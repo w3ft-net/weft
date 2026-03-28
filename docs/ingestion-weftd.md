@@ -1,0 +1,167 @@
+# Ingestion: weftd
+
+## Overview
+
+weftd is a lightweight agent (single Go binary) that runs on customer instances, tails log files directly, and ships structured lines to weft over gRPC. It provides sub-second latency from log write to queryable in the shell — the fast-follow to CloudWatch ingestion.
+
+weftd is optional. CloudWatch ingestion works without any software installed on customer instances. weftd is for customers who want real-time tailing and are willing to deploy an agent.
+
+## Motivation
+
+CloudWatch ingestion has inherent latency: the CloudWatch agent batches logs (typically 5-60 seconds), pushes to CloudWatch, which then delivers via subscription filter to Kinesis. End-to-end latency is seconds to low minutes. For interactive debugging (`tail -f`), this is too slow.
+
+## Architecture
+
+```
+Customer instance
+  ┌─────────────────────────┐
+  │ Application              │
+  │   └── writes to /var/log/app.log
+  │                          │
+  │ weftd                    │
+  │   └── tails log files    │
+  │   └── applies schema     │
+  │   └── gRPC stream ──────────→ Coordinator → Active shard
+  └─────────────────────────┘
+```
+
+weftd ships to the coordinator (single stable endpoint), not directly to shard nodes. The coordinator routes to the active shard. This means weftd never needs to know about shard topology.
+
+## Protocol
+
+gRPC streaming over TLS, consistent with the internal shard protocol:
+
+```protobuf
+service WeftIngest {
+  // Long-lived stream: agent pushes log lines as they appear
+  rpc Ingest(stream IngestLine) returns (IngestAck);
+}
+
+message IngestLine {
+  string app = 1;
+  string instance = 2;      // hostname or instance ID
+  string raw = 3;            // the log line
+  int64 ts_unix_ns = 4;      // timestamp from the log or wall clock
+  repeated string fields = 5; // pre-split by schema
+  string level = 6;          // extracted by schema
+  bytes payload_json = 7;    // JSON portion, if applicable
+}
+
+message IngestAck {
+  int64 lines_received = 1;
+}
+```
+
+Authentication: the agent includes its token in gRPC metadata on connection. The coordinator maps the token to a customer and validates the app name.
+
+## Configuration
+
+Local file, designed to be managed by Terraform/Ansible/Chef:
+
+```yaml
+# /etc/weftd/config.yaml
+
+endpoint: weft.example.com:443
+token: wft_agent_abc123...
+
+sources:
+  - app: vimgym
+    path: /var/log/vimgym/*.log
+    schema: prefix_json
+    prefix_fields: [ts, level, service]
+    prefix_separator: " "
+    json_field: payload
+
+  - app: callbox
+    path: /var/log/callbox/app.log
+    schema: json
+    # pure JSON lines, no prefix
+```
+
+Terraform example:
+
+```hcl
+resource "template_file" "weftd_config" {
+  template = file("${path.module}/weftd.yaml.tpl")
+  vars = {
+    endpoint = var.weft_endpoint
+    token    = var.weft_agent_token
+    app_name = var.app_name
+    log_path = var.log_path
+  }
+}
+```
+
+## Agent behavior
+
+### Tailing
+
+weftd uses inotify (Linux) / kqueue (macOS) to watch configured log paths. On new data:
+
+1. Read new lines from the file
+2. Apply the configured schema to extract structured fields
+3. Buffer briefly (configurable, default 100ms or 100 lines, whichever comes first)
+4. Send batch over the gRPC stream
+
+### File rotation
+
+Handles standard log rotation patterns:
+
+- Detects rename/truncate (logrotate copytruncate)
+- Follows new file when the watched path is recreated
+- Tracks position via an offset file (`/var/lib/weftd/offsets.yaml`) to survive restarts
+
+### Glob patterns
+
+`path: /var/log/vimgym/*.log` watches for new files matching the glob and tails them. Useful for applications that create per-date or per-process log files.
+
+### Backpressure
+
+If the gRPC stream is slow (coordinator overloaded, network issues):
+
+1. Buffer in memory up to a configurable limit (default 10MB)
+2. If buffer fills, drop oldest lines and increment a dropped counter
+3. On reconnect, log the drop count so the customer knows data was lost
+4. No disk buffering in v1 — keep the agent simple and low-footprint
+
+### Reconnection
+
+If the connection to the coordinator drops, weftd retries with exponential backoff (1s, 2s, 4s, ..., max 30s). It continues tailing and buffering locally during disconnection.
+
+## Deployment
+
+Single static Go binary, no dependencies:
+
+```bash
+# Install
+curl -L https://weft.example.com/dl/weftd-linux-amd64 -o /usr/local/bin/weftd
+chmod +x /usr/local/bin/weftd
+
+# Run as systemd service
+systemctl enable --now weftd
+```
+
+systemd unit file:
+
+```ini
+[Unit]
+Description=weftd log shipping agent
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/weftd --config /etc/weftd/config.yaml
+Restart=always
+RestartSec=5
+User=weftd
+Group=weftd
+
+[Install]
+WantedBy=multi-user.target
+```
+
+## Open questions
+
+- **Schema sync:** weftd applies the schema locally, but the schema is defined on the coordinator. Should weftd fetch its schema from the coordinator on startup (using the token for auth), or is the local config file the source of truth? Local is simpler for Terraform but risks drift.
+- **Disk buffering:** v1 drops data on buffer overflow. Should v2 spill to disk to survive longer outages? Adds complexity and disk I/O but prevents data loss.
+- **Multi-line logs:** stack traces, Python tracebacks, etc. span multiple lines. Should weftd support configurable multi-line join patterns (e.g., "lines starting with whitespace are continuations")?
+- **Metrics:** should weftd expose a local metrics endpoint (Prometheus `/metrics`) for customers to monitor agent health, throughput, drops?
