@@ -4,6 +4,9 @@
 /wef
 *.exe
 
+# Local config (contains endpoint/credentials)
+.weft.yaml
+
 # DuckDB databases
 *.duckdb
 *.duckdb.wal

@@ -27,7 +27,7 @@ func (s *Server) Query(req *pb.QueryRequest, stream pb.ShardQuery_QueryServer) e
 	}
 
 	for _, r := range rows {
-		pbRow := logRowToProto(&r)
+		pbRow := LogRowToProto(&r)
 		if err := stream.Send(pbRow); err != nil {
 			return err
 		}
@@ -54,7 +54,8 @@ func (s *Server) Ingest(_ context.Context, req *pb.IngestRequest) (*pb.IngestRes
 	return &pb.IngestResponse{RowsIngested: int64(len(rows))}, nil
 }
 
-func logRowToProto(r *shard.LogRow) *pb.LogRow {
+// LogRowToProto converts a shard.LogRow to a protobuf LogRow.
+func LogRowToProto(r *shard.LogRow) *pb.LogRow {
 	return &pb.LogRow{
 		LineNum:     r.LineNum,
 		Raw:         r.Raw,

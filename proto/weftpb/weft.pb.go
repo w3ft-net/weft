@@ -669,6 +669,199 @@ func (x *GetResultResponse) GetError() string {
 	return ""
 }
 
+type CoordinatorQueryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Pipeline      string                 `protobuf:"bytes,1,opt,name=pipeline,proto3" json:"pipeline,omitempty"`
+	TimeStartNs   int64                  `protobuf:"varint,2,opt,name=time_start_ns,json=timeStartNs,proto3" json:"time_start_ns,omitempty"` // 0 = use default
+	TimeEndNs     int64                  `protobuf:"varint,3,opt,name=time_end_ns,json=timeEndNs,proto3" json:"time_end_ns,omitempty"`       // 0 = use default
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CoordinatorQueryRequest) Reset() {
+	*x = CoordinatorQueryRequest{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CoordinatorQueryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CoordinatorQueryRequest) ProtoMessage() {}
+
+func (x *CoordinatorQueryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CoordinatorQueryRequest.ProtoReflect.Descriptor instead.
+func (*CoordinatorQueryRequest) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *CoordinatorQueryRequest) GetPipeline() string {
+	if x != nil {
+		return x.Pipeline
+	}
+	return ""
+}
+
+func (x *CoordinatorQueryRequest) GetTimeStartNs() int64 {
+	if x != nil {
+		return x.TimeStartNs
+	}
+	return 0
+}
+
+func (x *CoordinatorQueryRequest) GetTimeEndNs() int64 {
+	if x != nil {
+		return x.TimeEndNs
+	}
+	return 0
+}
+
+type CoordinatorQueryResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// One of these is populated depending on whether compute stages ran.
+	Rows          []*LogRow `protobuf:"bytes,1,rep,name=rows,proto3" json:"rows,omitempty"`
+	Text          string    `protobuf:"bytes,2,opt,name=text,proto3" json:"text,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CoordinatorQueryResponse) Reset() {
+	*x = CoordinatorQueryResponse{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CoordinatorQueryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CoordinatorQueryResponse) ProtoMessage() {}
+
+func (x *CoordinatorQueryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CoordinatorQueryResponse.ProtoReflect.Descriptor instead.
+func (*CoordinatorQueryResponse) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *CoordinatorQueryResponse) GetRows() []*LogRow {
+	if x != nil {
+		return x.Rows
+	}
+	return nil
+}
+
+func (x *CoordinatorQueryResponse) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+type ListAppsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListAppsRequest) Reset() {
+	*x = ListAppsRequest{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAppsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAppsRequest) ProtoMessage() {}
+
+func (x *ListAppsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAppsRequest.ProtoReflect.Descriptor instead.
+func (*ListAppsRequest) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{14}
+}
+
+type ListAppsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Apps          []string               `protobuf:"bytes,1,rep,name=apps,proto3" json:"apps,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListAppsResponse) Reset() {
+	*x = ListAppsResponse{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAppsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAppsResponse) ProtoMessage() {}
+
+func (x *ListAppsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAppsResponse.ProtoReflect.Descriptor instead.
+func (*ListAppsResponse) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ListAppsResponse) GetApps() []string {
+	if x != nil {
+		return x.Apps
+	}
+	return nil
+}
+
 type ShardHealth struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	State         string                 `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`                                // LAUNCHING, INGESTING, READ_ONLY, EXPIRING
@@ -683,7 +876,7 @@ type ShardHealth struct {
 
 func (x *ShardHealth) Reset() {
 	*x = ShardHealth{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[12]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -695,7 +888,7 @@ func (x *ShardHealth) String() string {
 func (*ShardHealth) ProtoMessage() {}
 
 func (x *ShardHealth) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[12]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -708,7 +901,7 @@ func (x *ShardHealth) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShardHealth.ProtoReflect.Descriptor instead.
 func (*ShardHealth) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{12}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ShardHealth) GetState() string {
@@ -798,7 +991,17 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"=\n" +
 	"\x11GetResultResponse\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\xc0\x01\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"y\n" +
+	"\x17CoordinatorQueryRequest\x12\x1a\n" +
+	"\bpipeline\x18\x01 \x01(\tR\bpipeline\x12\"\n" +
+	"\rtime_start_ns\x18\x02 \x01(\x03R\vtimeStartNs\x12\x1e\n" +
+	"\vtime_end_ns\x18\x03 \x01(\x03R\ttimeEndNs\"P\n" +
+	"\x18CoordinatorQueryResponse\x12 \n" +
+	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\x12\x12\n" +
+	"\x04text\x18\x02 \x01(\tR\x04text\"\x11\n" +
+	"\x0fListAppsRequest\"&\n" +
+	"\x10ListAppsResponse\x12\x12\n" +
+	"\x04apps\x18\x01 \x03(\tR\x04apps\"\xc0\x01\n" +
 	"\vShardHealth\x12\x14\n" +
 	"\x05state\x18\x01 \x01(\tR\x05state\x12!\n" +
 	"\fwindow_start\x18\x02 \x01(\tR\vwindowStart\x12\x1d\n" +
@@ -817,7 +1020,10 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\vWeftCompute\x12<\n" +
 	"\tCreateJob\x12\x16.weft.CreateJobRequest\x1a\x17.weft.CreateJobResponse\x12:\n" +
 	"\bSendRows\x12\x14.weft.ComputeMessage\x1a\x16.weft.SendRowsResponse(\x01\x12<\n" +
-	"\tGetResult\x12\x16.weft.GetResultRequest\x1a\x17.weft.GetResultResponseB(Z&github.com/kevlarcon/weft/proto/weftpbb\x06proto3"
+	"\tGetResult\x12\x16.weft.GetResultRequest\x1a\x17.weft.GetResultResponse2\x94\x01\n" +
+	"\x0fWeftCoordinator\x12F\n" +
+	"\x05Query\x12\x1d.weft.CoordinatorQueryRequest\x1a\x1e.weft.CoordinatorQueryResponse\x129\n" +
+	"\bListApps\x12\x15.weft.ListAppsRequest\x1a\x16.weft.ListAppsResponseB(Z&github.com/kevlarcon/weft/proto/weftpbb\x06proto3"
 
 var (
 	file_proto_weftpb_weft_proto_rawDescOnce sync.Once
@@ -831,42 +1037,51 @@ func file_proto_weftpb_weft_proto_rawDescGZIP() []byte {
 	return file_proto_weftpb_weft_proto_rawDescData
 }
 
-var file_proto_weftpb_weft_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_proto_weftpb_weft_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_proto_weftpb_weft_proto_goTypes = []any{
-	(*QueryRequest)(nil),           // 0: weft.QueryRequest
-	(*QueryToComputeRequest)(nil),  // 1: weft.QueryToComputeRequest
-	(*QueryToComputeResponse)(nil), // 2: weft.QueryToComputeResponse
-	(*LogRow)(nil),                 // 3: weft.LogRow
-	(*IngestRequest)(nil),          // 4: weft.IngestRequest
-	(*IngestResponse)(nil),         // 5: weft.IngestResponse
-	(*CreateJobRequest)(nil),       // 6: weft.CreateJobRequest
-	(*CreateJobResponse)(nil),      // 7: weft.CreateJobResponse
-	(*ComputeMessage)(nil),         // 8: weft.ComputeMessage
-	(*SendRowsResponse)(nil),       // 9: weft.SendRowsResponse
-	(*GetResultRequest)(nil),       // 10: weft.GetResultRequest
-	(*GetResultResponse)(nil),      // 11: weft.GetResultResponse
-	(*ShardHealth)(nil),            // 12: weft.ShardHealth
+	(*QueryRequest)(nil),             // 0: weft.QueryRequest
+	(*QueryToComputeRequest)(nil),    // 1: weft.QueryToComputeRequest
+	(*QueryToComputeResponse)(nil),   // 2: weft.QueryToComputeResponse
+	(*LogRow)(nil),                   // 3: weft.LogRow
+	(*IngestRequest)(nil),            // 4: weft.IngestRequest
+	(*IngestResponse)(nil),           // 5: weft.IngestResponse
+	(*CreateJobRequest)(nil),         // 6: weft.CreateJobRequest
+	(*CreateJobResponse)(nil),        // 7: weft.CreateJobResponse
+	(*ComputeMessage)(nil),           // 8: weft.ComputeMessage
+	(*SendRowsResponse)(nil),         // 9: weft.SendRowsResponse
+	(*GetResultRequest)(nil),         // 10: weft.GetResultRequest
+	(*GetResultResponse)(nil),        // 11: weft.GetResultResponse
+	(*CoordinatorQueryRequest)(nil),  // 12: weft.CoordinatorQueryRequest
+	(*CoordinatorQueryResponse)(nil), // 13: weft.CoordinatorQueryResponse
+	(*ListAppsRequest)(nil),          // 14: weft.ListAppsRequest
+	(*ListAppsResponse)(nil),         // 15: weft.ListAppsResponse
+	(*ShardHealth)(nil),              // 16: weft.ShardHealth
 }
 var file_proto_weftpb_weft_proto_depIdxs = []int32{
 	3,  // 0: weft.IngestRequest.rows:type_name -> weft.LogRow
 	3,  // 1: weft.ComputeMessage.row:type_name -> weft.LogRow
-	0,  // 2: weft.ShardQuery.Query:input_type -> weft.QueryRequest
-	1,  // 3: weft.ShardQuery.QueryToCompute:input_type -> weft.QueryToComputeRequest
-	4,  // 4: weft.ShardQuery.Ingest:input_type -> weft.IngestRequest
-	6,  // 5: weft.WeftCompute.CreateJob:input_type -> weft.CreateJobRequest
-	8,  // 6: weft.WeftCompute.SendRows:input_type -> weft.ComputeMessage
-	10, // 7: weft.WeftCompute.GetResult:input_type -> weft.GetResultRequest
-	3,  // 8: weft.ShardQuery.Query:output_type -> weft.LogRow
-	2,  // 9: weft.ShardQuery.QueryToCompute:output_type -> weft.QueryToComputeResponse
-	5,  // 10: weft.ShardQuery.Ingest:output_type -> weft.IngestResponse
-	7,  // 11: weft.WeftCompute.CreateJob:output_type -> weft.CreateJobResponse
-	9,  // 12: weft.WeftCompute.SendRows:output_type -> weft.SendRowsResponse
-	11, // 13: weft.WeftCompute.GetResult:output_type -> weft.GetResultResponse
-	8,  // [8:14] is the sub-list for method output_type
-	2,  // [2:8] is the sub-list for method input_type
-	2,  // [2:2] is the sub-list for extension type_name
-	2,  // [2:2] is the sub-list for extension extendee
-	0,  // [0:2] is the sub-list for field type_name
+	3,  // 2: weft.CoordinatorQueryResponse.rows:type_name -> weft.LogRow
+	0,  // 3: weft.ShardQuery.Query:input_type -> weft.QueryRequest
+	1,  // 4: weft.ShardQuery.QueryToCompute:input_type -> weft.QueryToComputeRequest
+	4,  // 5: weft.ShardQuery.Ingest:input_type -> weft.IngestRequest
+	6,  // 6: weft.WeftCompute.CreateJob:input_type -> weft.CreateJobRequest
+	8,  // 7: weft.WeftCompute.SendRows:input_type -> weft.ComputeMessage
+	10, // 8: weft.WeftCompute.GetResult:input_type -> weft.GetResultRequest
+	12, // 9: weft.WeftCoordinator.Query:input_type -> weft.CoordinatorQueryRequest
+	14, // 10: weft.WeftCoordinator.ListApps:input_type -> weft.ListAppsRequest
+	3,  // 11: weft.ShardQuery.Query:output_type -> weft.LogRow
+	2,  // 12: weft.ShardQuery.QueryToCompute:output_type -> weft.QueryToComputeResponse
+	5,  // 13: weft.ShardQuery.Ingest:output_type -> weft.IngestResponse
+	7,  // 14: weft.WeftCompute.CreateJob:output_type -> weft.CreateJobResponse
+	9,  // 15: weft.WeftCompute.SendRows:output_type -> weft.SendRowsResponse
+	11, // 16: weft.WeftCompute.GetResult:output_type -> weft.GetResultResponse
+	13, // 17: weft.WeftCoordinator.Query:output_type -> weft.CoordinatorQueryResponse
+	15, // 18: weft.WeftCoordinator.ListApps:output_type -> weft.ListAppsResponse
+	11, // [11:19] is the sub-list for method output_type
+	3,  // [3:11] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_proto_weftpb_weft_proto_init() }
@@ -880,9 +1095,9 @@ func file_proto_weftpb_weft_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_weftpb_weft_proto_rawDesc), len(file_proto_weftpb_weft_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   13,
+			NumMessages:   17,
 			NumExtensions: 0,
-			NumServices:   2,
+			NumServices:   3,
 		},
 		GoTypes:           file_proto_weftpb_weft_proto_goTypes,
 		DependencyIndexes: file_proto_weftpb_weft_proto_depIdxs,

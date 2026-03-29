@@ -25,6 +25,46 @@ func main() {
 		}
 	}
 
+	// Load config.
+	cfg, err := shell.LoadConfig()
+	if err != nil {
+		// Fall back to dev mode with fixtures.
+		fmt.Fprintln(os.Stderr, dimText("no .weft.yaml found, using dev fixtures"))
+		runDevShell()
+		return
+	}
+
+	// Connect to remote coordinator.
+	remote, err := shell.NewRemoteCoordinator(cfg.Endpoint)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "connect to %s: %v\n", cfg.Endpoint, err)
+		os.Exit(1)
+	}
+	defer remote.Close()
+
+	apps, err := remote.ListApps()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "list apps: %v\n", err)
+		os.Exit(1)
+	}
+
+	s := &shell.Shell{
+		Query: func(pipeline string, start, end time.Time) (*shell.QueryResult, error) {
+			r, err := remote.Query(pipeline, start, end)
+			if err != nil {
+				return nil, err
+			}
+			return &shell.QueryResult{Rows: r.Rows, Text: r.Text}, nil
+		},
+		Start: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+		End:   time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
+		Apps:  apps,
+	}
+
+	runShell(s)
+}
+
+func runDevShell() {
 	coord, cleanup, err := coordinator.NewDevCoordinator()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to start: %v\n", err)
@@ -33,15 +73,24 @@ func main() {
 	defer cleanup()
 
 	s := &shell.Shell{
-		Coord: coord,
-		TimeRange: coordinator.TimeRange{
-			Start: coordinator.DevT0,
-			End:   coordinator.DevT2,
+		Query: func(pipeline string, start, end time.Time) (*shell.QueryResult, error) {
+			tr := coordinator.TimeRange{Start: start, End: end}
+			r, err := coord.Query(pipeline, tr)
+			if err != nil {
+				return nil, err
+			}
+			return &shell.QueryResult{Rows: r.Rows, Text: r.Text}, nil
 		},
-		Apps: coordinator.DevApps(),
+		Start: coordinator.DevT0,
+		End:   coordinator.DevT2,
+		Apps:  coordinator.DevApps(),
 	}
 
-	// If stdin is not a terminal, run non-interactively (piped input).
+	runShell(s)
+}
+
+func runShell(s *shell.Shell) {
+	// If stdin is not a terminal, run non-interactively.
 	if fi, _ := os.Stdin.Stat(); fi.Mode()&os.ModeCharDevice == 0 {
 		scanner := bufio.NewScanner(os.Stdin)
 		for scanner.Scan() {
@@ -57,6 +106,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "shell error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func dimText(s string) string {
+	return "\033[90m" + s + "\033[0m"
 }
 
 func runSetup() {
@@ -127,14 +180,12 @@ func runIngest() {
 		os.Exit(1)
 	}
 
-	// Load schema.
 	schema, err := ingest.LoadSchema(schemaFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load schema: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Read log file.
 	data, err := os.ReadFile(logFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "read log file: %v\n", err)
@@ -142,7 +193,6 @@ func runIngest() {
 	}
 	lines := strings.Split(string(data), "\n")
 
-	// Parse lines using schema.
 	parser, err := ingest.NewParser(schema)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create parser: %v\n", err)
@@ -161,7 +211,6 @@ func runIngest() {
 		os.Exit(1)
 	}
 
-	// Determine time range from parsed rows.
 	minTs, maxTs := rows[0].Ts, rows[0].Ts
 	for _, r := range rows[1:] {
 		if r.Ts.Before(minTs) {
@@ -172,7 +221,6 @@ func runIngest() {
 		}
 	}
 
-	// Open or create shard.
 	if dbPath == "" {
 		dbPath = fmt.Sprintf("%s.duckdb", schema.App)
 	}
@@ -183,7 +231,6 @@ func runIngest() {
 	}
 	defer ds.Close()
 
-	// Ingest.
 	if err := ds.Ingest(rows); err != nil {
 		fmt.Fprintf(os.Stderr, "ingest: %v\n", err)
 		os.Exit(1)

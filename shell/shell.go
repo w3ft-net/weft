@@ -6,12 +6,13 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/kevlarcon/weft/coordinator"
+	"github.com/kevlarcon/weft/shard"
 )
 
 var (
@@ -27,11 +28,22 @@ var terminalCommands = map[string]bool{
 	"more": true,
 }
 
+// QueryResult is the output of a query — either structured rows or text.
+type QueryResult struct {
+	Rows []shard.LogRow
+	Text string
+}
+
+// QueryFunc is the function signature the shell uses to execute queries.
+// Abstracts both in-process coordinator and remote gRPC coordinator.
+type QueryFunc func(pipeline string, start, end time.Time) (*QueryResult, error)
+
 // Shell is the weft interactive shell.
 type Shell struct {
-	Coord     *coordinator.Coordinator
-	TimeRange coordinator.TimeRange
-	Apps      []string
+	Query QueryFunc
+	Start time.Time
+	End   time.Time
+	Apps  []string
 }
 
 // Run starts the interactive bubbletea REPL.
@@ -137,8 +149,8 @@ func newModel(s *Shell) model {
 	out.WriteString(dimStyle.Render(fmt.Sprintf(
 		"weft shell — %d apps, range %s to %s",
 		len(s.Apps),
-		s.TimeRange.Start.Format("15:04"),
-		s.TimeRange.End.Format("15:04"),
+		s.Start.Format("15:04"),
+		s.End.Format("15:04"),
 	)))
 	out.WriteString("\n")
 	out.WriteString(dimStyle.Render("type a pipeline, or: range, apps, exit"))
@@ -321,8 +333,8 @@ func (m *model) execLine(line string) {
 		m.output.WriteString(fmt.Sprintf("  warp.log %s\n", dimStyle.Render("(all apps)")))
 	case line == "range":
 		m.output.WriteString(fmt.Sprintf("  %s to %s\n",
-			m.shell.TimeRange.Start.Format("2006-01-02T15:04:05Z"),
-			m.shell.TimeRange.End.Format("2006-01-02T15:04:05Z")))
+			m.shell.Start.Format("2006-01-02T15:04:05Z"),
+			m.shell.End.Format("2006-01-02T15:04:05Z")))
 	case strings.HasPrefix(line, "range "):
 		m.output.WriteString(dimStyle.Render("range adjustment not yet implemented\n"))
 	default:
@@ -333,7 +345,7 @@ func (m *model) execLine(line string) {
 func (m *model) execPipeline(line string) {
 	weftPipeline, termCmd := splitTerminalStage(line)
 
-	result, err := m.shell.Coord.Query(weftPipeline, m.shell.TimeRange)
+	result, err := m.shell.Query(weftPipeline, m.shell.Start, m.shell.End)
 	if err != nil {
 		m.output.WriteString(errorStyle.Render("error: "+err.Error()) + "\n")
 		return
@@ -405,7 +417,7 @@ func pipeToTerminal(text, cmdStr string) {
 // ExecNonInteractive runs a single pipeline and prints results to w.
 func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 	weftPipeline, _ := splitTerminalStage(line)
-	result, err := s.Coord.Query(weftPipeline, s.TimeRange)
+	result, err := s.Query(weftPipeline, s.Start, s.End)
 	if err != nil {
 		return err
 	}

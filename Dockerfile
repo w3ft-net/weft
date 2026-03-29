@@ -1,6 +1,5 @@
 # Build context must be the parent directory (~/dev) so we can access both weft and warp.
-# docker build -f weft/Dockerfile -t weft ~/dev
-# Or use docker-compose which sets context: ..
+# docker compose -f weft/docker-compose.yml up --build
 
 FROM golang:1.26 AS builder
 
@@ -19,7 +18,9 @@ RUN sed -i 's|=> ../warp|=> /src/warp|' go.mod
 RUN go mod download
 RUN CGO_ENABLED=1 go build -o /bin/weft-shard ./cmd/shard
 RUN CGO_ENABLED=1 go build -o /bin/weft-compute ./cmd/compute
+RUN CGO_ENABLED=1 go build -o /bin/weft-coordinator ./cmd/coordinator
 
-FROM debian:bookworm-slim
+# Use the same distro as the builder to match glibc.
+FROM golang:1.26
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /bin/weft-shard /bin/weft-compute /usr/local/bin/
+COPY --from=builder /bin/weft-shard /bin/weft-compute /bin/weft-coordinator /usr/local/bin/

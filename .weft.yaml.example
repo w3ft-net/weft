@@ -1,0 +1,5 @@
+# Copy this to .weft.yaml and adjust as needed.
+#
+# For Docker Compose (after `docker compose up`):
+endpoint: localhost:9020
+customer: kevlar

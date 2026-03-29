@@ -387,3 +387,147 @@ var WeftCompute_ServiceDesc = grpc.ServiceDesc{
 	},
 	Metadata: "proto/weftpb/weft.proto",
 }
+
+const (
+	WeftCoordinator_Query_FullMethodName    = "/weft.WeftCoordinator/Query"
+	WeftCoordinator_ListApps_FullMethodName = "/weft.WeftCoordinator/ListApps"
+)
+
+// WeftCoordinatorClient is the client API for WeftCoordinator service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type WeftCoordinatorClient interface {
+	// Query executes a weft pipeline and returns results.
+	Query(ctx context.Context, in *CoordinatorQueryRequest, opts ...grpc.CallOption) (*CoordinatorQueryResponse, error)
+	// ListApps returns the available app names (pseudofiles).
+	ListApps(ctx context.Context, in *ListAppsRequest, opts ...grpc.CallOption) (*ListAppsResponse, error)
+}
+
+type weftCoordinatorClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewWeftCoordinatorClient(cc grpc.ClientConnInterface) WeftCoordinatorClient {
+	return &weftCoordinatorClient{cc}
+}
+
+func (c *weftCoordinatorClient) Query(ctx context.Context, in *CoordinatorQueryRequest, opts ...grpc.CallOption) (*CoordinatorQueryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CoordinatorQueryResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_Query_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftCoordinatorClient) ListApps(ctx context.Context, in *ListAppsRequest, opts ...grpc.CallOption) (*ListAppsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListAppsResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_ListApps_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// WeftCoordinatorServer is the server API for WeftCoordinator service.
+// All implementations must embed UnimplementedWeftCoordinatorServer
+// for forward compatibility.
+type WeftCoordinatorServer interface {
+	// Query executes a weft pipeline and returns results.
+	Query(context.Context, *CoordinatorQueryRequest) (*CoordinatorQueryResponse, error)
+	// ListApps returns the available app names (pseudofiles).
+	ListApps(context.Context, *ListAppsRequest) (*ListAppsResponse, error)
+	mustEmbedUnimplementedWeftCoordinatorServer()
+}
+
+// UnimplementedWeftCoordinatorServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedWeftCoordinatorServer struct{}
+
+func (UnimplementedWeftCoordinatorServer) Query(context.Context, *CoordinatorQueryRequest) (*CoordinatorQueryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Query not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) ListApps(context.Context, *ListAppsRequest) (*ListAppsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListApps not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) mustEmbedUnimplementedWeftCoordinatorServer() {}
+func (UnimplementedWeftCoordinatorServer) testEmbeddedByValue()                         {}
+
+// UnsafeWeftCoordinatorServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to WeftCoordinatorServer will
+// result in compilation errors.
+type UnsafeWeftCoordinatorServer interface {
+	mustEmbedUnimplementedWeftCoordinatorServer()
+}
+
+func RegisterWeftCoordinatorServer(s grpc.ServiceRegistrar, srv WeftCoordinatorServer) {
+	// If the following call panics, it indicates UnimplementedWeftCoordinatorServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&WeftCoordinator_ServiceDesc, srv)
+}
+
+func _WeftCoordinator_Query_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CoordinatorQueryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).Query(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_Query_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).Query(ctx, req.(*CoordinatorQueryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftCoordinator_ListApps_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListAppsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).ListApps(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_ListApps_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).ListApps(ctx, req.(*ListAppsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// WeftCoordinator_ServiceDesc is the grpc.ServiceDesc for WeftCoordinator service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "weft.WeftCoordinator",
+	HandlerType: (*WeftCoordinatorServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Query",
+			Handler:    _WeftCoordinator_Query_Handler,
+		},
+		{
+			MethodName: "ListApps",
+			Handler:    _WeftCoordinator_ListApps_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "proto/weftpb/weft.proto",
+}
