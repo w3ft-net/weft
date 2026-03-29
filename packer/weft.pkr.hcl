@@ -138,6 +138,7 @@ build {
       "GOPRIVATE=github.com/kevlarcon/*",
     ]
     inline = [
+      "sudo apt-get update -qq",
       "sudo apt-get install -y -qq gcc git",
       "mkdir -p /tmp/weft-build && cd /tmp/weft-build && tar xzf /tmp/app-source.tar.gz",
       # Remove local replace directive so Go fetches warp from GitHub
