@@ -1,0 +1,18 @@
+[Unit]
+Description=weft coordinator
+After=network.target
+
+[Service]
+Type=simple
+User=app
+Group=app
+ExecStart=/opt/app/bin/weft-coordinator \
+    --port=9020 \
+    --customer=kevlar
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/app/logs/coordinator.log
+StandardError=append:/opt/app/logs/coordinator.log
+
+[Install]
+WantedBy=multi-user.target

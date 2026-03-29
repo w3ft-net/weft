@@ -1,0 +1,18 @@
+[Unit]
+Description=weft compute worker
+After=network.target
+
+[Service]
+Type=simple
+User=app
+Group=app
+ExecStart=/opt/app/bin/weft-compute \
+    --port=9010 \
+    --parallelism=4
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/app/logs/compute.log
+StandardError=append:/opt/app/logs/compute.log
+
+[Install]
+WantedBy=multi-user.target

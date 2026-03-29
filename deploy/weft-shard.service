@@ -1,0 +1,19 @@
+[Unit]
+Description=weft shard
+After=network.target
+
+[Service]
+Type=simple
+User=app
+Group=app
+ExecStart=/opt/app/bin/weft-shard \
+    --grpc-port=9000 \
+    --http-port=9001 \
+    --db=/opt/app/data/shard.duckdb
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/app/logs/shard.log
+StandardError=append:/opt/app/logs/shard.log
+
+[Install]
+WantedBy=multi-user.target
