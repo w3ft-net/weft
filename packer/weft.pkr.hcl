@@ -134,8 +134,11 @@ build {
   provisioner "shell" {
     environment_vars = [
       "GOPATH=/tmp/go",
+      "HOME=/home/admin",
       "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
       "GOPRIVATE=github.com/kevlarcon/*",
+      "GONOSUMCHECK=github.com/kevlarcon/*",
+      "GONOSUMDB=github.com/kevlarcon/*",
     ]
     inline = [
       "sudo apt-get update -qq",
@@ -144,8 +147,8 @@ build {
       # Remove local replace directive so Go fetches warp from GitHub
       "sed -i '/replace.*warp/d' /tmp/weft-build/go.mod",
       # Configure git auth for private repos via .netrc
-      "echo 'machine github.com login x-access-token password ${var.github_token}' > ~/.netrc",
-      "chmod 600 ~/.netrc",
+      "echo 'machine github.com login x-access-token password ${var.github_token}' > /home/admin/.netrc",
+      "chmod 600 /home/admin/.netrc",
       # Re-resolve warp from GitHub now that replace is removed
       "cd /tmp/weft-build && go mod tidy",
       "cd /tmp/weft-build && CGO_ENABLED=1 go build -o /tmp/weft-coordinator ./cmd/coordinator",
@@ -156,7 +159,7 @@ build {
       "sudo chown app:app /opt/app/bin/weft-*",
       # Clean up
       "sudo rm -rf /tmp/weft-build /tmp/app-source.tar.gz /tmp/go /usr/local/go /etc/profile.d/go.sh",
-      "rm -f ~/.netrc",
+      "rm -f /home/admin/.netrc",
     ]
   }
 
