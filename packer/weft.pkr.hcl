@@ -145,6 +145,8 @@ build {
       "sed -i '/replace.*warp/d' /tmp/weft-build/go.mod",
       # Configure git to use the GitHub token for private repos
       "git config --global url.\"https://${var.github_token}@github.com/\".insteadOf \"https://github.com/\"",
+      # Re-resolve warp from GitHub now that replace is removed
+      "cd /tmp/weft-build && go mod tidy",
       "cd /tmp/weft-build && CGO_ENABLED=1 go build -o /tmp/weft-coordinator ./cmd/coordinator",
       "cd /tmp/weft-build && CGO_ENABLED=1 go build -o /tmp/weft-shard ./cmd/shard",
       "cd /tmp/weft-build && CGO_ENABLED=1 go build -o /tmp/weft-compute ./cmd/compute",
