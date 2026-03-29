@@ -107,27 +107,44 @@ build {
     ]
   }
 
-  # Copy binaries (pre-compiled for linux/arm64)
-  provisioner "file" {
-    source      = "bin/weft-coordinator"
-    destination = "/tmp/weft-coordinator"
-  }
-
-  provisioner "file" {
-    source      = "bin/weft-shard"
-    destination = "/tmp/weft-shard"
-  }
-
-  provisioner "file" {
-    source      = "bin/weft-compute"
-    destination = "/tmp/weft-compute"
-  }
-
+  # Install Go (for on-instance compilation — CGO cross-compile from macOS doesn't work)
   provisioner "shell" {
     inline = [
+      "curl -sSL https://go.dev/dl/go1.26.0.linux-arm64.tar.gz -o /tmp/go.tar.gz",
+      "sudo tar -C /usr/local -xzf /tmp/go.tar.gz",
+      "rm /tmp/go.tar.gz",
+      "echo 'export PATH=$PATH:/usr/local/go/bin' | sudo tee /etc/profile.d/go.sh",
+      "export PATH=$PATH:/usr/local/go/bin && go version",
+    ]
+  }
+
+  # Copy source code for compilation
+  provisioner "file" {
+    source      = "."
+    destination = "/tmp/weft-src"
+  }
+
+  # Copy warp dependency (local replace directive)
+  provisioner "file" {
+    source      = "../warp"
+    destination = "/tmp/warp-src"
+  }
+
+  # Build binaries on the instance
+  provisioner "shell" {
+    inline = [
+      "export PATH=$PATH:/usr/local/go/bin",
+      "cd /tmp/weft-src",
+      "sed -i 's|=> ../warp|=> /tmp/warp-src|' go.mod",
+      "sudo apt-get install -y -qq gcc",
+      "CGO_ENABLED=1 go build -o /tmp/weft-coordinator ./cmd/coordinator",
+      "CGO_ENABLED=1 go build -o /tmp/weft-shard ./cmd/shard",
+      "CGO_ENABLED=1 go build -o /tmp/weft-compute ./cmd/compute",
       "sudo mv /tmp/weft-coordinator /tmp/weft-shard /tmp/weft-compute /opt/app/bin/",
       "sudo chmod +x /opt/app/bin/weft-*",
       "sudo chown app:app /opt/app/bin/weft-*",
+      # Clean up source and Go install
+      "sudo rm -rf /tmp/weft-src /tmp/warp-src /usr/local/go /etc/profile.d/go.sh",
     ]
   }
 
@@ -207,5 +224,11 @@ build {
       "sudo mv /tmp/cloudwatch-agent.json /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json",
       "sudo systemctl enable amazon-cloudwatch-agent",
     ]
+  }
+
+  # Manifest for kevcons to read the AMI ID
+  post-processor "manifest" {
+    output     = var.manifest_output != "" ? var.manifest_output : "manifest.json"
+    strip_path = true
   }
 }

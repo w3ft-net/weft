@@ -10,3 +10,4 @@ build:
   packer_template: packer/weft.pkr.hcl
   instance_type: t4g.small
   skip_base_ami: true
+  skip_local_build: true
