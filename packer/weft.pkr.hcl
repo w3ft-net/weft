@@ -146,9 +146,10 @@ build {
       "mkdir -p /tmp/weft-build && cd /tmp/weft-build && tar xzf /tmp/app-source.tar.gz",
       # Remove local replace directive so Go fetches warp from GitHub
       "sed -i '/replace.*warp/d' /tmp/weft-build/go.mod",
-      # Configure git auth for private repos via .netrc
+      # Configure git auth for private repos
       "echo 'machine github.com login x-access-token password ${var.github_token}' > /home/admin/.netrc",
       "chmod 600 /home/admin/.netrc",
+      "git config --global --add url.'https://x-access-token:${var.github_token}@github.com/'.insteadOf 'https://github.com/'",
       # Re-resolve warp from GitHub now that replace is removed
       "cd /tmp/weft-build && go mod tidy",
       "cd /tmp/weft-build && CGO_ENABLED=1 go build -o /tmp/weft-coordinator ./cmd/coordinator",
@@ -160,6 +161,7 @@ build {
       # Clean up
       "sudo rm -rf /tmp/weft-build /tmp/app-source.tar.gz /tmp/go /usr/local/go /etc/profile.d/go.sh",
       "rm -f /home/admin/.netrc",
+      "git config --global --unset-all url.'https://x-access-token:${var.github_token}@github.com/'.insteadOf || true",
     ]
   }
 
