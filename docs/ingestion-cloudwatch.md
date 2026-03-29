@@ -10,7 +10,7 @@ CloudWatch is the default, zero-install ingestion path. Customers connect their 
 Customer (tenant — Kevlar, Acme Corp, ...)
   └── AWS Account (one IAM role per account)
        └── App (vimgym, callbox, ...)
-            └── Log Group (/ecs/vimgym-prod, ...)
+            └── Log Group (/aws/vimgym/web, ...)
 ```
 
 `$CUSTOMER` is never exposed as a user-facing meta-variable. The coordinator applies it automatically to every query based on the authenticated user's token. It is a row-level security boundary.
@@ -24,7 +24,7 @@ Per AWS account the customer wants to connect:
    - Permission: `logs:CreateSubscriptionFilter`, `logs:DeleteSubscriptionFilter`, `logs:DescribeLogGroups`, `logs:DescribeSubscriptionFilters`
 2. Customer provides us with:
    - Role ARN
-   - Log group → app name mapping (e.g., `/ecs/vimgym-prod` → `vimgym`)
+   - Log group → app name mapping (e.g., `/aws/vimgym/web` → `vimgym`)
 3. We provide a CloudFormation template / Terraform module to automate steps 1-2
 
 Multiple AWS accounts per customer are expected (landing zone pattern). Each account has its own role. A single customer may have accounts in different regions.
