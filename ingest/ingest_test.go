@@ -1,0 +1,211 @@
+package ingest
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/kevlarcon/weft/shard"
+)
+
+// TestIngestRoundTrip_GrantCentralWorker tests the full pipeline:
+// sample logs → detect → schema → parse → ingest → query.
+func TestIngestRoundTrip_GrantCentralWorker(t *testing.T) {
+	lines := readSampleLines(t, "../sample-logs/grantcentral_worker_logs.txt")
+
+	// Detect schema.
+	det := Detect(lines)
+	if !det.HasKevconsEnvelope {
+		t.Fatal("expected kevcons envelope")
+	}
+
+	// Build schema from detection results (simulating what the wizard would do).
+	schema := &Schema{
+		App:             "grantcentral-worker",
+		Customer:        "kevlar",
+		Envelope:        "kevcons",
+		Format:          "text",
+		TimestampField:  "1",
+		TimestampFields: 2,
+		TimestampFormat: "2006-01-02 15:04:05,000",
+		LevelField:      "3",
+		LevelPattern:    `^(\w+)/`,
+	}
+
+	// Parse lines.
+	parser, err := NewParser(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	rows, err := parser.ParseLines(lines, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(rows) == 0 {
+		t.Fatal("expected rows")
+	}
+	t.Logf("parsed %d rows", len(rows))
+
+	// Check some rows have extracted timestamps, levels, instances.
+	hasTimestamp := false
+	hasLevel := false
+	hasInstance := false
+	for _, r := range rows {
+		if !r.Ts.Equal(now) {
+			hasTimestamp = true
+		}
+		if r.Level != "" {
+			hasLevel = true
+		}
+		if r.Instance != "" {
+			hasInstance = true
+		}
+	}
+	if !hasTimestamp {
+		t.Error("no rows had extracted timestamps")
+	}
+	if !hasLevel {
+		t.Error("no rows had extracted levels")
+	}
+	if !hasInstance {
+		t.Error("no rows had extracted instances")
+	}
+
+	// Log a few sample rows.
+	for i, r := range rows {
+		if i >= 5 {
+			break
+		}
+		t.Logf("  row %d: ts=%s level=%-7s instance=%s raw=%.60s",
+			r.LineNum, r.Ts.Format("15:04:05"), r.Level, r.Instance, r.Raw)
+	}
+
+	// Ingest into an in-memory shard and query back.
+	minTs := rows[0].Ts
+	maxTs := rows[0].Ts
+	for _, r := range rows[1:] {
+		if r.Ts.Before(minTs) {
+			minTs = r.Ts
+		}
+		if r.Ts.After(maxTs) {
+			maxTs = r.Ts
+		}
+	}
+
+	ds, err := shard.NewDuckDBShard("test", "", minTs, maxTs.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.Close()
+
+	if err := ds.Ingest(rows); err != nil {
+		t.Fatal(err)
+	}
+
+	// Query: all rows for this app.
+	allRows, err := ds.Query("SELECT * FROM logs WHERE app = 'grantcentral-worker' AND customer = 'kevlar'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(allRows) != len(rows) {
+		t.Errorf("expected %d rows from query, got %d", len(rows), len(allRows))
+	}
+
+	// Query: ERROR rows only.
+	errorRows, err := ds.Query("SELECT * FROM logs WHERE app = 'grantcentral-worker' AND customer = 'kevlar' AND level = 'ERROR'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("ERROR rows: %d", len(errorRows))
+	if len(errorRows) == 0 {
+		t.Error("expected some ERROR rows")
+	}
+	for _, r := range errorRows {
+		if r.Level != "ERROR" {
+			t.Errorf("expected level=ERROR, got %s", r.Level)
+		}
+	}
+
+	// Query: grep for "timeout" in raw.
+	timeoutRows, err := ds.Query("SELECT * FROM logs WHERE app = 'grantcentral-worker' AND customer = 'kevlar' AND raw LIKE '%timeout%'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("timeout rows: %d", len(timeoutRows))
+	for _, r := range timeoutRows {
+		if !strings.Contains(strings.ToLower(r.Raw), "timeout") {
+			t.Errorf("expected 'timeout' in raw, got: %s", r.Raw)
+		}
+	}
+}
+
+func TestIngestRoundTrip_VimGym(t *testing.T) {
+	lines := readSampleLines(t, "../sample-logs/vimgym_logs.txt")
+
+	schema := &Schema{
+		App:             "vimgym",
+		Customer:        "kevlar",
+		Envelope:        "kevcons",
+		Format:          "text",
+		TimestampField:  "1",
+		TimestampFields: 2,
+		TimestampFormat: "2006/01/02 15:04:05",
+	}
+
+	parser, err := NewParser(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	rows, err := parser.ParseLines(lines, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(rows) == 0 {
+		t.Fatal("expected rows")
+	}
+	t.Logf("parsed %d rows", len(rows))
+
+	// Check timestamps were extracted for lines that have Go timestamps.
+	extracted := 0
+	for _, r := range rows {
+		if !r.Ts.Equal(now) {
+			extracted++
+		}
+	}
+	t.Logf("%d rows had extracted timestamps", extracted)
+
+	// Ingest and query.
+	ds, err := shard.NewDuckDBShard("test", "", time.Time{}, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.Close()
+
+	if err := ds.Ingest(rows); err != nil {
+		t.Fatal(err)
+	}
+
+	allRows, err := ds.Query("SELECT * FROM logs WHERE app = 'vimgym'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(allRows) != len(rows) {
+		t.Errorf("expected %d rows, got %d", len(rows), len(allRows))
+	}
+
+	// Grep for "bot:" which appears in several vimgym lines.
+	botRows, err := ds.Query("SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%bot:%'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("bot rows: %d", len(botRows))
+	if len(botRows) == 0 {
+		t.Error("expected some bot rows")
+	}
+}

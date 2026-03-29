@@ -1,0 +1,43 @@
+services:
+  shard-0:
+    build:
+      context: ..
+      dockerfile: weft/Dockerfile
+    command:
+      - weft-shard
+      - --id=shard-0
+      - --grpc-port=9000
+      - --http-port=9001
+      - --window-start=2026-03-28T10:00:00Z
+      - --window-end=2026-03-28T11:00:00Z
+      - --seed=shard-0
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  shard-1:
+    build:
+      context: ..
+      dockerfile: weft/Dockerfile
+    command:
+      - weft-shard
+      - --id=shard-1
+      - --grpc-port=9000
+      - --http-port=9001
+      - --window-start=2026-03-28T11:00:00Z
+      - --window-end=2026-03-28T12:00:00Z
+      - --seed=shard-1
+    ports:
+      - "9002:9000"
+      - "9003:9001"
+
+  compute:
+    build:
+      context: ..
+      dockerfile: weft/Dockerfile
+    command:
+      - weft-compute
+      - --port=9010
+      - --parallelism=2
+    ports:
+      - "9010:9010"

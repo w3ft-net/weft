@@ -1,0 +1,16 @@
+# Binaries (in repo root only)
+/server
+/weft
+/wef
+*.exe
+
+# DuckDB databases
+*.duckdb
+*.duckdb.wal
+
+# Generated schema files (from weft setup)
+*.schema.yaml
+
+# IDE
+.idea/
+.vscode/

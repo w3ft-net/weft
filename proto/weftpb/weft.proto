@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package weft;
+
+option go_package = "github.com/kevlarcon/weft/proto/weftpb";
+
+// ---------------------------------------------------------------------------
+// Shard service — runs on each shard node
+// ---------------------------------------------------------------------------
+
+service ShardQuery {
+  // Query executes pushed-down SQL and streams matching rows.
+  rpc Query(QueryRequest) returns (stream LogRow);
+
+  // QueryToCompute executes SQL and streams rows directly to a compute
+  // job, followed by a sentinel. The shard manages its own connection
+  // to the compute service.
+  rpc QueryToCompute(QueryToComputeRequest) returns (QueryToComputeResponse);
+
+  // Ingest accepts a batch of rows for insertion into the shard.
+  rpc Ingest(IngestRequest) returns (IngestResponse);
+}
+
+message QueryRequest {
+  string sql = 1;
+}
+
+message QueryToComputeRequest {
+  string sql = 1;
+  string compute_addr = 2;  // address of the compute worker
+  string job_id = 3;        // compute job to send rows to
+}
+
+message QueryToComputeResponse {
+  int64 rows_sent = 1;
+}
+
+message LogRow {
+  int64 line_num = 1;
+  string raw = 2;
+  string app = 3;
+  string level = 4;
+  int64 ts_unix_ns = 5;
+  string instance = 6;
+  bytes payload_json = 7;
+  repeated string fields = 8;
+  string customer = 9;
+}
+
+message IngestRequest {
+  repeated LogRow rows = 1;
+}
+
+message IngestResponse {
+  int64 rows_ingested = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Compute service — runs on compute worker nodes
+// ---------------------------------------------------------------------------
+
+service WeftCompute {
+  // CreateJob creates a new compute job with the given pipeline stages.
+  rpc CreateJob(CreateJobRequest) returns (CreateJobResponse);
+
+  // SendRows streams rows and sentinels to an active job.
+  rpc SendRows(stream ComputeMessage) returns (SendRowsResponse);
+
+  // GetResult blocks until the job is complete and returns the output.
+  rpc GetResult(GetResultRequest) returns (GetResultResponse);
+}
+
+message CreateJobRequest {
+  repeated string stages = 1;
+  int32 shard_count = 2;
+}
+
+message CreateJobResponse {
+  string job_id = 1;
+}
+
+message ComputeMessage {
+  string job_id = 1;
+  string shard_id = 2;
+  bool sentinel = 3;
+  LogRow row = 4;  // nil/empty for sentinel messages
+}
+
+message SendRowsResponse {
+  int64 rows_received = 1;
+}
+
+message GetResultRequest {
+  string job_id = 1;
+}
+
+message GetResultResponse {
+  string text = 1;
+  string error = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Shard health — HTTP, not gRPC, but defining the message for consistency
+// ---------------------------------------------------------------------------
+
+message ShardHealth {
+  string state = 1;          // LAUNCHING, INGESTING, READ_ONLY, EXPIRING
+  string window_start = 2;   // RFC3339
+  string window_end = 3;     // RFC3339
+  int64 row_count = 4;
+  int64 disk_bytes = 5;
+  string last_write = 6;     // RFC3339
+}

@@ -1,0 +1,225 @@
+━━━ /aws/grantcentral/worker ━━━
+[2026-03-22 08:39:13] [i-0fb0b01f1bc7baba6] [2026-03-22 12:39:02,057: INFO/MainProcess] celery@ip-172-31-44-106 ready.
+[2026-03-22 08:39:13] [i-0fb0b01f1bc7baba6] [2026-03-22 12:39:02,682: INFO/MainProcess] Task forms.tasks.publish_dataset[deed4d18-331d-4c15-a51e-d1fe6fca16b7] received
+[2026-03-22 08:39:13] [i-0fb0b01f1bc7baba6] [2026-03-22 12:39:10,555: INFO/ForkPoolWorker-1] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-22 08:39:13] [i-0fb0b01f1bc7baba6] [2026-03-22 12:39:10,110: ERROR/ForkPoolWorker-1] Dataset 37 publish failed: integer out of range
+
+[2026-03-22 08:39:13] [i-0fb0b01f1bc7baba6] [2026-03-22 12:39:04,362: INFO/ForkPoolWorker-1] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-22 08:39:13] [i-0fb0b01f1bc7baba6] [2026-03-22 12:39:03,179: INFO/ForkPoolWorker-1] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-22 08:39:13] [i-0fb0b01f1bc7baba6] [2026-03-22 12:39:02,904: INFO/ForkPoolWorker-1] Starting dataset publish for dataset 37
+[2026-03-22 08:39:13] [i-0fb0b01f1bc7baba6] [2026-03-22 12:39:10,797: INFO/MainProcess] Task forms.tasks.publish_dataset[deed4d18-331d-4c15-a51e-d1fe6fca16b7] received
+[2026-03-22 08:39:18] [i-0fb0b01f1bc7baba6] [2026-03-22 12:39:10,800: INFO/ForkPoolWorker-1] Task forms.tasks.publish_dataset[deed4d18-331d-4c15-a51e-d1fe6fca16b7] retry: Retry in 30s: DataError('integer out of range\n')
+[2026-03-22 08:39:40] [i-0fb0b01f1bc7baba6] [2026-03-22 12:39:40,550: INFO/ForkPoolWorker-1] publish_dataset: job 14 already failed, skipping
+[2026-03-22 08:39:44] [i-0fb0b01f1bc7baba6] [2026-03-22 12:39:40,551: INFO/ForkPoolWorker-1] Task forms.tasks.publish_dataset[deed4d18-331d-4c15-a51e-d1fe6fca16b7] succeeded in 0.02547232300000246s: None
+[2026-03-22 09:07:12] [i-02b94838b1acad55f] [2026-03-22 13:06:57,780: INFO/MainProcess] Task forms.tasks.publish_dataset[f453ce23-3c6f-40d0-bfca-daff62c3d53e] received
+[2026-03-22 09:07:12] [i-02b94838b1acad55f] [2026-03-22 13:06:57,250: INFO/MainProcess] Connected to sqs://localhost//
+[2026-03-22 09:07:12] [i-02b94838b1acad55f] [2026-03-22 13:06:57,272: INFO/MainProcess] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-22 09:07:12] [i-02b94838b1acad55f] [2026-03-22 13:06:57,527: INFO/MainProcess] celery@ip-172-31-44-88 ready.
+[2026-03-22 09:07:12] [i-02b94838b1acad55f] [2026-03-22 13:06:58,147: INFO/ForkPoolWorker-1] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-22 09:07:12] [i-02b94838b1acad55f] [2026-03-22 13:06:57,885: INFO/ForkPoolWorker-1] Starting dataset publish for dataset 38
+[2026-03-22 09:07:12] [i-02b94838b1acad55f] [2026-03-22 13:06:56,701: INFO/MainProcess] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-22 09:07:12] [i-02b94838b1acad55f] [2026-03-22 13:07:04,301: INFO/MainProcess] Task forms.tasks.publish_dataset[f453ce23-3c6f-40d0-bfca-daff62c3d53e] received
+[2026-03-22 09:07:12] [i-02b94838b1acad55f] [2026-03-22 13:07:04,037: INFO/ForkPoolWorker-1] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-22 09:07:12] [i-02b94838b1acad55f] [2026-03-22 13:07:03,722: ERROR/ForkPoolWorker-1] Dataset 38 publish failed: integer out of range
+
+[2026-03-22 09:07:12] [i-02b94838b1acad55f] [2026-03-22 13:06:59,114: INFO/ForkPoolWorker-1] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-22 09:07:17] [i-02b94838b1acad55f] [2026-03-22 13:07:04,313: INFO/ForkPoolWorker-1] Task forms.tasks.publish_dataset[f453ce23-3c6f-40d0-bfca-daff62c3d53e] retry: Retry in 30s: DataError('integer out of range\n')
+[2026-03-22 09:07:34] [i-02b94838b1acad55f] [2026-03-22 13:07:34,035: INFO/ForkPoolWorker-1] publish_dataset: job 15 already failed, skipping
+[2026-03-22 09:07:38] [i-02b94838b1acad55f] [2026-03-22 13:07:34,036: INFO/ForkPoolWorker-1] Task forms.tasks.publish_dataset[f453ce23-3c6f-40d0-bfca-daff62c3d53e] succeeded in 0.027432514000011565s: None
+[2026-03-22 09:11:38] [i-02b94838b1acad55f] [2026-03-22 13:11:38,211: INFO/MainProcess] Task forms.tasks.publish_dataset[a008da22-ec2a-470f-af44-93fe49d502f6] received
+[2026-03-22 09:11:42] [i-02b94838b1acad55f] [2026-03-22 13:11:38,249: INFO/ForkPoolWorker-1] Starting dataset publish for dataset 39
+[2026-03-22 09:13:04] [i-02b94838b1acad55f] [2026-03-22 13:13:04,189: INFO/ForkPoolWorker-1] Dataset 39 published successfully
+[2026-03-22 09:13:08] [i-02b94838b1acad55f] [2026-03-22 13:13:04,193: INFO/ForkPoolWorker-1] Task forms.tasks.publish_dataset[a008da22-ec2a-470f-af44-93fe49d502f6] succeeded in 85.97940992599996s: None
+[2026-03-23 07:47:29] [i-0be83fef781e34c3c] [2026-03-23 11:47:28,627: INFO/MainProcess] Task forms.tasks.publish_dataset[3037df01-ccf9-4841-bfa7-cc7299e3433f] received
+[2026-03-23 07:47:29] [i-0be83fef781e34c3c] [2026-03-23 11:47:26,387: INFO/MainProcess] Connected to sqs://localhost//
+[2026-03-23 07:47:29] [i-0be83fef781e34c3c] [2026-03-23 11:47:26,415: INFO/MainProcess] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-23 07:47:29] [i-0be83fef781e34c3c] [2026-03-23 11:47:26,591: INFO/MainProcess] celery@ip-172-31-8-20 ready.
+[2026-03-23 07:47:29] [i-0be83fef781e34c3c] [2026-03-23 11:47:23,745: INFO/MainProcess] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-23 07:47:29] [i-0be83fef781e34c3c] [2026-03-23 11:47:29,210: INFO/ForkPoolWorker-1] Starting dataset publish for dataset 40
+[2026-03-23 07:47:30] [i-0be83fef781e34c3c] [2026-03-23 11:47:29,431: INFO/ForkPoolWorker-1] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-23 07:47:34] [i-0be83fef781e34c3c] [2026-03-23 11:47:30,372: INFO/ForkPoolWorker-1] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-23 07:47:46] [i-0be83fef781e34c3c] [2026-03-23 11:47:46,052: INFO/ForkPoolWorker-1] Dataset 40 published successfully
+[2026-03-23 07:47:50] [i-0be83fef781e34c3c] [2026-03-23 11:47:46,058: INFO/ForkPoolWorker-1] Task forms.tasks.publish_dataset[3037df01-ccf9-4841-bfa7-cc7299e3433f] succeeded in 17.382001187s: None
+[2026-03-28 11:13:37] [i-052402bc87acf36c3] [2026-03-28 15:13:33,475: INFO/MainProcess] Connected to sqs://localhost//
+[2026-03-28 11:13:37] [i-052402bc87acf36c3] [2026-03-28 15:13:34,965: WARNING/ForkPoolWorker-1] Failed to write wizard status to Redis
+[2026-03-28 11:13:37] [i-052402bc87acf36c3] [2026-03-28 15:13:33,503: INFO/MainProcess] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-28 11:13:37] [i-052402bc87acf36c3] [2026-03-28 15:13:33,684: INFO/MainProcess] celery@ip-172-31-14-225 ready.
+[2026-03-28 11:13:37] [i-052402bc87acf36c3] [2026-03-28 15:13:30,718: INFO/MainProcess] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-28 11:13:37] [i-052402bc87acf36c3] [2026-03-28 15:13:34,486: INFO/MainProcess] Task reports.tasks.run_report_wizard[e42bee00-618f-4502-98c3-5f63a87ac800] received
+[2026-03-28 11:13:37] [i-052402bc87acf36c3] Traceback (most recent call last):
+  File "/opt/app/reports/wizard.py", line 490, in _set_wizard_status
+    r = _get_report_redis()
+        ^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/reports/engine.py", line 292, in _get_report_redis
+    import redis as redis_lib
+  File "/opt/app/.venv/lib/python3.11/site-packages/redis/__init__.py", line 1, in <module>
+    from redis import asyncio  # noqa
+    ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/.venv/lib/python3.11/site-packages/redis/asyncio/__init__.py", line 1, in <module>
+    from redis.asyncio.client import Redis, StrictRedis
+  File "/opt/app/.venv/lib/python3.11/site-packages/redis/asyncio/client.py", line 34, in <module>
+    from redis.asyncio.connection import (
+  File "/opt/app/.venv/lib/python3.11/site-packages/redis/asyncio/connection.py", line 50, in <module>
+    from async_timeout import timeout as async_timeout
+[2026-03-28 11:13:37] [i-052402bc87acf36c3] ModuleNotFoundError: No module named 'async_timeout'
+[2026-03-28 11:13:38] [i-052402bc87acf36c3] [2026-03-28 15:13:35,215: INFO/ForkPoolWorker-1] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-28 11:13:43] [i-052402bc87acf36c3] [2026-03-28 15:13:38,337: INFO/ForkPoolWorker-1] HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+[2026-03-28 11:13:44] [i-052402bc87acf36c3] [2026-03-28 15:13:44,087: INFO/ForkPoolWorker-1] HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+[2026-03-28 11:13:44] [i-052402bc87acf36c3] [2026-03-28 15:13:44,219: WARNING/ForkPoolWorker-1] Failed to derive SQL schema
+[2026-03-28 11:13:44] [i-052402bc87acf36c3] Traceback (most recent call last):
+  File "/opt/app/.venv/lib/python3.11/site-packages/django/db/backends/utils.py", line 103, in _execute
+    return self.cursor.execute(sql)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+[2026-03-28 11:13:44] [i-052402bc87acf36c3] psycopg2.errors.UndefinedFunction: function sum(character varying) does not exist
+[2026-03-28 11:13:44] [i-052402bc87acf36c3] LINE 1: ...ROM (SELECT "project_areas"."county" AS "County", SUM("bead_...
+                                                             ^
+[2026-03-28 11:13:44] [i-052402bc87acf36c3] HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+
+
+[2026-03-28 11:13:44] [i-052402bc87acf36c3] The above exception was the direct cause of the following exception:
+
+[2026-03-28 11:13:44] [i-052402bc87acf36c3] Traceback (most recent call last):
+  File "/opt/app/reports/engine.py", line 447, in derive_sql_schema
+    return validate_sql(sql, project)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/reports/engine.py", line 429, in validate_sql
+    cursor.execute(f'SELECT * FROM ({sql}) _sq LIMIT 0')
+  File "/opt/app/.venv/lib/python3.11/site-packages/sentry_sdk/utils.py", line 1842, in runner
+    return sentry_patched_function(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/.venv/lib/python3.11/site-packages/sentry_sdk/integrations/django/__init__.py", line 645, in execute
+    result = real_execute(self, sql, params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/.venv/lib/python3.11/site-packages/django/db/backends/utils.py", line 79, in execute
+    return self._execute_with_wrappers(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/.venv/lib/python3.11/site-packages/django/db/backends/utils.py", line 92, in _execute_with_wrappers
+    return executor(sql, params, many, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/.venv/lib/python3.11/site-packages/django/db/backends/utils.py", line 100, in _execute
+    with self.db.wrap_database_errors:
+  File "/opt/app/.venv/lib/python3.11/site-packages/django/db/utils.py", line 91, in __exit__
+    raise dj_exc_value.with_traceback(traceback) from exc_value
+  File "/opt/app/.venv/lib/python3.11/site-packages/django/db/backends/utils.py", line 103, in _execute
+    return self.cursor.execute(sql)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+[2026-03-28 11:13:44] [i-052402bc87acf36c3] django.db.utils.ProgrammingError: function sum(character varying) does not exist
+[2026-03-28 11:13:44] [i-052402bc87acf36c3] LINE 1: ...ROM (SELECT "project_areas"."county" AS "County", SUM("bead_...
+                                                             ^
+[2026-03-28 11:13:48] [i-052402bc87acf36c3] HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+
+[2026-03-28 11:13:51] [i-052402bc87acf36c3] [2026-03-28 15:13:48,625: INFO/ForkPoolWorker-1] HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+[2026-03-28 11:13:55] [i-052402bc87acf36c3] [2026-03-28 15:13:51,395: INFO/ForkPoolWorker-1] HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+[2026-03-28 11:13:57] [i-052402bc87acf36c3] [2026-03-28 15:13:57,457: INFO/ForkPoolWorker-1] HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+[2026-03-28 11:13:57] [i-052402bc87acf36c3] [2026-03-28 15:13:57,548: WARNING/ForkPoolWorker-1] Failed to derive SQL schema
+[2026-03-28 11:13:57] [i-052402bc87acf36c3] Traceback (most recent call last):
+  File "/opt/app/.venv/lib/python3.11/site-packages/django/db/backends/utils.py", line 103, in _execute
+    return self.cursor.execute(sql)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+[2026-03-28 11:13:57] [i-052402bc87acf36c3] psycopg2.errors.UndefinedFunction: operator does not exist: text = integer
+[2026-03-28 11:13:57] [i-052402bc87acf36c3] LINE 3: ...JOIN "bead_subgrant_awards" ON "popoops"."county" = "bead_su...
+                                                             ^
+[2026-03-28 11:13:57] [i-052402bc87acf36c3] HINT:  No operator matches the given name and argument types. You might need to add explicit type casts.
+
+
+[2026-03-28 11:13:57] [i-052402bc87acf36c3] The above exception was the direct cause of the following exception:
+
+[2026-03-28 11:13:57] [i-052402bc87acf36c3] Traceback (most recent call last):
+  File "/opt/app/reports/engine.py", line 447, in derive_sql_schema
+    return validate_sql(sql, project)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/reports/engine.py", line 429, in validate_sql
+    cursor.execute(f'SELECT * FROM ({sql}) _sq LIMIT 0')
+  File "/opt/app/.venv/lib/python3.11/site-packages/sentry_sdk/utils.py", line 1842, in runner
+    return sentry_patched_function(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/.venv/lib/python3.11/site-packages/sentry_sdk/integrations/django/__init__.py", line 645, in execute
+    result = real_execute(self, sql, params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/.venv/lib/python3.11/site-packages/django/db/backends/utils.py", line 79, in execute
+    return self._execute_with_wrappers(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/.venv/lib/python3.11/site-packages/django/db/backends/utils.py", line 92, in _execute_with_wrappers
+    return executor(sql, params, many, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/.venv/lib/python3.11/site-packages/django/db/backends/utils.py", line 100, in _execute
+    with self.db.wrap_database_errors:
+  File "/opt/app/.venv/lib/python3.11/site-packages/django/db/utils.py", line 91, in __exit__
+    raise dj_exc_value.with_traceback(traceback) from exc_value
+  File "/opt/app/.venv/lib/python3.11/site-packages/django/db/backends/utils.py", line 103, in _execute
+    return self.cursor.execute(sql)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+[2026-03-28 11:13:57] [i-052402bc87acf36c3] django.db.utils.ProgrammingError: operator does not exist: text = integer
+[2026-03-28 11:13:57] [i-052402bc87acf36c3] LINE 3: ...JOIN "bead_subgrant_awards" ON "popoops"."county" = "bead_su...
+                                                             ^
+[2026-03-28 11:14:01] [i-052402bc87acf36c3] HINT:  No operator matches the given name and argument types. You might need to add explicit type casts.
+
+[2026-03-28 11:14:05] [i-052402bc87acf36c3] [2026-03-28 15:14:02,833: INFO/ForkPoolWorker-1] HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+[2026-03-28 11:14:09] [i-052402bc87acf36c3] [2026-03-28 15:14:05,243: INFO/ForkPoolWorker-1] HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+[2026-03-28 11:14:11] [i-052402bc87acf36c3] [2026-03-28 15:14:11,369: WARNING/ForkPoolWorker-1] Failed to write wizard status to Redis
+[2026-03-28 11:14:11] [i-052402bc87acf36c3] Traceback (most recent call last):
+  File "/opt/app/reports/wizard.py", line 490, in _set_wizard_status
+    r = _get_report_redis()
+        ^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/reports/engine.py", line 292, in _get_report_redis
+    import redis as redis_lib
+  File "/opt/app/.venv/lib/python3.11/site-packages/redis/__init__.py", line 1, in <module>
+    from redis import asyncio  # noqa
+    ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/.venv/lib/python3.11/site-packages/redis/asyncio/__init__.py", line 1, in <module>
+    from redis.asyncio.client import Redis, StrictRedis
+  File "/opt/app/.venv/lib/python3.11/site-packages/redis/asyncio/client.py", line 34, in <module>
+    from redis.asyncio.connection import (
+  File "/opt/app/.venv/lib/python3.11/site-packages/redis/asyncio/connection.py", line 50, in <module>
+    from async_timeout import timeout as async_timeout
+[2026-03-28 11:14:11] [i-052402bc87acf36c3] ModuleNotFoundError: No module named 'async_timeout'
+[2026-03-28 11:14:11] [i-052402bc87acf36c3] [2026-03-28 15:14:11,366: INFO/ForkPoolWorker-1] HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+[2026-03-28 11:14:15] [i-052402bc87acf36c3] [2026-03-28 15:14:11,379: INFO/ForkPoolWorker-1] Task reports.tasks.run_report_wizard[e42bee00-618f-4502-98c3-5f63a87ac800] succeeded in 36.88668818900001s: None
+[2026-03-28 11:16:20] [i-02ac814dd36ad9688] [2026-03-28 15:16:13,344: INFO/MainProcess] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-28 11:16:20] [i-02ac814dd36ad9688] [2026-03-28 15:16:13,924: INFO/MainProcess] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-28 11:16:20] [i-02ac814dd36ad9688] [2026-03-28 15:16:13,903: INFO/MainProcess] Connected to sqs://localhost//
+[2026-03-28 11:16:25] [i-02ac814dd36ad9688] [2026-03-28 15:16:14,080: INFO/MainProcess] celery@ip-172-31-34-122 ready.
+[2026-03-28 11:41:28] [i-0538a8a932eac03da] Traceback (most recent call last):
+  File "/opt/app/reports/wizard.py", line 490, in _set_wizard_status
+    r = _get_report_redis()
+        ^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/reports/engine.py", line 292, in _get_report_redis
+    import redis as redis_lib
+  File "/opt/app/.venv/lib/python3.11/site-packages/redis/__init__.py", line 1, in <module>
+    from redis import asyncio  # noqa
+    ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/.venv/lib/python3.11/site-packages/redis/asyncio/__init__.py", line 1, in <module>
+    from redis.asyncio.client import Redis, StrictRedis
+  File "/opt/app/.venv/lib/python3.11/site-packages/redis/asyncio/client.py", line 34, in <module>
+    from redis.asyncio.connection import (
+  File "/opt/app/.venv/lib/python3.11/site-packages/redis/asyncio/connection.py", line 50, in <module>
+    from async_timeout import timeout as async_timeout
+[2026-03-28 11:41:28] [i-0538a8a932eac03da] ModuleNotFoundError: No module named 'async_timeout'
+[2026-03-28 11:41:28] [i-0538a8a932eac03da] [2026-03-28 15:41:25,601: INFO/MainProcess] Connected to sqs://localhost//
+[2026-03-28 11:41:28] [i-0538a8a932eac03da] [2026-03-28 15:41:25,636: INFO/MainProcess] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-28 11:41:28] [i-0538a8a932eac03da] [2026-03-28 15:41:25,855: INFO/MainProcess] celery@ip-172-31-13-86 ready.
+[2026-03-28 11:41:28] [i-0538a8a932eac03da] [2026-03-28 15:41:26,841: INFO/MainProcess] Task reports.tasks.run_report_wizard[9a6b46ed-74ba-4df2-8456-63c0f3c04cb3] received
+[2026-03-28 11:41:28] [i-0538a8a932eac03da] [2026-03-28 15:41:27,416: WARNING/ForkPoolWorker-1] Failed to write wizard status to Redis
+[2026-03-28 11:41:28] [i-0538a8a932eac03da] [2026-03-28 15:41:24,807: INFO/MainProcess] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-28 11:41:32] [i-0538a8a932eac03da] [2026-03-28 15:41:27,678: INFO/ForkPoolWorker-1] Found credentials from IAM Role: grantcentral-instance-role
+[2026-03-28 11:41:36] [i-0538a8a932eac03da] [2026-03-28 15:41:32,009: INFO/ForkPoolWorker-1] HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+[2026-03-28 11:41:40] [i-0538a8a932eac03da] [2026-03-28 15:41:36,774: INFO/ForkPoolWorker-1] HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+[2026-03-28 11:41:40] [i-0538a8a932eac03da] [2026-03-28 15:41:40,614: INFO/ForkPoolWorker-1] HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+[2026-03-28 11:41:40] [i-0538a8a932eac03da] [2026-03-28 15:41:40,617: WARNING/ForkPoolWorker-1] Failed to write wizard status to Redis
+[2026-03-28 11:41:40] [i-0538a8a932eac03da] Traceback (most recent call last):
+  File "/opt/app/reports/wizard.py", line 490, in _set_wizard_status
+    r = _get_report_redis()
+        ^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/reports/engine.py", line 292, in _get_report_redis
+    import redis as redis_lib
+  File "/opt/app/.venv/lib/python3.11/site-packages/redis/__init__.py", line 1, in <module>
+    from redis import asyncio  # noqa
+    ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/app/.venv/lib/python3.11/site-packages/redis/asyncio/__init__.py", line 1, in <module>
+    from redis.asyncio.client import Redis, StrictRedis
+  File "/opt/app/.venv/lib/python3.11/site-packages/redis/asyncio/client.py", line 34, in <module>
+    from redis.asyncio.connection import (
+  File "/opt/app/.venv/lib/python3.11/site-packages/redis/asyncio/connection.py", line 50, in <module>
+    from async_timeout import timeout as async_timeout
+[2026-03-28 11:41:40] [i-0538a8a932eac03da] ModuleNotFoundError: No module named 'async_timeout'
+[2026-03-28 11:41:45] [i-0538a8a932eac03da] [2026-03-28 15:41:40,633: INFO/ForkPoolWorker-1] Task reports.tasks.run_report_wizard[9a6b46ed-74ba-4df2-8456-63c0f3c04cb3] succeeded in 13.582171106000004s: None

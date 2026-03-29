@@ -1,0 +1,425 @@
+package coordinator
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/kevlarcon/weft/compute"
+	"github.com/kevlarcon/weft/shard"
+)
+
+// Base times for test fixtures. Shard 0 covers 10:00–11:00, shard 1 covers 11:00–12:00.
+var (
+	t0 = time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC) // shard 0 start
+	t1 = time.Date(2026, 3, 28, 11, 0, 0, 0, time.UTC) // shard 1 start
+	t2 = time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC) // shard 1 end
+)
+
+// fullRange covers both shards.
+var fullRange = TimeRange{Start: t0, End: t2}
+
+func payload(m map[string]any) json.RawMessage {
+	b, _ := json.Marshal(m)
+	return b
+}
+
+// setupTestCoordinator creates two in-memory DuckDB shards with realistic
+// log data and returns a Coordinator ready for querying.
+func setupTestCoordinator(t *testing.T) *Coordinator {
+	t.Helper()
+
+	s0, err := shard.NewDuckDBShard("shard-0", "", t0, t1)
+	if err != nil {
+		t.Fatalf("create shard-0: %v", err)
+	}
+	t.Cleanup(func() { s0.Close() })
+
+	s1, err := shard.NewDuckDBShard("shard-1", "", t1, t2)
+	if err != nil {
+		t.Fatalf("create shard-1: %v", err)
+	}
+	t.Cleanup(func() { s1.Close() })
+
+	// --- Shard 0: 10:00–11:00, 25 rows ---
+	if err := s0.Ingest(shard0Rows()); err != nil {
+		t.Fatalf("ingest shard-0: %v", err)
+	}
+
+	// --- Shard 1: 11:00–12:00, 25 rows ---
+	if err := s1.Ingest(shard1Rows()); err != nil {
+		t.Fatalf("ingest shard-1: %v", err)
+	}
+
+	// Inject some rows from a different customer to test isolation.
+	if err := s0.Ingest(otherCustomerRows()); err != nil {
+		t.Fatalf("ingest other-customer: %v", err)
+	}
+
+	return &Coordinator{
+		Shards:   []shard.Shard{s0, s1},
+		Customer: "kevlar",
+	}
+}
+
+func shard0Rows() []shard.LogRow {
+	base := t0
+	return []shard.LogRow{
+		{LineNum: 1, Raw: "2026-03-28T10:00:01 ERROR vimgym i-001 connection timeout", Fields: []string{"2026-03-28T10:00:01", "ERROR", "vimgym", "i-001", "connection", "timeout"}, Ts: base.Add(1 * time.Second), Level: "ERROR", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: payload(map[string]any{"status": 500, "action": "login", "user_id": "u1"})},
+		{LineNum: 2, Raw: "2026-03-28T10:00:05 INFO vimgym i-001 request completed", Fields: []string{"2026-03-28T10:00:05", "INFO", "vimgym", "i-001", "request", "completed"}, Ts: base.Add(5 * time.Second), Level: "INFO", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: payload(map[string]any{"status": 200, "action": "list", "duration_ms": 45})},
+		{LineNum: 3, Raw: "2026-03-28T10:01:00 WARN callbox i-002 slow query detected", Fields: []string{"2026-03-28T10:01:00", "WARN", "callbox", "i-002", "slow", "query", "detected"}, Ts: base.Add(1 * time.Minute), Level: "WARN", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: payload(map[string]any{"status": 200, "action": "search", "duration_ms": 1500})},
+		{LineNum: 4, Raw: "2026-03-28T10:02:00 ERROR vimgym i-001 null pointer exception", Fields: []string{"2026-03-28T10:02:00", "ERROR", "vimgym", "i-001", "null", "pointer", "exception"}, Ts: base.Add(2 * time.Minute), Level: "ERROR", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: payload(map[string]any{"status": 500, "action": "update", "user_id": "u2"})},
+		{LineNum: 5, Raw: "2026-03-28T10:03:00 INFO callbox i-002 health check ok", Fields: []string{"2026-03-28T10:03:00", "INFO", "callbox", "i-002", "health", "check", "ok"}, Ts: base.Add(3 * time.Minute), Level: "INFO", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: payload(map[string]any{"status": 200, "action": "health"})},
+		{LineNum: 6, Raw: "2026-03-28T10:05:00 ERROR callbox i-002 connection timeout to database", Fields: []string{"2026-03-28T10:05:00", "ERROR", "callbox", "i-002", "connection", "timeout", "to", "database"}, Ts: base.Add(5 * time.Minute), Level: "ERROR", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: payload(map[string]any{"status": 503, "action": "query"})},
+		{LineNum: 7, Raw: "2026-03-28T10:10:00 INFO vimgym i-003 user signup completed", Fields: []string{"2026-03-28T10:10:00", "INFO", "vimgym", "i-003", "user", "signup", "completed"}, Ts: base.Add(10 * time.Minute), Level: "INFO", App: "vimgym", Instance: "i-003", Customer: "kevlar", Payload: payload(map[string]any{"status": 201, "action": "signup", "user_id": "u3"})},
+		{LineNum: 8, Raw: "2026-03-28T10:15:00 DEBUG vimgym i-001 cache miss for key session:u1", Fields: []string{"2026-03-28T10:15:00", "DEBUG", "vimgym", "i-001", "cache", "miss", "for", "key", "session:u1"}, Ts: base.Add(15 * time.Minute), Level: "DEBUG", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: payload(map[string]any{"status": 200, "action": "cache_lookup"})},
+		{LineNum: 9, Raw: "2026-03-28T10:20:00 ERROR vimgym i-003 timeout waiting for response", Fields: []string{"2026-03-28T10:20:00", "ERROR", "vimgym", "i-003", "timeout", "waiting", "for", "response"}, Ts: base.Add(20 * time.Minute), Level: "ERROR", App: "vimgym", Instance: "i-003", Customer: "kevlar", Payload: payload(map[string]any{"status": 504, "action": "proxy"})},
+		{LineNum: 10, Raw: "2026-03-28T10:25:00 INFO callbox i-002 batch job completed 150 records", Fields: []string{"2026-03-28T10:25:00", "INFO", "callbox", "i-002", "batch", "job", "completed", "150", "records"}, Ts: base.Add(25 * time.Minute), Level: "INFO", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: payload(map[string]any{"status": 200, "action": "batch", "count": 150})},
+		{LineNum: 11, Raw: "2026-03-28T10:30:00 WARN vimgym i-001 high memory usage 85%", Fields: []string{"2026-03-28T10:30:00", "WARN", "vimgym", "i-001", "high", "memory", "usage", "85%"}, Ts: base.Add(30 * time.Minute), Level: "WARN", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: payload(map[string]any{"status": 200, "action": "monitor", "memory_pct": 85})},
+		{LineNum: 12, Raw: "2026-03-28T10:35:00 INFO vimgym i-001 request completed", Fields: []string{"2026-03-28T10:35:00", "INFO", "vimgym", "i-001", "request", "completed"}, Ts: base.Add(35 * time.Minute), Level: "INFO", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: payload(map[string]any{"status": 200, "action": "list", "duration_ms": 32})},
+		{LineNum: 13, Raw: "2026-03-28T10:40:00 ERROR callbox i-002 authentication failed for tenant acme", Fields: []string{"2026-03-28T10:40:00", "ERROR", "callbox", "i-002", "authentication", "failed", "for", "tenant", "acme"}, Ts: base.Add(40 * time.Minute), Level: "ERROR", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: payload(map[string]any{"status": 401, "action": "auth"})},
+		{LineNum: 14, Raw: "2026-03-28T10:45:00 INFO vimgym i-003 deploy v2.3.1 started", Fields: []string{"2026-03-28T10:45:00", "INFO", "vimgym", "i-003", "deploy", "v2.3.1", "started"}, Ts: base.Add(45 * time.Minute), Level: "INFO", App: "vimgym", Instance: "i-003", Customer: "kevlar", Payload: payload(map[string]any{"status": 200, "action": "deploy", "version": "v2.3.1"})},
+		{LineNum: 15, Raw: "2026-03-28T10:50:00 INFO callbox i-002 connection pool resized to 20", Fields: []string{"2026-03-28T10:50:00", "INFO", "callbox", "i-002", "connection", "pool", "resized", "to", "20"}, Ts: base.Add(50 * time.Minute), Level: "INFO", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: payload(map[string]any{"status": 200, "action": "pool_resize", "size": 20})},
+	}
+}
+
+func shard1Rows() []shard.LogRow {
+	base := t1
+	return []shard.LogRow{
+		{LineNum: 16, Raw: "2026-03-28T11:00:01 INFO vimgym i-001 deploy v2.3.1 completed", Fields: []string{"2026-03-28T11:00:01", "INFO", "vimgym", "i-001", "deploy", "v2.3.1", "completed"}, Ts: base.Add(1 * time.Second), Level: "INFO", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: payload(map[string]any{"status": 200, "action": "deploy", "version": "v2.3.1"})},
+		{LineNum: 17, Raw: "2026-03-28T11:01:00 ERROR vimgym i-001 500 internal server error on /api/users", Fields: []string{"2026-03-28T11:01:00", "ERROR", "vimgym", "i-001", "500", "internal", "server", "error", "on", "/api/users"}, Ts: base.Add(1 * time.Minute), Level: "ERROR", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: payload(map[string]any{"status": 500, "action": "api", "path": "/api/users"})},
+		{LineNum: 18, Raw: "2026-03-28T11:05:00 WARN callbox i-002 disk usage above 80%", Fields: []string{"2026-03-28T11:05:00", "WARN", "callbox", "i-002", "disk", "usage", "above", "80%"}, Ts: base.Add(5 * time.Minute), Level: "WARN", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: payload(map[string]any{"status": 200, "action": "monitor", "disk_pct": 82})},
+		{LineNum: 19, Raw: "2026-03-28T11:10:00 INFO vimgym i-003 cache warmed 2500 keys", Fields: []string{"2026-03-28T11:10:00", "INFO", "vimgym", "i-003", "cache", "warmed", "2500", "keys"}, Ts: base.Add(10 * time.Minute), Level: "INFO", App: "vimgym", Instance: "i-003", Customer: "kevlar", Payload: payload(map[string]any{"status": 200, "action": "cache_warm", "keys": 2500})},
+		{LineNum: 20, Raw: "2026-03-28T11:15:00 ERROR callbox i-002 timeout connecting to redis", Fields: []string{"2026-03-28T11:15:00", "ERROR", "callbox", "i-002", "timeout", "connecting", "to", "redis"}, Ts: base.Add(15 * time.Minute), Level: "ERROR", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: payload(map[string]any{"status": 503, "action": "cache"})},
+		{LineNum: 21, Raw: "2026-03-28T11:20:00 INFO vimgym i-001 request completed", Fields: []string{"2026-03-28T11:20:00", "INFO", "vimgym", "i-001", "request", "completed"}, Ts: base.Add(20 * time.Minute), Level: "INFO", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: payload(map[string]any{"status": 200, "action": "list", "duration_ms": 28})},
+		{LineNum: 22, Raw: "2026-03-28T11:25:00 WARN vimgym i-003 request latency spike p99=2.3s", Fields: []string{"2026-03-28T11:25:00", "WARN", "vimgym", "i-003", "request", "latency", "spike", "p99=2.3s"}, Ts: base.Add(25 * time.Minute), Level: "WARN", App: "vimgym", Instance: "i-003", Customer: "kevlar", Payload: payload(map[string]any{"status": 200, "action": "monitor", "p99_ms": 2300})},
+		{LineNum: 23, Raw: "2026-03-28T11:30:00 ERROR vimgym i-001 connection timeout to upstream", Fields: []string{"2026-03-28T11:30:00", "ERROR", "vimgym", "i-001", "connection", "timeout", "to", "upstream"}, Ts: base.Add(30 * time.Minute), Level: "ERROR", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: payload(map[string]any{"status": 504, "action": "proxy"})},
+		{LineNum: 24, Raw: "2026-03-28T11:40:00 INFO callbox i-002 health check ok", Fields: []string{"2026-03-28T11:40:00", "INFO", "callbox", "i-002", "health", "check", "ok"}, Ts: base.Add(40 * time.Minute), Level: "INFO", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: payload(map[string]any{"status": 200, "action": "health"})},
+		{LineNum: 25, Raw: "2026-03-28T11:50:00 INFO vimgym i-003 graceful shutdown initiated", Fields: []string{"2026-03-28T11:50:00", "INFO", "vimgym", "i-003", "graceful", "shutdown", "initiated"}, Ts: base.Add(50 * time.Minute), Level: "INFO", App: "vimgym", Instance: "i-003", Customer: "kevlar", Payload: payload(map[string]any{"status": 200, "action": "shutdown"})},
+	}
+}
+
+// otherCustomerRows returns rows from a different customer to test isolation.
+func otherCustomerRows() []shard.LogRow {
+	return []shard.LogRow{
+		{LineNum: 100, Raw: "2026-03-28T10:00:30 ERROR vimgym i-999 should not appear", Fields: []string{"2026-03-28T10:00:30", "ERROR", "vimgym", "i-999"}, Ts: t0.Add(30 * time.Second), Level: "ERROR", App: "vimgym", Instance: "i-999", Customer: "acme", Payload: payload(map[string]any{"status": 500})},
+		{LineNum: 101, Raw: "2026-03-28T10:01:30 INFO callbox i-999 should not appear", Fields: []string{"2026-03-28T10:01:30", "INFO", "callbox", "i-999"}, Ts: t0.Add(90 * time.Second), Level: "INFO", App: "callbox", Instance: "i-999", Customer: "acme", Payload: payload(map[string]any{"status": 200})},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+func TestQuery_AwkLevelFilter(t *testing.T) {
+	c := setupTestCoordinator(t)
+	res, err := c.Query(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, fullRange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := res.Rows
+	for _, r := range rows {
+		if r.App != "vimgym" {
+			t.Errorf("expected app=vimgym, got %s (line %d)", r.App, r.LineNum)
+		}
+		if r.Level != "ERROR" {
+			t.Errorf("expected level=ERROR, got %s (line %d)", r.Level, r.LineNum)
+		}
+		if r.Customer != "kevlar" {
+			t.Errorf("customer isolation failed: got customer=%s (line %d)", r.Customer, r.LineNum)
+		}
+	}
+	// Shard 0 has vimgym ERROR lines: 1, 4, 9. Shard 1 has: 17, 23. Total 5.
+	if len(rows) != 5 {
+		t.Errorf("expected 5 rows, got %d", len(rows))
+	}
+}
+
+func TestQuery_GrepTimeout(t *testing.T) {
+	c := setupTestCoordinator(t)
+	res, err := c.Query(`cat warp.log | grep timeout`, fullRange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := res.Rows
+	for _, r := range rows {
+		if r.Customer != "kevlar" {
+			t.Errorf("customer isolation: got %s (line %d)", r.Customer, r.LineNum)
+		}
+	}
+	// "timeout" appears in lines: 1, 6, 9 (shard 0), 20, 23 (shard 1) = 5
+	if len(rows) != 5 {
+		t.Errorf("expected 5 timeout rows, got %d", len(rows))
+		for _, r := range rows {
+			t.Logf("  line %d: %s", r.LineNum, r.Raw)
+		}
+	}
+}
+
+func TestQuery_JqSelectStatus500(t *testing.T) {
+	c := setupTestCoordinator(t)
+	res, err := c.Query(`cat vimgym.log | jq 'select(.status == 500)'`, fullRange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := res.Rows
+	for _, r := range rows {
+		var p map[string]any
+		json.Unmarshal(r.Payload, &p)
+		if p["status"] != float64(500) {
+			t.Errorf("expected status=500, got %v (line %d)", p["status"], r.LineNum)
+		}
+	}
+	// status=500 in vimgym: lines 1, 4 (shard 0), 17 (shard 1) = 3
+	if len(rows) != 3 {
+		t.Errorf("expected 3 rows, got %d", len(rows))
+	}
+}
+
+func TestQuery_HeadLimit(t *testing.T) {
+	c := setupTestCoordinator(t)
+	res, err := c.Query(`head -3 vimgym.log`, fullRange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := res.Rows
+	if len(rows) > 3 {
+		t.Errorf("expected at most 3 rows, got %d", len(rows))
+	}
+	for _, r := range rows {
+		if r.App != "vimgym" {
+			t.Errorf("expected app=vimgym, got %s", r.App)
+		}
+	}
+}
+
+func TestQuery_TailLimit(t *testing.T) {
+	c := setupTestCoordinator(t)
+	res, err := c.Query(`tail -3 vimgym.log`, fullRange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := res.Rows
+	if len(rows) > 3 {
+		t.Errorf("expected at most 3 rows, got %d", len(rows))
+	}
+	for _, r := range rows {
+		if r.App != "vimgym" {
+			t.Errorf("expected app=vimgym, got %s", r.App)
+		}
+	}
+}
+
+func TestQuery_TimeRangeScoping_Shard0Only(t *testing.T) {
+	c := setupTestCoordinator(t)
+	tr := TimeRange{Start: t0, End: t1} // only shard 0
+	res, err := c.Query(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := res.Rows
+	// Shard 0 vimgym ERROR: lines 1, 4, 9
+	if len(rows) != 3 {
+		t.Errorf("expected 3 rows from shard 0, got %d", len(rows))
+	}
+	for _, r := range rows {
+		if !r.Ts.Before(t1) {
+			t.Errorf("got row outside shard 0 window: ts=%v (line %d)", r.Ts, r.LineNum)
+		}
+	}
+}
+
+func TestQuery_TimeRangeScoping_Shard1Only(t *testing.T) {
+	c := setupTestCoordinator(t)
+	tr := TimeRange{Start: t1, End: t2} // only shard 1
+	res, err := c.Query(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := res.Rows
+	// Shard 1 vimgym ERROR: lines 17, 23
+	if len(rows) != 2 {
+		t.Errorf("expected 2 rows from shard 1, got %d", len(rows))
+	}
+}
+
+func TestQuery_CustomerIsolation(t *testing.T) {
+	c := setupTestCoordinator(t)
+	res, err := c.Query(`cat vimgym.log`, fullRange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := res.Rows
+	for _, r := range rows {
+		if r.Customer != "kevlar" {
+			t.Fatalf("customer isolation broken: got customer=%q on line %d", r.Customer, r.LineNum)
+		}
+	}
+}
+
+func TestQuery_WarpLogAppFilter(t *testing.T) {
+	c := setupTestCoordinator(t)
+	res, err := c.Query(`cat warp.log | awk '$APP == "callbox"'`, fullRange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := res.Rows
+	for _, r := range rows {
+		if r.App != "callbox" {
+			t.Errorf("expected app=callbox, got %s (line %d)", r.App, r.LineNum)
+		}
+	}
+	// Callbox rows in kevlar: shard 0 has 5 (lines 3,5,6,10,13,15=6), shard 1 has 3 (18,20,24)
+	// Let me count: shard0 callbox = 3,5,6,10,13,15 = 6; shard1 callbox = 18,20,24 = 3; total 9
+	if len(rows) != 9 {
+		t.Errorf("expected 9 callbox rows, got %d", len(rows))
+		for _, r := range rows {
+			t.Logf("  line %d: %s %s", r.LineNum, r.App, r.Level)
+		}
+	}
+}
+
+func TestQuery_ResultsOrderedByTimestamp(t *testing.T) {
+	c := setupTestCoordinator(t)
+	res, err := c.Query(`cat warp.log`, fullRange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := res.Rows
+	for i := 1; i < len(rows); i++ {
+		if rows[i].Ts.Before(rows[i-1].Ts) {
+			t.Errorf("results not ordered: row %d (ts=%v) before row %d (ts=%v)",
+				i-1, rows[i-1].Ts, i, rows[i].Ts)
+		}
+	}
+}
+
+func TestQuery_MergesAcrossShards(t *testing.T) {
+	c := setupTestCoordinator(t)
+	res, err := c.Query(`cat warp.log | grep timeout`, fullRange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := res.Rows
+	// Should have rows from both shards, interleaved by timestamp.
+	hasShard0 := false
+	hasShard1 := false
+	for _, r := range rows {
+		if r.Ts.Before(t1) {
+			hasShard0 = true
+		} else {
+			hasShard1 = true
+		}
+	}
+	if !hasShard0 || !hasShard1 {
+		t.Errorf("expected results from both shards, shard0=%v shard1=%v", hasShard0, hasShard1)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Compute stage tests
+// ---------------------------------------------------------------------------
+
+func setupTestCoordinatorWithCompute(t *testing.T) *Coordinator {
+	t.Helper()
+	c := setupTestCoordinator(t)
+	c.Pool = &compute.LocalComputePool{Parallelism: 2}
+	return c
+}
+
+func TestCompute_Sort(t *testing.T) {
+	c := setupTestCoordinatorWithCompute(t)
+	res, err := c.Query(`cat vimgym.log | awk '$LEVEL == "ERROR"' | sort`, fullRange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Text == "" {
+		t.Fatal("expected text output from compute pipeline, got empty")
+	}
+	lines := nonEmptyLines(res.Text)
+	// Should be sorted lexicographically.
+	for i := 1; i < len(lines); i++ {
+		if lines[i] < lines[i-1] {
+			t.Errorf("not sorted: line %d %q < line %d %q", i, lines[i], i-1, lines[i-1])
+		}
+	}
+	// Should have 5 ERROR lines from vimgym (same count as non-compute test).
+	if len(lines) != 5 {
+		t.Errorf("expected 5 lines, got %d", len(lines))
+		for _, l := range lines {
+			t.Logf("  %s", l)
+		}
+	}
+}
+
+func TestCompute_WcCount(t *testing.T) {
+	c := setupTestCoordinatorWithCompute(t)
+	res, err := c.Query(`cat warp.log | grep timeout | wc -l`, fullRange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Text == "" {
+		t.Fatal("expected text output, got empty")
+	}
+	// wc -l should output the count of timeout lines.
+	// We know there are 5 timeout lines from the grep test.
+	trimmed := strings.TrimSpace(res.Text)
+	if trimmed != "5" {
+		t.Errorf("expected wc -l = 5, got %q", trimmed)
+	}
+}
+
+func TestCompute_SortUniqCount(t *testing.T) {
+	c := setupTestCoordinatorWithCompute(t)
+	// Get ERROR lines from all apps, sort them, count unique lines.
+	res, err := c.Query(`cat warp.log | awk '$LEVEL == "ERROR"' | sort | uniq -c`, fullRange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Text == "" {
+		t.Fatal("expected text output, got empty")
+	}
+	lines := nonEmptyLines(res.Text)
+	// Each unique ERROR line should appear with a count prefix.
+	if len(lines) == 0 {
+		t.Error("expected non-empty output from sort | uniq -c")
+	}
+	for _, l := range lines {
+		// uniq -c output looks like "      1 2026-03-28T10:00:01 ERROR ..."
+		trimmed := strings.TrimSpace(l)
+		if len(trimmed) == 0 || trimmed[0] < '0' || trimmed[0] > '9' {
+			t.Errorf("unexpected uniq -c output format: %q", l)
+		}
+	}
+}
+
+func TestCompute_AwkFieldExtract(t *testing.T) {
+	c := setupTestCoordinatorWithCompute(t)
+	// Grep for ERROR, then print just the third field (app name).
+	res, err := c.Query(`cat warp.log | grep ERROR | awk '{ print $3 }'`, fullRange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Text == "" {
+		t.Fatal("expected text output, got empty")
+	}
+	lines := nonEmptyLines(res.Text)
+	// Every line should be an app name (vimgym or callbox).
+	for _, l := range lines {
+		if l != "vimgym" && l != "callbox" {
+			t.Errorf("expected app name, got %q", l)
+		}
+	}
+}
+
+// nonEmptyLines splits text into lines, filtering out empty ones.
+func nonEmptyLines(text string) []string {
+	var out []string
+	for _, l := range strings.Split(text, "\n") {
+		if l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
