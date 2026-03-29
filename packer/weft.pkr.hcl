@@ -47,6 +47,12 @@ variable "manifest_output" {
   default = ""
 }
 
+variable "github_token" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
 variable "assume_role_account_id" {
   type        = string
   description = "AWS account ID for kevlar-weft"
