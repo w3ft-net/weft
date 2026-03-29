@@ -124,33 +124,35 @@ build {
     ]
   }
 
-  # Copy source code for compilation
+  # Upload weft source (kevcons creates this tarball)
   provisioner "file" {
-    source      = "."
-    destination = "/tmp/weft-src"
-  }
-
-  # Copy warp dependency (local replace directive)
-  provisioner "file" {
-    source      = "../warp"
-    destination = "/tmp/warp-src"
+    source      = "/tmp/app-source.tar.gz"
+    destination = "/tmp/app-source.tar.gz"
   }
 
   # Build binaries on the instance
   provisioner "shell" {
+    environment_vars = [
+      "GOPATH=/tmp/go",
+      "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "GOPRIVATE=github.com/kevlarcon/*",
+    ]
     inline = [
-      "export PATH=$PATH:/usr/local/go/bin",
-      "cd /tmp/weft-src",
-      "sed -i 's|=> ../warp|=> /tmp/warp-src|' go.mod",
-      "sudo apt-get install -y -qq gcc",
-      "CGO_ENABLED=1 go build -o /tmp/weft-coordinator ./cmd/coordinator",
-      "CGO_ENABLED=1 go build -o /tmp/weft-shard ./cmd/shard",
-      "CGO_ENABLED=1 go build -o /tmp/weft-compute ./cmd/compute",
+      "sudo apt-get install -y -qq gcc git",
+      "mkdir -p /tmp/weft-build && cd /tmp/weft-build && tar xzf /tmp/app-source.tar.gz",
+      # Remove local replace directive so Go fetches warp from GitHub
+      "sed -i '/replace.*warp/d' /tmp/weft-build/go.mod",
+      # Configure git to use the GitHub token for private repos
+      "git config --global url.\"https://${var.github_token}@github.com/\".insteadOf \"https://github.com/\"",
+      "cd /tmp/weft-build && CGO_ENABLED=1 go build -o /tmp/weft-coordinator ./cmd/coordinator",
+      "cd /tmp/weft-build && CGO_ENABLED=1 go build -o /tmp/weft-shard ./cmd/shard",
+      "cd /tmp/weft-build && CGO_ENABLED=1 go build -o /tmp/weft-compute ./cmd/compute",
       "sudo mv /tmp/weft-coordinator /tmp/weft-shard /tmp/weft-compute /opt/app/bin/",
       "sudo chmod +x /opt/app/bin/weft-*",
       "sudo chown app:app /opt/app/bin/weft-*",
-      # Clean up source and Go install
-      "sudo rm -rf /tmp/weft-src /tmp/warp-src /usr/local/go /etc/profile.d/go.sh",
+      # Clean up
+      "sudo rm -rf /tmp/weft-build /tmp/app-source.tar.gz /tmp/go /usr/local/go /etc/profile.d/go.sh",
+      "git config --global --unset url.\"https://${var.github_token}@github.com/\".insteadOf || true",
     ]
   }
 
