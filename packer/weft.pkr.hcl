@@ -72,7 +72,7 @@ variable "assume_role_name" {
 
 locals {
   ts       = var.timestamp != "" ? var.timestamp : formatdate("YYYYMMDDhhmmss", timestamp())
-  ami_name = "${var.app_name}-${var.git_sha}-${local.ts}"
+  ami_name = "${var.app_name}-coordinator-${var.git_sha}-${local.ts}"
 }
 
 source "amazon-ebs" "weft" {
