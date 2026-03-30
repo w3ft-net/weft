@@ -150,7 +150,7 @@ build {
     ]
     inline = [
       "sudo apt-get update -qq",
-      "sudo apt-get install -y -qq gcc git",
+      "sudo apt-get install -y -qq gcc g++ git",
       # Prebuild tarball contains both weft/ and warp/ — extract and fix replace path
       "cd /tmp && tar xzf /tmp/app-source.tar.gz",
       "sed -i 's|=> ../warp|=> /tmp/warp|' /tmp/weft/go.mod",
