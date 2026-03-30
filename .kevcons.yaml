@@ -8,7 +8,7 @@ app:
 
 build:
   packer_template: packer/weft.pkr.hcl
-  instance_type: t4g.small
+  instance_type: t4g.xlarge  # DuckDB CGO compilation needs more RAM
   skip_base_ami: true
   skip_local_build: true
   prebuild:
