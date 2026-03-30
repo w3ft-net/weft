@@ -96,7 +96,9 @@ source "amazon-ebs" "weft" {
     owners      = ["136693071363"] # Debian official
   }
 
-  ssh_username = "admin"
+  ssh_username         = "admin"
+  ssh_timeout          = "30m"
+  ssh_read_write_timeout = "30m"
 
   tags = {
     Name      = local.ami_name
