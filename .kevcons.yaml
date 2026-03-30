@@ -2,8 +2,8 @@ app:
   name: weft
   region: us-east-2
   type: go
-  asg_prefix: coordinator  # primary ASG for deploy
-  account_id: "220664822695"  # kevlar-weft
+  asg_prefix: coordinator
+  account_id: "220664822695"
   infrastructure_live_dir: /Users/paul/dev/infrastructure-live
 
 build:
@@ -11,3 +11,11 @@ build:
   instance_type: t4g.small
   skip_base_ami: true
   skip_local_build: true
+  prebuild:
+    - name: Create build tarball with warp dependency
+      run: |
+        cd ..
+        tar czf /tmp/app-source.tar.gz \
+          --exclude='.git' --exclude='node_modules' --exclude='*.duckdb' \
+          --exclude='weft/weft' --exclude='weft/server' --exclude='weft/bin' \
+          weft warp

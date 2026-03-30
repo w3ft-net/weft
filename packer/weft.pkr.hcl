@@ -143,25 +143,17 @@ build {
     inline = [
       "sudo apt-get update -qq",
       "sudo apt-get install -y -qq gcc git",
-      "mkdir -p /tmp/weft-build && cd /tmp/weft-build && tar xzf /tmp/app-source.tar.gz",
-      # Remove local replace directive so Go fetches warp from GitHub
-      "sed -i '/replace.*warp/d' /tmp/weft-build/go.mod",
-      # Configure git auth for private repos
-      "echo 'machine github.com login x-access-token password ${var.github_token}' > /home/admin/.netrc",
-      "chmod 600 /home/admin/.netrc",
-      "git config --global --add url.'https://x-access-token:${var.github_token}@github.com/'.insteadOf 'https://github.com/'",
-      # Re-resolve warp from GitHub now that replace is removed
-      "cd /tmp/weft-build && go mod tidy",
-      "cd /tmp/weft-build && CGO_ENABLED=1 go build -o /tmp/weft-coordinator ./cmd/coordinator",
-      "cd /tmp/weft-build && CGO_ENABLED=1 go build -o /tmp/weft-shard ./cmd/shard",
-      "cd /tmp/weft-build && CGO_ENABLED=1 go build -o /tmp/weft-compute ./cmd/compute",
+      # Prebuild tarball contains both weft/ and warp/ — extract and fix replace path
+      "cd /tmp && tar xzf /tmp/app-source.tar.gz",
+      "sed -i 's|=> ../warp|=> /tmp/warp|' /tmp/weft/go.mod",
+      "cd /tmp/weft && CGO_ENABLED=1 go build -o /tmp/weft-coordinator ./cmd/coordinator",
+      "cd /tmp/weft && CGO_ENABLED=1 go build -o /tmp/weft-shard ./cmd/shard",
+      "cd /tmp/weft && CGO_ENABLED=1 go build -o /tmp/weft-compute ./cmd/compute",
       "sudo mv /tmp/weft-coordinator /tmp/weft-shard /tmp/weft-compute /opt/app/bin/",
       "sudo chmod +x /opt/app/bin/weft-*",
       "sudo chown app:app /opt/app/bin/weft-*",
       # Clean up
-      "sudo rm -rf /tmp/weft-build /tmp/app-source.tar.gz /tmp/go /usr/local/go /etc/profile.d/go.sh",
-      "rm -f /home/admin/.netrc",
-      "git config --global --unset-all url.'https://x-access-token:${var.github_token}@github.com/'.insteadOf || true",
+      "sudo rm -rf /tmp/weft /tmp/warp /tmp/app-source.tar.gz /tmp/go /usr/local/go /etc/profile.d/go.sh",
     ]
   }
 
