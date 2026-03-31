@@ -3,6 +3,9 @@ app:
   region: us-east-2
   type: go
   asg_prefix: coordinator
+  worker_asg_prefix: shard
+  extra_asg_prefixes:
+    - compute
   account_id: "220664822695"
   infrastructure_live_dir: /Users/paul/dev/infrastructure-live
 

@@ -14,8 +14,10 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/kevlarcon/weft/compute"
+	"github.com/kevlarcon/weft/configstore"
 	"github.com/kevlarcon/weft/coordinator"
 	"github.com/kevlarcon/weft/coordinator/discovery"
+	"github.com/kevlarcon/weft/coordinator/poller"
 	coordsvc "github.com/kevlarcon/weft/coordinator/service"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
@@ -31,6 +33,7 @@ func main() {
 	awsRegion := flag.String("region", "us-east-2", "AWS region for ASG discovery")
 	customer := flag.String("customer", "kevlar", "customer ID for row-level security")
 	appsFlag := flag.String("apps", "", "comma-separated app names (e.g., vimgym,callbox)")
+	dataDir := flag.String("data-dir", "/opt/app/data", "directory for SQLite config database")
 	flag.Parse()
 
 	var shards []shard.Shard
@@ -98,6 +101,20 @@ func main() {
 		apps = strings.Split(*appsFlag, ",")
 	}
 
+	// Config store (SQLite on EBS).
+	store, err := configstore.Open(*dataDir + "/weft.db")
+	if err != nil {
+		log.Printf("warning: config store unavailable: %v", err)
+	} else {
+		defer store.Close()
+
+		// Start CloudWatch poller for configured sources.
+		p := poller.New(store, shards)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		p.Start(ctx)
+	}
+
 	// HTTP health endpoint.
 	go func() {
 		http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -119,6 +136,7 @@ func main() {
 	srv := grpc.NewServer()
 	pb.RegisterWeftCoordinatorServer(srv, &coordsvc.Server{
 		Coord: coord,
+		Store: store,
 		Apps:  apps,
 	})
 

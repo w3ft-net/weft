@@ -68,3 +68,52 @@ func (r *RemoteCoordinator) ListApps() ([]string, error) {
 	}
 	return resp.Apps, nil
 }
+
+// AddSource registers a log source on the coordinator.
+func (r *RemoteCoordinator) AddSource(app, customer, logGroup, region, schemaYAML, pollInterval string) error {
+	_, err := r.client.AddSource(context.Background(), &pb.AddSourceRequest{
+		App:          app,
+		Customer:     customer,
+		LogGroup:     logGroup,
+		Region:       region,
+		SchemaYaml:   schemaYAML,
+		PollInterval: pollInterval,
+	})
+	return err
+}
+
+// SourceInfo holds info about a configured log source.
+type SourceInfo struct {
+	App        string
+	Customer   string
+	LogGroup   string
+	Region     string
+	Enabled    bool
+	LastPollAt string
+}
+
+// ListSources returns all configured log sources.
+func (r *RemoteCoordinator) ListSources() ([]SourceInfo, error) {
+	resp, err := r.client.ListSources(context.Background(), &pb.ListSourcesRequest{})
+	if err != nil {
+		return nil, err
+	}
+	var sources []SourceInfo
+	for _, s := range resp.Sources {
+		sources = append(sources, SourceInfo{
+			App:        s.App,
+			Customer:   s.Customer,
+			LogGroup:   s.LogGroup,
+			Region:     s.Region,
+			Enabled:    s.Enabled,
+			LastPollAt: s.LastPollAt,
+		})
+	}
+	return sources, nil
+}
+
+// RemoveSource deletes a log source.
+func (r *RemoteCoordinator) RemoveSource(app string) error {
+	_, err := r.client.RemoveSource(context.Background(), &pb.RemoveSourceRequest{App: app})
+	return err
+}

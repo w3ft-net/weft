@@ -389,8 +389,11 @@ var WeftCompute_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	WeftCoordinator_Query_FullMethodName    = "/weft.WeftCoordinator/Query"
-	WeftCoordinator_ListApps_FullMethodName = "/weft.WeftCoordinator/ListApps"
+	WeftCoordinator_Query_FullMethodName        = "/weft.WeftCoordinator/Query"
+	WeftCoordinator_ListApps_FullMethodName     = "/weft.WeftCoordinator/ListApps"
+	WeftCoordinator_AddSource_FullMethodName    = "/weft.WeftCoordinator/AddSource"
+	WeftCoordinator_ListSources_FullMethodName  = "/weft.WeftCoordinator/ListSources"
+	WeftCoordinator_RemoveSource_FullMethodName = "/weft.WeftCoordinator/RemoveSource"
 )
 
 // WeftCoordinatorClient is the client API for WeftCoordinator service.
@@ -401,6 +404,12 @@ type WeftCoordinatorClient interface {
 	Query(ctx context.Context, in *CoordinatorQueryRequest, opts ...grpc.CallOption) (*CoordinatorQueryResponse, error)
 	// ListApps returns the available app names (pseudofiles).
 	ListApps(ctx context.Context, in *ListAppsRequest, opts ...grpc.CallOption) (*ListAppsResponse, error)
+	// AddSource registers a CloudWatch log source for ingestion.
+	AddSource(ctx context.Context, in *AddSourceRequest, opts ...grpc.CallOption) (*AddSourceResponse, error)
+	// ListSources returns all configured log sources.
+	ListSources(ctx context.Context, in *ListSourcesRequest, opts ...grpc.CallOption) (*ListSourcesResponse, error)
+	// RemoveSource deletes a log source.
+	RemoveSource(ctx context.Context, in *RemoveSourceRequest, opts ...grpc.CallOption) (*RemoveSourceResponse, error)
 }
 
 type weftCoordinatorClient struct {
@@ -431,6 +440,36 @@ func (c *weftCoordinatorClient) ListApps(ctx context.Context, in *ListAppsReques
 	return out, nil
 }
 
+func (c *weftCoordinatorClient) AddSource(ctx context.Context, in *AddSourceRequest, opts ...grpc.CallOption) (*AddSourceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddSourceResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_AddSource_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftCoordinatorClient) ListSources(ctx context.Context, in *ListSourcesRequest, opts ...grpc.CallOption) (*ListSourcesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSourcesResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_ListSources_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftCoordinatorClient) RemoveSource(ctx context.Context, in *RemoveSourceRequest, opts ...grpc.CallOption) (*RemoveSourceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveSourceResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_RemoveSource_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WeftCoordinatorServer is the server API for WeftCoordinator service.
 // All implementations must embed UnimplementedWeftCoordinatorServer
 // for forward compatibility.
@@ -439,6 +478,12 @@ type WeftCoordinatorServer interface {
 	Query(context.Context, *CoordinatorQueryRequest) (*CoordinatorQueryResponse, error)
 	// ListApps returns the available app names (pseudofiles).
 	ListApps(context.Context, *ListAppsRequest) (*ListAppsResponse, error)
+	// AddSource registers a CloudWatch log source for ingestion.
+	AddSource(context.Context, *AddSourceRequest) (*AddSourceResponse, error)
+	// ListSources returns all configured log sources.
+	ListSources(context.Context, *ListSourcesRequest) (*ListSourcesResponse, error)
+	// RemoveSource deletes a log source.
+	RemoveSource(context.Context, *RemoveSourceRequest) (*RemoveSourceResponse, error)
 	mustEmbedUnimplementedWeftCoordinatorServer()
 }
 
@@ -454,6 +499,15 @@ func (UnimplementedWeftCoordinatorServer) Query(context.Context, *CoordinatorQue
 }
 func (UnimplementedWeftCoordinatorServer) ListApps(context.Context, *ListAppsRequest) (*ListAppsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListApps not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) AddSource(context.Context, *AddSourceRequest) (*AddSourceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddSource not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) ListSources(context.Context, *ListSourcesRequest) (*ListSourcesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSources not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) RemoveSource(context.Context, *RemoveSourceRequest) (*RemoveSourceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveSource not implemented")
 }
 func (UnimplementedWeftCoordinatorServer) mustEmbedUnimplementedWeftCoordinatorServer() {}
 func (UnimplementedWeftCoordinatorServer) testEmbeddedByValue()                         {}
@@ -512,6 +566,60 @@ func _WeftCoordinator_ListApps_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WeftCoordinator_AddSource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddSourceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).AddSource(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_AddSource_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).AddSource(ctx, req.(*AddSourceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftCoordinator_ListSources_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSourcesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).ListSources(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_ListSources_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).ListSources(ctx, req.(*ListSourcesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftCoordinator_RemoveSource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveSourceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).RemoveSource(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_RemoveSource_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).RemoveSource(ctx, req.(*RemoveSourceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WeftCoordinator_ServiceDesc is the grpc.ServiceDesc for WeftCoordinator service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -526,6 +634,18 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListApps",
 			Handler:    _WeftCoordinator_ListApps_Handler,
+		},
+		{
+			MethodName: "AddSource",
+			Handler:    _WeftCoordinator_AddSource_Handler,
+		},
+		{
+			MethodName: "ListSources",
+			Handler:    _WeftCoordinator_ListSources_Handler,
+		},
+		{
+			MethodName: "RemoveSource",
+			Handler:    _WeftCoordinator_RemoveSource_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

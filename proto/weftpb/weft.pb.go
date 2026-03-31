@@ -862,6 +862,371 @@ func (x *ListAppsResponse) GetApps() []string {
 	return nil
 }
 
+// Source management messages
+type AddSourceRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	App           string                 `protobuf:"bytes,1,opt,name=app,proto3" json:"app,omitempty"`
+	Customer      string                 `protobuf:"bytes,2,opt,name=customer,proto3" json:"customer,omitempty"`
+	LogGroup      string                 `protobuf:"bytes,3,opt,name=log_group,json=logGroup,proto3" json:"log_group,omitempty"`
+	Region        string                 `protobuf:"bytes,4,opt,name=region,proto3" json:"region,omitempty"`
+	SchemaYaml    string                 `protobuf:"bytes,5,opt,name=schema_yaml,json=schemaYaml,proto3" json:"schema_yaml,omitempty"`
+	PollInterval  string                 `protobuf:"bytes,6,opt,name=poll_interval,json=pollInterval,proto3" json:"poll_interval,omitempty"` // e.g. "30s"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddSourceRequest) Reset() {
+	*x = AddSourceRequest{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddSourceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddSourceRequest) ProtoMessage() {}
+
+func (x *AddSourceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddSourceRequest.ProtoReflect.Descriptor instead.
+func (*AddSourceRequest) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *AddSourceRequest) GetApp() string {
+	if x != nil {
+		return x.App
+	}
+	return ""
+}
+
+func (x *AddSourceRequest) GetCustomer() string {
+	if x != nil {
+		return x.Customer
+	}
+	return ""
+}
+
+func (x *AddSourceRequest) GetLogGroup() string {
+	if x != nil {
+		return x.LogGroup
+	}
+	return ""
+}
+
+func (x *AddSourceRequest) GetRegion() string {
+	if x != nil {
+		return x.Region
+	}
+	return ""
+}
+
+func (x *AddSourceRequest) GetSchemaYaml() string {
+	if x != nil {
+		return x.SchemaYaml
+	}
+	return ""
+}
+
+func (x *AddSourceRequest) GetPollInterval() string {
+	if x != nil {
+		return x.PollInterval
+	}
+	return ""
+}
+
+type AddSourceResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddSourceResponse) Reset() {
+	*x = AddSourceResponse{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddSourceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddSourceResponse) ProtoMessage() {}
+
+func (x *AddSourceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddSourceResponse.ProtoReflect.Descriptor instead.
+func (*AddSourceResponse) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{17}
+}
+
+type ListSourcesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSourcesRequest) Reset() {
+	*x = ListSourcesRequest{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSourcesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSourcesRequest) ProtoMessage() {}
+
+func (x *ListSourcesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSourcesRequest.ProtoReflect.Descriptor instead.
+func (*ListSourcesRequest) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{18}
+}
+
+type ListSourcesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sources       []*SourceInfo          `protobuf:"bytes,1,rep,name=sources,proto3" json:"sources,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSourcesResponse) Reset() {
+	*x = ListSourcesResponse{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSourcesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSourcesResponse) ProtoMessage() {}
+
+func (x *ListSourcesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSourcesResponse.ProtoReflect.Descriptor instead.
+func (*ListSourcesResponse) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *ListSourcesResponse) GetSources() []*SourceInfo {
+	if x != nil {
+		return x.Sources
+	}
+	return nil
+}
+
+type SourceInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	App           string                 `protobuf:"bytes,1,opt,name=app,proto3" json:"app,omitempty"`
+	Customer      string                 `protobuf:"bytes,2,opt,name=customer,proto3" json:"customer,omitempty"`
+	LogGroup      string                 `protobuf:"bytes,3,opt,name=log_group,json=logGroup,proto3" json:"log_group,omitempty"`
+	Region        string                 `protobuf:"bytes,4,opt,name=region,proto3" json:"region,omitempty"`
+	Enabled       bool                   `protobuf:"varint,5,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	LastPollAt    string                 `protobuf:"bytes,6,opt,name=last_poll_at,json=lastPollAt,proto3" json:"last_poll_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SourceInfo) Reset() {
+	*x = SourceInfo{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SourceInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SourceInfo) ProtoMessage() {}
+
+func (x *SourceInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SourceInfo.ProtoReflect.Descriptor instead.
+func (*SourceInfo) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *SourceInfo) GetApp() string {
+	if x != nil {
+		return x.App
+	}
+	return ""
+}
+
+func (x *SourceInfo) GetCustomer() string {
+	if x != nil {
+		return x.Customer
+	}
+	return ""
+}
+
+func (x *SourceInfo) GetLogGroup() string {
+	if x != nil {
+		return x.LogGroup
+	}
+	return ""
+}
+
+func (x *SourceInfo) GetRegion() string {
+	if x != nil {
+		return x.Region
+	}
+	return ""
+}
+
+func (x *SourceInfo) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *SourceInfo) GetLastPollAt() string {
+	if x != nil {
+		return x.LastPollAt
+	}
+	return ""
+}
+
+type RemoveSourceRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	App           string                 `protobuf:"bytes,1,opt,name=app,proto3" json:"app,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveSourceRequest) Reset() {
+	*x = RemoveSourceRequest{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveSourceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveSourceRequest) ProtoMessage() {}
+
+func (x *RemoveSourceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveSourceRequest.ProtoReflect.Descriptor instead.
+func (*RemoveSourceRequest) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *RemoveSourceRequest) GetApp() string {
+	if x != nil {
+		return x.App
+	}
+	return ""
+}
+
+type RemoveSourceResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveSourceResponse) Reset() {
+	*x = RemoveSourceResponse{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveSourceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveSourceResponse) ProtoMessage() {}
+
+func (x *RemoveSourceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveSourceResponse.ProtoReflect.Descriptor instead.
+func (*RemoveSourceResponse) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{22}
+}
+
 type ShardHealth struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	State         string                 `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`                                // LAUNCHING, INGESTING, READ_ONLY, EXPIRING
@@ -876,7 +1241,7 @@ type ShardHealth struct {
 
 func (x *ShardHealth) Reset() {
 	*x = ShardHealth{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[16]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -888,7 +1253,7 @@ func (x *ShardHealth) String() string {
 func (*ShardHealth) ProtoMessage() {}
 
 func (x *ShardHealth) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[16]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -901,7 +1266,7 @@ func (x *ShardHealth) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShardHealth.ProtoReflect.Descriptor instead.
 func (*ShardHealth) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{16}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ShardHealth) GetState() string {
@@ -1001,7 +1366,31 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x04text\x18\x02 \x01(\tR\x04text\"\x11\n" +
 	"\x0fListAppsRequest\"&\n" +
 	"\x10ListAppsResponse\x12\x12\n" +
-	"\x04apps\x18\x01 \x03(\tR\x04apps\"\xc0\x01\n" +
+	"\x04apps\x18\x01 \x03(\tR\x04apps\"\xbb\x01\n" +
+	"\x10AddSourceRequest\x12\x10\n" +
+	"\x03app\x18\x01 \x01(\tR\x03app\x12\x1a\n" +
+	"\bcustomer\x18\x02 \x01(\tR\bcustomer\x12\x1b\n" +
+	"\tlog_group\x18\x03 \x01(\tR\blogGroup\x12\x16\n" +
+	"\x06region\x18\x04 \x01(\tR\x06region\x12\x1f\n" +
+	"\vschema_yaml\x18\x05 \x01(\tR\n" +
+	"schemaYaml\x12#\n" +
+	"\rpoll_interval\x18\x06 \x01(\tR\fpollInterval\"\x13\n" +
+	"\x11AddSourceResponse\"\x14\n" +
+	"\x12ListSourcesRequest\"A\n" +
+	"\x13ListSourcesResponse\x12*\n" +
+	"\asources\x18\x01 \x03(\v2\x10.weft.SourceInfoR\asources\"\xab\x01\n" +
+	"\n" +
+	"SourceInfo\x12\x10\n" +
+	"\x03app\x18\x01 \x01(\tR\x03app\x12\x1a\n" +
+	"\bcustomer\x18\x02 \x01(\tR\bcustomer\x12\x1b\n" +
+	"\tlog_group\x18\x03 \x01(\tR\blogGroup\x12\x16\n" +
+	"\x06region\x18\x04 \x01(\tR\x06region\x12\x18\n" +
+	"\aenabled\x18\x05 \x01(\bR\aenabled\x12 \n" +
+	"\flast_poll_at\x18\x06 \x01(\tR\n" +
+	"lastPollAt\"'\n" +
+	"\x13RemoveSourceRequest\x12\x10\n" +
+	"\x03app\x18\x01 \x01(\tR\x03app\"\x16\n" +
+	"\x14RemoveSourceResponse\"\xc0\x01\n" +
 	"\vShardHealth\x12\x14\n" +
 	"\x05state\x18\x01 \x01(\tR\x05state\x12!\n" +
 	"\fwindow_start\x18\x02 \x01(\tR\vwindowStart\x12\x1d\n" +
@@ -1020,10 +1409,13 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\vWeftCompute\x12<\n" +
 	"\tCreateJob\x12\x16.weft.CreateJobRequest\x1a\x17.weft.CreateJobResponse\x12:\n" +
 	"\bSendRows\x12\x14.weft.ComputeMessage\x1a\x16.weft.SendRowsResponse(\x01\x12<\n" +
-	"\tGetResult\x12\x16.weft.GetResultRequest\x1a\x17.weft.GetResultResponse2\x94\x01\n" +
+	"\tGetResult\x12\x16.weft.GetResultRequest\x1a\x17.weft.GetResultResponse2\xdd\x02\n" +
 	"\x0fWeftCoordinator\x12F\n" +
 	"\x05Query\x12\x1d.weft.CoordinatorQueryRequest\x1a\x1e.weft.CoordinatorQueryResponse\x129\n" +
-	"\bListApps\x12\x15.weft.ListAppsRequest\x1a\x16.weft.ListAppsResponseB(Z&github.com/kevlarcon/weft/proto/weftpbb\x06proto3"
+	"\bListApps\x12\x15.weft.ListAppsRequest\x1a\x16.weft.ListAppsResponse\x12<\n" +
+	"\tAddSource\x12\x16.weft.AddSourceRequest\x1a\x17.weft.AddSourceResponse\x12B\n" +
+	"\vListSources\x12\x18.weft.ListSourcesRequest\x1a\x19.weft.ListSourcesResponse\x12E\n" +
+	"\fRemoveSource\x12\x19.weft.RemoveSourceRequest\x1a\x1a.weft.RemoveSourceResponseB(Z&github.com/kevlarcon/weft/proto/weftpbb\x06proto3"
 
 var (
 	file_proto_weftpb_weft_proto_rawDescOnce sync.Once
@@ -1037,7 +1429,7 @@ func file_proto_weftpb_weft_proto_rawDescGZIP() []byte {
 	return file_proto_weftpb_weft_proto_rawDescData
 }
 
-var file_proto_weftpb_weft_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_proto_weftpb_weft_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_proto_weftpb_weft_proto_goTypes = []any{
 	(*QueryRequest)(nil),             // 0: weft.QueryRequest
 	(*QueryToComputeRequest)(nil),    // 1: weft.QueryToComputeRequest
@@ -1055,33 +1447,47 @@ var file_proto_weftpb_weft_proto_goTypes = []any{
 	(*CoordinatorQueryResponse)(nil), // 13: weft.CoordinatorQueryResponse
 	(*ListAppsRequest)(nil),          // 14: weft.ListAppsRequest
 	(*ListAppsResponse)(nil),         // 15: weft.ListAppsResponse
-	(*ShardHealth)(nil),              // 16: weft.ShardHealth
+	(*AddSourceRequest)(nil),         // 16: weft.AddSourceRequest
+	(*AddSourceResponse)(nil),        // 17: weft.AddSourceResponse
+	(*ListSourcesRequest)(nil),       // 18: weft.ListSourcesRequest
+	(*ListSourcesResponse)(nil),      // 19: weft.ListSourcesResponse
+	(*SourceInfo)(nil),               // 20: weft.SourceInfo
+	(*RemoveSourceRequest)(nil),      // 21: weft.RemoveSourceRequest
+	(*RemoveSourceResponse)(nil),     // 22: weft.RemoveSourceResponse
+	(*ShardHealth)(nil),              // 23: weft.ShardHealth
 }
 var file_proto_weftpb_weft_proto_depIdxs = []int32{
 	3,  // 0: weft.IngestRequest.rows:type_name -> weft.LogRow
 	3,  // 1: weft.ComputeMessage.row:type_name -> weft.LogRow
 	3,  // 2: weft.CoordinatorQueryResponse.rows:type_name -> weft.LogRow
-	0,  // 3: weft.ShardQuery.Query:input_type -> weft.QueryRequest
-	1,  // 4: weft.ShardQuery.QueryToCompute:input_type -> weft.QueryToComputeRequest
-	4,  // 5: weft.ShardQuery.Ingest:input_type -> weft.IngestRequest
-	6,  // 6: weft.WeftCompute.CreateJob:input_type -> weft.CreateJobRequest
-	8,  // 7: weft.WeftCompute.SendRows:input_type -> weft.ComputeMessage
-	10, // 8: weft.WeftCompute.GetResult:input_type -> weft.GetResultRequest
-	12, // 9: weft.WeftCoordinator.Query:input_type -> weft.CoordinatorQueryRequest
-	14, // 10: weft.WeftCoordinator.ListApps:input_type -> weft.ListAppsRequest
-	3,  // 11: weft.ShardQuery.Query:output_type -> weft.LogRow
-	2,  // 12: weft.ShardQuery.QueryToCompute:output_type -> weft.QueryToComputeResponse
-	5,  // 13: weft.ShardQuery.Ingest:output_type -> weft.IngestResponse
-	7,  // 14: weft.WeftCompute.CreateJob:output_type -> weft.CreateJobResponse
-	9,  // 15: weft.WeftCompute.SendRows:output_type -> weft.SendRowsResponse
-	11, // 16: weft.WeftCompute.GetResult:output_type -> weft.GetResultResponse
-	13, // 17: weft.WeftCoordinator.Query:output_type -> weft.CoordinatorQueryResponse
-	15, // 18: weft.WeftCoordinator.ListApps:output_type -> weft.ListAppsResponse
-	11, // [11:19] is the sub-list for method output_type
-	3,  // [3:11] is the sub-list for method input_type
-	3,  // [3:3] is the sub-list for extension type_name
-	3,  // [3:3] is the sub-list for extension extendee
-	0,  // [0:3] is the sub-list for field type_name
+	20, // 3: weft.ListSourcesResponse.sources:type_name -> weft.SourceInfo
+	0,  // 4: weft.ShardQuery.Query:input_type -> weft.QueryRequest
+	1,  // 5: weft.ShardQuery.QueryToCompute:input_type -> weft.QueryToComputeRequest
+	4,  // 6: weft.ShardQuery.Ingest:input_type -> weft.IngestRequest
+	6,  // 7: weft.WeftCompute.CreateJob:input_type -> weft.CreateJobRequest
+	8,  // 8: weft.WeftCompute.SendRows:input_type -> weft.ComputeMessage
+	10, // 9: weft.WeftCompute.GetResult:input_type -> weft.GetResultRequest
+	12, // 10: weft.WeftCoordinator.Query:input_type -> weft.CoordinatorQueryRequest
+	14, // 11: weft.WeftCoordinator.ListApps:input_type -> weft.ListAppsRequest
+	16, // 12: weft.WeftCoordinator.AddSource:input_type -> weft.AddSourceRequest
+	18, // 13: weft.WeftCoordinator.ListSources:input_type -> weft.ListSourcesRequest
+	21, // 14: weft.WeftCoordinator.RemoveSource:input_type -> weft.RemoveSourceRequest
+	3,  // 15: weft.ShardQuery.Query:output_type -> weft.LogRow
+	2,  // 16: weft.ShardQuery.QueryToCompute:output_type -> weft.QueryToComputeResponse
+	5,  // 17: weft.ShardQuery.Ingest:output_type -> weft.IngestResponse
+	7,  // 18: weft.WeftCompute.CreateJob:output_type -> weft.CreateJobResponse
+	9,  // 19: weft.WeftCompute.SendRows:output_type -> weft.SendRowsResponse
+	11, // 20: weft.WeftCompute.GetResult:output_type -> weft.GetResultResponse
+	13, // 21: weft.WeftCoordinator.Query:output_type -> weft.CoordinatorQueryResponse
+	15, // 22: weft.WeftCoordinator.ListApps:output_type -> weft.ListAppsResponse
+	17, // 23: weft.WeftCoordinator.AddSource:output_type -> weft.AddSourceResponse
+	19, // 24: weft.WeftCoordinator.ListSources:output_type -> weft.ListSourcesResponse
+	22, // 25: weft.WeftCoordinator.RemoveSource:output_type -> weft.RemoveSourceResponse
+	15, // [15:26] is the sub-list for method output_type
+	4,  // [4:15] is the sub-list for method input_type
+	4,  // [4:4] is the sub-list for extension type_name
+	4,  // [4:4] is the sub-list for extension extendee
+	0,  // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_proto_weftpb_weft_proto_init() }
@@ -1095,7 +1501,7 @@ func file_proto_weftpb_weft_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_weftpb_weft_proto_rawDesc), len(file_proto_weftpb_weft_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   17,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

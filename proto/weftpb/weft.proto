@@ -109,6 +109,15 @@ service WeftCoordinator {
 
   // ListApps returns the available app names (pseudofiles).
   rpc ListApps(ListAppsRequest) returns (ListAppsResponse);
+
+  // AddSource registers a CloudWatch log source for ingestion.
+  rpc AddSource(AddSourceRequest) returns (AddSourceResponse);
+
+  // ListSources returns all configured log sources.
+  rpc ListSources(ListSourcesRequest) returns (ListSourcesResponse);
+
+  // RemoveSource deletes a log source.
+  rpc RemoveSource(RemoveSourceRequest) returns (RemoveSourceResponse);
 }
 
 message CoordinatorQueryRequest {
@@ -128,6 +137,39 @@ message ListAppsRequest {}
 message ListAppsResponse {
   repeated string apps = 1;
 }
+
+// Source management messages
+message AddSourceRequest {
+  string app = 1;
+  string customer = 2;
+  string log_group = 3;
+  string region = 4;
+  string schema_yaml = 5;
+  string poll_interval = 6;  // e.g. "30s"
+}
+
+message AddSourceResponse {}
+
+message ListSourcesRequest {}
+
+message ListSourcesResponse {
+  repeated SourceInfo sources = 1;
+}
+
+message SourceInfo {
+  string app = 1;
+  string customer = 2;
+  string log_group = 3;
+  string region = 4;
+  bool enabled = 5;
+  string last_poll_at = 6;
+}
+
+message RemoveSourceRequest {
+  string app = 1;
+}
+
+message RemoveSourceResponse {}
 
 // ---------------------------------------------------------------------------
 // Shard health — HTTP, not gRPC, but defining the message for consistency
