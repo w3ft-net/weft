@@ -1,270 +1,164 @@
 package configstore
 
 import (
-	"database/sql"
-	"fmt"
-
-	_ "github.com/mattn/go-sqlite3"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
-// Store is a SQLite-backed configuration store for the coordinator.
-type Store struct {
-	db *sql.DB
+type Customer struct {
+	gorm.Model
+	Name     string    `gorm:"uniqueIndex;not null"`
+	Accounts []Account `gorm:"foreignKey:CustomerID"`
 }
 
-// Open opens or creates a SQLite database at the given path.
+type Account struct {
+	gorm.Model
+	CustomerID uint      `gorm:"not null"`
+	Customer   Customer  `gorm:"foreignKey:CustomerID"`
+	AWSAccount string    `gorm:"not null"`
+	RoleARN    string    `gorm:"not null"`
+	ExternalID string
+	LogGroups  []LogGroup `gorm:"foreignKey:AccountID"`
+}
+
+type LogGroup struct {
+	gorm.Model
+	AccountID    uint    `gorm:"not null;uniqueIndex:idx_account_app"`
+	Account      Account `gorm:"foreignKey:AccountID"`
+	App          string  `gorm:"not null;uniqueIndex:idx_account_app"`
+	LogGroupName string  `gorm:"not null"`
+	Region       string  `gorm:"not null;default:us-east-2"`
+	SchemaYAML   string  `gorm:"not null"`
+	PollInterval string  `gorm:"not null;default:30s"`
+	Enabled      bool    `gorm:"not null;default:true"`
+	LastPollAt   string
+	LastToken    string
+}
+
+type Store struct {
+	db *gorm.DB
+}
+
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite3", path+"?_journal_mode=WAL")
+	db, err := gorm.Open(sqlite.Open(path+"?_journal_mode=WAL"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
 	if err != nil {
-		return nil, fmt.Errorf("open config db: %w", err)
-	}
-	s := &Store{db: db}
-	if err := s.migrate(); err != nil {
-		db.Close()
 		return nil, err
 	}
-	return s, nil
+	if err := db.AutoMigrate(&Customer{}, &Account{}, &LogGroup{}); err != nil {
+		return nil, err
+	}
+	return &Store{db: db}, nil
 }
 
 func (s *Store) Close() error {
-	return s.db.Close()
-}
-
-func (s *Store) migrate() error {
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS customers (
-			id          INTEGER PRIMARY KEY AUTOINCREMENT,
-			name        TEXT NOT NULL UNIQUE
-		)`,
-		`CREATE TABLE IF NOT EXISTS accounts (
-			id          INTEGER PRIMARY KEY AUTOINCREMENT,
-			customer_id INTEGER NOT NULL REFERENCES customers(id),
-			account_id  TEXT NOT NULL,
-			role_arn    TEXT NOT NULL,
-			external_id TEXT NOT NULL DEFAULT '',
-			UNIQUE(customer_id, account_id)
-		)`,
-		`CREATE TABLE IF NOT EXISTS log_groups (
-			id            INTEGER PRIMARY KEY AUTOINCREMENT,
-			account_id    INTEGER NOT NULL REFERENCES accounts(id),
-			app           TEXT NOT NULL,
-			log_group     TEXT NOT NULL,
-			region        TEXT NOT NULL DEFAULT 'us-east-2',
-			schema_yaml   TEXT NOT NULL,
-			poll_interval TEXT NOT NULL DEFAULT '30s',
-			enabled       INTEGER NOT NULL DEFAULT 1,
-			last_poll_at  TEXT,
-			last_token    TEXT,
-			UNIQUE(account_id, app)
-		)`,
-	}
-	for _, stmt := range stmts {
-		if _, err := s.db.Exec(stmt); err != nil {
-			return fmt.Errorf("migrate: %w", err)
-		}
-	}
-	return nil
-}
-
-// --- Customers ---
-
-type Customer struct {
-	ID   int64
-	Name string
-}
-
-func (s *Store) AddCustomer(name string) (int64, error) {
-	res, err := s.db.Exec("INSERT INTO customers (name) VALUES (?) ON CONFLICT(name) DO NOTHING", name)
+	db, err := s.db.DB()
 	if err != nil {
-		return 0, err
+		return err
 	}
-	id, _ := res.LastInsertId()
-	if id == 0 {
-		// Already existed.
-		err = s.db.QueryRow("SELECT id FROM customers WHERE name = ?", name).Scan(&id)
-	}
-	return id, err
+	return db.Close()
 }
 
-func (s *Store) GetCustomer(name string) (*Customer, error) {
+// FindOrCreateCustomer returns the customer, creating if needed.
+func (s *Store) FindOrCreateCustomer(name string) (*Customer, error) {
 	var c Customer
-	err := s.db.QueryRow("SELECT id, name FROM customers WHERE name = ?", name).Scan(&c.ID, &c.Name)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	return &c, err
+	result := s.db.Where("name = ?", name).FirstOrCreate(&c, Customer{Name: name})
+	return &c, result.Error
 }
 
-func (s *Store) ListCustomers() ([]Customer, error) {
-	rows, err := s.db.Query("SELECT id, name FROM customers ORDER BY name")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Customer
-	for rows.Next() {
-		var c Customer
-		if err := rows.Scan(&c.ID, &c.Name); err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
-}
-
-// --- Accounts ---
-
-type Account struct {
-	ID         int64
-	CustomerID int64
-	AccountID  string
-	RoleARN    string
-	ExternalID string
-}
-
-func (s *Store) AddAccount(customerID int64, accountID, roleARN, externalID string) (int64, error) {
-	res, err := s.db.Exec(`
-		INSERT INTO accounts (customer_id, account_id, role_arn, external_id)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(customer_id, account_id) DO UPDATE SET
-			role_arn = excluded.role_arn,
-			external_id = excluded.external_id
-	`, customerID, accountID, roleARN, externalID)
-	if err != nil {
-		return 0, err
-	}
-	id, _ := res.LastInsertId()
-	if id == 0 {
-		err = s.db.QueryRow("SELECT id FROM accounts WHERE customer_id = ? AND account_id = ?", customerID, accountID).Scan(&id)
-	}
-	return id, err
-}
-
-func (s *Store) GetAccount(customerID int64, accountID string) (*Account, error) {
+// FindOrCreateAccount returns the account, creating or updating if needed.
+func (s *Store) FindOrCreateAccount(customerID uint, awsAccount, roleARN, externalID string) (*Account, error) {
 	var a Account
-	err := s.db.QueryRow("SELECT id, customer_id, account_id, role_arn, external_id FROM accounts WHERE customer_id = ? AND account_id = ?", customerID, accountID).
-		Scan(&a.ID, &a.CustomerID, &a.AccountID, &a.RoleARN, &a.ExternalID)
-	if err == sql.ErrNoRows {
-		return nil, nil
+	result := s.db.Where("customer_id = ? AND aws_account = ?", customerID, awsAccount).First(&a)
+	if result.Error == gorm.ErrRecordNotFound {
+		a = Account{
+			CustomerID: customerID,
+			AWSAccount: awsAccount,
+			RoleARN:    roleARN,
+			ExternalID: externalID,
+		}
+		result = s.db.Create(&a)
+	} else if result.Error == nil {
+		result = s.db.Model(&a).Updates(Account{RoleARN: roleARN, ExternalID: externalID})
 	}
-	return &a, err
+	return &a, result.Error
 }
 
-// --- Log Groups ---
+// AddLogGroup creates or updates a log group source.
+func (s *Store) AddLogGroup(accountID uint, app, logGroupName, region, schemaYAML, pollInterval string) error {
+	var lg LogGroup
+	result := s.db.Where("account_id = ? AND app = ?", accountID, app).First(&lg)
+	if result.Error == gorm.ErrRecordNotFound {
+		lg = LogGroup{
+			AccountID:    accountID,
+			App:          app,
+			LogGroupName: logGroupName,
+			Region:       region,
+			SchemaYAML:   schemaYAML,
+			PollInterval: pollInterval,
+			Enabled:      true,
+		}
+		return s.db.Create(&lg).Error
+	}
+	return s.db.Model(&lg).Updates(LogGroup{
+		LogGroupName: logGroupName,
+		Region:       region,
+		SchemaYAML:   schemaYAML,
+		PollInterval: pollInterval,
+	}).Error
+}
 
-type LogGroup struct {
-	ID           int64
-	AccountID    int64
-	App          string
-	LogGroupName string
-	Region       string
-	SchemaYAML   string
-	PollInterval string
-	Enabled      bool
-	LastPollAt   string
-	LastToken    string
+// RemoveLogGroup deletes a log group by app name.
+func (s *Store) RemoveLogGroup(app string) error {
+	return s.db.Where("app = ?", app).Delete(&LogGroup{}).Error
+}
 
-	// Joined fields (populated by EnabledLogGroups).
+// LogGroupWithAccount is a joined result for the poller.
+type LogGroupWithAccount struct {
+	LogGroup
 	CustomerName string
 	RoleARN      string
 	ExternalID   string
-	AWSAccountID string
+	AWSAccount   string
 }
 
-func (s *Store) AddLogGroup(accountID int64, app, logGroup, region, schemaYAML, pollInterval string) error {
-	_, err := s.db.Exec(`
-		INSERT INTO log_groups (account_id, app, log_group, region, schema_yaml, poll_interval)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(account_id, app) DO UPDATE SET
-			log_group = excluded.log_group,
-			region = excluded.region,
-			schema_yaml = excluded.schema_yaml,
-			poll_interval = excluded.poll_interval
-	`, accountID, app, logGroup, region, schemaYAML, pollInterval)
-	return err
+// EnabledLogGroups returns all enabled log groups with customer/account info.
+func (s *Store) EnabledLogGroups() ([]LogGroupWithAccount, error) {
+	var results []LogGroupWithAccount
+	err := s.db.
+		Table("log_groups").
+		Select("log_groups.*, customers.name as customer_name, accounts.role_arn, accounts.external_id, accounts.aws_account").
+		Joins("JOIN accounts ON log_groups.account_id = accounts.id").
+		Joins("JOIN customers ON accounts.customer_id = customers.id").
+		Where("log_groups.enabled = ?", true).
+		Find(&results).Error
+	return results, err
 }
 
-func (s *Store) RemoveLogGroup(app string) error {
-	_, err := s.db.Exec("DELETE FROM log_groups WHERE app = ?", app)
-	return err
-}
-
-// EnabledLogGroups returns all enabled log groups with joined customer/account info.
-func (s *Store) EnabledLogGroups() ([]LogGroup, error) {
-	rows, err := s.db.Query(`
-		SELECT lg.id, lg.account_id, lg.app, lg.log_group, lg.region, lg.schema_yaml,
-		       lg.poll_interval, lg.enabled, COALESCE(lg.last_poll_at, ''), COALESCE(lg.last_token, ''),
-		       c.name, a.role_arn, a.external_id, a.account_id
-		FROM log_groups lg
-		JOIN accounts a ON lg.account_id = a.id
-		JOIN customers c ON a.customer_id = c.id
-		WHERE lg.enabled = 1
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []LogGroup
-	for rows.Next() {
-		var lg LogGroup
-		if err := rows.Scan(&lg.ID, &lg.AccountID, &lg.App, &lg.LogGroupName, &lg.Region,
-			&lg.SchemaYAML, &lg.PollInterval, &lg.Enabled, &lg.LastPollAt, &lg.LastToken,
-			&lg.CustomerName, &lg.RoleARN, &lg.ExternalID, &lg.AWSAccountID); err != nil {
-			return nil, err
-		}
-		out = append(out, lg)
-	}
-	return out, rows.Err()
-}
-
-// AllLogGroups returns all log groups with joined info.
-func (s *Store) AllLogGroups() ([]LogGroup, error) {
-	rows, err := s.db.Query(`
-		SELECT lg.id, lg.account_id, lg.app, lg.log_group, lg.region, lg.schema_yaml,
-		       lg.poll_interval, lg.enabled, COALESCE(lg.last_poll_at, ''), COALESCE(lg.last_token, ''),
-		       c.name, a.role_arn, a.external_id, a.account_id
-		FROM log_groups lg
-		JOIN accounts a ON lg.account_id = a.id
-		JOIN customers c ON a.customer_id = c.id
-		ORDER BY c.name, lg.app
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []LogGroup
-	for rows.Next() {
-		var lg LogGroup
-		if err := rows.Scan(&lg.ID, &lg.AccountID, &lg.App, &lg.LogGroupName, &lg.Region,
-			&lg.SchemaYAML, &lg.PollInterval, &lg.Enabled, &lg.LastPollAt, &lg.LastToken,
-			&lg.CustomerName, &lg.RoleARN, &lg.ExternalID, &lg.AWSAccountID); err != nil {
-			return nil, err
-		}
-		out = append(out, lg)
-	}
-	return out, rows.Err()
+// AllLogGroups returns all log groups with customer/account info.
+func (s *Store) AllLogGroups() ([]LogGroupWithAccount, error) {
+	var results []LogGroupWithAccount
+	err := s.db.
+		Table("log_groups").
+		Select("log_groups.*, customers.name as customer_name, accounts.role_arn, accounts.external_id, accounts.aws_account").
+		Joins("JOIN accounts ON log_groups.account_id = accounts.id").
+		Joins("JOIN customers ON accounts.customer_id = customers.id").
+		Order("customers.name, log_groups.app").
+		Find(&results).Error
+	return results, err
 }
 
 // UpdatePollState saves the last poll timestamp and pagination token.
 func (s *Store) UpdatePollState(app, lastPollAt, lastToken string) error {
-	_, err := s.db.Exec("UPDATE log_groups SET last_poll_at = ?, last_token = ? WHERE app = ?", lastPollAt, lastToken, app)
-	return err
+	return s.db.Model(&LogGroup{}).Where("app = ?", app).
+		Updates(map[string]any{"last_poll_at": lastPollAt, "last_token": lastToken}).Error
 }
 
-// AppNames returns all distinct app names from enabled log groups.
+// AppNames returns distinct app names from enabled log groups.
 func (s *Store) AppNames() ([]string, error) {
-	rows, err := s.db.Query("SELECT DISTINCT app FROM log_groups WHERE enabled = 1 ORDER BY app")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		out = append(out, name)
-	}
-	return out, rows.Err()
+	var names []string
+	err := s.db.Model(&LogGroup{}).Where("enabled = ?", true).Distinct().Pluck("app", &names).Error
+	return names, err
 }

@@ -60,26 +60,22 @@ func (s *Server) AddSource(_ context.Context, req *pb.AddSourceRequest) (*pb.Add
 		return nil, fmt.Errorf("config store not available")
 	}
 
-	// Ensure customer exists.
-	customerID, err := s.Store.AddCustomer(req.Customer)
+	customer, err := s.Store.FindOrCreateCustomer(req.Customer)
 	if err != nil {
-		return nil, fmt.Errorf("add customer: %w", err)
+		return nil, fmt.Errorf("customer: %w", err)
 	}
 
-	// Ensure account exists (use log group region as account region).
-	// The role_arn is required for cross-account access.
-	accountID, err := s.Store.AddAccount(customerID, req.AwsAccountId, req.RoleArn, req.ExternalId)
+	account, err := s.Store.FindOrCreateAccount(customer.ID, req.AwsAccountId, req.RoleArn, req.ExternalId)
 	if err != nil {
-		return nil, fmt.Errorf("add account: %w", err)
+		return nil, fmt.Errorf("account: %w", err)
 	}
 
-	// Add the log group.
 	pollInterval := req.PollInterval
 	if pollInterval == "" {
 		pollInterval = "30s"
 	}
-	if err := s.Store.AddLogGroup(accountID, req.App, req.LogGroup, req.Region, req.SchemaYaml, pollInterval); err != nil {
-		return nil, fmt.Errorf("add log group: %w", err)
+	if err := s.Store.AddLogGroup(account.ID, req.App, req.LogGroup, req.Region, req.SchemaYaml, pollInterval); err != nil {
+		return nil, fmt.Errorf("log group: %w", err)
 	}
 
 	return &pb.AddSourceResponse{}, nil

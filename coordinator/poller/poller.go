@@ -43,13 +43,13 @@ func (p *Poller) Start(ctx context.Context) {
 	log.Printf("poller: started %d log group pollers", len(logGroups))
 }
 
-func (p *Poller) pollLoop(ctx context.Context, lg configstore.LogGroup) {
+func (p *Poller) pollLoop(ctx context.Context, lg configstore.LogGroupWithAccount) {
 	interval, err := time.ParseDuration(lg.PollInterval)
 	if err != nil {
 		interval = 30 * time.Second
 	}
 
-	log.Printf("poller[%s]: polling %s (account %s) every %s", lg.App, lg.LogGroupName, lg.AWSAccountID, interval)
+	log.Printf("poller[%s]: polling %s (account %s) every %s", lg.App, lg.LogGroupName, lg.AWSAccount, interval)
 
 	p.poll(ctx, lg)
 
@@ -66,7 +66,7 @@ func (p *Poller) pollLoop(ctx context.Context, lg configstore.LogGroup) {
 	}
 }
 
-func (p *Poller) poll(ctx context.Context, lg configstore.LogGroup) {
+func (p *Poller) poll(ctx context.Context, lg configstore.LogGroupWithAccount) {
 	// Load base AWS config.
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(lg.Region))
 	if err != nil {

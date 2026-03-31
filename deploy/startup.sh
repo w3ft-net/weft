@@ -1,6 +1,6 @@
 #!/bin/bash
-# Weft startup script — reads the instance Role tag and starts the
-# appropriate systemd service with config from SSM.
+# Weft startup script — reads the instance Role tag, attaches persistent
+# EBS for coordinator, and starts the appropriate systemd service.
 
 set -euo pipefail
 
@@ -21,11 +21,63 @@ if [ -z "$ROLE" ] || [ "$ROLE" = "None" ]; then
 fi
 
 echo "Starting weft-$ROLE on instance $INSTANCE_ID in $REGION"
+APP_NAME="weft"
 
-# For the coordinator, fetch ASG names from SSM and write an env file
+# For the coordinator: attach persistent EBS and fetch config from SSM.
 if [ "$ROLE" = "coordinator" ]; then
-  APP_NAME="weft"
 
+  # Attach persistent EBS volume for config store
+  VOLUME_ID=$(aws ssm get-parameter \
+    --name "/$APP_NAME/config/coordinator-ebs-volume-id" \
+    --region "$REGION" \
+    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
+  if [ -n "$VOLUME_ID" ] && [ "$VOLUME_ID" != "None" ]; then
+    echo "Attaching EBS volume $VOLUME_ID..."
+
+    # Wait for volume to be available (might still be attached to old instance)
+    for i in $(seq 1 30); do
+      STATE=$(aws ec2 describe-volumes --volume-ids "$VOLUME_ID" --region "$REGION" \
+        --query 'Volumes[0].State' --output text 2>/dev/null || echo "unknown")
+      if [ "$STATE" = "available" ]; then
+        break
+      fi
+      echo "Volume state: $STATE, waiting..."
+      sleep 5
+    done
+
+    aws ec2 attach-volume \
+      --volume-id "$VOLUME_ID" \
+      --instance-id "$INSTANCE_ID" \
+      --device /dev/xvdf \
+      --region "$REGION" 2>/dev/null || echo "Volume attach failed (may already be attached)"
+
+    # Wait for device to appear
+    for i in $(seq 1 15); do
+      if [ -b /dev/xvdf ] || [ -b /dev/nvme1n1 ]; then
+        break
+      fi
+      sleep 2
+    done
+
+    # Determine actual device name (NVMe instances use nvme1n1)
+    DEVICE="/dev/xvdf"
+    [ -b /dev/nvme1n1 ] && DEVICE="/dev/nvme1n1"
+
+    # Format if new (no filesystem)
+    if ! blkid "$DEVICE" >/dev/null 2>&1; then
+      echo "Formatting new volume..."
+      mkfs.ext4 "$DEVICE"
+    fi
+
+    # Mount
+    mkdir -p /opt/app/data
+    mount "$DEVICE" /opt/app/data
+    chown app:app /opt/app/data
+    echo "Mounted $VOLUME_ID at /opt/app/data"
+  fi
+
+  # Fetch ASG names from SSM
   SHARD_ASG=$(aws ssm get-parameter \
     --name "/$APP_NAME/config/shard-asg-name" \
     --region "$REGION" \
@@ -36,7 +88,6 @@ if [ "$ROLE" = "coordinator" ]; then
     --region "$REGION" \
     --query 'Parameter.Value' --output text 2>/dev/null || echo "")
 
-  # Write environment file for the coordinator systemd unit
   cat > /opt/app/coordinator.env <<EOF
 WEFT_SHARD_ASG=${SHARD_ASG}
 WEFT_COMPUTE_ASG=${COMPUTE_ASG}
