@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"bufio"
 	"flag"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -28,8 +30,9 @@ type Config struct {
 }
 
 type SourceConfig struct {
-	App  string `yaml:"app"`
-	Path string `yaml:"path"`
+	App     string `yaml:"app"`
+	Path    string `yaml:"path"`              // file path or glob (file tailing)
+	Unit    string `yaml:"unit,omitempty"`     // systemd unit name (journal tailing)
 }
 
 func main() {
@@ -79,17 +82,24 @@ func main() {
 
 	hostname, _ := os.Hostname()
 
-	// Start file tailers.
+	// Start sources.
 	for _, src := range cfg.Sources {
-		paths, err := filepath.Glob(src.Path)
-		if err != nil || len(paths) == 0 {
-			log.Printf("[%s] no files matching %s", src.App, src.Path)
-			continue
+		if src.Unit != "" {
+			// Journal source — tail systemd unit logs.
+			go runJournalTailer(ctx, coordClient, customer, hostname, src.App, src.Unit)
+			log.Printf("[%s] tailing journal unit %s", src.App, src.Unit)
+		} else if src.Path != "" {
+			// File source — tail log files.
+			paths, err := filepath.Glob(src.Path)
+			if err != nil || len(paths) == 0 {
+				log.Printf("[%s] no files matching %s", src.App, src.Path)
+				continue
+			}
+			for _, p := range paths {
+				go runFileTailer(ctx, coordClient, customer, hostname, src.App, p)
+			}
+			log.Printf("[%s] tailing %d files matching %s", src.App, len(paths), src.Path)
 		}
-		for _, p := range paths {
-			go runFileTailer(ctx, coordClient, customer, hostname, src.App, p)
-		}
-		log.Printf("[%s] tailing %d files matching %s", src.App, len(paths), src.Path)
 	}
 
 	// Start socket listener.
@@ -110,6 +120,40 @@ func main() {
 	<-sig
 	log.Println("shutting down")
 	cancel()
+}
+
+// runJournalTailer tails a systemd unit's journal and streams lines.
+func runJournalTailer(ctx context.Context, client pb.WeftCoordinatorClient, customer, instance, app, unit string) {
+	// Start journalctl following the unit from now.
+	cmd := exec.CommandContext(ctx, "journalctl", "-f", "-u", unit, "--no-pager", "-o", "cat", "-n", "0")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Printf("[%s] journalctl pipe: %v", app, err)
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		log.Printf("[%s] journalctl start: %v", app, err)
+		return
+	}
+
+	stream, err := client.IngestStream(ctx)
+	if err != nil {
+		log.Printf("[%s] open stream: %v", app, err)
+		cmd.Process.Kill()
+		return
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		sendLine(stream, line, customer, instance, app)
+	}
+
+	stream.CloseAndRecv()
+	cmd.Wait()
 }
 
 func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, customer, instance, app, path string) {

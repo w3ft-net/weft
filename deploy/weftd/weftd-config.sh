@@ -4,8 +4,9 @@
 #
 # Expects:
 #   WEFT_TOKEN    - agent auth token (from Secrets Manager via fetch-config.sh)
-#   APP_NAME      - app name for log tagging (from SSM config)
+#   APP_NAME      - app name for log tagging (from SSM config or kevcons)
 #   WEFT_ENDPOINT - coordinator ingest endpoint (default: ingest.w3ft.net:9020)
+#   WEFT_UNIT     - systemd unit to tail (default: ${APP_NAME}.service)
 
 set -euo pipefail
 
@@ -17,16 +18,21 @@ if [ -z "${WEFT_TOKEN:-}" ]; then
   exit 0
 fi
 
+APP=${APP_NAME:-unknown}
+UNIT=${WEFT_UNIT:-${APP}.service}
+
 mkdir -p /etc/weftd
 
 cat > /etc/weftd/config.yaml <<EOF
 endpoint: ${WEFT_ENDPOINT:-ingest.w3ft.net:9020}
 token: ${WEFT_TOKEN}
 sources:
-  - app: ${APP_NAME:-unknown}
+  - app: ${APP}
+    unit: ${UNIT}
+  - app: ${APP}
     path: /opt/app/logs/*.log
 socket: /var/run/weftd/weftd.sock
 EOF
 
 chmod 600 /etc/weftd/config.yaml
-echo "weftd config written for app=${APP_NAME:-unknown}"
+echo "weftd config written for app=${APP} unit=${UNIT}"
