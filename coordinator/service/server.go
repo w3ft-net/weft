@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"time"
 
@@ -232,4 +233,46 @@ func (s *Server) RevokeToken(_ context.Context, req *pb.RevokeTokenRequest) (*pb
 		return nil, err
 	}
 	return &pb.RevokeTokenResponse{}, nil
+}
+
+// IngestStream accepts a stream of LogRows from weftd agents and forwards
+// them to the active shard in batches.
+func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) error {
+	var rows []shardpkg.LogRow
+	var count int64
+
+	for {
+		row, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		rows = append(rows, shardservice.ProtoToLogRow(row))
+		count++
+
+		if len(rows) >= 100 {
+			s.ingestBatch(rows)
+			rows = rows[:0]
+		}
+	}
+
+	if len(rows) > 0 {
+		s.ingestBatch(rows)
+	}
+
+	log.Printf("ingest-stream: received %d rows", count)
+	return stream.SendAndClose(&pb.IngestStreamResponse{RowsReceived: count})
+}
+
+func (s *Server) ingestBatch(rows []shardpkg.LogRow) {
+	for _, sh := range s.Coord.Shards {
+		if err := sh.Ingest(rows); err != nil {
+			continue
+		}
+		return
+	}
+	log.Printf("ingest-stream: all shards rejected batch of %d rows", len(rows))
 }

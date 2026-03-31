@@ -132,6 +132,11 @@ service WeftCoordinator {
   // directly via IngestStream.
   rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
 
+  // IngestStream accepts a stream of log rows from weftd agents that
+  // cannot reach shards directly. The coordinator validates the token
+  // from gRPC metadata and forwards batches to the active shard.
+  rpc IngestStream(stream LogRow) returns (IngestStreamResponse);
+
   // Token management for weftd agents.
   rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse);
   rpc ListTokens(ListTokensRequest) returns (ListTokensResponse);

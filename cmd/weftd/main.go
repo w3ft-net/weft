@@ -62,25 +62,20 @@ func main() {
 	}
 	coordClient := pb.NewWeftCoordinatorClient(coordConn)
 
+	// Authenticate to verify token and get customer name.
 	authResp, err := coordClient.Authenticate(ctx, &pb.AuthenticateRequest{Token: cfg.Token})
 	if err != nil {
 		log.Fatalf("authenticate: %v", err)
 	}
-	coordConn.Close()
 
 	customer := authResp.Customer
 	if customer == "" {
 		customer = cfg.Customer
 	}
-	log.Printf("authenticated as customer=%s, shard=%s", customer, authResp.ShardAddr)
+	log.Printf("authenticated as customer=%s", customer)
 
-	// Connect directly to the shard for ingestion.
-	shardConn, err := grpc.NewClient(authResp.ShardAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		log.Fatalf("connect to shard %s: %v", authResp.ShardAddr, err)
-	}
-	defer shardConn.Close()
-	shardClient := pb.NewShardQueryClient(shardConn)
+	// Stream logs through the coordinator (agents can't reach shards directly).
+	// Keep the coordinator connection open for the lifetime of the agent.
 
 	hostname, _ := os.Hostname()
 
@@ -92,7 +87,7 @@ func main() {
 			continue
 		}
 		for _, p := range paths {
-			go runFileTailer(ctx, shardClient, customer, hostname, src.App, p)
+			go runFileTailer(ctx, coordClient, customer, hostname, src.App, p)
 		}
 		log.Printf("[%s] tailing %d files matching %s", src.App, len(paths), src.Path)
 	}
@@ -104,7 +99,7 @@ func main() {
 			log.Fatalf("socket listener: %v", err)
 		}
 		defer sock.Close()
-		go runSocketIngester(ctx, shardClient, customer, hostname, sock)
+		go runSocketIngester(ctx, coordClient, customer, hostname, sock)
 		log.Printf("listening on socket %s", cfg.Socket)
 	}
 
@@ -117,7 +112,7 @@ func main() {
 	cancel()
 }
 
-func runFileTailer(ctx context.Context, client pb.ShardQueryClient, customer, instance, app, path string) {
+func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, customer, instance, app, path string) {
 	tailer, err := weftd.NewTailer(path)
 	if err != nil {
 		log.Printf("[%s] open %s: %v", app, path, err)
@@ -163,7 +158,7 @@ func runFileTailer(ctx context.Context, client pb.ShardQueryClient, customer, in
 	}
 }
 
-func runSocketIngester(ctx context.Context, client pb.ShardQueryClient, customer, instance string, sock *weftd.SocketListener) {
+func runSocketIngester(ctx context.Context, client pb.WeftCoordinatorClient, customer, instance string, sock *weftd.SocketListener) {
 	stream, err := client.IngestStream(ctx)
 	if err != nil {
 		log.Printf("socket ingester: open stream: %v", err)
@@ -208,13 +203,13 @@ func runSocketIngester(ctx context.Context, client pb.ShardQueryClient, customer
 	}
 }
 
-func flush(stream pb.ShardQuery_IngestStreamClient, lines []string, customer, instance, app string) {
+func flush(stream pb.WeftCoordinator_IngestStreamClient, lines []string, customer, instance, app string) {
 	for _, line := range lines {
 		sendLine(stream, line, customer, instance, app)
 	}
 }
 
-func sendLine(stream pb.ShardQuery_IngestStreamClient, line, customer, instance, app string) {
+func sendLine(stream pb.WeftCoordinator_IngestStreamClient, line, customer, instance, app string) {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return

@@ -146,6 +146,7 @@ func newModel(s *Shell) model {
 	ti.CharLimit = 1024
 
 	out := &strings.Builder{}
+	out.WriteString(RenderLogo())
 	out.WriteString(dimStyle.Render(fmt.Sprintf(
 		"weft shell — %d apps, range %s to %s",
 		len(s.Apps),

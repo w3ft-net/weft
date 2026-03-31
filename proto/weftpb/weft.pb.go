@@ -1955,14 +1955,15 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\vWeftCompute\x12<\n" +
 	"\tCreateJob\x12\x16.weft.CreateJobRequest\x1a\x17.weft.CreateJobResponse\x12:\n" +
 	"\bSendRows\x12\x14.weft.ComputeMessage\x1a\x16.weft.SendRowsResponse(\x01\x12<\n" +
-	"\tGetResult\x12\x16.weft.GetResultRequest\x1a\x17.weft.GetResultResponse2\xef\x04\n" +
+	"\tGetResult\x12\x16.weft.GetResultRequest\x1a\x17.weft.GetResultResponse2\xab\x05\n" +
 	"\x0fWeftCoordinator\x12H\n" +
 	"\x05Query\x12\x1d.weft.CoordinatorQueryRequest\x1a\x1e.weft.CoordinatorQueryResponse0\x01\x129\n" +
 	"\bListApps\x12\x15.weft.ListAppsRequest\x1a\x16.weft.ListAppsResponse\x12<\n" +
 	"\tAddSource\x12\x16.weft.AddSourceRequest\x1a\x17.weft.AddSourceResponse\x12B\n" +
 	"\vListSources\x12\x18.weft.ListSourcesRequest\x1a\x19.weft.ListSourcesResponse\x12E\n" +
 	"\fRemoveSource\x12\x19.weft.RemoveSourceRequest\x1a\x1a.weft.RemoveSourceResponse\x12E\n" +
-	"\fAuthenticate\x12\x19.weft.AuthenticateRequest\x1a\x1a.weft.AuthenticateResponse\x12B\n" +
+	"\fAuthenticate\x12\x19.weft.AuthenticateRequest\x1a\x1a.weft.AuthenticateResponse\x12:\n" +
+	"\fIngestStream\x12\f.weft.LogRow\x1a\x1a.weft.IngestStreamResponse(\x01\x12B\n" +
 	"\vCreateToken\x12\x18.weft.CreateTokenRequest\x1a\x19.weft.CreateTokenResponse\x12?\n" +
 	"\n" +
 	"ListTokens\x12\x17.weft.ListTokensRequest\x1a\x18.weft.ListTokensResponse\x12B\n" +
@@ -2036,27 +2037,29 @@ var file_proto_weftpb_weft_proto_depIdxs = []int32{
 	28, // 15: weft.WeftCoordinator.ListSources:input_type -> weft.ListSourcesRequest
 	31, // 16: weft.WeftCoordinator.RemoveSource:input_type -> weft.RemoveSourceRequest
 	20, // 17: weft.WeftCoordinator.Authenticate:input_type -> weft.AuthenticateRequest
-	13, // 18: weft.WeftCoordinator.CreateToken:input_type -> weft.CreateTokenRequest
-	15, // 19: weft.WeftCoordinator.ListTokens:input_type -> weft.ListTokensRequest
-	18, // 20: weft.WeftCoordinator.RevokeToken:input_type -> weft.RevokeTokenRequest
-	4,  // 21: weft.ShardQuery.Query:output_type -> weft.LogRow
-	3,  // 22: weft.ShardQuery.QueryToCompute:output_type -> weft.QueryToComputeResponse
-	6,  // 23: weft.ShardQuery.Ingest:output_type -> weft.IngestResponse
-	0,  // 24: weft.ShardQuery.IngestStream:output_type -> weft.IngestStreamResponse
-	8,  // 25: weft.WeftCompute.CreateJob:output_type -> weft.CreateJobResponse
-	10, // 26: weft.WeftCompute.SendRows:output_type -> weft.SendRowsResponse
-	12, // 27: weft.WeftCompute.GetResult:output_type -> weft.GetResultResponse
-	23, // 28: weft.WeftCoordinator.Query:output_type -> weft.CoordinatorQueryResponse
-	25, // 29: weft.WeftCoordinator.ListApps:output_type -> weft.ListAppsResponse
-	27, // 30: weft.WeftCoordinator.AddSource:output_type -> weft.AddSourceResponse
-	29, // 31: weft.WeftCoordinator.ListSources:output_type -> weft.ListSourcesResponse
-	32, // 32: weft.WeftCoordinator.RemoveSource:output_type -> weft.RemoveSourceResponse
-	21, // 33: weft.WeftCoordinator.Authenticate:output_type -> weft.AuthenticateResponse
-	14, // 34: weft.WeftCoordinator.CreateToken:output_type -> weft.CreateTokenResponse
-	16, // 35: weft.WeftCoordinator.ListTokens:output_type -> weft.ListTokensResponse
-	19, // 36: weft.WeftCoordinator.RevokeToken:output_type -> weft.RevokeTokenResponse
-	21, // [21:37] is the sub-list for method output_type
-	5,  // [5:21] is the sub-list for method input_type
+	4,  // 18: weft.WeftCoordinator.IngestStream:input_type -> weft.LogRow
+	13, // 19: weft.WeftCoordinator.CreateToken:input_type -> weft.CreateTokenRequest
+	15, // 20: weft.WeftCoordinator.ListTokens:input_type -> weft.ListTokensRequest
+	18, // 21: weft.WeftCoordinator.RevokeToken:input_type -> weft.RevokeTokenRequest
+	4,  // 22: weft.ShardQuery.Query:output_type -> weft.LogRow
+	3,  // 23: weft.ShardQuery.QueryToCompute:output_type -> weft.QueryToComputeResponse
+	6,  // 24: weft.ShardQuery.Ingest:output_type -> weft.IngestResponse
+	0,  // 25: weft.ShardQuery.IngestStream:output_type -> weft.IngestStreamResponse
+	8,  // 26: weft.WeftCompute.CreateJob:output_type -> weft.CreateJobResponse
+	10, // 27: weft.WeftCompute.SendRows:output_type -> weft.SendRowsResponse
+	12, // 28: weft.WeftCompute.GetResult:output_type -> weft.GetResultResponse
+	23, // 29: weft.WeftCoordinator.Query:output_type -> weft.CoordinatorQueryResponse
+	25, // 30: weft.WeftCoordinator.ListApps:output_type -> weft.ListAppsResponse
+	27, // 31: weft.WeftCoordinator.AddSource:output_type -> weft.AddSourceResponse
+	29, // 32: weft.WeftCoordinator.ListSources:output_type -> weft.ListSourcesResponse
+	32, // 33: weft.WeftCoordinator.RemoveSource:output_type -> weft.RemoveSourceResponse
+	21, // 34: weft.WeftCoordinator.Authenticate:output_type -> weft.AuthenticateResponse
+	0,  // 35: weft.WeftCoordinator.IngestStream:output_type -> weft.IngestStreamResponse
+	14, // 36: weft.WeftCoordinator.CreateToken:output_type -> weft.CreateTokenResponse
+	16, // 37: weft.WeftCoordinator.ListTokens:output_type -> weft.ListTokensResponse
+	19, // 38: weft.WeftCoordinator.RevokeToken:output_type -> weft.RevokeTokenResponse
+	22, // [22:39] is the sub-list for method output_type
+	5,  // [5:22] is the sub-list for method input_type
 	5,  // [5:5] is the sub-list for extension type_name
 	5,  // [5:5] is the sub-list for extension extendee
 	0,  // [0:5] is the sub-list for field type_name

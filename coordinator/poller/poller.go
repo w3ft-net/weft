@@ -161,22 +161,38 @@ func (p *Poller) poll(ctx context.Context, lg configstore.LogGroupWithAccount) {
 		return
 	}
 
-	// Ingest into the first available shard.
-	for _, s := range p.shards {
-		if err := s.Ingest(allRows); err != nil {
-			log.Printf("poller[%s]: ingest to shard %s: %v", lg.App, s.ID(), err)
+	// Ingest into shards in batches (to stay under gRPC message size limit).
+	const batchSize = 500
+	ingested := 0
+	for i := 0; i < len(allRows); i += batchSize {
+		end := i + batchSize
+		if end > len(allRows) {
+			end = len(allRows)
+		}
+		batch := allRows[i:end]
+
+		ok := false
+		for _, s := range p.shards {
+			if err := s.Ingest(batch); err != nil {
+				continue
+			}
+			ok = true
+			break
+		}
+		if !ok {
+			log.Printf("poller[%s]: failed to ingest batch of %d rows — all shards rejected", lg.App, len(batch))
 			continue
 		}
-		log.Printf("poller[%s]: ingested %d rows into shard %s", lg.App, len(allRows), s.ID())
+		ingested += len(batch)
+	}
 
+	if ingested > 0 {
+		log.Printf("poller[%s]: ingested %d rows", lg.App, ingested)
 		now := time.Now().UTC().Format(time.RFC3339)
 		token := ""
 		if nextToken != nil {
 			token = *nextToken
 		}
 		p.store.UpdatePollState(lg.App, now, token)
-		return
 	}
-
-	log.Printf("poller[%s]: failed to ingest %d rows — all shards rejected", lg.App, len(allRows))
 }
