@@ -3,6 +3,7 @@ package shell
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"google.golang.org/grpc"
@@ -44,7 +45,7 @@ func (r *RemoteCoordinator) Close() error {
 
 // Query executes a pipeline against the remote coordinator.
 func (r *RemoteCoordinator) Query(pipeline string, start, end time.Time) (*RemoteQueryResult, error) {
-	resp, err := r.client.Query(context.Background(), &pb.CoordinatorQueryRequest{
+	stream, err := r.client.Query(context.Background(), &pb.CoordinatorQueryRequest{
 		Pipeline:    pipeline,
 		TimeStartNs: start.UnixNano(),
 		TimeEndNs:   end.UnixNano(),
@@ -53,9 +54,21 @@ func (r *RemoteCoordinator) Query(pipeline string, start, end time.Time) (*Remot
 		return nil, err
 	}
 
-	result := &RemoteQueryResult{Text: resp.Text}
-	for _, r := range resp.Rows {
-		result.Rows = append(result.Rows, shardservice.ProtoToLogRow(r))
+	result := &RemoteQueryResult{}
+	for {
+		resp, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if resp.Text != "" {
+			result.Text += resp.Text
+		}
+		for _, row := range resp.Rows {
+			result.Rows = append(result.Rows, shardservice.ProtoToLogRow(row))
+		}
 	}
 	return result, nil
 }

@@ -19,7 +19,7 @@ type Server struct {
 	Apps  []string
 }
 
-func (s *Server) Query(_ context.Context, req *pb.CoordinatorQueryRequest) (*pb.CoordinatorQueryResponse, error) {
+func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinator_QueryServer) error {
 	tr := coordinator.TimeRange{
 		Start: time.Unix(0, req.TimeStartNs),
 		End:   time.Unix(0, req.TimeEndNs),
@@ -31,18 +31,29 @@ func (s *Server) Query(_ context.Context, req *pb.CoordinatorQueryRequest) (*pb.
 
 	result, err := s.Coord.Query(req.Pipeline, tr)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	resp := &pb.CoordinatorQueryResponse{}
 	if result.Text != "" {
-		resp.Text = result.Text
-	} else {
-		for _, r := range result.Rows {
+		return stream.Send(&pb.CoordinatorQueryResponse{Text: result.Text})
+	}
+
+	// Stream rows in batches to stay under gRPC message size limit.
+	const batchSize = 500
+	for i := 0; i < len(result.Rows); i += batchSize {
+		end := i + batchSize
+		if end > len(result.Rows) {
+			end = len(result.Rows)
+		}
+		resp := &pb.CoordinatorQueryResponse{}
+		for _, r := range result.Rows[i:end] {
 			resp.Rows = append(resp.Rows, shardservice.LogRowToProto(&r))
 		}
+		if err := stream.Send(resp); err != nil {
+			return err
+		}
 	}
-	return resp, nil
+	return nil
 }
 
 func (s *Server) ListApps(_ context.Context, _ *pb.ListAppsRequest) (*pb.ListAppsResponse, error) {

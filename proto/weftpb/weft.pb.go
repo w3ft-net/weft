@@ -1437,9 +1437,9 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\vWeftCompute\x12<\n" +
 	"\tCreateJob\x12\x16.weft.CreateJobRequest\x1a\x17.weft.CreateJobResponse\x12:\n" +
 	"\bSendRows\x12\x14.weft.ComputeMessage\x1a\x16.weft.SendRowsResponse(\x01\x12<\n" +
-	"\tGetResult\x12\x16.weft.GetResultRequest\x1a\x17.weft.GetResultResponse2\xdd\x02\n" +
-	"\x0fWeftCoordinator\x12F\n" +
-	"\x05Query\x12\x1d.weft.CoordinatorQueryRequest\x1a\x1e.weft.CoordinatorQueryResponse\x129\n" +
+	"\tGetResult\x12\x16.weft.GetResultRequest\x1a\x17.weft.GetResultResponse2\xdf\x02\n" +
+	"\x0fWeftCoordinator\x12H\n" +
+	"\x05Query\x12\x1d.weft.CoordinatorQueryRequest\x1a\x1e.weft.CoordinatorQueryResponse0\x01\x129\n" +
 	"\bListApps\x12\x15.weft.ListAppsRequest\x1a\x16.weft.ListAppsResponse\x12<\n" +
 	"\tAddSource\x12\x16.weft.AddSourceRequest\x1a\x17.weft.AddSourceResponse\x12B\n" +
 	"\vListSources\x12\x18.weft.ListSourcesRequest\x1a\x19.weft.ListSourcesResponse\x12E\n" +

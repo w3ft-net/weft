@@ -400,8 +400,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type WeftCoordinatorClient interface {
-	// Query executes a weft pipeline and returns results.
-	Query(ctx context.Context, in *CoordinatorQueryRequest, opts ...grpc.CallOption) (*CoordinatorQueryResponse, error)
+	// Query executes a weft pipeline and streams results back.
+	Query(ctx context.Context, in *CoordinatorQueryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CoordinatorQueryResponse], error)
 	// ListApps returns the available app names (pseudofiles).
 	ListApps(ctx context.Context, in *ListAppsRequest, opts ...grpc.CallOption) (*ListAppsResponse, error)
 	// AddSource registers a CloudWatch log source for ingestion.
@@ -420,15 +420,24 @@ func NewWeftCoordinatorClient(cc grpc.ClientConnInterface) WeftCoordinatorClient
 	return &weftCoordinatorClient{cc}
 }
 
-func (c *weftCoordinatorClient) Query(ctx context.Context, in *CoordinatorQueryRequest, opts ...grpc.CallOption) (*CoordinatorQueryResponse, error) {
+func (c *weftCoordinatorClient) Query(ctx context.Context, in *CoordinatorQueryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CoordinatorQueryResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CoordinatorQueryResponse)
-	err := c.cc.Invoke(ctx, WeftCoordinator_Query_FullMethodName, in, out, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WeftCoordinator_ServiceDesc.Streams[0], WeftCoordinator_Query_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &grpc.GenericClientStream[CoordinatorQueryRequest, CoordinatorQueryResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WeftCoordinator_QueryClient = grpc.ServerStreamingClient[CoordinatorQueryResponse]
 
 func (c *weftCoordinatorClient) ListApps(ctx context.Context, in *ListAppsRequest, opts ...grpc.CallOption) (*ListAppsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -474,8 +483,8 @@ func (c *weftCoordinatorClient) RemoveSource(ctx context.Context, in *RemoveSour
 // All implementations must embed UnimplementedWeftCoordinatorServer
 // for forward compatibility.
 type WeftCoordinatorServer interface {
-	// Query executes a weft pipeline and returns results.
-	Query(context.Context, *CoordinatorQueryRequest) (*CoordinatorQueryResponse, error)
+	// Query executes a weft pipeline and streams results back.
+	Query(*CoordinatorQueryRequest, grpc.ServerStreamingServer[CoordinatorQueryResponse]) error
 	// ListApps returns the available app names (pseudofiles).
 	ListApps(context.Context, *ListAppsRequest) (*ListAppsResponse, error)
 	// AddSource registers a CloudWatch log source for ingestion.
@@ -494,8 +503,8 @@ type WeftCoordinatorServer interface {
 // pointer dereference when methods are called.
 type UnimplementedWeftCoordinatorServer struct{}
 
-func (UnimplementedWeftCoordinatorServer) Query(context.Context, *CoordinatorQueryRequest) (*CoordinatorQueryResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method Query not implemented")
+func (UnimplementedWeftCoordinatorServer) Query(*CoordinatorQueryRequest, grpc.ServerStreamingServer[CoordinatorQueryResponse]) error {
+	return status.Error(codes.Unimplemented, "method Query not implemented")
 }
 func (UnimplementedWeftCoordinatorServer) ListApps(context.Context, *ListAppsRequest) (*ListAppsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListApps not implemented")
@@ -530,23 +539,16 @@ func RegisterWeftCoordinatorServer(s grpc.ServiceRegistrar, srv WeftCoordinatorS
 	s.RegisterService(&WeftCoordinator_ServiceDesc, srv)
 }
 
-func _WeftCoordinator_Query_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CoordinatorQueryRequest)
-	if err := dec(in); err != nil {
-		return nil, err
+func _WeftCoordinator_Query_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(CoordinatorQueryRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
 	}
-	if interceptor == nil {
-		return srv.(WeftCoordinatorServer).Query(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WeftCoordinator_Query_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WeftCoordinatorServer).Query(ctx, req.(*CoordinatorQueryRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+	return srv.(WeftCoordinatorServer).Query(m, &grpc.GenericServerStream[CoordinatorQueryRequest, CoordinatorQueryResponse]{ServerStream: stream})
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WeftCoordinator_QueryServer = grpc.ServerStreamingServer[CoordinatorQueryResponse]
 
 func _WeftCoordinator_ListApps_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListAppsRequest)
@@ -628,10 +630,6 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*WeftCoordinatorServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "Query",
-			Handler:    _WeftCoordinator_Query_Handler,
-		},
-		{
 			MethodName: "ListApps",
 			Handler:    _WeftCoordinator_ListApps_Handler,
 		},
@@ -648,6 +646,12 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _WeftCoordinator_RemoveSource_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Query",
+			Handler:       _WeftCoordinator_Query_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "proto/weftpb/weft.proto",
 }

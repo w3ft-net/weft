@@ -104,8 +104,8 @@ message GetResultResponse {
 // ---------------------------------------------------------------------------
 
 service WeftCoordinator {
-  // Query executes a weft pipeline and returns results.
-  rpc Query(CoordinatorQueryRequest) returns (CoordinatorQueryResponse);
+  // Query executes a weft pipeline and streams results back.
+  rpc Query(CoordinatorQueryRequest) returns (stream CoordinatorQueryResponse);
 
   // ListApps returns the available app names (pseudofiles).
   rpc ListApps(ListAppsRequest) returns (ListAppsResponse);
