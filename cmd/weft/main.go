@@ -25,6 +25,9 @@ func main() {
 		case "source":
 			runSource()
 			return
+		case "token":
+			runToken()
+			return
 		}
 	}
 
@@ -374,4 +377,117 @@ func runSourceRemove(remote *shell.RemoteCoordinator) {
 		os.Exit(1)
 	}
 	fmt.Printf("Removed source: %s\n", app)
+}
+
+func runToken() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: weft token {create|list|revoke}")
+		os.Exit(1)
+	}
+
+	cfg, err := shell.LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "no .weft.yaml: %v\n", err)
+		os.Exit(1)
+	}
+	remote, err := shell.NewRemoteCoordinator(cfg.Endpoint)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "connect: %v\n", err)
+		os.Exit(1)
+	}
+	defer remote.Close()
+
+	switch os.Args[2] {
+	case "create":
+		runTokenCreate(remote, cfg)
+	case "list":
+		runTokenList(remote, cfg)
+	case "revoke":
+		runTokenRevoke(remote)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown token command: %s\n", os.Args[2])
+		os.Exit(1)
+	}
+}
+
+func runTokenCreate(remote *shell.RemoteCoordinator, cfg *shell.Config) {
+	args := os.Args[3:]
+	var label string
+	customer := cfg.Customer
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--label":
+			if i+1 < len(args) { label = args[i+1]; i++ }
+		case "--customer":
+			if i+1 < len(args) { customer = args[i+1]; i++ }
+		}
+	}
+
+	if customer == "" {
+		fmt.Fprintln(os.Stderr, "usage: weft token create --label NAME [--customer CUST]")
+		os.Exit(1)
+	}
+
+	token, err := remote.CreateToken(customer, label)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create token: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Token created: %s\n", token)
+	if label != "" {
+		fmt.Printf("Label: %s\n", label)
+	}
+	fmt.Println("Store this token in your weftd config. It cannot be retrieved again.")
+}
+
+func runTokenList(remote *shell.RemoteCoordinator, cfg *shell.Config) {
+	customer := cfg.Customer
+	args := os.Args[3:]
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--customer" && i+1 < len(args) {
+			customer = args[i+1]
+			i++
+		}
+	}
+
+	tokens, err := remote.ListTokens(customer)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "list tokens: %v\n", err)
+		os.Exit(1)
+	}
+	if len(tokens) == 0 {
+		fmt.Println("No tokens configured.")
+		return
+	}
+	fmt.Printf("%-40s %-25s %-10s %s\n", "TOKEN", "LABEL", "STATUS", "CREATED")
+	for _, t := range tokens {
+		status := "active"
+		if t.Revoked {
+			status = "revoked"
+		}
+		// Show only prefix of token for security.
+		display := t.Token[:12] + "..."
+		fmt.Printf("%-40s %-25s %-10s %s\n", display, t.Label, status, t.CreatedAt)
+	}
+}
+
+func runTokenRevoke(remote *shell.RemoteCoordinator) {
+	args := os.Args[3:]
+	var token string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--token" && i+1 < len(args) {
+			token = args[i+1]
+			i++
+		}
+	}
+	if token == "" {
+		fmt.Fprintln(os.Stderr, "usage: weft token revoke --token TOKEN")
+		os.Exit(1)
+	}
+	if err := remote.RevokeToken(token); err != nil {
+		fmt.Fprintf(os.Stderr, "revoke token: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Revoked token: %s\n", token[:12]+"...")
 }

@@ -131,7 +131,42 @@ service WeftCoordinator {
   // address for direct ingestion. The agent then connects to the shard
   // directly via IngestStream.
   rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+
+  // Token management for weftd agents.
+  rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse);
+  rpc ListTokens(ListTokensRequest) returns (ListTokensResponse);
+  rpc RevokeToken(RevokeTokenRequest) returns (RevokeTokenResponse);
 }
+
+message CreateTokenRequest {
+  string customer = 1;
+  string label = 2;  // human-readable label (e.g., "vimgym-prod-agent")
+}
+
+message CreateTokenResponse {
+  string token = 1;  // the generated wft_xxx token
+}
+
+message ListTokensRequest {
+  string customer = 1;
+}
+
+message ListTokensResponse {
+  repeated TokenInfo tokens = 1;
+}
+
+message TokenInfo {
+  string token = 1;
+  string label = 2;
+  bool revoked = 3;
+  string created_at = 4;
+}
+
+message RevokeTokenRequest {
+  string token = 1;
+}
+
+message RevokeTokenResponse {}
 
 message AuthenticateRequest {
   string token = 1;

@@ -430,6 +430,9 @@ const (
 	WeftCoordinator_ListSources_FullMethodName  = "/weft.WeftCoordinator/ListSources"
 	WeftCoordinator_RemoveSource_FullMethodName = "/weft.WeftCoordinator/RemoveSource"
 	WeftCoordinator_Authenticate_FullMethodName = "/weft.WeftCoordinator/Authenticate"
+	WeftCoordinator_CreateToken_FullMethodName  = "/weft.WeftCoordinator/CreateToken"
+	WeftCoordinator_ListTokens_FullMethodName   = "/weft.WeftCoordinator/ListTokens"
+	WeftCoordinator_RevokeToken_FullMethodName  = "/weft.WeftCoordinator/RevokeToken"
 )
 
 // WeftCoordinatorClient is the client API for WeftCoordinator service.
@@ -450,6 +453,10 @@ type WeftCoordinatorClient interface {
 	// address for direct ingestion. The agent then connects to the shard
 	// directly via IngestStream.
 	Authenticate(ctx context.Context, in *AuthenticateRequest, opts ...grpc.CallOption) (*AuthenticateResponse, error)
+	// Token management for weftd agents.
+	CreateToken(ctx context.Context, in *CreateTokenRequest, opts ...grpc.CallOption) (*CreateTokenResponse, error)
+	ListTokens(ctx context.Context, in *ListTokensRequest, opts ...grpc.CallOption) (*ListTokensResponse, error)
+	RevokeToken(ctx context.Context, in *RevokeTokenRequest, opts ...grpc.CallOption) (*RevokeTokenResponse, error)
 }
 
 type weftCoordinatorClient struct {
@@ -529,6 +536,36 @@ func (c *weftCoordinatorClient) Authenticate(ctx context.Context, in *Authentica
 	return out, nil
 }
 
+func (c *weftCoordinatorClient) CreateToken(ctx context.Context, in *CreateTokenRequest, opts ...grpc.CallOption) (*CreateTokenResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateTokenResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_CreateToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftCoordinatorClient) ListTokens(ctx context.Context, in *ListTokensRequest, opts ...grpc.CallOption) (*ListTokensResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTokensResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_ListTokens_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftCoordinatorClient) RevokeToken(ctx context.Context, in *RevokeTokenRequest, opts ...grpc.CallOption) (*RevokeTokenResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RevokeTokenResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_RevokeToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WeftCoordinatorServer is the server API for WeftCoordinator service.
 // All implementations must embed UnimplementedWeftCoordinatorServer
 // for forward compatibility.
@@ -547,6 +584,10 @@ type WeftCoordinatorServer interface {
 	// address for direct ingestion. The agent then connects to the shard
 	// directly via IngestStream.
 	Authenticate(context.Context, *AuthenticateRequest) (*AuthenticateResponse, error)
+	// Token management for weftd agents.
+	CreateToken(context.Context, *CreateTokenRequest) (*CreateTokenResponse, error)
+	ListTokens(context.Context, *ListTokensRequest) (*ListTokensResponse, error)
+	RevokeToken(context.Context, *RevokeTokenRequest) (*RevokeTokenResponse, error)
 	mustEmbedUnimplementedWeftCoordinatorServer()
 }
 
@@ -574,6 +615,15 @@ func (UnimplementedWeftCoordinatorServer) RemoveSource(context.Context, *RemoveS
 }
 func (UnimplementedWeftCoordinatorServer) Authenticate(context.Context, *AuthenticateRequest) (*AuthenticateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Authenticate not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) CreateToken(context.Context, *CreateTokenRequest) (*CreateTokenResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateToken not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) ListTokens(context.Context, *ListTokensRequest) (*ListTokensResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTokens not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) RevokeToken(context.Context, *RevokeTokenRequest) (*RevokeTokenResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RevokeToken not implemented")
 }
 func (UnimplementedWeftCoordinatorServer) mustEmbedUnimplementedWeftCoordinatorServer() {}
 func (UnimplementedWeftCoordinatorServer) testEmbeddedByValue()                         {}
@@ -697,6 +747,60 @@ func _WeftCoordinator_Authenticate_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WeftCoordinator_CreateToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).CreateToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_CreateToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).CreateToken(ctx, req.(*CreateTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftCoordinator_ListTokens_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTokensRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).ListTokens(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_ListTokens_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).ListTokens(ctx, req.(*ListTokensRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftCoordinator_RevokeToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).RevokeToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_RevokeToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).RevokeToken(ctx, req.(*RevokeTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WeftCoordinator_ServiceDesc is the grpc.ServiceDesc for WeftCoordinator service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -723,6 +827,18 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Authenticate",
 			Handler:    _WeftCoordinator_Authenticate_Handler,
+		},
+		{
+			MethodName: "CreateToken",
+			Handler:    _WeftCoordinator_CreateToken_Handler,
+		},
+		{
+			MethodName: "ListTokens",
+			Handler:    _WeftCoordinator_ListTokens_Handler,
+		},
+		{
+			MethodName: "RevokeToken",
+			Handler:    _WeftCoordinator_RevokeToken_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

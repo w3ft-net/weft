@@ -133,3 +133,45 @@ func (r *RemoteCoordinator) RemoveSource(app string) error {
 	_, err := r.client.RemoveSource(context.Background(), &pb.RemoveSourceRequest{App: app})
 	return err
 }
+
+// --- Token management ---
+
+func (r *RemoteCoordinator) CreateToken(customer, label string) (string, error) {
+	resp, err := r.client.CreateToken(context.Background(), &pb.CreateTokenRequest{
+		Customer: customer,
+		Label:    label,
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.Token, nil
+}
+
+type TokenInfo struct {
+	Token     string
+	Label     string
+	Revoked   bool
+	CreatedAt string
+}
+
+func (r *RemoteCoordinator) ListTokens(customer string) ([]TokenInfo, error) {
+	resp, err := r.client.ListTokens(context.Background(), &pb.ListTokensRequest{Customer: customer})
+	if err != nil {
+		return nil, err
+	}
+	var tokens []TokenInfo
+	for _, t := range resp.Tokens {
+		tokens = append(tokens, TokenInfo{
+			Token:     t.Token,
+			Label:     t.Label,
+			Revoked:   t.Revoked,
+			CreatedAt: t.CreatedAt,
+		})
+	}
+	return tokens, nil
+}
+
+func (r *RemoteCoordinator) RevokeToken(token string) error {
+	_, err := r.client.RevokeToken(context.Background(), &pb.RevokeTokenRequest{Token: token})
+	return err
+}

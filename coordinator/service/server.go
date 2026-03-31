@@ -184,3 +184,52 @@ func getShardAddr(sh shardpkg.Shard) string {
 	}
 	return "localhost:9000"
 }
+
+func (s *Server) CreateToken(_ context.Context, req *pb.CreateTokenRequest) (*pb.CreateTokenResponse, error) {
+	if s.Store == nil {
+		return nil, fmt.Errorf("config store not available")
+	}
+	customer, err := s.Store.FindOrCreateCustomer(req.Customer)
+	if err != nil {
+		return nil, fmt.Errorf("customer: %w", err)
+	}
+	token, err := s.Store.CreateAgentToken(customer.ID, req.Label)
+	if err != nil {
+		return nil, fmt.Errorf("create token: %w", err)
+	}
+	return &pb.CreateTokenResponse{Token: token.Token}, nil
+}
+
+func (s *Server) ListTokens(_ context.Context, req *pb.ListTokensRequest) (*pb.ListTokensResponse, error) {
+	if s.Store == nil {
+		return &pb.ListTokensResponse{}, nil
+	}
+	customer, err := s.Store.FindOrCreateCustomer(req.Customer)
+	if err != nil {
+		return nil, err
+	}
+	tokens, err := s.Store.ListAgentTokens(customer.ID)
+	if err != nil {
+		return nil, err
+	}
+	var infos []*pb.TokenInfo
+	for _, t := range tokens {
+		infos = append(infos, &pb.TokenInfo{
+			Token:     t.Token,
+			Label:     t.Label,
+			Revoked:   t.Revoked,
+			CreatedAt: t.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	return &pb.ListTokensResponse{Tokens: infos}, nil
+}
+
+func (s *Server) RevokeToken(_ context.Context, req *pb.RevokeTokenRequest) (*pb.RevokeTokenResponse, error) {
+	if s.Store == nil {
+		return nil, fmt.Errorf("config store not available")
+	}
+	if err := s.Store.RevokeAgentToken(req.Token); err != nil {
+		return nil, err
+	}
+	return &pb.RevokeTokenResponse{}, nil
+}
