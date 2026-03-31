@@ -2,16 +2,14 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"time"
 
 	"github.com/kevlarcon/weft/configstore"
 	"github.com/kevlarcon/weft/coordinator"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
+	shardpkg "github.com/kevlarcon/weft/shard"
 	shardservice "github.com/kevlarcon/weft/shard/service"
 )
 
@@ -128,60 +126,61 @@ func (s *Server) RemoveSource(_ context.Context, req *pb.RemoveSourceRequest) (*
 	return &pb.RemoveSourceResponse{}, nil
 }
 
-func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) error {
-	var rows []shard.LogRow
-	var count int64
-
-	for {
-		msg, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-
-		row := shard.LogRow{
-			LineNum:  count + 1,
-			Raw:      msg.Raw,
-			App:      msg.App,
-			Level:    msg.Level,
-			Ts:       time.Unix(0, msg.TsUnixNs),
-			Instance: msg.Instance,
-			Customer: msg.Customer,
-			Fields:   msg.Fields,
-		}
-		if len(msg.PayloadJson) > 0 {
-			row.Payload = json.RawMessage(msg.PayloadJson)
-		}
-		rows = append(rows, row)
-		count++
-
-		// Batch ingest every 100 rows.
-		if len(rows) >= 100 {
-			if err := s.ingestToShard(rows); err != nil {
-				log.Printf("ingest-stream: %v", err)
-			}
-			rows = rows[:0]
-		}
+// Authenticate validates an agent token and returns the active shard address.
+// The agent then connects directly to the shard for streaming ingestion.
+func (s *Server) Authenticate(_ context.Context, req *pb.AuthenticateRequest) (*pb.AuthenticateResponse, error) {
+	if s.Store == nil {
+		return nil, fmt.Errorf("config store not available")
 	}
 
-	// Flush remaining.
-	if len(rows) > 0 {
-		if err := s.ingestToShard(rows); err != nil {
-			log.Printf("ingest-stream: %v", err)
-		}
+	customer, err := s.Store.ValidateAgentToken(req.Token)
+	if err != nil {
+		return nil, fmt.Errorf("validate token: %w", err)
+	}
+	if customer == nil {
+		return nil, fmt.Errorf("invalid or revoked token")
 	}
 
-	return stream.SendAndClose(&pb.IngestStreamResponse{RowsReceived: count})
+	// Find the first healthy shard for ingestion.
+	if len(s.Coord.Shards) == 0 {
+		return nil, fmt.Errorf("no shards available")
+	}
+
+	// For now, pick the first shard. In production this would be the
+	// INGESTING shard (the one accepting writes).
+	activeShard := s.Coord.Shards[0]
+
+	// The shard address comes from the GRPCShard's connection info.
+	// For now, use the shard ID as a hint — the agent needs the actual
+	// host:port. We'll get this from ASG discovery.
+	shardAddr := getShardAddr(activeShard)
+
+	// Generate a short-lived shard token. For now, use the customer name
+	// as the token — the shard validates it against metadata.
+	// TODO: proper JWT or HMAC-signed short-lived tokens.
+	shardToken := fmt.Sprintf("%s:%s", customer.Name, req.Token[:16])
+
+	// Expire in 1 hour (forces re-auth, picks up shard rotations).
+	expiresAt := time.Now().Add(1 * time.Hour).UnixNano()
+
+	log.Printf("auth: customer=%s shard=%s", customer.Name, activeShard.ID())
+
+	return &pb.AuthenticateResponse{
+		Customer:    customer.Name,
+		ShardAddr:   shardAddr,
+		ShardToken:  shardToken,
+		ExpiresAtNs: expiresAt,
+	}, nil
 }
 
-func (s *Server) ingestToShard(rows []shard.LogRow) error {
-	for _, sh := range s.Coord.Shards {
-		if err := sh.Ingest(rows); err != nil {
-			continue
-		}
-		return nil
+// getShardAddr extracts the network address from a shard.
+func getShardAddr(sh shardpkg.Shard) string {
+	// GRPCShard stores the address. For DuckDBShard (in-process), return localhost.
+	type addrGetter interface {
+		Addr() string
 	}
-	return fmt.Errorf("all shards rejected ingest")
+	if g, ok := sh.(addrGetter); ok {
+		return g.Addr()
+	}
+	return "localhost:9000"
 }

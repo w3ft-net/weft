@@ -47,6 +47,9 @@ func (s *GRPCShard) Close() error {
 	return s.conn.Close()
 }
 
+// Addr returns the gRPC address of this shard.
+func (s *GRPCShard) Addr() string { return s.addr }
+
 // Ingest sends a batch of rows to the remote shard for insertion.
 func (s *GRPCShard) Ingest(rows []LogRow) error {
 	pbRows := make([]*pb.LogRow, len(rows))

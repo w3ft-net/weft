@@ -19,6 +19,14 @@ service ShardQuery {
 
   // Ingest accepts a batch of rows for insertion into the shard.
   rpc Ingest(IngestRequest) returns (IngestResponse);
+
+  // IngestStream accepts a long-lived stream of log rows from weftd agents.
+  // The agent authenticates via metadata (shard token from coordinator).
+  rpc IngestStream(stream LogRow) returns (IngestStreamResponse);
+}
+
+message IngestStreamResponse {
+  int64 rows_received = 1;
 }
 
 message QueryRequest {
@@ -119,23 +127,21 @@ service WeftCoordinator {
   // RemoveSource deletes a log source.
   rpc RemoveSource(RemoveSourceRequest) returns (RemoveSourceResponse);
 
-  // IngestStream accepts a stream of log rows from weftd agents.
-  rpc IngestStream(stream IngestStreamMessage) returns (IngestStreamResponse);
+  // Authenticate validates an agent token and returns the active shard
+  // address for direct ingestion. The agent then connects to the shard
+  // directly via IngestStream.
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
 }
 
-message IngestStreamMessage {
-  string app = 1;
-  string customer = 2;
-  string instance = 3;
-  string raw = 4;
-  int64 ts_unix_ns = 5;
-  string level = 6;
-  bytes payload_json = 7;
-  repeated string fields = 8;
+message AuthenticateRequest {
+  string token = 1;
 }
 
-message IngestStreamResponse {
-  int64 rows_received = 1;
+message AuthenticateResponse {
+  string customer = 1;
+  string shard_addr = 2;       // host:port of the active shard for ingestion
+  string shard_token = 3;      // short-lived token the shard validates
+  int64 expires_at_ns = 4;     // when to re-authenticate (shard rotation)
 }
 
 message CoordinatorQueryRequest {

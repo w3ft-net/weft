@@ -22,6 +22,7 @@ const (
 	ShardQuery_Query_FullMethodName          = "/weft.ShardQuery/Query"
 	ShardQuery_QueryToCompute_FullMethodName = "/weft.ShardQuery/QueryToCompute"
 	ShardQuery_Ingest_FullMethodName         = "/weft.ShardQuery/Ingest"
+	ShardQuery_IngestStream_FullMethodName   = "/weft.ShardQuery/IngestStream"
 )
 
 // ShardQueryClient is the client API for ShardQuery service.
@@ -36,6 +37,9 @@ type ShardQueryClient interface {
 	QueryToCompute(ctx context.Context, in *QueryToComputeRequest, opts ...grpc.CallOption) (*QueryToComputeResponse, error)
 	// Ingest accepts a batch of rows for insertion into the shard.
 	Ingest(ctx context.Context, in *IngestRequest, opts ...grpc.CallOption) (*IngestResponse, error)
+	// IngestStream accepts a long-lived stream of log rows from weftd agents.
+	// The agent authenticates via metadata (shard token from coordinator).
+	IngestStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[LogRow, IngestStreamResponse], error)
 }
 
 type shardQueryClient struct {
@@ -85,6 +89,19 @@ func (c *shardQueryClient) Ingest(ctx context.Context, in *IngestRequest, opts .
 	return out, nil
 }
 
+func (c *shardQueryClient) IngestStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[LogRow, IngestStreamResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ShardQuery_ServiceDesc.Streams[1], ShardQuery_IngestStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[LogRow, IngestStreamResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ShardQuery_IngestStreamClient = grpc.ClientStreamingClient[LogRow, IngestStreamResponse]
+
 // ShardQueryServer is the server API for ShardQuery service.
 // All implementations must embed UnimplementedShardQueryServer
 // for forward compatibility.
@@ -97,6 +114,9 @@ type ShardQueryServer interface {
 	QueryToCompute(context.Context, *QueryToComputeRequest) (*QueryToComputeResponse, error)
 	// Ingest accepts a batch of rows for insertion into the shard.
 	Ingest(context.Context, *IngestRequest) (*IngestResponse, error)
+	// IngestStream accepts a long-lived stream of log rows from weftd agents.
+	// The agent authenticates via metadata (shard token from coordinator).
+	IngestStream(grpc.ClientStreamingServer[LogRow, IngestStreamResponse]) error
 	mustEmbedUnimplementedShardQueryServer()
 }
 
@@ -115,6 +135,9 @@ func (UnimplementedShardQueryServer) QueryToCompute(context.Context, *QueryToCom
 }
 func (UnimplementedShardQueryServer) Ingest(context.Context, *IngestRequest) (*IngestResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Ingest not implemented")
+}
+func (UnimplementedShardQueryServer) IngestStream(grpc.ClientStreamingServer[LogRow, IngestStreamResponse]) error {
+	return status.Error(codes.Unimplemented, "method IngestStream not implemented")
 }
 func (UnimplementedShardQueryServer) mustEmbedUnimplementedShardQueryServer() {}
 func (UnimplementedShardQueryServer) testEmbeddedByValue()                    {}
@@ -184,6 +207,13 @@ func _ShardQuery_Ingest_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ShardQuery_IngestStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ShardQueryServer).IngestStream(&grpc.GenericServerStream[LogRow, IngestStreamResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ShardQuery_IngestStreamServer = grpc.ClientStreamingServer[LogRow, IngestStreamResponse]
+
 // ShardQuery_ServiceDesc is the grpc.ServiceDesc for ShardQuery service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -205,6 +235,11 @@ var ShardQuery_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "Query",
 			Handler:       _ShardQuery_Query_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "IngestStream",
+			Handler:       _ShardQuery_IngestStream_Handler,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "proto/weftpb/weft.proto",
@@ -394,7 +429,7 @@ const (
 	WeftCoordinator_AddSource_FullMethodName    = "/weft.WeftCoordinator/AddSource"
 	WeftCoordinator_ListSources_FullMethodName  = "/weft.WeftCoordinator/ListSources"
 	WeftCoordinator_RemoveSource_FullMethodName = "/weft.WeftCoordinator/RemoveSource"
-	WeftCoordinator_IngestStream_FullMethodName = "/weft.WeftCoordinator/IngestStream"
+	WeftCoordinator_Authenticate_FullMethodName = "/weft.WeftCoordinator/Authenticate"
 )
 
 // WeftCoordinatorClient is the client API for WeftCoordinator service.
@@ -411,8 +446,10 @@ type WeftCoordinatorClient interface {
 	ListSources(ctx context.Context, in *ListSourcesRequest, opts ...grpc.CallOption) (*ListSourcesResponse, error)
 	// RemoveSource deletes a log source.
 	RemoveSource(ctx context.Context, in *RemoveSourceRequest, opts ...grpc.CallOption) (*RemoveSourceResponse, error)
-	// IngestStream accepts a stream of log rows from weftd agents.
-	IngestStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[IngestStreamMessage, IngestStreamResponse], error)
+	// Authenticate validates an agent token and returns the active shard
+	// address for direct ingestion. The agent then connects to the shard
+	// directly via IngestStream.
+	Authenticate(ctx context.Context, in *AuthenticateRequest, opts ...grpc.CallOption) (*AuthenticateResponse, error)
 }
 
 type weftCoordinatorClient struct {
@@ -482,18 +519,15 @@ func (c *weftCoordinatorClient) RemoveSource(ctx context.Context, in *RemoveSour
 	return out, nil
 }
 
-func (c *weftCoordinatorClient) IngestStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[IngestStreamMessage, IngestStreamResponse], error) {
+func (c *weftCoordinatorClient) Authenticate(ctx context.Context, in *AuthenticateRequest, opts ...grpc.CallOption) (*AuthenticateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WeftCoordinator_ServiceDesc.Streams[1], WeftCoordinator_IngestStream_FullMethodName, cOpts...)
+	out := new(AuthenticateResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_Authenticate_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[IngestStreamMessage, IngestStreamResponse]{ClientStream: stream}
-	return x, nil
+	return out, nil
 }
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WeftCoordinator_IngestStreamClient = grpc.ClientStreamingClient[IngestStreamMessage, IngestStreamResponse]
 
 // WeftCoordinatorServer is the server API for WeftCoordinator service.
 // All implementations must embed UnimplementedWeftCoordinatorServer
@@ -509,8 +543,10 @@ type WeftCoordinatorServer interface {
 	ListSources(context.Context, *ListSourcesRequest) (*ListSourcesResponse, error)
 	// RemoveSource deletes a log source.
 	RemoveSource(context.Context, *RemoveSourceRequest) (*RemoveSourceResponse, error)
-	// IngestStream accepts a stream of log rows from weftd agents.
-	IngestStream(grpc.ClientStreamingServer[IngestStreamMessage, IngestStreamResponse]) error
+	// Authenticate validates an agent token and returns the active shard
+	// address for direct ingestion. The agent then connects to the shard
+	// directly via IngestStream.
+	Authenticate(context.Context, *AuthenticateRequest) (*AuthenticateResponse, error)
 	mustEmbedUnimplementedWeftCoordinatorServer()
 }
 
@@ -536,8 +572,8 @@ func (UnimplementedWeftCoordinatorServer) ListSources(context.Context, *ListSour
 func (UnimplementedWeftCoordinatorServer) RemoveSource(context.Context, *RemoveSourceRequest) (*RemoveSourceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RemoveSource not implemented")
 }
-func (UnimplementedWeftCoordinatorServer) IngestStream(grpc.ClientStreamingServer[IngestStreamMessage, IngestStreamResponse]) error {
-	return status.Error(codes.Unimplemented, "method IngestStream not implemented")
+func (UnimplementedWeftCoordinatorServer) Authenticate(context.Context, *AuthenticateRequest) (*AuthenticateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Authenticate not implemented")
 }
 func (UnimplementedWeftCoordinatorServer) mustEmbedUnimplementedWeftCoordinatorServer() {}
 func (UnimplementedWeftCoordinatorServer) testEmbeddedByValue()                         {}
@@ -643,12 +679,23 @@ func _WeftCoordinator_RemoveSource_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
-func _WeftCoordinator_IngestStream_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(WeftCoordinatorServer).IngestStream(&grpc.GenericServerStream[IngestStreamMessage, IngestStreamResponse]{ServerStream: stream})
+func _WeftCoordinator_Authenticate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AuthenticateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).Authenticate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_Authenticate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).Authenticate(ctx, req.(*AuthenticateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WeftCoordinator_IngestStreamServer = grpc.ClientStreamingServer[IngestStreamMessage, IngestStreamResponse]
 
 // WeftCoordinator_ServiceDesc is the grpc.ServiceDesc for WeftCoordinator service.
 // It's only intended for direct use with grpc.RegisterService,
@@ -673,17 +720,16 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "RemoveSource",
 			Handler:    _WeftCoordinator_RemoveSource_Handler,
 		},
+		{
+			MethodName: "Authenticate",
+			Handler:    _WeftCoordinator_Authenticate_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "Query",
 			Handler:       _WeftCoordinator_Query_Handler,
 			ServerStreams: true,
-		},
-		{
-			StreamName:    "IngestStream",
-			Handler:       _WeftCoordinator_IngestStream_Handler,
-			ClientStreams: true,
 		},
 	},
 	Metadata: "proto/weftpb/weft.proto",

@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"io"
+	"log"
 	"time"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
@@ -67,6 +69,41 @@ func LogRowToProto(r *shard.LogRow) *pb.LogRow {
 		Fields:      r.Fields,
 		Customer:    r.Customer,
 	}
+}
+
+// IngestStream accepts a long-lived stream of LogRows from a weftd agent.
+func (s *Server) IngestStream(stream pb.ShardQuery_IngestStreamServer) error {
+	var rows []shard.LogRow
+	var count int64
+
+	for {
+		row, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		rows = append(rows, ProtoToLogRow(row))
+		count++
+
+		if len(rows) >= 100 {
+			if err := s.shard.Ingest(rows); err != nil {
+				log.Printf("ingest-stream: %v", err)
+			}
+			rows = rows[:0]
+		}
+	}
+
+	if len(rows) > 0 {
+		if err := s.shard.Ingest(rows); err != nil {
+			log.Printf("ingest-stream flush: %v", err)
+		}
+	}
+
+	log.Printf("ingest-stream: received %d rows", count)
+	return stream.SendAndClose(&pb.IngestStreamResponse{RowsReceived: count})
 }
 
 // ProtoToLogRow converts a protobuf LogRow to a shard.LogRow.
