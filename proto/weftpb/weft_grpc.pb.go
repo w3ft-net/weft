@@ -394,6 +394,7 @@ const (
 	WeftCoordinator_AddSource_FullMethodName    = "/weft.WeftCoordinator/AddSource"
 	WeftCoordinator_ListSources_FullMethodName  = "/weft.WeftCoordinator/ListSources"
 	WeftCoordinator_RemoveSource_FullMethodName = "/weft.WeftCoordinator/RemoveSource"
+	WeftCoordinator_IngestStream_FullMethodName = "/weft.WeftCoordinator/IngestStream"
 )
 
 // WeftCoordinatorClient is the client API for WeftCoordinator service.
@@ -410,6 +411,8 @@ type WeftCoordinatorClient interface {
 	ListSources(ctx context.Context, in *ListSourcesRequest, opts ...grpc.CallOption) (*ListSourcesResponse, error)
 	// RemoveSource deletes a log source.
 	RemoveSource(ctx context.Context, in *RemoveSourceRequest, opts ...grpc.CallOption) (*RemoveSourceResponse, error)
+	// IngestStream accepts a stream of log rows from weftd agents.
+	IngestStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[IngestStreamMessage, IngestStreamResponse], error)
 }
 
 type weftCoordinatorClient struct {
@@ -479,6 +482,19 @@ func (c *weftCoordinatorClient) RemoveSource(ctx context.Context, in *RemoveSour
 	return out, nil
 }
 
+func (c *weftCoordinatorClient) IngestStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[IngestStreamMessage, IngestStreamResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &WeftCoordinator_ServiceDesc.Streams[1], WeftCoordinator_IngestStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[IngestStreamMessage, IngestStreamResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WeftCoordinator_IngestStreamClient = grpc.ClientStreamingClient[IngestStreamMessage, IngestStreamResponse]
+
 // WeftCoordinatorServer is the server API for WeftCoordinator service.
 // All implementations must embed UnimplementedWeftCoordinatorServer
 // for forward compatibility.
@@ -493,6 +509,8 @@ type WeftCoordinatorServer interface {
 	ListSources(context.Context, *ListSourcesRequest) (*ListSourcesResponse, error)
 	// RemoveSource deletes a log source.
 	RemoveSource(context.Context, *RemoveSourceRequest) (*RemoveSourceResponse, error)
+	// IngestStream accepts a stream of log rows from weftd agents.
+	IngestStream(grpc.ClientStreamingServer[IngestStreamMessage, IngestStreamResponse]) error
 	mustEmbedUnimplementedWeftCoordinatorServer()
 }
 
@@ -517,6 +535,9 @@ func (UnimplementedWeftCoordinatorServer) ListSources(context.Context, *ListSour
 }
 func (UnimplementedWeftCoordinatorServer) RemoveSource(context.Context, *RemoveSourceRequest) (*RemoveSourceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RemoveSource not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) IngestStream(grpc.ClientStreamingServer[IngestStreamMessage, IngestStreamResponse]) error {
+	return status.Error(codes.Unimplemented, "method IngestStream not implemented")
 }
 func (UnimplementedWeftCoordinatorServer) mustEmbedUnimplementedWeftCoordinatorServer() {}
 func (UnimplementedWeftCoordinatorServer) testEmbeddedByValue()                         {}
@@ -622,6 +643,13 @@ func _WeftCoordinator_RemoveSource_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WeftCoordinator_IngestStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(WeftCoordinatorServer).IngestStream(&grpc.GenericServerStream[IngestStreamMessage, IngestStreamResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WeftCoordinator_IngestStreamServer = grpc.ClientStreamingServer[IngestStreamMessage, IngestStreamResponse]
+
 // WeftCoordinator_ServiceDesc is the grpc.ServiceDesc for WeftCoordinator service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -651,6 +679,11 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "Query",
 			Handler:       _WeftCoordinator_Query_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "IngestStream",
+			Handler:       _WeftCoordinator_IngestStream_Handler,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "proto/weftpb/weft.proto",

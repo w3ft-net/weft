@@ -2,12 +2,16 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"time"
 
 	"github.com/kevlarcon/weft/configstore"
 	"github.com/kevlarcon/weft/coordinator"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/shard"
 	shardservice "github.com/kevlarcon/weft/shard/service"
 )
 
@@ -122,4 +126,62 @@ func (s *Server) RemoveSource(_ context.Context, req *pb.RemoveSourceRequest) (*
 		return nil, err
 	}
 	return &pb.RemoveSourceResponse{}, nil
+}
+
+func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) error {
+	var rows []shard.LogRow
+	var count int64
+
+	for {
+		msg, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		row := shard.LogRow{
+			LineNum:  count + 1,
+			Raw:      msg.Raw,
+			App:      msg.App,
+			Level:    msg.Level,
+			Ts:       time.Unix(0, msg.TsUnixNs),
+			Instance: msg.Instance,
+			Customer: msg.Customer,
+			Fields:   msg.Fields,
+		}
+		if len(msg.PayloadJson) > 0 {
+			row.Payload = json.RawMessage(msg.PayloadJson)
+		}
+		rows = append(rows, row)
+		count++
+
+		// Batch ingest every 100 rows.
+		if len(rows) >= 100 {
+			if err := s.ingestToShard(rows); err != nil {
+				log.Printf("ingest-stream: %v", err)
+			}
+			rows = rows[:0]
+		}
+	}
+
+	// Flush remaining.
+	if len(rows) > 0 {
+		if err := s.ingestToShard(rows); err != nil {
+			log.Printf("ingest-stream: %v", err)
+		}
+	}
+
+	return stream.SendAndClose(&pb.IngestStreamResponse{RowsReceived: count})
+}
+
+func (s *Server) ingestToShard(rows []shard.LogRow) error {
+	for _, sh := range s.Coord.Shards {
+		if err := sh.Ingest(rows); err != nil {
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("all shards rejected ingest")
 }

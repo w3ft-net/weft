@@ -118,6 +118,24 @@ service WeftCoordinator {
 
   // RemoveSource deletes a log source.
   rpc RemoveSource(RemoveSourceRequest) returns (RemoveSourceResponse);
+
+  // IngestStream accepts a stream of log rows from weftd agents.
+  rpc IngestStream(stream IngestStreamMessage) returns (IngestStreamResponse);
+}
+
+message IngestStreamMessage {
+  string app = 1;
+  string customer = 2;
+  string instance = 3;
+  string raw = 4;
+  int64 ts_unix_ns = 5;
+  string level = 6;
+  bytes payload_json = 7;
+  repeated string fields = 8;
+}
+
+message IngestStreamResponse {
+  int64 rows_received = 1;
 }
 
 message CoordinatorQueryRequest {
