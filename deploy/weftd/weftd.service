@@ -1,0 +1,15 @@
+[Unit]
+Description=weftd log agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStartPre=/opt/app/scripts/weftd-config.sh
+ExecStart=/usr/local/bin/weftd --config /etc/weftd/config.yaml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
