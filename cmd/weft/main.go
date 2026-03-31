@@ -278,7 +278,7 @@ func runSource() {
 
 func runSourceAdd(remote *shell.RemoteCoordinator, cfg *shell.Config) {
 	args := os.Args[3:]
-	var app, logGroup, schemaFile, region, pollInterval string
+	var app, logGroup, schemaFile, region, pollInterval, awsAccountID, roleARN, externalID string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -292,11 +292,18 @@ func runSourceAdd(remote *shell.RemoteCoordinator, cfg *shell.Config) {
 			if i+1 < len(args) { region = args[i+1]; i++ }
 		case "--interval":
 			if i+1 < len(args) { pollInterval = args[i+1]; i++ }
+		case "--account":
+			if i+1 < len(args) { awsAccountID = args[i+1]; i++ }
+		case "--role-arn":
+			if i+1 < len(args) { roleARN = args[i+1]; i++ }
+		case "--external-id":
+			if i+1 < len(args) { externalID = args[i+1]; i++ }
 		}
 	}
 
-	if app == "" || logGroup == "" || schemaFile == "" {
-		fmt.Fprintln(os.Stderr, "usage: weft source add --app NAME --log-group GROUP --schema FILE [--region REGION] [--interval DURATION]")
+	if app == "" || logGroup == "" || schemaFile == "" || roleARN == "" {
+		fmt.Fprintln(os.Stderr, `usage: weft source add --app NAME --log-group GROUP --schema FILE --role-arn ARN
+    [--account AWS_ACCOUNT_ID] [--region REGION] [--interval DURATION] [--external-id ID]`)
 		os.Exit(1)
 	}
 	if region == "" {
@@ -317,11 +324,11 @@ func runSourceAdd(remote *shell.RemoteCoordinator, cfg *shell.Config) {
 		customer = "default"
 	}
 
-	if err := remote.AddSource(app, customer, logGroup, region, string(schemaData), pollInterval); err != nil {
+	if err := remote.AddSource(app, customer, logGroup, region, string(schemaData), pollInterval, awsAccountID, roleARN, externalID); err != nil {
 		fmt.Fprintf(os.Stderr, "add source: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Added source: %s → %s (poll every %s)\n", app, logGroup, pollInterval)
+	fmt.Printf("Added source: %s → %s (account %s, poll every %s)\n", app, logGroup, awsAccountID, pollInterval)
 }
 
 func runSourceList(remote *shell.RemoteCoordinator) {

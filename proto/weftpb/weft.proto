@@ -146,6 +146,9 @@ message AddSourceRequest {
   string region = 4;
   string schema_yaml = 5;
   string poll_interval = 6;  // e.g. "30s"
+  string aws_account_id = 7; // customer's AWS account ID
+  string role_arn = 8;       // cross-account role ARN for CloudWatch access
+  string external_id = 9;   // STS external ID for role assumption
 }
 
 message AddSourceResponse {}

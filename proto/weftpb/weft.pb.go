@@ -870,7 +870,10 @@ type AddSourceRequest struct {
 	LogGroup      string                 `protobuf:"bytes,3,opt,name=log_group,json=logGroup,proto3" json:"log_group,omitempty"`
 	Region        string                 `protobuf:"bytes,4,opt,name=region,proto3" json:"region,omitempty"`
 	SchemaYaml    string                 `protobuf:"bytes,5,opt,name=schema_yaml,json=schemaYaml,proto3" json:"schema_yaml,omitempty"`
-	PollInterval  string                 `protobuf:"bytes,6,opt,name=poll_interval,json=pollInterval,proto3" json:"poll_interval,omitempty"` // e.g. "30s"
+	PollInterval  string                 `protobuf:"bytes,6,opt,name=poll_interval,json=pollInterval,proto3" json:"poll_interval,omitempty"`   // e.g. "30s"
+	AwsAccountId  string                 `protobuf:"bytes,7,opt,name=aws_account_id,json=awsAccountId,proto3" json:"aws_account_id,omitempty"` // customer's AWS account ID
+	RoleArn       string                 `protobuf:"bytes,8,opt,name=role_arn,json=roleArn,proto3" json:"role_arn,omitempty"`                  // cross-account role ARN for CloudWatch access
+	ExternalId    string                 `protobuf:"bytes,9,opt,name=external_id,json=externalId,proto3" json:"external_id,omitempty"`         // STS external ID for role assumption
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -943,6 +946,27 @@ func (x *AddSourceRequest) GetSchemaYaml() string {
 func (x *AddSourceRequest) GetPollInterval() string {
 	if x != nil {
 		return x.PollInterval
+	}
+	return ""
+}
+
+func (x *AddSourceRequest) GetAwsAccountId() string {
+	if x != nil {
+		return x.AwsAccountId
+	}
+	return ""
+}
+
+func (x *AddSourceRequest) GetRoleArn() string {
+	if x != nil {
+		return x.RoleArn
+	}
+	return ""
+}
+
+func (x *AddSourceRequest) GetExternalId() string {
+	if x != nil {
+		return x.ExternalId
 	}
 	return ""
 }
@@ -1366,7 +1390,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x04text\x18\x02 \x01(\tR\x04text\"\x11\n" +
 	"\x0fListAppsRequest\"&\n" +
 	"\x10ListAppsResponse\x12\x12\n" +
-	"\x04apps\x18\x01 \x03(\tR\x04apps\"\xbb\x01\n" +
+	"\x04apps\x18\x01 \x03(\tR\x04apps\"\x9d\x02\n" +
 	"\x10AddSourceRequest\x12\x10\n" +
 	"\x03app\x18\x01 \x01(\tR\x03app\x12\x1a\n" +
 	"\bcustomer\x18\x02 \x01(\tR\bcustomer\x12\x1b\n" +
@@ -1374,7 +1398,11 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x06region\x18\x04 \x01(\tR\x06region\x12\x1f\n" +
 	"\vschema_yaml\x18\x05 \x01(\tR\n" +
 	"schemaYaml\x12#\n" +
-	"\rpoll_interval\x18\x06 \x01(\tR\fpollInterval\"\x13\n" +
+	"\rpoll_interval\x18\x06 \x01(\tR\fpollInterval\x12$\n" +
+	"\x0eaws_account_id\x18\a \x01(\tR\fawsAccountId\x12\x19\n" +
+	"\brole_arn\x18\b \x01(\tR\aroleArn\x12\x1f\n" +
+	"\vexternal_id\x18\t \x01(\tR\n" +
+	"externalId\"\x13\n" +
 	"\x11AddSourceResponse\"\x14\n" +
 	"\x12ListSourcesRequest\"A\n" +
 	"\x13ListSourcesResponse\x12*\n" +

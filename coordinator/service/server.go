@@ -15,7 +15,7 @@ import (
 type Server struct {
 	pb.UnimplementedWeftCoordinatorServer
 	Coord *coordinator.Coordinator
-	Store *configstore.Store // nil if no config store (dev mode)
+	Store *configstore.Store
 	Apps  []string
 }
 
@@ -46,14 +46,9 @@ func (s *Server) Query(_ context.Context, req *pb.CoordinatorQueryRequest) (*pb.
 }
 
 func (s *Server) ListApps(_ context.Context, _ *pb.ListAppsRequest) (*pb.ListAppsResponse, error) {
-	// If we have a config store, derive apps from enabled sources.
 	if s.Store != nil {
-		sources, err := s.Store.EnabledSources()
-		if err == nil && len(sources) > 0 {
-			var apps []string
-			for _, src := range sources {
-				apps = append(apps, src.App)
-			}
+		apps, err := s.Store.AppNames()
+		if err == nil && len(apps) > 0 {
 			return &pb.ListAppsResponse{Apps: apps}, nil
 		}
 	}
@@ -64,18 +59,29 @@ func (s *Server) AddSource(_ context.Context, req *pb.AddSourceRequest) (*pb.Add
 	if s.Store == nil {
 		return nil, fmt.Errorf("config store not available")
 	}
-	err := s.Store.AddSource(configstore.Source{
-		App:          req.App,
-		Customer:     req.Customer,
-		LogGroup:     req.LogGroup,
-		Region:       req.Region,
-		SchemaYAML:   req.SchemaYaml,
-		PollInterval: req.PollInterval,
-		Enabled:      true,
-	})
+
+	// Ensure customer exists.
+	customerID, err := s.Store.AddCustomer(req.Customer)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("add customer: %w", err)
 	}
+
+	// Ensure account exists (use log group region as account region).
+	// The role_arn is required for cross-account access.
+	accountID, err := s.Store.AddAccount(customerID, req.AwsAccountId, req.RoleArn, req.ExternalId)
+	if err != nil {
+		return nil, fmt.Errorf("add account: %w", err)
+	}
+
+	// Add the log group.
+	pollInterval := req.PollInterval
+	if pollInterval == "" {
+		pollInterval = "30s"
+	}
+	if err := s.Store.AddLogGroup(accountID, req.App, req.LogGroup, req.Region, req.SchemaYaml, pollInterval); err != nil {
+		return nil, fmt.Errorf("add log group: %w", err)
+	}
+
 	return &pb.AddSourceResponse{}, nil
 }
 
@@ -83,19 +89,19 @@ func (s *Server) ListSources(_ context.Context, _ *pb.ListSourcesRequest) (*pb.L
 	if s.Store == nil {
 		return &pb.ListSourcesResponse{}, nil
 	}
-	sources, err := s.Store.ListSources()
+	logGroups, err := s.Store.AllLogGroups()
 	if err != nil {
 		return nil, err
 	}
 	var infos []*pb.SourceInfo
-	for _, src := range sources {
+	for _, lg := range logGroups {
 		infos = append(infos, &pb.SourceInfo{
-			App:        src.App,
-			Customer:   src.Customer,
-			LogGroup:   src.LogGroup,
-			Region:     src.Region,
-			Enabled:    src.Enabled,
-			LastPollAt: src.LastPollAt,
+			App:        lg.App,
+			Customer:   lg.CustomerName,
+			LogGroup:   lg.LogGroupName,
+			Region:     lg.Region,
+			Enabled:    lg.Enabled,
+			LastPollAt: lg.LastPollAt,
 		})
 	}
 	return &pb.ListSourcesResponse{Sources: infos}, nil
@@ -105,7 +111,7 @@ func (s *Server) RemoveSource(_ context.Context, req *pb.RemoveSourceRequest) (*
 	if s.Store == nil {
 		return nil, fmt.Errorf("config store not available")
 	}
-	if err := s.Store.RemoveSource(req.App); err != nil {
+	if err := s.Store.RemoveLogGroup(req.App); err != nil {
 		return nil, err
 	}
 	return &pb.RemoveSourceResponse{}, nil

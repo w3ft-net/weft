@@ -70,7 +70,7 @@ func (r *RemoteCoordinator) ListApps() ([]string, error) {
 }
 
 // AddSource registers a log source on the coordinator.
-func (r *RemoteCoordinator) AddSource(app, customer, logGroup, region, schemaYAML, pollInterval string) error {
+func (r *RemoteCoordinator) AddSource(app, customer, logGroup, region, schemaYAML, pollInterval, awsAccountID, roleARN, externalID string) error {
 	_, err := r.client.AddSource(context.Background(), &pb.AddSourceRequest{
 		App:          app,
 		Customer:     customer,
@@ -78,6 +78,9 @@ func (r *RemoteCoordinator) AddSource(app, customer, logGroup, region, schemaYAM
 		Region:       region,
 		SchemaYaml:   schemaYAML,
 		PollInterval: pollInterval,
+		AwsAccountId: awsAccountID,
+		RoleArn:      roleARN,
+		ExternalId:   externalID,
 	})
 	return err
 }

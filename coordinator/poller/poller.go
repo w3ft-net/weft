@@ -8,8 +8,9 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
-
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"gopkg.in/yaml.v3"
 
 	"github.com/kevlarcon/weft/configstore"
@@ -28,30 +29,29 @@ func New(store *configstore.Store, shards []shard.Shard) *Poller {
 	return &Poller{store: store, shards: shards}
 }
 
-// Start begins polling all enabled sources in background goroutines.
+// Start begins polling all enabled log groups in background goroutines.
 func (p *Poller) Start(ctx context.Context) {
-	sources, err := p.store.EnabledSources()
+	logGroups, err := p.store.EnabledLogGroups()
 	if err != nil {
-		log.Printf("poller: failed to list sources: %v", err)
+		log.Printf("poller: failed to list log groups: %v", err)
 		return
 	}
 
-	for _, src := range sources {
-		go p.pollLoop(ctx, src)
+	for _, lg := range logGroups {
+		go p.pollLoop(ctx, lg)
 	}
-	log.Printf("poller: started %d source pollers", len(sources))
+	log.Printf("poller: started %d log group pollers", len(logGroups))
 }
 
-func (p *Poller) pollLoop(ctx context.Context, src configstore.Source) {
-	interval, err := time.ParseDuration(src.PollInterval)
+func (p *Poller) pollLoop(ctx context.Context, lg configstore.LogGroup) {
+	interval, err := time.ParseDuration(lg.PollInterval)
 	if err != nil {
 		interval = 30 * time.Second
 	}
 
-	log.Printf("poller[%s]: polling %s every %s", src.App, src.LogGroup, interval)
+	log.Printf("poller[%s]: polling %s (account %s) every %s", lg.App, lg.LogGroupName, lg.AWSAccountID, interval)
 
-	// Poll immediately on start, then on interval.
-	p.poll(ctx, src)
+	p.poll(ctx, lg)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -61,23 +61,36 @@ func (p *Poller) pollLoop(ctx context.Context, src configstore.Source) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			p.poll(ctx, src)
+			p.poll(ctx, lg)
 		}
 	}
 }
 
-func (p *Poller) poll(ctx context.Context, src configstore.Source) {
-	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(src.Region))
+func (p *Poller) poll(ctx context.Context, lg configstore.LogGroup) {
+	// Load base AWS config.
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(lg.Region))
 	if err != nil {
-		log.Printf("poller[%s]: aws config: %v", src.App, err)
+		log.Printf("poller[%s]: aws config: %v", lg.App, err)
 		return
 	}
-	client := cloudwatchlogs.NewFromConfig(cfg)
 
-	// Determine start time: last poll or 1 hour ago.
+	// Assume cross-account role to access the customer's CloudWatch logs.
+	stsClient := sts.NewFromConfig(cfg)
+	creds := stscreds.NewAssumeRoleProvider(stsClient, lg.RoleARN, func(o *stscreds.AssumeRoleOptions) {
+		if lg.ExternalID != "" {
+			o.ExternalID = aws.String(lg.ExternalID)
+		}
+		o.RoleSessionName = "weft-poller-" + lg.App
+	})
+	assumedCfg := cfg.Copy()
+	assumedCfg.Credentials = aws.NewCredentialsCache(creds)
+
+	client := cloudwatchlogs.NewFromConfig(assumedCfg)
+
+	// Determine start time.
 	var startTime int64
-	if src.LastPollAt != "" {
-		t, err := time.Parse(time.RFC3339, src.LastPollAt)
+	if lg.LastPollAt != "" {
+		t, err := time.Parse(time.RFC3339, lg.LastPollAt)
 		if err == nil {
 			startTime = t.UnixMilli()
 		}
@@ -87,31 +100,31 @@ func (p *Poller) poll(ctx context.Context, src configstore.Source) {
 	}
 	endTime := time.Now().UnixMilli()
 
-	// Parse schema from stored YAML.
-	schema, err := parseSchemaYAML(src.SchemaYAML)
-	if err != nil {
-		log.Printf("poller[%s]: parse schema: %v", src.App, err)
+	// Parse schema.
+	var schema ingest.Schema
+	if err := yaml.Unmarshal([]byte(lg.SchemaYAML), &schema); err != nil {
+		log.Printf("poller[%s]: parse schema: %v", lg.App, err)
 		return
 	}
-	schema.App = src.App
-	schema.Customer = src.Customer
+	schema.App = lg.App
+	schema.Customer = lg.CustomerName
 
-	parser, err := ingest.NewParser(schema)
+	parser, err := ingest.NewParser(&schema)
 	if err != nil {
-		log.Printf("poller[%s]: create parser: %v", src.App, err)
+		log.Printf("poller[%s]: create parser: %v", lg.App, err)
 		return
 	}
 
-	// Fetch logs from CloudWatch.
+	// Fetch logs.
 	var allRows []shard.LogRow
 	var nextToken *string
-	if src.LastToken != "" {
-		nextToken = aws.String(src.LastToken)
+	if lg.LastToken != "" {
+		nextToken = aws.String(lg.LastToken)
 	}
 
 	for {
 		input := &cloudwatchlogs.FilterLogEventsInput{
-			LogGroupName: aws.String(src.LogGroup),
+			LogGroupName: aws.String(lg.LogGroupName),
 			StartTime:    aws.Int64(startTime),
 			EndTime:      aws.Int64(endTime),
 			NextToken:    nextToken,
@@ -119,7 +132,7 @@ func (p *Poller) poll(ctx context.Context, src configstore.Source) {
 
 		result, err := client.FilterLogEvents(ctx, input)
 		if err != nil {
-			log.Printf("poller[%s]: FilterLogEvents: %v", src.App, err)
+			log.Printf("poller[%s]: FilterLogEvents: %v", lg.App, err)
 			break
 		}
 
@@ -148,31 +161,22 @@ func (p *Poller) poll(ctx context.Context, src configstore.Source) {
 		return
 	}
 
-	// Find the first available shard and ingest.
+	// Ingest into the first available shard.
 	for _, s := range p.shards {
 		if err := s.Ingest(allRows); err != nil {
-			log.Printf("poller[%s]: ingest to shard %s: %v", src.App, s.ID(), err)
+			log.Printf("poller[%s]: ingest to shard %s: %v", lg.App, s.ID(), err)
 			continue
 		}
-		log.Printf("poller[%s]: ingested %d rows into shard %s", src.App, len(allRows), s.ID())
+		log.Printf("poller[%s]: ingested %d rows into shard %s", lg.App, len(allRows), s.ID())
 
-		// Update poll state.
 		now := time.Now().UTC().Format(time.RFC3339)
 		token := ""
 		if nextToken != nil {
 			token = *nextToken
 		}
-		p.store.UpdatePollState(src.App, now, token)
+		p.store.UpdatePollState(lg.App, now, token)
 		return
 	}
 
-	log.Printf("poller[%s]: failed to ingest %d rows — all shards rejected", src.App, len(allRows))
-}
-
-func parseSchemaYAML(yamlStr string) (*ingest.Schema, error) {
-	var schema ingest.Schema
-	if err := yaml.Unmarshal([]byte(yamlStr), &schema); err != nil {
-		return nil, err
-	}
-	return &schema, nil
+	log.Printf("poller[%s]: failed to ingest %d rows — all shards rejected", lg.App, len(allRows))
 }
