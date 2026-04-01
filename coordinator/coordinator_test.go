@@ -57,10 +57,11 @@ func setupTestCoordinator(t *testing.T) *Coordinator {
 		t.Fatalf("ingest other-customer: %v", err)
 	}
 
-	return &Coordinator{
-		Shards:   []shard.Shard{s0, s1},
-		Customer: "kevlar",
-	}
+	return NewCoordinator(
+		[]shard.Shard{s0, s1},
+		"kevlar",
+		nil,
+	)
 }
 
 func shard0Rows() []shard.LogRow {
@@ -397,18 +398,18 @@ func TestCompute_SortUniqCount(t *testing.T) {
 func TestCompute_AwkFieldExtract(t *testing.T) {
 	c := setupTestCoordinatorWithCompute(t)
 	// Grep for ERROR, then print just the third field (app name).
+	// Simple $N print is fully pushed down as a projection — no compute stage.
 	res, err := c.Query(`cat warp.log | grep ERROR | awk '{ print $3 }'`, fullRange)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Text == "" {
-		t.Fatal("expected text output, got empty")
+	// Projection returns rows (not text) since there are no compute stages.
+	if len(res.Rows) == 0 {
+		t.Fatal("expected rows, got none")
 	}
-	lines := nonEmptyLines(res.Text)
-	// Every line should be an app name (vimgym or callbox).
-	for _, l := range lines {
-		if l != "vimgym" && l != "callbox" {
-			t.Errorf("expected app name, got %q", l)
+	for _, row := range res.Rows {
+		if row.Raw != "vimgym" && row.Raw != "callbox" {
+			t.Errorf("expected app name, got %q", row.Raw)
 		}
 	}
 }

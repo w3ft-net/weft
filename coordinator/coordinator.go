@@ -2,7 +2,9 @@ package coordinator
 
 import (
 	"fmt"
+	"log"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/kevlarcon/weft/compute"
@@ -25,9 +27,49 @@ type QueryResult struct {
 
 // Coordinator routes queries to shards and merges results.
 type Coordinator struct {
-	Shards   []shard.Shard
+	mu       sync.RWMutex
+	shards   []shard.Shard
 	Customer string
 	Pool     compute.ComputePool // nil = no compute support
+}
+
+// NewCoordinator creates a coordinator with the given initial shard list.
+func NewCoordinator(shards []shard.Shard, customer string, pool compute.ComputePool) *Coordinator {
+	return &Coordinator{
+		shards:   shards,
+		Customer: customer,
+		Pool:     pool,
+	}
+}
+
+// SetShards replaces the coordinator's shard list. Thread-safe.
+func (c *Coordinator) SetShards(shards []shard.Shard) {
+	c.mu.Lock()
+	old := c.shards
+	c.shards = shards
+	c.mu.Unlock()
+
+	// Close old connections that are no longer in the new list.
+	newAddrs := make(map[string]bool)
+	for _, s := range shards {
+		newAddrs[s.ID()] = true
+	}
+	for _, s := range old {
+		if !newAddrs[s.ID()] {
+			s.Close()
+		}
+	}
+
+	log.Printf("coordinator: shard list updated (%d shards)", len(shards))
+}
+
+// Shards returns a snapshot of the current shard list. Thread-safe.
+func (c *Coordinator) GetShards() []shard.Shard {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]shard.Shard, len(c.shards))
+	copy(out, c.shards)
+	return out
 }
 
 // Query parses a pipeline, routes the pushed-down SQL to matching shards,
@@ -109,8 +151,10 @@ func (c *Coordinator) queryWithCompute(sql string, stages []string, shards []sha
 
 // matchingShards returns shards whose time windows overlap the given range.
 func (c *Coordinator) matchingShards(tr TimeRange) []shard.Shard {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	var out []shard.Shard
-	for _, s := range c.Shards {
+	for _, s := range c.shards {
 		if s.WindowStart().Before(tr.End) && s.WindowEnd().After(tr.Start) {
 			out = append(out, s)
 		}

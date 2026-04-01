@@ -144,13 +144,14 @@ func (s *Server) Authenticate(_ context.Context, req *pb.AuthenticateRequest) (*
 	}
 
 	// Find the first healthy shard for ingestion.
-	if len(s.Coord.Shards) == 0 {
+	shards := s.Coord.GetShards()
+	if len(shards) == 0 {
 		return nil, fmt.Errorf("no shards available")
 	}
 
 	// For now, pick the first shard. In production this would be the
 	// INGESTING shard (the one accepting writes).
-	activeShard := s.Coord.Shards[0]
+	activeShard := shards[0]
 
 	// The shard address comes from the GRPCShard's connection info.
 	// For now, use the shard ID as a hint — the agent needs the actual
@@ -287,7 +288,7 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 }
 
 func (s *Server) ingestBatch(rows []shardpkg.LogRow) {
-	for _, sh := range s.Coord.Shards {
+	for _, sh := range s.Coord.GetShards() {
 		if err := sh.Ingest(rows); err != nil {
 			continue
 		}

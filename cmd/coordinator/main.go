@@ -53,9 +53,6 @@ func main() {
 		}
 		shards = discovered
 		log.Printf("discovered %d shards from ASG %s", len(shards), *shardASG)
-
-		// Re-discover periodically in a background goroutine.
-		// TODO: update the coordinator's shard list on rediscovery.
 	} else {
 		log.Fatal("either --shards or --shard-asg is required")
 	}
@@ -91,10 +88,16 @@ func main() {
 		log.Printf("using local compute pool (parallelism=2)")
 	}
 
-	coord := &coordinator.Coordinator{
-		Shards:   shards,
-		Customer: *customer,
-		Pool:     pool,
+	coord := coordinator.NewCoordinator(shards, *customer, pool)
+
+	// Start background shard re-discovery if using ASG.
+	if *shardASG != "" {
+		disc, err := discovery.NewASGDiscovery(*awsRegion, *shardASG, 9000)
+		if err != nil {
+			log.Printf("warning: cannot create shard re-discovery: %v", err)
+		} else {
+			go rediscoverLoop(disc, coord)
+		}
 	}
 
 	if *appsFlag != "" {
@@ -109,7 +112,8 @@ func main() {
 		defer store.Close()
 
 		// Start CloudWatch poller for configured sources.
-		p := poller.New(store, shards)
+		// Poller uses coord.GetShards() to find healthy shards dynamically.
+		p := poller.New(store, coord)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		p.Start(ctx)
@@ -121,7 +125,7 @@ func main() {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"status": "ok",
-				"shards": len(shards),
+				"shards": len(coord.GetShards()),
 			})
 		})
 		log.Printf("coordinator health on :%d", *healthPort)
@@ -144,6 +148,44 @@ func main() {
 	if err := srv.Serve(lis); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
+}
+
+// rediscoverLoop periodically re-discovers shards from the ASG and updates
+// the coordinator's shard list. This handles instance replacements, scale-outs,
+// and recovery from transient discovery failures at startup.
+func rediscoverLoop(disc *discovery.ASGDiscovery, coord *coordinator.Coordinator) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		discovered, err := disc.DiscoverShards(context.Background())
+		if err != nil {
+			log.Printf("shard re-discovery failed: %v", err)
+			continue
+		}
+		current := coord.GetShards()
+		if shardsChanged(current, discovered) {
+			log.Printf("shard re-discovery: %d -> %d shards", len(current), len(discovered))
+			coord.SetShards(discovered)
+		}
+	}
+}
+
+// shardsChanged returns true if the discovered shard set differs from the current one.
+func shardsChanged(current, discovered []shard.Shard) bool {
+	if len(current) != len(discovered) {
+		return true
+	}
+	ids := make(map[string]bool, len(current))
+	for _, s := range current {
+		ids[s.ID()] = true
+	}
+	for _, s := range discovered {
+		if !ids[s.ID()] {
+			return true
+		}
+	}
+	return false
 }
 
 func parseShardsFlag(flag string) []shard.Shard {

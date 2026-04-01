@@ -64,11 +64,11 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 	}
 	t.Cleanup(func() { pool.Close() })
 
-	return &Coordinator{
-		Shards:   []shard.Shard{gs0, gs1},
-		Customer: "kevlar",
-		Pool:     pool,
-	}
+	return NewCoordinator(
+		[]shard.Shard{gs0, gs1},
+		"kevlar",
+		pool,
+	)
 }
 
 func startShardServer(t *testing.T, ds *shard.DuckDBShard) string {

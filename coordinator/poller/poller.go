@@ -18,15 +18,20 @@ import (
 	"github.com/kevlarcon/weft/shard"
 )
 
+// ShardProvider returns the current list of available shards.
+type ShardProvider interface {
+	GetShards() []shard.Shard
+}
+
 // Poller polls CloudWatch log groups and ingests into shards.
 type Poller struct {
-	store  *configstore.Store
-	shards []shard.Shard
+	store    *configstore.Store
+	provider ShardProvider
 }
 
 // New creates a new CloudWatch poller.
-func New(store *configstore.Store, shards []shard.Shard) *Poller {
-	return &Poller{store: store, shards: shards}
+func New(store *configstore.Store, provider ShardProvider) *Poller {
+	return &Poller{store: store, provider: provider}
 }
 
 // Start begins polling all enabled log groups in background goroutines.
@@ -172,7 +177,7 @@ func (p *Poller) poll(ctx context.Context, lg configstore.LogGroupWithAccount) {
 		batch := allRows[i:end]
 
 		ok := false
-		for _, s := range p.shards {
+		for _, s := range p.provider.GetShards() {
 			if err := s.Ingest(batch); err != nil {
 				continue
 			}

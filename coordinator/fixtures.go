@@ -51,11 +51,11 @@ func NewDevCoordinator() (*Coordinator, func(), error) {
 		s1.Close()
 	}
 
-	c := &Coordinator{
-		Shards:   []shard.Shard{s0, s1},
-		Customer: "kevlar",
-		Pool:     &compute.LocalComputePool{Parallelism: 2},
-	}
+	c := NewCoordinator(
+		[]shard.Shard{s0, s1},
+		"kevlar",
+		&compute.LocalComputePool{Parallelism: 2},
+	)
 
 	return c, cleanup, nil
 }
