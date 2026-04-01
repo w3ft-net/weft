@@ -278,6 +278,16 @@ func TestPushdown_SingleStage_HeadTail(t *testing.T) {
 			pipeline: `tail -100 vimgym.log`,
 			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' ORDER BY ts DESC LIMIT 100`,
 		},
+		{
+			name:     "head -n flag",
+			pipeline: `head -n 25 vimgym.log`,
+			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' ORDER BY ts ASC LIMIT 25`,
+		},
+		{
+			name:     "tail -n flag",
+			pipeline: `tail -n 50 vimgym.log`,
+			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' ORDER BY ts DESC LIMIT 50`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -495,7 +505,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 			name:        "awk filter then awk print",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR"' | awk '{ print $2, $1 }'`,
 			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND level = 'ERROR'`,
-			wantCompute: []string{`awk '{ print $2, $1 }'`},
+			wantCompute: nil, // simple $N print is fully pushed down as projection
 		},
 
 		// jq object construction — transforms output shape

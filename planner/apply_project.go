@@ -15,6 +15,9 @@ func ApplyProjection(sql string, proj *Project) string {
 		return sql
 	}
 
+	if proj.RawExpr != "" {
+		return applyRawExprProjection(sql, proj)
+	}
 	if len(proj.Fields) > 0 {
 		return applyFieldProjection(sql, proj.Fields)
 	}
@@ -22,6 +25,15 @@ func ApplyProjection(sql string, proj *Project) string {
 		return applyJSONProjection(sql, proj.JSONKeys)
 	}
 	return sql
+}
+
+// applyRawExprProjection rewrites SELECT * using an explicit SQL expression
+// for the raw column (e.g. from awk print with concatenation).
+func applyRawExprProjection(sql string, proj *Project) string {
+	selectClause := fmt.Sprintf(
+		"SELECT line_num, %s as raw, fields, ts, level, app, instance, customer, payload",
+		proj.RawExpr)
+	return strings.Replace(sql, "SELECT *", selectClause, 1)
 }
 
 // applyFieldProjection rewrites SELECT * to select only the specified fields,

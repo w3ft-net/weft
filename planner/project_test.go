@@ -105,47 +105,57 @@ func TestProject_AwkPrint(t *testing.T) {
 		wantProject *Project
 		wantCompute []string
 	}{
-		// awk print single field — complete projection
+		// awk print single field — fully pushed down as SQL
 		{
 			name:        "awk print single field",
 			pipeline:    `cat vimgym.log | awk '{ print $3 }'`,
-			wantProject: &Project{Fields: []int{3}, Complete: false},
-			wantCompute: []string{`awk '{ print $3 }'`},
+			wantProject: &Project{Fields: []int{3},
+				RawExpr:  "list_extract(fields, 3)",
+				Complete: true},
+			wantCompute: nil,
 		},
-		// awk print multiple fields
+		// awk print multiple fields — comma-separated, pushed as concat_ws
 		{
 			name:        "awk print multiple fields",
 			pipeline:    `cat vimgym.log | awk '{ print $1, $4 }'`,
-			wantProject: &Project{Fields: []int{1, 4}, Complete: false},
-			wantCompute: []string{`awk '{ print $1, $4 }'`},
+			wantProject: &Project{Fields: []int{1, 4},
+				RawExpr:  "concat_ws(' ', list_extract(fields, 1), list_extract(fields, 4))",
+				Complete: true},
+			wantCompute: nil,
 		},
-		// awk with filter + print — filter pushes down, print is projection + compute
+		// awk with filter + print — filter pushes down, print pushed as SQL
 		{
 			name:        "awk filter then awk print",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR"' | awk '{ print $3, $5 }'`,
-			wantProject: &Project{Fields: []int{3, 5}, Complete: false},
-			wantCompute: []string{`awk '{ print $3, $5 }'`},
+			wantProject: &Project{Fields: []int{3, 5},
+				RawExpr:  "concat_ws(' ', list_extract(fields, 3), list_extract(fields, 5))",
+				Complete: true},
+			wantCompute: nil,
 		},
-		// awk partial pushdown: filter + print in one stage
+		// awk partial pushdown: filter + print — both fully pushed to SQL
 		{
 			name:        "awk filter with print action",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR" { print $3, $4 }'`,
-			wantProject: &Project{Fields: []int{3, 4}, Complete: false},
-			wantCompute: []string{`awk '{ print $3, $4 }'`},
+			wantProject: &Project{Fields: []int{3, 4},
+				RawExpr:  "concat_ws(' ', list_extract(fields, 3), list_extract(fields, 4))",
+				Complete: true},
+			wantCompute: nil,
 		},
-		// awk print $0 — no projection (needs entire row)
+		// awk print $0 — identity, complete (no compute needed)
 		{
 			name:        "awk print whole line",
 			pipeline:    `cat vimgym.log | awk '{ print $0 }'`,
-			wantProject: nil,
-			wantCompute: []string{`awk '{ print $0 }'`},
+			wantProject: &Project{Complete: true},
+			wantCompute: nil,
 		},
-		// awk print with string concatenation — projection on referenced fields
+		// awk print with string concatenation — pushed down as SQL concat
 		{
 			name:        "awk print with separator",
 			pipeline:    `cat vimgym.log | awk '{ print $2 ":" $3 }'`,
-			wantProject: &Project{Fields: []int{2, 3}, Complete: false},
-			wantCompute: []string{`awk '{ print $2 ":" $3 }'`},
+			wantProject: &Project{Fields: []int{2, 3},
+				RawExpr:  "concat(concat(list_extract(fields, 2), ':'), list_extract(fields, 3))",
+				Complete: true},
+			wantCompute: nil,
 		},
 	}
 
@@ -315,6 +325,9 @@ func assertProject(t *testing.T, got, want *Project) {
 	}
 	if !reflect.DeepEqual(got.JSONKeys, want.JSONKeys) {
 		t.Errorf("Project.JSONKeys\n got: %v\nwant: %v", got.JSONKeys, want.JSONKeys)
+	}
+	if got.RawExpr != want.RawExpr {
+		t.Errorf("Project.RawExpr\n got: %s\nwant: %s", got.RawExpr, want.RawExpr)
 	}
 	if got.Complete != want.Complete {
 		t.Errorf("Project.Complete: got %v, want %v", got.Complete, want.Complete)

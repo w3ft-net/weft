@@ -21,6 +21,7 @@ type QueryPlan struct {
 type Project struct {
 	Fields   []int    // positional field indices (1-based); negative = open-ended (e.g., -5 means "5 to end")
 	JSONKeys []string // JSON payload keys needed
+	RawExpr  string   // SQL expression for raw column; overrides Fields-based reconstruction when set
 	Complete bool     // if true, the projection fully replaces the stage (no compute needed)
 }
 
@@ -88,8 +89,11 @@ func Plan(pipeline string) (*QueryPlan, error) {
 	}
 
 	// Extract projection from the first compute stage (raw, not partial).
+	// Only safe when there are no partial pushdown remainders (computeStrings)
+	// running before it — those may transform the data, making the shard's
+	// fields column stale for projection.
 	var proj *Project
-	if len(computeStages) > 0 {
+	if len(computeStages) > 0 && len(computeStrings) == 0 {
 		proj = extractProjection(computeStages[0])
 		if proj != nil && proj.Complete {
 			// Complete projection replaces the first compute stage.
@@ -106,6 +110,13 @@ func Plan(pipeline string) (*QueryPlan, error) {
 		partial := parseComputeString(computeStrings[0])
 		if partial != nil {
 			proj = extractProjection(*partial)
+			if proj != nil && proj.Complete {
+				// Complete projection replaces the partial compute string.
+				compute = append(computeStrings[1:], formatComputeStages(computeStages)...)
+				if len(compute) > 0 {
+					proj.Complete = false // still have downstream compute
+				}
+			}
 		}
 	}
 
@@ -156,18 +167,12 @@ func tryPushdown(stage stageInfo, sql *sqlBuilder) pushdownResult {
 		return pushdownResult{pushed: true, predicate: pred}
 
 	case "head":
-		n := 10
-		if len(stage.args) > 0 {
-			fmt.Sscanf(stage.args[0], "-%d", &n)
-		}
+		n := parseLineCount(stage.args)
 		sql.setOrderLimit("ts ASC", n)
 		return pushdownResult{pushed: true}
 
 	case "tail":
-		n := 10
-		if len(stage.args) > 0 {
-			fmt.Sscanf(stage.args[0], "-%d", &n)
-		}
+		n := parseLineCount(stage.args)
 		sql.setOrderLimit("ts DESC", n)
 		return pushdownResult{pushed: true}
 	}

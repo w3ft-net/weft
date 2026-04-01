@@ -106,7 +106,7 @@ func TestEdge_Awk_NonPushable(t *testing.T) {
 			name:        "unconditional print action",
 			pipeline:    `cat vimgym.log | awk '{ print $2 }'`,
 			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
-			wantCompute: []string{`awk '{ print $2 }'`},
+			wantCompute: nil, // simple $N print fully pushed down as projection
 		},
 		// User-defined function
 		{
@@ -256,7 +256,7 @@ func TestEdge_Awk_PartialPushdown(t *testing.T) {
 			name:        "regex pattern with print action",
 			pipeline:    `cat vimgym.log | awk '/timeout/ { print $1, $2 }'`,
 			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%timeout%'`,
-			wantCompute: []string{`awk '{ print $1, $2 }'`},
+			wantCompute: nil, // simple $N print fully pushed down as projection
 		},
 		// Filter + increment + END (count errors)
 		{
@@ -706,6 +706,13 @@ func TestEdge_PipelineOrdering(t *testing.T) {
 			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND level = 'ERROR' ORDER BY ts ASC LIMIT 50`,
 			wantCompute: nil,
 		},
+		// -n flag in mid-pipeline position
+		{
+			name:        "filter then tail -n in pipeline",
+			pipeline:    `cat vimgym.log | grep ERROR | tail -n 20`,
+			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%ERROR%' ORDER BY ts DESC LIMIT 20`,
+			wantCompute: nil,
+		},
 		// All compute — no pushable stages at all
 		{
 			name:        "cat then sort then uniq",
@@ -725,7 +732,7 @@ func TestEdge_PipelineOrdering(t *testing.T) {
 			name:        "partial awk then sort",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR" { print $3 }' | sort`,
 			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND level = 'ERROR'`,
-			wantCompute: []string{`awk '{ print $3 }'`, "sort"},
+			wantCompute: []string{"sort"}, // simple $N print pushed down, sort remains
 		},
 		// Partial jq pushdown followed by more compute
 		{
@@ -795,7 +802,7 @@ func TestEdge_CrossTool(t *testing.T) {
 			name:        "jq select then awk print",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500)' | awk '{ print $1 }'`,
 			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
-			wantCompute: []string{`awk '{ print $1 }'`},
+			wantCompute: nil, // simple $N print fully pushed down as projection
 		},
 		// grep then jq select then sort
 		{
@@ -942,6 +949,96 @@ func TestEdge_WarpLog(t *testing.T) {
 			name:        "warp.log head with sort",
 			pipeline:    `head warp.log | sort`,
 			wantSQL:     `SELECT * FROM logs ORDER BY ts ASC LIMIT 10`,
+			wantCompute: []string{"sort"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan, err := Plan(tt.pipeline)
+			if err != nil {
+				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
+			}
+			if plan.ShardSQL != tt.wantSQL {
+				t.Errorf("ShardSQL\n got: %s\nwant: %s", plan.ShardSQL, tt.wantSQL)
+			}
+			if len(plan.ComputeStages) != len(tt.wantCompute) {
+				t.Fatalf("ComputeStages count: got %d, want %d\n got: %v\nwant: %v",
+					len(plan.ComputeStages), len(tt.wantCompute), plan.ComputeStages, tt.wantCompute)
+			}
+			for i, want := range tt.wantCompute {
+				if plan.ComputeStages[i] != want {
+					t.Errorf("ComputeStages[%d]\n got: %s\nwant: %s", i, plan.ComputeStages[i], want)
+				}
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Projection safety: awk print must NOT be pushed down when a preceding
+// compute stage transforms the data. The shard's `fields` column would not
+// match the modified row layout.
+// ---------------------------------------------------------------------------
+
+func TestEdge_ProjectionSafety(t *testing.T) {
+	tests := []struct {
+		name        string
+		pipeline    string
+		wantSQL     string
+		wantCompute []string
+	}{
+		// sort is a non-projectable compute stage before awk;
+		// awk after sort must stay in compute.
+		{
+			name:        "sort then awk print",
+			pipeline:    `cat vimgym.log | sort | awk '{print $2}'`,
+			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantCompute: []string{"sort", `awk '{print $2}'`},
+		},
+		// sed modifies field contents — awk's $3 is on transformed text.
+		{
+			name:        "sed then awk print",
+			pipeline:    `cat vimgym.log | sed 's/GET/POST/' | awk '{print $3}'`,
+			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantCompute: []string{`sed 's/GET/POST/'`, `awk '{print $3}'`},
+		},
+		// uniq -c prepends a count column — completely changes field layout.
+		{
+			name:        "uniq -c then awk print",
+			pipeline:    `cat vimgym.log | sort | uniq -c | awk '{print $1}'`,
+			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantCompute: []string{"sort", "uniq -c", `awk '{print $1}'`},
+		},
+		// Partial pushdown with printf remainder — printf transforms data,
+		// so the following awk must stay in compute.
+		{
+			name:        "partial printf then awk print",
+			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR" { printf "%s=%s\n", $1, $2 }' | awk '{print $1}'`,
+			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND level = 'ERROR'`,
+			wantCompute: []string{`awk '{ printf "%s=%s\n", $1, $2 }'`, `awk '{print $1}'`},
+		},
+		// END block produces entirely different output — cannot project past it.
+		{
+			name:        "END block then awk print",
+			pipeline:    `cat vimgym.log | awk '/error/ { c++ } END { print c }' | awk '{print $1}'`,
+			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%error%'`,
+			wantCompute: []string{`awk '/error/ { c++ } END { print c }'`, `awk '{print $1}'`},
+		},
+		// Two awk prints chained — first is projected, second must compute
+		// on the projected data (its field refs are relative to the new row).
+		{
+			name:        "awk print chain",
+			pipeline:    `cat vimgym.log | awk '{print $3, $4}' | awk '{print $1}'`,
+			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantCompute: []string{`awk '{print $1}'`},
+		},
+		// Partial pushdown with simple print + sort — print projects, sort computes.
+		// This IS safe because the print is the first compute operation.
+		{
+			name:        "partial print then sort is safe",
+			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR" { print $3 }' | sort`,
+			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND level = 'ERROR'`,
 			wantCompute: []string{"sort"},
 		},
 	}

@@ -92,14 +92,18 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 	case "head":
 		limit := 10
 		file := ""
-		for _, arg := range args {
-			if strings.HasPrefix(arg, "-") {
-				n, err := strconv.Atoi(arg[1:])
-				if err == nil {
+		for i := 0; i < len(args); i++ {
+			if args[i] == "-n" && i+1 < len(args) {
+				if n, err := strconv.Atoi(args[i+1]); err == nil {
+					limit = n
+				}
+				i++ // skip the number
+			} else if strings.HasPrefix(args[i], "-") {
+				if n, err := strconv.Atoi(args[i][1:]); err == nil {
 					limit = n
 				}
 			} else {
-				file = arg
+				file = args[i]
 			}
 		}
 		if file == "" {
@@ -112,16 +116,20 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 		limit := 10
 		file := ""
 		follow := false
-		for _, arg := range args {
-			if arg == "-f" {
+		for i := 0; i < len(args); i++ {
+			if args[i] == "-f" {
 				follow = true
-			} else if strings.HasPrefix(arg, "-") {
-				n, err := strconv.Atoi(arg[1:])
-				if err == nil {
+			} else if args[i] == "-n" && i+1 < len(args) {
+				if n, err := strconv.Atoi(args[i+1]); err == nil {
+					limit = n
+				}
+				i++ // skip the number
+			} else if strings.HasPrefix(args[i], "-") {
+				if n, err := strconv.Atoi(args[i][1:]); err == nil {
 					limit = n
 				}
 			} else {
-				file = arg
+				file = args[i]
 			}
 		}
 		_ = follow // tail -f handled separately in future
@@ -154,6 +162,29 @@ func extractApp(filename string) string {
 		return ""
 	}
 	return name
+}
+
+// parseLineCount extracts the line count from head/tail arguments.
+// Handles: -N, -n N, -nN. Returns 10 as the default.
+func parseLineCount(args []string) int {
+	n := 10
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-n" && i+1 < len(args) {
+			if v, err := strconv.Atoi(args[i+1]); err == nil {
+				n = v
+			}
+			i++
+		} else if strings.HasPrefix(args[i], "-n") {
+			if v, err := strconv.Atoi(args[i][2:]); err == nil {
+				n = v
+			}
+		} else if strings.HasPrefix(args[i], "-") && args[i] != "-f" {
+			if v, err := strconv.Atoi(args[i][1:]); err == nil {
+				n = v
+			}
+		}
+	}
+	return n
 }
 
 // literalArgs extracts literal strings from a slice of Words.
