@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -20,6 +21,9 @@ var (
 	errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Inline(true)
 	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Inline(true)
 	searchStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Inline(true)
+	borderColor  = lipgloss.Color("68")
+	accentStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Inline(true)
+	sepStyle     = lipgloss.NewStyle().Foreground(borderColor)
 )
 
 // terminalCommands are commands that need direct terminal access (pagers, etc.).
@@ -46,10 +50,10 @@ type Shell struct {
 	Apps  []string
 }
 
-// Run starts the interactive bubbletea REPL.
+// Run starts the interactive bubbletea REPL in full-screen mode.
 func (s *Shell) Run() error {
 	m := newModel(s)
-	p := tea.NewProgram(m)
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
 }
@@ -65,7 +69,6 @@ func (h *history) add(line string) {
 	if line == "" {
 		return
 	}
-	// Don't add duplicates of the most recent entry.
 	if len(h.entries) > 0 && h.entries[len(h.entries)-1] == line {
 		return
 	}
@@ -78,26 +81,24 @@ func (h *history) up(currentInput string) (string, bool) {
 		return "", false
 	}
 	if h.cursor == -1 {
-		// Starting to navigate — save current input.
 		h.saved = currentInput
 		h.cursor = len(h.entries) - 1
 	} else if h.cursor > 0 {
 		h.cursor--
 	} else {
-		return h.entries[0], false // already at oldest
+		return h.entries[0], false
 	}
 	return h.entries[h.cursor], true
 }
 
 func (h *history) down(currentInput string) (string, bool) {
 	if h.cursor == -1 {
-		return "", false // not navigating
+		return "", false
 	}
 	if h.cursor < len(h.entries)-1 {
 		h.cursor++
 		return h.entries[h.cursor], true
 	}
-	// Past the newest entry — restore saved input.
 	h.cursor = -1
 	return h.saved, true
 }
@@ -106,8 +107,6 @@ func (h *history) reset() {
 	h.cursor = -1
 }
 
-// search finds the most recent entry containing the query, starting from
-// the current search position. Returns the match and its index, or -1.
 func (h *history) search(query string, fromIdx int) (string, int) {
 	if query == "" {
 		return "", -1
@@ -124,44 +123,64 @@ func (h *history) search(query string, fromIdx int) (string, int) {
 	return "", -1
 }
 
+// Spinner frames — braille dot cycle.
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+var spinnerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Inline(true)
+
+// Messages for async query execution.
+type spinnerTickMsg time.Time
+
+type queryResultMsg struct {
+	result  *QueryResult
+	err     error
+	termCmd string
+}
+
+func spinnerTick() tea.Cmd {
+	return tea.Tick(80*time.Millisecond, func(t time.Time) tea.Msg {
+		return spinnerTickMsg(t)
+	})
+}
+
+// headerLines is the fixed height of the header (logo rows).
+const headerLines = 5
+
 // model is the bubbletea model for the shell.
 type model struct {
-	shell     *Shell
-	input     textinput.Model
-	output    *strings.Builder
-	history   *history
-	completer *completer
-	quitting  bool
+	shell      *Shell
+	input      textinput.Model
+	viewport   viewport.Model
+	scrollback *strings.Builder // accumulated output fed into viewport
+	history    *history
+	completer  *completer
+	quitting   bool
+	width      int
+	height     int
+	ready      bool // true after first WindowSizeMsg
 
 	// Reverse search state.
 	searching bool
 	searchBuf string
-	searchIdx int // current search position in history
+	searchIdx int
+
+	// Async query state.
+	running      bool
+	spinnerFrame int
 }
 
 func newModel(s *Shell) model {
 	ti := textinput.New()
-	ti.Prompt = promptStyle.Render("weft> ")
+	ti.Prompt = ""
 	ti.Focus()
 	ti.CharLimit = 1024
 
-	out := &strings.Builder{}
-	out.WriteString(RenderLogo())
-	out.WriteString(dimStyle.Render(fmt.Sprintf(
-		"weft shell — %d apps, range %s to %s",
-		len(s.Apps),
-		s.Start.Format("15:04"),
-		s.End.Format("15:04"),
-	)))
-	out.WriteString("\n")
-	out.WriteString(dimStyle.Render("type a pipeline, or: range, apps, exit"))
-	out.WriteString("\n\n")
 	return model{
-		shell:     s,
-		input:     ti,
-		output:    out,
-		history:   &history{},
-		completer: newCompleter(s.Apps),
+		shell:      s,
+		input:      ti,
+		scrollback: &strings.Builder{},
+		history:    &history{},
+		completer:  newCompleter(s.Apps),
 	}
 }
 
@@ -169,9 +188,92 @@ func (m model) Init() tea.Cmd {
 	return textinput.Blink
 }
 
+// viewportHeight calculates the available rows for the scrollback viewport.
+func (m model) viewportHeight() int {
+	// Layout: border(1) + header(5) + info-bar(1) + sep(1) + viewport + sep(1) + input(1) + completer + border(1)
+	chrome := 2 + headerLines + 1 + 1 + 1 + 1 // borders + header + info bar + separators + input
+	if m.completer.active {
+		lines := len(m.completer.items)
+		if lines > 8 {
+			lines = 9 // 8 visible + "... N more"
+		}
+		chrome += lines
+	}
+	h := m.height - chrome
+	if h < 1 {
+		h = 1
+	}
+	return h
+}
+
+// innerWidth returns the usable width inside the border.
+func (m model) innerWidth() int {
+	w := m.width - 2 // left + right border
+	if w < 20 {
+		w = 20
+	}
+	return w
+}
+
+// syncViewport updates the viewport content and dimensions.
+func (m *model) syncViewport() {
+	m.viewport.Width = m.innerWidth()
+	m.viewport.Height = m.viewportHeight()
+	m.viewport.SetContent(m.scrollback.String())
+	m.viewport.GotoBottom()
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		if !m.ready {
+			m.viewport = viewport.New(m.innerWidth(), m.viewportHeight())
+			m.viewport.SetContent(m.scrollback.String())
+			m.ready = true
+		} else {
+			m.viewport.Width = m.innerWidth()
+			m.viewport.Height = m.viewportHeight()
+		}
+		return m, nil
+
+	case spinnerTickMsg:
+		if m.running {
+			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
+			return m, spinnerTick()
+		}
+		return m, nil
+
+	case queryResultMsg:
+		m.running = false
+		m.handleQueryResult(msg)
+		m.syncViewport()
+		if m.quitting {
+			return m, tea.Quit
+		}
+		return m, nil
+
+	case tea.MouseMsg:
+		if m.ready {
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+
 	case tea.KeyMsg:
+		// Ignore input while a query is running.
+		if m.running {
+			if msg.Type == tea.KeyCtrlC {
+				m.running = false
+				m.scrollback.WriteString(errorStyle.Render("interrupted") + "\n")
+				m.syncViewport()
+				return m, nil
+			}
+			return m, nil
+		}
+
 		// Reverse search mode.
 		if m.searching {
 			return m.updateSearch(msg)
@@ -190,15 +292,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.searchIdx = len(m.history.entries) - 1
 			return m, nil
 
+		case tea.KeyPgUp:
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+
+		case tea.KeyPgDown:
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+
 		case tea.KeyTab:
 			if m.completer.active {
-				// Cycle to next match.
 				m.completer.next()
 				newInput, newCursor := m.completer.apply(m.input.Value())
 				m.input.SetValue(newInput)
 				m.input.SetCursor(newCursor)
 			} else {
-				// Open completion menu.
 				m.completer.update(m.input.Value(), m.input.Position())
 				if m.completer.active {
 					newInput, newCursor := m.completer.apply(m.input.Value())
@@ -248,16 +358,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.history.add(line)
-			m.output.WriteString(promptStyle.Render("weft> ") + line + "\n")
-			m.execLine(line)
-			if m.quitting {
-				return m, tea.Quit
+			m.scrollback.WriteString(promptStyle.Render("weft> ") + highlightPipeline(line) + "\n")
+
+			if cmd := m.execBuiltin(line); cmd != nil || m.quitting {
+				m.syncViewport()
+				if m.quitting {
+					return m, tea.Quit
+				}
+				return m, cmd
 			}
-			return m, nil
+
+			m.syncViewport()
+			return m, m.startQuery(line)
 
 		default:
-			// Any other key dismisses the completion menu (it will
-			// re-evaluate on the next keystroke if needed).
 			if m.completer.active {
 				m.completer.dismiss()
 			}
@@ -272,12 +386,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlC, tea.KeyEsc:
-		// Cancel search.
 		m.searching = false
 		return m, nil
 
 	case tea.KeyCtrlR:
-		// Search further back.
 		if m.searchIdx > 0 {
 			m.searchIdx--
 			if match, idx := m.history.search(m.searchBuf, m.searchIdx); idx >= 0 {
@@ -289,7 +401,6 @@ func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyEnter:
-		// Accept the current search result.
 		m.searching = false
 		m.history.reset()
 		return m, nil
@@ -313,8 +424,6 @@ func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.searchIdx = idx
 				m.input.SetValue(match)
 				m.input.CursorEnd()
-			} else {
-				// No match — keep the search buf but don't change input.
 			}
 			return m, nil
 		}
@@ -322,69 +431,234 @@ func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *model) execLine(line string) {
+// execBuiltin handles synchronous built-in commands. Returns nil if the
+// line is not a built-in (i.e. it's a pipeline that should run async).
+func (m *model) execBuiltin(line string) tea.Cmd {
 	switch {
 	case line == "exit" || line == "quit":
 		m.quitting = true
+		return nil
 	case line == "apps":
-		m.output.WriteString(dimStyle.Render("Available apps:\n"))
+		m.scrollback.WriteString(dimStyle.Render("Available apps:\n"))
 		for _, app := range m.shell.Apps {
-			m.output.WriteString(fmt.Sprintf("  %s.log\n", app))
+			m.scrollback.WriteString(fmt.Sprintf("  %s.log\n", app))
 		}
-		m.output.WriteString(fmt.Sprintf("  warp.log %s\n", dimStyle.Render("(all apps)")))
+		m.scrollback.WriteString(fmt.Sprintf("  warp.log %s\n", dimStyle.Render("(all apps)")))
+		return tea.Batch()
 	case line == "range":
-		m.output.WriteString(fmt.Sprintf("  %s to %s\n",
+		m.scrollback.WriteString(fmt.Sprintf("  %s to %s\n",
 			m.shell.Start.Format("2006-01-02T15:04:05Z"),
 			m.shell.End.Format("2006-01-02T15:04:05Z")))
+		return tea.Batch()
 	case strings.HasPrefix(line, "range "):
-		m.output.WriteString(dimStyle.Render("range adjustment not yet implemented\n"))
-	default:
-		m.execPipeline(line)
+		m.scrollback.WriteString(dimStyle.Render("range adjustment not yet implemented\n"))
+		return tea.Batch()
 	}
+	return nil
 }
 
-func (m *model) execPipeline(line string) {
-	weftPipeline, termCmd := splitTerminalStage(line)
+// startQuery launches an async pipeline query and starts the spinner.
+func (m *model) startQuery(line string) tea.Cmd {
+	m.running = true
+	m.spinnerFrame = 0
 
-	result, err := m.shell.Query(weftPipeline, m.shell.Start, m.shell.End)
-	if err != nil {
-		m.output.WriteString(errorStyle.Render("error: "+err.Error()) + "\n")
+	weftPipeline, termCmd := splitTerminalStage(line)
+	queryFn := m.shell.Query
+	start, end := m.shell.Start, m.shell.End
+
+	return tea.Batch(spinnerTick(), func() tea.Msg {
+		result, err := queryFn(weftPipeline, start, end)
+		return queryResultMsg{result: result, err: err, termCmd: termCmd}
+	})
+}
+
+// handleQueryResult processes the result of an async query.
+func (m *model) handleQueryResult(msg queryResultMsg) {
+	if msg.err != nil {
+		errMsg := msg.err.Error()
+		for _, prefix := range []string{
+			"rpc error: code = Unknown desc = ",
+			"compute error: ",
+		} {
+			if idx := strings.Index(errMsg, prefix); idx >= 0 {
+				errMsg = errMsg[idx+len(prefix):]
+			}
+		}
+		m.scrollback.WriteString(errorStyle.Render(errMsg) + "\n")
 		return
 	}
 
 	var text string
-	if result.Text != "" {
-		text = result.Text
+	if msg.result.Text != "" {
+		text = msg.result.Text
 	} else {
 		var sb strings.Builder
-		for _, row := range result.Rows {
+		for _, row := range msg.result.Rows {
 			sb.WriteString(row.Raw)
 			sb.WriteByte('\n')
 		}
 		text = sb.String()
 	}
 
-	if termCmd != "" {
-		m.output.WriteString(dimStyle.Render(fmt.Sprintf("[piping to %s]\n", termCmd)))
-		pipeToTerminal(text, termCmd)
+	if msg.termCmd != "" {
+		m.scrollback.WriteString(dimStyle.Render(fmt.Sprintf("[piping to %s]\n", msg.termCmd)))
+		pipeToTerminal(text, msg.termCmd)
 	} else {
-		m.output.WriteString(text)
+		m.scrollback.WriteString(text)
 	}
 }
 
+// ── View ─────────────────────────────────────────────────────────
+
 func (m model) View() string {
+	if !m.ready {
+		return ""
+	}
 	if m.quitting {
-		return m.output.String() + dimStyle.Render("goodbye\n")
+		return "" // alt-screen will be cleared on exit
 	}
-	if m.searching {
-		searchPrompt := searchStyle.Render(fmt.Sprintf("(reverse-i-search)`%s': ", m.searchBuf))
-		return m.output.String() + searchPrompt + m.input.Value()
+
+	w := m.innerWidth()
+
+	// ── Header: logo (left) + info panel (right) ──
+	header := m.renderHeader(w)
+
+	// ── Separator ──
+	sep := sepStyle.Render(strings.Repeat("─", w))
+
+	// ── Viewport (scrollback) ──
+	// Recalculate height in case completer changed.
+	m.viewport.Height = m.viewportHeight()
+	vpView := m.viewport.View()
+
+	// ── Input line ──
+	var inputLine string
+	if m.running {
+		frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+		inputLine = " " + spinnerStyle.Render(frame) + dimStyle.Render(" querying shards...")
+	} else if m.searching {
+		inputLine = " " + searchStyle.Render(fmt.Sprintf("(reverse-i-search)`%s': ", m.searchBuf)) +
+			highlightPipeline(m.input.Value())
+	} else {
+		inputLine = " " + promptStyle.Render("weft> ") +
+			highlightWithCursor(m.input.Value(), m.input.Position())
 	}
-	v := m.output.String() + m.input.View()
+
+	// ── Completer (between separator and input) ──
+	var completerView string
 	if m.completer.active {
-		v += "\n" + m.completer.render()
+		completerView = m.completer.render()
 	}
-	return v
+
+	// ── Compose inner content ──
+	var sections []string
+	sections = append(sections, header)
+	sections = append(sections, sep)
+	sections = append(sections, vpView)
+	sections = append(sections, sep)
+	if completerView != "" {
+		sections = append(sections, completerView)
+	}
+	sections = append(sections, inputLine)
+
+	inner := strings.Join(sections, "\n")
+
+	// ── Wrap in border ──
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Width(w)
+
+	return boxStyle.Render(inner)
+}
+
+// renderHeader builds the logo + info panel side by side.
+func (m model) renderHeader(totalWidth int) string {
+	logo := RenderLogo()
+	logoLines := strings.Split(strings.TrimRight(logo, "\n"), "\n")
+
+	// Info panel lines — matched to logo height.
+	rangeStr := fmt.Sprintf("%s to %s",
+		m.shell.Start.Format("15:04"),
+		m.shell.End.Format("15:04"))
+
+	appsStr := fmt.Sprintf("%d apps", len(m.shell.Apps))
+	if len(m.shell.Apps) <= 4 {
+		names := make([]string, len(m.shell.Apps))
+		copy(names, m.shell.Apps)
+		appsStr = strings.Join(names, ", ")
+	}
+
+	infoLines := []string{
+		accentStyle.Render(rangeStr),
+		dimStyle.Render(appsStr),
+		"",
+		dimStyle.Render("apps") + " " + dimStyle.Render("range") + " " + dimStyle.Render("exit"),
+		dimStyle.Render("ctrl-r") + " " + dimStyle.Render("ctrl-c"),
+	}
+
+	// Pad to same number of lines.
+	for len(logoLines) < len(infoLines) {
+		logoLines = append(logoLines, "")
+	}
+	for len(infoLines) < len(logoLines) {
+		infoLines = append(infoLines, "")
+	}
+
+	// Measure the visual width of the logo (first line as reference).
+	logoWidth := visualWidth(logoLines[0])
+	if logoWidth < 53 {
+		logoWidth = 53 // known width from letter bitmaps
+	}
+
+	gap := 4
+	infoWidth := totalWidth - logoWidth - gap
+	if infoWidth < 10 {
+		infoWidth = 10
+	}
+
+	// Build combined header lines.
+	var headerBuf strings.Builder
+	for i := 0; i < len(logoLines); i++ {
+		ll := logoLines[i]
+		il := ""
+		if i < len(infoLines) {
+			il = infoLines[i]
+		}
+		// Pad logo line to fixed width.
+		pad := logoWidth - visualWidth(ll)
+		if pad < 0 {
+			pad = 0
+		}
+		headerBuf.WriteString(ll)
+		headerBuf.WriteString(strings.Repeat(" ", pad+gap))
+		headerBuf.WriteString(il)
+		if i < len(logoLines)-1 {
+			headerBuf.WriteByte('\n')
+		}
+	}
+
+	return headerBuf.String()
+}
+
+// visualWidth returns the display width of a string, ignoring ANSI escape codes.
+func visualWidth(s string) int {
+	n := 0
+	inEsc := false
+	for _, r := range s {
+		if r == '\033' {
+			inEsc = true
+			continue
+		}
+		if inEsc {
+			if r == 'm' {
+				inEsc = false
+			}
+			continue
+		}
+		n++
+	}
+	return n
 }
 
 // splitTerminalStage checks if the pipeline ends with a terminal command
