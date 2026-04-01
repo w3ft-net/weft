@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/kevlarcon/weft/configstore"
@@ -236,10 +237,25 @@ func (s *Server) RevokeToken(_ context.Context, req *pb.RevokeTokenRequest) (*pb
 }
 
 // IngestStream accepts a stream of LogRows from weftd agents and forwards
-// them to the active shard in batches.
+// them to the active shard in batches. Flushes every 2 seconds or 100 rows.
 func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) error {
+	var mu sync.Mutex
 	var rows []shardpkg.LogRow
 	var count int64
+
+	// Periodic flush for sparse streams.
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	go func() {
+		for range ticker.C {
+			mu.Lock()
+			if len(rows) > 0 {
+				s.ingestBatch(rows)
+				rows = rows[:0]
+			}
+			mu.Unlock()
+		}
+	}()
 
 	for {
 		row, err := stream.Recv()
@@ -250,18 +266,21 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 			return err
 		}
 
+		mu.Lock()
 		rows = append(rows, shardservice.ProtoToLogRow(row))
 		count++
-
 		if len(rows) >= 100 {
 			s.ingestBatch(rows)
 			rows = rows[:0]
 		}
+		mu.Unlock()
 	}
 
+	mu.Lock()
 	if len(rows) > 0 {
 		s.ingestBatch(rows)
 	}
+	mu.Unlock()
 
 	log.Printf("ingest-stream: received %d rows", count)
 	return stream.SendAndClose(&pb.IngestStreamResponse{RowsReceived: count})
