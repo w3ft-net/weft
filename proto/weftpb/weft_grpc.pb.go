@@ -450,13 +450,11 @@ type WeftCoordinatorClient interface {
 	ListSources(ctx context.Context, in *ListSourcesRequest, opts ...grpc.CallOption) (*ListSourcesResponse, error)
 	// RemoveSource deletes a log source.
 	RemoveSource(ctx context.Context, in *RemoveSourceRequest, opts ...grpc.CallOption) (*RemoveSourceResponse, error)
-	// Authenticate validates an agent token and returns the active shard
-	// address for direct ingestion. The agent then connects to the shard
-	// directly via IngestStream.
+	// Authenticate validates an agent token. Agents stream logs through
+	// the coordinator via IngestStream — they never connect to shards directly.
 	Authenticate(ctx context.Context, in *AuthenticateRequest, opts ...grpc.CallOption) (*AuthenticateResponse, error)
-	// IngestStream accepts a stream of log rows from weftd agents that
-	// cannot reach shards directly. The coordinator validates the token
-	// from gRPC metadata and forwards batches to the active shard.
+	// IngestStream accepts a stream of log rows from weftd agents. The
+	// coordinator forwards batches to the active shard.
 	IngestStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[LogRow, IngestStreamResponse], error)
 	// Token management for weftd agents.
 	CreateToken(ctx context.Context, in *CreateTokenRequest, opts ...grpc.CallOption) (*CreateTokenResponse, error)
@@ -598,13 +596,11 @@ type WeftCoordinatorServer interface {
 	ListSources(context.Context, *ListSourcesRequest) (*ListSourcesResponse, error)
 	// RemoveSource deletes a log source.
 	RemoveSource(context.Context, *RemoveSourceRequest) (*RemoveSourceResponse, error)
-	// Authenticate validates an agent token and returns the active shard
-	// address for direct ingestion. The agent then connects to the shard
-	// directly via IngestStream.
+	// Authenticate validates an agent token. Agents stream logs through
+	// the coordinator via IngestStream — they never connect to shards directly.
 	Authenticate(context.Context, *AuthenticateRequest) (*AuthenticateResponse, error)
-	// IngestStream accepts a stream of log rows from weftd agents that
-	// cannot reach shards directly. The coordinator validates the token
-	// from gRPC metadata and forwards batches to the active shard.
+	// IngestStream accepts a stream of log rows from weftd agents. The
+	// coordinator forwards batches to the active shard.
 	IngestStream(grpc.ClientStreamingServer[LogRow, IngestStreamResponse]) error
 	// Token management for weftd agents.
 	CreateToken(context.Context, *CreateTokenRequest) (*CreateTokenResponse, error)

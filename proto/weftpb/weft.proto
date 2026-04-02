@@ -127,14 +127,12 @@ service WeftCoordinator {
   // RemoveSource deletes a log source.
   rpc RemoveSource(RemoveSourceRequest) returns (RemoveSourceResponse);
 
-  // Authenticate validates an agent token and returns the active shard
-  // address for direct ingestion. The agent then connects to the shard
-  // directly via IngestStream.
+  // Authenticate validates an agent token. Agents stream logs through
+  // the coordinator via IngestStream — they never connect to shards directly.
   rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
 
-  // IngestStream accepts a stream of log rows from weftd agents that
-  // cannot reach shards directly. The coordinator validates the token
-  // from gRPC metadata and forwards batches to the active shard.
+  // IngestStream accepts a stream of log rows from weftd agents. The
+  // coordinator forwards batches to the active shard.
   rpc IngestStream(stream LogRow) returns (IngestStreamResponse);
 
   // Token management for weftd agents.
@@ -179,9 +177,8 @@ message AuthenticateRequest {
 
 message AuthenticateResponse {
   string customer = 1;
-  string shard_addr = 2;       // host:port of the active shard for ingestion
-  string shard_token = 3;      // short-lived token the shard validates
-  int64 expires_at_ns = 4;     // when to re-authenticate (shard rotation)
+  reserved 2, 3, 4;           // was shard_addr, shard_token, expires_at_ns — removed with direct-shard path
+  reserved "shard_addr", "shard_token", "expires_at_ns";
 }
 
 message CoordinatorQueryRequest {

@@ -1092,9 +1092,6 @@ func (x *AuthenticateRequest) GetToken() string {
 type AuthenticateResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
-	ShardAddr     string                 `protobuf:"bytes,2,opt,name=shard_addr,json=shardAddr,proto3" json:"shard_addr,omitempty"`          // host:port of the active shard for ingestion
-	ShardToken    string                 `protobuf:"bytes,3,opt,name=shard_token,json=shardToken,proto3" json:"shard_token,omitempty"`       // short-lived token the shard validates
-	ExpiresAtNs   int64                  `protobuf:"varint,4,opt,name=expires_at_ns,json=expiresAtNs,proto3" json:"expires_at_ns,omitempty"` // when to re-authenticate (shard rotation)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1134,27 +1131,6 @@ func (x *AuthenticateResponse) GetCustomer() string {
 		return x.Customer
 	}
 	return ""
-}
-
-func (x *AuthenticateResponse) GetShardAddr() string {
-	if x != nil {
-		return x.ShardAddr
-	}
-	return ""
-}
-
-func (x *AuthenticateResponse) GetShardToken() string {
-	if x != nil {
-		return x.ShardToken
-	}
-	return ""
-}
-
-func (x *AuthenticateResponse) GetExpiresAtNs() int64 {
-	if x != nil {
-		return x.ExpiresAtNs
-	}
-	return 0
 }
 
 type CoordinatorQueryRequest struct {
@@ -1890,14 +1866,10 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x05token\x18\x01 \x01(\tR\x05token\"\x15\n" +
 	"\x13RevokeTokenResponse\"+\n" +
 	"\x13AuthenticateRequest\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\"\x96\x01\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"l\n" +
 	"\x14AuthenticateResponse\x12\x1a\n" +
-	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x1d\n" +
-	"\n" +
-	"shard_addr\x18\x02 \x01(\tR\tshardAddr\x12\x1f\n" +
-	"\vshard_token\x18\x03 \x01(\tR\n" +
-	"shardToken\x12\"\n" +
-	"\rexpires_at_ns\x18\x04 \x01(\x03R\vexpiresAtNs\"y\n" +
+	"\bcustomer\x18\x01 \x01(\tR\bcustomerJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\n" +
+	"shard_addrR\vshard_tokenR\rexpires_at_ns\"y\n" +
 	"\x17CoordinatorQueryRequest\x12\x1a\n" +
 	"\bpipeline\x18\x01 \x01(\tR\bpipeline\x12\"\n" +
 	"\rtime_start_ns\x18\x02 \x01(\x03R\vtimeStartNs\x12\x1e\n" +

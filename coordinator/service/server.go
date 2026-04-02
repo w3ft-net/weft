@@ -128,8 +128,8 @@ func (s *Server) RemoveSource(_ context.Context, req *pb.RemoveSourceRequest) (*
 	return &pb.RemoveSourceResponse{}, nil
 }
 
-// Authenticate validates an agent token and returns the active shard address.
-// The agent then connects directly to the shard for streaming ingestion.
+// Authenticate validates an agent token. Agents stream through the
+// coordinator via IngestStream — they never connect to shards directly.
 func (s *Server) Authenticate(_ context.Context, req *pb.AuthenticateRequest) (*pb.AuthenticateResponse, error) {
 	if s.Store == nil {
 		return nil, fmt.Errorf("config store not available")
@@ -143,49 +143,11 @@ func (s *Server) Authenticate(_ context.Context, req *pb.AuthenticateRequest) (*
 		return nil, fmt.Errorf("invalid or revoked token")
 	}
 
-	// Find the first healthy shard for ingestion.
-	shards := s.Coord.GetShards()
-	if len(shards) == 0 {
-		return nil, fmt.Errorf("no shards available")
-	}
-
-	// For now, pick the first shard. In production this would be the
-	// INGESTING shard (the one accepting writes).
-	activeShard := shards[0]
-
-	// The shard address comes from the GRPCShard's connection info.
-	// For now, use the shard ID as a hint — the agent needs the actual
-	// host:port. We'll get this from ASG discovery.
-	shardAddr := getShardAddr(activeShard)
-
-	// Generate a short-lived shard token. For now, use the customer name
-	// as the token — the shard validates it against metadata.
-	// TODO: proper JWT or HMAC-signed short-lived tokens.
-	shardToken := fmt.Sprintf("%s:%s", customer.Name, req.Token[:16])
-
-	// Expire in 1 hour (forces re-auth, picks up shard rotations).
-	expiresAt := time.Now().Add(1 * time.Hour).UnixNano()
-
-	log.Printf("auth: customer=%s shard=%s", customer.Name, activeShard.ID())
+	log.Printf("auth: customer=%s", customer.Name)
 
 	return &pb.AuthenticateResponse{
-		Customer:    customer.Name,
-		ShardAddr:   shardAddr,
-		ShardToken:  shardToken,
-		ExpiresAtNs: expiresAt,
+		Customer: customer.Name,
 	}, nil
-}
-
-// getShardAddr extracts the network address from a shard.
-func getShardAddr(sh shardpkg.Shard) string {
-	// GRPCShard stores the address. For DuckDBShard (in-process), return localhost.
-	type addrGetter interface {
-		Addr() string
-	}
-	if g, ok := sh.(addrGetter); ok {
-		return g.Addr()
-	}
-	return "localhost:9000"
 }
 
 func (s *Server) CreateToken(_ context.Context, req *pb.CreateTokenRequest) (*pb.CreateTokenResponse, error) {
