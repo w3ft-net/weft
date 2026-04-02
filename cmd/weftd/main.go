@@ -1,8 +1,8 @@
 package main
 
 import (
-	"context"
 	"bufio"
+	"context"
 	"flag"
 	"log"
 	"os"
@@ -30,9 +30,9 @@ type Config struct {
 }
 
 type SourceConfig struct {
-	App     string `yaml:"app"`
-	Path    string `yaml:"path"`              // file path or glob (file tailing)
-	Unit    string `yaml:"unit,omitempty"`     // systemd unit name (journal tailing)
+	App  string `yaml:"app"`
+	Path string `yaml:"path"`          // file path or glob (file tailing)
+	Unit string `yaml:"unit,omitempty"` // systemd unit name (journal tailing)
 }
 
 func main() {
@@ -58,7 +58,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Authenticate with coordinator to get shard address.
+	// Connect to coordinator.
 	coordConn, err := grpc.NewClient(cfg.Endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Fatalf("connect to coordinator: %v", err)
@@ -77,19 +77,14 @@ func main() {
 	}
 	log.Printf("authenticated as customer=%s", customer)
 
-	// Stream logs through the coordinator (agents can't reach shards directly).
-	// Keep the coordinator connection open for the lifetime of the agent.
-
 	hostname, _ := os.Hostname()
 
-	// Start sources.
+	// Start sources — all stream through the coordinator, never direct to shards.
 	for _, src := range cfg.Sources {
 		if src.Unit != "" {
-			// Journal source — tail systemd unit logs.
 			go runJournalTailer(ctx, coordClient, customer, hostname, src.App, src.Unit)
 			log.Printf("[%s] tailing journal unit %s", src.App, src.Unit)
 		} else if src.Path != "" {
-			// File source — tail log files.
 			paths, err := filepath.Glob(src.Path)
 			if err != nil || len(paths) == 0 {
 				log.Printf("[%s] no files matching %s", src.App, src.Path)
@@ -113,7 +108,7 @@ func main() {
 		log.Printf("listening on socket %s", cfg.Socket)
 	}
 
-	log.Printf("weftd started: %d file sources, streaming to shard %s", len(cfg.Sources), authResp.ShardAddr)
+	log.Printf("weftd started: %d sources, streaming to %s", len(cfg.Sources), cfg.Endpoint)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -122,9 +117,35 @@ func main() {
 	cancel()
 }
 
+// openStream opens an IngestStream to the coordinator with retry.
+// Blocks until a stream is established or ctx is cancelled.
+func openStream(ctx context.Context, client pb.WeftCoordinatorClient, label string) (pb.WeftCoordinator_IngestStreamClient, error) {
+	var backoff time.Duration = time.Second
+
+	for {
+		stream, err := client.IngestStream(ctx)
+		if err == nil {
+			return stream, nil
+		}
+
+		log.Printf("[%s] stream failed, retrying in %v: %v", label, backoff, err)
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+
+		backoff *= 2
+		if backoff > 30*time.Second {
+			backoff = 30 * time.Second
+		}
+	}
+}
+
 // runJournalTailer tails a systemd unit's journal and streams lines.
+// Reconnects automatically if the stream breaks.
 func runJournalTailer(ctx context.Context, client pb.WeftCoordinatorClient, customer, instance, app, unit string) {
-	// Start journalctl following the unit from now.
 	cmd := exec.CommandContext(ctx, "journalctl", "-f", "-u", unit, "--no-pager", "-o", "cat", "-n", "0")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -136,23 +157,17 @@ func runJournalTailer(ctx context.Context, client pb.WeftCoordinatorClient, cust
 		return
 	}
 
-	stream, err := client.IngestStream(ctx)
-	if err != nil {
-		log.Printf("[%s] open stream: %v", app, err)
-		cmd.Process.Kill()
-		return
-	}
-
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
 			continue
 		}
-		sendLine(stream, line, customer, instance, app)
+		if err := sendLineWithReconnect(ctx, client, &streamState{}, line, customer, instance, app); err != nil {
+			return // context cancelled
+		}
 	}
 
-	stream.CloseAndRecv()
 	cmd.Wait()
 }
 
@@ -164,38 +179,37 @@ func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, custome
 	}
 	defer tailer.Close()
 
-	stream, err := client.IngestStream(ctx)
-	if err != nil {
-		log.Printf("[%s] open stream: %v", app, err)
-		return
-	}
-
 	lines := tailer.Lines()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
+	ss := &streamState{}
 	var buf []string
 
 	for {
 		select {
 		case <-ctx.Done():
-			flush(stream, buf, customer, instance, app)
-			stream.CloseAndRecv()
+			flushWithReconnect(ctx, client, ss, buf, customer, instance, app)
+			if ss.stream != nil {
+				ss.stream.CloseAndRecv()
+			}
 			return
 		case line, ok := <-lines:
 			if !ok {
-				flush(stream, buf, customer, instance, app)
-				stream.CloseAndRecv()
+				flushWithReconnect(ctx, client, ss, buf, customer, instance, app)
+				if ss.stream != nil {
+					ss.stream.CloseAndRecv()
+				}
 				return
 			}
 			buf = append(buf, line)
 			if len(buf) >= 100 {
-				flush(stream, buf, customer, instance, app)
+				flushWithReconnect(ctx, client, ss, buf, customer, instance, app)
 				buf = buf[:0]
 			}
 		case <-ticker.C:
 			if len(buf) > 0 {
-				flush(stream, buf, customer, instance, app)
+				flushWithReconnect(ctx, client, ss, buf, customer, instance, app)
 				buf = buf[:0]
 			}
 		}
@@ -203,15 +217,11 @@ func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, custome
 }
 
 func runSocketIngester(ctx context.Context, client pb.WeftCoordinatorClient, customer, instance string, sock *weftd.SocketListener) {
-	stream, err := client.IngestStream(ctx)
-	if err != nil {
-		log.Printf("socket ingester: open stream: %v", err)
-		return
-	}
-
 	lines := sock.Lines()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+
+	ss := &streamState{}
 
 	type appLine struct{ app, line string }
 	var buf []appLine
@@ -220,26 +230,30 @@ func runSocketIngester(ctx context.Context, client pb.WeftCoordinatorClient, cus
 		select {
 		case <-ctx.Done():
 			for _, al := range buf {
-				sendLine(stream, al.line, customer, instance, al.app)
+				sendLineWithReconnect(ctx, client, ss, al.line, customer, instance, al.app)
 			}
-			stream.CloseAndRecv()
+			if ss.stream != nil {
+				ss.stream.CloseAndRecv()
+			}
 			return
 		case sl, ok := <-lines:
 			if !ok {
-				stream.CloseAndRecv()
+				if ss.stream != nil {
+					ss.stream.CloseAndRecv()
+				}
 				return
 			}
 			buf = append(buf, appLine{app: sl.App, line: sl.Line})
 			if len(buf) >= 100 {
 				for _, al := range buf {
-					sendLine(stream, al.line, customer, instance, al.app)
+					sendLineWithReconnect(ctx, client, ss, al.line, customer, instance, al.app)
 				}
 				buf = buf[:0]
 			}
 		case <-ticker.C:
 			if len(buf) > 0 {
 				for _, al := range buf {
-					sendLine(stream, al.line, customer, instance, al.app)
+					sendLineWithReconnect(ctx, client, ss, al.line, customer, instance, al.app)
 				}
 				buf = buf[:0]
 			}
@@ -247,23 +261,56 @@ func runSocketIngester(ctx context.Context, client pb.WeftCoordinatorClient, cus
 	}
 }
 
-func flush(stream pb.WeftCoordinator_IngestStreamClient, lines []string, customer, instance, app string) {
-	for _, line := range lines {
-		sendLine(stream, line, customer, instance, app)
-	}
+// streamState holds a lazily-opened, reconnectable IngestStream.
+type streamState struct {
+	stream pb.WeftCoordinator_IngestStreamClient
 }
 
-func sendLine(stream pb.WeftCoordinator_IngestStreamClient, line, customer, instance, app string) {
+// sendLineWithReconnect sends a line, opening or reconnecting the stream as needed.
+func sendLineWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient, ss *streamState, line, customer, instance, app string) error {
 	line = strings.TrimSpace(line)
 	if line == "" {
-		return
+		return nil
 	}
-	stream.Send(&pb.LogRow{
+
+	msg := &pb.LogRow{
 		App:       app,
 		Customer:  customer,
 		Instance:  instance,
 		Raw:       line,
 		TsUnixNs: time.Now().UnixNano(),
 		Fields:    strings.Fields(line),
-	})
+	}
+
+	// Try sending on existing stream.
+	if ss.stream != nil {
+		if err := ss.stream.Send(msg); err == nil {
+			return nil
+		}
+		// Stream is broken — will reconnect below.
+		log.Printf("[%s] stream broken, reconnecting", app)
+		ss.stream = nil
+	}
+
+	// Open a new stream.
+	stream, err := openStream(ctx, client, app)
+	if err != nil {
+		return err // context cancelled
+	}
+	ss.stream = stream
+
+	// Retry the send on the fresh stream.
+	if err := ss.stream.Send(msg); err != nil {
+		log.Printf("[%s] send failed after reconnect: %v", app, err)
+		ss.stream = nil
+	}
+	return nil
+}
+
+func flushWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient, ss *streamState, lines []string, customer, instance, app string) {
+	for _, line := range lines {
+		if err := sendLineWithReconnect(ctx, client, ss, line, customer, instance, app); err != nil {
+			return
+		}
+	}
 }
