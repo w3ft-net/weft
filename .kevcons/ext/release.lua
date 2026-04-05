@@ -86,12 +86,12 @@ function run(args)
         -- Upload versioned
         local s3_versioned = "s3://" .. bucket .. "/" .. name .. "/v" .. version .. "/" .. binary_name
         kevcons.log("uploading " .. s3_versioned)
-        kevcons.aws("s3", "cp", tmp, s3_versioned)
+        kevcons.aws_exec("s3", "cp", tmp, s3_versioned)
 
         -- Upload latest
         local s3_latest = "s3://" .. bucket .. "/" .. name .. "/latest/" .. binary_name
         kevcons.log("uploading " .. s3_latest)
-        kevcons.aws("s3", "cp", tmp, s3_latest)
+        kevcons.aws_exec("s3", "cp", tmp, s3_latest)
 
         -- Clean up
         os.remove(tmp)
