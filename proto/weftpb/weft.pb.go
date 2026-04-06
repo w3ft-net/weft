@@ -716,7 +716,8 @@ func (x *GetResultResponse) GetError() string {
 type CreateTokenRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
-	Label         string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"` // human-readable label (e.g., "vimgym-prod-agent")
+	Label         string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"` // human-readable label (e.g., "vimgym-prod")
+	App           string                 `protobuf:"bytes,3,opt,name=app,proto3" json:"app,omitempty"`     // app name this token authorizes (e.g., "vimgym")
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -761,6 +762,13 @@ func (x *CreateTokenRequest) GetCustomer() string {
 func (x *CreateTokenRequest) GetLabel() string {
 	if x != nil {
 		return x.Label
+	}
+	return ""
+}
+
+func (x *CreateTokenRequest) GetApp() string {
+	if x != nil {
+		return x.App
 	}
 	return ""
 }
@@ -903,6 +911,7 @@ type TokenInfo struct {
 	Label         string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`
 	Revoked       bool                   `protobuf:"varint,3,opt,name=revoked,proto3" json:"revoked,omitempty"`
 	CreatedAt     string                 `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	App           string                 `protobuf:"bytes,5,opt,name=app,proto3" json:"app,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -961,6 +970,13 @@ func (x *TokenInfo) GetRevoked() bool {
 func (x *TokenInfo) GetCreatedAt() string {
 	if x != nil {
 		return x.CreatedAt
+	}
+	return ""
+}
+
+func (x *TokenInfo) GetApp() string {
+	if x != nil {
+		return x.App
 	}
 	return ""
 }
@@ -1846,22 +1862,24 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"=\n" +
 	"\x11GetResultResponse\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"F\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"X\n" +
 	"\x12CreateTokenRequest\x12\x1a\n" +
 	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x14\n" +
-	"\x05label\x18\x02 \x01(\tR\x05label\"+\n" +
+	"\x05label\x18\x02 \x01(\tR\x05label\x12\x10\n" +
+	"\x03app\x18\x03 \x01(\tR\x03app\"+\n" +
 	"\x13CreateTokenResponse\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\"/\n" +
 	"\x11ListTokensRequest\x12\x1a\n" +
 	"\bcustomer\x18\x01 \x01(\tR\bcustomer\"=\n" +
 	"\x12ListTokensResponse\x12'\n" +
-	"\x06tokens\x18\x01 \x03(\v2\x0f.weft.TokenInfoR\x06tokens\"p\n" +
+	"\x06tokens\x18\x01 \x03(\v2\x0f.weft.TokenInfoR\x06tokens\"\x82\x01\n" +
 	"\tTokenInfo\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12\x18\n" +
 	"\arevoked\x18\x03 \x01(\bR\arevoked\x12\x1d\n" +
 	"\n" +
-	"created_at\x18\x04 \x01(\tR\tcreatedAt\"*\n" +
+	"created_at\x18\x04 \x01(\tR\tcreatedAt\x12\x10\n" +
+	"\x03app\x18\x05 \x01(\tR\x03app\"*\n" +
 	"\x12RevokeTokenRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\"\x15\n" +
 	"\x13RevokeTokenResponse\"+\n" +

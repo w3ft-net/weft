@@ -132,10 +132,11 @@ func (r *RemoteCoordinator) RemoveSource(app string) error {
 
 // --- Token management ---
 
-func (r *RemoteCoordinator) CreateToken(customer, label string) (string, error) {
+func (r *RemoteCoordinator) CreateToken(customer, label, app string) (string, error) {
 	resp, err := r.client.CreateToken(context.Background(), &pb.CreateTokenRequest{
 		Customer: customer,
 		Label:    label,
+		App:      app,
 	})
 	if err != nil {
 		return "", err
@@ -146,6 +147,7 @@ func (r *RemoteCoordinator) CreateToken(customer, label string) (string, error) 
 type TokenInfo struct {
 	Token     string
 	Label     string
+	App       string
 	Revoked   bool
 	CreatedAt string
 }
@@ -160,6 +162,7 @@ func (r *RemoteCoordinator) ListTokens(customer string) ([]TokenInfo, error) {
 		tokens = append(tokens, TokenInfo{
 			Token:     t.Token,
 			Label:     t.Label,
+			App:       t.App,
 			Revoked:   t.Revoked,
 			CreatedAt: t.CreatedAt,
 		})

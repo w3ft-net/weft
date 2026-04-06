@@ -18,7 +18,6 @@ type Server struct {
 	pb.UnimplementedWeftCoordinatorServer
 	Coord *coordinator.Coordinator
 	Store *configstore.Store
-	Apps  []string
 }
 
 func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinator_QueryServer) error {
@@ -58,13 +57,34 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 }
 
 func (s *Server) ListApps(_ context.Context, _ *pb.ListAppsRequest) (*pb.ListAppsResponse, error) {
-	if s.Store != nil {
-		apps, err := s.Store.AppNames()
-		if err == nil && len(apps) > 0 {
-			return &pb.ListAppsResponse{Apps: apps}, nil
+	if s.Store == nil {
+		return &pb.ListAppsResponse{}, nil
+	}
+
+	seen := make(map[string]bool)
+	var apps []string
+
+	// Apps with weftd agent tokens.
+	if agentApps, err := s.Store.AgentAppNames(); err == nil {
+		for _, a := range agentApps {
+			if !seen[a] {
+				seen[a] = true
+				apps = append(apps, a)
+			}
 		}
 	}
-	return &pb.ListAppsResponse{Apps: s.Apps}, nil
+
+	// Apps with CloudWatch polling sources.
+	if pollerApps, err := s.Store.AppNames(); err == nil {
+		for _, a := range pollerApps {
+			if !seen[a] {
+				seen[a] = true
+				apps = append(apps, a)
+			}
+		}
+	}
+
+	return &pb.ListAppsResponse{Apps: apps}, nil
 }
 
 func (s *Server) AddSource(_ context.Context, req *pb.AddSourceRequest) (*pb.AddSourceResponse, error) {
@@ -155,7 +175,7 @@ func (s *Server) CreateToken(_ context.Context, req *pb.CreateTokenRequest) (*pb
 	if err != nil {
 		return nil, fmt.Errorf("customer: %w", err)
 	}
-	token, err := s.Store.CreateAgentToken(customer.ID, req.Label)
+	token, err := s.Store.CreateAgentToken(customer.ID, req.Label, req.App)
 	if err != nil {
 		return nil, fmt.Errorf("create token: %w", err)
 	}
@@ -179,6 +199,7 @@ func (s *Server) ListTokens(_ context.Context, req *pb.ListTokensRequest) (*pb.L
 		infos = append(infos, &pb.TokenInfo{
 			Token:     t.Token,
 			Label:     t.Label,
+			App:       t.App,
 			Revoked:   t.Revoked,
 			CreatedAt: t.CreatedAt.Format(time.RFC3339),
 		})

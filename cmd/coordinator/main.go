@@ -32,12 +32,10 @@ func main() {
 	computeASG := flag.String("compute-asg", "", "compute ASG name for AWS discovery (production)")
 	awsRegion := flag.String("region", "us-east-2", "AWS region for ASG discovery")
 	customer := flag.String("customer", "kevlar", "customer ID for row-level security")
-	appsFlag := flag.String("apps", "", "comma-separated app names (e.g., vimgym,callbox)")
 	dataDir := flag.String("data-dir", "/opt/app/data", "directory for SQLite config database")
 	flag.Parse()
 
 	var shards []shard.Shard
-	var apps []string
 
 	// Shard setup: either explicit specs or ASG discovery.
 	if *shardsFlag != "" {
@@ -100,10 +98,6 @@ func main() {
 		}
 	}
 
-	if *appsFlag != "" {
-		apps = strings.Split(*appsFlag, ",")
-	}
-
 	// Config store (SQLite on EBS).
 	store, err := configstore.Open(*dataDir + "/weft.db")
 	if err != nil {
@@ -141,7 +135,6 @@ func main() {
 	pb.RegisterWeftCoordinatorServer(srv, &coordsvc.Server{
 		Coord: coord,
 		Store: store,
-		Apps:  apps,
 	})
 
 	log.Printf("coordinator listening on :%d (%d shards, customer=%s)", *port, len(shards), *customer)

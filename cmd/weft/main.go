@@ -414,24 +414,26 @@ func runToken() {
 
 func runTokenCreate(remote *shell.RemoteCoordinator, cfg *shell.Config) {
 	args := os.Args[3:]
-	var label string
+	var label, app string
 	customer := cfg.Customer
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--label":
 			if i+1 < len(args) { label = args[i+1]; i++ }
+		case "--app":
+			if i+1 < len(args) { app = args[i+1]; i++ }
 		case "--customer":
 			if i+1 < len(args) { customer = args[i+1]; i++ }
 		}
 	}
 
-	if customer == "" {
-		fmt.Fprintln(os.Stderr, "usage: weft token create --label NAME [--customer CUST]")
+	if customer == "" || app == "" {
+		fmt.Fprintln(os.Stderr, "usage: weft token create --app NAME --label LABEL [--customer CUST]")
 		os.Exit(1)
 	}
 
-	token, err := remote.CreateToken(customer, label)
+	token, err := remote.CreateToken(customer, label, app)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create token: %v\n", err)
 		os.Exit(1)
@@ -462,15 +464,14 @@ func runTokenList(remote *shell.RemoteCoordinator, cfg *shell.Config) {
 		fmt.Println("No tokens configured.")
 		return
 	}
-	fmt.Printf("%-40s %-25s %-10s %s\n", "TOKEN", "LABEL", "STATUS", "CREATED")
+	fmt.Printf("%-40s %-15s %-25s %-10s %s\n", "TOKEN", "APP", "LABEL", "STATUS", "CREATED")
 	for _, t := range tokens {
 		status := "active"
 		if t.Revoked {
 			status = "revoked"
 		}
-		// Show only prefix of token for security.
 		display := t.Token[:12] + "..."
-		fmt.Printf("%-40s %-25s %-10s %s\n", display, t.Label, status, t.CreatedAt)
+		fmt.Printf("%-40s %-15s %-25s %-10s %s\n", display, t.App, t.Label, status, t.CreatedAt)
 	}
 }
 

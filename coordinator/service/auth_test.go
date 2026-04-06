@@ -33,7 +33,7 @@ func TestAuthenticate_NoShardAddr(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tok, err := store.CreateAgentToken(cust.ID, "test-agent")
+	tok, err := store.CreateAgentToken(cust.ID, "test-agent", "testapp")
 	if err != nil {
 		t.Fatal(err)
 	}

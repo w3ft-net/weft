@@ -20,11 +20,12 @@ type Customer struct {
 // Token format: wft_<random> (e.g., wft_abc123def456)
 type AgentToken struct {
 	gorm.Model
-	CustomerID uint   `gorm:"not null"`
+	CustomerID uint     `gorm:"not null"`
 	Customer   Customer `gorm:"foreignKey:CustomerID"`
-	Token      string `gorm:"uniqueIndex;not null"`
-	Label      string // human-readable label (e.g., "vimgym-prod-agent")
-	Revoked    bool   `gorm:"not null;default:false"`
+	Token      string   `gorm:"uniqueIndex;not null"`
+	Label      string   // human-readable label (e.g., "vimgym-prod")
+	App        string   // app name this token authorizes (e.g., "vimgym")
+	Revoked    bool     `gorm:"not null;default:false"`
 }
 
 type Account struct {
@@ -180,8 +181,8 @@ func (s *Store) AppNames() ([]string, error) {
 
 // --- Agent Tokens ---
 
-// CreateAgentToken generates a new token for a customer.
-func (s *Store) CreateAgentToken(customerID uint, label string) (*AgentToken, error) {
+// CreateAgentToken generates a new token for a customer and app.
+func (s *Store) CreateAgentToken(customerID uint, label, app string) (*AgentToken, error) {
 	token, err := generateToken()
 	if err != nil {
 		return nil, err
@@ -190,11 +191,21 @@ func (s *Store) CreateAgentToken(customerID uint, label string) (*AgentToken, er
 		CustomerID: customerID,
 		Token:      token,
 		Label:      label,
+		App:        app,
 	}
 	if err := s.db.Create(&t).Error; err != nil {
 		return nil, err
 	}
 	return &t, nil
+}
+
+// AgentAppNames returns distinct app names from active (non-revoked) agent tokens.
+func (s *Store) AgentAppNames() ([]string, error) {
+	var names []string
+	err := s.db.Model(&AgentToken{}).
+		Where("revoked = ? AND app != ''", false).
+		Distinct().Pluck("app", &names).Error
+	return names, err
 }
 
 // ValidateAgentToken checks a token and returns the associated customer name.

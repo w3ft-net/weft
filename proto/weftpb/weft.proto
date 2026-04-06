@@ -143,7 +143,8 @@ service WeftCoordinator {
 
 message CreateTokenRequest {
   string customer = 1;
-  string label = 2;  // human-readable label (e.g., "vimgym-prod-agent")
+  string label = 2;  // human-readable label (e.g., "vimgym-prod")
+  string app = 3;    // app name this token authorizes (e.g., "vimgym")
 }
 
 message CreateTokenResponse {
@@ -163,6 +164,7 @@ message TokenInfo {
   string label = 2;
   bool revoked = 3;
   string created_at = 4;
+  string app = 5;
 }
 
 message RevokeTokenRequest {
