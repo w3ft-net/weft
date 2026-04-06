@@ -10,6 +10,7 @@ import (
 
 	"github.com/kevlarcon/weft/configstore"
 	"github.com/kevlarcon/weft/coordinator"
+	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
@@ -53,7 +54,41 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 			return err
 		}
 	}
-	return nil
+
+	if !req.Follow || s.Coord.Tail == nil {
+		return nil
+	}
+
+	// Follow mode: subscribe and stream live rows until client disconnects.
+	plan, err := planner.Plan(req.Pipeline)
+	if err != nil {
+		return err
+	}
+
+	matcher := &coordinator.RowMatcher{
+		App:      plan.FollowApp,
+		Patterns: plan.FollowPatterns,
+	}
+
+	ctx := stream.Context()
+	id, ch := s.Coord.Tail.Subscribe(ctx, matcher)
+	defer s.Coord.Tail.Unsubscribe(id)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case row, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			if err := stream.Send(&pb.CoordinatorQueryResponse{
+				Rows: []*pb.LogRow{row},
+			}); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 func (s *Server) ListApps(_ context.Context, _ *pb.ListAppsRequest) (*pb.ListAppsResponse, error) {
@@ -272,7 +307,11 @@ func (s *Server) ingestBatch(rows []*pb.LogRow) {
 		if err := sh.Ingest(rows); err != nil {
 			continue
 		}
-		return
+		break
 	}
-	log.Printf("ingest-stream: all shards rejected batch of %d rows", len(rows))
+
+	// Fan out to tail -f subscribers.
+	if s.Coord.Tail != nil {
+		s.Coord.Tail.Broadcast(rows)
+	}
 }

@@ -62,9 +62,10 @@ func main() {
 			}
 			return &shell.QueryResult{Rows: r.Rows, Text: r.Text}, nil
 		},
-		Start: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
-		End:   time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
-		Apps:  apps,
+		Follow: remote.Follow,
+		Start:  time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+		End:    time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
+		Apps:   apps,
 	}
 
 	runShell(s)

@@ -69,6 +69,31 @@ func (r *RemoteCoordinator) Query(pipeline string, start, end time.Time) (*Remot
 	return result, nil
 }
 
+// Follow opens a streaming query with follow mode. It calls onRow for each
+// row (both historical and live) until the context is cancelled or the stream ends.
+func (r *RemoteCoordinator) Follow(ctx context.Context, pipeline string, onRow func(*pb.LogRow)) error {
+	stream, err := r.client.Query(ctx, &pb.CoordinatorQueryRequest{
+		Pipeline: pipeline,
+		Follow:   true,
+	})
+	if err != nil {
+		return err
+	}
+
+	for {
+		resp, err := stream.Recv()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		for _, row := range resp.Rows {
+			onRow(row)
+		}
+	}
+}
+
 // ListApps returns the available app names from the coordinator.
 func (r *RemoteCoordinator) ListApps() ([]string, error) {
 	resp, err := r.client.ListApps(context.Background(), &pb.ListAppsRequest{})

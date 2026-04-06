@@ -10,9 +10,10 @@ import (
 
 // sourceInfo describes the source command (cat/head/tail) at the start of a pipeline.
 type sourceInfo struct {
-	app   string // app name extracted from pseudofile, or "" for warp.log (all apps)
-	cmd   string // "cat", "head", or "tail"
-	limit int    // for head/tail: line count (0 = unlimited for cat)
+	app    string // app name extracted from pseudofile, or "" for warp.log (all apps)
+	cmd    string // "cat", "head", or "tail"
+	limit  int    // for head/tail: line count (0 = unlimited for cat)
+	follow bool   // tail -f
 }
 
 // stageInfo describes a single pipeline stage after the source command.
@@ -132,12 +133,11 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 				file = args[i]
 			}
 		}
-		_ = follow // tail -f handled separately in future
 		if file == "" {
 			return nil, fmt.Errorf("tail: missing pseudofile argument")
 		}
 		app := extractApp(file)
-		return &sourceInfo{app: app, cmd: "tail", limit: limit}, nil
+		return &sourceInfo{app: app, cmd: "tail", limit: limit, follow: follow}, nil
 
 	default:
 		return nil, fmt.Errorf("unknown source command: %s", name)

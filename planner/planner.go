@@ -8,12 +8,22 @@ import (
 // QueryPlan is the result of analyzing a weft pipeline. ShardSQL is the
 // pushed-down SQL sent to shard nodes. ComputeStages lists the pipeline
 // stages that must run in the gpipe compute layer, in order.
+// GrepPattern captures a grep filter for live tail matching.
+type GrepPattern struct {
+	Pattern    string
+	IgnoreCase bool
+	Invert     bool
+}
+
 type QueryPlan struct {
-	ShardSQL      string
-	ComputeStages []string
-	Limit         int      // post-merge limit (from head/tail), 0 = unlimited
-	OrderDesc     bool     // true for tail (DESC), false for head (ASC)
-	Project       *Project // field/key projection extracted from cut/awk/jq, or nil
+	ShardSQL       string
+	ComputeStages  []string
+	Limit          int           // post-merge limit (from head/tail), 0 = unlimited
+	OrderDesc      bool          // true for tail (DESC), false for head (ASC)
+	Project        *Project      // field/key projection extracted from cut/awk/jq, or nil
+	Follow         bool          // tail -f: keep stream open for live updates
+	FollowApp      string        // app to subscribe to ("" = all)
+	FollowPatterns []GrepPattern // grep filters applied to live rows
 }
 
 // Project describes which fields or JSON keys a pipeline needs from the shard.
@@ -57,7 +67,8 @@ func Plan(pipeline string) (*QueryPlan, error) {
 	// Walk stages left-to-right, pushing down as many as possible.
 	// Keep raw stageInfo for compute stages so we can extract projections.
 	var computeStages []stageInfo
-	var computeStrings []string // formatted strings from partial pushdown
+	var computeStrings []string     // formatted strings from partial pushdown
+	var grepPatterns []GrepPattern  // collected for follow mode
 	pushing := true
 
 	for _, stage := range info.stages {
@@ -70,6 +81,16 @@ func Plan(pipeline string) (*QueryPlan, error) {
 		if r.pushed {
 			if r.predicate != "" {
 				sql.addPredicate(r.predicate)
+			}
+			// Collect grep patterns for follow mode (only if successfully pushed down).
+			if stage.cmd == "grep" {
+				if pattern, ignoreCase, invert := parseGrepArgs(stage.args); pattern != "" {
+					grepPatterns = append(grepPatterns, GrepPattern{
+						Pattern:    pattern,
+						IgnoreCase: ignoreCase,
+						Invert:     invert,
+					})
+				}
 			}
 			if r.compute != "" {
 				pushing = false
@@ -121,11 +142,14 @@ func Plan(pipeline string) (*QueryPlan, error) {
 	}
 
 	return &QueryPlan{
-		ShardSQL:      sql.build(),
-		ComputeStages: compute,
-		Limit:         sql.limit,
-		OrderDesc:     sql.orderBy == "ts DESC",
-		Project:       proj,
+		ShardSQL:       sql.build(),
+		ComputeStages:  compute,
+		Limit:          sql.limit,
+		OrderDesc:      sql.orderBy == "ts DESC",
+		Project:        proj,
+		Follow:         info.source.follow,
+		FollowApp:      info.source.app,
+		FollowPatterns: grepPatterns,
 	}, nil
 }
 

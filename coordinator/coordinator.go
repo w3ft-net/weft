@@ -32,6 +32,7 @@ type Coordinator struct {
 	shards   []shard.Shard
 	Customer string
 	Pool     compute.ComputePool // nil = no compute support
+	Tail     *TailBroker
 }
 
 // NewCoordinator creates a coordinator with the given initial shard list.

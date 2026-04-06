@@ -87,6 +87,7 @@ func main() {
 	}
 
 	coord := coordinator.NewCoordinator(shards, *customer, pool)
+	coord.Tail = coordinator.NewTailBroker()
 
 	// Start background shard re-discovery if using ASG.
 	if *shardASG != "" {

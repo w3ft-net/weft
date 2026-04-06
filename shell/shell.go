@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -39,15 +40,19 @@ type QueryResult struct {
 }
 
 // QueryFunc is the function signature the shell uses to execute queries.
-// Abstracts both in-process coordinator and remote gRPC coordinator.
 type QueryFunc func(pipeline string, start, end time.Time) (*QueryResult, error)
+
+// FollowFunc is the function signature for tail -f streaming.
+// It calls onRow for each row until ctx is cancelled.
+type FollowFunc func(ctx context.Context, pipeline string, onRow func(*pb.LogRow)) error
 
 // Shell is the weft interactive shell.
 type Shell struct {
-	Query QueryFunc
-	Start time.Time
-	End   time.Time
-	Apps  []string
+	Query  QueryFunc
+	Follow FollowFunc
+	Start  time.Time
+	End    time.Time
+	Apps   []string
 }
 
 // Run starts the interactive bubbletea REPL in full-screen mode.
@@ -137,6 +142,15 @@ type queryResultMsg struct {
 	termCmd string
 }
 
+type tailRowMsg struct {
+	row *pb.LogRow
+	ch  <-chan *pb.LogRow
+}
+
+type tailDoneMsg struct {
+	err error
+}
+
 func spinnerTick() tea.Cmd {
 	return tea.Tick(80*time.Millisecond, func(t time.Time) tea.Msg {
 		return spinnerTickMsg(t)
@@ -167,6 +181,10 @@ type model struct {
 	// Async query state.
 	running      bool
 	spinnerFrame int
+
+	// Follow (tail -f) state.
+	following    bool
+	followCancel context.CancelFunc
 }
 
 func newModel(s *Shell) model {
@@ -262,7 +280,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case tailRowMsg:
+		if m.following {
+			m.scrollback.WriteString(msg.row.Raw + "\n")
+			m.syncViewport()
+			return m, waitForTailRow(msg.ch)
+		}
+		return m, nil
+
+	case tailDoneMsg:
+		m.following = false
+		if msg.err != nil && msg.err != context.Canceled {
+			m.scrollback.WriteString(errorStyle.Render(msg.err.Error()) + "\n")
+		}
+		m.scrollback.WriteString(dimStyle.Render("[tail stopped]") + "\n")
+		m.syncViewport()
+		return m, nil
+
 	case tea.KeyMsg:
+		// Stop follow mode on Ctrl+C.
+		if m.following {
+			if msg.Type == tea.KeyCtrlC {
+				m.followCancel()
+				m.following = false
+				m.scrollback.WriteString(dimStyle.Render("\n[tail stopped]") + "\n")
+				m.syncViewport()
+				return m, nil
+			}
+			return m, nil
+		}
+
 		// Ignore input while a query is running.
 		if m.running {
 			if msg.Type == tea.KeyCtrlC {
@@ -459,10 +506,16 @@ func (m *model) execBuiltin(line string) tea.Cmd {
 
 // startQuery launches an async pipeline query and starts the spinner.
 func (m *model) startQuery(line string) tea.Cmd {
+	weftPipeline, termCmd := splitTerminalStage(line)
+
+	// Detect follow mode: "tail -f ..." or "tail -nN -f ..."
+	if m.shell.Follow != nil && isFollowPipeline(weftPipeline) {
+		return m.startFollow(weftPipeline)
+	}
+
 	m.running = true
 	m.spinnerFrame = 0
 
-	weftPipeline, termCmd := splitTerminalStage(line)
 	queryFn := m.shell.Query
 	start, end := m.shell.Start, m.shell.End
 
@@ -470,6 +523,56 @@ func (m *model) startQuery(line string) tea.Cmd {
 		result, err := queryFn(weftPipeline, start, end)
 		return queryResultMsg{result: result, err: err, termCmd: termCmd}
 	})
+}
+
+// isFollowPipeline checks if the pipeline is a tail -f command.
+func isFollowPipeline(pipeline string) bool {
+	parts := strings.Fields(pipeline)
+	if len(parts) < 2 || parts[0] != "tail" {
+		return false
+	}
+	for _, p := range parts {
+		if p == "-f" {
+			return true
+		}
+	}
+	return false
+}
+
+// startFollow launches a tail -f streaming subscription.
+func (m *model) startFollow(pipeline string) tea.Cmd {
+	m.following = true
+	ctx, cancel := context.WithCancel(context.Background())
+	m.followCancel = cancel
+
+	ch := make(chan *pb.LogRow, 100)
+	followFn := m.shell.Follow
+	m.scrollback.WriteString(dimStyle.Render("[streaming — Ctrl+C to stop]") + "\n")
+
+	// Background goroutine: runs the follow stream, feeds rows into channel.
+	go func() {
+		defer close(ch)
+		followFn(ctx, pipeline, func(row *pb.LogRow) {
+			select {
+			case ch <- row:
+			case <-ctx.Done():
+			}
+		})
+	}()
+
+	// Return a command that reads the first row from the channel.
+	return waitForTailRow(ch)
+}
+
+// waitForTailRow returns a tea.Cmd that blocks until a row arrives or the channel closes.
+func waitForTailRow(ch <-chan *pb.LogRow) tea.Cmd {
+	return func() tea.Msg {
+		row, ok := <-ch
+		if !ok {
+			return tailDoneMsg{}
+		}
+		return tailRowMsg{row: row, ch: ch}
+	}
 }
 
 // handleQueryResult processes the result of an async query.

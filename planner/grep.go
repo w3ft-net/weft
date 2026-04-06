@@ -2,12 +2,38 @@ package planner
 
 import "fmt"
 
+// parseGrepArgs extracts grep flags and pattern from arguments.
+func parseGrepArgs(args []string) (pattern string, ignoreCase, invert bool) {
+	for _, arg := range args {
+		if arg == "-v" {
+			invert = true
+		} else if arg == "-i" {
+			ignoreCase = true
+		} else if arg == "-iv" || arg == "-vi" {
+			invert = true
+			ignoreCase = true
+		} else if len(arg) > 1 && arg[0] == '-' {
+			for _, c := range arg[1:] {
+				switch c {
+				case 'i':
+					ignoreCase = true
+				case 'v':
+					invert = true
+				}
+			}
+		} else {
+			pattern = arg
+		}
+	}
+	return
+}
+
 // tryGrepPushdown extracts a SQL predicate from grep arguments.
 // Returns the SQL WHERE fragment, or "" if not pushable.
 func tryGrepPushdown(args []string) string {
-	invert := false
-	ignoreCase := false
 	pattern := ""
+	ignoreCase := false
+	invert := false
 
 	for _, arg := range args {
 		if arg == "-v" {
@@ -18,7 +44,6 @@ func tryGrepPushdown(args []string) string {
 			invert = true
 			ignoreCase = true
 		} else if len(arg) > 1 && arg[0] == '-' {
-			// Parse combined flags like -iv.
 			for _, c := range arg[1:] {
 				switch c {
 				case 'i':
@@ -26,14 +51,13 @@ func tryGrepPushdown(args []string) string {
 				case 'v':
 					invert = true
 				default:
-					return "" // unknown flag
+					return "" // unknown flag — can't push down
 				}
 			}
 		} else {
 			pattern = arg
 		}
 	}
-
 	if pattern == "" {
 		return ""
 	}
