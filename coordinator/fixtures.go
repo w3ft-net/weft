@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/kevlarcon/weft/compute"
+	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
 
@@ -15,9 +16,24 @@ var (
 	DevT2 = time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC) // shard 1 end
 )
 
-func devPayload(m map[string]any) json.RawMessage {
+func devPayload(m map[string]any) []byte {
 	b, _ := json.Marshal(m)
 	return b
+
+}
+
+func devRow(lineNum int64, raw string, fields []string, ts time.Time, level, app, instance, customer string, payload []byte) *pb.LogRow {
+	return &pb.LogRow{
+		LineNum:     lineNum,
+		Raw:         raw,
+		Fields:      fields,
+		TsUnixNs:    ts.UnixNano(),
+		Level:       level,
+		App:         app,
+		Instance:    instance,
+		Customer:    customer,
+		PayloadJson: payload,
+	}
 }
 
 // NewDevCoordinator creates a coordinator with two in-memory DuckDB shards
@@ -67,7 +83,7 @@ func DevApps() []string {
 
 // DevShardRows returns fixture rows for the named shard ("shard-0" or "shard-1").
 // Returns nil for unknown names.
-func DevShardRows(name string) []shard.LogRow {
+func DevShardRows(name string) []*pb.LogRow {
 	switch name {
 	case "shard-0":
 		return devShard0Rows()
@@ -77,39 +93,39 @@ func DevShardRows(name string) []shard.LogRow {
 	return nil
 }
 
-func devShard0Rows() []shard.LogRow {
+func devShard0Rows() []*pb.LogRow {
 	base := DevT0
-	return []shard.LogRow{
-		{LineNum: 1, Raw: "2026-03-28T10:00:01 ERROR vimgym i-001 connection timeout", Fields: []string{"2026-03-28T10:00:01", "ERROR", "vimgym", "i-001", "connection", "timeout"}, Ts: base.Add(1 * time.Second), Level: "ERROR", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 500, "action": "login", "user_id": "u1"})},
-		{LineNum: 2, Raw: "2026-03-28T10:00:05 INFO vimgym i-001 request completed", Fields: []string{"2026-03-28T10:00:05", "INFO", "vimgym", "i-001", "request", "completed"}, Ts: base.Add(5 * time.Second), Level: "INFO", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 200, "action": "list", "duration_ms": 45})},
-		{LineNum: 3, Raw: "2026-03-28T10:01:00 WARN callbox i-002 slow query detected", Fields: []string{"2026-03-28T10:01:00", "WARN", "callbox", "i-002", "slow", "query", "detected"}, Ts: base.Add(1 * time.Minute), Level: "WARN", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 200, "action": "search", "duration_ms": 1500})},
-		{LineNum: 4, Raw: "2026-03-28T10:02:00 ERROR vimgym i-001 null pointer exception", Fields: []string{"2026-03-28T10:02:00", "ERROR", "vimgym", "i-001", "null", "pointer", "exception"}, Ts: base.Add(2 * time.Minute), Level: "ERROR", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 500, "action": "update", "user_id": "u2"})},
-		{LineNum: 5, Raw: "2026-03-28T10:03:00 INFO callbox i-002 health check ok", Fields: []string{"2026-03-28T10:03:00", "INFO", "callbox", "i-002", "health", "check", "ok"}, Ts: base.Add(3 * time.Minute), Level: "INFO", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 200, "action": "health"})},
-		{LineNum: 6, Raw: "2026-03-28T10:05:00 ERROR callbox i-002 connection timeout to database", Fields: []string{"2026-03-28T10:05:00", "ERROR", "callbox", "i-002", "connection", "timeout", "to", "database"}, Ts: base.Add(5 * time.Minute), Level: "ERROR", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 503, "action": "query"})},
-		{LineNum: 7, Raw: "2026-03-28T10:10:00 INFO vimgym i-003 user signup completed", Fields: []string{"2026-03-28T10:10:00", "INFO", "vimgym", "i-003", "user", "signup", "completed"}, Ts: base.Add(10 * time.Minute), Level: "INFO", App: "vimgym", Instance: "i-003", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 201, "action": "signup", "user_id": "u3"})},
-		{LineNum: 8, Raw: "2026-03-28T10:15:00 DEBUG vimgym i-001 cache miss for key session:u1", Fields: []string{"2026-03-28T10:15:00", "DEBUG", "vimgym", "i-001", "cache", "miss", "for", "key", "session:u1"}, Ts: base.Add(15 * time.Minute), Level: "DEBUG", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 200, "action": "cache_lookup"})},
-		{LineNum: 9, Raw: "2026-03-28T10:20:00 ERROR vimgym i-003 timeout waiting for response", Fields: []string{"2026-03-28T10:20:00", "ERROR", "vimgym", "i-003", "timeout", "waiting", "for", "response"}, Ts: base.Add(20 * time.Minute), Level: "ERROR", App: "vimgym", Instance: "i-003", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 504, "action": "proxy"})},
-		{LineNum: 10, Raw: "2026-03-28T10:25:00 INFO callbox i-002 batch job completed 150 records", Fields: []string{"2026-03-28T10:25:00", "INFO", "callbox", "i-002", "batch", "job", "completed", "150", "records"}, Ts: base.Add(25 * time.Minute), Level: "INFO", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 200, "action": "batch", "count": 150})},
-		{LineNum: 11, Raw: "2026-03-28T10:30:00 WARN vimgym i-001 high memory usage 85%", Fields: []string{"2026-03-28T10:30:00", "WARN", "vimgym", "i-001", "high", "memory", "usage", "85%"}, Ts: base.Add(30 * time.Minute), Level: "WARN", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 200, "action": "monitor", "memory_pct": 85})},
-		{LineNum: 12, Raw: "2026-03-28T10:35:00 INFO vimgym i-001 request completed", Fields: []string{"2026-03-28T10:35:00", "INFO", "vimgym", "i-001", "request", "completed"}, Ts: base.Add(35 * time.Minute), Level: "INFO", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 200, "action": "list", "duration_ms": 32})},
-		{LineNum: 13, Raw: "2026-03-28T10:40:00 ERROR callbox i-002 authentication failed for tenant acme", Fields: []string{"2026-03-28T10:40:00", "ERROR", "callbox", "i-002", "authentication", "failed", "for", "tenant", "acme"}, Ts: base.Add(40 * time.Minute), Level: "ERROR", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 401, "action": "auth"})},
-		{LineNum: 14, Raw: "2026-03-28T10:45:00 INFO vimgym i-003 deploy v2.3.1 started", Fields: []string{"2026-03-28T10:45:00", "INFO", "vimgym", "i-003", "deploy", "v2.3.1", "started"}, Ts: base.Add(45 * time.Minute), Level: "INFO", App: "vimgym", Instance: "i-003", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 200, "action": "deploy", "version": "v2.3.1"})},
-		{LineNum: 15, Raw: "2026-03-28T10:50:00 INFO callbox i-002 connection pool resized to 20", Fields: []string{"2026-03-28T10:50:00", "INFO", "callbox", "i-002", "connection", "pool", "resized", "to", "20"}, Ts: base.Add(50 * time.Minute), Level: "INFO", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 200, "action": "pool_resize", "size": 20})},
+	return []*pb.LogRow{
+		devRow(1, "2026-03-28T10:00:01 ERROR vimgym i-001 connection timeout", []string{"2026-03-28T10:00:01", "ERROR", "vimgym", "i-001", "connection", "timeout"}, base.Add(1*time.Second), "ERROR", "vimgym", "i-001", "kevlar", devPayload(map[string]any{"status": 500, "action": "login", "user_id": "u1"})),
+		devRow(2, "2026-03-28T10:00:05 INFO vimgym i-001 request completed", []string{"2026-03-28T10:00:05", "INFO", "vimgym", "i-001", "request", "completed"}, base.Add(5*time.Second), "INFO", "vimgym", "i-001", "kevlar", devPayload(map[string]any{"status": 200, "action": "list", "duration_ms": 45})),
+		devRow(3, "2026-03-28T10:01:00 WARN callbox i-002 slow query detected", []string{"2026-03-28T10:01:00", "WARN", "callbox", "i-002", "slow", "query", "detected"}, base.Add(1*time.Minute), "WARN", "callbox", "i-002", "kevlar", devPayload(map[string]any{"status": 200, "action": "search", "duration_ms": 1500})),
+		devRow(4, "2026-03-28T10:02:00 ERROR vimgym i-001 null pointer exception", []string{"2026-03-28T10:02:00", "ERROR", "vimgym", "i-001", "null", "pointer", "exception"}, base.Add(2*time.Minute), "ERROR", "vimgym", "i-001", "kevlar", devPayload(map[string]any{"status": 500, "action": "update", "user_id": "u2"})),
+		devRow(5, "2026-03-28T10:03:00 INFO callbox i-002 health check ok", []string{"2026-03-28T10:03:00", "INFO", "callbox", "i-002", "health", "check", "ok"}, base.Add(3*time.Minute), "INFO", "callbox", "i-002", "kevlar", devPayload(map[string]any{"status": 200, "action": "health"})),
+		devRow(6, "2026-03-28T10:05:00 ERROR callbox i-002 connection timeout to database", []string{"2026-03-28T10:05:00", "ERROR", "callbox", "i-002", "connection", "timeout", "to", "database"}, base.Add(5*time.Minute), "ERROR", "callbox", "i-002", "kevlar", devPayload(map[string]any{"status": 503, "action": "query"})),
+		devRow(7, "2026-03-28T10:10:00 INFO vimgym i-003 user signup completed", []string{"2026-03-28T10:10:00", "INFO", "vimgym", "i-003", "user", "signup", "completed"}, base.Add(10*time.Minute), "INFO", "vimgym", "i-003", "kevlar", devPayload(map[string]any{"status": 201, "action": "signup", "user_id": "u3"})),
+		devRow(8, "2026-03-28T10:15:00 DEBUG vimgym i-001 cache miss for key session:u1", []string{"2026-03-28T10:15:00", "DEBUG", "vimgym", "i-001", "cache", "miss", "for", "key", "session:u1"}, base.Add(15*time.Minute), "DEBUG", "vimgym", "i-001", "kevlar", devPayload(map[string]any{"status": 200, "action": "cache_lookup"})),
+		devRow(9, "2026-03-28T10:20:00 ERROR vimgym i-003 timeout waiting for response", []string{"2026-03-28T10:20:00", "ERROR", "vimgym", "i-003", "timeout", "waiting", "for", "response"}, base.Add(20*time.Minute), "ERROR", "vimgym", "i-003", "kevlar", devPayload(map[string]any{"status": 504, "action": "proxy"})),
+		devRow(10, "2026-03-28T10:25:00 INFO callbox i-002 batch job completed 150 records", []string{"2026-03-28T10:25:00", "INFO", "callbox", "i-002", "batch", "job", "completed", "150", "records"}, base.Add(25*time.Minute), "INFO", "callbox", "i-002", "kevlar", devPayload(map[string]any{"status": 200, "action": "batch", "count": 150})),
+		devRow(11, "2026-03-28T10:30:00 WARN vimgym i-001 high memory usage 85%", []string{"2026-03-28T10:30:00", "WARN", "vimgym", "i-001", "high", "memory", "usage", "85%"}, base.Add(30*time.Minute), "WARN", "vimgym", "i-001", "kevlar", devPayload(map[string]any{"status": 200, "action": "monitor", "memory_pct": 85})),
+		devRow(12, "2026-03-28T10:35:00 INFO vimgym i-001 request completed", []string{"2026-03-28T10:35:00", "INFO", "vimgym", "i-001", "request", "completed"}, base.Add(35*time.Minute), "INFO", "vimgym", "i-001", "kevlar", devPayload(map[string]any{"status": 200, "action": "list", "duration_ms": 32})),
+		devRow(13, "2026-03-28T10:40:00 ERROR callbox i-002 authentication failed for tenant acme", []string{"2026-03-28T10:40:00", "ERROR", "callbox", "i-002", "authentication", "failed", "for", "tenant", "acme"}, base.Add(40*time.Minute), "ERROR", "callbox", "i-002", "kevlar", devPayload(map[string]any{"status": 401, "action": "auth"})),
+		devRow(14, "2026-03-28T10:45:00 INFO vimgym i-003 deploy v2.3.1 started", []string{"2026-03-28T10:45:00", "INFO", "vimgym", "i-003", "deploy", "v2.3.1", "started"}, base.Add(45*time.Minute), "INFO", "vimgym", "i-003", "kevlar", devPayload(map[string]any{"status": 200, "action": "deploy", "version": "v2.3.1"})),
+		devRow(15, "2026-03-28T10:50:00 INFO callbox i-002 connection pool resized to 20", []string{"2026-03-28T10:50:00", "INFO", "callbox", "i-002", "connection", "pool", "resized", "to", "20"}, base.Add(50*time.Minute), "INFO", "callbox", "i-002", "kevlar", devPayload(map[string]any{"status": 200, "action": "pool_resize", "size": 20})),
 	}
 }
 
-func devShard1Rows() []shard.LogRow {
+func devShard1Rows() []*pb.LogRow {
 	base := DevT1
-	return []shard.LogRow{
-		{LineNum: 16, Raw: "2026-03-28T11:00:01 INFO vimgym i-001 deploy v2.3.1 completed", Fields: []string{"2026-03-28T11:00:01", "INFO", "vimgym", "i-001", "deploy", "v2.3.1", "completed"}, Ts: base.Add(1 * time.Second), Level: "INFO", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 200, "action": "deploy", "version": "v2.3.1"})},
-		{LineNum: 17, Raw: "2026-03-28T11:01:00 ERROR vimgym i-001 500 internal server error on /api/users", Fields: []string{"2026-03-28T11:01:00", "ERROR", "vimgym", "i-001", "500", "internal", "server", "error", "on", "/api/users"}, Ts: base.Add(1 * time.Minute), Level: "ERROR", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 500, "action": "api", "path": "/api/users"})},
-		{LineNum: 18, Raw: "2026-03-28T11:05:00 WARN callbox i-002 disk usage above 80%", Fields: []string{"2026-03-28T11:05:00", "WARN", "callbox", "i-002", "disk", "usage", "above", "80%"}, Ts: base.Add(5 * time.Minute), Level: "WARN", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 200, "action": "monitor", "disk_pct": 82})},
-		{LineNum: 19, Raw: "2026-03-28T11:10:00 INFO vimgym i-003 cache warmed 2500 keys", Fields: []string{"2026-03-28T11:10:00", "INFO", "vimgym", "i-003", "cache", "warmed", "2500", "keys"}, Ts: base.Add(10 * time.Minute), Level: "INFO", App: "vimgym", Instance: "i-003", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 200, "action": "cache_warm", "keys": 2500})},
-		{LineNum: 20, Raw: "2026-03-28T11:15:00 ERROR callbox i-002 timeout connecting to redis", Fields: []string{"2026-03-28T11:15:00", "ERROR", "callbox", "i-002", "timeout", "connecting", "to", "redis"}, Ts: base.Add(15 * time.Minute), Level: "ERROR", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 503, "action": "cache"})},
-		{LineNum: 21, Raw: "2026-03-28T11:20:00 INFO vimgym i-001 request completed", Fields: []string{"2026-03-28T11:20:00", "INFO", "vimgym", "i-001", "request", "completed"}, Ts: base.Add(20 * time.Minute), Level: "INFO", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 200, "action": "list", "duration_ms": 28})},
-		{LineNum: 22, Raw: "2026-03-28T11:25:00 WARN vimgym i-003 request latency spike p99=2.3s", Fields: []string{"2026-03-28T11:25:00", "WARN", "vimgym", "i-003", "request", "latency", "spike", "p99=2.3s"}, Ts: base.Add(25 * time.Minute), Level: "WARN", App: "vimgym", Instance: "i-003", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 200, "action": "monitor", "p99_ms": 2300})},
-		{LineNum: 23, Raw: "2026-03-28T11:30:00 ERROR vimgym i-001 connection timeout to upstream", Fields: []string{"2026-03-28T11:30:00", "ERROR", "vimgym", "i-001", "connection", "timeout", "to", "upstream"}, Ts: base.Add(30 * time.Minute), Level: "ERROR", App: "vimgym", Instance: "i-001", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 504, "action": "proxy"})},
-		{LineNum: 24, Raw: "2026-03-28T11:40:00 INFO callbox i-002 health check ok", Fields: []string{"2026-03-28T11:40:00", "INFO", "callbox", "i-002", "health", "check", "ok"}, Ts: base.Add(40 * time.Minute), Level: "INFO", App: "callbox", Instance: "i-002", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 200, "action": "health"})},
-		{LineNum: 25, Raw: "2026-03-28T11:50:00 INFO vimgym i-003 graceful shutdown initiated", Fields: []string{"2026-03-28T11:50:00", "INFO", "vimgym", "i-003", "graceful", "shutdown", "initiated"}, Ts: base.Add(50 * time.Minute), Level: "INFO", App: "vimgym", Instance: "i-003", Customer: "kevlar", Payload: devPayload(map[string]any{"status": 200, "action": "shutdown"})},
+	return []*pb.LogRow{
+		devRow(16, "2026-03-28T11:00:01 INFO vimgym i-001 deploy v2.3.1 completed", []string{"2026-03-28T11:00:01", "INFO", "vimgym", "i-001", "deploy", "v2.3.1", "completed"}, base.Add(1*time.Second), "INFO", "vimgym", "i-001", "kevlar", devPayload(map[string]any{"status": 200, "action": "deploy", "version": "v2.3.1"})),
+		devRow(17, "2026-03-28T11:01:00 ERROR vimgym i-001 500 internal server error on /api/users", []string{"2026-03-28T11:01:00", "ERROR", "vimgym", "i-001", "500", "internal", "server", "error", "on", "/api/users"}, base.Add(1*time.Minute), "ERROR", "vimgym", "i-001", "kevlar", devPayload(map[string]any{"status": 500, "action": "api", "path": "/api/users"})),
+		devRow(18, "2026-03-28T11:05:00 WARN callbox i-002 disk usage above 80%", []string{"2026-03-28T11:05:00", "WARN", "callbox", "i-002", "disk", "usage", "above", "80%"}, base.Add(5*time.Minute), "WARN", "callbox", "i-002", "kevlar", devPayload(map[string]any{"status": 200, "action": "monitor", "disk_pct": 82})),
+		devRow(19, "2026-03-28T11:10:00 INFO vimgym i-003 cache warmed 2500 keys", []string{"2026-03-28T11:10:00", "INFO", "vimgym", "i-003", "cache", "warmed", "2500", "keys"}, base.Add(10*time.Minute), "INFO", "vimgym", "i-003", "kevlar", devPayload(map[string]any{"status": 200, "action": "cache_warm", "keys": 2500})),
+		devRow(20, "2026-03-28T11:15:00 ERROR callbox i-002 timeout connecting to redis", []string{"2026-03-28T11:15:00", "ERROR", "callbox", "i-002", "timeout", "connecting", "to", "redis"}, base.Add(15*time.Minute), "ERROR", "callbox", "i-002", "kevlar", devPayload(map[string]any{"status": 503, "action": "cache"})),
+		devRow(21, "2026-03-28T11:20:00 INFO vimgym i-001 request completed", []string{"2026-03-28T11:20:00", "INFO", "vimgym", "i-001", "request", "completed"}, base.Add(20*time.Minute), "INFO", "vimgym", "i-001", "kevlar", devPayload(map[string]any{"status": 200, "action": "list", "duration_ms": 28})),
+		devRow(22, "2026-03-28T11:25:00 WARN vimgym i-003 request latency spike p99=2.3s", []string{"2026-03-28T11:25:00", "WARN", "vimgym", "i-003", "request", "latency", "spike", "p99=2.3s"}, base.Add(25*time.Minute), "WARN", "vimgym", "i-003", "kevlar", devPayload(map[string]any{"status": 200, "action": "monitor", "p99_ms": 2300})),
+		devRow(23, "2026-03-28T11:30:00 ERROR vimgym i-001 connection timeout to upstream", []string{"2026-03-28T11:30:00", "ERROR", "vimgym", "i-001", "connection", "timeout", "to", "upstream"}, base.Add(30*time.Minute), "ERROR", "vimgym", "i-001", "kevlar", devPayload(map[string]any{"status": 504, "action": "proxy"})),
+		devRow(24, "2026-03-28T11:40:00 INFO callbox i-002 health check ok", []string{"2026-03-28T11:40:00", "INFO", "callbox", "i-002", "health", "check", "ok"}, base.Add(40*time.Minute), "INFO", "callbox", "i-002", "kevlar", devPayload(map[string]any{"status": 200, "action": "health"})),
+		devRow(25, "2026-03-28T11:50:00 INFO vimgym i-003 graceful shutdown initiated", []string{"2026-03-28T11:50:00", "INFO", "vimgym", "i-003", "graceful", "shutdown", "initiated"}, base.Add(50*time.Minute), "INFO", "vimgym", "i-003", "kevlar", devPayload(map[string]any{"status": 200, "action": "shutdown"})),
 	}
 }

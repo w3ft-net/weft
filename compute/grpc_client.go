@@ -10,7 +10,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
 )
 
 // GRPCComputePool implements ComputePool by connecting to a remote compute
@@ -90,13 +89,13 @@ func (j *GRPCComputeJob) Send(msg ComputeMessage) {
 		Sentinel: msg.Sentinel,
 	}
 	if msg.Row != nil {
-		pbMsg.Row = logRowToProto(msg.Row)
+		pbMsg.Row = msg.Row
 	}
 	j.stream.Send(pbMsg)
 }
 
 // SendRow implements shard.RowSink.
-func (j *GRPCComputeJob) SendRow(row *shard.LogRow, shardID string) {
+func (j *GRPCComputeJob) SendRow(row *pb.LogRow, shardID string) {
 	j.Send(ComputeMessage{Row: row, ShardID: shardID})
 }
 
@@ -134,20 +133,7 @@ type errJob struct {
 }
 
 func (j *errJob) Send(ComputeMessage)               {}
-func (j *errJob) SendRow(*shard.LogRow, string)      {}
+func (j *errJob) SendRow(*pb.LogRow, string)         {}
 func (j *errJob) SendSentinel(string)                {}
 func (j *errJob) Result() (string, error)            { return "", j.err }
 
-func logRowToProto(r *shard.LogRow) *pb.LogRow {
-	return &pb.LogRow{
-		LineNum:     r.LineNum,
-		Raw:         r.Raw,
-		App:         r.App,
-		Level:       r.Level,
-		TsUnixNs:   r.Ts.UnixNano(),
-		Instance:    r.Instance,
-		PayloadJson: r.Payload,
-		Fields:      r.Fields,
-		Customer:    r.Customer,
-	}
-}

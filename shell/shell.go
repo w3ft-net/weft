@@ -13,7 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/kevlarcon/weft/shard"
+	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
 var (
@@ -34,7 +34,7 @@ var terminalCommands = map[string]bool{
 
 // QueryResult is the output of a query — either structured rows or text.
 type QueryResult struct {
-	Rows []shard.LogRow
+	Rows []*pb.LogRow
 	Text string
 }
 

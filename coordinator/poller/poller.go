@@ -15,6 +15,7 @@ import (
 
 	"github.com/kevlarcon/weft/configstore"
 	"github.com/kevlarcon/weft/ingest"
+	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
 
@@ -121,7 +122,7 @@ func (p *Poller) poll(ctx context.Context, lg configstore.LogGroupWithAccount) {
 	}
 
 	// Fetch logs.
-	var allRows []shard.LogRow
+	var allRows []*pb.LogRow
 	var nextToken *string
 	if lg.LastToken != "" {
 		nextToken = aws.String(lg.LastToken)
@@ -153,7 +154,7 @@ func (p *Poller) poll(ctx context.Context, lg configstore.LogGroupWithAccount) {
 			if err != nil {
 				continue
 			}
-			allRows = append(allRows, *row)
+			allRows = append(allRows, row)
 		}
 
 		if result.NextToken == nil {

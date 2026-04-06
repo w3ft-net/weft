@@ -50,11 +50,12 @@ func TestIngestRoundTrip_GrantCentralWorker(t *testing.T) {
 	t.Logf("parsed %d rows", len(rows))
 
 	// Check some rows have extracted timestamps, levels, instances.
+	nowNs := now.UnixNano()
 	hasTimestamp := false
 	hasLevel := false
 	hasInstance := false
 	for _, r := range rows {
-		if !r.Ts.Equal(now) {
+		if r.TsUnixNs != nowNs {
 			hasTimestamp = true
 		}
 		if r.Level != "" {
@@ -80,18 +81,19 @@ func TestIngestRoundTrip_GrantCentralWorker(t *testing.T) {
 			break
 		}
 		t.Logf("  row %d: ts=%s level=%-7s instance=%s raw=%.60s",
-			r.LineNum, r.Ts.Format("15:04:05"), r.Level, r.Instance, r.Raw)
+			r.LineNum, time.Unix(0, r.TsUnixNs).Format("15:04:05"), r.Level, r.Instance, r.Raw)
 	}
 
 	// Ingest into an in-memory shard and query back.
-	minTs := rows[0].Ts
-	maxTs := rows[0].Ts
+	minTs := time.Unix(0, rows[0].TsUnixNs)
+	maxTs := minTs
 	for _, r := range rows[1:] {
-		if r.Ts.Before(minTs) {
-			minTs = r.Ts
+		ts := time.Unix(0, r.TsUnixNs)
+		if ts.Before(minTs) {
+			minTs = ts
 		}
-		if r.Ts.After(maxTs) {
-			maxTs = r.Ts
+		if ts.After(maxTs) {
+			maxTs = ts
 		}
 	}
 
@@ -172,9 +174,10 @@ func TestIngestRoundTrip_VimGym(t *testing.T) {
 	t.Logf("parsed %d rows", len(rows))
 
 	// Check timestamps were extracted for lines that have Go timestamps.
+	nowNs := now.UnixNano()
 	extracted := 0
 	for _, r := range rows {
-		if !r.Ts.Equal(now) {
+		if r.TsUnixNs != nowNs {
 			extracted++
 		}
 	}

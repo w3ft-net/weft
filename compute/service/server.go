@@ -11,7 +11,6 @@ import (
 	"github.com/kevlarcon/weft/compute"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
-	shardservice "github.com/kevlarcon/weft/shard/service"
 )
 
 // Server implements the WeftCompute gRPC service.
@@ -63,8 +62,7 @@ func (s *Server) SendRows(stream pb.WeftCompute_SendRowsServer) error {
 		if msg.Sentinel {
 			job.SendSentinel(msg.ShardId)
 		} else if msg.Row != nil {
-			row := shardservice.ProtoToLogRow(msg.Row)
-			job.SendRow(&row, msg.ShardId)
+			job.SendRow(msg.Row, msg.ShardId)
 			count++
 		}
 	}

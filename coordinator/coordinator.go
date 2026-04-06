@@ -9,6 +9,7 @@ import (
 
 	"github.com/kevlarcon/weft/compute"
 	"github.com/kevlarcon/weft/planner"
+	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
 
@@ -21,7 +22,7 @@ type TimeRange struct {
 // QueryResult holds the output of a coordinated query. Either Rows is
 // populated (no compute stages) or Text is populated (compute stages ran).
 type QueryResult struct {
-	Rows []shard.LogRow
+	Rows []*pb.LogRow
 	Text string
 }
 
@@ -106,7 +107,7 @@ func (c *Coordinator) Query(pipeline string, tr TimeRange) (*QueryResult, error)
 
 // queryRowsOnly is the direct path: query each shard, merge rows by timestamp.
 func (c *Coordinator) queryRowsOnly(sql string, plan *planner.QueryPlan, shards []shard.Shard) (*QueryResult, error) {
-	var allRows []shard.LogRow
+	var allRows []*pb.LogRow
 	for _, s := range shards {
 		rows, err := s.Query(sql)
 		if err != nil {
@@ -117,11 +118,11 @@ func (c *Coordinator) queryRowsOnly(sql string, plan *planner.QueryPlan, shards 
 
 	if plan.OrderDesc {
 		sort.Slice(allRows, func(i, j int) bool {
-			return allRows[i].Ts.After(allRows[j].Ts)
+			return allRows[i].TsUnixNs > allRows[j].TsUnixNs
 		})
 	} else {
 		sort.Slice(allRows, func(i, j int) bool {
-			return allRows[i].Ts.Before(allRows[j].Ts)
+			return allRows[i].TsUnixNs < allRows[j].TsUnixNs
 		})
 	}
 

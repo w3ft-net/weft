@@ -8,25 +8,24 @@ import (
 	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
+
+	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
 // RowSink receives rows streamed from a shard query. ComputeJob satisfies this.
 type RowSink interface {
-	SendRow(row *LogRow, shardID string)
+	SendRow(row *pb.LogRow, shardID string)
 	SendSentinel(shardID string)
 }
 
 // Shard is the interface the coordinator uses to interact with a shard node.
-// Backed by DuckDBShard in-process today; will be a gRPC client later.
 type Shard interface {
 	ID() string
 	WindowStart() time.Time
 	WindowEnd() time.Time
-	Query(sql string) ([]LogRow, error)
-	// QueryToSink executes SQL and streams matching rows to the sink,
-	// followed by a sentinel. Intended to run in a goroutine.
+	Query(sql string) ([]*pb.LogRow, error)
 	QueryToSink(sql string, sink RowSink)
-	Ingest(rows []LogRow) error
+	Ingest(rows []*pb.LogRow) error
 	Close() error
 }
 
@@ -89,13 +88,13 @@ func (s *DuckDBShard) QueryToSink(query string, sink RowSink) {
 	if err != nil {
 		return // sentinel still sent via defer
 	}
-	for i := range rows {
-		sink.SendRow(&rows[i], s.id)
+	for _, r := range rows {
+		sink.SendRow(r, s.id)
 	}
 }
 
 // Ingest batch-inserts rows into the logs table.
-func (s *DuckDBShard) Ingest(rows []LogRow) error {
+func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -111,15 +110,15 @@ func (s *DuckDBShard) Ingest(rows []LogRow) error {
 		sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?)")
 
 		payloadStr := "{}"
-		if len(r.Payload) > 0 {
-			payloadStr = string(r.Payload)
+		if len(r.PayloadJson) > 0 {
+			payloadStr = string(r.PayloadJson)
 		}
 
 		args = append(args,
 			r.LineNum,
 			r.Raw,
 			r.Fields,
-			r.Ts,
+			time.Unix(0, r.TsUnixNs),
 			r.Level,
 			r.App,
 			r.Instance,
@@ -133,34 +132,39 @@ func (s *DuckDBShard) Ingest(rows []LogRow) error {
 }
 
 // Query executes a SQL query and returns the matching rows.
-func (s *DuckDBShard) Query(query string) ([]LogRow, error) {
+func (s *DuckDBShard) Query(query string) ([]*pb.LogRow, error) {
 	sqlRows, err := s.db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("query shard %s: %w", s.id, err)
 	}
 	defer sqlRows.Close()
 
-	var results []LogRow
+	var results []*pb.LogRow
 	for sqlRows.Next() {
-		var r LogRow
-		var rawFields any
-		var rawPayload any
-
-		err := sqlRows.Scan(
-			&r.LineNum,
-			&r.Raw,
-			&rawFields,
-			&r.Ts,
-			&r.Level,
-			&r.App,
-			&r.Instance,
-			&r.Customer,
-			&rawPayload,
+		var (
+			lineNum            int64
+			raw, level, app    string
+			instance, customer string
+			ts                 time.Time
+			rawFields          any
+			rawPayload         any
 		)
+
+		err := sqlRows.Scan(&lineNum, &raw, &rawFields, &ts, &level, &app, &instance, &customer, &rawPayload)
 		if err != nil {
 			return nil, fmt.Errorf("scan row: %w", err)
 		}
-		// DuckDB returns TEXT[] as []interface{} — convert to []string.
+
+		r := &pb.LogRow{
+			LineNum:  lineNum,
+			Raw:      raw,
+			TsUnixNs: ts.UnixNano(),
+			Level:    level,
+			App:      app,
+			Instance: instance,
+			Customer: customer,
+		}
+
 		if arr, ok := rawFields.([]any); ok {
 			for _, v := range arr {
 				if sv, ok := v.(string); ok {
@@ -168,11 +172,10 @@ func (s *DuckDBShard) Query(query string) ([]LogRow, error) {
 				}
 			}
 		}
-		// DuckDB returns JSON as map[string]interface{} — marshal back to bytes.
 		if rawPayload != nil {
 			b, err := json.Marshal(rawPayload)
 			if err == nil {
-				r.Payload = json.RawMessage(b)
+				r.PayloadJson = b
 			}
 		}
 		results = append(results, r)

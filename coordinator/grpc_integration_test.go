@@ -146,7 +146,7 @@ func TestGRPC_JqSelect(t *testing.T) {
 	}
 	for _, r := range res.Rows {
 		var p map[string]any
-		json.Unmarshal(r.Payload, &p)
+		json.Unmarshal(r.PayloadJson, &p)
 		if p["status"] != float64(500) {
 			t.Errorf("expected status=500, got %v", p["status"])
 		}

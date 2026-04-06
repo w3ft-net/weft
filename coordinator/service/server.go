@@ -11,8 +11,6 @@ import (
 	"github.com/kevlarcon/weft/configstore"
 	"github.com/kevlarcon/weft/coordinator"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
-	shardpkg "github.com/kevlarcon/weft/shard"
-	shardservice "github.com/kevlarcon/weft/shard/service"
 )
 
 // Server implements the WeftCoordinator gRPC service.
@@ -49,9 +47,8 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 		if end > len(result.Rows) {
 			end = len(result.Rows)
 		}
-		resp := &pb.CoordinatorQueryResponse{}
-		for _, r := range result.Rows[i:end] {
-			resp.Rows = append(resp.Rows, shardservice.LogRowToProto(&r))
+		resp := &pb.CoordinatorQueryResponse{
+			Rows: result.Rows[i:end],
 		}
 		if err := stream.Send(resp); err != nil {
 			return err
@@ -203,7 +200,7 @@ func (s *Server) RevokeToken(_ context.Context, req *pb.RevokeTokenRequest) (*pb
 // them to the active shard in batches. Flushes every 2 seconds or 100 rows.
 func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) error {
 	var mu sync.Mutex
-	var rows []shardpkg.LogRow
+	var rows []*pb.LogRow
 	var count int64
 
 	// Periodic flush for sparse streams.
@@ -230,7 +227,7 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 		}
 
 		mu.Lock()
-		rows = append(rows, shardservice.ProtoToLogRow(row))
+		rows = append(rows, row)
 		count++
 		if len(rows) >= 100 {
 			s.ingestBatch(rows)
@@ -249,7 +246,7 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 	return stream.SendAndClose(&pb.IngestStreamResponse{RowsReceived: count})
 }
 
-func (s *Server) ingestBatch(rows []shardpkg.LogRow) {
+func (s *Server) ingestBatch(rows []*pb.LogRow) {
 	for _, sh := range s.Coord.GetShards() {
 		if err := sh.Ingest(rows); err != nil {
 			continue

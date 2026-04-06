@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/weft/shard"
+	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
 // Parser applies a schema to raw log lines, producing LogRow structs.
@@ -33,15 +33,15 @@ func NewParser(s *Schema) (*Parser, error) {
 
 // ParseLine parses a single raw log line into a LogRow.
 // ingestTime is the time the line was received (used as fallback timestamp).
-func (p *Parser) ParseLine(raw string, ingestTime time.Time) (*shard.LogRow, error) {
+func (p *Parser) ParseLine(raw string, ingestTime time.Time) (*pb.LogRow, error) {
 	p.lineNum++
 
-	row := &shard.LogRow{
+	row := &pb.LogRow{
 		LineNum:  p.lineNum,
 		Raw:      raw,
 		App:      p.schema.App,
 		Customer: p.schema.Customer,
-		Ts:       ingestTime,
+		TsUnixNs: ingestTime.UnixNano(),
 	}
 
 	// Strip envelope.
@@ -54,21 +54,21 @@ func (p *Parser) ParseLine(raw string, ingestTime time.Time) (*shard.LogRow, err
 
 	// Extract timestamp.
 	if ts, ok := p.extractTimestamp(fields, body); ok {
-		row.Ts = ts
+		row.TsUnixNs = ts.UnixNano()
 	}
 
 	// Extract level.
 	row.Level = p.extractLevel(fields, body)
 
 	// Extract JSON payload.
-	row.Payload = p.extractPayload(fields, body)
+	row.PayloadJson = p.extractPayload(fields, body)
 
 	return row, nil
 }
 
 // ParseLines parses multiple raw lines.
-func (p *Parser) ParseLines(lines []string, ingestTime time.Time) ([]shard.LogRow, error) {
-	var rows []shard.LogRow
+func (p *Parser) ParseLines(lines []string, ingestTime time.Time) ([]*pb.LogRow, error) {
+	var rows []*pb.LogRow
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "━") {
@@ -78,7 +78,7 @@ func (p *Parser) ParseLines(lines []string, ingestTime time.Time) ([]shard.LogRo
 		if err != nil {
 			return nil, err
 		}
-		rows = append(rows, *row)
+		rows = append(rows, row)
 	}
 	return rows, nil
 }

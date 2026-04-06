@@ -1,11 +1,14 @@
 package compute
 
-import "github.com/kevlarcon/weft/shard"
+import (
+	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/shard"
+)
 
 // ComputeMessage is sent from shards to a compute job. Either Row is set
 // (a data row) or Sentinel is true (indicating the shard has finished).
 type ComputeMessage struct {
-	Row      *shard.LogRow
+	Row      *pb.LogRow
 	ShardID  string
 	Sentinel bool
 }

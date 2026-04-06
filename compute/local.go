@@ -7,7 +7,7 @@ import (
 
 	"github.com/kevlarcon/warp/pkg/bash"
 
-	"github.com/kevlarcon/weft/shard"
+	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
 // LocalComputePool executes compute stages in-process using warp's bash
@@ -52,7 +52,7 @@ func (j *LocalComputeJob) Send(msg ComputeMessage) {
 }
 
 // SendRow implements shard.RowSink.
-func (j *LocalComputeJob) SendRow(row *shard.LogRow, shardID string) {
+func (j *LocalComputeJob) SendRow(row *pb.LogRow, shardID string) {
 	j.Send(ComputeMessage{Row: row, ShardID: shardID})
 }
 

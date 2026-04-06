@@ -50,23 +50,9 @@ func (s *GRPCShard) Close() error {
 // Addr returns the gRPC address of this shard.
 func (s *GRPCShard) Addr() string { return s.addr }
 
-// Ingest sends a batch of rows to the remote shard for insertion.
-func (s *GRPCShard) Ingest(rows []LogRow) error {
-	pbRows := make([]*pb.LogRow, len(rows))
-	for i := range rows {
-		pbRows[i] = &pb.LogRow{
-			LineNum:     rows[i].LineNum,
-			Raw:         rows[i].Raw,
-			App:         rows[i].App,
-			Level:       rows[i].Level,
-			TsUnixNs:   rows[i].Ts.UnixNano(),
-			Instance:    rows[i].Instance,
-			PayloadJson: rows[i].Payload,
-			Fields:      rows[i].Fields,
-			Customer:    rows[i].Customer,
-		}
-	}
-	_, err := s.client.Ingest(context.Background(), &pb.IngestRequest{Rows: pbRows})
+// Ingest forwards rows to the remote shard for insertion.
+func (s *GRPCShard) Ingest(rows []*pb.LogRow) error {
+	_, err := s.client.Ingest(context.Background(), &pb.IngestRequest{Rows: rows})
 	if err != nil {
 		return fmt.Errorf("ingest to shard %s: %w", s.id, err)
 	}
@@ -74,22 +60,22 @@ func (s *GRPCShard) Ingest(rows []LogRow) error {
 }
 
 // Query executes SQL on the remote shard and collects all rows.
-func (s *GRPCShard) Query(sql string) ([]LogRow, error) {
+func (s *GRPCShard) Query(sql string) ([]*pb.LogRow, error) {
 	stream, err := s.client.Query(context.Background(), &pb.QueryRequest{Sql: sql})
 	if err != nil {
 		return nil, fmt.Errorf("query shard %s: %w", s.id, err)
 	}
 
-	var rows []LogRow
+	var rows []*pb.LogRow
 	for {
-		pbRow, err := stream.Recv()
+		row, err := stream.Recv()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
 			return nil, fmt.Errorf("recv from shard %s: %w", s.id, err)
 		}
-		rows = append(rows, protoToLogRow(pbRow))
+		rows = append(rows, row)
 	}
 	return rows, nil
 }
@@ -104,28 +90,13 @@ func (s *GRPCShard) QueryToSink(sql string, sink RowSink) {
 	}
 
 	for {
-		pbRow, err := stream.Recv()
+		row, err := stream.Recv()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
 			return
 		}
-		row := protoToLogRow(pbRow)
-		sink.SendRow(&row, s.id)
-	}
-}
-
-func protoToLogRow(r *pb.LogRow) LogRow {
-	return LogRow{
-		LineNum:  r.LineNum,
-		Raw:      r.Raw,
-		App:      r.App,
-		Level:    r.Level,
-		Ts:       time.Unix(0, r.TsUnixNs),
-		Instance: r.Instance,
-		Payload:  r.PayloadJson,
-		Fields:   r.Fields,
-		Customer: r.Customer,
+		sink.SendRow(row, s.id)
 	}
 }

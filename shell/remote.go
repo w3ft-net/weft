@@ -10,8 +10,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
-	shardservice "github.com/kevlarcon/weft/shard/service"
 )
 
 // RemoteCoordinator connects to a coordinator gRPC service and provides
@@ -23,7 +21,7 @@ type RemoteCoordinator struct {
 
 // RemoteQueryResult mirrors coordinator.QueryResult for the shell.
 type RemoteQueryResult struct {
-	Rows []shard.LogRow
+	Rows []*pb.LogRow
 	Text string
 }
 
@@ -66,9 +64,7 @@ func (r *RemoteCoordinator) Query(pipeline string, start, end time.Time) (*Remot
 		if resp.Text != "" {
 			result.Text += resp.Text
 		}
-		for _, row := range resp.Rows {
-			result.Rows = append(result.Rows, shardservice.ProtoToLogRow(row))
-		}
+		result.Rows = append(result.Rows, resp.Rows...)
 	}
 	return result, nil
 }

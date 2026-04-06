@@ -217,15 +217,17 @@ func runIngest() {
 		os.Exit(1)
 	}
 
-	minTs, maxTs := rows[0].Ts, rows[0].Ts
+	minNs, maxNs := rows[0].TsUnixNs, rows[0].TsUnixNs
 	for _, r := range rows[1:] {
-		if r.Ts.Before(minTs) {
-			minTs = r.Ts
+		if r.TsUnixNs < minNs {
+			minNs = r.TsUnixNs
 		}
-		if r.Ts.After(maxTs) {
-			maxTs = r.Ts
+		if r.TsUnixNs > maxNs {
+			maxNs = r.TsUnixNs
 		}
 	}
+	minTs := time.Unix(0, minNs)
+	maxTs := time.Unix(0, maxNs)
 
 	if dbPath == "" {
 		dbPath = fmt.Sprintf("%s.duckdb", schema.App)
