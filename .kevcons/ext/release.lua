@@ -8,8 +8,9 @@ local targets = {
         pkg         = "./cmd/weftd/",
         version_file = "cmd/weftd/version.go",
         test_pkgs   = "./cmd/weftd/ ./weftd/",
+        deb         = true,
         platforms   = {
-            { goos = "linux", goarch = "amd64", suffix = "linux-amd64" },
+            { goos = "linux", goarch = "amd64", suffix = "linux-amd64", deb_arch = "amd64" },
         },
     },
     weft = {
@@ -83,17 +84,64 @@ function run(args)
             },
         })
 
-        -- Upload versioned
-        local s3_versioned = "s3://" .. bucket .. "/" .. name .. "/v" .. version .. "/" .. binary_name
-        kevcons.log("uploading " .. s3_versioned)
-        kevcons.aws_exec("s3", "cp", tmp, s3_versioned)
+        if target.deb and plat.deb_arch then
+            -- Build .deb package
+            local deb_name = name .. "_" .. version .. "_" .. plat.deb_arch .. ".deb"
+            local deb_tmp = "/tmp/" .. deb_name
+            local pkg_root = "/tmp/" .. name .. "-deb-" .. plat.deb_arch
 
-        -- Upload latest
-        local s3_latest = "s3://" .. bucket .. "/" .. name .. "/latest/" .. binary_name
-        kevcons.log("uploading " .. s3_latest)
-        kevcons.aws_exec("s3", "cp", tmp, s3_latest)
+            kevcons.log("packaging " .. deb_name .. "...")
+            kevcons.exec("rm", {"-rf", pkg_root})
+            kevcons.exec("mkdir", {"-p", pkg_root .. "/DEBIAN"})
+            kevcons.exec("mkdir", {"-p", pkg_root .. "/usr/local/bin"})
+            kevcons.exec("mkdir", {"-p", pkg_root .. "/etc/systemd/system"})
+            kevcons.exec("mkdir", {"-p", pkg_root .. "/opt/app/scripts"})
 
-        -- Clean up
+            -- Write control file with actual version and arch
+            local ctrl = read_file("deploy/weftd/deb/DEBIAN/control")
+            ctrl = ctrl:gsub("{{VERSION}}", version)
+            ctrl = ctrl:gsub("amd64", plat.deb_arch)
+            write_file(pkg_root .. "/DEBIAN/control", ctrl)
+
+            -- Copy postinst
+            kevcons.exec("cp", {"deploy/weftd/deb/DEBIAN/postinst", pkg_root .. "/DEBIAN/postinst"})
+            kevcons.exec("chmod", {"0755", pkg_root .. "/DEBIAN/postinst"})
+
+            -- Place files
+            kevcons.exec("cp", {tmp, pkg_root .. "/usr/local/bin/weftd"})
+            kevcons.exec("chmod", {"0755", pkg_root .. "/usr/local/bin/weftd"})
+            kevcons.exec("cp", {"deploy/weftd/weftd.service", pkg_root .. "/etc/systemd/system/weftd.service"})
+            kevcons.exec("cp", {"deploy/weftd/weftd-config.sh", pkg_root .. "/opt/app/scripts/weftd-config.sh"})
+            kevcons.exec("chmod", {"0755", pkg_root .. "/opt/app/scripts/weftd-config.sh"})
+
+            -- Build deb
+            kevcons.exec("dpkg-deb", {"--build", pkg_root, deb_tmp})
+
+            -- Upload versioned
+            local s3_versioned = "s3://" .. bucket .. "/" .. name .. "/v" .. version .. "/" .. deb_name
+            kevcons.log("uploading " .. s3_versioned)
+            kevcons.aws_exec("s3", "cp", deb_tmp, s3_versioned)
+
+            -- Upload latest
+            local s3_latest = "s3://" .. bucket .. "/" .. name .. "/latest/" .. deb_name
+            kevcons.log("uploading " .. s3_latest)
+            kevcons.aws_exec("s3", "cp", deb_tmp, s3_latest)
+
+            -- Clean up deb artifacts
+            kevcons.exec("rm", {"-rf", pkg_root})
+            os.remove(deb_tmp)
+        else
+            -- Upload raw binary (weft CLI)
+            local s3_versioned = "s3://" .. bucket .. "/" .. name .. "/v" .. version .. "/" .. binary_name
+            kevcons.log("uploading " .. s3_versioned)
+            kevcons.aws_exec("s3", "cp", tmp, s3_versioned)
+
+            local s3_latest = "s3://" .. bucket .. "/" .. name .. "/latest/" .. binary_name
+            kevcons.log("uploading " .. s3_latest)
+            kevcons.aws_exec("s3", "cp", tmp, s3_latest)
+        end
+
+        -- Clean up binary
         os.remove(tmp)
     end
 
@@ -121,6 +169,21 @@ function read_version(path)
     local content = f:read("*a")
     f:close()
     return content:match('Version%s*=%s*"([^"]+)"')
+end
+
+function read_file(path)
+    local f = io.open(path, "r")
+    if not f then return "" end
+    local content = f:read("*a")
+    f:close()
+    return content
+end
+
+function write_file(path, content)
+    local f = io.open(path, "w")
+    if not f then return end
+    f:write(content)
+    f:close()
 end
 
 function split(s)

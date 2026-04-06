@@ -1,0 +1,6 @@
+#!/bin/bash
+set -e
+
+mkdir -p /etc/weftd /var/run/weftd
+systemctl daemon-reload
+systemctl enable weftd
