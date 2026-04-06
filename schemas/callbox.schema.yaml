@@ -1,0 +1,6 @@
+app: callbox
+customer: kevlar
+format: text
+timestamp_field: "1"
+timestamp_fields: 2
+timestamp_format: "2006/01/02 15:04:05"

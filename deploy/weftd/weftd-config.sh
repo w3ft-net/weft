@@ -20,6 +20,7 @@ fi
 
 APP=${APP_NAME:-unknown}
 UNIT=${WEFT_UNIT:-${APP}.service}
+LOG_PATH=${WEFT_LOG_PATH:-/opt/app/logs/*.log}
 
 mkdir -p /etc/weftd
 
@@ -30,7 +31,7 @@ sources:
   - app: ${APP}
     unit: ${UNIT}
   - app: ${APP}
-    path: /opt/app/logs/*.log
+    path: ${LOG_PATH}
 socket: /var/run/weftd/weftd.sock
 EOF
 
