@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sort"
@@ -33,6 +34,7 @@ type Coordinator struct {
 	Customer string
 	Pool     compute.ComputePool // nil = no compute support
 	Tail     *TailBroker
+	Ingest   *RingBuffer // write path: IngestStream → buffer → shards
 }
 
 // NewCoordinator creates a coordinator with the given initial shard list.
@@ -42,6 +44,36 @@ func NewCoordinator(shards []shard.Shard, customer string, pool compute.ComputeP
 		Customer: customer,
 		Pool:     pool,
 	}
+}
+
+// StartDrain runs a background goroutine that drains the ring buffer
+// into shards. Call this after setting up shards and the ring buffer.
+func (c *Coordinator) StartDrain(ctx context.Context) {
+	if c.Ingest == nil {
+		return
+	}
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-c.Ingest.Notify():
+			}
+
+			for {
+				batch := c.Ingest.Drain(500)
+				if batch == nil {
+					break
+				}
+				for _, sh := range c.GetShards() {
+					if err := sh.Ingest(batch); err != nil {
+						continue
+					}
+					break
+				}
+			}
+		}
+	}()
 }
 
 // SetShards replaces the coordinator's shard list. Thread-safe.
@@ -106,15 +138,31 @@ func (c *Coordinator) Query(pipeline string, tr TimeRange) (*QueryResult, error)
 	return c.queryRowsOnly(sql, plan, matching)
 }
 
-// queryRowsOnly is the direct path: query each shard, merge rows by timestamp.
+// queryRowsOnly fans out to all matching shards in parallel, then merges.
 func (c *Coordinator) queryRowsOnly(sql string, plan *planner.QueryPlan, shards []shard.Shard) (*QueryResult, error) {
+	type shardResult struct {
+		rows []*pb.LogRow
+		err  error
+	}
+
+	results := make([]shardResult, len(shards))
+	var wg sync.WaitGroup
+	wg.Add(len(shards))
+	for i, s := range shards {
+		go func(i int, s shard.Shard) {
+			defer wg.Done()
+			rows, err := s.Query(sql)
+			results[i] = shardResult{rows, err}
+		}(i, s)
+	}
+	wg.Wait()
+
 	var allRows []*pb.LogRow
-	for _, s := range shards {
-		rows, err := s.Query(sql)
-		if err != nil {
-			return nil, fmt.Errorf("shard %s: %w", s.ID(), err)
+	for i, r := range results {
+		if r.err != nil {
+			return nil, fmt.Errorf("shard %s: %w", shards[i].ID(), r.err)
 		}
-		allRows = append(allRows, rows...)
+		allRows = append(allRows, r.rows...)
 	}
 
 	if plan.OrderDesc {

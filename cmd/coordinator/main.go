@@ -88,6 +88,11 @@ func main() {
 
 	coord := coordinator.NewCoordinator(shards, *customer, pool)
 	coord.Tail = coordinator.NewTailBroker()
+	coord.Ingest = coordinator.NewRingBuffer(1_000_000) // 1M row buffer
+
+	drainCtx, drainCancel := context.WithCancel(context.Background())
+	defer drainCancel()
+	coord.StartDrain(drainCtx)
 
 	// Start background shard re-discovery if using ASG.
 	if *shardASG != "" {

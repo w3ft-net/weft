@@ -303,11 +303,17 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 }
 
 func (s *Server) ingestBatch(rows []*pb.LogRow) {
-	for _, sh := range s.Coord.GetShards() {
-		if err := sh.Ingest(rows); err != nil {
-			continue
+	// Write to ring buffer (non-blocking). Background drain pushes to shards.
+	if s.Coord.Ingest != nil {
+		s.Coord.Ingest.Write(rows)
+	} else {
+		// Fallback: direct shard write (dev mode without ring buffer).
+		for _, sh := range s.Coord.GetShards() {
+			if err := sh.Ingest(rows); err != nil {
+				continue
+			}
+			break
 		}
-		break
 	}
 
 	// Fan out to tail -f subscribers.

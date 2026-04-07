@@ -52,7 +52,6 @@ services:
       - --shards=shard-0=shard-0:9000=2026-03-28T10:00:00Z=2026-03-28T11:00:00Z,shard-1=shard-1:9000=2026-03-28T11:00:00Z=2026-03-28T12:00:00Z
       - --compute=compute:9010
       - --customer=kevlar
-      - --apps=vimgym,callbox
     ports:
       - "9020:9020"
     depends_on:
