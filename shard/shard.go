@@ -163,5 +163,5 @@ func (s *DuckDBShard) Query(query string) ([]*pb.LogRow, error) {
 		return nil, fmt.Errorf("query shard %s: %w", s.id, err)
 	}
 	defer sqlRows.Close()
-	return scanRows(sqlRows)
+	return ScanRows(sqlRows)
 }

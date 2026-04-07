@@ -60,7 +60,7 @@ func (s *ColdShard) Query(query string) ([]*pb.LogRow, error) {
 		return nil, fmt.Errorf("cold query %s: %w", s.id, err)
 	}
 	defer sqlRows.Close()
-	return scanRows(sqlRows)
+	return ScanRows(sqlRows)
 }
 
 // QueryToSink streams query results to a RowSink.

@@ -9,9 +9,9 @@ import (
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
-// scanRows reads all rows from a SQL result set and converts them to LogRow.
-// Shared by DuckDBShard.Query and ColdShard.Query.
-func scanRows(sqlRows *sql.Rows) ([]*pb.LogRow, error) {
+// ScanRows reads all rows from a SQL result set and converts them to LogRow.
+// Shared by DuckDBShard.Query, ColdShard.Query, and the Lambda handler.
+func ScanRows(sqlRows *sql.Rows) ([]*pb.LogRow, error) {
 	var results []*pb.LogRow
 	for sqlRows.Next() {
 		var (
