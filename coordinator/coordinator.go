@@ -145,10 +145,14 @@ func (c *Coordinator) SetShards(shards []shard.Shard) {
 	log.Printf("coordinator: shard list updated (%d shards)", c.Registry.Count())
 }
 
-// GetShards returns all live shard connections. Used by the poller and
-// other code that hasn't been migrated to the registry yet.
+// GetShards returns all live shard connections.
 func (c *Coordinator) GetShards() []shard.Shard {
 	return c.Registry.AllShards()
+}
+
+// IngestingShard returns the current INGESTING shard for the given app.
+func (c *Coordinator) IngestingShard(app string) shard.Shard {
+	return c.Registry.IngestingShard(app)
 }
 
 // Query parses a pipeline, routes the pushed-down SQL to matching shards,

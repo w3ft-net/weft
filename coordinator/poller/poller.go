@@ -19,9 +19,10 @@ import (
 	"github.com/kevlarcon/weft/shard"
 )
 
-// ShardProvider returns the current list of available shards.
+// ShardProvider routes rows to the correct shard.
 type ShardProvider interface {
 	GetShards() []shard.Shard
+	IngestingShard(app string) shard.Shard
 }
 
 // Poller polls CloudWatch log groups and ingests into shards.
@@ -167,7 +168,21 @@ func (p *Poller) poll(ctx context.Context, lg configstore.LogGroupWithAccount) {
 		return
 	}
 
-	// Ingest into shards in batches (to stay under gRPC message size limit).
+	// Route to the INGESTING shard for this app.
+	sh := p.provider.IngestingShard(lg.App)
+	if sh == nil {
+		// Fallback: try any shard.
+		for _, s := range p.provider.GetShards() {
+			sh = s
+			break
+		}
+	}
+	if sh == nil {
+		log.Printf("poller[%s]: no shard available for ingestion", lg.App)
+		return
+	}
+
+	// Ingest in batches to stay under gRPC message size limit.
 	const batchSize = 500
 	ingested := 0
 	for i := 0; i < len(allRows); i += batchSize {
@@ -175,21 +190,11 @@ func (p *Poller) poll(ctx context.Context, lg configstore.LogGroupWithAccount) {
 		if end > len(allRows) {
 			end = len(allRows)
 		}
-		batch := allRows[i:end]
-
-		ok := false
-		for _, s := range p.provider.GetShards() {
-			if err := s.Ingest(batch); err != nil {
-				continue
-			}
-			ok = true
-			break
-		}
-		if !ok {
-			log.Printf("poller[%s]: failed to ingest batch of %d rows — all shards rejected", lg.App, len(batch))
+		if err := sh.Ingest(allRows[i:end]); err != nil {
+			log.Printf("poller[%s]: ingest batch failed: %v", lg.App, err)
 			continue
 		}
-		ingested += len(batch)
+		ingested += end - i
 	}
 
 	if ingested > 0 {
