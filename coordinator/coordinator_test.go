@@ -415,6 +415,108 @@ func TestCompute_AwkFieldExtract(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Registry / app-scoped routing tests
+// ---------------------------------------------------------------------------
+
+func TestRegistry_AppScopedQueryRouting(t *testing.T) {
+	// Create two shards: one owns vimgym, one owns callbox.
+	sVim, err := shard.NewDuckDBShard("shard-vimgym", "", t0, t2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sVim.Close() })
+
+	sCb, err := shard.NewDuckDBShard("shard-callbox", "", t0, t2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sCb.Close() })
+
+	// Ingest vimgym data into vimgym shard, callbox data into callbox shard.
+	for _, r := range shard0Rows() {
+		if r.App == "vimgym" {
+			sVim.Ingest([]*pb.LogRow{r})
+		} else {
+			sCb.Ingest([]*pb.LogRow{r})
+		}
+	}
+
+	reg := NewShardRegistry()
+	reg.Add(&ShardEntry{
+		ID: "shard-vimgym", Apps: []string{"vimgym"},
+		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: sVim,
+	})
+	reg.Add(&ShardEntry{
+		ID: "shard-callbox", Apps: []string{"callbox"},
+		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: sCb,
+	})
+
+	// Query for vimgym should only hit shard-vimgym.
+	matching := reg.MatchingShards(fullRange, "vimgym")
+	if len(matching) != 1 {
+		t.Fatalf("expected 1 shard for vimgym, got %d", len(matching))
+	}
+	if matching[0].ID() != "shard-vimgym" {
+		t.Fatalf("expected shard-vimgym, got %s", matching[0].ID())
+	}
+
+	// Query for callbox should only hit shard-callbox.
+	matching = reg.MatchingShards(fullRange, "callbox")
+	if len(matching) != 1 {
+		t.Fatalf("expected 1 shard for callbox, got %d", len(matching))
+	}
+
+	// Query for all apps (empty string) should hit both.
+	matching = reg.MatchingShards(fullRange, "")
+	if len(matching) != 2 {
+		t.Fatalf("expected 2 shards for all apps, got %d", len(matching))
+	}
+}
+
+func TestRegistry_IngestingShard(t *testing.T) {
+	s0, err := shard.NewDuckDBShard("s0", "", t0, t2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s0.Close() })
+
+	reg := NewShardRegistry()
+	reg.Add(&ShardEntry{
+		ID: "s0", Apps: []string{"vimgym", "grantcentral"},
+		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: s0,
+	})
+
+	if sh := reg.IngestingShard("vimgym"); sh == nil {
+		t.Fatal("expected ingesting shard for vimgym")
+	}
+	if sh := reg.IngestingShard("grantcentral"); sh == nil {
+		t.Fatal("expected ingesting shard for grantcentral")
+	}
+	if sh := reg.IngestingShard("unknown"); sh != nil {
+		t.Fatal("expected nil for unknown app")
+	}
+}
+
+func TestRegistry_ExpiringShardExcluded(t *testing.T) {
+	s0, err := shard.NewDuckDBShard("s0", "", t0, t2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s0.Close() })
+
+	reg := NewShardRegistry()
+	reg.Add(&ShardEntry{
+		ID: "s0", WindowStart: t0, WindowEnd: t2,
+		State: StateExpiring, Shard: s0,
+	})
+
+	matching := reg.MatchingShards(fullRange, "")
+	if len(matching) != 0 {
+		t.Fatalf("expected 0 shards (expiring), got %d", len(matching))
+	}
+}
+
 // nonEmptyLines splits text into lines, filtering out empty ones.
 func nonEmptyLines(text string) []string {
 	var out []string

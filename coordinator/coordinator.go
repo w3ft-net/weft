@@ -29,8 +29,7 @@ type QueryResult struct {
 
 // Coordinator routes queries to shards and merges results.
 type Coordinator struct {
-	mu       sync.RWMutex
-	shards   []shard.Shard
+	Registry *ShardRegistry
 	Customer string
 	Pool     compute.ComputePool // nil = no compute support
 	Tail     *TailBroker
@@ -38,16 +37,28 @@ type Coordinator struct {
 }
 
 // NewCoordinator creates a coordinator with the given initial shard list.
+// Shards are registered with empty Apps (legacy: matches all apps).
 func NewCoordinator(shards []shard.Shard, customer string, pool compute.ComputePool) *Coordinator {
+	reg := NewShardRegistry()
+	for _, s := range shards {
+		reg.Add(&ShardEntry{
+			ID:          s.ID(),
+			WindowStart: s.WindowStart(),
+			WindowEnd:   s.WindowEnd(),
+			State:       StateIngesting,
+			Shard:       s,
+			CreatedAt:   time.Now(),
+		})
+	}
 	return &Coordinator{
-		shards:   shards,
+		Registry: reg,
 		Customer: customer,
 		Pool:     pool,
 	}
 }
 
 // StartDrain runs a background goroutine that drains the ring buffer
-// into shards. Call this after setting up shards and the ring buffer.
+// into shards. Routes rows by app to the correct INGESTING shard.
 func (c *Coordinator) StartDrain(ctx context.Context) {
 	if c.Ingest == nil {
 		return
@@ -65,45 +76,79 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 				if batch == nil {
 					break
 				}
-				for _, sh := range c.GetShards() {
-					if err := sh.Ingest(batch); err != nil {
-						continue
+
+				// Group by app for targeted routing.
+				byApp := make(map[string][]*pb.LogRow)
+				for _, row := range batch {
+					byApp[row.App] = append(byApp[row.App], row)
+				}
+
+				for app, rows := range byApp {
+					sh := c.Registry.IngestingShard(app)
+					if sh == nil {
+						sh = c.Registry.DefaultIngestingShard()
 					}
-					break
+					if sh != nil {
+						sh.Ingest(rows)
+					}
 				}
 			}
 		}
 	}()
 }
 
-// SetShards replaces the coordinator's shard list. Thread-safe.
+// SetShards replaces the shard list via the registry. Used by ASG re-discovery.
+// Entries are created with empty Apps (legacy: matches all apps).
 func (c *Coordinator) SetShards(shards []shard.Shard) {
-	c.mu.Lock()
-	old := c.shards
-	c.shards = shards
-	c.mu.Unlock()
-
-	// Close old connections that are no longer in the new list.
-	newAddrs := make(map[string]bool)
+	// Build set of new IDs.
+	newIDs := make(map[string]bool)
 	for _, s := range shards {
-		newAddrs[s.ID()] = true
+		newIDs[s.ID()] = true
 	}
-	for _, s := range old {
-		if !newAddrs[s.ID()] {
-			s.Close()
+
+	// Collect old shards to close after updating.
+	var toClose []shard.Shard
+	for _, e := range c.Registry.Entries() {
+		if !newIDs[e.ID] {
+			if e.Shard != nil {
+				toClose = append(toClose, e.Shard)
+			}
+			c.Registry.Remove(e.ID)
 		}
 	}
 
-	log.Printf("coordinator: shard list updated (%d shards)", len(shards))
+	// Add/update new entries.
+	for _, s := range shards {
+		if existing := c.Registry.Get(s.ID()); existing != nil {
+			old := existing.Shard
+			existing.Shard = s
+			if old != nil && old != s {
+				toClose = append(toClose, old)
+			}
+			continue
+		}
+		c.Registry.Add(&ShardEntry{
+			ID:          s.ID(),
+			WindowStart: s.WindowStart(),
+			WindowEnd:   s.WindowEnd(),
+			State:       StateIngesting,
+			Shard:       s,
+			CreatedAt:   time.Now(),
+		})
+	}
+
+	// Note: old shard connections are not closed here. In-flight queries
+	// may still hold references. For gRPC shards, the connection will be
+	// garbage collected. For in-process DuckDB shards (tests), the test's
+	// t.Cleanup or defer handles closure.
+
+	log.Printf("coordinator: shard list updated (%d shards)", c.Registry.Count())
 }
 
-// Shards returns a snapshot of the current shard list. Thread-safe.
+// GetShards returns all live shard connections. Used by the poller and
+// other code that hasn't been migrated to the registry yet.
 func (c *Coordinator) GetShards() []shard.Shard {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	out := make([]shard.Shard, len(c.shards))
-	copy(out, c.shards)
-	return out
+	return c.Registry.AllShards()
 }
 
 // Query parses a pipeline, routes the pushed-down SQL to matching shards,
@@ -118,7 +163,7 @@ func (c *Coordinator) Query(pipeline string, tr TimeRange) (*QueryResult, error)
 	sql := planner.InjectCustomer(plan.ShardSQL, c.Customer)
 	sql = planner.ApplyProjection(sql, plan.Project)
 
-	matching := c.matchingShards(tr)
+	matching := c.Registry.MatchingShards(tr, plan.FollowApp)
 	if len(matching) == 0 {
 		return &QueryResult{}, nil
 	}
@@ -199,15 +244,3 @@ func (c *Coordinator) queryWithCompute(sql string, stages []string, shards []sha
 	return &QueryResult{Text: text}, nil
 }
 
-// matchingShards returns shards whose time windows overlap the given range.
-func (c *Coordinator) matchingShards(tr TimeRange) []shard.Shard {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	var out []shard.Shard
-	for _, s := range c.shards {
-		if s.WindowStart().Before(tr.End) && s.WindowEnd().After(tr.Start) {
-			out = append(out, s)
-		}
-	}
-	return out
-}
