@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"gopkg.in/yaml.v3"
@@ -85,15 +86,7 @@ func main() {
 			go runJournalTailer(ctx, coordClient, customer, hostname, src.App, src.Unit)
 			log.Printf("[%s] tailing journal unit %s", src.App, src.Unit)
 		} else if src.Path != "" {
-			paths, err := filepath.Glob(src.Path)
-			if err != nil || len(paths) == 0 {
-				log.Printf("[%s] no files matching %s", src.App, src.Path)
-				continue
-			}
-			for _, p := range paths {
-				go runFileTailer(ctx, coordClient, customer, hostname, src.App, p)
-			}
-			log.Printf("[%s] tailing %d files matching %s", src.App, len(paths), src.Path)
+			go watchGlob(ctx, coordClient, customer, hostname, src.App, src.Path)
 		}
 	}
 
@@ -212,6 +205,83 @@ func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, custome
 				flushWithReconnect(ctx, client, ss, buf, customer, instance, app)
 				buf = buf[:0]
 			}
+		}
+	}
+}
+
+// watchGlob watches a directory for new files matching a glob pattern and
+// starts tailers for each. Handles the case where log files don't exist at
+// startup (e.g., gunicorn creates them on first request).
+func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, customer, instance, app, pattern string) {
+	dir := filepath.Dir(pattern)
+	tailing := make(map[string]bool)
+
+	// Tail any files that already match.
+	startMatching := func() {
+		paths, _ := filepath.Glob(pattern)
+		for _, p := range paths {
+			if !tailing[p] {
+				tailing[p] = true
+				go runFileTailer(ctx, client, customer, instance, app, p)
+			}
+		}
+	}
+
+	startMatching()
+	if len(tailing) > 0 {
+		log.Printf("[%s] tailing %d files matching %s", app, len(tailing), pattern)
+	}
+
+	// Watch directory for new files.
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Printf("[%s] watch %s: %v", app, dir, err)
+		return
+	}
+	defer watcher.Close()
+
+	if err := watcher.Add(dir); err != nil {
+		// Directory doesn't exist yet — wait for it.
+		log.Printf("[%s] directory %s not found, waiting...", app, dir)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := watcher.Add(dir); err == nil {
+					log.Printf("[%s] directory %s appeared", app, dir)
+					startMatching()
+					goto watch
+				}
+			}
+		}
+	}
+
+watch:
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Op&fsnotify.Create == fsnotify.Create {
+				// Check if the new file matches our glob.
+				matched, _ := filepath.Match(filepath.Base(pattern), filepath.Base(event.Name))
+				if matched && !tailing[event.Name] {
+					tailing[event.Name] = true
+					log.Printf("[%s] new file %s, starting tailer", app, event.Name)
+					go runFileTailer(ctx, client, customer, instance, app, event.Name)
+				}
+			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Printf("[%s] watch error: %v", app, err)
 		}
 	}
 }
