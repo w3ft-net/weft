@@ -111,8 +111,33 @@ func main() {
 	} else {
 		defer store.Close()
 
+		// Assign known apps to all shards so queries route correctly.
+		var allApps []string
+		if agentApps, err := store.AgentAppNames(); err == nil {
+			allApps = append(allApps, agentApps...)
+		}
+		if pollerApps, err := store.AppNames(); err == nil {
+			for _, a := range pollerApps {
+				found := false
+				for _, existing := range allApps {
+					if existing == a {
+						found = true
+						break
+					}
+				}
+				if !found {
+					allApps = append(allApps, a)
+				}
+			}
+		}
+		if len(allApps) > 0 {
+			for _, entry := range coord.Registry.Entries() {
+				entry.Apps = allApps
+			}
+			log.Printf("coordinator: assigned apps %v to %d shards", allApps, coord.Registry.Count())
+		}
+
 		// Start CloudWatch poller for configured sources.
-		// Poller uses coord.GetShards() to find healthy shards dynamically.
 		p := poller.New(store, coord)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
