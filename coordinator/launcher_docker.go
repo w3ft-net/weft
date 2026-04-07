@@ -1,0 +1,96 @@
+package coordinator
+
+import (
+	"context"
+	"fmt"
+	"os/exec"
+	"strings"
+	"sync"
+	"time"
+)
+
+// DockerLauncher starts shard containers for integration tests.
+// Requires the weft shard image to be built (docker compose build).
+type DockerLauncher struct {
+	mu         sync.Mutex
+	image      string
+	network    string
+	containers map[string]string // addr → container ID
+	nextPort   int
+}
+
+// NewDockerLauncher creates a launcher that starts containers from the given
+// image on the given Docker network.
+func NewDockerLauncher(image, network string) *DockerLauncher {
+	return &DockerLauncher{
+		image:      image,
+		network:    network,
+		containers: make(map[string]string),
+		nextPort:   19000, // start from a high port range
+	}
+}
+
+func (d *DockerLauncher) Launch(ctx context.Context, tier string) (string, error) {
+	d.mu.Lock()
+	port := d.nextPort
+	d.nextPort++
+	d.mu.Unlock()
+
+	// Start a blank shard container (no --window-start/--window-end).
+	name := fmt.Sprintf("weft-shard-bench-%d", port)
+	args := []string{
+		"run", "-d", "--rm",
+		"--name", name,
+		"--network", d.network,
+		"-p", fmt.Sprintf("%d:9000", port),
+		d.image,
+		"weft-shard",
+		"--grpc-port=9000",
+		"--http-port=9001",
+	}
+
+	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("docker run: %w\n%s", err, out)
+	}
+
+	containerID := strings.TrimSpace(string(out))
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+
+	d.mu.Lock()
+	d.containers[addr] = containerID
+	d.mu.Unlock()
+
+	// Wait for the shard to be reachable.
+	for i := 0; i < 30; i++ {
+		time.Sleep(500 * time.Millisecond)
+		check := exec.CommandContext(ctx, "docker", "exec", containerID, "true")
+		if check.Run() == nil {
+			return addr, nil
+		}
+	}
+
+	return addr, nil // optimistic — gRPC client will retry
+}
+
+func (d *DockerLauncher) Terminate(_ context.Context, addr string) error {
+	d.mu.Lock()
+	containerID, ok := d.containers[addr]
+	delete(d.containers, addr)
+	d.mu.Unlock()
+
+	if ok {
+		exec.Command("docker", "rm", "-f", containerID).Run()
+	}
+	return nil
+}
+
+// Close terminates all containers.
+func (d *DockerLauncher) Close() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, id := range d.containers {
+		exec.Command("docker", "rm", "-f", id).Run()
+	}
+	d.containers = make(map[string]string)
+}

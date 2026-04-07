@@ -2,27 +2,85 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
+	"sync"
+	"time"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
 
 // Server implements the ShardQuery gRPC service backed by a DuckDBShard.
+// The shard can be nil at startup (blank-start mode) and initialized
+// later via the Configure RPC.
 type Server struct {
 	pb.UnimplementedShardQueryServer
+	mu    sync.RWMutex
 	shard *shard.DuckDBShard
+	id    string
+	apps  []string
 }
 
-// NewServer creates a new shard gRPC server.
+// NewServer creates a new shard gRPC server. s can be nil for blank-start mode.
 func NewServer(s *shard.DuckDBShard) *Server {
-	return &Server{shard: s}
+	srv := &Server{shard: s}
+	if s != nil {
+		srv.id = s.ID()
+	}
+	return srv
+}
+
+// getShard returns the shard, or an error if not yet configured.
+func (s *Server) getShard() (*shard.DuckDBShard, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.shard == nil {
+		return nil, fmt.Errorf("shard not configured — waiting for Configure RPC")
+	}
+	return s.shard, nil
+}
+
+// Configure assigns an identity and creates the DuckDB for a blank shard.
+func (s *Server) Configure(_ context.Context, req *pb.ConfigureRequest) (*pb.ConfigureResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.shard != nil {
+		return nil, fmt.Errorf("shard already configured as %s", s.id)
+	}
+
+	start, err := time.Parse(time.RFC3339, req.WindowStart)
+	if err != nil {
+		return nil, fmt.Errorf("parse window_start: %w", err)
+	}
+	end, err := time.Parse(time.RFC3339, req.WindowEnd)
+	if err != nil {
+		return nil, fmt.Errorf("parse window_end: %w", err)
+	}
+
+	ds, err := shard.NewDuckDBShard(req.ShardId, "", start, end)
+	if err != nil {
+		return nil, fmt.Errorf("create shard: %w", err)
+	}
+
+	s.shard = ds
+	s.id = req.ShardId
+	s.apps = req.Apps
+	log.Printf("shard configured: id=%s apps=%v window=[%s, %s]",
+		req.ShardId, req.Apps, req.WindowStart, req.WindowEnd)
+
+	return &pb.ConfigureResponse{}, nil
 }
 
 // Query executes SQL and streams matching rows to the client.
 func (s *Server) Query(req *pb.QueryRequest, stream pb.ShardQuery_QueryServer) error {
-	rows, err := s.shard.Query(req.Sql)
+	ds, err := s.getShard()
+	if err != nil {
+		return err
+	}
+	rows, err := ds.Query(req.Sql)
 	if err != nil {
 		return err
 	}
@@ -44,7 +102,11 @@ func (s *Server) QueryToCompute(_ context.Context, req *pb.QueryToComputeRequest
 
 // Ingest accepts a batch of rows for insertion.
 func (s *Server) Ingest(_ context.Context, req *pb.IngestRequest) (*pb.IngestResponse, error) {
-	if err := s.shard.Ingest(req.Rows); err != nil {
+	ds, err := s.getShard()
+	if err != nil {
+		return nil, err
+	}
+	if err := ds.Ingest(req.Rows); err != nil {
 		return nil, err
 	}
 	return &pb.IngestResponse{RowsIngested: int64(len(req.Rows))}, nil
@@ -52,6 +114,11 @@ func (s *Server) Ingest(_ context.Context, req *pb.IngestRequest) (*pb.IngestRes
 
 // IngestStream accepts a long-lived stream of LogRows from a weftd agent.
 func (s *Server) IngestStream(stream pb.ShardQuery_IngestStreamServer) error {
+	ds, err := s.getShard()
+	if err != nil {
+		return err
+	}
+
 	var rows []*pb.LogRow
 	var count int64
 
@@ -68,7 +135,7 @@ func (s *Server) IngestStream(stream pb.ShardQuery_IngestStreamServer) error {
 		count++
 
 		if len(rows) >= 100 {
-			if err := s.shard.Ingest(rows); err != nil {
+			if err := ds.Ingest(rows); err != nil {
 				log.Printf("ingest-stream: %v", err)
 			}
 			rows = rows[:0]
@@ -76,7 +143,7 @@ func (s *Server) IngestStream(stream pb.ShardQuery_IngestStreamServer) error {
 	}
 
 	if len(rows) > 0 {
-		if err := s.shard.Ingest(rows); err != nil {
+		if err := ds.Ingest(rows); err != nil {
 			log.Printf("ingest-stream flush: %v", err)
 		}
 	}

@@ -23,6 +23,7 @@ const (
 	ShardQuery_QueryToCompute_FullMethodName = "/weft.ShardQuery/QueryToCompute"
 	ShardQuery_Ingest_FullMethodName         = "/weft.ShardQuery/Ingest"
 	ShardQuery_IngestStream_FullMethodName   = "/weft.ShardQuery/IngestStream"
+	ShardQuery_Configure_FullMethodName      = "/weft.ShardQuery/Configure"
 )
 
 // ShardQueryClient is the client API for ShardQuery service.
@@ -40,6 +41,9 @@ type ShardQueryClient interface {
 	// IngestStream accepts a long-lived stream of log rows from weftd agents.
 	// The agent authenticates via metadata (shard token from coordinator).
 	IngestStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[LogRow, IngestStreamResponse], error)
+	// Configure assigns an identity and time window to a blank shard.
+	// Called by the coordinator after discovering a new instance.
+	Configure(ctx context.Context, in *ConfigureRequest, opts ...grpc.CallOption) (*ConfigureResponse, error)
 }
 
 type shardQueryClient struct {
@@ -102,6 +106,16 @@ func (c *shardQueryClient) IngestStream(ctx context.Context, opts ...grpc.CallOp
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ShardQuery_IngestStreamClient = grpc.ClientStreamingClient[LogRow, IngestStreamResponse]
 
+func (c *shardQueryClient) Configure(ctx context.Context, in *ConfigureRequest, opts ...grpc.CallOption) (*ConfigureResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConfigureResponse)
+	err := c.cc.Invoke(ctx, ShardQuery_Configure_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ShardQueryServer is the server API for ShardQuery service.
 // All implementations must embed UnimplementedShardQueryServer
 // for forward compatibility.
@@ -117,6 +131,9 @@ type ShardQueryServer interface {
 	// IngestStream accepts a long-lived stream of log rows from weftd agents.
 	// The agent authenticates via metadata (shard token from coordinator).
 	IngestStream(grpc.ClientStreamingServer[LogRow, IngestStreamResponse]) error
+	// Configure assigns an identity and time window to a blank shard.
+	// Called by the coordinator after discovering a new instance.
+	Configure(context.Context, *ConfigureRequest) (*ConfigureResponse, error)
 	mustEmbedUnimplementedShardQueryServer()
 }
 
@@ -138,6 +155,9 @@ func (UnimplementedShardQueryServer) Ingest(context.Context, *IngestRequest) (*I
 }
 func (UnimplementedShardQueryServer) IngestStream(grpc.ClientStreamingServer[LogRow, IngestStreamResponse]) error {
 	return status.Error(codes.Unimplemented, "method IngestStream not implemented")
+}
+func (UnimplementedShardQueryServer) Configure(context.Context, *ConfigureRequest) (*ConfigureResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Configure not implemented")
 }
 func (UnimplementedShardQueryServer) mustEmbedUnimplementedShardQueryServer() {}
 func (UnimplementedShardQueryServer) testEmbeddedByValue()                    {}
@@ -214,6 +234,24 @@ func _ShardQuery_IngestStream_Handler(srv interface{}, stream grpc.ServerStream)
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ShardQuery_IngestStreamServer = grpc.ClientStreamingServer[LogRow, IngestStreamResponse]
 
+func _ShardQuery_Configure_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfigureRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ShardQueryServer).Configure(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ShardQuery_Configure_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ShardQueryServer).Configure(ctx, req.(*ConfigureRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ShardQuery_ServiceDesc is the grpc.ServiceDesc for ShardQuery service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -228,6 +266,10 @@ var ShardQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Ingest",
 			Handler:    _ShardQuery_Ingest_Handler,
+		},
+		{
+			MethodName: "Configure",
+			Handler:    _ShardQuery_Configure_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

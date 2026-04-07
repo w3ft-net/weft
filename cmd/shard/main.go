@@ -27,33 +27,40 @@ func main() {
 	seed := flag.String("seed", "", "seed with fixture data: shard-0 or shard-1")
 	flag.Parse()
 
-	start, err := time.Parse(time.RFC3339, *windowStart)
-	if err != nil {
-		log.Fatalf("invalid --window-start: %v", err)
-	}
-	end, err := time.Parse(time.RFC3339, *windowEnd)
-	if err != nil {
-		log.Fatalf("invalid --window-end: %v", err)
-	}
-
-	ds, err := shard.NewDuckDBShard(*shardID, *dbPath, start, end)
-	if err != nil {
-		log.Fatalf("failed to open shard: %v", err)
-	}
-	defer ds.Close()
-
-	if *seed != "" {
-		rows := coordinator.DevShardRows(*seed)
-		if rows == nil {
-			log.Fatalf("unknown seed: %s (use shard-0 or shard-1)", *seed)
+	// Blank-start mode: if no window flags, start without DuckDB and wait
+	// for the coordinator's Configure RPC to assign identity + time window.
+	var ds *shard.DuckDBShard
+	if *windowStart != "" && *windowEnd != "" {
+		start, err := time.Parse(time.RFC3339, *windowStart)
+		if err != nil {
+			log.Fatalf("invalid --window-start: %v", err)
 		}
-		if err := ds.Ingest(rows); err != nil {
-			log.Fatalf("seed ingest: %v", err)
+		end, err := time.Parse(time.RFC3339, *windowEnd)
+		if err != nil {
+			log.Fatalf("invalid --window-end: %v", err)
 		}
-		log.Printf("seeded %d rows", len(rows))
+
+		ds, err = shard.NewDuckDBShard(*shardID, *dbPath, start, end)
+		if err != nil {
+			log.Fatalf("failed to open shard: %v", err)
+		}
+		defer ds.Close()
+
+		if *seed != "" {
+			rows := coordinator.DevShardRows(*seed)
+			if rows == nil {
+				log.Fatalf("unknown seed: %s (use shard-0 or shard-1)", *seed)
+			}
+			if err := ds.Ingest(rows); err != nil {
+				log.Fatalf("seed ingest: %v", err)
+			}
+			log.Printf("seeded %d rows", len(rows))
+		}
+	} else {
+		log.Println("blank-start mode: waiting for Configure RPC")
 	}
 
-	// gRPC server.
+	// gRPC server. Pass nil ds for blank-start (Configure RPC creates it).
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *grpcPort))
 	if err != nil {
 		log.Fatalf("listen grpc: %v", err)
@@ -71,10 +78,14 @@ func main() {
 	// HTTP health endpoint.
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		h := map[string]any{
-			"state":        "INGESTING",
-			"window_start": start.Format(time.RFC3339),
-			"window_end":   end.Format(time.RFC3339),
-			"shard_id":     *shardID,
+			"shard_id": *shardID,
+		}
+		if ds != nil {
+			h["state"] = "INGESTING"
+			h["window_start"] = ds.WindowStart().Format(time.RFC3339)
+			h["window_end"] = ds.WindowEnd().Format(time.RFC3339)
+		} else {
+			h["state"] = "UNCONFIGURED"
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(h)

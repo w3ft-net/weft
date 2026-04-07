@@ -29,11 +29,12 @@ type QueryResult struct {
 
 // Coordinator routes queries to shards and merges results.
 type Coordinator struct {
-	Registry *ShardRegistry
-	Customer string
-	Pool     compute.ComputePool // nil = no compute support
-	Tail     *TailBroker
-	Ingest   *RingBuffer // write path: IngestStream → buffer → shards
+	Registry    *ShardRegistry
+	Customer    string
+	Pool        compute.ComputePool // nil = no compute support
+	Tail        *TailBroker
+	Ingest      *RingBuffer    // write path: IngestStream → buffer → shards
+	Provisioner *Provisioner   // shard lifecycle management (nil = no auto-provisioning)
 }
 
 // NewCoordinator creates a coordinator with the given initial shard list.
@@ -90,6 +91,9 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 					}
 					if sh != nil {
 						sh.Ingest(rows)
+						if c.Provisioner != nil {
+							c.Provisioner.Stats().Record(app, int64(len(rows)))
+						}
 					}
 				}
 			}

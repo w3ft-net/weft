@@ -23,7 +23,20 @@ service ShardQuery {
   // IngestStream accepts a long-lived stream of log rows from weftd agents.
   // The agent authenticates via metadata (shard token from coordinator).
   rpc IngestStream(stream LogRow) returns (IngestStreamResponse);
+
+  // Configure assigns an identity and time window to a blank shard.
+  // Called by the coordinator after discovering a new instance.
+  rpc Configure(ConfigureRequest) returns (ConfigureResponse);
 }
+
+message ConfigureRequest {
+  string shard_id = 1;
+  repeated string apps = 2;
+  string window_start = 3; // RFC3339
+  string window_end = 4;   // RFC3339
+}
+
+message ConfigureResponse {}
 
 message IngestStreamResponse {
   int64 rows_received = 1;
