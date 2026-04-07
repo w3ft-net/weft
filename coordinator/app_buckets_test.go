@@ -68,6 +68,85 @@ func TestBucketManager_NoDuplicateSplit(t *testing.T) {
 	}
 }
 
+func TestRegistry_RoundRobinIngestion(t *testing.T) {
+	s0, err := shard.NewDuckDBShard("s0", "", t0, t2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s0.Close() })
+
+	s1, err := shard.NewDuckDBShard("s1", "", t0, t2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s1.Close() })
+
+	reg := NewShardRegistry()
+	reg.Add(&ShardEntry{
+		ID: "s0", Apps: []string{"vimgym"},
+		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: s0,
+	})
+	reg.Add(&ShardEntry{
+		ID: "s1", Apps: []string{"vimgym"},
+		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: s1,
+	})
+
+	// Round-robin should alternate between s0 and s1.
+	seen := make(map[string]int)
+	for i := 0; i < 100; i++ {
+		sh := reg.IngestingShard("vimgym")
+		if sh == nil {
+			t.Fatal("nil shard")
+		}
+		seen[sh.ID()]++
+	}
+
+	if len(seen) != 2 {
+		t.Fatalf("expected 2 distinct shards, got %d: %v", len(seen), seen)
+	}
+	// Each should get roughly 50 (allow some variance from map iteration order).
+	for id, count := range seen {
+		if count < 30 || count > 70 {
+			t.Errorf("shard %s got %d/100 writes — expected ~50", id, count)
+		}
+	}
+}
+
+func TestProvisioner_ScalesUpToConfiguredCount(t *testing.T) {
+	ds, err := shard.NewDuckDBShard("shard-only", "", t0, t2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ds.Close() })
+
+	reg := NewShardRegistry()
+	reg.Add(&ShardEntry{
+		ID: "shard-only", Apps: []string{"vimgym"},
+		WindowStart: t0, WindowEnd: t2, State: StateIngesting,
+		Shard: ds, CreatedAt: time.Now(),
+	})
+
+	launcher := NewLocalLauncher()
+	t.Cleanup(func() { launcher.Close() })
+
+	config := ProvisionerConfig{
+		MaxRows:            5_000_000,
+		MaxDuration:        1 * time.Hour,
+		IngestingPerBucket: 3, // want 3, have 1
+	}
+
+	prov := NewProvisioner(reg, launcher, config)
+	prov.Buckets = NewBucketManager([]string{"vimgym"})
+
+	prov.check(context.Background())
+
+	// Should have scaled up to 3 ingesting shards.
+	count := reg.IngestingCount("vimgym")
+	if count != 3 {
+		t.Fatalf("expected 3 ingesting shards, got %d", count)
+	}
+}
+
 func TestProvisioner_SplitCreatesNewShard(t *testing.T) {
 	ds, err := shard.NewDuckDBShard("shard-shared", "", t0, t2)
 	if err != nil {

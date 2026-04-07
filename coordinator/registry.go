@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kevlarcon/weft/shard"
@@ -49,6 +50,7 @@ func (e *ShardEntry) hasApp(app string) bool {
 type ShardRegistry struct {
 	mu      sync.RWMutex
 	entries map[string]*ShardEntry
+	robin   atomic.Uint64 // round-robin counter for write distribution
 }
 
 // NewShardRegistry creates an empty registry.
@@ -110,21 +112,41 @@ func (r *ShardRegistry) MatchingShards(tr TimeRange, app string) []shard.Shard {
 	return out
 }
 
-// IngestingShard returns the live Shard connection for the current INGESTING
-// shard that owns the given app. Returns nil if none found.
+// IngestingShard returns an INGESTING shard for the given app, selected
+// via round-robin across all matching INGESTING shards. This distributes
+// writes across N concurrent writable shards for the same app.
 func (r *ShardRegistry) IngestingShard(app string) shard.Shard {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	var candidates []shard.Shard
 	for _, e := range r.entries {
 		if e.State != StateIngesting || e.Shard == nil {
 			continue
 		}
 		if e.hasApp(app) {
-			return e.Shard
+			candidates = append(candidates, e.Shard)
 		}
 	}
-	return nil
+
+	if len(candidates) == 0 {
+		return nil
+	}
+	idx := r.robin.Add(1) % uint64(len(candidates))
+	return candidates[idx]
+}
+
+// IngestingCount returns the number of INGESTING shards for the given app.
+func (r *ShardRegistry) IngestingCount(app string) int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	n := 0
+	for _, e := range r.entries {
+		if e.State == StateIngesting && e.Shard != nil && e.hasApp(app) {
+			n++
+		}
+	}
+	return n
 }
 
 // DefaultIngestingShard returns any INGESTING shard, preferring one with

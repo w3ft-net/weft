@@ -84,6 +84,7 @@ func main() {
 			h["state"] = "INGESTING"
 			h["window_start"] = ds.WindowStart().Format(time.RFC3339)
 			h["window_end"] = ds.WindowEnd().Format(time.RFC3339)
+			h["row_count"] = ds.RowCount()
 		} else {
 			h["state"] = "UNCONFIGURED"
 		}

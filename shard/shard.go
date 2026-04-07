@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
@@ -35,6 +36,7 @@ type DuckDBShard struct {
 	db          *sql.DB
 	windowStart time.Time
 	windowEnd   time.Time
+	rowCount    atomic.Int64
 }
 
 const createTableSQL = `
@@ -128,7 +130,15 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
 	}
 
 	_, err := s.db.Exec(sb.String(), args...)
+	if err == nil {
+		s.rowCount.Add(int64(len(rows)))
+	}
 	return err
+}
+
+// RowCount returns the total number of rows ingested into this shard.
+func (s *DuckDBShard) RowCount() int64 {
+	return s.rowCount.Load()
 }
 
 // Query executes a SQL query and returns the matching rows.

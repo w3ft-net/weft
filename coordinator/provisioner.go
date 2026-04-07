@@ -13,29 +13,32 @@ import (
 
 // ProvisionerConfig controls shard rotation thresholds.
 type ProvisionerConfig struct {
-	MaxRows      int64         // rotate when row count exceeds this (default 5M)
-	MaxDiskBytes int64         // rotate when disk exceeds this (default 500MB)
-	MaxDuration  time.Duration // rotate after this time (default 8h)
-	PollInterval time.Duration // how often to check (default 30s)
+	MaxRows           int64         // rotate when row count exceeds this (default 5M)
+	MaxDiskBytes      int64         // rotate when disk exceeds this (default 500MB)
+	MaxDuration       time.Duration // rotate after this time (default 8h)
+	PollInterval      time.Duration // how often to check (default 5min)
+	IngestingPerBucket int          // number of concurrent INGESTING shards per app bucket (default 2)
 }
 
 // DefaultProvisionerConfig returns sensible production defaults.
 func DefaultProvisionerConfig() ProvisionerConfig {
 	return ProvisionerConfig{
-		MaxRows:      5_000_000,
-		MaxDiskBytes: 500 * 1024 * 1024, // 500MB
-		MaxDuration:  8 * time.Hour,
-		PollInterval: 30 * time.Second,
+		MaxRows:            5_000_000,
+		MaxDiskBytes:       500 * 1024 * 1024, // 500MB
+		MaxDuration:        8 * time.Hour,
+		PollInterval:       5 * time.Minute,
+		IngestingPerBucket: 2,
 	}
 }
 
 // DevProvisionerConfig returns faster thresholds for development/testing.
 func DevProvisionerConfig() ProvisionerConfig {
 	return ProvisionerConfig{
-		MaxRows:      50_000,
-		MaxDiskBytes: 50 * 1024 * 1024, // 50MB
-		MaxDuration:  1 * time.Hour,
-		PollInterval: 5 * time.Second,
+		MaxRows:            50_000,
+		MaxDiskBytes:       50 * 1024 * 1024, // 50MB
+		MaxDuration:        1 * time.Hour,
+		PollInterval:       5 * time.Second,
+		IngestingPerBucket: 2,
 	}
 }
 
@@ -132,6 +135,20 @@ func (p *Provisioner) check(ctx context.Context) {
 		}
 	}
 
+	// Ensure each bucket has enough INGESTING shards.
+	if p.Buckets != nil && p.config.IngestingPerBucket > 0 {
+		for _, bucket := range p.Buckets.Buckets() {
+			app := bucket.Apps[0] // check using first app in bucket
+			current := p.registry.IngestingCount(app)
+			for current < p.config.IngestingPerBucket {
+				log.Printf("provisioner: scaling up %s (%d/%d ingesting shards)",
+					bucket.ID, current, p.config.IngestingPerBucket)
+				p.provisionForBucket(ctx, bucket)
+				current++
+			}
+		}
+	}
+
 	for _, entry := range p.registry.Entries() {
 		if entry.State != StateIngesting {
 			continue
@@ -169,7 +186,8 @@ func (p *Provisioner) rotate(ctx context.Context, old *ShardEntry) {
 
 	// Connect to the new shard.
 	now := time.Now().UTC()
-	newID := fmt.Sprintf("shard-%s-%s", joinApps(old.Apps), now.Format("20060102T1504"))
+	seq := p.registry.Count()
+	newID := fmt.Sprintf("shard-%s-%s-%d", joinApps(old.Apps), now.Format("20060102T1504"), seq)
 
 	gs, err := shard.NewGRPCShard(newID, addr, now, now.Add(100*365*24*time.Hour))
 	if err != nil {
@@ -206,7 +224,8 @@ func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket)
 	}
 
 	now := time.Now().UTC()
-	id := fmt.Sprintf("shard-%s-%s", joinApps(bucket.Apps), now.Format("20060102T1504"))
+	seq := p.registry.Count() // unique suffix
+	id := fmt.Sprintf("shard-%s-%s-%d", joinApps(bucket.Apps), now.Format("20060102T1504"), seq)
 
 	gs, err := shard.NewGRPCShard(id, addr, now, now.Add(100*365*24*time.Hour))
 	if err != nil {
