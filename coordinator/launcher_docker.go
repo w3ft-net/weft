@@ -7,6 +7,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
+	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
 // DockerLauncher starts shard containers for integration tests.
@@ -30,7 +35,7 @@ func NewDockerLauncher(image, network string) *DockerLauncher {
 	}
 }
 
-func (d *DockerLauncher) Launch(ctx context.Context, tier string) (string, error) {
+func (d *DockerLauncher) Launch(ctx context.Context, tier string, cfg *pb.ConfigureRequest) (string, error) {
 	d.mu.Lock()
 	port := d.nextPort
 	d.nextPort++
@@ -61,13 +66,22 @@ func (d *DockerLauncher) Launch(ctx context.Context, tier string) (string, error
 	d.containers[addr] = containerID
 	d.mu.Unlock()
 
-	// Wait for the shard to be reachable.
+	// Wait for the shard gRPC to be reachable, then call Configure.
 	for i := 0; i < 30; i++ {
 		time.Sleep(500 * time.Millisecond)
-		check := exec.CommandContext(ctx, "docker", "exec", containerID, "true")
-		if check.Run() == nil {
-			return addr, nil
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			continue
 		}
+		if cfg != nil {
+			client := pb.NewShardQueryClient(conn)
+			if _, err := client.Configure(ctx, cfg); err != nil {
+				conn.Close()
+				continue
+			}
+		}
+		conn.Close()
+		return addr, nil
 	}
 
 	return addr, nil // optimistic — gRPC client will retry

@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
 
@@ -176,32 +177,37 @@ func (p *Provisioner) check(ctx context.Context) {
 
 // rotate transitions an INGESTING shard to READ_ONLY and launches a replacement.
 func (p *Provisioner) rotate(ctx context.Context, old *ShardEntry) {
-	// Launch a new shard instance.
+	now := time.Now().UTC()
+	seq := p.registry.Count()
+	newID := fmt.Sprintf("shard-%s-%s-%d", joinApps(old.Apps), now.Format("20060102T1504"), seq)
+	farFuture := now.Add(100 * 365 * 24 * time.Hour)
+
+	cfg := &pb.ConfigureRequest{
+		ShardId:     newID,
+		Apps:        old.Apps,
+		WindowStart: now.Format(time.RFC3339),
+		WindowEnd:   farFuture.Format(time.RFC3339),
+	}
+
 	tier := "small" // TODO: determine from app bucket throughput
-	addr, err := p.launcher.Launch(ctx, tier)
+	addr, err := p.launcher.Launch(ctx, tier, cfg)
 	if err != nil {
 		log.Printf("provisioner: failed to launch replacement for %s: %v", old.ID, err)
 		return
 	}
 
-	// Connect to the new shard.
-	now := time.Now().UTC()
-	seq := p.registry.Count()
-	newID := fmt.Sprintf("shard-%s-%s-%d", joinApps(old.Apps), now.Format("20060102T1504"), seq)
-
-	gs, err := shard.NewGRPCShard(newID, addr, now, now.Add(100*365*24*time.Hour))
+	gs, err := shard.NewGRPCShard(newID, addr, now, farFuture)
 	if err != nil {
 		log.Printf("provisioner: failed to connect to new shard at %s: %v", addr, err)
 		p.launcher.Terminate(ctx, addr)
 		return
 	}
 
-	// Register the new shard.
 	p.registry.Add(&ShardEntry{
 		ID:          newID,
 		Apps:        old.Apps,
 		WindowStart: now,
-		WindowEnd:   now.Add(100 * 365 * 24 * time.Hour), // far future until next rotation
+		WindowEnd:   farFuture,
 		State:       StateIngesting,
 		Addr:        addr,
 		Shard:       gs,
@@ -216,18 +222,26 @@ func (p *Provisioner) rotate(ctx context.Context, old *ShardEntry) {
 
 // provisionForBucket launches a new INGESTING shard for a bucket.
 func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket) {
+	now := time.Now().UTC()
+	seq := p.registry.Count()
+	id := fmt.Sprintf("shard-%s-%s-%d", joinApps(bucket.Apps), now.Format("20060102T1504"), seq)
+	farFuture := now.Add(100 * 365 * 24 * time.Hour)
+
+	cfg := &pb.ConfigureRequest{
+		ShardId:     id,
+		Apps:        bucket.Apps,
+		WindowStart: now.Format(time.RFC3339),
+		WindowEnd:   farFuture.Format(time.RFC3339),
+	}
+
 	tier := "small" // TODO: determine from throughput history
-	addr, err := p.launcher.Launch(ctx, tier)
+	addr, err := p.launcher.Launch(ctx, tier, cfg)
 	if err != nil {
 		log.Printf("provisioner: failed to launch shard for bucket %s: %v", bucket.ID, err)
 		return
 	}
 
-	now := time.Now().UTC()
-	seq := p.registry.Count() // unique suffix
-	id := fmt.Sprintf("shard-%s-%s-%d", joinApps(bucket.Apps), now.Format("20060102T1504"), seq)
-
-	gs, err := shard.NewGRPCShard(id, addr, now, now.Add(100*365*24*time.Hour))
+	gs, err := shard.NewGRPCShard(id, addr, now, farFuture)
 	if err != nil {
 		log.Printf("provisioner: failed to connect to new shard at %s: %v", addr, err)
 		p.launcher.Terminate(ctx, addr)
@@ -238,7 +252,7 @@ func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket)
 		ID:          id,
 		Apps:        bucket.Apps,
 		WindowStart: now,
-		WindowEnd:   now.Add(100 * 365 * 24 * time.Hour),
+		WindowEnd:   farFuture,
 		State:       StateIngesting,
 		Addr:        addr,
 		Shard:       gs,
