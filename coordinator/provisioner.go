@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,9 +21,10 @@ type ProvisionerConfig struct {
 	MaxDiskBytes       int64         // rotate when disk exceeds this (default 500MB)
 	MaxDuration        time.Duration // rotate after this time (default 8h)
 	PollInterval       time.Duration // how often to check (default 5min)
-	IngestingPerBucket int           // number of concurrent INGESTING shards per app bucket (default 2)
-	RetentionPeriod    time.Duration // how long READ_ONLY shards stay hot before archiving (0 = no archival)
-	ParquetDir         string        // directory for Parquet exports (local or s3:// prefix)
+	IngestingPerBucket int             // number of concurrent INGESTING shards per app bucket (default 2)
+	RetentionPeriod    time.Duration   // how long READ_ONLY shards stay hot before archiving (0 = no archival)
+	ParquetDir         string          // directory for Parquet exports (local path or s3:// prefix)
+	S3Config           *shard.S3Config // S3 credentials for Parquet export/read (nil = local only)
 }
 
 // DefaultProvisionerConfig returns sensible production defaults.
@@ -194,31 +196,39 @@ func (p *Provisioner) check(ctx context.Context) {
 
 // archive exports a READ_ONLY shard to Parquet and replaces it with a ColdShard.
 func (p *Provisioner) archive(entry *ShardEntry) {
-	// Build Parquet path from apps + time.
 	appLabel := joinApps(entry.Apps)
 	parquetPath := fmt.Sprintf("%s/%s/%s.parquet",
 		p.config.ParquetDir, appLabel, entry.ID)
 
-	// Ensure parent directory exists.
-	if err := os.MkdirAll(filepath.Dir(parquetPath), 0755); err != nil {
-		log.Printf("provisioner: mkdir for %s: %v", parquetPath, err)
-		return
-	}
+	s3cfg := p.config.S3Config
+	isS3 := strings.HasPrefix(p.config.ParquetDir, "s3://")
 
-	// Export: the shard must be a DuckDBShard (in-process) for direct export.
-	// For remote shards, this would use the ExportParquet RPC.
-	if ds, ok := entry.Shard.(*shard.DuckDBShard); ok {
-		if err := ds.ExportToParquet(parquetPath); err != nil {
-			log.Printf("provisioner: export %s failed: %v", entry.ID, err)
-			return
-		}
-	} else {
+	ds, ok := entry.Shard.(*shard.DuckDBShard)
+	if !ok {
 		log.Printf("provisioner: cannot export non-DuckDB shard %s (type %T)", entry.ID, entry.Shard)
 		return
 	}
 
+	if isS3 && s3cfg != nil {
+		// Export directly to S3 via DuckDB httpfs.
+		if err := ds.ExportToS3Parquet(parquetPath, s3cfg); err != nil {
+			log.Printf("provisioner: S3 export %s failed: %v", entry.ID, err)
+			return
+		}
+	} else {
+		// Export to local filesystem.
+		if err := os.MkdirAll(filepath.Dir(parquetPath), 0755); err != nil {
+			log.Printf("provisioner: mkdir for %s: %v", parquetPath, err)
+			return
+		}
+		if err := ds.ExportToParquet(parquetPath); err != nil {
+			log.Printf("provisioner: export %s failed: %v", entry.ID, err)
+			return
+		}
+	}
+
 	// Create ColdShard backed by the Parquet file.
-	cold, err := shard.NewColdShard(entry.ID, entry.Apps, parquetPath, entry.WindowStart, entry.WindowEnd)
+	cold, err := shard.NewColdShard(entry.ID, entry.Apps, parquetPath, entry.WindowStart, entry.WindowEnd, s3cfg)
 	if err != nil {
 		log.Printf("provisioner: create cold shard for %s: %v", entry.ID, err)
 		return

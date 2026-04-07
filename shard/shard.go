@@ -140,9 +140,19 @@ func (s *DuckDBShard) RowCount() int64 {
 	return s.rowCount.Load()
 }
 
-// ExportToParquet exports the logs table to a Parquet file.
+// ExportToParquet exports the logs table to a Parquet file (local path).
 func (s *DuckDBShard) ExportToParquet(path string) error {
 	_, err := s.db.Exec(fmt.Sprintf("COPY logs TO '%s' (FORMAT PARQUET)", path))
+	return err
+}
+
+// ExportToS3Parquet exports the logs table to a Parquet file on S3.
+// Configures httpfs on this DuckDB connection, then writes directly.
+func (s *DuckDBShard) ExportToS3Parquet(s3Path string, cfg *S3Config) error {
+	if err := cfg.ConfigureDuckDB(s.db); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(fmt.Sprintf("COPY logs TO '%s' (FORMAT PARQUET)", s3Path))
 	return err
 }
 

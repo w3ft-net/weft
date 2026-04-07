@@ -11,16 +11,6 @@ import (
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
-// S3Config holds S3/MinIO connection settings for ColdShard.
-// If nil, ColdShard reads from local filesystem.
-type S3Config struct {
-	Endpoint  string // e.g., "localhost:9050" for MinIO, "" for AWS
-	AccessKey string
-	SecretKey string
-	Region    string
-	UseSSL    bool
-}
-
 // ColdShard implements the Shard interface by querying a Parquet file
 // via DuckDB's read_parquet(). Used for archived shards whose data has
 // been exported from a live DuckDB to Parquet (locally or on S3).
@@ -41,34 +31,10 @@ func NewColdShard(id string, apps []string, parquetPath string, start, end time.
 		return nil, fmt.Errorf("open in-memory duckdb: %w", err)
 	}
 
-	// Configure S3/httpfs if needed.
 	if len(s3cfg) > 0 && s3cfg[0] != nil {
-		cfg := s3cfg[0]
-		if _, err := db.Exec("INSTALL httpfs; LOAD httpfs;"); err != nil {
+		if err := s3cfg[0].ConfigureDuckDB(db); err != nil {
 			db.Close()
-			return nil, fmt.Errorf("load httpfs: %w", err)
-		}
-		ssl := "false"
-		if cfg.UseSSL {
-			ssl = "true"
-		}
-		stmts := []string{
-			fmt.Sprintf("SET s3_access_key_id='%s'", cfg.AccessKey),
-			fmt.Sprintf("SET s3_secret_access_key='%s'", cfg.SecretKey),
-			fmt.Sprintf("SET s3_use_ssl=%s", ssl),
-			"SET s3_url_style='path'",
-		}
-		if cfg.Endpoint != "" {
-			stmts = append(stmts, fmt.Sprintf("SET s3_endpoint='%s'", cfg.Endpoint))
-		}
-		if cfg.Region != "" {
-			stmts = append(stmts, fmt.Sprintf("SET s3_region='%s'", cfg.Region))
-		}
-		for _, stmt := range stmts {
-			if _, err := db.Exec(stmt); err != nil {
-				db.Close()
-				return nil, fmt.Errorf("s3 config: %w", err)
-			}
+			return nil, err
 		}
 	}
 
