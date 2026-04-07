@@ -81,6 +81,7 @@ type Provisioner struct {
 	launcher ShardLauncher
 	config   ProvisionerConfig
 	stats    *AppStats
+	Buckets  *BucketManager
 }
 
 // NewProvisioner creates a provisioner.
@@ -90,6 +91,7 @@ func NewProvisioner(registry *ShardRegistry, launcher ShardLauncher, config Prov
 		launcher: launcher,
 		config:   config,
 		stats:    NewAppStats(),
+		Buckets:  NewBucketManager(nil),
 	}
 }
 
@@ -116,8 +118,20 @@ func (p *Provisioner) Start(ctx context.Context) {
 	}()
 }
 
-// check evaluates each INGESTING shard for rotation.
+// check evaluates each INGESTING shard for rotation and app split.
 func (p *Provisioner) check(ctx context.Context) {
+	// Evaluate bucket splits based on ingestion stats.
+	if p.Buckets != nil {
+		snapshot := p.stats.Snapshot()
+		if app := p.Buckets.EvaluateSplit(snapshot); app != "" {
+			if bucket := p.Buckets.Split(app); bucket != nil {
+				// Provision a dedicated shard for the split-out app.
+				log.Printf("provisioner: splitting %s into dedicated shard", app)
+				p.provisionForBucket(ctx, bucket)
+			}
+		}
+	}
+
 	for _, entry := range p.registry.Entries() {
 		if entry.State != StateIngesting {
 			continue
@@ -180,6 +194,39 @@ func (p *Provisioner) rotate(ctx context.Context, old *ShardEntry) {
 	old.WindowEnd = now
 	old.State = StateReadOnly
 	log.Printf("provisioner: shard %s → READ_ONLY, new shard %s at %s", old.ID, newID, addr)
+}
+
+// provisionForBucket launches a new INGESTING shard for a bucket.
+func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket) {
+	tier := "small" // TODO: determine from throughput history
+	addr, err := p.launcher.Launch(ctx, tier)
+	if err != nil {
+		log.Printf("provisioner: failed to launch shard for bucket %s: %v", bucket.ID, err)
+		return
+	}
+
+	now := time.Now().UTC()
+	id := fmt.Sprintf("shard-%s-%s", joinApps(bucket.Apps), now.Format("20060102T1504"))
+
+	gs, err := shard.NewGRPCShard(id, addr, now, now.Add(100*365*24*time.Hour))
+	if err != nil {
+		log.Printf("provisioner: failed to connect to new shard at %s: %v", addr, err)
+		p.launcher.Terminate(ctx, addr)
+		return
+	}
+
+	p.registry.Add(&ShardEntry{
+		ID:          id,
+		Apps:        bucket.Apps,
+		WindowStart: now,
+		WindowEnd:   now.Add(100 * 365 * 24 * time.Hour),
+		State:       StateIngesting,
+		Addr:        addr,
+		Shard:       gs,
+		CreatedAt:   now,
+	})
+
+	log.Printf("provisioner: launched shard %s for bucket %s at %s", id, bucket.ID, addr)
 }
 
 func joinApps(apps []string) string {
