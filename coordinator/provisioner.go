@@ -228,6 +228,10 @@ func (p *Provisioner) archive(entry *ShardEntry) {
 	entry.Shard.Close()
 	entry.Shard = cold
 	entry.State = StateArchived
+	entry.ParquetPath = parquetPath
+
+	// Persist the state change.
+	p.registry.PersistState(entry)
 
 	log.Printf("provisioner: shard %s archived to %s", entry.ID, parquetPath)
 }

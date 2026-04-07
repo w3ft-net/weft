@@ -2,10 +2,13 @@ package coordinator
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/kevlarcon/weft/configstore"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
@@ -137,6 +140,81 @@ func TestProvisioner_ArchivesExpiredShard(t *testing.T) {
 	}
 	if len(result) != 1 {
 		t.Fatalf("expected 1 row from archived shard, got %d", len(result))
+	}
+}
+
+func TestRegistry_PersistAndRestore(t *testing.T) {
+	// Create a store.
+	store, err := configstore.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Create registry with store, add an archived shard.
+	reg := NewShardRegistry()
+	reg.SetStore(store)
+
+	parquetPath := filepath.Join(t.TempDir(), "test.parquet")
+	// Create a Parquet file so ColdShard can open it.
+	ds, err := shard.NewDuckDBShard("tmp", "", t0, t1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ds.Ingest([]*pb.LogRow{{LineNum: 1, Raw: "persisted", App: "vimgym", Customer: "kevlar", TsUnixNs: t0.UnixNano()}})
+	ds.ExportToParquet(parquetPath)
+	ds.Close()
+
+	cold, err := shard.NewColdShard("shard-archived", []string{"vimgym"}, parquetPath, t0, t1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reg.Add(&ShardEntry{
+		ID: "shard-archived", Apps: []string{"vimgym"},
+		WindowStart: t0, WindowEnd: t1,
+		State:       StateArchived,
+		ParquetPath: parquetPath,
+		Shard:       cold,
+		CreatedAt:   time.Now(),
+	})
+
+	// Create a NEW registry, load from the same store.
+	reg2 := NewShardRegistry()
+	reg2.SetStore(store)
+	err = reg2.LoadFromStore(func(rec configstore.ShardRecord) (shard.Shard, error) {
+		if rec.State == string(StateArchived) && rec.ParquetPath != "" {
+			var apps []string
+			json.Unmarshal([]byte(rec.Apps), &apps)
+			ws, _ := time.Parse(time.RFC3339, rec.WindowStart)
+			we, _ := time.Parse(time.RFC3339, rec.WindowEnd)
+			return shard.NewColdShard(rec.ID, apps, rec.ParquetPath, ws, we)
+		}
+		return nil, fmt.Errorf("skip live shard %s", rec.ID)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The archived shard should be restored.
+	if reg2.Count() != 1 {
+		t.Fatalf("expected 1 restored shard, got %d", reg2.Count())
+	}
+	entry := reg2.Get("shard-archived")
+	if entry == nil {
+		t.Fatal("shard-archived not found after restore")
+	}
+	if entry.State != StateArchived {
+		t.Fatalf("expected ARCHIVED, got %s", entry.State)
+	}
+
+	// Query should work on the restored ColdShard.
+	rows, err := entry.Shard.Query("SELECT * FROM logs WHERE customer = 'kevlar'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row from restored shard, got %d", len(rows))
 	}
 }
 

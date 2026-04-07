@@ -1,10 +1,12 @@
 package coordinator
 
 import (
+	"encoding/json"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/kevlarcon/weft/configstore"
 	"github.com/kevlarcon/weft/shard"
 )
 
@@ -26,8 +28,10 @@ type ShardEntry struct {
 	WindowStart time.Time
 	WindowEnd   time.Time
 	State       ShardState
-	Addr        string
-	InstanceID  string
+	Addr        string     // gRPC address for live shards
+	InstanceID  string     // EC2 instance ID
+	ParquetPath string     // Parquet file path for archived shards
+	Tier        string     // instance tier (small/medium/large)
 	RowCount    int64
 	CreatedAt   time.Time
 	Shard       shard.Shard // live connection (not persisted)
@@ -48,10 +52,12 @@ func (e *ShardEntry) hasApp(app string) bool {
 }
 
 // ShardRegistry tracks all shard entries. Thread-safe.
+// If a Store is set, mutations are persisted to SQLite.
 type ShardRegistry struct {
 	mu      sync.RWMutex
 	entries map[string]*ShardEntry
-	robin   atomic.Uint64 // round-robin counter for write distribution
+	robin   atomic.Uint64              // round-robin counter for write distribution
+	store   *configstore.Store         // optional persistence (nil in tests)
 }
 
 // NewShardRegistry creates an empty registry.
@@ -61,11 +67,87 @@ func NewShardRegistry() *ShardRegistry {
 	}
 }
 
-// Add registers a shard entry.
+// SetStore enables persistence to SQLite.
+func (r *ShardRegistry) SetStore(store *configstore.Store) {
+	r.store = store
+}
+
+// Add registers a shard entry and persists it.
 func (r *ShardRegistry) Add(entry *ShardEntry) {
 	r.mu.Lock()
 	r.entries[entry.ID] = entry
 	r.mu.Unlock()
+	r.persist(entry)
+}
+
+// persist saves a shard entry to the store (if configured).
+func (r *ShardRegistry) persist(entry *ShardEntry) {
+	if r.store == nil {
+		return
+	}
+	appsJSON, _ := json.Marshal(entry.Apps)
+	r.store.SaveShard(&configstore.ShardRecord{
+		ID:          entry.ID,
+		Apps:        string(appsJSON),
+		WindowStart: entry.WindowStart.Format(time.RFC3339),
+		WindowEnd:   entry.WindowEnd.Format(time.RFC3339),
+		State:       string(entry.State),
+		Addr:        entry.Addr,
+		InstanceID:  entry.InstanceID,
+		ParquetPath: entry.ParquetPath,
+		Tier:        entry.Tier,
+		RowCount:    entry.RowCount,
+		CreatedAt:   entry.CreatedAt.Format(time.RFC3339),
+	})
+}
+
+// PersistState saves the current state of an entry to the store.
+// Call after modifying State, ParquetPath, RowCount, etc.
+func (r *ShardRegistry) PersistState(entry *ShardEntry) {
+	r.persist(entry)
+}
+
+// LoadFromStore loads archived (and optionally other) shard records from
+// the store and calls the provided function to reconstruct each shard.
+// The reconstruct function should create the appropriate Shard implementation
+// (ColdShard for ARCHIVED, GRPCShard for live) and return it.
+func (r *ShardRegistry) LoadFromStore(reconstruct func(rec configstore.ShardRecord) (shard.Shard, error)) error {
+	if r.store == nil {
+		return nil
+	}
+	records, err := r.store.ListShards()
+	if err != nil {
+		return err
+	}
+	for _, rec := range records {
+		sh, err := reconstruct(rec)
+		if err != nil {
+			continue // skip unrecoverable entries
+		}
+		var apps []string
+		json.Unmarshal([]byte(rec.Apps), &apps)
+		windowStart, _ := time.Parse(time.RFC3339, rec.WindowStart)
+		windowEnd, _ := time.Parse(time.RFC3339, rec.WindowEnd)
+		createdAt, _ := time.Parse(time.RFC3339, rec.CreatedAt)
+
+		r.mu.Lock()
+		r.entries[rec.ID] = &ShardEntry{
+			ID:          rec.ID,
+			Apps:        apps,
+			WindowStart: windowStart,
+			WindowEnd:   windowEnd,
+			State:       ShardState(rec.State),
+			Addr:        rec.Addr,
+			InstanceID:  rec.InstanceID,
+			ParquetPath: rec.ParquetPath,
+			Tier:        rec.Tier,
+			RowCount:    rec.RowCount,
+			CreatedAt:   createdAt,
+			Shard:       sh,
+		}
+		r.mu.Unlock()
+	}
+	return nil
 }
 
 // Remove deletes a shard entry and closes its connection.
@@ -78,6 +160,10 @@ func (r *ShardRegistry) Remove(id string) {
 		delete(r.entries, id)
 	}
 	r.mu.Unlock()
+
+	if r.store != nil {
+		r.store.DeleteShard(id)
+	}
 }
 
 // Get returns a shard entry by ID, or nil.

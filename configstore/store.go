@@ -52,6 +52,21 @@ type LogGroup struct {
 	LastToken    string
 }
 
+// ShardRecord persists shard registry entries across coordinator restarts.
+type ShardRecord struct {
+	ID           string `gorm:"primaryKey"`
+	Apps         string `gorm:"not null"` // JSON array: ["vimgym","callbox"]
+	WindowStart  string `gorm:"not null"` // RFC3339
+	WindowEnd    string `gorm:"not null"` // RFC3339
+	State        string `gorm:"not null"` // INGESTING/READ_ONLY/ARCHIVED
+	Addr         string                   // gRPC address for live shards
+	InstanceID   string                   // EC2 instance ID
+	ParquetPath  string                   // Parquet file path for archived shards
+	Tier         string                   // instance tier (small/medium/large)
+	RowCount     int64  `gorm:"default:0"`
+	CreatedAt    string `gorm:"not null"` // RFC3339
+}
+
 type Store struct {
 	db *gorm.DB
 }
@@ -63,7 +78,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := db.AutoMigrate(&Customer{}, &Account{}, &LogGroup{}, &AgentToken{}); err != nil {
+	if err := db.AutoMigrate(&Customer{}, &Account{}, &LogGroup{}, &AgentToken{}, &ShardRecord{}); err != nil {
 		return nil, err
 	}
 	return &Store{db: db}, nil
@@ -232,6 +247,32 @@ func (s *Store) ListAgentTokens(customerID uint) ([]AgentToken, error) {
 	var tokens []AgentToken
 	err := s.db.Where("customer_id = ?", customerID).Find(&tokens).Error
 	return tokens, err
+}
+
+// --- Shard Registry ---
+
+// SaveShard upserts a shard record.
+func (s *Store) SaveShard(rec *ShardRecord) error {
+	return s.db.Save(rec).Error
+}
+
+// DeleteShard removes a shard record.
+func (s *Store) DeleteShard(id string) error {
+	return s.db.Delete(&ShardRecord{}, "id = ?", id).Error
+}
+
+// ListShards returns all shard records.
+func (s *Store) ListShards() ([]ShardRecord, error) {
+	var records []ShardRecord
+	err := s.db.Find(&records).Error
+	return records, err
+}
+
+// ListShardsByState returns shard records with the given state.
+func (s *Store) ListShardsByState(state string) ([]ShardRecord, error) {
+	var records []ShardRecord
+	err := s.db.Where("state = ?", state).Find(&records).Error
+	return records, err
 }
 
 func generateToken() (string, error) {
