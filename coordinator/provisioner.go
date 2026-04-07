@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,11 +16,13 @@ import (
 
 // ProvisionerConfig controls shard rotation thresholds.
 type ProvisionerConfig struct {
-	MaxRows           int64         // rotate when row count exceeds this (default 5M)
-	MaxDiskBytes      int64         // rotate when disk exceeds this (default 500MB)
-	MaxDuration       time.Duration // rotate after this time (default 8h)
-	PollInterval      time.Duration // how often to check (default 5min)
-	IngestingPerBucket int          // number of concurrent INGESTING shards per app bucket (default 2)
+	MaxRows            int64         // rotate when row count exceeds this (default 5M)
+	MaxDiskBytes       int64         // rotate when disk exceeds this (default 500MB)
+	MaxDuration        time.Duration // rotate after this time (default 8h)
+	PollInterval       time.Duration // how often to check (default 5min)
+	IngestingPerBucket int           // number of concurrent INGESTING shards per app bucket (default 2)
+	RetentionPeriod    time.Duration // how long READ_ONLY shards stay hot before archiving (0 = no archival)
+	ParquetDir         string        // directory for Parquet exports (local or s3:// prefix)
 }
 
 // DefaultProvisionerConfig returns sensible production defaults.
@@ -173,6 +177,59 @@ func (p *Provisioner) check(ctx context.Context) {
 			p.rotate(ctx, entry)
 		}
 	}
+
+	// Archive READ_ONLY shards past retention period.
+	if p.config.RetentionPeriod > 0 && p.config.ParquetDir != "" {
+		for _, entry := range p.registry.Entries() {
+			if entry.State != StateReadOnly {
+				continue
+			}
+			if time.Since(entry.CreatedAt) > p.config.RetentionPeriod {
+				log.Printf("provisioner: archiving shard %s", entry.ID)
+				p.archive(entry)
+			}
+		}
+	}
+}
+
+// archive exports a READ_ONLY shard to Parquet and replaces it with a ColdShard.
+func (p *Provisioner) archive(entry *ShardEntry) {
+	// Build Parquet path from apps + time.
+	appLabel := joinApps(entry.Apps)
+	parquetPath := fmt.Sprintf("%s/%s/%s.parquet",
+		p.config.ParquetDir, appLabel, entry.ID)
+
+	// Ensure parent directory exists.
+	if err := os.MkdirAll(filepath.Dir(parquetPath), 0755); err != nil {
+		log.Printf("provisioner: mkdir for %s: %v", parquetPath, err)
+		return
+	}
+
+	// Export: the shard must be a DuckDBShard (in-process) for direct export.
+	// For remote shards, this would use the ExportParquet RPC.
+	if ds, ok := entry.Shard.(*shard.DuckDBShard); ok {
+		if err := ds.ExportToParquet(parquetPath); err != nil {
+			log.Printf("provisioner: export %s failed: %v", entry.ID, err)
+			return
+		}
+	} else {
+		log.Printf("provisioner: cannot export non-DuckDB shard %s (type %T)", entry.ID, entry.Shard)
+		return
+	}
+
+	// Create ColdShard backed by the Parquet file.
+	cold, err := shard.NewColdShard(entry.ID, entry.Apps, parquetPath, entry.WindowStart, entry.WindowEnd)
+	if err != nil {
+		log.Printf("provisioner: create cold shard for %s: %v", entry.ID, err)
+		return
+	}
+
+	// Swap: close old shard, replace with cold.
+	entry.Shard.Close()
+	entry.Shard = cold
+	entry.State = StateArchived
+
+	log.Printf("provisioner: shard %s archived to %s", entry.ID, parquetPath)
 }
 
 // rotate transitions an INGESTING shard to READ_ONLY and launches a replacement.

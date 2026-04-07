@@ -16,6 +16,7 @@ const (
 	StateIngesting ShardState = "INGESTING"
 	StateReadOnly  ShardState = "READ_ONLY"
 	StateExpiring  ShardState = "EXPIRING"
+	StateArchived  ShardState = "ARCHIVED"
 )
 
 // ShardEntry is the registry's per-shard metadata.

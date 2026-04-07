@@ -2,7 +2,6 @@ package shard
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -141,6 +140,12 @@ func (s *DuckDBShard) RowCount() int64 {
 	return s.rowCount.Load()
 }
 
+// ExportToParquet exports the logs table to a Parquet file.
+func (s *DuckDBShard) ExportToParquet(path string) error {
+	_, err := s.db.Exec(fmt.Sprintf("COPY logs TO '%s' (FORMAT PARQUET)", path))
+	return err
+}
+
 // Query executes a SQL query and returns the matching rows.
 func (s *DuckDBShard) Query(query string) ([]*pb.LogRow, error) {
 	sqlRows, err := s.db.Query(query)
@@ -148,47 +153,5 @@ func (s *DuckDBShard) Query(query string) ([]*pb.LogRow, error) {
 		return nil, fmt.Errorf("query shard %s: %w", s.id, err)
 	}
 	defer sqlRows.Close()
-
-	var results []*pb.LogRow
-	for sqlRows.Next() {
-		var (
-			lineNum            int64
-			raw, level, app    string
-			instance, customer string
-			ts                 time.Time
-			rawFields          any
-			rawPayload         any
-		)
-
-		err := sqlRows.Scan(&lineNum, &raw, &rawFields, &ts, &level, &app, &instance, &customer, &rawPayload)
-		if err != nil {
-			return nil, fmt.Errorf("scan row: %w", err)
-		}
-
-		r := &pb.LogRow{
-			LineNum:  lineNum,
-			Raw:      raw,
-			TsUnixNs: ts.UnixNano(),
-			Level:    level,
-			App:      app,
-			Instance: instance,
-			Customer: customer,
-		}
-
-		if arr, ok := rawFields.([]any); ok {
-			for _, v := range arr {
-				if sv, ok := v.(string); ok {
-					r.Fields = append(r.Fields, sv)
-				}
-			}
-		}
-		if rawPayload != nil {
-			b, err := json.Marshal(rawPayload)
-			if err == nil {
-				r.PayloadJson = b
-			}
-		}
-		results = append(results, r)
-	}
-	return results, sqlRows.Err()
+	return scanRows(sqlRows)
 }
