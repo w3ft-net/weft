@@ -17,19 +17,27 @@ type S3Config struct {
 }
 
 // S3ConfigFromEnv loads S3 configuration from environment variables.
-// Returns nil if WEFT_S3_ACCESS_KEY is not set.
+// Returns a config if either WEFT_S3_ACCESS_KEY or WEFT_S3_REGION is set.
+// Returns nil if neither is set (meaning no S3 — use local filesystem).
 //
 //	WEFT_S3_ENDPOINT   — S3 endpoint (empty for AWS default)
-//	WEFT_S3_ACCESS_KEY — access key ID
+//	WEFT_S3_ACCESS_KEY — access key ID (empty = use IAM/instance credentials)
 //	WEFT_S3_SECRET_KEY — secret access key
 //	WEFT_S3_REGION     — AWS region (default: us-east-1)
 //	WEFT_S3_USE_SSL    — "true" for HTTPS (default: "false")
+//
+// Three modes:
+//   - MinIO (tests): all vars set → explicit credentials + custom endpoint
+//   - Lambda/EC2 (prod): only WEFT_S3_REGION set → DuckDB uses IAM credentials
+//   - Local dev: nothing set → returns nil → local filesystem only
 func S3ConfigFromEnv() *S3Config {
 	ak := os.Getenv("WEFT_S3_ACCESS_KEY")
-	if ak == "" {
+	region := os.Getenv("WEFT_S3_REGION")
+
+	if ak == "" && region == "" {
 		return nil
 	}
-	region := os.Getenv("WEFT_S3_REGION")
+
 	if region == "" {
 		region = "us-east-1"
 	}
@@ -43,6 +51,8 @@ func S3ConfigFromEnv() *S3Config {
 }
 
 // ConfigureDuckDB sets up httpfs/S3 on a DuckDB connection.
+// When AccessKey is empty, skips credential statements — DuckDB will use
+// the default credential chain (IAM role on EC2/Lambda).
 func (c *S3Config) ConfigureDuckDB(db *sql.DB) error {
 	if _, err := db.Exec("INSTALL httpfs; LOAD httpfs;"); err != nil {
 		return fmt.Errorf("load httpfs: %w", err)
@@ -52,10 +62,15 @@ func (c *S3Config) ConfigureDuckDB(db *sql.DB) error {
 		ssl = "true"
 	}
 	stmts := []string{
-		fmt.Sprintf("SET s3_access_key_id='%s'", c.AccessKey),
-		fmt.Sprintf("SET s3_secret_access_key='%s'", c.SecretKey),
 		fmt.Sprintf("SET s3_use_ssl=%s", ssl),
 		"SET s3_url_style='path'",
+	}
+	// Explicit credentials (MinIO, tests). Omit for IAM (Lambda, EC2).
+	if c.AccessKey != "" {
+		stmts = append(stmts,
+			fmt.Sprintf("SET s3_access_key_id='%s'", c.AccessKey),
+			fmt.Sprintf("SET s3_secret_access_key='%s'", c.SecretKey),
+		)
 	}
 	if c.Endpoint != "" {
 		stmts = append(stmts, fmt.Sprintf("SET s3_endpoint='%s'", c.Endpoint))
