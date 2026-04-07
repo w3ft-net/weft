@@ -27,7 +27,10 @@ func main() {
 	port := flag.Int("port", 9020, "gRPC listen port")
 	healthPort := flag.Int("health-port", 9021, "HTTP health listen port")
 	shardsFlag := flag.String("shards", "", "comma-separated shard specs: id=addr=start=end,... (for Docker/dev)")
-	shardASG := flag.String("shard-asg", "", "shard ASG name for AWS discovery (production)")
+	shardASG := flag.String("shard-asg", "", "shard ASG name for AWS discovery (legacy single-tier)")
+	shardASGSmall := flag.String("shard-asg-small", "", "small tier shard ASG name")
+	shardASGMedium := flag.String("shard-asg-medium", "", "medium tier shard ASG name")
+	shardASGLarge := flag.String("shard-asg-large", "", "large tier shard ASG name")
 	computeAddr := flag.String("compute", "", "compute worker address (host:port)")
 	computeASG := flag.String("compute-asg", "", "compute ASG name for AWS discovery (production)")
 	awsRegion := flag.String("region", "us-east-2", "AWS region for ASG discovery")
@@ -94,13 +97,42 @@ func main() {
 	defer drainCancel()
 	coord.StartDrain(drainCtx)
 
-	// Start background shard re-discovery if using ASG.
-	if *shardASG != "" {
-		disc, err := discovery.NewASGDiscovery(*awsRegion, *shardASG, 9000)
+	// Build tiered ASG map. Fall back to legacy single --shard-asg.
+	shardTiers := make(map[string]string)
+	if *shardASGSmall != "" {
+		shardTiers["small"] = *shardASGSmall
+	} else if *shardASG != "" {
+		shardTiers["small"] = *shardASG // legacy: single ASG = small tier
+	}
+	if *shardASGMedium != "" {
+		shardTiers["medium"] = *shardASGMedium
+	}
+	if *shardASGLarge != "" {
+		shardTiers["large"] = *shardASGLarge
+	}
+
+	// Start background shard re-discovery for each configured ASG.
+	for _, asgName := range shardTiers {
+		disc, err := discovery.NewASGDiscovery(*awsRegion, asgName, 9000)
 		if err != nil {
-			log.Printf("warning: cannot create shard re-discovery: %v", err)
+			log.Printf("warning: cannot create shard re-discovery for %s: %v", asgName, err)
+			continue
+		}
+		go rediscoverLoop(disc, coord)
+	}
+
+	// Start provisioner with ASG launcher if tiers are configured.
+	if len(shardTiers) > 0 {
+		asgLauncher, err := coordinator.NewASGLauncher(*awsRegion, shardTiers, 9000)
+		if err != nil {
+			log.Printf("warning: ASG launcher unavailable: %v", err)
 		} else {
-			go rediscoverLoop(disc, coord)
+			prov := coordinator.NewProvisioner(coord.Registry, asgLauncher, coordinator.DefaultProvisionerConfig())
+			coord.Provisioner = prov
+			provCtx, provCancel := context.WithCancel(context.Background())
+			defer provCancel()
+			prov.Start(provCtx)
+			log.Printf("provisioner: started with tiers %v", shardTiers)
 		}
 	}
 

@@ -77,11 +77,29 @@ if [ "$ROLE" = "coordinator" ]; then
     echo "Mounted $VOLUME_ID at /opt/app/data"
   fi
 
-  # Fetch ASG names from SSM
-  SHARD_ASG=$(aws ssm get-parameter \
-    --name "/$APP_NAME/config/shard-asg-name" \
+  # Fetch ASG names from SSM (tiered shard ASGs)
+  SHARD_ASG_SMALL=$(aws ssm get-parameter \
+    --name "/$APP_NAME/config/shard-asg-small" \
     --region "$REGION" \
     --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
+  SHARD_ASG_MEDIUM=$(aws ssm get-parameter \
+    --name "/$APP_NAME/config/shard-asg-medium" \
+    --region "$REGION" \
+    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
+  SHARD_ASG_LARGE=$(aws ssm get-parameter \
+    --name "/$APP_NAME/config/shard-asg-large" \
+    --region "$REGION" \
+    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
+  # Backward compat: fall back to single shard-asg-name
+  if [ -z "$SHARD_ASG_SMALL" ]; then
+    SHARD_ASG_SMALL=$(aws ssm get-parameter \
+      --name "/$APP_NAME/config/shard-asg-name" \
+      --region "$REGION" \
+      --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+  fi
 
   COMPUTE_ASG=$(aws ssm get-parameter \
     --name "/$APP_NAME/config/compute-asg-name" \
@@ -89,7 +107,9 @@ if [ "$ROLE" = "coordinator" ]; then
     --query 'Parameter.Value' --output text 2>/dev/null || echo "")
 
   cat > /opt/app/coordinator.env <<EOF
-WEFT_SHARD_ASG=${SHARD_ASG}
+WEFT_SHARD_ASG_SMALL=${SHARD_ASG_SMALL}
+WEFT_SHARD_ASG_MEDIUM=${SHARD_ASG_MEDIUM}
+WEFT_SHARD_ASG_LARGE=${SHARD_ASG_LARGE}
 WEFT_COMPUTE_ASG=${COMPUTE_ASG}
 WEFT_REGION=${REGION}
 EOF
