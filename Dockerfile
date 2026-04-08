@@ -19,8 +19,9 @@ RUN go mod download
 RUN CGO_ENABLED=1 go build -o /bin/weft-shard ./cmd/shard
 RUN CGO_ENABLED=1 go build -o /bin/weft-compute ./cmd/compute
 RUN CGO_ENABLED=1 go build -o /bin/weft-coordinator ./cmd/coordinator
+RUN CGO_ENABLED=1 go build -o /bin/lambda-shard ./cmd/lambda-shard
 
 # Use the same distro as the builder to match glibc.
 FROM golang:1.26
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /bin/weft-shard /bin/weft-compute /bin/weft-coordinator /usr/local/bin/
+COPY --from=builder /bin/weft-shard /bin/weft-compute /bin/weft-coordinator /bin/lambda-shard /usr/local/bin/
