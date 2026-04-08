@@ -5,8 +5,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-echo "Building lambda-shard for linux/amd64..."
-CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o /tmp/bootstrap ./cmd/lambda-shard/
+echo "Building lambda-shard via Docker (arm64)..."
+docker build -f Dockerfile.lambda -t weft-lambda-shard ..
+
+echo "Extracting binary from image..."
+CONTAINER=$(docker create weft-lambda-shard)
+docker cp "$CONTAINER:/var/runtime/bootstrap" /tmp/bootstrap
+docker rm "$CONTAINER" > /dev/null
 
 echo "Packaging zip..."
 cd /tmp

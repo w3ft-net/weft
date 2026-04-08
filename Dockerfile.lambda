@@ -10,10 +10,10 @@ WORKDIR /src/weft
 
 RUN sed -i 's|=> ../warp|=> /src/warp|' go.mod
 RUN go mod download
-RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o /bin/bootstrap ./cmd/lambda-shard/
+RUN CGO_ENABLED=1 go build -o /bin/bootstrap ./cmd/lambda-shard/
 
-# Use AWS Lambda base image for RIE compatibility.
-FROM public.ecr.aws/lambda/provided:al2023
+# Use AWS Lambda ARM64 base image.
+FROM public.ecr.aws/lambda/provided:al2023-arm64
 
 COPY --from=builder /bin/bootstrap ${LAMBDA_RUNTIME_DIR}/bootstrap
 CMD ["bootstrap"]
