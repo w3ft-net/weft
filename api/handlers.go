@@ -13,6 +13,7 @@ type Server struct {
 	jwtSecret string
 	coordAddr string // coordinator gRPC address
 	baseURL   string // e.g., https://w3ft.net
+	email     *EmailConfig // nil = dev mode (log links)
 
 	// Stripe config
 	StripeSecretKey    string
@@ -23,10 +24,11 @@ type Server struct {
 // NewServer creates an API server.
 func NewServer(store *Store, jwtSecret, coordAddr, baseURL string) *Server {
 	return &Server{
-		store:     store,
-		jwtSecret: jwtSecret,
-		coordAddr: coordAddr,
-		baseURL:   baseURL,
+		store:        store,
+		jwtSecret:    jwtSecret,
+		coordAddr:    coordAddr,
+		baseURL:      baseURL,
+		email:        EmailConfigFromEnv(),
 		StripePrices: make(map[string]string),
 	}
 }
@@ -75,10 +77,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: send email with magic link
-	// For now, log it (dev mode).
 	verifyURL := fmt.Sprintf("%s/verify?token=%s", s.baseURL, token)
-	log.Printf("magic link for %s: %s", req.Email, verifyURL)
+	if err := SendMagicLinkEmail(s.email, req.Email, verifyURL); err != nil {
+		log.Printf("failed to send magic link to %s: %v", req.Email, err)
+		http.Error(w, "failed to send email", http.StatusInternalServerError)
+		return
+	}
 
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
