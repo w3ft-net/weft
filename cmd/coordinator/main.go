@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -127,7 +128,11 @@ func main() {
 		if err != nil {
 			log.Printf("warning: ASG launcher unavailable: %v", err)
 		} else {
-			prov := coordinator.NewProvisioner(coord.Registry, asgLauncher, coordinator.DefaultProvisionerConfig())
+			provConfig := coordinator.DefaultProvisionerConfig()
+			provConfig.S3Config = shard.S3ConfigFromEnv()
+			provConfig.ParquetDir = os.Getenv("WEFT_PARQUET_DIR")
+			provConfig.LambdaFunctionURL = os.Getenv("WEFT_LAMBDA_FUNCTION_URL")
+			prov := coordinator.NewProvisioner(coord.Registry, asgLauncher, provConfig)
 			coord.Provisioner = prov
 			provCtx, provCancel := context.WithCancel(context.Background())
 			defer provCancel()
@@ -167,6 +172,30 @@ func main() {
 				entry.Apps = allApps
 			}
 			log.Printf("coordinator: assigned apps %v to %d shards", allApps, coord.Registry.Count())
+		}
+
+		// Restore archived shards from the registry.
+		coord.Registry.SetStore(store)
+		s3cfg := shard.S3ConfigFromEnv()
+		lambdaURL := os.Getenv("WEFT_LAMBDA_FUNCTION_URL")
+
+		if err := coord.Registry.LoadFromStore(func(rec configstore.ShardRecord) (shard.Shard, error) {
+			if rec.State != string(coordinator.StateArchived) || rec.ParquetPath == "" {
+				return nil, fmt.Errorf("skip non-archived shard %s", rec.ID)
+			}
+			var apps []string
+			json.Unmarshal([]byte(rec.Apps), &apps)
+			ws, _ := time.Parse(time.RFC3339, rec.WindowStart)
+			we, _ := time.Parse(time.RFC3339, rec.WindowEnd)
+
+			if lambdaURL != "" {
+				return shard.NewLambdaColdShard(rec.ID, apps, lambdaURL, rec.ParquetPath, ws, we), nil
+			}
+			return shard.NewColdShard(rec.ID, apps, rec.ParquetPath, ws, we, s3cfg)
+		}); err != nil {
+			log.Printf("warning: load archived shards: %v", err)
+		} else {
+			log.Printf("coordinator: restored archived shards from store")
 		}
 
 		// Start CloudWatch poller for configured sources.

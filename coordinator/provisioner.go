@@ -25,6 +25,7 @@ type ProvisionerConfig struct {
 	RetentionPeriod    time.Duration   // how long READ_ONLY shards stay hot before archiving (0 = no archival)
 	ParquetDir         string          // directory for Parquet exports (local path or s3:// prefix)
 	S3Config           *shard.S3Config // S3 credentials for Parquet export/read (nil = local only)
+	LambdaFunctionURL  string          // Lambda function URL for cold queries (empty = in-process ColdShard)
 }
 
 // DefaultProvisionerConfig returns sensible production defaults.
@@ -227,16 +228,22 @@ func (p *Provisioner) archive(entry *ShardEntry) {
 		}
 	}
 
-	// Create ColdShard backed by the Parquet file.
-	cold, err := shard.NewColdShard(entry.ID, entry.Apps, parquetPath, entry.WindowStart, entry.WindowEnd, s3cfg)
-	if err != nil {
-		log.Printf("provisioner: create cold shard for %s: %v", entry.ID, err)
-		return
+	// Create cold shard — Lambda if function URL is configured, in-process otherwise.
+	var coldShard shard.Shard
+	if p.config.LambdaFunctionURL != "" {
+		coldShard = shard.NewLambdaColdShard(entry.ID, entry.Apps, p.config.LambdaFunctionURL, parquetPath, entry.WindowStart, entry.WindowEnd)
+	} else {
+		cs, err := shard.NewColdShard(entry.ID, entry.Apps, parquetPath, entry.WindowStart, entry.WindowEnd, s3cfg)
+		if err != nil {
+			log.Printf("provisioner: create cold shard for %s: %v", entry.ID, err)
+			return
+		}
+		coldShard = cs
 	}
 
 	// Swap: close old shard, replace with cold.
 	entry.Shard.Close()
-	entry.Shard = cold
+	entry.Shard = coldShard
 	entry.State = StateArchived
 	entry.ParquetPath = parquetPath
 
