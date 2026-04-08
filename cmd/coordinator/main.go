@@ -41,7 +41,7 @@ func main() {
 
 	var shards []shard.Shard
 
-	// Shard setup: either explicit specs or ASG discovery.
+	// Shard setup: explicit specs, legacy single ASG, or tiered ASGs.
 	if *shardsFlag != "" {
 		shards = parseShardsFlag(*shardsFlag)
 	} else if *shardASG != "" {
@@ -55,8 +55,27 @@ func main() {
 		}
 		shards = discovered
 		log.Printf("discovered %d shards from ASG %s", len(shards), *shardASG)
+	} else if *shardASGSmall != "" || *shardASGMedium != "" || *shardASGLarge != "" {
+		// Tiered ASGs — discover from all configured tiers.
+		for _, asgName := range []string{*shardASGSmall, *shardASGMedium, *shardASGLarge} {
+			if asgName == "" {
+				continue
+			}
+			disc, err := discovery.NewASGDiscovery(*awsRegion, asgName, 9000)
+			if err != nil {
+				log.Printf("warning: cannot discover from %s: %v", asgName, err)
+				continue
+			}
+			discovered, err := disc.DiscoverShards(context.Background())
+			if err != nil {
+				log.Printf("warning: discover from %s: %v", asgName, err)
+				continue
+			}
+			shards = append(shards, discovered...)
+			log.Printf("discovered %d shards from ASG %s", len(discovered), asgName)
+		}
 	} else {
-		log.Fatal("either --shards or --shard-asg is required")
+		log.Fatal("either --shards or --shard-asg-small is required")
 	}
 
 	// Compute pool setup.
