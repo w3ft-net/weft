@@ -106,12 +106,26 @@ if [ "$ROLE" = "coordinator" ]; then
     --region "$REGION" \
     --query 'Parameter.Value' --output text 2>/dev/null || echo "")
 
+  # Cold storage config
+  PARQUET_DIR=$(aws ssm get-parameter \
+    --name "/$APP_NAME/config/parquet-dir" \
+    --region "$REGION" \
+    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
+  LAMBDA_FUNCTION_URL=$(aws ssm get-parameter \
+    --name "/$APP_NAME/config/lambda-function-url" \
+    --region "$REGION" \
+    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
   cat > /opt/app/coordinator.env <<EOF
 WEFT_SHARD_ASG_SMALL=${SHARD_ASG_SMALL}
 WEFT_SHARD_ASG_MEDIUM=${SHARD_ASG_MEDIUM}
 WEFT_SHARD_ASG_LARGE=${SHARD_ASG_LARGE}
 WEFT_COMPUTE_ASG=${COMPUTE_ASG}
 WEFT_REGION=${REGION}
+WEFT_S3_REGION=${REGION}
+WEFT_PARQUET_DIR=${PARQUET_DIR}
+WEFT_LAMBDA_FUNCTION_URL=${LAMBDA_FUNCTION_URL}
 EOF
   chown app:app /opt/app/coordinator.env
 fi
