@@ -11,6 +11,7 @@ local targets = {
         deb         = true,
         platforms   = {
             { goos = "linux", goarch = "amd64", suffix = "linux-amd64", deb_arch = "amd64" },
+            { goos = "linux", goarch = "arm64", suffix = "linux-arm64", deb_arch = "arm64" },
         },
     },
     weft = {
