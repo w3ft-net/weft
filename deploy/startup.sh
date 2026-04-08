@@ -35,13 +35,27 @@ if [ "$ROLE" = "coordinator" ]; then
   if [ -n "$VOLUME_ID" ] && [ "$VOLUME_ID" != "None" ]; then
     echo "Attaching EBS volume $VOLUME_ID..."
 
-    # Wait for volume to be available (might still be attached to old instance)
-    for i in $(seq 1 30); do
+    # Wait for volume to be available. If stuck in-use on a dead instance,
+    # force-detach it.
+    for i in $(seq 1 60); do
       STATE=$(aws ec2 describe-volumes --volume-ids "$VOLUME_ID" --region "$REGION" \
         --query 'Volumes[0].State' --output text 2>/dev/null || echo "unknown")
       if [ "$STATE" = "available" ]; then
         break
       fi
+
+      # If in-use, check if it's attached to a different (dead) instance
+      if [ "$STATE" = "in-use" ]; then
+        ATTACHED_TO=$(aws ec2 describe-volumes --volume-ids "$VOLUME_ID" --region "$REGION" \
+          --query 'Volumes[0].Attachments[0].InstanceId' --output text 2>/dev/null || echo "")
+        if [ -n "$ATTACHED_TO" ] && [ "$ATTACHED_TO" != "$INSTANCE_ID" ]; then
+          echo "Volume attached to stale instance $ATTACHED_TO — force-detaching..."
+          aws ec2 detach-volume --volume-id "$VOLUME_ID" --force --region "$REGION" 2>/dev/null || true
+          sleep 10
+          continue
+        fi
+      fi
+
       echo "Volume state: $STATE, waiting..."
       sleep 5
     done
