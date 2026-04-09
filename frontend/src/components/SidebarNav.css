@@ -1,0 +1,134 @@
+.sidebar {
+  width: 200px;
+  min-height: 100vh;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 24px 0;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.sidebar-top {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.sidebar-logo {
+  padding: 0 20px;
+}
+
+.sidebar-logo-text {
+  font-family: var(--font-mono);
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: -0.02em;
+}
+
+.sidebar-links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 8px;
+}
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+
+.sidebar-link:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.sidebar-link-active {
+  background: var(--bg-card);
+  color: var(--accent) !important;
+  border: 1px solid var(--border);
+}
+
+.sidebar-link-icon {
+  font-size: 0.85rem;
+  width: 16px;
+  text-align: center;
+  opacity: 0.7;
+  font-style: normal;
+}
+
+.sidebar-link-label {
+  font-size: 0.85rem;
+}
+
+.sidebar-bottom {
+  padding: 0 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sidebar-tier {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.sidebar-tier-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sidebar-tier-value {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sidebar-email {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-logout {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 7px 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.2s, color 0.2s;
+}
+
+.sidebar-logout:hover {
+  border-color: var(--red);
+  color: var(--red);
+}

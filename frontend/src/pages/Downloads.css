@@ -1,0 +1,168 @@
+.downloads-content {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 48px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 48px;
+}
+
+/* Reuse dash-header / dash-page-title from Dashboard.css */
+
+/* ── Sections ────────────────────────────────────── */
+.dl-section {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.dl-section-header {
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dl-section-title {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.dl-section-sub {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* ── Download grid ───────────────────────────────── */
+.dl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.dl-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  text-decoration: none;
+  color: var(--text-primary);
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.dl-link:hover {
+  border-color: var(--accent);
+  background: var(--bg-card);
+  color: var(--text-primary);
+}
+
+.dl-link-icon {
+  font-size: 1.1rem;
+  color: var(--accent);
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.dl-link-label {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.dl-link-meta {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+/* ── Install blocks ──────────────────────────────── */
+.dl-install {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dl-install-title {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.dl-install-note {
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.dl-install-note code {
+  font-family: var(--font-mono);
+  font-size: 0.83rem;
+  color: var(--cyan);
+  background: var(--bg-elevated);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.dl-install-note a {
+  color: var(--accent);
+}
+
+/* ── Code block ──────────────────────────────────── */
+.code-block {
+  position: relative;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-bright);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.code-block-pre {
+  font-family: var(--font-mono);
+  font-size: 0.83rem;
+  color: var(--green-dim);
+  line-height: 1.7;
+  padding: 16px 48px 16px 16px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.code-block-copy {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-bright);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 3px 9px;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s;
+}
+
+.code-block-copy:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Responsive ──────────────────────────────────── */
+@media (max-width: 760px) {
+  .downloads-content {
+    padding: 32px 20px;
+  }
+
+  .dl-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
