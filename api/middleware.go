@@ -35,12 +35,27 @@ func GetClaims(r *http.Request) *JWTClaims {
 	return claims
 }
 
-// CORSMiddleware adds CORS headers for the SPA.
+// CORSMiddleware adds CORS headers for the SPA. Allows the configured
+// origin plus localhost for development.
 func CORSMiddleware(origin string, next http.Handler) http.Handler {
+	allowed := map[string]bool{
+		origin: true,
+	}
+	// Allow common dev origins.
+	for _, port := range []string{"5173", "5174", "3000"} {
+		allowed["http://localhost:"+port] = true
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
+		reqOrigin := r.Header.Get("Origin")
+		if allowed[reqOrigin] {
+			w.Header().Set("Access-Control-Allow-Origin", reqOrigin)
+		} else {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Vary", "Origin")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
