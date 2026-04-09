@@ -1,0 +1,21 @@
+[Unit]
+Description=weft API server
+After=network.target weft-coordinator.service
+Wants=weft-coordinator.service
+
+[Service]
+Type=simple
+User=app
+Group=app
+EnvironmentFile=/opt/app/coordinator.env
+ExecStart=/opt/app/bin/weft-api \
+    --port=8080 \
+    --coordinator=localhost:9020 \
+    --base-url=https://w3ft.net
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/app/logs/api.log
+StandardError=append:/opt/app/logs/api.log
+
+[Install]
+WantedBy=multi-user.target

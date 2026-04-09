@@ -1,6 +1,6 @@
 #!/bin/bash
-# Weft startup script — reads the instance Role tag, attaches persistent
-# EBS for coordinator, and starts the appropriate systemd service.
+# Weft startup script — reads the instance Role tag, fetches config from
+# SSM, and starts the appropriate systemd services.
 
 set -euo pipefail
 
@@ -23,73 +23,15 @@ fi
 echo "Starting weft-$ROLE on instance $INSTANCE_ID in $REGION"
 APP_NAME="weft"
 
-# For the coordinator: attach persistent EBS and fetch config from SSM.
+# For the coordinator: fetch config from SSM.
 if [ "$ROLE" = "coordinator" ]; then
 
-  # Attach persistent EBS volume for config store
-  VOLUME_ID=$(aws ssm get-parameter \
-    --name "/$APP_NAME/config/coordinator-ebs-volume-id" \
+  # Database DSN from SSM (PostgreSQL on RDS).
+  DB_DSN=$(aws ssm get-parameter \
+    --name "/$APP_NAME/config/db-dsn" \
     --region "$REGION" \
+    --with-decryption \
     --query 'Parameter.Value' --output text 2>/dev/null || echo "")
-
-  if [ -n "$VOLUME_ID" ] && [ "$VOLUME_ID" != "None" ]; then
-    echo "Attaching EBS volume $VOLUME_ID..."
-
-    # Wait for volume to be available. If stuck in-use on a dead instance,
-    # force-detach it.
-    for i in $(seq 1 60); do
-      STATE=$(aws ec2 describe-volumes --volume-ids "$VOLUME_ID" --region "$REGION" \
-        --query 'Volumes[0].State' --output text 2>/dev/null || echo "unknown")
-      if [ "$STATE" = "available" ]; then
-        break
-      fi
-
-      # If in-use, check if it's attached to a different (dead) instance
-      if [ "$STATE" = "in-use" ]; then
-        ATTACHED_TO=$(aws ec2 describe-volumes --volume-ids "$VOLUME_ID" --region "$REGION" \
-          --query 'Volumes[0].Attachments[0].InstanceId' --output text 2>/dev/null || echo "")
-        if [ -n "$ATTACHED_TO" ] && [ "$ATTACHED_TO" != "$INSTANCE_ID" ]; then
-          echo "Volume attached to stale instance $ATTACHED_TO — force-detaching..."
-          aws ec2 detach-volume --volume-id "$VOLUME_ID" --force --region "$REGION" 2>/dev/null || true
-          sleep 10
-          continue
-        fi
-      fi
-
-      echo "Volume state: $STATE, waiting..."
-      sleep 5
-    done
-
-    aws ec2 attach-volume \
-      --volume-id "$VOLUME_ID" \
-      --instance-id "$INSTANCE_ID" \
-      --device /dev/xvdf \
-      --region "$REGION" 2>/dev/null || echo "Volume attach failed (may already be attached)"
-
-    # Wait for device to appear
-    for i in $(seq 1 15); do
-      if [ -b /dev/xvdf ] || [ -b /dev/nvme1n1 ]; then
-        break
-      fi
-      sleep 2
-    done
-
-    # Determine actual device name (NVMe instances use nvme1n1)
-    DEVICE="/dev/xvdf"
-    [ -b /dev/nvme1n1 ] && DEVICE="/dev/nvme1n1"
-
-    # Format if new (no filesystem)
-    if ! blkid "$DEVICE" >/dev/null 2>&1; then
-      echo "Formatting new volume..."
-      mkfs.ext4 "$DEVICE"
-    fi
-
-    # Mount
-    mkdir -p /opt/app/data
-    mount "$DEVICE" /opt/app/data
-    chown app:app /opt/app/data
-    echo "Mounted $VOLUME_ID at /opt/app/data"
-  fi
 
   # Fetch ASG names from SSM (tiered shard ASGs)
   SHARD_ASG_SMALL=$(aws ssm get-parameter \
@@ -131,7 +73,33 @@ if [ "$ROLE" = "coordinator" ]; then
     --region "$REGION" \
     --query 'Parameter.Value' --output text 2>/dev/null || echo "")
 
+  # API server config
+  JWT_SECRET=$(aws ssm get-parameter \
+    --name "/$APP_NAME/config/jwt-secret" \
+    --region "$REGION" \
+    --with-decryption \
+    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
+  STRIPE_SECRET_KEY=$(aws ssm get-parameter \
+    --name "/$APP_NAME/config/stripe-secret-key" \
+    --region "$REGION" \
+    --with-decryption \
+    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
+  STRIPE_WEBHOOK_SECRET=$(aws ssm get-parameter \
+    --name "/$APP_NAME/config/stripe-webhook-secret" \
+    --region "$REGION" \
+    --with-decryption \
+    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
+  MAILGUN_API_KEY=$(aws ssm get-parameter \
+    --name "/$APP_NAME/config/mailgun-api-key" \
+    --region "$REGION" \
+    --with-decryption \
+    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
   cat > /opt/app/coordinator.env <<EOF
+WEFT_DB_DSN=${DB_DSN}
 WEFT_SHARD_ASG_SMALL=${SHARD_ASG_SMALL}
 WEFT_SHARD_ASG_MEDIUM=${SHARD_ASG_MEDIUM}
 WEFT_SHARD_ASG_LARGE=${SHARD_ASG_LARGE}
@@ -140,8 +108,21 @@ WEFT_REGION=${REGION}
 WEFT_S3_REGION=${REGION}
 WEFT_PARQUET_DIR=${PARQUET_DIR}
 WEFT_LAMBDA_FUNCTION_URL=${LAMBDA_FUNCTION_URL}
+JWT_SECRET=${JWT_SECRET}
+STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+STRIPE_PRICE_SWATCH=price_1TK7iK2SENTbrh5us0SI1nRz
+STRIPE_PRICE_YARD=price_1TK7jI2SENTbrh5uP3wVxnlx
+STRIPE_PRICE_BOLT=price_1TK7kH2SENTbrh5upDvBswnG
+MAILGUN_API_KEY=${MAILGUN_API_KEY}
+MAILGUN_DOMAIN=w3ft.net
 EOF
   chown app:app /opt/app/coordinator.env
 fi
 
 systemctl start "weft-$ROLE"
+
+# Also start the API server on coordinator hosts.
+if [ "$ROLE" = "coordinator" ]; then
+  systemctl start weft-api
+fi
