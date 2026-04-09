@@ -6,9 +6,7 @@ local distribution_id_ssm = "/weft/config/cloudfront-distribution-id"
 function run(args)
     -- Build the production frontend
     kevcons.log("building frontend...")
-    kevcons.exec("npm", {"run", "build"}, {cwd = "frontend", env = {
-        VITE_API_URL = "https://api.w3ft.net",
-    }})
+    kevcons.exec("bash", {"-c", "cd frontend && VITE_API_URL=https://api.w3ft.net npm run build"})
 
     -- Sync to S3
     kevcons.log("deploying to s3://" .. bucket .. "/...")
@@ -25,10 +23,10 @@ function run(args)
 
     -- Invalidate CloudFront cache
     kevcons.log("invalidating CloudFront cache...")
-    local dist_id = kevcons.exec("aws", {"ssm", "get-parameter",
+    local dist_id = kevcons.aws_exec("ssm", "get-parameter",
         "--name", distribution_id_ssm,
         "--query", "Parameter.Value",
-        "--output", "text"})
+        "--output", "text")
     dist_id = dist_id:match("^%s*(.-)%s*$")
 
     if dist_id ~= "" and dist_id ~= "None" then
