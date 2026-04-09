@@ -36,7 +36,7 @@ func main() {
 	computeASG := flag.String("compute-asg", "", "compute ASG name for AWS discovery (production)")
 	awsRegion := flag.String("region", "us-east-2", "AWS region for ASG discovery")
 	customer := flag.String("customer", "kevlar", "customer ID for row-level security")
-	dataDir := flag.String("data-dir", "/opt/app/data", "directory for SQLite config database")
+	dbDSN := flag.String("db-dsn", "", "PostgreSQL DSN (e.g., host=localhost dbname=weft user=weft password=...)")
 	flag.Parse()
 
 	var shards []shard.Shard
@@ -112,6 +112,7 @@ func main() {
 	coord := coordinator.NewCoordinator(shards, *customer, pool)
 	coord.Tail = coordinator.NewTailBroker()
 	coord.Ingest = coordinator.NewRingBuffer(1_000_000) // 1M row buffer
+	coord.Usage = coordinator.NewCustomerUsageStats()
 
 	drainCtx, drainCancel := context.WithCancel(context.Background())
 	defer drainCancel()
@@ -160,12 +161,23 @@ func main() {
 		}
 	}
 
-	// Config store (SQLite on EBS).
-	store, err := configstore.Open(*dataDir + "/weft.db")
+	// Config store (PostgreSQL).
+	dsn := *dbDSN
+	if dsn == "" {
+		dsn = os.Getenv("WEFT_DB_DSN")
+	}
+	if dsn == "" {
+		dsn = "host=localhost dbname=weft user=weft password=weft sslmode=disable"
+		log.Println("WARNING: using default DB DSN — set --db-dsn or WEFT_DB_DSN in production")
+	}
+	store, err := configstore.Open(dsn)
 	if err != nil {
 		log.Printf("warning: config store unavailable: %v", err)
 	} else {
 		defer store.Close()
+
+		// Start usage metering flush (every 5 minutes).
+		coord.StartUsageFlush(drainCtx, store)
 
 		// Assign known apps to all shards so queries route correctly.
 		var allApps []string

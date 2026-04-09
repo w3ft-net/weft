@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"gorm.io/driver/sqlite"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -17,7 +17,7 @@ type User struct {
 	Email                string `gorm:"uniqueIndex;not null"`
 	Name                 string
 	CustomerName         string // maps to configstore Customer.Name
-	Tier                 string `gorm:"not null;default:'trial'"` // trial, starter, growth, scale
+	Tier                 string `gorm:"not null;default:'trial'"` // trial, swatch, yard, bolt
 	TrialEndsAt          *time.Time
 	StripeCustomerID     string
 	StripeSubscriptionID string
@@ -53,20 +53,21 @@ type UsageRecord struct {
 	BytesIngested int64 `gorm:"not null;default:0"`
 }
 
-// Store manages the API server's SQLite database.
+// Store manages the API server's PostgreSQL database.
 type Store struct {
 	db *gorm.DB
 }
 
-// NewStore opens or creates the API database.
-func NewStore(path string) (*Store, error) {
-	db, err := gorm.Open(sqlite.Open(path+"?_journal_mode=WAL"), &gorm.Config{
+// NewStore connects to the API database. DSN is a PostgreSQL connection string.
+// Usage tables (usage_hourly, usage_daily) are managed via SQL migrations, not AutoMigrate.
+func NewStore(dsn string) (*Store, error) {
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
 		return nil, err
 	}
-	if err := db.AutoMigrate(&User{}, &MagicLink{}, &SavedQuery{}, &UsageRecord{}); err != nil {
+	if err := db.AutoMigrate(&User{}, &MagicLink{}, &SavedQuery{}); err != nil {
 		return nil, err
 	}
 	return &Store{db: db}, nil
@@ -123,6 +124,18 @@ func (s *Store) UpdateUserStripe(userID, stripeCustomerID, stripeSubID, tier str
 		"tier":                   tier,
 		"updated_at":             time.Now(),
 	}).Error
+}
+
+// DowngradeByStripeSubscription finds the user with the given Stripe
+// subscription ID and reverts them to an expired trial state.
+func (s *Store) DowngradeByStripeSubscription(subscriptionID string) error {
+	return s.db.Model(&User{}).
+		Where("stripe_subscription_id = ?", subscriptionID).
+		Updates(map[string]any{
+			"tier":                   "trial",
+			"stripe_subscription_id": "",
+			"updated_at":             time.Now(),
+		}).Error
 }
 
 // --- Magic Links ---

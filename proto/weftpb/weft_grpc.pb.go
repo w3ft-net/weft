@@ -476,6 +476,7 @@ const (
 	WeftCoordinator_CreateToken_FullMethodName  = "/weft.WeftCoordinator/CreateToken"
 	WeftCoordinator_ListTokens_FullMethodName   = "/weft.WeftCoordinator/ListTokens"
 	WeftCoordinator_RevokeToken_FullMethodName  = "/weft.WeftCoordinator/RevokeToken"
+	WeftCoordinator_GetUsage_FullMethodName     = "/weft.WeftCoordinator/GetUsage"
 )
 
 // WeftCoordinatorClient is the client API for WeftCoordinator service.
@@ -502,6 +503,8 @@ type WeftCoordinatorClient interface {
 	CreateToken(ctx context.Context, in *CreateTokenRequest, opts ...grpc.CallOption) (*CreateTokenResponse, error)
 	ListTokens(ctx context.Context, in *ListTokensRequest, opts ...grpc.CallOption) (*ListTokensResponse, error)
 	RevokeToken(ctx context.Context, in *RevokeTokenRequest, opts ...grpc.CallOption) (*RevokeTokenResponse, error)
+	// Usage metering.
+	GetUsage(ctx context.Context, in *GetUsageRequest, opts ...grpc.CallOption) (*GetUsageResponse, error)
 }
 
 type weftCoordinatorClient struct {
@@ -624,6 +627,16 @@ func (c *weftCoordinatorClient) RevokeToken(ctx context.Context, in *RevokeToken
 	return out, nil
 }
 
+func (c *weftCoordinatorClient) GetUsage(ctx context.Context, in *GetUsageRequest, opts ...grpc.CallOption) (*GetUsageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetUsageResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_GetUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WeftCoordinatorServer is the server API for WeftCoordinator service.
 // All implementations must embed UnimplementedWeftCoordinatorServer
 // for forward compatibility.
@@ -648,6 +661,8 @@ type WeftCoordinatorServer interface {
 	CreateToken(context.Context, *CreateTokenRequest) (*CreateTokenResponse, error)
 	ListTokens(context.Context, *ListTokensRequest) (*ListTokensResponse, error)
 	RevokeToken(context.Context, *RevokeTokenRequest) (*RevokeTokenResponse, error)
+	// Usage metering.
+	GetUsage(context.Context, *GetUsageRequest) (*GetUsageResponse, error)
 	mustEmbedUnimplementedWeftCoordinatorServer()
 }
 
@@ -687,6 +702,9 @@ func (UnimplementedWeftCoordinatorServer) ListTokens(context.Context, *ListToken
 }
 func (UnimplementedWeftCoordinatorServer) RevokeToken(context.Context, *RevokeTokenRequest) (*RevokeTokenResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RevokeToken not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) GetUsage(context.Context, *GetUsageRequest) (*GetUsageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetUsage not implemented")
 }
 func (UnimplementedWeftCoordinatorServer) mustEmbedUnimplementedWeftCoordinatorServer() {}
 func (UnimplementedWeftCoordinatorServer) testEmbeddedByValue()                         {}
@@ -871,6 +889,24 @@ func _WeftCoordinator_RevokeToken_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WeftCoordinator_GetUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).GetUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_GetUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).GetUsage(ctx, req.(*GetUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WeftCoordinator_ServiceDesc is the grpc.ServiceDesc for WeftCoordinator service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -909,6 +945,10 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RevokeToken",
 			Handler:    _WeftCoordinator_RevokeToken_Handler,
+		},
+		{
+			MethodName: "GetUsage",
+			Handler:    _WeftCoordinator_GetUsage_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

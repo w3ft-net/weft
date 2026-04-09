@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kevlarcon/weft/compute"
+	"github.com/kevlarcon/weft/configstore"
 	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
@@ -35,6 +36,7 @@ type Coordinator struct {
 	Tail        *TailBroker
 	Ingest      *RingBuffer    // write path: IngestStream → buffer → shards
 	Provisioner *Provisioner   // shard lifecycle management (nil = no auto-provisioning)
+	Usage       *CustomerUsageStats // per-customer byte metering
 }
 
 // NewCoordinator creates a coordinator with the given initial shard list.
@@ -78,10 +80,13 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 					break
 				}
 
-				// Group by app for targeted routing.
+				// Group by app for targeted routing; count bytes per customer.
 				byApp := make(map[string][]*pb.LogRow)
 				for _, row := range batch {
 					byApp[row.App] = append(byApp[row.App], row)
+					if c.Usage != nil && row.Customer != "" {
+						c.Usage.Record(row.Customer, int64(len(row.Raw)))
+					}
 				}
 
 				for app, rows := range byApp {
@@ -99,6 +104,41 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// StartUsageFlush runs a background goroutine that periodically drains
+// completed hourly usage counters to PostgreSQL. Flushes every 5 minutes
+// so at most 5 minutes of data is lost on restart.
+func (c *Coordinator) StartUsageFlush(ctx context.Context, store *configstore.Store) {
+	if c.Usage == nil {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				// Final flush on shutdown.
+				c.flushUsage(store)
+				return
+			case <-ticker.C:
+				c.flushUsage(store)
+			}
+		}
+	}()
+}
+
+func (c *Coordinator) flushUsage(store *configstore.Store) {
+	entries := c.Usage.DrainCompleted()
+	for _, e := range entries {
+		if err := store.UpsertUsageHourly(e.Customer, e.Hour, e.Bytes); err != nil {
+			log.Printf("usage flush error: customer=%s hour=%s: %v", e.Customer, e.Hour, err)
+		}
+	}
+	if len(entries) > 0 {
+		log.Printf("usage flush: wrote %d hourly entries", len(entries))
+	}
 }
 
 // SetShards replaces the shard list via the registry. Used by ASG re-discovery.

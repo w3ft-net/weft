@@ -152,6 +152,20 @@ service WeftCoordinator {
   rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse);
   rpc ListTokens(ListTokensRequest) returns (ListTokensResponse);
   rpc RevokeToken(RevokeTokenRequest) returns (RevokeTokenResponse);
+
+  // Usage metering.
+  rpc GetUsage(GetUsageRequest) returns (GetUsageResponse);
+}
+
+message GetUsageRequest {
+  string customer = 1;
+  string period = 2;  // "2026-04" format; empty = current month
+}
+
+message GetUsageResponse {
+  int64 bytes_ingested = 1;
+  string period_start = 2;  // RFC3339, first of month
+  string period_end = 3;    // RFC3339, first of next month
 }
 
 message CreateTokenRequest {

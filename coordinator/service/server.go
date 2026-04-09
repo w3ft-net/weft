@@ -321,3 +321,40 @@ func (s *Server) ingestBatch(rows []*pb.LogRow) {
 		s.Coord.Tail.Broadcast(rows)
 	}
 }
+
+// GetUsage returns bytes ingested for a customer in a billing period.
+// Combines persisted data from PostgreSQL with the current in-memory hour.
+func (s *Server) GetUsage(_ context.Context, req *pb.GetUsageRequest) (*pb.GetUsageResponse, error) {
+	period := req.Period
+	if period == "" {
+		period = time.Now().UTC().Format("2006-01")
+	}
+
+	t, err := time.Parse("2006-01", period)
+	if err != nil {
+		return nil, fmt.Errorf("invalid period %q: expected YYYY-MM", period)
+	}
+	periodStart := t
+	periodEnd := t.AddDate(0, 1, 0)
+
+	var dbBytes int64
+	if s.Store != nil {
+		dbBytes, err = s.Store.QueryUsage(req.Customer, periodStart, periodEnd)
+		if err != nil {
+			log.Printf("GetUsage DB query error: %v", err)
+			// Continue with in-memory only.
+		}
+	}
+
+	// Add the current (not-yet-flushed) hour.
+	var memBytes int64
+	if s.Coord.Usage != nil {
+		memBytes = s.Coord.Usage.CurrentHour(req.Customer)
+	}
+
+	return &pb.GetUsageResponse{
+		BytesIngested: dbBytes + memBytes,
+		PeriodStart:   periodStart.Format(time.RFC3339),
+		PeriodEnd:     periodEnd.Format(time.RFC3339),
+	}, nil
+}
