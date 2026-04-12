@@ -18,8 +18,8 @@ local targets = {
         pkg         = "./cmd/weft/",
         version_file = "cmd/weft/version.go",
         test_pkgs   = "./cmd/weft/ ./shell/ ./planner/",
+        cgo         = true,
         platforms   = {
-            { goos = "linux",  goarch = "amd64", suffix = "linux-amd64" },
             { goos = "darwin", goarch = "arm64", suffix = "darwin-arm64" },
         },
     },
@@ -81,7 +81,7 @@ function run(args)
             env = {
                 GOOS = plat.goos,
                 GOARCH = plat.goarch,
-                CGO_ENABLED = "0",
+                CGO_ENABLED = target.cgo and "1" or "0",
             },
         })
 
