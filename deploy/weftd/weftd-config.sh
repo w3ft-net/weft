@@ -24,12 +24,18 @@ LOG_PATH=${WEFT_LOG_PATH:-/opt/app/logs/*.log}
 
 mkdir -p /etc/weftd
 
+METRICS_ENABLED=${WEFT_METRICS:-false}
+METRICS_INTERVAL=${WEFT_METRICS_INTERVAL:-30s}
+
 cat > /etc/weftd/config.yaml <<EOF
 endpoint: ${WEFT_ENDPOINT:-ingest.w3ft.net:9020}
 token: ${WEFT_TOKEN}
 sources:
   - app: ${APP}
     unit: ${UNIT}
+    metrics:
+      enabled: ${METRICS_ENABLED}
+      interval: ${METRICS_INTERVAL}
   - app: ${APP}
     path: ${LOG_PATH}
 socket: /var/run/weftd/weftd.sock
