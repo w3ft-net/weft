@@ -1,11 +1,13 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext'
+import WeftLogoSvg from './WeftLogoSvg'
 import './SidebarNav.css'
 
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard', icon: '▦' },
   { to: '/shell', label: 'Shell', icon: '>' },
   { to: '/downloads', label: 'Downloads', icon: '↓' },
+  { to: '/account', label: 'Account', icon: '⚙' },
 ]
 
 export default function SidebarNav() {
@@ -21,7 +23,7 @@ export default function SidebarNav() {
     <aside className="sidebar" data-testid="sidebar-nav">
       <div className="sidebar-top">
         <div className="sidebar-logo" data-testid="sidebar-logo">
-          <span className="sidebar-logo-text">weft</span>
+          <WeftLogoSvg className="sidebar-logo-svg" />
         </div>
 
         <nav className="sidebar-links">
@@ -42,12 +44,6 @@ export default function SidebarNav() {
       </div>
 
       <div className="sidebar-bottom">
-        {user && (
-          <div className="sidebar-tier" data-testid="sidebar-tier-badge">
-            <span className="sidebar-tier-label">tier</span>
-            <span className="sidebar-tier-value">{user.tier}</span>
-          </div>
-        )}
         {user && (
           <div className="sidebar-email" data-testid="sidebar-user-email">
             {user.email}

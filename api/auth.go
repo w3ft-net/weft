@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/kevlarcon/weft/store"
 )
 
 // JWTClaims are the payload of a weft JWT.
@@ -20,15 +22,16 @@ type JWTClaims struct {
 	ExpiresAt    int64  `json:"exp"`
 }
 
-// GenerateJWT creates a signed JWT for the user.
-func GenerateJWT(user *User, secret string) (string, error) {
+// GenerateJWT creates a signed JWT for the user. Tier is for display only
+// (dashboard "your plan: Swatch") — enforcement queries the DB on each request.
+func GenerateJWT(user *store.User, tier string, secret string) (string, error) {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
 
 	claims := JWTClaims{
 		UserID:       user.ID,
 		Email:        user.Email,
 		CustomerName: user.CustomerName,
-		Tier:         user.Tier,
+		Tier:         tier,
 		IssuedAt:     time.Now().Unix(),
 		ExpiresAt:    time.Now().Add(30 * 24 * time.Hour).Unix(),
 	}

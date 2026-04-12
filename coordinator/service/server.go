@@ -8,7 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kevlarcon/weft/configstore"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/kevlarcon/weft/store"
 	"github.com/kevlarcon/weft/coordinator"
 	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
@@ -18,7 +21,7 @@ import (
 type Server struct {
 	pb.UnimplementedWeftCoordinatorServer
 	Coord *coordinator.Coordinator
-	Store *configstore.Store
+	Store *store.Store
 }
 
 func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinator_QueryServer) error {
@@ -36,8 +39,13 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 		return err
 	}
 
-	if result.Text != "" {
-		return stream.Send(&pb.CoordinatorQueryResponse{Text: result.Text})
+	if result.Text != "" || result.Stderr != "" {
+		text := result.Text
+		if result.Stderr != "" {
+			// Render stderr in red ANSI so the shell displays it appropriately.
+			text += "\033[38;5;1m" + result.Stderr + "\033[0m"
+		}
+		return stream.Send(&pb.CoordinatorQueryResponse{Text: text})
 	}
 
 	// Stream rows in batches to stay under gRPC message size limit.
@@ -96,30 +104,12 @@ func (s *Server) ListApps(_ context.Context, _ *pb.ListAppsRequest) (*pb.ListApp
 		return &pb.ListAppsResponse{}, nil
 	}
 
-	seen := make(map[string]bool)
-	var apps []string
-
-	// Apps with weftd agent tokens.
-	if agentApps, err := s.Store.AgentAppNames(); err == nil {
-		for _, a := range agentApps {
-			if !seen[a] {
-				seen[a] = true
-				apps = append(apps, a)
-			}
-		}
+	names, err := s.Store.AllAppNames()
+	if err != nil {
+		return &pb.ListAppsResponse{}, nil
 	}
 
-	// Apps with CloudWatch polling sources.
-	if pollerApps, err := s.Store.AppNames(); err == nil {
-		for _, a := range pollerApps {
-			if !seen[a] {
-				seen[a] = true
-				apps = append(apps, a)
-			}
-		}
-	}
-
-	return &pb.ListAppsResponse{Apps: apps}, nil
+	return &pb.ListAppsResponse{Apps: names}, nil
 }
 
 func (s *Server) AddSource(_ context.Context, req *pb.AddSourceRequest) (*pb.AddSourceResponse, error) {
@@ -195,7 +185,15 @@ func (s *Server) Authenticate(_ context.Context, req *pb.AuthenticateRequest) (*
 		return nil, fmt.Errorf("invalid or revoked token")
 	}
 
-	log.Printf("auth: customer=%s", customer.Name)
+	// Check for an active subscription.
+	sub, err := s.Store.ActiveSubscription(customer.Name)
+	if err != nil || sub == nil {
+		log.Printf("auth: customer=%s denied (no active subscription)", customer.Name)
+		return nil, status.Errorf(codes.PermissionDenied,
+			"no active subscription — upgrade at w3ft.net/dashboard")
+	}
+
+	log.Printf("auth: customer=%s tier=%s", customer.Name, sub.Tier)
 
 	return &pb.AuthenticateResponse{
 		Customer: customer.Name,
@@ -358,3 +356,155 @@ func (s *Server) GetUsage(_ context.Context, req *pb.GetUsageRequest) (*pb.GetUs
 		PeriodEnd:     periodEnd.Format(time.RFC3339),
 	}, nil
 }
+
+// ── Shell functions (/bin/) ─────────────────────────────────
+
+func (s *Server) resolveCustomer(customerName string) (uint, error) {
+	if s.Store == nil {
+		return 0, fmt.Errorf("config store not available")
+	}
+	c, err := s.Store.FindOrCreateCustomer(customerName)
+	if err != nil {
+		return 0, err
+	}
+	return c.ID, nil
+}
+
+func (s *Server) SaveFunction(_ context.Context, req *pb.SaveFunctionRequest) (*pb.SaveFunctionResponse, error) {
+	custID, err := s.resolveCustomer(req.Customer)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Store.SaveShellFunction(custID, req.Name, req.Source); err != nil {
+		return nil, err
+	}
+	return &pb.SaveFunctionResponse{}, nil
+}
+
+func (s *Server) GetFunction(_ context.Context, req *pb.GetFunctionRequest) (*pb.GetFunctionResponse, error) {
+	custID, err := s.resolveCustomer(req.Customer)
+	if err != nil {
+		return nil, err
+	}
+	fn, err := s.Store.GetShellFunction(custID, req.Name)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "%s: not found", req.Name)
+	}
+	return &pb.GetFunctionResponse{Name: fn.Name, Source: fn.Source}, nil
+}
+
+func (s *Server) ListFunctions(_ context.Context, req *pb.ListFunctionsRequest) (*pb.ListFunctionsResponse, error) {
+	custID, err := s.resolveCustomer(req.Customer)
+	if err != nil {
+		return nil, err
+	}
+	fns, err := s.Store.ListShellFunctions(custID)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(fns))
+	for i, f := range fns {
+		names[i] = f.Name
+	}
+	return &pb.ListFunctionsResponse{Names: names}, nil
+}
+
+func (s *Server) DeleteFunction(_ context.Context, req *pb.DeleteFunctionRequest) (*pb.DeleteFunctionResponse, error) {
+	custID, err := s.resolveCustomer(req.Customer)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Store.DeleteShellFunction(custID, req.Name); err != nil {
+		return nil, err
+	}
+	return &pb.DeleteFunctionResponse{}, nil
+}
+
+// ── Cron watches (/cron.d/) ─────────────────────────────────
+
+func (s *Server) SaveWatch(_ context.Context, req *pb.SaveWatchRequest) (*pb.SaveWatchResponse, error) {
+	custID, err := s.resolveCustomer(req.Customer)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Store.SaveCronWatch(custID, req.Name, req.Schedule, req.Pipeline, req.NotifyDest); err != nil {
+		return nil, err
+	}
+	return &pb.SaveWatchResponse{}, nil
+}
+
+func (s *Server) GetWatch(_ context.Context, req *pb.GetWatchRequest) (*pb.GetWatchResponse, error) {
+	custID, err := s.resolveCustomer(req.Customer)
+	if err != nil {
+		return nil, err
+	}
+	w, err := s.Store.GetCronWatch(custID, req.Name)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "%s: not found", req.Name)
+	}
+	return &pb.GetWatchResponse{
+		Name:       w.Name,
+		Schedule:   w.Schedule,
+		Pipeline:   w.Pipeline,
+		NotifyDest: w.NotifyDest,
+		Enabled:    w.Enabled,
+	}, nil
+}
+
+func (s *Server) ListWatches(_ context.Context, req *pb.ListWatchesRequest) (*pb.ListWatchesResponse, error) {
+	custID, err := s.resolveCustomer(req.Customer)
+	if err != nil {
+		return nil, err
+	}
+	watches, err := s.Store.ListCronWatches(custID)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(watches))
+	for i, w := range watches {
+		names[i] = w.Name
+	}
+	return &pb.ListWatchesResponse{Names: names}, nil
+}
+
+func (s *Server) GetWatchResults(_ context.Context, req *pb.GetWatchResultsRequest) (*pb.GetWatchResultsResponse, error) {
+	custID, err := s.resolveCustomer(req.Customer)
+	if err != nil {
+		return nil, err
+	}
+	w, err := s.Store.GetCronWatch(custID, req.Name)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "%s: not found", req.Name)
+	}
+	limit := int(req.Limit)
+	if limit <= 0 {
+		limit = 20
+	}
+	results, err := s.Store.ListCronResults(w.ID, limit)
+	if err != nil {
+		return nil, err
+	}
+	var out []*pb.WatchResult
+	for _, r := range results {
+		out = append(out, &pb.WatchResult{
+			Stdout:     r.Stdout,
+			Stderr:     r.Stderr,
+			ExitCode:   int32(r.ExitCode),
+			DurationMs: r.DurationMs,
+			RanAt:      r.RanAt.Format(time.RFC3339),
+		})
+	}
+	return &pb.GetWatchResultsResponse{Results: out}, nil
+}
+
+func (s *Server) DeleteWatch(_ context.Context, req *pb.DeleteWatchRequest) (*pb.DeleteWatchResponse, error) {
+	custID, err := s.resolveCustomer(req.Customer)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Store.DeleteCronWatch(custID, req.Name); err != nil {
+		return nil, err
+	}
+	return &pb.DeleteWatchResponse{}, nil
+}
+

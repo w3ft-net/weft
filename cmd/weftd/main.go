@@ -15,7 +15,9 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
@@ -67,16 +69,47 @@ func main() {
 	coordClient := pb.NewWeftCoordinatorClient(coordConn)
 
 	// Authenticate to verify token and get customer name.
-	authResp, err := coordClient.Authenticate(ctx, &pb.AuthenticateRequest{Token: cfg.Token})
-	if err != nil {
-		log.Fatalf("authenticate: %v", err)
+	// Retry on PermissionDenied (trial expired / cancelled subscription).
+	var customer string
+	for {
+		authResp, err := coordClient.Authenticate(ctx, &pb.AuthenticateRequest{Token: cfg.Token})
+		if err != nil {
+			if status.Code(err) == codes.PermissionDenied {
+				log.Printf("subscription inactive: %v — retrying in 24h", status.Convert(err).Message())
+				select {
+				case <-ctx.Done():
+					os.Exit(0)
+				case <-time.After(24 * time.Hour):
+				}
+				continue
+			}
+			log.Fatalf("authenticate: %v", err)
+		}
+		customer = authResp.Customer
+		if customer == "" {
+			customer = cfg.Customer
+		}
+		log.Printf("authenticated as customer=%s", customer)
+		break
 	}
 
-	customer := authResp.Customer
-	if customer == "" {
-		customer = cfg.Customer
-	}
-	log.Printf("authenticated as customer=%s", customer)
+	// Periodic re-auth: check subscription status daily.
+	// On rejection, log and exit so systemd restarts us into the retry loop above.
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_, err := coordClient.Authenticate(ctx, &pb.AuthenticateRequest{Token: cfg.Token})
+				if err != nil && status.Code(err) == codes.PermissionDenied {
+					log.Fatalf("subscription expired: %v", status.Convert(err).Message())
+				}
+			}
+		}
+	}()
 
 	hostname, _ := os.Hostname()
 

@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/configstore"
+	"github.com/kevlarcon/weft/store"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
@@ -145,15 +146,19 @@ func TestProvisioner_ArchivesExpiredShard(t *testing.T) {
 
 func TestRegistry_PersistAndRestore(t *testing.T) {
 	// Create a store.
-	store, err := configstore.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatal(err)
+	dsn := os.Getenv("WEFT_TEST_DSN")
+	if dsn == "" {
+		dsn = "host=localhost port=5433 dbname=weft user=weft password=weft sslmode=disable"
 	}
-	defer store.Close()
+	db, err := store.Open(dsn)
+	if err != nil {
+		t.Skipf("postgres unavailable: %v", err)
+	}
+	defer db.Close()
 
 	// Create registry with store, add an archived shard.
 	reg := NewShardRegistry()
-	reg.SetStore(store)
+	reg.SetStore(db)
 
 	parquetPath := filepath.Join(t.TempDir(), "test.parquet")
 	// Create a Parquet file so ColdShard can open it.
@@ -181,8 +186,8 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 
 	// Create a NEW registry, load from the same store.
 	reg2 := NewShardRegistry()
-	reg2.SetStore(store)
-	err = reg2.LoadFromStore(func(rec configstore.ShardRecord) (shard.Shard, error) {
+	reg2.SetStore(db)
+	err = reg2.LoadFromStore(func(rec store.ShardRecord) (shard.Shard, error) {
 		if rec.State == string(StateArchived) && rec.ParquetPath != "" {
 			var apps []string
 			json.Unmarshal([]byte(rec.Apps), &apps)

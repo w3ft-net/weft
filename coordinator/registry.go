@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/kevlarcon/weft/configstore"
+	"github.com/kevlarcon/weft/store"
 	"github.com/kevlarcon/weft/shard"
 )
 
@@ -57,7 +57,7 @@ type ShardRegistry struct {
 	mu      sync.RWMutex
 	entries map[string]*ShardEntry
 	robin   atomic.Uint64              // round-robin counter for write distribution
-	store   *configstore.Store         // optional persistence (nil in tests)
+	store   *store.Store         // optional persistence (nil in tests)
 }
 
 // NewShardRegistry creates an empty registry.
@@ -68,7 +68,7 @@ func NewShardRegistry() *ShardRegistry {
 }
 
 // SetStore enables persistence to SQLite.
-func (r *ShardRegistry) SetStore(store *configstore.Store) {
+func (r *ShardRegistry) SetStore(store *store.Store) {
 	r.store = store
 }
 
@@ -86,7 +86,7 @@ func (r *ShardRegistry) persist(entry *ShardEntry) {
 		return
 	}
 	appsJSON, _ := json.Marshal(entry.Apps)
-	r.store.SaveShard(&configstore.ShardRecord{
+	r.store.SaveShard(&store.ShardRecord{
 		ID:          entry.ID,
 		Apps:        string(appsJSON),
 		WindowStart: entry.WindowStart.Format(time.RFC3339),
@@ -111,7 +111,7 @@ func (r *ShardRegistry) PersistState(entry *ShardEntry) {
 // the store and calls the provided function to reconstruct each shard.
 // The reconstruct function should create the appropriate Shard implementation
 // (ColdShard for ARCHIVED, GRPCShard for live) and return it.
-func (r *ShardRegistry) LoadFromStore(reconstruct func(rec configstore.ShardRecord) (shard.Shard, error)) error {
+func (r *ShardRegistry) LoadFromStore(reconstruct func(rec store.ShardRecord) (shard.Shard, error)) error {
 	if r.store == nil {
 		return nil
 	}

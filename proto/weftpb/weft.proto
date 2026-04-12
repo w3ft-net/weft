@@ -155,6 +155,19 @@ service WeftCoordinator {
 
   // Usage metering.
   rpc GetUsage(GetUsageRequest) returns (GetUsageResponse);
+
+  // Shell functions (/bin/).
+  rpc SaveFunction(SaveFunctionRequest) returns (SaveFunctionResponse);
+  rpc GetFunction(GetFunctionRequest) returns (GetFunctionResponse);
+  rpc ListFunctions(ListFunctionsRequest) returns (ListFunctionsResponse);
+  rpc DeleteFunction(DeleteFunctionRequest) returns (DeleteFunctionResponse);
+
+  // Cron watches (/cron.d/).
+  rpc SaveWatch(SaveWatchRequest) returns (SaveWatchResponse);
+  rpc GetWatch(GetWatchRequest) returns (GetWatchResponse);
+  rpc ListWatches(ListWatchesRequest) returns (ListWatchesResponse);
+  rpc DeleteWatch(DeleteWatchRequest) returns (DeleteWatchResponse);
+  rpc GetWatchResults(GetWatchResultsRequest) returns (GetWatchResultsResponse);
 }
 
 message GetUsageRequest {
@@ -264,6 +277,89 @@ message RemoveSourceRequest {
 }
 
 message RemoveSourceResponse {}
+
+// Shell functions (/bin/).
+message SaveFunctionRequest {
+  string customer = 1;
+  string name = 2;
+  string source = 3;
+}
+message SaveFunctionResponse {}
+
+message GetFunctionRequest {
+  string customer = 1;
+  string name = 2;
+}
+message GetFunctionResponse {
+  string name = 1;
+  string source = 2;
+}
+
+message ListFunctionsRequest {
+  string customer = 1;
+}
+message ListFunctionsResponse {
+  repeated string names = 1;
+}
+
+message DeleteFunctionRequest {
+  string customer = 1;
+  string name = 2;
+}
+message DeleteFunctionResponse {}
+
+// Cron watches (/cron.d/).
+message SaveWatchRequest {
+  string customer = 1;
+  string name = 2;
+  string schedule = 3;
+  string pipeline = 4;
+  string notify_dest = 5;
+}
+message SaveWatchResponse {}
+
+message GetWatchRequest {
+  string customer = 1;
+  string name = 2;
+}
+message GetWatchResponse {
+  string name = 1;
+  string schedule = 2;
+  string pipeline = 3;
+  string notify_dest = 4;
+  bool enabled = 5;
+}
+
+message ListWatchesRequest {
+  string customer = 1;
+}
+message ListWatchesResponse {
+  repeated string names = 1;
+}
+
+message DeleteWatchRequest {
+  string customer = 1;
+  string name = 2;
+}
+message DeleteWatchResponse {}
+
+message GetWatchResultsRequest {
+  string customer = 1;
+  string name = 2;
+  int32 limit = 3;  // 0 = default (20)
+}
+
+message GetWatchResultsResponse {
+  repeated WatchResult results = 1;
+}
+
+message WatchResult {
+  string stdout = 1;
+  string stderr = 2;
+  int32 exit_code = 3;
+  int64 duration_ms = 4;
+  string ran_at = 5;  // RFC3339
+}
 
 // ---------------------------------------------------------------------------
 // Shard health — HTTP, not gRPC, but defining the message for consistency

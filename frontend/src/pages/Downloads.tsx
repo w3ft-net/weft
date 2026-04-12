@@ -136,7 +136,7 @@ sudo systemctl enable --now weftd`}
               <div className="dl-install-title">Configure agent token</div>
               <p className="dl-install-note">
                 Create a token on the{' '}
-                <a href="/dashboard" data-testid="downloads-dashboard-link">Dashboard</a>{' '}
+                <a href="/account" data-testid="downloads-account-link">Account</a>{' '}
                 page, then add it to <code>/etc/weftd/weftd.conf</code>:
               </p>
               <CodeBlock

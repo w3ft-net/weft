@@ -13,7 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"gopkg.in/yaml.v3"
 
-	"github.com/kevlarcon/weft/configstore"
+	"github.com/kevlarcon/weft/store"
 	"github.com/kevlarcon/weft/ingest"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
@@ -27,12 +27,12 @@ type ShardProvider interface {
 
 // Poller polls CloudWatch log groups and ingests into shards.
 type Poller struct {
-	store    *configstore.Store
+	store    *store.Store
 	provider ShardProvider
 }
 
 // New creates a new CloudWatch poller.
-func New(store *configstore.Store, provider ShardProvider) *Poller {
+func New(store *store.Store, provider ShardProvider) *Poller {
 	return &Poller{store: store, provider: provider}
 }
 
@@ -50,7 +50,7 @@ func (p *Poller) Start(ctx context.Context) {
 	log.Printf("poller: started %d log group pollers", len(logGroups))
 }
 
-func (p *Poller) pollLoop(ctx context.Context, lg configstore.LogGroupWithAccount) {
+func (p *Poller) pollLoop(ctx context.Context, lg store.LogGroupWithAccount) {
 	interval, err := time.ParseDuration(lg.PollInterval)
 	if err != nil {
 		interval = 30 * time.Second
@@ -73,7 +73,7 @@ func (p *Poller) pollLoop(ctx context.Context, lg configstore.LogGroupWithAccoun
 	}
 }
 
-func (p *Poller) poll(ctx context.Context, lg configstore.LogGroupWithAccount) {
+func (p *Poller) poll(ctx context.Context, lg store.LogGroupWithAccount) {
 	// Load base AWS config.
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(lg.Region))
 	if err != nil {

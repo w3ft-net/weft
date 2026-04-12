@@ -20,7 +20,6 @@ func TestEdge_Source(t *testing.T) {
 			pipeline string
 		}{
 			{"empty string", ``},
-			{"unknown source command", `ls vimgym.log`},
 			{"cat with no file", `cat`},
 			{"head with no file", `head`},
 			{"tail with no file", `tail`},
@@ -32,6 +31,19 @@ func TestEdge_Source(t *testing.T) {
 					t.Errorf("Plan(%q): expected error, got nil", tt.pipeline)
 				}
 			})
+		}
+	})
+
+	t.Run("local pipeline", func(t *testing.T) {
+		plan, err := Plan("echo 42")
+		if err != nil {
+			t.Fatalf("Plan(\"echo 42\"): unexpected error: %v", err)
+		}
+		if !plan.Local {
+			t.Error("expected Local=true for sourceless pipeline")
+		}
+		if plan.LocalPipeline != "echo 42" {
+			t.Errorf("LocalPipeline = %q, want %q", plan.LocalPipeline, "echo 42")
 		}
 	})
 

@@ -24,6 +24,8 @@ type QueryPlan struct {
 	Follow         bool          // tail -f: keep stream open for live updates
 	FollowApp      string        // app to subscribe to ("" = all)
 	FollowPatterns []GrepPattern // grep filters applied to live rows
+	Local          bool          // true if pipeline has no log source (run through warp locally)
+	LocalPipeline  string        // the full pipeline string for local execution
 }
 
 // Project describes which fields or JSON keys a pipeline needs from the shard.
@@ -47,6 +49,11 @@ type pushdownResult struct {
 func Plan(pipeline string) (*QueryPlan, error) {
 	info, err := parsePipeline(pipeline)
 	if err != nil {
+		// If the source command is unknown, this is a local pipeline
+		// (e.g., "echo 42 | alert above 0"). Run it entirely through warp.
+		if strings.Contains(err.Error(), "unknown source command") {
+			return &QueryPlan{Local: true, LocalPipeline: pipeline}, nil
+		}
 		return nil, fmt.Errorf("plan: %w", err)
 	}
 

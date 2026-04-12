@@ -1,15 +1,19 @@
 package coordinator
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/kevlarcon/warp/pkg/bash"
 	"github.com/kevlarcon/weft/compute"
-	"github.com/kevlarcon/weft/configstore"
+	"github.com/kevlarcon/weft/store"
 	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
@@ -24,8 +28,9 @@ type TimeRange struct {
 // QueryResult holds the output of a coordinated query. Either Rows is
 // populated (no compute stages) or Text is populated (compute stages ran).
 type QueryResult struct {
-	Rows []*pb.LogRow
-	Text string
+	Rows   []*pb.LogRow
+	Text   string
+	Stderr string // alert/error output — rendered in red by the shell
 }
 
 // Coordinator routes queries to shards and merges results.
@@ -109,7 +114,7 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 // StartUsageFlush runs a background goroutine that periodically drains
 // completed hourly usage counters to PostgreSQL. Flushes every 5 minutes
 // so at most 5 minutes of data is lost on restart.
-func (c *Coordinator) StartUsageFlush(ctx context.Context, store *configstore.Store) {
+func (c *Coordinator) StartUsageFlush(ctx context.Context, store *store.Store) {
 	if c.Usage == nil {
 		return
 	}
@@ -129,7 +134,7 @@ func (c *Coordinator) StartUsageFlush(ctx context.Context, store *configstore.St
 	}()
 }
 
-func (c *Coordinator) flushUsage(store *configstore.Store) {
+func (c *Coordinator) flushUsage(store *store.Store) {
 	entries := c.Usage.DrainCompleted()
 	for _, e := range entries {
 		if err := store.UpsertUsageHourly(e.Customer, e.Hour, e.Bytes); err != nil {
@@ -206,6 +211,11 @@ func (c *Coordinator) Query(pipeline string, tr TimeRange) (*QueryResult, error)
 	plan, err := planner.Plan(pipeline)
 	if err != nil {
 		return nil, fmt.Errorf("plan: %w", err)
+	}
+
+	// Local pipeline (no log source) — run through warp directly.
+	if plan.Local {
+		return c.runLocal(plan.LocalPipeline)
 	}
 
 	sql := planner.InjectCustomer(plan.ShardSQL, c.Customer)
@@ -290,5 +300,37 @@ func (c *Coordinator) queryWithCompute(sql string, stages []string, shards []sha
 	}
 
 	return &QueryResult{Text: text}, nil
+}
+
+// runLocal executes a sourceless pipeline (no log query) through warp locally.
+// Registers alert and other builtins so `echo "42" | alert above 0` works.
+func (c *Coordinator) runLocal(pipeline string) (*QueryResult, error) {
+	ast, err := bash.Parse(pipeline)
+	if err != nil {
+		return nil, fmt.Errorf("parse: %w", err)
+	}
+
+	interp := bash.NewInterpreter()
+	interp.SetStdin(strings.NewReader(""))
+
+	var outBuf, errBuf bytes.Buffer
+	interp.SetStdout(&outBuf)
+	interp.SetStderr(&errBuf)
+
+	bash.RegisterToolCommands(interp)
+
+	// Register alert for interactive use (no watch context, no history).
+	interp.RegisterCommand("alert", func(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+		return AlertCommand(args, stdin, stdout, stderr, &AlertContext{
+			Interactive: true,
+		})
+	})
+
+	interp.ExecScript(ast)
+
+	return &QueryResult{
+		Text:   outBuf.String(),
+		Stderr: errBuf.String(),
+	}, nil
 }
 

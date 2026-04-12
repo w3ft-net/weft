@@ -79,3 +79,45 @@ func SendMagicLinkEmail(cfg *EmailConfig, email, verifyURL string) error {
 	log.Printf("magic link email sent to %s", email)
 	return nil
 }
+
+// SendInviteEmail sends a team invite email via Mailgun.
+// If cfg is nil (dev mode), logs the link instead.
+func SendInviteEmail(cfg *EmailConfig, toEmail, inviterEmail, customerName, verifyURL string) error {
+	if cfg == nil {
+		log.Printf("invite for %s to join %s (from %s): %s", toEmail, customerName, inviterEmail, verifyURL)
+		return nil
+	}
+
+	endpoint := fmt.Sprintf("https://api.mailgun.net/v3/%s/messages", cfg.Domain)
+
+	form := url.Values{
+		"from":    {cfg.From},
+		"to":      {toEmail},
+		"subject": {fmt.Sprintf("You've been invited to %s on Weft", customerName)},
+		"html": {fmt.Sprintf(`
+			<p><strong>%s</strong> invited you to join <strong>%s</strong> on Weft.</p>
+			<p><a href="%s" style="display:inline-block;padding:12px 24px;background:#e67e22;color:white;text-decoration:none;border-radius:4px;font-weight:bold;">Accept Invite</a></p>
+			<p style="color:#888;font-size:12px;">This link expires in 15 minutes.</p>
+		`, inviterEmail, customerName, verifyURL)},
+	}
+
+	req, err := http.NewRequest("POST", endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth("api", cfg.APIKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("mailgun request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("mailgun error: %s", resp.Status)
+	}
+
+	log.Printf("invite email sent to %s (team: %s)", toEmail, customerName)
+	return nil
+}

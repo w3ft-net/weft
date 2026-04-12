@@ -4,10 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/kevlarcon/weft/configstore"
+	"github.com/kevlarcon/weft/store"
 	"github.com/kevlarcon/weft/coordinator"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
@@ -78,16 +77,18 @@ func TestAuthenticate_InvalidToken(t *testing.T) {
 	}
 }
 
-func testStore(t *testing.T) (*configstore.Store, func()) {
+func testStore(t *testing.T) (*store.Store, func()) {
 	t.Helper()
-	dir := t.TempDir()
-	store, err := configstore.Open(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatal(err)
+	dsn := os.Getenv("WEFT_TEST_DSN")
+	if dsn == "" {
+		dsn = "host=localhost port=5433 dbname=weft user=weft password=weft sslmode=disable"
 	}
-	return store, func() {
-		store.Close()
-		os.RemoveAll(dir)
+	db, err := store.Open(dsn)
+	if err != nil {
+		t.Skipf("postgres unavailable: %v", err)
+	}
+	return db, func() {
+		db.Close()
 	}
 }
 

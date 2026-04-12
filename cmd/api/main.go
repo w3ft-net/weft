@@ -7,6 +7,7 @@ import (
 	"os"
 
 	weftapi "github.com/kevlarcon/weft/api"
+	"github.com/kevlarcon/weft/store"
 )
 
 func main() {
@@ -31,13 +32,13 @@ func main() {
 		log.Println("WARNING: using default DB DSN — set --db-dsn or WEFT_DB_DSN in production")
 	}
 
-	store, err := weftapi.NewStore(dsn)
+	s, err := store.Open(dsn)
 	if err != nil {
 		log.Fatalf("open database: %v", err)
 	}
-	defer store.Close()
+	defer s.Close()
 
-	srv := weftapi.NewServer(store, jwtSecret, *coordAddr, *baseURL)
+	srv := weftapi.NewServer(s, jwtSecret, *coordAddr, *baseURL)
 	if err := srv.Connect(); err != nil {
 		log.Fatalf("connect to coordinator: %v", err)
 	}
@@ -55,6 +56,8 @@ func main() {
 	}
 	srv.StripeSecretKey = os.Getenv("STRIPE_SECRET_KEY")
 	srv.StripeWebhookSecret = os.Getenv("STRIPE_WEBHOOK_SECRET")
+	srv.SlackClientID = os.Getenv("SLACK_CLIENT_ID")
+	srv.SlackClientSecret = os.Getenv("SLACK_CLIENT_SECRET")
 
 	log.Printf("weft-api listening on :%s (coordinator: %s)", *port, *coordAddr)
 	if err := http.ListenAndServe(":"+*port, srv.Handler()); err != nil {

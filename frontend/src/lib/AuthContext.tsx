@@ -6,6 +6,7 @@ interface AuthContextValue {
   token: string | null
   login: (email: string) => Promise<void>
   verify: (token: string) => Promise<void>
+  loginWithToken: (jwt: string) => Promise<void>
   logout: () => void
   loading: boolean
 }
@@ -46,6 +47,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(u)
   }
 
+  async function loginWithToken(jwt: string): Promise<void> {
+    localStorage.setItem(TOKEN_KEY, jwt)
+    setToken(jwt)
+    const u = await getMe()
+    setUser(u)
+  }
+
   function logout(): void {
     localStorage.removeItem(TOKEN_KEY)
     setToken(null)
@@ -53,7 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, token, login, verify, logout, loading }}>
+    <AuthContext.Provider value={{ user, token, login, verify, loginWithToken, logout, loading }}>
       {children}
     </AuthContext.Provider>
   )

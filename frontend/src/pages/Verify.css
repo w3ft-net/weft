@@ -103,3 +103,27 @@
 .verify-back:hover {
   color: var(--accent-hover);
 }
+
+.verify-accept-btn {
+  display: inline-block;
+  margin-top: 16px;
+  padding: 12px 28px;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: var(--bg-deep);
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.verify-accept-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.verify-accept-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

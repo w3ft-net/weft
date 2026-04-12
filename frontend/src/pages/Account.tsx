@@ -1,0 +1,671 @@
+import { useState, useEffect } from 'react'
+import SidebarNav from '../components/SidebarNav'
+import {
+  getUsage, getTokens, createToken, revokeToken, createCheckout,
+  getTeam, inviteMember, removeMember, updateTeamName,
+  getIntegrations, connectSlack, disconnectSlack, savePagerDutyKey, disconnectPagerDuty,
+  type Usage, type AgentToken, type TeamResponse, type IntegrationsResponse,
+} from '../lib/api'
+import { useAuth } from '../lib/AuthContext'
+import './Dashboard.css'
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+  })
+}
+
+function truncateToken(tok: string): string {
+  if (tok.length <= 16) return tok
+  return `${tok.slice(0, 8)}...${tok.slice(-4)}`
+}
+
+// ── Plan tiers ─────────────────────────────────────────────────────────────
+
+const PLANS = [
+  { tier: 'swatch', name: 'Swatch', price: 19, volume: '10 GB/mo', retention: '30 days', overage: '$2/GB' },
+  { tier: 'yard', name: 'Yard', price: 79, volume: '100 GB/mo', retention: '90 days', overage: '$1/GB' },
+  { tier: 'bolt', name: 'Bolt', price: 299, volume: '1 TB/mo', retention: '1 year', overage: '$0.50/GB' },
+]
+
+// ── Subscription Card ──────────────────────────────────────────────────────
+
+function SubscriptionCard({ usage }: { usage: Usage | null }) {
+  const [upgrading, setUpgrading] = useState<string | null>(null)
+
+  async function handleUpgrade(tier: string) {
+    setUpgrading(tier)
+    try {
+      const { url } = await createCheckout(tier)
+      window.location.href = url
+    } catch {
+      setUpgrading(null)
+    }
+  }
+
+  const currentTier = usage?.tier?.toLowerCase() || 'trial'
+  const isTrial = currentTier === 'trial'
+  const pct = usage
+    ? Math.min(100, Math.round((usage.bytes_ingested / usage.tier_limit_bytes) * 100))
+    : 0
+  const barColor = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--yellow)' : 'var(--green)'
+
+  return (
+    <div className="dash-card" data-testid="account-subscription-card">
+      <div className="dash-card-header">
+        <h2 className="dash-card-title">Subscription</h2>
+        {usage && <span className="dash-tier-badge" data-testid="account-tier-badge">{usage.tier}</span>}
+      </div>
+
+      {/* Trial banner */}
+      {isTrial && (
+        <div className="trial-banner" data-testid="account-trial-banner">
+          You're on a free trial. Choose a plan below to continue after the trial ends.
+        </div>
+      )}
+
+      {/* Current usage */}
+      {usage && (
+        <>
+          <div className="usage-stats">
+            <div className="usage-stat">
+              <div className="usage-stat-label">Ingested this period</div>
+              <div className="usage-stat-value" data-testid="account-bytes-ingested">
+                {formatBytes(usage.bytes_ingested)}
+              </div>
+            </div>
+            <div className="usage-stat">
+              <div className="usage-stat-label">Tier limit</div>
+              <div className="usage-stat-value">{formatBytes(usage.tier_limit_bytes)}</div>
+            </div>
+            <div className="usage-stat">
+              <div className="usage-stat-label">Period start</div>
+              <div className="usage-stat-value">{formatDate(usage.period_start)}</div>
+            </div>
+          </div>
+          <div className="usage-bar-wrap" style={{ marginBottom: 24 }}>
+            <div className="usage-bar-track" data-testid="account-usage-bar">
+              <div className="usage-bar-fill" style={{ width: `${pct}%`, background: barColor }} />
+            </div>
+            <span className="usage-bar-pct" style={{ color: barColor }}>{pct}%</span>
+          </div>
+        </>
+      )}
+
+      {/* Plan comparison */}
+      <div className="plan-grid">
+        {PLANS.map(plan => {
+          const isCurrent = plan.tier === currentTier
+          return (
+            <div
+              key={plan.tier}
+              className={`plan-tile${isCurrent ? ' plan-tile-current' : ''}`}
+              data-testid={`account-plan-${plan.tier}`}
+            >
+              <div className="plan-tile-name">{plan.name}</div>
+              <div className="plan-tile-price">
+                <span className="plan-price-amount">${plan.price}</span>
+                <span className="plan-price-period">/mo</span>
+              </div>
+              <div className="plan-tile-details">
+                <div>{plan.volume}</div>
+                <div>{plan.retention} retention</div>
+                <div>{plan.overage} overage</div>
+              </div>
+              {isCurrent ? (
+                <div className="plan-tile-badge">Current plan</div>
+              ) : (
+                <button
+                  className="btn-action btn-action-primary plan-tile-btn"
+                  onClick={() => handleUpgrade(plan.tier)}
+                  disabled={upgrading !== null}
+                  data-testid={`account-plan-select-${plan.tier}`}
+                >
+                  {upgrading === plan.tier ? 'Redirecting...' : isTrial ? 'Upgrade' : 'Switch'}
+                </button>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── Tokens Card ────────────────────────────────────────────────────────────
+
+function CreateTokenForm({ onCreated, onCancel }: {
+  onCreated: (t: AgentToken & { secret: string }) => void
+  onCancel: () => void
+}) {
+  const [label, setLabel] = useState('')
+  const [app, setApp] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!label.trim()) return
+    setError('')
+    setLoading(true)
+    try {
+      const tok = await createToken(label.trim(), app.trim())
+      onCreated(tok)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create token.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <form className="create-token-form" onSubmit={handleSubmit} data-testid="account-create-token-form">
+      <div className="form-row">
+        <div className="form-field">
+          <label className="form-label">Label</label>
+          <input className="form-input" placeholder="prod-web-01" value={label}
+            onChange={e => setLabel(e.target.value)} data-testid="account-token-label-input" required />
+        </div>
+        <div className="form-field">
+          <label className="form-label">App</label>
+          <input className="form-input" placeholder="myapp" value={app}
+            onChange={e => setApp(e.target.value)} data-testid="account-token-app-input" />
+        </div>
+      </div>
+      {error && <div className="form-error">{error}</div>}
+      <div className="form-actions">
+        <button type="submit" className="btn-action btn-action-primary"
+          disabled={loading} data-testid="account-token-create-submit-button">
+          {loading ? 'Creating...' : 'Create token'}
+        </button>
+        <button type="button" className="btn-action" onClick={onCancel}
+          data-testid="account-token-create-cancel-button">Cancel</button>
+      </div>
+    </form>
+  )
+}
+
+function TokensCard({ tokens, onRefresh }: { tokens: AgentToken[]; onRefresh: () => void }) {
+  const [showForm, setShowForm] = useState(false)
+  const [newToken, setNewToken] = useState<(AgentToken & { secret: string }) | null>(null)
+  const [revoking, setRevoking] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  async function handleRevoke(tok: string) {
+    setRevoking(tok)
+    try { await revokeToken(tok) } catch { /* */ }
+    finally { setRevoking(null); onRefresh() }
+  }
+
+  return (
+    <div className="dash-card" data-testid="account-tokens-card">
+      <div className="dash-card-header">
+        <h2 className="dash-card-title">Agent tokens</h2>
+        {!showForm && !newToken && (
+          <button className="btn-action btn-action-primary" onClick={() => setShowForm(true)}
+            data-testid="account-create-token-button">+ Create token</button>
+        )}
+      </div>
+
+      {newToken && (
+        <div className="token-reveal" data-testid="account-token-reveal">
+          <div className="token-reveal-label">Token created — copy now, it won't be shown again.</div>
+          <div className="token-reveal-value" data-testid="account-token-secret">{newToken.secret}</div>
+          <div className="form-actions">
+            <button className="btn-action btn-action-primary" data-testid="account-token-copy-button"
+              onClick={() => { navigator.clipboard.writeText(newToken.secret); setCopied(true); setTimeout(() => setCopied(false), 2000) }}>
+              {copied ? 'Copied!' : 'Copy to clipboard'}
+            </button>
+            <button className="btn-action" onClick={() => { setNewToken(null); onRefresh() }}
+              data-testid="account-token-reveal-done-button">Done</button>
+          </div>
+        </div>
+      )}
+
+      {showForm && (
+        <CreateTokenForm
+          onCreated={t => { setShowForm(false); setNewToken(t) }}
+          onCancel={() => setShowForm(false)}
+        />
+      )}
+
+      {tokens.length === 0 && !showForm && !newToken ? (
+        <div className="dash-empty">No tokens yet. Create one to connect weftd agents.</div>
+      ) : (
+        <div className="dash-table-wrap">
+          <table className="dash-table" data-testid="account-tokens-table">
+            <thead>
+              <tr><th>Token</th><th>Label</th><th>App</th><th>Status</th><th>Created</th><th></th></tr>
+            </thead>
+            <tbody>
+              {tokens.map(t => (
+                <tr key={t.token} data-testid={`account-token-row-${t.token}`}>
+                  <td>
+                    <button className="token-copy-btn" title="Click to copy"
+                      onClick={() => navigator.clipboard.writeText(t.token)}
+                      data-testid={`account-token-copy-${t.token}`}>
+                      {truncateToken(t.token)}
+                    </button>
+                  </td>
+                  <td className="token-label">{t.label}</td>
+                  <td className="token-app">{t.app || '—'}</td>
+                  <td><span className={`token-status token-status-${t.status}`}>{t.status}</span></td>
+                  <td className="token-date">{formatDate(t.created_at)}</td>
+                  <td>
+                    {t.status === 'active' && (
+                      <button className="btn-action btn-action-danger" onClick={() => handleRevoke(t.token)}
+                        disabled={revoking === t.token} data-testid={`account-token-revoke-${t.token}`}>
+                        {revoking === t.token ? '...' : 'Revoke'}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Main ───────────────────────────────────────────────────────────────────
+
+// ── Team Members Card ──────────────────────────────────────────────────────
+
+// ── Integrations Card ──────────────────────────────────────────────────────
+
+function IntegrationsCard({ integrations, onRefresh }: { integrations: IntegrationsResponse | null; onRefresh: () => void }) {
+  const [pdName, setPdName] = useState('')
+  const [pdKey, setPdKey] = useState('')
+  const [pdSaving, setPdSaving] = useState(false)
+  const [showPdForm, setShowPdForm] = useState(false)
+
+  const slackConnected = integrations?.slack?.connected ?? false
+  const pdKeys = integrations?.pagerduty?.keys ?? {}
+  const pdConnected = Object.keys(pdKeys).length > 0
+
+  async function handleSlackConnect() {
+    try {
+      const { url } = await connectSlack()
+      window.location.href = url
+    } catch {
+      // Slack not configured on server
+    }
+  }
+
+  async function handleSlackDisconnect() {
+    await disconnectSlack()
+    onRefresh()
+  }
+
+  async function handlePdSave(e: React.FormEvent) {
+    e.preventDefault()
+    if (!pdName.trim() || !pdKey.trim()) return
+    setPdSaving(true)
+    try {
+      await savePagerDutyKey(pdName.trim(), pdKey.trim())
+      setPdName('')
+      setPdKey('')
+      setShowPdForm(false)
+      onRefresh()
+    } finally {
+      setPdSaving(false)
+    }
+  }
+
+  async function handlePdDisconnect() {
+    await disconnectPagerDuty()
+    onRefresh()
+  }
+
+  return (
+    <div className="dash-card" data-testid="account-integrations-card">
+      <div className="dash-card-header">
+        <h2 className="dash-card-title">Integrations</h2>
+      </div>
+
+      {/* Slack */}
+      <div className="integration-section">
+        <div className="integration-row">
+          <div className="integration-info">
+            <span className="integration-name">Slack</span>
+            {slackConnected ? (
+              <span className="integration-status integration-status-connected">
+                {integrations?.slack?.team_name || 'Connected'}
+              </span>
+            ) : (
+              <span className="integration-status">Not connected</span>
+            )}
+          </div>
+          {slackConnected ? (
+            <button className="btn-action btn-action-danger" onClick={handleSlackDisconnect}
+              data-testid="account-slack-disconnect-button">Disconnect</button>
+          ) : (
+            <button className="btn-action btn-action-primary" onClick={handleSlackConnect}
+              data-testid="account-slack-connect-button">Connect Slack</button>
+          )}
+        </div>
+      </div>
+
+      {/* PagerDuty */}
+      <div className="integration-section">
+        <div className="integration-row">
+          <div className="integration-info">
+            <span className="integration-name">PagerDuty</span>
+            {pdConnected ? (
+              <span className="integration-status integration-status-connected">
+                {Object.keys(pdKeys).length} service{Object.keys(pdKeys).length !== 1 ? 's' : ''}
+              </span>
+            ) : (
+              <span className="integration-status">No keys configured</span>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {!showPdForm && (
+              <button className="btn-action btn-action-primary" onClick={() => setShowPdForm(true)}
+                data-testid="account-pd-add-button">+ Add key</button>
+            )}
+            {pdConnected && (
+              <button className="btn-action btn-action-danger" onClick={handlePdDisconnect}
+                data-testid="account-pd-disconnect-button">Clear all</button>
+            )}
+          </div>
+        </div>
+
+        {/* Existing PD keys */}
+        {pdConnected && (
+          <div className="integration-keys">
+            {Object.entries(pdKeys).map(([name, masked]) => (
+              <div key={name} className="integration-key-row">
+                <span className="integration-key-name">{name}</span>
+                <span className="integration-key-value">{masked}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Add PD key form */}
+        {showPdForm && (
+          <form className="create-token-form" onSubmit={handlePdSave} style={{ marginTop: 12 }}
+            data-testid="account-pd-form">
+            <div className="form-row">
+              <div className="form-field">
+                <label className="form-label">Service name</label>
+                <input className="form-input" placeholder="api" value={pdName}
+                  onChange={e => setPdName(e.target.value)} required
+                  data-testid="account-pd-name-input" />
+              </div>
+              <div className="form-field">
+                <label className="form-label">Routing key</label>
+                <input className="form-input" placeholder="paste from PagerDuty" value={pdKey}
+                  onChange={e => setPdKey(e.target.value)} required
+                  data-testid="account-pd-key-input" />
+              </div>
+            </div>
+            <div className="form-actions">
+              <button type="submit" className="btn-action btn-action-primary" disabled={pdSaving}
+                data-testid="account-pd-save-button">{pdSaving ? 'Saving...' : 'Save'}</button>
+              <button type="button" className="btn-action" onClick={() => setShowPdForm(false)}>Cancel</button>
+            </div>
+          </form>
+        )}
+      </div>
+
+      {/* Info */}
+      <div className="dash-empty" style={{ paddingTop: 12 }}>
+        Configure notification routing in <code>/etc/notify.conf</code> or per-watch with <code># notify: slack:#channel</code>
+      </div>
+    </div>
+  )
+}
+
+// ── Team Members Card ──────────────────────────────────────────────────────
+
+function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null; onRefresh: () => void; currentEmail: string }) {
+  const [showInvite, setShowInvite] = useState(false)
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviting, setInviting] = useState(false)
+  const [inviteError, setInviteError] = useState('')
+  const [removing, setRemoving] = useState<string | null>(null)
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
+  const [editingName, setEditingName] = useState(false)
+  const [orgNameInput, setOrgNameInput] = useState(team?.org_name ?? '')
+
+  const members = team?.members ?? []
+  const seatsUsed = team?.seats_used ?? 0
+  const seatsLimit = team?.seats_limit ?? 1
+  const atLimit = seatsUsed >= seatsLimit
+  const isOwner = members.some(m => m.Email === currentEmail && m.Role === 'owner')
+
+  async function handleInvite(e: React.FormEvent) {
+    e.preventDefault()
+    if (!inviteEmail.trim()) return
+    setInviteError('')
+    setInviting(true)
+    try {
+      await inviteMember(inviteEmail.trim())
+      setInviteEmail('')
+      setShowInvite(false)
+      onRefresh()
+    } catch (err) {
+      setInviteError(err instanceof Error ? err.message : 'Failed to invite.')
+    } finally {
+      setInviting(false)
+    }
+  }
+
+  async function handleRemove(id: string) {
+    setRemoving(id)
+    try {
+      await removeMember(id)
+      setConfirmRemove(null)
+      onRefresh()
+    } catch {
+      // ignore
+    } finally {
+      setRemoving(null)
+    }
+  }
+
+  return (
+    <div className="dash-card" data-testid="account-team-card">
+      <div className="dash-card-header">
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <h2 className="dash-card-title">Team</h2>
+          {editingName ? (
+            <form onSubmit={async (e) => {
+              e.preventDefault()
+              if (orgNameInput.trim()) {
+                await updateTeamName(orgNameInput.trim())
+                onRefresh()
+              }
+              setEditingName(false)
+            }} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input
+                className="form-input"
+                value={orgNameInput}
+                onChange={e => setOrgNameInput(e.target.value)}
+                autoFocus
+                style={{ width: 180, padding: '4px 8px', fontSize: '0.82rem' }}
+                data-testid="account-org-name-input"
+              />
+              <button type="submit" className="btn-action btn-action-primary" style={{ padding: '4px 10px', fontSize: '0.75rem' }}>Save</button>
+              <button type="button" className="btn-action" style={{ padding: '4px 10px', fontSize: '0.75rem' }} onClick={() => setEditingName(false)}>Cancel</button>
+            </form>
+          ) : (
+            <span
+              className="watch-tile-name"
+              style={{ cursor: isOwner ? 'pointer' : 'default' }}
+              onClick={() => { if (isOwner) { setOrgNameInput(team?.org_name ?? ''); setEditingName(true) } }}
+              title={isOwner ? 'Click to rename' : undefined}
+              data-testid="account-org-name"
+            >
+              {team?.org_name || '—'}
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span className="watch-count-badge">{seatsUsed} / {seatsLimit} seats</span>
+          {isOwner && !showInvite && (
+            <button
+              className="btn-action btn-action-primary"
+              onClick={() => setShowInvite(true)}
+              disabled={atLimit}
+              title={atLimit ? 'Seat limit reached — upgrade to add more' : undefined}
+              data-testid="account-invite-button"
+            >
+              + Invite
+            </button>
+          )}
+        </div>
+      </div>
+
+      {showInvite && (
+        <form className="create-token-form" onSubmit={handleInvite} data-testid="account-invite-form">
+          <div className="form-row">
+            <div className="form-field">
+              <label className="form-label">Email address</label>
+              <input
+                className="form-input"
+                type="email"
+                placeholder="teammate@company.com"
+                value={inviteEmail}
+                onChange={e => setInviteEmail(e.target.value)}
+                autoFocus
+                required
+                data-testid="account-invite-email-input"
+              />
+            </div>
+          </div>
+          {inviteError && <div className="form-error">{inviteError}</div>}
+          <div className="form-actions">
+            <button
+              type="submit"
+              className="btn-action btn-action-primary"
+              disabled={inviting || !inviteEmail.trim()}
+              data-testid="account-invite-submit-button"
+            >
+              {inviting ? 'Sending...' : 'Send invite'}
+            </button>
+            <button
+              type="button"
+              className="btn-action"
+              onClick={() => { setShowInvite(false); setInviteError('') }}
+              data-testid="account-invite-cancel-button"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+
+      {members.length === 0 ? (
+        <div className="dash-empty">No team members yet.</div>
+      ) : (
+        <div className="dash-table-wrap">
+          <table className="dash-table" data-testid="account-team-table">
+            <thead>
+              <tr><th>Email</th><th>Role</th><th>Status</th><th>Joined</th><th></th></tr>
+            </thead>
+            <tbody>
+              {members.map(m => (
+                <tr key={m.ID} data-testid={`account-team-row-${m.ID}`}>
+                  <td className="token-label">{m.Email}</td>
+                  <td>
+                    <span className={`token-status ${m.Role === 'owner' ? 'token-status-active' : ''}`}>
+                      {m.Role}
+                    </span>
+                  </td>
+                  <td>
+                    <span className={`token-status ${m.Status === 'active' ? 'token-status-active' : 'token-status-revoked'}`}>
+                      {m.Status === 'pending' ? 'invited' : m.Status}
+                    </span>
+                  </td>
+                  <td className="token-date">
+                    {m.AcceptedAt ? formatDate(m.AcceptedAt) : m.Status === 'pending' ? formatDate(m.InvitedAt) : '—'}
+                  </td>
+                  <td>
+                    {isOwner && m.Role !== 'owner' && (
+                      confirmRemove === m.ID ? (
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button
+                            className="btn-action btn-action-danger"
+                            onClick={() => handleRemove(m.ID)}
+                            disabled={removing === m.ID}
+                            data-testid={`account-team-confirm-remove-${m.ID}`}
+                          >
+                            {removing === m.ID ? '...' : 'Confirm'}
+                          </button>
+                          <button
+                            className="btn-action"
+                            onClick={() => setConfirmRemove(null)}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          className="btn-action btn-action-danger"
+                          onClick={() => setConfirmRemove(m.ID)}
+                          data-testid={`account-team-remove-${m.ID}`}
+                        >
+                          Remove
+                        </button>
+                      )
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Main ───────────────────────────────────────────────────────────────────
+
+export default function Account() {
+  const { user } = useAuth()
+  const [usage, setUsage] = useState<Usage | null>(null)
+  const [tokens, setTokens] = useState<AgentToken[]>([])
+  const [team, setTeam] = useState<TeamResponse | null>(null)
+  const [integrations, setIntegrations] = useState<IntegrationsResponse | null>(null)
+
+  function loadData() {
+    getUsage().then(setUsage).catch(() => {})
+    getTokens().then(setTokens).catch(() => {})
+    getTeam().then(setTeam).catch(() => {})
+    getIntegrations().then(setIntegrations).catch(() => {})
+  }
+
+  useEffect(() => { loadData() }, [])
+
+  return (
+    <div className="app-layout">
+      <SidebarNav />
+      <main className="app-main" data-testid="account-main">
+        <div className="dash-content">
+          <div className="dash-header">
+            <h1 className="dash-page-title">Account</h1>
+            {user && <div className="dash-empty" style={{ marginTop: 4 }}>{user.email}</div>}
+          </div>
+
+          <SubscriptionCard usage={usage} />
+          <IntegrationsCard integrations={integrations} onRefresh={loadData} />
+          <TeamCard team={team} onRefresh={loadData} currentEmail={user?.email ?? ''} />
+          <TokensCard tokens={tokens} onRefresh={loadData} />
+        </div>
+      </main>
+    </div>
+  )
+}

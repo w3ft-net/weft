@@ -1,4 +1,4 @@
-package shell
+package shellcore
 
 import (
 	"fmt"
@@ -72,4 +72,24 @@ func RenderLogo() string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+// VisualWidth returns the display width of a string, ignoring ANSI escape codes.
+func VisualWidth(s string) int {
+	n := 0
+	inEsc := false
+	for _, r := range s {
+		if r == '\033' {
+			inEsc = true
+			continue
+		}
+		if inEsc {
+			if r == 'm' {
+				inEsc = false
+			}
+			continue
+		}
+		n++
+	}
+	return n
 }

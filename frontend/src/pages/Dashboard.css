@@ -423,6 +423,359 @@
   gap: 8px;
 }
 
+/* ── Watches ───────────────────────────────────── */
+.watch-count-badge {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  padding: 2px 10px;
+  border-radius: 20px;
+}
+
+.watch-count-at-limit {
+  color: var(--red);
+  border-color: rgba(224, 108, 117, 0.3);
+}
+
+.watch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.watch-tile {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: border-color 0.15s;
+}
+
+.watch-tile:hover {
+  border-color: var(--border-bright);
+}
+
+.watch-tile-errored {
+  border-color: rgba(224, 108, 117, 0.3);
+}
+
+.watch-tile-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.watch-tile-name {
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.watch-tile-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.watch-tile-value {
+  font-family: var(--font-mono);
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.watch-sparkline {
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+
+.watch-tile-schedule {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.watch-tile-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.watch-tile-ago {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.watch-tile-ago-err {
+  color: var(--red);
+}
+
+.watch-tile-notify {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--accent);
+  background: var(--accent-glow);
+  border: 1px solid rgba(230, 126, 34, 0.2);
+  padding: 1px 7px;
+  border-radius: 3px;
+}
+
+.watch-tile-open {
+  margin-left: auto;
+  background: none;
+  border: none;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.15s;
+}
+
+.watch-tile-open:hover {
+  color: var(--accent);
+}
+
+/* ── Integrations ──────────────────────────────── */
+.integration-section {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.integration-section:last-of-type {
+  border-bottom: none;
+}
+
+.integration-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.integration-info {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.integration-name {
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.integration-status {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.integration-status-connected {
+  color: var(--green);
+}
+
+.integration-keys {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.integration-key-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.integration-key-name {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  min-width: 80px;
+}
+
+.integration-key-value {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+/* ── Trial banner ──────────────────────────────── */
+.trial-banner {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--accent);
+  background: var(--accent-glow);
+  border: 1px solid rgba(230, 126, 34, 0.25);
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+}
+
+/* ── Plan grid ─────────────────────────────────── */
+.plan-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.plan-tile {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: border-color 0.15s;
+}
+
+.plan-tile:hover {
+  border-color: var(--border-bright);
+}
+
+.plan-tile-current {
+  border-color: var(--accent);
+}
+
+.plan-tile-name {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.plan-tile-price {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+.plan-price-amount {
+  font-family: var(--font-mono);
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.plan-price-period {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.plan-tile-details {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.plan-tile-badge {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding-top: 4px;
+}
+
+.plan-tile-btn {
+  align-self: flex-start;
+  margin-top: auto;
+}
+
+@media (max-width: 760px) {
+  .plan-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Functions ──────────────────────────────────── */
+.func-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.func-row {
+  border-bottom: 1px solid var(--border);
+}
+
+.func-row:last-child {
+  border-bottom: none;
+}
+
+.func-name {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 12px 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.func-name-text {
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.func-name:hover .func-name-text {
+  color: var(--accent);
+}
+
+.func-chevron {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.func-detail {
+  padding: 0 0 14px;
+}
+
+.func-source {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--green-dim);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.func-actions {
+  display: flex;
+  gap: 8px;
+}
+
 /* ── Responsive ─────────────────────────────────── */
 @media (max-width: 760px) {
   .dash-content {

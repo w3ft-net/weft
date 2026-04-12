@@ -66,6 +66,7 @@ func main() {
 		Start:  time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
 		End:    time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
 		Apps:   apps,
+		FS:     shell.NewRemoteFS(remote.Client(), cfg.Customer, apps),
 	}
 
 	runShell(s)
@@ -79,6 +80,7 @@ func runDevShell() {
 	}
 	defer cleanup()
 
+	apps := coordinator.DevApps()
 	s := &shell.Shell{
 		Query: func(pipeline string, start, end time.Time) (*shell.QueryResult, error) {
 			tr := coordinator.TimeRange{Start: start, End: end}
@@ -90,7 +92,9 @@ func runDevShell() {
 		},
 		Start: coordinator.DevT0,
 		End:   coordinator.DevT2,
-		Apps:  coordinator.DevApps(),
+		Apps:  apps,
+		// Dev shell uses in-memory FS (no gRPC coordinator to proxy through).
+		FS:    shell.NewDevFS(apps),
 	}
 
 	runShell(s)

@@ -41,6 +41,11 @@ func (r *RemoteCoordinator) Close() error {
 	return r.conn.Close()
 }
 
+// Client returns the underlying gRPC client for direct RPC calls.
+func (r *RemoteCoordinator) Client() pb.WeftCoordinatorClient {
+	return r.client
+}
+
 // Query executes a pipeline against the remote coordinator.
 func (r *RemoteCoordinator) Query(pipeline string, start, end time.Time) (*RemoteQueryResult, error) {
 	stream, err := r.client.Query(context.Background(), &pb.CoordinatorQueryRequest{

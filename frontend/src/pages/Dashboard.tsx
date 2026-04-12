@@ -2,413 +2,266 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import SidebarNav from '../components/SidebarNav'
 import {
-  getUsage, getTokens, createToken, revokeToken,
-  getQueries, deleteQuery,
-  type Usage, type AgentToken, type SavedQuery,
+  getWatches, getWatchResults, getFunctions,
+  type CronWatch, type CronResult, type ShellFunction,
 } from '../lib/api'
 import './Dashboard.css'
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+function timeAgo(iso: string): string {
+  const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+  if (seconds < 60) return `${seconds}s ago`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.floor(hours / 24)}d ago`
 }
 
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric',
-  })
-}
+// ── Sparkline ──────────────────────────────────────────────────────────────
 
-function truncateToken(tok: string): string {
-  if (tok.length <= 16) return tok
-  return `${tok.slice(0, 8)}...${tok.slice(-4)}`
-}
+function Sparkline({ values }: { values: number[] }) {
+  if (values.length < 2) return null
 
-// ── Usage Card ──────────────────────────────────────────────────────────────
+  const w = 120
+  const h = 30
+  const pad = 2
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const range = max - min || 1
 
-function UsageCard({ usage }: { usage: Usage }) {
-  const pct = Math.min(100, Math.round((usage.bytes_ingested / usage.tier_limit_bytes) * 100))
-  const barColor = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--yellow)' : 'var(--green)'
+  const points = values.map((v, i) => {
+    const x = pad + (i / (values.length - 1)) * (w - pad * 2)
+    const y = h - pad - ((v - min) / range) * (h - pad * 2)
+    return `${x},${y}`
+  }).join(' ')
 
   return (
-    <div className="dash-card" data-testid="dashboard-usage-card">
-      <div className="dash-card-header">
-        <h2 className="dash-card-title">Usage</h2>
-        <span className="dash-tier-badge" data-testid="dashboard-tier-badge">{usage.tier}</span>
-      </div>
-      <div className="usage-stats">
-        <div className="usage-stat">
-          <div className="usage-stat-label">Ingested this period</div>
-          <div className="usage-stat-value" data-testid="dashboard-bytes-ingested">
-            {formatBytes(usage.bytes_ingested)}
-          </div>
-        </div>
-        <div className="usage-stat">
-          <div className="usage-stat-label">Tier limit</div>
-          <div className="usage-stat-value">{formatBytes(usage.tier_limit_bytes)}</div>
-        </div>
-        <div className="usage-stat">
-          <div className="usage-stat-label">Period start</div>
-          <div className="usage-stat-value">{formatDate(usage.period_start)}</div>
-        </div>
-      </div>
-      <div className="usage-bar-wrap">
-        <div className="usage-bar-track" data-testid="dashboard-usage-bar">
-          <div
-            className="usage-bar-fill"
-            style={{ width: `${pct}%`, background: barColor }}
-          />
-        </div>
-        <span className="usage-bar-pct" style={{ color: barColor }}>{pct}%</span>
-      </div>
-    </div>
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="watch-sparkline">
+      <polyline
+        points={points}
+        fill="none"
+        stroke="var(--accent)"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {values.length > 0 && (() => {
+        const lastX = w - pad
+        const lastY = h - pad - ((values[values.length - 1] - min) / range) * (h - pad * 2)
+        return <circle cx={lastX} cy={lastY} r="2.5" fill="var(--accent)" />
+      })()}
+    </svg>
   )
 }
 
-// ── Tokens Section ──────────────────────────────────────────────────────────
+// ── Watches Section ────────────────────────────────────────────────────────
 
-interface CreateTokenFormProps {
-  onCreated: (t: AgentToken & { secret: string }) => void
-  onCancel: () => void
+interface WatchWithResults {
+  watch: CronWatch
+  results: CronResult[]
 }
 
-function CreateTokenForm({ onCreated, onCancel }: CreateTokenFormProps) {
-  const [label, setLabel] = useState('')
-  const [app, setApp] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!label.trim()) return
-    setError('')
-    setLoading(true)
-    try {
-      const tok = await createToken(label.trim(), app.trim())
-      onCreated(tok)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create token.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <form className="create-token-form" onSubmit={handleSubmit} data-testid="dashboard-create-token-form">
-      <div className="form-row">
-        <div className="form-field">
-          <label className="form-label">Label</label>
-          <input
-            className="form-input"
-            placeholder="prod-web-01"
-            value={label}
-            onChange={e => setLabel(e.target.value)}
-            data-testid="dashboard-token-label-input"
-            required
-          />
-        </div>
-        <div className="form-field">
-          <label className="form-label">App</label>
-          <input
-            className="form-input"
-            placeholder="myapp"
-            value={app}
-            onChange={e => setApp(e.target.value)}
-            data-testid="dashboard-token-app-input"
-          />
-        </div>
-      </div>
-      {error && <div className="form-error">{error}</div>}
-      <div className="form-actions">
-        <button
-          type="submit"
-          className="btn-action btn-action-primary"
-          disabled={loading}
-          data-testid="dashboard-token-create-submit-button"
-        >
-          {loading ? 'Creating...' : 'Create token'}
-        </button>
-        <button
-          type="button"
-          className="btn-action"
-          onClick={onCancel}
-          data-testid="dashboard-token-create-cancel-button"
-        >
-          Cancel
-        </button>
-      </div>
-    </form>
-  )
-}
-
-interface NewTokenRevealProps {
-  token: AgentToken & { secret: string }
-  onDone: () => void
-}
-
-function NewTokenReveal({ token, onDone }: NewTokenRevealProps) {
-  const [copied, setCopied] = useState(false)
-
-  function handleCopy() {
-    navigator.clipboard.writeText(token.secret)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
-
-  return (
-    <div className="token-reveal" data-testid="dashboard-token-reveal">
-      <div className="token-reveal-label">
-        Token created — copy now, it won't be shown again.
-      </div>
-      <div className="token-reveal-value" data-testid="dashboard-token-secret">
-        {token.secret}
-      </div>
-      <div className="form-actions">
-        <button
-          className="btn-action btn-action-primary"
-          onClick={handleCopy}
-          data-testid="dashboard-token-copy-button"
-        >
-          {copied ? 'Copied!' : 'Copy to clipboard'}
-        </button>
-        <button
-          className="btn-action"
-          onClick={onDone}
-          data-testid="dashboard-token-reveal-done-button"
-        >
-          Done
-        </button>
-      </div>
-    </div>
-  )
-}
-
-interface TokensCardProps {
-  tokens: AgentToken[]
-  onRevoke: (tok: string) => void
-}
-
-function TokensCard({ tokens, onRevoke }: TokensCardProps) {
-  const [showForm, setShowForm] = useState(false)
-  const [newToken, setNewToken] = useState<(AgentToken & { secret: string }) | null>(null)
-  const [revoking, setRevoking] = useState<string | null>(null)
-
-  async function handleRevoke(tok: string) {
-    setRevoking(tok)
-    try {
-      await revokeToken(tok)
-      onRevoke(tok)
-    } catch {
-      // silently ignore — parent still holds stale state
-    } finally {
-      setRevoking(null)
-    }
-  }
-
-  function handleCreated(t: AgentToken & { secret: string }) {
-    setShowForm(false)
-    setNewToken(t)
-    onRevoke('__refresh__')
-  }
-
-  return (
-    <div className="dash-card" data-testid="dashboard-tokens-card">
-      <div className="dash-card-header">
-        <h2 className="dash-card-title">Agent tokens</h2>
-        {!showForm && !newToken && (
-          <button
-            className="btn-action btn-action-primary"
-            onClick={() => setShowForm(true)}
-            data-testid="dashboard-create-token-button"
-          >
-            + Create token
-          </button>
-        )}
-      </div>
-
-      {newToken && (
-        <NewTokenReveal
-          token={newToken}
-          onDone={() => setNewToken(null)}
-        />
-      )}
-
-      {showForm && (
-        <CreateTokenForm
-          onCreated={handleCreated}
-          onCancel={() => setShowForm(false)}
-        />
-      )}
-
-      {tokens.length === 0 && !showForm && !newToken ? (
-        <div className="dash-empty">No tokens yet. Create one to connect weftd agents.</div>
-      ) : (
-        <div className="dash-table-wrap">
-          <table className="dash-table" data-testid="dashboard-tokens-table">
-            <thead>
-              <tr>
-                <th>Token</th>
-                <th>Label</th>
-                <th>App</th>
-                <th>Status</th>
-                <th>Created</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {tokens.map(t => (
-                <tr key={t.token} data-testid={`token-row-${t.token}`}>
-                  <td>
-                    <button
-                      className="token-copy-btn"
-                      title="Click to copy"
-                      onClick={() => navigator.clipboard.writeText(t.token)}
-                      data-testid={`token-copy-${t.token}`}
-                    >
-                      {truncateToken(t.token)}
-                    </button>
-                  </td>
-                  <td className="token-label">{t.label}</td>
-                  <td className="token-app">{t.app || '—'}</td>
-                  <td>
-                    <span className={`token-status token-status-${t.status}`}
-                      data-testid={`token-status-${t.token}`}>
-                      {t.status}
-                    </span>
-                  </td>
-                  <td className="token-date">{formatDate(t.created_at)}</td>
-                  <td>
-                    {t.status === 'active' && (
-                      <button
-                        className="btn-action btn-action-danger"
-                        onClick={() => handleRevoke(t.token)}
-                        disabled={revoking === t.token}
-                        data-testid={`token-revoke-${t.token}`}
-                      >
-                        {revoking === t.token ? '...' : 'Revoke'}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Queries Section ─────────────────────────────────────────────────────────
-
-interface QueriesCardProps {
-  queries: SavedQuery[]
-  onDelete: (id: string) => void
-}
-
-function QueriesCard({ queries, onDelete }: QueriesCardProps) {
+function WatchesCard({ watches, watchCount, watchLimit, minInterval }: {
+  watches: WatchWithResults[]
+  watchCount: number
+  watchLimit: number
+  minInterval: string
+}) {
   const navigate = useNavigate()
-  const [deleting, setDeleting] = useState<string | null>(null)
+  const atLimit = watchCount >= watchLimit
+  const noWatches = watchLimit === 0
 
-  async function handleDelete(id: string) {
-    setDeleting(id)
-    try {
-      await deleteQuery(id)
-      onDelete(id)
-    } catch {
-      // ignore
-    } finally {
-      setDeleting(null)
-    }
+  if (noWatches) {
+    return (
+      <div className="dash-card" data-testid="dashboard-watches-card">
+        <div className="dash-card-header">
+          <h2 className="dash-card-title">Watches</h2>
+        </div>
+        <div className="dash-empty">
+          Watches are not available on the trial plan.{' '}
+          <a href="/account">Upgrade</a> to enable scheduled monitoring.
+        </div>
+      </div>
+    )
   }
 
-  function runInShell(query: string) {
-    navigate(`/shell?q=${encodeURIComponent(query)}`)
+  if (watches.length === 0) {
+    return (
+      <div className="dash-card" data-testid="dashboard-watches-card">
+        <div className="dash-card-header">
+          <h2 className="dash-card-title">Watches</h2>
+          <span className="watch-count-badge">{watchCount} / {watchLimit}</span>
+        </div>
+        <div className="dash-empty">
+          No watches yet. Create one in the{' '}
+          <a href="/shell" data-testid="dashboard-watches-shell-link">shell</a>
+          {' '}with <code>vi /cron.d/my-watch</code>
+          {minInterval && <span className="dash-empty"> (min interval: {minInterval})</span>}
+        </div>
+      </div>
+    )
   }
 
   return (
-    <div className="dash-card" data-testid="dashboard-queries-card">
+    <div className="dash-card" data-testid="dashboard-watches-card">
       <div className="dash-card-header">
-        <h2 className="dash-card-title">Saved queries</h2>
+        <h2 className="dash-card-title">Watches</h2>
+        <span className={`watch-count-badge${atLimit ? ' watch-count-at-limit' : ''}`}>
+          {watchCount} / {watchLimit}
+        </span>
       </div>
+      <div className="watch-grid">
+        {watches.map(({ watch, results }) => {
+          const latestResult = results[0]
+          const latestValue = latestResult?.Stdout?.trim() ?? '—'
+          const sparkValues = results
+            .slice(0, 20)
+            .reverse()
+            .map(r => parseFloat(r.Stdout?.trim()))
+            .filter(n => !isNaN(n))
+          const hasError = latestResult && latestResult.ExitCode !== 0
+          const lastRanAgo = latestResult ? timeAgo(latestResult.RanAt) : null
 
-      {queries.length === 0 ? (
-        <div className="dash-empty">
-          No saved queries. Run a pipeline in the{' '}
-          <a href="/shell" data-testid="dashboard-shell-link">shell</a>{' '}
-          and save it for quick access.
-        </div>
-      ) : (
-        <div className="queries-list">
-          {queries.map(q => (
-            <div key={q.id} className="query-row" data-testid={`query-row-${q.id}`}>
-              <div className="query-meta">
-                <div className="query-name">{q.name}</div>
-                <div className="query-date">{formatDate(q.created_at)}</div>
+          return (
+            <div
+              key={watch.Name}
+              className={`watch-tile${hasError ? ' watch-tile-errored' : ''}`}
+              data-testid={`dashboard-watch-card-${watch.Name}`}
+            >
+              <div className="watch-tile-header">
+                <span className="watch-tile-name">{watch.Name}</span>
+                <span className="watch-tile-schedule">{watch.Schedule}</span>
               </div>
-              <div className="query-pipeline" data-testid={`query-pipeline-${q.id}`}>
-                {q.query}
+
+              <div className="watch-tile-body">
+                <div className="watch-tile-value" data-testid={`dashboard-watch-value-${watch.Name}`}>
+                  {latestValue}
+                </div>
+                <Sparkline values={sparkValues} />
               </div>
-              <div className="query-actions">
+
+              <div className="watch-tile-footer">
+                {lastRanAgo ? (
+                  <span className={`watch-tile-ago${hasError ? ' watch-tile-ago-err' : ''}`}>
+                    {hasError ? 'failed ' : ''}{lastRanAgo}
+                  </span>
+                ) : (
+                  <span className="watch-tile-ago">waiting for first run</span>
+                )}
+                {watch.NotifyDest && (
+                  <span className="watch-tile-notify">{watch.NotifyDest}</span>
+                )}
                 <button
-                  className="btn-action btn-action-primary"
-                  onClick={() => runInShell(q.query)}
-                  data-testid={`query-run-${q.id}`}
+                  className="watch-tile-open"
+                  onClick={() => navigate(`/shell?q=${encodeURIComponent(`cat /cron.d/${watch.Name}`)}`)}
+                  data-testid={`dashboard-watch-open-${watch.Name}`}
                 >
-                  Run in shell →
-                </button>
-                <button
-                  className="btn-action btn-action-danger"
-                  onClick={() => handleDelete(q.id)}
-                  disabled={deleting === q.id}
-                  data-testid={`query-delete-${q.id}`}
-                >
-                  {deleting === q.id ? '...' : 'Delete'}
+                  open in shell
                 </button>
               </div>
             </div>
-          ))}
-        </div>
-      )}
+          )
+        })}
+      </div>
     </div>
   )
 }
 
-// ── Main Dashboard ──────────────────────────────────────────────────────────
+// ── Functions Section ──────────────────────────────────────────────────────
+
+function FunctionsCard({ functions }: { functions: ShellFunction[] }) {
+  const navigate = useNavigate()
+  const [expanded, setExpanded] = useState<string | null>(null)
+
+  if (functions.length === 0) {
+    return (
+      <div className="dash-card" data-testid="dashboard-functions-card">
+        <div className="dash-card-header">
+          <h2 className="dash-card-title">Functions</h2>
+        </div>
+        <div className="dash-empty">
+          No functions yet. Create one in the{' '}
+          <a href="/shell" data-testid="dashboard-functions-shell-link">shell</a>
+          {' '}with <code>vi /bin/my-function</code>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="dash-card" data-testid="dashboard-functions-card">
+      <div className="dash-card-header">
+        <h2 className="dash-card-title">Functions</h2>
+        <span className="watch-count-badge">{functions.length} in /bin</span>
+      </div>
+      <div className="func-list">
+        {functions.map(fn => (
+          <div key={fn.Name} className="func-row" data-testid={`dashboard-function-${fn.Name}`}>
+            <button
+              className="func-name"
+              onClick={() => setExpanded(expanded === fn.Name ? null : fn.Name)}
+              data-testid={`dashboard-function-toggle-${fn.Name}`}
+            >
+              <span className="func-name-text">{fn.Name}</span>
+              <span className="func-chevron">{expanded === fn.Name ? '▾' : '▸'}</span>
+            </button>
+
+            {expanded === fn.Name && (
+              <div className="func-detail">
+                <pre className="func-source" data-testid={`dashboard-function-source-${fn.Name}`}>
+                  {fn.Source}
+                </pre>
+                <div className="func-actions">
+                  <button
+                    className="btn-action btn-action-primary"
+                    onClick={() => navigate(`/shell?q=${encodeURIComponent(fn.Name)}`)}
+                    data-testid={`dashboard-function-run-${fn.Name}`}
+                  >
+                    Run in shell
+                  </button>
+                  <button
+                    className="btn-action"
+                    onClick={() => navigate(`/shell?q=${encodeURIComponent(`vi /bin/${fn.Name}`)}`)}
+                    data-testid={`dashboard-function-edit-${fn.Name}`}
+                  >
+                    Edit
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Main Dashboard ─────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const [usage, setUsage] = useState<Usage | null>(null)
-  const [tokens, setTokens] = useState<AgentToken[]>([])
-  const [queries, setQueries] = useState<SavedQuery[]>([])
-  const [loadError, setLoadError] = useState('')
+  const navigate = useNavigate()
+  const [watches, setWatches] = useState<WatchWithResults[]>([])
+  const [watchMeta, setWatchMeta] = useState<{ count: number; limit: number; min_interval: string }>({ count: 0, limit: 0, min_interval: '' })
+  const [functions, setFunctions] = useState<ShellFunction[]>([])
 
   useEffect(() => {
-    Promise.all([getUsage(), getTokens(), getQueries()])
-      .then(([u, t, q]) => {
-        setUsage(u)
-        setTokens(t)
-        setQueries(q)
+    getWatches()
+      .then(async (resp) => {
+        setWatchMeta({ count: resp.count, limit: resp.limit, min_interval: resp.min_interval })
+        const withResults = await Promise.all(
+          (resp.watches || []).map(async (w) => {
+            const results = await getWatchResults(w.Name).catch(() => [] as CronResult[])
+            return { watch: w, results: results || [] }
+          })
+        )
+        setWatches(withResults)
       })
-      .catch(err => {
-        setLoadError(err instanceof Error ? err.message : 'Failed to load dashboard.')
-      })
+      .catch(() => {})
+
+    getFunctions().then(fns => setFunctions(fns || [])).catch(() => {})
   }, [])
 
-  function handleTokenAction(tok: string) {
-    if (tok === '__refresh__') {
-      getTokens().then(setTokens).catch(() => {})
-    } else {
-      setTokens(prev => prev.map(t =>
-        t.token === tok ? { ...t, status: 'revoked' as const } : t
-      ))
-    }
-  }
-
-  function handleQueryDelete(id: string) {
-    setQueries(prev => prev.filter(q => q.id !== id))
-  }
+  void navigate // used in child components
 
   return (
     <div className="app-layout">
@@ -419,17 +272,13 @@ export default function Dashboard() {
             <h1 className="dash-page-title">Dashboard</h1>
           </div>
 
-          {loadError && (
-            <div className="dash-load-error" data-testid="dashboard-load-error">
-              {loadError}
-            </div>
-          )}
-
-          {usage && <UsageCard usage={usage} />}
-
-          <TokensCard tokens={tokens} onRevoke={handleTokenAction} />
-
-          <QueriesCard queries={queries} onDelete={handleQueryDelete} />
+          <WatchesCard
+            watches={watches}
+            watchCount={watchMeta.count}
+            watchLimit={watchMeta.limit}
+            minInterval={watchMeta.min_interval}
+          />
+          <FunctionsCard functions={functions} />
         </div>
       </main>
     </div>

@@ -11,6 +11,8 @@ import (
 	"github.com/kevlarcon/weft/ingest"
 )
 
+var dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Inline(true)
+
 var (
 	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6")).MarginBottom(1)
 	sampleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).PaddingLeft(2)

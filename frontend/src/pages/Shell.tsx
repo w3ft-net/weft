@@ -1,341 +1,101 @@
-import { useState, useEffect, useRef, type KeyboardEvent, useCallback } from 'react'
-import { useSearchParams, useNavigate } from 'react-router-dom'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import SidebarNav from '../components/SidebarNav'
-import { getQueries, createQuery, deleteQuery, type SavedQuery } from '../lib/api'
+import {
+  getFunctions, deleteFunction, type ShellFunction,
+  getWatches, deleteWatch, type CronWatch,
+} from '../lib/api'
+import { initShellWasm, type ShellBridge } from '../wasm/bridge'
+import '@xterm/xterm/css/xterm.css'
 import './Shell.css'
-
-const API_BASE = import.meta.env.VITE_API_URL || ''
-
-interface OutputLine {
-  id: number
-  text: string
-  type: 'output' | 'error' | 'info' | 'prompt'
-}
-
-let lineId = 0
-function nextId() { return ++lineId }
-
-function formatTime() {
-  return new Date().toLocaleTimeString('en-US', { hour12: false })
-}
-
-// ── Saved Queries Sidebar ────────────────────────────────────────────────────
-
-interface QuerySidebarProps {
-  queries: SavedQuery[]
-  open: boolean
-  onSelect: (q: string) => void
-  onDelete: (id: string) => void
-  onClose: () => void
-}
-
-function QuerySidebar({ queries, open, onSelect, onDelete, onClose }: QuerySidebarProps) {
-  return (
-    <div className={`shell-query-sidebar${open ? ' shell-query-sidebar-open' : ''}`}
-      data-testid="shell-query-sidebar">
-      <div className="shell-query-sidebar-header">
-        <span className="shell-query-sidebar-title">Saved queries</span>
-        <button
-          className="shell-query-sidebar-close"
-          onClick={onClose}
-          data-testid="shell-query-sidebar-close-button"
-        >×</button>
-      </div>
-      {queries.length === 0 ? (
-        <div className="shell-query-empty">No saved queries.</div>
-      ) : (
-        <ul className="shell-query-list">
-          {queries.map(q => (
-            <li key={q.id} className="shell-query-item" data-testid={`shell-query-item-${q.id}`}>
-              <button
-                className="shell-query-name"
-                onClick={() => onSelect(q.query)}
-                data-testid={`shell-query-select-${q.id}`}
-              >
-                {q.name}
-              </button>
-              <div className="shell-query-pipeline">{q.query}</div>
-              <button
-                className="shell-query-delete"
-                onClick={() => onDelete(q.id)}
-                data-testid={`shell-query-delete-${q.id}`}
-              >
-                ✕
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
-
-// ── Save Query Modal ─────────────────────────────────────────────────────────
-
-interface SaveModalProps {
-  pipeline: string
-  onSave: (name: string) => Promise<void>
-  onClose: () => void
-}
-
-function SaveModal({ pipeline, onSave, onClose }: SaveModalProps) {
-  const [name, setName] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!name.trim()) return
-    setError('')
-    setLoading(true)
-    try {
-      await onSave(name.trim())
-      onClose()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div className="shell-modal-overlay" onClick={onClose} data-testid="shell-save-modal-overlay">
-      <div
-        className="shell-modal"
-        onClick={e => e.stopPropagation()}
-        data-testid="shell-save-modal"
-      >
-        <div className="shell-modal-title">Save query</div>
-        <div className="shell-modal-pipeline">{pipeline}</div>
-        <form onSubmit={handleSubmit}>
-          <input
-            className="shell-modal-input"
-            placeholder="Query name"
-            value={name}
-            onChange={e => setName(e.target.value)}
-            autoFocus
-            data-testid="shell-save-query-name-input"
-          />
-          {error && <div className="shell-modal-error">{error}</div>}
-          <div className="shell-modal-actions">
-            <button
-              type="submit"
-              className="shell-modal-btn shell-modal-btn-primary"
-              disabled={loading || !name.trim()}
-              data-testid="shell-save-query-submit-button"
-            >
-              {loading ? 'Saving...' : 'Save'}
-            </button>
-            <button
-              type="button"
-              className="shell-modal-btn"
-              onClick={onClose}
-              data-testid="shell-save-query-cancel-button"
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  )
-}
 
 // ── Main Shell ───────────────────────────────────────────────────────────────
 
 export default function Shell() {
   const [searchParams] = useSearchParams()
-  const navigate = useNavigate()
+  const termContainerRef = useRef<HTMLDivElement>(null)
+  const bridgeRef = useRef<ShellBridge | null>(null)
+  const [functions, setFunctions] = useState<ShellFunction[]>([])
+  const [watches, setWatches] = useState<CronWatch[]>([])
+  const [watchLimits, setWatchLimits] = useState({ count: 0, limit: 0, min_interval: '' })
+  const [sidebarTab, setSidebarTab] = useState<'functions' | 'watches' | null>(null)
+  const [, setWasmReady] = useState(false)
 
-  const [lines, setLines] = useState<OutputLine[]>([
-    {
-      id: nextId(),
-      text: `weft shell — ${formatTime()} — type a pipeline and press Enter`,
-      type: 'info',
-    },
-  ])
-  const [input, setInput] = useState('')
-  const [history, setHistory] = useState<string[]>([])
-  const [historyIdx, setHistoryIdx] = useState(-1)
-  const [running, setRunning] = useState(false)
-  const [queries, setQueries] = useState<SavedQuery[]>([])
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [saveModal, setSaveModal] = useState(false)
-
-  const outputRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const abortRef = useRef<AbortController | null>(null)
-
-  // Load saved queries
   useEffect(() => {
-    getQueries().then(setQueries).catch(() => {})
+    getFunctions().then(setFunctions).catch(() => {})
+    getWatches().then(resp => {
+      setWatches(resp.watches || [])
+      setWatchLimits({ count: resp.count, limit: resp.limit, min_interval: resp.min_interval })
+    }).catch(() => {})
   }, [])
 
-  // Pre-fill from URL param
+  // Initialize WASM + xterm.js.
   useEffect(() => {
-    const q = searchParams.get('q')
-    if (q) {
-      setInput(decodeURIComponent(q))
-      inputRef.current?.focus()
-    }
-  }, [searchParams])
+    if (!termContainerRef.current) return
 
-  // Auto-scroll
-  useEffect(() => {
-    if (outputRef.current) {
-      outputRef.current.scrollTop = outputRef.current.scrollHeight
-    }
-  }, [lines])
+    let disposed = false
+    let bridge: ShellBridge | null = null
 
-  function pushLine(text: string, type: OutputLine['type'] = 'output') {
-    setLines(prev => [...prev, { id: nextId(), text, type }])
-  }
+    async function init() {
+      if (!termContainerRef.current || disposed) return
 
-  function clearOutput() {
-    setLines([{ id: nextId(), text: `cleared — ${formatTime()}`, type: 'info' }])
-  }
+      // TODO: fetch real app list from API.
+      const apps = ['api', 'web']
 
-  const runPipeline = useCallback(async (pipeline: string) => {
-    if (!pipeline.trim()) return
-    if (running) {
-      abortRef.current?.abort()
-      return
-    }
-
-    const trimmed = pipeline.trim()
-    pushLine(`weft > ${trimmed}`, 'prompt')
-    setHistory(prev => [trimmed, ...prev.filter(h => h !== trimmed)].slice(0, 100))
-    setHistoryIdx(-1)
-    setInput('')
-    setRunning(true)
-
-    const follow = trimmed.startsWith('tail -f')
-    const token = localStorage.getItem('weft_token')
-    const ctrl = new AbortController()
-    abortRef.current = ctrl
-
-    try {
-      const res = await fetch(`${API_BASE}/api/shell/exec`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ pipeline: trimmed, follow }),
-        signal: ctrl.signal,
-      })
-
-      if (!res.ok) {
-        const msg = await res.text().catch(() => `HTTP ${res.status}`)
-        pushLine(msg, 'error')
+      bridge = await initShellWasm(termContainerRef.current, apps)
+      if (disposed) {
+        bridge.dispose()
         return
       }
+      bridgeRef.current = bridge
+      setWasmReady(true)
 
-      const reader = res.body?.getReader()
-      if (!reader) {
-        pushLine('No response body', 'error')
-        return
-      }
-
-      const decoder = new TextDecoder()
-      let buf = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buf += decoder.decode(value, { stream: true })
-        const parts = buf.split('\n')
-        buf = parts.pop() ?? ''
-
-        for (const part of parts) {
-          const line = part.trim()
-          if (!line.startsWith('data:')) continue
-          const raw = line.slice(5).trim()
-          if (!raw || raw === '[DONE]') continue
-          try {
-            const evt = JSON.parse(raw) as { type: string; text?: string }
-            if (evt.type === 'output' && evt.text != null) {
-              pushLine(evt.text, 'output')
-            } else if (evt.type === 'error' && evt.text != null) {
-              pushLine(evt.text, 'error')
-            }
-          } catch {
-            // skip malformed SSE
-          }
-        }
-      }
-    } catch (err) {
-      if ((err as Error).name !== 'AbortError') {
-        pushLine(`Error: ${(err as Error).message}`, 'error')
-      }
-    } finally {
-      setRunning(false)
-      abortRef.current = null
-      inputRef.current?.focus()
-    }
-  }, [running])
-
-  function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Enter') {
-      if (input.trim() === 'clear') {
-        clearOutput()
-        setInput('')
-        setHistoryIdx(-1)
-        return
-      }
-      runPipeline(input)
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      const idx = historyIdx + 1
-      if (idx < history.length) {
-        setHistoryIdx(idx)
-        setInput(history[idx])
-      }
-    } else if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      const idx = historyIdx - 1
-      if (idx < 0) {
-        setHistoryIdx(-1)
-        setInput('')
-      } else {
-        setHistoryIdx(idx)
-        setInput(history[idx])
-      }
-    } else if (e.key === 'c' && e.ctrlKey) {
-      if (running) {
-        abortRef.current?.abort()
-        pushLine('^C', 'info')
+      // Pre-fill from URL param.
+      const q = searchParams.get('q')
+      if (q) {
+        bridge.setInput(decodeURIComponent(q))
       }
     }
+
+    init()
+
+    return () => {
+      disposed = true
+      bridge?.dispose()
+      bridgeRef.current = null
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleFunctionSelect = useCallback((name: string) => {
+    bridgeRef.current?.setInput(name)
+    setSidebarTab(null)
+    bridgeRef.current?.terminal.focus()
+  }, [])
+
+  const handleWatchSelect = useCallback((name: string) => {
+    bridgeRef.current?.setInput(`cat /cron.d/${name}`)
+    setSidebarTab(null)
+    bridgeRef.current?.terminal.focus()
+  }, [])
+
+  async function handleFunctionDelete(name: string) {
+    await deleteFunction(name)
+    setFunctions(prev => prev.filter(f => f.Name !== name))
   }
 
-  async function handleSaveQuery(name: string) {
-    const q = await createQuery(name, input.trim() || history[0] || '')
-    setQueries(prev => [q, ...prev])
+  async function handleWatchDelete(name: string) {
+    await deleteWatch(name)
+    setWatches(prev => prev.filter(w => w.Name !== name))
   }
 
-  function handleQuerySelect(q: string) {
-    setInput(q)
-    setSidebarOpen(false)
-    inputRef.current?.focus()
+  function toggleSidebar(tab: 'functions' | 'watches') {
+    setSidebarTab(prev => prev === tab ? null : tab)
   }
-
-  async function handleQueryDelete(id: string) {
-    await deleteQuery(id)
-    setQueries(prev => prev.filter(q => q.id !== id))
-  }
-
-  function handleRunInShell(q: string) {
-    navigate(`/shell?q=${encodeURIComponent(q)}`)
-  }
-  void handleRunInShell
 
   return (
     <div className="app-layout">
       <SidebarNav />
       <main className="app-main shell-main" data-testid="shell-main">
-        {/* Terminal wrapper fills the remaining space */}
         <div className="shell-wrap">
           {/* Chrome bar */}
           <div className="shell-chrome" data-testid="shell-chrome">
@@ -347,115 +107,87 @@ export default function Shell() {
             <span className="terminal-title">weft shell — w3ft.net</span>
             <div className="shell-chrome-actions">
               <button
-                className="shell-chrome-btn"
-                onClick={() => setSidebarOpen(o => !o)}
-                data-testid="shell-queries-toggle-button"
-                title="Saved queries"
+                className={`shell-chrome-btn${sidebarTab === 'functions' ? ' shell-chrome-btn-active' : ''}`}
+                onClick={() => toggleSidebar('functions')}
+                data-testid="shell-functions-toggle-button"
               >
-                queries
+                /bin
               </button>
-              {(input.trim() || (history.length > 0)) && (
-                <button
-                  className="shell-chrome-btn"
-                  onClick={() => setSaveModal(true)}
-                  data-testid="shell-save-query-button"
-                  title="Save current pipeline"
-                >
-                  save
-                </button>
-              )}
-              {running && (
-                <button
-                  className="shell-chrome-btn shell-chrome-btn-danger"
-                  onClick={() => abortRef.current?.abort()}
-                  data-testid="shell-interrupt-button"
-                >
-                  interrupt
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Body */}
-          <div className="shell-body-wrap">
-            {/* Output */}
-            <div
-              className="shell-output"
-              ref={outputRef}
-              onClick={() => inputRef.current?.focus()}
-              data-testid="shell-output"
-            >
-              {lines.map(line => (
-                <div
-                  key={line.id}
-                  className={`shell-line shell-line-${line.type}`}
-                  data-testid={`shell-line-${line.type}`}
-                >
-                  {line.type === 'prompt' ? (
-                    <>
-                      <span className="shell-prompt-text">
-                        {line.text.replace(/^weft > /, '')}
-                      </span>
-                    </>
-                  ) : (
-                    line.text
-                  )}
-                </div>
-              ))}
-              {running && (
-                <div className="shell-line shell-line-info shell-running-indicator"
-                  data-testid="shell-running-indicator">
-                  <span className="shell-spinner" />
-                  streaming...
-                </div>
-              )}
-            </div>
-
-            {/* Input row */}
-            <div className="shell-input-row" data-testid="shell-input-row">
-              <span className="shell-prompt-label">weft &gt;</span>
-              <input
-                ref={inputRef}
-                type="text"
-                className="shell-input"
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="cat app.log | grep ERROR"
-                autoFocus
-                autoComplete="off"
-                spellCheck={false}
-                data-testid="shell-pipeline-input"
-                aria-label="Pipeline input"
-              />
               <button
-                className={`shell-run-btn${running ? ' shell-run-btn-running' : ''}`}
-                onClick={() => running ? abortRef.current?.abort() : runPipeline(input)}
-                data-testid="shell-run-button"
+                className={`shell-chrome-btn${sidebarTab === 'watches' ? ' shell-chrome-btn-active' : ''}`}
+                onClick={() => toggleSidebar('watches')}
+                data-testid="shell-watches-toggle-button"
               >
-                {running ? '■' : '↵'}
+                /cron.d
               </button>
             </div>
           </div>
 
-          {/* Saved queries sidebar */}
-          <QuerySidebar
-            queries={queries}
-            open={sidebarOpen}
-            onSelect={handleQuerySelect}
-            onDelete={handleQueryDelete}
-            onClose={() => setSidebarOpen(false)}
+          {/* xterm.js terminal container */}
+          <div
+            className="shell-xterm-container"
+            ref={termContainerRef}
+            onClick={() => bridgeRef.current?.terminal.focus()}
+            data-testid="shell-xterm-container"
           />
+
+          {/* Sidebar panels */}
+          <div className={`shell-query-sidebar${sidebarTab === 'functions' ? ' shell-query-sidebar-open' : ''}`}
+            data-testid="shell-functions-sidebar">
+            <div className="shell-query-sidebar-header">
+              <span className="shell-query-sidebar-title">/bin</span>
+              <button className="shell-query-sidebar-close" onClick={() => setSidebarTab(null)}
+                data-testid="shell-functions-sidebar-close-button">×</button>
+            </div>
+            {functions.length === 0 ? (
+              <div className="shell-query-empty">No functions. Use <code>vi /bin/name</code> to create one.</div>
+            ) : (
+              <ul className="shell-query-list">
+                {functions.map(f => (
+                  <li key={f.Name} className="shell-query-item" data-testid={`shell-function-item-${f.Name}`}>
+                    <button className="shell-query-name" onClick={() => handleFunctionSelect(f.Name)}
+                      data-testid={`shell-function-select-${f.Name}`}>{f.Name}</button>
+                    <div className="shell-query-pipeline">{f.Source.split('\n')[0]}</div>
+                    <button className="shell-query-delete" onClick={() => handleFunctionDelete(f.Name)}
+                      data-testid={`shell-function-delete-${f.Name}`}>✕</button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className={`shell-query-sidebar${sidebarTab === 'watches' ? ' shell-query-sidebar-open' : ''}`}
+            data-testid="shell-watches-sidebar">
+            <div className="shell-query-sidebar-header">
+              <span className="shell-query-sidebar-title">/cron.d</span>
+              <span className="shell-query-sidebar-badge">{watchLimits.count}/{watchLimits.limit}</span>
+              <button className="shell-query-sidebar-close" onClick={() => setSidebarTab(null)}
+                data-testid="shell-watches-sidebar-close-button">×</button>
+            </div>
+            {watchLimits.limit === 0 ? (
+              <div className="shell-query-empty">Watches not available on trial. <a href="/account">Upgrade</a> to enable.</div>
+            ) : watches.length === 0 ? (
+              <div className="shell-query-empty">
+                No watches. Use <code>vi /cron.d/name</code> to create one.
+                {watchLimits.min_interval && <><br/>Min interval: {watchLimits.min_interval}</>}
+              </div>
+            ) : (
+              <ul className="shell-query-list">
+                {watches.map(w => (
+                  <li key={w.Name} className="shell-query-item" data-testid={`shell-watch-item-${w.Name}`}>
+                    <button className="shell-query-name" onClick={() => handleWatchSelect(w.Name)}
+                      data-testid={`shell-watch-select-${w.Name}`}>{w.Name}</button>
+                    <div className="shell-query-pipeline">
+                      {w.Schedule} · {w.LastStatus || 'pending'}
+                    </div>
+                    <button className="shell-query-delete" onClick={() => handleWatchDelete(w.Name)}
+                      data-testid={`shell-watch-delete-${w.Name}`}>✕</button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
 
-        {/* Save modal */}
-        {saveModal && (
-          <SaveModal
-            pipeline={input.trim() || history[0] || ''}
-            onSave={handleSaveQuery}
-            onClose={() => setSaveModal(false)}
-          />
-        )}
       </main>
     </div>
   )

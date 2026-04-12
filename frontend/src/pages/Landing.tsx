@@ -1,108 +1,87 @@
 import { Link } from 'react-router-dom'
-import TerminalDemo from '../components/TerminalDemo'
+import AsciiLogo from '../components/AsciiLogo'
+import VillainCarousel from '../components/VillainCarousel'
+import WeftLogoSvg from '../components/WeftLogoSvg'
+import ScrollDiagram from '../components/ScrollDiagram'
 import PricingTable from '../components/PricingTable'
 import './Landing.css'
 
+
 export default function Landing() {
+
   return (
     <div className="landing">
       {/* Nav */}
       <nav className="nav" data-testid="nav">
         <div className="container nav-inner">
           <Link to="/" className="nav-logo" data-testid="nav-logo-link">
-            <span className="logo-weft">weft</span>
+            <WeftLogoSvg className="logo-nav" />
           </Link>
           <div className="nav-links">
-            <a href="#how-it-works" data-testid="nav-how-link">How it works</a>
             <a href="#pricing" data-testid="nav-pricing-link">Pricing</a>
             <Link to="/login" className="nav-cta" data-testid="nav-login-button">Log in</Link>
           </div>
         </div>
       </nav>
 
-      {/* Hero */}
+      {/* ── Narrative: the problem ─────────────────────────────── */}
+
       <section className="hero">
         <div className="container">
-          <div className="hero-content">
-            <div className="hero-badge">grep · awk · sed · jq — on every log, everywhere</div>
-            <h1 className="hero-title">
-              <span className="hero-title-line">Unix-native</span>
-              <span className="hero-title-line accent">log management</span>
-            </h1>
-            <p className="hero-sub">
-              One shell. All your apps. Stream logs from EC2, Lambda, and containers
-              into a single queryable pipeline. No vendor lock-in — your data exports
-              to Parquet.
-            </p>
-            <div className="hero-actions">
-              <Link to="/login" className="btn btn-primary" data-testid="hero-cta-button">
-                Start free trial
-              </Link>
-              <a href="#how-it-works" className="btn btn-ghost" data-testid="hero-learn-link">
-                See how it works →
-              </a>
-            </div>
+          <div className="prison-row">
+            <VillainCarousel side="left" startIndex={0} />
+            <pre className="prison-box">{
+`+---------------------------------------------------+
+|                                                   |
+|   Distributed computing has rent asunder your     |
+|   log infrastructure. You are locked in a         |
+|   vendor dungeon, your muscle memory for          |
+|   familiar tools failing you every time you       |
+|   must learn a new proprietary syntax.            |
+|                                                   |
++---------------------------------------------------+`
+            }</pre>
+            <VillainCarousel side="right" startIndex={1} />
           </div>
-          <div className="hero-terminal">
-            <TerminalDemo />
-          </div>
+        </div>
+
+        <div className="spacer-lg" />
+
+        {/* ── Narrative: the solution ────────────────────────────── */}
+
+        <div className="narrative">
+          <p>
+            restore the fabric of Do One Thing Well with...
+          </p>
+        </div>
+
+        <section className="hero-center container">
+          <AsciiLogo />
+        </section>
+
+        <div className="narrative">
+          <p>
+            <em>weft</em> stitches together logs from disparate sources
+            <br />and gives you cloud-native versions of core *nix utilities.
+          </p>
         </div>
       </section>
 
-      {/* How it works */}
-      <section className="how-it-works" id="how-it-works">
-        <div className="container">
-          <h2 className="section-title">How it works</h2>
-          <div className="steps">
-            <div className="step">
-              <div className="step-number">01</div>
-              <div className="step-icon">
-                <code>dpkg -i weftd.deb</code>
-              </div>
-              <h3>Install the agent</h3>
-              <p>
-                Drop <code>weftd</code> on your instances. It tails systemd journals
-                and log files, streaming structured lines to the coordinator over gRPC.
-              </p>
-            </div>
-            <div className="step-connector">
-              <div className="connector-line" />
-            </div>
-            <div className="step">
-              <div className="step-number">02</div>
-              <div className="step-icon">
-                <code>→ coordinator → shards</code>
-              </div>
-              <h3>Logs stream in</h3>
-              <p>
-                The coordinator ingests logs via a ring buffer, routes by app to
-                time-sharded DuckDB nodes. Zero config — apps are discovered
-                automatically.
-              </p>
-            </div>
-            <div className="step-connector">
-              <div className="connector-line" />
-            </div>
-            <div className="step">
-              <div className="step-number">03</div>
-              <div className="step-icon">
-                <code>cat app.log | grep ERROR</code>
-              </div>
-              <h3>Query from anywhere</h3>
-              <p>
-                Use the <code>weft</code> CLI or the browser shell. Write pipelines
-                with grep, awk, sed, jq — the tools you already know. Predicates
-                push down to shard-level SQL.
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
+      {/* ── Scroll-driven diagram → shell ─────────────────────── */}
 
-      {/* Pricing */}
-      <section className="pricing" id="pricing">
+      <div className="container">
+        <ScrollDiagram />
+      </div>
+
+      {/* ── Pricing ───────────────────────────────────────────── */}
+
+      <section className="pricing-section" id="pricing">
         <div className="container">
-          <h2 className="section-title">Simple, predictable pricing</h2>
+          <pre className="section-header">{
+`+----------------------------------------------+
+|         simple, predictable pricing          |
++----------------------------------------------+`
+          }</pre>
           <p className="section-sub">
             14-day free trial on any tier. No credit card required.
             Usage-based overage — pay only for what you use beyond your plan.
@@ -112,13 +91,21 @@ export default function Landing() {
       </section>
 
       {/* Bottom CTA */}
-      <section className="bottom-cta">
+      <section className="cta-section">
         <div className="container">
-          <div className="cta-card">
-            <h2>Stop copy-pasting SSH sessions.</h2>
-            <p>Get all your logs in one shell — try weft free for 14 days.</p>
-            <Link to="/login" className="btn btn-primary btn-lg" data-testid="bottom-cta-button">
-              Start free trial
+          <pre className="cta-box">{
+`+------------------------------------------------------+
+|                                                      |
+|       Let pipes once again be the unifying           |
+|       thread in you log analysis.                    |
+|                                                      |
+|       try weft free for 14 days.                     |
+|                                                      |
++------------------------------------------------------+`
+          }</pre>
+          <div className="cta-center">
+            <Link to="/login" className="cta-cmd" data-testid="bottom-cta-button">
+              start free trial &rarr;
             </Link>
           </div>
         </div>
@@ -126,9 +113,8 @@ export default function Landing() {
 
       {/* Footer */}
       <footer className="footer">
-        <div className="container footer-inner">
-          <span className="footer-logo">weft</span>
-          <span className="footer-copy">© 2026 Kevlar Consulting. All rights reserved.</span>
+        <div className="container">
+          weft &copy; 2026 <a href="https://graybeardcorp.com" data-testid="footer-company-link">Graybeard Corporation</a>
         </div>
       </footer>
     </div>

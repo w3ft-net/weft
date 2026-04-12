@@ -9,19 +9,20 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
 	"google.golang.org/grpc"
 
 	"github.com/kevlarcon/weft/compute"
-	"github.com/kevlarcon/weft/configstore"
 	"github.com/kevlarcon/weft/coordinator"
 	"github.com/kevlarcon/weft/coordinator/discovery"
 	"github.com/kevlarcon/weft/coordinator/poller"
 	coordsvc "github.com/kevlarcon/weft/coordinator/service"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
+	"github.com/kevlarcon/weft/store"
 )
 
 func main() {
@@ -170,33 +171,29 @@ func main() {
 		dsn = "host=localhost dbname=weft user=weft password=weft sslmode=disable"
 		log.Println("WARNING: using default DB DSN — set --db-dsn or WEFT_DB_DSN in production")
 	}
-	store, err := configstore.Open(dsn)
+	db, err := store.Open(dsn)
 	if err != nil {
 		log.Printf("warning: config store unavailable: %v", err)
 	} else {
-		defer store.Close()
+		defer db.Close()
 
 		// Start usage metering flush (every 5 minutes).
-		coord.StartUsageFlush(drainCtx, store)
+		coord.StartUsageFlush(drainCtx, db)
+
+		// Seed dev apps if shards were configured with seed data.
+		if *shardsFlag != "" {
+			cust, _ := db.FindOrCreateCustomer(*customer)
+			if cust != nil {
+				for _, appName := range []string{"vimgym", "callbox"} {
+					db.FindOrCreateApp(cust.ID, appName)
+				}
+			}
+		}
 
 		// Assign known apps to all shards so queries route correctly.
 		var allApps []string
-		if agentApps, err := store.AgentAppNames(); err == nil {
-			allApps = append(allApps, agentApps...)
-		}
-		if pollerApps, err := store.AppNames(); err == nil {
-			for _, a := range pollerApps {
-				found := false
-				for _, existing := range allApps {
-					if existing == a {
-						found = true
-						break
-					}
-				}
-				if !found {
-					allApps = append(allApps, a)
-				}
-			}
+		if appNames, err := db.AllAppNames(); err == nil {
+			allApps = appNames
 		}
 		if len(allApps) > 0 {
 			for _, entry := range coord.Registry.Entries() {
@@ -206,11 +203,11 @@ func main() {
 		}
 
 		// Restore archived shards from the registry.
-		coord.Registry.SetStore(store)
+		coord.Registry.SetStore(db)
 		s3cfg := shard.S3ConfigFromEnv()
 		lambdaURL := os.Getenv("WEFT_LAMBDA_FUNCTION_URL")
 
-		if err := coord.Registry.LoadFromStore(func(rec configstore.ShardRecord) (shard.Shard, error) {
+		if err := coord.Registry.LoadFromStore(func(rec store.ShardRecord) (shard.Shard, error) {
 			if rec.State != string(coordinator.StateArchived) || rec.ParquetPath == "" {
 				return nil, fmt.Errorf("skip non-archived shard %s", rec.ID)
 			}
@@ -230,19 +227,36 @@ func main() {
 		}
 
 		// Start CloudWatch poller for configured sources.
-		p := poller.New(store, coord)
+		p := poller.New(db, coord)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		p.Start(ctx)
+
+		// Start cron executor for scheduled watches.
+		cronExec := &coordinator.CronExecutor{
+			Store:    db,
+			Coord:    coord,
+			Notifier: coordinator.NewNotifier(db),
+		}
+		cronExec.Start(ctx)
 	}
 
-	// HTTP health endpoint.
+	// HTTP health endpoint with subsystem metrics for load testing.
 	go func() {
 		http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			var mem runtime.MemStats
+			runtime.ReadMemStats(&mem)
+
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"status": "ok",
 				"shards": len(coord.GetShards()),
+				"system": map[string]any{
+					"goroutines":    runtime.NumGoroutine(),
+					"heap_mb":       mem.HeapAlloc / 1024 / 1024,
+					"heap_sys_mb":   mem.HeapSys / 1024 / 1024,
+					"gc_cycles":     mem.NumGC,
+				},
 			})
 		})
 		log.Printf("coordinator health on :%d", *healthPort)
@@ -257,7 +271,7 @@ func main() {
 	srv := grpc.NewServer()
 	pb.RegisterWeftCoordinatorServer(srv, &coordsvc.Server{
 		Coord: coord,
-		Store: store,
+		Store: db,
 	})
 
 	log.Printf("coordinator listening on :%d (%d shards, customer=%s)", *port, len(shards), *customer)

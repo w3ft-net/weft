@@ -5,6 +5,7 @@ import Verify from './pages/Verify'
 import Dashboard from './pages/Dashboard'
 import Shell from './pages/Shell'
 import Downloads from './pages/Downloads'
+import Account from './pages/Account'
 import ProtectedRoute from './components/ProtectedRoute'
 
 export default function App() {
@@ -21,6 +22,9 @@ export default function App() {
       } />
       <Route path="/downloads" element={
         <ProtectedRoute><Downloads /></ProtectedRoute>
+      } />
+      <Route path="/account" element={
+        <ProtectedRoute><Account /></ProtectedRoute>
       } />
     </Routes>
   )

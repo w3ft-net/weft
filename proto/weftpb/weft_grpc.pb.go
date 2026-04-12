@@ -466,17 +466,26 @@ var WeftCompute_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	WeftCoordinator_Query_FullMethodName        = "/weft.WeftCoordinator/Query"
-	WeftCoordinator_ListApps_FullMethodName     = "/weft.WeftCoordinator/ListApps"
-	WeftCoordinator_AddSource_FullMethodName    = "/weft.WeftCoordinator/AddSource"
-	WeftCoordinator_ListSources_FullMethodName  = "/weft.WeftCoordinator/ListSources"
-	WeftCoordinator_RemoveSource_FullMethodName = "/weft.WeftCoordinator/RemoveSource"
-	WeftCoordinator_Authenticate_FullMethodName = "/weft.WeftCoordinator/Authenticate"
-	WeftCoordinator_IngestStream_FullMethodName = "/weft.WeftCoordinator/IngestStream"
-	WeftCoordinator_CreateToken_FullMethodName  = "/weft.WeftCoordinator/CreateToken"
-	WeftCoordinator_ListTokens_FullMethodName   = "/weft.WeftCoordinator/ListTokens"
-	WeftCoordinator_RevokeToken_FullMethodName  = "/weft.WeftCoordinator/RevokeToken"
-	WeftCoordinator_GetUsage_FullMethodName     = "/weft.WeftCoordinator/GetUsage"
+	WeftCoordinator_Query_FullMethodName           = "/weft.WeftCoordinator/Query"
+	WeftCoordinator_ListApps_FullMethodName        = "/weft.WeftCoordinator/ListApps"
+	WeftCoordinator_AddSource_FullMethodName       = "/weft.WeftCoordinator/AddSource"
+	WeftCoordinator_ListSources_FullMethodName     = "/weft.WeftCoordinator/ListSources"
+	WeftCoordinator_RemoveSource_FullMethodName    = "/weft.WeftCoordinator/RemoveSource"
+	WeftCoordinator_Authenticate_FullMethodName    = "/weft.WeftCoordinator/Authenticate"
+	WeftCoordinator_IngestStream_FullMethodName    = "/weft.WeftCoordinator/IngestStream"
+	WeftCoordinator_CreateToken_FullMethodName     = "/weft.WeftCoordinator/CreateToken"
+	WeftCoordinator_ListTokens_FullMethodName      = "/weft.WeftCoordinator/ListTokens"
+	WeftCoordinator_RevokeToken_FullMethodName     = "/weft.WeftCoordinator/RevokeToken"
+	WeftCoordinator_GetUsage_FullMethodName        = "/weft.WeftCoordinator/GetUsage"
+	WeftCoordinator_SaveFunction_FullMethodName    = "/weft.WeftCoordinator/SaveFunction"
+	WeftCoordinator_GetFunction_FullMethodName     = "/weft.WeftCoordinator/GetFunction"
+	WeftCoordinator_ListFunctions_FullMethodName   = "/weft.WeftCoordinator/ListFunctions"
+	WeftCoordinator_DeleteFunction_FullMethodName  = "/weft.WeftCoordinator/DeleteFunction"
+	WeftCoordinator_SaveWatch_FullMethodName       = "/weft.WeftCoordinator/SaveWatch"
+	WeftCoordinator_GetWatch_FullMethodName        = "/weft.WeftCoordinator/GetWatch"
+	WeftCoordinator_ListWatches_FullMethodName     = "/weft.WeftCoordinator/ListWatches"
+	WeftCoordinator_DeleteWatch_FullMethodName     = "/weft.WeftCoordinator/DeleteWatch"
+	WeftCoordinator_GetWatchResults_FullMethodName = "/weft.WeftCoordinator/GetWatchResults"
 )
 
 // WeftCoordinatorClient is the client API for WeftCoordinator service.
@@ -505,6 +514,17 @@ type WeftCoordinatorClient interface {
 	RevokeToken(ctx context.Context, in *RevokeTokenRequest, opts ...grpc.CallOption) (*RevokeTokenResponse, error)
 	// Usage metering.
 	GetUsage(ctx context.Context, in *GetUsageRequest, opts ...grpc.CallOption) (*GetUsageResponse, error)
+	// Shell functions (/bin/).
+	SaveFunction(ctx context.Context, in *SaveFunctionRequest, opts ...grpc.CallOption) (*SaveFunctionResponse, error)
+	GetFunction(ctx context.Context, in *GetFunctionRequest, opts ...grpc.CallOption) (*GetFunctionResponse, error)
+	ListFunctions(ctx context.Context, in *ListFunctionsRequest, opts ...grpc.CallOption) (*ListFunctionsResponse, error)
+	DeleteFunction(ctx context.Context, in *DeleteFunctionRequest, opts ...grpc.CallOption) (*DeleteFunctionResponse, error)
+	// Cron watches (/cron.d/).
+	SaveWatch(ctx context.Context, in *SaveWatchRequest, opts ...grpc.CallOption) (*SaveWatchResponse, error)
+	GetWatch(ctx context.Context, in *GetWatchRequest, opts ...grpc.CallOption) (*GetWatchResponse, error)
+	ListWatches(ctx context.Context, in *ListWatchesRequest, opts ...grpc.CallOption) (*ListWatchesResponse, error)
+	DeleteWatch(ctx context.Context, in *DeleteWatchRequest, opts ...grpc.CallOption) (*DeleteWatchResponse, error)
+	GetWatchResults(ctx context.Context, in *GetWatchResultsRequest, opts ...grpc.CallOption) (*GetWatchResultsResponse, error)
 }
 
 type weftCoordinatorClient struct {
@@ -637,6 +657,96 @@ func (c *weftCoordinatorClient) GetUsage(ctx context.Context, in *GetUsageReques
 	return out, nil
 }
 
+func (c *weftCoordinatorClient) SaveFunction(ctx context.Context, in *SaveFunctionRequest, opts ...grpc.CallOption) (*SaveFunctionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SaveFunctionResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_SaveFunction_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftCoordinatorClient) GetFunction(ctx context.Context, in *GetFunctionRequest, opts ...grpc.CallOption) (*GetFunctionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetFunctionResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_GetFunction_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftCoordinatorClient) ListFunctions(ctx context.Context, in *ListFunctionsRequest, opts ...grpc.CallOption) (*ListFunctionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListFunctionsResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_ListFunctions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftCoordinatorClient) DeleteFunction(ctx context.Context, in *DeleteFunctionRequest, opts ...grpc.CallOption) (*DeleteFunctionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteFunctionResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_DeleteFunction_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftCoordinatorClient) SaveWatch(ctx context.Context, in *SaveWatchRequest, opts ...grpc.CallOption) (*SaveWatchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SaveWatchResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_SaveWatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftCoordinatorClient) GetWatch(ctx context.Context, in *GetWatchRequest, opts ...grpc.CallOption) (*GetWatchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetWatchResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_GetWatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftCoordinatorClient) ListWatches(ctx context.Context, in *ListWatchesRequest, opts ...grpc.CallOption) (*ListWatchesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListWatchesResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_ListWatches_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftCoordinatorClient) DeleteWatch(ctx context.Context, in *DeleteWatchRequest, opts ...grpc.CallOption) (*DeleteWatchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteWatchResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_DeleteWatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftCoordinatorClient) GetWatchResults(ctx context.Context, in *GetWatchResultsRequest, opts ...grpc.CallOption) (*GetWatchResultsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetWatchResultsResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_GetWatchResults_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WeftCoordinatorServer is the server API for WeftCoordinator service.
 // All implementations must embed UnimplementedWeftCoordinatorServer
 // for forward compatibility.
@@ -663,6 +773,17 @@ type WeftCoordinatorServer interface {
 	RevokeToken(context.Context, *RevokeTokenRequest) (*RevokeTokenResponse, error)
 	// Usage metering.
 	GetUsage(context.Context, *GetUsageRequest) (*GetUsageResponse, error)
+	// Shell functions (/bin/).
+	SaveFunction(context.Context, *SaveFunctionRequest) (*SaveFunctionResponse, error)
+	GetFunction(context.Context, *GetFunctionRequest) (*GetFunctionResponse, error)
+	ListFunctions(context.Context, *ListFunctionsRequest) (*ListFunctionsResponse, error)
+	DeleteFunction(context.Context, *DeleteFunctionRequest) (*DeleteFunctionResponse, error)
+	// Cron watches (/cron.d/).
+	SaveWatch(context.Context, *SaveWatchRequest) (*SaveWatchResponse, error)
+	GetWatch(context.Context, *GetWatchRequest) (*GetWatchResponse, error)
+	ListWatches(context.Context, *ListWatchesRequest) (*ListWatchesResponse, error)
+	DeleteWatch(context.Context, *DeleteWatchRequest) (*DeleteWatchResponse, error)
+	GetWatchResults(context.Context, *GetWatchResultsRequest) (*GetWatchResultsResponse, error)
 	mustEmbedUnimplementedWeftCoordinatorServer()
 }
 
@@ -705,6 +826,33 @@ func (UnimplementedWeftCoordinatorServer) RevokeToken(context.Context, *RevokeTo
 }
 func (UnimplementedWeftCoordinatorServer) GetUsage(context.Context, *GetUsageRequest) (*GetUsageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetUsage not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) SaveFunction(context.Context, *SaveFunctionRequest) (*SaveFunctionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SaveFunction not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) GetFunction(context.Context, *GetFunctionRequest) (*GetFunctionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetFunction not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) ListFunctions(context.Context, *ListFunctionsRequest) (*ListFunctionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListFunctions not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) DeleteFunction(context.Context, *DeleteFunctionRequest) (*DeleteFunctionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteFunction not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) SaveWatch(context.Context, *SaveWatchRequest) (*SaveWatchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SaveWatch not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) GetWatch(context.Context, *GetWatchRequest) (*GetWatchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetWatch not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) ListWatches(context.Context, *ListWatchesRequest) (*ListWatchesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListWatches not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) DeleteWatch(context.Context, *DeleteWatchRequest) (*DeleteWatchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteWatch not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) GetWatchResults(context.Context, *GetWatchResultsRequest) (*GetWatchResultsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetWatchResults not implemented")
 }
 func (UnimplementedWeftCoordinatorServer) mustEmbedUnimplementedWeftCoordinatorServer() {}
 func (UnimplementedWeftCoordinatorServer) testEmbeddedByValue()                         {}
@@ -907,6 +1055,168 @@ func _WeftCoordinator_GetUsage_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WeftCoordinator_SaveFunction_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SaveFunctionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).SaveFunction(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_SaveFunction_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).SaveFunction(ctx, req.(*SaveFunctionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftCoordinator_GetFunction_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetFunctionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).GetFunction(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_GetFunction_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).GetFunction(ctx, req.(*GetFunctionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftCoordinator_ListFunctions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListFunctionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).ListFunctions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_ListFunctions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).ListFunctions(ctx, req.(*ListFunctionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftCoordinator_DeleteFunction_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteFunctionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).DeleteFunction(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_DeleteFunction_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).DeleteFunction(ctx, req.(*DeleteFunctionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftCoordinator_SaveWatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SaveWatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).SaveWatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_SaveWatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).SaveWatch(ctx, req.(*SaveWatchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftCoordinator_GetWatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).GetWatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_GetWatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).GetWatch(ctx, req.(*GetWatchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftCoordinator_ListWatches_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListWatchesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).ListWatches(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_ListWatches_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).ListWatches(ctx, req.(*ListWatchesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftCoordinator_DeleteWatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteWatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).DeleteWatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_DeleteWatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).DeleteWatch(ctx, req.(*DeleteWatchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftCoordinator_GetWatchResults_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWatchResultsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).GetWatchResults(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_GetWatchResults_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).GetWatchResults(ctx, req.(*GetWatchResultsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WeftCoordinator_ServiceDesc is the grpc.ServiceDesc for WeftCoordinator service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -949,6 +1259,42 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetUsage",
 			Handler:    _WeftCoordinator_GetUsage_Handler,
+		},
+		{
+			MethodName: "SaveFunction",
+			Handler:    _WeftCoordinator_SaveFunction_Handler,
+		},
+		{
+			MethodName: "GetFunction",
+			Handler:    _WeftCoordinator_GetFunction_Handler,
+		},
+		{
+			MethodName: "ListFunctions",
+			Handler:    _WeftCoordinator_ListFunctions_Handler,
+		},
+		{
+			MethodName: "DeleteFunction",
+			Handler:    _WeftCoordinator_DeleteFunction_Handler,
+		},
+		{
+			MethodName: "SaveWatch",
+			Handler:    _WeftCoordinator_SaveWatch_Handler,
+		},
+		{
+			MethodName: "GetWatch",
+			Handler:    _WeftCoordinator_GetWatch_Handler,
+		},
+		{
+			MethodName: "ListWatches",
+			Handler:    _WeftCoordinator_ListWatches_Handler,
+		},
+		{
+			MethodName: "DeleteWatch",
+			Handler:    _WeftCoordinator_DeleteWatch_Handler,
+		},
+		{
+			MethodName: "GetWatchResults",
+			Handler:    _WeftCoordinator_GetWatchResults_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

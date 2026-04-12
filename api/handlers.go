@@ -7,7 +7,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/stripe/stripe-go/v82"
 	"github.com/stripe/stripe-go/v82/checkout/session"
 	"github.com/stripe/stripe-go/v82/webhook"
@@ -15,11 +18,12 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/store"
 )
 
 // Server is the weft API server.
 type Server struct {
-	store     *Store
+	store     *store.Store
 	jwtSecret string
 	coordAddr string // coordinator gRPC address
 	baseURL   string // e.g., https://w3ft.net
@@ -33,12 +37,16 @@ type Server struct {
 	StripeSecretKey    string
 	StripeWebhookSecret string
 	StripePrices       map[string]string // tier → Stripe price ID
+
+	// Slack OAuth config
+	SlackClientID     string
+	SlackClientSecret string
 }
 
 // NewServer creates an API server.
-func NewServer(store *Store, jwtSecret, coordAddr, baseURL string) *Server {
+func NewServer(s *store.Store, jwtSecret, coordAddr, baseURL string) *Server {
 	return &Server{
-		store:        store,
+		store:        s,
 		jwtSecret:    jwtSecret,
 		coordAddr:    coordAddr,
 		baseURL:      baseURL,
@@ -87,7 +95,31 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/tokens", s.handleListTokens)
 	auth.HandleFunc("POST /api/tokens", s.handleCreateToken)
 	auth.HandleFunc("DELETE /api/tokens/{token}", s.handleRevokeToken)
+	auth.HandleFunc("GET /api/apps", s.handleListApps)
 	auth.HandleFunc("POST /api/shell/exec", s.handleShellExec)
+	auth.HandleFunc("GET /api/functions", s.handleListFunctions)
+	auth.HandleFunc("GET /api/functions/{name}", s.handleGetFunction)
+	auth.HandleFunc("PUT /api/functions/{name}", s.handleSaveFunction)
+	auth.HandleFunc("DELETE /api/functions/{name}", s.handleDeleteFunction)
+	auth.HandleFunc("GET /api/watches", s.handleListWatches)
+	auth.HandleFunc("GET /api/watches/{name}", s.handleGetWatch)
+	auth.HandleFunc("PUT /api/watches/{name}", s.handleSaveWatch)
+	auth.HandleFunc("DELETE /api/watches/{name}", s.handleDeleteWatch)
+	auth.HandleFunc("GET /api/watches/{name}/results", s.handleWatchResults)
+	auth.HandleFunc("GET /api/integrations", s.handleListIntegrations)
+	auth.HandleFunc("POST /api/integrations/slack/connect", s.handleSlackConnect)
+	auth.HandleFunc("DELETE /api/integrations/slack", s.handleSlackDisconnect)
+	auth.HandleFunc("PUT /api/integrations/pagerduty", s.handlePagerDutySave)
+	auth.HandleFunc("DELETE /api/integrations/pagerduty", s.handlePagerDutyDisconnect)
+	auth.HandleFunc("PUT /api/integrations/routes", s.handleSaveRoutes)
+	auth.HandleFunc("GET /api/team", s.handleListTeam)
+	auth.HandleFunc("PUT /api/team/name", s.handleUpdateTeamName)
+	auth.HandleFunc("POST /api/team/invite", s.handleInviteTeamMember)
+	auth.HandleFunc("DELETE /api/team/{id}", s.handleRemoveTeamMember)
+
+	// Public routes (no auth).
+	mux.HandleFunc("POST /api/team/accept", s.handleAcceptInvite)
+	mux.HandleFunc("GET /api/integrations/slack/callback", s.handleSlackCallback)
 
 	mux.Handle("/api/auth/me", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/billing/checkout", AuthMiddleware(s.jwtSecret, auth))
@@ -96,7 +128,16 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/queries/", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/tokens", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/tokens/", AuthMiddleware(s.jwtSecret, auth))
+	mux.Handle("/api/apps", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/shell/exec", AuthMiddleware(s.jwtSecret, auth))
+	mux.Handle("/api/functions", AuthMiddleware(s.jwtSecret, auth))
+	mux.Handle("/api/functions/", AuthMiddleware(s.jwtSecret, auth))
+	mux.Handle("/api/watches", AuthMiddleware(s.jwtSecret, auth))
+	mux.Handle("/api/watches/", AuthMiddleware(s.jwtSecret, auth))
+	mux.Handle("/api/integrations", AuthMiddleware(s.jwtSecret, auth))
+	mux.Handle("/api/integrations/", AuthMiddleware(s.jwtSecret, auth))
+	mux.Handle("/api/team", AuthMiddleware(s.jwtSecret, auth))
+	mux.Handle("/api/team/", AuthMiddleware(s.jwtSecret, auth))
 
 	return CORSMiddleware(s.baseURL, mux)
 }
@@ -143,7 +184,51 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jwt, err := GenerateJWT(user, s.jwtSecret)
+	// Ensure a subscription exists. For new users, create a trial.
+	tier := "trial"
+	if s.store != nil {
+		sub, _ := s.store.ActiveSubscription(user.CustomerName)
+		if sub != nil {
+			tier = sub.Tier
+		} else {
+			// New user — assign a customer name, create trial, create owner membership.
+			if user.CustomerName == "" {
+				// Derive customer name from email prefix.
+				customerName := user.Email
+				if at := strings.Index(customerName, "@"); at > 0 {
+					customerName = user.Email[:at]
+				}
+				s.store.FindOrCreateCustomer(customerName)
+				s.store.UpdateUserCustomerName(user.ID, customerName)
+				user.CustomerName = customerName
+			}
+
+			trialEnd := time.Now().Add(14 * 24 * time.Hour)
+			_ = s.store.CreateSubscription(&store.Subscription{
+				ID:         uuid.New().String(),
+				CustomerID: user.CustomerName,
+				Tier:       "trial",
+				Status:     "active",
+				StartsAt:   time.Now(),
+				ExpiresAt:  &trialEnd,
+			})
+
+			// Create owner team membership.
+			_ = s.store.CreateTeamMember(&store.TeamMember{
+				ID:           uuid.New().String(),
+				CustomerName: user.CustomerName,
+				Email:        user.Email,
+				UserID:       &user.ID,
+				Role:         "owner",
+				Status:       "active",
+				InvitedAt:    time.Now(),
+				CreatedAt:    time.Now(),
+				UpdatedAt:    time.Now(),
+			})
+		}
+	}
+
+	jwt, err := GenerateJWT(user, tier, s.jwtSecret)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -154,7 +239,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		"user": map[string]any{
 			"id":    user.ID,
 			"email": user.Email,
-			"tier":  user.Tier,
+			"tier":  tier,
 		},
 	})
 }
@@ -172,11 +257,18 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tier := "none"
+	if s.store != nil {
+		if sub, _ := s.store.ActiveSubscription(user.CustomerName); sub != nil {
+			tier = sub.Tier
+		}
+	}
+
 	json.NewEncoder(w).Encode(map[string]any{
 		"id":       user.ID,
 		"email":    user.Email,
 		"name":     user.Name,
-		"tier":     user.Tier,
+		"tier":     tier,
 		"customer": user.CustomerName,
 	})
 }
@@ -211,8 +303,8 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		LineItems: []*stripe.CheckoutSessionLineItemParams{
 			{Price: stripe.String(priceID), Quantity: stripe.Int64(1)},
 		},
-		SuccessURL:        stripe.String(s.baseURL + "/dashboard?checkout=success"),
-		CancelURL:         stripe.String(s.baseURL + "/dashboard?checkout=cancel"),
+		SuccessURL:        stripe.String(s.baseURL + "/account?checkout=success"),
+		CancelURL:         stripe.String(s.baseURL + "/account?checkout=cancel"),
 		ClientReferenceID: stripe.String(claims.UserID),
 		CustomerEmail:     stripe.String(claims.Email),
 	}
@@ -224,6 +316,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	}
 	params.AddMetadata("tier", req.Tier)
 	params.AddMetadata("user_id", claims.UserID)
+	params.AddMetadata("customer", claims.CustomerName)
 
 	sess, err := session.New(params)
 	if err != nil {
@@ -258,11 +351,27 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		userID := sess.Metadata["user_id"]
 		tier := sess.Metadata["tier"]
+		customerName := sess.Metadata["customer"]
 		if userID != "" && tier != "" {
-			if err := s.store.UpdateUserStripe(userID, sess.Customer.ID, sess.Subscription.ID, tier); err != nil {
-				log.Printf("failed to update user stripe info: %v", err)
-			} else {
-				log.Printf("subscription activated: user=%s tier=%s", userID, tier)
+			// Store Stripe customer ID on the user.
+			if sess.Customer != nil {
+				_ = s.store.UpdateUserStripeCustomer(userID, sess.Customer.ID)
+			}
+			// Create a new active subscription.
+			if s.store != nil && customerName != "" {
+				subID := ""
+				if sess.Subscription != nil {
+					subID = sess.Subscription.ID
+				}
+				_ = s.store.CreateSubscription(&store.Subscription{
+					ID:                   uuid.New().String(),
+					CustomerID:           customerName,
+					Tier:                 tier,
+					Status:               "active",
+					StartsAt:             time.Now(),
+					StripeSubscriptionID: subID,
+				})
+				log.Printf("subscription activated: customer=%s tier=%s", customerName, tier)
 			}
 		}
 
@@ -272,11 +381,12 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Stripe webhook unmarshal error: %v", err)
 			break
 		}
-		// Downgrade user back to trial (expired).
-		if err := s.store.DowngradeByStripeSubscription(sub.ID); err != nil {
-			log.Printf("failed to downgrade subscription %s: %v", sub.ID, err)
-		} else {
-			log.Printf("subscription cancelled: %s", sub.ID)
+		if s.store != nil {
+			if err := s.store.CancelSubscription(sub.ID); err != nil {
+				log.Printf("failed to cancel subscription %s: %v", sub.ID, err)
+			} else {
+				log.Printf("subscription cancelled: %s", sub.ID)
+			}
 		}
 	}
 
@@ -288,6 +398,12 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
+	}
+	if s.store != nil {
+		if sub, _ := s.store.ActiveSubscription(claims.CustomerName); sub == nil {
+			http.Error(w, "no active subscription", http.StatusPaymentRequired)
+			return
+		}
 	}
 	if s.coordClient == nil {
 		http.Error(w, "coordinator unavailable", http.StatusServiceUnavailable)
@@ -303,11 +419,31 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get the actual tier from the DB subscription, not the JWT (which may be stale).
+	tier := claims.Tier
+	var tierLimitBytes int64 = 10 * 1024 * 1024 * 1024 // default 10 GB
+	if s.store != nil {
+		if sub, _ := s.store.ActiveSubscription(claims.CustomerName); sub != nil {
+			tier = sub.Tier
+			switch sub.Tier {
+			case "swatch":
+				tierLimitBytes = 10 * 1024 * 1024 * 1024    // 10 GB
+			case "yard":
+				tierLimitBytes = 100 * 1024 * 1024 * 1024   // 100 GB
+			case "bolt":
+				tierLimitBytes = 1024 * 1024 * 1024 * 1024  // 1 TB
+			case "trial":
+				tierLimitBytes = 1 * 1024 * 1024 * 1024     // 1 GB
+			}
+		}
+	}
+
 	json.NewEncoder(w).Encode(map[string]any{
-		"bytes_ingested": resp.BytesIngested,
-		"period_start":   resp.PeriodStart,
-		"period_end":     resp.PeriodEnd,
-		"tier":           claims.Tier,
+		"bytes_ingested":  resp.BytesIngested,
+		"tier_limit_bytes": tierLimitBytes,
+		"period_start":    resp.PeriodStart,
+		"period_end":      resp.PeriodEnd,
+		"tier":            tier,
 	})
 }
 
@@ -446,4 +582,469 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Apps ---
+
+func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
+	if s.coordClient == nil {
+		http.Error(w, "coordinator unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	resp, err := s.coordClient.ListApps(context.Background(), &pb.ListAppsRequest{})
+	if err != nil {
+		http.Error(w, "coordinator error", http.StatusBadGateway)
+		return
+	}
+	json.NewEncoder(w).Encode(resp.Apps)
+}
+
+// --- Shell functions (/bin/) ---
+
+func (s *Server) resolveCustomerID(customerName string) (uint, error) {
+	cust, err := s.store.FindOrCreateCustomer(customerName)
+	if err != nil {
+		return 0, err
+	}
+	return cust.ID, nil
+}
+
+func (s *Server) handleListFunctions(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	custID, err := s.resolveCustomerID(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	fns, err := s.store.ListShellFunctions(custID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(fns)
+}
+
+func (s *Server) handleGetFunction(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	name := r.PathValue("name")
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	custID, err := s.resolveCustomerID(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	fn, err := s.store.GetShellFunction(custID, name)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	json.NewEncoder(w).Encode(fn)
+}
+
+func (s *Server) handleSaveFunction(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	name := r.PathValue("name")
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Source string `json:"source"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Source == "" {
+		http.Error(w, "source required", http.StatusBadRequest)
+		return
+	}
+	custID, err := s.resolveCustomerID(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if err := s.store.SaveShellFunction(custID, name, req.Source); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleDeleteFunction(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	name := r.PathValue("name")
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	custID, err := s.resolveCustomerID(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if err := s.store.DeleteShellFunction(custID, name); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Cron watches (/cron.d/) ---
+
+func (s *Server) handleListWatches(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	custID, err := s.resolveCustomerID(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	watches, err := s.store.ListCronWatches(custID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	tier := "trial"
+	if sub, _ := s.store.ActiveSubscription(claims.CustomerName); sub != nil {
+		tier = sub.Tier
+	}
+	count, _ := s.store.CountCronWatches(custID)
+	json.NewEncoder(w).Encode(map[string]any{
+		"watches":      watches,
+		"count":        count,
+		"limit":        store.WatchLimit(tier),
+		"min_interval": store.MinWatchInterval(tier).String(),
+	})
+}
+
+func (s *Server) handleGetWatch(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	name := r.PathValue("name")
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	custID, err := s.resolveCustomerID(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w_, err := s.store.GetCronWatch(custID, name)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	json.NewEncoder(w).Encode(w_)
+}
+
+func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	name := r.PathValue("name")
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Schedule   string `json:"schedule"`
+		Pipeline   string `json:"pipeline"`
+		NotifyDest string `json:"notify_dest"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Schedule == "" || req.Pipeline == "" {
+		http.Error(w, "schedule and pipeline required", http.StatusBadRequest)
+		return
+	}
+	custID, err := s.resolveCustomerID(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Enforce tier limits on watches.
+	tier := claims.Tier
+	maxWatches := store.WatchLimit(tier)
+	if maxWatches == 0 {
+		http.Error(w, "watches are not available on the trial plan", http.StatusForbidden)
+		return
+	}
+
+	// Check watch count (only for new watches, not updates).
+	if _, err := s.store.GetCronWatch(custID, name); err != nil {
+		// New watch — check count limit.
+		count, err := s.store.CountCronWatches(custID)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if count >= maxWatches {
+			http.Error(w, fmt.Sprintf("watch limit reached (%d watches on %s plan)", maxWatches, tier), http.StatusForbidden)
+			return
+		}
+	}
+
+	// Check minimum interval.
+	minInterval := store.MinWatchInterval(tier)
+	interval := store.ParseScheduleInterval(req.Schedule)
+	if interval < minInterval {
+		http.Error(w, fmt.Sprintf("minimum schedule interval for %s plan is %s", tier, minInterval), http.StatusForbidden)
+		return
+	}
+
+	if err := s.store.SaveCronWatch(custID, name, req.Schedule, req.Pipeline, req.NotifyDest); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleDeleteWatch(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	name := r.PathValue("name")
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	custID, err := s.resolveCustomerID(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if err := s.store.DeleteCronWatch(custID, name); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleWatchResults(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	name := r.PathValue("name")
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	custID, err := s.resolveCustomerID(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	watch, err := s.store.GetCronWatch(custID, name)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	results, err := s.store.ListCronResults(watch.ID, 50)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(results)
+}
+
+// --- Team management ---
+
+func (s *Server) handleListTeam(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	if claims.CustomerName == "" {
+		json.NewEncoder(w).Encode(map[string]any{"members": []any{}, "seats_used": 0, "seats_limit": 1})
+		return
+	}
+	members, err := s.store.ListTeamMembers(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	count, _ := s.store.CountTeamMembers(claims.CustomerName)
+	tier := "trial"
+	if sub, _ := s.store.ActiveSubscription(claims.CustomerName); sub != nil {
+		tier = sub.Tier
+	}
+	orgName := claims.CustomerName
+	if cust, err := s.store.GetCustomerByName(claims.CustomerName); err == nil && cust.DisplayName != "" {
+		orgName = cust.DisplayName
+	}
+	json.NewEncoder(w).Encode(map[string]any{
+		"members":     members,
+		"seats_used":  count,
+		"seats_limit": store.SeatLimit(tier),
+		"org_name":    orgName,
+	})
+}
+
+func (s *Server) handleInviteTeamMember(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	if claims.CustomerName == "" {
+		http.Error(w, "no team configured", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Email == "" {
+		http.Error(w, "email required", http.StatusBadRequest)
+		return
+	}
+
+	// Check seat limit.
+	tier := "trial"
+	if sub, _ := s.store.ActiveSubscription(claims.CustomerName); sub != nil {
+		tier = sub.Tier
+	}
+	count, _ := s.store.CountTeamMembers(claims.CustomerName)
+	limit := store.SeatLimit(tier)
+	if count >= limit {
+		http.Error(w, fmt.Sprintf("seat limit reached (%d/%d)", count, limit), http.StatusForbidden)
+		return
+	}
+
+	// Check for duplicate.
+	if existing, _ := s.store.GetTeamMemberByEmail(claims.CustomerName, req.Email); existing != nil {
+		http.Error(w, "already a team member", http.StatusConflict)
+		return
+	}
+
+	// Create pending member.
+	member := &store.TeamMember{
+		ID:           uuid.New().String(),
+		CustomerName: claims.CustomerName,
+		Email:        req.Email,
+		Role:         "member",
+		Status:       "pending",
+		InvitedBy:    claims.UserID,
+		InvitedAt:    time.Now(),
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	}
+	if err := s.store.CreateTeamMember(member); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Send invite email.
+	token, err := s.store.CreateMagicLink(req.Email)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	verifyURL := fmt.Sprintf("%s/verify?token=%s&invite=1", s.baseURL, token)
+	// Use display name for the email if available.
+	orgName := claims.CustomerName
+	if cust, err := s.store.GetCustomerByName(claims.CustomerName); err == nil && cust.DisplayName != "" {
+		orgName = cust.DisplayName
+	}
+	SendInviteEmail(s.email, req.Email, claims.Email, orgName, verifyURL)
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(member)
+}
+
+func (s *Server) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Token == "" {
+		http.Error(w, "token required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate magic link + find/create user.
+	user, err := s.store.ValidateMagicLink(req.Token)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	// Find pending invite.
+	member, err := s.store.GetPendingTeamMemberByEmail(user.Email)
+	if err != nil {
+		http.Error(w, "no pending invite found", http.StatusNotFound)
+		return
+	}
+
+	// Assign user to the team.
+	s.store.UpdateUserCustomerName(user.ID, member.CustomerName)
+	s.store.AcceptTeamMember(member.ID, user.ID)
+
+	// Reload user for JWT generation.
+	user, _ = s.store.GetUserByID(user.ID)
+
+	tier := "trial"
+	if sub, _ := s.store.ActiveSubscription(member.CustomerName); sub != nil {
+		tier = sub.Tier
+	}
+
+	jwt, err := GenerateJWT(user, tier, s.jwtSecret)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"token": jwt,
+		"user": map[string]any{
+			"id":    user.ID,
+			"email": user.Email,
+			"tier":  tier,
+		},
+	})
+}
+
+func (s *Server) handleRemoveTeamMember(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+
+	// Verify caller is owner.
+	callerMember, err := s.store.GetTeamMemberByEmail(claims.CustomerName, claims.Email)
+	if err != nil || callerMember.Role != "owner" {
+		http.Error(w, "only the owner can remove members", http.StatusForbidden)
+		return
+	}
+
+	// Can't remove self.
+	target, err := s.store.GetTeamMemberByID(id)
+	if err != nil {
+		http.Error(w, "member not found", http.StatusNotFound)
+		return
+	}
+	if target.Email == claims.Email {
+		http.Error(w, "cannot remove yourself", http.StatusBadRequest)
+		return
+	}
+
+	// Remove.
+	s.store.RemoveTeamMember(id)
+
+	// Clear the user's customer association.
+	if target.UserID != nil {
+		s.store.UpdateUserCustomerName(*target.UserID, "")
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleUpdateTeamName(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+
+	// Only the owner can rename.
+	if callerMember, err := s.store.GetTeamMemberByEmail(claims.CustomerName, claims.Email); err != nil || callerMember.Role != "owner" {
+		http.Error(w, "only the owner can rename the team", http.StatusForbidden)
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.UpdateCustomerDisplayName(claims.CustomerName, req.Name); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]string{"name": req.Name})
 }
