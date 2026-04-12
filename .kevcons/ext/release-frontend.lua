@@ -8,18 +8,45 @@ function run(args)
     kevcons.log("building frontend...")
     kevcons.exec("bash", {"-c", "cd frontend && VITE_API_URL=https://api.w3ft.net npm run build"})
 
-    -- Sync to S3
+    -- Sync to S3 with correct MIME types
     kevcons.log("deploying to s3://" .. bucket .. "/...")
+
+    -- HTML files
     kevcons.aws_exec("s3", "sync", "frontend/dist/", "s3://" .. bucket .. "/",
         "--delete",
+        "--exclude", "*",
+        "--include", "*.html",
+        "--content-type", "text/html",
+        "--cache-control", "public,max-age=60")
+
+    -- JS files (hashed, long cache)
+    kevcons.aws_exec("s3", "sync", "frontend/dist/", "s3://" .. bucket .. "/",
+        "--exclude", "*",
+        "--include", "*.js",
+        "--content-type", "application/javascript",
+        "--cache-control", "public,max-age=31536000,immutable")
+
+    -- CSS files (hashed, long cache)
+    kevcons.aws_exec("s3", "sync", "frontend/dist/", "s3://" .. bucket .. "/",
+        "--exclude", "*",
+        "--include", "*.css",
+        "--content-type", "text/css",
+        "--cache-control", "public,max-age=31536000,immutable")
+
+    -- SVG files
+    kevcons.aws_exec("s3", "sync", "frontend/dist/", "s3://" .. bucket .. "/",
+        "--exclude", "*",
+        "--include", "*.svg",
+        "--content-type", "image/svg+xml",
         "--cache-control", "public,max-age=3600")
 
-    -- Set long cache on hashed assets
-    kevcons.aws_exec("s3", "cp",
-        "s3://" .. bucket .. "/assets/", "s3://" .. bucket .. "/assets/",
-        "--recursive",
-        "--cache-control", "public,max-age=31536000,immutable",
-        "--metadata-directive", "REPLACE")
+    -- Everything else (images, fonts, etc.)
+    kevcons.aws_exec("s3", "sync", "frontend/dist/", "s3://" .. bucket .. "/",
+        "--exclude", "*.html",
+        "--exclude", "*.js",
+        "--exclude", "*.css",
+        "--exclude", "*.svg",
+        "--cache-control", "public,max-age=3600")
 
     -- Invalidate CloudFront cache
     kevcons.log("invalidating CloudFront cache...")

@@ -9,6 +9,7 @@ package main
 
 import (
 	"syscall/js"
+	"time"
 	"unicode/utf8"
 
 	"github.com/kevlarcon/weft/shellcore"
@@ -69,6 +70,8 @@ func wasmInit(_ js.Value, args []js.Value) any {
 				if fs != nil {
 					fs.WriteFile(a.Path, []byte(a.Content))
 				}
+			case shellcore.ActionSetRange:
+				jsCallbacks.Call("onRangeChange", shellcore.FormatRangePlain(a.Start, a.End))
 			case shellcore.ActionQuit:
 				jsCallbacks.Call("notifyQuit")
 			}
@@ -77,6 +80,12 @@ func wasmInit(_ js.Value, args []js.Value) any {
 
 	// Set up JS-backed virtual filesystem.
 	core.SetFS(&jsFS{callbacks: jsCallbacks})
+
+	// Default range: last 24 hours.
+	rangeStart := time.Now().Add(-24 * time.Hour)
+	rangeEnd := time.Now()
+	core.SetRange(rangeStart, rangeEnd)
+	jsCallbacks.Call("onRangeChange", shellcore.FormatRangePlain(rangeStart, rangeEnd))
 
 	// Render initial prompt.
 	core.Redraw()

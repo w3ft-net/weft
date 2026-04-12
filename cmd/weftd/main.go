@@ -33,9 +33,10 @@ type Config struct {
 }
 
 type SourceConfig struct {
-	App  string `yaml:"app"`
-	Path string `yaml:"path"`          // file path or glob (file tailing)
-	Unit string `yaml:"unit,omitempty"` // systemd unit name (journal tailing)
+	App     string        `yaml:"app"`
+	Path    string        `yaml:"path"`            // file path or glob (file tailing)
+	Unit    string        `yaml:"unit,omitempty"`   // systemd unit name (journal tailing)
+	Metrics MetricsConfig `yaml:"metrics,omitempty"` // optional system metrics collection
 }
 
 func main() {
@@ -68,11 +69,31 @@ func main() {
 	}
 	coordClient := pb.NewWeftCoordinatorClient(coordConn)
 
+	// Build metrics config to report to coordinator.
+	var metricsProto *pb.MetricsConfig
+	for _, src := range cfg.Sources {
+		if src.Metrics.Enabled {
+			collectors := src.Metrics.Collectors
+			if len(collectors) == 0 {
+				collectors = []string{"cpu", "memory", "disk", "load", "network"}
+			}
+			metricsProto = &pb.MetricsConfig{
+				Enabled:    true,
+				Interval:   src.Metrics.Interval,
+				Collectors: collectors,
+			}
+			break // report first enabled source's config
+		}
+	}
+
 	// Authenticate to verify token and get customer name.
 	// Retry on PermissionDenied (trial expired / cancelled subscription).
 	var customer string
 	for {
-		authResp, err := coordClient.Authenticate(ctx, &pb.AuthenticateRequest{Token: cfg.Token})
+		authResp, err := coordClient.Authenticate(ctx, &pb.AuthenticateRequest{
+			Token:         cfg.Token,
+			MetricsConfig: metricsProto,
+		})
 		if err != nil {
 			if status.Code(err) == codes.PermissionDenied {
 				log.Printf("subscription inactive: %v — retrying in 24h", status.Convert(err).Message())
@@ -120,6 +141,9 @@ func main() {
 			log.Printf("[%s] tailing journal unit %s", src.App, src.Unit)
 		} else if src.Path != "" {
 			go watchGlob(ctx, coordClient, customer, hostname, src.App, src.Path)
+		}
+		if src.Metrics.Enabled {
+			go runMetricsCollector(ctx, coordClient, customer, hostname, src.App, src.Metrics)
 		}
 	}
 

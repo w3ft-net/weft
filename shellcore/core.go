@@ -3,6 +3,7 @@ package shellcore
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // terminalCommands are commands that need direct terminal access (pagers, etc.).
@@ -59,6 +60,10 @@ type ShellCore struct {
 
 	// maxScrollbackLines bounds scrollback to prevent memory issues.
 	maxScrollbackLines int
+
+	// Query time range (displayed by `range`, modified by `range <spec>`).
+	rangeStart time.Time
+	rangeEnd   time.Time
 }
 
 // NewShellCore creates a new core with a single write callback (for xterm.js/WASM).
@@ -101,6 +106,12 @@ func (c *ShellCore) SetFS(fs FS) { c.shellFS = fs }
 
 // GetFS returns the virtual filesystem.
 func (c *ShellCore) GetFS() FS { return c.shellFS }
+
+// SetRange sets the current query time range.
+func (c *ShellCore) SetRange(start, end time.Time) {
+	c.rangeStart = start
+	c.rangeEnd = end
+}
 
 // SetInput replaces the current input buffer (for saved query injection).
 func (c *ShellCore) SetInput(text string) {
@@ -488,10 +499,21 @@ func (c *ShellCore) execBuiltin(line string) bool {
 		c.appendScrollback(fmt.Sprintf("  warp.log %s\n", DimText("(all apps)")))
 		return true
 	case line == "range":
-		c.appendScrollback(DimText("range display not yet implemented") + "\n")
+		c.appendScrollback(formatRange(c.rangeStart, c.rangeEnd))
 		return true
 	case strings.HasPrefix(line, "range "):
-		c.appendScrollback(DimText("range adjustment not yet implemented") + "\n")
+		start, end, err := parseRange(strings.TrimPrefix(line, "range "))
+		if err != nil {
+			c.appendScrollback(ErrorText(fmt.Sprintf("range: %v", err)) + "\n")
+			return true
+		}
+		c.rangeStart = start
+		c.rangeEnd = end
+		c.dispatch(ActionSetRange{Start: start, End: end})
+		c.appendScrollback(formatRange(start, end))
+		return true
+	case line == "man range" || line == "range --help":
+		c.appendScrollback(RangeManPage)
 		return true
 	case strings.HasPrefix(line, "vi ") || strings.HasPrefix(line, "vim "):
 		parts := strings.Fields(line)

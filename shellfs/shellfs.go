@@ -22,10 +22,11 @@ var _ bash.FS = (*ShellFS)(nil)
 
 // ShellFS implements bash.FS for the weft shell.
 type ShellFS struct {
-	store      *store.Store
-	customerID uint
-	tier       string   // subscription tier (trial, swatch, yard, bolt)
-	logApps    []string // app names for /log/ directory listing
+	store        *store.Store
+	customerID   uint
+	customerName string   // for usage queries
+	tier         string   // subscription tier (trial, swatch, yard, bolt)
+	logApps      []string // app names for /log/ directory listing
 }
 
 // New creates a ShellFS for the given customer.
@@ -48,6 +49,11 @@ type Option func(*ShellFS)
 // WithTier sets the subscription tier for limit enforcement.
 func WithTier(tier string) Option {
 	return func(f *ShellFS) { f.tier = tier }
+}
+
+// WithCustomerName sets the customer name for usage queries.
+func WithCustomerName(name string) Option {
+	return func(f *ShellFS) { f.customerName = name }
 }
 
 // ReadFile returns the content of a virtual file.
@@ -76,6 +82,9 @@ func (f *ShellFS) ReadFile(path string) ([]byte, error) {
 				return []byte(""), nil // empty config is valid
 			}
 			return []byte(serializeNotifyConfig(nc)), nil
+		}
+		if name == "usage" {
+			return []byte(f.buildUsageReport()), nil
 		}
 		return nil, fmt.Errorf("%s: no such file", path)
 
@@ -178,7 +187,7 @@ func (f *ShellFS) Stat(path string) (fs.FileInfo, error) {
 			return &vfsFileInfo{name: name}, nil
 		}
 	case "etc":
-		if name == "notify.conf" {
+		if name == "notify.conf" || name == "usage" {
 			return &vfsFileInfo{name: name}, nil
 		}
 	case "log":
@@ -233,6 +242,7 @@ func (f *ShellFS) ReadDir(path string) ([]fs.DirEntry, error) {
 	case "etc":
 		return []fs.DirEntry{
 			&vfsDirEntry{name: "notify.conf"},
+			&vfsDirEntry{name: "usage"},
 		}, nil
 
 	case "log":
@@ -338,6 +348,81 @@ func parseNotifyConfig(content string) string {
 		}
 	}
 	return ""
+}
+
+// ── Usage report ───────────────────────────────────────────────
+
+func (f *ShellFS) buildUsageReport() string {
+	var b strings.Builder
+
+	now := time.Now()
+	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	periodEnd := periodStart.AddDate(0, 1, 0)
+
+	b.WriteString("# weft usage report\n")
+	fmt.Fprintf(&b, "# period: %s — %s\n", periodStart.Format("2006-01-02"), periodEnd.Format("2006-01-02"))
+	fmt.Fprintf(&b, "# tier: %s\n\n", f.tier)
+
+	// Actual ingestion.
+	bytesIngested, err := f.store.QueryUsage(f.customerName, periodStart, periodEnd)
+	if err != nil {
+		bytesIngested = 0
+	}
+
+	var tierLimitBytes int64
+	switch f.tier {
+	case "swatch":
+		tierLimitBytes = 10 * 1024 * 1024 * 1024
+	case "yard":
+		tierLimitBytes = 100 * 1024 * 1024 * 1024
+	case "bolt":
+		tierLimitBytes = 1024 * 1024 * 1024 * 1024
+	default:
+		tierLimitBytes = 1 * 1024 * 1024 * 1024
+	}
+
+	pct := 0.0
+	if tierLimitBytes > 0 {
+		pct = float64(bytesIngested) / float64(tierLimitBytes) * 100
+	}
+
+	fmt.Fprintf(&b, "ingested:  %s / %s (%.1f%%)\n",
+		humanBytes(bytesIngested), humanBytes(tierLimitBytes), pct)
+
+	// Metrics forecast.
+	forecast, err := f.store.ForecastMetricsUsage(f.customerID)
+	if err == nil && forecast.AgentsWithMetrics > 0 {
+		fmt.Fprintf(&b, "metrics:   ~%s/mo projected (%d agent%s)\n",
+			humanBytes(forecast.ProjectedBytesMonth),
+			forecast.AgentsWithMetrics, plural(forecast.AgentsWithMetrics))
+
+		totalProjected := bytesIngested + forecast.ProjectedBytesMonth
+		totalPct := float64(totalProjected) / float64(tierLimitBytes) * 100
+		fmt.Fprintf(&b, "total:     ~%s projected (%.1f%% of limit)\n",
+			humanBytes(totalProjected), totalPct)
+	}
+
+	return b.String()
+}
+
+func humanBytes(b int64) string {
+	switch {
+	case b >= 1024*1024*1024:
+		return fmt.Sprintf("%.2f GB", float64(b)/(1024*1024*1024))
+	case b >= 1024*1024:
+		return fmt.Sprintf("%.1f MB", float64(b)/(1024*1024))
+	case b >= 1024:
+		return fmt.Sprintf("%.1f KB", float64(b)/1024)
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // ── fs.FileInfo / fs.DirEntry implementations ───────────────

@@ -1,0 +1,14 @@
+endpoint: "coordinator:9020"
+token: "wft_dev_0000000000000000"
+customer: "kevlar"
+sources:
+  - app: "vimgym"
+    metrics:
+      enabled: true
+      interval: 10s
+      collectors:
+        - cpu
+        - memory
+        - disk
+        - load
+        - network

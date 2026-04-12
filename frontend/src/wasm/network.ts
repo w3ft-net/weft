@@ -203,4 +203,5 @@ export interface WasmCallbacks {
   fsReadDir: (path: string) => { entries?: string[]; error?: string }
   fsRemove: (path: string) => { error?: string }
   fsGetWatchResults: (name: string, limit: number) => { results?: { stdout: string; ran_at: string }[]; error?: string }
+  onRangeChange: (rangeText: string) => void
 }

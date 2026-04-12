@@ -180,13 +180,16 @@ func main() {
 		// Start usage metering flush (every 5 minutes).
 		coord.StartUsageFlush(drainCtx, db)
 
-		// Seed dev apps if shards were configured with seed data.
+		// Seed dev apps and agent token if shards were configured with seed data.
 		if *shardsFlag != "" {
 			cust, _ := db.FindOrCreateCustomer(*customer)
 			if cust != nil {
 				for _, appName := range []string{"vimgym", "callbox"} {
 					db.FindOrCreateApp(cust.ID, appName)
 				}
+				// Seed a dev subscription and agent token so weftd can authenticate.
+				db.SeedDevSubscription(cust.Name)
+				db.SeedDevAgentToken(cust.ID, "dev-agent", "vimgym")
 			}
 		}
 

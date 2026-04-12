@@ -52,6 +52,24 @@ func (s *Store) CreateSubscription(sub *Subscription) error {
 	return s.db.Create(sub).Error
 }
 
+// SeedDevSubscription ensures an active dev subscription exists. Idempotent.
+func (s *Store) SeedDevSubscription(customerName string) {
+	sub, _ := s.ActiveSubscription(customerName)
+	if sub != nil {
+		return
+	}
+	now := time.Now()
+	s.db.Create(&Subscription{
+		ID:         "dev-sub",
+		CustomerID: customerName,
+		Tier:       "swatch",
+		Status:     "active",
+		StartsAt:   now,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	})
+}
+
 // CancelSubscription marks a subscription as cancelled by Stripe subscription ID.
 func (s *Store) CancelSubscription(stripeSubID string) error {
 	return s.db.Model(&Subscription{}).

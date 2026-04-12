@@ -86,8 +86,9 @@ export function deleteQuery(id: string): Promise<void> {
 }
 
 // Functions (/bin/)
-export function getFunctions(): Promise<ShellFunction[]> {
-  return apiFetch('/api/functions')
+export async function getFunctions(): Promise<ShellFunction[]> {
+  const resp = await apiFetch<{ functions: ShellFunction[] }>('/api/functions')
+  return resp.functions || []
 }
 
 export function saveFunction(name: string, source: string): Promise<void> {
@@ -142,6 +143,10 @@ export interface Usage {
   bytes_ingested: number
   tier_limit_bytes: number
   period_start: string
+  metrics_forecast?: {
+    agents_with_metrics: number
+    projected_bytes_month: number
+  }
 }
 
 export interface AgentToken {

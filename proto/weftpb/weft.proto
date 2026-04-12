@@ -215,6 +215,13 @@ message RevokeTokenResponse {}
 
 message AuthenticateRequest {
   string token = 1;
+  MetricsConfig metrics_config = 5;  // agent reports its metrics config on connect
+}
+
+message MetricsConfig {
+  bool enabled = 1;
+  string interval = 2;            // e.g., "30s"
+  repeated string collectors = 3; // e.g., ["cpu", "memory", "disk"]
 }
 
 message AuthenticateResponse {

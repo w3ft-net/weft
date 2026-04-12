@@ -1,5 +1,7 @@
 package shellcore
 
+import "time"
+
 // FS is the virtual filesystem interface for the shell.
 // ShellFS (server-side) and the WASM API adapter both implement this.
 type FS interface {
@@ -154,6 +156,14 @@ func (ActionVimSave) shellAction() {}
 type ActionVimClose struct{}
 
 func (ActionVimClose) shellAction() {}
+
+// ActionSetRange requests changing the query time range.
+type ActionSetRange struct {
+	Start time.Time
+	End   time.Time
+}
+
+func (ActionSetRange) shellAction() {}
 
 // VimFileLoadedEvent delivers file content for the vim editor.
 type VimFileLoadedEvent struct {

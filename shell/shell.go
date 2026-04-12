@@ -69,6 +69,7 @@ func (s *Shell) Run() error {
 	if s.FS != nil {
 		runner.core.SetFS(s.FS)
 	}
+	runner.core.SetRange(s.Start, s.End)
 
 	// Handle window resize.
 	sigCh := make(chan os.Signal, 1)
@@ -147,6 +148,9 @@ func (r *shellRunner) handleAction(a shellcore.Action) {
 		if r.shell.FS != nil {
 			r.shell.FS.WriteFile(a.Path, []byte(a.Content))
 		}
+	case shellcore.ActionSetRange:
+		r.shell.Start = a.Start
+		r.shell.End = a.End
 	case shellcore.ActionQuit:
 		// Handled by checking core.Quitting() in the read loop.
 	}
@@ -446,6 +450,24 @@ func stripBoth(line string) string {
 
 // ExecNonInteractive runs a single pipeline and prints results to w.
 func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
+	line = strings.TrimSpace(line)
+
+	// Handle range as a local builtin.
+	if line == "range" {
+		fmt.Fprint(w, shellcore.FormatRangePlain(s.Start, s.End))
+		return nil
+	}
+	if strings.HasPrefix(line, "range ") {
+		start, end, err := shellcore.ParseRange(strings.TrimPrefix(line, "range "))
+		if err != nil {
+			return err
+		}
+		s.Start = start
+		s.End = end
+		fmt.Fprint(w, shellcore.FormatRangePlain(start, end))
+		return nil
+	}
+
 	weftPipeline, _ := splitTerminalStage(line)
 	result, err := s.Query(weftPipeline, s.Start, s.End)
 	if err != nil {

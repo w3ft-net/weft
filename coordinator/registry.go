@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,8 +44,10 @@ func (e *ShardEntry) hasApp(app string) bool {
 	if len(e.Apps) == 0 {
 		return true // legacy: empty = all apps
 	}
+	// vimgym.metrics matches the vimgym shard.
+	base := strings.TrimSuffix(app, ".metrics")
 	for _, a := range e.Apps {
-		if a == app {
+		if a == app || a == base {
 			return true
 		}
 	}

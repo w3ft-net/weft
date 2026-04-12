@@ -96,6 +96,26 @@ function SubscriptionCard({ usage }: { usage: Usage | null }) {
             </div>
             <span className="usage-bar-pct" style={{ color: barColor }}>{pct}%</span>
           </div>
+
+          {/* Metrics forecast */}
+          {usage.metrics_forecast && usage.metrics_forecast.agents_with_metrics > 0 && (
+            <div className="usage-stats" style={{ marginBottom: 20 }} data-testid="account-metrics-forecast">
+              <div className="usage-stat">
+                <div className="usage-stat-label">Metrics agents</div>
+                <div className="usage-stat-value">{usage.metrics_forecast.agents_with_metrics}</div>
+              </div>
+              <div className="usage-stat">
+                <div className="usage-stat-label">Projected metrics</div>
+                <div className="usage-stat-value">~{formatBytes(usage.metrics_forecast.projected_bytes_month)}/mo</div>
+              </div>
+              <div className="usage-stat">
+                <div className="usage-stat-label">Projected total</div>
+                <div className="usage-stat-value">
+                  ~{formatBytes(usage.bytes_ingested + usage.metrics_forecast.projected_bytes_month)}/mo
+                </div>
+              </div>
+            </div>
+          )}
         </>
       )}
 

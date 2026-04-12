@@ -438,13 +438,27 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	json.NewEncoder(w).Encode(map[string]any{
-		"bytes_ingested":  resp.BytesIngested,
+	result := map[string]any{
+		"bytes_ingested":   resp.BytesIngested,
 		"tier_limit_bytes": tierLimitBytes,
-		"period_start":    resp.PeriodStart,
-		"period_end":      resp.PeriodEnd,
-		"tier":            tier,
-	})
+		"period_start":     resp.PeriodStart,
+		"period_end":       resp.PeriodEnd,
+		"tier":             tier,
+	}
+
+	// Add metrics forecast if available.
+	if s.store != nil {
+		if cust, err := s.store.GetCustomerByName(claims.CustomerName); err == nil {
+			if forecast, err := s.store.ForecastMetricsUsage(cust.ID); err == nil && forecast.AgentsWithMetrics > 0 {
+				result["metrics_forecast"] = map[string]any{
+					"agents_with_metrics":     forecast.AgentsWithMetrics,
+					"projected_bytes_month":   forecast.ProjectedBytesMonth,
+				}
+			}
+		}
+	}
+
+	json.NewEncoder(w).Encode(result)
 }
 
 // --- Saved queries handlers ---
@@ -621,7 +635,9 @@ func (s *Server) handleListFunctions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	json.NewEncoder(w).Encode(fns)
+	json.NewEncoder(w).Encode(map[string]any{
+		"functions": fns,
+	})
 }
 
 func (s *Server) handleGetFunction(w http.ResponseWriter, r *http.Request) {

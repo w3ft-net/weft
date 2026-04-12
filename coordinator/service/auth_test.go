@@ -57,6 +57,56 @@ func TestAuthenticate_NoShardAddr(t *testing.T) {
 	}
 }
 
+// TestAuthenticate_MetricsConfigSync verifies that the agent's reported
+// metrics config is persisted to the token record on authentication.
+func TestAuthenticate_MetricsConfigSync(t *testing.T) {
+	store, cleanup := testStore(t)
+	defer cleanup()
+
+	s0, err := shard.NewDuckDBShard("shard-0", "", coordinator.DevT0, coordinator.DevT1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s0.Close()
+
+	coord := coordinator.NewCoordinator([]shard.Shard{s0}, "kevlar", nil)
+	srv := &Server{Coord: coord, Store: store}
+
+	cust, err := store.FindOrCreateCustomer("kevlar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := store.CreateAgentToken(cust.ID, "metrics-sync-test", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Authenticate with metrics config.
+	_, err = srv.Authenticate(context.Background(), &pb.AuthenticateRequest{
+		Token: tok.Token,
+		MetricsConfig: &pb.MetricsConfig{
+			Enabled:    true,
+			Interval:   "15s",
+			Collectors: []string{"cpu", "memory", "disk"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify metrics config was persisted.
+	forecast, err := store.ForecastMetricsUsage(cust.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if forecast.AgentsWithMetrics < 1 {
+		t.Error("expected at least 1 agent with metrics after auth")
+	}
+	if forecast.ProjectedBytesMonth == 0 {
+		t.Error("expected non-zero projected bytes")
+	}
+}
+
 // TestAuthenticate_InvalidToken verifies that bad tokens are rejected.
 func TestAuthenticate_InvalidToken(t *testing.T) {
 	store, cleanup := testStore(t)

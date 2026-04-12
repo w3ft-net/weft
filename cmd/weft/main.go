@@ -16,6 +16,13 @@ import (
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "-c":
+			if len(os.Args) < 3 {
+				fmt.Fprintln(os.Stderr, "usage: weft -c 'pipeline'")
+				os.Exit(1)
+			}
+			runOneShot(strings.Join(os.Args[2:], " "))
+			return
 		case "setup":
 			runSetup()
 			return
@@ -63,8 +70,8 @@ func main() {
 			return &shell.QueryResult{Rows: r.Rows, Text: r.Text}, nil
 		},
 		Follow: remote.Follow,
-		Start:  time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
-		End:    time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
+		Start:  time.Now().Add(-24 * time.Hour),
+		End:    time.Now(),
 		Apps:   apps,
 		FS:     shell.NewRemoteFS(remote.Client(), cfg.Customer, apps),
 	}
@@ -115,6 +122,38 @@ func runShell(s *shell.Shell) {
 
 	if err := s.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "shell error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runOneShot(pipeline string) {
+	cfg, err := shell.LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "no .weft.yaml: %v\n", err)
+		os.Exit(1)
+	}
+
+	remote, err := shell.NewRemoteCoordinator(cfg.Endpoint)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "connect to %s: %v\n", cfg.Endpoint, err)
+		os.Exit(1)
+	}
+	defer remote.Close()
+
+	s := &shell.Shell{
+		Query: func(p string, start, end time.Time) (*shell.QueryResult, error) {
+			r, err := remote.Query(p, start, end)
+			if err != nil {
+				return nil, err
+			}
+			return &shell.QueryResult{Rows: r.Rows, Text: r.Text}, nil
+		},
+		Start: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+		End:   time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	if err := s.ExecNonInteractive(pipeline, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }

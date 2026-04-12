@@ -109,6 +109,10 @@ func (s *Server) ListApps(_ context.Context, _ *pb.ListAppsRequest) (*pb.ListApp
 		return &pb.ListAppsResponse{}, nil
 	}
 
+	// Include <app>.metrics for agents with metrics enabled.
+	metricsApps, _ := s.Store.MetricsAppNames()
+	names = append(names, metricsApps...)
+
 	return &pb.ListAppsResponse{Apps: names}, nil
 }
 
@@ -194,6 +198,13 @@ func (s *Server) Authenticate(_ context.Context, req *pb.AuthenticateRequest) (*
 	}
 
 	log.Printf("auth: customer=%s tier=%s", customer.Name, sub.Tier)
+
+	// If the agent reported a metrics config, persist it.
+	if mc := req.MetricsConfig; mc != nil {
+		if err := s.Store.UpdateAgentMetricsConfig(req.Token, mc.Enabled, mc.Interval, mc.Collectors); err != nil {
+			log.Printf("auth: failed to save metrics config for %s: %v", customer.Name, err)
+		}
+	}
 
 	return &pb.AuthenticateResponse{
 		Customer: customer.Name,

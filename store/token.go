@@ -2,7 +2,9 @@ package store
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -11,12 +13,15 @@ import (
 // Token format: wft_<random> (e.g., wft_abc123def456)
 type AgentToken struct {
 	gorm.Model
-	CustomerID uint     `gorm:"not null"`
-	Customer   Customer `gorm:"foreignKey:CustomerID"`
-	Token      string   `gorm:"uniqueIndex;not null"`
-	Label      string   // human-readable label (e.g., "vimgym-prod")
-	App        string   // app name this token authorizes (e.g., "vimgym")
-	Revoked    bool     `gorm:"not null;default:false"`
+	CustomerID       uint     `gorm:"not null"`
+	Customer         Customer `gorm:"foreignKey:CustomerID"`
+	Token            string   `gorm:"uniqueIndex;not null"`
+	Label            string   // human-readable label (e.g., "vimgym-prod")
+	App              string   // app name this token authorizes (e.g., "vimgym")
+	Revoked          bool     `gorm:"not null;default:false"`
+	MetricsEnabled   bool     `gorm:"not null;default:false"`
+	MetricsInterval  string   // e.g., "30s"
+	MetricsCollectors string  // JSON array, e.g., `["cpu","memory","disk"]`
 }
 
 // CreateAgentToken generates a new token for a customer and app.
@@ -70,6 +75,92 @@ func (s *Store) ListAgentTokens(customerID uint) ([]AgentToken, error) {
 	var tokens []AgentToken
 	err := s.db.Where("customer_id = ?", customerID).Find(&tokens).Error
 	return tokens, err
+}
+
+// UpdateAgentMetricsConfig stores the agent's reported metrics configuration.
+func (s *Store) UpdateAgentMetricsConfig(token string, enabled bool, interval string, collectors []string) error {
+	collectorsJSON := "[]"
+	if len(collectors) > 0 {
+		b, _ := json.Marshal(collectors)
+		collectorsJSON = string(b)
+	}
+	return s.db.Model(&AgentToken{}).Where("token = ?", token).Updates(map[string]any{
+		"metrics_enabled":    enabled,
+		"metrics_interval":   interval,
+		"metrics_collectors": collectorsJSON,
+	}).Error
+}
+
+// MetricsForecast holds projected metric ingest for a customer.
+type MetricsForecast struct {
+	AgentsWithMetrics int
+	ProjectedBytesMonth int64
+}
+
+// ForecastMetricsUsage computes projected monthly metric bytes from active agent configs.
+func (s *Store) ForecastMetricsUsage(customerID uint) (*MetricsForecast, error) {
+	var tokens []AgentToken
+	err := s.db.Where("customer_id = ? AND revoked = ? AND metrics_enabled = ?",
+		customerID, false, true).Find(&tokens).Error
+	if err != nil {
+		return nil, err
+	}
+
+	var totalBytesMonth int64
+	for _, t := range tokens {
+		intervalSec := 30.0 // default
+		if t.MetricsInterval != "" {
+			if d, err := time.ParseDuration(t.MetricsInterval); err == nil {
+				intervalSec = d.Seconds()
+			}
+		}
+		numCollectors := 5 // default: all
+		if t.MetricsCollectors != "" && t.MetricsCollectors != "[]" {
+			var c []string
+			if json.Unmarshal([]byte(t.MetricsCollectors), &c) == nil && len(c) > 0 {
+				numCollectors = len(c)
+			}
+		}
+		// ~300 bytes per metric row, one row per collector per tick
+		ticksPerDay := 86400.0 / intervalSec
+		bytesPerDay := int64(ticksPerDay * float64(numCollectors) * 300)
+		totalBytesMonth += bytesPerDay * 30
+	}
+
+	return &MetricsForecast{
+		AgentsWithMetrics:   len(tokens),
+		ProjectedBytesMonth: totalBytesMonth,
+	}, nil
+}
+
+// MetricsAppNames returns "<app>.metrics" for each active agent with metrics enabled.
+func (s *Store) MetricsAppNames() ([]string, error) {
+	var apps []string
+	err := s.db.Model(&AgentToken{}).
+		Where("revoked = ? AND metrics_enabled = ? AND app != ''", false, true).
+		Distinct().Pluck("app", &apps).Error
+	if err != nil {
+		return nil, err
+	}
+	for i, a := range apps {
+		apps[i] = a + ".metrics"
+	}
+	return apps, nil
+}
+
+// SeedDevAgentToken ensures a deterministic dev token exists. Idempotent.
+func (s *Store) SeedDevAgentToken(customerID uint, label, app string) {
+	const devToken = "wft_dev_0000000000000000"
+	var existing AgentToken
+	if s.db.Where("token = ?", devToken).First(&existing).Error == nil {
+		return // already exists
+	}
+	s.db.Create(&AgentToken{
+		CustomerID: customerID,
+		Token:      devToken,
+		Label:      label,
+		App:        app,
+	})
 }
 
 func generateToken() (string, error) {

@@ -101,6 +101,19 @@ services:
       coordinator:
         condition: service_started
 
+  weftd:
+    build:
+      context: ..
+      dockerfile: weft/Dockerfile
+    command:
+      - weftd
+      - --config=/etc/weftd/config.yaml
+    volumes:
+      - ./dev/weftd-config.yaml:/etc/weftd/config.yaml:ro
+    depends_on:
+      coordinator:
+        condition: service_started
+
   lambda-shard:
     build:
       context: ..

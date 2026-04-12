@@ -20,6 +20,7 @@ export interface ShellBridge {
 export async function initShellWasm(
   container: HTMLElement,
   apps: string[],
+  onRangeChange?: (rangeText: string) => void,
 ): Promise<ShellBridge> {
   // Create xterm.js terminal.
   const terminal = new Terminal({
@@ -92,6 +93,9 @@ export async function initShellWasm(
     fsReadDir: (path: string) => fsApiSyncDir(path),
     fsRemove: (path: string) => fsApiSync('DELETE', path),
     fsGetWatchResults: (name: string, limit: number) => fsGetWatchResults(name, limit),
+    onRangeChange: (rangeText: string) => {
+      if (onRangeChange) onRangeChange(rangeText)
+    },
   }
 
   // Initialize WASM shell.
@@ -253,7 +257,9 @@ function fsApiSyncDir(path: string): { entries?: string[]; error?: string } {
   }
 
   try {
-    const items = JSON.parse(xhr.responseText) as { Name: string }[]
+    const parsed = JSON.parse(xhr.responseText)
+    // Both endpoints return envelopes: { functions: [...] } or { watches: [...] }
+    const items: { Name: string }[] = parsed.functions || parsed.watches || []
     return { entries: (items || []).map(i => i.Name) }
   } catch {
     return { entries: [] }
