@@ -29,7 +29,6 @@ export default function Namespaces() {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [showTokenForm, setShowTokenForm] = useState<string | null>(null)
   const [tokenLabel, setTokenLabel] = useState('')
-  const [tokenApp, setTokenApp] = useState('')
   const [newTokenSecret, setNewTokenSecret] = useState('')
   const [copied, setCopied] = useState(false)
 
@@ -60,10 +59,9 @@ export default function Namespaces() {
   async function handleCreateToken(nsName: string) {
     if (!tokenLabel.trim()) return
     try {
-      const resp = await createToken(tokenLabel.trim(), tokenApp.trim() || nsName)
+      const resp = await createToken(tokenLabel.trim(), nsName)
       setNewTokenSecret(resp.token)
       setTokenLabel('')
-      setTokenApp('')
       setShowTokenForm(null)
       loadData()
     } catch {
@@ -76,11 +74,8 @@ export default function Namespaces() {
     loadData()
   }
 
-  // Group tokens by namespace (using the app field prefix).
   function tokensForNamespace(nsName: string): AgentToken[] {
-    return tokens.filter(t =>
-      t.app === nsName || t.app.startsWith(nsName + '/')
-    )
+    return tokens.filter(t => t.namespace === nsName)
   }
 
   return (
@@ -166,7 +161,7 @@ export default function Namespaces() {
                             <div className="dash-table-wrap" style={{ marginBottom: 12 }}>
                               <table className="dash-table" data-testid={`namespace-tokens-${ns.name}`}>
                                 <thead>
-                                  <tr><th>Token</th><th>Label</th><th>App</th><th>Status</th><th>Created</th><th></th></tr>
+                                  <tr><th>Token</th><th>Label</th><th>Status</th><th>Created</th><th></th></tr>
                                 </thead>
                                 <tbody>
                                   {nsTokens.map(t => (
@@ -179,7 +174,6 @@ export default function Namespaces() {
                                         </button>
                                       </td>
                                       <td className="token-label">{t.label}</td>
-                                      <td className="token-app">{t.app || '—'}</td>
                                       <td><span className={`token-status token-status-${t.status}`}>{t.status}</span></td>
                                       <td className="token-date">{formatDate(t.created_at)}</td>
                                       <td>
@@ -205,12 +199,6 @@ export default function Namespaces() {
                                   <input className="form-input" placeholder="prod-web-01" value={tokenLabel}
                                     onChange={e => setTokenLabel(e.target.value)}
                                     data-testid={`namespace-token-label-${ns.name}`} />
-                                </div>
-                                <div className="form-field">
-                                  <label className="form-label">Sub-app (optional)</label>
-                                  <input className="form-input" placeholder={`${ns.name}/coordinator`} value={tokenApp}
-                                    onChange={e => setTokenApp(e.target.value)}
-                                    data-testid={`namespace-token-app-${ns.name}`} />
                                 </div>
                               </div>
                               <div className="form-actions">

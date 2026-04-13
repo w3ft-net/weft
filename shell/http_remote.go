@@ -181,8 +181,8 @@ func (h *HTTPCoordinator) CreateNamespace(name string) (*NamespaceInfo, error) {
 	return &ns, nil
 }
 
-func (h *HTTPCoordinator) CreateToken(customer, label, app string) (string, error) {
-	body, _ := json.Marshal(map[string]string{"label": label, "app": app})
+func (h *HTTPCoordinator) CreateToken(customer, label, namespace string) (string, error) {
+	body, _ := json.Marshal(map[string]string{"label": label, "namespace": namespace})
 	req, _ := http.NewRequest("POST", h.baseURL+"/api/tokens", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+h.token)

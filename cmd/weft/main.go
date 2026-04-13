@@ -669,26 +669,23 @@ func runToken() {
 
 func runTokenCreate(client tokenClient, cfg *shell.Config) {
 	args := os.Args[3:]
-	var label, app string
-	customer := cfg.Customer
+	var label, namespace string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--label":
 			if i+1 < len(args) { label = args[i+1]; i++ }
-		case "--app":
-			if i+1 < len(args) { app = args[i+1]; i++ }
-		case "--customer":
-			if i+1 < len(args) { customer = args[i+1]; i++ }
+		case "--namespace", "--ns":
+			if i+1 < len(args) { namespace = args[i+1]; i++ }
 		}
 	}
 
-	if app == "" {
-		fmt.Fprintln(os.Stderr, "usage: weft token create --app NAME --label LABEL [--customer CUST]")
+	if namespace == "" {
+		fmt.Fprintln(os.Stderr, "usage: weft token create --namespace NAME --label LABEL")
 		os.Exit(1)
 	}
 
-	token, err := client.CreateToken(customer, label, app)
+	token, err := client.CreateToken("", label, namespace)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create token: %v\n", err)
 		os.Exit(1)

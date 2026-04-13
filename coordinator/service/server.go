@@ -219,7 +219,12 @@ func (s *Server) CreateToken(_ context.Context, req *pb.CreateTokenRequest) (*pb
 	if err != nil {
 		return nil, fmt.Errorf("customer: %w", err)
 	}
-	token, err := s.Store.CreateAgentToken(customer.ID, req.Label, req.App)
+	// App field used as namespace name for backward compat with gRPC callers.
+	ns, _ := s.Store.FindOrCreateNamespace(customer.ID, req.App)
+	if ns == nil {
+		return nil, fmt.Errorf("namespace %q not found", req.App)
+	}
+	token, err := s.Store.CreateAgentToken(customer.ID, ns.ID, req.Label)
 	if err != nil {
 		return nil, fmt.Errorf("create token: %w", err)
 	}
@@ -243,7 +248,7 @@ func (s *Server) ListTokens(_ context.Context, req *pb.ListTokensRequest) (*pb.L
 		infos = append(infos, &pb.TokenInfo{
 			Token:     t.Token,
 			Label:     t.Label,
-			App:       t.App,
+			App:       t.Namespace.Name,
 			Revoked:   t.Revoked,
 			CreatedAt: t.CreatedAt.Format(time.RFC3339),
 		})

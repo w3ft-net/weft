@@ -578,7 +578,7 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 	type tokenResult struct {
 		Token     string `json:"token"`
 		Label     string `json:"label"`
-		App       string `json:"app"`
+		Namespace string `json:"namespace"`
 		Status    string `json:"status"`
 		CreatedAt string `json:"created_at"`
 	}
@@ -591,7 +591,7 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 		out = append(out, tokenResult{
 			Token:     t.Token,
 			Label:     t.Label,
-			App:       t.App,
+			Namespace: t.Namespace.Name,
 			Status:    status,
 			CreatedAt: t.CreatedAt.Format(time.RFC3339),
 		})
@@ -608,39 +608,27 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Label string `json:"label"`
-		App   string `json:"app"`
+		Label     string `json:"label"`
+		Namespace string `json:"namespace"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Label == "" {
 		http.Error(w, "label required", http.StatusBadRequest)
 		return
 	}
-	if req.App == "" {
-		http.Error(w, "app required (e.g., weft/coordinator)", http.StatusBadRequest)
+	if req.Namespace == "" {
+		http.Error(w, "namespace required", http.StatusBadRequest)
 		return
 	}
 
 	// Validate that the namespace exists.
-	ns := req.App
-	if idx := strings.Index(ns, "/"); idx >= 0 {
-		ns = ns[:idx]
-	}
-	nss, _ := s.store.ListNamespaces(custID)
-	found := false
-	for _, n := range nss {
-		if n.Name == ns {
-			found = true
-			break
-		}
-	}
-	if !found {
-		http.Error(w, fmt.Sprintf("namespace %q does not exist — create it first", ns), http.StatusBadRequest)
+	nsObj, err := s.store.FindOrCreateNamespace(custID, req.Namespace)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
 	// Check permission: owner or can_create_tokens on namespace.
 	if !s.isOwner(claims.CustomerName, claims.Email) {
-		nsObj, _ := s.store.FindOrCreateNamespace(custID, ns)
 		perm, err := s.store.GetNamespacePermission(claims.UserID, nsObj.ID)
 		if err != nil || !perm.CanCreateTokens {
 			http.Error(w, "forbidden: no token permission on this namespace", http.StatusForbidden)
@@ -648,7 +636,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	tok, err := s.store.CreateAgentToken(custID, req.Label, req.App)
+	tok, err := s.store.CreateAgentToken(custID, nsObj.ID, req.Label)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
