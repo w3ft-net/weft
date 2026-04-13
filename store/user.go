@@ -179,15 +179,19 @@ func (s *Store) CreateMagicLink(email string) (string, error) {
 	return token, nil
 }
 
-// ValidateMagicLink validates and consumes a magic link token.
-// Returns the email. User creation/lookup is handled by the API layer.
+// ValidateMagicLink validates a magic link token without consuming it.
+// Returns the email. Call ConsumeMagicLink after successful account creation.
 func (s *Store) ValidateMagicLink(token string) (string, error) {
 	var link MagicLink
 	if err := s.db.Where("token = ? AND used = ? AND expires_at > ?", token, false, time.Now()).First(&link).Error; err != nil {
 		return "", fmt.Errorf("invalid or expired magic link")
 	}
-	s.db.Model(&link).Update("used", true)
 	return link.Email, nil
+}
+
+// ConsumeMagicLink marks a magic link as used.
+func (s *Store) ConsumeMagicLink(token string) {
+	s.db.Model(&MagicLink{}).Where("token = ?", token).Update("used", true)
 }
 
 // GetLastMagicLinkToken returns the most recent token for an email (for testing).

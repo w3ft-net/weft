@@ -29,10 +29,10 @@ export function login(email: string): Promise<{ message: string }> {
   })
 }
 
-export function verify(token: string): Promise<{ token: string; user: User }> {
+export function verify(token: string, orgName?: string): Promise<{ token?: string; user?: User; needs_org?: boolean; email?: string }> {
   return apiFetch('/api/auth/verify', {
     method: 'POST',
-    body: JSON.stringify({ token }),
+    body: JSON.stringify({ token, org_name: orgName }),
   })
 }
 

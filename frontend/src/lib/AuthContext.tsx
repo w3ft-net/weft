@@ -5,7 +5,7 @@ interface AuthContextValue {
   user: User | null
   token: string | null
   login: (email: string) => Promise<void>
-  verify: (token: string) => Promise<void>
+  verify: (token: string, orgName?: string) => Promise<{ needs_org?: boolean; email?: string }>
   loginWithToken: (jwt: string) => Promise<void>
   logout: () => void
   loading: boolean
@@ -40,11 +40,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await apiLogin(email)
   }
 
-  async function verify(tok: string): Promise<void> {
-    const { token: jwt, user: u } = await apiVerify(tok)
-    localStorage.setItem(TOKEN_KEY, jwt)
-    setToken(jwt)
-    setUser(u)
+  async function verify(tok: string, orgName?: string): Promise<{ needs_org?: boolean; email?: string }> {
+    const resp = await apiVerify(tok, orgName)
+    if (resp.needs_org) {
+      return { needs_org: true, email: resp.email }
+    }
+    if (resp.token) {
+      localStorage.setItem(TOKEN_KEY, resp.token)
+      setToken(resp.token)
+      if (resp.user) setUser(resp.user)
+    }
+    return {}
   }
 
   async function loginWithToken(jwt: string): Promise<void> {

@@ -4,7 +4,7 @@ import { useAuth } from '../lib/AuthContext'
 import { acceptInvite } from '../lib/api'
 import './Verify.css'
 
-type State = 'verifying' | 'success' | 'error' | 'invite-prompt'
+type State = 'verifying' | 'needs-org' | 'creating' | 'success' | 'error' | 'invite-prompt'
 
 export default function Verify() {
   const [searchParams] = useSearchParams()
@@ -13,6 +13,8 @@ export default function Verify() {
   const [state, setState] = useState<State>('verifying')
   const [errorMsg, setErrorMsg] = useState('')
   const [accepting, setAccepting] = useState(false)
+  const [orgName, setOrgName] = useState('')
+  const [email, setEmail] = useState('')
 
   const token = searchParams.get('token') || ''
   const isInvite = searchParams.get('invite') === '1'
@@ -25,16 +27,20 @@ export default function Verify() {
     }
 
     if (isInvite) {
-      // Show the accept prompt instead of auto-verifying.
       setState('invite-prompt')
       return
     }
 
     // Normal login flow.
     verify(token)
-      .then(() => {
-        setState('success')
-        setTimeout(() => navigate('/dashboard'), 1200)
+      .then(resp => {
+        if (resp.needs_org) {
+          setEmail(resp.email || '')
+          setState('needs-org')
+        } else {
+          setState('success')
+          setTimeout(() => navigate('/dashboard'), 1200)
+        }
       })
       .catch(err => {
         setState('error')
@@ -43,11 +49,28 @@ export default function Verify() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  async function handleCreateOrg(e: React.FormEvent) {
+    e.preventDefault()
+    if (!orgName.trim()) return
+    setState('creating')
+    try {
+      const resp = await verify(token, orgName.trim())
+      if (resp.needs_org) {
+        setState('needs-org')
+        return
+      }
+      setState('success')
+      setTimeout(() => navigate('/dashboard'), 1200)
+    } catch (err) {
+      setState('error')
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to create account.')
+    }
+  }
+
   async function handleAcceptInvite() {
     setAccepting(true)
     try {
       const result = await acceptInvite(token)
-      // Store the JWT and load user info.
       if (result.token) {
         await loginWithToken(result.token)
       }
@@ -70,6 +93,45 @@ export default function Verify() {
           <div className="verify-body" data-testid="verify-verifying-state">
             <div className="verify-spinner" />
             <p className="verify-status">Verifying magic link...</p>
+          </div>
+        )}
+
+        {state === 'needs-org' && (
+          <div className="verify-body" data-testid="verify-org-state">
+            <p className="verify-status">Welcome{email ? `, ${email}` : ''}!</p>
+            <p className="verify-hint" style={{ marginBottom: 16 }}>Choose a name for your organization.</p>
+            <form onSubmit={handleCreateOrg}>
+              <input
+                className="verify-org-input"
+                type="text"
+                placeholder="e.g., kevlar, acme"
+                value={orgName}
+                onChange={e => setOrgName(e.target.value)}
+                autoFocus
+                required
+                data-testid="verify-org-name-input"
+                style={{
+                  width: '100%', padding: '10px 14px', marginBottom: 12,
+                  background: 'var(--bg-surface, #1a1d26)', border: '1px solid var(--border, #2d3345)',
+                  borderRadius: 4, color: 'var(--text-primary, #c8ccd4)',
+                  fontFamily: '"JetBrains Mono", monospace', fontSize: '0.9rem',
+                }}
+              />
+              <button
+                type="submit"
+                className="verify-accept-btn"
+                data-testid="verify-create-org-button"
+              >
+                Create account
+              </button>
+            </form>
+          </div>
+        )}
+
+        {state === 'creating' && (
+          <div className="verify-body" data-testid="verify-creating-state">
+            <div className="verify-spinner" />
+            <p className="verify-status">Creating your account...</p>
           </div>
         )}
 

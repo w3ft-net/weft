@@ -187,7 +187,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Token string `json:"token"`
+		Token   string `json:"token"`
+		OrgName string `json:"org_name"` // required for new users
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Token == "" {
 		http.Error(w, "token required", http.StatusBadRequest)
@@ -228,11 +229,17 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		// No invite — find existing user or create new user + customer.
 		user, _ = s.store.GetUserByEmail(email)
 		if user == nil {
-			// New user: derive customer name from email prefix.
-			customerName := email
-			if at := strings.Index(email, "@"); at > 0 {
-				customerName = email[:at]
+			// New user — require org name.
+			if req.OrgName == "" {
+				// Tell the frontend to prompt for org name.
+				json.NewEncoder(w).Encode(map[string]any{
+					"needs_org": true,
+					"email":     email,
+				})
+				return
 			}
+
+			customerName := strings.ToLower(strings.TrimSpace(req.OrgName))
 			cust, _ := s.store.FindOrCreateCustomer(customerName)
 			user, err = s.store.CreateUser(email, cust.ID)
 			if err != nil {
@@ -269,6 +276,9 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	// Consume the magic link now that we have a user.
+	s.store.ConsumeMagicLink(req.Token)
 
 	jwt, err := GenerateJWT(user, tier, s.jwtSecret)
 	if err != nil {
