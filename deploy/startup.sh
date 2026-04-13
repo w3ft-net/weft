@@ -149,7 +149,7 @@ if [ -n "$WEFT_AGENT_TOKEN" ] && command -v weftd >/dev/null 2>&1; then
 endpoint: localhost:9020
 token: ${WEFT_AGENT_TOKEN}
 sources:
-  - app: weft/${ROLE}
+  - target: weft/${ROLE}
     path: /opt/app/logs/*.log
     metrics:
       enabled: true

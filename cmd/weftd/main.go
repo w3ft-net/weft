@@ -33,7 +33,7 @@ type Config struct {
 }
 
 type SourceConfig struct {
-	App     string        `yaml:"app"`
+	Target  string        `yaml:"target"`          // namespace/subapp (e.g., "weft/coordinator")
 	Path    string        `yaml:"path"`            // file path or glob (file tailing)
 	Unit    string        `yaml:"unit,omitempty"`   // systemd unit name (journal tailing)
 	Metrics MetricsConfig `yaml:"metrics,omitempty"` // optional system metrics collection
@@ -137,13 +137,13 @@ func main() {
 	// Start sources — all stream through the coordinator, never direct to shards.
 	for _, src := range cfg.Sources {
 		if src.Unit != "" {
-			go runJournalTailer(ctx, coordClient, customer, hostname, src.App, src.Unit)
-			log.Printf("[%s] tailing journal unit %s", src.App, src.Unit)
+			go runJournalTailer(ctx, coordClient, customer, hostname, src.Target, src.Unit)
+			log.Printf("[%s] tailing journal unit %s", src.Target, src.Unit)
 		} else if src.Path != "" {
-			go watchGlob(ctx, coordClient, customer, hostname, src.App, src.Path)
+			go watchGlob(ctx, coordClient, customer, hostname, src.Target, src.Path)
 		}
 		if src.Metrics.Enabled {
-			go runMetricsCollector(ctx, coordClient, customer, hostname, src.App, src.Metrics)
+			go runMetricsCollector(ctx, coordClient, customer, hostname, src.Target, src.Metrics)
 		}
 	}
 

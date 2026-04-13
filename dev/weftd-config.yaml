@@ -2,7 +2,7 @@ endpoint: "coordinator:9020"
 token: "wft_dev_0000000000000000"
 customer: "kevlar"
 sources:
-  - app: "vimgym"
+  - target: "vimgym/default"
     metrics:
       enabled: true
       interval: 10s
