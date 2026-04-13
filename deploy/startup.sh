@@ -92,11 +92,10 @@ if [ "$ROLE" = "coordinator" ]; then
     --with-decryption \
     --query 'Parameter.Value' --output text 2>/dev/null || echo "")
 
-  MAILGUN_API_KEY=$(aws ssm get-parameter \
-    --name "/$APP_NAME/config/mailgun-api-key" \
+  EMAIL_HOST_PASSWORD=$(aws secretsmanager get-secret-value \
+    --secret-id "/$APP_NAME/EMAIL_HOST_PASSWORD" \
     --region "$REGION" \
-    --with-decryption \
-    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+    --query 'SecretString' --output text 2>/dev/null || echo "")
 
   cat > /opt/app/coordinator.env <<EOF
 WEFT_DB_DSN=${DB_DSN}
@@ -114,8 +113,7 @@ STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
 STRIPE_PRICE_SWATCH=price_1TK7iK2SENTbrh5us0SI1nRz
 STRIPE_PRICE_YARD=price_1TK7jI2SENTbrh5uP3wVxnlx
 STRIPE_PRICE_BOLT=price_1TK7kH2SENTbrh5upDvBswnG
-MAILGUN_API_KEY=${MAILGUN_API_KEY}
-MAILGUN_DOMAIN=w3ft.net
+EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD}
 EOF
   chown app:app /opt/app/coordinator.env
 fi
