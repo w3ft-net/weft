@@ -82,11 +82,14 @@ func (s *Server) Handler() http.Handler {
 	// Public routes (no auth).
 	mux.HandleFunc("POST /api/auth/login", s.handleLogin)
 	mux.HandleFunc("POST /api/auth/verify", s.handleVerify)
+	mux.HandleFunc("POST /api/auth/device", s.handleDeviceInit)
+	mux.HandleFunc("POST /api/auth/device/poll", s.handleDevicePoll)
 	mux.HandleFunc("POST /api/billing/webhook", s.handleStripeWebhook)
 
 	// Authenticated routes.
 	auth := http.NewServeMux()
 	auth.HandleFunc("GET /api/auth/me", s.handleMe)
+	auth.HandleFunc("POST /api/auth/device/approve", s.handleDeviceApprove)
 	auth.HandleFunc("POST /api/billing/checkout", s.handleCheckout)
 	auth.HandleFunc("GET /api/billing/usage", s.handleUsage)
 	auth.HandleFunc("GET /api/queries", s.handleListQueries)
@@ -122,6 +125,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/integrations/slack/callback", s.handleSlackCallback)
 
 	mux.Handle("/api/auth/me", AuthMiddleware(s.jwtSecret, auth))
+	mux.Handle("/api/auth/device/approve", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/billing/checkout", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/billing/usage", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/queries", AuthMiddleware(s.jwtSecret, auth))
@@ -1063,4 +1067,93 @@ func (s *Server) handleUpdateTeamName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]string{"name": req.Name})
+}
+
+// ── Device auth flow (CLI login) ─────────────────────────────────────
+
+// handleDeviceInit creates a new device code for CLI authorization.
+// POST /api/auth/device → {"device_code": "...", "user_code": "XXXX-XX", "expires_in": 600}
+func (s *Server) handleDeviceInit(w http.ResponseWriter, r *http.Request) {
+	dc, err := s.store.CreateDeviceCode()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{
+		"device_code": dc.DeviceCode,
+		"user_code":   dc.UserCode,
+		"expires_in":  600,
+	})
+}
+
+// handleDevicePoll checks if a device code has been approved.
+// POST /api/auth/device/poll {"device_code": "..."}
+// Returns {"status": "pending"} or {"status": "approved", "token": "jwt..."}
+func (s *Server) handleDevicePoll(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DeviceCode string `json:"device_code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.DeviceCode == "" {
+		http.Error(w, "device_code required", http.StatusBadRequest)
+		return
+	}
+
+	userID, err := s.store.PollDeviceCode(req.DeviceCode)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusGone)
+		return
+	}
+	if userID == "" {
+		json.NewEncoder(w).Encode(map[string]string{"status": "pending"})
+		return
+	}
+
+	user, err := s.store.GetUserByID(userID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	tier := "trial"
+	if sub, _ := s.store.ActiveSubscription(user.CustomerName); sub != nil {
+		tier = sub.Tier
+	}
+
+	jwt, err := GenerateJWT(user, tier, s.jwtSecret)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":   "approved",
+		"token":    jwt,
+		"email":    user.Email,
+		"customer": user.CustomerName,
+	})
+}
+
+// handleDeviceApprove approves a device code (requires auth — user clicks in browser).
+// POST /api/auth/device/approve {"user_code": "XXXX-XX"}
+func (s *Server) handleDeviceApprove(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		UserCode string `json:"user_code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserCode == "" {
+		http.Error(w, "user_code required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.ApproveDeviceCode(req.UserCode, claims.UserID); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"status": "approved"})
 }

@@ -25,7 +25,7 @@ func Open(dsn string) (*Store, error) {
 		&ShardRecord{}, &Subscription{},
 		&ShellFunction{}, &CronWatch{}, &CronResult{}, &NotifyConfig{},
 		&User{}, &MagicLink{}, &SavedQuery{}, &TeamMember{},
-		&AlertIncident{},
+		&AlertIncident{}, &DeviceCode{},
 	); err != nil {
 		return nil, err
 	}

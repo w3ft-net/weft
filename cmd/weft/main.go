@@ -2,8 +2,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,6 +28,9 @@ func main() {
 				os.Exit(1)
 			}
 			runOneShot(strings.Join(os.Args[2:], " "))
+			return
+		case "login":
+			runLogin()
 			return
 		case "setup":
 			runSetup()
@@ -122,6 +131,97 @@ func runOneShot(pipeline string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func runLogin() {
+	baseURL := os.Getenv("WEFT_ENDPOINT")
+	if baseURL == "" {
+		baseURL = "https://api.w3ft.net"
+	}
+
+	// Request a device code.
+	resp, err := http.Post(baseURL+"/api/auth/device", "application/json", nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "request device code: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		fmt.Fprintf(os.Stderr, "request device code: HTTP %d: %s\n", resp.StatusCode, string(body))
+		os.Exit(1)
+	}
+
+	var device struct {
+		DeviceCode string `json:"device_code"`
+		UserCode   string `json:"user_code"`
+		ExpiresIn  int    `json:"expires_in"`
+	}
+	json.Unmarshal(body, &device)
+
+	// Build the browser URL.
+	webBase := strings.Replace(baseURL, "api.", "", 1) // https://api.w3ft.net → https://w3ft.net
+	authURL := fmt.Sprintf("%s/device?code=%s", webBase, device.UserCode)
+
+	fmt.Printf("Open this URL to authorize the CLI:\n\n  %s\n\n", authURL)
+	fmt.Printf("Verify code: %s\n\n", device.UserCode)
+
+	// Try to open the browser.
+	if err := exec.Command("open", authURL).Start(); err != nil {
+		// Try xdg-open on Linux.
+		exec.Command("xdg-open", authURL).Start()
+	}
+
+	fmt.Printf("Waiting for authorization...")
+
+	// Poll until approved or expired.
+	client := &http.Client{Timeout: 10 * time.Second}
+	deadline := time.Now().Add(time.Duration(device.ExpiresIn) * time.Second)
+
+	for time.Now().Before(deadline) {
+		time.Sleep(2 * time.Second)
+		fmt.Print(".")
+
+		pollBody, _ := json.Marshal(map[string]string{"device_code": device.DeviceCode})
+		pollResp, err := client.Post(baseURL+"/api/auth/device/poll", "application/json", bytes.NewReader(pollBody))
+		if err != nil {
+			continue
+		}
+		pollData, _ := io.ReadAll(pollResp.Body)
+		pollResp.Body.Close()
+
+		if pollResp.StatusCode == http.StatusGone {
+			fmt.Fprintf(os.Stderr, "\nDevice code expired.\n")
+			os.Exit(1)
+		}
+
+		var result struct {
+			Status   string `json:"status"`
+			Token    string `json:"token"`
+			Email    string `json:"email"`
+			Customer string `json:"customer"`
+		}
+		json.Unmarshal(pollData, &result)
+
+		if result.Status == "approved" {
+			fmt.Printf("\n\nLogged in as %s (%s)\n", result.Email, result.Customer)
+
+			// Write config file.
+			home, _ := os.UserHomeDir()
+			configPath := filepath.Join(home, ".weft.yaml")
+			config := fmt.Sprintf("endpoint: %s\ntoken: %s\n", baseURL, result.Token)
+			if err := os.WriteFile(configPath, []byte(config), 0600); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not write %s: %v\n", configPath, err)
+				fmt.Printf("\nAdd this to your ~/.weft.yaml manually:\n\n  endpoint: %s\n  token: %s\n", baseURL, result.Token)
+			} else {
+				fmt.Printf("Config written to %s\n", configPath)
+			}
+			return
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "\nTimed out waiting for authorization.\n")
+	os.Exit(1)
 }
 
 func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {

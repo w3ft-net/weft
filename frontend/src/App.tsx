@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard'
 import Shell from './pages/Shell'
 import Downloads from './pages/Downloads'
 import Account from './pages/Account'
+import Device from './pages/Device'
 import ProtectedRoute from './components/ProtectedRoute'
 
 export default function App() {
@@ -25,6 +26,9 @@ export default function App() {
       } />
       <Route path="/account" element={
         <ProtectedRoute><Account /></ProtectedRoute>
+      } />
+      <Route path="/device" element={
+        <ProtectedRoute><Device /></ProtectedRoute>
       } />
     </Routes>
   )
