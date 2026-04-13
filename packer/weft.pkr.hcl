@@ -157,7 +157,8 @@ build {
       "cd /tmp/weft && CGO_ENABLED=1 go build -o /tmp/weft-coordinator ./cmd/coordinator",
       "cd /tmp/weft && CGO_ENABLED=1 go build -o /tmp/weft-shard ./cmd/shard",
       "cd /tmp/weft && CGO_ENABLED=1 go build -o /tmp/weft-compute ./cmd/compute",
-      "sudo mv /tmp/weft-coordinator /tmp/weft-shard /tmp/weft-compute /opt/app/bin/",
+      "cd /tmp/weft && CGO_ENABLED=0 go build -o /tmp/weft-api ./cmd/api",
+      "sudo mv /tmp/weft-coordinator /tmp/weft-shard /tmp/weft-compute /tmp/weft-api /opt/app/bin/",
       "sudo chmod +x /opt/app/bin/weft-*",
       "sudo chown app:app /opt/app/bin/weft-*",
       # Clean up
@@ -199,9 +200,14 @@ build {
     destination = "/tmp/weft-compute.service"
   }
 
+  provisioner "file" {
+    source      = "deploy/weft-api.service"
+    destination = "/tmp/weft-api.service"
+  }
+
   provisioner "shell" {
     inline = [
-      "sudo mv /tmp/weft-startup.service /tmp/weft-coordinator.service /tmp/weft-shard.service /tmp/weft-compute.service /etc/systemd/system/",
+      "sudo mv /tmp/weft-startup.service /tmp/weft-coordinator.service /tmp/weft-shard.service /tmp/weft-compute.service /tmp/weft-api.service /etc/systemd/system/",
       "sudo systemctl daemon-reload",
       "sudo systemctl enable weft-startup",
     ]

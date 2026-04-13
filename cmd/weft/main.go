@@ -47,34 +47,12 @@ func main() {
 		return
 	}
 
-	// Connect to remote coordinator.
-	remote, err := shell.NewRemoteCoordinator(cfg.Endpoint)
+	s, cleanup, err := connectRemote(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "connect to %s: %v\n", cfg.Endpoint, err)
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-	defer remote.Close()
-
-	apps, err := remote.ListApps()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "list apps: %v\n", err)
-		os.Exit(1)
-	}
-
-	s := &shell.Shell{
-		Query: func(pipeline string, start, end time.Time) (*shell.QueryResult, error) {
-			r, err := remote.Query(pipeline, start, end)
-			if err != nil {
-				return nil, err
-			}
-			return &shell.QueryResult{Rows: r.Rows, Text: r.Text}, nil
-		},
-		Follow: remote.Follow,
-		Start:  time.Now().Add(-24 * time.Hour),
-		End:    time.Now(),
-		Apps:   apps,
-		FS:     shell.NewRemoteFS(remote.Client(), cfg.Customer, apps),
-	}
+	defer cleanup()
 
 	runShell(s)
 }
@@ -133,29 +111,78 @@ func runOneShot(pipeline string) {
 		os.Exit(1)
 	}
 
-	remote, err := shell.NewRemoteCoordinator(cfg.Endpoint)
+	s, cleanup, err := connectRemote(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "connect to %s: %v\n", cfg.Endpoint, err)
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-	defer remote.Close()
-
-	s := &shell.Shell{
-		Query: func(p string, start, end time.Time) (*shell.QueryResult, error) {
-			r, err := remote.Query(p, start, end)
-			if err != nil {
-				return nil, err
-			}
-			return &shell.QueryResult{Rows: r.Rows, Text: r.Text}, nil
-		},
-		Start: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
-		End:   time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
-	}
+	defer cleanup()
 
 	if err := s.ExecNonInteractive(pipeline, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
+	endpoint := cfg.Endpoint
+
+	// HTTP mode: endpoint is a URL (https://api.w3ft.net).
+	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
+		if cfg.Token == "" {
+			return nil, nil, fmt.Errorf("WEFT_TOKEN required for HTTP mode — get one from the web dashboard")
+		}
+		remote := shell.NewHTTPCoordinator(endpoint, cfg.Token)
+
+		apps, err := remote.ListApps()
+		if err != nil {
+			return nil, nil, fmt.Errorf("list apps: %w", err)
+		}
+
+		s := &shell.Shell{
+			Query: func(pipeline string, start, end time.Time) (*shell.QueryResult, error) {
+				r, err := remote.Query(pipeline, start, end)
+				if err != nil {
+					return nil, err
+				}
+				return &shell.QueryResult{Rows: r.Rows, Text: r.Text}, nil
+			},
+			Follow: remote.Follow,
+			Start:  time.Now().Add(-24 * time.Hour),
+			End:    time.Now(),
+			Apps:   apps,
+			FS:     shell.NewHTTPRemoteFS(endpoint, cfg.Token, apps),
+		}
+		return s, func() {}, nil
+	}
+
+	// gRPC mode: endpoint is host:port.
+	remote, err := shell.NewRemoteCoordinator(endpoint)
+	if err != nil {
+		return nil, nil, fmt.Errorf("connect to %s: %w", endpoint, err)
+	}
+
+	apps, err := remote.ListApps()
+	if err != nil {
+		remote.Close()
+		return nil, nil, fmt.Errorf("list apps: %w", err)
+	}
+
+	s := &shell.Shell{
+		Query: func(pipeline string, start, end time.Time) (*shell.QueryResult, error) {
+			r, err := remote.Query(pipeline, start, end)
+			if err != nil {
+				return nil, err
+			}
+			return &shell.QueryResult{Rows: r.Rows, Text: r.Text}, nil
+		},
+		Follow: remote.Follow,
+		Start:  time.Now().Add(-24 * time.Hour),
+		End:    time.Now(),
+		Apps:   apps,
+		FS:     shell.NewRemoteFS(remote.Client(), cfg.Customer, apps),
+	}
+	return s, func() { remote.Close() }, nil
 }
 
 func dimText(s string) string {
