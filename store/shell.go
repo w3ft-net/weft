@@ -229,7 +229,8 @@ func (s *Store) LatestCronResult(customerID uint, watchName string) (*CronResult
 type NotifyConfig struct {
 	gorm.Model
 	CustomerID    uint       `gorm:"not null;uniqueIndex"`
-	SlackWebhook  string     // incoming webhook URL from Slack OAuth
+	SlackWebhook  string     // incoming webhook URL (legacy, may be empty)
+	SlackBotToken string     // bot OAuth token for chat.postMessage
 	SlackTeamName string     // workspace name (for display)
 	PagerDutyKeys string     `gorm:"type:text"` // JSON: {"api": "key1", "workers": "key2"}
 	Routes        string     `gorm:"type:text"` // JSON: {"error-check": "slack:#ops", ...}
@@ -255,6 +256,10 @@ func (s *Store) SaveNotifyConfig(customerID uint, slackWebhook string) error {
 }
 
 func (s *Store) SaveSlackWebhook(customerID uint, webhook, teamName string) error {
+	return s.SaveSlackConfig(customerID, webhook, "", teamName)
+}
+
+func (s *Store) SaveSlackConfig(customerID uint, webhook, botToken, teamName string) error {
 	now := time.Now()
 	var nc NotifyConfig
 	result := s.db.Where("customer_id = ?", customerID).First(&nc)
@@ -262,12 +267,14 @@ func (s *Store) SaveSlackWebhook(customerID uint, webhook, teamName string) erro
 		return s.db.Create(&NotifyConfig{
 			CustomerID:    customerID,
 			SlackWebhook:  webhook,
+			SlackBotToken: botToken,
 			SlackTeamName: teamName,
 			ConfiguredAt:  &now,
 		}).Error
 	}
 	return s.db.Model(&nc).Updates(map[string]any{
 		"slack_webhook":   webhook,
+		"slack_bot_token": botToken,
 		"slack_team_name": teamName,
 		"configured_at":   &now,
 	}).Error

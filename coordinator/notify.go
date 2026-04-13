@@ -43,11 +43,11 @@ func (n *Notifier) Send(customerID uint, watch *store.CronWatch, stderr string) 
 	return fmt.Errorf("unknown notification destination: %s", dest)
 }
 
-// sendSlack posts an alert to a Slack channel via the customer's webhook.
+// sendSlack posts an alert to a Slack channel via the Slack API (chat.postMessage).
 func (n *Notifier) sendSlack(customerID uint, watchName, channel, stderr string) error {
 	nc, err := n.Store.GetNotifyConfig(customerID)
-	if err != nil || nc.SlackWebhook == "" {
-		return fmt.Errorf("no Slack webhook configured")
+	if err != nil {
+		return fmt.Errorf("no Slack configuration found")
 	}
 
 	// Truncate stderr if very long.
@@ -55,17 +55,57 @@ func (n *Notifier) sendSlack(customerID uint, watchName, channel, stderr string)
 		stderr = stderr[:1000] + "\n... (truncated)"
 	}
 
-	payload := slackPayload{
-		Channel: channel,
-		Text:    fmt.Sprintf(":rotating_light: *weft alert: %s*\n```\n%s\n```", watchName, stderr),
+	text := fmt.Sprintf(":rotating_light: *weft alert: %s*\n```\n%s\n```", watchName, stderr)
+
+	// Prefer bot token (chat:write scope, any channel).
+	if nc.SlackBotToken != "" {
+		return n.postSlackMessage(nc.SlackBotToken, channel, text, watchName)
 	}
 
-	body, err := json.Marshal(payload)
+	// Fallback to webhook (legacy, single-channel).
+	if nc.SlackWebhook != "" {
+		return n.postSlackWebhook(nc.SlackWebhook, channel, text, watchName)
+	}
+
+	return fmt.Errorf("no Slack token or webhook configured")
+}
+
+func (n *Notifier) postSlackMessage(botToken, channel, text, watchName string) error {
+	payload, _ := json.Marshal(map[string]string{
+		"channel": channel,
+		"text":    text,
+	})
+
+	req, _ := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	req.Header.Set("Authorization", "Bearer "+botToken)
+
+	resp, err := n.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("marshal slack payload: %w", err)
+		return fmt.Errorf("slack API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	if !result.OK {
+		return fmt.Errorf("slack API error: %s", result.Error)
 	}
 
-	resp, err := n.client.Post(nc.SlackWebhook, "application/json", bytes.NewReader(body))
+	log.Printf("notify: sent Slack alert for watch %s to %s", watchName, channel)
+	return nil
+}
+
+func (n *Notifier) postSlackWebhook(webhook, channel, text, watchName string) error {
+	payload, _ := json.Marshal(map[string]string{
+		"channel": channel,
+		"text":    text,
+	})
+
+	resp, err := n.client.Post(webhook, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("slack webhook: %w", err)
 	}
@@ -75,11 +115,6 @@ func (n *Notifier) sendSlack(customerID uint, watchName, channel, stderr string)
 		return fmt.Errorf("slack webhook returned %d", resp.StatusCode)
 	}
 
-	log.Printf("notify: sent Slack alert for watch %s to %s", watchName, channel)
+	log.Printf("notify: sent Slack alert for watch %s to %s (webhook)", watchName, channel)
 	return nil
-}
-
-type slackPayload struct {
-	Channel string `json:"channel,omitempty"`
-	Text    string `json:"text"`
 }

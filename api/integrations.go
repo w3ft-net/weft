@@ -79,7 +79,7 @@ func (s *Server) handleSlackConnect(w http.ResponseWriter, r *http.Request) {
 
 	redirectURI := s.apiBaseURL() + "/api/integrations/slack/callback"
 	authURL := fmt.Sprintf(
-		"https://slack.com/oauth/v2/authorize?client_id=%s&scope=incoming-webhook&redirect_uri=%s&state=%s",
+		"https://slack.com/oauth/v2/authorize?client_id=%s&scope=chat:write&redirect_uri=%s&state=%s",
 		url.QueryEscape(s.SlackClientID),
 		url.QueryEscape(redirectURI),
 		url.QueryEscape(stateToken),
@@ -121,15 +121,20 @@ func (s *Server) handleSlackCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	webhook := tokenResp.IncomingWebhook.URL
+	botToken := tokenResp.AccessToken
 	teamName := tokenResp.Team.Name
-	if webhook == "" {
-		log.Printf("Slack OAuth: no webhook in response")
+	if botToken == "" {
+		log.Printf("Slack OAuth: no access_token in response")
 		http.Redirect(w, r, s.baseURL+"/account?integration=slack&status=error", http.StatusFound)
 		return
 	}
 
-	s.store.SaveSlackWebhook(custID, webhook, teamName)
+	// Save bot token (for chat.postMessage) and webhook (if present, for legacy).
+	webhook := ""
+	if tokenResp.IncomingWebhook.URL != "" {
+		webhook = tokenResp.IncomingWebhook.URL
+	}
+	s.store.SaveSlackConfig(custID, webhook, botToken, teamName)
 
 	http.Redirect(w, r, s.baseURL+"/account?integration=slack&status=success", http.StatusFound)
 }
