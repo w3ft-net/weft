@@ -23,9 +23,10 @@ func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) 
 
 	nc, _ := s.store.GetNotifyConfig(custID)
 
+	slackConnected := nc != nil && (nc.SlackBotToken != "" || nc.SlackWebhook != "")
 	resp := map[string]any{
 		"slack": map[string]any{
-			"connected": nc != nil && nc.SlackWebhook != "",
+			"connected": slackConnected,
 			"team_name": "",
 		},
 		"pagerduty": map[string]any{
@@ -36,7 +37,7 @@ func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if nc != nil {
-		if nc.SlackWebhook != "" {
+		if slackConnected {
 			resp["slack"] = map[string]any{
 				"connected":     true,
 				"team_name":     nc.SlackTeamName,
