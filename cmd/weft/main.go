@@ -32,6 +32,9 @@ func main() {
 		case "login":
 			runLogin()
 			return
+		case "namespace", "ns":
+			runNamespace()
+			return
 		case "setup":
 			runSetup()
 			return
@@ -222,6 +225,69 @@ func runLogin() {
 
 	fmt.Fprintf(os.Stderr, "\nTimed out waiting for authorization.\n")
 	os.Exit(1)
+}
+
+func runNamespace() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: weft namespace {list|create}")
+		os.Exit(1)
+	}
+
+	cfg, err := shell.LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "no .weft.yaml: %v\n", err)
+		os.Exit(1)
+	}
+
+	if !strings.HasPrefix(cfg.Endpoint, "http") {
+		fmt.Fprintln(os.Stderr, "namespace commands require HTTP endpoint")
+		os.Exit(1)
+	}
+
+	remote := shell.NewHTTPCoordinator(cfg.Endpoint, cfg.Token)
+
+	switch os.Args[2] {
+	case "list":
+		nss, err := remote.ListNamespaces()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "list namespaces: %v\n", err)
+			os.Exit(1)
+		}
+		if len(nss) == 0 {
+			fmt.Println("No namespaces. Create one with: weft namespace create --name <name>")
+			return
+		}
+		for _, ns := range nss {
+			fmt.Println(ns.Name)
+		}
+
+	case "create":
+		args := os.Args[3:]
+		var name string
+		for i := 0; i < len(args); i++ {
+			if args[i] == "--name" && i+1 < len(args) {
+				name = args[i+1]
+				i++
+			}
+		}
+		if name == "" && len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+			name = args[0]
+		}
+		if name == "" {
+			fmt.Fprintln(os.Stderr, "usage: weft namespace create --name <name>")
+			os.Exit(1)
+		}
+		ns, err := remote.CreateNamespace(name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "create namespace: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Created namespace: %s\n", ns.Name)
+
+	default:
+		fmt.Fprintf(os.Stderr, "unknown namespace command: %s\n", os.Args[2])
+		os.Exit(1)
+	}
 }
 
 func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {

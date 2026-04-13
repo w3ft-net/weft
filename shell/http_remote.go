@@ -135,6 +135,52 @@ func (h *HTTPCoordinator) ListApps() ([]string, error) {
 // Client returns nil — HTTP mode doesn't have a gRPC client.
 func (h *HTTPCoordinator) Client() pb.WeftCoordinatorClient { return nil }
 
+// NamespaceInfo holds namespace metadata.
+type NamespaceInfo struct {
+	Name string `json:"name"`
+	ID   uint   `json:"id"`
+}
+
+func (h *HTTPCoordinator) ListNamespaces() ([]NamespaceInfo, error) {
+	req, _ := http.NewRequest("GET", h.baseURL+"/api/namespaces", nil)
+	req.Header.Set("Authorization", "Bearer "+h.token)
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		msg, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var result struct {
+		Namespaces []NamespaceInfo `json:"namespaces"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	return result.Namespaces, nil
+}
+
+func (h *HTTPCoordinator) CreateNamespace(name string) (*NamespaceInfo, error) {
+	body, _ := json.Marshal(map[string]string{"name": name})
+	req, _ := http.NewRequest("POST", h.baseURL+"/api/namespaces", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+h.token)
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		msg, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var ns NamespaceInfo
+	json.NewDecoder(resp.Body).Decode(&ns)
+	return &ns, nil
+}
+
 func (h *HTTPCoordinator) CreateToken(customer, label, app string) (string, error) {
 	body, _ := json.Marshal(map[string]string{"label": label, "app": app})
 	req, _ := http.NewRequest("POST", h.baseURL+"/api/tokens", bytes.NewReader(body))

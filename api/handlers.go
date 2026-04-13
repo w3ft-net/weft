@@ -605,6 +605,38 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "label required", http.StatusBadRequest)
 		return
 	}
+	if req.App == "" {
+		http.Error(w, "app required (e.g., weft/coordinator)", http.StatusBadRequest)
+		return
+	}
+
+	// Validate that the namespace exists.
+	ns := req.App
+	if idx := strings.Index(ns, "/"); idx >= 0 {
+		ns = ns[:idx]
+	}
+	nss, _ := s.store.ListNamespaces(custID)
+	found := false
+	for _, n := range nss {
+		if n.Name == ns {
+			found = true
+			break
+		}
+	}
+	if !found {
+		http.Error(w, fmt.Sprintf("namespace %q does not exist — create it first", ns), http.StatusBadRequest)
+		return
+	}
+
+	// Check permission: owner or can_create_tokens on namespace.
+	if !s.isOwner(claims.CustomerName, claims.Email) {
+		nsObj, _ := s.store.FindOrCreateNamespace(custID, ns)
+		perm, err := s.store.GetNamespacePermission(claims.UserID, nsObj.ID)
+		if err != nil || !perm.CanCreateTokens {
+			http.Error(w, "forbidden: no token permission on this namespace", http.StatusForbidden)
+			return
+		}
+	}
 
 	tok, err := s.store.CreateAgentToken(custID, req.Label, req.App)
 	if err != nil {
