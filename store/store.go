@@ -21,11 +21,11 @@ func Open(dsn string) (*Store, error) {
 		return nil, err
 	}
 	if err := db.AutoMigrate(
-		&Customer{}, &App{}, &Account{}, &LogGroup{}, &AgentToken{},
+		&Customer{}, &Namespace{}, &Account{}, &LogGroup{}, &AgentToken{},
 		&ShardRecord{}, &Subscription{},
 		&ShellFunction{}, &CronWatch{}, &CronResult{}, &NotifyConfig{},
 		&User{}, &MagicLink{}, &SavedQuery{}, &TeamMember{},
-		&AlertIncident{}, &DeviceCode{},
+		&AlertIncident{}, &DeviceCode{}, &NamespacePermission{},
 	); err != nil {
 		return nil, err
 	}

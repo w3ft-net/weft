@@ -6,17 +6,18 @@ type Customer struct {
 	gorm.Model
 	Name        string       `gorm:"uniqueIndex;not null"`
 	DisplayName string       // human-readable org/team name (editable)
-	Apps        []App        `gorm:"foreignKey:CustomerID"`
+	Namespaces  []Namespace  `gorm:"foreignKey:CustomerID"`
 	Accounts    []Account    `gorm:"foreignKey:CustomerID"`
 	AgentTokens []AgentToken `gorm:"foreignKey:CustomerID"`
 }
 
-// App is a named log source owned by a customer. Tokens and ingestion
-// configuration (CloudWatch, Kinesis, agent) hang off apps.
-type App struct {
+// Namespace is a grouping of log sources owned by a customer.
+// e.g., "weft" (containing coordinator, shard, api sub-apps).
+// Agent tokens and log ingestion reference namespaces via "namespace/subapp" app names.
+type Namespace struct {
 	gorm.Model
-	CustomerID uint   `gorm:"not null;uniqueIndex:idx_app_customer_name"`
-	Name       string `gorm:"not null;uniqueIndex:idx_app_customer_name"`
+	CustomerID uint   `gorm:"not null;uniqueIndex:idx_ns_customer_name"`
+	Name       string `gorm:"not null;uniqueIndex:idx_ns_customer_name"`
 }
 
 // FindOrCreateCustomer returns the customer, creating if needed.
@@ -49,30 +50,53 @@ func (s *Store) UpdateCustomerDisplayName(name, displayName string) error {
 	return s.db.Model(&Customer{}).Where("name = ?", name).Update("display_name", displayName).Error
 }
 
-// --- Apps ---
+// --- Namespaces ---
 
-// FindOrCreateApp returns the app, creating if needed.
-func (s *Store) FindOrCreateApp(customerID uint, name string) (*App, error) {
-	var a App
-	result := s.db.Where("customer_id = ? AND name = ?", customerID, name).FirstOrCreate(&a, App{CustomerID: customerID, Name: name})
-	return &a, result.Error
+// FindOrCreateNamespace returns the namespace, creating if needed.
+func (s *Store) FindOrCreateNamespace(customerID uint, name string) (*Namespace, error) {
+	var ns Namespace
+	result := s.db.Where("customer_id = ? AND name = ?", customerID, name).FirstOrCreate(&ns, Namespace{CustomerID: customerID, Name: name})
+	return &ns, result.Error
 }
 
-// ListApps returns all apps for a customer.
-func (s *Store) ListApps(customerID uint) ([]App, error) {
-	var apps []App
-	err := s.db.Where("customer_id = ?", customerID).Order("name").Find(&apps).Error
-	return apps, err
+// ListNamespaces returns all namespaces for a customer.
+func (s *Store) ListNamespaces(customerID uint) ([]Namespace, error) {
+	var nss []Namespace
+	err := s.db.Where("customer_id = ?", customerID).Order("name").Find(&nss).Error
+	return nss, err
 }
 
-// AllAppNames returns distinct app names across all customers.
-func (s *Store) AllAppNames() ([]string, error) {
+// AllNamespaceNames returns distinct namespace names across all customers.
+func (s *Store) AllNamespaceNames() ([]string, error) {
 	var names []string
-	err := s.db.Model(&App{}).Distinct().Pluck("name", &names).Error
+	err := s.db.Model(&Namespace{}).Distinct().Pluck("name", &names).Error
 	return names, err
 }
 
-// DeleteApp removes an app.
+// DeleteNamespace removes a namespace.
+func (s *Store) DeleteNamespace(customerID uint, name string) error {
+	return s.db.Where("customer_id = ? AND name = ?", customerID, name).Delete(&Namespace{}).Error
+}
+
+// --- Backward compat aliases ---
+// TODO: remove after all callers are migrated
+
+// FindOrCreateApp is an alias for FindOrCreateNamespace.
+func (s *Store) FindOrCreateApp(customerID uint, name string) (*Namespace, error) {
+	return s.FindOrCreateNamespace(customerID, name)
+}
+
+// AllAppNames is an alias for AllNamespaceNames.
+func (s *Store) AllAppNames() ([]string, error) {
+	return s.AllNamespaceNames()
+}
+
+// ListApps is an alias for ListNamespaces.
+func (s *Store) ListApps(customerID uint) ([]Namespace, error) {
+	return s.ListNamespaces(customerID)
+}
+
+// DeleteApp is an alias for DeleteNamespace.
 func (s *Store) DeleteApp(customerID uint, name string) error {
-	return s.db.Where("customer_id = ? AND name = ?", customerID, name).Delete(&App{}).Error
+	return s.DeleteNamespace(customerID, name)
 }

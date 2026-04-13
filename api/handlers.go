@@ -189,35 +189,57 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := s.store.ValidateMagicLink(req.Token)
+	email, err := s.store.ValidateMagicLink(req.Token)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
 
-	// Ensure a subscription exists. For new users, create a trial.
+	var user *store.User
 	tier := "trial"
-	if s.store != nil {
-		sub, _ := s.store.ActiveSubscription(user.CustomerName)
-		if sub != nil {
+
+	// Check for pending team invite first.
+	if invite, err := s.store.GetPendingTeamMemberByEmail(email); err == nil {
+		// Invited user — join that customer.
+		cust, _ := s.store.GetCustomerByName(invite.CustomerName)
+		if cust == nil {
+			http.Error(w, "customer not found", http.StatusInternalServerError)
+			return
+		}
+		user, err = s.store.GetUserByEmailAndCustomer(email, cust.ID)
+		if err != nil {
+			user, err = s.store.CreateUser(email, cust.ID)
+			if err != nil {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+		}
+		s.store.AcceptTeamMember(invite.ID, user.ID)
+
+		if sub, _ := s.store.ActiveSubscription(invite.CustomerName); sub != nil {
 			tier = sub.Tier
-		} else {
-			// New user — assign a customer name, create trial, create owner membership.
-			if user.CustomerName == "" {
-				// Derive customer name from email prefix.
-				customerName := user.Email
-				if at := strings.Index(customerName, "@"); at > 0 {
-					customerName = user.Email[:at]
-				}
-				s.store.FindOrCreateCustomer(customerName)
-				s.store.UpdateUserCustomerName(user.ID, customerName)
-				user.CustomerName = customerName
+		}
+	} else {
+		// No invite — find existing user or create new user + customer.
+		user, _ = s.store.GetUserByEmail(email)
+		if user == nil {
+			// New user: derive customer name from email prefix.
+			customerName := email
+			if at := strings.Index(email, "@"); at > 0 {
+				customerName = email[:at]
+			}
+			cust, _ := s.store.FindOrCreateCustomer(customerName)
+			user, err = s.store.CreateUser(email, cust.ID)
+			if err != nil {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
 			}
 
+			// Create trial subscription.
 			trialEnd := time.Now().Add(14 * 24 * time.Hour)
-			_ = s.store.CreateSubscription(&store.Subscription{
+			s.store.CreateSubscription(&store.Subscription{
 				ID:         uuid.New().String(),
-				CustomerID: user.CustomerName,
+				CustomerID: customerName,
 				Tier:       "trial",
 				Status:     "active",
 				StartsAt:   time.Now(),
@@ -225,10 +247,10 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			})
 
 			// Create owner team membership.
-			_ = s.store.CreateTeamMember(&store.TeamMember{
+			s.store.CreateTeamMember(&store.TeamMember{
 				ID:           uuid.New().String(),
-				CustomerName: user.CustomerName,
-				Email:        user.Email,
+				CustomerName: customerName,
+				Email:        email,
 				UserID:       &user.ID,
 				Role:         "owner",
 				Status:       "active",
@@ -236,6 +258,10 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 				CreatedAt:    time.Now(),
 				UpdatedAt:    time.Now(),
 			})
+		} else {
+			if sub, _ := s.store.ActiveSubscription(user.Customer.Name); sub != nil {
+				tier = sub.Tier
+			}
 		}
 	}
 
@@ -964,26 +990,31 @@ func (s *Server) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate magic link + find/create user.
-	user, err := s.store.ValidateMagicLink(req.Token)
+	// Validate magic link.
+	email, err := s.store.ValidateMagicLink(req.Token)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
 
 	// Find pending invite.
-	member, err := s.store.GetPendingTeamMemberByEmail(user.Email)
+	member, err := s.store.GetPendingTeamMemberByEmail(email)
 	if err != nil {
 		http.Error(w, "no pending invite found", http.StatusNotFound)
 		return
 	}
 
-	// Assign user to the team.
-	s.store.UpdateUserCustomerName(user.ID, member.CustomerName)
+	// Find or create user under the invite's customer.
+	cust, _ := s.store.GetCustomerByName(member.CustomerName)
+	if cust == nil {
+		http.Error(w, "customer not found", http.StatusInternalServerError)
+		return
+	}
+	user, _ := s.store.GetUserByEmailAndCustomer(email, cust.ID)
+	if user == nil {
+		user, _ = s.store.CreateUser(email, cust.ID)
+	}
 	s.store.AcceptTeamMember(member.ID, user.ID)
-
-	// Reload user for JWT generation.
-	user, _ = s.store.GetUserByID(user.ID)
 
 	tier := "trial"
 	if sub, _ := s.store.ActiveSubscription(member.CustomerName); sub != nil {
@@ -1035,10 +1066,9 @@ func (s *Server) handleRemoveTeamMember(w http.ResponseWriter, r *http.Request) 
 	// Remove.
 	s.store.RemoveTeamMember(id)
 
-	// Clear the user's customer association.
-	if target.UserID != nil {
-		s.store.UpdateUserCustomerName(*target.UserID, "")
-	}
+	// Note: we don't clear the user's CustomerID — the user record
+	// stays associated with the customer for audit purposes. The
+	// TeamMember status=removed controls access.
 
 	w.WriteHeader(http.StatusNoContent)
 }

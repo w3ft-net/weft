@@ -34,16 +34,21 @@ func MinWatchInterval(tier string) time.Duration {
 	}
 }
 
-// User represents a weft customer account. Billing state lives in the
-// subscriptions table (Subscription), not here.
+// User represents a weft user. A user belongs to a customer (org).
+// The composite unique index allows a user to exist under multiple customers.
 type User struct {
-	ID               string `gorm:"primaryKey"`
-	Email            string `gorm:"uniqueIndex;not null"`
-	Name             string
-	CustomerName     string // maps to Customer.Name
-	StripeCustomerID string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID                 string   `gorm:"primaryKey"`
+	Email              string   `gorm:"not null;uniqueIndex:idx_user_email_customer"`
+	CustomerID         uint     `gorm:"not null;uniqueIndex:idx_user_email_customer"`
+	Customer           Customer `gorm:"foreignKey:CustomerID"`
+	Name               string
+	StripeCustomerID   string
+	CanCreateNamespace bool `gorm:"not null;default:false"`
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+
+	// Deprecated: use CustomerID. Kept temporarily for migration.
+	CustomerName string `gorm:"-"` // excluded from DB, computed on read
 }
 
 // MagicLink is a one-time-use login token.
@@ -105,14 +110,14 @@ func SeatLimit(tier string) int {
 
 // --- Users ---
 
-func (s *Store) CreateUser(email, customerName string) (*User, error) {
+func (s *Store) CreateUser(email string, customerID uint) (*User, error) {
 	now := time.Now()
 	user := User{
-		ID:           uuid.New().String(),
-		Email:        email,
-		CustomerName: customerName,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:         uuid.New().String(),
+		Email:      email,
+		CustomerID: customerID,
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 	if err := s.db.Create(&user).Error; err != nil {
 		return nil, err
@@ -122,17 +127,29 @@ func (s *Store) CreateUser(email, customerName string) (*User, error) {
 
 func (s *Store) GetUserByEmail(email string) (*User, error) {
 	var user User
-	if err := s.db.Where("email = ?", email).First(&user).Error; err != nil {
+	if err := s.db.Preload("Customer").Where("email = ?", email).First(&user).Error; err != nil {
 		return nil, err
 	}
+	user.CustomerName = user.Customer.Name
+	return &user, nil
+}
+
+// GetUserByEmailAndCustomer finds a user for a specific customer.
+func (s *Store) GetUserByEmailAndCustomer(email string, customerID uint) (*User, error) {
+	var user User
+	if err := s.db.Preload("Customer").Where("email = ? AND customer_id = ?", email, customerID).First(&user).Error; err != nil {
+		return nil, err
+	}
+	user.CustomerName = user.Customer.Name
 	return &user, nil
 }
 
 func (s *Store) GetUserByID(id string) (*User, error) {
 	var user User
-	if err := s.db.First(&user, "id = ?", id).Error; err != nil {
+	if err := s.db.Preload("Customer").First(&user, "id = ?", id).Error; err != nil {
 		return nil, err
 	}
+	user.CustomerName = user.Customer.Name
 	return &user, nil
 }
 
@@ -162,23 +179,15 @@ func (s *Store) CreateMagicLink(email string) (string, error) {
 	return token, nil
 }
 
-func (s *Store) ValidateMagicLink(token string) (*User, error) {
+// ValidateMagicLink validates and consumes a magic link token.
+// Returns the email. User creation/lookup is handled by the API layer.
+func (s *Store) ValidateMagicLink(token string) (string, error) {
 	var link MagicLink
 	if err := s.db.Where("token = ? AND used = ? AND expires_at > ?", token, false, time.Now()).First(&link).Error; err != nil {
-		return nil, fmt.Errorf("invalid or expired magic link")
+		return "", fmt.Errorf("invalid or expired magic link")
 	}
 	s.db.Model(&link).Update("used", true)
-
-	// Find or create user.
-	user, err := s.GetUserByEmail(link.Email)
-	if err != nil {
-		// New user.
-		user, err = s.CreateUser(link.Email, "")
-		if err != nil {
-			return nil, err
-		}
-	}
-	return user, nil
+	return link.Email, nil
 }
 
 // GetLastMagicLinkToken returns the most recent token for an email (for testing).
@@ -291,10 +300,10 @@ func (s *Store) CountTeamMembers(customerName string) (int, error) {
 	return int(count), err
 }
 
-// UpdateUserCustomerName sets the customer association for a user.
-func (s *Store) UpdateUserCustomerName(userID, customerName string) error {
+// UpdateUserCustomer sets the customer association for a user.
+func (s *Store) UpdateUserCustomer(userID string, customerID uint) error {
 	return s.db.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
-		"customer_name": customerName,
-		"updated_at":    time.Now(),
+		"customer_id": customerID,
+		"updated_at":  time.Now(),
 	}).Error
 }
