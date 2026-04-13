@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react'
 import SidebarNav from '../components/SidebarNav'
 import {
-  getUsage, getTokens, createToken, revokeToken, createCheckout,
+  getUsage, createCheckout,
   getTeam, inviteMember, removeMember, updateTeamName,
   getIntegrations, connectSlack, disconnectSlack, savePagerDutyKey, disconnectPagerDuty,
-  type Usage, type AgentToken, type TeamResponse, type IntegrationsResponse,
+  type Usage, type TeamResponse, type IntegrationsResponse,
 } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import './Dashboard.css'
@@ -20,11 +20,6 @@ function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric',
   })
-}
-
-function truncateToken(tok: string): string {
-  if (tok.length <= 16) return tok
-  return `${tok.slice(0, 8)}...${tok.slice(-4)}`
 }
 
 // ── Plan tiers ─────────────────────────────────────────────────────────────
@@ -158,147 +153,6 @@ function SubscriptionCard({ usage }: { usage: Usage | null }) {
     </div>
   )
 }
-
-// ── Tokens Card ────────────────────────────────────────────────────────────
-
-function CreateTokenForm({ onCreated, onCancel }: {
-  onCreated: (t: AgentToken & { secret: string }) => void
-  onCancel: () => void
-}) {
-  const [label, setLabel] = useState('')
-  const [app, setApp] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!label.trim()) return
-    setError('')
-    setLoading(true)
-    try {
-      const tok = await createToken(label.trim(), app.trim())
-      onCreated(tok)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create token.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <form className="create-token-form" onSubmit={handleSubmit} data-testid="account-create-token-form">
-      <div className="form-row">
-        <div className="form-field">
-          <label className="form-label">Label</label>
-          <input className="form-input" placeholder="prod-web-01" value={label}
-            onChange={e => setLabel(e.target.value)} data-testid="account-token-label-input" required />
-        </div>
-        <div className="form-field">
-          <label className="form-label">App</label>
-          <input className="form-input" placeholder="myapp" value={app}
-            onChange={e => setApp(e.target.value)} data-testid="account-token-app-input" />
-        </div>
-      </div>
-      {error && <div className="form-error">{error}</div>}
-      <div className="form-actions">
-        <button type="submit" className="btn-action btn-action-primary"
-          disabled={loading} data-testid="account-token-create-submit-button">
-          {loading ? 'Creating...' : 'Create token'}
-        </button>
-        <button type="button" className="btn-action" onClick={onCancel}
-          data-testid="account-token-create-cancel-button">Cancel</button>
-      </div>
-    </form>
-  )
-}
-
-function TokensCard({ tokens, onRefresh }: { tokens: AgentToken[]; onRefresh: () => void }) {
-  const [showForm, setShowForm] = useState(false)
-  const [newToken, setNewToken] = useState<(AgentToken & { secret: string }) | null>(null)
-  const [revoking, setRevoking] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
-
-  async function handleRevoke(tok: string) {
-    setRevoking(tok)
-    try { await revokeToken(tok) } catch { /* */ }
-    finally { setRevoking(null); onRefresh() }
-  }
-
-  return (
-    <div className="dash-card" data-testid="account-tokens-card">
-      <div className="dash-card-header">
-        <h2 className="dash-card-title">Agent tokens</h2>
-        {!showForm && !newToken && (
-          <button className="btn-action btn-action-primary" onClick={() => setShowForm(true)}
-            data-testid="account-create-token-button">+ Create token</button>
-        )}
-      </div>
-
-      {newToken && (
-        <div className="token-reveal" data-testid="account-token-reveal">
-          <div className="token-reveal-label">Token created — copy now, it won't be shown again.</div>
-          <div className="token-reveal-value" data-testid="account-token-secret">{newToken.secret}</div>
-          <div className="form-actions">
-            <button className="btn-action btn-action-primary" data-testid="account-token-copy-button"
-              onClick={() => { navigator.clipboard.writeText(newToken.secret); setCopied(true); setTimeout(() => setCopied(false), 2000) }}>
-              {copied ? 'Copied!' : 'Copy to clipboard'}
-            </button>
-            <button className="btn-action" onClick={() => { setNewToken(null); onRefresh() }}
-              data-testid="account-token-reveal-done-button">Done</button>
-          </div>
-        </div>
-      )}
-
-      {showForm && (
-        <CreateTokenForm
-          onCreated={t => { setShowForm(false); setNewToken(t) }}
-          onCancel={() => setShowForm(false)}
-        />
-      )}
-
-      {tokens.length === 0 && !showForm && !newToken ? (
-        <div className="dash-empty">No tokens yet. Create one to connect weftd agents.</div>
-      ) : (
-        <div className="dash-table-wrap">
-          <table className="dash-table" data-testid="account-tokens-table">
-            <thead>
-              <tr><th>Token</th><th>Label</th><th>App</th><th>Status</th><th>Created</th><th></th></tr>
-            </thead>
-            <tbody>
-              {tokens.map(t => (
-                <tr key={t.token} data-testid={`account-token-row-${t.token}`}>
-                  <td>
-                    <button className="token-copy-btn" title="Click to copy"
-                      onClick={() => navigator.clipboard.writeText(t.token)}
-                      data-testid={`account-token-copy-${t.token}`}>
-                      {truncateToken(t.token)}
-                    </button>
-                  </td>
-                  <td className="token-label">{t.label}</td>
-                  <td className="token-app">{t.app || '—'}</td>
-                  <td><span className={`token-status token-status-${t.status}`}>{t.status}</span></td>
-                  <td className="token-date">{formatDate(t.created_at)}</td>
-                  <td>
-                    {t.status === 'active' && (
-                      <button className="btn-action btn-action-danger" onClick={() => handleRevoke(t.token)}
-                        disabled={revoking === t.token} data-testid={`account-token-revoke-${t.token}`}>
-                        {revoking === t.token ? '...' : 'Revoke'}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Main ───────────────────────────────────────────────────────────────────
-
-// ── Team Members Card ──────────────────────────────────────────────────────
 
 // ── Integrations Card ──────────────────────────────────────────────────────
 
@@ -657,13 +511,11 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
 export default function Account() {
   const { user } = useAuth()
   const [usage, setUsage] = useState<Usage | null>(null)
-  const [tokens, setTokens] = useState<AgentToken[]>([])
   const [team, setTeam] = useState<TeamResponse | null>(null)
   const [integrations, setIntegrations] = useState<IntegrationsResponse | null>(null)
 
   function loadData() {
     getUsage().then(setUsage).catch(() => {})
-    getTokens().then(setTokens).catch(() => {})
     getTeam().then(setTeam).catch(() => {})
     getIntegrations().then(setIntegrations).catch(() => {})
   }
@@ -683,7 +535,6 @@ export default function Account() {
           <SubscriptionCard usage={usage} />
           <IntegrationsCard integrations={integrations} onRefresh={loadData} />
           <TeamCard team={team} onRefresh={loadData} currentEmail={user?.email ?? ''} />
-          <TokensCard tokens={tokens} onRefresh={loadData} />
         </div>
       </main>
     </div>

@@ -27,6 +27,8 @@ type ShellFS struct {
 	customerName string   // for usage queries
 	tier         string   // subscription tier (trial, swatch, yard, bolt)
 	logApps      []string // app names for /log/ directory listing
+	userID       string   // for permission checks (empty = owner/no filtering)
+	isOwner      bool     // owners bypass namespace permissions
 }
 
 // New creates a ShellFS for the given customer.
@@ -54,6 +56,14 @@ func WithTier(tier string) Option {
 // WithCustomerName sets the customer name for usage queries.
 func WithCustomerName(name string) Option {
 	return func(f *ShellFS) { f.customerName = name }
+}
+
+// WithUser sets the user ID for permission checks.
+func WithUser(userID string, isOwner bool) Option {
+	return func(f *ShellFS) {
+		f.userID = userID
+		f.isOwner = isOwner
+	}
 }
 
 // ReadFile returns the content of a virtual file.
@@ -95,15 +105,72 @@ func (f *ShellFS) ReadFile(path string) ([]byte, error) {
 	case "log":
 		// Log pseudofiles are read-only markers. The planner intercepts
 		// `cat <app>.log` before it reaches the FS.
-		// Handles both flat (vimgym.log) and namespaced (weft/coordinator.log).
 		app := strings.TrimSuffix(name, ".log")
 		if f.hasLogApp(app) {
+			ns := namespaceFromApp(app)
+			if !f.canReadNamespace(ns) {
+				return nil, fmt.Errorf("%s: permission denied", path)
+			}
 			return []byte{}, nil
 		}
 		return nil, fmt.Errorf("%s: no such file", path)
 	}
 
 	return nil, fmt.Errorf("%s: no such file or directory", path)
+}
+
+// canReadNamespace checks if the user has read access to a namespace.
+// Owners and users with no userID (legacy/dev) always have access.
+func (f *ShellFS) canReadNamespace(ns string) bool {
+	if f.isOwner || f.userID == "" {
+		return true
+	}
+	// Look up the namespace ID, then check permission.
+	nsObj, err := f.store.FindOrCreateNamespace(f.customerID, ns)
+	if err != nil {
+		return false
+	}
+	perm, err := f.store.GetNamespacePermission(f.userID, nsObj.ID)
+	if err != nil {
+		return false // no permission row = no access
+	}
+	return perm.CanRead
+}
+
+// canManageInNamespace checks a specific permission on a namespace.
+func (f *ShellFS) canManageInNamespace(ns, perm string) bool {
+	if f.isOwner || f.userID == "" {
+		return true
+	}
+	nsObj, err := f.store.FindOrCreateNamespace(f.customerID, ns)
+	if err != nil {
+		return false
+	}
+	p, err := f.store.GetNamespacePermission(f.userID, nsObj.ID)
+	if err != nil {
+		return false
+	}
+	switch perm {
+	case "watches":
+		return p.CanManageWatches
+	case "functions":
+		return p.CanManageFunctions
+	case "tokens":
+		return p.CanCreateTokens
+	case "integrations":
+		return p.CanManageIntegrations
+	default:
+		return false
+	}
+}
+
+// namespaceFromApp extracts the namespace from an app name.
+// "weft/coordinator" → "weft", "vimgym" → "vimgym"
+func namespaceFromApp(app string) string {
+	if idx := strings.Index(app, "/"); idx >= 0 {
+		return app[:idx]
+	}
+	return app
 }
 
 // hasLogApp checks if an app name exists in the log apps list.
@@ -235,15 +302,21 @@ func (f *ShellFS) Stat(path string) (fs.FileInfo, error) {
 	case "log":
 		// Could be a namespace dir (name="weft") or a file (name="vimgym.log" or "weft/coordinator.log").
 		if !strings.HasSuffix(name, ".log") {
-			// Check if it's a namespace directory.
 			for _, ns := range f.logNamespaces() {
 				if ns == name {
+					if !f.canReadNamespace(ns) {
+						return nil, fmt.Errorf("%s: permission denied", path)
+					}
 					return &vfsFileInfo{name: name, dir: true}, nil
 				}
 			}
 		} else {
 			app := strings.TrimSuffix(name, ".log")
 			if f.hasLogApp(app) {
+				ns := namespaceFromApp(app)
+				if !f.canReadNamespace(ns) {
+					return nil, fmt.Errorf("%s: permission denied", path)
+				}
 				return &vfsFileInfo{name: name}, nil
 			}
 		}
@@ -302,6 +375,9 @@ func (f *ShellFS) ReadDir(path string) ([]fs.DirEntry, error) {
 			nss := f.logNamespaces()
 			var entries []fs.DirEntry
 			for _, ns := range nss {
+				if !f.canReadNamespace(ns) {
+					continue
+				}
 				subApps := f.logAppsInNamespace(ns)
 				if len(subApps) > 0 {
 					entries = append(entries, &vfsDirEntry{name: ns, dir: true})
@@ -312,6 +388,9 @@ func (f *ShellFS) ReadDir(path string) ([]fs.DirEntry, error) {
 			return entries, nil
 		}
 		// /log/<namespace>/ — show sub-apps as .log files.
+		if !f.canReadNamespace(logName) {
+			return nil, fmt.Errorf("%s: permission denied", path)
+		}
 		subApps := f.logAppsInNamespace(logName)
 		if len(subApps) > 0 {
 			entries := make([]fs.DirEntry, len(subApps))

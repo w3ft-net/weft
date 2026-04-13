@@ -36,17 +36,20 @@ func (s *Store) ListUserNamespacePermissions(userID string) ([]NamespacePermissi
 // UpsertNamespacePermission creates or updates a namespace permission.
 func (s *Store) UpsertNamespacePermission(p *NamespacePermission) error {
 	var existing NamespacePermission
-	result := s.db.Where("user_id = ? AND namespace_id = ?", p.UserID, p.NamespaceID).First(&existing)
-	if result.Error == gorm.ErrRecordNotFound {
-		return s.db.Create(p).Error
-	}
-	return s.db.Model(&existing).Updates(map[string]any{
+	vals := map[string]any{
+		"user_id":                   p.UserID,
+		"namespace_id":              p.NamespaceID,
 		"can_read":                  p.CanRead,
 		"can_create_tokens":         p.CanCreateTokens,
 		"can_manage_watches":        p.CanManageWatches,
 		"can_manage_functions":      p.CanManageFunctions,
 		"can_manage_integrations":   p.CanManageIntegrations,
-	}).Error
+	}
+	result := s.db.Where("user_id = ? AND namespace_id = ?", p.UserID, p.NamespaceID).First(&existing)
+	if result.Error == gorm.ErrRecordNotFound {
+		return s.db.Model(&NamespacePermission{}).Create(vals).Error
+	}
+	return s.db.Model(&existing).Updates(vals).Error
 }
 
 // DeleteNamespacePermission removes a permission record.

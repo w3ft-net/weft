@@ -1,6 +1,7 @@
 package shellfs
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -169,6 +170,114 @@ func TestReadDir_Etc_IncludesUsage(t *testing.T) {
 			names[i] = e.Name()
 		}
 		t.Errorf("expected 'usage' in /etc/ listing, got: %v", names)
+	}
+}
+
+func TestReadFile_LogNamespace_PermissionDenied(t *testing.T) {
+	db := testStore(t)
+
+	cust, err := db.FindOrCreateCustomer("nsperm-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a namespace and a user with NO read permission.
+	ns, err := db.FindOrCreateNamespace(cust.ID, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	email := fmt.Sprintf("restricted-%d@example.com", os.Getpid())
+	user, err := db.CreateUser(email, cust.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.UpsertNamespacePermission(&store.NamespacePermission{
+		UserID:      user.ID,
+		NamespaceID: ns.ID,
+		CanRead:     false,
+	})
+
+	fs := New(db, cust.ID, []string{"secret/app"},
+		WithTier("swatch"),
+		WithCustomerName("nsperm-test"),
+		WithUser(user.ID, false))
+
+	// ReadFile should return permission denied.
+	_, err = fs.ReadFile("/log/secret/app.log")
+	if err == nil {
+		t.Fatal("expected permission denied")
+	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Errorf("expected 'permission denied', got: %v", err)
+	}
+}
+
+func TestReadDir_Log_FiltersNamespaces(t *testing.T) {
+	db := testStore(t)
+
+	cust, err := db.FindOrCreateCustomer("nsfilter-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create two namespaces.
+	nsA, _ := db.FindOrCreateNamespace(cust.ID, "allowed")
+	nsB, _ := db.FindOrCreateNamespace(cust.ID, "blocked")
+	_ = nsB
+
+	// User has read on "allowed" but not "blocked".
+	user, err := db.CreateUser(fmt.Sprintf("filtered-%d@example.com", os.Getpid()), cust.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.UpsertNamespacePermission(&store.NamespacePermission{
+		UserID: user.ID, NamespaceID: nsA.ID, CanRead: true,
+	})
+	// No permission row for nsB = no access.
+
+	fs := New(db, cust.ID, []string{"allowed/web", "blocked/api"},
+		WithTier("swatch"),
+		WithCustomerName("nsfilter-test"),
+		WithUser(user.ID, false))
+
+	entries, err := fs.ReadDir("/log")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should only see "allowed/", not "blocked/".
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
+	}
+	if len(entries) != 1 || entries[0].Name() != "allowed" {
+		t.Errorf("expected only 'allowed', got: %v", names)
+	}
+}
+
+func TestReadFile_LogNamespace_OwnerBypass(t *testing.T) {
+	db := testStore(t)
+
+	cust, err := db.FindOrCreateCustomer("nsowner-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.FindOrCreateNamespace(cust.ID, "private")
+	user, err := db.CreateUser(fmt.Sprintf("owner-%d@example.com", os.Getpid()), cust.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No NamespacePermission row — but user is owner.
+
+	fs := New(db, cust.ID, []string{"private/app"},
+		WithTier("swatch"),
+		WithCustomerName("nsowner-test"),
+		WithUser(user.ID, true)) // isOwner=true
+
+	// Owner should have access despite no permission row.
+	_, err = fs.ReadFile("/log/private/app.log")
+	if err != nil {
+		t.Errorf("owner should have access, got: %v", err)
 	}
 }
 
