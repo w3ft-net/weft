@@ -95,5 +95,6 @@ func sendEmail(cfg *EmailConfig, to, subject, htmlBody string) error {
 	auth := smtp.PlainAuth("", cfg.User, cfg.Password, cfg.Host)
 	addr := cfg.Host + ":" + cfg.Port
 
-	return smtp.SendMail(addr, auth, cfg.From, []string{to}, []byte(msg))
+	// smtp.SendMail envelope sender must be a bare address.
+	return smtp.SendMail(addr, auth, cfg.User, []string{to}, []byte(msg))
 }
