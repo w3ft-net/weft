@@ -7,6 +7,7 @@ import Shell from './pages/Shell'
 import Downloads from './pages/Downloads'
 import Account from './pages/Account'
 import Device from './pages/Device'
+import Namespaces from './pages/Namespaces'
 import ProtectedRoute from './components/ProtectedRoute'
 
 export default function App() {
@@ -23,6 +24,9 @@ export default function App() {
       } />
       <Route path="/downloads" element={
         <ProtectedRoute><Downloads /></ProtectedRoute>
+      } />
+      <Route path="/namespaces" element={
+        <ProtectedRoute><Namespaces /></ProtectedRoute>
       } />
       <Route path="/account" element={
         <ProtectedRoute><Account /></ProtectedRoute>

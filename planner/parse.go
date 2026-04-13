@@ -155,8 +155,9 @@ func parseStage(cmd *bash.SimpleCommand) stageInfo {
 }
 
 // extractApp extracts the app name from a pseudofile name.
-// "vimgym.log" → "vimgym", "/log/vimgym.log" → "vimgym",
-// "log/vimgym.log" → "vimgym", "warp.log" → "" (all apps).
+// "/log/weft/coordinator.log" → "weft/coordinator"
+// "/log/vimgym.log" → "vimgym" (flat namespace, backward compat)
+// "warp.log" → "" (all apps)
 func extractApp(filename string) string {
 	// Strip /log/ or log/ prefix if present.
 	filename = strings.TrimPrefix(filename, "/log/")

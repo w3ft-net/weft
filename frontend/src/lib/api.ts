@@ -287,4 +287,39 @@ export function saveRoutes(routes: Record<string, string>): Promise<void> {
   })
 }
 
+// Namespaces
+export interface NamespaceInfo {
+  name: string
+  id: number
+}
+
+export async function getNamespaces(): Promise<NamespaceInfo[]> {
+  const resp = await apiFetch<{ namespaces: NamespaceInfo[] }>('/api/namespaces')
+  return resp.namespaces || []
+}
+
+export function createNamespace(name: string): Promise<NamespaceInfo> {
+  return apiFetch('/api/namespaces', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  })
+}
+
+export interface NamespacePermission {
+  can_read: boolean
+  can_create_tokens: boolean
+  can_manage_watches: boolean
+  can_manage_functions: boolean
+  can_manage_integrations: boolean
+}
+
+export function setNamespacePermission(
+  nsName: string, userId: string, perms: NamespacePermission
+): Promise<void> {
+  return apiFetch(`/api/namespaces/${encodeURIComponent(nsName)}/permissions/${userId}`, {
+    method: 'PUT',
+    body: JSON.stringify(perms),
+  })
+}
+
 export { apiFetch }

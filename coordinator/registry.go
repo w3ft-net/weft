@@ -44,10 +44,15 @@ func (e *ShardEntry) hasApp(app string) bool {
 	if len(e.Apps) == 0 {
 		return true // legacy: empty = all apps
 	}
-	// vimgym.metrics matches the vimgym shard.
+	// Strip .metrics suffix: weft/coordinator.metrics → weft/coordinator
 	base := strings.TrimSuffix(app, ".metrics")
+	// Extract namespace: weft/coordinator → weft
+	ns := base
+	if idx := strings.Index(ns, "/"); idx >= 0 {
+		ns = ns[:idx]
+	}
 	for _, a := range e.Apps {
-		if a == app || a == base {
+		if a == app || a == base || a == ns {
 			return true
 		}
 	}

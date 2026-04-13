@@ -122,6 +122,9 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("PUT /api/integrations/pagerduty", s.handlePagerDutySave)
 	auth.HandleFunc("DELETE /api/integrations/pagerduty", s.handlePagerDutyDisconnect)
 	auth.HandleFunc("PUT /api/integrations/routes", s.handleSaveRoutes)
+	auth.HandleFunc("GET /api/namespaces", s.handleListNamespaces)
+	auth.HandleFunc("POST /api/namespaces", s.handleCreateNamespace)
+	auth.HandleFunc("PUT /api/namespaces/{name}/permissions/{userId}", s.handleSetNamespacePermission)
 	auth.HandleFunc("GET /api/team", s.handleListTeam)
 	auth.HandleFunc("PUT /api/team/name", s.handleUpdateTeamName)
 	auth.HandleFunc("POST /api/team/invite", s.handleInviteTeamMember)
@@ -147,6 +150,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/watches/", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/integrations", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/integrations/", AuthMiddleware(s.jwtSecret, auth))
+	mux.Handle("/api/namespaces", AuthMiddleware(s.jwtSecret, auth))
+	mux.Handle("/api/namespaces/", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/team", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/team/", AuthMiddleware(s.jwtSecret, auth))
 
@@ -1184,4 +1189,119 @@ func (s *Server) handleDeviceApprove(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(map[string]string{"status": "approved"})
+}
+
+// ── Namespace management ──────────────────────────────────────
+
+func (s *Server) handleListNamespaces(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	custID, err := s.resolveCustomerID(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	nss, err := s.store.ListNamespaces(custID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	type nsResult struct {
+		Name string `json:"name"`
+		ID   uint   `json:"id"`
+	}
+	out := make([]nsResult, len(nss))
+	for i, ns := range nss {
+		out[i] = nsResult{Name: ns.Name, ID: ns.ID}
+	}
+	json.NewEncoder(w).Encode(map[string]any{"namespaces": out})
+}
+
+func (s *Server) handleCreateNamespace(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	custID, err := s.resolveCustomerID(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Check permission: owner or CanCreateNamespace.
+	user, err := s.store.GetUserByID(claims.UserID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	isOwner := s.isOwner(claims.CustomerName, claims.Email)
+	if !isOwner && !user.CanCreateNamespace {
+		http.Error(w, "forbidden: cannot create namespaces", http.StatusForbidden)
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+
+	ns, err := s.store.FindOrCreateNamespace(custID, req.Name)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Grant creator full access.
+	s.store.GrantFullNamespaceAccess(claims.UserID, ns.ID)
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]any{"name": ns.Name, "id": ns.ID})
+}
+
+func (s *Server) handleSetNamespacePermission(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	if !s.isOwner(claims.CustomerName, claims.Email) {
+		http.Error(w, "forbidden: owner only", http.StatusForbidden)
+		return
+	}
+
+	nsName := r.PathValue("name")
+	userID := r.PathValue("userId")
+	if nsName == "" || userID == "" {
+		http.Error(w, "name and userId required", http.StatusBadRequest)
+		return
+	}
+
+	custID, _ := s.resolveCustomerID(claims.CustomerName)
+	ns, err := s.store.FindOrCreateNamespace(custID, nsName)
+	if err != nil {
+		http.Error(w, "namespace not found", http.StatusNotFound)
+		return
+	}
+
+	var req store.NamespacePermission
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	req.UserID = userID
+	req.NamespaceID = ns.ID
+
+	if err := s.store.UpsertNamespacePermission(&req); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// isOwner checks if the email has owner role on the customer team.
+func (s *Server) isOwner(customerName, email string) bool {
+	member, err := s.store.GetTeamMemberByEmail(customerName, email)
+	if err != nil {
+		return false
+	}
+	return member.Role == "owner"
 }

@@ -93,20 +93,58 @@ func (f *ShellFS) ReadFile(path string) ([]byte, error) {
 		return nil, fmt.Errorf("%s: no such file", path)
 
 	case "log":
-		// Log pseudofiles are read-only markers. The actual content comes
-		// from the query pipeline, not from ReadFile. Return an empty
-		// placeholder so stat/cat don't error — the planner intercepts
+		// Log pseudofiles are read-only markers. The planner intercepts
 		// `cat <app>.log` before it reaches the FS.
+		// Handles both flat (vimgym.log) and namespaced (weft/coordinator.log).
 		app := strings.TrimSuffix(name, ".log")
-		for _, a := range f.logApps {
-			if a == app {
-				return []byte{}, nil
-			}
+		if f.hasLogApp(app) {
+			return []byte{}, nil
 		}
 		return nil, fmt.Errorf("%s: no such file", path)
 	}
 
 	return nil, fmt.Errorf("%s: no such file or directory", path)
+}
+
+// hasLogApp checks if an app name exists in the log apps list.
+// Matches both exact ("weft/coordinator") and namespace-only ("weft" matches "weft/coordinator").
+func (f *ShellFS) hasLogApp(app string) bool {
+	for _, a := range f.logApps {
+		if a == app {
+			return true
+		}
+	}
+	return false
+}
+
+// logNamespaces returns unique namespace prefixes from logApps.
+func (f *ShellFS) logNamespaces() []string {
+	seen := map[string]bool{}
+	var nss []string
+	for _, a := range f.logApps {
+		ns := a
+		if idx := strings.Index(a, "/"); idx >= 0 {
+			ns = a[:idx]
+		}
+		if !seen[ns] {
+			seen[ns] = true
+			nss = append(nss, ns)
+		}
+	}
+	return nss
+}
+
+// logAppsInNamespace returns sub-app names within a namespace.
+// For "weft" with apps ["weft/coordinator", "weft/shard"], returns ["coordinator", "shard"].
+func (f *ShellFS) logAppsInNamespace(ns string) []string {
+	prefix := ns + "/"
+	var apps []string
+	for _, a := range f.logApps {
+		if strings.HasPrefix(a, prefix) {
+			apps = append(apps, strings.TrimPrefix(a, prefix))
+		}
+	}
+	return apps
 }
 
 // WriteFile creates or updates a virtual file.
@@ -195,9 +233,17 @@ func (f *ShellFS) Stat(path string) (fs.FileInfo, error) {
 			return &vfsFileInfo{name: name}, nil
 		}
 	case "log":
-		app := strings.TrimSuffix(name, ".log")
-		for _, a := range f.logApps {
-			if a == app {
+		// Could be a namespace dir (name="weft") or a file (name="vimgym.log" or "weft/coordinator.log").
+		if !strings.HasSuffix(name, ".log") {
+			// Check if it's a namespace directory.
+			for _, ns := range f.logNamespaces() {
+				if ns == name {
+					return &vfsFileInfo{name: name, dir: true}, nil
+				}
+			}
+		} else {
+			app := strings.TrimSuffix(name, ".log")
+			if f.hasLogApp(app) {
 				return &vfsFileInfo{name: name}, nil
 			}
 		}
@@ -250,11 +296,30 @@ func (f *ShellFS) ReadDir(path string) ([]fs.DirEntry, error) {
 		}, nil
 
 	case "log":
-		entries := make([]fs.DirEntry, len(f.logApps))
-		for i, app := range f.logApps {
-			entries[i] = &vfsDirEntry{name: app + ".log"}
+		_, logName := splitPath(path)
+		if logName == "" {
+			// /log/ — show namespace directories (and flat apps as .log files).
+			nss := f.logNamespaces()
+			var entries []fs.DirEntry
+			for _, ns := range nss {
+				subApps := f.logAppsInNamespace(ns)
+				if len(subApps) > 0 {
+					entries = append(entries, &vfsDirEntry{name: ns, dir: true})
+				} else {
+					entries = append(entries, &vfsDirEntry{name: ns + ".log"})
+				}
+			}
+			return entries, nil
 		}
-		return entries, nil
+		// /log/<namespace>/ — show sub-apps as .log files.
+		subApps := f.logAppsInNamespace(logName)
+		if len(subApps) > 0 {
+			entries := make([]fs.DirEntry, len(subApps))
+			for i, app := range subApps {
+				entries[i] = &vfsDirEntry{name: app + ".log"}
+			}
+			return entries, nil
+		}
 	}
 
 	return nil, fmt.Errorf("%s: no such directory", path)
