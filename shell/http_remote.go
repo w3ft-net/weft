@@ -133,8 +133,59 @@ func (h *HTTPCoordinator) ListApps() ([]string, error) {
 }
 
 // Client returns nil — HTTP mode doesn't have a gRPC client.
-// The shell FS uses HTTPRemoteFS instead.
 func (h *HTTPCoordinator) Client() pb.WeftCoordinatorClient { return nil }
+
+func (h *HTTPCoordinator) CreateToken(customer, label, app string) (string, error) {
+	body, _ := json.Marshal(map[string]string{"label": label, "app": app})
+	req, _ := http.NewRequest("POST", h.baseURL+"/api/tokens", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+h.token)
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		msg, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var result struct{ Token string `json:"token"` }
+	json.NewDecoder(resp.Body).Decode(&result)
+	return result.Token, nil
+}
+
+func (h *HTTPCoordinator) ListTokens(customer string) ([]TokenInfo, error) {
+	req, _ := http.NewRequest("GET", h.baseURL+"/api/tokens", nil)
+	req.Header.Set("Authorization", "Bearer "+h.token)
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	var tokens []TokenInfo
+	json.NewDecoder(resp.Body).Decode(&tokens)
+	return tokens, nil
+}
+
+func (h *HTTPCoordinator) RevokeToken(token string) error {
+	req, _ := http.NewRequest("DELETE", h.baseURL+"/api/tokens/"+token, nil)
+	req.Header.Set("Authorization", "Bearer "+h.token)
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
 
 // ── SSE parsing ──────────────────────────────────────────────
 

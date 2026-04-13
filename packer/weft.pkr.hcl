@@ -158,7 +158,9 @@ build {
       "cd /tmp/weft && CGO_ENABLED=1 go build -o /tmp/weft-shard ./cmd/shard",
       "cd /tmp/weft && CGO_ENABLED=1 go build -o /tmp/weft-compute ./cmd/compute",
       "cd /tmp/weft && CGO_ENABLED=0 go build -o /tmp/weft-api ./cmd/api",
+      "cd /tmp/weft && CGO_ENABLED=0 go build -o /tmp/weftd ./cmd/weftd",
       "sudo mv /tmp/weft-coordinator /tmp/weft-shard /tmp/weft-compute /tmp/weft-api /opt/app/bin/",
+      "sudo mv /tmp/weftd /usr/local/bin/weftd",
       "sudo chmod +x /opt/app/bin/weft-*",
       "sudo chown app:app /opt/app/bin/weft-*",
       # Clean up

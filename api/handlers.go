@@ -522,17 +522,15 @@ func (s *Server) handleDeleteQuery(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
-	if s.coordClient == nil {
-		http.Error(w, "coordinator unavailable", http.StatusServiceUnavailable)
+	custID, err := s.resolveCustomerID(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	resp, err := s.coordClient.ListTokens(context.Background(), &pb.ListTokensRequest{
-		Customer: claims.CustomerName,
-	})
+	tokens, err := s.store.ListAgentTokens(custID)
 	if err != nil {
-		log.Printf("ListTokens gRPC error: %v", err)
-		http.Error(w, "coordinator error", http.StatusBadGateway)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
@@ -540,17 +538,21 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 		Token     string `json:"token"`
 		Label     string `json:"label"`
 		App       string `json:"app"`
-		Revoked   bool   `json:"revoked"`
+		Status    string `json:"status"`
 		CreatedAt string `json:"created_at"`
 	}
-	out := make([]tokenResult, 0, len(resp.Tokens))
-	for _, t := range resp.Tokens {
+	out := make([]tokenResult, 0, len(tokens))
+	for _, t := range tokens {
+		status := "active"
+		if t.Revoked {
+			status = "revoked"
+		}
 		out = append(out, tokenResult{
 			Token:     t.Token,
 			Label:     t.Label,
 			App:       t.App,
-			Revoked:   t.Revoked,
-			CreatedAt: t.CreatedAt,
+			Status:    status,
+			CreatedAt: t.CreatedAt.Format(time.RFC3339),
 		})
 	}
 	json.NewEncoder(w).Encode(out)
@@ -558,8 +560,9 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
-	if s.coordClient == nil {
-		http.Error(w, "coordinator unavailable", http.StatusServiceUnavailable)
+	custID, err := s.resolveCustomerID(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
@@ -572,37 +575,25 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := s.coordClient.CreateToken(context.Background(), &pb.CreateTokenRequest{
-		Customer: claims.CustomerName,
-		Label:    req.Label,
-		App:      req.App,
-	})
+	tok, err := s.store.CreateAgentToken(custID, req.Label, req.App)
 	if err != nil {
-		log.Printf("CreateToken gRPC error: %v", err)
-		http.Error(w, "coordinator error", http.StatusBadGateway)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"token": resp.Token})
+	json.NewEncoder(w).Encode(map[string]string{"token": tok.Token})
 }
 
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
-	if s.coordClient == nil {
-		http.Error(w, "coordinator unavailable", http.StatusServiceUnavailable)
-		return
-	}
-
 	token := r.PathValue("token")
 	if token == "" {
 		http.Error(w, "token required", http.StatusBadRequest)
 		return
 	}
 
-	_, err := s.coordClient.RevokeToken(context.Background(), &pb.RevokeTokenRequest{Token: token})
-	if err != nil {
-		log.Printf("RevokeToken gRPC error: %v", err)
-		http.Error(w, "coordinator error", http.StatusBadGateway)
+	if err := s.store.RevokeAgentToken(token); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 

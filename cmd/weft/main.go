@@ -552,6 +552,13 @@ func runSourceRemove(remote *shell.RemoteCoordinator) {
 	fmt.Printf("Removed source: %s\n", app)
 }
 
+// tokenClient is the common interface for token operations across HTTP and gRPC.
+type tokenClient interface {
+	CreateToken(customer, label, app string) (string, error)
+	ListTokens(customer string) ([]shell.TokenInfo, error)
+	RevokeToken(token string) error
+}
+
 func runToken() {
 	if len(os.Args) < 3 {
 		fmt.Fprintln(os.Stderr, "usage: weft token {create|list|revoke}")
@@ -563,27 +570,38 @@ func runToken() {
 		fmt.Fprintf(os.Stderr, "no .weft.yaml: %v\n", err)
 		os.Exit(1)
 	}
-	remote, err := shell.NewRemoteCoordinator(cfg.Endpoint)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "connect: %v\n", err)
-		os.Exit(1)
+
+	var client tokenClient
+	var cleanup func()
+
+	if strings.HasPrefix(cfg.Endpoint, "http://") || strings.HasPrefix(cfg.Endpoint, "https://") {
+		client = shell.NewHTTPCoordinator(cfg.Endpoint, cfg.Token)
+		cleanup = func() {}
+	} else {
+		remote, err := shell.NewRemoteCoordinator(cfg.Endpoint)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "connect: %v\n", err)
+			os.Exit(1)
+		}
+		client = remote
+		cleanup = func() { remote.Close() }
 	}
-	defer remote.Close()
+	defer cleanup()
 
 	switch os.Args[2] {
 	case "create":
-		runTokenCreate(remote, cfg)
+		runTokenCreate(client, cfg)
 	case "list":
-		runTokenList(remote, cfg)
+		runTokenList(client, cfg)
 	case "revoke":
-		runTokenRevoke(remote)
+		runTokenRevoke(client)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown token command: %s\n", os.Args[2])
 		os.Exit(1)
 	}
 }
 
-func runTokenCreate(remote *shell.RemoteCoordinator, cfg *shell.Config) {
+func runTokenCreate(client tokenClient, cfg *shell.Config) {
 	args := os.Args[3:]
 	var label, app string
 	customer := cfg.Customer
@@ -599,12 +617,12 @@ func runTokenCreate(remote *shell.RemoteCoordinator, cfg *shell.Config) {
 		}
 	}
 
-	if customer == "" || app == "" {
+	if app == "" {
 		fmt.Fprintln(os.Stderr, "usage: weft token create --app NAME --label LABEL [--customer CUST]")
 		os.Exit(1)
 	}
 
-	token, err := remote.CreateToken(customer, label, app)
+	token, err := client.CreateToken(customer, label, app)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create token: %v\n", err)
 		os.Exit(1)
@@ -616,7 +634,7 @@ func runTokenCreate(remote *shell.RemoteCoordinator, cfg *shell.Config) {
 	fmt.Println("Store this token in your weftd config. It cannot be retrieved again.")
 }
 
-func runTokenList(remote *shell.RemoteCoordinator, cfg *shell.Config) {
+func runTokenList(remote tokenClient, cfg *shell.Config) {
 	customer := cfg.Customer
 	args := os.Args[3:]
 	for i := 0; i < len(args); i++ {
@@ -646,7 +664,7 @@ func runTokenList(remote *shell.RemoteCoordinator, cfg *shell.Config) {
 	}
 }
 
-func runTokenRevoke(remote *shell.RemoteCoordinator) {
+func runTokenRevoke(remote tokenClient) {
 	args := os.Args[3:]
 	var token string
 	for i := 0; i < len(args); i++ {

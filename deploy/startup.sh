@@ -136,3 +136,47 @@ systemctl start "weft-$ROLE"
 if [ "$ROLE" = "coordinator" ]; then
   systemctl start weft-api
 fi
+
+# Start weftd on all roles if a token is available.
+WEFT_AGENT_TOKEN=$(aws secretsmanager get-secret-value \
+  --secret-id "/$APP_NAME/WEFT_AGENT_TOKEN" \
+  --region "$REGION" \
+  --query 'SecretString' --output text 2>/dev/null || echo "")
+
+if [ -n "$WEFT_AGENT_TOKEN" ] && command -v weftd >/dev/null 2>&1; then
+  mkdir -p /etc/weftd
+  cat > /etc/weftd/config.yaml <<WEFTCFG
+endpoint: localhost:9020
+token: ${WEFT_AGENT_TOKEN}
+sources:
+  - app: weft-${ROLE}
+    path: /opt/app/logs/*.log
+    metrics:
+      enabled: true
+      interval: 30s
+WEFTCFG
+  chmod 600 /etc/weftd/config.yaml
+
+  # Create systemd unit if not already present.
+  if [ ! -f /etc/systemd/system/weftd.service ]; then
+    cat > /etc/systemd/system/weftd.service <<'UNIT'
+[Unit]
+Description=weftd log agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/weftd --config=/etc/weftd/config.yaml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload
+  fi
+
+  systemctl enable weftd
+  systemctl restart weftd
+  echo "weftd started for role=$ROLE"
+fi
