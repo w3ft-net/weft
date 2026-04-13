@@ -181,33 +181,34 @@ func (s *Server) Authenticate(_ context.Context, req *pb.AuthenticateRequest) (*
 		return nil, fmt.Errorf("config store not available")
 	}
 
-	customer, err := s.Store.ValidateAgentToken(req.Token)
+	auth, err := s.Store.ValidateAgentToken(req.Token)
 	if err != nil {
 		return nil, fmt.Errorf("validate token: %w", err)
 	}
-	if customer == nil {
+	if auth == nil {
 		return nil, fmt.Errorf("invalid or revoked token")
 	}
 
 	// Check for an active subscription.
-	sub, err := s.Store.ActiveSubscription(customer.Name)
+	sub, err := s.Store.ActiveSubscription(auth.Customer.Name)
 	if err != nil || sub == nil {
-		log.Printf("auth: customer=%s denied (no active subscription)", customer.Name)
+		log.Printf("auth: customer=%s denied (no active subscription)", auth.Customer.Name)
 		return nil, status.Errorf(codes.PermissionDenied,
 			"no active subscription — upgrade at w3ft.net/dashboard")
 	}
 
-	log.Printf("auth: customer=%s tier=%s", customer.Name, sub.Tier)
+	log.Printf("auth: customer=%s namespace=%s tier=%s", auth.Customer.Name, auth.Namespace, sub.Tier)
 
 	// If the agent reported a metrics config, persist it.
 	if mc := req.MetricsConfig; mc != nil {
 		if err := s.Store.UpdateAgentMetricsConfig(req.Token, mc.Enabled, mc.Interval, mc.Collectors); err != nil {
-			log.Printf("auth: failed to save metrics config for %s: %v", customer.Name, err)
+			log.Printf("auth: failed to save metrics config for %s: %v", auth.Customer.Name, err)
 		}
 	}
 
 	return &pb.AuthenticateResponse{
-		Customer: customer.Name,
+		Customer:  auth.Customer.Name,
+		Namespace: auth.Namespace,
 	}, nil
 }
 

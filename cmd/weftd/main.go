@@ -33,7 +33,6 @@ type Config struct {
 }
 
 type SourceConfig struct {
-	Target  string        `yaml:"target"`          // namespace/subapp (e.g., "weft/coordinator")
 	Path    string        `yaml:"path"`            // file path or glob (file tailing)
 	Unit    string        `yaml:"unit,omitempty"`   // systemd unit name (journal tailing)
 	Metrics MetricsConfig `yaml:"metrics,omitempty"` // optional system metrics collection
@@ -88,7 +87,7 @@ func main() {
 
 	// Authenticate to verify token and get customer name.
 	// Retry on PermissionDenied (trial expired / cancelled subscription).
-	var customer string
+	var customer, namespace string
 	for {
 		authResp, err := coordClient.Authenticate(ctx, &pb.AuthenticateRequest{
 			Token:         cfg.Token,
@@ -110,7 +109,8 @@ func main() {
 		if customer == "" {
 			customer = cfg.Customer
 		}
-		log.Printf("authenticated as customer=%s", customer)
+		namespace = authResp.Namespace
+		log.Printf("authenticated as customer=%s namespace=%s", customer, namespace)
 		break
 	}
 
@@ -135,15 +135,21 @@ func main() {
 	hostname, _ := os.Hostname()
 
 	// Start sources — all stream through the coordinator, never direct to shards.
+	// The namespace comes from the token; sub-app names come from filenames/units.
 	for _, src := range cfg.Sources {
 		if src.Unit != "" {
-			go runJournalTailer(ctx, coordClient, customer, hostname, src.Target, src.Unit)
-			log.Printf("[%s] tailing journal unit %s", src.Target, src.Unit)
+			// Derive sub-app from unit name: "coordinator.service" → "weft/coordinator"
+			unitApp := strings.TrimSuffix(src.Unit, ".service")
+			app := namespace + "/" + unitApp
+			go runJournalTailer(ctx, coordClient, customer, hostname, app, src.Unit)
+			log.Printf("[%s] tailing journal unit %s", app, src.Unit)
 		} else if src.Path != "" {
-			go watchGlob(ctx, coordClient, customer, hostname, src.Target, src.Path)
+			// File tailer: sub-app derived from each filename at tail time.
+			go watchGlob(ctx, coordClient, customer, hostname, namespace, src.Path)
 		}
 		if src.Metrics.Enabled {
-			go runMetricsCollector(ctx, coordClient, customer, hostname, src.Target, src.Metrics)
+			// Metrics tagged as namespace/metrics (e.g., "weft.metrics" via the metrics suffix).
+			go runMetricsCollector(ctx, coordClient, customer, hostname, namespace, src.Metrics)
 		}
 	}
 
@@ -269,7 +275,16 @@ func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, custome
 // watchGlob watches a directory for new files matching a glob pattern and
 // starts tailers for each. Handles the case where log files don't exist at
 // startup (e.g., gunicorn creates them on first request).
-func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, customer, instance, app, pattern string) {
+// appFromPath derives the app name from a namespace and file path.
+// namespace="weft", path="/opt/app/logs/coordinator.log" → "weft/coordinator"
+func appFromPath(namespace, path string) string {
+	base := filepath.Base(path)
+	ext := filepath.Ext(base)
+	name := strings.TrimSuffix(base, ext)
+	return namespace + "/" + name
+}
+
+func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, customer, instance, namespace, pattern string) {
 	dir := filepath.Dir(pattern)
 	tailing := make(map[string]bool)
 
@@ -279,6 +294,7 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, customer, i
 		for _, p := range paths {
 			if !tailing[p] {
 				tailing[p] = true
+				app := appFromPath(namespace, p)
 				go runFileTailer(ctx, client, customer, instance, app, p)
 			}
 		}
@@ -286,20 +302,20 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, customer, i
 
 	startMatching()
 	if len(tailing) > 0 {
-		log.Printf("[%s] tailing %d files matching %s", app, len(tailing), pattern)
+		log.Printf("[%s] tailing %d files matching %s", namespace, len(tailing), pattern)
 	}
 
 	// Watch directory for new files.
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Printf("[%s] watch %s: %v", app, dir, err)
+		log.Printf("[%s] watch %s: %v", namespace, dir, err)
 		return
 	}
 	defer watcher.Close()
 
 	if err := watcher.Add(dir); err != nil {
 		// Directory doesn't exist yet — wait for it.
-		log.Printf("[%s] directory %s not found, waiting...", app, dir)
+		log.Printf("[%s] directory %s not found, waiting...", namespace, dir)
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -308,7 +324,7 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, customer, i
 				return
 			case <-ticker.C:
 				if err := watcher.Add(dir); err == nil {
-					log.Printf("[%s] directory %s appeared", app, dir)
+					log.Printf("[%s] directory %s appeared", namespace, dir)
 					startMatching()
 					goto watch
 				}
@@ -330,15 +346,16 @@ watch:
 				matched, _ := filepath.Match(filepath.Base(pattern), filepath.Base(event.Name))
 				if matched && !tailing[event.Name] {
 					tailing[event.Name] = true
-					log.Printf("[%s] new file %s, starting tailer", app, event.Name)
-					go runFileTailer(ctx, client, customer, instance, app, event.Name)
+					newApp := appFromPath(namespace, event.Name)
+					log.Printf("[%s] new file %s, starting tailer", newApp, event.Name)
+					go runFileTailer(ctx, client, customer, instance, newApp, event.Name)
 				}
 			}
 		case err, ok := <-watcher.Errors:
 			if !ok {
 				return
 			}
-			log.Printf("[%s] watch error: %v", app, err)
+			log.Printf("[%s] watch error: %v", namespace, err)
 		}
 	}
 }

@@ -59,9 +59,15 @@ func (s *Store) AgentAppNames() ([]string, error) {
 	return s.AgentNamespaceNames()
 }
 
-// ValidateAgentToken checks a token and returns the associated customer.
+// AgentAuthResult holds the result of agent token validation.
+type AgentAuthResult struct {
+	Customer  *Customer
+	Namespace string // namespace name from the token
+}
+
+// ValidateAgentToken checks a token and returns the associated customer + namespace.
 // Returns nil if the token is invalid or revoked.
-func (s *Store) ValidateAgentToken(token string) (*Customer, error) {
+func (s *Store) ValidateAgentToken(token string) (*AgentAuthResult, error) {
 	var t AgentToken
 	result := s.db.Preload("Customer").Preload("Namespace").Where("token = ? AND revoked = ?", token, false).First(&t)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -70,7 +76,10 @@ func (s *Store) ValidateAgentToken(token string) (*Customer, error) {
 	if result.Error != nil {
 		return nil, result.Error
 	}
-	return &t.Customer, nil
+	return &AgentAuthResult{
+		Customer:  &t.Customer,
+		Namespace: t.Namespace.Name,
+	}, nil
 }
 
 // RevokeAgentToken disables a token.

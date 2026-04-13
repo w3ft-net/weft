@@ -1392,6 +1392,7 @@ func (x *MetricsConfig) GetCollectors() []string {
 type AuthenticateResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
+	Namespace     string                 `protobuf:"bytes,5,opt,name=namespace,proto3" json:"namespace,omitempty"` // namespace name from the token
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1429,6 +1430,13 @@ func (*AuthenticateResponse) Descriptor() ([]byte, []int) {
 func (x *AuthenticateResponse) GetCustomer() string {
 	if x != nil {
 		return x.Customer
+	}
+	return ""
+}
+
+func (x *AuthenticateResponse) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
 	}
 	return ""
 }
@@ -3172,9 +3180,10 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\binterval\x18\x02 \x01(\tR\binterval\x12\x1e\n" +
 	"\n" +
 	"collectors\x18\x03 \x03(\tR\n" +
-	"collectors\"l\n" +
+	"collectors\"\x8a\x01\n" +
 	"\x14AuthenticateResponse\x12\x1a\n" +
-	"\bcustomer\x18\x01 \x01(\tR\bcustomerJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\n" +
+	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x1c\n" +
+	"\tnamespace\x18\x05 \x01(\tR\tnamespaceJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\n" +
 	"shard_addrR\vshard_tokenR\rexpires_at_ns\"\x91\x01\n" +
 	"\x17CoordinatorQueryRequest\x12\x1a\n" +
 	"\bpipeline\x18\x01 \x01(\tR\bpipeline\x12\"\n" +

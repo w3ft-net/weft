@@ -228,6 +228,7 @@ message AuthenticateResponse {
   string customer = 1;
   reserved 2, 3, 4;           // was shard_addr, shard_token, expires_at_ns — removed with direct-shard path
   reserved "shard_addr", "shard_token", "expires_at_ns";
+  string namespace = 5;       // namespace name from the token
 }
 
 message CoordinatorQueryRequest {
