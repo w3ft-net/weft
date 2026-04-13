@@ -43,6 +43,13 @@ type Server struct {
 	SlackClientSecret string
 }
 
+// apiBaseURL returns the API's own external URL (e.g., https://api.w3ft.net).
+// Derived from baseURL by inserting "api." prefix.
+func (s *Server) apiBaseURL() string {
+	// https://w3ft.net → https://api.w3ft.net
+	return strings.Replace(s.baseURL, "://", "://api.", 1)
+}
+
 // NewServer creates an API server.
 func NewServer(s *store.Store, jwtSecret, coordAddr, baseURL string) *Server {
 	return &Server{

@@ -77,7 +77,7 @@ func (s *Server) handleSlackConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectURI := s.baseURL + "/api/integrations/slack/callback"
+	redirectURI := s.apiBaseURL() + "/api/integrations/slack/callback"
 	authURL := fmt.Sprintf(
 		"https://slack.com/oauth/v2/authorize?client_id=%s&scope=incoming-webhook&redirect_uri=%s&state=%s",
 		url.QueryEscape(s.SlackClientID),
@@ -106,7 +106,7 @@ func (s *Server) handleSlackCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Exchange code for access token.
-	redirectURI := s.baseURL + "/api/integrations/slack/callback"
+	redirectURI := s.apiBaseURL() + "/api/integrations/slack/callback"
 	tokenResp, err := exchangeSlackCode(code, s.SlackClientID, s.SlackClientSecret, redirectURI)
 	if err != nil {
 		log.Printf("Slack OAuth exchange error: %v", err)
