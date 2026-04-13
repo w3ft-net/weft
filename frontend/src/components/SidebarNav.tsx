@@ -1,6 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext'
-import WeftLogoSvg from './WeftLogoSvg'
 import './SidebarNav.css'
 
 const NAV_ITEMS = [
@@ -23,7 +22,7 @@ export default function SidebarNav() {
     <aside className="sidebar" data-testid="sidebar-nav">
       <div className="sidebar-top">
         <div className="sidebar-logo" data-testid="sidebar-logo">
-          <WeftLogoSvg className="sidebar-logo-svg" />
+          <img src="/weft-logo.svg" alt="weft" className="sidebar-logo-svg" data-testid="weft-logo-svg" />
         </div>
 
         <nav className="sidebar-links">

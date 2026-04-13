@@ -1,7 +1,6 @@
 import { Link } from 'react-router-dom'
 import AsciiLogo from '../components/AsciiLogo'
 import VillainCarousel from '../components/VillainCarousel'
-import WeftLogoSvg from '../components/WeftLogoSvg'
 import ScrollDiagram from '../components/ScrollDiagram'
 import PricingTable from '../components/PricingTable'
 import './Landing.css'
@@ -15,7 +14,7 @@ export default function Landing() {
       <nav className="nav" data-testid="nav">
         <div className="container nav-inner">
           <Link to="/" className="nav-logo" data-testid="nav-logo-link">
-            <WeftLogoSvg className="logo-nav" />
+            <img src="/weft-logo.svg" alt="weft" className="logo-nav" data-testid="weft-logo-svg" />
           </Link>
           <div className="nav-links">
             <a href="#pricing" data-testid="nav-pricing-link">Pricing</a>

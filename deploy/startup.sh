@@ -97,6 +97,16 @@ if [ "$ROLE" = "coordinator" ]; then
     --region "$REGION" \
     --query 'SecretString' --output text 2>/dev/null || echo "")
 
+  SLACK_CLIENT_SECRET=$(aws secretsmanager get-secret-value \
+    --secret-id "/$APP_NAME/SLACK_CLIENT_SECRET" \
+    --region "$REGION" \
+    --query 'SecretString' --output text 2>/dev/null || echo "")
+
+  SLACK_CLIENT_ID=$(aws ssm get-parameter \
+    --name "/$APP_NAME/config/slack-client-id" \
+    --region "$REGION" \
+    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
   cat > /opt/app/coordinator.env <<EOF
 WEFT_DB_DSN=${DB_DSN}
 WEFT_SHARD_ASG_SMALL=${SHARD_ASG_SMALL}
@@ -114,6 +124,8 @@ STRIPE_PRICE_SWATCH=price_1TK7iK2SENTbrh5us0SI1nRz
 STRIPE_PRICE_YARD=price_1TK7jI2SENTbrh5uP3wVxnlx
 STRIPE_PRICE_BOLT=price_1TK7kH2SENTbrh5upDvBswnG
 EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD}
+SLACK_CLIENT_ID=${SLACK_CLIENT_ID}
+SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET}
 EOF
   chown app:app /opt/app/coordinator.env
 fi
