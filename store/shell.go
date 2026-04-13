@@ -39,21 +39,41 @@ func ParseScheduleInterval(schedule string) time.Duration {
 	return 5 * time.Minute
 }
 
-// ShellFunction is a user-defined bash function stored in the virtual filesystem.
+// ShellFunction is a user-defined function stored in the virtual filesystem.
+// Language is detected from shebang at write time: "bash" (default) or "lua".
 type ShellFunction struct {
 	gorm.Model
 	CustomerID uint   `gorm:"not null;uniqueIndex:idx_func_customer_name"`
 	Name       string `gorm:"not null;uniqueIndex:idx_func_customer_name"`
 	Source     string `gorm:"type:text;not null"`
+	Language   string `gorm:"not null;default:bash"` // "bash" or "lua"
 }
 
 func (s *Store) SaveShellFunction(customerID uint, name, source string) error {
+	lang, cleanSource := detectLanguage(source)
 	var fn ShellFunction
 	result := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&fn)
 	if result.Error == gorm.ErrRecordNotFound {
-		return s.db.Create(&ShellFunction{CustomerID: customerID, Name: name, Source: source}).Error
+		return s.db.Create(&ShellFunction{
+			CustomerID: customerID, Name: name,
+			Source: cleanSource, Language: lang,
+		}).Error
 	}
-	return s.db.Model(&fn).Update("source", source).Error
+	return s.db.Model(&fn).Updates(map[string]any{
+		"source":   cleanSource,
+		"language": lang,
+	}).Error
+}
+
+// detectLanguage checks for a Lua shebang and returns the language
+// and source with the shebang stripped.
+func detectLanguage(source string) (lang, cleanSource string) {
+	firstLine, rest, _ := strings.Cut(source, "\n")
+	trimmed := strings.TrimSpace(firstLine)
+	if strings.HasPrefix(trimmed, "#!") && strings.Contains(trimmed, "lua") {
+		return "lua", rest
+	}
+	return "bash", source
 }
 
 func (s *Store) GetShellFunction(customerID uint, name string) (*ShellFunction, error) {
@@ -172,6 +192,33 @@ func (s *Store) ListCronResults(cronWatchID uint, limit int) ([]CronResult, erro
 	err := s.db.Where("cron_watch_id = ?", cronWatchID).
 		Order("ran_at DESC").Limit(limit).Find(&results).Error
 	return results, err
+}
+
+// QueryCronResults returns results for a named watch within a time range,
+// scoped to a customer. Used by weft.* functions in /bin/ scripts.
+func (s *Store) QueryCronResults(customerID uint, watchName string, since time.Time) ([]CronResult, error) {
+	var watch CronWatch
+	if err := s.db.Where("customer_id = ? AND name = ?", customerID, watchName).First(&watch).Error; err != nil {
+		return nil, err
+	}
+	var results []CronResult
+	err := s.db.Where("cron_watch_id = ? AND ran_at >= ?", watch.ID, since).
+		Order("ran_at DESC").Find(&results).Error
+	return results, err
+}
+
+// LatestCronResult returns the most recent result for a named watch.
+func (s *Store) LatestCronResult(customerID uint, watchName string) (*CronResult, error) {
+	var watch CronWatch
+	if err := s.db.Where("customer_id = ? AND name = ?", customerID, watchName).First(&watch).Error; err != nil {
+		return nil, err
+	}
+	var result CronResult
+	err := s.db.Where("cron_watch_id = ?", watch.ID).Order("ran_at DESC").First(&result).Error
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 // --- Notification Config ---

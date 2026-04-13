@@ -725,6 +725,8 @@ var warpBuiltins = map[string]bool{
 	"cut": true, "paste": true, "tee": true, "xargs": true,
 	"grep": true, "awk": true, "sed": true, "jq": true,
 	"alert": true,
+	"weft.latest": true, "weft.avg": true, "weft.max": true,
+	"weft.min": true, "weft.sum": true, "weft.stddev": true,
 }
 
 func (c *ShellCore) resolveFunction(line string) string {
@@ -755,6 +757,14 @@ func (c *ShellCore) resolveFunction(line string) string {
 	if err != nil {
 		return ""
 	}
+
+	// Lua scripts: return the command name as-is so warp's
+	// PATH resolution handles it (it knows about Lua via LangFS).
+	if lfs, ok := c.shellFS.(LangFS); ok && lfs.FileLanguage(path) == "lua" {
+		return line
+	}
+
+	// Bash scripts: return contents (existing behavior).
 	resolved := strings.TrimSpace(string(data))
 	if len(parts) > 1 {
 		resolved += " " + strings.Join(parts[1:], " ")

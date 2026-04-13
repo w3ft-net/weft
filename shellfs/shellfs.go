@@ -66,6 +66,10 @@ func (f *ShellFS) ReadFile(path string) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: no such file", path)
 		}
+		// Reconstruct shebang for display so vi/cat shows the original.
+		if fn.Language == "lua" {
+			return []byte("#!/usr/bin/env lua\n" + fn.Source), nil
+		}
 		return []byte(fn.Source), nil
 
 	case "cron.d":
@@ -270,6 +274,20 @@ func (f *ShellFS) Remove(path string) error {
 	}
 
 	return fmt.Errorf("%s: no such file or directory", path)
+}
+
+// FileLanguage returns the scripting language for a /bin/ file.
+// Implements bash.LangFS.
+func (f *ShellFS) FileLanguage(path string) string {
+	dir, name := splitPath(path)
+	if dir != "bin" {
+		return ""
+	}
+	fn, err := f.store.GetShellFunction(f.customerID, name)
+	if err != nil {
+		return ""
+	}
+	return fn.Language
 }
 
 // ── Path helpers ────────────────────────────────────────────

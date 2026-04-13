@@ -11,6 +11,12 @@ type FS interface {
 	Remove(path string) error
 }
 
+// LangFS is optionally implemented by FS implementations that know
+// the scripting language of files (e.g., "bash" or "lua").
+type LangFS interface {
+	FileLanguage(path string) string
+}
+
 // WatchResultValue represents a single cron watch result for dashboard display.
 type WatchResultValue struct {
 	Value string // stdout, trimmed

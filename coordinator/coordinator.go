@@ -42,6 +42,8 @@ type Coordinator struct {
 	Ingest      *RingBuffer    // write path: IngestStream → buffer → shards
 	Provisioner *Provisioner   // shard lifecycle management (nil = no auto-provisioning)
 	Usage       *CustomerUsageStats // per-customer byte metering
+	Store       *store.Store   // for weft.* functions in /bin/ scripts (nil = disabled)
+	CustomerID  uint           // for weft.* customer scoping
 }
 
 // NewCoordinator creates a coordinator with the given initial shard list.
@@ -325,6 +327,13 @@ func (c *Coordinator) runLocal(pipeline string) (*QueryResult, error) {
 			Interactive: true,
 		})
 	})
+
+	// Register weft.* functions for cron result access.
+	if c.Store != nil && c.CustomerID != 0 {
+		wf := &WeftFuncs{Store: c.Store, CustomerID: c.CustomerID}
+		RegisterWeftCommands(interp, wf)
+		interp.LuaWeftFuncs = wf
+	}
 
 	interp.ExecScript(ast)
 
