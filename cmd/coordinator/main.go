@@ -45,38 +45,9 @@ func main() {
 	// Shard setup: explicit specs, legacy single ASG, or tiered ASGs.
 	if *shardsFlag != "" {
 		shards = parseShardsFlag(*shardsFlag)
-	} else if *shardASG != "" {
-		disc, err := discovery.NewASGDiscovery(*awsRegion, *shardASG, 9000)
-		if err != nil {
-			log.Fatalf("init shard discovery: %v", err)
-		}
-		discovered, err := disc.DiscoverShards(context.Background())
-		if err != nil {
-			log.Fatalf("discover shards: %v", err)
-		}
-		shards = discovered
-		log.Printf("discovered %d shards from ASG %s", len(shards), *shardASG)
-	} else if *shardASGSmall != "" || *shardASGMedium != "" || *shardASGLarge != "" {
-		// Tiered ASGs — discover from all configured tiers.
-		for _, asgName := range []string{*shardASGSmall, *shardASGMedium, *shardASGLarge} {
-			if asgName == "" {
-				continue
-			}
-			disc, err := discovery.NewASGDiscovery(*awsRegion, asgName, 9000)
-			if err != nil {
-				log.Printf("warning: cannot discover from %s: %v", asgName, err)
-				continue
-			}
-			discovered, err := disc.DiscoverShards(context.Background())
-			if err != nil {
-				log.Printf("warning: discover from %s: %v", asgName, err)
-				continue
-			}
-			shards = append(shards, discovered...)
-			log.Printf("discovered %d shards from ASG %s", len(discovered), asgName)
-		}
 	}
-	// No shards configured = provisioner will bootstrap them.
+	// Provisioner manages shard lifecycle. No startup discovery needed —
+	// shards are restored from postgres or bootstrapped by the provisioner.
 
 	// Compute pool setup.
 	var pool compute.ComputePool
