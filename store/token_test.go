@@ -15,8 +15,17 @@ func testOpen(t *testing.T) *Store {
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
-	return db
+	tx, rollback := db.BeginTest()
+	t.Cleanup(func() {
+		rollback()
+		db.Close()
+	})
+	return tx
+}
+
+func createTestToken(db *Store, custID uint, label string) (*AgentToken, error) {
+	ns, _ := db.FindOrCreateNamespace(custID, "test")
+	return db.CreateAgentToken(custID, ns.ID, label)
 }
 
 func TestUpdateAgentMetricsConfig(t *testing.T) {
@@ -27,7 +36,7 @@ func TestUpdateAgentMetricsConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tok, err := db.CreateAgentToken(cust.ID, "test-agent", "api")
+	tok, err := createTestToken(db, cust.ID, "test-agent")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +72,7 @@ func TestForecastMetricsUsage(t *testing.T) {
 
 	// Create two tokens with metrics.
 	for _, label := range []string{"agent-1", "agent-2"} {
-		tok, err := db.CreateAgentToken(cust.ID, label, "api")
+		tok, err := createTestToken(db, cust.ID, label)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -74,7 +83,7 @@ func TestForecastMetricsUsage(t *testing.T) {
 	}
 
 	// Create one token without metrics (should not count).
-	_, err = db.CreateAgentToken(cust.ID, "agent-no-metrics", "api")
+	_, err = createTestToken(db, cust.ID, "agent-no-metrics")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +114,7 @@ func TestForecastMetricsUsage_NoMetrics(t *testing.T) {
 	}
 
 	// Token without metrics.
-	_, err = db.CreateAgentToken(cust.ID, "plain-agent", "api")
+	_, err = createTestToken(db, cust.ID, "plain-agent")
 	if err != nil {
 		t.Fatal(err)
 	}

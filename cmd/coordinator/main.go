@@ -132,17 +132,8 @@ func main() {
 		shardTiers["large"] = *shardASGLarge
 	}
 
-	// Start background shard re-discovery for each configured ASG.
-	for _, asgName := range shardTiers {
-		disc, err := discovery.NewASGDiscovery(*awsRegion, asgName, 9000)
-		if err != nil {
-			log.Printf("warning: cannot create shard re-discovery for %s: %v", asgName, err)
-			continue
-		}
-		go rediscoverLoop(disc, coord)
-	}
-
-	// Start provisioner.
+	// Provisioner manages shard lifecycle — no separate discovery loop.
+	// Shards are persisted to postgres and restored on restart via LoadFromStore.
 	provCtx, provCancel := context.WithCancel(context.Background())
 	defer provCancel()
 
@@ -289,43 +280,6 @@ func main() {
 	}
 }
 
-// rediscoverLoop periodically re-discovers shards from the ASG and updates
-// the coordinator's shard list. This handles instance replacements, scale-outs,
-// and recovery from transient discovery failures at startup.
-func rediscoverLoop(disc *discovery.ASGDiscovery, coord *coordinator.Coordinator) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		discovered, err := disc.DiscoverShards(context.Background())
-		if err != nil {
-			log.Printf("shard re-discovery failed: %v", err)
-			continue
-		}
-		current := coord.GetShards()
-		if shardsChanged(current, discovered) {
-			log.Printf("shard re-discovery: %d -> %d shards", len(current), len(discovered))
-			coord.SetShards(discovered)
-		}
-	}
-}
-
-// shardsChanged returns true if the discovered shard set differs from the current one.
-func shardsChanged(current, discovered []shard.Shard) bool {
-	if len(current) != len(discovered) {
-		return true
-	}
-	ids := make(map[string]bool, len(current))
-	for _, s := range current {
-		ids[s.ID()] = true
-	}
-	for _, s := range discovered {
-		if !ids[s.ID()] {
-			return true
-		}
-	}
-	return false
-}
 
 func parseShardsFlag(flag string) []shard.Shard {
 	var shards []shard.Shard

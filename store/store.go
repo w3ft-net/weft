@@ -32,6 +32,18 @@ func Open(dsn string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
+// BeginTest starts a transaction and returns a Store that uses it.
+// Call the returned rollback function in t.Cleanup to undo all changes.
+func (s *Store) BeginTest() (*Store, func()) {
+	tx := s.db.Begin()
+	return &Store{db: tx}, func() { tx.Rollback() }
+}
+
+// TruncateTestTables removes all data from GORM-managed tables. For tests only.
+func (s *Store) TruncateTestTables() {
+	s.db.Exec("TRUNCATE TABLE cron_results, cron_watches, shell_functions, agent_tokens, notify_configs, namespace_permissions, namespaces, alert_incidents, device_codes, magic_links, saved_queries, team_members, shard_records, subscriptions, users, customers CASCADE")
+}
+
 // Close releases the database connection.
 func (s *Store) Close() error {
 	db, err := s.db.DB()

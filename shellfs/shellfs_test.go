@@ -19,7 +19,10 @@ func testStore(t *testing.T) *store.Store {
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() {
+		db.TruncateTestTables()
+		db.Close()
+	})
 	return db
 }
 
@@ -62,7 +65,8 @@ func TestReadFile_EtcUsage_WithMetricsForecast(t *testing.T) {
 	}
 
 	// Create an agent with metrics enabled.
-	tok, err := db.CreateAgentToken(cust.ID, "metrics-agent", "api")
+	ns, _ := db.FindOrCreateNamespace(cust.ID, "api")
+	tok, err := db.CreateAgentToken(cust.ID, ns.ID, "metrics-agent")
 	if err != nil {
 		t.Fatal(err)
 	}

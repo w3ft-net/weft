@@ -448,11 +448,12 @@ func stripBoth(line string) string {
 	return b.String()
 }
 
-// ExecNonInteractive runs a single pipeline and prints results to w.
+// ExecNonInteractive runs a single command through the shell and prints to w.
+// Supports all builtins (ls, cat /etc/, range, etc.) as well as queries.
 func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 	line = strings.TrimSpace(line)
 
-	// Handle range as a local builtin.
+	// Handle range locally (modifies shell state).
 	if line == "range" {
 		fmt.Fprint(w, shellcore.FormatRangePlain(s.Start, s.End))
 		return nil
@@ -468,6 +469,17 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 		return nil
 	}
 
+	// FS builtins: ls, cat for /bin /cron.d /etc /log paths.
+	if s.FS != nil {
+		if handled, output := s.execFSBuiltin(line); handled {
+			if output != "" {
+				fmt.Fprint(w, output)
+			}
+			return nil
+		}
+	}
+
+	// Query pipeline.
 	weftPipeline, _ := splitTerminalStage(line)
 	result, err := s.Query(weftPipeline, s.Start, s.End)
 	if err != nil {
@@ -481,4 +493,63 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// execFSBuiltin handles ls, cat, stat for FS paths in non-interactive mode.
+// Returns (handled, output).
+func (s *Shell) execFSBuiltin(line string) (bool, string) {
+	parts := strings.Fields(line)
+	if len(parts) == 0 {
+		return false, ""
+	}
+	cmd := parts[0]
+	args := parts[1:]
+
+	switch cmd {
+	case "ls":
+		path := "/"
+		if len(args) > 0 {
+			path = args[0]
+		}
+		if s.FS == nil {
+			return false, ""
+		}
+		// Only handle FS paths.
+		if path != "/" && !strings.HasPrefix(path, "/log") && !strings.HasPrefix(path, "/bin") &&
+			!strings.HasPrefix(path, "/cron.d") && !strings.HasPrefix(path, "/etc") &&
+			!strings.HasPrefix(path, "log") && !strings.HasPrefix(path, "bin") &&
+			!strings.HasPrefix(path, "cron.d") && !strings.HasPrefix(path, "etc") {
+			return false, ""
+		}
+		entries, err := s.FS.ReadDir(path)
+		if err != nil {
+			return true, fmt.Sprintf("ls: %v\n", err)
+		}
+		var sb strings.Builder
+		for _, e := range entries {
+			sb.WriteString(e)
+			sb.WriteByte('\n')
+		}
+		return true, sb.String()
+
+	case "cat":
+		if len(args) == 0 {
+			return false, ""
+		}
+		path := args[0]
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+		// Only handle FS paths (not /log/*.log which goes to the query pipeline).
+		if strings.HasPrefix(path, "/bin/") || strings.HasPrefix(path, "/cron.d/") || strings.HasPrefix(path, "/etc/") {
+			data, err := s.FS.ReadFile(path)
+			if err != nil {
+				return true, fmt.Sprintf("cat: %v\n", err)
+			}
+			return true, string(data)
+		}
+		return false, ""
+	}
+
+	return false, ""
 }

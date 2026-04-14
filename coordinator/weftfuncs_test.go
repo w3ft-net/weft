@@ -19,13 +19,18 @@ func testStoreAndCustomer(t *testing.T) (*store.Store, uint) {
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
 
-	cust, err := db.FindOrCreateCustomer("weftfuncs-test")
+	tx, rollback := db.BeginTest()
+	t.Cleanup(func() {
+		rollback()
+		db.Close()
+	})
+
+	cust, err := tx.FindOrCreateCustomer("weftfuncs-test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return db, cust.ID
+	return tx, cust.ID
 }
 
 func seedWatch(t *testing.T, db *store.Store, custID uint, name string, values []string, interval time.Duration) {

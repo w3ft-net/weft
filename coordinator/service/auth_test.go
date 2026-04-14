@@ -32,7 +32,9 @@ func TestAuthenticate_NoShardAddr(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tok, err := store.CreateAgentToken(cust.ID, "test-agent", "testapp")
+	store.SeedDevSubscription(cust.Name)
+	ns, _ := store.FindOrCreateNamespace(cust.ID, "testapp")
+	tok, err := store.CreateAgentToken(cust.ID, ns.ID, "test-agent")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +78,9 @@ func TestAuthenticate_MetricsConfigSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tok, err := store.CreateAgentToken(cust.ID, "metrics-sync-test", "api")
+	store.SeedDevSubscription(cust.Name)
+	ns2, _ := store.FindOrCreateNamespace(cust.ID, "api")
+	tok, err := store.CreateAgentToken(cust.ID, ns2.ID, "metrics-sync-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +141,9 @@ func testStore(t *testing.T) (*store.Store, func()) {
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}
-	return db, func() {
+	tx, rollback := db.BeginTest()
+	return tx, func() {
+		rollback()
 		db.Close()
 	}
 }

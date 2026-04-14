@@ -203,6 +203,7 @@ func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier stri
 		WindowStart: windowStart,
 		WindowEnd:   windowEnd,
 		State:       StateIngesting,
+		Addr:        addr,
 		Shard:       gs,
 		CreatedAt:   time.Now(),
 	}, nil

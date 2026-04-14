@@ -27,9 +27,13 @@ func testServer(t *testing.T) (*Server, *store.Store) {
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
-	srv := NewServer(s, "test-secret", "localhost:9020", "http://localhost:3000")
-	return srv, s
+	tx, rollback := s.BeginTest()
+	t.Cleanup(func() {
+		rollback()
+		s.Close()
+	})
+	srv := NewServer(tx, "test-secret", "localhost:9020", "http://localhost:3000")
+	return srv, tx
 }
 
 func uniqueEmail(t *testing.T) string {
@@ -58,8 +62,8 @@ func TestAuth_LoginAndVerify(t *testing.T) {
 		t.Fatal("no magic link created")
 	}
 
-	// Verify — exchange token for JWT.
-	body, _ = json.Marshal(map[string]string{"token": token})
+	// Verify — exchange token for JWT (new users need org_name).
+	body, _ = json.Marshal(map[string]string{"token": token, "org_name": "testorg"})
 	req = httptest.NewRequest("POST", "/api/auth/verify", bytes.NewReader(body))
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -101,17 +105,17 @@ func TestAuth_MagicLinkOneTimeUse(t *testing.T) {
 
 	token, _ := s.GetLastMagicLinkToken(email)
 
-	// First verify — success.
-	body, _ = json.Marshal(map[string]string{"token": token})
+	// First verify — success (with org_name to consume the link).
+	body, _ = json.Marshal(map[string]string{"token": token, "org_name": "oneuse-org"})
 	req = httptest.NewRequest("POST", "/api/auth/verify", bytes.NewReader(body))
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	if w.Code != 200 {
-		t.Fatalf("first verify failed: %d", w.Code)
+		t.Fatalf("first verify failed: %d: %s", w.Code, w.Body.String())
 	}
 
 	// Second verify — should fail (used).
-	body, _ = json.Marshal(map[string]string{"token": token})
+	body, _ = json.Marshal(map[string]string{"token": token, "org_name": "oneuse-org"})
 	req = httptest.NewRequest("POST", "/api/auth/verify", bytes.NewReader(body))
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -124,7 +128,8 @@ func TestAuth_Me(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
 
-	user, _ := s.CreateUser(fmt.Sprintf("me-%d@example.com", os.Getpid()), "kevlar")
+	cust, _ := s.FindOrCreateCustomer("kevlar")
+	user, _ := s.CreateUser(fmt.Sprintf("me-%d@example.com", os.Getpid()), cust.ID)
 	jwt, _ := GenerateJWT(user, "trial", "test-secret")
 
 	req := httptest.NewRequest("GET", "/api/auth/me", nil)
@@ -169,7 +174,8 @@ func TestSavedQueries_CRUD(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
 
-	user, _ := s.CreateUser(fmt.Sprintf("queries-%d@example.com", os.Getpid()), "kevlar")
+	cust2, _ := s.FindOrCreateCustomer("kevlar")
+	user, _ := s.CreateUser(fmt.Sprintf("queries-%d@example.com", os.Getpid()), cust2.ID)
 	jwt, _ := GenerateJWT(user, "trial", "test-secret")
 
 	// Create.

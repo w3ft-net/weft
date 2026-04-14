@@ -58,11 +58,21 @@ func setupTestCoordinator(t *testing.T) *Coordinator {
 		t.Fatalf("ingest other-customer: %v", err)
 	}
 
-	return NewCoordinator(
-		[]shard.Shard{s0, s1},
-		"kevlar",
-		nil,
-	)
+	apps := []string{"vimgym", "callbox"}
+	c := NewCoordinator(nil, "kevlar", nil)
+	c.Registry.Add(&ShardEntry{
+		ID: "shard-0", Apps: apps,
+		WindowStart: t0, WindowEnd: t1,
+		State: StateIngesting, Shard: s0,
+		CreatedAt: time.Now(),
+	})
+	c.Registry.Add(&ShardEntry{
+		ID: "shard-1", Apps: apps,
+		WindowStart: t1, WindowEnd: t2,
+		State: StateIngesting, Shard: s1,
+		CreatedAt: time.Now(),
+	})
+	return c
 }
 
 func shard0Rows() []*pb.LogRow {

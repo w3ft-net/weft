@@ -64,11 +64,19 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 	}
 	t.Cleanup(func() { pool.Close() })
 
-	return NewCoordinator(
-		[]shard.Shard{gs0, gs1},
-		"kevlar",
-		pool,
-	)
+	apps := []string{"vimgym", "callbox"}
+	c := NewCoordinator(nil, "kevlar", pool)
+	c.Registry.Add(&ShardEntry{
+		ID: "shard-0", Apps: apps,
+		WindowStart: DevT0, WindowEnd: DevT1,
+		State: StateIngesting, Shard: gs0,
+	})
+	c.Registry.Add(&ShardEntry{
+		ID: "shard-1", Apps: apps,
+		WindowStart: DevT1, WindowEnd: DevT2,
+		State: StateIngesting, Shard: gs1,
+	})
+	return c
 }
 
 func startShardServer(t *testing.T, ds *shard.DuckDBShard) string {
