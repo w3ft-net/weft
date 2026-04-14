@@ -145,33 +145,67 @@ func (p *Provisioner) bootstrap(ctx context.Context) {
 	}
 
 	shardID := fmt.Sprintf("shard-%d", now.UnixMilli())
-
-	addr, err := p.launcher.Launch(ctx, "small", &pb.ConfigureRequest{
-		ShardId:     shardID,
-		WindowStart: now.Format(time.RFC3339),
-		WindowEnd:   windowEnd.Format(time.RFC3339),
-	})
+	entry, err := p.launchAndConfigure(ctx, shardID, "small", nil, now, windowEnd)
 	if err != nil {
 		log.Printf("provisioner: bootstrap failed: %v", err)
 		return
 	}
 
-	gs, err := shard.NewGRPCShard(shardID, addr, now, windowEnd)
+	p.registry.Add(entry)
+	log.Printf("provisioner: bootstrapped shard %s (%s to %s)",
+		shardID, now.Format(time.RFC3339), windowEnd.Format(time.RFC3339))
+}
+
+// launchAndConfigure is the shared lifecycle logic: launch instance,
+// connect via gRPC, call Configure RPC, return a registry entry.
+// This runs the same code path for LocalLauncher and ASGLauncher.
+func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier string, apps []string, windowStart, windowEnd time.Time) (*ShardEntry, error) {
+	log.Printf("provisioner: launching shard %s (tier=%s)", shardID, tier)
+
+	addr, err := p.launcher.LaunchInstance(ctx, tier)
 	if err != nil {
-		log.Printf("provisioner: bootstrap connect failed: %v", err)
-		return
+		return nil, fmt.Errorf("launch: %w", err)
 	}
 
-	p.registry.Add(&ShardEntry{
+	// Connect via gRPC.
+	gs, err := shard.NewGRPCShard(shardID, addr, windowStart, windowEnd)
+	if err != nil {
+		p.launcher.TerminateInstance(ctx, addr)
+		return nil, fmt.Errorf("connect to %s: %w", addr, err)
+	}
+
+	// Configure RPC with retry — instance may need a moment to start.
+	cfg := &pb.ConfigureRequest{
+		ShardId:     shardID,
+		Apps:        apps,
+		WindowStart: windowStart.Format(time.RFC3339),
+		WindowEnd:   windowEnd.Format(time.RFC3339),
+	}
+	var configErr error
+	for i := 0; i < 12; i++ {
+		configErr = gs.Configure(ctx, cfg)
+		if configErr == nil {
+			break
+		}
+		log.Printf("provisioner: configure %s attempt %d: %v", shardID, i+1, configErr)
+		time.Sleep(5 * time.Second)
+	}
+	if configErr != nil {
+		p.launcher.TerminateInstance(ctx, addr)
+		return nil, fmt.Errorf("configure %s: %w", shardID, configErr)
+	}
+
+	log.Printf("provisioner: shard %s ready at %s", shardID, addr)
+
+	return &ShardEntry{
 		ID:          shardID,
-		WindowStart: now,
+		Apps:        apps,
+		WindowStart: windowStart,
 		WindowEnd:   windowEnd,
 		State:       StateIngesting,
 		Shard:       gs,
-		CreatedAt:   now,
-	})
-	log.Printf("provisioner: bootstrapped shard %s at %s (%s to %s)",
-		shardID, addr, now.Format(time.RFC3339), windowEnd.Format(time.RFC3339))
+		CreatedAt:   time.Now(),
+	}, nil
 }
 
 // check evaluates each INGESTING shard for rotation and app split.
@@ -305,42 +339,18 @@ func (p *Provisioner) rotate(ctx context.Context, old *ShardEntry) {
 	newID := fmt.Sprintf("shard-%s-%s-%d", joinApps(old.Apps), now.Format("20060102T1504"), seq)
 	farFuture := now.Add(100 * 365 * 24 * time.Hour)
 
-	cfg := &pb.ConfigureRequest{
-		ShardId:     newID,
-		Apps:        old.Apps,
-		WindowStart: now.Format(time.RFC3339),
-		WindowEnd:   farFuture.Format(time.RFC3339),
-	}
-
-	tier := "small" // TODO: determine from app bucket throughput
-	addr, err := p.launcher.Launch(ctx, tier, cfg)
+	entry, err := p.launchAndConfigure(ctx, newID, "small", old.Apps, now, farFuture)
 	if err != nil {
 		log.Printf("provisioner: failed to launch replacement for %s: %v", old.ID, err)
 		return
 	}
 
-	gs, err := shard.NewGRPCShard(newID, addr, now, farFuture)
-	if err != nil {
-		log.Printf("provisioner: failed to connect to new shard at %s: %v", addr, err)
-		p.launcher.Terminate(ctx, addr)
-		return
-	}
-
-	p.registry.Add(&ShardEntry{
-		ID:          newID,
-		Apps:        old.Apps,
-		WindowStart: now,
-		WindowEnd:   farFuture,
-		State:       StateIngesting,
-		Addr:        addr,
-		Shard:       gs,
-		CreatedAt:   now,
-	})
+	p.registry.Add(entry)
 
 	// Transition old shard.
 	old.WindowEnd = now
 	old.State = StateReadOnly
-	log.Printf("provisioner: shard %s → READ_ONLY, new shard %s at %s", old.ID, newID, addr)
+	log.Printf("provisioner: rotated %s → READ_ONLY, new shard %s", old.ID, newID)
 }
 
 // provisionForBucket launches a new INGESTING shard for a bucket.
@@ -350,39 +360,14 @@ func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket)
 	id := fmt.Sprintf("shard-%s-%s-%d", joinApps(bucket.Apps), now.Format("20060102T1504"), seq)
 	farFuture := now.Add(100 * 365 * 24 * time.Hour)
 
-	cfg := &pb.ConfigureRequest{
-		ShardId:     id,
-		Apps:        bucket.Apps,
-		WindowStart: now.Format(time.RFC3339),
-		WindowEnd:   farFuture.Format(time.RFC3339),
-	}
-
-	tier := "small" // TODO: determine from throughput history
-	addr, err := p.launcher.Launch(ctx, tier, cfg)
+	entry, err := p.launchAndConfigure(ctx, id, "small", bucket.Apps, now, farFuture)
 	if err != nil {
 		log.Printf("provisioner: failed to launch shard for bucket %s: %v", bucket.ID, err)
 		return
 	}
 
-	gs, err := shard.NewGRPCShard(id, addr, now, farFuture)
-	if err != nil {
-		log.Printf("provisioner: failed to connect to new shard at %s: %v", addr, err)
-		p.launcher.Terminate(ctx, addr)
-		return
-	}
-
-	p.registry.Add(&ShardEntry{
-		ID:          id,
-		Apps:        bucket.Apps,
-		WindowStart: now,
-		WindowEnd:   farFuture,
-		State:       StateIngesting,
-		Addr:        addr,
-		Shard:       gs,
-		CreatedAt:   now,
-	})
-
-	log.Printf("provisioner: launched shard %s for bucket %s at %s", id, bucket.ID, addr)
+	p.registry.Add(entry)
+	log.Printf("provisioner: shard %s launched for bucket %s", id, bucket.ID)
 }
 
 func joinApps(apps []string) string {

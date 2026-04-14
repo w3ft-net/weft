@@ -11,26 +11,19 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-
-	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
 // ASGLauncher implements ShardLauncher by scaling AWS Auto Scaling Groups.
-// It maps tier names to ASG names and uses SetDesiredCapacity to provision
-// new instances.
 type ASGLauncher struct {
 	asgClient *autoscaling.Client
 	ec2Client *ec2.Client
 	tiers     map[string]string // tier → ASG name
 	port      int
 	mu        sync.Mutex
-	instances map[string]string // addr → instance ID (for surgical termination)
+	instances map[string]string // addr → instance ID
 	known     map[string]bool   // instance IDs already claimed
 }
 
-// NewASGLauncher creates a launcher for the given tier→ASG name mapping.
 func NewASGLauncher(region string, tiers map[string]string, port int) (*ASGLauncher, error) {
 	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(region))
 	if err != nil {
@@ -46,7 +39,7 @@ func NewASGLauncher(region string, tiers map[string]string, port int) (*ASGLaunc
 	}, nil
 }
 
-func (l *ASGLauncher) Launch(ctx context.Context, tier string, cfg *pb.ConfigureRequest) (string, error) {
+func (l *ASGLauncher) LaunchInstance(ctx context.Context, tier string) (string, error) {
 	asgName, ok := l.tiers[tier]
 	if !ok {
 		return "", fmt.Errorf("unknown tier %q (available: %v)", tier, l.tierNames())
@@ -60,7 +53,6 @@ func (l *ASGLauncher) Launch(ctx context.Context, tier string, cfg *pb.Configure
 	}
 	l.mu.Unlock()
 
-	// Also check current ASG members.
 	currentIDs, err := l.asgInstanceIDs(ctx, asgName)
 	if err != nil {
 		return "", fmt.Errorf("describe ASG %s: %w", asgName, err)
@@ -109,35 +101,16 @@ func (l *ASGLauncher) Launch(ctx context.Context, tier string, cfg *pb.Configure
 	}
 	addr := fmt.Sprintf("%s:%d", ip, l.port)
 
-	// Wait for gRPC to be reachable and call Configure.
-	for i := 0; i < 24; i++ { // up to 2 more minutes
-		time.Sleep(5 * time.Second)
-		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			continue
-		}
-		if cfg != nil {
-			client := pb.NewShardQueryClient(conn)
-			if _, err := client.Configure(ctx, cfg); err != nil {
-				conn.Close()
-				continue
-			}
-		}
-		conn.Close()
+	l.mu.Lock()
+	l.instances[addr] = newInstanceID
+	l.known[newInstanceID] = true
+	l.mu.Unlock()
 
-		l.mu.Lock()
-		l.instances[addr] = newInstanceID
-		l.known[newInstanceID] = true
-		l.mu.Unlock()
-
-		log.Printf("asg-launcher: instance %s ready at %s", newInstanceID, addr)
-		return addr, nil
-	}
-
-	return "", fmt.Errorf("timed out waiting for gRPC on %s (instance %s)", addr, newInstanceID)
+	log.Printf("asg-launcher: instance %s ready at %s", newInstanceID, addr)
+	return addr, nil
 }
 
-func (l *ASGLauncher) Terminate(ctx context.Context, addr string) error {
+func (l *ASGLauncher) TerminateInstance(ctx context.Context, addr string) error {
 	l.mu.Lock()
 	instanceID, ok := l.instances[addr]
 	delete(l.instances, addr)
@@ -158,7 +131,6 @@ func (l *ASGLauncher) Terminate(ctx context.Context, addr string) error {
 	return err
 }
 
-// asgInstanceIDs returns InService instance IDs for the named ASG.
 func (l *ASGLauncher) asgInstanceIDs(ctx context.Context, asgName string) ([]string, error) {
 	out, err := l.asgClient.DescribeAutoScalingGroups(ctx, &autoscaling.DescribeAutoScalingGroupsInput{
 		AutoScalingGroupNames: []string{asgName},
@@ -179,7 +151,6 @@ func (l *ASGLauncher) asgInstanceIDs(ctx context.Context, asgName string) ([]str
 	return ids, nil
 }
 
-// instancePrivateIP returns the private IP for an EC2 instance.
 func (l *ASGLauncher) instancePrivateIP(ctx context.Context, instanceID string) (string, error) {
 	out, err := l.ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		InstanceIds: []string{instanceID},

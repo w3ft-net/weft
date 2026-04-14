@@ -1,20 +1,16 @@
 package coordinator
 
-import (
-	"context"
+import "context"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-)
-
-// ShardLauncher abstracts shard instance lifecycle management.
-// Every implementation handles the full lifecycle: start instance,
-// connect via gRPC, call Configure RPC, return the address.
-// Production uses ASG, tests use in-process or Docker.
+// ShardLauncher abstracts shard instance lifecycle.
+// Implementations only manage infrastructure — starting and stopping
+// instances. The provisioner handles configuration (Configure RPC),
+// health checks, and retry logic.
 type ShardLauncher interface {
-	// Launch starts a new shard instance, configures it via the Configure
-	// RPC, and returns the address (host:port) where it's reachable.
-	Launch(ctx context.Context, tier string, cfg *pb.ConfigureRequest) (addr string, err error)
+	// LaunchInstance starts a new shard instance and returns the
+	// gRPC address (host:port) where it will be reachable.
+	LaunchInstance(ctx context.Context, tier string) (addr string, err error)
 
-	// Terminate removes a shard instance.
-	Terminate(ctx context.Context, addr string) error
+	// TerminateInstance removes a shard instance.
+	TerminateInstance(ctx context.Context, addr string) error
 }

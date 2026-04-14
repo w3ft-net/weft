@@ -39,6 +39,12 @@ func NewGRPCShard(id, addr string, start, end time.Time) (*GRPCShard, error) {
 	}, nil
 }
 
+// Configure calls the Configure RPC to assign identity and time window.
+func (s *GRPCShard) Configure(ctx context.Context, cfg *pb.ConfigureRequest) error {
+	_, err := s.client.Configure(ctx, cfg)
+	return err
+}
+
 func (s *GRPCShard) ID() string            { return s.id }
 func (s *GRPCShard) WindowStart() time.Time { return s.windowStart }
 func (s *GRPCShard) WindowEnd() time.Time   { return s.windowEnd }
