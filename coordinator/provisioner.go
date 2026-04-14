@@ -113,7 +113,14 @@ func (p *Provisioner) Stats() *AppStats {
 }
 
 // Start runs the provisioner loop until the context is cancelled.
+// It ensures at least one INGESTING shard exists on startup.
 func (p *Provisioner) Start(ctx context.Context) {
+	// Bootstrap: if no INGESTING shards exist, create one.
+	if p.registry.TotalIngesting() == 0 {
+		log.Printf("provisioner: no ingesting shards found, bootstrapping")
+		p.bootstrap(ctx)
+	}
+
 	go func() {
 		ticker := time.NewTicker(p.config.PollInterval)
 		defer ticker.Stop()
@@ -127,6 +134,44 @@ func (p *Provisioner) Start(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// bootstrap creates an initial shard to accept data.
+func (p *Provisioner) bootstrap(ctx context.Context) {
+	now := time.Now()
+	windowEnd := now.Add(p.config.MaxDuration)
+	if p.config.MaxDuration == 0 {
+		windowEnd = now.Add(8 * time.Hour)
+	}
+
+	shardID := fmt.Sprintf("shard-%d", now.UnixMilli())
+
+	addr, err := p.launcher.Launch(ctx, "small", &pb.ConfigureRequest{
+		ShardId:     shardID,
+		WindowStart: now.Format(time.RFC3339),
+		WindowEnd:   windowEnd.Format(time.RFC3339),
+	})
+	if err != nil {
+		log.Printf("provisioner: bootstrap failed: %v", err)
+		return
+	}
+
+	gs, err := shard.NewGRPCShard(shardID, addr, now, windowEnd)
+	if err != nil {
+		log.Printf("provisioner: bootstrap connect failed: %v", err)
+		return
+	}
+
+	p.registry.Add(&ShardEntry{
+		ID:          shardID,
+		WindowStart: now,
+		WindowEnd:   windowEnd,
+		State:       StateIngesting,
+		Shard:       gs,
+		CreatedAt:   now,
+	})
+	log.Printf("provisioner: bootstrapped shard %s at %s (%s to %s)",
+		shardID, addr, now.Format(time.RFC3339), windowEnd.Format(time.RFC3339))
 }
 
 // check evaluates each INGESTING shard for rotation and app split.

@@ -41,9 +41,6 @@ type ShardEntry struct {
 // hasApp returns true if this entry owns the given app, or if the entry
 // is a legacy/shared shard with an empty Apps list (matches all apps).
 func (e *ShardEntry) hasApp(app string) bool {
-	if len(e.Apps) == 0 {
-		return true // legacy: empty = all apps
-	}
 	// Strip .metrics suffix: weft/coordinator.metrics → weft/coordinator
 	base := strings.TrimSuffix(app, ".metrics")
 	// Extract namespace: weft/coordinator → weft
@@ -229,6 +226,19 @@ func (r *ShardRegistry) IngestingShard(app string) shard.Shard {
 	}
 	idx := r.robin.Add(1) % uint64(len(candidates))
 	return candidates[idx]
+}
+
+// TotalIngesting returns the count of all INGESTING shards regardless of app.
+func (r *ShardRegistry) TotalIngesting() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	n := 0
+	for _, e := range r.entries {
+		if e.State == StateIngesting && e.Shard != nil {
+			n++
+		}
+	}
+	return n
 }
 
 // IngestingCount returns the number of INGESTING shards for the given app.

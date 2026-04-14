@@ -1,47 +1,4 @@
 services:
-  shard-0:
-    build:
-      context: ..
-      dockerfile: weft/Dockerfile
-    command:
-      - weft-shard
-      - --id=shard-0
-      - --grpc-port=9000
-      - --http-port=9001
-      - --window-start=2026-03-28T10:00:00Z
-      - --window-end=2026-03-28T11:00:00Z
-      - --seed=shard-0
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-
-  shard-1:
-    build:
-      context: ..
-      dockerfile: weft/Dockerfile
-    command:
-      - weft-shard
-      - --id=shard-1
-      - --grpc-port=9000
-      - --http-port=9001
-      - --window-start=2026-03-28T11:00:00Z
-      - --window-end=2026-03-28T12:00:00Z
-      - --seed=shard-1
-    ports:
-      - "9002:9000"
-      - "9003:9001"
-
-  compute:
-    build:
-      context: ..
-      dockerfile: weft/Dockerfile
-    command:
-      - weft-compute
-      - --port=9010
-      - --parallelism=2
-    ports:
-      - "9010:9010"
-
   postgres:
     image: postgres:16
     environment:
@@ -64,8 +21,6 @@ services:
       - weft-coordinator
       - --port=9020
       - --health-port=9021
-      - --shards=shard-0=shard-0:9000=2026-03-28T10:00:00Z=2026-03-28T11:00:00Z,shard-1=shard-1:9000=2026-03-28T11:00:00Z=2026-03-28T12:00:00Z
-      - --compute=compute:9010
       - --customer=kevlar
       - --db-dsn=host=postgres dbname=weft user=weft password=weft sslmode=disable
     ports:
@@ -74,12 +29,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      shard-0:
-        condition: service_started
-      shard-1:
-        condition: service_started
-      compute:
-        condition: service_started
 
   api:
     build:
@@ -113,24 +62,6 @@ services:
     depends_on:
       coordinator:
         condition: service_started
-
-  lambda-shard:
-    build:
-      context: ..
-      dockerfile: weft/Dockerfile
-    command:
-      - /usr/local/bin/lambda-shard
-    environment:
-      PORT: "9030"
-      WEFT_S3_ENDPOINT: minio:9000
-      WEFT_S3_ACCESS_KEY: minioadmin
-      WEFT_S3_SECRET_KEY: minioadmin
-      WEFT_S3_REGION: us-east-1
-      WEFT_S3_USE_SSL: "false"
-    ports:
-      - "9030:9030"
-    depends_on:
-      - minio
 
   minio:
     image: minio/minio:latest

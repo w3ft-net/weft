@@ -75,9 +75,8 @@ func main() {
 			shards = append(shards, discovered...)
 			log.Printf("discovered %d shards from ASG %s", len(discovered), asgName)
 		}
-	} else {
-		log.Fatal("either --shards or --shard-asg-small is required")
 	}
+	// No shards configured = provisioner will bootstrap them.
 
 	// Compute pool setup.
 	var pool compute.ComputePool
@@ -143,8 +142,12 @@ func main() {
 		go rediscoverLoop(disc, coord)
 	}
 
-	// Start provisioner with ASG launcher if tiers are configured.
+	// Start provisioner.
+	provCtx, provCancel := context.WithCancel(context.Background())
+	defer provCancel()
+
 	if len(shardTiers) > 0 {
+		// Production: ASG launcher for shard EC2 instances.
 		asgLauncher, err := coordinator.NewASGLauncher(*awsRegion, shardTiers, 9000)
 		if err != nil {
 			log.Printf("warning: ASG launcher unavailable: %v", err)
@@ -155,11 +158,18 @@ func main() {
 			provConfig.LambdaFunctionURL = os.Getenv("WEFT_LAMBDA_FUNCTION_URL")
 			prov := coordinator.NewProvisioner(coord.Registry, asgLauncher, provConfig)
 			coord.Provisioner = prov
-			provCtx, provCancel := context.WithCancel(context.Background())
-			defer provCancel()
 			prov.Start(provCtx)
-			log.Printf("provisioner: started with tiers %v", shardTiers)
+			log.Printf("provisioner: started with ASG tiers %v", shardTiers)
 		}
+	} else {
+		// Dev/Docker: local in-process DuckDB shards managed by provisioner.
+		launcher := coordinator.NewLocalLauncher()
+		provConfig := coordinator.DevProvisionerConfig()
+		provConfig.ParquetDir = os.Getenv("WEFT_PARQUET_DIR")
+		prov := coordinator.NewProvisioner(coord.Registry, launcher, provConfig)
+		coord.Provisioner = prov
+		prov.Start(provCtx)
+		log.Printf("provisioner: started with local launcher (dev mode)")
 	}
 
 	// Config store (PostgreSQL).
@@ -180,16 +190,12 @@ func main() {
 		// Start usage metering flush (every 5 minutes).
 		coord.StartUsageFlush(drainCtx, db)
 
-		// Seed dev apps and agent token if shards were configured with seed data.
-		if *shardsFlag != "" {
+		// Seed dev data when running with a customer flag (dev/docker mode).
+		if *customer != "" {
 			cust, _ := db.FindOrCreateCustomer(*customer)
 			if cust != nil {
-				for _, appName := range []string{"vimgym", "callbox"} {
-					db.FindOrCreateApp(cust.ID, appName)
-				}
-				// Seed a dev subscription and agent token so weftd can authenticate.
 				db.SeedDevSubscription(cust.Name)
-				db.SeedDevAgentToken(cust.ID, "dev-agent", "vimgym")
+				db.SeedDevAgentToken(cust.ID, "dev-agent", *customer)
 			}
 		}
 
