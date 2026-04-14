@@ -1447,6 +1447,7 @@ type CoordinatorQueryRequest struct {
 	TimeStartNs   int64                  `protobuf:"varint,2,opt,name=time_start_ns,json=timeStartNs,proto3" json:"time_start_ns,omitempty"` // 0 = use default
 	TimeEndNs     int64                  `protobuf:"varint,3,opt,name=time_end_ns,json=timeEndNs,proto3" json:"time_end_ns,omitempty"`       // 0 = use default
 	Follow        bool                   `protobuf:"varint,4,opt,name=follow,proto3" json:"follow,omitempty"`                                // if true, stream stays open for live tail
+	Customer      string                 `protobuf:"bytes,5,opt,name=customer,proto3" json:"customer,omitempty"`                             // customer name for row-level security (from JWT)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1507,6 +1508,13 @@ func (x *CoordinatorQueryRequest) GetFollow() bool {
 		return x.Follow
 	}
 	return false
+}
+
+func (x *CoordinatorQueryRequest) GetCustomer() string {
+	if x != nil {
+		return x.Customer
+	}
+	return ""
 }
 
 type CoordinatorQueryResponse struct {
@@ -3184,12 +3192,13 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x14AuthenticateResponse\x12\x1a\n" +
 	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x1c\n" +
 	"\tnamespace\x18\x05 \x01(\tR\tnamespaceJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\n" +
-	"shard_addrR\vshard_tokenR\rexpires_at_ns\"\x91\x01\n" +
+	"shard_addrR\vshard_tokenR\rexpires_at_ns\"\xad\x01\n" +
 	"\x17CoordinatorQueryRequest\x12\x1a\n" +
 	"\bpipeline\x18\x01 \x01(\tR\bpipeline\x12\"\n" +
 	"\rtime_start_ns\x18\x02 \x01(\x03R\vtimeStartNs\x12\x1e\n" +
 	"\vtime_end_ns\x18\x03 \x01(\x03R\ttimeEndNs\x12\x16\n" +
-	"\x06follow\x18\x04 \x01(\bR\x06follow\"P\n" +
+	"\x06follow\x18\x04 \x01(\bR\x06follow\x12\x1a\n" +
+	"\bcustomer\x18\x05 \x01(\tR\bcustomer\"P\n" +
 	"\x18CoordinatorQueryResponse\x12 \n" +
 	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\"\x11\n" +

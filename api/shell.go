@@ -67,6 +67,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	stream, err := s.coordClient.Query(ctx, &pb.CoordinatorQueryRequest{
 		Pipeline: req.Pipeline,
 		Follow:   req.Follow,
+		Customer: claims.CustomerName,
 	})
 	if err != nil {
 		writeSSEEvent(w, map[string]any{"type": "error", "message": err.Error()})

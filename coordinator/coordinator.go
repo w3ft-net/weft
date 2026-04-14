@@ -209,7 +209,7 @@ func (c *Coordinator) IngestingShard(app string) shard.Shard {
 // Query parses a pipeline, routes the pushed-down SQL to matching shards,
 // and returns results. If compute stages exist and a Pool is set, shard
 // rows are streamed to the compute pool for post-processing.
-func (c *Coordinator) Query(pipeline string, tr TimeRange) (*QueryResult, error) {
+func (c *Coordinator) Query(pipeline string, tr TimeRange, customerOverride ...string) (*QueryResult, error) {
 	plan, err := planner.Plan(pipeline)
 	if err != nil {
 		return nil, fmt.Errorf("plan: %w", err)
@@ -220,7 +220,11 @@ func (c *Coordinator) Query(pipeline string, tr TimeRange) (*QueryResult, error)
 		return c.runLocal(plan.LocalPipeline)
 	}
 
-	sql := planner.InjectCustomer(plan.ShardSQL, c.Customer)
+	customer := c.Customer
+	if len(customerOverride) > 0 && customerOverride[0] != "" {
+		customer = customerOverride[0]
+	}
+	sql := planner.InjectCustomer(plan.ShardSQL, customer)
 	sql = planner.ApplyProjection(sql, plan.Project)
 
 	matching := c.Registry.MatchingShards(tr, plan.FollowApp)

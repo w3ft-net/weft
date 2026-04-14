@@ -34,7 +34,7 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 		tr.End = time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
 	}
 
-	result, err := s.Coord.Query(req.Pipeline, tr)
+	result, err := s.Coord.Query(req.Pipeline, tr, req.Customer)
 	if err != nil {
 		return err
 	}

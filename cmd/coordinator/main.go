@@ -36,7 +36,7 @@ func main() {
 	computeAddr := flag.String("compute", "", "compute worker address (host:port)")
 	computeASG := flag.String("compute-asg", "", "compute ASG name for AWS discovery (production)")
 	awsRegion := flag.String("region", "us-east-2", "AWS region for ASG discovery")
-	customer := flag.String("customer", "kevlar", "customer ID for row-level security")
+	customer := flag.String("customer", "", "fallback customer for dev/docker (queries pass customer per-request)")
 	dbDSN := flag.String("db-dsn", "", "PostgreSQL DSN (e.g., host=localhost dbname=weft user=weft password=...)")
 	flag.Parse()
 
