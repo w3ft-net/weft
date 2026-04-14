@@ -273,6 +273,7 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 	var mu sync.Mutex
 	var rows []*pb.LogRow
 	var count int64
+	var firstApp string
 
 	// Periodic flush for sparse streams.
 	ticker := time.NewTicker(2 * time.Second)
@@ -298,6 +299,10 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 		}
 
 		mu.Lock()
+		if count == 0 {
+			firstApp = row.App
+			log.Printf("ingest-stream: first row from customer=%s app=%s", row.Customer, row.App)
+		}
 		rows = append(rows, row)
 		count++
 		if len(rows) >= 100 {
@@ -306,6 +311,8 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 		}
 		mu.Unlock()
 	}
+
+	_ = firstApp
 
 	mu.Lock()
 	if len(rows) > 0 {
@@ -323,8 +330,14 @@ func (s *Server) ingestBatch(rows []*pb.LogRow) {
 		s.Coord.Ingest.Write(rows)
 	} else {
 		// Fallback: direct shard write (dev mode without ring buffer).
-		for _, sh := range s.Coord.GetShards() {
+		shards := s.Coord.GetShards()
+		if len(shards) == 0 {
+			log.Printf("ingest: dropping %d rows (no shards available)", len(rows))
+			return
+		}
+		for _, sh := range shards {
 			if err := sh.Ingest(rows); err != nil {
+				log.Printf("ingest: shard write error: %v", err)
 				continue
 			}
 			break
