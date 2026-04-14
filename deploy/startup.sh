@@ -138,17 +138,12 @@ if [ "$ROLE" = "shard" ]; then
     --region "$REGION" \
     --query 'Parameter.Value' --output text 2>/dev/null || echo "")
 
-  NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  WINDOW_END=$(date -u -d "+8 hours" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+8H +%Y-%m-%dT%H:%M:%SZ)
-
   cat > /opt/app/shard.env <<EOF
 SHARD_ID=${INSTANCE_ID}
 COORDINATOR_ADDR=${COORD_NLB:-localhost:9020}
-WINDOW_START=${NOW}
-WINDOW_END=${WINDOW_END}
 EOF
   chown app:app /opt/app/shard.env
-  echo "shard env: id=$INSTANCE_ID coordinator=$COORD_NLB window=$NOW..$WINDOW_END"
+  echo "shard env: id=$INSTANCE_ID coordinator=$COORD_NLB"
 fi
 
 systemctl start "weft-$ROLE"
