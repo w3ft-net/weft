@@ -27,3 +27,4 @@ RUN CGO_ENABLED=0 go build -o /bin/weftd ./cmd/weftd
 FROM golang:1.26
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /bin/weft-shard /bin/weft-compute /bin/weft-coordinator /bin/weft-api /bin/lambda-shard /bin/weftd /usr/local/bin/
+COPY --from=builder /src/weft/deploy/entrypoint.sh /usr/local/bin/entrypoint.sh

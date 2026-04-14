@@ -168,16 +168,26 @@ build {
     ]
   }
 
-  # Copy startup script
+  # Copy startup scripts
   provisioner "file" {
     source      = "deploy/startup.sh"
     destination = "/tmp/startup.sh"
   }
 
+  provisioner "file" {
+    source      = "deploy/fetch-config.sh"
+    destination = "/tmp/fetch-config.sh"
+  }
+
+  provisioner "file" {
+    source      = "deploy/start-role.sh"
+    destination = "/tmp/start-role.sh"
+  }
+
   provisioner "shell" {
     inline = [
-      "sudo mv /tmp/startup.sh /opt/app/scripts/startup.sh",
-      "sudo chmod +x /opt/app/scripts/startup.sh",
+      "sudo mv /tmp/startup.sh /tmp/fetch-config.sh /tmp/start-role.sh /opt/app/scripts/",
+      "sudo chmod +x /opt/app/scripts/startup.sh /opt/app/scripts/fetch-config.sh /opt/app/scripts/start-role.sh",
     ]
   }
 

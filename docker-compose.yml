@@ -22,13 +22,13 @@ services:
     build:
       context: ..
       dockerfile: weft/Dockerfile
-    command:
-      - weft-shard
-      - --id=shard-0
-      - --grpc-port=9000
-      - --http-port=9001
-      - --coordinator-addr=coordinator:9020
-      - --heartbeat-interval=10s
+    entrypoint: ["/usr/local/bin/entrypoint.sh"]
+    environment:
+      ROLE: shard
+      SHARD_ID: shard-0
+      COORDINATOR_ADDR: coordinator:9020
+      HEARTBEAT_INTERVAL: "10s"
+      SHARD_DB_PATH: ""
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -40,13 +40,13 @@ services:
     build:
       context: ..
       dockerfile: weft/Dockerfile
-    command:
-      - weft-shard
-      - --id=shard-1
-      - --grpc-port=9000
-      - --http-port=9001
-      - --coordinator-addr=coordinator:9020
-      - --heartbeat-interval=10s
+    entrypoint: ["/usr/local/bin/entrypoint.sh"]
+    environment:
+      ROLE: shard
+      SHARD_ID: shard-1
+      COORDINATOR_ADDR: coordinator:9020
+      HEARTBEAT_INTERVAL: "10s"
+      SHARD_DB_PATH: ""
     ports:
       - "9002:9000"
       - "9003:9001"
@@ -58,12 +58,11 @@ services:
     build:
       context: ..
       dockerfile: weft/Dockerfile
-    command:
-      - weft-coordinator
-      - --port=9020
-      - --health-port=9021
-      - --customer=kevlar
-      - --db-dsn=host=postgres dbname=weft user=weft password=weft sslmode=disable
+    entrypoint: ["/usr/local/bin/entrypoint.sh"]
+    environment:
+      ROLE: coordinator
+      WEFT_DB_DSN: host=postgres dbname=weft user=weft password=weft sslmode=disable
+      WEFT_CUSTOMER: kevlar
     ports:
       - "9020:9020"
       - "9021:9021"
@@ -75,13 +74,12 @@ services:
     build:
       context: ..
       dockerfile: weft/Dockerfile
-    command:
-      - weft-api
-      - --port=8080
-      - --coordinator=coordinator:9020
-      - --db-dsn=host=postgres dbname=weft user=weft password=weft sslmode=disable
-      - --base-url=http://localhost:5173
+    entrypoint: ["/usr/local/bin/entrypoint.sh"]
     environment:
+      ROLE: api
+      WEFT_DB_DSN: host=postgres dbname=weft user=weft password=weft sslmode=disable
+      COORDINATOR_ADDR: coordinator:9020
+      BASE_URL: http://localhost:5173
       JWT_SECRET: dev-secret
     ports:
       - "8080:8080"
