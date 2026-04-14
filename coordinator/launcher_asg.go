@@ -9,19 +9,37 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
+	astypes "github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
 
+// ASGApi is the subset of the autoscaling client we use.
+type ASGApi interface {
+	SetDesiredCapacity(ctx context.Context, params *autoscaling.SetDesiredCapacityInput, optFns ...func(*autoscaling.Options)) (*autoscaling.SetDesiredCapacityOutput, error)
+	DescribeAutoScalingGroups(ctx context.Context, params *autoscaling.DescribeAutoScalingGroupsInput, optFns ...func(*autoscaling.Options)) (*autoscaling.DescribeAutoScalingGroupsOutput, error)
+	TerminateInstanceInAutoScalingGroup(ctx context.Context, params *autoscaling.TerminateInstanceInAutoScalingGroupInput, optFns ...func(*autoscaling.Options)) (*autoscaling.TerminateInstanceInAutoScalingGroupOutput, error)
+}
+
+// EC2Api is the subset of the ec2 client we use.
+type EC2Api interface {
+	DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
+}
+
 // ASGLauncher implements ShardLauncher by scaling AWS Auto Scaling Groups.
 type ASGLauncher struct {
-	asgClient *autoscaling.Client
-	ec2Client *ec2.Client
+	asgClient ASGApi
+	ec2Client EC2Api
 	tiers     map[string]string // tier → ASG name
 	port      int
 	mu        sync.Mutex
 	instances map[string]string // addr → instance ID
 	known     map[string]bool   // instance IDs already claimed
+
+	// PollInterval and PollAttempts control how long we wait for new instances.
+	// Exported for testing. Defaults: 5s interval, 60 attempts (5 min).
+	PollInterval time.Duration
+	PollAttempts int
 }
 
 func NewASGLauncher(region string, tiers map[string]string, port int) (*ASGLauncher, error) {
@@ -30,13 +48,29 @@ func NewASGLauncher(region string, tiers map[string]string, port int) (*ASGLaunc
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
 	return &ASGLauncher{
-		asgClient: autoscaling.NewFromConfig(cfg),
-		ec2Client: ec2.NewFromConfig(cfg),
-		tiers:     tiers,
-		port:      port,
-		instances: make(map[string]string),
-		known:     make(map[string]bool),
+		asgClient:    autoscaling.NewFromConfig(cfg),
+		ec2Client:    ec2.NewFromConfig(cfg),
+		tiers:        tiers,
+		port:         port,
+		instances:    make(map[string]string),
+		known:        make(map[string]bool),
+		PollInterval: 5 * time.Second,
+		PollAttempts: 60,
 	}, nil
+}
+
+// NewASGLauncherWithClients creates a launcher with injected clients (for testing).
+func NewASGLauncherWithClients(asg ASGApi, ec2c EC2Api, tiers map[string]string, port int) *ASGLauncher {
+	return &ASGLauncher{
+		asgClient:    asg,
+		ec2Client:    ec2c,
+		tiers:        tiers,
+		port:         port,
+		instances:    make(map[string]string),
+		known:        make(map[string]bool),
+		PollInterval: 10 * time.Millisecond, // fast for tests
+		PollAttempts: 20,
+	}
 }
 
 func (l *ASGLauncher) LaunchInstance(ctx context.Context, tier string) (string, error) {
@@ -74,8 +108,8 @@ func (l *ASGLauncher) LaunchInstance(ctx context.Context, tier string) (string, 
 
 	// Poll for a new InService instance.
 	var newInstanceID string
-	for i := 0; i < 60; i++ { // up to 5 minutes
-		time.Sleep(5 * time.Second)
+	for i := 0; i < l.PollAttempts; i++ {
+		time.Sleep(l.PollInterval)
 		ids, err := l.asgInstanceIDs(ctx, asgName)
 		if err != nil {
 			continue
@@ -144,7 +178,7 @@ func (l *ASGLauncher) asgInstanceIDs(ctx context.Context, asgName string) ([]str
 
 	var ids []string
 	for _, inst := range out.AutoScalingGroups[0].Instances {
-		if inst.LifecycleState == "InService" && inst.InstanceId != nil {
+		if inst.LifecycleState == astypes.LifecycleStateInService && inst.InstanceId != nil {
 			ids = append(ids, *inst.InstanceId)
 		}
 	}
