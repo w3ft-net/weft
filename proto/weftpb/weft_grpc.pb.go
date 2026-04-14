@@ -486,6 +486,7 @@ const (
 	WeftCoordinator_ListWatches_FullMethodName     = "/weft.WeftCoordinator/ListWatches"
 	WeftCoordinator_DeleteWatch_FullMethodName     = "/weft.WeftCoordinator/DeleteWatch"
 	WeftCoordinator_GetWatchResults_FullMethodName = "/weft.WeftCoordinator/GetWatchResults"
+	WeftCoordinator_Heartbeat_FullMethodName       = "/weft.WeftCoordinator/Heartbeat"
 )
 
 // WeftCoordinatorClient is the client API for WeftCoordinator service.
@@ -525,6 +526,8 @@ type WeftCoordinatorClient interface {
 	ListWatches(ctx context.Context, in *ListWatchesRequest, opts ...grpc.CallOption) (*ListWatchesResponse, error)
 	DeleteWatch(ctx context.Context, in *DeleteWatchRequest, opts ...grpc.CallOption) (*DeleteWatchResponse, error)
 	GetWatchResults(ctx context.Context, in *GetWatchResultsRequest, opts ...grpc.CallOption) (*GetWatchResultsResponse, error)
+	// Shard heartbeat — shards push their state to the coordinator every 60s.
+	Heartbeat(ctx context.Context, in *ShardHeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 }
 
 type weftCoordinatorClient struct {
@@ -747,6 +750,16 @@ func (c *weftCoordinatorClient) GetWatchResults(ctx context.Context, in *GetWatc
 	return out, nil
 }
 
+func (c *weftCoordinatorClient) Heartbeat(ctx context.Context, in *ShardHeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HeartbeatResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_Heartbeat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WeftCoordinatorServer is the server API for WeftCoordinator service.
 // All implementations must embed UnimplementedWeftCoordinatorServer
 // for forward compatibility.
@@ -784,6 +797,8 @@ type WeftCoordinatorServer interface {
 	ListWatches(context.Context, *ListWatchesRequest) (*ListWatchesResponse, error)
 	DeleteWatch(context.Context, *DeleteWatchRequest) (*DeleteWatchResponse, error)
 	GetWatchResults(context.Context, *GetWatchResultsRequest) (*GetWatchResultsResponse, error)
+	// Shard heartbeat — shards push their state to the coordinator every 60s.
+	Heartbeat(context.Context, *ShardHeartbeatRequest) (*HeartbeatResponse, error)
 	mustEmbedUnimplementedWeftCoordinatorServer()
 }
 
@@ -853,6 +868,9 @@ func (UnimplementedWeftCoordinatorServer) DeleteWatch(context.Context, *DeleteWa
 }
 func (UnimplementedWeftCoordinatorServer) GetWatchResults(context.Context, *GetWatchResultsRequest) (*GetWatchResultsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetWatchResults not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) Heartbeat(context.Context, *ShardHeartbeatRequest) (*HeartbeatResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Heartbeat not implemented")
 }
 func (UnimplementedWeftCoordinatorServer) mustEmbedUnimplementedWeftCoordinatorServer() {}
 func (UnimplementedWeftCoordinatorServer) testEmbeddedByValue()                         {}
@@ -1217,6 +1235,24 @@ func _WeftCoordinator_GetWatchResults_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WeftCoordinator_Heartbeat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ShardHeartbeatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).Heartbeat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_Heartbeat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).Heartbeat(ctx, req.(*ShardHeartbeatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WeftCoordinator_ServiceDesc is the grpc.ServiceDesc for WeftCoordinator service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1295,6 +1331,10 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetWatchResults",
 			Handler:    _WeftCoordinator_GetWatchResults_Handler,
+		},
+		{
+			MethodName: "Heartbeat",
+			Handler:    _WeftCoordinator_Heartbeat_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

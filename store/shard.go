@@ -38,3 +38,43 @@ func (s *Store) ListShardsByState(state string) ([]ShardRecord, error) {
 	err := s.db.Where("state = ?", state).Find(&records).Error
 	return records, err
 }
+
+// ── Shard heartbeats ────────────────────────────────────────
+
+// ShardHeartbeat represents a shard's periodic status report.
+type ShardHeartbeat struct {
+	ShardID     string
+	Addr        string
+	InstanceID  string
+	Apps        string // JSON array
+	WindowStart string // RFC3339
+	WindowEnd   string // RFC3339
+	State       string
+	RowCount    int64
+	DiskBytes   int64
+	BeatAt      string // RFC3339
+}
+
+// InsertHeartbeat writes a heartbeat row. Uses raw SQL since the table
+// is partitioned and not managed by GORM AutoMigrate.
+func (s *Store) InsertHeartbeat(hb *ShardHeartbeat) error {
+	return s.db.Exec(`
+		INSERT INTO shard_heartbeats (shard_id, addr, instance_id, apps, window_start, window_end, state, row_count, disk_bytes, beat_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+		hb.ShardID, hb.Addr, hb.InstanceID, hb.Apps, hb.WindowStart, hb.WindowEnd, hb.State, hb.RowCount, hb.DiskBytes).Error
+}
+
+// LiveShardHeartbeats returns the most recent heartbeat per shard
+// where beat_at is within the given duration. A shard with no heartbeat
+// in this window is considered dead.
+func (s *Store) LiveShardHeartbeats(since string) ([]ShardHeartbeat, error) {
+	var results []ShardHeartbeat
+	err := s.db.Raw(`
+		SELECT DISTINCT ON (shard_id)
+			shard_id, addr, instance_id, apps, window_start, window_end, state, row_count, disk_bytes, beat_at
+		FROM shard_heartbeats
+		WHERE beat_at > NOW() - ?::interval
+		ORDER BY shard_id, beat_at DESC`,
+		since).Scan(&results).Error
+	return results, err
+}

@@ -152,6 +152,11 @@ func main() {
 		// Start usage metering flush (every 5 minutes).
 		coord.StartUsageFlush(drainCtx, db)
 
+		// Give the provisioner access to the store for heartbeat adoption.
+		if coord.Provisioner != nil {
+			coord.Provisioner.SetStore(db)
+		}
+
 		// Seed dev data when running with a customer flag (dev/docker mode).
 		if *customer != "" {
 			cust, _ := db.FindOrCreateCustomer(*customer)

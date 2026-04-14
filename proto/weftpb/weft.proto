@@ -168,7 +168,24 @@ service WeftCoordinator {
   rpc ListWatches(ListWatchesRequest) returns (ListWatchesResponse);
   rpc DeleteWatch(DeleteWatchRequest) returns (DeleteWatchResponse);
   rpc GetWatchResults(GetWatchResultsRequest) returns (GetWatchResultsResponse);
+
+  // Shard heartbeat — shards push their state to the coordinator every 60s.
+  rpc Heartbeat(ShardHeartbeatRequest) returns (HeartbeatResponse);
 }
+
+message ShardHeartbeatRequest {
+  string shard_id = 1;
+  string addr = 2;              // gRPC address (ip:port)
+  string instance_id = 3;       // EC2 instance ID
+  repeated string apps = 4;
+  string window_start = 5;      // RFC3339
+  string window_end = 6;        // RFC3339
+  string state = 7;             // INGESTING, READ_ONLY
+  int64 row_count = 8;
+  int64 disk_bytes = 9;
+}
+
+message HeartbeatResponse {}
 
 message GetUsageRequest {
   string customer = 1;

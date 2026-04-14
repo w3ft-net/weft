@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
+	"github.com/kevlarcon/weft/store"
 )
 
 // ProvisionerConfig controls shard rotation thresholds.
@@ -26,6 +28,7 @@ type ProvisionerConfig struct {
 	ParquetDir         string          // directory for Parquet exports (local path or s3:// prefix)
 	S3Config           *shard.S3Config // S3 credentials for Parquet export/read (nil = local only)
 	LambdaFunctionURL  string          // Lambda function URL for cold queries (empty = in-process ColdShard)
+	Store              *store.Store    // for reading shard heartbeats (nil = no heartbeat adoption)
 }
 
 // DefaultProvisionerConfig returns sensible production defaults.
@@ -106,6 +109,12 @@ func NewProvisioner(registry *ShardRegistry, launcher ShardLauncher, config Prov
 	}
 }
 
+// SetStore provides the store for heartbeat queries. Called after the store
+// is opened (which may happen after the provisioner starts).
+func (p *Provisioner) SetStore(s *store.Store) {
+	p.config.Store = s
+}
+
 // Stats returns the provisioner's app stats tracker. The drain loop
 // should call stats.Record() after each successful ingestion.
 func (p *Provisioner) Stats() *AppStats {
@@ -116,9 +125,10 @@ func (p *Provisioner) Stats() *AppStats {
 // It ensures at least one INGESTING shard exists on startup.
 func (p *Provisioner) Start(ctx context.Context) {
 	go func() {
-		// Bootstrap: if no INGESTING shards exist, create one.
+		// First tick: adopt live shards from heartbeats, then bootstrap if needed.
+		p.adoptFromHeartbeats()
 		if p.registry.TotalIngesting() == 0 {
-			log.Printf("provisioner: no ingesting shards found, bootstrapping")
+			log.Printf("provisioner: no ingesting shards after adoption, bootstrapping")
 			p.bootstrap(ctx)
 		}
 
@@ -130,10 +140,66 @@ func (p *Provisioner) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				p.adoptFromHeartbeats()
 				p.check(ctx)
 			}
 		}
 	}()
+}
+
+// adoptFromHeartbeats reads recent shard heartbeats from the store
+// and adds any unknown shards to the registry.
+func (p *Provisioner) adoptFromHeartbeats() {
+	if p.config.Store == nil {
+		return
+	}
+
+	heartbeats, err := p.config.Store.LiveShardHeartbeats("2 minutes")
+	if err != nil {
+		log.Printf("provisioner: heartbeat query failed: %v", err)
+		return
+	}
+
+	for _, hb := range heartbeats {
+		if p.registry.Get(hb.ShardID) != nil {
+			continue // already known
+		}
+
+		gs, err := shard.NewGRPCShard(hb.ShardID, hb.Addr,
+			parseTime(hb.WindowStart), parseTime(hb.WindowEnd))
+		if err != nil {
+			log.Printf("provisioner: adopt %s at %s failed: %v", hb.ShardID, hb.Addr, err)
+			continue
+		}
+
+		var apps []string
+		json.Unmarshal([]byte(hb.Apps), &apps)
+
+		state := StateIngesting
+		if hb.State == "READ_ONLY" {
+			state = StateReadOnly
+		}
+
+		p.registry.Add(&ShardEntry{
+			ID:          hb.ShardID,
+			Apps:        apps,
+			Addr:        hb.Addr,
+			InstanceID:  hb.InstanceID,
+			WindowStart: parseTime(hb.WindowStart),
+			WindowEnd:   parseTime(hb.WindowEnd),
+			State:       state,
+			RowCount:    hb.RowCount,
+			Shard:       gs,
+			CreatedAt:   time.Now(),
+		})
+		log.Printf("provisioner: adopted shard %s at %s (state=%s, rows=%d)",
+			hb.ShardID, hb.Addr, hb.State, hb.RowCount)
+	}
+}
+
+func parseTime(s string) time.Time {
+	t, _ := time.Parse(time.RFC3339, s)
+	return t
 }
 
 // bootstrap creates an initial shard to accept data.

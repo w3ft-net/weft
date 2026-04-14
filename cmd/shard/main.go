@@ -1,15 +1,18 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/kevlarcon/weft/coordinator"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
@@ -25,6 +28,7 @@ func main() {
 	windowStart := flag.String("window-start", "", "window start (RFC3339)")
 	windowEnd := flag.String("window-end", "", "window end (RFC3339)")
 	seed := flag.String("seed", "", "seed with fixture data: shard-0 or shard-1")
+	coordAddr := flag.String("coordinator-addr", "", "coordinator gRPC address for heartbeats (e.g., coordinator:9020)")
 	flag.Parse()
 
 	// Blank-start mode: if no window flags, start without DuckDB and wait
@@ -75,6 +79,32 @@ func main() {
 		}
 	}()
 
+	// Heartbeat goroutine: push state to coordinator every 60s.
+	if *coordAddr != "" {
+		go func() {
+			hostname, _ := os.Hostname()
+			myAddr := fmt.Sprintf("%s:%d", hostname, *grpcPort)
+
+			conn, err := grpc.NewClient(*coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				log.Printf("heartbeat: connect to coordinator: %v", err)
+				return
+			}
+			client := pb.NewWeftCoordinatorClient(conn)
+
+			ticker := time.NewTicker(60 * time.Second)
+			defer ticker.Stop()
+
+			// Send first heartbeat immediately.
+			sendHeartbeat(client, *shardID, myAddr, ds)
+
+			for range ticker.C {
+				sendHeartbeat(client, *shardID, myAddr, ds)
+			}
+		}()
+		log.Printf("shard %s heartbeating to %s", *shardID, *coordAddr)
+	}
+
 	// HTTP health endpoint.
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		h := map[string]any{
@@ -95,5 +125,26 @@ func main() {
 	log.Printf("shard %s HTTP listening on :%d", *shardID, *httpPort)
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", *httpPort), nil); err != nil {
 		log.Fatalf("http serve: %v", err)
+	}
+}
+
+func sendHeartbeat(client pb.WeftCoordinatorClient, shardID, addr string, ds *shard.DuckDBShard) {
+	req := &pb.ShardHeartbeatRequest{
+		ShardId: shardID,
+		Addr:    addr,
+		State:   "UNCONFIGURED",
+	}
+	if ds != nil {
+		req.State = "INGESTING"
+		req.WindowStart = ds.WindowStart().Format(time.RFC3339)
+		req.WindowEnd = ds.WindowEnd().Format(time.RFC3339)
+		req.RowCount = ds.RowCount()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := client.Heartbeat(ctx, req); err != nil {
+		log.Printf("heartbeat: %v", err)
 	}
 }

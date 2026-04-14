@@ -18,6 +18,16 @@ type RingBuffer struct {
 	notify chan struct{} // signaled on write
 }
 
+// UsagePct returns the buffer fill percentage (0-100).
+func (r *RingBuffer) UsagePct() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.size == 0 {
+		return 0
+	}
+	return r.count * 100 / r.size
+}
+
 // NewRingBuffer creates a ring buffer with the given capacity.
 func NewRingBuffer(capacity int) *RingBuffer {
 	return &RingBuffer{

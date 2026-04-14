@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -20,8 +21,9 @@ import (
 // Server implements the WeftCoordinator gRPC service.
 type Server struct {
 	pb.UnimplementedWeftCoordinatorServer
-	Coord *coordinator.Coordinator
-	Store *store.Store
+	Coord            *coordinator.Coordinator
+	Store            *store.Store
+	consecutiveDrops int
 }
 
 func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinator_QueryServer) error {
@@ -328,13 +330,23 @@ func (s *Server) ingestBatch(rows []*pb.LogRow) {
 	// Write to ring buffer (non-blocking). Background drain pushes to shards.
 	if s.Coord.Ingest != nil {
 		s.Coord.Ingest.Write(rows)
+
+		// Check buffer pressure.
+		pct := s.Coord.Ingest.UsagePct()
+		if pct > 80 && s.Coord.Registry.TotalIngesting() == 0 {
+			log.Printf("CRITICAL: ring buffer at %d%% with no ingesting shards — data will be lost", pct)
+		}
 	} else {
 		// Fallback: direct shard write (dev mode without ring buffer).
 		shards := s.Coord.GetShards()
 		if len(shards) == 0 {
-			log.Printf("ingest: dropping %d rows (no shards available)", len(rows))
+			s.consecutiveDrops++
+			if s.consecutiveDrops >= 3 {
+				log.Printf("DROPPING %d rows (no shards available, %d consecutive drops)", len(rows), s.consecutiveDrops)
+			}
 			return
 		}
+		s.consecutiveDrops = 0
 		for _, sh := range shards {
 			if err := sh.Ingest(rows); err != nil {
 				log.Printf("ingest: shard write error: %v", err)
@@ -536,5 +548,34 @@ func (s *Server) DeleteWatch(_ context.Context, req *pb.DeleteWatchRequest) (*pb
 		return nil, err
 	}
 	return &pb.DeleteWatchResponse{}, nil
+}
+
+// Heartbeat receives a shard's periodic status report and persists it.
+func (s *Server) Heartbeat(_ context.Context, req *pb.ShardHeartbeatRequest) (*pb.HeartbeatResponse, error) {
+	if s.Store == nil {
+		return &pb.HeartbeatResponse{}, nil
+	}
+
+	apps := "[]"
+	if len(req.Apps) > 0 {
+		b, _ := json.Marshal(req.Apps)
+		apps = string(b)
+	}
+
+	err := s.Store.InsertHeartbeat(&store.ShardHeartbeat{
+		ShardID:     req.ShardId,
+		Addr:        req.Addr,
+		InstanceID:  req.InstanceId,
+		Apps:        apps,
+		WindowStart: req.WindowStart,
+		WindowEnd:   req.WindowEnd,
+		State:       req.State,
+		RowCount:    req.RowCount,
+		DiskBytes:   req.DiskBytes,
+	})
+	if err != nil {
+		log.Printf("heartbeat: failed to persist for %s: %v", req.ShardId, err)
+	}
+	return &pb.HeartbeatResponse{}, nil
 }
 
