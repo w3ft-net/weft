@@ -115,13 +115,13 @@ func (p *Provisioner) Stats() *AppStats {
 // Start runs the provisioner loop until the context is cancelled.
 // It ensures at least one INGESTING shard exists on startup.
 func (p *Provisioner) Start(ctx context.Context) {
-	// Bootstrap: if no INGESTING shards exist, create one.
-	if p.registry.TotalIngesting() == 0 {
-		log.Printf("provisioner: no ingesting shards found, bootstrapping")
-		p.bootstrap(ctx)
-	}
-
 	go func() {
+		// Bootstrap: if no INGESTING shards exist, create one.
+		if p.registry.TotalIngesting() == 0 {
+			log.Printf("provisioner: no ingesting shards found, bootstrapping")
+			p.bootstrap(ctx)
+		}
+
 		ticker := time.NewTicker(p.config.PollInterval)
 		defer ticker.Stop()
 
