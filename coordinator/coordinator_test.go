@@ -31,13 +31,13 @@ func payload(m map[string]any) []byte {
 func setupTestCoordinator(t *testing.T) *Coordinator {
 	t.Helper()
 
-	s0, err := shard.NewDuckDBShard("shard-0", "", t0, t1)
+	s0, err := shard.NewDuckDBShard("shard-0", "")
 	if err != nil {
 		t.Fatalf("create shard-0: %v", err)
 	}
 	t.Cleanup(func() { s0.Close() })
 
-	s1, err := shard.NewDuckDBShard("shard-1", "", t1, t2)
+	s1, err := shard.NewDuckDBShard("shard-1", "")
 	if err != nil {
 		t.Fatalf("create shard-1: %v", err)
 	}
@@ -431,13 +431,13 @@ func TestCompute_AwkFieldExtract(t *testing.T) {
 
 func TestRegistry_AppScopedQueryRouting(t *testing.T) {
 	// Create two shards: one owns vimgym, one owns callbox.
-	sVim, err := shard.NewDuckDBShard("shard-vimgym", "", t0, t2)
+	sVim, err := shard.NewDuckDBShard("shard-vimgym", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { sVim.Close() })
 
-	sCb, err := shard.NewDuckDBShard("shard-callbox", "", t0, t2)
+	sCb, err := shard.NewDuckDBShard("shard-callbox", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,7 +485,7 @@ func TestRegistry_AppScopedQueryRouting(t *testing.T) {
 }
 
 func TestRegistry_IngestingShard(t *testing.T) {
-	s0, err := shard.NewDuckDBShard("s0", "", t0, t2)
+	s0, err := shard.NewDuckDBShard("s0", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +509,7 @@ func TestRegistry_IngestingShard(t *testing.T) {
 }
 
 func TestRegistry_ExpiringShardExcluded(t *testing.T) {
-	s0, err := shard.NewDuckDBShard("s0", "", t0, t2)
+	s0, err := shard.NewDuckDBShard("s0", "")
 	if err != nil {
 		t.Fatal(err)
 	}

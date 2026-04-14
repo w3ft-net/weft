@@ -65,7 +65,7 @@ func TestLambdaColdShard_Query(t *testing.T) {
 	srv := httptest.NewServer(lambdaHandler(t))
 	defer srv.Close()
 
-	shard := NewLambdaColdShard("lambda-test", []string{"vimgym", "callbox"}, srv.URL, parquetPath, coldT0, coldT1)
+	shard := NewLambdaColdShard("lambda-test", []string{"vimgym", "callbox"}, srv.URL, parquetPath)
 
 	rows, err := shard.Query("SELECT * FROM logs WHERE customer = 'kevlar'")
 	if err != nil {
@@ -82,7 +82,7 @@ func TestLambdaColdShard_QueryToSink(t *testing.T) {
 	srv := httptest.NewServer(lambdaHandler(t))
 	defer srv.Close()
 
-	shard := NewLambdaColdShard("lambda-test", []string{"vimgym"}, srv.URL, parquetPath, coldT0, coldT1)
+	shard := NewLambdaColdShard("lambda-test", []string{"vimgym"}, srv.URL, parquetPath)
 
 	sink := &testSink{}
 	shard.QueryToSink("SELECT * FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'", sink)
@@ -96,7 +96,7 @@ func TestLambdaColdShard_QueryToSink(t *testing.T) {
 }
 
 func TestLambdaColdShard_ReadOnly(t *testing.T) {
-	shard := NewLambdaColdShard("lambda-test", nil, "http://unused", "", coldT0, coldT1)
+	shard := NewLambdaColdShard("lambda-test", nil, "http://unused", "")
 	err := shard.Ingest([]*pb.LogRow{{Raw: "nope"}})
 	if err == nil {
 		t.Fatal("expected error on Ingest")
@@ -109,7 +109,7 @@ func TestLambdaColdShard_FiltersByApp(t *testing.T) {
 	srv := httptest.NewServer(lambdaHandler(t))
 	defer srv.Close()
 
-	shard := NewLambdaColdShard("lambda-test", []string{"callbox"}, srv.URL, parquetPath, coldT0, coldT1)
+	shard := NewLambdaColdShard("lambda-test", []string{"callbox"}, srv.URL, parquetPath)
 
 	rows, err := shard.Query("SELECT * FROM logs WHERE app = 'callbox' AND customer = 'kevlar'")
 	if err != nil {
@@ -122,7 +122,7 @@ func TestLambdaColdShard_FiltersByApp(t *testing.T) {
 
 func BenchmarkLambdaColdShard_Query(b *testing.B) {
 	// Build a Parquet file with 10K rows.
-	ds, err := NewDuckDBShard("bench", "", coldT0, coldT1)
+	ds, err := NewDuckDBShard("bench", "")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func BenchmarkLambdaColdShard_Query(b *testing.B) {
 	}))
 	defer srv.Close()
 
-	shard := NewLambdaColdShard("bench", []string{"vimgym"}, srv.URL, path, coldT0, coldT1)
+	shard := NewLambdaColdShard("bench", []string{"vimgym"}, srv.URL, path)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

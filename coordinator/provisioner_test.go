@@ -11,7 +11,7 @@ import (
 
 func TestProvisioner_RotatesOnRowCount(t *testing.T) {
 	// Set up a shard with some data.
-	ds, err := shard.NewDuckDBShard("shard-test", "", t0, t2)
+	ds, err := shard.NewDuckDBShard("shard-test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestProvisioner_RotatesOnRowCount(t *testing.T) {
 }
 
 func TestProvisioner_NoRotateBelowThreshold(t *testing.T) {
-	ds, err := shard.NewDuckDBShard("shard-ok", "", t0, t2)
+	ds, err := shard.NewDuckDBShard("shard-ok", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestProvisioner_NoRotateBelowThreshold(t *testing.T) {
 }
 
 func TestProvisioner_RotatesOnAge(t *testing.T) {
-	ds, err := shard.NewDuckDBShard("shard-old", "", t0, t2)
+	ds, err := shard.NewDuckDBShard("shard-old", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestProvisioner_RotatesOnAge(t *testing.T) {
 
 func TestProvisioner_NewShardAcceptsIngestion(t *testing.T) {
 	// Verify the new shard created by rotation can actually accept data.
-	ds, err := shard.NewDuckDBShard("shard-full", "", t0, t2)
+	ds, err := shard.NewDuckDBShard("shard-full", "")
 	if err != nil {
 		t.Fatal(err)
 	}

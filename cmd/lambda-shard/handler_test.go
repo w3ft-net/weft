@@ -12,7 +12,7 @@ import (
 
 func testParquet(t *testing.T) string {
 	t.Helper()
-	ds, err := shard.NewDuckDBShard("test", "", time.Time{}, time.Time{})
+	ds, err := shard.NewDuckDBShard("test", "")
 	if err != nil {
 		t.Fatal(err)
 	}

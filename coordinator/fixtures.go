@@ -40,12 +40,12 @@ func devRow(lineNum int64, raw string, fields []string, ts time.Time, level, app
 // populated with sample log data. Useful for development and demos.
 // The caller must call the returned cleanup function when done.
 func NewDevCoordinator() (*Coordinator, func(), error) {
-	s0, err := shard.NewDuckDBShard("shard-0", "", DevT0, DevT1)
+	s0, err := shard.NewDuckDBShard("shard-0", "")
 	if err != nil {
 		return nil, nil, err
 	}
 
-	s1, err := shard.NewDuckDBShard("shard-1", "", DevT1, DevT2)
+	s1, err := shard.NewDuckDBShard("shard-1", "")
 	if err != nil {
 		s0.Close()
 		return nil, nil, err

@@ -63,7 +63,7 @@ func TestColdShard_S3Integration(t *testing.T) {
 	})
 
 	// Ingest test data.
-	ds, err := NewDuckDBShard("s3-test", "", coldT0, coldT1)
+	ds, err := NewDuckDBShard("s3-test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,13 +104,14 @@ func TestColdShard_S3Integration(t *testing.T) {
 
 	// Create ColdShard pointing at MinIO S3.
 	s3Path := fmt.Sprintf("s3://%s/%s", minioBucket, s3Key)
-	cs, err := NewColdShard("cold-s3", []string{"vimgym", "callbox"}, s3Path, coldT0, coldT1, &S3Config{
+	cs, err := NewColdShard("cold-s3", []string{"vimgym", "callbox"}, s3Path, &S3Config{
 		Endpoint:  "localhost:9050",
 		AccessKey: minioAccessKey,
 		SecretKey: minioSecretKey,
 		Region:    "us-east-1",
 		UseSSL:    false,
 	})
+
 	if err != nil {
 		t.Fatalf("create cold shard with S3: %v", err)
 	}

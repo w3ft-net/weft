@@ -52,12 +52,10 @@ func NewCoordinator(shards []shard.Shard, customer string, pool compute.ComputeP
 	reg := NewShardRegistry()
 	for _, s := range shards {
 		reg.Add(&ShardEntry{
-			ID:          s.ID(),
-			WindowStart: s.WindowStart(),
-			WindowEnd:   s.WindowEnd(),
-			State:       StateIngesting,
-			Shard:       s,
-			CreatedAt:   time.Now(),
+			ID:        s.ID(),
+			State:     StateIngesting,
+			Shard:     s,
+			CreatedAt: time.Now(),
 		})
 	}
 	return &Coordinator{
@@ -179,12 +177,10 @@ func (c *Coordinator) SetShards(shards []shard.Shard) {
 			continue
 		}
 		c.Registry.Add(&ShardEntry{
-			ID:          s.ID(),
-			WindowStart: s.WindowStart(),
-			WindowEnd:   s.WindowEnd(),
-			State:       StateIngesting,
-			Shard:       s,
-			CreatedAt:   time.Now(),
+			ID:        s.ID(),
+			State:     StateIngesting,
+			Shard:     s,
+			CreatedAt: time.Now(),
 		})
 	}
 

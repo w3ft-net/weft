@@ -91,7 +91,7 @@ func runDevShell() {
 		End:   coordinator.DevT2,
 		Apps:  apps,
 		// Dev shell uses in-memory FS (no gRPC coordinator to proxy through).
-		FS:    shell.NewDevFS(apps),
+		FS: shell.NewDevFS(apps),
 	}
 
 	runShell(s)
@@ -469,7 +469,7 @@ func runIngest() {
 	if dbPath == "" {
 		dbPath = fmt.Sprintf("%s.duckdb", schema.App)
 	}
-	ds, err := shard.NewDuckDBShard("ingest", dbPath, minTs, maxTs.Add(time.Second))
+	ds, err := shard.NewDuckDBShard("ingest", dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "open shard: %v\n", err)
 		os.Exit(1)
@@ -525,21 +525,45 @@ func runSourceAdd(remote *shell.RemoteCoordinator, cfg *shell.Config) {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--app":
-			if i+1 < len(args) { app = args[i+1]; i++ }
+			if i+1 < len(args) {
+				app = args[i+1]
+				i++
+			}
 		case "--log-group":
-			if i+1 < len(args) { logGroup = args[i+1]; i++ }
+			if i+1 < len(args) {
+				logGroup = args[i+1]
+				i++
+			}
 		case "--schema":
-			if i+1 < len(args) { schemaFile = args[i+1]; i++ }
+			if i+1 < len(args) {
+				schemaFile = args[i+1]
+				i++
+			}
 		case "--region":
-			if i+1 < len(args) { region = args[i+1]; i++ }
+			if i+1 < len(args) {
+				region = args[i+1]
+				i++
+			}
 		case "--interval":
-			if i+1 < len(args) { pollInterval = args[i+1]; i++ }
+			if i+1 < len(args) {
+				pollInterval = args[i+1]
+				i++
+			}
 		case "--account":
-			if i+1 < len(args) { awsAccountID = args[i+1]; i++ }
+			if i+1 < len(args) {
+				awsAccountID = args[i+1]
+				i++
+			}
 		case "--role-arn":
-			if i+1 < len(args) { roleARN = args[i+1]; i++ }
+			if i+1 < len(args) {
+				roleARN = args[i+1]
+				i++
+			}
 		case "--external-id":
-			if i+1 < len(args) { externalID = args[i+1]; i++ }
+			if i+1 < len(args) {
+				externalID = args[i+1]
+				i++
+			}
 		}
 	}
 
@@ -674,9 +698,15 @@ func runTokenCreate(client tokenClient, cfg *shell.Config) {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--label":
-			if i+1 < len(args) { label = args[i+1]; i++ }
+			if i+1 < len(args) {
+				label = args[i+1]
+				i++
+			}
 		case "--namespace", "--ns":
-			if i+1 < len(args) { namespace = args[i+1]; i++ }
+			if i+1 < len(args) {
+				namespace = args[i+1]
+				i++
+			}
 		}
 	}
 

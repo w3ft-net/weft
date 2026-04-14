@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -15,27 +14,23 @@ import (
 // GRPCShard implements the Shard interface by connecting to a remote shard
 // over gRPC. Drop-in replacement for DuckDBShard in the coordinator.
 type GRPCShard struct {
-	id          string
-	addr        string
-	windowStart time.Time
-	windowEnd   time.Time
-	conn        *grpc.ClientConn
-	client      pb.ShardQueryClient
+	id     string
+	addr   string
+	conn   *grpc.ClientConn
+	client pb.ShardQueryClient
 }
 
 // NewGRPCShard connects to a remote shard gRPC server.
-func NewGRPCShard(id, addr string, start, end time.Time) (*GRPCShard, error) {
+func NewGRPCShard(id, addr string) (*GRPCShard, error) {
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, fmt.Errorf("connect to shard %s at %s: %w", id, addr, err)
 	}
 	return &GRPCShard{
-		id:          id,
-		addr:        addr,
-		windowStart: start,
-		windowEnd:   end,
-		conn:        conn,
-		client:      pb.NewShardQueryClient(conn),
+		id:     id,
+		addr:   addr,
+		conn:   conn,
+		client: pb.NewShardQueryClient(conn),
 	}, nil
 }
 
@@ -45,9 +40,7 @@ func (s *GRPCShard) Configure(ctx context.Context, cfg *pb.ConfigureRequest) err
 	return err
 }
 
-func (s *GRPCShard) ID() string            { return s.id }
-func (s *GRPCShard) WindowStart() time.Time { return s.windowStart }
-func (s *GRPCShard) WindowEnd() time.Time   { return s.windowEnd }
+func (s *GRPCShard) ID() string { return s.id }
 
 func (s *GRPCShard) Close() error {
 	return s.conn.Close()

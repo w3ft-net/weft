@@ -19,10 +19,10 @@ import (
 
 // ProvisionerConfig controls shard rotation thresholds.
 type ProvisionerConfig struct {
-	MaxRows            int64         // rotate when row count exceeds this (default 5M)
-	MaxDiskBytes       int64         // rotate when disk exceeds this (default 500MB)
-	MaxDuration        time.Duration // rotate after this time (default 8h)
-	PollInterval       time.Duration // how often to check (default 5min)
+	MaxRows            int64           // rotate when row count exceeds this (default 5M)
+	MaxDiskBytes       int64           // rotate when disk exceeds this (default 500MB)
+	MaxDuration        time.Duration   // rotate after this time (default 8h)
+	PollInterval       time.Duration   // how often to check (default 5min)
 	IngestingPerBucket int             // number of concurrent INGESTING shards per app bucket (default 2)
 	RetentionPeriod    time.Duration   // how long READ_ONLY shards stay hot before archiving (0 = no archival)
 	ParquetDir         string          // directory for Parquet exports (local path or s3:// prefix)
@@ -165,8 +165,7 @@ func (p *Provisioner) adoptFromHeartbeats() {
 			continue // already known
 		}
 
-		gs, err := shard.NewGRPCShard(hb.ShardID, hb.Addr,
-			parseTime(hb.WindowStart), parseTime(hb.WindowEnd))
+		gs, err := shard.NewGRPCShard(hb.ShardID, hb.Addr)
 		if err != nil {
 			log.Printf("provisioner: adopt %s at %s failed: %v", hb.ShardID, hb.Addr, err)
 			continue
@@ -234,7 +233,7 @@ func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier stri
 	}
 
 	// Connect via gRPC.
-	gs, err := shard.NewGRPCShard(shardID, addr, windowStart, windowEnd)
+	gs, err := shard.NewGRPCShard(shardID, addr)
 	if err != nil {
 		p.launcher.TerminateInstance(ctx, addr)
 		return nil, fmt.Errorf("connect to %s: %w", addr, err)
@@ -377,9 +376,9 @@ func (p *Provisioner) archive(entry *ShardEntry) {
 	// Create cold shard — Lambda if function URL is configured, in-process otherwise.
 	var coldShard shard.Shard
 	if p.config.LambdaFunctionURL != "" {
-		coldShard = shard.NewLambdaColdShard(entry.ID, entry.Apps, p.config.LambdaFunctionURL, parquetPath, entry.WindowStart, entry.WindowEnd)
+		coldShard = shard.NewLambdaColdShard(entry.ID, entry.Apps, p.config.LambdaFunctionURL, parquetPath)
 	} else {
-		cs, err := shard.NewColdShard(entry.ID, entry.Apps, parquetPath, entry.WindowStart, entry.WindowEnd, s3cfg)
+		cs, err := shard.NewColdShard(entry.ID, entry.Apps, parquetPath, s3cfg)
 		if err != nil {
 			log.Printf("provisioner: create cold shard for %s: %v", entry.ID, err)
 			return

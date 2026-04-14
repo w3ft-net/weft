@@ -69,13 +69,13 @@ func TestBucketManager_NoDuplicateSplit(t *testing.T) {
 }
 
 func TestRegistry_RoundRobinIngestion(t *testing.T) {
-	s0, err := shard.NewDuckDBShard("s0", "", t0, t2)
+	s0, err := shard.NewDuckDBShard("s0", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s0.Close() })
 
-	s1, err := shard.NewDuckDBShard("s1", "", t0, t2)
+	s1, err := shard.NewDuckDBShard("s1", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestRegistry_RoundRobinIngestion(t *testing.T) {
 }
 
 func TestProvisioner_ScalesUpToConfiguredCount(t *testing.T) {
-	ds, err := shard.NewDuckDBShard("shard-only", "", t0, t2)
+	ds, err := shard.NewDuckDBShard("shard-only", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestProvisioner_ScalesUpToConfiguredCount(t *testing.T) {
 }
 
 func TestProvisioner_SplitCreatesNewShard(t *testing.T) {
-	ds, err := shard.NewDuckDBShard("shard-shared", "", t0, t2)
+	ds, err := shard.NewDuckDBShard("shard-shared", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -22,7 +22,7 @@ var (
 )
 
 func TestExportToS3_DirectWrite(t *testing.T) {
-	ds, err := shard.NewDuckDBShard("s3-export", "", t0, t1)
+	ds, err := shard.NewDuckDBShard("s3-export", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestExportToS3_DirectWrite(t *testing.T) {
 	t.Logf("exported to %s", s3Path)
 
 	// Read it back via ColdShard.
-	cs, err := shard.NewColdShard("cold-s3-direct", []string{"vimgym", "callbox"}, s3Path, t0, t1, s3cfg)
+	cs, err := shard.NewColdShard("cold-s3-direct", []string{"vimgym", "callbox"}, s3Path, s3cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestExportToS3_AppPartitioned(t *testing.T) {
 	}
 
 	// Vimgym shard.
-	dsVim, err := shard.NewDuckDBShard("vim-export", "", t0, t1)
+	dsVim, err := shard.NewDuckDBShard("vim-export", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestExportToS3_AppPartitioned(t *testing.T) {
 	dsVim.Close()
 
 	// Callbox shard.
-	dsCb, err := shard.NewDuckDBShard("cb-export", "", t0, t1)
+	dsCb, err := shard.NewDuckDBShard("cb-export", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestExportToS3_AppPartitioned(t *testing.T) {
 	t.Logf("exported to %s and %s", vimPath, cbPath)
 
 	// Query each independently.
-	csVim, err := shard.NewColdShard("cold-vim", []string{"vimgym"}, vimPath, t0, t1, s3cfg)
+	csVim, err := shard.NewColdShard("cold-vim", []string{"vimgym"}, vimPath, s3cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestExportToS3_AppPartitioned(t *testing.T) {
 		t.Fatalf("expected 2 vimgym rows, got %d", len(result))
 	}
 
-	csCb, err := shard.NewColdShard("cold-cb", []string{"callbox"}, cbPath, t0, t1, s3cfg)
+	csCb, err := shard.NewColdShard("cold-cb", []string{"callbox"}, cbPath, s3cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

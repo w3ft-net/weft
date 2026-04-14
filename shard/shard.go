@@ -19,10 +19,9 @@ type RowSink interface {
 }
 
 // Shard is the interface the coordinator uses to interact with a shard node.
+// Shards are dumb storage — the coordinator manages time windows and routing.
 type Shard interface {
 	ID() string
-	WindowStart() time.Time
-	WindowEnd() time.Time
 	Query(sql string) ([]*pb.LogRow, error)
 	QueryToSink(sql string, sink RowSink)
 	Ingest(rows []*pb.LogRow) error
@@ -31,11 +30,9 @@ type Shard interface {
 
 // DuckDBShard is an in-process shard backed by a local DuckDB database.
 type DuckDBShard struct {
-	id          string
-	db          *sql.DB
-	windowStart time.Time
-	windowEnd   time.Time
-	rowCount    atomic.Int64
+	id       string
+	db       *sql.DB
+	rowCount atomic.Int64
 }
 
 const createTableSQL = `
@@ -54,7 +51,7 @@ CREATE TABLE IF NOT EXISTS logs (
 
 // NewDuckDBShard opens or creates a DuckDB database at path and initializes the
 // logs table. Use "" or ":memory:" for an in-memory database.
-func NewDuckDBShard(id, path string, start, end time.Time) (*DuckDBShard, error) {
+func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
 	db, err := sql.Open("duckdb", path)
 	if err != nil {
 		return nil, fmt.Errorf("open duckdb %q: %w", path, err)
@@ -63,17 +60,10 @@ func NewDuckDBShard(id, path string, start, end time.Time) (*DuckDBShard, error)
 		db.Close()
 		return nil, fmt.Errorf("create table: %w", err)
 	}
-	return &DuckDBShard{
-		id:          id,
-		db:          db,
-		windowStart: start,
-		windowEnd:   end,
-	}, nil
+	return &DuckDBShard{id: id, db: db}, nil
 }
 
-func (s *DuckDBShard) ID() string           { return s.id }
-func (s *DuckDBShard) WindowStart() time.Time { return s.windowStart }
-func (s *DuckDBShard) WindowEnd() time.Time   { return s.windowEnd }
+func (s *DuckDBShard) ID() string { return s.id }
 
 func (s *DuckDBShard) Close() error {
 	return s.db.Close()

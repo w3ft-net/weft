@@ -6,10 +6,10 @@ import (
 	"os"
 	"testing"
 
-	"github.com/kevlarcon/weft/store"
 	"github.com/kevlarcon/weft/coordinator"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
+	"github.com/kevlarcon/weft/store"
 )
 
 // TestAuthenticate_NoShardAddr verifies that the Authenticate response
@@ -18,7 +18,7 @@ func TestAuthenticate_NoShardAddr(t *testing.T) {
 	store, cleanup := testStore(t)
 	defer cleanup()
 
-	s0, err := shard.NewDuckDBShard("shard-0", "", coordinator.DevT0, coordinator.DevT1)
+	s0, err := shard.NewDuckDBShard("shard-0", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestAuthenticate_MetricsConfigSync(t *testing.T) {
 	store, cleanup := testStore(t)
 	defer cleanup()
 
-	s0, err := shard.NewDuckDBShard("shard-0", "", coordinator.DevT0, coordinator.DevT1)
+	s0, err := shard.NewDuckDBShard("shard-0", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestAuthenticate_InvalidToken(t *testing.T) {
 	store, cleanup := testStore(t)
 	defer cleanup()
 
-	s0, err := shard.NewDuckDBShard("shard-0", "", coordinator.DevT0, coordinator.DevT1)
+	s0, err := shard.NewDuckDBShard("shard-0", "")
 	if err != nil {
 		t.Fatal(err)
 	}

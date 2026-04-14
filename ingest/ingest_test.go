@@ -97,7 +97,7 @@ func TestIngestRoundTrip_GrantCentralWorker(t *testing.T) {
 		}
 	}
 
-	ds, err := shard.NewDuckDBShard("test", "", minTs, maxTs.Add(time.Second))
+	ds, err := shard.NewDuckDBShard("test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestIngestRoundTrip_VimGym(t *testing.T) {
 	t.Logf("%d rows had extracted timestamps", extracted)
 
 	// Ingest and query.
-	ds, err := shard.NewDuckDBShard("test", "", time.Time{}, time.Now().Add(time.Hour))
+	ds, err := shard.NewDuckDBShard("test", "")
 	if err != nil {
 		t.Fatal(err)
 	}

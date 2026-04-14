@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/store"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
+	"github.com/kevlarcon/weft/store"
 )
 
 func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 	// Live shard with recent data.
-	live, err := shard.NewDuckDBShard("shard-live", "", t1, t2)
+	live, err := shard.NewDuckDBShard("shard-live", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 	}
 
 	// Cold shard with older data (exported to Parquet).
-	coldDS, err := shard.NewDuckDBShard("shard-cold-src", "", t0, t1)
+	coldDS, err := shard.NewDuckDBShard("shard-cold-src", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 	}
 	coldDS.Close()
 
-	cold, err := shard.NewColdShard("shard-cold", []string{"vimgym"}, parquetPath, t0, t1)
+	cold, err := shard.NewColdShard("shard-cold", []string{"vimgym"}, parquetPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 }
 
 func TestProvisioner_ArchivesExpiredShard(t *testing.T) {
-	ds, err := shard.NewDuckDBShard("shard-old", "", t0, t1)
+	ds, err := shard.NewDuckDBShard("shard-old", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 
 	parquetPath := filepath.Join(t.TempDir(), "test.parquet")
 	// Create a Parquet file so ColdShard can open it.
-	ds, err := shard.NewDuckDBShard("tmp", "", t0, t1)
+	ds, err := shard.NewDuckDBShard("tmp", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 	ds.ExportToParquet(parquetPath)
 	ds.Close()
 
-	cold, err := shard.NewColdShard("shard-archived", []string{"vimgym"}, parquetPath, t0, t1)
+	cold, err := shard.NewColdShard("shard-archived", []string{"vimgym"}, parquetPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,9 +191,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 		if rec.State == string(StateArchived) && rec.ParquetPath != "" {
 			var apps []string
 			json.Unmarshal([]byte(rec.Apps), &apps)
-			ws, _ := time.Parse(time.RFC3339, rec.WindowStart)
-			we, _ := time.Parse(time.RFC3339, rec.WindowEnd)
-			return shard.NewColdShard(rec.ID, apps, rec.ParquetPath, ws, we)
+			return shard.NewColdShard(rec.ID, apps, rec.ParquetPath)
 		}
 		return nil, fmt.Errorf("skip live shard %s", rec.ID)
 	})
@@ -224,7 +222,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 }
 
 func TestRegistry_MatchingShards_IncludesArchived(t *testing.T) {
-	ds, err := shard.NewDuckDBShard("shard-arch", "", t0, t1)
+	ds, err := shard.NewDuckDBShard("shard-arch", "")
 	if err != nil {
 		t.Fatal(err)
 	}

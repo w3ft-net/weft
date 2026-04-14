@@ -3,7 +3,6 @@ package discovery
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
@@ -92,14 +91,10 @@ func (d *ASGDiscovery) DiscoverShards(ctx context.Context) ([]shard.Shard, error
 	}
 
 	// For now, assign wide time windows. In production the coordinator
-	// would query each shard's /health endpoint for its actual window.
-	farPast := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-	farFuture := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
-
 	var shards []shard.Shard
 	for i, addr := range addrs {
 		id := fmt.Sprintf("shard-%d", i)
-		gs, err := shard.NewGRPCShard(id, addr, farPast, farFuture)
+		gs, err := shard.NewGRPCShard(id, addr)
 		if err != nil {
 			return nil, fmt.Errorf("connect to shard %s at %s: %w", id, addr, err)
 		}

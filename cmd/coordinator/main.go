@@ -11,7 +11,6 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"time"
 
 	"google.golang.org/grpc"
 
@@ -189,13 +188,11 @@ func main() {
 			}
 			var apps []string
 			json.Unmarshal([]byte(rec.Apps), &apps)
-			ws, _ := time.Parse(time.RFC3339, rec.WindowStart)
-			we, _ := time.Parse(time.RFC3339, rec.WindowEnd)
 
 			if lambdaURL != "" {
-				return shard.NewLambdaColdShard(rec.ID, apps, lambdaURL, rec.ParquetPath, ws, we), nil
+				return shard.NewLambdaColdShard(rec.ID, apps, lambdaURL, rec.ParquetPath), nil
 			}
-			return shard.NewColdShard(rec.ID, apps, rec.ParquetPath, ws, we, s3cfg)
+			return shard.NewColdShard(rec.ID, apps, rec.ParquetPath, s3cfg)
 		}); err != nil {
 			log.Printf("warning: load archived shards: %v", err)
 		} else {
@@ -228,10 +225,10 @@ func main() {
 				"status": "ok",
 				"shards": len(coord.GetShards()),
 				"system": map[string]any{
-					"goroutines":    runtime.NumGoroutine(),
-					"heap_mb":       mem.HeapAlloc / 1024 / 1024,
-					"heap_sys_mb":   mem.HeapSys / 1024 / 1024,
-					"gc_cycles":     mem.NumGC,
+					"goroutines":  runtime.NumGoroutine(),
+					"heap_mb":     mem.HeapAlloc / 1024 / 1024,
+					"heap_sys_mb": mem.HeapSys / 1024 / 1024,
+					"gc_cycles":   mem.NumGC,
 				},
 			})
 		})
@@ -256,31 +253,21 @@ func main() {
 	}
 }
 
-
 func parseShardsFlag(flag string) []shard.Shard {
 	var shards []shard.Shard
 	for _, spec := range strings.Split(flag, ",") {
-		parts := strings.SplitN(spec, "=", 4)
-		if len(parts) != 4 {
-			log.Fatalf("invalid shard spec %q: expected id=addr=start=end", spec)
+		parts := strings.SplitN(spec, "=", 2)
+		if len(parts) != 2 {
+			log.Fatalf("invalid shard spec %q: expected id=addr", spec)
 		}
 		id, addr := parts[0], parts[1]
-		start, err := time.Parse(time.RFC3339, parts[2])
-		if err != nil {
-			log.Fatalf("invalid start time %q: %v", parts[2], err)
-		}
-		end, err := time.Parse(time.RFC3339, parts[3])
-		if err != nil {
-			log.Fatalf("invalid end time %q: %v", parts[3], err)
-		}
 
-		gs, err := shard.NewGRPCShard(id, addr, start, end)
+		gs, err := shard.NewGRPCShard(id, addr)
 		if err != nil {
 			log.Fatalf("connect to shard %s at %s: %v", id, addr, err)
 		}
 		shards = append(shards, gs)
-		log.Printf("connected to shard %s at %s (%s to %s)", id, addr,
-			start.Format("15:04"), end.Format("15:04"))
+		log.Printf("connected to shard %s at %s", id, addr)
 	}
 	return shards
 }

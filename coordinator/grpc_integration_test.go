@@ -23,7 +23,7 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 	t.Helper()
 
 	// --- Shard 0 ---
-	ds0, err := shard.NewDuckDBShard("shard-0", "", DevT0, DevT1)
+	ds0, err := shard.NewDuckDBShard("shard-0", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 	shard0Addr := startShardServer(t, ds0)
 
 	// --- Shard 1 ---
-	ds1, err := shard.NewDuckDBShard("shard-1", "", DevT1, DevT2)
+	ds1, err := shard.NewDuckDBShard("shard-1", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,13 +46,13 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 	computeAddr := startComputeServer(t)
 
 	// --- Connect gRPC clients ---
-	gs0, err := shard.NewGRPCShard("shard-0", shard0Addr, DevT0, DevT1)
+	gs0, err := shard.NewGRPCShard("shard-0", shard0Addr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { gs0.Close() })
 
-	gs1, err := shard.NewGRPCShard("shard-1", shard1Addr, DevT1, DevT2)
+	gs1, err := shard.NewGRPCShard("shard-1", shard1Addr)
 	if err != nil {
 		t.Fatal(err)
 	}

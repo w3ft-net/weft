@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 
@@ -18,14 +17,12 @@ type ColdShard struct {
 	id          string
 	apps        []string
 	parquetPath string
-	windowStart time.Time
-	windowEnd   time.Time
 	db          *sql.DB // throwaway in-memory DuckDB for read_parquet()
 }
 
 // NewColdShard creates a read-only shard backed by a Parquet file.
 // Pass nil for s3cfg to read from local filesystem.
-func NewColdShard(id string, apps []string, parquetPath string, start, end time.Time, s3cfg ...*S3Config) (*ColdShard, error) {
+func NewColdShard(id string, apps []string, parquetPath string, s3cfg ...*S3Config) (*ColdShard, error) {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return nil, fmt.Errorf("open in-memory duckdb: %w", err)
@@ -42,15 +39,11 @@ func NewColdShard(id string, apps []string, parquetPath string, start, end time.
 		id:          id,
 		apps:        apps,
 		parquetPath: parquetPath,
-		windowStart: start,
-		windowEnd:   end,
 		db:          db,
 	}, nil
 }
 
-func (s *ColdShard) ID() string            { return s.id }
-func (s *ColdShard) WindowStart() time.Time { return s.windowStart }
-func (s *ColdShard) WindowEnd() time.Time   { return s.windowEnd }
+func (s *ColdShard) ID() string { return s.id }
 
 // Query rewrites FROM logs to FROM read_parquet('path') and executes.
 func (s *ColdShard) Query(query string) ([]*pb.LogRow, error) {

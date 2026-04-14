@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"sync"
-	"time"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
@@ -51,16 +50,7 @@ func (s *Server) Configure(_ context.Context, req *pb.ConfigureRequest) (*pb.Con
 		return nil, fmt.Errorf("shard already configured as %s", s.id)
 	}
 
-	start, err := time.Parse(time.RFC3339, req.WindowStart)
-	if err != nil {
-		return nil, fmt.Errorf("parse window_start: %w", err)
-	}
-	end, err := time.Parse(time.RFC3339, req.WindowEnd)
-	if err != nil {
-		return nil, fmt.Errorf("parse window_end: %w", err)
-	}
-
-	ds, err := shard.NewDuckDBShard(req.ShardId, "", start, end)
+	ds, err := shard.NewDuckDBShard(req.ShardId, "")
 	if err != nil {
 		return nil, fmt.Errorf("create shard: %w", err)
 	}

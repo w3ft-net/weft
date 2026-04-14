@@ -33,7 +33,7 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 	}
 
 	// Simulate re-discovery finding shard instances.
-	s0, err := shard.NewDuckDBShard("shard-0", "", t0, t1)
+	s0, err := shard.NewDuckDBShard("shard-0", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 func TestFailover_ShardReplacement(t *testing.T) {
 	apps := []string{"vimgym", "callbox"}
 
-	s0, err := shard.NewDuckDBShard("shard-0", "", t0, t1)
+	s0, err := shard.NewDuckDBShard("shard-0", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestFailover_ShardReplacement(t *testing.T) {
 	}
 
 	// Add shard-1 covering a different window.
-	s1, err := shard.NewDuckDBShard("shard-1", "", t1, t2)
+	s1, err := shard.NewDuckDBShard("shard-1", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestFailover_ShardReplacement(t *testing.T) {
 // TestFailover_ConcurrentQueryDuringSwap verifies that queries in flight
 // don't panic or return corrupt data when SetShards is called concurrently.
 func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
-	s0, err := shard.NewDuckDBShard("shard-0", "", t0, t1)
+	s0, err := shard.NewDuckDBShard("shard-0", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
 // TestFailover_GetShardsSnapshot verifies that GetShards returns a defensive
 // copy — mutating the returned slice must not affect the coordinator.
 func TestFailover_GetShardsSnapshot(t *testing.T) {
-	s0, err := shard.NewDuckDBShard("shard-0", "", t0, t1)
+	s0, err := shard.NewDuckDBShard("shard-0", "")
 	if err != nil {
 		t.Fatal(err)
 	}

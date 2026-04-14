@@ -18,8 +18,6 @@ type LambdaColdShard struct {
 	apps        []string
 	functionURL string
 	parquetPath string
-	windowStart time.Time
-	windowEnd   time.Time
 	client      *http.Client
 }
 
@@ -30,21 +28,17 @@ type LambdaQueryRequest struct {
 }
 
 // NewLambdaColdShard creates a cold shard backed by a Lambda function URL.
-func NewLambdaColdShard(id string, apps []string, functionURL, parquetPath string, start, end time.Time) *LambdaColdShard {
+func NewLambdaColdShard(id string, apps []string, functionURL, parquetPath string) *LambdaColdShard {
 	return &LambdaColdShard{
 		id:          id,
 		apps:        apps,
 		functionURL: functionURL,
 		parquetPath: parquetPath,
-		windowStart: start,
-		windowEnd:   end,
 		client:      &http.Client{Timeout: 5 * time.Minute},
 	}
 }
 
-func (s *LambdaColdShard) ID() string            { return s.id }
-func (s *LambdaColdShard) WindowStart() time.Time { return s.windowStart }
-func (s *LambdaColdShard) WindowEnd() time.Time   { return s.windowEnd }
+func (s *LambdaColdShard) ID() string { return s.id }
 
 // Query calls the Lambda with the SQL and Parquet path, reads the
 // streaming protobuf response, and returns all rows.

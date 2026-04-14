@@ -81,7 +81,7 @@ func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
 
 	// Create new registry (simulating restart) and reconnect to same shard.
 	reg2 := NewShardRegistry()
-	gs, err := shard.NewGRPCShard(shardID, shardAddr, shardStart, shardEnd)
+	gs, err := shard.NewGRPCShard(shardID, shardAddr)
 	if err != nil {
 		t.Fatalf("reconnect to shard: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
 // when shard IDs change — demonstrating why it's wrong.
 func TestCoordinator_RediscoveryDoesNotLoseData(t *testing.T) {
 	// Set up a coordinator with one shard containing data.
-	s0, err := shard.NewDuckDBShard("shard-0", "", DevT0, DevT1)
+	s0, err := shard.NewDuckDBShard("shard-0", "")
 	if err != nil {
 		t.Fatal(err)
 	}

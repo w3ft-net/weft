@@ -17,7 +17,7 @@ var (
 // and returns the Parquet path. The DuckDB is closed after export.
 func exportToParquet(t *testing.T, rows []*pb.LogRow) string {
 	t.Helper()
-	ds, err := NewDuckDBShard("export", "", coldT0, coldT1)
+	ds, err := NewDuckDBShard("export", "")
 	if err != nil {
 		t.Fatalf("create shard: %v", err)
 	}
@@ -47,7 +47,7 @@ func testRows() []*pb.LogRow {
 func TestColdShard_QueryParquet(t *testing.T) {
 	path := exportToParquet(t, testRows())
 
-	cs, err := NewColdShard("cold-0", []string{"vimgym", "callbox"}, path, coldT0, coldT1)
+	cs, err := NewColdShard("cold-0", []string{"vimgym", "callbox"}, path)
 	if err != nil {
 		t.Fatalf("create cold shard: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestColdShard_QueryParquet(t *testing.T) {
 func TestColdShard_FiltersByApp(t *testing.T) {
 	path := exportToParquet(t, testRows())
 
-	cs, err := NewColdShard("cold-0", []string{"vimgym", "callbox"}, path, coldT0, coldT1)
+	cs, err := NewColdShard("cold-0", []string{"vimgym", "callbox"}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestColdShard_FiltersByApp(t *testing.T) {
 func TestColdShard_ReadOnly(t *testing.T) {
 	path := exportToParquet(t, testRows())
 
-	cs, err := NewColdShard("cold-0", []string{"vimgym"}, path, coldT0, coldT1)
+	cs, err := NewColdShard("cold-0", []string{"vimgym"}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestColdShard_ReadOnly(t *testing.T) {
 func TestColdShard_TimeWindow(t *testing.T) {
 	path := exportToParquet(t, testRows())
 
-	cs, err := NewColdShard("cold-test-id", []string{"vimgym"}, path, coldT0, coldT1)
+	cs, err := NewColdShard("cold-test-id", []string{"vimgym"}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,18 +120,12 @@ func TestColdShard_TimeWindow(t *testing.T) {
 	if cs.ID() != "cold-test-id" {
 		t.Errorf("expected cold-test-id, got %s", cs.ID())
 	}
-	if !cs.WindowStart().Equal(coldT0) {
-		t.Errorf("expected WindowStart %v, got %v", coldT0, cs.WindowStart())
-	}
-	if !cs.WindowEnd().Equal(coldT1) {
-		t.Errorf("expected WindowEnd %v, got %v", coldT1, cs.WindowEnd())
-	}
 }
 
 func TestColdShard_QueryToSink(t *testing.T) {
 	path := exportToParquet(t, testRows())
 
-	cs, err := NewColdShard("cold-0", []string{"vimgym", "callbox"}, path, coldT0, coldT1)
+	cs, err := NewColdShard("cold-0", []string{"vimgym", "callbox"}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +145,7 @@ func TestColdShard_QueryToSink(t *testing.T) {
 func TestColdShard_EmptyResult(t *testing.T) {
 	path := exportToParquet(t, testRows())
 
-	cs, err := NewColdShard("cold-0", []string{"vimgym"}, path, coldT0, coldT1)
+	cs, err := NewColdShard("cold-0", []string{"vimgym"}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +194,7 @@ func benchColdQuery(b *testing.B, n int) {
 		}
 	}
 
-	ds, err := NewDuckDBShard("bench", "", coldT0, coldT1)
+	ds, err := NewDuckDBShard("bench", "")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -214,7 +208,7 @@ func benchColdQuery(b *testing.B, n int) {
 	}
 	ds.Close()
 
-	cs, err := NewColdShard("bench-cold", []string{"vimgym"}, path, coldT0, coldT1)
+	cs, err := NewColdShard("bench-cold", []string{"vimgym"}, path)
 	if err != nil {
 		b.Fatal(err)
 	}

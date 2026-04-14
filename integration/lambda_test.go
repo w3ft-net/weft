@@ -24,7 +24,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	lambdaURL := "http://localhost:9030"
 
 	// Ingest test data.
-	ds, err := shard.NewDuckDBShard("lambda-int", "", t0, t1)
+	ds, err := shard.NewDuckDBShard("lambda-int", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	// MinIO endpoint (minio:9000), not localhost:9050.
 	containerS3Path := fmt.Sprintf("s3://%s/lambda-test/shard-lambda-int.parquet", ColdBucket)
 
-	cs := shard.NewLambdaColdShard("cold-lambda", []string{"vimgym", "callbox"}, lambdaURL, containerS3Path, t0, t1)
+	cs := shard.NewLambdaColdShard("cold-lambda", []string{"vimgym", "callbox"}, lambdaURL, containerS3Path)
 
 	// Query all kevlar rows.
 	result, err := cs.Query("SELECT * FROM logs WHERE customer = 'kevlar'")
