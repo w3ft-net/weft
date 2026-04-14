@@ -1,9 +1,9 @@
 -- Usage metering tables with pg_partman-managed partitioning.
 -- Run once after creating the weft database.
---
--- Prerequisites:
---   CREATE EXTENSION IF NOT EXISTS pg_partman;
---   CREATE EXTENSION IF NOT EXISTS pg_cron;
+
+CREATE SCHEMA IF NOT EXISTS partman;
+CREATE EXTENSION IF NOT EXISTS pg_partman SCHEMA partman;
+CREATE EXTENSION IF NOT EXISTS pg_cron;
 
 -- Hourly ingestion counters, partitioned by day (7-day retention).
 CREATE TABLE IF NOT EXISTS usage_hourly (
@@ -22,30 +22,30 @@ CREATE TABLE IF NOT EXISTS usage_daily (
 ) PARTITION BY RANGE (day);
 
 -- pg_partman: auto-create and drop partitions.
-SELECT public.create_parent(
+SELECT partman.create_parent(
     p_parent_table := 'public.usage_hourly',
     p_control := 'hour',
     p_interval := '1 day',
     p_premake := 3
 );
-UPDATE public.part_config
+UPDATE partman.part_config
 SET retention = '7 days', retention_keep_table = false
 WHERE parent_table = 'public.usage_hourly';
 
-SELECT public.create_parent(
+SELECT partman.create_parent(
     p_parent_table := 'public.usage_daily',
     p_control := 'day',
     p_interval := '1 month',
     p_premake := 3
 );
-UPDATE public.part_config
+UPDATE partman.part_config
 SET retention = '13 months', retention_keep_table = false
 WHERE parent_table = 'public.usage_daily';
 
 -- pg_cron: run pg_partman maintenance every 30 minutes
 -- (creates new partitions, drops expired ones)
 SELECT cron.schedule('partman-maintenance', '*/30 * * * *',
-    $$CALL public.run_maintenance_proc()$$);
+    $$CALL partman.run_maintenance_proc()$$);
 
 -- pg_cron: daily rollup of completed hourly data into daily aggregates.
 -- Runs at 02:00 UTC. Rolls up hours older than 7 days, then deletes them.

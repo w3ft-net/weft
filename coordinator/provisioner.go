@@ -2,7 +2,6 @@ package coordinator
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -171,25 +170,19 @@ func (p *Provisioner) adoptFromHeartbeats() {
 			continue
 		}
 
-		var apps []string
-		json.Unmarshal([]byte(hb.Apps), &apps)
-
 		state := StateIngesting
 		if hb.State == "READ_ONLY" {
 			state = StateReadOnly
 		}
 
 		p.registry.Add(&ShardEntry{
-			ID:          hb.ShardID,
-			Apps:        apps,
-			Addr:        hb.Addr,
-			InstanceID:  hb.InstanceID,
-			WindowStart: parseTime(hb.WindowStart),
-			WindowEnd:   parseTime(hb.WindowEnd),
-			State:       state,
-			RowCount:    hb.RowCount,
-			Shard:       gs,
-			CreatedAt:   time.Now(),
+			ID:         hb.ShardID,
+			Addr:       hb.Addr,
+			InstanceID: hb.InstanceID,
+			State:      state,
+			RowCount:   hb.RowCount,
+			Shard:      gs,
+			CreatedAt:  time.Now(),
 		})
 		log.Printf("provisioner: adopted shard %s at %s (state=%s, rows=%d)",
 			hb.ShardID, hb.Addr, hb.State, hb.RowCount)

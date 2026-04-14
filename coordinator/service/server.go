@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -556,20 +555,11 @@ func (s *Server) Heartbeat(_ context.Context, req *pb.ShardHeartbeatRequest) (*p
 		return &pb.HeartbeatResponse{}, nil
 	}
 
-	apps := "[]"
-	if len(req.Apps) > 0 {
-		b, _ := json.Marshal(req.Apps)
-		apps = string(b)
-	}
-
 	err := s.Store.InsertHeartbeat(&store.ShardHeartbeat{
-		ShardID:     req.ShardId,
-		Addr:        req.Addr,
-		InstanceID:  req.InstanceId,
-		Apps:        apps,
-		WindowStart: req.WindowStart,
-		WindowEnd:   req.WindowEnd,
-		State:       req.State,
+		ShardID:    req.ShardId,
+		Addr:       req.Addr,
+		InstanceID: req.InstanceId,
+		State:      req.State,
 		RowCount:    req.RowCount,
 		DiskBytes:   req.DiskBytes,
 	})

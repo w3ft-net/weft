@@ -822,10 +822,7 @@ type ShardHeartbeatRequest struct {
 	ShardId       string                 `protobuf:"bytes,1,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
 	Addr          string                 `protobuf:"bytes,2,opt,name=addr,proto3" json:"addr,omitempty"`                               // gRPC address (ip:port)
 	InstanceId    string                 `protobuf:"bytes,3,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"` // EC2 instance ID
-	Apps          []string               `protobuf:"bytes,4,rep,name=apps,proto3" json:"apps,omitempty"`
-	WindowStart   string                 `protobuf:"bytes,5,opt,name=window_start,json=windowStart,proto3" json:"window_start,omitempty"` // RFC3339
-	WindowEnd     string                 `protobuf:"bytes,6,opt,name=window_end,json=windowEnd,proto3" json:"window_end,omitempty"`       // RFC3339
-	State         string                 `protobuf:"bytes,7,opt,name=state,proto3" json:"state,omitempty"`                                // INGESTING, READ_ONLY
+	State         string                 `protobuf:"bytes,7,opt,name=state,proto3" json:"state,omitempty"`                             // INGESTING, READ_ONLY
 	RowCount      int64                  `protobuf:"varint,8,opt,name=row_count,json=rowCount,proto3" json:"row_count,omitempty"`
 	DiskBytes     int64                  `protobuf:"varint,9,opt,name=disk_bytes,json=diskBytes,proto3" json:"disk_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -879,27 +876,6 @@ func (x *ShardHeartbeatRequest) GetAddr() string {
 func (x *ShardHeartbeatRequest) GetInstanceId() string {
 	if x != nil {
 		return x.InstanceId
-	}
-	return ""
-}
-
-func (x *ShardHeartbeatRequest) GetApps() []string {
-	if x != nil {
-		return x.Apps
-	}
-	return nil
-}
-
-func (x *ShardHeartbeatRequest) GetWindowStart() string {
-	if x != nil {
-		return x.WindowStart
-	}
-	return ""
-}
-
-func (x *ShardHeartbeatRequest) GetWindowEnd() string {
-	if x != nil {
-		return x.WindowEnd
 	}
 	return ""
 }
@@ -3295,16 +3271,12 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"=\n" +
 	"\x11GetResultResponse\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\x8f\x02\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\xb9\x01\n" +
 	"\x15ShardHeartbeatRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12\x12\n" +
 	"\x04addr\x18\x02 \x01(\tR\x04addr\x12\x1f\n" +
 	"\vinstance_id\x18\x03 \x01(\tR\n" +
-	"instanceId\x12\x12\n" +
-	"\x04apps\x18\x04 \x03(\tR\x04apps\x12!\n" +
-	"\fwindow_start\x18\x05 \x01(\tR\vwindowStart\x12\x1d\n" +
-	"\n" +
-	"window_end\x18\x06 \x01(\tR\twindowEnd\x12\x14\n" +
+	"instanceId\x12\x14\n" +
 	"\x05state\x18\a \x01(\tR\x05state\x12\x1b\n" +
 	"\trow_count\x18\b \x01(\x03R\browCount\x12\x1d\n" +
 	"\n" +

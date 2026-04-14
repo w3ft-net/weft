@@ -25,6 +25,7 @@ func main() {
 	dbPath := flag.String("db", "", "DuckDB path (empty = in-memory)")
 	shardID := flag.String("id", "shard-0", "shard identifier")
 	coordAddr := flag.String("coordinator-addr", "", "coordinator gRPC address for heartbeats")
+	hbInterval := flag.Duration("heartbeat-interval", 60*time.Second, "heartbeat interval")
 	flag.Parse()
 
 	ds, err := shard.NewDuckDBShard(*shardID, *dbPath)
@@ -62,15 +63,22 @@ func main() {
 			}
 			client := pb.NewWeftCoordinatorClient(conn)
 
-			ticker := time.NewTicker(60 * time.Second)
-			defer ticker.Stop()
+			// Retry initial heartbeat with backoff so we survive
+			// starting simultaneously with the coordinator.
+			for i := 0; i < 10; i++ {
+				if sendHeartbeat(client, *shardID, myAddr, ds) {
+					break
+				}
+				time.Sleep(time.Duration(i+1) * time.Second)
+			}
 
-			sendHeartbeat(client, *shardID, myAddr, ds)
+			ticker := time.NewTicker(*hbInterval)
+			defer ticker.Stop()
 			for range ticker.C {
 				sendHeartbeat(client, *shardID, myAddr, ds)
 			}
 		}()
-		log.Printf("shard %s heartbeating to %s", *shardID, *coordAddr)
+		log.Printf("shard %s heartbeating to %s every %s", *shardID, *coordAddr, *hbInterval)
 	}
 
 	// HTTP health endpoint.
@@ -88,7 +96,7 @@ func main() {
 	}
 }
 
-func sendHeartbeat(client pb.WeftCoordinatorClient, shardID, addr string, ds *shard.DuckDBShard) {
+func sendHeartbeat(client pb.WeftCoordinatorClient, shardID, addr string, ds *shard.DuckDBShard) bool {
 	req := &pb.ShardHeartbeatRequest{
 		ShardId:  shardID,
 		Addr:     addr,
@@ -101,5 +109,7 @@ func sendHeartbeat(client pb.WeftCoordinatorClient, shardID, addr string, ds *sh
 
 	if _, err := client.Heartbeat(ctx, req); err != nil {
 		log.Printf("heartbeat: %v", err)
+		return false
 	}
+	return true
 }

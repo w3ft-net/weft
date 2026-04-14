@@ -1,17 +1,58 @@
 services:
   postgres:
-    image: postgres:16
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    command: postgres -c shared_preload_libraries=pg_cron -c cron.database_name=weft
     environment:
       POSTGRES_USER: weft
       POSTGRES_PASSWORD: weft
       POSTGRES_DB: weft
     ports:
       - "5433:5432"
+    volumes:
+      - ./deploy/migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U weft"]
       interval: 5s
       timeout: 5s
       retries: 5
+
+  shard-0:
+    build:
+      context: ..
+      dockerfile: weft/Dockerfile
+    command:
+      - weft-shard
+      - --id=shard-0
+      - --grpc-port=9000
+      - --http-port=9001
+      - --coordinator-addr=coordinator:9020
+      - --heartbeat-interval=10s
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    depends_on:
+      coordinator:
+        condition: service_started
+
+  shard-1:
+    build:
+      context: ..
+      dockerfile: weft/Dockerfile
+    command:
+      - weft-shard
+      - --id=shard-1
+      - --grpc-port=9000
+      - --http-port=9001
+      - --coordinator-addr=coordinator:9020
+      - --heartbeat-interval=10s
+    ports:
+      - "9002:9000"
+      - "9003:9001"
+    depends_on:
+      coordinator:
+        condition: service_started
 
   coordinator:
     build:
