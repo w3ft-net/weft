@@ -146,7 +146,7 @@ WEFT_AGENT_TOKEN=$(aws secretsmanager get-secret-value \
 if [ -n "$WEFT_AGENT_TOKEN" ] && command -v weftd >/dev/null 2>&1; then
   mkdir -p /etc/weftd
   cat > /etc/weftd/config.yaml <<WEFTCFG
-endpoint: localhost:9020
+endpoint: ingest.w3ft.net:9020
 token: ${WEFT_AGENT_TOKEN}
 sources:
   - path: /opt/app/logs/*.log
