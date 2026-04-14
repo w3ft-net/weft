@@ -194,8 +194,20 @@ func parseTime(s string) time.Time {
 	return t
 }
 
-// bootstrap creates an initial shard to accept data.
+// bootstrap ensures at least one shard instance is launching.
+// For ASG launchers, it just scales up — the shard self-configures and
+// heartbeats back; adoptFromHeartbeats adds it to the registry.
+// For local launchers, it uses launchAndConfigure for immediate setup.
 func (p *Provisioner) bootstrap(ctx context.Context) {
+	if _, isASG := p.launcher.(*ASGLauncher); isASG {
+		log.Printf("provisioner: launching shard instance via ASG (will adopt via heartbeat)")
+		if _, err := p.launcher.LaunchInstance(ctx, "small"); err != nil {
+			log.Printf("provisioner: bootstrap ASG launch failed: %v", err)
+		}
+		return
+	}
+
+	// Local launcher: configure immediately.
 	now := time.Now()
 	windowEnd := now.Add(p.config.MaxDuration)
 	if p.config.MaxDuration == 0 {
@@ -414,6 +426,14 @@ func (p *Provisioner) rotate(ctx context.Context, old *ShardEntry) {
 
 // provisionForBucket launches a new INGESTING shard for a bucket.
 func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket) {
+	if _, isASG := p.launcher.(*ASGLauncher); isASG {
+		log.Printf("provisioner: launching shard for bucket %s via ASG", bucket.ID)
+		if _, err := p.launcher.LaunchInstance(ctx, "small"); err != nil {
+			log.Printf("provisioner: failed to launch shard for bucket %s: %v", bucket.ID, err)
+		}
+		return
+	}
+
 	now := time.Now().UTC()
 	seq := p.registry.Count()
 	id := fmt.Sprintf("shard-%s-%s-%d", joinApps(bucket.Apps), now.Format("20060102T1504"), seq)
