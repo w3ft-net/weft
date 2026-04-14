@@ -2,6 +2,10 @@
 -- Partitioned by beat_at with 1-hour intervals, 5-minute retention.
 -- A shard with no heartbeat in 2 minutes is considered dead.
 
+-- Ensure pg_partman is available in its own schema.
+CREATE SCHEMA IF NOT EXISTS partman;
+CREATE EXTENSION IF NOT EXISTS pg_partman SCHEMA partman;
+
 CREATE TABLE IF NOT EXISTS shard_heartbeats (
     shard_id     TEXT NOT NULL,
     addr         TEXT NOT NULL,
