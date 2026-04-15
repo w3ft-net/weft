@@ -45,6 +45,8 @@ type Coordinator struct {
 	Store       *store.Store   // for weft.* functions in /bin/ scripts (nil = disabled)
 	CustomerID  uint           // for weft.* customer scoping
 	SeenApps    *SeenApps      // distinct app names from ingest stream
+	DLQ         *DLQ           // S3 dead-letter queue for failed ingests
+	Errors      *IngestionErrorRecorder // async error persistence
 }
 
 // SeenApps tracks distinct app names observed during ingestion, keyed by customer.
@@ -141,13 +143,39 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 					if sh == nil {
 						sh = c.Registry.DefaultIngestingShard()
 					}
-					if sh != nil {
-						if err := sh.Ingest(rows); err != nil {
-							log.Printf("drain: ingest %d rows for %s to %s failed: %v", len(rows), app, sh.ID(), err)
+					if sh == nil {
+						// No healthy shards at all — DLQ immediately.
+						dlqPath := c.DLQ.Write(rows)
+						c.Errors.Record("none", "no healthy shards available", rows, dlqPath)
+						log.Printf("drain: DLQ'd %d rows for %s (no healthy shards)", len(rows), app)
+						continue
+					}
+					if err := sh.Ingest(rows); err != nil {
+						log.Printf("drain: suspending shard %s: %v", sh.ID(), err)
+						c.Registry.Suspend(sh.ID())
+
+						// Retry on a different healthy shard.
+						fallback := c.Registry.IngestingShard(app)
+						if fallback == nil {
+							fallback = c.Registry.DefaultIngestingShard()
 						}
-						if c.Provisioner != nil {
-							c.Provisioner.Stats().Record(app, int64(len(rows)))
+						if fallback != nil {
+							if retryErr := fallback.Ingest(rows); retryErr == nil {
+								if c.Provisioner != nil {
+									c.Provisioner.Stats().Record(app, int64(len(rows)))
+								}
+								continue // retry succeeded
+							}
 						}
+
+						// All retries exhausted — DLQ.
+						dlqPath := c.DLQ.Write(rows)
+						c.Errors.Record(sh.ID(), err.Error(), rows, dlqPath)
+						log.Printf("drain: DLQ'd %d rows for %s (shard %s failed, no fallback)", len(rows), app, sh.ID())
+						continue
+					}
+					if c.Provisioner != nil {
+						c.Provisioner.Stats().Record(app, int64(len(rows)))
 					}
 				}
 			}

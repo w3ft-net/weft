@@ -53,6 +53,11 @@ export function getUsage(): Promise<Usage> {
   return apiFetch('/api/usage')
 }
 
+// Ingestion status
+export function getIngestionStatus(): Promise<{ affected_apps: string[] }> {
+  return apiFetch('/api/ingestion-status')
+}
+
 // Tokens
 export function getTokens(): Promise<AgentToken[]> {
   return apiFetch('/api/tokens')

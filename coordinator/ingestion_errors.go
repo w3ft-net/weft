@@ -1,0 +1,83 @@
+package coordinator
+
+import (
+	"log"
+
+	"github.com/kevlarcon/weft/store"
+	pb "github.com/kevlarcon/weft/proto/weftpb"
+)
+
+// IngestionErrorRecorder asynchronously records ingest failures to postgres.
+type IngestionErrorRecorder struct {
+	store *store.Store
+	ch    chan ingestionError
+}
+
+type ingestionError struct {
+	ShardID  string
+	ErrorMsg string
+	RowCount int
+	Apps     []string
+	Customers []string
+	DLQPath  string
+}
+
+// NewIngestionErrorRecorder creates a recorder with a buffered channel.
+// Returns nil if store is nil.
+func NewIngestionErrorRecorder(s *store.Store) *IngestionErrorRecorder {
+	if s == nil {
+		return nil
+	}
+	r := &IngestionErrorRecorder{
+		store: s,
+		ch:    make(chan ingestionError, 100),
+	}
+	go r.flush()
+	return r
+}
+
+// Record queues an ingestion error for async persistence.
+func (r *IngestionErrorRecorder) Record(shardID, errMsg string, rows []*pb.LogRow, dlqPath string) {
+	if r == nil {
+		return
+	}
+
+	apps := distinctStrings(rows, func(r *pb.LogRow) string { return r.App })
+	customers := distinctStrings(rows, func(r *pb.LogRow) string { return r.Customer })
+
+	select {
+	case r.ch <- ingestionError{
+		ShardID:   shardID,
+		ErrorMsg:  errMsg,
+		RowCount:  len(rows),
+		Apps:      apps,
+		Customers: customers,
+		DLQPath:   dlqPath,
+	}:
+	default:
+		log.Printf("ingestion-errors: channel full, dropping error record for %s", shardID)
+	}
+}
+
+func (r *IngestionErrorRecorder) flush() {
+	for ie := range r.ch {
+		if err := r.store.RecordIngestionError(
+			ie.ShardID, ie.ErrorMsg, ie.RowCount, ie.Apps, ie.Customers, ie.DLQPath,
+		); err != nil {
+			log.Printf("ingestion-errors: failed to persist: %v", err)
+		}
+	}
+}
+
+func distinctStrings(rows []*pb.LogRow, extract func(*pb.LogRow) string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, r := range rows {
+		v := extract(r)
+		if v != "" && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
+}

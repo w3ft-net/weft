@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import SidebarNav from '../components/SidebarNav'
 import {
-  getWatches, getWatchResults, getFunctions,
+  getWatches, getWatchResults, getFunctions, getIngestionStatus,
   type CronWatch, type CronResult, type ShellFunction,
 } from '../lib/api'
 import './Dashboard.css'
@@ -243,6 +243,7 @@ export default function Dashboard() {
   const [watches, setWatches] = useState<WatchWithResults[]>([])
   const [watchMeta, setWatchMeta] = useState<{ count: number; limit: number; min_interval: string }>({ count: 0, limit: 0, min_interval: '' })
   const [functions, setFunctions] = useState<ShellFunction[]>([])
+  const [affectedApps, setAffectedApps] = useState<string[]>([])
 
   useEffect(() => {
     getWatches()
@@ -259,6 +260,10 @@ export default function Dashboard() {
       .catch(() => {})
 
     getFunctions().then(fns => setFunctions(fns || [])).catch(() => {})
+
+    getIngestionStatus()
+      .then(resp => setAffectedApps(resp.affected_apps || []))
+      .catch(() => {})
   }, [])
 
   void navigate // used in child components
@@ -271,6 +276,12 @@ export default function Dashboard() {
           <div className="dash-header">
             <h1 className="dash-page-title">Dashboard</h1>
           </div>
+
+          {affectedApps.length > 0 && (
+            <div className="dash-load-error" data-testid="dashboard-ingestion-warning">
+              Ingestion delayed for some records on: {affectedApps.join(', ')}
+            </div>
+          )}
 
           <WatchesCard
             watches={watches}

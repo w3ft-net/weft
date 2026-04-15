@@ -106,6 +106,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/tokens", s.handleCreateToken)
 	auth.HandleFunc("DELETE /api/tokens/{token}", s.handleRevokeToken)
 	auth.HandleFunc("GET /api/apps", s.handleListApps)
+		auth.HandleFunc("GET /api/ingestion-status", s.handleIngestionStatus)
 	auth.HandleFunc("POST /api/shell/exec", s.handleShellExec)
 	auth.HandleFunc("GET /api/functions", s.handleListFunctions)
 	auth.HandleFunc("GET /api/functions/{name}", s.handleGetFunction)
@@ -679,6 +680,18 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	json.NewEncoder(w).Encode(resp.Apps)
+}
+
+func (s *Server) handleIngestionStatus(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		json.NewEncoder(w).Encode(map[string]any{"affected_apps": []string{}})
+		return
+	}
+	apps, err := s.store.UnresolvedIngestionApps()
+	if err != nil {
+		apps = []string{}
+	}
+	json.NewEncoder(w).Encode(map[string]any{"affected_apps": apps})
 }
 
 // --- Shell functions (/bin/) ---

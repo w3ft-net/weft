@@ -29,6 +29,7 @@ type ShardEntry struct {
 	WindowStart time.Time
 	WindowEnd   time.Time
 	State       ShardState
+	Suspended   bool       // true if ingest failed — excluded from write routing, still queryable
 	Addr        string     // gRPC address for live shards
 	InstanceID  string     // EC2 instance ID
 	ParquetPath string     // Parquet file path for archived shards
@@ -182,6 +183,16 @@ func (r *ShardRegistry) Remove(id string) {
 	}
 }
 
+// Suspend marks a shard as suspended (ingest failed). Suspended shards
+// are excluded from write routing but still participate in queries.
+func (r *ShardRegistry) Suspend(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e, ok := r.entries[id]; ok {
+		e.Suspended = true
+	}
+}
+
 // Get returns a shard entry by ID, or nil.
 func (r *ShardRegistry) Get(id string) *ShardEntry {
 	r.mu.RLock()
@@ -224,7 +235,7 @@ func (r *ShardRegistry) IngestingShard(app string) shard.Shard {
 
 	var candidates []shard.Shard
 	for _, e := range r.entries {
-		if e.State != StateIngesting || e.Shard == nil {
+		if e.State != StateIngesting || e.Shard == nil || e.Suspended {
 			continue
 		}
 		if e.hasApp(app) {
@@ -273,13 +284,13 @@ func (r *ShardRegistry) DefaultIngestingShard() shard.Shard {
 
 	// Prefer shared (empty Apps) shard.
 	for _, e := range r.entries {
-		if e.State == StateIngesting && e.Shard != nil && len(e.Apps) == 0 {
+		if e.State == StateIngesting && e.Shard != nil && !e.Suspended && len(e.Apps) == 0 {
 			return e.Shard
 		}
 	}
-	// Fallback: any ingesting shard.
+	// Fallback: any non-suspended ingesting shard.
 	for _, e := range r.entries {
-		if e.State == StateIngesting && e.Shard != nil {
+		if e.State == StateIngesting && e.Shard != nil && !e.Suspended {
 			return e.Shard
 		}
 	}

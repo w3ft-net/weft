@@ -140,6 +140,7 @@ func (p *Provisioner) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				p.adoptFromHeartbeats()
+				p.reapDeadShards()
 				p.check(ctx)
 			}
 		}
@@ -160,10 +161,32 @@ func (p *Provisioner) adoptFromHeartbeats() {
 	}
 
 	for _, hb := range heartbeats {
-		if p.registry.Get(hb.ShardID) != nil {
-			continue // already known
+		existing := p.registry.Get(hb.ShardID)
+		if existing != nil {
+			if existing.Addr == hb.Addr {
+				// Same shard, same address. Unsuspend if it was suspended.
+				if existing.Suspended {
+					log.Printf("provisioner: unsuspending shard %s (heartbeat received)", hb.ShardID)
+					existing.Suspended = false
+				}
+				continue
+			}
+			// Same ID, different address → instance replaced.
+			gs, err := shard.NewGRPCShard(hb.ShardID, hb.Addr)
+			if err != nil {
+				log.Printf("provisioner: reconnect %s at %s failed: %v", hb.ShardID, hb.Addr, err)
+				continue
+			}
+			log.Printf("provisioner: shard %s moved %s → %s", hb.ShardID, existing.Addr, hb.Addr)
+			existing.Shard.Close()
+			existing.Shard = gs
+			existing.Addr = hb.Addr
+			existing.InstanceID = hb.InstanceID
+			existing.Suspended = false
+			continue
 		}
 
+		// New shard — adopt it.
 		gs, err := shard.NewGRPCShard(hb.ShardID, hb.Addr)
 		if err != nil {
 			log.Printf("provisioner: adopt %s at %s failed: %v", hb.ShardID, hb.Addr, err)
@@ -186,6 +209,35 @@ func (p *Provisioner) adoptFromHeartbeats() {
 		})
 		log.Printf("provisioner: adopted shard %s at %s (state=%s, rows=%d)",
 			hb.ShardID, hb.Addr, hb.State, hb.RowCount)
+	}
+}
+
+// reapDeadShards removes registry entries for shards that have stopped
+// heartbeating. Skips archived shards (cold storage, no heartbeat expected)
+// and skips if no heartbeats exist at all (startup race protection).
+func (p *Provisioner) reapDeadShards() {
+	if p.config.Store == nil {
+		return
+	}
+	heartbeats, err := p.config.Store.LiveShardHeartbeats("2 minutes")
+	if err != nil || len(heartbeats) == 0 {
+		return // no data or no heartbeats yet — don't reap
+	}
+
+	live := make(map[string]bool, len(heartbeats))
+	for _, hb := range heartbeats {
+		live[hb.ShardID] = true
+	}
+
+	for _, entry := range p.registry.Entries() {
+		if entry.State == StateArchived {
+			continue
+		}
+		if live[entry.ID] {
+			continue
+		}
+		log.Printf("provisioner: reaping dead shard %s (no heartbeat)", entry.ID)
+		p.registry.Remove(entry.ID)
 	}
 }
 
