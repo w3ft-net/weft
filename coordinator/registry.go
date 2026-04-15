@@ -39,17 +39,25 @@ type ShardEntry struct {
 }
 
 // hasApp returns true if this entry owns the given app, or if the entry
-// is a legacy/shared shard with an empty Apps list (matches all apps).
+// has any app in the same namespace.
 func (e *ShardEntry) hasApp(app string) bool {
-	// Strip .metrics suffix: weft/coordinator.metrics → weft/coordinator
-	base := strings.TrimSuffix(app, ".metrics")
-	// Extract namespace: weft/coordinator → weft
-	ns := base
-	if idx := strings.Index(ns, "/"); idx >= 0 {
-		ns = ns[:idx]
+	// Extract namespace from query: weft/coordinator → weft, weft → weft
+	queryNS := app
+	if idx := strings.Index(queryNS, "/"); idx >= 0 {
+		queryNS = queryNS[:idx]
 	}
+
 	for _, a := range e.Apps {
-		if a == app || a == base || a == ns {
+		// Exact match.
+		if a == app {
+			return true
+		}
+		// Namespace match: query is "weft", shard has "weft/coordinator".
+		entryNS := a
+		if idx := strings.Index(entryNS, "/"); idx >= 0 {
+			entryNS = entryNS[:idx]
+		}
+		if entryNS == queryNS {
 			return true
 		}
 	}

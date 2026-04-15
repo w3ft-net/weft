@@ -56,17 +56,17 @@ func TestEdge_Source(t *testing.T) {
 			{
 				name:     "callbox app",
 				pipeline: `cat callbox.log`,
-				wantSQL:  `SELECT * FROM logs WHERE app = 'callbox'`,
+				wantSQL:  `SELECT * FROM logs WHERE (app = 'callbox' OR app LIKE 'callbox/%')`,
 			},
 			{
 				name:     "hyphenated app name",
 				pipeline: `cat my-service.log`,
-				wantSQL:  `SELECT * FROM logs WHERE app = 'my-service'`,
+				wantSQL:  `SELECT * FROM logs WHERE (app = 'my-service' OR app LIKE 'my-service/%')`,
 			},
 			{
 				name:     "underscored app name",
 				pipeline: `cat my_service.log`,
-				wantSQL:  `SELECT * FROM logs WHERE app = 'my_service'`,
+				wantSQL:  `SELECT * FROM logs WHERE (app = 'my_service' OR app LIKE 'my_service/%')`,
 			},
 			{
 				name:     "head on warp.log",
@@ -110,49 +110,49 @@ func TestEdge_Awk_NonPushable(t *testing.T) {
 		{
 			name:        "BEGIN block only",
 			pipeline:    `cat vimgym.log | awk 'BEGIN { print "header" }'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`awk 'BEGIN { print "header" }'`},
 		},
 		// No pattern at all, just an action on every line
 		{
 			name:        "unconditional print action",
 			pipeline:    `cat vimgym.log | awk '{ print $2 }'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: nil, // simple $N print fully pushed down as projection
 		},
 		// User-defined function
 		{
 			name:        "program with function definition",
 			pipeline:    `cat vimgym.log | awk 'function foo() { return 1 } /test/'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`awk 'function foo() { return 1 } /test/'`},
 		},
 		// Assignment in pattern position — not a filter
 		{
 			name:        "assignment expression is not a filter",
 			pipeline:    `cat vimgym.log | awk '{ x = $3 + 1; print x }'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`awk '{ x = $3 + 1; print x }'`},
 		},
 		// Non-pushable field access: $NF (variable index, not a literal)
 		{
 			name:        "variable field index NF",
 			pipeline:    `cat vimgym.log | awk '$NF == "ERROR"'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`awk '$NF == "ERROR"'`},
 		},
 		// Field compared to another field — can't push down
 		{
 			name:        "field vs field comparison",
 			pipeline:    `cat vimgym.log | awk '$3 > $4'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`awk '$3 > $4'`},
 		},
 		// Function call in pattern — can't push down
 		{
 			name:        "function call in pattern",
 			pipeline:    `cat vimgym.log | awk 'length($0) > 100'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`awk 'length($0) > 100'`},
 		},
 	}
@@ -189,43 +189,43 @@ func TestEdge_Awk_Pushable(t *testing.T) {
 		{
 			name:     "field zero equals string",
 			pipeline: `cat vimgym.log | awk '$0 == "exact match"'`,
-			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' AND raw = 'exact match'`,
+			wantSQL:  `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw = 'exact match'`,
 		},
 		// Deeply nested boolean logic
 		{
 			name:     "nested AND inside OR",
 			pipeline: `cat vimgym.log | awk '($LEVEL == "ERROR" && $3 > 100) || $LEVEL == "FATAL"'`,
-			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' AND ((level = 'ERROR' AND CAST(list_extract(fields, 3) AS DOUBLE) > 100) OR level = 'FATAL')`,
+			wantSQL:  `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND ((level = 'ERROR' AND CAST(list_extract(fields, 3) AS DOUBLE) > 100) OR level = 'FATAL')`,
 		},
 		// Large positional field number
 		{
 			name:     "high positional field",
 			pipeline: `cat vimgym.log | awk '$15 == "value"'`,
-			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' AND list_extract(fields, 15) = 'value'`,
+			wantSQL:  `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND list_extract(fields, 15) = 'value'`,
 		},
 		// Field 1
 		{
 			name:     "field 1",
 			pipeline: `cat vimgym.log | awk '$1 == "2026-03-28"'`,
-			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' AND list_extract(fields, 1) = '2026-03-28'`,
+			wantSQL:  `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND list_extract(fields, 1) = '2026-03-28'`,
 		},
 		// Numeric equality (not just comparison)
 		{
 			name:     "field numeric equality",
 			pipeline: `cat vimgym.log | awk '$3 == 200'`,
-			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' AND CAST(list_extract(fields, 3) AS DOUBLE) = 200`,
+			wantSQL:  `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(list_extract(fields, 3) AS DOUBLE) = 200`,
 		},
 		// Numeric not-equal
 		{
 			name:     "field numeric not equal",
 			pipeline: `cat vimgym.log | awk '$3 != 0'`,
-			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' AND CAST(list_extract(fields, 3) AS DOUBLE) != 0`,
+			wantSQL:  `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(list_extract(fields, 3) AS DOUBLE) != 0`,
 		},
 		// Meta-var less-than (non-standard but expressible)
 		{
 			name:     "meta-var less than string",
 			pipeline: `cat vimgym.log | awk '$LEVEL < "WARN"'`,
-			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' AND level < 'WARN'`,
+			wantSQL:  `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level < 'WARN'`,
 		},
 	}
 
@@ -260,21 +260,21 @@ func TestEdge_Awk_PartialPushdown(t *testing.T) {
 		{
 			name:        "filter with printf action",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR" { printf "%s %s\n", $1, $2 }'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND level = 'ERROR'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR'`,
 			wantCompute: []string{`awk '{ printf "%s %s\n", $1, $2 }'`},
 		},
 		// Regex pattern + non-default action
 		{
 			name:        "regex pattern with print action",
 			pipeline:    `cat vimgym.log | awk '/timeout/ { print $1, $2 }'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%timeout%'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw LIKE '%timeout%'`,
 			wantCompute: nil, // simple $N print fully pushed down as projection
 		},
 		// Filter + increment + END (count errors)
 		{
 			name:        "count pattern with END",
 			pipeline:    `cat vimgym.log | awk '/error/ { c++ } END { print c }'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%error%'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw LIKE '%error%'`,
 			wantCompute: []string{`awk '/error/ { c++ } END { print c }'`},
 		},
 	}
@@ -317,76 +317,76 @@ func TestEdge_Jq_NonPushable(t *testing.T) {
 		{
 			name:        "identity",
 			pipeline:    `cat vimgym.log | jq '.'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`jq '.'`},
 		},
 		// Field access without select
 		{
 			name:        "bare field access",
 			pipeline:    `cat vimgym.log | jq '.payload'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`jq '.payload'`},
 		},
 		// Object construction without select
 		{
 			name:        "object construction",
 			pipeline:    `cat vimgym.log | jq '{user: .user_id, action: .action}'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`jq '{user: .user_id, action: .action}'`},
 		},
 		// Array construction
 		{
 			name:        "array expression",
 			pipeline:    `cat vimgym.log | jq '[.user_id, .action]'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`jq '[.user_id, .action]'`},
 		},
 		// keys/length/type
 		{
 			name:        "keys builtin",
 			pipeline:    `cat vimgym.log | jq 'keys'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`jq 'keys'`},
 		},
 		{
 			name:        "length builtin",
 			pipeline:    `cat vimgym.log | jq 'length'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`jq 'length'`},
 		},
 		// map
 		{
 			name:        "map expression",
 			pipeline:    `cat vimgym.log | jq 'map(.status)'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`jq 'map(.status)'`},
 		},
 		// select with non-comparison condition (has, contains, test)
 		{
 			name:        "select with has",
 			pipeline:    `cat vimgym.log | jq 'select(has("error"))'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`jq 'select(has("error"))'`},
 		},
 		// select with arithmetic in condition
 		{
 			name:        "select with arithmetic",
 			pipeline:    `cat vimgym.log | jq 'select((.x + .y) > 100)'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`jq 'select((.x + .y) > 100)'`},
 		},
 		// select comparing two fields (no literal)
 		{
 			name:        "select comparing two fields",
 			pipeline:    `cat vimgym.log | jq 'select(.start < .end)'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`jq 'select(.start < .end)'`},
 		},
 		// Literal on the left side of comparison
 		{
 			name:        "literal on left side",
 			pipeline:    `cat vimgym.log | jq 'select(500 == .status)'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`jq 'select(500 == .status)'`},
 		},
 	}
@@ -423,25 +423,25 @@ func TestEdge_Jq_Pushable(t *testing.T) {
 		{
 			name:     "select boolean true",
 			pipeline: `cat vimgym.log | jq 'select(.success == true)'`,
-			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' AND CAST(json_extract(payload, '$.success') AS BOOL) = true`,
+			wantSQL:  `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(json_extract(payload, '$.success') AS BOOL) = true`,
 		},
 		// Less-than on json field
 		{
 			name:     "select less than",
 			pipeline: `cat vimgym.log | jq 'select(.duration_ms < 100)'`,
-			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' AND CAST(json_extract(payload, '$.duration_ms') AS DOUBLE) < 100`,
+			wantSQL:  `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(json_extract(payload, '$.duration_ms') AS DOUBLE) < 100`,
 		},
 		// Greater-than-or-equal
 		{
 			name:     "select gte",
 			pipeline: `cat vimgym.log | jq 'select(.retries >= 3)'`,
-			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' AND CAST(json_extract(payload, '$.retries') AS DOUBLE) >= 3`,
+			wantSQL:  `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(json_extract(payload, '$.retries') AS DOUBLE) >= 3`,
 		},
 		// Three chained selects
 		{
 			name:     "three chained selects",
 			pipeline: `cat vimgym.log | jq 'select(._level == "ERROR") | select(.status == 500) | select(.action == "login")'`,
-			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' AND level = 'ERROR' AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND json_extract_string(payload, '$.action') = 'login'`,
+			wantSQL:  `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND json_extract_string(payload, '$.action') = 'login'`,
 		},
 	}
 
@@ -472,14 +472,14 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:        "select then field access",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500) | .payload'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
 			wantCompute: []string{`jq '.payload'`},
 		},
 		// select | select | object construction (two pushable, one not)
 		{
 			name:        "two selects then construction",
 			pipeline:    `cat vimgym.log | jq 'select(._level == "ERROR") | select(.status == 500) | {ts: ._ts}'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND level = 'ERROR' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
 			wantCompute: []string{`jq '{ts: ._ts}'`},
 		},
 	}
@@ -522,25 +522,25 @@ func TestEdge_Grep(t *testing.T) {
 			{
 				name:        "grep -c count mode",
 				pipeline:    `cat vimgym.log | grep -c ERROR`,
-				wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+				wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 				wantCompute: []string{`grep -c ERROR`},
 			},
 			{
 				name:        "grep -n line numbers",
 				pipeline:    `cat vimgym.log | grep -n ERROR`,
-				wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+				wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 				wantCompute: []string{`grep -n ERROR`},
 			},
 			{
 				name:        "grep -E extended regex",
 				pipeline:    `cat vimgym.log | grep -E 'error|warn'`,
-				wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+				wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 				wantCompute: []string{`grep -E error|warn`},
 			},
 			{
 				name:        "grep -w word match",
 				pipeline:    `cat vimgym.log | grep -w error`,
-				wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+				wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 				wantCompute: []string{`grep -w error`},
 			},
 		}
@@ -583,35 +583,35 @@ func TestEdge_Sed(t *testing.T) {
 			{
 				name:        "substitution without -n",
 				pipeline:    `cat vimgym.log | sed 's/error/ERROR/g'`,
-				wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+				wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 				wantCompute: []string{`sed 's/error/ERROR/g'`},
 			},
 			// -n with delete instead of print
 			{
 				name:        "-n with delete command",
 				pipeline:    `cat vimgym.log | sed -n '/pattern/d'`,
-				wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+				wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 				wantCompute: []string{`sed -n '/pattern/d'`},
 			},
 			// No -n flag with address print (prints everything plus matching lines twice)
 			{
 				name:        "address print without -n",
 				pipeline:    `cat vimgym.log | sed '/timeout/p'`,
-				wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+				wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 				wantCompute: []string{`sed '/timeout/p'`},
 			},
 			// Range address
 			{
 				name:        "range address",
 				pipeline:    `cat vimgym.log | sed -n '/start/,/end/p'`,
-				wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+				wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 				wantCompute: []string{`sed -n '/start/,/end/p'`},
 			},
 			// Multiple commands
 			{
 				name:        "multiple commands with semicolon",
 				pipeline:    `cat vimgym.log | sed -n '/error/p; /warn/p'`,
-				wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+				wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 				wantCompute: []string{`sed -n '/error/p; /warn/p'`},
 			},
 		}
@@ -652,24 +652,24 @@ func TestEdge_SQLEscaping(t *testing.T) {
 		{
 			name:     "awk string with single quote",
 			pipeline: `cat vimgym.log | awk '$LEVEL == "can'"'"'t"'`,
-			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' AND level = 'can''t'`,
+			wantSQL:  `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'can''t'`,
 		},
 		// LIKE special chars in grep pattern
 		{
 			name:     "grep pattern with percent",
 			pipeline: `cat vimgym.log | grep 100%`,
-			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%100\%%'`,
+			wantSQL:  `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw LIKE '%100\%%'`,
 		},
 		{
 			name:     "grep pattern with underscore",
 			pipeline: `cat vimgym.log | grep user_id`,
-			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%user\_id%'`,
+			wantSQL:  `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw LIKE '%user\_id%'`,
 		},
 		// LIKE special chars in awk regex
 		{
 			name:     "awk regex with underscore",
 			pipeline: `cat vimgym.log | awk '/user_name/'`,
-			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%user\_name%'`,
+			wantSQL:  `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw LIKE '%user\_name%'`,
 		},
 	}
 
@@ -701,77 +701,77 @@ func TestEdge_PipelineOrdering(t *testing.T) {
 		{
 			name:        "filter then head in pipeline",
 			pipeline:    `cat vimgym.log | grep ERROR | head -5`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%ERROR%' ORDER BY ts ASC LIMIT 5`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw LIKE '%ERROR%' ORDER BY ts ASC LIMIT 5`,
 			wantCompute: nil,
 		},
 		// tail in the middle — should merge
 		{
 			name:        "filter then tail in pipeline",
 			pipeline:    `cat vimgym.log | grep ERROR | tail -5`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%ERROR%' ORDER BY ts DESC LIMIT 5`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw LIKE '%ERROR%' ORDER BY ts DESC LIMIT 5`,
 			wantCompute: nil,
 		},
 		// head as source then filter
 		{
 			name:        "head source then awk filter",
 			pipeline:    `head -50 vimgym.log | awk '$LEVEL == "ERROR"'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND level = 'ERROR' ORDER BY ts ASC LIMIT 50`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' ORDER BY ts ASC LIMIT 50`,
 			wantCompute: nil,
 		},
 		// -n flag in mid-pipeline position
 		{
 			name:        "filter then tail -n in pipeline",
 			pipeline:    `cat vimgym.log | grep ERROR | tail -n 20`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%ERROR%' ORDER BY ts DESC LIMIT 20`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw LIKE '%ERROR%' ORDER BY ts DESC LIMIT 20`,
 			wantCompute: nil,
 		},
 		// All compute — no pushable stages at all
 		{
 			name:        "cat then sort then uniq",
 			pipeline:    `cat vimgym.log | sort | uniq -c`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{"sort", "uniq -c"},
 		},
 		// Five-stage mixed pipeline
 		{
 			name:        "five stage mixed",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR"' | grep timeout | sort | uniq -c | head -10`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND level = 'ERROR' AND raw LIKE '%timeout%'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' AND raw LIKE '%timeout%'`,
 			wantCompute: []string{"sort", "uniq -c", "head -10"},
 		},
 		// Partial awk pushdown followed by more compute
 		{
 			name:        "partial awk then sort",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR" { print $3 }' | sort`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND level = 'ERROR'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR'`,
 			wantCompute: []string{"sort"}, // simple $N print pushed down, sort remains
 		},
 		// Partial jq pushdown followed by more compute
 		{
 			name:        "partial jq then sort",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500) | .payload' | sort`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
 			wantCompute: []string{`jq '.payload'`, "sort"},
 		},
 		// wc without -l flag — not pushable
 		{
 			name:        "wc without flags",
 			pipeline:    `cat vimgym.log | grep ERROR | wc`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%ERROR%'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw LIKE '%ERROR%'`,
 			wantCompute: []string{"wc"},
 		},
 		// sort with flags — still compute
 		{
 			name:        "sort with flags",
 			pipeline:    `cat vimgym.log | grep ERROR | sort -rn`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%ERROR%'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw LIKE '%ERROR%'`,
 			wantCompute: []string{"sort -rn"},
 		},
 		// uniq without -c — still compute
 		{
 			name:        "uniq without flags",
 			pipeline:    `cat vimgym.log | grep ERROR | sort | uniq`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%ERROR%'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw LIKE '%ERROR%'`,
 			wantCompute: []string{"sort", "uniq"},
 		},
 	}
@@ -813,35 +813,35 @@ func TestEdge_CrossTool(t *testing.T) {
 		{
 			name:        "jq select then awk print",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500)' | awk '{ print $1 }'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
 			wantCompute: nil, // simple $N print fully pushed down as projection
 		},
 		// grep then jq select then sort
 		{
 			name:        "grep then jq select then sort",
 			pipeline:    `cat vimgym.log | grep error | jq 'select(.status == 500)' | sort`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%error%' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw LIKE '%error%' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
 			wantCompute: []string{"sort"},
 		},
 		// awk filter then jq select — both push
 		{
 			name:        "awk filter then jq select",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR"' | jq 'select(.status == 500)'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND level = 'ERROR' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
 			wantCompute: nil,
 		},
 		// sed filter then grep — both push
 		{
 			name:        "sed filter then grep",
 			pipeline:    `cat vimgym.log | sed -n '/timeout/p' | grep ERROR`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%timeout%' AND raw LIKE '%ERROR%'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw LIKE '%timeout%' AND raw LIKE '%ERROR%'`,
 			wantCompute: nil,
 		},
 		// Four different tools all pushing
 		{
 			name:        "four tools all pushable",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR"' | grep timeout | jq 'select(.status == 500)' | sed -n '/fatal/p'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND level = 'ERROR' AND raw LIKE '%timeout%' AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND raw LIKE '%fatal%'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' AND raw LIKE '%timeout%' AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND raw LIKE '%fatal%'`,
 			wantCompute: nil,
 		},
 	}
@@ -885,26 +885,26 @@ func TestEdge_NR(t *testing.T) {
 		{
 			name:        "NR lower bound only",
 			pipeline:    `cat vimgym.log | awk 'NR >= 10'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`awk 'NR >= 10'`},
 		},
 		{
 			name:        "NR upper bound only",
 			pipeline:    `cat vimgym.log | awk 'NR <= 50'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`awk 'NR <= 50'`},
 		},
 		// NR range starting at 1 — equivalent to head
 		{
 			name:     "NR range from 1",
 			pipeline: `cat vimgym.log | awk 'NR >= 1 && NR <= 20'`,
-			wantSQL:  `SELECT * FROM logs WHERE app = 'vimgym' LIMIT 20`,
+			wantSQL:  `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') LIMIT 20`,
 		},
 		// NR mixed with regular predicate — can't combine
 		{
 			name:        "NR mixed with filter",
 			pipeline:    `cat vimgym.log | awk 'NR >= 10 && $LEVEL == "ERROR"'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`awk 'NR >= 10 && $LEVEL == "ERROR"'`},
 		},
 	}
@@ -1005,21 +1005,21 @@ func TestEdge_ProjectionSafety(t *testing.T) {
 		{
 			name:        "sort then awk print",
 			pipeline:    `cat vimgym.log | sort | awk '{print $2}'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{"sort", `awk '{print $2}'`},
 		},
 		// sed modifies field contents — awk's $3 is on transformed text.
 		{
 			name:        "sed then awk print",
 			pipeline:    `cat vimgym.log | sed 's/GET/POST/' | awk '{print $3}'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`sed 's/GET/POST/'`, `awk '{print $3}'`},
 		},
 		// uniq -c prepends a count column — completely changes field layout.
 		{
 			name:        "uniq -c then awk print",
 			pipeline:    `cat vimgym.log | sort | uniq -c | awk '{print $1}'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{"sort", "uniq -c", `awk '{print $1}'`},
 		},
 		// Partial pushdown with printf remainder — printf transforms data,
@@ -1027,14 +1027,14 @@ func TestEdge_ProjectionSafety(t *testing.T) {
 		{
 			name:        "partial printf then awk print",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR" { printf "%s=%s\n", $1, $2 }' | awk '{print $1}'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND level = 'ERROR'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR'`,
 			wantCompute: []string{`awk '{ printf "%s=%s\n", $1, $2 }'`, `awk '{print $1}'`},
 		},
 		// END block produces entirely different output — cannot project past it.
 		{
 			name:        "END block then awk print",
 			pipeline:    `cat vimgym.log | awk '/error/ { c++ } END { print c }' | awk '{print $1}'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND raw LIKE '%error%'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw LIKE '%error%'`,
 			wantCompute: []string{`awk '/error/ { c++ } END { print c }'`, `awk '{print $1}'`},
 		},
 		// Two awk prints chained — first is projected, second must compute
@@ -1042,7 +1042,7 @@ func TestEdge_ProjectionSafety(t *testing.T) {
 		{
 			name:        "awk print chain",
 			pipeline:    `cat vimgym.log | awk '{print $3, $4}' | awk '{print $1}'`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`awk '{print $1}'`},
 		},
 		// Partial pushdown with simple print + sort — print projects, sort computes.
@@ -1050,7 +1050,7 @@ func TestEdge_ProjectionSafety(t *testing.T) {
 		{
 			name:        "partial print then sort is safe",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR" { print $3 }' | sort`,
-			wantSQL:     `SELECT * FROM logs WHERE app = 'vimgym' AND level = 'ERROR'`,
+			wantSQL:     `SELECT * FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR'`,
 			wantCompute: []string{"sort"},
 		},
 	}
