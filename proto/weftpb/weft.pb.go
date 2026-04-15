@@ -1700,6 +1700,7 @@ func (x *CoordinatorQueryResponse) GetText() string {
 
 type ListAppsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"` // filter apps by customer (from JWT)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1732,6 +1733,13 @@ func (x *ListAppsRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ListAppsRequest.ProtoReflect.Descriptor instead.
 func (*ListAppsRequest) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *ListAppsRequest) GetCustomer() string {
+	if x != nil {
+		return x.Customer
+	}
+	return ""
 }
 
 type ListAppsResponse struct {
@@ -3342,8 +3350,9 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\bcustomer\x18\x05 \x01(\tR\bcustomer\"P\n" +
 	"\x18CoordinatorQueryResponse\x12 \n" +
 	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\x12\x12\n" +
-	"\x04text\x18\x02 \x01(\tR\x04text\"\x11\n" +
-	"\x0fListAppsRequest\"&\n" +
+	"\x04text\x18\x02 \x01(\tR\x04text\"-\n" +
+	"\x0fListAppsRequest\x12\x1a\n" +
+	"\bcustomer\x18\x01 \x01(\tR\bcustomer\"&\n" +
 	"\x10ListAppsResponse\x12\x12\n" +
 	"\x04apps\x18\x01 \x03(\tR\x04apps\"\x9d\x02\n" +
 	"\x10AddSourceRequest\x12\x10\n" +

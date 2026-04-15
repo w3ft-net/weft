@@ -221,21 +221,32 @@ func TestNamespaceQuery_FilterAcrossSubApps(t *testing.T) {
 func TestSeenApps_TracksSubApps(t *testing.T) {
 	sa := NewSeenApps()
 
-	sa.Add("weft/coordinator")
-	sa.Add("weft/shard")
-	sa.Add("weft/metrics")
-	sa.Add("weft/coordinator") // duplicate
-	sa.Add("grantcentral")
+	sa.Add("graybeard", "weft/coordinator")
+	sa.Add("graybeard", "weft/shard")
+	sa.Add("graybeard", "weft/metrics")
+	sa.Add("graybeard", "weft/coordinator") // duplicate
+	sa.Add("kevlar", "grantcentral")
 
-	names := sa.Names()
-	if len(names) != 4 {
-		t.Fatalf("expected 4 unique apps, got %d: %v", len(names), names)
+	// Per-customer filtering.
+	names := sa.Names("graybeard")
+	if len(names) != 3 {
+		t.Fatalf("expected 3 apps for graybeard, got %d: %v", len(names), names)
 	}
-
-	want := []string{"grantcentral", "weft/coordinator", "weft/metrics", "weft/shard"}
+	want := []string{"weft/coordinator", "weft/metrics", "weft/shard"}
 	for i, w := range want {
 		if names[i] != w {
 			t.Errorf("Names()[%d] = %q, want %q", i, names[i], w)
 		}
+	}
+
+	// kevlar should only see grantcentral.
+	kevlarNames := sa.Names("kevlar")
+	if len(kevlarNames) != 1 || kevlarNames[0] != "grantcentral" {
+		t.Errorf("kevlar apps: got %v, want [grantcentral]", kevlarNames)
+	}
+
+	// Unknown customer sees nothing.
+	if names := sa.Names("unknown"); len(names) != 0 {
+		t.Errorf("unknown customer should see no apps, got %v", names)
 	}
 }

@@ -99,9 +99,9 @@ func (r *RemoteCoordinator) Follow(ctx context.Context, pipeline string, onRow f
 	}
 }
 
-// ListApps returns the available app names from the coordinator.
-func (r *RemoteCoordinator) ListApps() ([]string, error) {
-	resp, err := r.client.ListApps(context.Background(), &pb.ListAppsRequest{})
+// ListApps returns the available app names from the coordinator for a customer.
+func (r *RemoteCoordinator) ListApps(customer string) ([]string, error) {
+	resp, err := r.client.ListApps(context.Background(), &pb.ListAppsRequest{Customer: customer})
 	if err != nil {
 		return nil, err
 	}

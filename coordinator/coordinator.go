@@ -47,33 +47,40 @@ type Coordinator struct {
 	SeenApps    *SeenApps      // distinct app names from ingest stream
 }
 
-// SeenApps tracks distinct app names observed during ingestion.
+// SeenApps tracks distinct app names observed during ingestion, keyed by customer.
 type SeenApps struct {
 	mu   sync.RWMutex
-	apps map[string]bool
+	apps map[string]map[string]bool // customer → set of app names
 }
 
 func NewSeenApps() *SeenApps {
-	return &SeenApps{apps: make(map[string]bool)}
+	return &SeenApps{apps: make(map[string]map[string]bool)}
 }
 
-// Add records an app name. Returns true if it was new.
-func (s *SeenApps) Add(app string) bool {
+// Add records an app name for a customer. Returns true if it was new.
+func (s *SeenApps) Add(customer, app string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.apps[app] {
+	if s.apps[customer] == nil {
+		s.apps[customer] = make(map[string]bool)
+	}
+	if s.apps[customer][app] {
 		return false
 	}
-	s.apps[app] = true
+	s.apps[customer][app] = true
 	return true
 }
 
-// Names returns all seen app names, sorted.
-func (s *SeenApps) Names() []string {
+// Names returns seen app names for a specific customer, sorted.
+func (s *SeenApps) Names(customer string) []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	names := make([]string, 0, len(s.apps))
-	for a := range s.apps {
+	cApps := s.apps[customer]
+	if len(cApps) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(cApps))
+	for a := range cApps {
 		names = append(names, a)
 	}
 	sort.Strings(names)
@@ -135,7 +142,9 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 						sh = c.Registry.DefaultIngestingShard()
 					}
 					if sh != nil {
-						sh.Ingest(rows)
+						if err := sh.Ingest(rows); err != nil {
+							log.Printf("drain: ingest %d rows for %s to %s failed: %v", len(rows), app, sh.ID(), err)
+						}
 						if c.Provisioner != nil {
 							c.Provisioner.Stats().Record(app, int64(len(rows)))
 						}

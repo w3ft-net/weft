@@ -668,7 +668,12 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "coordinator unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	resp, err := s.coordClient.ListApps(context.Background(), &pb.ListAppsRequest{})
+	claims := GetClaims(r)
+	customer := ""
+	if claims != nil {
+		customer = claims.CustomerName
+	}
+	resp, err := s.coordClient.ListApps(context.Background(), &pb.ListAppsRequest{Customer: customer})
 	if err != nil {
 		http.Error(w, "coordinator error", http.StatusBadGateway)
 		return

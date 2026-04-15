@@ -328,7 +328,7 @@ func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 		return nil, nil, fmt.Errorf("connect to %s: %w", endpoint, err)
 	}
 
-	apps, err := remote.ListApps()
+	apps, err := remote.ListApps("") // gRPC mode: customer filtering happens at query time
 	if err != nil {
 		remote.Close()
 		return nil, nil, fmt.Errorf("list apps: %w", err)

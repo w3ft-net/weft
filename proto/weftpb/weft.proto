@@ -260,7 +260,9 @@ message CoordinatorQueryResponse {
   string text = 2;
 }
 
-message ListAppsRequest {}
+message ListAppsRequest {
+  string customer = 1;  // filter apps by customer (from JWT)
+}
 
 message ListAppsResponse {
   repeated string apps = 1;

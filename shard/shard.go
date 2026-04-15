@@ -61,6 +61,8 @@ func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
 		db.Close()
 		return nil, fmt.Errorf("create table: %w", err)
 	}
+	// Migrate: add host_group column if missing (existing shards from older AMIs).
+	db.Exec("ALTER TABLE logs ADD COLUMN IF NOT EXISTS host_group TEXT")
 	return &DuckDBShard{id: id, db: db}, nil
 }
 

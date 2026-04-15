@@ -38,9 +38,14 @@ type ShardEntry struct {
 	Shard       shard.Shard // live connection (not persisted)
 }
 
-// hasApp returns true if this entry owns the given app, or if the entry
-// has any app in the same namespace.
+// hasApp returns true if this entry owns the given app. Empty Apps
+// means the shard is a catch-all (heartbeat-adopted shards start with
+// no app assignments and accept everything).
 func (e *ShardEntry) hasApp(app string) bool {
+	if len(e.Apps) == 0 {
+		return true // catch-all shard
+	}
+
 	// Extract namespace from query: weft/coordinator → weft, weft → weft
 	queryNS := app
 	if idx := strings.Index(queryNS, "/"); idx >= 0 {
@@ -48,11 +53,9 @@ func (e *ShardEntry) hasApp(app string) bool {
 	}
 
 	for _, a := range e.Apps {
-		// Exact match.
 		if a == app {
 			return true
 		}
-		// Namespace match: query is "weft", shard has "weft/coordinator".
 		entryNS := a
 		if idx := strings.Index(entryNS, "/"); idx >= 0 {
 			entryNS = entryNS[:idx]

@@ -100,17 +100,34 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 	}
 }
 
-func (s *Server) ListApps(_ context.Context, _ *pb.ListAppsRequest) (*pb.ListAppsResponse, error) {
-	// Return app names observed from ingest if available (includes sub-apps).
-	if s.Coord.SeenApps != nil {
-		if names := s.Coord.SeenApps.Names(); len(names) > 0 {
+func (s *Server) ListApps(_ context.Context, req *pb.ListAppsRequest) (*pb.ListAppsResponse, error) {
+	customer := req.Customer
+
+	// Return app names observed from ingest for this customer.
+	if s.Coord.SeenApps != nil && customer != "" {
+		if names := s.Coord.SeenApps.Names(customer); len(names) > 0 {
 			return &pb.ListAppsResponse{Apps: names}, nil
 		}
 	}
 
-	// Fall back to DB namespaces if no ingest data yet.
+	// Fall back to DB namespaces for this customer.
 	if s.Store == nil {
 		return &pb.ListAppsResponse{}, nil
+	}
+	if customer != "" {
+		cust, err := s.Store.FindOrCreateCustomer(customer)
+		if err != nil || cust == nil {
+			return &pb.ListAppsResponse{}, nil
+		}
+		nss, err := s.Store.ListNamespaces(cust.ID)
+		if err != nil {
+			return &pb.ListAppsResponse{}, nil
+		}
+		names := make([]string, len(nss))
+		for i, ns := range nss {
+			names[i] = ns.Name
+		}
+		return &pb.ListAppsResponse{Apps: names}, nil
 	}
 	names, err := s.Store.AllAppNames()
 	if err != nil {
@@ -306,9 +323,9 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 			firstApp = row.App
 			log.Printf("ingest-stream: first row from customer=%s app=%s", row.Customer, row.App)
 		}
-		if s.Coord.SeenApps != nil && row.App != "" {
-			if s.Coord.SeenApps.Add(row.App) {
-				log.Printf("ingest-stream: new app discovered: %s", row.App)
+		if s.Coord.SeenApps != nil && row.App != "" && row.Customer != "" {
+			if s.Coord.SeenApps.Add(row.Customer, row.App) {
+				log.Printf("ingest-stream: new app discovered: customer=%s app=%s", row.Customer, row.App)
 			}
 		}
 		rows = append(rows, row)
