@@ -169,6 +169,10 @@ sources:
     metrics:
       enabled: true
       interval: 30s
+      collectors:
+        - cpu
+        - memory
+        - disk
 WEFTCFG
   chmod 600 /etc/weftd/config.yaml
 

@@ -60,8 +60,14 @@ func Plan(pipeline string) (*QueryPlan, error) {
 	sql := newSQLBuilder()
 
 	// Apply source: app filter + head/tail ordering.
+	// If the app contains "/" it's a specific sub-app (exact match).
+	// Otherwise it's a namespace — match the namespace and all sub-apps.
 	if info.source.app != "" {
-		sql.addPredicate(fmt.Sprintf("app = '%s'", info.source.app))
+		if strings.Contains(info.source.app, "/") {
+			sql.addPredicate(fmt.Sprintf("app = '%s'", info.source.app))
+		} else {
+			sql.addPredicate(fmt.Sprintf("(app = '%s' OR app LIKE '%s/%%')", info.source.app, info.source.app))
+		}
 	}
 
 	switch info.source.cmd {

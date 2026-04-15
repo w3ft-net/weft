@@ -44,6 +44,40 @@ type Coordinator struct {
 	Usage       *CustomerUsageStats // per-customer byte metering
 	Store       *store.Store   // for weft.* functions in /bin/ scripts (nil = disabled)
 	CustomerID  uint           // for weft.* customer scoping
+	SeenApps    *SeenApps      // distinct app names from ingest stream
+}
+
+// SeenApps tracks distinct app names observed during ingestion.
+type SeenApps struct {
+	mu   sync.RWMutex
+	apps map[string]bool
+}
+
+func NewSeenApps() *SeenApps {
+	return &SeenApps{apps: make(map[string]bool)}
+}
+
+// Add records an app name. Returns true if it was new.
+func (s *SeenApps) Add(app string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.apps[app] {
+		return false
+	}
+	s.apps[app] = true
+	return true
+}
+
+// Names returns all seen app names, sorted.
+func (s *SeenApps) Names() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	names := make([]string, 0, len(s.apps))
+	for a := range s.apps {
+		names = append(names, a)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // NewCoordinator creates a coordinator with the given initial shard list.
@@ -62,6 +96,7 @@ func NewCoordinator(shards []shard.Shard, customer string, pool compute.ComputeP
 		Registry: reg,
 		Customer: customer,
 		Pool:     pool,
+		SeenApps: NewSeenApps(),
 	}
 }
 

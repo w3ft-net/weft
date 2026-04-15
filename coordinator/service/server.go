@@ -101,19 +101,21 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 }
 
 func (s *Server) ListApps(_ context.Context, _ *pb.ListAppsRequest) (*pb.ListAppsResponse, error) {
+	// Return app names observed from ingest if available (includes sub-apps).
+	if s.Coord.SeenApps != nil {
+		if names := s.Coord.SeenApps.Names(); len(names) > 0 {
+			return &pb.ListAppsResponse{Apps: names}, nil
+		}
+	}
+
+	// Fall back to DB namespaces if no ingest data yet.
 	if s.Store == nil {
 		return &pb.ListAppsResponse{}, nil
 	}
-
 	names, err := s.Store.AllAppNames()
 	if err != nil {
 		return &pb.ListAppsResponse{}, nil
 	}
-
-	// Include <app>.metrics for agents with metrics enabled.
-	metricsApps, _ := s.Store.MetricsAppNames()
-	names = append(names, metricsApps...)
-
 	return &pb.ListAppsResponse{Apps: names}, nil
 }
 
@@ -303,6 +305,11 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 		if count == 0 {
 			firstApp = row.App
 			log.Printf("ingest-stream: first row from customer=%s app=%s", row.Customer, row.App)
+		}
+		if s.Coord.SeenApps != nil && row.App != "" {
+			if s.Coord.SeenApps.Add(row.App) {
+				log.Printf("ingest-stream: new app discovered: %s", row.App)
+			}
 		}
 		rows = append(rows, row)
 		count++

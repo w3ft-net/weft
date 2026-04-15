@@ -62,7 +62,7 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 		}
 	}
 
-	metricsApp := app + ".metrics"
+	metricsApp := app + "/metrics"
 	log.Printf("[%s] metrics enabled: interval=%s collectors=%v", metricsApp, interval, mcfg.Collectors)
 
 	ss := &streamState{}
