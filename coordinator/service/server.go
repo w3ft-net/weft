@@ -37,6 +37,7 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 
 	result, err := s.Coord.Query(req.Pipeline, tr, req.Customer)
 	if err != nil {
+		log.Printf("query rpc: error for customer=%s pipeline=%q: %v", req.Customer, req.Pipeline, err)
 		return err
 	}
 

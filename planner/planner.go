@@ -26,6 +26,8 @@ type QueryPlan struct {
 	FollowPatterns []GrepPattern // grep filters applied to live rows
 	Local          bool          // true if pipeline has no log source (run through warp locally)
 	LocalPipeline  string        // the full pipeline string for local execution
+	SourceCmd      string        // source command: "cat", "head", or "tail"
+	SourceApp      string        // app extracted from pseudofile ("" = all apps)
 }
 
 // Project describes which fields or JSON keys a pipeline needs from the shard.
@@ -163,6 +165,8 @@ func Plan(pipeline string) (*QueryPlan, error) {
 		Follow:         info.source.follow,
 		FollowApp:      info.source.app,
 		FollowPatterns: grepPatterns,
+		SourceCmd:      info.source.cmd,
+		SourceApp:      info.source.app,
 	}, nil
 }
 

@@ -280,6 +280,7 @@ func (c *Coordinator) IngestingShard(app string) shard.Shard {
 func (c *Coordinator) Query(pipeline string, tr TimeRange, customerOverride ...string) (*QueryResult, error) {
 	plan, err := planner.Plan(pipeline)
 	if err != nil {
+		log.Printf("query: plan error: %v (pipeline=%q)", err, pipeline)
 		return nil, fmt.Errorf("plan: %w", err)
 	}
 
@@ -297,8 +298,24 @@ func (c *Coordinator) Query(pipeline string, tr TimeRange, customerOverride ...s
 
 	matching := c.Registry.MatchingShards(tr, plan.FollowApp)
 	if len(matching) == 0 {
+		log.Printf("query: no matching shards (app=%s, customer=%s)", plan.SourceApp, customer)
 		return &QueryResult{}, nil
 	}
+
+	shardIDs := make([]string, len(matching))
+	for i, s := range matching {
+		shardIDs[i] = s.ID()
+	}
+
+	path := "rows-only"
+	if plan.Project != nil && plan.Project.Complete && len(plan.ComputeStages) == 0 {
+		path = "projection-only"
+	} else if len(plan.ComputeStages) > 0 && c.Pool != nil {
+		path = "compute"
+	}
+
+	log.Printf("query: app=%s shards=%v path=%s compute=%v sql=%s",
+		plan.SourceApp, shardIDs, path, plan.ComputeStages, sql)
 
 	// Complete projection with no compute stages: the SQL handles everything.
 	// Return rows (which have narrowed raw/fields from the projection).
@@ -337,10 +354,12 @@ func (c *Coordinator) queryRowsOnly(sql string, plan *planner.QueryPlan, shards 
 	var allRows []*pb.LogRow
 	for i, r := range results {
 		if r.err != nil {
+			log.Printf("query: shard %s returned error: %v", shards[i].ID(), r.err)
 			return nil, fmt.Errorf("shard %s: %w", shards[i].ID(), r.err)
 		}
 		allRows = append(allRows, r.rows...)
 	}
+	log.Printf("query: %d shards returned %d total rows", len(shards), len(allRows))
 
 	if plan.OrderDesc {
 		sort.Slice(allRows, func(i, j int) bool {
@@ -370,9 +389,11 @@ func (c *Coordinator) queryWithCompute(sql string, stages []string, shards []sha
 
 	text, err := job.Result()
 	if err != nil {
+		log.Printf("query: compute error: %v (stages=%v)", err, stages)
 		return nil, err
 	}
 
+	log.Printf("query: compute complete, output=%d bytes (stages=%v)", len(text), stages)
 	return &QueryResult{Text: text}, nil
 }
 
