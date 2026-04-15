@@ -53,8 +53,8 @@ func main() {
 	// Heartbeat goroutine.
 	if *coordAddr != "" {
 		go func() {
-			hostname, _ := os.Hostname()
-			myAddr := fmt.Sprintf("%s:%d", hostname, *grpcPort)
+			myIP := getPrivateIP()
+			myAddr := fmt.Sprintf("%s:%d", myIP, *grpcPort)
 
 			conn, err := grpc.NewClient(*coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 			if err != nil {
@@ -112,4 +112,32 @@ func sendHeartbeat(client pb.WeftCoordinatorClient, shardID, addr string, ds *sh
 		return false
 	}
 	return true
+}
+
+// getPrivateIP returns the instance's private IP. Tries EC2 instance
+// metadata first (works on EC2), falls back to os.Hostname().
+func getPrivateIP() string {
+	// EC2 IMDSv2: get token, then query local-ipv4.
+	client := &http.Client{Timeout: 2 * time.Second}
+	tokenReq, _ := http.NewRequest("PUT", "http://169.254.169.254/latest/api/token", nil)
+	tokenReq.Header.Set("X-aws-ec2-metadata-token-ttl-seconds", "60")
+	if tokenResp, err := client.Do(tokenReq); err == nil {
+		defer tokenResp.Body.Close()
+		token := make([]byte, 256)
+		n, _ := tokenResp.Body.Read(token)
+		if n > 0 {
+			ipReq, _ := http.NewRequest("GET", "http://169.254.169.254/latest/meta-data/local-ipv4", nil)
+			ipReq.Header.Set("X-aws-ec2-metadata-token", string(token[:n]))
+			if ipResp, err := client.Do(ipReq); err == nil {
+				defer ipResp.Body.Close()
+				ip := make([]byte, 64)
+				if n, _ := ipResp.Body.Read(ip); n > 0 {
+					return string(ip[:n])
+				}
+			}
+		}
+	}
+	// Fallback: hostname (works in Docker).
+	hostname, _ := os.Hostname()
+	return hostname
 }
