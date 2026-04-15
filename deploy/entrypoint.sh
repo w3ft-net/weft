@@ -13,50 +13,44 @@ ROLE="${ROLE:?ROLE env var is required}"
 
 case "$ROLE" in
   coordinator)
-    # Env vars: WEFT_DB_DSN, WEFT_REGION, WEFT_SHARD_ASG_SMALL,
-    #   WEFT_SHARD_ASG_MEDIUM, WEFT_SHARD_ASG_LARGE, WEFT_COMPUTE_ASG,
-    #   WEFT_PARQUET_DIR, WEFT_LAMBDA_FUNCTION_URL, WEFT_CUSTOMER
-    ARGS="--port=${COORDINATOR_PORT:-9020} --health-port=${COORDINATOR_HEALTH_PORT:-9021}"
+    ARGS=(--port="${COORDINATOR_PORT:-9020}" --health-port="${COORDINATOR_HEALTH_PORT:-9021}")
 
-    [ -n "${WEFT_DB_DSN:-}" ]             && ARGS="$ARGS --db-dsn=$WEFT_DB_DSN"
-    [ -n "${WEFT_REGION:-}" ]             && ARGS="$ARGS --region=$WEFT_REGION"
-    [ -n "${WEFT_SHARD_ASG_SMALL:-}" ]    && ARGS="$ARGS --shard-asg-small=$WEFT_SHARD_ASG_SMALL"
-    [ -n "${WEFT_SHARD_ASG_MEDIUM:-}" ]   && ARGS="$ARGS --shard-asg-medium=$WEFT_SHARD_ASG_MEDIUM"
-    [ -n "${WEFT_SHARD_ASG_LARGE:-}" ]    && ARGS="$ARGS --shard-asg-large=$WEFT_SHARD_ASG_LARGE"
-    [ -n "${WEFT_COMPUTE_ASG:-}" ]        && ARGS="$ARGS --compute-asg=$WEFT_COMPUTE_ASG"
-    [ -n "${WEFT_CUSTOMER:-}" ]           && ARGS="$ARGS --customer=$WEFT_CUSTOMER"
+    [ -n "${WEFT_DB_DSN:-}" ]             && ARGS+=(--db-dsn="$WEFT_DB_DSN")
+    [ -n "${WEFT_REGION:-}" ]             && ARGS+=(--region="$WEFT_REGION")
+    [ -n "${WEFT_SHARD_ASG_SMALL:-}" ]    && ARGS+=(--shard-asg-small="$WEFT_SHARD_ASG_SMALL")
+    [ -n "${WEFT_SHARD_ASG_MEDIUM:-}" ]   && ARGS+=(--shard-asg-medium="$WEFT_SHARD_ASG_MEDIUM")
+    [ -n "${WEFT_SHARD_ASG_LARGE:-}" ]    && ARGS+=(--shard-asg-large="$WEFT_SHARD_ASG_LARGE")
+    [ -n "${WEFT_COMPUTE_ASG:-}" ]        && ARGS+=(--compute-asg="$WEFT_COMPUTE_ASG")
+    [ -n "${WEFT_CUSTOMER:-}" ]           && ARGS+=(--customer="$WEFT_CUSTOMER")
 
-    exec weft-coordinator $ARGS
+    exec weft-coordinator "${ARGS[@]}"
     ;;
 
   shard)
-    # Env vars: SHARD_ID, COORDINATOR_ADDR, HEARTBEAT_INTERVAL
-    ARGS="--id=${SHARD_ID:?SHARD_ID required}"
-    ARGS="$ARGS --grpc-port=${SHARD_GRPC_PORT:-9000}"
-    ARGS="$ARGS --http-port=${SHARD_HTTP_PORT:-9001}"
-    ARGS="$ARGS --db=${SHARD_DB_PATH:-/opt/app/data/shard.duckdb}"
+    ARGS=(--id="${SHARD_ID:?SHARD_ID required}")
+    ARGS+=(--grpc-port="${SHARD_GRPC_PORT:-9000}")
+    ARGS+=(--http-port="${SHARD_HTTP_PORT:-9001}")
 
-    [ -n "${COORDINATOR_ADDR:-}" ]    && ARGS="$ARGS --coordinator-addr=$COORDINATOR_ADDR"
-    [ -n "${HEARTBEAT_INTERVAL:-}" ]  && ARGS="$ARGS --heartbeat-interval=$HEARTBEAT_INTERVAL"
+    [ -n "${SHARD_DB_PATH:-}" ]           && ARGS+=(--db="$SHARD_DB_PATH")
+    [ -n "${COORDINATOR_ADDR:-}" ]        && ARGS+=(--coordinator-addr="$COORDINATOR_ADDR")
+    [ -n "${HEARTBEAT_INTERVAL:-}" ]      && ARGS+=(--heartbeat-interval="$HEARTBEAT_INTERVAL")
 
-    exec weft-shard $ARGS
+    exec weft-shard "${ARGS[@]}"
     ;;
 
   compute)
-    ARGS="--port=${COMPUTE_PORT:-9010}"
-    exec weft-compute $ARGS
+    ARGS=(--port="${COMPUTE_PORT:-9010}")
+    exec weft-compute "${ARGS[@]}"
     ;;
 
   api)
-    # Env vars: WEFT_DB_DSN, COORDINATOR_ADDR, BASE_URL, JWT_SECRET,
-    #   STRIPE_*, EMAIL_HOST_PASSWORD, SLACK_*
-    ARGS="--port=${API_PORT:-8080}"
+    ARGS=(--port="${API_PORT:-8080}")
 
-    [ -n "${COORDINATOR_ADDR:-}" ]  && ARGS="$ARGS --coordinator=$COORDINATOR_ADDR"
-    [ -n "${WEFT_DB_DSN:-}" ]       && ARGS="$ARGS --db-dsn=$WEFT_DB_DSN"
-    [ -n "${BASE_URL:-}" ]          && ARGS="$ARGS --base-url=$BASE_URL"
+    [ -n "${COORDINATOR_ADDR:-}" ]  && ARGS+=(--coordinator="$COORDINATOR_ADDR")
+    [ -n "${WEFT_DB_DSN:-}" ]       && ARGS+=(--db-dsn="$WEFT_DB_DSN")
+    [ -n "${BASE_URL:-}" ]          && ARGS+=(--base-url="$BASE_URL")
 
-    exec weft-api $ARGS
+    exec weft-api "${ARGS[@]}"
     ;;
 
   *)

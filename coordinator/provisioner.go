@@ -195,12 +195,21 @@ func parseTime(s string) time.Time {
 }
 
 // bootstrap ensures at least one shard instance is launching.
-// For ASG launchers, it just scales up — the shard self-configures and
-// heartbeats back; adoptFromHeartbeats adds it to the registry.
+// For ASG launchers, it checks whether instances already exist before
+// scaling — avoids ratcheting up desired capacity on every coordinator restart.
 // For local launchers, it uses launchAndConfigure for immediate setup.
 func (p *Provisioner) bootstrap(ctx context.Context) {
-	if _, isASG := p.launcher.(*ASGLauncher); isASG {
-		log.Printf("provisioner: launching shard instance via ASG (will adopt via heartbeat)")
+	if asg, isASG := p.launcher.(*ASGLauncher); isASG {
+		// Check if the ASG already has running instances — if so, just
+		// wait for them to heartbeat rather than scaling up further.
+		for _, asgName := range asg.tiers {
+			ids, err := asg.asgInstanceIDs(ctx, asgName)
+			if err == nil && len(ids) > 0 {
+				log.Printf("provisioner: ASG %s already has %d instances, waiting for heartbeats", asgName, len(ids))
+				return
+			}
+		}
+		log.Printf("provisioner: no ASG instances found, launching one (will adopt via heartbeat)")
 		if _, err := p.launcher.LaunchInstance(ctx, "small"); err != nil {
 			log.Printf("provisioner: bootstrap ASG launch failed: %v", err)
 		}
