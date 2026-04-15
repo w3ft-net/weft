@@ -16,6 +16,12 @@ import (
 	"github.com/kevlarcon/weft/store"
 )
 
+// HeartbeatStore is the interface the provisioner needs for heartbeat operations.
+type HeartbeatStore interface {
+	LiveShardHeartbeats(since string) ([]store.ShardHeartbeat, error)
+	InsertHeartbeat(hb *store.ShardHeartbeat) error
+}
+
 // ProvisionerConfig controls shard rotation thresholds.
 type ProvisionerConfig struct {
 	MaxRows            int64           // rotate when row count exceeds this (default 5M)
@@ -27,7 +33,7 @@ type ProvisionerConfig struct {
 	ParquetDir         string          // directory for Parquet exports (local path or s3:// prefix)
 	S3Config           *shard.S3Config // S3 credentials for Parquet export/read (nil = local only)
 	LambdaFunctionURL  string          // Lambda function URL for cold queries (empty = in-process ColdShard)
-	Store              *store.Store    // for reading shard heartbeats (nil = no heartbeat adoption)
+	Store              HeartbeatStore  // for reading shard heartbeats (nil = no heartbeat adoption)
 }
 
 // DefaultProvisionerConfig returns sensible production defaults.
