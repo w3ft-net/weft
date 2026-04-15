@@ -31,7 +31,7 @@ func ApplyProjection(sql string, proj *Project) string {
 // for the raw column (e.g. from awk print with concatenation).
 func applyRawExprProjection(sql string, proj *Project) string {
 	selectClause := fmt.Sprintf(
-		"SELECT line_num, %s as raw, fields, ts, level, app, instance, customer, payload",
+		"SELECT line_num, %s as raw, fields, ts, level, app, instance, customer, payload, host_group",
 		proj.RawExpr)
 	return strings.Replace(sql, "SELECT *", selectClause, 1)
 }
@@ -85,7 +85,7 @@ func applyFieldProjection(sql string, fields []int) string {
 	}
 
 	selectClause := fmt.Sprintf(
-		"SELECT line_num, %s as raw, %s as fields, ts, level, app, instance, customer, payload",
+		"SELECT line_num, %s as raw, %s as fields, ts, level, app, instance, customer, payload, host_group",
 		rawExpr, projectedFieldsList)
 
 	return strings.Replace(sql, "SELECT *", selectClause, 1)
@@ -105,7 +105,7 @@ func applyJSONProjection(sql string, keys []string) string {
 
 	// Set raw to the full payload cast as text, so jq stages get JSON input.
 	selectClause := fmt.Sprintf(
-		"SELECT line_num, CAST(payload AS TEXT) as raw, fields, ts, level, app, instance, customer, %s as payload",
+		"SELECT line_num, CAST(payload AS TEXT) as raw, fields, ts, level, app, instance, customer, %s as payload, host_group",
 		payloadExpr)
 
 	return strings.Replace(sql, "SELECT *", selectClause, 1)

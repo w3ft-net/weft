@@ -3,6 +3,7 @@ package shard
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -80,6 +81,7 @@ func (s *DuckDBShard) QueryToSink(query string, sink RowSink) {
 
 	rows, err := s.Query(query)
 	if err != nil {
+		log.Printf("shard %s: QueryToSink error: %v (sql=%s)", s.id, err, query)
 		return // sentinel still sent via defer
 	}
 	for _, r := range rows {

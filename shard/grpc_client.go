@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -85,6 +86,7 @@ func (s *GRPCShard) QueryToSink(sql string, sink RowSink) {
 
 	stream, err := s.client.Query(context.Background(), &pb.QueryRequest{Sql: sql})
 	if err != nil {
+		log.Printf("shard %s: QueryToSink stream error: %v (sql=%s)", s.id, err, sql)
 		return
 	}
 
@@ -94,6 +96,7 @@ func (s *GRPCShard) QueryToSink(sql string, sink RowSink) {
 			break
 		}
 		if err != nil {
+			log.Printf("shard %s: QueryToSink recv error: %v", s.id, err)
 			return
 		}
 		sink.SendRow(row, s.id)

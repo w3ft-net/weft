@@ -72,6 +72,7 @@ func (s *Server) Query(req *pb.QueryRequest, stream pb.ShardQuery_QueryServer) e
 	}
 	rows, err := ds.Query(req.Sql)
 	if err != nil {
+		log.Printf("shard %s: query error: %v (sql=%s)", s.id, err, req.Sql)
 		return err
 	}
 
