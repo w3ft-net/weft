@@ -215,7 +215,9 @@ func (r *ShardRegistry) MatchingShards(tr TimeRange, app string) []shard.Shard {
 		if e.State == StateExpiring {
 			continue
 		}
-		if !e.WindowStart.Before(tr.End) || !e.WindowEnd.After(tr.Start) {
+		// Zero-value windows = unbounded (heartbeat-adopted shards).
+		hasWindow := !e.WindowStart.IsZero() && !e.WindowEnd.IsZero()
+		if hasWindow && (!e.WindowStart.Before(tr.End) || !e.WindowEnd.After(tr.Start)) {
 			continue
 		}
 		if app != "" && !e.hasApp(app) {
