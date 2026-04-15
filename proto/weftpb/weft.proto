@@ -62,10 +62,11 @@ message LogRow {
   string app = 3;
   string level = 4;
   int64 ts_unix_ns = 5;
-  string instance = 6;
+  string instance = 6;      // hostname of the emitting machine
   bytes payload_json = 7;
   repeated string fields = 8;
   string customer = 9;
+  string host_group = 10;   // logical group (e.g. "coordinator", "shard")
 }
 
 message IngestRequest {

@@ -412,6 +412,8 @@ func round2(f float64) float64 {
 func sendRowWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient,
 	ss *streamState, row *pb.LogRow, label string) error {
 
+	row.HostGroup = globalHostGroup
+
 	if ss.stream != nil {
 		if err := ss.stream.Send(row); err == nil {
 			return nil

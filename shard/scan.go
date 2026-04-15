@@ -18,24 +18,26 @@ func ScanRows(sqlRows *sql.Rows) ([]*pb.LogRow, error) {
 			lineNum            int64
 			raw, level, app    string
 			instance, customer string
+			hostGroup          string
 			ts                 time.Time
 			rawFields          any
 			rawPayload         any
 		)
 
-		err := sqlRows.Scan(&lineNum, &raw, &rawFields, &ts, &level, &app, &instance, &customer, &rawPayload)
+		err := sqlRows.Scan(&lineNum, &raw, &rawFields, &ts, &level, &app, &instance, &customer, &rawPayload, &hostGroup)
 		if err != nil {
 			return nil, fmt.Errorf("scan row: %w", err)
 		}
 
 		r := &pb.LogRow{
-			LineNum:  lineNum,
-			Raw:      raw,
-			TsUnixNs: ts.UnixNano(),
-			Level:    level,
-			App:      app,
-			Instance: instance,
-			Customer: customer,
+			LineNum:   lineNum,
+			Raw:       raw,
+			TsUnixNs:  ts.UnixNano(),
+			Level:     level,
+			App:       app,
+			Instance:  instance,
+			Customer:  customer,
+			HostGroup: hostGroup,
 		}
 
 		if arr, ok := rawFields.([]any); ok {

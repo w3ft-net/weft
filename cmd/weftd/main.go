@@ -24,10 +24,14 @@ import (
 	"github.com/kevlarcon/weft/weftd"
 )
 
+// globalHostGroup is set at startup from config and stamped on every LogRow.
+var globalHostGroup string
+
 type Config struct {
-	Endpoint string         `yaml:"endpoint"` // coordinator address
-	Token    string         `yaml:"token"`    // agent auth token (wft_...)
-	Customer string         `yaml:"customer"` // fallback if not returned by auth
+	Endpoint string         `yaml:"endpoint"`  // coordinator address
+	Token    string         `yaml:"token"`     // agent auth token (wft_...)
+	Customer string         `yaml:"customer"`  // fallback if not returned by auth
+	HostGroup string        `yaml:"host_group"` // logical group (e.g. "coordinator", "shard") — sent alongside hostname
 	Socket   string         `yaml:"socket"`
 	Sources  []SourceConfig `yaml:"sources"`
 }
@@ -133,6 +137,7 @@ func main() {
 	}()
 
 	hostname, _ := os.Hostname()
+	globalHostGroup = cfg.HostGroup
 
 	// Start sources — all stream through the coordinator, never direct to shards.
 	// The namespace comes from the token; sub-app names come from filenames/units.
@@ -421,6 +426,7 @@ func sendLineWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient,
 		App:       app,
 		Customer:  customer,
 		Instance:  instance,
+		HostGroup: globalHostGroup,
 		Raw:       line,
 		TsUnixNs: time.Now().UnixNano(),
 		Fields:    strings.Fields(line),

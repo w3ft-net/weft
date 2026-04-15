@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS logs (
     app         TEXT,
     instance    TEXT,
     customer    TEXT,
-    payload     JSON
+    payload     JSON,
+    host_group  TEXT
 );
 `
 
@@ -91,14 +92,14 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("INSERT INTO logs (line_num, raw, fields, ts, level, app, instance, customer, payload) VALUES ")
+	sb.WriteString("INSERT INTO logs (line_num, raw, fields, ts, level, app, instance, customer, payload, host_group) VALUES ")
 
-	args := make([]any, 0, len(rows)*9)
+	args := make([]any, 0, len(rows)*10)
 	for i, r := range rows {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 
 		payloadStr := "{}"
 		if len(r.PayloadJson) > 0 {
@@ -115,6 +116,7 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
 			r.Instance,
 			r.Customer,
 			payloadStr,
+			r.HostGroup,
 		)
 	}
 

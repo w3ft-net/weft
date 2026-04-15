@@ -324,10 +324,11 @@ type LogRow struct {
 	App           string                 `protobuf:"bytes,3,opt,name=app,proto3" json:"app,omitempty"`
 	Level         string                 `protobuf:"bytes,4,opt,name=level,proto3" json:"level,omitempty"`
 	TsUnixNs      int64                  `protobuf:"varint,5,opt,name=ts_unix_ns,json=tsUnixNs,proto3" json:"ts_unix_ns,omitempty"`
-	Instance      string                 `protobuf:"bytes,6,opt,name=instance,proto3" json:"instance,omitempty"`
+	Instance      string                 `protobuf:"bytes,6,opt,name=instance,proto3" json:"instance,omitempty"` // hostname of the emitting machine
 	PayloadJson   []byte                 `protobuf:"bytes,7,opt,name=payload_json,json=payloadJson,proto3" json:"payload_json,omitempty"`
 	Fields        []string               `protobuf:"bytes,8,rep,name=fields,proto3" json:"fields,omitempty"`
 	Customer      string                 `protobuf:"bytes,9,opt,name=customer,proto3" json:"customer,omitempty"`
+	HostGroup     string                 `protobuf:"bytes,10,opt,name=host_group,json=hostGroup,proto3" json:"host_group,omitempty"` // logical group (e.g. "coordinator", "shard")
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -421,6 +422,13 @@ func (x *LogRow) GetFields() []string {
 func (x *LogRow) GetCustomer() string {
 	if x != nil {
 		return x.Customer
+	}
+	return ""
+}
+
+func (x *LogRow) GetHostGroup() string {
+	if x != nil {
+		return x.HostGroup
 	}
 	return ""
 }
@@ -3238,7 +3246,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\fcompute_addr\x18\x02 \x01(\tR\vcomputeAddr\x12\x15\n" +
 	"\x06job_id\x18\x03 \x01(\tR\x05jobId\"5\n" +
 	"\x16QueryToComputeResponse\x12\x1b\n" +
-	"\trows_sent\x18\x01 \x01(\x03R\browsSent\"\xee\x01\n" +
+	"\trows_sent\x18\x01 \x01(\x03R\browsSent\"\x8d\x02\n" +
 	"\x06LogRow\x12\x19\n" +
 	"\bline_num\x18\x01 \x01(\x03R\alineNum\x12\x10\n" +
 	"\x03raw\x18\x02 \x01(\tR\x03raw\x12\x10\n" +
@@ -3249,7 +3257,10 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\binstance\x18\x06 \x01(\tR\binstance\x12!\n" +
 	"\fpayload_json\x18\a \x01(\fR\vpayloadJson\x12\x16\n" +
 	"\x06fields\x18\b \x03(\tR\x06fields\x12\x1a\n" +
-	"\bcustomer\x18\t \x01(\tR\bcustomer\"1\n" +
+	"\bcustomer\x18\t \x01(\tR\bcustomer\x12\x1d\n" +
+	"\n" +
+	"host_group\x18\n" +
+	" \x01(\tR\thostGroup\"1\n" +
 	"\rIngestRequest\x12 \n" +
 	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\"5\n" +
 	"\x0eIngestResponse\x12#\n" +

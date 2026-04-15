@@ -164,6 +164,7 @@ if [ -n "$WEFT_AGENT_TOKEN" ] && command -v weftd >/dev/null 2>&1; then
   cat > /etc/weftd/config.yaml <<WEFTCFG
 endpoint: ingest.w3ft.net:9020
 token: ${WEFT_AGENT_TOKEN}
+host_group: ${ROLE}
 sources:
   - path: /opt/app/logs/*.log
     metrics:
