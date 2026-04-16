@@ -9,8 +9,8 @@ option go_package = "github.com/kevlarcon/weft/proto/weftpb";
 // ---------------------------------------------------------------------------
 
 service ShardQuery {
-  // Query executes pushed-down SQL and streams matching rows.
-  rpc Query(QueryRequest) returns (stream LogRow);
+  // Query executes pushed-down SQL and streams result rows (line_num, raw).
+  rpc Query(QueryRequest) returns (stream ResultRow);
 
   // QueryToCompute executes SQL and streams rows directly to a compute
   // job, followed by a sentinel. The shard manages its own connection
@@ -56,6 +56,16 @@ message QueryToComputeResponse {
   int64 rows_sent = 1;
 }
 
+// ResultRow is the query result type — shards always return (line_num, raw).
+// The planner bakes projections into the SQL so raw contains exactly what
+// the consumer needs (full log line, JSON payload, projected fields, etc.).
+message ResultRow {
+  int64 line_num = 1;
+  string raw = 2;
+}
+
+// LogRow is the ingestion type — weftd agents and CloudWatch poller send
+// structured rows to the coordinator for insertion into shards.
 message LogRow {
   int64 line_num = 1;
   string raw = 2;
@@ -105,7 +115,7 @@ message ComputeMessage {
   string job_id = 1;
   string shard_id = 2;
   bool sentinel = 3;
-  LogRow row = 4;  // nil/empty for sentinel messages
+  ResultRow row = 4;  // nil/empty for sentinel messages
 }
 
 message SendRowsResponse {
@@ -256,7 +266,7 @@ message CoordinatorQueryRequest {
 
 message CoordinatorQueryResponse {
   // One of these is populated depending on whether compute stages ran.
-  repeated LogRow rows = 1;
+  repeated ResultRow rows = 1;
   string text = 2;
 }
 

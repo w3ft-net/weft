@@ -7,6 +7,7 @@ import (
 
 // sqlBuilder accumulates the parts of a shard SQL query.
 type sqlBuilder struct {
+	rawExpr    string   // SQL expression for the raw column (default: "raw")
 	predicates []string // WHERE clause fragments, ANDed together
 	orderBy    string   // e.g. "ts ASC" or "ts DESC"
 	limit      int      // 0 = no limit
@@ -14,7 +15,11 @@ type sqlBuilder struct {
 }
 
 func newSQLBuilder() *sqlBuilder {
-	return &sqlBuilder{}
+	return &sqlBuilder{rawExpr: "raw"}
+}
+
+func (b *sqlBuilder) setSelect(rawExpr string) {
+	b.rawExpr = rawExpr
 }
 
 func (b *sqlBuilder) addPredicate(pred string) {
@@ -32,9 +37,15 @@ func (b *sqlBuilder) setLimitOffset(limit, offset int) {
 }
 
 // build produces the final SQL string.
+// Always: SELECT line_num, {rawExpr} as raw FROM logs ...
 func (b *sqlBuilder) build() string {
 	var sb strings.Builder
-	sb.WriteString("SELECT * FROM logs")
+
+	if b.rawExpr == "raw" {
+		sb.WriteString("SELECT line_num, raw FROM logs")
+	} else {
+		sb.WriteString(fmt.Sprintf("SELECT line_num, %s as raw FROM logs", b.rawExpr))
+	}
 
 	if len(b.predicates) > 0 {
 		sb.WriteString(" WHERE ")

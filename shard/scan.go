@@ -2,58 +2,25 @@ package shard
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"time"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
-// ScanRows reads all rows from a SQL result set and converts them to LogRow.
-// Shared by DuckDBShard.Query, ColdShard.Query, and the Lambda handler.
-func ScanRows(sqlRows *sql.Rows) ([]*pb.LogRow, error) {
-	var results []*pb.LogRow
+// ScanResultRows reads all rows from a SQL result set that returns
+// (line_num, raw) and converts them to ResultRow.
+func ScanResultRows(sqlRows *sql.Rows) ([]*pb.ResultRow, error) {
+	var results []*pb.ResultRow
 	for sqlRows.Next() {
-		var (
-			lineNum            int64
-			raw, level, app    string
-			instance, customer string
-			hostGroup          string
-			ts                 time.Time
-			rawFields          any
-			rawPayload         any
-		)
-
-		err := sqlRows.Scan(&lineNum, &raw, &rawFields, &ts, &level, &app, &instance, &customer, &rawPayload, &hostGroup)
-		if err != nil {
+		var lineNum int64
+		var raw string
+		if err := sqlRows.Scan(&lineNum, &raw); err != nil {
 			return nil, fmt.Errorf("scan row: %w", err)
 		}
-
-		r := &pb.LogRow{
-			LineNum:   lineNum,
-			Raw:       raw,
-			TsUnixNs:  ts.UnixNano(),
-			Level:     level,
-			App:       app,
-			Instance:  instance,
-			Customer:  customer,
-			HostGroup: hostGroup,
-		}
-
-		if arr, ok := rawFields.([]any); ok {
-			for _, v := range arr {
-				if sv, ok := v.(string); ok {
-					r.Fields = append(r.Fields, sv)
-				}
-			}
-		}
-		if rawPayload != nil {
-			b, err := json.Marshal(rawPayload)
-			if err == nil {
-				r.PayloadJson = b
-			}
-		}
-		results = append(results, r)
+		results = append(results, &pb.ResultRow{
+			LineNum: lineNum,
+			Raw:     raw,
+		})
 	}
 	return results, sqlRows.Err()
 }

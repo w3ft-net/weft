@@ -107,7 +107,7 @@ func TestDockerStack_IngestAndQuery(t *testing.T) {
 	}
 
 	// Wait for drain loop to flush to shard, with retry.
-	var queryResp []*pb.LogRow
+	var queryResp []*pb.ResultRow
 	for attempt := 0; attempt < 10; attempt++ {
 		time.Sleep(2 * time.Second)
 		queryResp = queryPipeline(t, client, "cat /log/integration.log", "testcust")
@@ -134,8 +134,8 @@ func TestDockerStack_IngestAndQuery(t *testing.T) {
 		t.Errorf("filtered query: expected 10 ERROR rows, got %d", len(filteredResp))
 	}
 	for _, r := range filteredResp {
-		if r.Level != "ERROR" {
-			t.Errorf("unexpected level %q in filtered results", r.Level)
+		if !strings.Contains(r.Raw, "app-b") {
+			t.Errorf("unexpected row in ERROR-filtered results: %q", r.Raw)
 		}
 	}
 }
@@ -169,7 +169,7 @@ func TestDockerStack_ShardSuspendAndRecovery(t *testing.T) {
 	}
 	stream.CloseAndRecv()
 
-	var rows []*pb.LogRow
+	var rows []*pb.ResultRow
 	for attempt := 0; attempt < 10; attempt++ {
 		time.Sleep(2 * time.Second)
 		rows = queryPipeline(t, client, "cat /log/suspend-test.log", "testcust")
@@ -259,7 +259,7 @@ func grpcClient(t *testing.T) (*grpc.ClientConn, pb.WeftCoordinatorClient) {
 	return conn, pb.NewWeftCoordinatorClient(conn)
 }
 
-func queryPipeline(t *testing.T, client pb.WeftCoordinatorClient, pipeline, customer string) []*pb.LogRow {
+func queryPipeline(t *testing.T, client pb.WeftCoordinatorClient, pipeline, customer string) []*pb.ResultRow {
 	t.Helper()
 	stream, err := client.Query(context.Background(), &pb.CoordinatorQueryRequest{
 		Pipeline: pipeline,
@@ -269,7 +269,7 @@ func queryPipeline(t *testing.T, client pb.WeftCoordinatorClient, pipeline, cust
 		t.Fatalf("query %q: %v", pipeline, err)
 	}
 
-	var rows []*pb.LogRow
+	var rows []*pb.ResultRow
 	for {
 		resp, err := stream.Recv()
 		if err != nil {

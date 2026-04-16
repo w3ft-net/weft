@@ -62,7 +62,7 @@ func (h *HTTPCoordinator) Query(pipeline string, start, end time.Time) (*RemoteQ
 	return parseSSEResponse(resp.Body)
 }
 
-func (h *HTTPCoordinator) Follow(ctx context.Context, pipeline string, onRow func(*pb.LogRow)) error {
+func (h *HTTPCoordinator) Follow(ctx context.Context, pipeline string, onRow func(*pb.ResultRow)) error {
 	body, _ := json.Marshal(map[string]any{
 		"pipeline": pipeline,
 		"follow":   true,
@@ -102,7 +102,7 @@ func (h *HTTPCoordinator) Follow(ctx context.Context, pipeline string, onRow fun
 		switch event["type"] {
 		case "row":
 			if rowData, ok := event["data"].(map[string]any); ok {
-				onRow(mapToLogRow(rowData))
+				onRow(mapToResultRow(rowData))
 			}
 		case "error":
 			if msg, ok := event["message"].(string); ok {
@@ -258,7 +258,7 @@ func parseSSEResponse(r io.Reader) (*RemoteQueryResult, error) {
 			}
 		case "row":
 			if rowData, ok := event["data"].(map[string]any); ok {
-				result.Rows = append(result.Rows, mapToLogRow(rowData))
+				result.Rows = append(result.Rows, mapToResultRow(rowData))
 			}
 		case "error":
 			if msg, ok := event["message"].(string); ok {
@@ -275,28 +275,13 @@ func parseSSEResponse(r io.Reader) (*RemoteQueryResult, error) {
 	return result, nil
 }
 
-func mapToLogRow(m map[string]any) *pb.LogRow {
-	row := &pb.LogRow{}
+func mapToResultRow(m map[string]any) *pb.ResultRow {
+	row := &pb.ResultRow{}
 	if v, ok := m["raw"].(string); ok {
 		row.Raw = v
 	}
-	if v, ok := m["app"].(string); ok {
-		row.App = v
-	}
-	if v, ok := m["level"].(string); ok {
-		row.Level = v
-	}
-	if v, ok := m["instance"].(string); ok {
-		row.Instance = v
-	}
-	if v, ok := m["ts_unix_ns"].(float64); ok {
-		row.TsUnixNs = int64(v)
-	}
 	if v, ok := m["line_num"].(float64); ok {
 		row.LineNum = int64(v)
-	}
-	if payload, ok := m["payload"]; ok {
-		row.PayloadJson, _ = json.Marshal(payload)
 	}
 	return row
 }

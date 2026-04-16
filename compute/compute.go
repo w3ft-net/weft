@@ -8,14 +8,14 @@ import (
 // ComputeMessage is sent from shards to a compute job. Either Row is set
 // (a data row) or Sentinel is true (indicating the shard has finished).
 type ComputeMessage struct {
-	Row      *pb.LogRow
+	Row      *pb.ResultRow
 	ShardID  string
 	Sentinel bool
 }
 
 // ComputePool creates compute jobs. Implementations:
 //   - LocalComputePool: in-process execution via warp's bash interpreter
-//   - (future) GRPCComputePool: fans out to remote compute workers
+//   - GRPCComputePool: fans out to remote compute workers
 type ComputePool interface {
 	NewJob(stages []string, shardCount int) ComputeJob
 }

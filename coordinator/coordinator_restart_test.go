@@ -55,7 +55,7 @@ func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
 	}
 
 	// Verify data is queryable.
-	result, err := ingestShard.Query("SELECT * FROM logs WHERE customer = 'testcust'")
+	result, err := ingestShard.Query("SELECT line_num, raw FROM logs WHERE customer = 'testcust'")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
 	})
 
 	// Query through the new registry's shard — data should still be there.
-	result2, err := gs.Query("SELECT * FROM logs WHERE customer = 'testcust'")
+	result2, err := gs.Query("SELECT line_num, raw FROM logs WHERE customer = 'testcust'")
 	if err != nil {
 		t.Fatalf("query after restart: %v", err)
 	}

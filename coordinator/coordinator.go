@@ -28,7 +28,7 @@ type TimeRange struct {
 // QueryResult holds the output of a coordinated query. Either Rows is
 // populated (no compute stages) or Text is populated (compute stages ran).
 type QueryResult struct {
-	Rows   []*pb.LogRow
+	Rows   []*pb.ResultRow
 	Text   string
 	Stderr string // alert/error output — rendered in red by the shell
 }
@@ -294,7 +294,6 @@ func (c *Coordinator) Query(pipeline string, tr TimeRange, customerOverride ...s
 		customer = customerOverride[0]
 	}
 	sql := planner.InjectCustomer(plan.ShardSQL, customer)
-	sql = planner.ApplyProjection(sql, plan.Project)
 
 	matching := c.Registry.MatchingShards(tr, plan.FollowApp)
 	if len(matching) == 0 {
@@ -306,43 +305,18 @@ func (c *Coordinator) Query(pipeline string, tr TimeRange, customerOverride ...s
 	for i, s := range matching {
 		shardIDs[i] = s.ID()
 	}
+	log.Printf("query: app=%s shards=%v compute=%v sql=%s",
+		plan.SourceApp, shardIDs, plan.ComputeStages, sql)
 
-	path := "rows-only"
-	if plan.Project != nil && plan.Project.Complete && len(plan.ComputeStages) == 0 {
-		path = "projection-only"
-	} else if len(plan.ComputeStages) > 0 && c.Pool != nil {
-		path = "compute"
-	}
-
-	log.Printf("query: app=%s shards=%v path=%s compute=%v sql=%s",
-		plan.SourceApp, shardIDs, path, plan.ComputeStages, sql)
-
-	// Complete projection with no compute stages: the SQL handles everything.
-	// Return rows (which have narrowed raw/fields from the projection).
-	if plan.Project != nil && plan.Project.Complete && len(plan.ComputeStages) == 0 {
-		return c.queryRowsOnly(sql, plan, matching)
-	}
-
-	// If there are compute stages and a pool, use the streaming path.
-	if len(plan.ComputeStages) > 0 && c.Pool != nil {
-		return c.queryWithCompute(sql, plan.ComputeStages, matching)
-	}
-
-	// No compute: query shards directly, merge, return rows.
-	return c.queryRowsOnly(sql, plan, matching)
-}
-
-// queryRowsOnly fans out to all matching shards in parallel, then merges.
-func (c *Coordinator) queryRowsOnly(sql string, plan *planner.QueryPlan, shards []shard.Shard) (*QueryResult, error) {
+	// Fan out query to all matching shards in parallel.
 	type shardResult struct {
-		rows []*pb.LogRow
+		rows []*pb.ResultRow
 		err  error
 	}
-
-	results := make([]shardResult, len(shards))
+	results := make([]shardResult, len(matching))
 	var wg sync.WaitGroup
-	wg.Add(len(shards))
-	for i, s := range shards {
+	wg.Add(len(matching))
+	for i, s := range matching {
 		go func(i int, s shard.Shard) {
 			defer wg.Done()
 			rows, err := s.Query(sql)
@@ -351,23 +325,24 @@ func (c *Coordinator) queryRowsOnly(sql string, plan *planner.QueryPlan, shards 
 	}
 	wg.Wait()
 
-	var allRows []*pb.LogRow
+	var allRows []*pb.ResultRow
 	for i, r := range results {
 		if r.err != nil {
-			log.Printf("query: shard %s returned error: %v", shards[i].ID(), r.err)
-			return nil, fmt.Errorf("shard %s: %w", shards[i].ID(), r.err)
+			log.Printf("query: shard %s returned error: %v", matching[i].ID(), r.err)
+			return nil, fmt.Errorf("shard %s: %w", matching[i].ID(), r.err)
 		}
 		allRows = append(allRows, r.rows...)
 	}
-	log.Printf("query: %d shards returned %d total rows", len(shards), len(allRows))
+	log.Printf("query: %d shards returned %d total rows", len(matching), len(allRows))
 
+	// Sort by line_num for deterministic merge ordering.
 	if plan.OrderDesc {
 		sort.Slice(allRows, func(i, j int) bool {
-			return allRows[i].TsUnixNs > allRows[j].TsUnixNs
+			return allRows[i].LineNum > allRows[j].LineNum
 		})
 	} else {
 		sort.Slice(allRows, func(i, j int) bool {
-			return allRows[i].TsUnixNs < allRows[j].TsUnixNs
+			return allRows[i].LineNum < allRows[j].LineNum
 		})
 	}
 
@@ -375,26 +350,24 @@ func (c *Coordinator) queryRowsOnly(sql string, plan *planner.QueryPlan, shards 
 		allRows = allRows[:plan.Limit]
 	}
 
+	// If compute stages exist, pipe rows through the compute pool.
+	if len(plan.ComputeStages) > 0 && c.Pool != nil {
+		job := c.Pool.NewJob(plan.ComputeStages, 1) // already merged
+		for _, r := range allRows {
+			job.SendRow(r, "merged")
+		}
+		job.SendSentinel("merged")
+
+		text, err := job.Result()
+		if err != nil {
+			log.Printf("query: compute error: %v (stages=%v)", err, plan.ComputeStages)
+			return nil, err
+		}
+		log.Printf("query: compute complete, output=%d bytes (stages=%v)", len(text), plan.ComputeStages)
+		return &QueryResult{Text: text}, nil
+	}
+
 	return &QueryResult{Rows: allRows}, nil
-}
-
-// queryWithCompute creates a compute job, fans out shard queries that stream
-// rows directly to the job, and waits for the result.
-func (c *Coordinator) queryWithCompute(sql string, stages []string, shards []shard.Shard) (*QueryResult, error) {
-	job := c.Pool.NewJob(stages, len(shards))
-
-	for _, s := range shards {
-		go s.QueryToSink(sql, job)
-	}
-
-	text, err := job.Result()
-	if err != nil {
-		log.Printf("query: compute error: %v (stages=%v)", err, stages)
-		return nil, err
-	}
-
-	log.Printf("query: compute complete, output=%d bytes (stages=%v)", len(text), stages)
-	return &QueryResult{Text: text}, nil
 }
 
 // runLocal executes a sourceless pipeline (no log query) through warp locally.

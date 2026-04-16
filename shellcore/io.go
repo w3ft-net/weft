@@ -101,10 +101,7 @@ func (FollowDoneEvent) shellEvent() {}
 
 // OutputRow is a renderer-friendly log row (no protobuf dependency).
 type OutputRow struct {
-	Raw      string
-	App      string
-	Level    string
-	Instance string
+	Raw string
 }
 
 // Mode represents the shell's current input mode.

@@ -59,14 +59,14 @@ func (s *GRPCShard) Ingest(rows []*pb.LogRow) error {
 	return nil
 }
 
-// Query executes SQL on the remote shard and collects all rows.
-func (s *GRPCShard) Query(sql string) ([]*pb.LogRow, error) {
+// Query executes SQL on the remote shard and collects all result rows.
+func (s *GRPCShard) Query(sql string) ([]*pb.ResultRow, error) {
 	stream, err := s.client.Query(context.Background(), &pb.QueryRequest{Sql: sql})
 	if err != nil {
 		return nil, fmt.Errorf("query shard %s: %w", s.id, err)
 	}
 
-	var rows []*pb.LogRow
+	var rows []*pb.ResultRow
 	for {
 		row, err := stream.Recv()
 		if err == io.EOF {

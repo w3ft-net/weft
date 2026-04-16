@@ -38,14 +38,19 @@ func Setup() func() {
 	os.Setenv("WEFT_S3_REGION", "us-east-1")
 	os.Setenv("WEFT_S3_USE_SSL", "false")
 
-	// Start docker-compose stack.
-	log.Println("integration: starting docker-compose stack...")
-	up := exec.Command("docker", "compose", "up", "-d", "--build", "--wait")
-	up.Dir = ".."
-	up.Stdout = os.Stdout
-	up.Stderr = os.Stderr
-	if err := up.Run(); err != nil {
-		log.Fatalf("docker compose up: %v", err)
+	// Skip docker rebuild if WEFT_INTEGRATION_NO_BUILD is set (stack already running).
+	if os.Getenv("WEFT_INTEGRATION_NO_BUILD") != "" {
+		log.Println("integration: skipping docker build (WEFT_INTEGRATION_NO_BUILD set)")
+	} else {
+		// Start docker-compose stack.
+		log.Println("integration: starting docker-compose stack...")
+		up := exec.Command("docker", "compose", "up", "-d", "--build", "--wait")
+		up.Dir = ".."
+		up.Stdout = os.Stdout
+		up.Stderr = os.Stderr
+		if err := up.Run(); err != nil {
+			log.Fatalf("docker compose up: %v", err)
+		}
 	}
 
 	// Wait for MinIO and create bucket.

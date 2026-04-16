@@ -2,6 +2,7 @@ package shard
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,7 +54,7 @@ func TestColdShard_QueryParquet(t *testing.T) {
 	}
 	defer cs.Close()
 
-	rows, err := cs.Query("SELECT * FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
+	rows, err := cs.Query("SELECT line_num, raw FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -61,11 +62,8 @@ func TestColdShard_QueryParquet(t *testing.T) {
 		t.Fatalf("expected 2 ERROR rows, got %d", len(rows))
 	}
 	for _, r := range rows {
-		if r.Level != "ERROR" {
-			t.Errorf("expected ERROR, got %s", r.Level)
-		}
-		if r.Customer != "kevlar" {
-			t.Errorf("expected kevlar, got %s", r.Customer)
+		if !strings.Contains(strings.ToLower(r.Raw), "error") {
+			t.Errorf("expected raw to contain 'error', got %q", r.Raw)
 		}
 	}
 }
@@ -79,7 +77,7 @@ func TestColdShard_FiltersByApp(t *testing.T) {
 	}
 	defer cs.Close()
 
-	rows, err := cs.Query("SELECT * FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'")
+	rows, err := cs.Query("SELECT line_num, raw FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,8 +85,8 @@ func TestColdShard_FiltersByApp(t *testing.T) {
 		t.Fatalf("expected 2 vimgym/kevlar rows, got %d", len(rows))
 	}
 	for _, r := range rows {
-		if r.App != "vimgym" {
-			t.Errorf("expected vimgym, got %s", r.App)
+		if !strings.Contains(r.Raw, "vimgym") {
+			t.Errorf("expected raw to contain 'vimgym', got %q", r.Raw)
 		}
 	}
 }
@@ -132,7 +130,7 @@ func TestColdShard_QueryToSink(t *testing.T) {
 	defer cs.Close()
 
 	sink := &testSink{}
-	cs.QueryToSink("SELECT * FROM logs WHERE customer = 'kevlar'", sink)
+	cs.QueryToSink("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'", sink)
 
 	if !sink.sentinelReceived {
 		t.Error("expected sentinel")
@@ -151,7 +149,7 @@ func TestColdShard_EmptyResult(t *testing.T) {
 	}
 	defer cs.Close()
 
-	rows, err := cs.Query("SELECT * FROM logs WHERE app = 'nonexistent'")
+	rows, err := cs.Query("SELECT line_num, raw FROM logs WHERE app = 'nonexistent'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,11 +160,11 @@ func TestColdShard_EmptyResult(t *testing.T) {
 
 // testSink implements RowSink for testing QueryToSink.
 type testSink struct {
-	rows             []*pb.LogRow
+	rows             []*pb.ResultRow
 	sentinelReceived bool
 }
 
-func (s *testSink) SendRow(row *pb.LogRow, shardID string) {
+func (s *testSink) SendRow(row *pb.ResultRow, shardID string) {
 	s.rows = append(s.rows, row)
 }
 func (s *testSink) SendSentinel(shardID string) {
@@ -216,6 +214,6 @@ func benchColdQuery(b *testing.B, n int) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		cs.Query("SELECT * FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
+		cs.Query("SELECT line_num, raw FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
 	}
 }

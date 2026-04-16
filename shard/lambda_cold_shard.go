@@ -42,7 +42,7 @@ func (s *LambdaColdShard) ID() string { return s.id }
 
 // Query calls the Lambda with the SQL and Parquet path, reads the
 // streaming protobuf response, and returns all rows.
-func (s *LambdaColdShard) Query(sql string) ([]*pb.LogRow, error) {
+func (s *LambdaColdShard) Query(sql string) ([]*pb.ResultRow, error) {
 	body, err := json.Marshal(LambdaQueryRequest{
 		SQL:         sql,
 		ParquetPath: s.parquetPath,
@@ -61,7 +61,7 @@ func (s *LambdaColdShard) Query(sql string) ([]*pb.LogRow, error) {
 		return nil, fmt.Errorf("lambda %s returned %d", s.id, resp.StatusCode)
 	}
 
-	return ReadAllLogRows(resp.Body)
+	return ReadAllResultRows(resp.Body)
 }
 
 // QueryToSink calls the Lambda and streams rows directly to the sink.
@@ -87,7 +87,7 @@ func (s *LambdaColdShard) QueryToSink(sql string, sink RowSink) {
 	}
 
 	for {
-		row, err := ReadLogRow(resp.Body)
+		row, err := ReadResultRow(resp.Body)
 		if err != nil {
 			return // EOF or error
 		}

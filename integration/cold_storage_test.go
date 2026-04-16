@@ -56,7 +56,7 @@ func TestExportToS3_DirectWrite(t *testing.T) {
 	}
 	defer cs.Close()
 
-	result, err := cs.Query("SELECT * FROM logs WHERE customer = 'kevlar'")
+	result, err := cs.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestExportToS3_AppPartitioned(t *testing.T) {
 	}
 	defer csVim.Close()
 
-	result, err := csVim.Query("SELECT * FROM logs WHERE customer = 'kevlar'")
+	result, err := csVim.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestExportToS3_AppPartitioned(t *testing.T) {
 	}
 	defer csCb.Close()
 
-	result, err = csCb.Query("SELECT * FROM logs WHERE customer = 'kevlar'")
+	result, err = csCb.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}

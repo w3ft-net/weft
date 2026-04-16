@@ -46,13 +46,13 @@ func HandleQuery(w io.Writer, req QueryRequest, s3cfg *shard.S3Config) error {
 	defer rows.Close()
 
 	// Scan and stream rows.
-	results, err := shard.ScanRows(rows)
+	results, err := shard.ScanResultRows(rows)
 	if err != nil {
 		return fmt.Errorf("scan: %w", err)
 	}
 
 	for _, row := range results {
-		if err := shard.WriteLogRow(w, row); err != nil {
+		if err := shard.WriteResultRow(w, row); err != nil {
 			return fmt.Errorf("write row: %w", err)
 		}
 	}

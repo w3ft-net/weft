@@ -17,9 +17,9 @@ import (
 	"github.com/kevlarcon/weft/shellcore"
 )
 
-// QueryResult is the output of a query — either structured rows or text.
+// QueryResult is the output of a query — either result rows or text.
 type QueryResult struct {
-	Rows []*pb.LogRow
+	Rows []*pb.ResultRow
 	Text string
 }
 
@@ -27,7 +27,7 @@ type QueryResult struct {
 type QueryFunc func(pipeline string, start, end time.Time) (*QueryResult, error)
 
 // FollowFunc is the function signature for tail -f streaming.
-type FollowFunc func(ctx context.Context, pipeline string, onRow func(*pb.LogRow)) error
+type FollowFunc func(ctx context.Context, pipeline string, onRow func(*pb.ResultRow)) error
 
 // Shell is the weft interactive shell.
 type Shell struct {
@@ -193,7 +193,7 @@ func (r *shellRunner) runFollow(pipeline string) {
 	r.followCancel = cancel
 
 	if r.shell.Follow != nil {
-		r.shell.Follow(ctx, pipeline, func(row *pb.LogRow) {
+		r.shell.Follow(ctx, pipeline, func(row *pb.ResultRow) {
 			r.core.HandleEvent(shellcore.FollowRowEvent{Raw: row.Raw})
 		})
 	}

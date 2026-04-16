@@ -45,7 +45,7 @@ func lambdaHandler(t *testing.T) http.HandlerFunc {
 		}
 		defer rows.Close()
 
-		results, err := ScanRows(rows)
+		results, err := ScanResultRows(rows)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -53,7 +53,7 @@ func lambdaHandler(t *testing.T) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/x-protobuf-stream")
 		for _, row := range results {
-			WriteLogRow(w, row)
+			WriteResultRow(w, row)
 		}
 		WriteStreamEnd(w)
 	}
@@ -67,7 +67,7 @@ func TestLambdaColdShard_Query(t *testing.T) {
 
 	shard := NewLambdaColdShard("lambda-test", []string{"vimgym", "callbox"}, srv.URL, parquetPath)
 
-	rows, err := shard.Query("SELECT * FROM logs WHERE customer = 'kevlar'")
+	rows, err := shard.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestLambdaColdShard_QueryToSink(t *testing.T) {
 	shard := NewLambdaColdShard("lambda-test", []string{"vimgym"}, srv.URL, parquetPath)
 
 	sink := &testSink{}
-	shard.QueryToSink("SELECT * FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'", sink)
+	shard.QueryToSink("SELECT line_num, raw FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'", sink)
 
 	if !sink.sentinelReceived {
 		t.Error("expected sentinel")
@@ -111,7 +111,7 @@ func TestLambdaColdShard_FiltersByApp(t *testing.T) {
 
 	shard := NewLambdaColdShard("lambda-test", []string{"callbox"}, srv.URL, parquetPath)
 
-	rows, err := shard.Query("SELECT * FROM logs WHERE app = 'callbox' AND customer = 'kevlar'")
+	rows, err := shard.Query("SELECT line_num, raw FROM logs WHERE app = 'callbox' AND customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,9 +150,9 @@ func BenchmarkLambdaColdShard_Query(b *testing.B) {
 		query := strings.Replace(req.SQL, "FROM logs", fmt.Sprintf("FROM read_parquet('%s')", req.ParquetPath), 1)
 		sqlRows, _ := db.Query(query)
 		defer sqlRows.Close()
-		results, _ := ScanRows(sqlRows)
+		results, _ := ScanResultRows(sqlRows)
 		for _, row := range results {
-			WriteLogRow(w, row)
+			WriteResultRow(w, row)
 		}
 		WriteStreamEnd(w)
 	}))
@@ -162,6 +162,6 @@ func BenchmarkLambdaColdShard_Query(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		shard.Query("SELECT * FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
+		shard.Query("SELECT line_num, raw FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
 	}
 }

@@ -21,7 +21,7 @@ type RemoteCoordinator struct {
 
 // RemoteQueryResult mirrors coordinator.QueryResult for the shell.
 type RemoteQueryResult struct {
-	Rows []*pb.LogRow
+	Rows []*pb.ResultRow
 	Text string
 }
 
@@ -76,7 +76,7 @@ func (r *RemoteCoordinator) Query(pipeline string, start, end time.Time) (*Remot
 
 // Follow opens a streaming query with follow mode. It calls onRow for each
 // row (both historical and live) until the context is cancelled or the stream ends.
-func (r *RemoteCoordinator) Follow(ctx context.Context, pipeline string, onRow func(*pb.LogRow)) error {
+func (r *RemoteCoordinator) Follow(ctx context.Context, pipeline string, onRow func(*pb.ResultRow)) error {
 	stream, err := r.client.Query(ctx, &pb.CoordinatorQueryRequest{
 		Pipeline: pipeline,
 		Follow:   true,

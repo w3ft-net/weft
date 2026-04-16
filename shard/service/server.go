@@ -64,7 +64,7 @@ func (s *Server) Configure(_ context.Context, req *pb.ConfigureRequest) (*pb.Con
 	return &pb.ConfigureResponse{}, nil
 }
 
-// Query executes SQL and streams matching rows to the client.
+// Query executes SQL and streams result rows (line_num, raw) to the client.
 func (s *Server) Query(req *pb.QueryRequest, stream pb.ShardQuery_QueryServer) error {
 	ds, err := s.getShard()
 	if err != nil {

@@ -52,7 +52,7 @@ func (j *LocalComputeJob) Send(msg ComputeMessage) {
 }
 
 // SendRow implements shard.RowSink.
-func (j *LocalComputeJob) SendRow(row *pb.LogRow, shardID string) {
+func (j *LocalComputeJob) SendRow(row *pb.ResultRow, shardID string) {
 	j.Send(ComputeMessage{Row: row, ShardID: shardID})
 }
 

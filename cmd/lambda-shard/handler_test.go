@@ -38,14 +38,14 @@ func TestLambdaHandler_QueryParquet(t *testing.T) {
 	var buf bytes.Buffer
 
 	err := HandleQuery(&buf, QueryRequest{
-		SQL:         "SELECT * FROM logs WHERE customer = 'kevlar'",
+		SQL:         "SELECT line_num, raw FROM logs WHERE customer = 'kevlar'",
 		ParquetPath: path,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rows, err := shard.ReadAllLogRows(&buf)
+	rows, err := shard.ReadAllResultRows(&buf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,14 +59,14 @@ func TestLambdaHandler_FiltersByApp(t *testing.T) {
 	var buf bytes.Buffer
 
 	err := HandleQuery(&buf, QueryRequest{
-		SQL:         "SELECT * FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'",
+		SQL:         "SELECT line_num, raw FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'",
 		ParquetPath: path,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rows, err := shard.ReadAllLogRows(&buf)
+	rows, err := shard.ReadAllResultRows(&buf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,14 +80,14 @@ func TestLambdaHandler_EmptyResult(t *testing.T) {
 	var buf bytes.Buffer
 
 	err := HandleQuery(&buf, QueryRequest{
-		SQL:         "SELECT * FROM logs WHERE app = 'nonexistent'",
+		SQL:         "SELECT line_num, raw FROM logs WHERE app = 'nonexistent'",
 		ParquetPath: path,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rows, err := shard.ReadAllLogRows(&buf)
+	rows, err := shard.ReadAllResultRows(&buf)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,21 +6,13 @@ import (
 )
 
 // QueryPlan is the result of analyzing a weft pipeline. ShardSQL is the
-// pushed-down SQL sent to shard nodes. ComputeStages lists the pipeline
-// stages that must run in the gpipe compute layer, in order.
-// GrepPattern captures a grep filter for live tail matching.
-type GrepPattern struct {
-	Pattern    string
-	IgnoreCase bool
-	Invert     bool
-}
-
+// pushed-down SQL sent to shard nodes — always SELECT line_num, {raw_expr} as raw.
+// ComputeStages lists the pipeline stages that must run in the compute layer.
 type QueryPlan struct {
 	ShardSQL       string
 	ComputeStages  []string
 	Limit          int           // post-merge limit (from head/tail), 0 = unlimited
 	OrderDesc      bool          // true for tail (DESC), false for head (ASC)
-	Project        *Project      // field/key projection extracted from cut/awk/jq, or nil
 	Follow         bool          // tail -f: keep stream open for live updates
 	FollowApp      string        // app to subscribe to ("" = all)
 	FollowPatterns []GrepPattern // grep filters applied to live rows
@@ -30,13 +22,11 @@ type QueryPlan struct {
 	SourceApp      string        // app extracted from pseudofile ("" = all apps)
 }
 
-// Project describes which fields or JSON keys a pipeline needs from the shard.
-// The shard can narrow its SELECT to only these columns, reducing data transfer.
-type Project struct {
-	Fields   []int    // positional field indices (1-based); negative = open-ended (e.g., -5 means "5 to end")
-	JSONKeys []string // JSON payload keys needed
-	RawExpr  string   // SQL expression for raw column; overrides Fields-based reconstruction when set
-	Complete bool     // if true, the projection fully replaces the stage (no compute needed)
+// GrepPattern captures a grep filter for live tail matching.
+type GrepPattern struct {
+	Pattern    string
+	IgnoreCase bool
+	Invert     bool
 }
 
 // pushdownResult is the outcome of attempting to push a stage into SQL.
@@ -82,8 +72,8 @@ func Plan(pipeline string) (*QueryPlan, error) {
 	// Walk stages left-to-right, pushing down as many as possible.
 	// Keep raw stageInfo for compute stages so we can extract projections.
 	var computeStages []stageInfo
-	var computeStrings []string     // formatted strings from partial pushdown
-	var grepPatterns []GrepPattern  // collected for follow mode
+	var computeStrings []string    // formatted strings from partial pushdown
+	var grepPatterns []GrepPattern // collected for follow mode
 	pushing := true
 
 	for _, stage := range info.stages {
@@ -124,44 +114,43 @@ func Plan(pipeline string) (*QueryPlan, error) {
 		compute = append(compute, formatStage(s))
 	}
 
-	// Extract projection from the first compute stage (raw, not partial).
-	// Only safe when there are no partial pushdown remainders (computeStrings)
-	// running before it — those may transform the data, making the shard's
-	// fields column stale for projection.
-	var proj *Project
+	// Determine the raw expression for the SELECT clause.
+	// The projection examines the first compute stage to determine what
+	// columns/keys the pipeline needs. If the projection is "complete"
+	// (fully expressible in SQL), it replaces that compute stage.
+	rawExpr := "raw" // default: the stored log line
 	if len(computeStages) > 0 && len(computeStrings) == 0 {
-		proj = extractProjection(computeStages[0])
-		if proj != nil && proj.Complete {
-			// Complete projection replaces the first compute stage.
-			compute = compute[:len(computeStrings)]
-			compute = append(compute, formatComputeStages(computeStages[1:])...)
-			if len(compute) > 0 {
-				proj.Complete = false // still have downstream compute
+		expr, complete := extractRawExpr(computeStages[0])
+		if expr != "" {
+			rawExpr = expr
+			if complete {
+				// Complete projection replaces the first compute stage.
+				compute = compute[:len(computeStrings)]
+				compute = append(compute, formatComputeStages(computeStages[1:])...)
 			}
 		}
 	}
 	// Also check partial pushdown compute strings for awk projections.
-	if proj == nil && len(computeStrings) > 0 {
-		// Parse the partial pushdown string to extract projection.
+	if rawExpr == "raw" && len(computeStrings) > 0 {
 		partial := parseComputeString(computeStrings[0])
 		if partial != nil {
-			proj = extractProjection(*partial)
-			if proj != nil && proj.Complete {
-				// Complete projection replaces the partial compute string.
-				compute = append(computeStrings[1:], formatComputeStages(computeStages)...)
-				if len(compute) > 0 {
-					proj.Complete = false // still have downstream compute
+			expr, complete := extractRawExpr(*partial)
+			if expr != "" {
+				rawExpr = expr
+				if complete {
+					compute = append(computeStrings[1:], formatComputeStages(computeStages)...)
 				}
 			}
 		}
 	}
+
+	sql.setSelect(rawExpr)
 
 	return &QueryPlan{
 		ShardSQL:       sql.build(),
 		ComputeStages:  compute,
 		Limit:          sql.limit,
 		OrderDesc:      sql.orderBy == "ts DESC",
-		Project:        proj,
 		Follow:         info.source.follow,
 		FollowApp:      info.source.app,
 		FollowPatterns: grepPatterns,

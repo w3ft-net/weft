@@ -78,12 +78,16 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 		t.Fatalf("expected 5 rows (3 cold + 2 live), got %d", len(result.Rows))
 	}
 
-	// Verify ordering — cold rows first (earlier timestamps).
-	if result.Rows[0].Raw != "cold row 1" {
-		t.Errorf("expected first row to be cold, got %s", result.Rows[0].Raw)
+	// Verify all rows are present (ordering across shards is by line_num,
+	// which is per-shard — not globally chronological).
+	rawSet := map[string]bool{}
+	for _, r := range result.Rows {
+		rawSet[r.Raw] = true
 	}
-	if result.Rows[4].Raw != "live row 2" {
-		t.Errorf("expected last row to be live, got %s", result.Rows[4].Raw)
+	for _, want := range []string{"cold row 1", "cold row 2", "cold row 3", "live row 1", "live row 2"} {
+		if !rawSet[want] {
+			t.Errorf("missing expected row %q", want)
+		}
 	}
 }
 
@@ -135,7 +139,7 @@ func TestProvisioner_ArchivesExpiredShard(t *testing.T) {
 	}
 
 	// Verify the ColdShard is queryable.
-	result, err := entry.Shard.Query("SELECT * FROM logs WHERE customer = 'kevlar'")
+	result, err := entry.Shard.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")
 	if err != nil {
 		t.Fatalf("query archived shard: %v", err)
 	}
@@ -212,7 +216,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 	}
 
 	// Query should work on the restored ColdShard.
-	rows, err := entry.Shard.Query("SELECT * FROM logs WHERE customer = 'kevlar'")
+	rows, err := entry.Shard.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}

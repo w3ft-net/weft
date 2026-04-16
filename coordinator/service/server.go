@@ -93,7 +93,7 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 				return nil
 			}
 			if err := stream.Send(&pb.CoordinatorQueryResponse{
-				Rows: []*pb.LogRow{row},
+				Rows: []*pb.ResultRow{{LineNum: row.LineNum, Raw: row.Raw}},
 			}); err != nil {
 				return err
 			}

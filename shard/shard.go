@@ -13,9 +13,9 @@ import (
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
-// RowSink receives rows streamed from a shard query. ComputeJob satisfies this.
+// RowSink receives result rows streamed from a shard query. ComputeJob satisfies this.
 type RowSink interface {
-	SendRow(row *pb.LogRow, shardID string)
+	SendRow(row *pb.ResultRow, shardID string)
 	SendSentinel(shardID string)
 }
 
@@ -23,7 +23,7 @@ type RowSink interface {
 // Shards are dumb storage — the coordinator manages time windows and routing.
 type Shard interface {
 	ID() string
-	Query(sql string) ([]*pb.LogRow, error)
+	Query(sql string) ([]*pb.ResultRow, error)
 	QueryToSink(sql string, sink RowSink)
 	Ingest(rows []*pb.LogRow) error
 	Close() error
@@ -152,12 +152,13 @@ func (s *DuckDBShard) ExportToS3Parquet(s3Path string, cfg *S3Config) error {
 	return err
 }
 
-// Query executes a SQL query and returns the matching rows.
-func (s *DuckDBShard) Query(query string) ([]*pb.LogRow, error) {
+// Query executes a SQL query and returns the matching result rows.
+// The SQL is expected to return (line_num, raw) — two columns.
+func (s *DuckDBShard) Query(query string) ([]*pb.ResultRow, error) {
 	sqlRows, err := s.db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("query shard %s: %w", s.id, err)
 	}
 	defer sqlRows.Close()
-	return ScanRows(sqlRows)
+	return ScanResultRows(sqlRows)
 }

@@ -95,7 +95,7 @@ func (j *GRPCComputeJob) Send(msg ComputeMessage) {
 }
 
 // SendRow implements shard.RowSink.
-func (j *GRPCComputeJob) SendRow(row *pb.LogRow, shardID string) {
+func (j *GRPCComputeJob) SendRow(row *pb.ResultRow, shardID string) {
 	j.Send(ComputeMessage{Row: row, ShardID: shardID})
 }
 
@@ -133,7 +133,7 @@ type errJob struct {
 }
 
 func (j *errJob) Send(ComputeMessage)               {}
-func (j *errJob) SendRow(*pb.LogRow, string)         {}
+func (j *errJob) SendRow(*pb.ResultRow, string)      {}
 func (j *errJob) SendSentinel(string)                {}
 func (j *errJob) Result() (string, error)            { return "", j.err }
 

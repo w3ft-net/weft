@@ -25,7 +25,7 @@ type failingShard struct {
 }
 
 func (s *failingShard) ID() string { return s.id }
-func (s *failingShard) Query(sql string) ([]*pb.LogRow, error) {
+func (s *failingShard) Query(sql string) ([]*pb.ResultRow, error) {
 	return nil, nil
 }
 func (s *failingShard) QueryToSink(sql string, sink shard.RowSink) {}

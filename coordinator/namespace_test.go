@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -114,19 +115,28 @@ func TestNamespaceQuery_All(t *testing.T) {
 		t.Errorf("expected 15 rows for namespace query, got %d", len(result.Rows))
 	}
 
-	// Verify all three sub-apps are represented.
-	apps := map[string]int{}
+	// Verify all three sub-apps are represented by checking raw content.
+	appCounts := map[string]int{}
 	for _, r := range result.Rows {
-		apps[r.App]++
+		switch {
+		case strings.Contains(r.Raw, "coordinator:"):
+			appCounts["weft/coordinator"]++
+		case strings.Contains(r.Raw, "shard:"):
+			appCounts["weft/shard"]++
+		case strings.Contains(r.Raw, "collector"):
+			appCounts["weft/metrics"]++
+		case strings.Contains(r.Raw, "grantcentral"):
+			appCounts["grantcentral"]++
+		}
 	}
 	for _, want := range []string{"weft/coordinator", "weft/shard", "weft/metrics"} {
-		if apps[want] != 5 {
-			t.Errorf("expected 5 rows for %s, got %d", want, apps[want])
+		if appCounts[want] != 5 {
+			t.Errorf("expected 5 rows for %s, got %d", want, appCounts[want])
 		}
 	}
 
 	// grantcentral must NOT appear (different namespace, different customer).
-	if apps["grantcentral"] > 0 {
+	if appCounts["grantcentral"] > 0 {
 		t.Errorf("grantcentral rows leaked into weft namespace query")
 	}
 }
@@ -145,8 +155,8 @@ func TestNamespaceQuery_SubApp(t *testing.T) {
 		t.Errorf("expected 5 rows for sub-app query, got %d", len(result.Rows))
 	}
 	for _, r := range result.Rows {
-		if r.App != "weft/coordinator" {
-			t.Errorf("unexpected app %q in sub-app query", r.App)
+		if !strings.Contains(r.Raw, "coordinator:") {
+			t.Errorf("unexpected raw in sub-app query: %q", r.Raw)
 		}
 	}
 }
@@ -165,8 +175,8 @@ func TestNamespaceQuery_Metrics(t *testing.T) {
 		t.Errorf("expected 5 rows for metrics query, got %d", len(result.Rows))
 	}
 	for _, r := range result.Rows {
-		if r.App != "weft/metrics" {
-			t.Errorf("unexpected app %q in metrics query", r.App)
+		if !strings.Contains(r.Raw, "collector") {
+			t.Errorf("unexpected raw in metrics query: %q", r.Raw)
 		}
 	}
 }

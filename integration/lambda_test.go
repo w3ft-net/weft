@@ -61,7 +61,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	cs := shard.NewLambdaColdShard("cold-lambda", []string{"vimgym", "callbox"}, lambdaURL, containerS3Path)
 
 	// Query all kevlar rows.
-	result, err := cs.Query("SELECT * FROM logs WHERE customer = 'kevlar'")
+	result, err := cs.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")
 	if err != nil {
 		t.Fatalf("query via Lambda: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	t.Logf("queried %d rows via Lambda container", len(result))
 
 	// Filter by app.
-	result, err = cs.Query("SELECT * FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'")
+	result, err = cs.Query("SELECT line_num, raw FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	}
 
 	// Filter by level.
-	result, err = cs.Query("SELECT * FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
+	result, err = cs.Query("SELECT line_num, raw FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 
 	// QueryToSink.
 	sink := &testSink{}
-	cs.QueryToSink("SELECT * FROM logs WHERE customer = 'kevlar'", sink)
+	cs.QueryToSink("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'", sink)
 	if !sink.sentinelReceived {
 		t.Error("expected sentinel")
 	}
@@ -126,11 +126,11 @@ func TestLambdaColdShard_VerifyS3Upload(t *testing.T) {
 }
 
 type testSink struct {
-	rows             []*pb.LogRow
+	rows             []*pb.ResultRow
 	sentinelReceived bool
 }
 
-func (s *testSink) SendRow(row *pb.LogRow, shardID string) {
+func (s *testSink) SendRow(row *pb.ResultRow, shardID string) {
 	s.rows = append(s.rows, row)
 }
 func (s *testSink) SendSentinel(shardID string) {

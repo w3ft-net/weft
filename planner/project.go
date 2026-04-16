@@ -9,24 +9,26 @@ import (
 	"github.com/kevlarcon/warp/pkg/jq"
 )
 
-// extractProjection examines the first compute stage (or the stage that would
-// become compute) and extracts a field/key projection if possible.
-// Returns the projection and whether the stage is fully handled by the projection
+// extractRawExpr examines a compute stage and returns the SQL expression for
+// the raw column plus whether the stage is fully handled by the expression
 // (i.e., it can be removed from compute stages).
-func extractProjection(stage stageInfo) *Project {
+//
+// Returns ("", false) if no projection can be extracted.
+func extractRawExpr(stage stageInfo) (string, bool) {
 	switch stage.cmd {
 	case "cut":
-		return extractCutProjection(stage.args)
+		return extractCutRawExpr(stage.args)
 	case "awk":
-		return extractAwkProjection(stage.args)
+		return extractAwkRawExpr(stage.args)
 	case "jq":
-		return extractJqProjection(stage.args)
+		return extractJqRawExpr(stage.args)
 	}
-	return nil
+	return "", false
 }
 
-// extractCutProjection parses cut flags to determine which fields are selected.
-func extractCutProjection(args []string) *Project {
+// extractCutRawExpr parses cut flags and returns a SQL expression for the
+// selected fields.
+func extractCutRawExpr(args []string) (string, bool) {
 	fieldsSpec := ""
 
 	for i := 0; i < len(args); i++ {
@@ -44,18 +46,15 @@ func extractCutProjection(args []string) *Project {
 	}
 
 	if fieldsSpec == "" {
-		return nil
+		return "", false
 	}
 
 	fields := parseCutFieldSpec(fieldsSpec)
 	if len(fields) == 0 {
-		return nil
+		return "", false
 	}
 
-	return &Project{
-		Fields:   fields,
-		Complete: true, // cut is fully handled by the projection
-	}
+	return fieldsToRawExpr(fields), true
 }
 
 // parseCutFieldSpec parses a cut-style field spec: "1,3", "1-3", "5-", "1,3-5".
@@ -91,16 +90,29 @@ func parseCutFieldSpec(spec string) []int {
 	return result
 }
 
-// extractAwkProjection examines an awk program for field references in print
-// statements and attempts to push the entire print down to SQL.
-//
-// Any awk print that uses only $N fields, $0 (= raw column), string literals,
-// and concatenation can be expressed as a SQL expression — no awk compute needed.
-// When a custom field separator (-F) is used, we fall back to field-list-only
-// projection with compute.
-func extractAwkProjection(args []string) *Project {
+// fieldsToRawExpr builds a SQL expression that reconstructs raw from
+// selected positional fields.
+func fieldsToRawExpr(fields []int) string {
+	var exprs []string
+	for _, f := range fields {
+		if f < 0 {
+			start := -f
+			exprs = append(exprs, fmt.Sprintf("array_to_string(fields[%d:], ' ')", start))
+		} else {
+			exprs = append(exprs, fmt.Sprintf("list_extract(fields, %d)", f))
+		}
+	}
+	if len(exprs) == 1 {
+		return exprs[0]
+	}
+	return "concat_ws(' ', " + strings.Join(exprs, ", ") + ")"
+}
+
+// extractAwkRawExpr examines an awk program and returns a SQL expression
+// if the print can be pushed down.
+func extractAwkRawExpr(args []string) (string, bool) {
 	if len(args) == 0 {
-		return nil
+		return "", false
 	}
 
 	// Check for -F flag (custom field separator). If present, the shard's
@@ -116,53 +128,28 @@ func extractAwkProjection(args []string) *Project {
 		}
 	}
 	if program == "" {
-		return nil
+		return "", false
 	}
 
 	prog, err := awk.Parse(program)
 	if err != nil || len(prog.Rules) == 0 {
-		return nil
+		return "", false
 	}
 
 	// Try to convert the entire program's print statements to SQL.
-	// This handles $N fields, $0, string literals, and concatenation.
 	if !hasCustomFS {
-		sqlExpr, fields, ok := awkProgramToSQL(prog)
+		sqlExpr, _, ok := awkProgramToSQL(prog)
 		if ok {
-			if sqlExpr == "raw" && len(fields) == 0 {
-				// Identity operation ({print} or {print $0}) — no projection
-				// needed, just mark complete to remove the stage.
-				return &Project{Complete: true}
+			if sqlExpr == "raw" {
+				// Identity operation ({print} or {print $0}) — no change needed.
+				return "raw", true
 			}
-			return &Project{
-				Fields:  dedup(fields),
-				RawExpr: sqlExpr,
-				Complete: true,
-			}
+			return sqlExpr, true
 		}
 	}
 
-	// Fallback: extract field references for narrowing, keep awk in compute.
-	var fields []int
-	for _, rule := range prog.Rules {
-		if rule.Action == nil {
-			continue
-		}
-		refs := extractAwkFieldRefs(rule.Action)
-		if refs == nil {
-			return nil
-		}
-		fields = append(fields, refs...)
-	}
-
-	if len(fields) == 0 {
-		return nil
-	}
-
-	return &Project{
-		Fields:   dedup(fields),
-		Complete: false,
-	}
+	// Fallback: can't push down to SQL, keep in compute.
+	return "", false
 }
 
 // awkProgramToSQL tries to convert all print statements in an awk program
@@ -202,11 +189,8 @@ func awkProgramToSQL(prog *awk.Program) (string, []int, bool) {
 }
 
 // awkPrintToSQL converts an awk print statement to a SQL expression.
-// Handles: {print} → raw, {print $N} → list_extract, {print $2 ":" $3} → concat,
-// and comma-separated args with default OFS (space).
 func awkPrintToSQL(ps *awk.PrintStmt) (string, []int, bool) {
 	if len(ps.Args) == 0 {
-		// print with no args = print $0 = raw
 		return "raw", nil, true
 	}
 
@@ -224,7 +208,6 @@ func awkPrintToSQL(ps *awk.PrintStmt) (string, []int, bool) {
 	if len(parts) == 1 {
 		return parts[0], allFields, true
 	}
-	// Comma-separated args → concat_ws with OFS (default space).
 	return "concat_ws(' ', " + strings.Join(parts, ", ") + ")", allFields, true
 }
 
@@ -234,7 +217,7 @@ func awkPrintArgToSQL(expr awk.Expr) (string, []int, bool) {
 	case *awk.FieldExpr:
 		nl, ok := e.Index.(*awk.NumberLit)
 		if !ok {
-			return "", nil, false // dynamic field index ($NF, etc.)
+			return "", nil, false
 		}
 		n := int(nl.Value)
 		if n == 0 {
@@ -261,7 +244,6 @@ func awkPrintArgToSQL(expr awk.Expr) (string, []int, bool) {
 		return fmt.Sprintf("concat(%s, %s)", leftSQL, rightSQL), fields, true
 
 	case *awk.IdentExpr:
-		// Meta-variables like LEVEL, APP — these are columns.
 		if col, ok := metaVars[e.Name]; ok {
 			return col, nil, true
 		}
@@ -270,87 +252,30 @@ func awkPrintArgToSQL(expr awk.Expr) (string, []int, bool) {
 	return "", nil, false
 }
 
-// extractAwkFieldRefs walks an awk Block and collects positional field
-// references ($1, $2, etc.) from print statements. Returns nil if $0 is
-// referenced or if field indices can't be statically determined.
-func extractAwkFieldRefs(block *awk.Block) []int {
-	var refs []int
-	for _, stmt := range block.Stmts {
-		ps, ok := stmt.(*awk.PrintStmt)
-		if !ok {
-			continue
-		}
-		for _, arg := range ps.Args {
-			fieldRefs := collectFieldExprs(arg)
-			if fieldRefs == nil {
-				return nil // unknown reference
-			}
-			refs = append(refs, fieldRefs...)
-		}
-	}
-	return refs
-}
-
-// collectFieldExprs recursively collects $N references from an awk expression.
-// Returns nil if $0 is found or if a field index is non-static.
-func collectFieldExprs(expr awk.Expr) []int {
-	switch e := expr.(type) {
-	case *awk.FieldExpr:
-		nl, ok := e.Index.(*awk.NumberLit)
-		if !ok {
-			return nil // dynamic field reference
-		}
-		n := int(nl.Value)
-		if n == 0 {
-			return nil // $0 = whole line
-		}
-		return []int{n}
-	case *awk.ConcatExpr:
-		left := collectFieldExprs(e.Left)
-		right := collectFieldExprs(e.Right)
-		if left == nil || right == nil {
-			return nil
-		}
-		return append(left, right...)
-	case *awk.StringLit:
-		return []int{} // string literal, no field refs
-	case *awk.NumberLit:
-		return []int{} // number literal, no field refs
-	case *awk.IdentExpr:
-		// Variable reference like LEVEL, APP — these are meta-vars, not field refs.
-		// We can't project on them since they're separate columns.
-		return []int{}
-	}
-	return nil // unknown expression type
-}
-
-// extractJqProjection examines a jq expression for field references in object
-// construction or simple field access.
-func extractJqProjection(args []string) *Project {
+// extractJqRawExpr examines a jq expression for field references.
+// For jq, the raw column needs to be the JSON payload text so jq can parse it.
+func extractJqRawExpr(args []string) (string, bool) {
 	if len(args) == 0 {
-		return nil
+		return "", false
 	}
 	expr, err := jq.Parse(args[0])
 	if err != nil {
-		return nil
+		return "", false
 	}
 
 	keys := collectJqKeys(expr)
 	if len(keys) == 0 {
-		return nil
+		return "", false
 	}
 
-	return &Project{
-		JSONKeys: keys,
-		Complete: false, // jq still needs to run for formatting
-	}
+	// jq needs JSON input — cast payload to text for the raw column.
+	return "CAST(payload AS TEXT)", false
 }
 
 // collectJqKeys recursively collects JSON field names from a jq expression.
 func collectJqKeys(expr jq.Expr) []string {
 	switch e := expr.(type) {
 	case jq.FieldExpr:
-		// Skip meta-vars (underscore-prefixed) — those are columns, not JSON keys.
 		if strings.HasPrefix(e.Name, "_") {
 			return nil
 		}
@@ -360,23 +285,21 @@ func collectJqKeys(expr jq.Expr) []string {
 		for _, pair := range e.Pairs {
 			valKeys := collectJqKeys(pair.Value)
 			if valKeys == nil {
-				return nil // can't determine
+				return nil
 			}
 			keys = append(keys, valKeys...)
 		}
 		return keys
 	case jq.PipeExpr:
-		// For pipes: collect from the rightmost non-select expression.
-		// The left side may be selects (already pushed down).
 		rightKeys := collectJqKeys(e.Right)
 		if rightKeys != nil {
 			return rightKeys
 		}
 		return collectJqKeys(e.Left)
 	case jq.SelectExpr:
-		return nil // select is a filter, not a projection
+		return nil
 	case jq.IdentityExpr:
-		return nil // identity = whole object
+		return nil
 	}
 	return nil
 }

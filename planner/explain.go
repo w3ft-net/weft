@@ -6,8 +6,7 @@ import (
 )
 
 // Explain runs the planner on a pipeline and returns a human-readable
-// breakdown of the query plan: source, shard SQL, compute stages,
-// projection, and the final SQL after projection is applied.
+// breakdown of the query plan: source, shard SQL, and compute stages.
 func Explain(pipeline string) string {
 	plan, err := Plan(pipeline)
 	if err != nil {
@@ -48,31 +47,6 @@ func Explain(pipeline string) string {
 		}
 	} else {
 		fmt.Fprintf(&b, "\nCompute stages: (none — fully pushed down)\n")
-	}
-
-	// Projection.
-	if plan.Project != nil {
-		fmt.Fprintf(&b, "\nProjection:\n")
-		if plan.Project.RawExpr != "" {
-			fmt.Fprintf(&b, "  type:      raw_expr\n")
-			fmt.Fprintf(&b, "  expr:      %s\n", plan.Project.RawExpr)
-		} else if len(plan.Project.JSONKeys) > 0 {
-			fmt.Fprintf(&b, "  type:      json_keys\n")
-			fmt.Fprintf(&b, "  keys:      %v\n", plan.Project.JSONKeys)
-		} else if len(plan.Project.Fields) > 0 {
-			fmt.Fprintf(&b, "  type:      fields\n")
-			fmt.Fprintf(&b, "  indices:   %v\n", plan.Project.Fields)
-		}
-		fmt.Fprintf(&b, "  complete:  %v\n", plan.Project.Complete)
-
-		// Final SQL after projection.
-		finalSQL := ApplyProjection(plan.ShardSQL, plan.Project)
-		fmt.Fprintf(&b, "\nFinal SQL (after projection):\n")
-		for _, line := range formatSQL(finalSQL) {
-			fmt.Fprintf(&b, "  %s\n", line)
-		}
-	} else {
-		fmt.Fprintf(&b, "\nProjection: (none)\n")
 	}
 
 	return b.String()

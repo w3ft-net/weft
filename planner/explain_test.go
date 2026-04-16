@@ -11,9 +11,6 @@ import (
 )
 
 func TestExplain_JqPctExtraction(t *testing.T) {
-	// Simulate a metrics row as ingested by weftd: Raw and PayloadJson are
-	// identical JSON. After CAST(payload AS TEXT), raw should still be valid
-	// JSON that jq can consume.
 	metricsJSON := `{"type":"memory","total_mb":7864,"used_mb":4521,"available_mb":3343,"swap_used_mb":0,"pct":57.49}`
 
 	t.Run("jq.Run extracts .pct from raw JSON", func(t *testing.T) {
@@ -63,8 +60,6 @@ func TestExplain_JqPctExtraction(t *testing.T) {
 	})
 
 	t.Run("double-quoted JSON fails jq parse", func(t *testing.T) {
-		// If CAST(JSON AS TEXT) were to produce a quoted string instead of
-		// bare JSON, jq would see a string, not an object.
 		doubleQuoted := `"{\"type\":\"memory\",\"pct\":57.49}"`
 		_, err := jq.Run(".pct", doubleQuoted)
 		if err == nil {
@@ -87,20 +82,15 @@ func TestExplain_PlannerOutput(t *testing.T) {
 			t.Errorf("SourceApp = %q, want %q", plan.SourceApp, "weft/metrics")
 		}
 
-		wantSQL := `SELECT * FROM logs WHERE app = 'weft/metrics' AND json_extract_string(payload, '$.type') = 'memory' ORDER BY ts DESC LIMIT 10`
-		if plan.ShardSQL != wantSQL {
-			t.Errorf("ShardSQL\n got: %s\nwant: %s", plan.ShardSQL, wantSQL)
+		if !strings.Contains(plan.ShardSQL, "CAST(payload AS TEXT) as raw") {
+			t.Errorf("ShardSQL missing CAST projection\n got: %s", plan.ShardSQL)
+		}
+		if !strings.Contains(plan.ShardSQL, "json_extract_string(payload, '$.type') = 'memory'") {
+			t.Errorf("ShardSQL missing jq select predicate\n got: %s", plan.ShardSQL)
 		}
 
 		if len(plan.ComputeStages) != 1 || plan.ComputeStages[0] != "jq '.pct'" {
 			t.Errorf("ComputeStages = %v, want [jq '.pct']", plan.ComputeStages)
-		}
-
-		if plan.Project == nil {
-			t.Fatal("Project is nil, expected json_keys projection")
-		}
-		if len(plan.Project.JSONKeys) != 1 || plan.Project.JSONKeys[0] != "pct" {
-			t.Errorf("Project.JSONKeys = %v, want [pct]", plan.Project.JSONKeys)
 		}
 	})
 
@@ -115,9 +105,6 @@ func TestExplain_PlannerOutput(t *testing.T) {
 			"json_extract_string(payload, '$.type') = 'memory'",
 			"Compute stages:",
 			"jq '.pct'",
-			"Projection:",
-			"json_keys",
-			"Final SQL (after projection):",
 			"CAST(payload AS TEXT) as raw",
 		} {
 			if !strings.Contains(output, want) {

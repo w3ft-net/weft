@@ -118,7 +118,7 @@ func TestColdShard_S3Integration(t *testing.T) {
 	defer cs.Close()
 
 	// Query all rows.
-	result, err := cs.Query("SELECT * FROM logs WHERE customer = 'kevlar'")
+	result, err := cs.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")
 	if err != nil {
 		t.Fatalf("query from S3: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestColdShard_S3Integration(t *testing.T) {
 	t.Logf("queried %d rows from S3 Parquet", len(result))
 
 	// Query with filter.
-	result, err = cs.Query("SELECT * FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'")
+	result, err = cs.Query("SELECT line_num, raw FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestColdShard_S3Integration(t *testing.T) {
 	}
 
 	// Query with level filter.
-	result, err = cs.Query("SELECT * FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
+	result, err = cs.Query("SELECT line_num, raw FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}

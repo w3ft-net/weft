@@ -4,23 +4,22 @@ import (
 	"bytes"
 	"io"
 	"testing"
-	"time"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
 func TestProtoStream_RoundTrip(t *testing.T) {
-	rows := []*pb.LogRow{
-		{LineNum: 1, Raw: "test row 1", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
-		{LineNum: 2, Raw: "test row 2", App: "callbox", Level: "ERROR", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
-		{LineNum: 3, Raw: "test row 3", App: "vimgym", Level: "WARN", Customer: "kevlar", TsUnixNs: time.Now().UnixNano(), PayloadJson: []byte(`{"status":500}`)},
+	rows := []*pb.ResultRow{
+		{LineNum: 1, Raw: "test row 1"},
+		{LineNum: 2, Raw: "test row 2"},
+		{LineNum: 3, Raw: "test row 3"},
 	}
 
 	var buf bytes.Buffer
 
 	// Write all rows + sentinel.
 	for _, row := range rows {
-		if err := WriteLogRow(&buf, row); err != nil {
+		if err := WriteResultRow(&buf, row); err != nil {
 			t.Fatalf("write: %v", err)
 		}
 	}
@@ -29,7 +28,7 @@ func TestProtoStream_RoundTrip(t *testing.T) {
 	}
 
 	// Read them back.
-	result, err := ReadAllLogRows(&buf)
+	result, err := ReadAllResultRows(&buf)
 	if err != nil {
 		t.Fatalf("read all: %v", err)
 	}
@@ -41,11 +40,8 @@ func TestProtoStream_RoundTrip(t *testing.T) {
 		if r.Raw != rows[i].Raw {
 			t.Errorf("row %d: expected Raw=%q, got %q", i, rows[i].Raw, r.Raw)
 		}
-		if r.App != rows[i].App {
-			t.Errorf("row %d: expected App=%q, got %q", i, rows[i].App, r.App)
-		}
-		if r.TsUnixNs != rows[i].TsUnixNs {
-			t.Errorf("row %d: timestamp mismatch", i)
+		if r.LineNum != rows[i].LineNum {
+			t.Errorf("row %d: expected LineNum=%d, got %d", i, rows[i].LineNum, r.LineNum)
 		}
 	}
 }
@@ -54,7 +50,7 @@ func TestProtoStream_EmptyStream(t *testing.T) {
 	var buf bytes.Buffer
 	WriteStreamEnd(&buf)
 
-	rows, err := ReadAllLogRows(&buf)
+	rows, err := ReadAllResultRows(&buf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,11 +61,11 @@ func TestProtoStream_EmptyStream(t *testing.T) {
 
 func TestProtoStream_SingleRow(t *testing.T) {
 	var buf bytes.Buffer
-	row := &pb.LogRow{LineNum: 42, Raw: "single", App: "test"}
-	WriteLogRow(&buf, row)
+	row := &pb.ResultRow{LineNum: 42, Raw: "single"}
+	WriteResultRow(&buf, row)
 	WriteStreamEnd(&buf)
 
-	result, err := ReadAllLogRows(&buf)
+	result, err := ReadAllResultRows(&buf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,37 +74,37 @@ func TestProtoStream_SingleRow(t *testing.T) {
 	}
 }
 
-func TestProtoStream_ReadLogRow_EOF(t *testing.T) {
+func TestProtoStream_ReadResultRow_EOF(t *testing.T) {
 	// Empty reader returns io.EOF.
-	_, err := ReadLogRow(&bytes.Buffer{})
+	_, err := ReadResultRow(&bytes.Buffer{})
 	if err != io.EOF {
 		t.Fatalf("expected io.EOF, got %v", err)
 	}
 }
 
 func BenchmarkProtoStream_Write1K(b *testing.B) {
-	row := &pb.LogRow{LineNum: 1, Raw: "benchmark row with realistic content", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()}
+	row := &pb.ResultRow{LineNum: 1, Raw: "benchmark row with realistic content"}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var buf bytes.Buffer
 		for j := 0; j < 1000; j++ {
-			WriteLogRow(&buf, row)
+			WriteResultRow(&buf, row)
 		}
 		WriteStreamEnd(&buf)
 	}
 }
 
 func BenchmarkProtoStream_Read1K(b *testing.B) {
-	row := &pb.LogRow{LineNum: 1, Raw: "benchmark row with realistic content", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()}
+	row := &pb.ResultRow{LineNum: 1, Raw: "benchmark row with realistic content"}
 	var source bytes.Buffer
 	for j := 0; j < 1000; j++ {
-		WriteLogRow(&source, row)
+		WriteResultRow(&source, row)
 	}
 	WriteStreamEnd(&source)
 	data := source.Bytes()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		ReadAllLogRows(bytes.NewReader(data))
+		ReadAllResultRows(bytes.NewReader(data))
 	}
 }

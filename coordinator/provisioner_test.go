@@ -188,7 +188,7 @@ func TestProvisioner_NewShardAcceptsIngestion(t *testing.T) {
 	}
 
 	// Query should return the row.
-	result, err := newShard.Query("SELECT * FROM logs WHERE app = 'vimgym'")
+	result, err := newShard.Query("SELECT line_num, raw FROM logs WHERE app = 'vimgym'")
 	if err != nil {
 		t.Fatalf("query new shard: %v", err)
 	}

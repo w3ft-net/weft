@@ -98,7 +98,10 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 		for _, row := range resp.Rows {
 			writeSSEEvent(w, map[string]any{
 				"type": "row",
-				"data": logRowToMap(row),
+				"data": map[string]any{
+					"line_num": row.LineNum,
+					"raw":      row.Raw,
+				},
 			})
 		}
 
@@ -120,24 +123,3 @@ func writeSSEEvent(w http.ResponseWriter, payload any) {
 	fmt.Fprintf(w, "data: %s\n\n", data)
 }
 
-// logRowToMap converts a LogRow proto to a plain map for JSON serialisation.
-func logRowToMap(row *pb.LogRow) map[string]any {
-	m := map[string]any{
-		"line_num":  row.LineNum,
-		"raw":       row.Raw,
-		"app":       row.App,
-		"level":     row.Level,
-		"ts_unix_ns": row.TsUnixNs,
-		"instance":  row.Instance,
-	}
-	if len(row.PayloadJson) > 0 {
-		var payload any
-		if err := json.Unmarshal(row.PayloadJson, &payload); err == nil {
-			m["payload"] = payload
-		}
-	}
-	if len(row.Fields) > 0 {
-		m["fields"] = row.Fields
-	}
-	return m
-}

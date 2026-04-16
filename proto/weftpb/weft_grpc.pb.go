@@ -30,8 +30,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ShardQueryClient interface {
-	// Query executes pushed-down SQL and streams matching rows.
-	Query(ctx context.Context, in *QueryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogRow], error)
+	// Query executes pushed-down SQL and streams result rows (line_num, raw).
+	Query(ctx context.Context, in *QueryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ResultRow], error)
 	// QueryToCompute executes SQL and streams rows directly to a compute
 	// job, followed by a sentinel. The shard manages its own connection
 	// to the compute service.
@@ -54,13 +54,13 @@ func NewShardQueryClient(cc grpc.ClientConnInterface) ShardQueryClient {
 	return &shardQueryClient{cc}
 }
 
-func (c *shardQueryClient) Query(ctx context.Context, in *QueryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogRow], error) {
+func (c *shardQueryClient) Query(ctx context.Context, in *QueryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ResultRow], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &ShardQuery_ServiceDesc.Streams[0], ShardQuery_Query_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[QueryRequest, LogRow]{ClientStream: stream}
+	x := &grpc.GenericClientStream[QueryRequest, ResultRow]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -71,7 +71,7 @@ func (c *shardQueryClient) Query(ctx context.Context, in *QueryRequest, opts ...
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type ShardQuery_QueryClient = grpc.ServerStreamingClient[LogRow]
+type ShardQuery_QueryClient = grpc.ServerStreamingClient[ResultRow]
 
 func (c *shardQueryClient) QueryToCompute(ctx context.Context, in *QueryToComputeRequest, opts ...grpc.CallOption) (*QueryToComputeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -120,8 +120,8 @@ func (c *shardQueryClient) Configure(ctx context.Context, in *ConfigureRequest, 
 // All implementations must embed UnimplementedShardQueryServer
 // for forward compatibility.
 type ShardQueryServer interface {
-	// Query executes pushed-down SQL and streams matching rows.
-	Query(*QueryRequest, grpc.ServerStreamingServer[LogRow]) error
+	// Query executes pushed-down SQL and streams result rows (line_num, raw).
+	Query(*QueryRequest, grpc.ServerStreamingServer[ResultRow]) error
 	// QueryToCompute executes SQL and streams rows directly to a compute
 	// job, followed by a sentinel. The shard manages its own connection
 	// to the compute service.
@@ -144,7 +144,7 @@ type ShardQueryServer interface {
 // pointer dereference when methods are called.
 type UnimplementedShardQueryServer struct{}
 
-func (UnimplementedShardQueryServer) Query(*QueryRequest, grpc.ServerStreamingServer[LogRow]) error {
+func (UnimplementedShardQueryServer) Query(*QueryRequest, grpc.ServerStreamingServer[ResultRow]) error {
 	return status.Error(codes.Unimplemented, "method Query not implemented")
 }
 func (UnimplementedShardQueryServer) QueryToCompute(context.Context, *QueryToComputeRequest) (*QueryToComputeResponse, error) {
@@ -185,11 +185,11 @@ func _ShardQuery_Query_Handler(srv interface{}, stream grpc.ServerStream) error 
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(ShardQueryServer).Query(m, &grpc.GenericServerStream[QueryRequest, LogRow]{ServerStream: stream})
+	return srv.(ShardQueryServer).Query(m, &grpc.GenericServerStream[QueryRequest, ResultRow]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type ShardQuery_QueryServer = grpc.ServerStreamingServer[LogRow]
+type ShardQuery_QueryServer = grpc.ServerStreamingServer[ResultRow]
 
 func _ShardQuery_QueryToCompute_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(QueryToComputeRequest)

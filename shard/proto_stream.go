@@ -10,12 +10,12 @@ import (
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
-// WriteLogRow writes a length-prefixed protobuf LogRow to the writer.
+// WriteResultRow writes a length-prefixed protobuf ResultRow to the writer.
 // Format: [4-byte big-endian length][serialized protobuf]
-func WriteLogRow(w io.Writer, row *pb.LogRow) error {
+func WriteResultRow(w io.Writer, row *pb.ResultRow) error {
 	data, err := proto.Marshal(row)
 	if err != nil {
-		return fmt.Errorf("marshal LogRow: %w", err)
+		return fmt.Errorf("marshal ResultRow: %w", err)
 	}
 	length := uint32(len(data))
 	if err := binary.Write(w, binary.BigEndian, length); err != nil {
@@ -32,9 +32,9 @@ func WriteStreamEnd(w io.Writer) error {
 	return binary.Write(w, binary.BigEndian, uint32(0))
 }
 
-// ReadLogRow reads a length-prefixed protobuf LogRow from the reader.
+// ReadResultRow reads a length-prefixed protobuf ResultRow from the reader.
 // Returns io.EOF when the zero-length sentinel is encountered.
-func ReadLogRow(r io.Reader) (*pb.LogRow, error) {
+func ReadResultRow(r io.Reader) (*pb.ResultRow, error) {
 	var length uint32
 	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
 		return nil, err // io.EOF or read error
@@ -46,18 +46,18 @@ func ReadLogRow(r io.Reader) (*pb.LogRow, error) {
 	if _, err := io.ReadFull(r, data); err != nil {
 		return nil, fmt.Errorf("read data: %w", err)
 	}
-	row := &pb.LogRow{}
+	row := &pb.ResultRow{}
 	if err := proto.Unmarshal(data, row); err != nil {
-		return nil, fmt.Errorf("unmarshal LogRow: %w", err)
+		return nil, fmt.Errorf("unmarshal ResultRow: %w", err)
 	}
 	return row, nil
 }
 
-// ReadAllLogRows reads all length-prefixed protobuf LogRows until the sentinel.
-func ReadAllLogRows(r io.Reader) ([]*pb.LogRow, error) {
-	var rows []*pb.LogRow
+// ReadAllResultRows reads all length-prefixed protobuf ResultRows until the sentinel.
+func ReadAllResultRows(r io.Reader) ([]*pb.ResultRow, error) {
+	var rows []*pb.ResultRow
 	for {
-		row, err := ReadLogRow(r)
+		row, err := ReadResultRow(r)
 		if err == io.EOF {
 			return rows, nil
 		}
