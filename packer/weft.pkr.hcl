@@ -17,9 +17,14 @@ variable "region" {
   default = "us-east-2"
 }
 
+variable "base_ami_id" {
+  type    = string
+  default = ""
+}
+
 variable "source_ami_filter" {
   type    = string
-  default = "debian-12-arm64-*"
+  default = "debian-12-base-*"
 }
 
 variable "instance_type" {
@@ -85,15 +90,20 @@ source "amazon-ebs" "weft" {
     session_name = "packer-weft-build"
   }
 
-  source_ami_filter {
-    filters = {
-      name                = var.source_ami_filter
-      root-device-type    = "ebs"
-      virtualization-type = "hvm"
-      architecture        = "arm64"
+  source_ami = var.base_ami_id != "" ? var.base_ami_id : null
+
+  dynamic "source_ami_filter" {
+    for_each = var.base_ami_id == "" ? [1] : []
+    content {
+      filters = {
+        name                = var.source_ami_filter
+        root-device-type    = "ebs"
+        virtualization-type = "hvm"
+        architecture        = "arm64"
+      }
+      most_recent = true
+      owners      = ["self"]
     }
-    most_recent = true
-    owners      = ["136693071363"] # Debian official
   }
 
   ssh_username         = "admin"
@@ -112,36 +122,17 @@ source "amazon-ebs" "weft" {
 build {
   sources = ["source.amazon-ebs.weft"]
 
-  # Create app user and directories
-  provisioner "shell" {
-    inline = [
-      "sudo useradd -r -m -d /opt/app -s /bin/false app || true",
-      "sudo mkdir -p /opt/app/bin /opt/app/scripts /opt/app/logs /opt/app/data",
-      "sudo chown -R app:app /opt/app",
-    ]
-  }
-
-  # Install Go (for on-instance compilation — CGO cross-compile from macOS doesn't work)
-  provisioner "shell" {
-    inline = [
-      "curl -sSL https://go.dev/dl/go1.26.0.linux-arm64.tar.gz -o /tmp/go.tar.gz",
-      "sudo tar -C /usr/local -xzf /tmp/go.tar.gz",
-      "rm /tmp/go.tar.gz",
-      "echo 'export PATH=$PATH:/usr/local/go/bin' | sudo tee /etc/profile.d/go.sh",
-      "export PATH=$PATH:/usr/local/go/bin && go version",
-    ]
-  }
-
   # Upload weft source (kevcons creates this tarball)
   provisioner "file" {
     source      = "/tmp/app-source.tar.gz"
     destination = "/tmp/app-source.tar.gz"
   }
 
-  # Build binaries on the instance
+  # Build binaries on the instance (Go, gcc, module cache pre-baked in base AMI)
   provisioner "shell" {
     environment_vars = [
       "GOPATH=/tmp/go",
+      "GOMODCACHE=/opt/app/gomodcache",
       "HOME=/home/admin",
       "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
       "GOPRIVATE=github.com/kevlarcon/*",
@@ -149,9 +140,6 @@ build {
       "GONOSUMDB=github.com/kevlarcon/*",
     ]
     inline = [
-      "sudo apt-get update -qq",
-      "sudo apt-get install -y -qq gcc g++ git",
-      # Prebuild tarball contains both weft/ and warp/ — extract and fix replace path
       "cd /tmp && tar xzf /tmp/app-source.tar.gz",
       "sed -i 's|=> ../warp|=> /tmp/warp|' /tmp/weft/go.mod",
       "cd /tmp/weft && CGO_ENABLED=1 go build -o /tmp/weft-coordinator ./cmd/coordinator",
@@ -163,8 +151,8 @@ build {
       "sudo mv /tmp/weftd /usr/local/bin/weftd",
       "sudo chmod +x /opt/app/bin/weft-*",
       "sudo chown app:app /opt/app/bin/weft-*",
-      # Clean up
-      "sudo rm -rf /tmp/weft /tmp/warp /tmp/app-source.tar.gz /tmp/go /usr/local/go /etc/profile.d/go.sh",
+      # Clean up source and build artifacts (keep Go + gcc for future rebuilds if needed)
+      "sudo rm -rf /tmp/weft /tmp/warp /tmp/app-source.tar.gz /tmp/go",
     ]
   }
 
@@ -225,30 +213,7 @@ build {
     ]
   }
 
-  # Install AWS CLI, CloudWatch agent, SSM agent
-  provisioner "shell" {
-    inline = [
-      "sudo apt-get update -qq",
-      "sudo apt-get install -y -qq curl jq unzip",
-      # AWS CLI v2 (for startup.sh to read tags)
-      "curl -sSL 'https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip' -o /tmp/awscli.zip",
-      "unzip -q /tmp/awscli.zip -d /tmp",
-      "sudo /tmp/aws/install",
-      "rm -rf /tmp/aws /tmp/awscli.zip",
-      # CloudWatch agent
-      "curl -sSL https://s3.amazonaws.com/amazoncloudwatch-agent/debian/arm64/latest/amazon-cloudwatch-agent.deb -o /tmp/amazon-cloudwatch-agent.deb",
-      "sudo dpkg -i /tmp/amazon-cloudwatch-agent.deb",
-      "rm /tmp/amazon-cloudwatch-agent.deb",
-      "sudo mkdir -p /opt/aws/amazon-cloudwatch-agent/etc",
-      # SSM agent
-      "curl -sSL https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/debian_arm64/amazon-ssm-agent.deb -o /tmp/amazon-ssm-agent.deb",
-      "sudo dpkg -i /tmp/amazon-ssm-agent.deb",
-      "sudo systemctl enable amazon-ssm-agent",
-      "rm /tmp/amazon-ssm-agent.deb",
-    ]
-  }
-
-  # CloudWatch agent config
+  # CloudWatch agent config (agent itself is pre-installed in base AMI)
   provisioner "file" {
     source      = "packer/cloudwatch-agent.json"
     destination = "/tmp/cloudwatch-agent.json"
