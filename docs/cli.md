@@ -69,8 +69,9 @@ tail -f vimgym.log | awk '$LEVEL == "ERROR"' | jq '.user_id'
 tail -f warp.log | awk '$LEVEL == "ERROR" { count[$APP]++ } END { for (a in count) print a, count[a] }'
 
 # Time range override (in-shell)
-range 2h
-range 2026-03-28T00:00:00 2026-03-28T06:00:00
+range 2h..
+range yesterday..today
+range 2026-03-28T00:00:00..2026-03-28T06:00:00
 cat vimgym.log | awk '$LEVEL == "ERROR"'
 ```
 
@@ -114,4 +115,3 @@ All of these can be piped through awk/sed/jq/grep/sort/uniq/wc. The query planne
 - Prompt format: `weft>`, `weft(vimgym,callbox)>`, something else?
 - Tab completion for pseudofile names and meta-variables?
 - History persistence across sessions?
-- Should `range` accept relative and/or natural language (e.g., `range yesterday`)?

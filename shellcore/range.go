@@ -56,6 +56,17 @@ func parseTimeSpec(s string, now time.Time) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("empty time spec")
 	}
 
+	// Named time references.
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	switch strings.ToLower(s) {
+	case "now":
+		return now, nil
+	case "today":
+		return today, nil
+	case "yesterday":
+		return today.AddDate(0, 0, -1), nil
+	}
+
 	// Try relative duration: <n><unit> where unit is m, h, or d.
 	if len(s) >= 2 {
 		unit := s[len(s)-1]
@@ -176,12 +187,19 @@ DESCRIPTION
         2h                      2 hours ago
         7d                      7 days ago
 
+    NAMED REFERENCES
+        now                     current time
+        today                   midnight today
+        yesterday               midnight yesterday
+
 EXAMPLES
     range                   show current range
     range 2h..              last 2 hours
     range 30m..             last 30 minutes
     range 7d..              last 7 days
     range 1h..10m           from 1 hour ago to 10 minutes ago
+    range yesterday..today  all of yesterday
+    range yesterday..       yesterday to now
     range 2026-04-01..2026-04-12
                             specific date range
     range 2026-04-12T10:00..2026-04-12T11:00
