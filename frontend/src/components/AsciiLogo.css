@@ -1,0 +1,9 @@
+.ascii-logo {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  line-height: 1.15;
+  letter-spacing: 0;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+}
