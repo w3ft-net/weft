@@ -8,6 +8,7 @@
 package main
 
 import (
+	"strings"
 	"syscall/js"
 	"time"
 	"unicode/utf8"
@@ -82,6 +83,12 @@ func wasmInit(_ js.Value, args []js.Value) any {
 
 	// Set up JS-backed virtual filesystem.
 	core.SetFS(&jsFS{callbacks: jsCallbacks})
+
+	// Set up history persistence via localStorage.
+	loadFn := jsCallbacks.Get("loadHistory")
+	if !loadFn.IsUndefined() && !loadFn.IsNull() {
+		core.SetHistoryStore(&jsHistoryStore{callbacks: jsCallbacks})
+	}
 
 	// Set user from JS callback if available.
 	getUserFn := jsCallbacks.Get("getUser")
@@ -370,6 +377,36 @@ func parseCSI(data string) (int, *shellcore.KeyEvent) {
 	}
 
 	return 1, nil
+}
+
+// jsHistoryStore implements shellcore.HistoryStore via JS localStorage callbacks.
+type jsHistoryStore struct {
+	callbacks js.Value
+}
+
+func (s *jsHistoryStore) Load() ([]string, error) {
+	result := s.callbacks.Call("loadHistory")
+	if result.IsNull() || result.IsUndefined() {
+		return nil, nil
+	}
+	text := result.String()
+	if text == "" {
+		return nil, nil
+	}
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	var entries []string
+	for _, line := range lines {
+		if line != "" {
+			entries = append(entries, line)
+		}
+	}
+	return entries, nil
+}
+
+func (s *jsHistoryStore) Save(entries []string) error {
+	text := strings.Join(entries, "\n") + "\n"
+	s.callbacks.Call("saveHistory", text)
+	return nil
 }
 
 // jsError implements the error interface for a JS error message.

@@ -2,11 +2,31 @@ package shellcore
 
 import "strings"
 
+const maxHistoryEntries = 1000
+
+// HistoryStore is the persistence interface for command history.
+type HistoryStore interface {
+	Load() ([]string, error)
+	Save(entries []string) error
+}
+
 // History tracks command history with cursor navigation.
 type History struct {
 	entries []string
 	cursor  int    // -1 = not navigating; 0..len-1 = browsing history
 	saved   string // the in-progress input before the user started navigating
+	store   HistoryStore
+}
+
+// SetStore sets the persistence backend and loads existing history from it.
+func (h *History) SetStore(store HistoryStore) {
+	h.store = store
+	if entries, err := store.Load(); err == nil && len(entries) > 0 {
+		h.entries = entries
+		if len(h.entries) > maxHistoryEntries {
+			h.entries = h.entries[len(h.entries)-maxHistoryEntries:]
+		}
+	}
 }
 
 // Add appends a line to history, deduplicating consecutive entries.
@@ -18,7 +38,13 @@ func (h *History) Add(line string) {
 		return
 	}
 	h.entries = append(h.entries, line)
+	if len(h.entries) > maxHistoryEntries {
+		h.entries = h.entries[len(h.entries)-maxHistoryEntries:]
+	}
 	h.cursor = -1
+	if h.store != nil {
+		h.store.Save(h.entries)
+	}
 }
 
 // Up moves to the previous history entry. Returns the entry and true if moved.
@@ -76,4 +102,11 @@ func (h *History) Search(query string, fromIdx int) (string, int) {
 // Len returns the number of history entries.
 func (h *History) Len() int {
 	return len(h.entries)
+}
+
+// Entries returns a copy of the history entries.
+func (h *History) Entries() []string {
+	out := make([]string, len(h.entries))
+	copy(out, h.entries)
+	return out
 }

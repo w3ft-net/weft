@@ -118,6 +118,9 @@ func (c *ShellCore) SetRange(start, end time.Time) {
 	c.rangeEnd = end
 }
 
+// SetHistoryStore sets the persistence backend for command history.
+func (c *ShellCore) SetHistoryStore(store HistoryStore) { c.history.SetStore(store) }
+
 // SetUser sets the username shown in the prompt (e.g. "paul" → "paul@weft").
 func (c *ShellCore) SetUser(user string) { c.user = user }
 
@@ -511,6 +514,12 @@ func (c *ShellCore) execBuiltin(line string) bool {
 		}
 		c.appendScrollback(fmt.Sprintf("  warp.log %s\n", DimText("(all apps)")))
 		return true
+	case line == "history":
+		entries := c.history.Entries()
+		for i, entry := range entries {
+			c.appendScrollback(fmt.Sprintf("%4d  %s\n", i+1, entry))
+		}
+		return true
 	case line == "range":
 		c.appendScrollback(formatRange(c.rangeStart, c.rangeEnd))
 		return true
@@ -784,7 +793,7 @@ func (c *ShellCore) execFSBuiltin(line string) bool {
 			return false
 		}
 		name := args[0]
-		for _, b := range []string{"exit", "quit", "clear", "apps", "range", "cd", "vi", "vim", "ls", "cat", "rm", "which", "type"} {
+		for _, b := range []string{"exit", "quit", "clear", "apps", "history", "range", "cd", "vi", "vim", "ls", "cat", "rm", "which", "type"} {
 			if name == b {
 				c.appendScrollback(fmt.Sprintf("%s is a shell builtin\n", name))
 				return true

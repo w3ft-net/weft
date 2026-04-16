@@ -73,6 +73,7 @@ func (s *Shell) Run() error {
 	if s.User != "" {
 		runner.core.SetUser(s.User)
 	}
+	runner.core.SetHistoryStore(NewFileHistoryStore())
 	runner.core.SetRange(s.Start, s.End)
 
 	// Handle window resize.

@@ -96,6 +96,10 @@ export async function initShellWasm(
     onRangeChange: (rangeText: string) => {
       if (onRangeChange) onRangeChange(rangeText)
     },
+
+    // History persistence via localStorage.
+    loadHistory: () => localStorage.getItem('weft_history') || '',
+    saveHistory: (lines: string) => localStorage.setItem('weft_history', lines),
   }
 
   // Initialize WASM shell.
