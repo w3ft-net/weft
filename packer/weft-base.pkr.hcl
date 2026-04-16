@@ -128,11 +128,10 @@ build {
       "sudo mkdir -p /opt/app/gomodcache",
       "sudo chown -R admin:admin /opt/app/gomodcache",
       "mkdir -p /tmp/modcache-seed && cp /tmp/go.mod /tmp/go.sum /tmp/modcache-seed/",
-      # Replace local warp path with a dummy module so go mod download doesn't fail
-      "sed -i '/=> \\.\\.\\/warp/d' /tmp/modcache-seed/go.mod",
-      "sed -i '/replace.*warp/d' /tmp/modcache-seed/go.mod",
+      # Strip warp entirely (local replace + require) so go mod download caches everything else
+      "sed -i '/kevlarcon\\/warp/d' /tmp/modcache-seed/go.mod",
       "cd /tmp/modcache-seed && go mod download -x 2>&1 | tail -5 || true",
-      "sudo chown -R app:app /opt/app/gomodcache",
+      # Cache stays admin-owned — the app build step runs as admin too
       "rm -rf /tmp/modcache-seed /tmp/go.mod /tmp/go.sum",
     ]
   }
