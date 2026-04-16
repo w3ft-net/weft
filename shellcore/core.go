@@ -958,6 +958,18 @@ func (c *ShellCore) redrawPrompt() {
 	}
 	c.prevPromptLines = lines
 
+	// Position the terminal cursor at the correct column for input modes.
+	if c.mode == ModeInput || c.mode == ModeSearching {
+		// If the completer menu added lines below, move cursor back up.
+		menuLines := lines - 1
+		if menuLines > 0 {
+			fmt.Fprintf(&b, "\x1b[%dA", menuLines)
+		}
+		// Absolute column positioning: prompt prefix width + cursor offset + 1 (1-indexed).
+		col := PromptPrefixWidth(c.mode, c.searchBuf) + c.inputCursor + 1
+		fmt.Fprintf(&b, "\x1b[%dG", col)
+	}
+
 	// Use promptWrite if available (bubbletea), otherwise write (xterm.js).
 	if c.promptWrite != nil {
 		c.promptWrite([]byte(b.String()))

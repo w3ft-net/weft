@@ -576,6 +576,48 @@ func TestVimRelativePath(t *testing.T) {
 	core.HandleEvent(KeyEvent{Key: KeyEnter})
 }
 
+// TestCursorPositionAfterLeftArrow verifies that pressing left arrow causes
+// the terminal output to include a cursor positioning escape sequence so the
+// on-screen cursor actually moves, rather than staying at end-of-line.
+func TestCursorPositionAfterLeftArrow(t *testing.T) {
+	var rawOutput strings.Builder
+
+	core := NewShellCore(
+		nil, 80, 24,
+		func(b []byte) { rawOutput.Write(b) },
+		func(a Action) {},
+	)
+	core.Redraw()
+
+	// Type "abcdef".
+	for _, r := range "abcdef" {
+		core.HandleEvent(KeyEvent{Rune: r})
+	}
+	rawOutput.Reset() // only care about output after left arrows
+
+	// Press left 3 times — cursor should be at position 3 (between 'c' and 'd').
+	core.HandleEvent(KeyEvent{Key: KeyLeft})
+	core.HandleEvent(KeyEvent{Key: KeyLeft})
+	core.HandleEvent(KeyEvent{Key: KeyLeft})
+
+	raw := rawOutput.String()
+	t.Logf("raw after 3x left: %q", raw)
+
+	// The prompt prefix "$ " is 2 visible chars. With inputCursor=3,
+	// the terminal cursor should be at column 6 (2 + 3 + 1 for 1-indexed).
+	// Check for \x1b[6G (absolute column positioning).
+	if !strings.Contains(raw, "\x1b[6G") {
+		t.Errorf("expected cursor positioning escape \\x1b[6G in output, got: %q", raw)
+	}
+
+	// Also verify that the block cursor (reverse video) is rendered on 'd'
+	// (the character at position 3), not at end of input.
+	// ansiCursor = "\033[7m" (reverse video).
+	if !strings.Contains(raw, "\x1b[7md") {
+		t.Errorf("expected reverse-video block cursor on 'd', got: %q", raw)
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

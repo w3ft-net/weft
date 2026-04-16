@@ -154,7 +154,7 @@ func RenderPrompt(mode Mode, searchBuf string, input string, cursorPos int) stri
 		b.WriteString(ansiPrompt)
 		b.WriteString("$ ")
 		b.WriteString(ansiReset)
-		b.WriteString(HighlightPipeline(input))
+		b.WriteString(HighlightWithCursor(input, cursorPos))
 	}
 
 	return b.String()
@@ -236,6 +236,42 @@ func RenderCompleterMenu(c *Completer) string {
 	}
 
 	return sb.String()
+}
+
+// stripANSI removes all ANSI escape sequences from a string, returning only visible characters.
+func stripANSI(s string) string {
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			j := i + 2
+			for j < len(s) && ((s[j] >= '0' && s[j] <= '9') || s[j] == ';') {
+				j++
+			}
+			if j < len(s) {
+				j++ // skip final byte (letter)
+			}
+			i = j
+			continue
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
+}
+
+// PromptPrefixWidth returns the number of visible characters in the prompt
+// prefix (before user input) for a given mode.
+func PromptPrefixWidth(mode Mode, searchBuf string) int {
+	switch mode {
+	case ModeSearching:
+		// "(reverse-i-search)`<searchBuf>': "
+		return len(fmt.Sprintf("(reverse-i-search)`%s': ", searchBuf))
+	case ModeInput:
+		return 2 // "$ "
+	default:
+		return 0
+	}
 }
 
 // ANSI helpers for output formatting.
