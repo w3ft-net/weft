@@ -80,17 +80,15 @@ if [ "$ROLE" = "coordinator" ]; then
     --with-decryption \
     --query 'Parameter.Value' --output text 2>/dev/null || echo "")
 
-  STRIPE_SECRET_KEY=$(aws ssm get-parameter \
-    --name "/$APP_NAME/config/stripe-secret-key" \
+  STRIPE_SECRET_KEY=$(aws secretsmanager get-secret-value \
+    --secret-id "/$APP_NAME/STRIPE_SECRET_KEY" \
     --region "$REGION" \
-    --with-decryption \
-    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+    --query 'SecretString' --output text 2>/dev/null || echo "")
 
-  STRIPE_WEBHOOK_SECRET=$(aws ssm get-parameter \
-    --name "/$APP_NAME/config/stripe-webhook-secret" \
+  STRIPE_WEBHOOK_SECRET=$(aws secretsmanager get-secret-value \
+    --secret-id "/$APP_NAME/STRIPE_WEBHOOK_SECRET" \
     --region "$REGION" \
-    --with-decryption \
-    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+    --query 'SecretString' --output text 2>/dev/null || echo "")
 
   EMAIL_HOST_PASSWORD=$(aws secretsmanager get-secret-value \
     --secret-id "/$APP_NAME/EMAIL_HOST_PASSWORD" \
