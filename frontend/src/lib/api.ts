@@ -29,6 +29,13 @@ export function login(email: string): Promise<{ message: string }> {
   })
 }
 
+export function signup(email: string, orgName: string, tier: string): Promise<{ token: string; checkout_url: string; user: User }> {
+  return apiFetch('/api/auth/signup', {
+    method: 'POST',
+    body: JSON.stringify({ email, org_name: orgName, tier }),
+  })
+}
+
 export function verify(token: string, orgName?: string): Promise<{ token?: string; user?: User; needs_org?: boolean; email?: string }> {
   return apiFetch('/api/auth/verify', {
     method: 'POST',

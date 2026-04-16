@@ -65,7 +65,7 @@ export default function PricingTable() {
               </li>
             ))}
           </ul>
-          <Link to="/login" className="pricing-cta" data-testid={`pricing-${tier.name.toLowerCase()}-button`}>
+          <Link to={`/signup?tier=${tier.name.toLowerCase()}`} className="pricing-cta" data-testid={`pricing-${tier.name.toLowerCase()}-button`}>
             Start free trial
           </Link>
         </div>

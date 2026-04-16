@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import SidebarNav from '../components/SidebarNav'
 import {
   getWatches, getWatchResults, getFunctions, getIngestionStatus,
@@ -236,14 +236,52 @@ function FunctionsCard({ functions }: { functions: ShellFunction[] }) {
   )
 }
 
+// ── Welcome Modal ─────────────────────────────────────────────────────────
+
+function WelcomeModal({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <div className="welcome-overlay" data-testid="welcome-modal">
+      <div className="welcome-card">
+        <h2 className="welcome-title">Welcome to weft</h2>
+        <p className="welcome-text">
+          Your account is ready. Head over to the{' '}
+          <Link to="/docs" onClick={onDismiss} data-testid="welcome-docs-link">docs</Link>{' '}
+          to get started with your first namespace, install the agent, and run your first query.
+        </p>
+        <button
+          className="login-submit"
+          onClick={onDismiss}
+          data-testid="welcome-dismiss-button"
+        >
+          Got it
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Main Dashboard ─────────────────────────────────────────────────────────
 
 export default function Dashboard() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const [showWelcome, setShowWelcome] = useState(false)
   const [watches, setWatches] = useState<WatchWithResults[]>([])
   const [watchMeta, setWatchMeta] = useState<{ count: number; limit: number; min_interval: string }>({ count: 0, limit: 0, min_interval: '' })
   const [functions, setFunctions] = useState<ShellFunction[]>([])
   const [affectedApps, setAffectedApps] = useState<string[]>([])
+
+  useEffect(() => {
+    if (searchParams.get('welcome') === '1' && !localStorage.getItem('weft_welcome_seen')) {
+      setShowWelcome(true)
+    }
+  }, [searchParams])
+
+  function dismissWelcome() {
+    localStorage.setItem('weft_welcome_seen', '1')
+    setShowWelcome(false)
+    navigate('/dashboard', { replace: true })
+  }
 
   useEffect(() => {
     getWatches()
@@ -272,6 +310,7 @@ export default function Dashboard() {
     <div className="app-layout">
       <SidebarNav />
       <main className="app-main" data-testid="dashboard-main">
+        {showWelcome && <WelcomeModal onDismiss={dismissWelcome} />}
         <div className="dash-content">
           <div className="dash-header">
             <h1 className="dash-page-title">Dashboard</h1>

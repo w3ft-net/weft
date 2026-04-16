@@ -82,7 +82,7 @@ export default function Landing() {
 +----------------------------------------------+`
           }</pre>
           <p className="section-sub">
-            14-day free trial on any tier. No credit card required.
+            14-day free trial on any tier.
             Usage-based overage — pay only for what you use beyond your plan.
           </p>
           <PricingTable />
@@ -103,7 +103,7 @@ export default function Landing() {
 +------------------------------------------------------+`
           }</pre>
           <div className="cta-center">
-            <Link to="/login" className="cta-cmd" data-testid="bottom-cta-button">
+            <Link to="/signup" className="cta-cmd" data-testid="bottom-cta-button">
               start free trial &rarr;
             </Link>
           </div>

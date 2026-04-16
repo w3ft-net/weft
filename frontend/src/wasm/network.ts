@@ -204,4 +204,6 @@ export interface WasmCallbacks {
   fsRemove: (path: string) => { error?: string }
   fsGetWatchResults: (name: string, limit: number) => { results?: { stdout: string; ran_at: string }[]; error?: string }
   onRangeChange: (rangeText: string) => void
+  loadHistory: () => string
+  saveHistory: (lines: string) => void
 }

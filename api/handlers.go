@@ -88,6 +88,7 @@ func (s *Server) Handler() http.Handler {
 
 	// Public routes (no auth).
 	mux.HandleFunc("POST /api/auth/login", s.handleLogin)
+	mux.HandleFunc("POST /api/auth/signup", s.handleSignup)
 	mux.HandleFunc("POST /api/auth/verify", s.handleVerify)
 	mux.HandleFunc("POST /api/auth/device", s.handleDeviceInit)
 	mux.HandleFunc("POST /api/auth/device/poll", s.handleDevicePoll)
@@ -131,9 +132,22 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/team/invite", s.handleInviteTeamMember)
 	auth.HandleFunc("DELETE /api/team/{id}", s.handleRemoveTeamMember)
 
+	// Source onboarding (dashboard-authenticated).
+	auth.HandleFunc("GET /api/sources/pending", s.handlePendingSources)
+	auth.HandleFunc("POST /api/sources/{namespace}/{app}/configure", s.handleConfigureSource)
+
 	// Public routes (no auth).
 	mux.HandleFunc("POST /api/team/accept", s.handleAcceptInvite)
 	mux.HandleFunc("GET /api/integrations/slack/callback", s.handleSlackCallback)
+
+	// Agent-facing routes (agent token auth).
+	agentMux := http.NewServeMux()
+	agentMux.HandleFunc("POST /api/agent/sample", s.handleAgentSample)
+	agentMux.HandleFunc("GET /api/agent/source-status", s.handleAgentSourceStatus)
+	mux.Handle("/api/agent/", AgentTokenMiddleware(s.store, agentMux))
+
+	// Dashboard-authenticated route registrations.
+	mux.Handle("/api/sources/", AuthMiddleware(s.jwtSecret, auth))
 
 	mux.Handle("/api/auth/me", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/auth/device/approve", AuthMiddleware(s.jwtSecret, auth))
@@ -184,6 +198,118 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email   string `json:"email"`
+		OrgName string `json:"org_name"`
+		Tier    string `json:"tier"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if req.Email == "" || req.OrgName == "" || req.Tier == "" {
+		http.Error(w, "email, org_name, and tier are required", http.StatusBadRequest)
+		return
+	}
+
+	priceID, ok := s.StripePrices[req.Tier]
+	if !ok {
+		http.Error(w, "invalid tier", http.StatusBadRequest)
+		return
+	}
+
+	// Check for existing user.
+	if existing, _ := s.store.GetUserByEmail(req.Email); existing != nil {
+		http.Error(w, "account already exists", http.StatusConflict)
+		return
+	}
+
+	// Check for existing org name.
+	customerName := strings.ToLower(strings.TrimSpace(req.OrgName))
+	if existing, _ := s.store.GetCustomerByName(customerName); existing != nil {
+		http.Error(w, "organization name already taken", http.StatusConflict)
+		return
+	}
+
+	// Create customer + user.
+	cust, _ := s.store.FindOrCreateCustomer(customerName)
+	user, err := s.store.CreateUser(req.Email, cust.ID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Create trial subscription.
+	trialEnd := time.Now().Add(14 * 24 * time.Hour)
+	s.store.CreateSubscription(&store.Subscription{
+		ID:         uuid.New().String(),
+		CustomerID: customerName,
+		Tier:       "trial",
+		Status:     "active",
+		StartsAt:   time.Now(),
+		ExpiresAt:  &trialEnd,
+	})
+
+	// Create owner team membership.
+	s.store.CreateTeamMember(&store.TeamMember{
+		ID:           uuid.New().String(),
+		CustomerName: customerName,
+		Email:        req.Email,
+		UserID:       &user.ID,
+		Role:         "owner",
+		Status:       "active",
+		InvitedAt:    time.Now(),
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	})
+
+	// Generate JWT.
+	user.CustomerName = customerName
+	jwt, err := GenerateJWT(user, "trial", s.jwtSecret)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Create Stripe Checkout session with trial.
+	stripe.Key = s.StripeSecretKey
+	params := &stripe.CheckoutSessionParams{
+		Mode: stripe.String(string(stripe.CheckoutSessionModeSubscription)),
+		LineItems: []*stripe.CheckoutSessionLineItemParams{
+			{Price: stripe.String(priceID), Quantity: stripe.Int64(1)},
+		},
+		SubscriptionData: &stripe.CheckoutSessionSubscriptionDataParams{
+			TrialPeriodDays: stripe.Int64(14),
+		},
+		SuccessURL:        stripe.String(s.baseURL + "/dashboard?welcome=1"),
+		CancelURL:         stripe.String(s.baseURL + "/signup?cancelled=1"),
+		ClientReferenceID: stripe.String(user.ID),
+		CustomerEmail:     stripe.String(req.Email),
+	}
+	params.AddMetadata("tier", req.Tier)
+	params.AddMetadata("user_id", user.ID)
+	params.AddMetadata("customer", customerName)
+
+	sess, err := session.New(params)
+	if err != nil {
+		log.Printf("Stripe checkout error during signup: %v", err)
+		http.Error(w, "failed to create checkout session", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"token":        jwt,
+		"checkout_url": sess.URL,
+		"user": map[string]any{
+			"id":       user.ID,
+			"email":    user.Email,
+			"tier":     "trial",
+			"customer": customerName,
+		},
+	})
 }
 
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {

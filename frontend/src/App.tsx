@@ -1,6 +1,7 @@
 import { Routes, Route } from 'react-router-dom'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
+import Signup from './pages/Signup'
 import Verify from './pages/Verify'
 import Dashboard from './pages/Dashboard'
 import Shell from './pages/Shell'
@@ -8,6 +9,7 @@ import Downloads from './pages/Downloads'
 import Account from './pages/Account'
 import Device from './pages/Device'
 import Namespaces from './pages/Namespaces'
+import Docs from './pages/Docs'
 import ProtectedRoute from './components/ProtectedRoute'
 
 export default function App() {
@@ -15,6 +17,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<Landing />} />
       <Route path="/login" element={<Login />} />
+      <Route path="/signup" element={<Signup />} />
       <Route path="/verify" element={<Verify />} />
       <Route path="/dashboard" element={
         <ProtectedRoute><Dashboard /></ProtectedRoute>
@@ -33,6 +36,9 @@ export default function App() {
       } />
       <Route path="/device" element={
         <ProtectedRoute><Device /></ProtectedRoute>
+      } />
+      <Route path="/docs" element={
+        <ProtectedRoute><Docs /></ProtectedRoute>
       } />
     </Routes>
   )
