@@ -104,7 +104,7 @@ func (c *ShellCore) Quitting() bool { return c.quitting }
 func (c *ShellCore) SpinnerFrame() int { return c.spinnerFrame }
 
 // CompleterActive returns whether the completer menu is visible.
-func (c *ShellCore) CompleterActive() bool { return c.completer.Active }
+func (c *ShellCore) CompleterActive() bool { return c.completer.Active() }
 
 // SetFS sets the virtual filesystem for vim file editing.
 func (c *ShellCore) SetFS(fs FS) { c.shellFS = fs }
@@ -248,13 +248,13 @@ func (c *ShellCore) handleKey(ev KeyEvent) {
 	// Normal input mode.
 	switch ev.Key {
 	case KeyCtrlC, KeyCtrlD:
-		c.completer.Dismiss()
+		c.completer.Accept()
 		c.quitting = true
 		c.dispatch(ActionQuit{})
 		return
 
 	case KeyCtrlR:
-		c.completer.Dismiss()
+		c.completer.Accept()
 		c.mode = ModeSearching
 		c.searchBuf = ""
 		c.searchIdx = c.history.Len() - 1
@@ -266,41 +266,30 @@ func (c *ShellCore) handleKey(ev KeyEvent) {
 		return
 
 	case KeyTab:
-		if c.completer.Active {
-			c.completer.Next()
-			newInput, newCursor := c.completer.Apply(c.GetInput())
-			c.inputBuf = []rune(newInput)
-			c.inputCursor = newCursor
-		} else {
-			c.completer.Update(c.GetInput(), c.inputCursor)
-			if c.completer.Active {
-				newInput, newCursor := c.completer.Apply(c.GetInput())
-				c.inputBuf = []rune(newInput)
-				c.inputCursor = newCursor
-			}
-		}
+		newInput, newCursor := c.completer.Tab(c.inputBuf, c.inputCursor, c.shellFS, c.cwd)
+		c.inputBuf = newInput
+		c.inputCursor = newCursor
 		c.redrawPrompt()
 		return
 
 	case KeyShiftTab:
-		if c.completer.Active {
-			c.completer.Prev()
-			newInput, newCursor := c.completer.Apply(c.GetInput())
-			c.inputBuf = []rune(newInput)
+		if c.completer.Active() {
+			newInput, newCursor := c.completer.ShiftTab(c.inputBuf, c.inputCursor)
+			c.inputBuf = newInput
 			c.inputCursor = newCursor
 			c.redrawPrompt()
 		}
 		return
 
 	case KeyEsc:
-		if c.completer.Active {
-			c.completer.Dismiss()
+		if c.completer.Active() {
+			c.completer.Accept()
 			c.redrawPrompt()
 			return
 		}
 
 	case KeyUp:
-		c.completer.Dismiss()
+		c.completer.Accept()
 		if line, ok := c.history.Up(c.GetInput()); ok {
 			c.inputBuf = []rune(line)
 			c.inputCursor = len(c.inputBuf)
@@ -309,7 +298,7 @@ func (c *ShellCore) handleKey(ev KeyEvent) {
 		return
 
 	case KeyDown:
-		c.completer.Dismiss()
+		c.completer.Accept()
 		if line, ok := c.history.Down(c.GetInput()); ok {
 			c.inputBuf = []rune(line)
 			c.inputCursor = len(c.inputBuf)
@@ -318,7 +307,7 @@ func (c *ShellCore) handleKey(ev KeyEvent) {
 		return
 
 	case KeyEnter:
-		c.completer.Dismiss()
+		c.completer.Accept()
 		line := strings.TrimSpace(c.GetInput())
 		c.inputBuf = nil
 		c.inputCursor = 0
@@ -352,8 +341,8 @@ func (c *ShellCore) handleKey(ev KeyEvent) {
 		return
 
 	case KeyBackspace:
-		if c.completer.Active {
-			c.completer.Dismiss()
+		if c.completer.Active() {
+			c.completer.Accept()
 		}
 		if c.inputCursor > 0 {
 			c.inputBuf = append(c.inputBuf[:c.inputCursor-1], c.inputBuf[c.inputCursor:]...)
@@ -426,8 +415,8 @@ func (c *ShellCore) handleKey(ev KeyEvent) {
 	case KeyNone:
 		// Printable rune.
 		if ev.Rune != 0 {
-			if c.completer.Active {
-				c.completer.Dismiss()
+			if c.completer.Active() {
+				c.completer.Accept()
 			}
 			c.inputBuf = append(c.inputBuf[:c.inputCursor],
 				append([]rune{ev.Rune}, c.inputBuf[c.inputCursor:]...)...)
@@ -1042,11 +1031,6 @@ func (c *ShellCore) redrawPrompt() {
 		prompt.WriteString(RenderPrompt(ModeSearching, c.searchBuf, c.GetInput(), c.inputCursor, info))
 	default:
 		prompt.WriteString(RenderPrompt(ModeInput, "", c.GetInput(), c.inputCursor, info))
-	}
-
-	if c.completer.Active {
-		prompt.WriteString("\n")
-		prompt.WriteString(RenderCompleterMenu(c.completer))
 	}
 
 	promptStr := prompt.String()

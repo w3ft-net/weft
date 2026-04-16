@@ -207,73 +207,7 @@ func RenderRunningPrompt(spinnerFrame int) string {
 	return b.String()
 }
 
-// RenderCompleterMenu returns the completion menu as ANSI text.
-func RenderCompleterMenu(c *Completer) string {
-	if !c.Active || len(c.Items) == 0 {
-		return ""
-	}
-
-	maxVisible := 8
-	start := 0
-	if len(c.Items) > maxVisible {
-		start = c.Cursor - maxVisible/2
-		if start < 0 {
-			start = 0
-		}
-		if start+maxVisible > len(c.Items) {
-			start = len(c.Items) - maxVisible
-		}
-	}
-	end := start + maxVisible
-	if end > len(c.Items) {
-		end = len(c.Items)
-	}
-
-	var sb strings.Builder
-	prefixLen := len(c.Prefix)
-
-	for i := start; i < end; i++ {
-		item := c.Items[i]
-
-		if i == c.Cursor {
-			sb.WriteString("  ")
-			sb.WriteString(ansiSelected)
-			sb.WriteString(item.Text)
-			sb.WriteString(ansiReset)
-		} else {
-			sb.WriteString("  ")
-			if prefixLen <= len(item.Text) {
-				sb.WriteString(ansiMatch)
-				sb.WriteString(item.Text[:prefixLen])
-				sb.WriteString(ansiReset)
-				sb.WriteString(ansiNoMatch)
-				sb.WriteString(item.Text[prefixLen:])
-				sb.WriteString(ansiReset)
-			} else {
-				sb.WriteString(ansiNoMatch)
-				sb.WriteString(item.Text)
-				sb.WriteString(ansiReset)
-			}
-		}
-
-		if item.Kind == KindFile {
-			sb.WriteString(ansiDim)
-			sb.WriteString(" (file)")
-			sb.WriteString(ansiReset)
-		}
-
-		sb.WriteByte('\n')
-	}
-
-	if len(c.Items) > maxVisible {
-		sb.WriteString(ansiDim)
-		fmt.Fprintf(&sb, "  ... %d more", len(c.Items)-maxVisible)
-		sb.WriteString(ansiReset)
-		sb.WriteByte('\n')
-	}
-
-	return sb.String()
-}
+// (Dropdown completion menu removed — tab completion is now inline.)
 
 // stripANSI removes all ANSI escape sequences from a string, returning only visible characters.
 func stripANSI(s string) string {

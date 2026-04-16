@@ -1,142 +1,106 @@
 package shellcore
 
 import (
+	"path"
 	"sort"
 	"strings"
 )
 
-// CompletionKind distinguishes what kind of token we're completing.
-type CompletionKind int
-
-const (
-	KindCommand CompletionKind = iota
-	KindFile
-)
-
-// CompletionItem is one possible completion.
-type CompletionItem struct {
-	Text string
-	Kind CompletionKind
+// builtinCommands are the commands available for tab completion.
+var builtinCommands = []string{
+	"awk", "cat", "cd", "cut", "grep", "head", "jq", "less", "ls", "more",
+	"paste", "rev", "rm", "sed", "seq", "sort", "tac", "tail", "tee",
+	"tr", "uniq", "vi", "wc", "which", "xargs",
+	// weft builtins
+	"apps", "clear", "exit", "help", "range",
 }
 
-// Completer manages tab completion state.
+// Completer manages inline bash-style tab completion.
+// First Tab computes matches and inserts the first; subsequent Tabs cycle.
+// Any non-Tab key accepts the current completion and resets state.
 type Completer struct {
-	Commands []string // available command names
-	Files    []string // available pseudofile names
-
-	Active      bool             // completion menu is visible
-	Items       []CompletionItem // current matches
-	Cursor      int              // selected index in items
-	Prefix      string           // the partial word being completed
-	PrefixStart int              // byte offset in input where prefix starts
+	active       bool
+	matches      []string
+	cycleIndex   int
+	originalWord string // user's text before any completion
+	wordStart    int    // rune offset where the word begins
+	insertedLen  int    // rune length of what's currently in the buffer at wordStart
 }
 
-// NewCompleter creates a completer with the available apps.
-func NewCompleter(apps []string) *Completer {
-	commands := []string{
-		"awk", "cat", "cut", "grep", "head", "jq", "less", "more",
-		"paste", "rev", "sed", "seq", "sort", "tac", "tail", "tee",
-		"tr", "uniq", "wc", "xargs",
-		// weft builtins
-		"apps", "exit", "range", "schema",
-	}
-	sort.Strings(commands)
-
-	var files []string
-	for _, app := range apps {
-		files = append(files, app+".log")
-	}
-	files = append(files, "warp.log")
-	sort.Strings(files)
-
-	return &Completer{
-		Commands: commands,
-		Files:    files,
-	}
+// NewCompleter creates a completer.
+func NewCompleter(_ []string) *Completer {
+	return &Completer{}
 }
 
-// Update recalculates completions based on the current input and cursor position.
-// Returns true if the completion menu should be shown.
-func (c *Completer) Update(input string, cursorPos int) bool {
-	prefix, start := c.ExtractWord(input, cursorPos)
-	if prefix == "" {
-		c.Dismiss()
-		return false
-	}
+// Active returns whether a completion cycle is in progress.
+func (c *Completer) Active() bool { return c.active }
 
-	c.Prefix = prefix
-	c.PrefixStart = start
-
-	kind := c.ClassifyPosition(input, start)
-
-	var candidates []string
-	switch kind {
-	case KindCommand:
-		candidates = c.Commands
-	case KindFile:
-		candidates = c.Files
-	}
-
-	c.Items = nil
-	lower := strings.ToLower(prefix)
-	for _, cand := range candidates {
-		if strings.HasPrefix(strings.ToLower(cand), lower) {
-			c.Items = append(c.Items, CompletionItem{Text: cand, Kind: kind})
-		}
-	}
-
-	if len(c.Items) == 0 {
-		c.Dismiss()
-		return false
-	}
-
-	if len(c.Items) == 1 && strings.EqualFold(c.Items[0].Text, prefix) {
-		c.Dismiss()
-		return false
-	}
-
-	c.Active = true
-	c.Cursor = 0
-	return true
+// Accept locks in the current completion and resets cycling state.
+func (c *Completer) Accept() {
+	c.active = false
+	c.matches = nil
+	c.cycleIndex = 0
+	c.originalWord = ""
+	c.wordStart = 0
+	c.insertedLen = 0
 }
 
-// ClassifyPosition determines whether we're completing a command or a file
-// based on what precedes the current word.
-func (c *Completer) ClassifyPosition(input string, wordStart int) CompletionKind {
-	before := strings.TrimSpace(input[:wordStart])
-
-	if before == "" || strings.HasSuffix(before, "|") {
-		return KindCommand
+// Tab handles a Tab keypress. Returns the new input and cursor position.
+func (c *Completer) Tab(input []rune, cursor int, fs FS, cwd string) ([]rune, int) {
+	if c.active {
+		c.cycleIndex = (c.cycleIndex + 1) % len(c.matches)
+		return c.apply(input)
 	}
 
-	fields := strings.Fields(before)
-	if len(fields) > 0 {
-		lastCmd := fields[len(fields)-1]
-		if idx := strings.LastIndex(before, "|"); idx >= 0 {
-			afterPipe := strings.TrimSpace(before[idx+1:])
-			pipeFields := strings.Fields(afterPipe)
-			if len(pipeFields) > 0 {
-				lastCmd = pipeFields[0]
-			}
-			if afterPipe == "" {
-				return KindCommand
-			}
-		}
-		switch lastCmd {
-		case "cat", "head", "tail":
-			return KindFile
-		}
+	word, start := extractWord(input, cursor)
+	if word == "" {
+		return input, cursor
 	}
 
-	return KindCommand
+	matches := computeMatches(input, start, word, fs, cwd)
+	if len(matches) == 0 {
+		return input, cursor
+	}
+
+	c.active = true
+	c.matches = matches
+	c.cycleIndex = 0
+	c.originalWord = word
+	c.wordStart = start
+	c.insertedLen = len([]rune(word)) // buffer currently has the original word
+
+	return c.apply(input)
 }
 
-// ExtractWord returns the partial word at the cursor and its start position.
-func (c *Completer) ExtractWord(input string, cursorPos int) (string, int) {
-	if cursorPos > len(input) {
-		cursorPos = len(input)
+// ShiftTab cycles backward through matches.
+func (c *Completer) ShiftTab(input []rune, cursor int) ([]rune, int) {
+	if !c.active || len(c.matches) == 0 {
+		return input, cursor
 	}
-	start := cursorPos
+	c.cycleIndex = (c.cycleIndex - 1 + len(c.matches)) % len(c.matches)
+	return c.apply(input)
+}
+
+// apply replaces the current word in input with matches[cycleIndex].
+func (c *Completer) apply(input []rune) ([]rune, int) {
+	match := []rune(c.matches[c.cycleIndex])
+
+	newInput := make([]rune, 0, len(input)-c.insertedLen+len(match))
+	newInput = append(newInput, input[:c.wordStart]...)
+	newInput = append(newInput, match...)
+	newInput = append(newInput, input[c.wordStart+c.insertedLen:]...)
+
+	c.insertedLen = len(match)
+	newCursor := c.wordStart + len(match)
+	return newInput, newCursor
+}
+
+// extractWord returns the word at the cursor position and its start index (in runes).
+func extractWord(input []rune, cursor int) (string, int) {
+	if cursor > len(input) {
+		cursor = len(input)
+	}
+	start := cursor
 	for start > 0 {
 		ch := input[start-1]
 		if ch == ' ' || ch == '|' || ch == '\t' {
@@ -144,40 +108,122 @@ func (c *Completer) ExtractWord(input string, cursorPos int) (string, int) {
 		}
 		start--
 	}
-	return input[start:cursorPos], start
+	return string(input[start:cursor]), start
 }
 
-// Apply inserts the selected completion into the input string.
-// Returns the new input and new cursor position.
-func (c *Completer) Apply(input string) (string, int) {
-	if !c.Active || len(c.Items) == 0 {
-		return input, len(input)
+// computeMatches determines completion candidates based on context.
+func computeMatches(input []rune, wordStart int, word string, fs FS, cwd string) []string {
+	before := strings.TrimSpace(string(input[:wordStart]))
+
+	if isCommandPosition(before) {
+		return matchCommands(word, fs)
 	}
-	selected := c.Items[c.Cursor].Text
-	newInput := input[:c.PrefixStart] + selected + input[c.PrefixStart+len(c.Prefix):]
-	newCursor := c.PrefixStart + len(selected)
-	return newInput, newCursor
+
+	return matchPaths(word, fs, cwd)
 }
 
-// Next moves to the next completion item.
-func (c *Completer) Next() {
-	if len(c.Items) == 0 {
-		return
+// isCommandPosition returns true if the cursor expects a command name.
+func isCommandPosition(before string) bool {
+	if before == "" {
+		return true
 	}
-	c.Cursor = (c.Cursor + 1) % len(c.Items)
-}
-
-// Prev moves to the previous completion item.
-func (c *Completer) Prev() {
-	if len(c.Items) == 0 {
-		return
+	trimmed := before
+	if idx := strings.LastIndex(trimmed, "|"); idx >= 0 {
+		afterPipe := strings.TrimSpace(trimmed[idx+1:])
+		return afterPipe == ""
 	}
-	c.Cursor = (c.Cursor - 1 + len(c.Items)) % len(c.Items)
+	return false
 }
 
-// Dismiss hides the completion menu.
-func (c *Completer) Dismiss() {
-	c.Active = false
-	c.Items = nil
-	c.Cursor = 0
+// matchCommands returns commands matching the prefix.
+func matchCommands(prefix string, fs FS) []string {
+	var matches []string
+	lower := strings.ToLower(prefix)
+
+	for _, cmd := range builtinCommands {
+		if strings.HasPrefix(cmd, lower) {
+			matches = append(matches, cmd)
+		}
+	}
+
+	// /bin/ functions from FS.
+	if fs != nil {
+		if names, err := fs.ReadDir("/bin"); err == nil {
+			for _, name := range names {
+				if strings.HasPrefix(strings.ToLower(name), lower) {
+					matches = append(matches, name)
+				}
+			}
+		}
+	}
+
+	sort.Strings(matches)
+	return dedup(matches)
+}
+
+// matchPaths returns filesystem path completions for the word.
+func matchPaths(word string, fs FS, cwd string) []string {
+	if fs == nil {
+		return nil
+	}
+
+	var dir, namePrefix string
+	if strings.Contains(word, "/") {
+		if strings.HasSuffix(word, "/") {
+			dir = strings.TrimSuffix(word, "/")
+			namePrefix = ""
+		} else {
+			dir = path.Dir(word)
+			namePrefix = path.Base(word)
+		}
+	} else {
+		dir = ""
+		namePrefix = word
+	}
+
+	// Resolve directory against cwd.
+	var absDir string
+	if dir == "" {
+		absDir = cwd
+	} else if strings.HasPrefix(dir, "/") {
+		absDir = dir
+	} else if cwd == "/" {
+		absDir = "/" + dir
+	} else {
+		absDir = cwd + "/" + dir
+	}
+
+	entries, err := fs.ReadDir(absDir)
+	if err != nil {
+		return nil
+	}
+
+	var matches []string
+	lower := strings.ToLower(namePrefix)
+	for _, entry := range entries {
+		if namePrefix == "" || strings.HasPrefix(strings.ToLower(entry), lower) {
+			if dir == "" {
+				matches = append(matches, entry)
+			} else {
+				matches = append(matches, dir+"/"+entry)
+			}
+		}
+	}
+
+	sort.Strings(matches)
+	return matches
+}
+
+func dedup(sorted []string) []string {
+	if len(sorted) == 0 {
+		return sorted
+	}
+	j := 0
+	for i, s := range sorted {
+		if i == 0 || s != sorted[i-1] {
+			sorted[j] = s
+			j++
+		}
+	}
+	return sorted[:j]
 }
