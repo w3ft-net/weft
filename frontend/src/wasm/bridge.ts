@@ -217,6 +217,21 @@ function fsApiSync(method: string, path: string, content?: string): { content?: 
   return {}
 }
 
+function fetchApps(): string[] | null {
+  const token = localStorage.getItem('weft_token')
+  const xhr = new XMLHttpRequest()
+  xhr.open('GET', `${API_BASE}/api/apps`, false)
+  xhr.setRequestHeader('Content-Type', 'application/json')
+  if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+  try { xhr.send() } catch { return null }
+  if (xhr.status >= 400) return null
+  try {
+    return JSON.parse(xhr.responseText) as string[]
+  } catch {
+    return null
+  }
+}
+
 function fsApiSyncDir(path: string): { entries?: string[]; error?: string } {
   const token = localStorage.getItem('weft_token')
   let endpoint: string
@@ -227,20 +242,40 @@ function fsApiSyncDir(path: string): { entries?: string[]; error?: string } {
     endpoint = '/api/functions'
   } else if (path === '/cron.d' || path === '/cron.d/') {
     endpoint = '/api/watches'
-  } else if (path === '/log' || path === '/log/') {
-    const token = localStorage.getItem('weft_token')
-    const xhr = new XMLHttpRequest()
-    xhr.open('GET', `${API_BASE}/api/apps`, false)
-    xhr.setRequestHeader('Content-Type', 'application/json')
-    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
-    try { xhr.send() } catch { return { entries: [] } }
-    if (xhr.status >= 400) return { entries: [] }
-    try {
-      const apps = JSON.parse(xhr.responseText) as string[]
-      return { entries: (apps || []).map(a => a + '.log') }
-    } catch {
-      return { entries: [] }
+  } else if (path === '/log' || path === '/log/' || path.startsWith('/log/')) {
+    const apps = fetchApps()
+    if (apps === null) return { entries: [] }
+
+    const norm = path.replace(/\/+$/, '')
+    if (norm === '/log') {
+      // Group by namespace: apps with "/" show as dirs, flat apps as .log
+      const seen = new Set<string>()
+      const entries: string[] = []
+      for (const app of apps) {
+        const slash = app.indexOf('/')
+        if (slash >= 0) {
+          const ns = app.substring(0, slash)
+          if (!seen.has(ns)) {
+            seen.add(ns)
+            entries.push(ns + '/')
+          }
+        } else {
+          entries.push(app + '.log')
+        }
+      }
+      return { entries }
     }
+
+    // /log/<namespace> — filter apps under this prefix
+    const ns = norm.substring('/log/'.length)
+    const prefix = ns + '/'
+    const entries = apps
+      .filter(a => a.startsWith(prefix))
+      .map(a => a.substring(prefix.length) + '.log')
+    if (entries.length > 0) return { entries }
+    return { error: `${path}: no such directory` }
+  } else if (path === '/etc' || path === '/etc/') {
+    return { entries: ['usage'] }
   } else {
     return { error: `${path}: not a directory` }
   }
