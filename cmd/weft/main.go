@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,12 +24,28 @@ import (
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "sh":
+			// weft sh [-c 'pipeline']
+			if len(os.Args) > 2 && os.Args[2] == "-c" {
+				if len(os.Args) < 4 {
+					fmt.Fprintln(os.Stderr, "usage: weft sh -c 'pipeline'")
+					os.Exit(1)
+				}
+				runOneShot(strings.Join(os.Args[3:], " "))
+				return
+			}
+			runShellCmd()
+			return
 		case "-c":
+			// Legacy shorthand: weft -c 'pipeline'
 			if len(os.Args) < 3 {
 				fmt.Fprintln(os.Stderr, "usage: weft -c 'pipeline'")
 				os.Exit(1)
 			}
 			runOneShot(strings.Join(os.Args[2:], " "))
+			return
+		case "whoami":
+			runWhoami()
 			return
 		case "login":
 			runLogin()
@@ -51,6 +68,29 @@ func main() {
 		}
 	}
 
+	printUsage()
+}
+
+func printUsage() {
+	fmt.Println("weft — log analysis for operators")
+	fmt.Println()
+	fmt.Println("Usage: weft <command> [options]")
+	fmt.Println()
+	fmt.Println("Commands:")
+	fmt.Println("  sh              Start the interactive shell")
+	fmt.Println("  sh -c 'CMD'     Run a single pipeline and exit")
+	fmt.Println("  whoami          Show current user, team, and plan")
+	fmt.Println("  login           Authenticate via browser device flow")
+	fmt.Println("  namespace       Manage namespaces (list, create)")
+	fmt.Println("  token           Manage agent tokens (create, list, revoke)")
+	fmt.Println("  source          Manage log sources (add, list, remove, pending, configure)")
+	fmt.Println("  setup           Interactive schema setup from a sample file")
+	fmt.Println("  ingest          Ingest a log file into a local DuckDB shard")
+	fmt.Println()
+	fmt.Println("Run 'weft <command> --help' for details on a specific command.")
+}
+
+func runShellCmd() {
 	// Load config.
 	cfg, err := shell.LoadConfig()
 	if err != nil {
@@ -68,6 +108,57 @@ func main() {
 	defer cleanup()
 
 	runShell(s)
+}
+
+func runWhoami() {
+	cfg, err := shell.LoadConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Not logged in. Run 'weft login' to authenticate.")
+		os.Exit(1)
+	}
+
+	if cfg.Token == "" {
+		fmt.Fprintln(os.Stderr, "No token in ~/.weft.yaml. Run 'weft login' to authenticate.")
+		os.Exit(1)
+	}
+
+	// Decode JWT payload without signature verification (we don't have the secret).
+	parts := strings.Split(cfg.Token, ".")
+	if len(parts) != 3 {
+		fmt.Fprintln(os.Stderr, "Invalid token format.")
+		os.Exit(1)
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Failed to decode token.")
+		os.Exit(1)
+	}
+
+	var claims struct {
+		Email    string `json:"email"`
+		Customer string `json:"customer"`
+		Tier     string `json:"tier"`
+		IssuedAt int64  `json:"iat"`
+		Expires  int64  `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		fmt.Fprintln(os.Stderr, "Failed to parse token claims.")
+		os.Exit(1)
+	}
+
+	expires := time.Unix(claims.Expires, 0)
+	expired := time.Now().After(expires)
+
+	fmt.Printf("Email:    %s\n", claims.Email)
+	fmt.Printf("Team:     %s\n", claims.Customer)
+	fmt.Printf("Plan:     %s\n", claims.Tier)
+	fmt.Printf("Endpoint: %s\n", cfg.Endpoint)
+	if expired {
+		fmt.Printf("Token:    expired (%s) — run 'weft login' to re-authenticate\n", expires.Format("2006-01-02"))
+	} else {
+		fmt.Printf("Token:    valid until %s\n", expires.Format("2006-01-02"))
+	}
 }
 
 func runDevShell() {
