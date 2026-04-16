@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 type testHarness struct {
@@ -603,11 +604,11 @@ func TestCursorPositionAfterLeftArrow(t *testing.T) {
 	raw := rawOutput.String()
 	t.Logf("raw after 3x left: %q", raw)
 
-	// The prompt prefix "$ " is 2 visible chars. With inputCursor=3,
-	// the terminal cursor should be at column 6 (2 + 3 + 1 for 1-indexed).
-	// Check for \x1b[6G (absolute column positioning).
-	if !strings.Contains(raw, "\x1b[6G") {
-		t.Errorf("expected cursor positioning escape \\x1b[6G in output, got: %q", raw)
+	// The prompt prefix "~ $ " is 4 visible chars. With inputCursor=3,
+	// the terminal cursor should be at column 8 (4 + 3 + 1 for 1-indexed).
+	// Check for \x1b[8G (absolute column positioning).
+	if !strings.Contains(raw, "\x1b[8G") {
+		t.Errorf("expected cursor positioning escape \\x1b[8G in output, got: %q", raw)
 	}
 
 	// Also verify that the block cursor (reverse video) is rendered on 'd'
@@ -615,6 +616,65 @@ func TestCursorPositionAfterLeftArrow(t *testing.T) {
 	// ansiCursor = "\033[7m" (reverse video).
 	if !strings.Contains(raw, "\x1b[7md") {
 		t.Errorf("expected reverse-video block cursor on 'd', got: %q", raw)
+	}
+}
+
+// TestPromptFormat verifies the prompt displays [range] user@weft cwd $ format.
+func TestPromptFormat(t *testing.T) {
+	var rawOutput strings.Builder
+
+	core := NewShellCore(
+		nil, 80, 24,
+		func(b []byte) { rawOutput.Write(b) },
+		func(a Action) {},
+	)
+	core.SetUser("paul")
+	core.SetRange(
+		time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC),
+	)
+	core.Redraw()
+
+	visible := stripAllANSI(rawOutput.String())
+	t.Logf("visible prompt: %q", visible)
+
+	// Should show [1d] paul@weft ~ $ (24h = 1d per formatDuration)
+	if !strings.Contains(visible, "[1d]") {
+		t.Errorf("expected [1d] in prompt, got: %q", visible)
+	}
+	if !strings.Contains(visible, "paul@weft") {
+		t.Errorf("expected paul@weft in prompt, got: %q", visible)
+	}
+	if !strings.Contains(visible, "~ $") {
+		t.Errorf("expected '~ $' in prompt, got: %q", visible)
+	}
+}
+
+// TestPromptCwdNotRoot verifies cwd shows the path when not at /.
+func TestPromptCwdNotRoot(t *testing.T) {
+	var rawOutput strings.Builder
+
+	core := NewShellCore(
+		nil, 80, 24,
+		func(b []byte) { rawOutput.Write(b) },
+		func(a Action) {},
+	)
+	core.SetUser("paul")
+	core.SetCwd("/log")
+	core.SetRange(
+		time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC),
+		time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC),
+	)
+	core.Redraw()
+
+	visible := stripAllANSI(rawOutput.String())
+	t.Logf("visible prompt: %q", visible)
+
+	if !strings.Contains(visible, "[2h]") {
+		t.Errorf("expected [2h] in prompt, got: %q", visible)
+	}
+	if !strings.Contains(visible, "/log $") {
+		t.Errorf("expected '/log $' in prompt, got: %q", visible)
 	}
 }
 

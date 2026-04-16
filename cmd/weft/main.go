@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
@@ -98,6 +99,13 @@ func runDevShell() {
 }
 
 func runShell(s *shell.Shell) {
+	// Set user for the prompt if not already set.
+	if s.User == "" {
+		if u, err := user.Current(); err == nil {
+			s.User = u.Username
+		}
+	}
+
 	// If stdin is not a terminal, run non-interactively.
 	if fi, _ := os.Stdin.Stat(); fi.Mode()&os.ModeCharDevice == 0 {
 		scanner := bufio.NewScanner(os.Stdin)

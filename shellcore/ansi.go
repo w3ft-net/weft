@@ -138,8 +138,44 @@ func RenderSpinner(frame int) string {
 	return ansiSpinner + f + ansiReset
 }
 
+// PromptInfo holds the fields needed to render the prompt prefix.
+type PromptInfo struct {
+	RangeLabel string // e.g. "24h", "2h30m"
+	User       string // e.g. "paul"
+	Cwd        string // e.g. "/" or "/log"
+}
+
+// FormatPromptPrefix builds the visible prompt prefix: [24h] paul@weft ~ $
+func FormatPromptPrefix(info PromptInfo) string {
+	var b strings.Builder
+
+	// Range bracket.
+	if info.RangeLabel != "" {
+		b.WriteString("[")
+		b.WriteString(info.RangeLabel)
+		b.WriteString("] ")
+	}
+
+	// user@weft
+	if info.User != "" {
+		b.WriteString(info.User)
+		b.WriteString("@weft")
+		b.WriteString(" ")
+	}
+
+	// cwd: ~ for root, otherwise the path.
+	cwd := info.Cwd
+	if cwd == "" || cwd == "/" {
+		cwd = "~"
+	}
+	b.WriteString(cwd)
+	b.WriteString(" $ ")
+
+	return b.String()
+}
+
 // RenderPrompt renders the input prompt line with ANSI escape sequences.
-func RenderPrompt(mode Mode, searchBuf string, input string, cursorPos int) string {
+func RenderPrompt(mode Mode, searchBuf string, input string, cursorPos int, info PromptInfo) string {
 	var b strings.Builder
 
 	switch mode {
@@ -151,8 +187,9 @@ func RenderPrompt(mode Mode, searchBuf string, input string, cursorPos int) stri
 		b.WriteString(ansiReset)
 		b.WriteString(HighlightPipeline(input))
 	default:
+		prefix := FormatPromptPrefix(info)
 		b.WriteString(ansiPrompt)
-		b.WriteString("$ ")
+		b.WriteString(prefix)
 		b.WriteString(ansiReset)
 		b.WriteString(HighlightWithCursor(input, cursorPos))
 	}
@@ -262,13 +299,13 @@ func stripANSI(s string) string {
 
 // PromptPrefixWidth returns the number of visible characters in the prompt
 // prefix (before user input) for a given mode.
-func PromptPrefixWidth(mode Mode, searchBuf string) int {
+func PromptPrefixWidth(mode Mode, searchBuf string, info PromptInfo) int {
 	switch mode {
 	case ModeSearching:
 		// "(reverse-i-search)`<searchBuf>': "
 		return len(fmt.Sprintf("(reverse-i-search)`%s': ", searchBuf))
 	case ModeInput:
-		return 2 // "$ "
+		return len(FormatPromptPrefix(info))
 	default:
 		return 0
 	}

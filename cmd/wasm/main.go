@@ -40,6 +40,8 @@ func main() {
 // callbacks must have: writeOutput(string), startQuery(string), startFollow(string),
 //
 //	cancelQuery(), notifyQuit()
+//
+// Optional callback fields: getUser() returns the username for the prompt.
 func wasmInit(_ js.Value, args []js.Value) any {
 	appsJS := args[0]
 	width := args[1].Int()
@@ -80,6 +82,15 @@ func wasmInit(_ js.Value, args []js.Value) any {
 
 	// Set up JS-backed virtual filesystem.
 	core.SetFS(&jsFS{callbacks: jsCallbacks})
+
+	// Set user from JS callback if available.
+	getUserFn := jsCallbacks.Get("getUser")
+	if !getUserFn.IsUndefined() && !getUserFn.IsNull() {
+		user := jsCallbacks.Call("getUser").String()
+		if user != "" && user != "undefined" {
+			core.SetUser(user)
+		}
+	}
 
 	// Default range: last 24 hours.
 	rangeStart := time.Now().Add(-24 * time.Hour)

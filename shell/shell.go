@@ -37,6 +37,7 @@ type Shell struct {
 	End    time.Time
 	Apps   []string
 	FS     shellcore.FS
+	User   string // username shown in prompt (e.g. "paul")
 }
 
 // Run starts the interactive shell.
@@ -68,6 +69,9 @@ func (s *Shell) Run() error {
 	)
 	if s.FS != nil {
 		runner.core.SetFS(s.FS)
+	}
+	if s.User != "" {
+		runner.core.SetUser(s.User)
 	}
 	runner.core.SetRange(s.Start, s.End)
 

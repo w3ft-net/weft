@@ -64,6 +64,10 @@ type ShellCore struct {
 	// Query time range (displayed by `range`, modified by `range <spec>`).
 	rangeStart time.Time
 	rangeEnd   time.Time
+
+	// Prompt identity fields.
+	user string // e.g. "paul" — shown as paul@weft in prompt
+	cwd  string // virtual working directory, "/" = home = "~"
 }
 
 // NewShellCore creates a new core with a single write callback (for xterm.js/WASM).
@@ -78,6 +82,7 @@ func NewShellCore(apps []string, width, height int, write func([]byte), dispatch
 		width:              width,
 		height:             height,
 		maxScrollbackLines: 10000,
+		cwd:                "/",
 	}
 }
 
@@ -111,6 +116,25 @@ func (c *ShellCore) GetFS() FS { return c.shellFS }
 func (c *ShellCore) SetRange(start, end time.Time) {
 	c.rangeStart = start
 	c.rangeEnd = end
+}
+
+// SetUser sets the username shown in the prompt (e.g. "paul" → "paul@weft").
+func (c *ShellCore) SetUser(user string) { c.user = user }
+
+// SetCwd sets the virtual working directory shown in the prompt.
+func (c *ShellCore) SetCwd(cwd string) { c.cwd = cwd }
+
+// promptInfo builds the PromptInfo from current state.
+func (c *ShellCore) promptInfo() PromptInfo {
+	var rangeLabel string
+	if !c.rangeStart.IsZero() && !c.rangeEnd.IsZero() {
+		rangeLabel = formatDuration(c.rangeEnd.Sub(c.rangeStart))
+	}
+	return PromptInfo{
+		RangeLabel: rangeLabel,
+		User:       c.user,
+		Cwd:        c.cwd,
+	}
 }
 
 // SetInput replaces the current input buffer (for saved query injection).
@@ -304,7 +328,7 @@ func (c *ShellCore) handleKey(ev KeyEvent) {
 			return
 		}
 		c.history.Add(line)
-		c.appendScrollback(PromptText("$ ") + HighlightPipeline(line) + "\n")
+		c.appendScrollback(PromptText(FormatPromptPrefix(c.promptInfo())) + HighlightPipeline(line) + "\n")
 
 		if c.execBuiltin(line) {
 			c.redrawPrompt()
@@ -928,6 +952,8 @@ func (c *ShellCore) redrawPrompt() {
 
 	c.erasePromptLines(&b)
 
+	info := c.promptInfo()
+
 	var prompt strings.Builder
 	switch c.mode {
 	case ModeVim:
@@ -937,9 +963,9 @@ func (c *ShellCore) redrawPrompt() {
 	case ModeRunning:
 		prompt.WriteString(RenderRunningPrompt(c.spinnerFrame))
 	case ModeSearching:
-		prompt.WriteString(RenderPrompt(ModeSearching, c.searchBuf, c.GetInput(), c.inputCursor))
+		prompt.WriteString(RenderPrompt(ModeSearching, c.searchBuf, c.GetInput(), c.inputCursor, info))
 	default:
-		prompt.WriteString(RenderPrompt(ModeInput, "", c.GetInput(), c.inputCursor))
+		prompt.WriteString(RenderPrompt(ModeInput, "", c.GetInput(), c.inputCursor, info))
 	}
 
 	if c.completer.Active {
@@ -966,7 +992,7 @@ func (c *ShellCore) redrawPrompt() {
 			fmt.Fprintf(&b, "\x1b[%dA", menuLines)
 		}
 		// Absolute column positioning: prompt prefix width + cursor offset + 1 (1-indexed).
-		col := PromptPrefixWidth(c.mode, c.searchBuf) + c.inputCursor + 1
+		col := PromptPrefixWidth(c.mode, c.searchBuf, info) + c.inputCursor + 1
 		fmt.Fprintf(&b, "\x1b[%dG", col)
 	}
 
