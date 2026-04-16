@@ -1,6 +1,9 @@
 package shellcore
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // FS is the virtual filesystem interface for the shell.
 // ShellFS (server-side) and the WASM API adapter both implement this.
@@ -9,6 +12,30 @@ type FS interface {
 	WriteFile(path string, data []byte) error
 	ReadDir(path string) ([]string, error) // returns entry names
 	Remove(path string) error
+}
+
+// PathKind classifies a resolved virtual FS path.
+type PathKind int
+
+const (
+	PathUnknown  PathKind = iota // not a recognized FS path
+	PathLocal                    // local FS object (/bin/, /cron.d/, /etc/) — read/write via FS
+	PathQuery                    // query source (/log/) — dispatched to coordinator
+)
+
+// ClassifyPath returns the kind of a resolved absolute FS path.
+func ClassifyPath(path string) PathKind {
+	switch {
+	case strings.HasPrefix(path, "/log/") || path == "/log":
+		return PathQuery
+	case strings.HasPrefix(path, "/bin/") || path == "/bin",
+		strings.HasPrefix(path, "/cron.d/") || path == "/cron.d",
+		strings.HasPrefix(path, "/etc/") || path == "/etc",
+		path == "/":
+		return PathLocal
+	default:
+		return PathUnknown
+	}
 }
 
 // LangFS is optionally implemented by FS implementations that know

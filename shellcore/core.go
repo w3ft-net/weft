@@ -551,6 +551,24 @@ func (c *ShellCore) execBuiltin(line string) bool {
 		}
 		c.startVim(parts[1])
 		return true
+	case line == "cd" || line == "cd ~":
+		c.cwd = "/"
+		return true
+	case strings.HasPrefix(line, "cd "):
+		target := strings.TrimSpace(strings.TrimPrefix(line, "cd "))
+		if target == "~" || target == "" {
+			c.cwd = "/"
+			return true
+		}
+		resolved := c.resolvePath(target)
+		if c.shellFS != nil {
+			if _, err := c.shellFS.ReadDir(resolved); err != nil {
+				c.appendScrollback(ErrorText(fmt.Sprintf("cd: %s: no such directory", target)) + "\n")
+				return true
+			}
+		}
+		c.cwd = resolved
+		return true
 	}
 
 	// FS-aware builtins: ls, cat, rm, which, type for /bin /cron.d /etc /log paths.
@@ -559,6 +577,63 @@ func (c *ShellCore) execBuiltin(line string) bool {
 	}
 
 	return false
+}
+
+// resolvePath resolves a path against the current working directory.
+// Absolute paths pass through; relative paths are joined with cwd.
+// ".." segments are normalized.
+func (c *ShellCore) resolvePath(path string) string {
+	if !strings.HasPrefix(path, "/") {
+		if c.cwd == "/" {
+			path = "/" + path
+		} else {
+			path = c.cwd + "/" + path
+		}
+	}
+	// Normalize: split on /, resolve . and .., rejoin.
+	parts := strings.Split(path, "/")
+	var resolved []string
+	for _, p := range parts {
+		switch p {
+		case "", ".":
+			continue
+		case "..":
+			if len(resolved) > 0 {
+				resolved = resolved[:len(resolved)-1]
+			}
+		default:
+			resolved = append(resolved, p)
+		}
+	}
+	if len(resolved) == 0 {
+		return "/"
+	}
+	return "/" + strings.Join(resolved, "/")
+}
+
+// resolveQueryPaths rewrites a command's arguments, resolving any that
+// refer to query-source paths against the current working directory.
+// e.g. from cwd=/log/weft: ["tail", "api.log"] → "tail /log/weft/api.log"
+func (c *ShellCore) resolveQueryPaths(parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	resolved := make([]string, len(parts))
+	resolved[0] = parts[0] // command name
+	for i := 1; i < len(parts); i++ {
+		arg := parts[i]
+		if strings.HasPrefix(arg, "-") {
+			resolved[i] = arg
+			continue
+		}
+		path := c.resolvePath(arg)
+		if ClassifyPath(path) == PathQuery {
+			resolved[i] = path
+		} else {
+			resolved[i] = arg
+		}
+	}
+	return strings.Join(resolved, " ")
 }
 
 // normalizePath resolves relative paths against root.
@@ -589,8 +664,8 @@ func (c *ShellCore) execFSBuiltin(line string) bool {
 			}
 		}
 		if redirectIdx >= 0 && redirectIdx+1 < len(args) {
-			target := normalizePath(args[redirectIdx+1])
-			if strings.HasPrefix(target, "/bin/") || strings.HasPrefix(target, "/cron.d/") || strings.HasPrefix(target, "/etc/") {
+			target := c.resolvePath(args[redirectIdx+1])
+			if ClassifyPath(target) == PathLocal {
 				if c.shellFS == nil {
 					c.appendScrollback(ErrorText("cat: filesystem not available") + "\n")
 					return true
@@ -606,28 +681,25 @@ func (c *ShellCore) execFSBuiltin(line string) bool {
 	case "ls", "rm", "which", "type":
 		// handled below
 	case "cat":
-		// Only intercept if the target is a FS path (starts with / or resolves to one).
+		// Only intercept if the target resolves to a known FS path.
 		if len(args) > 0 {
-			path := normalizePath(args[0])
-			if strings.HasPrefix(path, "/log/") || strings.HasPrefix(path, "/bin/") ||
-				strings.HasPrefix(path, "/cron.d/") || strings.HasPrefix(path, "/etc/") {
-				// handled below
-			} else {
-				return false // bare name that's not a FS path — not our problem
+			path := c.resolvePath(args[0])
+			if ClassifyPath(path) == PathUnknown {
+				return false
 			}
 		} else {
 			return false // bare "cat" with no args
 		}
 	case "head", "tail":
-		// Only intercept if targeting /log/.
-		hasLogPath := false
+		// Only intercept if targeting a query source.
+		hasQueryPath := false
 		for _, a := range args {
-			if strings.HasPrefix(normalizePath(a), "/log/") {
-				hasLogPath = true
+			if ClassifyPath(c.resolvePath(a)) == PathQuery {
+				hasQueryPath = true
 				break
 			}
 		}
-		if !hasLogPath {
+		if !hasQueryPath {
 			return false
 		}
 	default:
@@ -641,9 +713,9 @@ func (c *ShellCore) execFSBuiltin(line string) bool {
 
 	switch cmd {
 	case "ls":
-		path := "/"
+		path := c.cwd
 		if len(args) > 0 {
-			path = normalizePath(args[0])
+			path = c.resolvePath(args[0])
 		}
 		entries, err := c.shellFS.ReadDir(path)
 		if err != nil {
@@ -659,16 +731,20 @@ func (c *ShellCore) execFSBuiltin(line string) bool {
 		if len(args) == 0 {
 			return false
 		}
-		path := normalizePath(args[0])
+		path := c.resolvePath(args[0])
 
-		// /log/ paths are query pipelines — pass the whole line to the coordinator.
-		if strings.HasPrefix(path, "/log/") {
-			c.startQuery(line)
+		// Query sources — pass to coordinator with resolved path.
+		if ClassifyPath(path) == PathQuery {
+			resolved := cmd + " " + path
+			if len(parts) > 2 {
+				resolved += " " + strings.Join(parts[2:], " ")
+			}
+			c.startQuery(resolved)
 			c.redrawPrompt()
 			return true
 		}
 
-		// /bin/, /cron.d/, /etc/ — read from FS.
+		// Local FS paths — read from FS.
 		data, err := c.shellFS.ReadFile(path)
 		if err != nil {
 			c.appendScrollback(ErrorText(fmt.Sprintf("cat: %s: no such file", path)) + "\n")
@@ -688,7 +764,7 @@ func (c *ShellCore) execFSBuiltin(line string) bool {
 			c.appendScrollback(ErrorText("rm: missing operand") + "\n")
 			return true
 		}
-		path := normalizePath(args[0])
+		path := c.resolvePath(args[0])
 		if err := c.shellFS.Remove(path); err != nil {
 			c.appendScrollback(ErrorText(fmt.Sprintf("rm: %v", err)) + "\n")
 			return true
@@ -696,9 +772,9 @@ func (c *ShellCore) execFSBuiltin(line string) bool {
 		return true
 
 	case "head", "tail":
-		// Query source commands — pass through to the coordinator.
-		// The planner handles /log/ paths directly.
-		c.startQuery(line)
+		// Query source commands — resolve paths against cwd before sending.
+		resolved := c.resolveQueryPaths(parts)
+		c.startQuery(resolved)
 		c.redrawPrompt()
 		return true
 
@@ -719,7 +795,7 @@ func (c *ShellCore) execFSBuiltin(line string) bool {
 			return false
 		}
 		name := args[0]
-		for _, b := range []string{"exit", "quit", "clear", "apps", "range", "vi", "vim", "ls", "cat", "rm", "which", "type"} {
+		for _, b := range []string{"exit", "quit", "clear", "apps", "range", "cd", "vi", "vim", "ls", "cat", "rm", "which", "type"} {
 			if name == b {
 				c.appendScrollback(fmt.Sprintf("%s is a shell builtin\n", name))
 				return true

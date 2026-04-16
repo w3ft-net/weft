@@ -92,7 +92,7 @@ func runDevShell() {
 		End:   coordinator.DevT2,
 		Apps:  apps,
 		// Dev shell uses in-memory FS (no gRPC coordinator to proxy through).
-		FS: shell.NewDevFS(apps),
+		FS: shell.NewRemoteFS(shell.NewMemBackend(), apps),
 	}
 
 	runShell(s)
@@ -325,7 +325,7 @@ func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 			Start:  time.Now().Add(-24 * time.Hour),
 			End:    time.Now(),
 			Apps:   apps,
-			FS:     shell.NewHTTPRemoteFS(endpoint, cfg.Token, apps),
+			FS:     shell.NewRemoteFS(shell.NewHTTPBackend(endpoint, cfg.Token), apps),
 		}
 		return s, func() {}, nil
 	}
@@ -354,7 +354,7 @@ func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 		Start:  time.Now().Add(-24 * time.Hour),
 		End:    time.Now(),
 		Apps:   apps,
-		FS:     shell.NewRemoteFS(remote.Client(), cfg.Customer, apps),
+		FS:     shell.NewRemoteFS(shell.NewGRPCBackend(remote.Client(), cfg.Customer), apps),
 	}
 	return s, func() { remote.Close() }, nil
 }
