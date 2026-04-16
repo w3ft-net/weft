@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -11,10 +12,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/kevlarcon/weft/store"
 	"github.com/kevlarcon/weft/coordinator"
+	"github.com/kevlarcon/weft/ingest"
 	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/store"
 )
 
 // Server implements the WeftCoordinator gRPC service.
@@ -592,5 +594,81 @@ func (s *Server) Heartbeat(_ context.Context, req *pb.ShardHeartbeatRequest) (*p
 		log.Printf("heartbeat: failed to persist for %s: %v", req.ShardId, err)
 	}
 	return &pb.HeartbeatResponse{}, nil
+}
+
+// ── Source onboarding ──────────────────────────────────────
+
+// authenticateToken is a helper that validates an agent token and returns auth info.
+func (s *Server) authenticateToken(token string) (*store.AgentAuthResult, error) {
+	if s.Store == nil {
+		return nil, fmt.Errorf("config store not available")
+	}
+	auth, err := s.Store.ValidateAgentToken(token)
+	if err != nil {
+		return nil, fmt.Errorf("validate token: %w", err)
+	}
+	if auth == nil {
+		return nil, fmt.Errorf("invalid or revoked token")
+	}
+	return auth, nil
+}
+
+// SubmitSample receives sample log lines from weftd for a new source.
+func (s *Server) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest) (*pb.SubmitSampleResponse, error) {
+	auth, err := s.authenticateToken(req.Token)
+	if err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, "%v", err)
+	}
+
+	if req.App == "" || len(req.Lines) == 0 {
+		return nil, status.Errorf(codes.InvalidArgument, "app and lines required")
+	}
+
+	detection := ingest.Detect(req.Lines)
+	sampleJSON, _ := json.Marshal(req.Lines)
+	detectionJSON, _ := json.Marshal(detection)
+
+	if err := s.Store.UpsertPendingSource(
+		auth.Customer.ID, auth.Namespace, req.App,
+		req.Instance, req.HostGroup,
+		string(sampleJSON), string(detectionJSON),
+	); err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+
+	log.Printf("sample: customer=%s namespace=%s app=%s lines=%d", auth.Customer.Name, auth.Namespace, req.App, len(req.Lines))
+	return &pb.SubmitSampleResponse{Status: "pending"}, nil
+}
+
+// GetSourceStatus returns the configuration status of a source.
+func (s *Server) GetSourceStatus(_ context.Context, req *pb.GetSourceStatusRequest) (*pb.GetSourceStatusResponse, error) {
+	auth, err := s.authenticateToken(req.Token)
+	if err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, "%v", err)
+	}
+
+	if req.App == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "app required")
+	}
+
+	// Check if fully configured.
+	configured, schemaYAML, err := s.Store.SourceIsConfigured(auth.Customer.Name, auth.Namespace, req.App)
+	if err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+	if configured {
+		return &pb.GetSourceStatusResponse{Status: "configured", SchemaYaml: schemaYAML}, nil
+	}
+
+	// Check if pending.
+	ps, err := s.Store.GetPendingSource(auth.Customer.ID, auth.Namespace, req.App)
+	if err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+	if ps != nil {
+		return &pb.GetSourceStatusResponse{Status: "pending"}, nil
+	}
+
+	return &pb.GetSourceStatusResponse{Status: "unknown"}, nil
 }
 

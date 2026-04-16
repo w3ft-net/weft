@@ -20,15 +20,18 @@ var (
 	labelStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
 )
 
-// RunSetup runs the interactive schema setup wizard.
+// RunSetup runs the interactive schema setup wizard from a sample file.
 func RunSetup(app, customer, sampleFile string) (*ingest.Schema, error) {
-	// Read sample file.
 	data, err := os.ReadFile(sampleFile)
 	if err != nil {
 		return nil, fmt.Errorf("read sample file: %w", err)
 	}
 	lines := strings.Split(string(data), "\n")
+	return RunSetupFromLines(app, customer, lines)
+}
 
+// RunSetupFromLines runs the interactive schema setup wizard from pre-loaded lines.
+func RunSetupFromLines(app, customer string, lines []string) (*ingest.Schema, error) {
 	fmt.Println(titleStyle.Render("weft setup — schema detection for " + app))
 	fmt.Println()
 

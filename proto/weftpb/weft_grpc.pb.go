@@ -486,6 +486,8 @@ const (
 	WeftCoordinator_ListWatches_FullMethodName     = "/weft.WeftCoordinator/ListWatches"
 	WeftCoordinator_DeleteWatch_FullMethodName     = "/weft.WeftCoordinator/DeleteWatch"
 	WeftCoordinator_GetWatchResults_FullMethodName = "/weft.WeftCoordinator/GetWatchResults"
+	WeftCoordinator_SubmitSample_FullMethodName    = "/weft.WeftCoordinator/SubmitSample"
+	WeftCoordinator_GetSourceStatus_FullMethodName = "/weft.WeftCoordinator/GetSourceStatus"
 	WeftCoordinator_Heartbeat_FullMethodName       = "/weft.WeftCoordinator/Heartbeat"
 )
 
@@ -526,6 +528,9 @@ type WeftCoordinatorClient interface {
 	ListWatches(ctx context.Context, in *ListWatchesRequest, opts ...grpc.CallOption) (*ListWatchesResponse, error)
 	DeleteWatch(ctx context.Context, in *DeleteWatchRequest, opts ...grpc.CallOption) (*DeleteWatchResponse, error)
 	GetWatchResults(ctx context.Context, in *GetWatchResultsRequest, opts ...grpc.CallOption) (*GetWatchResultsResponse, error)
+	// Source onboarding — weftd submits samples and polls for schema config.
+	SubmitSample(ctx context.Context, in *SubmitSampleRequest, opts ...grpc.CallOption) (*SubmitSampleResponse, error)
+	GetSourceStatus(ctx context.Context, in *GetSourceStatusRequest, opts ...grpc.CallOption) (*GetSourceStatusResponse, error)
 	// Shard heartbeat — shards push their state to the coordinator every 60s.
 	Heartbeat(ctx context.Context, in *ShardHeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 }
@@ -750,6 +755,26 @@ func (c *weftCoordinatorClient) GetWatchResults(ctx context.Context, in *GetWatc
 	return out, nil
 }
 
+func (c *weftCoordinatorClient) SubmitSample(ctx context.Context, in *SubmitSampleRequest, opts ...grpc.CallOption) (*SubmitSampleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SubmitSampleResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_SubmitSample_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftCoordinatorClient) GetSourceStatus(ctx context.Context, in *GetSourceStatusRequest, opts ...grpc.CallOption) (*GetSourceStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSourceStatusResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_GetSourceStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *weftCoordinatorClient) Heartbeat(ctx context.Context, in *ShardHeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HeartbeatResponse)
@@ -797,6 +822,9 @@ type WeftCoordinatorServer interface {
 	ListWatches(context.Context, *ListWatchesRequest) (*ListWatchesResponse, error)
 	DeleteWatch(context.Context, *DeleteWatchRequest) (*DeleteWatchResponse, error)
 	GetWatchResults(context.Context, *GetWatchResultsRequest) (*GetWatchResultsResponse, error)
+	// Source onboarding — weftd submits samples and polls for schema config.
+	SubmitSample(context.Context, *SubmitSampleRequest) (*SubmitSampleResponse, error)
+	GetSourceStatus(context.Context, *GetSourceStatusRequest) (*GetSourceStatusResponse, error)
 	// Shard heartbeat — shards push their state to the coordinator every 60s.
 	Heartbeat(context.Context, *ShardHeartbeatRequest) (*HeartbeatResponse, error)
 	mustEmbedUnimplementedWeftCoordinatorServer()
@@ -868,6 +896,12 @@ func (UnimplementedWeftCoordinatorServer) DeleteWatch(context.Context, *DeleteWa
 }
 func (UnimplementedWeftCoordinatorServer) GetWatchResults(context.Context, *GetWatchResultsRequest) (*GetWatchResultsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetWatchResults not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) SubmitSample(context.Context, *SubmitSampleRequest) (*SubmitSampleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SubmitSample not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) GetSourceStatus(context.Context, *GetSourceStatusRequest) (*GetSourceStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSourceStatus not implemented")
 }
 func (UnimplementedWeftCoordinatorServer) Heartbeat(context.Context, *ShardHeartbeatRequest) (*HeartbeatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Heartbeat not implemented")
@@ -1235,6 +1269,42 @@ func _WeftCoordinator_GetWatchResults_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WeftCoordinator_SubmitSample_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SubmitSampleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).SubmitSample(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_SubmitSample_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).SubmitSample(ctx, req.(*SubmitSampleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftCoordinator_GetSourceStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSourceStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).GetSourceStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_GetSourceStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).GetSourceStatus(ctx, req.(*GetSourceStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WeftCoordinator_Heartbeat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ShardHeartbeatRequest)
 	if err := dec(in); err != nil {
@@ -1331,6 +1401,14 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetWatchResults",
 			Handler:    _WeftCoordinator_GetWatchResults_Handler,
+		},
+		{
+			MethodName: "SubmitSample",
+			Handler:    _WeftCoordinator_SubmitSample_Handler,
+		},
+		{
+			MethodName: "GetSourceStatus",
+			Handler:    _WeftCoordinator_GetSourceStatus_Handler,
 		},
 		{
 			MethodName: "Heartbeat",

@@ -359,6 +359,111 @@ func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 	return s, func() { remote.Close() }, nil
 }
 
+func runSourcePending(cfg *shell.Config) {
+	endpoint := cfg.Endpoint
+	if !strings.HasPrefix(endpoint, "http") {
+		fmt.Fprintln(os.Stderr, "source pending requires HTTP endpoint")
+		os.Exit(1)
+	}
+	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token)
+
+	var namespace string
+	args := os.Args[3:]
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--namespace" || args[i] == "-n" {
+			if i+1 < len(args) {
+				namespace = args[i+1]
+			}
+		}
+	}
+
+	sources, err := remote.ListPendingSources(namespace)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "list pending: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(sources) == 0 {
+		fmt.Println("No pending sources.")
+		return
+	}
+
+	fmt.Printf("%-20s %-15s %-20s %-15s %s\n", "APP", "NAMESPACE", "INSTANCE", "HOST_GROUP", "AGE")
+	for _, s := range sources {
+		fmt.Printf("%-20s %-15s %-20s %-15s %s\n", s.App, s.Namespace, s.Instance, s.HostGroup, s.CreatedAt)
+	}
+}
+
+func runSourceConfigure(cfg *shell.Config) {
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "usage: weft source configure <namespace>/<app>")
+		os.Exit(1)
+	}
+	endpoint := cfg.Endpoint
+	if !strings.HasPrefix(endpoint, "http") {
+		fmt.Fprintln(os.Stderr, "source configure requires HTTP endpoint")
+		os.Exit(1)
+	}
+	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token)
+
+	target := os.Args[3]
+	parts := strings.SplitN(target, "/", 2)
+	if len(parts) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: weft source configure <namespace>/<app>")
+		os.Exit(1)
+	}
+	namespace, app := parts[0], parts[1]
+
+	// Fetch the pending source to get sample + detection.
+	sources, err := remote.ListPendingSources(namespace)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "list pending: %v\n", err)
+		os.Exit(1)
+	}
+
+	var found *shell.PendingSource
+	for i := range sources {
+		if sources[i].Namespace == namespace && sources[i].App == app {
+			found = &sources[i]
+			break
+		}
+	}
+	if found == nil {
+		fmt.Fprintf(os.Stderr, "no pending source: %s/%s\n", namespace, app)
+		os.Exit(1)
+	}
+
+	// Parse sample lines from JSON.
+	var lines []string
+	if err := json.Unmarshal(found.Sample, &lines); err != nil {
+		fmt.Fprintf(os.Stderr, "parse sample: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Run the interactive setup wizard with the remote sample.
+	schema, err := shell.RunSetupFromLines(namespace+"/"+app, cfg.Customer, lines)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "setup: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Send the configuration to the coordinator.
+	config := map[string]any{
+		"format":           schema.Format,
+		"timestamp_field":  schema.TimestampField,
+		"timestamp_format": schema.TimestampFormat,
+		"level_field":      schema.LevelField,
+		"level_pattern":    schema.LevelPattern,
+		"expand_keys":      schema.ExpandKeys,
+	}
+	if err := remote.ConfigureSource(namespace, app, config); err != nil {
+		fmt.Fprintf(os.Stderr, "configure: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Source %s/%s configured.\n", namespace, app)
+}
+
 func dimText(s string) string {
 	return "\033[90m" + s + "\033[0m"
 }
@@ -520,6 +625,10 @@ func runSource() {
 		runSourceList(remote)
 	case "remove":
 		runSourceRemove(remote)
+	case "pending":
+		runSourcePending(cfg)
+	case "configure":
+		runSourceConfigure(cfg)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown source command: %s\n", os.Args[2])
 		os.Exit(1)

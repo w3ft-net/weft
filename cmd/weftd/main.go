@@ -37,8 +37,9 @@ type Config struct {
 }
 
 type SourceConfig struct {
-	Path    string        `yaml:"path"`            // file path or glob (file tailing)
-	Unit    string        `yaml:"unit,omitempty"`   // systemd unit name (journal tailing)
+	App     string        `yaml:"app,omitempty"`    // bare app name within namespace (e.g. "coordinator")
+	Path    string        `yaml:"path"`             // file path or glob (file tailing)
+	Unit    string        `yaml:"unit,omitempty"`    // systemd unit name (journal tailing)
 	Metrics MetricsConfig `yaml:"metrics,omitempty"` // optional system metrics collection
 }
 
@@ -139,21 +140,40 @@ func main() {
 	hostname, _ := os.Hostname()
 	globalHostGroup = cfg.HostGroup
 
-	// Start sources — all stream through the coordinator, never direct to shards.
-	// The namespace comes from the token; sub-app names come from filenames/units.
+	// Start sources — each independently onboards then streams.
 	for _, src := range cfg.Sources {
+		src := src // capture loop var
+
+		// Derive the app name for this source.
+		app := src.App
+		if app == "" && src.Unit != "" {
+			app = strings.TrimSuffix(src.Unit, ".service")
+		}
+		if app == "" && src.Path != "" {
+			// Derive from filename: /var/log/weft/coordinator.log → coordinator
+			base := filepath.Base(src.Path)
+			app = strings.TrimSuffix(base, filepath.Ext(base))
+		}
+		fullApp := namespace + "/" + app
+
 		if src.Unit != "" {
-			// Derive sub-app from unit name: "coordinator.service" → "weft/coordinator"
-			unitApp := strings.TrimSuffix(src.Unit, ".service")
-			app := namespace + "/" + unitApp
-			go runJournalTailer(ctx, coordClient, customer, hostname, app, src.Unit)
-			log.Printf("[%s] tailing journal unit %s", app, src.Unit)
+			go func() {
+				if err := onboardAndRun(ctx, coordClient, cfg.Token, app, src.Path, hostname, fullApp, func() {
+					runJournalTailer(ctx, coordClient, customer, hostname, fullApp, src.Unit)
+				}); err != nil {
+					log.Printf("[%s] onboard failed: %v", fullApp, err)
+				}
+			}()
 		} else if src.Path != "" {
-			// File tailer: sub-app derived from each filename at tail time.
-			go watchGlob(ctx, coordClient, customer, hostname, namespace, src.Path)
+			go func() {
+				if err := onboardAndRun(ctx, coordClient, cfg.Token, app, src.Path, hostname, fullApp, func() {
+					watchGlob(ctx, coordClient, customer, hostname, namespace, src.Path)
+				}); err != nil {
+					log.Printf("[%s] onboard failed: %v", fullApp, err)
+				}
+			}()
 		}
 		if src.Metrics.Enabled {
-			// Metrics tagged as namespace/metrics (e.g., "weft.metrics" via the metrics suffix).
 			go runMetricsCollector(ctx, coordClient, customer, hostname, namespace, src.Metrics)
 		}
 	}
@@ -176,6 +196,37 @@ func main() {
 	<-sig
 	log.Println("shutting down")
 	cancel()
+}
+
+// onboardAndRun checks if a source is already configured. If so, runs the
+// tailer immediately. If not, submits a sample and polls until configured.
+func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, app, path, hostname, fullApp string, run func()) error {
+	// Check if already configured.
+	status, err := weftd.CheckSourceStatus(ctx, client, token, app)
+	if err != nil {
+		log.Printf("[%s] status check failed: %v — proceeding to sample", fullApp, err)
+	} else if status.Status == "configured" {
+		log.Printf("[%s] already configured — starting", fullApp)
+		run()
+		return nil
+	}
+
+	// Submit sample.
+	log.Printf("[%s] new source — sampling %s", fullApp, path)
+	if err := weftd.SubmitSample(ctx, client, token, app, path, hostname, globalHostGroup); err != nil {
+		return err
+	}
+	log.Printf("[%s] sample submitted — waiting for configuration", fullApp)
+
+	// Poll until configured.
+	schemaYAML, err := weftd.WaitForConfiguration(ctx, client, token, app)
+	if err != nil {
+		return err
+	}
+	_ = schemaYAML // TODO: apply schema to parser when weftd gains client-side parsing
+	log.Printf("[%s] configured — starting", fullApp)
+	run()
+	return nil
 }
 
 // openStream opens an IngestStream to the coordinator with retry.

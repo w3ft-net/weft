@@ -86,3 +86,12 @@ func (s *Schema) Save(path string) error {
 	}
 	return os.WriteFile(path, data, 0644)
 }
+
+// ToYAML returns the schema as a YAML string.
+func (s *Schema) ToYAML() (string, error) {
+	data, err := yaml.Marshal(s)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}

@@ -275,6 +275,65 @@ func parseSSEResponse(r io.Reader) (*RemoteQueryResult, error) {
 	return result, nil
 }
 
+// PendingSource represents a source awaiting schema configuration.
+type PendingSource struct {
+	App       string          `json:"app"`
+	Namespace string          `json:"namespace"`
+	Instance  string          `json:"instance"`
+	HostGroup string          `json:"host_group"`
+	Sample    json.RawMessage `json:"sample"`
+	Detection json.RawMessage `json:"detection"`
+	CreatedAt string          `json:"created_at"`
+}
+
+// ListPendingSources returns all pending sources for the authenticated customer.
+func (h *HTTPCoordinator) ListPendingSources(namespace string) ([]PendingSource, error) {
+	url := h.baseURL + "/api/sources/pending"
+	if namespace != "" {
+		url += "?namespace=" + namespace
+	}
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("Authorization", "Bearer "+h.token)
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var sources []PendingSource
+	if err := json.NewDecoder(resp.Body).Decode(&sources); err != nil {
+		return nil, err
+	}
+	return sources, nil
+}
+
+// ConfigureSource confirms the schema for a pending source.
+func (h *HTTPCoordinator) ConfigureSource(namespace, app string, config map[string]any) error {
+	body, _ := json.Marshal(config)
+	url := fmt.Sprintf("%s/api/sources/%s/%s/configure", h.baseURL, namespace, app)
+	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+h.token)
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	return nil
+}
+
 func mapToResultRow(m map[string]any) *pb.ResultRow {
 	row := &pb.ResultRow{}
 	if v, ok := m["raw"].(string); ok {

@@ -180,6 +180,10 @@ service WeftCoordinator {
   rpc DeleteWatch(DeleteWatchRequest) returns (DeleteWatchResponse);
   rpc GetWatchResults(GetWatchResultsRequest) returns (GetWatchResultsResponse);
 
+  // Source onboarding — weftd submits samples and polls for schema config.
+  rpc SubmitSample(SubmitSampleRequest) returns (SubmitSampleResponse);
+  rpc GetSourceStatus(GetSourceStatusRequest) returns (GetSourceStatusResponse);
+
   // Shard heartbeat — shards push their state to the coordinator every 60s.
   rpc Heartbeat(ShardHeartbeatRequest) returns (HeartbeatResponse);
 }
@@ -408,4 +412,31 @@ message ShardHealth {
   int64 row_count = 4;
   int64 disk_bytes = 5;
   string last_write = 6;     // RFC3339
+}
+
+// ---------------------------------------------------------------------------
+// Source onboarding — weftd submits samples and polls for schema config.
+// Customer and namespace are derived from the agent token on the server side.
+// ---------------------------------------------------------------------------
+
+message SubmitSampleRequest {
+  string token = 1;             // agent token (wft_...) for auth
+  string app = 2;               // bare app name within namespace
+  string instance = 3;          // hostname of agent
+  string host_group = 4;        // logical group
+  repeated string lines = 5;    // sample log lines
+}
+
+message SubmitSampleResponse {
+  string status = 1; // "pending"
+}
+
+message GetSourceStatusRequest {
+  string token = 1; // agent token (wft_...) for auth
+  string app = 2;   // bare app name within namespace
+}
+
+message GetSourceStatusResponse {
+  string status = 1;       // "unknown", "pending", "configured"
+  string schema_yaml = 2;  // populated when status = "configured"
 }

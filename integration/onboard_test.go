@@ -1,0 +1,264 @@
+//go:build integration
+
+package integration
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/kevlarcon/weft/api"
+	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/store"
+)
+
+const (
+	onboardCoordAddr = "localhost:9020"
+	onboardAPIAddr   = "http://localhost:8080"
+	jwtSecret        = "dev-secret"
+)
+
+// TestOnboardFlow exercises the full weftd schema onboarding lifecycle:
+//
+//  1. weftd starts, reads /var/log/testapp.log, authenticates, checks source status
+//  2. Source is unknown → weftd submits a sample via gRPC SubmitSample
+//  3. Source status becomes "pending"
+//  4. Test (acting as human reviewer) configures the source via HTTP API
+//  5. Source status becomes "configured" with schema YAML
+//  6. weftd starts streaming → data becomes queryable
+func TestOnboardFlow(t *testing.T) {
+	conn, client := onboardGRPCClient(t)
+	defer conn.Close()
+
+	// ── Phase 1: Wait for weftd to submit its sample ──────────────
+	//
+	// weftd is running in Docker, tailing /var/log/testapp.log with app=testapp.
+	// On startup it calls GetSourceStatus (unknown) → SubmitSample → status becomes pending.
+	// We poll GetSourceStatus from outside using the same dev token.
+
+	t.Log("waiting for weftd to submit sample...")
+	var pendingStatus string
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := client.GetSourceStatus(context.Background(), &pb.GetSourceStatusRequest{
+			Token: "wft_dev_0000000000000000",
+			App:   "testapp",
+		})
+		if err != nil {
+			t.Logf("  GetSourceStatus: %v (retrying)", err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		pendingStatus = resp.Status
+		if pendingStatus == "pending" {
+			t.Log("  sample submitted — source is pending")
+			break
+		}
+		if pendingStatus == "configured" {
+			t.Log("  source already configured (previous test run?) — skipping to query verification")
+			break
+		}
+		t.Logf("  status: %s (waiting for pending)", pendingStatus)
+		time.Sleep(2 * time.Second)
+	}
+	if pendingStatus != "pending" && pendingStatus != "configured" {
+		t.Fatalf("timed out waiting for weftd to submit sample — last status: %q", pendingStatus)
+	}
+
+	// ── Phase 2: Verify pending source via HTTP API ───────────────
+
+	jwt := generateDevJWT(t)
+
+	if pendingStatus == "pending" {
+		t.Log("verifying pending source via HTTP API...")
+		sources := listPendingSources(t, jwt)
+		found := false
+		for _, s := range sources {
+			if s.App == "testapp" && s.Namespace == "kevlar" {
+				found = true
+				t.Logf("  found pending source: app=%s namespace=%s instance=%s", s.App, s.Namespace, s.Instance)
+
+				// Verify the sample contains actual log lines.
+				var lines []string
+				if err := json.Unmarshal(s.Sample, &lines); err != nil {
+					t.Fatalf("parse sample: %v", err)
+				}
+				if len(lines) == 0 {
+					t.Fatal("sample has 0 lines")
+				}
+				t.Logf("  sample has %d lines, first: %q", len(lines), lines[0])
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("testapp not found in pending sources: %+v", sources)
+		}
+
+		// ── Phase 3: Configure the source ─────────────────────────
+
+		t.Log("configuring source via HTTP API...")
+		configureSource(t, jwt, "kevlar", "testapp", map[string]any{
+			"format":           "text",
+			"timestamp_field":  "0",
+			"timestamp_format": "2006-01-02 15:04:05",
+			"level_field":      "2",
+		})
+		t.Log("  source configured")
+	}
+
+	// ── Phase 4: Verify source is now configured via gRPC ─────────
+
+	t.Log("verifying source is configured via gRPC...")
+	resp, err := client.GetSourceStatus(context.Background(), &pb.GetSourceStatusRequest{
+		Token: "wft_dev_0000000000000000",
+		App:   "testapp",
+	})
+	if err != nil {
+		t.Fatalf("GetSourceStatus after configure: %v", err)
+	}
+	if resp.Status != "configured" {
+		t.Fatalf("expected status=configured, got %q", resp.Status)
+	}
+	if resp.SchemaYaml == "" {
+		t.Fatal("configured status but empty schema YAML")
+	}
+	t.Logf("  schema YAML present (%d bytes)", len(resp.SchemaYaml))
+
+	// ── Phase 5: Wait for data to flow and become queryable ───────
+
+	t.Log("waiting for data to flow through weftd → coordinator → shard...")
+	var rows []*pb.CoordinatorQueryResponse
+	deadline = time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(3 * time.Second)
+		stream, err := client.Query(context.Background(), &pb.CoordinatorQueryRequest{
+			Pipeline: "cat /log/kevlar/testapp.log",
+			Customer: "kevlar",
+		})
+		if err != nil {
+			t.Logf("  query error: %v (retrying)", err)
+			continue
+		}
+		rows = nil
+		for {
+			row, err := stream.Recv()
+			if err != nil {
+				break
+			}
+			rows = append(rows, row)
+		}
+		if len(rows) > 0 {
+			t.Logf("  got %d rows", len(rows))
+			break
+		}
+		t.Log("  0 rows (retrying)")
+	}
+	if len(rows) == 0 {
+		t.Fatal("timed out waiting for queryable data — weftd may not have started streaming after configuration")
+	}
+
+	// Verify content looks right.
+	foundStart := false
+	foundError := false
+	for _, r := range rows {
+		if strings.Contains(r.Raw, "starting application") {
+			foundStart = true
+		}
+		if strings.Contains(r.Raw, "ERROR") {
+			foundError = true
+		}
+	}
+	if !foundStart {
+		t.Error("expected a row containing 'starting application'")
+	}
+	if !foundError {
+		t.Error("expected a row containing 'ERROR'")
+	}
+	t.Logf("onboard flow complete: %d rows queryable, content verified", len(rows))
+}
+
+// ── Helpers ──────────────────────────────────────────────────────
+
+func onboardGRPCClient(t *testing.T) (*grpc.ClientConn, pb.WeftCoordinatorClient) {
+	t.Helper()
+	conn, err := grpc.NewClient(onboardCoordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("connect to coordinator: %v", err)
+	}
+	return conn, pb.NewWeftCoordinatorClient(conn)
+}
+
+func generateDevJWT(t *testing.T) string {
+	t.Helper()
+	user := &store.User{
+		ID:    "dev-user",
+		Email: "dev@test.local",
+	}
+	user.CustomerName = "kevlar"
+	token, err := api.GenerateJWT(user, "dev", jwtSecret)
+	if err != nil {
+		t.Fatalf("generate JWT: %v", err)
+	}
+	return token
+}
+
+type pendingSourceResp struct {
+	App       string          `json:"app"`
+	Namespace string          `json:"namespace"`
+	Instance  string          `json:"instance"`
+	HostGroup string          `json:"host_group"`
+	Sample    json.RawMessage `json:"sample"`
+	Detection json.RawMessage `json:"detection"`
+	CreatedAt string          `json:"created_at"`
+}
+
+func listPendingSources(t *testing.T, jwt string) []pendingSourceResp {
+	t.Helper()
+	req, _ := http.NewRequest("GET", onboardAPIAddr+"/api/sources/pending", nil)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("list pending: HTTP %d: %s", resp.StatusCode, body)
+	}
+
+	var sources []pendingSourceResp
+	if err := json.NewDecoder(resp.Body).Decode(&sources); err != nil {
+		t.Fatalf("decode pending: %v", err)
+	}
+	return sources
+}
+
+func configureSource(t *testing.T, jwt, namespace, app string, config map[string]any) {
+	t.Helper()
+	body, _ := json.Marshal(config)
+	url := fmt.Sprintf("%s/api/sources/%s/%s/configure", onboardAPIAddr, namespace, app)
+	req, _ := http.NewRequest("POST", url, strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+jwt)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("configure source: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("configure source: HTTP %d: %s", resp.StatusCode, respBody)
+	}
+}

@@ -98,6 +98,7 @@ services:
       - --config=/etc/weftd/config.yaml
     volumes:
       - ./dev/weftd-config.yaml:/etc/weftd/config.yaml:ro
+      - ./dev/testapp.log:/var/log/testapp.log:ro
     depends_on:
       coordinator:
         condition: service_started
