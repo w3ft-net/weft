@@ -74,13 +74,21 @@ func (e *ShardEntry) hasApp(app string) bool {
 	return false
 }
 
+// RegistryStore is the subset of *store.Store that ShardRegistry needs.
+// Extracted so tests can swap in an in-memory fake instead of postgres.
+type RegistryStore interface {
+	SaveShard(rec *store.ShardRecord) error
+	DeleteShard(id string) error
+	ListShards() ([]store.ShardRecord, error)
+}
+
 // ShardRegistry tracks all shard entries. Thread-safe.
-// If a Store is set, mutations are persisted to SQLite.
+// If a Store is set, mutations are persisted.
 type ShardRegistry struct {
 	mu      sync.RWMutex
 	entries map[string]*ShardEntry
-	robin   atomic.Uint64              // round-robin counter for write distribution
-	store   *store.Store         // optional persistence (nil in tests)
+	robin   atomic.Uint64 // round-robin counter for write distribution
+	store   RegistryStore // optional persistence (nil in tests)
 }
 
 // NewShardRegistry creates an empty registry.
@@ -90,9 +98,10 @@ func NewShardRegistry() *ShardRegistry {
 	}
 }
 
-// SetStore enables persistence to SQLite.
-func (r *ShardRegistry) SetStore(store *store.Store) {
-	r.store = store
+// SetStore enables persistence. Accepts *store.Store in production and
+// an in-memory RegistryStore in tests.
+func (r *ShardRegistry) SetStore(s RegistryStore) {
+	r.store = s
 }
 
 // Add registers a shard entry and persists it.
