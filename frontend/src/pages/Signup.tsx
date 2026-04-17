@@ -15,7 +15,6 @@ export default function Signup() {
   const navigate = useNavigate()
   const { loginWithToken } = useAuth()
 
-  const cancelled = searchParams.get('cancelled') === '1'
   const tierParam = searchParams.get('tier') || 'swatch'
   const tier = tierParam in TIER_LABELS ? tierParam : 'swatch'
 
@@ -32,35 +31,11 @@ export default function Signup() {
     try {
       const resp = await signup(email.trim(), orgName.trim(), tier)
       await loginWithToken(resp.token)
-      window.location.href = resp.checkout_url
+      navigate(`/signup/payment?tier=${encodeURIComponent(resp.tier)}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong.')
       setLoading(false)
     }
-  }
-
-  if (cancelled) {
-    return (
-      <div className="login-page">
-        <div className="login-card">
-          <div className="login-logo">weft</div>
-          <div className="login-tagline">log analysis for operators</div>
-          <div className="signup-cancelled" data-testid="signup-cancelled-message">
-            <p>Checkout was cancelled. Your trial account has been created — you can add payment later from Account settings.</p>
-            <button
-              className="login-submit"
-              data-testid="signup-continue-button"
-              onClick={() => navigate('/dashboard')}
-            >
-              Continue to dashboard
-            </button>
-          </div>
-          <Link to="/" className="login-back" data-testid="signup-back-link">
-            ← Back to home
-          </Link>
-        </div>
-      </div>
-    )
   }
 
   return (

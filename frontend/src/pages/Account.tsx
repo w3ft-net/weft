@@ -1,13 +1,28 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, type FormEvent } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { loadStripe, type Stripe } from '@stripe/stripe-js'
+import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js'
 import SidebarNav from '../components/SidebarNav'
 import {
-  getUsage, createCheckout,
+  getUsage, changeSubscription,
   getTeam, inviteMember, removeMember, updateTeamName,
   getIntegrations, connectSlack, disconnectSlack, savePagerDutyKey, disconnectPagerDuty,
   type Usage, type TeamResponse, type IntegrationsResponse,
 } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import './Dashboard.css'
+
+const ELEMENTS_APPEARANCE = {
+  theme: 'night' as const,
+  variables: {
+    colorPrimary: '#c9a96e',
+    colorBackground: '#141414',
+    colorText: '#e8e6e3',
+    colorDanger: '#d4635a',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    borderRadius: '4px',
+  },
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -30,17 +45,88 @@ const PLANS = [
   { tier: 'bolt', name: 'Bolt', price: 299, volume: '1 TB/mo', retention: '1 year', overage: '$0.50/GB' },
 ]
 
+// ── Upgrade confirmation (Stripe Elements) ─────────────────────────────────
+
+function ConfirmForm({ onDone }: { onDone: (err?: string) => void }) {
+  const stripe = useStripe()
+  const elements = useElements()
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (!stripe || !elements) return
+    setSubmitting(true)
+    setError('')
+    const result = await stripe.confirmPayment({
+      elements,
+      confirmParams: { return_url: `${window.location.origin}/account` },
+      redirect: 'if_required',
+    })
+    if (result.error) {
+      setError(result.error.message ?? 'Payment failed.')
+      setSubmitting(false)
+      return
+    }
+    onDone()
+  }
+
+  return (
+    <form onSubmit={handleSubmit} data-testid="account-confirm-payment-form">
+      <PaymentElement options={{ layout: 'tabs' }} />
+      {error && <div className="login-error" data-testid="account-confirm-error">{error}</div>}
+      <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+        <button
+          type="submit"
+          className="btn-action btn-action-primary"
+          disabled={!stripe || submitting}
+          data-testid="account-confirm-submit-button"
+        >
+          {submitting ? 'Confirming...' : 'Confirm payment'}
+        </button>
+        <button
+          type="button"
+          className="btn-action"
+          onClick={() => onDone('cancelled')}
+          data-testid="account-confirm-cancel-button"
+        >
+          Cancel
+        </button>
+      </div>
+    </form>
+  )
+}
+
 // ── Subscription Card ──────────────────────────────────────────────────────
 
-function SubscriptionCard({ usage }: { usage: Usage | null }) {
+function SubscriptionCard({ usage, onRefresh }: { usage: Usage | null; onRefresh: () => void }) {
+  const navigate = useNavigate()
   const [upgrading, setUpgrading] = useState<string | null>(null)
+  const [confirm, setConfirm] = useState<{ stripePromise: Promise<Stripe | null>; clientSecret: string } | null>(null)
+  const [error, setError] = useState('')
 
   async function handleUpgrade(tier: string) {
+    setError('')
+    const currentTier = usage?.tier?.toLowerCase() || 'trial'
+    // Trial users who never completed card entry go through signup/payment.
+    if (currentTier === 'trial') {
+      navigate(`/signup/payment?tier=${encodeURIComponent(tier)}`)
+      return
+    }
     setUpgrading(tier)
     try {
-      const { url } = await createCheckout(tier)
-      window.location.href = url
-    } catch {
+      const resp = await changeSubscription(tier)
+      if (resp.requires_action && resp.client_secret && resp.publishable_key) {
+        setConfirm({
+          stripePromise: loadStripe(resp.publishable_key),
+          clientSecret: resp.client_secret,
+        })
+      } else {
+        onRefresh()
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Upgrade failed.')
+    } finally {
       setUpgrading(null)
     }
   }
@@ -63,6 +149,26 @@ function SubscriptionCard({ usage }: { usage: Usage | null }) {
       {isTrial && (
         <div className="trial-banner" data-testid="account-trial-banner">
           You're on a free trial. Choose a plan below to continue after the trial ends.
+        </div>
+      )}
+
+      {error && (
+        <div className="login-error" data-testid="account-subscription-error" style={{ marginBottom: 12 }}>
+          {error}
+        </div>
+      )}
+
+      {confirm && (
+        <div className="dash-card" style={{ marginBottom: 16, borderColor: 'var(--accent)' }} data-testid="account-confirm-modal">
+          <div className="dash-card-header">
+            <h3 className="dash-card-title">Confirm payment</h3>
+          </div>
+          <Elements stripe={confirm.stripePromise} options={{ clientSecret: confirm.clientSecret, appearance: ELEMENTS_APPEARANCE }}>
+            <ConfirmForm onDone={(err) => {
+              setConfirm(null)
+              if (!err) onRefresh()
+            }} />
+          </Elements>
         </div>
       )}
 
@@ -532,7 +638,7 @@ export default function Account() {
             {user && <div className="dash-empty" style={{ marginTop: 4 }}>{user.email}</div>}
           </div>
 
-          <SubscriptionCard usage={usage} />
+          <SubscriptionCard usage={usage} onRefresh={loadData} />
           <IntegrationsCard integrations={integrations} onRefresh={loadData} />
           <TeamCard team={team} onRefresh={loadData} currentEmail={user?.email ?? ''} />
         </div>

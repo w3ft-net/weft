@@ -12,7 +12,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stripe/stripe-go/v82"
-	"github.com/stripe/stripe-go/v82/checkout/session"
+	"github.com/stripe/stripe-go/v82/customer"
+	"github.com/stripe/stripe-go/v82/subscription"
 	"github.com/stripe/stripe-go/v82/webhook"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -34,9 +35,10 @@ type Server struct {
 	coordClient pb.WeftCoordinatorClient
 
 	// Stripe config
-	StripeSecretKey    string
-	StripeWebhookSecret string
-	StripePrices       map[string]string // tier → Stripe price ID
+	StripeSecretKey      string
+	StripePublishableKey string
+	StripeWebhookSecret  string
+	StripePrices         map[string]string // tier → Stripe price ID
 
 	// Slack OAuth config
 	SlackClientID     string
@@ -99,6 +101,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/auth/me", s.handleMe)
 	auth.HandleFunc("POST /api/auth/device/approve", s.handleDeviceApprove)
 	auth.HandleFunc("POST /api/billing/checkout", s.handleCheckout)
+	auth.HandleFunc("POST /api/billing/setup-intent", s.handleSetupIntent)
 	auth.HandleFunc("GET /api/billing/usage", s.handleUsage)
 	auth.HandleFunc("GET /api/queries", s.handleListQueries)
 	auth.HandleFunc("POST /api/queries", s.handleCreateQuery)
@@ -152,6 +155,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/auth/me", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/auth/device/approve", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/billing/checkout", AuthMiddleware(s.jwtSecret, auth))
+	mux.Handle("/api/billing/setup-intent", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/billing/usage", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/queries", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/queries/", AuthMiddleware(s.jwtSecret, auth))
@@ -215,8 +219,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	priceID, ok := s.StripePrices[req.Tier]
-	if !ok {
+	if _, ok := s.StripePrices[req.Tier]; !ok {
 		http.Error(w, "invalid tier", http.StatusBadRequest)
 		return
 	}
@@ -274,35 +277,9 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create Stripe Checkout session with trial.
-	stripe.Key = s.StripeSecretKey
-	params := &stripe.CheckoutSessionParams{
-		Mode: stripe.String(string(stripe.CheckoutSessionModeSubscription)),
-		LineItems: []*stripe.CheckoutSessionLineItemParams{
-			{Price: stripe.String(priceID), Quantity: stripe.Int64(1)},
-		},
-		SubscriptionData: &stripe.CheckoutSessionSubscriptionDataParams{
-			TrialPeriodDays: stripe.Int64(14),
-		},
-		SuccessURL:        stripe.String(s.baseURL + "/dashboard?welcome=1"),
-		CancelURL:         stripe.String(s.baseURL + "/signup?cancelled=1"),
-		ClientReferenceID: stripe.String(user.ID),
-		CustomerEmail:     stripe.String(req.Email),
-	}
-	params.AddMetadata("tier", req.Tier)
-	params.AddMetadata("user_id", user.ID)
-	params.AddMetadata("customer", customerName)
-
-	sess, err := session.New(params)
-	if err != nil {
-		log.Printf("Stripe checkout error during signup: %v", err)
-		http.Error(w, "failed to create checkout session", http.StatusInternalServerError)
-		return
-	}
-
 	json.NewEncoder(w).Encode(map[string]any{
-		"token":        jwt,
-		"checkout_url": sess.URL,
+		"token": jwt,
+		"tier":  req.Tier,
 		"user": map[string]any{
 			"id":       user.ID,
 			"email":    user.Email,
@@ -454,6 +431,133 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 
 // --- Billing handlers ---
 
+// ensureStripeCustomer returns the Stripe customer ID for a user, creating one
+// on Stripe if the user doesn't have one yet.
+func (s *Server) ensureStripeCustomer(u *store.User, customerName string) (string, error) {
+	if u.StripeCustomerID != "" {
+		return u.StripeCustomerID, nil
+	}
+	cust, err := customer.New(&stripe.CustomerParams{
+		Email: stripe.String(u.Email),
+		Metadata: map[string]string{
+			"user_id":  u.ID,
+			"customer": customerName,
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if err := s.store.UpdateUserStripeCustomer(u.ID, cust.ID); err != nil {
+		return "", err
+	}
+	return cust.ID, nil
+}
+
+// handleSetupIntent creates (or reuses) a Stripe Subscription in trialing
+// state with payment_behavior=default_incomplete and returns the
+// pending_setup_intent's client_secret. The frontend mounts Elements against
+// that client_secret and calls stripe.confirmSetup() to collect card details.
+func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		Tier string `json:"tier"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "tier required", http.StatusBadRequest)
+		return
+	}
+	priceID, ok := s.StripePrices[req.Tier]
+	if !ok {
+		http.Error(w, "invalid tier", http.StatusBadRequest)
+		return
+	}
+
+	user, err := s.store.GetUserByID(claims.UserID)
+	if err != nil {
+		http.Error(w, "user not found", http.StatusNotFound)
+		return
+	}
+
+	stripe.Key = s.StripeSecretKey
+
+	custID, err := s.ensureStripeCustomer(user, claims.CustomerName)
+	if err != nil {
+		log.Printf("stripe customer create failed: %v", err)
+		http.Error(w, "billing setup failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Reuse an existing trialing Stripe subscription if the trial row already
+	// has one attached (handles page refresh / retries idempotently).
+	if trial, _ := s.store.ActiveSubscription(claims.CustomerName); trial != nil && trial.StripeSubscriptionID != "" {
+		getParams := &stripe.SubscriptionParams{}
+		getParams.AddExpand("pending_setup_intent")
+		sub, err := subscription.Get(trial.StripeSubscriptionID, getParams)
+		if err == nil && sub.PendingSetupIntent != nil && sub.PendingSetupIntent.ClientSecret != "" {
+			json.NewEncoder(w).Encode(map[string]string{
+				"client_secret":   sub.PendingSetupIntent.ClientSecret,
+				"publishable_key": s.StripePublishableKey,
+			})
+			return
+		}
+	}
+
+	params := &stripe.SubscriptionParams{
+		Customer: stripe.String(custID),
+		Items: []*stripe.SubscriptionItemsParams{
+			{Price: stripe.String(priceID), Quantity: stripe.Int64(1)},
+		},
+		TrialPeriodDays: stripe.Int64(14),
+		PaymentBehavior: stripe.String("default_incomplete"),
+		PaymentSettings: &stripe.SubscriptionPaymentSettingsParams{
+			SaveDefaultPaymentMethod: stripe.String(string(stripe.SubscriptionPaymentSettingsSaveDefaultPaymentMethodOnSubscription)),
+		},
+		TrialSettings: &stripe.SubscriptionTrialSettingsParams{
+			EndBehavior: &stripe.SubscriptionTrialSettingsEndBehaviorParams{
+				MissingPaymentMethod: stripe.String(string(stripe.SubscriptionTrialSettingsEndBehaviorMissingPaymentMethodCancel)),
+			},
+		},
+		Metadata: map[string]string{
+			"user_id":  user.ID,
+			"customer": claims.CustomerName,
+			"tier":     req.Tier,
+		},
+	}
+	params.AddExpand("pending_setup_intent")
+
+	sub, err := subscription.New(params)
+	if err != nil {
+		log.Printf("stripe subscription create failed: %v", err)
+		http.Error(w, "billing setup failed", http.StatusInternalServerError)
+		return
+	}
+	if sub.PendingSetupIntent == nil || sub.PendingSetupIntent.ClientSecret == "" {
+		log.Printf("stripe subscription missing pending_setup_intent: id=%s", sub.ID)
+		http.Error(w, "billing setup failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Attach the Stripe subscription ID to our local trial row so refresh
+	// reuses the same subscription and the webhook can promote it on confirm.
+	if trial, _ := s.store.ActiveSubscription(claims.CustomerName); trial != nil {
+		_ = s.store.AttachStripeSubscription(trial.ID, sub.ID)
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{
+		"client_secret":   sub.PendingSetupIntent.ClientSecret,
+		"publishable_key": s.StripePublishableKey,
+	})
+}
+
+// handleCheckout handles tier changes for an existing paid subscription.
+// It updates the Stripe subscription with the new price and returns either
+// {status: "active"} if no confirmation is needed, or a client_secret for the
+// latest invoice's PaymentIntent so the frontend can confirm inline.
 func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
 	if claims == nil {
@@ -468,7 +572,6 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tier required", http.StatusBadRequest)
 		return
 	}
-
 	priceID, ok := s.StripePrices[req.Tier]
 	if !ok {
 		http.Error(w, "invalid tier", http.StatusBadRequest)
@@ -477,34 +580,61 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 
 	stripe.Key = s.StripeSecretKey
 
-	params := &stripe.CheckoutSessionParams{
-		Mode: stripe.String(string(stripe.CheckoutSessionModeSubscription)),
-		LineItems: []*stripe.CheckoutSessionLineItemParams{
-			{Price: stripe.String(priceID), Quantity: stripe.Int64(1)},
-		},
-		SuccessURL:        stripe.String(s.baseURL + "/account?checkout=success"),
-		CancelURL:         stripe.String(s.baseURL + "/account?checkout=cancel"),
-		ClientReferenceID: stripe.String(claims.UserID),
-		CustomerEmail:     stripe.String(claims.Email),
-	}
-	// If the user already has a Stripe customer, use it.
-	user, err := s.store.GetUserByID(claims.UserID)
-	if err == nil && user.StripeCustomerID != "" {
-		params.Customer = stripe.String(user.StripeCustomerID)
-		params.CustomerEmail = nil // can't set both
-	}
-	params.AddMetadata("tier", req.Tier)
-	params.AddMetadata("user_id", claims.UserID)
-	params.AddMetadata("customer", claims.CustomerName)
-
-	sess, err := session.New(params)
-	if err != nil {
-		log.Printf("Stripe checkout error: %v", err)
-		http.Error(w, "failed to create checkout session", http.StatusInternalServerError)
+	currentSub, _ := s.store.ActiveSubscription(claims.CustomerName)
+	if currentSub == nil || currentSub.StripeSubscriptionID == "" {
+		http.Error(w, "no active stripe subscription; complete signup first", http.StatusBadRequest)
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]string{"url": sess.URL})
+	// Fetch the existing subscription so we can replace the single item in place.
+	existing, err := subscription.Get(currentSub.StripeSubscriptionID, nil)
+	if err != nil {
+		log.Printf("stripe subscription lookup failed: %v", err)
+		http.Error(w, "billing update failed", http.StatusInternalServerError)
+		return
+	}
+	if len(existing.Items.Data) == 0 {
+		http.Error(w, "subscription has no items", http.StatusInternalServerError)
+		return
+	}
+
+	updateParams := &stripe.SubscriptionParams{
+		Items: []*stripe.SubscriptionItemsParams{{
+			ID:    stripe.String(existing.Items.Data[0].ID),
+			Price: stripe.String(priceID),
+		}},
+		ProrationBehavior: stripe.String("create_prorations"),
+		PaymentBehavior:   stripe.String("default_incomplete"),
+		Metadata: map[string]string{
+			"tier":     req.Tier,
+			"user_id":  claims.UserID,
+			"customer": claims.CustomerName,
+		},
+	}
+	updateParams.AddExpand("latest_invoice.confirmation_secret")
+
+	updated, err := subscription.Update(currentSub.StripeSubscriptionID, updateParams)
+	if err != nil {
+		log.Printf("stripe subscription update failed: %v", err)
+		http.Error(w, "billing update failed", http.StatusInternalServerError)
+		return
+	}
+
+	// If the invoice needs a confirmation (3DS or first charge), return its
+	// client_secret so the frontend can call stripe.confirmPayment().
+	if updated.LatestInvoice != nil && updated.LatestInvoice.ConfirmationSecret != nil {
+		cs := updated.LatestInvoice.ConfirmationSecret.ClientSecret
+		if cs != "" {
+			json.NewEncoder(w).Encode(map[string]any{
+				"requires_action": true,
+				"client_secret":   cs,
+				"publishable_key": s.StripePublishableKey,
+			})
+			return
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{"status": "active"})
 }
 
 func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
@@ -522,36 +652,42 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch event.Type {
-	case "checkout.session.completed":
-		var sess stripe.CheckoutSession
-		if err := json.Unmarshal(event.Data.Raw, &sess); err != nil {
+	case "customer.subscription.updated":
+		// Covers trial→active and tier changes. Promote the local row to the
+		// tier recorded in metadata, clearing any trial expiry.
+		var sub stripe.Subscription
+		if err := json.Unmarshal(event.Data.Raw, &sub); err != nil {
 			log.Printf("Stripe webhook unmarshal error: %v", err)
 			break
 		}
-		userID := sess.Metadata["user_id"]
-		tier := sess.Metadata["tier"]
-		customerName := sess.Metadata["customer"]
-		if userID != "" && tier != "" {
-			// Store Stripe customer ID on the user.
-			if sess.Customer != nil {
-				_ = s.store.UpdateUserStripeCustomer(userID, sess.Customer.ID)
+		if s.store == nil {
+			break
+		}
+		tier := sub.Metadata["tier"]
+		// Only promote once the subscription is actually paying (not trialing
+		// without a PM, and not past_due).
+		if tier != "" && (sub.Status == stripe.SubscriptionStatusActive || sub.Status == stripe.SubscriptionStatusTrialing) {
+			if err := s.store.PromoteSubscriptionTier(sub.ID, tier); err != nil {
+				log.Printf("failed to promote subscription %s: %v", sub.ID, err)
+			} else {
+				log.Printf("subscription promoted: stripe_sub=%s tier=%s status=%s", sub.ID, tier, sub.Status)
 			}
-			// Create a new active subscription.
-			if s.store != nil && customerName != "" {
-				subID := ""
-				if sess.Subscription != nil {
-					subID = sess.Subscription.ID
-				}
-				_ = s.store.CreateSubscription(&store.Subscription{
-					ID:                   uuid.New().String(),
-					CustomerID:           customerName,
-					Tier:                 tier,
-					Status:               "active",
-					StartsAt:             time.Now(),
-					StripeSubscriptionID: subID,
-				})
-				log.Printf("subscription activated: customer=%s tier=%s", customerName, tier)
-			}
+		}
+
+	case "invoice.payment_failed":
+		// Mark the local subscription past_due so the UI can prompt for a new card.
+		var inv stripe.Invoice
+		if err := json.Unmarshal(event.Data.Raw, &inv); err != nil {
+			log.Printf("Stripe webhook unmarshal error: %v", err)
+			break
+		}
+		if s.store == nil || inv.Parent == nil || inv.Parent.SubscriptionDetails == nil {
+			break
+		}
+		if inv.Parent.SubscriptionDetails.Subscription != nil {
+			subID := inv.Parent.SubscriptionDetails.Subscription.ID
+			_ = s.store.SetSubscriptionStatus(subID, "past_due")
+			log.Printf("subscription payment failed: stripe_sub=%s", subID)
 		}
 
 	case "customer.subscription.deleted":

@@ -55,6 +55,7 @@ func main() {
 		srv.StripePrices["bolt"] = p
 	}
 	srv.StripeSecretKey = os.Getenv("STRIPE_SECRET_KEY")
+	srv.StripePublishableKey = os.Getenv("STRIPE_PUBLISHABLE_KEY")
 	srv.StripeWebhookSecret = os.Getenv("STRIPE_WEBHOOK_SECRET")
 	srv.SlackClientID = os.Getenv("SLACK_CLIENT_ID")
 	srv.SlackClientSecret = os.Getenv("SLACK_CLIENT_SECRET")

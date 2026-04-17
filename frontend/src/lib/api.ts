@@ -29,7 +29,7 @@ export function login(email: string): Promise<{ message: string }> {
   })
 }
 
-export function signup(email: string, orgName: string, tier: string): Promise<{ token: string; checkout_url: string; user: User }> {
+export function signup(email: string, orgName: string, tier: string): Promise<{ token: string; tier: string; user: User }> {
   return apiFetch('/api/auth/signup', {
     method: 'POST',
     body: JSON.stringify({ email, org_name: orgName, tier }),
@@ -48,7 +48,14 @@ export function getMe(): Promise<User> {
 }
 
 // Billing
-export function createCheckout(tier: string): Promise<{ url: string }> {
+export function createSetupIntent(tier: string): Promise<{ client_secret: string; publishable_key: string }> {
+  return apiFetch('/api/billing/setup-intent', {
+    method: 'POST',
+    body: JSON.stringify({ tier }),
+  })
+}
+
+export function changeSubscription(tier: string): Promise<{ status?: string; requires_action?: boolean; client_secret?: string; publishable_key?: string }> {
   return apiFetch('/api/billing/checkout', {
     method: 'POST',
     body: JSON.stringify({ tier }),

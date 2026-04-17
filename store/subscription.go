@@ -79,3 +79,48 @@ func (s *Store) CancelSubscription(stripeSubID string) error {
 			"updated_at": time.Now(),
 		}).Error
 }
+
+// AttachStripeSubscription sets the Stripe subscription ID on an existing
+// local subscription row by its local ID.
+func (s *Store) AttachStripeSubscription(subID, stripeSubID string) error {
+	return s.db.Model(&Subscription{}).
+		Where("id = ?", subID).
+		Updates(map[string]any{
+			"stripe_subscription_id": stripeSubID,
+			"updated_at":             time.Now(),
+		}).Error
+}
+
+// GetSubscriptionByStripeID returns the local subscription row matching a
+// Stripe subscription ID, or nil if none.
+func (s *Store) GetSubscriptionByStripeID(stripeSubID string) (*Subscription, error) {
+	var sub Subscription
+	if err := s.db.Where("stripe_subscription_id = ?", stripeSubID).First(&sub).Error; err != nil {
+		return nil, err
+	}
+	return &sub, nil
+}
+
+// SetSubscriptionStatus updates the status field on a local subscription row
+// identified by its Stripe subscription ID.
+func (s *Store) SetSubscriptionStatus(stripeSubID, status string) error {
+	return s.db.Model(&Subscription{}).
+		Where("stripe_subscription_id = ?", stripeSubID).
+		Updates(map[string]any{
+			"status":     status,
+			"updated_at": time.Now(),
+		}).Error
+}
+
+// PromoteSubscriptionTier upgrades a subscription's tier and clears its
+// trial expiry once payment is confirmed.
+func (s *Store) PromoteSubscriptionTier(stripeSubID, tier string) error {
+	return s.db.Model(&Subscription{}).
+		Where("stripe_subscription_id = ?", stripeSubID).
+		Updates(map[string]any{
+			"tier":       tier,
+			"status":     "active",
+			"expires_at": nil,
+			"updated_at": time.Now(),
+		}).Error
+}
