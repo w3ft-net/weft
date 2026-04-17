@@ -37,6 +37,7 @@ type ShardEntry struct {
 	Tier           string      // instance tier (small/medium/large)
 	RowCount       int64
 	CreatedAt      time.Time
+	EBSVolumeID    string      // EBS volume id for this shard's DuckDB; empty until volume is attached
 	Shard          shard.Shard // live connection (not persisted)
 }
 
@@ -130,6 +131,7 @@ func (r *ShardRegistry) persist(entry *ShardEntry) {
 		Tier:        entry.Tier,
 		RowCount:    entry.RowCount,
 		CreatedAt:   entry.CreatedAt.Format(time.RFC3339),
+		EBSVolumeID: entry.EBSVolumeID,
 	})
 }
 
@@ -175,6 +177,7 @@ func (r *ShardRegistry) LoadFromStore(reconstruct func(rec store.ShardRecord) (s
 			Tier:        rec.Tier,
 			RowCount:    rec.RowCount,
 			CreatedAt:   createdAt,
+			EBSVolumeID: rec.EBSVolumeID,
 			Shard:       sh,
 		}
 		r.mu.Unlock()

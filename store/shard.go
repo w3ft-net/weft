@@ -13,6 +13,7 @@ type ShardRecord struct {
 	Tier        string                   // instance tier (small/medium/large)
 	RowCount    int64  `gorm:"default:0"`
 	CreatedAt   string `gorm:"not null"` // RFC3339
+	EBSVolumeID string                   // EBS volume holding this shard's DuckDB (empty = not on a dedicated volume yet)
 }
 
 // SaveShard upserts a shard record.
