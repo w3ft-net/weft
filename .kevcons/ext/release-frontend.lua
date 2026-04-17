@@ -4,6 +4,14 @@ local bucket = "weft-frontend-220664822695"
 local distribution_id_ssm = "/weft/config/cloudfront-distribution-id"
 
 function run(args)
+    -- Build the Go-to-WebAssembly shell core first. frontend/public is
+    -- copied verbatim into frontend/dist/ by Vite, so the fresh
+    -- shell.wasm gets picked up automatically by the npm build below.
+    -- Without this step the browser shell runs whatever bytes were last
+    -- committed to frontend/public/shell.wasm — usually stale.
+    kevcons.log("building shell.wasm...")
+    kevcons.exec("bash", {"-c", "GOOS=js GOARCH=wasm go build -o frontend/public/shell.wasm ./cmd/wasm/"})
+
     -- Build the production frontend
     kevcons.log("building frontend...")
     kevcons.exec("bash", {"-c", "cd frontend && VITE_API_URL=https://api.w3ft.net npm run build"})
@@ -40,12 +48,20 @@ function run(args)
         "--content-type", "image/svg+xml",
         "--cache-control", "public,max-age=3600")
 
+    -- WebAssembly (short cache — rebuilt on every release, no hash in the filename)
+    kevcons.aws_exec("s3", "sync", "frontend/dist/", "s3://" .. bucket .. "/",
+        "--exclude", "*",
+        "--include", "*.wasm",
+        "--content-type", "application/wasm",
+        "--cache-control", "public,max-age=60")
+
     -- Everything else (images, fonts, etc.)
     kevcons.aws_exec("s3", "sync", "frontend/dist/", "s3://" .. bucket .. "/",
         "--exclude", "*.html",
         "--exclude", "*.js",
         "--exclude", "*.css",
         "--exclude", "*.svg",
+        "--exclude", "*.wasm",
         "--cache-control", "public,max-age=3600")
 
     -- Invalidate CloudFront cache
