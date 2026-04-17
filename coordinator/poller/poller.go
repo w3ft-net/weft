@@ -44,10 +44,23 @@ func (p *Poller) Start(ctx context.Context) {
 		return
 	}
 
+	started := 0
 	for _, lg := range logGroups {
+		// Only CloudWatch-sourced log groups are pollable. weftd rows
+		// get their data via IngestStream (push) — spinning a ticker
+		// for them would just do nothing, and historically a 0s
+		// interval slipped through and panic'd NewTicker.
+		if lg.SourceType != store.SourceTypeCloudWatch {
+			continue
+		}
+		if d, err := time.ParseDuration(lg.PollInterval); err != nil || d <= 0 {
+			log.Printf("poller[%s]: skipping — invalid poll_interval %q", lg.App, lg.PollInterval)
+			continue
+		}
 		go p.pollLoop(ctx, lg)
+		started++
 	}
-	log.Printf("poller: started %d log group pollers", len(logGroups))
+	log.Printf("poller: started %d CloudWatch pollers (of %d log groups)", started, len(logGroups))
 }
 
 func (p *Poller) pollLoop(ctx context.Context, lg store.LogGroupWithAccount) {

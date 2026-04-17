@@ -160,7 +160,10 @@ func (s *Server) AddSource(_ context.Context, req *pb.AddSourceRequest) (*pb.Add
 	if pollInterval == "" {
 		pollInterval = "30s"
 	}
-	if err := s.Store.AddLogGroup(account.ID, req.App, req.LogGroup, req.Region, req.SchemaYaml, pollInterval); err != nil {
+	if err := s.Store.AddLogGroup(
+		account.ID, store.SourceTypeCloudWatch,
+		req.App, req.LogGroup, req.Region, req.SchemaYaml, pollInterval,
+	); err != nil {
 		return nil, fmt.Errorf("log group: %w", err)
 	}
 
