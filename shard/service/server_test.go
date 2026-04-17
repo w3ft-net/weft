@@ -1,0 +1,81 @@
+package service
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+	"time"
+
+	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/shard"
+)
+
+// Configure should persist identity to <dataDir>/shard.json so that an
+// instance restart against the same volume can reconstruct its identity
+// without re-contacting the coordinator.
+func TestConfigure_PersistsIdentity(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "shard.duckdb")
+
+	srv := NewBlankServer(dir, dbPath)
+
+	req := &pb.ConfigureRequest{
+		ShardId:     "shard-2026w16-small-01",
+		Apps:        []string{"weft"},
+		WindowStart: time.Date(2026, 4, 13, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		WindowEnd:   time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+	}
+	if _, err := srv.Configure(context.Background(), req); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+
+	id, err := shard.LoadIdentity(dir)
+	if err != nil {
+		t.Fatalf("LoadIdentity: %v", err)
+	}
+	if id == nil {
+		t.Fatal("expected identity, got nil")
+	}
+	if id.ShardID != req.ShardId {
+		t.Errorf("ShardID: got %q want %q", id.ShardID, req.ShardId)
+	}
+	if len(id.Apps) != 1 || id.Apps[0] != "weft" {
+		t.Errorf("Apps: got %v want [weft]", id.Apps)
+	}
+	if id.WindowEnd.Sub(id.WindowStart) != 7*24*time.Hour {
+		t.Errorf("expected 7d window, got %v", id.WindowEnd.Sub(id.WindowStart))
+	}
+}
+
+// A shard that comes up with identity already on disk should refuse a
+// second Configure — an already-christened shard must not be re-christened.
+func TestConfigure_RejectsReconfigureWhenAlreadyIdentified(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "shard.duckdb")
+
+	// Pre-seed an identity file, then start the shard from it.
+	id := &shard.Identity{
+		ShardID:     "shard-already",
+		WindowStart: time.Unix(1000, 0).UTC(),
+		WindowEnd:   time.Unix(2000, 0).UTC(),
+		Apps:        []string{"weft"},
+	}
+	if err := shard.SaveIdentity(dir, id); err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := NewServerFromIdentity(dir, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Second Configure with a different id should be rejected.
+	req := &pb.ConfigureRequest{
+		ShardId:     "shard-different",
+		WindowStart: time.Unix(3000, 0).UTC().Format(time.RFC3339),
+		WindowEnd:   time.Unix(4000, 0).UTC().Format(time.RFC3339),
+	}
+	if _, err := srv.Configure(context.Background(), req); err == nil {
+		t.Fatal("expected Configure to reject reconfigure, got nil error")
+	}
+}

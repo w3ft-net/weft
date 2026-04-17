@@ -9,99 +9,150 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
 	shardsvc "github.com/kevlarcon/weft/shard/service"
 )
 
 func main() {
 	grpcPort := flag.Int("grpc-port", 9000, "gRPC listen port")
 	httpPort := flag.Int("http-port", 9001, "HTTP health listen port")
-	dbPath := flag.String("db", "", "DuckDB path (empty = in-memory)")
-	shardID := flag.String("id", "shard-0", "shard identifier")
+	dataDir := flag.String("data-dir", "/opt/app/data", "directory holding shard.json and shard.duckdb")
 	coordAddr := flag.String("coordinator-addr", "", "coordinator gRPC address for heartbeats")
 	hbInterval := flag.Duration("heartbeat-interval", 60*time.Second, "heartbeat interval")
 	flag.Parse()
 
-	ds, err := shard.NewDuckDBShard(*shardID, *dbPath)
-	if err != nil {
-		log.Fatalf("failed to open shard: %v", err)
+	if err := os.MkdirAll(*dataDir, 0755); err != nil {
+		log.Fatalf("mkdir data dir %s: %v", *dataDir, err)
 	}
-	defer ds.Close()
-	log.Printf("shard %s opened (db=%s)", *shardID, *dbPath)
+	dbPath := filepath.Join(*dataDir, "shard.duckdb")
+
+	// Try to start from an existing identity on disk. If shard.json is
+	// missing we start in blank mode and wait for the coordinator to
+	// christen us via Configure.
+	var srv *shardsvc.Server
+	if id, err := shardIdentityHint(*dataDir); err != nil {
+		log.Fatalf("inspect shard.json: %v", err)
+	} else if id != "" {
+		log.Printf("found existing identity %s — opening db at %s", id, dbPath)
+		srv, err = shardsvc.NewServerFromIdentity(*dataDir, dbPath)
+		if err != nil {
+			log.Fatalf("reopen from identity: %v", err)
+		}
+	} else {
+		log.Printf("no shard.json in %s — starting blank, awaiting Configure", *dataDir)
+		srv = shardsvc.NewBlankServer(*dataDir, dbPath)
+	}
 
 	// gRPC server.
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *grpcPort))
 	if err != nil {
 		log.Fatalf("listen grpc: %v", err)
 	}
-	srv := grpc.NewServer()
-	pb.RegisterShardQueryServer(srv, shardsvc.NewServer(ds))
+	gs := grpc.NewServer()
+	pb.RegisterShardQueryServer(gs, srv)
 
 	go func() {
-		log.Printf("shard %s gRPC listening on :%d", *shardID, *grpcPort)
-		if err := srv.Serve(lis); err != nil {
+		log.Printf("shard gRPC listening on :%d", *grpcPort)
+		if err := gs.Serve(lis); err != nil {
 			log.Fatalf("grpc serve: %v", err)
 		}
 	}()
 
 	// Heartbeat goroutine.
 	if *coordAddr != "" {
-		go func() {
-			myIP := getPrivateIP()
-			myAddr := fmt.Sprintf("%s:%d", myIP, *grpcPort)
-
-			conn, err := grpc.NewClient(*coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-			if err != nil {
-				log.Printf("heartbeat: connect to coordinator: %v", err)
-				return
-			}
-			client := pb.NewWeftCoordinatorClient(conn)
-
-			// Retry initial heartbeat with backoff so we survive
-			// starting simultaneously with the coordinator.
-			for i := 0; i < 10; i++ {
-				if sendHeartbeat(client, *shardID, myAddr, ds) {
-					break
-				}
-				time.Sleep(time.Duration(i+1) * time.Second)
-			}
-
-			ticker := time.NewTicker(*hbInterval)
-			defer ticker.Stop()
-			for range ticker.C {
-				sendHeartbeat(client, *shardID, myAddr, ds)
-			}
-		}()
-		log.Printf("shard %s heartbeating to %s every %s", *shardID, *coordAddr, *hbInterval)
+		go runHeartbeat(*coordAddr, *grpcPort, *hbInterval, srv)
 	}
 
 	// HTTP health endpoint.
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"shard_id":  *shardID,
-			"row_count": ds.RowCount(),
-		})
+		resp := map[string]any{"shard_id": srv.Identity()}
+		if ds := srv.Shard(); ds != nil {
+			resp["row_count"] = ds.RowCount()
+		}
+		json.NewEncoder(w).Encode(resp)
 	})
 
-	log.Printf("shard %s HTTP listening on :%d", *shardID, *httpPort)
+	log.Printf("shard HTTP listening on :%d", *httpPort)
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", *httpPort), nil); err != nil {
 		log.Fatalf("http serve: %v", err)
 	}
 }
 
-func sendHeartbeat(client pb.WeftCoordinatorClient, shardID, addr string, ds *shard.DuckDBShard) bool {
+// shardIdentityHint peeks at shard.json and returns the shard_id (or ""
+// if the file is missing). Done without opening DuckDB so a decision
+// about blank vs. reopen can be made first.
+func shardIdentityHint(dataDir string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(dataDir, "shard.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	var m struct {
+		ShardID string `json:"shard_id"`
+	}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return "", err
+	}
+	return m.ShardID, nil
+}
+
+// runHeartbeat connects to the coordinator and sends a heartbeat every
+// hbInterval. Pulls the shard id on each tick so post-Configure the
+// heartbeat stream starts carrying the real identity rather than the
+// empty-string unclaimed signal.
+func runHeartbeat(coordAddr string, grpcPort int, hbInterval time.Duration, srv *shardsvc.Server) {
+	myIP := getPrivateIP()
+	myAddr := fmt.Sprintf("%s:%d", myIP, grpcPort)
+
+	conn, err := grpc.NewClient(coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Printf("heartbeat: connect to coordinator: %v", err)
+		return
+	}
+	client := pb.NewWeftCoordinatorClient(conn)
+
+	// Retry initial heartbeat with backoff so we survive starting
+	// simultaneously with the coordinator.
+	for i := 0; i < 10; i++ {
+		if sendHeartbeat(client, myAddr, srv) {
+			break
+		}
+		time.Sleep(time.Duration(i+1) * time.Second)
+	}
+
+	ticker := time.NewTicker(hbInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		sendHeartbeat(client, myAddr, srv)
+	}
+}
+
+func sendHeartbeat(client pb.WeftCoordinatorClient, addr string, srv *shardsvc.Server) bool {
+	shardID := srv.Identity()
+	state := "INGESTING"
+	if shardID == "" {
+		state = "ADOPTED"
+	}
+
+	var rowCount int64
+	if ds := srv.Shard(); ds != nil {
+		rowCount = ds.RowCount()
+	}
+
 	req := &pb.ShardHeartbeatRequest{
 		ShardId:  shardID,
 		Addr:     addr,
-		State:    "INGESTING",
-		RowCount: ds.RowCount(),
+		State:    state,
+		RowCount: rowCount,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -117,7 +168,6 @@ func sendHeartbeat(client pb.WeftCoordinatorClient, shardID, addr string, ds *sh
 // getPrivateIP returns the instance's private IP. Tries EC2 instance
 // metadata first (works on EC2), falls back to os.Hostname().
 func getPrivateIP() string {
-	// EC2 IMDSv2: get token, then query local-ipv4.
 	client := &http.Client{Timeout: 2 * time.Second}
 	tokenReq, _ := http.NewRequest("PUT", "http://169.254.169.254/latest/api/token", nil)
 	tokenReq.Header.Set("X-aws-ec2-metadata-token-ttl-seconds", "60")
@@ -137,7 +187,6 @@ func getPrivateIP() string {
 			}
 		}
 	}
-	// Fallback: hostname (works in Docker).
 	hostname, _ := os.Hostname()
 	return hostname
 }
