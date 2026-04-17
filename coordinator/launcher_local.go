@@ -49,7 +49,7 @@ func (l *LocalLauncher) LaunchInstance(_ context.Context, _ string) (string, err
 	return addr, nil
 }
 
-func (l *LocalLauncher) TerminateInstance(_ context.Context, addr string) error {
+func (l *LocalLauncher) TerminateInstance(_ context.Context, _, addr string) error {
 	l.mu.Lock()
 	ls, ok := l.servers[addr]
 	delete(l.servers, addr)

@@ -452,7 +452,7 @@ func (r *recordingLauncher) LaunchInstance(_ context.Context, _ string) (string,
 	return "", nil
 }
 
-func (r *recordingLauncher) TerminateInstance(_ context.Context, addr string) error {
+func (r *recordingLauncher) TerminateInstance(_ context.Context, _, addr string) error {
 	r.terminated = append(r.terminated, addr)
 	return nil
 }

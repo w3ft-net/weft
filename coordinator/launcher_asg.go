@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -144,24 +145,46 @@ func (l *ASGLauncher) LaunchInstance(ctx context.Context, tier string) (string, 
 	return addr, nil
 }
 
-func (l *ASGLauncher) TerminateInstance(ctx context.Context, addr string) error {
+func (l *ASGLauncher) TerminateInstance(ctx context.Context, id, addr string) error {
+	// Prefer the explicit instance id — it works for shards adopted
+	// from heartbeats that never went through LaunchInstance. Fall back
+	// to the addr → id map for anything we launched ourselves.
 	l.mu.Lock()
-	instanceID, ok := l.instances[addr]
-	delete(l.instances, addr)
-	delete(l.known, instanceID)
+	if id == "" {
+		id = l.instances[addr]
+	}
+	if addr != "" {
+		delete(l.instances, addr)
+	}
+	if id != "" {
+		delete(l.known, id)
+	}
 	l.mu.Unlock()
 
-	if !ok {
-		return fmt.Errorf("unknown instance for addr %s", addr)
+	if id == "" {
+		return fmt.Errorf("no instance id known for addr %s", addr)
 	}
 
 	shouldDecrement := true
-	log.Printf("asg-launcher: terminating instance %s (%s)", instanceID, addr)
+	log.Printf("asg-launcher: terminating instance %s (%s)", id, addr)
 	_, err := l.asgClient.TerminateInstanceInAutoScalingGroup(ctx,
 		&autoscaling.TerminateInstanceInAutoScalingGroupInput{
-			InstanceId:                     &instanceID,
+			InstanceId:                     &id,
 			ShouldDecrementDesiredCapacity: &shouldDecrement,
 		})
+	if err != nil {
+		// If the instance is already gone (someone else terminated it,
+		// ASG already scaled it down, etc.) treat as success — we got
+		// what we wanted. AWS phrases this inconsistently; match the
+		// common variants.
+		msg := err.Error()
+		if strings.Contains(msg, "not found") ||
+			strings.Contains(msg, "no longer exists") ||
+			strings.Contains(msg, "InvalidInstanceID") {
+			log.Printf("asg-launcher: instance %s already gone, ignoring: %v", id, err)
+			return nil
+		}
+	}
 	return err
 }
 

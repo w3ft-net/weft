@@ -254,9 +254,9 @@ func (p *Provisioner) reapDeadShards() {
 		// the call in that case. Log errors but don't block removal —
 		// the registry is already updated and the coordinator mustn't
 		// hold onto a ghost entry just because the ASG API is slow.
-		if p.launcher != nil && entry.Addr != "" {
+		if p.launcher != nil && (entry.InstanceID != "" || entry.Addr != "") {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if err := p.launcher.TerminateInstance(ctx, entry.Addr); err != nil {
+			if err := p.launcher.TerminateInstance(ctx, entry.InstanceID, entry.Addr); err != nil {
 				log.Printf("provisioner: terminate %s (%s): %v", entry.ID, entry.Addr, err)
 			}
 			cancel()
@@ -324,7 +324,7 @@ func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier stri
 	// Connect via gRPC.
 	gs, err := shard.NewGRPCShard(shardID, addr)
 	if err != nil {
-		p.launcher.TerminateInstance(ctx, addr)
+		p.launcher.TerminateInstance(ctx, "", addr)
 		return nil, fmt.Errorf("connect to %s: %w", addr, err)
 	}
 
@@ -345,7 +345,7 @@ func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier stri
 		time.Sleep(5 * time.Second)
 	}
 	if configErr != nil {
-		p.launcher.TerminateInstance(ctx, addr)
+		p.launcher.TerminateInstance(ctx, "", addr)
 		return nil, fmt.Errorf("configure %s: %w", shardID, configErr)
 	}
 
