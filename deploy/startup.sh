@@ -128,10 +128,12 @@ EOF
   chown app:app /opt/app/coordinator.env
 fi
 
-# For shard roles: generate shard.env with self-configuration.
-# Shard identity now lives in /opt/app/data/shard.json on the EBS volume —
+# For shard roles: generate shard.env and mount the per-shard EBS data
+# volume at /opt/app/data before the service starts.
+# Shard identity lives in /opt/app/data/shard.json on the EBS volume —
 # the coordinator writes it via the Configure RPC on first christening
-# and every subsequent restart reads it back.
+# and every subsequent restart reads it back. See
+# docs/plans/ebs-shard-volumes.md.
 if [ "$ROLE" = "shard" ]; then
   COORD_NLB=$(aws ssm get-parameter \
     --name "/$APP_NAME/config/coordinator-nlb" \
@@ -143,6 +145,55 @@ COORDINATOR_ADDR=${COORD_NLB:-localhost:9020}
 EOF
   chown app:app /opt/app/shard.env
   echo "shard env: coordinator=$COORD_NLB"
+
+  # Mount the data volume. The coordinator attaches an EBS volume at
+  # /dev/sdf before completing the instance's ASG lifecycle hook; on
+  # nitro instances the kernel renames it to /dev/nvme1n1 or similar.
+  # Resolve it via ec2-utils (available in all our shard AMIs). If no
+  # data volume is attached within ~60s, fall through — the shard can
+  # still come up on the root volume for dev or container mode.
+  MOUNT_POINT=/opt/app/data
+  DEVICE=""
+  for i in $(seq 1 30); do
+    # ebsnvme-id is shipped with ec2-utils on Amazon Linux and Debian
+    # AMIs we build from. It maps /dev/nvme*n* → the requested device
+    # name we asked for at attach time.
+    for nvme in /dev/nvme[1-9]n[0-9]*; do
+      [ -e "$nvme" ] || continue
+      requested=$(ebsnvme-id "$nvme" 2>/dev/null | awk '/Disk/{print $NF}')
+      if [ "$requested" = "/dev/sdf" ] || [ "$requested" = "sdf" ]; then
+        DEVICE=$nvme
+        break 2
+      fi
+    done
+    # On non-nitro / older kernels, /dev/sdf may be the literal path.
+    if [ -e "/dev/sdf" ]; then
+      DEVICE=/dev/sdf
+      break
+    fi
+    sleep 2
+  done
+
+  if [ -n "$DEVICE" ]; then
+    echo "shard data volume detected at $DEVICE"
+    if ! blkid "$DEVICE" >/dev/null 2>&1; then
+      echo "formatting $DEVICE (fresh volume)"
+      mkfs.ext4 -L weft-data "$DEVICE"
+    fi
+    mkdir -p "$MOUNT_POINT"
+    # Use LABEL= so a kernel-induced device rename across reboots
+    # doesn't break the mount.
+    if ! mountpoint -q "$MOUNT_POINT"; then
+      mount -o defaults,noatime LABEL=weft-data "$MOUNT_POINT" \
+        || mount -o defaults,noatime "$DEVICE" "$MOUNT_POINT"
+    fi
+    chown -R app:app "$MOUNT_POINT"
+    echo "shard data volume mounted at $MOUNT_POINT"
+  else
+    echo "no shard data volume attached; running on root volume (dev/container mode)"
+    mkdir -p "$MOUNT_POINT"
+    chown -R app:app "$MOUNT_POINT"
+  fi
 fi
 
 systemctl start "weft-$ROLE"
