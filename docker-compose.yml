@@ -103,6 +103,23 @@ services:
       coordinator:
         condition: service_started
 
+  # Second weftd, configured with a glob path over a directory of log files.
+  # Reproduces the production coordinator config (path: /opt/app/logs/*.log)
+  # and exercises the multi-file onboarding flow.
+  weftd-glob:
+    build:
+      context: ..
+      dockerfile: weft/Dockerfile
+    command:
+      - weftd
+      - --config=/etc/weftd/config.yaml
+    volumes:
+      - ./dev/weftd-glob-config.yaml:/etc/weftd/config.yaml:ro
+      - ./dev/testlogs:/var/log/testlogs:ro
+    depends_on:
+      coordinator:
+        condition: service_started
+
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9091"

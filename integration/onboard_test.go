@@ -135,7 +135,7 @@ func TestOnboardFlow(t *testing.T) {
 	// ── Phase 5: Wait for data to flow and become queryable ───────
 
 	t.Log("waiting for data to flow through weftd → coordinator → shard...")
-	var rows []*pb.CoordinatorQueryResponse
+	var rows []*pb.ResultRow
 	deadline = time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		time.Sleep(3 * time.Second)
@@ -149,11 +149,11 @@ func TestOnboardFlow(t *testing.T) {
 		}
 		rows = nil
 		for {
-			row, err := stream.Recv()
+			resp, err := stream.Recv()
 			if err != nil {
 				break
 			}
-			rows = append(rows, row)
+			rows = append(rows, resp.Rows...)
 		}
 		if len(rows) > 0 {
 			t.Logf("  got %d rows", len(rows))
@@ -183,6 +183,97 @@ func TestOnboardFlow(t *testing.T) {
 		t.Error("expected a row containing 'ERROR'")
 	}
 	t.Logf("onboard flow complete: %d rows queryable, content verified", len(rows))
+}
+
+// TestGlobOnboardFlow reproduces the multi-file glob onboarding case used in
+// the production coordinator config (path: /opt/app/logs/*.log).
+//
+// The weftd-glob container tails /var/log/testlogs/*.log, which matches
+// nginx.log, app.log, and worker.log. Each file should onboard
+// independently — the coordinator should end up with three distinct pending
+// sources (one per file) within the timeout.
+//
+// Current behaviour: weftd derives the app name from the glob pattern
+// ("*.log" → "*") and passes the glob string into SubmitSample, which tries
+// os.Open("/var/log/testlogs/*.log") and fails with ENOENT. No pending
+// sources are ever created, and this test times out.
+func TestGlobOnboardFlow(t *testing.T) {
+	conn, client := onboardGRPCClient(t)
+	defer conn.Close()
+
+	expectedApps := []string{"nginx", "app", "worker"}
+
+	t.Log("waiting for weftd-glob to submit a sample for each file...")
+	found := map[string]bool{}
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) && len(found) < len(expectedApps) {
+		for _, app := range expectedApps {
+			if found[app] {
+				continue
+			}
+			resp, err := client.GetSourceStatus(context.Background(), &pb.GetSourceStatusRequest{
+				Token: "wft_dev_0000000000000000",
+				App:   app,
+			})
+			if err != nil {
+				t.Logf("  GetSourceStatus(%s): %v (retrying)", app, err)
+				continue
+			}
+			if resp.Status == "pending" || resp.Status == "configured" {
+				t.Logf("  %s → %s", app, resp.Status)
+				found[app] = true
+			}
+		}
+		if len(found) < len(expectedApps) {
+			time.Sleep(2 * time.Second)
+		}
+	}
+
+	if len(found) < len(expectedApps) {
+		var missing []string
+		for _, app := range expectedApps {
+			if !found[app] {
+				missing = append(missing, app)
+			}
+		}
+		t.Fatalf("glob onboarding did not produce pending sources for: %v (got %v)", missing, found)
+	}
+
+	// Sanity-check the pending list too: each app should appear with a
+	// non-empty sample. If any file was onboarded under a weird derived name
+	// (e.g. "*"), that would show up here.
+	jwt := generateDevJWT(t)
+	sources := listPendingSources(t, jwt)
+	for _, app := range expectedApps {
+		var match *pendingSourceResp
+		for i := range sources {
+			if sources[i].App == app && sources[i].Namespace == "kevlar" {
+				match = &sources[i]
+				break
+			}
+		}
+		if match == nil {
+			t.Errorf("no pending source listed for app=%s namespace=kevlar", app)
+			continue
+		}
+		var lines []string
+		if err := json.Unmarshal(match.Sample, &lines); err != nil {
+			t.Errorf("%s: parse sample: %v", app, err)
+			continue
+		}
+		if len(lines) == 0 {
+			t.Errorf("%s: sample has 0 lines", app)
+		}
+	}
+
+	// Also confirm nothing was onboarded under a literal "*" app name —
+	// which is what the current glob-handling bug would produce if the
+	// SubmitSample call were ever to succeed.
+	for _, s := range sources {
+		if s.App == "*" {
+			t.Errorf("found pending source with literal wildcard app name: %+v", s)
+		}
+	}
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
