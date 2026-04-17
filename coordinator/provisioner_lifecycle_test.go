@@ -18,7 +18,7 @@ func (f *failingLauncher) LaunchInstance(_ context.Context, _ string) (string, e
 	return "", fmt.Errorf("timed out")
 }
 
-func (f *failingLauncher) TerminateInstance(_ context.Context, _ string) error {
+func (f *failingLauncher) TerminateInstance(_ context.Context, _, _ string) error {
 	return nil
 }
 

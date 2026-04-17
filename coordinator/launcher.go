@@ -11,6 +11,11 @@ type ShardLauncher interface {
 	// gRPC address (host:port) where it will be reachable.
 	LaunchInstance(ctx context.Context, tier string) (addr string, err error)
 
-	// TerminateInstance removes a shard instance.
-	TerminateInstance(ctx context.Context, addr string) error
+	// TerminateInstance removes a shard instance. Both id (cloud
+	// instance id) and addr (host:port) are passed so each launcher can
+	// pick whichever identifier it tracks: ASGLauncher prefers id (works
+	// for shards adopted from heartbeats that were never seen by
+	// LaunchInstance), LocalLauncher uses addr. Either may be empty if
+	// the caller doesn't have it.
+	TerminateInstance(ctx context.Context, id, addr string) error
 }

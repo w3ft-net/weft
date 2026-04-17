@@ -23,6 +23,7 @@ type mockASG struct {
 	setCapErr     error
 	describeErr   error
 	terminateErr  error
+	terminated    []string // instance IDs passed to TerminateInstanceInAutoScalingGroup
 }
 
 func (m *mockASG) SetDesiredCapacity(_ context.Context, _ *autoscaling.SetDesiredCapacityInput, _ ...func(*autoscaling.Options)) (*autoscaling.SetDesiredCapacityOutput, error) {
@@ -67,7 +68,10 @@ func (m *mockASG) DescribeAutoScalingGroups(_ context.Context, input *autoscalin
 	}, nil
 }
 
-func (m *mockASG) TerminateInstanceInAutoScalingGroup(_ context.Context, _ *autoscaling.TerminateInstanceInAutoScalingGroupInput, _ ...func(*autoscaling.Options)) (*autoscaling.TerminateInstanceInAutoScalingGroupOutput, error) {
+func (m *mockASG) TerminateInstanceInAutoScalingGroup(_ context.Context, input *autoscaling.TerminateInstanceInAutoScalingGroupInput, _ ...func(*autoscaling.Options)) (*autoscaling.TerminateInstanceInAutoScalingGroupOutput, error) {
+	if input != nil && input.InstanceId != nil {
+		m.terminated = append(m.terminated, *input.InstanceId)
+	}
 	return nil, m.terminateErr
 }
 
@@ -192,7 +196,7 @@ func TestASGLauncher_Terminate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = launcher.TerminateInstance(context.Background(), addr)
+	err = launcher.TerminateInstance(context.Background(), "", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,9 +205,34 @@ func TestASGLauncher_Terminate(t *testing.T) {
 func TestASGLauncher_Terminate_Unknown(t *testing.T) {
 	launcher := NewASGLauncherWithClients(&mockASG{}, &mockEC2{}, map[string]string{"small": "my-asg"}, 9000)
 
-	err := launcher.TerminateInstance(context.Background(), "10.0.0.1:9000")
+	// No id provided, addr not in the launcher's map → nothing to
+	// terminate. Should error rather than silently no-op.
+	err := launcher.TerminateInstance(context.Background(), "", "10.0.0.1:9000")
 	if err == nil {
 		t.Fatal("expected error for unknown instance")
+	}
+}
+
+// TestASGLauncher_Terminate_AdoptedByID regression-guards the case the
+// reap loop hit on 2026-04-17: a shard adopted from heartbeats (never
+// seen by LaunchInstance) gets reaped, and the reap path asks the
+// launcher to terminate it. The launcher's addr→id map is empty for
+// adopted shards, but we still know the instance id from the heartbeat
+// row — the launcher should use it.
+func TestASGLauncher_Terminate_AdoptedByID(t *testing.T) {
+	asg := &mockASG{}
+	launcher := NewASGLauncherWithClients(asg, &mockEC2{}, map[string]string{"small": "my-asg"}, 9000)
+
+	err := launcher.TerminateInstance(context.Background(), "i-adopted-01", "172.31.128.135:9000")
+	if err != nil {
+		t.Fatalf("expected successful terminate when id is provided, got %v", err)
+	}
+	if len(asg.terminated) != 1 {
+		t.Fatalf("expected 1 TerminateInstanceInAutoScalingGroup call, got %d: %v",
+			len(asg.terminated), asg.terminated)
+	}
+	if asg.terminated[0] != "i-adopted-01" {
+		t.Errorf("expected TerminateInstanceInAutoScalingGroup(i-adopted-01), got %s", asg.terminated[0])
 	}
 }
 
@@ -216,7 +245,7 @@ func TestASGLauncher_Terminate_AWSError(t *testing.T) {
 	launcher := NewASGLauncherWithClients(asg, ec2c, map[string]string{"small": "my-asg"}, 9000)
 
 	addr, _ := launcher.LaunchInstance(context.Background(), "small")
-	err := launcher.TerminateInstance(context.Background(), addr)
+	err := launcher.TerminateInstance(context.Background(), "", addr)
 	if err == nil {
 		t.Fatal("expected error from AWS")
 	}
