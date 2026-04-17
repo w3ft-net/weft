@@ -15,9 +15,9 @@ import (
 type AgentToken struct {
 	gorm.Model
 	CustomerID        uint      `gorm:"not null"`
-	Customer          Customer  `gorm:"foreignKey:CustomerID"`
+	Customer          Customer  `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
 	NamespaceID       uint      `gorm:"not null"`
-	Namespace         Namespace `gorm:"foreignKey:NamespaceID"`
+	Namespace         Namespace `gorm:"foreignKey:NamespaceID;constraint:OnDelete:CASCADE"`
 	Token             string    `gorm:"uniqueIndex;not null"`
 	Label             string    // human-readable label (e.g., "prod-coordinator")
 	Revoked           bool      `gorm:"not null;default:false"`

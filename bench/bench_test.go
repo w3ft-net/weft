@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,16 +27,29 @@ func init() {
 	}
 }
 
-// connect returns a coordinator gRPC client.
+// connect returns a coordinator gRPC client authenticated with the dev
+// seed token (tied to customer "kevlar"). IngestStream requires this
+// metadata; queries don't need it but it's harmless to send.
 func connect(tb testing.TB) pb.WeftCoordinatorClient {
 	tb.Helper()
-	conn, err := grpc.NewClient(coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(coordAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithPerRPCCredentials(benchBearer{token: "wft_dev_0000000000000000"}),
+	)
 	if err != nil {
 		tb.Fatalf("connect to %s: %v", coordAddr, err)
 	}
 	tb.Cleanup(func() { conn.Close() })
 	return pb.NewWeftCoordinatorClient(conn)
 }
+
+type benchBearer struct{ token string }
+
+func (b benchBearer) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
+	return map[string]string{"authorization": "Bearer " + b.token}, nil
+}
+
+func (benchBearer) RequireTransportSecurity() bool { return false }
 
 // ensureData loads N rows into the coordinator via IngestStream if not already loaded.
 var dataLoaded atomic.Bool
@@ -386,10 +398,10 @@ func benchTailFanout(b *testing.B, numSubscribers int) {
 
 // --- Helpers ---
 
-// dockerComposeUp starts the docker-compose stack if not already running.
-// Call from TestMain to set up the environment.
-func dockerComposeUp(m *testing.M) int {
-	// Check if coordinator is already reachable.
+// requireCoordinator aborts the benchmark run unless the coordinator is
+// already reachable. Benchmarks don't bring up docker themselves —
+// bring up the stack first: `docker compose up -d --build`.
+func requireCoordinator() int {
 	conn, err := grpc.NewClient(coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err == nil {
 		client := pb.NewWeftCoordinatorClient(conn)
@@ -397,46 +409,22 @@ func dockerComposeUp(m *testing.M) int {
 		defer cancel()
 		if _, err := client.ListApps(ctx, &pb.ListAppsRequest{}); err == nil {
 			conn.Close()
-			fmt.Println("bench: coordinator already running at", coordAddr)
-			return m.Run()
+			fmt.Println("bench: coordinator reachable at", coordAddr)
+			return 0
 		}
 		conn.Close()
 	}
-
-	fmt.Println("bench: starting docker-compose stack...")
-	up := exec.Command("docker", "compose", "up", "-d", "--build", "--wait")
-	up.Dir = ".."
-	up.Stdout = os.Stdout
-	up.Stderr = os.Stderr
-	if err := up.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "docker compose up failed: %v\n", err)
-		return 1
-	}
-
-	// Wait for coordinator to be ready.
-	for i := 0; i < 30; i++ {
-		time.Sleep(time.Second)
-		conn, err := grpc.NewClient(coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			continue
-		}
-		client := pb.NewWeftCoordinatorClient(conn)
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_, err = client.ListApps(ctx, &pb.ListAppsRequest{})
-		cancel()
-		conn.Close()
-		if err == nil {
-			fmt.Println("bench: coordinator ready")
-			break
-		}
-	}
-
-	code := m.Run()
-
-	// Leave stack running for re-runs. Use `docker compose down` to clean up.
-	return code
+	fmt.Fprintf(os.Stderr,
+		"bench: coordinator at %s is not reachable. "+
+			"Start the stack first: `docker compose up -d --build`.\n",
+		coordAddr,
+	)
+	return 1
 }
 
 func TestMain(m *testing.M) {
-	os.Exit(dockerComposeUp(m))
+	if rc := requireCoordinator(); rc != 0 {
+		os.Exit(rc)
+	}
+	os.Exit(m.Run())
 }

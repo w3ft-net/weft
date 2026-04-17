@@ -1,3 +1,4 @@
+-- +goose Up
 -- Ingestion error tracking for DLQ and dashboard banner.
 CREATE TABLE IF NOT EXISTS ingestion_errors (
     id          SERIAL PRIMARY KEY,

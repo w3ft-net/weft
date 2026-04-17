@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"google.golang.org/grpc/metadata"
+
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
@@ -32,10 +34,23 @@ func runIngest(ctx context.Context, cfg *Config, report *Report) {
 		customer := fmt.Sprintf("loadtest-%d", i)
 		app := fmt.Sprintf("app-%d", i%3)
 
-		go func(customer, app string, rate int) {
+		// Each simulated customer needs its own token — IngestStream
+		// validates the bearer and attributes rows to the token's customer.
+		tokResp, err := cfg.Client.CreateToken(ctx, &pb.CreateTokenRequest{
+			Customer: customer,
+			App:      app,
+			Label:    "loadtest",
+		})
+		if err != nil {
+			errors.Add(1)
+			wg.Done()
+			continue
+		}
+
+		go func(customer, app, token string, rate int) {
 			defer wg.Done()
-			ingestCustomer(ctx, cfg.Client, customer, app, rate, &sent, &acked, &errors)
-		}(customer, app, ratePerCustomer)
+			ingestCustomer(ctx, cfg.Client, customer, app, token, rate, &sent, &acked, &errors)
+		}(customer, app, tokResp.Token, ratePerCustomer)
 	}
 
 	wg.Wait()
@@ -52,8 +67,9 @@ func runIngest(ctx context.Context, cfg *Config, report *Report) {
 	}
 }
 
-func ingestCustomer(ctx context.Context, client pb.WeftCoordinatorClient, customer, app string, rate int, sent, acked, errors *atomic.Int64) {
-	stream, err := client.IngestStream(ctx)
+func ingestCustomer(ctx context.Context, client pb.WeftCoordinatorClient, customer, app, token string, rate int, sent, acked, errors *atomic.Int64) {
+	authed := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+	stream, err := client.IngestStream(authed)
 	if err != nil {
 		errors.Add(1)
 		return

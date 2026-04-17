@@ -40,7 +40,7 @@ type User struct {
 	ID                 string   `gorm:"primaryKey"`
 	Email              string   `gorm:"not null;uniqueIndex:idx_user_email_customer"`
 	CustomerID         uint     `gorm:"not null;uniqueIndex:idx_user_email_customer"`
-	Customer           Customer `gorm:"foreignKey:CustomerID"`
+	Customer           Customer `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
 	Name               string
 	StripeCustomerID   string
 	CanCreateNamespace bool `gorm:"not null;default:false"`
