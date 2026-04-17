@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -45,7 +46,15 @@ type SourceConfig struct {
 
 func main() {
 	configPath := flag.String("config", "/etc/weftd/config.yaml", "config file path")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("weftd " + Version)
+		os.Exit(0)
+	}
+
+	log.Printf("weftd %s starting", Version)
 
 	data, err := os.ReadFile(*configPath)
 	if err != nil {
@@ -91,15 +100,19 @@ func main() {
 	}
 
 	// Authenticate to verify token and get customer name.
-	// Retry on PermissionDenied (trial expired / cancelled subscription).
+	//   PermissionDenied → subscription inactive; retry in 24h.
+	//   Unavailable      → coordinator not reachable yet; retry with backoff.
+	//   anything else    → fatal (bad token, bad config).
 	var customer, namespace string
+	var transportBackoff = time.Second
 	for {
 		authResp, err := coordClient.Authenticate(ctx, &pb.AuthenticateRequest{
 			Token:         cfg.Token,
 			MetricsConfig: metricsProto,
 		})
 		if err != nil {
-			if status.Code(err) == codes.PermissionDenied {
+			switch status.Code(err) {
+			case codes.PermissionDenied:
 				log.Printf("subscription inactive: %v — retrying in 24h", status.Convert(err).Message())
 				select {
 				case <-ctx.Done():
@@ -107,8 +120,21 @@ func main() {
 				case <-time.After(24 * time.Hour):
 				}
 				continue
+			case codes.Unavailable:
+				log.Printf("coordinator unreachable, retrying in %v: %v", transportBackoff, err)
+				select {
+				case <-ctx.Done():
+					os.Exit(0)
+				case <-time.After(transportBackoff):
+				}
+				transportBackoff *= 2
+				if transportBackoff > 30*time.Second {
+					transportBackoff = 30 * time.Second
+				}
+				continue
+			default:
+				log.Fatalf("authenticate: %v", err)
 			}
-			log.Fatalf("authenticate: %v", err)
 		}
 		customer = authResp.Customer
 		if customer == "" {
@@ -165,13 +191,20 @@ func main() {
 				}
 			}()
 		} else if src.Path != "" {
-			go func() {
-				if err := onboardAndRun(ctx, coordClient, cfg.Token, app, src.Path, hostname, fullApp, func() {
-					watchGlob(ctx, coordClient, customer, hostname, namespace, src.Path)
-				}); err != nil {
-					log.Printf("[%s] onboard failed: %v", fullApp, err)
-				}
-			}()
+			if strings.ContainsAny(src.Path, "*?[") {
+				// Glob: each matched file is onboarded independently from inside watchGlob.
+				// The app name derived from the pattern ("*") is meaningless here.
+				go watchGlob(ctx, coordClient, cfg.Token, customer, hostname, namespace, src.Path)
+			} else {
+				// Single file: onboard once, then tail.
+				go func() {
+					if err := onboardAndRun(ctx, coordClient, cfg.Token, app, src.Path, hostname, fullApp, func() {
+						runFileTailer(ctx, coordClient, customer, hostname, fullApp, src.Path)
+					}); err != nil {
+						log.Printf("[%s] onboard failed: %v", fullApp, err)
+					}
+				}()
+			}
 		}
 		if src.Metrics.Enabled {
 			go runMetricsCollector(ctx, coordClient, customer, hostname, namespace, src.Metrics)
@@ -328,31 +361,37 @@ func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, custome
 	}
 }
 
-// watchGlob watches a directory for new files matching a glob pattern and
-// starts tailers for each. Handles the case where log files don't exist at
-// startup (e.g., gunicorn creates them on first request).
-// appFromPath derives the app name from a namespace and file path.
-// namespace="weft", path="/opt/app/logs/coordinator.log" → "weft/coordinator"
-func appFromPath(namespace, path string) string {
-	base := filepath.Base(path)
-	ext := filepath.Ext(base)
-	name := strings.TrimSuffix(base, ext)
-	return namespace + "/" + name
-}
-
-func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, customer, instance, namespace, pattern string) {
+// watchGlob watches a directory for new files matching a glob pattern. For
+// each matching file — both files present at startup and files created later —
+// it runs onboardAndRun with the file's real path and a per-file app name
+// derived from the filename. This handles the case where log files don't
+// exist yet at startup (e.g. gunicorn creates them on first request).
+func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, customer, instance, namespace, pattern string) {
 	dir := filepath.Dir(pattern)
 	tailing := make(map[string]bool)
 
-	// Tail any files that already match.
+	startFile := func(p string) {
+		if tailing[p] {
+			return
+		}
+		tailing[p] = true
+		base := filepath.Base(p)
+		app := strings.TrimSuffix(base, filepath.Ext(base))
+		fullApp := namespace + "/" + app
+		go func() {
+			if err := onboardAndRun(ctx, client, token, app, p, instance, fullApp, func() {
+				runFileTailer(ctx, client, customer, instance, fullApp, p)
+			}); err != nil {
+				log.Printf("[%s] onboard failed: %v", fullApp, err)
+			}
+		}()
+	}
+
+	// Onboard + tail any files that already match.
 	startMatching := func() {
 		paths, _ := filepath.Glob(pattern)
 		for _, p := range paths {
-			if !tailing[p] {
-				tailing[p] = true
-				app := appFromPath(namespace, p)
-				go runFileTailer(ctx, client, customer, instance, app, p)
-			}
+			startFile(p)
 		}
 	}
 
@@ -398,13 +437,10 @@ watch:
 				return
 			}
 			if event.Op&fsnotify.Create == fsnotify.Create {
-				// Check if the new file matches our glob.
 				matched, _ := filepath.Match(filepath.Base(pattern), filepath.Base(event.Name))
-				if matched && !tailing[event.Name] {
-					tailing[event.Name] = true
-					newApp := appFromPath(namespace, event.Name)
-					log.Printf("[%s] new file %s, starting tailer", newApp, event.Name)
-					go runFileTailer(ctx, client, customer, instance, newApp, event.Name)
+				if matched {
+					log.Printf("[%s] new file %s", namespace, event.Name)
+					startFile(event.Name)
 				}
 			}
 		case err, ok := <-watcher.Errors:
