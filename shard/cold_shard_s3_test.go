@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -149,9 +148,3 @@ func TestColdShard_S3Integration(t *testing.T) {
 	}
 }
 
-// ensureMinio starts MinIO via docker-compose if not already running.
-func ensureMinio() error {
-	cmd := exec.Command("docker", "compose", "up", "-d", "minio")
-	cmd.Dir = "."
-	return cmd.Run()
-}

@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/kevlarcon/weft/coordinator"
@@ -292,7 +294,20 @@ func (s *Server) RevokeToken(_ context.Context, req *pb.RevokeTokenRequest) (*pb
 
 // IngestStream accepts a stream of LogRows from weftd agents and forwards
 // them to the active shard in batches. Flushes every 2 seconds or 100 rows.
+//
+// The stream requires an `authorization: Bearer <token>` gRPC metadata
+// header. The token's customer is authoritative — row.Customer is
+// overwritten with it regardless of what the client sends. This prevents
+// a weftd whose customer has been deleted from continuing to push rows
+// against that customer, and prevents a compromised agent from claiming
+// to be someone else.
 func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) error {
+	auth, err := s.authenticateStream(stream.Context())
+	if err != nil {
+		return err
+	}
+	authCustomer := auth.Customer.Name
+
 	var mu sync.Mutex
 	var rows []*pb.LogRow
 	var count int64
@@ -321,12 +336,15 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 			return err
 		}
 
+		// Force the authoritative customer on every row.
+		row.Customer = authCustomer
+
 		mu.Lock()
 		if count == 0 {
 			firstApp = row.App
 			log.Printf("ingest-stream: first row from customer=%s app=%s", row.Customer, row.App)
 		}
-		if s.Coord.SeenApps != nil && row.App != "" && row.Customer != "" {
+		if s.Coord.SeenApps != nil && row.App != "" {
 			if s.Coord.SeenApps.Add(row.Customer, row.App) {
 				log.Printf("ingest-stream: new app discovered: customer=%s app=%s", row.Customer, row.App)
 			}
@@ -348,8 +366,37 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 	}
 	mu.Unlock()
 
-	log.Printf("ingest-stream: received %d rows", count)
+	log.Printf("ingest-stream: received %d rows from customer=%s", count, authCustomer)
 	return stream.SendAndClose(&pb.IngestStreamResponse{RowsReceived: count})
+}
+
+// authenticateStream validates the bearer token in incoming gRPC metadata
+// and returns the resolved customer/namespace. Used by streaming RPCs
+// where the token isn't part of the request body.
+func (s *Server) authenticateStream(ctx context.Context) (*store.AgentAuthResult, error) {
+	if s.Store == nil {
+		return nil, status.Errorf(codes.Unauthenticated, "store unavailable")
+	}
+	md, _ := metadata.FromIncomingContext(ctx)
+	values := md.Get("authorization")
+	if len(values) == 0 {
+		return nil, status.Errorf(codes.Unauthenticated, "missing authorization metadata")
+	}
+	token := strings.TrimPrefix(values[0], "Bearer ")
+	if token == "" {
+		return nil, status.Errorf(codes.Unauthenticated, "empty bearer token")
+	}
+	auth, err := s.Store.ValidateAgentToken(token)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "validate token: %v", err)
+	}
+	// auth is nil when the token doesn't exist (e.g. after customer
+	// deletion cascaded the token away). Customer.ID == 0 guards against
+	// any lingering orphan rows from pre-cascade deletions.
+	if auth == nil || auth.Customer == nil || auth.Customer.ID == 0 || auth.Customer.Name == "" {
+		return nil, status.Errorf(codes.Unauthenticated, "invalid or revoked token")
+	}
+	return auth, nil
 }
 
 func (s *Server) ingestBatch(rows []*pb.LogRow) {

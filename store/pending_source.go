@@ -10,7 +10,7 @@ import (
 // has not yet been configured with a schema by a human reviewer.
 type PendingSource struct {
 	CustomerID uint      `gorm:"not null;uniqueIndex:idx_pending_customer_ns_app"`
-	Customer   Customer  `gorm:"foreignKey:CustomerID"`
+	Customer   Customer  `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
 	Namespace  string    `gorm:"not null;uniqueIndex:idx_pending_customer_ns_app"`
 	App        string    `gorm:"not null;uniqueIndex:idx_pending_customer_ns_app"`
 	Instance   string    // hostname of the agent that submitted the sample

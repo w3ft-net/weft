@@ -70,11 +70,8 @@ func TestDockerStack_IngestAndQuery(t *testing.T) {
 	conn, client := grpcClient(t)
 	defer conn.Close()
 
-	// Ingest 20 rows across two sub-apps.
-	stream, err := client.IngestStream(context.Background())
-	if err != nil {
-		t.Fatalf("open ingest stream: %v", err)
-	}
+	token := ensureToken(t, client, "testcust", "integration")
+	stream := openAuthedStream(t, context.Background(), client, token)
 
 	now := time.Now()
 	for i := 0; i < 10; i++ {
@@ -152,10 +149,8 @@ func TestDockerStack_ShardSuspendAndRecovery(t *testing.T) {
 	defer conn.Close()
 
 	// Ingest some data first so we have something to query.
-	stream, err := client.IngestStream(context.Background())
-	if err != nil {
-		t.Fatalf("open ingest stream: %v", err)
-	}
+	token := ensureToken(t, client, "testcust", "suspend-test")
+	stream := openAuthedStream(t, context.Background(), client, token)
 	now := time.Now()
 	for i := 0; i < 5; i++ {
 		stream.Send(&pb.LogRow{
@@ -195,11 +190,11 @@ func TestDockerStack_CustomerIsolation(t *testing.T) {
 	conn, client := grpcClient(t)
 	defer conn.Close()
 
-	// Ingest as customer "alpha".
-	stream, err := client.IngestStream(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Ingest as customer "alpha". The token's customer overrides whatever
+	// row.Customer the client sends server-side.
+	alphaToken := ensureToken(t, client, "alpha", "isolation")
+	_ = ensureToken(t, client, "beta", "isolation") // just to make beta a real customer for the query
+	stream := openAuthedStream(t, context.Background(), client, alphaToken)
 	now := time.Now()
 	for i := 0; i < 5; i++ {
 		stream.Send(&pb.LogRow{

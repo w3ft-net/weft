@@ -1,0 +1,10 @@
+2026-04-16 10:00:01 INFO worker pid=42 starting
+2026-04-16 10:00:02 INFO picked up job id=j-001 queue=default
+2026-04-16 10:00:03 INFO job j-001 completed duration=120ms
+2026-04-16 10:00:04 INFO picked up job id=j-002 queue=high
+2026-04-16 10:00:05 WARN job j-002 slow duration=5200ms
+2026-04-16 10:00:06 ERROR job j-003 failed: timeout after 30s
+2026-04-16 10:00:07 INFO retrying j-003 attempt=1
+2026-04-16 10:00:08 INFO job j-003 completed duration=210ms
+2026-04-16 10:00:09 INFO picked up job id=j-004 queue=default
+2026-04-16 10:00:10 INFO idle queue empty

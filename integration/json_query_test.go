@@ -22,10 +22,8 @@ func TestDockerStack_JqFieldExtraction(t *testing.T) {
 	defer conn.Close()
 
 	// Ingest JSON metrics rows — same shape as weftd metrics collector.
-	stream, err := client.IngestStream(context.Background())
-	if err != nil {
-		t.Fatalf("open ingest stream: %v", err)
-	}
+	token := ensureToken(t, client, "testcust", "jqtest")
+	stream := openAuthedStream(t, context.Background(), client, token)
 
 	now := time.Now()
 	metrics := []map[string]any{

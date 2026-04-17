@@ -6,9 +6,9 @@ type Customer struct {
 	gorm.Model
 	Name        string       `gorm:"uniqueIndex;not null"`
 	DisplayName string       // human-readable org/team name (editable)
-	Namespaces  []Namespace  `gorm:"foreignKey:CustomerID"`
-	Accounts    []Account    `gorm:"foreignKey:CustomerID"`
-	AgentTokens []AgentToken `gorm:"foreignKey:CustomerID"`
+	Namespaces  []Namespace  `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
+	Accounts    []Account    `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
+	AgentTokens []AgentToken `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
 }
 
 // Namespace is a grouping of log sources owned by a customer.

@@ -75,8 +75,12 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Connect to coordinator.
-	coordConn, err := grpc.NewClient(cfg.Endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// Connect to coordinator. The bearer token is attached to every RPC
+	// via PerRPCCredentials — IngestStream reads it from metadata.
+	coordConn, err := grpc.NewClient(cfg.Endpoint,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithPerRPCCredentials(bearerToken{token: cfg.Token}),
+	)
 	if err != nil {
 		log.Fatalf("connect to coordinator: %v", err)
 	}
@@ -261,6 +265,17 @@ func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 	run()
 	return nil
 }
+
+// bearerToken implements grpc.PerRPCCredentials so every outgoing RPC
+// carries `authorization: Bearer <token>`. The coordinator reads this in
+// IngestStream (and any other streaming RPC) to validate the caller.
+type bearerToken struct{ token string }
+
+func (b bearerToken) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
+	return map[string]string{"authorization": "Bearer " + b.token}, nil
+}
+
+func (bearerToken) RequireTransportSecurity() bool { return false }
 
 // openStream opens an IngestStream to the coordinator with retry.
 // Blocks until a stream is established or ctx is cancelled.

@@ -1,3 +1,4 @@
+-- +goose Up
 -- Shard heartbeat table: shards push their state every 60s.
 -- Partitioned by beat_at with 1-hour intervals, 5-minute retention.
 -- A shard with no heartbeat in 2 minutes is considered dead.

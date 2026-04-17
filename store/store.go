@@ -11,23 +11,17 @@ type Store struct {
 	db *gorm.DB
 }
 
-// Open connects to the database and runs migrations for all models.
-// Usage tables (usage_hourly, usage_daily) are managed via SQL migrations, not AutoMigrate.
+// Open connects to the database and ensures all goose migrations have been
+// applied. Schema is authoritative from the .sql files under store/migrations;
+// we no longer use GORM AutoMigrate.
 func Open(dsn string) (*Store, error) {
+	if err := Migrate(dsn); err != nil {
+		return nil, err
+	}
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
-		return nil, err
-	}
-	if err := db.AutoMigrate(
-		&Customer{}, &Namespace{}, &Account{}, &LogGroup{}, &AgentToken{},
-		&ShardRecord{}, &Subscription{},
-		&ShellFunction{}, &CronWatch{}, &CronResult{}, &NotifyConfig{},
-		&User{}, &MagicLink{}, &SavedQuery{}, &TeamMember{},
-		&AlertIncident{}, &DeviceCode{}, &NamespacePermission{},
-		&PendingSource{},
-	); err != nil {
 		return nil, err
 	}
 	return &Store{db: db}, nil

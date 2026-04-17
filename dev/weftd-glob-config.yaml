@@ -1,0 +1,6 @@
+endpoint: "coordinator:9020"
+token: "wft_dev_0000000000000000"
+customer: "kevlar"
+host_group: "dev-glob"
+sources:
+  - path: /var/log/testlogs/*.log

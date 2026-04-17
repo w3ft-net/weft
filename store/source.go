@@ -5,17 +5,17 @@ import "gorm.io/gorm"
 type Account struct {
 	gorm.Model
 	CustomerID uint      `gorm:"not null"`
-	Customer   Customer  `gorm:"foreignKey:CustomerID"`
+	Customer   Customer  `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
 	AWSAccount string    `gorm:"not null"`
 	RoleARN    string    `gorm:"not null"`
 	ExternalID string
-	LogGroups  []LogGroup `gorm:"foreignKey:AccountID"`
+	LogGroups  []LogGroup `gorm:"foreignKey:AccountID;constraint:OnDelete:CASCADE"`
 }
 
 type LogGroup struct {
 	gorm.Model
 	AccountID    uint    `gorm:"not null;uniqueIndex:idx_account_app"`
-	Account      Account `gorm:"foreignKey:AccountID"`
+	Account      Account `gorm:"foreignKey:AccountID;constraint:OnDelete:CASCADE"`
 	App          string  `gorm:"not null;uniqueIndex:idx_account_app"`
 	LogGroupName string  `gorm:"not null"`
 	Region       string  `gorm:"not null;default:us-east-2"`

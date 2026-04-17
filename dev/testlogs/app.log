@@ -1,0 +1,10 @@
+2026-04-16 10:00:01 INFO app starting up version=1.2.3
+2026-04-16 10:00:02 INFO connected to postgres
+2026-04-16 10:00:03 INFO listening on :8080
+2026-04-16 10:00:04 INFO worker pool=4 started
+2026-04-16 10:00:05 WARN cache miss key=user:1234
+2026-04-16 10:00:06 INFO request user=alice path=/projects
+2026-04-16 10:00:07 ERROR failed to write: connection reset
+2026-04-16 10:00:08 INFO retry succeeded attempt=2
+2026-04-16 10:00:09 INFO request user=bob path=/dashboard
+2026-04-16 10:00:10 INFO shutdown signal received
