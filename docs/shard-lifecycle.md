@@ -41,41 +41,44 @@ lifecycle**. A shard can outlive many instances.
 
 ```
                 ┌─────────────┐
-          ┌────▶│  INGESTING  │──────┐
-          │     └─────────────┘      │
-  coord.  │                          │ window
-christens │     ┌─────────────┐      │ closes
-new shard └─────│   ADOPTED   │      │
-                └─────────────┘      ▼
-                       ▲      ┌─────────────┐
-                  adopt from  │  READ_ONLY  │
-                  heartbeat   └─────────────┘
-                                     │
-                                     │ retention
-                                     │ boundary
-                                     ▼
-                              ┌─────────────┐
-                              │  ARCHIVING  │
-                              └─────────────┘
-                                     │
-                                     │ export to S3
-                                     ▼
-                              ┌─────────────┐
-                              │  ARCHIVED   │  (Lambda-served cold)
-                              └─────────────┘
-                                     │
-                                     │ cold retention
-                                     ▼
-                              ┌─────────────┐
-                              │  TERMINATED │
-                              └─────────────┘
+          ┌────▶│  INGESTING  │◀─┐───┐
+          │     └─────────────┘  │   │
+  coord.  │                      │   │ window
+christens │     ┌─────────────┐  │   │ closes
+new shard └─────│   ADOPTED   │  │   │
+                └─────────────┘  │   ▼
+                       ▲         │  ┌─────────────┐
+                 fresh EBS,      │  │  READ_ONLY  │◀─┐
+                 no identity     │  └─────────────┘  │
+                                 │         │        rebind
+                  rebind ────────┘         │        (known id
+                  (known id)               │         at new
+                                           │         addr)
+                                           │
+                                           │ retention
+                                           │ boundary
+                                           ▼
+                                    ┌─────────────┐
+                                    │  ARCHIVING  │◀─┐
+                                    └─────────────┘  │
+                                           │        rebind
+                                           │ export to S3
+                                           ▼
+                                    ┌─────────────┐
+                                    │  ARCHIVED   │  (Lambda-served cold)
+                                    └─────────────┘
+                                           │
+                                           │ cold retention
+                                           ▼
+                                    ┌─────────────┐
+                                    │  TERMINATED │
+                                    └─────────────┘
 ```
 
-- **ADOPTED** — an instance has come up with an EBS volume attached
-  and has reported in. The coordinator recognises the shard (by the
-  identity stored on the volume) but has not yet christened it with
-  a window/app assignment. New instances for an existing shard also
-  briefly pass through this state.
+- **ADOPTED** — an instance has come up with a **fresh EBS volume**
+  (no `shard.json` on disk) and has reported in. The coordinator
+  hasn't yet christened it with a window/app assignment. Only new
+  shards in a brand-new fleet pass through this state.
 - **INGESTING** — coordinator has assigned the shard a window and
   app set. Writes for rows whose timestamp falls in the window and
   whose app is in the set route here. Queries overlapping the
@@ -96,55 +99,89 @@ Exactly one state transition per boundary — the coordinator is the
 only actor that moves a shard from one state to the next. Instances
 don't self-transition.
 
+### Rebind: prodigal-son heartbeats
+
+The "rebind" arrows on the diagram are not state transitions; they're
+addr/instance_id updates **within** the shard's current state.
+
+If an instance hosting shard S dies and a replacement instance comes
+up with the same EBS volume attached, the shard process reads
+`shard.json`, heartbeats with the existing `shard_id` at the new
+addr, and the coordinator sees an already-registered shard reporting
+in. The coordinator updates `addr` and `instance_id`, reconnects the
+gRPC handle, clears any `Suspended` flag, and leaves the state
+untouched. The shard was INGESTING before → it's INGESTING after.
+READ_ONLY → READ_ONLY. ARCHIVING → ARCHIVING (the export resumes or
+restarts depending on how far it got; see Archiving section).
+
+No christening happens. Concretely: `kevcons chaos --role shard` on a
+live shard should put it through this path — kill the instance, the
+ASG-replaced instance reattaches the same EBS, the shard process
+comes up with the same identity, and the coordinator just re-wires
+its gRPC handle.
+
+The ADOPTED state is only entered by a shard with a fresh EBS volume
+and no `shard.json`. That's a brand-new shard in a brand-new fleet,
+not a restarted one.
+
 ## Rotation
 
+Two configuration knobs govern the whole scheme:
+
+- `w.duration` — how long a single window covers (e.g. `7d`).
+- `w.count` — how many hot windows are retained simultaneously
+  (e.g. `2`: current and previous). Hot retention = `w.count *
+  w.duration`.
+
 The interesting part of the lifecycle is what happens near the end of
-a hot window. Assume 7-day hot retention and a 7-day write window.
+a hot window. Walkthrough assumes `w.duration = 7d`, `w.count = 2`
+(so: current window ingesting, previous window still hot for reads).
 
 Steady state (call it day N within the current window):
 
 ```
-       │ window W0                 │ window W1 (future)
-───────┼───────────────────────────┼───────────────
-  day  │  7..6..5..4..3..2..1..0   │
-       │                           │
-       │  ingesting: shards owned  │
-       │  by W0 (1+ per tier)      │
+       │ window W-prev        │ window W0 (current)       │ window W1 (future)
+───────┼──────────────────────┼───────────────────────────┼───────────────
+       │  7..6..5..4..3..2..1 │  7..6..5..4..3..2..1..0   │
+       │                      │                           │
+       │  READ_ONLY fleet     │  INGESTING fleet          │
+       │  (queries only)      │  (all writes, queries)    │
 ```
 
-Hot storage covers one window at a time. All writes go to W0's
-shards.
+All writes go to W0's shards. Queries spanning W-prev and W0 fan
+out to both fleets.
 
-Window handoff (approaching W0's end, call it T-24h):
+Window handoff (approaching W0's end, call it T - handoff_lead, with
+`handoff_lead` configurable, nominally 24h):
 
 ```
-       │ window W0            │ window W1
-───────┼──────────────────────┼────────────────
-       │                      │
-       │  ingesting W0        │  ingesting W1
-       │  (old fleet)         │  (new fleet, just
-       │                      │   came up, empty)
+       │ W-prev       │ W0               │ W1
+───────┼──────────────┼──────────────────┼──────────────────
+       │              │                  │
+       │  READ_ONLY   │  INGESTING       │  INGESTING (new,
+       │  or          │  (old fleet,     │   just christened,
+       │  ARCHIVING   │   primary)       │   empty)
 ```
 
-For the last ~24h of W0, **both fleets are live**. The coordinator
-christens W1's shards early so they're warmed up and in the registry
-before the cutover. Writes for a row are routed based on its
-timestamp: rows in W0's window still go to W0's fleet; rows crossing
-into W1 start going to W1's fleet.
+For the last `handoff_lead` interval of W0, **both W0 and W1 fleets
+are INGESTING**. The coordinator christens W1's shards early so
+they're warmed up, christened, and in the registry before cutover.
+Writes route by timestamp: rows whose ts falls in W0 still go to
+W0's fleet; rows crossing into W1 go to W1's fleet.
 
-Counts to keep in your head:
-- 1 fleet ingesting at any instant (nominal).
-- Up to 2 fleets in INGESTING state overlapping for the last 24h of
-  a window (while W1 is christened but W0 is still authoritative
-  for in-window writes).
-- Add N fleets in READ_ONLY / ARCHIVING for however many past
-  windows are still within hot retention. With 7-day hot retention
-  and 7-day windows, N=1 at steady state (the previous window).
+At boundary crossing, W0 transitions to READ_ONLY and what used to
+be W-prev transitions to ARCHIVING.
 
-Worst-case bottom-of-window shard count = **3 × per-window fleet
-size** briefly: W-prev (READ_ONLY or ARCHIVING), W0 (INGESTING,
-primary), W1 (INGESTING, warming). Provisioner planning must account
-for this, not collapse to "desired_capacity = per-window size".
+Fleet-count math in terms of the config:
+
+- At steady state: `w.count` fleets hot (one INGESTING, the rest
+  READ_ONLY or ARCHIVING).
+- At handoff: `w.count + 1` fleets briefly — `w.count` existing
+  plus one warming. For `w.count = 2`, that's the "3× per-window
+  fleet size" I had written before.
+
+Worst-case provisioner capacity planning must reserve for
+`(w.count + 1) × fleet_size`, not `w.count × fleet_size`.
 
 ## Identity persistence
 
@@ -183,17 +220,28 @@ Happy path:
      not yet ARCHIVED?
      - **No** → reap normally; terminate instance; don't replace.
      - **Yes** → recover.
-5. Recovery:
-   1. Detach V-S from I-A (even though I-A is dead, the API call
-      may need `Force: true`).
-   2. Launch I-B in the shard's ASG via the launcher.
-   3. Attach V-S to I-B at `/dev/xvdf` (or whatever).
-   4. I-B's startup script mounts the volume, reads
+5. Recovery (issued via ASG APIs so we don't race the ASG):
+   1. Look up V-S by `shard_id` — either from `shard_records.ebs_volume_id`
+      (cached) or by listing volumes filtered on
+      `tag:shard_id=<name>` (authoritative, tags are the source of
+      truth).
+   2. `DetachVolume V-S` with `Force: true` (I-A is dead so the
+      soft detach would hang).
+   3. Call `TerminateInstanceInAutoScalingGroup` on I-A with
+      `ShouldDecrementDesiredCapacity = false`. The ASG launches
+      I-B from the (naked) launch template to maintain desired
+      capacity. **Critical**: the launch template must not attach
+      an EBS volume of its own — see Gap #4 — otherwise I-B boots
+      with an empty volume and our attach in the next step races
+      against its existing one.
+   4. Poll for I-B to reach `InService`, then `AttachVolume V-S`
+      to I-B at the agreed device path (`/dev/sdf`).
+   5. I-B's startup script mounts the volume, reads
       `/opt/app/data/shard.json`, starts weft-shard with the
       recovered identity.
-   5. I-B heartbeats. Coordinator observes the shard is back at a
-      new addr, updates the registry entry's `addr` / `instance_id`,
-      keeps everything else.
+   6. I-B heartbeats with the existing shard id — this is the
+      rebind path described above. Coordinator updates `addr` /
+      `instance_id`, keeps state/window/apps.
 
 Nothing about the shard's identity, window, or data changed during
 the recovery. From a writer's or querier's perspective, there was a
@@ -202,27 +250,46 @@ the recovery. From a writer's or querier's perspective, there was a
 Pre-existing constraints to be mindful of:
 - EBS volumes are AZ-scoped. The recovery instance has to come up
   in the same AZ. Either every shard's ASG is pinned to one AZ, or
-  the launcher handles AZ-to-subnet mapping.
-- `ec2:AttachVolume` and `ec2:DetachVolume` are not in the current
-  coordinator IAM policy (see Gap analysis #4).
+  the launcher tracks the volume's AZ and launches there. See
+  [az-resilience.md](az-resilience.md) for the longer-term design
+  where write shards intentionally span AZs.
+- `ec2:AttachVolume`, `ec2:DetachVolume`, `ec2:DescribeVolumes`,
+  and `autoscaling:TerminateInstanceInAutoScalingGroup` are needed
+  by the coordinator. Some are already granted; see Gap #4 for the
+  missing set.
 
 ## Archiving and cold storage
 
-At the retention boundary (e.g. hot shard N days past window end),
-the coordinator:
+Nothing in this section is a new mechanism — the export path, the
+cold-storage bucket, and the Lambda cold-shard function already
+exist. Missing piece is the **scheduling**: calling the existing
+export at the right time on a window boundary.
+
+At the retention boundary (shard's window older than
+`w.count * w.duration` past its end), the coordinator:
 
 1. Transitions the shard to ARCHIVING.
-2. Triggers the Parquet export: a DuckDB query on the shard writes
-   all rows into a Parquet file at a canonical S3 path, e.g.
-   `s3://weft-cold-<acct>/<yyyy>/<mm>/<dd>/<shard_id>.parquet`.
-3. Records the Parquet path in `shard_records`.
+2. Invokes the existing shard-side exporter (`shard/cold_shard*`).
+   The shard writes its DuckDB contents to Parquet and uploads
+   directly to S3 at a canonical path under `weft-cold-<acct>/…`.
+   The bucket already exists in
+   `infrastructure-catalog/stacks/asg-weft-application` — no
+   terraform change.
+3. Records the resulting Parquet path in `shard_records.parquet_path`.
 4. Transitions to ARCHIVED.
-5. Terminates the instance, detaches & deletes the EBS volume.
+5. Terminates the instance via ASG and deletes the EBS volume.
 6. Subsequent queries overlapping the window route to the Lambda
-   cold-shard invoker instead of the now-gone hot shard.
+   `cold-shard` invoker (already wired) instead of the hot shard
+   that's no longer there.
 
 Queries during ARCHIVING still hit the hot shard until transition
 completes — no double-count, no gap.
+
+Rebind during ARCHIVING: if the hot shard's instance dies mid-export
+and gets recovered, the export is interrupted. Current implementation
+restarts the export from scratch on the new instance; incremental
+resume is not required (the export is idempotent as long as we write
+to a distinct object key per run and finalise atomically).
 
 ## Coordinator contract
 
@@ -306,10 +373,14 @@ match this doc. Numbered so we can track them.
    `adoptFromHeartbeats` quietly accepts anything heartbeating and
    slots it into `StateIngesting` with zero-value windows. It must
    instead:
-   - Recognise a known shard id → update addr, move on.
-   - Recognise an unclaimed new instance (no shard id in
-     heartbeat) → assign identity, Configure, transition to
-     INGESTING.
+   - Recognise a known shard id (heartbeat's `shard_id` already in
+     the registry) → rebind path: update `addr` / `instance_id` /
+     gRPC handle, clear `Suspended`, preserve state. No christening.
+   - Recognise an unclaimed new instance (shard reports "no
+     identity on disk") → christen: mint the next shard name for
+     the active window, populate `apps` from the current onboarded
+     set (see gap item 9), write `shard.json` via a Configure RPC,
+     transition to INGESTING.
 
 3. **Rotation on wall-clock windows.** A ticker in the provisioner
    that, when the current window is within some lead time of its
@@ -318,19 +389,33 @@ match this doc. Numbered so we can track them.
    `check()`, which should probably just go away once windows are
    real.
 
-4. **EBS per-shard attach/detach.** Two sub-problems:
-   a. Tag volumes with `shard_id` at creation; don't delete on
-      instance termination; make the shard ASG's launch template
-      create the volume separately.
-   b. On failure recovery, orchestrate
-      `Detach(force) → Attach(to new instance) → wait`. Needs
-      `ec2:AttachVolume`, `ec2:DetachVolume`, `ec2:CreateVolume`,
-      `ec2:DeleteVolume` in the coordinator IAM policy.
+4. **EBS per-shard attach/detach.** Several related pieces:
+   a. **Naked launch templates** for the shard ASGs — no
+      `block_device_mappings`. New instances come up with the root
+      volume only; the shard's data volume is always attached from
+      outside by the coordinator. Prevents the collision where an
+      ASG-launched replacement boots with its own empty volume
+      that would race our re-attach.
+   b. **Tag volumes with `shard_id`** at creation. The tag is the
+      authoritative `shard → volume` binding; operators can find a
+      shard's volume with `describe-volumes
+      --filters Name=tag:shard_id,Values=<name>`.
+   c. **Cache `ebs_volume_id` in `shard_records`** to avoid a
+      describe-volumes call on every recovery, and to make the
+      binding visible in Postgres.
+   d. **Recovery orchestration** uses the ASG-friendly dance:
+      `TerminateInstanceInAutoScalingGroup` (with
+      `ShouldDecrementDesiredCapacity=false` so the ASG launches
+      our replacement), then `DetachVolume(force)` →
+      `AttachVolume(new-instance)`.
+   e. **IAM**: the coordinator instance role needs
+      `ec2:DescribeVolumes`, `ec2:AttachVolume`, `ec2:DetachVolume`,
+      `ec2:CreateVolume`, `ec2:DeleteVolume`, `ec2:CreateTags`.
 
 5. **Failure-recovery branch.** Before reaping, ask: is this
    shard's window within hot retention and not ARCHIVED? If so,
-   recover (re-launch + re-attach EBS) rather than reap. Only
-   fully-expired shards get reaped and terminated.
+   recover (re-attach EBS into ASG-launched replacement) rather
+   than reap. Only fully-expired shards get reaped and terminated.
 
 6. **Archive scheduling on retention boundary.** Currently export
    is manual. Should be driven by the same ticker that does
@@ -347,23 +432,43 @@ match this doc. Numbered so we can track them.
    heartbeat is a legacy artifact of the old model and can be
    deleted. A migration-or-script can do it.
 
+9. **`apps` populated at christening; appended on app onboarding.**
+   Every shard record always has a non-empty `apps` list — there's
+   no "NULL means catch-all" special case. At christening,
+   populate from the current set of onboarded apps for the
+   namespace. When a new app is onboarded (via weftd onboarding or
+   CLI), append it to the `apps` list on every INGESTING shard
+   that should host it (= all current write shards, until the
+   dedicated-fleet mechanism in a future iteration carves out
+   exceptions). Query routing is then a direct membership check
+   (`app ∈ shard.apps`), no special cases.
+
 ## Known ambiguities to decide before implementation
 
-- **Per-app or shared shards?** The `apps` field is modelled as a
-  set. Today most rows have `null`. Decide whether per-app
-  partitioning is a day-1 feature or deferred. Either way,
-  adopting the identity-on-EBS model doesn't block it.
-- **Exporter location.** Hot shard exports itself to S3 vs.
-  coordinator exports it remotely. The existing
-  `coordinator/archiver*` suggests coordinator-side; the
-  `shard/cold_shard*` path suggests shard-side. Pick one.
-- **Spot vs. on-demand for shards.** Spot reclaims make the
-  failure-recovery path hot. If recovery is robust, spot is
-  viable. If not, on-demand only.
-- **Cross-AZ failure.** EBS is AZ-scoped. If an entire AZ drops,
-  recovery can't proceed until the AZ comes back. Acceptable?
-  Otherwise we need snapshot-based recovery into a different AZ
-  (slower, more $).
+- **Dedicated fleets for high-throughput apps.** Day-1 model is
+  that every onboarded app joins the default fleet's `apps` list
+  at christening. Later we will want the flexibility to carve out
+  a high-throughput app onto its own fleet (possibly meatier
+  instance types, different `w.duration` / `w.count`). The data
+  model already supports this — just don't append the app to the
+  default fleet and christen a separate fleet whose `apps = [that
+  app]`. No schema change needed when we add the mechanism.
+- **Spot vs. on-demand purchase model.** Shard ASG launch
+  templates can request EC2 capacity as spot (cheaper, ~70% off
+  on-demand, but AWS can reclaim with 2 min notice) or on-demand
+  (stable). Spot viability depends on three things together:
+  (a) recovery robust enough that reclaim = routine instance
+  death; (b) DuckDB fsync cadence tight enough that the
+  worst-case lost-writes window is acceptable; (c) mixed-instance
+  policy so we fall back to on-demand when spot capacity tightens.
+  **Day-1: on-demand.** Revisit once we have recovery working in
+  prod and have measured fsync cadence.
+- **Multi-AZ.** EBS is AZ-scoped, so a shard recovered after
+  instance death must come up in the same AZ. A full-AZ outage
+  blocks recovery for any shards in that AZ. Longer-term we want
+  write shards intentionally split across AZs and cross-AZ
+  snapshotting. See [az-resilience.md](az-resilience.md) for that
+  design. Not day-1.
 
 ## Testing story
 
@@ -374,10 +479,11 @@ Three layers worth building out in lockstep with the above:
   launcher + mocked store. Fast, deterministic, covers the state
   machine.
 - **Integration** (`integration/` package, docker-compose) — full
-  coordinator + shard containers, fake time advance via a mockable
-  clock hook so we can simulate "7 days passed" in milliseconds.
-  Covers the happy-path rotation and failure-recovery with real
-  DuckDB.
+  coordinator + shard containers with small real values for
+  `w.duration` / `w.count` (e.g. `30s`, `2`) so rotation and
+  retention boundaries fire inside a test lifetime. Real
+  wall-clock time; no mock clock. Covers happy-path rotation and
+  failure-recovery with real DuckDB.
 - **Prod smoke** (one-off, via `kevcons ssh` or a dedicated script)
   — after AMI rollout, kill an ASG instance mid-window and confirm
   a fresh instance picks up the EBS with the same shard id and no
