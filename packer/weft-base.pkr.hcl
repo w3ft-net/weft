@@ -166,6 +166,34 @@ build {
     ]
   }
 
+  # Inter-instance SSH: kevcons ssh --role <non-entrypoint> tunnels through
+  # the coordinator using this bastion key pair. Mirrors the
+  # infrastructure-catalog inter-instance-ssh ansible role used by django
+  # apps. Every weft node gets the public key in authorized_keys and the
+  # private key at /home/admin/.ssh/bastion_key — the coordinator is the
+  # only one that normally uses the private key, but all nodes share the
+  # same trust boundary so isolation per node isn't a meaningful gain.
+  provisioner "file" {
+    source      = "deploy/bastion_key"
+    destination = "/tmp/bastion_key"
+  }
+
+  provisioner "file" {
+    source      = "deploy/bastion_key.pub"
+    destination = "/tmp/bastion_key.pub"
+  }
+
+  provisioner "shell" {
+    inline = [
+      "sudo mkdir -p /home/admin/.ssh",
+      "sudo mv /tmp/bastion_key.pub /home/admin/.ssh/authorized_keys",
+      "sudo mv /tmp/bastion_key    /home/admin/.ssh/bastion_key",
+      "sudo chown -R admin:admin /home/admin/.ssh",
+      "sudo chmod 700 /home/admin/.ssh",
+      "sudo chmod 600 /home/admin/.ssh/authorized_keys /home/admin/.ssh/bastion_key",
+    ]
+  }
+
   post-processor "manifest" {
     output     = var.manifest_output != "" ? var.manifest_output : "manifest-base.json"
     strip_path = true
