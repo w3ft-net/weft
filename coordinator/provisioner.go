@@ -35,6 +35,8 @@ type ProvisionerConfig struct {
 	LambdaFunctionURL  string          // Lambda function URL for cold queries (empty = in-process ColdShard)
 	Store              HeartbeatStore  // for reading shard heartbeats (nil = no heartbeat adoption)
 	WindowDuration     time.Duration   // duration of a single shard window (w.duration in docs/shard-lifecycle.md)
+	ConfigureRetries   int             // attempts to Configure a freshly-launched shard (default 12)
+	ConfigureBackoff   time.Duration   // sleep between Configure attempts (default 5s)
 }
 
 // DefaultProvisionerConfig returns sensible production defaults.
@@ -226,6 +228,7 @@ func (p *Provisioner) adoptFromHeartbeats() {
 			existing.Addr = hb.Addr
 			existing.InstanceID = hb.InstanceID
 			existing.Suspended = false
+			p.registry.PersistState(existing)
 			continue
 		}
 
@@ -404,7 +407,8 @@ func (p *Provisioner) bootstrap(ctx context.Context) {
 
 // launchAndConfigure is the shared lifecycle logic: launch instance,
 // connect via gRPC, call Configure RPC, return a registry entry.
-// This runs the same code path for LocalLauncher and ASGLauncher.
+// Goes through the ShardConfigurer so tests can swap the gRPC dial for
+// a stub.
 func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier string, apps []string, windowStart, windowEnd time.Time) (*ShardEntry, error) {
 	log.Printf("provisioner: launching shard %s (tier=%s)", shardID, tier)
 
@@ -413,28 +417,33 @@ func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier stri
 		return nil, fmt.Errorf("launch: %w", err)
 	}
 
-	// Connect via gRPC.
-	gs, err := shard.NewGRPCShard(shardID, addr)
-	if err != nil {
-		p.launcher.TerminateInstance(ctx, "", addr)
-		return nil, fmt.Errorf("connect to %s: %w", addr, err)
-	}
-
-	// Configure RPC with retry — instance may need a moment to start.
 	cfg := &pb.ConfigureRequest{
 		ShardId:     shardID,
 		Apps:        apps,
 		WindowStart: windowStart.Format(time.RFC3339),
 		WindowEnd:   windowEnd.Format(time.RFC3339),
 	}
+
+	// Retry Configure — instance may still be coming up. The
+	// configurer is responsible for the actual gRPC dial.
+	retries := p.config.ConfigureRetries
+	if retries <= 0 {
+		retries = 12
+	}
+	backoff := p.config.ConfigureBackoff
+	if backoff <= 0 {
+		backoff = 5 * time.Second
+	}
+
+	var sh shard.Shard
 	var configErr error
-	for i := 0; i < 12; i++ {
-		configErr = gs.Configure(ctx, cfg)
+	for i := 0; i < retries; i++ {
+		sh, configErr = p.configurer.Dial(ctx, addr, cfg)
 		if configErr == nil {
 			break
 		}
 		log.Printf("provisioner: configure %s attempt %d: %v", shardID, i+1, configErr)
-		time.Sleep(5 * time.Second)
+		time.Sleep(backoff)
 	}
 	if configErr != nil {
 		p.launcher.TerminateInstance(ctx, "", addr)
@@ -450,7 +459,7 @@ func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier stri
 		WindowEnd:   windowEnd,
 		State:       StateIngesting,
 		Addr:        addr,
-		Shard:       gs,
+		Shard:       sh,
 		CreatedAt:   time.Now(),
 	}, nil
 }
@@ -579,12 +588,23 @@ func (p *Provisioner) archive(entry *ShardEntry) {
 	log.Printf("provisioner: shard %s archived to %s", entry.ID, parquetPath)
 }
 
-// rotate transitions an INGESTING shard to READ_ONLY and launches a replacement.
+// rotate transitions an INGESTING shard to READ_ONLY and launches a
+// replacement. The transition on `old` is persisted unconditionally
+// — even when the replacement launch fails — so the store doesn't
+// disagree with the registry about what state `old` is in.
 func (p *Provisioner) rotate(ctx context.Context, old *ShardEntry) {
 	now := time.Now().UTC()
 	seq := p.registry.Count()
 	newID := fmt.Sprintf("shard-%s-%s-%d", joinApps(old.Apps), now.Format("20060102T1504"), seq)
 	farFuture := now.Add(100 * 365 * 24 * time.Hour)
+
+	// Transition first, then launch. If launch fails we've at least
+	// stopped routing writes to `old`; the next check() will attempt
+	// the replacement again, and the write path falls back to the
+	// remaining INGESTING shards in the bucket.
+	old.WindowEnd = now
+	old.State = StateReadOnly
+	p.registry.PersistState(old)
 
 	entry, err := p.launchAndConfigure(ctx, newID, "small", old.Apps, now, farFuture)
 	if err != nil {
@@ -593,10 +613,6 @@ func (p *Provisioner) rotate(ctx context.Context, old *ShardEntry) {
 	}
 
 	p.registry.Add(entry)
-
-	// Transition old shard.
-	old.WindowEnd = now
-	old.State = StateReadOnly
 	log.Printf("provisioner: rotated %s → READ_ONLY, new shard %s", old.ID, newID)
 }
 
