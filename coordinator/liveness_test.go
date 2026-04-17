@@ -148,6 +148,46 @@ func TestSuspend_OnIngestFailure(t *testing.T) {
 	}
 }
 
+func TestSuspend_RequiresConsecutiveFailures(t *testing.T) {
+	// One flaky RPC shouldn't suspend a shard — that was the bug that caused
+	// 2026-04-17's shard-count inflation (intermittent NLB-loop heartbeat
+	// failures → immediate suspend → provisioner replaces → orphan
+	// accumulation). Require a consistent string of failures instead.
+	//
+	// Drive the registry's ingest-failure counter directly rather than going
+	// through StartDrain; the drain loop's routing to *other* shards on
+	// failure makes it hard to deterministically deliver N consecutive
+	// attempts to the same shard in a test.
+	reg := NewShardRegistry()
+	reg.Add(&ShardEntry{
+		ID: "shard-a", State: StateIngesting, CreatedAt: time.Now(),
+	})
+
+	// First failure: recorded, but below threshold.
+	reg.RecordIngestFailure("shard-a")
+	if reg.Get("shard-a").Suspended {
+		t.Fatal("one failure should not suspend")
+	}
+
+	// A successful ingest resets the counter.
+	reg.ResetIngestFailures("shard-a")
+
+	// Below-threshold run of consecutive failures — still healthy.
+	for i := 0; i < suspendFailureThreshold-1; i++ {
+		reg.RecordIngestFailure("shard-a")
+	}
+	if reg.Get("shard-a").Suspended {
+		t.Fatalf("suspended after only %d failures (threshold is %d)",
+			suspendFailureThreshold-1, suspendFailureThreshold)
+	}
+
+	// One more failure trips the threshold.
+	reg.RecordIngestFailure("shard-a")
+	if !reg.Get("shard-a").Suspended {
+		t.Fatalf("should be suspended after %d failures", suspendFailureThreshold)
+	}
+}
+
 func TestSuspend_AllShardsDown_DLQ(t *testing.T) {
 	shardA := &failingShard{id: "shard-a", failing: true}
 
@@ -170,9 +210,13 @@ func TestSuspend_AllShardsDown_DLQ(t *testing.T) {
 	c.StartDrain(ctx)
 	time.Sleep(50 * time.Millisecond)
 
-	rows := testRows("weft/shard", "graybeard", 5)
-	c.Ingest.Write(rows)
-	time.Sleep(300 * time.Millisecond)
+	// Drive enough consecutive failures past the threshold so the shard
+	// transitions to Suspended. Each Write triggers one drain cycle →
+	// one failed Ingest call → one RecordIngestFailure.
+	for i := 0; i < suspendFailureThreshold; i++ {
+		c.Ingest.Write(testRows("weft/shard", "graybeard", 5))
+		time.Sleep(120 * time.Millisecond)
+	}
 
 	// shard-a should be suspended.
 	if !reg.Get("shard-a").Suspended {

@@ -151,8 +151,17 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 						continue
 					}
 					if err := sh.Ingest(rows); err != nil {
-						log.Printf("drain: suspending shard %s: %v", sh.ID(), err)
-						c.Registry.Suspend(sh.ID())
+						// Count consecutive failures; only suspend once a
+						// sustained failure run crosses suspendFailureThreshold.
+						// One flaky RPC shouldn't take a shard out of rotation.
+						failures := c.Registry.RecordIngestFailure(sh.ID())
+						if c.Registry.Get(sh.ID()).Suspended {
+							log.Printf("drain: suspending shard %s after %d consecutive failures: %v",
+								sh.ID(), failures, err)
+						} else {
+							log.Printf("drain: ingest failed on shard %s (%d/%d): %v",
+								sh.ID(), failures, suspendFailureThreshold, err)
+						}
 
 						// Retry on a different healthy shard.
 						fallback := c.Registry.IngestingShard(app)
@@ -161,6 +170,7 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 						}
 						if fallback != nil {
 							if retryErr := fallback.Ingest(rows); retryErr == nil {
+								c.Registry.ResetIngestFailures(fallback.ID())
 								if c.Provisioner != nil {
 									c.Provisioner.Stats().Record(app, int64(len(rows)))
 								}
@@ -174,6 +184,7 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 						log.Printf("drain: DLQ'd %d rows for %s (shard %s failed, no fallback)", len(rows), app, sh.ID())
 						continue
 					}
+					c.Registry.ResetIngestFailures(sh.ID())
 					if c.Provisioner != nil {
 						c.Provisioner.Stats().Record(app, int64(len(rows)))
 					}

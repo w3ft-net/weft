@@ -24,20 +24,26 @@ const (
 
 // ShardEntry is the registry's per-shard metadata.
 type ShardEntry struct {
-	ID          string
-	Apps        []string   // apps this shard owns; empty = all apps (legacy/shared)
-	WindowStart time.Time
-	WindowEnd   time.Time
-	State       ShardState
-	Suspended   bool       // true if ingest failed — excluded from write routing, still queryable
-	Addr        string     // gRPC address for live shards
-	InstanceID  string     // EC2 instance ID
-	ParquetPath string     // Parquet file path for archived shards
-	Tier        string     // instance tier (small/medium/large)
-	RowCount    int64
-	CreatedAt   time.Time
-	Shard       shard.Shard // live connection (not persisted)
+	ID             string
+	Apps           []string // apps this shard owns; empty = all apps (legacy/shared)
+	WindowStart    time.Time
+	WindowEnd      time.Time
+	State          ShardState
+	Suspended      bool        // true if ingest failed repeatedly — excluded from write routing, still queryable
+	IngestFailures int         // consecutive ingest failures; resets on success; triggers Suspended at suspendFailureThreshold
+	Addr           string      // gRPC address for live shards
+	InstanceID     string      // EC2 instance ID
+	ParquetPath    string      // Parquet file path for archived shards
+	Tier           string      // instance tier (small/medium/large)
+	RowCount       int64
+	CreatedAt      time.Time
+	Shard          shard.Shard // live connection (not persisted)
 }
+
+// suspendFailureThreshold is the number of consecutive ingest failures
+// that marks a shard as suspended. One flaky RPC shouldn't take a shard
+// out of rotation; a sustained run of failures should.
+const suspendFailureThreshold = 3
 
 // hasApp returns true if this entry owns the given app. Empty Apps
 // means the shard is a catch-all (heartbeat-adopted shards start with
@@ -190,6 +196,35 @@ func (r *ShardRegistry) Suspend(id string) {
 	defer r.mu.Unlock()
 	if e, ok := r.entries[id]; ok {
 		e.Suspended = true
+	}
+}
+
+// RecordIngestFailure increments the consecutive-failure counter for the
+// given shard and marks it Suspended once it hits suspendFailureThreshold.
+// Returns the new count. Callers should pair this with ResetIngestFailures
+// on successful ingest so transient failures don't accumulate forever.
+func (r *ShardRegistry) RecordIngestFailure(id string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.entries[id]
+	if !ok {
+		return 0
+	}
+	e.IngestFailures++
+	if e.IngestFailures >= suspendFailureThreshold {
+		e.Suspended = true
+	}
+	return e.IngestFailures
+}
+
+// ResetIngestFailures clears the consecutive-failure counter for a shard
+// after a successful ingest. Does not alter Suspended — an explicit
+// heartbeat-based unsuspend handles that side.
+func (r *ShardRegistry) ResetIngestFailures(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e, ok := r.entries[id]; ok {
+		e.IngestFailures = 0
 	}
 }
 
