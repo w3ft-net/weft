@@ -244,6 +244,23 @@ func (p *Provisioner) reapDeadShards() {
 		}
 		log.Printf("provisioner: reaping dead shard %s (no heartbeat)", entry.ID)
 		p.registry.Remove(entry.ID)
+
+		// Also ask the launcher to terminate the instance. Without this
+		// the ASG keeps the "dead" instance around, which costs money
+		// and inflates bootstrap's "ASG already has N instances" check
+		// for every subsequent coordinator restart.
+		//
+		// Some tests construct a Provisioner without a launcher; skip
+		// the call in that case. Log errors but don't block removal —
+		// the registry is already updated and the coordinator mustn't
+		// hold onto a ghost entry just because the ASG API is slow.
+		if p.launcher != nil && entry.Addr != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if err := p.launcher.TerminateInstance(ctx, entry.Addr); err != nil {
+				log.Printf("provisioner: terminate %s (%s): %v", entry.ID, entry.Addr, err)
+			}
+			cancel()
+		}
 	}
 }
 

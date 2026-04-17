@@ -349,6 +349,70 @@ func TestReap_SkipsArchivedShards(t *testing.T) {
 	}
 }
 
+func TestReap_TerminatesInstanceViaLauncher(t *testing.T) {
+	// Regression guard for the orphaned-shards bug seen on 2026-04-17:
+	// reapDeadShards removed dead entries from the in-memory registry
+	// but never told the launcher to terminate the EC2 instance, so
+	// flaky heartbeats caused the ASG to accumulate "dead" instances
+	// that were still billing.
+	alive := &failingShard{id: "shard-alive"}
+	dead := &failingShard{id: "shard-dead"}
+
+	reg := NewShardRegistry()
+	reg.Add(&ShardEntry{
+		ID: "shard-alive", State: StateIngesting, Shard: alive,
+		Addr: "10.0.0.1:9000", CreatedAt: time.Now(),
+	})
+	reg.Add(&ShardEntry{
+		ID: "shard-dead", State: StateIngesting, Shard: dead,
+		Addr: "10.0.0.99:9000", CreatedAt: time.Now(),
+	})
+
+	mockStore := &mockHeartbeatStore{
+		heartbeats: []store.ShardHeartbeat{
+			{ShardID: "shard-alive", Addr: "10.0.0.1:9000", State: "INGESTING"},
+		},
+	}
+	launcher := &recordingLauncher{}
+	prov := &Provisioner{
+		registry: reg,
+		launcher: launcher,
+		config:   ProvisionerConfig{Store: mockStore, PollInterval: time.Second},
+	}
+	prov.reapDeadShards()
+
+	// Registry side: dead removed, alive kept.
+	if reg.Get("shard-dead") != nil {
+		t.Error("dead shard should have been reaped from registry")
+	}
+	if reg.Get("shard-alive") == nil {
+		t.Error("alive shard should not have been reaped")
+	}
+
+	// Launcher side: terminate called exactly once, for the dead shard's addr.
+	if got := len(launcher.terminated); got != 1 {
+		t.Fatalf("expected 1 TerminateInstance call, got %d: %v", got, launcher.terminated)
+	}
+	if launcher.terminated[0] != "10.0.0.99:9000" {
+		t.Errorf("expected TerminateInstance(10.0.0.99:9000), got %s", launcher.terminated[0])
+	}
+}
+
+// recordingLauncher captures TerminateInstance calls for assertions.
+// Satisfies ShardLauncher; LaunchInstance is a no-op.
+type recordingLauncher struct {
+	terminated []string
+}
+
+func (r *recordingLauncher) LaunchInstance(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
+func (r *recordingLauncher) TerminateInstance(_ context.Context, addr string) error {
+	r.terminated = append(r.terminated, addr)
+	return nil
+}
+
 func TestReap_SkipsWhenNoHeartbeats(t *testing.T) {
 	ds, err := shard.NewDuckDBShard("shard-0", "")
 	if err != nil {
