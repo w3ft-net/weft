@@ -129,19 +129,20 @@ EOF
 fi
 
 # For shard roles: generate shard.env with self-configuration.
+# Shard identity now lives in /opt/app/data/shard.json on the EBS volume —
+# the coordinator writes it via the Configure RPC on first christening
+# and every subsequent restart reads it back.
 if [ "$ROLE" = "shard" ]; then
-  # Coordinator NLB address from SSM.
   COORD_NLB=$(aws ssm get-parameter \
     --name "/$APP_NAME/config/coordinator-nlb" \
     --region "$REGION" \
     --query 'Parameter.Value' --output text 2>/dev/null || echo "")
 
   cat > /opt/app/shard.env <<EOF
-SHARD_ID=${INSTANCE_ID}
 COORDINATOR_ADDR=${COORD_NLB:-localhost:9020}
 EOF
   chown app:app /opt/app/shard.env
-  echo "shard env: id=$INSTANCE_ID coordinator=$COORD_NLB"
+  echo "shard env: coordinator=$COORD_NLB"
 fi
 
 systemctl start "weft-$ROLE"

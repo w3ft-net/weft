@@ -27,11 +27,13 @@ case "$ROLE" in
     ;;
 
   shard)
-    ARGS=(--id="${SHARD_ID:?SHARD_ID required}")
-    ARGS+=(--grpc-port="${SHARD_GRPC_PORT:-9000}")
+    # Identity is sourced from <data-dir>/shard.json, written by the
+    # coordinator via the Configure RPC on first christening and then
+    # persisted across restarts on the EBS volume.
+    ARGS=(--grpc-port="${SHARD_GRPC_PORT:-9000}")
     ARGS+=(--http-port="${SHARD_HTTP_PORT:-9001}")
+    ARGS+=(--data-dir="${SHARD_DATA_DIR:-/opt/app/data}")
 
-    [ -n "${SHARD_DB_PATH:-}" ]           && ARGS+=(--db="$SHARD_DB_PATH")
     [ -n "${COORDINATOR_ADDR:-}" ]        && ARGS+=(--coordinator-addr="$COORDINATOR_ADDR")
     [ -n "${HEARTBEAT_INTERVAL:-}" ]      && ARGS+=(--heartbeat-interval="$HEARTBEAT_INTERVAL")
 

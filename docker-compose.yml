@@ -16,6 +16,9 @@ services:
       timeout: 5s
       retries: 5
 
+  # Shard identity is persisted in shard.json inside the volume at
+  # /opt/app/data — written by the coordinator on first christening.
+  # Named volumes here stand in for per-instance EBS in production.
   shard-0:
     build:
       context: ..
@@ -23,10 +26,11 @@ services:
     entrypoint: ["/usr/local/bin/entrypoint.sh"]
     environment:
       ROLE: shard
-      SHARD_ID: shard-0
       COORDINATOR_ADDR: coordinator:9020
       HEARTBEAT_INTERVAL: "10s"
-      # SHARD_DB_PATH left unset = in-memory DuckDB
+      SHARD_DATA_DIR: /opt/app/data
+    volumes:
+      - shard0_data:/opt/app/data
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -41,10 +45,11 @@ services:
     entrypoint: ["/usr/local/bin/entrypoint.sh"]
     environment:
       ROLE: shard
-      SHARD_ID: shard-1
       COORDINATOR_ADDR: coordinator:9020
       HEARTBEAT_INTERVAL: "10s"
-      # SHARD_DB_PATH left unset = in-memory DuckDB
+      SHARD_DATA_DIR: /opt/app/data
+    volumes:
+      - shard1_data:/opt/app/data
     ports:
       - "9002:9000"
       - "9003:9001"
@@ -132,3 +137,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+volumes:
+  shard0_data:
+  shard1_data:

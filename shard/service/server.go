@@ -6,29 +6,92 @@ import (
 	"io"
 	"log"
 	"sync"
+	"time"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
 
 // Server implements the ShardQuery gRPC service backed by a DuckDBShard.
-// The shard can be nil at startup (blank-start mode) and initialized
-// later via the Configure RPC.
+// Two startup modes:
+//   - NewServerFromIdentity: EBS volume already carries shard.json; open
+//     DuckDB with that identity at startup.
+//   - NewBlankServer: fresh EBS, no identity on disk. The shard reports
+//     as unclaimed in heartbeats until the coordinator christens it via
+//     Configure, at which point we write shard.json and open DuckDB.
+//
+// Tests may still pass an already-opened *DuckDBShard via NewServer; that
+// path is identity-less and used only in in-process unit tests.
 type Server struct {
 	pb.UnimplementedShardQueryServer
+
 	mu    sync.RWMutex
 	shard *shard.DuckDBShard
 	id    string
 	apps  []string
+
+	// dataDir is the directory shard.json lives in. Empty means the
+	// server is in test/in-process mode with no persistence.
+	dataDir string
+	dbPath  string
 }
 
-// NewServer creates a new shard gRPC server. s can be nil for blank-start mode.
+// NewServer wraps an already-open DuckDBShard. Used by in-process tests
+// where no identity file is needed.
 func NewServer(s *shard.DuckDBShard) *Server {
 	srv := &Server{shard: s}
 	if s != nil {
 		srv.id = s.ID()
 	}
 	return srv
+}
+
+// NewBlankServer creates a Server for a fresh EBS volume — no identity
+// yet. Calls to Query/Ingest fail until Configure is invoked. dataDir is
+// where shard.json gets written; dbPath is where the DuckDB file will be
+// created on Configure.
+func NewBlankServer(dataDir, dbPath string) *Server {
+	return &Server{dataDir: dataDir, dbPath: dbPath}
+}
+
+// NewServerFromIdentity reads shard.json from dataDir, opens the DuckDB
+// at dbPath, and returns a configured Server. Use when the shard restarts
+// against an existing EBS volume.
+func NewServerFromIdentity(dataDir, dbPath string) (*Server, error) {
+	id, err := shard.LoadIdentity(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("load identity: %w", err)
+	}
+	if id == nil {
+		return nil, fmt.Errorf("no shard.json in %s", dataDir)
+	}
+	ds, err := shard.NewDuckDBShard(id.ShardID, dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("open duckdb at %s: %w", dbPath, err)
+	}
+	return &Server{
+		shard:   ds,
+		id:      id.ShardID,
+		apps:    id.Apps,
+		dataDir: dataDir,
+		dbPath:  dbPath,
+	}, nil
+}
+
+// Identity returns the current shard id, or "" when unclaimed. Safe to
+// call from any goroutine (e.g. the heartbeat loop in cmd/shard/main.go).
+func (s *Server) Identity() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.id
+}
+
+// Shard returns the underlying DuckDBShard, or nil if the server hasn't
+// been configured yet. The heartbeat loop uses this to report row count.
+func (s *Server) Shard() *shard.DuckDBShard {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.shard
 }
 
 // getShard returns the shard, or an error if not yet configured.
@@ -41,7 +104,9 @@ func (s *Server) getShard() (*shard.DuckDBShard, error) {
 	return s.shard, nil
 }
 
-// Configure assigns an identity and creates the DuckDB for a blank shard.
+// Configure assigns an identity, opens the DuckDB, and persists the
+// identity to disk. Rejects reconfigure: once a shard has an id, it
+// keeps that id for life.
 func (s *Server) Configure(_ context.Context, req *pb.ConfigureRequest) (*pb.ConfigureResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -50,11 +115,38 @@ func (s *Server) Configure(_ context.Context, req *pb.ConfigureRequest) (*pb.Con
 		return nil, fmt.Errorf("shard already configured as %s", s.id)
 	}
 
-	ds, err := shard.NewDuckDBShard(req.ShardId, "")
-	if err != nil {
-		return nil, fmt.Errorf("create shard: %w", err)
+	if s.dataDir == "" {
+		// In-process test mode: no persistence, in-memory DB.
+		ds, err := shard.NewDuckDBShard(req.ShardId, "")
+		if err != nil {
+			return nil, fmt.Errorf("create shard: %w", err)
+		}
+		s.shard = ds
+		s.id = req.ShardId
+		s.apps = req.Apps
+		return &pb.ConfigureResponse{}, nil
 	}
 
+	// Production path: persist identity first, then open DuckDB.
+	// Do it in this order so a crash between the two leaves a readable
+	// identity on disk and the next restart picks up right where we left
+	// off — NewServerFromIdentity will open the DuckDB fresh.
+	winStart, _ := time.Parse(time.RFC3339, req.WindowStart)
+	winEnd, _ := time.Parse(time.RFC3339, req.WindowEnd)
+	ident := &shard.Identity{
+		ShardID:     req.ShardId,
+		WindowStart: winStart,
+		WindowEnd:   winEnd,
+		Apps:        req.Apps,
+	}
+	if err := shard.SaveIdentity(s.dataDir, ident); err != nil {
+		return nil, fmt.Errorf("persist identity: %w", err)
+	}
+
+	ds, err := shard.NewDuckDBShard(req.ShardId, s.dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("open duckdb at %s: %w", s.dbPath, err)
+	}
 	s.shard = ds
 	s.id = req.ShardId
 	s.apps = req.Apps
