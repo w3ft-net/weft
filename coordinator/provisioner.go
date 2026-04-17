@@ -34,6 +34,7 @@ type ProvisionerConfig struct {
 	S3Config           *shard.S3Config // S3 credentials for Parquet export/read (nil = local only)
 	LambdaFunctionURL  string          // Lambda function URL for cold queries (empty = in-process ColdShard)
 	Store              HeartbeatStore  // for reading shard heartbeats (nil = no heartbeat adoption)
+	WindowDuration     time.Duration   // duration of a single shard window (w.duration in docs/shard-lifecycle.md)
 }
 
 // DefaultProvisionerConfig returns sensible production defaults.
@@ -44,6 +45,7 @@ func DefaultProvisionerConfig() ProvisionerConfig {
 		MaxDuration:        8 * time.Hour,
 		PollInterval:       5 * time.Minute,
 		IngestingPerBucket: 2,
+		WindowDuration:     7 * 24 * time.Hour,
 	}
 }
 
@@ -55,6 +57,7 @@ func DevProvisionerConfig() ProvisionerConfig {
 		MaxDuration:        1 * time.Hour,
 		PollInterval:       5 * time.Second,
 		IngestingPerBucket: 2,
+		WindowDuration:     1 * time.Hour,
 	}
 }
 
@@ -94,23 +97,47 @@ func (s *AppStats) Snapshot() map[string]int64 {
 	return out
 }
 
+// ShardConfigurer dials a shard at addr, sends Configure, and returns a
+// live shard handle. Abstracted so tests can avoid real gRPC.
+type ShardConfigurer interface {
+	Dial(ctx context.Context, addr string, req *pb.ConfigureRequest) (shard.Shard, error)
+}
+
+// grpcConfigurer is the production ShardConfigurer — it actually dials
+// the shard over gRPC.
+type grpcConfigurer struct{}
+
+func (grpcConfigurer) Dial(ctx context.Context, addr string, req *pb.ConfigureRequest) (shard.Shard, error) {
+	gs, err := shard.NewGRPCShard(req.ShardId, addr)
+	if err != nil {
+		return nil, err
+	}
+	if err := gs.Configure(ctx, req); err != nil {
+		gs.Close()
+		return nil, err
+	}
+	return gs, nil
+}
+
 // Provisioner monitors shard fill rates and handles rotation.
 type Provisioner struct {
-	registry *ShardRegistry
-	launcher ShardLauncher
-	config   ProvisionerConfig
-	stats    *AppStats
-	Buckets  *BucketManager
+	registry   *ShardRegistry
+	launcher   ShardLauncher
+	config     ProvisionerConfig
+	stats      *AppStats
+	Buckets    *BucketManager
+	configurer ShardConfigurer
 }
 
 // NewProvisioner creates a provisioner.
 func NewProvisioner(registry *ShardRegistry, launcher ShardLauncher, config ProvisionerConfig) *Provisioner {
 	return &Provisioner{
-		registry: registry,
-		launcher: launcher,
-		config:   config,
-		stats:    NewAppStats(),
-		Buckets:  NewBucketManager(nil),
+		registry:   registry,
+		launcher:   launcher,
+		config:     config,
+		stats:      NewAppStats(),
+		Buckets:    NewBucketManager(nil),
+		configurer: grpcConfigurer{},
 	}
 }
 
@@ -153,8 +180,10 @@ func (p *Provisioner) Start(ctx context.Context) {
 	}()
 }
 
-// adoptFromHeartbeats reads recent shard heartbeats from the store
-// and adds any unknown shards to the registry.
+// adoptFromHeartbeats reads recent shard heartbeats from the store and
+// either rebinds them to existing entries (known id) or christens them
+// (empty id — fresh EBS with no shard.json). The christening arm is what
+// makes ADOPTED shards transition to INGESTING.
 func (p *Provisioner) adoptFromHeartbeats() {
 	if p.config.Store == nil {
 		return
@@ -167,17 +196,25 @@ func (p *Provisioner) adoptFromHeartbeats() {
 	}
 
 	for _, hb := range heartbeats {
+		// Unclaimed: shard reports empty id because shard.json was absent
+		// on its data volume. Needs christening.
+		if hb.ShardID == "" {
+			if err := p.christen(hb); err != nil {
+				log.Printf("provisioner: christen %s: %v", hb.Addr, err)
+			}
+			continue
+		}
+
 		existing := p.registry.Get(hb.ShardID)
 		if existing != nil {
 			if existing.Addr == hb.Addr {
-				// Same shard, same address. Unsuspend if it was suspended.
 				if existing.Suspended {
 					log.Printf("provisioner: unsuspending shard %s (heartbeat received)", hb.ShardID)
 					existing.Suspended = false
 				}
 				continue
 			}
-			// Same ID, different address → instance replaced.
+			// Rebind: same durable id, instance moved.
 			gs, err := shard.NewGRPCShard(hb.ShardID, hb.Addr)
 			if err != nil {
 				log.Printf("provisioner: reconnect %s at %s failed: %v", hb.ShardID, hb.Addr, err)
@@ -192,7 +229,9 @@ func (p *Provisioner) adoptFromHeartbeats() {
 			continue
 		}
 
-		// New shard — adopt it.
+		// Known id but not in the registry: either the registry was just
+		// reloaded from the store and is catching up, or the coordinator
+		// restarted. Adopt the entry so queries reach it.
 		gs, err := shard.NewGRPCShard(hb.ShardID, hb.Addr)
 		if err != nil {
 			log.Printf("provisioner: adopt %s at %s failed: %v", hb.ShardID, hb.Addr, err)
@@ -216,6 +255,59 @@ func (p *Provisioner) adoptFromHeartbeats() {
 		log.Printf("provisioner: adopted shard %s at %s (state=%s, rows=%d)",
 			hb.ShardID, hb.Addr, hb.State, hb.RowCount)
 	}
+}
+
+// christen assigns identity to an unclaimed shard: mints a shard id,
+// picks a window from WindowDuration, and sends Configure. The shard
+// persists the identity to shard.json before returning success.
+//
+// For now we use catch-all apps (empty list) — gap item #9 in
+// docs/shard-lifecycle.md tracks populating from the onboarded set.
+func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
+	windowDur := p.config.WindowDuration
+	if windowDur == 0 {
+		windowDur = 7 * 24 * time.Hour
+	}
+	now := time.Now().UTC()
+	windowStart := now.Truncate(windowDur)
+	windowEnd := windowStart.Add(windowDur)
+
+	// Name format: shard-YYYYMMDDThhmm-seq. Globally unique within the
+	// fleet; seq increments from current registry size so concurrent
+	// christenings don't collide.
+	seq := p.registry.Count() + 1
+	shardID := fmt.Sprintf("shard-%s-%d", windowStart.Format("20060102T1504"), seq)
+
+	req := &pb.ConfigureRequest{
+		ShardId:     shardID,
+		Apps:        nil, // catch-all; see gap #9
+		WindowStart: windowStart.Format(time.RFC3339),
+		WindowEnd:   windowEnd.Format(time.RFC3339),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	sh, err := p.configurer.Dial(ctx, hb.Addr, req)
+	if err != nil {
+		return fmt.Errorf("configure %s at %s: %w", shardID, hb.Addr, err)
+	}
+
+	p.registry.Add(&ShardEntry{
+		ID:          shardID,
+		Apps:        nil,
+		WindowStart: windowStart,
+		WindowEnd:   windowEnd,
+		State:       StateIngesting,
+		Addr:        hb.Addr,
+		InstanceID:  hb.InstanceID,
+		RowCount:    hb.RowCount,
+		Shard:       sh,
+		CreatedAt:   now,
+	})
+	log.Printf("provisioner: christened %s at %s (window %s–%s)",
+		shardID, hb.Addr, windowStart.Format(time.RFC3339), windowEnd.Format(time.RFC3339))
+	return nil
 }
 
 // reapDeadShards removes registry entries for shards that have stopped
