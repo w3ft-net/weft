@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import SidebarNav from '../components/SidebarNav'
+import PendingSourceConfigure from '../components/PendingSourceConfigure'
 import {
   getNamespaces, createNamespace, getTokens, createToken, revokeToken,
-  type NamespaceInfo, type AgentToken,
+  getPendingSources, onPendingSourcesChanged,
+  type NamespaceInfo, type AgentToken, type PendingSource,
 } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import './Dashboard.css'
@@ -22,6 +24,7 @@ export default function Namespaces() {
   const { user } = useAuth()
   const [namespaces, setNamespaces] = useState<NamespaceInfo[]>([])
   const [tokens, setTokens] = useState<AgentToken[]>([])
+  const [pendingSources, setPendingSources] = useState<PendingSource[]>([])
   const [showCreate, setShowCreate] = useState(false)
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
@@ -35,9 +38,28 @@ export default function Namespaces() {
   function loadData() {
     getNamespaces().then(setNamespaces).catch(() => {})
     getTokens().then(setTokens).catch(() => {})
+    getPendingSources().then(setPendingSources).catch(() => {})
   }
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => {
+    loadData()
+    return onPendingSourcesChanged(() => {
+      getPendingSources().then(setPendingSources).catch(() => {})
+    })
+  }, [])
+
+  // Auto-expand any namespace that has pending sources so the user sees
+  // the prompt on first load without having to click around.
+  useEffect(() => {
+    if (expanded !== null) return
+    const nsWithPending = pendingSources[0]?.namespace
+    if (nsWithPending) setExpanded(nsWithPending)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSources.length])
+
+  function pendingForNamespace(nsName: string): PendingSource[] {
+    return pendingSources.filter(p => p.namespace === nsName)
+  }
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault()
@@ -141,6 +163,7 @@ export default function Namespaces() {
               <div className="func-list">
                 {namespaces.map(ns => {
                   const nsTokens = tokensForNamespace(ns.name)
+                  const nsPending = pendingForNamespace(ns.name)
                   const isExpanded = expanded === ns.name
 
                   return (
@@ -149,6 +172,11 @@ export default function Namespaces() {
                         data-testid={`namespace-toggle-${ns.name}`}>
                         <span className="func-name-text">{ns.name}</span>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          {nsPending.length > 0 && (
+                            <span className="namespace-pending-badge" data-testid={`namespace-pending-badge-${ns.name}`}>
+                              {nsPending.length} pending source{nsPending.length === 1 ? '' : 's'}
+                            </span>
+                          )}
                           <span className="watch-count-badge">{nsTokens.length} token{nsTokens.length !== 1 ? 's' : ''}</span>
                           <span className="func-chevron">{isExpanded ? '▾' : '▸'}</span>
                         </div>
@@ -156,6 +184,20 @@ export default function Namespaces() {
 
                       {isExpanded && (
                         <div className="func-detail">
+                          {/* Pending sources — shown first so they're the obvious thing to act on */}
+                          {nsPending.length > 0 && (
+                            <div className="namespace-pending-section" data-testid={`namespace-pending-${ns.name}`}>
+                              <div className="namespace-subsection-title">Pending sources</div>
+                              {nsPending.map(src => (
+                                <PendingSourceConfigure
+                                  key={`${src.namespace}/${src.app}`}
+                                  source={src}
+                                  onConfigured={loadData}
+                                />
+                              ))}
+                            </div>
+                          )}
+
                           {/* Tokens for this namespace */}
                           {nsTokens.length > 0 && (
                             <div className="dash-table-wrap" style={{ marginBottom: 12 }}>

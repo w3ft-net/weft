@@ -69,6 +69,23 @@
 
 .sidebar-link-label {
   font-size: 0.85rem;
+  flex: 1;
+}
+
+.sidebar-pending-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 var(--accent);
+  animation: sidebar-pending-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes sidebar-pending-pulse {
+  0%   { box-shadow: 0 0 0 0 var(--accent-glow); opacity: 1;   }
+  70%  { box-shadow: 0 0 0 8px transparent;    opacity: 0.8; }
+  100% { box-shadow: 0 0 0 0 transparent;      opacity: 1;   }
 }
 
 .sidebar-bottom {

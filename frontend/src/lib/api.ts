@@ -341,4 +341,102 @@ export function setNamespacePermission(
   })
 }
 
+// Pending sources (weftd auto-discovery)
+
+// Field names mirror Go's Detection struct (no json tags — PascalCase).
+export interface TimestampCandidate {
+  FieldIndex: number
+  SpanFields: number
+  Format: string
+  Sample: string
+}
+
+export interface LevelCandidate {
+  FieldIndex: number
+  Sample: string
+  Pattern: string
+}
+
+export interface SourceDetection {
+  Lines: string[] | null
+  HasKevconsEnvelope: boolean
+  StrippedLines: string[] | null
+  Instances: string[] | null
+  JSONCoverage: number
+  JSONTailCoverage: number
+  JSONTailStartField: number
+  TimestampCandidates: TimestampCandidate[] | null
+  LevelCandidates: LevelCandidate[] | null
+}
+
+export interface PendingSource {
+  app: string
+  namespace: string
+  instance: string
+  host_group: string
+  sample: string[]
+  detection: SourceDetection
+  created_at: string
+}
+
+export interface ConfigureSourceRequest {
+  format: string
+  timestamp_field: string
+  timestamp_format: string
+  level_field: string
+  level_pattern: string
+  expand_keys?: { key: string; type: string }[]
+}
+
+export async function getPendingSources(namespace?: string): Promise<PendingSource[]> {
+  const path = namespace
+    ? `/api/sources/pending?namespace=${encodeURIComponent(namespace)}`
+    : '/api/sources/pending'
+  const resp = await apiFetch<PendingSource[] | null>(path)
+  return resp || []
+}
+
+export function configureSource(
+  namespace: string,
+  app: string,
+  config: ConfigureSourceRequest,
+): Promise<void> {
+  return apiFetch(
+    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(app)}/configure`,
+    { method: 'POST', body: JSON.stringify(config) },
+  )
+}
+
+// Best-guess defaults from the server's Detection. Level fields are left
+// blank on purpose — we don't surface level extraction in the UI since
+// most real logs don't carry a level on every line.
+export function suggestFromDetection(d: SourceDetection): ConfigureSourceRequest {
+  const format =
+    d.JSONCoverage > 0.8 ? 'json'
+      : d.JSONTailCoverage > 0.5 ? 'prefix_json'
+        : 'text'
+  const ts = d.TimestampCandidates?.[0]
+  return {
+    format,
+    timestamp_field: ts ? String(ts.FieldIndex) : '',
+    timestamp_format: ts?.Format ?? '',
+    level_field: '',
+    level_pattern: '',
+  }
+}
+
+// Cross-page change notifications for pending sources. The sidebar badge
+// and the Namespaces page both need to refresh when a source transitions
+// from pending → configured (or a new one arrives via weftd).
+const pendingSourcesBus = new EventTarget()
+
+export function notifyPendingSourcesChanged(): void {
+  pendingSourcesBus.dispatchEvent(new Event('change'))
+}
+
+export function onPendingSourcesChanged(handler: () => void): () => void {
+  pendingSourcesBus.addEventListener('change', handler)
+  return () => pendingSourcesBus.removeEventListener('change', handler)
+}
+
 export { apiFetch }
