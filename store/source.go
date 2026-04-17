@@ -12,16 +12,27 @@ type Account struct {
 	LogGroups  []LogGroup `gorm:"foreignKey:AccountID;constraint:OnDelete:CASCADE"`
 }
 
+// LogGroupSourceType identifies where a log_groups row's rows come from.
+// cloudwatch: coordinator polls CloudWatch FilterLogEvents on a schedule.
+// weftd:      weftd agents push rows via gRPC IngestStream; no polling.
+type LogGroupSourceType string
+
+const (
+	SourceTypeCloudWatch LogGroupSourceType = "cloudwatch"
+	SourceTypeWeftd      LogGroupSourceType = "weftd"
+)
+
 type LogGroup struct {
 	gorm.Model
-	AccountID    uint    `gorm:"not null;uniqueIndex:idx_account_app"`
-	Account      Account `gorm:"foreignKey:AccountID;constraint:OnDelete:CASCADE"`
-	App          string  `gorm:"not null;uniqueIndex:idx_account_app"`
-	LogGroupName string  `gorm:"not null"`
-	Region       string  `gorm:"not null;default:us-east-2"`
-	SchemaYAML   string  `gorm:"not null"`
-	PollInterval string  `gorm:"not null;default:30s"`
-	Enabled      bool    `gorm:"not null;default:true"`
+	AccountID    uint               `gorm:"not null;uniqueIndex:idx_account_app"`
+	Account      Account            `gorm:"foreignKey:AccountID;constraint:OnDelete:CASCADE"`
+	App          string             `gorm:"not null;uniqueIndex:idx_account_app"`
+	SourceType   LogGroupSourceType `gorm:"type:log_group_source_type;not null"`
+	LogGroupName string             `gorm:"not null"`
+	Region       string             `gorm:"not null;default:us-east-2"`
+	SchemaYAML   string             `gorm:"not null"`
+	PollInterval string             `gorm:"not null;default:30s"`
+	Enabled      bool               `gorm:"not null;default:true"`
 	LastPollAt   string
 	LastToken    string
 }
@@ -44,13 +55,16 @@ func (s *Store) FindOrCreateAccount(customerID uint, awsAccount, roleARN, extern
 	return &a, result.Error
 }
 
-// AddLogGroup creates or updates a log group source.
-func (s *Store) AddLogGroup(accountID uint, app, logGroupName, region, schemaYAML, pollInterval string) error {
+// AddLogGroup creates or updates a log group source. sourceType decides
+// whether the coordinator will poll CloudWatch for this row (cloudwatch)
+// or expect weftd to push into it (weftd).
+func (s *Store) AddLogGroup(accountID uint, sourceType LogGroupSourceType, app, logGroupName, region, schemaYAML, pollInterval string) error {
 	var lg LogGroup
 	result := s.db.Where("account_id = ? AND app = ?", accountID, app).First(&lg)
 	if result.Error == gorm.ErrRecordNotFound {
 		lg = LogGroup{
 			AccountID:    accountID,
+			SourceType:   sourceType,
 			App:          app,
 			LogGroupName: logGroupName,
 			Region:       region,
@@ -61,6 +75,7 @@ func (s *Store) AddLogGroup(accountID uint, app, logGroupName, region, schemaYAM
 		return s.db.Create(&lg).Error
 	}
 	return s.db.Model(&lg).Updates(LogGroup{
+		SourceType:   sourceType,
 		LogGroupName: logGroupName,
 		Region:       region,
 		SchemaYAML:   schemaYAML,

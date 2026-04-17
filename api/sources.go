@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/kevlarcon/weft/ingest"
+	"github.com/kevlarcon/weft/store"
 )
 
 // ── Agent-facing endpoints (token-authenticated) ───────────
@@ -215,14 +216,19 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store the configured source. For weftd-sourced logs we don't have an AWS
-	// account/log group — we use a synthetic "agent" account.
-	acct, err := s.store.FindOrCreateAccount(customer.ID, "agent", "agent://"+claims.CustomerName, "")
+	// Store the configured source. For weftd-sourced logs we don't have
+	// an AWS account/log group — we write a placeholder "agent" account
+	// and mark the LogGroup with source_type=weftd so the poller knows
+	// not to treat it as a CloudWatch target.
+	acct, err := s.store.FindOrCreateAccount(customer.ID, "agent", "", "")
 	if err != nil {
 		http.Error(w, "account error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := s.store.AddLogGroup(acct.ID, fullApp, "agent://"+fullApp, "local", string(schemaYAML), "0s"); err != nil {
+	if err := s.store.AddLogGroup(
+		acct.ID, store.SourceTypeWeftd, fullApp, fullApp,
+		"local", string(schemaYAML), "0s",
+	); err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
