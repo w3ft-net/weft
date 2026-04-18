@@ -1,142 +1,158 @@
 #!/bin/bash
-# Snapshot the shard lifecycle flow — intended for post-deploy verification
-# of the EBS-volume rollout (docs/plans/ebs-shard-volumes.md).
+# One-screen snapshot of the shard lifecycle pipeline. Re-runnable as a
+# watch loop without drowning — all output fits in ~15 lines at steady
+# state, and only expands details when something interesting is
+# happening (pending hooks, non-empty queue, recent coordinator log).
 #
-# Reports:
-#   - SQS queue depth + recent receives (poller health)
-#   - ASG activity for each shard tier (lifecycle hook firing)
-#   - EC2 volumes tagged for the weft fleet (what's been created/recovered)
-#   - Shard instances and their attached non-root volumes
-#   - Latest coordinator log lines mentioning "lifecycle:" or
-#     "christened" (via SSM — no SSH needed)
-#
-# Usage: ./scripts/lifecycle-status.sh [region]
+# Usage:
+#   ./scripts/lifecycle-status.sh           # one-shot
+#   ./scripts/lifecycle-status.sh --verbose # full diagnostic (old behaviour)
+#   watch -n 10 ./scripts/lifecycle-status.sh
 
 set -euo pipefail
 
-REGION="${1:-us-east-2}"
+REGION="us-east-2"
 APP_NAME="weft"
+VERBOSE=0
 
-# Route aws-cli calls through kevcons so it can handle role assumption
-# into the weft account. Override with AWS=aws if you've already
-# assumed into 220664822695 in your shell.
+for arg in "$@"; do
+  case "$arg" in
+    --verbose|-v) VERBOSE=1 ;;
+    us-east-*|us-west-*|eu-*|ap-*) REGION="$arg" ;;
+    *)            REGION="$arg" ;;
+  esac
+done
+
 AWS="${AWS:-kevcons aws}"
 
-section() { printf '\n── %s ─────────────────────────────────────────\n' "$1"; }
-
-section "Caller identity"
-$AWS sts get-caller-identity --query '[Account,Arn]' --output text 2>&1 || true
-
-section "SQS queue"
+# ── SQS depth ──────────────────────────────────────────────
 QUEUE_URL=$($AWS ssm get-parameter \
   --region "$REGION" \
   --name "/$APP_NAME/config/shard-lifecycle-queue-url" \
-  --query 'Parameter.Value' --output text 2>&1 || true)
-if [ -z "$QUEUE_URL" ] || [ "$QUEUE_URL" = "None" ] || [[ "$QUEUE_URL" == *Error* ]]; then
-  echo "NO QUEUE URL in SSM — response was: $QUEUE_URL"
-  echo "(is terraform applied? account 220664822695?)"
-else
-  echo "queue: $QUEUE_URL"
-  $AWS sqs get-queue-attributes \
+  --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+SQS_DEPTH="?"
+SQS_INFLIGHT="?"
+if [[ "$QUEUE_URL" =~ ^https ]]; then
+  attrs=$($AWS sqs get-queue-attributes \
     --region "$REGION" \
     --queue-url "$QUEUE_URL" \
-    --attribute-names ApproximateNumberOfMessages \
-                      ApproximateNumberOfMessagesNotVisible \
-                      ApproximateNumberOfMessagesDelayed \
-    --query 'Attributes' --output table || true
+    --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible \
+    --query 'Attributes' --output json 2>/dev/null || echo "{}")
+  SQS_DEPTH=$(echo "$attrs" | jq -r '.ApproximateNumberOfMessages // "?"')
+  SQS_INFLIGHT=$(echo "$attrs" | jq -r '.ApproximateNumberOfMessagesNotVisible // "?"')
 fi
 
-section "ASG activity (last 10 per tier)"
-for asg in weft-shard-small weft-shard-medium weft-shard-large; do
-  printf "\n▸ %s\n" "$asg"
-  $AWS autoscaling describe-scaling-activities \
-    --region "$REGION" \
-    --auto-scaling-group-name "$asg" \
-    --max-records 10 \
-    --query 'Activities[].[StartTime,StatusCode,Cause]' \
-    --output table 2>/dev/null || echo "  (ASG not found)"
-done
-
-section "Pending lifecycle actions (should be 0 during steady state)"
-for asg in weft-shard-small weft-shard-medium weft-shard-large; do
-  count=$($AWS autoscaling describe-auto-scaling-groups \
+# ── ASG state (one row per tier) ──────────────────────────
+# Build a compact `tier  inService/desired  pending`.
+asg_row() {
+  local asg="$1"
+  local json
+  json=$($AWS autoscaling describe-auto-scaling-groups \
     --region "$REGION" \
     --auto-scaling-group-names "$asg" \
-    --query 'AutoScalingGroups[0].Instances[?LifecycleState==`Pending:Wait`] | length(@)' \
-    --output text 2>/dev/null || echo "0")
-  printf "  %s → %s pending\n" "$asg" "$count"
-done
+    --query 'AutoScalingGroups[0]' --output json 2>/dev/null || echo "null")
+  if [ "$json" = "null" ]; then
+    printf "  %-20s %s\n" "$asg" "(not found)"
+    return
+  fi
+  local desired inservice pending
+  desired=$(echo "$json" | jq -r '.DesiredCapacity // 0')
+  inservice=$(echo "$json" | jq -r '[.Instances[]? | select(.LifecycleState=="InService")] | length')
+  pending=$(echo "$json" | jq -r '[.Instances[]? | select(.LifecycleState=="Pending:Wait")] | length')
+  local flag=""
+  [ "$pending" != "0" ] && flag=" ⚠ PENDING"
+  printf "  %-20s %s/%s InService, %s Pending%s\n" "$asg" "$inservice" "$desired" "$pending" "$flag"
+}
 
-section "EC2 volumes tagged for weft shards"
-$AWS ec2 describe-volumes \
-  --region "$REGION" \
-  --filters Name=tag-key,Values=shard_tier \
-  --query 'Volumes[].[VolumeId,State,AvailabilityZone,Size,Tags[?Key==`shard_id`]|[0].Value,Tags[?Key==`shard_tier`]|[0].Value]' \
-  --output table || true
-
-section "Shard instances + attached volumes"
-for asg in weft-shard-small weft-shard-medium weft-shard-large; do
-  printf "\n▸ %s\n" "$asg"
-  ids=$($AWS autoscaling describe-auto-scaling-groups \
+# ── Volumes (compact) ──────────────────────────────────────
+# One line per volume: shard_id  state  az  vol-id
+volumes_summary() {
+  local json
+  json=$($AWS ec2 describe-volumes \
     --region "$REGION" \
-    --auto-scaling-group-names "$asg" \
-    --query 'AutoScalingGroups[0].Instances[?LifecycleState==`InService`].InstanceId' \
+    --filters Name=tag-key,Values=shard_tier \
+    --query 'Volumes[].{id:VolumeId, state:State, az:AvailabilityZone, size:Size, tags:Tags}' \
+    --output json 2>/dev/null || echo "[]")
+  local count
+  count=$(echo "$json" | jq -r 'length')
+  if [ "$count" = "0" ]; then
+    echo "  (no shard volumes)"
+    return
+  fi
+  local pending_count
+  pending_count=$(echo "$json" | jq -r '[.[] | select(.tags[]? | select(.Key=="shard_id") | .Value | startswith("pending-"))] | length')
+  local avail_count
+  avail_count=$(echo "$json" | jq -r '[.[] | select(.state=="available")] | length')
+  printf "  %d total, %d in-use, %d available, %d with pending-id\n" \
+    "$count" "$(( count - avail_count ))" "$avail_count" "$pending_count"
+  if [ "$VERBOSE" = "1" ] || [ "$pending_count" != "0" ] || [ "$avail_count" != "0" ]; then
+    echo "$json" | jq -r '.[] |
+      "    " +
+      (.id | tostring) + "  " +
+      (.state | tostring) + "  " +
+      (.az | tostring) + "  " +
+      ((.tags[]? | select(.Key=="shard_id") | .Value) // "<untagged>")'
+  fi
+}
+
+# ── Recent coordinator log (SSM) ──────────────────────────
+# Only show 5 most-recent lifecycle/christen/retire lines, unless
+# verbose.
+coord_log() {
+  local coord_id
+  coord_id=$($AWS autoscaling describe-auto-scaling-groups \
+    --region "$REGION" \
+    --auto-scaling-group-names "weft-coordinator" \
+    --query 'AutoScalingGroups[0].Instances[?LifecycleState==`InService`].InstanceId | [0]' \
     --output text 2>/dev/null || echo "")
-  if [ -z "$ids" ]; then
-    echo "  (no InService instances)"
-    continue
+  if [ -z "$coord_id" ] || [ "$coord_id" = "None" ]; then
+    echo "  no InService coordinator"
+    return
   fi
-  # For each instance, list its block-device mappings so we can see
-  # whether /dev/sdf (or the nvme-renamed equivalent) is attached.
-  # shellcheck disable=SC2086  # word-splitting is intentional
-  $AWS ec2 describe-instances \
+  local cmd_id
+  local lines="5"
+  [ "$VERBOSE" = "1" ] && lines="40"
+  cmd_id=$($AWS ssm send-command \
     --region "$REGION" \
-    --instance-ids $ids \
-    --query 'Reservations[].Instances[].[InstanceId,PrivateIpAddress,BlockDeviceMappings[?contains(DeviceName,`sdf`) || contains(DeviceName,`xvdf`) || contains(DeviceName,`nvme1`)].[DeviceName,Ebs.VolumeId]]' \
-    --output json 2>/dev/null | head -30 || true
-done
-
-section "Coordinator lifecycle log lines (latest via SSM)"
-COORD_ID=$($AWS autoscaling describe-auto-scaling-groups \
-  --region "$REGION" \
-  --auto-scaling-group-names "weft-coordinator" \
-  --query 'AutoScalingGroups[0].Instances[?LifecycleState==`InService`].InstanceId' \
-  --output text 2>/dev/null | head -n1 || echo "")
-if [ -z "$COORD_ID" ]; then
-  echo "no InService coordinator"
-else
-  echo "coordinator: $COORD_ID"
-  CMD_ID=$($AWS ssm send-command \
-    --region "$REGION" \
-    --instance-ids "$COORD_ID" \
+    --instance-ids "$coord_id" \
     --document-name AWS-RunShellScript \
-    --parameters 'commands=["journalctl -u weft-coordinator --no-pager -n 500 | grep -E \"lifecycle|christened|retir\" | tail -40 || true"]' \
+    --parameters "commands=[\"journalctl -u weft-coordinator --no-pager -n 500 2>/dev/null | grep -E 'lifecycle:|christened|retir' | tail -$lines\"]" \
     --query 'Command.CommandId' --output text 2>/dev/null || echo "")
-  if [ -n "$CMD_ID" ]; then
-    # Poll up to ~15s for completion
-    for _ in $(seq 1 15); do
-      STATE=$($AWS ssm get-command-invocation \
-        --region "$REGION" \
-        --command-id "$CMD_ID" \
-        --instance-id "$COORD_ID" \
-        --query 'Status' --output text 2>/dev/null || echo "Pending")
-      if [ "$STATE" = "Success" ] || [ "$STATE" = "Failed" ]; then
-        break
-      fi
-      sleep 1
-    done
-    $AWS ssm get-command-invocation \
-      --region "$REGION" \
-      --command-id "$CMD_ID" \
-      --instance-id "$COORD_ID" \
-      --query 'StandardOutputContent' --output text 2>/dev/null || true
+  if [ -z "$cmd_id" ]; then
+    echo "  (SSM send-command failed)"
+    return
   fi
-fi
+  for _ in $(seq 1 12); do
+    local state
+    state=$($AWS ssm get-command-invocation \
+      --region "$REGION" \
+      --command-id "$cmd_id" --instance-id "$coord_id" \
+      --query 'Status' --output text 2>/dev/null || echo "Pending")
+    if [ "$state" = "Success" ] || [ "$state" = "Failed" ]; then
+      break
+    fi
+    sleep 1
+  done
+  local out
+  out=$($AWS ssm get-command-invocation \
+    --region "$REGION" \
+    --command-id "$cmd_id" --instance-id "$coord_id" \
+    --query 'StandardOutputContent' --output text 2>/dev/null || echo "")
+  if [ -z "$out" ] || [ "$out" = "None" ]; then
+    echo "  (no recent lifecycle activity)"
+  else
+    echo "$out" | sed 's/^/    /'
+  fi
+}
 
-echo
-echo "Done. Expected happy-path indicators:"
-echo "  * SQS: ApproximateNumberOfMessages = 0 (steady state)"
-echo "  * ASG: 0 pending lifecycle actions"
-echo "  * Volumes: one per InService shard, state=in-use, shard_id=<real id> (not 'pending-...')"
-echo "  * Each shard instance has a non-root volume attached"
-echo "  * Coordinator log shows CHRISTEN or RECOVER lines and no ABANDON"
+# ── Output ────────────────────────────────────────────────
+printf "weft lifecycle  %s  [%s]\n" "$(date -u +%H:%M:%SZ)" "$REGION"
+printf "SQS: depth=%s inflight=%s\n" "$SQS_DEPTH" "$SQS_INFLIGHT"
+echo "ASGs:"
+asg_row weft-shard-small
+asg_row weft-shard-medium
+asg_row weft-shard-large
+echo "Volumes:"
+volumes_summary
+echo "Coordinator log (last lifecycle/christen/retir lines):"
+coord_log
