@@ -40,13 +40,13 @@ type netState struct {
 // at the configured interval and sending them as LogRows through the
 // coordinator IngestStream.
 func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
-	customer, instance, app string, mcfg MetricsConfig) {
+	customer, instance, namespace string, mcfg MetricsConfig) {
 
 	interval := 30 * time.Second
 	if mcfg.Interval != "" {
 		d, err := time.ParseDuration(mcfg.Interval)
 		if err != nil {
-			log.Printf("[%s.metrics] bad interval %q, using 30s", app, mcfg.Interval)
+			log.Printf("[%s/metrics] bad interval %q, using 30s", namespace, mcfg.Interval)
 		} else {
 			interval = d
 		}
@@ -62,7 +62,10 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 		}
 	}
 
-	metricsApp := app + "/metrics"
+	metricsApp := namespace + "/metrics"
+	if hg := sanitizeHostGroup(globalHostGroup); hg != "" {
+		metricsApp = namespace + "/" + hg + "_metrics"
+	}
 	log.Printf("[%s] metrics enabled: interval=%s collectors=%v", metricsApp, interval, mcfg.Collectors)
 
 	ss := &streamState{}
@@ -183,7 +186,9 @@ func buildCPURow(app, customer, instance string, now time.Time, prev, cur *cpuSt
 	cores := countCPUs()
 
 	payload, _ := json.Marshal(map[string]any{
-		"type": "cpu", "user": round2(user), "system": round2(system),
+		"type": "cpu", "ts": now.UTC().Format(time.RFC3339Nano),
+		"host": instance, "host_group": globalHostGroup,
+		"user": round2(user), "system": round2(system),
 		"idle": round2(idle), "iowait": round2(iowait), "cores": cores,
 	})
 
@@ -247,7 +252,9 @@ func buildMemoryRow(app, customer, instance string, now time.Time) (*pb.LogRow, 
 	}
 
 	payload, _ := json.Marshal(map[string]any{
-		"type": "memory", "total_mb": totalMB, "used_mb": usedMB,
+		"type": "memory", "ts": now.UTC().Format(time.RFC3339Nano),
+		"host": instance, "host_group": globalHostGroup,
+		"total_mb": totalMB, "used_mb": usedMB,
 		"available_mb": availMB, "swap_used_mb": swapUsedMB, "pct": round2(pct),
 	})
 
@@ -300,7 +307,9 @@ func buildDiskRows(app, customer, instance string, now time.Time) ([]*pb.LogRow,
 		}
 
 		payload, _ := json.Marshal(map[string]any{
-			"type": "disk", "path": mountpoint,
+			"type": "disk", "ts": now.UTC().Format(time.RFC3339Nano),
+			"host": instance, "host_group": globalHostGroup,
+			"path": mountpoint,
 			"total_gb": round2(totalGB), "used_gb": round2(usedGB), "pct": round2(pct),
 		})
 
@@ -329,7 +338,9 @@ func buildLoadRow(app, customer, instance string, now time.Time) (*pb.LogRow, er
 	load15, _ := strconv.ParseFloat(fields[2], 64)
 
 	payload, _ := json.Marshal(map[string]any{
-		"type": "load", "load1": round2(load1), "load5": round2(load5), "load15": round2(load15),
+		"type": "load", "ts": now.UTC().Format(time.RFC3339Nano),
+		"host": instance, "host_group": globalHostGroup,
+		"load1": round2(load1), "load5": round2(load5), "load15": round2(load15),
 	})
 
 	return &pb.LogRow{
@@ -389,7 +400,9 @@ func buildNetworkRows(app, customer, instance string, now time.Time,
 		txPerSec := float64(c.txBytes-p.txBytes) / elapsed
 
 		payload, _ := json.Marshal(map[string]any{
-			"type": "network", "iface": iface,
+			"type": "network", "ts": now.UTC().Format(time.RFC3339Nano),
+			"host": instance, "host_group": globalHostGroup,
+			"iface": iface,
 			"rx_bytes_sec": int64(rxPerSec), "tx_bytes_sec": int64(txPerSec),
 		})
 
@@ -406,6 +419,23 @@ func buildNetworkRows(app, customer, instance string, now time.Time,
 
 func round2(f float64) float64 {
 	return float64(int(f*100)) / 100
+}
+
+// sanitizeHostGroup replaces characters that would break the
+// {namespace}/{subapp}.log pseudofile convention ('/') or read oddly in a
+// filename (whitespace, '.') with '_'. Empty input returns empty.
+func sanitizeHostGroup(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '/', '.', ' ', '\t':
+			return '_'
+		}
+		return r
+	}, s)
 }
 
 // sendRowWithReconnect sends a pre-built LogRow, reconnecting if needed.
