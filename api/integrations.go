@@ -43,7 +43,6 @@ func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) 
 		pdKeys[it.Name] = maskKey(it.IntegrationKey)
 		pdMeta = append(pdMeta, map[string]any{
 			"name":         it.Name,
-			"description":  it.Description,
 			"last_used_at": it.LastUsedAt,
 			"last_error":   it.LastError,
 		})
@@ -158,15 +157,14 @@ func (s *Server) handlePagerDutySave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name        string `json:"name"`
-		Key         string `json:"key"`
-		Description string `json:"description"`
+		Name string `json:"name"`
+		Key  string `json:"key"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Key == "" {
 		http.Error(w, "name and key required", http.StatusBadRequest)
 		return
 	}
-	if err := s.store.SavePagerDutyIntegration(custID, req.Name, req.Key, req.Description); err != nil {
+	if err := s.store.SavePagerDutyIntegration(custID, req.Name, req.Key); err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
