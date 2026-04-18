@@ -563,11 +563,28 @@ func (p *Provisioner) check(ctx context.Context) {
 		}
 	}
 
+	now := time.Now().UTC()
+
 	for _, entry := range p.registry.Entries() {
 		if entry.State != StateIngesting {
 			continue
 		}
 
+		// Wall-clock window boundary: once we've passed WindowEnd,
+		// this shard should serve queries only. Transition and
+		// persist; a replacement will be christened by the next
+		// heartbeat from an ASG-launched instance.
+		if !entry.WindowEnd.IsZero() && !now.Before(entry.WindowEnd) {
+			log.Printf("provisioner: rotating shard %s → READ_ONLY (window ended %v ago)",
+				entry.ID, now.Sub(entry.WindowEnd).Round(time.Second))
+			entry.State = StateReadOnly
+			p.registry.PersistState(entry)
+			continue
+		}
+
+		// Legacy row-count / MaxDuration rotation, retained for
+		// dev/docker where windows aren't set. Triggers a full
+		// rotate() including launchAndConfigure for a replacement.
 		shouldRotate := false
 		reason := ""
 
@@ -587,16 +604,25 @@ func (p *Provisioner) check(ctx context.Context) {
 		}
 	}
 
-	// Archive READ_ONLY shards past retention period.
+	// Archive READ_ONLY shards once their window-end is more than
+	// RetentionPeriod in the past. Measuring from WindowEnd (not
+	// CreatedAt) keeps a long-lived shard hot for a full retention
+	// period after it transitions — CreatedAt is the christening
+	// time, not when the shard stopped taking writes.
 	if p.config.RetentionPeriod > 0 && p.config.ParquetDir != "" {
 		for _, entry := range p.registry.Entries() {
 			if entry.State != StateReadOnly {
 				continue
 			}
-			if time.Since(entry.CreatedAt) > p.config.RetentionPeriod {
-				log.Printf("provisioner: archiving shard %s", entry.ID)
-				p.archive(entry)
+			if entry.WindowEnd.IsZero() {
+				continue // legacy/zero-window shards are excluded
 			}
+			if now.Sub(entry.WindowEnd) <= p.config.RetentionPeriod {
+				continue
+			}
+			log.Printf("provisioner: archiving shard %s (%v past WindowEnd)",
+				entry.ID, now.Sub(entry.WindowEnd).Round(time.Second))
+			p.archive(entry)
 		}
 	}
 }
