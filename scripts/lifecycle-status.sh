@@ -17,18 +17,27 @@ set -euo pipefail
 REGION="${1:-us-east-2}"
 APP_NAME="weft"
 
+# Route aws-cli calls through kevcons so it can handle role assumption
+# into the weft account. Override with AWS=aws if you've already
+# assumed into 220664822695 in your shell.
+AWS="${AWS:-kevcons aws}"
+
 section() { printf '\n── %s ─────────────────────────────────────────\n' "$1"; }
 
+section "Caller identity"
+$AWS sts get-caller-identity --query '[Account,Arn]' --output text 2>&1 || true
+
 section "SQS queue"
-QUEUE_URL=$(aws ssm get-parameter \
+QUEUE_URL=$($AWS ssm get-parameter \
   --region "$REGION" \
   --name "/$APP_NAME/config/shard-lifecycle-queue-url" \
-  --query 'Parameter.Value' --output text 2>/dev/null || echo "")
-if [ -z "$QUEUE_URL" ]; then
-  echo "NO QUEUE URL in SSM — is terraform applied?"
+  --query 'Parameter.Value' --output text 2>&1 || true)
+if [ -z "$QUEUE_URL" ] || [ "$QUEUE_URL" = "None" ] || [[ "$QUEUE_URL" == *Error* ]]; then
+  echo "NO QUEUE URL in SSM — response was: $QUEUE_URL"
+  echo "(is terraform applied? account 220664822695?)"
 else
   echo "queue: $QUEUE_URL"
-  aws sqs get-queue-attributes \
+  $AWS sqs get-queue-attributes \
     --region "$REGION" \
     --queue-url "$QUEUE_URL" \
     --attribute-names ApproximateNumberOfMessages \
@@ -40,7 +49,7 @@ fi
 section "ASG activity (last 10 per tier)"
 for asg in weft-shard-small weft-shard-medium weft-shard-large; do
   printf "\n▸ %s\n" "$asg"
-  aws autoscaling describe-scaling-activities \
+  $AWS autoscaling describe-scaling-activities \
     --region "$REGION" \
     --auto-scaling-group-name "$asg" \
     --max-records 10 \
@@ -50,7 +59,7 @@ done
 
 section "Pending lifecycle actions (should be 0 during steady state)"
 for asg in weft-shard-small weft-shard-medium weft-shard-large; do
-  count=$(aws autoscaling describe-auto-scaling-groups \
+  count=$($AWS autoscaling describe-auto-scaling-groups \
     --region "$REGION" \
     --auto-scaling-group-names "$asg" \
     --query 'AutoScalingGroups[0].Instances[?LifecycleState==`Pending:Wait`] | length(@)' \
@@ -59,7 +68,7 @@ for asg in weft-shard-small weft-shard-medium weft-shard-large; do
 done
 
 section "EC2 volumes tagged for weft shards"
-aws ec2 describe-volumes \
+$AWS ec2 describe-volumes \
   --region "$REGION" \
   --filters Name=tag-key,Values=shard_tier \
   --query 'Volumes[].[VolumeId,State,AvailabilityZone,Size,Tags[?Key==`shard_id`]|[0].Value,Tags[?Key==`shard_tier`]|[0].Value]' \
@@ -68,7 +77,7 @@ aws ec2 describe-volumes \
 section "Shard instances + attached volumes"
 for asg in weft-shard-small weft-shard-medium weft-shard-large; do
   printf "\n▸ %s\n" "$asg"
-  ids=$(aws autoscaling describe-auto-scaling-groups \
+  ids=$($AWS autoscaling describe-auto-scaling-groups \
     --region "$REGION" \
     --auto-scaling-group-names "$asg" \
     --query 'AutoScalingGroups[0].Instances[?LifecycleState==`InService`].InstanceId' \
@@ -80,7 +89,7 @@ for asg in weft-shard-small weft-shard-medium weft-shard-large; do
   # For each instance, list its block-device mappings so we can see
   # whether /dev/sdf (or the nvme-renamed equivalent) is attached.
   # shellcheck disable=SC2086  # word-splitting is intentional
-  aws ec2 describe-instances \
+  $AWS ec2 describe-instances \
     --region "$REGION" \
     --instance-ids $ids \
     --query 'Reservations[].Instances[].[InstanceId,PrivateIpAddress,BlockDeviceMappings[?contains(DeviceName,`sdf`) || contains(DeviceName,`xvdf`) || contains(DeviceName,`nvme1`)].[DeviceName,Ebs.VolumeId]]' \
@@ -88,7 +97,7 @@ for asg in weft-shard-small weft-shard-medium weft-shard-large; do
 done
 
 section "Coordinator lifecycle log lines (latest via SSM)"
-COORD_ID=$(aws autoscaling describe-auto-scaling-groups \
+COORD_ID=$($AWS autoscaling describe-auto-scaling-groups \
   --region "$REGION" \
   --auto-scaling-group-names "weft-coordinator" \
   --query 'AutoScalingGroups[0].Instances[?LifecycleState==`InService`].InstanceId' \
@@ -97,7 +106,7 @@ if [ -z "$COORD_ID" ]; then
   echo "no InService coordinator"
 else
   echo "coordinator: $COORD_ID"
-  CMD_ID=$(aws ssm send-command \
+  CMD_ID=$($AWS ssm send-command \
     --region "$REGION" \
     --instance-ids "$COORD_ID" \
     --document-name AWS-RunShellScript \
@@ -106,7 +115,7 @@ else
   if [ -n "$CMD_ID" ]; then
     # Poll up to ~15s for completion
     for _ in $(seq 1 15); do
-      STATE=$(aws ssm get-command-invocation \
+      STATE=$($AWS ssm get-command-invocation \
         --region "$REGION" \
         --command-id "$CMD_ID" \
         --instance-id "$COORD_ID" \
@@ -116,7 +125,7 @@ else
       fi
       sleep 1
     done
-    aws ssm get-command-invocation \
+    $AWS ssm get-command-invocation \
       --region "$REGION" \
       --command-id "$CMD_ID" \
       --instance-id "$COORD_ID" \
