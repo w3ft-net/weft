@@ -74,22 +74,109 @@ Historical rows streamed first, then TailBroker.Subscribe()
 
 ## Shard Lifecycle
 
+Shards are **durable, volume-bound** entities. A shard's data lives on
+a dedicated gp3 EBS volume tagged with its `shard_id`; the EC2
+instance is just the current compute host. Instance death ≠ shard
+death — the volume reattaches to a replacement instance and the shard
+continues under the same identity.
+
+See [shard-lifecycle.md](shard-lifecycle.md) for full detail and
+[plans/ebs-shard-volumes.md](plans/ebs-shard-volumes.md) for the
+EBS rollout design.
+
+### States
+
 ```
-LAUNCHING → INGESTING → READ_ONLY → EXPIRING → ARCHIVED → TERMINATED
+              ┌─────────────┐
+        ┌────▶│  INGESTING  │◀──┐──┐
+christen│     └─────────────┘   │  │
+        │                       │  │ wall-clock
+        │     ┌─────────────┐   │  │ WindowEnd
+        └─────│   ADOPTED   │   │  ▼
+              └─────────────┘   │ ┌─────────────┐
+                                │ │  READ_ONLY  │◀─┐
+                 fresh EBS      │ └─────────────┘  │
+                 no shard.json  │        │      rebind
+                                │        │ retention
+                 rebind ────────┘        ▼ boundary
+                 (known id)              ┌─────────────┐
+                                         │  ARCHIVING  │
+                                         └─────────────┘
+                                                │ snapshot +
+                                                │ detach +
+                                                ▼ delete
+                                         ┌─────────────┐
+                                         │  ARCHIVED   │
+                                         └─────────────┘
 ```
 
-- **Provisioner** polls every 5s (dev) / 5min (prod), checks row count, disk bytes, and age.
-- Rotation: launch new shard → Configure RPC → swap INGESTING designation → old shard becomes READ_ONLY.
-- After retention period: export to Parquet on S3 → ARCHIVED (queryable via ColdShard or LambdaColdShard) → terminate instance.
-- Dead shards reaped via heartbeat timeout.
+### Launch flow (christen)
 
-### Rotation thresholds
+1. ASG launches a new instance behind an `EC2_INSTANCE_LAUNCHING`
+   hook (Pending:Wait).
+2. Hook publishes to SNS → SQS; coordinator's lifecycle poller
+   receives the event.
+3. Coordinator decides CHRISTEN (no orphan volume for this
+   tier/AZ): `CreateVolume` tagged `shard_id=pending-<instance>`,
+   `AttachVolume` at `/dev/sdf`.
+4. `CompleteLifecycleAction` with CONTINUE — instance finishes
+   cloud-init. `startup.sh` mounts the new volume at
+   `/opt/app/data`.
+5. Shard service boots, finds no `shard.json` (fresh volume),
+   heartbeats with empty `shard_id` + its `instance_id`.
+6. Coordinator's `Heartbeat` RPC handler routes the empty-id
+   heartbeat through `Provisioner.ProcessHeartbeat`, which christens
+   inline: mints `shard-YYYYMMDDThhmm-N`, sends `Configure` RPC,
+   rewrites the volume tag from `pending-<instance>` to the real
+   shard id, records `ebs_volume_id` on the registry entry.
 
-| | Dev | Prod |
+### Recovery flow
+
+1. Instance hosting shard S dies. Coordinator detects stale
+   heartbeat but **preserves** the registry entry because
+   `EBSVolumeID` is populated.
+2. ASG health-check launches a replacement; hook fires.
+3. Coordinator sees an `available` volume tagged
+   `shard_id=<S>` in the new instance's AZ → decides RECOVER
+   instead of CHRISTEN → reattaches the existing volume.
+4. Instance boots, mounts, reads `shard.json`, heartbeats as S.
+   Rebind arm of `ProcessHeartbeat` rewires addr/instance in the
+   registry. Same shard id, same data.
+
+### Wall-clock rotation
+
+- **INGESTING → READ_ONLY**: provisioner ticker checks each
+  INGESTING shard; when wall-clock passes `WindowEnd`, state flips
+  to READ_ONLY and is persisted. Writes stop routing there;
+  queries still work.
+- **READ_ONLY → ARCHIVING**: when `now - WindowEnd > RetentionPeriod`,
+  coordinator exports DuckDB to Parquet, snapshots the EBS volume
+  (tagged `shard_id` + `parquet_path` for lineage), detaches and
+  deletes the volume, terminates the instance. Queries transparently
+  route to the ColdShard / LambdaColdShard reader from then on.
+
+### Config knobs (`ProvisionerConfig`)
+
+| Knob | Default (prod) | Role |
 |---|---|---|
-| MaxRows | 50k | 5M |
-| MaxDiskBytes | 50MB | 500MB |
-| MaxDuration | 1h | 8h |
+| `WindowDuration` | `7d` | One hot window |
+| `RetentionPeriod` | `0` (archive disabled) | How long READ_ONLY lingers past WindowEnd before archive |
+| `PollInterval` | `5min` | Reconciliation tick; inline christen via `Heartbeat` RPC runs on every heartbeat |
+| `ConfigureRetries` / `ConfigureBackoff` | `12` × `5s` | gRPC retry on shard startup |
+
+Dev/docker uses shorter values via `DevProvisionerConfig`. The
+legacy `MaxRows`/`MaxDuration`/`MaxDiskBytes` triggers are still
+honored when windows aren't set.
+
+### Failure recovery and reap
+
+- A shard with a bound EBS volume is **never** reaped on stale
+  heartbeat — ASG + lifecycle hook drive recovery.
+- A shard without a volume (pre-EBS legacy) follows the old reap-
+  and-terminate path.
+- Brand-new registry entries get a 2-minute grace period so the
+  reap pass doesn't race a freshly-christened shard before it can
+  heartbeat with its minted id.
 
 ## Multi-Tenancy and Auth
 
@@ -211,7 +298,7 @@ Single Postgres DB (gorm auto-migrate) holds all configuration and metadata:
 
 **Core models:** Customer, Namespace, Account, User, MagicLink, DeviceCode, Subscription, TeamMember, NamespacePermission
 
-**Operational:** AgentToken, ShardRecord, LogGroup, ShellFunction, CronWatch, CronResult, NotifyConfig, AlertIncident, SavedQuery
+**Operational:** AgentToken, ShardRecord (includes `ebs_volume_id` cache of the shard's data volume — authoritative binding is the volume's `tag:shard_id`, this column is a coordinator-side convenience), LogGroup, ShellFunction, CronWatch, CronResult, NotifyConfig, AlertIncident, SavedQuery
 
 **Metered:** usage_hourly / usage_daily (pg_partman partitioned), ingestion_errors, shard_heartbeats
 
@@ -231,9 +318,11 @@ API client in `frontend/src/lib/api.ts` covers all REST endpoints. Auth state in
 
 - **Prod**: AWS account 220664822695, domain w3ft.net, us-east-2
 - **Coordinator**: behind ALB, 1-2 instances
-- **Shards**: tiered ASGs — small (t4g.micro, 2 running), medium (t4g.small, 0), large (t4g.medium, 0); EBS gp3
+- **Shards**: tiered ASGs — small (t4g.micro, 2 running), medium (t4g.small, 0), large (t4g.medium, 0). Each running shard has a dedicated gp3 EBS volume attached at `/dev/sdf`; volumes are tagged `shard_id` + `shard_tier` and outlive the instance (see Shard Lifecycle above).
+- **Shard lifecycle hook**: `EC2_INSTANCE_LAUNCHING` per tier → SNS (`weft-shard-lifecycle`) → SQS. Coordinator long-polls the queue, creates/attaches volumes, signals `CompleteLifecycleAction`. Failed attaches ABANDON the pending instance; ASG retries.
+- **Archive storage**: Parquet on `weft-cold-*` S3 bucket; hot volumes get EBS snapshots (tagged `shard_id` + `parquet_path`) on archive for data-recovery insurance.
 - **Build**: kevcons + Packer AMIs
-- **Dev**: Docker Compose (postgres, 2 shards, coordinator, api, weftd, minio for S3)
+- **Dev**: Docker Compose (postgres, 2 shards with named volumes, coordinator, api, weftd, minio for S3, localstack for EC2/SNS/SQS integration tests)
 
 ## gRPC Services
 
@@ -258,5 +347,5 @@ API client in `frontend/src/lib/api.ts` covers all REST endpoints. Auth state in
 - **Tokens**: CreateToken, ListTokens, RevokeToken
 - **Shell**: SaveFunction, GetFunction, ListFunctions, DeleteFunction
 - **Watches**: SaveWatch, GetWatch, ListWatches, DeleteWatch, GetWatchResults
-- **Heartbeat**: `Heartbeat(ShardHeartbeatRequest) → HeartbeatResponse`
+- **Heartbeat**: `Heartbeat(ShardHeartbeatRequest) → HeartbeatResponse` — shards heartbeat `shard_id` (empty = unclaimed), `addr`, `instance_id`, `state`, `row_count`. The handler persists the heartbeat AND dispatches it to `Provisioner.ProcessHeartbeat` in a goroutine, so christen / rebind / adopt happens within seconds of the first heartbeat from a fresh shard, not on the next 5-min reconciliation tick.
 - **Metering**: `GetUsage(GetUsageRequest) → GetUsageResponse`

@@ -37,7 +37,14 @@ Single process (1-2 instances behind ALB for HA). Responsibilities:
 
 ### Shard nodes
 
-Each shard owns a configurable time window of log data for all customers. Data is stored in DuckDB with Parquet backing on local disk. See [shard-lifecycle.md](shard-lifecycle.md).
+Each shard owns a configurable time window (`WindowDuration`) of log
+data for all customers. Data lives in DuckDB on a **dedicated gp3 EBS
+volume** tagged with the shard's id — the volume outlives any single
+EC2 instance. When an instance dies, the volume reattaches to a
+replacement launched by the ASG (via an `EC2_INSTANCE_LAUNCHING`
+lifecycle hook that the coordinator handles) and the shard continues
+under the same identity. See [shard-lifecycle.md](shard-lifecycle.md)
+and [plans/ebs-shard-volumes.md](plans/ebs-shard-volumes.md).
 
 ### Compute pool
 
@@ -49,7 +56,13 @@ Docker Compose with containerized DuckDB shard nodes. This lets us test multi-no
 
 ## Production deployment
 
-- Shard nodes in an ASG, time-driven scaling (launch/terminate by schedule)
+- Shard nodes in tiered ASGs (small / medium / large). Each ASG has
+  a launching lifecycle hook that fans out to SNS → SQS; the
+  coordinator consumes and attaches EBS volumes during
+  `Pending:Wait` before instances finish booting.
+- Windows rotate on wall-clock time, not row count. `WindowEnd` in
+  the past → INGESTING → READ_ONLY; past retention → ARCHIVING
+  (Parquet export + EBS snapshot + volume delete).
 - Coordinator behind ALB (1-2 instances)
 - Compute pool deferred to Phase 3 — coordinator runs gpipe inline initially
 
@@ -77,11 +90,14 @@ User-facing meta-variables (`$APP`, `$LEVEL`, `$TS`, `$INSTANCE`) are documented
 
 - [github.com/kevlarcon/warp](https://github.com/kevlarcon/warp) — awk, sed, jq, bash interpreters + gpipe
 - DuckDB (via CGo or shell exec)
-- AWS SDK — CloudWatch Logs, EC2/ASG for shard lifecycle
+- AWS SDK — CloudWatch Logs, EC2/ASG for shard lifecycle, EBS volumes + snapshots for shard data, SNS/SQS for ASG lifecycle hook fan-out
 
 ## Design documents
 
-- [shard-lifecycle.md](shard-lifecycle.md) — time-sharded storage, ASG controller, retention
+- [shard-lifecycle.md](shard-lifecycle.md) — durable volume-bound shards, wall-clock windows, christen/recover/archive
+- [plans/ebs-shard-volumes.md](plans/ebs-shard-volumes.md) — EBS rollout design (S1–S6) + decisions
+- [plans/ebs-shard-volumes-verification.md](plans/ebs-shard-volumes-verification.md) — deploy-time verification playbook
+- [az-resilience.md](az-resilience.md) — future cross-AZ resilience work
 - [ingestion-cloudwatch.md](ingestion-cloudwatch.md) — CloudWatch polling/subscription, schema detection
 - [ingestion-weftd.md](ingestion-weftd.md) — direct-ingest agent for sub-second log tailing
 - [query-execution.md](query-execution.md) — predicate extraction, pushdown, routing, fan-out
