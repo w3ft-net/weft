@@ -129,6 +129,7 @@ type Provisioner struct {
 	stats      *AppStats
 	Buckets    *BucketManager
 	configurer ShardConfigurer
+	volumes    VolumeManager // optional; used to tag data volumes at christen time
 }
 
 // NewProvisioner creates a provisioner.
@@ -147,6 +148,13 @@ func NewProvisioner(registry *ShardRegistry, launcher ShardLauncher, config Prov
 // is opened (which may happen after the provisioner starts).
 func (p *Provisioner) SetStore(s *store.Store) {
 	p.config.Store = s
+}
+
+// SetVolumeManager enables volume-aware christening. When set, the
+// provisioner stamps the minted shard id onto the pre-attached EBS
+// volume as the final step of christen().
+func (p *Provisioner) SetVolumeManager(vm VolumeManager) {
+	p.volumes = vm
 }
 
 // Stats returns the provisioner's app stats tracker. The drain loop
@@ -296,6 +304,24 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 		return fmt.Errorf("configure %s at %s: %w", shardID, hb.Addr, err)
 	}
 
+	// Find the data volume the lifecycle handler attached for this
+	// instance (tagged shard_id=pending-<instance_id>) and rewrite
+	// the shard_id tag to the now-known real id. Caches the volume
+	// id on the entry so recovery can skip DescribeVolumes.
+	var volumeID string
+	if p.volumes != nil && hb.InstanceID != "" {
+		placeholder := "pending-" + hb.InstanceID
+		if info, err := p.volumes.FindByShard(ctx, placeholder); err != nil {
+			log.Printf("provisioner: find volume for %s: %v", placeholder, err)
+		} else if info != nil {
+			if err := p.volumes.TagWithShardID(ctx, info.VolumeID, shardID); err != nil {
+				log.Printf("provisioner: tag volume %s as %s: %v", info.VolumeID, shardID, err)
+			} else {
+				volumeID = info.VolumeID
+			}
+		}
+	}
+
 	p.registry.Add(&ShardEntry{
 		ID:          shardID,
 		Apps:        nil,
@@ -305,11 +331,12 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 		Addr:        hb.Addr,
 		InstanceID:  hb.InstanceID,
 		RowCount:    hb.RowCount,
+		EBSVolumeID: volumeID,
 		Shard:       sh,
 		CreatedAt:   now,
 	})
-	log.Printf("provisioner: christened %s at %s (window %s–%s)",
-		shardID, hb.Addr, windowStart.Format(time.RFC3339), windowEnd.Format(time.RFC3339))
+	log.Printf("provisioner: christened %s at %s (window %s–%s, volume=%s)",
+		shardID, hb.Addr, windowStart.Format(time.RFC3339), windowEnd.Format(time.RFC3339), volumeID)
 	return nil
 }
 
