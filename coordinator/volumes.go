@@ -228,11 +228,16 @@ func (m *EC2VolumeManager) TagWithShardID(ctx context.Context, volumeID, shardID
 	return nil
 }
 
-// AttachToInstance attaches volumeID to instanceID at the given device
-// path, then polls until DescribeVolumes reports the volume as
-// in-use. Poll interval and attempts are exported (test shim) but
-// callers should generally rely on the default 2s × 60.
+// AttachToInstance attaches volumeID to instanceID at the given
+// device path. Waits for the volume to be `available` first —
+// CreateVolume returns immediately with the volume still in
+// `creating` state, and AttachVolume fails with IncorrectState if
+// called too early. Then polls until DescribeVolumes reports
+// `in-use`. Poll interval and attempts are exported (test shim).
 func (m *EC2VolumeManager) AttachToInstance(ctx context.Context, volumeID, instanceID, device string) error {
+	if err := m.waitForVolumeState(ctx, volumeID, ec2types.VolumeStateAvailable); err != nil {
+		return fmt.Errorf("wait for %s available: %w", volumeID, err)
+	}
 	if _, err := m.client.AttachVolume(ctx, &ec2.AttachVolumeInput{
 		VolumeId:   aws.String(volumeID),
 		InstanceId: aws.String(instanceID),

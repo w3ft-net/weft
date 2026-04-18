@@ -165,6 +165,16 @@ func (m *mockEC2Volumes) AttachVolume(_ context.Context, in *ec2.AttachVolumeInp
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.attachCalls = append(m.attachCalls, in)
+	// Flip the attached volume's state so the post-attach
+	// waitForVolumeState(InUse) poll succeeds — matches real AWS
+	// behavior (a successful AttachVolume transitions the volume
+	// through `attaching` → `in-use`).
+	if m.attachErr == nil && in != nil && in.VolumeId != nil {
+		if v, ok := m.volumesByID[*in.VolumeId]; ok {
+			v.State = ec2types.VolumeStateInUse
+			m.volumesByID[*in.VolumeId] = v
+		}
+	}
 	return &ec2.AttachVolumeOutput{}, m.attachErr
 }
 
@@ -299,14 +309,71 @@ func TestVolumeManager_FindByShard_NoneReturnsNil(t *testing.T) {
 	}
 }
 
+// Real AWS returns a just-created volume in `creating` state for a
+// few seconds before it reaches `available`. AttachVolume against a
+// `creating` volume fails with IncorrectState. This test pins the
+// fix: AttachToInstance must wait for `available` before calling
+// AttachVolume, otherwise we leak one volume per launch cycle in
+// prod (seen 2026-04-17 during the EBS rollout).
+func TestVolumeManager_AttachToInstance_WaitsForAvailable(t *testing.T) {
+	mock := &mockEC2Volumes{
+		volumesByID: map[string]ec2types.Volume{
+			"vol-creating": {
+				VolumeId: strPtr("vol-creating"),
+				State:    ec2types.VolumeStateCreating, // starts not-available
+			},
+		},
+	}
+	vm := NewEC2VolumeManagerWithClient(mock)
+	vm.pollInterval = 5 * time.Millisecond
+	vm.pollAttempts = 100 // up to ~500ms — plenty for the flip below
+
+	// Kick off the attach in a goroutine. It should block until we
+	// flip the volume to `available`.
+	done := make(chan error, 1)
+	go func() {
+		done <- vm.AttachToInstance(context.Background(), "vol-creating", "i-1", "/dev/sdf")
+	}()
+
+	// Give the poll loop a couple of ticks to observe `creating`,
+	// then flip the state. A race-free flip is good enough here —
+	// we're not testing exact timing, we're testing that the call
+	// eventually waits and succeeds.
+	time.Sleep(20 * time.Millisecond)
+	if len(mock.attachCalls) != 0 {
+		t.Fatalf("AttachVolume called while volume was still 'creating' — IncorrectState bug")
+	}
+	mock.mu.Lock()
+	mock.volumesByID["vol-creating"] = ec2types.Volume{
+		VolumeId: strPtr("vol-creating"),
+		State:    ec2types.VolumeStateAvailable, // CreateVolume completed; attach can proceed
+	}
+	mock.mu.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("AttachToInstance: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AttachToInstance did not return after volume became available")
+	}
+
+	if len(mock.attachCalls) != 1 {
+		t.Fatalf("expected 1 AttachVolume call, got %d", len(mock.attachCalls))
+	}
+}
+
 func TestVolumeManager_AttachToInstance(t *testing.T) {
 	mock := &mockEC2Volumes{}
-	// Pre-register the volume so WaitForVolumeAttached can observe it
-	// transitioning to in-use.
+	// Volume must be `available` at the pre-attach poll, then
+	// DescribeVolumes reports `in-use` after the attach. Both
+	// happen on the same mock record; the pre-attach check is
+	// what gates the call.
 	mock.volumesByID = map[string]ec2types.Volume{
 		"vol-1": {
 			VolumeId: strPtr("vol-1"),
-			State:    ec2types.VolumeStateInUse,
+			State:    ec2types.VolumeStateAvailable,
 		},
 	}
 	vm := NewEC2VolumeManagerWithClient(mock)
