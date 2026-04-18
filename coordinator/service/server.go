@@ -545,7 +545,7 @@ func (s *Server) SaveWatch(_ context.Context, req *pb.SaveWatchRequest) (*pb.Sav
 	if err != nil {
 		return nil, err
 	}
-	if err := s.Store.SaveCronWatch(custID, req.Name, req.Schedule, req.Pipeline, req.NotifyDest); err != nil {
+	if err := s.Store.SaveCronWatch(custID, req.Name, req.Schedule, req.Pipeline); err != nil {
 		return nil, err
 	}
 	return &pb.SaveWatchResponse{}, nil
@@ -561,11 +561,10 @@ func (s *Server) GetWatch(_ context.Context, req *pb.GetWatchRequest) (*pb.GetWa
 		return nil, status.Errorf(codes.NotFound, "%s: not found", req.Name)
 	}
 	return &pb.GetWatchResponse{
-		Name:       w.Name,
-		Schedule:   w.Schedule,
-		Pipeline:   w.Pipeline,
-		NotifyDest: w.NotifyDest,
-		Enabled:    w.Enabled,
+		Name:     w.Name,
+		Schedule: w.Schedule,
+		Pipeline: w.Pipeline,
+		Enabled:  w.Enabled,
 	}, nil
 }
 

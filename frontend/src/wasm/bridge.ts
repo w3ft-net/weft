@@ -326,26 +326,22 @@ function fsGetWatchResults(name: string, limit: number): { results?: { stdout: s
   }
 }
 
-function parseCronFile(content: string): { schedule: string; pipeline: string; notify_dest: string } {
+function parseCronFile(content: string): { schedule: string; pipeline: string } {
   let schedule = ''
-  let notifyDest = ''
   const pipelineLines: string[] = []
   for (const line of content.split('\n')) {
     const trimmed = line.trim()
     if (trimmed.startsWith('# schedule:')) {
       schedule = trimmed.replace('# schedule:', '').trim()
-    } else if (trimmed.startsWith('# notify:')) {
-      notifyDest = trimmed.replace('# notify:', '').trim()
     } else if (trimmed && !trimmed.startsWith('#')) {
       pipelineLines.push(line)
     }
   }
-  return { schedule, pipeline: pipelineLines.join('\n'), notify_dest: notifyDest }
+  return { schedule, pipeline: pipelineLines.join('\n') }
 }
 
-function serializeCronFile(data: { Schedule: string; Pipeline: string; NotifyDest?: string; Enabled?: boolean }): string {
+function serializeCronFile(data: { Schedule: string; Pipeline: string; Enabled?: boolean }): string {
   let out = `# schedule: ${data.Schedule}\n`
-  if (data.NotifyDest) out += `# notify: ${data.NotifyDest}\n`
   if (data.Enabled === false) out += `# enabled: false\n`
   out += data.Pipeline
   if (!data.Pipeline.endsWith('\n')) out += '\n'

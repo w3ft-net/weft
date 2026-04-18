@@ -56,27 +56,24 @@ func (b *HTTPBackend) GetWatch(name string) (*WatchData, error) {
 		return nil, err
 	}
 	var w struct {
-		Schedule   string `json:"Schedule"`
-		Pipeline   string `json:"Pipeline"`
-		NotifyDest string `json:"NotifyDest"`
-		Enabled    bool   `json:"Enabled"`
+		Schedule string `json:"Schedule"`
+		Pipeline string `json:"Pipeline"`
+		Enabled  bool   `json:"Enabled"`
 	}
 	if err := json.Unmarshal(data, &w); err != nil {
 		return nil, fmt.Errorf("parse watch: %w", err)
 	}
 	return &WatchData{
-		Schedule:   w.Schedule,
-		Pipeline:   w.Pipeline,
-		NotifyDest: w.NotifyDest,
-		Enabled:    w.Enabled,
+		Schedule: w.Schedule,
+		Pipeline: w.Pipeline,
+		Enabled:  w.Enabled,
 	}, nil
 }
 
 func (b *HTTPBackend) SaveWatch(name string, w *WatchData) error {
 	return b.apiPut("/api/watches/"+name, map[string]string{
-		"schedule":    w.Schedule,
-		"pipeline":    w.Pipeline,
-		"notify_dest": w.NotifyDest,
+		"schedule": w.Schedule,
+		"pipeline": w.Pipeline,
 	})
 }
 

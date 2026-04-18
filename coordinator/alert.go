@@ -11,19 +11,23 @@ import (
 	"github.com/kevlarcon/weft/store"
 )
 
-// AlertContext provides the alert command with access to result history
-// and incident management. When Watch is nil, the command is running
-// interactively (no dedup, no real notifications unless --send).
+// AlertContext provides the alert command with access to result history,
+// incident dedup, and the Notifier. Watch is nil for interactive runs,
+// which skips the (watchID, condition) dedup check but still dispatches
+// if --notify is supplied — useful for testing aliases from the shell.
 type AlertContext struct {
 	Store       *store.Store
-	Watch       *store.CronWatch // nil in interactive mode
+	Watch       *store.CronWatch
+	Notifier    *Notifier
+	CustomerID  uint
 	Interactive bool
 }
 
 type alertCondition int
 
 const (
-	condAbove alertCondition = iota
+	condAny alertCondition = iota // fires on any non-empty stdin
+	condAbove
 	condBelow
 	condEq
 	condNeq
@@ -40,7 +44,7 @@ type alertArgs struct {
 	duration  time.Duration
 	average   bool
 	msg       string
-	send      bool
+	notify    string // alias name in /etc/notify.conf
 }
 
 // AlertCommand is the entry point for the `alert` pipeline command.
@@ -104,6 +108,12 @@ func AlertCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wr
 	var reason string
 
 	switch parsed.condition {
+	case condAny:
+		triggered = value != ""
+		if triggered {
+			reason = "non-empty output"
+		}
+
 	case condAbove:
 		if !isNumeric {
 			fmt.Fprintf(stderr, "alert: non-numeric value %q\n", value)
@@ -223,19 +233,52 @@ func AlertCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wr
 		msg = prefix + ": " + reason
 	}
 
-	// Incident dedup (cron mode only).
+	// Incident dedup (cron mode only). If the incident is already open we
+	// write to stderr for visibility but skip dispatch to avoid re-paging.
+	shouldDispatch := true
 	if ctx.Watch != nil && ctx.Store != nil {
 		condStr := strings.Join(args, " ")
-		shouldNotify := checkIncident(ctx.Store, ctx.Watch.ID, condStr, true)
-		if !shouldNotify {
-			// Incident already open — don't re-notify.
-			return 0
-		}
+		shouldDispatch = checkIncident(ctx.Store, ctx.Watch.ID, condStr, true)
 	}
 
-	// Write to stderr.
+	// Always write to stderr so the cron executor logs the trigger and the
+	// shell user sees it interactively.
 	fmt.Fprintln(stderr, msg)
+
+	// Dispatch through the Notifier if an alias was supplied.
+	if shouldDispatch && parsed.notify != "" && ctx.Notifier != nil {
+		body := truncateAlertBody(value)
+		watchName, customerID := ctx.dispatchIdentity()
+		if err := ctx.Notifier.Send(customerID, parsed.notify, watchName, body); err != nil {
+			fmt.Fprintf(stderr, "alert: dispatch to %q failed: %v\n", parsed.notify, err)
+			return 1
+		}
+	} else if parsed.notify != "" && ctx.Notifier == nil && ctx.Interactive {
+		fmt.Fprintf(stderr, "alert: notifier unavailable — would dispatch to %q\n", parsed.notify)
+	}
 	return 0
+}
+
+// dispatchIdentity returns the (watchName, customerID) used by the Notifier
+// for dedup-key construction. For ad-hoc shell runs a unique synthetic name
+// ensures every invocation creates its own PagerDuty incident instead of
+// collapsing into a shared "adhoc" key.
+func (ctx *AlertContext) dispatchIdentity() (string, uint) {
+	if ctx.Watch != nil {
+		return ctx.Watch.Name, ctx.Watch.CustomerID
+	}
+	return fmt.Sprintf("adhoc-%d", time.Now().UnixNano()), ctx.CustomerID
+}
+
+// truncateAlertBody caps stdin content at 1 KB for the alert body. Slack and
+// PagerDuty have separate hard caps inside the Notifier; this one just keeps
+// us honest about what gets shipped over the wire.
+func truncateAlertBody(s string) string {
+	const max = 1024
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "\n... (truncated)"
 }
 
 // checkIncident handles incident dedup. Returns true if this is a NEW incident
@@ -265,14 +308,19 @@ func checkIncident(s *store.Store, watchID uint, condition string, triggered boo
 
 func parseAlertArgs(args []string) (*alertArgs, error) {
 	if len(args) == 0 {
-		return nil, fmt.Errorf("usage: alert <condition> [--duration <dur>] [--average] [--msg <text>]")
+		return nil, fmt.Errorf("usage: alert [<condition>] --notify=<alias> [--duration <dur>] [--average] [--msg <text>]")
 	}
 
-	parsed := &alertArgs{}
+	parsed := &alertArgs{condition: condAny}
 	i := 0
 
-	// Parse condition.
+	// First positional may be a condition keyword. If it starts with "--" or
+	// isn't a known condition, fall through with default (any).
 	switch args[0] {
+	case "any":
+		parsed.condition = condAny
+		i++
+
 	case "above":
 		parsed.condition = condAbove
 		i++
@@ -362,12 +410,22 @@ func parseAlertArgs(args []string) (*alertArgs, error) {
 		i++
 
 	default:
-		return nil, fmt.Errorf("unknown condition: %s", args[0])
+		if !strings.HasPrefix(args[0], "-") {
+			return nil, fmt.Errorf("unknown condition: %s", args[0])
+		}
+		// First token is a flag — fall through with default condition (any).
 	}
 
 	// Parse flags.
 	for i < len(args) {
-		switch args[i] {
+		a := args[i]
+		// Support --notify=foo as well as --notify foo.
+		if strings.HasPrefix(a, "--notify=") {
+			parsed.notify = strings.TrimPrefix(a, "--notify=")
+			i++
+			continue
+		}
+		switch a {
 		case "--duration":
 			i++
 			if i >= len(args) {
@@ -386,8 +444,12 @@ func parseAlertArgs(args []string) (*alertArgs, error) {
 				return nil, fmt.Errorf("--msg requires a value")
 			}
 			parsed.msg = args[i]
-		case "--send":
-			parsed.send = true
+		case "--notify":
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("--notify requires a value")
+			}
+			parsed.notify = args[i]
 		}
 		i++
 	}
@@ -449,26 +511,34 @@ var _ = math.Abs
 const alertManPage = `ALERT(1)                    Weft Commands                    ALERT(1)
 
 NAME
-    alert - evaluate conditions and fire notifications
+    alert - evaluate conditions and dispatch notifications
 
 SYNOPSIS
-    <pipeline> | alert <condition> [--duration <dur>] [--average]
-                                   [--msg <text>] [--send]
+    <pipeline> | alert [<condition>] [--notify=<alias>]
+                       [--duration <dur>] [--average] [--msg <text>]
 
 DESCRIPTION
     Reads a value from stdin and evaluates it against a condition.
-    If the condition is met, writes an alert message to stderr.
+    If the condition is met, writes an alert message to stderr and,
+    when --notify is supplied, dispatches the alias from /etc/notify.conf
+    to its Slack and/or PagerDuty targets.
+
+    If no condition is given, the default is "any": the alert fires
+    whenever stdin is non-empty.
+
     Always passes stdin through to stdout unchanged (tee behavior).
 
-    When used in a cron watch (/cron.d/), stderr triggers notifications
-    to configured channels. Incidents are deduplicated: only the first
-    trigger fires a notification. Subsequent ticks update the incident
-    but don't re-notify. When the condition clears, the incident closes.
+    In a cron watch (/cron.d/), incidents are deduplicated on
+    (watch, condition). Subsequent ticks during an open incident
+    update it but don't re-page. When the condition clears, the
+    incident closes.
 
-    When used interactively, stderr prints to the terminal. Use --send
-    to fire a real notification (for testing integrations).
+    From the interactive shell, alert is the supported way to
+    test an alias end-to-end:
+        echo "hello" | alert --notify=ops
 
 CONDITIONS
+    any           Fires whenever stdin is non-empty (default)
     above <N>     Current value is greater than N
     below <N>     Current value is less than N
     eq <N>        Current value equals N
@@ -479,6 +549,10 @@ CONDITIONS
     falling <N>%  Value decreased by N% compared to previous
 
 OPTIONS
+    --notify=<alias>
+        Dispatch to the named alias in /etc/notify.conf.
+        Without --notify, alert only writes to stderr.
+
     --duration <dur>
         Time window for sustained conditions. For above/below:
         condition must hold for ALL runs in the window. For
@@ -493,18 +567,13 @@ OPTIONS
     --msg <text>
         Override the default alert message.
 
-    --send
-        (Interactive only) Fire the real notification to
-        configured channels instead of just printing to stderr.
-
 EXAMPLES
-    check_errors | alert above 50
-    check_errors | alert above 50 --duration 5m
-    check_errors | alert above 50 --duration 10m --average
-    check_errors | alert rising 100%
-    check_errors | alert rising 100% --duration 10m
-    cat /log/canary.log | tail -1 | alert absent --duration 10m
-    echo "test" | alert above 0 --send
+    cat myapp.log --since 5m | awk '$LEVEL == "ERROR"' | alert --notify=ops
+    check_errors | alert above 50 --notify=critical
+    check_errors | alert above 50 --duration 5m --average --notify=ops
+    check_errors | alert rising 100% --notify=critical
+    cat /log/canary.log | tail -1 | alert absent --duration 10m --notify=ops
+    echo "integration test" | alert --notify=ops
 
 SEE ALSO
     help, vi, cat

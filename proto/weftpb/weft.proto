@@ -349,12 +349,15 @@ message DeleteFunctionRequest {
 message DeleteFunctionResponse {}
 
 // Cron watches (/cron.d/).
+// Alert destinations are encoded inline in the pipeline as
+// `alert --notify=<alias>`; there is no separate wire field.
 message SaveWatchRequest {
   string customer = 1;
   string name = 2;
   string schedule = 3;
   string pipeline = 4;
-  string notify_dest = 5;
+  reserved 5;
+  reserved "notify_dest";
 }
 message SaveWatchResponse {}
 
@@ -366,7 +369,8 @@ message GetWatchResponse {
   string name = 1;
   string schedule = 2;
   string pipeline = 3;
-  string notify_dest = 4;
+  reserved 4;
+  reserved "notify_dest";
   bool enabled = 5;
 }
 

@@ -9,10 +9,9 @@ import (
 
 // WatchData holds the deserialized fields of a cron watch.
 type WatchData struct {
-	Schedule   string
-	Pipeline   string
-	NotifyDest string
-	Enabled    bool
+	Schedule string
+	Pipeline string
+	Enabled  bool
 }
 
 // Backend is the transport layer for coordinator storage operations.
@@ -77,12 +76,11 @@ func (f *RemoteFS) WriteFile(path string, data []byte) error {
 	case "bin":
 		return f.backend.SaveFunction(name, string(data))
 	case "cron.d":
-		schedule, pipeline, notifyDest := parseCronFileContent(string(data))
+		schedule, pipeline := parseCronFileContent(string(data))
 		return f.backend.SaveWatch(name, &WatchData{
-			Schedule:   schedule,
-			Pipeline:   pipeline,
-			NotifyDest: notifyDest,
-			Enabled:    true,
+			Schedule: schedule,
+			Pipeline: pipeline,
+			Enabled:  true,
 		})
 	}
 
@@ -201,9 +199,6 @@ func splitFSPath(path string) (dir, name string) {
 func serializeCronFile(w *WatchData) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# schedule: %s\n", w.Schedule)
-	if w.NotifyDest != "" {
-		fmt.Fprintf(&b, "# notify: %s\n", w.NotifyDest)
-	}
 	if !w.Enabled {
 		b.WriteString("# enabled: false\n")
 	}
@@ -214,14 +209,12 @@ func serializeCronFile(w *WatchData) string {
 	return b.String()
 }
 
-func parseCronFileContent(content string) (schedule, pipeline, notifyDest string) {
+func parseCronFileContent(content string) (schedule, pipeline string) {
 	var pipelineLines []string
 	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "# schedule:") {
 			schedule = strings.TrimSpace(strings.TrimPrefix(trimmed, "# schedule:"))
-		} else if strings.HasPrefix(trimmed, "# notify:") {
-			notifyDest = strings.TrimSpace(strings.TrimPrefix(trimmed, "# notify:"))
 		} else if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
 			pipelineLines = append(pipelineLines, line)
 		}

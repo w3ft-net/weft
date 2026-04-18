@@ -13,6 +13,41 @@ func runAlert(args string, stdin string) (stdout, stderr string, exitCode int) {
 	return outBuf.String(), errBuf.String(), code
 }
 
+func TestAlert_AnyNonEmpty(t *testing.T) {
+	// Default condition fires on any non-empty stdin.
+	_, stderr, code := runAlert("--notify=ops", "something happened\n")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if stderr == "" {
+		t.Error("expected alert for non-empty stdin")
+	}
+}
+
+func TestAlert_AnyEmpty(t *testing.T) {
+	// No stdin means no trigger.
+	_, stderr, code := runAlert("--notify=ops", "")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if stderr != "" {
+		t.Errorf("expected no alert for empty stdin, got %q", stderr)
+	}
+}
+
+func TestAlert_NotifyFlagForms(t *testing.T) {
+	// Both --notify=x and --notify x should parse the alias.
+	for _, args := range []string{"--notify=ops", "--notify ops"} {
+		parsed, err := parseAlertArgs(strings.Fields(args))
+		if err != nil {
+			t.Fatalf("%s: %v", args, err)
+		}
+		if parsed.notify != "ops" {
+			t.Errorf("%s: got notify=%q", args, parsed.notify)
+		}
+	}
+}
+
 func TestAlert_Above(t *testing.T) {
 	stdout, stderr, code := runAlert("above 50", "73\n")
 	if code != 0 {

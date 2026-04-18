@@ -24,42 +24,39 @@ func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) 
 	nc, _ := s.store.GetNotifyConfig(custID)
 
 	slackConnected := nc != nil && (nc.SlackBotToken != "" || nc.SlackWebhook != "")
-	resp := map[string]any{
-		"slack": map[string]any{
-			"connected": slackConnected,
-			"team_name": "",
-		},
+	slackInfo := map[string]any{
+		"connected": slackConnected,
+		"team_name": "",
+	}
+	if nc != nil && slackConnected {
+		slackInfo = map[string]any{
+			"connected":     true,
+			"team_name":     nc.SlackTeamName,
+			"configured_at": nc.ConfiguredAt,
+		}
+	}
+
+	pdItems, _ := s.store.ListPagerDutyIntegrations(custID)
+	pdKeys := make(map[string]string, len(pdItems))
+	pdMeta := make([]map[string]any, 0, len(pdItems))
+	for _, it := range pdItems {
+		pdKeys[it.Name] = maskKey(it.IntegrationKey)
+		pdMeta = append(pdMeta, map[string]any{
+			"name":         it.Name,
+			"description":  it.Description,
+			"last_used_at": it.LastUsedAt,
+			"last_error":   it.LastError,
+		})
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"slack": slackInfo,
 		"pagerduty": map[string]any{
-			"connected": nc != nil && nc.PagerDutyKeys != "" && nc.PagerDutyKeys != "{}",
-			"keys":      map[string]string{},
+			"connected":    len(pdItems) > 0,
+			"keys":         pdKeys,
+			"integrations": pdMeta,
 		},
-		"routes": map[string]string{},
-	}
-
-	if nc != nil {
-		if slackConnected {
-			resp["slack"] = map[string]any{
-				"connected":     true,
-				"team_name":     nc.SlackTeamName,
-				"configured_at": nc.ConfiguredAt,
-			}
-		}
-		if nc.PagerDutyKeys != "" {
-			var keys map[string]string
-			json.Unmarshal([]byte(nc.PagerDutyKeys), &keys)
-			resp["pagerduty"] = map[string]any{
-				"connected": len(keys) > 0,
-				"keys":      maskKeys(keys),
-			}
-		}
-		if nc.Routes != "" {
-			var routes map[string]string
-			json.Unmarshal([]byte(nc.Routes), &routes)
-			resp["routes"] = routes
-		}
-	}
-
-	json.NewEncoder(w).Encode(resp)
+	})
 }
 
 // handleSlackConnect starts the Slack OAuth flow.
@@ -115,7 +112,6 @@ func (s *Server) handleSlackCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Save the webhook.
 	custID, err := s.resolveCustomerID(customerName)
 	if err != nil {
 		http.Redirect(w, r, s.baseURL+"/account?integration=slack&status=error", http.StatusFound)
@@ -130,7 +126,6 @@ func (s *Server) handleSlackCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Save bot token (for chat.postMessage) and webhook (if present, for legacy).
 	webhook := ""
 	if tokenResp.IncomingWebhook.URL != "" {
 		webhook = tokenResp.IncomingWebhook.URL
@@ -152,7 +147,8 @@ func (s *Server) handleSlackDisconnect(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handlePagerDutySave saves a PagerDuty routing key.
+// handlePagerDutySave creates or updates a single named PagerDuty integration.
+// Body: {"name": "ops", "key": "<routing-key>", "description": "optional"}.
 func (s *Server) handlePagerDutySave(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
 	custID, err := s.resolveCustomerID(claims.CustomerName)
@@ -162,29 +158,43 @@ func (s *Server) handlePagerDutySave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name string `json:"name"` // e.g., "api", "workers"
-		Key  string `json:"key"`  // PagerDuty routing key
+		Name        string `json:"name"`
+		Key         string `json:"key"`
+		Description string `json:"description"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Key == "" {
 		http.Error(w, "name and key required", http.StatusBadRequest)
 		return
 	}
-
-	// Load existing keys, add/update this one.
-	nc, _ := s.store.GetNotifyConfig(custID)
-	keys := make(map[string]string)
-	if nc != nil && nc.PagerDutyKeys != "" {
-		json.Unmarshal([]byte(nc.PagerDutyKeys), &keys)
+	if err := s.store.SavePagerDutyIntegration(custID, req.Name, req.Key, req.Description); err != nil {
+		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
-	keys[req.Name] = req.Key
-
-	keysJSON, _ := json.Marshal(keys)
-	s.store.SavePagerDutyKeys(custID, string(keysJSON))
-
 	w.WriteHeader(http.StatusOK)
 }
 
-// handlePagerDutyDisconnect removes all PagerDuty keys.
+// handlePagerDutyDelete removes a single integration by name.
+// Path: DELETE /api/integrations/pagerduty/{name}
+func (s *Server) handlePagerDutyDelete(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	custID, err := s.resolveCustomerID(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	name := r.PathValue("name")
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	if err := s.store.DeletePagerDutyIntegration(custID, name); err != nil {
+		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePagerDutyDisconnect removes all PagerDuty integrations for the customer.
 func (s *Server) handlePagerDutyDisconnect(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
 	custID, err := s.resolveCustomerID(claims.CustomerName)
@@ -192,32 +202,11 @@ func (s *Server) handlePagerDutyDisconnect(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.store.SavePagerDutyKeys(custID, "{}")
+	s.store.DeleteAllPagerDutyIntegrations(custID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleSaveRoutes saves the watch→destination routing map.
-func (s *Server) handleSaveRoutes(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
-	custID, err := s.resolveCustomerID(claims.CustomerName)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	var routes map[string]string
-	if err := json.NewDecoder(r.Body).Decode(&routes); err != nil {
-		http.Error(w, "invalid routes", http.StatusBadRequest)
-		return
-	}
-
-	routesJSON, _ := json.Marshal(routes)
-	s.store.SaveNotifyRoutes(custID, string(routesJSON))
-
-	w.WriteHeader(http.StatusOK)
-}
-
-// ── Slack OAuth helpers ──────────────���──────────────────────
+// ── Slack OAuth helpers ────────────────────────────────────
 
 type slackOAuthResponse struct {
 	OK              bool   `json:"ok"`
@@ -278,15 +267,10 @@ func validateStateToken(token, secret string) (string, error) {
 	return claims.CustomerName, nil
 }
 
-// maskKeys replaces key values with masked versions for display.
-func maskKeys(keys map[string]string) map[string]string {
-	masked := make(map[string]string, len(keys))
-	for name, key := range keys {
-		if len(key) > 8 {
-			masked[name] = key[:4] + "..." + key[len(key)-4:]
-		} else {
-			masked[name] = "****"
-		}
+// maskKey displays only the first/last few characters of a secret.
+func maskKey(key string) string {
+	if len(key) > 8 {
+		return key[:4] + "..." + key[len(key)-4:]
 	}
-	return masked
+	return "****"
 }

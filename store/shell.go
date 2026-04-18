@@ -104,13 +104,12 @@ type CronWatch struct {
 	Name       string `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
 	Schedule   string `gorm:"not null"`        // "*/5 * * * *" or "every 1m"
 	Pipeline   string `gorm:"type:text;not null"`
-	NotifyDest string                           // "slack:#ops"
 	Enabled    bool   `gorm:"not null;default:true"`
 	LastRunAt  *time.Time
 	LastStatus string                           // "ok", "error", "stderr"
 }
 
-func (s *Store) SaveCronWatch(customerID uint, name, schedule, pipeline, notifyDest string) error {
+func (s *Store) SaveCronWatch(customerID uint, name, schedule, pipeline string) error {
 	var w CronWatch
 	result := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&w)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -119,14 +118,12 @@ func (s *Store) SaveCronWatch(customerID uint, name, schedule, pipeline, notifyD
 			Name:       name,
 			Schedule:   schedule,
 			Pipeline:   pipeline,
-			NotifyDest: notifyDest,
 			Enabled:    true,
 		}).Error
 	}
 	return s.db.Model(&w).Updates(map[string]any{
-		"schedule":    schedule,
-		"pipeline":    pipeline,
-		"notify_dest": notifyDest,
+		"schedule": schedule,
+		"pipeline": pipeline,
 	}).Error
 }
 
@@ -223,19 +220,37 @@ func (s *Store) LatestCronResult(customerID uint, watchName string) (*CronResult
 
 // --- Notification Config ---
 
-// NotifyConfig stores notification channel configuration per customer.
-// SlackWebhook comes from OAuth. PagerDutyKeys and Routes are JSON maps
-// serialized as YAML in /etc/notify.conf.
+// NotifyConfig stores per-customer notification channel state.
+// Slack credentials live here (OAuth bot token; webhook kept only for
+// tenants that never re-authed). PagerDuty integration keys live in
+// their own pagerduty_integrations table keyed by (customer_id, name).
+// AliasesYAML is the raw /etc/notify.conf document — a map of alias →
+// per-service entries consumed by the Notifier.
 type NotifyConfig struct {
 	gorm.Model
-	CustomerID    uint       `gorm:"not null;uniqueIndex"`
-	SlackWebhook  string     // incoming webhook URL (legacy, may be empty)
-	SlackBotToken string     // bot OAuth token for chat.postMessage
-	SlackTeamName string     // workspace name (for display)
-	PagerDutyKeys string     `gorm:"type:text"` // JSON: {"api": "key1", "workers": "key2"}
-	Routes        string     `gorm:"type:text"` // JSON: {"error-check": "slack:#ops", ...}
+	CustomerID    uint   `gorm:"not null;uniqueIndex"`
+	SlackWebhook  string // incoming webhook URL (optional)
+	SlackBotToken string // bot OAuth token for chat.postMessage
+	SlackTeamName string // workspace name (for display)
+	AliasesYAML   string `gorm:"type:text"`
 	ConfiguredAt  *time.Time
 }
+
+// PagerDutyIntegration is a single named PagerDuty integration key for a
+// customer. notify.conf aliases reference rows here by Name.
+type PagerDutyIntegration struct {
+	gorm.Model
+	CustomerID     uint   `gorm:"not null;index:idx_pd_integrations_customer_name,unique,where:deleted_at IS NULL"`
+	Name           string `gorm:"not null;index:idx_pd_integrations_customer_name,unique,where:deleted_at IS NULL"`
+	IntegrationKey string `gorm:"not null"`
+	Description    string
+	LastUsedAt     *time.Time
+	LastError      string
+}
+
+// TableName pins the plural table name even though the model name doesn't
+// pluralize naturally through gorm's NamingStrategy.
+func (PagerDutyIntegration) TableName() string { return "pagerduty_integrations" }
 
 func (s *Store) GetNotifyConfig(customerID uint) (*NotifyConfig, error) {
 	var nc NotifyConfig
@@ -244,15 +259,6 @@ func (s *Store) GetNotifyConfig(customerID uint) (*NotifyConfig, error) {
 		return nil, err
 	}
 	return &nc, nil
-}
-
-func (s *Store) SaveNotifyConfig(customerID uint, slackWebhook string) error {
-	var nc NotifyConfig
-	result := s.db.Where("customer_id = ?", customerID).First(&nc)
-	if result.Error == gorm.ErrRecordNotFound {
-		return s.db.Create(&NotifyConfig{CustomerID: customerID, SlackWebhook: slackWebhook}).Error
-	}
-	return s.db.Model(&nc).Update("slack_webhook", slackWebhook).Error
 }
 
 func (s *Store) SaveSlackWebhook(customerID uint, webhook, teamName string) error {
@@ -287,28 +293,75 @@ func (s *Store) DisconnectSlack(customerID uint) error {
 	}).Error
 }
 
-func (s *Store) SavePagerDutyKeys(customerID uint, keysJSON string) error {
+// SaveNotifyAliases writes the raw /etc/notify.conf YAML for a customer.
+// Callers must validate the YAML before invoking this.
+func (s *Store) SaveNotifyAliases(customerID uint, aliasesYAML string) error {
 	var nc NotifyConfig
 	result := s.db.Where("customer_id = ?", customerID).First(&nc)
 	if result.Error == gorm.ErrRecordNotFound {
-		now := time.Now()
 		return s.db.Create(&NotifyConfig{
-			CustomerID:    customerID,
-			PagerDutyKeys: keysJSON,
-			ConfiguredAt:  &now,
+			CustomerID:  customerID,
+			AliasesYAML: aliasesYAML,
 		}).Error
 	}
-	return s.db.Model(&nc).Update("pager_duty_keys", keysJSON).Error
+	return s.db.Model(&nc).Update("aliases_yaml", aliasesYAML).Error
 }
 
-func (s *Store) SaveNotifyRoutes(customerID uint, routesJSON string) error {
-	var nc NotifyConfig
-	result := s.db.Where("customer_id = ?", customerID).First(&nc)
+// ── PagerDuty integrations ─────────────────────────────
+
+// ListPagerDutyIntegrations returns all PD integrations for a customer.
+func (s *Store) ListPagerDutyIntegrations(customerID uint) ([]PagerDutyIntegration, error) {
+	var items []PagerDutyIntegration
+	err := s.db.Where("customer_id = ?", customerID).Order("name").Find(&items).Error
+	return items, err
+}
+
+// GetPagerDutyIntegration returns a single integration by name.
+func (s *Store) GetPagerDutyIntegration(customerID uint, name string) (*PagerDutyIntegration, error) {
+	var item PagerDutyIntegration
+	err := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&item).Error
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+// SavePagerDutyIntegration inserts or updates a PD integration by (customer, name).
+func (s *Store) SavePagerDutyIntegration(customerID uint, name, key, description string) error {
+	var item PagerDutyIntegration
+	result := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&item)
 	if result.Error == gorm.ErrRecordNotFound {
-		return s.db.Create(&NotifyConfig{
-			CustomerID: customerID,
-			Routes:     routesJSON,
+		return s.db.Create(&PagerDutyIntegration{
+			CustomerID:     customerID,
+			Name:           name,
+			IntegrationKey: key,
+			Description:    description,
 		}).Error
 	}
-	return s.db.Model(&nc).Update("routes", routesJSON).Error
+	return s.db.Model(&item).Updates(map[string]any{
+		"integration_key": key,
+		"description":     description,
+	}).Error
+}
+
+// DeletePagerDutyIntegration removes a single integration by name.
+func (s *Store) DeletePagerDutyIntegration(customerID uint, name string) error {
+	return s.db.Where("customer_id = ? AND name = ?", customerID, name).Delete(&PagerDutyIntegration{}).Error
+}
+
+// DeleteAllPagerDutyIntegrations clears all integrations for a customer.
+func (s *Store) DeleteAllPagerDutyIntegrations(customerID uint) error {
+	return s.db.Where("customer_id = ?", customerID).Delete(&PagerDutyIntegration{}).Error
+}
+
+// RecordPagerDutySend marks an integration's last_used_at / last_error after
+// a dispatch attempt. sendErr may be empty on success.
+func (s *Store) RecordPagerDutySend(customerID uint, name, sendErr string) error {
+	now := time.Now()
+	return s.db.Model(&PagerDutyIntegration{}).
+		Where("customer_id = ? AND name = ?", customerID, name).
+		Updates(map[string]any{
+			"last_used_at": &now,
+			"last_error":   sendErr,
+		}).Error
 }
