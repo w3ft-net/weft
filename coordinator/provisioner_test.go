@@ -21,8 +21,11 @@ func TestProvisioner_RotatesOnRowCount(t *testing.T) {
 	reg.Add(&ShardEntry{
 		ID:          "shard-test",
 		Apps:        []string{"vimgym"},
-		WindowStart: t0,
-		WindowEnd:   t2,
+		// Future WindowEnd so the wall-clock-window rotation in
+		// check() doesn't preempt the row-count / MaxDuration
+		// trigger this test is exercising.
+		WindowStart: time.Now().UTC(),
+		WindowEnd:   time.Now().UTC().Add(100 * 365 * 24 * time.Hour),
 		State:       StateIngesting,
 		Shard:       ds,
 		RowCount:    100, // will be set above threshold
@@ -80,8 +83,11 @@ func TestProvisioner_NoRotateBelowThreshold(t *testing.T) {
 	reg.Add(&ShardEntry{
 		ID:          "shard-ok",
 		Apps:        []string{"vimgym"},
-		WindowStart: t0,
-		WindowEnd:   t2,
+		// Future WindowEnd so the wall-clock-window rotation in
+		// check() doesn't preempt the row-count / MaxDuration
+		// trigger this test is exercising.
+		WindowStart: time.Now().UTC(),
+		WindowEnd:   time.Now().UTC().Add(100 * 365 * 24 * time.Hour),
 		State:       StateIngesting,
 		Shard:       ds,
 		RowCount:    10, // below threshold
@@ -115,8 +121,11 @@ func TestProvisioner_RotatesOnAge(t *testing.T) {
 	reg.Add(&ShardEntry{
 		ID:          "shard-old",
 		Apps:        []string{"callbox"},
-		WindowStart: t0,
-		WindowEnd:   t2,
+		// Future WindowEnd so the wall-clock-window rotation in
+		// check() doesn't preempt the row-count / MaxDuration
+		// trigger this test is exercising.
+		WindowStart: time.Now().UTC(),
+		WindowEnd:   time.Now().UTC().Add(100 * 365 * 24 * time.Hour),
 		State:       StateIngesting,
 		Shard:       ds,
 		RowCount:    0,
@@ -151,8 +160,11 @@ func TestProvisioner_NewShardAcceptsIngestion(t *testing.T) {
 	reg.Add(&ShardEntry{
 		ID:          "shard-full",
 		Apps:        []string{"vimgym"},
-		WindowStart: t0,
-		WindowEnd:   t2,
+		// Future WindowEnd so the wall-clock-window rotation in
+		// check() doesn't preempt the row-count / MaxDuration
+		// trigger this test is exercising.
+		WindowStart: time.Now().UTC(),
+		WindowEnd:   time.Now().UTC().Add(100 * 365 * 24 * time.Hour),
 		State:       StateIngesting,
 		Shard:       ds,
 		RowCount:    100,

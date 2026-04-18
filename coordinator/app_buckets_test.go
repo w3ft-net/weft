@@ -122,7 +122,10 @@ func TestProvisioner_ScalesUpToConfiguredCount(t *testing.T) {
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
 		ID: "shard-only", Apps: []string{"vimgym"},
-		WindowStart: t0, WindowEnd: t2, State: StateIngesting,
+		// Future WindowEnd keeps the wall-clock rotation from
+		// preempting the bucket-scale-up this test exercises.
+		WindowStart: time.Now().UTC(), WindowEnd: time.Now().UTC().Add(100 * 365 * 24 * time.Hour),
+		State: StateIngesting,
 		Shard: ds, CreatedAt: time.Now(),
 	})
 
@@ -156,10 +159,12 @@ func TestProvisioner_SplitCreatesNewShard(t *testing.T) {
 
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
-		ID:          "shard-shared",
-		Apps:        []string{"vimgym", "callbox", "grantcentral"},
-		WindowStart: t0,
-		WindowEnd:   t2,
+		ID:   "shard-shared",
+		Apps: []string{"vimgym", "callbox", "grantcentral"},
+		// Future WindowEnd — this test exercises bucket splitting,
+		// not window-boundary rotation.
+		WindowStart: time.Now().UTC(),
+		WindowEnd:   time.Now().UTC().Add(100 * 365 * 24 * time.Hour),
 		State:       StateIngesting,
 		Shard:       ds,
 		RowCount:    10,
