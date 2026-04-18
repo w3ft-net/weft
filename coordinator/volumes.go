@@ -30,6 +30,8 @@ type VolumeInfo struct {
 	VolumeID string
 	AZ       string
 	State    string // available / in-use / creating / deleting / ...
+	ShardID  string // from the shard_id tag; empty for volumes created pre-christening
+	Tier     string // from the shard_tier tag
 }
 
 // CreateVolumeOpts parameterises a CreateForShard call.
@@ -57,6 +59,8 @@ type SnapshotOpts struct {
 type VolumeManager interface {
 	CreateForShard(ctx context.Context, opts CreateVolumeOpts) (volumeID string, err error)
 	FindByShard(ctx context.Context, shardID string) (*VolumeInfo, error)
+	ListAvailableByTier(ctx context.Context, tier, az string) ([]VolumeInfo, error)
+	TagWithShardID(ctx context.Context, volumeID, shardID string) error
 	AttachToInstance(ctx context.Context, volumeID, instanceID, device string) error
 	DetachFromInstance(ctx context.Context, volumeID string, force bool) error
 	DeleteVolume(ctx context.Context, volumeID string) error
@@ -159,6 +163,69 @@ func (m *EC2VolumeManager) FindByShard(ctx context.Context, shardID string) (*Vo
 	}
 	info.State = string(v.State)
 	return info, nil
+}
+
+// ListAvailableByTier returns volumes in the given AZ that (a) carry
+// the requested shard_tier tag and (b) are currently available (i.e.
+// not attached to an instance). These are recovery candidates — their
+// previous instance died and left the volume detached.
+func (m *EC2VolumeManager) ListAvailableByTier(ctx context.Context, tier, az string) ([]VolumeInfo, error) {
+	if tier == "" || az == "" {
+		return nil, fmt.Errorf("ListAvailableByTier: tier and az required")
+	}
+	out, err := m.client.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("tag:shard_tier"), Values: []string{tier}},
+			{Name: aws.String("availability-zone"), Values: []string{az}},
+			{Name: aws.String("status"), Values: []string{"available"}},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("DescribeVolumes tier=%s az=%s: %w", tier, az, err)
+	}
+	infos := make([]VolumeInfo, 0, len(out.Volumes))
+	for _, v := range out.Volumes {
+		info := VolumeInfo{State: string(v.State)}
+		if v.VolumeId != nil {
+			info.VolumeID = *v.VolumeId
+		}
+		if v.AvailabilityZone != nil {
+			info.AZ = *v.AvailabilityZone
+		}
+		for _, t := range v.Tags {
+			if t.Key == nil || t.Value == nil {
+				continue
+			}
+			switch *t.Key {
+			case "shard_id":
+				info.ShardID = *t.Value
+			case "shard_tier":
+				info.Tier = *t.Value
+			}
+		}
+		infos = append(infos, info)
+	}
+	return infos, nil
+}
+
+// TagWithShardID stamps a volume with its shard id after christening
+// minted the id. Used for volumes that were created before the shard
+// had an identity (the common "brand-new shard" path).
+func (m *EC2VolumeManager) TagWithShardID(ctx context.Context, volumeID, shardID string) error {
+	if volumeID == "" || shardID == "" {
+		return fmt.Errorf("TagWithShardID: volumeID and shardID required")
+	}
+	_, err := m.client.CreateTags(ctx, &ec2.CreateTagsInput{
+		Resources: []string{volumeID},
+		Tags: []ec2types.Tag{
+			{Key: aws.String("shard_id"), Value: aws.String(shardID)},
+			{Key: aws.String("Name"), Value: aws.String(shardID)},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("CreateTags on %s: %w", volumeID, err)
+	}
+	return nil
 }
 
 // AttachToInstance attaches volumeID to instanceID at the given device
