@@ -243,7 +243,6 @@ type PagerDutyIntegration struct {
 	CustomerID     uint   `gorm:"not null;index:idx_pd_integrations_customer_name,unique,where:deleted_at IS NULL"`
 	Name           string `gorm:"not null;index:idx_pd_integrations_customer_name,unique,where:deleted_at IS NULL"`
 	IntegrationKey string `gorm:"not null"`
-	Description    string
 	LastUsedAt     *time.Time
 	LastError      string
 }
@@ -327,7 +326,7 @@ func (s *Store) GetPagerDutyIntegration(customerID uint, name string) (*PagerDut
 }
 
 // SavePagerDutyIntegration inserts or updates a PD integration by (customer, name).
-func (s *Store) SavePagerDutyIntegration(customerID uint, name, key, description string) error {
+func (s *Store) SavePagerDutyIntegration(customerID uint, name, key string) error {
 	var item PagerDutyIntegration
 	result := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&item)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -335,13 +334,9 @@ func (s *Store) SavePagerDutyIntegration(customerID uint, name, key, description
 			CustomerID:     customerID,
 			Name:           name,
 			IntegrationKey: key,
-			Description:    description,
 		}).Error
 	}
-	return s.db.Model(&item).Updates(map[string]any{
-		"integration_key": key,
-		"description":     description,
-	}).Error
+	return s.db.Model(&item).Update("integration_key", key).Error
 }
 
 // DeletePagerDutyIntegration removes a single integration by name.

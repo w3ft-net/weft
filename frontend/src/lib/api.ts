@@ -264,7 +264,6 @@ export function acceptInvite(token: string): Promise<{ token: string; user: User
 // Integrations
 export interface PagerDutyIntegrationMeta {
   name: string
-  description: string
   last_used_at: string | null
   last_error: string
 }
@@ -294,10 +293,10 @@ export function disconnectSlack(): Promise<void> {
   return apiFetch('/api/integrations/slack', { method: 'DELETE' })
 }
 
-export function savePagerDutyKey(name: string, key: string, description?: string): Promise<void> {
+export function savePagerDutyKey(name: string, key: string): Promise<void> {
   return apiFetch('/api/integrations/pagerduty', {
     method: 'PUT',
-    body: JSON.stringify({ name, key, description: description ?? '' }),
+    body: JSON.stringify({ name, key }),
   })
 }
 

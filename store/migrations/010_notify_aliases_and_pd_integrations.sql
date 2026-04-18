@@ -24,7 +24,6 @@ CREATE TABLE IF NOT EXISTS pagerduty_integrations (
     customer_id     BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
     name            TEXT NOT NULL,
     integration_key TEXT NOT NULL,
-    description     TEXT,
     last_used_at    TIMESTAMPTZ,
     last_error      TEXT
 );
