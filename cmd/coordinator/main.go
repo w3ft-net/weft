@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"google.golang.org/grpc"
 
 	"github.com/kevlarcon/weft/compute"
@@ -119,8 +121,43 @@ func main() {
 			provConfig.LambdaFunctionURL = os.Getenv("WEFT_LAMBDA_FUNCTION_URL")
 			prov := coordinator.NewProvisioner(coord.Registry, asgLauncher, provConfig)
 			coord.Provisioner = prov
+
+			// Attach a VolumeManager so christen() can tag EBS volumes
+			// with the minted shard id. Runs in prod mode; unavailable
+			// when the SDK can't load (caller warned above).
+			if vm, err := coordinator.NewEC2VolumeManager(*awsRegion); err != nil {
+				log.Printf("warning: VolumeManager unavailable: %v", err)
+			} else {
+				prov.SetVolumeManager(vm)
+			}
+
 			prov.Start(provCtx)
 			log.Printf("provisioner: started with ASG tiers %v", shardTiers)
+
+			// Lifecycle poller: consume ASG launch hook events from SQS
+			// and decide christen/recover for each new shard instance.
+			// Controlled by WEFT_LIFECYCLE_QUEUE_URL so dev/docker
+			// coordinators stay out of this path.
+			if queueURL := os.Getenv("WEFT_LIFECYCLE_QUEUE_URL"); queueURL != "" {
+				tierByASG := make(map[string]string, len(shardTiers))
+				for tier, asgName := range shardTiers {
+					tierByASG[asgName] = tier
+				}
+				sizeByTier := readTierSizes(*awsRegion)
+				poller, err := coordinator.BuildLifecyclePoller(provCtx, *awsRegion, queueURL,
+					coordinator.LifecycleHandlerConfig{
+						Registry:   coord.Registry,
+						TierByASG:  tierByASG,
+						SizeByTier: sizeByTier,
+						DeviceName: os.Getenv("WEFT_SHARD_DEVICE_NAME"),
+					})
+				if err != nil {
+					log.Printf("warning: lifecycle poller unavailable: %v", err)
+				} else if poller != nil {
+					poller.Start(provCtx)
+					log.Printf("lifecycle: subscribed to %s", queueURL)
+				}
+			}
 		}
 	} else {
 		// Dev/Docker: local in-process DuckDB shards managed by provisioner.
@@ -251,6 +288,47 @@ func main() {
 	if err := srv.Serve(lis); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
+}
+
+// readTierSizes fetches per-tier data volume sizes from SSM. These
+// parameters are written by the terraform stack (see
+// docs/plans/ebs-shard-volumes.md → S1). Falls back to sensible
+// defaults on missing params so coordinators that boot before the
+// terraform apply can still function.
+func readTierSizes(region string) map[string]int32 {
+	defaults := map[string]int32{"small": 100, "medium": 500, "large": 2000}
+	appName := os.Getenv("APP_NAME")
+	if appName == "" {
+		appName = "weft"
+	}
+	sizes := map[string]int32{}
+	for tier, def := range defaults {
+		key := fmt.Sprintf("/%s/config/shard-%s-volume-gb", appName, tier)
+		if val, ok := lookupSSMInt32(region, key); ok {
+			sizes[tier] = val
+		} else {
+			sizes[tier] = def
+		}
+	}
+	return sizes
+}
+
+func lookupSSMInt32(region, name string) (int32, bool) {
+	cfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(region))
+	if err != nil {
+		return 0, false
+	}
+	out, err := ssm.NewFromConfig(cfg).GetParameter(context.Background(), &ssm.GetParameterInput{
+		Name: &name,
+	})
+	if err != nil || out.Parameter == nil || out.Parameter.Value == nil {
+		return 0, false
+	}
+	var v int32
+	if _, err := fmt.Sscanf(*out.Parameter.Value, "%d", &v); err != nil || v <= 0 {
+		return 0, false
+	}
+	return v, true
 }
 
 func parseShardsFlag(flag string) []shard.Shard {
