@@ -112,6 +112,7 @@ func shardIdentityHint(dataDir string) (string, error) {
 func runHeartbeat(coordAddr string, grpcPort int, hbInterval time.Duration, srv *shardsvc.Server) {
 	myIP := getPrivateIP()
 	myAddr := fmt.Sprintf("%s:%d", myIP, grpcPort)
+	myInstanceID := getInstanceID()
 
 	conn, err := grpc.NewClient(coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -123,7 +124,7 @@ func runHeartbeat(coordAddr string, grpcPort int, hbInterval time.Duration, srv 
 	// Retry initial heartbeat with backoff so we survive starting
 	// simultaneously with the coordinator.
 	for i := 0; i < 10; i++ {
-		if sendHeartbeat(client, myAddr, srv) {
+		if sendHeartbeat(client, myAddr, myInstanceID, srv) {
 			break
 		}
 		time.Sleep(time.Duration(i+1) * time.Second)
@@ -132,11 +133,26 @@ func runHeartbeat(coordAddr string, grpcPort int, hbInterval time.Duration, srv 
 	ticker := time.NewTicker(hbInterval)
 	defer ticker.Stop()
 	for range ticker.C {
-		sendHeartbeat(client, myAddr, srv)
+		sendHeartbeat(client, myAddr, myInstanceID, srv)
 	}
 }
 
-func sendHeartbeat(client pb.WeftCoordinatorClient, addr string, srv *shardsvc.Server) bool {
+// buildHeartbeatRequest materializes the proto from identity snapshot.
+// Pulled out so unit tests can assert every outbound field without a
+// live gRPC client. The coordinator's christen path needs InstanceId
+// to find the pre-attached EBS volume (tag:shard_id=pending-<id>) —
+// an empty InstanceId silently drops that lookup.
+func buildHeartbeatRequest(shardID, addr, instanceID, state string, rowCount int64) *pb.ShardHeartbeatRequest {
+	return &pb.ShardHeartbeatRequest{
+		ShardId:    shardID,
+		Addr:       addr,
+		InstanceId: instanceID,
+		State:      state,
+		RowCount:   rowCount,
+	}
+}
+
+func sendHeartbeat(client pb.WeftCoordinatorClient, addr, instanceID string, srv *shardsvc.Server) bool {
 	shardID := srv.Identity()
 	state := "INGESTING"
 	if shardID == "" {
@@ -148,12 +164,7 @@ func sendHeartbeat(client pb.WeftCoordinatorClient, addr string, srv *shardsvc.S
 		rowCount = ds.RowCount()
 	}
 
-	req := &pb.ShardHeartbeatRequest{
-		ShardId:  shardID,
-		Addr:     addr,
-		State:    state,
-		RowCount: rowCount,
-	}
+	req := buildHeartbeatRequest(shardID, addr, instanceID, state, rowCount)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -165,28 +176,54 @@ func sendHeartbeat(client pb.WeftCoordinatorClient, addr string, srv *shardsvc.S
 	return true
 }
 
+// getInstanceID fetches the EC2 instance id from IMDSv2. Returns ""
+// off-EC2 (docker, dev), which is fine — only production shards need
+// it for volume lookups.
+func getInstanceID() string {
+	return imdsFetch("instance-id")
+}
+
 // getPrivateIP returns the instance's private IP. Tries EC2 instance
-// metadata first (works on EC2), falls back to os.Hostname().
+// metadata first (works on EC2), falls back to os.Hostname() for
+// docker/dev.
 func getPrivateIP() string {
-	client := &http.Client{Timeout: 2 * time.Second}
-	tokenReq, _ := http.NewRequest("PUT", "http://169.254.169.254/latest/api/token", nil)
-	tokenReq.Header.Set("X-aws-ec2-metadata-token-ttl-seconds", "60")
-	if tokenResp, err := client.Do(tokenReq); err == nil {
-		defer tokenResp.Body.Close()
-		token := make([]byte, 256)
-		n, _ := tokenResp.Body.Read(token)
-		if n > 0 {
-			ipReq, _ := http.NewRequest("GET", "http://169.254.169.254/latest/meta-data/local-ipv4", nil)
-			ipReq.Header.Set("X-aws-ec2-metadata-token", string(token[:n]))
-			if ipResp, err := client.Do(ipReq); err == nil {
-				defer ipResp.Body.Close()
-				ip := make([]byte, 64)
-				if n, _ := ipResp.Body.Read(ip); n > 0 {
-					return string(ip[:n])
-				}
-			}
-		}
+	if ip := imdsFetch("local-ipv4"); ip != "" {
+		return ip
 	}
 	hostname, _ := os.Hostname()
 	return hostname
+}
+
+// imdsFetch pulls a single IMDSv2 metadata key, e.g. "instance-id" or
+// "local-ipv4". Returns "" on any failure (no token, no route, bad
+// response) so callers can handle off-EC2 gracefully.
+func imdsFetch(key string) string {
+	client := &http.Client{Timeout: 2 * time.Second}
+	tokenReq, _ := http.NewRequest("PUT", "http://169.254.169.254/latest/api/token", nil)
+	tokenReq.Header.Set("X-aws-ec2-metadata-token-ttl-seconds", "60")
+	tokenResp, err := client.Do(tokenReq)
+	if err != nil {
+		return ""
+	}
+	defer tokenResp.Body.Close()
+	tokenBuf := make([]byte, 256)
+	n, _ := tokenResp.Body.Read(tokenBuf)
+	if n == 0 {
+		return ""
+	}
+	token := string(tokenBuf[:n])
+
+	req, _ := http.NewRequest("GET", "http://169.254.169.254/latest/meta-data/"+key, nil)
+	req.Header.Set("X-aws-ec2-metadata-token", token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	buf := make([]byte, 128)
+	n, _ = resp.Body.Read(buf)
+	if n == 0 {
+		return ""
+	}
+	return string(buf[:n])
 }

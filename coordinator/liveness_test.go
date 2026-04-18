@@ -331,13 +331,15 @@ func TestReap_DeadShard(t *testing.T) {
 	deadShard := &failingShard{id: "shard-dead"}
 
 	reg := NewShardRegistry()
+	// Past the grace period so reap is eligible to act.
+	aged := time.Now().Add(-10 * time.Minute)
 	reg.Add(&ShardEntry{
 		ID: "shard-alive", State: StateIngesting, Shard: ds,
-		Addr: "10.0.0.1:9000", CreatedAt: time.Now(),
+		Addr: "10.0.0.1:9000", CreatedAt: aged,
 	})
 	reg.Add(&ShardEntry{
 		ID: "shard-dead", State: StateIngesting, Shard: deadShard,
-		Addr: "10.0.0.2:9000", CreatedAt: time.Now(),
+		Addr: "10.0.0.2:9000", CreatedAt: aged,
 	})
 
 	// Only shard-alive has a heartbeat.
@@ -403,13 +405,14 @@ func TestReap_TerminatesInstanceViaLauncher(t *testing.T) {
 	dead := &failingShard{id: "shard-dead"}
 
 	reg := NewShardRegistry()
+	aged := time.Now().Add(-10 * time.Minute)
 	reg.Add(&ShardEntry{
 		ID: "shard-alive", State: StateIngesting, Shard: alive,
-		Addr: "10.0.0.1:9000", CreatedAt: time.Now(),
+		Addr: "10.0.0.1:9000", CreatedAt: aged,
 	})
 	reg.Add(&ShardEntry{
 		ID: "shard-dead", State: StateIngesting, Shard: dead,
-		Addr: "10.0.0.99:9000", CreatedAt: time.Now(),
+		Addr: "10.0.0.99:9000", CreatedAt: aged,
 	})
 
 	mockStore := &mockHeartbeatStore{
