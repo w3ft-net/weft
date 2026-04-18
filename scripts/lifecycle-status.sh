@@ -112,11 +112,13 @@ coord_log() {
   local cmd_id
   local lines="5"
   [ "$VERBOSE" = "1" ] && lines="40"
+  # weft-coordinator.service writes to /opt/app/logs/coordinator.log
+  # via StandardOutput=append: — journalctl has nothing for it.
   cmd_id=$($AWS ssm send-command \
     --region "$REGION" \
     --instance-ids "$coord_id" \
     --document-name AWS-RunShellScript \
-    --parameters "commands=[\"journalctl -u weft-coordinator --no-pager -n 500 2>/dev/null | grep -E 'lifecycle:|christened|retir' | tail -$lines\"]" \
+    --parameters "commands=[\"grep -E 'lifecycle|christened|retir|CHRISTEN|RECOVER|ABANDON' /opt/app/logs/coordinator.log 2>/dev/null | tail -$lines\"]" \
     --query 'Command.CommandId' --output text 2>/dev/null || echo "")
   if [ -z "$cmd_id" ]; then
     echo "  (SSM send-command failed)"
