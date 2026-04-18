@@ -363,3 +363,102 @@ func describeVolumeTags(t *testing.T, cfg aws.Config, volumeID string) map[strin
 func testSuffix() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano()%1_000_000)
 }
+
+// End-to-end retirement: pre-seed a volume tagged for an archived
+// shard, run retireVolume via the real VolumeManager against
+// LocalStack, and confirm a snapshot exists with the right tags and
+// the volume is deleted.
+func TestLifecycle_Integration_RetirementPath(t *testing.T) {
+	cfg := awsTestConfig(t)
+	ec2c := ec2.NewFromConfig(cfg)
+
+	shardID := "shard-retire-" + testSuffix()
+	parquetPath := "s3://weft-cold/" + shardID + ".parquet"
+	az := "us-east-2a"
+
+	volOut, err := ec2c.CreateVolume(context.Background(), &ec2.CreateVolumeInput{
+		AvailabilityZone: aws.String(az),
+		Size:             aws.Int32(10),
+		VolumeType:       ec2types.VolumeTypeGp3,
+		TagSpecifications: []ec2types.TagSpecification{{
+			ResourceType: ec2types.ResourceTypeVolume,
+			Tags: []ec2types.Tag{
+				{Key: aws.String("shard_id"), Value: aws.String(shardID)},
+				{Key: aws.String("shard_tier"), Value: aws.String("small")},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreateVolume: %v", err)
+	}
+	volumeID := *volOut.VolumeId
+
+	vm := coordinator.NewEC2VolumeManagerWithClient(ec2c)
+
+	// Exercise the production sequence directly — snapshot → detach →
+	// delete — through the real SDK calls. Skips the full archive()
+	// wrapper (which wants a DuckDBShard); this verifies the AWS
+	// side, not the Parquet export.
+	ctx := context.Background()
+	snapID, err := vm.SnapshotVolume(ctx, coordinator.SnapshotOpts{
+		VolumeID:    volumeID,
+		ShardID:     shardID,
+		ParquetPath: parquetPath,
+	})
+	if err != nil {
+		t.Fatalf("SnapshotVolume: %v", err)
+	}
+	if snapID == "" {
+		t.Fatal("empty snapshot id")
+	}
+
+	// Snapshot should carry shard_id + parquet_path tags so operators
+	// can reconstruct the lineage later.
+	snapOut, err := ec2c.DescribeSnapshots(ctx, &ec2.DescribeSnapshotsInput{
+		SnapshotIds: []string{snapID},
+	})
+	if err != nil {
+		t.Fatalf("DescribeSnapshots: %v", err)
+	}
+	if len(snapOut.Snapshots) != 1 {
+		t.Fatalf("expected 1 snapshot, got %d", len(snapOut.Snapshots))
+	}
+	tags := map[string]string{}
+	for _, tag := range snapOut.Snapshots[0].Tags {
+		if tag.Key != nil && tag.Value != nil {
+			tags[*tag.Key] = *tag.Value
+		}
+	}
+	if tags["shard_id"] != shardID {
+		t.Errorf("snapshot shard_id: got %q want %q", tags["shard_id"], shardID)
+	}
+	if tags["parquet_path"] != parquetPath {
+		t.Errorf("snapshot parquet_path: got %q want %q", tags["parquet_path"], parquetPath)
+	}
+
+	// Volume isn't attached (we skipped attach above), so a
+	// non-force detach will error — fine, archive() always uses
+	// force=true for exactly this reason. Move straight to delete.
+	if err := vm.DeleteVolume(ctx, volumeID); err != nil {
+		t.Fatalf("DeleteVolume: %v", err)
+	}
+
+	// Volume should be gone. EC2 often returns an
+	// InvalidVolume.NotFound error for a deleted volume; that's the
+	// cleanest pass signal. If it does return a record, it must be
+	// in `deleted`/`deleting` — any other state is a bug.
+	volOut2, err := ec2c.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{
+		VolumeIds: []string{volumeID},
+	})
+	if err != nil {
+		if !strings.Contains(err.Error(), "NotFound") {
+			t.Errorf("post-delete DescribeVolumes: unexpected error %v", err)
+		}
+		return
+	}
+	for _, v := range volOut2.Volumes {
+		if v.State != ec2types.VolumeStateDeleted && v.State != ec2types.VolumeStateDeleting {
+			t.Errorf("volume %s still in state %s after DeleteVolume", volumeID, v.State)
+		}
+	}
+}

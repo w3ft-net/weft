@@ -613,6 +613,55 @@ func (p *Provisioner) archive(entry *ShardEntry) {
 	p.registry.PersistState(entry)
 
 	log.Printf("provisioner: shard %s archived to %s", entry.ID, parquetPath)
+
+	// Retire the data volume: snapshot → detach → delete. Skip when
+	// no volume is bound (shards from the pre-S5 era, or dev-mode
+	// shards). Snapshot first so a detach/delete failure after a
+	// successful snapshot leaves us with durable data; a snapshot
+	// failure aborts the whole sequence and leaves the volume intact
+	// for a retry.
+	if p.volumes != nil && entry.EBSVolumeID != "" {
+		p.retireVolume(entry)
+	}
+}
+
+// retireVolume runs the snapshot → detach → delete sequence on an
+// archived shard's data volume. Errors are logged rather than
+// returned; the archive state change has already been persisted and
+// we don't want to undo it on a terminal-side failure that an
+// operator can clean up out of band.
+func (p *Provisioner) retireVolume(entry *ShardEntry) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	snapID, err := p.volumes.SnapshotVolume(ctx, SnapshotOpts{
+		VolumeID:    entry.EBSVolumeID,
+		ShardID:     entry.ID,
+		ParquetPath: entry.ParquetPath,
+	})
+	if err != nil {
+		log.Printf("provisioner: snapshot %s (%s): %v — leaving volume in place for retry",
+			entry.EBSVolumeID, entry.ID, err)
+		return
+	}
+	log.Printf("provisioner: snapshotted %s → %s before archive delete", entry.EBSVolumeID, snapID)
+
+	// Detach with force=true: the instance hosting this shard may
+	// already have been terminated via the ASG path, in which case a
+	// non-force detach hangs. Even on a live instance the volume is
+	// now unused.
+	if err := p.volumes.DetachFromInstance(ctx, entry.EBSVolumeID, true); err != nil {
+		log.Printf("provisioner: detach %s: %v", entry.EBSVolumeID, err)
+		return
+	}
+	if err := p.volumes.DeleteVolume(ctx, entry.EBSVolumeID); err != nil {
+		log.Printf("provisioner: delete %s: %v", entry.EBSVolumeID, err)
+		return
+	}
+	log.Printf("provisioner: retired volume %s (shard %s)", entry.EBSVolumeID, entry.ID)
+
+	entry.EBSVolumeID = ""
+	p.registry.PersistState(entry)
 }
 
 // rotate transitions an INGESTING shard to READ_ONLY and launches a
