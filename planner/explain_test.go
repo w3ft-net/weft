@@ -82,15 +82,15 @@ func TestExplain_PlannerOutput(t *testing.T) {
 			t.Errorf("SourceApp = %q, want %q", plan.SourceApp, "weft/metrics")
 		}
 
-		if !strings.Contains(plan.ShardSQL, "CAST(payload AS TEXT) as raw") {
-			t.Errorf("ShardSQL missing CAST projection\n got: %s", plan.ShardSQL)
+		if !strings.Contains(plan.ShardSQL, "CAST(json_extract(payload, '$.pct') AS VARCHAR) as raw") {
+			t.Errorf("ShardSQL missing .pct projection\n got: %s", plan.ShardSQL)
 		}
 		if !strings.Contains(plan.ShardSQL, "json_extract_string(payload, '$.type') = 'memory'") {
 			t.Errorf("ShardSQL missing jq select predicate\n got: %s", plan.ShardSQL)
 		}
 
-		if len(plan.ComputeStages) != 1 || plan.ComputeStages[0] != "jq '.pct'" {
-			t.Errorf("ComputeStages = %v, want [jq '.pct']", plan.ComputeStages)
+		if len(plan.ComputeStages) != 0 {
+			t.Errorf("ComputeStages = %v, want empty (jq fully folded into SELECT)", plan.ComputeStages)
 		}
 	})
 
@@ -103,9 +103,8 @@ func TestExplain_PlannerOutput(t *testing.T) {
 			"app:      weft/metrics",
 			"Shard SQL:",
 			"json_extract_string(payload, '$.type') = 'memory'",
-			"Compute stages:",
-			"jq '.pct'",
-			"CAST(payload AS TEXT) as raw",
+			"CAST(json_extract(payload, '$.pct') AS VARCHAR) as raw",
+			"Compute stages: (none — fully pushed down)",
 		} {
 			if !strings.Contains(output, want) {
 				t.Errorf("explain output missing %q\n\nfull output:\n%s", want, output)

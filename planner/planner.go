@@ -114,31 +114,41 @@ func Plan(pipeline string) (*QueryPlan, error) {
 		compute = append(compute, formatStage(s))
 	}
 
-	// Determine the raw expression for the SELECT clause.
-	// The projection examines the first compute stage to determine what
-	// columns/keys the pipeline needs. If the projection is "complete"
-	// (fully expressible in SQL), it replaces that compute stage.
-	rawExpr := "raw" // default: the stored log line
+	// Determine the raw expression for the SELECT clause. The projection
+	// examines the first compute stage to see what columns/keys the pipeline
+	// needs. extractRawExpr returns either:
+	//   - residual=nil: the stage is fully covered, drop it
+	//   - residual!=nil: a path prefix folded in; replace the stage with the
+	//     residual and let it run in compute
+	rawExpr := "raw"
 	if len(computeStages) > 0 && len(computeStrings) == 0 {
-		expr, complete := extractRawExpr(computeStages[0])
-		if expr != "" {
+		expr, residual, ok := extractRawExpr(computeStages[0])
+		if ok {
 			rawExpr = expr
-			if complete {
-				// Complete projection replaces the first compute stage.
+			if residual == nil {
 				compute = compute[:len(computeStrings)]
+				compute = append(compute, formatComputeStages(computeStages[1:])...)
+			} else {
+				compute = compute[:len(computeStrings)]
+				compute = append(compute, formatStage(*residual))
 				compute = append(compute, formatComputeStages(computeStages[1:])...)
 			}
 		}
 	}
-	// Also check partial pushdown compute strings for awk projections.
+	// Same treatment for the residual of a partial-pushdown stage (e.g. the
+	// jq remainder after pushing select(...) — we may still be able to fold
+	// a `.foo` projection out of it).
 	if rawExpr == "raw" && len(computeStrings) > 0 {
 		partial := parseComputeString(computeStrings[0])
 		if partial != nil {
-			expr, complete := extractRawExpr(*partial)
-			if expr != "" {
+			expr, residual, ok := extractRawExpr(*partial)
+			if ok {
 				rawExpr = expr
-				if complete {
+				if residual == nil {
 					compute = append(computeStrings[1:], formatComputeStages(computeStages)...)
+				} else {
+					compute = append([]string{formatStage(*residual)}, computeStrings[1:]...)
+					compute = append(compute, formatComputeStages(computeStages)...)
 				}
 			}
 		}
