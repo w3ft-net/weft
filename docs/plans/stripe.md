@@ -1,0 +1,1 @@
+**Not wired to Stripe.** Usage data is tracked internally and shown in the dashboard, but there is no Stripe metered billing integration — no usage records are pushed to Stripe subscriptions. The `UsageRecord` model exists in `store/user.go` but is separate from the hourly/daily tables and has no Stripe reporting code.
