@@ -73,6 +73,11 @@ if [ "$ROLE" = "coordinator" ]; then
     --region "$REGION" \
     --query 'Parameter.Value' --output text 2>/dev/null || echo "")
 
+  LIFECYCLE_QUEUE_URL=$(aws ssm get-parameter \
+    --name "/$APP_NAME/config/shard-lifecycle-queue-url" \
+    --region "$REGION" \
+    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
   # API server config
   JWT_SECRET=$(aws ssm get-parameter \
     --name "/$APP_NAME/config/jwt-secret" \
@@ -115,6 +120,8 @@ WEFT_REGION=${REGION}
 WEFT_S3_REGION=${REGION}
 WEFT_PARQUET_DIR=${PARQUET_DIR}
 WEFT_LAMBDA_FUNCTION_URL=${LAMBDA_FUNCTION_URL}
+WEFT_LIFECYCLE_QUEUE_URL=${LIFECYCLE_QUEUE_URL}
+APP_NAME=${APP_NAME}
 JWT_SECRET=${JWT_SECRET}
 STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
 STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
