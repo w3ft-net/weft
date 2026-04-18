@@ -626,22 +626,29 @@ func (s *Server) DeleteWatch(_ context.Context, req *pb.DeleteWatchRequest) (*pb
 	return &pb.DeleteWatchResponse{}, nil
 }
 
-// Heartbeat receives a shard's periodic status report and persists it.
+// Heartbeat receives a shard's periodic status report. Persists the
+// heartbeat for the provisioner's tick-based reconciliation pass,
+// and also drives christen / rebind / adopt directly so state
+// transitions don't wait up to PollInterval for the next tick.
 func (s *Server) Heartbeat(_ context.Context, req *pb.ShardHeartbeatRequest) (*pb.HeartbeatResponse, error) {
-	if s.Store == nil {
-		return &pb.HeartbeatResponse{}, nil
-	}
-
-	err := s.Store.InsertHeartbeat(&store.ShardHeartbeat{
+	hb := store.ShardHeartbeat{
 		ShardID:    req.ShardId,
 		Addr:       req.Addr,
 		InstanceID: req.InstanceId,
 		State:      req.State,
-		RowCount:    req.RowCount,
-		DiskBytes:   req.DiskBytes,
-	})
-	if err != nil {
-		log.Printf("heartbeat: failed to persist for %s: %v", req.ShardId, err)
+		RowCount:   req.RowCount,
+		DiskBytes:  req.DiskBytes,
+	}
+	if s.Store != nil {
+		if err := s.Store.InsertHeartbeat(&hb); err != nil {
+			log.Printf("heartbeat: failed to persist for %s: %v", req.ShardId, err)
+		}
+	}
+	// Runs in a goroutine so the RPC returns within the shard's 5s
+	// timeout even when christen has to CreateVolume + Configure
+	// over gRPC.
+	if s.Coord.Provisioner != nil {
+		go s.Coord.Provisioner.ProcessHeartbeat(hb)
 	}
 	return &pb.HeartbeatResponse{}, nil
 }

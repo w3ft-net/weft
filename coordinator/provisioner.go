@@ -131,13 +131,14 @@ func (grpcConfigurer) Dial(ctx context.Context, addr string, req *pb.ConfigureRe
 
 // Provisioner monitors shard fill rates and handles rotation.
 type Provisioner struct {
-	registry   *ShardRegistry
-	launcher   ShardLauncher
-	config     ProvisionerConfig
-	stats      *AppStats
-	Buckets    *BucketManager
-	configurer ShardConfigurer
-	volumes    VolumeManager // optional; used to tag data volumes at christen time
+	registry    *ShardRegistry
+	launcher    ShardLauncher
+	config      ProvisionerConfig
+	stats       *AppStats
+	Buckets     *BucketManager
+	configurer  ShardConfigurer
+	volumes     VolumeManager // optional; used to tag data volumes at christen time
+	heartbeatMu sync.Mutex    // serialises ProcessHeartbeat with the ticker's adoptFromHeartbeats
 }
 
 // NewProvisioner creates a provisioner.
@@ -198,10 +199,10 @@ func (p *Provisioner) Start(ctx context.Context) {
 	}()
 }
 
-// adoptFromHeartbeats reads recent shard heartbeats from the store and
-// either rebinds them to existing entries (known id) or christens them
-// (empty id — fresh EBS with no shard.json). The christening arm is what
-// makes ADOPTED shards transition to INGESTING.
+// adoptFromHeartbeats reads recent shard heartbeats from the store
+// and dispatches each to ProcessHeartbeat. Runs on the provisioner
+// ticker as a catch-up / reconciliation pass; the Heartbeat RPC path
+// drives ProcessHeartbeat directly for sub-second latency.
 func (p *Provisioner) adoptFromHeartbeats() {
 	if p.config.Store == nil {
 		return
@@ -214,66 +215,80 @@ func (p *Provisioner) adoptFromHeartbeats() {
 	}
 
 	for _, hb := range heartbeats {
-		// Unclaimed: shard reports empty id because shard.json was absent
-		// on its data volume. Needs christening.
-		if hb.ShardID == "" {
-			if err := p.christen(hb); err != nil {
-				log.Printf("provisioner: christen %s: %v", hb.Addr, err)
-			}
-			continue
-		}
+		p.ProcessHeartbeat(hb)
+	}
+}
 
-		existing := p.registry.Get(hb.ShardID)
-		if existing != nil {
-			if existing.Addr == hb.Addr {
-				if existing.Suspended {
-					log.Printf("provisioner: unsuspending shard %s (heartbeat received)", hb.ShardID)
-					existing.Suspended = false
-				}
-				continue
-			}
-			// Rebind: same durable id, instance moved.
-			gs, err := shard.NewGRPCShard(hb.ShardID, hb.Addr)
-			if err != nil {
-				log.Printf("provisioner: reconnect %s at %s failed: %v", hb.ShardID, hb.Addr, err)
-				continue
-			}
-			log.Printf("provisioner: shard %s moved %s → %s", hb.ShardID, existing.Addr, hb.Addr)
-			existing.Shard.Close()
-			existing.Shard = gs
-			existing.Addr = hb.Addr
-			existing.InstanceID = hb.InstanceID
-			existing.Suspended = false
-			p.registry.PersistState(existing)
-			continue
-		}
+// ProcessHeartbeat handles one heartbeat synchronously:
+//   - empty ShardID        → christen (mint id, Configure, register)
+//   - known id at same addr → unsuspend if needed, no-op otherwise
+//   - known id at new addr  → rebind (reconnect gRPC, update entry)
+//   - known id not in registry → adopt (coordinator restart catchup)
+//
+// Exported so the Heartbeat RPC handler can drive state transitions
+// immediately rather than wait for the provisioner's tick interval.
+// Serialised against itself via heartbeatMu so concurrent heartbeats
+// for the same unclaimed instance can't race into a double christen.
+func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
+	p.heartbeatMu.Lock()
+	defer p.heartbeatMu.Unlock()
 
-		// Known id but not in the registry: either the registry was just
-		// reloaded from the store and is catching up, or the coordinator
-		// restarted. Adopt the entry so queries reach it.
+	if hb.ShardID == "" {
+		if err := p.christen(hb); err != nil {
+			log.Printf("provisioner: christen %s: %v", hb.Addr, err)
+		}
+		return
+	}
+
+	existing := p.registry.Get(hb.ShardID)
+	if existing != nil {
+		if existing.Addr == hb.Addr {
+			if existing.Suspended {
+				log.Printf("provisioner: unsuspending shard %s (heartbeat received)", hb.ShardID)
+				existing.Suspended = false
+			}
+			return
+		}
+		// Rebind: same durable id, instance moved.
 		gs, err := shard.NewGRPCShard(hb.ShardID, hb.Addr)
 		if err != nil {
-			log.Printf("provisioner: adopt %s at %s failed: %v", hb.ShardID, hb.Addr, err)
-			continue
+			log.Printf("provisioner: reconnect %s at %s failed: %v", hb.ShardID, hb.Addr, err)
+			return
 		}
-
-		state := StateIngesting
-		if hb.State == "READ_ONLY" {
-			state = StateReadOnly
-		}
-
-		p.registry.Add(&ShardEntry{
-			ID:         hb.ShardID,
-			Addr:       hb.Addr,
-			InstanceID: hb.InstanceID,
-			State:      state,
-			RowCount:   hb.RowCount,
-			Shard:      gs,
-			CreatedAt:  time.Now(),
-		})
-		log.Printf("provisioner: adopted shard %s at %s (state=%s, rows=%d)",
-			hb.ShardID, hb.Addr, hb.State, hb.RowCount)
+		log.Printf("provisioner: shard %s moved %s → %s", hb.ShardID, existing.Addr, hb.Addr)
+		existing.Shard.Close()
+		existing.Shard = gs
+		existing.Addr = hb.Addr
+		existing.InstanceID = hb.InstanceID
+		existing.Suspended = false
+		p.registry.PersistState(existing)
+		return
 	}
+
+	// Known id but not in the registry: coordinator restart / reload
+	// catchup. Adopt the entry so queries reach it.
+	gs, err := shard.NewGRPCShard(hb.ShardID, hb.Addr)
+	if err != nil {
+		log.Printf("provisioner: adopt %s at %s failed: %v", hb.ShardID, hb.Addr, err)
+		return
+	}
+
+	state := StateIngesting
+	if hb.State == "READ_ONLY" {
+		state = StateReadOnly
+	}
+
+	p.registry.Add(&ShardEntry{
+		ID:         hb.ShardID,
+		Addr:       hb.Addr,
+		InstanceID: hb.InstanceID,
+		State:      state,
+		RowCount:   hb.RowCount,
+		Shard:      gs,
+		CreatedAt:  time.Now(),
+	})
+	log.Printf("provisioner: adopted shard %s at %s (state=%s, rows=%d)",
+		hb.ShardID, hb.Addr, hb.State, hb.RowCount)
 }
 
 // christen assigns identity to an unclaimed shard: mints a shard id,
