@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v5.29.3
-// source: proto/weftpb/weft.proto
+// source: weft.proto
 
 package weftpb
 
@@ -284,7 +284,7 @@ var ShardQuery_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "proto/weftpb/weft.proto",
+	Metadata: "weft.proto",
 }
 
 const (
@@ -462,7 +462,7 @@ var WeftCompute_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "proto/weftpb/weft.proto",
+	Metadata: "weft.proto",
 }
 
 const (
@@ -1427,5 +1427,5 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "proto/weftpb/weft.proto",
+	Metadata: "weft.proto",
 }

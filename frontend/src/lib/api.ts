@@ -133,10 +133,10 @@ export function getWatches(): Promise<WatchesResponse> {
   return apiFetch('/api/watches')
 }
 
-export function saveWatch(name: string, schedule: string, pipeline: string, notifyDest: string): Promise<void> {
+export function saveWatch(name: string, schedule: string, pipeline: string): Promise<void> {
   return apiFetch(`/api/watches/${encodeURIComponent(name)}`, {
     method: 'PUT',
-    body: JSON.stringify({ schedule, pipeline, notify_dest: notifyDest }),
+    body: JSON.stringify({ schedule, pipeline }),
   })
 }
 
@@ -196,7 +196,6 @@ export interface CronWatch {
   Name: string
   Schedule: string
   Pipeline: string
-  NotifyDest: string
   Enabled: boolean
   LastRunAt: string | null
   LastStatus: string
@@ -263,6 +262,13 @@ export function acceptInvite(token: string): Promise<{ token: string; user: User
 }
 
 // Integrations
+export interface PagerDutyIntegrationMeta {
+  name: string
+  description: string
+  last_used_at: string | null
+  last_error: string
+}
+
 export interface IntegrationsResponse {
   slack: {
     connected: boolean
@@ -272,8 +278,8 @@ export interface IntegrationsResponse {
   pagerduty: {
     connected: boolean
     keys: Record<string, string>
+    integrations: PagerDutyIntegrationMeta[]
   }
-  routes: Record<string, string>
 }
 
 export function getIntegrations(): Promise<IntegrationsResponse> {
@@ -288,22 +294,21 @@ export function disconnectSlack(): Promise<void> {
   return apiFetch('/api/integrations/slack', { method: 'DELETE' })
 }
 
-export function savePagerDutyKey(name: string, key: string): Promise<void> {
+export function savePagerDutyKey(name: string, key: string, description?: string): Promise<void> {
   return apiFetch('/api/integrations/pagerduty', {
     method: 'PUT',
-    body: JSON.stringify({ name, key }),
+    body: JSON.stringify({ name, key, description: description ?? '' }),
+  })
+}
+
+export function deletePagerDutyKey(name: string): Promise<void> {
+  return apiFetch(`/api/integrations/pagerduty/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
   })
 }
 
 export function disconnectPagerDuty(): Promise<void> {
   return apiFetch('/api/integrations/pagerduty', { method: 'DELETE' })
-}
-
-export function saveRoutes(routes: Record<string, string>): Promise<void> {
-  return apiFetch('/api/integrations/routes', {
-    method: 'PUT',
-    body: JSON.stringify(routes),
-  })
 }
 
 // Namespaces

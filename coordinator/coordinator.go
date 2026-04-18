@@ -47,6 +47,7 @@ type Coordinator struct {
 	SeenApps    *SeenApps      // distinct app names from ingest stream
 	DLQ         *DLQ           // S3 dead-letter queue for failed ingests
 	Errors      *IngestionErrorRecorder // async error persistence
+	Notifier    *Notifier      // per-customer alert dispatcher (nil = disabled)
 }
 
 // SeenApps tracks distinct app names observed during ingestion, keyed by customer.
@@ -399,8 +400,13 @@ func (c *Coordinator) runLocal(pipeline string) (*QueryResult, error) {
 	bash.RegisterToolCommands(interp)
 
 	// Register alert for interactive use (no watch context, no history).
+	// Passing Notifier + CustomerID lets `echo foo | alert --notify=<alias>`
+	// actually fire a test alert from the shell.
 	interp.RegisterCommand("alert", func(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
 		return AlertCommand(args, stdin, stdout, stderr, &AlertContext{
+			Store:       c.Store,
+			Notifier:    c.Notifier,
+			CustomerID:  c.CustomerID,
 			Interactive: true,
 		})
 	})

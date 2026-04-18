@@ -148,9 +148,6 @@ function WatchesCard({ watches, watchCount, watchLimit, minInterval }: {
                 ) : (
                   <span className="watch-tile-ago">waiting for first run</span>
                 )}
-                {watch.NotifyDest && (
-                  <span className="watch-tile-notify">{watch.NotifyDest}</span>
-                )}
                 <button
                   className="watch-tile-open"
                   onClick={() => navigate(`/shell?q=${encodeURIComponent(`cat /cron.d/${watch.Name}`)}`)}

@@ -187,11 +187,16 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch) {
 		stdout = sb.String()
 	}
 
-	// Run alert stage if present.
+	// Run alert stage if present. The alert built-in evaluates the condition,
+	// updates the incident ledger, and dispatches through the Notifier itself
+	// when a --notify alias is set on the command — no more post-hoc
+	// stderr→notify magic at this layer.
 	if alertPart != "" && exitCode == 0 {
 		alertCtx := &AlertContext{
-			Store: ce.Store,
-			Watch: &watch,
+			Store:      ce.Store,
+			Watch:      &watch,
+			Notifier:   ce.Notifier,
+			CustomerID: watch.CustomerID,
 		}
 		alertArgs := strings.Fields(alertPart)
 		stdinReader := strings.NewReader(stdout)
@@ -201,9 +206,6 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch) {
 			stderr = alertStderr.String()
 			status = "alert"
 		}
-	} else if alertPart == "" && exitCode == 0 {
-		// No alert stage — close any open incidents for this watch.
-		// (Nothing to dedup against.)
 	}
 
 	// Persist result.
@@ -224,25 +226,8 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch) {
 		log.Printf("cron[%s]: failed to update run status: %v", watch.Name, updateErr)
 	}
 
-	// If stderr non-empty and notification configured, trigger notification.
-	if stderr != "" && watch.NotifyDest != "" {
-		status = "stderr"
-		ce.notify(watch, stderr)
-	}
-
 	log.Printf("cron[%s]: %s (%dms, stdout=%d bytes, stderr=%d bytes)",
 		watch.Name, status, duration.Milliseconds(), len(stdout), len(stderr))
-}
-
-// notify sends a notification for a watch that produced stderr.
-func (ce *CronExecutor) notify(watch store.CronWatch, stderr string) {
-	if ce.Notifier == nil {
-		log.Printf("cron[%s]: ALERT (no notifier configured) → %s: %s", watch.Name, watch.NotifyDest, stderr)
-		return
-	}
-	if err := ce.Notifier.Send(watch.CustomerID, &watch, stderr); err != nil {
-		log.Printf("cron[%s]: notification failed: %v", watch.Name, err)
-	}
 }
 
 // tierForWatch looks up the subscription tier for the customer that owns the watch.

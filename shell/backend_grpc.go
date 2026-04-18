@@ -71,20 +71,18 @@ func (b *GRPCBackend) GetWatch(name string) (*WatchData, error) {
 		return nil, err
 	}
 	return &WatchData{
-		Schedule:   resp.Schedule,
-		Pipeline:   resp.Pipeline,
-		NotifyDest: resp.NotifyDest,
-		Enabled:    resp.Enabled,
+		Schedule: resp.Schedule,
+		Pipeline: resp.Pipeline,
+		Enabled:  resp.Enabled,
 	}, nil
 }
 
 func (b *GRPCBackend) SaveWatch(name string, w *WatchData) error {
 	_, err := b.client.SaveWatch(context.Background(), &pb.SaveWatchRequest{
-		Customer:   b.customer,
-		Name:       name,
-		Schedule:   w.Schedule,
-		Pipeline:   w.Pipeline,
-		NotifyDest: w.NotifyDest,
+		Customer: b.customer,
+		Name:     name,
+		Schedule: w.Schedule,
+		Pipeline: w.Pipeline,
 	})
 	return err
 }

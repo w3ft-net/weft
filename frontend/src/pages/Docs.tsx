@@ -31,7 +31,11 @@ export default function Docs() {
             <ol className="docs-steps">
               <li><a href="#create-namespace">Create a namespace</a> to group your log sources</li>
               <li><a href="#create-token">Create a token</a> so your agents can authenticate</li>
-              <li><a href="#install-weftd">Install weftd</a> on a server and configure your log sources</li>
+              <li>
+                Connect a source — either{' '}
+                <a href="#install-weftd">install weftd</a> on a server you own, or{' '}
+                <a href="#connect-cloudwatch">connect a CloudWatch log group</a> from your AWS account
+              </li>
               <li><a href="#schema-setup">Check schema setup</a> to verify weft detected your log format</li>
               <li><a href="#query-logs">Query your logs</a> using the weft shell</li>
               <li><a href="#monitors">Set up a monitor</a> to watch for patterns</li>
@@ -117,6 +121,135 @@ sudo systemctl status weftd
 journalctl -u weftd -f`}</pre>
           </section>
 
+          {/* ── Connect a CloudWatch source ────────────── */}
+
+          <section className="docs-section" id="connect-cloudwatch" data-testid="docs-connect-cloudwatch">
+            <h2>Connect a CloudWatch source</h2>
+            <p>
+              If your logs already land in AWS CloudWatch Logs — Lambda, ECS/Fargate,
+              API Gateway, RDS, or anything else that writes to a log group — weft can
+              ingest directly without installing an agent. You grant a cross-account
+              IAM role, point weft at a log group, and weft polls CloudWatch on a
+              schedule (default 30s).
+            </p>
+            <p>
+              This is the lowest-friction source type: nothing to install, nothing to
+              run. Latency is bounded by CloudWatch's own ingestion delay plus the poll
+              interval — usually well under a minute. For sub-second tailing you want{' '}
+              <a href="#install-weftd">weftd</a> instead.
+            </p>
+
+            <h3>1. Create the cross-account IAM role</h3>
+            <p>
+              In the AWS account that owns the log group, create an IAM role that
+              trusts weft's ingestion account and has read access to the log group.
+              Pick an external ID — any hard-to-guess string — and keep it secret;
+              you'll paste it into weft in step 2.
+            </p>
+            <pre className="docs-code">{`# Trust policy — allows weft's ingestion account to assume this role,
+# but only when it presents the matching external ID.
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": { "AWS": "arn:aws:iam::220664822695:root" },
+    "Action": "sts:AssumeRole",
+    "Condition": {
+      "StringEquals": { "sts:ExternalId": "REPLACE-WITH-YOUR-EXTERNAL-ID" }
+    }
+  }]
+}
+
+# Permissions policy — read-only access to the log group(s) you're sharing.
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "logs:FilterLogEvents",
+      "logs:DescribeLogGroups",
+      "logs:DescribeLogStreams"
+    ],
+    "Resource": "arn:aws:logs:us-east-2:123456789012:log-group:/aws/lambda/my-fn:*"
+  }]
+}`}</pre>
+            <p>
+              You can scope <code>Resource</code> to a single log group (recommended)
+              or a prefix (<code>…/log-group:/aws/lambda/*</code>) to share a whole
+              tier at once. Note the trailing <code>:*</code> — CloudWatch Logs ARNs
+              require it.
+            </p>
+
+            <h3>2. Write a schema file</h3>
+            <p>
+              Weft needs to know how to parse each log line. The schema file is a
+              short YAML document that names the app and tells weft where to find the
+              timestamp. For a typical CloudWatch-flavored line
+              (<code>2026-04-18 14:32:01 INFO {"{"}"user":"alice"{"}"}</code>):
+            </p>
+            <pre className="docs-code">{`# my-app.schema.yaml
+app: my-app
+format: text
+timestamp_field: "1"          # 1-indexed field number
+timestamp_fields: 2           # how many fields make up the timestamp
+timestamp_format: "2006-01-02 15:04:05"   # Go time layout`}</pre>
+            <p>
+              If your lines are pure JSON (Lambda's structured logs, for example),
+              use <code>format: json</code> and point <code>timestamp_field</code>{' '}
+              at the JSON key instead:
+            </p>
+            <pre className="docs-code">{`app: my-lambda
+format: json
+timestamp_field: time        # the JSON key holding the timestamp
+timestamp_format: "2006-01-02T15:04:05.000Z"`}</pre>
+
+            <h3>3. Register the source</h3>
+            <p>
+              Use the <code>weft</code> CLI to tell weft about the account and log group.
+              Run this from any machine with the <code>weft</code> binary installed and
+              a valid login.
+            </p>
+            <pre className="docs-code">{`weft source add \\
+  --app my-app \\
+  --log-group /aws/lambda/my-fn \\
+  --account 123456789012 \\
+  --role-arn arn:aws:iam::123456789012:role/weft-ingest \\
+  --external-id REPLACE-WITH-YOUR-EXTERNAL-ID \\
+  --region us-east-2 \\
+  --interval 30s \\
+  --schema ./my-app.schema.yaml`}</pre>
+            <p>
+              Within one poll interval weft will assume the role, page through recent
+              log events, and start writing rows. Confirm the source is live:
+            </p>
+            <pre className="docs-code">{`weft source list
+
+# And in the shell:
+cat /log/my-app.log | head`}</pre>
+
+            <h3>Troubleshooting</h3>
+            <ul>
+              <li>
+                <strong>No rows appearing</strong> — check the coordinator log for{' '}
+                <code>poller[my-app]: FilterLogEvents: …</code> messages. The most
+                common causes are a missing external ID, the role's resource ARN not
+                matching your log group, or the log group being in a different region
+                than you specified.
+              </li>
+              <li>
+                <strong>Rows appearing but fields look wrong</strong> — your schema's{' '}
+                <code>timestamp_format</code> is off. Check against Go's reference
+                time (<code>Mon Jan 2 15:04:05 MST 2006</code>).
+              </li>
+              <li>
+                <strong>CloudWatch charges</strong> — weft's poller uses
+                <code>FilterLogEvents</code>, which AWS bills as data scanned. If cost
+                matters, raise <code>--interval</code> (fewer calls) or scope your
+                log group tightly.
+              </li>
+            </ul>
+          </section>
+
           {/* ── Schema Setup ───────────────────────────── */}
 
           <section className="docs-section" id="schema-setup" data-testid="docs-schema-setup">
@@ -182,11 +315,11 @@ cat myapp.log --since 2h --until 30m | head -100`}</pre>
             <pre className="docs-code">{`# Open the watch editor
 vi /cron.d/error-count
 
-# Watch file format:
+# Watch file format: a single '# schedule:' directive plus a shell
+# pipeline. Alerts are dispatched by the 'alert' stage (see below);
+# there's no watch-level notify field.
 # schedule: */5 * * * *
-# notify: slack:#alerts
-# ---
-cat myapp.log --since 5m | awk '$LEVEL == "ERROR"' | wc -l`}</pre>
+cat myapp.log --since 5m | awk '$LEVEL == "ERROR"' | wc -l | alert above 0 --notify=ops`}</pre>
             <p>
               Watches run on the specified cron schedule. The pipeline's stdout is captured as the
               watch result — numeric values are graphed on the dashboard as sparklines.
@@ -201,28 +334,107 @@ cat myapp.log --since 5m | awk '$LEVEL == "ERROR"' | wc -l`}</pre>
           <section className="docs-section" id="alerting" data-testid="docs-alerting">
             <h2>Configure alerting</h2>
             <p>
-              Watches can send notifications when they produce output. Set the <code>notify</code> destination
-              in the watch file:
+              Alerts are dispatched by the <code>alert</code> built-in — a pipeline stage you
+              add to a watch (or run ad-hoc in the shell). It takes an optional condition and a{' '}
+              <code>--notify=&lt;alias&gt;</code> flag pointing at an alias in{' '}
+              <code>/etc/notify.conf</code>. One edit to an alias re-routes every watch that uses it.
             </p>
-            <pre className="docs-code">{`# Slack channel
-notify: slack:#ops-alerts
 
-# PagerDuty service
-notify: pagerduty:my-service
-
-# Multiple destinations
-notify: slack:#alerts,pagerduty:critical`}</pre>
+            <h3>1. Connect your integrations</h3>
             <p>
-              Connect your integrations in{' '}
-              <Link to="/account" data-testid="docs-account-link">Account</Link> settings:
+              Credentials never live in <code>notify.conf</code>. Connect them under{' '}
+              <Link to="/account" data-testid="docs-account-link">Account → Integrations</Link>:
             </p>
             <ul>
-              <li><strong>Slack</strong> — OAuth connection, select which channels to post to</li>
-              <li><strong>PagerDuty</strong> — add your integration key per service</li>
+              <li><strong>Slack</strong> — OAuth. weft posts via <code>chat.postMessage</code> to any channel the bot is a member of.</li>
+              <li><strong>PagerDuty</strong> — for each PD service you want to page, paste its Events v2 integration key and give it a short name (e.g. <code>ops-daytime</code>). Aliases reference these names.</li>
+            </ul>
+
+            <h3>2. Edit <code>/etc/notify.conf</code></h3>
+            <p>
+              From the shell, <code>vi /etc/notify.conf</code>. The file is a YAML map of alias
+              names to per-service targets:
+            </p>
+            <pre className="docs-code">{`# /etc/notify.conf
+
+ops:
+  slack:
+    - "#ops-alerts"
+    - "#backend"
+  pagerduty:
+    - name: ops-daytime
+      severity: error
+
+critical:
+  slack:
+    - "#pager"
+  pagerduty:
+    - name: oncall
+      severity: critical
+
+quiet:
+  slack:
+    - "#debug-noise"`}</pre>
+            <p>
+              Each service entry accepts either a bare string or an object. Bare strings are fine
+              for Slack (it's just a channel); PagerDuty entries usually want <code>severity</code>{' '}
+              to drive your escalation policy.
+            </p>
+            <ul>
+              <li><code>slack</code> — list of channel names. Weft posts one message per listed channel.</li>
+              <li>
+                <code>pagerduty</code> — list of PD integrations. Each needs a <code>name</code>{' '}
+                matching one you added under Account → Integrations. Optional{' '}
+                <code>severity</code>: <code>critical</code>, <code>error</code> (default),{' '}
+                <code>warning</code>, or <code>info</code>.
+              </li>
             </ul>
             <p>
-              Notification routing can be configured to send different watches to different channels
-              based on pattern matching.
+              Saves are validated — an invalid <code>notify.conf</code> (unknown severity, empty
+              alias, malformed YAML) is rejected at write time so you don't find out three days
+              later when a watch fires.
+            </p>
+
+            <h3>3. Pipe through <code>alert</code> in your watch</h3>
+            <pre className="docs-code">{`# /cron.d/error-rate
+
+# schedule: */5 * * * *
+cat myapp.log --since 5m \\
+  | awk '$LEVEL == "ERROR"' \\
+  | wc -l \\
+  | alert above 0 --notify=ops`}</pre>
+            <p>
+              <code>alert</code> reads stdin, evaluates its condition, and — when triggered and{' '}
+              <code>--notify</code> is set — fans out to every Slack channel and PagerDuty
+              integration in the alias.
+            </p>
+            <p>
+              If you omit the condition, <code>alert</code> fires on any non-empty stdin. Conditions
+              available: <code>above</code>, <code>below</code>, <code>eq</code>, <code>neq</code>,{' '}
+              <code>changed</code>, <code>absent</code>, <code>rising</code>, <code>falling</code>.{' '}
+              Run <code>alert --help</code> in the shell for the full reference.
+            </p>
+
+            <h3>4. Test it from the shell</h3>
+            <p>
+              Because <code>alert</code> is a normal built-in, you can fire a real dispatch at any
+              time to verify your integrations and routing:
+            </p>
+            <pre className="docs-code">{`# Fires the 'ops' alias right now
+echo "integration test — please ignore" | alert --notify=ops
+
+# Same, with a condition
+echo 99 | alert above 50 --notify=critical`}</pre>
+
+            <h3>How PagerDuty alerts behave</h3>
+            <p>
+              Each PD event uses a <code>dedup_key</code> derived from the watch name, so a watch
+              that fires every 5 minutes during an outage collapses to a single incident rather
+              than a page storm. Ad-hoc shell invocations use a fresh synthetic name per run, so
+              every test creates its own incident. The <code>severity</code> you set on the alias
+              drives PD's routing rules. The incident summary includes the watch name and the
+              first line of stderr; full stderr (capped at 1&nbsp;KB) is attached under custom
+              details.
             </p>
           </section>
         </div>

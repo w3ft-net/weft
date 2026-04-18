@@ -223,7 +223,7 @@ func (f *ShellFS) WriteFile(path string, data []byte) error {
 		return f.store.SaveShellFunction(f.customerID, name, string(data))
 
 	case "cron.d":
-		schedule, pipeline, notifyDest, err := parseCron(string(data))
+		schedule, pipeline, err := parseCron(string(data))
 		if err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
@@ -252,12 +252,15 @@ func (f *ShellFS) WriteFile(path string, data []byte) error {
 			return fmt.Errorf("minimum schedule interval for %s plan is %s", f.tier, minInterval)
 		}
 
-		return f.store.SaveCronWatch(f.customerID, name, schedule, pipeline, notifyDest)
+		return f.store.SaveCronWatch(f.customerID, name, schedule, pipeline)
 
 	case "etc":
 		if name == "notify.conf" {
-			slackWebhook := parseNotifyConfig(string(data))
-			return f.store.SaveNotifyConfig(f.customerID, slackWebhook)
+			validated, err := parseNotifyConfig(string(data))
+			if err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
+			return f.store.SaveNotifyAliases(f.customerID, validated)
 		}
 		return fmt.Errorf("%s: read-only", path)
 
@@ -455,9 +458,6 @@ func splitPath(path string) (dir, name string) {
 func serializeCron(w *store.CronWatch) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# schedule: %s\n", w.Schedule)
-	if w.NotifyDest != "" {
-		fmt.Fprintf(&b, "# notify: %s\n", w.NotifyDest)
-	}
 	if !w.Enabled {
 		b.WriteString("# enabled: false\n")
 	}
@@ -468,14 +468,15 @@ func serializeCron(w *store.CronWatch) string {
 	return b.String()
 }
 
-func parseCron(content string) (schedule, pipeline, notifyDest string, err error) {
+// parseCron extracts the `# schedule:` directive and the shell pipeline body.
+// Alert destinations are no longer watch-level metadata — they come from
+// `alert --notify=<alias>` stages inside the pipeline itself.
+func parseCron(content string) (schedule, pipeline string, err error) {
 	var pipelineLines []string
 	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "# schedule:") {
 			schedule = strings.TrimSpace(strings.TrimPrefix(trimmed, "# schedule:"))
-		} else if strings.HasPrefix(trimmed, "# notify:") {
-			notifyDest = strings.TrimSpace(strings.TrimPrefix(trimmed, "# notify:"))
 		} else if strings.HasPrefix(trimmed, "# enabled:") {
 			// Ignored on write — enabled/disabled via separate API.
 		} else if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
@@ -493,23 +494,33 @@ func parseCron(content string) (schedule, pipeline, notifyDest string, err error
 }
 
 // ── Notify config serialization ─────────────────────────────
+//
+// /etc/notify.conf is a YAML map of alias → per-service targets. Example:
+//
+//     ops:
+//       slack: ["#ops-alerts"]
+//       pagerduty:
+//         - name: ops-daytime
+//           severity: error
+//
+// Cron watches reference aliases via `notify: <alias-name>`. Slack credentials
+// and PagerDuty integration keys live in the database (managed through the
+// Account → Integrations UI); notify.conf carries routing only, never secrets.
 
 func serializeNotifyConfig(nc *store.NotifyConfig) string {
-	var b strings.Builder
-	if nc.SlackWebhook != "" {
-		fmt.Fprintf(&b, "slack_webhook: %s\n", nc.SlackWebhook)
+	if nc == nil {
+		return ""
 	}
-	return b.String()
+	return nc.AliasesYAML
 }
 
-func parseNotifyConfig(content string) string {
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "slack_webhook:") {
-			return strings.TrimSpace(strings.TrimPrefix(trimmed, "slack_webhook:"))
-		}
+// parseNotifyConfig validates the YAML alias document. Returns the raw input
+// on success so the store layer persists exactly what the user wrote.
+func parseNotifyConfig(content string) (string, error) {
+	if _, err := store.ParseNotifyAliases(content); err != nil {
+		return "", err
 	}
-	return ""
+	return content, nil
 }
 
 // ── Usage report ───────────────────────────────────────────────

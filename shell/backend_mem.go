@@ -49,12 +49,11 @@ func (b *MemBackend) GetWatch(name string) (*WatchData, error) {
 	if !ok {
 		return nil, fmt.Errorf("not found: %s", name)
 	}
-	schedule, pipeline, notifyDest := parseCronFileContent(content)
+	schedule, pipeline := parseCronFileContent(content)
 	return &WatchData{
-		Schedule:   schedule,
-		Pipeline:   pipeline,
-		NotifyDest: notifyDest,
-		Enabled:    true,
+		Schedule: schedule,
+		Pipeline: pipeline,
+		Enabled:  true,
 	}, nil
 }
 

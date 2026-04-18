@@ -126,7 +126,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("DELETE /api/integrations/slack", s.handleSlackDisconnect)
 	auth.HandleFunc("PUT /api/integrations/pagerduty", s.handlePagerDutySave)
 	auth.HandleFunc("DELETE /api/integrations/pagerduty", s.handlePagerDutyDisconnect)
-	auth.HandleFunc("PUT /api/integrations/routes", s.handleSaveRoutes)
+	auth.HandleFunc("DELETE /api/integrations/pagerduty/{name}", s.handlePagerDutyDelete)
 	auth.HandleFunc("GET /api/namespaces", s.handleListNamespaces)
 	auth.HandleFunc("POST /api/namespaces", s.handleCreateNamespace)
 	auth.HandleFunc("PUT /api/namespaces/{name}/permissions/{userId}", s.handleSetNamespacePermission)
@@ -1103,9 +1103,8 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Schedule   string `json:"schedule"`
-		Pipeline   string `json:"pipeline"`
-		NotifyDest string `json:"notify_dest"`
+		Schedule string `json:"schedule"`
+		Pipeline string `json:"pipeline"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Schedule == "" || req.Pipeline == "" {
 		http.Error(w, "schedule and pipeline required", http.StatusBadRequest)
@@ -1147,7 +1146,7 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.SaveCronWatch(custID, name, req.Schedule, req.Pipeline, req.NotifyDest); err != nil {
+	if err := s.store.SaveCronWatch(custID, name, req.Schedule, req.Pipeline); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
