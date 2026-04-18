@@ -364,18 +364,27 @@ func (p *Provisioner) reapDeadShards() {
 		if live[entry.ID] {
 			continue
 		}
-		log.Printf("provisioner: reaping dead shard %s (no heartbeat)", entry.ID)
+
+		// Failure-recovery branch: if the shard has a bound EBS
+		// volume, its data outlives the instance. The ASG's
+		// health-check replaces the instance; the lifecycle hook
+		// reattaches the volume to the replacement; the replacement
+		// heartbeats with the same shard id and the rebind arm of
+		// adoptFromHeartbeats rewires the registry entry. We must
+		// preserve the registry entry through the stale-heartbeat
+		// window so rebind has something to update.
+		if entry.EBSVolumeID != "" {
+			log.Printf("provisioner: shard %s stale heartbeat — preserving for ASG-driven recovery (vol=%s)",
+				entry.ID, entry.EBSVolumeID)
+			continue
+		}
+
+		// Legacy path: no EBS volume → data is already lost with the
+		// instance. Remove from registry and ask the launcher to
+		// terminate so the ASG doesn't keep a ghost instance.
+		log.Printf("provisioner: reaping dead shard %s (no heartbeat, no volume)", entry.ID)
 		p.registry.Remove(entry.ID)
 
-		// Also ask the launcher to terminate the instance. Without this
-		// the ASG keeps the "dead" instance around, which costs money
-		// and inflates bootstrap's "ASG already has N instances" check
-		// for every subsequent coordinator restart.
-		//
-		// Some tests construct a Provisioner without a launcher; skip
-		// the call in that case. Log errors but don't block removal —
-		// the registry is already updated and the coordinator mustn't
-		// hold onto a ghost entry just because the ASG API is slow.
 		if p.launcher != nil && (entry.InstanceID != "" || entry.Addr != "") {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			if err := p.launcher.TerminateInstance(ctx, entry.InstanceID, entry.Addr); err != nil {
