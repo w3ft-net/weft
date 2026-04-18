@@ -138,6 +138,25 @@ services:
       timeout: 5s
       retries: 5
 
+  # LocalStack: AWS emulator for integration tests that exercise the
+  # real EC2/SNS/SQS wire format (shard EBS lifecycle — see
+  # docs/plans/ebs-shard-volumes.md). Community edition covers
+  # ec2/sns/sqs; ASG lifecycle hooks are Pro-only and the tests inject
+  # a fake ASG client for that part.
+  localstack:
+    image: localstack/localstack:3.8
+    environment:
+      SERVICES: "ec2,sns,sqs"
+      DEFAULT_REGION: us-east-2
+      DEBUG: "0"
+    ports:
+      - "4566:4566"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
 volumes:
   shard0_data:
   shard1_data:
