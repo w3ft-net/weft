@@ -68,7 +68,8 @@ func TestReap_LegacyShardWithoutVolume(t *testing.T) {
 		Addr:       "10.0.0.99:9000",
 		InstanceID: "i-legacy",
 		// No EBSVolumeID — pre-S5 shard.
-		CreatedAt: time.Now(),
+		// Past the grace period so reap is eligible.
+		CreatedAt: time.Now().Add(-10 * time.Minute),
 	})
 
 	mockStore := &mockHeartbeatStore{
@@ -90,6 +91,80 @@ func TestReap_LegacyShardWithoutVolume(t *testing.T) {
 	}
 	if len(launcher.terminated) != 1 {
 		t.Errorf("expected 1 terminate call for legacy reap, got %d", len(launcher.terminated))
+	}
+}
+
+// A freshly-christened shard has a registry entry for its minted id
+// but the most recent heartbeat still carries the empty "unclaimed"
+// id (the one that triggered christening). adoptFromHeartbeats and
+// reapDeadShards run in the same tick; without a grace window, reap
+// sees the new entry absent from the live-heartbeat map and kills
+// it immediately. Seen 2026-04-18 in prod as:
+//   provisioner: christened shard-... at ... volume=
+//   provisioner: reaping dead shard shard-... (no heartbeat, no volume)
+// happening in the same second.
+func TestReap_GracePeriodOnFreshChristening(t *testing.T) {
+	reg := NewShardRegistry()
+	// Entry was just christened ~1s ago. No EBS volume on this
+	// shard (dev/docker path; the prod path is covered by the
+	// preserve-on-EBS test).
+	reg.Add(&ShardEntry{
+		ID:         "shard-just-christened",
+		State:      StateIngesting,
+		Addr:       "10.0.0.5:9000",
+		InstanceID: "i-fresh",
+		CreatedAt:  time.Now().Add(-1 * time.Second),
+	})
+
+	// The heartbeats table has the pre-christening empty-id ping
+	// that triggered the whole thing — not the new shard id.
+	mockStore := &mockHeartbeatStore{
+		heartbeats: []store.ShardHeartbeat{
+			{ShardID: "", Addr: "10.0.0.5:9000", InstanceID: "i-fresh", State: "ADOPTED"},
+		},
+	}
+	launcher := &recordingLauncher{}
+	prov := &Provisioner{
+		registry: reg,
+		launcher: launcher,
+		config:   ProvisionerConfig{Store: mockStore},
+	}
+	prov.reapDeadShards()
+
+	if reg.Get("shard-just-christened") == nil {
+		t.Fatal("freshly-christened shard reaped — need a grace period on CreatedAt")
+	}
+	if len(launcher.terminated) != 0 {
+		t.Errorf("expected no terminate calls during grace period, got %v", launcher.terminated)
+	}
+}
+
+// After the grace period, a shard that's still not heartbeating with
+// its real id DOES get reaped (nothing is heartbeating for it).
+// This closes the loop: grace is a window, not a forever-skip.
+func TestReap_GracePeriodExpires(t *testing.T) {
+	reg := NewShardRegistry()
+	reg.Add(&ShardEntry{
+		ID:        "shard-stale",
+		State:     StateIngesting,
+		Addr:      "10.0.0.5:9000",
+		CreatedAt: time.Now().Add(-10 * time.Minute),
+	})
+
+	mockStore := &mockHeartbeatStore{
+		heartbeats: []store.ShardHeartbeat{
+			{ShardID: "other-live", Addr: "10.0.0.1:9000", State: "INGESTING"},
+		},
+	}
+	prov := &Provisioner{
+		registry: reg,
+		launcher: &recordingLauncher{},
+		config:   ProvisionerConfig{Store: mockStore},
+	}
+	prov.reapDeadShards()
+
+	if reg.Get("shard-stale") != nil {
+		t.Error("shard past the grace period should be reaped when truly stale")
 	}
 }
 

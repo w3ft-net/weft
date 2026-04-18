@@ -16,6 +16,14 @@ import (
 	"github.com/kevlarcon/weft/store"
 )
 
+// reapGracePeriod is how long a newly-added registry entry is
+// protected from reap, measured from its CreatedAt. Must cover one
+// provisioner tick plus a heartbeat round-trip — otherwise a shard
+// that got christened this tick but hasn't yet heartbeated with its
+// minted id gets killed on the same tick. 2 min matches the
+// LiveShardHeartbeats staleness window.
+const reapGracePeriod = 2 * time.Minute
+
 // HeartbeatStore is the interface the provisioner needs for heartbeat operations.
 type HeartbeatStore interface {
 	LiveShardHeartbeats(since string) ([]store.ShardHeartbeat, error)
@@ -362,6 +370,18 @@ func (p *Provisioner) reapDeadShards() {
 			continue
 		}
 		if live[entry.ID] {
+			continue
+		}
+
+		// Grace period for freshly-christened shards. adoptFromHeartbeats
+		// and reapDeadShards run in the same tick; a shard christened
+		// during adopt has a brand-new registry id but the heartbeat
+		// that triggered its christening still carried the old
+		// empty-id ping. Without this guard, reap sees the new entry
+		// absent from `live` and kills it on the same tick. The real
+		// heartbeat (carrying the minted id) lands a few seconds
+		// later.
+		if time.Since(entry.CreatedAt) < reapGracePeriod {
 			continue
 		}
 
