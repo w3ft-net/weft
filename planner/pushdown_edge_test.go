@@ -320,27 +320,10 @@ func TestEdge_Jq_NonPushable(t *testing.T) {
 			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 			wantCompute: []string{`jq '.'`},
 		},
-		// Field access without select
-		{
-			name:        "bare field access",
-			pipeline:    `cat vimgym.log | jq '.payload'`,
-			wantSQL:     `SELECT line_num, CAST(payload AS TEXT) as raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
-			wantCompute: []string{`jq '.payload'`},
-		},
-		// Object construction without select
-		{
-			name:        "object construction",
-			pipeline:    `cat vimgym.log | jq '{user: .user_id, action: .action}'`,
-			wantSQL:     `SELECT line_num, CAST(payload AS TEXT) as raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
-			wantCompute: []string{`jq '{user: .user_id, action: .action}'`},
-		},
-		// Array construction
-		{
-			name:        "array expression",
-			pipeline:    `cat vimgym.log | jq '[.user_id, .action]'`,
-			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
-			wantCompute: []string{`jq '[.user_id, .action]'`},
-		},
+		// Bare field access, object construction, and array construction all
+		// project into the SELECT now — see TestRawExpr_Jq, TestRawExpr_JqObject,
+		// TestRawExpr_JqArray. They live there, not here, since they ARE pushable.
+
 		// keys/length/type
 		{
 			name:        "keys builtin",
@@ -472,15 +455,17 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:        "select then field access",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500) | .payload'`,
-			wantSQL:     `SELECT line_num, CAST(payload AS TEXT) as raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
-			wantCompute: []string{`jq '.payload'`},
+			wantSQL:     `SELECT line_num, CAST(json_extract(payload, '$.payload') AS VARCHAR) as raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantCompute: nil,
 		},
-		// select | select | object construction (two pushable, one not)
+		// select | select | object construction — both selects push as
+		// predicates, and the trailing object construction folds into a
+		// json_object SELECT (metavar ._ts maps to the ts column).
 		{
 			name:        "two selects then construction",
 			pipeline:    `cat vimgym.log | jq 'select(._level == "ERROR") | select(.status == 500) | {ts: ._ts}'`,
-			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
-			wantCompute: []string{`jq '{ts: ._ts}'`},
+			wantSQL:     `SELECT line_num, CAST(json_object('ts', ts) AS VARCHAR) as raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantCompute: nil,
 		},
 	}
 
@@ -746,12 +731,13 @@ func TestEdge_PipelineOrdering(t *testing.T) {
 			wantSQL:     `SELECT line_num, list_extract(fields, 3) as raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR'`,
 			wantCompute: []string{"sort"}, // simple $N print pushed down, sort remains
 		},
-		// Partial jq pushdown followed by more compute
+		// Partial jq pushdown followed by more compute — .payload folds into the
+		// SELECT, leaving only sort to run downstream.
 		{
 			name:        "partial jq then sort",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500) | .payload' | sort`,
-			wantSQL:     `SELECT line_num, CAST(payload AS TEXT) as raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
-			wantCompute: []string{`jq '.payload'`, "sort"},
+			wantSQL:     `SELECT line_num, CAST(json_extract(payload, '$.payload') AS VARCHAR) as raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantCompute: []string{"sort"},
 		},
 		// wc without -l flag — not pushable
 		{

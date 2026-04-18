@@ -214,18 +214,12 @@ For `format: "prefix_json"` sources, `raw` is the full line, `fields` covers the
 
 ### Gap: the planner is schema-unaware
 
-The planner (`planner/`) has no access to source schemas. This causes unnecessary work for JSON sources:
+The planner (`planner/`) has no access to source schemas. Today this is mostly fine — single-key jq projections fold directly into the SELECT (see the example trace below) — but a few cases still leave money on the table:
 
-When a jq pipeline like `tail log/weft/metrics.log | jq 'select(.type == "memory") | .pct'` hits the planner:
+- **Object/array construction in jq** (`jq '{a: .x, b: .y}'`): falls back to `CAST(payload AS TEXT) as raw` so jq can run on the full JSON. With a known JSON source we could either skip the cast (raw is already JSON text) or narrow to a `json_object(...)` over only the referenced keys.
+- **Tracking which keys jq actually reads** through more complex chains, so we can prune them at the shard.
 
-1. **Parse**: source = `tail`, app = `weft/metrics`, stage = `jq 'select(.type == "memory") | .pct'`
-2. **jq pushdown** (`jq.go:tryJqStagePushdown`): Flattens the pipe chain. `select(.type == "memory")` is pushable → SQL predicate `json_extract_string(payload, '$.type') = 'memory'`. `.pct` is not a select → becomes compute stage `jq '.pct'`.
-3. **Projection** (`project.go:extractJqProjection`): Sees `jq '.pct'` → extracts `JSONKeys: ["pct"]`.
-4. **Apply projection** (`apply_project.go:applyJSONProjection`): Rewrites SELECT to `CAST(payload AS TEXT) as raw, json_object('pct', ...) as payload`.
-
-The `CAST(payload AS TEXT) as raw` rewrite is redundant for JSON sources — `raw` already IS valid JSON. The narrowed `payload` diverges from `raw`. This works today because the compute layer only reads `raw`, but it's fragile and wasteful.
-
-**Fix**: The planner should accept schema metadata (at minimum, the source format). For `format: "json"` sources, skip JSON projection entirely — `raw` is already the JSON string that jq will consume. The `select` pushdown to SQL is still valuable; only the projection rewrite is unnecessary.
+See `docs/optimizations.md` for the planned next step.
 
 ## Query Planner
 
@@ -251,7 +245,7 @@ To trace what the planner does with a pipeline, understand the three-phase split
 
 Once a stage fails to push down, all subsequent stages become compute stages (no reordering).
 
-**Phase 3 — Projection** (`planner/project.go`): The first compute stage is examined for field/key references. If it only reads specific fields (`cut -f1,3`, `awk '{print $2}'`) or JSON keys (`jq '.pct'`), a `Project` is extracted. The coordinator uses this to narrow the SQL SELECT clause, reducing data transfer from shards.
+**Phase 3 — Projection** (`planner/project.go`): The first compute stage is examined for field/key references. If it only reads specific fields (`cut -f1,3`, `awk '{print $2}'`) or pushable jq shapes (a single key `jq '.pct'`, a nested path `jq '.foo.bar'`, an array index `jq '.items[0]'`, object construction `jq '{a: .x}'`, array construction `jq '[.x, .y]'`), the access is folded directly into the SELECT and the stage drops out of compute. When a jq pipe has a pure-path prefix but a non-pushable suffix (`jq '.foo | length'`, `jq 'select(.x==1) | .users | sort_by(.name)'`), the prefix folds in and only the suffix ships to compute. jq projections are always wrapped `CAST(... AS VARCHAR)` so JSON objects/arrays come back as strings (otherwise the duckdb-go driver can't scan them, and it strips quotes from string scalars — breaking downstream jq stages).
 
 **Partial pushdown**: A single jq expression like `select(.x == 1) | .y` is split — the select becomes a SQL predicate, `.y` becomes a compute stage. The awk equivalent: `$LEVEL == "ERROR" { print $3 }` splits into a WHERE clause and a compute `awk '{ print $3 }'`.
 
@@ -269,27 +263,25 @@ Pushdown:
     flatten pipe: [select(.type == "memory"), .pct]
     select(.type == "memory") → pushable
       predicate: json_extract_string(payload, '$.type') = 'memory'
-    .pct → not a select → stop
+    .pct → not a select → leftover compute "jq '.pct'"
     result: pushed=true, predicate=above, compute="jq '.pct'"
 
-  ShardSQL: SELECT * FROM logs
+Projection (project.go:extractJqRawExpr):
+  leftover is a single FieldExpr (.pct) → fold into SELECT
+  rawExpr = CAST(json_extract(payload, '$.pct') AS VARCHAR), residual=nil
+  → drops the jq stage entirely
+
+  ShardSQL: SELECT line_num, CAST(json_extract(payload, '$.pct') AS VARCHAR) as raw FROM logs
             WHERE app = 'weft/metrics'
             AND json_extract_string(payload, '$.type') = 'memory'
             ORDER BY ts DESC LIMIT 10
 
-  ComputeStages: ["jq '.pct'"]
-
-Projection:
-  extractJqProjection on "jq '.pct'" → JSONKeys: ["pct"]
-  applyJSONProjection rewrites SELECT to:
-    CAST(payload AS TEXT) as raw, json_object('pct', ...) as payload
+  ComputeStages: []
 
 Execution:
-  coordinator injects customer WHERE, applies projection
-  fans out to matching shards
-  shard returns rows where raw = full JSON text
-  compute feeds raw to: jq '.pct'
-  jq extracts .pct from each JSON line → output
+  coordinator injects customer WHERE, fans out to matching shards
+  shard returns rows where raw = the .pct value (e.g. "57.49")
+  no compute work — output goes straight to the client
 ```
 
 ## PostgreSQL Store

@@ -87,7 +87,8 @@ func TestRawExpr_AwkPrint(t *testing.T) {
 	}
 }
 
-// TestRawExpr_Jq verifies jq projections set raw to CAST(payload AS TEXT).
+// TestRawExpr_Jq verifies jq single-field projections collapse into a
+// json_extract on raw and drop the jq compute stage.
 func TestRawExpr_Jq(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -98,14 +99,14 @@ func TestRawExpr_Jq(t *testing.T) {
 		{
 			name:      "jq field access",
 			pipeline:  `cat vimgym.log | jq '.status'`,
-			wantInSQL: "CAST(payload AS TEXT) as raw",
-			wantComp:  []string{"jq '.status'"},
+			wantInSQL: "CAST(json_extract(payload, '$.status') AS VARCHAR) as raw",
+			wantComp:  nil,
 		},
 		{
 			name:      "jq select then field",
 			pipeline:  `cat vimgym.log | jq 'select(.status == 500) | .message'`,
-			wantInSQL: "CAST(payload AS TEXT) as raw",
-			wantComp:  []string{"jq '.message'"},
+			wantInSQL: "CAST(json_extract(payload, '$.message') AS VARCHAR) as raw",
+			wantComp:  nil,
 		},
 	}
 

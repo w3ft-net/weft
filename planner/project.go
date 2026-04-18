@@ -9,21 +9,39 @@ import (
 	"github.com/kevlarcon/warp/pkg/jq"
 )
 
-// extractRawExpr examines a compute stage and returns the SQL expression for
-// the raw column plus whether the stage is fully handled by the expression
-// (i.e., it can be removed from compute stages).
+// extractRawExpr examines a compute stage and tries to fold its projection
+// into shard-side SQL. Returns:
 //
-// Returns ("", false) if no projection can be extracted.
-func extractRawExpr(stage stageInfo) (string, bool) {
+//   - rawExpr: SQL expression for the raw column. Empty when ok=false.
+//   - residual: optional replacement compute stage. nil means the original
+//     stage is fully covered by rawExpr and can be dropped; non-nil means
+//     a partial projection — the caller should swap the original stage for
+//     this residual and let the rest run in compute.
+//   - ok: true when a projection was extracted (caller should set the SELECT).
+func extractRawExpr(stage stageInfo) (rawExpr string, residual *stageInfo, ok bool) {
 	switch stage.cmd {
 	case "cut":
-		return extractCutRawExpr(stage.args)
+		expr, complete := extractCutRawExpr(stage.args)
+		if expr == "" {
+			return "", nil, false
+		}
+		if !complete {
+			return expr, &stage, true
+		}
+		return expr, nil, true
 	case "awk":
-		return extractAwkRawExpr(stage.args)
+		expr, complete := extractAwkRawExpr(stage.args)
+		if expr == "" {
+			return "", nil, false
+		}
+		if !complete {
+			return expr, &stage, true
+		}
+		return expr, nil, true
 	case "jq":
 		return extractJqRawExpr(stage.args)
 	}
-	return "", false
+	return "", nil, false
 }
 
 // extractCutRawExpr parses cut flags and returns a SQL expression for the
@@ -252,24 +270,218 @@ func awkPrintArgToSQL(expr awk.Expr) (string, []int, bool) {
 	return "", nil, false
 }
 
-// extractJqRawExpr examines a jq expression for field references.
-// For jq, the raw column needs to be the JSON payload text so jq can parse it.
-func extractJqRawExpr(args []string) (string, bool) {
+// extractJqRawExpr folds as much of a jq expression as possible into
+// shard-side SQL. Three outcomes:
+//
+//  1. Whole expression projects: single field, pure-path access (.a.b[0],
+//     .a | .b), object construction, or array construction over pushable
+//     values. The jq stage drops out entirely (residual=nil).
+//  2. A pure-path *prefix* projects but the suffix doesn't (.foo | length,
+//     .users | sort_by(.name), .foo | select(.bar==1) — note the inner
+//     select is value-relative and must NOT be lifted to a row-level WHERE).
+//     We emit the path projection and replace the stage with `jq '<rest>'`.
+//  3. Nothing pushable (iter `[]`, recurse `..`, lone builtins, etc.):
+//     no projection — caller leaves raw and the original stage alone.
+func extractJqRawExpr(args []string) (string, *stageInfo, bool) {
 	if len(args) == 0 {
-		return "", false
+		return "", nil, false
 	}
-	expr, err := jq.Parse(args[0])
+	src := args[0]
+	expr, err := jq.Parse(src)
 	if err != nil {
-		return "", false
+		return "", nil, false
 	}
 
-	keys := collectJqKeys(expr)
-	if len(keys) == 0 {
-		return "", false
+	// Case 1: whole expression projectable.
+	if sql, ok := jqValueToSQL(expr); ok {
+		return wrapJqProjection(sql), nil, true
 	}
 
-	// jq needs JSON input — cast payload to text for the raw column.
-	return "CAST(payload AS TEXT)", false
+	// Case 2: pure-path prefix + non-pushable suffix.
+	nodes := jqFlattenPipe(expr)
+	if len(nodes) < 2 {
+		return "", nil, false
+	}
+	pathLen := 0
+	for i, n := range nodes {
+		if _, ok := jqPathParts(n); !ok {
+			break
+		}
+		pathLen = i + 1
+	}
+	if pathLen == 0 || pathLen == len(nodes) {
+		// pathLen == len(nodes) shouldn't happen because case 1 would have
+		// caught it; pathLen == 0 means there's nothing to push.
+		return "", nil, false
+	}
+
+	var pathParts []string
+	for i := 0; i < pathLen; i++ {
+		p, _ := jqPathParts(nodes[i])
+		pathParts = append(pathParts, p...)
+	}
+	rawExpr := fmt.Sprintf("json_extract(payload, '$%s')", strings.Join(pathParts, ""))
+
+	// Round-trip the residual through formatJqExpr. If any node can't be
+	// printed back to source, bail out — better to ship the original whole
+	// stage than to corrupt it.
+	residualSrc := jqRenderPipe(nodes[pathLen:])
+	if residualSrc == "" {
+		return "", nil, false
+	}
+	return wrapJqProjection(rawExpr), &stageInfo{cmd: "jq", args: []string{residualSrc}}, true
+}
+
+// wrapJqProjection casts a JSON-returning expression (or metavar column) to
+// VARCHAR so the driver can scan it into a string and downstream jq gets the
+// JSON-text representation. Without this:
+//   - duckdb-go returns json_object / json_array as map/slice — scan fails.
+//   - duckdb-go strips quotes from string scalars, breaking jq compatibility
+//     (`"u1"` → `u1`) for anything piped into a further jq stage.
+// For metavar-mapped columns (e.g., ts is TIMESTAMP) the cast also gives a
+// consistent string form instead of driver-native types.
+func wrapJqProjection(sql string) string {
+	return "CAST(" + sql + " AS VARCHAR)"
+}
+
+// jqValueToSQL converts a jq expression into a SQL value expression IF the
+// whole expression is fully expressible in SQL (no leftover compute work).
+// Returns ok=false otherwise.
+func jqValueToSQL(expr jq.Expr) (string, bool) {
+	switch e := expr.(type) {
+	case jq.FieldExpr:
+		if col, isMeta := jqMetaVars[e.Name]; isMeta {
+			return col, true
+		}
+		return fmt.Sprintf("json_extract(payload, '$.%s')", e.Name), true
+
+	case jq.LiteralExpr:
+		return jqLiteralToSQL(e.Value)
+
+	case jq.PipeExpr:
+		// Pure path chain like .a.b[0] / .a | .b.
+		if path, ok := jqPathParts(expr); ok {
+			return fmt.Sprintf("json_extract(payload, '$%s')", strings.Join(path, "")), true
+		}
+		return "", false
+
+	case jq.IndexExpr:
+		// Standalone .[n] would need a chained subject — not pushable on its own.
+		return "", false
+
+	case jq.ObjectExpr:
+		var parts []string
+		for _, p := range e.Pairs {
+			keyStr, ok := jqObjKeyAsString(p.Key)
+			if !ok {
+				return "", false
+			}
+			val, ok := jqValueToSQL(p.Value)
+			if !ok {
+				return "", false
+			}
+			parts = append(parts, fmt.Sprintf("'%s', %s", escapeSQLString(keyStr), val))
+		}
+		return "json_object(" + strings.Join(parts, ", ") + ")", true
+
+	case jq.ArrayExpr:
+		elems := jqFlattenComma(e.Elems)
+		var parts []string
+		for _, elem := range elems {
+			val, ok := jqValueToSQL(elem)
+			if !ok {
+				return "", false
+			}
+			parts = append(parts, val)
+		}
+		return "json_array(" + strings.Join(parts, ", ") + ")", true
+	}
+	return "", false
+}
+
+// jqPathParts returns the JSONPath fragments for a pure-path expression
+// (FieldExpr / numeric IndexExpr / left-associative pipes thereof).
+// Meta-variables can't appear in a JSONPath, so they fail the check.
+func jqPathParts(expr jq.Expr) ([]string, bool) {
+	switch e := expr.(type) {
+	case jq.FieldExpr:
+		if _, isMeta := jqMetaVars[e.Name]; isMeta {
+			return nil, false
+		}
+		return []string{"." + e.Name}, true
+	case jq.IndexExpr:
+		lit, ok := e.Index.(jq.LiteralExpr)
+		if !ok || lit.Value.Type != jq.TypeNumber {
+			return nil, false
+		}
+		n := int(lit.Value.Num)
+		return []string{fmt.Sprintf("[%d]", n)}, true
+	case jq.PipeExpr:
+		left, ok := jqPathParts(e.Left)
+		if !ok {
+			return nil, false
+		}
+		right, ok := jqPathParts(e.Right)
+		if !ok {
+			return nil, false
+		}
+		return append(left, right...), true
+	}
+	return nil, false
+}
+
+// jqLiteralToSQL emits a SQL literal for a jq Value.
+func jqLiteralToSQL(v jq.Value) (string, bool) {
+	switch v.Type {
+	case jq.TypeString:
+		return fmt.Sprintf("'%s'", escapeSQLString(v.Str)), true
+	case jq.TypeNumber:
+		if v.Num == float64(int(v.Num)) {
+			return fmt.Sprintf("%d", int(v.Num)), true
+		}
+		return fmt.Sprintf("%g", v.Num), true
+	case jq.TypeBool:
+		if v.Bool {
+			return "true", true
+		}
+		return "false", true
+	case jq.TypeNull:
+		return "NULL", true
+	}
+	return "", false
+}
+
+// jqObjKeyAsString returns the literal string for a jq object key. Both
+// `{user: ...}` (parsed as LiteralExpr StrValue) and `{"user": ...}`
+// reduce to a string; anything else (computed keys) is unsupported.
+func jqObjKeyAsString(k jq.Expr) (string, bool) {
+	if lit, ok := k.(jq.LiteralExpr); ok && lit.Value.Type == jq.TypeString {
+		return lit.Value.Str, true
+	}
+	return "", false
+}
+
+// jqFlattenComma flattens a CommaExpr tree into a slice. Non-comma exprs
+// return as a single-element slice.
+func jqFlattenComma(expr jq.Expr) []jq.Expr {
+	if c, ok := expr.(jq.CommaExpr); ok {
+		return append(jqFlattenComma(c.Left), jqFlattenComma(c.Right)...)
+	}
+	return []jq.Expr{expr}
+}
+
+// jqRenderPipe formats a sequence of pipe nodes back into source form.
+// Returns "" if any node fails to round-trip (formatJqExpr returns "").
+func jqRenderPipe(nodes []jq.Expr) string {
+	parts := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		s := formatJqExpr(n)
+		if s == "" || s == "?" {
+			return ""
+		}
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, " | ")
 }
 
 // collectJqKeys recursively collects JSON field names from a jq expression.

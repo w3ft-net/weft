@@ -508,12 +508,13 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 			wantCompute: nil, // simple $N print is fully pushed down as projection
 		},
 
-		// jq object construction — transforms output shape
+		// jq object construction — pushes both as the WHERE (awk filter) and
+		// as a json_object SELECT (jq construction folded into projection).
 		{
 			name:        "awk filter then jq construction",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR"' | jq '{ts: ._ts, msg: .message}'`,
-			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR'`,
-			wantCompute: []string{`jq '{ts: ._ts, msg: .message}'`},
+			wantSQL:     `SELECT line_num, CAST(json_object('ts', ts, 'msg', json_extract(payload, '$.message')) AS VARCHAR) as raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR'`,
+			wantCompute: nil,
 		},
 
 		// awk END block — needs all rows before producing output
@@ -572,12 +573,13 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 			wantCompute: []string{"sort", "grep timeout"},
 		},
 
-		// jq pipe from select to construction — select pushes, construction is compute
+		// jq pipe from select to construction — select pushes as predicate,
+		// construction folds into a json_object SELECT, no compute remainder.
 		{
 			name:        "jq select piped to object construction",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500) | {ts: ._ts, msg: .message}'`,
-			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
-			wantCompute: []string{`jq '{ts: ._ts, msg: .message}'`},
+			wantSQL:     `SELECT line_num, CAST(json_object('ts', ts, 'msg', json_extract(payload, '$.message')) AS VARCHAR) as raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantCompute: nil,
 		},
 	}
 

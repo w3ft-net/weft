@@ -158,14 +158,14 @@ func tryJqStagePushdown(expression string) pushdownResult {
 		return pushdownResult{pushed: true, predicate: pred}
 	}
 
-	// Partial: remaining nodes become compute.
-	var remainParts []string
-	for _, node := range nodes[splitAt:] {
-		remainParts = append(remainParts, formatJqExpr(node))
+	// Partial: remaining nodes become compute. If we can't round-trip any of
+	// them back to source, bail on partial pushdown — better to keep the
+	// whole stage in compute than to ship a corrupted jq command.
+	rendered := jqRenderPipe(nodes[splitAt:])
+	if rendered == "" {
+		return pushdownResult{}
 	}
-	compute := "jq '" + strings.Join(remainParts, " | ") + "'"
-
-	return pushdownResult{pushed: true, predicate: pred, compute: compute}
+	return pushdownResult{pushed: true, predicate: pred, compute: "jq '" + rendered + "'"}
 }
 
 // jqFlattenPipe flattens a left-associative PipeExpr chain into a slice.
@@ -176,11 +176,17 @@ func jqFlattenPipe(expr jq.Expr) []jq.Expr {
 	return []jq.Expr{expr}
 }
 
-// formatJqExpr formats a jq AST node back to source-like string.
+// formatJqExpr formats a jq AST node back to source-like form. Returns ""
+// for unsupported nodes; callers that round-trip residuals must check this
+// and fall back rather than emit a corrupted jq command.
 func formatJqExpr(expr jq.Expr) string {
 	switch e := expr.(type) {
 	case jq.SelectExpr:
-		return fmt.Sprintf("select(%s)", formatJqExpr(e.Cond))
+		inner := formatJqExpr(e.Cond)
+		if inner == "" {
+			return ""
+		}
+		return fmt.Sprintf("select(%s)", inner)
 	case jq.FieldExpr:
 		return "." + e.Name
 	case jq.LiteralExpr:
@@ -202,30 +208,126 @@ func formatJqExpr(expr jq.Expr) string {
 			return "null"
 		}
 	case jq.EqExpr:
-		return formatJqExpr(e.Left) + " == " + formatJqExpr(e.Right)
+		return formatJqBinOp(e.Left, e.Right, " == ")
 	case jq.NeExpr:
-		return formatJqExpr(e.Left) + " != " + formatJqExpr(e.Right)
+		return formatJqBinOp(e.Left, e.Right, " != ")
 	case jq.LtExpr:
-		return formatJqExpr(e.Left) + " < " + formatJqExpr(e.Right)
+		return formatJqBinOp(e.Left, e.Right, " < ")
 	case jq.GtExpr:
-		return formatJqExpr(e.Left) + " > " + formatJqExpr(e.Right)
+		return formatJqBinOp(e.Left, e.Right, " > ")
 	case jq.LeExpr:
-		return formatJqExpr(e.Left) + " <= " + formatJqExpr(e.Right)
+		return formatJqBinOp(e.Left, e.Right, " <= ")
 	case jq.GeExpr:
-		return formatJqExpr(e.Left) + " >= " + formatJqExpr(e.Right)
+		return formatJqBinOp(e.Left, e.Right, " >= ")
+	case jq.AndExpr:
+		return formatJqBinOp(e.Left, e.Right, " and ")
+	case jq.OrExpr:
+		return formatJqBinOp(e.Left, e.Right, " or ")
+	case jq.NotExpr:
+		inner := formatJqExpr(e.Operand)
+		if inner == "" {
+			return ""
+		}
+		return inner + " | not"
 	case jq.PipeExpr:
-		return formatJqExpr(e.Left) + " | " + formatJqExpr(e.Right)
+		return formatJqBinOp(e.Left, e.Right, " | ")
+	case jq.CommaExpr:
+		return formatJqBinOp(e.Left, e.Right, ", ")
 	case jq.ObjectExpr:
 		var pairs []string
 		for _, p := range e.Pairs {
 			key := formatJqObjKey(p.Key)
-			pairs = append(pairs, key+": "+formatJqExpr(p.Value))
+			val := formatJqExpr(p.Value)
+			if key == "" || val == "" {
+				return ""
+			}
+			pairs = append(pairs, key+": "+val)
 		}
 		return "{" + strings.Join(pairs, ", ") + "}"
+	case jq.ArrayExpr:
+		inner := formatJqExpr(e.Elems)
+		if inner == "" {
+			return ""
+		}
+		return "[" + inner + "]"
+	case jq.IndexExpr:
+		idx := formatJqExpr(e.Index)
+		if idx == "" {
+			return ""
+		}
+		return "[" + idx + "]"
+	case jq.IterExpr:
+		// Standalone iter — `.[]` so it can be re-attached after a pipe.
+		return ".[]"
 	case jq.IdentityExpr:
 		return "."
+	case jq.RecurseExpr:
+		return ".."
+	case jq.LengthExpr:
+		return "length"
+	case jq.KeysExpr:
+		return "keys"
+	case jq.ValuesExpr:
+		return "values"
+	case jq.TypeExpr:
+		return "type"
+	case jq.ToStringExpr:
+		return "tostring"
+	case jq.ToNumberExpr:
+		return "tonumber"
+	case jq.AsciiUpExpr:
+		return "ascii_upcase"
+	case jq.AsciiDownExpr:
+		return "ascii_downcase"
+	case jq.SortExpr:
+		return "sort"
+	case jq.SortByExpr:
+		key := formatJqExpr(e.Key)
+		if key == "" {
+			return ""
+		}
+		return "sort_by(" + key + ")"
+	case jq.GroupByExpr:
+		key := formatJqExpr(e.Key)
+		if key == "" {
+			return ""
+		}
+		return "group_by(" + key + ")"
+	case jq.UniqueExpr:
+		return "unique"
+	case jq.UniqueByExpr:
+		key := formatJqExpr(e.Key)
+		if key == "" {
+			return ""
+		}
+		return "unique_by(" + key + ")"
+	case jq.ReverseExpr:
+		return "reverse"
+	case jq.MapExpr:
+		body := formatJqExpr(e.Body)
+		if body == "" {
+			return ""
+		}
+		return "map(" + body + ")"
+	case jq.MapValuesExpr:
+		body := formatJqExpr(e.Body)
+		if body == "" {
+			return ""
+		}
+		return "map_values(" + body + ")"
 	}
-	return "?"
+	return ""
+}
+
+// formatJqBinOp renders a binary jq op, propagating empty-string failure
+// from either operand.
+func formatJqBinOp(l, r jq.Expr, op string) string {
+	left := formatJqExpr(l)
+	right := formatJqExpr(r)
+	if left == "" || right == "" {
+		return ""
+	}
+	return left + op + right
 }
 
 // formatJqObjKey formats an object key — bare identifier for string literals.
