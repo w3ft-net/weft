@@ -106,6 +106,40 @@ func TestChristen_UnclaimedHeartbeat_GetsWindowAndID(t *testing.T) {
 	}
 }
 
+// ProcessHeartbeat lets the Heartbeat RPC drive christen/rebind/adopt
+// inline rather than wait up to PollInterval for the next tick. A
+// single unclaimed heartbeat should mint + Configure one shard.
+func TestProcessHeartbeat_ChristensInlineForUnclaimed(t *testing.T) {
+	reg := NewShardRegistry()
+	configurer := &stubConfigurer{}
+
+	prov := &Provisioner{
+		registry: reg,
+		config: ProvisionerConfig{
+			PollInterval:   time.Second,
+			WindowDuration: 7 * 24 * time.Hour,
+		},
+		configurer: configurer,
+	}
+
+	prov.ProcessHeartbeat(store.ShardHeartbeat{
+		ShardID:    "",
+		Addr:       "10.0.0.50:9000",
+		InstanceID: "i-new",
+		State:      "ADOPTED",
+	})
+
+	if len(configurer.calls) != 1 {
+		t.Fatalf("expected 1 Configure call, got %d", len(configurer.calls))
+	}
+	if configurer.calls[0].Addr != "10.0.0.50:9000" {
+		t.Errorf("Configure addr: got %q", configurer.calls[0].Addr)
+	}
+	if reg.Count() != 1 {
+		t.Errorf("expected 1 registered shard, got %d", reg.Count())
+	}
+}
+
 // A heartbeat from a known shard id must NOT trigger christening — that
 // would re-configure an already-identified shard. It should re-bind
 // addr/instance on the existing entry instead.
