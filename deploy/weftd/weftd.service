@@ -6,7 +6,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-ExecStartPre=/opt/app/scripts/weftd-config.sh
+EnvironmentFile=-/etc/default/weftd
+ExecStartPre=/usr/lib/weftd/weftd-config.sh
 ExecStart=/usr/local/bin/weftd --config /etc/weftd/config.yaml
 Restart=always
 RestartSec=5

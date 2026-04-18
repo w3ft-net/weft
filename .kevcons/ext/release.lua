@@ -95,8 +95,9 @@ function run(args)
             kevcons.exec("rm", {"-rf", pkg_root})
             kevcons.exec("mkdir", {"-p", pkg_root .. "/DEBIAN"})
             kevcons.exec("mkdir", {"-p", pkg_root .. "/usr/local/bin"})
+            kevcons.exec("mkdir", {"-p", pkg_root .. "/usr/lib/weftd"})
+            kevcons.exec("mkdir", {"-p", pkg_root .. "/etc/default"})
             kevcons.exec("mkdir", {"-p", pkg_root .. "/etc/systemd/system"})
-            kevcons.exec("mkdir", {"-p", pkg_root .. "/opt/app/scripts"})
 
             -- Write control file with actual version and arch
             local ctrl = read_file("deploy/weftd/deb/DEBIAN/control")
@@ -104,16 +105,19 @@ function run(args)
             ctrl = ctrl:gsub("amd64", plat.deb_arch)
             write_file(pkg_root .. "/DEBIAN/control", ctrl)
 
-            -- Copy postinst
+            -- Copy control scripts
             kevcons.exec("cp", {"deploy/weftd/deb/DEBIAN/postinst", pkg_root .. "/DEBIAN/postinst"})
             kevcons.exec("chmod", {"0755", pkg_root .. "/DEBIAN/postinst"})
+            kevcons.exec("cp", {"deploy/weftd/deb/DEBIAN/conffiles", pkg_root .. "/DEBIAN/conffiles"})
 
             -- Place files
             kevcons.exec("cp", {tmp, pkg_root .. "/usr/local/bin/weftd"})
             kevcons.exec("chmod", {"0755", pkg_root .. "/usr/local/bin/weftd"})
             kevcons.exec("cp", {"deploy/weftd/weftd.service", pkg_root .. "/etc/systemd/system/weftd.service"})
-            kevcons.exec("cp", {"deploy/weftd/weftd-config.sh", pkg_root .. "/opt/app/scripts/weftd-config.sh"})
-            kevcons.exec("chmod", {"0755", pkg_root .. "/opt/app/scripts/weftd-config.sh"})
+            kevcons.exec("cp", {"deploy/weftd/weftd-config.sh", pkg_root .. "/usr/lib/weftd/weftd-config.sh"})
+            kevcons.exec("chmod", {"0755", pkg_root .. "/usr/lib/weftd/weftd-config.sh"})
+            kevcons.exec("cp", {"deploy/weftd/weftd.default", pkg_root .. "/etc/default/weftd"})
+            kevcons.exec("chmod", {"0644", pkg_root .. "/etc/default/weftd"})
 
             -- Build deb
             kevcons.exec("dpkg-deb", {"--build", pkg_root, deb_tmp})
