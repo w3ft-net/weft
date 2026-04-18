@@ -12,6 +12,7 @@ app:
 build:
   packer_template: packer/weft.pkr.hcl
   base_packer_template: packer/weft-base.pkr.hcl
+  base_ami_pattern: "debian-12-base-weft-*"
   instance_type: t4g.xlarge  # DuckDB CGO compilation needs more RAM
   skip_local_build: true
   prebuild:
