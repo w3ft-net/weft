@@ -88,7 +88,6 @@ func (m *mockEC2Volumes) DescribeVolumes(_ context.Context, in *ec2.DescribeVolu
 	if m.describeErr != nil {
 		return nil, m.describeErr
 	}
-	// Respect volume-ids if given.
 	if len(in.VolumeIds) > 0 {
 		var out []ec2types.Volume
 		for _, id := range in.VolumeIds {
@@ -98,16 +97,68 @@ func (m *mockEC2Volumes) DescribeVolumes(_ context.Context, in *ec2.DescribeVolu
 		}
 		return &ec2.DescribeVolumesOutput{Volumes: out}, nil
 	}
-	// Respect tag:shard_id filter.
-	for _, f := range in.Filters {
-		if f.Name != nil && *f.Name == "tag:shard_id" && len(f.Values) > 0 {
-			if v, ok := m.volumesByShard[f.Values[0]]; ok {
-				return &ec2.DescribeVolumesOutput{Volumes: []ec2types.Volume{v}}, nil
-			}
-			return &ec2.DescribeVolumesOutput{}, nil
+	// General filter handling: apply all filters conjunctively across
+	// volumesByID. Supported filter names: tag:<key>, availability-zone,
+	// status.
+	var out []ec2types.Volume
+	for _, v := range m.volumesByID {
+		if matchVolume(v, in.Filters) {
+			out = append(out, v)
 		}
 	}
-	return &ec2.DescribeVolumesOutput{}, nil
+	// Back-compat with earlier tests that expected volumesByShard to
+	// answer a direct tag:shard_id query even if the volume wasn't
+	// registered in volumesByID.
+	if len(out) == 0 {
+		for _, f := range in.Filters {
+			if f.Name != nil && *f.Name == "tag:shard_id" && len(f.Values) > 0 {
+				if v, ok := m.volumesByShard[f.Values[0]]; ok {
+					return &ec2.DescribeVolumesOutput{Volumes: []ec2types.Volume{v}}, nil
+				}
+			}
+		}
+	}
+	return &ec2.DescribeVolumesOutput{Volumes: out}, nil
+}
+
+func matchVolume(v ec2types.Volume, filters []ec2types.Filter) bool {
+	for _, f := range filters {
+		if f.Name == nil {
+			continue
+		}
+		name := *f.Name
+		switch {
+		case name == "availability-zone":
+			if v.AvailabilityZone == nil || !contains(f.Values, *v.AvailabilityZone) {
+				return false
+			}
+		case name == "status":
+			if !contains(f.Values, string(v.State)) {
+				return false
+			}
+		case len(name) > 4 && name[:4] == "tag:":
+			key := name[4:]
+			got := ""
+			for _, t := range v.Tags {
+				if t.Key != nil && *t.Key == key && t.Value != nil {
+					got = *t.Value
+				}
+			}
+			if !contains(f.Values, got) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func contains(xs []string, x string) bool {
+	for _, s := range xs {
+		if s == x {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *mockEC2Volumes) AttachVolume(_ context.Context, in *ec2.AttachVolumeInput, _ ...func(*ec2.Options)) (*ec2.AttachVolumeOutput, error) {
@@ -312,6 +363,90 @@ func TestVolumeManager_SnapshotThenDelete(t *testing.T) {
 	}
 	if len(mock.deleteCalls) != 1 {
 		t.Fatalf("expected 1 DeleteVolume call, got %d", len(mock.deleteCalls))
+	}
+}
+
+// ListAvailableByTier returns volumes tagged with the requested tier
+// that are in the `available` state (i.e. not currently attached) in
+// the requested AZ. These are recovery candidates — their previous
+// instance must have died and left the volume detached.
+func TestVolumeManager_ListAvailableByTier(t *testing.T) {
+	mock := &mockEC2Volumes{
+		volumesByID: map[string]ec2types.Volume{
+			"vol-avail-a": {
+				VolumeId:         strPtr("vol-avail-a"),
+				AvailabilityZone: strPtr("us-east-2a"),
+				State:            ec2types.VolumeStateAvailable,
+				Tags: []ec2types.Tag{
+					{Key: strPtr("shard_tier"), Value: strPtr("small")},
+					{Key: strPtr("shard_id"), Value: strPtr("shard-old-01")},
+				},
+			},
+			"vol-inuse": {
+				VolumeId:         strPtr("vol-inuse"),
+				AvailabilityZone: strPtr("us-east-2a"),
+				State:            ec2types.VolumeStateInUse,
+				Tags: []ec2types.Tag{
+					{Key: strPtr("shard_tier"), Value: strPtr("small")},
+				},
+			},
+			"vol-other-az": {
+				VolumeId:         strPtr("vol-other-az"),
+				AvailabilityZone: strPtr("us-east-2b"),
+				State:            ec2types.VolumeStateAvailable,
+				Tags: []ec2types.Tag{
+					{Key: strPtr("shard_tier"), Value: strPtr("small")},
+				},
+			},
+			"vol-other-tier": {
+				VolumeId:         strPtr("vol-other-tier"),
+				AvailabilityZone: strPtr("us-east-2a"),
+				State:            ec2types.VolumeStateAvailable,
+				Tags: []ec2types.Tag{
+					{Key: strPtr("shard_tier"), Value: strPtr("large")},
+				},
+			},
+		},
+	}
+	vm := NewEC2VolumeManagerWithClient(mock)
+
+	got, err := vm.ListAvailableByTier(context.Background(), "small", "us-east-2a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 available volume, got %d (%+v)", len(got), got)
+	}
+	if got[0].VolumeID != "vol-avail-a" {
+		t.Errorf("VolumeID: got %q want vol-avail-a", got[0].VolumeID)
+	}
+}
+
+// TagWithShardID stamps a volume that was created pre-christening with
+// the shard id once we have one.
+func TestVolumeManager_TagWithShardID(t *testing.T) {
+	mock := &mockEC2Volumes{}
+	vm := NewEC2VolumeManagerWithClient(mock)
+
+	if err := vm.TagWithShardID(context.Background(), "vol-new", "shard-2026w16-small-01"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(mock.createTagCalls) != 1 {
+		t.Fatalf("expected 1 CreateTags call, got %d", len(mock.createTagCalls))
+	}
+	call := mock.createTagCalls[0]
+	if len(call.Resources) != 1 || call.Resources[0] != "vol-new" {
+		t.Errorf("resources: got %v want [vol-new]", call.Resources)
+	}
+	got := map[string]string{}
+	for _, tag := range call.Tags {
+		if tag.Key != nil && tag.Value != nil {
+			got[*tag.Key] = *tag.Value
+		}
+	}
+	if got["shard_id"] != "shard-2026w16-small-01" {
+		t.Errorf("tag shard_id: got %q", got["shard_id"])
 	}
 }
 
