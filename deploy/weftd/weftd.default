@@ -1,0 +1,35 @@
+# /etc/default/weftd — environment for the weftd log agent.
+#
+# /etc/weftd/config.yaml is regenerated from these variables on every
+# weftd start (see /usr/lib/weftd/weftd-config.sh). Edit this file, then:
+#     systemctl restart weftd
+#
+# Only WEFT_TOKEN is required. Everything else has sensible defaults.
+
+# Agent auth token issued by the weft coordinator (required).
+#WEFT_TOKEN=
+
+# Coordinator ingest endpoint (host:port).
+#WEFT_ENDPOINT=ingest.w3ft.net:9020
+
+# App name used to tag emitted log rows. Defaults to "unknown".
+#WEFT_APP=myapp
+
+# systemd unit to tail. Defaults to ${WEFT_APP}.service.
+#WEFT_UNIT=myapp.service
+
+# File path or glob of log files to tail.
+# Multiple globs can be specified space-separated.
+#WEFT_LOG_PATH=/var/log/myapp/*.log
+
+# Logical host-group tag stamped on every emitted row. Use this to
+# distinguish classes of hosts that share a token (e.g. "web", "worker",
+# "edge-us-east"). Leaving this unset is fine for single-group installs.
+#WEFT_HOST_GROUP=
+
+# Enable periodic system metrics collection (cpu / memory / disk / load / network).
+#WEFT_METRICS=false
+#WEFT_METRICS_INTERVAL=30s
+
+# Unix socket for local line ingest (applications can write log lines to it).
+#WEFT_SOCKET=/var/run/weftd/weftd.sock
