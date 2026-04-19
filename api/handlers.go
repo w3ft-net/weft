@@ -9,7 +9,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"github.com/kevlarcon/weft/config"
 
 	"github.com/google/uuid"
 	"github.com/stripe/stripe-go/v82"
@@ -51,6 +54,29 @@ type Server struct {
 	// Slack OAuth config
 	SlackClientID     string
 	SlackClientSecret string
+
+	// Runtime config pointer — populated in Handler() via SetConfig.
+	// Serves both rate-limit middleware and body-cap sizing. Nil means
+	// dev/test mode: defaults apply, no live refresh.
+	cfgPtr  *atomic.Pointer[config.Runtime]
+	limiter *limiter
+}
+
+// SetConfig wires a live runtime-config pointer to the server. The
+// API main binary calls this right after NewServer with the watcher
+// from config.Watch. Tests can omit it and get compile-time defaults.
+func (s *Server) SetConfig(ptr *atomic.Pointer[config.Runtime]) {
+	s.cfgPtr = ptr
+	s.limiter = newLimiter(ptr)
+}
+
+// currentConfig returns the live runtime config, falling back to
+// defaults if SetConfig was never called (tests, dev).
+func (s *Server) currentConfig() *config.Runtime {
+	if s.cfgPtr == nil {
+		return config.Defaults()
+	}
+	return s.cfgPtr.Load()
 }
 
 // apiBaseURL returns the API's own external URL (e.g., https://api.w3ft.net).
@@ -142,13 +168,35 @@ func (s *Server) sweepUnverified() {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// Public routes (no auth).
-	mux.HandleFunc("POST /api/auth/login", s.handleLogin)
-	mux.HandleFunc("POST /api/auth/signup", s.handleSignup)
-	mux.HandleFunc("POST /api/auth/verify", s.handleVerify)
-	mux.HandleFunc("POST /api/auth/device", s.handleDeviceInit)
-	mux.HandleFunc("POST /api/auth/device/poll", s.handleDevicePoll)
-	mux.HandleFunc("POST /api/billing/webhook", s.handleStripeWebhook)
+	// If a runtime-config pointer hasn't been installed, run with
+	// compile-time defaults for the lifetime of this handler. The
+	// limiter then tracks a never-changing config snapshot — fine for
+	// tests.
+	if s.limiter == nil {
+		fallback := new(atomic.Pointer[config.Runtime])
+		fallback.Store(config.Defaults())
+		s.cfgPtr = fallback
+		s.limiter = newLimiter(fallback)
+	}
+	cfg := s.currentConfig()
+
+	// guarded stacks body-cap + rate-limit on a public endpoint. Body
+	// caps come first so oversize requests don't even touch the
+	// limiter's bucket state.
+	guarded := func(route RouteLimit, bodyMax int64, h http.HandlerFunc) http.Handler {
+		return BodyCap(bodyMax, s.limiter.RateLimit(route, h))
+	}
+
+	// Public routes (no auth) — each guarded per the audit §1 budgets.
+	mux.Handle("POST /api/auth/login", guarded(LimitLogin, cfg.AuthBodyMax, s.handleLogin))
+	mux.Handle("POST /api/auth/signup", guarded(LimitAnonAuth, cfg.AuthBodyMax, s.handleSignup))
+	mux.Handle("POST /api/auth/verify", guarded(LimitAnonAuth, cfg.AuthBodyMax, s.handleVerify))
+	mux.Handle("POST /api/auth/device", guarded(LimitAnonAuth, cfg.AuthBodyMax, s.handleDeviceInit))
+	mux.Handle("POST /api/auth/device/poll", guarded(LimitDevicePoll, cfg.AuthBodyMax, s.handleDevicePoll))
+	// Stripe handles its own body parsing + webhook-secret verification;
+	// only the rate limit is added here (Stripe retries with backoff on
+	// 429, so this is safe).
+	mux.Handle("POST /api/billing/webhook", s.limiter.RateLimit(LimitStripeWebhook, http.HandlerFunc(s.handleStripeWebhook)))
 
 	// Authenticated routes.
 	// protected wraps a handler in RequireEmailVerified. Used for routes
@@ -177,14 +225,14 @@ func (s *Server) Handler() http.Handler {
 	auth.Handle("DELETE /api/tokens/{id}", protected(s.handleRevokeToken))
 	auth.HandleFunc("GET /api/apps", s.handleListApps)
 	auth.HandleFunc("GET /api/ingestion-status", s.handleIngestionStatus)
-	auth.HandleFunc("POST /api/shell/exec", s.handleShellExec)
+	auth.Handle("POST /api/shell/exec", BodyCapFunc(cfg.ShellExecBodyMax, s.handleShellExec))
 	auth.HandleFunc("GET /api/functions", s.handleListFunctions)
 	auth.HandleFunc("GET /api/functions/{name}", s.handleGetFunction)
-	auth.Handle("PUT /api/functions/{name}", protected(s.handleSaveFunction))
+	auth.Handle("PUT /api/functions/{name}", BodyCap(cfg.FunctionBodyMax, protected(s.handleSaveFunction)))
 	auth.Handle("DELETE /api/functions/{name}", protected(s.handleDeleteFunction))
 	auth.HandleFunc("GET /api/watches", s.handleListWatches)
 	auth.HandleFunc("GET /api/watches/{name}", s.handleGetWatch)
-	auth.Handle("PUT /api/watches/{name}", protected(s.handleSaveWatch))
+	auth.Handle("PUT /api/watches/{name}", BodyCap(cfg.WatchBodyMax, protected(s.handleSaveWatch)))
 	auth.Handle("DELETE /api/watches/{name}", protected(s.handleDeleteWatch))
 	auth.HandleFunc("GET /api/watches/{name}/results", s.handleWatchResults)
 	auth.HandleFunc("GET /api/integrations", s.handleListIntegrations)
@@ -212,7 +260,7 @@ func (s *Server) Handler() http.Handler {
 	auth.Handle("DELETE /api/sources/{namespace}/{app}", protected(s.handleDeleteSource))
 
 	// Public routes (no auth).
-	mux.HandleFunc("POST /api/team/accept", s.handleAcceptInvite)
+	mux.Handle("POST /api/team/accept", guarded(LimitAnonAuth, cfg.AuthBodyMax, s.handleAcceptInvite))
 	mux.HandleFunc("GET /api/integrations/slack/callback", s.handleSlackCallback)
 
 	// Agent-facing routes (agent token auth).

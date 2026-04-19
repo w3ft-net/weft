@@ -12,12 +12,15 @@ import (
 	"runtime"
 	"strings"
 
+	"time"
+
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"google.golang.org/grpc"
 
 	"github.com/kevlarcon/weft/auth"
 	"github.com/kevlarcon/weft/compute"
+	weftcfg "github.com/kevlarcon/weft/config"
 	"github.com/kevlarcon/weft/coordinator"
 	"github.com/kevlarcon/weft/coordinator/discovery"
 	"github.com/kevlarcon/weft/coordinator/poller"
@@ -311,17 +314,32 @@ func main() {
 		"/weft.WeftCoordinator/Heartbeat":       true,
 	}
 
+	// Runtime config watcher — powers IngestStream's per-stream byte
+	// budget via an atomic pointer the service reads on every accepted
+	// stream. GRPCMaxRecvBytes is read exactly once here because gRPC's
+	// MaxRecvMsgSize is a ServerOption evaluated at NewServer time.
+	appName := os.Getenv("APP_NAME")
+	if appName == "" {
+		appName = "weft"
+	}
+	cfgCtx, cfgCancel := context.WithCancel(context.Background())
+	defer cfgCancel()
+	cfgPtr := weftcfg.Watch(cfgCtx, appName, 60*time.Second)
+	bootCfg := cfgPtr.Load()
+
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 	srv := grpc.NewServer(
+		grpc.MaxRecvMsgSize(bootCfg.GRPCMaxRecvBytes),
 		grpc.UnaryInterceptor(auth.UnaryServerInterceptor(jwtSecret, skip)),
 		grpc.StreamInterceptor(auth.StreamServerInterceptor(jwtSecret, skip)),
 	)
 	pb.RegisterWeftCoordinatorServer(srv, &coordsvc.Server{
-		Coord: coord,
-		Store: db,
+		Coord:  coord,
+		Store:  db,
+		CfgPtr: cfgPtr,
 	})
 
 	log.Printf("coordinator listening on :%d (%d shards, customer=%s)", *port, len(shards), *customer)

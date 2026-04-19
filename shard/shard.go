@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -155,7 +156,15 @@ func (s *DuckDBShard) ExportToS3Parquet(s3Path string, cfg *S3Config) error {
 // Query executes a SQL query and returns the matching result rows.
 // The SQL is expected to return (line_num, raw) — two columns.
 func (s *DuckDBShard) Query(query string) ([]*pb.ResultRow, error) {
-	sqlRows, err := s.db.Query(query)
+	return s.QueryContext(context.Background(), query)
+}
+
+// QueryContext is Query with a deadline. The DuckDB Go driver honors
+// context cancellation at row boundaries, so a context timeout trims
+// pathological long-running queries (the main motivation for the
+// SHARD_QUERY_TIMEOUT_SECONDS runtime config).
+func (s *DuckDBShard) QueryContext(ctx context.Context, query string) ([]*pb.ResultRow, error) {
+	sqlRows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("query shard %s: %w", s.id, err)
 	}

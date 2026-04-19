@@ -6,8 +6,10 @@ import (
 	"io"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	weftcfg "github.com/kevlarcon/weft/config"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
@@ -35,6 +37,19 @@ type Server struct {
 	// server is in test/in-process mode with no persistence.
 	dataDir string
 	dbPath  string
+
+	// CfgPtr holds the live runtime config. Consulted by Query to pick
+	// up the current SHARD_QUERY_TIMEOUT_SECONDS on every request. Nil
+	// in tests / in-process mode — runtimeCfg falls through to
+	// compile-time defaults.
+	CfgPtr *atomic.Pointer[weftcfg.Runtime]
+}
+
+func (s *Server) runtimeCfg() *weftcfg.Runtime {
+	if s.CfgPtr == nil {
+		return weftcfg.Defaults()
+	}
+	return s.CfgPtr.Load()
 }
 
 // NewServer wraps an already-open DuckDBShard. Used by in-process tests
@@ -169,12 +184,24 @@ func (s *Server) Configure(_ context.Context, req *pb.ConfigureRequest) (*pb.Con
 }
 
 // Query executes SQL and streams result rows (line_num, raw) to the client.
+// Per-request deadline from the runtime config caps pathological queries
+// (deep OR chains, raw LIKE '%...%' across billions of rows) — DuckDB
+// honors ctx cancellation at row boundaries.
 func (s *Server) Query(req *pb.QueryRequest, stream pb.ShardQuery_QueryServer) error {
 	ds, err := s.getShard()
 	if err != nil {
 		return err
 	}
-	rows, err := ds.Query(req.Sql)
+
+	timeoutSec := s.runtimeCfg().ShardQueryTimeoutSeconds
+	ctx := stream.Context()
+	if timeoutSec > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+		defer cancel()
+	}
+
+	rows, err := ds.QueryContext(ctx, req.Sql)
 	if err != nil {
 		log.Printf("shard %s: query error: %v (sql=%s)", s.id, err, req.Sql)
 		return err

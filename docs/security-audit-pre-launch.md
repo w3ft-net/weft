@@ -9,15 +9,17 @@ for signup), `8315d9c` (coordinator gRPC JWT interceptor), `eca7eb7`
 for api/weftd/shard paths), `30af7ae` (per-shard Heartbeat bearer
 token), `eaf636e` (shared SHARD_SECRET bearer on every coord→shard
 call; rogue-reach attacks on :9000 closed), `5485495` (magic-link
-atomic UPDATE ... RETURNING + sha256 at rest), and the agent-token-hash
-commit landing now (sha256(token) at rest + short Prefix for display;
-GitHub-PAT style one-time reveal; revoke-by-id). Items struck from the
-doc; everything still here is unfixed.
-**Verdict**: **Every critical cross-tenant path is closed, plus the
-critical at-rest plaintext path.** The remaining findings are
-medium-severity hardening (rate limits, JWT hygiene, CORS) — none are
-standalone data-exfil vectors post-fix. Launching is now a product
-decision, not a security one; still land the highs before scaling.
+atomic UPDATE ... RETURNING + sha256 at rest), `2ef4e8b` (agent-token
+sha256 at rest; GitHub-PAT reveal-once UX; revoke-by-id), and the
+rate-limits commit landing now (per-IP token buckets on anonymous
+HTTP; body caps; gRPC MaxRecvMsgSize + IngestStream budget; shard
+Query deadline — all SSM-tunable via the kevcons /weft/config/app
+blob with 60s refresh). Items struck from the doc; everything still
+here is unfixed.
+**Verdict**: **All high-severity findings closed.** What remains is
+medium hardening (JWT hygiene, CORS dev-origin allowlist). Launch is a
+product decision; the remaining mediums can ship on a normal release
+cadence.
 
 ---
 
@@ -25,31 +27,14 @@ decision, not a security one; still land the highs before scaling.
 
 | # | Severity | Finding | Why it matters |
 |---|---|---|---|
-| 1 | **High** | `/api/auth/device/poll` unauthenticated with no rate limit + 128-bit device code | DoS + narrows the window for any future code-entropy regression |
-| 2 | **Medium** | JWT 30-day expiry, no revocation list, stored in `localStorage` | XSS → month-long account takeover |
-| 3 | **Medium** | Production CORS silently allows `localhost:5173/5174/3000` | Subtle token-leakage path if a dev loopback is ever reachable |
+| 1 | **Medium** | JWT 30-day expiry, no revocation list, stored in `localStorage` | XSS → month-long account takeover |
+| 2 | **Medium** | Production CORS silently allows `localhost:5173/5174/3000` | Subtle token-leakage path if a dev loopback is ever reachable |
 
 The details below back each of these with file/line references and, where relevant, a working exploit payload.
 
 ---
 
-## 1. Rate-limiting and abuse controls — absent everywhere  **[HIGH]**
-
-Nothing in `api/`, `coordinator/service/`, or `shard/service/` implements rate limiting, request-size caps, or query timeouts. Concrete issues:
-
-- `POST /api/auth/login` (`api/handlers.go:182`): one magic-link email per request, unlimited requests. Attacker spams a victim's inbox; Sendgrid quota drains; victim's mail server may reject future real mail as spam.
-- `POST /api/auth/device/poll` (`api/handlers.go:1434`): unauthenticated, unrated. An attacker who learns (or guesses) a 128-bit device code gets the JWT forever. Today the code entropy is high enough — but the endpoint being unrated means any future regression (shorter codes, predictable seeding) goes straight to exploit with no detection.
-- `grpc.NewServer()` with default message size (4 MiB per message) — but `IngestStream` accumulates rows into an unbounded slice in `coordinator/service/server.go:333-362` with no per-row or per-stream byte cap. A malicious agent can OOM the coordinator.
-- `Shard.Query` has no context deadline (`shard/service/server.go:160`). A pathological pushdown (deep `OR`-chain, `raw LIKE '%…%'` on billions of rows) runs until the shard OOMs.
-- `POST /api/shell/exec` pipelines aren't length-limited, and neither are saved shell functions (`PUT /api/functions/{name}`) or watch pipelines (`PUT /api/watches/{name}`).
-
-### Fix
-
-Standard per-IP / per-customer rate-limit middleware on the api (use `golang.org/x/time/rate`). gRPC `MaxRecvMsgSize(32*MiB)` + per-stream byte budget for `IngestStream`. Add a 30s default context deadline on shard `Query` via `context.WithTimeout`. Cap free-text request bodies at sensible upper bounds (1 MiB for pipelines, 10 MiB for shell functions).
-
----
-
-## 2. JWT hygiene  **[MEDIUM]**
+## 1. JWT hygiene  **[MEDIUM]**
 
 `api/auth.go:27-82`
 
@@ -68,7 +53,7 @@ Reduce expiry to 1h; add refresh tokens stored server-side with rotation on use;
 
 ---
 
-## 3. CORS and CSRF  **[MEDIUM]**
+## 2. CORS and CSRF  **[MEDIUM]**
 
 `api/middleware.go:83-108`
 
@@ -90,7 +75,7 @@ Gate the localhost origins on `os.Getenv("WEFT_ENV") == "dev"`. Explicitly set `
 
 ---
 
-## 4. Miscellaneous findings  **[LOW – MEDIUM]**
+## 3. Miscellaneous findings  **[LOW – MEDIUM]**
 
 - **`InjectCustomer` substring match.** `planner/sql.go:76` uses `strings.Contains(sql, " WHERE ")` to decide where to insert the customer predicate, and the value is interpolated via `fmt.Sprintf`. Safe today — the planner never produces `" WHERE "` as a substring of any `rawExpr` or predicate, and the allowlist in `coordinator.Query` gates the app name upstream — but brittle. A future change that puts user data inside a string literal containing ` WHERE ` would silently misplace the predicate. Move to an AST-level SQL build with parameterized literals.
 - **`SeedDevAgentToken`** (`store/token.go`) writes a known token whenever `--customer` is passed. The row now holds only the hash so a prod DB dump won't reveal a usable secret — but the known raw value (`wft_dev_0000000000000000`) is still the valid credential, so the seed path must not run against a prod DSN. Gate on `WEFT_ENV=dev` or equivalent.
@@ -105,20 +90,17 @@ Gate the localhost origins on `os.Getenv("WEFT_ENV") == "dev"`. Explicitly set `
 
 ## Recommended pre-launch punch list
 
-Blocking (must land before opening signups):
+No blocking items remain. Strongly recommended before first paying customer:
 
-1. gRPC `MaxRecvMsgSize` + per-stream byte budget; 30s default query deadline; rate limits on `/api/auth/login`, `/api/auth/device/poll`, and the anonymous Stripe webhook path (already length-capped, good).
+1. TLS (preferably mTLS) on every inter-service gRPC channel — today the shared-bearer-token flows on plaintext TCP inside the VPC, so a compromised VPC peer can sniff rows in transit. Bearer is defense-in-depth on auth, not on confidentiality.
+2. JWT expiry ≤ 1h with refresh tokens; add `iss`/`aud`; add a token revocation check tied to team-member removal.
+3. Production-only CORS allowlist.
+4. Follow-up on migration 015's grandfather clause — once the shard fleet has rolled, add a follow-up migration that NOT-NULLs `shard_records.heartbeat_token` and tightens the Heartbeat handler to reject tokenless shards. Today's code accepts them during the transition window.
+5. SHARD_SECRET rotation plan. Currently a static env var; in prod it's populated by SSM/Secrets Manager. Document the rotate-and-redeploy procedure (roll coord first with dual-accept, then roll shards, then roll coord to new-only) before rotating becomes necessary.
+6. Gate `SeedDevAgentToken` on a `WEFT_ENV=dev` check; the known raw token value is still a valid credential for any row that carries its hash.
+7. Retire or regen the dead coordinator gRPC `ListTokens`/`RevokeToken` RPCs and `TokenInfo.token` field — after the CLI migration (`eca7eb7`) nothing calls them; the current implementation populates `Token` with `Prefix` as a harmless placeholder until the proto is updated.
+8. Trusted-proxy CIDR tuning. The rate-limit middleware uses `RATELIMIT_TRUSTED_PROXY_CIDRS` to decide whether to honor `X-Forwarded-For`. The default `10.0.0.0/8` covers most VPC ranges but should be tightened to the ALB's actual subnet once the prod VPC is final — otherwise one attacker who compromises any `10.x` host can spoof their rate-limit key.
 
-Strongly recommended before first paying customer:
-
-2. TLS (preferably mTLS) on every inter-service gRPC channel — today the shared-bearer-token flows on plaintext TCP inside the VPC, so a compromised VPC peer can sniff rows in transit. Bearer is defense-in-depth on auth, not on confidentiality.
-3. JWT expiry ≤ 1h with refresh tokens; add `iss`/`aud`; add a token revocation check tied to team-member removal.
-4. Production-only CORS allowlist.
-5. Follow-up on migration 015's grandfather clause — once the shard fleet has rolled, add a follow-up migration that NOT-NULLs `shard_records.heartbeat_token` and tightens the Heartbeat handler to reject tokenless shards. Today's code accepts them during the transition window.
-6. SHARD_SECRET rotation plan. Currently a static env var; in prod it's populated by SSM/Secrets Manager. Document the rotate-and-redeploy procedure (roll coord first with dual-accept, then roll shards, then roll coord to new-only) before rotating becomes necessary.
-7. Gate `SeedDevAgentToken` on a `WEFT_ENV=dev` check; the known raw token value is still a valid credential for any row that carries its hash.
-8. Retire or regen the dead coordinator gRPC `ListTokens`/`RevokeToken` RPCs and `TokenInfo.token` field — after the CLI migration (`eca7eb7`) nothing calls them; the current implementation populates `Token` with `Prefix` as a harmless placeholder until the proto is updated.
-
-Everything else on this list is follow-up hardening that can ship on a normal release cadence once the above is done.
+Everything else on this list is follow-up hardening that can ship on a normal release cadence.
 
 — end of audit —
