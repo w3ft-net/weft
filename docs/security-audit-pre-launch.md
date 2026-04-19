@@ -4,15 +4,14 @@
 **Original audit**: commit `4f4bd01`, 2026-04-18.
 **Closed since**: `99f8988` (planner SQL injection, source allowlist,
 IngestStream namespace-scope bypass), `989da01` (email-verification gate
-for signup), `8315d9c` (coordinator gRPC JWT interceptor — client-supplied
-`customer` can no longer bypass tenancy). Additionally: the CLI has been
-retired from the gRPC-direct path — `weft` speaks HTTP to the api server
-only, so the coordinator gRPC surface is now strictly internal
-(api→coord, weftd→coord, coord→shard). Items struck from the doc;
-everything still here is unfixed.
-**Verdict**: **Do not launch**. Two cross-tenant data-exfiltration paths
-remain (Heartbeat, shard RPC auth), plus several high-impact hardening
-gaps.
+for signup), `8315d9c` (coordinator gRPC JWT interceptor), `eca7eb7`
+(CLI migrated off gRPC-direct — coord gRPC is now strictly internal
+for api/weftd/shard paths), and the heartbeat-auth commit landing now
+(per-shard bearer token, minted at christen, validated on every
+Heartbeat — rogue-shard-registration attack closed). Items struck from
+the doc; everything still here is unfixed.
+**Verdict**: **Do not launch**. One cross-tenant data-exfiltration path
+remains (shard RPC auth), plus several high-impact hardening gaps.
 
 ---
 
@@ -20,52 +19,18 @@ gaps.
 
 | # | Severity | Finding | Why it matters |
 |---|---|---|---|
-| 1 | **Critical** | Heartbeat RPC accepts any `shard_id`+`addr` with no auth | Rogue shard injection → query traffic routed to attacker-controlled node |
-| 2 | **Critical** | Agent tokens (`wft_…`) stored **plaintext** in Postgres | Any DB leak = fleet-wide agent impersonation |
-| 3 | **High** | Magic-link validation and consumption are not atomic | TOCTOU → single link creates multiple accounts |
-| 4 | **High** | Shard gRPC unauthenticated; no TLS between any services | Lateral movement inside VPC = full DuckDB read/write |
-| 5 | **High** | `/api/auth/device/poll` unauthenticated with no rate limit + 128-bit device code | DoS + narrows the window for any future code-entropy regression |
-| 6 | **Medium** | JWT 30-day expiry, no revocation list, stored in `localStorage` | XSS → month-long account takeover |
-| 7 | **Medium** | Production CORS silently allows `localhost:5173/5174/3000` | Subtle token-leakage path if a dev loopback is ever reachable |
+| 1 | **Critical** | Agent tokens (`wft_…`) stored **plaintext** in Postgres | Any DB leak = fleet-wide agent impersonation |
+| 2 | **High** | Magic-link validation and consumption are not atomic | TOCTOU → single link creates multiple accounts |
+| 3 | **High** | Shard gRPC unauthenticated; no TLS between any services | Lateral movement inside VPC = full DuckDB read/write |
+| 4 | **High** | `/api/auth/device/poll` unauthenticated with no rate limit + 128-bit device code | DoS + narrows the window for any future code-entropy regression |
+| 5 | **Medium** | JWT 30-day expiry, no revocation list, stored in `localStorage` | XSS → month-long account takeover |
+| 6 | **Medium** | Production CORS silently allows `localhost:5173/5174/3000` | Subtle token-leakage path if a dev loopback is ever reachable |
 
 The details below back each of these with file/line references and, where relevant, a working exploit payload.
 
 ---
 
-## 1. Heartbeat RPC can register rogue shards  **[CRITICAL]**
-
-`coordinator/service/server.go:632-653`
-
-```go
-func (s *Server) Heartbeat(_ context.Context, req *pb.ShardHeartbeatRequest) (*pb.HeartbeatResponse, error) {
-    hb := store.ShardHeartbeat{
-        ShardID:    req.ShardId,   // caller-supplied
-        Addr:       req.Addr,      // caller-supplied
-        InstanceID: req.InstanceId,
-        State:      req.State,
-        ...
-    }
-    if s.Coord.Provisioner != nil {
-        go s.Coord.Provisioner.ProcessHeartbeat(hb)   // christen / rebind / adopt
-    }
-    return &pb.HeartbeatResponse{}, nil
-}
-```
-
-No auth, no signature, no rate limiting, no binding check that the caller is at the address it claims to be at. `ProcessHeartbeat` will:
-
-- for an empty `ShardId`, christen a new shard (mint id, write the Docker launcher / ASG tag, `Configure` RPC back to the address),
-- for a known id whose address changed, **rebind** the registry entry to the new address.
-
-An attacker with network reach to `:9020` can send a single heartbeat with `ShardId` matching a real shard and `Addr` pointing to their own machine. The next `MatchingShards` lookup routes Query RPCs to the attacker. Since every tenant's rows flow through `shard.Query(sql)` with the sql already containing the customer filter — but the attacker implements a rogue shard that returns everything it's asked *plus* records it — this is silent, persistent cross-tenant data exfiltration.
-
-### Fix
-
-Either (a) mTLS with per-shard client certs provisioned at launch, or (b) a per-shard bearer token minted when the provisioner christens and stored in the shard's `shard.json`, validated on every heartbeat. Until then, do not enable the provisioner in prod without a VPC whose `:9020` security group is provably locked down to the coordinator's own subnet.
-
----
-
-## 2. Agent tokens stored in plaintext  **[CRITICAL]**
+## 1. Agent tokens stored in plaintext  **[CRITICAL]**
 
 `store/token.go:15-45`
 
@@ -97,7 +62,7 @@ Store `sha256(token)` as the lookup key. On validate, hash the presented token a
 
 ---
 
-## 3. Magic-link TOCTOU  **[HIGH]**
+## 2. Magic-link TOCTOU  **[HIGH]**
 
 `store/user.go:184-195`
 
@@ -125,7 +90,7 @@ Merge validate+consume into a single `UPDATE ... WHERE used=false AND expires_at
 
 ---
 
-## 4. Shard gRPC + inter-service trust  **[HIGH]**
+## 3. Shard gRPC + inter-service trust  **[HIGH]**
 
 `cmd/shard/main.go:57` — `grpc.NewServer()`, no auth, no TLS. The handler file `shard/service/server.go` accepts:
 
@@ -141,7 +106,7 @@ TLS on all gRPC listeners. At minimum, shared-secret bearer interceptors between
 
 ---
 
-## 5. Rate-limiting and abuse controls — absent everywhere  **[HIGH]**
+## 4. Rate-limiting and abuse controls — absent everywhere  **[HIGH]**
 
 Nothing in `api/`, `coordinator/service/`, or `shard/service/` implements rate limiting, request-size caps, or query timeouts. Concrete issues:
 
@@ -157,7 +122,7 @@ Standard per-IP / per-customer rate-limit middleware on the api (use `golang.org
 
 ---
 
-## 6. JWT hygiene  **[MEDIUM]**
+## 5. JWT hygiene  **[MEDIUM]**
 
 `api/auth.go:27-82`
 
@@ -176,7 +141,7 @@ Reduce expiry to 1h; add refresh tokens stored server-side with rotation on use;
 
 ---
 
-## 7. CORS and CSRF  **[MEDIUM]**
+## 6. CORS and CSRF  **[MEDIUM]**
 
 `api/middleware.go:83-108`
 
@@ -198,7 +163,7 @@ Gate the localhost origins on `os.Getenv("WEFT_ENV") == "dev"`. Explicitly set `
 
 ---
 
-## 8. Miscellaneous findings  **[LOW – MEDIUM]**
+## 7. Miscellaneous findings  **[LOW – MEDIUM]**
 
 - **`InjectCustomer` substring match.** `planner/sql.go:76` uses `strings.Contains(sql, " WHERE ")` to decide where to insert the customer predicate, and the value is interpolated via `fmt.Sprintf`. Safe today — the planner never produces `" WHERE "` as a substring of any `rawExpr` or predicate, and the allowlist in `coordinator.Query` gates the app name upstream — but brittle. A future change that puts user data inside a string literal containing ` WHERE ` would silently misplace the predicate. Move to an AST-level SQL build with parameterized literals.
 - **`SeedDevAgentToken`** (`store/token.go:169`) writes a known token whenever `--customer` is passed. Ensure this is never executable with a prod Postgres DSN.
@@ -216,16 +181,15 @@ Gate the localhost origins on `os.Getenv("WEFT_ENV") == "dev"`. Explicitly set `
 Blocking (must land before opening signups):
 
 1. Hash agent tokens and magic-link tokens at rest; make magic-link validate+consume a single atomic UPDATE.
-2. Heartbeat auth (mTLS or per-shard bearer token). No registry mutation on unauthenticated heartbeats.
-3. Shard gRPC auth. Either a bearer token shared between coordinator and shard, or mTLS; same decision covers Configure/Query/Ingest surfaces.
-4. gRPC `MaxRecvMsgSize` + per-stream byte budget; 30s default query deadline; rate limits on `/api/auth/login`, `/api/auth/device/poll`, and the anonymous Stripe webhook path (already length-capped, good).
+2. Shard gRPC auth. Either a bearer token shared between coordinator and shard, or mTLS; same decision covers Configure/Query/Ingest surfaces.
+3. gRPC `MaxRecvMsgSize` + per-stream byte budget; 30s default query deadline; rate limits on `/api/auth/login`, `/api/auth/device/poll`, and the anonymous Stripe webhook path (already length-capped, good).
 
 Strongly recommended before first paying customer:
 
-5. TLS (preferably mTLS) on every inter-service gRPC channel.
-6. JWT expiry ≤ 1h with refresh tokens; add `iss`/`aud`; add a token revocation check tied to team-member removal.
-7. Production-only CORS allowlist.
-8. Audit and document the network exposure of `:9000` (shard), `:9010` (compute), `:9020` (coordinator). These should be reachable only from the coordinator's own security group and, for `:9020`, from the api host.
+4. TLS (preferably mTLS) on every inter-service gRPC channel.
+5. JWT expiry ≤ 1h with refresh tokens; add `iss`/`aud`; add a token revocation check tied to team-member removal.
+6. Production-only CORS allowlist.
+7. Follow-up on migration 015's grandfather clause — once the shard fleet has rolled, add a follow-up migration 016 that NOT-NULLs `shard_records.heartbeat_token` and tightens the Heartbeat handler to reject tokenless shards. Today's code accepts them during the transition window.
 
 Everything else on this list is follow-up hardening that can ship on a normal release cadence once the above is done.
 

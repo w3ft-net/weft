@@ -17,10 +17,11 @@ const identityFilename = "shard.json"
 // Written by the Configure RPC, read by the shard process at startup.
 // Source of truth when an instance restarts against an existing EBS volume.
 type Identity struct {
-	ShardID     string    `json:"shard_id"`
-	WindowStart time.Time `json:"window_start"`
-	WindowEnd   time.Time `json:"window_end"`
-	Apps        []string  `json:"apps"`
+	ShardID        string    `json:"shard_id"`
+	WindowStart    time.Time `json:"window_start"`
+	WindowEnd      time.Time `json:"window_end"`
+	Apps           []string  `json:"apps"`
+	HeartbeatToken string    `json:"heartbeat_token,omitempty"`
 }
 
 // LoadIdentity reads shard.json from dataDir. Returns (nil, nil) when the

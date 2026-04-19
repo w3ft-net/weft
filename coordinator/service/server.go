@@ -770,7 +770,20 @@ func (s *Server) DeleteWatch(ctx context.Context, req *pb.DeleteWatchRequest) (*
 // heartbeat for the provisioner's tick-based reconciliation pass,
 // and also drives christen / rebind / adopt directly so state
 // transitions don't wait up to PollInterval for the next tick.
-func (s *Server) Heartbeat(_ context.Context, req *pb.ShardHeartbeatRequest) (*pb.HeartbeatResponse, error) {
+//
+// Empty ShardId heartbeats are the christen bootstrap: the shard has
+// no identity yet, so it cannot yet hold a heartbeat token. These pass
+// through without auth so the provisioner can mint an id + token and
+// hand them back via Configure. For known shards, the heartbeat's
+// authorization metadata must carry the per-shard token the coordinator
+// minted at christen, validated here in constant time.
+func (s *Server) Heartbeat(ctx context.Context, req *pb.ShardHeartbeatRequest) (*pb.HeartbeatResponse, error) {
+	if req.ShardId != "" {
+		if err := s.authenticateHeartbeat(ctx, req.ShardId); err != nil {
+			return nil, err
+		}
+	}
+
 	hb := store.ShardHeartbeat{
 		ShardID:    req.ShardId,
 		Addr:       req.Addr,
@@ -791,6 +804,38 @@ func (s *Server) Heartbeat(_ context.Context, req *pb.ShardHeartbeatRequest) (*p
 		go s.Coord.Provisioner.ProcessHeartbeat(hb)
 	}
 	return &pb.HeartbeatResponse{}, nil
+}
+
+// authenticateHeartbeat validates the bearer token attached to an
+// incoming Heartbeat for a known shard. Returns Unauthenticated on
+// mismatch; accepts any token for shards whose HeartbeatToken is still
+// empty in the registry (grandfathered pre-migration-015 entries) and
+// logs a warning so we can see the tail of the rollout.
+func (s *Server) authenticateHeartbeat(ctx context.Context, shardID string) error {
+	entry := s.Coord.Registry.Get(shardID)
+	if entry == nil {
+		// Unknown shard id — not necessarily an attack; the provisioner
+		// may adopt it on the ProcessHeartbeat path. Let it through so
+		// legacy rebind behaviour is preserved; future tightening can
+		// reject here once we've confirmed no legitimate flow relies on
+		// an unknown id.
+		return nil
+	}
+	if entry.HeartbeatToken == "" {
+		log.Printf("heartbeat: %s has no stored token (pre-015 shard); accepting", shardID)
+		return nil
+	}
+
+	md, _ := metadata.FromIncomingContext(ctx)
+	values := md.Get("authorization")
+	if len(values) == 0 {
+		return status.Errorf(codes.Unauthenticated, "heartbeat missing authorization bearer for %s", shardID)
+	}
+	presented := strings.TrimPrefix(values[0], "Bearer ")
+	if !store.ConstantTimeTokenEqual(entry.HeartbeatToken, presented) {
+		return status.Errorf(codes.Unauthenticated, "heartbeat bearer mismatch for %s", shardID)
+	}
+	return nil
 }
 
 // ── Source onboarding ──────────────────────────────────────

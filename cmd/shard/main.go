@@ -14,6 +14,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	shardsvc "github.com/kevlarcon/weft/shard/service"
@@ -168,6 +169,14 @@ func sendHeartbeat(client pb.WeftCoordinatorClient, addr, instanceID string, srv
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	// Attach the per-shard bearer token so the coordinator's Heartbeat
+	// handler can prove this heartbeat came from the real owner of
+	// shardID. Empty token on christen-pending shards is expected — the
+	// coordinator skips auth for empty-ID heartbeats.
+	if tok := srv.HeartbeatToken(); tok != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+tok)
+	}
 
 	if _, err := client.Heartbeat(ctx, req); err != nil {
 		log.Printf("heartbeat: %v", err)

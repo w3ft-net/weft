@@ -39,6 +39,10 @@ type ShardEntry struct {
 	CreatedAt      time.Time
 	EBSVolumeID    string      // EBS volume id for this shard's DuckDB; empty until volume is attached
 	Shard          shard.Shard // live connection (not persisted)
+	// HeartbeatToken is the per-shard bearer the Heartbeat handler
+	// validates against. Minted at christen and persisted via store
+	// so the coordinator can validate heartbeats after restart.
+	HeartbeatToken string
 }
 
 // suspendFailureThreshold is the number of consecutive ingest failures
@@ -120,18 +124,19 @@ func (r *ShardRegistry) persist(entry *ShardEntry) {
 	}
 	appsJSON, _ := json.Marshal(entry.Apps)
 	r.store.SaveShard(&store.ShardRecord{
-		ID:          entry.ID,
-		Apps:        string(appsJSON),
-		WindowStart: entry.WindowStart.Format(time.RFC3339),
-		WindowEnd:   entry.WindowEnd.Format(time.RFC3339),
-		State:       string(entry.State),
-		Addr:        entry.Addr,
-		InstanceID:  entry.InstanceID,
-		ParquetPath: entry.ParquetPath,
-		Tier:        entry.Tier,
-		RowCount:    entry.RowCount,
-		CreatedAt:   entry.CreatedAt.Format(time.RFC3339),
-		EBSVolumeID: entry.EBSVolumeID,
+		ID:             entry.ID,
+		Apps:           string(appsJSON),
+		WindowStart:    entry.WindowStart.Format(time.RFC3339),
+		WindowEnd:      entry.WindowEnd.Format(time.RFC3339),
+		State:          string(entry.State),
+		Addr:           entry.Addr,
+		InstanceID:     entry.InstanceID,
+		ParquetPath:    entry.ParquetPath,
+		Tier:           entry.Tier,
+		RowCount:       entry.RowCount,
+		CreatedAt:      entry.CreatedAt.Format(time.RFC3339),
+		EBSVolumeID:    entry.EBSVolumeID,
+		HeartbeatToken: entry.HeartbeatToken,
 	})
 }
 
@@ -166,19 +171,20 @@ func (r *ShardRegistry) LoadFromStore(reconstruct func(rec store.ShardRecord) (s
 
 		r.mu.Lock()
 		r.entries[rec.ID] = &ShardEntry{
-			ID:          rec.ID,
-			Apps:        apps,
-			WindowStart: windowStart,
-			WindowEnd:   windowEnd,
-			State:       ShardState(rec.State),
-			Addr:        rec.Addr,
-			InstanceID:  rec.InstanceID,
-			ParquetPath: rec.ParquetPath,
-			Tier:        rec.Tier,
-			RowCount:    rec.RowCount,
-			CreatedAt:   createdAt,
-			EBSVolumeID: rec.EBSVolumeID,
-			Shard:       sh,
+			ID:             rec.ID,
+			Apps:           apps,
+			WindowStart:    windowStart,
+			WindowEnd:      windowEnd,
+			State:          ShardState(rec.State),
+			Addr:           rec.Addr,
+			InstanceID:     rec.InstanceID,
+			ParquetPath:    rec.ParquetPath,
+			Tier:           rec.Tier,
+			RowCount:       rec.RowCount,
+			CreatedAt:      createdAt,
+			EBSVolumeID:    rec.EBSVolumeID,
+			Shard:          sh,
+			HeartbeatToken: rec.HeartbeatToken,
 		}
 		r.mu.Unlock()
 	}
