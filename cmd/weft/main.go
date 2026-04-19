@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -943,29 +944,35 @@ func runTokenList(client *shell.HTTPCoordinator) {
 		fmt.Println("No tokens configured.")
 		return
 	}
-	fmt.Printf("%-40s %-15s %-25s %-10s %s\n", "TOKEN", "NAMESPACE", "LABEL", "STATUS", "CREATED")
+	// Raw token isn't available after creation — show ID for revoke and
+	// Prefix so humans can distinguish tokens at a glance.
+	fmt.Printf("%-6s %-14s %-15s %-25s %-10s %s\n", "ID", "PREFIX", "NAMESPACE", "LABEL", "STATUS", "CREATED")
 	for _, t := range tokens {
-		display := t.Token[:12] + "..."
-		fmt.Printf("%-40s %-15s %-25s %-10s %s\n", display, t.Namespace, t.Label, t.Status, t.CreatedAt)
+		fmt.Printf("%-6d %-14s %-15s %-25s %-10s %s\n", t.ID, t.Prefix+"…", t.Namespace, t.Label, t.Status, t.CreatedAt)
 	}
 }
 
 func runTokenRevoke(client *shell.HTTPCoordinator) {
 	args := os.Args[3:]
-	var token string
+	var idStr string
 	for i := 0; i < len(args); i++ {
-		if args[i] == "--token" && i+1 < len(args) {
-			token = args[i+1]
+		if args[i] == "--id" && i+1 < len(args) {
+			idStr = args[i+1]
 			i++
 		}
 	}
-	if token == "" {
-		fmt.Fprintln(os.Stderr, "usage: weft token revoke --token TOKEN")
+	if idStr == "" {
+		fmt.Fprintln(os.Stderr, "usage: weft token revoke --id ID   (see `weft token list`)")
 		os.Exit(1)
 	}
-	if err := client.RevokeToken(token); err != nil {
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid id: %v\n", err)
+		os.Exit(1)
+	}
+	if err := client.RevokeToken(uint(id)); err != nil {
 		fmt.Fprintf(os.Stderr, "revoke token: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Revoked token: %s\n", token[:12]+"...")
+	fmt.Printf("Revoked token id %d\n", id)
 }

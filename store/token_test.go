@@ -23,7 +23,7 @@ func testOpen(t *testing.T) *Store {
 	return tx
 }
 
-func createTestToken(db *Store, custID uint, label string) (*AgentToken, error) {
+func createTestToken(db *Store, custID uint, label string) (string, *AgentToken, error) {
 	ns, _ := db.FindOrCreateNamespace(custID, "test")
 	return db.CreateAgentToken(custID, ns.ID, label)
 }
@@ -36,20 +36,20 @@ func TestUpdateAgentMetricsConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tok, err := createTestToken(db, cust.ID, "test-agent")
+	raw, tok, err := createTestToken(db, cust.ID, "test-agent")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Update metrics config.
-	err = db.UpdateAgentMetricsConfig(tok.Token, true, "15s", []string{"cpu", "memory"})
+	err = db.UpdateAgentMetricsConfig(raw, true, "15s", []string{"cpu", "memory"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Reload and verify.
 	var updated AgentToken
-	db.db.Where("token = ?", tok.Token).First(&updated)
+	db.db.Where("token_hash = ?", tok.TokenHash).First(&updated)
 
 	if !updated.MetricsEnabled {
 		t.Error("expected metrics_enabled=true")
@@ -72,18 +72,18 @@ func TestForecastMetricsUsage(t *testing.T) {
 
 	// Create two tokens with metrics.
 	for _, label := range []string{"agent-1", "agent-2"} {
-		tok, err := createTestToken(db, cust.ID, label)
+		raw, _, err := createTestToken(db, cust.ID, label)
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = db.UpdateAgentMetricsConfig(tok.Token, true, "30s", []string{"cpu", "memory", "disk"})
+		err = db.UpdateAgentMetricsConfig(raw, true, "30s", []string{"cpu", "memory", "disk"})
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// Create one token without metrics (should not count).
-	_, err = createTestToken(db, cust.ID, "agent-no-metrics")
+	_, _, err = createTestToken(db, cust.ID, "agent-no-metrics")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,6 +105,94 @@ func TestForecastMetricsUsage(t *testing.T) {
 	}
 }
 
+// TestAgentToken_HashedAtRest pins the audit-§1 invariant: the raw
+// wft_<...> token must not appear in agent_tokens. Only the hash and
+// the public prefix live in Postgres.
+func TestAgentToken_HashedAtRest(t *testing.T) {
+	db := testOpen(t)
+
+	cust, err := db.FindOrCreateCustomer("agent-hash-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, tok, err := createTestToken(db, cust.ID, "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if raw == "" {
+		t.Fatal("empty raw token")
+	}
+	var row struct {
+		TokenHash string
+		Prefix    string
+	}
+	if err := db.db.Table("agent_tokens").
+		Select("token_hash, prefix").
+		Where("id = ?", tok.ID).
+		Scan(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.TokenHash == raw {
+		t.Fatalf("raw token stored in db: %q", row.TokenHash)
+	}
+	if row.TokenHash != hashAgentToken(raw) {
+		t.Fatalf("stored hash %q != sha256(raw) %q", row.TokenHash, hashAgentToken(raw))
+	}
+	if !stringsHasPrefix(raw, row.Prefix) {
+		t.Fatalf("prefix %q is not a prefix of raw %q", row.Prefix, raw)
+	}
+
+	// Validate round-trips: presenting the raw token hashes in-flight
+	// and finds the row.
+	res, err := db.ValidateAgentToken(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res == nil {
+		t.Fatal("validate: expected hit, got nil")
+	}
+
+	// Random strings don't validate.
+	res, err = db.ValidateAgentToken("wft_not-a-real-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res != nil {
+		t.Fatal("validate: expected miss on bogus token")
+	}
+}
+
+// TestAgentToken_RevokeByID confirms revocation is ID-based and that
+// a revoked token no longer validates.
+func TestAgentToken_RevokeByID(t *testing.T) {
+	db := testOpen(t)
+
+	cust, err := db.FindOrCreateCustomer("agent-revoke-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, tok, err := createTestToken(db, cust.ID, "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.RevokeAgentToken(tok.ID); err != nil {
+		t.Fatal(err)
+	}
+	res, err := db.ValidateAgentToken(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res != nil {
+		t.Fatal("expected validate miss after revoke")
+	}
+}
+
+func stringsHasPrefix(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+}
+
 func TestForecastMetricsUsage_NoMetrics(t *testing.T) {
 	db := testOpen(t)
 
@@ -114,7 +202,7 @@ func TestForecastMetricsUsage_NoMetrics(t *testing.T) {
 	}
 
 	// Token without metrics.
-	_, err = createTestToken(db, cust.ID, "plain-agent")
+	_, _, err = createTestToken(db, cust.ID, "plain-agent")
 	if err != nil {
 		t.Fatal(err)
 	}

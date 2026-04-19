@@ -36,8 +36,12 @@ type SourceInfo struct {
 }
 
 // TokenInfo describes an agent token as returned by GET /api/tokens.
+// The raw token is only present in the POST /api/tokens response; it
+// is never re-served by the API. Callers identify a token by ID for
+// revoke and display Prefix to humans.
 type TokenInfo struct {
-	Token     string `json:"token"`
+	ID        uint   `json:"id"`
+	Prefix    string `json:"prefix"`
 	Label     string `json:"label"`
 	Namespace string `json:"namespace"`
 	Status    string `json:"status"` // "active" | "revoked"
@@ -248,8 +252,8 @@ func (h *HTTPCoordinator) ListTokens(customer string) ([]TokenInfo, error) {
 	return tokens, nil
 }
 
-func (h *HTTPCoordinator) RevokeToken(token string) error {
-	req, _ := http.NewRequest("DELETE", h.baseURL+"/api/tokens/"+token, nil)
+func (h *HTTPCoordinator) RevokeToken(id uint) error {
+	req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/api/tokens/%d", h.baseURL, id), nil)
 	req.Header.Set("Authorization", "Bearer "+h.token)
 
 	resp, err := h.client.Do(req)

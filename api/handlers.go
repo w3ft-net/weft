@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -173,7 +174,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("DELETE /api/queries/{id}", s.handleDeleteQuery)
 	auth.HandleFunc("GET /api/tokens", s.handleListTokens)
 	auth.Handle("POST /api/tokens", protected(s.handleCreateToken))
-	auth.Handle("DELETE /api/tokens/{token}", protected(s.handleRevokeToken))
+	auth.Handle("DELETE /api/tokens/{id}", protected(s.handleRevokeToken))
 	auth.HandleFunc("GET /api/apps", s.handleListApps)
 	auth.HandleFunc("GET /api/ingestion-status", s.handleIngestionStatus)
 	auth.HandleFunc("POST /api/shell/exec", s.handleShellExec)
@@ -998,8 +999,12 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The raw token is never returned from this endpoint — only on
+	// the one-time create response. Callers identify tokens by ID for
+	// revoke and render Prefix for display.
 	type tokenResult struct {
-		Token     string `json:"token"`
+		ID        uint   `json:"id"`
+		Prefix    string `json:"prefix"`
 		Label     string `json:"label"`
 		Namespace string `json:"namespace"`
 		Status    string `json:"status"`
@@ -1012,7 +1017,8 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 			status = "revoked"
 		}
 		out = append(out, tokenResult{
-			Token:     t.Token,
+			ID:        t.ID,
+			Prefix:    t.Prefix,
 			Label:     t.Label,
 			Namespace: t.Namespace.Name,
 			Status:    status,
@@ -1059,24 +1065,39 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	tok, err := s.store.CreateAgentToken(custID, nsObj.ID, req.Label)
+	raw, tok, err := s.store.CreateAgentToken(custID, nsObj.ID, req.Label)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
+	// Raw token is returned here and nowhere else — the UI must
+	// capture it in this response or the user creates a new one.
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"token": tok.Token})
+	json.NewEncoder(w).Encode(map[string]any{
+		"token":      raw,
+		"id":         tok.ID,
+		"prefix":     tok.Prefix,
+		"label":      tok.Label,
+		"namespace":  nsObj.Name,
+		"status":     "active",
+		"created_at": tok.CreatedAt.Format(time.RFC3339),
+	})
 }
 
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
-	token := r.PathValue("token")
-	if token == "" {
-		http.Error(w, "token required", http.StatusBadRequest)
+	idStr := r.PathValue("id")
+	if idStr == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
 
-	if err := s.store.RevokeAgentToken(token); err != nil {
+	if err := s.store.RevokeAgentToken(uint(id)); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

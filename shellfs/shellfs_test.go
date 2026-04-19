@@ -66,11 +66,11 @@ func TestReadFile_EtcUsage_WithMetricsForecast(t *testing.T) {
 
 	// Create an agent with metrics enabled.
 	ns, _ := db.FindOrCreateNamespace(cust.ID, "api")
-	tok, err := db.CreateAgentToken(cust.ID, ns.ID, "metrics-agent")
+	raw, _, err := db.CreateAgentToken(cust.ID, ns.ID, "metrics-agent")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = db.UpdateAgentMetricsConfig(tok.Token, true, "30s", []string{"cpu", "memory"})
+	err = db.UpdateAgentMetricsConfig(raw, true, "30s", []string{"cpu", "memory"})
 	if err != nil {
 		t.Fatal(err)
 	}
