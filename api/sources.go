@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/kevlarcon/weft/ingest"
+	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -216,17 +217,16 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store the configured source. For weftd-sourced logs we don't have
-	// an AWS account/log group — we write a placeholder "agent" account
-	// and mark the LogGroup with source_type=weftd so the poller knows
-	// not to treat it as a CloudWatch target.
-	acct, err := s.store.FindOrCreateAccount(customer.ID, "agent", "", "")
+	// Store the configured source under its namespace. Weftd-sourced logs
+	// don't have an AWS account (that's cloudwatch-only), so account_id
+	// stays nil — NamespaceID carries ownership.
+	ns, err := s.store.GetNamespace(customer.ID, namespace)
 	if err != nil {
-		http.Error(w, "account error: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "namespace not found: "+err.Error(), http.StatusNotFound)
 		return
 	}
 	if err := s.store.AddLogGroup(
-		acct.ID, store.SourceTypeWeftd, fullApp, fullApp,
+		ns.ID, nil, store.SourceTypeWeftd, fullApp, fullApp,
 		"local", string(schemaYAML), "0s",
 	); err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
@@ -242,3 +242,272 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "configured"})
 }
+
+// ── CloudWatch source management (JWT-authenticated) ────────
+
+// handleListSources returns all configured log sources for the caller's
+// customer, optionally filtered to a single namespace via ?namespace=X.
+// Pulled from AllLogGroups directly (not the coordinator gRPC) because the
+// api server owns the store handle and filtering by customer at the DB
+// level is trivial.
+func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	customer, err := s.store.GetCustomerByName(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "customer not found", http.StatusNotFound)
+		return
+	}
+
+	all, err := s.store.AllLogGroups()
+	if err != nil {
+		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	nsFilter := r.URL.Query().Get("namespace")
+
+	type sourceResp struct {
+		Namespace    string `json:"namespace"`
+		App          string `json:"app"`
+		SourceType   string `json:"source_type"`
+		LogGroup     string `json:"log_group"`
+		Region       string `json:"region"`
+		PollInterval string `json:"poll_interval"`
+		Enabled      bool   `json:"enabled"`
+		LastPollAt   string `json:"last_poll_at"`
+		AWSAccountID string `json:"aws_account_id,omitempty"`
+	}
+	out := []sourceResp{}
+	for _, lg := range all {
+		if lg.CustomerName != customer.Name {
+			continue
+		}
+		if nsFilter != "" && lg.NamespaceName != nsFilter {
+			continue
+		}
+		out = append(out, sourceResp{
+			Namespace:    lg.NamespaceName,
+			App:          lg.App,
+			SourceType:   string(lg.SourceType),
+			LogGroup:     lg.LogGroupName,
+			Region:       lg.Region,
+			PollInterval: lg.PollInterval,
+			Enabled:      lg.Enabled,
+			LastPollAt:   lg.LastPollAt,
+			AWSAccountID: lg.AccountID,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+// cloudWatchFormBase carries the fields shared between the sample and
+// add-source flows — the creds/log-group identification. Declared once so
+// both handlers decode the same JSON shape.
+type cloudWatchFormBase struct {
+	Namespace    string `json:"namespace"`
+	App          string `json:"app"`
+	AWSAccountID string `json:"aws_account_id"`
+	RoleARN      string `json:"role_arn"`
+	ExternalID   string `json:"external_id"`
+	LogGroup     string `json:"log_group"`
+	Region       string `json:"region"`
+}
+
+// handleSampleCloudWatchSource proxies to the coordinator's
+// SampleCloudWatchSource RPC so the UI can preview events + a detected
+// schema before committing. Requires the same authorization as creating a
+// source (see handleAddCloudWatchSource).
+func (s *Server) handleSampleCloudWatchSource(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req cloudWatchFormBase
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Namespace == "" || req.LogGroup == "" || req.RoleARN == "" {
+		http.Error(w, "namespace, log_group, and role_arn are required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.authorizeSourceEdit(claims, req.Namespace); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	if s.coordClient == nil {
+		http.Error(w, "coordinator unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	resp, err := s.coordClient.SampleCloudWatchSource(r.Context(), &pb.SampleCloudWatchSourceRequest{
+		Customer:     claims.CustomerName,
+		Namespace:    req.Namespace,
+		LogGroup:     req.LogGroup,
+		Region:       req.Region,
+		AwsAccountId: req.AWSAccountID,
+		RoleArn:      req.RoleARN,
+		ExternalId:   req.ExternalID,
+	})
+	if err != nil {
+		http.Error(w, "sample failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"lines":     resp.Lines,
+		"detection": json.RawMessage(resp.DetectionJson),
+	})
+}
+
+// handleAddCloudWatchSource is the final step of the add-source flow: the
+// user has previewed a sample, confirmed a schema via <SchemaEditor>, and
+// is now committing. Builds the Schema YAML server-side from the submitted
+// form fields rather than trusting a client-supplied YAML blob.
+func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		cloudWatchFormBase
+		PollInterval    string             `json:"poll_interval"`
+		Format          string             `json:"format"`
+		TimestampField  string             `json:"timestamp_field"`
+		TimestampFormat string             `json:"timestamp_format"`
+		LevelField      string             `json:"level_field"`
+		LevelPattern    string             `json:"level_pattern"`
+		ExpandKeys      []ingest.ExpandKey `json:"expand_keys"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Namespace == "" || req.App == "" || req.LogGroup == "" || req.RoleARN == "" {
+		http.Error(w, "namespace, app, log_group, and role_arn are required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.authorizeSourceEdit(claims, req.Namespace); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	if s.coordClient == nil {
+		http.Error(w, "coordinator unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	fullApp := req.Namespace + "/" + req.App
+	schema := &ingest.Schema{
+		App:             fullApp,
+		Customer:        claims.CustomerName,
+		Format:          req.Format,
+		TimestampField:  req.TimestampField,
+		TimestampFormat: req.TimestampFormat,
+		LevelField:      req.LevelField,
+		LevelPattern:    req.LevelPattern,
+		ExpandKeys:      req.ExpandKeys,
+	}
+	schemaYAML, err := schema.ToYAML()
+	if err != nil {
+		http.Error(w, "schema marshal: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if _, err := s.coordClient.AddSource(r.Context(), &pb.AddSourceRequest{
+		Customer:     claims.CustomerName,
+		Namespace:    req.Namespace,
+		App:          fullApp,
+		LogGroup:     req.LogGroup,
+		Region:       req.Region,
+		SchemaYaml:   string(schemaYAML),
+		PollInterval: req.PollInterval,
+		AwsAccountId: req.AWSAccountID,
+		RoleArn:      req.RoleARN,
+		ExternalId:   req.ExternalID,
+	}); err != nil {
+		http.Error(w, "add source: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"status": "configured", "app": fullApp})
+}
+
+// handleDeleteSource removes a configured log source. Path shape:
+// DELETE /api/sources/{namespace}/{app}. app is the sub-app name; the
+// stored log_groups.app is "{namespace}/{app}" so we reconstruct it here.
+func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	namespace := r.PathValue("namespace")
+	app := r.PathValue("app")
+	if namespace == "" || app == "" {
+		http.Error(w, "namespace and app required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.authorizeSourceEdit(claims, namespace); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	if s.coordClient == nil {
+		http.Error(w, "coordinator unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	fullApp := namespace + "/" + app
+	if _, err := s.coordClient.RemoveSource(r.Context(), &pb.RemoveSourceRequest{
+		Customer:  claims.CustomerName,
+		Namespace: namespace,
+		App:       fullApp,
+	}); err != nil {
+		http.Error(w, "remove source: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// authorizeSourceEdit enforces the same rule as token creation: owners pass
+// unconditionally; other users need CanCreateTokens on the namespace. If
+// we ever split source permissions from token permissions we'd add a
+// dedicated CanManageSources flag — but for now the two tend to travel
+// together (both register data ingestion) so reusing the flag is honest.
+func (s *Server) authorizeSourceEdit(claims *JWTClaims, namespace string) error {
+	if s.isOwner(claims.CustomerName, claims.Email) {
+		return nil
+	}
+	cust, err := s.store.GetCustomerByName(claims.CustomerName)
+	if err != nil {
+		return errForbidden("customer not found")
+	}
+	ns, err := s.store.GetNamespace(cust.ID, namespace)
+	if err != nil {
+		return errForbidden("namespace not found")
+	}
+	perm, err := s.store.GetNamespacePermission(claims.UserID, ns.ID)
+	if err != nil || !perm.CanCreateTokens {
+		return errForbidden("no permission to manage sources in this namespace")
+	}
+	return nil
+}
+
+type forbiddenError string
+
+func (e forbiddenError) Error() string { return string(e) }
+func errForbidden(msg string) error    { return forbiddenError(msg) }

@@ -141,17 +141,75 @@ func (s *Server) ListApps(_ context.Context, req *pb.ListAppsRequest) (*pb.ListA
 	return &pb.ListAppsResponse{Apps: names}, nil
 }
 
+// SampleCloudWatchSource pulls up to 50 recent events from a CloudWatch log
+// group using the customer's cross-account role, runs ingest.Detect on the
+// messages, and returns both so the dashboard can preview the source and
+// suggest a schema before the user commits to AddSource.
+func (s *Server) SampleCloudWatchSource(ctx context.Context, req *pb.SampleCloudWatchSourceRequest) (*pb.SampleCloudWatchSourceResponse, error) {
+	if req.LogGroup == "" || req.RoleArn == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "log_group and role_arn required")
+	}
+	if req.Namespace == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "namespace required")
+	}
+	if s.Store != nil {
+		customer, err := s.Store.GetCustomerByName(req.Customer)
+		if err != nil {
+			return nil, status.Errorf(codes.NotFound, "customer %q not found", req.Customer)
+		}
+		if _, err := s.Store.GetNamespace(customer.ID, req.Namespace); err != nil {
+			return nil, status.Errorf(codes.NotFound, "namespace %q not found", req.Namespace)
+		}
+	}
+
+	result, err := ingest.FetchCloudWatch(ctx, ingest.CloudWatchFetchOpts{
+		Region:        req.Region,
+		RoleARN:       req.RoleArn,
+		ExternalID:    req.ExternalId,
+		LogGroup:      req.LogGroup,
+		Limit:         50,
+		SessionSuffix: "sampler-" + req.Namespace,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "cloudwatch fetch: %v", err)
+	}
+
+	lines := make([]string, len(result.Events))
+	for i, e := range result.Events {
+		lines[i] = e.Message
+	}
+
+	detection := ingest.Detect(lines)
+	detectionJSON, err := json.Marshal(detection)
+	if err != nil {
+		return nil, fmt.Errorf("marshal detection: %w", err)
+	}
+
+	return &pb.SampleCloudWatchSourceResponse{
+		Lines:         lines,
+		DetectionJson: string(detectionJSON),
+	}, nil
+}
+
 func (s *Server) AddSource(_ context.Context, req *pb.AddSourceRequest) (*pb.AddSourceResponse, error) {
 	if s.Store == nil {
 		return nil, fmt.Errorf("config store not available")
 	}
-
-	customer, err := s.Store.FindOrCreateCustomer(req.Customer)
-	if err != nil {
-		return nil, fmt.Errorf("customer: %w", err)
+	if req.Namespace == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "namespace required")
 	}
 
-	account, err := s.Store.FindOrCreateAccount(customer.ID, req.AwsAccountId, req.RoleArn, req.ExternalId)
+	customer, err := s.Store.GetCustomerByName(req.Customer)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "customer %q not found", req.Customer)
+	}
+
+	ns, err := s.Store.GetNamespace(customer.ID, req.Namespace)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "namespace %q not found — create it first", req.Namespace)
+	}
+
+	account, err := s.Store.FindOrCreateAWSAccount(customer.ID, req.AwsAccountId, req.RoleArn, req.ExternalId)
 	if err != nil {
 		return nil, fmt.Errorf("account: %w", err)
 	}
@@ -161,7 +219,7 @@ func (s *Server) AddSource(_ context.Context, req *pb.AddSourceRequest) (*pb.Add
 		pollInterval = "30s"
 	}
 	if err := s.Store.AddLogGroup(
-		account.ID, store.SourceTypeCloudWatch,
+		ns.ID, &account.ID, store.SourceTypeCloudWatch,
 		req.App, req.LogGroup, req.Region, req.SchemaYaml, pollInterval,
 	); err != nil {
 		return nil, fmt.Errorf("log group: %w", err)
@@ -183,6 +241,7 @@ func (s *Server) ListSources(_ context.Context, _ *pb.ListSourcesRequest) (*pb.L
 		infos = append(infos, &pb.SourceInfo{
 			App:        lg.App,
 			Customer:   lg.CustomerName,
+			Namespace:  lg.NamespaceName,
 			LogGroup:   lg.LogGroupName,
 			Region:     lg.Region,
 			Enabled:    lg.Enabled,
@@ -196,7 +255,18 @@ func (s *Server) RemoveSource(_ context.Context, req *pb.RemoveSourceRequest) (*
 	if s.Store == nil {
 		return nil, fmt.Errorf("config store not available")
 	}
-	if err := s.Store.RemoveLogGroup(req.App); err != nil {
+	if req.Namespace == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "namespace required")
+	}
+	customer, err := s.Store.GetCustomerByName(req.Customer)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "customer %q not found", req.Customer)
+	}
+	ns, err := s.Store.GetNamespace(customer.ID, req.Namespace)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "namespace %q not found", req.Namespace)
+	}
+	if err := s.Store.RemoveLogGroup(ns.ID, req.App); err != nil {
 		return nil, err
 	}
 	return &pb.RemoveSourceResponse{}, nil
@@ -310,6 +380,7 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 		return err
 	}
 	authCustomer := auth.Customer.Name
+	authNamespace := auth.Namespace
 
 	var mu sync.Mutex
 	var rows []*pb.LogRow
@@ -341,6 +412,16 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 
 		// Force the authoritative customer on every row.
 		row.Customer = authCustomer
+
+		// Enforce the token's namespace scope on every row. row.App must
+		// either equal the token's namespace or sit beneath it
+		// ("<ns>/<subapp>"). Without this an agent with a token for
+		// namespace A can label rows with namespace B of the same customer
+		// and contaminate B's queries.
+		if row.App != authNamespace && !strings.HasPrefix(row.App, authNamespace+"/") {
+			return status.Errorf(codes.PermissionDenied,
+				"token scoped to namespace %q; cannot ingest app %q", authNamespace, row.App)
+		}
 
 		mu.Lock()
 		if count == 0 {

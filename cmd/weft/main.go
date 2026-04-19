@@ -715,7 +715,7 @@ func runSource() {
 	case "list":
 		runSourceList(remote)
 	case "remove":
-		runSourceRemove(remote)
+		runSourceRemove(remote, cfg)
 	case "pending":
 		runSourcePending(cfg)
 	case "configure":
@@ -728,10 +728,15 @@ func runSource() {
 
 func runSourceAdd(remote *shell.RemoteCoordinator, cfg *shell.Config) {
 	args := os.Args[3:]
-	var app, logGroup, schemaFile, region, pollInterval, awsAccountID, roleARN, externalID string
+	var namespace, app, logGroup, schemaFile, region, pollInterval, awsAccountID, roleARN, externalID string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--namespace":
+			if i+1 < len(args) {
+				namespace = args[i+1]
+				i++
+			}
 		case "--app":
 			if i+1 < len(args) {
 				app = args[i+1]
@@ -775,9 +780,13 @@ func runSourceAdd(remote *shell.RemoteCoordinator, cfg *shell.Config) {
 		}
 	}
 
-	if app == "" || logGroup == "" || schemaFile == "" || roleARN == "" {
-		fmt.Fprintln(os.Stderr, `usage: weft source add --app NAME --log-group GROUP --schema FILE --role-arn ARN
+	if namespace == "" || app == "" || logGroup == "" || schemaFile == "" || roleARN == "" {
+		fmt.Fprintln(os.Stderr, `usage: weft source add --namespace NS --app NAME --log-group GROUP --schema FILE --role-arn ARN
     [--account AWS_ACCOUNT_ID] [--region REGION] [--interval DURATION] [--external-id ID]`)
+		os.Exit(1)
+	}
+	if strings.Contains(app, "/") {
+		fmt.Fprintln(os.Stderr, "--app should be the sub-app name only; pass the namespace via --namespace")
 		os.Exit(1)
 	}
 	if region == "" {
@@ -798,11 +807,12 @@ func runSourceAdd(remote *shell.RemoteCoordinator, cfg *shell.Config) {
 		customer = "default"
 	}
 
-	if err := remote.AddSource(app, customer, logGroup, region, string(schemaData), pollInterval, awsAccountID, roleARN, externalID); err != nil {
+	fullApp := namespace + "/" + app
+	if err := remote.AddSource(namespace, fullApp, customer, logGroup, region, string(schemaData), pollInterval, awsAccountID, roleARN, externalID); err != nil {
 		fmt.Fprintf(os.Stderr, "add source: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Added source: %s → %s (account %s, poll every %s)\n", app, logGroup, awsAccountID, pollInterval)
+	fmt.Printf("Added source: %s → %s (account %s, poll every %s)\n", fullApp, logGroup, awsAccountID, pollInterval)
 }
 
 func runSourceList(remote *shell.RemoteCoordinator) {
@@ -815,39 +825,52 @@ func runSourceList(remote *shell.RemoteCoordinator) {
 		fmt.Println("No sources configured.")
 		return
 	}
-	fmt.Printf("%-20s %-10s %-35s %-12s %s\n", "APP", "CUSTOMER", "LOG GROUP", "REGION", "LAST POLL")
+	fmt.Printf("%-15s %-20s %-10s %-35s %-12s %s\n", "NAMESPACE", "APP", "CUSTOMER", "LOG GROUP", "REGION", "LAST POLL")
 	for _, s := range sources {
 		lastPoll := s.LastPollAt
 		if lastPoll == "" {
 			lastPoll = "(never)"
 		}
-		fmt.Printf("%-20s %-10s %-35s %-12s %s\n", s.App, s.Customer, s.LogGroup, s.Region, lastPoll)
+		fmt.Printf("%-15s %-20s %-10s %-35s %-12s %s\n", s.Namespace, s.App, s.Customer, s.LogGroup, s.Region, lastPoll)
 	}
 }
 
-func runSourceRemove(remote *shell.RemoteCoordinator) {
+func runSourceRemove(remote *shell.RemoteCoordinator, cfg *shell.Config) {
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: weft source remove --app NAME")
+		fmt.Fprintln(os.Stderr, "usage: weft source remove --namespace NS --app NAME")
 		os.Exit(1)
 	}
 	args := os.Args[3:]
-	var app string
+	var namespace, app string
 	for i := 0; i < len(args); i++ {
-		if args[i] == "--app" && i+1 < len(args) {
-			app = args[i+1]
-			i++
+		switch args[i] {
+		case "--namespace":
+			if i+1 < len(args) {
+				namespace = args[i+1]
+				i++
+			}
+		case "--app":
+			if i+1 < len(args) {
+				app = args[i+1]
+				i++
+			}
 		}
 	}
-	if app == "" {
-		fmt.Fprintln(os.Stderr, "usage: weft source remove --app NAME")
+	if namespace == "" || app == "" {
+		fmt.Fprintln(os.Stderr, "usage: weft source remove --namespace NS --app NAME")
 		os.Exit(1)
 	}
 
-	if err := remote.RemoveSource(app); err != nil {
+	customer := cfg.Customer
+	if customer == "" {
+		customer = "default"
+	}
+	fullApp := namespace + "/" + app
+	if err := remote.RemoveSource(customer, namespace, fullApp); err != nil {
 		fmt.Fprintf(os.Stderr, "remove source: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Removed source: %s\n", app)
+	fmt.Printf("Removed source: %s\n", fullApp)
 }
 
 // tokenClient is the common interface for token operations across HTTP and gRPC.

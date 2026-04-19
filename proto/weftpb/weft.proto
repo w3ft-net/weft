@@ -142,6 +142,11 @@ service WeftCoordinator {
   // ListApps returns the available app names (pseudofiles).
   rpc ListApps(ListAppsRequest) returns (ListAppsResponse);
 
+  // SampleCloudWatchSource assumes the customer's cross-account role and
+  // pulls a handful of recent events so the dashboard can show a preview
+  // and run schema detection before the user commits to a source.
+  rpc SampleCloudWatchSource(SampleCloudWatchSourceRequest) returns (SampleCloudWatchSourceResponse);
+
   // AddSource registers a CloudWatch log source for ingestion.
   rpc AddSource(AddSourceRequest) returns (AddSourceResponse);
 
@@ -292,10 +297,31 @@ message AddSourceRequest {
   string poll_interval = 6;  // e.g. "30s"
   string aws_account_id = 7; // customer's AWS account ID
   string role_arn = 8;       // cross-account role ARN for CloudWatch access
-  string external_id = 9;   // STS external ID for role assumption
+  string external_id = 9;    // STS external ID for role assumption
+  string namespace = 10;     // owner namespace (must already exist for this customer)
 }
 
 message AddSourceResponse {}
+
+// Sampling the CloudWatch side before registering a source: the dashboard
+// sends the creds and log group, coordinator pulls up to 50 recent events,
+// returns them with the schema detection. detection_json is the
+// ingest.Detect result serialized as JSON so the frontend can reuse the
+// same suggestion logic as the weftd onboarding flow.
+message SampleCloudWatchSourceRequest {
+  string customer = 1;
+  string namespace = 2;
+  string log_group = 3;
+  string region = 4;
+  string aws_account_id = 5;
+  string role_arn = 6;
+  string external_id = 7;
+}
+
+message SampleCloudWatchSourceResponse {
+  repeated string lines = 1;
+  string detection_json = 2; // JSON-encoded ingest.Detection
+}
 
 message ListSourcesRequest {}
 
@@ -310,10 +336,13 @@ message SourceInfo {
   string region = 4;
   bool enabled = 5;
   string last_poll_at = 6;
+  string namespace = 7;
 }
 
 message RemoveSourceRequest {
   string app = 1;
+  string customer = 2;
+  string namespace = 3;
 }
 
 message RemoveSourceResponse {}

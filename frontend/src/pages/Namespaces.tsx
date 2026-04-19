@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
 import SidebarNav from '../components/SidebarNav'
 import PendingSourceConfigure from '../components/PendingSourceConfigure'
+import AddCloudWatchSource from '../components/AddCloudWatchSource'
+import ConfiguredSourcesList from '../components/ConfiguredSourcesList'
 import {
   getNamespaces, createNamespace, getTokens, createToken, revokeToken,
-  getPendingSources, onPendingSourcesChanged,
-  type NamespaceInfo, type AgentToken, type PendingSource,
+  getPendingSources, onPendingSourcesChanged, listSources,
+  type NamespaceInfo, type AgentToken, type PendingSource, type SourceInfo,
 } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import './Dashboard.css'
@@ -34,11 +36,18 @@ export default function Namespaces() {
   const [tokenLabel, setTokenLabel] = useState('')
   const [newTokenSecret, setNewTokenSecret] = useState('')
   const [copied, setCopied] = useState(false)
+  const [sources, setSources] = useState<SourceInfo[]>([])
+  const [showAddCW, setShowAddCW] = useState<string | null>(null)
 
   function loadData() {
     getNamespaces().then(setNamespaces).catch(() => {})
     getTokens().then(setTokens).catch(() => {})
     getPendingSources().then(setPendingSources).catch(() => {})
+    listSources().then(setSources).catch(() => {})
+  }
+
+  function sourcesForNamespace(nsName: string): SourceInfo[] {
+    return sources.filter(s => s.namespace === nsName)
   }
 
   useEffect(() => {
@@ -197,6 +206,32 @@ export default function Namespaces() {
                               ))}
                             </div>
                           )}
+
+                          {/* Configured sources (CloudWatch + weftd) */}
+                          <div className="namespace-pending-section">
+                            <div className="namespace-subsection-title">Sources</div>
+                            <ConfiguredSourcesList
+                              namespace={ns.name}
+                              sources={sourcesForNamespace(ns.name)}
+                              onChanged={loadData}
+                            />
+                            {showAddCW === ns.name ? (
+                              <AddCloudWatchSource
+                                namespace={ns.name}
+                                onAdded={() => { setShowAddCW(null); loadData() }}
+                                onCancel={() => setShowAddCW(null)}
+                              />
+                            ) : (
+                              <button
+                                className="btn-action"
+                                onClick={() => setShowAddCW(ns.name)}
+                                data-testid={`namespace-add-cloudwatch-${ns.name}-button`}
+                                style={{ marginTop: 4 }}
+                              >
+                                + Add CloudWatch source
+                              </button>
+                            )}
+                          </div>
 
                           {/* Tokens for this namespace */}
                           {nsTokens.length > 0 && (

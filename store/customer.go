@@ -7,7 +7,7 @@ type Customer struct {
 	Name        string       `gorm:"uniqueIndex;not null"`
 	DisplayName string       // human-readable org/team name (editable)
 	Namespaces  []Namespace  `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
-	Accounts    []Account    `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
+	AWSAccounts []AWSAccount `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
 	AgentTokens []AgentToken `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
 }
 
@@ -57,6 +57,18 @@ func (s *Store) FindOrCreateNamespace(customerID uint, name string) (*Namespace,
 	var ns Namespace
 	result := s.db.Where("customer_id = ? AND name = ?", customerID, name).FirstOrCreate(&ns, Namespace{CustomerID: customerID, Name: name})
 	return &ns, result.Error
+}
+
+// GetNamespace looks up a namespace by (customer_id, name) without creating
+// one if absent. Callers validating user-supplied namespace names (e.g.
+// AddSource) should use this so a typo doesn't silently spawn a new
+// namespace under the customer.
+func (s *Store) GetNamespace(customerID uint, name string) (*Namespace, error) {
+	var ns Namespace
+	if err := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&ns).Error; err != nil {
+		return nil, err
+	}
+	return &ns, nil
 }
 
 // ListNamespaces returns all namespaces for a customer.

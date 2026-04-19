@@ -139,6 +139,12 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/sources/pending", s.handlePendingSources)
 	auth.HandleFunc("POST /api/sources/{namespace}/{app}/configure", s.handleConfigureSource)
 
+	// CloudWatch source management (dashboard-authenticated).
+	auth.HandleFunc("GET /api/sources", s.handleListSources)
+	auth.HandleFunc("POST /api/sources/cloudwatch/sample", s.handleSampleCloudWatchSource)
+	auth.HandleFunc("POST /api/sources/cloudwatch", s.handleAddCloudWatchSource)
+	auth.HandleFunc("DELETE /api/sources/{namespace}/{app}", s.handleDeleteSource)
+
 	// Public routes (no auth).
 	mux.HandleFunc("POST /api/team/accept", s.handleAcceptInvite)
 	mux.HandleFunc("GET /api/integrations/slack/callback", s.handleSlackCallback)
@@ -150,6 +156,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/agent/", AgentTokenMiddleware(s.store, agentMux))
 
 	// Dashboard-authenticated route registrations.
+	mux.Handle("/api/sources", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/sources/", AuthMiddleware(s.jwtSecret, auth))
 
 	mux.Handle("/api/auth/me", AuthMiddleware(s.jwtSecret, auth))
