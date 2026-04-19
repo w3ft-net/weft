@@ -1,5 +1,15 @@
-# Copy this to .weft.yaml and adjust as needed.
+# Copy this to ~/.weft.yaml and adjust as needed — or just run `weft login`
+# and the file will be written for you after the browser device flow.
 #
-# For Docker Compose (after `docker compose up`):
-endpoint: localhost:9020
-customer: kevlar
+# endpoint must be the weft api server's base URL. The CLI only speaks
+# HTTP now; direct gRPC to :9020 was retired so the api server is the
+# only public surface to worry about (auth, rate limits, CORS, etc.).
+#
+# For the dev docker-compose stack (after `docker compose up`):
+endpoint: http://localhost:8080
+
+# For production (this is what `weft login` writes by default):
+# endpoint: https://api.w3ft.net
+
+# token is a JWT from the device flow. `weft login` populates it.
+# token: eyJ...

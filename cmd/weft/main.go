@@ -389,53 +389,25 @@ func runNamespace() {
 	}
 }
 
+// connectRemote builds a shell backed by the weft api server over HTTP.
+// The CLI only speaks HTTP now — direct-to-coordinator gRPC was retired
+// because it doubled the public auth surface (the api server already
+// gates JWT, email verification, rate limits, CORS, etc). Operators who
+// need a gRPC tap can still point pb.WeftCoordinatorClient at :9020
+// from the internal network; it's not the CLI's job to expose that.
 func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 	endpoint := cfg.Endpoint
-
-	// HTTP mode: endpoint is a URL (https://api.w3ft.net).
-	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
-		if cfg.Token == "" {
-			return nil, nil, fmt.Errorf("WEFT_TOKEN required for HTTP mode — get one from the web dashboard")
-		}
-		remote := shell.NewHTTPCoordinator(endpoint, cfg.Token)
-
-		apps, err := remote.ListApps()
-		if err != nil {
-			return nil, nil, fmt.Errorf("list apps: %w", err)
-		}
-
-		s := &shell.Shell{
-			Query: func(pipeline string, start, end time.Time) (*shell.QueryResult, error) {
-				r, err := remote.Query(pipeline, start, end)
-				if err != nil {
-					return nil, err
-				}
-				return &shell.QueryResult{Rows: r.Rows, Text: r.Text}, nil
-			},
-			Follow: remote.Follow,
-			Start:  time.Now().Add(-24 * time.Hour),
-			End:    time.Now(),
-			Apps:   apps,
-			FS:     shell.NewRemoteFS(shell.NewHTTPBackend(endpoint, cfg.Token), apps),
-		}
-		return s, func() {}, nil
+	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
+		return nil, nil, fmt.Errorf("endpoint %q is not an api URL — re-run `weft login` "+
+			"or edit ~/.weft.yaml to point at http(s)://<api-host>", endpoint)
 	}
-
-	// gRPC mode: endpoint is host:port. The token must be a user JWT
-	// obtained via the browser/device flow — the coordinator's auth
-	// interceptor rejects unauthenticated calls on every RPC that
-	// operates on tenant data.
 	if cfg.Token == "" {
-		return nil, nil, fmt.Errorf("WEFT_TOKEN required — grab one from the dashboard or run `weft login`")
-	}
-	remote, err := shell.NewRemoteCoordinator(endpoint, cfg.Token)
-	if err != nil {
-		return nil, nil, fmt.Errorf("connect to %s: %w", endpoint, err)
+		return nil, nil, fmt.Errorf("WEFT_TOKEN required — run `weft login` to get one")
 	}
 
-	apps, err := remote.ListApps("") // gRPC mode: customer filtering happens at query time
+	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token)
+	apps, err := remote.ListApps()
 	if err != nil {
-		remote.Close()
 		return nil, nil, fmt.Errorf("list apps: %w", err)
 	}
 
@@ -451,9 +423,9 @@ func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 		Start:  time.Now().Add(-24 * time.Hour),
 		End:    time.Now(),
 		Apps:   apps,
-		FS:     shell.NewRemoteFS(shell.NewGRPCBackend(remote.Client(), cfg.Customer), apps),
+		FS:     shell.NewRemoteFS(shell.NewHTTPBackend(endpoint, cfg.Token), apps),
 	}
-	return s, func() { remote.Close() }, nil
+	return s, func() {}, nil
 }
 
 func runSourcePending(cfg *shell.Config) {
@@ -538,7 +510,7 @@ func runSourceConfigure(cfg *shell.Config) {
 	}
 
 	// Run the interactive setup wizard with the remote sample.
-	schema, err := shell.RunSetupFromLines(namespace+"/"+app, cfg.Customer, lines)
+	schema, err := shell.RunSetupFromLines(namespace+"/"+app, lines)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "setup: %v\n", err)
 		os.Exit(1)
@@ -567,18 +539,13 @@ func dimText(s string) string {
 
 func runSetup() {
 	args := os.Args[2:]
-	var app, customer, sampleFile string
+	var app, sampleFile string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--app":
 			if i+1 < len(args) {
 				app = args[i+1]
-				i++
-			}
-		case "--customer":
-			if i+1 < len(args) {
-				customer = args[i+1]
 				i++
 			}
 		case "--sample":
@@ -590,14 +557,11 @@ func runSetup() {
 	}
 
 	if app == "" || sampleFile == "" {
-		fmt.Fprintln(os.Stderr, "usage: weft setup --app NAME --sample FILE [--customer CUST]")
+		fmt.Fprintln(os.Stderr, "usage: weft setup --app NAME --sample FILE")
 		os.Exit(1)
 	}
-	if customer == "" {
-		customer = "default"
-	}
 
-	_, err := shell.RunSetup(app, customer, sampleFile)
+	_, err := shell.RunSetup(app, sampleFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "setup failed: %v\n", err)
 		os.Exit(1)
@@ -699,7 +663,7 @@ func runIngest() {
 
 func runSource() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: weft source {add|list|remove}")
+		fmt.Fprintln(os.Stderr, "usage: weft source {add|list|remove|pending|configure}")
 		os.Exit(1)
 	}
 
@@ -708,24 +672,19 @@ func runSource() {
 		fmt.Fprintf(os.Stderr, "no .weft.yaml: %v\n", err)
 		os.Exit(1)
 	}
-	if cfg.Token == "" {
-		fmt.Fprintln(os.Stderr, "WEFT_TOKEN required — grab one from the dashboard")
-		os.Exit(1)
-	}
-	remote, err := shell.NewRemoteCoordinator(cfg.Endpoint, cfg.Token)
+	client, err := httpClient(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "connect: %v\n", err)
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-	defer remote.Close()
 
 	switch os.Args[2] {
 	case "add":
-		runSourceAdd(remote, cfg)
+		runSourceAdd(client)
 	case "list":
-		runSourceList(remote)
+		runSourceList(client)
 	case "remove":
-		runSourceRemove(remote, cfg)
+		runSourceRemove(client)
 	case "pending":
 		runSourcePending(cfg)
 	case "configure":
@@ -736,7 +695,20 @@ func runSource() {
 	}
 }
 
-func runSourceAdd(remote *shell.RemoteCoordinator, cfg *shell.Config) {
+// httpClient returns an HTTPCoordinator built from cfg, with a uniform
+// error message if the endpoint isn't an api URL or WEFT_TOKEN is unset.
+// Used by every subcommand that needs to hit the api.
+func httpClient(cfg *shell.Config) (*shell.HTTPCoordinator, error) {
+	if !strings.HasPrefix(cfg.Endpoint, "http://") && !strings.HasPrefix(cfg.Endpoint, "https://") {
+		return nil, fmt.Errorf("endpoint %q is not an api URL — re-run `weft login`", cfg.Endpoint)
+	}
+	if cfg.Token == "" {
+		return nil, fmt.Errorf("WEFT_TOKEN required — run `weft login`")
+	}
+	return shell.NewHTTPCoordinator(cfg.Endpoint, cfg.Token), nil
+}
+
+func runSourceAdd(client *shell.HTTPCoordinator) {
 	args := os.Args[3:]
 	var namespace, app, logGroup, schemaFile, region, pollInterval, awsAccountID, roleARN, externalID string
 
@@ -806,27 +778,45 @@ func runSourceAdd(remote *shell.RemoteCoordinator, cfg *shell.Config) {
 		pollInterval = "30s"
 	}
 
-	schemaData, err := os.ReadFile(schemaFile)
+	schemaYAML, err := os.ReadFile(schemaFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "read schema: %v\n", err)
 		os.Exit(1)
 	}
 
-	customer := cfg.Customer
-	if customer == "" {
-		customer = "default"
+	// The api server builds the Schema YAML from the individual fields in
+	// AddCloudWatchSourceRequest rather than accepting a YAML blob. Parse
+	// the user-supplied file locally and pass the fields through.
+	parsedSchema, err := ingest.LoadSchemaFromBytes(schemaYAML)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parse schema %s: %v\n", schemaFile, err)
+		os.Exit(1)
 	}
 
-	fullApp := namespace + "/" + app
-	if err := remote.AddSource(namespace, fullApp, customer, logGroup, region, string(schemaData), pollInterval, awsAccountID, roleARN, externalID); err != nil {
+	if err := client.AddCloudWatchSource(shell.AddCloudWatchSourceRequest{
+		Namespace:       namespace,
+		App:             app,
+		AWSAccountID:    awsAccountID,
+		RoleARN:         roleARN,
+		ExternalID:      externalID,
+		LogGroup:        logGroup,
+		Region:          region,
+		PollInterval:    pollInterval,
+		Format:          parsedSchema.Format,
+		TimestampField:  parsedSchema.TimestampField,
+		TimestampFormat: parsedSchema.TimestampFormat,
+		LevelField:      parsedSchema.LevelField,
+		LevelPattern:    parsedSchema.LevelPattern,
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "add source: %v\n", err)
 		os.Exit(1)
 	}
+	fullApp := namespace + "/" + app
 	fmt.Printf("Added source: %s → %s (account %s, poll every %s)\n", fullApp, logGroup, awsAccountID, pollInterval)
 }
 
-func runSourceList(remote *shell.RemoteCoordinator) {
-	sources, err := remote.ListSources()
+func runSourceList(client *shell.HTTPCoordinator) {
+	sources, err := client.ListSources()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "list sources: %v\n", err)
 		os.Exit(1)
@@ -835,17 +825,17 @@ func runSourceList(remote *shell.RemoteCoordinator) {
 		fmt.Println("No sources configured.")
 		return
 	}
-	fmt.Printf("%-15s %-20s %-10s %-35s %-12s %s\n", "NAMESPACE", "APP", "CUSTOMER", "LOG GROUP", "REGION", "LAST POLL")
+	fmt.Printf("%-15s %-20s %-10s %-35s %-12s %s\n", "NAMESPACE", "APP", "SOURCE", "LOG GROUP", "REGION", "LAST POLL")
 	for _, s := range sources {
 		lastPoll := s.LastPollAt
 		if lastPoll == "" {
 			lastPoll = "(never)"
 		}
-		fmt.Printf("%-15s %-20s %-10s %-35s %-12s %s\n", s.Namespace, s.App, s.Customer, s.LogGroup, s.Region, lastPoll)
+		fmt.Printf("%-15s %-20s %-10s %-35s %-12s %s\n", s.Namespace, s.App, s.SourceType, s.LogGroup, s.Region, lastPoll)
 	}
 }
 
-func runSourceRemove(remote *shell.RemoteCoordinator, cfg *shell.Config) {
+func runSourceRemove(client *shell.HTTPCoordinator) {
 	if len(os.Args) < 4 {
 		fmt.Fprintln(os.Stderr, "usage: weft source remove --namespace NS --app NAME")
 		os.Exit(1)
@@ -870,24 +860,11 @@ func runSourceRemove(remote *shell.RemoteCoordinator, cfg *shell.Config) {
 		fmt.Fprintln(os.Stderr, "usage: weft source remove --namespace NS --app NAME")
 		os.Exit(1)
 	}
-
-	customer := cfg.Customer
-	if customer == "" {
-		customer = "default"
-	}
-	fullApp := namespace + "/" + app
-	if err := remote.RemoveSource(customer, namespace, fullApp); err != nil {
+	if err := client.RemoveSource(namespace, app); err != nil {
 		fmt.Fprintf(os.Stderr, "remove source: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Removed source: %s\n", fullApp)
-}
-
-// tokenClient is the common interface for token operations across HTTP and gRPC.
-type tokenClient interface {
-	CreateToken(customer, label, app string) (string, error)
-	ListTokens(customer string) ([]shell.TokenInfo, error)
-	RevokeToken(token string) error
+	fmt.Printf("Removed source: %s/%s\n", namespace, app)
 }
 
 func runToken() {
@@ -901,33 +878,17 @@ func runToken() {
 		fmt.Fprintf(os.Stderr, "no .weft.yaml: %v\n", err)
 		os.Exit(1)
 	}
-
-	var client tokenClient
-	var cleanup func()
-
-	if strings.HasPrefix(cfg.Endpoint, "http://") || strings.HasPrefix(cfg.Endpoint, "https://") {
-		client = shell.NewHTTPCoordinator(cfg.Endpoint, cfg.Token)
-		cleanup = func() {}
-	} else {
-		if cfg.Token == "" {
-			fmt.Fprintln(os.Stderr, "WEFT_TOKEN required — grab one from the dashboard")
-			os.Exit(1)
-		}
-		remote, err := shell.NewRemoteCoordinator(cfg.Endpoint, cfg.Token)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "connect: %v\n", err)
-			os.Exit(1)
-		}
-		client = remote
-		cleanup = func() { remote.Close() }
+	client, err := httpClient(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
 	}
-	defer cleanup()
 
 	switch os.Args[2] {
 	case "create":
-		runTokenCreate(client, cfg)
+		runTokenCreate(client)
 	case "list":
-		runTokenList(client, cfg)
+		runTokenList(client)
 	case "revoke":
 		runTokenRevoke(client)
 	default:
@@ -936,7 +897,7 @@ func runToken() {
 	}
 }
 
-func runTokenCreate(client tokenClient, cfg *shell.Config) {
+func runTokenCreate(client *shell.HTTPCoordinator) {
 	args := os.Args[3:]
 	var label, namespace string
 
@@ -972,17 +933,8 @@ func runTokenCreate(client tokenClient, cfg *shell.Config) {
 	fmt.Println("Store this token in your weftd config. It cannot be retrieved again.")
 }
 
-func runTokenList(remote tokenClient, cfg *shell.Config) {
-	customer := cfg.Customer
-	args := os.Args[3:]
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--customer" && i+1 < len(args) {
-			customer = args[i+1]
-			i++
-		}
-	}
-
-	tokens, err := remote.ListTokens(customer)
+func runTokenList(client *shell.HTTPCoordinator) {
+	tokens, err := client.ListTokens("")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "list tokens: %v\n", err)
 		os.Exit(1)
@@ -991,18 +943,14 @@ func runTokenList(remote tokenClient, cfg *shell.Config) {
 		fmt.Println("No tokens configured.")
 		return
 	}
-	fmt.Printf("%-40s %-15s %-25s %-10s %s\n", "TOKEN", "APP", "LABEL", "STATUS", "CREATED")
+	fmt.Printf("%-40s %-15s %-25s %-10s %s\n", "TOKEN", "NAMESPACE", "LABEL", "STATUS", "CREATED")
 	for _, t := range tokens {
-		status := "active"
-		if t.Revoked {
-			status = "revoked"
-		}
 		display := t.Token[:12] + "..."
-		fmt.Printf("%-40s %-15s %-25s %-10s %s\n", display, t.App, t.Label, status, t.CreatedAt)
+		fmt.Printf("%-40s %-15s %-25s %-10s %s\n", display, t.Namespace, t.Label, t.Status, t.CreatedAt)
 	}
 }
 
-func runTokenRevoke(remote tokenClient) {
+func runTokenRevoke(client *shell.HTTPCoordinator) {
 	args := os.Args[3:]
 	var token string
 	for i := 0; i < len(args); i++ {
@@ -1015,7 +963,7 @@ func runTokenRevoke(remote tokenClient) {
 		fmt.Fprintln(os.Stderr, "usage: weft token revoke --token TOKEN")
 		os.Exit(1)
 	}
-	if err := remote.RevokeToken(token); err != nil {
+	if err := client.RevokeToken(token); err != nil {
 		fmt.Fprintf(os.Stderr, "revoke token: %v\n", err)
 		os.Exit(1)
 	}

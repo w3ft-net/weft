@@ -4,9 +4,12 @@
 **Original audit**: commit `4f4bd01`, 2026-04-18.
 **Closed since**: `99f8988` (planner SQL injection, source allowlist,
 IngestStream namespace-scope bypass), `989da01` (email-verification gate
-for signup), and the coordinator gRPC JWT interceptor that landed after
-that (client-supplied `customer` field can no longer bypass tenancy).
-Items struck from the doc; everything still here is unfixed.
+for signup), `8315d9c` (coordinator gRPC JWT interceptor — client-supplied
+`customer` can no longer bypass tenancy). Additionally: the CLI has been
+retired from the gRPC-direct path — `weft` speaks HTTP to the api server
+only, so the coordinator gRPC surface is now strictly internal
+(api→coord, weftd→coord, coord→shard). Items struck from the doc;
+everything still here is unfixed.
 **Verdict**: **Do not launch**. Two cross-tenant data-exfiltration paths
 remain (Heartbeat, shard RPC auth), plus several high-impact hardening
 gaps.
