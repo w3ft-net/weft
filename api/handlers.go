@@ -428,8 +428,35 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email, err := s.store.ValidateMagicLink(req.Token)
+	// Peek first so we can branch on whether the caller needs to supply
+	// org_name. The peek only reveals the associated email — no state
+	// changes — so two racing peeks are harmless. Every state-mutating
+	// branch below goes through ConsumeMagicLink, which is a single
+	// atomic UPDATE and therefore can only be won by one concurrent
+	// request; that's what actually closes the TOCTOU.
+	email, err := s.store.PeekMagicLink(req.Token)
 	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	// New-user + missing org_name: prompt the frontend for one and
+	// return without consuming. The user will POST back with the same
+	// token + org_name on the next round-trip.
+	if invite, _ := s.store.GetPendingTeamMemberByEmail(email); invite == nil {
+		if existing, _ := s.store.GetUserByEmail(email); existing == nil && req.OrgName == "" {
+			json.NewEncoder(w).Encode(map[string]any{
+				"needs_org": true,
+				"email":     email,
+			})
+			return
+		}
+	}
+
+	// Every path from here creates or updates a user row. Burn the
+	// token now; if we lose the atomic race, some other request is
+	// already doing the work.
+	if _, err := s.store.ConsumeMagicLink(req.Token); err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
@@ -464,16 +491,6 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		// No invite — find existing user or create new user + customer.
 		user, _ = s.store.GetUserByEmail(email)
 		if user == nil {
-			// New user — require org name.
-			if req.OrgName == "" {
-				// Tell the frontend to prompt for org name.
-				json.NewEncoder(w).Encode(map[string]any{
-					"needs_org": true,
-					"email":     email,
-				})
-				return
-			}
-
 			customerName := strings.ToLower(strings.TrimSpace(req.OrgName))
 			cust, _ := s.store.FindOrCreateCustomer(customerName)
 			user, err = s.store.CreateVerifiedUser(email, cust.ID)
@@ -522,9 +539,6 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-
-	// Consume the magic link now that we have a user.
-	s.store.ConsumeMagicLink(req.Token)
 
 	jwt, err := auth.Generate(user, tier, s.jwtSecret)
 	if err != nil {
@@ -1445,8 +1459,9 @@ func (s *Server) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate magic link.
-	email, err := s.store.ValidateMagicLink(req.Token)
+	// Atomic consume — invite acceptance creates/accepts a TeamMember,
+	// so two concurrent clicks on the same link must not both succeed.
+	email, err := s.store.ConsumeMagicLink(req.Token)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return

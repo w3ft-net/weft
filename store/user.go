@@ -2,6 +2,8 @@ package store
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -212,47 +214,92 @@ func (s *Store) UpdateUserStripeCustomer(userID, stripeCustomerID string) error 
 }
 
 // --- Magic Links ---
+//
+// Tokens live plaintext in the email we send and in the URL the user
+// clicks; in Postgres we only ever keep the sha256 hash. A DB dump
+// therefore can't be turned into a login — an attacker would need a
+// sha256 preimage for a 256-bit random value.
+
+// hashMagicLinkToken returns the lookup value we store in magic_links.token.
+func hashMagicLinkToken(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
 
 func (s *Store) CreateMagicLink(email string) (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	token := fmt.Sprintf("%x", b)
+	raw := hex.EncodeToString(b)
 	link := MagicLink{
 		Email:     email,
-		Token:     token,
+		Token:     hashMagicLinkToken(raw),
 		ExpiresAt: time.Now().Add(15 * time.Minute),
 	}
 	if err := s.db.Create(&link).Error; err != nil {
 		return "", err
 	}
-	return token, nil
+	s.rememberRawMagicLink(email, raw)
+	return raw, nil
 }
 
-// ValidateMagicLink validates a magic link token without consuming it.
-// Returns the email. Call ConsumeMagicLink after successful account creation.
-func (s *Store) ValidateMagicLink(token string) (string, error) {
+// PeekMagicLink returns the email on a valid/unused/unexpired token
+// *without* consuming it. Callers that only need to branch on the
+// associated email (no state mutations) may use this. Callers that
+// mutate state — create user, flip EmailVerifiedAt, accept invite —
+// must go through ConsumeMagicLink so Postgres atomically decides
+// which concurrent request wins.
+func (s *Store) PeekMagicLink(token string) (string, error) {
+	hash := hashMagicLinkToken(token)
 	var link MagicLink
-	if err := s.db.Where("token = ? AND used = ? AND expires_at > ?", token, false, time.Now()).First(&link).Error; err != nil {
+	if err := s.db.Where("token = ? AND used = ? AND expires_at > ?", hash, false, time.Now()).First(&link).Error; err != nil {
 		return "", fmt.Errorf("invalid or expired magic link")
 	}
 	return link.Email, nil
 }
 
-// ConsumeMagicLink marks a magic link as used.
-func (s *Store) ConsumeMagicLink(token string) {
-	s.db.Model(&MagicLink{}).Where("token = ?", token).Update("used", true)
+// ConsumeMagicLink validates and marks the token as used in a single
+// atomic UPDATE ... RETURNING — two concurrent requests can't both win
+// because Postgres serializes the row update. Returns the email on
+// success, "" and an error on invalid/expired/already-used.
+func (s *Store) ConsumeMagicLink(token string) (string, error) {
+	hash := hashMagicLinkToken(token)
+	var email string
+	res := s.db.Raw(`
+		UPDATE magic_links
+		   SET used = true
+		 WHERE token = ? AND used = false AND expires_at > now()
+		RETURNING email`, hash).Scan(&email)
+	if res.Error != nil {
+		return "", fmt.Errorf("consume magic link: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return "", fmt.Errorf("invalid or expired magic link")
+	}
+	return email, nil
 }
 
-// GetLastMagicLinkToken returns the most recent token for an email (for testing).
+// GetLastMagicLinkToken returns the most recently issued raw token for
+// an email. Test-only: reads from an in-process map populated by
+// CreateMagicLink, since the raw token is never persisted.
 func (s *Store) GetLastMagicLinkToken(email string) (string, error) {
-	var link MagicLink
-	err := s.db.Where("email = ?", email).Order("id DESC").First(&link).Error
-	if err != nil {
-		return "", err
+	s.rawMagicLinkMu.Lock()
+	defer s.rawMagicLinkMu.Unlock()
+	tok, ok := s.rawMagicLinkTokens[email]
+	if !ok {
+		return "", fmt.Errorf("no magic link for %s", email)
 	}
-	return link.Token, nil
+	return tok, nil
+}
+
+func (s *Store) rememberRawMagicLink(email, raw string) {
+	s.rawMagicLinkMu.Lock()
+	defer s.rawMagicLinkMu.Unlock()
+	if s.rawMagicLinkTokens == nil {
+		s.rawMagicLinkTokens = make(map[string]string)
+	}
+	s.rawMagicLinkTokens[email] = raw
 }
 
 // --- Saved Queries ---

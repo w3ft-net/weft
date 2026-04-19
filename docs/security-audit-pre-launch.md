@@ -7,14 +7,15 @@ IngestStream namespace-scope bypass), `989da01` (email-verification gate
 for signup), `8315d9c` (coordinator gRPC JWT interceptor), `eca7eb7`
 (CLI migrated off gRPC-direct — coord gRPC is now strictly internal
 for api/weftd/shard paths), `30af7ae` (per-shard Heartbeat bearer
-token), and the shard-gRPC-auth commit landing now (shared SHARD_SECRET
-bearer on every coord→shard call; rogue-reach attacks on :9000 closed).
-Items struck from the doc; everything still here is unfixed.
-**Verdict**: **All four critical cross-tenant paths now closed.** The
-remaining findings are high/medium hardening (token plaintext storage,
-magic-link TOCTOU, rate limits, JWT hygiene, CORS) — none are
-standalone data-exfil vectors post-fix. Launching is now a product
-decision, not a security one; still land the highs before scaling.
+token), `eaf636e` (shared SHARD_SECRET bearer on every coord→shard
+call; rogue-reach attacks on :9000 closed), and the magic-link-TOCTOU
+commit landing now (atomic UPDATE ... RETURNING; sha256(token) at
+rest). Items struck from the doc; everything still here is unfixed.
+**Verdict**: **All four critical cross-tenant paths closed.** The
+remaining findings are high/medium hardening (agent-token plaintext,
+rate limits, JWT hygiene, CORS) — none are standalone data-exfil
+vectors post-fix. Launching is now a product decision, not a security
+one; still land the highs before scaling.
 
 ---
 
@@ -23,10 +24,9 @@ decision, not a security one; still land the highs before scaling.
 | # | Severity | Finding | Why it matters |
 |---|---|---|---|
 | 1 | **Critical** | Agent tokens (`wft_…`) stored **plaintext** in Postgres | Any DB leak = fleet-wide agent impersonation |
-| 2 | **High** | Magic-link validation and consumption are not atomic | TOCTOU → single link creates multiple accounts |
-| 3 | **High** | `/api/auth/device/poll` unauthenticated with no rate limit + 128-bit device code | DoS + narrows the window for any future code-entropy regression |
-| 4 | **Medium** | JWT 30-day expiry, no revocation list, stored in `localStorage` | XSS → month-long account takeover |
-| 5 | **Medium** | Production CORS silently allows `localhost:5173/5174/3000` | Subtle token-leakage path if a dev loopback is ever reachable |
+| 2 | **High** | `/api/auth/device/poll` unauthenticated with no rate limit + 128-bit device code | DoS + narrows the window for any future code-entropy regression |
+| 3 | **Medium** | JWT 30-day expiry, no revocation list, stored in `localStorage` | XSS → month-long account takeover |
+| 4 | **Medium** | Production CORS silently allows `localhost:5173/5174/3000` | Subtle token-leakage path if a dev loopback is ever reachable |
 
 The details below back each of these with file/line references and, where relevant, a working exploit payload.
 
@@ -64,35 +64,7 @@ Store `sha256(token)` as the lookup key. On validate, hash the presented token a
 
 ---
 
-## 2. Magic-link TOCTOU  **[HIGH]**
-
-`store/user.go:184-195`
-
-```go
-func (s *Store) ValidateMagicLink(token string) (string, error) {
-    var link MagicLink
-    if err := s.db.Where("token = ? AND used = ? AND expires_at > ?", token, false, time.Now()).First(&link).Error; err != nil {
-        return "", fmt.Errorf("invalid or expired magic link")
-    }
-    return link.Email, nil
-}
-
-func (s *Store) ConsumeMagicLink(token string) {
-    s.db.Model(&MagicLink{}).Where("token = ?", token).Update("used", true)
-}
-```
-
-`api/handlers.go:302-385` is the only caller; it does `Validate → … long path through user creation, subscription, team member … → Consume`. Two concurrent `POST /api/auth/verify` requests with the same token both see `used=false`, both succeed, and both produce JWTs. Worse, if the same email has never registered, the two requests race to `CreateUser` + `CreateSubscription`, producing duplicate rows (the `User` unique index is `(email, customer_id)`, so a second customer with the same org name *would* be rejected, but the `verify` path only creates the customer on brand-new users — in the race both may pass the exists check).
-
-Magic links are also stored plaintext (`store/user.go:58`). Same fix as agent tokens.
-
-### Fix
-
-Merge validate+consume into a single `UPDATE ... WHERE used=false AND expires_at > now() RETURNING email` — one SQL statement, atomic. Store `sha256(token)` rather than plaintext.
-
----
-
-## 3. Rate-limiting and abuse controls — absent everywhere  **[HIGH]**
+## 2. Rate-limiting and abuse controls — absent everywhere  **[HIGH]**
 
 Nothing in `api/`, `coordinator/service/`, or `shard/service/` implements rate limiting, request-size caps, or query timeouts. Concrete issues:
 
@@ -108,7 +80,7 @@ Standard per-IP / per-customer rate-limit middleware on the api (use `golang.org
 
 ---
 
-## 4. JWT hygiene  **[MEDIUM]**
+## 3. JWT hygiene  **[MEDIUM]**
 
 `api/auth.go:27-82`
 
@@ -127,7 +99,7 @@ Reduce expiry to 1h; add refresh tokens stored server-side with rotation on use;
 
 ---
 
-## 5. CORS and CSRF  **[MEDIUM]**
+## 4. CORS and CSRF  **[MEDIUM]**
 
 `api/middleware.go:83-108`
 
@@ -149,7 +121,7 @@ Gate the localhost origins on `os.Getenv("WEFT_ENV") == "dev"`. Explicitly set `
 
 ---
 
-## 6. Miscellaneous findings  **[LOW – MEDIUM]**
+## 5. Miscellaneous findings  **[LOW – MEDIUM]**
 
 - **`InjectCustomer` substring match.** `planner/sql.go:76` uses `strings.Contains(sql, " WHERE ")` to decide where to insert the customer predicate, and the value is interpolated via `fmt.Sprintf`. Safe today — the planner never produces `" WHERE "` as a substring of any `rawExpr` or predicate, and the allowlist in `coordinator.Query` gates the app name upstream — but brittle. A future change that puts user data inside a string literal containing ` WHERE ` would silently misplace the predicate. Move to an AST-level SQL build with parameterized literals.
 - **`SeedDevAgentToken`** (`store/token.go:169`) writes a known token whenever `--customer` is passed. Ensure this is never executable with a prod Postgres DSN.
@@ -166,7 +138,7 @@ Gate the localhost origins on `os.Getenv("WEFT_ENV") == "dev"`. Explicitly set `
 
 Blocking (must land before opening signups):
 
-1. Hash agent tokens and magic-link tokens at rest; make magic-link validate+consume a single atomic UPDATE.
+1. Hash agent tokens at rest (same sha256-lookup pattern now used for magic links).
 2. gRPC `MaxRecvMsgSize` + per-stream byte budget; 30s default query deadline; rate limits on `/api/auth/login`, `/api/auth/device/poll`, and the anonymous Stripe webhook path (already length-capped, good).
 
 Strongly recommended before first paying customer:
