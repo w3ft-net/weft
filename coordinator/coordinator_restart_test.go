@@ -81,7 +81,7 @@ func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
 
 	// Create new registry (simulating restart) and reconnect to same shard.
 	reg2 := NewShardRegistry()
-	gs, err := shard.NewGRPCShard(shardID, shardAddr)
+	gs, err := shard.NewGRPCShard(shardID, shardAddr, "")
 	if err != nil {
 		t.Fatalf("reconnect to shard: %v", err)
 	}

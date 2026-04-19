@@ -84,7 +84,9 @@ func (d *ASGDiscovery) DiscoverAddrs(ctx context.Context) ([]string, error) {
 
 // DiscoverShards returns Shard interfaces connected to each instance in the ASG.
 // Each shard gets a wide time window (will be narrowed by the shard's own config).
-func (d *ASGDiscovery) DiscoverShards(ctx context.Context) ([]shard.Shard, error) {
+// shardSecret is the shared bearer attached to every outbound call so the
+// shard's SharedTokenServerInterceptor accepts it.
+func (d *ASGDiscovery) DiscoverShards(ctx context.Context, shardSecret string) ([]shard.Shard, error) {
 	addrs, err := d.DiscoverAddrs(ctx)
 	if err != nil {
 		return nil, err
@@ -94,7 +96,7 @@ func (d *ASGDiscovery) DiscoverShards(ctx context.Context) ([]shard.Shard, error
 	var shards []shard.Shard
 	for i, addr := range addrs {
 		id := fmt.Sprintf("shard-%d", i)
-		gs, err := shard.NewGRPCShard(id, addr)
+		gs, err := shard.NewGRPCShard(id, addr, shardSecret)
 		if err != nil {
 			return nil, fmt.Errorf("connect to shard %s at %s: %w", id, addr, err)
 		}

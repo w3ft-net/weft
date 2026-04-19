@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/kevlarcon/weft/auth"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	shardsvc "github.com/kevlarcon/weft/shard/service"
 )
@@ -50,12 +51,28 @@ func main() {
 		srv = shardsvc.NewBlankServer(*dataDir, dbPath)
 	}
 
-	// gRPC server.
+	// gRPC server with shared-token auth. Coord↔shard is an internal
+	// link — both ends are trusted services, not the public internet,
+	// so a single shared secret is enough instead of per-peer JWTs. The
+	// coordinator reads the same SHARD_SECRET env var and attaches the
+	// bearer on every outbound call via auth.ClientTokenUnaryInterceptor.
+	// Default dev value so the local docker stack works out of the box;
+	// prod gets SHARD_SECRET populated from SSM/Secrets Manager via the
+	// Packer-baked startup.sh.
+	shardSecret := os.Getenv("SHARD_SECRET")
+	if shardSecret == "" {
+		shardSecret = "dev-shard-secret-change-in-production"
+		log.Println("WARNING: using default SHARD_SECRET — set SHARD_SECRET in production")
+	}
+
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *grpcPort))
 	if err != nil {
 		log.Fatalf("listen grpc: %v", err)
 	}
-	gs := grpc.NewServer()
+	gs := grpc.NewServer(
+		grpc.UnaryInterceptor(auth.SharedTokenUnaryServerInterceptor(shardSecret)),
+		grpc.StreamInterceptor(auth.SharedTokenStreamServerInterceptor(shardSecret)),
+	)
 	pb.RegisterShardQueryServer(gs, srv)
 
 	go func() {
