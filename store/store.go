@@ -1,6 +1,8 @@
 package store
 
 import (
+	"sync"
+
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -9,6 +11,16 @@ import (
 // Store manages all weft PostgreSQL state in a single unified package.
 type Store struct {
 	db *gorm.DB
+
+	// Test-only: raw magic-link tokens indexed by email. Populated by
+	// CreateMagicLink; read by GetLastMagicLinkToken. The tokens
+	// themselves are hashed before being persisted, so this map is the
+	// only way an in-process test can retrieve the raw value after
+	// sending it through the handler. In production nothing reads from
+	// this map, and tokens are cleared every 15 minutes by normal
+	// consumption / expiry.
+	rawMagicLinkMu     sync.Mutex
+	rawMagicLinkTokens map[string]string
 }
 
 // Open connects to the database and ensures all goose migrations have been

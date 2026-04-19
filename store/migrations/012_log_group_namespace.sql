@@ -45,12 +45,14 @@ UPDATE log_groups lg
 
 -- 4. Any row still unpinned means the backfill missed a case — fail the
 --    migration before the NOT NULL would do it silently.
+-- +goose StatementBegin
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM log_groups WHERE namespace_id IS NULL) THEN
         RAISE EXCEPTION 'migration 012: log_groups rows still have NULL namespace_id after backfill';
     END IF;
 END$$;
+-- +goose StatementEnd
 
 ALTER TABLE log_groups
     ALTER COLUMN namespace_id SET NOT NULL;
