@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kevlarcon/weft/auth"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -81,7 +82,7 @@ func TestAuth_LoginAndVerify(t *testing.T) {
 	}
 
 	// Verify JWT is valid.
-	claims, err := ValidateJWT(jwt, "test-secret")
+	claims, err := auth.Validate(jwt, "test-secret")
 	if err != nil {
 		t.Fatalf("validate JWT: %v", err)
 	}
@@ -131,7 +132,7 @@ func TestAuth_Me(t *testing.T) {
 
 	cust, _ := s.FindOrCreateCustomer("kevlar")
 	user, _ := s.CreateUser(fmt.Sprintf("me-%d@example.com", os.Getpid()), cust.ID)
-	jwt, _ := GenerateJWT(user, "trial", "test-secret")
+	jwt, _ := auth.Generate(user, "trial", "test-secret")
 
 	req := httptest.NewRequest("GET", "/api/auth/me", nil)
 	req.Header.Set("Authorization", "Bearer "+jwt)
@@ -177,7 +178,7 @@ func TestSavedQueries_CRUD(t *testing.T) {
 
 	cust2, _ := s.FindOrCreateCustomer("kevlar")
 	user, _ := s.CreateUser(fmt.Sprintf("queries-%d@example.com", os.Getpid()), cust2.ID)
-	jwt, _ := GenerateJWT(user, "trial", "test-secret")
+	jwt, _ := auth.Generate(user, "trial", "test-secret")
 
 	// Create.
 	body, _ := json.Marshal(map[string]string{"name": "error check", "query": "cat vimgym.log | grep ERROR"})
@@ -251,7 +252,7 @@ func TestAuth_Signup_ReturnsUnverifiedUser(t *testing.T) {
 
 	// JWT claim should agree.
 	jwt, _ := resp["token"].(string)
-	claims, err := ValidateJWT(jwt, "test-secret")
+	claims, err := auth.Validate(jwt, "test-secret")
 	if err != nil {
 		t.Fatalf("validate JWT: %v", err)
 	}
@@ -277,7 +278,7 @@ func TestAuth_UnverifiedUser_CannotCreateToken(t *testing.T) {
 		UserID: &user.ID, Role: "owner", Status: "active",
 	})
 	s.FindOrCreateNamespace(cust.ID, "default")
-	jwt, _ := GenerateJWT(user, "trial", "test-secret")
+	jwt, _ := auth.Generate(user, "trial", "test-secret")
 
 	body, _ := json.Marshal(map[string]string{"label": "prod", "namespace": "default"})
 	req := httptest.NewRequest("POST", "/api/tokens", bytes.NewReader(body))
@@ -312,7 +313,7 @@ func TestAuth_MarkVerified_UnlocksTokenCreation(t *testing.T) {
 		t.Fatalf("mark verified: %v", err)
 	}
 	user, _ = s.GetUserByID(user.ID)
-	jwt, _ := GenerateJWT(user, "trial", "test-secret")
+	jwt, _ := auth.Generate(user, "trial", "test-secret")
 
 	body, _ := json.Marshal(map[string]string{"label": "prod", "namespace": "default"})
 	req := httptest.NewRequest("POST", "/api/tokens", bytes.NewReader(body))

@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/kevlarcon/weft/auth"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
@@ -26,8 +27,15 @@ type RemoteQueryResult struct {
 }
 
 // NewRemoteCoordinator connects to a coordinator at the given address.
-func NewRemoteCoordinator(addr string) (*RemoteCoordinator, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+// token is attached as a Bearer in the authorization metadata of every
+// outbound RPC. Empty token is only appropriate for tests and for RPCs
+// in the coordinator's auth-skip list (IngestStream, Authenticate, etc).
+func NewRemoteCoordinator(addr, token string) (*RemoteCoordinator, error) {
+	conn, err := grpc.NewClient(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(auth.ClientTokenUnaryInterceptor(token)),
+		grpc.WithStreamInterceptor(auth.ClientTokenStreamInterceptor(token)),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("connect to coordinator at %s: %w", addr, err)
 	}

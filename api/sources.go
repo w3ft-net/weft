@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/kevlarcon/weft/auth"
 	"github.com/kevlarcon/weft/ingest"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/store"
@@ -348,8 +349,7 @@ func (s *Server) handleSampleCloudWatchSource(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	resp, err := s.coordClient.SampleCloudWatchSource(r.Context(), &pb.SampleCloudWatchSourceRequest{
-		Customer:     claims.CustomerName,
+	resp, err := s.coordClient.SampleCloudWatchSource(s.coordCtx(r), &pb.SampleCloudWatchSourceRequest{
 		Namespace:    req.Namespace,
 		LogGroup:     req.LogGroup,
 		Region:       req.Region,
@@ -425,8 +425,7 @@ func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if _, err := s.coordClient.AddSource(r.Context(), &pb.AddSourceRequest{
-		Customer:     claims.CustomerName,
+	if _, err := s.coordClient.AddSource(s.coordCtx(r), &pb.AddSourceRequest{
 		Namespace:    req.Namespace,
 		App:          fullApp,
 		LogGroup:     req.LogGroup,
@@ -472,8 +471,7 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fullApp := namespace + "/" + app
-	if _, err := s.coordClient.RemoveSource(r.Context(), &pb.RemoveSourceRequest{
-		Customer:  claims.CustomerName,
+	if _, err := s.coordClient.RemoveSource(s.coordCtx(r), &pb.RemoveSourceRequest{
 		Namespace: namespace,
 		App:       fullApp,
 	}); err != nil {
@@ -488,7 +486,7 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 // we ever split source permissions from token permissions we'd add a
 // dedicated CanManageSources flag — but for now the two tend to travel
 // together (both register data ingestion) so reusing the flag is honest.
-func (s *Server) authorizeSourceEdit(claims *JWTClaims, namespace string) error {
+func (s *Server) authorizeSourceEdit(claims *auth.Claims, namespace string) error {
 	if s.isOwner(claims.CustomerName, claims.Email) {
 		return nil
 	}

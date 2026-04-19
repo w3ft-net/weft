@@ -14,8 +14,41 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/kevlarcon/weft/auth"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/store"
 )
+
+// benchJWTSecret matches the dev coordinator's JWT_SECRET default so tests
+// can sign tokens the coordinator will accept without prearranged
+// configuration. Override WEFT_BENCH_JWT_SECRET to test against a
+// coordinator running with a custom secret.
+var benchJWTSecret = func() string {
+	if v := os.Getenv("WEFT_BENCH_JWT_SECRET"); v != "" {
+		return v
+	}
+	return "dev-secret-change-in-production"
+}()
+
+// benchJWT returns a signed JWT for a fake verified "kevlar" user. The
+// coordinator's auth interceptor validates against benchJWTSecret; the
+// handlers derive customer from the claim.
+func benchJWT(tb testing.TB) string {
+	tb.Helper()
+	now := time.Now()
+	user := &store.User{
+		ID:              "bench-user",
+		Email:           "bench@example.com",
+		CustomerName:    "kevlar",
+		EmailVerifiedAt: &now,
+		CreatedAt:       now,
+	}
+	tok, err := auth.Generate(user, "trial", benchJWTSecret)
+	if err != nil {
+		tb.Fatalf("sign bench JWT: %v", err)
+	}
+	return tok
+}
 
 // coordAddr is the coordinator gRPC address for benchmarks.
 // Set WEFT_BENCH_ADDR to override (default: localhost:9020).
@@ -27,10 +60,30 @@ func init() {
 	}
 }
 
-// connect returns a coordinator gRPC client authenticated with the dev
-// seed token (tied to customer "kevlar"). IngestStream requires this
-// metadata; queries don't need it but it's harmless to send.
+// connect returns a coordinator gRPC client. For ingest-only paths we'd
+// hand over the seeded agent token, but the JWT-gated RPCs (Query,
+// ListApps, ...) now require a user JWT. Send the user JWT by default;
+// ingest paths don't care which bearer is present since the coordinator's
+// IngestStream handler does its own agent-token lookup in metadata.
 func connect(tb testing.TB) pb.WeftCoordinatorClient {
+	tb.Helper()
+	conn, err := grpc.NewClient(coordAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithPerRPCCredentials(benchBearer{token: benchJWT(tb)}),
+	)
+	if err != nil {
+		tb.Fatalf("connect to %s: %v", coordAddr, err)
+	}
+	tb.Cleanup(func() { conn.Close() })
+	return pb.NewWeftCoordinatorClient(conn)
+}
+
+// connectIngest returns a client authenticated with the dev seed agent
+// token (tied to customer "kevlar"). Used for benchmarks that exercise
+// IngestStream — the coordinator's IngestStream handler expects a
+// bearer token formatted as wft_... and looks it up in the agent-token
+// table, so a JWT won't work there.
+func connectIngest(tb testing.TB) pb.WeftCoordinatorClient {
 	tb.Helper()
 	conn, err := grpc.NewClient(coordAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -54,14 +107,19 @@ func (benchBearer) RequireTransportSecurity() bool { return false }
 // ensureData loads N rows into the coordinator via IngestStream if not already loaded.
 var dataLoaded atomic.Bool
 
-func ensureData(tb testing.TB, client pb.WeftCoordinatorClient, n int) {
+func ensureData(tb testing.TB, _ pb.WeftCoordinatorClient, n int) {
 	if dataLoaded.Swap(true) {
 		return // already loaded in this process
 	}
 	tb.Logf("loading %d rows...", n)
 	start := time.Now()
 
-	stream, err := client.IngestStream(context.Background())
+	// IngestStream still validates the agent-token bearer inside the
+	// handler — the JWT we'd use for queries won't pass that check.
+	// Dial a dedicated client with the seeded agent token just for
+	// the ingest round-trip.
+	ingestClient := connectIngest(tb)
+	stream, err := ingestClient.IngestStream(context.Background())
 	if err != nil {
 		tb.Fatalf("open ingest stream: %v", err)
 	}
@@ -262,7 +320,8 @@ func BenchmarkIngest_50k(b *testing.B)  { benchIngest(b, 50_000) }
 func BenchmarkIngest_100k(b *testing.B) { benchIngest(b, 100_000) }
 
 func benchIngest(b *testing.B, rows int) {
-	client := connect(b)
+	// IngestStream needs an agent-token bearer, not a user JWT.
+	client := connectIngest(b)
 	baseTime := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	r := rand.New(rand.NewSource(99))
 
@@ -319,6 +378,7 @@ var tailPipelines = []string{
 
 func benchTailFanout(b *testing.B, numSubscribers int) {
 	client := connect(b)
+	ingestClient := connectIngest(b)
 	ensureData(b, client, 10_000)
 
 	b.ResetTimer()
@@ -354,7 +414,7 @@ func benchTailFanout(b *testing.B, numSubscribers int) {
 		// Give subscribers time to connect, then push rows for multiple apps.
 		time.Sleep(100 * time.Millisecond)
 
-		ingestStream, err := client.IngestStream(ctx)
+		ingestStream, err := ingestClient.IngestStream(ctx)
 		if err != nil {
 			cancel()
 			b.Fatal(err)
@@ -407,7 +467,12 @@ func requireCoordinator() int {
 		client := pb.NewWeftCoordinatorClient(conn)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		if _, err := client.ListApps(ctx, &pb.ListAppsRequest{}); err == nil {
+		// Authenticate is in the auth-skip list (agents bootstrap here
+		// with their own token in the request body), so we can use it
+		// as a cheap liveness probe without needing a signed JWT.
+		// An invalid-token reply still tells us the service is alive.
+		_, err := client.Authenticate(ctx, &pb.AuthenticateRequest{Token: "probe"})
+		if err == nil || strings.Contains(err.Error(), "invalid or revoked") {
 			conn.Close()
 			fmt.Println("bench: coordinator reachable at", coordAddr)
 			return 0

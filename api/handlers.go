@@ -17,7 +17,9 @@ import (
 	"github.com/stripe/stripe-go/v82/webhook"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
+	"github.com/kevlarcon/weft/auth"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/store"
 )
@@ -89,6 +91,18 @@ func (s *Server) Close() {
 	}
 }
 
+// coordCtx returns a context suitable for calling the coordinator on
+// behalf of the authenticated caller of r. The caller's JWT is forwarded
+// as outgoing gRPC metadata so the coordinator's auth interceptor sees
+// the same bearer token the api middleware already validated.
+func (s *Server) coordCtx(r *http.Request) context.Context {
+	hdr := r.Header.Get("Authorization")
+	if hdr == "" {
+		return r.Context()
+	}
+	return metadata.AppendToOutgoingContext(r.Context(), "authorization", hdr)
+}
+
 // StartUnverifiedSweep starts a background goroutine that periodically
 // deletes accounts that were created but never verified within the grace
 // period. Blocks until ctx is cancelled. Cascading FK deletes take care
@@ -112,7 +126,7 @@ func (s *Server) StartUnverifiedSweep(ctx context.Context) {
 }
 
 func (s *Server) sweepUnverified() {
-	cutoff := time.Now().Add(-UnverifiedGracePeriod)
+	cutoff := time.Now().Add(-auth.UnverifiedGracePeriod)
 	n, err := s.store.DeleteExpiredUnverifiedUsers(cutoff)
 	if err != nil {
 		log.Printf("unverified sweep: %v", err)
@@ -350,7 +364,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 
 	// Generate JWT.
 	user.CustomerName = customerName
-	jwt, err := GenerateJWT(user, "trial", s.jwtSecret)
+	jwt, err := auth.Generate(user, "trial", s.jwtSecret)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -512,7 +526,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	// Consume the magic link now that we have a user.
 	s.store.ConsumeMagicLink(req.Token)
 
-	jwt, err := GenerateJWT(user, tier, s.jwtSecret)
+	jwt, err := auth.Generate(user, tier, s.jwtSecret)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -558,7 +572,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"email_verified": user.EmailVerifiedAt != nil,
 	}
 	if user.EmailVerifiedAt == nil {
-		resp["verification_deadline"] = user.CreatedAt.Add(UnverifiedGracePeriod).Unix()
+		resp["verification_deadline"] = user.CreatedAt.Add(auth.UnverifiedGracePeriod).Unix()
 	}
 	json.NewEncoder(w).Encode(resp)
 }
@@ -859,9 +873,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := s.coordClient.GetUsage(context.Background(), &pb.GetUsageRequest{
-		Customer: claims.CustomerName,
-	})
+	resp, err := s.coordClient.GetUsage(s.coordCtx(r), &pb.GetUsageRequest{})
 	if err != nil {
 		log.Printf("GetUsage gRPC error: %v", err)
 		http.Error(w, "coordinator error", http.StatusBadGateway)
@@ -1065,12 +1077,7 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "coordinator unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	claims := GetClaims(r)
-	customer := ""
-	if claims != nil {
-		customer = claims.CustomerName
-	}
-	resp, err := s.coordClient.ListApps(context.Background(), &pb.ListAppsRequest{Customer: customer})
+	resp, err := s.coordClient.ListApps(s.coordCtx(r), &pb.ListAppsRequest{})
 	if err != nil {
 		http.Error(w, "coordinator error", http.StatusBadGateway)
 		return
@@ -1469,7 +1476,7 @@ func (s *Server) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		tier = sub.Tier
 	}
 
-	jwt, err := GenerateJWT(user, tier, s.jwtSecret)
+	jwt, err := auth.Generate(user, tier, s.jwtSecret)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1595,7 +1602,7 @@ func (s *Server) handleDevicePoll(w http.ResponseWriter, r *http.Request) {
 		tier = sub.Tier
 	}
 
-	jwt, err := GenerateJWT(user, tier, s.jwtSecret)
+	jwt, err := auth.Generate(user, tier, s.jwtSecret)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

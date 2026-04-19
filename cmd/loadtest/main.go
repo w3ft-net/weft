@@ -23,7 +23,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/kevlarcon/weft/auth"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/store"
 )
 
 func main() {
@@ -40,8 +42,28 @@ func main() {
 	reportFile := flag.String("report", "", "write JSON report to file")
 	flag.Parse()
 
-	// Connect to coordinator.
-	conn, err := grpc.NewClient(*coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// Connect to coordinator. The coordinator's auth interceptor rejects
+	// unauthenticated calls on every JWT-gated RPC, so we sign a test
+	// JWT for a fake "loadtest" user (customer "kevlar") using the dev
+	// JWT secret. Override WEFT_LOADTEST_JWT_SECRET to point at a
+	// coordinator with a non-default secret.
+	jwtSecret := os.Getenv("WEFT_LOADTEST_JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = "dev-secret-change-in-production"
+	}
+	now := time.Now()
+	loadtestJWT, err := auth.Generate(&store.User{
+		ID: "loadtest-user", Email: "loadtest@example.com",
+		CustomerName: "kevlar", EmailVerifiedAt: &now, CreatedAt: now,
+	}, "trial", jwtSecret)
+	if err != nil {
+		log.Fatalf("sign loadtest JWT: %v", err)
+	}
+	conn, err := grpc.NewClient(*coordAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(auth.ClientTokenUnaryInterceptor(loadtestJWT)),
+		grpc.WithStreamInterceptor(auth.ClientTokenStreamInterceptor(loadtestJWT)),
+	)
 	if err != nil {
 		log.Fatalf("connect to coordinator: %v", err)
 	}
