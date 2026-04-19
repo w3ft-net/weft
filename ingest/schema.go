@@ -71,6 +71,13 @@ func LoadSchema(path string) (*Schema, error) {
 	if err != nil {
 		return nil, err
 	}
+	return LoadSchemaFromBytes(data)
+}
+
+// LoadSchemaFromBytes parses a schema from raw YAML bytes. Same shape as
+// LoadSchema but for callers that already have the YAML in memory (e.g.
+// CLI subcommands that read the file themselves before posting fields).
+func LoadSchemaFromBytes(data []byte) (*Schema, error) {
 	var s Schema
 	if err := yaml.Unmarshal(data, &s); err != nil {
 		return nil, err

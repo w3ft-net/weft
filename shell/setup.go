@@ -21,17 +21,19 @@ var (
 )
 
 // RunSetup runs the interactive schema setup wizard from a sample file.
-func RunSetup(app, customer, sampleFile string) (*ingest.Schema, error) {
+func RunSetup(app, sampleFile string) (*ingest.Schema, error) {
 	data, err := os.ReadFile(sampleFile)
 	if err != nil {
 		return nil, fmt.Errorf("read sample file: %w", err)
 	}
 	lines := strings.Split(string(data), "\n")
-	return RunSetupFromLines(app, customer, lines)
+	return RunSetupFromLines(app, lines)
 }
 
 // RunSetupFromLines runs the interactive schema setup wizard from pre-loaded lines.
-func RunSetupFromLines(app, customer string, lines []string) (*ingest.Schema, error) {
+// Customer is not captured on the resulting schema — the api server derives
+// it from the caller's JWT at upload time, so it's redundant on disk.
+func RunSetupFromLines(app string, lines []string) (*ingest.Schema, error) {
 	fmt.Println(titleStyle.Render("weft setup — schema detection for " + app))
 	fmt.Println()
 
@@ -54,8 +56,7 @@ func RunSetupFromLines(app, customer string, lines []string) (*ingest.Schema, er
 	fmt.Println()
 
 	schema := &ingest.Schema{
-		App:      app,
-		Customer: customer,
+		App: app,
 	}
 
 	// --- Envelope ---

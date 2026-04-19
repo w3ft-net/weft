@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kevlarcon/weft/shellcore"
 )
 
 // HTTPBackend implements Backend over the weft HTTP API.
@@ -79,6 +82,35 @@ func (b *HTTPBackend) SaveWatch(name string, w *WatchData) error {
 
 func (b *HTTPBackend) DeleteWatch(name string) error {
 	return b.apiDelete("/api/watches/" + name)
+}
+
+// GetWatchResults returns recent watch runs. Used by the shell to render
+// sparkline / last-run values inside the interactive UI. limit is the
+// server-side max; a limit of 0 tells the api to apply its default.
+func (b *HTTPBackend) GetWatchResults(name string, limit int) ([]shellcore.WatchResultValue, error) {
+	url := "/api/watches/" + name + "/results"
+	if limit > 0 {
+		url += "?limit=" + strconv.Itoa(limit)
+	}
+	data, err := b.apiGet(url)
+	if err != nil {
+		return nil, err
+	}
+	var rows []struct {
+		Stdout string `json:"stdout"`
+		RanAt  string `json:"ran_at"`
+	}
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return nil, err
+	}
+	out := make([]shellcore.WatchResultValue, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, shellcore.WatchResultValue{
+			Value: strings.TrimSpace(r.Stdout),
+			RanAt: r.RanAt,
+		})
+	}
+	return out, nil
 }
 
 // ── HTTP helpers ──────────────────────────────────────────────
