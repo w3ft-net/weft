@@ -171,11 +171,15 @@ build {
   # instance profile (see source block) gets read access via the bucket
   # policy on kevlar-releases; no explicit IAM needed. Pins whatever
   # version was LATEST at bake time into the AMI for its lifetime.
+  # inline_shebang forces bash — Debian's /bin/sh is dash, which chokes
+  # on `set -o pipefail`.
   provisioner "shell" {
     environment_vars = ["AWS_REGION=us-east-2"]
+    inline_shebang   = "/bin/bash -e"
     inline = [
-      "set -euo pipefail",
+      "set -uo pipefail",
       "VERSION=$(aws s3 cp --no-progress s3://kevlar-releases-289202785125/kevcons/LATEST -)",
+      "if [ -z \"$VERSION\" ]; then echo 'failed to resolve kevcons LATEST'; exit 1; fi",
       "echo \"installing kevcons $VERSION\"",
       "sudo aws s3 cp --no-progress \"s3://kevlar-releases-289202785125/kevcons/$VERSION/kevcons-linux-arm64\" /usr/local/bin/kevcons",
       "sudo chmod 0755 /usr/local/bin/kevcons",
