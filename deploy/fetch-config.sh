@@ -37,6 +37,30 @@ APP_NAME=$APP_NAME
 AWS_REGION=$AWS_REGION
 WEFT_DB_DSN='$WEFT_DB_DSN'
 EOF
+
+# Auto-discover secrets under /${APP_NAME}/ and append. The short name
+# (after the last '/') becomes the env var, uppercased with dashes
+# converted to underscores. e.g. /weft/WEFTD_TOKEN → WEFTD_TOKEN,
+# /weft/slack-client-secret → SLACK_CLIENT_SECRET.
+echo "fetch-config: fetching secrets from /${APP_NAME}/ ..."
+SECRET_NAMES=$(aws secretsmanager list-secrets \
+    --filters Key=name,Values="/${APP_NAME}/" \
+    --region "$AWS_REGION" \
+    --query 'SecretList[*].Name' \
+    --output text 2>/dev/null || echo "")
+for SECRET_NAME in $SECRET_NAMES; do
+    SECRET_VALUE=$(aws secretsmanager get-secret-value \
+        --secret-id "$SECRET_NAME" \
+        --region "$AWS_REGION" \
+        --query 'SecretString' \
+        --output text 2>/dev/null || echo "")
+    [ -z "$SECRET_VALUE" ] && continue
+    SHORT_NAME="${SECRET_NAME##*/}"
+    ENV_VAR=$(echo "$SHORT_NAME" | tr '[:lower:]-' '[:upper:]_')
+    echo "${ENV_VAR}='${SECRET_VALUE}'" >> "$ENV_FILE"
+    echo "  secret: $SHORT_NAME → $ENV_VAR"
+done
+
 chown app:app "$ENV_FILE"
 
 echo "fetch-config: done"
