@@ -22,6 +22,11 @@ import (
 	"github.com/kevlarcon/weft/store"
 )
 
+// unverifiedSweepInterval is how often the cleanup goroutine deletes
+// expired unverified accounts. Must be comfortably shorter than
+// UnverifiedGracePeriod so an expired account doesn't linger.
+const unverifiedSweepInterval = 1 * time.Hour
+
 // Server is the weft API server.
 type Server struct {
 	store     *store.Store
@@ -84,6 +89,40 @@ func (s *Server) Close() {
 	}
 }
 
+// StartUnverifiedSweep starts a background goroutine that periodically
+// deletes accounts that were created but never verified within the grace
+// period. Blocks until ctx is cancelled. Cascading FK deletes take care
+// of the user's customer/subscription/team-member/tokens/sources.
+func (s *Server) StartUnverifiedSweep(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(unverifiedSweepInterval)
+		defer ticker.Stop()
+		// Run once at startup so restarts don't give squatters a free
+		// extra interval. Ignore errors — we'll retry next tick.
+		s.sweepUnverified()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.sweepUnverified()
+			}
+		}
+	}()
+}
+
+func (s *Server) sweepUnverified() {
+	cutoff := time.Now().Add(-UnverifiedGracePeriod)
+	n, err := s.store.DeleteExpiredUnverifiedUsers(cutoff)
+	if err != nil {
+		log.Printf("unverified sweep: %v", err)
+		return
+	}
+	if n > 0 {
+		log.Printf("unverified sweep: deleted %d expired accounts", n)
+	}
+}
+
 // Handler returns the HTTP handler with all routes.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -97,9 +136,21 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/billing/webhook", s.handleStripeWebhook)
 
 	// Authenticated routes.
+	// protected wraps a handler in RequireEmailVerified. Used for routes
+	// that touch external effects (token creation, integrations, source
+	// registration, team invites, namespace creation) — anything an
+	// unverified attacker could abuse to do real damage before the cleanup
+	// sweep drops their account. Read-only routes and the Stripe billing
+	// flow stay open for unverified users so they can still set up
+	// payment without a second round-trip to their inbox.
+	protected := func(h http.HandlerFunc) http.Handler {
+		return RequireEmailVerified(s.store, h)
+	}
+
 	auth := http.NewServeMux()
 	auth.HandleFunc("GET /api/auth/me", s.handleMe)
 	auth.HandleFunc("POST /api/auth/device/approve", s.handleDeviceApprove)
+	auth.HandleFunc("POST /api/auth/resend-verification", s.handleResendVerification)
 	auth.HandleFunc("POST /api/billing/checkout", s.handleCheckout)
 	auth.HandleFunc("POST /api/billing/setup-intent", s.handleSetupIntent)
 	auth.HandleFunc("GET /api/billing/usage", s.handleUsage)
@@ -107,43 +158,43 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/queries", s.handleCreateQuery)
 	auth.HandleFunc("DELETE /api/queries/{id}", s.handleDeleteQuery)
 	auth.HandleFunc("GET /api/tokens", s.handleListTokens)
-	auth.HandleFunc("POST /api/tokens", s.handleCreateToken)
-	auth.HandleFunc("DELETE /api/tokens/{token}", s.handleRevokeToken)
+	auth.Handle("POST /api/tokens", protected(s.handleCreateToken))
+	auth.Handle("DELETE /api/tokens/{token}", protected(s.handleRevokeToken))
 	auth.HandleFunc("GET /api/apps", s.handleListApps)
-		auth.HandleFunc("GET /api/ingestion-status", s.handleIngestionStatus)
+	auth.HandleFunc("GET /api/ingestion-status", s.handleIngestionStatus)
 	auth.HandleFunc("POST /api/shell/exec", s.handleShellExec)
 	auth.HandleFunc("GET /api/functions", s.handleListFunctions)
 	auth.HandleFunc("GET /api/functions/{name}", s.handleGetFunction)
-	auth.HandleFunc("PUT /api/functions/{name}", s.handleSaveFunction)
-	auth.HandleFunc("DELETE /api/functions/{name}", s.handleDeleteFunction)
+	auth.Handle("PUT /api/functions/{name}", protected(s.handleSaveFunction))
+	auth.Handle("DELETE /api/functions/{name}", protected(s.handleDeleteFunction))
 	auth.HandleFunc("GET /api/watches", s.handleListWatches)
 	auth.HandleFunc("GET /api/watches/{name}", s.handleGetWatch)
-	auth.HandleFunc("PUT /api/watches/{name}", s.handleSaveWatch)
-	auth.HandleFunc("DELETE /api/watches/{name}", s.handleDeleteWatch)
+	auth.Handle("PUT /api/watches/{name}", protected(s.handleSaveWatch))
+	auth.Handle("DELETE /api/watches/{name}", protected(s.handleDeleteWatch))
 	auth.HandleFunc("GET /api/watches/{name}/results", s.handleWatchResults)
 	auth.HandleFunc("GET /api/integrations", s.handleListIntegrations)
-	auth.HandleFunc("POST /api/integrations/slack/connect", s.handleSlackConnect)
-	auth.HandleFunc("DELETE /api/integrations/slack", s.handleSlackDisconnect)
-	auth.HandleFunc("PUT /api/integrations/pagerduty", s.handlePagerDutySave)
-	auth.HandleFunc("DELETE /api/integrations/pagerduty", s.handlePagerDutyDisconnect)
-	auth.HandleFunc("DELETE /api/integrations/pagerduty/{name}", s.handlePagerDutyDelete)
+	auth.Handle("POST /api/integrations/slack/connect", protected(s.handleSlackConnect))
+	auth.Handle("DELETE /api/integrations/slack", protected(s.handleSlackDisconnect))
+	auth.Handle("PUT /api/integrations/pagerduty", protected(s.handlePagerDutySave))
+	auth.Handle("DELETE /api/integrations/pagerduty", protected(s.handlePagerDutyDisconnect))
+	auth.Handle("DELETE /api/integrations/pagerduty/{name}", protected(s.handlePagerDutyDelete))
 	auth.HandleFunc("GET /api/namespaces", s.handleListNamespaces)
-	auth.HandleFunc("POST /api/namespaces", s.handleCreateNamespace)
-	auth.HandleFunc("PUT /api/namespaces/{name}/permissions/{userId}", s.handleSetNamespacePermission)
+	auth.Handle("POST /api/namespaces", protected(s.handleCreateNamespace))
+	auth.Handle("PUT /api/namespaces/{name}/permissions/{userId}", protected(s.handleSetNamespacePermission))
 	auth.HandleFunc("GET /api/team", s.handleListTeam)
 	auth.HandleFunc("PUT /api/team/name", s.handleUpdateTeamName)
-	auth.HandleFunc("POST /api/team/invite", s.handleInviteTeamMember)
+	auth.Handle("POST /api/team/invite", protected(s.handleInviteTeamMember))
 	auth.HandleFunc("DELETE /api/team/{id}", s.handleRemoveTeamMember)
 
 	// Source onboarding (dashboard-authenticated).
 	auth.HandleFunc("GET /api/sources/pending", s.handlePendingSources)
-	auth.HandleFunc("POST /api/sources/{namespace}/{app}/configure", s.handleConfigureSource)
+	auth.Handle("POST /api/sources/{namespace}/{app}/configure", protected(s.handleConfigureSource))
 
 	// CloudWatch source management (dashboard-authenticated).
 	auth.HandleFunc("GET /api/sources", s.handleListSources)
-	auth.HandleFunc("POST /api/sources/cloudwatch/sample", s.handleSampleCloudWatchSource)
-	auth.HandleFunc("POST /api/sources/cloudwatch", s.handleAddCloudWatchSource)
-	auth.HandleFunc("DELETE /api/sources/{namespace}/{app}", s.handleDeleteSource)
+	auth.Handle("POST /api/sources/cloudwatch/sample", protected(s.handleSampleCloudWatchSource))
+	auth.Handle("POST /api/sources/cloudwatch", protected(s.handleAddCloudWatchSource))
+	auth.Handle("DELETE /api/sources/{namespace}/{app}", protected(s.handleDeleteSource))
 
 	// Public routes (no auth).
 	mux.HandleFunc("POST /api/team/accept", s.handleAcceptInvite)
@@ -161,6 +212,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("/api/auth/me", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/auth/device/approve", AuthMiddleware(s.jwtSecret, auth))
+	mux.Handle("/api/auth/resend-verification", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/billing/checkout", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/billing/setup-intent", AuthMiddleware(s.jwtSecret, auth))
 	mux.Handle("/api/billing/usage", AuthMiddleware(s.jwtSecret, auth))
@@ -244,7 +296,11 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create customer + user.
+	// Create customer + user. The user starts UNVERIFIED — they'll get a
+	// JWT that lets them into the dashboard but the RequireEmailVerified
+	// middleware blocks token creation, watches, integrations, and source
+	// config until they click the magic link we send below. If they never
+	// click, the cleanup sweep deletes the account after 24h.
 	cust, _ := s.store.FindOrCreateCustomer(customerName)
 	user, err := s.store.CreateUser(req.Email, cust.ID)
 	if err != nil {
@@ -276,6 +332,22 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:    time.Now(),
 	})
 
+	// Send the verification email. We ignore the send failure on purpose:
+	// signup succeeds either way so the user still has a working session,
+	// and they can hit POST /api/auth/resend-verification from the banner
+	// if the first email never arrives. We DO fail if the magic-link
+	// record can't be created, since that's a DB problem the caller
+	// should know about.
+	token, err := s.store.CreateMagicLink(req.Email)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	verifyURL := fmt.Sprintf("%s/verify?token=%s", s.baseURL, token)
+	if err := SendMagicLinkEmail(s.email, req.Email, verifyURL); err != nil {
+		log.Printf("signup: failed to send verification email to %s: %v", req.Email, err)
+	}
+
 	// Generate JWT.
 	user.CustomerName = customerName
 	jwt, err := GenerateJWT(user, "trial", s.jwtSecret)
@@ -288,12 +360,48 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		"token": jwt,
 		"tier":  req.Tier,
 		"user": map[string]any{
-			"id":       user.ID,
-			"email":    user.Email,
-			"tier":     "trial",
-			"customer": customerName,
+			"id":             user.ID,
+			"email":          user.Email,
+			"tier":           "trial",
+			"customer":       customerName,
+			"email_verified": false,
 		},
 	})
+}
+
+// handleResendVerification re-sends the verification email for the
+// authenticated caller. No-op (returns 200) for users already verified so
+// the frontend can call it unconditionally from a "resend" button without
+// worrying about state. The email send itself is best-effort — we log but
+// don't fail if Sendgrid rejects.
+func (s *Server) handleResendVerification(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	user, err := s.store.GetUserByID(claims.UserID)
+	if err != nil {
+		http.Error(w, "user not found", http.StatusNotFound)
+		return
+	}
+	if user.EmailVerifiedAt != nil {
+		json.NewEncoder(w).Encode(map[string]any{"status": "already_verified"})
+		return
+	}
+
+	token, err := s.store.CreateMagicLink(user.Email)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	verifyURL := fmt.Sprintf("%s/verify?token=%s", s.baseURL, token)
+	if err := SendMagicLinkEmail(s.email, user.Email, verifyURL); err != nil {
+		log.Printf("resend-verification: failed to send to %s: %v", user.Email, err)
+		http.Error(w, "failed to send email", http.StatusBadGateway)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{"status": "sent"})
 }
 
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
@@ -317,7 +425,9 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 
 	// Check for pending team invite first.
 	if invite, err := s.store.GetPendingTeamMemberByEmail(email); err == nil {
-		// Invited user — join that customer.
+		// Invited user — join that customer. They proved email ownership
+		// by clicking the invite link, so the user row is created as
+		// verified from the start.
 		cust, _ := s.store.GetCustomerByName(invite.CustomerName)
 		if cust == nil {
 			http.Error(w, "customer not found", http.StatusInternalServerError)
@@ -325,7 +435,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		}
 		user, err = s.store.GetUserByEmailAndCustomer(email, cust.ID)
 		if err != nil {
-			user, err = s.store.CreateUser(email, cust.ID)
+			user, err = s.store.CreateVerifiedUser(email, cust.ID)
 			if err != nil {
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
@@ -352,7 +462,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 
 			customerName := strings.ToLower(strings.TrimSpace(req.OrgName))
 			cust, _ := s.store.FindOrCreateCustomer(customerName)
-			user, err = s.store.CreateUser(email, cust.ID)
+			user, err = s.store.CreateVerifiedUser(email, cust.ID)
 			if err != nil {
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
@@ -382,6 +492,17 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 				UpdatedAt:    time.Now(),
 			})
 		} else {
+			// Existing user — this is the signup-verification round-trip.
+			// Flip EmailVerifiedAt if not already set so the middleware
+			// unlocks mutating endpoints. No-op for users who were
+			// already verified (e.g. re-clicked the link later).
+			if user.EmailVerifiedAt == nil {
+				if err := s.store.MarkUserVerified(user.ID); err != nil {
+					log.Printf("verify: mark verified for %s: %v", user.ID, err)
+				}
+				now := time.Now()
+				user.EmailVerifiedAt = &now
+			}
 			if sub, _ := s.store.ActiveSubscription(user.Customer.Name); sub != nil {
 				tier = sub.Tier
 			}
@@ -400,9 +521,10 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"token": jwt,
 		"user": map[string]any{
-			"id":    user.ID,
-			"email": user.Email,
-			"tier":  tier,
+			"id":             user.ID,
+			"email":          user.Email,
+			"tier":           tier,
+			"email_verified": true,
 		},
 	})
 }
@@ -427,13 +549,18 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	json.NewEncoder(w).Encode(map[string]any{
-		"id":       user.ID,
-		"email":    user.Email,
-		"name":     user.Name,
-		"tier":     tier,
-		"customer": user.CustomerName,
-	})
+	resp := map[string]any{
+		"id":             user.ID,
+		"email":          user.Email,
+		"name":           user.Name,
+		"tier":           tier,
+		"customer":       user.CustomerName,
+		"email_verified": user.EmailVerifiedAt != nil,
+	}
+	if user.EmailVerifiedAt == nil {
+		resp["verification_deadline"] = user.CreatedAt.Add(UnverifiedGracePeriod).Unix()
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 // --- Billing handlers ---

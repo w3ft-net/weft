@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/kevlarcon/weft/store"
 )
@@ -216,5 +217,140 @@ func TestSavedQueries_CRUD(t *testing.T) {
 	handler.ServeHTTP(w, req)
 	if w.Code != 204 {
 		t.Fatalf("delete: expected 204, got %d", w.Code)
+	}
+}
+
+// ── Email verification gating (security audit follow-up) ───────
+
+func TestAuth_Signup_ReturnsUnverifiedUser(t *testing.T) {
+	srv, _ := testServer(t)
+	srv.StripePrices["swatch"] = "price_test"
+	handler := srv.Handler()
+	email := fmt.Sprintf("signup-%d@example.com", os.Getpid())
+
+	body, _ := json.Marshal(map[string]string{
+		"email": email, "org_name": fmt.Sprintf("squatter-%d", os.Getpid()), "tier": "swatch",
+	})
+	req := httptest.NewRequest("POST", "/api/auth/signup", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("signup: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	user, _ := resp["user"].(map[string]any)
+	if user == nil {
+		t.Fatal("no user in signup response")
+	}
+	if ver, _ := user["email_verified"].(bool); ver != false {
+		t.Errorf("signup user should be unverified, got email_verified=%v", user["email_verified"])
+	}
+
+	// JWT claim should agree.
+	jwt, _ := resp["token"].(string)
+	claims, err := ValidateJWT(jwt, "test-secret")
+	if err != nil {
+		t.Fatalf("validate JWT: %v", err)
+	}
+	if claims.EmailVerified {
+		t.Error("JWT claim email_verified should be false on signup")
+	}
+	if claims.VerificationDeadline == 0 {
+		t.Error("JWT should carry a verification_deadline for unverified users")
+	}
+}
+
+func TestAuth_UnverifiedUser_CannotCreateToken(t *testing.T) {
+	srv, s := testServer(t)
+	handler := srv.Handler()
+
+	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("unverified-%d", os.Getpid()))
+	user, _ := s.CreateUser(fmt.Sprintf("unverified-%d@example.com", os.Getpid()), cust.ID)
+	// Owner membership so the isOwner check in handleCreateToken would
+	// otherwise pass — we want to be sure the 403 comes from the
+	// verification gate, not from permission.
+	s.CreateTeamMember(&store.TeamMember{
+		ID: "tm-unverified", CustomerName: cust.Name, Email: user.Email,
+		UserID: &user.ID, Role: "owner", Status: "active",
+	})
+	s.FindOrCreateNamespace(cust.ID, "default")
+	jwt, _ := GenerateJWT(user, "trial", "test-secret")
+
+	body, _ := json.Marshal(map[string]string{"label": "prod", "namespace": "default"})
+	req := httptest.NewRequest("POST", "/api/tokens", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403 for unverified user, got %d: %s", w.Code, w.Body.String())
+	}
+	var errResp map[string]any
+	json.Unmarshal(w.Body.Bytes(), &errResp)
+	if errResp["code"] != "email_verification_required" {
+		t.Errorf("expected code email_verification_required, got %v", errResp["code"])
+	}
+}
+
+func TestAuth_MarkVerified_UnlocksTokenCreation(t *testing.T) {
+	srv, s := testServer(t)
+	handler := srv.Handler()
+
+	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("verify-unlock-%d", os.Getpid()))
+	user, _ := s.CreateUser(fmt.Sprintf("verify-unlock-%d@example.com", os.Getpid()), cust.ID)
+	s.CreateTeamMember(&store.TeamMember{
+		ID: "tm-verify-unlock", CustomerName: cust.Name, Email: user.Email,
+		UserID: &user.ID, Role: "owner", Status: "active",
+	})
+	s.FindOrCreateNamespace(cust.ID, "default")
+
+	// Flip verified state, then reissue JWT.
+	if err := s.MarkUserVerified(user.ID); err != nil {
+		t.Fatalf("mark verified: %v", err)
+	}
+	user, _ = s.GetUserByID(user.ID)
+	jwt, _ := GenerateJWT(user, "trial", "test-secret")
+
+	body, _ := json.Marshal(map[string]string{"label": "prod", "namespace": "default"})
+	req := httptest.NewRequest("POST", "/api/tokens", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != 201 {
+		t.Fatalf("expected 201 after verification, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAuth_Sweep_DeletesExpiredUnverifiedOnly(t *testing.T) {
+	_, s := testServer(t)
+
+	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("sweep-%d", os.Getpid()))
+	unverifiedEmail := fmt.Sprintf("sweep-unverified-%d@example.com", os.Getpid())
+	verifiedEmail := fmt.Sprintf("sweep-verified-%d@example.com", os.Getpid())
+
+	unverified, _ := s.CreateUser(unverifiedEmail, cust.ID)
+	_, _ = s.CreateVerifiedUser(verifiedEmail, cust.ID)
+
+	// Cutoff one hour in the future sweeps ALL users whose EmailVerifiedAt
+	// is nil regardless of CreatedAt, so we don't have to surgically
+	// backdate rows to prove the delete targets the right set.
+	deleted, err := s.DeleteExpiredUnverifiedUsers(time.Now().Add(1 * time.Hour))
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected 1 deletion (unverified only), got %d", deleted)
+	}
+
+	// The unverified user is gone, the verified user survives.
+	if _, err := s.GetUserByID(unverified.ID); err == nil {
+		t.Error("unverified user should have been deleted")
+	}
+	if _, err := s.GetUserByEmail(verifiedEmail); err != nil {
+		t.Errorf("verified user should still exist: %v", err)
 	}
 }

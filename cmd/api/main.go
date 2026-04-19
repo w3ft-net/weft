@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"net/http"
@@ -59,6 +60,12 @@ func main() {
 	srv.StripeWebhookSecret = os.Getenv("STRIPE_WEBHOOK_SECRET")
 	srv.SlackClientID = os.Getenv("SLACK_CLIENT_ID")
 	srv.SlackClientSecret = os.Getenv("SLACK_CLIENT_SECRET")
+
+	// Start the periodic cleanup of accounts that were created but never
+	// completed email verification. See api.UnverifiedGracePeriod.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv.StartUnverifiedSweep(ctx)
 
 	log.Printf("weft-api listening on :%s (coordinator: %s)", *port, *coordAddr)
 	if err := http.ListenAndServe(":"+*port, srv.Handler()); err != nil {
