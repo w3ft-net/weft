@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"google.golang.org/grpc"
 
+	"github.com/kevlarcon/weft/auth"
 	"github.com/kevlarcon/weft/compute"
 	"github.com/kevlarcon/weft/coordinator"
 	"github.com/kevlarcon/weft/coordinator/discovery"
@@ -273,12 +274,38 @@ func main() {
 		http.ListenAndServe(fmt.Sprintf(":%d", *healthPort), nil)
 	}()
 
-	// gRPC server.
+	// gRPC server with auth interceptors.
+	//
+	// JWT-gated RPCs carry the caller's bearer token in metadata; the
+	// auth interceptor validates and stashes claims in ctx. A few RPCs
+	// skip the JWT check because they bootstrap some other auth model:
+	//   - IngestStream / SubmitSample / GetSourceStatus: agent-token
+	//     bearer, validated inside the handler.
+	//   - Authenticate: takes the agent token in the request body; this
+	//     is how weftd converts a wft_... into a customer/namespace.
+	//   - Heartbeat: unauthenticated today; separate follow-up will
+	//     require per-shard credentials.
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = "dev-secret-change-in-production"
+		log.Println("WARNING: using default JWT secret — set JWT_SECRET in production")
+	}
+	skip := auth.SkipMethods{
+		"/weft.WeftCoordinator/IngestStream":    true,
+		"/weft.WeftCoordinator/SubmitSample":    true,
+		"/weft.WeftCoordinator/GetSourceStatus": true,
+		"/weft.WeftCoordinator/Authenticate":    true,
+		"/weft.WeftCoordinator/Heartbeat":       true,
+	}
+
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
-	srv := grpc.NewServer()
+	srv := grpc.NewServer(
+		grpc.UnaryInterceptor(auth.UnaryServerInterceptor(jwtSecret, skip)),
+		grpc.StreamInterceptor(auth.StreamServerInterceptor(jwtSecret, skip)),
+	)
 	pb.RegisterWeftCoordinatorServer(srv, &coordsvc.Server{
 		Coord: coord,
 		Store: db,

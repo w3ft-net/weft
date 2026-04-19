@@ -421,8 +421,14 @@ func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 		return s, func() {}, nil
 	}
 
-	// gRPC mode: endpoint is host:port.
-	remote, err := shell.NewRemoteCoordinator(endpoint)
+	// gRPC mode: endpoint is host:port. The token must be a user JWT
+	// obtained via the browser/device flow — the coordinator's auth
+	// interceptor rejects unauthenticated calls on every RPC that
+	// operates on tenant data.
+	if cfg.Token == "" {
+		return nil, nil, fmt.Errorf("WEFT_TOKEN required — grab one from the dashboard or run `weft login`")
+	}
+	remote, err := shell.NewRemoteCoordinator(endpoint, cfg.Token)
 	if err != nil {
 		return nil, nil, fmt.Errorf("connect to %s: %w", endpoint, err)
 	}
@@ -702,7 +708,11 @@ func runSource() {
 		fmt.Fprintf(os.Stderr, "no .weft.yaml: %v\n", err)
 		os.Exit(1)
 	}
-	remote, err := shell.NewRemoteCoordinator(cfg.Endpoint)
+	if cfg.Token == "" {
+		fmt.Fprintln(os.Stderr, "WEFT_TOKEN required — grab one from the dashboard")
+		os.Exit(1)
+	}
+	remote, err := shell.NewRemoteCoordinator(cfg.Endpoint, cfg.Token)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "connect: %v\n", err)
 		os.Exit(1)
@@ -899,7 +909,11 @@ func runToken() {
 		client = shell.NewHTTPCoordinator(cfg.Endpoint, cfg.Token)
 		cleanup = func() {}
 	} else {
-		remote, err := shell.NewRemoteCoordinator(cfg.Endpoint)
+		if cfg.Token == "" {
+			fmt.Fprintln(os.Stderr, "WEFT_TOKEN required — grab one from the dashboard")
+			os.Exit(1)
+		}
+		remote, err := shell.NewRemoteCoordinator(cfg.Endpoint, cfg.Token)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "connect: %v\n", err)
 			os.Exit(1)

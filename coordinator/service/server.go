@@ -14,12 +14,31 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"github.com/kevlarcon/weft/auth"
 	"github.com/kevlarcon/weft/coordinator"
 	"github.com/kevlarcon/weft/ingest"
 	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/store"
 )
+
+// callerCustomer returns the customer name of the authenticated caller,
+// derived from JWT claims injected by the auth interceptor. Any non-empty
+// `Customer` field on the request proto is IGNORED — clients don't get to
+// declare which tenant they are; the verified principal is authoritative.
+// Returns an Unauthenticated error when called without an interceptor-
+// populated context (shouldn't happen in production because the
+// interceptor gates every JWT-protected RPC).
+func callerCustomer(ctx context.Context) (string, error) {
+	c := auth.FromContext(ctx)
+	if c == nil {
+		return "", status.Errorf(codes.Unauthenticated, "no authenticated caller")
+	}
+	if c.CustomerName == "" {
+		return "", status.Errorf(codes.PermissionDenied, "authenticated user has no customer")
+	}
+	return c.CustomerName, nil
+}
 
 // Server implements the WeftCoordinator gRPC service.
 type Server struct {
@@ -30,6 +49,11 @@ type Server struct {
 }
 
 func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinator_QueryServer) error {
+	customer, err := callerCustomer(stream.Context())
+	if err != nil {
+		return err
+	}
+
 	tr := coordinator.TimeRange{
 		Start: time.Unix(0, req.TimeStartNs),
 		End:   time.Unix(0, req.TimeEndNs),
@@ -39,9 +63,9 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 		tr.End = time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
 	}
 
-	result, err := s.Coord.Query(req.Pipeline, tr, req.Customer)
+	result, err := s.Coord.Query(req.Pipeline, tr, customer)
 	if err != nil {
-		log.Printf("query rpc: error for customer=%s pipeline=%q: %v", req.Customer, req.Pipeline, err)
+		log.Printf("query rpc: error for customer=%s pipeline=%q: %v", customer, req.Pipeline, err)
 		return err
 	}
 
@@ -105,8 +129,11 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 	}
 }
 
-func (s *Server) ListApps(_ context.Context, req *pb.ListAppsRequest) (*pb.ListAppsResponse, error) {
-	customer := req.Customer
+func (s *Server) ListApps(ctx context.Context, _ *pb.ListAppsRequest) (*pb.ListAppsResponse, error) {
+	customer, err := callerCustomer(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// Return app names observed from ingest for this customer.
 	if s.Coord.SeenApps != nil && customer != "" {
@@ -120,7 +147,7 @@ func (s *Server) ListApps(_ context.Context, req *pb.ListAppsRequest) (*pb.ListA
 		return &pb.ListAppsResponse{}, nil
 	}
 	if customer != "" {
-		cust, err := s.Store.FindOrCreateCustomer(customer)
+		cust, err := s.Store.GetCustomerByName(customer)
 		if err != nil || cust == nil {
 			return &pb.ListAppsResponse{}, nil
 		}
@@ -146,6 +173,10 @@ func (s *Server) ListApps(_ context.Context, req *pb.ListAppsRequest) (*pb.ListA
 // messages, and returns both so the dashboard can preview the source and
 // suggest a schema before the user commits to AddSource.
 func (s *Server) SampleCloudWatchSource(ctx context.Context, req *pb.SampleCloudWatchSourceRequest) (*pb.SampleCloudWatchSourceResponse, error) {
+	callerCust, err := callerCustomer(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if req.LogGroup == "" || req.RoleArn == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "log_group and role_arn required")
 	}
@@ -153,9 +184,9 @@ func (s *Server) SampleCloudWatchSource(ctx context.Context, req *pb.SampleCloud
 		return nil, status.Errorf(codes.InvalidArgument, "namespace required")
 	}
 	if s.Store != nil {
-		customer, err := s.Store.GetCustomerByName(req.Customer)
+		customer, err := s.Store.GetCustomerByName(callerCust)
 		if err != nil {
-			return nil, status.Errorf(codes.NotFound, "customer %q not found", req.Customer)
+			return nil, status.Errorf(codes.NotFound, "customer %q not found", callerCust)
 		}
 		if _, err := s.Store.GetNamespace(customer.ID, req.Namespace); err != nil {
 			return nil, status.Errorf(codes.NotFound, "namespace %q not found", req.Namespace)
@@ -191,7 +222,7 @@ func (s *Server) SampleCloudWatchSource(ctx context.Context, req *pb.SampleCloud
 	}, nil
 }
 
-func (s *Server) AddSource(_ context.Context, req *pb.AddSourceRequest) (*pb.AddSourceResponse, error) {
+func (s *Server) AddSource(ctx context.Context, req *pb.AddSourceRequest) (*pb.AddSourceResponse, error) {
 	if s.Store == nil {
 		return nil, fmt.Errorf("config store not available")
 	}
@@ -199,9 +230,13 @@ func (s *Server) AddSource(_ context.Context, req *pb.AddSourceRequest) (*pb.Add
 		return nil, status.Errorf(codes.InvalidArgument, "namespace required")
 	}
 
-	customer, err := s.Store.GetCustomerByName(req.Customer)
+	callerCust, err := callerCustomer(ctx)
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "customer %q not found", req.Customer)
+		return nil, err
+	}
+	customer, err := s.Store.GetCustomerByName(callerCust)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "customer %q not found", callerCust)
 	}
 
 	ns, err := s.Store.GetNamespace(customer.ID, req.Namespace)
@@ -251,16 +286,20 @@ func (s *Server) ListSources(_ context.Context, _ *pb.ListSourcesRequest) (*pb.L
 	return &pb.ListSourcesResponse{Sources: infos}, nil
 }
 
-func (s *Server) RemoveSource(_ context.Context, req *pb.RemoveSourceRequest) (*pb.RemoveSourceResponse, error) {
+func (s *Server) RemoveSource(ctx context.Context, req *pb.RemoveSourceRequest) (*pb.RemoveSourceResponse, error) {
 	if s.Store == nil {
 		return nil, fmt.Errorf("config store not available")
 	}
 	if req.Namespace == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "namespace required")
 	}
-	customer, err := s.Store.GetCustomerByName(req.Customer)
+	callerCust, err := callerCustomer(ctx)
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "customer %q not found", req.Customer)
+		return nil, err
+	}
+	customer, err := s.Store.GetCustomerByName(callerCust)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "customer %q not found", callerCust)
 	}
 	ns, err := s.Store.GetNamespace(customer.ID, req.Namespace)
 	if err != nil {
@@ -310,18 +349,22 @@ func (s *Server) Authenticate(_ context.Context, req *pb.AuthenticateRequest) (*
 	}, nil
 }
 
-func (s *Server) CreateToken(_ context.Context, req *pb.CreateTokenRequest) (*pb.CreateTokenResponse, error) {
+func (s *Server) CreateToken(ctx context.Context, req *pb.CreateTokenRequest) (*pb.CreateTokenResponse, error) {
 	if s.Store == nil {
 		return nil, fmt.Errorf("config store not available")
 	}
-	customer, err := s.Store.FindOrCreateCustomer(req.Customer)
+	callerCust, err := callerCustomer(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("customer: %w", err)
+		return nil, err
+	}
+	customer, err := s.Store.GetCustomerByName(callerCust)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "customer %q not found", callerCust)
 	}
 	// App field used as namespace name for backward compat with gRPC callers.
-	ns, _ := s.Store.FindOrCreateNamespace(customer.ID, req.App)
-	if ns == nil {
-		return nil, fmt.Errorf("namespace %q not found", req.App)
+	ns, err := s.Store.GetNamespace(customer.ID, req.App)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "namespace %q not found — create it first", req.App)
 	}
 	token, err := s.Store.CreateAgentToken(customer.ID, ns.ID, req.Label)
 	if err != nil {
@@ -330,13 +373,17 @@ func (s *Server) CreateToken(_ context.Context, req *pb.CreateTokenRequest) (*pb
 	return &pb.CreateTokenResponse{Token: token.Token}, nil
 }
 
-func (s *Server) ListTokens(_ context.Context, req *pb.ListTokensRequest) (*pb.ListTokensResponse, error) {
+func (s *Server) ListTokens(ctx context.Context, _ *pb.ListTokensRequest) (*pb.ListTokensResponse, error) {
 	if s.Store == nil {
 		return &pb.ListTokensResponse{}, nil
 	}
-	customer, err := s.Store.FindOrCreateCustomer(req.Customer)
+	callerCust, err := callerCustomer(ctx)
 	if err != nil {
 		return nil, err
+	}
+	customer, err := s.Store.GetCustomerByName(callerCust)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "customer %q not found", callerCust)
 	}
 	tokens, err := s.Store.ListAgentTokens(customer.ID)
 	if err != nil {
@@ -521,7 +568,12 @@ func (s *Server) ingestBatch(rows []*pb.LogRow) {
 
 // GetUsage returns bytes ingested for a customer in a billing period.
 // Combines persisted data from PostgreSQL with the current in-memory hour.
-func (s *Server) GetUsage(_ context.Context, req *pb.GetUsageRequest) (*pb.GetUsageResponse, error) {
+func (s *Server) GetUsage(ctx context.Context, req *pb.GetUsageRequest) (*pb.GetUsageResponse, error) {
+	customer, err := callerCustomer(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	period := req.Period
 	if period == "" {
 		period = time.Now().UTC().Format("2006-01")
@@ -536,7 +588,7 @@ func (s *Server) GetUsage(_ context.Context, req *pb.GetUsageRequest) (*pb.GetUs
 
 	var dbBytes int64
 	if s.Store != nil {
-		dbBytes, err = s.Store.QueryUsage(req.Customer, periodStart, periodEnd)
+		dbBytes, err = s.Store.QueryUsage(customer, periodStart, periodEnd)
 		if err != nil {
 			log.Printf("GetUsage DB query error: %v", err)
 			// Continue with in-memory only.
@@ -546,7 +598,7 @@ func (s *Server) GetUsage(_ context.Context, req *pb.GetUsageRequest) (*pb.GetUs
 	// Add the current (not-yet-flushed) hour.
 	var memBytes int64
 	if s.Coord.Usage != nil {
-		memBytes = s.Coord.Usage.CurrentHour(req.Customer)
+		memBytes = s.Coord.Usage.CurrentHour(customer)
 	}
 
 	return &pb.GetUsageResponse{
@@ -558,19 +610,27 @@ func (s *Server) GetUsage(_ context.Context, req *pb.GetUsageRequest) (*pb.GetUs
 
 // ── Shell functions (/bin/) ─────────────────────────────────
 
-func (s *Server) resolveCustomer(customerName string) (uint, error) {
+// resolveCallerCustomerID returns the DB id of the customer the
+// authenticated caller belongs to. Ignores any customer field on the
+// request — the verified principal from the JWT interceptor is the sole
+// source of truth for identity.
+func (s *Server) resolveCallerCustomerID(ctx context.Context) (uint, error) {
 	if s.Store == nil {
 		return 0, fmt.Errorf("config store not available")
 	}
-	c, err := s.Store.FindOrCreateCustomer(customerName)
+	name, err := callerCustomer(ctx)
 	if err != nil {
 		return 0, err
+	}
+	c, err := s.Store.GetCustomerByName(name)
+	if err != nil {
+		return 0, status.Errorf(codes.NotFound, "customer %q not found", name)
 	}
 	return c.ID, nil
 }
 
-func (s *Server) SaveFunction(_ context.Context, req *pb.SaveFunctionRequest) (*pb.SaveFunctionResponse, error) {
-	custID, err := s.resolveCustomer(req.Customer)
+func (s *Server) SaveFunction(ctx context.Context, req *pb.SaveFunctionRequest) (*pb.SaveFunctionResponse, error) {
+	custID, err := s.resolveCallerCustomerID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -580,8 +640,8 @@ func (s *Server) SaveFunction(_ context.Context, req *pb.SaveFunctionRequest) (*
 	return &pb.SaveFunctionResponse{}, nil
 }
 
-func (s *Server) GetFunction(_ context.Context, req *pb.GetFunctionRequest) (*pb.GetFunctionResponse, error) {
-	custID, err := s.resolveCustomer(req.Customer)
+func (s *Server) GetFunction(ctx context.Context, req *pb.GetFunctionRequest) (*pb.GetFunctionResponse, error) {
+	custID, err := s.resolveCallerCustomerID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -592,8 +652,8 @@ func (s *Server) GetFunction(_ context.Context, req *pb.GetFunctionRequest) (*pb
 	return &pb.GetFunctionResponse{Name: fn.Name, Source: fn.Source}, nil
 }
 
-func (s *Server) ListFunctions(_ context.Context, req *pb.ListFunctionsRequest) (*pb.ListFunctionsResponse, error) {
-	custID, err := s.resolveCustomer(req.Customer)
+func (s *Server) ListFunctions(ctx context.Context, req *pb.ListFunctionsRequest) (*pb.ListFunctionsResponse, error) {
+	custID, err := s.resolveCallerCustomerID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -608,8 +668,8 @@ func (s *Server) ListFunctions(_ context.Context, req *pb.ListFunctionsRequest) 
 	return &pb.ListFunctionsResponse{Names: names}, nil
 }
 
-func (s *Server) DeleteFunction(_ context.Context, req *pb.DeleteFunctionRequest) (*pb.DeleteFunctionResponse, error) {
-	custID, err := s.resolveCustomer(req.Customer)
+func (s *Server) DeleteFunction(ctx context.Context, req *pb.DeleteFunctionRequest) (*pb.DeleteFunctionResponse, error) {
+	custID, err := s.resolveCallerCustomerID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -621,8 +681,8 @@ func (s *Server) DeleteFunction(_ context.Context, req *pb.DeleteFunctionRequest
 
 // ── Cron watches (/cron.d/) ─────────────────────────────────
 
-func (s *Server) SaveWatch(_ context.Context, req *pb.SaveWatchRequest) (*pb.SaveWatchResponse, error) {
-	custID, err := s.resolveCustomer(req.Customer)
+func (s *Server) SaveWatch(ctx context.Context, req *pb.SaveWatchRequest) (*pb.SaveWatchResponse, error) {
+	custID, err := s.resolveCallerCustomerID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -632,8 +692,8 @@ func (s *Server) SaveWatch(_ context.Context, req *pb.SaveWatchRequest) (*pb.Sav
 	return &pb.SaveWatchResponse{}, nil
 }
 
-func (s *Server) GetWatch(_ context.Context, req *pb.GetWatchRequest) (*pb.GetWatchResponse, error) {
-	custID, err := s.resolveCustomer(req.Customer)
+func (s *Server) GetWatch(ctx context.Context, req *pb.GetWatchRequest) (*pb.GetWatchResponse, error) {
+	custID, err := s.resolveCallerCustomerID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -649,8 +709,8 @@ func (s *Server) GetWatch(_ context.Context, req *pb.GetWatchRequest) (*pb.GetWa
 	}, nil
 }
 
-func (s *Server) ListWatches(_ context.Context, req *pb.ListWatchesRequest) (*pb.ListWatchesResponse, error) {
-	custID, err := s.resolveCustomer(req.Customer)
+func (s *Server) ListWatches(ctx context.Context, req *pb.ListWatchesRequest) (*pb.ListWatchesResponse, error) {
+	custID, err := s.resolveCallerCustomerID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -665,8 +725,8 @@ func (s *Server) ListWatches(_ context.Context, req *pb.ListWatchesRequest) (*pb
 	return &pb.ListWatchesResponse{Names: names}, nil
 }
 
-func (s *Server) GetWatchResults(_ context.Context, req *pb.GetWatchResultsRequest) (*pb.GetWatchResultsResponse, error) {
-	custID, err := s.resolveCustomer(req.Customer)
+func (s *Server) GetWatchResults(ctx context.Context, req *pb.GetWatchResultsRequest) (*pb.GetWatchResultsResponse, error) {
+	custID, err := s.resolveCallerCustomerID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -695,8 +755,8 @@ func (s *Server) GetWatchResults(_ context.Context, req *pb.GetWatchResultsReque
 	return &pb.GetWatchResultsResponse{Results: out}, nil
 }
 
-func (s *Server) DeleteWatch(_ context.Context, req *pb.DeleteWatchRequest) (*pb.DeleteWatchResponse, error) {
-	custID, err := s.resolveCustomer(req.Customer)
+func (s *Server) DeleteWatch(ctx context.Context, req *pb.DeleteWatchRequest) (*pb.DeleteWatchResponse, error) {
+	custID, err := s.resolveCallerCustomerID(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -15,7 +15,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/kevlarcon/weft/api"
+	"github.com/kevlarcon/weft/auth"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/store"
 )
@@ -280,7 +280,12 @@ func TestGlobOnboardFlow(t *testing.T) {
 
 func onboardGRPCClient(t *testing.T) (*grpc.ClientConn, pb.WeftCoordinatorClient) {
 	t.Helper()
-	conn, err := grpc.NewClient(onboardCoordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	tok := generateDevJWT(t)
+	conn, err := grpc.NewClient(onboardCoordAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(auth.ClientTokenUnaryInterceptor(tok)),
+		grpc.WithStreamInterceptor(auth.ClientTokenStreamInterceptor(tok)),
+	)
 	if err != nil {
 		t.Fatalf("connect to coordinator: %v", err)
 	}
@@ -294,7 +299,7 @@ func generateDevJWT(t *testing.T) string {
 		Email: "dev@test.local",
 	}
 	user.CustomerName = "kevlar"
-	token, err := api.GenerateJWT(user, "dev", jwtSecret)
+	token, err := auth.Generate(user, "dev", jwtSecret)
 	if err != nil {
 		t.Fatalf("generate JWT: %v", err)
 	}

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/kevlarcon/weft/auth"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -253,12 +254,12 @@ func exchangeSlackCode(code, clientID, clientSecret, redirectURI string) (*slack
 // generateStateToken creates a signed token containing the customer name.
 func generateStateToken(customerName, secret string) (string, error) {
 	user := &store.User{CustomerName: customerName}
-	return GenerateJWT(user, "oauth-state", secret)
+	return auth.Generate(user, "oauth-state", secret)
 }
 
 // validateStateToken validates and extracts the customer name from a state token.
 func validateStateToken(token, secret string) (string, error) {
-	claims, err := ValidateJWT(token, secret)
+	claims, err := auth.Validate(token, secret)
 	if err != nil {
 		return "", err
 	}

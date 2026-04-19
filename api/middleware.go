@@ -6,44 +6,40 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/kevlarcon/weft/auth"
 	"github.com/kevlarcon/weft/store"
 )
 
 type contextKey string
 
-const claimsKey contextKey = "claims"
-
-// AuthMiddleware validates JWT tokens from the Authorization header.
+// AuthMiddleware validates JWT tokens from the Authorization header and
+// stashes the claims in the request context via auth.WithClaims so
+// handlers can pull them through GetClaims (REST) or auth.FromContext
+// (any protocol).
 func AuthMiddleware(secret string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") {
+		hdr := r.Header.Get("Authorization")
+		if !strings.HasPrefix(hdr, "Bearer ") {
 			http.Error(w, "missing authorization", http.StatusUnauthorized)
 			return
 		}
-		token := strings.TrimPrefix(auth, "Bearer ")
-		claims, err := ValidateJWT(token, secret)
+		token := strings.TrimPrefix(hdr, "Bearer ")
+		claims, err := auth.Validate(token, secret)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		ctx := context.WithValue(r.Context(), claimsKey, claims)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(w, r.WithContext(auth.WithClaims(r.Context(), claims)))
 	})
 }
 
 // RequireEmailVerified gates state-changing endpoints on a verified email.
-// Must be applied BEFORE the JWT middleware on the request path — it reads
-// claims out of the context that AuthMiddleware inserts.
-//
-// The JWT's email_verified claim is advisory only; a user who was issued an
-// unverified token and later clicked their link still has a "false" claim
-// in their JWT until it's refreshed, so this middleware re-reads the DB. A
-// 403 with a structured error code lets the frontend surface the
-// verify-your-email banner rather than a generic auth failure.
+// Reads claims out of the ctx that AuthMiddleware inserts, then re-reads
+// the DB so a user who verified after their JWT was issued doesn't need
+// to re-login to unlock.
 func RequireEmailVerified(st *store.Store, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims, _ := r.Context().Value(claimsKey).(*JWTClaims)
+		claims := auth.FromContext(r.Context())
 		if claims == nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -76,10 +72,9 @@ func writeJSON(w http.ResponseWriter, v any) error {
 	return err
 }
 
-// GetClaims extracts JWT claims from the request context.
-func GetClaims(r *http.Request) *JWTClaims {
-	claims, _ := r.Context().Value(claimsKey).(*JWTClaims)
-	return claims
+// GetClaims extracts JWT claims from the REST request context.
+func GetClaims(r *http.Request) *auth.Claims {
+	return auth.FromContext(r.Context())
 }
 
 // agentAuthKey holds the validated agent auth result in the request context.
@@ -96,12 +91,12 @@ type AgentAuthResult struct {
 // Authorization header, resolving (customer, namespace) from the token.
 func AgentTokenMiddleware(s *store.Store, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") {
+		hdr := r.Header.Get("Authorization")
+		if !strings.HasPrefix(hdr, "Bearer ") {
 			http.Error(w, "missing authorization", http.StatusUnauthorized)
 			return
 		}
-		token := strings.TrimPrefix(auth, "Bearer ")
+		token := strings.TrimPrefix(hdr, "Bearer ")
 		storeResult, err := s.ValidateAgentToken(token)
 		if err != nil || storeResult == nil {
 			http.Error(w, "invalid or revoked token", http.StatusUnauthorized)

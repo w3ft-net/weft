@@ -1,0 +1,114 @@
+package auth
+
+import (
+	"context"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+)
+
+// SkipMethods is the set of gRPC full method names the interceptors pass
+// through without requiring a JWT. Populated with methods that authenticate
+// by some other means (agent tokens, unauthenticated bootstrap).
+type SkipMethods map[string]bool
+
+// ExtractJWT reads the authorization metadata from an incoming gRPC
+// context, strips the "Bearer " prefix, and validates the signature.
+// Returns a structured Unauthenticated error on failure so the
+// interceptors can surface it directly.
+func ExtractJWT(ctx context.Context, secret string) (*Claims, error) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	values := md.Get("authorization")
+	if len(values) == 0 {
+		return nil, status.Errorf(codes.Unauthenticated, "missing authorization metadata")
+	}
+	token := values[0]
+	const prefix = "Bearer "
+	if len(token) < len(prefix) || token[:len(prefix)] != prefix {
+		return nil, status.Errorf(codes.Unauthenticated, "authorization must be a Bearer token")
+	}
+	token = token[len(prefix):]
+	claims, err := Validate(token, secret)
+	if err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, "%v", err)
+	}
+	return claims, nil
+}
+
+// UnaryServerInterceptor validates a JWT on every unary RPC not listed
+// in skip and injects the resulting claims into the handler's context.
+// Methods in skip pass through untouched so they can do their own auth
+// (e.g. agent-token bearer for IngestStream, pre-auth bootstrap for
+// Authenticate itself).
+func UnaryServerInterceptor(secret string, skip SkipMethods) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if skip[info.FullMethod] {
+			return handler(ctx, req)
+		}
+		claims, err := ExtractJWT(ctx, secret)
+		if err != nil {
+			return nil, err
+		}
+		return handler(WithClaims(ctx, claims), req)
+	}
+}
+
+// StreamServerInterceptor is the streaming counterpart to
+// UnaryServerInterceptor.
+func StreamServerInterceptor(secret string, skip SkipMethods) grpc.StreamServerInterceptor {
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if skip[info.FullMethod] {
+			return handler(srv, ss)
+		}
+		claims, err := ExtractJWT(ss.Context(), secret)
+		if err != nil {
+			return err
+		}
+		return handler(srv, &claimsServerStream{ServerStream: ss, ctx: WithClaims(ss.Context(), claims)})
+	}
+}
+
+// claimsServerStream overrides Context() so downstream handlers see the
+// claims-enriched ctx. Needed because grpc.ServerStream exposes the
+// context through a method rather than a field.
+type claimsServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s *claimsServerStream) Context() context.Context { return s.ctx }
+
+// ClientTokenUnaryInterceptor attaches a bearer token to every outbound
+// unary RPC. Used by the api server (JWT-forwarding) and the weft CLI
+// (configured WEFT_TOKEN). Returns a no-op interceptor when token is "".
+func ClientTokenUnaryInterceptor(token string) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		ctx = attachToken(ctx, token)
+		return invoker(ctx, method, req, reply, cc, opts...)
+	}
+}
+
+// ClientTokenStreamInterceptor is the streaming counterpart to
+// ClientTokenUnaryInterceptor.
+func ClientTokenStreamInterceptor(token string) grpc.StreamClientInterceptor {
+	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		ctx = attachToken(ctx, token)
+		return streamer(ctx, desc, cc, method, opts...)
+	}
+}
+
+func attachToken(ctx context.Context, token string) context.Context {
+	if token == "" {
+		return ctx
+	}
+	// Don't overwrite an authorization header the caller already set
+	// (e.g. api server forwards the end-user's JWT per-request, bypassing
+	// this interceptor's default token).
+	md, _ := metadata.FromOutgoingContext(ctx)
+	if len(md.Get("authorization")) > 0 {
+		return ctx
+	}
+	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+}

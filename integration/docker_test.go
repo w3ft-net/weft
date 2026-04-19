@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +23,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/kevlarcon/weft/auth"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/store"
 )
 
 const (
@@ -247,11 +250,35 @@ func TestDockerStack_HeartbeatsInPostgres(t *testing.T) {
 
 func grpcClient(t *testing.T) (*grpc.ClientConn, pb.WeftCoordinatorClient) {
 	t.Helper()
-	conn, err := grpc.NewClient(coordinatorAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(coordinatorAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(auth.ClientTokenUnaryInterceptor(integrationJWT(t))),
+		grpc.WithStreamInterceptor(auth.ClientTokenStreamInterceptor(integrationJWT(t))),
+	)
 	if err != nil {
 		t.Fatalf("connect to coordinator at %s: %v", coordinatorAddr, err)
 	}
 	return conn, pb.NewWeftCoordinatorClient(conn)
+}
+
+// integrationJWT produces a signed JWT for a fake verified user in the
+// "kevlar" customer. Used by tests that exercise JWT-gated RPCs; the
+// coordinator validates against the dev JWT secret set in docker-compose.
+func integrationJWT(t *testing.T) string {
+	t.Helper()
+	secret := os.Getenv("WEFT_TEST_JWT_SECRET")
+	if secret == "" {
+		secret = "dev-secret-change-in-production"
+	}
+	now := time.Now()
+	tok, err := auth.Generate(&store.User{
+		ID: "integration-user", Email: "it@example.com",
+		CustomerName: "kevlar", EmailVerifiedAt: &now, CreatedAt: now,
+	}, "trial", secret)
+	if err != nil {
+		t.Fatalf("sign integration JWT: %v", err)
+	}
+	return tok
 }
 
 func queryPipeline(t *testing.T, client pb.WeftCoordinatorClient, pipeline, customer string) []*pb.ResultRow {

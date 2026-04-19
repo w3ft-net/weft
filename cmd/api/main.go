@@ -62,7 +62,7 @@ func main() {
 	srv.SlackClientSecret = os.Getenv("SLACK_CLIENT_SECRET")
 
 	// Start the periodic cleanup of accounts that were created but never
-	// completed email verification. See api.UnverifiedGracePeriod.
+	// completed email verification. See auth.UnverifiedGracePeriod.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	srv.StartUnverifiedSweep(ctx)
