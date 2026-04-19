@@ -11,11 +11,6 @@ import {
 import { useAuth } from '../lib/AuthContext'
 import './Dashboard.css'
 
-function truncateToken(tok: string): string {
-  if (tok.length <= 16) return tok
-  return `${tok.slice(0, 8)}...${tok.slice(-4)}`
-}
-
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric',
@@ -100,8 +95,8 @@ export default function Namespaces() {
     }
   }
 
-  async function handleRevoke(token: string) {
-    await revokeToken(token).catch(() => {})
+  async function handleRevoke(id: number) {
+    await revokeToken(id).catch(() => {})
     loadData()
   }
 
@@ -233,22 +228,21 @@ export default function Namespaces() {
                             )}
                           </div>
 
-                          {/* Tokens for this namespace */}
+                          {/* Tokens for this namespace.
+                              The raw token is no longer retrievable after
+                              creation (hashed at rest). Show prefix + label
+                              so humans can identify tokens; revoke by id. */}
                           {nsTokens.length > 0 && (
                             <div className="dash-table-wrap" style={{ marginBottom: 12 }}>
                               <table className="dash-table" data-testid={`namespace-tokens-${ns.name}`}>
                                 <thead>
-                                  <tr><th>Token</th><th>Label</th><th>Status</th><th>Created</th><th></th></tr>
+                                  <tr><th>Prefix</th><th>Label</th><th>Status</th><th>Created</th><th></th></tr>
                                 </thead>
                                 <tbody>
                                   {nsTokens.map(t => (
-                                    <tr key={t.token} data-testid={`namespace-token-row-${t.token}`}>
-                                      <td>
-                                        <button className="token-copy-btn" title="Click to copy"
-                                          onClick={() => navigator.clipboard.writeText(t.token)}
-                                          data-testid={`namespace-token-copy-${t.token}`}>
-                                          {truncateToken(t.token)}
-                                        </button>
+                                    <tr key={t.id} data-testid={`namespace-token-row-${t.id}`}>
+                                      <td className="token-prefix">
+                                        <code>{t.prefix}…</code>
                                       </td>
                                       <td className="token-label">{t.label}</td>
                                       <td><span className={`token-status token-status-${t.status}`}>{t.status}</span></td>
@@ -256,8 +250,8 @@ export default function Namespaces() {
                                       <td>
                                         {t.status === 'active' && (
                                           <button className="btn-action btn-action-danger"
-                                            onClick={() => handleRevoke(t.token)}
-                                            data-testid={`namespace-token-revoke-${t.token}`}>Revoke</button>
+                                            onClick={() => handleRevoke(t.id)}
+                                            data-testid={`namespace-token-revoke-${t.id}`}>Revoke</button>
                                         )}
                                       </td>
                                     </tr>

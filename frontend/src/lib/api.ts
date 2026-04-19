@@ -113,8 +113,8 @@ export function createToken(label: string, namespace: string): Promise<AgentToke
   })
 }
 
-export function revokeToken(token: string): Promise<void> {
-  return apiFetch(`/api/tokens/${token}`, { method: 'DELETE' })
+export function revokeToken(id: number): Promise<void> {
+  return apiFetch(`/api/tokens/${id}`, { method: 'DELETE' })
 }
 
 // Queries
@@ -208,7 +208,8 @@ export interface Usage {
 }
 
 export interface AgentToken {
-  token: string
+  id: number
+  prefix: string
   label: string
   namespace: string
   status: 'active' | 'revoked'

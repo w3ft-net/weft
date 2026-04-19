@@ -2,6 +2,8 @@ package store
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -10,15 +12,18 @@ import (
 )
 
 // AgentToken authenticates a weftd agent and maps it to a customer + namespace.
-// Token format: wft_<random> (e.g., wft_abc123def456)
-// The token authorizes ingestion for any sub-app within the namespace.
+// The raw token (format `wft_<32hex>`) is only ever held by the agent and is
+// shown to the user exactly once at create time. The row holds sha256(raw)
+// as TokenHash; the short Prefix is safe to display so users can tell their
+// tokens apart in the UI.
 type AgentToken struct {
 	gorm.Model
 	CustomerID        uint      `gorm:"not null"`
 	Customer          Customer  `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
 	NamespaceID       uint      `gorm:"not null"`
 	Namespace         Namespace `gorm:"foreignKey:NamespaceID;constraint:OnDelete:CASCADE"`
-	Token             string    `gorm:"uniqueIndex;not null"`
+	TokenHash         string    `gorm:"column:token_hash;uniqueIndex;not null"`
+	Prefix            string    `gorm:"not null"` // e.g. "wft_a1b2" — safe to display
 	Label             string    // human-readable label (e.g., "prod-coordinator")
 	Revoked           bool      `gorm:"not null;default:false"`
 	MetricsEnabled    bool      `gorm:"not null;default:false"`
@@ -26,22 +31,47 @@ type AgentToken struct {
 	MetricsCollectors string    // JSON array, e.g., `["cpu","memory","disk"]`
 }
 
+// hashAgentToken returns the sha256 hex digest used for lookup in
+// agent_tokens.token_hash. Must be stable: if this changes, every
+// existing token stops validating.
+func hashAgentToken(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+// agentTokenPrefix returns the safe-to-display leading slice of the
+// raw token. 8 chars = "wft_" plus 4 hex digits (~16 bits). Plenty of
+// entropy to distinguish tokens in the UI; not enough that leaking a
+// prefix meaningfully narrows a brute-force search on the remaining
+// 112 bits.
+func agentTokenPrefix(raw string) string {
+	if len(raw) < 8 {
+		return raw
+	}
+	return raw[:8]
+}
+
 // CreateAgentToken generates a new token for a customer and namespace.
-func (s *Store) CreateAgentToken(customerID, namespaceID uint, label string) (*AgentToken, error) {
-	token, err := generateToken()
+// Returns the raw wft_<32hex> string as its first value — this is the
+// only moment it exists server-side, so the caller must hand it to the
+// user immediately and then discard. The returned *AgentToken contains
+// only the hash and prefix.
+func (s *Store) CreateAgentToken(customerID, namespaceID uint, label string) (string, *AgentToken, error) {
+	raw, err := generateToken()
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	t := AgentToken{
 		CustomerID:  customerID,
 		NamespaceID: namespaceID,
-		Token:       token,
+		TokenHash:   hashAgentToken(raw),
+		Prefix:      agentTokenPrefix(raw),
 		Label:       label,
 	}
 	if err := s.db.Create(&t).Error; err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	return &t, nil
+	return raw, &t, nil
 }
 
 // AgentNamespaceNames returns distinct namespace names from active agent tokens.
@@ -65,11 +95,15 @@ type AgentAuthResult struct {
 	Namespace string // namespace name from the token
 }
 
-// ValidateAgentToken checks a token and returns the associated customer + namespace.
-// Returns nil if the token is invalid or revoked.
+// ValidateAgentToken checks a presented raw token and returns the
+// associated customer + namespace. Hashes the input and looks up by
+// token_hash — the DB never sees the plaintext. Returns nil if the
+// token is invalid or revoked.
 func (s *Store) ValidateAgentToken(token string) (*AgentAuthResult, error) {
 	var t AgentToken
-	result := s.db.Preload("Customer").Preload("Namespace").Where("token = ? AND revoked = ?", token, false).First(&t)
+	result := s.db.Preload("Customer").Preload("Namespace").
+		Where("token_hash = ? AND revoked = ?", hashAgentToken(token), false).
+		First(&t)
 	if result.Error == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
@@ -82,9 +116,18 @@ func (s *Store) ValidateAgentToken(token string) (*AgentAuthResult, error) {
 	}, nil
 }
 
-// RevokeAgentToken disables a token.
-func (s *Store) RevokeAgentToken(token string) error {
-	return s.db.Model(&AgentToken{}).Where("token = ?", token).Update("revoked", true).Error
+// RevokeAgentToken disables a token by primary key. The UI only has
+// the ID + prefix after creation, so revocation is ID-based.
+func (s *Store) RevokeAgentToken(id uint) error {
+	return s.db.Model(&AgentToken{}).Where("id = ?", id).Update("revoked", true).Error
+}
+
+// RevokeAgentTokenByRawToken is the gRPC-path equivalent of
+// RevokeAgentToken — takes a raw wft_<...> string, hashes it, and
+// revokes the matching row. Only used by the legacy coordinator gRPC
+// RevokeToken RPC; the REST path uses RevokeAgentToken(id) directly.
+func (s *Store) RevokeAgentTokenByRawToken(raw string) error {
+	return s.db.Model(&AgentToken{}).Where("token_hash = ?", hashAgentToken(raw)).Update("revoked", true).Error
 }
 
 // ListAgentTokens returns all tokens for a customer, with namespace preloaded.
@@ -95,13 +138,14 @@ func (s *Store) ListAgentTokens(customerID uint) ([]AgentToken, error) {
 }
 
 // UpdateAgentMetricsConfig stores the agent's reported metrics configuration.
+// Looks up the row by the hash of the presented raw token.
 func (s *Store) UpdateAgentMetricsConfig(token string, enabled bool, interval string, collectors []string) error {
 	collectorsJSON := "[]"
 	if len(collectors) > 0 {
 		b, _ := json.Marshal(collectors)
 		collectorsJSON = string(b)
 	}
-	return s.db.Model(&AgentToken{}).Where("token = ?", token).Updates(map[string]any{
+	return s.db.Model(&AgentToken{}).Where("token_hash = ?", hashAgentToken(token)).Updates(map[string]any{
 		"metrics_enabled":    enabled,
 		"metrics_interval":   interval,
 		"metrics_collectors": collectorsJSON,
@@ -166,10 +210,13 @@ func (s *Store) MetricsAppNames() ([]string, error) {
 }
 
 // SeedDevAgentToken ensures a deterministic dev token exists. Idempotent.
+// The raw token is still the known string; only its sha256 lives in the
+// DB, same as production tokens.
 func (s *Store) SeedDevAgentToken(customerID uint, label, nsName string) {
 	const devToken = "wft_dev_0000000000000000"
+	hash := hashAgentToken(devToken)
 	var existing AgentToken
-	if s.db.Where("token = ?", devToken).First(&existing).Error == nil {
+	if s.db.Where("token_hash = ?", hash).First(&existing).Error == nil {
 		return // already exists
 	}
 	ns, _ := s.FindOrCreateNamespace(customerID, nsName)
@@ -179,7 +226,8 @@ func (s *Store) SeedDevAgentToken(customerID uint, label, nsName string) {
 	s.db.Create(&AgentToken{
 		CustomerID:  customerID,
 		NamespaceID: ns.ID,
-		Token:       devToken,
+		TokenHash:   hash,
+		Prefix:      agentTokenPrefix(devToken),
 		Label:       label,
 	})
 }

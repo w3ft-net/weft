@@ -8,14 +8,16 @@ for signup), `8315d9c` (coordinator gRPC JWT interceptor), `eca7eb7`
 (CLI migrated off gRPC-direct — coord gRPC is now strictly internal
 for api/weftd/shard paths), `30af7ae` (per-shard Heartbeat bearer
 token), `eaf636e` (shared SHARD_SECRET bearer on every coord→shard
-call; rogue-reach attacks on :9000 closed), and the magic-link-TOCTOU
-commit landing now (atomic UPDATE ... RETURNING; sha256(token) at
-rest). Items struck from the doc; everything still here is unfixed.
-**Verdict**: **All four critical cross-tenant paths closed.** The
-remaining findings are high/medium hardening (agent-token plaintext,
-rate limits, JWT hygiene, CORS) — none are standalone data-exfil
-vectors post-fix. Launching is now a product decision, not a security
-one; still land the highs before scaling.
+call; rogue-reach attacks on :9000 closed), `5485495` (magic-link
+atomic UPDATE ... RETURNING + sha256 at rest), and the agent-token-hash
+commit landing now (sha256(token) at rest + short Prefix for display;
+GitHub-PAT style one-time reveal; revoke-by-id). Items struck from the
+doc; everything still here is unfixed.
+**Verdict**: **Every critical cross-tenant path is closed, plus the
+critical at-rest plaintext path.** The remaining findings are
+medium-severity hardening (rate limits, JWT hygiene, CORS) — none are
+standalone data-exfil vectors post-fix. Launching is now a product
+decision, not a security one; still land the highs before scaling.
 
 ---
 
@@ -23,48 +25,15 @@ one; still land the highs before scaling.
 
 | # | Severity | Finding | Why it matters |
 |---|---|---|---|
-| 1 | **Critical** | Agent tokens (`wft_…`) stored **plaintext** in Postgres | Any DB leak = fleet-wide agent impersonation |
-| 2 | **High** | `/api/auth/device/poll` unauthenticated with no rate limit + 128-bit device code | DoS + narrows the window for any future code-entropy regression |
-| 3 | **Medium** | JWT 30-day expiry, no revocation list, stored in `localStorage` | XSS → month-long account takeover |
-| 4 | **Medium** | Production CORS silently allows `localhost:5173/5174/3000` | Subtle token-leakage path if a dev loopback is ever reachable |
+| 1 | **High** | `/api/auth/device/poll` unauthenticated with no rate limit + 128-bit device code | DoS + narrows the window for any future code-entropy regression |
+| 2 | **Medium** | JWT 30-day expiry, no revocation list, stored in `localStorage` | XSS → month-long account takeover |
+| 3 | **Medium** | Production CORS silently allows `localhost:5173/5174/3000` | Subtle token-leakage path if a dev loopback is ever reachable |
 
 The details below back each of these with file/line references and, where relevant, a working exploit payload.
 
 ---
 
-## 1. Agent tokens stored in plaintext  **[CRITICAL]**
-
-`store/token.go:15-45`
-
-```go
-type AgentToken struct {
-    ...
-    Token       string `gorm:"uniqueIndex;not null"`   // plaintext
-    ...
-}
-
-func generateToken() (string, error) {
-    b := make([]byte, 16)
-    if _, err := rand.Read(b); err != nil { return "", err }
-    return fmt.Sprintf("wft_%x", b), nil                // 128 bits entropy
-}
-```
-
-Entropy is fine. Storage is not. `ValidateAgentToken` (`store/token.go:72`) looks the token up by exact match on the plaintext column.
-
-Consequences:
-
-- Any read-only compromise of Postgres (stolen backup, misconfigured replica, SQL injection elsewhere) yields every customer's fleet of agent tokens, each of which can write arbitrary log data to the customer's DuckDB shards via `IngestStream`.
-- `SeedDevAgentToken` (`store/token.go:170`) hard-codes `wft_dev_0000000000000000` in Postgres on dev/docker startups that pass a `--customer` flag. If this is ever inadvertently run against prod Postgres, the attacker-known token becomes a live credential.
-- DB comparison isn't constant-time, but given 128-bit random tokens this doesn't add real risk.
-
-### Fix
-
-Store `sha256(token)` as the lookup key. On validate, hash the presented token and compare. Remove the seed dev token from any code path that could touch prod (gate on `WEFT_ENV=dev` or similar).
-
----
-
-## 2. Rate-limiting and abuse controls — absent everywhere  **[HIGH]**
+## 1. Rate-limiting and abuse controls — absent everywhere  **[HIGH]**
 
 Nothing in `api/`, `coordinator/service/`, or `shard/service/` implements rate limiting, request-size caps, or query timeouts. Concrete issues:
 
@@ -80,7 +49,7 @@ Standard per-IP / per-customer rate-limit middleware on the api (use `golang.org
 
 ---
 
-## 3. JWT hygiene  **[MEDIUM]**
+## 2. JWT hygiene  **[MEDIUM]**
 
 `api/auth.go:27-82`
 
@@ -99,7 +68,7 @@ Reduce expiry to 1h; add refresh tokens stored server-side with rotation on use;
 
 ---
 
-## 4. CORS and CSRF  **[MEDIUM]**
+## 3. CORS and CSRF  **[MEDIUM]**
 
 `api/middleware.go:83-108`
 
@@ -121,10 +90,10 @@ Gate the localhost origins on `os.Getenv("WEFT_ENV") == "dev"`. Explicitly set `
 
 ---
 
-## 5. Miscellaneous findings  **[LOW – MEDIUM]**
+## 4. Miscellaneous findings  **[LOW – MEDIUM]**
 
 - **`InjectCustomer` substring match.** `planner/sql.go:76` uses `strings.Contains(sql, " WHERE ")` to decide where to insert the customer predicate, and the value is interpolated via `fmt.Sprintf`. Safe today — the planner never produces `" WHERE "` as a substring of any `rawExpr` or predicate, and the allowlist in `coordinator.Query` gates the app name upstream — but brittle. A future change that puts user data inside a string literal containing ` WHERE ` would silently misplace the predicate. Move to an AST-level SQL build with parameterized literals.
-- **`SeedDevAgentToken`** (`store/token.go:169`) writes a known token whenever `--customer` is passed. Ensure this is never executable with a prod Postgres DSN.
+- **`SeedDevAgentToken`** (`store/token.go`) writes a known token whenever `--customer` is passed. The row now holds only the hash so a prod DB dump won't reveal a usable secret — but the known raw value (`wft_dev_0000000000000000`) is still the valid credential, so the seed path must not run against a prod DSN. Gate on `WEFT_ENV=dev` or equivalent.
 - **`handleLogin` account enumeration.** Response timing differs for registered vs. unregistered emails because Sendgrid call latency dominates and only happens for registered addresses after `CreateMagicLink` returns. Minor.
 - **Slack OAuth redirect URI** is derived from `s.baseURL` (`api/integrations.go`); if `baseURL` is ever affected by a Host header trust, an attacker could redirect the flow. Today `baseURL` is a fixed flag at startup, so this is theoretical.
 - **`isOwner` check uses email equality**, which is case-sensitive (`store/user.go:250`). Postgres `citext` or lowercasing at write-time would remove a class of identity confusion.
@@ -138,16 +107,17 @@ Gate the localhost origins on `os.Getenv("WEFT_ENV") == "dev"`. Explicitly set `
 
 Blocking (must land before opening signups):
 
-1. Hash agent tokens at rest (same sha256-lookup pattern now used for magic links).
-2. gRPC `MaxRecvMsgSize` + per-stream byte budget; 30s default query deadline; rate limits on `/api/auth/login`, `/api/auth/device/poll`, and the anonymous Stripe webhook path (already length-capped, good).
+1. gRPC `MaxRecvMsgSize` + per-stream byte budget; 30s default query deadline; rate limits on `/api/auth/login`, `/api/auth/device/poll`, and the anonymous Stripe webhook path (already length-capped, good).
 
 Strongly recommended before first paying customer:
 
-3. TLS (preferably mTLS) on every inter-service gRPC channel — today the shared-bearer-token flows on plaintext TCP inside the VPC, so a compromised VPC peer can sniff rows in transit. Bearer is defense-in-depth on auth, not on confidentiality.
-4. JWT expiry ≤ 1h with refresh tokens; add `iss`/`aud`; add a token revocation check tied to team-member removal.
-5. Production-only CORS allowlist.
-6. Follow-up on migration 015's grandfather clause — once the shard fleet has rolled, add a follow-up migration 016 that NOT-NULLs `shard_records.heartbeat_token` and tightens the Heartbeat handler to reject tokenless shards. Today's code accepts them during the transition window.
-7. SHARD_SECRET rotation plan. Currently a static env var; in prod it's populated by SSM/Secrets Manager. Document the rotate-and-redeploy procedure (roll coord first with dual-accept, then roll shards, then roll coord to new-only) before rotating becomes necessary.
+2. TLS (preferably mTLS) on every inter-service gRPC channel — today the shared-bearer-token flows on plaintext TCP inside the VPC, so a compromised VPC peer can sniff rows in transit. Bearer is defense-in-depth on auth, not on confidentiality.
+3. JWT expiry ≤ 1h with refresh tokens; add `iss`/`aud`; add a token revocation check tied to team-member removal.
+4. Production-only CORS allowlist.
+5. Follow-up on migration 015's grandfather clause — once the shard fleet has rolled, add a follow-up migration that NOT-NULLs `shard_records.heartbeat_token` and tightens the Heartbeat handler to reject tokenless shards. Today's code accepts them during the transition window.
+6. SHARD_SECRET rotation plan. Currently a static env var; in prod it's populated by SSM/Secrets Manager. Document the rotate-and-redeploy procedure (roll coord first with dual-accept, then roll shards, then roll coord to new-only) before rotating becomes necessary.
+7. Gate `SeedDevAgentToken` on a `WEFT_ENV=dev` check; the known raw token value is still a valid credential for any row that carries its hash.
+8. Retire or regen the dead coordinator gRPC `ListTokens`/`RevokeToken` RPCs and `TokenInfo.token` field — after the CLI migration (`eca7eb7`) nothing calls them; the current implementation populates `Token` with `Prefix` as a harmless placeholder until the proto is updated.
 
 Everything else on this list is follow-up hardening that can ship on a normal release cadence once the above is done.
 

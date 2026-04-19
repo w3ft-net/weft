@@ -366,11 +366,11 @@ func (s *Server) CreateToken(ctx context.Context, req *pb.CreateTokenRequest) (*
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "namespace %q not found — create it first", req.App)
 	}
-	token, err := s.Store.CreateAgentToken(customer.ID, ns.ID, req.Label)
+	raw, _, err := s.Store.CreateAgentToken(customer.ID, ns.ID, req.Label)
 	if err != nil {
 		return nil, fmt.Errorf("create token: %w", err)
 	}
-	return &pb.CreateTokenResponse{Token: token.Token}, nil
+	return &pb.CreateTokenResponse{Token: raw}, nil
 }
 
 func (s *Server) ListTokens(ctx context.Context, _ *pb.ListTokensRequest) (*pb.ListTokensResponse, error) {
@@ -391,8 +391,12 @@ func (s *Server) ListTokens(ctx context.Context, _ *pb.ListTokensRequest) (*pb.L
 	}
 	var infos []*pb.TokenInfo
 	for _, t := range tokens {
+		// TokenInfo.Token is legacy proto; populate with the public
+		// Prefix since the raw value no longer exists server-side.
+		// Dead path — no callers; retained for proto-compat until we
+		// regen with an id+prefix schema.
 		infos = append(infos, &pb.TokenInfo{
-			Token:     t.Token,
+			Token:     t.Prefix,
 			Label:     t.Label,
 			App:       t.Namespace.Name,
 			Revoked:   t.Revoked,
@@ -406,7 +410,7 @@ func (s *Server) RevokeToken(_ context.Context, req *pb.RevokeTokenRequest) (*pb
 	if s.Store == nil {
 		return nil, fmt.Errorf("config store not available")
 	}
-	if err := s.Store.RevokeAgentToken(req.Token); err != nil {
+	if err := s.Store.RevokeAgentTokenByRawToken(req.Token); err != nil {
 		return nil, err
 	}
 	return &pb.RevokeTokenResponse{}, nil
