@@ -44,8 +44,14 @@ type User struct {
 	Name               string
 	StripeCustomerID   string
 	CanCreateNamespace bool `gorm:"not null;default:false"`
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// EmailVerifiedAt is the timestamp when the user proved ownership of
+	// their email by clicking a magic-link. Nil on a fresh signup until
+	// the round-trip completes. State-changing API endpoints block on
+	// this being non-nil; the cleanup sweep deletes users where this is
+	// still nil more than 24h after CreatedAt.
+	EmailVerifiedAt *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 
 	// Deprecated: use CustomerID. Kept temporarily for migration.
 	CustomerName string `gorm:"-"` // excluded from DB, computed on read
@@ -110,6 +116,9 @@ func SeatLimit(tier string) int {
 
 // --- Users ---
 
+// CreateUser inserts a new user with EmailVerifiedAt == nil. Callers that
+// know the email has already been proven (e.g. brand-new magic-link flow)
+// should use CreateVerifiedUser instead.
 func (s *Store) CreateUser(email string, customerID uint) (*User, error) {
 	now := time.Now()
 	user := User{
@@ -123,6 +132,48 @@ func (s *Store) CreateUser(email string, customerID uint) (*User, error) {
 		return nil, err
 	}
 	return &user, nil
+}
+
+// CreateVerifiedUser is like CreateUser but marks EmailVerifiedAt = now.
+// Used by the magic-link signup path where ownership is proven in a single
+// round-trip (the user wouldn't receive the email otherwise).
+func (s *Store) CreateVerifiedUser(email string, customerID uint) (*User, error) {
+	now := time.Now()
+	user := User{
+		ID:              uuid.New().String(),
+		Email:           email,
+		CustomerID:      customerID,
+		EmailVerifiedAt: &now,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := s.db.Create(&user).Error; err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// MarkUserVerified flips EmailVerifiedAt to now() for an existing user.
+// No-op if already verified.
+func (s *Store) MarkUserVerified(userID string) error {
+	now := time.Now()
+	return s.db.Model(&User{}).
+		Where("id = ? AND email_verified_at IS NULL", userID).
+		Updates(map[string]any{
+			"email_verified_at": &now,
+			"updated_at":        now,
+		}).Error
+}
+
+// DeleteExpiredUnverifiedUsers removes users whose email was never verified
+// and whose CreatedAt is older than cutoff. Cascades via FK constraints to
+// the customer, subscription, team member, tokens, sources, etc. Returns
+// how many users were swept.
+func (s *Store) DeleteExpiredUnverifiedUsers(cutoff time.Time) (int64, error) {
+	result := s.db.
+		Where("email_verified_at IS NULL AND created_at < ?", cutoff).
+		Delete(&User{})
+	return result.RowsAffected, result.Error
 }
 
 func (s *Store) GetUserByEmail(email string) (*User, error) {

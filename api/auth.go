@@ -20,20 +20,43 @@ type JWTClaims struct {
 	Tier         string `json:"tier"`
 	IssuedAt     int64  `json:"iat"`
 	ExpiresAt    int64  `json:"exp"`
+	// EmailVerified is the verification state AT TOKEN ISSUE. It's
+	// advisory — middleware that truly gates on verification re-checks
+	// the DB (RequireEmailVerified), because a stolen token from before
+	// verification should keep working if the user has since verified.
+	EmailVerified bool `json:"email_verified"`
+	// VerificationDeadline is the unix time by which the user must
+	// verify or be swept. Set on unverified tokens; 0 for verified
+	// tokens. Sent to the frontend so the banner can show a deadline.
+	VerificationDeadline int64 `json:"verification_deadline,omitempty"`
 }
+
+// UnverifiedGracePeriod is the window a user has to click their verify
+// link before the cleanup sweep deletes the account.
+const UnverifiedGracePeriod = 24 * time.Hour
 
 // GenerateJWT creates a signed JWT for the user. Tier is for display only
 // (dashboard "your plan: Swatch") — enforcement queries the DB on each request.
+// Verified-state is similarly advisory; RequireEmailVerified middleware reads
+// the user row on each sensitive request.
 func GenerateJWT(user *store.User, tier string, secret string) (string, error) {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
 
+	verified := user.EmailVerifiedAt != nil
+	var deadline int64
+	if !verified {
+		deadline = user.CreatedAt.Add(UnverifiedGracePeriod).Unix()
+	}
+
 	claims := JWTClaims{
-		UserID:       user.ID,
-		Email:        user.Email,
-		CustomerName: user.CustomerName,
-		Tier:         tier,
-		IssuedAt:     time.Now().Unix(),
-		ExpiresAt:    time.Now().Add(30 * 24 * time.Hour).Unix(),
+		UserID:               user.ID,
+		Email:                user.Email,
+		CustomerName:         user.CustomerName,
+		Tier:                 tier,
+		IssuedAt:             time.Now().Unix(),
+		ExpiresAt:            time.Now().Add(30 * 24 * time.Hour).Unix(),
+		EmailVerified:        verified,
+		VerificationDeadline: deadline,
 	}
 	claimsJSON, err := json.Marshal(claims)
 	if err != nil {

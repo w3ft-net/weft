@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -29,6 +30,50 @@ func AuthMiddleware(secret string, next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), claimsKey, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// RequireEmailVerified gates state-changing endpoints on a verified email.
+// Must be applied BEFORE the JWT middleware on the request path — it reads
+// claims out of the context that AuthMiddleware inserts.
+//
+// The JWT's email_verified claim is advisory only; a user who was issued an
+// unverified token and later clicked their link still has a "false" claim
+// in their JWT until it's refreshed, so this middleware re-reads the DB. A
+// 403 with a structured error code lets the frontend surface the
+// verify-your-email banner rather than a generic auth failure.
+func RequireEmailVerified(st *store.Store, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims, _ := r.Context().Value(claimsKey).(*JWTClaims)
+		if claims == nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		user, err := st.GetUserByID(claims.UserID)
+		if err != nil || user == nil {
+			http.Error(w, "user not found", http.StatusNotFound)
+			return
+		}
+		if user.EmailVerifiedAt == nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = writeJSON(w, map[string]any{
+				"code":    "email_verification_required",
+				"message": "Verify your email to unlock this feature.",
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// writeJSON is a tiny helper to keep the middleware body readable.
+func writeJSON(w http.ResponseWriter, v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(b)
+	return err
 }
 
 // GetClaims extracts JWT claims from the request context.

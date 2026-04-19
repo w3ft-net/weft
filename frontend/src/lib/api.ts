@@ -1,5 +1,20 @@
 const API_BASE = import.meta.env.VITE_API_URL || ''
 
+// ApiError surfaces structured codes from the backend (e.g.
+// email_verification_required) so callers can render the right UI
+// affordance instead of a generic alert. Plain string errors still fall
+// into message; code is "" when the backend returned non-JSON text.
+export class ApiError extends Error {
+  code: string
+  status: number
+  constructor(message: string, code: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.code = code
+    this.status = status
+  }
+}
+
 async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem('weft_token')
   const headers: Record<string, string> = {
@@ -14,7 +29,21 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
 
   if (!res.ok) {
     const body = await res.text().catch(() => '')
-    throw new Error(body || `HTTP ${res.status}`)
+    // Try to parse as a structured error. Backend emits
+    // {code, message} for things the UI should react to (e.g.
+    // email_verification_required); plain text otherwise.
+    let code = ''
+    let message = body || `HTTP ${res.status}`
+    try {
+      const parsed = JSON.parse(body)
+      if (parsed && typeof parsed === 'object' && parsed.code) {
+        code = String(parsed.code)
+        message = String(parsed.message || body)
+      }
+    } catch {
+      // not JSON — leave defaults
+    }
+    throw new ApiError(message, code, res.status)
   }
 
   const text = await res.text()
@@ -148,6 +177,14 @@ export function getWatchResults(name: string): Promise<CronResult[]> {
   return apiFetch(`/api/watches/${encodeURIComponent(name)}/results`)
 }
 
+// resendVerification re-sends the signup verification email to the
+// currently-authenticated user. Returns {status: "sent"} on success, or
+// {status: "already_verified"} for users who've already completed the
+// round-trip.
+export function resendVerification(): Promise<{ status: string }> {
+  return apiFetch('/api/auth/resend-verification', { method: 'POST' })
+}
+
 // Types
 export interface User {
   id: string
@@ -155,6 +192,8 @@ export interface User {
   name: string
   tier: string
   customer: string
+  email_verified?: boolean
+  verification_deadline?: number // unix seconds; present only when unverified
 }
 
 export interface Usage {
