@@ -37,9 +37,22 @@ variable "share_with_account_id" {
   default = "220664822695"
 }
 
+# Per-arch base AMIs — kevcons build-base passes these through from
+# .kevcons.yaml's build.architecture. Defaults keep the arm64 path
+# (weft's production arch) working when packer is invoked directly.
+variable "architecture" {
+  type    = string
+  default = "arm64"
+}
+
+variable "source_ami_filter" {
+  type    = string
+  default = "debian-12-arm64-*"
+}
+
 locals {
   ts       = var.timestamp != "" ? var.timestamp : formatdate("YYYYMMDDhhmmss", timestamp())
-  ami_name = "debian-12-base-weft-${var.version}-${local.ts}"
+  ami_name = "debian-12-base-weft-${var.architecture}-${var.version}-${local.ts}"
 }
 
 source "amazon-ebs" "weft-base" {
@@ -49,10 +62,10 @@ source "amazon-ebs" "weft-base" {
 
   source_ami_filter {
     filters = {
-      name                = "debian-12-arm64-*"
+      name                = var.source_ami_filter
       root-device-type    = "ebs"
       virtualization-type = "hvm"
-      architecture        = "arm64"
+      architecture        = var.architecture
     }
     most_recent = true
     owners      = ["136693071363"] # Debian official
@@ -65,11 +78,12 @@ source "amazon-ebs" "weft-base" {
   ami_users = [var.share_with_account_id]
 
   tags = {
-    Name      = local.ami_name
-    App       = "weft"
-    Created   = local.ts
-    ManagedBy = "packer"
-    Role      = "base"
+    Name         = local.ami_name
+    App          = "weft"
+    Architecture = var.architecture
+    Created      = local.ts
+    ManagedBy    = "packer"
+    Role         = "base"
   }
 }
 
