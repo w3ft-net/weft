@@ -6,8 +6,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	weftapi "github.com/kevlarcon/weft/api"
+	"github.com/kevlarcon/weft/config"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -66,6 +68,16 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	srv.StartUnverifiedSweep(ctx)
+
+	// Kick off the runtime-config watcher. Reads /weft/config/app from
+	// SSM on boot and re-reads every 60s, atomically swapping the
+	// pointer every rate-limit, body-cap, and grpc-cap consumer holds.
+	// Missing param / AWS errors fall through to compile-time defaults.
+	appName := os.Getenv("APP_NAME")
+	if appName == "" {
+		appName = "weft"
+	}
+	srv.SetConfig(config.Watch(ctx, appName, 60*time.Second))
 
 	log.Printf("weft-api listening on :%s (coordinator: %s)", *port, *coordAddr)
 	if err := http.ListenAndServe(":"+*port, srv.Handler()); err != nil {

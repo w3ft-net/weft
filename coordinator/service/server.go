@@ -8,13 +8,16 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/kevlarcon/weft/auth"
+	weftcfg "github.com/kevlarcon/weft/config"
 	"github.com/kevlarcon/weft/coordinator"
 	"github.com/kevlarcon/weft/ingest"
 	"github.com/kevlarcon/weft/planner"
@@ -46,6 +49,19 @@ type Server struct {
 	Coord            *coordinator.Coordinator
 	Store            *store.Store
 	consecutiveDrops int
+
+	// CfgPtr holds the live runtime config. Today only IngestStream
+	// consults it (for the per-stream byte budget); nil is fine in
+	// tests and non-production callers — handlers fall through to
+	// compile-time defaults via runtimeCfg().
+	CfgPtr *atomic.Pointer[weftcfg.Runtime]
+}
+
+func (s *Server) runtimeCfg() *weftcfg.Runtime {
+	if s.CfgPtr == nil {
+		return weftcfg.Defaults()
+	}
+	return s.CfgPtr.Load()
 }
 
 func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinator_QueryServer) error {
@@ -433,6 +449,14 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 	authCustomer := auth.Customer.Name
 	authNamespace := auth.Namespace
 
+	// Per-stream byte budget — caps a hostile agent's ability to OOM
+	// the coordinator by holding a stream open and firing rows forever.
+	// Read once at accept time; an operator tightening the budget mid-
+	// stream doesn't retroactively evict an in-flight stream, but every
+	// agent reconnect picks up the new value.
+	budget := s.runtimeCfg().IngestStreamBudgetBytes
+	var bytesThisStream int64
+
 	var mu sync.Mutex
 	var rows []*pb.LogRow
 	var count int64
@@ -459,6 +483,16 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 		}
 		if err != nil {
 			return err
+		}
+
+		if budget > 0 {
+			bytesThisStream += int64(proto.Size(row))
+			if bytesThisStream > budget {
+				log.Printf("ingest-stream: customer=%s exceeded %d-byte budget, closing stream (agent should reconnect)",
+					authCustomer, budget)
+				return status.Errorf(codes.ResourceExhausted,
+					"ingest stream budget of %d bytes exceeded; reconnect", budget)
+			}
 		}
 
 		// Force the authoritative customer on every row.

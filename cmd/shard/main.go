@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/kevlarcon/weft/auth"
+	weftcfg "github.com/kevlarcon/weft/config"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	shardsvc "github.com/kevlarcon/weft/shard/service"
 )
@@ -65,11 +66,24 @@ func main() {
 		log.Println("WARNING: using default SHARD_SECRET — set SHARD_SECRET in production")
 	}
 
+	// Runtime config watcher — powers the Query timeout and feeds
+	// grpc.MaxRecvMsgSize at boot. See config/runtime.go.
+	appName := os.Getenv("APP_NAME")
+	if appName == "" {
+		appName = "weft"
+	}
+	cfgCtx, cfgCancel := context.WithCancel(context.Background())
+	defer cfgCancel()
+	cfgPtr := weftcfg.Watch(cfgCtx, appName, 60*time.Second)
+	srv.CfgPtr = cfgPtr
+	bootCfg := cfgPtr.Load()
+
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *grpcPort))
 	if err != nil {
 		log.Fatalf("listen grpc: %v", err)
 	}
 	gs := grpc.NewServer(
+		grpc.MaxRecvMsgSize(bootCfg.GRPCMaxRecvBytes),
 		grpc.UnaryInterceptor(auth.SharedTokenUnaryServerInterceptor(shardSecret)),
 		grpc.StreamInterceptor(auth.SharedTokenStreamServerInterceptor(shardSecret)),
 	)
