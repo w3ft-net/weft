@@ -71,6 +71,13 @@ source "amazon-ebs" "weft-base" {
     owners      = ["136693071363"] # Debian official
   }
 
+  # Builder EC2 runs with this instance profile so the kevcons install
+  # step below can pull from s3://kevlar-releases-.../kevcons/. The
+  # bucket policy grants read to any org principal; the profile's role
+  # has no explicit S3 policy. Managed in
+  # infrastructure-live/management/kevcons-releases.
+  iam_instance_profile = "packer-builder-kevcons-reader"
+
   ssh_username           = "admin"
   ssh_timeout            = "30m"
   ssh_read_write_timeout = "30m"
@@ -157,6 +164,22 @@ build {
       "unzip -q /tmp/awscli.zip -d /tmp",
       "sudo /tmp/aws/install",
       "rm -rf /tmp/aws /tmp/awscli.zip",
+    ]
+  }
+
+  # Install kevcons from the org-wide releases bucket. The builder EC2's
+  # instance profile (see source block) gets read access via the bucket
+  # policy on kevlar-releases; no explicit IAM needed. Pins whatever
+  # version was LATEST at bake time into the AMI for its lifetime.
+  provisioner "shell" {
+    environment_vars = ["AWS_REGION=us-east-2"]
+    inline = [
+      "set -euo pipefail",
+      "VERSION=$(aws s3 cp --no-progress s3://kevlar-releases-289202785125/kevcons/LATEST -)",
+      "echo \"installing kevcons $VERSION\"",
+      "sudo aws s3 cp --no-progress \"s3://kevlar-releases-289202785125/kevcons/$VERSION/kevcons-linux-arm64\" /usr/local/bin/kevcons",
+      "sudo chmod 0755 /usr/local/bin/kevcons",
+      "/usr/local/bin/kevcons --version",
     ]
   }
 
