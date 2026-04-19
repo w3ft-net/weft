@@ -443,4 +443,79 @@ export function onPendingSourcesChanged(handler: () => void): () => void {
   return () => pendingSourcesBus.removeEventListener('change', handler)
 }
 
+// ─── Configured sources (CloudWatch + weftd) ─────────────────────
+
+export interface SourceInfo {
+  namespace: string
+  app: string
+  source_type: 'cloudwatch' | 'weftd'
+  log_group: string
+  region: string
+  poll_interval: string
+  enabled: boolean
+  last_poll_at: string
+  aws_account_id?: string
+}
+
+export async function listSources(namespace?: string): Promise<SourceInfo[]> {
+  const path = namespace
+    ? `/api/sources?namespace=${encodeURIComponent(namespace)}`
+    : '/api/sources'
+  const resp = await apiFetch<SourceInfo[] | null>(path)
+  return resp || []
+}
+
+export function deleteSource(namespace: string, app: string): Promise<void> {
+  // The backend stores the full app as "{namespace}/{app}" but its DELETE
+  // path takes just the sub-app, so strip the prefix if present.
+  const sub = app.startsWith(namespace + '/') ? app.slice(namespace.length + 1) : app
+  return apiFetch(
+    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(sub)}`,
+    { method: 'DELETE' },
+  )
+}
+
+// ─── CloudWatch source add flow ──────────────────────────────────
+
+export interface CloudWatchCreds {
+  namespace: string
+  app: string
+  aws_account_id: string
+  role_arn: string
+  external_id: string
+  log_group: string
+  region: string
+}
+
+export interface CloudWatchSampleResponse {
+  lines: string[]
+  detection: SourceDetection
+}
+
+export async function sampleCloudWatchSource(
+  creds: Omit<CloudWatchCreds, 'app'>,
+): Promise<CloudWatchSampleResponse> {
+  return apiFetch<CloudWatchSampleResponse>('/api/sources/cloudwatch/sample', {
+    method: 'POST',
+    body: JSON.stringify(creds),
+  })
+}
+
+export interface AddCloudWatchSourceRequest extends CloudWatchCreds {
+  poll_interval: string
+  format: string
+  timestamp_field: string
+  timestamp_format: string
+  level_field: string
+  level_pattern: string
+  expand_keys?: { key: string; type: string }[]
+}
+
+export function addCloudWatchSource(req: AddCloudWatchSourceRequest): Promise<void> {
+  return apiFetch('/api/sources/cloudwatch', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  })
+}
+
 export { apiFetch }

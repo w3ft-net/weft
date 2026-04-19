@@ -389,9 +389,14 @@ func escapeSQLString(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
 }
 
-// escapeSQLLike escapes characters that are special in SQL LIKE patterns.
+// escapeSQLLike escapes characters that are special in SQL LIKE patterns
+// and also doubles single quotes so the result is safe to embed in a '...'
+// string literal — every caller wraps the output in '%...%' and a stray
+// quote in user-supplied input (grep/sed/awk pattern) would otherwise
+// terminate the literal and let the rest of the pattern run as SQL.
 func escapeSQLLike(s string) string {
 	s = strings.ReplaceAll(s, "%", "\\%")
 	s = strings.ReplaceAll(s, "_", "\\_")
+	s = strings.ReplaceAll(s, "'", "''")
 	return s
 }

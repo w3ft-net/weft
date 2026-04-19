@@ -3,20 +3,14 @@ package poller
 import (
 	"context"
 	"log"
-	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
-	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"gopkg.in/yaml.v3"
 
-	"github.com/kevlarcon/weft/store"
 	"github.com/kevlarcon/weft/ingest"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
+	"github.com/kevlarcon/weft/store"
 )
 
 // ShardProvider routes rows to the correct shard.
@@ -63,13 +57,13 @@ func (p *Poller) Start(ctx context.Context) {
 	log.Printf("poller: started %d CloudWatch pollers (of %d log groups)", started, len(logGroups))
 }
 
-func (p *Poller) pollLoop(ctx context.Context, lg store.LogGroupWithAccount) {
+func (p *Poller) pollLoop(ctx context.Context, lg store.LogGroupWithAWSAccount) {
 	interval, err := time.ParseDuration(lg.PollInterval)
 	if err != nil {
 		interval = 30 * time.Second
 	}
 
-	log.Printf("poller[%s]: polling %s (account %s) every %s", lg.App, lg.LogGroupName, lg.AWSAccount, interval)
+	log.Printf("poller[%s]: polling %s (account %s) every %s", lg.App, lg.LogGroupName, lg.AccountID, interval)
 
 	p.poll(ctx, lg)
 
@@ -86,41 +80,8 @@ func (p *Poller) pollLoop(ctx context.Context, lg store.LogGroupWithAccount) {
 	}
 }
 
-func (p *Poller) poll(ctx context.Context, lg store.LogGroupWithAccount) {
-	// Load base AWS config.
-	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(lg.Region))
-	if err != nil {
-		log.Printf("poller[%s]: aws config: %v", lg.App, err)
-		return
-	}
-
-	// Assume cross-account role to access the customer's CloudWatch logs.
-	stsClient := sts.NewFromConfig(cfg)
-	creds := stscreds.NewAssumeRoleProvider(stsClient, lg.RoleARN, func(o *stscreds.AssumeRoleOptions) {
-		if lg.ExternalID != "" {
-			o.ExternalID = aws.String(lg.ExternalID)
-		}
-		o.RoleSessionName = "weft-poller-" + lg.App
-	})
-	assumedCfg := cfg.Copy()
-	assumedCfg.Credentials = aws.NewCredentialsCache(creds)
-
-	client := cloudwatchlogs.NewFromConfig(assumedCfg)
-
-	// Determine start time.
-	var startTime int64
-	if lg.LastPollAt != "" {
-		t, err := time.Parse(time.RFC3339, lg.LastPollAt)
-		if err == nil {
-			startTime = t.UnixMilli()
-		}
-	}
-	if startTime == 0 {
-		startTime = time.Now().Add(-1 * time.Hour).UnixMilli()
-	}
-	endTime := time.Now().UnixMilli()
-
-	// Parse schema.
+func (p *Poller) poll(ctx context.Context, lg store.LogGroupWithAWSAccount) {
+	// Parse schema first — no point pulling events we can't parse.
 	var schema ingest.Schema
 	if err := yaml.Unmarshal([]byte(lg.SchemaYAML), &schema); err != nil {
 		log.Printf("poller[%s]: parse schema: %v", lg.App, err)
@@ -135,46 +96,36 @@ func (p *Poller) poll(ctx context.Context, lg store.LogGroupWithAccount) {
 		return
 	}
 
-	// Fetch logs.
-	var allRows []*pb.LogRow
-	var nextToken *string
-	if lg.LastToken != "" {
-		nextToken = aws.String(lg.LastToken)
+	// Pick up where we left off. First poll or parse failure → last hour
+	// (the Fetch helper defaults StartTime=0 to "1h ago").
+	var startTime int64
+	if lg.LastPollAt != "" {
+		if t, err := time.Parse(time.RFC3339, lg.LastPollAt); err == nil {
+			startTime = t.UnixMilli()
+		}
 	}
 
-	for {
-		input := &cloudwatchlogs.FilterLogEventsInput{
-			LogGroupName: aws.String(lg.LogGroupName),
-			StartTime:    aws.Int64(startTime),
-			EndTime:      aws.Int64(endTime),
-			NextToken:    nextToken,
-		}
+	result, err := ingest.FetchCloudWatch(ctx, ingest.CloudWatchFetchOpts{
+		Region:        lg.Region,
+		RoleARN:       lg.RoleARN,
+		ExternalID:    lg.ExternalID,
+		LogGroup:      lg.LogGroupName,
+		StartTime:     startTime,
+		NextToken:     lg.LastToken,
+		SessionSuffix: "poller-" + lg.App,
+	})
+	if err != nil {
+		log.Printf("poller[%s]: fetch: %v", lg.App, err)
+		return
+	}
 
-		result, err := client.FilterLogEvents(ctx, input)
+	var allRows []*pb.LogRow
+	for _, event := range result.Events {
+		row, err := parser.ParseLine(event.Message, event.Timestamp)
 		if err != nil {
-			log.Printf("poller[%s]: FilterLogEvents: %v", lg.App, err)
-			break
+			continue
 		}
-
-		for _, event := range result.Events {
-			msg := aws.ToString(event.Message)
-			msg = strings.TrimSpace(msg)
-			if msg == "" {
-				continue
-			}
-
-			ts := time.UnixMilli(aws.ToInt64(event.Timestamp))
-			row, err := parser.ParseLine(msg, ts)
-			if err != nil {
-				continue
-			}
-			allRows = append(allRows, row)
-		}
-
-		if result.NextToken == nil {
-			break
-		}
-		nextToken = result.NextToken
+		allRows = append(allRows, row)
 	}
 
 	if len(allRows) == 0 {
@@ -213,10 +164,6 @@ func (p *Poller) poll(ctx context.Context, lg store.LogGroupWithAccount) {
 	if ingested > 0 {
 		log.Printf("poller[%s]: ingested %d rows", lg.App, ingested)
 		now := time.Now().UTC().Format(time.RFC3339)
-		token := ""
-		if nextToken != nil {
-			token = *nextToken
-		}
-		p.store.UpdatePollState(lg.App, now, token)
+		p.store.UpdatePollState(lg.ID, now, result.NextToken)
 	}
 }

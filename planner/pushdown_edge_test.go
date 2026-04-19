@@ -1,6 +1,9 @@
 package planner
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // ===========================================================================
 // Edge cases and failure modes for predicate pushdown.
@@ -1058,6 +1061,53 @@ func TestEdge_ProjectionSafety(t *testing.T) {
 				if plan.ComputeStages[i] != want {
 					t.Errorf("ComputeStages[%d]\n got: %s\nwant: %s", i, plan.ComputeStages[i], want)
 				}
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SQL-injection regressions. User-derived bytes that land inside a SQL
+// string literal must be quote-escaped so the literal can't be closed
+// early. Every case here must also survive InjectCustomer with the
+// customer predicate AND-dominant (i.e. appearing immediately after
+// "WHERE ").
+// ---------------------------------------------------------------------------
+
+func TestEdge_SQLInjection(t *testing.T) {
+	tests := []struct {
+		name     string
+		pipeline string
+		wantSQL  string
+	}{
+		{
+			name:     "grep pattern with single quote",
+			pipeline: `cat foo.log | grep "x' OR 1=1 --"`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'foo' OR app LIKE 'foo/%') AND raw LIKE '%x'' OR 1=1 --%'`,
+		},
+		{
+			name:     "sed address with single quote",
+			pipeline: `cat foo.log | sed -n "/x' OR 1=1 --/p"`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'foo' OR app LIKE 'foo/%') AND raw LIKE '%x'' OR 1=1 --%'`,
+		},
+		{
+			name:     "awk regex with single quote",
+			pipeline: `cat foo.log | awk '/x'"'"' OR 1=1/'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'foo' OR app LIKE 'foo/%') AND raw LIKE '%x'' OR 1=1%'`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan, err := Plan(tt.pipeline)
+			if err != nil {
+				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
+			}
+			if plan.ShardSQL != tt.wantSQL {
+				t.Errorf("ShardSQL mismatch\n  got:  %s\n  want: %s", plan.ShardSQL, tt.wantSQL)
+			}
+			injected := InjectCustomer(plan.ShardSQL, "victim-co")
+			if !strings.Contains(injected, "WHERE customer = 'victim-co' AND ") {
+				t.Errorf("customer predicate not AND-dominant after InjectCustomer:\n  %s", injected)
 			}
 		})
 	}

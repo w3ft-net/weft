@@ -109,8 +109,9 @@ func (r *RemoteCoordinator) ListApps(customer string) ([]string, error) {
 }
 
 // AddSource registers a log source on the coordinator.
-func (r *RemoteCoordinator) AddSource(app, customer, logGroup, region, schemaYAML, pollInterval, awsAccountID, roleARN, externalID string) error {
+func (r *RemoteCoordinator) AddSource(namespace, app, customer, logGroup, region, schemaYAML, pollInterval, awsAccountID, roleARN, externalID string) error {
 	_, err := r.client.AddSource(context.Background(), &pb.AddSourceRequest{
+		Namespace:    namespace,
 		App:          app,
 		Customer:     customer,
 		LogGroup:     logGroup,
@@ -128,6 +129,7 @@ func (r *RemoteCoordinator) AddSource(app, customer, logGroup, region, schemaYAM
 type SourceInfo struct {
 	App        string
 	Customer   string
+	Namespace  string
 	LogGroup   string
 	Region     string
 	Enabled    bool
@@ -145,6 +147,7 @@ func (r *RemoteCoordinator) ListSources() ([]SourceInfo, error) {
 		sources = append(sources, SourceInfo{
 			App:        s.App,
 			Customer:   s.Customer,
+			Namespace:  s.Namespace,
 			LogGroup:   s.LogGroup,
 			Region:     s.Region,
 			Enabled:    s.Enabled,
@@ -155,8 +158,12 @@ func (r *RemoteCoordinator) ListSources() ([]SourceInfo, error) {
 }
 
 // RemoveSource deletes a log source.
-func (r *RemoteCoordinator) RemoveSource(app string) error {
-	_, err := r.client.RemoveSource(context.Background(), &pb.RemoveSourceRequest{App: app})
+func (r *RemoteCoordinator) RemoveSource(customer, namespace, app string) error {
+	_, err := r.client.RemoveSource(context.Background(), &pb.RemoveSourceRequest{
+		Customer:  customer,
+		Namespace: namespace,
+		App:       app,
+	})
 	return err
 }
 

@@ -305,6 +305,26 @@ func (c *Coordinator) Query(pipeline string, tr TimeRange, customerOverride ...s
 	if len(customerOverride) > 0 && customerOverride[0] != "" {
 		customer = customerOverride[0]
 	}
+
+	// Allowlist: the pipeline's source app (the part before '/') must
+	// resolve to a namespace this customer owns. Gate here, before the
+	// app name ever reaches SQL interpolation — the planner escapes
+	// string literals, but an allowlist is the correct posture for a
+	// user-controlled identifier.
+	if plan.SourceApp != "" && c.Store != nil {
+		cust, err := c.Store.GetCustomerByName(customer)
+		if err != nil || cust == nil {
+			return nil, fmt.Errorf("unknown customer")
+		}
+		ok, err := c.Store.CustomerHasSource(cust.ID, plan.SourceApp)
+		if err != nil {
+			return nil, fmt.Errorf("validate source: %w", err)
+		}
+		if !ok {
+			return nil, fmt.Errorf("unknown source: %s", plan.SourceApp)
+		}
+	}
+
 	sql := planner.InjectCustomer(plan.ShardSQL, customer)
 
 	matching := c.Registry.MatchingShards(tr, plan.FollowApp)
