@@ -6,12 +6,15 @@
 IngestStream namespace-scope bypass), `989da01` (email-verification gate
 for signup), `8315d9c` (coordinator gRPC JWT interceptor), `eca7eb7`
 (CLI migrated off gRPC-direct — coord gRPC is now strictly internal
-for api/weftd/shard paths), and the heartbeat-auth commit landing now
-(per-shard bearer token, minted at christen, validated on every
-Heartbeat — rogue-shard-registration attack closed). Items struck from
-the doc; everything still here is unfixed.
-**Verdict**: **Do not launch**. One cross-tenant data-exfiltration path
-remains (shard RPC auth), plus several high-impact hardening gaps.
+for api/weftd/shard paths), `30af7ae` (per-shard Heartbeat bearer
+token), and the shard-gRPC-auth commit landing now (shared SHARD_SECRET
+bearer on every coord→shard call; rogue-reach attacks on :9000 closed).
+Items struck from the doc; everything still here is unfixed.
+**Verdict**: **All four critical cross-tenant paths now closed.** The
+remaining findings are high/medium hardening (token plaintext storage,
+magic-link TOCTOU, rate limits, JWT hygiene, CORS) — none are
+standalone data-exfil vectors post-fix. Launching is now a product
+decision, not a security one; still land the highs before scaling.
 
 ---
 
@@ -21,10 +24,9 @@ remains (shard RPC auth), plus several high-impact hardening gaps.
 |---|---|---|---|
 | 1 | **Critical** | Agent tokens (`wft_…`) stored **plaintext** in Postgres | Any DB leak = fleet-wide agent impersonation |
 | 2 | **High** | Magic-link validation and consumption are not atomic | TOCTOU → single link creates multiple accounts |
-| 3 | **High** | Shard gRPC unauthenticated; no TLS between any services | Lateral movement inside VPC = full DuckDB read/write |
-| 4 | **High** | `/api/auth/device/poll` unauthenticated with no rate limit + 128-bit device code | DoS + narrows the window for any future code-entropy regression |
-| 5 | **Medium** | JWT 30-day expiry, no revocation list, stored in `localStorage` | XSS → month-long account takeover |
-| 6 | **Medium** | Production CORS silently allows `localhost:5173/5174/3000` | Subtle token-leakage path if a dev loopback is ever reachable |
+| 3 | **High** | `/api/auth/device/poll` unauthenticated with no rate limit + 128-bit device code | DoS + narrows the window for any future code-entropy regression |
+| 4 | **Medium** | JWT 30-day expiry, no revocation list, stored in `localStorage` | XSS → month-long account takeover |
+| 5 | **Medium** | Production CORS silently allows `localhost:5173/5174/3000` | Subtle token-leakage path if a dev loopback is ever reachable |
 
 The details below back each of these with file/line references and, where relevant, a working exploit payload.
 
@@ -90,23 +92,7 @@ Merge validate+consume into a single `UPDATE ... WHERE used=false AND expires_at
 
 ---
 
-## 3. Shard gRPC + inter-service trust  **[HIGH]**
-
-`cmd/shard/main.go:57` — `grpc.NewServer()`, no auth, no TLS. The handler file `shard/service/server.go` accepts:
-
-- `Query(QueryRequest)` — takes a raw SQL string and executes it against DuckDB. Anyone with network reach to `:9000` gets `SELECT * FROM logs` unfiltered by customer, because only the coordinator is expected to construct a customer-safe SQL string.
-- `Configure(ConfigureRequest)` — assigns the shard's identity. Protected by a `shard != nil` check, so a live shard can't be repurposed — but a fresh EBS volume's shard is `nil` until christen, so there's a race window between instance launch and the coordinator's `Configure` RPC where an attacker can claim the shard under an identity of their choosing.
-- `Ingest` / `IngestStream` — insert arbitrary rows, bypassing the coordinator's `row.Customer = authCustomer` overwrite in `coordinator/service/server.go:343`. An attacker who can reach a shard directly can plant rows attributed to any customer, polluting query results and (if they control the ingested JSON) driving false positives through the customer's watches / Slack integrations.
-
-The coordinator's outbound shard client also uses `insecure.NewCredentials()` (see `cmd/shard/main.go:117` for the analogous heartbeat path). A network-in-the-middle attacker on the VPC sees every row of every query in cleartext.
-
-### Fix
-
-TLS on all gRPC listeners. At minimum, shared-secret bearer interceptors between coordinator ↔ shard and coordinator ↔ compute, so the trust boundary isn't "whatever the VPC security group does today."
-
----
-
-## 4. Rate-limiting and abuse controls — absent everywhere  **[HIGH]**
+## 3. Rate-limiting and abuse controls — absent everywhere  **[HIGH]**
 
 Nothing in `api/`, `coordinator/service/`, or `shard/service/` implements rate limiting, request-size caps, or query timeouts. Concrete issues:
 
@@ -122,7 +108,7 @@ Standard per-IP / per-customer rate-limit middleware on the api (use `golang.org
 
 ---
 
-## 5. JWT hygiene  **[MEDIUM]**
+## 4. JWT hygiene  **[MEDIUM]**
 
 `api/auth.go:27-82`
 
@@ -141,7 +127,7 @@ Reduce expiry to 1h; add refresh tokens stored server-side with rotation on use;
 
 ---
 
-## 6. CORS and CSRF  **[MEDIUM]**
+## 5. CORS and CSRF  **[MEDIUM]**
 
 `api/middleware.go:83-108`
 
@@ -163,7 +149,7 @@ Gate the localhost origins on `os.Getenv("WEFT_ENV") == "dev"`. Explicitly set `
 
 ---
 
-## 7. Miscellaneous findings  **[LOW – MEDIUM]**
+## 6. Miscellaneous findings  **[LOW – MEDIUM]**
 
 - **`InjectCustomer` substring match.** `planner/sql.go:76` uses `strings.Contains(sql, " WHERE ")` to decide where to insert the customer predicate, and the value is interpolated via `fmt.Sprintf`. Safe today — the planner never produces `" WHERE "` as a substring of any `rawExpr` or predicate, and the allowlist in `coordinator.Query` gates the app name upstream — but brittle. A future change that puts user data inside a string literal containing ` WHERE ` would silently misplace the predicate. Move to an AST-level SQL build with parameterized literals.
 - **`SeedDevAgentToken`** (`store/token.go:169`) writes a known token whenever `--customer` is passed. Ensure this is never executable with a prod Postgres DSN.
@@ -181,15 +167,15 @@ Gate the localhost origins on `os.Getenv("WEFT_ENV") == "dev"`. Explicitly set `
 Blocking (must land before opening signups):
 
 1. Hash agent tokens and magic-link tokens at rest; make magic-link validate+consume a single atomic UPDATE.
-2. Shard gRPC auth. Either a bearer token shared between coordinator and shard, or mTLS; same decision covers Configure/Query/Ingest surfaces.
-3. gRPC `MaxRecvMsgSize` + per-stream byte budget; 30s default query deadline; rate limits on `/api/auth/login`, `/api/auth/device/poll`, and the anonymous Stripe webhook path (already length-capped, good).
+2. gRPC `MaxRecvMsgSize` + per-stream byte budget; 30s default query deadline; rate limits on `/api/auth/login`, `/api/auth/device/poll`, and the anonymous Stripe webhook path (already length-capped, good).
 
 Strongly recommended before first paying customer:
 
-4. TLS (preferably mTLS) on every inter-service gRPC channel.
-5. JWT expiry ≤ 1h with refresh tokens; add `iss`/`aud`; add a token revocation check tied to team-member removal.
-6. Production-only CORS allowlist.
-7. Follow-up on migration 015's grandfather clause — once the shard fleet has rolled, add a follow-up migration 016 that NOT-NULLs `shard_records.heartbeat_token` and tightens the Heartbeat handler to reject tokenless shards. Today's code accepts them during the transition window.
+3. TLS (preferably mTLS) on every inter-service gRPC channel — today the shared-bearer-token flows on plaintext TCP inside the VPC, so a compromised VPC peer can sniff rows in transit. Bearer is defense-in-depth on auth, not on confidentiality.
+4. JWT expiry ≤ 1h with refresh tokens; add `iss`/`aud`; add a token revocation check tied to team-member removal.
+5. Production-only CORS allowlist.
+6. Follow-up on migration 015's grandfather clause — once the shard fleet has rolled, add a follow-up migration 016 that NOT-NULLs `shard_records.heartbeat_token` and tightens the Heartbeat handler to reject tokenless shards. Today's code accepts them during the transition window.
+7. SHARD_SECRET rotation plan. Currently a static env var; in prod it's populated by SSM/Secrets Manager. Document the rotate-and-redeploy procedure (roll coord first with dual-accept, then roll shards, then roll coord to new-only) before rotating becomes necessary.
 
 Everything else on this list is follow-up hardening that can ship on a normal release cadence once the above is done.
 

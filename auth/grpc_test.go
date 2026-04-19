@@ -149,3 +149,58 @@ func TestClientTokenInterceptor_RespectsPreexistingHeader(t *testing.T) {
 		t.Errorf("authorization metadata = %v, want [Bearer user-jwt]", got)
 	}
 }
+
+// ── SharedTokenServerInterceptor (coord ↔ shard) ──────────────
+
+func TestSharedTokenServer_AcceptsMatchingBearer(t *testing.T) {
+	interceptor := SharedTokenUnaryServerInterceptor("shared-secret")
+	info := &grpc.UnaryServerInfo{FullMethod: "/weft.ShardQuery/Query"}
+
+	_, err := interceptor(
+		incomingCtx("authorization", "Bearer shared-secret"),
+		nil, info, func(ctx context.Context, req any) (any, error) { return "ok", nil },
+	)
+	if err != nil {
+		t.Fatalf("matching bearer rejected: %v", err)
+	}
+}
+
+func TestSharedTokenServer_RejectsMissing(t *testing.T) {
+	interceptor := SharedTokenUnaryServerInterceptor("shared-secret")
+	info := &grpc.UnaryServerInfo{FullMethod: "/weft.ShardQuery/Query"}
+
+	_, err := interceptor(incomingCtx(), nil, info, passthroughHandler)
+	if err == nil {
+		t.Fatal("expected Unauthenticated, got nil")
+	}
+	if s, _ := status.FromError(err); s.Code() != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %s", s.Code())
+	}
+}
+
+func TestSharedTokenServer_RejectsMismatch(t *testing.T) {
+	interceptor := SharedTokenUnaryServerInterceptor("shared-secret")
+	info := &grpc.UnaryServerInfo{FullMethod: "/weft.ShardQuery/Query"}
+
+	_, err := interceptor(
+		incomingCtx("authorization", "Bearer wrong-secret"),
+		nil, info, passthroughHandler,
+	)
+	if err == nil {
+		t.Fatal("expected Unauthenticated for mismatch")
+	}
+	if s, _ := status.FromError(err); s.Code() != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %s", s.Code())
+	}
+}
+
+func TestSharedTokenServer_EmptyExpectedPanics(t *testing.T) {
+	// Defense against misconfigured deploys that would otherwise make
+	// the server silently accept everything.
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on empty expected token")
+		}
+	}()
+	_ = SharedTokenUnaryServerInterceptor("")
+}

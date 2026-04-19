@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/kevlarcon/weft/auth"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
@@ -21,9 +22,17 @@ type GRPCShard struct {
 	client pb.ShardQueryClient
 }
 
-// NewGRPCShard connects to a remote shard gRPC server.
-func NewGRPCShard(id, addr string) (*GRPCShard, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+// NewGRPCShard connects to a remote shard gRPC server. token is the
+// shared SHARD_SECRET both ends agree on; it's attached as Bearer
+// authorization on every outbound call so the shard's
+// SharedTokenServerInterceptor accepts the connection. Empty token is
+// only valid in tests where the shard also runs without interceptors.
+func NewGRPCShard(id, addr, token string) (*GRPCShard, error) {
+	conn, err := grpc.NewClient(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(auth.ClientTokenUnaryInterceptor(token)),
+		grpc.WithStreamInterceptor(auth.ClientTokenStreamInterceptor(token)),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("connect to shard %s at %s: %w", id, addr, err)
 	}

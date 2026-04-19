@@ -45,13 +45,13 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 	computeAddr := startComputeServer(t)
 
 	// --- Connect gRPC clients ---
-	gs0, err := shard.NewGRPCShard("shard-0", shard0Addr)
+	gs0, err := shard.NewGRPCShard("shard-0", shard0Addr, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { gs0.Close() })
 
-	gs1, err := shard.NewGRPCShard("shard-1", shard1Addr)
+	gs1, err := shard.NewGRPCShard("shard-1", shard1Addr, "")
 	if err != nil {
 		t.Fatal(err)
 	}

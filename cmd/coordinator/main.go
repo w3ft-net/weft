@@ -42,11 +42,22 @@ func main() {
 	dbDSN := flag.String("db-dsn", "", "PostgreSQL DSN (e.g., host=localhost dbname=weft user=weft password=...)")
 	flag.Parse()
 
+	// Shared bearer token for coord ↔ shard gRPC. Coord is the client,
+	// shard is the server; both read the same SHARD_SECRET env var and
+	// exchange it on every call via auth.ClientToken / SharedToken
+	// interceptors. Default matches cmd/shard/main.go so the local
+	// docker stack works without additional config.
+	shardSecret := os.Getenv("SHARD_SECRET")
+	if shardSecret == "" {
+		shardSecret = "dev-shard-secret-change-in-production"
+		log.Println("WARNING: using default SHARD_SECRET — set SHARD_SECRET in production")
+	}
+
 	var shards []shard.Shard
 
 	// Shard setup: explicit specs, legacy single ASG, or tiered ASGs.
 	if *shardsFlag != "" {
-		shards = parseShardsFlag(*shardsFlag)
+		shards = parseShardsFlag(*shardsFlag, shardSecret)
 	}
 	// Provisioner manages shard lifecycle. No startup discovery needed —
 	// shards are restored from postgres or bootstrapped by the provisioner.
@@ -117,6 +128,7 @@ func main() {
 			log.Printf("warning: ASG launcher unavailable: %v", err)
 		} else {
 			provConfig := coordinator.DefaultProvisionerConfig()
+			provConfig.ShardSecret = shardSecret
 			provConfig.S3Config = shard.S3ConfigFromEnv()
 			provConfig.ParquetDir = os.Getenv("WEFT_PARQUET_DIR")
 			provConfig.LambdaFunctionURL = os.Getenv("WEFT_LAMBDA_FUNCTION_URL")
@@ -164,6 +176,7 @@ func main() {
 		// Dev/Docker: local in-process DuckDB shards managed by provisioner.
 		launcher := coordinator.NewLocalLauncher()
 		provConfig := coordinator.DevProvisionerConfig()
+		provConfig.ShardSecret = shardSecret
 		provConfig.ParquetDir = os.Getenv("WEFT_PARQUET_DIR")
 		prov := coordinator.NewProvisioner(coord.Registry, launcher, provConfig)
 		coord.Provisioner = prov
@@ -358,7 +371,7 @@ func lookupSSMInt32(region, name string) (int32, bool) {
 	return v, true
 }
 
-func parseShardsFlag(flag string) []shard.Shard {
+func parseShardsFlag(flag, shardSecret string) []shard.Shard {
 	var shards []shard.Shard
 	for _, spec := range strings.Split(flag, ",") {
 		parts := strings.SplitN(spec, "=", 2)
@@ -367,7 +380,7 @@ func parseShardsFlag(flag string) []shard.Shard {
 		}
 		id, addr := parts[0], parts[1]
 
-		gs, err := shard.NewGRPCShard(id, addr)
+		gs, err := shard.NewGRPCShard(id, addr, shardSecret)
 		if err != nil {
 			log.Fatalf("connect to shard %s at %s: %v", id, addr, err)
 		}

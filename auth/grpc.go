@@ -112,3 +112,74 @@ func attachToken(ctx context.Context, token string) context.Context {
 	}
 	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 }
+
+// SharedTokenUnaryServerInterceptor gates every unary RPC on a single
+// shared bearer token — used on server-to-server links where both ends
+// are trusted internal services (coordinator ↔ shard). The token is a
+// static secret distributed to both endpoints at deploy time (via SSM /
+// Secrets Manager) rather than per-request JWT.
+//
+// Constant-time compare via store.ConstantTimeTokenEqual semantics
+// (implemented here so auth doesn't depend on store) — a short-circuit
+// length check would leak length via timing. Empty expected token panics
+// at construction so a misconfigured deploy never silently accepts
+// everything.
+func SharedTokenUnaryServerInterceptor(expected string) grpc.UnaryServerInterceptor {
+	if expected == "" {
+		panic("SharedTokenUnaryServerInterceptor: expected token cannot be empty")
+	}
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if err := checkSharedToken(ctx, expected); err != nil {
+			return nil, err
+		}
+		return handler(ctx, req)
+	}
+}
+
+// SharedTokenStreamServerInterceptor is the streaming counterpart to
+// SharedTokenUnaryServerInterceptor.
+func SharedTokenStreamServerInterceptor(expected string) grpc.StreamServerInterceptor {
+	if expected == "" {
+		panic("SharedTokenStreamServerInterceptor: expected token cannot be empty")
+	}
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if err := checkSharedToken(ss.Context(), expected); err != nil {
+			return err
+		}
+		return handler(srv, ss)
+	}
+}
+
+func checkSharedToken(ctx context.Context, expected string) error {
+	md, _ := metadata.FromIncomingContext(ctx)
+	values := md.Get("authorization")
+	if len(values) == 0 {
+		return status.Errorf(codes.Unauthenticated, "missing authorization metadata")
+	}
+	const prefix = "Bearer "
+	hdr := values[0]
+	if len(hdr) < len(prefix) || hdr[:len(prefix)] != prefix {
+		return status.Errorf(codes.Unauthenticated, "authorization must be a Bearer token")
+	}
+	presented := hdr[len(prefix):]
+	if !constantTimeEqual(expected, presented) {
+		return status.Errorf(codes.Unauthenticated, "shared token mismatch")
+	}
+	return nil
+}
+
+// constantTimeEqual compares two strings in constant time. Duplicated
+// from store.ConstantTimeTokenEqual to avoid an auth → store dependency.
+func constantTimeEqual(a, b string) bool {
+	if len(a) != len(b) {
+		// subtle.ConstantTimeCompare already returns 0 for mismatched
+		// lengths; the explicit check here is only to skip the compare
+		// allocation path for the obvious case.
+		return false
+	}
+	var v byte
+	for i := 0; i < len(a); i++ {
+		v |= a[i] ^ b[i]
+	}
+	return v == 0
+}

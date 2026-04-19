@@ -45,6 +45,13 @@ type ProvisionerConfig struct {
 	WindowDuration     time.Duration   // duration of a single shard window (w.duration in docs/shard-lifecycle.md)
 	ConfigureRetries   int             // attempts to Configure a freshly-launched shard (default 12)
 	ConfigureBackoff   time.Duration   // sleep between Configure attempts (default 5s)
+	// ShardSecret is the shared bearer token attached to every outbound
+	// coord→shard gRPC call (see auth.ClientTokenUnaryInterceptor). The
+	// shard's server-side interceptor validates against the same value.
+	// Empty is only valid in in-process tests where the shard server
+	// runs without an interceptor — production deploys populate this
+	// from SHARD_SECRET via cmd/coordinator/main.go.
+	ShardSecret string
 }
 
 // DefaultProvisionerConfig returns sensible production defaults.
@@ -114,11 +121,14 @@ type ShardConfigurer interface {
 }
 
 // grpcConfigurer is the production ShardConfigurer — it actually dials
-// the shard over gRPC.
-type grpcConfigurer struct{}
+// the shard over gRPC. Holds the shared secret so every dial attaches
+// the SHARD_SECRET bearer for the shard-side interceptor.
+type grpcConfigurer struct {
+	shardSecret string
+}
 
-func (grpcConfigurer) Dial(ctx context.Context, addr string, req *pb.ConfigureRequest) (shard.Shard, error) {
-	gs, err := shard.NewGRPCShard(req.ShardId, addr)
+func (c grpcConfigurer) Dial(ctx context.Context, addr string, req *pb.ConfigureRequest) (shard.Shard, error) {
+	gs, err := shard.NewGRPCShard(req.ShardId, addr, c.shardSecret)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +159,7 @@ func NewProvisioner(registry *ShardRegistry, launcher ShardLauncher, config Prov
 		config:     config,
 		stats:      NewAppStats(),
 		Buckets:    NewBucketManager(nil),
-		configurer: grpcConfigurer{},
+		configurer: grpcConfigurer{shardSecret: config.ShardSecret},
 	}
 }
 
@@ -250,7 +260,7 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 			return
 		}
 		// Rebind: same durable id, instance moved.
-		gs, err := shard.NewGRPCShard(hb.ShardID, hb.Addr)
+		gs, err := shard.NewGRPCShard(hb.ShardID, hb.Addr, p.config.ShardSecret)
 		if err != nil {
 			log.Printf("provisioner: reconnect %s at %s failed: %v", hb.ShardID, hb.Addr, err)
 			return
@@ -267,7 +277,7 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 
 	// Known id but not in the registry: coordinator restart / reload
 	// catchup. Adopt the entry so queries reach it.
-	gs, err := shard.NewGRPCShard(hb.ShardID, hb.Addr)
+	gs, err := shard.NewGRPCShard(hb.ShardID, hb.Addr, p.config.ShardSecret)
 	if err != nil {
 		log.Printf("provisioner: adopt %s at %s failed: %v", hb.ShardID, hb.Addr, err)
 		return
