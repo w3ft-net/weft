@@ -22,13 +22,19 @@ const (
 )
 
 type ConfigureRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ShardId       string                 `protobuf:"bytes,1,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
-	Apps          []string               `protobuf:"bytes,2,rep,name=apps,proto3" json:"apps,omitempty"`
-	WindowStart   string                 `protobuf:"bytes,3,opt,name=window_start,json=windowStart,proto3" json:"window_start,omitempty"` // RFC3339
-	WindowEnd     string                 `protobuf:"bytes,4,opt,name=window_end,json=windowEnd,proto3" json:"window_end,omitempty"`       // RFC3339
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	ShardId     string                 `protobuf:"bytes,1,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
+	Apps        []string               `protobuf:"bytes,2,rep,name=apps,proto3" json:"apps,omitempty"`
+	WindowStart string                 `protobuf:"bytes,3,opt,name=window_start,json=windowStart,proto3" json:"window_start,omitempty"` // RFC3339
+	WindowEnd   string                 `protobuf:"bytes,4,opt,name=window_end,json=windowEnd,proto3" json:"window_end,omitempty"`       // RFC3339
+	// heartbeat_token is the per-shard bearer the coordinator minted at
+	// christen. The shard persists it in shard.json and sends it as
+	// authorization metadata on every Heartbeat RPC; the coordinator
+	// compares to the stored value and rejects mismatches. Closes the
+	// rogue-shard-registration attack in the pre-launch audit.
+	HeartbeatToken string `protobuf:"bytes,5,opt,name=heartbeat_token,json=heartbeatToken,proto3" json:"heartbeat_token,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ConfigureRequest) Reset() {
@@ -85,6 +91,13 @@ func (x *ConfigureRequest) GetWindowStart() string {
 func (x *ConfigureRequest) GetWindowEnd() string {
 	if x != nil {
 		return x.WindowEnd
+	}
+	return ""
+}
+
+func (x *ConfigureRequest) GetHeartbeatToken() string {
+	if x != nil {
+		return x.HeartbeatToken
 	}
 	return ""
 }
@@ -3685,13 +3698,14 @@ var File_proto_weftpb_weft_proto protoreflect.FileDescriptor
 
 const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
-	"\x17proto/weftpb/weft.proto\x12\x04weft\"\x83\x01\n" +
+	"\x17proto/weftpb/weft.proto\x12\x04weft\"\xac\x01\n" +
 	"\x10ConfigureRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12\x12\n" +
 	"\x04apps\x18\x02 \x03(\tR\x04apps\x12!\n" +
 	"\fwindow_start\x18\x03 \x01(\tR\vwindowStart\x12\x1d\n" +
 	"\n" +
-	"window_end\x18\x04 \x01(\tR\twindowEnd\"\x13\n" +
+	"window_end\x18\x04 \x01(\tR\twindowEnd\x12'\n" +
+	"\x0fheartbeat_token\x18\x05 \x01(\tR\x0eheartbeatToken\"\x13\n" +
 	"\x11ConfigureResponse\";\n" +
 	"\x14IngestStreamResponse\x12#\n" +
 	"\rrows_received\x18\x01 \x01(\x03R\frowsReceived\" \n" +

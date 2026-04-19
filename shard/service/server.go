@@ -25,10 +25,11 @@ import (
 type Server struct {
 	pb.UnimplementedShardQueryServer
 
-	mu    sync.RWMutex
-	shard *shard.DuckDBShard
-	id    string
-	apps  []string
+	mu             sync.RWMutex
+	shard          *shard.DuckDBShard
+	id             string
+	apps           []string
+	heartbeatToken string // per-shard bearer for Heartbeat RPC; populated by Configure or loaded from shard.json
 
 	// dataDir is the directory shard.json lives in. Empty means the
 	// server is in test/in-process mode with no persistence.
@@ -70,12 +71,21 @@ func NewServerFromIdentity(dataDir, dbPath string) (*Server, error) {
 		return nil, fmt.Errorf("open duckdb at %s: %w", dbPath, err)
 	}
 	return &Server{
-		shard:   ds,
-		id:      id.ShardID,
-		apps:    id.Apps,
-		dataDir: dataDir,
-		dbPath:  dbPath,
+		shard:          ds,
+		id:             id.ShardID,
+		apps:           id.Apps,
+		heartbeatToken: id.HeartbeatToken,
+		dataDir:        dataDir,
+		dbPath:         dbPath,
 	}, nil
+}
+
+// HeartbeatToken returns the per-shard bearer token, or "" if not yet
+// christened. Safe to call concurrently from the heartbeat goroutine.
+func (s *Server) HeartbeatToken() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.heartbeatToken
 }
 
 // Identity returns the current shard id, or "" when unclaimed. Safe to
@@ -134,10 +144,11 @@ func (s *Server) Configure(_ context.Context, req *pb.ConfigureRequest) (*pb.Con
 	winStart, _ := time.Parse(time.RFC3339, req.WindowStart)
 	winEnd, _ := time.Parse(time.RFC3339, req.WindowEnd)
 	ident := &shard.Identity{
-		ShardID:     req.ShardId,
-		WindowStart: winStart,
-		WindowEnd:   winEnd,
-		Apps:        req.Apps,
+		ShardID:        req.ShardId,
+		WindowStart:    winStart,
+		WindowEnd:      winEnd,
+		Apps:           req.Apps,
+		HeartbeatToken: req.HeartbeatToken,
 	}
 	if err := shard.SaveIdentity(s.dataDir, ident); err != nil {
 		return nil, fmt.Errorf("persist identity: %w", err)
@@ -150,6 +161,7 @@ func (s *Server) Configure(_ context.Context, req *pb.ConfigureRequest) (*pb.Con
 	s.shard = ds
 	s.id = req.ShardId
 	s.apps = req.Apps
+	s.heartbeatToken = req.HeartbeatToken
 	log.Printf("shard configured: id=%s apps=%v window=[%s, %s]",
 		req.ShardId, req.Apps, req.WindowStart, req.WindowEnd)
 

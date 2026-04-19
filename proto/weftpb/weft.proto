@@ -34,6 +34,12 @@ message ConfigureRequest {
   repeated string apps = 2;
   string window_start = 3; // RFC3339
   string window_end = 4;   // RFC3339
+  // heartbeat_token is the per-shard bearer the coordinator minted at
+  // christen. The shard persists it in shard.json and sends it as
+  // authorization metadata on every Heartbeat RPC; the coordinator
+  // compares to the stored value and rejects mismatches. Closes the
+  // rogue-shard-registration attack in the pre-launch audit.
+  string heartbeat_token = 5;
 }
 
 message ConfigureResponse {}

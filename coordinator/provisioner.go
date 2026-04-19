@@ -312,11 +312,22 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 	seq := p.registry.Count() + 1
 	shardID := fmt.Sprintf("shard-%s-%d", windowStart.Format("20060102T1504"), seq)
 
+	// Mint a per-shard bearer for heartbeat auth. The shard persists
+	// this in shard.json (see Configure) and sends it as authorization
+	// metadata on every subsequent Heartbeat RPC. Without this
+	// secret an attacker with network reach to :9020 could register a
+	// rogue shard by heartbeating with a stolen ID.
+	heartbeatToken, err := store.GenerateShardHeartbeatToken()
+	if err != nil {
+		return fmt.Errorf("mint heartbeat token for %s: %w", shardID, err)
+	}
+
 	req := &pb.ConfigureRequest{
-		ShardId:     shardID,
-		Apps:        nil, // catch-all; see gap #9
-		WindowStart: windowStart.Format(time.RFC3339),
-		WindowEnd:   windowEnd.Format(time.RFC3339),
+		ShardId:        shardID,
+		Apps:           nil, // catch-all; see gap #9
+		WindowStart:    windowStart.Format(time.RFC3339),
+		WindowEnd:      windowEnd.Format(time.RFC3339),
+		HeartbeatToken: heartbeatToken,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -346,17 +357,18 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 	}
 
 	p.registry.Add(&ShardEntry{
-		ID:          shardID,
-		Apps:        nil,
-		WindowStart: windowStart,
-		WindowEnd:   windowEnd,
-		State:       StateIngesting,
-		Addr:        hb.Addr,
-		InstanceID:  hb.InstanceID,
-		RowCount:    hb.RowCount,
-		EBSVolumeID: volumeID,
-		Shard:       sh,
-		CreatedAt:   now,
+		ID:             shardID,
+		Apps:           nil,
+		WindowStart:    windowStart,
+		WindowEnd:      windowEnd,
+		State:          StateIngesting,
+		Addr:           hb.Addr,
+		InstanceID:     hb.InstanceID,
+		RowCount:       hb.RowCount,
+		EBSVolumeID:    volumeID,
+		Shard:          sh,
+		CreatedAt:      now,
+		HeartbeatToken: heartbeatToken,
 	})
 	log.Printf("provisioner: christened %s at %s (window %s–%s, volume=%s)",
 		shardID, hb.Addr, windowStart.Format(time.RFC3339), windowEnd.Format(time.RFC3339), volumeID)

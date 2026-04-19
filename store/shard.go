@@ -1,5 +1,12 @@
 package store
 
+import (
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
+	"fmt"
+)
+
 // ShardRecord persists shard registry entries across coordinator restarts.
 type ShardRecord struct {
 	ID          string `gorm:"primaryKey"`
@@ -14,6 +21,39 @@ type ShardRecord struct {
 	RowCount    int64  `gorm:"default:0"`
 	CreatedAt   string `gorm:"not null"` // RFC3339
 	EBSVolumeID string                   // EBS volume holding this shard's DuckDB (empty = not on a dedicated volume yet)
+	// HeartbeatToken is a per-shard bearer the shard presents on every
+	// Heartbeat RPC. Minted by the provisioner at christen, returned to
+	// the shard in the Configure response, and persisted in shard.json.
+	// NULL for shards created before migration 015 — the Heartbeat
+	// handler accepts them during the transition window and logs a
+	// warning so the fleet can roll naturally.
+	HeartbeatToken string
+}
+
+// GenerateShardHeartbeatToken mints a fresh 256-bit random bearer token
+// for a newly-christened shard. Callers store the result on the
+// ShardRecord and hand the same string back to the shard via the
+// Configure RPC.
+func GenerateShardHeartbeatToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("heartbeat token: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// ConstantTimeTokenEqual compares two heartbeat tokens in constant
+// time. Returns false if either side is empty so callers don't need a
+// separate check — "empty vs empty equals true" would be a trap since
+// the Heartbeat handler treats empty-token as a grandfather fallback.
+func ConstantTimeTokenEqual(stored, presented string) bool {
+	if stored == "" || presented == "" {
+		return false
+	}
+	if len(stored) != len(presented) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(stored), []byte(presented)) == 1
 }
 
 // SaveShard upserts a shard record.
