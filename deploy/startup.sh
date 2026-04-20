@@ -23,6 +23,25 @@ fi
 echo "Starting weft-$ROLE on instance $INSTANCE_ID in $REGION"
 APP_NAME="weft"
 
+# Pull every kevcons-managed config + secret into /opt/app/.env via the
+# universal loader (baked into the AMI by the kevcons ansible role and
+# weft-base's file provisioner). Then source the result so values flow
+# into this script's env. Any specific value not yet migrated into the
+# kevcons blob/secrets falls through to the legacy per-param aws ssm /
+# aws secretsmanager fetches below via the ${VAR:-$(aws …)} pattern is
+# left in place — this step is additive.
+if [ -x /usr/local/bin/load-app-env ]; then
+    APP_NAME="$APP_NAME" AWS_REGION="$REGION" /usr/local/bin/load-app-env \
+        || echo "startup: load-app-env returned nonzero; continuing with legacy fetches"
+    if [ -f /opt/app/.env ]; then
+        set -a
+        . /opt/app/.env
+        set +a
+    fi
+else
+    echo "startup: /usr/local/bin/load-app-env not installed — skipping kevcons load"
+fi
+
 # For the coordinator: fetch config from SSM.
 if [ "$ROLE" = "coordinator" ]; then
 
@@ -123,6 +142,7 @@ WEFT_LAMBDA_FUNCTION_URL=${LAMBDA_FUNCTION_URL}
 WEFT_LIFECYCLE_QUEUE_URL=${LIFECYCLE_QUEUE_URL}
 APP_NAME=${APP_NAME}
 JWT_SECRET=${JWT_SECRET}
+SHARD_SECRET=${SHARD_SECRET:-}
 STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
 STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
 STRIPE_PRICE_SWATCH=price_1TK7iK2SENTbrh5us0SI1nRz
@@ -149,6 +169,7 @@ if [ "$ROLE" = "shard" ]; then
 
   cat > /opt/app/shard.env <<EOF
 COORDINATOR_ADDR=${COORD_NLB:-localhost:9020}
+SHARD_SECRET=${SHARD_SECRET:-}
 EOF
   chown app:app /opt/app/shard.env
   echo "shard env: coordinator=$COORD_NLB"
@@ -210,17 +231,21 @@ if [ "$ROLE" = "coordinator" ]; then
   systemctl start weft-api
 fi
 
-# Start weftd on all roles if a token is available.
-WEFT_AGENT_TOKEN=$(aws secretsmanager get-secret-value \
+# Start weftd on all roles if a token is available. Prefer WEFTD_TOKEN
+# (set via `kevcons secrets set WEFTD_TOKEN wft_...` and surfaced into
+# this shell by load-app-env above); fall back to the legacy
+# /$APP_NAME/WEFT_AGENT_TOKEN Secrets Manager path so a stale secret
+# still boots an AMI baked before the rename stuck.
+WEFTD_TOKEN="${WEFTD_TOKEN:-$(aws secretsmanager get-secret-value \
   --secret-id "/$APP_NAME/WEFT_AGENT_TOKEN" \
   --region "$REGION" \
-  --query 'SecretString' --output text 2>/dev/null || echo "")
+  --query 'SecretString' --output text 2>/dev/null || echo "")}"
 
-if [ -n "$WEFT_AGENT_TOKEN" ] && command -v weftd >/dev/null 2>&1; then
+if [ -n "$WEFTD_TOKEN" ] && command -v weftd >/dev/null 2>&1; then
   mkdir -p /etc/weftd
   cat > /etc/weftd/config.yaml <<WEFTCFG
 endpoint: ingest.w3ft.net:9020
-token: ${WEFT_AGENT_TOKEN}
+token: ${WEFTD_TOKEN}
 host_group: ${ROLE}
 sources:
   - path: /opt/app/logs/*.log
