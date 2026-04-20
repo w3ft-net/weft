@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/kevlarcon/weft/auth"
@@ -178,7 +179,8 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	// Verify the pending source exists for this customer.
 	ps, err := s.store.GetPendingSource(customer.ID, namespace, app)
 	if err != nil {
-		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("configure source %s/%s: GetPendingSource: %v", namespace, app, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if ps == nil {
@@ -214,7 +216,8 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 
 	schemaYAML, err := schema.ToYAML()
 	if err != nil {
-		http.Error(w, "schema marshal error: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("configure source %s/%s: schema marshal: %v", namespace, app, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
@@ -223,20 +226,26 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	// stays nil — NamespaceID carries ownership.
 	ns, err := s.store.GetNamespace(customer.ID, namespace)
 	if err != nil {
-		http.Error(w, "namespace not found: "+err.Error(), http.StatusNotFound)
+		http.Error(w, "namespace not found", http.StatusNotFound)
 		return
 	}
 	if err := s.store.AddLogGroup(
 		ns.ID, nil, store.SourceTypeWeftd, fullApp, fullApp,
 		"local", string(schemaYAML), "0s",
 	); err != nil {
-		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
+		if store.IsDuplicate(err) {
+			http.Error(w, "a source is already configured for this namespace and app", http.StatusConflict)
+			return
+		}
+		log.Printf("configure source %s/%s: AddLogGroup: %v", namespace, app, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
 	// Remove from pending.
 	if err := s.store.DeletePendingSource(customer.ID, namespace, app); err != nil {
-		http.Error(w, "cleanup error: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("configure source %s/%s: DeletePendingSource: %v", namespace, app, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 

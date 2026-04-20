@@ -124,8 +124,14 @@ func (s *Store) CustomerHasSource(customerID uint, app string) (bool, error) {
 // RemoveLogGroup deletes a log group by (namespace_id, app). Scoped to a
 // namespace so one customer can't delete another customer's source by
 // guessing an app name.
+//
+// Uses Unscoped() to hard-delete rather than GORM's default soft-delete.
+// Without it, the row sits in the table with deleted_at != NULL but
+// still participates in the plain unique index idx_ns_app on
+// (namespace_id, app), so a later re-add of the same source would
+// trip a 23505 unique-constraint violation. "Remove" means gone.
 func (s *Store) RemoveLogGroup(namespaceID uint, app string) error {
-	return s.db.Where("namespace_id = ? AND app = ?", namespaceID, app).Delete(&LogGroup{}).Error
+	return s.db.Unscoped().Where("namespace_id = ? AND app = ?", namespaceID, app).Delete(&LogGroup{}).Error
 }
 
 // LogGroupWithAWSAccount is a joined result for the poller and list paths.
