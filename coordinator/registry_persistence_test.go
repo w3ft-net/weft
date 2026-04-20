@@ -52,6 +52,16 @@ func (f *fakeRegistryStore) ListShards() ([]store.ShardRecord, error) {
 	return out, nil
 }
 
+func (f *fakeRegistryStore) GetShard(id string) (store.ShardRecord, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.records[id]
+	if !ok {
+		return store.ShardRecord{}, false, nil
+	}
+	return r, true, nil
+}
+
 func (f *fakeRegistryStore) get(id string) (store.ShardRecord, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

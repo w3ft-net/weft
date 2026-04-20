@@ -4,7 +4,10 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
+
+	"gorm.io/gorm"
 )
 
 // ShardRecord persists shard registry entries across coordinator restarts.
@@ -59,6 +62,22 @@ func ConstantTimeTokenEqual(stored, presented string) bool {
 // SaveShard upserts a shard record.
 func (s *Store) SaveShard(rec *ShardRecord) error {
 	return s.db.Save(rec).Error
+}
+
+// GetShard returns the record for id. Returns (record, true, nil) when
+// found, (zero, false, nil) when absent, and (zero, false, err) on DB
+// error. Used by the provisioner's adopt path to preserve persisted
+// fields that the heartbeat itself doesn't carry (window, token, apps).
+func (s *Store) GetShard(id string) (ShardRecord, bool, error) {
+	var rec ShardRecord
+	err := s.db.Where("id = ?", id).First(&rec).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ShardRecord{}, false, nil
+	}
+	if err != nil {
+		return ShardRecord{}, false, err
+	}
+	return rec, true, nil
 }
 
 // DeleteShard removes a shard record.

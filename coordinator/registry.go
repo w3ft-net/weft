@@ -85,6 +85,11 @@ type RegistryStore interface {
 	SaveShard(rec *store.ShardRecord) error
 	DeleteShard(id string) error
 	ListShards() ([]store.ShardRecord, error)
+	// GetShard returns the record for id, or (zero, false) if absent.
+	// Used by the adopt path so it can preserve WindowStart/End/
+	// HeartbeatToken/Apps when creating a ShardEntry for a shard
+	// the registry has no in-memory record of but the DB does.
+	GetShard(id string) (store.ShardRecord, bool, error)
 }
 
 // ShardRegistry tracks all shard entries. Thread-safe.
@@ -251,6 +256,27 @@ func (r *ShardRegistry) Get(id string) *ShardEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.entries[id]
+}
+
+// HasAddr reports whether any live entry is registered at addr.
+// Used by the christen path to skip a duplicate Configure when two
+// heartbeats from the same unclaimed instance race through
+// ProcessHeartbeat — the second one's captured ShardID is stale
+// (empty) because the shard's id is only written after the first
+// Configure returns, so without this check the second goroutine
+// would mint a new id and try to re-Configure the same addr.
+func (r *ShardRegistry) HasAddr(addr string) bool {
+	if addr == "" {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, e := range r.entries {
+		if e.Addr == addr {
+			return true
+		}
+	}
+	return false
 }
 
 // MatchingShards returns shards whose time windows overlap the given range

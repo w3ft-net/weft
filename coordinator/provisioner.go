@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -276,7 +277,12 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 	}
 
 	// Known id but not in the registry: coordinator restart / reload
-	// catchup. Adopt the entry so queries reach it.
+	// catchup. Adopt the entry so queries reach it — but first pull
+	// the persisted record from the store so fields the heartbeat
+	// doesn't carry (window, heartbeat token, apps, created-at)
+	// survive the round-trip. Without this, registry.Add →
+	// SaveShard (an UPSERT) would write zero-valued window + empty
+	// token back over the correct row.
 	gs, err := shard.NewGRPCShard(hb.ShardID, hb.Addr, p.config.ShardSecret)
 	if err != nil {
 		log.Printf("provisioner: adopt %s at %s failed: %v", hb.ShardID, hb.Addr, err)
@@ -288,7 +294,7 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 		state = StateReadOnly
 	}
 
-	p.registry.Add(&ShardEntry{
+	entry := &ShardEntry{
 		ID:         hb.ShardID,
 		Addr:       hb.Addr,
 		InstanceID: hb.InstanceID,
@@ -296,7 +302,39 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 		RowCount:   hb.RowCount,
 		Shard:      gs,
 		CreatedAt:  time.Now(),
-	})
+	}
+
+	if p.registry.store != nil {
+		if rec, ok, err := p.registry.store.GetShard(hb.ShardID); err != nil {
+			log.Printf("provisioner: adopt %s — store lookup failed, falling back to defaults: %v", hb.ShardID, err)
+		} else if ok {
+			if ws, err := time.Parse(time.RFC3339, rec.WindowStart); err == nil {
+				entry.WindowStart = ws
+			}
+			if we, err := time.Parse(time.RFC3339, rec.WindowEnd); err == nil {
+				entry.WindowEnd = we
+			}
+			if ca, err := time.Parse(time.RFC3339, rec.CreatedAt); err == nil {
+				entry.CreatedAt = ca
+			}
+			entry.HeartbeatToken = rec.HeartbeatToken
+			entry.Tier = rec.Tier
+			entry.EBSVolumeID = rec.EBSVolumeID
+			if rec.Apps != "" && rec.Apps != "null" {
+				_ = json.Unmarshal([]byte(rec.Apps), &entry.Apps)
+			}
+			// Preserve READ_ONLY from DB over an INGESTING heartbeat —
+			// the DB is the authoritative state for lifecycle.
+			if ShardState(rec.State) == StateReadOnly {
+				entry.State = StateReadOnly
+			}
+		} else {
+			log.Printf("provisioner: adopt %s has no store record — registering with defaults (anomalous)",
+				hb.ShardID)
+		}
+	}
+
+	p.registry.Add(entry)
 	log.Printf("provisioner: adopted shard %s at %s (state=%s, rows=%d)",
 		hb.ShardID, hb.Addr, hb.State, hb.RowCount)
 }
@@ -308,6 +346,18 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 // For now we use catch-all apps (empty list) — gap item #9 in
 // docs/shard-lifecycle.md tracks populating from the onboarded set.
 func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
+	// Race guard: two heartbeats from the same unclaimed instance
+	// arrive back-to-back (the Heartbeat RPC dispatches each in its
+	// own goroutine). heartbeatMu serialises them, but the second
+	// goroutine's hb.ShardID is still "" because it was captured at
+	// send time, before the first Configure returned. Without this
+	// check the second goroutine mints a new seq and tries to
+	// re-Configure the same addr; the shard then rejects with
+	// "shard already configured as ...".
+	if p.registry.HasAddr(hb.Addr) {
+		return nil
+	}
+
 	windowDur := p.config.WindowDuration
 	if windowDur == 0 {
 		windowDur = 7 * 24 * time.Hour
