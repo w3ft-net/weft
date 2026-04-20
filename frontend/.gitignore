@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Built by `kevcons ext release-frontend` (see .kevcons/ext/release-frontend.lua).
+# Rebuild locally with: GOOS=js GOARCH=wasm go build -o frontend/public/shell.wasm ./cmd/wasm/
+public/shell.wasm
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
