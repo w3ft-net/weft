@@ -1,6 +1,54 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import './ScrollDiagram.css'
 
+// ── Narrative sidebar copy ────────────────────────────────────────────
+// Each block fades in while `progress` is inside [start, end).
+const NARRATIVES: { start: number; end: number; title: string; body: ReactNode }[] = [
+  {
+    start: 0,
+    end: 0.45,
+    title: 'connect weft everywhere',
+    body: <>
+      <code>tail -f</code> all your logs like the old days — from the <em>weft</em>{' '}
+      shell, in your terminal or right in your browser.
+    </>,
+  },
+  {
+    start: 0.45,
+    end: 0.58,
+    title: 'bring back your old friends',
+    body: <>
+      just because your logs are distributed doesn’t mean you can’t have{' '}
+      <em>coreutils</em>.
+    </>,
+  },
+  {
+    start: 0.58,
+    end: 0.71,
+    title: 'metrics, too',
+    body: <>
+      optionally stream system metrics and slice them with <code>jq</code>.
+    </>,
+  },
+  {
+    start: 0.71,
+    end: 0.84,
+    title: 'reusable 1-liners',
+    body: <>
+      write scripts in bash or lua, save them to <code>/bin</code>, and monitor
+      your fleet by dropping specs into <code>cron.d</code>.
+    </>,
+  },
+  {
+    start: 0.84,
+    end: 1.01,
+    title: 'get notified',
+    body: <>
+      slack, pagerduty, email — just pipe to <code>alert</code>.
+    </>,
+  },
+]
+
 // ── Layout constants ──────────────────────────────────────────────────
 const BOX_W = 150
 const BOX_H = 70
@@ -29,7 +77,7 @@ const ROWS = [
 // ── Shell commands ────────────────────────────────────────────────────
 const SHELL_COMMANDS = [
   {
-    cmd: "cat api-gateway.log | awk '$DURATION > 2000' | sort -k2 -rn",
+    cmd: "cat api-gateway.log | awk '$DURATION > 2000' | sort -k2 -rn | head -3",
     output: [
       '/api/reports/generate   4820ms',
       '/api/exports/csv       3201ms',
@@ -37,20 +85,25 @@ const SHELL_COMMANDS = [
     ],
   },
   {
-    cmd: "cat auth.log | sed 's/[^ ]*@[^ ]*/***@***/g' | head -3",
+    cmd: "tail -f host-metrics | jq 'select(.cpu > 80) | .host'",
     output: [
-      'INFO  login user=***@*** ip=10.0.3.44',
-      'WARN  failed user=***@*** ip=192.168.1.7',
-      'INFO  login user=***@*** ip=10.0.3.12',
+      '"web-2"',
+      '"importer"',
+      '"web-2"',
     ],
   },
   {
-    cmd: 'tail -f *.log | grep -i error',
+    cmd: 'cat /etc/cron.d/fleet-health',
     output: [
-      'api-gateway  i-0a3f  ERROR pool exhausted',
-      'auth-service i-7b2c  ERROR token invalid',
-      'payment      lambda  ERROR webhook timeout',
-      'batch-worker ecs     ERROR S3 access denied',
+      '*/5 * * * *   health-check',
+      '0   * * * *   slow-reqs | alert',
+      '0   9 * * *   daily-summary',
+    ],
+  },
+  {
+    cmd: 'health-check | alert slack:#oncall',
+    output: [
+      '\u2192 slack #oncall: 2 hosts unhealthy',
     ],
   },
 ]
@@ -349,30 +402,50 @@ export default function ScrollDiagram() {
   return (
     <div className="scroll-diagram-container" ref={containerRef}>
       <div className="scroll-diagram-sticky">
-        <svg
-          className="diagram-svg"
-          viewBox={`0 0 ${SVG_W} ${svgH}`}
-          preserveAspectRatio="xMidYMin meet"
-          data-testid="scroll-diagram"
-          style={{ transition: 'all 0.5s ease' }}
-        >
-          <rect width={SVG_W} height={svgH} fill={BG} rx={4} />
+        <div className="scroll-diagram-layout">
+          <aside className="scroll-narrative" data-testid="scroll-narrative">
+            {NARRATIVES.map((n, i) => {
+              const active = progress >= n.start && progress < n.end
+              return (
+                <div
+                  key={i}
+                  className="narrative-block"
+                  data-testid={`narrative-block-${i}`}
+                  style={{ opacity: active ? 1 : 0 }}
+                  aria-hidden={!active}
+                >
+                  <h3>{n.title}</h3>
+                  <p>{n.body}</p>
+                </div>
+              )
+            })}
+          </aside>
 
-          {!showShell && diagramContent()}
+          <svg
+            className="diagram-svg"
+            viewBox={`0 0 ${SVG_W} ${svgH}`}
+            preserveAspectRatio="xMidYMin meet"
+            data-testid="scroll-diagram"
+            style={{ transition: 'all 0.5s ease' }}
+          >
+            <rect width={SVG_W} height={svgH} fill={BG} rx={4} />
 
-          {showShell && (
-            <>
-              {/* Full-viewport terminal frame */}
-              <rect x={4} y={4} width={SVG_W - 8} height={SVG_H_SHELL - 8}
-                fill={BG} stroke="#252540" strokeWidth={1} rx={2} />
-              {shellContent()}
-            </>
-          )}
+            {!showShell && diagramContent()}
 
-          {/* Border */}
-          <rect width={SVG_W} height={svgH} fill="none"
-            stroke="#252540" strokeWidth={1} rx={4} />
-        </svg>
+            {showShell && (
+              <>
+                {/* Full-viewport terminal frame */}
+                <rect x={4} y={4} width={SVG_W - 8} height={SVG_H_SHELL - 8}
+                  fill={BG} stroke="#252540" strokeWidth={1} rx={2} />
+                {shellContent()}
+              </>
+            )}
+
+            {/* Border */}
+            <rect width={SVG_W} height={svgH} fill="none"
+              stroke="#252540" strokeWidth={1} rx={4} />
+          </svg>
+        </div>
       </div>
     </div>
   )

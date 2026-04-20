@@ -1,11 +1,21 @@
 .scroll-diagram-container {
-  min-height: 300vh;
+  min-height: 420vh;
   position: relative;
 }
 
 .scroll-diagram-sticky {
   position: sticky;
   top: 80px;
+}
+
+.scroll-diagram-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 740px);
+  gap: 48px;
+  max-width: 1120px;
+  margin: 0 auto;
+  align-items: center;
+  padding: 0 16px;
 }
 
 .diagram-svg {
@@ -15,10 +25,71 @@
   margin: 0 auto;
 }
 
+/* Narrative column: all blocks stacked in the same grid cell and
+   cross-faded via opacity — keeps the box pinned and prevents layout
+   shift between phases. */
+.scroll-narrative {
+  display: grid;
+  position: relative;
+  min-height: 200px;
+}
+
+.narrative-block {
+  grid-area: 1 / 1;
+  transition: opacity 0.55s ease;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  pointer-events: none;
+}
+
+.narrative-block h3 {
+  color: #ff8700;
+  font-size: 14px;
+  font-weight: normal;
+  letter-spacing: 0.02em;
+  margin: 0 0 12px;
+}
+
+.narrative-block p {
+  color: #8888a0;
+  font-size: 14px;
+  line-height: 1.75;
+  margin: 0;
+}
+
+.narrative-block code {
+  color: #00afff;
+  background: rgba(0, 175, 255, 0.08);
+  padding: 1px 6px;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.narrative-block em {
+  color: #e0e0f0;
+  font-style: normal;
+}
+
 .cursor-blink {
   animation: blink 1s step-end infinite;
 }
 
 @keyframes blink {
   50% { opacity: 0; }
+}
+
+@media (max-width: 900px) {
+  .scroll-diagram-layout {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+
+  .scroll-narrative {
+    min-height: auto;
+    text-align: center;
+  }
+
+  .narrative-block p {
+    max-width: 520px;
+    margin: 0 auto;
+  }
 }

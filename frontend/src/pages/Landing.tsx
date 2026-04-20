@@ -1,13 +1,10 @@
 import { Link } from 'react-router-dom'
 import AsciiLogo from '../components/AsciiLogo'
-import VillainCarousel from '../components/VillainCarousel'
 import ScrollDiagram from '../components/ScrollDiagram'
 import PricingTable from '../components/PricingTable'
 import './Landing.css'
 
-
 export default function Landing() {
-
   return (
     <div className="landing">
       {/* Nav */}
@@ -17,51 +14,51 @@ export default function Landing() {
             <img src="/weft-logo.svg" alt="weft" className="logo-nav" data-testid="weft-logo-svg" />
           </Link>
           <div className="nav-links">
+            <a href="#compare" data-testid="nav-compare-link">Why weft</a>
             <a href="#pricing" data-testid="nav-pricing-link">Pricing</a>
             <Link to="/login" className="nav-cta" data-testid="nav-login-button">Log in</Link>
           </div>
         </div>
       </nav>
 
-      {/* ── Narrative: the problem ─────────────────────────────── */}
+      {/* ── Hero: logo + tagline ──────────────────────────────── */}
 
       <section className="hero">
         <div className="container">
-          <div className="prison-row">
-            <VillainCarousel side="left" startIndex={0} />
-            <pre className="prison-box">{
-`+---------------------------------------------------+
-|                                                   |
-|   Distributed computing has rent asunder your     |
-|   log infrastructure. You are locked in a         |
-|   vendor dungeon, your muscle memory for          |
-|   familiar tools failing you every time you       |
-|   must learn a new proprietary syntax.            |
-|                                                   |
-+---------------------------------------------------+`
-            }</pre>
-            <VillainCarousel side="right" startIndex={1} />
+
+          <div className="narrative" style={{ paddingTop: 32 }}>
+            <p>
+              <strong>Another year. Another log vendor. Another proprietary syntax.</strong>
+              <br />
+              <strong>Sick of it? Do you want your old tools back?</strong>
+              <br />
+              <br />
+              <strong>Mend the tattered fabric of the Unix way with...</strong>
+            </p>
           </div>
-        </div>
+          <section className="hero-center">
+            <AsciiLogo />
+          </section>
 
-        <div className="spacer-lg" />
+          <div className="cta-center" style={{ marginTop: 28, marginBottom: 16 }}>
+            <Link to="/signup" className="cta-cmd" data-testid="hero-cta-button">
+              start free trial &rarr;
+            </Link>
+          </div>
 
-        {/* ── Narrative: the solution ────────────────────────────── */}
-
-        <div className="narrative">
-          <p>
-            restore the fabric of Do One Thing Well with...
+          <p style={{
+            textAlign: 'center',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 12,
+            color: '#555577',
+            marginTop: 8,
+          }}>
+            14 days free. No credit card required.
           </p>
         </div>
-
-        <section className="hero-center container">
-          <AsciiLogo />
-        </section>
-
         <div className="narrative">
           <p>
-            <em>weft</em> stitches together logs from disparate sources
-            <br />and gives you cloud-native versions of core *nix utilities.
+            <em>weft</em> gives you cloud-native versions of core *nix utilities so that you can search, monitor, and alert on all your logs using sed, awk, jq, and more.
           </p>
         </div>
       </section>
@@ -76,37 +73,11 @@ export default function Landing() {
 
       <section className="pricing-section" id="pricing">
         <div className="container">
-          <pre className="section-header">{
-`+----------------------------------------------+
-|         simple, predictable pricing          |
-+----------------------------------------------+`
-          }</pre>
           <p className="section-sub">
             14-day free trial on any tier.
             Usage-based overage — pay only for what you use beyond your plan.
           </p>
           <PricingTable />
-        </div>
-      </section>
-
-      {/* Bottom CTA */}
-      <section className="cta-section">
-        <div className="container">
-          <pre className="cta-box">{
-`+------------------------------------------------------+
-|                                                      |
-|       Let pipes once again be the unifying           |
-|       thread in you log analysis.                    |
-|                                                      |
-|       try weft free for 14 days.                     |
-|                                                      |
-+------------------------------------------------------+`
-          }</pre>
-          <div className="cta-center">
-            <Link to="/signup" className="cta-cmd" data-testid="bottom-cta-button">
-              start free trial &rarr;
-            </Link>
-          </div>
         </div>
       </section>
 
