@@ -108,7 +108,10 @@ local function describe_asgs(asg_names)
 end
 
 -- Fetch EC2 instance details for a list of instance IDs.
--- Returns a map: instance_id -> { state, private_ip, instance_type, launch_time }
+-- Returns a map: instance_id -> { state, private_ip, instance_type, launch_time,
+--                                  volumes: [ { volume_id, device, attach_state, shard_id } ] }
+-- Volumes come from BlockDeviceMappings on the instance; size and the shard_id
+-- tag are fetched separately via describe_volumes_for_instances().
 local function describe_instances(instance_ids)
     local result = {}
     if #instance_ids == 0 then return result end
@@ -134,17 +137,155 @@ local function describe_instances(instance_ids)
             for j = 1, #instances do
                 local inst = instances[j]
                 local id = inst["InstanceId"]
+
+                -- Collect attached volume IDs from BlockDeviceMappings
+                local volumes = {}
+                local bdms = inst["BlockDeviceMappings"]
+                if bdms then
+                    for k = 1, #bdms do
+                        local bdm = bdms[k]
+                        local ebs = bdm["Ebs"]
+                        if ebs and ebs["VolumeId"] then
+                            table.insert(volumes, {
+                                volume_id    = ebs["VolumeId"],
+                                device       = bdm["DeviceName"] or "-",
+                                attach_state = ebs["Status"] or "-",
+                                -- size and shard_id filled in by describe_volumes_for_instances()
+                                size_gb      = nil,
+                                shard_id     = nil,
+                            })
+                        end
+                    end
+                end
+
                 result[id] = {
                     state         = (inst["State"] and inst["State"]["Name"]) or "unknown",
                     private_ip    = inst["PrivateIpAddress"] or "-",
                     instance_type = inst["InstanceType"] or "-",
                     launch_time   = inst["LaunchTime"],
+                    volumes       = volumes,
                 }
             end
         end
     end
 
     return result
+end
+
+-- Fetch describe-volumes details (size, tags) for volumes already listed in
+-- ec2_map, and also fetch unattached volumes tagged shard_id=pending-* or
+-- matching the weft-shard naming pattern.
+--
+-- Mutates ec2_map in place (fills in size_gb and shard_id on each volume entry).
+-- Returns a list of orphan volume records:
+--   [ { volume_id, size_gb, shard_id_tag, create_time, state } ]
+local function fetch_volume_details(ec2_map)
+    -- Gather all volume IDs attached to any known instance
+    local attached_vol_ids = {}
+    local vol_id_to_instance = {}  -- volume_id -> instance_id (for back-fill)
+    local vol_id_to_idx = {}       -- volume_id -> index in instance's volumes list
+
+    for iid, info in pairs(ec2_map) do
+        for idx, vol in ipairs(info.volumes) do
+            table.insert(attached_vol_ids, vol.volume_id)
+            vol_id_to_instance[vol.volume_id] = iid
+            vol_id_to_idx[vol.volume_id] = idx
+        end
+    end
+
+    -- ── 1. Describe attached volumes to get size + shard_id tag ──────────────
+    if #attached_vol_ids > 0 then
+        local args = { "ec2", "describe-volumes", "--volume-ids" }
+        for _, vid in ipairs(attached_vol_ids) do
+            args[#args + 1] = vid
+        end
+
+        local ok, data = pcall(kevcons.aws, unpack(args))
+        if ok and data and data["Volumes"] then
+            local vols = data["Volumes"]
+            for i = 1, #vols do
+                local v = vols[i]
+                local vid = v["VolumeId"]
+
+                -- Extract shard_id tag
+                local shard_id_tag = nil
+                local tags = v["Tags"]
+                if tags then
+                    for t = 1, #tags do
+                        if tags[t]["Key"] == "shard_id" then
+                            shard_id_tag = tags[t]["Value"]
+                            break
+                        end
+                    end
+                end
+
+                -- Back-fill into ec2_map
+                local iid = vol_id_to_instance[vid]
+                local idx = vol_id_to_idx[vid]
+                if iid and idx then
+                    ec2_map[iid].volumes[idx].size_gb  = v["Size"]
+                    ec2_map[iid].volumes[idx].shard_id = shard_id_tag
+                end
+            end
+        else
+            kevcons.log("warning: could not fetch attached volume details: " .. tostring(data))
+        end
+    end
+
+    -- ── 2. Find orphan / unattached volumes tagged for weft shards ───────────
+    -- Filter: status=available AND (shard_id tag starts with "pending-" OR
+    -- shard_id tag matches weft-shard-* pattern).
+    -- We use two separate filter calls because OR isn't natively supported in
+    -- the CLI filter syntax across different tag values.
+
+    local orphans = {}
+    local seen_orphan_ids = {}
+
+    local function fetch_orphans_by_filter(filter_value)
+        local args = {
+            "ec2", "describe-volumes",
+            "--filters",
+            "Name=status,Values=available",
+            "Name=tag:shard_id,Values=" .. filter_value,
+        }
+        local ok, data = pcall(kevcons.aws, unpack(args))
+        if not ok or not data or not data["Volumes"] then return end
+
+        local vols = data["Volumes"]
+        for i = 1, #vols do
+            local v = vols[i]
+            local vid = v["VolumeId"]
+            if not seen_orphan_ids[vid] then
+                seen_orphan_ids[vid] = true
+
+                local shard_id_tag = nil
+                local tags = v["Tags"]
+                if tags then
+                    for t = 1, #tags do
+                        if tags[t]["Key"] == "shard_id" then
+                            shard_id_tag = tags[t]["Value"]
+                            break
+                        end
+                    end
+                end
+
+                table.insert(orphans, {
+                    volume_id    = vid,
+                    size_gb      = v["Size"],
+                    shard_id_tag = shard_id_tag or "-",
+                    create_time  = v["CreateTime"],
+                    state        = v["State"] or "available",
+                })
+            end
+        end
+    end
+
+    -- pending-* orphans (instance was terminated before volume was attached)
+    fetch_orphans_by_filter("pending-*")
+    -- volumes tagged for any weft shard tier
+    fetch_orphans_by_filter("weft-shard-*")
+
+    return orphans
 end
 
 -- ── rendering ──────────────────────────────────────────────────────────────
@@ -169,6 +310,24 @@ local function print_instance_row(id, info, now)
         pad_right(uptime,           14) ..
         info.instance_type
     )
+
+    -- Print attached volumes indented beneath the instance row
+    if #info.volumes == 0 then
+        kevcons.log("    volumes: (none attached)")
+    else
+        for _, vol in ipairs(info.volumes) do
+            local size_str = vol.size_gb and (vol.size_gb .. "GB") or "?GB"
+            local tag_str  = vol.shard_id and ("shard_id=" .. vol.shard_id) or "shard_id=(untagged)"
+            kevcons.log(
+                "    vol  " ..
+                pad_right(vol.volume_id,    25) ..
+                pad_right(vol.device,       12) ..
+                pad_right(size_str,          8) ..
+                pad_right(vol.attach_state, 12) ..
+                tag_str
+            )
+        end
+    end
 end
 
 local function print_asg_block(asg_name, asg_data, ec2_map, now)
@@ -207,6 +366,47 @@ local function print_asg_block(asg_name, asg_data, ec2_map, now)
     end
 end
 
+local function print_orphan_volumes(orphans, now)
+    kevcons.log("")
+    kevcons.log("  ORPHAN / UNATTACHED SHARD VOLUMES  (" .. #orphans .. ")")
+    kevcons.log("  " .. string.rep("-", 74))
+
+    if #orphans == 0 then
+        kevcons.log("    (none)")
+        return
+    end
+
+    kevcons.log(
+        "  " ..
+        pad_right("VOLUME ID",   25) ..
+        pad_right("SIZE",         8) ..
+        pad_right("STATE",       12) ..
+        pad_right("AGE",         14) ..
+        "SHARD_ID TAG"
+    )
+    kevcons.log("  " .. string.rep("-", 74))
+
+    for _, vol in ipairs(orphans) do
+        local size_str = vol.size_gb and (vol.size_gb .. "GB") or "?GB"
+        local age_str  = "unknown"
+        if vol.create_time then
+            local epoch = parse_iso8601(vol.create_time)
+            if epoch then
+                age_str = format_uptime(now - epoch)
+            end
+        end
+
+        kevcons.log(
+            "  " ..
+            pad_right(vol.volume_id,    25) ..
+            pad_right(size_str,          8) ..
+            pad_right(vol.state,        12) ..
+            pad_right(age_str,          14) ..
+            vol.shard_id_tag
+        )
+    end
+end
+
 -- ── main ───────────────────────────────────────────────────────────────────
 
 function run(args)
@@ -239,8 +439,11 @@ function run(args)
         end
     end
 
-    -- Fetch EC2 details for all instances in one API call
+    -- Fetch EC2 details (including BlockDeviceMappings) for all instances
     local ec2_map = describe_instances(all_instance_ids)
+
+    -- Fetch volume details: fills in size/tag on attached vols, returns orphans
+    local orphan_volumes = fetch_volume_details(ec2_map)
 
     -- Group ASG definitions by role, preserving role_order
     local asgs_by_role = {}
@@ -279,6 +482,11 @@ function run(args)
             else
                 print_asg_block(asg_name, asg_data, ec2_map, now)
             end
+        end
+
+        -- Print orphan volumes beneath the shard role section
+        if role == "shard" then
+            print_orphan_volumes(orphan_volumes, now)
         end
 
         ::continue::
