@@ -1,6 +1,15 @@
 #!/bin/bash
-# Weft startup script — reads the instance Role tag, fetches config from
-# SSM, and starts the appropriate systemd services.
+# weft startup — runs as weft-startup.service oneshot on boot. Reads
+# the instance's Role tag, refreshes /opt/app/.env via fetch-config.sh
+# (which delegates to load-app-env), translates the populated env into
+# role-specific EnvironmentFile(s) for systemd, mounts the shard data
+# volume if needed, and starts services.
+#
+# Source of truth for coordinator/api flags is the kevcons-managed
+# config blob at /weft/config/app, surfaced through load-app-env. This
+# script just threads those values into the systemd EnvironmentFile;
+# it does not fetch anything from SSM directly anymore (aside from the
+# standalone db-dsn param, which fetch-config.sh handles).
 
 set -euo pipefail
 
@@ -23,134 +32,61 @@ fi
 echo "Starting weft-$ROLE on instance $INSTANCE_ID in $REGION"
 APP_NAME="weft"
 
-# Pull every kevcons-managed config + secret into /opt/app/.env via the
-# universal loader (baked into the AMI by the kevcons ansible role and
-# weft-base's file provisioner). Then source the result so values flow
-# into this script's env. Any specific value not yet migrated into the
-# kevcons blob/secrets falls through to the legacy per-param aws ssm /
-# aws secretsmanager fetches below via the ${VAR:-$(aws …)} pattern is
-# left in place — this step is additive.
-if [ -x /usr/local/bin/load-app-env ]; then
-    APP_NAME="$APP_NAME" AWS_REGION="$REGION" /usr/local/bin/load-app-env \
-        || echo "startup: load-app-env returned nonzero; continuing with legacy fetches"
-    if [ -f /opt/app/.env ]; then
-        set -a
-        . /opt/app/.env
-        set +a
-    fi
-else
-    echo "startup: /usr/local/bin/load-app-env not installed — skipping kevcons load"
-fi
+# Refresh /opt/app/.env from the blob + secrets + standalone db-dsn.
+# user-data has already done this once at launch, but re-running here
+# makes startup.sh self-contained and idempotent: reload-config.sh can
+# invoke it directly, and a manual restart picks up any post-boot
+# config changes that landed before the service came back.
+APP_NAME="$APP_NAME" AWS_REGION="$REGION" /opt/app/scripts/fetch-config.sh "$APP_NAME"
 
-# For the coordinator: fetch config from SSM.
+set -a
+. /opt/app/.env
+set +a
+
+# Coordinator: write /opt/app/coordinator.env with a sanitised,
+# plain-KEY=VALUE form that systemd's EnvironmentFile parser accepts.
+# Variables whose Go code still expects a WEFT_ prefix keep it
+# (WEFT_DB_DSN, WEFT_S3_REGION); everything else uses the blob keys
+# directly so weft-coordinator.service can reference them without a
+# translation layer.
 if [ "$ROLE" = "coordinator" ]; then
-
-  # Database DSN from SSM (PostgreSQL on RDS).
-  DB_DSN=$(aws ssm get-parameter \
-    --name "/$APP_NAME/config/db-dsn" \
-    --region "$REGION" \
-    --with-decryption \
-    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
-
-  # Fetch ASG names from SSM (tiered shard ASGs)
-  SHARD_ASG_SMALL=$(aws ssm get-parameter \
-    --name "/$APP_NAME/config/shard-asg-small" \
-    --region "$REGION" \
-    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
-
-  SHARD_ASG_MEDIUM=$(aws ssm get-parameter \
-    --name "/$APP_NAME/config/shard-asg-medium" \
-    --region "$REGION" \
-    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
-
-  SHARD_ASG_LARGE=$(aws ssm get-parameter \
-    --name "/$APP_NAME/config/shard-asg-large" \
-    --region "$REGION" \
-    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
-
-  # Backward compat: fall back to single shard-asg-name
-  if [ -z "$SHARD_ASG_SMALL" ]; then
-    SHARD_ASG_SMALL=$(aws ssm get-parameter \
-      --name "/$APP_NAME/config/shard-asg-name" \
-      --region "$REGION" \
-      --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+  # Safety belt: the whole point of this script post-rewrite is to
+  # avoid the silent fall-through to dev mode we saw on 2026-04-20.
+  # If the blob didn't populate ASG names, bail loudly — an operator
+  # can fix the config much faster than they can notice a dev-mode
+  # coordinator running in prod.
+  if [ -z "${SHARD_ASG_SMALL:-}" ]; then
+    echo "startup: FATAL — SHARD_ASG_SMALL missing from env after fetch-config"
+    echo "startup: check 'kevcons config list' or /weft/config/app SSM blob"
+    exit 1
   fi
 
-  COMPUTE_ASG=$(aws ssm get-parameter \
-    --name "/$APP_NAME/config/compute-asg-name" \
-    --region "$REGION" \
-    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
-
-  # Cold storage config
-  PARQUET_DIR=$(aws ssm get-parameter \
-    --name "/$APP_NAME/config/parquet-dir" \
-    --region "$REGION" \
-    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
-
-  LAMBDA_FUNCTION_URL=$(aws ssm get-parameter \
-    --name "/$APP_NAME/config/lambda-function-url" \
-    --region "$REGION" \
-    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
-
-  LIFECYCLE_QUEUE_URL=$(aws ssm get-parameter \
-    --name "/$APP_NAME/config/shard-lifecycle-queue-url" \
-    --region "$REGION" \
-    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
-
-  # API server config
-  JWT_SECRET=$(aws ssm get-parameter \
-    --name "/$APP_NAME/config/jwt-secret" \
-    --region "$REGION" \
-    --with-decryption \
-    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
-
-  STRIPE_SECRET_KEY=$(aws secretsmanager get-secret-value \
-    --secret-id "/$APP_NAME/STRIPE_SECRET_KEY" \
-    --region "$REGION" \
-    --query 'SecretString' --output text 2>/dev/null || echo "")
-
-  STRIPE_WEBHOOK_SECRET=$(aws secretsmanager get-secret-value \
-    --secret-id "/$APP_NAME/STRIPE_WEBHOOK_SECRET" \
-    --region "$REGION" \
-    --query 'SecretString' --output text 2>/dev/null || echo "")
-
-  EMAIL_HOST_PASSWORD=$(aws secretsmanager get-secret-value \
-    --secret-id "/$APP_NAME/EMAIL_HOST_PASSWORD" \
-    --region "$REGION" \
-    --query 'SecretString' --output text 2>/dev/null || echo "")
-
-  SLACK_CLIENT_SECRET=$(aws secretsmanager get-secret-value \
-    --secret-id "/$APP_NAME/SLACK_CLIENT_SECRET" \
-    --region "$REGION" \
-    --query 'SecretString' --output text 2>/dev/null || echo "")
-
-  SLACK_CLIENT_ID=$(aws ssm get-parameter \
-    --name "/$APP_NAME/config/slack-client-id" \
-    --region "$REGION" \
-    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
-
   cat > /opt/app/coordinator.env <<EOF
-WEFT_DB_DSN=${DB_DSN}
-WEFT_SHARD_ASG_SMALL=${SHARD_ASG_SMALL}
-WEFT_SHARD_ASG_MEDIUM=${SHARD_ASG_MEDIUM}
-WEFT_SHARD_ASG_LARGE=${SHARD_ASG_LARGE}
-WEFT_COMPUTE_ASG=${COMPUTE_ASG}
-WEFT_REGION=${REGION}
-WEFT_S3_REGION=${REGION}
-WEFT_PARQUET_DIR=${PARQUET_DIR}
-WEFT_LAMBDA_FUNCTION_URL=${LAMBDA_FUNCTION_URL}
-WEFT_LIFECYCLE_QUEUE_URL=${LIFECYCLE_QUEUE_URL}
 APP_NAME=${APP_NAME}
-JWT_SECRET=${JWT_SECRET}
+AWS_REGION=${REGION}
+WEFT_DB_DSN=${WEFT_DB_DSN:-}
+WEFT_S3_REGION=${REGION}
+SHARD_ASG_SMALL=${SHARD_ASG_SMALL:-}
+SHARD_ASG_MEDIUM=${SHARD_ASG_MEDIUM:-}
+SHARD_ASG_LARGE=${SHARD_ASG_LARGE:-}
+COMPUTE_ASG_NAME=${COMPUTE_ASG_NAME:-}
+PARQUET_DIR=${PARQUET_DIR:-}
+LAMBDA_FUNCTION_URL=${LAMBDA_FUNCTION_URL:-}
+LIFECYCLE_QUEUE_URL=${LIFECYCLE_QUEUE_URL:-}
+SHARD_VOLUME_DEVICE=${SHARD_VOLUME_DEVICE:-}
+SHARD_SMALL_VOLUME_GB=${SHARD_SMALL_VOLUME_GB:-}
+SHARD_MEDIUM_VOLUME_GB=${SHARD_MEDIUM_VOLUME_GB:-}
+SHARD_LARGE_VOLUME_GB=${SHARD_LARGE_VOLUME_GB:-}
+JWT_SECRET=${JWT_SECRET:-}
 SHARD_SECRET=${SHARD_SECRET:-}
-STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
-STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
 STRIPE_PRICE_SWATCH=price_1TK7iK2SENTbrh5us0SI1nRz
 STRIPE_PRICE_YARD=price_1TK7jI2SENTbrh5uP3wVxnlx
 STRIPE_PRICE_BOLT=price_1TK7kH2SENTbrh5upDvBswnG
-EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD}
-SLACK_CLIENT_ID=${SLACK_CLIENT_ID}
-SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET}
+EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD:-}
+SLACK_CLIENT_ID=${SLACK_CLIENT_ID:-}
+SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET:-}
 EOF
   chown app:app /opt/app/coordinator.env
 fi
@@ -162,17 +98,12 @@ fi
 # and every subsequent restart reads it back. See
 # docs/plans/ebs-shard-volumes.md.
 if [ "$ROLE" = "shard" ]; then
-  COORD_NLB=$(aws ssm get-parameter \
-    --name "/$APP_NAME/config/coordinator-nlb" \
-    --region "$REGION" \
-    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
-
   cat > /opt/app/shard.env <<EOF
-COORDINATOR_ADDR=${COORD_NLB:-localhost:9020}
+COORDINATOR_ADDR=${COORDINATOR_NLB:-localhost:9020}
 SHARD_SECRET=${SHARD_SECRET:-}
 EOF
   chown app:app /opt/app/shard.env
-  echo "shard env: coordinator=$COORD_NLB"
+  echo "shard env: coordinator=${COORDINATOR_NLB:-localhost:9020}"
 
   # Mount the data volume. The coordinator attaches an EBS volume at
   # /dev/sdf before completing the instance's ASG lifecycle hook; on
@@ -231,17 +162,9 @@ if [ "$ROLE" = "coordinator" ]; then
   systemctl start weft-api
 fi
 
-# Start weftd on all roles if a token is available. Prefer WEFTD_TOKEN
-# (set via `kevcons secrets set WEFTD_TOKEN wft_...` and surfaced into
-# this shell by load-app-env above); fall back to the legacy
-# /$APP_NAME/WEFT_AGENT_TOKEN Secrets Manager path so a stale secret
-# still boots an AMI baked before the rename stuck.
-WEFTD_TOKEN="${WEFTD_TOKEN:-$(aws secretsmanager get-secret-value \
-  --secret-id "/$APP_NAME/WEFT_AGENT_TOKEN" \
-  --region "$REGION" \
-  --query 'SecretString' --output text 2>/dev/null || echo "")}"
-
-if [ -n "$WEFTD_TOKEN" ] && command -v weftd >/dev/null 2>&1; then
+# Start weftd on all roles if a token is available. WEFTD_TOKEN is
+# populated by load-app-env from the /weft/WEFTD_TOKEN secret.
+if [ -n "${WEFTD_TOKEN:-}" ] && command -v weftd >/dev/null 2>&1; then
   mkdir -p /etc/weftd
   cat > /etc/weftd/config.yaml <<WEFTCFG
 endpoint: ingest.w3ft.net:9020

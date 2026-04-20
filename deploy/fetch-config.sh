@@ -1,18 +1,22 @@
 #!/bin/bash
-# Synchronous SSM fetch for values needed by the ASG lifecycle hook
-# (migration command). Writes /opt/app/.env with just enough env for
-# /usr/local/bin/weft-migrate — currently WEFT_DB_DSN.
+# fetch-config.sh — populate /opt/app/.env for pre-service-boot steps
+# (ASG migration lifecycle hook, /etc/default/weftd generation).
 #
-# The service-level env (shard ASGs, region, secrets, etc.) continues to
-# be written by startup.sh into /opt/app/coordinator.env, which systemd
-# loads via EnvironmentFile= for the weft-coordinator / weft-api units.
-# Those services run after this script, so no race with the hook.
+# Delegates to /usr/local/bin/load-app-env, which slurps the kevcons
+# config blob (infra-derived vars like SHARD_ASG_SMALL, PARQUET_DIR)
+# and /weft/ secrets (JWT_SECRET, Stripe keys, WEFTD_TOKEN, …) into
+# /opt/app/.env. Then appends WEFT_DB_DSN, the only value weft needs
+# that isn't in the blob or secrets — the DB DSN has a distinct SSM
+# lifecycle (separate stack) and stays standalone.
+#
+# Callers: infrastructure-catalog/modules/asg-application/user-data*.tpl
+# at instance launch, and /opt/app/scripts/reload-config.sh on config
+# version bumps.
 set -euo pipefail
 
 APP_NAME="${1:-${APP_NAME:-weft}}"
 
-# Derive region from instance metadata if not already set (user-data
-# exports AWS_REGION, but be defensive in case this is run manually).
+# Derive region from instance metadata if not already set.
 if [ -z "${AWS_REGION:-}" ]; then
     TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
         -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
@@ -20,47 +24,26 @@ if [ -z "${AWS_REGION:-}" ]; then
         http://169.254.169.254/latest/meta-data/placement/region)
 fi
 
-ENV_FILE="/opt/app/.env"
+if [ ! -x /usr/local/bin/load-app-env ]; then
+    echo "fetch-config: /usr/local/bin/load-app-env not installed — AMI out of date"
+    exit 1
+fi
 
-echo "fetch-config: writing $ENV_FILE"
+echo "fetch-config: running load-app-env for $APP_NAME"
+APP_NAME="$APP_NAME" AWS_REGION="$AWS_REGION" /usr/local/bin/load-app-env
 
 WEFT_DB_DSN=$(aws ssm get-parameter \
     --name "/${APP_NAME}/config/db-dsn" \
     --region "$AWS_REGION" \
     --with-decryption \
-    --query 'Parameter.Value' --output text)
+    --query 'Parameter.Value' --output text 2>/dev/null || echo "")
 
-umask 077
-cat > "$ENV_FILE" <<EOF
-# Generated at $(date -u +%Y-%m-%dT%H:%M:%SZ) by fetch-config.sh
-APP_NAME=$APP_NAME
-AWS_REGION=$AWS_REGION
-WEFT_DB_DSN='$WEFT_DB_DSN'
-EOF
-
-# Auto-discover secrets under /${APP_NAME}/ and append. The short name
-# (after the last '/') becomes the env var, uppercased with dashes
-# converted to underscores. e.g. /weft/WEFTD_TOKEN → WEFTD_TOKEN,
-# /weft/slack-client-secret → SLACK_CLIENT_SECRET.
-echo "fetch-config: fetching secrets from /${APP_NAME}/ ..."
-SECRET_NAMES=$(aws secretsmanager list-secrets \
-    --filters Key=name,Values="/${APP_NAME}/" \
-    --region "$AWS_REGION" \
-    --query 'SecretList[*].Name' \
-    --output text 2>/dev/null || echo "")
-for SECRET_NAME in $SECRET_NAMES; do
-    SECRET_VALUE=$(aws secretsmanager get-secret-value \
-        --secret-id "$SECRET_NAME" \
-        --region "$AWS_REGION" \
-        --query 'SecretString' \
-        --output text 2>/dev/null || echo "")
-    [ -z "$SECRET_VALUE" ] && continue
-    SHORT_NAME="${SECRET_NAME##*/}"
-    ENV_VAR=$(echo "$SHORT_NAME" | tr '[:lower:]-' '[:upper:]_')
-    echo "${ENV_VAR}='${SECRET_VALUE}'" >> "$ENV_FILE"
-    echo "  secret: $SHORT_NAME → $ENV_VAR"
-done
-
-chown app:app "$ENV_FILE"
+if [ -n "$WEFT_DB_DSN" ]; then
+    # Append to (not overwrite) load-app-env's output so both its blob
+    # + secrets AND our DSN are present in a single source-able file.
+    echo "WEFT_DB_DSN='$WEFT_DB_DSN'" >> /opt/app/.env
+else
+    echo "fetch-config: warning — /${APP_NAME}/config/db-dsn empty or unavailable"
+fi
 
 echo "fetch-config: done"
