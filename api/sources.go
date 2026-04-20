@@ -2,19 +2,27 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
+	"strings"
+
+	"gorm.io/gorm"
 
 	"github.com/kevlarcon/weft/auth"
 	"github.com/kevlarcon/weft/ingest"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/store"
 )
 
 // ── Agent-facing endpoints (token-authenticated) ───────────
 
 // handleAgentSample receives sample log lines from weftd for a new source.
 // POST /api/agent/sample
+//
+// UpsertPendingLogGroup is a no-op when a configured row already exists
+// for (namespace, app) — the source is approved and the sample is stale.
+// That's what prevents the old "source appears as both pending AND
+// configured" bug.
 func (s *Server) handleAgentSample(w http.ResponseWriter, r *http.Request) {
 	agent := GetAgentAuth(r)
 	if agent == nil {
@@ -37,14 +45,19 @@ func (s *Server) handleAgentSample(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Run schema detection on the sample.
-	detection := ingest.Detect(req.Lines)
+	ns, err := s.store.GetNamespace(agent.CustomerID, agent.Namespace)
+	if err != nil {
+		http.Error(w, "namespace not found", http.StatusNotFound)
+		return
+	}
 
+	detection := ingest.Detect(req.Lines)
 	sampleJSON, _ := json.Marshal(req.Lines)
 	detectionJSON, _ := json.Marshal(detection)
 
-	if err := s.store.UpsertPendingSource(
-		agent.CustomerID, agent.Namespace, req.App,
+	fullApp := agent.Namespace + "/" + req.App
+	if err := s.store.UpsertPendingLogGroup(
+		ns.ID, fullApp,
 		req.Instance, req.HostGroup,
 		string(sampleJSON), string(detectionJSON),
 	); err != nil {
@@ -87,12 +100,18 @@ func (s *Server) handleAgentSourceStatus(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Check if pending (sample submitted, awaiting review).
-	ps, err := s.store.GetPendingSource(agent.CustomerID, agent.Namespace, app)
+	ns, err := s.store.GetNamespace(agent.CustomerID, agent.Namespace)
+	if err != nil {
+		http.Error(w, "namespace not found", http.StatusNotFound)
+		return
+	}
+	fullApp := agent.Namespace + "/" + app
+	pending, err := s.store.GetPendingLogGroup(ns.ID, fullApp)
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if ps != nil {
+	if pending != nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "pending"})
 		return
@@ -121,7 +140,7 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 	}
 
 	namespace := r.URL.Query().Get("namespace")
-	sources, err := s.store.ListPendingSources(customer.ID, namespace)
+	sources, err := s.store.ListPendingLogGroups(customer.ID, namespace)
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -137,16 +156,19 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 		CreatedAt string          `json:"created_at"`
 	}
 
-	var resp []pendingResp
-	for _, ps := range sources {
+	resp := make([]pendingResp, 0, len(sources))
+	for _, lg := range sources {
+		// Strip the namespace prefix so the response keeps the same
+		// short-form app shape the frontend and weftd agents consume.
+		shortApp := strings.TrimPrefix(lg.App, lg.NamespaceName+"/")
 		resp = append(resp, pendingResp{
-			App:       ps.App,
-			Namespace: ps.Namespace,
-			Instance:  ps.Instance,
-			HostGroup: ps.HostGroup,
-			Sample:    json.RawMessage(ps.Sample),
-			Detection: json.RawMessage(ps.Detection),
-			CreatedAt: ps.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			App:       shortApp,
+			Namespace: lg.NamespaceName,
+			Instance:  lg.Instance,
+			HostGroup: lg.HostGroup,
+			Sample:    json.RawMessage(lg.Sample),
+			Detection: json.RawMessage(lg.Detection),
+			CreatedAt: lg.CreatedAt.Format("2006-01-02T15:04:05Z"),
 		})
 	}
 
@@ -176,14 +198,21 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the pending source exists for this customer.
-	ps, err := s.store.GetPendingSource(customer.ID, namespace, app)
+	ns, err := s.store.GetNamespace(customer.ID, namespace)
 	if err != nil {
-		log.Printf("configure source %s/%s: GetPendingSource: %v", namespace, app, err)
+		http.Error(w, "namespace not found", http.StatusNotFound)
+		return
+	}
+
+	fullApp := namespace + "/" + app
+	// Verify the pending row exists for this namespace.
+	pending, err := s.store.GetPendingLogGroup(ns.ID, fullApp)
+	if err != nil {
+		log.Printf("configure source %s/%s: GetPendingLogGroup: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if ps == nil {
+	if pending == nil {
 		http.Error(w, "no pending source found", http.StatusNotFound)
 		return
 	}
@@ -202,7 +231,6 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build schema.
-	fullApp := namespace + "/" + app
 	schema := &ingest.Schema{
 		App:             fullApp,
 		Customer:        claims.CustomerName,
@@ -221,30 +249,18 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store the configured source under its namespace. Weftd-sourced logs
-	// don't have an AWS account (that's cloudwatch-only), so account_id
-	// stays nil — NamespaceID carries ownership.
-	ns, err := s.store.GetNamespace(customer.ID, namespace)
-	if err != nil {
-		http.Error(w, "namespace not found", http.StatusNotFound)
-		return
-	}
-	if err := s.store.AddLogGroup(
-		ns.ID, nil, store.SourceTypeWeftd, fullApp, fullApp,
-		"local", string(schemaYAML), "0s",
-	); err != nil {
-		if store.IsDuplicate(err) {
-			http.Error(w, "a source is already configured for this namespace and app", http.StatusConflict)
+	// Flip the pending row to configured. The existing (namespace_id, app)
+	// row is preserved — only status/schema_yaml/sample/detection change —
+	// so there's no window where the source doesn't exist in the table.
+	if err := s.store.ConfigureLogGroup(ns.ID, fullApp, string(schemaYAML)); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// The pending row disappeared between GetPendingLogGroup and
+			// the UPDATE — either a parallel configure won the race or
+			// the source got removed. Surface as 409.
+			http.Error(w, "source is no longer pending", http.StatusConflict)
 			return
 		}
-		log.Printf("configure source %s/%s: AddLogGroup: %v", namespace, app, err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	// Remove from pending.
-	if err := s.store.DeletePendingSource(customer.ID, namespace, app); err != nil {
-		log.Printf("configure source %s/%s: DeletePendingSource: %v", namespace, app, err)
+		log.Printf("configure source %s/%s: ConfigureLogGroup: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

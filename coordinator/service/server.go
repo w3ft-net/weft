@@ -908,8 +908,13 @@ func (s *Server) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest) (*
 	sampleJSON, _ := json.Marshal(req.Lines)
 	detectionJSON, _ := json.Marshal(detection)
 
-	if err := s.Store.UpsertPendingSource(
-		auth.Customer.ID, auth.Namespace, req.App,
+	ns, err := s.Store.GetNamespace(auth.Customer.ID, auth.Namespace)
+	if err != nil {
+		return nil, fmt.Errorf("namespace: %w", err)
+	}
+	fullApp := auth.Namespace + "/" + req.App
+	if err := s.Store.UpsertPendingLogGroup(
+		ns.ID, fullApp,
 		req.Instance, req.HostGroup,
 		string(sampleJSON), string(detectionJSON),
 	); err != nil {
@@ -941,11 +946,16 @@ func (s *Server) GetSourceStatus(_ context.Context, req *pb.GetSourceStatusReque
 	}
 
 	// Check if pending.
-	ps, err := s.Store.GetPendingSource(auth.Customer.ID, auth.Namespace, req.App)
+	ns, err := s.Store.GetNamespace(auth.Customer.ID, auth.Namespace)
+	if err != nil {
+		return nil, fmt.Errorf("namespace: %w", err)
+	}
+	fullApp := auth.Namespace + "/" + req.App
+	pending, err := s.Store.GetPendingLogGroup(ns.ID, fullApp)
 	if err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}
-	if ps != nil {
+	if pending != nil {
 		return &pb.GetSourceStatusResponse{Status: "pending"}, nil
 	}
 
