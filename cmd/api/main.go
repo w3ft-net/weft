@@ -77,7 +77,13 @@ func main() {
 	if appName == "" {
 		appName = "weft"
 	}
-	srv.SetConfig(config.Watch(ctx, appName, 60*time.Second))
+	// AWS SDK v2's default chain doesn't reliably resolve region from
+	// IMDS; pass it explicitly. AWS_REGION is set by user-data on EC2.
+	region := os.Getenv("AWS_REGION")
+	if region == "" {
+		region = "us-east-2"
+	}
+	srv.SetConfig(config.Watch(ctx, appName, region, 60*time.Second))
 
 	log.Printf("weft-api listening on :%s (coordinator: %s)", *port, *coordAddr)
 	if err := http.ListenAndServe(":"+*port, srv.Handler()); err != nil {

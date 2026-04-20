@@ -175,9 +175,15 @@ type ssmClient interface {
 // Load fetches /{appName}/config/app from SSM and returns the
 // defaults-with-overlay. Any failure (param missing, AWS unreachable,
 // JSON malformed) falls back to defaults with a log line — we never
-// fail startup over config.
-func Load(ctx context.Context, appName string) *Runtime {
-	cfg, err := awsconfig.LoadDefaultConfig(ctx)
+// fail startup over config. Region is required because the AWS SDK
+// v2's default chain doesn't always resolve a region from instance
+// metadata the way v1 did; passing it explicitly is the reliable path.
+func Load(ctx context.Context, appName, region string) *Runtime {
+	opts := []func(*awsconfig.LoadOptions) error{}
+	if region != "" {
+		opts = append(opts, awsconfig.WithRegion(region))
+	}
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		log.Printf("config: AWS config load failed, using defaults: %v", err)
 		return Defaults()
@@ -215,9 +221,9 @@ func isParamNotFound(err error) bool {
 // from the current one. Returns the pointer immediately so callers can
 // start serving with the initial load while the goroutine runs
 // forever until ctx is cancelled.
-func Watch(ctx context.Context, appName string, interval time.Duration) *atomic.Pointer[Runtime] {
+func Watch(ctx context.Context, appName, region string, interval time.Duration) *atomic.Pointer[Runtime] {
 	ptr := new(atomic.Pointer[Runtime])
-	ptr.Store(Load(ctx, appName))
+	ptr.Store(Load(ctx, appName, region))
 	go func() {
 		t := time.NewTicker(interval)
 		defer t.Stop()
@@ -226,7 +232,7 @@ func Watch(ctx context.Context, appName string, interval time.Duration) *atomic.
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				next := Load(ctx, appName)
+				next := Load(ctx, appName, region)
 				cur := ptr.Load()
 				if !reflect.DeepEqual(cur, next) {
 					log.Printf("config: runtime config changed, applying new values")

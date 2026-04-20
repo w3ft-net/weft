@@ -72,9 +72,15 @@ func main() {
 	if appName == "" {
 		appName = "weft"
 	}
+	// AWS SDK v2's default chain doesn't always resolve region from IMDS;
+	// pass it explicitly. AWS_REGION is set by user-data on EC2.
+	region := os.Getenv("AWS_REGION")
+	if region == "" {
+		region = "us-east-2"
+	}
 	cfgCtx, cfgCancel := context.WithCancel(context.Background())
 	defer cfgCancel()
-	cfgPtr := weftcfg.Watch(cfgCtx, appName, 60*time.Second)
+	cfgPtr := weftcfg.Watch(cfgCtx, appName, region, 60*time.Second)
 	srv.CfgPtr = cfgPtr
 	bootCfg := cfgPtr.Load()
 

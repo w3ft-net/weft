@@ -324,7 +324,7 @@ func main() {
 	}
 	cfgCtx, cfgCancel := context.WithCancel(context.Background())
 	defer cfgCancel()
-	cfgPtr := weftcfg.Watch(cfgCtx, appName, 60*time.Second)
+	cfgPtr := weftcfg.Watch(cfgCtx, appName, *awsRegion, 60*time.Second)
 	bootCfg := cfgPtr.Load()
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
