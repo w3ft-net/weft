@@ -9,13 +9,6 @@
 
 ## Prod blockers (in order)
 
-### 1. SSM parameter for coordinator-nlb
-`kevcons config set` wrote to the JSON blob at `/weft/config/app`. The shard startup script reads a standalone parameter at `/weft/config/coordinator-nlb`. Need to either:
-- Add it as a Terraform variable in the weft stack (preferred — version controlled)
-- Or create a standalone SSM parameter manually
-
-The value is the internal NLB DNS: `weft-nlb-*.elb.us-east-2.amazonaws.com:9020`
-
 ### 2. Verify shard instance refresh completed
 The `kevcons deploy` fires shard refresh as fire-and-forget. Need to confirm:
 - Shard instances got the new AMI

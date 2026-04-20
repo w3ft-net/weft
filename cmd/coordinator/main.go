@@ -14,8 +14,6 @@ import (
 
 	"time"
 
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"google.golang.org/grpc"
 
 	"github.com/kevlarcon/weft/auth"
@@ -133,8 +131,8 @@ func main() {
 			provConfig := coordinator.DefaultProvisionerConfig()
 			provConfig.ShardSecret = shardSecret
 			provConfig.S3Config = shard.S3ConfigFromEnv()
-			provConfig.ParquetDir = os.Getenv("WEFT_PARQUET_DIR")
-			provConfig.LambdaFunctionURL = os.Getenv("WEFT_LAMBDA_FUNCTION_URL")
+			provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
+			provConfig.LambdaFunctionURL = os.Getenv("LAMBDA_FUNCTION_URL")
 			prov := coordinator.NewProvisioner(coord.Registry, asgLauncher, provConfig)
 			coord.Provisioner = prov
 
@@ -152,20 +150,20 @@ func main() {
 
 			// Lifecycle poller: consume ASG launch hook events from SQS
 			// and decide christen/recover for each new shard instance.
-			// Controlled by WEFT_LIFECYCLE_QUEUE_URL so dev/docker
+			// Controlled by LIFECYCLE_QUEUE_URL so dev/docker
 			// coordinators stay out of this path.
-			if queueURL := os.Getenv("WEFT_LIFECYCLE_QUEUE_URL"); queueURL != "" {
+			if queueURL := os.Getenv("LIFECYCLE_QUEUE_URL"); queueURL != "" {
 				tierByASG := make(map[string]string, len(shardTiers))
 				for tier, asgName := range shardTiers {
 					tierByASG[asgName] = tier
 				}
-				sizeByTier := readTierSizes(*awsRegion)
+				sizeByTier := readTierSizes()
 				poller, err := coordinator.BuildLifecyclePoller(provCtx, *awsRegion, queueURL,
 					coordinator.LifecycleHandlerConfig{
 						Registry:   coord.Registry,
 						TierByASG:  tierByASG,
 						SizeByTier: sizeByTier,
-						DeviceName: os.Getenv("WEFT_SHARD_DEVICE_NAME"),
+						DeviceName: os.Getenv("SHARD_VOLUME_DEVICE"),
 					})
 				if err != nil {
 					log.Printf("warning: lifecycle poller unavailable: %v", err)
@@ -180,7 +178,7 @@ func main() {
 		launcher := coordinator.NewLocalLauncher()
 		provConfig := coordinator.DevProvisionerConfig()
 		provConfig.ShardSecret = shardSecret
-		provConfig.ParquetDir = os.Getenv("WEFT_PARQUET_DIR")
+		provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
 		prov := coordinator.NewProvisioner(coord.Registry, launcher, provConfig)
 		coord.Provisioner = prov
 		prov.Start(provCtx)
@@ -234,7 +232,7 @@ func main() {
 		// Restore archived shards from the registry.
 		coord.Registry.SetStore(db)
 		s3cfg := shard.S3ConfigFromEnv()
-		lambdaURL := os.Getenv("WEFT_LAMBDA_FUNCTION_URL")
+		lambdaURL := os.Getenv("LAMBDA_FUNCTION_URL")
 
 		if err := coord.Registry.LoadFromStore(func(rec store.ShardRecord) (shard.Shard, error) {
 			if rec.State != string(coordinator.StateArchived) || rec.ParquetPath == "" {
@@ -348,21 +346,16 @@ func main() {
 	}
 }
 
-// readTierSizes fetches per-tier data volume sizes from SSM. These
-// parameters are written by the terraform stack (see
-// docs/plans/ebs-shard-volumes.md → S1). Falls back to sensible
-// defaults on missing params so coordinators that boot before the
-// terraform apply can still function.
-func readTierSizes(region string) map[string]int32 {
+// readTierSizes returns per-tier data volume sizes from env vars populated
+// by load-app-env out of the TF-managed config blob (see
+// stacks/asg-weft-application/main.tf → aws_ssm_parameter.app_config_blob).
+// Falls back to sensible defaults when a var is missing or unparseable.
+func readTierSizes() map[string]int32 {
 	defaults := map[string]int32{"small": 100, "medium": 500, "large": 2000}
-	appName := os.Getenv("APP_NAME")
-	if appName == "" {
-		appName = "weft"
-	}
 	sizes := map[string]int32{}
 	for tier, def := range defaults {
-		key := fmt.Sprintf("/%s/config/shard-%s-volume-gb", appName, tier)
-		if val, ok := lookupSSMInt32(region, key); ok {
+		envKey := fmt.Sprintf("SHARD_%s_VOLUME_GB", strings.ToUpper(tier))
+		if val, ok := parsePositiveInt32(os.Getenv(envKey)); ok {
 			sizes[tier] = val
 		} else {
 			sizes[tier] = def
@@ -371,19 +364,12 @@ func readTierSizes(region string) map[string]int32 {
 	return sizes
 }
 
-func lookupSSMInt32(region, name string) (int32, bool) {
-	cfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(region))
-	if err != nil {
-		return 0, false
-	}
-	out, err := ssm.NewFromConfig(cfg).GetParameter(context.Background(), &ssm.GetParameterInput{
-		Name: &name,
-	})
-	if err != nil || out.Parameter == nil || out.Parameter.Value == nil {
+func parsePositiveInt32(s string) (int32, bool) {
+	if s == "" {
 		return 0, false
 	}
 	var v int32
-	if _, err := fmt.Sscanf(*out.Parameter.Value, "%d", &v); err != nil || v <= 0 {
+	if _, err := fmt.Sscanf(s, "%d", &v); err != nil || v <= 0 {
 		return 0, false
 	}
 	return v, true
