@@ -187,6 +187,23 @@ build {
     ]
   }
 
+  # Install the universal load-app-env loader. Canonical copy lives in
+  # the infrastructure-catalog kevcons ansible role; we reach across to
+  # the sibling checkout rather than duplicate the script. If the
+  # sibling path is missing the bake fails loudly.
+  provisioner "file" {
+    source      = "../infrastructure-catalog/packer/ansible/roles/kevcons/files/load-app-env"
+    destination = "/tmp/load-app-env"
+  }
+
+  provisioner "shell" {
+    inline = [
+      "sudo mv /tmp/load-app-env /usr/local/bin/load-app-env",
+      "sudo chown root:root /usr/local/bin/load-app-env",
+      "sudo chmod 0755 /usr/local/bin/load-app-env",
+    ]
+  }
+
   # Install CloudWatch agent
   provisioner "shell" {
     inline = [
