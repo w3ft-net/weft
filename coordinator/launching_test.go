@@ -39,7 +39,9 @@ func TestReconciler_MintsLaunchingRow_AndCountsAgainstTarget(t *testing.T) {
 	}
 
 	// First tick: bucket at 0 capacity, target 2 → two LAUNCHING
-	// rows INSERTed, two ASG calls.
+	// rows INSERTed. ASG scaling is handled separately by
+	// syncASGDesiredCapacity; this test asserts on the LAUNCHING
+	// rows, which are the coordinator's source of truth.
 	prov.check(context.Background())
 
 	launchingRows := func() int {
@@ -49,21 +51,14 @@ func TestReconciler_MintsLaunchingRow_AndCountsAgainstTarget(t *testing.T) {
 	if got := launchingRows(); got != 2 {
 		t.Errorf("after tick 1: want 2 LAUNCHING rows, got %d", got)
 	}
-	if launcher.count() != 2 {
-		t.Errorf("after tick 1: want 2 ASG launches, got %d", launcher.count())
-	}
 
-	// Second tick: effectiveCapacity sees 2 LAUNCHING rows → target
-	// met → no further launches. This is the key regression test —
-	// without §2, the registry has 0 INGESTING entries here and the
-	// old code would issue 2 more launches.
+	// Second tick: the reconciler snapshot sees 2 LAUNCHING rows →
+	// target met → no additional mints. Regression guard against
+	// the pre-§2 ratchet.
 	prov.check(context.Background())
 
 	if got := launchingRows(); got != 2 {
-		t.Errorf("after tick 2: want 2 LAUNCHING rows still, got %d", got)
-	}
-	if launcher.count() != 2 {
-		t.Errorf("after tick 2: want 2 ASG launches total, got %d — reconciler ratcheted", launcher.count())
+		t.Errorf("after tick 2: want 2 LAUNCHING rows still, got %d — reconciler ratcheted", got)
 	}
 }
 

@@ -33,6 +33,17 @@ type asyncLauncher interface {
 	UsesLaunchingRows() bool
 }
 
+// TierScaler is the optional extension async launchers implement so
+// the coordinator can set a tier's ASG desired_capacity in absolute
+// terms (rather than bumping +1 per launch and never scaling down).
+// SetDesiredCapacity runs once per tick per tier from the
+// provisioner's post-reconcile sync pass; TierMaxSize lets the sync
+// clamp computed desired against the ASG's MaxSize.
+type TierScaler interface {
+	SetDesiredCapacity(ctx context.Context, tier string, desired int32) error
+	TierMaxSize(ctx context.Context, tier string) (int32, error)
+}
+
 // isLaunchingLauncher reports whether this launcher participates in
 // the LAUNCHING-row handoff. Used by the reconciler to pick between
 // the INSERT-then-call-ASG path and the synchronous

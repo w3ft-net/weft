@@ -237,6 +237,85 @@ func (p *Provisioner) Start(ctx context.Context) {
 	}()
 }
 
+// syncASGDesiredCapacity, once per tick per tier, sets the ASG's
+// desired_capacity to an absolute value derived from bucket config
+// and registry state — NOT from a COUNT of shard_records. For each
+// tier with buckets:
+//
+//	desired = Σ bucket.target (buckets in this tier)
+//	        + count(READ_ONLY registry entries with entry.Tier == tier)
+//
+// Targets cover LAUNCHING + INGESTING (a LAUNCHING in flight and an
+// already-INGESTING shard both consume one target slot). READ_ONLY
+// adds the count of past-window shards whose instances are still
+// hot until archive.
+//
+// Computed desired is clamped to the ASG's MaxSize with a log
+// tripwire if the clamp kicks in — "someone added a bucket to this
+// tier without bumping TF's max."
+//
+// No-op for launchers that don't implement TierScaler (sync
+// launchers); they manage their own lifecycle.
+func (p *Provisioner) syncASGDesiredCapacity(ctx context.Context) {
+	scaler, ok := p.launcher.(TierScaler)
+	if !ok {
+		return
+	}
+	if p.Buckets == nil {
+		return
+	}
+	all, err := p.Buckets.All()
+	if err != nil {
+		log.Printf("provisioner: sync desired: Buckets.All: %v", err)
+		return
+	}
+
+	// Sum targets per tier. Only tiers that have at least one bucket
+	// are managed here; a tier with zero buckets has nothing the
+	// coordinator wants to say about it.
+	targetByTier := make(map[string]int32)
+	for _, bucket := range all {
+		if bucket.Tier == "" || bucket.Target <= 0 {
+			continue
+		}
+		targetByTier[bucket.Tier] += int32(bucket.Target)
+	}
+
+	// Count READ_ONLY entries per tier from the registry. The
+	// registry is the hot-state source for shards past WindowEnd
+	// but still holding an instance; reaping hasn't happened yet
+	// (reaping is §4 for ARCHIVED shards).
+	readOnlyByTier := make(map[string]int32)
+	for _, e := range p.registry.Entries() {
+		if e.State != StateReadOnly {
+			continue
+		}
+		if e.Tier == "" {
+			continue
+		}
+		readOnlyByTier[e.Tier]++
+	}
+
+	for tier, targetSum := range targetByTier {
+		desired := targetSum + readOnlyByTier[tier]
+
+		max, err := scaler.TierMaxSize(ctx, tier)
+		if err != nil {
+			log.Printf("provisioner: sync desired: TierMaxSize(%s): %v — skipping clamp",
+				tier, err)
+		} else if max > 0 && desired > max {
+			log.Printf("provisioner: sync desired: tier %s computed=%d > max=%d — clamping",
+				tier, desired, max)
+			desired = max
+		}
+
+		if err := scaler.SetDesiredCapacity(ctx, tier, desired); err != nil {
+			log.Printf("provisioner: sync desired: SetDesiredCapacity(%s, %d): %v",
+				tier, desired, err)
+		}
+	}
+}
+
 // reapStaleLaunching sweeps LAUNCHING rows older than staleLaunchingAge.
 // Two flavours, distinguished by whether the lifecycle hook has
 // claimed the row:
@@ -734,7 +813,9 @@ func (p *Provisioner) OnboardApp(app string) error {
 	return nil
 }
 
-// check evaluates each INGESTING shard for rotation and app split.
+// check runs one tick of the provisioner's housekeeping: bucket
+// split evaluation, per-bucket reconciliation, then an absolute
+// ASG desired_capacity sync for each tier.
 func (p *Provisioner) check(ctx context.Context) {
 	// Evaluate bucket splits based on ingestion stats.
 	if p.Buckets != nil {
@@ -753,9 +834,9 @@ func (p *Provisioner) check(ctx context.Context) {
 		}
 	}
 
-	// Per-bucket reconciliation. Covers app-drift (op 1) and
-	// under-capacity scale-up (op 2); future passes will fold the
-	// remaining check() loops into ops as well.
+	// Per-bucket reconciliation. Covers app-drift (op 1),
+	// under-capacity scale-up (op 2), window-closed rotation
+	// (op 3), and retention-archive (op 5).
 	if p.Buckets != nil {
 		all, err := p.Buckets.All()
 		if err != nil {
@@ -766,6 +847,12 @@ func (p *Provisioner) check(ctx context.Context) {
 		}
 	}
 
+	// Tier-level ASG sync: set each tier's desired_capacity
+	// absolutely from bucket config + READ_ONLY registry count.
+	// Runs after the per-bucket reconcile so any LAUNCHING rows
+	// minted this tick inform the count. No-op on synchronous
+	// launchers.
+	p.syncASGDesiredCapacity(ctx)
 }
 
 // archive exports a READ_ONLY shard to Parquet and replaces it with a ColdShard.
@@ -943,22 +1030,16 @@ func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket)
 	}
 
 	if isLaunchingLauncher(p.launcher) {
-		// INSERT the LAUNCHING row before calling the ASG so next
-		// tick's reconciler snapshot already includes the in-flight
-		// launch. The async handoff is non-negotiable: no store
-		// means no handoff, so we refuse to scale rather than let an
-		// orphan instance reach christen.
+		// INSERT the LAUNCHING row. The ASG scale-up happens out of
+		// band via syncASGDesiredCapacity at the end of this tick,
+		// which reads bucket targets and adjusts desired_capacity
+		// absolutely. No per-launch SetDesiredCapacity bumps.
 		if p.config.ShardOps == nil {
-			log.Printf("provisioner: bucket %d: no ShardOps store — skipping ASG call (async handoff requires it)", bucket.ID)
+			log.Printf("provisioner: bucket %d: no ShardOps store — skipping LAUNCHING mint (async handoff requires it)", bucket.ID)
 			return
 		}
 		if _, err := p.mintLaunchingRow(bucket); err != nil {
-			log.Printf("provisioner: bucket %d: mint LAUNCHING: %v — skipping ASG call", bucket.ID, err)
-			return
-		}
-		log.Printf("provisioner: launching shard for bucket %d via ASG (tier=%s)", bucket.ID, tier)
-		if _, err := p.launcher.LaunchInstance(ctx, tier); err != nil {
-			log.Printf("provisioner: failed to launch shard for bucket %d: %v", bucket.ID, err)
+			log.Printf("provisioner: bucket %d: mint LAUNCHING: %v", bucket.ID, err)
 		}
 		return
 	}

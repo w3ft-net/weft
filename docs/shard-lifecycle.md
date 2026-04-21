@@ -376,9 +376,15 @@ additional ops without reshaping the scaffold.
 Concretely the provisioner owns:
 
 - **Launch intent.** INSERT a LAUNCHING row in `shard_records`
-  before calling the ASG, so `COUNT(LAUNCHING + INGESTING)` is the
-  single source of truth for "effective capacity" and the reconciler
-  doesn't ratchet the ASG under launch latency.
+  before the ASG ever learns about the new shard. The reconciler's
+  per-bucket snapshot sees the row on the next tick so no duplicate
+  launch fires.
+- **ASG desired_capacity.** Once per tick per tier, compute
+  `Σ bucket.target + count(READ_ONLY entries in tier)` and call
+  `SetDesiredCapacity(tier, desired)` as an absolute assignment.
+  Clamped to `MaxSize` with a log tripwire. This is the sole
+  mechanism for ASG scale-up and scale-down; there is no
+  per-instance bump.
 - **Rotation scheduling.** "The current window ends in ≤`PrewarmLead`;
   mint W1 LAUNCHING rows now." Running on a ticker.
 - **Christening.** When an unclaimed heartbeat arrives (shard has no

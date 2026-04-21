@@ -84,29 +84,30 @@ window get ABANDON-signalled to the ASG and deleted.
 **Size.** Medium (~200 lines across the reconciler, lifecycle hook,
 and ProcessHeartbeat christen path).
 
-## 3. ASG `desired_capacity` driven by the reconciler
+## 3. ASG `desired_capacity` driven by the reconciler — done (coordinator side)
 
-**Today.** TF sets `aws_autoscaling_group.shard_small.desired_capacity
-= var.shard_desired` (default 2). The coordinator's
-`ASGLauncher.LaunchInstance` bumps it via `SetDesiredCapacity(+1)` on
-every bucket-sizing call — ratchets under any launch latency because
-nothing tracks in-flight launches (see §2). No path ever decreases
-desired_capacity.
-
-**Target.** ASG `desired_capacity` is coordinator-managed, driven by a
-simple formula:
+**Status.** Coordinator side landed. Formula is:
 
 ```
-desired_capacity(tier) = COUNT(*) FROM shard_records
-                          WHERE tier = $tier
-                            AND state IN ('LAUNCHING','INGESTING','READ_ONLY','ARCHIVING')
+desired(tier) = Σ bucket.target_ingesting_count (buckets where tier=tier)
+              + count(READ_ONLY registry entries with Tier == tier)
 ```
 
-Once per reconciler tick, per tier: compute that number, call
-`SetDesiredCapacity(tier, desired)`. No more incremental bumps; this
-is an absolute assignment.
+Targets cover LAUNCHING+INGESTING in one number (a LAUNCHING in
+flight and an already-INGESTING shard both occupy one target slot).
+READ_ONLY adds past-window shards whose instances are still hot.
+ARCHIVED is excluded — §4 terminates those explicitly.
 
-**TF companion change.**
+`syncASGDesiredCapacity` runs once per tick at the end of `check()`,
+after the per-bucket reconciler has minted any LAUNCHING rows. It
+clamps to the ASG's `MaxSize` (queried via `DescribeAutoScalingGroups`)
+with a log tripwire when the clamp kicks in. The
+`SetDesiredCapacity(+1)` ratchet in `ASGLauncher.LaunchInstance` is
+gone; the method is now a stub that errors to catch stale callers.
+`PollInterval`/`PollAttempts`/`instances`/`known`/`asgInstanceIDs`/
+`instancePrivateIP` are all dead code, removed.
+
+**TF companion change — still pending, in `infrastructure-catalog`:**
 
 ```hcl
 resource "aws_autoscaling_group" "shard_small" {
@@ -131,9 +132,12 @@ max_capacity(tier) = Σ (2 + ceil(retention_b / window_b)) * target_b
 For the day-1 small tier with only the default bucket (target=2,
 retention=7d, window=7d): `(2+1)*2 = 6`, +2 headroom ⇒ 8.
 
-A guard: if the reconciler's computed `desired > max_capacity`, log +
-clamp. That's the tripwire that says "someone added a bucket to this
-tier without bumping max."
+**Footgun until §4 lands.** `ARCHIVED` shards' EC2 instances are
+still running until §4 terminates them explicitly. During the gap,
+coordinator-computed desired excludes them but ASG actual count
+includes them; on a tick where desired drops, ASG's scale-in policy
+picks which instance to kill and it might not be the archived one.
+Land §4 to close the gap.
 
 **Size.** Small (~50 lines reconciler + TF changes) but depends on
 §1+§2 being in place first.
@@ -343,7 +347,7 @@ The original gap inventory in shard-lifecycle.md. Current status:
 |---|---|---|
 | 1 | Durable shard identity on EBS | done (christen writes shard.json via Configure RPC) |
 | 2 | Coordinator christening path | done — now LAUNCHING-row promotion in `ProcessHeartbeat.christen` |
-| 3 | Rotation on wall-clock windows | partial — Path A transitions, no replacement yet (see §5) |
+| 3 | Rotation on wall-clock windows | partial — `RotateToReadOnlyOp` flips INGESTING → READ_ONLY on window-end; ASG right-sizes automatically via §3's tier-sync. Next-window pre-warm still pending (§5). |
 | 4 | EBS per-shard attach/detach | partial — lifecycle hook claims LAUNCHING rows and tags volumes with real shard ids; recovery branch exists |
 | 5 | Failure-recovery branch | partial — `reapDeadShards` preserves rows with `ebs_volume_id`; rebind path works; the `TerminateInstanceInAutoScalingGroup` call from §4 is the missing piece |
 | 6 | Archive scheduling on retention | done (check's retention branch) |
@@ -393,13 +397,16 @@ Work in progress — checked items are landed:
 - [x] **§2 (LAUNCHING state)** — reconciler/hook/christen now agree
   on a shared LAUNCHING row.
 - [x] **§1 (reconciler), ops 1/2/3/5** — per-bucket reconciler with
-  explicit op types, idempotent and state-gated. Ops 4 (pre-warm)
-  and 6 (terminate-on-archive) land with §5 and §4 respectively.
-- [ ] **§3 (ASG desired wiring)** + **§4 (terminate-on-archive)** —
-  flip ASG to coordinator-managed. At this point the shard-lifecycle
-  doc's §3/§5 gaps close.
+  explicit op types, idempotent and state-gated.
+- [x] **§3 (ASG desired wiring)** — coordinator side done;
+  `syncASGDesiredCapacity` computes absolute desired per tick,
+  clamps to `MaxSize`. TF companion change still pending in
+  `infrastructure-catalog` (remove `desired_capacity` + add
+  `ignore_changes = [desired_capacity]` + set `max_capacity`).
+- [ ] **§4 (terminate-on-archive)** — closes the ARCHIVED-instance
+  footgun introduced by §3. Ops 6 from the §1 table lands here.
 - [ ] **§5 (pre-warm + rechristen)** — completes the window-rotation
-  story.
+  story. Op 4 from the §1 table lands here.
 - [ ] **§7 (lifecycle hook intent)** — can land anywhere after §2;
   defensible as its own PR.
 
