@@ -219,7 +219,25 @@ window, an INGESTING shard close to `WindowEnd`, and verifies the
 reconciler INSERTs a next-window LAUNCHING row with the correct
 bounds and empty `instance_id`.
 
-## 6. App-onboarding race window
+## 6. App-onboarding race window — done
+
+**Status.** The drain-async race this section originally described
+is moot: `OnboardApp` runs synchronously inside `IngestStream`'s
+receive path (per-stream mutex) since commit `de752cf`, so a row
+for a new app can't reach a shard before the shard's `Apps` list
+has been updated. The §1 reconciler preserves that property —
+the `AddAppToShardOp.Apply` path goes through the new
+`Registry.AddAppToShard` method which takes the registry's write
+lock, so concurrent `IngestingShard` / `MatchingShards` readers
+can't tear on the `Apps` slice header.
+
+A residual cross-stream visibility window still exists during
+`OnboardApp`'s ~5–10ms DB write; it's bounded and benign because
+no shard holds data for the new app during that window anyway.
+See `docs/shard-lifecycle.md` → Coordinator contract → App
+onboarding path for the permanent architecture description.
+
+**Original write-up below, preserved for context.**
 
 **Today.** First row for a new app arrives on IngestStream:
 

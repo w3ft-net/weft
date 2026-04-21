@@ -326,20 +326,10 @@ func (o AddAppToShardOp) Describe() string {
 }
 
 func (o AddAppToShardOp) Apply(_ context.Context, p *Provisioner) error {
-	entry := p.registry.Get(o.ShardID)
-	if entry == nil {
+	found, _ := p.registry.AddAppToShard(o.ShardID, o.App)
+	if !found {
 		return fmt.Errorf("%s: entry not in registry", o.Describe())
 	}
-	if entry.State != StateIngesting {
-		return nil
-	}
-	for _, a := range entry.Apps {
-		if a == o.App {
-			return nil
-		}
-	}
-	entry.Apps = append(entry.Apps, o.App)
-	p.registry.PersistState(entry)
 	return nil
 }
 

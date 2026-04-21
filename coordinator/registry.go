@@ -227,6 +227,40 @@ func (r *ShardRegistry) Remove(id string) {
 	}
 }
 
+// AddAppToShard appends app to the given shard's Apps list under
+// the registry's write lock. Idempotent (no-op if the app is
+// already present) and state-gated (READ_ONLY/ARCHIVED shards'
+// apps stay frozen — they never accepted writes for the app, so
+// including them in query routing would widen fan-out).
+//
+// Returns (found, added):
+//   - found=false means the shard isn't in the registry
+//   - found=true, added=false means the op was a no-op (already
+//     present or state != INGESTING)
+//   - found=true, added=true means the shard's Apps list grew
+//
+// Callers that mutate entry.Apps directly bypass the lock and
+// race with IngestingShard/MatchingShards readers — don't.
+func (r *ShardRegistry) AddAppToShard(id, app string) (found bool, added bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.entries[id]
+	if !ok {
+		return false, false
+	}
+	if entry.State != StateIngesting {
+		return true, false
+	}
+	for _, a := range entry.Apps {
+		if a == app {
+			return true, false
+		}
+	}
+	entry.Apps = append(entry.Apps, app)
+	r.persist(entry)
+	return true, true
+}
+
 // Suspend marks a shard as suspended (ingest failed). Suspended shards
 // are excluded from write routing but still participate in queries.
 func (r *ShardRegistry) Suspend(id string) {

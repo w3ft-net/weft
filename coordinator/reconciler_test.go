@@ -2,6 +2,8 @@ package coordinator
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -90,6 +92,65 @@ func TestAddAppToShardOp_Apply_Idempotent(t *testing.T) {
 	if len(got) != 2 {
 		t.Errorf("Apps changed on idempotent re-apply: got %v, want [weft vimgym]", got)
 	}
+}
+
+// AddAppToShard's mutation must be lock-protected so a concurrent
+// IngestingShard or MatchingShards read doesn't see a torn Apps
+// slice header. Run with -race (which the standard test invocation
+// enables in CI); the assertion is that the test doesn't panic or
+// trip the race detector.
+func TestAddAppToShard_RaceSafeAgainstReaders(t *testing.T) {
+	reg := NewShardRegistry()
+	for i := 0; i < 4; i++ {
+		reg.Add(&ShardEntry{
+			ID:    fmt.Sprintf("shard-%d", i),
+			State: StateIngesting,
+			Shard: &failingShard{id: fmt.Sprintf("shard-%d", i)},
+			Apps:  []string{"weft"},
+		})
+	}
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+
+	// Readers: repeatedly scan via IngestingShard — same path the
+	// ingest drain uses to pick a target shard — under registry
+	// RLock.
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				_ = reg.IngestingShard("weft")
+				_ = reg.MatchingShards(TimeRange{}, "weft")
+			}
+		}()
+	}
+
+	// Writers: pound on AddAppToShard with a variety of apps across
+	// all shards. Under the old direct-mutation code this tripped
+	// go test -race; under the locked version it doesn't.
+	apps := []string{"vimgym", "callbox", "grantcentral", "xylem", "weft"}
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				shardID := fmt.Sprintf("shard-%d", j%4)
+				app := apps[j%len(apps)]
+				reg.AddAppToShard(shardID, app)
+			}
+		}(i)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	close(done)
+	wg.Wait()
 }
 
 func TestAddAppToShardOp_Apply_SkipsReadOnly(t *testing.T) {

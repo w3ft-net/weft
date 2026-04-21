@@ -465,6 +465,46 @@ with "reconciler minted a LAUNCHING row." Its decisions are:
   LAUNCHING row to claim, or any error. The ASG terminates the
   instance.
 
+### App onboarding path
+
+A new app's first ingest row threads through onboarding inline,
+in the receive path of `IngestStream`:
+
+```
+Recv row → (per-stream mu.Lock) →
+    SeenApps.Add(customer, app)     // atomic dedup, true only first time
+    └─ if true:
+         OnboardApp(app)
+         ├─ Buckets.AddAppToBucket  // DB write, ~5ms
+         └─ reconcileBucket          // emits AddAppToShardOp per INGESTING shard;
+                                     // Apply → registry.AddAppToShard (writer-
+                                     // locked mutation + persist)
+    row → batch → (mu.Unlock)
+```
+
+A few properties that fall out:
+
+- **Rows for a new app never reach a shard before that shard's
+  `Apps` list contains the app.** `OnboardApp` runs inside the
+  stream mutex, same mutex the batch-flush path takes; by the
+  time a batched row gets written the `AddAppToShardOp` has
+  applied.
+- **Registry mutations are lock-protected.** `AddAppToShard` takes
+  the registry's write lock; concurrent readers
+  (`IngestingShard`, `MatchingShards`) under RLock see a
+  consistent `Apps` slice — no torn reads.
+- **Residual cross-stream window.** Between `SeenApps.Add` and
+  the registry write, a query on another goroutine filtering by
+  the new app sees empty results. Duration is the
+  `OnboardApp` latency (~5–10ms, dominated by the bucket DB
+  write). Practically invisible because no shard holds data for
+  the new app during that window either — stream A's first row
+  is still in-batch, not yet ingested.
+
+The `pending_sources` + `AddSource` RPC flow takes the same
+`OnboardApp` call synchronously, so operator-registered apps are
+propagated on the RPC's return.
+
 ## Known ambiguities to decide before implementation
 
 - **Dedicated fleets for high-throughput apps.** Day-1 model is
