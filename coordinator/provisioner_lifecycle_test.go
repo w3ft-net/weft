@@ -56,6 +56,12 @@ func TestProvisioner_AdoptsFromHeartbeatsOnTick(t *testing.T) {
 	config.PollInterval = 50 * time.Millisecond
 
 	prov := NewProvisioner(reg, launcher, config)
+	// Bootstrap reads the default bucket; give it a fake store with
+	// one seeded.
+	fake := newFakeBucketStore()
+	fake.seedBucket("default", nil)
+	prov.Buckets = NewBucketManager(fake)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

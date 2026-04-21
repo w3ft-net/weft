@@ -2,38 +2,132 @@ package coordinator
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/kevlarcon/weft/shard"
+	"github.com/kevlarcon/weft/store"
 )
+
+// fakeBucketStore is an in-memory BucketStore for unit tests that
+// want to exercise BucketManager's DB-talking logic (EvaluateSplit,
+// Split, AddAppToBucket) without standing up postgres. Assigns
+// surrogate ids sequentially on first insert.
+type fakeBucketStore struct {
+	buckets []store.Bucket
+	nextID  int64
+}
+
+func newFakeBucketStore() *fakeBucketStore {
+	return &fakeBucketStore{nextID: 1}
+}
+
+// seedBucket adds a bucket directly, assigning a surrogate id.
+// Used by tests to set up initial state before handing the fake
+// to a BucketManager.
+func (f *fakeBucketStore) seedBucket(label string, apps []string) *store.Bucket {
+	appsJSON, _ := json.Marshal(apps)
+	b := store.Bucket{
+		ID:                   f.nextID,
+		Label:                label,
+		Apps:                 string(appsJSON),
+		TargetIngestingCount: 2,
+		Tier:                 "small",
+		WindowDuration:       "168h",
+		RetentionPeriod:      "168h",
+		CreatedAt:            "2026-04-21T00:00:00Z",
+	}
+	f.nextID++
+	f.buckets = append(f.buckets, b)
+	return &f.buckets[len(f.buckets)-1]
+}
+
+func (f *fakeBucketStore) ListBuckets() ([]store.Bucket, error) {
+	out := make([]store.Bucket, len(f.buckets))
+	copy(out, f.buckets)
+	return out, nil
+}
+
+func (f *fakeBucketStore) GetBucket(id int64) (store.Bucket, bool, error) {
+	for _, b := range f.buckets {
+		if b.ID == id {
+			return b, true, nil
+		}
+	}
+	return store.Bucket{}, false, nil
+}
+
+func (f *fakeBucketStore) GetBucketByLabel(label string) (store.Bucket, bool, error) {
+	for _, b := range f.buckets {
+		if b.Label == label {
+			return b, true, nil
+		}
+	}
+	return store.Bucket{}, false, nil
+}
+
+func (f *fakeBucketStore) SaveBucket(b *store.Bucket) error {
+	if b.ID == 0 {
+		b.ID = f.nextID
+		f.nextID++
+		f.buckets = append(f.buckets, *b)
+		return nil
+	}
+	for i, existing := range f.buckets {
+		if existing.ID == b.ID {
+			f.buckets[i] = *b
+			return nil
+		}
+	}
+	f.buckets = append(f.buckets, *b)
+	return nil
+}
 
 // stubBuckets is a Buckets implementation for tests that need to
 // hand christen()/check() a specific default bucket without
-// building a fake store + LoadFromStore. Returns the configured
-// bucket from Default()/All(); split/evaluate are inert.
+// standing up a fake store. Returns the configured bucket from
+// Default()/All(); split/evaluate are inert.
 type stubBuckets struct {
 	bucket *AppBucket
 }
+
+// defaultBucketID is the surrogate id stub tests use for "the
+// default bucket." Any positive number works — tests just need it
+// to match what they stamp onto ShardEntry.BucketID. Keeping it
+// constant across tests makes cross-test reasoning easier.
+const defaultBucketID int64 = 1
 
 // newDefaultStubBuckets returns a stubBuckets whose default is a
 // catch-all bucket — the shape christen() expects when there are no
 // dedicated buckets carved out yet.
 func newDefaultStubBuckets() *stubBuckets {
-	return &stubBuckets{bucket: &AppBucket{ID: "default", Apps: nil, Tier: "small"}}
+	return &stubBuckets{bucket: &AppBucket{ID: defaultBucketID, Label: "default", Apps: nil, Tier: "small"}}
 }
 
-func (s *stubBuckets) Default() *AppBucket { return s.bucket }
-func (s *stubBuckets) All() []*AppBucket {
-	if s.bucket == nil {
-		return nil
+func (s *stubBuckets) Default() (*AppBucket, error) { return s.bucket, nil }
+func (s *stubBuckets) ByID(id int64) (*AppBucket, error) {
+	if s.bucket != nil && s.bucket.ID == id {
+		return s.bucket, nil
 	}
-	return []*AppBucket{s.bucket}
+	return nil, nil
 }
-func (s *stubBuckets) EvaluateSplit(_ map[string]int64) string { return "" }
-func (s *stubBuckets) Split(_ string) *AppBucket               { return nil }
-func (s *stubBuckets) LoadFromStore(_ BucketStore) error       { return nil }
-func (s *stubBuckets) AddAppToBucket(id, app string) (*AppBucket, error) {
+func (s *stubBuckets) ByLabel(label string) (*AppBucket, error) {
+	if s.bucket != nil && s.bucket.Label == label {
+		return s.bucket, nil
+	}
+	return nil, nil
+}
+func (s *stubBuckets) All() ([]*AppBucket, error) {
+	if s.bucket == nil {
+		return nil, nil
+	}
+	return []*AppBucket{s.bucket}, nil
+}
+func (s *stubBuckets) EvaluateSplit(_ map[string]int64) (string, error) { return "", nil }
+func (s *stubBuckets) Split(_ string) (*AppBucket, error)               { return nil, nil }
+func (s *stubBuckets) SetStore(_ BucketStore)                           {}
+func (s *stubBuckets) AddAppToBucket(id int64, app string) (*AppBucket, error) {
 	if s.bucket == nil || s.bucket.ID != id {
 		return nil, nil
 	}
@@ -57,14 +151,14 @@ func TestOnboardApp_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 	// Two INGESTING shards in the default bucket.
 	reg.Add(&ShardEntry{
 		ID:       "ingest-1",
-		BucketID: "default",
+		BucketID: defaultBucketID,
 		State:    StateIngesting,
 		Apps:     []string{"weft"},
 		Shard:    &failingShard{id: "ingest-1"},
 	})
 	reg.Add(&ShardEntry{
 		ID:       "ingest-2",
-		BucketID: "default",
+		BucketID: defaultBucketID,
 		State:    StateIngesting,
 		Apps:     []string{"weft"},
 		Shard:    &failingShard{id: "ingest-2"},
@@ -72,21 +166,22 @@ func TestOnboardApp_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 	// A READ_ONLY shard in the same bucket — must NOT get the app.
 	reg.Add(&ShardEntry{
 		ID:       "readonly-1",
-		BucketID: "default",
+		BucketID: defaultBucketID,
 		State:    StateReadOnly,
 		Apps:     []string{"weft"},
 		Shard:    &failingShard{id: "readonly-1"},
 	})
 	// An INGESTING shard in a *different* bucket — also must NOT.
+	const dedicatedBucketID int64 = 2
 	reg.Add(&ShardEntry{
 		ID:       "other-bucket-ingest",
-		BucketID: "dedicated-vimgym",
+		BucketID: dedicatedBucketID,
 		State:    StateIngesting,
 		Apps:     []string{"vimgym"},
 		Shard:    &failingShard{id: "other-bucket-ingest"},
 	})
 
-	stub := &stubBuckets{bucket: &AppBucket{ID: "default", Apps: []string{"weft"}, Tier: "small"}}
+	stub := &stubBuckets{bucket: &AppBucket{ID: defaultBucketID, Label: "default", Apps: []string{"weft"}, Tier: "small"}}
 	prov := &Provisioner{
 		registry: reg,
 		Buckets:  stub,
@@ -97,7 +192,11 @@ func TestOnboardApp_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 	}
 
 	// Bucket now has both apps.
-	got := stub.Default().Apps
+	def, err := stub.Default()
+	if err != nil {
+		t.Fatalf("stub.Default: %v", err)
+	}
+	got := def.Apps
 	if len(got) != 2 || got[0] != "weft" || got[1] != "xylem" {
 		t.Errorf("default bucket apps: got %v, want [weft xylem]", got)
 	}
@@ -127,7 +226,8 @@ func TestOnboardApp_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 	if err := prov.OnboardApp("xylem"); err != nil {
 		t.Fatalf("OnboardApp (second): %v", err)
 	}
-	if got := stub.Default().Apps; len(got) != 2 {
+	def2, _ := stub.Default()
+	if got := def2.Apps; len(got) != 2 {
 		t.Errorf("second OnboardApp duplicated: %v", got)
 	}
 }
@@ -142,7 +242,9 @@ func containsApp(apps []string, want string) bool {
 }
 
 func TestBucketManager_EvaluateSplit(t *testing.T) {
-	bm := NewBucketManager([]string{"vimgym", "callbox", "grantcentral"})
+	fake := newFakeBucketStore()
+	fake.seedBucket("default", []string{"vimgym", "callbox", "grantcentral"})
+	bm := NewBucketManager(fake)
 
 	// No split when traffic is balanced.
 	stats := map[string]int64{
@@ -150,7 +252,11 @@ func TestBucketManager_EvaluateSplit(t *testing.T) {
 		"callbox":      100,
 		"grantcentral": 100,
 	}
-	if app := bm.EvaluateSplit(stats); app != "" {
+	app, err := bm.EvaluateSplit(stats)
+	if err != nil {
+		t.Fatalf("EvaluateSplit (balanced): %v", err)
+	}
+	if app != "" {
 		t.Fatalf("expected no split, got %s", app)
 	}
 
@@ -160,43 +266,69 @@ func TestBucketManager_EvaluateSplit(t *testing.T) {
 		"callbox":      150,
 		"grantcentral": 150,
 	}
-	if app := bm.EvaluateSplit(stats); app != "vimgym" {
+	app, err = bm.EvaluateSplit(stats)
+	if err != nil {
+		t.Fatalf("EvaluateSplit (dominated): %v", err)
+	}
+	if app != "vimgym" {
 		t.Fatalf("expected vimgym split, got %q", app)
 	}
 }
 
 func TestBucketManager_Split(t *testing.T) {
-	bm := NewBucketManager([]string{"vimgym", "callbox", "grantcentral"})
+	fake := newFakeBucketStore()
+	fake.seedBucket("default", []string{"vimgym", "callbox", "grantcentral"})
+	bm := NewBucketManager(fake)
 
-	bucket := bm.Split("vimgym")
+	bucket, err := bm.Split("vimgym")
+	if err != nil {
+		t.Fatalf("Split: %v", err)
+	}
 	if bucket == nil {
 		t.Fatal("expected new bucket")
 	}
 	if len(bucket.Apps) != 1 || bucket.Apps[0] != "vimgym" {
 		t.Fatalf("expected [vimgym], got %v", bucket.Apps)
 	}
-
-	// Shared bucket should have 2 remaining apps.
-	shared := bm.BucketFor("callbox")
-	if shared == nil {
-		t.Fatal("expected shared bucket for callbox")
-	}
-	if len(shared.Apps) != 2 {
-		t.Fatalf("expected 2 apps in shared, got %d", len(shared.Apps))
+	if bucket.Label != "dedicated-vimgym" {
+		t.Errorf("expected label dedicated-vimgym, got %q", bucket.Label)
 	}
 
-	// vimgym should be in the dedicated bucket.
-	vim := bm.BucketFor("vimgym")
-	if vim == nil || vim.ID != "dedicated-vimgym" {
-		t.Fatalf("expected dedicated-vimgym bucket, got %v", vim)
+	// Original bucket now has 2 apps.
+	def, err := bm.ByLabel("default")
+	if err != nil || def == nil {
+		t.Fatalf("ByLabel(default): %v / %v", def, err)
+	}
+	if len(def.Apps) != 2 {
+		t.Fatalf("expected 2 apps in default after split, got %v", def.Apps)
+	}
+	for _, a := range def.Apps {
+		if a == "vimgym" {
+			t.Errorf("vimgym still in default after split")
+		}
+	}
+
+	// The dedicated bucket is queryable by its label.
+	dedicated, err := bm.ByLabel("dedicated-vimgym")
+	if err != nil || dedicated == nil {
+		t.Fatalf("ByLabel(dedicated-vimgym): %v / %v", dedicated, err)
+	}
+	if dedicated.ID != bucket.ID {
+		t.Errorf("dedicated bucket id mismatch: %d vs %d", dedicated.ID, bucket.ID)
 	}
 }
 
 func TestBucketManager_NoDuplicateSplit(t *testing.T) {
-	bm := NewBucketManager([]string{"vimgym"})
+	fake := newFakeBucketStore()
+	fake.seedBucket("default", []string{"vimgym"})
+	bm := NewBucketManager(fake)
 
 	// Can't split a single-app bucket.
-	if app := bm.EvaluateSplit(map[string]int64{"vimgym": 1000}); app != "" {
+	app, err := bm.EvaluateSplit(map[string]int64{"vimgym": 1000})
+	if err != nil {
+		t.Fatalf("EvaluateSplit: %v", err)
+	}
+	if app != "" {
 		t.Fatalf("expected no split for single-app bucket, got %s", app)
 	}
 }
@@ -266,10 +398,12 @@ func TestProvisioner_ScalesUpToConfiguredCount(t *testing.T) {
 	t.Cleanup(func() { launcher.Close() })
 
 	prov := NewProvisioner(reg, launcher, ProvisionerConfig{})
-	bm := NewBucketManager([]string{"vimgym"})
-	// Bucket target lives on the AppBucket itself now.
-	bm.All()[0].Target = 3
-	prov.Buckets = bm
+	fake := newFakeBucketStore()
+	b := fake.seedBucket("default", []string{"vimgym"})
+	b.TargetIngestingCount = 3 // scale target lives on the row now
+	// Seed writes a fresh copy, so find-and-update via SaveBucket.
+	_ = fake.SaveBucket(b)
+	prov.Buckets = NewBucketManager(fake)
 
 	prov.check(context.Background())
 
@@ -307,7 +441,14 @@ func TestProvisioner_SplitCreatesNewShard(t *testing.T) {
 	config := ProvisionerConfig{}
 
 	prov := NewProvisioner(reg, launcher, config)
-	prov.Buckets = NewBucketManager([]string{"vimgym", "callbox", "grantcentral"})
+	fake := newFakeBucketStore()
+	// Target=1 so the sizing loop doesn't scale up (the existing
+	// shared shard meets the count); we're testing split-driven
+	// provisioning in isolation here.
+	b := fake.seedBucket("default", []string{"vimgym", "callbox", "grantcentral"})
+	b.TargetIngestingCount = 1
+	_ = fake.SaveBucket(b)
+	prov.Buckets = NewBucketManager(fake)
 
 	// Simulate vimgym dominating throughput.
 	prov.Stats().Record("vimgym", 700)

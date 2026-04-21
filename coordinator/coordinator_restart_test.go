@@ -20,6 +20,10 @@ func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
 	reg1 := NewShardRegistry()
 	provConfig := DevProvisionerConfig()
 	prov := NewProvisioner(reg1, launcher, provConfig)
+	// Bootstrap requires a default bucket.
+	fake := newFakeBucketStore()
+	fake.seedBucket("default", nil)
+	prov.Buckets = NewBucketManager(fake)
 
 	ctx := context.Background()
 	prov.Start(ctx)

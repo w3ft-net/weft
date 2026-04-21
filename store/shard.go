@@ -31,11 +31,11 @@ type ShardRecord struct {
 	// handler accepts them during the transition window and logs a
 	// warning so the fleet can roll naturally.
 	HeartbeatToken string
-	// BucketID references buckets.id (FK added in migration 020). Every
-	// shard belongs to exactly one bucket; the day-1 default bucket
-	// covers all catch-all shards. christen() assigns this from the
-	// provisioner's BucketManager.
-	BucketID string `gorm:"not null;default:default;column:bucket_id"`
+	// BucketID references buckets.id (surrogate bigint since
+	// migration 022). Every shard belongs to exactly one bucket;
+	// christen() resolves the target bucket's surrogate via the
+	// BucketManager and stamps the int here.
+	BucketID int64 `gorm:"not null;column:bucket_id"`
 }
 
 // GenerateShardHeartbeatToken mints a fresh 256-bit random bearer token

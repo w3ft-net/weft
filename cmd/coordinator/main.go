@@ -170,9 +170,9 @@ func main() {
 
 			if db != nil {
 				prov.SetStore(db)
-				if err := prov.Buckets.LoadFromStore(db); err != nil {
-					log.Printf("warning: bucket hydration failed: %v", err)
-				}
+				// No-cache: SetStore on the bucket manager is all
+				// that's needed; every lookup hits the DB.
+				prov.Buckets.SetStore(db)
 			}
 
 			prov.Start(provCtx)
@@ -214,9 +214,7 @@ func main() {
 
 		if db != nil {
 			prov.SetStore(db)
-			if err := prov.Buckets.LoadFromStore(db); err != nil {
-				log.Printf("warning: bucket hydration failed: %v", err)
-			}
+			prov.Buckets.SetStore(db)
 		}
 
 		prov.Start(provCtx)

@@ -353,9 +353,12 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 		return nil
 	}
 
-	bucket := p.Buckets.Default()
+	bucket, err := p.Buckets.Default()
+	if err != nil {
+		return fmt.Errorf("christen %s: lookup default bucket: %w", hb.Addr, err)
+	}
 	if bucket == nil {
-		return fmt.Errorf("christen %s: no default bucket loaded — has BucketManager.LoadFromStore been called?", hb.Addr)
+		return fmt.Errorf("christen %s: no default bucket — has migration 020+022 run?", hb.Addr)
 	}
 
 	now := time.Now().UTC()
@@ -435,8 +438,8 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 		Tier:           bucket.Tier,
 		BucketID:       bucket.ID,
 	})
-	log.Printf("provisioner: christened %s at %s (bucket=%s window %s–%s volume=%s)",
-		shardID, hb.Addr, bucket.ID, windowStart.Format(time.RFC3339), windowEnd.Format(time.RFC3339), volumeID)
+	log.Printf("provisioner: christened %s at %s (bucket=%s(%d) window %s–%s volume=%s)",
+		shardID, hb.Addr, bucket.Label, bucket.ID, windowStart.Format(time.RFC3339), windowEnd.Format(time.RFC3339), volumeID)
 	return nil
 }
 
@@ -573,23 +576,29 @@ func (p *Provisioner) bootstrap(ctx context.Context) {
 	// Local launcher: configure immediately. Align the bootstrap
 	// shard's window to the bucket's WindowDuration boundary so
 	// check()'s wall-clock rotation fires on the same schedule as
-	// christened shards. Bind to the default bucket if one exists
-	// (in tests without a hydrated BucketManager, the entry's
-	// BucketID stays empty and persist() defaults it to "default").
-	var bucketID, tier string
-	var apps []string
-	var bucket *AppBucket
-	if p.Buckets != nil {
-		if b := p.Buckets.Default(); b != nil {
-			bucket = b
-			bucketID = b.ID
-			tier = b.Tier
-			apps = append([]string(nil), b.Apps...)
-		}
+	// christened shards. Bootstrap needs the default bucket — bail
+	// loudly if it's missing rather than silently degrading to a
+	// shard with no bucket_id (which would fail the NOT NULL FK at
+	// persist time anyway).
+	if p.Buckets == nil {
+		log.Printf("provisioner: bootstrap failed: no BucketManager configured")
+		return
 	}
+	bucket, err := p.Buckets.Default()
+	if err != nil {
+		log.Printf("provisioner: bootstrap failed: lookup default bucket: %v", err)
+		return
+	}
+	if bucket == nil {
+		log.Printf("provisioner: bootstrap failed: no default bucket")
+		return
+	}
+
+	tier := bucket.Tier
 	if tier == "" {
 		tier = "small"
 	}
+	apps := append([]string(nil), bucket.Apps...)
 
 	now := time.Now().UTC()
 	windowStart, windowEnd := p.currentWindow(bucket, now)
@@ -600,12 +609,12 @@ func (p *Provisioner) bootstrap(ctx context.Context) {
 		log.Printf("provisioner: bootstrap failed: %v", err)
 		return
 	}
-	entry.BucketID = bucketID
+	entry.BucketID = bucket.ID
 	entry.Tier = tier
 
 	p.registry.Add(entry)
-	log.Printf("provisioner: bootstrapped shard %s (bucket=%s %s to %s)",
-		shardID, bucketID, now.Format(time.RFC3339), windowEnd.Format(time.RFC3339))
+	log.Printf("provisioner: bootstrapped shard %s (bucket=%s(%d) %s to %s)",
+		shardID, bucket.Label, bucket.ID, now.Format(time.RFC3339), windowEnd.Format(time.RFC3339))
 }
 
 // launchAndConfigure is the shared lifecycle logic: launch instance,
@@ -682,14 +691,17 @@ func (p *Provisioner) OnboardApp(app string) error {
 	if p.Buckets == nil {
 		return nil
 	}
-	bucket := p.Buckets.Default()
+	bucket, err := p.Buckets.Default()
+	if err != nil {
+		return fmt.Errorf("OnboardApp(%s): lookup default: %w", app, err)
+	}
 	if bucket == nil {
-		log.Printf("provisioner: OnboardApp(%s): no default bucket loaded — skipping", app)
+		log.Printf("provisioner: OnboardApp(%s): no default bucket — skipping", app)
 		return nil
 	}
 	updated, err := p.Buckets.AddAppToBucket(bucket.ID, app)
 	if err != nil {
-		return fmt.Errorf("add %q to bucket %s: %w", app, bucket.ID, err)
+		return fmt.Errorf("add %q to bucket %d: %w", app, bucket.ID, err)
 	}
 	if updated == nil {
 		return nil
@@ -734,9 +746,14 @@ func (p *Provisioner) check(ctx context.Context) {
 	// Evaluate bucket splits based on ingestion stats.
 	if p.Buckets != nil {
 		snapshot := p.stats.Snapshot()
-		if app := p.Buckets.EvaluateSplit(snapshot); app != "" {
-			if bucket := p.Buckets.Split(app); bucket != nil {
-				// Provision a dedicated shard for the split-out app.
+		app, err := p.Buckets.EvaluateSplit(snapshot)
+		if err != nil {
+			log.Printf("provisioner: EvaluateSplit: %v", err)
+		} else if app != "" {
+			bucket, err := p.Buckets.Split(app)
+			if err != nil {
+				log.Printf("provisioner: Split(%s): %v", app, err)
+			} else if bucket != nil {
 				log.Printf("provisioner: splitting %s into dedicated shard", app)
 				p.provisionForBucket(ctx, bucket)
 			}
@@ -747,7 +764,12 @@ func (p *Provisioner) check(ctx context.Context) {
 	// comes from the bucket's persisted record (DB-backed since
 	// migration 020) rather than a per-coordinator config knob.
 	if p.Buckets != nil {
-		for _, bucket := range p.Buckets.All() {
+		all, err := p.Buckets.All()
+		if err != nil {
+			log.Printf("provisioner: Buckets.All: %v", err)
+			all = nil
+		}
+		for _, bucket := range all {
 			if bucket.Target <= 0 {
 				continue
 			}
@@ -763,7 +785,7 @@ func (p *Provisioner) check(ctx context.Context) {
 			}
 			current := p.registry.IngestingCount(probeApp)
 			for current < bucket.Target {
-				log.Printf("provisioner: scaling up bucket %s (%d/%d ingesting shards)",
+				log.Printf("provisioner: scaling up bucket %d (%d/%d ingesting shards)",
 					bucket.ID, current, bucket.Target)
 				p.provisionForBucket(ctx, bucket)
 				current++
@@ -801,9 +823,13 @@ func (p *Provisioner) check(ctx context.Context) {
 	// entry's bucket, then fall back to config for legacy/bare
 	// entries that haven't been rebound to a bucket yet.
 	if p.config.ParquetDir != "" {
-		bucketByID := make(map[string]*AppBucket)
+		bucketByID := make(map[int64]*AppBucket)
 		if p.Buckets != nil {
-			for _, b := range p.Buckets.All() {
+			all, err := p.Buckets.All()
+			if err != nil {
+				log.Printf("provisioner: archive lookup Buckets.All: %v", err)
+			}
+			for _, b := range all {
 				bucketByID[b.ID] = b
 			}
 		}
@@ -945,9 +971,9 @@ func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket)
 	}
 
 	if _, isASG := p.launcher.(*ASGLauncher); isASG {
-		log.Printf("provisioner: launching shard for bucket %s via ASG (tier=%s)", bucket.ID, tier)
+		log.Printf("provisioner: launching shard for bucket %d via ASG (tier=%s)", bucket.ID, tier)
 		if _, err := p.launcher.LaunchInstance(ctx, tier); err != nil {
-			log.Printf("provisioner: failed to launch shard for bucket %s: %v", bucket.ID, err)
+			log.Printf("provisioner: failed to launch shard for bucket %d: %v", bucket.ID, err)
 		}
 		return
 	}
@@ -963,14 +989,14 @@ func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket)
 
 	entry, err := p.launchAndConfigure(ctx, id, tier, bucket.Apps, windowStart, windowEnd)
 	if err != nil {
-		log.Printf("provisioner: failed to launch shard for bucket %s: %v", bucket.ID, err)
+		log.Printf("provisioner: failed to launch shard for bucket %d: %v", bucket.ID, err)
 		return
 	}
 	entry.BucketID = bucket.ID
 	entry.Tier = tier
 
 	p.registry.Add(entry)
-	log.Printf("provisioner: shard %s launched for bucket %s", id, bucket.ID)
+	log.Printf("provisioner: shard %s launched for bucket %d", id, bucket.ID)
 }
 
 func joinApps(apps []string) string {
