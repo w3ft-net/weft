@@ -246,18 +246,6 @@ func main() {
 			}
 		}
 
-		// Assign known apps to all shards so queries route correctly.
-		var allApps []string
-		if appNames, err := db.AllAppNames(); err == nil {
-			allApps = appNames
-		}
-		if len(allApps) > 0 {
-			for _, entry := range coord.Registry.Entries() {
-				entry.Apps = allApps
-			}
-			log.Printf("coordinator: assigned apps %v to %d shards", allApps, coord.Registry.Count())
-		}
-
 		// Restore archived shards from the registry.
 		coord.Registry.SetStore(db)
 		s3cfg := shard.S3ConfigFromEnv()

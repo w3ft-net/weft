@@ -354,24 +354,19 @@ Both were test drift rather than code bugs:
 
 ## 11. Remaining gaps from `docs/shard-lifecycle.md`
 
-The original gap inventory in shard-lifecycle.md. Current status:
+Only one open item from the original gap inventory remains; the
+rest fold into §1–§5 above and are closed.
 
-| # | Gap | Status |
-|---|---|---|
-| 1 | Durable shard identity on EBS | done (christen writes shard.json via Configure RPC) |
-| 2 | Coordinator christening path | done — now LAUNCHING-row promotion in `ProcessHeartbeat.christen` |
-| 3 | Rotation on wall-clock windows | done — `RotateToReadOnlyOp` flips INGESTING → READ_ONLY on window-end; §5's `PrewarmNextWindowOp` brings up next-window shards ahead of the boundary; §3's tier-sync right-sizes the ASG automatically. |
-| 4 | EBS per-shard attach/detach | partial — lifecycle hook claims LAUNCHING rows and tags volumes with real shard ids; recovery branch exists |
-| 5 | Failure-recovery branch | partial — `reapDeadShards` preserves rows with `ebs_volume_id`; rebind path works. §4's op reclaims ARCHIVED instances; the failure-recovery variant (terminate a dead instance with `ShouldDecrementDesiredCapacity=false` so ASG replaces it) still needs wiring. |
-| 6 | Archive scheduling on retention | done (check's retention branch) |
-| 7 | Registry ↔ store consistency | done (persist on every transition; FK ensures referential integrity) |
-| 8 | Clean up `shard_records` cruft | done via migration 019 |
-| 9 | `apps` populated at christening | done — bucket read is authoritative; LAUNCHING row's snapshot is for observability only |
-
-Gaps #3, #4, #5 fold into the reconciler work (§1, §5, §4
-respectively). Once those land, the shard-lifecycle doc's "Gap
-analysis" section can be removed — the doc becomes a statement of
-architecture rather than a work-in-progress inventory.
+- **Gap #5 (failure-recovery variant).** Today `reapDeadShards`
+  preserves rows with a set `ebs_volume_id` so a rebind can pick
+  them up; rebind itself works; §4's op reclaims ARCHIVED
+  instances. What's still missing: the coordinator-driven
+  "explicit kill the dead instance so ASG spins a replacement"
+  path — `TerminateInstanceInAutoScalingGroup` with
+  `ShouldDecrementDesiredCapacity=false`. Without it we lean on
+  the ASG's own health checks to notice a dead instance, which
+  is slower and less reliable than doing it ourselves. ~50
+  lines in `reapDeadShards` once we decide the trigger condition.
 
 ## Minor observability and ergonomics
 
@@ -392,12 +387,6 @@ Small but worth flagging:
   shards)`. No metric, no alert. A heartbeat-like periodic summary
   ("N rows DLQ'd in the last minute") would be visible in ops
   consoles.
-
-- **`assigned apps ... 0 shards` log.** `cmd/coordinator/main.go:274`
-  still runs, still logs, still does nothing because the registry is
-  empty at that point. The "assign apps to all shards" code block
-  pre-dates the bucket model and should be deleted — app assignment
-  now flows through christen + OnboardApp.
 
 - **`BucketManager.EvaluateSplit` threshold is not configurable.**
   Hard-coded 0.6 on the struct field. Fine for now; flag if an
