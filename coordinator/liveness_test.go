@@ -445,10 +445,13 @@ func TestReap_TerminatesInstanceViaLauncher(t *testing.T) {
 	}
 }
 
-// recordingLauncher captures TerminateInstance calls for assertions.
-// Satisfies ShardLauncher; LaunchInstance is a no-op.
+// recordingLauncher captures TerminateInstance / TerminateForReplacement
+// calls for assertions. Satisfies ShardLauncher and
+// RecoveryTerminator; LaunchInstance is a no-op.
 type recordingLauncher struct {
-	terminated []string
+	terminated            []string // addr passed to TerminateInstance (ASG decrement semantics)
+	terminatedForReplace  []string // instance id passed to TerminateForReplacement (ASG replace semantics)
+	replacementErr        error
 }
 
 func (r *recordingLauncher) LaunchInstance(_ context.Context, _ string) (string, error) {
@@ -458,6 +461,11 @@ func (r *recordingLauncher) LaunchInstance(_ context.Context, _ string) (string,
 func (r *recordingLauncher) TerminateInstance(_ context.Context, _, addr string) error {
 	r.terminated = append(r.terminated, addr)
 	return nil
+}
+
+func (r *recordingLauncher) TerminateForReplacement(_ context.Context, instanceID string) error {
+	r.terminatedForReplace = append(r.terminatedForReplace, instanceID)
+	return r.replacementErr
 }
 
 func TestReap_SkipsWhenNoHeartbeats(t *testing.T) {

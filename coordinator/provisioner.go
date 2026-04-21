@@ -674,16 +674,41 @@ func (p *Provisioner) reapDeadShards() {
 		}
 
 		// Failure-recovery branch: if the shard has a bound EBS
-		// volume, its data outlives the instance. The ASG's
-		// health-check replaces the instance; the lifecycle hook
-		// reattaches the volume to the replacement; the replacement
-		// heartbeats with the same shard id and the rebind arm of
-		// adoptFromHeartbeats rewires the registry entry. We must
-		// preserve the registry entry through the stale-heartbeat
-		// window so rebind has something to update.
+		// volume, its data outlives the instance. Coordinator's
+		// explicit play:
+		//   1. Preserve the registry entry — rebind needs it to
+		//      find the shard post-replacement.
+		//   2. Ask the ASG to terminate the dead instance and
+		//      launch a replacement (ShouldDecrementDesiredCapacity
+		//      = false). The lifecycle hook reattaches the volume
+		//      to the replacement; the replacement heartbeats with
+		//      the same shard id; the rebind arm of
+		//      adoptFromHeartbeats rewires the entry.
+		//   3. Null entry.InstanceID so the terminate doesn't
+		//      re-fire next tick (the 1–3 minute replacement
+		//      window spans multiple ticks). Rebind restores it
+		//      from the replacement's heartbeat.
 		if entry.EBSVolumeID != "" {
-			log.Printf("provisioner: shard %s stale heartbeat — preserving for ASG-driven recovery (vol=%s)",
-				entry.ID, entry.EBSVolumeID)
+			if entry.InstanceID != "" {
+				if rt, ok := p.launcher.(RecoveryTerminator); ok {
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					err := rt.TerminateForReplacement(ctx, entry.InstanceID)
+					cancel()
+					if err != nil {
+						log.Printf("provisioner: TerminateForReplacement(%s): %v — will retry next tick",
+							entry.InstanceID, err)
+					} else {
+						log.Printf("provisioner: shard %s stale heartbeat — asked ASG to replace instance %s (vol=%s preserved)",
+							entry.ID, entry.InstanceID, entry.EBSVolumeID)
+						entry.InstanceID = ""
+						entry.Addr = ""
+						p.registry.PersistState(entry)
+					}
+				} else {
+					log.Printf("provisioner: shard %s stale heartbeat — launcher has no RecoveryTerminator; falling back to ASG health-check",
+						entry.ID)
+				}
+			}
 			continue
 		}
 

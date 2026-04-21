@@ -114,6 +114,36 @@ func (l *ASGLauncher) TierMaxSize(ctx context.Context, tier string) (int32, erro
 	return *g.MaxSize, nil
 }
 
+// TerminateForReplacement asks the ASG to terminate a dead instance
+// WITHOUT decrementing desired_capacity — the ASG then launches a
+// replacement, which picks up the shard's EBS volume via the
+// lifecycle hook's RECOVER path. Distinct from TerminateInstance
+// (which decrements) because the semantics are opposite: here we
+// want ASG to keep capacity constant and swap instances; there we
+// want ASG to shrink.
+func (l *ASGLauncher) TerminateForReplacement(ctx context.Context, instanceID string) error {
+	if instanceID == "" {
+		return fmt.Errorf("TerminateForReplacement: instance id required")
+	}
+	shouldDecrement := false
+	log.Printf("asg-launcher: requesting replacement of dead instance %s", instanceID)
+	_, err := l.asgClient.TerminateInstanceInAutoScalingGroup(ctx,
+		&autoscaling.TerminateInstanceInAutoScalingGroupInput{
+			InstanceId:                     &instanceID,
+			ShouldDecrementDesiredCapacity: &shouldDecrement,
+		})
+	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "not found") ||
+			strings.Contains(msg, "no longer exists") ||
+			strings.Contains(msg, "InvalidInstanceID") {
+			log.Printf("asg-launcher: instance %s already gone, ignoring: %v", instanceID, err)
+			return nil
+		}
+	}
+	return err
+}
+
 // TerminateInstance terminates a specific EC2 instance in its ASG
 // and decrements desired_capacity. The id must be provided — post-§3
 // there's no addr→id tracking; callers read InstanceID from

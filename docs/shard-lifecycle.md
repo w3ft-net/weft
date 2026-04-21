@@ -334,11 +334,12 @@ Pre-existing constraints:
   `autoscaling:SetDesiredCapacity`,
   `autoscaling:DescribeAutoScalingGroups`.
 
-**Still partial:** the coordinator-driven recovery variant where
-we explicitly call `TerminateInstanceInAutoScalingGroup(
-ShouldDecrementDesiredCapacity=false)` to trigger ASG replacement
-doesn't exist — today we rely on ASG's own health checks. See
-`cleanup.md` §11 gap #5.
+Step 4 is coordinator-driven: when `reapDeadShards` sees a stale
+heartbeat on an EBS-backed shard, it calls
+`ASGLauncher.TerminateForReplacement` (which passes
+`ShouldDecrementDesiredCapacity=false`) and nulls the entry's
+`InstanceID`. That's faster than waiting for ASG's own health
+check and keeps the ASG's actual count stable.
 
 ## Archiving and cold storage
 

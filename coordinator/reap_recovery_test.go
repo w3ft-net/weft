@@ -7,14 +7,15 @@ import (
 	"github.com/kevlarcon/weft/store"
 )
 
-// A shard with a bound EBS volume must NOT be reaped when its
-// heartbeat goes stale. The ASG health-check replaces the dead
-// instance, the lifecycle hook reattaches the EBS volume to the
-// replacement, and the replacement heartbeats with the same shard
-// id — which the rebind path in adoptFromHeartbeats handles.
-// Removing the registry entry on stale heartbeat would break that:
-// rebind can't find the entry and the replacement comes up as a
-// brand-new adoption with no window/apps metadata.
+// A shard with a bound EBS volume must NOT be reaped from the
+// registry when its heartbeat goes stale — rebind needs the entry
+// to persist across the heartbeat gap. The dead instance, however,
+// IS explicitly terminated via TerminateForReplacement (with
+// ShouldDecrementDesiredCapacity=false) so the ASG launches a
+// replacement immediately rather than waiting for its own
+// health check. InstanceID gets nulled on the entry after the
+// terminate call so the op doesn't re-fire every tick; rebind
+// will restore it from the replacement's heartbeat.
 func TestReap_PreservesHotShardWithVolume(t *testing.T) {
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
@@ -23,7 +24,9 @@ func TestReap_PreservesHotShardWithVolume(t *testing.T) {
 		Addr:        "10.0.0.10:9000",
 		InstanceID:  "i-dying",
 		EBSVolumeID: "vol-live-data",
-		CreatedAt:   time.Now(),
+		// Past the grace period so we actually hit the
+		// recovery-terminate branch.
+		CreatedAt: time.Now().Add(-10 * time.Minute),
 	})
 
 	// Heartbeat store: shard-with-ebs has no recent heartbeat.
@@ -47,12 +50,65 @@ func TestReap_PreservesHotShardWithVolume(t *testing.T) {
 		t.Fatal("shard-with-ebs was reaped despite having a bound EBS volume")
 	}
 
-	// Launcher must NOT be asked to terminate — ASG health check
-	// handles the instance replacement, and a manual terminate from
-	// the coordinator would race the ASG.
+	// Coordinator explicitly asked ASG to replace the dead instance.
+	if len(launcher.terminatedForReplace) != 1 || launcher.terminatedForReplace[0] != "i-dying" {
+		t.Errorf("want 1 TerminateForReplacement call for i-dying, got %v",
+			launcher.terminatedForReplace)
+	}
+	// Decrement-semantics TerminateInstance (for archive) must NOT
+	// fire — that'd tell the ASG to shrink, which would lose us a
+	// recovery slot.
 	if len(launcher.terminated) != 0 {
-		t.Errorf("expected no TerminateInstance calls for EBS-backed shard, got %v",
+		t.Errorf("TerminateInstance (decrement) must not fire on recovery path, got %v",
 			launcher.terminated)
+	}
+
+	// InstanceID nulled so next tick doesn't re-fire the terminate.
+	if got.InstanceID != "" {
+		t.Errorf("InstanceID: got %q, want empty (nulled post-terminate)", got.InstanceID)
+	}
+	// EBSVolumeID preserved so rebind can find the volume.
+	if got.EBSVolumeID != "vol-live-data" {
+		t.Errorf("EBSVolumeID: got %q, want vol-live-data (must survive for rebind)", got.EBSVolumeID)
+	}
+}
+
+// Idempotency: once the terminate request has been issued and
+// InstanceID is nulled, subsequent reapDeadShards ticks during the
+// recovery window (until the replacement heartbeats) must not
+// re-fire the terminate. This prevents a storm of terminate calls
+// across the 1-3 minute replacement interval.
+func TestReap_DoesNotRetryTerminateOnceInstanceIDNulled(t *testing.T) {
+	reg := NewShardRegistry()
+	reg.Add(&ShardEntry{
+		ID:          "shard-mid-recovery",
+		State:       StateIngesting,
+		Addr:        "10.0.0.10:9000",
+		InstanceID:  "", // already nulled by a prior tick's terminate
+		EBSVolumeID: "vol-live-data",
+		CreatedAt:   time.Now().Add(-10 * time.Minute),
+	})
+
+	mockStore := &mockHeartbeatStore{
+		heartbeats: []store.ShardHeartbeat{
+			{ShardID: "other-live", Addr: "10.0.0.1:9000", State: "INGESTING"},
+		},
+	}
+
+	launcher := &recordingLauncher{}
+	prov := &Provisioner{
+		registry: reg,
+		launcher: launcher,
+		config:   ProvisionerConfig{Store: mockStore},
+	}
+	prov.reapDeadShards()
+
+	if len(launcher.terminatedForReplace) != 0 {
+		t.Errorf("entry with empty InstanceID must not re-fire terminate; got %v",
+			launcher.terminatedForReplace)
+	}
+	if reg.Get("shard-mid-recovery") == nil {
+		t.Error("entry must stay in registry during recovery window")
 	}
 }
 

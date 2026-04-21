@@ -13,13 +13,17 @@ import (
 // ── Mock ASG client ──────────────────────────────────────────
 
 type mockASG struct {
-	lastSetDesired   *int32
-	lastSetASGName   string
-	setCapErr        error
-	maxSize          int32
-	describeErr      error
-	terminateErr     error
-	terminated       []string // instance IDs passed to TerminateInstanceInAutoScalingGroup
+	lastSetDesired *int32
+	lastSetASGName string
+	setCapErr      error
+	maxSize        int32
+	describeErr    error
+	terminateErr   error
+	terminated     []string // instance IDs passed to TerminateInstanceInAutoScalingGroup
+	// Last ShouldDecrementDesiredCapacity flag seen. Lets tests
+	// distinguish the §4 "decrement" call from the recovery-replace
+	// call with one scalar field.
+	lastTerminateDecrement bool
 }
 
 func (m *mockASG) SetDesiredCapacity(_ context.Context, in *autoscaling.SetDesiredCapacityInput, _ ...func(*autoscaling.Options)) (*autoscaling.SetDesiredCapacityOutput, error) {
@@ -56,8 +60,13 @@ func (m *mockASG) DescribeAutoScalingGroups(_ context.Context, input *autoscalin
 }
 
 func (m *mockASG) TerminateInstanceInAutoScalingGroup(_ context.Context, input *autoscaling.TerminateInstanceInAutoScalingGroupInput, _ ...func(*autoscaling.Options)) (*autoscaling.TerminateInstanceInAutoScalingGroupOutput, error) {
-	if input != nil && input.InstanceId != nil {
-		m.terminated = append(m.terminated, *input.InstanceId)
+	if input != nil {
+		if input.InstanceId != nil {
+			m.terminated = append(m.terminated, *input.InstanceId)
+		}
+		if input.ShouldDecrementDesiredCapacity != nil {
+			m.lastTerminateDecrement = *input.ShouldDecrementDesiredCapacity
+		}
 	}
 	return nil, m.terminateErr
 }
@@ -156,6 +165,31 @@ func TestASGLauncher_Terminate_AdoptedByID(t *testing.T) {
 	}
 	if asg.terminated[0] != "i-adopted-01" {
 		t.Errorf("expected TerminateInstanceInAutoScalingGroup(i-adopted-01), got %s", asg.terminated[0])
+	}
+}
+
+// TerminateForReplacement must pass ShouldDecrementDesiredCapacity=false
+// so the ASG launches a replacement rather than shrinking. Opposite
+// of TerminateInstance's semantics.
+func TestASGLauncher_TerminateForReplacement_KeepsDesiredCapacity(t *testing.T) {
+	asg := &mockASG{}
+	launcher := NewASGLauncherWithClients(asg, &mockEC2{}, map[string]string{"small": "my-asg"}, 9000)
+
+	if err := launcher.TerminateForReplacement(context.Background(), "i-dead"); err != nil {
+		t.Fatalf("TerminateForReplacement: %v", err)
+	}
+	if len(asg.terminated) != 1 || asg.terminated[0] != "i-dead" {
+		t.Errorf("terminated: got %v, want [i-dead]", asg.terminated)
+	}
+	if asg.lastTerminateDecrement {
+		t.Error("ShouldDecrementDesiredCapacity must be false for replacement-semantics terminate")
+	}
+}
+
+func TestASGLauncher_TerminateForReplacement_RequiresInstanceID(t *testing.T) {
+	launcher := NewASGLauncherWithClients(&mockASG{}, &mockEC2{}, map[string]string{"small": "my-asg"}, 9000)
+	if err := launcher.TerminateForReplacement(context.Background(), ""); err == nil {
+		t.Fatal("expected error for empty instance id")
 	}
 }
 

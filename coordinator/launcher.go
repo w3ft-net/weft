@@ -44,6 +44,19 @@ type TierScaler interface {
 	TierMaxSize(ctx context.Context, tier string) (int32, error)
 }
 
+// RecoveryTerminator is the optional extension async launchers
+// implement so the coordinator can explicitly terminate a dead
+// instance while keeping the ASG's desired_capacity the same,
+// prompting the ASG to launch a replacement. This is the
+// failure-recovery counterpart to TerminateInstance (which uses
+// ShouldDecrementDesiredCapacity=true, for archive-then-reclaim).
+// Called from reapDeadShards when a shard's heartbeat is stale
+// AND it has a bound EBS volume — the data survives on the
+// volume, the instance doesn't.
+type RecoveryTerminator interface {
+	TerminateForReplacement(ctx context.Context, instanceID string) error
+}
+
 // isLaunchingLauncher reports whether this launcher participates in
 // the LAUNCHING-row handoff. Used by the reconciler to pick between
 // the INSERT-then-call-ASG path and the synchronous

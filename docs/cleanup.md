@@ -352,21 +352,17 @@ Both were test drift rather than code bugs:
 
 **Size.** Each is small (tens of lines) once investigated.
 
-## 11. Remaining gaps from `docs/shard-lifecycle.md`
+## 11. Remaining gaps from `docs/shard-lifecycle.md` — done
 
-Only one open item from the original gap inventory remains; the
-rest fold into §1–§5 above and are closed.
-
-- **Gap #5 (failure-recovery variant).** Today `reapDeadShards`
-  preserves rows with a set `ebs_volume_id` so a rebind can pick
-  them up; rebind itself works; §4's op reclaims ARCHIVED
-  instances. What's still missing: the coordinator-driven
-  "explicit kill the dead instance so ASG spins a replacement"
-  path — `TerminateInstanceInAutoScalingGroup` with
-  `ShouldDecrementDesiredCapacity=false`. Without it we lean on
-  the ASG's own health checks to notice a dead instance, which
-  is slower and less reliable than doing it ourselves. ~50
-  lines in `reapDeadShards` once we decide the trigger condition.
+All 9 original gaps from the shard-lifecycle doc's inventory are
+closed. The failure-recovery-terminate variant (gap #5) landed as
+`RecoveryTerminator.TerminateForReplacement` on `ASGLauncher`,
+called from `reapDeadShards`'s EBS-backed branch: stale heartbeat
++ bound volume → coordinator asks ASG to replace with
+`ShouldDecrementDesiredCapacity=false` and nulls the entry's
+`InstanceID` so the terminate doesn't re-fire during the 1-3
+minute replacement window. Rebind restores the `InstanceID` from
+the replacement's heartbeat.
 
 ## Minor observability and ergonomics
 
