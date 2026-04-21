@@ -259,30 +259,31 @@ None feel urgent; first option is the cheap status-quo.
 
 **Size.** Small (options 2 or 3 each ~30 lines). Depends on nothing.
 
-## 7. Lifecycle hook consultation of reconciler intent
+## 7. Lifecycle hook consultation of reconciler intent — won't do
 
-**Today.** `LifecycleHandler.decide()` picks christen vs recover vs
-abandon purely on orphan-volume existence (`lifecycle.go:151`). It
-has no knowledge of whether the reconciler *asked* for this instance
-to be a new shard (christen) or is getting an unprompted ASG
-auto-replacement (recover, if a volume exists).
+**Status.** Analysed and discarded. The proposal was: if both a
+pending LAUNCHING row AND an orphan recoverable volume exist for
+the tier+AZ, prefer the LAUNCHING row (CHRISTEN) so the
+reconciler's intent wins. In practice that inverts the priority
+order we actually want:
 
-**Target.** Hook consults the LAUNCHING-row table (from §2):
+1. **Durability wins.** An orphan volume tagged with a recognised
+   shard_id carries a living shard's data. Letting it go unattached
+   (while we christen fresh) strands the data; any subsequent
+   cleanup — a manual `aws ec2 delete-volume`, cost-reaper,
+   anything — destroys it silently.
+2. **Reconciler intent is self-healing.** If a LAUNCHING row gets
+   pre-empted by recovery of an unrelated shard, the row stays
+   unclaimed. Next tick's `syncASGDesiredCapacity` still sees it
+   (via `CountShardsInBucketForFutureWindows` + target math), the
+   ASG launches another instance, and the LAUNCHING row gets
+   claimed on that one. The cost is one tick of latency, not data.
 
-```go
-if pending := h.findPendingLaunchForTier(tier, az); pending != nil {
-    // Reconciler is waiting on us. Stamp instance_id, christen path.
-    return DecisionChristen, ...
-}
-// No intent — check for orphan volume, fall back to abandon.
-```
-
-Without this, the reconciler's "I want +1 fresh shard" can lose to
-the hook's "orphan volume exists, let's recover" if an old
-recoverable volume happens to be in the same AZ. We'd get an old
-shard back when we wanted a new one.
-
-**Size.** Small (~50 lines in `lifecycle.go`). Depends on §2.
+Post-§2 the hook already does the safe thing: RECOVER when a
+recognised orphan volume exists, CHRISTEN-via-LAUNCHING when it
+doesn't, ABANDON when ambiguous or when neither a row nor a
+volume matches. The priority comment + observability log added
+in this session make the policy explicit at the decide() site.
 
 ## 8. Runtime config reload
 
@@ -424,8 +425,9 @@ Work in progress — checked items are landed:
   is a package var; per-bucket policy lives in
   `AppBucket.ShouldPrewarmNextWindow` for future swap-in of
   burn-rate-based strategies.
-- [ ] **§7 (lifecycle hook intent)** — can land anywhere after §2;
-  defensible as its own PR.
+- [x] **§7 (lifecycle hook intent)** — won't do. Priority analysis
+  in §7's own section; inverting current RECOVER-first logic would
+  strand orphan-volume data.
 
 §8 (reload-config), §9 (env prefix cleanup), §10 (test failures), §11
 doc revisions are all independent small PRs that can interleave.

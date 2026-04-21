@@ -151,6 +151,23 @@ func (h *LifecycleHandler) HandleLaunchEvent(ctx context.Context, ev LifecycleEv
 // decide runs the christen-vs-recover-vs-abandon tree. Returns the
 // volume id we committed to (created or found) so the caller can
 // attach it.
+//
+// Priority order, by design:
+//  1. Durability: a recoverable orphan volume (exactly one, tagged
+//     with a shard_id we recognise as dead) always wins. Its data
+//     needs to come back online; any alternative strands it.
+//  2. Reconciler intent: with no recoverable volume, claim a
+//     pending LAUNCHING row and christen.
+//  3. Abandon: ambiguous recovery or no pending row for a
+//     christen. ASG terminates the instance.
+//
+// The subtle case is "pending LAUNCHING row AND orphan volume."
+// We choose RECOVER — the reconciler's LAUNCHING row stays
+// unclaimed, which is benign (next tick's syncASGDesiredCapacity
+// sees the still-pending row and brings up another instance for it).
+// Inverting this (preferring the LAUNCHING row) would let the
+// orphan volume sit unattached and eventually get reaped or
+// deleted, destroying the shard's data. See cleanup.md §7.
 func (h *LifecycleHandler) decide(ctx context.Context, instanceID, tier, az string) (LifecycleDecision, string, error) {
 	candidates, err := h.volumes.ListAvailableByTier(ctx, tier, az)
 	if err != nil {

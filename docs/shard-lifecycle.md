@@ -52,33 +52,27 @@ lifecycle**. A shard can outlive many instances.
                 │  INGESTING  │◀─┐
                 └─────────────┘  │ rebind
                        │         │ (known id
-                       │         │  at new addr)
-                       │ window  │
-                       │ closes  │
+                       │ window  │  at new addr,
+                       │ closes  │  preserves state)
                        ▼         │
                 ┌─────────────┐  │
                 │  READ_ONLY  │◀─┘
                 └─────────────┘
                        │
-                       │ retention
-                       │ boundary
+                       │ retention boundary
+                       │ (op 5 archive)
                        ▼
                 ┌─────────────┐
-                │  ARCHIVING  │◀─┐ rebind
-                └─────────────┘  │ (export resumes
-                       │         │  on new instance)
-                       │ export  │
-                       │ to S3   │
-                       ▼         │
-                ┌─────────────┐  │
-                │  ARCHIVED   │◀─┘ (Lambda-served cold)
-                └─────────────┘
-                       │
-                       │ cold retention
+                │  ARCHIVED   │  (ColdShard; Parquet on S3,
+                └─────────────┘   EBS volume retired. Still
+                       │          holds instance_id until op 6
+                       │          terminates it.)
+                       │ op 6 terminate
+                       │ (ShouldDecrementDesiredCapacity=true)
                        ▼
-                ┌─────────────┐
-                │  TERMINATED │
-                └─────────────┘
+                  instance_id=""
+                  (ColdShard stays queryable
+                  forever via Lambda)
 ```
 
 - **LAUNCHING** — a persistent row in `shard_records` that
@@ -97,14 +91,21 @@ lifecycle**. A shard can outlive many instances.
 - **READ_ONLY** — wall-clock time has passed the window's end. No
   new writes arrive. Queries still route here until the retention
   boundary.
-- **ARCHIVING** — the shard is past the hot retention boundary. The
-  coordinator has kicked off a Parquet export to S3. Queries still
-  route here while the export is in progress.
-- **ARCHIVED** — the export is complete, the Parquet file is on S3,
-  the `lambda-cold-shard` function can serve queries against it.
-  The hot-shard EBS volume is no longer needed.
-- **TERMINATED** — instance stopped, EBS deleted, row removed from
-  `shard_records`.
+- **ARCHIVED** — Parquet export complete, EBS volume retired, shard
+  handle swapped to a ColdShard that serves queries from S3 via
+  Lambda. The row persists in `shard_records` forever (ColdShards
+  stay queryable as long as the Parquet file is on S3). `instance_id`
+  may still be set momentarily until op 6 terminates the compute.
+  ARCHIVED is terminal for the shard's identity — there is no
+  TERMINATED state; "done" means "`instance_id` is nulled and the
+  ColdShard keeps serving."
+
+No ARCHIVING intermediate state today — archive is synchronous
+inside op 5's Apply (export → ColdShard swap → volume retire → state
+transition, all in one call). If archive ever becomes async (large
+shards, background export), an ARCHIVING state would slot in
+between READ_ONLY and ARCHIVED; for now the transition is atomic
+from the reconciler's perspective.
 
 Exactly one state transition per boundary — the coordinator is the
 only actor that moves a shard from one state to the next. Instances
@@ -188,16 +189,18 @@ christen.
 
 ## Rotation
 
-Two configuration knobs govern the whole scheme:
+Window cadence is a **per-bucket** property, persisted on the
+`buckets` table:
 
-- `w.duration` — how long a single window covers (e.g. `7d`).
-- `w.count` — how many hot windows are retained simultaneously
-  (e.g. `2`: current and previous). Hot retention = `w.count *
-  w.duration`.
+- `bucket.WindowDuration` — how long one window covers (e.g. `7d`).
+- `bucket.RetentionPeriod` — how long past `WindowEnd` a READ_ONLY
+  shard stays hot before archiving (e.g. `7d`).
+- `coordinator.PrewarmLead` (package var, not per-bucket yet) —
+  how far before a shard's `WindowEnd` the reconciler starts
+  pre-warming next-window shards.
 
-The interesting part of the lifecycle is what happens near the end of
-a hot window. Walkthrough assumes `w.duration = 7d`, `w.count = 2`
-(so: current window ingesting, previous window still hot for reads).
+Walkthrough assumes `WindowDuration = 7d`, `RetentionPeriod = 7d`
+(current INGESTING + previous window still hot for reads).
 
 Steady state (call it day N within the current window):
 
@@ -213,37 +216,41 @@ Steady state (call it day N within the current window):
 All writes go to W0's shards. Queries spanning W-prev and W0 fan
 out to both fleets.
 
-Window handoff (approaching W0's end, call it T - handoff_lead, with
-`handoff_lead` configurable, nominally 24h):
+Window handoff (approaching W0's end, when `now + PrewarmLead ≥
+WindowEnd`):
 
 ```
        │ W-prev       │ W0               │ W1
 ───────┼──────────────┼──────────────────┼──────────────────
        │              │                  │
-       │  READ_ONLY   │  INGESTING       │  INGESTING (new,
-       │  or          │  (old fleet,     │   just christened,
-       │  ARCHIVING   │   primary)       │   empty)
+       │  READ_ONLY   │  INGESTING       │  LAUNCHING then
+       │              │  (primary)       │   INGESTING (pre-
+       │              │                  │   warmed via op 4)
 ```
 
-For the last `handoff_lead` interval of W0, **both W0 and W1 fleets
-are INGESTING**. The coordinator christens W1's shards early so
-they're warmed up, christened, and in the registry before cutover.
-Writes route by timestamp: rows whose ts falls in W0 still go to
-W0's fleet; rows crossing into W1 go to W1's fleet.
+For the last `PrewarmLead` interval of W0, **both W0 and W1 shards
+exist**. The reconciler's op 4 (pre-warm) inserts LAUNCHING rows
+for W1 ahead of the boundary; `syncASGDesiredCapacity` adds them
+to ASG desired_capacity (§3's formula includes future-window
+LAUNCHING); the ASG brings up instances; the lifecycle hook claims
+the rows; heartbeats promote them to INGESTING before W0's
+WindowEnd. Writes route by timestamp: rows in W0 go to W0's
+shards; rows crossing into W1 go to W1's shards.
 
-At boundary crossing, W0 transitions to READ_ONLY and what used to
-be W-prev transitions to ARCHIVING.
+At boundary crossing, op 3 transitions W0 shards INGESTING →
+READ_ONLY. When RetentionPeriod past `WindowEnd`, op 5 archives,
+op 6 terminates the instance.
 
-Fleet-count math in terms of the config:
+Fleet-count math in terms of config:
 
-- At steady state: `w.count` fleets hot (one INGESTING, the rest
-  READ_ONLY or ARCHIVING).
-- At handoff: `w.count + 1` fleets briefly — `w.count` existing
-  plus one warming. For `w.count = 2`, that's the "3× per-window
-  fleet size" I had written before.
+- At steady state: `ceil(RetentionPeriod / WindowDuration) + 1`
+  concurrent fleets (current INGESTING + past-window READ_ONLYs).
+- At handoff: one more briefly, for the pre-warmed next window.
+  For `WindowDuration = RetentionPeriod = 7d`: `(1+1) + 1 = 3`
+  per-window fleets at peak.
 
-Worst-case provisioner capacity planning must reserve for
-`(w.count + 1) × fleet_size`, not `w.count × fleet_size`.
+`max_capacity` on the ASG is sized against this peak (see §3 in
+[`cleanup.md`](cleanup.md) for the formula).
 
 ## Identity persistence
 
@@ -280,98 +287,107 @@ renamed later.
 
 ## EBS re-attach on instance death
 
-Happy path:
+Instance death splits into two lanes depending on whether the
+shard's EBS volume survived:
+
+**Lane A — `ebs_volume_id` set on the record.** The shard's data
+is intact on the volume; recovery reattaches it to a fresh
+instance.
 
 1. Instance I-A hosts shard S, EBS volume V-S attached.
-2. I-A dies (SIGKILL, hardware failure, spot reclaim — whatever).
-3. Heartbeat for S stops. Coordinator notices after ~2 minutes.
-4. Coordinator's failure path — distinct from the "reap" path:
-   - Check: is the shard's window still within hot retention and
-     not yet ARCHIVED?
-     - **No** → reap normally; terminate instance; don't replace.
-     - **Yes** → recover.
-5. Recovery (issued via ASG APIs so we don't race the ASG):
-   1. Look up V-S by `shard_id` — either from `shard_records.ebs_volume_id`
-      (cached) or by listing volumes filtered on
-      `tag:shard_id=<name>` (authoritative, tags are the source of
-      truth).
-   2. `DetachVolume V-S` with `Force: true` (I-A is dead so the
-      soft detach would hang).
-   3. Call `TerminateInstanceInAutoScalingGroup` on I-A with
-      `ShouldDecrementDesiredCapacity = false`. The ASG launches
-      I-B from the (naked) launch template to maintain desired
-      capacity. **Critical**: the launch template must not attach
-      an EBS volume of its own — see Gap #4 — otherwise I-B boots
-      with an empty volume and our attach in the next step races
-      against its existing one.
-   4. Poll for I-B to reach `InService`, then `AttachVolume V-S`
-      to I-B at the agreed device path (`/dev/sdf`).
-   5. I-B's startup script mounts the volume, reads
-      `/opt/app/data/shard.json`, starts weft-shard with the
-      recovered identity.
-   6. I-B heartbeats with the existing shard id — this is the
-      rebind path described above. Coordinator updates `addr` /
-      `instance_id`, keeps state/window/apps.
+2. I-A dies (SIGKILL, hardware failure, spot reclaim).
+3. Heartbeat for S stops. `reapDeadShards` notices after
+   `deadFor` (default 2 minutes) and preserves the registry
+   entry — the `ebs_volume_id` field is what distinguishes
+   "keep, will recover" from "gone, reap."
+4. ASG's own health check replaces I-A with I-B (via the same
+   `desired_capacity` syncASG sets, not via a coordinator call).
+5. Lifecycle hook fires for I-B. It sees V-S in the available
+   pool tagged with S's `shard_id`, filters by recognised-as-dead
+   (registry entry exists + heartbeat stale), and issues a
+   RECOVER decision: attach V-S to I-B at `/dev/sdf`, signal
+   `CONTINUE` on the ASG hook, return.
+6. I-B's startup script mounts the volume, reads `shard.json`,
+   starts weft-shard with the recovered identity.
+7. I-B heartbeats with S's existing shard id — rebind path:
+   coordinator updates `addr` / `instance_id`, state/window/apps
+   preserved.
 
-Nothing about the shard's identity, window, or data changed during
-the recovery. From a writer's or querier's perspective, there was a
-~2–3 minute interruption.
+Nothing about the shard's identity, window, or data changed.
+From a writer's or querier's perspective the shard was offline
+for the heartbeat-detection + instance-boot window (~2–3 min).
 
-Pre-existing constraints to be mindful of:
-- EBS volumes are AZ-scoped. The recovery instance has to come up
-  in the same AZ. Either every shard's ASG is pinned to one AZ, or
-  the launcher tracks the volume's AZ and launches there. See
-  [az-resilience.md](az-resilience.md) for the longer-term design
-  where write shards intentionally span AZs.
-- `ec2:AttachVolume`, `ec2:DetachVolume`, `ec2:DescribeVolumes`,
-  and `autoscaling:TerminateInstanceInAutoScalingGroup` are needed
-  by the coordinator. Some are already granted; see Gap #4 for the
-  missing set.
+**Lane B — `ebs_volume_id` empty on the record.** No volume to
+recover; the shard's data is gone with the instance. Reaper
+removes the registry entry and asks the launcher to terminate
+any lingering instance. The reconciler's next tick will bring up
+a replacement via op 2 under the standard LAUNCHING handoff.
+
+Pre-existing constraints:
+- EBS volumes are AZ-scoped. Recovery requires the replacement
+  instance in the same AZ. See
+  [az-resilience.md](az-resilience.md) for the cross-AZ design.
+- Coordinator role needs `ec2:AttachVolume`, `ec2:DetachVolume`,
+  `ec2:DescribeVolumes`, `ec2:CreateVolume`, `ec2:DeleteVolume`,
+  `ec2:CreateTags`,
+  `autoscaling:TerminateInstanceInAutoScalingGroup`,
+  `autoscaling:SetDesiredCapacity`,
+  `autoscaling:DescribeAutoScalingGroups`.
+
+**Still partial:** the coordinator-driven recovery variant where
+we explicitly call `TerminateInstanceInAutoScalingGroup(
+ShouldDecrementDesiredCapacity=false)` to trigger ASG replacement
+doesn't exist — today we rely on ASG's own health checks. See
+`cleanup.md` §11 gap #5.
 
 ## Archiving and cold storage
 
-Nothing in this section is a new mechanism — the export path, the
-cold-storage bucket, and the Lambda cold-shard function already
-exist. Missing piece is the **scheduling**: calling the existing
-export at the right time on a window boundary.
+Archive scheduling is op 5 in the reconciler. When a READ_ONLY
+shard is past `bucket.RetentionPeriod` (measured from
+`WindowEnd`, not `CreatedAt`), `ArchiveShardOp` fires. Apply runs
+the export sequence synchronously:
 
-At the retention boundary (shard's window older than
-`w.count * w.duration` past its end), the coordinator:
+1. Export DuckDB contents to Parquet. Local-disk destination in
+   dev; `s3://weft-cold-<acct>/...` in prod via DuckDB's httpfs
+   and S3 credentials in `shard/s3config.go`.
+2. Swap the shard handle from a `DuckDBShard` to a `ColdShard`
+   (or `LambdaColdShard` when `LAMBDA_FUNCTION_URL` is set).
+   Queries continue uninterrupted; they just read from Parquet now.
+3. Record the Parquet path in `shard_records.parquet_path` and
+   flip state READ_ONLY → ARCHIVED.
+4. Retire the EBS volume: snapshot (tagged with shard_id +
+   parquet_path for lineage), force-detach, delete.
 
-1. Transitions the shard to ARCHIVING.
-2. Invokes the existing shard-side exporter (`shard/cold_shard*`).
-   The shard writes its DuckDB contents to Parquet and uploads
-   directly to S3 at a canonical path under `weft-cold-<acct>/…`.
-   The bucket already exists in
-   `infrastructure-catalog/stacks/asg-weft-application` — no
-   terraform change.
-3. Records the resulting Parquet path in `shard_records.parquet_path`.
-4. Transitions to ARCHIVED.
-5. Terminates the instance via ASG and deletes the EBS volume.
-6. Subsequent queries overlapping the window route to the Lambda
-   `cold-shard` invoker (already wired) instead of the hot shard
-   that's no longer there.
+Op 6 (terminate-on-archive) then fires on the NEXT tick: the
+snapshot sees state=ARCHIVED + non-empty `instance_id`, Apply
+calls
+`TerminateInstanceInAutoScalingGroup(ShouldDecrementDesiredCapacity=true)`
+and nulls `instance_id`. `desired_capacity` drops in lockstep
+with ASG actual, so scale-in policies never pick the wrong
+instance to kill.
 
-Queries during ARCHIVING still hit the hot shard until transition
-completes — no double-count, no gap.
+ARCHIVED is terminal. The ColdShard keeps serving queries from
+S3 for as long as the Parquet file exists. There's no further
+state transition.
 
-Rebind during ARCHIVING: if the hot shard's instance dies mid-export
-and gets recovered, the export is interrupted. Current implementation
-restarts the export from scratch on the new instance; incremental
-resume is not required (the export is idempotent as long as we write
-to a distinct object key per run and finalise atomically).
+Archive today is synchronous inside op 5's Apply — no separate
+ARCHIVING state. If export time ever outgrows a tick
+(multi-hour bulk exports), an ARCHIVING intermediate slots in
+between READ_ONLY and ARCHIVED; queries would continue hitting
+the DuckDB shard during the export and the ColdShard swap
+would become an atomic tail operation. Not needed today.
 
 ## Coordinator contract
 
 The coordinator's provisioner is the single writer of shard identity
 and state. It runs a **per-bucket reconciler** every tick (and
 synchronously from `OnboardApp`): the reconciler reads a snapshot
-of bucket config + registry + in-flight LAUNCHING count and emits
-an ordered list of idempotent ops, which are then applied. Each
-responsibility below is one op type; order inside a tick is
-app-drift → window-closed → under-capacity → retention-archive.
-Future responsibilities (pre-warm, terminate-on-archive) slot in as
-additional ops without reshaping the scaffold.
+of bucket config + registry + in-flight LAUNCHING counts and emits
+an ordered list of idempotent ops, which are then applied. Order
+inside a tick: app-drift → window-closed → under-capacity →
+pre-warm → retention-archive → terminate-on-archive. A separate
+tier-level `syncASGDesiredCapacity` pass runs after the per-bucket
+loop.
 
 Concretely the provisioner owns:
 
@@ -380,11 +396,15 @@ Concretely the provisioner owns:
   per-bucket snapshot sees the row on the next tick so no duplicate
   launch fires.
 - **ASG desired_capacity.** Once per tick per tier, compute
-  `Σ bucket.target + count(READ_ONLY entries in tier)` and call
+  `Σ bucket.target + count(READ_ONLY in tier) +
+  count(future-window LAUNCHING in tier)` and call
   `SetDesiredCapacity(tier, desired)` as an absolute assignment.
-  Clamped to `MaxSize` with a log tripwire. This is the sole
-  mechanism for ASG scale-up and scale-down; there is no
-  per-instance bump.
+  Target covers current-window LAUNCHING+INGESTING; READ_ONLY
+  covers past-window shards still serving queries; future-window
+  LAUNCHING covers pre-warmed next-window shards (op 4). Clamped
+  to `MaxSize` with a log tripwire. This is the sole mechanism
+  for ASG scale-up and scale-down; there is no per-instance
+  bump.
 - **Rotation scheduling.** "The current window ends in ≤`PrewarmLead`;
   mint W1 LAUNCHING rows now." Running on a ticker. Decision lives
   in `AppBucket.ShouldPrewarmNextWindow` — today date math against
@@ -480,11 +500,16 @@ Three layers worth building out in lockstep with the above:
   launcher + mocked store. Fast, deterministic, covers the state
   machine.
 - **Integration** (`integration/` package, docker-compose) — full
-  coordinator + shard containers with small real values for
-  `w.duration` / `w.count` (e.g. `30s`, `2`) so rotation and
-  retention boundaries fire inside a test lifetime. Real
-  wall-clock time; no mock clock. Covers happy-path rotation and
-  failure-recovery with real DuckDB.
+  coordinator + shard containers with small bucket values for
+  `WindowDuration` / `RetentionPeriod` (e.g. `5m`, `24h`) so
+  rotation and retention fire inside a test lifetime. Real
+  wall-clock time; no mock clock. Real Postgres via the same
+  harness. LocalStack for EC2 where the test exercises EBS /
+  instance paths; stubs for ASG API (LocalStack Community
+  doesn't implement it). See
+  `integration/prewarm_test.go`,
+  `integration/terminate_on_archive_test.go`,
+  `integration/lifecycle_test.go` for worked examples.
 - **Prod smoke** (one-off, via `kevcons ssh` or a dedicated script)
   — after AMI rollout, kill an ASG instance mid-window and confirm
   a fresh instance picks up the EBS with the same shard id and no
