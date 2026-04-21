@@ -17,6 +17,12 @@ type Bucket struct {
 	TargetIngestingCount int    `gorm:"not null;column:target_ingesting_count"`
 	Tier                 string `gorm:"not null;column:tier"`
 	CreatedAt            string `gorm:"not null;column:created_at"`
+	// WindowDuration and RetentionPeriod are stored as Go duration
+	// literals ("168h", "30m") so time.ParseDuration round-trips them.
+	// Empty strings are treated as "fall back to provisioner config"
+	// at the Go layer.
+	WindowDuration  string `gorm:"not null;column:window_duration"`
+	RetentionPeriod string `gorm:"not null;column:retention_period"`
 }
 
 // TableName pins the GORM mapping. Without this GORM would pluralise

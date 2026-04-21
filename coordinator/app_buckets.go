@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/kevlarcon/weft/store"
 )
@@ -12,11 +13,15 @@ import (
 // share a bucket; high-throughput apps get dedicated buckets. Target
 // is the desired number of INGESTING shards in the bucket; Tier is
 // the instance class (which ASG, in prod) those shards run on.
+// WindowDuration and RetentionPeriod govern rotation and archive
+// timing per-bucket — zero means "fall back to provisioner config."
 type AppBucket struct {
-	ID     string
-	Apps   []string
-	Target int
-	Tier   string
+	ID              string
+	Apps            []string
+	Target          int
+	Tier            string
+	WindowDuration  time.Duration
+	RetentionPeriod time.Duration
 }
 
 // BucketStore is the subset of *store.Store that BucketManager needs.
@@ -95,11 +100,33 @@ func (bm *BucketManager) LoadFromStore(s BucketStore) error {
 		if r.Apps != "" && r.Apps != "null" {
 			_ = json.Unmarshal([]byte(r.Apps), &apps)
 		}
+		// Durations default to zero on parse failure so the Go layer
+		// can fall back to provisioner config. Missing values (NULL)
+		// are already excluded by the NOT NULL column constraint.
+		var winDur, retDur time.Duration
+		if r.WindowDuration != "" {
+			if d, err := time.ParseDuration(r.WindowDuration); err == nil {
+				winDur = d
+			} else {
+				log.Printf("bucket-manager: bucket %s has unparseable window_duration %q: %v",
+					r.ID, r.WindowDuration, err)
+			}
+		}
+		if r.RetentionPeriod != "" {
+			if d, err := time.ParseDuration(r.RetentionPeriod); err == nil {
+				retDur = d
+			} else {
+				log.Printf("bucket-manager: bucket %s has unparseable retention_period %q: %v",
+					r.ID, r.RetentionPeriod, err)
+			}
+		}
 		loaded = append(loaded, &AppBucket{
-			ID:     r.ID,
-			Apps:   apps,
-			Target: r.TargetIngestingCount,
-			Tier:   r.Tier,
+			ID:              r.ID,
+			Apps:            apps,
+			Target:          r.TargetIngestingCount,
+			Tier:            r.Tier,
+			WindowDuration:  winDur,
+			RetentionPeriod: retDur,
 		})
 	}
 

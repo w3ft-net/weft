@@ -359,7 +359,7 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 	}
 
 	now := time.Now().UTC()
-	windowStart, windowEnd := p.currentWindow(now)
+	windowStart, windowEnd := p.currentWindow(bucket, now)
 
 	// Name format: shard-YYYYMMDDThhmm-seq. Globally unique within the
 	// fleet; seq increments from current registry size so concurrent
@@ -513,15 +513,39 @@ func parseTime(s string) time.Time {
 }
 
 // currentWindow returns the [start, end) window bounds enclosing now,
-// aligned to p.config.WindowDuration. WindowDuration defaults to 7d
-// when unset (matches DefaultProvisionerConfig).
-func (p *Provisioner) currentWindow(now time.Time) (time.Time, time.Time) {
-	dur := p.config.WindowDuration
-	if dur == 0 {
-		dur = 7 * 24 * time.Hour
-	}
+// aligned to the bucket's WindowDuration (falling back to the
+// provisioner config, then to 7d). Per-bucket durations (migration
+// 021) let different buckets run at different cadences on the same
+// tier.
+func (p *Provisioner) currentWindow(bucket *AppBucket, now time.Time) (time.Time, time.Time) {
+	dur := p.windowDurationFor(bucket)
 	start := now.UTC().Truncate(dur)
 	return start, start.Add(dur)
+}
+
+// windowDurationFor picks the effective WindowDuration for a bucket,
+// with a two-step fallback so tests and boot-before-hydration paths
+// stay working. Production paths always pass a bucket with a set
+// WindowDuration (persisted by migration 021).
+func (p *Provisioner) windowDurationFor(bucket *AppBucket) time.Duration {
+	if bucket != nil && bucket.WindowDuration > 0 {
+		return bucket.WindowDuration
+	}
+	if p.config.WindowDuration > 0 {
+		return p.config.WindowDuration
+	}
+	return 7 * 24 * time.Hour
+}
+
+// retentionPeriodFor picks the effective RetentionPeriod for a
+// bucket, same fallback chain as windowDurationFor. Zero means
+// "don't archive this bucket" — matches the provisioner-config
+// convention.
+func (p *Provisioner) retentionPeriodFor(bucket *AppBucket) time.Duration {
+	if bucket != nil && bucket.RetentionPeriod > 0 {
+		return bucket.RetentionPeriod
+	}
+	return p.config.RetentionPeriod
 }
 
 // bootstrap ensures at least one shard instance is launching.
@@ -547,18 +571,17 @@ func (p *Provisioner) bootstrap(ctx context.Context) {
 	}
 
 	// Local launcher: configure immediately. Align the bootstrap
-	// shard's window to the current WindowDuration boundary so that
+	// shard's window to the bucket's WindowDuration boundary so
 	// check()'s wall-clock rotation fires on the same schedule as
 	// christened shards. Bind to the default bucket if one exists
 	// (in tests without a hydrated BucketManager, the entry's
 	// BucketID stays empty and persist() defaults it to "default").
-	now := time.Now().UTC()
-	windowStart, windowEnd := p.currentWindow(now)
-
 	var bucketID, tier string
 	var apps []string
+	var bucket *AppBucket
 	if p.Buckets != nil {
 		if b := p.Buckets.Default(); b != nil {
+			bucket = b
 			bucketID = b.ID
 			tier = b.Tier
 			apps = append([]string(nil), b.Apps...)
@@ -567,6 +590,9 @@ func (p *Provisioner) bootstrap(ctx context.Context) {
 	if tier == "" {
 		tier = "small"
 	}
+
+	now := time.Now().UTC()
+	windowStart, windowEnd := p.currentWindow(bucket, now)
 
 	shardID := fmt.Sprintf("shard-%d", now.UnixMilli())
 	entry, err := p.launchAndConfigure(ctx, shardID, tier, apps, windowStart, windowEnd)
@@ -708,8 +734,17 @@ func (p *Provisioner) check(ctx context.Context) {
 	// RetentionPeriod in the past. Measuring from WindowEnd (not
 	// CreatedAt) keeps a long-lived shard hot for a full retention
 	// period after it transitions — CreatedAt is the christening
-	// time, not when the shard stopped taking writes.
-	if p.config.RetentionPeriod > 0 && p.config.ParquetDir != "" {
+	// time, not when the shard stopped taking writes. Retention is
+	// per-bucket (migration 021); we resolve it by looking up the
+	// entry's bucket, then fall back to config for legacy/bare
+	// entries that haven't been rebound to a bucket yet.
+	if p.config.ParquetDir != "" {
+		bucketByID := make(map[string]*AppBucket)
+		if p.Buckets != nil {
+			for _, b := range p.Buckets.All() {
+				bucketByID[b.ID] = b
+			}
+		}
 		for _, entry := range p.registry.Entries() {
 			if entry.State != StateReadOnly {
 				continue
@@ -717,11 +752,15 @@ func (p *Provisioner) check(ctx context.Context) {
 			if entry.WindowEnd.IsZero() {
 				continue // legacy/zero-window shards are excluded
 			}
-			if now.Sub(entry.WindowEnd) <= p.config.RetentionPeriod {
+			retention := p.retentionPeriodFor(bucketByID[entry.BucketID])
+			if retention <= 0 {
+				continue // archive disabled for this bucket
+			}
+			if now.Sub(entry.WindowEnd) <= retention {
 				continue
 			}
-			log.Printf("provisioner: archiving shard %s (%v past WindowEnd)",
-				entry.ID, now.Sub(entry.WindowEnd).Round(time.Second))
+			log.Printf("provisioner: archiving shard %s (%v past WindowEnd, retention=%v)",
+				entry.ID, now.Sub(entry.WindowEnd).Round(time.Second), retention)
 			p.archive(entry)
 		}
 	}
@@ -851,12 +890,12 @@ func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket)
 		return
 	}
 
-	// Local-launcher path: mint a window aligned to the current
+	// Local-launcher path: mint a window aligned to the bucket's
 	// WindowDuration boundary. Matches christen() so bucket-
 	// provisioned shards and heartbeat-christened shards share
 	// window semantics.
 	now := time.Now().UTC()
-	windowStart, windowEnd := p.currentWindow(now)
+	windowStart, windowEnd := p.currentWindow(bucket, now)
 	seq := p.registry.Count()
 	id := fmt.Sprintf("shard-%s-%s-%d", joinApps(bucket.Apps), windowStart.Format("20060102T1504"), seq)
 
