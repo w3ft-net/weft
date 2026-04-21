@@ -7,6 +7,16 @@ import (
 	"time"
 )
 
+// PrewarmLead is the interval before a current-window INGESTING
+// shard's WindowEnd at which the reconciler starts pre-warming
+// next-window shards. Zero disables pre-warm entirely. Package-
+// scoped rather than passed through the op signature: future
+// AppBucket.ShouldPrewarmNextWindow implementations might not use a
+// lead duration at all (ingestion burn rate, disk-fill slope,
+// etc.), so the policy shouldn't leak into every caller's
+// signature. main.go can override at boot for per-env tuning.
+var PrewarmLead time.Duration
+
 // ReconcileOp is one idempotent action the reconciler wants to take
 // to close a drift between desired state (bucket config) and actual
 // state (registry + shard_records). `reconcile()` computes a list of
@@ -30,11 +40,13 @@ type ReconcileOp interface {
 // instance hasn't heartbeated yet), sync launchers count from the
 // registry (there's no LAUNCHING intermediate state to miss).
 type ReconcilerSnapshot struct {
-	Bucket         *AppBucket
-	Entries        []*ShardEntry // registry entries with BucketID == Bucket.ID
-	LaunchingCount int           // shard_records rows in this bucket with state=LAUNCHING
-	IngestingCount int           // authoritative INGESTING count (DB for async, registry for sync)
-	Now            time.Time
+	Bucket               *AppBucket
+	Entries              []*ShardEntry // registry entries with BucketID == Bucket.ID
+	LaunchingCount       int           // shard_records rows in this bucket with state=LAUNCHING
+	IngestingCount       int           // authoritative INGESTING count (DB for async, registry for sync)
+	FutureLaunchingCount int           // LAUNCHING rows with window_start > current (pre-warm)
+	IsAsyncLauncher      bool          // whether the launcher uses the LAUNCHING-row handoff
+	Now                  time.Time
 }
 
 // reconcile computes the op list for one bucket. Pure.
@@ -89,6 +101,25 @@ func reconcile(snap ReconcilerSnapshot) []ReconcileOp {
 	effective := snap.LaunchingCount + snap.IngestingCount
 	for i := effective; i < snap.Bucket.Target; i++ {
 		ops = append(ops, LaunchShardOp{Bucket: snap.Bucket})
+	}
+
+	// Op 4 — pre-warm next window. When a current-window INGESTING
+	// shard is within the bucket's pre-warm threshold, mint
+	// bucket.Target LAUNCHING rows for the next window so the ASG
+	// can bring up replacement instances before the rotation flips
+	// the current-window shards to READ_ONLY. Async launchers only —
+	// sync launchers configure inline with no LAUNCHING intermediate.
+	if snap.IsAsyncLauncher && snap.FutureLaunchingCount == 0 {
+		if snap.Bucket.ShouldPrewarmNextWindow(snap.Now, snap.Entries) {
+			nextStart, nextEnd := snap.Bucket.NextWindow(snap.Now)
+			for i := 0; i < snap.Bucket.Target; i++ {
+				ops = append(ops, PrewarmNextWindowOp{
+					BucketID:    snap.Bucket.ID,
+					WindowStart: nextStart,
+					WindowEnd:   nextEnd,
+				})
+			}
+		}
 	}
 
 	// Op 5 — retention-archive. A READ_ONLY shard whose WindowEnd
@@ -151,6 +182,40 @@ func (o LaunchShardOp) Apply(ctx context.Context, p *Provisioner) error {
 		return fmt.Errorf("LaunchShardOp: nil bucket")
 	}
 	p.provisionForBucket(ctx, o.Bucket)
+	return nil
+}
+
+// PrewarmNextWindowOp inserts a LAUNCHING row for a bucket's next
+// window while the current window is still INGESTING. This closes
+// the write-gap at window rotation: new-window instances are
+// already up and serving by the time op 3 flips the current-window
+// shards to READ_ONLY. Apply calls mintLaunchingRowForWindow,
+// persisting an intent row the lifecycle hook will claim when the
+// ASG brings up the instance.
+type PrewarmNextWindowOp struct {
+	BucketID    int64
+	WindowStart time.Time
+	WindowEnd   time.Time
+}
+
+func (o PrewarmNextWindowOp) Describe() string {
+	return fmt.Sprintf("pre-warm bucket %d window starting %s", o.BucketID, o.WindowStart.Format(time.RFC3339))
+}
+
+func (o PrewarmNextWindowOp) Apply(_ context.Context, p *Provisioner) error {
+	if p.Buckets == nil {
+		return fmt.Errorf("%s: no BucketManager", o.Describe())
+	}
+	bucket, err := p.Buckets.ByID(o.BucketID)
+	if err != nil {
+		return fmt.Errorf("%s: lookup bucket %d: %w", o.Describe(), o.BucketID, err)
+	}
+	if bucket == nil {
+		return fmt.Errorf("%s: bucket %d not found", o.Describe(), o.BucketID)
+	}
+	if _, err := p.mintLaunchingRowForWindow(bucket, o.WindowStart, o.WindowEnd); err != nil {
+		return fmt.Errorf("%s: mint LAUNCHING: %w", o.Describe(), err)
+	}
 	return nil
 }
 
@@ -285,8 +350,9 @@ func (o AddAppToShardOp) Apply(_ context.Context, p *Provisioner) error {
 // directly because they skip the LAUNCHING state entirely.
 func (p *Provisioner) snapshotForBucket(bucket *AppBucket) ReconcilerSnapshot {
 	snap := ReconcilerSnapshot{
-		Bucket: bucket,
-		Now:    time.Now().UTC(),
+		Bucket:          bucket,
+		Now:             time.Now().UTC(),
+		IsAsyncLauncher: isLaunchingLauncher(p.launcher),
 	}
 	for _, e := range p.registry.Entries() {
 		if e.BucketID == bucket.ID {
@@ -294,7 +360,7 @@ func (p *Provisioner) snapshotForBucket(bucket *AppBucket) ReconcilerSnapshot {
 		}
 	}
 
-	if isLaunchingLauncher(p.launcher) {
+	if snap.IsAsyncLauncher {
 		if p.config.ShardOps != nil {
 			if n, err := p.config.ShardOps.CountShardsInBucket(bucket.ID, []string{string(StateLaunching)}); err != nil {
 				log.Printf("reconciler: bucket %d LAUNCHING count: %v", bucket.ID, err)
@@ -305,6 +371,12 @@ func (p *Provisioner) snapshotForBucket(bucket *AppBucket) ReconcilerSnapshot {
 				log.Printf("reconciler: bucket %d INGESTING count: %v", bucket.ID, err)
 			} else {
 				snap.IngestingCount = n
+			}
+			currentStart, _ := bucket.CurrentWindow(snap.Now)
+			if n, err := p.config.ShardOps.CountShardsInBucketForFutureWindows(bucket.ID, currentStart); err != nil {
+				log.Printf("reconciler: bucket %d future-LAUNCHING count: %v", bucket.ID, err)
+			} else {
+				snap.FutureLaunchingCount = n
 			}
 		}
 	} else {

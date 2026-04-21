@@ -386,7 +386,10 @@ Concretely the provisioner owns:
   mechanism for ASG scale-up and scale-down; there is no
   per-instance bump.
 - **Rotation scheduling.** "The current window ends in ≤`PrewarmLead`;
-  mint W1 LAUNCHING rows now." Running on a ticker.
+  mint W1 LAUNCHING rows now." Running on a ticker. Decision lives
+  in `AppBucket.ShouldPrewarmNextWindow` — today date math against
+  a coordinator-global `PrewarmLead`, swappable in future for
+  burn-rate-based policies without changing callers.
 - **Christening.** When an unclaimed heartbeat arrives (shard has no
   `shard.json`), find the LAUNCHING row the lifecycle hook stamped
   onto this instance, Configure the shard with the row's identity,

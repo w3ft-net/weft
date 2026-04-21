@@ -142,6 +142,26 @@ func (f *fakeRegistryStore) CountShardsInBucket(bucketID int64, states []string)
 	return n, nil
 }
 
+func (f *fakeRegistryStore) CountShardsInBucketForFutureWindows(bucketID int64, currentWindowStart time.Time) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	threshold := currentWindowStart.UTC().Format(time.RFC3339)
+	n := 0
+	for _, rec := range f.records {
+		if rec.BucketID != bucketID {
+			continue
+		}
+		if rec.State != string(StateLaunching) {
+			continue
+		}
+		if rec.WindowStart <= threshold {
+			continue
+		}
+		n++
+	}
+	return n, nil
+}
+
 // Rebind (instance replaced behind a durable shard id) must persist the
 // new address so a coordinator restart reloads the correct endpoint.
 func TestRebind_PersistsAddrChange(t *testing.T) {

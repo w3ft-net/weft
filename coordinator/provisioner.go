@@ -49,6 +49,7 @@ type ShardOpsStore interface {
 	FindLaunchingByInstance(instanceID string) (store.ShardRecord, bool, error)
 	ListStaleLaunching(olderThan time.Duration) ([]store.ShardRecord, error)
 	CountShardsInBucket(bucketID int64, states []string) (int, error)
+	CountShardsInBucketForFutureWindows(bucketID int64, currentWindowStart time.Time) (int, error)
 }
 
 // staleLaunchingAge is the age beyond which a LAUNCHING row is
@@ -274,11 +275,27 @@ func (p *Provisioner) syncASGDesiredCapacity(ctx context.Context) {
 	// are managed here; a tier with zero buckets has nothing the
 	// coordinator wants to say about it.
 	targetByTier := make(map[string]int32)
+	// Aggregate next-window pre-warm LAUNCHING rows by tier. These
+	// are extra capacity beyond target (target covers current-
+	// window LAUNCHING+INGESTING; pre-warm rows are for the NEXT
+	// window and need their own ASG slots).
+	futureLaunchingByTier := make(map[string]int32)
+	now := time.Now().UTC()
 	for _, bucket := range all {
-		if bucket.Tier == "" || bucket.Target <= 0 {
+		if bucket.Tier == "" {
 			continue
 		}
-		targetByTier[bucket.Tier] += int32(bucket.Target)
+		if bucket.Target > 0 {
+			targetByTier[bucket.Tier] += int32(bucket.Target)
+		}
+		if p.config.ShardOps != nil {
+			currentStart, _ := bucket.CurrentWindow(now)
+			if n, err := p.config.ShardOps.CountShardsInBucketForFutureWindows(bucket.ID, currentStart); err != nil {
+				log.Printf("provisioner: sync desired: bucket %d future-LAUNCHING count: %v", bucket.ID, err)
+			} else if n > 0 {
+				futureLaunchingByTier[bucket.Tier] += int32(n)
+			}
+		}
 	}
 
 	// Count READ_ONLY entries per tier from the registry. The
@@ -296,8 +313,23 @@ func (p *Provisioner) syncASGDesiredCapacity(ctx context.Context) {
 		readOnlyByTier[e.Tier]++
 	}
 
-	for tier, targetSum := range targetByTier {
-		desired := targetSum + readOnlyByTier[tier]
+	// Union of tiers that appear anywhere — target, pre-warm, or
+	// READ_ONLY. A tier with only READ_ONLY shards (no current
+	// bucket) still needs its ASG sized; a pre-warm-only tier
+	// would be unusual but shouldn't be lost either.
+	tiers := make(map[string]struct{})
+	for t := range targetByTier {
+		tiers[t] = struct{}{}
+	}
+	for t := range futureLaunchingByTier {
+		tiers[t] = struct{}{}
+	}
+	for t := range readOnlyByTier {
+		tiers[t] = struct{}{}
+	}
+
+	for tier := range tiers {
+		desired := targetByTier[tier] + readOnlyByTier[tier] + futureLaunchingByTier[tier]
 
 		max, err := scaler.TierMaxSize(ctx, tier)
 		if err != nil {
@@ -963,19 +995,26 @@ func (p *Provisioner) retireVolume(entry *ShardEntry) {
 }
 
 
-// mintLaunchingRow INSERTs a LAUNCHING row for a bucket: a shard id
-// and heartbeat token minted now, a window picked from the bucket's
-// cadence, empty instance_id/addr (the lifecycle hook + christen fill
-// those in). The row is the reconciler's persistent record of "a
-// launch is in flight"; subsequent ticks see it via CountShardsInBucket
-// and don't issue duplicate ASG calls.
+// mintLaunchingRow INSERTs a LAUNCHING row for a bucket's current
+// window. Thin wrapper over mintLaunchingRowForWindow; see that
+// function for the details.
 func (p *Provisioner) mintLaunchingRow(bucket *AppBucket) (*store.ShardRecord, error) {
+	windowStart, windowEnd := p.currentWindow(bucket, time.Now().UTC())
+	return p.mintLaunchingRowForWindow(bucket, windowStart, windowEnd)
+}
+
+// mintLaunchingRowForWindow INSERTs a LAUNCHING row for a bucket
+// with caller-supplied window bounds. Called with the current
+// window from op 2's under-capacity path and with the next window
+// from op 4's pre-warm path. The row's shard id and heartbeat
+// token are minted now; instance_id/addr stay empty until the
+// lifecycle hook + christen fill them in.
+func (p *Provisioner) mintLaunchingRowForWindow(bucket *AppBucket, windowStart, windowEnd time.Time) (*store.ShardRecord, error) {
 	if p.config.ShardOps == nil {
 		return nil, fmt.Errorf("no ShardOps store configured")
 	}
 
 	now := time.Now().UTC()
-	windowStart, windowEnd := p.currentWindow(bucket, now)
 
 	// 32-bit random suffix avoids shard-id collisions across
 	// concurrent ticks and across buckets on the same window. The

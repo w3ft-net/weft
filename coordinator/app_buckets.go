@@ -289,6 +289,61 @@ func (bm *BucketManager) save(b *AppBucket) error {
 // Duration strings default to zero on parse failure; callers that
 // need a non-zero duration should supply a provisioner-config
 // fallback (see provisioner.windowDurationFor).
+// windowDurationOr returns the bucket's WindowDuration or a
+// sensible fallback. Used by CurrentWindow/NextWindow when a
+// bucket hasn't been hydrated with a real duration yet.
+func (b *AppBucket) windowDurationOr(fallback time.Duration) time.Duration {
+	if b.WindowDuration > 0 {
+		return b.WindowDuration
+	}
+	return fallback
+}
+
+// CurrentWindow returns the [start, end) window bounds that the
+// bucket's shards should be writing to at `now`. Aligned to the
+// bucket's WindowDuration via Truncate.
+func (b *AppBucket) CurrentWindow(now time.Time) (start, end time.Time) {
+	dur := b.windowDurationOr(7 * 24 * time.Hour)
+	start = now.UTC().Truncate(dur)
+	return start, start.Add(dur)
+}
+
+// NextWindow returns the [start, end) bounds of the window
+// immediately after the current one — the window pre-warm fills.
+func (b *AppBucket) NextWindow(now time.Time) (start, end time.Time) {
+	_, currEnd := b.CurrentWindow(now)
+	dur := b.windowDurationOr(7 * 24 * time.Hour)
+	return currEnd, currEnd.Add(dur)
+}
+
+// ShouldPrewarmNextWindow reports whether the reconciler should
+// mint next-window LAUNCHING rows this tick. The current policy is
+// simple date math against a package-scoped PrewarmLead; the
+// method exists on AppBucket so future strategies (ingestion burn
+// rate, disk-fill slope, p99 latency tracker) can swap the policy
+// without changing every caller.
+//
+// TODO: extend to consider per-shard ingest rate so bursty
+// workloads pre-warm sooner than steady-state ones.
+func (b *AppBucket) ShouldPrewarmNextWindow(now time.Time, ingesting []*ShardEntry) bool {
+	if PrewarmLead <= 0 {
+		return false
+	}
+	threshold := now.Add(PrewarmLead)
+	for _, e := range ingesting {
+		if e.State != StateIngesting {
+			continue
+		}
+		if e.WindowEnd.IsZero() {
+			continue
+		}
+		if !threshold.Before(e.WindowEnd) {
+			return true
+		}
+	}
+	return false
+}
+
 func recordToAppBucket(r store.Bucket) *AppBucket {
 	var apps []string
 	if r.Apps != "" && r.Apps != "null" {

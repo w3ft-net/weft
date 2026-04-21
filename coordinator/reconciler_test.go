@@ -518,6 +518,203 @@ func TestTerminateArchivedInstanceOp_Apply_EmptyInstanceIDNoOp(t *testing.T) {
 	}
 }
 
+// Op 4 — pre-warm next window. The reconciler emits one
+// PrewarmNextWindowOp per bucket.Target when any INGESTING shard's
+// WindowEnd is within PrewarmLead of now AND no next-window
+// LAUNCHING rows exist yet for this bucket. Async launchers only.
+
+// withPrewarmLead temporarily overrides the package-scoped
+// PrewarmLead, restoring on cleanup so tests don't leak global
+// state.
+func withPrewarmLead(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := PrewarmLead
+	PrewarmLead = d
+	t.Cleanup(func() { PrewarmLead = prev })
+}
+
+func TestShouldPrewarmNextWindow_TrueWhenWindowEndWithinLead(t *testing.T) {
+	withPrewarmLead(t, 10*time.Minute)
+	now := time.Now().UTC()
+	bucket := &AppBucket{ID: 1, Tier: "small", WindowDuration: time.Hour}
+	entries := []*ShardEntry{
+		{ID: "s", State: StateIngesting, WindowEnd: now.Add(5 * time.Minute)}, // 5m away, within 10m lead
+	}
+	if !bucket.ShouldPrewarmNextWindow(now, entries) {
+		t.Error("want ShouldPrewarmNextWindow=true (WindowEnd within PrewarmLead)")
+	}
+}
+
+func TestShouldPrewarmNextWindow_FalseWhenWindowEndFar(t *testing.T) {
+	withPrewarmLead(t, 10*time.Minute)
+	now := time.Now().UTC()
+	bucket := &AppBucket{ID: 1, Tier: "small", WindowDuration: time.Hour}
+	entries := []*ShardEntry{
+		{ID: "s", State: StateIngesting, WindowEnd: now.Add(time.Hour)},
+	}
+	if bucket.ShouldPrewarmNextWindow(now, entries) {
+		t.Error("want false (WindowEnd way outside PrewarmLead)")
+	}
+}
+
+func TestShouldPrewarmNextWindow_FalseWhenLeadZero(t *testing.T) {
+	withPrewarmLead(t, 0)
+	now := time.Now().UTC()
+	bucket := &AppBucket{ID: 1, Tier: "small"}
+	entries := []*ShardEntry{
+		{ID: "s", State: StateIngesting, WindowEnd: now.Add(-time.Minute)},
+	}
+	if bucket.ShouldPrewarmNextWindow(now, entries) {
+		t.Error("PrewarmLead=0 must disable pre-warm entirely")
+	}
+}
+
+func TestShouldPrewarmNextWindow_SkipsNonIngestingAndZeroWindow(t *testing.T) {
+	withPrewarmLead(t, time.Hour)
+	now := time.Now().UTC()
+	bucket := &AppBucket{ID: 1, Tier: "small", WindowDuration: time.Hour}
+	entries := []*ShardEntry{
+		{ID: "ro", State: StateReadOnly, WindowEnd: now},                       // non-INGESTING
+		{ID: "zero", State: StateIngesting, WindowEnd: time.Time{}},            // zero window
+		{ID: "future", State: StateIngesting, WindowEnd: now.Add(24 * time.Hour)}, // outside lead
+	}
+	if bucket.ShouldPrewarmNextWindow(now, entries) {
+		t.Error("want false: no INGESTING+valid-window entry within lead")
+	}
+}
+
+// reconcile() emits PrewarmNextWindowOp when the bucket method
+// returns true, respecting async-only gating and not re-emitting
+// if next-window LAUNCHING rows already exist.
+func TestReconcile_Prewarm_EmitsWhenBucketSaysYes(t *testing.T) {
+	withPrewarmLead(t, 10*time.Minute)
+	now := time.Now().UTC()
+	bucket := &AppBucket{ID: 1, Target: 2, Tier: "small", WindowDuration: time.Hour}
+	entries := []*ShardEntry{
+		{ID: "ing", BucketID: 1, State: StateIngesting, WindowEnd: now.Add(5 * time.Minute)},
+	}
+	snap := ReconcilerSnapshot{
+		Bucket: bucket, Entries: entries,
+		IngestingCount: 1, FutureLaunchingCount: 0,
+		IsAsyncLauncher: true,
+		Now:             now,
+	}
+
+	prewarms := 0
+	var seenStarts []time.Time
+	for _, op := range reconcile(snap) {
+		p, ok := op.(PrewarmNextWindowOp)
+		if !ok {
+			continue
+		}
+		prewarms++
+		if p.BucketID != 1 {
+			t.Errorf("BucketID: got %d want 1", p.BucketID)
+		}
+		seenStarts = append(seenStarts, p.WindowStart)
+	}
+	if prewarms != bucket.Target {
+		t.Errorf("want %d PrewarmNextWindowOps (bucket.Target), got %d: %v",
+			bucket.Target, prewarms, describeOps(reconcile(snap)))
+	}
+	// All ops should target the same next-window start.
+	for i, s := range seenStarts {
+		if i > 0 && !s.Equal(seenStarts[0]) {
+			t.Errorf("op %d WindowStart=%v differs from first %v", i, s, seenStarts[0])
+		}
+	}
+}
+
+func TestReconcile_Prewarm_SkipsWhenFutureLaunchingExists(t *testing.T) {
+	withPrewarmLead(t, 10*time.Minute)
+	now := time.Now().UTC()
+	bucket := &AppBucket{ID: 1, Target: 2, Tier: "small", WindowDuration: time.Hour}
+	entries := []*ShardEntry{
+		{ID: "ing", BucketID: 1, State: StateIngesting, WindowEnd: now.Add(5 * time.Minute)},
+	}
+	snap := ReconcilerSnapshot{
+		Bucket: bucket, Entries: entries,
+		IngestingCount: 1, FutureLaunchingCount: 2, // next-window rows already in flight
+		IsAsyncLauncher: true,
+		Now:             now,
+	}
+
+	for _, op := range reconcile(snap) {
+		if _, ok := op.(PrewarmNextWindowOp); ok {
+			t.Errorf("unexpected PrewarmNextWindowOp when FutureLaunchingCount > 0: %s", op.Describe())
+		}
+	}
+}
+
+func TestReconcile_Prewarm_SkipsForSyncLauncher(t *testing.T) {
+	withPrewarmLead(t, 10*time.Minute)
+	now := time.Now().UTC()
+	bucket := &AppBucket{ID: 1, Target: 2, Tier: "small", WindowDuration: time.Hour}
+	entries := []*ShardEntry{
+		{ID: "ing", BucketID: 1, State: StateIngesting, WindowEnd: now.Add(5 * time.Minute)},
+	}
+	snap := ReconcilerSnapshot{
+		Bucket: bucket, Entries: entries,
+		IngestingCount:  1,
+		IsAsyncLauncher: false, // sync launcher — no LAUNCHING row dance
+		Now:             now,
+	}
+
+	for _, op := range reconcile(snap) {
+		if _, ok := op.(PrewarmNextWindowOp); ok {
+			t.Errorf("unexpected PrewarmNextWindowOp for sync launcher: %s", op.Describe())
+		}
+	}
+}
+
+// Apply inserts a LAUNCHING row via mintLaunchingRowForWindow with
+// the op's window bounds.
+func TestPrewarmNextWindowOp_Apply_InsertsLaunchingRowForNextWindow(t *testing.T) {
+	fake := newFakeRegistryStore()
+	reg := NewShardRegistry()
+	reg.SetStore(fake)
+
+	bucket := &AppBucket{ID: 1, Label: "default", Tier: "small", WindowDuration: time.Hour}
+	stub := &stubBuckets{bucket: bucket}
+
+	prov := &Provisioner{
+		registry: reg,
+		config:   ProvisionerConfig{ShardOps: fake},
+		Buckets:  stub,
+	}
+
+	start := time.Date(2026, 4, 21, 14, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	op := PrewarmNextWindowOp{BucketID: bucket.ID, WindowStart: start, WindowEnd: end}
+	if err := op.Apply(context.Background(), prov); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// Exactly one new LAUNCHING row, in the right bucket and window.
+	rows := 0
+	for _, r := range fake.records {
+		if r.State != string(StateLaunching) {
+			continue
+		}
+		rows++
+		if r.BucketID != bucket.ID {
+			t.Errorf("inserted row bucket=%d want %d", r.BucketID, bucket.ID)
+		}
+		if r.WindowStart != start.Format(time.RFC3339) {
+			t.Errorf("inserted row WindowStart=%q want %q", r.WindowStart, start.Format(time.RFC3339))
+		}
+		if r.WindowEnd != end.Format(time.RFC3339) {
+			t.Errorf("inserted row WindowEnd=%q want %q", r.WindowEnd, end.Format(time.RFC3339))
+		}
+		if r.InstanceID != "" {
+			t.Errorf("inserted row InstanceID=%q, want empty (filled by lifecycle hook)", r.InstanceID)
+		}
+	}
+	if rows != 1 {
+		t.Errorf("want 1 new LAUNCHING row, got %d", rows)
+	}
+}
+
 func describeOps(ops []ReconcileOp) []string {
 	out := make([]string, 0, len(ops))
 	for _, op := range ops {

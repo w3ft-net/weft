@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/kevlarcon/weft/store"
 )
 
 // fakeTierScaler records SetDesiredCapacity calls by tier.
@@ -241,6 +243,53 @@ func TestSyncASGDesired_NoOpForSyncLauncher(t *testing.T) {
 
 	// Must not panic.
 	prov.syncASGDesiredCapacity(context.Background())
+}
+
+// Pre-warm LAUNCHING rows (window_start > current) are EXTRA
+// capacity beyond bucket.target. §3's formula must count them or
+// the ASG will scale-in the pre-warmed instances as fast as we
+// launch them.
+func TestSyncASGDesired_IncludesFutureWindowLaunching(t *testing.T) {
+	reg := NewShardRegistry()
+	// No READ_ONLY; pre-warm is the only above-target contribution.
+
+	buckets := &manyBucketsStub{byLabel: map[string]*AppBucket{
+		"default": {ID: 1, Label: "default", Target: 2, Tier: "small", WindowDuration: time.Hour},
+	}}
+
+	// Fake store reports 2 pre-warmed LAUNCHING rows for bucket 1
+	// (window_start > now-truncated-to-hour).
+	fake := newFakeRegistryStore()
+	nextStart := time.Now().UTC().Truncate(time.Hour).Add(time.Hour)
+	for i := 0; i < 2; i++ {
+		_ = fake.SaveShard(&store.ShardRecord{
+			ID:          fmt.Sprintf("shard-pre-%d", i),
+			BucketID:    1,
+			Tier:        "small",
+			State:       string(StateLaunching),
+			Apps:        "null",
+			WindowStart: nextStart.Format(time.RFC3339),
+			WindowEnd:   nextStart.Add(time.Hour).Format(time.RFC3339),
+			CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+
+	scaler := &fakeTierScaler{}
+	prov := &Provisioner{
+		registry: reg,
+		launcher: scaler,
+		Buckets:  buckets,
+		config:   ProvisionerConfig{ShardOps: fake},
+	}
+
+	prov.syncASGDesiredCapacity(context.Background())
+
+	// Expected: target 2 + 0 READ_ONLY + 2 pre-warm = 4.
+	if got, ok := scaler.callFor("small"); !ok {
+		t.Errorf("no SetDesiredCapacity call for small")
+	} else if got != 4 {
+		t.Errorf("small desired: got %d, want 4 (target 2 + pre-warm 2)", got)
+	}
 }
 
 // READ_ONLY shards only count against their own tier. A READ_ONLY

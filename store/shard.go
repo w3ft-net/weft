@@ -211,6 +211,25 @@ func (s *Store) CountShardsInBucket(bucketID int64, states []string) (int, error
 	return int(n), nil
 }
 
+// CountShardsInBucketForFutureWindows returns the count of LAUNCHING
+// rows in this bucket whose window_start is strictly greater than
+// currentWindowStart. The reconciler's pre-warm path uses this to
+// know whether next-window LAUNCHING rows already exist (so it
+// doesn't re-emit), and the tier-level desired sync uses it to add
+// the pre-warmed LAUNCHING rows as extra capacity beyond bucket
+// targets.
+func (s *Store) CountShardsInBucketForFutureWindows(bucketID int64, currentWindowStart time.Time) (int, error) {
+	var n int64
+	threshold := currentWindowStart.UTC().Format(time.RFC3339)
+	err := s.db.Model(&ShardRecord{}).
+		Where("bucket_id = ? AND state = ? AND window_start > ?", bucketID, "LAUNCHING", threshold).
+		Count(&n).Error
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
 // ── Shard heartbeats ────────────────────────────────────────
 
 // ShardHeartbeat represents a shard's periodic status report.

@@ -169,35 +169,55 @@ exercises the full aws-sdk-go-v2 request path against a stub
 seeds a realistic EC2 instance id so the asserted terminate call
 mirrors prod wiring.
 
-## 5. Pre-warm + window-rotation rechristen
+## 5. Pre-warm + window-rotation rechristen — done
 
-**Today.** `check()` Path A flips INGESTING → READ_ONLY at
-`WindowEnd`. Nothing creates a new INGESTING shard for the next
-window. Instances keep running with READ_ONLY shards bound; ASG count
-doesn't change; no new writes have anywhere to go.
+**Status.** Landed as `PrewarmNextWindowOp` (op 4 from §1's table).
+When any INGESTING shard in a bucket is within `PrewarmLead` of its
+`WindowEnd` and no next-window LAUNCHING rows exist yet, the
+reconciler emits `bucket.Target` pre-warm ops. Each op calls
+`mintLaunchingRowForWindow` to INSERT a LAUNCHING row with
+`window_start = next window boundary`. The tier-level
+`syncASGDesiredCapacity` factors these rows in via
+`CountShardsInBucketForFutureWindows`, so ASG's `desired_capacity`
+rises in lockstep with the pre-warm commitment — ASG brings up new
+instances, the lifecycle hook claims the pre-warm rows, and those
+shards are ready to serve writes when the current window closes.
 
-**Target.** Reconciler's size-drift op (from §1) handles this once the
-plumbing is in place: after Path A transitions the current-window
-INGESTING shards to READ_ONLY, `COUNT(INGESTING+LAUNCHING) for bucket`
-drops below target and the reconciler inserts LAUNCHING rows for the
-new window.
+The policy decision is a method on `AppBucket`:
+`ShouldPrewarmNextWindow(now, ingesting) bool`. Today it's simple
+date math against a package-scoped `coordinator.PrewarmLead`. The
+method exists so future policies (ingestion burn rate, disk-fill
+slope, p99 latency tracker) can swap the implementation without
+touching every caller. `PrewarmLead` is a package var rather than a
+method argument because future strategies may not use a lead
+duration at all.
 
-Pre-warm is a separate reconciler op: when `WindowEnd - PrewarmLead ≤
-now < WindowEnd` on a current-window INGESTING shard **and** no
-LAUNCHING row exists for the next window in that bucket, insert N
-LAUNCHING rows for window+1 immediately. This gives the ASG and
-lifecycle hook time to bring up fresh instances before the old
-shards transition.
+`PrewarmLead` defaults to zero (disabled); `main.go` overrides for
+prod (suggested: ~5 minutes for dev, ~1 hour for prod — less than
+the min acceptable write-gap at a window boundary).
 
-`PrewarmLead` is a bucket-level config (or global, initially — call
-it 5 minutes for dev, 1 hour for prod) and should be < min acceptable
-write-gap at a boundary.
+Apps-snapshot freshness is already handled: christen re-reads
+`bucket.Apps` at Configure time, so a pre-warmed shard that sits in
+LAUNCHING for minutes still picks up any apps that got onboarded
+during that window.
 
-**Size.** Small as a reconciler op once §1+§2 exist. Requires the
-`Configure` RPC to accept a bucket's current `apps` snapshot — so
-pre-warmed shards get whatever apps were onboarded up to the moment
-they were christened, not stale values from when the ASG launched
-them.
+**Desired formula update.** §3's formula grew a third term:
+
+```
+desired(tier) = Σ bucket.target + count(READ_ONLY entries in tier)
+              + count(LAUNCHING rows in tier with window_start > current)
+```
+
+The new term is "pre-warm overhead" — LAUNCHING rows for future
+windows, beyond what `bucket.target` covers for the current
+window. Without this term ASG's scale-in would kill pre-warmed
+instances as fast as the coordinator requested them.
+
+**Integration tested** against real Postgres
+(`integration/prewarm_test.go`): seeds a bucket with a 5-minute
+window, an INGESTING shard close to `WindowEnd`, and verifies the
+reconciler INSERTs a next-window LAUNCHING row with the correct
+bounds and empty `instance_id`.
 
 ## 6. App-onboarding race window
 
@@ -340,7 +360,7 @@ The original gap inventory in shard-lifecycle.md. Current status:
 |---|---|---|
 | 1 | Durable shard identity on EBS | done (christen writes shard.json via Configure RPC) |
 | 2 | Coordinator christening path | done — now LAUNCHING-row promotion in `ProcessHeartbeat.christen` |
-| 3 | Rotation on wall-clock windows | partial — `RotateToReadOnlyOp` flips INGESTING → READ_ONLY on window-end; ASG right-sizes automatically via §3's tier-sync. Next-window pre-warm still pending (§5). |
+| 3 | Rotation on wall-clock windows | done — `RotateToReadOnlyOp` flips INGESTING → READ_ONLY on window-end; §5's `PrewarmNextWindowOp` brings up next-window shards ahead of the boundary; §3's tier-sync right-sizes the ASG automatically. |
 | 4 | EBS per-shard attach/detach | partial — lifecycle hook claims LAUNCHING rows and tags volumes with real shard ids; recovery branch exists |
 | 5 | Failure-recovery branch | partial — `reapDeadShards` preserves rows with `ebs_volume_id`; rebind path works. §4's op reclaims ARCHIVED instances; the failure-recovery variant (terminate a dead instance with `ShouldDecrementDesiredCapacity=false` so ASG replaces it) still needs wiring. |
 | 6 | Archive scheduling on retention | done (check's retention branch) |
@@ -399,8 +419,11 @@ Work in progress — checked items are landed:
 - [x] **§4 (terminate-on-archive)** — op 6 lands; ARCHIVED
   instances now get reclaimed via
   `TerminateInstanceInAutoScalingGroup`.
-- [ ] **§5 (pre-warm + rechristen)** — completes the window-rotation
-  story. Op 4 from the §1 table lands here.
+- [x] **§5 (pre-warm + rechristen)** — op 4 lands; next-window
+  shards come up before the current window closes. `PrewarmLead`
+  is a package var; per-bucket policy lives in
+  `AppBucket.ShouldPrewarmNextWindow` for future swap-in of
+  burn-rate-based strategies.
 - [ ] **§7 (lifecycle hook intent)** — can land anywhere after §2;
   defensible as its own PR.
 
