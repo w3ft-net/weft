@@ -112,25 +112,33 @@ gone; the method is now a stub that errors to catch stale callers.
 ```hcl
 resource "aws_autoscaling_group" "shard_small" {
   # desired_capacity removed — coordinator-managed at runtime
-  min_capacity = 0
-  max_capacity = var.shard_small_max   # see below
+  min_size = 0
+  max_size = var.shard_small_max        # see below
   lifecycle {
-    ignore_changes = [desired_capacity]
+    ignore_changes = [desired_capacity] # ONLY desired; max_size is TF-authoritative
   }
 }
 ```
 
-`max_capacity` is the static upper bound. Needs to accommodate peak
+`max_size` is the static upper bound. Needs to accommodate peak
 handoff where all buckets in the tier are pre-warming at once:
 
 ```
-max_capacity(tier) = Σ (2 + ceil(retention_b / window_b)) * target_b
-                       for bucket b with tier=tier
-                   + headroom (~25%)
+max_size(tier) = Σ (2 + ceil(retention_b / window_b)) * target_b
+                   for bucket b with tier=tier
+               + headroom (~25%)
 ```
 
 For the day-1 small tier with only the default bucket (target=2,
 retention=7d, window=7d): `(2+1)*2 = 6`, +2 headroom ⇒ 8.
+
+Only `desired_capacity` needs `ignore_changes` — the coordinator
+writes to it via `SetDesiredCapacity`, and TF would otherwise
+flap on every apply. `max_size` stays TF-authoritative: nothing
+in the coordinator writes it, so there's no drift to ignore, and
+keeping it in TF is deliberate — max is a safety ceiling that
+should go through operator review, not something the coordinator
+can raise on itself.
 
 **Paired with §4** to close the ARCHIVED-instance consistency gap:
 §3 excludes ARCHIVED from the desired formula and §4 terminates
@@ -453,7 +461,7 @@ Work in progress — checked items are landed:
   `syncASGDesiredCapacity` computes absolute desired per tick,
   clamps to `MaxSize`. TF companion change still pending in
   `infrastructure-catalog` (remove `desired_capacity` + add
-  `ignore_changes = [desired_capacity]` + set `max_capacity`).
+  `ignore_changes = [desired_capacity]` + set `max_size`).
 - [x] **§4 (terminate-on-archive)** — op 6 lands; ARCHIVED
   instances now get reclaimed via
   `TerminateInstanceInAutoScalingGroup`.

@@ -249,7 +249,7 @@ Fleet-count math in terms of config:
   For `WindowDuration = RetentionPeriod = 7d`: `(1+1) + 1 = 3`
   per-window fleets at peak.
 
-`max_capacity` on the ASG is sized against this peak (see §3 in
+`max_size` on the ASG is sized against this peak (see §3 in
 [`cleanup.md`](cleanup.md) for the formula).
 
 ## Identity persistence
