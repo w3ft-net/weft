@@ -149,15 +149,19 @@ func (bm *BucketManager) LoadFromStore(s BucketStore) error {
 	return nil
 }
 
-// Default returns the catch-all bucket (apps == []) — the bucket that
-// new apps fall into until split-evaluation moves them out. Returns
-// nil if no bucket has an empty Apps list, which is a misconfigured
-// state worth logging at the call site.
+// Default returns the bucket named "default" — the catch-all that
+// new apps land in before split-evaluation carves dedicated buckets
+// out of it. Returns nil if no bucket with that ID exists, which is
+// a misconfigured state (migration 020 always seeds one in prod).
+//
+// Matching by ID rather than by "Apps is empty" matters once the
+// first app lands in the default: Apps is no longer empty but the
+// bucket is still the catch-all.
 func (bm *BucketManager) Default() *AppBucket {
 	bm.mu.RLock()
 	defer bm.mu.RUnlock()
 	for _, b := range bm.buckets {
-		if len(b.Apps) == 0 {
+		if b.ID == "default" {
 			return b
 		}
 	}

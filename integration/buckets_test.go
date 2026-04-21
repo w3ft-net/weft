@@ -1,0 +1,221 @@
+//go:build integration
+
+package integration
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/store"
+)
+
+// TestBuckets_DefaultSeeded asserts migration 020 + 021 seeded the
+// default bucket with the shape the Go layer expects.
+func TestBuckets_DefaultSeeded(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+
+	b, ok, err := db.GetBucket("default")
+	if err != nil {
+		t.Fatalf("GetBucket(default): %v", err)
+	}
+	if !ok {
+		t.Fatal("default bucket missing — migration 020 did not seed it")
+	}
+
+	if b.TargetIngestingCount != 2 {
+		t.Errorf("default.target_ingesting_count: got %d, want 2", b.TargetIngestingCount)
+	}
+	if b.Tier != "small" {
+		t.Errorf("default.tier: got %q, want small", b.Tier)
+	}
+	// apps is stored as JSON; "[]" == catch-all day-1.
+	if b.Apps == "" {
+		t.Error("default.apps: empty string, want JSON array")
+	}
+	var apps []string
+	if b.Apps != "[]" && b.Apps != "null" {
+		if err := json.Unmarshal([]byte(b.Apps), &apps); err != nil {
+			t.Errorf("default.apps not parseable JSON: %q (%v)", b.Apps, err)
+		}
+	}
+	// Compare as parsed durations so "168h" (migration default) and
+	// "168h0m0s" (Go time.Duration.String() format, written on any
+	// SaveBucket) both pass. The invariant is "7 days," not the
+	// serialisation.
+	want := 7 * 24 * time.Hour
+	if d, err := time.ParseDuration(b.WindowDuration); err != nil || d != want {
+		t.Errorf("default.window_duration: got %q (%v, err=%v), want 168h", b.WindowDuration, d, err)
+	}
+	if d, err := time.ParseDuration(b.RetentionPeriod); err != nil || d != want {
+		t.Errorf("default.retention_period: got %q (%v, err=%v), want 168h", b.RetentionPeriod, d, err)
+	}
+}
+
+// TestBuckets_ShardsBoundToDefault asserts that christened (and
+// subsequently transitioned) shards have bucket_id='default' in
+// shard_records. Without the FK wiring, shard_records would accept
+// any string here; this test catches a silent regression if christen
+// stops writing the bucket id.
+func TestBuckets_ShardsBoundToDefault(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+
+	// Give the coordinator a window to christen the docker-compose
+	// shard containers' first heartbeats. They're typically up within
+	// ~10s of compose boot, but we may be the first test to run.
+	deadline := time.Now().Add(30 * time.Second)
+	var shards []store.ShardRecord
+	for time.Now().Before(deadline) {
+		var err error
+		shards, err = db.ListShards()
+		if err != nil {
+			t.Fatalf("ListShards: %v", err)
+		}
+		if len(shards) > 0 {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if len(shards) == 0 {
+		t.Fatal("no shards in registry after 30s — coord never christened the shard containers")
+	}
+
+	liveStates := map[string]bool{
+		"LAUNCHING":  true,
+		"INGESTING":  true,
+		"READ_ONLY":  true,
+		"ARCHIVING":  true,
+	}
+	checked := 0
+	for _, s := range shards {
+		if !liveStates[s.State] {
+			continue
+		}
+		checked++
+		if s.BucketID != "default" {
+			t.Errorf("shard %s state=%s bucket_id=%q, want default",
+				s.ID, s.State, s.BucketID)
+		}
+	}
+	if checked == 0 {
+		t.Fatalf("no non-terminal shards found among %d rows — can't assert bucket_id", len(shards))
+	}
+	t.Logf("checked %d live shards, all bound to bucket=default", checked)
+}
+
+// TestBuckets_OnboardAppPropagates calls AddSource with a fresh app
+// name, then asserts that (1) the default bucket's apps list now
+// contains it, and (2) every INGESTING shard in the default bucket
+// has the new app in its shard_records.apps — which is how query
+// routing (hasApp) will include those shards for queries against
+// this app going forward.
+//
+// READ_ONLY shards are a separate sub-assertion: if any exist, they
+// must NOT have received the new app (the denormalization invariant
+// — they can't route queries for an app they never saw writes for).
+func TestBuckets_OnboardAppPropagates(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+
+	// Use a unique app name so repeated local test runs don't
+	// conflict with each other's residue. The assertion is on the
+	// end state (apps list CONTAINS the new one), not the full set.
+	appName := fmt.Sprintf("intbuckets-%d", time.Now().UnixNano())
+
+	conn, client := onboardGRPCClient(t)
+	defer conn.Close()
+
+	_, err := client.AddSource(context.Background(), &pb.AddSourceRequest{
+		Namespace:    "kevlar",
+		AwsAccountId: "000000000000",
+		RoleArn:      "arn:aws:iam::000000000000:role/integration-test",
+		Region:       "us-east-1",
+		App:          appName,
+		LogGroup:     "/integration-test/bucket-onboarding",
+		PollInterval: "30s",
+	})
+	if err != nil {
+		t.Fatalf("AddSource: %v", err)
+	}
+
+	// Give the coordinator a tick to persist bucket + propagate to
+	// shards. OnboardApp is synchronous on the RPC path, but the
+	// persist call goes through GORM and a test reading the DB
+	// immediately after is racy in practice; retry briefly.
+	deadline := time.Now().Add(10 * time.Second)
+	var bucket store.Bucket
+	for time.Now().Before(deadline) {
+		b, ok, err := db.GetBucket("default")
+		if err != nil {
+			t.Fatalf("GetBucket(default): %v", err)
+		}
+		if !ok {
+			t.Fatal("default bucket disappeared")
+		}
+		if strings.Contains(b.Apps, `"`+appName+`"`) {
+			bucket = b
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if bucket.ID == "" {
+		// Final read for the error message.
+		b, _, _ := db.GetBucket("default")
+		t.Fatalf("bucket.apps missing %q after 10s: %s", appName, b.Apps)
+	}
+
+	// Now check shards. For each INGESTING shard bound to default,
+	// apps JSON must contain the new app. For each READ_ONLY shard,
+	// apps JSON must NOT contain it.
+	shards, err := db.ListShards()
+	if err != nil {
+		t.Fatalf("ListShards: %v", err)
+	}
+
+	ingestingChecked := 0
+	readOnlyChecked := 0
+	for _, s := range shards {
+		if s.BucketID != "default" {
+			continue
+		}
+		appsContainsNew := strings.Contains(s.Apps, `"`+appName+`"`)
+		switch s.State {
+		case "INGESTING":
+			ingestingChecked++
+			if !appsContainsNew {
+				t.Errorf("INGESTING shard %s did not receive app %q: apps=%s",
+					s.ID, appName, s.Apps)
+			}
+		case "READ_ONLY":
+			readOnlyChecked++
+			if appsContainsNew {
+				t.Errorf("READ_ONLY shard %s was mutated with new app %q: apps=%s (denormalization violated)",
+					s.ID, appName, s.Apps)
+			}
+		}
+	}
+	if ingestingChecked == 0 {
+		t.Fatal("no INGESTING shards found in default bucket — can't verify propagation")
+	}
+	t.Logf("verified %d INGESTING shards received %q; %d READ_ONLY shards stayed frozen",
+		ingestingChecked, appName, readOnlyChecked)
+}
+
+// openTestStore connects to the dev postgres instance the
+// docker-compose stack stands up. Migrations are already applied by
+// the running coordinator; store.Open re-runs goose.Up which is a
+// no-op when all migrations are current.
+func openTestStore(t *testing.T) *store.Store {
+	t.Helper()
+	db, err := store.Open(postgresURL)
+	if err != nil {
+		t.Fatalf("open store at %s: %v", postgresURL, err)
+	}
+	return db
+}

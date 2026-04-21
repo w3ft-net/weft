@@ -122,6 +122,29 @@ func main() {
 	provCtx, provCancel := context.WithCancel(context.Background())
 	defer provCancel()
 
+	// Open the store up front so Buckets can hydrate BEFORE prov.Start
+	// fires bootstrap. Without this ordering the bootstrap shard
+	// christens against an empty bucket manager and loses its
+	// bucket_id. If the store is unavailable, proceed without
+	// hydration and let christen() fail loudly — the alternative
+	// (silent fallback) reintroduces the class of bugs per-bucket
+	// config was meant to prevent.
+	var db *store.Store
+	dsn := *dbDSN
+	if dsn == "" {
+		dsn = os.Getenv("WEFT_DB_DSN")
+	}
+	if dsn == "" {
+		dsn = "host=localhost dbname=weft user=weft password=weft sslmode=disable"
+		log.Println("WARNING: using default DB DSN — set --db-dsn or WEFT_DB_DSN in production")
+	}
+	if d, err := store.Open(dsn); err != nil {
+		log.Printf("warning: config store unavailable: %v", err)
+	} else {
+		db = d
+		defer db.Close()
+	}
+
 	if len(shardTiers) > 0 {
 		// Production: ASG launcher for shard EC2 instances.
 		asgLauncher, err := coordinator.NewASGLauncher(*awsRegion, shardTiers, 9000)
@@ -143,6 +166,13 @@ func main() {
 				log.Printf("warning: VolumeManager unavailable: %v", err)
 			} else {
 				prov.SetVolumeManager(vm)
+			}
+
+			if db != nil {
+				prov.SetStore(db)
+				if err := prov.Buckets.LoadFromStore(db); err != nil {
+					log.Printf("warning: bucket hydration failed: %v", err)
+				}
 			}
 
 			prov.Start(provCtx)
@@ -181,39 +211,26 @@ func main() {
 		provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
 		prov := coordinator.NewProvisioner(coord.Registry, launcher, provConfig)
 		coord.Provisioner = prov
+
+		if db != nil {
+			prov.SetStore(db)
+			if err := prov.Buckets.LoadFromStore(db); err != nil {
+				log.Printf("warning: bucket hydration failed: %v", err)
+			}
+		}
+
 		prov.Start(provCtx)
 		log.Printf("provisioner: started with local launcher (dev mode)")
 	}
 
-	// Config store (PostgreSQL).
-	dsn := *dbDSN
-	if dsn == "" {
-		dsn = os.Getenv("WEFT_DB_DSN")
-	}
-	if dsn == "" {
-		dsn = "host=localhost dbname=weft user=weft password=weft sslmode=disable"
-		log.Println("WARNING: using default DB DSN — set --db-dsn or WEFT_DB_DSN in production")
-	}
-	db, err := store.Open(dsn)
-	if err != nil {
-		log.Printf("warning: config store unavailable: %v", err)
-	} else {
-		defer db.Close()
-
+	// Post-provisioner db-dependent setup: usage metering, customer
+	// seeding, archived-shard rehydration, pollers. Everything above
+	// already took its snapshot of the store at boot time for
+	// hydration; this block covers the pieces that run for the life
+	// of the process or depend on live buckets.
+	if db != nil {
 		// Start usage metering flush (every 5 minutes).
 		coord.StartUsageFlush(drainCtx, db)
-
-		// Give the provisioner access to the store for heartbeat adoption.
-		if coord.Provisioner != nil {
-			coord.Provisioner.SetStore(db)
-
-			// Hydrate the in-memory bucket manager from shard_records'
-			// FK target. Migration 020 always seeds a 'default' bucket;
-			// without this load christen() bails out for lack of one.
-			if err := coord.Provisioner.Buckets.LoadFromStore(db); err != nil {
-				log.Printf("warning: bucket hydration failed: %v", err)
-			}
-		}
 
 		// Seed dev data when running with a customer flag (dev/docker mode).
 		if *customer != "" {
