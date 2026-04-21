@@ -6,6 +6,17 @@ import (
 	"time"
 )
 
+// bucketStub returns a stubBuckets whose default bucket has the
+// given target and retention. Window-rotation and archive tests
+// usually pass target=0 or 1 (no scale-up) with a specific
+// retention; under-capacity tests do the inverse.
+func bucketStub(target int, retention time.Duration) *stubBuckets {
+	return &stubBuckets{bucket: &AppBucket{
+		ID: defaultBucketID, Label: "default", Apps: nil,
+		Target: target, RetentionPeriod: retention, Tier: "small",
+	}}
+}
+
 // A shard whose WindowEnd has passed must transition INGESTING →
 // READ_ONLY on the next tick — and the transition must be
 // persisted, so a coordinator restart doesn't see it as still
@@ -18,6 +29,7 @@ func TestCheck_WindowEndPastNow_RotatesToReadOnly(t *testing.T) {
 	now := time.Now().UTC()
 	reg.Add(&ShardEntry{
 		ID:          "shard-past-window",
+		BucketID:    defaultBucketID,
 		State:       StateIngesting,
 		Shard:       &failingShard{id: "shard-past-window"},
 		WindowStart: now.Add(-2 * time.Hour),
@@ -35,7 +47,7 @@ func TestCheck_WindowEndPastNow_RotatesToReadOnly(t *testing.T) {
 			ConfigureBackoff: time.Millisecond,
 		},
 		stats:      NewAppStats(),
-		Buckets:    NewBucketManager(nil),
+		Buckets:    bucketStub(1, 0),
 		configurer: &failingConfigurer{}, // no replacement gRPC; we're asserting the transition
 	}
 	prov.check(context.Background())
@@ -61,6 +73,7 @@ func TestCheck_WindowEndInFuture_NoRotation(t *testing.T) {
 	now := time.Now().UTC()
 	reg.Add(&ShardEntry{
 		ID:          "shard-fresh-window",
+		BucketID:    defaultBucketID,
 		State:       StateIngesting,
 		Shard:       &failingShard{id: "shard-fresh-window"},
 		WindowStart: now.Add(-10 * time.Minute),
@@ -75,7 +88,7 @@ func TestCheck_WindowEndInFuture_NoRotation(t *testing.T) {
 			WindowDuration: time.Hour,
 		},
 		stats:      NewAppStats(),
-		Buckets:    NewBucketManager(nil),
+		Buckets:    bucketStub(1, 0),
 		configurer: &failingConfigurer{},
 	}
 	prov.check(context.Background())
@@ -94,6 +107,7 @@ func TestCheck_ReadOnlyPastRetention_TriggersArchive(t *testing.T) {
 
 	now := time.Now().UTC()
 	entry := testArchiveIngestedShard(t, "shard-retire-candidate", "vol-retire")
+	entry.BucketID = defaultBucketID
 	entry.State = StateReadOnly
 	entry.WindowStart = now.Add(-3 * time.Hour)
 	entry.WindowEnd = now.Add(-2 * time.Hour) // past
@@ -104,12 +118,11 @@ func TestCheck_ReadOnlyPastRetention_TriggersArchive(t *testing.T) {
 		registry: reg,
 		launcher: &recordingLauncher{},
 		config: ProvisionerConfig{
-			WindowDuration:  time.Hour,
-			RetentionPeriod: time.Hour, // 1h past WindowEnd → eligible
-			ParquetDir:      t.TempDir(),
+			WindowDuration: time.Hour,
+			ParquetDir:     t.TempDir(),
 		},
 		stats:   NewAppStats(),
-		Buckets: NewBucketManager(nil),
+		Buckets: bucketStub(0, time.Hour), // retention 1h: 2h past WindowEnd → eligible
 		volumes: vm,
 	}
 	prov.check(context.Background())
@@ -133,6 +146,7 @@ func TestCheck_ReadOnlyWithinRetention_NoArchive(t *testing.T) {
 
 	now := time.Now().UTC()
 	entry := testArchiveIngestedShard(t, "shard-still-warm", "vol-warm")
+	entry.BucketID = defaultBucketID
 	entry.State = StateReadOnly
 	entry.WindowStart = now.Add(-90 * time.Minute)
 	entry.WindowEnd = now.Add(-30 * time.Minute) // 30m past, but retention is 2h
@@ -143,12 +157,11 @@ func TestCheck_ReadOnlyWithinRetention_NoArchive(t *testing.T) {
 		registry: reg,
 		launcher: &recordingLauncher{},
 		config: ProvisionerConfig{
-			WindowDuration:  time.Hour,
-			RetentionPeriod: 2 * time.Hour,
-			ParquetDir:      t.TempDir(),
+			WindowDuration: time.Hour,
+			ParquetDir:     t.TempDir(),
 		},
 		stats:   NewAppStats(),
-		Buckets: NewBucketManager(nil),
+		Buckets: bucketStub(0, 2*time.Hour),
 		volumes: vm,
 	}
 	prov.check(context.Background())
@@ -171,6 +184,7 @@ func TestCheck_OldCreatedAt_RecentWindowEnd_NoArchive(t *testing.T) {
 
 	now := time.Now().UTC()
 	entry := testArchiveIngestedShard(t, "shard-aged-but-recent-roll", "vol-ok")
+	entry.BucketID = defaultBucketID
 	entry.State = StateReadOnly
 	// Created long ago — existed as INGESTING for 10h — but only
 	// became READ_ONLY 30m ago. Retention is 1h so we still want
@@ -184,12 +198,11 @@ func TestCheck_OldCreatedAt_RecentWindowEnd_NoArchive(t *testing.T) {
 		registry: reg,
 		launcher: &recordingLauncher{},
 		config: ProvisionerConfig{
-			WindowDuration:  time.Hour,
-			RetentionPeriod: time.Hour,
-			ParquetDir:      t.TempDir(),
+			WindowDuration: time.Hour,
+			ParquetDir:     t.TempDir(),
 		},
 		stats:   NewAppStats(),
-		Buckets: NewBucketManager(nil),
+		Buckets: bucketStub(0, time.Hour),
 		volumes: vm,
 	}
 	prov.check(context.Background())
@@ -209,9 +222,10 @@ func TestCheck_OldCreatedAt_RecentWindowEnd_NoArchive(t *testing.T) {
 func TestCheck_ZeroWindow_NoRotation(t *testing.T) {
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
-		ID:    "shard-no-window",
-		State: StateIngesting,
-		Shard: &failingShard{id: "shard-no-window"},
+		ID:       "shard-no-window",
+		BucketID: defaultBucketID,
+		State:    StateIngesting,
+		Shard:    &failingShard{id: "shard-no-window"},
 		// WindowStart / WindowEnd zero value
 		CreatedAt: time.Now().UTC(),
 	})
@@ -223,7 +237,7 @@ func TestCheck_ZeroWindow_NoRotation(t *testing.T) {
 			WindowDuration: time.Hour,
 		},
 		stats:      NewAppStats(),
-		Buckets:    NewBucketManager(nil),
+		Buckets:    bucketStub(1, 0),
 		configurer: &failingConfigurer{},
 	}
 	prov.check(context.Background())

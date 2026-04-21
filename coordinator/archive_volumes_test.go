@@ -110,8 +110,7 @@ func TestArchive_SnapshotThenDetachThenDelete(t *testing.T) {
 		registry: reg,
 		launcher: &recordingLauncher{},
 		config: ProvisionerConfig{
-			RetentionPeriod: time.Minute, // anything non-zero
-			ParquetDir:      t.TempDir(), // local path; no S3
+			ParquetDir: t.TempDir(), // local path; no S3
 		},
 		volumes: vm,
 	}
@@ -186,8 +185,7 @@ func TestArchive_NoVolumeID_SkipsRetirement(t *testing.T) {
 		registry: reg,
 		launcher: &recordingLauncher{},
 		config: ProvisionerConfig{
-			RetentionPeriod: time.Minute,
-			ParquetDir:      t.TempDir(),
+			ParquetDir: t.TempDir(),
 		},
 		volumes: vm,
 	}
@@ -223,8 +221,7 @@ func TestArchive_SnapshotFailureAbortsRetirement(t *testing.T) {
 		registry: reg,
 		launcher: &recordingLauncher{},
 		config: ProvisionerConfig{
-			RetentionPeriod: time.Minute,
-			ParquetDir:      t.TempDir(),
+			ParquetDir: t.TempDir(),
 		},
 		volumes: vm,
 	}

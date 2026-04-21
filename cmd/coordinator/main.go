@@ -188,13 +188,20 @@ func main() {
 					tierByASG[asgName] = tier
 				}
 				sizeByTier := readTierSizes()
-				poller, err := coordinator.BuildLifecyclePoller(provCtx, *awsRegion, queueURL,
-					coordinator.LifecycleHandlerConfig{
-						Registry:   coord.Registry,
-						TierByASG:  tierByASG,
-						SizeByTier: sizeByTier,
-						DeviceName: os.Getenv("SHARD_VOLUME_DEVICE"),
-					})
+				lcCfg := coordinator.LifecycleHandlerConfig{
+					Registry:   coord.Registry,
+					TierByASG:  tierByASG,
+					SizeByTier: sizeByTier,
+					DeviceName: os.Getenv("SHARD_VOLUME_DEVICE"),
+				}
+				// Only wire ShardOps when a concrete *store.Store is
+				// available — assigning nil *store.Store to the
+				// interface produces a typed-nil that passes
+				// != nil checks and NPEs on first call.
+				if db != nil {
+					lcCfg.ShardOps = db
+				}
+				poller, err := coordinator.BuildLifecyclePoller(provCtx, *awsRegion, queueURL, lcCfg)
 				if err != nil {
 					log.Printf("warning: lifecycle poller unavailable: %v", err)
 				} else if poller != nil {

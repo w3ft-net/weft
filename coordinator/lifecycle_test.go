@@ -140,11 +140,16 @@ func (f *fakeLifecycleASG) lastResult() string {
 // ── Tests ─────────────────────────────────────────
 
 func baseHandler(vm VolumeManager, asg ASGLifecycleAPI, reg *ShardRegistry, storeIface HeartbeatStore) *LifecycleHandler {
+	return handlerWithShardOps(vm, asg, reg, storeIface, nil)
+}
+
+func handlerWithShardOps(vm VolumeManager, asg ASGLifecycleAPI, reg *ShardRegistry, storeIface HeartbeatStore, shardOps ShardOpsStore) *LifecycleHandler {
 	return NewLifecycleHandler(LifecycleHandlerConfig{
 		Volumes:      vm,
 		EC2Instances: &fakeEC2Instances{},
 		ASG:          asg,
 		Store:        storeIface,
+		ShardOps:     shardOps,
 		Registry:     reg,
 		TierByASG:    map[string]string{"weft-shard-small": "small"},
 		SizeByTier:   map[string]int32{"small": 100},
@@ -153,14 +158,39 @@ func baseHandler(vm VolumeManager, asg ASGLifecycleAPI, reg *ShardRegistry, stor
 	})
 }
 
-// No recovery candidates → christen: coordinator creates a new
-// volume, attaches it, signals CONTINUE.
+// seedLaunchingRow puts a LAUNCHING shard_records row into the given
+// fake for a specific tier, matching what the reconciler would insert
+// before calling the ASG. Tests that exercise the CHRISTEN branch need
+// this so the hook's ClaimLaunchingForTier can find something to
+// stamp.
+func seedLaunchingRow(t *testing.T, fake *fakeRegistryStore, id, tier string) {
+	t.Helper()
+	if err := fake.SaveShard(&store.ShardRecord{
+		ID:             id,
+		State:          string(StateLaunching),
+		Tier:           tier,
+		BucketID:       defaultBucketID,
+		Apps:           "null",
+		WindowStart:    "2026-04-21T00:00:00Z",
+		WindowEnd:      "2026-04-22T00:00:00Z",
+		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+		HeartbeatToken: "lifecycle-test-token",
+	}); err != nil {
+		t.Fatalf("seed LAUNCHING %s: %v", id, err)
+	}
+}
+
+// No recovery candidates → christen: coordinator claims the
+// reconciler's LAUNCHING row, creates a new volume tagged with its
+// shard id, attaches, signals CONTINUE.
 func TestLifecycle_NewFleet_Christens(t *testing.T) {
 	vm := &fakeVolumeManager{}
 	asg := &fakeLifecycleASG{}
 	reg := NewShardRegistry()
+	fake := newFakeRegistryStore()
+	seedLaunchingRow(t, fake, "shard-fresh", "small")
 
-	h := baseHandler(vm, asg, reg, nil)
+	h := handlerWithShardOps(vm, asg, reg, nil, fake)
 
 	ev := LifecycleEvent{
 		ASGName:              "weft-shard-small",
@@ -185,6 +215,12 @@ func TestLifecycle_NewFleet_Christens(t *testing.T) {
 	}
 	if asg.lastResult() != "CONTINUE" {
 		t.Errorf("CompleteLifecycleAction result: got %q want CONTINUE", asg.lastResult())
+	}
+	// The new volume's shard_id tag must match the claimed row, not
+	// a placeholder — so the shard boots with its real identity in
+	// place.
+	if _, ok := vm.createdByShard["shard-fresh"]; !ok {
+		t.Errorf("CreateForShard wasn't invoked with claimed row's id; createdByShard=%v", vm.createdByShard)
 	}
 }
 
@@ -275,7 +311,10 @@ func TestLifecycle_AmbiguousRecovery_Abandons(t *testing.T) {
 }
 
 // An available volume whose shard_id is still heartbeating is NOT a
-// recovery candidate — that shard isn't dead.
+// recovery candidate — that shard isn't dead. With no recoverable
+// volumes, the hook falls into the christen branch; a seeded
+// LAUNCHING row for the tier lets it claim an identity for the new
+// instance.
 func TestLifecycle_LiveShardVolume_NotARecovery(t *testing.T) {
 	vm := &fakeVolumeManager{
 		availableByTier: map[string][]VolumeInfo{
@@ -293,8 +332,10 @@ func TestLifecycle_LiveShardVolume_NotARecovery(t *testing.T) {
 			{ShardID: "shard-live", Addr: "10.0.0.1:9000", State: "INGESTING"},
 		},
 	}
+	fake := newFakeRegistryStore()
+	seedLaunchingRow(t, fake, "shard-new", "small")
 
-	h := baseHandler(vm, asg, reg, storeFake)
+	h := handlerWithShardOps(vm, asg, reg, storeFake, fake)
 
 	ev := LifecycleEvent{
 		ASGName:             "weft-shard-small",

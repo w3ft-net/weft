@@ -69,6 +69,79 @@ func (f *fakeRegistryStore) get(id string) (store.ShardRecord, bool) {
 	return r, ok
 }
 
+// ── ShardOpsStore ────────────────────────────────────────
+
+// ClaimLaunchingForTier finds the oldest LAUNCHING row for the tier
+// with empty instance_id and stamps the given instance id on it.
+// Matches the production SELECT FOR UPDATE SKIP LOCKED semantics —
+// concurrent callers with different instance ids will each claim a
+// different row (or return ok=false when none remain).
+func (f *fakeRegistryStore) ClaimLaunchingForTier(tier, instanceID string) (store.ShardRecord, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var oldestID string
+	var oldestCreated string
+	for id, rec := range f.records {
+		if rec.State != string(StateLaunching) || rec.Tier != tier || rec.InstanceID != "" {
+			continue
+		}
+		if oldestID == "" || rec.CreatedAt < oldestCreated {
+			oldestID = id
+			oldestCreated = rec.CreatedAt
+		}
+	}
+	if oldestID == "" {
+		return store.ShardRecord{}, false, nil
+	}
+	rec := f.records[oldestID]
+	rec.InstanceID = instanceID
+	f.records[oldestID] = rec
+	return rec, true, nil
+}
+
+func (f *fakeRegistryStore) FindLaunchingByInstance(instanceID string) (store.ShardRecord, bool, error) {
+	if instanceID == "" {
+		return store.ShardRecord{}, false, nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, rec := range f.records {
+		if rec.State == string(StateLaunching) && rec.InstanceID == instanceID {
+			return rec, true, nil
+		}
+	}
+	return store.ShardRecord{}, false, nil
+}
+
+func (f *fakeRegistryStore) ListStaleLaunching(olderThan time.Duration) ([]store.ShardRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	threshold := time.Now().UTC().Add(-olderThan).Format(time.RFC3339)
+	var out []store.ShardRecord
+	for _, rec := range f.records {
+		if rec.State == string(StateLaunching) && rec.CreatedAt < threshold {
+			out = append(out, rec)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeRegistryStore) CountShardsInBucket(bucketID int64, states []string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	wanted := make(map[string]bool, len(states))
+	for _, s := range states {
+		wanted[s] = true
+	}
+	n := 0
+	for _, rec := range f.records {
+		if rec.BucketID == bucketID && wanted[rec.State] {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // Rebind (instance replaced behind a durable shard id) must persist the
 // new address so a coordinator restart reloads the correct endpoint.
 func TestRebind_PersistsAddrChange(t *testing.T) {

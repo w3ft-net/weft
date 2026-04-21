@@ -19,3 +19,27 @@ type ShardLauncher interface {
 	// the caller doesn't have it.
 	TerminateInstance(ctx context.Context, id, addr string) error
 }
+
+// asyncLauncher is the optional extension launchers can implement to
+// declare that LaunchInstance is non-blocking — the instance comes up
+// out-of-band (e.g., AWS ASG via lifecycle hook). Launchers that
+// satisfy this interface and return true get a LAUNCHING row INSERTed
+// before LaunchInstance is called; the lifecycle hook claims the row
+// when the instance enters Pending:Wait; heartbeats from the instance
+// promote it to INGESTING. Synchronous launchers (LocalLauncher,
+// in-process test launchers) don't implement the interface — their
+// LaunchInstance returns only when the shard is ready to Configure.
+type asyncLauncher interface {
+	UsesLaunchingRows() bool
+}
+
+// isLaunchingLauncher reports whether this launcher participates in
+// the LAUNCHING-row handoff. Used by the reconciler to pick between
+// the INSERT-then-call-ASG path and the synchronous
+// launch-and-configure path.
+func isLaunchingLauncher(l ShardLauncher) bool {
+	if al, ok := l.(asyncLauncher); ok {
+		return al.UsesLaunchingRows()
+	}
+	return false
+}

@@ -107,7 +107,7 @@ func TestProvisioner_ArchivesExpiredShard(t *testing.T) {
 
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
-		ID: "shard-old", Apps: []string{"vimgym"},
+		ID: "shard-old", Apps: []string{"vimgym"}, BucketID: defaultBucketID,
 		WindowStart: t0, WindowEnd: t1,
 		State:     StateReadOnly,
 		Shard:     ds,
@@ -119,12 +119,12 @@ func TestProvisioner_ArchivesExpiredShard(t *testing.T) {
 
 	parquetDir := t.TempDir()
 	config := ProvisionerConfig{
-		PollInterval:    5 * time.Second,
-		RetentionPeriod: 1 * time.Hour, // shard is 2h old → should archive
-		ParquetDir:      parquetDir,
+		PollInterval: 5 * time.Second,
+		ParquetDir:   parquetDir,
 	}
 
 	prov := NewProvisioner(reg, launcher, config)
+	prov.Buckets = bucketStub(0, time.Hour) // retention 1h; WindowEnd is > 1h past
 	prov.check(context.Background())
 
 	// Verify state changed to ARCHIVED.

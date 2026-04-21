@@ -60,13 +60,14 @@ type LifecycleHandler struct {
 	volumes      VolumeManager
 	ec2Instances EC2InstancesAPI
 	asg          ASGLifecycleAPI
-	store        HeartbeatStore     // used to decide whether a "prior owner" instance is really dead
-	registry     *ShardRegistry     // for the same decision — only shards we know about are eligible
-	tierByASG    map[string]string  // ASG name → tier (small/medium/large)
-	sizeByTier   map[string]int32   // tier → data_volume_size_gb
-	deviceName   string             // e.g. /dev/sdf
-	deadFor      time.Duration      // "no heartbeat in ≥ deadFor" counts as dead
-	defaultAZ    string             // safety net: if DescribeInstances fails we still need an AZ
+	store        HeartbeatStore    // used to decide whether a "prior owner" instance is really dead
+	shardOps     ShardOpsStore     // for claiming LAUNCHING rows on CHRISTEN
+	registry     *ShardRegistry    // for the same decision — only shards we know about are eligible
+	tierByASG    map[string]string // ASG name → tier (small/medium/large)
+	sizeByTier   map[string]int32  // tier → data_volume_size_gb
+	deviceName   string            // e.g. /dev/sdf
+	deadFor      time.Duration     // "no heartbeat in ≥ deadFor" counts as dead
+	defaultAZ    string            // safety net: if DescribeInstances fails we still need an AZ
 }
 
 // LifecycleHandlerConfig wraps the constructor args so we don't end
@@ -76,6 +77,7 @@ type LifecycleHandlerConfig struct {
 	EC2Instances EC2InstancesAPI
 	ASG          ASGLifecycleAPI
 	Store        HeartbeatStore
+	ShardOps     ShardOpsStore
 	Registry     *ShardRegistry
 	TierByASG    map[string]string
 	SizeByTier   map[string]int32
@@ -92,6 +94,7 @@ func NewLifecycleHandler(cfg LifecycleHandlerConfig) *LifecycleHandler {
 		ec2Instances: cfg.EC2Instances,
 		asg:          cfg.ASG,
 		store:        cfg.Store,
+		shardOps:     cfg.ShardOps,
 		registry:     cfg.Registry,
 		tierByASG:    cfg.TierByASG,
 		sizeByTier:   cfg.SizeByTier,
@@ -178,8 +181,26 @@ func (h *LifecycleHandler) decide(ctx context.Context, instanceID, tier, az stri
 		if !ok || size <= 0 {
 			return DecisionAbandon, "", fmt.Errorf("no data_volume_size_gb configured for tier %q", tier)
 		}
+		// CHRISTEN requires a reconciler-minted LAUNCHING row
+		// naming this tier. The row becomes the volume's shard_id
+		// tag — no placeholder, no re-tag post-boot. An instance
+		// reaching this branch without a row is an orphan (ASG
+		// scaled out-of-band, or reconciler/ASG state diverged):
+		// ABANDON so the ASG terminates it.
+		if h.shardOps == nil {
+			return DecisionAbandon, "", fmt.Errorf("christen for %s: no ShardOps store — can't claim LAUNCHING row", instanceID)
+		}
+		claimed, claimOK, err := h.shardOps.ClaimLaunchingForTier(tier, instanceID)
+		if err != nil {
+			return DecisionAbandon, "", fmt.Errorf("claim LAUNCHING row for %s/%s: %w", tier, instanceID, err)
+		}
+		if !claimOK {
+			return DecisionAbandon, "", fmt.Errorf("no LAUNCHING row for tier %s; instance %s is an orphan", tier, instanceID)
+		}
+		log.Printf("lifecycle: claimed LAUNCHING row %s for instance %s (tier=%s)",
+			claimed.ID, instanceID, tier)
 		id, err := h.volumes.CreateForShard(ctx, CreateVolumeOpts{
-			ShardID: placeholderShardID(instanceID),
+			ShardID: claimed.ID,
 			Tier:    tier,
 			AZ:      az,
 			SizeGB:  size,
@@ -276,15 +297,6 @@ func (h *LifecycleHandler) lookupInstanceAZ(ctx context.Context, instanceID stri
 		}
 	}
 	return "", fmt.Errorf("no AZ found for instance %s", instanceID)
-}
-
-// placeholderShardID is the temporary marker we stamp on a just-
-// created volume that doesn't have a real shard id yet. Not
-// cryptographic — just needs to be unique so operators aren't
-// confused by "same id on three volumes". The real shard id gets
-// applied post-christening via VolumeManager.TagWithShardID.
-func placeholderShardID(instanceID string) string {
-	return "pending-" + instanceID
 }
 
 // ParseLifecycleEvent unwraps an SNS-wrapped ASG lifecycle payload.

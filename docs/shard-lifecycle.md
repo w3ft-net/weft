@@ -1,9 +1,10 @@
 # Shard Lifecycle
 
-Status of the code as of this document: **intended design only**. The
-gap analysis at the end of this doc lists the parts of the system that
-don't yet match this model — several of them don't exist. Read the
-"Gap analysis" and "What exists today" sections before touching code.
+This doc is the target architecture. It's broadly implemented as of
+2026-04 but not complete — see [`cleanup.md`](cleanup.md) for the
+live inventory of remaining work. Anywhere this doc and the code
+disagree and `cleanup.md` doesn't mention it, the code is a bug; file
+it.
 
 ## What a shard is
 
@@ -41,48 +42,58 @@ lifecycle**. A shard can outlive many instances.
 
 ```
                 ┌─────────────┐
-          ┌────▶│  INGESTING  │◀─┐───┐
-          │     └─────────────┘  │   │
-  coord.  │                      │   │ window
-christens │     ┌─────────────┐  │   │ closes
-new shard └─────│   ADOPTED   │  │   │
-                └─────────────┘  │   ▼
-                       ▲         │  ┌─────────────┐
-                 fresh EBS,      │  │  READ_ONLY  │◀─┐
-                 no identity     │  └─────────────┘  │
-                                 │         │        rebind
-                  rebind ────────┘         │        (known id
-                  (known id)               │         at new
-                                           │         addr)
-                                           │
-                                           │ retention
-                                           │ boundary
-                                           ▼
-                                    ┌─────────────┐
-                                    │  ARCHIVING  │◀─┐
-                                    └─────────────┘  │
-                                           │        rebind
-                                           │ export to S3
-                                           ▼
-                                    ┌─────────────┐
-                                    │  ARCHIVED   │  (Lambda-served cold)
-                                    └─────────────┘
-                                           │
-                                           │ cold retention
-                                           ▼
-                                    ┌─────────────┐
-                                    │  TERMINATED │
-                                    └─────────────┘
+                │  LAUNCHING  │  (row in shard_records;
+                └─────────────┘   no instance yet, or
+                       │          instance not yet heart-
+                       │ instance beating)
+                       │ heartbeats
+                       ▼
+                ┌─────────────┐
+                │  INGESTING  │◀─┐
+                └─────────────┘  │ rebind
+                       │         │ (known id
+                       │         │  at new addr)
+                       │ window  │
+                       │ closes  │
+                       ▼         │
+                ┌─────────────┐  │
+                │  READ_ONLY  │◀─┘
+                └─────────────┘
+                       │
+                       │ retention
+                       │ boundary
+                       ▼
+                ┌─────────────┐
+                │  ARCHIVING  │◀─┐ rebind
+                └─────────────┘  │ (export resumes
+                       │         │  on new instance)
+                       │ export  │
+                       │ to S3   │
+                       ▼         │
+                ┌─────────────┐  │
+                │  ARCHIVED   │◀─┘ (Lambda-served cold)
+                └─────────────┘
+                       │
+                       │ cold retention
+                       ▼
+                ┌─────────────┐
+                │  TERMINATED │
+                └─────────────┘
 ```
 
-- **ADOPTED** — an instance has come up with a **fresh EBS volume**
-  (no `shard.json` on disk) and has reported in. The coordinator
-  hasn't yet christened it with a window/app assignment. Only new
-  shards in a brand-new fleet pass through this state.
-- **INGESTING** — coordinator has assigned the shard a window and
-  app set. Writes for rows whose timestamp falls in the window and
-  whose app is in the set route here. Queries overlapping the
-  window route here.
+- **LAUNCHING** — a persistent row in `shard_records` that
+  represents the reconciler's intent to bring up a new shard. Has a
+  minted `shard_id`, heartbeat token, bucket, window, and tier, but
+  (at first) no `instance_id` and no `addr`. The lifecycle hook
+  stamps `instance_id` onto the oldest unmatched row for the tier
+  when AWS brings up an instance; the instance's first heartbeat
+  promotes the row to INGESTING. Synchronous launchers (LocalLauncher
+  for dev/test) skip this state — they Configure the shard inline
+  before it ever heartbeats.
+- **INGESTING** — Configure RPC has been sent; shard is registered
+  and serving writes + queries for its `(window, apps)`. Writes for
+  rows whose timestamp falls in the window and whose app is in the
+  set route here. Queries overlapping the window route here.
 - **READ_ONLY** — wall-clock time has passed the window's end. No
   new writes arrive. Queries still route here until the retention
   boundary.
@@ -98,6 +109,56 @@ new shard └─────│   ADOPTED   │  │   │
 Exactly one state transition per boundary — the coordinator is the
 only actor that moves a shard from one state to the next. Instances
 don't self-transition.
+
+### LAUNCHING handoff
+
+Launching a new shard via the async (ASG) path is a three-party
+choreography around a single DB row. Each party's read of the row is
+the authoritative answer to "what's the reconciler already doing?":
+
+```
+ reconciler             lifecycle hook          shard process
+ ──────────             ──────────────          ─────────────
+ INSERT LAUNCHING  →
+   (shard_id,
+    bucket, window,
+    token, tier,
+    instance_id='')
+        │
+        └─ SetDesiredCapacity +1
+                                │
+                                ASG launches instance
+                                │
+                                ▼
+                  ClaimLaunchingForTier(tier, i-X)
+                  stamps instance_id = i-X, tags
+                  volume with shard_id, attaches
+                                │
+                                └─ CompleteLifecycleAction(CONTINUE)
+                                                       │
+                                                       ▼
+                                                  instance boots,
+                                                  reads empty volume,
+                                                  heartbeats with
+                                                  shard_id=""
+                                                  instance_id=i-X
+                                                       │
+ FindLaunchingByInstance(i-X) ──────────────────────── ┘
+ returns the row; Configure RPC sends the row's
+ fields; UPSERT flips state LAUNCHING → INGESTING
+```
+
+A missing row at any hand-off point is a bug, not a fallback:
+
+- Lifecycle hook with no matching row → ABANDON the instance (ASG
+  terminates it).
+- Christen with no matching row → error, shard stays unclaimed and
+  will eventually be reaped.
+
+The stale-LAUNCHING reaper sweeps rows older than ~10 minutes: empty
+`instance_id` means the ASG never brought one up (capacity issue);
+populated `instance_id` means the instance never heartbeated (bad
+AMI, userdata failure) and gets ABANDON-signalled to the ASG.
 
 ### Rebind: prodigal-son heartbeats
 
@@ -120,9 +181,10 @@ ASG-replaced instance reattaches the same EBS, the shard process
 comes up with the same identity, and the coordinator just re-wires
 its gRPC handle.
 
-The ADOPTED state is only entered by a shard with a fresh EBS volume
-and no `shard.json`. That's a brand-new shard in a brand-new fleet,
-not a restarted one.
+LAUNCHING is the only state an empty-`shard_id` heartbeat can
+terminate in. A shard with a populated `shard.json` heartbeats its
+durable id on every ping — its path is always rebind, never
+christen.
 
 ## Rotation
 
@@ -194,19 +256,27 @@ When an instance comes up, it discovers its shard identity like this:
      "shard_id": "shard-2026w16-small-01",
      "window_start": "2026-04-13T00:00:00Z",
      "window_end":   "2026-04-20T00:00:00Z",
-     "apps":         ["weft"]
+     "apps":         ["weft"],
+     "heartbeat_token": "…hex…"
    }
    ```
 2. The shard process reads `shard.json` and heartbeats as that
-   identity.
+   identity. This is the rebind path — the coordinator finds a
+   matching registry entry and re-wires its gRPC handle.
 3. If `shard.json` doesn't exist (fresh EBS volume), the shard
-   reports as ADOPTED / UNCLAIMED — no identity yet. The coordinator
-   christens it on the next tick: assigns a shard id, window, app
-   set, and tells the shard (via a Configure RPC) to write
-   `shard.json`. That file is the durable record of identity.
+   heartbeats with an empty `shard_id`. The coordinator looks up the
+   LAUNCHING row stamped with this instance's id (the lifecycle hook
+   claimed it earlier), sends Configure with the row's
+   `(shard_id, window, apps, heartbeat_token)`, and UPSERTs the row
+   from LAUNCHING → INGESTING. The shard writes `shard.json` on
+   receipt of Configure.
 
-EBS volume must be tagged with the shard id so the coordinator can
+EBS volumes are tagged with the shard id so the coordinator can
 find "the volume that used to host shard X" when an instance dies.
+For a christening instance the lifecycle hook applies this tag as
+part of claiming the LAUNCHING row — the volume already carries its
+real shard id when the instance boots, not a placeholder to be
+renamed later.
 
 ## EBS re-attach on instance death
 
@@ -294,159 +364,69 @@ to a distinct object key per run and finalise atomically).
 ## Coordinator contract
 
 The coordinator's provisioner is the single writer of shard identity
-and state. Concretely it owns:
+and state. It runs a **per-bucket reconciler** every tick (and
+synchronously from `OnboardApp`): the reconciler reads a snapshot
+of bucket config + registry + in-flight LAUNCHING count and emits
+an ordered list of idempotent ops, which are then applied. Each
+responsibility below is one op type; order inside a tick is
+app-drift → window-closed → under-capacity → retention-archive.
+Future responsibilities (pre-warm, terminate-on-archive) slot in as
+additional ops without reshaping the scaffold.
 
-- **Rotation scheduling.** "The current window ends in ≤24h; mint
-  W1 shards now." Running on a ticker.
-- **Christening.** When an ADOPTED shard appears, assign
-  `(shard_id, window, apps)`, persist to `shard_records`, tell the
-  shard to write its `shard.json`, transition to INGESTING.
+Concretely the provisioner owns:
+
+- **Launch intent.** INSERT a LAUNCHING row in `shard_records`
+  before calling the ASG, so `COUNT(LAUNCHING + INGESTING)` is the
+  single source of truth for "effective capacity" and the reconciler
+  doesn't ratchet the ASG under launch latency.
+- **Rotation scheduling.** "The current window ends in ≤`PrewarmLead`;
+  mint W1 LAUNCHING rows now." Running on a ticker.
+- **Christening.** When an unclaimed heartbeat arrives (shard has no
+  `shard.json`), find the LAUNCHING row the lifecycle hook stamped
+  onto this instance, Configure the shard with the row's identity,
+  UPSERT state LAUNCHING → INGESTING.
 - **Window transition.** Move a shard INGESTING → READ_ONLY when
   wall-clock passes `WindowEnd`.
 - **Archive scheduling.** Move READ_ONLY → ARCHIVING at retention
   boundary, kick off export.
 - **Failure recovery.** Detect dead instance, decide reap vs.
   recover based on shard state + retention.
+- **Stale-LAUNCHING reap.** Sweep LAUNCHING rows older than the
+  stuck-launch threshold. Empty `instance_id` → DELETE. Populated
+  `instance_id` → ABANDON-signal the ASG and DELETE.
 - **Registry sync.** The in-memory registry is a cache of
-  `shard_records`. Both must agree. Remove-from-registry always
-  pairs with delete-from-store for terminal states (TERMINATED),
-  and with update-for-state-transition for everything else.
+  `shard_records` for states INGESTING onward. LAUNCHING rows live
+  only in the DB — there is nothing in-memory to cache. Every
+  transition persists; Remove-from-registry pairs with
+  delete-from-store for terminal states, update-for-state-transition
+  for everything else.
 
 Shards do nothing autonomously beyond:
-- Write `shard.json` when told.
-- Heartbeat `(shard_id, addr, state, row_count, disk_bytes)`.
+- Write `shard.json` when told via Configure.
+- Heartbeat `(shard_id, addr, instance_id, state, row_count,
+  disk_bytes)`. Empty `shard_id` on first boot with a fresh volume;
+  the durable id once Configure has landed.
 - Accept writes.
 - Answer queries.
 - Export to S3 when told (if the hot-shard does the export; an
   alternative is the coordinator doing it remotely via DuckDB over
   gRPC).
 
-## What exists today
+The lifecycle hook is a third actor, run per-instance by AWS ASG on
+`EC2_INSTANCE_LAUNCHING`. It bridges "ASG brought an instance up"
+with "reconciler minted a LAUNCHING row." Its decisions are:
 
-Read this before implementing anything above.
-
-- **Identity**: shards today get `-id=<something>` at launch. For
-  ASG-launched shards, `<something>` is the EC2 instance id, so
-  identity is coupled 1:1 with the instance. For local/docker
-  shards, a timestamp is used. `shard_records.id` reflects whichever
-  was used. There is no `shard.json` on disk.
-- **EBS**: ASG launch templates today use ephemeral EBS
-  provisioned per-launch. Nothing attaches/detaches volumes by
-  shard id. When an instance dies, its volume dies with it.
-- **Windows**: the heartbeat proto used to carry `window_start` /
-  `window_end` / `apps`; those were removed in commit `f4c310e`
-  (Apr 14) with the comment "coordinator manages windows now." The
-  coordinator-side assignment was never written. Result:
-  ASG-adopted shards have `WindowStart = WindowEnd = 0001-01-01T00:00:00Z`
-  in the registry and in `shard_records`. Only local-launcher
-  shards (via `provisioner.launchAndConfigure`, used by
-  `bootstrap` in dev) have real windows.
-- **Rotation**: partial. The provisioner's `check()` loop (see
-  `provisioner.go`) flips INGESTING shards to READ_ONLY on the
-  wall-clock `WindowEnd` boundary, and the bucket-sizing pass
-  below provisions replacements (via ASG in prod, via
-  `launchAndConfigure` in dev/docker). What's still missing from
-  the target design: no handoff-lead pre-warming of the next
-  window's fleet, no N-fleet overlap tracking, and no archive-on-
-  retention boundary (that path exists in `archive()` but only
-  fires when `RetentionPeriod > 0 && ParquetDir != ""`, both
-  opt-in).
-- **Archiving**: `StateExpiring` and `StateArchived` exist in the
-  registry enum. The export path exists in `coordinator/archiver*`
-  and `shard/cold_shard*`. Coordinator-driven scheduling of
-  EXPIRING → ARCHIVING → ARCHIVED on a retention boundary does
-  **not** exist; today the transitions happen only when called
-  manually via an RPC.
-- **Failure recovery**: `provisioner.reapDeadShards` removes
-  heartbeat-stale entries from the registry and calls
-  `launcher.TerminateInstance`. There is no branch that asks "is
-  the shard's data still needed?" — everything that stops
-  heartbeating is reaped. Data loss is therefore silent when an
-  instance dies mid-window.
-
-## Gap analysis
-
-Things that must be built or changed for the system to actually
-match this doc. Numbered so we can track them.
-
-1. **Durable shard identity on EBS.** Shards read/write
-   `/opt/app/data/shard.json`. A `Configure` RPC from the
-   coordinator is the one thing allowed to write it. Heartbeats
-   report the identity read from disk, not from `-id=`.
-
-2. **Coordinator christening path for ADOPTED shards.** Today
-   `adoptFromHeartbeats` quietly accepts anything heartbeating and
-   slots it into `StateIngesting` with zero-value windows. It must
-   instead:
-   - Recognise a known shard id (heartbeat's `shard_id` already in
-     the registry) → rebind path: update `addr` / `instance_id` /
-     gRPC handle, clear `Suspended`, preserve state. No christening.
-   - Recognise an unclaimed new instance (shard reports "no
-     identity on disk") → christen: mint the next shard name for
-     the active window, populate `apps` from the current onboarded
-     set (see gap item 9), write `shard.json` via a Configure RPC,
-     transition to INGESTING.
-
-3. **Rotation on wall-clock windows.** A ticker in the provisioner
-   that, when the current window is within some lead time of its
-   end, christens the next fleet, sized per tier. Distinct from
-   the row-count / disk-bytes rotation logic currently in
-   `check()`, which should probably just go away once windows are
-   real.
-
-4. **EBS per-shard attach/detach.** Several related pieces:
-   a. **Naked launch templates** for the shard ASGs — no
-      `block_device_mappings`. New instances come up with the root
-      volume only; the shard's data volume is always attached from
-      outside by the coordinator. Prevents the collision where an
-      ASG-launched replacement boots with its own empty volume
-      that would race our re-attach.
-   b. **Tag volumes with `shard_id`** at creation. The tag is the
-      authoritative `shard → volume` binding; operators can find a
-      shard's volume with `describe-volumes
-      --filters Name=tag:shard_id,Values=<name>`.
-   c. **Cache `ebs_volume_id` in `shard_records`** to avoid a
-      describe-volumes call on every recovery, and to make the
-      binding visible in Postgres.
-   d. **Recovery orchestration** uses the ASG-friendly dance:
-      `TerminateInstanceInAutoScalingGroup` (with
-      `ShouldDecrementDesiredCapacity=false` so the ASG launches
-      our replacement), then `DetachVolume(force)` →
-      `AttachVolume(new-instance)`.
-   e. **IAM**: the coordinator instance role needs
-      `ec2:DescribeVolumes`, `ec2:AttachVolume`, `ec2:DetachVolume`,
-      `ec2:CreateVolume`, `ec2:DeleteVolume`, `ec2:CreateTags`.
-
-5. **Failure-recovery branch.** Before reaping, ask: is this
-   shard's window within hot retention and not ARCHIVED? If so,
-   recover (re-attach EBS into ASG-launched replacement) rather
-   than reap. Only fully-expired shards get reaped and terminated.
-
-6. **Archive scheduling on retention boundary.** Currently export
-   is manual. Should be driven by the same ticker that does
-   rotation: when wall-clock − `WindowEnd` > hot-retention, move
-   to ARCHIVING and invoke the existing exporter.
-
-7. **Registry ↔ store consistency on termination.** `shard_records`
-   currently accumulates rows for long-dead instances.
-   `Registry.Remove` must always reach store and delete the row for
-   TERMINATED shards; transitional states must update, not delete.
-
-8. **Clean up existing `shard_records` cruft.** One-time: any row
-   whose `id` is an `i-…` with zero-value window and no recent
-   heartbeat is a legacy artifact of the old model and can be
-   deleted. A migration-or-script can do it.
-
-9. **`apps` populated at christening; appended on app onboarding.**
-   Every shard record always has a non-empty `apps` list — there's
-   no "NULL means catch-all" special case. At christening,
-   populate from the current set of onboarded apps for the
-   namespace. When a new app is onboarded (via weftd onboarding or
-   CLI), append it to the `apps` list on every INGESTING shard
-   that should host it (= all current write shards, until the
-   dedicated-fleet mechanism in a future iteration carves out
-   exceptions). Query routing is then a direct membership check
-   (`app ∈ shard.apps`), no special cases.
+- **RECOVER** — an orphan EBS volume with a recognised `shard_id`
+  exists in this tier+AZ. The hook attaches it to the new instance;
+  the shard boots, reads its `shard.json`, heartbeats with its
+  durable id, and the coordinator takes the rebind path.
+- **CHRISTEN** — no orphan volume. Claim the oldest unmatched
+  LAUNCHING row for this tier (stamp `instance_id` onto the row,
+  create an EBS volume tagged with the row's `shard_id`, attach).
+  The subsequent empty-id heartbeat promotes the row.
+- **ABANDON** — ambiguous recovery (multiple orphan volumes), no
+  LAUNCHING row to claim, or any error. The ASG terminates the
+  instance.
 
 ## Known ambiguities to decide before implementation
 
@@ -495,23 +475,6 @@ Three layers worth building out in lockstep with the above:
   data loss. Not cheap to run; do it on deploys that touch this
   path.
 
-## Rollout plan
-
-This doc is the target. Actual work should land in roughly this
-order so each step is independently useful and testable:
-
-1. **#1 + #2** together: durable identity on EBS, christening
-   path. Without rotation or recovery the system still works
-   (instances come up, get christened once, stay christened,
-   windows are real). Unblocks queries immediately. Sets up the
-   invariants everything else depends on.
-2. **#7 + #8**: registry/store consistency + one-time cleanup.
-   Cheap, makes the state table observable.
-3. **#4**: EBS attach/detach. Needs the IAM changes and a small
-   change to the shard ASGs' launch templates. Test by manually
-   terminating one instance and watching the recovery.
-4. **#5**: failure-recovery decision logic on top of #4. Guarded
-   by a flag initially so we can smoke-test one shard at a time.
-5. **#3 + #6**: rotation + archive scheduling. These are the
-   "proactive" parts of the provisioner — they change behavior at
-   window boundaries. Last because the biggest behaviour change.
+Remaining work toward this target lives in
+[`cleanup.md`](cleanup.md), which is the authoritative inventory of
+open items and their sequencing.

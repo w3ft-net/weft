@@ -5,37 +5,45 @@ covers what's missing today, why it matters, and what the change shape
 looks like. "Size" is a rough estimate, assuming familiarity with the
 code around it.
 
-## 1. Reconciler rewrite of `check()`
+## 1. Reconciler rewrite of `check()` — partial
 
-**Today.** `provisioner.check()` is a pile of scattered loops: split
-evaluation, bucket-sizing, INGESTING→READ_ONLY transition, archive
-scheduling. Each operates on its own view of state. None track "I
-already asked for this op last tick and it hasn't taken effect yet,"
-so scale-ups ratchet under any launch latency.
+**Status.** Scaffold landed (`coordinator/reconciler.go`):
+`ReconcileOp` interface, `ReconcilerSnapshot`, a pure
+`reconcile(snap) []ReconcileOp` function, and `reconcileBucket`
+helpers wire it into the ticker and into `OnboardApp`. Four of the
+six ops from the target table are in:
 
-**Target.** A single per-bucket reconciler that reads three inputs
-(desired from `buckets`, actual from `shard_records` + registry,
-in-flight launches) and emits a small set of ops to close the gap:
+| # | Drift | Op | Status |
+|---|---|---|---|
+| 1 | app-drift | `AddAppToShardOp` | landed |
+| 2 | under-capacity | `LaunchShardOp` | landed (replaced `scaleBucketsToTarget` + `effectiveCapacity`) |
+| 3 | window-closed | `RotateToReadOnlyOp` | landed (replaced Path A) |
+| 4 | pre-warm next window | (future) | pending — see §5 |
+| 5 | retention-archive | `ArchiveShardOp` | landed (per-bucket retention is authoritative; `ProvisionerConfig.RetentionPeriod` dropped) |
+| 6 | terminate-on-archive | (future) | pending — see §4 |
 
-| Drift | Op |
-|---|---|
-| `buckets.apps` has an app missing from an INGESTING shard in that bucket | UPDATE `shard_records.apps` + registry in-memory |
-| INGESTING+LAUNCHING count < `bucket.target` | INSERT LAUNCHING row, call ASG (see §3) |
-| Wall-clock past `WindowEnd` on an INGESTING shard | flip to READ_ONLY (today's Path A) |
-| `WindowEnd - PrewarmLead ≤ now` and no next-window LAUNCHING | INSERT LAUNCHING rows for next window |
-| READ_ONLY past `bucket.retention_period` | archive() (today's path) |
-| ARCHIVED shard with live `instance_id` | TerminateInstanceInAutoScalingGroup (see §4) |
+`check()` is now just bucket-split evaluation + a `reconcileBucket`
+loop. Ops 4 and 6 slot in as new op types without further scaffold
+changes; they belong to §5 and §4 respectively.
 
-Each op is idempotent and composable. Testing becomes: feed (bucket
-snapshot, shard_records snapshot, in-flight map), assert the list of
-ops issued.
+**Depends on.** §2 (LAUNCHING state, done), §3 (ASG desired
+wiring).
 
-**Size.** Large (~500 lines). The existing check() body gets mostly
-replaced; individual ops are small but the aggregation is new.
+## 2. `LAUNCHING` state in `shard_records` — done
 
-**Depends on.** §2 (LAUNCHING state), §3 (ASG desired wiring).
+**Status.** Landed. Reconciler INSERTs LAUNCHING rows before calling
+the ASG (`provisioner.mintLaunchingRow`); lifecycle hook claims the
+oldest unmatched row via `ClaimLaunchingForTier` and tags the EBS
+volume with the claimed shard id; the subsequent heartbeat promotes
+the row to INGESTING through `christen` (strict — no mint-at-christen
+fallback). Stale-LAUNCHING reaper deletes orphan rows every tick.
+Effective capacity is the DB's `COUNT(LAUNCHING + INGESTING)` for
+async launchers; the registry-only count remains only for
+synchronous launchers (LocalLauncher, tests) where there is nothing
+async to coordinate with. Choice of path flows from
+`asyncLauncher.UsesLaunchingRows()`, not from store availability.
 
-## 2. `LAUNCHING` state in `shard_records`
+**Original write-up below, preserved for context.**
 
 **Today.** `StateLaunching` is defined in `coordinator/registry.go:18`
 but nothing uses it. When the reconciler wants to scale up, it has no
@@ -334,14 +342,14 @@ The original gap inventory in shard-lifecycle.md. Current status:
 | # | Gap | Status |
 |---|---|---|
 | 1 | Durable shard identity on EBS | done (christen writes shard.json via Configure RPC) |
-| 2 | Coordinator christening path | done (`ProcessHeartbeat.christen`) |
+| 2 | Coordinator christening path | done — now LAUNCHING-row promotion in `ProcessHeartbeat.christen` |
 | 3 | Rotation on wall-clock windows | partial — Path A transitions, no replacement yet (see §5) |
-| 4 | EBS per-shard attach/detach | partial — lifecycle hook attaches, recovery branch exists |
+| 4 | EBS per-shard attach/detach | partial — lifecycle hook claims LAUNCHING rows and tags volumes with real shard ids; recovery branch exists |
 | 5 | Failure-recovery branch | partial — `reapDeadShards` preserves rows with `ebs_volume_id`; rebind path works; the `TerminateInstanceInAutoScalingGroup` call from §4 is the missing piece |
 | 6 | Archive scheduling on retention | done (check's retention branch) |
 | 7 | Registry ↔ store consistency | done (persist on every transition; FK ensures referential integrity) |
 | 8 | Clean up `shard_records` cruft | done via migration 019 |
-| 9 | `apps` populated at christening | done (christen snapshots `bucket.apps`) |
+| 9 | `apps` populated at christening | done — bucket read is authoritative; LAUNCHING row's snapshot is for observability only |
 
 Gaps #3, #4, #5 fold into the reconciler work (§1, §5, §4
 respectively). Once those land, the shard-lifecycle doc's "Gap
@@ -380,18 +388,20 @@ Small but worth flagging:
 
 ## Suggested sequencing
 
-When someone picks this back up:
+Work in progress — checked items are landed:
 
-1. **§2 (LAUNCHING state)** first — foundation for the rest.
-2. **§1 (reconciler)** second — pulls existing logic into the new
-   shape and adds size-drift, but ASG control stays where it is.
-3. **§3 (ASG desired wiring)** + **§4 (terminate-on-archive)** —
-   flip ASG to coordinator-managed. At this point the shard-lifecycle
-   doc's §3/§5 gaps close.
-4. **§5 (pre-warm + rechristen)** — completes the window-rotation
-   story.
-5. **§7 (lifecycle hook intent)** — can land anywhere after §2;
-   defensible as its own PR.
+- [x] **§2 (LAUNCHING state)** — reconciler/hook/christen now agree
+  on a shared LAUNCHING row.
+- [x] **§1 (reconciler), ops 1/2/3/5** — per-bucket reconciler with
+  explicit op types, idempotent and state-gated. Ops 4 (pre-warm)
+  and 6 (terminate-on-archive) land with §5 and §4 respectively.
+- [ ] **§3 (ASG desired wiring)** + **§4 (terminate-on-archive)** —
+  flip ASG to coordinator-managed. At this point the shard-lifecycle
+  doc's §3/§5 gaps close.
+- [ ] **§5 (pre-warm + rechristen)** — completes the window-rotation
+  story.
+- [ ] **§7 (lifecycle hook intent)** — can land anywhere after §2;
+  defensible as its own PR.
 
 §8 (reload-config), §9 (env prefix cleanup), §10 (test failures), §11
 doc revisions are all independent small PRs that can interleave.

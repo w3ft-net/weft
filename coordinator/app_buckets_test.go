@@ -384,9 +384,19 @@ func TestProvisioner_ScalesUpToConfiguredCount(t *testing.T) {
 	}
 	t.Cleanup(func() { ds.Close() })
 
+	launcher := NewLocalLauncher()
+	t.Cleanup(func() { launcher.Close() })
+
+	fake := newFakeBucketStore()
+	b := fake.seedBucket("default", []string{"vimgym"})
+	b.TargetIngestingCount = 3
+	_ = fake.SaveBucket(b)
+
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
-		ID: "shard-only", Apps: []string{"vimgym"},
+		ID:       "shard-only",
+		BucketID: b.ID, // reconciler filters snapshot.Entries by BucketID
+		Apps:     []string{"vimgym"},
 		// Future WindowEnd keeps the wall-clock rotation from
 		// preempting the bucket-scale-up this test exercises.
 		WindowStart: time.Now().UTC(), WindowEnd: time.Now().UTC().Add(100 * 365 * 24 * time.Hour),
@@ -394,15 +404,7 @@ func TestProvisioner_ScalesUpToConfiguredCount(t *testing.T) {
 		Shard: ds, CreatedAt: time.Now(),
 	})
 
-	launcher := NewLocalLauncher()
-	t.Cleanup(func() { launcher.Close() })
-
 	prov := NewProvisioner(reg, launcher, ProvisionerConfig{})
-	fake := newFakeBucketStore()
-	b := fake.seedBucket("default", []string{"vimgym"})
-	b.TargetIngestingCount = 3 // scale target lives on the row now
-	// Seed writes a fresh copy, so find-and-update via SaveBucket.
-	_ = fake.SaveBucket(b)
 	prov.Buckets = NewBucketManager(fake)
 
 	prov.check(context.Background())
@@ -421,10 +423,22 @@ func TestProvisioner_SplitCreatesNewShard(t *testing.T) {
 	}
 	t.Cleanup(func() { ds.Close() })
 
+	launcher := NewLocalLauncher()
+	t.Cleanup(func() { launcher.Close() })
+
+	fake := newFakeBucketStore()
+	// Target=1 so the sizing loop doesn't scale up (the existing
+	// shared shard meets the count); we're testing split-driven
+	// provisioning in isolation here.
+	b := fake.seedBucket("default", []string{"vimgym", "callbox", "grantcentral"})
+	b.TargetIngestingCount = 1
+	_ = fake.SaveBucket(b)
+
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
-		ID:   "shard-shared",
-		Apps: []string{"vimgym", "callbox", "grantcentral"},
+		ID:       "shard-shared",
+		BucketID: b.ID,
+		Apps:     []string{"vimgym", "callbox", "grantcentral"},
 		// Future WindowEnd — this test exercises bucket splitting,
 		// not window-boundary rotation.
 		WindowStart: time.Now().UTC(),
@@ -435,19 +449,7 @@ func TestProvisioner_SplitCreatesNewShard(t *testing.T) {
 		CreatedAt:   time.Now(),
 	})
 
-	launcher := NewLocalLauncher()
-	t.Cleanup(func() { launcher.Close() })
-
-	config := ProvisionerConfig{}
-
-	prov := NewProvisioner(reg, launcher, config)
-	fake := newFakeBucketStore()
-	// Target=1 so the sizing loop doesn't scale up (the existing
-	// shared shard meets the count); we're testing split-driven
-	// provisioning in isolation here.
-	b := fake.seedBucket("default", []string{"vimgym", "callbox", "grantcentral"})
-	b.TargetIngestingCount = 1
-	_ = fake.SaveBucket(b)
+	prov := NewProvisioner(reg, launcher, ProvisionerConfig{})
 	prov.Buckets = NewBucketManager(fake)
 
 	// Simulate vimgym dominating throughput.

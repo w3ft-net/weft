@@ -27,6 +27,14 @@ type EC2Api interface {
 	DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
 }
 
+// UsesLaunchingRows reports that ASGLauncher's LaunchInstance is
+// non-blocking with respect to instance-readiness — the ASG call
+// returns once desired_capacity is updated, but the instance doesn't
+// heartbeat until EC2 has brought it up and the lifecycle hook has
+// attached its volume. The reconciler uses this signal to INSERT a
+// LAUNCHING row before the call (see provisionForBucket).
+func (l *ASGLauncher) UsesLaunchingRows() bool { return true }
+
 // ASGLauncher implements ShardLauncher by scaling AWS Auto Scaling Groups.
 type ASGLauncher struct {
 	asgClient ASGApi

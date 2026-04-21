@@ -2,6 +2,8 @@ package coordinator
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -31,17 +33,43 @@ type HeartbeatStore interface {
 	InsertHeartbeat(hb *store.ShardHeartbeat) error
 }
 
+// ShardOpsStore is the shard_records operations the provisioner and
+// lifecycle hook need for the LAUNCHING/INGESTING handoff. The
+// reconciler INSERTs LAUNCHING rows, the lifecycle hook claims them,
+// the christen path promotes them, the reaper cleans up stale ones.
+// Separate from HeartbeatStore so tests that don't exercise this path
+// can keep their minimal mocks.
+//
+// *store.Store satisfies this interface natively; tests that do
+// exercise the LAUNCHING lifecycle supply a fake.
+type ShardOpsStore interface {
+	SaveShard(rec *store.ShardRecord) error
+	DeleteShard(id string) error
+	ClaimLaunchingForTier(tier, instanceID string) (store.ShardRecord, bool, error)
+	FindLaunchingByInstance(instanceID string) (store.ShardRecord, bool, error)
+	ListStaleLaunching(olderThan time.Duration) ([]store.ShardRecord, error)
+	CountShardsInBucket(bucketID int64, states []string) (int, error)
+}
+
+// staleLaunchingAge is the age beyond which a LAUNCHING row is
+// considered stuck. Rows older than this with no instance_id mean the
+// ASG never brought an instance up (capacity exhausted, launch
+// failed); rows with an instance_id mean the instance was claimed by
+// the lifecycle hook but never heartbeated (bad AMI, userdata
+// failure). 10 minutes is well past the ~2 minute instance-boot
+// window plus a coordinator tick.
+const staleLaunchingAge = 10 * time.Minute
+
 // ProvisionerConfig controls shard rotation thresholds.
 type ProvisionerConfig struct {
-	PollInterval       time.Duration   // how often to check (default 5min)
-	RetentionPeriod    time.Duration   // how long READ_ONLY shards stay hot before archiving (0 = no archival)
-	ParquetDir         string          // directory for Parquet exports (local path or s3:// prefix)
-	S3Config           *shard.S3Config // S3 credentials for Parquet export/read (nil = local only)
-	LambdaFunctionURL  string          // Lambda function URL for cold queries (empty = in-process ColdShard)
-	Store              HeartbeatStore  // for reading shard heartbeats (nil = no heartbeat adoption)
-	WindowDuration     time.Duration   // duration of a single shard window (w.duration in docs/shard-lifecycle.md)
-	ConfigureRetries   int             // attempts to Configure a freshly-launched shard (default 12)
-	ConfigureBackoff   time.Duration   // sleep between Configure attempts (default 5s)
+	PollInterval      time.Duration   // how often to check (default 5min)
+	ParquetDir        string          // directory for Parquet exports (local path or s3:// prefix)
+	S3Config          *shard.S3Config // S3 credentials for Parquet export/read (nil = local only)
+	LambdaFunctionURL string          // Lambda function URL for cold queries (empty = in-process ColdShard)
+	Store             HeartbeatStore  // for reading shard heartbeats (nil = no heartbeat adoption)
+	WindowDuration    time.Duration   // duration of a single shard window (w.duration in docs/shard-lifecycle.md)
+	ConfigureRetries  int             // attempts to Configure a freshly-launched shard (default 12)
+	ConfigureBackoff  time.Duration   // sleep between Configure attempts (default 5s)
 	// ShardSecret is the shared bearer token attached to every outbound
 	// coord→shard gRPC call (see auth.ClientTokenUnaryInterceptor). The
 	// shard's server-side interceptor validates against the same value.
@@ -49,16 +77,20 @@ type ProvisionerConfig struct {
 	// runs without an interceptor — production deploys populate this
 	// from SHARD_SECRET via cmd/coordinator/main.go.
 	ShardSecret string
+	// ShardOps is the shard_records store for LAUNCHING-row lifecycle
+	// (mint, claim, promote, reap). Nil in tests that don't exercise
+	// the ASG handoff; main.go sets it to the full *store.Store in
+	// production.
+	ShardOps ShardOpsStore
 }
 
 // DefaultProvisionerConfig returns sensible production defaults.
-// IngestingPerBucket isn't here — that target lives on each bucket
-// row in the DB (see migration 020).
+// IngestingPerBucket and RetentionPeriod aren't here — both live on
+// each bucket row in the DB (migrations 020/021).
 func DefaultProvisionerConfig() ProvisionerConfig {
 	return ProvisionerConfig{
-		PollInterval:    5 * time.Minute,
-		WindowDuration:  7 * 24 * time.Hour,
-		RetentionPeriod: 7 * 24 * time.Hour,
+		PollInterval:   5 * time.Minute,
+		WindowDuration: 7 * 24 * time.Hour,
 	}
 }
 
@@ -155,10 +187,13 @@ func NewProvisioner(registry *ShardRegistry, launcher ShardLauncher, config Prov
 	}
 }
 
-// SetStore provides the store for heartbeat queries. Called after the store
-// is opened (which may happen after the provisioner starts).
+// SetStore provides the store for heartbeat and LAUNCHING-row
+// operations. Called after the store is opened (which may happen
+// after the provisioner starts). *store.Store satisfies both
+// HeartbeatStore and ShardOpsStore, so one call wires both.
 func (p *Provisioner) SetStore(s *store.Store) {
 	p.config.Store = s
+	p.config.ShardOps = s
 }
 
 // SetVolumeManager enables volume-aware christening. When set, the
@@ -195,10 +230,54 @@ func (p *Provisioner) Start(ctx context.Context) {
 			case <-ticker.C:
 				p.adoptFromHeartbeats()
 				p.reapDeadShards()
+				p.reapStaleLaunching()
 				p.check(ctx)
 			}
 		}
 	}()
+}
+
+// reapStaleLaunching sweeps LAUNCHING rows older than staleLaunchingAge.
+// Two flavours, distinguished by whether the lifecycle hook has
+// claimed the row:
+//   - Empty instance_id: the ASG never brought an instance up
+//     (capacity exhausted, AMI missing, launch template rejected).
+//     DELETE the row so next tick's under-capacity op sees the gap
+//     and the reconciler re-mints.
+//   - Populated instance_id: the lifecycle hook claimed us but the
+//     instance never heartbeated (bad AMI, userdata failure,
+//     networking). Signal the ASG to terminate this specific
+//     instance (decrements desired_capacity) and DELETE the row.
+func (p *Provisioner) reapStaleLaunching() {
+	if p.config.ShardOps == nil {
+		return
+	}
+	stale, err := p.config.ShardOps.ListStaleLaunching(staleLaunchingAge)
+	if err != nil {
+		log.Printf("provisioner: list stale LAUNCHING: %v", err)
+		return
+	}
+	for _, row := range stale {
+		if row.InstanceID == "" {
+			log.Printf("provisioner: reaping stale LAUNCHING %s (no instance — ASG never launched)", row.ID)
+			if err := p.config.ShardOps.DeleteShard(row.ID); err != nil {
+				log.Printf("provisioner: delete stale LAUNCHING %s: %v", row.ID, err)
+			}
+			continue
+		}
+		log.Printf("provisioner: abandoning stale LAUNCHING %s (instance %s never heartbeated)",
+			row.ID, row.InstanceID)
+		if p.launcher != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if err := p.launcher.TerminateInstance(ctx, row.InstanceID, ""); err != nil {
+				log.Printf("provisioner: terminate stuck instance %s: %v", row.InstanceID, err)
+			}
+			cancel()
+		}
+		if err := p.config.ShardOps.DeleteShard(row.ID); err != nil {
+			log.Printf("provisioner: delete stale LAUNCHING %s: %v", row.ID, err)
+		}
+	}
 }
 
 // adoptFromHeartbeats reads recent shard heartbeats from the store
@@ -331,69 +410,72 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 		hb.ShardID, hb.Addr, hb.State, hb.RowCount)
 }
 
-// christen assigns identity to an unclaimed shard: looks up the
-// bucket the shard should belong to, mints a shard id, picks a window
-// from WindowDuration, and sends Configure. The shard persists the
-// identity to shard.json before returning success.
-//
-// Today every christened shard goes into the catch-all "default"
-// bucket (BucketManager.Default). When per-app dedicated buckets are
-// added (the Split path), this lookup grows logic to pick by app /
-// instance metadata.
+// christen promotes a LAUNCHING row to INGESTING: finds the row the
+// reconciler minted for this instance, sends Configure with the
+// row's shard id / window / heartbeat token, and registers the
+// entry. Only ever called from ProcessHeartbeat when an unclaimed
+// heartbeat arrives — which, since non-async launchers Configure
+// synchronously in provisionForBucket, happens only on the async
+// (ASG) path. A missing row is an invariant break: the reconciler
+// and the hook must agree on which instances are expected, and any
+// orphan instance is the stale-LAUNCHING reaper's job.
 func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 	// Race guard: two heartbeats from the same unclaimed instance
 	// arrive back-to-back (the Heartbeat RPC dispatches each in its
 	// own goroutine). heartbeatMu serialises them, but the second
 	// goroutine's hb.ShardID is still "" because it was captured at
 	// send time, before the first Configure returned. Without this
-	// check the second goroutine mints a new seq and tries to
-	// re-Configure the same addr; the shard then rejects with
-	// "shard already configured as ...".
+	// check the second goroutine tries to re-Configure the same
+	// addr; the shard rejects with "shard already configured as ...".
 	if p.registry.HasAddr(hb.Addr) {
 		return nil
 	}
+	if p.config.ShardOps == nil {
+		return fmt.Errorf("christen %s: no ShardOps store — async-launcher handoff requires LAUNCHING-row lookup", hb.Addr)
+	}
+	if hb.InstanceID == "" {
+		return fmt.Errorf("christen %s: heartbeat carried empty instance_id — can't match a LAUNCHING row", hb.Addr)
+	}
 
-	bucket, err := p.Buckets.Default()
+	row, ok, err := p.config.ShardOps.FindLaunchingByInstance(hb.InstanceID)
 	if err != nil {
-		return fmt.Errorf("christen %s: lookup default bucket: %w", hb.Addr, err)
+		return fmt.Errorf("christen %s: find LAUNCHING for instance %s: %w", hb.Addr, hb.InstanceID, err)
+	}
+	if !ok {
+		return fmt.Errorf("christen %s: no LAUNCHING row for instance %s — reconciler/ASG out of sync",
+			hb.Addr, hb.InstanceID)
+	}
+
+	windowStart, err1 := time.Parse(time.RFC3339, row.WindowStart)
+	windowEnd, err2 := time.Parse(time.RFC3339, row.WindowEnd)
+	if err1 != nil || err2 != nil || windowStart.IsZero() || windowEnd.IsZero() {
+		return fmt.Errorf("christen %s: unparseable window [%s, %s]: %v / %v",
+			row.ID, row.WindowStart, row.WindowEnd, err1, err2)
+	}
+
+	if p.Buckets == nil {
+		return fmt.Errorf("christen %s: no BucketManager — cannot resolve bucket %d", row.ID, row.BucketID)
+	}
+	bucket, err := p.Buckets.ByID(row.BucketID)
+	if err != nil {
+		return fmt.Errorf("christen %s: lookup bucket %d: %w", row.ID, row.BucketID, err)
 	}
 	if bucket == nil {
-		return fmt.Errorf("christen %s: no default bucket — has migration 020+022 run?", hb.Addr)
+		return fmt.Errorf("christen %s: bucket %d not found", row.ID, row.BucketID)
 	}
 
-	now := time.Now().UTC()
-	windowStart, windowEnd := p.currentWindow(bucket, now)
-
-	// Name format: shard-YYYYMMDDThhmm-seq. Globally unique within the
-	// fleet; seq increments from current registry size so concurrent
-	// christenings don't collide.
-	seq := p.registry.Count() + 1
-	shardID := fmt.Sprintf("shard-%s-%d", windowStart.Format("20060102T1504"), seq)
-
-	// Mint a per-shard bearer for heartbeat auth. The shard persists
-	// this in shard.json (see Configure) and sends it as authorization
-	// metadata on every subsequent Heartbeat RPC. Without this
-	// secret an attacker with network reach to :9020 could register a
-	// rogue shard by heartbeating with a stolen ID.
-	heartbeatToken, err := store.GenerateShardHeartbeatToken()
-	if err != nil {
-		return fmt.Errorf("mint heartbeat token for %s: %w", shardID, err)
-	}
-
-	// Snapshot the bucket's current Apps into the shard. After this
-	// point the shard's app set is frozen — adding an app to the
-	// bucket later does NOT backfill it onto already-christened
-	// shards (intentional: those shards never received writes for
-	// the new app, so query routing should keep them out of its
-	// fan-out). Only newly-christened shards inherit the updated set.
+	// Fresh bucket.Apps so a shard that LAUNCHED before an
+	// OnboardApp call still picks up the new app on promotion. The
+	// LAUNCHING row's Apps column is a snapshot for observability;
+	// the bucket read is authoritative.
 	apps := append([]string(nil), bucket.Apps...)
 
 	req := &pb.ConfigureRequest{
-		ShardId:        shardID,
+		ShardId:        row.ID,
 		Apps:           apps,
-		WindowStart:    windowStart.Format(time.RFC3339),
-		WindowEnd:      windowEnd.Format(time.RFC3339),
-		HeartbeatToken: heartbeatToken,
+		WindowStart:    row.WindowStart,
+		WindowEnd:      row.WindowEnd,
+		HeartbeatToken: row.HeartbeatToken,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -401,29 +483,29 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 
 	sh, err := p.configurer.Dial(ctx, hb.Addr, req)
 	if err != nil {
-		return fmt.Errorf("configure %s at %s: %w", shardID, hb.Addr, err)
+		return fmt.Errorf("configure %s at %s: %w", row.ID, hb.Addr, err)
 	}
 
-	// Find the data volume the lifecycle handler attached for this
-	// instance (tagged shard_id=pending-<instance_id>) and rewrite
-	// the shard_id tag to the now-known real id. Caches the volume
-	// id on the entry so recovery can skip DescribeVolumes.
+	// The lifecycle hook already tagged the volume with row.ID when
+	// it claimed the LAUNCHING row (see lifecycle.decide()'s CHRISTEN
+	// branch). Look it up so recovery can skip DescribeVolumes; no
+	// re-tag necessary.
 	var volumeID string
-	if p.volumes != nil && hb.InstanceID != "" {
-		placeholder := "pending-" + hb.InstanceID
-		if info, err := p.volumes.FindByShard(ctx, placeholder); err != nil {
-			log.Printf("provisioner: find volume for %s: %v", placeholder, err)
+	if p.volumes != nil {
+		if info, err := p.volumes.FindByShard(ctx, row.ID); err != nil {
+			log.Printf("provisioner: find volume for %s: %v", row.ID, err)
 		} else if info != nil {
-			if err := p.volumes.TagWithShardID(ctx, info.VolumeID, shardID); err != nil {
-				log.Printf("provisioner: tag volume %s as %s: %v", info.VolumeID, shardID, err)
-			} else {
-				volumeID = info.VolumeID
-			}
+			volumeID = info.VolumeID
 		}
 	}
 
+	createdAt, _ := time.Parse(time.RFC3339, row.CreatedAt)
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+
 	p.registry.Add(&ShardEntry{
-		ID:             shardID,
+		ID:             row.ID,
 		Apps:           apps,
 		WindowStart:    windowStart,
 		WindowEnd:      windowEnd,
@@ -433,13 +515,13 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 		RowCount:       hb.RowCount,
 		EBSVolumeID:    volumeID,
 		Shard:          sh,
-		CreatedAt:      now,
-		HeartbeatToken: heartbeatToken,
-		Tier:           bucket.Tier,
-		BucketID:       bucket.ID,
+		CreatedAt:      createdAt,
+		HeartbeatToken: row.HeartbeatToken,
+		Tier:           row.Tier,
+		BucketID:       row.BucketID,
 	})
 	log.Printf("provisioner: christened %s at %s (bucket=%s(%d) window %s–%s volume=%s)",
-		shardID, hb.Addr, bucket.Label, bucket.ID, windowStart.Format(time.RFC3339), windowEnd.Format(time.RFC3339), volumeID)
+		row.ID, hb.Addr, bucket.Label, bucket.ID, row.WindowStart, row.WindowEnd, volumeID)
 	return nil
 }
 
@@ -540,81 +622,22 @@ func (p *Provisioner) windowDurationFor(bucket *AppBucket) time.Duration {
 	return 7 * 24 * time.Hour
 }
 
-// retentionPeriodFor picks the effective RetentionPeriod for a
-// bucket, same fallback chain as windowDurationFor. Zero means
-// "don't archive this bucket" — matches the provisioner-config
-// convention.
-func (p *Provisioner) retentionPeriodFor(bucket *AppBucket) time.Duration {
-	if bucket != nil && bucket.RetentionPeriod > 0 {
-		return bucket.RetentionPeriod
-	}
-	return p.config.RetentionPeriod
-}
-
-// bootstrap ensures at least one shard instance is launching.
-// For ASG launchers, it checks whether instances already exist before
-// scaling — avoids ratcheting up desired capacity on every coordinator restart.
-// For local launchers, it uses launchAndConfigure for immediate setup.
+// bootstrap forces an early reconciler pass on startup so the first
+// shards begin launching without waiting a full PollInterval. Just
+// runs reconcileBucket for each bucket — the under-capacity op
+// emits one LaunchShardOp per missing shard.
 func (p *Provisioner) bootstrap(ctx context.Context) {
-	if asg, isASG := p.launcher.(*ASGLauncher); isASG {
-		// Check if the ASG already has running instances — if so, just
-		// wait for them to heartbeat rather than scaling up further.
-		for _, asgName := range asg.tiers {
-			ids, err := asg.asgInstanceIDs(ctx, asgName)
-			if err == nil && len(ids) > 0 {
-				log.Printf("provisioner: ASG %s already has %d instances, waiting for heartbeats", asgName, len(ids))
-				return
-			}
-		}
-		log.Printf("provisioner: no ASG instances found, launching one (will adopt via heartbeat)")
-		if _, err := p.launcher.LaunchInstance(ctx, "small"); err != nil {
-			log.Printf("provisioner: bootstrap ASG launch failed: %v", err)
-		}
-		return
-	}
-
-	// Local launcher: configure immediately. Align the bootstrap
-	// shard's window to the bucket's WindowDuration boundary so
-	// check()'s wall-clock rotation fires on the same schedule as
-	// christened shards. Bootstrap needs the default bucket — bail
-	// loudly if it's missing rather than silently degrading to a
-	// shard with no bucket_id (which would fail the NOT NULL FK at
-	// persist time anyway).
 	if p.Buckets == nil {
-		log.Printf("provisioner: bootstrap failed: no BucketManager configured")
 		return
 	}
-	bucket, err := p.Buckets.Default()
+	all, err := p.Buckets.All()
 	if err != nil {
-		log.Printf("provisioner: bootstrap failed: lookup default bucket: %v", err)
+		log.Printf("provisioner: bootstrap: Buckets.All: %v", err)
 		return
 	}
-	if bucket == nil {
-		log.Printf("provisioner: bootstrap failed: no default bucket")
-		return
+	for _, bucket := range all {
+		p.reconcileBucket(ctx, bucket)
 	}
-
-	tier := bucket.Tier
-	if tier == "" {
-		tier = "small"
-	}
-	apps := append([]string(nil), bucket.Apps...)
-
-	now := time.Now().UTC()
-	windowStart, windowEnd := p.currentWindow(bucket, now)
-
-	shardID := fmt.Sprintf("shard-%d", now.UnixMilli())
-	entry, err := p.launchAndConfigure(ctx, shardID, tier, apps, windowStart, windowEnd)
-	if err != nil {
-		log.Printf("provisioner: bootstrap failed: %v", err)
-		return
-	}
-	entry.BucketID = bucket.ID
-	entry.Tier = tier
-
-	p.registry.Add(entry)
-	log.Printf("provisioner: bootstrapped shard %s (bucket=%s(%d) %s to %s)",
-		shardID, bucket.Label, bucket.ID, now.Format(time.RFC3339), windowEnd.Format(time.RFC3339))
 }
 
 // launchAndConfigure is the shared lifecycle logic: launch instance,
@@ -676,15 +699,16 @@ func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier stri
 	}, nil
 }
 
-// OnboardApp records an app as belonging to a bucket and fans the
-// new app out to every INGESTING shard currently in that bucket.
-// Called from AddSource (operator config) and from IngestStream on
-// first-seen apps (auto-discovery). For now every app lands in the
-// default catch-all bucket; a future Split() can promote individual
-// apps into their own buckets.
+// OnboardApp records an app as belonging to a bucket and kicks a
+// reconciler pass so the new app lands on every INGESTING shard in
+// that bucket without waiting for the next ticker. Called from
+// AddSource (operator config) and from IngestStream on first-seen
+// apps (auto-discovery). For now every app lands in the default
+// catch-all bucket; a future Split() can promote individual apps
+// into their own buckets.
 //
 // Idempotent: if the app is already on the bucket, no DB write and
-// no shard mutation. Safe to call on the hot ingest path where
+// no reconcile pass. Safe to call on the hot ingest path where
 // SeenApps.Add returns true for every row the coordinator has ever
 // seen from a given (customer, app) pair.
 func (p *Provisioner) OnboardApp(app string) error {
@@ -706,39 +730,8 @@ func (p *Provisioner) OnboardApp(app string) error {
 	if updated == nil {
 		return nil
 	}
-	p.propagateAppsToIngesting(updated)
+	p.reconcileBucket(context.Background(), updated)
 	return nil
-}
-
-// propagateAppsToIngesting appends any bucket apps missing from an
-// INGESTING shard's Apps list to that shard, in memory and in the
-// store. Only INGESTING shards mutate — READ_ONLY / ARCHIVED shards'
-// apps stay frozen because they never accepted writes for the new
-// app, and including them in query routing would widen the fan-out
-// pointlessly.
-func (p *Provisioner) propagateAppsToIngesting(bucket *AppBucket) {
-	for _, entry := range p.registry.Entries() {
-		if entry.State != StateIngesting {
-			continue
-		}
-		if entry.BucketID != bucket.ID {
-			continue
-		}
-		changed := false
-		have := make(map[string]bool, len(entry.Apps))
-		for _, a := range entry.Apps {
-			have[a] = true
-		}
-		for _, a := range bucket.Apps {
-			if !have[a] {
-				entry.Apps = append(entry.Apps, a)
-				changed = true
-			}
-		}
-		if changed {
-			p.registry.PersistState(entry)
-		}
-	}
 }
 
 // check evaluates each INGESTING shard for rotation and app split.
@@ -760,98 +753,19 @@ func (p *Provisioner) check(ctx context.Context) {
 		}
 	}
 
-	// Ensure each bucket has enough INGESTING shards. The target
-	// comes from the bucket's persisted record (DB-backed since
-	// migration 020) rather than a per-coordinator config knob.
+	// Per-bucket reconciliation. Covers app-drift (op 1) and
+	// under-capacity scale-up (op 2); future passes will fold the
+	// remaining check() loops into ops as well.
 	if p.Buckets != nil {
 		all, err := p.Buckets.All()
 		if err != nil {
-			log.Printf("provisioner: Buckets.All: %v", err)
-			all = nil
+			log.Printf("provisioner: reconcile: Buckets.All: %v", err)
 		}
 		for _, bucket := range all {
-			if bucket.Target <= 0 {
-				continue
-			}
-			// For multi-app buckets, count INGESTING shards that own
-			// the first app — they all share the same set so the
-			// count is identical for any app in the bucket. For the
-			// catch-all default bucket (no apps), pass "" which
-			// hasApp() treats as a wildcard match against catch-all
-			// shards.
-			var probeApp string
-			if len(bucket.Apps) > 0 {
-				probeApp = bucket.Apps[0]
-			}
-			current := p.registry.IngestingCount(probeApp)
-			for current < bucket.Target {
-				log.Printf("provisioner: scaling up bucket %d (%d/%d ingesting shards)",
-					bucket.ID, current, bucket.Target)
-				p.provisionForBucket(ctx, bucket)
-				current++
-			}
+			p.reconcileBucket(ctx, bucket)
 		}
 	}
 
-	now := time.Now().UTC()
-
-	for _, entry := range p.registry.Entries() {
-		if entry.State != StateIngesting {
-			continue
-		}
-
-		// Wall-clock window boundary: once we've passed WindowEnd,
-		// this shard should serve queries only. Transition and
-		// persist; a replacement will be christened by the next
-		// heartbeat from an ASG-launched instance (or by the bucket-
-		// sizing loop above for local/dev launchers).
-		if !entry.WindowEnd.IsZero() && !now.Before(entry.WindowEnd) {
-			log.Printf("provisioner: rotating shard %s → READ_ONLY (window ended %v ago)",
-				entry.ID, now.Sub(entry.WindowEnd).Round(time.Second))
-			entry.State = StateReadOnly
-			p.registry.PersistState(entry)
-			continue
-		}
-	}
-
-	// Archive READ_ONLY shards once their window-end is more than
-	// RetentionPeriod in the past. Measuring from WindowEnd (not
-	// CreatedAt) keeps a long-lived shard hot for a full retention
-	// period after it transitions — CreatedAt is the christening
-	// time, not when the shard stopped taking writes. Retention is
-	// per-bucket (migration 021); we resolve it by looking up the
-	// entry's bucket, then fall back to config for legacy/bare
-	// entries that haven't been rebound to a bucket yet.
-	if p.config.ParquetDir != "" {
-		bucketByID := make(map[int64]*AppBucket)
-		if p.Buckets != nil {
-			all, err := p.Buckets.All()
-			if err != nil {
-				log.Printf("provisioner: archive lookup Buckets.All: %v", err)
-			}
-			for _, b := range all {
-				bucketByID[b.ID] = b
-			}
-		}
-		for _, entry := range p.registry.Entries() {
-			if entry.State != StateReadOnly {
-				continue
-			}
-			if entry.WindowEnd.IsZero() {
-				continue // legacy/zero-window shards are excluded
-			}
-			retention := p.retentionPeriodFor(bucketByID[entry.BucketID])
-			if retention <= 0 {
-				continue // archive disabled for this bucket
-			}
-			if now.Sub(entry.WindowEnd) <= retention {
-				continue
-			}
-			log.Printf("provisioner: archiving shard %s (%v past WindowEnd, retention=%v)",
-				entry.ID, now.Sub(entry.WindowEnd).Round(time.Second), retention)
-			p.archive(entry)
-		}
-	}
 }
 
 // archive exports a READ_ONLY shard to Parquet and replaces it with a ColdShard.
@@ -961,6 +875,64 @@ func (p *Provisioner) retireVolume(entry *ShardEntry) {
 	p.registry.PersistState(entry)
 }
 
+
+// mintLaunchingRow INSERTs a LAUNCHING row for a bucket: a shard id
+// and heartbeat token minted now, a window picked from the bucket's
+// cadence, empty instance_id/addr (the lifecycle hook + christen fill
+// those in). The row is the reconciler's persistent record of "a
+// launch is in flight"; subsequent ticks see it via CountShardsInBucket
+// and don't issue duplicate ASG calls.
+func (p *Provisioner) mintLaunchingRow(bucket *AppBucket) (*store.ShardRecord, error) {
+	if p.config.ShardOps == nil {
+		return nil, fmt.Errorf("no ShardOps store configured")
+	}
+
+	now := time.Now().UTC()
+	windowStart, windowEnd := p.currentWindow(bucket, now)
+
+	// 32-bit random suffix avoids shard-id collisions across
+	// concurrent ticks and across buckets on the same window. The
+	// old registry-size-based seq (shard-<window>-N) didn't see
+	// LAUNCHING rows and could re-emit an existing id.
+	suf := make([]byte, 4)
+	if _, err := rand.Read(suf); err != nil {
+		return nil, fmt.Errorf("mint shard id suffix: %w", err)
+	}
+	shardID := fmt.Sprintf("shard-%s-%s", windowStart.Format("20060102T1504"), hex.EncodeToString(suf))
+
+	token, err := store.GenerateShardHeartbeatToken()
+	if err != nil {
+		return nil, fmt.Errorf("mint heartbeat token for %s: %w", shardID, err)
+	}
+
+	tier := bucket.Tier
+	if tier == "" {
+		tier = "small"
+	}
+
+	apps := append([]string(nil), bucket.Apps...)
+	appsJSON, _ := json.Marshal(apps)
+
+	rec := &store.ShardRecord{
+		ID:             shardID,
+		Apps:           string(appsJSON),
+		WindowStart:    windowStart.Format(time.RFC3339),
+		WindowEnd:      windowEnd.Format(time.RFC3339),
+		State:          string(StateLaunching),
+		Tier:           tier,
+		CreatedAt:      now.Format(time.RFC3339),
+		BucketID:       bucket.ID,
+		HeartbeatToken: token,
+	}
+	if err := p.config.ShardOps.SaveShard(rec); err != nil {
+		return nil, fmt.Errorf("INSERT LAUNCHING row for bucket %d: %w", bucket.ID, err)
+	}
+	log.Printf("provisioner: minted LAUNCHING row %s for bucket %s(%d) (tier=%s window %s–%s)",
+		shardID, bucket.Label, bucket.ID, tier,
+		windowStart.Format(time.RFC3339), windowEnd.Format(time.RFC3339))
+	return rec, nil
+}
+
 // provisionForBucket launches a new INGESTING shard for a bucket.
 // Tier comes from the bucket record so per-bucket fleet sizing (small
 // catch-all vs. medium dedicated, etc.) is data-driven.
@@ -970,7 +942,20 @@ func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket)
 		tier = "small"
 	}
 
-	if _, isASG := p.launcher.(*ASGLauncher); isASG {
+	if isLaunchingLauncher(p.launcher) {
+		// INSERT the LAUNCHING row before calling the ASG so next
+		// tick's reconciler snapshot already includes the in-flight
+		// launch. The async handoff is non-negotiable: no store
+		// means no handoff, so we refuse to scale rather than let an
+		// orphan instance reach christen.
+		if p.config.ShardOps == nil {
+			log.Printf("provisioner: bucket %d: no ShardOps store — skipping ASG call (async handoff requires it)", bucket.ID)
+			return
+		}
+		if _, err := p.mintLaunchingRow(bucket); err != nil {
+			log.Printf("provisioner: bucket %d: mint LAUNCHING: %v — skipping ASG call", bucket.ID, err)
+			return
+		}
 		log.Printf("provisioner: launching shard for bucket %d via ASG (tier=%s)", bucket.ID, tier)
 		if _, err := p.launcher.LaunchInstance(ctx, tier); err != nil {
 			log.Printf("provisioner: failed to launch shard for bucket %d: %v", bucket.ID, err)
@@ -978,10 +963,10 @@ func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket)
 		return
 	}
 
-	// Local-launcher path: mint a window aligned to the bucket's
-	// WindowDuration boundary. Matches christen() so bucket-
-	// provisioned shards and heartbeat-christened shards share
-	// window semantics.
+	// Synchronous launcher: mint a window aligned to the bucket's
+	// WindowDuration boundary, launch + Configure inline, register
+	// the entry straight into INGESTING. No LAUNCHING-row dance —
+	// the launcher returns only after the shard is ready.
 	now := time.Now().UTC()
 	windowStart, windowEnd := p.currentWindow(bucket, now)
 	seq := p.registry.Count()

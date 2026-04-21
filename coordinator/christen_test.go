@@ -40,108 +40,6 @@ func (s *stubConfigurer) Dial(_ context.Context, addr string, req *pb.ConfigureR
 	return ds, nil
 }
 
-// An unclaimed heartbeat (empty shard_id) should trigger christening:
-// the provisioner mints a shard id, sends Configure with a non-zero
-// window, and registers the result as INGESTING. This is the code path
-// that doesn't exist yet — `adoptFromHeartbeats` currently slots empty-
-// id rows into the registry with zero-valued windows.
-func TestChristen_UnclaimedHeartbeat_GetsWindowAndID(t *testing.T) {
-	reg := NewShardRegistry()
-	configurer := &stubConfigurer{}
-
-	mockStore := &mockHeartbeatStore{
-		heartbeats: []store.ShardHeartbeat{
-			{ShardID: "", Addr: "10.0.0.50:9000", State: "ADOPTED", InstanceID: "i-abc"},
-		},
-	}
-	prov := &Provisioner{
-		registry: reg,
-		config: ProvisionerConfig{
-			Store:          mockStore,
-			PollInterval:   time.Second,
-			WindowDuration: 7 * 24 * time.Hour,
-		},
-		configurer: configurer,
-		Buckets:    newDefaultStubBuckets(),
-	}
-
-	prov.adoptFromHeartbeats()
-
-	// Exactly one Configure call issued, at the heartbeat's address.
-	if got := len(configurer.calls); got != 1 {
-		t.Fatalf("expected 1 Configure call, got %d", got)
-	}
-	call := configurer.calls[0]
-	if call.Addr != "10.0.0.50:9000" {
-		t.Errorf("expected Configure at 10.0.0.50:9000, got %s", call.Addr)
-	}
-
-	// Shard id must be non-empty (minted by the coordinator).
-	if call.Req.ShardId == "" {
-		t.Error("expected non-empty minted ShardId")
-	}
-
-	// Window must be 7d wide per WindowDuration config.
-	start, err1 := time.Parse(time.RFC3339, call.Req.WindowStart)
-	end, err2 := time.Parse(time.RFC3339, call.Req.WindowEnd)
-	if err1 != nil || err2 != nil {
-		t.Fatalf("window times not RFC3339: %v / %v", err1, err2)
-	}
-	if got := end.Sub(start); got != 7*24*time.Hour {
-		t.Errorf("window duration: got %v want 168h", got)
-	}
-
-	// Registered and INGESTING.
-	entry := reg.Get(call.Req.ShardId)
-	if entry == nil {
-		t.Fatalf("minted shard %q not registered", call.Req.ShardId)
-	}
-	if entry.State != StateIngesting {
-		t.Errorf("state: got %s want INGESTING", entry.State)
-	}
-	if entry.InstanceID != "i-abc" {
-		t.Errorf("InstanceID: got %q want i-abc", entry.InstanceID)
-	}
-	if entry.WindowStart.IsZero() || entry.WindowEnd.IsZero() {
-		t.Error("expected non-zero windows on christened entry")
-	}
-}
-
-// ProcessHeartbeat lets the Heartbeat RPC drive christen/rebind/adopt
-// inline rather than wait up to PollInterval for the next tick. A
-// single unclaimed heartbeat should mint + Configure one shard.
-func TestProcessHeartbeat_ChristensInlineForUnclaimed(t *testing.T) {
-	reg := NewShardRegistry()
-	configurer := &stubConfigurer{}
-
-	prov := &Provisioner{
-		registry: reg,
-		config: ProvisionerConfig{
-			PollInterval:   time.Second,
-			WindowDuration: 7 * 24 * time.Hour,
-		},
-		configurer: configurer,
-		Buckets:    newDefaultStubBuckets(),
-	}
-
-	prov.ProcessHeartbeat(store.ShardHeartbeat{
-		ShardID:    "",
-		Addr:       "10.0.0.50:9000",
-		InstanceID: "i-new",
-		State:      "ADOPTED",
-	})
-
-	if len(configurer.calls) != 1 {
-		t.Fatalf("expected 1 Configure call, got %d", len(configurer.calls))
-	}
-	if configurer.calls[0].Addr != "10.0.0.50:9000" {
-		t.Errorf("Configure addr: got %q", configurer.calls[0].Addr)
-	}
-	if reg.Count() != 1 {
-		t.Errorf("expected 1 registered shard, got %d", reg.Count())
-	}
-}
-
 // TestChristen_ConcurrentHeartbeats_FromSameAddr_DoNotDoubleConfigure
 // exercises the racy-christen bug we saw in prod (2026-04-20 coord log):
 //
@@ -154,21 +52,40 @@ func TestProcessHeartbeat_ChristensInlineForUnclaimed(t *testing.T) {
 // The Heartbeat RPC spawns a goroutine per call, so ProcessHeartbeat
 // runs twice concurrently. heartbeatMu serialises them, but the second
 // goroutine's captured hb.ShardID is still "" (the shard only gets an
-// id after Configure returns) — so it re-enters christen() and tries
-// to Configure the same addr a second time with a new id.
+// id after Configure returns) — without a HasAddr guard, the second
+// goroutine re-enters christen() and tries to Configure the same addr
+// a second time.
 //
 // Expected behaviour: exactly one Configure call per unclaimed addr,
 // regardless of how many concurrent empty-id heartbeats arrive.
-// Today: two Configure calls.
 func TestChristen_ConcurrentHeartbeats_FromSameAddr_DoNotDoubleConfigure(t *testing.T) {
 	reg := NewShardRegistry()
-	configurer := &stubConfigurer{}
+	fake := newFakeRegistryStore()
+	reg.SetStore(fake)
 
+	// Seed a LAUNCHING row matching the instance — christen requires
+	// one to promote. Without this, the strict error-on-missing-row
+	// path kicks in before the concurrency guard can be exercised.
+	_ = fake.SaveShard(&store.ShardRecord{
+		ID:             "shard-racy",
+		State:          string(StateLaunching),
+		Tier:           "small",
+		BucketID:       defaultBucketID,
+		Apps:           "null",
+		WindowStart:    "2026-04-21T00:00:00Z",
+		WindowEnd:      "2026-04-22T00:00:00Z",
+		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+		HeartbeatToken: "concurrent-test-token",
+		InstanceID:     "i-racy",
+	})
+
+	configurer := &stubConfigurer{}
 	prov := &Provisioner{
 		registry: reg,
 		config: ProvisionerConfig{
 			PollInterval:   time.Second,
 			WindowDuration: 7 * 24 * time.Hour,
+			ShardOps:       fake,
 		},
 		configurer: configurer,
 		Buckets:    newDefaultStubBuckets(),

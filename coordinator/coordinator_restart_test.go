@@ -34,20 +34,22 @@ func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
 		t.Fatal("provisioner did not bootstrap a shard")
 	}
 
-	// Ingest some data.
-	ingestShard := reg1.IngestingShard("")
-	if ingestShard == nil {
-		// Try getting any shard.
-		for _, e := range reg1.Entries() {
-			if e.Shard != nil {
-				ingestShard = e.Shard
-				break
-			}
+	// Capture one entry's identity up front; the same one will
+	// receive ingest, be "restarted" out of the registry, and be
+	// reconnected to in phase 2. Multi-shard buckets make the
+	// previous "pick any shard twice" pattern flaky across map
+	// iterations.
+	var chosen *ShardEntry
+	for _, e := range reg1.Entries() {
+		if e.Shard != nil {
+			chosen = e
+			break
 		}
 	}
-	if ingestShard == nil {
+	if chosen == nil {
 		t.Fatal("no shard available for ingestion")
 	}
+	ingestShard := chosen.Shard
 
 	rows := []*pb.LogRow{
 		{LineNum: 1, Raw: "test log line 1", App: "weft/coordinator", Customer: "testcust", Level: "INFO", TsUnixNs: time.Now().UnixNano()},
@@ -70,17 +72,10 @@ func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
 	// The key property: shards restored from the store should still have
 	// the data that was ingested in phase 1.
 
-	// Get the shard entry info before "restart".
-	var shardID string
-	var shardAddr string
-	var shardStart, shardEnd time.Time
-	for _, e := range reg1.Entries() {
-		shardID = e.ID
-		shardAddr = e.Addr
-		shardStart = e.WindowStart
-		shardEnd = e.WindowEnd
-		break
-	}
+	shardID := chosen.ID
+	shardAddr := chosen.Addr
+	shardStart := chosen.WindowStart
+	shardEnd := chosen.WindowEnd
 
 	// Create new registry (simulating restart) and reconnect to same shard.
 	reg2 := NewShardRegistry()
