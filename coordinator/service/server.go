@@ -276,6 +276,18 @@ func (s *Server) AddSource(ctx context.Context, req *pb.AddSourceRequest) (*pb.A
 		return nil, fmt.Errorf("log group: %w", err)
 	}
 
+	// Attach the new app to its bucket and fan out to INGESTING
+	// shards so queries for this app route correctly from the next
+	// row onward. Best-effort: a failure here leaves the log_group
+	// persisted but the bucket un-updated — the ingest path's
+	// SeenApps trigger (below) will retry on first row. Don't fail
+	// the client's AddSource on bucket trouble.
+	if s.Coord != nil && s.Coord.Provisioner != nil {
+		if err := s.Coord.Provisioner.OnboardApp(req.App); err != nil {
+			log.Printf("AddSource: OnboardApp %q: %v", req.App, err)
+		}
+	}
+
 	return &pb.AddSourceResponse{}, nil
 }
 
@@ -516,6 +528,16 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 		if s.Coord.SeenApps != nil && row.App != "" {
 			if s.Coord.SeenApps.Add(row.Customer, row.App) {
 				log.Printf("ingest-stream: new app discovered: customer=%s app=%s", row.Customer, row.App)
+				// Onboard to the default bucket + propagate to
+				// INGESTING shards so query routing picks up the new
+				// app. Idempotent; SeenApps.Add only returns true the
+				// first time, so this fires once per (customer, app)
+				// pair over the coordinator's lifetime.
+				if s.Coord.Provisioner != nil {
+					if err := s.Coord.Provisioner.OnboardApp(row.App); err != nil {
+						log.Printf("ingest-stream: OnboardApp %q: %v", row.App, err)
+					}
+				}
 			}
 		}
 		rows = append(rows, row)

@@ -667,6 +667,68 @@ func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier stri
 	}, nil
 }
 
+// OnboardApp records an app as belonging to a bucket and fans the
+// new app out to every INGESTING shard currently in that bucket.
+// Called from AddSource (operator config) and from IngestStream on
+// first-seen apps (auto-discovery). For now every app lands in the
+// default catch-all bucket; a future Split() can promote individual
+// apps into their own buckets.
+//
+// Idempotent: if the app is already on the bucket, no DB write and
+// no shard mutation. Safe to call on the hot ingest path where
+// SeenApps.Add returns true for every row the coordinator has ever
+// seen from a given (customer, app) pair.
+func (p *Provisioner) OnboardApp(app string) error {
+	if p.Buckets == nil {
+		return nil
+	}
+	bucket := p.Buckets.Default()
+	if bucket == nil {
+		log.Printf("provisioner: OnboardApp(%s): no default bucket loaded — skipping", app)
+		return nil
+	}
+	updated, err := p.Buckets.AddAppToBucket(bucket.ID, app)
+	if err != nil {
+		return fmt.Errorf("add %q to bucket %s: %w", app, bucket.ID, err)
+	}
+	if updated == nil {
+		return nil
+	}
+	p.propagateAppsToIngesting(updated)
+	return nil
+}
+
+// propagateAppsToIngesting appends any bucket apps missing from an
+// INGESTING shard's Apps list to that shard, in memory and in the
+// store. Only INGESTING shards mutate — READ_ONLY / ARCHIVED shards'
+// apps stay frozen because they never accepted writes for the new
+// app, and including them in query routing would widen the fan-out
+// pointlessly.
+func (p *Provisioner) propagateAppsToIngesting(bucket *AppBucket) {
+	for _, entry := range p.registry.Entries() {
+		if entry.State != StateIngesting {
+			continue
+		}
+		if entry.BucketID != bucket.ID {
+			continue
+		}
+		changed := false
+		have := make(map[string]bool, len(entry.Apps))
+		for _, a := range entry.Apps {
+			have[a] = true
+		}
+		for _, a := range bucket.Apps {
+			if !have[a] {
+				entry.Apps = append(entry.Apps, a)
+				changed = true
+			}
+		}
+		if changed {
+			p.registry.PersistState(entry)
+		}
+	}
+}
+
 // check evaluates each INGESTING shard for rotation and app split.
 func (p *Provisioner) check(ctx context.Context) {
 	// Evaluate bucket splits based on ingestion stats.

@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -22,6 +23,11 @@ type AppBucket struct {
 	Tier            string
 	WindowDuration  time.Duration
 	RetentionPeriod time.Duration
+	// CreatedAt is round-tripped through LoadFromStore so SaveBucket
+	// (via GORM's upsert) preserves the original timestamp on
+	// mutation. Empty means "never loaded from store" — the in-memory
+	// stub case. SaveBucket won't be called with an empty CreatedAt.
+	CreatedAt string
 }
 
 // BucketStore is the subset of *store.Store that BucketManager needs.
@@ -42,6 +48,10 @@ type Buckets interface {
 	EvaluateSplit(stats map[string]int64) string
 	Split(app string) *AppBucket
 	LoadFromStore(BucketStore) error
+	// AddAppToBucket appends an app to the named bucket and persists.
+	// Idempotent; returns the updated bucket snapshot so callers can
+	// fan the new app out to INGESTING shards.
+	AddAppToBucket(bucketID, app string) (*AppBucket, error)
 }
 
 // BucketManager tracks app-to-bucket assignments and splits/merges
@@ -127,6 +137,7 @@ func (bm *BucketManager) LoadFromStore(s BucketStore) error {
 			Tier:            r.Tier,
 			WindowDuration:  winDur,
 			RetentionPeriod: retDur,
+			CreatedAt:       r.CreatedAt,
 		})
 	}
 
@@ -151,6 +162,22 @@ func (bm *BucketManager) Default() *AppBucket {
 		}
 	}
 	return nil
+}
+
+// bucketToStoreRecord converts an in-memory bucket snapshot to the
+// store's Bucket shape for SaveBucket. CreatedAt is round-tripped
+// from LoadFromStore so GORM's Save (UPDATE on PK match) preserves
+// the original timestamp.
+func bucketToStoreRecord(b *AppBucket, appsJSON []byte) *store.Bucket {
+	return &store.Bucket{
+		ID:                   b.ID,
+		Apps:                 string(appsJSON),
+		TargetIngestingCount: b.Target,
+		Tier:                 b.Tier,
+		WindowDuration:       b.WindowDuration.String(),
+		RetentionPeriod:      b.RetentionPeriod.String(),
+		CreatedAt:            b.CreatedAt,
+	}
 }
 
 // All returns a snapshot of current buckets.
@@ -240,31 +267,53 @@ func (bm *BucketManager) Split(app string) *AppBucket {
 	return nil
 }
 
-// AddApp adds an app to the shared bucket. Used when new apps are discovered.
-func (bm *BucketManager) AddApp(app string) {
+// AddAppToBucket appends an app to the named bucket and persists the
+// mutation. Idempotent — if the app is already in the bucket, the
+// call is a no-op (no save, no error). Returns the bucket snapshot
+// so callers can fan the new app out to INGESTING shards.
+//
+// When the store is configured, this is the only sanctioned way to
+// mutate a bucket's apps list; all other code should read bucket.
+// Apps but never write it directly. That keeps the DB and in-memory
+// views in sync.
+func (bm *BucketManager) AddAppToBucket(bucketID, app string) (*AppBucket, error) {
 	bm.mu.Lock()
-	defer bm.mu.Unlock()
-
-	// Check if already tracked.
+	var target *AppBucket
 	for _, b := range bm.buckets {
-		for _, a := range b.Apps {
-			if a == app {
-				return
-			}
+		if b.ID == bucketID {
+			target = b
+			break
 		}
 	}
+	if target == nil {
+		bm.mu.Unlock()
+		return nil, fmt.Errorf("bucket %q not found", bucketID)
+	}
+	for _, a := range target.Apps {
+		if a == app {
+			bm.mu.Unlock()
+			return target, nil // idempotent
+		}
+	}
+	target.Apps = append(target.Apps, app)
+	snapshot := &AppBucket{
+		ID:              target.ID,
+		Apps:            append([]string(nil), target.Apps...),
+		Target:          target.Target,
+		Tier:            target.Tier,
+		WindowDuration:  target.WindowDuration,
+		RetentionPeriod: target.RetentionPeriod,
+	}
+	store := bm.store
+	bm.mu.Unlock()
 
-	// Add to shared bucket, creating one if needed.
-	if len(bm.buckets) == 0 {
-		bm.buckets = append(bm.buckets, &AppBucket{ID: "shared", Apps: []string{app}})
-	} else {
-		// Add to the first shared (multi-app) bucket, or the first bucket.
-		for _, b := range bm.buckets {
-			if len(b.Apps) > 1 || b.ID == "shared" {
-				b.Apps = append(b.Apps, app)
-				return
-			}
-		}
-		bm.buckets[0].Apps = append(bm.buckets[0].Apps, app)
+	if store == nil {
+		return snapshot, nil
 	}
+	appsJSON, _ := json.Marshal(snapshot.Apps)
+	rec := bucketToStoreRecord(snapshot, appsJSON)
+	if err := store.SaveBucket(rec); err != nil {
+		return nil, fmt.Errorf("persist bucket %s: %w", bucketID, err)
+	}
+	return snapshot, nil
 }

@@ -30,9 +30,116 @@ func (s *stubBuckets) All() []*AppBucket {
 	}
 	return []*AppBucket{s.bucket}
 }
-func (s *stubBuckets) EvaluateSplit(_ map[string]int64) string  { return "" }
-func (s *stubBuckets) Split(_ string) *AppBucket                { return nil }
-func (s *stubBuckets) LoadFromStore(_ BucketStore) error        { return nil }
+func (s *stubBuckets) EvaluateSplit(_ map[string]int64) string { return "" }
+func (s *stubBuckets) Split(_ string) *AppBucket               { return nil }
+func (s *stubBuckets) LoadFromStore(_ BucketStore) error       { return nil }
+func (s *stubBuckets) AddAppToBucket(id, app string) (*AppBucket, error) {
+	if s.bucket == nil || s.bucket.ID != id {
+		return nil, nil
+	}
+	for _, a := range s.bucket.Apps {
+		if a == app {
+			return s.bucket, nil
+		}
+	}
+	s.bucket.Apps = append(s.bucket.Apps, app)
+	return s.bucket, nil
+}
+
+// OnboardApp must append the app to the default bucket AND to every
+// INGESTING shard bound to that bucket, while leaving READ_ONLY and
+// ARCHIVED shards alone (their apps list stays frozen — they never
+// accepted writes for the new app). Shards in a different bucket
+// also stay untouched.
+func TestOnboardApp_OnlyIngestingInBucketGetsAppended(t *testing.T) {
+	reg := NewShardRegistry()
+
+	// Two INGESTING shards in the default bucket.
+	reg.Add(&ShardEntry{
+		ID:       "ingest-1",
+		BucketID: "default",
+		State:    StateIngesting,
+		Apps:     []string{"weft"},
+		Shard:    &failingShard{id: "ingest-1"},
+	})
+	reg.Add(&ShardEntry{
+		ID:       "ingest-2",
+		BucketID: "default",
+		State:    StateIngesting,
+		Apps:     []string{"weft"},
+		Shard:    &failingShard{id: "ingest-2"},
+	})
+	// A READ_ONLY shard in the same bucket — must NOT get the app.
+	reg.Add(&ShardEntry{
+		ID:       "readonly-1",
+		BucketID: "default",
+		State:    StateReadOnly,
+		Apps:     []string{"weft"},
+		Shard:    &failingShard{id: "readonly-1"},
+	})
+	// An INGESTING shard in a *different* bucket — also must NOT.
+	reg.Add(&ShardEntry{
+		ID:       "other-bucket-ingest",
+		BucketID: "dedicated-vimgym",
+		State:    StateIngesting,
+		Apps:     []string{"vimgym"},
+		Shard:    &failingShard{id: "other-bucket-ingest"},
+	})
+
+	stub := &stubBuckets{bucket: &AppBucket{ID: "default", Apps: []string{"weft"}, Tier: "small"}}
+	prov := &Provisioner{
+		registry: reg,
+		Buckets:  stub,
+	}
+
+	if err := prov.OnboardApp("xylem"); err != nil {
+		t.Fatalf("OnboardApp: %v", err)
+	}
+
+	// Bucket now has both apps.
+	got := stub.Default().Apps
+	if len(got) != 2 || got[0] != "weft" || got[1] != "xylem" {
+		t.Errorf("default bucket apps: got %v, want [weft xylem]", got)
+	}
+
+	// INGESTING shards in default bucket: updated.
+	for _, id := range []string{"ingest-1", "ingest-2"} {
+		e := reg.Get(id)
+		if e == nil {
+			t.Fatalf("%s missing from registry", id)
+		}
+		if len(e.Apps) != 2 || !containsApp(e.Apps, "xylem") {
+			t.Errorf("%s apps: got %v, want contains xylem", id, e.Apps)
+		}
+	}
+
+	// READ_ONLY shard: untouched.
+	if got := reg.Get("readonly-1").Apps; len(got) != 1 || got[0] != "weft" {
+		t.Errorf("readonly-1 apps changed: got %v, want [weft] (READ_ONLY must stay frozen)", got)
+	}
+
+	// Other-bucket shard: untouched.
+	if got := reg.Get("other-bucket-ingest").Apps; len(got) != 1 || got[0] != "vimgym" {
+		t.Errorf("other-bucket-ingest apps changed: got %v, want [vimgym]", got)
+	}
+
+	// Second call is a no-op (idempotent).
+	if err := prov.OnboardApp("xylem"); err != nil {
+		t.Fatalf("OnboardApp (second): %v", err)
+	}
+	if got := stub.Default().Apps; len(got) != 2 {
+		t.Errorf("second OnboardApp duplicated: %v", got)
+	}
+}
+
+func containsApp(apps []string, want string) bool {
+	for _, a := range apps {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
 
 func TestBucketManager_EvaluateSplit(t *testing.T) {
 	bm := NewBucketManager([]string{"vimgym", "callbox", "grantcentral"})
