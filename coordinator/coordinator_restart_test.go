@@ -19,7 +19,6 @@ func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
 
 	reg1 := NewShardRegistry()
 	provConfig := DevProvisionerConfig()
-	provConfig.MaxDuration = 1 * time.Hour
 	prov := NewProvisioner(reg1, launcher, provConfig)
 
 	ctx := context.Background()

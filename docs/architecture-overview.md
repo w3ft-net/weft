@@ -165,8 +165,10 @@ christen│     └─────────────┘   │  │
 | `ConfigureRetries` / `ConfigureBackoff` | `12` × `5s` | gRPC retry on shard startup |
 
 Dev/docker uses shorter values via `DevProvisionerConfig`. The
-legacy `MaxRows`/`MaxDuration`/`MaxDiskBytes` triggers are still
-honored when windows aren't set.
+legacy `MaxRows`/`MaxDuration`/`MaxDiskBytes` triggers and the
+`rotate()` path they fed have been removed — INGESTING → READ_ONLY
+is driven exclusively by the wall-clock `WindowEnd` check in
+`provisioner.check()`.
 
 ### Failure recovery and reap
 

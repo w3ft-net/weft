@@ -341,11 +341,16 @@ Read this before implementing anything above.
   in the registry and in `shard_records`. Only local-launcher
   shards (via `provisioner.launchAndConfigure`, used by
   `bootstrap` in dev) have real windows.
-- **Rotation**: not implemented. The provisioner's `check()` loop
-  (see `provisioner.go`) rotates based on row count / disk bytes /
-  `MaxDuration` (default 8 hours), not windows, and only creates
-  the next shard in series — no notion of N-fleet overlap or
-  wall-clock window alignment.
+- **Rotation**: partial. The provisioner's `check()` loop (see
+  `provisioner.go`) flips INGESTING shards to READ_ONLY on the
+  wall-clock `WindowEnd` boundary, and the bucket-sizing pass
+  below provisions replacements (via ASG in prod, via
+  `launchAndConfigure` in dev/docker). What's still missing from
+  the target design: no handoff-lead pre-warming of the next
+  window's fleet, no N-fleet overlap tracking, and no archive-on-
+  retention boundary (that path exists in `archive()` but only
+  fires when `RetentionPeriod > 0 && ParquetDir != ""`, both
+  opt-in).
 - **Archiving**: `StateExpiring` and `StateArchived` exist in the
   registry enum. The export path exists in `coordinator/archiver*`
   and `shard/cold_shard*`. Coordinator-driven scheduling of

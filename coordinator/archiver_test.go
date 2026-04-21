@@ -119,8 +119,6 @@ func TestProvisioner_ArchivesExpiredShard(t *testing.T) {
 
 	parquetDir := t.TempDir()
 	config := ProvisionerConfig{
-		MaxRows:         5_000_000,
-		MaxDuration:     24 * time.Hour,
 		PollInterval:    5 * time.Second,
 		RetentionPeriod: 1 * time.Hour, // shard is 2h old → should archive
 		ParquetDir:      parquetDir,

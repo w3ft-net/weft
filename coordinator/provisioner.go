@@ -33,9 +33,6 @@ type HeartbeatStore interface {
 
 // ProvisionerConfig controls shard rotation thresholds.
 type ProvisionerConfig struct {
-	MaxRows            int64           // rotate when row count exceeds this (default 5M)
-	MaxDiskBytes       int64           // rotate when disk exceeds this (default 500MB)
-	MaxDuration        time.Duration   // rotate after this time (default 8h)
 	PollInterval       time.Duration   // how often to check (default 5min)
 	IngestingPerBucket int             // number of concurrent INGESTING shards per app bucket (default 2)
 	RetentionPeriod    time.Duration   // how long READ_ONLY shards stay hot before archiving (0 = no archival)
@@ -58,21 +55,16 @@ type ProvisionerConfig struct {
 // DefaultProvisionerConfig returns sensible production defaults.
 func DefaultProvisionerConfig() ProvisionerConfig {
 	return ProvisionerConfig{
-		MaxRows:            5_000_000,
-		MaxDiskBytes:       500 * 1024 * 1024, // 500MB
-		MaxDuration:        8 * time.Hour,
 		PollInterval:       5 * time.Minute,
 		IngestingPerBucket: 2,
 		WindowDuration:     7 * 24 * time.Hour,
+		RetentionPeriod:    7 * 24 * time.Hour,
 	}
 }
 
 // DevProvisionerConfig returns faster thresholds for development/testing.
 func DevProvisionerConfig() ProvisionerConfig {
 	return ProvisionerConfig{
-		MaxRows:            50_000,
-		MaxDiskBytes:       50 * 1024 * 1024, // 50MB
-		MaxDuration:        1 * time.Hour,
 		PollInterval:       5 * time.Second,
 		IngestingPerBucket: 2,
 		WindowDuration:     1 * time.Hour,
@@ -358,13 +350,8 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 		return nil
 	}
 
-	windowDur := p.config.WindowDuration
-	if windowDur == 0 {
-		windowDur = 7 * 24 * time.Hour
-	}
 	now := time.Now().UTC()
-	windowStart := now.Truncate(windowDur)
-	windowEnd := windowStart.Add(windowDur)
+	windowStart, windowEnd := p.currentWindow(now)
 
 	// Name format: shard-YYYYMMDDThhmm-seq. Globally unique within the
 	// fleet; seq increments from current registry size so concurrent
@@ -507,6 +494,18 @@ func parseTime(s string) time.Time {
 	return t
 }
 
+// currentWindow returns the [start, end) window bounds enclosing now,
+// aligned to p.config.WindowDuration. WindowDuration defaults to 7d
+// when unset (matches DefaultProvisionerConfig).
+func (p *Provisioner) currentWindow(now time.Time) (time.Time, time.Time) {
+	dur := p.config.WindowDuration
+	if dur == 0 {
+		dur = 7 * 24 * time.Hour
+	}
+	start := now.UTC().Truncate(dur)
+	return start, start.Add(dur)
+}
+
 // bootstrap ensures at least one shard instance is launching.
 // For ASG launchers, it checks whether instances already exist before
 // scaling — avoids ratcheting up desired capacity on every coordinator restart.
@@ -529,15 +528,15 @@ func (p *Provisioner) bootstrap(ctx context.Context) {
 		return
 	}
 
-	// Local launcher: configure immediately.
-	now := time.Now()
-	windowEnd := now.Add(p.config.MaxDuration)
-	if p.config.MaxDuration == 0 {
-		windowEnd = now.Add(8 * time.Hour)
-	}
+	// Local launcher: configure immediately. Align the bootstrap
+	// shard's window to the current WindowDuration boundary so that
+	// check()'s wall-clock rotation fires on the same schedule as
+	// christened shards.
+	now := time.Now().UTC()
+	windowStart, windowEnd := p.currentWindow(now)
 
 	shardID := fmt.Sprintf("shard-%d", now.UnixMilli())
-	entry, err := p.launchAndConfigure(ctx, shardID, "small", nil, now, windowEnd)
+	entry, err := p.launchAndConfigure(ctx, shardID, "small", nil, windowStart, windowEnd)
 	if err != nil {
 		log.Printf("provisioner: bootstrap failed: %v", err)
 		return
@@ -645,34 +644,14 @@ func (p *Provisioner) check(ctx context.Context) {
 		// Wall-clock window boundary: once we've passed WindowEnd,
 		// this shard should serve queries only. Transition and
 		// persist; a replacement will be christened by the next
-		// heartbeat from an ASG-launched instance.
+		// heartbeat from an ASG-launched instance (or by the bucket-
+		// sizing loop above for local/dev launchers).
 		if !entry.WindowEnd.IsZero() && !now.Before(entry.WindowEnd) {
 			log.Printf("provisioner: rotating shard %s → READ_ONLY (window ended %v ago)",
 				entry.ID, now.Sub(entry.WindowEnd).Round(time.Second))
 			entry.State = StateReadOnly
 			p.registry.PersistState(entry)
 			continue
-		}
-
-		// Legacy row-count / MaxDuration rotation, retained for
-		// dev/docker where windows aren't set. Triggers a full
-		// rotate() including launchAndConfigure for a replacement.
-		shouldRotate := false
-		reason := ""
-
-		if p.config.MaxRows > 0 && entry.RowCount > p.config.MaxRows {
-			shouldRotate = true
-			reason = fmt.Sprintf("row count %d > %d", entry.RowCount, p.config.MaxRows)
-		}
-
-		if !shouldRotate && p.config.MaxDuration > 0 && time.Since(entry.CreatedAt) > p.config.MaxDuration {
-			shouldRotate = true
-			reason = fmt.Sprintf("age %v > %v", time.Since(entry.CreatedAt).Round(time.Second), p.config.MaxDuration)
-		}
-
-		if shouldRotate {
-			log.Printf("provisioner: rotating shard %s (%s)", entry.ID, reason)
-			p.rotate(ctx, entry)
 		}
 	}
 
@@ -806,34 +785,6 @@ func (p *Provisioner) retireVolume(entry *ShardEntry) {
 	p.registry.PersistState(entry)
 }
 
-// rotate transitions an INGESTING shard to READ_ONLY and launches a
-// replacement. The transition on `old` is persisted unconditionally
-// — even when the replacement launch fails — so the store doesn't
-// disagree with the registry about what state `old` is in.
-func (p *Provisioner) rotate(ctx context.Context, old *ShardEntry) {
-	now := time.Now().UTC()
-	seq := p.registry.Count()
-	newID := fmt.Sprintf("shard-%s-%s-%d", joinApps(old.Apps), now.Format("20060102T1504"), seq)
-	farFuture := now.Add(100 * 365 * 24 * time.Hour)
-
-	// Transition first, then launch. If launch fails we've at least
-	// stopped routing writes to `old`; the next check() will attempt
-	// the replacement again, and the write path falls back to the
-	// remaining INGESTING shards in the bucket.
-	old.WindowEnd = now
-	old.State = StateReadOnly
-	p.registry.PersistState(old)
-
-	entry, err := p.launchAndConfigure(ctx, newID, "small", old.Apps, now, farFuture)
-	if err != nil {
-		log.Printf("provisioner: failed to launch replacement for %s: %v", old.ID, err)
-		return
-	}
-
-	p.registry.Add(entry)
-	log.Printf("provisioner: rotated %s → READ_ONLY, new shard %s", old.ID, newID)
-}
-
 // provisionForBucket launches a new INGESTING shard for a bucket.
 func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket) {
 	if _, isASG := p.launcher.(*ASGLauncher); isASG {
@@ -844,12 +795,16 @@ func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket)
 		return
 	}
 
+	// Local-launcher path: mint a window aligned to the current
+	// WindowDuration boundary. Matches christen() so bucket-
+	// provisioned shards and heartbeat-christened shards share
+	// window semantics.
 	now := time.Now().UTC()
+	windowStart, windowEnd := p.currentWindow(now)
 	seq := p.registry.Count()
-	id := fmt.Sprintf("shard-%s-%s-%d", joinApps(bucket.Apps), now.Format("20060102T1504"), seq)
-	farFuture := now.Add(100 * 365 * 24 * time.Hour)
+	id := fmt.Sprintf("shard-%s-%s-%d", joinApps(bucket.Apps), windowStart.Format("20060102T1504"), seq)
 
-	entry, err := p.launchAndConfigure(ctx, id, "small", bucket.Apps, now, farFuture)
+	entry, err := p.launchAndConfigure(ctx, id, "small", bucket.Apps, windowStart, windowEnd)
 	if err != nil {
 		log.Printf("provisioner: failed to launch shard for bucket %s: %v", bucket.ID, err)
 		return

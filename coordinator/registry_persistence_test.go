@@ -69,55 +69,6 @@ func (f *fakeRegistryStore) get(id string) (store.ShardRecord, bool) {
 	return r, ok
 }
 
-// Rotation must persist the transition from INGESTING → READ_ONLY on
-// the outgoing shard. Otherwise the store keeps claiming the shard is
-// INGESTING long after rotation.
-func TestRotate_PersistsReadOnlyTransition(t *testing.T) {
-	fake := newFakeRegistryStore()
-	reg := NewShardRegistry()
-	reg.SetStore(fake)
-
-	// An INGESTING shard that will get rotated out because RowCount
-	// exceeds MaxRows.
-	old := &ShardEntry{
-		ID:          "shard-old",
-		Apps:        []string{"weft"},
-		State:       StateIngesting,
-		Shard:       &failingShard{id: "shard-old"},
-		RowCount:    1_000_000_000,
-		WindowStart: time.Now().Add(-time.Hour),
-		WindowEnd:   time.Now().Add(100 * 365 * 24 * time.Hour),
-		CreatedAt:   time.Now().Add(-time.Hour),
-	}
-	reg.Add(old)
-
-	prov := &Provisioner{
-		registry: reg,
-		launcher: &stubLauncher{addr: "10.0.0.99:9000"},
-		config: ProvisionerConfig{
-			MaxRows:          100,
-			PollInterval:     time.Second,
-			WindowDuration:   time.Hour,
-			ConfigureRetries: 1,
-			ConfigureBackoff: time.Millisecond,
-		},
-		stats:      NewAppStats(),
-		Buckets:    NewBucketManager(nil),
-		configurer: &failingConfigurer{},
-	}
-
-	// rotate() is the code path that currently misses PersistState.
-	prov.rotate(context.Background(), old)
-
-	rec, ok := fake.get("shard-old")
-	if !ok {
-		t.Fatal("shard-old missing from store")
-	}
-	if rec.State != string(StateReadOnly) {
-		t.Errorf("after rotate, store still says %q — PersistState missing", rec.State)
-	}
-}
-
 // Rebind (instance replaced behind a durable shard id) must persist the
 // new address so a coordinator restart reloads the correct endpoint.
 func TestRebind_PersistsAddrChange(t *testing.T) {
@@ -191,8 +142,9 @@ func TestRemove_DeletesFromStore(t *testing.T) {
 	}
 }
 
-// stubLauncher returns a canned address from LaunchInstance so the
-// rotate() path can proceed past the launch step.
+// stubLauncher returns a canned address from LaunchInstance so tests
+// that exercise check() can proceed past the launch step without a
+// real gRPC server.
 type stubLauncher struct {
 	addr string
 }
@@ -202,9 +154,8 @@ func (s *stubLauncher) LaunchInstance(_ context.Context, _ string) (string, erro
 }
 func (s *stubLauncher) TerminateInstance(_ context.Context, _, _ string) error { return nil }
 
-// failingConfigurer always errors on Dial. This lets us exercise the
-// transition on the *outgoing* shard in rotate() without needing a real
-// gRPC server for the replacement.
+// failingConfigurer always errors on Dial. Keeps check()-path tests
+// focused on registry transitions without needing a live replacement.
 type failingConfigurer struct{}
 
 func (failingConfigurer) Dial(_ context.Context, _ string, _ *pb.ConfigureRequest) (shard.Shard, error) {

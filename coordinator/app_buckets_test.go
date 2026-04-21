@@ -133,8 +133,6 @@ func TestProvisioner_ScalesUpToConfiguredCount(t *testing.T) {
 	t.Cleanup(func() { launcher.Close() })
 
 	config := ProvisionerConfig{
-		MaxRows:            5_000_000,
-		MaxDuration:        1 * time.Hour,
 		IngestingPerBucket: 3, // want 3, have 1
 	}
 
@@ -174,10 +172,7 @@ func TestProvisioner_SplitCreatesNewShard(t *testing.T) {
 	launcher := NewLocalLauncher()
 	t.Cleanup(func() { launcher.Close() })
 
-	config := ProvisionerConfig{
-		MaxRows:     5_000_000, // high threshold — won't trigger rotation
-		MaxDuration: 1 * time.Hour,
-	}
+	config := ProvisionerConfig{}
 
 	prov := NewProvisioner(reg, launcher, config)
 	prov.Buckets = NewBucketManager([]string{"vimgym", "callbox", "grantcentral"})
