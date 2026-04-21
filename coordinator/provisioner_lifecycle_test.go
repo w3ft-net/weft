@@ -22,6 +22,11 @@ func (f *failingLauncher) TerminateInstance(_ context.Context, _, _ string) erro
 	return nil
 }
 
+// When every LaunchInstance call fails (e.g., ASG throttling), the
+// provisioner's ticker must keep retrying on each tick — the system
+// self-heals once the underlying failure clears. Each tick's
+// reconciler sees the bucket is under target and re-emits the
+// LaunchShardOp; Apply fails; next tick tries again.
 func TestProvisioner_TickerContinuesAfterBootstrapFailure(t *testing.T) {
 	launcher := &failingLauncher{}
 	reg := NewShardRegistry()
@@ -30,17 +35,23 @@ func TestProvisioner_TickerContinuesAfterBootstrapFailure(t *testing.T) {
 	config.PollInterval = 50 * time.Millisecond // fast for test
 
 	prov := NewProvisioner(reg, launcher, config)
+	// Bucket config is the signal for "how many shards do we want" —
+	// without it the reconciler has nothing to scale toward.
+	fake := newFakeBucketStore()
+	fake.seedBucket("default", nil)
+	prov.Buckets = NewBucketManager(fake)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	prov.Start(ctx)
 
-	// Wait for bootstrap to fail + at least 2 ticker ticks.
+	// Wait for bootstrap + a few ticker ticks.
 	time.Sleep(300 * time.Millisecond)
 
 	calls := launcher.launchCalls.Load()
 	if calls < 2 {
-		t.Errorf("expected at least 2 launch calls (1 bootstrap + 1+ check), got %d", calls)
+		t.Errorf("expected at least 2 launch calls (retry across ticks), got %d", calls)
 	}
 	t.Logf("launch calls after 300ms: %d", calls)
 }

@@ -331,25 +331,24 @@ sources have migrated.
 **Size.** Medium (~100 lines across 5-10 files + Secrets Manager
 renames + Docker env var migration docs).
 
-## 10. Pre-existing test failures
+## 10. Pre-existing test failures — done
 
-Neither caused by work in this session. Both are known.
+Both were test drift rather than code bugs:
 
-- **`TestProvisioner_TickerContinuesAfterBootstrapFailure`**
-  (`coordinator/provisioner_lifecycle_test.go:25`). Asserts the
-  provisioner's ticker retries `bootstrap()` when the initial launch
-  fails. `Start()` never implemented that retry; it only calls
-  bootstrap once at startup. Either implement the retry (makes the
-  system self-healing after a transient launch failure) or delete the
-  test.
+- **`TestProvisioner_TickerContinuesAfterBootstrapFailure`** — the
+  test pre-dated the reconciler's bucket-config-driven scale-up.
+  With no bucket, the reconciler has nothing to scale toward, so
+  no launches fire. Fix: seed a bucket in the test. The
+  self-healing behaviour the test asserted is real — each ticker
+  tick re-emits `LaunchShardOp`s while the launcher is failing.
 
-- **`TestRegistry_PersistAndRestore`** (`coordinator/archiver_test.go:219`).
-  Fails looking for a Parquet file the cold-shard path expected to
-  find at a `t.TempDir()` location. Likely a test-setup bug — the
-  archive path writes to one directory but the test reads from
-  another, or the test's lifecycle expectation doesn't match the
-  current archive implementation. Would need ~30 minutes of reading
-  to diagnose precisely.
+- **`TestRegistry_PersistAndRestore`** — the entry's `BucketID` was
+  zero, which violates migration 020+022's NOT NULL FK. `SaveShard`
+  returned an error that `registry.persist` silently discarded, so
+  the insert never landed and the restore saw nothing. Fix: look
+  up the default bucket in the test + pass its id. Separately,
+  `registry.persist` now logs errors instead of discarding, so the
+  next silent-persistence bug is findable.
 
 **Size.** Each is small (tens of lines) once investigated.
 

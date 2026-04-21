@@ -158,6 +158,16 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 	}
 	defer db.Close()
 
+	// The shard_records table has a NOT NULL FK on bucket_id since
+	// migration 020. Look up the default bucket (seeded by that
+	// migration) so the test entry stays valid.
+	defBucket, ok, err := db.GetBucketByLabel("default")
+	if err != nil || !ok {
+		t.Fatalf("default bucket lookup: ok=%v err=%v", ok, err)
+	}
+	shardID := "shard-archived-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	t.Cleanup(func() { _ = db.DeleteShard(shardID) })
+
 	// Create registry with store, add an archived shard.
 	reg := NewShardRegistry()
 	reg.SetStore(db)
@@ -172,13 +182,14 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 	ds.ExportToParquet(parquetPath)
 	ds.Close()
 
-	cold, err := shard.NewColdShard("shard-archived", []string{"vimgym"}, parquetPath)
+	cold, err := shard.NewColdShard(shardID, []string{"vimgym"}, parquetPath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	reg.Add(&ShardEntry{
-		ID: "shard-archived", Apps: []string{"vimgym"},
+		ID: shardID, Apps: []string{"vimgym"},
+		BucketID:    defBucket.ID,
 		WindowStart: t0, WindowEnd: t1,
 		State:       StateArchived,
 		ParquetPath: parquetPath,
@@ -190,10 +201,13 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 	reg2 := NewShardRegistry()
 	reg2.SetStore(db)
 	err = reg2.LoadFromStore(func(rec store.ShardRecord) (shard.Shard, error) {
+		if rec.ID != shardID {
+			return nil, fmt.Errorf("skip unrelated shard %s", rec.ID)
+		}
 		if rec.State == string(StateArchived) && rec.ParquetPath != "" {
 			var apps []string
 			json.Unmarshal([]byte(rec.Apps), &apps)
-			return shard.NewColdShard(rec.ID, apps, rec.ParquetPath)
+			return shard.NewColdShard(rec.ID, apps, rec.ParquetPath, nil)
 		}
 		return nil, fmt.Errorf("skip live shard %s", rec.ID)
 	})
@@ -201,13 +215,16 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The archived shard should be restored.
+	// The archived shard should be restored. LoadFromStore skips rows
+	// where the reconstruct func returns err, so Count() includes only
+	// our test shard — not whatever other shard_records LocalStack /
+	// the running coordinator has in the DB.
 	if reg2.Count() != 1 {
 		t.Fatalf("expected 1 restored shard, got %d", reg2.Count())
 	}
-	entry := reg2.Get("shard-archived")
+	entry := reg2.Get(shardID)
 	if entry == nil {
-		t.Fatal("shard-archived not found after restore")
+		t.Fatalf("%s not found after restore", shardID)
 	}
 	if entry.State != StateArchived {
 		t.Fatalf("expected ARCHIVED, got %s", entry.State)

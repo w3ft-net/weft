@@ -2,13 +2,14 @@ package coordinator
 
 import (
 	"encoding/json"
+	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/kevlarcon/weft/store"
 	"github.com/kevlarcon/weft/shard"
+	"github.com/kevlarcon/weft/store"
 )
 
 // ShardState represents the lifecycle state of a shard.
@@ -129,16 +130,16 @@ func (r *ShardRegistry) Add(entry *ShardEntry) {
 }
 
 // persist saves a shard entry to the store (if configured).
+// BucketID is required (NOT NULL FK). No silent fallback — callers
+// must set it explicitly before Add/PersistState; a zero value
+// surfaces as a DB constraint error, which we log so silent
+// persistence failures don't slip past tests or prod.
 func (r *ShardRegistry) persist(entry *ShardEntry) {
 	if r.store == nil {
 		return
 	}
 	appsJSON, _ := json.Marshal(entry.Apps)
-	// BucketID is required (NOT NULL FK). No silent fallback —
-	// callers must set it explicitly before Add/PersistState. A zero
-	// value here means a bug upstream; surface it via the DB's
-	// constraint failure rather than paper over it with a lookup.
-	r.store.SaveShard(&store.ShardRecord{
+	if err := r.store.SaveShard(&store.ShardRecord{
 		ID:             entry.ID,
 		Apps:           string(appsJSON),
 		WindowStart:    entry.WindowStart.Format(time.RFC3339),
@@ -153,7 +154,9 @@ func (r *ShardRegistry) persist(entry *ShardEntry) {
 		EBSVolumeID:    entry.EBSVolumeID,
 		HeartbeatToken: entry.HeartbeatToken,
 		BucketID:       entry.BucketID,
-	})
+	}); err != nil {
+		log.Printf("registry: persist shard %s: %v", entry.ID, err)
+	}
 }
 
 // PersistState saves the current state of an entry to the store.
