@@ -93,10 +93,7 @@ func reconcile(snap ReconcilerSnapshot) []ReconcileOp {
 
 	// Op 5 — retention-archive. A READ_ONLY shard whose WindowEnd
 	// is older than bucket.RetentionPeriod gets archived. Zero
-	// retention means "archive disabled for this bucket." Emitted
-	// last because the archive side-effect (Parquet export, volume
-	// retirement) is the slowest; deferring it to end-of-tick
-	// leaves the cheaper ops visible sooner.
+	// retention means "archive disabled for this bucket."
 	if snap.Bucket.RetentionPeriod > 0 {
 		for _, e := range snap.Entries {
 			if e.State != StateReadOnly {
@@ -110,6 +107,22 @@ func reconcile(snap ReconcilerSnapshot) []ReconcileOp {
 			}
 			ops = append(ops, ArchiveShardOp{ShardID: e.ID})
 		}
+	}
+
+	// Op 6 — terminate-on-archive. An ARCHIVED shard whose EC2
+	// instance hasn't been reclaimed yet. TerminateInstanceInAutoScalingGroup
+	// decrements desired_capacity atomically so the coordinator's
+	// view and the ASG's stay consistent. The archive op in the
+	// same tick doesn't emit this op for the same shard (snapshot
+	// predates the archive); terminate fires on the following tick.
+	for _, e := range snap.Entries {
+		if e.State != StateArchived {
+			continue
+		}
+		if e.InstanceID == "" {
+			continue
+		}
+		ops = append(ops, TerminateArchivedInstanceOp{ShardID: e.ID})
 	}
 
 	return ops
@@ -138,6 +151,47 @@ func (o LaunchShardOp) Apply(ctx context.Context, p *Provisioner) error {
 		return fmt.Errorf("LaunchShardOp: nil bucket")
 	}
 	p.provisionForBucket(ctx, o.Bucket)
+	return nil
+}
+
+// TerminateArchivedInstanceOp terminates the EC2 instance still
+// running behind an ARCHIVED shard. The shard's data has already
+// been exported to S3 and its EBS volume retired; all that's left
+// is to reclaim the compute. TerminateInstanceInAutoScalingGroup
+// (not ec2:TerminateInstances) is used so the ASG's
+// desired_capacity decrements atomically and the coordinator's
+// view stays consistent.
+//
+// Idempotent via Apply's state + InstanceID re-checks. After a
+// successful terminate the op nulls entry.InstanceID so the next
+// tick's snapshot doesn't re-emit.
+type TerminateArchivedInstanceOp struct {
+	ShardID string
+}
+
+func (o TerminateArchivedInstanceOp) Describe() string {
+	return fmt.Sprintf("terminate archived instance for shard %s", o.ShardID)
+}
+
+func (o TerminateArchivedInstanceOp) Apply(ctx context.Context, p *Provisioner) error {
+	entry := p.registry.Get(o.ShardID)
+	if entry == nil {
+		return fmt.Errorf("%s: entry not in registry", o.Describe())
+	}
+	if entry.State != StateArchived {
+		return nil // state changed since snapshot — not our concern anymore
+	}
+	if entry.InstanceID == "" {
+		return nil // already terminated or never on an instance we track
+	}
+	if p.launcher != nil {
+		if err := p.launcher.TerminateInstance(ctx, entry.InstanceID, entry.Addr); err != nil {
+			return fmt.Errorf("%s: terminate %s: %w", o.Describe(), entry.InstanceID, err)
+		}
+	}
+	entry.InstanceID = ""
+	entry.Addr = ""
+	p.registry.PersistState(entry)
 	return nil
 }
 
@@ -264,12 +318,12 @@ func (p *Provisioner) snapshotForBucket(bucket *AppBucket) ReconcilerSnapshot {
 	return snap
 }
 
-// reconcileBucket runs one pass of the reconciler for a single
+// ReconcileBucket runs one pass of the reconciler for a single
 // bucket, applying each op in order. Called from the ticker for
 // periodic catchup and from OnboardApp for immediate propagation.
 // Concurrent callers are serialised by per-op idempotency and
 // state re-checks, not a lock here.
-func (p *Provisioner) reconcileBucket(ctx context.Context, bucket *AppBucket) {
+func (p *Provisioner) ReconcileBucket(ctx context.Context, bucket *AppBucket) {
 	snap := p.snapshotForBucket(bucket)
 	for _, op := range reconcile(snap) {
 		if err := op.Apply(ctx, p); err != nil {

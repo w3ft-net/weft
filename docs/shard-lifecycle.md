@@ -395,6 +395,13 @@ Concretely the provisioner owns:
   wall-clock passes `WindowEnd`.
 - **Archive scheduling.** Move READ_ONLY → ARCHIVING at retention
   boundary, kick off export.
+- **Terminate-on-archive.** An ARCHIVED shard whose EC2 instance
+  is still around gets reclaimed via
+  `TerminateInstanceInAutoScalingGroup(ShouldDecrementDesiredCapacity=true)`.
+  The `InstanceID` on the record gets nulled so the op doesn't
+  re-fire. Paired with the ASG desired_capacity sync above: both
+  the coordinator's `desired` calculation and the ASG's actual
+  count drop in lockstep when a shard completes archive.
 - **Failure recovery.** Detect dead instance, decide reap vs.
   recover based on shard state + retention.
 - **Stale-LAUNCHING reap.** Sweep LAUNCHING rows older than the

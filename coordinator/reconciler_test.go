@@ -380,6 +380,144 @@ func TestArchiveShardOp_Apply_NoParquetDirNoOp(t *testing.T) {
 	}
 }
 
+// Op 6 — terminate-on-archive. After archive() has exported the
+// shard's data and retired its EBS volume, the EC2 instance is
+// still running; this op reclaims it via
+// TerminateInstanceInAutoScalingGroup so the ASG's desired_capacity
+// decrements atomically.
+
+func TestReconcile_TerminateArchived_EmitsOpForArchivedWithInstanceID(t *testing.T) {
+	bucket := &AppBucket{ID: 1, Target: 0, Tier: "small"}
+	entries := []*ShardEntry{
+		{ID: "shard-done", BucketID: 1, State: StateArchived, InstanceID: "i-dead-shard"},
+	}
+	snap := ReconcilerSnapshot{Bucket: bucket, Entries: entries, Now: time.Now()}
+
+	terminates := 0
+	for _, op := range reconcile(snap) {
+		term, ok := op.(TerminateArchivedInstanceOp)
+		if !ok {
+			continue
+		}
+		terminates++
+		if term.ShardID != "shard-done" {
+			t.Errorf("op shard: got %q want shard-done", term.ShardID)
+		}
+	}
+	if terminates != 1 {
+		t.Errorf("want 1 TerminateArchivedInstanceOp, got %d: %v",
+			terminates, describeOps(reconcile(snap)))
+	}
+}
+
+// An ARCHIVED entry with no InstanceID has already been terminated
+// (or was never on an instance we manage). No op should fire.
+func TestReconcile_TerminateArchived_SkipsArchivedWithoutInstanceID(t *testing.T) {
+	bucket := &AppBucket{ID: 1, Target: 0, Tier: "small"}
+	entries := []*ShardEntry{
+		{ID: "shard-clean", BucketID: 1, State: StateArchived, InstanceID: ""},
+	}
+	snap := ReconcilerSnapshot{Bucket: bucket, Entries: entries, Now: time.Now()}
+
+	for _, op := range reconcile(snap) {
+		if _, ok := op.(TerminateArchivedInstanceOp); ok {
+			t.Errorf("unexpected op for already-nulled instance: %s", op.Describe())
+		}
+	}
+}
+
+// Non-ARCHIVED entries stay alone — terminate is only for shards
+// whose data has already been exported.
+func TestReconcile_TerminateArchived_SkipsLiveStates(t *testing.T) {
+	bucket := &AppBucket{ID: 1, Target: 0, Tier: "small"}
+	entries := []*ShardEntry{
+		{ID: "shard-live", BucketID: 1, State: StateIngesting, InstanceID: "i-1"},
+		{ID: "shard-ro", BucketID: 1, State: StateReadOnly, InstanceID: "i-2"},
+	}
+	snap := ReconcilerSnapshot{Bucket: bucket, Entries: entries, Now: time.Now()}
+
+	for _, op := range reconcile(snap) {
+		if _, ok := op.(TerminateArchivedInstanceOp); ok {
+			t.Errorf("unexpected terminate op for live state: %s", op.Describe())
+		}
+	}
+}
+
+// Apply calls the launcher's TerminateInstance with the right id,
+// then nulls entry.InstanceID + entry.Addr so the next tick doesn't
+// re-emit.
+func TestTerminateArchivedInstanceOp_Apply_CallsLauncherAndNullsFields(t *testing.T) {
+	reg := NewShardRegistry()
+	reg.Add(&ShardEntry{
+		ID:         "shard-done",
+		State:      StateArchived,
+		InstanceID: "i-dead-shard",
+		Addr:       "10.0.0.5:9000",
+	})
+
+	launcher := &countingLauncher{}
+	prov := &Provisioner{registry: reg, launcher: launcher}
+
+	if err := (TerminateArchivedInstanceOp{ShardID: "shard-done"}).Apply(context.Background(), prov); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	if launcher.terminated != "i-dead-shard" {
+		t.Errorf("TerminateInstance id: got %q want i-dead-shard", launcher.terminated)
+	}
+	entry := reg.Get("shard-done")
+	if entry.InstanceID != "" {
+		t.Errorf("InstanceID: got %q want empty (should be nulled post-terminate)", entry.InstanceID)
+	}
+	if entry.Addr != "" {
+		t.Errorf("Addr: got %q want empty (should be nulled post-terminate)", entry.Addr)
+	}
+}
+
+// If the entry has flipped away from ARCHIVED between snapshot and
+// Apply, the op must not fire — the shard is no longer a candidate
+// for reclamation.
+func TestTerminateArchivedInstanceOp_Apply_StateChangedSinceSnapshot(t *testing.T) {
+	reg := NewShardRegistry()
+	// Snapshot would have had this entry as ARCHIVED; by Apply time
+	// it's been rebound into INGESTING somehow.
+	reg.Add(&ShardEntry{
+		ID:         "shard-revived",
+		State:      StateIngesting,
+		InstanceID: "i-alive",
+	})
+
+	launcher := &countingLauncher{}
+	prov := &Provisioner{registry: reg, launcher: launcher}
+
+	if err := (TerminateArchivedInstanceOp{ShardID: "shard-revived"}).Apply(context.Background(), prov); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if launcher.terminated != "" {
+		t.Errorf("TerminateInstance must NOT fire on non-ARCHIVED state; got terminated=%q", launcher.terminated)
+	}
+	if got := reg.Get("shard-revived").InstanceID; got != "i-alive" {
+		t.Errorf("InstanceID should be untouched: got %q", got)
+	}
+}
+
+// Apply for an already-nulled entry is a no-op — useful under
+// retry or if two reconciler ticks race.
+func TestTerminateArchivedInstanceOp_Apply_EmptyInstanceIDNoOp(t *testing.T) {
+	reg := NewShardRegistry()
+	reg.Add(&ShardEntry{ID: "shard-already-done", State: StateArchived, InstanceID: ""})
+
+	launcher := &countingLauncher{}
+	prov := &Provisioner{registry: reg, launcher: launcher}
+
+	if err := (TerminateArchivedInstanceOp{ShardID: "shard-already-done"}).Apply(context.Background(), prov); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if launcher.terminated != "" {
+		t.Errorf("TerminateInstance must NOT fire when InstanceID already empty; got %q", launcher.terminated)
+	}
+}
+
 func describeOps(ops []ReconcileOp) []string {
 	out := make([]string, 0, len(ops))
 	for _, op := range ops {

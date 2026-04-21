@@ -132,49 +132,42 @@ max_capacity(tier) = Σ (2 + ceil(retention_b / window_b)) * target_b
 For the day-1 small tier with only the default bucket (target=2,
 retention=7d, window=7d): `(2+1)*2 = 6`, +2 headroom ⇒ 8.
 
-**Footgun until §4 lands.** `ARCHIVED` shards' EC2 instances are
-still running until §4 terminates them explicitly. During the gap,
-coordinator-computed desired excludes them but ASG actual count
-includes them; on a tick where desired drops, ASG's scale-in policy
-picks which instance to kill and it might not be the archived one.
-Land §4 to close the gap.
+**Paired with §4** to close the ARCHIVED-instance consistency gap:
+§3 excludes ARCHIVED from the desired formula and §4 terminates
+those instances explicitly with `ShouldDecrementDesiredCapacity=true`,
+so ASG actual and coordinator-computed desired stay lockstep.
 
 **Size.** Small (~50 lines reconciler + TF changes) but depends on
 §1+§2 being in place first.
 
-## 4. Terminate-on-archive
+## 4. Terminate-on-archive — done
 
-**Today.** `archive()` exports the shard's DuckDB to Parquet, swaps in
-a ColdShard, marks ARCHIVED, calls `retireVolume` (snapshot + detach +
-delete EBS). But the **EC2 instance** that hosted the shard is still
-running. ASG still counts it toward `desired_capacity`. Nothing
-reclaims it.
+**Status.** Landed as `TerminateArchivedInstanceOp` (op 6 from §1's
+table). Reconcile emits the op for any `StateArchived` entry with
+non-empty `InstanceID`; Apply calls `launcher.TerminateInstance`
+which routes to `TerminateInstanceInAutoScalingGroup` with
+`ShouldDecrementDesiredCapacity=true`, then nulls `InstanceID` +
+`Addr` so subsequent ticks don't re-emit. One-tick latency between
+archive (op 5 fires tick T) and terminate (op 6 fires tick T+1)
+because the op 5 side effect isn't visible in the same tick's
+snapshot; acceptable.
 
-**Target.** After `retireVolume` completes, for each ARCHIVED row with
-a non-empty `instance_id`:
-
-```go
-asg.TerminateInstanceInAutoScalingGroup(
-    InstanceId: aws.String(entry.InstanceID),
-    ShouldDecrementDesiredCapacity: aws.Bool(true),
-)
-```
-
-Then null out `instance_id` on the row so we don't re-fire. The ASG
-terminates the specific instance we name (not one of its own choosing
-via OldestInstance / scale-in policy).
-
-**Why targeted.** ASG scale-in policies choose an instance by
-heuristic — oldest, lowest protection score, etc. We need to terminate
-exactly the instance whose shard just archived, not whichever the ASG
-picks. The `TerminateInstanceInAutoScalingGroup` API (distinct from
-`ec2:TerminateInstances`) decrements desired atomically and targets a
-specific instance.
+The footgun §3 flagged (coordinator-computed `desired` dropping
+below ASG actual-count, letting scale-in pick the wrong instance)
+is closed: `desired` excludes ARCHIVED and the terminate call is
+now the mechanism that brings ASG actual down in lockstep.
 
 **IAM.** Coordinator role needs
-`autoscaling:TerminateInstanceInAutoScalingGroup` on the shard ASGs.
+`autoscaling:TerminateInstanceInAutoScalingGroup` on the shard
+ASGs. Existing use in `reapDeadShards` (pre-§4) already required
+this, so no new IAM grant needed for §4 itself — but worth
+verifying next time the role is audited.
 
-**Size.** Small (~30 lines + IAM).
+Integration test (`integration/terminate_on_archive_test.go`)
+exercises the full aws-sdk-go-v2 request path against a stub
+`ASGApi` (LocalStack Community doesn't implement ASG). LocalStack
+seeds a realistic EC2 instance id so the asserted terminate call
+mirrors prod wiring.
 
 ## 5. Pre-warm + window-rotation rechristen
 
@@ -349,7 +342,7 @@ The original gap inventory in shard-lifecycle.md. Current status:
 | 2 | Coordinator christening path | done — now LAUNCHING-row promotion in `ProcessHeartbeat.christen` |
 | 3 | Rotation on wall-clock windows | partial — `RotateToReadOnlyOp` flips INGESTING → READ_ONLY on window-end; ASG right-sizes automatically via §3's tier-sync. Next-window pre-warm still pending (§5). |
 | 4 | EBS per-shard attach/detach | partial — lifecycle hook claims LAUNCHING rows and tags volumes with real shard ids; recovery branch exists |
-| 5 | Failure-recovery branch | partial — `reapDeadShards` preserves rows with `ebs_volume_id`; rebind path works; the `TerminateInstanceInAutoScalingGroup` call from §4 is the missing piece |
+| 5 | Failure-recovery branch | partial — `reapDeadShards` preserves rows with `ebs_volume_id`; rebind path works. §4's op reclaims ARCHIVED instances; the failure-recovery variant (terminate a dead instance with `ShouldDecrementDesiredCapacity=false` so ASG replaces it) still needs wiring. |
 | 6 | Archive scheduling on retention | done (check's retention branch) |
 | 7 | Registry ↔ store consistency | done (persist on every transition; FK ensures referential integrity) |
 | 8 | Clean up `shard_records` cruft | done via migration 019 |
@@ -403,8 +396,9 @@ Work in progress — checked items are landed:
   clamps to `MaxSize`. TF companion change still pending in
   `infrastructure-catalog` (remove `desired_capacity` + add
   `ignore_changes = [desired_capacity]` + set `max_capacity`).
-- [ ] **§4 (terminate-on-archive)** — closes the ARCHIVED-instance
-  footgun introduced by §3. Ops 6 from the §1 table lands here.
+- [x] **§4 (terminate-on-archive)** — op 6 lands; ARCHIVED
+  instances now get reclaimed via
+  `TerminateInstanceInAutoScalingGroup`.
 - [ ] **§5 (pre-warm + rechristen)** — completes the window-rotation
   story. Op 4 from the §1 table lands here.
 - [ ] **§7 (lifecycle hook intent)** — can land anywhere after §2;

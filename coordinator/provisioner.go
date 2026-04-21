@@ -715,7 +715,7 @@ func (p *Provisioner) bootstrap(ctx context.Context) {
 		return
 	}
 	for _, bucket := range all {
-		p.reconcileBucket(ctx, bucket)
+		p.ReconcileBucket(ctx, bucket)
 	}
 }
 
@@ -809,7 +809,7 @@ func (p *Provisioner) OnboardApp(app string) error {
 	if updated == nil {
 		return nil
 	}
-	p.reconcileBucket(context.Background(), updated)
+	p.ReconcileBucket(context.Background(), updated)
 	return nil
 }
 
@@ -843,7 +843,7 @@ func (p *Provisioner) check(ctx context.Context) {
 			log.Printf("provisioner: reconcile: Buckets.All: %v", err)
 		}
 		for _, bucket := range all {
-			p.reconcileBucket(ctx, bucket)
+			p.ReconcileBucket(ctx, bucket)
 		}
 	}
 
