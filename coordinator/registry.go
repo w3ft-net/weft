@@ -43,6 +43,10 @@ type ShardEntry struct {
 	// validates against. Minted at christen and persisted via store
 	// so the coordinator can validate heartbeats after restart.
 	HeartbeatToken string
+	// BucketID names the bucket this shard belongs to (FK to
+	// buckets.id). Set by christen() from BucketManager.Default()
+	// today; per-app buckets pick a different one in the future.
+	BucketID string
 }
 
 // suspendFailureThreshold is the number of consecutive ingest failures
@@ -128,6 +132,10 @@ func (r *ShardRegistry) persist(entry *ShardEntry) {
 		return
 	}
 	appsJSON, _ := json.Marshal(entry.Apps)
+	bucketID := entry.BucketID
+	if bucketID == "" {
+		bucketID = "default" // FK requires a value; default bucket always exists post-migration 020
+	}
 	r.store.SaveShard(&store.ShardRecord{
 		ID:             entry.ID,
 		Apps:           string(appsJSON),
@@ -142,6 +150,7 @@ func (r *ShardRegistry) persist(entry *ShardEntry) {
 		CreatedAt:      entry.CreatedAt.Format(time.RFC3339),
 		EBSVolumeID:    entry.EBSVolumeID,
 		HeartbeatToken: entry.HeartbeatToken,
+		BucketID:       bucketID,
 	})
 }
 
@@ -190,6 +199,7 @@ func (r *ShardRegistry) LoadFromStore(reconstruct func(rec store.ShardRecord) (s
 			EBSVolumeID:    rec.EBSVolumeID,
 			Shard:          sh,
 			HeartbeatToken: rec.HeartbeatToken,
+			BucketID:       rec.BucketID,
 		}
 		r.mu.Unlock()
 	}

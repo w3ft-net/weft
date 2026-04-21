@@ -8,6 +8,32 @@ import (
 	"github.com/kevlarcon/weft/shard"
 )
 
+// stubBuckets is a Buckets implementation for tests that need to
+// hand christen()/check() a specific default bucket without
+// building a fake store + LoadFromStore. Returns the configured
+// bucket from Default()/All(); split/evaluate are inert.
+type stubBuckets struct {
+	bucket *AppBucket
+}
+
+// newDefaultStubBuckets returns a stubBuckets whose default is a
+// catch-all bucket — the shape christen() expects when there are no
+// dedicated buckets carved out yet.
+func newDefaultStubBuckets() *stubBuckets {
+	return &stubBuckets{bucket: &AppBucket{ID: "default", Apps: nil, Tier: "small"}}
+}
+
+func (s *stubBuckets) Default() *AppBucket { return s.bucket }
+func (s *stubBuckets) All() []*AppBucket {
+	if s.bucket == nil {
+		return nil
+	}
+	return []*AppBucket{s.bucket}
+}
+func (s *stubBuckets) EvaluateSplit(_ map[string]int64) string  { return "" }
+func (s *stubBuckets) Split(_ string) *AppBucket                { return nil }
+func (s *stubBuckets) LoadFromStore(_ BucketStore) error        { return nil }
+
 func TestBucketManager_EvaluateSplit(t *testing.T) {
 	bm := NewBucketManager([]string{"vimgym", "callbox", "grantcentral"})
 
@@ -132,12 +158,11 @@ func TestProvisioner_ScalesUpToConfiguredCount(t *testing.T) {
 	launcher := NewLocalLauncher()
 	t.Cleanup(func() { launcher.Close() })
 
-	config := ProvisionerConfig{
-		IngestingPerBucket: 3, // want 3, have 1
-	}
-
-	prov := NewProvisioner(reg, launcher, config)
-	prov.Buckets = NewBucketManager([]string{"vimgym"})
+	prov := NewProvisioner(reg, launcher, ProvisionerConfig{})
+	bm := NewBucketManager([]string{"vimgym"})
+	// Bucket target lives on the AppBucket itself now.
+	bm.All()[0].Target = 3
+	prov.Buckets = bm
 
 	prov.check(context.Background())
 

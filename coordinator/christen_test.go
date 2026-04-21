@@ -62,6 +62,7 @@ func TestChristen_UnclaimedHeartbeat_GetsWindowAndID(t *testing.T) {
 			WindowDuration: 7 * 24 * time.Hour,
 		},
 		configurer: configurer,
+		Buckets:    newDefaultStubBuckets(),
 	}
 
 	prov.adoptFromHeartbeats()
@@ -120,6 +121,7 @@ func TestProcessHeartbeat_ChristensInlineForUnclaimed(t *testing.T) {
 			WindowDuration: 7 * 24 * time.Hour,
 		},
 		configurer: configurer,
+		Buckets:    newDefaultStubBuckets(),
 	}
 
 	prov.ProcessHeartbeat(store.ShardHeartbeat{
@@ -169,6 +171,7 @@ func TestChristen_ConcurrentHeartbeats_FromSameAddr_DoNotDoubleConfigure(t *test
 			WindowDuration: 7 * 24 * time.Hour,
 		},
 		configurer: configurer,
+		Buckets:    newDefaultStubBuckets(),
 	}
 
 	hb := store.ShardHeartbeat{
@@ -249,6 +252,7 @@ func TestAdopt_DoesNotClobberPersistedWindowAndToken(t *testing.T) {
 			ShardSecret:    "test-secret",
 		},
 		configurer: &stubConfigurer{},
+		Buckets:    newDefaultStubBuckets(),
 	}
 
 	// Shard heartbeats with its durable id. Registry has no entry
@@ -305,6 +309,7 @@ func TestChristen_KnownIDTakesRebindPath(t *testing.T) {
 			WindowDuration: 7 * 24 * time.Hour,
 		},
 		configurer: configurer,
+		Buckets:    newDefaultStubBuckets(),
 	}
 
 	prov.adoptFromHeartbeats()

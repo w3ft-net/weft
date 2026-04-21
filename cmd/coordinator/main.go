@@ -206,6 +206,13 @@ func main() {
 		// Give the provisioner access to the store for heartbeat adoption.
 		if coord.Provisioner != nil {
 			coord.Provisioner.SetStore(db)
+
+			// Hydrate the in-memory bucket manager from shard_records'
+			// FK target. Migration 020 always seeds a 'default' bucket;
+			// without this load christen() bails out for lack of one.
+			if err := coord.Provisioner.Buckets.LoadFromStore(db); err != nil {
+				log.Printf("warning: bucket hydration failed: %v", err)
+			}
 		}
 
 		// Seed dev data when running with a customer flag (dev/docker mode).

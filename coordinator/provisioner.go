@@ -34,7 +34,6 @@ type HeartbeatStore interface {
 // ProvisionerConfig controls shard rotation thresholds.
 type ProvisionerConfig struct {
 	PollInterval       time.Duration   // how often to check (default 5min)
-	IngestingPerBucket int             // number of concurrent INGESTING shards per app bucket (default 2)
 	RetentionPeriod    time.Duration   // how long READ_ONLY shards stay hot before archiving (0 = no archival)
 	ParquetDir         string          // directory for Parquet exports (local path or s3:// prefix)
 	S3Config           *shard.S3Config // S3 credentials for Parquet export/read (nil = local only)
@@ -53,21 +52,21 @@ type ProvisionerConfig struct {
 }
 
 // DefaultProvisionerConfig returns sensible production defaults.
+// IngestingPerBucket isn't here — that target lives on each bucket
+// row in the DB (see migration 020).
 func DefaultProvisionerConfig() ProvisionerConfig {
 	return ProvisionerConfig{
-		PollInterval:       5 * time.Minute,
-		IngestingPerBucket: 2,
-		WindowDuration:     7 * 24 * time.Hour,
-		RetentionPeriod:    7 * 24 * time.Hour,
+		PollInterval:    5 * time.Minute,
+		WindowDuration:  7 * 24 * time.Hour,
+		RetentionPeriod: 7 * 24 * time.Hour,
 	}
 }
 
 // DevProvisionerConfig returns faster thresholds for development/testing.
 func DevProvisionerConfig() ProvisionerConfig {
 	return ProvisionerConfig{
-		PollInterval:       5 * time.Second,
-		IngestingPerBucket: 2,
-		WindowDuration:     1 * time.Hour,
+		PollInterval:   5 * time.Second,
+		WindowDuration: 1 * time.Hour,
 	}
 }
 
@@ -138,7 +137,7 @@ type Provisioner struct {
 	launcher    ShardLauncher
 	config      ProvisionerConfig
 	stats       *AppStats
-	Buckets     *BucketManager
+	Buckets     Buckets
 	configurer  ShardConfigurer
 	volumes     VolumeManager // optional; used to tag data volumes at christen time
 	heartbeatMu sync.Mutex    // serialises ProcessHeartbeat with the ticker's adoptFromHeartbeats
@@ -312,6 +311,7 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 			entry.HeartbeatToken = rec.HeartbeatToken
 			entry.Tier = rec.Tier
 			entry.EBSVolumeID = rec.EBSVolumeID
+			entry.BucketID = rec.BucketID
 			if rec.Apps != "" && rec.Apps != "null" {
 				_ = json.Unmarshal([]byte(rec.Apps), &entry.Apps)
 			}
@@ -331,12 +331,15 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 		hb.ShardID, hb.Addr, hb.State, hb.RowCount)
 }
 
-// christen assigns identity to an unclaimed shard: mints a shard id,
-// picks a window from WindowDuration, and sends Configure. The shard
-// persists the identity to shard.json before returning success.
+// christen assigns identity to an unclaimed shard: looks up the
+// bucket the shard should belong to, mints a shard id, picks a window
+// from WindowDuration, and sends Configure. The shard persists the
+// identity to shard.json before returning success.
 //
-// For now we use catch-all apps (empty list) — gap item #9 in
-// docs/shard-lifecycle.md tracks populating from the onboarded set.
+// Today every christened shard goes into the catch-all "default"
+// bucket (BucketManager.Default). When per-app dedicated buckets are
+// added (the Split path), this lookup grows logic to pick by app /
+// instance metadata.
 func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 	// Race guard: two heartbeats from the same unclaimed instance
 	// arrive back-to-back (the Heartbeat RPC dispatches each in its
@@ -348,6 +351,11 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 	// "shard already configured as ...".
 	if p.registry.HasAddr(hb.Addr) {
 		return nil
+	}
+
+	bucket := p.Buckets.Default()
+	if bucket == nil {
+		return fmt.Errorf("christen %s: no default bucket loaded — has BucketManager.LoadFromStore been called?", hb.Addr)
 	}
 
 	now := time.Now().UTC()
@@ -369,9 +377,17 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 		return fmt.Errorf("mint heartbeat token for %s: %w", shardID, err)
 	}
 
+	// Snapshot the bucket's current Apps into the shard. After this
+	// point the shard's app set is frozen — adding an app to the
+	// bucket later does NOT backfill it onto already-christened
+	// shards (intentional: those shards never received writes for
+	// the new app, so query routing should keep them out of its
+	// fan-out). Only newly-christened shards inherit the updated set.
+	apps := append([]string(nil), bucket.Apps...)
+
 	req := &pb.ConfigureRequest{
 		ShardId:        shardID,
-		Apps:           nil, // catch-all; see gap #9
+		Apps:           apps,
 		WindowStart:    windowStart.Format(time.RFC3339),
 		WindowEnd:      windowEnd.Format(time.RFC3339),
 		HeartbeatToken: heartbeatToken,
@@ -405,7 +421,7 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 
 	p.registry.Add(&ShardEntry{
 		ID:             shardID,
-		Apps:           nil,
+		Apps:           apps,
 		WindowStart:    windowStart,
 		WindowEnd:      windowEnd,
 		State:          StateIngesting,
@@ -416,9 +432,11 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 		Shard:          sh,
 		CreatedAt:      now,
 		HeartbeatToken: heartbeatToken,
+		Tier:           bucket.Tier,
+		BucketID:       bucket.ID,
 	})
-	log.Printf("provisioner: christened %s at %s (window %s–%s, volume=%s)",
-		shardID, hb.Addr, windowStart.Format(time.RFC3339), windowEnd.Format(time.RFC3339), volumeID)
+	log.Printf("provisioner: christened %s at %s (bucket=%s window %s–%s volume=%s)",
+		shardID, hb.Addr, bucket.ID, windowStart.Format(time.RFC3339), windowEnd.Format(time.RFC3339), volumeID)
 	return nil
 }
 
@@ -531,20 +549,37 @@ func (p *Provisioner) bootstrap(ctx context.Context) {
 	// Local launcher: configure immediately. Align the bootstrap
 	// shard's window to the current WindowDuration boundary so that
 	// check()'s wall-clock rotation fires on the same schedule as
-	// christened shards.
+	// christened shards. Bind to the default bucket if one exists
+	// (in tests without a hydrated BucketManager, the entry's
+	// BucketID stays empty and persist() defaults it to "default").
 	now := time.Now().UTC()
 	windowStart, windowEnd := p.currentWindow(now)
 
+	var bucketID, tier string
+	var apps []string
+	if p.Buckets != nil {
+		if b := p.Buckets.Default(); b != nil {
+			bucketID = b.ID
+			tier = b.Tier
+			apps = append([]string(nil), b.Apps...)
+		}
+	}
+	if tier == "" {
+		tier = "small"
+	}
+
 	shardID := fmt.Sprintf("shard-%d", now.UnixMilli())
-	entry, err := p.launchAndConfigure(ctx, shardID, "small", nil, windowStart, windowEnd)
+	entry, err := p.launchAndConfigure(ctx, shardID, tier, apps, windowStart, windowEnd)
 	if err != nil {
 		log.Printf("provisioner: bootstrap failed: %v", err)
 		return
 	}
+	entry.BucketID = bucketID
+	entry.Tier = tier
 
 	p.registry.Add(entry)
-	log.Printf("provisioner: bootstrapped shard %s (%s to %s)",
-		shardID, now.Format(time.RFC3339), windowEnd.Format(time.RFC3339))
+	log.Printf("provisioner: bootstrapped shard %s (bucket=%s %s to %s)",
+		shardID, bucketID, now.Format(time.RFC3339), windowEnd.Format(time.RFC3339))
 }
 
 // launchAndConfigure is the shared lifecycle logic: launch instance,
@@ -620,14 +655,28 @@ func (p *Provisioner) check(ctx context.Context) {
 		}
 	}
 
-	// Ensure each bucket has enough INGESTING shards.
-	if p.Buckets != nil && p.config.IngestingPerBucket > 0 {
-		for _, bucket := range p.Buckets.Buckets() {
-			app := bucket.Apps[0] // check using first app in bucket
-			current := p.registry.IngestingCount(app)
-			for current < p.config.IngestingPerBucket {
-				log.Printf("provisioner: scaling up %s (%d/%d ingesting shards)",
-					bucket.ID, current, p.config.IngestingPerBucket)
+	// Ensure each bucket has enough INGESTING shards. The target
+	// comes from the bucket's persisted record (DB-backed since
+	// migration 020) rather than a per-coordinator config knob.
+	if p.Buckets != nil {
+		for _, bucket := range p.Buckets.All() {
+			if bucket.Target <= 0 {
+				continue
+			}
+			// For multi-app buckets, count INGESTING shards that own
+			// the first app — they all share the same set so the
+			// count is identical for any app in the bucket. For the
+			// catch-all default bucket (no apps), pass "" which
+			// hasApp() treats as a wildcard match against catch-all
+			// shards.
+			var probeApp string
+			if len(bucket.Apps) > 0 {
+				probeApp = bucket.Apps[0]
+			}
+			current := p.registry.IngestingCount(probeApp)
+			for current < bucket.Target {
+				log.Printf("provisioner: scaling up bucket %s (%d/%d ingesting shards)",
+					bucket.ID, current, bucket.Target)
 				p.provisionForBucket(ctx, bucket)
 				current++
 			}
@@ -786,10 +835,17 @@ func (p *Provisioner) retireVolume(entry *ShardEntry) {
 }
 
 // provisionForBucket launches a new INGESTING shard for a bucket.
+// Tier comes from the bucket record so per-bucket fleet sizing (small
+// catch-all vs. medium dedicated, etc.) is data-driven.
 func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket) {
+	tier := bucket.Tier
+	if tier == "" {
+		tier = "small"
+	}
+
 	if _, isASG := p.launcher.(*ASGLauncher); isASG {
-		log.Printf("provisioner: launching shard for bucket %s via ASG", bucket.ID)
-		if _, err := p.launcher.LaunchInstance(ctx, "small"); err != nil {
+		log.Printf("provisioner: launching shard for bucket %s via ASG (tier=%s)", bucket.ID, tier)
+		if _, err := p.launcher.LaunchInstance(ctx, tier); err != nil {
 			log.Printf("provisioner: failed to launch shard for bucket %s: %v", bucket.ID, err)
 		}
 		return
@@ -804,11 +860,13 @@ func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket)
 	seq := p.registry.Count()
 	id := fmt.Sprintf("shard-%s-%s-%d", joinApps(bucket.Apps), windowStart.Format("20060102T1504"), seq)
 
-	entry, err := p.launchAndConfigure(ctx, id, "small", bucket.Apps, windowStart, windowEnd)
+	entry, err := p.launchAndConfigure(ctx, id, tier, bucket.Apps, windowStart, windowEnd)
 	if err != nil {
 		log.Printf("provisioner: failed to launch shard for bucket %s: %v", bucket.ID, err)
 		return
 	}
+	entry.BucketID = bucket.ID
+	entry.Tier = tier
 
 	p.registry.Add(entry)
 	log.Printf("provisioner: shard %s launched for bucket %s", id, bucket.ID)
