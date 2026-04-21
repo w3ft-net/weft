@@ -28,11 +28,11 @@ func main() {
 
 	dsn := *dbDSN
 	if dsn == "" {
-		dsn = os.Getenv("WEFT_DB_DSN")
+		dsn = os.Getenv("DB_DSN")
 	}
 	if dsn == "" {
 		dsn = "host=localhost dbname=weft user=weft password=weft sslmode=disable"
-		log.Println("WARNING: using default DB DSN — set --db-dsn or WEFT_DB_DSN in production")
+		log.Println("WARNING: using default DB DSN — set --db-dsn or DB_DSN in production")
 	}
 
 	s, err := store.Open(dsn)

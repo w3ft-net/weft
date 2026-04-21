@@ -66,7 +66,7 @@ services:
     entrypoint: ["/usr/local/bin/entrypoint.sh"]
     environment:
       ROLE: coordinator
-      WEFT_DB_DSN: host=postgres dbname=weft user=weft password=weft sslmode=disable
+      DB_DSN: host=postgres dbname=weft user=weft password=weft sslmode=disable
       WEFT_CUSTOMER: kevlar
       SHARD_SECRET: dev-shard-secret
       JWT_SECRET: dev-secret
@@ -84,7 +84,7 @@ services:
     entrypoint: ["/usr/local/bin/entrypoint.sh"]
     environment:
       ROLE: api
-      WEFT_DB_DSN: host=postgres dbname=weft user=weft password=weft sslmode=disable
+      DB_DSN: host=postgres dbname=weft user=weft password=weft sslmode=disable
       COORDINATOR_ADDR: coordinator:9020
       BASE_URL: http://localhost:5173
       JWT_SECRET: dev-secret

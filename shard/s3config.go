@@ -17,22 +17,22 @@ type S3Config struct {
 }
 
 // S3ConfigFromEnv loads S3 configuration from environment variables.
-// Returns a config if either WEFT_S3_ACCESS_KEY or WEFT_S3_REGION is set.
+// Returns a config if either S3_ACCESS_KEY or S3_REGION is set.
 // Returns nil if neither is set (meaning no S3 — use local filesystem).
 //
-//	WEFT_S3_ENDPOINT   — S3 endpoint (empty for AWS default)
-//	WEFT_S3_ACCESS_KEY — access key ID (empty = use IAM/instance credentials)
-//	WEFT_S3_SECRET_KEY — secret access key
-//	WEFT_S3_REGION     — AWS region (default: us-east-1)
-//	WEFT_S3_USE_SSL    — "true" for HTTPS (default: "false")
+//	S3_ENDPOINT   — S3 endpoint (empty for AWS default)
+//	S3_ACCESS_KEY — access key ID (empty = use IAM/instance credentials)
+//	S3_SECRET_KEY — secret access key
+//	S3_REGION     — AWS region (default: us-east-1)
+//	S3_USE_SSL    — "true" for HTTPS (default: "false")
 //
 // Three modes:
 //   - MinIO (tests): all vars set → explicit credentials + custom endpoint
-//   - Lambda/EC2 (prod): only WEFT_S3_REGION set → DuckDB uses IAM credentials
+//   - Lambda/EC2 (prod): only S3_REGION set → DuckDB uses IAM credentials
 //   - Local dev: nothing set → returns nil → local filesystem only
 func S3ConfigFromEnv() *S3Config {
-	ak := os.Getenv("WEFT_S3_ACCESS_KEY")
-	region := os.Getenv("WEFT_S3_REGION")
+	ak := os.Getenv("S3_ACCESS_KEY")
+	region := os.Getenv("S3_REGION")
 
 	if ak == "" && region == "" {
 		return nil
@@ -42,11 +42,11 @@ func S3ConfigFromEnv() *S3Config {
 		region = "us-east-1"
 	}
 	return &S3Config{
-		Endpoint:  os.Getenv("WEFT_S3_ENDPOINT"),
+		Endpoint:  os.Getenv("S3_ENDPOINT"),
 		AccessKey: ak,
-		SecretKey: os.Getenv("WEFT_S3_SECRET_KEY"),
+		SecretKey: os.Getenv("S3_SECRET_KEY"),
 		Region:    region,
-		UseSSL:    os.Getenv("WEFT_S3_USE_SSL") == "true",
+		UseSSL:    os.Getenv("S3_USE_SSL") == "true",
 	}
 }
 

@@ -29,7 +29,7 @@ const (
 // Requires MinIO running on localhost:9050 (docker compose up minio).
 // Skipped if MinIO is not reachable.
 func TestColdShard_S3Integration(t *testing.T) {
-	if os.Getenv("WEFT_S3_TEST") == "" {
+	if os.Getenv("WEFT_TEST_S3") == "" {
 		// Try to reach MinIO.
 		cfg, err := config.LoadDefaultConfig(context.Background(),
 			config.WithRegion("us-east-1"),

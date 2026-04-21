@@ -41,11 +41,11 @@ const (
 // Setup verifies the stack is up and ensures the MinIO bucket exists.
 // Returns a cleanup function. Call from TestMain.
 func Setup() func() {
-	os.Setenv("WEFT_S3_ENDPOINT", MinioEndpoint)
-	os.Setenv("WEFT_S3_ACCESS_KEY", MinioAccessKey)
-	os.Setenv("WEFT_S3_SECRET_KEY", MinioSecretKey)
-	os.Setenv("WEFT_S3_REGION", "us-east-1")
-	os.Setenv("WEFT_S3_USE_SSL", "false")
+	os.Setenv("S3_ENDPOINT", MinioEndpoint)
+	os.Setenv("S3_ACCESS_KEY", MinioAccessKey)
+	os.Setenv("S3_SECRET_KEY", MinioSecretKey)
+	os.Setenv("S3_REGION", "us-east-1")
+	os.Setenv("S3_USE_SSL", "false")
 
 	requireStackRunning()
 

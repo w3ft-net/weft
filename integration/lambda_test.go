@@ -53,7 +53,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	t.Logf("exported to %s", s3Path)
 
 	// Create LambdaColdShard pointing at the container.
-	// Note: the container reads from MinIO using its own WEFT_S3_* env vars
+	// Note: the container reads from MinIO using its own S3_* env vars
 	// (set in docker-compose), so the Parquet path uses the container's
 	// MinIO endpoint (minio:9000), not localhost:9050.
 	containerS3Path := fmt.Sprintf("s3://%s/lambda-test/shard-lambda-int.parquet", ColdBucket)

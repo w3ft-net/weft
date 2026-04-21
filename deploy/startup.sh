@@ -44,11 +44,10 @@ set -a
 set +a
 
 # Coordinator: write /opt/app/coordinator.env with a sanitised,
-# plain-KEY=VALUE form that systemd's EnvironmentFile parser accepts.
-# Variables whose Go code still expects a WEFT_ prefix keep it
-# (WEFT_DB_DSN, WEFT_S3_REGION); everything else uses the blob keys
-# directly so weft-coordinator.service can reference them without a
-# translation layer.
+# plain-KEY=VALUE form that systemd's EnvironmentFile parser
+# accepts. All values use the blob keys directly (no WEFT_ prefix)
+# — the Go side reads DB_DSN, S3_REGION, etc. as-is, no translation
+# layer needed.
 if [ "$ROLE" = "coordinator" ]; then
   # Safety belt: the whole point of this script post-rewrite is to
   # avoid the silent fall-through to dev mode we saw on 2026-04-20.
@@ -64,8 +63,8 @@ if [ "$ROLE" = "coordinator" ]; then
   cat > /opt/app/coordinator.env <<EOF
 APP_NAME=${APP_NAME}
 AWS_REGION=${REGION}
-WEFT_DB_DSN=${WEFT_DB_DSN:-}
-WEFT_S3_REGION=${REGION}
+DB_DSN=${DB_DSN:-}
+S3_REGION=${REGION}
 SHARD_ASG_SMALL=${SHARD_ASG_SMALL:-}
 SHARD_ASG_MEDIUM=${SHARD_ASG_MEDIUM:-}
 SHARD_ASG_LARGE=${SHARD_ASG_LARGE:-}

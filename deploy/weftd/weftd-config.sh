@@ -4,7 +4,7 @@
 # from /etc/default/weftd (see weftd.service's EnvironmentFile= directive).
 #
 # All weftd-specific variables use the WEFTD_ prefix to avoid colliding
-# with the coordinator's WEFT_* env (WEFT_DB_DSN, WEFT_CUSTOMER, etc.) on
+# with the coordinator's env (DB_DSN, S3_REGION, SHARD_ASG_*, etc.) on
 # hosts that run both. See /etc/default/weftd for the full list.
 #
 # Supported variables (all optional except WEFTD_TOKEN):

@@ -5,7 +5,7 @@
 # Delegates to /usr/local/bin/load-app-env, which slurps the kevcons
 # config blob (infra-derived vars like SHARD_ASG_SMALL, PARQUET_DIR)
 # and /weft/ secrets (JWT_SECRET, Stripe keys, WEFTD_TOKEN, …) into
-# /opt/app/.env. Then appends WEFT_DB_DSN, the only value weft needs
+# /opt/app/.env. Then appends DB_DSN, the only value weft needs
 # that isn't in the blob or secrets — the DB DSN has a distinct SSM
 # lifecycle (separate stack) and stays standalone.
 #
@@ -32,16 +32,16 @@ fi
 echo "fetch-config: running load-app-env for $APP_NAME"
 APP_NAME="$APP_NAME" AWS_REGION="$AWS_REGION" /usr/local/bin/load-app-env
 
-WEFT_DB_DSN=$(aws ssm get-parameter \
+DB_DSN=$(aws ssm get-parameter \
     --name "/${APP_NAME}/config/db-dsn" \
     --region "$AWS_REGION" \
     --with-decryption \
     --query 'Parameter.Value' --output text 2>/dev/null || echo "")
 
-if [ -n "$WEFT_DB_DSN" ]; then
+if [ -n "$DB_DSN" ]; then
     # Append to (not overwrite) load-app-env's output so both its blob
     # + secrets AND our DSN are present in a single source-able file.
-    echo "WEFT_DB_DSN='$WEFT_DB_DSN'" >> /opt/app/.env
+    echo "DB_DSN='$DB_DSN'" >> /opt/app/.env
 else
     echo "fetch-config: warning — /${APP_NAME}/config/db-dsn empty or unavailable"
 fi

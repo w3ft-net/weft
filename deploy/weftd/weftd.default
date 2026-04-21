@@ -7,8 +7,9 @@
 # Only WEFTD_TOKEN is required. Everything else has sensible defaults.
 #
 # NOTE: weftd-specific vars use the WEFTD_ prefix on purpose. Hosts
-# that also run the weft coordinator use WEFT_* for admin config (DB
-# DSN, customer name, etc.) and those MUST stay out of weftd's env.
+# that also run the weft coordinator use unprefixed names for admin
+# config (DB_DSN, SHARD_ASG_SMALL, etc.) and those MUST stay out of
+# weftd's env to avoid colliding with the same-named weft vars.
 
 # Agent auth token issued by the weft coordinator (required).
 #WEFTD_TOKEN=

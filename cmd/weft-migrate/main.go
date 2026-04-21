@@ -9,7 +9,7 @@
 // embedded goose runner records applied migrations in the
 // `goose_db_version` table.
 //
-// The DSN comes from $WEFT_DB_DSN (set by fetch-config.sh into
+// The DSN comes from $DB_DSN (set by fetch-config.sh into
 // /opt/app/.env before the lifecycle hook executes). --db-dsn is available
 // for one-off manual runs.
 package main
@@ -25,11 +25,11 @@ import (
 )
 
 func main() {
-	dsn := flag.String("db-dsn", os.Getenv("WEFT_DB_DSN"), "postgres DSN (defaults to $WEFT_DB_DSN)")
+	dsn := flag.String("db-dsn", os.Getenv("DB_DSN"), "postgres DSN (defaults to $DB_DSN)")
 	flag.Parse()
 
 	if *dsn == "" {
-		log.Fatal("weft-migrate: no DSN provided (set --db-dsn or $WEFT_DB_DSN)")
+		log.Fatal("weft-migrate: no DSN provided (set --db-dsn or $DB_DSN)")
 	}
 
 	start := time.Now()
