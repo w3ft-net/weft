@@ -18,13 +18,13 @@ TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-m
 INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
 REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
 
-# Read the Role tag
-ROLE=$(aws ec2 describe-tags \
-  --filters "Name=resource-id,Values=$INSTANCE_ID" "Name=key,Values=Role" \
-  --region "$REGION" \
-  --query 'Tags[0].Value' --output text 2>/dev/null || echo "")
+# Read the Role tag via IMDS. Relies on instance_metadata_tags=enabled
+# on the launch template (modules/asg-application). No IAM round-trip
+# and no silent-failure mode from an API error.
+ROLE=$(curl -sf -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/tags/instance/Role || true)
 
-if [ -z "$ROLE" ] || [ "$ROLE" = "None" ]; then
+if [ -z "$ROLE" ]; then
   echo "No Role tag found on instance $INSTANCE_ID, defaulting to coordinator"
   ROLE="coordinator"
 fi
