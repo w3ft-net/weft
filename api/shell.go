@@ -61,7 +61,8 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Use the request context so the stream is cancelled when the client disconnects.
-	ctx, cancel := context.WithCancel(r.Context())
+	// coordCtx forwards the caller's bearer token as outgoing gRPC metadata.
+	ctx, cancel := context.WithCancel(s.coordCtx(r))
 	defer cancel()
 
 	stream, err := s.coordClient.Query(ctx, &pb.CoordinatorQueryRequest{
