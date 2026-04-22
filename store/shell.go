@@ -1,9 +1,12 @@
 package store
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/kevlarcon/warp/pkg/bash"
 	"gorm.io/gorm"
 )
 
@@ -110,6 +113,9 @@ type CronWatch struct {
 }
 
 func (s *Store) SaveCronWatch(customerID uint, name, schedule, pipeline string) error {
+	if err := ValidateWatchPipeline(pipeline); err != nil {
+		return err
+	}
 	var w CronWatch
 	result := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&w)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -125,6 +131,36 @@ func (s *Store) SaveCronWatch(customerID uint, name, schedule, pipeline string) 
 		"schedule": schedule,
 		"pipeline": pipeline,
 	}).Error
+}
+
+// ValidateWatchPipeline enforces pipeline-shape invariants for cron watches.
+// Today it rejects pipelines that invoke `alert` more than once; the single
+// alert stage is the sole incident-dedup boundary per watch, and a second
+// stage would mean two incident rows competing for the same watch run.
+//
+// The check parses with warp's bash AST and walks every SimpleCommand —
+// including those nested inside command substitutions, compound commands,
+// and function bodies — so alias/variable obfuscation is the only way to
+// slip past it. If the pipeline fails to parse we let the error through:
+// the runtime parser will surface a clearer diagnostic when the watch runs.
+func ValidateWatchPipeline(pipeline string) error {
+	script, err := bash.Parse(pipeline)
+	if err != nil {
+		return nil
+	}
+	alerts := 0
+	bash.Walk(script, func(n bash.Node) bool {
+		if sc, ok := n.(*bash.SimpleCommand); ok {
+			if len(sc.Words) > 0 && sc.Words[0].Literal() == "alert" {
+				alerts++
+			}
+		}
+		return true
+	})
+	if alerts > 1 {
+		return fmt.Errorf("alert may only appear once in a pipeline (found %d)", alerts)
+	}
+	return nil
 }
 
 func (s *Store) GetCronWatch(customerID uint, name string) (*CronWatch, error) {
@@ -169,7 +205,10 @@ func (s *Store) UpdateCronWatchRun(id uint, status string) error {
 
 // --- Cron Results ---
 
-// CronResult stores the output of a completed cron watch run.
+// CronResult stores the output of a completed cron watch run. Value holds the
+// numeric form of Stdout when it parses cleanly as a float; NULL otherwise.
+// Alert aggregations (avg/min/max over a duration window) read Value directly
+// in SQL and ignore the NULLs.
 type CronResult struct {
 	gorm.Model
 	CronWatchID uint      `gorm:"not null;index"`
@@ -178,9 +217,15 @@ type CronResult struct {
 	Stderr      string    `gorm:"type:text"`
 	ExitCode    int
 	DurationMs  int64
+	Value       *float64 `gorm:"type:double precision"`
 }
 
 func (s *Store) SaveCronResult(result *CronResult) error {
+	if result.Value == nil {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(result.Stdout), 64); err == nil {
+			result.Value = &v
+		}
+	}
 	return s.db.Create(result).Error
 }
 
@@ -189,6 +234,48 @@ func (s *Store) ListCronResults(cronWatchID uint, limit int) ([]CronResult, erro
 	err := s.db.Where("cron_watch_id = ?", cronWatchID).
 		Order("ran_at DESC").Limit(limit).Find(&results).Error
 	return results, err
+}
+
+// CronAggStats is the one-row result of an aggregation over a duration window.
+// Avg/Min/Max are nil when Samples is 0 (no numeric rows in the window).
+type CronAggStats struct {
+	Avg     *float64
+	Min     *float64
+	Max     *float64
+	Samples int
+}
+
+// CronAggregate returns avg/min/max/sample-count of cron_results.value for a
+// watch over [since, now). Runs as a single SQL aggregate — alert uses this
+// in place of loading rows and reducing in Go.
+func (s *Store) CronAggregate(cronWatchID uint, since time.Time) (CronAggStats, error) {
+	var row struct {
+		Avg     *float64
+		Min     *float64
+		Max     *float64
+		Samples int
+	}
+	err := s.db.Raw(`
+		SELECT AVG(value) AS avg,
+		       MIN(value) AS min,
+		       MAX(value) AS max,
+		       COUNT(value) AS samples
+		FROM cron_results
+		WHERE cron_watch_id = ? AND ran_at >= ? AND value IS NOT NULL
+	`, cronWatchID, since).Scan(&row).Error
+	return CronAggStats{Avg: row.Avg, Min: row.Min, Max: row.Max, Samples: row.Samples}, err
+}
+
+// CronNonEmptyCount returns how many rows in [since, now) had non-empty
+// stdout. Used by `alert absent --duration <dur>` to tell whether any data
+// arrived in the window.
+func (s *Store) CronNonEmptyCount(cronWatchID uint, since time.Time) (int, error) {
+	var n int64
+	err := s.db.Raw(`
+		SELECT COUNT(*) FROM cron_results
+		WHERE cron_watch_id = ? AND ran_at >= ? AND stdout <> ''
+	`, cronWatchID, since).Scan(&n).Error
+	return int(n), err
 }
 
 // QueryCronResults returns results for a named watch within a time range,

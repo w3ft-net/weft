@@ -3,7 +3,6 @@ package coordinator
 import (
 	"fmt"
 	"io"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -65,38 +64,25 @@ func AlertCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wr
 		return 1
 	}
 
-	// Show man page.
-	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
-		fmt.Fprint(stdout, alertManPage)
-		return 0
-	}
-
 	// Parse current value as float.
 	current, numErr := strconv.ParseFloat(value, 64)
 	isNumeric := numErr == nil
 
-	// Get history if needed.
-	var history []store.CronResult
+	// Fetch window aggregates (avg/min/max/samples) once, if needed.
+	var stats store.CronAggStats
 	if parsed.duration > 0 && ctx.Store != nil && ctx.Watch != nil {
-		history, _ = ctx.Store.ListCronResults(ctx.Watch.ID, 100)
-		// Filter to duration window.
-		cutoff := time.Now().Add(-parsed.duration)
-		var filtered []store.CronResult
-		for _, r := range history {
-			if r.RanAt.After(cutoff) {
-				filtered = append(filtered, r)
-			}
-		}
-		history = filtered
+		stats, _ = ctx.Store.CronAggregate(ctx.Watch.ID, time.Now().Add(-parsed.duration))
 	}
 
-	// Get previous value for changed/rising/falling.
+	// Previous value for changed/rising/falling (single prior row).
 	var prevValue float64
+	var prevStdout string
 	var hasPrev bool
 	if ctx.Store != nil && ctx.Watch != nil {
 		results, _ := ctx.Store.ListCronResults(ctx.Watch.ID, 2)
 		if len(results) >= 2 {
-			if v, err := strconv.ParseFloat(strings.TrimSpace(results[1].Stdout), 64); err == nil {
+			prevStdout = strings.TrimSpace(results[1].Stdout)
+			if v, err := strconv.ParseFloat(prevStdout, 64); err == nil {
 				prevValue = v
 				hasPrev = true
 			}
@@ -119,14 +105,14 @@ func AlertCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wr
 			fmt.Fprintf(stderr, "alert: non-numeric value %q\n", value)
 			return 1
 		}
-		if parsed.duration > 0 && parsed.average {
-			avg := historyAvg(history)
-			triggered = avg > parsed.threshold
-			reason = fmt.Sprintf("average %.1f > %.1f over %s", avg, parsed.threshold, parsed.duration)
-		} else if parsed.duration > 0 {
-			triggered = allAbove(history, parsed.threshold)
+		if parsed.duration > 0 && parsed.average && stats.Avg != nil {
+			triggered = *stats.Avg > parsed.threshold
+			reason = fmt.Sprintf("average %.1f > %.1f over %s", *stats.Avg, parsed.threshold, parsed.duration)
+		} else if parsed.duration > 0 && stats.Min != nil {
+			// MIN > threshold ⇒ all samples > threshold.
+			triggered = *stats.Min > parsed.threshold
 			reason = fmt.Sprintf("above %.1f for %s", parsed.threshold, parsed.duration)
-		} else {
+		} else if parsed.duration == 0 {
 			triggered = current > parsed.threshold
 			reason = fmt.Sprintf("%.1f > %.1f", current, parsed.threshold)
 		}
@@ -136,14 +122,14 @@ func AlertCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wr
 			fmt.Fprintf(stderr, "alert: non-numeric value %q\n", value)
 			return 1
 		}
-		if parsed.duration > 0 && parsed.average {
-			avg := historyAvg(history)
-			triggered = avg < parsed.threshold
-			reason = fmt.Sprintf("average %.1f < %.1f over %s", avg, parsed.threshold, parsed.duration)
-		} else if parsed.duration > 0 {
-			triggered = allBelow(history, parsed.threshold)
+		if parsed.duration > 0 && parsed.average && stats.Avg != nil {
+			triggered = *stats.Avg < parsed.threshold
+			reason = fmt.Sprintf("average %.1f < %.1f over %s", *stats.Avg, parsed.threshold, parsed.duration)
+		} else if parsed.duration > 0 && stats.Max != nil {
+			// MAX < threshold ⇒ all samples < threshold.
+			triggered = *stats.Max < parsed.threshold
 			reason = fmt.Sprintf("below %.1f for %s", parsed.threshold, parsed.duration)
-		} else {
+		} else if parsed.duration == 0 {
 			triggered = current < parsed.threshold
 			reason = fmt.Sprintf("%.1f < %.1f", current, parsed.threshold)
 		}
@@ -165,19 +151,22 @@ func AlertCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wr
 		reason = fmt.Sprintf("%.1f != %.1f", current, parsed.threshold)
 
 	case condChanged:
-		if hasPrev {
-			triggered = value != strings.TrimSpace(history[0].Stdout) // compare raw strings
+		if hasPrev || prevStdout != "" {
+			triggered = value != prevStdout
 			if triggered {
-				reason = fmt.Sprintf("changed from %q to %q", strings.TrimSpace(history[0].Stdout), value)
+				reason = fmt.Sprintf("changed from %q to %q", prevStdout, value)
 			}
 		}
 
 	case condAbsent:
 		if parsed.duration == 0 {
-			fmt.Fprintf(stderr, "alert: absent requires --duration\n")
-			return 1
+			triggered = value == ""
+		} else if ctx.Store != nil && ctx.Watch != nil {
+			n, _ := ctx.Store.CronNonEmptyCount(ctx.Watch.ID, time.Now().Add(-parsed.duration))
+			triggered = n == 0
+		} else {
+			triggered = value == ""
 		}
-		triggered = len(history) == 0 || value == ""
 		reason = fmt.Sprintf("absent for %s", parsed.duration)
 
 	case condRising:
@@ -186,8 +175,8 @@ func AlertCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wr
 			return 1
 		}
 		var baseline float64
-		if parsed.duration > 0 && len(history) > 0 {
-			baseline = historyAvg(history)
+		if parsed.duration > 0 && stats.Avg != nil {
+			baseline = *stats.Avg
 		} else if hasPrev {
 			baseline = prevValue
 		} else {
@@ -205,8 +194,8 @@ func AlertCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wr
 			return 1
 		}
 		var baseline float64
-		if parsed.duration > 0 && len(history) > 0 {
-			baseline = historyAvg(history)
+		if parsed.duration > 0 && stats.Avg != nil {
+			baseline = *stats.Avg
 		} else if hasPrev {
 			baseline = prevValue
 		} else {
@@ -457,124 +446,3 @@ func parseAlertArgs(args []string) (*alertArgs, error) {
 	return parsed, nil
 }
 
-// ── History helpers ─────────────────────────────────────────
-
-func historyAvg(results []store.CronResult) float64 {
-	if len(results) == 0 {
-		return 0
-	}
-	var sum float64
-	var count int
-	for _, r := range results {
-		if v, err := strconv.ParseFloat(strings.TrimSpace(r.Stdout), 64); err == nil {
-			sum += v
-			count++
-		}
-	}
-	if count == 0 {
-		return 0
-	}
-	return sum / float64(count)
-}
-
-func allAbove(results []store.CronResult, threshold float64) bool {
-	if len(results) == 0 {
-		return false
-	}
-	for _, r := range results {
-		v, err := strconv.ParseFloat(strings.TrimSpace(r.Stdout), 64)
-		if err != nil || v <= threshold {
-			return false
-		}
-	}
-	return true
-}
-
-func allBelow(results []store.CronResult, threshold float64) bool {
-	if len(results) == 0 {
-		return false
-	}
-	for _, r := range results {
-		v, err := strconv.ParseFloat(strings.TrimSpace(r.Stdout), 64)
-		if err != nil || v >= threshold {
-			return false
-		}
-	}
-	return true
-}
-
-// Suppress unused import warning.
-var _ = math.Abs
-
-// ── Man page ────────────────────────────────────────────────
-
-const alertManPage = `ALERT(1)                    Weft Commands                    ALERT(1)
-
-NAME
-    alert - evaluate conditions and dispatch notifications
-
-SYNOPSIS
-    <pipeline> | alert [<condition>] [--notify=<alias>]
-                       [--duration <dur>] [--average] [--msg <text>]
-
-DESCRIPTION
-    Reads a value from stdin and evaluates it against a condition.
-    If the condition is met, writes an alert message to stderr and,
-    when --notify is supplied, dispatches the alias from /etc/notify.conf
-    to its Slack and/or PagerDuty targets.
-
-    If no condition is given, the default is "any": the alert fires
-    whenever stdin is non-empty.
-
-    Always passes stdin through to stdout unchanged (tee behavior).
-
-    In a cron watch (/cron.d/), incidents are deduplicated on
-    (watch, condition). Subsequent ticks during an open incident
-    update it but don't re-page. When the condition clears, the
-    incident closes.
-
-    From the interactive shell, alert is the supported way to
-    test an alias end-to-end:
-        echo "hello" | alert --notify=ops
-
-CONDITIONS
-    any           Fires whenever stdin is non-empty (default)
-    above <N>     Current value is greater than N
-    below <N>     Current value is less than N
-    eq <N>        Current value equals N
-    neq <N>       Current value does not equal N
-    changed       Value differs from previous run
-    absent        No input received (requires --duration)
-    rising <N>%   Value increased by N% compared to previous
-    falling <N>%  Value decreased by N% compared to previous
-
-OPTIONS
-    --notify=<alias>
-        Dispatch to the named alias in /etc/notify.conf.
-        Without --notify, alert only writes to stderr.
-
-    --duration <dur>
-        Time window for sustained conditions. For above/below:
-        condition must hold for ALL runs in the window. For
-        rising/falling: compares against the window average.
-        Required for absent. Examples: 5m, 1h, 30s.
-
-    --average
-        For above/below with --duration: compare against the
-        rolling average over the window instead of requiring
-        every individual run to match.
-
-    --msg <text>
-        Override the default alert message.
-
-EXAMPLES
-    cat myapp.log --since 5m | awk '$LEVEL == "ERROR"' | alert --notify=ops
-    check_errors | alert above 50 --notify=critical
-    check_errors | alert above 50 --duration 5m --average --notify=ops
-    check_errors | alert rising 100% --notify=critical
-    cat /log/canary.log | tail -1 | alert absent --duration 10m --notify=ops
-    echo "integration test" | alert --notify=ops
-
-SEE ALSO
-    help, vi, cat
-`
