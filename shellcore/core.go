@@ -14,24 +14,15 @@ var terminalCommands = map[string]bool{
 
 // ShellCore is the shared shell state machine.
 // It is synchronous and passive — the renderer calls HandleEvent(),
-// and ShellCore writes ANSI to callbacks and dispatches actions.
-//
-// For xterm.js: use a single Write callback. All output (scrollback,
-// prompt, cursor control) goes through this one function.
-// For bubbletea: use separate Write + PromptWrite callbacks so the
-// adapter can route content to different UI regions.
+// and ShellCore writes ANSI to a single callback and dispatches actions.
 type ShellCore struct {
 	history   *History
 	completer *Completer
 	mode      Mode
 	apps      []string
 
-	// Output callback: all terminal bytes go here.
 	write    func([]byte)
-	// Optional separate prompt callback. If nil, write is used for everything.
-	// The bubbletea adapter uses this to route prompt content separately.
-	promptWrite func([]byte)
-	dispatch    func(Action)
+	dispatch func(Action)
 
 	width, height int
 	inputBuf      []rune
@@ -70,7 +61,7 @@ type ShellCore struct {
 	cwd  string // virtual working directory, "/" = home = "~"
 }
 
-// NewShellCore creates a new core with a single write callback (for xterm.js/WASM).
+// NewShellCore creates a new core with a single write callback.
 func NewShellCore(apps []string, width, height int, write func([]byte), dispatch func(Action)) *ShellCore {
 	return &ShellCore{
 		history:            &History{},
@@ -84,14 +75,6 @@ func NewShellCore(apps []string, width, height int, write func([]byte), dispatch
 		maxScrollbackLines: 10000,
 		cwd:                "/",
 	}
-}
-
-// NewShellCoreWithPrompt creates a core with separate scrollback and prompt
-// callbacks (for bubbletea adapter).
-func NewShellCoreWithPrompt(apps []string, width, height int, write, promptWrite func([]byte), dispatch func(Action)) *ShellCore {
-	c := NewShellCore(apps, width, height, write, dispatch)
-	c.promptWrite = promptWrite
-	return c
 }
 
 // Mode returns the current shell mode.
@@ -1065,12 +1048,7 @@ func (c *ShellCore) redrawPrompt() {
 		fmt.Fprintf(&b, "\x1b[%dG", col)
 	}
 
-	// Use promptWrite if available (bubbletea), otherwise write (xterm.js).
-	if c.promptWrite != nil {
-		c.promptWrite([]byte(b.String()))
-	} else {
-		c.write([]byte(b.String()))
-	}
+	c.write([]byte(b.String()))
 }
 
 // erasePromptLines writes ANSI sequences to erase the previous prompt area.

@@ -6,7 +6,6 @@ import (
 )
 
 // ANSI SGR escape sequences for syntax highlighting.
-// These mirror the lipgloss styles in shell/highlight.go and shell/complete.go.
 const (
 	ansiReset = "\033[0m"
 	ansiBold  = "\033[1m"
