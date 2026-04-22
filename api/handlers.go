@@ -1413,7 +1413,7 @@ func (s *Server) handleWatchResults(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	results, err := s.store.ListCronResults(watch.ID, 50)
+	results, err := s.store.ListCronResults(watch.ID, 50, "")
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

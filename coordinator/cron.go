@@ -1,8 +1,10 @@
 package coordinator
 
 import (
+	"bufio"
 	"context"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -208,16 +210,13 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch) {
 		}
 	}
 
-	// Persist result.
-	cronResult := &store.CronResult{
-		CronWatchID: watch.ID,
-		RanAt:       start,
-		Stdout:      stdout,
-		Stderr:      stderr,
-		ExitCode:    exitCode,
-		DurationMs:  duration.Milliseconds(),
-	}
-	if saveErr := ce.Store.SaveCronResult(cronResult); saveErr != nil {
+	// Persist result(s). Single-row mode: one cron_results row with
+	// tag='' and value auto-parsed from stdout. Multi-row mode (watch has
+	// alert_key set): split stdout into lines, extract value from field
+	// alert_key and tag from alert_tag, one row per line. Lines whose -k
+	// field isn't numeric are persisted with Value=NULL so the debugging
+	// trail stays intact; aggregates ignore NULLs.
+	if saveErr := ce.persistResults(watch, start, stdout, stderr, exitCode, duration); saveErr != nil {
 		log.Printf("cron[%s]: failed to save result: %v", watch.Name, saveErr)
 	}
 
@@ -228,6 +227,73 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch) {
 
 	log.Printf("cron[%s]: %s (%dms, stdout=%d bytes, stderr=%d bytes)",
 		watch.Name, status, duration.Milliseconds(), len(stdout), len(stderr))
+}
+
+// persistResults writes one or more cron_results rows for this tick. In
+// single-row mode (watch.AlertKey nil) we write a single row with tag='' and
+// let SaveCronResult auto-parse Stdout into Value. In multi-row mode we
+// split stdout into lines, extract value from field AlertKey and tag from
+// AlertTag, and write one row per non-blank line. Lines whose value field
+// is non-numeric are still persisted — with Value=NULL — so the history
+// stays a faithful record; aggregates ignore NULLs. Stderr and exit_code
+// are only attached to the first row in multi-row mode (they describe the
+// whole tick, not a specific row).
+func (ce *CronExecutor) persistResults(watch store.CronWatch, ranAt time.Time, stdout, stderr string, exitCode int, duration time.Duration) error {
+	if watch.AlertKey == nil {
+		return ce.Store.SaveCronResult(&store.CronResult{
+			CronWatchID: watch.ID,
+			RanAt:       ranAt,
+			Stdout:      stdout,
+			Stderr:      stderr,
+			ExitCode:    exitCode,
+			DurationMs:  duration.Milliseconds(),
+		})
+	}
+
+	k := *watch.AlertKey
+	tagField := 0
+	if watch.AlertTag != nil {
+		tagField = *watch.AlertTag
+	}
+
+	var rows []store.CronResult
+	scanner := bufio.NewScanner(strings.NewReader(stdout))
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	first := true
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+
+		r := store.CronResult{
+			CronWatchID: watch.ID,
+			RanAt:       ranAt,
+			Stdout:      line,
+			ExitCode:    exitCode,
+			DurationMs:  duration.Milliseconds(),
+		}
+		if first {
+			r.Stderr = stderr
+			first = false
+		}
+		if k > 0 && k <= len(fields) {
+			if v, err := strconv.ParseFloat(fields[k-1], 64); err == nil {
+				r.Value = &v
+			}
+		}
+		if tagField > 0 && tagField <= len(fields) {
+			r.Tag = fields[tagField-1]
+		}
+		rows = append(rows, r)
+	}
+
+	// Empty multi-row output = no rows written. That's fine; the watch's
+	// "last run" timestamp still updates via UpdateCronWatchRun. If we want
+	// an audit trail of empty ticks in multi-row mode we can add a sentinel
+	// row later.
+	return ce.Store.SaveCronResults(rows)
 }
 
 // tierForWatch looks up the subscription tier for the customer that owns the watch.

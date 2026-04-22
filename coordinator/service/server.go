@@ -798,7 +798,7 @@ func (s *Server) GetWatchResults(ctx context.Context, req *pb.GetWatchResultsReq
 	if limit <= 0 {
 		limit = 20
 	}
-	results, err := s.Store.ListCronResults(w.ID, limit)
+	results, err := s.Store.ListCronResults(w.ID, limit, "")
 	if err != nil {
 		return nil, err
 	}

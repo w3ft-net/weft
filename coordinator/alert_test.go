@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/kevlarcon/weft/shellcore"
 )
 
 func runAlert(args string, stdin string) (stdout, stderr string, exitCode int) {
@@ -35,15 +37,73 @@ func TestAlert_AnyEmpty(t *testing.T) {
 	}
 }
 
+func TestAlert_MultiRow_FiresPerRow(t *testing.T) {
+	// Three hosts; only the first two are above 80. Both should fire, each
+	// with its own tag prefix in the stderr line.
+	stdin := "shard-a 85\nshard-b 90\nshard-c 50\n"
+	_, stderr, code := runAlert("above 80 -k 2 -t 1", stdin)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
+	}
+	if !strings.Contains(stderr, "shard-a") {
+		t.Errorf("stderr missing shard-a alert: %q", stderr)
+	}
+	if !strings.Contains(stderr, "shard-b") {
+		t.Errorf("stderr missing shard-b alert: %q", stderr)
+	}
+	if strings.Contains(stderr, "shard-c") {
+		t.Errorf("shard-c (50) should not have fired: %q", stderr)
+	}
+}
+
+func TestAlert_MultiRow_BelowThresholdSilent(t *testing.T) {
+	stdin := "shard-a 50\nshard-b 30\n"
+	_, stderr, code := runAlert("above 80 -k 2 -t 1", stdin)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if stderr != "" {
+		t.Errorf("no rows should fire; got %q", stderr)
+	}
+}
+
+func TestAlert_MultiRow_SkipsBlankLines(t *testing.T) {
+	stdin := "\nshard-a 85\n\nshard-b 60\n\n"
+	_, stderr, _ := runAlert("above 80 -k 2 -t 1", stdin)
+	// Only shard-a should fire.
+	if !strings.Contains(stderr, "shard-a") {
+		t.Errorf("expected shard-a alert, got %q", stderr)
+	}
+	if strings.Contains(stderr, "shard-b") {
+		t.Errorf("shard-b (60) should not have fired: %q", stderr)
+	}
+}
+
+func TestAlert_MultiRow_NonNumericFieldSkipped(t *testing.T) {
+	// Row 2 has a non-numeric "oops" in the value field. We still process
+	// the other rows; the bad one produces a stderr line and exit 1.
+	stdin := "shard-a 85\nshard-b oops\nshard-c 92\n"
+	_, stderr, code := runAlert("above 80 -k 2 -t 1", stdin)
+	if code != 1 {
+		t.Errorf("expected exit 1 from non-numeric row, got %d", code)
+	}
+	if !strings.Contains(stderr, "non-numeric") {
+		t.Errorf("expected non-numeric warning, got %q", stderr)
+	}
+	if !strings.Contains(stderr, "shard-a") || !strings.Contains(stderr, "shard-c") {
+		t.Errorf("good rows should still fire; got %q", stderr)
+	}
+}
+
 func TestAlert_NotifyFlagForms(t *testing.T) {
 	// Both --notify=x and --notify x should parse the alias.
 	for _, args := range []string{"--notify=ops", "--notify ops"} {
-		parsed, err := parseAlertArgs(strings.Fields(args))
+		parsed, err := shellcore.ParseAlertArgs(strings.Fields(args))
 		if err != nil {
 			t.Fatalf("%s: %v", args, err)
 		}
-		if parsed.notify != "ops" {
-			t.Errorf("%s: got notify=%q", args, parsed.notify)
+		if parsed.Notify != "ops" {
+			t.Errorf("%s: got notify=%q", args, parsed.Notify)
 		}
 	}
 }
@@ -188,16 +248,21 @@ func TestAlert_ParseArgs(t *testing.T) {
 		{"unknown", "bogus 50", false},
 		{"above missing threshold", "above", false},
 		{"rising missing pct", "rising", false},
+		{"-k positive", "above 1 -k 2", true},
+		{"-k non-numeric", "above 1 -k abc", false},
+		{"-k zero rejected", "above 1 -k 0", false},
+		{"-t positive", "above 1 -k 2 -t 1", true},
+		{"--tag long form", "above 1 -k 2 --tag 3", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := parseAlertArgs(strings.Fields(tt.args))
+			_, err := shellcore.ParseAlertArgs(strings.Fields(tt.args))
 			if tt.ok && err != nil {
-				t.Errorf("parseAlertArgs(%q): unexpected error: %v", tt.args, err)
+				t.Errorf("shellcore.ParseAlertArgs(%q): unexpected error: %v", tt.args, err)
 			}
 			if !tt.ok && err == nil {
-				t.Errorf("parseAlertArgs(%q): expected error", tt.args)
+				t.Errorf("shellcore.ParseAlertArgs(%q): expected error", tt.args)
 			}
 		})
 	}

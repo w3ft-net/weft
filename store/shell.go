@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kevlarcon/warp/pkg/bash"
+	"github.com/kevlarcon/weft/shellcore"
 	"gorm.io/gorm"
 )
 
@@ -100,7 +101,10 @@ func (s *Store) DeleteShellFunction(customerID uint, name string) error {
 
 // --- Cron Watches (/cron.d/) ---
 
-// CronWatch is a scheduled pipeline run.
+// CronWatch is a scheduled pipeline run. AlertKey and AlertTag are the
+// pre-parsed -k and -t field positions from the pipeline's `| alert` stage;
+// nil means single-row mode (no extraction). They're populated by
+// SaveCronWatch so the executor doesn't reparse the pipeline every tick.
 type CronWatch struct {
 	gorm.Model
 	CustomerID uint   `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
@@ -110,10 +114,13 @@ type CronWatch struct {
 	Enabled    bool   `gorm:"not null;default:true"`
 	LastRunAt  *time.Time
 	LastStatus string                           // "ok", "error", "stderr"
+	AlertKey   *int `gorm:"column:alert_key"`
+	AlertTag   *int `gorm:"column:alert_tag"`
 }
 
 func (s *Store) SaveCronWatch(customerID uint, name, schedule, pipeline string) error {
-	if err := ValidateWatchPipeline(pipeline); err != nil {
+	compiled, err := CompileWatchPipeline(pipeline)
+	if err != nil {
 		return err
 	}
 	var w CronWatch
@@ -125,42 +132,85 @@ func (s *Store) SaveCronWatch(customerID uint, name, schedule, pipeline string) 
 			Schedule:   schedule,
 			Pipeline:   pipeline,
 			Enabled:    true,
+			AlertKey:   compiled.AlertKey,
+			AlertTag:   compiled.AlertTag,
 		}).Error
 	}
 	return s.db.Model(&w).Updates(map[string]any{
-		"schedule": schedule,
-		"pipeline": pipeline,
+		"schedule":  schedule,
+		"pipeline":  pipeline,
+		"alert_key": compiled.AlertKey,
+		"alert_tag": compiled.AlertTag,
 	}).Error
 }
 
-// ValidateWatchPipeline enforces pipeline-shape invariants for cron watches.
-// Today it rejects pipelines that invoke `alert` more than once; the single
-// alert stage is the sole incident-dedup boundary per watch, and a second
-// stage would mean two incident rows competing for the same watch run.
+// CompiledWatch holds the pre-parsed bits of an `alert` stage that we want
+// to stamp onto the watch row so the executor doesn't re-parse on every
+// tick. Today that's just the field extractors; the rest of the alert args
+// are re-parsed at tick time because they're cheap and don't affect how
+// cron_results is shaped.
+type CompiledWatch struct {
+	AlertKey *int
+	AlertTag *int
+}
+
+// CompileWatchPipeline validates pipeline-shape invariants and returns the
+// compiled extractor positions for the (at most one) `alert` stage.
 //
-// The check parses with warp's bash AST and walks every SimpleCommand —
-// including those nested inside command substitutions, compound commands,
-// and function bodies — so alias/variable obfuscation is the only way to
-// slip past it. If the pipeline fails to parse we let the error through:
-// the runtime parser will surface a clearer diagnostic when the watch runs.
-func ValidateWatchPipeline(pipeline string) error {
+// Validation rules:
+//   - `alert` may appear at most once in the pipeline. The single stage is
+//     the sole incident-dedup boundary per watch run.
+//   - `-k` / `-t` must be positive integers if present (enforced by
+//     shellcore.ParseAlertArgs).
+//
+// The AST walk catches alerts nested in command substitutions, compound
+// commands, and function bodies so the only way past validation is alias
+// or variable obfuscation. Parse errors from warp are swallowed so the
+// runtime surfaces a clearer diagnostic at tick time.
+func CompileWatchPipeline(pipeline string) (CompiledWatch, error) {
+	var out CompiledWatch
 	script, err := bash.Parse(pipeline)
 	if err != nil {
-		return nil
+		return out, nil
 	}
-	alerts := 0
+	var alertCmds []*bash.SimpleCommand
 	bash.Walk(script, func(n bash.Node) bool {
 		if sc, ok := n.(*bash.SimpleCommand); ok {
 			if len(sc.Words) > 0 && sc.Words[0].Literal() == "alert" {
-				alerts++
+				alertCmds = append(alertCmds, sc)
 			}
 		}
 		return true
 	})
-	if alerts > 1 {
-		return fmt.Errorf("alert may only appear once in a pipeline (found %d)", alerts)
+	if len(alertCmds) > 1 {
+		return out, fmt.Errorf("alert may only appear once in a pipeline (found %d)", len(alertCmds))
 	}
-	return nil
+	if len(alertCmds) == 1 {
+		argv := make([]string, 0, len(alertCmds[0].Words)-1)
+		for _, w := range alertCmds[0].Words[1:] {
+			argv = append(argv, w.Literal())
+		}
+		parsed, perr := shellcore.ParseAlertArgs(argv)
+		if perr != nil {
+			return out, fmt.Errorf("alert: %w", perr)
+		}
+		if parsed.Key > 0 {
+			k := parsed.Key
+			out.AlertKey = &k
+		}
+		if parsed.Tag > 0 {
+			t := parsed.Tag
+			out.AlertTag = &t
+		}
+	}
+	return out, nil
+}
+
+// ValidateWatchPipeline is the error-only form of CompileWatchPipeline for
+// callers that don't need the compiled extractors.
+func ValidateWatchPipeline(pipeline string) error {
+	_, err := CompileWatchPipeline(pipeline)
+	return err
 }
 
 func (s *Store) GetCronWatch(customerID uint, name string) (*CronWatch, error) {
@@ -206,9 +256,11 @@ func (s *Store) UpdateCronWatchRun(id uint, status string) error {
 // --- Cron Results ---
 
 // CronResult stores the output of a completed cron watch run. Value holds the
-// numeric form of Stdout when it parses cleanly as a float; NULL otherwise.
-// Alert aggregations (avg/min/max over a duration window) read Value directly
-// in SQL and ignore the NULLs.
+// numeric form of Stdout (or, in multi-row mode, the extracted field -k of
+// one output line) when it parses cleanly as a float; NULL otherwise. Tag
+// labels the row in multi-row mode ("" for single-row mode, the default).
+// Aggregations read Value directly in SQL and ignore the NULLs; tag-scoped
+// aggregates filter by tag.
 type CronResult struct {
 	gorm.Model
 	CronWatchID uint      `gorm:"not null;index"`
@@ -218,8 +270,12 @@ type CronResult struct {
 	ExitCode    int
 	DurationMs  int64
 	Value       *float64 `gorm:"type:double precision"`
+	Tag         string   `gorm:"type:text;not null;default:''"`
 }
 
+// SaveCronResult persists a single result row. Parses Stdout as a float into
+// Value when Value is unset and Stdout trims cleanly; otherwise leaves Value
+// as nil. Use SaveCronResults for the multi-row case.
 func (s *Store) SaveCronResult(result *CronResult) error {
 	if result.Value == nil {
 		if v, err := strconv.ParseFloat(strings.TrimSpace(result.Stdout), 64); err == nil {
@@ -229,10 +285,27 @@ func (s *Store) SaveCronResult(result *CronResult) error {
 	return s.db.Create(result).Error
 }
 
-func (s *Store) ListCronResults(cronWatchID uint, limit int) ([]CronResult, error) {
+// SaveCronResults persists a batch of rows in one insert. Each row keeps
+// whatever Value/Tag the caller set; no auto-parse like SaveCronResult,
+// because in multi-row mode the executor has already done per-line
+// extraction and an empty slice is a legal no-op.
+func (s *Store) SaveCronResults(results []CronResult) error {
+	if len(results) == 0 {
+		return nil
+	}
+	return s.db.Create(&results).Error
+}
+
+// ListCronResults returns the most recent rows for a watch. If tag is
+// non-empty, the scan is filtered to that tag; pass "" to get every row
+// regardless of tag (used by single-row / legacy callers).
+func (s *Store) ListCronResults(cronWatchID uint, limit int, tag string) ([]CronResult, error) {
 	var results []CronResult
-	err := s.db.Where("cron_watch_id = ?", cronWatchID).
-		Order("ran_at DESC").Limit(limit).Find(&results).Error
+	q := s.db.Where("cron_watch_id = ?", cronWatchID)
+	if tag != "" {
+		q = q.Where("tag = ?", tag)
+	}
+	err := q.Order("ran_at DESC").Limit(limit).Find(&results).Error
 	return results, err
 }
 
@@ -246,35 +319,47 @@ type CronAggStats struct {
 }
 
 // CronAggregate returns avg/min/max/sample-count of cron_results.value for a
-// watch over [since, now). Runs as a single SQL aggregate — alert uses this
-// in place of loading rows and reducing in Go.
-func (s *Store) CronAggregate(cronWatchID uint, since time.Time) (CronAggStats, error) {
+// watch over [since, now), optionally scoped to a single tag. Runs as a
+// single SQL aggregate — alert uses this in place of loading rows and
+// reducing in Go. Pass tag="" for single-row mode (which stores tag='' by
+// default, so the filter still matches) or for cross-tag aggregates.
+func (s *Store) CronAggregate(cronWatchID uint, since time.Time, tag string) (CronAggStats, error) {
 	var row struct {
 		Avg     *float64
 		Min     *float64
 		Max     *float64
 		Samples int
 	}
-	err := s.db.Raw(`
+	query := `
 		SELECT AVG(value) AS avg,
 		       MIN(value) AS min,
 		       MAX(value) AS max,
 		       COUNT(value) AS samples
 		FROM cron_results
-		WHERE cron_watch_id = ? AND ran_at >= ? AND value IS NOT NULL
-	`, cronWatchID, since).Scan(&row).Error
+		WHERE cron_watch_id = ? AND ran_at >= ? AND value IS NOT NULL`
+	args := []any{cronWatchID, since}
+	if tag != "" {
+		query += " AND tag = ?"
+		args = append(args, tag)
+	}
+	err := s.db.Raw(query, args...).Scan(&row).Error
 	return CronAggStats{Avg: row.Avg, Min: row.Min, Max: row.Max, Samples: row.Samples}, err
 }
 
 // CronNonEmptyCount returns how many rows in [since, now) had non-empty
-// stdout. Used by `alert absent --duration <dur>` to tell whether any data
-// arrived in the window.
-func (s *Store) CronNonEmptyCount(cronWatchID uint, since time.Time) (int, error) {
+// stdout, optionally scoped to a tag. Used by `alert absent --duration
+// <dur>` to tell whether any data arrived in the window.
+func (s *Store) CronNonEmptyCount(cronWatchID uint, since time.Time, tag string) (int, error) {
 	var n int64
-	err := s.db.Raw(`
+	query := `
 		SELECT COUNT(*) FROM cron_results
-		WHERE cron_watch_id = ? AND ran_at >= ? AND stdout <> ''
-	`, cronWatchID, since).Scan(&n).Error
+		WHERE cron_watch_id = ? AND ran_at >= ? AND stdout <> ''`
+	args := []any{cronWatchID, since}
+	if tag != "" {
+		query += " AND tag = ?"
+		args = append(args, tag)
+	}
+	err := s.db.Raw(query, args...).Scan(&n).Error
 	return int(n), err
 }
 

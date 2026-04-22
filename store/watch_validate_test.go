@@ -1,6 +1,8 @@
 package store
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestValidateWatchPipeline(t *testing.T) {
 	cases := []struct {
@@ -17,6 +19,8 @@ func TestValidateWatchPipeline(t *testing.T) {
 		{"alert inside if", `if true; then alert above 1; fi`, false},
 		{"two alerts across if/for", `if true; then alert above 1; fi; for x in a; do alert below 2; done`, true},
 		{"unparseable pipeline is passed through", `<<< broken syntax >>>`, false},
+		{"bad -k value", `foo | alert above 1 -k abc`, true},
+		{"bad -t value", `foo | alert above 1 -k 2 -t 0`, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -29,4 +33,42 @@ func TestValidateWatchPipeline(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCompileWatchPipeline(t *testing.T) {
+	cases := []struct {
+		name     string
+		pipeline string
+		wantKey  *int
+		wantTag  *int
+	}{
+		{"no alert", `cat /log/app.log`, nil, nil},
+		{"alert without -k/-t", `foo | alert above 1`, nil, nil},
+		{"alert with -k only", `foo | alert above 1 -k 2`, intPtr(2), nil},
+		{"alert with -k and -t", `foo | alert above 1 -k 2 -t 1`, intPtr(2), intPtr(1)},
+		{"alert with --tag long form", `foo | alert above 1 -k 3 --tag 2`, intPtr(3), intPtr(2)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cw, err := CompileWatchPipeline(c.pipeline)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !eqIntPtr(cw.AlertKey, c.wantKey) {
+				t.Errorf("AlertKey = %v, want %v", cw.AlertKey, c.wantKey)
+			}
+			if !eqIntPtr(cw.AlertTag, c.wantTag) {
+				t.Errorf("AlertTag = %v, want %v", cw.AlertTag, c.wantTag)
+			}
+		})
+	}
+}
+
+func intPtr(n int) *int { return &n }
+
+func eqIntPtr(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }

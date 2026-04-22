@@ -7,12 +7,16 @@ import (
 	"gorm.io/gorm"
 )
 
-// AlertIncident tracks open/closed alert states for deduplication.
-// Only one incident per watch+condition can be open at a time.
+// AlertIncident tracks open/closed alert states for deduplication. Incident
+// identity is (watch, condition, tag): in multi-row mode two tags on the
+// same watch+condition open and close independently. Tag is "" in single-row
+// mode, which keeps the single-row behavior (one open incident per
+// watch+condition) as a special case of the general rule.
 type AlertIncident struct {
 	ID          string     `gorm:"primaryKey"`
-	CronWatchID uint       `gorm:"not null;index:idx_incident_watch_condition"`
-	Condition   string     `gorm:"not null;index:idx_incident_watch_condition"` // "above 50 --duration 5m"
+	CronWatchID uint       `gorm:"not null"`
+	Condition   string     `gorm:"not null"`
+	Tag         string     `gorm:"type:text;not null;default:''"`
 	OpenedAt    time.Time  `gorm:"not null"`
 	ClosedAt    *time.Time
 	LastSeenAt  time.Time  `gorm:"not null"`
@@ -21,11 +25,12 @@ type AlertIncident struct {
 	UpdatedAt   time.Time
 }
 
-// OpenIncident finds an open (unclosed) incident for this watch + condition.
-func (s *Store) OpenIncident(watchID uint, condition string) (*AlertIncident, error) {
+// OpenIncident finds an open (unclosed) incident for this watch + condition
+// + tag.
+func (s *Store) OpenIncident(watchID uint, condition, tag string) (*AlertIncident, error) {
 	var inc AlertIncident
-	err := s.db.Where("cron_watch_id = ? AND condition = ? AND closed_at IS NULL", watchID, condition).
-		First(&inc).Error
+	err := s.db.Where("cron_watch_id = ? AND condition = ? AND tag = ? AND closed_at IS NULL",
+		watchID, condition, tag).First(&inc).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
@@ -35,13 +40,14 @@ func (s *Store) OpenIncident(watchID uint, condition string) (*AlertIncident, er
 	return &inc, nil
 }
 
-// CreateIncident opens a new incident.
-func (s *Store) CreateIncident(watchID uint, condition string) (*AlertIncident, error) {
+// CreateIncident opens a new incident for (watch, condition, tag).
+func (s *Store) CreateIncident(watchID uint, condition, tag string) (*AlertIncident, error) {
 	now := time.Now()
 	inc := AlertIncident{
 		ID:          uuid.New().String(),
 		CronWatchID: watchID,
 		Condition:   condition,
+		Tag:         tag,
 		OpenedAt:    now,
 		LastSeenAt:  now,
 		NotifiedAt:  &now,
