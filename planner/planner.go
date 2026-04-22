@@ -190,7 +190,11 @@ func tryPushdown(stage stageInfo, sql *sqlBuilder) pushdownResult {
 		if len(stage.args) == 0 {
 			return pushdownResult{}
 		}
-		return tryJqStagePushdown(stage.args[0])
+		flags, expr := splitJqArgs(stage.args)
+		if expr == "" {
+			return pushdownResult{}
+		}
+		return tryJqStagePushdown(expr, flags)
 
 	case "grep":
 		pred := tryGrepPushdown(stage.args)
@@ -257,23 +261,35 @@ func formatComputeStages(stages []stageInfo) []string {
 }
 
 // parseComputeString tries to parse a formatted compute string like "awk '{ print $3 }'"
-// back into a stageInfo. Used for extracting projections from partial pushdown remainders.
+// or "jq -r 'select(.x==1)'" back into a stageInfo. Used for extracting
+// projections from partial pushdown remainders. Handles leading flags before
+// the single-quoted expression.
 func parseComputeString(s string) *stageInfo {
 	fields := strings.Fields(s)
 	if len(fields) == 0 {
 		return nil
 	}
 	cmd := fields[0]
-	var args []string
-	// Rejoin the rest, handling quoted arguments.
 	rest := strings.TrimSpace(strings.TrimPrefix(s, cmd))
-	if rest != "" {
-		// Strip surrounding single quotes if present.
-		if len(rest) >= 2 && rest[0] == '\'' && rest[len(rest)-1] == '\'' {
-			args = []string{rest[1 : len(rest)-1]}
-		} else {
-			args = fields[1:]
-		}
+	if rest == "" {
+		return &stageInfo{cmd: cmd}
+	}
+	// Split on the first single-quote: everything before is flags, the
+	// quoted portion is the expression arg. If there's no quote, fall
+	// back to whitespace-split.
+	quoteIdx := strings.IndexByte(rest, '\'')
+	if quoteIdx < 0 {
+		return &stageInfo{cmd: cmd, args: fields[1:]}
+	}
+	var args []string
+	if flagPart := strings.TrimSpace(rest[:quoteIdx]); flagPart != "" {
+		args = append(args, strings.Fields(flagPart)...)
+	}
+	quoted := rest[quoteIdx:]
+	if len(quoted) >= 2 && quoted[len(quoted)-1] == '\'' {
+		args = append(args, quoted[1:len(quoted)-1])
+	} else {
+		args = append(args, quoted)
 	}
 	return &stageInfo{cmd: cmd, args: args}
 }

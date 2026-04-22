@@ -283,17 +283,23 @@ func awkPrintArgToSQL(expr awk.Expr) (string, []int, bool) {
 //  3. Nothing pushable (iter `[]`, recurse `..`, lone builtins, etc.):
 //     no projection — caller leaves raw and the original stage alone.
 func extractJqRawExpr(args []string) (string, *stageInfo, bool) {
-	if len(args) == 0 {
+	flags, src := splitJqArgs(args)
+	if src == "" {
 		return "", nil, false
 	}
-	src := args[0]
 	expr, err := jq.Parse(src)
 	if err != nil {
 		return "", nil, false
 	}
 
+	// -r projects strings unquoted. Our projection path uses json_extract,
+	// which returns JSON-quoted text on string scalars, so folding the
+	// whole stage into SELECT would silently drop the raw semantics. Keep
+	// a residual jq stage whenever -r is present so the flag is honored.
+	raw := jqFlagsHaveRaw(flags)
+
 	// Case 1: whole expression projectable.
-	if sql, ok := jqValueToSQL(expr); ok {
+	if sql, ok := jqValueToSQL(expr); ok && !raw {
 		return wrapJqProjection(sql), nil, true
 	}
 
@@ -329,7 +335,9 @@ func extractJqRawExpr(args []string) (string, *stageInfo, bool) {
 	if residualSrc == "" {
 		return "", nil, false
 	}
-	return wrapJqProjection(rawExpr), &stageInfo{cmd: "jq", args: []string{residualSrc}}, true
+	residualArgs := append([]string{}, flags...)
+	residualArgs = append(residualArgs, residualSrc)
+	return wrapJqProjection(rawExpr), &stageInfo{cmd: "jq", args: residualArgs}, true
 }
 
 // wrapJqProjection casts a JSON-returning expression (or metavar column) to

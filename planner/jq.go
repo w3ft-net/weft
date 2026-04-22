@@ -2,6 +2,7 @@ package planner
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/kevlarcon/warp/pkg/jq"
@@ -121,8 +122,9 @@ func jqComparisonToSQL(left, right jq.Expr, op string) string {
 // tryJqStagePushdown analyzes a jq expression for pushdown, supporting partial
 // pushdown. If the expression is a pipe chain starting with selects followed by
 // non-pushable expressions, the selects become SQL predicates and the rest
-// becomes a compute stage.
-func tryJqStagePushdown(expression string) pushdownResult {
+// becomes a compute stage. flags are preserved on any residual compute stage so
+// command-line options like -r stick across partial pushdown.
+func tryJqStagePushdown(expression string, flags []string) pushdownResult {
 	expr, err := jq.Parse(expression)
 	if err != nil {
 		return pushdownResult{}
@@ -165,7 +167,35 @@ func tryJqStagePushdown(expression string) pushdownResult {
 	if rendered == "" {
 		return pushdownResult{}
 	}
-	return pushdownResult{pushed: true, predicate: pred, compute: "jq '" + rendered + "'"}
+	args := append([]string{}, flags...)
+	args = append(args, rendered)
+	return pushdownResult{pushed: true, predicate: pred, compute: formatToolStage("jq", args)}
+}
+
+// splitJqArgs separates jq's command-line flags from its expression argument.
+// Any arg beginning with "-" is a flag; the first non-flag arg is the
+// expression. Trailing positional args are ignored (jq only takes one).
+func splitJqArgs(args []string) (flags []string, expr string) {
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			flags = append(flags, a)
+			continue
+		}
+		if expr == "" {
+			expr = a
+		}
+	}
+	return flags, expr
+}
+
+// jqFlagsHaveRaw reports whether the flag slice includes -r / --raw-output.
+func jqFlagsHaveRaw(flags []string) bool {
+	for _, f := range flags {
+		if f == "-r" || f == "--raw-output" {
+			return true
+		}
+	}
+	return false
 }
 
 // jqFlattenPipe flattens a left-associative PipeExpr chain into a slice.
@@ -233,6 +263,30 @@ func formatJqExpr(expr jq.Expr) string {
 		return formatJqBinOp(e.Left, e.Right, " | ")
 	case jq.CommaExpr:
 		return formatJqBinOp(e.Left, e.Right, ", ")
+	case jq.StringInterp:
+		// warp's parser emits a nested StringInterp as a single Part for
+		// every interpolation after the first (see parseStringInterp), so
+		// flatten before rendering so we get a single "..." literal back
+		// instead of quote-in-quote garbage.
+		parts := flattenStringInterp(e)
+		var b strings.Builder
+		b.WriteByte('"')
+		for _, p := range parts {
+			if lit, ok := p.(jq.LiteralExpr); ok && lit.Value.Type == jq.TypeString {
+				q := strconv.Quote(lit.Value.Str)
+				b.WriteString(q[1 : len(q)-1])
+				continue
+			}
+			inner := formatJqExpr(p)
+			if inner == "" {
+				return ""
+			}
+			b.WriteString(`\(`)
+			b.WriteString(inner)
+			b.WriteByte(')')
+		}
+		b.WriteByte('"')
+		return b.String()
 	case jq.ObjectExpr:
 		var pairs []string
 		for _, p := range e.Pairs {
@@ -328,6 +382,20 @@ func formatJqBinOp(l, r jq.Expr, op string) string {
 		return ""
 	}
 	return left + op + right
+}
+
+// flattenStringInterp splices nested StringInterp parts into a single flat
+// slice so the rendered literal doesn't contain nested quotes.
+func flattenStringInterp(e jq.StringInterp) []jq.Expr {
+	var out []jq.Expr
+	for _, p := range e.Parts {
+		if nested, ok := p.(jq.StringInterp); ok {
+			out = append(out, flattenStringInterp(nested)...)
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // formatJqObjKey formats an object key — bare identifier for string literals.

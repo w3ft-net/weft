@@ -470,6 +470,42 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 			wantSQL:     `SELECT line_num, CAST(json_object('ts', ts) AS VARCHAR) as raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
 			wantCompute: nil,
 		},
+		// select | string-interpolation — the select pushes as a predicate
+		// and the interpolation stays as a jq compute stage. Equivalent to
+		// the `select | .a, .b` case in the table above; the only difference
+		// is the shape of the residual. Guards against a regression where
+		// formatJqExpr didn't know how to round-trip StringInterp nodes and
+		// bailed on the whole pushdown.
+		{
+			name:        "select then string interpolation",
+			pipeline:    `cat vimgym.log | jq 'select(.type == "disk") | "\(.host) \(.used_gb)"'`,
+			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND json_extract_string(payload, '$.type') = 'disk'`,
+			wantCompute: []string{`jq '"\(.host) \(.used_gb)"'`},
+		},
+		// -r flag must not prevent predicate pushdown, and must be preserved
+		// on any residual compute stage so raw-output semantics stick.
+		{
+			name:        "select with -r, full pushdown",
+			pipeline:    `cat vimgym.log | jq -r 'select(.status == 500)'`,
+			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantCompute: nil,
+		},
+		{
+			name:        "select with -r then string interpolation",
+			pipeline:    `cat vimgym.log | jq -r 'select(.type == "disk") | "\(.host) \(.used_gb)"'`,
+			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND json_extract_string(payload, '$.type') = 'disk'`,
+			wantCompute: []string{`jq -r '"\(.host) \(.used_gb)"'`},
+		},
+		// --raw-output (long spelling) with a field projection. The projection
+		// must NOT fold into SELECT: json_extract returns JSON-quoted strings,
+		// which would silently drop the -r semantics. Predicate still pushes;
+		// the -r jq stage stays as compute to do the unquoting.
+		{
+			name:        "select with --raw-output long spelling",
+			pipeline:    `cat vimgym.log | jq --raw-output 'select(.status == 500) | .payload'`,
+			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantCompute: []string{`jq --raw-output '.payload'`},
+		},
 	}
 
 	for _, tt := range tests {
