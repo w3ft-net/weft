@@ -144,31 +144,17 @@ func (bm *BucketManager) All() ([]*AppBucket, error) {
 // EvaluateSplit consults ingestion stats and returns the first app
 // that dominates a multi-app bucket beyond SplitThreshold. Returns
 // "" when no split is warranted.
-func (bm *BucketManager) EvaluateSplit(stats map[string]int64) (string, error) {
-	buckets, err := bm.All()
-	if err != nil {
-		return "", err
-	}
-	for _, bucket := range buckets {
-		if len(bucket.Apps) <= 1 {
-			continue
-		}
-		var total int64
-		counts := make(map[string]int64, len(bucket.Apps))
-		for _, app := range bucket.Apps {
-			c := stats[app]
-			counts[app] = c
-			total += c
-		}
-		if total == 0 {
-			continue
-		}
-		for app, c := range counts {
-			if float64(c)/float64(total) > bm.SplitThreshold {
-				return app, nil
-			}
-		}
-	}
+//
+// TODO(split): currently disabled — see docs/plans/bucket-split-policy.md.
+// The ratio-only predicate cascades: splitting a dominant app leaves
+// the tail in default, where a different app then dominates the
+// remaining volume and triggers another split. Combined with Split
+// inheriting the source's Target (not moving capacity), every
+// dedicated bucket adds bucket.Target to desired_capacity, producing
+// the 2026-04-22 runaway (10 small-tier shards against target=2).
+// Re-enable once Split moves capacity, EvaluateSplit skips apps that
+// already own a dedicated bucket, and there's a cooldown/budget.
+func (bm *BucketManager) EvaluateSplit(_ map[string]int64) (string, error) {
 	return "", nil
 }
 

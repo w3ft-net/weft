@@ -241,37 +241,23 @@ func containsApp(apps []string, want string) bool {
 	return false
 }
 
-func TestBucketManager_EvaluateSplit(t *testing.T) {
+// EvaluateSplit is stubbed to "" while the split policy is redesigned.
+// See docs/plans/bucket-split-policy.md.
+func TestBucketManager_EvaluateSplit_Disabled(t *testing.T) {
 	fake := newFakeBucketStore()
 	fake.seedBucket("default", []string{"vimgym", "callbox", "grantcentral"})
 	bm := NewBucketManager(fake)
 
-	// No split when traffic is balanced.
-	stats := map[string]int64{
-		"vimgym":       100,
-		"callbox":      100,
-		"grantcentral": 100,
-	}
+	// Even with a clearly dominant app, EvaluateSplit must return ""
+	// until the policy is re-enabled. If this test fails, the stub
+	// has been removed — update the regression tests in the plan doc.
+	stats := map[string]int64{"vimgym": 700, "callbox": 150, "grantcentral": 150}
 	app, err := bm.EvaluateSplit(stats)
 	if err != nil {
-		t.Fatalf("EvaluateSplit (balanced): %v", err)
+		t.Fatalf("EvaluateSplit: %v", err)
 	}
 	if app != "" {
-		t.Fatalf("expected no split, got %s", app)
-	}
-
-	// Split when vimgym dominates (70% > 60% threshold).
-	stats = map[string]int64{
-		"vimgym":       700,
-		"callbox":      150,
-		"grantcentral": 150,
-	}
-	app, err = bm.EvaluateSplit(stats)
-	if err != nil {
-		t.Fatalf("EvaluateSplit (dominated): %v", err)
-	}
-	if app != "vimgym" {
-		t.Fatalf("expected vimgym split, got %q", app)
+		t.Fatalf("EvaluateSplit must be disabled; got %q", app)
 	}
 }
 
@@ -416,63 +402,6 @@ func TestProvisioner_ScalesUpToConfiguredCount(t *testing.T) {
 	}
 }
 
-func TestProvisioner_SplitCreatesNewShard(t *testing.T) {
-	ds, err := shard.NewDuckDBShard("shard-shared", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { ds.Close() })
-
-	launcher := NewLocalLauncher()
-	t.Cleanup(func() { launcher.Close() })
-
-	fake := newFakeBucketStore()
-	// Target=1 so the sizing loop doesn't scale up (the existing
-	// shared shard meets the count); we're testing split-driven
-	// provisioning in isolation here.
-	b := fake.seedBucket("default", []string{"vimgym", "callbox", "grantcentral"})
-	b.TargetIngestingCount = 1
-	_ = fake.SaveBucket(b)
-
-	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
-		ID:       "shard-shared",
-		BucketID: b.ID,
-		Apps:     []string{"vimgym", "callbox", "grantcentral"},
-		// Future WindowEnd — this test exercises bucket splitting,
-		// not window-boundary rotation.
-		WindowStart: time.Now().UTC(),
-		WindowEnd:   time.Now().UTC().Add(100 * 365 * 24 * time.Hour),
-		State:       StateIngesting,
-		Shard:       ds,
-		RowCount:    10,
-		CreatedAt:   time.Now(),
-	})
-
-	prov := NewProvisioner(reg, launcher, ProvisionerConfig{})
-	prov.Buckets = NewBucketManager(fake)
-
-	// Simulate vimgym dominating throughput.
-	prov.Stats().Record("vimgym", 700)
-	prov.Stats().Record("callbox", 150)
-	prov.Stats().Record("grantcentral", 150)
-
-	prov.check(context.Background())
-
-	// Should have 2 shards now: shared + dedicated vimgym.
-	if reg.Count() != 2 {
-		t.Fatalf("expected 2 shards after split, got %d", reg.Count())
-	}
-
-	// vimgym should have a dedicated shard.
-	vimShard := reg.IngestingShard("vimgym")
-	if vimShard == nil {
-		t.Fatal("no ingesting shard for vimgym after split")
-	}
-
-	// callbox should still be on the shared shard.
-	cbShard := reg.IngestingShard("callbox")
-	if cbShard == nil {
-		t.Fatal("no ingesting shard for callbox after split")
-	}
-}
+// End-to-end split test removed along with the disabled EvaluateSplit
+// path. See docs/plans/bucket-split-policy.md for the regression
+// contract the re-enabled policy will need to honour.
