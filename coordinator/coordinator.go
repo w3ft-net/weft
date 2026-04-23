@@ -93,6 +93,8 @@ func (s *SeenApps) Names(customer string) []string {
 
 // NewCoordinator creates a coordinator with the given initial shard list.
 // Shards are registered with empty Apps (legacy: matches all apps).
+// Callers are responsible for setting Store, Notifier, and other
+// tenant-scoped dependencies before the coordinator serves requests.
 func NewCoordinator(shards []shard.Shard, pool compute.ComputePool) *Coordinator {
 	reg := NewShardRegistry()
 	for _, s := range shards {

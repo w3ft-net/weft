@@ -94,7 +94,31 @@ func main() {
 		log.Printf("using local compute pool (parallelism=2)")
 	}
 
+	// Open the store before building the Coordinator so /bin lookup,
+	// alert dispatch, and weft.* all have a tenant-scoped backend from
+	// the first request. Without this ordering, per-request customer
+	// resolution in query() silently no-ops.
+	var db *store.Store
+	dsn := *dbDSN
+	if dsn == "" {
+		dsn = os.Getenv("DB_DSN")
+	}
+	if dsn == "" {
+		dsn = "host=localhost dbname=weft user=weft password=weft sslmode=disable"
+		log.Println("WARNING: using default DB DSN — set --db-dsn or DB_DSN in production")
+	}
+	if d, err := store.Open(dsn); err != nil {
+		log.Printf("warning: config store unavailable: %v", err)
+	} else {
+		db = d
+		defer db.Close()
+	}
+
 	coord := coordinator.NewCoordinator(shards, pool)
+	// query() resolves the caller's customer name → ID via the store
+	// to scope /bin lookup, alert dispatch, and weft.* functions.
+	// Without this, those paths silently no-op.
+	coord.Store = db
 	coord.Tail = coordinator.NewTailBroker()
 	coord.Ingest = coordinator.NewRingBuffer(1_000_000) // 1M row buffer
 	coord.Usage = coordinator.NewCustomerUsageStats()
@@ -121,29 +145,6 @@ func main() {
 	// Shards are persisted to postgres and restored on restart via LoadFromStore.
 	provCtx, provCancel := context.WithCancel(context.Background())
 	defer provCancel()
-
-	// Open the store up front so Buckets can hydrate BEFORE prov.Start
-	// fires bootstrap. Without this ordering the bootstrap shard
-	// christens against an empty bucket manager and loses its
-	// bucket_id. If the store is unavailable, proceed without
-	// hydration and let christen() fail loudly — the alternative
-	// (silent fallback) reintroduces the class of bugs per-bucket
-	// config was meant to prevent.
-	var db *store.Store
-	dsn := *dbDSN
-	if dsn == "" {
-		dsn = os.Getenv("DB_DSN")
-	}
-	if dsn == "" {
-		dsn = "host=localhost dbname=weft user=weft password=weft sslmode=disable"
-		log.Println("WARNING: using default DB DSN — set --db-dsn or DB_DSN in production")
-	}
-	if d, err := store.Open(dsn); err != nil {
-		log.Printf("warning: config store unavailable: %v", err)
-	} else {
-		db = d
-		defer db.Close()
-	}
 
 	if len(shardTiers) > 0 {
 		// Production: ASG launcher for shard EC2 instances.
