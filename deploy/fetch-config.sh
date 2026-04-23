@@ -46,4 +46,15 @@ else
     echo "fetch-config: warning — /${APP_NAME}/config/db-dsn empty or unavailable"
 fi
 
+# App identity + region. Neither lives in the SSM blob — APP_NAME is
+# known at this point from the arg; AWS_REGION comes from IMDS above.
+# Appended here (not in TF or kevcons) so the .env file is a
+# standalone, reproducible source of truth for systemd's
+# EnvironmentFile parsing. S3_REGION mirrors AWS_REGION today; split
+# the two only if we ever run cold-storage buckets in a different
+# region from the compute plane.
+echo "APP_NAME='${APP_NAME}'"   >> /opt/app/.env
+echo "AWS_REGION='${AWS_REGION}'" >> /opt/app/.env
+echo "S3_REGION='${AWS_REGION}'"  >> /opt/app/.env
+
 echo "fetch-config: done"

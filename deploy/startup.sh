@@ -1,15 +1,14 @@
 #!/bin/bash
 # weft startup — runs as weft-startup.service oneshot on boot. Reads
 # the instance's Role tag, refreshes /opt/app/.env via fetch-config.sh
-# (which delegates to load-app-env), translates the populated env into
-# role-specific EnvironmentFile(s) for systemd, mounts the shard data
-# volume if needed, and starts services.
+# (which delegates to load-app-env), mounts the shard data volume if
+# needed, and starts services.
 #
-# Source of truth for coordinator/api flags is the kevcons-managed
-# config blob at /weft/config/app, surfaced through load-app-env. This
-# script just threads those values into the systemd EnvironmentFile;
-# it does not fetch anything from SSM directly anymore (aside from the
-# standalone db-dsn param, which fetch-config.sh handles).
+# Source of truth for coordinator/api/shard flags is the kevcons-
+# managed config blob at /weft/config/app, surfaced through
+# load-app-env into /opt/app/.env. The systemd service files read
+# that file directly as their EnvironmentFile — no translation layer,
+# no whitelist.
 
 set -euo pipefail
 
@@ -43,69 +42,26 @@ set -a
 . /opt/app/.env
 set +a
 
-# Coordinator: write /opt/app/coordinator.env with a sanitised,
-# plain-KEY=VALUE form that systemd's EnvironmentFile parser
-# accepts. All values use the blob keys directly (no WEFT_ prefix)
-# — the Go side reads DB_DSN, S3_REGION, etc. as-is, no translation
-# layer needed.
+# Safety belt for coordinator: if the blob didn't populate ASG names,
+# bail loudly. An operator can fix the config much faster than they
+# can notice a dev-mode coordinator running in prod — a regression we
+# actually hit on 2026-04-20. Shard + compute have no such sanity
+# invariant at startup.
 if [ "$ROLE" = "coordinator" ]; then
-  # Safety belt: the whole point of this script post-rewrite is to
-  # avoid the silent fall-through to dev mode we saw on 2026-04-20.
-  # If the blob didn't populate ASG names, bail loudly — an operator
-  # can fix the config much faster than they can notice a dev-mode
-  # coordinator running in prod.
   if [ -z "${SHARD_ASG_SMALL:-}" ]; then
     echo "startup: FATAL — SHARD_ASG_SMALL missing from env after fetch-config"
     echo "startup: check 'kevcons config list' or /weft/config/app SSM blob"
     exit 1
   fi
-
-  cat > /opt/app/coordinator.env <<EOF
-APP_NAME=${APP_NAME}
-AWS_REGION=${REGION}
-DB_DSN=${DB_DSN:-}
-S3_REGION=${REGION}
-SHARD_ASG_SMALL=${SHARD_ASG_SMALL:-}
-SHARD_ASG_MEDIUM=${SHARD_ASG_MEDIUM:-}
-SHARD_ASG_LARGE=${SHARD_ASG_LARGE:-}
-COMPUTE_ASG_NAME=${COMPUTE_ASG_NAME:-}
-PARQUET_DIR=${PARQUET_DIR:-}
-LAMBDA_FUNCTION_URL=${LAMBDA_FUNCTION_URL:-}
-LIFECYCLE_QUEUE_URL=${LIFECYCLE_QUEUE_URL:-}
-SHARD_VOLUME_DEVICE=${SHARD_VOLUME_DEVICE:-}
-SHARD_SMALL_VOLUME_GB=${SHARD_SMALL_VOLUME_GB:-}
-SHARD_MEDIUM_VOLUME_GB=${SHARD_MEDIUM_VOLUME_GB:-}
-SHARD_LARGE_VOLUME_GB=${SHARD_LARGE_VOLUME_GB:-}
-JWT_SECRET=${JWT_SECRET:-}
-SHARD_SECRET=${SHARD_SECRET:-}
-STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
-STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
-STRIPE_PRICE_SWATCH=${STRIPE_PRICE_SWATCH:-}
-STRIPE_PRICE_YARD=${STRIPE_PRICE_YARD:-}
-STRIPE_PRICE_BOLT=${STRIPE_PRICE_BOLT:-}
-STRIPE_PRICE_SWATCH_OVERAGE=${STRIPE_PRICE_SWATCH_OVERAGE:-}
-STRIPE_PRICE_YARD_OVERAGE=${STRIPE_PRICE_YARD_OVERAGE:-}
-STRIPE_PRICE_BOLT_OVERAGE=${STRIPE_PRICE_BOLT_OVERAGE:-}
-EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD:-}
-SLACK_CLIENT_ID=${SLACK_CLIENT_ID:-}
-SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET:-}
-EOF
-  chown app:app /opt/app/coordinator.env
 fi
 
-# For shard roles: generate shard.env and mount the per-shard EBS data
-# volume at /opt/app/data before the service starts.
-# Shard identity lives in /opt/app/data/shard.json on the EBS volume —
-# the coordinator writes it via the Configure RPC on first christening
-# and every subsequent restart reads it back. See
-# docs/plans/ebs-shard-volumes.md.
+# For shard roles: mount the per-shard EBS data volume at
+# /opt/app/data before the service starts. Shard identity lives in
+# /opt/app/data/shard.json on the EBS volume — the coordinator writes
+# it via the Configure RPC on first christening and every subsequent
+# restart reads it back. See docs/plans/ebs-shard-volumes.md.
 if [ "$ROLE" = "shard" ]; then
-  cat > /opt/app/shard.env <<EOF
-COORDINATOR_ADDR=${COORDINATOR_NLB:-localhost:9020}
-SHARD_SECRET=${SHARD_SECRET:-}
-EOF
-  chown app:app /opt/app/shard.env
-  echo "shard env: coordinator=${COORDINATOR_NLB:-localhost:9020}"
+  echo "shard role: coordinator=${COORDINATOR_NLB:-localhost:9020}"
 
   # Mount the data volume. The coordinator attaches an EBS volume at
   # /dev/sdf before completing the instance's ASG lifecycle hook; on
