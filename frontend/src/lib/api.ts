@@ -251,6 +251,11 @@ export interface CronResult {
   Stderr: string
   ExitCode: number
   DurationMs: number
+  // Parsed numeric value from the watch's alert_key field (or the whole
+  // stdout in single-row mode). Null when the value wasn't parseable.
+  Value: number | null
+  // Per-row tag from the watch's alert_tag field. Empty in single-row mode.
+  Tag: string
 }
 
 // Team

@@ -19,38 +19,145 @@ function timeAgo(iso: string): string {
 
 // ── Sparkline ──────────────────────────────────────────────────────────────
 
-function Sparkline({ values }: { values: number[] }) {
-  if (values.length < 2) return null
+interface SparkPoint {
+  ts: number // unix millis
+  value: number
+}
+
+interface SparkSeries {
+  tag: string // "" for single-row (untagged) watches
+  color: string
+  points: SparkPoint[]
+  latest: string // formatted latest value for the legend
+}
+
+// Stable palette — same tag always gets the same color.
+const TAG_PALETTE = [
+  'var(--accent)',
+  '#7ec8ff',
+  '#a29bfe',
+  '#ffb36b',
+  '#6de3a0',
+  '#ff7aa8',
+  '#ffd36b',
+  '#9ef0d8',
+]
+
+function colorForTag(tag: string): string {
+  if (tag === '') return 'var(--accent)'
+  let h = 0
+  for (let i = 0; i < tag.length; i++) {
+    h = (h * 31 + tag.charCodeAt(i)) & 0xffff
+  }
+  return TAG_PALETTE[h % TAG_PALETTE.length]
+}
+
+function groupResultsByTag(results: CronResult[]): SparkSeries[] {
+  const byTag = new Map<string, CronResult[]>()
+  for (const r of results) {
+    const key = r.Tag ?? ''
+    if (!byTag.has(key)) byTag.set(key, [])
+    byTag.get(key)!.push(r)
+  }
+
+  const series: SparkSeries[] = []
+  for (const [tag, rows] of byTag) {
+    const points: SparkPoint[] = []
+    for (const r of rows) {
+      const v = r.Value !== null && r.Value !== undefined ? r.Value : parseFloat(r.Stdout?.trim())
+      if (typeof v === 'number' && !isNaN(v)) {
+        points.push({ ts: new Date(r.RanAt).getTime(), value: v })
+      }
+    }
+    if (points.length === 0) continue
+    points.sort((a, b) => a.ts - b.ts)
+    series.push({
+      tag,
+      color: colorForTag(tag),
+      points,
+      latest: formatSparkValue(points[points.length - 1].value),
+    })
+  }
+  // Legend order: tag alphabetical, empty tag first so the primary
+  // series anchors the chart.
+  series.sort((a, b) => {
+    if (a.tag === '') return -1
+    if (b.tag === '') return 1
+    return a.tag.localeCompare(b.tag)
+  })
+  return series
+}
+
+function formatSparkValue(v: number): string {
+  if (Number.isInteger(v)) return v.toString()
+  return v.toFixed(2).replace(/\.?0+$/, '')
+}
+
+function Sparkline({ series }: { series: SparkSeries[] }) {
+  const drawable = series.filter(s => s.points.length >= 2)
+  if (drawable.length === 0) return null
 
   const w = 120
   const h = 30
   const pad = 2
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const range = max - min || 1
 
-  const points = values.map((v, i) => {
-    const x = pad + (i / (values.length - 1)) * (w - pad * 2)
-    const y = h - pad - ((v - min) / range) * (h - pad * 2)
-    return `${x},${y}`
-  }).join(' ')
+  // Shared scale across every series so tags are visually comparable.
+  let tMin = Infinity, tMax = -Infinity, vMin = Infinity, vMax = -Infinity
+  for (const s of drawable) {
+    for (const p of s.points) {
+      if (p.ts < tMin) tMin = p.ts
+      if (p.ts > tMax) tMax = p.ts
+      if (p.value < vMin) vMin = p.value
+      if (p.value > vMax) vMax = p.value
+    }
+  }
+  const tRange = tMax - tMin || 1
+  const vRange = vMax - vMin || 1
 
   return (
     <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="watch-sparkline">
-      <polyline
-        points={points}
-        fill="none"
-        stroke="var(--accent)"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      {values.length > 0 && (() => {
-        const lastX = w - pad
-        const lastY = h - pad - ((values[values.length - 1] - min) / range) * (h - pad * 2)
-        return <circle cx={lastX} cy={lastY} r="2.5" fill="var(--accent)" />
-      })()}
+      {drawable.map(s => {
+        const pts = s.points.map(p => {
+          const x = pad + ((p.ts - tMin) / tRange) * (w - pad * 2)
+          const y = h - pad - ((p.value - vMin) / vRange) * (h - pad * 2)
+          return `${x},${y}`
+        }).join(' ')
+        const last = s.points[s.points.length - 1]
+        const lastX = pad + ((last.ts - tMin) / tRange) * (w - pad * 2)
+        const lastY = h - pad - ((last.value - vMin) / vRange) * (h - pad * 2)
+        return (
+          <g key={s.tag || '_'}>
+            <polyline
+              points={pts}
+              fill="none"
+              stroke={s.color}
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <circle cx={lastX} cy={lastY} r="2.5" fill={s.color} />
+          </g>
+        )
+      })}
     </svg>
+  )
+}
+
+function SparkLegend({ series }: { series: SparkSeries[] }) {
+  return (
+    <ul className="watch-legend" data-testid="watch-legend">
+      {series.map(s => (
+        <li
+          key={s.tag || '_'}
+          className="watch-legend-row"
+          data-testid={`watch-legend-row-${s.tag || '_'}`}
+        >
+          <span className="watch-legend-swatch" style={{ background: s.color }} />
+          <span className="watch-legend-tag">{s.tag}</span>
+          <span className="watch-legend-value">{s.latest}</span>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -113,12 +220,15 @@ function WatchesCard({ watches, watchCount, watchLimit, minInterval }: {
       <div className="watch-grid">
         {watches.map(({ watch, results }) => {
           const latestResult = results[0]
-          const latestValue = latestResult?.Stdout?.trim() ?? '—'
-          const sparkValues = results
-            .slice(0, 20)
-            .reverse()
-            .map(r => parseFloat(r.Stdout?.trim()))
-            .filter(n => !isNaN(n))
+          // Cap sparkline history at 50 rows to keep the chart readable
+          // even when a multi-row watch fires many tags per tick.
+          const series = groupResultsByTag(results.slice(0, 50))
+          const tagged = series.some(s => s.tag !== '')
+          // Single untagged series keeps the original big-number display;
+          // tagged or empty series show just the chart + legend.
+          const scalarLatest = !tagged && series.length === 1
+            ? series[0].latest
+            : latestResult?.Stdout?.trim() ?? '—'
           const hasError = latestResult && latestResult.ExitCode !== 0
           const lastRanAgo = latestResult ? timeAgo(latestResult.RanAt) : null
 
@@ -133,12 +243,19 @@ function WatchesCard({ watches, watchCount, watchLimit, minInterval }: {
                 <span className="watch-tile-schedule">{watch.Schedule}</span>
               </div>
 
-              <div className="watch-tile-body">
-                <div className="watch-tile-value" data-testid={`dashboard-watch-value-${watch.Name}`}>
-                  {latestValue}
+              {tagged ? (
+                <div className="watch-tile-body watch-tile-body-tagged">
+                  <Sparkline series={series} />
+                  <SparkLegend series={series} />
                 </div>
-                <Sparkline values={sparkValues} />
-              </div>
+              ) : (
+                <div className="watch-tile-body">
+                  <div className="watch-tile-value" data-testid={`dashboard-watch-value-${watch.Name}`}>
+                    {scalarLatest}
+                  </div>
+                  <Sparkline series={series} />
+                </div>
+              )}
 
               <div className="watch-tile-footer">
                 {lastRanAgo ? (
