@@ -274,11 +274,17 @@ func main() {
 		defer cancel()
 		p.Start(ctx)
 
+		// Share one Notifier between cron watches and the Coordinator so
+		// interactive `alert --notify=foo` runs dispatch through the same
+		// path as scheduled watches.
+		notifier := coordinator.NewNotifier(db)
+		coord.Notifier = notifier
+
 		// Start cron executor for scheduled watches.
 		cronExec := &coordinator.CronExecutor{
 			Store:    db,
 			Coord:    coord,
-			Notifier: coordinator.NewNotifier(db),
+			Notifier: notifier,
 		}
 		cronExec.Start(ctx)
 	}

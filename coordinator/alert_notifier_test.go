@@ -1,0 +1,66 @@
+package coordinator
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+// TestQuery_InteractiveAlertUsesCoordinatorNotifier — regression guard for
+// the bug where cmd/coordinator handed NewNotifier only to CronExecutor,
+// leaving Coordinator.Notifier nil. Shell alerts (`| alert --notify=foo`)
+// then fell through to the "notifier unavailable — would dispatch"
+// fallback regardless of whether an alias was configured.
+//
+// With the fix, c.Notifier is set and interactive runs attempt real
+// dispatch — so a missing-alias lookup surfaces the alias resolver's
+// error, not the fallback's.
+func TestQuery_InteractiveAlertUsesCoordinatorNotifier(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+
+	c := &Coordinator{
+		Store:      db,
+		CustomerID: custID,
+		Notifier:   NewNotifier(db),
+	}
+
+	// No alias is defined in /etc/notify.conf, so Notifier.Send returns
+	// "no notify.conf configured". The point is that Send is REACHED —
+	// meaning Coordinator.Notifier propagated into the interactive
+	// AlertContext.
+	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
+	result, err := c.Query(`echo 40 | alert above 30 --notify=foo`, tr)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+
+	if strings.Contains(result.Stderr, "notifier unavailable") {
+		t.Errorf("fallback path hit — Notifier didn't propagate:\nstderr=%q", result.Stderr)
+	}
+	if !strings.Contains(result.Stderr, "dispatch to \"foo\" failed") {
+		t.Errorf("expected dispatch-attempt error, got stderr=%q", result.Stderr)
+	}
+}
+
+// TestQuery_InteractiveAlertFallbackWhenNoNotifier — companion to the above.
+// A Coordinator without a Notifier still runs alerts, just without
+// dispatch. The "would dispatch" message is the documented fallback.
+func TestQuery_InteractiveAlertFallbackWhenNoNotifier(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+
+	c := &Coordinator{
+		Store:      db,
+		CustomerID: custID,
+		// Notifier: nil
+	}
+
+	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
+	result, err := c.Query(`echo 40 | alert above 30 --notify=foo`, tr)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+
+	if !strings.Contains(result.Stderr, "notifier unavailable") {
+		t.Errorf("expected fallback message, got stderr=%q", result.Stderr)
+	}
+}
