@@ -304,8 +304,10 @@ func (c *Coordinator) QueryForWatch(pipeline string, tr TimeRange, watch *store.
 	ctx := &AlertContext{
 		Store:      c.Store,
 		Watch:      watch,
-		Notifier:   c.Notifier,
 		CustomerID: watch.CustomerID,
+	}
+	if c.Notifier != nil {
+		ctx.Notifier = c.Notifier
 	}
 	// The watch carries its own CustomerID so we can resolve the name
 	// here without a second Store round-trip. Used by the /bin
@@ -363,9 +365,14 @@ func (c *Coordinator) query(pipeline string, tr TimeRange, customer string, aler
 		if alertCtx == nil {
 			alertCtx = &AlertContext{
 				Store:       c.Store,
-				Notifier:    c.Notifier,
 				CustomerID:  custID,
 				Interactive: true,
+			}
+			// Guard: assigning a nil *Notifier to the NotifyDispatcher
+			// interface field would wrap a typed-nil and defeat the
+			// `ctx.Notifier != nil` guard inside evaluateAlertRow.
+			if c.Notifier != nil {
+				alertCtx.Notifier = c.Notifier
 			}
 		}
 		runAlertStage(result, plan.AlertArgs, alertCtx)

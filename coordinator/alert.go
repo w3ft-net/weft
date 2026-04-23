@@ -12,6 +12,13 @@ import (
 	"github.com/kevlarcon/weft/store"
 )
 
+// NotifyDispatcher is the subset of Notifier the alert stage calls.
+// Narrowed to an interface so tests can intercept Send without a live
+// HTTP endpoint. The concrete *Notifier satisfies it.
+type NotifyDispatcher interface {
+	Send(customerID uint, aliasName, watchName, body string) error
+}
+
 // AlertContext provides the alert command with access to result history,
 // incident dedup, and the Notifier. Watch is nil for interactive runs,
 // which skips (watchID, condition, tag) dedup but still dispatches if
@@ -19,7 +26,7 @@ import (
 type AlertContext struct {
 	Store       *store.Store
 	Watch       *store.CronWatch
-	Notifier    *Notifier
+	Notifier    NotifyDispatcher
 	CustomerID  uint
 	Interactive bool
 }
@@ -287,7 +294,10 @@ func evaluateAlertRow(r alertRow, parsed *shellcore.AlertArgs, condStr string, c
 	fmt.Fprintln(stderr, msg)
 
 	if shouldDispatch && parsed.Notify != "" && ctx.Notifier != nil {
-		body := truncateAlertBody(r.raw)
+		// Dispatch the formatted alert message (what the shell prints to
+		// stderr), not the raw triggering row — Slack/PagerDuty users
+		// want "watchname[tag]: 5.12 > 5.00", not "5.12 disk" on its own.
+		body := truncateAlertBody(msg)
 		watchName, customerID := ctx.dispatchIdentity(r.tag)
 		if err := ctx.Notifier.Send(customerID, parsed.Notify, watchName, body); err != nil {
 			fmt.Fprintf(stderr, "alert: dispatch to %q failed: %v\n", parsed.Notify, err)
