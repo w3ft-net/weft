@@ -11,6 +11,7 @@ import Account from './pages/Account'
 import Device from './pages/Device'
 import Namespaces from './pages/Namespaces'
 import Manual from './pages/Manual'
+import Watch from './pages/Watch'
 import ProtectedRoute from './components/ProtectedRoute'
 
 export default function App() {
@@ -43,6 +44,9 @@ export default function App() {
       } />
       <Route path="/manual" element={
         <ProtectedRoute><Manual /></ProtectedRoute>
+      } />
+      <Route path="/watch/:name" element={
+        <ProtectedRoute><Watch /></ProtectedRoute>
       } />
     </Routes>
   )

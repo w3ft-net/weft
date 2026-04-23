@@ -270,6 +270,84 @@ func TestCronAggregate_PicksTierByWindow(t *testing.T) {
 	}
 }
 
+// TestQueryCronSeries_PicksTierAndReturnsBuckets confirms the series
+// endpoint routes to the right tier by window width and returns the
+// buckets in ascending time order with (count, min, max) intact.
+// Seeds distinctive values in raw and hourly for the same watch so
+// you can tell which tier the result came from.
+func TestQueryCronSeries_PicksTierAndReturnsBuckets(t *testing.T) {
+	db := testOpen(t)
+
+	cust, err := db.FindOrCreateCustomer("series-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.db.Exec(`
+		INSERT INTO subscriptions (id, customer_id, tier, status, starts_at, created_at, updated_at)
+		VALUES (?, ?, 'bolt', 'active', now(), now(), now())`,
+		"sub-"+cust.Name, cust.Name).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveCronWatch(cust.ID, "w", "*/1 * * * *", "echo 1"); err != nil {
+		t.Fatal(err)
+	}
+	var watchID uint
+	if err := db.db.Raw("SELECT id FROM cron_watches WHERE customer_id = ? AND name = 'w'", cust.ID).Scan(&watchID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Two raw rows yesterday: values 5 and 15 in the empty tag.
+	for i, v := range []float64{5, 15} {
+		ranAt := time.Now().Add(-24*time.Hour + time.Duration(i)*time.Minute)
+		if err := db.db.Exec(
+			"INSERT INTO cron_results (cron_watch_id, ran_at, value, tag) VALUES (?, ?, ?, '')",
+			watchID, ranAt, v,
+		).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// One hourly bucket 10 days ago: marker value only accessible via hourly tier.
+	if err := db.db.Exec(`
+		INSERT INTO cron_results_hourly (cron_watch_id, tag, bucket_start, count, sum, sum_sq, min, max)
+		VALUES (?, '', ?, 11, 110, 1210, 1, 20)`,
+		watchID, time.Now().Add(-10*24*time.Hour).Truncate(time.Hour),
+	).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Short window -> raw tier, two buckets with count=1 each.
+	buckets, gran, err := db.QueryCronSeries(cust.ID, watchID, time.Now().Add(-2*24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gran != "raw" {
+		t.Errorf("short window: granularity = %q, want raw", gran)
+	}
+	if len(buckets) != 2 {
+		t.Fatalf("short window: expected 2 raw buckets, got %d", len(buckets))
+	}
+	if buckets[0].Count != 1 || buckets[0].Sum != 5 {
+		t.Errorf("short window: first bucket = %+v, want count=1 sum=5", buckets[0])
+	}
+
+	// 12-day window -> hourly tier, hits the seeded rollup row.
+	buckets, gran, err = db.QueryCronSeries(cust.ID, watchID, time.Now().Add(-12*24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gran != "hourly" {
+		t.Errorf("long window: granularity = %q, want hourly", gran)
+	}
+	if len(buckets) != 1 {
+		t.Fatalf("long window: expected 1 hourly bucket, got %d", len(buckets))
+	}
+	b := buckets[0]
+	if b.Count != 11 || b.Sum != 110 || b.Min != 1 || b.Max != 20 {
+		t.Errorf("long window: bucket = %+v, want count=11 sum=110 min=1 max=20", b)
+	}
+}
+
 // TestCronAggregate_ClampsToPlanRetention confirms a swatch customer
 // (30d cap) asking for 60d of history sees only the last 30 days'
 // data, not the older rows — even though those older rows are still

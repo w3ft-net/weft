@@ -236,6 +236,7 @@ func (s *Server) Handler() http.Handler {
 	auth.Handle("PUT /api/watches/{name}", BodyCap(cfg.WatchBodyMax, protected(s.handleSaveWatch)))
 	auth.Handle("DELETE /api/watches/{name}", protected(s.handleDeleteWatch))
 	auth.HandleFunc("GET /api/watches/{name}/results", s.handleWatchResults)
+	auth.HandleFunc("GET /api/watches/{name}/chart", s.handleWatchChart)
 	auth.HandleFunc("GET /api/notify", s.handleGetNotifyConfig)
 	auth.Handle("PUT /api/notify", BodyCap(cfg.WatchBodyMax, protected(s.handleSaveNotifyConfig)))
 	auth.HandleFunc("GET /api/integrations", s.handleListIntegrations)
@@ -1442,6 +1443,89 @@ func (s *Server) handleWatchResults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	json.NewEncoder(w).Encode(results)
+}
+
+// rangeDurations maps the discrete range tokens accepted by the
+// chart endpoint to their wall-clock windows. Keep in sync with the
+// frontend's Watch page buttons — the server is the source of truth
+// for which ranges exist; the client renders a button per entry.
+var rangeDurations = map[string]time.Duration{
+	"1h":  1 * time.Hour,
+	"6h":  6 * time.Hour,
+	"24h": 24 * time.Hour,
+	"7d":  7 * 24 * time.Hour,
+	"30d": 30 * 24 * time.Hour,
+	"90d": 90 * 24 * time.Hour,
+	"1y":  365 * 24 * time.Hour,
+}
+
+// handleWatchChart powers the /watch/:name detail page. Returns one
+// point per (tag, bucket) over the requested range at the coarsest
+// granularity whose retention covers it. Rollup tiers carry count,
+// min, and max per bucket so the client can shade a band alongside
+// the average line.
+func (s *Server) handleWatchChart(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	name := r.PathValue("name")
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	rangeKey := r.URL.Query().Get("range")
+	if rangeKey == "" {
+		rangeKey = "24h"
+	}
+	dur, ok := rangeDurations[rangeKey]
+	if !ok {
+		http.Error(w, "unknown range", http.StatusBadRequest)
+		return
+	}
+	custID, err := s.resolveCustomerID(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	watch, err := s.store.GetCronWatch(custID, name)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	buckets, gran, err := s.store.QueryCronSeries(custID, watch.ID, time.Now().Add(-dur))
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Shape for the wire: flat points, avg computed here so the client
+	// doesn't have to re-do sum/count division. Keep count/min/max so
+	// legends can show per-tag stats without a second request.
+	type point struct {
+		Ts    int64   `json:"ts"`
+		Tag   string  `json:"tag"`
+		Value float64 `json:"value"` // avg = sum/count (or raw value for raw tier)
+		Count int64   `json:"count"`
+		Min   float64 `json:"min"`
+		Max   float64 `json:"max"`
+	}
+	points := make([]point, 0, len(buckets))
+	for _, b := range buckets {
+		if b.Count == 0 {
+			continue
+		}
+		points = append(points, point{
+			Ts:    b.BucketStart.UnixMilli(),
+			Tag:   b.Tag,
+			Value: b.Sum / float64(b.Count),
+			Count: b.Count,
+			Min:   b.Min,
+			Max:   b.Max,
+		})
+	}
+	json.NewEncoder(w).Encode(map[string]any{
+		"points":      points,
+		"granularity": gran,
+		"range":       rangeKey,
+	})
 }
 
 // --- Team management ---

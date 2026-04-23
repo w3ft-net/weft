@@ -460,6 +460,18 @@
   border-color: var(--border-bright);
 }
 
+.watch-tile-clickable {
+  cursor: pointer;
+}
+.watch-tile-clickable:hover {
+  border-color: var(--accent);
+}
+.watch-tile-clickable:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(230, 126, 34, 0.25);
+}
+
 .watch-tile-errored {
   border-color: rgba(224, 108, 117, 0.3);
 }

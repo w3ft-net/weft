@@ -284,8 +284,17 @@ function WatchesCard({ watches, watchCount, watchLimit, minInterval }: {
           return (
             <div
               key={watch.Name}
-              className={`watch-tile${hasError ? ' watch-tile-errored' : ''}`}
+              role="link"
+              tabIndex={0}
+              className={`watch-tile watch-tile-clickable${hasError ? ' watch-tile-errored' : ''}`}
               data-testid={`dashboard-watch-card-${watch.Name}`}
+              onClick={() => navigate(`/watch/${encodeURIComponent(watch.Name)}`)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  navigate(`/watch/${encodeURIComponent(watch.Name)}`)
+                }
+              }}
             >
               <div className="watch-tile-header">
                 <span className="watch-tile-name">{watch.Name}</span>

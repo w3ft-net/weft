@@ -173,8 +173,49 @@ export function deleteWatch(name: string): Promise<void> {
   return apiFetch(`/api/watches/${encodeURIComponent(name)}`, { method: 'DELETE' })
 }
 
+export function getWatch(name: string): Promise<CronWatch> {
+  return apiFetch(`/api/watches/${encodeURIComponent(name)}`)
+}
+
 export function getWatchResults(name: string): Promise<CronResult[]> {
   return apiFetch(`/api/watches/${encodeURIComponent(name)}/results`)
+}
+
+export type ChartRange = '1h' | '6h' | '24h' | '7d' | '30d' | '90d' | '1y'
+
+export const CHART_RANGES: readonly ChartRange[] = ['1h', '6h', '24h', '7d', '30d', '90d', '1y'] as const
+
+// Approximate widths in ms — used client-side to grey out range
+// buttons whose windows exceed the caller's plan retention. Server
+// is still authoritative (it rejects over-long ranges), this is just
+// UX.
+export const CHART_RANGE_MS: Record<ChartRange, number> = {
+  '1h':  60 * 60 * 1000,
+  '6h':  6 * 60 * 60 * 1000,
+  '24h': 24 * 60 * 60 * 1000,
+  '7d':  7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+  '90d': 90 * 24 * 60 * 60 * 1000,
+  '1y':  365 * 24 * 60 * 60 * 1000,
+}
+
+export interface ChartPoint {
+  ts: number // unix millis
+  tag: string
+  value: number
+  count: number
+  min: number
+  max: number
+}
+
+export interface ChartResponse {
+  points: ChartPoint[]
+  granularity: 'raw' | 'hourly' | '4h' | 'daily'
+  range: ChartRange
+}
+
+export function getWatchChart(name: string, range: ChartRange): Promise<ChartResponse> {
+  return apiFetch(`/api/watches/${encodeURIComponent(name)}/chart?range=${range}`)
 }
 
 // resendVerification re-sends the signup verification email to the

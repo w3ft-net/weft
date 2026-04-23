@@ -402,6 +402,46 @@ func (s *Store) CronAggregate(customerID, cronWatchID uint, since time.Time, tag
 	return CronAggStats{Avg: row.Avg, Min: row.Min, Max: row.Max, Samples: row.Samples}, err
 }
 
+// CronBucket is one row of a (raw or rolled-up) series. For raw rows
+// Count is always 1 and {Sum, Min, Max} all equal the single Value.
+// For rollup rows they preserve exact avg/min/max/stddev through any
+// subsequent merging. BucketStart is the left edge of the bucket (or
+// the raw row's timestamp); Tag is "" for single-row watches.
+type CronBucket struct {
+	BucketStart time.Time `gorm:"column:bucket_start"`
+	Tag         string
+	Count       int64
+	Sum         float64
+	SumSq       float64 `gorm:"column:sum_sq"`
+	Min         float64
+	Max         float64
+}
+
+// QueryCronSeries returns one bucket per (tag, bucket_start) over
+// [since, now) at the coarsest granularity whose retention covers the
+// requested window. Powers the /watch/:name detail page — the chart
+// draws one point per bucket (avg = sum/count), and rollup rows also
+// carry min/max so the UI can shade a band when granularity != raw.
+//
+// `since` is clamped to (now − LogRetention(tier)) for the caller's
+// plan; rows on disk past that cap are invisible to the API.
+func (s *Store) QueryCronSeries(customerID, cronWatchID uint, since time.Time) ([]CronBucket, string, error) {
+	since = clampRetention(s.TierForCustomer(customerID), since)
+	gran := pickGranularity(time.Since(since))
+
+	var rows []CronBucket
+	err := s.db.Raw(`
+		SELECT bucket_start, tag, count, sum, sum_sq, min, max
+		FROM cron_results_all
+		WHERE granularity = ?
+		  AND cron_watch_id = ?
+		  AND bucket_start >= ?
+		ORDER BY bucket_start ASC`,
+		gran, cronWatchID, since,
+	).Scan(&rows).Error
+	return rows, gran, err
+}
+
 // CronNonEmptyCount returns how many rows in [since, now) had non-empty
 // stdout, optionally scoped to a tag. Used by `alert absent --duration
 // <dur>` to tell whether any data arrived in the window.
