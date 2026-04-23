@@ -50,18 +50,18 @@ Partition layout (migration 002):
 
 Known concerns that touch billing correctness:
 
-- **The rollup isn't atomic.** The scheduled SQL runs
-  `INSERT INTO usage_daily SELECT … FROM usage_hourly WHERE …; DELETE
-  FROM usage_hourly WHERE …;` — two statements, two transactions by
-  default. A `QueryUsage` call between the INSERT and the DELETE
-  double-counts the rolled rows. Low-probability (the window is on the
-  order of tens of ms at low volume) but it's a write-correctness hole
-  on data we're about to send to Stripe. Wrap both statements in `BEGIN;
-  … COMMIT;` inside the cron job string, or fold both into a single
-  `WITH rolled AS (INSERT … RETURNING …) DELETE …` CTE.
 - **`UsageRecord` struct is dead.** Defined in `store/user.go`, no
   callers. Either delete it or repurpose as the audit log for
   Stripe-reporting (see below).
+
+Previously this list included a non-atomic rollup (an INSERT + DELETE
+pair running as two separate transactions, double-counting for a
+reader in between). Migration 028 switched the rollup to the
+idempotent `ON CONFLICT DO UPDATE` pattern from migration 026 —
+usage_hourly rows are no longer deleted by the rollup (pg_partman
+handles the 7-day drop), and `QueryUsage` reads usage_daily for
+completed days and usage_hourly for today to avoid the new 7-day
+overlap.
 
 ### Stripe subscription billing (in place)
 
@@ -266,10 +266,8 @@ item:
 
 ## Prerequisites / order of operations
 
-1. **Fix the rollup atomicity** in migration 002's pg_cron job — wrap
-   the INSERT + DELETE in a single transaction or fold into a CTE.
-   Small, cheap, should happen before anything trusts `QueryUsage` for
-   money.
+1. ~~Fix the rollup atomicity~~ — done in migration 028 (idempotent
+   rollup, no DELETE, split-on-today read).
 2. **Centralize `VolumeAllowance` + `OverageRatePerGB`** in
    `store/user.go`; update `handleUsage` and `shellfs.go`.
 3. **Set up Stripe products + prices** in the Stripe dashboard: one
@@ -286,9 +284,9 @@ item:
    the `stripe_usage_reports` audit table schema (renaming to keep
    callers sane).
 
-Nothing in steps 1–2 is a blocker for anything else; they should land
-first as pure cleanup. Steps 3–7 are the actual metered-billing
-project and make sense as a focused follow-up.
+Step 2 is a mechanical cleanup that unblocks nothing but is cheap.
+Steps 3–7 are the actual metered-billing project and make sense as a
+focused follow-up.
 
 ## Open questions worth resolving before step 3
 
