@@ -8,6 +8,7 @@ import (
 
 	"github.com/kevlarcon/warp/pkg/bash"
 	"github.com/kevlarcon/weft/shellcore"
+	luaparse "github.com/yuin/gopher-lua/parse"
 	"gorm.io/gorm"
 )
 
@@ -55,6 +56,9 @@ type ShellFunction struct {
 
 func (s *Store) SaveShellFunction(customerID uint, name, source string) error {
 	lang, cleanSource := detectLanguage(source)
+	if err := validateSource(lang, cleanSource); err != nil {
+		return err
+	}
 	var fn ShellFunction
 	result := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&fn)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -67,6 +71,24 @@ func (s *Store) SaveShellFunction(customerID uint, name, source string) error {
 		"source":   cleanSource,
 		"language": lang,
 	}).Error
+}
+
+// validateSource rejects syntactically-invalid /bin scripts at save time.
+// Catching parse errors here surfaces them to the user (in vi's status line
+// on :w) instead of letting an unparseable script silently persist and
+// then 500 at invocation time.
+func validateSource(lang, source string) error {
+	switch lang {
+	case "bash":
+		if _, err := bash.Parse(source); err != nil {
+			return fmt.Errorf("bash syntax error: %w", err)
+		}
+	case "lua":
+		if _, err := luaparse.Parse(strings.NewReader(source), "source"); err != nil {
+			return fmt.Errorf("lua syntax error: %w", err)
+		}
+	}
+	return nil
 }
 
 // detectLanguage checks for a Lua shebang and returns the language

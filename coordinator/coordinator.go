@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"sort"
 	"strings"
@@ -13,10 +12,11 @@ import (
 
 	"github.com/kevlarcon/warp/pkg/bash"
 	"github.com/kevlarcon/weft/compute"
-	"github.com/kevlarcon/weft/store"
 	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
+	"github.com/kevlarcon/weft/shellfs"
+	"github.com/kevlarcon/weft/store"
 )
 
 // TimeRange specifies the query time window.
@@ -288,22 +288,79 @@ func (c *Coordinator) IngestingShard(app string) shard.Shard {
 
 // Query parses a pipeline, routes the pushed-down SQL to matching shards,
 // and returns results. If compute stages exist and a Pool is set, shard
-// rows are streamed to the compute pool for post-processing.
+// rows are streamed to the compute pool for post-processing. A trailing
+// `| alert ...` stage, if present, runs in interactive AlertContext after
+// the query; cron uses QueryForWatch to bind the alert to a watch.
 func (c *Coordinator) Query(pipeline string, tr TimeRange, customerOverride ...string) (*QueryResult, error) {
+	customer := c.Customer
+	if len(customerOverride) > 0 && customerOverride[0] != "" {
+		customer = customerOverride[0]
+	}
+	return c.query(pipeline, tr, customer, nil)
+}
+
+// QueryForWatch runs pipeline with the supplied watch bound to the alert
+// stage (if any), so incidents and dispatches use watch identity instead
+// of interactive-mode defaults.
+func (c *Coordinator) QueryForWatch(pipeline string, tr TimeRange, watch *store.CronWatch) (*QueryResult, error) {
+	ctx := &AlertContext{
+		Store:      c.Store,
+		Watch:      watch,
+		Notifier:   c.Notifier,
+		CustomerID: watch.CustomerID,
+	}
+	return c.query(pipeline, tr, "", ctx)
+}
+
+// query is the shared implementation for Query and QueryForWatch.
+// alertCtx = nil means "use interactive defaults if the pipeline has an
+// alert stage." A non-nil alertCtx binds the alert to that context.
+func (c *Coordinator) query(pipeline string, tr TimeRange, customer string, alertCtx *AlertContext) (*QueryResult, error) {
+	// Pre-expand /bin bash invocations so the planner can see their body
+	// and push down `cat /log/...` stages. Lua and complex bodies pass
+	// through untouched; warp resolves them at execution time.
+	if c.Store != nil && c.CustomerID != 0 {
+		fs := shellfs.New(c.Store, c.CustomerID, nil)
+		if expanded, err := expandBinPipeline(pipeline, fs); err != nil {
+			return nil, fmt.Errorf("expand /bin: %w", err)
+		} else {
+			pipeline = expanded
+		}
+	}
+
 	plan, err := planner.Plan(pipeline)
 	if err != nil {
 		log.Printf("query: plan error: %v (pipeline=%q)", err, pipeline)
 		return nil, fmt.Errorf("plan: %w", err)
 	}
 
-	// Local pipeline (no log source) — run through warp directly.
-	if plan.Local {
-		return c.runLocal(plan.LocalPipeline)
+	result, err := c.executeQuery(plan, tr, customer)
+	if err != nil {
+		return nil, err
 	}
 
-	customer := c.Customer
-	if len(customerOverride) > 0 && customerOverride[0] != "" {
-		customer = customerOverride[0]
+	if plan.AlertArgs != nil {
+		if alertCtx == nil {
+			alertCtx = &AlertContext{
+				Store:       c.Store,
+				Notifier:    c.Notifier,
+				CustomerID:  c.CustomerID,
+				Interactive: true,
+			}
+		}
+		runAlertStage(result, plan.AlertArgs, alertCtx)
+	}
+
+	return result, nil
+}
+
+// executeQuery runs the query half of a plan (everything except alert).
+func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, customer string) (*QueryResult, error) {
+	if plan.Local {
+		if plan.LocalPipeline == "" {
+			return &QueryResult{}, nil
+		}
+		return c.runLocal(plan.LocalPipeline)
 	}
 
 	// Allowlist: the pipeline's source app (the part before '/') must
@@ -402,8 +459,34 @@ func (c *Coordinator) Query(pipeline string, tr TimeRange, customerOverride ...s
 	return &QueryResult{Rows: allRows}, nil
 }
 
+// runAlertStage feeds a QueryResult's text (or joined raw rows) into
+// AlertCommand and merges its stderr into result.Stderr so the caller
+// sees the alert message. AlertCommand's stdout is a tee of stdin and
+// is discarded — the original result.Text/Rows already carry that.
+func runAlertStage(result *QueryResult, args []string, ctx *AlertContext) {
+	stdin := result.Text
+	if stdin == "" && len(result.Rows) > 0 {
+		var sb strings.Builder
+		for _, r := range result.Rows {
+			sb.WriteString(r.Raw)
+			sb.WriteByte('\n')
+		}
+		stdin = sb.String()
+	}
+	var out, errOut strings.Builder
+	AlertCommand(args, strings.NewReader(stdin), &out, &errOut, ctx)
+	if errOut.Len() == 0 {
+		return
+	}
+	if result.Stderr != "" && !strings.HasSuffix(result.Stderr, "\n") {
+		result.Stderr += "\n"
+	}
+	result.Stderr += errOut.String()
+}
+
 // runLocal executes a sourceless pipeline (no log query) through warp locally.
-// Registers alert and other builtins so `echo "42" | alert above 0` works.
+// The planner strips any trailing `alert` before this point, so the
+// interpreter doesn't need to register it.
 func (c *Coordinator) runLocal(pipeline string) (*QueryResult, error) {
 	ast, err := bash.Parse(pipeline)
 	if err != nil {
@@ -419,20 +502,11 @@ func (c *Coordinator) runLocal(pipeline string) (*QueryResult, error) {
 
 	bash.RegisterToolCommands(interp)
 
-	// Register alert for interactive use (no watch context, no history).
-	// Passing Notifier + CustomerID lets `echo foo | alert --notify=<alias>`
-	// actually fire a test alert from the shell.
-	interp.RegisterCommand("alert", func(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
-		return AlertCommand(args, stdin, stdout, stderr, &AlertContext{
-			Store:       c.Store,
-			Notifier:    c.Notifier,
-			CustomerID:  c.CustomerID,
-			Interactive: true,
-		})
-	})
-
-	// Register weft.* functions for cron result access.
+	// Wire a tenant-scoped ShellFS so /bin scripts resolve server-side for
+	// both bash (PATH resolution) and lua (LangFS-aware dispatch).
 	if c.Store != nil && c.CustomerID != 0 {
+		interp.SetFS(shellfs.New(c.Store, c.CustomerID, nil))
+
 		wf := &WeftFuncs{Store: c.Store, CustomerID: c.CustomerID}
 		RegisterWeftCommands(interp, wf)
 		interp.LuaWeftFuncs = wf

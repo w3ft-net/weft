@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/kevlarcon/weft/shellcore"
+	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
 func runAlert(args string, stdin string) (stdout, stderr string, exitCode int) {
@@ -266,4 +267,57 @@ func TestAlert_ParseArgs(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRunAlertStage exercises the integration point the query path relies on:
+// a QueryResult with Text (from compute output) or Rows (from raw shard
+// output) is fed into AlertCommand, and the alert's stderr lands on
+// result.Stderr for the caller to render.
+func TestRunAlertStage(t *testing.T) {
+	t.Run("text above threshold", func(t *testing.T) {
+		result := &QueryResult{Text: "73\n"}
+		runAlertStage(result, []string{"above", "50"}, &AlertContext{Interactive: true})
+		if result.Stderr == "" || !strings.Contains(result.Stderr, "73") {
+			t.Errorf("expected 'above' alert in Stderr, got %q", result.Stderr)
+		}
+		// Text untouched (alert is a tee; we discard its stdout since it
+		// duplicates the input).
+		if result.Text != "73\n" {
+			t.Errorf("Text mutated: %q", result.Text)
+		}
+	})
+
+	t.Run("rows multi-row tagged", func(t *testing.T) {
+		result := &QueryResult{Rows: []*pb.ResultRow{
+			{Raw: "shard-a 85"},
+			{Raw: "shard-b 50"},
+		}}
+		runAlertStage(result, []string{"above", "80", "-k", "2", "-t", "1"},
+			&AlertContext{Interactive: true})
+		if !strings.Contains(result.Stderr, "shard-a") {
+			t.Errorf("shard-a (85) should fire; stderr=%q", result.Stderr)
+		}
+		if strings.Contains(result.Stderr, "shard-b") {
+			t.Errorf("shard-b (50) should not fire; stderr=%q", result.Stderr)
+		}
+	})
+
+	t.Run("below threshold silent", func(t *testing.T) {
+		result := &QueryResult{Text: "12\n"}
+		runAlertStage(result, []string{"above", "50"}, &AlertContext{Interactive: true})
+		if result.Stderr != "" {
+			t.Errorf("below threshold should stay silent, got %q", result.Stderr)
+		}
+	})
+
+	t.Run("surfaces non-numeric diagnostic", func(t *testing.T) {
+		// Reproduces the UX problem the user hit: jq emits multiple numeric
+		// lines but single-row alert treats them as one scalar. The error
+		// message should make the mistake obvious.
+		result := &QueryResult{Text: "5.12\n5.13\n"}
+		runAlertStage(result, []string{"above", "5"}, &AlertContext{Interactive: true})
+		if !strings.Contains(result.Stderr, "non-numeric") {
+			t.Errorf("expected non-numeric diagnostic, got %q", result.Stderr)
+		}
+	})
 }

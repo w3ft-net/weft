@@ -130,30 +130,15 @@ func (ce *CronExecutor) runWatch(ctx context.Context, watch store.CronWatch) {
 	}
 }
 
-// resolvePipeline expands function references and normalizes /log/ paths
-// so the coordinator's planner can parse the pipeline.
+// resolvePipeline trims the stored pipeline for execution. /bin/ script
+// references no longer need expansion here — Coordinator.query pre-expands
+// bash invocations (and binds positionals) before calling Plan, and warp's
+// PATH resolution handles direct script invocations at execution time.
+// That means `check_errors` (bare name), `check_errors disk.log` (with
+// args), and arbitrary compositions (`check_errors | wc -l`) all flow
+// through the same server-side machinery.
 func (ce *CronExecutor) resolvePipeline(watch store.CronWatch) string {
-	pipeline := strings.TrimSpace(watch.Pipeline)
-
-	// If the pipeline is a bare name (no spaces, no pipes), check if it's a /bin/ function.
-	if !strings.Contains(pipeline, " ") && !strings.Contains(pipeline, "|") {
-		fn, err := ce.Store.GetShellFunction(watch.CustomerID, pipeline)
-		if err == nil {
-			pipeline = strings.TrimSpace(fn.Source)
-		}
-	}
-
-	return pipeline
-}
-
-// splitAlertStage splits a pipeline at "| alert". Everything before runs
-// as a coordinator query; the alert part runs through a local warp interpreter.
-func splitAlertStage(pipeline string) (queryPart, alertPart string) {
-	idx := strings.Index(pipeline, "| alert")
-	if idx == -1 {
-		return pipeline, ""
-	}
-	return strings.TrimSpace(pipeline[:idx]), strings.TrimSpace(pipeline[idx+2:])
+	return strings.TrimSpace(watch.Pipeline)
 }
 
 // executeWatch runs the watch's pipeline and records the result.
@@ -161,13 +146,16 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch) {
 	start := time.Now()
 
 	pipeline := ce.resolvePipeline(watch)
-	queryPart, alertPart := splitAlertStage(pipeline)
 
 	tr := TimeRange{
 		Start: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
 		End:   time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
-	result, err := ce.Coord.Query(queryPart, tr)
+	// QueryForWatch runs the query and (if the pipeline ends with `| alert`)
+	// evaluates the alert in the watch's AlertContext — incident dedup and
+	// notifier dispatch both key off the watch identity instead of an
+	// interactive-mode synthetic one.
+	result, err := ce.Coord.QueryForWatch(pipeline, tr, &watch)
 
 	duration := time.Since(start)
 	status := "ok"
@@ -178,34 +166,19 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch) {
 		status = "error"
 		stderr = err.Error()
 		exitCode = 1
-	} else if result.Text != "" {
-		stdout = result.Text
-	} else if len(result.Rows) > 0 {
-		var sb strings.Builder
-		for _, row := range result.Rows {
-			sb.WriteString(row.Raw)
-			sb.WriteByte('\n')
+	} else {
+		if result.Text != "" {
+			stdout = result.Text
+		} else if len(result.Rows) > 0 {
+			var sb strings.Builder
+			for _, row := range result.Rows {
+				sb.WriteString(row.Raw)
+				sb.WriteByte('\n')
+			}
+			stdout = sb.String()
 		}
-		stdout = sb.String()
-	}
-
-	// Run alert stage if present. The alert built-in evaluates the condition,
-	// updates the incident ledger, and dispatches through the Notifier itself
-	// when a --notify alias is set on the command — no more post-hoc
-	// stderr→notify magic at this layer.
-	if alertPart != "" && exitCode == 0 {
-		alertCtx := &AlertContext{
-			Store:      ce.Store,
-			Watch:      &watch,
-			Notifier:   ce.Notifier,
-			CustomerID: watch.CustomerID,
-		}
-		alertArgs := strings.Fields(alertPart)
-		stdinReader := strings.NewReader(stdout)
-		var alertStdout, alertStderr strings.Builder
-		AlertCommand(alertArgs, stdinReader, &alertStdout, &alertStderr, alertCtx)
-		if alertStderr.Len() > 0 {
-			stderr = alertStderr.String()
+		if result.Stderr != "" {
+			stderr = result.Stderr
 			status = "alert"
 		}
 	}

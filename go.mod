@@ -13,6 +13,9 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.66.0
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.296.1
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.98.0
+	github.com/aws/aws-sdk-go-v2/service/sns v1.39.16
+	github.com/aws/aws-sdk-go-v2/service/sqs v1.42.26
+	github.com/aws/aws-sdk-go-v2/service/ssm v1.68.5
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.10
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
@@ -23,7 +26,9 @@ require (
 	github.com/kevlarcon/warp v0.1.0
 	github.com/pressly/goose/v3 v3.27.0
 	github.com/stripe/stripe-go/v82 v82.5.1
+	github.com/yuin/gopher-lua v1.1.2
 	golang.org/x/term v0.42.0
+	golang.org/x/time v0.15.0
 	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
@@ -45,9 +50,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.21 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.21 // indirect
 	github.com/aws/aws-sdk-go-v2/service/signin v1.0.9 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sns v1.39.16 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sqs v1.42.26 // indirect
-	github.com/aws/aws-sdk-go-v2/service/ssm v1.68.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.30.15 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.19 // indirect
 	github.com/aws/smithy-go v1.25.0 // indirect
@@ -98,7 +100,6 @@ require (
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	github.com/yuin/gopher-lua v1.1.2 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa // indirect
@@ -108,7 +109,6 @@ require (
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260209163413-e7419c687ee4 // indirect
 	golang.org/x/text v0.34.0 // indirect
-	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.42.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260217215200-42d3e9bedb6d // indirect

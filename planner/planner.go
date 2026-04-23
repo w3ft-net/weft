@@ -20,6 +20,7 @@ type QueryPlan struct {
 	LocalPipeline  string        // the full pipeline string for local execution
 	SourceCmd      string        // source command: "cat", "head", or "tail"
 	SourceApp      string        // app extracted from pseudofile ("" = all apps)
+	AlertArgs      []string      // argv for a terminal `alert` stage; nil if absent
 }
 
 // GrepPattern captures a grep filter for live tail matching.
@@ -37,14 +38,26 @@ type pushdownResult struct {
 }
 
 // Plan parses a weft shell pipeline and produces a QueryPlan by pushing
-// down as many stages as possible into shard-level SQL.
+// down as many stages as possible into shard-level SQL. A trailing
+// `| alert ...` stage is peeled off and returned as QueryPlan.AlertArgs
+// for the coordinator (or cron) to evaluate against the query's output.
 func Plan(pipeline string) (*QueryPlan, error) {
-	info, err := parsePipeline(pipeline)
+	queryPart, alertArgs := SplitAlertStage(pipeline)
+
+	// Pipeline is just `alert ...` — nothing to query. The caller runs
+	// AlertCommand with empty stdin (mostly useful for `alert absent`
+	// or test-dispatch flows). A wholly empty input falls through so
+	// parsePipeline reports the usual "empty pipeline" error.
+	if queryPart == "" && alertArgs != nil {
+		return &QueryPlan{Local: true, LocalPipeline: "", AlertArgs: alertArgs}, nil
+	}
+
+	info, err := parsePipeline(queryPart)
 	if err != nil {
 		// If the source command is unknown, this is a local pipeline
 		// (e.g., "echo 42 | alert above 0"). Run it entirely through warp.
 		if strings.Contains(err.Error(), "unknown source command") {
-			return &QueryPlan{Local: true, LocalPipeline: pipeline}, nil
+			return &QueryPlan{Local: true, LocalPipeline: queryPart, AlertArgs: alertArgs}, nil
 		}
 		return nil, fmt.Errorf("plan: %w", err)
 	}
@@ -166,6 +179,7 @@ func Plan(pipeline string) (*QueryPlan, error) {
 		FollowPatterns: grepPatterns,
 		SourceCmd:      info.source.cmd,
 		SourceApp:      info.source.app,
+		AlertArgs:      alertArgs,
 	}, nil
 }
 

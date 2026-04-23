@@ -793,9 +793,11 @@ func (c *ShellCore) execFSBuiltin(line string) bool {
 	return false
 }
 
-// resolveFunction checks if the command line is (or starts with) a /bin/ function.
-// If the first word matches a file in /bin/, returns the function's contents
-// (with any trailing arguments appended). Otherwise returns "".
+// resolveFunction checks if the command line invokes a /bin/ function.
+// If the first word matches a file in /bin/, returns line unchanged so the
+// invocation (name + args) flows to the server verbatim — the coordinator
+// pre-expands bash bodies and warp resolves /bin directly for both bash
+// and lua. Returns "" if no matching /bin entry exists.
 // warpBuiltins are commands that warp handles natively — don't look these up in /bin/.
 var warpBuiltins = map[string]bool{
 	"echo": true, "printf": true, "read": true, "test": true,
@@ -834,23 +836,14 @@ func (c *ShellCore) resolveFunction(line string) string {
 		path = "/bin/" + name
 	}
 
-	data, err := c.shellFS.ReadFile(path)
-	if err != nil {
+	if _, err := c.shellFS.ReadFile(path); err != nil {
 		return ""
 	}
 
-	// Lua scripts: return the command name as-is so warp's
-	// PATH resolution handles it (it knows about Lua via LangFS).
-	if lfs, ok := c.shellFS.(LangFS); ok && lfs.FileLanguage(path) == "lua" {
-		return line
-	}
-
-	// Bash scripts: return contents (existing behavior).
-	resolved := strings.TrimSpace(string(data))
-	if len(parts) > 1 {
-		resolved += " " + strings.Join(parts[1:], " ")
-	}
-	return resolved
+	// Both bash and lua invocations flow through unchanged. The coordinator
+	// pre-expands bash bodies (for planner visibility into `cat /log/...`)
+	// and warp's PATH resolution handles execution for both languages.
+	return line
 }
 
 // ── Query handling ──────────────────────────────────────────
