@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -75,6 +74,7 @@ func (s *Shell) Run() error {
 	}
 	runner.core.SetHistoryStore(NewFileHistoryStore())
 	runner.core.SetRange(s.Start, s.End)
+	runner.core.SetTierLimits(storeTierLimits{})
 
 	// Handle window resize.
 	sigCh := make(chan os.Signal, 1)
@@ -162,26 +162,14 @@ func (r *shellRunner) handleAction(a shellcore.Action) {
 }
 
 func (r *shellRunner) runQuery(pipeline string) {
-	weftPipeline, termCmd := splitTerminalStage(pipeline)
-
-	result, err := r.shell.Query(weftPipeline, r.shell.Start, r.shell.End)
+	// The shell core already stripped `| less` before dispatching this
+	// pipeline — whatever comes back goes straight to the core, which
+	// routes into ModeLess when the user typed the pager suffix.
+	result, err := r.shell.Query(pipeline, r.shell.Start, r.shell.End)
 
 	ev := shellcore.QueryResultEvent{Err: err}
 	if err == nil {
-		if termCmd != "" {
-			var text string
-			if result.Text != "" {
-				text = result.Text
-			} else {
-				var sb strings.Builder
-				for _, row := range result.Rows {
-					sb.WriteString(row.Raw)
-					sb.WriteByte('\n')
-				}
-				text = sb.String()
-			}
-			pipeToTerminal(text, termCmd)
-		} else if result.Text != "" {
+		if result.Text != "" {
 			ev.Text = result.Text
 		} else {
 			for _, row := range result.Rows {
@@ -354,33 +342,6 @@ func parseCSI(data string) (int, *shellcore.KeyEvent) {
 	return 1, nil
 }
 
-// ── Terminal helpers ────────────────────────────────────────
-
-func splitTerminalStage(pipeline string) (weftPart, termPart string) {
-	terminalCommands := map[string]bool{"less": true, "more": true}
-	idx := strings.LastIndex(pipeline, "|")
-	if idx == -1 {
-		return pipeline, ""
-	}
-	lastStage := strings.TrimSpace(pipeline[idx+1:])
-	cmd := strings.Fields(lastStage)
-	if len(cmd) > 0 && terminalCommands[cmd[0]] {
-		return strings.TrimSpace(pipeline[:idx]), lastStage
-	}
-	return pipeline, ""
-}
-
-func pipeToTerminal(text, cmdStr string) {
-	parts := strings.Fields(cmdStr)
-	cmd := exec.Command(parts[0], parts[1:]...)
-	cmd.Stdin = strings.NewReader(text)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "pager error: %v\n", err)
-	}
-}
-
 // ── Logo dissolve helpers ───────────────────────────────────
 
 // stripWarp removes warp characters (║) from a logo line, replacing with spaces.
@@ -484,8 +445,9 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 		}
 	}
 
-	// Query pipeline.
-	weftPipeline, _ := splitTerminalStage(line)
+	// Query pipeline. Strip a pager suffix — one-shot mode doesn't
+	// have a screen to page against.
+	weftPipeline, _ := shellcore.SplitTerminalStage(line)
 	result, err := s.Query(weftPipeline, s.Start, s.End)
 	if err != nil {
 		return err

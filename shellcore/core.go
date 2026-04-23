@@ -6,10 +6,11 @@ import (
 	"time"
 )
 
-// terminalCommands are commands that need direct terminal access (pagers, etc.).
+// terminalCommands are commands recognised as a terminal pager suffix
+// in a shell pipeline. Today only `less` is wired through ModeLess;
+// `more` would need its own path.
 var terminalCommands = map[string]bool{
 	"less": true,
-	"more": true,
 }
 
 // ShellCore is the shared shell state machine.
@@ -38,6 +39,18 @@ type ShellCore struct {
 
 	// Vim editor state (active when mode == ModeVim).
 	vim *vimState
+
+	// Pager state (active when mode == ModeLess).
+	less *lessState
+
+	// pendingLess is set when the user typed `... | less`; the query
+	// runs stripped of the terminal stage and the result enters the
+	// pager on arrival instead of landing in scrollback.
+	pendingLess bool
+
+	// tierLimits provides the runtime tier→watch-cap table for
+	// `help cron`. nil = fall back to a generic "see your plan" line.
+	tierLimits TierLimitsProvider
 
 	// Stdin capture state (cat > /path mode).
 	capture *captureState
@@ -151,6 +164,25 @@ func (c *ShellCore) HandleEvent(ev Event) {
 		if c.mode == ModeVim {
 			c.renderVim()
 		}
+		if c.mode == ModeLess && c.less != nil {
+			// Re-wrap content at the new width so the viewport stays
+			// coherent. Keep the reader at approximately the same
+			// logical position by snapping to the nearest wrapped
+			// line index derived from the pre-resize ratio.
+			prevTotal := len(c.less.lines)
+			prevOffset := c.less.offset
+			c.less.lines = wrapLines(strings.Join(c.less.lines, "\n"), ev.Width)
+			c.less.width = ev.Width
+			c.less.height = ev.Height
+			if prevTotal > 0 {
+				c.less.offset = prevOffset * len(c.less.lines) / prevTotal
+			}
+			if c.less.query != "" {
+				c.computeMatches()
+			}
+			c.clampOffset()
+			c.renderLess()
+		}
 	case QueryResultEvent:
 		c.handleQueryResult(ev)
 	case FollowRowEvent:
@@ -194,6 +226,12 @@ func (c *ShellCore) handleKey(ev KeyEvent) {
 	// Vim mode: all keys go to the vim editor.
 	if c.mode == ModeVim {
 		c.handleVimKey(ev)
+		return
+	}
+
+	// Less mode: all keys go to the pager.
+	if c.mode == ModeLess {
+		c.handleLessKey(ev)
 		return
 	}
 
@@ -484,12 +522,6 @@ func (c *ShellCore) execBuiltin(line string) bool {
 		c.scrollback.Reset()
 		c.resetFlushState()
 		return true
-	case line == "help":
-		c.appendScrollback(helpText)
-		return true
-	case line == "man alert" || line == "alert --help":
-		c.appendScrollback(AlertManPage)
-		return true
 	case line == "apps":
 		c.appendScrollback(DimText("Available apps:") + "\n")
 		for _, app := range c.apps {
@@ -497,6 +529,16 @@ func (c *ShellCore) execBuiltin(line string) bool {
 		}
 		c.appendScrollback(fmt.Sprintf("  warp.log %s\n", DimText("(all apps)")))
 		return true
+	}
+
+	// Help topics and man pages. Page through less when the content
+	// wouldn't fit on one screen — the top-level `help` index is
+	// deliberately short enough to skip the pager every time.
+	if text, ok := c.topicDispatch(line); ok {
+		c.showDoc(text, line)
+		return true
+	}
+	switch {
 	case line == "history":
 		entries := c.history.Entries()
 		for i, entry := range entries {
@@ -516,9 +558,6 @@ func (c *ShellCore) execBuiltin(line string) bool {
 		c.rangeEnd = end
 		c.dispatch(ActionSetRange{Start: start, End: end})
 		c.appendScrollback(formatRange(start, end))
-		return true
-	case line == "man range" || line == "range --help":
-		c.appendScrollback(RangeManPage)
 		return true
 	case strings.HasPrefix(line, "vi ") || strings.HasPrefix(line, "vim "):
 		parts := strings.Fields(line)
@@ -850,20 +889,12 @@ func (c *ShellCore) resolveFunction(line string) string {
 
 func (c *ShellCore) startQuery(line string) {
 	weftPipeline, termCmd := splitTerminalStage(line)
+	c.pendingLess = termCmd == "less"
 
 	if isFollowPipeline(weftPipeline) {
 		c.mode = ModeFollowing
 		c.appendScrollback(DimText("[streaming — Ctrl+C to stop]") + "\n")
 		c.dispatch(ActionFollow{Pipeline: weftPipeline})
-		return
-	}
-
-	if termCmd != "" {
-		// Query with terminal pipe — dispatch with the terminal command.
-		c.mode = ModeRunning
-		c.spinnerFrame = 0
-		c.dispatch(ActionQuery{Pipeline: weftPipeline})
-		// The renderer will handle piping to terminal when result arrives.
 		return
 	}
 
@@ -876,9 +907,25 @@ func (c *ShellCore) handleQueryResult(ev QueryResultEvent) {
 	c.mode = ModeInput
 
 	if ev.Err != nil {
+		c.pendingLess = false
 		errMsg := cleanError(ev.Err.Error())
 		c.appendScrollback(ErrorText(errMsg) + "\n")
 		c.redrawPrompt()
+		return
+	}
+
+	if c.pendingLess {
+		c.pendingLess = false
+		text := ev.Text
+		if text == "" && len(ev.Rows) > 0 {
+			var sb strings.Builder
+			for _, row := range ev.Rows {
+				sb.WriteString(row.Raw)
+				sb.WriteByte('\n')
+			}
+			text = sb.String()
+		}
+		c.enterLess(text, "")
 		return
 	}
 
@@ -955,7 +1002,10 @@ func isFollowPipeline(pipeline string) bool {
 }
 
 // splitTerminalStage checks if the pipeline ends with a terminal command
-// (less, more) and splits it off.
+// (less, more) and splits it off. The termPart is the bare command name
+// ("less" or "more") rather than the whole last-stage string — the
+// caller doesn't need flags today and stripping them avoids confusing
+// future pager invocations with stray argv.
 func splitTerminalStage(pipeline string) (weftPart, termPart string) {
 	idx := strings.LastIndex(pipeline, "|")
 	if idx == -1 {
@@ -964,9 +1014,16 @@ func splitTerminalStage(pipeline string) (weftPart, termPart string) {
 	lastStage := strings.TrimSpace(pipeline[idx+1:])
 	cmd := strings.Fields(lastStage)
 	if len(cmd) > 0 && terminalCommands[cmd[0]] {
-		return strings.TrimSpace(pipeline[:idx]), lastStage
+		return strings.TrimSpace(pipeline[:idx]), cmd[0]
 	}
 	return pipeline, ""
+}
+
+// SplitTerminalStage is the exported form for non-interactive callers
+// (e.g. `weft sh -c 'cat foo.log | less'`) that want to strip a pager
+// suffix before sending the pipeline to the coordinator.
+func SplitTerminalStage(pipeline string) (weftPart, termPart string) {
+	return splitTerminalStage(pipeline)
 }
 
 // ── Output helpers ──────────────────────────────────────────

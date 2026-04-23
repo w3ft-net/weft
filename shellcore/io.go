@@ -141,6 +141,7 @@ const (
 	ModeSearching             // reverse-i-search
 	ModeVim                   // editing a file with the vim emulator
 	ModeCapture               // capturing stdin for redirect (cat > /path)
+	ModeLess                  // paging long output through the less viewer
 )
 
 // Action is a request from the core to the renderer for async work.

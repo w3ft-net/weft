@@ -8,11 +8,11 @@ import (
 
 // builtinCommands are the commands available for tab completion.
 var builtinCommands = []string{
-	"awk", "cat", "cd", "cut", "grep", "head", "jq", "less", "ls", "more",
+	"awk", "cat", "cd", "cut", "grep", "head", "jq", "less", "ls",
 	"paste", "rev", "rm", "sed", "seq", "sort", "tac", "tail", "tee",
 	"tr", "uniq", "vi", "wc", "which", "xargs",
 	// weft builtins
-	"apps", "clear", "exit", "help", "range",
+	"apps", "clear", "exit", "help", "man", "range",
 }
 
 // Completer manages inline bash-style tab completion.
