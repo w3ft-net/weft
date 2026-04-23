@@ -36,6 +36,35 @@ func MinWatchInterval(tier string) time.Duration {
 	}
 }
 
+// LogRetention returns how long log data is retained for a given plan
+// tier. Mirrors the pricing table on the landing page — this is what
+// customers are paying for, so treat these values as contractual.
+//
+// Enforcement is query-side only today: callers filter rows older than
+// this cap before returning them to the user. Data on disk can live
+// longer (up to the global pyramid boundary in Postgres, indefinitely
+// in S3) — see docs/plans/retention-enforcement.md for the path to
+// real storage-side enforcement.
+func LogRetention(tier string) time.Duration {
+	switch tier {
+	case "swatch":
+		return 30 * 24 * time.Hour
+	case "yard":
+		return 90 * 24 * time.Hour
+	case "bolt":
+		return 365 * 24 * time.Hour
+	default:
+		return 24 * time.Hour // trial
+	}
+}
+
+// MetricRetention returns how long log-derived metrics (cron_results
+// and its rollups) are retained. By construction this equals
+// LogRetention — retaining a metric past its source logs would be
+// misleading — so callers that care about either can use whichever
+// name reads clearer.
+func MetricRetention(tier string) time.Duration { return LogRetention(tier) }
+
 // User represents a weft user. A user belongs to a customer (org).
 // The composite unique index allows a user to exist under multiple customers.
 type User struct {

@@ -345,7 +345,16 @@ type CronAggStats struct {
 // single SQL aggregate — alert uses this in place of loading rows and
 // reducing in Go. Pass tag="" for single-row mode (which stores tag='' by
 // default, so the filter still matches) or for cross-tag aggregates.
-func (s *Store) CronAggregate(cronWatchID uint, since time.Time, tag string) (CronAggStats, error) {
+//
+// Routes to the coarsest rollup tier whose data covers the requested
+// window — raw (0–7d), hourly (7–14d), 4h (14–35d), daily (>35d). Also
+// clamps `since` up to (now − LogRetention(tier)) so the API never
+// returns data past the caller's plan retention even while it sits on
+// disk. See docs/plans/retention-enforcement.md.
+func (s *Store) CronAggregate(customerID, cronWatchID uint, since time.Time, tag string) (CronAggStats, error) {
+	since = clampRetention(s.TierForCustomer(customerID), since)
+	gran := pickGranularity(time.Since(since))
+
 	var row struct {
 		Avg     *float64
 		Min     *float64
@@ -353,13 +362,15 @@ func (s *Store) CronAggregate(cronWatchID uint, since time.Time, tag string) (Cr
 		Samples int
 	}
 	query := `
-		SELECT AVG(value) AS avg,
-		       MIN(value) AS min,
-		       MAX(value) AS max,
-		       COUNT(value) AS samples
-		FROM cron_results
-		WHERE cron_watch_id = ? AND ran_at >= ? AND value IS NOT NULL`
-	args := []any{cronWatchID, since}
+		SELECT SUM(sum) / NULLIF(SUM(count), 0) AS avg,
+		       MIN(min)                         AS min,
+		       MAX(max)                         AS max,
+		       COALESCE(SUM(count), 0)          AS samples
+		FROM cron_results_all
+		WHERE granularity = ?
+		  AND cron_watch_id = ?
+		  AND bucket_start >= ?`
+	args := []any{gran, cronWatchID, since}
 	if tag != "" {
 		query += " AND tag = ?"
 		args = append(args, tag)
@@ -371,7 +382,13 @@ func (s *Store) CronAggregate(cronWatchID uint, since time.Time, tag string) (Cr
 // CronNonEmptyCount returns how many rows in [since, now) had non-empty
 // stdout, optionally scoped to a tag. Used by `alert absent --duration
 // <dur>` to tell whether any data arrived in the window.
-func (s *Store) CronNonEmptyCount(cronWatchID uint, since time.Time, tag string) (int, error) {
+//
+// Raw-only: rollups don't carry stdout. Windows past the raw retention
+// (7d) will return 0 regardless of actual history — if you need to ask
+// "was there ever any output in the last 30 days" you're outside what
+// the `absent` alert is designed for.
+func (s *Store) CronNonEmptyCount(customerID, cronWatchID uint, since time.Time, tag string) (int, error) {
+	since = clampRetention(s.TierForCustomer(customerID), since)
 	var n int64
 	query := `
 		SELECT COUNT(*) FROM cron_results
@@ -387,15 +404,73 @@ func (s *Store) CronNonEmptyCount(cronWatchID uint, since time.Time, tag string)
 
 // QueryCronResults returns results for a named watch within a time range,
 // scoped to a customer. Used by weft.* functions in /bin/ scripts.
+//
+// Raw-only — the full CronResult row (with stdout/stderr/exit_code)
+// only exists in the unrolled raw table. `since` is clamped to the
+// caller's plan retention before the query runs.
 func (s *Store) QueryCronResults(customerID uint, watchName string, since time.Time) ([]CronResult, error) {
 	var watch CronWatch
 	if err := s.db.Where("customer_id = ? AND name = ?", customerID, watchName).First(&watch).Error; err != nil {
 		return nil, err
 	}
+	since = clampRetention(s.TierForCustomer(customerID), since)
 	var results []CronResult
 	err := s.db.Where("cron_watch_id = ? AND ran_at >= ?", watch.ID, since).
 		Order("ran_at DESC").Find(&results).Error
 	return results, err
+}
+
+// pickGranularity returns the coarsest rollup tier whose retention
+// covers the requested window. Boundaries match the pg_partman
+// retention ceilings in migration 026.
+func pickGranularity(window time.Duration) string {
+	switch {
+	case window <= 7*24*time.Hour:
+		return "raw"
+	case window <= 14*24*time.Hour:
+		return "hourly"
+	case window <= 35*24*time.Hour:
+		return "4h"
+	default:
+		return "daily"
+	}
+}
+
+// clampRetention pushes `since` forward to (now - LogRetention(tier))
+// when the requested window exceeds the plan's retention, so callers
+// never read rows older than the plan allows — even though the rows
+// may still exist on disk.
+func clampRetention(tier string, since time.Time) time.Time {
+	cap := time.Now().Add(-LogRetention(tier))
+	if since.Before(cap) {
+		return cap
+	}
+	return since
+}
+
+// TierForCustomer returns the active subscription tier for a customer.
+// Empty string ("" → "trial" in LogRetention) when no active sub is
+// found — conservatively treat unknown customers as trial so we never
+// over-serve data.
+//
+// NOTE: subscriptions.customer_id is a TEXT column that stores the
+// customer *name*, not the numeric id (see store/subscription.go).
+// That's historical — we'd rename it if we were starting over.
+func (s *Store) TierForCustomer(customerID uint) string {
+	var tier string
+	err := s.db.Raw(`
+		SELECT s.tier
+		FROM subscriptions s
+		JOIN customers c ON s.customer_id = c.name
+		WHERE c.id = ?
+		  AND s.status = 'active'
+		  AND (s.expires_at IS NULL OR s.expires_at > now())
+		ORDER BY s.created_at DESC
+		LIMIT 1`, customerID).Scan(&tier).Error
+	if err != nil {
+		return ""
+	}
+	return tier
 }
 
 // LatestCronResult returns the most recent result for a named watch.

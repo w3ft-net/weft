@@ -123,7 +123,7 @@ func evaluateAlertRow(r alertRow, parsed *shellcore.AlertArgs, condStr string, c
 	// Window aggregates (per-tag when we have one).
 	var stats store.CronAggStats
 	if parsed.Duration > 0 && ctx.Store != nil && ctx.Watch != nil {
-		stats, _ = ctx.Store.CronAggregate(ctx.Watch.ID, time.Now().Add(-parsed.Duration), r.tag)
+		stats, _ = ctx.Store.CronAggregate(ctx.CustomerID, ctx.Watch.ID, time.Now().Add(-parsed.Duration), r.tag)
 	}
 
 	// Previous tick's value for this same tag (changed/rising/falling).
@@ -217,7 +217,7 @@ func evaluateAlertRow(r alertRow, parsed *shellcore.AlertArgs, condStr string, c
 		if parsed.Duration == 0 {
 			triggered = r.value == ""
 		} else if ctx.Store != nil && ctx.Watch != nil {
-			n, _ := ctx.Store.CronNonEmptyCount(ctx.Watch.ID, time.Now().Add(-parsed.Duration), r.tag)
+			n, _ := ctx.Store.CronNonEmptyCount(ctx.CustomerID, ctx.Watch.ID, time.Now().Add(-parsed.Duration), r.tag)
 			triggered = n == 0
 		} else {
 			triggered = r.value == ""
