@@ -10,7 +10,7 @@ const NAV_ITEMS = [
   { to: '/namespaces', label: 'Namespaces', icon: '◫' },
   { to: '/downloads', label: 'Downloads', icon: '↓' },
   { to: '/account', label: 'Account', icon: '⚙' },
-  { to: '/docs', label: 'Docs', icon: '?' },
+  { to: '/manual', label: 'Manual', icon: '?' },
 ]
 
 export default function SidebarNav() {

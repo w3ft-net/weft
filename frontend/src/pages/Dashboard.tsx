@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import SidebarNav from '../components/SidebarNav'
 import {
   getWatches, getWatchResults, getFunctions, getIngestionStatus,
+  dismissWelcome as apiDismissWelcome,
   type CronWatch, type CronResult, type ShellFunction,
 } from '../lib/api'
+import { useAuth } from '../lib/AuthContext'
 import './Dashboard.css'
 
 function timeAgo(iso: string): string {
@@ -352,23 +354,132 @@ function FunctionsCard({ functions }: { functions: ShellFunction[] }) {
 
 // ── Welcome Modal ─────────────────────────────────────────────────────────
 
+type Slide = {
+  title: string
+  body: React.ReactNode
+}
+
+// welcomeSlides is a short, paced introduction shown once per user —
+// what weft is, how to feed it logs, and where to go next. Each slide
+// references the manual for depth rather than trying to be a tutorial
+// in its own right.
+function welcomeSlides(onDismiss: () => void): Slide[] {
+  return [
+    {
+      title: 'What is weft?',
+      body: (
+        <p className="welcome-text">
+          weft is a log analysis service. You connect AWS accounts or
+          install a small agent, and every log line lands in weft's
+          time-sharded store. You query them with the weft shell using
+          familiar Unix idioms — grep, awk, jq — backed by a planner
+          that pushes predicates into SQL so it stays fast.
+        </p>
+      ),
+    },
+    {
+      title: 'Hook up a source',
+      body: (
+        <>
+          <p className="welcome-text">
+            Start by creating a namespace, then pick an ingest path:
+          </p>
+          <ul className="welcome-list">
+            <li>
+              <Link to="/namespaces" onClick={onDismiss} data-testid="welcome-namespaces-link">
+                Namespaces
+              </Link>{' '}
+              — create a namespace and issue an agent token.
+            </li>
+            <li>
+              <Link to="/downloads" onClick={onDismiss} data-testid="welcome-downloads-link">
+                Downloads
+              </Link>{' '}
+              — install <code>weftd</code> on a server you own.
+            </li>
+            <li>
+              <Link to="/manual#connect-cloudwatch" onClick={onDismiss} data-testid="welcome-cloudwatch-link">
+                CloudWatch
+              </Link>{' '}
+              — grant a cross-account role and point weft at a log group.
+            </li>
+          </ul>
+        </>
+      ),
+    },
+    {
+      title: 'Try the shell',
+      body: (
+        <>
+          <p className="welcome-text">
+            Once logs are flowing, open the{' '}
+            <Link to="/shell" onClick={onDismiss} data-testid="welcome-shell-link">Shell</Link>{' '}
+            and try <code>cat *.log | head</code>. From there, type{' '}
+            <code>help</code> for the topic index or check the{' '}
+            <Link to="/manual" onClick={onDismiss} data-testid="welcome-manual-link">Manual</Link>{' '}
+            for reference.
+          </p>
+        </>
+      ),
+    },
+  ]
+}
+
 function WelcomeModal({ onDismiss }: { onDismiss: () => void }) {
+  const [idx, setIdx] = useState(0)
+  const slides = welcomeSlides(onDismiss)
+  const slide = slides[idx]
+  const isLast = idx === slides.length - 1
+
   return (
     <div className="welcome-overlay" data-testid="welcome-modal">
       <div className="welcome-card">
-        <h2 className="welcome-title">Welcome to weft</h2>
-        <p className="welcome-text">
-          Your account is ready. Head over to the{' '}
-          <Link to="/docs" onClick={onDismiss} data-testid="welcome-docs-link">docs</Link>{' '}
-          to get started with your first namespace, install the agent, and run your first query.
-        </p>
-        <button
-          className="login-submit"
-          onClick={onDismiss}
-          data-testid="welcome-dismiss-button"
-        >
-          Got it
-        </button>
+        <h2 className="welcome-title" data-testid="welcome-slide-title">
+          {slide.title}
+        </h2>
+        <div className="welcome-body" data-testid={`welcome-slide-${idx + 1}`}>
+          {slide.body}
+        </div>
+
+        <div className="welcome-footer">
+          <div className="welcome-dots" data-testid="welcome-dots">
+            {slides.map((_, i) => (
+              <span
+                key={i}
+                className={`welcome-dot ${i === idx ? 'welcome-dot-active' : ''}`}
+              />
+            ))}
+          </div>
+
+          <div className="welcome-actions">
+            {idx > 0 && (
+              <button
+                className="welcome-back"
+                onClick={() => setIdx(idx - 1)}
+                data-testid="welcome-back-button"
+              >
+                Back
+              </button>
+            )}
+            {!isLast ? (
+              <button
+                className="login-submit"
+                onClick={() => setIdx(idx + 1)}
+                data-testid="welcome-next-button"
+              >
+                Next
+              </button>
+            ) : (
+              <button
+                className="login-submit"
+                onClick={onDismiss}
+                data-testid="welcome-dismiss-button"
+              >
+                Got it
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -377,24 +488,25 @@ function WelcomeModal({ onDismiss }: { onDismiss: () => void }) {
 // ── Main Dashboard ─────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
-  const [showWelcome, setShowWelcome] = useState(false)
+  const { user } = useAuth()
+  const [welcomeDismissed, setWelcomeDismissed] = useState(false)
   const [watches, setWatches] = useState<WatchWithResults[]>([])
   const [watchMeta, setWatchMeta] = useState<{ count: number; limit: number; min_interval: string }>({ count: 0, limit: 0, min_interval: '' })
   const [functions, setFunctions] = useState<ShellFunction[]>([])
   const [affectedApps, setAffectedApps] = useState<string[]>([])
 
-  useEffect(() => {
-    if (searchParams.get('welcome') === '1' && !localStorage.getItem('weft_welcome_seen')) {
-      setShowWelcome(true)
-    }
-  }, [searchParams])
+  // Show the welcome modal until the user dismisses it. The server
+  // remembers the choice via POST /api/account/welcome-dismiss, so
+  // subsequent logins skip the modal. We also keep a local
+  // `welcomeDismissed` flag so the modal can close without waiting
+  // for /api/auth/me to round-trip.
+  const showWelcome = user?.has_seen_welcome === false && !welcomeDismissed
 
   function dismissWelcome() {
-    localStorage.setItem('weft_welcome_seen', '1')
-    setShowWelcome(false)
-    navigate('/dashboard', { replace: true })
+    setWelcomeDismissed(true)
+    // Fire-and-forget: if the POST fails the modal will re-appear on
+    // next login, which is the correct failure mode.
+    apiDismissWelcome().catch(() => {})
   }
 
   useEffect(() => {
@@ -417,8 +529,6 @@ export default function Dashboard() {
       .then(resp => setAffectedApps(resp.affected_apps || []))
       .catch(() => {})
   }, [])
-
-  void navigate // used in child components
 
   return (
     <div className="app-layout">

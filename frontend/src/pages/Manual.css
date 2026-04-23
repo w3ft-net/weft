@@ -1,9 +1,9 @@
-.docs-content {
+.manual-content {
   max-width: 760px;
   padding: 48px 36px;
 }
 
-.docs-page-title {
+.manual-page-title {
   font-family: var(--font-mono);
   font-size: 1.4rem;
   font-weight: 600;
@@ -11,11 +11,11 @@
   margin-bottom: 36px;
 }
 
-.docs-section {
+.manual-section {
   margin-bottom: 48px;
 }
 
-.docs-section h2 {
+.manual-section h2 {
   font-family: var(--font-mono);
   font-size: 1.15rem;
   font-weight: 600;
@@ -24,7 +24,7 @@
   padding-top: 16px;
 }
 
-.docs-section h3 {
+.manual-section h3 {
   font-family: var(--font-mono);
   font-size: 0.95rem;
   font-weight: 600;
@@ -33,24 +33,24 @@
   margin-bottom: 10px;
 }
 
-.docs-section p {
+.manual-section p {
   font-size: 0.92rem;
   color: var(--text-secondary);
   line-height: 1.7;
   margin-bottom: 14px;
 }
 
-.docs-section a {
+.manual-section a {
   color: var(--accent);
   text-decoration: none;
   transition: color 0.2s;
 }
 
-.docs-section a:hover {
+.manual-section a:hover {
   color: var(--accent-hover);
 }
 
-.docs-section code {
+.manual-section code {
   font-family: var(--font-mono);
   font-size: 0.85em;
   background: var(--bg-surface);
@@ -59,49 +59,23 @@
   color: var(--cyan);
 }
 
-.docs-section ul,
-.docs-section ol {
+.manual-section ul,
+.manual-section ol {
   padding-left: 24px;
   margin-bottom: 14px;
 }
 
-.docs-section li {
+.manual-section li {
   font-size: 0.92rem;
   color: var(--text-secondary);
   line-height: 1.7;
   margin-bottom: 6px;
 }
 
-.docs-getting-started {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-bright);
-  border-radius: 8px;
-  padding: 28px 32px;
-}
-
-.docs-getting-started h2 {
-  padding-top: 0;
-}
-
-.docs-steps {
-  padding-left: 24px;
-}
-
-.docs-steps li {
-  margin-bottom: 8px;
-}
-
-.docs-steps a {
-  color: var(--accent);
-  text-decoration: none;
-  font-weight: 500;
-}
-
-.docs-steps a:hover {
-  color: var(--accent-hover);
-}
-
-.docs-code {
+/* Code fences from goldmark arrive as <pre><code>…</code></pre>.
+   Style the outer pre as the code block and let the nested <code>
+   inherit — don't double up background. */
+.manual-section pre {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -113,4 +87,32 @@
   overflow-x: auto;
   margin-bottom: 16px;
   white-space: pre;
+}
+
+.manual-section pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  color: inherit;
+  font-size: inherit;
+}
+
+.manual-toc {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 36px 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px 20px;
+}
+
+.manual-toc a {
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 0.9rem;
+  transition: color 0.2s;
+}
+
+.manual-toc a:hover {
+  color: var(--accent);
 }

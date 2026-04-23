@@ -1,0 +1,128 @@
+---
+id: manual-cloudwatch
+title: Connect a CloudWatch source
+web:
+  section: connect-cloudwatch
+  order: 40
+---
+
+## Connect a CloudWatch source
+
+If your logs already land in AWS CloudWatch Logs — Lambda, ECS/Fargate,
+API Gateway, RDS, or anything else that writes to a log group — weft can
+ingest directly without installing an agent. You grant a cross-account
+IAM role, point weft at a log group, and weft polls CloudWatch on a
+schedule (default 30s).
+
+This is the lowest-friction source type: nothing to install, nothing to
+run. Latency is bounded by CloudWatch's own ingestion delay plus the
+poll interval — usually well under a minute. For sub-second tailing
+install weftd instead.
+
+### 1. Create the cross-account IAM role
+
+In the AWS account that owns the log group, create an IAM role that
+trusts weft's ingestion account and has read access to the log group.
+Pick an external ID — any hard-to-guess string — and keep it secret;
+you'll paste it into weft in step 3.
+
+```
+# Trust policy — allows weft's ingestion account to assume this role,
+# but only when it presents the matching external ID.
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": { "AWS": "arn:aws:iam::220664822695:root" },
+    "Action": "sts:AssumeRole",
+    "Condition": {
+      "StringEquals": { "sts:ExternalId": "REPLACE-WITH-YOUR-EXTERNAL-ID" }
+    }
+  }]
+}
+
+# Permissions policy — read-only access to the log group(s) you share.
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "logs:FilterLogEvents",
+      "logs:DescribeLogGroups",
+      "logs:DescribeLogStreams"
+    ],
+    "Resource": "arn:aws:logs:us-east-2:123456789012:log-group:/aws/lambda/my-fn:*"
+  }]
+}
+```
+
+Scope `Resource` to a single log group (recommended) or a prefix
+(`.../log-group:/aws/lambda/*`) to share a whole tier at once. Note the
+trailing `:*` — CloudWatch Logs ARNs require it.
+
+### 2. Write a schema file
+
+Weft needs to know how to parse each log line. The schema file is a
+short YAML document that names the app and tells weft where to find the
+timestamp. For a typical CloudWatch-flavored line
+(`2026-04-18 14:32:01 INFO {"user":"alice"}`):
+
+```
+# my-app.schema.yaml
+app: my-app
+format: text
+timestamp_field: "1"            # 1-indexed field number
+timestamp_fields: 2             # how many fields make up the timestamp
+timestamp_format: "2006-01-02 15:04:05"  # Go time layout
+```
+
+If your lines are pure JSON (Lambda's structured logs, for example),
+use `format: json` and point `timestamp_field` at the JSON key instead:
+
+```
+app: my-lambda
+format: json
+timestamp_field: time         # the JSON key holding the timestamp
+timestamp_format: "2006-01-02T15:04:05.000Z"
+```
+
+### 3. Register the source
+
+Use the `weft` CLI to tell weft about the account and log group.
+Run this from any machine with the `weft` binary installed and a
+valid login.
+
+```
+weft source add \
+  --app my-app \
+  --log-group /aws/lambda/my-fn \
+  --account 123456789012 \
+  --role-arn arn:aws:iam::123456789012:role/weft-ingest \
+  --external-id REPLACE-WITH-YOUR-EXTERNAL-ID \
+  --region us-east-2 \
+  --interval 30s \
+  --schema ./my-app.schema.yaml
+```
+
+Within one poll interval weft will assume the role, page through
+recent log events, and start writing rows. Confirm the source is live:
+
+```
+weft source list
+
+# And in the shell
+cat /log/my-app.log | head
+```
+
+### Troubleshooting
+
+- **No rows appearing** — the most common causes are a missing
+  external ID, the role's resource ARN not matching your log group, or
+  the log group being in a different region than you specified. Revisit
+  step 1 and confirm each matches.
+- **Rows appearing but fields look wrong** — your schema's
+  `timestamp_format` is off. Check against Go's reference time
+  (`Mon Jan 2 15:04:05 MST 2006`).
+- **CloudWatch charges** — weft's poller uses `FilterLogEvents`, which
+  AWS bills as data scanned. If cost matters, raise `--interval` (fewer
+  calls) or scope your log group tightly.

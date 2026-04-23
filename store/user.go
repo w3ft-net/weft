@@ -46,6 +46,10 @@ type User struct {
 	Name               string
 	StripeCustomerID   string
 	CanCreateNamespace bool `gorm:"not null;default:false"`
+	// HasSeenWelcome flips true when the user dismisses the first-time
+	// welcome modal. The modal re-shows on every login until the flip
+	// happens — new users get one chance per session to read the tour.
+	HasSeenWelcome bool `gorm:"not null;default:false"`
 	// EmailVerifiedAt is the timestamp when the user proved ownership of
 	// their email by clicking a magic-link. Nil on a fresh signup until
 	// the round-trip completes. State-changing API endpoints block on
@@ -164,6 +168,17 @@ func (s *Store) MarkUserVerified(userID string) error {
 		Updates(map[string]any{
 			"email_verified_at": &now,
 			"updated_at":        now,
+		}).Error
+}
+
+// MarkWelcomeSeen flips HasSeenWelcome to true. Idempotent — re-dismiss
+// doesn't touch UpdatedAt if the flag is already set.
+func (s *Store) MarkWelcomeSeen(userID string) error {
+	return s.db.Model(&User{}).
+		Where("id = ? AND has_seen_welcome = FALSE", userID).
+		Updates(map[string]any{
+			"has_seen_welcome": true,
+			"updated_at":       time.Now(),
 		}).Error
 }
 

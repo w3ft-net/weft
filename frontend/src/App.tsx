@@ -10,7 +10,7 @@ import Downloads from './pages/Downloads'
 import Account from './pages/Account'
 import Device from './pages/Device'
 import Namespaces from './pages/Namespaces'
-import Docs from './pages/Docs'
+import Manual from './pages/Manual'
 import ProtectedRoute from './components/ProtectedRoute'
 
 export default function App() {
@@ -41,8 +41,8 @@ export default function App() {
       <Route path="/device" element={
         <ProtectedRoute><Device /></ProtectedRoute>
       } />
-      <Route path="/docs" element={
-        <ProtectedRoute><Docs /></ProtectedRoute>
+      <Route path="/manual" element={
+        <ProtectedRoute><Manual /></ProtectedRoute>
       } />
     </Routes>
   )

@@ -214,6 +214,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/auth/me", s.handleMe)
 	auth.HandleFunc("POST /api/auth/device/approve", s.handleDeviceApprove)
 	auth.HandleFunc("POST /api/auth/resend-verification", s.handleResendVerification)
+	auth.HandleFunc("POST /api/account/welcome-dismiss", s.handleWelcomeDismiss)
 	auth.HandleFunc("POST /api/billing/checkout", s.handleCheckout)
 	auth.HandleFunc("POST /api/billing/setup-intent", s.handleSetupIntent)
 	auth.HandleFunc("GET /api/billing/usage", s.handleUsage)
@@ -470,6 +471,24 @@ func (s *Server) handleResendVerification(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(map[string]any{"status": "sent"})
 }
 
+// handleWelcomeDismiss flips the caller's HasSeenWelcome flag to true.
+// Idempotent — re-dismiss returns 200 without touching UpdatedAt. The
+// frontend calls this when the welcome modal closes; subsequent logins
+// skip the modal because /api/auth/me reports has_seen_welcome: true.
+func (s *Server) handleWelcomeDismiss(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if err := s.store.MarkWelcomeSeen(claims.UserID); err != nil {
+		log.Printf("welcome-dismiss: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+}
+
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Token   string `json:"token"`
@@ -630,12 +649,13 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]any{
-		"id":             user.ID,
-		"email":          user.Email,
-		"name":           user.Name,
-		"tier":           tier,
-		"customer":       user.CustomerName,
-		"email_verified": user.EmailVerifiedAt != nil,
+		"id":               user.ID,
+		"email":            user.Email,
+		"name":             user.Name,
+		"tier":             tier,
+		"customer":         user.CustomerName,
+		"email_verified":   user.EmailVerifiedAt != nil,
+		"has_seen_welcome": user.HasSeenWelcome,
 	}
 	if user.EmailVerifiedAt == nil {
 		resp["verification_deadline"] = user.CreatedAt.Add(auth.UnverifiedGracePeriod).Unix()

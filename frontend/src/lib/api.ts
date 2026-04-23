@@ -194,6 +194,14 @@ export interface User {
   customer: string
   email_verified?: boolean
   verification_deadline?: number // unix seconds; present only when unverified
+  has_seen_welcome?: boolean
+}
+
+// Flips the authenticated user's has_seen_welcome flag to true. Call
+// on welcome-modal dismiss so the modal doesn't re-appear on the next
+// login. Server-side is idempotent.
+export function dismissWelcome(): Promise<void> {
+  return apiFetch('/api/account/welcome-dismiss', { method: 'POST' })
 }
 
 export interface Usage {
