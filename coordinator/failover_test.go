@@ -22,9 +22,9 @@ var failoverRange = TimeRange{
 func TestFailover_EmptyThenRecover(t *testing.T) {
 	// Start with zero shards — simulates startup during ASG replacement
 	// when no shard instances are InService yet.
-	c := NewCoordinator(nil, "kevlar", nil)
+	c := NewCoordinator(nil, nil)
 
-	res, err := c.Query("cat vimgym.log", failoverRange)
+	res, err := c.Query("cat vimgym.log", failoverRange, "kevlar")
 	if err != nil {
 		t.Fatalf("query with no shards should not error, got: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 		CreatedAt: time.Now(),
 	})
 
-	res, err = c.Query("cat vimgym.log", failoverRange)
+	res, err = c.Query("cat vimgym.log", failoverRange, "kevlar")
 	if err != nil {
 		t.Fatalf("query after adding shard: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestFailover_ShardReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := NewCoordinator(nil, "kevlar", nil)
+	c := NewCoordinator(nil, nil)
 	c.Registry.Add(&ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: t0, WindowEnd: t1,
@@ -80,7 +80,7 @@ func TestFailover_ShardReplacement(t *testing.T) {
 		CreatedAt: time.Now(),
 	})
 
-	res, err := c.Query("cat vimgym.log", failoverRange)
+	res, err := c.Query("cat vimgym.log", failoverRange, "kevlar")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
 	}
 
 	apps := []string{"vimgym", "callbox"}
-	c := NewCoordinator(nil, "kevlar", nil)
+	c := NewCoordinator(nil, nil)
 	c.Registry.Add(&ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: t0, WindowEnd: t1,
@@ -141,7 +141,7 @@ func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 20; j++ {
-				_, err := c.Query("cat vimgym.log", failoverRange)
+				_, err := c.Query("cat vimgym.log", failoverRange, "kevlar")
 				if err != nil {
 					errors <- err
 				}
@@ -175,7 +175,7 @@ func TestFailover_GetShardsSnapshot(t *testing.T) {
 	}
 	defer s0.Close()
 
-	c := NewCoordinator(nil, "kevlar", nil)
+	c := NewCoordinator(nil, nil)
 	c.Registry.Add(&ShardEntry{
 		ID: "shard-0", Apps: []string{"vimgym"},
 		WindowStart: t0, WindowEnd: t1,

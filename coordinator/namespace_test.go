@@ -82,7 +82,7 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 		t.Fatalf("ingest: %v", err)
 	}
 
-	c := NewCoordinator(nil, "graybeard", nil)
+	c := NewCoordinator(nil, nil)
 	c.Registry.Add(&ShardEntry{
 		ID:          "ns-shard-0",
 		Apps:        []string{"weft/coordinator", "weft/shard", "weft/metrics", "grantcentral"},
@@ -105,7 +105,7 @@ var nsRange = TimeRange{
 func TestNamespaceQuery_All(t *testing.T) {
 	c := setupNamespaceCoordinator(t)
 
-	result, err := c.Query("cat /log/weft.log", nsRange)
+	result, err := c.Query("cat /log/weft.log", nsRange, "graybeard")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestNamespaceQuery_All(t *testing.T) {
 func TestNamespaceQuery_SubApp(t *testing.T) {
 	c := setupNamespaceCoordinator(t)
 
-	result, err := c.Query("cat /log/weft/coordinator.log", nsRange)
+	result, err := c.Query("cat /log/weft/coordinator.log", nsRange, "graybeard")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestNamespaceQuery_SubApp(t *testing.T) {
 func TestNamespaceQuery_Metrics(t *testing.T) {
 	c := setupNamespaceCoordinator(t)
 
-	result, err := c.Query("cat /log/weft/metrics.log", nsRange)
+	result, err := c.Query("cat /log/weft/metrics.log", nsRange, "graybeard")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestNamespaceQuery_Metrics(t *testing.T) {
 func TestNamespaceQuery_HeadTail(t *testing.T) {
 	c := setupNamespaceCoordinator(t)
 
-	result, err := c.Query("head -3 /log/weft.log", nsRange)
+	result, err := c.Query("head -3 /log/weft.log", nsRange, "graybeard")
 	if err != nil {
 		t.Fatalf("head query: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestNamespaceQuery_HeadTail(t *testing.T) {
 		t.Errorf("expected 3 rows for head -3, got %d", len(result.Rows))
 	}
 
-	result, err = c.Query("tail -3 /log/weft.log", nsRange)
+	result, err = c.Query("tail -3 /log/weft.log", nsRange, "graybeard")
 	if err != nil {
 		t.Fatalf("tail query: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestNamespaceQuery_FilterAcrossSubApps(t *testing.T) {
 	c := setupNamespaceCoordinator(t)
 
 	// grep for "coordinator" — should only match weft/coordinator rows
-	result, err := c.Query(`cat /log/weft.log | grep coordinator`, nsRange)
+	result, err := c.Query(`cat /log/weft.log | grep coordinator`, nsRange, "graybeard")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestNamespaceQuery_FilterAcrossSubApps(t *testing.T) {
 	}
 
 	// awk filter on instance — should match only shard rows
-	result, err = c.Query(`cat /log/weft.log | awk '$INSTANCE == "i-shard-001"'`, nsRange)
+	result, err = c.Query(`cat /log/weft.log | awk '$INSTANCE == "i-shard-001"'`, nsRange, "graybeard")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}

@@ -33,7 +33,7 @@ func TestCronShareScriptAcrossWatches(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := &Coordinator{Store: db, CustomerID: custID}
+	c := &Coordinator{Store: db}
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
 	diskResult, err := c.QueryForWatch(strings.TrimSpace(diskW.Pipeline), tr, diskW)
@@ -70,7 +70,7 @@ func TestCronBareNameStillWorks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := &Coordinator{Store: db, CustomerID: custID}
+	c := &Coordinator{Store: db}
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	result, err := c.QueryForWatch(strings.TrimSpace(w.Pipeline), tr, w)
 	if err != nil {

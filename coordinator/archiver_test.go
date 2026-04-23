@@ -57,7 +57,7 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 	t.Cleanup(func() { cold.Close() })
 
 	// Build coordinator with both shards.
-	c := NewCoordinator(nil, "kevlar", nil)
+	c := NewCoordinator(nil, nil)
 	c.Registry.Add(&ShardEntry{
 		ID: "shard-live", Apps: []string{"vimgym"},
 		WindowStart: t1, WindowEnd: t2, State: StateIngesting, Shard: live,
@@ -68,7 +68,7 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 	})
 
 	// Query spanning both windows.
-	result, err := c.Query("cat vimgym.log", TimeRange{Start: t0, End: t2})
+	result, err := c.Query("cat vimgym.log", TimeRange{Start: t0, End: t2}, "kevlar")
 	if err != nil {
 		t.Fatal(err)
 	}

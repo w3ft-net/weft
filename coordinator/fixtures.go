@@ -69,7 +69,6 @@ func NewDevCoordinator() (*Coordinator, func(), error) {
 
 	c := NewCoordinator(
 		[]shard.Shard{s0, s1},
-		"kevlar",
 		&compute.LocalComputePool{Parallelism: 2},
 	)
 

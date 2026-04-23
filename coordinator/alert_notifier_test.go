@@ -17,11 +17,16 @@ import (
 // error, not the fallback's.
 func TestQuery_InteractiveAlertUsesCoordinatorNotifier(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
+	_ = custID
+
+	cust, err := db.GetCustomerByID(custID)
+	if err != nil {
+		t.Fatalf("get customer: %v", err)
+	}
 
 	c := &Coordinator{
-		Store:      db,
-		CustomerID: custID,
-		Notifier:   NewNotifier(db),
+		Store:    db,
+		Notifier: NewNotifier(db),
 	}
 
 	// No alias is defined in /etc/notify.conf, so Notifier.Send returns
@@ -29,7 +34,7 @@ func TestQuery_InteractiveAlertUsesCoordinatorNotifier(t *testing.T) {
 	// meaning Coordinator.Notifier propagated into the interactive
 	// AlertContext.
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	result, err := c.Query(`echo 40 | alert above 30 --notify=foo`, tr)
+	result, err := c.Query(`echo 40 | alert above 30 --notify=foo`, tr, cust.Name)
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -48,14 +53,18 @@ func TestQuery_InteractiveAlertUsesCoordinatorNotifier(t *testing.T) {
 func TestQuery_InteractiveAlertFallbackWhenNoNotifier(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
+	cust, err := db.GetCustomerByID(custID)
+	if err != nil {
+		t.Fatalf("get customer: %v", err)
+	}
+
 	c := &Coordinator{
-		Store:      db,
-		CustomerID: custID,
+		Store: db,
 		// Notifier: nil
 	}
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	result, err := c.Query(`echo 40 | alert above 30 --notify=foo`, tr)
+	result, err := c.Query(`echo 40 | alert above 30 --notify=foo`, tr, cust.Name)
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}

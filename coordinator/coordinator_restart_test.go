@@ -114,7 +114,7 @@ func TestCoordinator_RediscoveryDoesNotLoseData(t *testing.T) {
 	}
 	t.Cleanup(func() { s0.Close() })
 
-	coord := NewCoordinator(nil, "testcust", nil)
+	coord := NewCoordinator(nil, nil)
 	coord.Registry.Add(&ShardEntry{
 		ID:          "shard-0",
 		Apps:        []string{"myapp"},

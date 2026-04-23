@@ -33,17 +33,18 @@ type QueryResult struct {
 	Stderr string // alert/error output — rendered in red by the shell
 }
 
-// Coordinator routes queries to shards and merges results.
+// Coordinator routes queries to shards and merges results. It holds no
+// customer identity of its own — tenant scope is resolved per-request
+// from the customer name passed to Query / QueryForWatch, which then
+// propagates to ShellFS, AlertContext, and /bin script resolution.
 type Coordinator struct {
 	Registry    *ShardRegistry
-	Customer    string
 	Pool        compute.ComputePool // nil = no compute support
 	Tail        *TailBroker
 	Ingest      *RingBuffer    // write path: IngestStream → buffer → shards
 	Provisioner *Provisioner   // shard lifecycle management (nil = no auto-provisioning)
 	Usage       *CustomerUsageStats // per-customer byte metering
-	Store       *store.Store   // for weft.* functions in /bin/ scripts (nil = disabled)
-	CustomerID  uint           // for weft.* customer scoping
+	Store       *store.Store   // nil = no tenant-scoped features (/bin, alert dispatch)
 	SeenApps    *SeenApps      // distinct app names from ingest stream
 	DLQ         *DLQ           // S3 dead-letter queue for failed ingests
 	Errors      *IngestionErrorRecorder // async error persistence
@@ -92,7 +93,7 @@ func (s *SeenApps) Names(customer string) []string {
 
 // NewCoordinator creates a coordinator with the given initial shard list.
 // Shards are registered with empty Apps (legacy: matches all apps).
-func NewCoordinator(shards []shard.Shard, customer string, pool compute.ComputePool) *Coordinator {
+func NewCoordinator(shards []shard.Shard, pool compute.ComputePool) *Coordinator {
 	reg := NewShardRegistry()
 	for _, s := range shards {
 		reg.Add(&ShardEntry{
@@ -104,7 +105,6 @@ func NewCoordinator(shards []shard.Shard, customer string, pool compute.ComputeP
 	}
 	return &Coordinator{
 		Registry: reg,
-		Customer: customer,
 		Pool:     pool,
 		SeenApps: NewSeenApps(),
 	}
@@ -291,11 +291,7 @@ func (c *Coordinator) IngestingShard(app string) shard.Shard {
 // rows are streamed to the compute pool for post-processing. A trailing
 // `| alert ...` stage, if present, runs in interactive AlertContext after
 // the query; cron uses QueryForWatch to bind the alert to a watch.
-func (c *Coordinator) Query(pipeline string, tr TimeRange, customerOverride ...string) (*QueryResult, error) {
-	customer := c.Customer
-	if len(customerOverride) > 0 && customerOverride[0] != "" {
-		customer = customerOverride[0]
-	}
+func (c *Coordinator) Query(pipeline string, tr TimeRange, customer string) (*QueryResult, error) {
 	return c.query(pipeline, tr, customer, nil)
 }
 
@@ -309,18 +305,40 @@ func (c *Coordinator) QueryForWatch(pipeline string, tr TimeRange, watch *store.
 		Notifier:   c.Notifier,
 		CustomerID: watch.CustomerID,
 	}
-	return c.query(pipeline, tr, "", ctx)
+	// The watch carries its own CustomerID so we can resolve the name
+	// here without a second Store round-trip. Used by the /bin
+	// pre-expand to build a tenant-scoped ShellFS.
+	var custName string
+	if c.Store != nil {
+		if cust, err := c.Store.GetCustomerByID(watch.CustomerID); err == nil {
+			custName = cust.Name
+		}
+	}
+	return c.query(pipeline, tr, custName, ctx)
 }
 
 // query is the shared implementation for Query and QueryForWatch.
 // alertCtx = nil means "use interactive defaults if the pipeline has an
 // alert stage." A non-nil alertCtx binds the alert to that context.
 func (c *Coordinator) query(pipeline string, tr TimeRange, customer string, alertCtx *AlertContext) (*QueryResult, error) {
+	// Resolve the customer name to an ID once. A non-zero result gates
+	// everything tenant-scoped downstream: /bin pre-expand, ShellFS
+	// wiring in runLocal, the interactive AlertContext. Failures here
+	// just mean the request runs without those features (no /bin, no
+	// alert dispatch) — queries against shards still work via the
+	// customer NAME that shard routing already uses.
+	var custID uint
+	if c.Store != nil && customer != "" {
+		if cust, err := c.Store.GetCustomerByName(customer); err == nil {
+			custID = cust.ID
+		}
+	}
+
 	// Pre-expand /bin bash invocations so the planner can see their body
 	// and push down `cat /log/...` stages. Lua and complex bodies pass
 	// through untouched; warp resolves them at execution time.
-	if c.Store != nil && c.CustomerID != 0 {
-		fs := shellfs.New(c.Store, c.CustomerID, nil)
+	if custID != 0 {
+		fs := shellfs.New(c.Store, custID, nil)
 		if expanded, err := expandBinPipeline(pipeline, fs); err != nil {
 			return nil, fmt.Errorf("expand /bin: %w", err)
 		} else {
@@ -334,7 +352,7 @@ func (c *Coordinator) query(pipeline string, tr TimeRange, customer string, aler
 		return nil, fmt.Errorf("plan: %w", err)
 	}
 
-	result, err := c.executeQuery(plan, tr, customer)
+	result, err := c.executeQuery(plan, tr, customer, custID)
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +362,7 @@ func (c *Coordinator) query(pipeline string, tr TimeRange, customer string, aler
 			alertCtx = &AlertContext{
 				Store:       c.Store,
 				Notifier:    c.Notifier,
-				CustomerID:  c.CustomerID,
+				CustomerID:  custID,
 				Interactive: true,
 			}
 		}
@@ -355,12 +373,14 @@ func (c *Coordinator) query(pipeline string, tr TimeRange, customer string, aler
 }
 
 // executeQuery runs the query half of a plan (everything except alert).
-func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, customer string) (*QueryResult, error) {
+// customer is the name used for shard routing; custID (0 if unresolved)
+// scopes tenant-backed features (ShellFS, weft.*).
+func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, customer string, custID uint) (*QueryResult, error) {
 	if plan.Local {
 		if plan.LocalPipeline == "" {
 			return &QueryResult{}, nil
 		}
-		return c.runLocal(plan.LocalPipeline)
+		return c.runLocal(plan.LocalPipeline, custID)
 	}
 
 	// Allowlist: the pipeline's source app (the part before '/') must
@@ -486,8 +506,9 @@ func runAlertStage(result *QueryResult, args []string, ctx *AlertContext) {
 
 // runLocal executes a sourceless pipeline (no log query) through warp locally.
 // The planner strips any trailing `alert` before this point, so the
-// interpreter doesn't need to register it.
-func (c *Coordinator) runLocal(pipeline string) (*QueryResult, error) {
+// interpreter doesn't need to register it. custID (non-zero) scopes the
+// ShellFS and weft.* functions to one tenant; zero disables both.
+func (c *Coordinator) runLocal(pipeline string, custID uint) (*QueryResult, error) {
 	ast, err := bash.Parse(pipeline)
 	if err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
@@ -504,10 +525,10 @@ func (c *Coordinator) runLocal(pipeline string) (*QueryResult, error) {
 
 	// Wire a tenant-scoped ShellFS so /bin scripts resolve server-side for
 	// both bash (PATH resolution) and lua (LangFS-aware dispatch).
-	if c.Store != nil && c.CustomerID != 0 {
-		interp.SetFS(shellfs.New(c.Store, c.CustomerID, nil))
+	if c.Store != nil && custID != 0 {
+		interp.SetFS(shellfs.New(c.Store, custID, nil))
 
-		wf := &WeftFuncs{Store: c.Store, CustomerID: c.CustomerID}
+		wf := &WeftFuncs{Store: c.Store, CustomerID: custID}
 		RegisterWeftCommands(interp, wf)
 		interp.LuaWeftFuncs = wf
 	}

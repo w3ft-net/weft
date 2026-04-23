@@ -16,8 +16,8 @@ func TestRunLocal_BinBashScriptResolution(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 
-	c := &Coordinator{Store: db, CustomerID: custID}
-	result, err := c.runLocal("who alice")
+	c := &Coordinator{Store: db}
+	result, err := c.runLocal("who alice", custID)
 	if err != nil {
 		t.Fatalf("runLocal: %v", err)
 	}
@@ -39,8 +39,8 @@ func TestRunLocal_BinLuaScriptResolution(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 
-	c := &Coordinator{Store: db, CustomerID: custID}
-	result, err := c.runLocal("greet world")
+	c := &Coordinator{Store: db}
+	result, err := c.runLocal("greet world", custID)
 	if err != nil {
 		t.Fatalf("runLocal: %v", err)
 	}
@@ -58,9 +58,9 @@ func TestRunLocal_BinBashPositionalRebinds(t *testing.T) {
 	if err := db.SaveShellFunction(custID, "greet", `echo "hello $1"`); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	c := &Coordinator{Store: db, CustomerID: custID}
+	c := &Coordinator{Store: db}
 
-	alice, err := c.runLocal("greet alice")
+	alice, err := c.runLocal("greet alice", custID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestRunLocal_BinBashPositionalRebinds(t *testing.T) {
 		t.Errorf("greet alice = %q, want `hello alice`", got)
 	}
 
-	bob, err := c.runLocal("greet bob")
+	bob, err := c.runLocal("greet bob", custID)
 	if err != nil {
 		t.Fatal(err)
 	}

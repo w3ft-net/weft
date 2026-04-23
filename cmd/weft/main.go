@@ -174,7 +174,7 @@ func runDevShell() {
 	s := &shell.Shell{
 		Query: func(pipeline string, start, end time.Time) (*shell.QueryResult, error) {
 			tr := coordinator.TimeRange{Start: start, End: end}
-			r, err := coord.Query(pipeline, tr)
+			r, err := coord.Query(pipeline, tr, "kevlar")
 			if err != nil {
 				return nil, err
 			}

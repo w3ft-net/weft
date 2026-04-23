@@ -94,7 +94,7 @@ func main() {
 		log.Printf("using local compute pool (parallelism=2)")
 	}
 
-	coord := coordinator.NewCoordinator(shards, *customer, pool)
+	coord := coordinator.NewCoordinator(shards, pool)
 	coord.Tail = coordinator.NewTailBroker()
 	coord.Ingest = coordinator.NewRingBuffer(1_000_000) // 1M row buffer
 	coord.Usage = coordinator.NewCustomerUsageStats()
