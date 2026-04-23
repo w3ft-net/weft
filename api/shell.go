@@ -8,6 +8,8 @@ import (
 	"log"
 	"net/http"
 
+	"google.golang.org/grpc/status"
+
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
@@ -86,8 +88,18 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 			if ctx.Err() != nil {
 				return
 			}
+			// Forward the real error to the caller. These come back from
+			// Coord.Query (plan errors, unknown source, shard failures,
+			// compute exit codes, etc.) — all of which are actionable for
+			// the user running the pipeline. Previously collapsed to a
+			// generic "stream error" that masked every failure mode.
 			log.Printf("shell exec stream error: %v", err)
-			writeSSEEvent(w, map[string]any{"type": "error", "message": "stream error"})
+			msg := err.Error()
+			if s, ok := status.FromError(err); ok {
+				// Strip the "rpc error: code = ... desc = " envelope.
+				msg = s.Message()
+			}
+			writeSSEEvent(w, map[string]any{"type": "error", "message": msg})
 			flusher.Flush()
 			return
 		}
