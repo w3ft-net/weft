@@ -84,6 +84,29 @@ func (b *HTTPBackend) DeleteWatch(name string) error {
 	return b.apiDelete("/api/watches/" + name)
 }
 
+func (b *HTTPBackend) GetNotifyConfig() (string, error) {
+	data, err := b.apiGet("/api/notify")
+	if err != nil {
+		// An unset notify.conf is a 404 from the API by design; the shell
+		// should see that as an empty file, not an error.
+		if err.Error() == "not found" {
+			return "", nil
+		}
+		return "", err
+	}
+	var resp struct {
+		AliasesYAML string `json:"aliases_yaml"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return "", fmt.Errorf("parse notify config: %w", err)
+	}
+	return resp.AliasesYAML, nil
+}
+
+func (b *HTTPBackend) SaveNotifyConfig(content string) error {
+	return b.apiPut("/api/notify", map[string]string{"aliases_yaml": content})
+}
+
 // GetWatchResults returns recent watch runs. Used by the shell to render
 // sparkline / last-run values inside the interactive UI. limit is the
 // server-side max; a limit of 0 tells the api to apply its default.

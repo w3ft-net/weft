@@ -193,6 +193,51 @@ func (s *Server) handlePagerDutyDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleGetNotifyConfig returns the customer's /etc/notify.conf YAML.
+// An absent row yields an empty string — the shell treats that as a blank file.
+func (s *Server) handleGetNotifyConfig(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	custID, err := s.resolveCustomerID(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	nc, _ := s.store.GetNotifyConfig(custID)
+	yaml := ""
+	if nc != nil {
+		yaml = nc.AliasesYAML
+	}
+	json.NewEncoder(w).Encode(map[string]string{"aliases_yaml": yaml})
+}
+
+// handleSaveNotifyConfig validates and persists the customer's notify.conf.
+// Validation mirrors the in-process shellfs path so both shells get the same
+// errors back (missing targets, bad PD severity, malformed YAML).
+func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r)
+	custID, err := s.resolveCustomerID(claims.CustomerName)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	var req struct {
+		AliasesYAML string `json:"aliases_yaml"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if _, err := store.ParseNotifyAliases(req.AliasesYAML); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.store.SaveNotifyAliases(custID, req.AliasesYAML); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 // handlePagerDutyDisconnect removes all PagerDuty integrations for the customer.
 func (s *Server) handlePagerDutyDisconnect(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)

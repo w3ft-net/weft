@@ -151,6 +151,10 @@ function fsApiPath(fsPath: string): { endpoint: string; name: string } | null {
   // Map virtual FS paths to API endpoints.
   // /bin/check_errors → PUT /api/functions/check_errors
   // /cron.d/api-errors → PUT /api/watches/api-errors
+  // /etc/notify.conf → PUT /api/notify
+  if (fsPath === '/etc/notify.conf') {
+    return { endpoint: '/api/notify', name: 'notify.conf' }
+  }
   const m = fsPath.match(/^\/(bin|cron\.d)\/(.+)$/)
   if (m) {
     const dir = m[1]
@@ -177,12 +181,15 @@ function fsApiSync(method: string, path: string, content?: string): { content?: 
     if (method === 'PUT' && content !== undefined) {
       // For functions: send { source: content }
       // For watches: send raw content (the cron file) — server parses it
+      // For notify: send { aliases_yaml: content }
       if (path.startsWith('/bin/')) {
         xhr.send(JSON.stringify({ source: content }))
       } else if (path.startsWith('/cron.d/')) {
         // Parse the cron file format client-side to match the API contract.
         const parsed = parseCronFile(content)
         xhr.send(JSON.stringify(parsed))
+      } else if (path === '/etc/notify.conf') {
+        xhr.send(JSON.stringify({ aliases_yaml: content }))
       }
     } else if (method === 'GET') {
       xhr.send()
@@ -205,12 +212,16 @@ function fsApiSync(method: string, path: string, content?: string): { content?: 
     try {
       const data = JSON.parse(xhr.responseText)
       // Functions return { Source: "..." }, watches return { Pipeline: "...", Schedule: "..." }
+      // Notify returns { aliases_yaml: "..." }
       if (data.Source !== undefined) {
         return { content: data.Source }
       }
       if (data.Pipeline !== undefined) {
         // Serialize back to cron file format.
         return { content: serializeCronFile(data) }
+      }
+      if (data.aliases_yaml !== undefined) {
+        return { content: data.aliases_yaml }
       }
       return { content: xhr.responseText }
     } catch {
@@ -279,7 +290,7 @@ function fsApiSyncDir(path: string): { entries?: string[]; error?: string } {
     if (entries.length > 0) return { entries }
     return { error: `${path}: no such directory` }
   } else if (path === '/etc' || path === '/etc/') {
-    return { entries: ['usage'] }
+    return { entries: ['notify.conf', 'usage'] }
   } else {
     return { error: `${path}: not a directory` }
   }

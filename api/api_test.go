@@ -355,3 +355,66 @@ func TestAuth_Sweep_DeletesExpiredUnverifiedOnly(t *testing.T) {
 		t.Errorf("verified user should still exist: %v", err)
 	}
 }
+
+func TestNotifyConfig_PutAndGet(t *testing.T) {
+	srv, s := testServer(t)
+	handler := srv.Handler()
+
+	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("notify-%d", os.Getpid()))
+	user, _ := s.CreateVerifiedUser(fmt.Sprintf("notify-%d@example.com", os.Getpid()), cust.ID)
+	s.CreateTeamMember(&store.TeamMember{
+		ID: fmt.Sprintf("tm-notify-%d", os.Getpid()), CustomerName: cust.Name, Email: user.Email,
+		UserID: &user.ID, Role: "owner", Status: "active",
+	})
+	jwt, _ := auth.Generate(user, "trial", "test-secret")
+
+	// GET on an untouched customer returns empty yaml, not 404.
+	req := httptest.NewRequest("GET", "/api/notify", nil)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("GET empty: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var got struct {
+		AliasesYAML string `json:"aliases_yaml"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &got)
+	if got.AliasesYAML != "" {
+		t.Errorf("expected empty aliases_yaml, got %q", got.AliasesYAML)
+	}
+
+	// PUT with missing targets → 400 (validation layer rejects).
+	body, _ := json.Marshal(map[string]string{"aliases_yaml": "ops: {}\n"})
+	req = httptest.NewRequest("PUT", "/api/notify", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 400 {
+		t.Fatalf("PUT invalid: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// PUT with a valid config succeeds, then GET returns exactly what we wrote.
+	valid := "ops:\n  slack:\n    - \"#ops\"\n"
+	body, _ = json.Marshal(map[string]string{"aliases_yaml": valid})
+	req = httptest.NewRequest("PUT", "/api/notify", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("PUT valid: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest("GET", "/api/notify", nil)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("GET after PUT: expected 200, got %d", w.Code)
+	}
+	got.AliasesYAML = ""
+	json.Unmarshal(w.Body.Bytes(), &got)
+	if got.AliasesYAML != valid {
+		t.Errorf("round-trip mismatch:\nwant: %q\ngot:  %q", valid, got.AliasesYAML)
+	}
+}

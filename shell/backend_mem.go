@@ -71,6 +71,15 @@ func (b *MemBackend) DeleteWatch(name string) error {
 	return nil
 }
 
+func (b *MemBackend) GetNotifyConfig() (string, error) {
+	return b.files["etc/notify.conf"], nil
+}
+
+func (b *MemBackend) SaveNotifyConfig(content string) error {
+	b.files["etc/notify.conf"] = content
+	return nil
+}
+
 func (b *MemBackend) listPrefix(prefix string) []string {
 	var names []string
 	for k := range b.files {

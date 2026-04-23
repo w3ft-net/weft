@@ -27,6 +27,9 @@ type Backend interface {
 	GetWatch(name string) (*WatchData, error)
 	SaveWatch(name string, w *WatchData) error
 	DeleteWatch(name string) error
+
+	GetNotifyConfig() (string, error)
+	SaveNotifyConfig(content string) error
 }
 
 // WatchResultsBackend is optionally implemented by backends that can
@@ -64,6 +67,15 @@ func (f *RemoteFS) ReadFile(path string) ([]byte, error) {
 			return nil, fmt.Errorf("%s: not found", path)
 		}
 		return []byte(serializeCronFile(w)), nil
+
+	case "etc":
+		if name == "notify.conf" {
+			yaml, err := f.backend.GetNotifyConfig()
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", path, err)
+			}
+			return []byte(yaml), nil
+		}
 	}
 
 	return nil, fmt.Errorf("%s: not found", path)
@@ -82,6 +94,10 @@ func (f *RemoteFS) WriteFile(path string, data []byte) error {
 			Pipeline: pipeline,
 			Enabled:  true,
 		})
+	case "etc":
+		if name == "notify.conf" {
+			return f.backend.SaveNotifyConfig(string(data))
+		}
 	}
 
 	return fmt.Errorf("%s: read-only", path)
@@ -112,7 +128,7 @@ func (f *RemoteFS) ReadDir(path string) ([]string, error) {
 		return names, nil
 
 	case "/etc":
-		return []string{"usage"}, nil
+		return []string{"notify.conf", "usage"}, nil
 	}
 
 	// /log/<namespace> — list apps under this namespace.
