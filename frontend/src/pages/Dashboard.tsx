@@ -95,7 +95,17 @@ function formatSparkValue(v: number): string {
   return v.toFixed(2).replace(/\.?0+$/, '')
 }
 
-function Sparkline({ series }: { series: SparkSeries[] }) {
+interface SparklineProps {
+  series: SparkSeries[]
+  // When the watch has an `above`/`below`/`eq`/`neq` alert, the
+  // threshold renders as a thin red line. For above/below we also
+  // tint the "safe" side of the chart pale green. eq/neq draw only
+  // the line — there's no area-shaped safe region for them.
+  threshold?: number | null
+  condition?: 'above' | 'below' | 'eq' | 'neq' | null
+}
+
+function Sparkline({ series, threshold, condition }: SparklineProps) {
   const drawable = series.filter(s => s.points.length >= 2)
   if (drawable.length === 0) return null
 
@@ -104,6 +114,8 @@ function Sparkline({ series }: { series: SparkSeries[] }) {
   const pad = 2
 
   // Shared scale across every series so tags are visually comparable.
+  // When a threshold is set, expand the y-range to include it so the
+  // line is always in-frame (otherwise it gets clipped off-chart).
   let tMin = Infinity, tMax = -Infinity, vMin = Infinity, vMax = -Infinity
   for (const s of drawable) {
     for (const p of s.points) {
@@ -113,20 +125,44 @@ function Sparkline({ series }: { series: SparkSeries[] }) {
       if (p.value > vMax) vMax = p.value
     }
   }
+  const hasThresh = typeof threshold === 'number' && !Number.isNaN(threshold)
+  if (hasThresh) {
+    if ((threshold as number) < vMin) vMin = threshold as number
+    if ((threshold as number) > vMax) vMax = threshold as number
+  }
   const tRange = tMax - tMin || 1
   const vRange = vMax - vMin || 1
 
+  const yForValue = (v: number) =>
+    h - pad - ((v - vMin) / vRange) * (h - pad * 2)
+
+  const thresholdY = hasThresh ? yForValue(threshold as number) : null
+
   return (
     <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="watch-sparkline">
+      {/* Safe-side green tint. SVG y grows downward: "above" means
+          values greater than threshold → small y → safe is below
+          the line → rect from thresholdY to bottom. "below" is the
+          mirror. eq/neq don't get a fill. */}
+      {hasThresh && (condition === 'above' || condition === 'below') && thresholdY !== null && (
+        <rect
+          x={0}
+          y={condition === 'above' ? thresholdY : 0}
+          width={w}
+          height={condition === 'above' ? h - thresholdY : thresholdY}
+          className="watch-sparkline-safe"
+        />
+      )}
+
       {drawable.map(s => {
         const pts = s.points.map(p => {
           const x = pad + ((p.ts - tMin) / tRange) * (w - pad * 2)
-          const y = h - pad - ((p.value - vMin) / vRange) * (h - pad * 2)
+          const y = yForValue(p.value)
           return `${x},${y}`
         }).join(' ')
         const last = s.points[s.points.length - 1]
         const lastX = pad + ((last.ts - tMin) / tRange) * (w - pad * 2)
-        const lastY = h - pad - ((last.value - vMin) / vRange) * (h - pad * 2)
+        const lastY = yForValue(last.value)
         return (
           <g key={s.tag || '_'}>
             <polyline
@@ -141,6 +177,17 @@ function Sparkline({ series }: { series: SparkSeries[] }) {
           </g>
         )
       })}
+
+      {thresholdY !== null && (
+        <line
+          x1={0}
+          x2={w}
+          y1={thresholdY}
+          y2={thresholdY}
+          className="watch-sparkline-threshold"
+          data-testid="sparkline-threshold-line"
+        />
+      )}
     </svg>
   )
 }
@@ -247,7 +294,11 @@ function WatchesCard({ watches, watchCount, watchLimit, minInterval }: {
 
               {tagged ? (
                 <div className="watch-tile-body watch-tile-body-tagged">
-                  <Sparkline series={series} />
+                  <Sparkline
+                    series={series}
+                    threshold={watch.AlertThreshold}
+                    condition={watch.AlertCondition}
+                  />
                   <SparkLegend series={series} />
                 </div>
               ) : (
@@ -255,7 +306,11 @@ function WatchesCard({ watches, watchCount, watchLimit, minInterval }: {
                   <div className="watch-tile-value" data-testid={`dashboard-watch-value-${watch.Name}`}>
                     {scalarLatest}
                   </div>
-                  <Sparkline series={series} />
+                  <Sparkline
+                    series={series}
+                    threshold={watch.AlertThreshold}
+                    condition={watch.AlertCondition}
+                  />
                 </div>
               )}
 

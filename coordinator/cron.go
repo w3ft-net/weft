@@ -270,16 +270,16 @@ func (ce *CronExecutor) persistResults(watch store.CronWatch, ranAt time.Time, s
 }
 
 // tierForWatch looks up the subscription tier for the customer that owns the watch.
-func (ce *CronExecutor) tierForWatch(watch store.CronWatch) string {
+func (ce *CronExecutor) tierForWatch(watch store.CronWatch) store.Tier {
 	cust, err := ce.Store.GetCustomerByID(watch.CustomerID)
 	if err != nil {
 		return ""
 	}
 	sub, err := ce.Store.ActiveSubscription(cust.Name)
 	if err != nil || sub == nil {
-		return "trial"
+		return store.TierTrial
 	}
-	return sub.Tier
+	return store.Tier(sub.Tier)
 }
 
 // parseSchedule parses a schedule string into a duration.

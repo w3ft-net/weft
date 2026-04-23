@@ -138,6 +138,12 @@ type CronWatch struct {
 	LastStatus string                           // "ok", "error", "stderr"
 	AlertKey   *int `gorm:"column:alert_key"`
 	AlertTag   *int `gorm:"column:alert_tag"`
+	// AlertCondition + AlertThreshold are the dashboard projection of
+	// the `alert` stage's numeric cutoff. Populated only for
+	// above/below/eq/neq — conditions without a single absolute
+	// threshold (rising/falling/changed/absent/any) leave both NULL.
+	AlertCondition *string  `gorm:"column:alert_condition"`
+	AlertThreshold *float64 `gorm:"column:alert_threshold"`
 }
 
 func (s *Store) SaveCronWatch(customerID uint, name, schedule, pipeline string) error {
@@ -149,31 +155,38 @@ func (s *Store) SaveCronWatch(customerID uint, name, schedule, pipeline string) 
 	result := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&w)
 	if result.Error == gorm.ErrRecordNotFound {
 		return s.db.Create(&CronWatch{
-			CustomerID: customerID,
-			Name:       name,
-			Schedule:   schedule,
-			Pipeline:   pipeline,
-			Enabled:    true,
-			AlertKey:   compiled.AlertKey,
-			AlertTag:   compiled.AlertTag,
+			CustomerID:     customerID,
+			Name:           name,
+			Schedule:       schedule,
+			Pipeline:       pipeline,
+			Enabled:        true,
+			AlertKey:       compiled.AlertKey,
+			AlertTag:       compiled.AlertTag,
+			AlertCondition: compiled.AlertCondition,
+			AlertThreshold: compiled.AlertThreshold,
 		}).Error
 	}
 	return s.db.Model(&w).Updates(map[string]any{
-		"schedule":  schedule,
-		"pipeline":  pipeline,
-		"alert_key": compiled.AlertKey,
-		"alert_tag": compiled.AlertTag,
+		"schedule":        schedule,
+		"pipeline":        pipeline,
+		"alert_key":       compiled.AlertKey,
+		"alert_tag":       compiled.AlertTag,
+		"alert_condition": compiled.AlertCondition,
+		"alert_threshold": compiled.AlertThreshold,
 	}).Error
 }
 
 // CompiledWatch holds the pre-parsed bits of an `alert` stage that we want
 // to stamp onto the watch row so the executor doesn't re-parse on every
-// tick. Today that's just the field extractors; the rest of the alert args
-// are re-parsed at tick time because they're cheap and don't affect how
-// cron_results is shaped.
+// tick. AlertKey/Tag are runtime-relevant (they shape how cron_results
+// gets written); AlertCondition/Threshold are dashboard projections for
+// threshold-line rendering and are only populated for conditions with a
+// single numeric cutoff (above, below, eq, neq).
 type CompiledWatch struct {
-	AlertKey *int
-	AlertTag *int
+	AlertKey       *int
+	AlertTag       *int
+	AlertCondition *string
+	AlertThreshold *float64
 }
 
 // CompileWatchPipeline validates pipeline-shape invariants and returns the
@@ -223,6 +236,16 @@ func CompileWatchPipeline(pipeline string) (CompiledWatch, error) {
 		if parsed.Tag > 0 {
 			t := parsed.Tag
 			out.AlertTag = &t
+		}
+		// Stamp the condition + numeric threshold for dashboard line
+		// rendering. Only above/below/eq/neq carry a single absolute
+		// threshold — other conditions leave both fields nil.
+		switch parsed.Condition {
+		case shellcore.AlertAbove, shellcore.AlertBelow, shellcore.AlertEq, shellcore.AlertNeq:
+			cond := parsed.Condition.String()
+			thr := parsed.Threshold
+			out.AlertCondition = &cond
+			out.AlertThreshold = &thr
 		}
 	}
 	return out, nil
@@ -440,7 +463,7 @@ func pickGranularity(window time.Duration) string {
 // when the requested window exceeds the plan's retention, so callers
 // never read rows older than the plan allows — even though the rows
 // may still exist on disk.
-func clampRetention(tier string, since time.Time) time.Time {
+func clampRetention(tier Tier, since time.Time) time.Time {
 	cap := time.Now().Add(-LogRetention(tier))
 	if since.Before(cap) {
 		return cap
@@ -449,14 +472,14 @@ func clampRetention(tier string, since time.Time) time.Time {
 }
 
 // TierForCustomer returns the active subscription tier for a customer.
-// Empty string ("" → "trial" in LogRetention) when no active sub is
-// found — conservatively treat unknown customers as trial so we never
-// over-serve data.
+// Empty Tier ("" → trial retention in LogRetention) when no active
+// sub is found — conservatively treat unknown customers as trial so
+// we never over-serve data.
 //
 // NOTE: subscriptions.customer_id is a TEXT column that stores the
 // customer *name*, not the numeric id (see store/subscription.go).
 // That's historical — we'd rename it if we were starting over.
-func (s *Store) TierForCustomer(customerID uint) string {
+func (s *Store) TierForCustomer(customerID uint) Tier {
 	var tier string
 	err := s.db.Raw(`
 		SELECT s.tier
@@ -470,7 +493,7 @@ func (s *Store) TierForCustomer(customerID uint) string {
 	if err != nil {
 		return ""
 	}
-	return tier
+	return Tier(tier)
 }
 
 // LatestCronResult returns the most recent result for a named watch.

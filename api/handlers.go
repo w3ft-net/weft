@@ -533,7 +533,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var user *store.User
-	tier := "trial"
+	tier := store.TierTrial
 
 	// Check for pending team invite first.
 	if invite, err := s.store.GetPendingTeamMemberByEmail(email); err == nil {
@@ -556,7 +556,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		s.store.AcceptTeamMember(invite.ID, user.ID)
 
 		if sub, _ := s.store.ActiveSubscription(invite.CustomerName); sub != nil {
-			tier = sub.Tier
+			tier = store.Tier(sub.Tier)
 		}
 	} else {
 		// No invite — find existing user or create new user + customer.
@@ -606,12 +606,12 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 				user.EmailVerifiedAt = &now
 			}
 			if sub, _ := s.store.ActiveSubscription(user.Customer.Name); sub != nil {
-				tier = sub.Tier
+				tier = store.Tier(sub.Tier)
 			}
 		}
 	}
 
-	jwt, err := auth.Generate(user, tier, s.jwtSecret)
+	jwt, err := auth.Generate(user, string(tier), s.jwtSecret)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -641,10 +641,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tier := "none"
+	tier := store.Tier("none")
 	if s.store != nil {
 		if sub, _ := s.store.ActiveSubscription(user.CustomerName); sub != nil {
-			tier = sub.Tier
+			tier = store.Tier(sub.Tier)
 		}
 	}
 
@@ -967,11 +967,11 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get the actual tier from the DB subscription, not the JWT (which may be stale).
-	tier := claims.Tier
+	tier := store.Tier(claims.Tier)
 	var tierLimitBytes int64 = 10 * 1024 * 1024 * 1024 // default 10 GB
 	if s.store != nil {
 		if sub, _ := s.store.ActiveSubscription(claims.CustomerName); sub != nil {
-			tier = sub.Tier
+			tier = store.Tier(sub.Tier)
 			switch sub.Tier {
 			case "swatch":
 				tierLimitBytes = 10 * 1024 * 1024 * 1024    // 10 GB
@@ -1309,9 +1309,9 @@ func (s *Server) handleListWatches(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	tier := "trial"
+	tier := store.TierTrial
 	if sub, _ := s.store.ActiveSubscription(claims.CustomerName); sub != nil {
-		tier = sub.Tier
+		tier = store.Tier(sub.Tier)
 	}
 	count, _ := s.store.CountCronWatches(custID)
 	json.NewEncoder(w).Encode(map[string]any{
@@ -1364,7 +1364,7 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Enforce tier limits on watches.
-	tier := claims.Tier
+	tier := store.Tier(claims.Tier)
 	maxWatches := store.WatchLimit(tier)
 	if maxWatches == 0 {
 		http.Error(w, "watches are not available on the trial plan", http.StatusForbidden)
@@ -1458,9 +1458,9 @@ func (s *Server) handleListTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	count, _ := s.store.CountTeamMembers(claims.CustomerName)
-	tier := "trial"
+	tier := store.TierTrial
 	if sub, _ := s.store.ActiveSubscription(claims.CustomerName); sub != nil {
-		tier = sub.Tier
+		tier = store.Tier(sub.Tier)
 	}
 	orgName := claims.CustomerName
 	if cust, err := s.store.GetCustomerByName(claims.CustomerName); err == nil && cust.DisplayName != "" {
@@ -1490,9 +1490,9 @@ func (s *Server) handleInviteTeamMember(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Check seat limit.
-	tier := "trial"
+	tier := store.TierTrial
 	if sub, _ := s.store.ActiveSubscription(claims.CustomerName); sub != nil {
-		tier = sub.Tier
+		tier = store.Tier(sub.Tier)
 	}
 	count, _ := s.store.CountTeamMembers(claims.CustomerName)
 	limit := store.SeatLimit(tier)
@@ -1578,12 +1578,12 @@ func (s *Server) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	s.store.AcceptTeamMember(member.ID, user.ID)
 
-	tier := "trial"
+	tier := store.TierTrial
 	if sub, _ := s.store.ActiveSubscription(member.CustomerName); sub != nil {
-		tier = sub.Tier
+		tier = store.Tier(sub.Tier)
 	}
 
-	jwt, err := auth.Generate(user, tier, s.jwtSecret)
+	jwt, err := auth.Generate(user, string(tier), s.jwtSecret)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1704,12 +1704,12 @@ func (s *Server) handleDevicePoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tier := "trial"
+	tier := store.TierTrial
 	if sub, _ := s.store.ActiveSubscription(user.CustomerName); sub != nil {
-		tier = sub.Tier
+		tier = store.Tier(sub.Tier)
 	}
 
-	jwt, err := auth.Generate(user, tier, s.jwtSecret)
+	jwt, err := auth.Generate(user, string(tier), s.jwtSecret)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

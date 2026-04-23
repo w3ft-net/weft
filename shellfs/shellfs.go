@@ -24,9 +24,9 @@ var _ bash.FS = (*ShellFS)(nil)
 type ShellFS struct {
 	store        *store.Store
 	customerID   uint
-	customerName string   // for usage queries
-	tier         string   // subscription tier (trial, swatch, yard, bolt)
-	logApps      []string // app names for /log/ directory listing
+	customerName string     // for usage queries
+	tier         store.Tier // subscription tier
+	logApps      []string   // app names for /log/ directory listing
 	userID       string   // for permission checks (empty = owner/no filtering)
 	isOwner      bool     // owners bypass namespace permissions
 }
@@ -36,7 +36,7 @@ func New(s *store.Store, customerID uint, logApps []string, opts ...Option) *She
 	fs := &ShellFS{
 		store:      s,
 		customerID: customerID,
-		tier:       "trial",
+		tier:       store.TierTrial,
 		logApps:    logApps,
 	}
 	for _, o := range opts {
@@ -49,7 +49,7 @@ func New(s *store.Store, customerID uint, logApps []string, opts ...Option) *She
 type Option func(*ShellFS)
 
 // WithTier sets the subscription tier for limit enforcement.
-func WithTier(tier string) Option {
+func WithTier(tier store.Tier) Option {
 	return func(f *ShellFS) { f.tier = tier }
 }
 
@@ -544,11 +544,11 @@ func (f *ShellFS) buildUsageReport() string {
 
 	var tierLimitBytes int64
 	switch f.tier {
-	case "swatch":
+	case store.TierSwatch:
 		tierLimitBytes = 10 * 1024 * 1024 * 1024
-	case "yard":
+	case store.TierYard:
 		tierLimitBytes = 100 * 1024 * 1024 * 1024
-	case "bolt":
+	case store.TierBolt:
 		tierLimitBytes = 1024 * 1024 * 1024 * 1024
 	default:
 		tierLimitBytes = 1 * 1024 * 1024 * 1024

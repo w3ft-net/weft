@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -64,11 +65,83 @@ func TestCompileWatchPipeline(t *testing.T) {
 	}
 }
 
-func intPtr(n int) *int { return &n }
+// TestCompileWatchPipeline_AlertThreshold confirms the dashboard
+// projection (AlertCondition + AlertThreshold) is populated for
+// numeric-cutoff conditions and stays nil for everything else. The
+// Sparkline draws a line only when both fields are non-nil, so this
+// also guards against accidentally populating one without the other.
+func TestCompileWatchPipeline_AlertThreshold(t *testing.T) {
+	cases := []struct {
+		name      string
+		pipeline  string
+		wantCond  *string
+		wantThres *float64
+	}{
+		{"no alert", `cat /log/app.log`, nil, nil},
+		{"above", `foo | alert above 50`, strPtr("above"), float64Ptr(50)},
+		{"below", `foo | alert below 10`, strPtr("below"), float64Ptr(10)},
+		{"eq", `foo | alert eq 0`, strPtr("eq"), float64Ptr(0)},
+		{"neq", `foo | alert neq 42`, strPtr("neq"), float64Ptr(42)},
+		// rising/falling use a percent delta (PctChange), not an
+		// absolute threshold. Leave both nil so no line renders.
+		{"rising", `foo | alert rising 20%`, nil, nil},
+		{"falling", `foo | alert falling 10%`, nil, nil},
+		// No numeric dimension at all.
+		{"changed", `foo | alert changed`, nil, nil},
+		{"absent", `foo | alert absent`, nil, nil},
+		{"any (no keyword)", `foo | alert --notify=ops`, nil, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cw, err := CompileWatchPipeline(c.pipeline)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !eqStrPtr(cw.AlertCondition, c.wantCond) {
+				t.Errorf("AlertCondition = %v, want %v", derefStr(cw.AlertCondition), derefStr(c.wantCond))
+			}
+			if !eqFloat64Ptr(cw.AlertThreshold, c.wantThres) {
+				t.Errorf("AlertThreshold = %v, want %v", derefF64(cw.AlertThreshold), derefF64(c.wantThres))
+			}
+		})
+	}
+}
+
+func intPtr(n int) *int     { return &n }
+func strPtr(s string) *string { return &s }
+func float64Ptr(v float64) *float64 { return &v }
 
 func eqIntPtr(a, b *int) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
 	return *a == *b
+}
+
+func eqStrPtr(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func eqFloat64Ptr(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func derefStr(p *string) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return *p
+}
+
+func derefF64(p *float64) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%v", *p)
 }

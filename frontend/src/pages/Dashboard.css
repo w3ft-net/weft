@@ -502,6 +502,25 @@
   opacity: 0.9;
 }
 
+/* Alert threshold line: thin, muted red, sits on top of the safe
+   tint but under the series polyline so the trace is what your eye
+   follows. dasharray lets it read as a guideline rather than data. */
+.watch-sparkline-threshold {
+  stroke: rgba(239, 85, 85, 0.65);
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+  fill: none;
+  pointer-events: none;
+}
+
+/* Safe-side tint: pale green on the side of the threshold where the
+   value does NOT fire the alert. Low opacity so it reads as a mood,
+   not as data. */
+.watch-sparkline-safe {
+  fill: rgba(109, 227, 160, 0.10);
+  pointer-events: none;
+}
+
 /* Tagged watches: chart anchors top-left, legend flows below at full
    width so long tag names wrap cleanly. Still flex so the chart can
    sit next to a short legend when there's room. */

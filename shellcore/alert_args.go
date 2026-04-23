@@ -22,6 +22,33 @@ const (
 	AlertFalling
 )
 
+// String is the lowercase keyword form of a condition as it appears
+// in pipelines ("above", "below", …). Used by the dashboard API to
+// project a watch's alert condition into JSON — the frontend keys on
+// these strings to decide whether to draw a threshold line.
+func (c AlertCondition) String() string {
+	switch c {
+	case AlertAbove:
+		return "above"
+	case AlertBelow:
+		return "below"
+	case AlertEq:
+		return "eq"
+	case AlertNeq:
+		return "neq"
+	case AlertChanged:
+		return "changed"
+	case AlertAbsent:
+		return "absent"
+	case AlertRising:
+		return "rising"
+	case AlertFalling:
+		return "falling"
+	default:
+		return "any"
+	}
+}
+
 // AlertArgs is the parsed form of an `alert` command invocation. Kept in
 // shellcore so both the runtime (coordinator) and the save-time validator
 // (store) can share one parser — the alternative is drifting grammars.

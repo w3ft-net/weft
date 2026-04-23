@@ -413,7 +413,22 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 
 	sql := planner.InjectCustomer(plan.ShardSQL, customer)
 
-	matching := c.Registry.MatchingShards(tr, plan.FollowApp)
+	// Shard selection honors plan-tier retention: tr.Start is clamped
+	// up to (now − LogRetention(tier)) inside MatchingShards, so a
+	// customer never reaches a shard whose data is entirely past their
+	// advertised retention. Unresolved customer (custID==0) yields tier
+	// "" which conservatively falls back to the trial retention. A nil
+	// Store means we're in a test/dev context with no subscription
+	// table at all — fall back to the most permissive tier so tests
+	// whose shards live in the distant past keep querying as before.
+	var tier store.Tier
+	switch {
+	case c.Store == nil:
+		tier = store.TierBolt
+	case custID != 0:
+		tier = c.Store.TierForCustomer(custID)
+	}
+	matching := c.Registry.MatchingShards(tr, plan.FollowApp, tier)
 	if len(matching) == 0 {
 		log.Printf("query: no matching shards (app=%s, customer=%s)", plan.SourceApp, customer)
 		return &QueryResult{}, nil

@@ -249,6 +249,11 @@ export interface CronWatch {
   LastStatus: string
   CreatedAt: string
   UpdatedAt: string
+  // Alert projection — populated only when the watch's `alert` stage
+  // uses a condition with a single numeric cutoff (above/below/eq/neq).
+  // Rising/falling/changed/absent leave both null.
+  AlertCondition: 'above' | 'below' | 'eq' | 'neq' | null
+  AlertThreshold: number | null
 }
 
 export interface CronResult {

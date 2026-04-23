@@ -10,14 +10,29 @@ import (
 	"github.com/google/uuid"
 )
 
+// Tier is a plan name. Use the constants below (TierSwatch,
+// TierYard, …) rather than bare strings — every tier-keyed function
+// in this file switches on these values, and the type keeps typos
+// from silently falling into the default/trial branch at call sites.
+// The underlying representation is string so GORM can round-trip
+// Subscription.Tier without custom serialization.
+type Tier string
+
+const (
+	TierTrial  Tier = "trial"
+	TierSwatch Tier = "swatch"
+	TierYard   Tier = "yard"
+	TierBolt   Tier = "bolt"
+)
+
 // WatchLimit returns the max number of cron watches for a tier.
-func WatchLimit(tier string) int {
+func WatchLimit(tier Tier) int {
 	switch tier {
-	case "swatch":
+	case TierSwatch:
 		return 5
-	case "yard":
+	case TierYard:
 		return 10
-	case "bolt":
+	case TierBolt:
 		return 50
 	default:
 		return 1 // trial: no watches
@@ -25,11 +40,11 @@ func WatchLimit(tier string) int {
 }
 
 // MinWatchInterval returns the minimum allowed schedule interval for a tier.
-func MinWatchInterval(tier string) time.Duration {
+func MinWatchInterval(tier Tier) time.Duration {
 	switch tier {
-	case "swatch", "trial":
+	case TierSwatch, TierTrial:
 		return 5 * time.Minute
-	case "yard", "bolt":
+	case TierYard, TierBolt:
 		return 1 * time.Minute
 	default:
 		return 0 // trial: watches not allowed
@@ -45,13 +60,13 @@ func MinWatchInterval(tier string) time.Duration {
 // longer (up to the global pyramid boundary in Postgres, indefinitely
 // in S3) — see docs/plans/retention-enforcement.md for the path to
 // real storage-side enforcement.
-func LogRetention(tier string) time.Duration {
+func LogRetention(tier Tier) time.Duration {
 	switch tier {
-	case "swatch":
+	case TierSwatch:
 		return 30 * 24 * time.Hour
-	case "yard":
+	case TierYard:
 		return 90 * 24 * time.Hour
-	case "bolt":
+	case TierBolt:
 		return 365 * 24 * time.Hour
 	default:
 		return 24 * time.Hour // trial
@@ -63,7 +78,7 @@ func LogRetention(tier string) time.Duration {
 // LogRetention — retaining a metric past its source logs would be
 // misleading — so callers that care about either can use whichever
 // name reads clearer.
-func MetricRetention(tier string) time.Duration { return LogRetention(tier) }
+func MetricRetention(tier Tier) time.Duration { return LogRetention(tier) }
 
 // User represents a weft user. A user belongs to a customer (org).
 // The composite unique index allows a user to exist under multiple customers.
@@ -136,13 +151,13 @@ type TeamMember struct {
 }
 
 // SeatLimit returns the max number of team members for a tier.
-func SeatLimit(tier string) int {
+func SeatLimit(tier Tier) int {
 	switch tier {
-	case "swatch":
+	case TierSwatch:
 		return 5
-	case "yard":
+	case TierYard:
 		return 10
-	case "bolt":
+	case TierBolt:
 		return 50
 	default:
 		return 1 // trial
