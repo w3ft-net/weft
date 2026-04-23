@@ -80,6 +80,45 @@ func LogRetention(tier Tier) time.Duration {
 // name reads clearer.
 func MetricRetention(tier Tier) time.Duration { return LogRetention(tier) }
 
+// VolumeAllowance returns the monthly ingestion quota for a tier, in
+// bytes. Uses decimal GB (10⁹) to align with the KB unit used by the
+// Stripe metered overage price — so the "% used" bar in the dashboard
+// matches what Stripe will bill. The landing page's "10 GB / 100 GB
+// / 1 TB" has always been decimal in customer-speak; the internal
+// constant was 1024³-based (GiB) before this, disagreeing by 7.4%.
+// See docs/plans/stripe.md for the alignment rationale.
+func VolumeAllowance(tier Tier) int64 {
+	switch tier {
+	case TierSwatch:
+		return 10 * 1_000_000_000
+	case TierYard:
+		return 100 * 1_000_000_000
+	case TierBolt:
+		return 1_000_000_000_000
+	default:
+		return 1 * 1_000_000_000 // trial
+	}
+}
+
+// OverageRatePerGB returns the per-GB charge for ingestion over
+// VolumeAllowance, in US cents. Matches the pricing page and the
+// Stripe graduated metered price. Used only for dashboard projections
+// — Stripe is authoritative for actual invoices. Trial tier returns
+// 0 (trial subscriptions have no metered item in Stripe; upgrade
+// adds it). See docs/plans/stripe.md.
+func OverageRatePerGB(tier Tier) int {
+	switch tier {
+	case TierSwatch:
+		return 200 // $2.00
+	case TierYard:
+		return 100 // $1.00
+	case TierBolt:
+		return 50 // $0.50
+	default:
+		return 0
+	}
+}
+
 // User represents a weft user. A user belongs to a customer (org).
 // The composite unique index allows a user to exist under multiple customers.
 type User struct {
@@ -124,15 +163,6 @@ type SavedQuery struct {
 	Query     string `gorm:"not null"` // the pipeline text
 	CreatedAt time.Time
 	UpdatedAt time.Time
-}
-
-// UsageRecord tracks ingestion bytes per customer per billing period.
-type UsageRecord struct {
-	ID            uint   `gorm:"primaryKey"`
-	CustomerName  string `gorm:"not null;index"`
-	PeriodStart   time.Time
-	PeriodEnd     time.Time
-	BytesIngested int64 `gorm:"not null;default:0"`
 }
 
 // TeamMember tracks membership in a customer team.

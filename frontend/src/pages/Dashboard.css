@@ -140,6 +140,26 @@
   text-align: right;
 }
 
+/* Projected overage: shown beneath the usage bar only when
+   bytes > tier allowance. Muted styling — it's a heads-up, not an
+   alert, and Stripe is still authoritative for the billable number. */
+.usage-projected-overage {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  padding: 8px 12px;
+  background: rgba(230, 126, 34, 0.06);
+  border: 1px solid rgba(230, 126, 34, 0.2);
+  border-radius: 4px;
+}
+.usage-projected-overage strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+.usage-projected-overage-hint {
+  color: var(--text-dim);
+}
+
 /* ── Tokens ─────────────────────────────────────── */
 .dash-table-wrap {
   overflow-x: auto;

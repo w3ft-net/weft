@@ -542,17 +542,7 @@ func (f *ShellFS) buildUsageReport() string {
 		bytesIngested = 0
 	}
 
-	var tierLimitBytes int64
-	switch f.tier {
-	case store.TierSwatch:
-		tierLimitBytes = 10 * 1024 * 1024 * 1024
-	case store.TierYard:
-		tierLimitBytes = 100 * 1024 * 1024 * 1024
-	case store.TierBolt:
-		tierLimitBytes = 1024 * 1024 * 1024 * 1024
-	default:
-		tierLimitBytes = 1 * 1024 * 1024 * 1024
-	}
+	tierLimitBytes := store.VolumeAllowance(f.tier)
 
 	pct := 0.0
 	if tierLimitBytes > 0 {

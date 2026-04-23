@@ -41,3 +41,47 @@ func TestMetricRetention_MirrorsLogRetention(t *testing.T) {
 		}
 	}
 }
+
+// TestVolumeAllowance pins the monthly ingestion quotas. These are
+// contractual — if they change, the Stripe graduated-tier free-quota
+// boundary on each overage price (docs/plans/stripe.md) and the
+// pricing-page advertised numbers must change in lockstep.
+func TestVolumeAllowance(t *testing.T) {
+	cases := []struct {
+		tier Tier
+		want int64
+	}{
+		{TierTrial, 1_000_000_000},
+		{TierSwatch, 10_000_000_000},
+		{TierYard, 100_000_000_000},
+		{TierBolt, 1_000_000_000_000},
+		{"", 1_000_000_000},
+	}
+	for _, c := range cases {
+		if got := VolumeAllowance(c.tier); got != c.want {
+			t.Errorf("VolumeAllowance(%q) = %d, want %d", c.tier, got, c.want)
+		}
+	}
+}
+
+// TestOverageRatePerGB pins the per-GB overage cents. Like
+// VolumeAllowance these match the Stripe price config; the helper
+// is a projection for the dashboard, not the billing source of
+// truth.
+func TestOverageRatePerGB(t *testing.T) {
+	cases := []struct {
+		tier Tier
+		want int
+	}{
+		{TierTrial, 0},
+		{TierSwatch, 200},
+		{TierYard, 100},
+		{TierBolt, 50},
+		{"", 0},
+	}
+	for _, c := range cases {
+		if got := OverageRatePerGB(c.tier); got != c.want {
+			t.Errorf("OverageRatePerGB(%q) = %d, want %d", c.tier, got, c.want)
+		}
+	}
+}

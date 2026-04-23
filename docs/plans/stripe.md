@@ -72,11 +72,11 @@ overlap.
 - `handleSetupIntent` and `handleCheckout` create/update subscriptions
   with a single subscription item pointing at the tier's price.
 - `handleStripeWebhook` handles `customer.subscription.updated`,
-  `invoice.payment_failed`, `customer.subscription.deleted`. Missing
-  every event that's relevant to metered billing.
-- `store.Subscription.StripeSubscriptionID` stores the subscription ID
-  but not the subscription *item* ID — which matters because metered
-  usage reports target an item, not the subscription.
+  `invoice.payment_failed`, `customer.subscription.deleted`. No
+  meter-related events are handled, and the meter-events model
+  doesn't need any — events are attributed to subscriptions by
+  Stripe server-side at ingest, so weft doesn't need to track the
+  metered item ID.
 
 ### Tier volume allowance (scattered)
 
@@ -125,38 +125,57 @@ Both `handleUsage` and `shellfs.go` switch to `store.VolumeAllowance`.
 sometimes differs deliberately from runtime behavior (introductory
 offers, etc.) and shouldn't be generated.
 
-### Stripe model: metered subscription items
+### Stripe model: meter events + graduated metered price
 
-Stripe has three billing shapes we could use:
+Stripe's current pattern for "flat-rate + per-unit overage" is:
 
-1. **Meters + Meter Events** (Stripe's newest API, shipped 2024). Attach
-   a meter to a subscription; report usage via
-   `billing.meter_event.create`. Stripe attributes each event to the
-   current period based on its timestamp. Best when usage is small and
-   continuous; handles backdated events gracefully.
-2. **Subscription items with metered pricing** (older but stable).
-   Each subscription has two items: one flat-rate (the tier), one
-   metered (the overage). Report usage via `usage_records.create`
-   against the item's ID. Well-documented, lots of prior art.
-3. **Invoice items.** Add arbitrary line items to the next invoice via
-   `invoiceitem.create`. Most flexible but least integrated with
-   Stripe's usage dashboards.
+- A single **meter** records usage events. Attached to one or more
+  metered prices via the event name.
+- Each paid tier has **two prices** on the same product: a flat-rate
+  recurring price, and a **graduated metered price** that references
+  the meter. The graduated price's tiers encode "first N units free,
+  then $X per unit" directly.
+- Subscriptions have **two items**: one per price. Stripe handles
+  proration and invoice generation automatically.
+- Usage is reported via `POST /v1/billing/meter_events` with the
+  customer ID as the only identifier — NOT per-subscription-item. The
+  event flows through the meter, hits whichever active metered price
+  is currently attached, and lands on the right billing period based
+  on the event's timestamp.
 
-**Recommendation: option 2** — subscription items with metered pricing.
+Older paths (`usage_records.create` against a subscription item, or
+`invoiceitem.create`) are still available but are no longer the
+recommended approach for new integrations. We go with meter events.
 
-Reasoning:
+Practical consequence: **no `stripe_overage_item_id` column is
+needed.** Reports use `customer_id`, and tier changes Just Work
+because Stripe resolves the active metered price at event-ingest
+time.
 
-- Stripe Meters is newer and has fewer examples in the wild; integrating
-  with our `stripe-go/v82` SDK may be more friction than reward.
-- Usage records are the tried-and-true path and we already use the SDK.
-- The subscription *item* model lets us express the pricing exactly as
-  the page advertises: flat-rate subscription + graduated metered
-  price with the first N GB free.
+### Unit of measurement: KB
 
-Stripe graduated pricing on the metered price can encode "first 10 GB
-free, $2/GB thereafter" for a swatch subscription — so we report **raw
-ingested bytes**, not pre-subtracted overage, and Stripe does the math.
-Simpler bookkeeping on our side.
+Reported `value` on each meter event is **kilobytes** (1 KB = 1000
+bytes, decimal). The graduated tiers in Stripe are denominated in KB
+too. Rationale in the original unit-math discussion (not reproduced
+here); short version: KB keeps `unit_amount_decimal` a short decimal,
+free-quota boundaries are round numbers, and we don't lose meaningful
+resolution on daily reports.
+
+Effect on internal code: `VolumeAllowance` switches from `10 * 1024³`
+(GiB) to `10 * 10⁹` (GB decimal) so the "% used" bar in the dashboard
+matches what Stripe will bill. This is a 7.4% tightening of the
+effective allowance, matching customer expectations of "10 GB."
+
+### Stripe prices (as created)
+
+| Tier   | Flat price ID           | Overage price ID                 | Free quota (KB) | Overage rate     |
+|--------|-------------------------|----------------------------------|-----------------|------------------|
+| Swatch | `STRIPE_PRICE_SWATCH`   | `price_1TPS462SENTbrh5uDsTsTL8Z` | 10,000,000      | $0.000002 / KB   |
+| Yard   | `STRIPE_PRICE_YARD`     | `price_1TPS6V2SENTbrh5uZdLhzDGp` | 100,000,000     | $0.000001 / KB   |
+| Bolt   | `STRIPE_PRICE_BOLT`     | `price_1TPSBK2SENTbrh5uSliq28GU` | 1,000,000,000   | $0.0000005 / KB  |
+
+Meter event name: `weft_ingestion_kb`. Aggregation: sum. Configured
+on all three overage prices.
 
 ### Subscription setup changes
 
@@ -171,7 +190,7 @@ Change to:
 ```go
 Items: []*SubscriptionItemsParams{
     { Price: flatRatePriceID },       // e.g. swatch $19/mo
-    { Price: overageMeteredPriceID }, // e.g. swatch $2/GB after 10GB
+    { Price: overageMeteredPriceID }, // graduated KB price
 }
 ```
 
@@ -180,73 +199,77 @@ Items: []*SubscriptionItemsParams{
 ```go
 type TierPrices struct {
     Flat    string // recurring subscription price
-    Overage string // metered price for GB-over-quota
+    Overage string // metered price for KB-over-quota; "" if not configured
 }
 StripePrices map[Tier]TierPrices
 ```
 
-And the env:
+Env (flat IDs already present; overage IDs new):
 
 ```
-STRIPE_PRICE_SWATCH=price_123
-STRIPE_PRICE_SWATCH_OVERAGE=price_456
-STRIPE_PRICE_YARD=price_789
-STRIPE_PRICE_YARD_OVERAGE=price_abc
-...
+STRIPE_PRICE_SWATCH=price_...
+STRIPE_PRICE_SWATCH_OVERAGE=price_1TPS462SENTbrh5uDsTsTL8Z
+
+STRIPE_PRICE_YARD=price_...
+STRIPE_PRICE_YARD_OVERAGE=price_1TPS6V2SENTbrh5uZdLhzDGp
+
+STRIPE_PRICE_BOLT=price_...
+STRIPE_PRICE_BOLT_OVERAGE=price_1TPSBK2SENTbrh5uSliq28GU
 ```
 
-### Track the metered subscription item ID
+Absence of the `_OVERAGE` variant → flat-only mode for that tier, so
+Stripe config can be piloted one tier at a time.
 
-`store.Subscription` today stores the subscription ID but not the
-per-item IDs. Usage records target the item, not the subscription —
-so either:
+**Trial tier: no overage item.** Trials get a single-item subscription
+matching today's behavior; when a trial converts to a paid tier the
+overage item is added as part of the tier-change.
 
-- Query Stripe for the item ID each report (`subscription.Get`,
-  pluck the metered item). Simple, but one extra API call per report.
-- Store the metered item ID on `store.Subscription`. One DB column
-  (`stripe_overage_item_id TEXT`), populated on subscription create and
-  refreshed on tier change.
+### Daily reporter
 
-**Recommendation:** store it. A daily reporter firing hundreds of
-Stripe API calls per tick is wasteful, and the item ID is stable across
-a subscription's lifetime (tier changes create a new item → we update
-the column from the webhook).
+A Go routine (coordinator-resident, since that's where the ingest
+path already writes to `usage_hourly` / `usage_daily`) fires daily
+at 03:00 UTC — one hour after the usage rollup job from migration
+028 has settled yesterday's row in `usage_daily`. Each tick:
 
-### Daily reporter cron
+1. `SELECT customer_name, bytes_ingested FROM usage_daily WHERE
+   day = yesterday`.
+2. Look up the customer's active subscription. Skip if no paying
+   sub (trial / cancelled / deleted).
+3. Skip if `stripe_usage_reports` already has a row for
+   `(customer, day)` — idempotency at the DB layer.
+4. Post to `/v1/billing/meter_events`:
+   ```
+   event_name           = weft_ingestion_kb
+   payload[stripe_customer_id] = <stripe customer id>
+   payload[value]       = floor(bytes / 1000)
+   identifier           = weft:<customer_name>:<yyyy-mm-dd>
+   timestamp            = end-of-day UTC
+   ```
+   `identifier` is Stripe's own idempotency key — even if our DB
+   check were bypassed, Stripe would dedupe.
+5. On success, write the audit row:
+   `stripe_usage_reports(customer_name, day, kb_reported,
+   stripe_event_id, reported_at)`.
 
-A Go routine inside the coordinator (or as a separate `cmd/billing-
-reporter` binary, same process either way) that wakes at 03:00 UTC —
-one hour after the hourly→daily rollup completes, to ensure
-`usage_daily` has yesterday's totals — and does:
-
-1. `SELECT customer_name, SUM(bytes_ingested) FROM usage_daily WHERE
-   day = yesterday GROUP BY customer_name`.
-2. For each row, look up the active subscription + metered item ID.
-3. Compute the Stripe idempotency key:
-   `usage:<customer>:<yyyy-mm-dd>`.
-4. Call `usagerecord.New(item_id, &params{
-       Quantity: bytes, Timestamp: end-of-day, Action: "increment",
-       IdempotencyKey: key,
-   })`.
-5. Record the result in a new `stripe_usage_reports` table (ID,
-   customer, day, bytes, stripe_usage_record_id, error, reported_at).
-
-On failure: log and leave the row absent from `stripe_usage_reports`.
-The next day's run re-reports it because it wasn't marked done — the
-idempotency key protects against double-charging during the replay.
+On failure: log, no audit row. Tomorrow's run re-tries with the same
+`identifier` — if the previous attempt actually succeeded on Stripe's
+side but failed before we wrote the audit row, Stripe dedupes.
 
 ### Tier changes mid-period
 
 Stripe handles flat-rate proration automatically. For the metered
-item:
+item the meter-events model is simpler than the legacy usage-records
+path: events are posted against the customer, Stripe resolves the
+active metered price at ingest time. No column to refresh.
 
-- On tier change, the old metered item is cancelled and a new one
-  replaces it. Usage reported against the old item is billed at the
-  old rate; usage reported against the new item is billed at the new
-  rate. Correct by construction as long as we always report against
-  the *current* item.
-- The `stripe_overage_item_id` column must be refreshed on
-  `customer.subscription.updated` so reports land on the new item.
+Open question for the event-timing edge: if a customer upgrades from
+Swatch → Yard at 14:00 UTC, the day's usage is reported as a single
+event at end-of-day with a single timestamp. Stripe attributes the
+whole event to whichever price was active at that timestamp (Yard).
+That's slightly generous to the customer on the upgrade path (old
+Swatch rates wouldn't apply to the day's Swatch-era usage) and
+slightly stingy on the downgrade (Swatch rates applied to Yard-era
+usage). Acceptable, given daily resolution is our usage granularity.
 
 ### Cancellation, refunds, chargebacks
 
@@ -269,35 +292,31 @@ item:
 1. ~~Fix the rollup atomicity~~ — done in migration 028 (idempotent
    rollup, no DELETE, split-on-today read).
 2. **Centralize `VolumeAllowance` + `OverageRatePerGB`** in
-   `store/user.go`; update `handleUsage` and `shellfs.go`.
-3. **Set up Stripe products + prices** in the Stripe dashboard: one
-   flat + one metered with graduated tiers per plan. Put price IDs in
-   env config.
-4. **Extend subscription wiring** — dual-item `handleSetupIntent`,
-   `handleCheckout`; `stripe_overage_item_id` column + migration; a
-   webhook branch that refreshes the column on tier change.
-5. **Build the reporter** — daily `usage_records.create` with
-   idempotency keys, audit log.
-6. **Surface projected overage** in the dashboard and
-   `/api/billing/usage`.
-7. **Delete or repurpose** `UsageRecord` — either drop it, or use it as
-   the `stripe_usage_reports` audit table schema (renaming to keep
-   callers sane).
+   `store/user.go` using decimal GB (10⁹ bytes); replace literals in
+   `handleUsage` and `shellfs.go`. Delete the unreferenced
+   `UsageRecord` struct — the reporter introduces a new
+   `StripeUsageReport` shape that matches the meter-event audit.
+3. ~~Stripe products + prices~~ — done. Meter + three graduated
+   metered prices exist in Stripe (see table above).
+4. **Extend subscription wiring** — `TierPrices` struct,
+   `STRIPE_PRICE_*_OVERAGE` env vars, dual-item subscriptions in
+   `handleSetupIntent` / `handleCheckout`. No DB schema change
+   (meter-events resolve by customer, not by subscription item).
+5. **Build the reporter** — migration 029 creates
+   `stripe_usage_reports` (id, customer_name, day, kb_reported,
+   stripe_event_id, reported_at; UNIQUE(customer_name, day)). Daily
+   03:00 UTC ticker posts `billing/meter_events` per customer with
+   idempotency `identifier=weft:<customer>:<date>`.
+6. **Surface projected overage** in `/api/billing/usage` and the
+   dashboard usage card.
 
-Step 2 is a mechanical cleanup that unblocks nothing but is cheap.
-Steps 3–7 are the actual metered-billing project and make sense as a
-focused follow-up.
+## Open questions — resolved
 
-## Open questions worth resolving before step 3
-
-- **Free-period policy.** New customers get a trial period; should
-  trial users see overage math but not be billed? Stripe handles this
-  by leaving trial subscriptions without a metered item, or by setting
-  the metered price to zero during trial. Product call.
-- **Rounding.** The pricing page says `$2/GB` — do we bill fractionally
-  (10.5 GB → $1.00 overage on swatch) or round up each GB (10.5 GB →
-  $2.00)? Stripe's graduated pricing supports both via `transform_quantity`
-  vs. proportional tiers. Default to fractional (more customer-friendly).
+- **Free-period policy.** Trial subscriptions get no metered item;
+  upgrade to a paid tier adds it.
+- **Rounding.** Fractional, via Stripe's graduated pricing on the
+  metered price. Client reports `floor(bytes / 1000)` KB; Stripe
+  handles the rest.
 - **Alerting.** A customer about to pay a large overage bill would
   probably rather know in advance. A "you're at 80% of your quota with
   10 days left in the period" email is a useful companion feature —

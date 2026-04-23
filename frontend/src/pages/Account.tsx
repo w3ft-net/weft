@@ -191,12 +191,25 @@ function SubscriptionCard({ usage, onRefresh }: { usage: Usage | null; onRefresh
               <div className="usage-stat-value">{formatDate(usage.period_start)}</div>
             </div>
           </div>
-          <div className="usage-bar-wrap" style={{ marginBottom: 24 }}>
+          <div className="usage-bar-wrap" style={{ marginBottom: usage.projected_overage_cents > 0 ? 8 : 24 }}>
             <div className="usage-bar-track" data-testid="account-usage-bar">
               <div className="usage-bar-fill" style={{ width: `${pct}%`, background: barColor }} />
             </div>
             <span className="usage-bar-pct" style={{ color: barColor }}>{pct}%</span>
           </div>
+          {usage.projected_overage_cents > 0 && (
+            <div
+              className="usage-projected-overage"
+              data-testid="account-projected-overage"
+              style={{ marginBottom: 24 }}
+            >
+              Projected overage this period:{' '}
+              <strong>${(usage.projected_overage_cents / 100).toFixed(2)}</strong>
+              <span className="usage-projected-overage-hint">
+                {' '}— billed at period end.
+              </span>
+            </div>
+          )}
 
           {/* Metrics forecast */}
           {usage.metrics_forecast && usage.metrics_forecast.agents_with_metrics > 0 && (

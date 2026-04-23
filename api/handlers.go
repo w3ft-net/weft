@@ -49,7 +49,17 @@ type Server struct {
 	StripeSecretKey      string
 	StripePublishableKey string
 	StripeWebhookSecret  string
-	StripePrices         map[string]string // tier → Stripe price ID
+	// StripePrices maps each paid tier to its flat + overage price IDs.
+	// A tier absent from the map, or with an empty Overage, is in
+	// flat-only mode: subscriptions get a single item and no usage is
+	// reported. Useful for piloting Stripe overage config one tier at
+	// a time. See docs/plans/stripe.md.
+	StripePrices map[store.Tier]TierPrices
+
+	// postMeterEvent is the Stripe meter-events client — see
+	// api/usage_reporter.go. Overridable in tests; production wiring
+	// happens in StartUsageReporter.
+	postMeterEvent postMeterEventFunc
 
 	// Slack OAuth config
 	SlackClientID     string
@@ -86,6 +96,14 @@ func (s *Server) apiBaseURL() string {
 	return strings.Replace(s.baseURL, "://", "://api.", 1)
 }
 
+// TierPrices is a tier's flat-rate and metered-overage Stripe price
+// pair. Overage may be empty — such a tier's subscriptions get a
+// single flat item and no meter events are emitted for it.
+type TierPrices struct {
+	Flat    string
+	Overage string
+}
+
 // NewServer creates an API server.
 func NewServer(s *store.Store, jwtSecret, coordAddr, baseURL string) *Server {
 	return &Server{
@@ -94,7 +112,7 @@ func NewServer(s *store.Store, jwtSecret, coordAddr, baseURL string) *Server {
 		coordAddr:    coordAddr,
 		baseURL:      baseURL,
 		email:        EmailConfigFromEnv(),
-		StripePrices: make(map[string]string),
+		StripePrices: make(map[store.Tier]TierPrices),
 	}
 }
 
@@ -346,7 +364,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.StripePrices[req.Tier]; !ok {
+	if _, ok := s.StripePrices[store.Tier(req.Tier)]; !ok {
 		http.Error(w, "invalid tier", http.StatusBadRequest)
 		return
 	}
@@ -706,7 +724,7 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tier required", http.StatusBadRequest)
 		return
 	}
-	priceID, ok := s.StripePrices[req.Tier]
+	prices, ok := s.StripePrices[store.Tier(req.Tier)]
 	if !ok {
 		http.Error(w, "invalid tier", http.StatusBadRequest)
 		return
@@ -742,11 +760,20 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Flat-rate item always; metered overage item only when the tier
+	// has an overage price configured (absence = flat-only, useful
+	// during a per-tier pilot of metered billing).
+	items := []*stripe.SubscriptionItemsParams{
+		{Price: stripe.String(prices.Flat), Quantity: stripe.Int64(1)},
+	}
+	if prices.Overage != "" {
+		items = append(items, &stripe.SubscriptionItemsParams{
+			Price: stripe.String(prices.Overage),
+		})
+	}
 	params := &stripe.SubscriptionParams{
 		Customer: stripe.String(custID),
-		Items: []*stripe.SubscriptionItemsParams{
-			{Price: stripe.String(priceID), Quantity: stripe.Int64(1)},
-		},
+		Items:    items,
 		TrialPeriodDays: stripe.Int64(14),
 		PaymentBehavior: stripe.String("default_incomplete"),
 		PaymentSettings: &stripe.SubscriptionPaymentSettingsParams{
@@ -807,7 +834,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tier required", http.StatusBadRequest)
 		return
 	}
-	priceID, ok := s.StripePrices[req.Tier]
+	newPrices, ok := s.StripePrices[store.Tier(req.Tier)]
 	if !ok {
 		http.Error(w, "invalid tier", http.StatusBadRequest)
 		return
@@ -821,7 +848,12 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch the existing subscription so we can replace the single item in place.
+	// Fetch the existing subscription so we can update items in place.
+	// We identify each item by its price's recurring.usage_type:
+	// "licensed" for the flat tier item, "metered" for the overage
+	// item (if present). Matching by position would be fragile when
+	// Stripe reorders or a new tier adds the overage item for the
+	// first time.
 	existing, err := subscription.Get(currentSub.StripeSubscriptionID, nil)
 	if err != nil {
 		log.Printf("stripe subscription lookup failed: %v", err)
@@ -832,12 +864,45 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "subscription has no items", http.StatusInternalServerError)
 		return
 	}
+	var flatItemID, overageItemID string
+	for _, it := range existing.Items.Data {
+		if it.Price == nil || it.Price.Recurring == nil {
+			continue
+		}
+		switch it.Price.Recurring.UsageType {
+		case stripe.PriceRecurringUsageTypeMetered:
+			overageItemID = it.ID
+		default:
+			flatItemID = it.ID
+		}
+	}
+	if flatItemID == "" {
+		// Shouldn't happen — every subscription has a flat item — but
+		// fall back to the first item rather than silently misroute.
+		flatItemID = existing.Items.Data[0].ID
+	}
+
+	// Update the flat item in place. Add or update the overage item
+	// according to the new tier's config — absence means flat-only.
+	items := []*stripe.SubscriptionItemsParams{
+		{ID: stripe.String(flatItemID), Price: stripe.String(newPrices.Flat)},
+	}
+	if newPrices.Overage != "" {
+		oi := &stripe.SubscriptionItemsParams{Price: stripe.String(newPrices.Overage)}
+		if overageItemID != "" {
+			oi.ID = stripe.String(overageItemID)
+		}
+		items = append(items, oi)
+	} else if overageItemID != "" {
+		// New tier has no overage item but old one does — delete it.
+		items = append(items, &stripe.SubscriptionItemsParams{
+			ID:      stripe.String(overageItemID),
+			Deleted: stripe.Bool(true),
+		})
+	}
 
 	updateParams := &stripe.SubscriptionParams{
-		Items: []*stripe.SubscriptionItemsParams{{
-			ID:    stripe.String(existing.Items.Data[0].ID),
-			Price: stripe.String(priceID),
-		}},
+		Items:             items,
 		ProrationBehavior: stripe.String("create_prorations"),
 		PaymentBehavior:   stripe.String("default_incomplete"),
 		Metadata: map[string]string{
@@ -943,6 +1008,24 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// projectedOverageCents returns what an extra $N the customer's next
+// invoice would carry if the current period's ingestion stopped now.
+// Cents, integer-truncated — the dashboard uses this as a heads-up,
+// not an invoice line item (Stripe does the precise math at billing
+// time). Zero when under the tier allowance or on tiers without an
+// overage rate (trial).
+func projectedOverageCents(bytes int64, tier store.Tier) int {
+	over := bytes - store.VolumeAllowance(tier)
+	if over <= 0 {
+		return 0
+	}
+	rate := store.OverageRatePerGB(tier) // cents per decimal GB
+	if rate == 0 {
+		return 0
+	}
+	return int((over * int64(rate)) / 1_000_000_000)
+}
+
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
 	if claims == nil {
@@ -967,31 +1050,23 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get the actual tier from the DB subscription, not the JWT (which may be stale).
+	// Actual tier from the DB subscription, not the JWT (which may be
+	// stale). Fall back to the JWT value when no active sub exists,
+	// keeping pre-subscription trial users visible.
 	tier := store.Tier(claims.Tier)
-	var tierLimitBytes int64 = 10 * 1024 * 1024 * 1024 // default 10 GB
 	if s.store != nil {
 		if sub, _ := s.store.ActiveSubscription(claims.CustomerName); sub != nil {
 			tier = store.Tier(sub.Tier)
-			switch sub.Tier {
-			case "swatch":
-				tierLimitBytes = 10 * 1024 * 1024 * 1024    // 10 GB
-			case "yard":
-				tierLimitBytes = 100 * 1024 * 1024 * 1024   // 100 GB
-			case "bolt":
-				tierLimitBytes = 1024 * 1024 * 1024 * 1024  // 1 TB
-			case "trial":
-				tierLimitBytes = 1 * 1024 * 1024 * 1024     // 1 GB
-			}
 		}
 	}
 
 	result := map[string]any{
-		"bytes_ingested":   resp.BytesIngested,
-		"tier_limit_bytes": tierLimitBytes,
-		"period_start":     resp.PeriodStart,
-		"period_end":       resp.PeriodEnd,
-		"tier":             tier,
+		"bytes_ingested":          resp.BytesIngested,
+		"tier_limit_bytes":        store.VolumeAllowance(tier),
+		"period_start":             resp.PeriodStart,
+		"period_end":              resp.PeriodEnd,
+		"tier":                    tier,
+		"projected_overage_cents": projectedOverageCents(resp.BytesIngested, tier),
 	}
 
 	// Add metrics forecast if available.

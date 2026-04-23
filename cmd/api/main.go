@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	weftapi "github.com/kevlarcon/weft/api"
@@ -47,15 +48,20 @@ func main() {
 	}
 	defer srv.Close()
 
-	// Configure Stripe prices from env.
-	if p := os.Getenv("STRIPE_PRICE_SWATCH"); p != "" {
-		srv.StripePrices["swatch"] = p
-	}
-	if p := os.Getenv("STRIPE_PRICE_YARD"); p != "" {
-		srv.StripePrices["yard"] = p
-	}
-	if p := os.Getenv("STRIPE_PRICE_BOLT"); p != "" {
-		srv.StripePrices["bolt"] = p
+	// Configure Stripe prices from env. Each tier has a flat recurring
+	// price plus an optional metered overage price. Absence of the
+	// _OVERAGE variant puts that tier in flat-only mode — see
+	// docs/plans/stripe.md for the overage-billing plan.
+	for _, tier := range []store.Tier{store.TierSwatch, store.TierYard, store.TierBolt} {
+		prefix := "STRIPE_PRICE_" + strings.ToUpper(string(tier))
+		flat := os.Getenv(prefix)
+		if flat == "" {
+			continue
+		}
+		srv.StripePrices[tier] = weftapi.TierPrices{
+			Flat:    flat,
+			Overage: os.Getenv(prefix + "_OVERAGE"),
+		}
 	}
 	srv.StripeSecretKey = os.Getenv("STRIPE_SECRET_KEY")
 	srv.StripePublishableKey = os.Getenv("STRIPE_PUBLISHABLE_KEY")
@@ -68,6 +74,12 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	srv.StartUnverifiedSweep(ctx)
+
+	// Start the daily Stripe usage reporter. Fires at 03:00 UTC and
+	// posts yesterday's ingestion to the metered overage prices for
+	// each customer with one. No-op when STRIPE_SECRET_KEY is unset
+	// or when a tier has no overage price configured.
+	srv.StartUsageReporter(ctx)
 
 	// Kick off the runtime-config watcher. Reads /weft/config/app from
 	// SSM on boot and re-reads every 60s, atomically swapping the

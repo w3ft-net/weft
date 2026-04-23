@@ -225,7 +225,7 @@ func TestSavedQueries_CRUD(t *testing.T) {
 
 func TestAuth_Signup_ReturnsUnverifiedUser(t *testing.T) {
 	srv, _ := testServer(t)
-	srv.StripePrices["swatch"] = "price_test"
+	srv.StripePrices[store.TierSwatch] = TierPrices{Flat: "price_test"}
 	handler := srv.Handler()
 	email := fmt.Sprintf("signup-%d@example.com", os.Getpid())
 

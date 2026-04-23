@@ -250,6 +250,11 @@ export interface Usage {
   bytes_ingested: number
   tier_limit_bytes: number
   period_start: string
+  // Cents the customer would owe on the next invoice if ingestion
+  // stopped now. Zero under the tier's free quota or on tiers without
+  // an overage rate (trial). Stripe is authoritative for the real
+  // billable number; this is a dashboard heads-up.
+  projected_overage_cents: number
   metrics_forecast?: {
     agents_with_metrics: number
     projected_bytes_month: number
