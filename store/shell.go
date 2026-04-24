@@ -77,11 +77,31 @@ func (s *Store) SaveShellFunction(customerID uint, name, source string) error {
 // Catching parse errors here surfaces them to the user (in vi's status line
 // on :w) instead of letting an unparseable script silently persist and
 // then 500 at invocation time.
+//
+// Bash scripts additionally must satisfy a set of shape rules that would
+// otherwise produce confusing runtime behaviour:
+//   - validateAlertPosition — alerts only at the terminal position.
+//   - validateNoFollowMode — `tail -f` is incompatible with the
+//     body-runs-to-completion execution model for saved scripts.
+//   - validateNoRangeBuiltin — `range` adjusts the request-scoped
+//     time window, which a saved script cannot scope properly (its
+//     effects would leak to subsequent interior queries in
+//     unexpected ways).
 func validateSource(lang, source string) error {
 	switch lang {
 	case "bash":
-		if _, err := bash.Parse(source); err != nil {
+		script, err := bash.Parse(source)
+		if err != nil {
 			return fmt.Errorf("bash syntax error: %w", err)
+		}
+		if err := validateAlertPosition(script); err != nil {
+			return err
+		}
+		if err := validateNoFollowMode(script); err != nil {
+			return err
+		}
+		if err := validateNoRangeBuiltin(script); err != nil {
+			return err
 		}
 	case "lua":
 		if _, err := luaparse.Parse(strings.NewReader(source), "source"); err != nil {
@@ -89,6 +109,156 @@ func validateSource(lang, source string) error {
 		}
 	}
 	return nil
+}
+
+// validateAlertPosition enforces that any `alert` stage in a /bin
+// script body appears only as the terminal stage of the body's final
+// top-level list, and that list is a bare pipeline (not inside
+// if/for/while/case/subshell/group/function). Any other placement is
+// rejected with a user-facing error that names the offending location.
+//
+// Rationale: a body that invokes `alert` mid-flow or inside a loop
+// fires the alert N times per script invocation, typically N > the
+// user's intent. Constraining alert to "the last thing the body
+// does" matches how interactive pipelines use alerts today and
+// matches the outer-watch model (one alert dispatch per watch run).
+func validateAlertPosition(script *bash.Script) error {
+	if script == nil || len(script.Commands) == 0 {
+		return nil
+	}
+	// Find every `alert` SimpleCommand anywhere in the tree, along
+	// with whether it sits at the allowed position.
+	lastIdx := len(script.Commands) - 1
+	allowed := make(map[*bash.SimpleCommand]bool)
+	if sc := terminalAlertOf(script.Commands[lastIdx]); sc != nil {
+		allowed[sc] = true
+	}
+
+	var offender *bash.SimpleCommand
+	bash.Walk(script, func(n bash.Node) bool {
+		if offender != nil {
+			return false
+		}
+		sc, ok := n.(*bash.SimpleCommand)
+		if !ok || len(sc.Words) == 0 {
+			return true
+		}
+		if sc.Words[0].Literal() != "alert" {
+			return true
+		}
+		if !allowed[sc] {
+			offender = sc
+		}
+		return true
+	})
+	if offender != nil {
+		return fmt.Errorf("alert may only appear as the final stage of a /bin script body, not in a leading list, loop body, conditional, or nested command")
+	}
+	return nil
+}
+
+// validateNoFollowMode rejects scripts that use `tail -f` anywhere in
+// the body. Follow mode streams indefinitely — it has no natural
+// completion point — which conflicts with the body-runs-to-completion
+// execution model for saved scripts (where a caller, cron, or HTTP
+// request is waiting for a final stdout). Allowing it would mean
+// either the script hangs forever or the first ERROR row kills the
+// whole stream; neither is what the user expects.
+//
+// If the user genuinely wants to follow logs, `tail -f` works at the
+// interactive shell prompt where there is no completion requirement.
+func validateNoFollowMode(script *bash.Script) error {
+	if script == nil {
+		return nil
+	}
+	var found *bash.SimpleCommand
+	bash.Walk(script, func(n bash.Node) bool {
+		if found != nil {
+			return false
+		}
+		sc, ok := n.(*bash.SimpleCommand)
+		if !ok || len(sc.Words) == 0 {
+			return true
+		}
+		if sc.Words[0].Literal() != "tail" {
+			return true
+		}
+		for _, w := range sc.Words[1:] {
+			lit := w.Literal()
+			if lit == "-f" || lit == "--follow" || strings.HasPrefix(lit, "-f") {
+				found = sc
+				return false
+			}
+		}
+		return true
+	})
+	if found != nil {
+		return fmt.Errorf("tail -f is not allowed in saved scripts (follow mode streams indefinitely and has no completion point); use `tail -f` interactively at the shell prompt instead")
+	}
+	return nil
+}
+
+// validateNoRangeBuiltin rejects scripts that invoke the `range`
+// shell builtin. `range` adjusts the request's time window in-place;
+// inside a saved script its effect would silently leak into every
+// interior query the script fires afterwards, producing windows the
+// caller did not ask for. Saved scripts inherit `tr` from the
+// request that invoked them; users who need a different window
+// should invoke the script from a shell session where they've
+// already set the window, or use explicit time predicates in their
+// awk/grep stages.
+func validateNoRangeBuiltin(script *bash.Script) error {
+	if script == nil {
+		return nil
+	}
+	var found *bash.SimpleCommand
+	bash.Walk(script, func(n bash.Node) bool {
+		if found != nil {
+			return false
+		}
+		sc, ok := n.(*bash.SimpleCommand)
+		if !ok || len(sc.Words) == 0 {
+			return true
+		}
+		if sc.Words[0].Literal() == "range" {
+			found = sc
+			return false
+		}
+		return true
+	})
+	if found != nil {
+		return fmt.Errorf("range is not allowed in saved scripts (it modifies the request-scoped time window and would leak into interior queries); set the window at the call site or use explicit time predicates inside the script")
+	}
+	return nil
+}
+
+// terminalAlertOf returns the `alert` SimpleCommand that is the last
+// stage of list's first (and only allowed) pipeline, iff list is a
+// bare single-pipeline list (no ListCont continuations). Any other
+// shape returns nil, which means no alert in that list is "allowed"
+// — including alerts sitting at the end of a compound list like
+// `foo && bar | alert`, where the alert's semantics are too
+// short-circuit-dependent to reason about cleanly.
+func terminalAlertOf(list *bash.List) *bash.SimpleCommand {
+	if list == nil || list.First == nil {
+		return nil
+	}
+	if len(list.Rest) != 0 {
+		return nil
+	}
+	pipe := list.First
+	if len(pipe.Commands) == 0 {
+		return nil
+	}
+	last := pipe.Commands[len(pipe.Commands)-1]
+	sc, ok := last.(*bash.SimpleCommand)
+	if !ok || len(sc.Words) == 0 {
+		return nil
+	}
+	if sc.Words[0].Literal() != "alert" {
+		return nil
+	}
+	return sc
 }
 
 // detectLanguage checks for a Lua shebang and returns the language
@@ -193,6 +363,7 @@ type CompiledWatch struct {
 // compiled extractor positions for the (at most one) `alert` stage.
 //
 // Validation rules:
+//   - The pipeline must parse as bash.
 //   - `alert` may appear at most once in the pipeline. The single stage is
 //     the sole incident-dedup boundary per watch run.
 //   - `-k` / `-t` must be positive integers if present (enforced by
@@ -200,13 +371,12 @@ type CompiledWatch struct {
 //
 // The AST walk catches alerts nested in command substitutions, compound
 // commands, and function bodies so the only way past validation is alias
-// or variable obfuscation. Parse errors from warp are swallowed so the
-// runtime surfaces a clearer diagnostic at tick time.
+// or variable obfuscation.
 func CompileWatchPipeline(pipeline string) (CompiledWatch, error) {
 	var out CompiledWatch
 	script, err := bash.Parse(pipeline)
 	if err != nil {
-		return out, nil
+		return out, fmt.Errorf("parse: %w", err)
 	}
 	var alertCmds []*bash.SimpleCommand
 	bash.Walk(script, func(n bash.Node) bool {

@@ -87,3 +87,155 @@ func TestSaveShellFunction_RejectsInvalidLua(t *testing.T) {
 		t.Error("broken lua was persisted despite syntax error")
 	}
 }
+
+// The terminal-alert-only rule: alert may appear only as the final
+// stage of a /bin body's final top-level list, and that list must be
+// a bare pipeline. Everything else is rejected at save time so the
+// interceptor never has to reason about alert position at runtime.
+
+func TestValidateSource_AcceptsTerminalAlert(t *testing.T) {
+	cases := []string{
+		// Bare single-pipeline body.
+		`cat /log/api.log | grep ERROR | wc -l | alert above 10`,
+		// Multi-list body, alert on the trailing pipeline.
+		`echo starting
+cat /log/api.log | grep ERROR | wc -l | alert above 10`,
+		// Body with several lists; alert only on the last.
+		`echo a
+echo b
+cat /log/api.log | wc -l | alert above 0`,
+		// No alert at all — the common case must keep working.
+		`echo starting
+cat /log/api.log | grep ERROR | wc -l
+echo finished`,
+	}
+	for _, src := range cases {
+		if err := validateSource("bash", src); err != nil {
+			t.Errorf("valid body rejected: %v\n---\n%s", err, src)
+		}
+	}
+}
+
+func TestValidateSource_RejectsInteriorAlert(t *testing.T) {
+	cases := map[string]string{
+		"alert in first list of multi-list body":   "cat /log/api.log | wc -l | alert above 10\necho finished",
+		"alert mid-body":                           "echo a\ncat /log/api.log | wc -l | alert above 0\necho b",
+		"alert inside for loop":                    "for a in x y; do cat /log/$a.log | wc -l | alert above 0; done",
+		"alert inside if body":                     "if true; then cat /log/api.log | wc -l | alert above 0; fi",
+		"alert inside subshell":                    "( cat /log/api.log | wc -l | alert above 0 )",
+		"alert inside command group":               "{ cat /log/api.log | wc -l | alert above 0; }",
+		"alert after final list's && continuation": "cat /log/api.log | wc -l && echo ok | alert above 0",
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := validateSource("bash", src)
+			if err == nil {
+				t.Errorf("expected rejection for interior alert; source was:\n%s", src)
+				return
+			}
+			if !strings.Contains(err.Error(), "alert may only appear") {
+				t.Errorf("err=%q, want message about alert placement", err)
+			}
+		})
+	}
+}
+
+// A body with no alert at all (but with interior source pipelines)
+// must also pass validation — this is the hot path for the interceptor
+// feature's motivating case.
+func TestValidateSource_AllowsBodyWithoutAlertAndInteriorQueries(t *testing.T) {
+	src := `echo starting
+cat /log/api.log | grep ERROR | wc -l
+for app in api web; do
+  cat /log/$app.log | grep WARN | wc -l
+done
+echo finished`
+	if err := validateSource("bash", src); err != nil {
+		t.Errorf("valid alert-free body rejected: %v", err)
+	}
+}
+
+// `tail -f` is banned in saved scripts. Follow mode streams
+// indefinitely — no natural completion point — so a saved script
+// containing it would hang forever from the caller's perspective.
+// The ban catches all common spellings.
+func TestValidateSource_RejectsTailFollow(t *testing.T) {
+	cases := map[string]string{
+		"tail -f":                  `tail -f /log/api.log`,
+		"tail -f with grep":        `tail -f /log/api.log | grep ERROR`,
+		"tail --follow long form":  `tail --follow /log/api.log`,
+		"tail -fn 100 (joined)":    `tail -fn 100 /log/api.log`,
+		"tail -f in for loop":      `for a in api web; do tail -f /log/$a.log; done`,
+		"tail -f inside cmdsub":    "x=$(tail -f /log/api.log); echo $x",
+		"tail -f inside function":  "watch() { tail -f /log/$1.log; }\nwatch api",
+		"tail -f after echo":       "echo starting\ntail -f /log/api.log",
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := validateSource("bash", src)
+			if err == nil {
+				t.Errorf("expected rejection; source was:\n%s", src)
+				return
+			}
+			if !strings.Contains(err.Error(), "tail -f is not allowed") {
+				t.Errorf("err=%q, want message about tail -f", err)
+			}
+		})
+	}
+}
+
+// Plain `tail` (without -f) is still allowed — it's a normal bounded
+// read of the last N lines.
+func TestValidateSource_AllowsPlainTail(t *testing.T) {
+	cases := []string{
+		`tail /log/api.log`,
+		`tail -n 100 /log/api.log`,
+		`tail -100 /log/api.log`,
+		`tail -n 50 /log/api.log | grep ERROR`,
+	}
+	for _, src := range cases {
+		if err := validateSource("bash", src); err != nil {
+			t.Errorf("valid `tail` without -f rejected: %v\nsrc: %s", err, src)
+		}
+	}
+}
+
+// `range` is banned in saved scripts: it modifies the request's
+// time window, which a script cannot sensibly scope.
+func TestValidateSource_RejectsRangeBuiltin(t *testing.T) {
+	cases := map[string]string{
+		"bare range":          `range 1h..`,
+		"range in for loop":   `for t in 1h 2h; do range $t..; cat /log/api.log | wc -l; done`,
+		"range inside cmdsub": "x=$(range 30m..; cat /log/api.log | wc -l); echo $x",
+		"range after echo":    "echo starting\nrange 1h..\ncat /log/api.log | wc -l",
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := validateSource("bash", src)
+			if err == nil {
+				t.Errorf("expected rejection; source was:\n%s", src)
+				return
+			}
+			if !strings.Contains(err.Error(), "range is not allowed") {
+				t.Errorf("err=%q, want message about range", err)
+			}
+		})
+	}
+}
+
+// `range` as an argument to another command is fine — it's a common
+// enough word that we shouldn't false-positive on `echo range` or
+// a variable named `$range`.
+func TestValidateSource_AllowsRangeAsArgument(t *testing.T) {
+	cases := []string{
+		`echo range`,
+		`echo "the range is"`,
+		`grep range /log/api.log`,
+		`x=range; echo $x`,
+	}
+	for _, src := range cases {
+		if err := validateSource("bash", src); err != nil {
+			t.Errorf("valid use of `range` as arg rejected: %v\nsrc: %s", err, src)
+		}
+	}
+}
