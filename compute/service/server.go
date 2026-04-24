@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"sync"
 
 	"github.com/google/uuid"
@@ -38,18 +39,34 @@ func (s *Server) CreateJob(_ context.Context, req *pb.CreateJobRequest) (*pb.Cre
 	s.jobs[jobID] = job
 	s.mu.Unlock()
 
+	log.Printf("job %s created: shards=%d merge_key=%q stages=%v", jobID, req.ShardCount, req.MergeKey, req.Stages)
 	return &pb.CreateJobResponse{JobId: jobID}, nil
 }
 
 func (s *Server) SendRows(stream pb.WeftCompute_SendRowsServer) error {
-	var count int64
+	// Per-shard row tallies so the per-request log shows the shape of
+	// the incoming stream (useful signal that compute is actually
+	// receiving traffic, not just that the RPC handler got called).
+	rowsByShard := map[string]int64{}
+	sentinelsByShard := map[string]bool{}
+	var jobID string
 	for {
 		msg, err := stream.Recv()
 		if err == io.EOF {
-			return stream.SendAndClose(&pb.SendRowsResponse{RowsReceived: count})
+			var total int64
+			for _, n := range rowsByShard {
+				total += n
+			}
+			log.Printf("job %s SendRows closed: rows=%d shards=%d sentinels=%d by_shard=%v", jobID, total, len(rowsByShard), len(sentinelsByShard), rowsByShard)
+			return stream.SendAndClose(&pb.SendRowsResponse{RowsReceived: total})
 		}
 		if err != nil {
+			log.Printf("job %s SendRows error after %d rows: %v", jobID, sumMap(rowsByShard), err)
 			return err
+		}
+
+		if jobID == "" {
+			jobID = msg.JobId
 		}
 
 		s.mu.Lock()
@@ -60,12 +77,21 @@ func (s *Server) SendRows(stream pb.WeftCompute_SendRowsServer) error {
 		}
 
 		if msg.Sentinel {
+			sentinelsByShard[msg.ShardId] = true
 			job.SendSentinel(msg.ShardId)
 		} else if msg.Row != nil {
+			rowsByShard[msg.ShardId]++
 			job.SendRow(msg.Row, msg.ShardId)
-			count++
 		}
 	}
+}
+
+func sumMap(m map[string]int64) int64 {
+	var n int64
+	for _, v := range m {
+		n += v
+	}
+	return n
 }
 
 func (s *Server) GetResult(_ context.Context, req *pb.GetResultRequest) (*pb.GetResultResponse, error) {
@@ -84,8 +110,10 @@ func (s *Server) GetResult(_ context.Context, req *pb.GetResultRequest) (*pb.Get
 	s.mu.Unlock()
 
 	if err != nil {
+		log.Printf("job %s GetResult: err=%v", req.JobId, err)
 		return &pb.GetResultResponse{Error: err.Error()}, nil
 	}
+	log.Printf("job %s GetResult: ok, output=%d bytes", req.JobId, len(text))
 	return &pb.GetResultResponse{Text: text}, nil
 }
 
