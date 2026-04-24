@@ -9,6 +9,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
 	weftcfg "github.com/kevlarcon/weft/config"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
@@ -215,11 +218,88 @@ func (s *Server) Query(req *pb.QueryRequest, stream pb.ShardQuery_QueryServer) e
 	return nil
 }
 
-// QueryToCompute is a placeholder — in Phase 1 the coordinator manages
-// shard→compute streaming. In Phase 2 the shard would connect directly
-// to the compute service.
-func (s *Server) QueryToCompute(_ context.Context, req *pb.QueryToComputeRequest) (*pb.QueryToComputeResponse, error) {
-	return &pb.QueryToComputeResponse{}, nil
+// QueryToCompute runs the pushed-down SQL and streams rows straight
+// to a compute job on compute_addr. The shard dials compute itself
+// (so the coordinator stays off the data path for op 1 of the
+// direct-to-compute plan), sends one ComputeMessage per row carrying
+// (job_id, this shard's id, row), and finishes with a sentinel so the
+// compute-side consumer knows this shard is done. Returns RowsSent so
+// the coordinator can fail the query if a shard didn't deliver what
+// its pushdown claimed it would.
+func (s *Server) QueryToCompute(ctx context.Context, req *pb.QueryToComputeRequest) (*pb.QueryToComputeResponse, error) {
+	ds, err := s.getShard()
+	if err != nil {
+		return nil, err
+	}
+	if req.ComputeAddr == "" {
+		return nil, fmt.Errorf("QueryToCompute: empty compute_addr")
+	}
+	if req.JobId == "" {
+		return nil, fmt.Errorf("QueryToCompute: empty job_id")
+	}
+
+	// Honor the same runtime timeout the regular Query RPC does —
+	// long-running pushdowns are pathological and we'd rather fail
+	// the job than stream forever into compute.
+	if timeoutSec := s.runtimeCfg().ShardQueryTimeoutSeconds; timeoutSec > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+		defer cancel()
+	}
+
+	rows, err := ds.QueryContext(ctx, req.Sql)
+	if err != nil {
+		log.Printf("shard %s: QueryToCompute query error: %v (sql=%s)", s.id, err, req.Sql)
+		return nil, err
+	}
+
+	// Dial compute fresh per request. Connections are cheap over the
+	// cluster's internal network and a per-request dial dodges the
+	// "compute restarted, our cached channel is stale" failure mode.
+	// Compute doesn't enforce shared-token auth (by design — the
+	// shard↔compute link is an internal RPC), so bare insecure creds
+	// are enough. If that changes, wire ClientTokenUnaryInterceptor
+	// with a dedicated secret here.
+	conn, err := grpc.NewClient(req.ComputeAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, fmt.Errorf("shard %s: dial compute %s: %w", s.id, req.ComputeAddr, err)
+	}
+	defer conn.Close()
+
+	cc := pb.NewWeftComputeClient(conn)
+	stream, err := cc.SendRows(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("shard %s: open SendRows stream: %w", s.id, err)
+	}
+
+	var sent int64
+	for _, r := range rows {
+		if err := stream.Send(&pb.ComputeMessage{
+			JobId:   req.JobId,
+			ShardId: s.id,
+			Row:     r,
+		}); err != nil {
+			return nil, fmt.Errorf("shard %s: send row: %w", s.id, err)
+		}
+		sent++
+	}
+
+	// Always close with a sentinel — even on the empty-result path —
+	// so compute's per-shard gate unblocks. Without this, one empty
+	// shard hangs the whole query.
+	if err := stream.Send(&pb.ComputeMessage{
+		JobId:    req.JobId,
+		ShardId:  s.id,
+		Sentinel: true,
+	}); err != nil {
+		return nil, fmt.Errorf("shard %s: send sentinel: %w", s.id, err)
+	}
+
+	if _, err := stream.CloseAndRecv(); err != nil {
+		return nil, fmt.Errorf("shard %s: close SendRows: %w", s.id, err)
+	}
+
+	return &pb.QueryToComputeResponse{RowsSent: sent}, nil
 }
 
 // Ingest accepts a batch of rows for insertion.

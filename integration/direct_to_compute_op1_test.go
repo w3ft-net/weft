@@ -72,13 +72,19 @@ func TestDirectToCompute_Op1_ShardStreamsDirectlyToCompute(t *testing.T) {
 	}
 
 	// ---- 2. Ingest test rows directly into shard-0 -----------------
+	//
+	// docker volumes persist across compose down/up, so successive
+	// runs accumulate. Salt the Raw column with a nanosecond prefix
+	// and filter on it in the query so each run only sees its own
+	// rows.
 	const nRows = 10
-	rows := make([]*pb.LogRow, nRows)
 	now := time.Now()
+	prefix := fmt.Sprintf("op1-%d", now.UnixNano())
+	rows := make([]*pb.LogRow, nRows)
 	for i := range rows {
 		rows[i] = &pb.LogRow{
 			LineNum:  int64(i + 1),
-			Raw:      fmt.Sprintf("op1-row-%d", i),
+			Raw:      fmt.Sprintf("%s-row-%d", prefix, i),
 			App:      "directcompute/app",
 			Level:    "INFO",
 			Customer: "kevlar",
@@ -116,7 +122,7 @@ func TestDirectToCompute_Op1_ShardStreamsDirectlyToCompute(t *testing.T) {
 	// "localhost:9010" would only work if compute were in the same
 	// container, which it isn't.
 	qtcResp, err := shardClient.QueryToCompute(ctx, &pb.QueryToComputeRequest{
-		Sql:         "SELECT line_num, raw FROM logs WHERE raw LIKE 'op1-row-%' ORDER BY line_num",
+		Sql:         fmt.Sprintf("SELECT line_num, raw FROM logs WHERE raw LIKE '%s-row-%%' ORDER BY line_num", prefix),
 		ComputeAddr: computeAddrDocker,
 		JobId:       jobResp.JobId,
 	})
@@ -150,7 +156,7 @@ func TestDirectToCompute_Op1_ShardStreamsDirectlyToCompute(t *testing.T) {
 		t.Fatalf("compute result has %d lines, want %d. Text:\n%s", gotLines, nRows, resultResp.Text)
 	}
 	for i := 0; i < nRows; i++ {
-		needle := fmt.Sprintf("op1-row-%d", i)
+		needle := fmt.Sprintf("%s-row-%d", prefix, i)
 		if !strings.Contains(resultResp.Text, needle) {
 			t.Errorf("compute result missing %q. Full text:\n%s", needle, resultResp.Text)
 		}
