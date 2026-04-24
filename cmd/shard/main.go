@@ -9,7 +9,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"google.golang.org/grpc"
@@ -98,7 +100,7 @@ func main() {
 	go func() {
 		log.Printf("shard gRPC listening on :%d", *grpcPort)
 		if err := gs.Serve(lis); err != nil {
-			log.Fatalf("grpc serve: %v", err)
+			log.Printf("grpc serve error: %v", err)
 		}
 	}()
 
@@ -117,9 +119,27 @@ func main() {
 		json.NewEncoder(w).Encode(resp)
 	})
 
+	httpSrv := &http.Server{Addr: fmt.Sprintf(":%d", *httpPort)}
+
+	// Signal handling for clean shutdown. `go build -cover` only
+	// flushes counter files on main() return; SIGKILL skips it.
+	// Trigger GracefulStop on gRPC and Shutdown on HTTP so both
+	// servers return cleanly, then fall through to main()'s exit.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		s := <-sigs
+		log.Printf("shard: received %s, gracefully stopping", s)
+		gs.GracefulStop()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpSrv.Shutdown(shutdownCtx)
+	}()
+
 	log.Printf("shard HTTP listening on :%d", *httpPort)
-	if err := http.ListenAndServe(fmt.Sprintf(":%d", *httpPort), nil); err != nil {
-		log.Fatalf("http serve: %v", err)
+	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Printf("http serve error: %v", err)
+		os.Exit(1)
 	}
 }
 

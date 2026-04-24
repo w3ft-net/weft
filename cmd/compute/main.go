@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"google.golang.org/grpc"
 
@@ -27,7 +30,22 @@ func main() {
 		log.Fatalf("listen: %v", err)
 	}
 	log.Printf("compute worker listening on :%d (parallelism=%d)", *port, *parallelism)
+
+	// Handle SIGTERM / SIGINT so the process exits cleanly from
+	// main() — under `go build -cover` that's the only path that
+	// flushes coverage counters to GOCOVERDIR. SIGKILL skips this.
+	// docker compose sends SIGTERM on `compose down`, then SIGKILL
+	// 10s later; the graceful-stop path has to fit inside that.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		s := <-sigs
+		log.Printf("compute: received %s, gracefully stopping", s)
+		srv.GracefulStop()
+	}()
+
 	if err := srv.Serve(lis); err != nil {
-		log.Fatalf("serve: %v", err)
+		log.Printf("serve error: %v", err)
+		os.Exit(1)
 	}
 }

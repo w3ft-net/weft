@@ -1,0 +1,64 @@
+# Compose overlay for coverage-instrumented integration runs. Usage:
+#
+#   mkdir -p coverage/{coordinator,shard-0,shard-1,compute,api}
+#   docker compose -f docker-compose.yml -f docker-compose.cover.yml \
+#       up -d --build
+#   go test -tags integration ./integration/ -count=1 -timeout 5m
+#   docker compose -f docker-compose.yml -f docker-compose.cover.yml down
+#   # Per-container coverage files land in ./coverage/<service>/.
+#   # Merge + report: scripts/coverage-report.sh
+#
+# Each server container gets:
+#   - BUILD_FLAGS=-cover -coverpkg=./...    (see Dockerfile ARG)
+#   - GOCOVERDIR pointing at a bind-mounted host dir
+# So the counter files are per-container, which lets us assert "this
+# line ran in the shard process, not the coordinator process" —
+# catches regressions where a method is mocked into the wrong binary.
+
+services:
+  compute:
+    build:
+      args:
+        BUILD_FLAGS: "-cover -coverpkg=github.com/kevlarcon/weft/..."
+    environment:
+      GOCOVERDIR: /coverage
+    volumes:
+      - ./coverage/compute:/coverage
+
+  coordinator:
+    build:
+      args:
+        BUILD_FLAGS: "-cover -coverpkg=github.com/kevlarcon/weft/..."
+    environment:
+      GOCOVERDIR: /coverage
+    volumes:
+      - ./coverage/coordinator:/coverage
+
+  shard-0:
+    build:
+      args:
+        BUILD_FLAGS: "-cover -coverpkg=github.com/kevlarcon/weft/..."
+    environment:
+      GOCOVERDIR: /coverage
+    volumes:
+      - ./coverage/shard-0:/coverage
+      - shard0_data:/opt/app/data
+
+  shard-1:
+    build:
+      args:
+        BUILD_FLAGS: "-cover -coverpkg=github.com/kevlarcon/weft/..."
+    environment:
+      GOCOVERDIR: /coverage
+    volumes:
+      - ./coverage/shard-1:/coverage
+      - shard1_data:/opt/app/data
+
+  api:
+    build:
+      args:
+        BUILD_FLAGS: "-cover -coverpkg=github.com/kevlarcon/weft/..."
+    environment:
+      GOCOVERDIR: /coverage
+    volumes:
+      - ./coverage/api:/coverage

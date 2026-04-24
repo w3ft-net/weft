@@ -16,12 +16,20 @@ WORKDIR /src/weft
 RUN sed -i 's|=> ../warp|=> /src/warp|' go.mod
 
 RUN go mod download
-RUN CGO_ENABLED=1 go build -o /bin/weft-shard ./cmd/shard
-RUN CGO_ENABLED=1 go build -o /bin/weft-compute ./cmd/compute
-RUN CGO_ENABLED=1 go build -o /bin/weft-coordinator ./cmd/coordinator
-RUN CGO_ENABLED=1 go build -o /bin/weft-api ./cmd/api
-RUN CGO_ENABLED=1 go build -o /bin/lambda-shard ./cmd/lambda-shard
-RUN CGO_ENABLED=0 go build -o /bin/weftd ./cmd/weftd
+
+# BUILD_FLAGS is empty in prod builds (empty string is a no-op to
+# `go build`). Integration runs that want per-container coverage
+# pass BUILD_FLAGS="-cover -coverpkg=github.com/kevlarcon/weft/..."
+# so every server binary writes its own counter file to GOCOVERDIR
+# on clean shutdown. See docker-compose.cover.yml.
+ARG BUILD_FLAGS=""
+
+RUN CGO_ENABLED=1 go build $BUILD_FLAGS -o /bin/weft-shard ./cmd/shard
+RUN CGO_ENABLED=1 go build $BUILD_FLAGS -o /bin/weft-compute ./cmd/compute
+RUN CGO_ENABLED=1 go build $BUILD_FLAGS -o /bin/weft-coordinator ./cmd/coordinator
+RUN CGO_ENABLED=1 go build $BUILD_FLAGS -o /bin/weft-api ./cmd/api
+RUN CGO_ENABLED=1 go build $BUILD_FLAGS -o /bin/lambda-shard ./cmd/lambda-shard
+RUN CGO_ENABLED=0 go build $BUILD_FLAGS -o /bin/weftd ./cmd/weftd
 
 # Use the same distro as the builder to match glibc.
 FROM golang:1.26

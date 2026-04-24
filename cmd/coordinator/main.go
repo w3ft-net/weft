@@ -9,8 +9,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"time"
 
@@ -365,8 +367,21 @@ func main() {
 	})
 
 	log.Printf("coordinator listening on :%d (%d shards, customer=%s)", *port, len(shards), *customer)
+
+	// Signal handling. Needed so `go build -cover` binaries flush
+	// coverage counters on `docker compose down` — SIGKILL skips the
+	// flush; a SIGTERM→GracefulStop→main-return sequence does not.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		s := <-sigs
+		log.Printf("coordinator: received %s, gracefully stopping", s)
+		srv.GracefulStop()
+	}()
+
 	if err := srv.Serve(lis); err != nil {
-		log.Fatalf("serve: %v", err)
+		log.Printf("serve error: %v", err)
+		os.Exit(1)
 	}
 }
 

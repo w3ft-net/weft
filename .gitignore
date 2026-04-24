@@ -21,3 +21,8 @@ lambda-shard
 
 # Stray process logs from shard-local dev runs
 shard.log
+
+# Per-container coverage output from coverage-instrumented
+# integration runs (docker-compose.cover.yml). Regenerated on
+# every run by the server binaries; never committed.
+/coverage/
