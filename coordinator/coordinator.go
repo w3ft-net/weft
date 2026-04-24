@@ -49,6 +49,10 @@ type Coordinator struct {
 	DLQ         *DLQ           // S3 dead-letter queue for failed ingests
 	Errors      *IngestionErrorRecorder // async error persistence
 	Notifier    *Notifier      // per-customer alert dispatcher (nil = disabled)
+	// ScriptExecutionTimeout caps how long a single runLocal invocation
+	// may run. Zero = use the package-level default (scriptExecutionTimeout).
+	// Tests override to shorten the wait.
+	ScriptExecutionTimeout time.Duration
 }
 
 // SeenApps tracks distinct app names observed during ingestion, keyed by customer.
@@ -343,6 +347,16 @@ func (c *Coordinator) query(pipeline string, tr TimeRange, customer string, aler
 	// through untouched; warp resolves them at execution time.
 	if custID != 0 {
 		fs := shellfs.New(c.Store, custID, nil)
+		// Reject `tail -f ... | <bin-script>` before inlining. Bash bodies
+		// get spliced by expandBinPipeline below, so if we waited until
+		// after expansion, a follow pipeline calling a bash /bin script
+		// would slip through looking like a regular pipeline (and Lua
+		// scripts would pass silently because they're opaque). Failing
+		// here keeps the rule uniform and the error pointed at the
+		// right stage name.
+		if err := rejectBinInFollow(pipeline, fs); err != nil {
+			return nil, err
+		}
 		if expanded, err := expandBinPipeline(pipeline, fs); err != nil {
 			return nil, fmt.Errorf("expand /bin: %w", err)
 		} else {
@@ -356,7 +370,7 @@ func (c *Coordinator) query(pipeline string, tr TimeRange, customer string, aler
 		return nil, fmt.Errorf("plan: %w", err)
 	}
 
-	result, err := c.executeQuery(plan, tr, customer, custID)
+	result, err := c.executeQuery(plan, tr, customer, custID, alertCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -383,13 +397,15 @@ func (c *Coordinator) query(pipeline string, tr TimeRange, customer string, aler
 
 // executeQuery runs the query half of a plan (everything except alert).
 // customer is the name used for shard routing; custID (0 if unresolved)
-// scopes tenant-backed features (ShellFS, weft.*).
-func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, customer string, custID uint) (*QueryResult, error) {
+// scopes tenant-backed features (ShellFS, weft.*). alertCtx is forwarded
+// to runLocal so interior queries dispatched by the interceptor inherit
+// the caller's alert identity; may be nil.
+func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, customer string, custID uint, alertCtx *AlertContext) (*QueryResult, error) {
 	if plan.Local {
 		if plan.LocalPipeline == "" {
 			return &QueryResult{}, nil
 		}
-		return c.runLocal(plan.LocalPipeline, custID)
+		return c.runLocal(plan.LocalPipeline, tr, customer, custID, alertCtx)
 	}
 
 	// Allowlist: the pipeline's source app (the part before '/') must
@@ -561,11 +577,43 @@ func runAlertStage(result *QueryResult, args []string, ctx *AlertContext) {
 	result.Stderr += errOut.String()
 }
 
-// runLocal executes a sourceless pipeline (no log query) through warp locally.
-// The planner strips any trailing `alert` before this point, so the
-// interpreter doesn't need to register it. custID (non-zero) scopes the
-// ShellFS and weft.* functions to one tenant; zero disables both.
-func (c *Coordinator) runLocal(pipeline string, custID uint) (*QueryResult, error) {
+// scriptExecutionTimeout caps how long a single runLocal invocation may
+// run before the interpreter is cancelled. Guards against runaway saved
+// scripts (infinite loops, pathological computation) burning server CPU
+// or holding cron slots. Interior shard queries still complete on their
+// own; the cap stops bash-level work between AST boundaries.
+const scriptExecutionTimeout = 30 * time.Second
+
+// runLocal executes a sourceless pipeline (no top-level log query) through
+// warp locally. The planner strips any trailing `alert` before this point,
+// so the interpreter doesn't need to register it. custID (non-zero) scopes
+// the ShellFS and weft.* functions to one tenant; zero disables both.
+//
+// tr/customer/alertCtx are captured by BinScriptTransform so that interior
+// query pipelines inside /bin scripts — substituted at load time with
+// CallbackCommand nodes — inherit the caller's time window, customer
+// scope, and alert identity. Tests that don't exercise interior queries
+// can pass zero values.
+//
+// Interior query pipelines are turned into callbacks by rewriteQueryPipelines,
+// invoked at two points:
+//   1. On the top-level AST here, covering query pipelines the caller
+//      typed directly.
+//   2. Via interp.BinScriptTransform, on each /bin/<name> script body
+//      as warp parses it at invocation time — that's where the
+//      interesting cases (loops, command substitutions, function
+//      bodies) live, because /bin scripts are how users compose
+//      multi-line / multi-pipeline logic.
+//
+// Both paths call the same rewriter, so the AST that warp executes has
+// no pipelines left that need weft-side dispatching at runtime.
+//
+// Execution is capped at scriptExecutionTimeout. When the cap fires the
+// interpreter is cancelled cooperatively; warp stops at the next AST
+// boundary (between top-level lists or loop iterations). Whatever the
+// script produced before the cut-off is returned along with a timeout
+// error.
+func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, custID uint, alertCtx *AlertContext) (*QueryResult, error) {
 	ast, err := bash.Parse(pipeline)
 	if err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
@@ -580,21 +628,58 @@ func (c *Coordinator) runLocal(pipeline string, custID uint) (*QueryResult, erro
 
 	bash.RegisterToolCommands(interp)
 
-	// Wire a tenant-scoped ShellFS so /bin scripts resolve server-side for
-	// both bash (PATH resolution) and lua (LangFS-aware dispatch).
 	if c.Store != nil && custID != 0 {
 		interp.SetFS(shellfs.New(c.Store, custID, nil))
 
 		wf := &WeftFuncs{Store: c.Store, CustomerID: custID}
 		RegisterWeftCommands(interp, wf)
 		interp.LuaWeftFuncs = wf
+
+		rewriteQueryPipelines(ast, c, tr, customer, alertCtx)
+		interp.BinScriptTransform = func(_ string, script *bash.Script) {
+			rewriteQueryPipelines(script, c, tr, customer, alertCtx)
+		}
 	}
 
-	interp.ExecScript(ast)
+	// Run the interpreter under a hard time cap. The watcher goroutine
+	// signals cooperative cancellation; warp observes this at its next
+	// list/loop boundary and winds down. If the script completes in
+	// time the deferred cancel() makes the watcher exit cleanly.
+	timeout := c.ScriptExecutionTimeout
+	if timeout <= 0 {
+		timeout = scriptExecutionTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		interp.ExecScript(ast)
+		close(done)
+	}()
 
-	return &QueryResult{
-		Text:   outBuf.String(),
-		Stderr: errBuf.String(),
-	}, nil
+	select {
+	case <-done:
+		return &QueryResult{
+			Text:   outBuf.String(),
+			Stderr: errBuf.String(),
+		}, nil
+	case <-ctx.Done():
+		interp.Cancel()
+		// Give the interpreter a brief grace period to stop at the
+		// next AST boundary before we return. Anything that's busy in
+		// an unresponsive path (a shard query mid-flight, a
+		// runaway awk program past AwkMaxSteps safeguards) will still
+		// be running in the background goroutine when we return; the
+		// caller sees the timeout promptly.
+		select {
+		case <-done:
+		case <-time.After(500 * time.Millisecond):
+			log.Printf("runLocal: interpreter did not halt within grace period after %s timeout", timeout)
+		}
+		return &QueryResult{
+			Text:   outBuf.String(),
+			Stderr: errBuf.String(),
+		}, fmt.Errorf("script exceeded %s execution time limit", timeout)
+	}
 }
 

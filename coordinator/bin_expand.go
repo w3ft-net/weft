@@ -6,6 +6,84 @@ import (
 	"github.com/kevlarcon/warp/pkg/bash"
 )
 
+// rejectBinInFollow returns an error if pipeline is a `tail -f` pipeline
+// that references any /bin/ script (bash or Lua). We refuse uniformly
+// rather than try to classify: bash bodies can invoke functions, eval,
+// sourced files, or subshells that hide aggregating stages from the
+// planner's follow-mode gate; Lua bodies are opaque to classifyStage
+// entirely. A single "no /bin/ in live mode" rule keeps the semantics
+// honest and the error message short.
+//
+// The check is a cheap pre-pass: one bash.Parse, one FS.ReadFile per
+// stage command. It's called from coordinator.query *before* the /bin/
+// bash body expansion, so we fail out before any inlining happens. If
+// fs is nil (no customer context resolved) the check no-ops — there
+// are no /bin/ scripts to clash with.
+func rejectBinInFollow(pipeline string, fs bash.FS) error {
+	if fs == nil {
+		return nil
+	}
+	ast, err := bash.Parse(pipeline)
+	if err != nil {
+		// A parse error surfaces with a better message from the planner
+		// a few steps downstream. Not our job to reject here.
+		return nil
+	}
+	if len(ast.Commands) == 0 {
+		return nil
+	}
+	list := ast.Commands[0]
+	if list == nil || list.First == nil || len(list.First.Commands) == 0 {
+		return nil
+	}
+
+	leading, ok := list.First.Commands[0].(*bash.SimpleCommand)
+	if !ok || !isTailFollow(leading) {
+		return nil
+	}
+
+	// Walk every stage after the tail -f source; the source itself is
+	// `tail`, not a /bin/ script.
+	for _, cmd := range list.First.Commands[1:] {
+		sc, ok := cmd.(*bash.SimpleCommand)
+		if !ok || len(sc.Words) == 0 {
+			continue
+		}
+		name := sc.Words[0].Literal()
+		if name == "" {
+			continue
+		}
+		if _, err := fs.ReadFile("/bin/" + name); err == nil {
+			return fmt.Errorf(
+				"plan: `/bin/%s` can't run under `tail -f` — /bin/ scripts "+
+					"(bash or lua) may contain aggregating stages or opaque "+
+					"logic that doesn't fit a live-streaming pipeline. Invoke "+
+					"it from a cron watch, or inline the specific commands "+
+					"you need into the follow pipeline directly",
+				name)
+		}
+	}
+	return nil
+}
+
+// isTailFollow returns true when cmd is `tail -f ...` — the source
+// shape that makes the whole pipeline live. Any `-f` anywhere in the
+// argv counts, matching the planner's own detection in parse.go.
+func isTailFollow(cmd *bash.SimpleCommand) bool {
+	if len(cmd.Words) == 0 {
+		return false
+	}
+	if cmd.Words[0].Literal() != "tail" {
+		return false
+	}
+	for _, w := range cmd.Words[1:] {
+		if w.Literal() == "-f" {
+			return true
+		}
+	}
+	return false
+}
+
 // expandBinPipeline inspects the leading command of pipeline. If it's an
 // invocation of a bash /bin script stored in fs, the script's body is
 // parsed, positional args are bound into the AST, and the body's commands
@@ -80,6 +158,16 @@ func expandBinPipeline(pipeline string, fs bash.FS) (string, error) {
 	bodyCmds := bodyList.First.Commands
 	if len(bodyCmds) == 0 {
 		return pipeline, nil
+	}
+	// Splicing is only valid when every stage of the body pipeline is
+	// a SimpleCommand. A body like `for x in a b; do ...; done` parses
+	// as a single pipeline whose sole command is a ForClause — not a
+	// shape we can splice into an outer pipeline (nor would it make
+	// semantic sense). Let runtime resolution handle those cases.
+	for _, c := range bodyCmds {
+		if _, ok := c.(*bash.SimpleCommand); !ok {
+			return pipeline, nil
+		}
 	}
 
 	// Collect positional args from the invocation (all words after the
