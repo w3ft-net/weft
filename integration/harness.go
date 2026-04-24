@@ -14,6 +14,7 @@ package integration
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
@@ -24,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 const (
@@ -52,10 +54,70 @@ func Setup() func() {
 	if err := ensureMinioBucket(); err != nil {
 		log.Fatalf("integration: MinIO setup: %v", err)
 	}
+	if err := seedFixtures(); err != nil {
+		log.Fatalf("integration: seed fixtures: %v", err)
+	}
 
 	log.Println("integration: ready")
 
 	return func() {}
+}
+
+// seedFixtures idempotently inserts the customers + namespaces the
+// integration tests assume exist. The CoordinatorQueryRequest's
+// customer field is ignored server-side (callerCustomer() reads the
+// JWT), so every test-internal customer name collapses onto the JWT's
+// customer (kevlar). Seeding under kevlar covers all the namespace
+// names tests reference.
+func seedFixtures() error {
+	conn, err := sql.Open("pgx", postgresURL)
+	if err != nil {
+		return fmt.Errorf("open postgres: %w", err)
+	}
+	defer conn.Close()
+
+	// customer id for kevlar (created by the coordinator's own
+	// FindOrCreateCustomer flow at startup via WEFT_CUSTOMER).
+	var kevID int64
+	if err := conn.QueryRow(`SELECT id FROM customers WHERE name = 'kevlar'`).Scan(&kevID); err != nil {
+		return fmt.Errorf("lookup kevlar customer: %w", err)
+	}
+
+	// Namespaces that tests call ensureToken()/queryPipeline() against.
+	// Kept as a single list — if a new test adds a fixture name, append
+	// here and the seeder covers it.
+	fixtures := []string{
+		"integration",
+		"suspend-test",
+		"isolation",
+		"jqtest",
+	}
+	for _, ns := range fixtures {
+		_, err := conn.Exec(`
+			INSERT INTO namespaces (customer_id, name, created_at, updated_at)
+			VALUES ($1, $2, now(), now())
+			ON CONFLICT (customer_id, name) DO NOTHING`,
+			kevID, ns,
+		)
+		if err != nil {
+			return fmt.Errorf("seed namespace %s: %w", ns, err)
+		}
+	}
+
+	// Dev user under kevlar — generateDevJWT in onboard_test.go signs
+	// with ID "dev-user", and the email-verified middleware looks the
+	// user up to confirm. Seed a verified user for that ID so the
+	// middleware lets the request through.
+	_, err = conn.Exec(`
+		INSERT INTO users (id, email, customer_id, name, email_verified_at, created_at, updated_at)
+		VALUES ('dev-user', 'dev@test.local', $1, 'Dev User', now(), now(), now())
+		ON CONFLICT (email, customer_id) DO UPDATE SET email_verified_at = now()`,
+		kevID,
+	)
+	if err != nil {
+		return fmt.Errorf("seed dev user: %w", err)
+	}
+	return nil
 }
 
 // requireStackRunning aborts the test run with a helpful message when the

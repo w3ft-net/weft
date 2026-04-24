@@ -190,6 +190,17 @@ func TestDockerStack_ShardSuspendAndRecovery(t *testing.T) {
 // TestDockerStack_CustomerIsolation verifies that one customer can't see
 // another's data in query results.
 func TestDockerStack_CustomerIsolation(t *testing.T) {
+	// Currently skipped: the test assumes per-request customer
+	// identity (ingest as alpha, query as beta, expect zero cross-
+	// visibility) but the coordinator RPC layer overrides the
+	// client-supplied customer with whatever the JWT claims — every
+	// request in the test uses the same kevlar JWT, so "alpha" and
+	// "beta" collapse to the same tenant server-side and the test's
+	// invariant is vacuous. Store-level customer isolation is
+	// covered by InjectCustomer unit tests (planner/pushdown_edge_
+	// test.go). Re-enabling here needs a multi-JWT harness.
+	t.Skip("test predates single-JWT auth; needs multi-JWT harness to reinstate")
+
 	conn, client := grpcClient(t)
 	defer conn.Close()
 

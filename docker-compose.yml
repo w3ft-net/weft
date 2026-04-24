@@ -59,6 +59,25 @@ services:
       coordinator:
         condition: service_started
 
+  # Dedicated compute worker. Coordinator fans out rows here for
+  # pipeline execution. The weft-compute binary was always built but
+  # pre-2026-04 not deployed in integration — coordinator fell
+  # through to in-process LocalComputePool, which meant the
+  # coordinator→compute boundary was never exercised under real
+  # gRPC. Putting compute on the wire gives that boundary real-
+  # traffic coverage in every integration run, which is a
+  # prerequisite for the direct-to-compute work (docs/plans/
+  # direct-to-compute.md).
+  compute:
+    build:
+      context: ..
+      dockerfile: weft/Dockerfile
+    entrypoint: ["/usr/local/bin/entrypoint.sh"]
+    environment:
+      ROLE: compute
+    ports:
+      - "9010:9010"
+
   coordinator:
     build:
       context: ..
@@ -69,13 +88,18 @@ services:
       DB_DSN: host=postgres dbname=weft user=weft password=weft sslmode=disable
       WEFT_CUSTOMER: kevlar
       SHARD_SECRET: dev-shard-secret
-      JWT_SECRET: dev-secret
+      JWT_SECRET: dev-secret-change-in-production
+      # Use the real gRPC compute pool instead of in-process so the
+      # coordinator→compute boundary is on the wire.
+      COMPUTE_ADDR: compute:9010
     ports:
       - "9020:9020"
       - "9021:9021"
     depends_on:
       postgres:
         condition: service_healthy
+      compute:
+        condition: service_started
 
   api:
     build:
@@ -87,7 +111,7 @@ services:
       DB_DSN: host=postgres dbname=weft user=weft password=weft sslmode=disable
       COORDINATOR_ADDR: coordinator:9020
       BASE_URL: http://localhost:5173
-      JWT_SECRET: dev-secret
+      JWT_SECRET: dev-secret-change-in-production
     ports:
       - "8080:8080"
     depends_on:

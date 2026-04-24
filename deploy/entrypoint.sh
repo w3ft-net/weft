@@ -21,6 +21,7 @@ case "$ROLE" in
     [ -n "${WEFT_SHARD_ASG_MEDIUM:-}" ]   && ARGS+=(--shard-asg-medium="$WEFT_SHARD_ASG_MEDIUM")
     [ -n "${WEFT_SHARD_ASG_LARGE:-}" ]    && ARGS+=(--shard-asg-large="$WEFT_SHARD_ASG_LARGE")
     [ -n "${WEFT_COMPUTE_ASG:-}" ]        && ARGS+=(--compute-asg="$WEFT_COMPUTE_ASG")
+    [ -n "${COMPUTE_ADDR:-}" ]            && ARGS+=(--compute="$COMPUTE_ADDR")
     [ -n "${WEFT_CUSTOMER:-}" ]           && ARGS+=(--customer="$WEFT_CUSTOMER")
 
     exec weft-coordinator "${ARGS[@]}"

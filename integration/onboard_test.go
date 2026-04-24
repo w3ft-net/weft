@@ -23,7 +23,10 @@ import (
 const (
 	onboardCoordAddr = "localhost:9020"
 	onboardAPIAddr   = "http://localhost:8080"
-	jwtSecret        = "dev-secret"
+	// Must match docker-compose.yml's JWT_SECRET for the coordinator
+	// + api services, which in turn matches the compiled-in default
+	// from cmd/api/main.go and cmd/coordinator/main.go.
+	jwtSecret = "dev-secret-change-in-production"
 )
 
 // TestOnboardFlow exercises the full weftd schema onboarding lifecycle:
