@@ -21,6 +21,14 @@ type QueryPlan struct {
 	SourceCmd      string        // source command: "cat", "head", or "tail"
 	SourceApp      string        // app extracted from pseudofile ("" = all apps)
 	AlertArgs      []string      // argv for a terminal `alert` stage; nil if absent
+
+	// Direct-to-compute mode (see docs/plans/direct-to-compute.md §3).
+	// Populated from classifyShardMode walking ComputeStages for the
+	// terminal sort. Both stay zero-value until op 6 wires the shard
+	// SQL builder to consume them — today they're read by op 2's
+	// compute-side merge_key and by the upcoming coordinator rewrite.
+	ShardOrderBy string // "", "line_num[ DESC]", or "raw[ DESC]"
+	ShardLimit   int    // per-shard LIMIT; 0 when pushdown is unsafe
 }
 
 // GrepPattern captures a grep filter for live tail matching.
@@ -169,17 +177,22 @@ func Plan(pipeline string) (*QueryPlan, error) {
 
 	sql.setSelect(rawExpr)
 
+	orderDesc := sql.orderBy == "ts DESC"
+	shardOrderBy, shardLimit := classifyShardMode(compute, orderDesc, sql.limit)
+
 	return &QueryPlan{
 		ShardSQL:       sql.build(),
 		ComputeStages:  compute,
 		Limit:          sql.limit,
-		OrderDesc:      sql.orderBy == "ts DESC",
+		OrderDesc:      orderDesc,
 		Follow:         info.source.follow,
 		FollowApp:      info.source.app,
 		FollowPatterns: grepPatterns,
 		SourceCmd:      info.source.cmd,
 		SourceApp:      info.source.app,
 		AlertArgs:      alertArgs,
+		ShardOrderBy:   shardOrderBy,
+		ShardLimit:     shardLimit,
 	}, nil
 }
 
