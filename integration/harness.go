@@ -101,6 +101,7 @@ func seedFixtures() error {
 		"suspend-test",
 		"isolation",
 		"jqtest",
+		"op5compute",
 	}
 	for _, ns := range fixtures {
 		_, err := conn.Exec(`

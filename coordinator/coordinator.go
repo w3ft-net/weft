@@ -411,7 +411,14 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 		}
 	}
 
+	// For the compute-stage branch we use plan.DirectShardSQL so each
+	// shard emits rows in the order compute's k-way merge expects
+	// (see docs/plans/direct-to-compute.md §3). For the no-compute-
+	// stage path the legacy ShardSQL keeps the old ts-ordered
+	// behavior — callers that iterate rows directly don't need the
+	// merge ordering.
 	sql := planner.InjectCustomer(plan.ShardSQL, customer)
+	directSQL := planner.InjectCustomer(plan.DirectShardSQL, customer)
 
 	// Shard selection honors plan-tier retention: tr.Start is clamped
 	// up to (now − LogRetention(tier)) inside MatchingShards, so a
@@ -441,7 +448,51 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	log.Printf("query: app=%s shards=%v compute=%v sql=%s",
 		plan.SourceApp, shardIDs, plan.ComputeStages, sql)
 
-	// Fan out query to all matching shards in parallel.
+	// Direct-to-compute branch: shards stream rows straight into the
+	// compute job (no coordinator-side buffer). Each shard's SQL is
+	// ORDER BY'd to match plan.ShardOrderBy so compute's k-way merge
+	// can advance a single heap head without re-sorting. See
+	// docs/plans/direct-to-compute.md §§4-5.
+	if len(plan.ComputeStages) > 0 && c.Pool != nil {
+		job := c.Pool.NewJob(plan.ComputeStages, len(matching), plan.ShardOrderBy)
+
+		var wg sync.WaitGroup
+		wg.Add(len(matching))
+		errs := make(chan error, len(matching))
+		for _, s := range matching {
+			go func(s shard.Shard) {
+				defer wg.Done()
+				defer job.SendSentinel(s.ID())
+				rows, err := s.Query(directSQL)
+				if err != nil {
+					errs <- fmt.Errorf("shard %s: %w", s.ID(), err)
+					return
+				}
+				for _, r := range rows {
+					job.SendRow(r, s.ID())
+				}
+			}(s)
+		}
+		wg.Wait()
+		close(errs)
+		for e := range errs {
+			log.Printf("query: %v", e)
+			return nil, e
+		}
+
+		text, err := job.Result()
+		if err != nil {
+			log.Printf("query: compute error: %v (stages=%v)", err, plan.ComputeStages)
+			return nil, err
+		}
+		log.Printf("query: compute complete, output=%d bytes (stages=%v)", len(text), plan.ComputeStages)
+		return &QueryResult{Text: text}, nil
+	}
+
+	// No compute stages — fall back to fetch-and-return rows. This
+	// path stays on ShardSQL (legacy ts-ordered SQL) because plan.
+	// OrderDesc + plan.Limit still describe the expected post-merge
+	// shape for callers that iterate rows directly.
 	type shardResult struct {
 		rows []*pb.ResultRow
 		err  error
@@ -468,7 +519,6 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	}
 	log.Printf("query: %d shards returned %d total rows", len(matching), len(allRows))
 
-	// Sort by line_num for deterministic merge ordering.
 	if plan.OrderDesc {
 		sort.Slice(allRows, func(i, j int) bool {
 			return allRows[i].LineNum > allRows[j].LineNum
@@ -481,23 +531,6 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 
 	if plan.Limit > 0 && len(allRows) > plan.Limit {
 		allRows = allRows[:plan.Limit]
-	}
-
-	// If compute stages exist, pipe rows through the compute pool.
-	if len(plan.ComputeStages) > 0 && c.Pool != nil {
-		job := c.Pool.NewJob(plan.ComputeStages, 1, "") // pre-merged on coordinator side; no compute-side merge
-		for _, r := range allRows {
-			job.SendRow(r, "merged")
-		}
-		job.SendSentinel("merged")
-
-		text, err := job.Result()
-		if err != nil {
-			log.Printf("query: compute error: %v (stages=%v)", err, plan.ComputeStages)
-			return nil, err
-		}
-		log.Printf("query: compute complete, output=%d bytes (stages=%v)", len(text), plan.ComputeStages)
-		return &QueryResult{Text: text}, nil
 	}
 
 	return &QueryResult{Rows: allRows}, nil

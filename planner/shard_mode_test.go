@@ -163,6 +163,77 @@ func TestClassifyShardMode_C(t *testing.T) {
 	}
 }
 
+// TestDirectShardSQL verifies op 6: the SQL the coordinator sends to
+// shards via QueryToCompute uses ShardOrderBy/ShardLimit instead of
+// the head/tail-derived ts ASC/DESC, and omits ORDER BY entirely in
+// Mode C.
+func TestDirectShardSQL(t *testing.T) {
+	cases := []struct {
+		name     string
+		pipeline string
+		want     string
+	}{
+		{
+			name:     "mode A no head/tail — appends ORDER BY line_num",
+			pipeline: `cat vimgym.log | grep ERROR`,
+			want:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw LIKE '%ERROR%' ORDER BY line_num`,
+		},
+		{
+			name:     "mode A with head — ORDER BY line_num LIMIT N",
+			pipeline: `cat vimgym.log | head -5`,
+			want:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') ORDER BY line_num LIMIT 5`,
+		},
+		{
+			name:     "mode A with tail — ORDER BY line_num DESC LIMIT N",
+			pipeline: `tail -10 vimgym.log`,
+			want:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') ORDER BY line_num DESC LIMIT 10`,
+		},
+		{
+			name:     "mode B plain sort — ORDER BY raw",
+			pipeline: `cat vimgym.log | sort`,
+			want:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') ORDER BY raw`,
+		},
+		{
+			name:     "mode B sort -r — ORDER BY raw DESC",
+			pipeline: `cat vimgym.log | sort -r`,
+			want:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') ORDER BY raw DESC`,
+		},
+		{
+			name:     "mode C sort -n — no ORDER BY",
+			pipeline: `cat vimgym.log | sort -n`,
+			want:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
+		},
+		{
+			// The awk print folds into the SELECT projection so the
+			// only compute stage is `sort` — first stage → Mode B.
+			// The shard emits pre-projected raw values so ORDER BY
+			// raw produces the same global order `awk | sort` would.
+			name:     "mode B after projection fold — sort-as-first stage",
+			pipeline: `cat vimgym.log | awk '{ print $3 }' | sort`,
+			want:     `SELECT line_num, list_extract(fields, 3) as raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') ORDER BY raw`,
+		},
+		{
+			// awk END block is a genuine compute-side transform that
+			// can't fold into SELECT, so sort is no longer the first
+			// compute stage → Mode C.
+			name:     "mode C — awk END block before sort",
+			pipeline: `cat vimgym.log | awk '{ count++ } END { print count }' | sort`,
+			want:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := Plan(tc.pipeline)
+			if err != nil {
+				t.Fatalf("Plan: %v", err)
+			}
+			if plan.DirectShardSQL != tc.want {
+				t.Errorf("DirectShardSQL\n  got: %s\n want: %s", plan.DirectShardSQL, tc.want)
+			}
+		})
+	}
+}
+
 // TestClassifyShardMode_HeadAfterSort_StaysSafe — `sort | head -N` is
 // Mode C in the MVP (we don't push LIMIT because that'd require the
 // merge-direction XOR with sort's -r flag). The shard orders +

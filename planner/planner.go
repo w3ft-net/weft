@@ -24,11 +24,18 @@ type QueryPlan struct {
 
 	// Direct-to-compute mode (see docs/plans/direct-to-compute.md §3).
 	// Populated from classifyShardMode walking ComputeStages for the
-	// terminal sort. Both stay zero-value until op 6 wires the shard
-	// SQL builder to consume them — today they're read by op 2's
-	// compute-side merge_key and by the upcoming coordinator rewrite.
+	// terminal sort. Consumed by compute's merge_key and by the
+	// coordinator when taking the direct-to-compute path.
 	ShardOrderBy string // "", "line_num[ DESC]", or "raw[ DESC]"
 	ShardLimit   int    // per-shard LIMIT; 0 when pushdown is unsafe
+
+	// DirectShardSQL is the SQL the coordinator sends to shards via
+	// QueryToCompute — same body as ShardSQL but with ShardOrderBy +
+	// ShardLimit substituted for the head/tail-derived "ts ASC"/
+	// "ts DESC". Kept separate so callers still using the legacy Query
+	// RPC (no compute stages, backward-compat tests) see the old
+	// behavior in ShardSQL.
+	DirectShardSQL string
 }
 
 // GrepPattern captures a grep filter for live tail matching.
@@ -182,6 +189,7 @@ func Plan(pipeline string) (*QueryPlan, error) {
 
 	return &QueryPlan{
 		ShardSQL:       sql.build(),
+		DirectShardSQL: sql.buildWith(shardOrderBy, shardLimit),
 		ComputeStages:  compute,
 		Limit:          sql.limit,
 		OrderDesc:      orderDesc,
