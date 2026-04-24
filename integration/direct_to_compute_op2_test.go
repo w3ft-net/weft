@@ -153,6 +153,15 @@ func TestDirectToCompute_Op2_ComputeMergesAcrossShards(t *testing.T) {
 	}
 }
 
+// TestDirectToCompute_Op2_BoundaryCoverage is the compute-side
+// counterpart of op 1's shard-side assertion: mergeRows must execute
+// in the compute container. If this ever lights up with the wrong
+// service's profile, someone moved merge logic back into the
+// coordinator binary — which defeats the whole plan.
+func TestDirectToCompute_Op2_BoundaryCoverage(t *testing.T) {
+	RequireRanIn(t, "compute", "compute/merge.go", "mergeRows")
+}
+
 // configureIfNeeded christens a shard that doesn't already carry an
 // identity. Matches the behavior in the op 1 test: docker-compose's
 // local-launcher provisioner doesn't touch the gRPC shard containers,

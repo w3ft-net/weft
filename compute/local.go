@@ -69,10 +69,15 @@ func (j *LocalComputeJob) Result() (string, error) {
 	return r.text, r.err
 }
 
-// consume reads all messages from the channel, collecting row text until all
-// sentinels arrive, then runs the pipeline.
+// consume reads all messages from the channel until every shard's
+// sentinel has arrived, then flattens rows into a single input stream
+// for the compute pipeline. When mergeKey is set, shards' per-stream
+// ordering (baked into their SQL via ORDER BY) is preserved through a
+// k-way merge on the join column; when empty, rows land in arrival
+// order (the legacy single-sink concat).
 func (j *LocalComputeJob) consume() {
 	var lines []string
+	perShard := map[string][]*pb.ResultRow{}
 	sentinels := 0
 
 	for sentinels < j.shardCount {
@@ -81,9 +86,19 @@ func (j *LocalComputeJob) consume() {
 			sentinels++
 			continue
 		}
-		if msg.Row != nil {
-			lines = append(lines, msg.Row.Raw)
+		if msg.Row == nil {
+			continue
 		}
+		if j.mergeKey == "" {
+			// Fast path: just append in arrival order.
+			lines = append(lines, msg.Row.Raw)
+		} else {
+			perShard[msg.ShardID] = append(perShard[msg.ShardID], msg.Row)
+		}
+	}
+
+	if j.mergeKey != "" {
+		lines = mergeRows(perShard, j.mergeKey)
 	}
 
 	input := strings.Join(lines, "\n")
