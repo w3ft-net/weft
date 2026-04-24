@@ -38,10 +38,11 @@ func (p *GRPCComputePool) Close() error {
 	return p.conn.Close()
 }
 
-func (p *GRPCComputePool) NewJob(stages []string, shardCount int) ComputeJob {
+func (p *GRPCComputePool) NewJob(stages []string, shardCount int, mergeKey string) ComputeJob {
 	resp, err := p.client.CreateJob(context.Background(), &pb.CreateJobRequest{
 		Stages:     stages,
 		ShardCount: int32(shardCount),
+		MergeKey:   mergeKey,
 	})
 	if err != nil {
 		// Return a job that immediately errors on Result().

@@ -111,6 +111,19 @@ service WeftCompute {
 message CreateJobRequest {
   repeated string stages = 1;
   int32 shard_count = 2;
+
+  // Ordering key for compute's k-way merge across shard input
+  // streams. One of:
+  //   ""             → concat (rows emitted in arrival order).
+  //   "line_num"     → merge by line_num ascending.
+  //   "line_num DESC" → merge by line_num descending.
+  //   "raw"           → merge by raw ascending.
+  //   "raw DESC"      → merge by raw descending.
+  // Shards bake the same ORDER BY into their SQL so their per-shard
+  // output is already sorted; merge_key tells compute which column
+  // to walk through the heap on. Empty = "don't merge, just concat"
+  // — matches the old coordinator-side buffered path.
+  string merge_key = 3;
 }
 
 message CreateJobResponse {

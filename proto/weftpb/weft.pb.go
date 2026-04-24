@@ -592,9 +592,23 @@ func (x *IngestResponse) GetRowsIngested() int64 {
 }
 
 type CreateJobRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Stages        []string               `protobuf:"bytes,1,rep,name=stages,proto3" json:"stages,omitempty"`
-	ShardCount    int32                  `protobuf:"varint,2,opt,name=shard_count,json=shardCount,proto3" json:"shard_count,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Stages     []string               `protobuf:"bytes,1,rep,name=stages,proto3" json:"stages,omitempty"`
+	ShardCount int32                  `protobuf:"varint,2,opt,name=shard_count,json=shardCount,proto3" json:"shard_count,omitempty"`
+	// Ordering key for compute's k-way merge across shard input
+	// streams. One of:
+	//
+	//	""             → concat (rows emitted in arrival order).
+	//	"line_num"     → merge by line_num ascending.
+	//	"line_num DESC" → merge by line_num descending.
+	//	"raw"           → merge by raw ascending.
+	//	"raw DESC"      → merge by raw descending.
+	//
+	// Shards bake the same ORDER BY into their SQL so their per-shard
+	// output is already sorted; merge_key tells compute which column
+	// to walk through the heap on. Empty = "don't merge, just concat"
+	// — matches the old coordinator-side buffered path.
+	MergeKey      string `protobuf:"bytes,3,opt,name=merge_key,json=mergeKey,proto3" json:"merge_key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -641,6 +655,13 @@ func (x *CreateJobRequest) GetShardCount() int32 {
 		return x.ShardCount
 	}
 	return 0
+}
+
+func (x *CreateJobRequest) GetMergeKey() string {
+	if x != nil {
+		return x.MergeKey
+	}
+	return ""
 }
 
 type CreateJobResponse struct {
@@ -3737,11 +3758,12 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\rIngestRequest\x12 \n" +
 	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\"5\n" +
 	"\x0eIngestResponse\x12#\n" +
-	"\rrows_ingested\x18\x01 \x01(\x03R\frowsIngested\"K\n" +
+	"\rrows_ingested\x18\x01 \x01(\x03R\frowsIngested\"h\n" +
 	"\x10CreateJobRequest\x12\x16\n" +
 	"\x06stages\x18\x01 \x03(\tR\x06stages\x12\x1f\n" +
 	"\vshard_count\x18\x02 \x01(\x05R\n" +
-	"shardCount\"*\n" +
+	"shardCount\x12\x1b\n" +
+	"\tmerge_key\x18\x03 \x01(\tR\bmergeKey\"*\n" +
 	"\x11CreateJobResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"\x81\x01\n" +
 	"\x0eComputeMessage\x12\x15\n" +

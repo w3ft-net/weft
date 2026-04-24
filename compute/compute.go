@@ -17,7 +17,12 @@ type ComputeMessage struct {
 //   - LocalComputePool: in-process execution via warp's bash interpreter
 //   - GRPCComputePool: fans out to remote compute workers
 type ComputePool interface {
-	NewJob(stages []string, shardCount int) ComputeJob
+	// NewJob creates a job that will receive rows from shardCount
+	// shard streams. mergeKey controls cross-shard ordering: empty
+	// concatenates in arrival order (legacy), "line_num"/"raw"
+	// (optionally " DESC") triggers a k-way merge keyed on that
+	// column. See docs/plans/direct-to-compute.md §4.
+	NewJob(stages []string, shardCount int, mergeKey string) ComputeJob
 }
 
 // ComputeJob receives rows from shards and produces a text result once all

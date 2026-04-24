@@ -16,10 +16,11 @@ type LocalComputePool struct {
 	Parallelism int // goroutine count for bash.RunWithParallelism (0 = streaming)
 }
 
-func (p *LocalComputePool) NewJob(stages []string, shardCount int) ComputeJob {
+func (p *LocalComputePool) NewJob(stages []string, shardCount int, mergeKey string) ComputeJob {
 	return &LocalComputeJob{
 		stages:      stages,
 		shardCount:  shardCount,
+		mergeKey:    mergeKey,
 		parallelism: p.Parallelism,
 		ch:          make(chan ComputeMessage, 1024),
 		done:        make(chan jobResult, 1),
@@ -36,6 +37,7 @@ type jobResult struct {
 type LocalComputeJob struct {
 	stages      []string
 	shardCount  int
+	mergeKey    string // see ComputePool.NewJob; empty = concat, otherwise k-way merge
 	parallelism int
 	ch          chan ComputeMessage
 	done        chan jobResult

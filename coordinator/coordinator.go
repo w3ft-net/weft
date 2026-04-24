@@ -485,7 +485,7 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 
 	// If compute stages exist, pipe rows through the compute pool.
 	if len(plan.ComputeStages) > 0 && c.Pool != nil {
-		job := c.Pool.NewJob(plan.ComputeStages, 1) // already merged
+		job := c.Pool.NewJob(plan.ComputeStages, 1, "") // pre-merged on coordinator side; no compute-side merge
 		for _, r := range allRows {
 			job.SendRow(r, "merged")
 		}
