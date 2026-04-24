@@ -42,12 +42,22 @@ const (
 
 // Setup verifies the stack is up and ensures the MinIO bucket exists.
 // Returns a cleanup function. Call from TestMain.
+//
+// When WEFT_SKIP_STACK_CHECK=1, Setup returns immediately without
+// hitting /health or seeding fixtures. That mode is for coverage-
+// boundary tests that only read coverage/<service>.out on disk —
+// they don't need the docker stack up.
 func Setup() func() {
 	os.Setenv("S3_ENDPOINT", MinioEndpoint)
 	os.Setenv("S3_ACCESS_KEY", MinioAccessKey)
 	os.Setenv("S3_SECRET_KEY", MinioSecretKey)
 	os.Setenv("S3_REGION", "us-east-1")
 	os.Setenv("S3_USE_SSL", "false")
+
+	if os.Getenv("WEFT_SKIP_STACK_CHECK") == "1" {
+		log.Println("integration: WEFT_SKIP_STACK_CHECK=1 — skipping stack health check")
+		return func() {}
+	}
 
 	requireStackRunning()
 
