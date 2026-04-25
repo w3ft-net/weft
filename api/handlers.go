@@ -1154,6 +1154,7 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 		Prefix    string `json:"prefix"`
 		Label     string `json:"label"`
 		Namespace string `json:"namespace"`
+		Env       string `json:"env"`
 		Status    string `json:"status"`
 		CreatedAt string `json:"created_at"`
 	}
@@ -1168,6 +1169,7 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 			Prefix:    t.Prefix,
 			Label:     t.Label,
 			Namespace: t.Namespace.Name,
+			Env:       t.Env,
 			Status:    status,
 			CreatedAt: t.CreatedAt.Format(time.RFC3339),
 		})
@@ -1186,6 +1188,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Label     string `json:"label"`
 		Namespace string `json:"namespace"`
+		Env       string `json:"env"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Label == "" {
 		http.Error(w, "label required", http.StatusBadRequest)
@@ -1212,7 +1215,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	raw, tok, err := s.store.CreateAgentToken(custID, nsObj.ID, req.Label)
+	raw, tok, err := s.store.CreateAgentToken(custID, nsObj.ID, req.Label, req.Env)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

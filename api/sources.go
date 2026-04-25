@@ -31,10 +31,10 @@ func (s *Server) handleAgentSample(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		App       string   `json:"app"`
-		Instance  string   `json:"instance"`
-		HostGroup string   `json:"host_group"`
-		Lines     []string `json:"lines"`
+		App        string   `json:"app"`
+		Instance   string   `json:"instance"`
+		Deployment string   `json:"deployment"`
+		Lines      []string `json:"lines"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -58,7 +58,7 @@ func (s *Server) handleAgentSample(w http.ResponseWriter, r *http.Request) {
 	fullApp := agent.Namespace + "/" + req.App
 	if err := s.store.UpsertPendingLogGroup(
 		ns.ID, fullApp,
-		req.Instance, req.HostGroup,
+		req.Instance, req.Deployment,
 		string(sampleJSON), string(detectionJSON),
 	); err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
@@ -147,13 +147,13 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type pendingResp struct {
-		App       string          `json:"app"`
-		Namespace string          `json:"namespace"`
-		Instance  string          `json:"instance"`
-		HostGroup string          `json:"host_group"`
-		Sample    json.RawMessage `json:"sample"`
-		Detection json.RawMessage `json:"detection"`
-		CreatedAt string          `json:"created_at"`
+		App        string          `json:"app"`
+		Namespace  string          `json:"namespace"`
+		Instance   string          `json:"instance"`
+		Deployment string          `json:"deployment"`
+		Sample     json.RawMessage `json:"sample"`
+		Detection  json.RawMessage `json:"detection"`
+		CreatedAt  string          `json:"created_at"`
 	}
 
 	resp := make([]pendingResp, 0, len(sources))
@@ -162,13 +162,13 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 		// short-form app shape the frontend and weftd agents consume.
 		shortApp := strings.TrimPrefix(lg.App, lg.NamespaceName+"/")
 		resp = append(resp, pendingResp{
-			App:       shortApp,
-			Namespace: lg.NamespaceName,
-			Instance:  lg.Instance,
-			HostGroup: lg.HostGroup,
-			Sample:    json.RawMessage(lg.Sample),
-			Detection: json.RawMessage(lg.Detection),
-			CreatedAt: lg.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			App:        shortApp,
+			Namespace:  lg.NamespaceName,
+			Instance:   lg.Instance,
+			Deployment: lg.Deployment,
+			Sample:     json.RawMessage(lg.Sample),
+			Detection:  json.RawMessage(lg.Detection),
+			CreatedAt:  lg.CreatedAt.Format("2006-01-02T15:04:05Z"),
 		})
 	}
 

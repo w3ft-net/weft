@@ -398,7 +398,14 @@ type LogRow struct {
 	PayloadJson   []byte                 `protobuf:"bytes,7,opt,name=payload_json,json=payloadJson,proto3" json:"payload_json,omitempty"`
 	Fields        []string               `protobuf:"bytes,8,rep,name=fields,proto3" json:"fields,omitempty"`
 	Customer      string                 `protobuf:"bytes,9,opt,name=customer,proto3" json:"customer,omitempty"`
-	HostGroup     string                 `protobuf:"bytes,10,opt,name=host_group,json=hostGroup,proto3" json:"host_group,omitempty"` // logical group (e.g. "coordinator", "shard")
+	Deployment    string                 `protobuf:"bytes,10,opt,name=deployment,proto3" json:"deployment,omitempty"`                         // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
+	Env           string                 `protobuf:"bytes,11,opt,name=env,proto3" json:"env,omitempty"`                                       // deployment environment (token-derived)
+	Version       string                 `protobuf:"bytes,12,opt,name=version,proto3" json:"version,omitempty"`                               // service version (agent version_file)
+	Region        string                 `protobuf:"bytes,13,opt,name=region,proto3" json:"region,omitempty"`                                 // cloud region (agent cloud-metadata probe)
+	Cluster       string                 `protobuf:"bytes,14,opt,name=cluster,proto3" json:"cluster,omitempty"`                               // k8s cluster name (k8s mode only)
+	K8SNamespace  string                 `protobuf:"bytes,15,opt,name=k8s_namespace,json=k8sNamespace,proto3" json:"k8s_namespace,omitempty"` // k8s namespace (k8s mode only)
+	Pod           string                 `protobuf:"bytes,16,opt,name=pod,proto3" json:"pod,omitempty"`                                       // k8s pod name (k8s mode only)
+	Container     string                 `protobuf:"bytes,17,opt,name=container,proto3" json:"container,omitempty"`                           // k8s container name (k8s mode only)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -496,9 +503,58 @@ func (x *LogRow) GetCustomer() string {
 	return ""
 }
 
-func (x *LogRow) GetHostGroup() string {
+func (x *LogRow) GetDeployment() string {
 	if x != nil {
-		return x.HostGroup
+		return x.Deployment
+	}
+	return ""
+}
+
+func (x *LogRow) GetEnv() string {
+	if x != nil {
+		return x.Env
+	}
+	return ""
+}
+
+func (x *LogRow) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *LogRow) GetRegion() string {
+	if x != nil {
+		return x.Region
+	}
+	return ""
+}
+
+func (x *LogRow) GetCluster() string {
+	if x != nil {
+		return x.Cluster
+	}
+	return ""
+}
+
+func (x *LogRow) GetK8SNamespace() string {
+	if x != nil {
+		return x.K8SNamespace
+	}
+	return ""
+}
+
+func (x *LogRow) GetPod() string {
+	if x != nil {
+		return x.Pod
+	}
+	return ""
+}
+
+func (x *LogRow) GetContainer() string {
+	if x != nil {
+		return x.Container
 	}
 	return ""
 }
@@ -1153,6 +1209,7 @@ type CreateTokenRequest struct {
 	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
 	Label         string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"` // human-readable label (e.g., "vimgym-prod")
 	App           string                 `protobuf:"bytes,3,opt,name=app,proto3" json:"app,omitempty"`     // app name this token authorizes (e.g., "vimgym")
+	Env           string                 `protobuf:"bytes,4,opt,name=env,proto3" json:"env,omitempty"`     // optional deployment-environment dimension stamped on every row
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1204,6 +1261,13 @@ func (x *CreateTokenRequest) GetLabel() string {
 func (x *CreateTokenRequest) GetApp() string {
 	if x != nil {
 		return x.App
+	}
+	return ""
+}
+
+func (x *CreateTokenRequest) GetEnv() string {
+	if x != nil {
+		return x.Env
 	}
 	return ""
 }
@@ -3493,11 +3557,11 @@ func (x *ShardHealth) GetLastWrite() string {
 
 type SubmitSampleRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`                          // agent token (wft_...) for auth
-	App           string                 `protobuf:"bytes,2,opt,name=app,proto3" json:"app,omitempty"`                              // bare app name within namespace
-	Instance      string                 `protobuf:"bytes,3,opt,name=instance,proto3" json:"instance,omitempty"`                    // hostname of agent
-	HostGroup     string                 `protobuf:"bytes,4,opt,name=host_group,json=hostGroup,proto3" json:"host_group,omitempty"` // logical group
-	Lines         []string               `protobuf:"bytes,5,rep,name=lines,proto3" json:"lines,omitempty"`                          // sample log lines
+	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`           // agent token (wft_...) for auth
+	App           string                 `protobuf:"bytes,2,opt,name=app,proto3" json:"app,omitempty"`               // bare app name within namespace
+	Instance      string                 `protobuf:"bytes,3,opt,name=instance,proto3" json:"instance,omitempty"`     // hostname of agent
+	Deployment    string                 `protobuf:"bytes,4,opt,name=deployment,proto3" json:"deployment,omitempty"` // fleet/scaling-unit (was host_group)
+	Lines         []string               `protobuf:"bytes,5,rep,name=lines,proto3" json:"lines,omitempty"`           // sample log lines
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3553,9 +3617,9 @@ func (x *SubmitSampleRequest) GetInstance() string {
 	return ""
 }
 
-func (x *SubmitSampleRequest) GetHostGroup() string {
+func (x *SubmitSampleRequest) GetDeployment() string {
 	if x != nil {
-		return x.HostGroup
+		return x.Deployment
 	}
 	return ""
 }
@@ -3740,7 +3804,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\trows_sent\x18\x01 \x01(\x03R\browsSent\"8\n" +
 	"\tResultRow\x12\x19\n" +
 	"\bline_num\x18\x01 \x01(\x03R\alineNum\x12\x10\n" +
-	"\x03raw\x18\x02 \x01(\tR\x03raw\"\x8d\x02\n" +
+	"\x03raw\x18\x02 \x01(\tR\x03raw\"\xc1\x03\n" +
 	"\x06LogRow\x12\x19\n" +
 	"\bline_num\x18\x01 \x01(\x03R\alineNum\x12\x10\n" +
 	"\x03raw\x18\x02 \x01(\tR\x03raw\x12\x10\n" +
@@ -3751,10 +3815,18 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\binstance\x18\x06 \x01(\tR\binstance\x12!\n" +
 	"\fpayload_json\x18\a \x01(\fR\vpayloadJson\x12\x16\n" +
 	"\x06fields\x18\b \x03(\tR\x06fields\x12\x1a\n" +
-	"\bcustomer\x18\t \x01(\tR\bcustomer\x12\x1d\n" +
+	"\bcustomer\x18\t \x01(\tR\bcustomer\x12\x1e\n" +
 	"\n" +
-	"host_group\x18\n" +
-	" \x01(\tR\thostGroup\"1\n" +
+	"deployment\x18\n" +
+	" \x01(\tR\n" +
+	"deployment\x12\x10\n" +
+	"\x03env\x18\v \x01(\tR\x03env\x12\x18\n" +
+	"\aversion\x18\f \x01(\tR\aversion\x12\x16\n" +
+	"\x06region\x18\r \x01(\tR\x06region\x12\x18\n" +
+	"\acluster\x18\x0e \x01(\tR\acluster\x12#\n" +
+	"\rk8s_namespace\x18\x0f \x01(\tR\fk8sNamespace\x12\x10\n" +
+	"\x03pod\x18\x10 \x01(\tR\x03pod\x12\x1c\n" +
+	"\tcontainer\x18\x11 \x01(\tR\tcontainer\"1\n" +
 	"\rIngestRequest\x12 \n" +
 	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\"5\n" +
 	"\x0eIngestResponse\x12#\n" +
@@ -3795,11 +3867,12 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x0ebytes_ingested\x18\x01 \x01(\x03R\rbytesIngested\x12!\n" +
 	"\fperiod_start\x18\x02 \x01(\tR\vperiodStart\x12\x1d\n" +
 	"\n" +
-	"period_end\x18\x03 \x01(\tR\tperiodEnd\"X\n" +
+	"period_end\x18\x03 \x01(\tR\tperiodEnd\"j\n" +
 	"\x12CreateTokenRequest\x12\x1a\n" +
 	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12\x10\n" +
-	"\x03app\x18\x03 \x01(\tR\x03app\"+\n" +
+	"\x03app\x18\x03 \x01(\tR\x03app\x12\x10\n" +
+	"\x03env\x18\x04 \x01(\tR\x03env\"+\n" +
 	"\x13CreateTokenResponse\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\"/\n" +
 	"\x11ListTokensRequest\x12\x1a\n" +
@@ -3950,13 +4023,14 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
 	"disk_bytes\x18\x05 \x01(\x03R\tdiskBytes\x12\x1d\n" +
 	"\n" +
-	"last_write\x18\x06 \x01(\tR\tlastWrite\"\x8e\x01\n" +
+	"last_write\x18\x06 \x01(\tR\tlastWrite\"\x8f\x01\n" +
 	"\x13SubmitSampleRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x10\n" +
 	"\x03app\x18\x02 \x01(\tR\x03app\x12\x1a\n" +
-	"\binstance\x18\x03 \x01(\tR\binstance\x12\x1d\n" +
+	"\binstance\x18\x03 \x01(\tR\binstance\x12\x1e\n" +
 	"\n" +
-	"host_group\x18\x04 \x01(\tR\thostGroup\x12\x14\n" +
+	"deployment\x18\x04 \x01(\tR\n" +
+	"deployment\x12\x14\n" +
 	"\x05lines\x18\x05 \x03(\tR\x05lines\".\n" +
 	"\x14SubmitSampleResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\"@\n" +

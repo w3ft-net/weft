@@ -16,6 +16,10 @@ import (
 // shown to the user exactly once at create time. The row holds sha256(raw)
 // as TokenHash; the short Prefix is safe to display so users can tell their
 // tokens apart in the UI.
+//
+// `Env` is bound at mint time and stamped on every row received from this
+// token by the coordinator's IngestStream handler. See
+// docs/plans/ingest-dimensions.md.
 type AgentToken struct {
 	gorm.Model
 	CustomerID        uint      `gorm:"not null"`
@@ -25,6 +29,7 @@ type AgentToken struct {
 	TokenHash         string    `gorm:"column:token_hash;uniqueIndex;not null"`
 	Prefix            string    `gorm:"not null"` // e.g. "wft_a1b2" — safe to display
 	Label             string    // human-readable label (e.g., "prod-coordinator")
+	Env               string    // optional deployment-environment dimension stamped on every row
 	Revoked           bool      `gorm:"not null;default:false"`
 	MetricsEnabled    bool      `gorm:"not null;default:false"`
 	MetricsInterval   string    // e.g., "30s"
@@ -56,7 +61,11 @@ func agentTokenPrefix(raw string) string {
 // only moment it exists server-side, so the caller must hand it to the
 // user immediately and then discard. The returned *AgentToken contains
 // only the hash and prefix.
-func (s *Store) CreateAgentToken(customerID, namespaceID uint, label string) (string, *AgentToken, error) {
+//
+// `env` is optional; pass "" for tokens that don't carry an env
+// dimension. When set, the coordinator's IngestStream handler stamps
+// it on every row from this token (the agent can't override).
+func (s *Store) CreateAgentToken(customerID, namespaceID uint, label, env string) (string, *AgentToken, error) {
 	raw, err := generateToken()
 	if err != nil {
 		return "", nil, err
@@ -67,6 +76,7 @@ func (s *Store) CreateAgentToken(customerID, namespaceID uint, label string) (st
 		TokenHash:   hashAgentToken(raw),
 		Prefix:      agentTokenPrefix(raw),
 		Label:       label,
+		Env:         env,
 	}
 	if err := s.db.Create(&t).Error; err != nil {
 		return "", nil, err
@@ -93,6 +103,7 @@ func (s *Store) AgentAppNames() ([]string, error) {
 type AgentAuthResult struct {
 	Customer  *Customer
 	Namespace string // namespace name from the token
+	Env       string // optional env dimension to stamp on every row from this token
 }
 
 // ValidateAgentToken checks a presented raw token and returns the
@@ -113,6 +124,7 @@ func (s *Store) ValidateAgentToken(token string) (*AgentAuthResult, error) {
 	return &AgentAuthResult{
 		Customer:  &t.Customer,
 		Namespace: t.Namespace.Name,
+		Env:       t.Env,
 	}, nil
 }
 

@@ -74,7 +74,7 @@ func (d *DLQ) Write(rows []*pb.LogRow) string {
 			"ts_ns":     r.TsUnixNs,
 			"fields":    r.Fields,
 			"payload":   string(r.PayloadJson),
-			"host_group": r.HostGroup,
+			"deployment": r.Deployment,
 		})
 	}
 	gz.Close()

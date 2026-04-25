@@ -25,23 +25,36 @@ import (
 	"github.com/kevlarcon/weft/weftd"
 )
 
-// globalHostGroup is set at startup from config and stamped on every LogRow.
-var globalHostGroup string
+// globalDeployment is set at startup from config and stamped on every LogRow.
+// Maps to the "deployment" column on shards (k8s Deployment, AWS ASG, etc.).
+var globalDeployment string
+
+// globalRegion is detected once at startup from cloud metadata (or
+// supplied via config override) and stamped on every LogRow.
+var globalRegion string
+
+// versionReaders maps a per-source version_file path to the live
+// reader watching it. Built at startup; consulted from the LogRow
+// stamping path. Per-source so multi-app hosts can have distinct
+// versions.
+var versionReaders = map[string]*weftd.VersionReader{}
 
 type Config struct {
-	Endpoint string         `yaml:"endpoint"`  // coordinator address
-	Token    string         `yaml:"token"`     // agent auth token (wft_...)
-	Customer string         `yaml:"customer"`  // fallback if not returned by auth
-	HostGroup string        `yaml:"host_group"` // logical group (e.g. "coordinator", "shard") — sent alongside hostname
-	Socket   string         `yaml:"socket"`
-	Sources  []SourceConfig `yaml:"sources"`
+	Endpoint   string         `yaml:"endpoint"`   // coordinator address
+	Token      string         `yaml:"token"`      // agent auth token (wft_...)
+	Customer   string         `yaml:"customer"`   // fallback if not returned by auth
+	Deployment string         `yaml:"deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
+	Region     string         `yaml:"region"`     // optional override; otherwise probed from cloud metadata
+	Socket     string         `yaml:"socket"`
+	Sources    []SourceConfig `yaml:"sources"`
 }
 
 type SourceConfig struct {
-	App     string        `yaml:"app,omitempty"`    // bare app name within namespace (e.g. "coordinator")
-	Path    string        `yaml:"path"`             // file path or glob (file tailing)
-	Unit    string        `yaml:"unit,omitempty"`    // systemd unit name (journal tailing)
-	Metrics MetricsConfig `yaml:"metrics,omitempty"` // optional system metrics collection
+	App         string        `yaml:"app,omitempty"`          // bare app name within namespace (e.g. "coordinator")
+	Path        string        `yaml:"path"`                   // file path or glob (file tailing)
+	Unit        string        `yaml:"unit,omitempty"`         // systemd unit name (journal tailing)
+	VersionFile string        `yaml:"version_file,omitempty"` // path to a file containing this source's version; fsnotify-watched
+	Metrics     MetricsConfig `yaml:"metrics,omitempty"`      // optional system metrics collection
 }
 
 func main() {
@@ -168,7 +181,11 @@ func main() {
 	}()
 
 	hostname, _ := os.Hostname()
-	globalHostGroup = cfg.HostGroup
+	globalDeployment = cfg.Deployment
+	globalRegion = weftd.DetectRegion(ctx, cfg.Region)
+	if globalRegion != "" {
+		log.Printf("region detected: %s", globalRegion)
+	}
 
 	// Start sources — each independently onboards then streams.
 	for _, src := range cfg.Sources {
@@ -185,6 +202,12 @@ func main() {
 			app = strings.TrimSuffix(base, filepath.Ext(base))
 		}
 		fullApp := namespace + "/" + app
+
+		// If this source declares a version_file, spin up a reader so
+		// row-stamping can fetch the current version cheaply.
+		if src.VersionFile != "" {
+			versionReaders[fullApp] = weftd.NewVersionReader(ctx, src.VersionFile)
+		}
 
 		if src.Unit != "" {
 			go func() {
@@ -250,7 +273,7 @@ func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 
 	// Submit sample.
 	log.Printf("[%s] new source — sampling %s", fullApp, path)
-	if err := weftd.SubmitSample(ctx, client, token, app, path, hostname, globalHostGroup); err != nil {
+	if err := weftd.SubmitSample(ctx, client, token, app, path, hostname, globalDeployment); err != nil {
 		return err
 	}
 	log.Printf("[%s] sample submitted — waiting for configuration", fullApp)
@@ -517,6 +540,17 @@ type streamState struct {
 	stream pb.WeftCoordinator_IngestStreamClient
 }
 
+// versionForApp returns the live version dimension for `app` if a
+// version_file was configured; "" otherwise. The reader is lock-free
+// (atomic pointer load), safe to call from the hot row-stamping
+// path.
+func versionForApp(app string) string {
+	if r, ok := versionReaders[app]; ok {
+		return r.Current()
+	}
+	return ""
+}
+
 // sendLineWithReconnect sends a line, opening or reconnecting the stream as needed.
 func sendLineWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient, ss *streamState, line, customer, instance, app string) error {
 	line = strings.TrimSpace(line)
@@ -525,13 +559,15 @@ func sendLineWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient,
 	}
 
 	msg := &pb.LogRow{
-		App:       app,
-		Customer:  customer,
-		Instance:  instance,
-		HostGroup: globalHostGroup,
-		Raw:       line,
-		TsUnixNs: time.Now().UnixNano(),
-		Fields:    strings.Fields(line),
+		App:        app,
+		Customer:   customer,
+		Instance:   instance,
+		Deployment: globalDeployment,
+		Region:     globalRegion,
+		Version:    versionForApp(app),
+		Raw:        line,
+		TsUnixNs:   time.Now().UnixNano(),
+		Fields:     strings.Fields(line),
 	}
 
 	// Try sending on existing stream.

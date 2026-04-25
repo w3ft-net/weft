@@ -55,31 +55,55 @@ type Coordinator struct {
 	ScriptExecutionTimeout time.Duration
 }
 
-// SeenApps tracks distinct app names observed during ingestion, keyed by customer.
+// SeenApps tracks distinct (app, env) tuples observed during
+// ingestion, keyed by customer. Env-less entries are stored in the
+// usual "<ns>/<app>" form; env-bearing entries get the env spliced
+// in: "<ns>/<env>/<rest-of-app>". This lets the user-facing
+// directory listing show env subdirectories alongside flat .log
+// files in the same namespace — see docs/plans/ingest-dimensions.md.
 type SeenApps struct {
 	mu   sync.RWMutex
-	apps map[string]map[string]bool // customer → set of app names
+	apps map[string]map[string]bool // customer → set of slash-encoded names
 }
 
 func NewSeenApps() *SeenApps {
 	return &SeenApps{apps: make(map[string]map[string]bool)}
 }
 
-// Add records an app name for a customer. Returns true if it was new.
-func (s *SeenApps) Add(customer, app string) bool {
+// encodeName splices env into the app's namespace prefix. Given
+// app="weft/coordinator" and env="prod", returns "weft/prod/coordinator".
+// Empty env returns app unchanged. App without a namespace prefix
+// (single-segment) gets "<env>/<app>" so single-app deployments still
+// produce a valid 3-segment path.
+func encodeName(app, env string) string {
+	if env == "" {
+		return app
+	}
+	if i := strings.Index(app, "/"); i >= 0 {
+		return app[:i] + "/" + env + "/" + app[i+1:]
+	}
+	return env + "/" + app
+}
+
+// Add records an (app, env) tuple for a customer. Returns true if
+// the resulting encoded name is new.
+func (s *SeenApps) Add(customer, app, env string) bool {
+	name := encodeName(app, env)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.apps[customer] == nil {
 		s.apps[customer] = make(map[string]bool)
 	}
-	if s.apps[customer][app] {
+	if s.apps[customer][name] {
 		return false
 	}
-	s.apps[customer][app] = true
+	s.apps[customer][name] = true
 	return true
 }
 
-// Names returns seen app names for a specific customer, sorted.
+// Names returns seen entries for a specific customer, sorted. Each
+// entry is either "<ns>/<app>" (env-less) or "<ns>/<env>/<app>"
+// (env-bearing).
 func (s *SeenApps) Names(customer string) []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

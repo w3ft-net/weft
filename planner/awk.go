@@ -16,12 +16,25 @@ type awkPushdown struct {
 	nrSentinel bool   // true if this is an intermediate NR bound, not a final result
 }
 
-// metaVars maps weft meta-variable names to SQL column names.
+// metaVars maps weft meta-variable names to SQL column names. The
+// SERVICE/HOST aliases point at the same columns as APP/INSTANCE so
+// users coming from OTel/Datadog vocabulary find what they expect.
+// See docs/plans/ingest-dimensions.md.
 var metaVars = map[string]string{
-	"LEVEL":    "level",
-	"APP":      "app",
-	"INSTANCE": "instance",
-	"TS":       "ts",
+	"LEVEL":         "level",
+	"APP":           "app",
+	"SERVICE":       "app",
+	"INSTANCE":      "instance",
+	"HOST":          "instance",
+	"TS":            "ts",
+	"DEPLOYMENT":    "deployment",
+	"ENV":           "env",
+	"VERSION":       "version",
+	"REGION":        "region",
+	"CLUSTER":       "cluster",
+	"K8S_NAMESPACE": "k8s_namespace",
+	"POD":           "pod",
+	"CONTAINER":     "container",
 }
 
 // tryAwkPushdown attempts to extract a pushable predicate from an awk program string.

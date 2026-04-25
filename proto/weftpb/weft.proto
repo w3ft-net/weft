@@ -78,11 +78,18 @@ message LogRow {
   string app = 3;
   string level = 4;
   int64 ts_unix_ns = 5;
-  string instance = 6;      // hostname of the emitting machine
+  string instance = 6;       // hostname of the emitting machine
   bytes payload_json = 7;
   repeated string fields = 8;
   string customer = 9;
-  string host_group = 10;   // logical group (e.g. "coordinator", "shard")
+  string deployment = 10;    // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
+  string env = 11;            // deployment environment (token-derived)
+  string version = 12;        // service version (agent version_file)
+  string region = 13;         // cloud region (agent cloud-metadata probe)
+  string cluster = 14;        // k8s cluster name (k8s mode only)
+  string k8s_namespace = 15;  // k8s namespace (k8s mode only)
+  string pod = 16;            // k8s pod name (k8s mode only)
+  string container = 17;      // k8s container name (k8s mode only)
 }
 
 message IngestRequest {
@@ -238,6 +245,7 @@ message CreateTokenRequest {
   string customer = 1;
   string label = 2;  // human-readable label (e.g., "vimgym-prod")
   string app = 3;    // app name this token authorizes (e.g., "vimgym")
+  string env = 4;    // optional deployment-environment dimension stamped on every row
 }
 
 message CreateTokenResponse {
@@ -475,7 +483,7 @@ message SubmitSampleRequest {
   string token = 1;             // agent token (wft_...) for auth
   string app = 2;               // bare app name within namespace
   string instance = 3;          // hostname of agent
-  string host_group = 4;        // logical group
+  string deployment = 4;        // fleet/scaling-unit (was host_group)
   repeated string lines = 5;    // sample log lines
 }
 

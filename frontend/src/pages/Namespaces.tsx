@@ -29,6 +29,7 @@ export default function Namespaces() {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [showTokenForm, setShowTokenForm] = useState<string | null>(null)
   const [tokenLabel, setTokenLabel] = useState('')
+  const [tokenEnv, setTokenEnv] = useState('')
   const [newTokenSecret, setNewTokenSecret] = useState('')
   const [copied, setCopied] = useState(false)
   const [sources, setSources] = useState<SourceInfo[]>([])
@@ -85,9 +86,10 @@ export default function Namespaces() {
   async function handleCreateToken(nsName: string) {
     if (!tokenLabel.trim()) return
     try {
-      const resp = await createToken(tokenLabel.trim(), nsName)
+      const resp = await createToken(tokenLabel.trim(), nsName, tokenEnv.trim())
       setNewTokenSecret(resp.token)
       setTokenLabel('')
+      setTokenEnv('')
       setShowTokenForm(null)
       loadData()
     } catch {
@@ -236,7 +238,7 @@ export default function Namespaces() {
                             <div className="dash-table-wrap" style={{ marginBottom: 12 }}>
                               <table className="dash-table" data-testid={`namespace-tokens-${ns.name}`}>
                                 <thead>
-                                  <tr><th>Prefix</th><th>Label</th><th>Status</th><th>Created</th><th></th></tr>
+                                  <tr><th>Prefix</th><th>Label</th><th>Env</th><th>Status</th><th>Created</th><th></th></tr>
                                 </thead>
                                 <tbody>
                                   {nsTokens.map(t => (
@@ -245,6 +247,7 @@ export default function Namespaces() {
                                         <code>{t.prefix}…</code>
                                       </td>
                                       <td className="token-label">{t.label}</td>
+                                      <td className="token-env">{t.env || <span className="dash-empty">—</span>}</td>
                                       <td><span className={`token-status token-status-${t.status}`}>{t.status}</span></td>
                                       <td className="token-date">{formatDate(t.created_at)}</td>
                                       <td>
@@ -271,12 +274,18 @@ export default function Namespaces() {
                                     onChange={e => setTokenLabel(e.target.value)}
                                     data-testid={`namespace-token-label-${ns.name}`} />
                                 </div>
+                                <div className="form-field">
+                                  <label className="form-label">Env <span className="dash-empty">(optional)</span></label>
+                                  <input className="form-input" placeholder="prod" value={tokenEnv}
+                                    onChange={e => setTokenEnv(e.target.value)}
+                                    data-testid={`namespace-token-env-${ns.name}`} />
+                                </div>
                               </div>
                               <div className="form-actions">
                                 <button className="btn-action btn-action-primary"
                                   onClick={() => handleCreateToken(ns.name)}
                                   data-testid={`namespace-token-create-${ns.name}`}>Create token</button>
-                                <button className="btn-action" onClick={() => setShowTokenForm(null)}>Cancel</button>
+                                <button className="btn-action" onClick={() => { setShowTokenForm(null); setTokenEnv('') }}>Cancel</button>
                               </div>
                             </div>
                           ) : (

@@ -50,17 +50,35 @@ type TokenInfo struct {
 
 // HTTPCoordinator talks to the weft API over HTTP instead of gRPC.
 // This works through the ALB / public internet.
+//
+// Two clients by design:
+//
+//   - client: one-shot RPCs (Query, ListApps, token/namespace CRUD, source
+//     management). http.Client.Timeout applies to the whole request
+//     including the body read, which is exactly right for a short
+//     request-reply exchange — it caps how long we'll wait on an
+//     unresponsive server.
+//   - streamClient: long-lived SSE streams (Follow). Here the body read
+//     is the entire point, so a wall-clock Timeout is wrong: it would
+//     guarantee the connection dies N seconds in regardless of whether
+//     the user or server wanted it to. Cancellation flows through the
+//     caller-supplied ctx instead.
+//
+// Keep the split explicit so a new endpoint has to pick its intent
+// rather than inheriting the wrong timeout by accident.
 type HTTPCoordinator struct {
-	baseURL string // e.g., "https://api.w3ft.net"
-	token   string // JWT for Authorization header
-	client  *http.Client
+	baseURL      string // e.g., "https://api.w3ft.net"
+	token        string // JWT for Authorization header
+	client       *http.Client
+	streamClient *http.Client
 }
 
 func NewHTTPCoordinator(baseURL, token string) *HTTPCoordinator {
 	return &HTTPCoordinator{
-		baseURL: strings.TrimSuffix(baseURL, "/"),
-		token:   token,
-		client:  &http.Client{Timeout: 30 * time.Second},
+		baseURL:      strings.TrimSuffix(baseURL, "/"),
+		token:        token,
+		client:       &http.Client{Timeout: 10 * time.Second},
+		streamClient: &http.Client{},
 	}
 }
 
@@ -109,7 +127,9 @@ func (h *HTTPCoordinator) Follow(ctx context.Context, pipeline string, onRow fun
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+h.token)
 
-	resp, err := h.client.Do(req)
+	// streamClient has no wall-clock Timeout — the request lives for the
+	// duration of the caller's ctx.
+	resp, err := h.streamClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -120,7 +140,12 @@ func (h *HTTPCoordinator) Follow(ctx context.Context, pipeline string, onRow fun
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 	}
 
+	// bufio.NewScanner's default MaxScanTokenSize is 64KB. Real log lines
+	// routinely run longer (stack traces, JSON blobs with large payloads);
+	// lifting the ceiling to 10MB costs nothing at steady state and
+	// avoids silent ErrTooLong terminations mid-stream.
 	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
@@ -215,8 +240,8 @@ func (h *HTTPCoordinator) CreateNamespace(name string) (*NamespaceInfo, error) {
 	return &ns, nil
 }
 
-func (h *HTTPCoordinator) CreateToken(customer, label, namespace string) (string, error) {
-	body, _ := json.Marshal(map[string]string{"label": label, "namespace": namespace})
+func (h *HTTPCoordinator) CreateToken(customer, label, namespace, env string) (string, error) {
+	body, _ := json.Marshal(map[string]string{"label": label, "namespace": namespace, "env": env})
 	req, _ := http.NewRequest("POST", h.baseURL+"/api/tokens", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+h.token)
@@ -311,13 +336,13 @@ func parseSSEResponse(r io.Reader) (*RemoteQueryResult, error) {
 
 // PendingSource represents a source awaiting schema configuration.
 type PendingSource struct {
-	App       string          `json:"app"`
-	Namespace string          `json:"namespace"`
-	Instance  string          `json:"instance"`
-	HostGroup string          `json:"host_group"`
-	Sample    json.RawMessage `json:"sample"`
-	Detection json.RawMessage `json:"detection"`
-	CreatedAt string          `json:"created_at"`
+	App        string          `json:"app"`
+	Namespace  string          `json:"namespace"`
+	Instance   string          `json:"instance"`
+	Deployment string          `json:"deployment"`
+	Sample     json.RawMessage `json:"sample"`
+	Detection  json.RawMessage `json:"detection"`
+	CreatedAt  string          `json:"created_at"`
 }
 
 // ListPendingSources returns all pending sources for the authenticated customer.

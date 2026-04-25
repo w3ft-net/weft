@@ -231,11 +231,11 @@ func TestNamespaceQuery_FilterAcrossSubApps(t *testing.T) {
 func TestSeenApps_TracksSubApps(t *testing.T) {
 	sa := NewSeenApps()
 
-	sa.Add("graybeard", "weft/coordinator")
-	sa.Add("graybeard", "weft/shard")
-	sa.Add("graybeard", "weft/metrics")
-	sa.Add("graybeard", "weft/coordinator") // duplicate
-	sa.Add("kevlar", "grantcentral")
+	sa.Add("graybeard", "weft/coordinator", "")
+	sa.Add("graybeard", "weft/shard", "")
+	sa.Add("graybeard", "weft/metrics", "")
+	sa.Add("graybeard", "weft/coordinator", "") // duplicate
+	sa.Add("kevlar", "grantcentral", "")
 
 	// Per-customer filtering.
 	names := sa.Names("graybeard")
@@ -258,5 +258,34 @@ func TestSeenApps_TracksSubApps(t *testing.T) {
 	// Unknown customer sees nothing.
 	if names := sa.Names("unknown"); len(names) != 0 {
 		t.Errorf("unknown customer should see no apps, got %v", names)
+	}
+}
+
+// TestSeenApps_EnvEncoding verifies that env-bearing rows produce
+// the slash-encoded "<ns>/<env>/<app>" name shape that drives the
+// 3-level pseudofile path layout. See docs/plans/ingest-dimensions.md.
+func TestSeenApps_EnvEncoding(t *testing.T) {
+	sa := NewSeenApps()
+
+	// Mix of env-less and env-bearing entries in the same namespace.
+	sa.Add("acme", "myco/api", "")          // env-less
+	sa.Add("acme", "myco/api", "prod")      // env-bearing, same app
+	sa.Add("acme", "myco/api", "staging")   // different env, same app
+	sa.Add("acme", "myco/worker", "prod")   // different app under prod
+
+	names := sa.Names("acme")
+	want := []string{
+		"myco/api",
+		"myco/prod/api",
+		"myco/prod/worker",
+		"myco/staging/api",
+	}
+	if len(names) != len(want) {
+		t.Fatalf("got %d names, want %d: %v", len(names), len(want), names)
+	}
+	for i, w := range want {
+		if names[i] != w {
+			t.Errorf("Names()[%d] = %q, want %q", i, names[i], w)
+		}
 	}
 }

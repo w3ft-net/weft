@@ -25,7 +25,7 @@ func testOpen(t *testing.T) *Store {
 
 func createTestToken(db *Store, custID uint, label string) (string, *AgentToken, error) {
 	ns, _ := db.FindOrCreateNamespace(custID, "test")
-	return db.CreateAgentToken(custID, ns.ID, label)
+	return db.CreateAgentToken(custID, ns.ID, label, "")
 }
 
 func TestUpdateAgentMetricsConfig(t *testing.T) {

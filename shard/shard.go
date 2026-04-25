@@ -39,18 +39,44 @@ type DuckDBShard struct {
 
 const createTableSQL = `
 CREATE TABLE IF NOT EXISTS logs (
-    line_num    BIGINT,
-    raw         TEXT,
-    fields      TEXT[],
-    ts          TIMESTAMP,
-    level       TEXT,
-    app         TEXT,
-    instance    TEXT,
-    customer    TEXT,
-    payload     JSON,
-    host_group  TEXT
+    line_num       BIGINT,
+    raw            TEXT,
+    fields         TEXT[],
+    ts             TIMESTAMP,
+    level          TEXT,
+    app            TEXT,
+    instance       TEXT,
+    customer       TEXT,
+    payload        JSON,
+    deployment     TEXT,
+    env            TEXT,
+    version        TEXT,
+    region         TEXT,
+    cluster        TEXT,
+    k8s_namespace  TEXT,
+    pod            TEXT,
+    container      TEXT
 );
 `
+
+// migrationSteps converges existing shards' schemas to the current target.
+// Each step is idempotent: rename guarded by column existence, ADD guarded
+// by IF NOT EXISTS. Order matters — rename must run before any ADD that
+// would conflict with the old name.
+var migrationSteps = []string{
+	// Rename host_group → deployment if the old column still exists.
+	`ALTER TABLE logs RENAME COLUMN host_group TO deployment`,
+	// Add the six new dimension columns. ADD COLUMN IF NOT EXISTS makes
+	// these idempotent on shards that already carry them.
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS deployment TEXT`,
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS env TEXT`,
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS version TEXT`,
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS region TEXT`,
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS cluster TEXT`,
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS k8s_namespace TEXT`,
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS pod TEXT`,
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS container TEXT`,
+}
 
 // NewDuckDBShard opens or creates a DuckDB database at path and initializes the
 // logs table. Use "" or ":memory:" for an in-memory database.
@@ -63,8 +89,12 @@ func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
 		db.Close()
 		return nil, fmt.Errorf("create table: %w", err)
 	}
-	// Migrate: add host_group column if missing (existing shards from older AMIs).
-	db.Exec("ALTER TABLE logs ADD COLUMN IF NOT EXISTS host_group TEXT")
+	// Run migrations. Errors are non-fatal — the rename fails on fresh
+	// shards that never had host_group, the ADDs fail on fully-migrated
+	// shards. Either way the schema converges to the CREATE TABLE shape.
+	for _, step := range migrationSteps {
+		_, _ = db.Exec(step)
+	}
 	return &DuckDBShard{id: id, db: db}, nil
 }
 
@@ -97,14 +127,14 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("INSERT INTO logs (line_num, raw, fields, ts, level, app, instance, customer, payload, host_group) VALUES ")
+	sb.WriteString("INSERT INTO logs (line_num, raw, fields, ts, level, app, instance, customer, payload, deployment, env, version, region, cluster, k8s_namespace, pod, container) VALUES ")
 
-	args := make([]any, 0, len(rows)*10)
+	args := make([]any, 0, len(rows)*17)
 	for i, r := range rows {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 
 		payloadStr := "{}"
 		if len(r.PayloadJson) > 0 {
@@ -121,7 +151,14 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
 			r.Instance,
 			r.Customer,
 			payloadStr,
-			r.HostGroup,
+			r.Deployment,
+			r.Env,
+			r.Version,
+			r.Region,
+			r.Cluster,
+			r.K8SNamespace,
+			r.Pod,
+			r.Container,
 		)
 	}
 

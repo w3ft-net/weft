@@ -71,7 +71,7 @@ type LogGroup struct {
 	LastPollAt   string
 	LastToken    string
 	Instance     string // hostname of the agent that last submitted a sample (pending only)
-	HostGroup    string // logical group (e.g. "coordinator", "shard") — pending only
+	Deployment   string `gorm:"column:deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.) — pending only
 	Sample       string // JSON array of raw sample lines; cleared on configure
 	Detection    string // JSON-encoded ingest.Detection; cleared on configure
 }
@@ -282,7 +282,7 @@ func (s *Store) AppNames() ([]string, error) {
 // for that key, this is a no-op — the schema is already approved and the
 // sample is stale. If a pending row exists, instance/host_group/sample/
 // detection are refreshed. Otherwise a new pending row is inserted.
-func (s *Store) UpsertPendingLogGroup(namespaceID uint, app, instance, hostGroup, sampleJSON, detectionJSON string) error {
+func (s *Store) UpsertPendingLogGroup(namespaceID uint, app, instance, deployment, sampleJSON, detectionJSON string) error {
 	var lg LogGroup
 	err := s.db.Where("namespace_id = ? AND app = ?", namespaceID, app).First(&lg).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -296,7 +296,7 @@ func (s *Store) UpsertPendingLogGroup(namespaceID uint, app, instance, hostGroup
 			PollInterval: "0s",
 			Enabled:      true,
 			Instance:     instance,
-			HostGroup:    hostGroup,
+			Deployment:   deployment,
 			Sample:       sampleJSON,
 			Detection:    detectionJSON,
 		}
@@ -310,7 +310,7 @@ func (s *Store) UpsertPendingLogGroup(namespaceID uint, app, instance, hostGroup
 	}
 	return s.db.Model(&lg).Updates(map[string]any{
 		"instance":   instance,
-		"host_group": hostGroup,
+		"deployment": deployment,
 		"sample":     sampleJSON,
 		"detection":  detectionJSON,
 	}).Error

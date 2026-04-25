@@ -106,10 +106,10 @@ export function getTokens(): Promise<AgentToken[]> {
   return apiFetch('/api/tokens')
 }
 
-export function createToken(label: string, namespace: string): Promise<AgentToken & { token: string }> {
+export function createToken(label: string, namespace: string, env: string): Promise<AgentToken & { token: string }> {
   return apiFetch('/api/tokens', {
     method: 'POST',
-    body: JSON.stringify({ label, namespace }),
+    body: JSON.stringify({ label, namespace, env }),
   })
 }
 
@@ -266,6 +266,7 @@ export interface AgentToken {
   prefix: string
   label: string
   namespace: string
+  env: string
   status: 'active' | 'revoked'
   created_at: string
 }

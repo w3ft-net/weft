@@ -90,6 +90,12 @@ func Plan(pipeline string) (*QueryPlan, error) {
 		}
 	}
 
+	// Three-level pseudofile path /log/<ns>/<env>/<app>.log adds an
+	// env predicate. See docs/plans/ingest-dimensions.md.
+	if info.source.env != "" {
+		sql.addPredicate(fmt.Sprintf("env = '%s'", info.source.env))
+	}
+
 	switch info.source.cmd {
 	case "head":
 		sql.setOrderLimit("ts ASC", info.source.limit)

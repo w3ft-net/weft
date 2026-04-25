@@ -202,9 +202,58 @@ func (f *ShellFS) logNamespaces() []string {
 }
 
 // logAppsInNamespace returns sub-app names within a namespace.
-// For "weft" with apps ["weft/coordinator", "weft/shard"], returns ["coordinator", "shard"].
+// For "weft" with apps ["weft/coordinator", "weft/shard"], returns
+// ["coordinator", "shard"]. Skips entries with an env segment —
+// those are listed under logEnvsInNamespace and surfaced as env
+// subdirectories in the directory listing. See
+// docs/plans/ingest-dimensions.md.
 func (f *ShellFS) logAppsInNamespace(ns string) []string {
 	prefix := ns + "/"
+	var apps []string
+	for _, a := range f.logApps {
+		if !strings.HasPrefix(a, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(a, prefix)
+		if strings.Contains(rest, "/") {
+			continue // env-bearing entry; env tier handles it
+		}
+		apps = append(apps, rest)
+	}
+	return apps
+}
+
+// logEnvsInNamespace returns the distinct env values for env-bearing
+// apps in a namespace. Pairs with logAppsInNamespace to drive the
+// mixed listing at /log/<ns>/ — env-less apps appear as files,
+// env-bearing apps appear as env subdirectories.
+func (f *ShellFS) logEnvsInNamespace(ns string) []string {
+	prefix := ns + "/"
+	seen := map[string]bool{}
+	var envs []string
+	for _, a := range f.logApps {
+		if !strings.HasPrefix(a, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(a, prefix)
+		i := strings.Index(rest, "/")
+		if i < 0 {
+			continue
+		}
+		env := rest[:i]
+		if !seen[env] {
+			seen[env] = true
+			envs = append(envs, env)
+		}
+	}
+	return envs
+}
+
+// logAppsInNamespaceEnv returns sub-app names for a (ns, env) pair.
+// For "weft"/"prod" with apps ["weft/prod/api", "weft/prod/worker"],
+// returns ["api", "worker"].
+func (f *ShellFS) logAppsInNamespaceEnv(ns, env string) []string {
+	prefix := ns + "/" + env + "/"
 	var apps []string
 	for _, a := range f.logApps {
 		if strings.HasPrefix(a, prefix) {
@@ -381,8 +430,7 @@ func (f *ShellFS) ReadDir(path string) ([]fs.DirEntry, error) {
 				if !f.canReadNamespace(ns) {
 					continue
 				}
-				subApps := f.logAppsInNamespace(ns)
-				if len(subApps) > 0 {
+				if len(f.logAppsInNamespace(ns)) > 0 || len(f.logEnvsInNamespace(ns)) > 0 {
 					entries = append(entries, &vfsDirEntry{name: ns, dir: true})
 				} else {
 					entries = append(entries, &vfsDirEntry{name: ns + ".log"})
@@ -390,17 +438,39 @@ func (f *ShellFS) ReadDir(path string) ([]fs.DirEntry, error) {
 			}
 			return entries, nil
 		}
-		// /log/<namespace>/ — show sub-apps as .log files.
-		if !f.canReadNamespace(logName) {
+		// Either "/log/<ns>/" or "/log/<ns>/<env>/". Three-segment paths
+		// peel the env off and list the apps within that env. See
+		// docs/plans/ingest-dimensions.md for the layout rationale.
+		segs := strings.Split(logName, "/")
+		nsName := segs[0]
+		if !f.canReadNamespace(nsName) {
 			return nil, fmt.Errorf("%s: permission denied", path)
 		}
-		subApps := f.logAppsInNamespace(logName)
-		if len(subApps) > 0 {
-			entries := make([]fs.DirEntry, len(subApps))
-			for i, app := range subApps {
-				entries[i] = &vfsDirEntry{name: app + ".log"}
+		switch len(segs) {
+		case 1:
+			// /log/<ns>/ — mix of <env>/ subdirs (env-bearing apps) and
+			// <app>.log files (env-less apps).
+			var entries []fs.DirEntry
+			for _, env := range f.logEnvsInNamespace(nsName) {
+				entries = append(entries, &vfsDirEntry{name: env, dir: true})
 			}
-			return entries, nil
+			for _, app := range f.logAppsInNamespace(nsName) {
+				entries = append(entries, &vfsDirEntry{name: app + ".log"})
+			}
+			if len(entries) > 0 {
+				return entries, nil
+			}
+		case 2:
+			// /log/<ns>/<env>/ — apps within this (ns, env) pair.
+			env := segs[1]
+			subApps := f.logAppsInNamespaceEnv(nsName, env)
+			if len(subApps) > 0 {
+				entries := make([]fs.DirEntry, len(subApps))
+				for i, app := range subApps {
+					entries[i] = &vfsDirEntry{name: app + ".log"}
+				}
+				return entries, nil
+			}
 		}
 	}
 

@@ -131,23 +131,64 @@ func (f *RemoteFS) ReadDir(path string) ([]string, error) {
 		return []string{"notify.conf", "usage"}, nil
 	}
 
-	// /log/<namespace> — list apps under this namespace.
+	// /log/<namespace>/[<env>/] — see docs/plans/ingest-dimensions.md.
+	// At /log/<ns>/ we emit a mix:
+	//   - <env>/ subdirectories (deduped) for env-bearing apps,
+	//   - <app>.log files for env-less apps in that namespace.
+	// At /log/<ns>/<env>/ we emit just <app>.log files filtered by env.
 	if strings.HasPrefix(p, "/log/") {
-		ns := strings.TrimPrefix(p, "/log/")
-		ns = strings.TrimSuffix(ns, "/")
-		var entries []string
-		prefix := ns + "/"
-		for _, app := range f.apps {
-			if strings.HasPrefix(app, prefix) {
-				entries = append(entries, strings.TrimPrefix(app, prefix)+".log")
-			}
-		}
-		if len(entries) > 0 {
-			return entries, nil
+		segs := strings.Split(strings.TrimPrefix(strings.TrimSuffix(p, "/"), "/log/"), "/")
+		switch len(segs) {
+		case 1:
+			ns := segs[0]
+			return f.entriesForNamespace(ns), nil
+		case 2:
+			ns, env := segs[0], segs[1]
+			return f.entriesForNamespaceEnv(ns, env), nil
 		}
 	}
 
 	return nil, fmt.Errorf("%s: no such directory", path)
+}
+
+// entriesForNamespace returns the mixed listing for /log/<ns>/. App
+// entries known with no env produce ".log" files; app entries known
+// only with envs produce env-named subdirectories (deduped). Result
+// can contain both shapes when a namespace has a mix.
+func (f *RemoteFS) entriesForNamespace(ns string) []string {
+	prefix := ns + "/"
+	envSeen := map[string]bool{}
+	var entries []string
+	for _, name := range f.apps {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(name, prefix)
+		if i := strings.Index(rest, "/"); i >= 0 {
+			env := rest[:i]
+			if !envSeen[env] {
+				envSeen[env] = true
+				entries = append(entries, env+"/")
+			}
+		} else {
+			entries = append(entries, rest+".log")
+		}
+	}
+	return entries
+}
+
+// entriesForNamespaceEnv returns the apps known under a specific
+// (ns, env) pair, formatted as "<app>.log".
+func (f *RemoteFS) entriesForNamespaceEnv(ns, env string) []string {
+	prefix := ns + "/" + env + "/"
+	var entries []string
+	for _, name := range f.apps {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		entries = append(entries, strings.TrimPrefix(name, prefix)+".log")
+	}
+	return entries
 }
 
 func (f *RemoteFS) Remove(path string) error {

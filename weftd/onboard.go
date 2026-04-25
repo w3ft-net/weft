@@ -38,7 +38,7 @@ func CheckSourceStatus(ctx context.Context, client pb.WeftCoordinatorClient, tok
 }
 
 // SubmitSample reads the first N lines from a file and sends them to the coordinator.
-func SubmitSample(ctx context.Context, client pb.WeftCoordinatorClient, token, app, path, instance, hostGroup string) error {
+func SubmitSample(ctx context.Context, client pb.WeftCoordinatorClient, token, app, path, instance, deployment string) error {
 	lines, err := SampleLines(path, sampleLineCount)
 	if err != nil {
 		return fmt.Errorf("sample %s: %w", path, err)
@@ -48,11 +48,11 @@ func SubmitSample(ctx context.Context, client pb.WeftCoordinatorClient, token, a
 	}
 
 	_, err = client.SubmitSample(ctx, &pb.SubmitSampleRequest{
-		Token:     token,
-		App:       app,
-		Instance:  instance,
-		HostGroup: hostGroup,
-		Lines:     lines,
+		Token:      token,
+		App:        app,
+		Instance:   instance,
+		Deployment: deployment,
+		Lines:      lines,
 	})
 	if err != nil {
 		return fmt.Errorf("submit sample: %w", err)

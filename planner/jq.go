@@ -9,11 +9,25 @@ import (
 )
 
 // jqMetaVars maps jq underscore-prefixed field names to SQL column names.
+// The leading underscore is the disambiguation convention — jq is
+// case-sensitive, but real JSONL sometimes carries Pod/.Pod-style keys
+// so the underscore is more reliable than casing. See
+// docs/plans/ingest-dimensions.md.
 var jqMetaVars = map[string]string{
-	"_app":      "app",
-	"_level":    "level",
-	"_instance": "instance",
-	"_ts":       "ts",
+	"_app":           "app",
+	"_service":       "app",
+	"_level":         "level",
+	"_instance":      "instance",
+	"_host":          "instance",
+	"_ts":            "ts",
+	"_deployment":    "deployment",
+	"_env":           "env",
+	"_version":       "version",
+	"_region":        "region",
+	"_cluster":       "cluster",
+	"_k8s_namespace": "k8s_namespace",
+	"_pod":           "pod",
+	"_container":     "container",
 }
 
 // tryJqPushdown attempts to extract a pushable predicate from a jq expression string.

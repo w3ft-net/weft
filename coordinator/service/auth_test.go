@@ -34,7 +34,7 @@ func TestAuthenticate_NoShardAddr(t *testing.T) {
 	}
 	store.SeedDevSubscription(cust.Name)
 	ns, _ := store.FindOrCreateNamespace(cust.ID, "testapp")
-	rawTok, _, err := store.CreateAgentToken(cust.ID, ns.ID, "test-agent")
+	rawTok, _, err := store.CreateAgentToken(cust.ID, ns.ID, "test-agent", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestAuthenticate_MetricsConfigSync(t *testing.T) {
 	}
 	store.SeedDevSubscription(cust.Name)
 	ns2, _ := store.FindOrCreateNamespace(cust.ID, "api")
-	rawTok, _, err := store.CreateAgentToken(cust.ID, ns2.ID, "metrics-sync-test")
+	rawTok, _, err := store.CreateAgentToken(cust.ID, ns2.ID, "metrics-sync-test", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -458,9 +458,9 @@ func runSourcePending(cfg *shell.Config) {
 		return
 	}
 
-	fmt.Printf("%-20s %-15s %-20s %-15s %s\n", "APP", "NAMESPACE", "INSTANCE", "HOST_GROUP", "AGE")
+	fmt.Printf("%-20s %-15s %-20s %-15s %s\n", "APP", "NAMESPACE", "INSTANCE", "DEPLOYMENT", "AGE")
 	for _, s := range sources {
-		fmt.Printf("%-20s %-15s %-20s %-15s %s\n", s.App, s.Namespace, s.Instance, s.HostGroup, s.CreatedAt)
+		fmt.Printf("%-20s %-15s %-20s %-15s %s\n", s.App, s.Namespace, s.Instance, s.Deployment, s.CreatedAt)
 	}
 }
 
@@ -900,7 +900,7 @@ func runToken() {
 
 func runTokenCreate(client *shell.HTTPCoordinator) {
 	args := os.Args[3:]
-	var label, namespace string
+	var label, namespace, env string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -914,15 +914,20 @@ func runTokenCreate(client *shell.HTTPCoordinator) {
 				namespace = args[i+1]
 				i++
 			}
+		case "--env":
+			if i+1 < len(args) {
+				env = args[i+1]
+				i++
+			}
 		}
 	}
 
 	if namespace == "" {
-		fmt.Fprintln(os.Stderr, "usage: weft token create --namespace NAME --label LABEL")
+		fmt.Fprintln(os.Stderr, "usage: weft token create --namespace NAME [--label LABEL] [--env ENV]")
 		os.Exit(1)
 	}
 
-	token, err := client.CreateToken("", label, namespace)
+	token, err := client.CreateToken("", label, namespace, env)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create token: %v\n", err)
 		os.Exit(1)
@@ -930,6 +935,9 @@ func runTokenCreate(client *shell.HTTPCoordinator) {
 	fmt.Printf("Token created: %s\n", token)
 	if label != "" {
 		fmt.Printf("Label: %s\n", label)
+	}
+	if env != "" {
+		fmt.Printf("Env:   %s (stamped on every row from this token)\n", env)
 	}
 	fmt.Println("Store this token in your weftd config. It cannot be retrieved again.")
 }

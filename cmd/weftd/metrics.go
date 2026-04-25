@@ -63,8 +63,8 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 	}
 
 	metricsApp := namespace + "/metrics"
-	if hg := sanitizeHostGroup(globalHostGroup); hg != "" {
-		metricsApp = namespace + "/" + hg + "_metrics"
+	if d := sanitizeDeployment(globalDeployment); d != "" {
+		metricsApp = namespace + "/" + d + "_metrics"
 	}
 	log.Printf("[%s] metrics enabled: interval=%s collectors=%v", metricsApp, interval, mcfg.Collectors)
 
@@ -187,7 +187,7 @@ func buildCPURow(app, customer, instance string, now time.Time, prev, cur *cpuSt
 
 	payload, _ := json.Marshal(map[string]any{
 		"type": "cpu", "ts": now.UTC().Format(time.RFC3339Nano),
-		"host": instance, "host_group": globalHostGroup,
+		"host": instance, "deployment": globalDeployment,
 		"user": round2(user), "system": round2(system),
 		"idle": round2(idle), "iowait": round2(iowait), "cores": cores,
 	})
@@ -253,7 +253,7 @@ func buildMemoryRow(app, customer, instance string, now time.Time) (*pb.LogRow, 
 
 	payload, _ := json.Marshal(map[string]any{
 		"type": "memory", "ts": now.UTC().Format(time.RFC3339Nano),
-		"host": instance, "host_group": globalHostGroup,
+		"host": instance, "deployment": globalDeployment,
 		"total_mb": totalMB, "used_mb": usedMB,
 		"available_mb": availMB, "swap_used_mb": swapUsedMB, "pct": round2(pct),
 	})
@@ -308,7 +308,7 @@ func buildDiskRows(app, customer, instance string, now time.Time) ([]*pb.LogRow,
 
 		payload, _ := json.Marshal(map[string]any{
 			"type": "disk", "ts": now.UTC().Format(time.RFC3339Nano),
-			"host": instance, "host_group": globalHostGroup,
+			"host": instance, "deployment": globalDeployment,
 			"path": mountpoint,
 			"total_gb": round2(totalGB), "used_gb": round2(usedGB), "pct": round2(pct),
 		})
@@ -339,7 +339,7 @@ func buildLoadRow(app, customer, instance string, now time.Time) (*pb.LogRow, er
 
 	payload, _ := json.Marshal(map[string]any{
 		"type": "load", "ts": now.UTC().Format(time.RFC3339Nano),
-		"host": instance, "host_group": globalHostGroup,
+		"host": instance, "deployment": globalDeployment,
 		"load1": round2(load1), "load5": round2(load5), "load15": round2(load15),
 	})
 
@@ -401,7 +401,7 @@ func buildNetworkRows(app, customer, instance string, now time.Time,
 
 		payload, _ := json.Marshal(map[string]any{
 			"type": "network", "ts": now.UTC().Format(time.RFC3339Nano),
-			"host": instance, "host_group": globalHostGroup,
+			"host": instance, "deployment": globalDeployment,
 			"iface": iface,
 			"rx_bytes_sec": int64(rxPerSec), "tx_bytes_sec": int64(txPerSec),
 		})
@@ -421,10 +421,10 @@ func round2(f float64) float64 {
 	return float64(int(f*100)) / 100
 }
 
-// sanitizeHostGroup replaces characters that would break the
+// sanitizeDeployment replaces characters that would break the
 // {namespace}/{subapp}.log pseudofile convention ('/') or read oddly in a
 // filename (whitespace, '.') with '_'. Empty input returns empty.
-func sanitizeHostGroup(s string) string {
+func sanitizeDeployment(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return ""
@@ -442,7 +442,9 @@ func sanitizeHostGroup(s string) string {
 func sendRowWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient,
 	ss *streamState, row *pb.LogRow, label string) error {
 
-	row.HostGroup = globalHostGroup
+	row.Deployment = globalDeployment
+	row.Region = globalRegion
+	// metrics rows have no source-bound version_file; leave empty.
 
 	if ss.stream != nil {
 		if err := ss.stream.Send(row); err == nil {

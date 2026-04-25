@@ -11,6 +11,7 @@ import (
 // sourceInfo describes the source command (cat/head/tail) at the start of a pipeline.
 type sourceInfo struct {
 	app    string // app name extracted from pseudofile, or "" for warp.log (all apps)
+	env    string // env extracted from pseudofile path /log/<ns>/<env>/<app>.log; "" = no env filter
 	cmd    string // "cat", "head", or "tail"
 	limit  int    // for head/tail: line count (0 = unlimited for cat)
 	follow bool   // tail -f
@@ -88,7 +89,8 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 			return nil, fmt.Errorf("cat: missing pseudofile argument")
 		}
 		app := extractApp(args[0])
-		return &sourceInfo{app: app, cmd: "cat"}, nil
+		env := extractEnv(args[0])
+		return &sourceInfo{app: app, env: env, cmd: "cat"}, nil
 
 	case "head":
 		limit := 10
@@ -111,7 +113,8 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 			return nil, fmt.Errorf("head: missing pseudofile argument")
 		}
 		app := extractApp(file)
-		return &sourceInfo{app: app, cmd: "head", limit: limit}, nil
+		env := extractEnv(file)
+		return &sourceInfo{app: app, env: env, cmd: "head", limit: limit}, nil
 
 	case "tail":
 		limit := 10
@@ -137,7 +140,8 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 			return nil, fmt.Errorf("tail: missing pseudofile argument")
 		}
 		app := extractApp(file)
-		return &sourceInfo{app: app, cmd: "tail", limit: limit, follow: follow}, nil
+		env := extractEnv(file)
+		return &sourceInfo{app: app, env: env, cmd: "tail", limit: limit, follow: follow}, nil
 
 	default:
 		return nil, fmt.Errorf("unknown source command: %s", name)
@@ -158,6 +162,11 @@ func parseStage(cmd *bash.SimpleCommand) stageInfo {
 // "/log/weft/coordinator.log" → "weft/coordinator"
 // "/log/vimgym.log" → "vimgym" (flat namespace, backward compat)
 // "warp.log" → "" (all apps)
+//
+// Three-level paths (/log/<ns>/<env>/<app>.log) are also accepted —
+// the env segment is consumed by extractEnv, and this function returns
+// just <ns>/<app> as the app filter. See docs/plans/ingest-dimensions.md
+// for the path-layout rationale.
 func extractApp(filename string) string {
 	// Strip /log/ or log/ prefix if present.
 	filename = strings.TrimPrefix(filename, "/log/")
@@ -166,7 +175,27 @@ func extractApp(filename string) string {
 	if name == "warp" {
 		return ""
 	}
+	parts := strings.Split(name, "/")
+	if len(parts) == 3 {
+		// /log/<ns>/<env>/<app>.log → app filter is <ns>/<app>
+		return parts[0] + "/" + parts[2]
+	}
 	return name
+}
+
+// extractEnv pulls the env segment from a 3-level pseudofile path.
+// "/log/weft/prod/coordinator.log" → "prod"
+// "/log/weft/coordinator.log" → "" (no env filter — token wasn't env-bearing)
+// See docs/plans/ingest-dimensions.md.
+func extractEnv(filename string) string {
+	filename = strings.TrimPrefix(filename, "/log/")
+	filename = strings.TrimPrefix(filename, "log/")
+	name := strings.TrimSuffix(filename, ".log")
+	parts := strings.Split(name, "/")
+	if len(parts) == 3 {
+		return parts[1]
+	}
+	return ""
 }
 
 // parseLineCount extracts the line count from head/tail arguments.

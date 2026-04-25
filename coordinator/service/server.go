@@ -394,7 +394,7 @@ func (s *Server) CreateToken(ctx context.Context, req *pb.CreateTokenRequest) (*
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "namespace %q not found — create it first", req.App)
 	}
-	raw, _, err := s.Store.CreateAgentToken(customer.ID, ns.ID, req.Label)
+	raw, _, err := s.Store.CreateAgentToken(customer.ID, ns.ID, req.Label, req.Env)
 	if err != nil {
 		return nil, fmt.Errorf("create token: %w", err)
 	}
@@ -460,6 +460,7 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 	}
 	authCustomer := auth.Customer.Name
 	authNamespace := auth.Namespace
+	authEnv := auth.Env
 
 	// Per-stream byte budget — caps a hostile agent's ability to OOM
 	// the coordinator by holding a stream open and firing rows forever.
@@ -510,6 +511,13 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 		// Force the authoritative customer on every row.
 		row.Customer = authCustomer
 
+		// Token-derived env: stamp it on every row. The agent has no
+		// say in the env value — it's bound to the token at mint time.
+		// See docs/plans/ingest-dimensions.md.
+		if authEnv != "" {
+			row.Env = authEnv
+		}
+
 		// Enforce the token's namespace scope on every row. row.App must
 		// either equal the token's namespace or sit beneath it
 		// ("<ns>/<subapp>"). Without this an agent with a token for
@@ -526,7 +534,7 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 			log.Printf("ingest-stream: first row from customer=%s app=%s", row.Customer, row.App)
 		}
 		if s.Coord.SeenApps != nil && row.App != "" {
-			if s.Coord.SeenApps.Add(row.Customer, row.App) {
+			if s.Coord.SeenApps.Add(row.Customer, row.App, row.Env) {
 				log.Printf("ingest-stream: new app discovered: customer=%s app=%s", row.Customer, row.App)
 				// Onboard to the default bucket + propagate to
 				// INGESTING shards so query routing picks up the new
@@ -937,7 +945,7 @@ func (s *Server) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest) (*
 	fullApp := auth.Namespace + "/" + req.App
 	if err := s.Store.UpsertPendingLogGroup(
 		ns.ID, fullApp,
-		req.Instance, req.HostGroup,
+		req.Instance, req.Deployment,
 		string(sampleJSON), string(detectionJSON),
 	); err != nil {
 		return nil, fmt.Errorf("store: %w", err)
