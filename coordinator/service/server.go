@@ -63,6 +63,18 @@ func callerCustomer(ctx context.Context) (string, error) {
 	return c.CustomerName, nil
 }
 
+// callerUserID returns the authenticated user's ID, or "" when no
+// claims are present. Used as the userID argument to store writes
+// that record creator/displacing user. Empty string is acceptable
+// upstream: the store path treats it as "system" attribution.
+func callerUserID(ctx context.Context) string {
+	c := auth.FromContext(ctx)
+	if c == nil {
+		return ""
+	}
+	return c.UserID
+}
+
 // Server implements the WeftCoordinator gRPC service.
 type Server struct {
 	pb.UnimplementedWeftCoordinatorServer
@@ -736,9 +748,7 @@ func (s *Server) SaveFunction(ctx context.Context, req *pb.SaveFunctionRequest) 
 	if err != nil {
 		return nil, err
 	}
-	// gRPC SaveFunction has no caller-user metadata yet — empty
-	// userID stores NULL creator, rendered as `-` by ls -al.
-	if err := s.Store.SaveShellFunction(custID, "", req.Name, req.Source); err != nil {
+	if err := s.Store.SaveShellFunction(custID, callerUserID(ctx), req.Name, req.Source); err != nil {
 		return nil, err
 	}
 	return &pb.SaveFunctionResponse{}, nil
@@ -790,7 +800,7 @@ func (s *Server) SaveWatch(ctx context.Context, req *pb.SaveWatchRequest) (*pb.S
 	if err != nil {
 		return nil, err
 	}
-	if err := s.Store.SaveCronWatch(custID, "", req.Name, req.Schedule, req.Pipeline); err != nil {
+	if err := s.Store.SaveCronWatch(custID, callerUserID(ctx), req.Name, req.Schedule, req.Pipeline); err != nil {
 		return nil, err
 	}
 	return &pb.SaveWatchResponse{}, nil

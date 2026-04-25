@@ -1,6 +1,8 @@
 package store
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -52,6 +54,8 @@ type ShellFunction struct {
 	Name            string  `gorm:"not null;uniqueIndex:idx_func_customer_name"`
 	Source          string  `gorm:"type:text;not null"`
 	Language        string  `gorm:"not null;default:bash"` // "bash" or "lua"
+	ContentHash     string  `gorm:"column:content_hash"`
+	Message         string  `gorm:"column:message"`
 	CreatedByUserID *string `gorm:"column:created_by_user_id"`
 }
 
@@ -60,24 +64,42 @@ func (s *Store) SaveShellFunction(customerID uint, userID, name, source string) 
 	if err := validateSource(lang, cleanSource); err != nil {
 		return err
 	}
-	var fn ShellFunction
-	result := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&fn)
-	if result.Error == gorm.ErrRecordNotFound {
-		row := &ShellFunction{
-			CustomerID: customerID, Name: name,
-			Source: cleanSource, Language: lang,
+	hash := computeShellFunctionHash(cleanSource)
+
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		// Set the per-transaction GUC the version-history trigger
+		// reads to populate captured_by_user_id. Empty userID is
+		// stored as '' — the trigger collapses '' to NULL. We
+		// always set explicitly (rather than skipping for empty)
+		// because tests wrap calls in an outer BeginTest tx, and
+		// inner Transaction()s become savepoints; SET LOCAL is
+		// scoped to the outer tx, so a previous call's value
+		// would otherwise bleed in.
+		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
+			return err
 		}
-		if userID != "" {
-			row.CreatedByUserID = &userID
+
+		var fn ShellFunction
+		result := tx.Where("customer_id = ? AND name = ?", customerID, name).First(&fn)
+		if result.Error == gorm.ErrRecordNotFound {
+			row := &ShellFunction{
+				CustomerID: customerID, Name: name,
+				Source: cleanSource, Language: lang,
+				ContentHash: hash,
+			}
+			if userID != "" {
+				row.CreatedByUserID = &userID
+			}
+			return tx.Create(row).Error
 		}
-		return s.db.Create(row).Error
-	}
-	// Existing rows keep their original creator on overwrite — only
-	// the source / language change. Editing isn't authoring.
-	return s.db.Model(&fn).Updates(map[string]any{
-		"source":   cleanSource,
-		"language": lang,
-	}).Error
+		// Existing rows keep their original creator on overwrite —
+		// only source / language / hash change. Editing isn't authoring.
+		return tx.Model(&fn).Updates(map[string]any{
+			"source":       cleanSource,
+			"language":     lang,
+			"content_hash": hash,
+		}).Error
+	})
 }
 
 // validateSource rejects syntactically-invalid /bin scripts at save time.
@@ -321,7 +343,17 @@ type CronWatch struct {
 	// threshold (rising/falling/changed/absent/any) leave both NULL.
 	AlertCondition  *string  `gorm:"column:alert_condition"`
 	AlertThreshold *float64 `gorm:"column:alert_threshold"`
+	ContentHash     string   `gorm:"column:content_hash"`
+	Message         string   `gorm:"column:message"`
 	CreatedByUserID *string  `gorm:"column:created_by_user_id"`
+}
+
+// computeCronWatchHash returns the canonical content hash for a
+// cron watch — SHA-256 over schedule + "\n" + pipeline. Matches
+// the Postgres backfill expression in migration 036.
+func computeCronWatchHash(schedule, pipeline string) string {
+	h := sha256.Sum256([]byte(schedule + "\n" + pipeline))
+	return hex.EncodeToString(h[:])
 }
 
 func (s *Store) SaveCronWatch(customerID uint, userID, name, schedule, pipeline string) error {
@@ -329,34 +361,44 @@ func (s *Store) SaveCronWatch(customerID uint, userID, name, schedule, pipeline 
 	if err != nil {
 		return err
 	}
-	var w CronWatch
-	result := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&w)
-	if result.Error == gorm.ErrRecordNotFound {
-		row := &CronWatch{
-			CustomerID:     customerID,
-			Name:           name,
-			Schedule:       schedule,
-			Pipeline:       pipeline,
-			Enabled:        true,
-			AlertKey:       compiled.AlertKey,
-			AlertTag:       compiled.AlertTag,
-			AlertCondition: compiled.AlertCondition,
-			AlertThreshold: compiled.AlertThreshold,
+	hash := computeCronWatchHash(schedule, pipeline)
+
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		// See SaveShellFunction for why we always set, even for empty.
+		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
+			return err
 		}
-		if userID != "" {
-			row.CreatedByUserID = &userID
+		var w CronWatch
+		result := tx.Where("customer_id = ? AND name = ?", customerID, name).First(&w)
+		if result.Error == gorm.ErrRecordNotFound {
+			row := &CronWatch{
+				CustomerID:     customerID,
+				Name:           name,
+				Schedule:       schedule,
+				Pipeline:       pipeline,
+				Enabled:        true,
+				AlertKey:       compiled.AlertKey,
+				AlertTag:       compiled.AlertTag,
+				AlertCondition: compiled.AlertCondition,
+				AlertThreshold: compiled.AlertThreshold,
+				ContentHash:    hash,
+			}
+			if userID != "" {
+				row.CreatedByUserID = &userID
+			}
+			return tx.Create(row).Error
 		}
-		return s.db.Create(row).Error
-	}
-	// Existing watches keep their original creator on overwrite.
-	return s.db.Model(&w).Updates(map[string]any{
-		"schedule":        schedule,
-		"pipeline":        pipeline,
-		"alert_key":       compiled.AlertKey,
-		"alert_tag":       compiled.AlertTag,
-		"alert_condition": compiled.AlertCondition,
-		"alert_threshold": compiled.AlertThreshold,
-	}).Error
+		// Existing watches keep their original creator on overwrite.
+		return tx.Model(&w).Updates(map[string]any{
+			"schedule":        schedule,
+			"pipeline":        pipeline,
+			"content_hash":    hash,
+			"alert_key":       compiled.AlertKey,
+			"alert_tag":       compiled.AlertTag,
+			"alert_condition": compiled.AlertCondition,
+			"alert_threshold": compiled.AlertThreshold,
+		}).Error
+	})
 }
 
 // CompiledWatch holds the pre-parsed bits of an `alert` stage that we want
