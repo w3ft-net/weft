@@ -16,8 +16,19 @@ import (
 
 // RemoteQueryResult is what the shell gets back from a Query RPC.
 type RemoteQueryResult struct {
-	Rows []*pb.ResultRow
-	Text string
+	Rows    []*pb.ResultRow
+	Text    string
+	Notices []RemoteNotice
+}
+
+// RemoteNotice mirrors the proto Notice message decoded from SSE.
+// The shell renders these as a prepended block before the actual
+// output (see RenderNotices).
+type RemoteNotice struct {
+	Key   string
+	Kind  string
+	Title string
+	Body  string
 }
 
 // SourceInfo describes a configured log source as returned by
@@ -292,6 +303,37 @@ func (h *HTTPCoordinator) RevokeToken(id uint) error {
 	return nil
 }
 
+// stringOf coerces an `any` from a JSON-decoded map into a string,
+// returning "" for any non-string or nil value. Used by the SSE
+// notice parser where the protocol guarantees string fields but the
+// generic decoder hands back interface{}.
+func stringOf(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+// RenderNotice formats a single Notice as a multi-line block ready
+// to be printed before a command's output. Title is highlighted via
+// ANSI color keyed on Kind: success green, warning yellow, error red.
+// Body is left as-is (may be multi-line). The block ends in a
+// horizontal rule so the actual output is visually separated.
+func RenderNotice(n RemoteNotice) string {
+	var color string
+	switch n.Kind {
+	case "success":
+		color = "\033[38;5;2m" // green
+	case "error":
+		color = "\033[38;5;1m" // red
+	default: // warning + unknown
+		color = "\033[38;5;3m" // yellow
+	}
+	const reset = "\033[0m"
+	const rule = "─────────────────────────────────────────────────────\n"
+	return rule + color + n.Title + reset + "\n" + n.Body + "\n" + rule + "\n"
+}
+
 // ── SSE parsing ──────────────────────────────────────────────
 
 func parseSSEResponse(r io.Reader) (*RemoteQueryResult, error) {
@@ -319,6 +361,13 @@ func parseSSEResponse(r io.Reader) (*RemoteQueryResult, error) {
 			if rowData, ok := event["data"].(map[string]any); ok {
 				result.Rows = append(result.Rows, mapToResultRow(rowData))
 			}
+		case "notice":
+			result.Notices = append(result.Notices, RemoteNotice{
+				Key:   stringOf(event["key"]),
+				Kind:  stringOf(event["kind"]),
+				Title: stringOf(event["title"]),
+				Body:  stringOf(event["body"]),
+			})
 		case "error":
 			if msg, ok := event["message"].(string); ok {
 				return nil, fmt.Errorf("%s", msg)

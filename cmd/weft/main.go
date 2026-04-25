@@ -418,7 +418,16 @@ func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 			if err != nil {
 				return nil, err
 			}
-			return &shell.QueryResult{Rows: r.Rows, Text: r.Text}, nil
+			notices := make([]shell.QueryResultNotice, len(r.Notices))
+			for i, n := range r.Notices {
+				notices[i] = shell.QueryResultNotice{
+					Key:   n.Key,
+					Kind:  n.Kind,
+					Title: n.Title,
+					Body:  n.Body,
+				}
+			}
+			return &shell.QueryResult{Rows: r.Rows, Text: r.Text, Notices: notices}, nil
 		},
 		Follow: remote.Follow,
 		Start:  time.Now().Add(-24 * time.Hour),

@@ -16,10 +16,24 @@ import (
 	"github.com/kevlarcon/weft/shellcore"
 )
 
-// QueryResult is the output of a query — either result rows or text.
+// QueryResult is the output of a query — either result rows or text,
+// optionally accompanied by per-user one-time notices that the
+// runner prepends to the displayed output.
 type QueryResult struct {
-	Rows []*pb.ResultRow
-	Text string
+	Rows    []*pb.ResultRow
+	Text    string
+	Notices []QueryResultNotice
+}
+
+// QueryResultNotice is the shell-package mirror of the wire Notice.
+// Lives here (not imported from `shell/http_remote.go`) so the
+// in-process dev shell and the remote HTTP shell can populate the
+// same field shape.
+type QueryResultNotice struct {
+	Key   string
+	Kind  string
+	Title string
+	Body  string
 }
 
 // QueryFunc is the function signature the shell uses to execute queries.
@@ -169,16 +183,48 @@ func (r *shellRunner) runQuery(pipeline string) {
 
 	ev := shellcore.QueryResultEvent{Err: err}
 	if err == nil {
-		if result.Text != "" {
-			ev.Text = result.Text
-		} else {
+		// Notices are prepended to the rendered output as a labeled
+		// block. They originate as one-time per-user system messages
+		// (e.g. /tmp 48h expiry) and the shell surfaces them once
+		// before any command output renders.
+		var notices string
+		for _, n := range result.Notices {
+			notices += renderNotice(n)
+		}
+		if result.Text != "" || notices != "" {
+			ev.Text = notices + result.Text
+		}
+		if result.Text == "" && len(result.Rows) > 0 {
 			for _, row := range result.Rows {
 				ev.Rows = append(ev.Rows, shellcore.OutputRow{Raw: row.Raw})
+			}
+			// Notices alongside row-shaped output: prepend as a
+			// synthetic Text payload that renders before rows.
+			if notices != "" {
+				ev.Text = notices
 			}
 		}
 	}
 
 	r.core.HandleEvent(ev)
+}
+
+// renderNotice formats a notice into a labeled block ready to be
+// shown in the terminal. ANSI color picked by Kind; Body is left
+// as-is. Trailing rule provides visual separation from output.
+func renderNotice(n QueryResultNotice) string {
+	var color string
+	switch n.Kind {
+	case "success":
+		color = "\033[38;5;2m" // green
+	case "error":
+		color = "\033[38;5;1m" // red
+	default: // warning / unknown
+		color = "\033[38;5;3m" // yellow
+	}
+	const reset = "\033[0m"
+	const rule = "─────────────────────────────────────────────────────\n"
+	return rule + color + n.Title + reset + "\n" + n.Body + "\n" + rule + "\n"
 }
 
 func (r *shellRunner) runFollow(pipeline string) {

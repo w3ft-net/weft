@@ -158,6 +158,18 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
+			// Notices come on the first response in a stream — emit
+			// them before any output/rows so the user sees the heads-up
+			// before the actual command output renders.
+			for _, n := range rr.resp.Notices {
+				writeSSEEvent(w, map[string]any{
+					"type":  "notice",
+					"key":   n.Key,
+					"kind":  n.Kind,
+					"title": n.Title,
+					"body":  n.Body,
+				})
+			}
 			if rr.resp.Text != "" {
 				writeSSEEvent(w, map[string]any{"type": "output", "text": rr.resp.Text})
 			}

@@ -305,6 +305,22 @@ message CoordinatorQueryResponse {
   // One of these is populated depending on whether compute stages ran.
   repeated ResultRow rows = 1;
   string text = 2;
+  // One-time per-user notices to surface in the UI / CLI. Typically
+  // emitted on the first response in a stream; empty for subsequent
+  // responses or follow-mode rows.
+  repeated Notice notices = 3;
+}
+
+// Notice is a one-time message attached to a Query response — the
+// first time anyone on a user account writes to /tmp produces a
+// `tmp_48h_expiry` warning, for example. Frontend renders by `kind`
+// (success → toast, warning → banner, error → modal). Body may be
+// multi-line; CLI prepends as a labeled block.
+message Notice {
+  string key   = 1;  // stable identifier (e.g. "tmp_48h_expiry")
+  string kind  = 2;  // "success" | "warning" | "error"
+  string title = 3;
+  string body  = 4;
 }
 
 message ListAppsRequest {

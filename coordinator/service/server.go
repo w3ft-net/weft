@@ -25,6 +25,26 @@ import (
 	"github.com/kevlarcon/weft/store"
 )
 
+// convertNotices maps coordinator-side Notice values to their
+// protobuf wire shape. The two types carry the same fields; the
+// indirection exists so coordinator/notices.go doesn't need to
+// import the proto package.
+func convertNotices(in []coordinator.Notice) []*pb.Notice {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*pb.Notice, len(in))
+	for i, n := range in {
+		out[i] = &pb.Notice{
+			Key:   n.Key,
+			Kind:  string(n.Kind),
+			Title: n.Title,
+			Body:  n.Body,
+		}
+	}
+	return out
+}
+
 // callerCustomer returns the customer name of the authenticated caller,
 // derived from JWT claims injected by the auth interceptor. Any non-empty
 // `Customer` field on the request proto is IGNORED — clients don't get to
@@ -85,16 +105,19 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 		return err
 	}
 
+	notices := convertNotices(result.Notices)
 	if result.Text != "" || result.Stderr != "" {
 		text := result.Text
 		if result.Stderr != "" {
 			// Render stderr in red ANSI so the shell displays it appropriately.
 			text += "\033[38;5;1m" + result.Stderr + "\033[0m"
 		}
-		return stream.Send(&pb.CoordinatorQueryResponse{Text: text})
+		return stream.Send(&pb.CoordinatorQueryResponse{Text: text, Notices: notices})
 	}
 
 	// Stream rows in batches to stay under gRPC message size limit.
+	// Notices ride along on the first batch so the client surfaces them
+	// before any rows render; subsequent batches don't repeat them.
 	const batchSize = 500
 	for i := 0; i < len(result.Rows); i += batchSize {
 		end := i + batchSize
@@ -104,7 +127,18 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 		resp := &pb.CoordinatorQueryResponse{
 			Rows: result.Rows[i:end],
 		}
+		if i == 0 {
+			resp.Notices = notices
+		}
 		if err := stream.Send(resp); err != nil {
+			return err
+		}
+	}
+	// Empty result + notices: nothing above sent anything, but we
+	// still want the user to see the warning. Emit a notices-only
+	// response.
+	if len(result.Rows) == 0 && result.Text == "" && result.Stderr == "" && len(notices) > 0 {
+		if err := stream.Send(&pb.CoordinatorQueryResponse{Notices: notices}); err != nil {
 			return err
 		}
 	}
