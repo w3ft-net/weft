@@ -13,14 +13,14 @@ import (
 func TestCronShareScriptAcrossWatches(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	if err := db.SaveShellFunction(custID, "announce", `echo "source=$1"`); err != nil {
+	if err := db.SaveShellFunction(custID, "", "announce", `echo "source=$1"`); err != nil {
 		t.Fatalf("save script: %v", err)
 	}
 
-	if err := db.SaveCronWatch(custID, "disk-check", "every 1m", "announce disk.log"); err != nil {
+	if err := db.SaveCronWatch(custID, "", "disk-check", "every 1m", "announce disk.log"); err != nil {
 		t.Fatalf("save disk watch: %v", err)
 	}
-	if err := db.SaveCronWatch(custID, "cpu-check", "every 1m", "announce cpu.log"); err != nil {
+	if err := db.SaveCronWatch(custID, "", "cpu-check", "every 1m", "announce cpu.log"); err != nil {
 		t.Fatalf("save cpu watch: %v", err)
 	}
 
@@ -59,10 +59,10 @@ func TestCronShareScriptAcrossWatches(t *testing.T) {
 func TestCronBareNameStillWorks(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	if err := db.SaveShellFunction(custID, "hello", `echo hello`); err != nil {
+	if err := db.SaveShellFunction(custID, "", "hello", `echo hello`); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(custID, "greeter", "every 1m", "hello"); err != nil {
+	if err := db.SaveCronWatch(custID, "", "greeter", "every 1m", "hello"); err != nil {
 		t.Fatal(err)
 	}
 	w, err := db.GetCronWatch(custID, "greeter")

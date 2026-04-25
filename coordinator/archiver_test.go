@@ -68,7 +68,7 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 	})
 
 	// Query spanning both windows.
-	result, err := c.Query("cat vimgym.log", TimeRange{Start: t0, End: t2}, "kevlar")
+	result, err := c.Query("cat vimgym.log", TimeRange{Start: t0, End: t2}, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}

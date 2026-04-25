@@ -7,11 +7,22 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"time"
 
 	"google.golang.org/grpc/status"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
+
+// sseKeepaliveInterval is how often handleShellExec writes a heartbeat
+// comment to an idle SSE stream. Must be shorter than the shortest idle
+// timeout imposed by any intermediate proxy. AWS ALB's default is 60s,
+// nginx's default keepalive_timeout is 75s, and browsers time out at 30s
+// for some adaptive-bitrate flows — 20s gives a comfortable 3x margin.
+//
+// Overridden by tests via the unexported setter to exercise the
+// keepalive path in milliseconds instead of seconds.
+var sseKeepaliveInterval = 20 * time.Second
 
 // handleShellExec executes a weft pipeline and streams results back as
 // Server-Sent Events (SSE). The frontend uses EventSource or fetch with
@@ -27,6 +38,11 @@ import (
 //	{"type":"row","data":{...log fields}}   — a structured log row
 //	{"type":"error","message":"..."}        — terminal error
 //	{"type":"done"}                         — stream complete (non-follow mode)
+//
+// Between events, the handler writes SSE comment lines (`: keepalive`)
+// at sseKeepaliveInterval so intermediate proxies (ALB, nginx, browser
+// HTTP/2 frame timers) don't drop the connection during quiet periods.
+// Clients ignore comment lines per the SSE spec.
 func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
 	if s.store != nil {
@@ -71,6 +87,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 		Pipeline: req.Pipeline,
 		Follow:   req.Follow,
 		Customer: claims.CustomerName,
+		UserId:   claims.UserID,
 	})
 	if err != nil {
 		writeSSEEvent(w, map[string]any{"type": "error", "message": err.Error()})
@@ -78,52 +95,83 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for {
-		resp, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			// Client disconnected — not an error worth logging loudly.
-			if ctx.Err() != nil {
+	// Receive on a goroutine; main loop multiplexes with the keepalive
+	// ticker so idle streams still write to the response writer on a
+	// predictable cadence. http.ResponseWriter isn't safe for concurrent
+	// writes — the goroutine does only Recv, never Write.
+	type recvResult struct {
+		resp *pb.CoordinatorQueryResponse
+		err  error
+	}
+	recvCh := make(chan recvResult)
+	go func() {
+		defer close(recvCh)
+		for {
+			resp, err := stream.Recv()
+			recvCh <- recvResult{resp, err}
+			if err != nil {
 				return
 			}
-			// Forward the real error to the caller. These come back from
-			// Coord.Query (plan errors, unknown source, shard failures,
-			// compute exit codes, etc.) — all of which are actionable for
-			// the user running the pipeline. Previously collapsed to a
-			// generic "stream error" that masked every failure mode.
-			log.Printf("shell exec stream error: %v", err)
-			msg := err.Error()
-			if s, ok := status.FromError(err); ok {
-				// Strip the "rpc error: code = ... desc = " envelope.
-				msg = s.Message()
-			}
-			writeSSEEvent(w, map[string]any{"type": "error", "message": msg})
-			flusher.Flush()
+		}
+	}()
+
+	ticker := time.NewTicker(sseKeepaliveInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
 			return
+
+		case <-ticker.C:
+			// SSE spec: a line starting with ':' is a comment, ignored
+			// by clients. Writing one keeps the TCP connection active.
+			fmt.Fprint(w, ": keepalive\n\n")
+			flusher.Flush()
+
+		case rr, ok := <-recvCh:
+			if !ok {
+				// Goroutine exited with an error already forwarded on
+				// the previous iteration; done.
+				return
+			}
+			if rr.err == io.EOF {
+				if !req.Follow {
+					writeSSEEvent(w, map[string]any{"type": "done"})
+					flusher.Flush()
+				}
+				return
+			}
+			if rr.err != nil {
+				if ctx.Err() != nil {
+					// Client disconnected — not an error worth logging loudly.
+					return
+				}
+				log.Printf("shell exec stream error: %v", rr.err)
+				msg := rr.err.Error()
+				if s, ok := status.FromError(rr.err); ok {
+					// Strip the "rpc error: code = ... desc = " envelope.
+					msg = s.Message()
+				}
+				writeSSEEvent(w, map[string]any{"type": "error", "message": msg})
+				flusher.Flush()
+				return
+			}
+
+			if rr.resp.Text != "" {
+				writeSSEEvent(w, map[string]any{"type": "output", "text": rr.resp.Text})
+			}
+			for _, row := range rr.resp.Rows {
+				writeSSEEvent(w, map[string]any{
+					"type": "row",
+					"data": map[string]any{
+						"line_num": row.LineNum,
+						"raw":      row.Raw,
+					},
+				})
+			}
+			flusher.Flush()
 		}
-
-		if resp.Text != "" {
-			writeSSEEvent(w, map[string]any{"type": "output", "text": resp.Text})
-		}
-
-		for _, row := range resp.Rows {
-			writeSSEEvent(w, map[string]any{
-				"type": "row",
-				"data": map[string]any{
-					"line_num": row.LineNum,
-					"raw":      row.Raw,
-				},
-			})
-		}
-
-		flusher.Flush()
-	}
-
-	if !req.Follow {
-		writeSSEEvent(w, map[string]any{"type": "done"})
-		flusher.Flush()
 	}
 }
 
@@ -135,4 +183,3 @@ func writeSSEEvent(w http.ResponseWriter, payload any) {
 	}
 	fmt.Fprintf(w, "data: %s\n\n", data)
 }
-

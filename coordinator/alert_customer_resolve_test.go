@@ -45,7 +45,7 @@ func TestQuery_InteractiveAlertResolvesCallerCustomer(t *testing.T) {
 	}
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	result, err := c.Query(`echo 40 | alert above 30 --notify=foo`, tr, cust.Name)
+	result, err := c.Query(`echo 40 | alert above 30 --notify=foo`, tr, cust.Name, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestQuery_InteractiveBinExpandResolvesCallerCustomer(t *testing.T) {
 	// end-to-end whether via pre-expand or runLocal+FS. A subsequent
 	// assertion on `plan.AlertArgs`-style introspection would catch
 	// the pre-expand regression specifically, but requires new hooks.
-	if err := db.SaveShellFunction(custID, "echo_first", "echo $1"); err != nil {
+	if err := db.SaveShellFunction(custID, "", "echo_first", "echo $1"); err != nil {
 		t.Fatalf("save script: %v", err)
 	}
 
@@ -111,7 +111,7 @@ func TestQuery_InteractiveBinExpandResolvesCallerCustomer(t *testing.T) {
 	}
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	result, err := c.Query(`echo_first disk`, tr, cust.Name)
+	result, err := c.Query(`echo_first disk`, tr, cust.Name, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}

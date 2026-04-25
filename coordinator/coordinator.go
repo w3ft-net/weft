@@ -28,9 +28,10 @@ type TimeRange struct {
 // QueryResult holds the output of a coordinated query. Either Rows is
 // populated (no compute stages) or Text is populated (compute stages ran).
 type QueryResult struct {
-	Rows   []*pb.ResultRow
-	Text   string
-	Stderr string // alert/error output — rendered in red by the shell
+	Rows    []*pb.ResultRow
+	Text    string
+	Stderr  string   // alert/error output — rendered in red by the shell
+	Notices []Notice // one-time per-user notices to surface in the response
 }
 
 // Coordinator routes queries to shards and merges results. It holds no
@@ -321,13 +322,18 @@ func (c *Coordinator) IngestingShard(app string) shard.Shard {
 // rows are streamed to the compute pool for post-processing. A trailing
 // `| alert ...` stage, if present, runs in interactive AlertContext after
 // the query; cron uses QueryForWatch to bind the alert to a watch.
-func (c *Coordinator) Query(pipeline string, tr TimeRange, customer string) (*QueryResult, error) {
-	return c.query(pipeline, tr, customer, nil)
+//
+// userID identifies the human who invoked the pipeline — used to attribute
+// any /bin /cron.d /tmp writes the pipeline performs. Empty string means
+// "no attribution" (system invocation, automated path).
+func (c *Coordinator) Query(pipeline string, tr TimeRange, customer, userID string) (*QueryResult, error) {
+	return c.query(pipeline, tr, customer, userID, nil)
 }
 
 // QueryForWatch runs pipeline with the supplied watch bound to the alert
 // stage (if any), so incidents and dispatches use watch identity instead
-// of interactive-mode defaults.
+// of interactive-mode defaults. Watches run as the system, not as a user
+// — any writes the watch performs land with NULL creator.
 func (c *Coordinator) QueryForWatch(pipeline string, tr TimeRange, watch *store.CronWatch) (*QueryResult, error) {
 	ctx := &AlertContext{
 		Store:      c.Store,
@@ -346,13 +352,13 @@ func (c *Coordinator) QueryForWatch(pipeline string, tr TimeRange, watch *store.
 			custName = cust.Name
 		}
 	}
-	return c.query(pipeline, tr, custName, ctx)
+	return c.query(pipeline, tr, custName, "", ctx)
 }
 
 // query is the shared implementation for Query and QueryForWatch.
 // alertCtx = nil means "use interactive defaults if the pipeline has an
 // alert stage." A non-nil alertCtx binds the alert to that context.
-func (c *Coordinator) query(pipeline string, tr TimeRange, customer string, alertCtx *AlertContext) (*QueryResult, error) {
+func (c *Coordinator) query(pipeline string, tr TimeRange, customer, userID string, alertCtx *AlertContext) (*QueryResult, error) {
 	// Resolve the customer name to an ID once. A non-zero result gates
 	// everything tenant-scoped downstream: /bin pre-expand, ShellFS
 	// wiring in runLocal, the interactive AlertContext. Failures here
@@ -394,7 +400,7 @@ func (c *Coordinator) query(pipeline string, tr TimeRange, customer string, aler
 		return nil, fmt.Errorf("plan: %w", err)
 	}
 
-	result, err := c.executeQuery(plan, tr, customer, custID, alertCtx)
+	result, err := c.executeQuery(plan, tr, customer, custID, userID, alertCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -424,12 +430,12 @@ func (c *Coordinator) query(pipeline string, tr TimeRange, customer string, aler
 // scopes tenant-backed features (ShellFS, weft.*). alertCtx is forwarded
 // to runLocal so interior queries dispatched by the interceptor inherit
 // the caller's alert identity; may be nil.
-func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, customer string, custID uint, alertCtx *AlertContext) (*QueryResult, error) {
+func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext) (*QueryResult, error) {
 	if plan.Local {
 		if plan.LocalPipeline == "" {
 			return &QueryResult{}, nil
 		}
-		return c.runLocal(plan.LocalPipeline, tr, customer, custID, alertCtx)
+		return c.runLocal(plan.LocalPipeline, tr, customer, custID, userID, alertCtx)
 	}
 
 	// Allowlist: the pipeline's source app (the part before '/') must
@@ -637,7 +643,7 @@ const scriptExecutionTimeout = 30 * time.Second
 // boundary (between top-level lists or loop iterations). Whatever the
 // script produced before the cut-off is returned along with a timeout
 // error.
-func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, custID uint, alertCtx *AlertContext) (*QueryResult, error) {
+func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext) (*QueryResult, error) {
 	ast, err := bash.Parse(pipeline)
 	if err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
@@ -652,16 +658,26 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 
 	bash.RegisterToolCommands(interp)
 
+	noticeQueue := NewNoticeQueue(c.Store, userID)
 	if c.Store != nil && custID != 0 {
-		interp.SetFS(shellfs.New(c.Store, custID, nil))
+		tier := c.Store.TierForCustomer(custID)
+		opts := []shellfs.Option{
+			shellfs.WithTier(tier),
+			shellfs.WithCustomerName(customer),
+			shellfs.WithNoticeQueue(noticeQueue),
+		}
+		if userID != "" {
+			opts = append(opts, shellfs.WithUser(userID, false))
+		}
+		interp.SetFS(shellfs.New(c.Store, custID, nil, opts...))
 
 		wf := &WeftFuncs{Store: c.Store, CustomerID: custID}
 		RegisterWeftCommands(interp, wf)
 		interp.LuaWeftFuncs = wf
 
-		rewriteQueryPipelines(ast, c, tr, customer, alertCtx)
+		rewriteQueryPipelines(ast, c, tr, customer, userID, alertCtx)
 		interp.BinScriptTransform = func(_ string, script *bash.Script) {
-			rewriteQueryPipelines(script, c, tr, customer, alertCtx)
+			rewriteQueryPipelines(script, c, tr, customer, userID, alertCtx)
 		}
 	}
 
@@ -684,8 +700,9 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 	select {
 	case <-done:
 		return &QueryResult{
-			Text:   outBuf.String(),
-			Stderr: errBuf.String(),
+			Text:    outBuf.String(),
+			Stderr:  errBuf.String(),
+			Notices: noticeQueue.Flush(),
 		}, nil
 	case <-ctx.Done():
 		interp.Cancel()
@@ -701,8 +718,9 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 			log.Printf("runLocal: interpreter did not halt within grace period after %s timeout", timeout)
 		}
 		return &QueryResult{
-			Text:   outBuf.String(),
-			Stderr: errBuf.String(),
+			Text:    outBuf.String(),
+			Stderr:  errBuf.String(),
+			Notices: noticeQueue.Flush(),
 		}, fmt.Errorf("script exceeded %s execution time limit", timeout)
 	}
 }

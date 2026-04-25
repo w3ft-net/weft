@@ -95,11 +95,11 @@ func TestInteriorQuery_EchoBeforeAndAfter(t *testing.T) {
 	body := `echo starting
 cat /log/api.log | grep ERROR | wc -l
 echo finished`
-	if err := db.SaveShellFunction(custID, "scan", body); err != nil {
+	if err := db.SaveShellFunction(custID, "", "scan", body); err != nil {
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Query("scan", lastHourRange(), custName)
+	result, err := c.Query("scan", lastHourRange(), custName, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestInteriorQuery_PositionalArg(t *testing.T) {
 
 	body := `echo starting
 cat /log/$1.log | grep ERROR | wc -l`
-	if err := db.SaveShellFunction(custID, "scan", body); err != nil {
+	if err := db.SaveShellFunction(custID, "", "scan", body); err != nil {
 		t.Fatalf("save script: %v", err)
 	}
 
@@ -140,7 +140,7 @@ cat /log/$1.log | grep ERROR | wc -l`
 	}
 	for _, tc := range cases {
 		t.Run(tc.arg, func(t *testing.T) {
-			result, err := c.Query("scan "+tc.arg, lastHourRange(), custName)
+			result, err := c.Query("scan "+tc.arg, lastHourRange(), custName, "")
 			if err != nil {
 				t.Fatalf("Query: %v", err)
 			}
@@ -165,11 +165,11 @@ func TestInteriorQuery_InsideForLoop(t *testing.T) {
 	body := `for app in api web; do
   cat /log/$app.log | grep ERROR | wc -l
 done`
-	if err := db.SaveShellFunction(custID, "loop", body); err != nil {
+	if err := db.SaveShellFunction(custID, "", "loop", body); err != nil {
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Query("loop", lastHourRange(), custName)
+	result, err := c.Query("loop", lastHourRange(), custName, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -195,11 +195,11 @@ func TestInteriorQuery_CommandSubstitution(t *testing.T) {
 
 	body := `count=$(cat /log/api.log | grep ERROR | wc -l)
 echo "found $count"`
-	if err := db.SaveShellFunction(custID, "count_errs", body); err != nil {
+	if err := db.SaveShellFunction(custID, "", "count_errs", body); err != nil {
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Query("count_errs", lastHourRange(), custName)
+	result, err := c.Query("count_errs", lastHourRange(), custName, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -219,11 +219,11 @@ func TestInteriorQuery_AndShortCircuit(t *testing.T) {
 	c, db, custName, custID := newInteriorQueryFixture(t)
 
 	body := `cat /log/api.log | grep ERROR | wc -l && echo ok`
-	if err := db.SaveShellFunction(custID, "and_ok", body); err != nil {
+	if err := db.SaveShellFunction(custID, "", "and_ok", body); err != nil {
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Query("and_ok", lastHourRange(), custName)
+	result, err := c.Query("and_ok", lastHourRange(), custName, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -266,11 +266,11 @@ func TestInteriorQuery_FunctionWithConditionalReturn(t *testing.T) {
 }
 error_check api
 error_check web`
-	if err := db.SaveShellFunction(custID, "check_all", body); err != nil {
+	if err := db.SaveShellFunction(custID, "", "check_all", body); err != nil {
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Query("check_all", lastHourRange(), custName)
+	result, err := c.Query("check_all", lastHourRange(), custName, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestInteriorQuery_FunctionDefinedInSeparateBinScript(t *testing.T) {
 	lib := `error_count() {
   cat /log/$1.log | grep ERROR | wc -l
 }`
-	if err := db.SaveShellFunction(custID, "lib", lib); err != nil {
+	if err := db.SaveShellFunction(custID, "", "lib", lib); err != nil {
 		t.Fatalf("save lib: %v", err)
 	}
 
@@ -321,11 +321,11 @@ func TestInteriorQuery_FunctionDefinedInSeparateBinScript(t *testing.T) {
 	report := `lib
 echo api: $(error_count api)
 echo web: $(error_count web)`
-	if err := db.SaveShellFunction(custID, "report", report); err != nil {
+	if err := db.SaveShellFunction(custID, "", "report", report); err != nil {
 		t.Fatalf("save report: %v", err)
 	}
 
-	result, err := c.Query("report", lastHourRange(), custName)
+	result, err := c.Query("report", lastHourRange(), custName, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -349,11 +349,11 @@ func TestInteriorQuery_SinglePipelineStillSplices(t *testing.T) {
 	c, db, custName, custID := newInteriorQueryFixture(t)
 
 	body := `cat /log/api.log | grep ERROR | wc -l`
-	if err := db.SaveShellFunction(custID, "errs", body); err != nil {
+	if err := db.SaveShellFunction(custID, "", "errs", body); err != nil {
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Query("errs api", lastHourRange(), custName)
+	result, err := c.Query("errs api", lastHourRange(), custName, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}

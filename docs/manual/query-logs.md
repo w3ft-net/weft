@@ -160,6 +160,19 @@ recipe above gives you per-bucket per-tag values; for the rolling
 average across buckets, point a second watch at it via
 `weft.latest`.
 
+## Saving a result set
+
+Redirect a pipeline into `/tmp` to hold onto the output and slice it
+a few different ways without re-running the whole query:
+
+```
+cat api.log | awk '$LEVEL == "ERROR"' > /tmp/errs
+grep timeout /tmp/errs | sort | uniq -c | sort -rn
+```
+
+Files in `/tmp` live for 48 hours. See the **Saving results to /tmp**
+section for storage limits and the full set of operations.
+
 ## Plan retention and the archive
 
 Your plan determines how far back queries can read — Trial keeps a

@@ -21,11 +21,11 @@ func TestBackfillAlertThresholds_PopulatesExistingRows(t *testing.T) {
 
 	// Insert a watch and deliberately NULL the new columns so the
 	// backfill has something to do.
-	if err := db.SaveCronWatch(cust.ID, "with-threshold",
+	if err := db.SaveCronWatch(cust.ID, "", "with-threshold",
 		"*/5 * * * *", "echo 1 | alert above 42"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(cust.ID, "no-threshold",
+	if err := db.SaveCronWatch(cust.ID, "", "no-threshold",
 		"*/5 * * * *", "echo 1 | alert changed"); err != nil {
 		t.Fatal(err)
 	}

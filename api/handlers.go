@@ -1348,7 +1348,7 @@ func (s *Server) handleSaveFunction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if err := s.store.SaveShellFunction(custID, name, req.Source); err != nil {
+	if err := s.store.SaveShellFunction(custID, claims.UserID, name, req.Source); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -1472,7 +1472,7 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.SaveCronWatch(custID, name, req.Schedule, req.Pipeline); err != nil {
+	if err := s.store.SaveCronWatch(custID, claims.UserID, name, req.Schedule, req.Pipeline); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

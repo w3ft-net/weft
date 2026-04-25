@@ -5,6 +5,7 @@
 //	/bin/*       — user-defined bash functions
 //	/cron.d/*    — scheduled watch definitions
 //	/etc/notify.conf — notification channel configuration
+//	/tmp/*       — per-customer scratch files (persistent for 48h)
 package shellfs
 
 import (
@@ -27,9 +28,32 @@ type ShellFS struct {
 	customerName string     // for usage queries
 	tier         store.Tier // subscription tier
 	logApps      []string   // app names for /log/ directory listing
-	userID       string   // for permission checks (empty = owner/no filtering)
-	isOwner      bool     // owners bypass namespace permissions
+	userID       string     // for permission checks (empty = owner/no filtering)
+	isOwner      bool       // owners bypass namespace permissions
+
+	// noticeQueue, when non-nil, is signaled by /tmp write paths the
+	// first time the user touches /tmp in a session — the queue
+	// itself decides whether to surface the warning, dedup across
+	// the session, and persist the seen flag. Optional; nil = no
+	// notices delivered (used by tests and non-user contexts).
+	noticeQueue NoticeSink
 }
+
+// NoticeSink is the narrow interface ShellFS uses to signal events
+// that should produce a one-time notice for the invoking user. The
+// coordinator's NoticeQueue type satisfies this; tests can substitute
+// a stub. The interface lives in shellfs (not coordinator) so
+// shellfs has no dependency on coordinator — coordinator already
+// imports shellfs, going the other way would create a cycle.
+type NoticeSink interface {
+	Maybe(noticeKey string)
+}
+
+// NoticeKeyTmpExpiry is the notice key for the 48h /tmp expiry
+// warning. Defined here (rather than in coordinator) because shellfs
+// is what triggers the notice — the registry entry that maps key →
+// title/body lives in coordinator/notices.go.
+const NoticeKeyTmpExpiry = "tmp_48h_expiry"
 
 // New creates a ShellFS for the given customer.
 func New(s *store.Store, customerID uint, logApps []string, opts ...Option) *ShellFS {
@@ -64,6 +88,13 @@ func WithUser(userID string, isOwner bool) Option {
 		f.userID = userID
 		f.isOwner = isOwner
 	}
+}
+
+// WithNoticeQueue wires a notice sink the FS signals on /tmp writes.
+// The coordinator's NoticeQueue is the production implementation;
+// tests can pass a stub.
+func WithNoticeQueue(q NoticeSink) Option {
+	return func(f *ShellFS) { f.noticeQueue = q }
 }
 
 // ReadFile returns the content of a virtual file.
@@ -114,6 +145,13 @@ func (f *ShellFS) ReadFile(path string) ([]byte, error) {
 			return []byte{}, nil
 		}
 		return nil, fmt.Errorf("%s: no such file", path)
+
+	case "tmp":
+		data, err := f.store.ReadTmpFile(f.customerID, path)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		return data, nil
 	}
 
 	return nil, fmt.Errorf("%s: no such file or directory", path)
@@ -269,7 +307,7 @@ func (f *ShellFS) WriteFile(path string, data []byte) error {
 
 	switch dir {
 	case "bin":
-		return f.store.SaveShellFunction(f.customerID, name, string(data))
+		return f.store.SaveShellFunction(f.customerID, f.userID, name, string(data))
 
 	case "cron.d":
 		schedule, pipeline, err := parseCron(string(data))
@@ -301,7 +339,7 @@ func (f *ShellFS) WriteFile(path string, data []byte) error {
 			return fmt.Errorf("minimum schedule interval for %s plan is %s", f.tier, minInterval)
 		}
 
-		return f.store.SaveCronWatch(f.customerID, name, schedule, pipeline)
+		return f.store.SaveCronWatch(f.customerID, f.userID, name, schedule, pipeline)
 
 	case "etc":
 		if name == "notify.conf" {
@@ -315,6 +353,13 @@ func (f *ShellFS) WriteFile(path string, data []byte) error {
 
 	case "log":
 		return fmt.Errorf("%s: read-only", path)
+
+	case "tmp":
+		if err := f.store.WriteTmpFile(f.customerID, f.tier, f.userID, path, data); err != nil {
+			return err
+		}
+		f.noteFirstTmpWrite()
+		return nil
 	}
 
 	return fmt.Errorf("%s: no such directory", path)
@@ -327,7 +372,7 @@ func (f *ShellFS) Stat(path string) (fs.FileInfo, error) {
 	// Top-level directory.
 	if name == "" {
 		switch dir {
-		case "bin", "cron.d", "log", "etc":
+		case "bin", "cron.d", "log", "etc", "tmp":
 			return &vfsFileInfo{name: dir, dir: true}, nil
 		}
 		// Root directory.
@@ -340,16 +385,23 @@ func (f *ShellFS) Stat(path string) (fs.FileInfo, error) {
 	// Check if file exists.
 	switch dir {
 	case "bin":
-		if _, err := f.store.GetShellFunction(f.customerID, name); err == nil {
-			return &vfsFileInfo{name: name}, nil
+		if fn, err := f.store.GetShellFunction(f.customerID, name); err == nil {
+			return &vfsFileInfo{name: name, size: int64(len(fn.Source)), mtime: fn.UpdatedAt}, nil
 		}
 	case "cron.d":
-		if _, err := f.store.GetCronWatch(f.customerID, name); err == nil {
-			return &vfsFileInfo{name: name}, nil
+		if w, err := f.store.GetCronWatch(f.customerID, name); err == nil {
+			return &vfsFileInfo{name: name, size: int64(len(serializeCron(w))), mtime: w.UpdatedAt}, nil
 		}
 	case "etc":
-		if name == "notify.conf" || name == "usage" {
+		if name == "notify.conf" {
+			if nc, err := f.store.GetNotifyConfig(f.customerID); err == nil {
+				return &vfsFileInfo{name: name, size: int64(len(nc.AliasesYAML)), mtime: nc.UpdatedAt}, nil
+			}
+			// No config row yet — still a legitimate (empty) file.
 			return &vfsFileInfo{name: name}, nil
+		}
+		if name == "usage" {
+			return &vfsFileInfo{name: name, mtime: time.Now()}, nil
 		}
 	case "log":
 		// Could be a namespace dir (name="weft") or a file (name="vimgym.log" or "weft/coordinator.log").
@@ -372,6 +424,17 @@ func (f *ShellFS) Stat(path string) (fs.FileInfo, error) {
 				return &vfsFileInfo{name: name}, nil
 			}
 		}
+	case "tmp":
+		tf, err := f.store.GetTmpFile(f.customerID, path)
+		if err != nil {
+			return nil, fmt.Errorf("%s: no such file or directory", path)
+		}
+		return &vfsFileInfo{
+			name:  lastSegment(name),
+			dir:   tf.IsDir,
+			size:  tf.ByteSize,
+			mtime: tf.UpdatedAt,
+		}, nil
 	}
 
 	return nil, fmt.Errorf("%s: no such file or directory", path)
@@ -388,6 +451,7 @@ func (f *ShellFS) ReadDir(path string) ([]fs.DirEntry, error) {
 			&vfsDirEntry{name: "cron.d", dir: true},
 			&vfsDirEntry{name: "etc", dir: true},
 			&vfsDirEntry{name: "log", dir: true},
+			&vfsDirEntry{name: "tmp", dir: true},
 		}, nil
 	}
 
@@ -397,9 +461,25 @@ func (f *ShellFS) ReadDir(path string) ([]fs.DirEntry, error) {
 		if err != nil {
 			return nil, err
 		}
+		ids := make([]string, 0, len(fns))
+		for _, fn := range fns {
+			if fn.CreatedByUserID != nil {
+				ids = append(ids, *fn.CreatedByUserID)
+			}
+		}
+		owners := f.resolveOwners(ids)
 		entries := make([]fs.DirEntry, len(fns))
 		for i, fn := range fns {
-			entries[i] = &vfsDirEntry{name: fn.Name}
+			owner := ""
+			if fn.CreatedByUserID != nil {
+				owner = owners[*fn.CreatedByUserID]
+			}
+			entries[i] = &vfsDirEntry{
+				name:  fn.Name,
+				size:  int64(len(fn.Source)),
+				mtime: fn.UpdatedAt,
+				owner: owner,
+			}
 		}
 		return entries, nil
 
@@ -408,17 +488,61 @@ func (f *ShellFS) ReadDir(path string) ([]fs.DirEntry, error) {
 		if err != nil {
 			return nil, err
 		}
+		ids := make([]string, 0, len(watches))
+		for _, w := range watches {
+			if w.CreatedByUserID != nil {
+				ids = append(ids, *w.CreatedByUserID)
+			}
+		}
+		owners := f.resolveOwners(ids)
 		entries := make([]fs.DirEntry, len(watches))
 		for i, w := range watches {
-			entries[i] = &vfsDirEntry{name: w.Name}
+			owner := ""
+			if w.CreatedByUserID != nil {
+				owner = owners[*w.CreatedByUserID]
+			}
+			entries[i] = &vfsDirEntry{
+				name:  w.Name,
+				size:  int64(len(serializeCron(&w))),
+				mtime: w.UpdatedAt,
+				owner: owner,
+			}
 		}
 		return entries, nil
 
 	case "etc":
+		var notifySize int64
+		var notifyMtime time.Time
+		if nc, err := f.store.GetNotifyConfig(f.customerID); err == nil {
+			notifySize = int64(len(nc.AliasesYAML))
+			notifyMtime = nc.UpdatedAt
+		}
 		return []fs.DirEntry{
-			&vfsDirEntry{name: "notify.conf"},
-			&vfsDirEntry{name: "usage"},
+			&vfsDirEntry{name: "notify.conf", size: notifySize, mtime: notifyMtime},
+			&vfsDirEntry{name: "usage", mtime: time.Now()},
 		}, nil
+
+	case "tmp":
+		rows, err := f.store.ListTmpFiles(f.customerID, path)
+		if err != nil {
+			return nil, err
+		}
+		owners := f.resolveOwners(collectCreatorIDs(rows))
+		entries := make([]fs.DirEntry, len(rows))
+		for i, r := range rows {
+			owner := ""
+			if r.CreatedByUserID != nil {
+				owner = owners[*r.CreatedByUserID]
+			}
+			entries[i] = &vfsDirEntry{
+				name:  lastSegment(r.Path),
+				dir:   r.IsDir,
+				size:  r.ByteSize,
+				mtime: r.UpdatedAt,
+				owner: owner,
+			}
+		}
+		return entries, nil
 
 	case "log":
 		_, logName := splitPath(path)
@@ -488,9 +612,207 @@ func (f *ShellFS) Remove(path string) error {
 		return f.store.DeleteCronWatch(f.customerID, name)
 	case "log", "etc":
 		return fmt.Errorf("%s: operation not permitted", path)
+	case "tmp":
+		// rm doesn't trigger the first-write notice — deletion
+		// shouldn't surprise a user who's never created anything,
+		// and a stray rm against a missing path returns an error
+		// we don't want to clutter with the courtesy line.
+		return f.store.DeleteTmpFile(f.customerID, path)
 	}
 
 	return fmt.Errorf("%s: no such file or directory", path)
+}
+
+// AppendFile implements bash.AppendFS for /tmp. Other namespaces
+// (/bin, /cron.d, /etc) have no sensible append semantics — their
+// contents are structured YAML or script text, not line-oriented
+// data — so append there falls back to WriteFile's semantics via
+// warp's read-modify-write path.
+func (f *ShellFS) AppendFile(path string, data []byte) error {
+	dir, _ := splitPath(path)
+	if dir != "tmp" {
+		// Fall back to the canonical read-modify-write the warp
+		// interpreter would use: that's what `>>` means on these
+		// read-then-replace namespaces.
+		existing, _ := f.ReadFile(path)
+		return f.WriteFile(path, append(existing, data...))
+	}
+	if err := f.store.AppendTmpFile(f.customerID, f.tier, f.userID, path, data); err != nil {
+		return err
+	}
+	f.noteFirstTmpWrite()
+	return nil
+}
+
+// Mkdir implements bash.MkdirFS. Only meaningful inside /tmp — the
+// other namespaces are flat by construction.
+func (f *ShellFS) Mkdir(path string) error {
+	dir, _ := splitPath(path)
+	if dir != "tmp" {
+		return fmt.Errorf("%s: mkdir not supported here", path)
+	}
+	if err := f.store.Mkdir(f.customerID, f.userID, path); err != nil {
+		return err
+	}
+	f.noteFirstTmpWrite()
+	return nil
+}
+
+// RemoveAll implements bash.RemoveAllFS for /tmp (rm -rf). Other
+// namespaces fall back to the standard Remove behaviour.
+func (f *ShellFS) RemoveAll(path string) error {
+	dir, _ := splitPath(path)
+	if dir == "tmp" {
+		return f.store.DeleteTmpSubtree(f.customerID, path)
+	}
+	return f.Remove(path)
+}
+
+// CopyFile implements bash.CopyFS for /tmp. Cross-namespace copies
+// (e.g., /tmp/x → /bin/y) are rejected — /bin runs writes through a
+// syntax validator, and copying arbitrary text into it would route
+// around that. Users who really mean to do this can `cat src > dst`,
+// which goes through the destination namespace's WriteFile.
+func (f *ShellFS) CopyFile(src, dst string) error {
+	srcDir, _ := splitPath(src)
+	dstDir, _ := splitPath(dst)
+	if srcDir != "tmp" || dstDir != "tmp" {
+		return fmt.Errorf("cp: cross-namespace copy not supported (use `cat %s > %s` instead)", src, dst)
+	}
+	if err := f.store.CopyTmpFile(f.customerID, f.tier, f.userID, src, dst); err != nil {
+		return err
+	}
+	f.noteFirstTmpWrite()
+	return nil
+}
+
+// Rename implements bash.RenameFS for /tmp. Same cross-namespace
+// prohibition as CopyFile.
+func (f *ShellFS) Rename(oldPath, newPath string) error {
+	oldDir, _ := splitPath(oldPath)
+	newDir, _ := splitPath(newPath)
+	if oldDir != "tmp" || newDir != "tmp" {
+		return fmt.Errorf("mv: cross-namespace rename not supported")
+	}
+	if err := f.store.RenameTmpFile(f.customerID, oldPath, newPath); err != nil {
+		return err
+	}
+	f.noteFirstTmpWrite()
+	return nil
+}
+
+// Touch implements bash.TouchFS. Only meaningful in /tmp where
+// updated_at drives the 48h retention clock; on other namespaces
+// returns an error since they have no expiry to extend.
+func (f *ShellFS) Touch(path string) error {
+	dir, _ := splitPath(path)
+	if dir != "tmp" {
+		return fmt.Errorf("touch: only supported in /tmp")
+	}
+	if err := f.store.TouchTmpFile(f.customerID, f.tier, f.userID, path); err != nil {
+		return err
+	}
+	f.noteFirstTmpWrite()
+	return nil
+}
+
+// resolveOwners batch-resolves a list of user IDs to display names
+// for `ls -al`'s owner column. Single store round-trip, deduped.
+// Display name follows the fallback chain: User.Name → email
+// local-part → first 8 chars of UUID. Truncated to 12 chars.
+//
+// Empty IDs (NULL CreatedByUserID rows) are skipped — they render
+// as `-` in the long-form output via the empty-owner branch in
+// builtinLs.
+func (f *ShellFS) resolveOwners(ids []string) map[string]string {
+	out := map[string]string{}
+	if len(ids) == 0 {
+		return out
+	}
+	// Dedup before the SQL hit.
+	uniq := make([]string, 0, len(ids))
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		uniq = append(uniq, id)
+	}
+	users, err := f.store.GetUsersByIDs(uniq)
+	if err != nil {
+		return out
+	}
+	for id, u := range users {
+		out[id] = ownerDisplayName(u)
+	}
+	// Any IDs we couldn't resolve get the UUID-prefix fallback so
+	// `ls -al` still shows *something* informative.
+	for _, id := range uniq {
+		if _, ok := out[id]; !ok {
+			out[id] = truncateOwner(id, 12)
+		}
+	}
+	return out
+}
+
+// collectCreatorIDs pulls the non-nil CreatedByUserID values from a
+// slice of TmpFile rows. Saves an inline loop at every ReadDir call
+// site.
+func collectCreatorIDs(rows []store.TmpFile) []string {
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if r.CreatedByUserID != nil {
+			out = append(out, *r.CreatedByUserID)
+		}
+	}
+	return out
+}
+
+// ownerDisplayName picks the friendliest available label for a user.
+// Fallback chain: User.Name → email local-part → first 8 chars of
+// UUID. Truncated to 12 chars to keep ls columns readable.
+func ownerDisplayName(u store.User) string {
+	if u.Name != "" {
+		return truncateOwner(u.Name, 12)
+	}
+	if at := strings.IndexByte(u.Email, '@'); at > 0 {
+		return truncateOwner(u.Email[:at], 12)
+	}
+	return truncateOwner(u.ID, 12)
+}
+
+func truncateOwner(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max]
+}
+
+// lastSegment returns the final path component. "incidents/a" → "a",
+// "foo" → "foo". Used by Stat/ReadDir on /tmp where store paths are
+// full sub-paths but fs.DirEntry.Name() is the basename.
+func lastSegment(p string) string {
+	if idx := strings.LastIndex(p, "/"); idx >= 0 {
+		return p[idx+1:]
+	}
+	return p
+}
+
+// noteFirstTmpWrite triggers the 48h-expiry notice on the request's
+// notice queue. Idempotent per session and per user — the queue
+// handles the bookkeeping; ShellFS just signals "this is a
+// notice-worthy event." Called after every successful /tmp mutation;
+// failing writes don't trigger.
+//
+// When `noticeQueue` is nil (legacy or no-user contexts), this is a
+// no-op. The queue itself decides whether the user has already seen
+// this notice and whether to enqueue it for delivery.
+func (f *ShellFS) noteFirstTmpWrite() {
+	if f.noticeQueue == nil {
+		return
+	}
+	f.noticeQueue.Maybe(NoticeKeyTmpExpiry)
 }
 
 // FileLanguage returns the scripting language for a /bin/ file.
@@ -661,23 +983,42 @@ func plural(n int) string {
 // ── fs.FileInfo / fs.DirEntry implementations ───────────────
 
 type vfsFileInfo struct {
-	name string
-	dir  bool
+	name  string
+	dir   bool
+	size  int64
+	mtime time.Time
+	owner string // resolved display name; "" = no attribution → renders as `-`
 }
 
-func (fi *vfsFileInfo) Name() string        { return fi.name }
-func (fi *vfsFileInfo) Size() int64         { return 0 }
-func (fi *vfsFileInfo) Mode() fs.FileMode   { if fi.dir { return fs.ModeDir | 0755 }; return 0644 }
-func (fi *vfsFileInfo) ModTime() time.Time  { return time.Time{} }
-func (fi *vfsFileInfo) IsDir() bool         { return fi.dir }
-func (fi *vfsFileInfo) Sys() any            { return nil }
+func (fi *vfsFileInfo) Name() string       { return fi.name }
+func (fi *vfsFileInfo) Size() int64        { return fi.size }
+func (fi *vfsFileInfo) Mode() fs.FileMode  { if fi.dir { return fs.ModeDir | 0755 }; return 0644 }
+func (fi *vfsFileInfo) ModTime() time.Time { return fi.mtime }
+func (fi *vfsFileInfo) IsDir() bool        { return fi.dir }
+
+// Sys returns an interface satisfying bash.OwnerInfo. The warp `ls -l`
+// builtin reads it to render an owner column.
+func (fi *vfsFileInfo) Sys() any { return ownerOnly{fi.owner} }
+
+// Owner implements bash.OwnerInfo. Empty string renders as `-` in
+// the long-form ls output.
+func (o ownerOnly) Owner() string { return o.name }
+
+// ownerOnly is the type Sys() returns — wraps just the owner string
+// so callers don't accidentally cast Sys() to something larger.
+type ownerOnly struct{ name string }
 
 type vfsDirEntry struct {
-	name string
-	dir  bool
+	name  string
+	dir   bool
+	size  int64
+	mtime time.Time
+	owner string
 }
 
-func (de *vfsDirEntry) Name() string               { return de.name }
-func (de *vfsDirEntry) IsDir() bool                { return de.dir }
-func (de *vfsDirEntry) Type() fs.FileMode          { if de.dir { return fs.ModeDir }; return 0 }
-func (de *vfsDirEntry) Info() (fs.FileInfo, error)  { return &vfsFileInfo{name: de.name, dir: de.dir}, nil }
+func (de *vfsDirEntry) Name() string      { return de.name }
+func (de *vfsDirEntry) IsDir() bool       { return de.dir }
+func (de *vfsDirEntry) Type() fs.FileMode { if de.dir { return fs.ModeDir }; return 0 }
+func (de *vfsDirEntry) Info() (fs.FileInfo, error) {
+	return &vfsFileInfo{name: de.name, dir: de.dir, size: de.size, mtime: de.mtime, owner: de.owner}, nil
+}

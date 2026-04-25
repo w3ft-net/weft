@@ -1731,6 +1731,7 @@ type CoordinatorQueryRequest struct {
 	TimeEndNs     int64                  `protobuf:"varint,3,opt,name=time_end_ns,json=timeEndNs,proto3" json:"time_end_ns,omitempty"`       // 0 = use default
 	Follow        bool                   `protobuf:"varint,4,opt,name=follow,proto3" json:"follow,omitempty"`                                // if true, stream stays open for live tail
 	Customer      string                 `protobuf:"bytes,5,opt,name=customer,proto3" json:"customer,omitempty"`                             // customer name for row-level security (from JWT)
+	UserId        string                 `protobuf:"bytes,6,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                   // invoking user; empty = system. Used for write attribution.
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1796,6 +1797,13 @@ func (x *CoordinatorQueryRequest) GetFollow() bool {
 func (x *CoordinatorQueryRequest) GetCustomer() string {
 	if x != nil {
 		return x.Customer
+	}
+	return ""
+}
+
+func (x *CoordinatorQueryRequest) GetUserId() string {
+	if x != nil {
+		return x.UserId
 	}
 	return ""
 }
@@ -3901,13 +3909,14 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x14AuthenticateResponse\x12\x1a\n" +
 	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x1c\n" +
 	"\tnamespace\x18\x05 \x01(\tR\tnamespaceJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\n" +
-	"shard_addrR\vshard_tokenR\rexpires_at_ns\"\xad\x01\n" +
+	"shard_addrR\vshard_tokenR\rexpires_at_ns\"\xc6\x01\n" +
 	"\x17CoordinatorQueryRequest\x12\x1a\n" +
 	"\bpipeline\x18\x01 \x01(\tR\bpipeline\x12\"\n" +
 	"\rtime_start_ns\x18\x02 \x01(\x03R\vtimeStartNs\x12\x1e\n" +
 	"\vtime_end_ns\x18\x03 \x01(\x03R\ttimeEndNs\x12\x16\n" +
 	"\x06follow\x18\x04 \x01(\bR\x06follow\x12\x1a\n" +
-	"\bcustomer\x18\x05 \x01(\tR\bcustomer\"S\n" +
+	"\bcustomer\x18\x05 \x01(\tR\bcustomer\x12\x17\n" +
+	"\auser_id\x18\x06 \x01(\tR\x06userId\"S\n" +
 	"\x18CoordinatorQueryResponse\x12#\n" +
 	"\x04rows\x18\x01 \x03(\v2\x0f.weft.ResultRowR\x04rows\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\"-\n" +

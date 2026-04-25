@@ -35,7 +35,7 @@ func testStoreAndCustomer(t *testing.T) (*store.Store, uint) {
 
 func seedWatch(t *testing.T, db *store.Store, custID uint, name string, values []string, interval time.Duration) {
 	t.Helper()
-	err := db.SaveCronWatch(custID, name, "every 1m", "echo test")
+	err := db.SaveCronWatch(custID, "", name, "every 1m", "echo test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestWeftFuncs_DurationCap(t *testing.T) {
 func TestWeftFuncs_TimeRangeFiltering(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	// Seed with values spread over 2 hours. Query only last 30m.
-	err := db.SaveCronWatch(custID, "range-filter-test", "every 1m", "echo test")
+	err := db.SaveCronWatch(custID, "", "range-filter-test", "every 1m", "echo test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func TestWeftFuncs_FloatValues(t *testing.T) {
 func TestWeftFuncs_EmptyResults(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	// Create watch with no results.
-	db.SaveCronWatch(custID, "empty-test", "every 1m", "echo test")
+	db.SaveCronWatch(custID, "", "empty-test", "every 1m", "echo test")
 
 	wf := &WeftFuncs{Store: db, CustomerID: custID}
 

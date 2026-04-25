@@ -24,7 +24,7 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 	// when no shard instances are InService yet.
 	c := NewCoordinator(nil, nil)
 
-	res, err := c.Query("cat vimgym.log", failoverRange, "kevlar")
+	res, err := c.Query("cat vimgym.log", failoverRange, "kevlar", "")
 	if err != nil {
 		t.Fatalf("query with no shards should not error, got: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 		CreatedAt: time.Now(),
 	})
 
-	res, err = c.Query("cat vimgym.log", failoverRange, "kevlar")
+	res, err = c.Query("cat vimgym.log", failoverRange, "kevlar", "")
 	if err != nil {
 		t.Fatalf("query after adding shard: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestFailover_ShardReplacement(t *testing.T) {
 		CreatedAt: time.Now(),
 	})
 
-	res, err := c.Query("cat vimgym.log", failoverRange, "kevlar")
+	res, err := c.Query("cat vimgym.log", failoverRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 20; j++ {
-				_, err := c.Query("cat vimgym.log", failoverRange, "kevlar")
+				_, err := c.Query("cat vimgym.log", failoverRange, "kevlar", "")
 				if err != nil {
 					errors <- err
 				}

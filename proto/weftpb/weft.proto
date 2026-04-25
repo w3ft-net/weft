@@ -298,6 +298,7 @@ message CoordinatorQueryRequest {
   int64 time_end_ns = 3;    // 0 = use default
   bool follow = 4;          // if true, stream stays open for live tail
   string customer = 5;      // customer name for row-level security (from JWT)
+  string user_id = 6;       // invoking user; empty = system. Used for write attribution.
 }
 
 message CoordinatorQueryResponse {

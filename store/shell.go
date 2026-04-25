@@ -48,13 +48,14 @@ func ParseScheduleInterval(schedule string) time.Duration {
 // Language is detected from shebang at write time: "bash" (default) or "lua".
 type ShellFunction struct {
 	gorm.Model
-	CustomerID uint   `gorm:"not null;uniqueIndex:idx_func_customer_name"`
-	Name       string `gorm:"not null;uniqueIndex:idx_func_customer_name"`
-	Source     string `gorm:"type:text;not null"`
-	Language   string `gorm:"not null;default:bash"` // "bash" or "lua"
+	CustomerID      uint    `gorm:"not null;uniqueIndex:idx_func_customer_name"`
+	Name            string  `gorm:"not null;uniqueIndex:idx_func_customer_name"`
+	Source          string  `gorm:"type:text;not null"`
+	Language        string  `gorm:"not null;default:bash"` // "bash" or "lua"
+	CreatedByUserID *string `gorm:"column:created_by_user_id"`
 }
 
-func (s *Store) SaveShellFunction(customerID uint, name, source string) error {
+func (s *Store) SaveShellFunction(customerID uint, userID, name, source string) error {
 	lang, cleanSource := detectLanguage(source)
 	if err := validateSource(lang, cleanSource); err != nil {
 		return err
@@ -62,11 +63,17 @@ func (s *Store) SaveShellFunction(customerID uint, name, source string) error {
 	var fn ShellFunction
 	result := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&fn)
 	if result.Error == gorm.ErrRecordNotFound {
-		return s.db.Create(&ShellFunction{
+		row := &ShellFunction{
 			CustomerID: customerID, Name: name,
 			Source: cleanSource, Language: lang,
-		}).Error
+		}
+		if userID != "" {
+			row.CreatedByUserID = &userID
+		}
+		return s.db.Create(row).Error
 	}
+	// Existing rows keep their original creator on overwrite — only
+	// the source / language change. Editing isn't authoring.
 	return s.db.Model(&fn).Updates(map[string]any{
 		"source":   cleanSource,
 		"language": lang,
@@ -312,11 +319,12 @@ type CronWatch struct {
 	// the `alert` stage's numeric cutoff. Populated only for
 	// above/below/eq/neq — conditions without a single absolute
 	// threshold (rising/falling/changed/absent/any) leave both NULL.
-	AlertCondition *string  `gorm:"column:alert_condition"`
+	AlertCondition  *string  `gorm:"column:alert_condition"`
 	AlertThreshold *float64 `gorm:"column:alert_threshold"`
+	CreatedByUserID *string  `gorm:"column:created_by_user_id"`
 }
 
-func (s *Store) SaveCronWatch(customerID uint, name, schedule, pipeline string) error {
+func (s *Store) SaveCronWatch(customerID uint, userID, name, schedule, pipeline string) error {
 	compiled, err := CompileWatchPipeline(pipeline)
 	if err != nil {
 		return err
@@ -324,7 +332,7 @@ func (s *Store) SaveCronWatch(customerID uint, name, schedule, pipeline string) 
 	var w CronWatch
 	result := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&w)
 	if result.Error == gorm.ErrRecordNotFound {
-		return s.db.Create(&CronWatch{
+		row := &CronWatch{
 			CustomerID:     customerID,
 			Name:           name,
 			Schedule:       schedule,
@@ -334,8 +342,13 @@ func (s *Store) SaveCronWatch(customerID uint, name, schedule, pipeline string) 
 			AlertTag:       compiled.AlertTag,
 			AlertCondition: compiled.AlertCondition,
 			AlertThreshold: compiled.AlertThreshold,
-		}).Error
+		}
+		if userID != "" {
+			row.CreatedByUserID = &userID
+		}
+		return s.db.Create(row).Error
 	}
+	// Existing watches keep their original creator on overwrite.
 	return s.db.Model(&w).Updates(map[string]any{
 		"schedule":        schedule,
 		"pipeline":        pipeline,

@@ -79,7 +79,7 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 		tr.End = time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
 	}
 
-	result, err := s.Coord.Query(req.Pipeline, tr, customer)
+	result, err := s.Coord.Query(req.Pipeline, tr, customer, req.UserId)
 	if err != nil {
 		log.Printf("query rpc: error for customer=%s pipeline=%q: %v", customer, req.Pipeline, err)
 		return err
@@ -702,7 +702,9 @@ func (s *Server) SaveFunction(ctx context.Context, req *pb.SaveFunctionRequest) 
 	if err != nil {
 		return nil, err
 	}
-	if err := s.Store.SaveShellFunction(custID, req.Name, req.Source); err != nil {
+	// gRPC SaveFunction has no caller-user metadata yet — empty
+	// userID stores NULL creator, rendered as `-` by ls -al.
+	if err := s.Store.SaveShellFunction(custID, "", req.Name, req.Source); err != nil {
 		return nil, err
 	}
 	return &pb.SaveFunctionResponse{}, nil
@@ -754,7 +756,7 @@ func (s *Server) SaveWatch(ctx context.Context, req *pb.SaveWatchRequest) (*pb.S
 	if err != nil {
 		return nil, err
 	}
-	if err := s.Store.SaveCronWatch(custID, req.Name, req.Schedule, req.Pipeline); err != nil {
+	if err := s.Store.SaveCronWatch(custID, "", req.Name, req.Schedule, req.Pipeline); err != nil {
 		return nil, err
 	}
 	return &pb.SaveWatchResponse{}, nil

@@ -100,6 +100,35 @@ func VolumeAllowance(tier Tier) int64 {
 	}
 }
 
+// TmpStorageAllowance returns the per-customer /tmp storage cap, in
+// bytes. Deliberately conservative: /tmp is a scratch pad for filtered
+// result sets and quick notes, not long-term storage — the 48h TTL
+// (enforced by partman-managed partitions) caps the long-term cost, and
+// these limits cap the instantaneous cost.
+//
+// Ratcheting up later is easy. Ratcheting down after people depend on
+// the space is not. Pair with TmpMaxFileBytes, which is a flat cap
+// applied on every individual write regardless of tier.
+func TmpStorageAllowance(tier Tier) int64 {
+	switch tier {
+	case TierSwatch:
+		return 10 * 1024 * 1024 // 10 MB
+	case TierYard:
+		return 100 * 1024 * 1024 // 100 MB
+	case TierBolt:
+		return 1024 * 1024 * 1024 // 1 GB
+	default:
+		return 500 * 1024 // trial: 500 KB
+	}
+}
+
+// TmpMaxFileBytes caps the size of any single /tmp file. Applies to
+// every tier — raising a customer's total allowance doesn't raise
+// their per-file ceiling. Streaming writers enforce this mid-stream,
+// so a pipeline filling a tmp file will fail with a clear error
+// rather than silently truncating.
+const TmpMaxFileBytes int64 = 512 * 1024 // 1/2 MB
+
 // OverageRatePerGB returns the per-GB charge for ingestion over
 // VolumeAllowance, in US cents. Matches the pricing page and the
 // Stripe graduated metered price. Used only for dashboard projections
@@ -497,4 +526,33 @@ func (s *Store) UpdateUserCustomer(userID string, customerID uint) error {
 		"customer_id": customerID,
 		"updated_at":  time.Now(),
 	}).Error
+}
+
+// SetUserName updates a user's free-text display name. Used for
+// `ls -al`'s owner column and other places where a friendlier label
+// than email-local-part is preferred. Pass "" to clear.
+func (s *Store) SetUserName(userID, name string) error {
+	return s.db.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
+		"name":       name,
+		"updated_at": time.Now(),
+	}).Error
+}
+
+// GetUsersByIDs resolves a batch of user IDs to user rows. IDs not
+// found are silently dropped from the result. Used by the
+// ls -al renderer to look up display names for a directory listing
+// without N+1 queries.
+func (s *Store) GetUsersByIDs(ids []string) (map[string]User, error) {
+	out := map[string]User{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var users []User
+	if err := s.db.Where("id IN ?", ids).Find(&users).Error; err != nil {
+		return nil, err
+	}
+	for _, u := range users {
+		out[u.ID] = u
+	}
+	return out, nil
 }

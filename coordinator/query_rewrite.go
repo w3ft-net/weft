@@ -26,7 +26,7 @@ import (
 // conditionals, functions — anywhere warp.Walk reaches — so query
 // pipelines anywhere in the tree are substituted regardless of
 // nesting depth.
-func rewriteQueryPipelines(script *bash.Script, c *Coordinator, tr TimeRange, customer string, alertCtx *AlertContext) {
+func rewriteQueryPipelines(script *bash.Script, c *Coordinator, tr TimeRange, customer, userID string, alertCtx *AlertContext) {
 	if script == nil {
 		return
 	}
@@ -45,7 +45,7 @@ func rewriteQueryPipelines(script *bash.Script, c *Coordinator, tr TimeRange, cu
 				Name: "weft-query",
 				Run: func(interp *bash.Interpreter, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
 					src := bash.UnparsePipelineExpanded(&snap, interp.ExpandWord)
-					result, err := c.query(src, tr, customer, alertCtx)
+					result, err := c.query(src, tr, customer, userID, alertCtx)
 					if err != nil {
 						fmt.Fprintf(stderr, "query: %v\n", err)
 						return 1
