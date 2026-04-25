@@ -52,6 +52,17 @@ web:
 - `paste <a> <b> [...]` — column-merge files line-by-line (`-d`)
 - `wc <files>` — `-l` lines, `-w` words, `-c` bytes, `-m` chars, `-L` longest line
 
+## Version history (wit)
+
+- `wit log <path>` — list versions; `-p` includes diffs
+- `wit show <path> <ref>` — print a version's content
+- `wit diff <path> <a>..<b>` — unified diff between two refs
+- `wit checkout <path> <ref>` — make a past version the new HEAD
+- `wit amend [-m MSG] <path> [<ref>]` — set a commit message
+
+Refs: `HEAD`, `HEAD^`, `HEAD^N`, or a hash prefix (≥4 hex chars).
+Tracked under `/bin` and `/cron.d` only; last 5 versions retained.
+
 ## Alerting
 
 - `<pipeline> | alert <condition>` — see `help alerts` or `man alert`

@@ -78,3 +78,12 @@ echo $(weft.avg error-rate 1h) | alert above 50 --notify=ops
 Tier limits (number of watches and minimum schedule interval) vary by
 plan — see the **Account** page for your current caps, or run
 `help cron` in the shell.
+
+### Watch version history
+
+Every save to `/cron.d/<name>` is captured. After `:w`, the shell
+prompts for an optional commit message; `wit log /cron.d/<name>`
+lists past versions, `wit checkout /cron.d/<name> HEAD^2` rolls
+back. Five most recent past versions are kept. See **wit** for
+the full surface.
+

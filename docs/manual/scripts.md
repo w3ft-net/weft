@@ -105,3 +105,16 @@ cat api.log | extract_ids | sort -u | wc -l
 Weft cannot optimize Lua scripts in the same way it can coreutils pipelines. If
 you need Lua, keep it at the end of a pipeline wherever you can for best
 performance. 
+
+## Editing a script with `vi`
+
+`vi /bin/<name>` opens the script for editing. After `:w`, the
+shell drops you into a follow-up buffer asking for an optional
+commit message — `:wq` to record, `:q!` to skip. See **wit** for
+the full version-control workflow, including `wit log`,
+`wit show`, `wit diff`, `wit checkout`, and `wit amend`.
+
+The five most recent past versions are kept; older saves are
+discarded. Watch this if you iterate quickly — there's no
+recycle bin past the cap.
+
