@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -562,6 +563,53 @@ func (s *Shell) execFSBuiltin(line string) (bool, string) {
 			return true, string(data)
 		}
 		return false, ""
+
+	case "chart":
+		// Non-interactive chart: render a single frame and return.
+		// `--follow` is meaningless here (no terminal to redraw into),
+		// so we ignore the flag and just paint the latest frame.
+		wr, ok := s.FS.(shellcore.WatchResultsProvider)
+		if !ok {
+			return true, "chart: watch results not supported in this backend\n"
+		}
+		// Parse a minimal subset of flags: the watch name, -t, -n.
+		var name, kind string
+		limit := 50
+		kind = "line"
+		for i := 0; i < len(args); i++ {
+			a := args[i]
+			switch {
+			case a == "-t" && i+1 < len(args):
+				kind = args[i+1]
+				i++
+			case a == "-n" && i+1 < len(args):
+				if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
+					limit = n
+				}
+				i++
+			case a == "-f" || a == "--follow" || a == "-i":
+				// follow / interval ignored in one-shot mode.
+				if a == "-i" && i+1 < len(args) {
+					i++
+				}
+			case strings.HasPrefix(a, "-"):
+				// Unknown flag — let it pass through silently.
+			default:
+				if name == "" {
+					name = a
+				}
+			}
+		}
+		if name == "" {
+			return true, "usage: chart <watch> [-t TYPE] [-n LIMIT]\n"
+		}
+		name = strings.TrimPrefix(name, "/cron.d/")
+		name = strings.TrimPrefix(name, "cron.d/")
+		out, errMsg := shellcore.RenderChartOneShot(wr, name, kind, limit, 80, 20)
+		if errMsg != "" {
+			return true, "chart: " + errMsg + "\n"
+		}
+		return true, out
 	}
 
 	return false, ""

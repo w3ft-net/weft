@@ -33,9 +33,10 @@ web:
 
 ## Filesystem
 
-- `ls [-l] [-a] [-h] [path]` — list `/bin`, `/cron.d`, `/etc`, `/log`, `/tmp`
+- `ls [-l] [-a] [-h] [path]` — list `/bin`, `/cron.d`, `/etc`, `/log`, `/tmp`; `ls -l /cron.d/` adds a sparkline
 - `cat /bin/<fn>` — view a saved function
 - `cat /cron.d/<watch>` — view a watch definition
+- `chart <watch>` — render recent watch results in the terminal (`man chart`)
 - `>` / `>>` — redirect pipeline output into `/tmp`
 - `mkdir /tmp/<dir>` — organise scratch files into folders
 - `cp <src> <dst>` / `mv <src> <dst>` — duplicate / rename (within `/tmp`)

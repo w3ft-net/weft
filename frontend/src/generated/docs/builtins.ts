@@ -28,13 +28,36 @@ const builtins = {
 </ul>
 <h2>Filesystem</h2>
 <ul>
-<li><code>ls [path]</code> — list <code>/bin</code>, <code>/cron.d</code>, <code>/etc</code>, <code>/log</code></li>
+<li><code>ls [-l] [-a] [-h] [path]</code> — list <code>/bin</code>, <code>/cron.d</code>, <code>/etc</code>, <code>/log</code>, <code>/tmp</code>; <code>ls -l /cron.d/</code> adds a sparkline</li>
 <li><code>cat /bin/&lt;fn&gt;</code> — view a saved function</li>
 <li><code>cat /cron.d/&lt;watch&gt;</code> — view a watch definition</li>
-<li><code>rm &lt;path&gt;</code> — delete a function or watch</li>
+<li><code>chart &lt;watch&gt;</code> — render recent watch results in the terminal (<code>man chart</code>)</li>
+<li><code>&gt;</code> / <code>&gt;&gt;</code> — redirect pipeline output into <code>/tmp</code></li>
+<li><code>mkdir /tmp/&lt;dir&gt;</code> — organise scratch files into folders</li>
+<li><code>cp &lt;src&gt; &lt;dst&gt;</code> / <code>mv &lt;src&gt; &lt;dst&gt;</code> — duplicate / rename (within <code>/tmp</code>)</li>
+<li><code>touch &lt;path&gt;</code> — create empty / reset the 48h clock on a <code>/tmp</code> file</li>
+<li><code>rm &lt;path&gt;</code> / <code>rm -rf &lt;dir&gt;</code> — delete a file or directory</li>
 <li><code>vi &lt;path&gt;</code> — edit (vim keys)</li>
 <li><code>cd &lt;path&gt;</code> — change the virtual cwd</li>
 </ul>
+<h2>Working on saved results</h2>
+<ul>
+<li><code>diff &lt;a&gt; &lt;b&gt;</code> — line-level differences between two files</li>
+<li><code>comm &lt;a&gt; &lt;b&gt;</code> — sorted-set merge: only-in-a, only-in-b, in-both</li>
+<li><code>join &lt;a&gt; &lt;b&gt;</code> — relational join on a key column (<code>-t</code> / <code>-1</code> / <code>-2</code>)</li>
+<li><code>paste &lt;a&gt; &lt;b&gt; [...]</code> — column-merge files line-by-line (<code>-d</code>)</li>
+<li><code>wc &lt;files&gt;</code> — <code>-l</code> lines, <code>-w</code> words, <code>-c</code> bytes, <code>-m</code> chars, <code>-L</code> longest line</li>
+</ul>
+<h2>Version history (wit)</h2>
+<ul>
+<li><code>wit log &lt;path&gt;</code> — list versions; <code>-p</code> includes diffs</li>
+<li><code>wit show &lt;path&gt; &lt;ref&gt;</code> — print a version's content</li>
+<li><code>wit diff &lt;path&gt; &lt;a&gt;..&lt;b&gt;</code> — unified diff between two refs</li>
+<li><code>wit checkout &lt;path&gt; &lt;ref&gt;</code> — make a past version the new HEAD</li>
+<li><code>wit amend [-m MSG] &lt;path&gt; [&lt;ref&gt;]</code> — set a commit message</li>
+</ul>
+<p>Refs: <code>HEAD</code>, <code>HEAD^</code>, <code>HEAD^N</code>, or a hash prefix (≥4 hex chars).
+Tracked under <code>/bin</code> and <code>/cron.d</code> only; last 5 versions retained.</p>
 <h2>Alerting</h2>
 <ul>
 <li><code>&lt;pipeline&gt; | alert &lt;condition&gt;</code> — see <code>help alerts</code> or <code>man alert</code></li>

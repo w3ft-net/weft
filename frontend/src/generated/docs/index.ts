@@ -7,7 +7,10 @@ import connectCloudwatch from './connect-cloudwatch';
 import schemaSetup from './schema-setup';
 import watches from './watches';
 import queryLogs from './query-logs';
+import tmp from './tmp';
 import builtins from './builtins';
+import scripts from './scripts';
+import wit from './wit';
 import alerting from './alerting';
 
 export type ManualSection = {
@@ -26,6 +29,9 @@ export const manualSections: readonly ManualSection[] = [
   schemaSetup,
   watches,
   queryLogs,
+  tmp,
   builtins,
+  scripts,
+  wit,
   alerting,
 ];

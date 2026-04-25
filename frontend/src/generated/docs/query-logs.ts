@@ -26,6 +26,125 @@ cat myapp.log --since 2h --until 30m | head -100
 <p>The weft query planner analyzes your full pipeline and pushes
 predicates down into SQL — you write familiar shell commands, weft
 makes them fast.</p>
+<h2>Meta-variables</h2>
+<p>Each row weft stores has a fixed set of indexed columns alongside
+its raw text and JSON payload. Filtering on these columns is the
+fastest path through the planner — predicates rewrite to direct
+SQL <code>WHERE</code> clauses with row-group statistics pruning. Anything
+not in the table below still works in awk/jq, but goes through the
+slower JSON-extract path.</p>
+<p>| awk | jq | Column | Source |
+|---|---|---|---|
+| <code>$APP</code> (alias <code>$SERVICE</code>) | <code>._app</code> (alias <code>._service</code>) | <code>app</code> | the log file's source name (<code>/log/&lt;ns&gt;/&lt;app&gt;.log</code>) |
+| <code>$HOST</code> (alias <code>$INSTANCE</code>) | <code>._host</code> (alias <code>._instance</code>) | <code>instance</code> | the agent's hostname |
+| <code>$LEVEL</code> | <code>._level</code> | <code>level</code> | parsed from the line per the source's schema |
+| <code>$TS</code> | <code>._ts</code> | <code>ts</code> | row timestamp |
+| <code>$DEPLOYMENT</code> | <code>._deployment</code> | <code>deployment</code> | weftd config <code>deployment:</code> value (k8s Deployment, AWS ASG, etc.) |
+| <code>$ENV</code> | <code>._env</code> | <code>env</code> | bound to the agent token at mint time (<code>weft token create --env prod</code>) |
+| <code>$VERSION</code> | <code>._version</code> | <code>version</code> | per-source <code>version_file</code> watched by the agent |
+| <code>$REGION</code> | <code>._region</code> | <code>region</code> | detected from cloud metadata at agent startup |
+| <code>$CLUSTER</code> | <code>._cluster</code> | <code>cluster</code> | k8s mode only: cluster name from the DaemonSet config |
+| <code>$K8S_NAMESPACE</code> | <code>._k8s_namespace</code> | <code>k8s_namespace</code> | k8s mode only: pod's k8s namespace |
+| <code>$POD</code> | <code>._pod</code> | <code>pod</code> | k8s mode only: pod name |
+| <code>$CONTAINER</code> | <code>._container</code> | <code>container</code> | k8s mode only: container name |</p>
+<p>A few examples:</p>
+<pre><code># Errors in production for one specific deployment
+cat /log/myco/prod/api.log | awk '$LEVEL == &quot;ERROR&quot; &amp;&amp; $DEPLOYMENT == &quot;api-east&quot;'
+
+# Same query in jq form against a JSON source
+cat /log/myco/prod/api.log | jq 'select(._level == &quot;ERROR&quot; and ._deployment == &quot;api-east&quot;)'
+
+# Per-host memory metrics
+tail /log/weft/metrics.log | jq 'select(._host == &quot;shard-3&quot; and .type == &quot;memory&quot;) | .pct'
+
+# Region-scoped grep
+cat /log/myco/prod/api.log | awk '$REGION == &quot;us-east-2&quot;' | grep &quot;timeout&quot;
+</code></pre>
+<h3>Why two naming styles</h3>
+<p>awk meta-variables are uppercase short names (<code>$APP</code>, <code>$ENV</code>); jq
+uses leading-underscore lowercase (<code>._app</code>, <code>._env</code>). The
+underscore is the disambiguation convention — jq is case-sensitive
+and real JSONL sometimes carries keys like <code>Pod</code> or <code>pod</code>, so
+<code>._pod</code> always means &quot;the indexed column&quot; and <code>.pod</code> always means
+&quot;a key in this row's JSON payload.&quot;</p>
+<p><code>$SERVICE</code> / <code>._service</code> is an alias for <code>$APP</code> / <code>._app</code>, and
+<code>$HOST</code> / <code>._host</code> is an alias for <code>$INSTANCE</code> / <code>._instance</code> — use
+whichever name fits your team's vocabulary.</p>
+<h3>Custom fields fall through to JSON-extract</h3>
+<p>Anything not in the table above lives in your row's JSON payload
+and is still queryable — just slower:</p>
+<pre><code>cat /log/myco/prod/api.log | jq 'select(.feature_flag == &quot;abc&quot;)'
+</code></pre>
+<p>The planner pushes that to <code>WHERE json_extract_string(payload, '$.feature_flag') = 'abc'</code>, which works correctly but can't use
+row-group statistics for skip-ahead — every row in the time range
+is read and parsed. For dimensions you query constantly, prefer
+the indexed columns.</p>
+<h2>Per-tag averages over time</h2>
+<p>The combination of indexed dimensions, watches, and the multi-row
+alert form gets you &quot;avg cpu by host over the last hour&quot; without
+any new infrastructure. Three pieces compose:</p>
+<ol>
+<li>A <strong>watch</strong> with a frequent schedule — the schedule is your
+bucket size. Every tick produces stdout that's stored as a row.</li>
+<li>The watch body emits <strong>one line per tag</strong>, with the tag and a
+numeric value. Whitespace separated; tag first, value second.</li>
+<li><code>weft.avg &lt;watch&gt; &lt;duration&gt;</code> (or <code>weft.max</code>, <code>weft.min</code>,
+<code>weft.sum</code>, <code>weft.stddev</code>) reads back the run history.</li>
+</ol>
+<p>A concrete example — average memory pressure per host, bucketed
+every minute:</p>
+<pre><code># /cron.d/memory-per-host
+# schedule: every 1m
+tail /log/weft/metrics.log --since 1m \\
+  | jq -r 'select(.type == &quot;memory&quot;) | &quot;\\(._host) \\(.pct)&quot;'
+</code></pre>
+<p>That emits lines like:</p>
+<pre><code>shard-0    62.4
+shard-1    58.1
+api-east   71.9
+</code></pre>
+<p>Each line is a per-host bucket for this minute. To alert per host
+when memory passes 80%, pipe into <code>alert</code> in multi-row mode:</p>
+<pre><code># /cron.d/memory-alert
+# schedule: every 1m
+tail /log/weft/metrics.log --since 1m \\
+  | jq -r 'select(.type == &quot;memory&quot;) | &quot;\\(._host) \\(.pct)&quot;' \\
+  | alert above 80 -k 2 -t 1 --notify=ops
+</code></pre>
+<p><code>-k 2</code> says &quot;field 2 holds the numeric value&quot;; <code>-t 1</code> says &quot;field
+1 names this row&quot; (the host) so each host opens and closes
+incidents independently.</p>
+<p>The same shape works with any indexed dimension as the tag —
+swap <code>\\(._host)</code> for <code>\\(._deployment)</code>, <code>\\(._pod)</code>, <code>\\(._region)</code>,
+or any combination (<code>&quot;\\(._region) \\(._host) \\(.pct)&quot;</code> for region-
+prefixed host names). For string dimensions there's no perf
+penalty: each is a real column, queries push down with row-group
+statistics.</p>
+<p>Window aggregates over the watch's history (<code>weft.avg</code>,
+<code>weft.max</code>, etc.) currently summarize the entire run's stdout as
+one number, so the per-tag history is a follow-up. For now the
+recipe above gives you per-bucket per-tag values; for the rolling
+average across buckets, point a second watch at it via
+<code>weft.latest</code>.</p>
+<h2>Saving a result set</h2>
+<p>Redirect a pipeline into <code>/tmp</code> to hold onto the output and slice it
+a few different ways without re-running the whole query:</p>
+<pre><code>cat api.log | awk '$LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
+grep timeout /tmp/errs | sort | uniq -c | sort -rn
+</code></pre>
+<p>Files in <code>/tmp</code> live for 48 hours. See the <strong>Saving results to /tmp</strong>
+section for storage limits and the full set of operations.</p>
+<h2>Plan retention and the archive</h2>
+<p>Your plan determines how far back queries can read — Trial keeps a
+day, Bolt keeps a year. The <strong>Account</strong> page shows your current cap;
+runs older than that are filtered out of every query, even if the
+underlying rows are still on disk.</p>
+<p>Recent data lives on hot DuckDB shards; older data is exported to
+Parquet on S3 and queried transparently. A <code>range 6m..</code> query
+stitches hot and archived shards in one pass — there is no
+separate &quot;search archived logs&quot; step, and no special syntax for
+the older portion. The only user-visible effect is a small extra
+latency on the cold side.</p>
 <p>See <code>help builtins</code> in the shell for the full command list, and
 <code>man range</code> for time-window syntax.</p>
 `,

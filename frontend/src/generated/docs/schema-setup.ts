@@ -12,13 +12,16 @@ their field schemas.</p>
 <p>If you see a <strong>pending source</strong> notification on the dashboard, it
 means weft received data but needs you to confirm the detected
 schema. Review the sample lines and approve.</p>
-<p>Common fields weft extracts automatically:</p>
+<p>Two fields come from parsing each log line per the source's schema:</p>
 <ul>
 <li><code>$TS</code> — timestamp</li>
 <li><code>$LEVEL</code> — log level (ERROR, WARN, INFO, DEBUG)</li>
-<li><code>$APP</code> — application name</li>
-<li><code>$INSTANCE</code> — hostname or instance ID</li>
 </ul>
+<p>Other indexed fields (<code>$APP</code>, <code>$HOST</code>, <code>$DEPLOYMENT</code>, <code>$ENV</code>, <code>$VERSION</code>,
+<code>$REGION</code>, and the four k8s-mode dimensions) are stamped by weftd, the
+agent token, or cloud metadata rather than parsed from the line — see
+the <strong>Meta-variables</strong> section in <strong>Query your logs</strong> for the full
+table and how each is sourced.</p>
 `,
 } as const;
 

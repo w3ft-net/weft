@@ -21,22 +21,53 @@ dispatched by the <code>alert</code> stage (see the Alerting section); there is
 no separate watch-level notify field.</p>
 <p>View and manage watches from the <strong>Dashboard</strong>.</p>
 <h3>Accessing past results</h3>
-<p>Every watch run is stored. You can pull summaries from other watches
-or one-off pipelines:</p>
-<ul>
-<li><code>weft.latest &lt;watch&gt;</code> — most recent value</li>
-<li><code>weft.avg &lt;watch&gt; &lt;duration&gt;</code> — rolling average over window</li>
-<li><code>weft.max &lt;watch&gt; &lt;duration&gt;</code> — window maximum</li>
-<li><code>weft.min &lt;watch&gt; &lt;duration&gt;</code> — window minimum</li>
-<li><code>weft.sum &lt;watch&gt; &lt;duration&gt;</code> — window sum</li>
-<li><code>weft.stddev &lt;watch&gt; &lt;duration&gt;</code> — window standard deviation</li>
-</ul>
-<pre><code># Chain: average of one watch triggers another
+<p>Every watch run is stored. The <code>weft.*</code> helpers pull summaries out of
+that history — use them from the shell prompt, from a <code>/bin/</code> script,
+or from another watch's pipeline:</p>
+<p>| Helper | Returns | Notes |
+|---|---|---|
+| <code>weft.latest &lt;watch&gt;</code> | string | Trimmed stdout of the most recent run |
+| <code>weft.avg &lt;watch&gt; &lt;duration&gt;</code> | number | Mean of numeric results in the window |
+| <code>weft.max &lt;watch&gt; &lt;duration&gt;</code> | number | Largest numeric result in the window |
+| <code>weft.min &lt;watch&gt; &lt;duration&gt;</code> | number | Smallest numeric result in the window |
+| <code>weft.sum &lt;watch&gt; &lt;duration&gt;</code> | number | Sum of numeric results in the window |
+| <code>weft.stddev &lt;watch&gt; &lt;duration&gt;</code> | number | Population stddev; requires ≥ 2 results |</p>
+<p><strong>Durations</strong> are the usual Go syntax — <code>30s</code>, <code>5m</code>, <code>1h</code>, <code>6h</code>, <code>24h</code>
+— and must be positive and ≤ 24 hours. Longer windows are rejected.</p>
+<p><strong>Numeric vs string.</strong> <code>weft.latest</code> just returns whatever the watch's
+last run wrote to stdout, so a watch that prints <code>ERROR: disk full</code>
+and a watch that prints <code>42</code> both come back as strings. The
+aggregates, by contrast, parse each run's stdout as a float and
+silently skip any rows that don't parse — they return an error if
+nothing in the window is numeric (and <code>weft.stddev</code> also errors when
+the window has fewer than 2 numeric samples).</p>
+<p><strong>Retention.</strong> The aggregates read back through whatever history your
+plan's retention covers; older runs are invisible to the helpers even
+if they're still on disk.</p>
+<p>The helpers are available everywhere the shell is:</p>
+<pre><code># Interactively, at the prompt
+weft.latest error-rate
+
+# Chained through a pipeline
 echo $(weft.avg error-rate 1h) | alert above 50 --notify=ops
+
+# From another watch — aggregate a noisy-per-minute watch into an hourly alert
+# /cron.d/error-rate-hourly
+# schedule: every 5m
+echo $(weft.avg error-rate 1h) | alert above 50 --notify=ops
+
+# From a Lua /bin/ script — return type is a number, no string parsing
+#   local rate = weft.avg(&quot;error-rate&quot;, &quot;1h&quot;)
 </code></pre>
 <p>Tier limits (number of watches and minimum schedule interval) vary by
 plan — see the <strong>Account</strong> page for your current caps, or run
 <code>help cron</code> in the shell.</p>
+<h3>Watch version history</h3>
+<p>Every save to <code>/cron.d/&lt;name&gt;</code> is captured. After <code>:w</code>, the shell
+prompts for an optional commit message; <code>wit log /cron.d/&lt;name&gt;</code>
+lists past versions, <code>wit checkout /cron.d/&lt;name&gt; HEAD^2</code> rolls
+back. Five most recent past versions are kept. See <strong>wit</strong> for
+the full surface.</p>
 `,
 } as const;
 

@@ -15,7 +15,8 @@ as a cron result; writes to stderr are treated as alert firings
 
 - `vi /cron.d/<name>` — create or edit a watch
 - `cat /cron.d/<name>` — view a watch definition
-- `ls /cron.d` — list existing watches
+- `ls /cron.d` — list existing watches; `ls -l /cron.d/` adds a sparkline column
+- `chart <name>` — chart recent results (`man chart`)
 - `rm /cron.d/<name>` — delete a watch (stops the schedule)
 
 ## Watch file format

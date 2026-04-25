@@ -13,6 +13,20 @@ Go to <strong>Namespaces</strong>, select your namespace, and click <strong>Crea
 <pre><code># Store the token in your weftd config
 token: wft_a1b2c3d4e5f6...
 </code></pre>
+<h3>Binding env to a token</h3>
+<p>When creating a token you can optionally bind a deployment environment
+(<code>prod</code>, <code>staging</code>, <code>qa</code>, …). Every row from an agent using that token
+gets the env value stamped on the row before it reaches a shard — the
+agent has no say in it, which means a leaked production token can't
+secretly write rows tagged as staging.</p>
+<p>The token-create form has an Env field; from the CLI:</p>
+<pre><code>weft token create --namespace myco --label api-prod --env prod
+</code></pre>
+<p>Tokens with env produce three-level pseudofile paths
+(<code>/log/myco/prod/api.log</code>); tokens without env produce the original
+two-level layout (<code>/log/myco/api.log</code>). A namespace can hold a mix
+during a migration. See <strong>Query your logs</strong> for how <code>$ENV</code> surfaces
+in awk and jq.</p>
 `,
 } as const;
 

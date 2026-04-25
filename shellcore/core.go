@@ -43,6 +43,9 @@ type ShellCore struct {
 	// Pager state (active when mode == ModeLess).
 	less *lessState
 
+	// Live-chart state (active when mode == ModeChart).
+	chart *chartState
+
 	// pendingLess is set when the user typed `... | less`; the query
 	// runs stripped of the terminal stage and the result enters the
 	// pager on arrival instead of landing in scrollback.
@@ -183,6 +186,11 @@ func (c *ShellCore) HandleEvent(ev Event) {
 			c.clampOffset()
 			c.renderLess()
 		}
+		if c.mode == ModeChart && c.chart != nil {
+			// Re-fit immediately on resize — the chart always paints
+			// to the current terminal dimensions, never paginated.
+			c.renderChart()
+		}
 	case QueryResultEvent:
 		c.handleQueryResult(ev)
 	case FollowRowEvent:
@@ -193,10 +201,15 @@ func (c *ShellCore) HandleEvent(ev Event) {
 }
 
 // SpinnerTick advances the spinner frame. Called by the renderer's timer.
+// Also drives the chart-mode redraw via chartTick (which throttles
+// internally to the user-configured interval).
 func (c *ShellCore) SpinnerTick() {
 	if c.mode == ModeRunning {
 		c.spinnerFrame = (c.spinnerFrame + 1) % len(SpinnerFrames)
 		c.redrawPrompt()
+	}
+	if c.mode == ModeChart {
+		c.chartTick()
 	}
 }
 
@@ -232,6 +245,12 @@ func (c *ShellCore) handleKey(ev KeyEvent) {
 	// Less mode: all keys go to the pager.
 	if c.mode == ModeLess {
 		c.handleLessKey(ev)
+		return
+	}
+
+	// Chart mode: only exit keys are handled; redraw runs on tick.
+	if c.mode == ModeChart {
+		c.handleChartKey(ev)
 		return
 	}
 
@@ -596,6 +615,13 @@ func (c *ShellCore) execBuiltin(line string) bool {
 		return true
 	}
 
+	// Chart builtin — `chart <watch>` reads recent watch results and renders.
+	if parts := strings.Fields(line); len(parts) > 0 && parts[0] == "chart" {
+		if c.execChart(parts) {
+			return true
+		}
+	}
+
 	return false
 }
 
@@ -733,13 +759,27 @@ func (c *ShellCore) execFSBuiltin(line string) bool {
 
 	switch cmd {
 	case "ls":
+		longForm := false
 		path := c.cwd
-		if len(args) > 0 {
-			path = c.resolvePath(args[0])
+		for _, a := range args {
+			if a == "-l" || a == "-al" || a == "-la" {
+				longForm = true
+				continue
+			}
+			if !strings.HasPrefix(a, "-") {
+				path = c.resolvePath(a)
+			}
 		}
 		entries, err := c.shellFS.ReadDir(path)
 		if err != nil {
 			c.appendScrollback(ErrorText(fmt.Sprintf("ls: %s: no such directory", path)) + "\n")
+			return true
+		}
+		// Long-form for /cron.d/ adds a per-watch sparkline glyph beside
+		// each entry. Falls back silently if the FS doesn't expose
+		// WatchResultsProvider.
+		if longForm && (path == "/cron.d" || path == "/cron.d/") {
+			c.lsCronWatchesLong(entries)
 			return true
 		}
 		for _, name := range entries {

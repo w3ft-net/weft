@@ -19,6 +19,11 @@ sudo dpkg -i weftd_*.deb
 
 endpoint: w3ft.net:443
 token: wft_a1b2c3d4e5f6...
+deployment: api               # optional; the fleet/scaling-unit
+                              # this agent belongs to (k8s Deployment,
+                              # AWS ASG, etc.) — stamped on every row
+region: us-east-2             # optional override; auto-detected from
+                              # cloud metadata at startup if omitted
 
 sources:
   - app: myapp
@@ -27,11 +32,19 @@ sources:
     prefix_fields: [ts, level, service]
     prefix_separator: &quot; &quot;
     json_field: payload
+    version_file: /opt/myapp/VERSION   # optional; weftd watches the
+                                       # file and stamps the latest
+                                       # contents as $VERSION on
+                                       # every row from this source
 
   - app: nginx
     path: /var/log/nginx/access.log
     schema: json
 </code></pre>
+<p>The <code>deployment</code>, <code>region</code>, and per-source <code>version_file</code> values
+become first-class query dimensions — see the <strong>Meta-variables</strong>
+section in <strong>Query your logs</strong> for the full list and how they
+appear in awk and jq.</p>
 <h3>Schema types</h3>
 <ul>
 <li><code>json</code> — pure JSON lines, no prefix</li>
@@ -45,6 +58,61 @@ sudo systemctl enable --now weftd
 sudo systemctl status weftd
 journalctl -u weftd -f
 </code></pre>
+<h3>System metrics (optional)</h3>
+<p>weftd can also ship host metrics alongside log lines. Opt in by
+attaching a <code>metrics:</code> block to any source in the config — the block
+is independent of what that source tails, it just rides along on the
+same agent process.</p>
+<pre><code># /etc/weftd/config.yaml
+endpoint: w3ft.net:443
+token: wft_a1b2c3d4e5f6...
+deployment: api               # optional; tags every row
+
+sources:
+  - app: myapp
+    path: /var/log/myapp/*.log
+    metrics:
+      enabled: true
+      interval: 30s            # default 30s
+      collectors:              # default: all five
+        - cpu
+        - memory
+        - disk
+        - load
+        - network
+</code></pre>
+<p>Samples are read from <code>/proc</code> (Linux only) and streamed as JSON log
+rows to an app named <code>&lt;namespace&gt;/metrics</code>. If you set <code>deployment</code>,
+the app becomes <code>&lt;namespace&gt;/&lt;deployment&gt;_metrics</code> so that different
+tiers of hosts land in separate pseudofiles.</p>
+<p>Each tick emits one row per metric type, with one extra row per
+mount (disk) and per interface (network):</p>
+<p>| <code>type</code> | Fields |
+|---|---|
+| <code>cpu</code> | <code>user</code>, <code>system</code>, <code>idle</code>, <code>iowait</code> (percent), <code>cores</code> |
+| <code>memory</code> | <code>total_mb</code>, <code>used_mb</code>, <code>available_mb</code>, <code>swap_used_mb</code>, <code>pct</code> |
+| <code>disk</code> | <code>path</code>, <code>total_gb</code>, <code>used_gb</code>, <code>pct</code> — one row per <code>/dev/*</code> mount |
+| <code>load</code> | <code>load1</code>, <code>load5</code>, <code>load15</code> |
+| <code>network</code> | <code>iface</code>, <code>rx_bytes_sec</code>, <code>tx_bytes_sec</code> — one row per non-loopback interface |</p>
+<p>Every row additionally carries <code>ts</code>, <code>host</code>, and <code>deployment</code>. <code>cpu</code>
+and <code>network</code> need two samples to compute a delta, so the first tick
+after startup is silent for those two.</p>
+<p>Query metrics the same way you query any JSON log source:</p>
+<pre><code># Recent memory pressure
+tail /log/myns/metrics.log | jq 'select(.type == &quot;memory&quot;) | .pct'
+
+# Per-host disk usage, alerting above 80%
+tail /log/myns/metrics.log \\
+  | jq -r 'select(.type == &quot;disk&quot;) | &quot;\\(.host) \\(.pct)&quot;' \\
+  | alert above 80 -k 2 -t 1 --notify=ops
+
+# 5-minute load average by host
+cat /log/myns/metrics.log --since 1h \\
+  | jq 'select(.type == &quot;load&quot;) | {host, load5}'
+</code></pre>
+<p>Metrics only run on Linux (the collectors read <code>/proc/stat</code>,
+<code>/proc/meminfo</code>, <code>/proc/mounts</code>, <code>/proc/loadavg</code>, and
+<code>/proc/net/dev</code>). On other kernels the block is ignored.</p>
 `,
 } as const;
 
