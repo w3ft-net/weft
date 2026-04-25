@@ -531,13 +531,25 @@ func TestVimOpenEditSaveQuit(t *testing.T) {
 		t.Error("expected ActionVimSave dispatch")
 	}
 
-	// Quit with :q
+	// Quit with :q. /bin paths trigger the post-save commit-message
+	// popup — the first :q swaps the editor for a follow-up buffer
+	// rather than returning to the prompt.
 	core.HandleEvent(KeyEvent{Rune: ':'})
 	core.HandleEvent(KeyEvent{Rune: 'q'})
 	core.HandleEvent(KeyEvent{Key: KeyEnter})
 
+	if core.Mode() != ModeVim {
+		t.Errorf("mode after first :q on /bin = %d, want ModeVim (commit-message popup)", core.Mode())
+	}
+
+	// Skip the message: :q!
+	core.HandleEvent(KeyEvent{Rune: ':'})
+	core.HandleEvent(KeyEvent{Rune: 'q'})
+	core.HandleEvent(KeyEvent{Rune: '!'})
+	core.HandleEvent(KeyEvent{Key: KeyEnter})
+
 	if core.Mode() != ModeInput {
-		t.Errorf("mode after :q = %d, want ModeInput", core.Mode())
+		t.Errorf("mode after popup :q! = %d, want ModeInput", core.Mode())
 	}
 }
 

@@ -44,6 +44,17 @@ type LangFS interface {
 	FileLanguage(path string) string
 }
 
+// MessageAmender is optionally implemented by FS implementations
+// that track a per-file commit-message column. shellcore's post-save
+// popup calls AmendVersionMessage(path, message) when the user
+// records a commit message in the follow-up vim buffer. FSes that
+// don't implement it (the dev shell, the web shell's read-only
+// browser) silently no-op — the popup still opens, the message
+// just goes nowhere.
+type MessageAmender interface {
+	AmendVersionMessage(path, message string) error
+}
+
 // WatchResultValue represents a single cron watch result for dashboard display.
 type WatchResultValue struct {
 	Value string // stdout, trimmed

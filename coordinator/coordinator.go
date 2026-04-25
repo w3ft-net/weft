@@ -675,6 +675,12 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 		RegisterWeftCommands(interp, wf)
 		interp.LuaWeftFuncs = wf
 
+		// `wit` version-history surface — log/show/diff/checkout/amend
+		// for /bin and /cron.d entities. Same scope as the weft.*
+		// helpers; one WitFuncs per request carries the acting user.
+		witFn := &WitFuncs{Store: c.Store, CustomerID: custID, UserID: userID}
+		RegisterWitCommands(interp, witFn)
+
 		rewriteQueryPipelines(ast, c, tr, customer, userID, alertCtx)
 		interp.BinScriptTransform = func(_ string, script *bash.Script) {
 			rewriteQueryPipelines(script, c, tr, customer, userID, alertCtx)

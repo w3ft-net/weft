@@ -701,6 +701,26 @@ func (f *ShellFS) Rename(oldPath, newPath string) error {
 	return nil
 }
 
+// AmendVersionMessage implements shellcore.MessageAmender. Routes
+// to the right store path based on the path's namespace. Only
+// /bin/<name> and /cron.d/<name> paths are versioned; other
+// namespaces produce a clear error rather than silently succeeding.
+//
+// Always targets HEAD — the post-save popup is for the version
+// just written, which is HEAD by definition. (Editing past
+// versions' messages goes through `wit amend <path> <ref>`.)
+func (f *ShellFS) AmendVersionMessage(path, message string) error {
+	dir, name := splitPath(path)
+	switch dir {
+	case "bin":
+		return f.store.AmendShellFunctionMessage(f.customerID, name, "HEAD", message)
+	case "cron.d":
+		return f.store.AmendCronWatchMessage(f.customerID, name, "HEAD", message)
+	default:
+		return fmt.Errorf("amend: %s: not a versioned namespace", path)
+	}
+}
+
 // Touch implements bash.TouchFS. Only meaningful in /tmp where
 // updated_at drives the 48h retention clock; on other namespaces
 // returns an error since they have no expiry to extend.
