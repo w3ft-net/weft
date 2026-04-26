@@ -1,5 +1,42 @@
 # Root Cause Analysis: Transient gRPC Errors After Coordinator+Compute Restart
 
+## Status (2026-04-26)
+
+**Phase 2 (retry loop in `shard/grpc_client.go`) shipped.** TDD tests in
+`shard/grpc_retry_test.go` cover Canceled/Unavailable retry, non-transient
+pass-through, retry-budget exhaustion, and the QueryToSink pre-row variant.
+
+**Live verify caveat:** Phase 2 alone does NOT recover the Docker-dev cascade
+where the coordinator's registry holds entries for shards whose containers
+have died and not come back (stale `Addr` after multiple `docker compose`
+recreations). A retry against a dead Addr correctly fails 3× and gives up —
+that's the right behaviour for an unreachable shard, but in dev it manifests
+as recurrent errors for those specific stale IDs until the registry sheds
+them. Production (ASG) doesn't hit this because shard identity is bound to
+EBS volumes that follow instance replacement: the rebind always lands on a
+real, live shard, which is exactly the case Phase 2 was designed for.
+
+**What Phase 2 actually fixes:** the brief window during a rebind where
+in-flight RPCs on the old conn would otherwise return `Canceled` to the user.
+After the retry budget elapses (~200ms), the next attempt picks up the new
+conn and succeeds. In an AWS deploy roll, this turns "some users see 5xx"
+into "tail latency goes up by 100ms during the roll."
+
+**Still open (next):**
+- Stale-shard pruning: if a registered shard's last heartbeat is >2min old,
+  either suspend it (skip from `MatchingShards`) or evict it. Today such
+  entries linger forever, and Phase 2 retries against their dead Addrs
+  produce repeated errors for the duration of any user session that touches
+  apps owned by those shards. This is launcher-agnostic but more visible in
+  Docker dev where container churn creates dead entries faster.
+- Phase 3 (coalesce rapid rebinds during `adoptFromHeartbeats`): mostly a
+  dev-mode comfort. Production wouldn't see the cascade outside fleet-wide
+  replacements.
+
+---
+
+
+
 ## Executive Summary
 
 After a coordinator restart, queries fail transiently with `code = Canceled desc = grpc: the client connection is closing`. The root cause is **address flapping**: when the coordinator comes back online, the provisioner's `ProcessHeartbeat` handler rapidly rebinds each shard's gRPC connection multiple times in succession (lines 444–456 of `/Users/paul/dev/weft/coordinator/provisioner.go`). Meanwhile, concurrent queries hold references to `shard.Shard` objects whose underlying `*grpc.ClientConn` gets closed and replaced mid-flight, causing in-flight RPC streams to be cancelled by the gRPC runtime.
