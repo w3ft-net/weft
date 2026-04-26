@@ -260,16 +260,34 @@ until prod snaps back.
 
 The pipe-stage chart renders a one-shot pipeline without first
 naming a watch. The seeded `/bin/mem_history` script reshapes a
-metrics log into chart-friendly JSONL; pipe it into `chart`:
+metrics log into chart-friendly JSONL.
+
+**Step 1.** Sanity-check the script's output shape:
+
+```
+weft> mem_history /log/acme/prod/api_metrics.log | head -3
+{"ts":"2026-04-25T10:00:00.123456Z","pct":42.31}
+{"ts":"2026-04-25T10:00:10.131829Z","pct":42.45}
+{"ts":"2026-04-25T10:00:20.144117Z","pct":42.58}
+```
+
+JSONL with two keys per line. If the rows look right, pipe into
+chart:
+
+**Step 2.** Time-bucketed average memory percentage:
 
 ```
 weft> mem_history /log/acme/prod/api_metrics.log \
     | chart -x .ts -y .pct --bucket 1m -a avg
 ```
 
-Time-bucketed average memory percentage over the last hour. With
-`-x .ts -y .pct` the chart parses each upstream line as JSON.
-Switch reductions inline:
+Expect a line chart filling the terminal with a HH:MM x-axis (one
+tick label per bucket window), a numeric y-axis on the left, and
+~60 buckets across (1h ÷ 1m). With weftd's 10s metrics interval
+each bucket aggregates ~6 samples.
+
+**Step 3.** Swap the reduction; the same data renders as a different
+shape:
 
 ```
 weft> mem_history /log/acme/prod/api_metrics.log \
@@ -278,8 +296,11 @@ weft> mem_history /log/acme/prod/api_metrics.log \
     | chart -x .ts -y .pct --bucket 30s -a max
 ```
 
-Categorical x (no time bucketing) is the other shape worth seeing —
-distribution of total request latency by path:
+The `p95` chart should track noticeably higher than `avg`; the
+`max` chart should be even higher and have twice as many buckets.
+
+**Step 4.** Categorical x (no time bucketing). Default kind is
+`bar` for categorical x, `line` for `--bucket`; `-t` overrides.
 
 ```
 weft> cat /log/acme/prod/api.log --since 1h \
@@ -287,32 +308,75 @@ weft> cat /log/acme/prod/api.log --since 1h \
     | chart -x .path -y .latency -a sum
 ```
 
-Default chart kind is `bar` for categorical x, `line` when
-`--bucket` is set; `-t bar|line|sparkline` overrides.
+Expect a horizontal-bar chart, one bar per distinct `.path` value
+in the upstream output, sized by the total `.latency` sum across
+matching rows. The path pool the generator uses is small (~5
+endpoints), so the chart shows ~5 bars.
+
+**Step 5.** Argument validation. Mixing positional with JSON-path
+in the same chart call is rejected at parse time:
+
+```
+weft> mem_history /log/acme/prod/api_metrics.log | chart -x 1 -y .pct
+chart: -x and -y must both be positional or both .json.path
+```
+
+No upstream query is dispatched — the error surfaces immediately
+in scrollback.
 
 ### JSON-path alerts
 
 The `mem-pressure` watch exercises `alert -k .pct -t .host`
 against JSONL — no `jq -r` reformatting, the alert reads the JSON
-field directly:
+field directly.
+
+**Step 1.** Read back the watch definition:
 
 ```
-# /cron.d/mem-pressure
-# schedule: every 1m
+weft> cat /cron.d/mem-pressure
+schedule: */1 * * * *
 tail /log/acme/prod/api_metrics.log --since 2m \
   | jq 'select(.type == "memory")' \
   | alert above 70 -k .pct -t .host
 ```
 
-Compare with the older positional form (still supported, still
-present in the manual examples) — both forms work in one repo, and
-mixing positional and JSON-path within a single alert call is
-rejected at parse time:
+**Step 2.** Wait one tick window (≤ 1 minute) and check the
+recent results — value is the parsed `.pct`, tag is the parsed
+`.host`:
 
 ```
-weft> echo "host-a 85" | alert above 80 -k 2 -t .host
+weft> weft.latest mem-pressure
+65.4
+weft> ls -l /cron.d/
+mem-pressure   <colored sparkline>   65.4
+error-rate     <colored sparkline>   210
+scan
+…
+```
+
+If `pct` ever crosses 70 the watch fires for that host (visible
+on the dashboard's incidents page; in the shell, the next
+`weft.latest` returns ≥70).
+
+**Step 3.** Cross-customer isolation still holds. As dana@globex,
+`weft.latest mem-pressure` returns globex's mem-pressure number,
+not acme's. Reading the acme watch directly is rejected:
+
+```
+weft> cat /cron.d/mem-pressure
+… globex's mem-pressure body, not acme's …
+```
+
+**Step 4.** The mixing-rejection rule is a parse-time guard for
+both `chart` and `alert`. A quick interactive test confirms alert
+enforces it:
+
+```
+weft> echo '{"host":"a","pct":85}' | alert above 80 -k 2 -t .host
 alert: -k and -t must both be positional or both .json.path
 ```
+
+No alert fires; the parse error returns exit 1 immediately.
 
 ### Metrics piggy-back
 
