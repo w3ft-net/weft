@@ -507,6 +507,16 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 	if chartArgs == nil {
 		weftPipeline, _ = shellcore.SplitTerminalStage(line)
 	}
+
+	// Resolve cd / pushd / popd against a transient dirstack so a
+	// chained pipeline like `cd /log/acme && cat api.log` is rewritten
+	// to `cd /log/acme && cat /log/acme/api.log` before reaching the
+	// planner. Without this the planner sees the bare `api.log` and
+	// rejects it as an unknown namespace.
+	if rewritten, err := shellcore.RewritePaths(weftPipeline, shellcore.NewTransientDirStack()); err == nil {
+		weftPipeline = rewritten
+	}
+
 	result, err := s.Query(weftPipeline, s.Start, s.End)
 	if err != nil {
 		return err

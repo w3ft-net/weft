@@ -83,7 +83,13 @@ type ShellCore struct {
 	// Prompt identity fields.
 	user     string // e.g. "alice" — shown as alice@<customer> in prompt
 	customer string // e.g. "acme"  — defaults to "weft" when empty
-	cwd  string // virtual working directory, "/" = home = "~"
+
+	// dirStack owns cwd and the dirstack used by cd/pushd/popd/dirs.
+	// All cwd reads in shellcore go through dirStack.Cwd(); the same
+	// pointer is wired into warp's interpreter via SetDirStack so the
+	// builtins shellcore handles inline and any builtins warp executes
+	// remotely both see the same source of truth.
+	dirStack *dirStack
 }
 
 // NewShellCore creates a new core with a single write callback.
@@ -97,7 +103,7 @@ func NewShellCore(apps []string, width, height int, write func([]byte), dispatch
 		width:              width,
 		height:             height,
 		maxScrollbackLines: 10000,
-		cwd:                "/",
+		dirStack:           newDirStack(nil),
 	}
 }
 
@@ -113,8 +119,12 @@ func (c *ShellCore) SpinnerFrame() int { return c.spinnerFrame }
 // CompleterActive returns whether the completer menu is visible.
 func (c *ShellCore) CompleterActive() bool { return c.completer.Active() }
 
-// SetFS sets the virtual filesystem for vim file editing.
-func (c *ShellCore) SetFS(fs FS) { c.shellFS = fs }
+// SetFS sets the virtual filesystem for vim file editing and routes it
+// to the dirStack so cd/pushd validation has something to check.
+func (c *ShellCore) SetFS(fs FS) {
+	c.shellFS = fs
+	c.dirStack.setFS(fs)
+}
 
 // GetFS returns the virtual filesystem.
 func (c *ShellCore) GetFS() FS { return c.shellFS }
@@ -136,7 +146,13 @@ func (c *ShellCore) SetUser(user string) { c.user = user }
 func (c *ShellCore) SetCustomer(customer string) { c.customer = customer }
 
 // SetCwd sets the virtual working directory shown in the prompt.
-func (c *ShellCore) SetCwd(cwd string) { c.cwd = cwd }
+// Used by tests and integrations that bootstrap state without going
+// through a `cd` invocation. Validation against shellFS is deliberately
+// skipped — callers asserting a cwd often do so before any FS is wired
+// in.
+func (c *ShellCore) SetCwd(cwd string) {
+	c.dirStack.stack[0] = cwd
+}
 
 // promptInfo builds the PromptInfo from current state.
 func (c *ShellCore) promptInfo() PromptInfo {
@@ -148,7 +164,7 @@ func (c *ShellCore) promptInfo() PromptInfo {
 		RangeLabel: rangeLabel,
 		User:       c.user,
 		Customer:   c.customer,
-		Cwd:        c.cwd,
+		Cwd:        c.dirStack.Cwd(),
 	}
 }
 
@@ -322,7 +338,7 @@ func (c *ShellCore) handleKey(ev KeyEvent) {
 		return
 
 	case KeyTab:
-		newInput, newCursor := c.completer.Tab(c.inputBuf, c.inputCursor, c.shellFS, c.cwd)
+		newInput, newCursor := c.completer.Tab(c.inputBuf, c.inputCursor, c.shellFS, c.dirStack.Cwd())
 		c.inputBuf = newInput
 		c.inputCursor = newCursor
 		c.redrawPrompt()
@@ -596,23 +612,44 @@ func (c *ShellCore) execBuiltin(line string) bool {
 		}
 		c.startVim(parts[1])
 		return true
-	case line == "cd" || line == "cd ~":
-		c.cwd = "/"
+	case line == "cd" || line == "cd ~" || line == "cd ":
+		_ = c.dirStack.Chdir("/")
 		return true
 	case strings.HasPrefix(line, "cd "):
 		target := strings.TrimSpace(strings.TrimPrefix(line, "cd "))
 		if target == "~" || target == "" {
-			c.cwd = "/"
+			_ = c.dirStack.Chdir("/")
 			return true
 		}
 		resolved := c.resolvePath(target)
-		if c.shellFS != nil {
-			if _, err := c.shellFS.ReadDir(resolved); err != nil {
-				c.appendScrollback(ErrorText(fmt.Sprintf("cd: %s: no such directory", target)) + "\n")
-				return true
-			}
+		if err := c.dirStack.Chdir(resolved); err != nil {
+			c.appendScrollback(ErrorText(fmt.Sprintf("cd: %s: %s", target, err)) + "\n")
 		}
-		c.cwd = resolved
+		return true
+	case line == "pwd":
+		c.appendScrollback(c.dirStack.Cwd() + "\n")
+		return true
+	case line == "pushd":
+		if !c.execPushdSwap() {
+			return true
+		}
+		return true
+	case strings.HasPrefix(line, "pushd "):
+		target := strings.TrimSpace(strings.TrimPrefix(line, "pushd "))
+		if target == "" {
+			c.execPushdSwap()
+			return true
+		}
+		c.execPushdPath(target)
+		return true
+	case line == "popd":
+		c.execPopd()
+		return true
+	case line == "dirs":
+		c.appendScrollback(formatDirstack(c.dirStack.Stack(), "") + "\n")
+		return true
+	case strings.HasPrefix(line, "dirs "):
+		c.execDirsFlags(strings.TrimSpace(strings.TrimPrefix(line, "dirs ")))
 		return true
 	}
 
@@ -635,11 +672,12 @@ func (c *ShellCore) execBuiltin(line string) bool {
 // Absolute paths pass through; relative paths are joined with cwd.
 // ".." segments are normalized.
 func (c *ShellCore) resolvePath(path string) string {
+	cwd := c.dirStack.Cwd()
 	if !strings.HasPrefix(path, "/") {
-		if c.cwd == "/" {
+		if cwd == "/" {
 			path = "/" + path
 		} else {
-			path = c.cwd + "/" + path
+			path = cwd + "/" + path
 		}
 	}
 	// Normalize: split on /, resolve . and .., rejoin.
@@ -766,7 +804,7 @@ func (c *ShellCore) execFSBuiltin(line string) bool {
 	switch cmd {
 	case "ls":
 		longForm := false
-		path := c.cwd
+		path := c.dirStack.Cwd()
 		for _, a := range args {
 			if a == "-l" || a == "-al" || a == "-la" {
 				longForm = true

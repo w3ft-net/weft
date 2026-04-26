@@ -803,3 +803,68 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// runBuiltins types each line into the core and presses Enter, returning the
+// scrollback for assertion. Helper for the dirstack builtin tests.
+func runBuiltins(t *testing.T, core *ShellCore, h *testHarness, lines ...string) string {
+	t.Helper()
+	for _, line := range lines {
+		for _, r := range line {
+			core.HandleEvent(KeyEvent{Rune: r})
+		}
+		core.HandleEvent(KeyEvent{Key: KeyEnter})
+	}
+	return h.Scrollback()
+}
+
+func TestPwdBuiltin(t *testing.T) {
+	core, h := newTestCore(nil)
+	fs := &testMemFS{files: map[string]string{"/log/api.log": ""}}
+	core.SetFS(fs)
+	out := runBuiltins(t, core, h, "cd /log", "pwd")
+	if !strings.Contains(stripAllANSI(out), "/log\n") {
+		t.Errorf("pwd should print /log; scrollback: %q", out)
+	}
+}
+
+func TestPushdPopdBuiltin(t *testing.T) {
+	core, h := newTestCore(nil)
+	fs := &testMemFS{files: map[string]string{
+		"/log/api.log": "",
+		"/etc/keep":    "",
+	}}
+	core.SetFS(fs)
+	out := runBuiltins(t, core, h, "cd /log", "pushd /etc", "dirs")
+	visible := stripAllANSI(out)
+	if !strings.Contains(visible, "/etc /log") {
+		t.Errorf("pushd should print '/etc /log'; got: %q", visible)
+	}
+	h.scrollback.Reset()
+	out = runBuiltins(t, core, h, "popd", "pwd")
+	visible = stripAllANSI(out)
+	if !strings.Contains(visible, "/log\n") {
+		t.Errorf("popd should restore cwd to /log; got: %q", visible)
+	}
+}
+
+func TestPopdEmptyShellcore(t *testing.T) {
+	core, h := newTestCore(nil)
+	out := runBuiltins(t, core, h, "popd")
+	if !strings.Contains(stripAllANSI(out), "directory stack empty") {
+		t.Errorf("expected 'directory stack empty', got: %q", out)
+	}
+}
+
+func TestDirsCFlagShellcore(t *testing.T) {
+	core, h := newTestCore(nil)
+	fs := &testMemFS{files: map[string]string{"/a/x": "", "/b/y": ""}}
+	core.SetFS(fs)
+	runBuiltins(t, core, h, "cd /a", "pushd /b")
+	h.scrollback.Reset()
+	out := runBuiltins(t, core, h, "dirs -c", "dirs")
+	visible := stripAllANSI(out)
+	// After dirs -c, only the current cwd /b remains.
+	if !strings.Contains(visible, "/b") || strings.Contains(visible, "/a") {
+		t.Errorf("dirs -c should leave only /b in stack; got: %q", visible)
+	}
+}

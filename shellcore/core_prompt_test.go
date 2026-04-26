@@ -9,7 +9,7 @@ import (
 // this guard we could regress by adding a separate config struct that
 // SetCustomer writes to but promptInfo() doesn't read.
 func TestShellCore_SetCustomerFlowsToPrompt(t *testing.T) {
-	c := &ShellCore{cwd: "/"}
+	c := &ShellCore{dirStack: newDirStack(nil)}
 	c.SetUser("alice")
 	c.SetCustomer("acme")
 
@@ -33,7 +33,7 @@ func TestShellCore_SetCustomerFlowsToPrompt(t *testing.T) {
 // pipeline, in case some intermediate normalizer ever decides to
 // strip "" customers.
 func TestShellCore_EmptyCustomerStillRenders(t *testing.T) {
-	c := &ShellCore{cwd: "/"}
+	c := &ShellCore{dirStack: newDirStack(nil)}
 	c.SetUser("paul")
 	rendered := FormatPromptPrefix(c.promptInfo())
 	if rendered != "paul@weft ~ $ " {
