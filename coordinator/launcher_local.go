@@ -12,9 +12,19 @@ import (
 	shardsvc "github.com/kevlarcon/weft/shard/service"
 )
 
-// LocalLauncher starts in-process DuckDB shards on random ports.
-// Used for dev/docker and tests.
-type LocalLauncher struct {
+// localLauncher starts in-process gRPC shard servers on random ports.
+// Lightweight stand-in used by unit tests in this package — exercises
+// the launcher interface without needing a real shard binary or a
+// docker socket. NOT used by the production-aligned dev path; see
+// DockerLauncher for that.
+//
+// Renamed from LocalLauncher (exported) when dev mode moved to
+// DockerLauncher; kept around so unit tests like coordinator_restart_
+// test, archiver_test, etc. don't have to be rewritten against a
+// fake. Anything that needs persistence across coordinator process
+// restarts must use DockerLauncher — these in-process servers die
+// with the process.
+type localLauncher struct {
 	mu      sync.Mutex
 	servers map[string]*localShard
 }
@@ -24,13 +34,13 @@ type localShard struct {
 	lis net.Listener
 }
 
-func NewLocalLauncher() *LocalLauncher {
-	return &LocalLauncher{
+func newLocalLauncher() *localLauncher {
+	return &localLauncher{
 		servers: make(map[string]*localShard),
 	}
 }
 
-func (l *LocalLauncher) LaunchInstance(_ context.Context, _ string) (string, error) {
+func (l *localLauncher) LaunchInstance(_ context.Context, _ string) (string, error) {
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", fmt.Errorf("listen: %w", err)
@@ -49,7 +59,7 @@ func (l *LocalLauncher) LaunchInstance(_ context.Context, _ string) (string, err
 	return addr, nil
 }
 
-func (l *LocalLauncher) TerminateInstance(_ context.Context, _, addr string) error {
+func (l *localLauncher) TerminateInstance(_ context.Context, _, addr string) error {
 	l.mu.Lock()
 	ls, ok := l.servers[addr]
 	delete(l.servers, addr)
@@ -62,7 +72,7 @@ func (l *LocalLauncher) TerminateInstance(_ context.Context, _, addr string) err
 }
 
 // Close terminates all running shards.
-func (l *LocalLauncher) Close() {
+func (l *localLauncher) Close() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for _, ls := range l.servers {

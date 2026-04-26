@@ -17,10 +17,16 @@ export interface ShellBridge {
   getInput: () => string
 }
 
+export interface ShellIdentity {
+  user: string     // email-local-part for the prompt — alice@acme.test → "alice"
+  customer: string // customer/team slug — "acme"
+}
+
 export async function initShellWasm(
   container: HTMLElement,
   apps: string[],
   onRangeChange?: (rangeText: string) => void,
+  identity?: ShellIdentity,
 ): Promise<ShellBridge> {
   // Create xterm.js terminal.
   const terminal = new Terminal({
@@ -100,6 +106,12 @@ export async function initShellWasm(
     // History persistence via localStorage.
     loadHistory: () => localStorage.getItem('weft_history') || '',
     saveHistory: (lines: string) => localStorage.setItem('weft_history', lines),
+
+    // Identity for the prompt prefix. Caller supplies this from
+    // AuthContext; absent identity falls back to "" which the prompt
+    // renders as `<empty>` (no user@host prefix).
+    getUser: () => identity?.user ?? '',
+    getCustomer: () => identity?.customer ?? '',
   }
 
   // Initialize WASM shell.

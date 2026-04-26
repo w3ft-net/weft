@@ -109,12 +109,12 @@ func main() {
 		dsn = "host=localhost dbname=weft user=weft password=weft sslmode=disable"
 		log.Println("WARNING: using default DB DSN — set --db-dsn or DB_DSN in production")
 	}
-	if d, err := store.Open(dsn); err != nil {
-		log.Printf("warning: config store unavailable: %v", err)
-	} else {
-		db = d
-		defer db.Close()
+	d, err := store.Open(dsn)
+	if err != nil {
+		log.Fatalf("store.Open: %v", err)
 	}
+	db = d
+	defer db.Close()
 
 	coord := coordinator.NewCoordinator(shards, pool)
 	// query() resolves the caller's customer name → ID via the store
@@ -171,12 +171,10 @@ func main() {
 				prov.SetVolumeManager(vm)
 			}
 
-			if db != nil {
-				prov.SetStore(db)
-				// No-cache: SetStore on the bucket manager is all
-				// that's needed; every lookup hits the DB.
-				prov.Buckets.SetStore(db)
-			}
+			prov.SetStore(db)
+			// No-cache: SetStore on the bucket manager is all that's
+			// needed; every lookup hits the DB.
+			prov.Buckets.SetStore(db)
 
 			prov.Start(provCtx)
 			log.Printf("provisioner: started with ASG tiers %v", shardTiers)
@@ -196,13 +194,7 @@ func main() {
 					TierByASG:  tierByASG,
 					SizeByTier: sizeByTier,
 					DeviceName: os.Getenv("SHARD_VOLUME_DEVICE"),
-				}
-				// Only wire ShardOps when a concrete *store.Store is
-				// available — assigning nil *store.Store to the
-				// interface produces a typed-nil that passes
-				// != nil checks and NPEs on first call.
-				if db != nil {
-					lcCfg.ShardOps = db
+					ShardOps:   db,
 				}
 				poller, err := coordinator.BuildLifecyclePoller(provCtx, *awsRegion, queueURL, lcCfg)
 				if err != nil {
@@ -214,21 +206,26 @@ func main() {
 			}
 		}
 	} else {
-		// Dev/Docker: local in-process DuckDB shards managed by provisioner.
-		launcher := coordinator.NewLocalLauncher()
+		// Dev/Docker: spawn sibling shard containers via DockerLauncher
+		// so each shard has a persistent dataDir on a host bind-mount,
+		// heartbeats independently, and survives a coordinator process
+		// restart. Misconfiguration (missing host data root, missing
+		// docker socket) is fatal in this branch — we don't silently
+		// fall back to in-process shards anymore. Unit tests use the
+		// in-package localLauncher directly, not this code path.
+		launcher := buildDockerLauncher(shardSecret)
 		provConfig := coordinator.DevProvisionerConfig()
 		provConfig.ShardSecret = shardSecret
 		provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
 		prov := coordinator.NewProvisioner(coord.Registry, launcher, provConfig)
 		coord.Provisioner = prov
 
-		if db != nil {
-			prov.SetStore(db)
-			prov.Buckets.SetStore(db)
-		}
+		prov.SetStore(db)
+		prov.Buckets.SetStore(db)
 
 		prov.Start(provCtx)
-		log.Printf("provisioner: started with local launcher (dev mode)")
+		log.Printf("provisioner: started with docker launcher (dev mode), image=%s data=%s",
+			launcher.Image, launcher.HostDataRoot)
 	}
 
 	// Post-provisioner db-dependent setup: usage metering, customer
@@ -236,7 +233,7 @@ func main() {
 	// already took its snapshot of the store at boot time for
 	// hydration; this block covers the pieces that run for the life
 	// of the process or depend on live buckets.
-	if db != nil {
+	{
 		// Start usage metering flush (every 5 minutes).
 		coord.StartUsageFlush(drainCtx, db)
 
@@ -401,6 +398,44 @@ func readTierSizes() map[string]int32 {
 		}
 	}
 	return sizes
+}
+
+// buildDockerLauncher constructs a DockerLauncher from env vars set on
+// the coordinator container by docker-compose. Fatal on missing/empty
+// required vars — there's no in-process fallback in this branch, so
+// the operator gets a precise error rather than silent data loss.
+//
+// Required env vars:
+//
+//	WEFT_SHARD_IMAGE      — the image tag to spawn (typically the same
+//	                         image the coordinator runs from)
+//	WEFT_DOCKER_NETWORK   — the docker network name from compose so the
+//	                         spawned shard can resolve "coordinator"
+//	                         by service DNS
+//	WEFT_HOST_DATA_ROOT   — host-side absolute path bind-mounted to
+//	                         WEFT_LOCAL_DATA_ROOT inside both the
+//	                         coordinator and each spawned shard
+//	WEFT_LOCAL_DATA_ROOT  — same volume's path inside the coordinator
+//	                         container; used to mkdir per-shard subdirs
+//	WEFT_COORDINATOR_ADDR — the address shards send heartbeats to;
+//	                         typically "coordinator:9020"
+func buildDockerLauncher(shardSecret string) *coordinator.DockerLauncher {
+	requireEnv := func(name string) string {
+		v := os.Getenv(name)
+		if v == "" {
+			log.Fatalf("docker launcher: %s is required (no in-process fallback in dev mode)", name)
+		}
+		return v
+	}
+	return &coordinator.DockerLauncher{
+		Image:             requireEnv("WEFT_SHARD_IMAGE"),
+		Network:           requireEnv("WEFT_DOCKER_NETWORK"),
+		HostDataRoot:      requireEnv("WEFT_HOST_DATA_ROOT"),
+		LocalDataRoot:     requireEnv("WEFT_LOCAL_DATA_ROOT"),
+		CoordinatorAddr:   requireEnv("WEFT_COORDINATOR_ADDR"),
+		HeartbeatInterval: 10 * time.Second,
+		ShardSecret:       shardSecret,
+	}
 }
 
 func parsePositiveInt32(s string) (int32, bool) {

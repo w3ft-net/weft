@@ -183,7 +183,7 @@ The original motivation: "avg memory pct by host over 1h". With `$HOST` as a rea
 ```
 # /cron.d/memory-per-host
 # schedule: every 1m
-cat /log/<ns>/metrics.log --since 1m \
+tail -n 200 /log/<ns>/metrics.log \
   | jq -r 'select(._level == "INFO" and .type == "memory") | "\(._host) \(.pct)"'
 ```
 

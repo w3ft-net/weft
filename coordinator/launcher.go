@@ -15,7 +15,7 @@ type ShardLauncher interface {
 	// instance id) and addr (host:port) are passed so each launcher can
 	// pick whichever identifier it tracks: ASGLauncher prefers id (works
 	// for shards adopted from heartbeats that were never seen by
-	// LaunchInstance), LocalLauncher uses addr. Either may be empty if
+	// LaunchInstance), localLauncher uses addr. Either may be empty if
 	// the caller doesn't have it.
 	TerminateInstance(ctx context.Context, id, addr string) error
 }
@@ -26,7 +26,7 @@ type ShardLauncher interface {
 // satisfy this interface and return true get a LAUNCHING row INSERTed
 // before LaunchInstance is called; the lifecycle hook claims the row
 // when the instance enters Pending:Wait; heartbeats from the instance
-// promote it to INGESTING. Synchronous launchers (LocalLauncher,
+// promote it to INGESTING. Synchronous launchers (localLauncher,
 // in-process test launchers) don't implement the interface — their
 // LaunchInstance returns only when the shard is ready to Configure.
 type asyncLauncher interface {

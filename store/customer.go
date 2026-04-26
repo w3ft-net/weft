@@ -50,6 +50,16 @@ func (s *Store) UpdateCustomerDisplayName(name, displayName string) error {
 	return s.db.Model(&Customer{}).Where("name = ?", name).Update("display_name", displayName).Error
 }
 
+// DeleteCustomerByName hard-deletes a customer by name. Cascades through
+// every FK that points at customers.id (accounts, agent_tokens, namespaces,
+// users, etc.), since those constraints are ON DELETE CASCADE.
+//
+// Used by the demo seed's --reset flag to wipe out a fixture customer
+// without disturbing real data; not safe for general use.
+func (s *Store) DeleteCustomerByName(name string) error {
+	return s.db.Unscoped().Where("name = ?", name).Delete(&Customer{}).Error
+}
+
 // --- Namespaces ---
 
 // FindOrCreateNamespace returns the namespace, creating if needed.

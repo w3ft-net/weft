@@ -90,12 +90,23 @@ func wasmInit(_ js.Value, args []js.Value) any {
 		core.SetHistoryStore(&jsHistoryStore{callbacks: jsCallbacks})
 	}
 
-	// Set user from JS callback if available.
+	// Set user + customer from JS callbacks if available — both feed
+	// the prompt prefix as `<user>@<customer>`. JS supplies them from
+	// AuthContext (email-local-part for user, claim["customer"] for
+	// customer) so the web shell shows the same identity as the rest
+	// of the app.
 	getUserFn := jsCallbacks.Get("getUser")
 	if !getUserFn.IsUndefined() && !getUserFn.IsNull() {
 		user := jsCallbacks.Call("getUser").String()
 		if user != "" && user != "undefined" {
 			core.SetUser(user)
+		}
+	}
+	getCustomerFn := jsCallbacks.Get("getCustomer")
+	if !getCustomerFn.IsUndefined() && !getCustomerFn.IsNull() {
+		customer := jsCallbacks.Call("getCustomer").String()
+		if customer != "" && customer != "undefined" {
+			core.SetCustomer(customer)
 		}
 	}
 

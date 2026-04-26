@@ -6,6 +6,7 @@ import {
   getWatches, deleteWatch, type CronWatch,
 } from '../lib/api'
 import { initShellWasm, type ShellBridge } from '../wasm/bridge'
+import { useAuth } from '../lib/AuthContext'
 import '@xterm/xterm/css/xterm.css'
 import './Shell.css'
 
@@ -13,6 +14,7 @@ import './Shell.css'
 
 export default function Shell() {
   const [searchParams] = useSearchParams()
+  const { user } = useAuth()
   const termContainerRef = useRef<HTMLDivElement>(null)
   const bridgeRef = useRef<ShellBridge | null>(null)
   const [functions, setFunctions] = useState<ShellFunction[]>([])
@@ -43,9 +45,15 @@ export default function Shell() {
       // TODO: fetch real app list from API.
       const apps = ['api', 'web']
 
-      bridge = await initShellWasm(termContainerRef.current, apps, (text) => {
-        setRangeText(text.trim())
-      })
+      const identity = user
+        ? { user: user.email.split('@')[0], customer: user.customer }
+        : undefined
+      bridge = await initShellWasm(
+        termContainerRef.current,
+        apps,
+        (text) => setRangeText(text.trim()),
+        identity,
+      )
       if (disposed) {
         bridge.dispose()
         return

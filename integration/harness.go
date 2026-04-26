@@ -102,6 +102,8 @@ func seedFixtures() error {
 		"isolation",
 		"jqtest",
 		"op5compute",
+		"restart-data",
+		"restart-resume",
 	}
 	for _, ns := range fixtures {
 		_, err := conn.Exec(`

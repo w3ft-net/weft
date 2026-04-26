@@ -127,8 +127,8 @@ tail /log/myns/metrics.log \
   | jq -r 'select(.type == "disk") | "\(.host) \(.pct)"' \
   | alert above 80 -k 2 -t 1 --notify=ops
 
-# 5-minute load average by host
-cat /log/myns/metrics.log --since 1h \
+# Recent load averages by host
+tail -n 1000 /log/myns/metrics.log \
   | jq 'select(.type == "load") | {host, load5}'
 ```
 

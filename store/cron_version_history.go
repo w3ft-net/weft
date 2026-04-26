@@ -40,6 +40,20 @@ type cronWatchHistoryRow struct {
 
 func (cronWatchHistoryRow) TableName() string { return "cron_watch_history" }
 
+// cronWatchHistoryView matches the LogCronWatch query: history columns
+// plus a SQL-resolved per-version author. See LogShellFunction's
+// equivalent for the LEAD-over-captured_by rule.
+type cronWatchHistoryView struct {
+	ID               uint64
+	Schedule         string
+	Pipeline         string
+	ContentHash      string
+	Message          string
+	CapturedAt       time.Time
+	CapturedByUserID *string
+	ResolvedAuthorID *string
+}
+
 // LogCronWatch returns the version chain newest-first for the named
 // watch, including the live row as the first entry.
 func (s *Store) LogCronWatch(customerID uint, name string) ([]CronWatchVersion, error) {
@@ -51,23 +65,40 @@ func (s *Store) LogCronWatch(customerID uint, name string) ([]CronWatchVersion, 
 		return nil, err
 	}
 
+	// See LogShellFunction for the LEAD/COALESCE rule.
+	var rows []cronWatchHistoryView
+	err = s.db.Raw(`
+		SELECT
+			id, schedule, pipeline, content_hash, message, captured_at,
+			captured_by_user_id,
+			COALESCE(
+				LEAD(captured_by_user_id) OVER (
+					ORDER BY captured_at DESC, id DESC
+				),
+				?
+			) AS resolved_author_id
+		FROM cron_watch_history
+		WHERE watch_id = ?
+		ORDER BY captured_at DESC, id DESC
+	`, w.CreatedByUserID, w.ID).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	headAuthor := w.CreatedByUserID
+	if len(rows) > 0 && rows[0].CapturedByUserID != nil {
+		headAuthor = rows[0].CapturedByUserID
+	}
+
 	out := []CronWatchVersion{{
 		ContentHash:      w.ContentHash,
 		Schedule:         w.Schedule,
 		Pipeline:         w.Pipeline,
 		Message:          w.Message,
 		AuthoredAt:       w.UpdatedAt,
-		AuthoredByUserID: w.CreatedByUserID,
+		AuthoredByUserID: headAuthor,
 		IsHead:           true,
 	}}
-
-	var rows []cronWatchHistoryRow
-	err = s.db.Where("watch_id = ?", w.ID).
-		Order("captured_at DESC, id DESC").
-		Find(&rows).Error
-	if err != nil {
-		return nil, err
-	}
 	for _, r := range rows {
 		out = append(out, CronWatchVersion{
 			ContentHash:       r.ContentHash,
@@ -75,7 +106,7 @@ func (s *Store) LogCronWatch(customerID uint, name string) ([]CronWatchVersion, 
 			Pipeline:          r.Pipeline,
 			Message:           r.Message,
 			AuthoredAt:        r.CapturedAt,
-			AuthoredByUserID:  r.AuthoredByUserID,
+			AuthoredByUserID:  r.ResolvedAuthorID,
 			DisplacedByUserID: r.CapturedByUserID,
 			IsHead:            false,
 		})

@@ -131,6 +131,13 @@ message CreateJobRequest {
   // to walk through the heap on. Empty = "don't merge, just concat"
   // — matches the old coordinator-side buffered path.
   string merge_key = 3;
+
+  // Global limit applied to the merged stream BEFORE the stages run.
+  // 0 = no limit. Mirrors planner.QueryPlan.Limit (the user-visible
+  // head/tail count). Without this, per-shard LIMIT N gets multiplied
+  // by shard count when downstream stages see the union — a bare
+  // `tail -n N | wc -l` would return N×num_shards.
+  int32 limit = 4;
 }
 
 message CreateJobResponse {

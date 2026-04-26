@@ -9,12 +9,28 @@ import (
 )
 
 // sourceInfo describes the source command (cat/head/tail) at the start of a pipeline.
+//
+// Multi-arg `cat a.log b.log` (and the post-glob-expansion form of
+// `cat *.log`) populates apps with the union; the planner emits a
+// single `app IN (...)` predicate. apps is empty for warp.log
+// (all apps); a one-element apps means a single-app query and uses
+// `app =`/`LIKE` predicates.
 type sourceInfo struct {
-	app    string // app name extracted from pseudofile, or "" for warp.log (all apps)
-	env    string // env extracted from pseudofile path /log/<ns>/<env>/<app>.log; "" = no env filter
-	cmd    string // "cat", "head", or "tail"
-	limit  int    // for head/tail: line count (0 = unlimited for cat)
-	follow bool   // tail -f
+	apps   []string // app names; empty = warp.log (no app filter)
+	env    string   // env extracted from pseudofile path; shared across all apps
+	cmd    string   // "cat", "head", or "tail"
+	limit  int      // for head/tail: line count (0 = unlimited for cat)
+	follow bool     // tail -f
+}
+
+// app returns the single app name for queries that source a single
+// pseudofile. Use only in code paths that already gate on
+// len(apps) == 1.
+func (s sourceInfo) app() string {
+	if len(s.apps) == 0 {
+		return ""
+	}
+	return s.apps[0]
 }
 
 // stageInfo describes a single pipeline stage after the source command.
@@ -88,13 +104,15 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 		if len(args) == 0 {
 			return nil, fmt.Errorf("cat: missing pseudofile argument")
 		}
-		app := extractApp(args[0])
-		env := extractEnv(args[0])
-		return &sourceInfo{app: app, env: env, cmd: "cat"}, nil
+		apps, env, err := extractAppsEnv(args, "cat")
+		if err != nil {
+			return nil, err
+		}
+		return &sourceInfo{apps: apps, env: env, cmd: "cat"}, nil
 
 	case "head":
 		limit := 10
-		file := ""
+		var files []string
 		for i := 0; i < len(args); i++ {
 			if args[i] == "-n" && i+1 < len(args) {
 				if n, err := strconv.Atoi(args[i+1]); err == nil {
@@ -106,19 +124,21 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 					limit = n
 				}
 			} else {
-				file = args[i]
+				files = append(files, args[i])
 			}
 		}
-		if file == "" {
+		if len(files) == 0 {
 			return nil, fmt.Errorf("head: missing pseudofile argument")
 		}
-		app := extractApp(file)
-		env := extractEnv(file)
-		return &sourceInfo{app: app, env: env, cmd: "head", limit: limit}, nil
+		apps, env, err := extractAppsEnv(files, "head")
+		if err != nil {
+			return nil, err
+		}
+		return &sourceInfo{apps: apps, env: env, cmd: "head", limit: limit}, nil
 
 	case "tail":
 		limit := 10
-		file := ""
+		var files []string
 		follow := false
 		for i := 0; i < len(args); i++ {
 			if args[i] == "-f" {
@@ -133,18 +153,62 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 					limit = n
 				}
 			} else {
-				file = args[i]
+				files = append(files, args[i])
 			}
 		}
-		if file == "" {
+		if len(files) == 0 {
 			return nil, fmt.Errorf("tail: missing pseudofile argument")
 		}
-		app := extractApp(file)
-		env := extractEnv(file)
-		return &sourceInfo{app: app, env: env, cmd: "tail", limit: limit, follow: follow}, nil
+		apps, env, err := extractAppsEnv(files, "tail")
+		if err != nil {
+			return nil, err
+		}
+		return &sourceInfo{apps: apps, env: env, cmd: "tail", limit: limit, follow: follow}, nil
 
 	default:
 		return nil, fmt.Errorf("unknown source command: %s", name)
+	}
+}
+
+// extractAppsEnv extracts apps + a shared env from a list of
+// pseudofile arguments. All args must agree on env (or all have
+// empty env); mixing prod-scoped and sand-scoped paths in one cat is
+// rejected because we'd silently drop one side. Empty app names are
+// dropped — extractApp returns "" for warp.log (the all-apps wildcard),
+// which means no app predicate at all, equivalent to a fan-out across
+// every app the customer can read. Apps are deduplicated and sorted
+// for stable SQL output.
+func extractAppsEnv(files []string, cmd string) ([]string, string, error) {
+	seen := map[string]struct{}{}
+	var apps []string
+	var env string
+	for i, f := range files {
+		a := extractApp(f)
+		if a != "" {
+			if _, ok := seen[a]; !ok {
+				seen[a] = struct{}{}
+				apps = append(apps, a)
+			}
+		}
+		e := extractEnv(f)
+		if i == 0 {
+			env = e
+		} else if e != env {
+			return nil, "", fmt.Errorf("%s: cannot mix env=%q and env=%q in one pipeline", cmd, env, e)
+		}
+	}
+	// Stable order so SQL is deterministic for tests and caching.
+	if len(apps) > 1 {
+		strSliceSort(apps)
+	}
+	return apps, env, nil
+}
+
+func strSliceSort(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
 	}
 }
 

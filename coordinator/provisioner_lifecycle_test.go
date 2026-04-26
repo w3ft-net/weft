@@ -59,7 +59,7 @@ func TestProvisioner_TickerContinuesAfterBootstrapFailure(t *testing.T) {
 func TestProvisioner_AdoptsFromHeartbeatsOnTick(t *testing.T) {
 	// This test verifies that the provisioner picks up heartbeats
 	// on subsequent ticks even if the store wasn't available at startup.
-	launcher := NewLocalLauncher()
+	launcher := newLocalLauncher()
 	t.Cleanup(func() { launcher.Close() })
 
 	reg := NewShardRegistry()

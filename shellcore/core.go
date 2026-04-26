@@ -20,7 +20,6 @@ type ShellCore struct {
 	history   *History
 	completer *Completer
 	mode      Mode
-	apps      []string
 
 	write    func([]byte)
 	dispatch func(Action)
@@ -73,7 +72,8 @@ type ShellCore struct {
 	rangeEnd   time.Time
 
 	// Prompt identity fields.
-	user string // e.g. "paul" — shown as paul@weft in prompt
+	user     string // e.g. "alice" — shown as alice@<customer> in prompt
+	customer string // e.g. "acme"  — defaults to "weft" when empty
 	cwd  string // virtual working directory, "/" = home = "~"
 }
 
@@ -83,7 +83,6 @@ func NewShellCore(apps []string, width, height int, write func([]byte), dispatch
 		history:            &History{},
 		completer:          NewCompleter(apps),
 		mode:               ModeInput,
-		apps:               apps,
 		write:              write,
 		dispatch:           dispatch,
 		width:              width,
@@ -120,8 +119,12 @@ func (c *ShellCore) SetRange(start, end time.Time) {
 // SetHistoryStore sets the persistence backend for command history.
 func (c *ShellCore) SetHistoryStore(store HistoryStore) { c.history.SetStore(store) }
 
-// SetUser sets the username shown in the prompt (e.g. "paul" → "paul@weft").
+// SetUser sets the username shown in the prompt (e.g. "alice" → "alice@<customer>").
 func (c *ShellCore) SetUser(user string) { c.user = user }
+
+// SetCustomer sets the customer/team slug shown after the @ in the
+// prompt (e.g. "acme" → "alice@acme"). Empty falls back to "weft".
+func (c *ShellCore) SetCustomer(customer string) { c.customer = customer }
 
 // SetCwd sets the virtual working directory shown in the prompt.
 func (c *ShellCore) SetCwd(cwd string) { c.cwd = cwd }
@@ -135,6 +138,7 @@ func (c *ShellCore) promptInfo() PromptInfo {
 	return PromptInfo{
 		RangeLabel: rangeLabel,
 		User:       c.user,
+		Customer:   c.customer,
 		Cwd:        c.cwd,
 	}
 }
@@ -541,13 +545,6 @@ func (c *ShellCore) execBuiltin(line string) bool {
 		c.scrollback.Reset()
 		c.resetFlushState()
 		return true
-	case line == "apps":
-		c.appendScrollback(DimText("Available apps:") + "\n")
-		for _, app := range c.apps {
-			c.appendScrollback(fmt.Sprintf("  %s.log\n", app))
-		}
-		c.appendScrollback(fmt.Sprintf("  warp.log %s\n", DimText("(all apps)")))
-		return true
 	}
 
 	// Help topics and man pages. Page through less when the content
@@ -855,7 +852,7 @@ func (c *ShellCore) execFSBuiltin(line string) bool {
 			return false
 		}
 		name := args[0]
-		for _, b := range []string{"exit", "quit", "clear", "apps", "history", "range", "cd", "vi", "vim", "ls", "cat", "rm", "which", "type"} {
+		for _, b := range []string{"exit", "quit", "clear", "history", "range", "cd", "vi", "vim", "ls", "cat", "rm", "which", "type"} {
 			if name == b {
 				c.appendScrollback(fmt.Sprintf("%s is a shell builtin\n", name))
 				return true

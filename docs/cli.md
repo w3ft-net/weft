@@ -22,9 +22,6 @@ weft
 # Scope to specific apps
 weft --app vimgym,callbox
 
-# Set initial time window
-weft --since 1h --app vimgym
-
 # Dev/local
 weft --endpoint http://localhost:8080
 ```
@@ -106,7 +103,7 @@ All of these can be piped through awk/sed/jq/grep/sort/uniq/wc. The query planne
 ### Built-in shell commands
 
 - `range <duration>` / `range <start> <end>` — set/show time window
-- `apps` — list available applications and their pseudofiles
+- `ls /log` — browse available apps (namespaces and their pseudofiles)
 - `schema [app]` — show detected schema for an app
 - `exit` / `ctrl-d` — quit
 

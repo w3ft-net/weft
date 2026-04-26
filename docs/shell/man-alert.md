@@ -86,7 +86,7 @@ jq, sed) so each row is one line of space-separated values.
 ## EXAMPLES
 
 ```
-cat myapp.log --since 5m | awk '$LEVEL == "ERROR"' | alert --notify=ops
+tail -n 500 myapp.log | awk '$LEVEL == "ERROR"' | alert --notify=ops
 check_errors | alert above 50 --notify=critical
 check_errors | alert above 50 --duration 5m --average --notify=ops
 check_errors | alert rising 100% --notify=critical

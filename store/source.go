@@ -134,6 +134,20 @@ func (s *Store) AddLogGroup(namespaceID uint, awsAccountID *uint, sourceType Log
 	}).Error
 }
 
+// CustomerAppNames returns the distinct app names visible to the
+// customer — the union of every enabled, configured log_groups row
+// in any namespace they own. Used by the glob expander to enumerate
+// pseudofile candidates for `cat /log/<ns>/*.log`-style patterns.
+func (s *Store) CustomerAppNames(customerID uint) ([]string, error) {
+	var names []string
+	err := s.db.Model(&LogGroup{}).
+		Joins("JOIN namespaces ON namespaces.id = log_groups.namespace_id").
+		Where("namespaces.customer_id = ? AND log_groups.enabled = ? AND log_groups.status = ?",
+			customerID, true, StatusConfigured).
+		Distinct().Pluck("log_groups.app", &names).Error
+	return names, err
+}
+
 // CustomerHasSource reports whether the customer owns the namespace
 // referenced by the leading '/'-segment of app. An empty app means
 // "all sources for this customer" (cat warp.log) and is always allowed —

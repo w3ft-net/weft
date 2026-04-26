@@ -119,9 +119,15 @@ func (b *HTTPBackend) GetWatchResults(name string, limit int) ([]shellcore.Watch
 	if err != nil {
 		return nil, err
 	}
+	// Tags must match the API's GORM-default JSON shape exactly —
+	// `RanAt` (capital R, no underscore). A `json:"ran_at"` tag fails
+	// case-insensitive matching because of the underscore, leaving
+	// RanAt empty and chart_builtin's RFC3339 parse silently rejecting
+	// every row. (See api/handlers.go:1524: handleWatchResults dumps
+	// the model directly with json.NewEncoder.)
 	var rows []struct {
-		Stdout string `json:"stdout"`
-		RanAt  string `json:"ran_at"`
+		Stdout string `json:"Stdout"`
+		RanAt  string `json:"RanAt"`
 	}
 	if err := json.Unmarshal(data, &rows); err != nil {
 		return nil, err

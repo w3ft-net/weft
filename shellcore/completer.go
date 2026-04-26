@@ -12,7 +12,7 @@ var builtinCommands = []string{
 	"paste", "rev", "rm", "sed", "seq", "sort", "tac", "tail", "tee",
 	"tr", "uniq", "vi", "wc", "which", "xargs",
 	// weft builtins
-	"apps", "clear", "exit", "help", "man", "range",
+	"clear", "exit", "help", "man", "range",
 }
 
 // Completer manages inline bash-style tab completion.

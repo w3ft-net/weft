@@ -17,7 +17,7 @@ vi /cron.d/error-count
 
 # Watch file format: a '# schedule:' directive plus a pipeline.
 # schedule: */5 * * * *
-cat myapp.log --since 5m | awk '$LEVEL == "ERROR"' | wc -l | alert above 0 --notify=ops
+tail -n 500 myapp.log | awk '$LEVEL == "ERROR"' | wc -l | alert above 0 --notify=ops
 ```
 
 The pipeline's stdout is captured as the watch result — numeric

@@ -140,11 +140,12 @@ func RenderSpinner(frame int) string {
 // PromptInfo holds the fields needed to render the prompt prefix.
 type PromptInfo struct {
 	RangeLabel string // e.g. "24h", "2h30m"
-	User       string // e.g. "paul"
+	User       string // e.g. "alice"
+	Customer   string // e.g. "acme" — falls back to "weft" when empty
 	Cwd        string // e.g. "/" or "/log"
 }
 
-// FormatPromptPrefix builds the visible prompt prefix: [24h] paul@weft ~ $
+// FormatPromptPrefix builds the visible prompt prefix: [24h] alice@acme ~ $
 func FormatPromptPrefix(info PromptInfo) string {
 	var b strings.Builder
 
@@ -155,10 +156,17 @@ func FormatPromptPrefix(info PromptInfo) string {
 		b.WriteString("] ")
 	}
 
-	// user@weft
+	// user@<customer>; customer defaults to "weft" so the prompt still
+	// reads sensibly when the shell is running pre-login (dev fixtures,
+	// or before the JWT has been parsed by the CLI).
 	if info.User != "" {
 		b.WriteString(info.User)
-		b.WriteString("@weft")
+		b.WriteString("@")
+		if info.Customer != "" {
+			b.WriteString(info.Customer)
+		} else {
+			b.WriteString("weft")
+		}
 		b.WriteString(" ")
 	}
 

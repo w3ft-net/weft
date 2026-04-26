@@ -10,7 +10,7 @@ const builtins = {
 <li><code>cat /log/&lt;app&gt;.log</code> — stream all lines for an app</li>
 <li><code>head /log/&lt;app&gt;.log</code> — first N lines (oldest)</li>
 <li><code>tail /log/&lt;app&gt;.log</code> — last N lines; <code>tail -f</code> follows</li>
-<li><code>apps</code> — list available apps</li>
+<li><code>ls /log</code> — list available apps (browse the namespace tree)</li>
 </ul>
 <h2>Text pipeline</h2>
 <ul>

@@ -26,3 +26,15 @@ shard.log
 # integration runs (docker-compose.cover.yml). Regenerated on
 # every run by the server binaries; never committed.
 /coverage/
+dev/demo/tokens.env
+dev/demo/weft-demo-seed
+dev/demo/__pycache__/
+dev/demo/.pytest_cache/
+
+# DockerLauncher dev shard volumes (DuckDB + parquet — multi-GB,
+# regenerated on every up). Never committed.
+dev/shard-data/
+
+# Sub-agent worktree scratch directories created by `Agent` /
+# isolation: "worktree". Local-only.
+.claude/worktrees/

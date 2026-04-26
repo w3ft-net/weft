@@ -169,6 +169,12 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 		App:      plan.FollowApp,
 		Patterns: plan.FollowPatterns,
 	}
+	// LiveFilter re-runs the user's post-source pipeline stages against
+	// each broker row so the live tail and the historical batch stay
+	// consistent — without it, `tail -f log | cut -d' ' -f3` shows the
+	// projection on the initial DB read and raw whole lines on every
+	// row that arrives afterward.
+	filter := coordinator.BuildLiveFilter(plan)
 
 	ctx := stream.Context()
 	id, ch := s.Coord.Tail.Subscribe(ctx, matcher)
@@ -182,9 +188,15 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 			if !ok {
 				return nil
 			}
-			if err := stream.Send(&pb.CoordinatorQueryResponse{
-				Rows: []*pb.ResultRow{{LineNum: row.LineNum, Raw: row.Raw}},
-			}); err != nil {
+			lines := filter(row)
+			if len(lines) == 0 {
+				continue
+			}
+			rows := make([]*pb.ResultRow, len(lines))
+			for i, ln := range lines {
+				rows[i] = &pb.ResultRow{LineNum: row.LineNum, Raw: ln}
+			}
+			if err := stream.Send(&pb.CoordinatorQueryResponse{Rows: rows}); err != nil {
 				return err
 			}
 		}
@@ -204,18 +216,20 @@ func (s *Server) ListApps(ctx context.Context, _ *pb.ListAppsRequest) (*pb.ListA
 		}
 	}
 
-	// Fall back to DB namespaces for this customer.
+	// Fall back to DB namespaces for this customer. Store may be nil
+	// only in heartbeat-style unit tests that bypass the real
+	// constructor; production always wires it.
 	if s.Store == nil {
 		return &pb.ListAppsResponse{}, nil
 	}
 	if customer != "" {
 		cust, err := s.Store.GetCustomerByName(customer)
-		if err != nil || cust == nil {
-			return &pb.ListAppsResponse{}, nil
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "resolve customer %q: %v", customer, err)
 		}
 		nss, err := s.Store.ListNamespaces(cust.ID)
 		if err != nil {
-			return &pb.ListAppsResponse{}, nil
+			return nil, status.Errorf(codes.Internal, "list namespaces: %v", err)
 		}
 		names := make([]string, len(nss))
 		for i, ns := range nss {
@@ -225,7 +239,7 @@ func (s *Server) ListApps(ctx context.Context, _ *pb.ListAppsRequest) (*pb.ListA
 	}
 	names, err := s.Store.AllAppNames()
 	if err != nil {
-		return &pb.ListAppsResponse{}, nil
+		return nil, status.Errorf(codes.Internal, "list apps: %v", err)
 	}
 	return &pb.ListAppsResponse{Apps: names}, nil
 }
@@ -328,7 +342,7 @@ func (s *Server) AddSource(ctx context.Context, req *pb.AddSourceRequest) (*pb.A
 	// persisted but the bucket un-updated — the ingest path's
 	// SeenApps trigger (below) will retry on first row. Don't fail
 	// the client's AddSource on bucket trouble.
-	if s.Coord != nil && s.Coord.Provisioner != nil {
+	if s.Coord.Provisioner != nil {
 		if err := s.Coord.Provisioner.OnboardApp(req.App); err != nil {
 			log.Printf("AddSource: OnboardApp %q: %v", req.App, err)
 		}

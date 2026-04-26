@@ -1,12 +1,56 @@
 package shell
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+// TokenClaims holds the JWT fields the CLI needs for prompt rendering
+// and `weft whoami`. Decoded WITHOUT verifying the signature — the CLI
+// doesn't have the issuing secret — so callers must not trust these
+// values for security decisions; it's display-only.
+type TokenClaims struct {
+	Email    string `json:"email"`
+	Customer string `json:"customer"`
+	Tier     string `json:"tier"`
+	IssuedAt int64  `json:"iat"`
+	Expires  int64  `json:"exp"`
+}
+
+// DecodeClaims parses the JWT payload segment without checking the
+// signature. Used to surface the logged-in identity in the shell
+// prompt and `weft whoami`.
+func DecodeClaims(token string) (*TokenClaims, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid token format")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("decode payload: %w", err)
+	}
+	var claims TokenClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, fmt.Errorf("parse claims: %w", err)
+	}
+	return &claims, nil
+}
+
+// EmailLocalPart returns the part of an email before the '@', or the
+// whole string if no '@' is present. Used as the user portion of the
+// shell prompt — alice@acme.test → "alice".
+func EmailLocalPart(email string) string {
+	if i := strings.IndexByte(email, '@'); i > 0 {
+		return email[:i]
+	}
+	return email
+}
 
 // Config is the .weft.yaml configuration. Endpoint must be an http(s)
 // URL pointing at the weft api server; the CLI speaks HTTP end-to-end

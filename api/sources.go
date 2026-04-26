@@ -25,10 +25,6 @@ import (
 // configured" bug.
 func (s *Server) handleAgentSample(w http.ResponseWriter, r *http.Request) {
 	agent := GetAgentAuth(r)
-	if agent == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 
 	var req struct {
 		App        string   `json:"app"`
@@ -73,10 +69,6 @@ func (s *Server) handleAgentSample(w http.ResponseWriter, r *http.Request) {
 // GET /api/agent/source-status?app=NAME
 func (s *Server) handleAgentSourceStatus(w http.ResponseWriter, r *http.Request) {
 	agent := GetAgentAuth(r)
-	if agent == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 
 	app := r.URL.Query().Get("app")
 	if app == "" {
@@ -128,10 +120,6 @@ func (s *Server) handleAgentSourceStatus(w http.ResponseWriter, r *http.Request)
 // GET /api/sources/pending[?namespace=X]
 func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
-	if claims == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 
 	customer, err := s.store.GetCustomerByName(claims.CustomerName)
 	if err != nil {
@@ -180,10 +168,6 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 // POST /api/sources/{namespace}/{app}/configure
 func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
-	if claims == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 
 	namespace := r.PathValue("namespace")
 	app := r.PathValue("app")
@@ -278,10 +262,6 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 // level is trivial.
 func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
-	if claims == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	customer, err := s.store.GetCustomerByName(claims.CustomerName)
 	if err != nil {
 		http.Error(w, "customer not found", http.StatusNotFound)
@@ -350,10 +330,6 @@ type cloudWatchFormBase struct {
 // source (see handleAddCloudWatchSource).
 func (s *Server) handleSampleCloudWatchSource(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
-	if claims == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 
 	var req cloudWatchFormBase
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -367,10 +343,6 @@ func (s *Server) handleSampleCloudWatchSource(w http.ResponseWriter, r *http.Req
 
 	if err := s.authorizeSourceEdit(claims, req.Namespace); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
-		return
-	}
-	if s.coordClient == nil {
-		http.Error(w, "coordinator unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -400,10 +372,6 @@ func (s *Server) handleSampleCloudWatchSource(w http.ResponseWriter, r *http.Req
 // form fields rather than trusting a client-supplied YAML blob.
 func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
-	if claims == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 
 	var req struct {
 		cloudWatchFormBase
@@ -426,10 +394,6 @@ func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Reques
 
 	if err := s.authorizeSourceEdit(claims, req.Namespace); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
-		return
-	}
-	if s.coordClient == nil {
-		http.Error(w, "coordinator unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -474,10 +438,6 @@ func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Reques
 // stored log_groups.app is "{namespace}/{app}" so we reconstruct it here.
 func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
-	if claims == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 
 	namespace := r.PathValue("namespace")
 	app := r.PathValue("app")
@@ -488,10 +448,6 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.authorizeSourceEdit(claims, namespace); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
-		return
-	}
-	if s.coordClient == nil {
-		http.Error(w, "coordinator unavailable", http.StatusServiceUnavailable)
 		return
 	}
 

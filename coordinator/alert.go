@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -131,7 +132,10 @@ func evaluateAlertRow(r alertRow, parsed *shellcore.AlertArgs, condStr string, c
 	var prevStdout string
 	var hasPrev bool
 	if ctx.Store != nil && ctx.Watch != nil {
-		results, _ := ctx.Store.ListCronResults(ctx.Watch.ID, 2, r.tag)
+		results, err := ctx.Store.ListCronResults(ctx.Watch.ID, 2, r.tag)
+		if err != nil {
+			log.Printf("alert: ListCronResults watch=%d tag=%q: %v", ctx.Watch.ID, r.tag, err)
+		}
 		if len(results) >= 2 {
 			prevStdout = strings.TrimSpace(results[1].Stdout)
 			prevValueStr := prevStdout
@@ -337,7 +341,12 @@ func truncateAlertBody(s string) string {
 // NEW incident and dispatch should fire; false if an incident is already
 // open (suppress) or the condition cleared (close).
 func checkIncident(s *store.Store, watchID uint, condition, tag string, triggered bool) bool {
-	existing, _ := s.OpenIncident(watchID, condition, tag)
+	existing, err := s.OpenIncident(watchID, condition, tag)
+	if err != nil {
+		// A swallow here would silently double-fire on every tick;
+		// log loudly so we can spot DB-side regressions.
+		log.Printf("alert: OpenIncident watch=%d condition=%q tag=%q: %v", watchID, condition, tag, err)
+	}
 	if triggered {
 		if existing != nil {
 			s.UpdateIncidentSeen(existing.ID)

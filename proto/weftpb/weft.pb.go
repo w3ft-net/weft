@@ -664,7 +664,13 @@ type CreateJobRequest struct {
 	// output is already sorted; merge_key tells compute which column
 	// to walk through the heap on. Empty = "don't merge, just concat"
 	// — matches the old coordinator-side buffered path.
-	MergeKey      string `protobuf:"bytes,3,opt,name=merge_key,json=mergeKey,proto3" json:"merge_key,omitempty"`
+	MergeKey string `protobuf:"bytes,3,opt,name=merge_key,json=mergeKey,proto3" json:"merge_key,omitempty"`
+	// Global limit applied to the merged stream BEFORE the stages run.
+	// 0 = no limit. Mirrors planner.QueryPlan.Limit (the user-visible
+	// head/tail count). Without this, per-shard LIMIT N gets multiplied
+	// by shard count when downstream stages see the union — a bare
+	// `tail -n N | wc -l` would return N×num_shards.
+	Limit         int32 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -718,6 +724,13 @@ func (x *CreateJobRequest) GetMergeKey() string {
 		return x.MergeKey
 	}
 	return ""
+}
+
+func (x *CreateJobRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
 }
 
 type CreateJobResponse struct {
@@ -3922,12 +3935,13 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\rIngestRequest\x12 \n" +
 	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\"5\n" +
 	"\x0eIngestResponse\x12#\n" +
-	"\rrows_ingested\x18\x01 \x01(\x03R\frowsIngested\"h\n" +
+	"\rrows_ingested\x18\x01 \x01(\x03R\frowsIngested\"~\n" +
 	"\x10CreateJobRequest\x12\x16\n" +
 	"\x06stages\x18\x01 \x03(\tR\x06stages\x12\x1f\n" +
 	"\vshard_count\x18\x02 \x01(\x05R\n" +
 	"shardCount\x12\x1b\n" +
-	"\tmerge_key\x18\x03 \x01(\tR\bmergeKey\"*\n" +
+	"\tmerge_key\x18\x03 \x01(\tR\bmergeKey\x12\x14\n" +
+	"\x05limit\x18\x04 \x01(\x05R\x05limit\"*\n" +
 	"\x11CreateJobResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"\x81\x01\n" +
 	"\x0eComputeMessage\x12\x15\n" +

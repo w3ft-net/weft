@@ -41,6 +41,69 @@ func runWit(t *testing.T, wf *WitFuncs, args ...string) (string, string, int) {
 
 // Subcommand: log -------------------------------------------------
 
+// witMultiActorHelper sets up /bin/scan with three versions saved by
+// three distinct users (the same email→user mapping the demo seed
+// uses, so the assertion mirrors the demo expectation).
+func witMultiActorHelper(t *testing.T) *WitFuncs {
+	t.Helper()
+	db, custID := testStoreAndCustomer(t)
+	alice, err := db.CreateUser("alice@example.test", custID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetUserName(alice.ID, "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	bob, err := db.CreateUser("bob@example.test", custID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetUserName(bob.ID, "Bob"); err != nil {
+		t.Fatal(err)
+	}
+	// alice → bob → alice  (same alternation as the multi-customer
+	// demo seed, so the assertion catches the same regression).
+	saves := []struct {
+		userID, src string
+	}{
+		{alice.ID, "echo v1"},
+		{bob.ID, "echo v2"},
+		{alice.ID, "echo v3"},
+	}
+	for _, s := range saves {
+		if err := db.SaveShellFunction(custID, s.userID, "scan", s.src); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return &WitFuncs{Store: db, CustomerID: custID, UserID: alice.ID}
+}
+
+func TestWit_Log_PerVersionAuthor(t *testing.T) {
+	wf := witMultiActorHelper(t)
+	out, errb, code := runWit(t, wf, "log", "/bin/scan")
+	if code != 0 {
+		t.Fatalf("wit log: code=%d, stderr=%q", code, errb)
+	}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 log entries, got %d:\n%s", len(lines), out)
+	}
+	// Authorship alternates: HEAD=Alice (v3), HEAD^=Bob (v2),
+	// HEAD^2=Alice (v1). The bug being fixed: today every line shows
+	// the original creator (Alice), so the per-version actor is lost.
+	wantOwners := []string{"Alice", "Bob", "Alice"}
+	for i, want := range wantOwners {
+		if !strings.Contains(lines[i], want) {
+			t.Errorf("line %d should name %q; got %q", i, want, lines[i])
+		}
+	}
+	// Negative check: HEAD^ must not still say "Alice", which is the
+	// most common failure mode of the displayed-from-created_by bug.
+	if strings.Contains(lines[1], "Alice") {
+		t.Errorf("HEAD^ should be Bob, not Alice; got %q", lines[1])
+	}
+}
+
 func TestWit_Log_NewestFirstWithHashAndOwner(t *testing.T) {
 	wf, _ := witHelper(t, "log-shape", 3)
 	out, errb, code := runWit(t, wf, "log", "/bin/scan")

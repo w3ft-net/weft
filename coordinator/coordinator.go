@@ -340,36 +340,42 @@ func (c *Coordinator) QueryForWatch(pipeline string, tr TimeRange, watch *store.
 		Watch:      watch,
 		CustomerID: watch.CustomerID,
 	}
+	// Notifier is an interface; assigning a typed-nil *Notifier would
+	// defeat the `ctx.Notifier != nil` guard inside evaluateAlertRow.
+	// Tests build Coordinator with Notifier=nil to exercise the
+	// no-dispatch fallback.
 	if c.Notifier != nil {
 		ctx.Notifier = c.Notifier
 	}
 	// The watch carries its own CustomerID so we can resolve the name
-	// here without a second Store round-trip. Used by the /bin
-	// pre-expand to build a tenant-scoped ShellFS.
-	var custName string
+	// here without a second Store round-trip. A miss means a deleted
+	// customer race; surface it rather than running with custName="".
 	if c.Store != nil {
-		if cust, err := c.Store.GetCustomerByID(watch.CustomerID); err == nil {
-			custName = cust.Name
+		cust, err := c.Store.GetCustomerByID(watch.CustomerID)
+		if err != nil {
+			return nil, fmt.Errorf("watch %d: resolve customer %d: %w", watch.ID, watch.CustomerID, err)
 		}
+		return c.query(pipeline, tr, cust.Name, "", ctx)
 	}
-	return c.query(pipeline, tr, custName, "", ctx)
+	return c.query(pipeline, tr, "", "", ctx)
 }
 
 // query is the shared implementation for Query and QueryForWatch.
 // alertCtx = nil means "use interactive defaults if the pipeline has an
 // alert stage." A non-nil alertCtx binds the alert to that context.
 func (c *Coordinator) query(pipeline string, tr TimeRange, customer, userID string, alertCtx *AlertContext) (*QueryResult, error) {
-	// Resolve the customer name to an ID once. A non-zero result gates
-	// everything tenant-scoped downstream: /bin pre-expand, ShellFS
-	// wiring in runLocal, the interactive AlertContext. Failures here
-	// just mean the request runs without those features (no /bin, no
-	// alert dispatch) — queries against shards still work via the
-	// customer NAME that shard routing already uses.
+	// Resolve the customer name to an ID. Store may be nil in unit
+	// tests that exercise registry/shard plumbing without a DB
+	// (NewCoordinator leaves Store unset; production wires it
+	// immediately after via coord.Store = db). When Store is set, a
+	// resolution failure is a real auth/data integrity bug — propagate.
 	var custID uint
 	if c.Store != nil && customer != "" {
-		if cust, err := c.Store.GetCustomerByName(customer); err == nil {
-			custID = cust.ID
+		cust, err := c.Store.GetCustomerByName(customer)
+		if err != nil {
+			return nil, fmt.Errorf("resolve customer %q: %w", customer, err)
 		}
+		custID = cust.ID
 	}
 
 	// Pre-expand /bin bash invocations so the planner can see their body
@@ -392,6 +398,24 @@ func (c *Coordinator) query(pipeline string, tr TimeRange, customer, userID stri
 		} else {
 			pipeline = expanded
 		}
+
+		// Expand source-arg globs (`cat /log/<ns>/<env>/*.log`) to a
+		// concrete multi-arg form the planner can union. Fan-out is
+		// scoped to apps observed in this customer's ingest stream
+		// (SeenApps) — that includes weftd metrics streams that
+		// don't have a configured log_groups row. The per-customer
+		// namespace allowlist downstream still vets the result.
+		// SeenApps guard supports tests that build Coordinator
+		// without going through NewCoordinator.
+		if c.SeenApps != nil {
+			if apps := c.SeenApps.Names(customer); len(apps) > 0 {
+				expanded, err := planner.ExpandSourceGlobs(pipeline, apps)
+				if err != nil {
+					return nil, fmt.Errorf("expand glob: %w", err)
+				}
+				pipeline = expanded
+			}
+		}
 	}
 
 	plan, err := planner.Plan(pipeline)
@@ -412,9 +436,7 @@ func (c *Coordinator) query(pipeline string, tr TimeRange, customer, userID stri
 				CustomerID:  custID,
 				Interactive: true,
 			}
-			// Guard: assigning a nil *Notifier to the NotifyDispatcher
-			// interface field would wrap a typed-nil and defeat the
-			// `ctx.Notifier != nil` guard inside evaluateAlertRow.
+			// See QueryForWatch — typed-nil interface trap.
 			if c.Notifier != nil {
 				alertCtx.Notifier = c.Notifier
 			}
@@ -442,11 +464,12 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	// resolve to a namespace this customer owns. Gate here, before the
 	// app name ever reaches SQL interpolation — the planner escapes
 	// string literals, but an allowlist is the correct posture for a
-	// user-controlled identifier.
+	// user-controlled identifier. Store may be nil in unit tests that
+	// don't wire a real DB; in production the gate runs unconditionally.
 	if plan.SourceApp != "" && c.Store != nil {
 		cust, err := c.Store.GetCustomerByName(customer)
-		if err != nil || cust == nil {
-			return nil, fmt.Errorf("unknown customer")
+		if err != nil {
+			return nil, fmt.Errorf("validate source: resolve customer %q: %w", customer, err)
 		}
 		ok, err := c.Store.CustomerHasSource(cust.ID, plan.SourceApp)
 		if err != nil {
@@ -469,11 +492,10 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	// Shard selection honors plan-tier retention: tr.Start is clamped
 	// up to (now − LogRetention(tier)) inside MatchingShards, so a
 	// customer never reaches a shard whose data is entirely past their
-	// advertised retention. Unresolved customer (custID==0) yields tier
-	// "" which conservatively falls back to the trial retention. A nil
-	// Store means we're in a test/dev context with no subscription
-	// table at all — fall back to the most permissive tier so tests
-	// whose shards live in the distant past keep querying as before.
+	// advertised retention. An unresolved customer (custID==0) yields
+	// tier "" which falls back to the trial retention. Store is nil in
+	// unit tests; fall back to the most permissive tier so shard tests
+	// whose data lives in the distant past stay queryable.
 	var tier store.Tier
 	switch {
 	case c.Store == nil:
@@ -500,7 +522,7 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	// can advance a single heap head without re-sorting. See
 	// docs/plans/direct-to-compute.md §§4-5.
 	if len(plan.ComputeStages) > 0 && c.Pool != nil {
-		job := c.Pool.NewJob(plan.ComputeStages, len(matching), plan.ShardOrderBy)
+		job := c.Pool.NewJob(plan.ComputeStages, len(matching), plan.ShardOrderBy, plan.Limit)
 
 		var wg sync.WaitGroup
 		wg.Add(len(matching))

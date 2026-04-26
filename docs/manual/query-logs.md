@@ -24,8 +24,8 @@ cat nginx.log | jq '.status' | sort | uniq -c | sort -rn
 # Grep across all sources
 cat *.log | grep "connection refused"
 
-# Time-bounded queries
-cat myapp.log --since 2h --until 30m | head -100
+# Most recent N lines (cheap)
+tail -n 100 myapp.log
 ```
 
 The weft query planner analyzes your full pipeline and pushes
@@ -119,7 +119,7 @@ every minute:
 ```
 # /cron.d/memory-per-host
 # schedule: every 1m
-tail /log/weft/metrics.log --since 1m \
+tail -n 200 /log/weft/metrics.log \
   | jq -r 'select(.type == "memory") | "\(._host) \(.pct)"'
 ```
 
@@ -137,7 +137,7 @@ when memory passes 80%, pipe into `alert` in multi-row mode:
 ```
 # /cron.d/memory-alert
 # schedule: every 1m
-tail /log/weft/metrics.log --since 1m \
+tail -n 200 /log/weft/metrics.log \
   | jq -r 'select(.type == "memory") | "\(._host) \(.pct)"' \
   | alert above 80 -k 2 -t 1 --notify=ops
 ```

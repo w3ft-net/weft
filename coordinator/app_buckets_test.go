@@ -370,7 +370,7 @@ func TestProvisioner_ScalesUpToConfiguredCount(t *testing.T) {
 	}
 	t.Cleanup(func() { ds.Close() })
 
-	launcher := NewLocalLauncher()
+	launcher := newLocalLauncher()
 	t.Cleanup(func() { launcher.Close() })
 
 	fake := newFakeBucketStore()

@@ -16,6 +16,13 @@ type QueryPlan struct {
 	Follow         bool          // tail -f: keep stream open for live updates
 	FollowApp      string        // app to subscribe to ("" = all)
 	FollowPatterns []GrepPattern // grep filters applied to live rows
+	// LiveStages is the post-source stage list to re-run per live row in
+	// follow mode. Same strings as ComputeStages would have been if we
+	// hadn't pushed anything down — i.e., a faithful reconstruction of
+	// the user's pipeline minus the source. Consumed by
+	// coordinator.BuildLiveFilter so the live broker rows go through
+	// the same transformations as the historical batch.
+	LiveStages []string
 	Local          bool          // true if pipeline has no log source (run through warp locally)
 	LocalPipeline  string        // the full pipeline string for local execution
 	SourceCmd      string        // source command: "cat", "head", or "tail"
@@ -79,15 +86,32 @@ func Plan(pipeline string) (*QueryPlan, error) {
 
 	sql := newSQLBuilder()
 
+	// Snapshot the user's post-source stages before pushdown rewrites
+	// them. LiveStages is a faithful reconstruction of "everything that
+	// followed the source" — coordinator.BuildLiveFilter re-runs these
+	// per row on the live-tail broker stream so the transformations
+	// stay consistent with the historical batch.
+	liveStages := formatComputeStages(info.stages)
+
 	// Apply source: app filter + head/tail ordering.
-	// If the app contains "/" it's a specific sub-app (exact match).
-	// Otherwise it's a namespace — match the namespace and all sub-apps.
-	if info.source.app != "" {
-		if strings.Contains(info.source.app, "/") {
-			sql.addPredicate(fmt.Sprintf("app = '%s'", info.source.app))
+	// One app: namespace OR-LIKE for bare names, exact match for sub-apps.
+	// Many apps (multi-arg cat or post-glob expansion): single IN list.
+	switch len(info.source.apps) {
+	case 0:
+		// warp.log — no app filter.
+	case 1:
+		app := info.source.apps[0]
+		if strings.Contains(app, "/") {
+			sql.addPredicate(fmt.Sprintf("app = '%s'", app))
 		} else {
-			sql.addPredicate(fmt.Sprintf("(app = '%s' OR app LIKE '%s/%%')", info.source.app, info.source.app))
+			sql.addPredicate(fmt.Sprintf("(app = '%s' OR app LIKE '%s/%%')", app, app))
 		}
+	default:
+		quoted := make([]string, len(info.source.apps))
+		for i, a := range info.source.apps {
+			quoted[i] = "'" + a + "'"
+		}
+		sql.addPredicate(fmt.Sprintf("app IN (%s)", strings.Join(quoted, ", ")))
 	}
 
 	// Three-level pseudofile path /log/<ns>/<env>/<app>.log adds an
@@ -200,10 +224,11 @@ func Plan(pipeline string) (*QueryPlan, error) {
 		Limit:          sql.limit,
 		OrderDesc:      orderDesc,
 		Follow:         info.source.follow,
-		FollowApp:      info.source.app,
+		FollowApp:      info.source.app(),
 		FollowPatterns: grepPatterns,
+		LiveStages:     liveStages,
 		SourceCmd:      info.source.cmd,
-		SourceApp:      info.source.app,
+		SourceApp:      info.source.app(),
 		AlertArgs:      alertArgs,
 		ShardOrderBy:   shardOrderBy,
 		ShardLimit:     shardLimit,

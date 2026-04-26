@@ -16,11 +16,12 @@ type LocalComputePool struct {
 	Parallelism int // goroutine count for bash.RunWithParallelism (0 = streaming)
 }
 
-func (p *LocalComputePool) NewJob(stages []string, shardCount int, mergeKey string) ComputeJob {
+func (p *LocalComputePool) NewJob(stages []string, shardCount int, mergeKey string, limit int) ComputeJob {
 	return &LocalComputeJob{
 		stages:      stages,
 		shardCount:  shardCount,
 		mergeKey:    mergeKey,
+		limit:       limit,
 		parallelism: p.Parallelism,
 		ch:          make(chan ComputeMessage, 1024),
 		done:        make(chan jobResult, 1),
@@ -38,6 +39,7 @@ type LocalComputeJob struct {
 	stages      []string
 	shardCount  int
 	mergeKey    string // see ComputePool.NewJob; empty = concat, otherwise k-way merge
+	limit       int    // see ComputePool.NewJob; 0 = no cap
 	parallelism int
 	ch          chan ComputeMessage
 	done        chan jobResult
@@ -99,6 +101,17 @@ func (j *LocalComputeJob) consume() {
 
 	if j.mergeKey != "" {
 		lines = mergeRows(perShard, j.mergeKey)
+	}
+
+	// Global tail/head cap: the per-shard LIMIT was already applied
+	// by the SQL builder; this truncates the union before downstream
+	// stages see it. Concat path (mergeKey == "") also gets capped —
+	// without an order it's "first N to arrive" rather than "first N
+	// in any deterministic ordering," but downstream stages that need
+	// determinism shouldn't be running over an unmerged stream
+	// anyway.
+	if j.limit > 0 && len(lines) > j.limit {
+		lines = lines[:j.limit]
 	}
 
 	input := strings.Join(lines, "\n")

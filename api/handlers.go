@@ -80,12 +80,8 @@ func (s *Server) SetConfig(ptr *atomic.Pointer[config.Runtime]) {
 	s.limiter = newLimiter(ptr)
 }
 
-// currentConfig returns the live runtime config, falling back to
-// defaults if SetConfig was never called (tests, dev).
+// currentConfig returns the live runtime config snapshot.
 func (s *Server) currentConfig() *config.Runtime {
-	if s.cfgPtr == nil {
-		return config.Defaults()
-	}
 	return s.cfgPtr.Load()
 }
 
@@ -104,8 +100,13 @@ type TierPrices struct {
 	Overage string
 }
 
-// NewServer creates an API server.
+// NewServer creates an API server. Wires a defaults-backed config
+// pointer + limiter so callers that don't call SetConfig (tests,
+// dev) still have a live limiter — production overwrites both via
+// SetConfig before serving.
 func NewServer(s *store.Store, jwtSecret, coordAddr, baseURL string) *Server {
+	cfgPtr := new(atomic.Pointer[config.Runtime])
+	cfgPtr.Store(config.Defaults())
 	return &Server{
 		store:        s,
 		jwtSecret:    jwtSecret,
@@ -113,6 +114,8 @@ func NewServer(s *store.Store, jwtSecret, coordAddr, baseURL string) *Server {
 		baseURL:      baseURL,
 		email:        EmailConfigFromEnv(),
 		StripePrices: make(map[store.Tier]TierPrices),
+		cfgPtr:       cfgPtr,
+		limiter:      newLimiter(cfgPtr),
 	}
 }
 
@@ -185,17 +188,6 @@ func (s *Server) sweepUnverified() {
 // Handler returns the HTTP handler with all routes.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-
-	// If a runtime-config pointer hasn't been installed, run with
-	// compile-time defaults for the lifetime of this handler. The
-	// limiter then tracks a never-changing config snapshot — fine for
-	// tests.
-	if s.limiter == nil {
-		fallback := new(atomic.Pointer[config.Runtime])
-		fallback.Store(config.Defaults())
-		s.cfgPtr = fallback
-		s.limiter = newLimiter(fallback)
-	}
 	cfg := s.currentConfig()
 
 	// guarded stacks body-cap + rate-limit on a public endpoint. Body
@@ -462,10 +454,6 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 // don't fail if Sendgrid rejects.
 func (s *Server) handleResendVerification(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
-	if claims == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	user, err := s.store.GetUserByID(claims.UserID)
 	if err != nil {
 		http.Error(w, "user not found", http.StatusNotFound)
@@ -496,10 +484,6 @@ func (s *Server) handleResendVerification(w http.ResponseWriter, r *http.Request
 // skip the modal because /api/auth/me reports has_seen_welcome: true.
 func (s *Server) handleWelcomeDismiss(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
-	if claims == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	if err := s.store.MarkWelcomeSeen(claims.UserID); err != nil {
 		log.Printf("welcome-dismiss: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -649,10 +633,6 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
-	if claims == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 
 	user, err := s.store.GetUserByID(claims.UserID)
 	if err != nil {
@@ -661,10 +641,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tier := store.Tier("none")
-	if s.store != nil {
-		if sub, _ := s.store.ActiveSubscription(user.CustomerName); sub != nil {
-			tier = store.Tier(sub.Tier)
-		}
+	if sub, _ := s.store.ActiveSubscription(user.CustomerName); sub != nil {
+		tier = store.Tier(sub.Tier)
 	}
 
 	resp := map[string]any{
@@ -712,10 +690,6 @@ func (s *Server) ensureStripeCustomer(u *store.User, customerName string) (strin
 // that client_secret and calls stripe.confirmSetup() to collect card details.
 func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
-	if claims == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 
 	var req struct {
 		Tier string `json:"tier"`
@@ -822,10 +796,6 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 // latest invoice's PaymentIntent so the frontend can confirm inline.
 func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
-	if claims == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 
 	var req struct {
 		Tier string `json:"tier"`
@@ -960,9 +930,6 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Stripe webhook unmarshal error: %v", err)
 			break
 		}
-		if s.store == nil {
-			break
-		}
 		tier := sub.Metadata["tier"]
 		// Only promote once the subscription is actually paying (not trialing
 		// without a PM, and not past_due).
@@ -981,7 +948,7 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Stripe webhook unmarshal error: %v", err)
 			break
 		}
-		if s.store == nil || inv.Parent == nil || inv.Parent.SubscriptionDetails == nil {
+		if inv.Parent == nil || inv.Parent.SubscriptionDetails == nil {
 			break
 		}
 		if inv.Parent.SubscriptionDetails.Subscription != nil {
@@ -996,12 +963,10 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Stripe webhook unmarshal error: %v", err)
 			break
 		}
-		if s.store != nil {
-			if err := s.store.CancelSubscription(sub.ID); err != nil {
-				log.Printf("failed to cancel subscription %s: %v", sub.ID, err)
-			} else {
-				log.Printf("subscription cancelled: %s", sub.ID)
-			}
+		if err := s.store.CancelSubscription(sub.ID); err != nil {
+			log.Printf("failed to cancel subscription %s: %v", sub.ID, err)
+		} else {
+			log.Printf("subscription cancelled: %s", sub.ID)
 		}
 	}
 
@@ -1028,18 +993,8 @@ func projectedOverageCents(bytes int64, tier store.Tier) int {
 
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
-	if claims == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	if s.store != nil {
-		if sub, _ := s.store.ActiveSubscription(claims.CustomerName); sub == nil {
-			http.Error(w, "no active subscription", http.StatusPaymentRequired)
-			return
-		}
-	}
-	if s.coordClient == nil {
-		http.Error(w, "coordinator unavailable", http.StatusServiceUnavailable)
+	if sub, _ := s.store.ActiveSubscription(claims.CustomerName); sub == nil {
+		http.Error(w, "no active subscription", http.StatusPaymentRequired)
 		return
 	}
 
@@ -1054,10 +1009,8 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	// stale). Fall back to the JWT value when no active sub exists,
 	// keeping pre-subscription trial users visible.
 	tier := store.Tier(claims.Tier)
-	if s.store != nil {
-		if sub, _ := s.store.ActiveSubscription(claims.CustomerName); sub != nil {
-			tier = store.Tier(sub.Tier)
-		}
+	if sub, _ := s.store.ActiveSubscription(claims.CustomerName); sub != nil {
+		tier = store.Tier(sub.Tier)
 	}
 
 	result := map[string]any{
@@ -1070,13 +1023,11 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add metrics forecast if available.
-	if s.store != nil {
-		if cust, err := s.store.GetCustomerByName(claims.CustomerName); err == nil {
-			if forecast, err := s.store.ForecastMetricsUsage(cust.ID); err == nil && forecast.AgentsWithMetrics > 0 {
-				result["metrics_forecast"] = map[string]any{
-					"agents_with_metrics":     forecast.AgentsWithMetrics,
-					"projected_bytes_month":   forecast.ProjectedBytesMonth,
-				}
+	if cust, err := s.store.GetCustomerByName(claims.CustomerName); err == nil {
+		if forecast, err := s.store.ForecastMetricsUsage(cust.ID); err == nil && forecast.AgentsWithMetrics > 0 {
+			result["metrics_forecast"] = map[string]any{
+				"agents_with_metrics":     forecast.AgentsWithMetrics,
+				"projected_bytes_month":   forecast.ProjectedBytesMonth,
 			}
 		}
 	}
@@ -1258,10 +1209,6 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 // --- Apps ---
 
 func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
-	if s.coordClient == nil {
-		http.Error(w, "coordinator unavailable", http.StatusServiceUnavailable)
-		return
-	}
 	resp, err := s.coordClient.ListApps(s.coordCtx(r), &pb.ListAppsRequest{})
 	if err != nil {
 		http.Error(w, "coordinator error", http.StatusBadGateway)
@@ -1271,10 +1218,6 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleIngestionStatus(w http.ResponseWriter, r *http.Request) {
-	if s.store == nil {
-		json.NewEncoder(w).Encode(map[string]any{"affected_apps": []string{}})
-		return
-	}
 	apps, err := s.store.UnresolvedIngestionApps()
 	if err != nil {
 		apps = []string{}
@@ -1326,7 +1269,8 @@ func (s *Server) handleGetFunction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	json.NewEncoder(w).Encode(fn)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write([]byte(fn.Source))
 }
 
 func (s *Server) handleSaveFunction(w http.ResponseWriter, r *http.Request) {
@@ -1889,10 +1833,6 @@ func (s *Server) handleDevicePoll(w http.ResponseWriter, r *http.Request) {
 // POST /api/auth/device/approve {"user_code": "XXXX-XX"}
 func (s *Server) handleDeviceApprove(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r)
-	if claims == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 
 	var req struct {
 		UserCode string `json:"user_code"`

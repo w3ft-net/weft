@@ -14,7 +14,7 @@ import (
 // time windows and apps, and ingested data is queryable.
 func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
 	// Phase 1: Create coordinator with provisioner, ingest data.
-	launcher := NewLocalLauncher()
+	launcher := newLocalLauncher()
 	t.Cleanup(func() { launcher.Close() })
 
 	reg1 := NewShardRegistry()

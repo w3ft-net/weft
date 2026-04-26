@@ -1,0 +1,140 @@
+# Multi-customer demo overlay. See docs/plans/multi-customer-demo-seed.md.
+#
+# Brings up 12 service containers — 2 customers × 2 envs × 3 apps —
+# each running a weftd agent + a Python rate-shape generator. Token
+# values come from dev/demo/tokens.env, minted by weft-demo-seed.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml \
+#                  --env-file dev/demo/tokens.env up -d
+#
+# The dev/demo/up.sh wrapper runs the seed first, then this command.
+
+x-demo-service: &demo-service
+  build:
+    context: ..
+    dockerfile: weft/dev/demo/Dockerfile
+  depends_on:
+    coordinator:
+      condition: service_started
+  restart: unless-stopped
+
+services:
+  acme-api-sand:
+    <<: *demo-service
+    environment:
+      SERVICE: api
+      CUSTOMER: acme
+      ENV: sand
+      WEFTD_TOKEN: ${ACME_API_SAND_TOKEN}
+      RATE_SHAPE: "const:8"
+      ERROR_RATIO: "0.05"
+
+  acme-api-prod:
+    <<: *demo-service
+    environment:
+      SERVICE: api
+      CUSTOMER: acme
+      ENV: prod
+      WEFTD_TOKEN: ${ACME_API_PROD_TOKEN}
+      RATE_SHAPE: "sine:20,40,600"
+      ERROR_RATIO: "0.08"
+
+  acme-worker-sand:
+    <<: *demo-service
+    environment:
+      SERVICE: worker
+      CUSTOMER: acme
+      ENV: sand
+      WEFTD_TOKEN: ${ACME_WORKER_SAND_TOKEN}
+      RATE_SHAPE: "sawtooth:2,0.05,12"
+      ERROR_RATIO: "0.05"
+
+  acme-worker-prod:
+    <<: *demo-service
+    environment:
+      SERVICE: worker
+      CUSTOMER: acme
+      ENV: prod
+      WEFTD_TOKEN: ${ACME_WORKER_PROD_TOKEN}
+      RATE_SHAPE: "sine:5,10,300"
+      ERROR_RATIO: "0.05"
+
+  acme-edge-sand:
+    <<: *demo-service
+    environment:
+      SERVICE: edge
+      CUSTOMER: acme
+      ENV: sand
+      WEFTD_TOKEN: ${ACME_EDGE_SAND_TOKEN}
+      RATE_SHAPE: "const:3"
+      ERROR_RATIO: "0.05"
+
+  acme-edge-prod:
+    <<: *demo-service
+    environment:
+      SERVICE: edge
+      CUSTOMER: acme
+      ENV: prod
+      WEFTD_TOKEN: ${ACME_EDGE_PROD_TOKEN}
+      RATE_SHAPE: "sine:10,15,180"
+      ERROR_RATIO: "0.05"
+
+  globex-orders-staging:
+    <<: *demo-service
+    environment:
+      SERVICE: orders
+      CUSTOMER: globex
+      ENV: staging
+      WEFTD_TOKEN: ${GLOBEX_ORDERS_STAGING_TOKEN}
+      RATE_SHAPE: "sawtooth:1,0.02,8"
+      ERROR_RATIO: "0.05"
+
+  globex-orders-prod:
+    <<: *demo-service
+    environment:
+      SERVICE: orders
+      CUSTOMER: globex
+      ENV: prod
+      WEFTD_TOKEN: ${GLOBEX_ORDERS_PROD_TOKEN}
+      RATE_SHAPE: "sine:30,60,900"
+      ERROR_RATIO: "0.05"
+
+  globex-billing-staging:
+    <<: *demo-service
+    environment:
+      SERVICE: billing
+      CUSTOMER: globex
+      ENV: staging
+      WEFTD_TOKEN: ${GLOBEX_BILLING_STAGING_TOKEN}
+      RATE_SHAPE: "monotonic:1,0.02"
+      ERROR_RATIO: "0.12"
+
+  globex-billing-prod:
+    <<: *demo-service
+    environment:
+      SERVICE: billing
+      CUSTOMER: globex
+      ENV: prod
+      WEFTD_TOKEN: ${GLOBEX_BILLING_PROD_TOKEN}
+      RATE_SHAPE: "monotonic:5,0.05,40"
+      ERROR_RATIO: "0.10"
+
+  globex-notifier-staging:
+    <<: *demo-service
+    environment:
+      SERVICE: notifier
+      CUSTOMER: globex
+      ENV: staging
+      WEFTD_TOKEN: ${GLOBEX_NOTIFIER_STAGING_TOKEN}
+      RATE_SHAPE: "const:4"
+      ERROR_RATIO: "0.05"
+
+  globex-notifier-prod:
+    <<: *demo-service
+    environment:
+      SERVICE: notifier
+      CUSTOMER: globex
+      ENV: prod
+      WEFTD_TOKEN: ${GLOBEX_NOTIFIER_PROD_TOKEN}
+      RATE_SHAPE: "sine:8,16,420"
+      ERROR_RATIO: "0.05"

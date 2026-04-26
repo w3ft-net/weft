@@ -538,6 +538,16 @@ func (s *Store) SetUserName(userID, name string) error {
 	}).Error
 }
 
+// SetCanCreateNamespace flips the namespace-creation flag for a user.
+// Used by the demo seed and the (eventual) admin UI for promoting
+// teammates beyond default permissions.
+func (s *Store) SetCanCreateNamespace(userID string, allowed bool) error {
+	return s.db.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
+		"can_create_namespace": allowed,
+		"updated_at":           time.Now(),
+	}).Error
+}
+
 // GetUsersByIDs resolves a batch of user IDs to user rows. IDs not
 // found are silently dropped from the result. Used by the
 // ls -al renderer to look up display names for a directory listing

@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -123,28 +122,9 @@ func runWhoami() {
 		os.Exit(1)
 	}
 
-	// Decode JWT payload without signature verification (we don't have the secret).
-	parts := strings.Split(cfg.Token, ".")
-	if len(parts) != 3 {
-		fmt.Fprintln(os.Stderr, "Invalid token format.")
-		os.Exit(1)
-	}
-
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	claims, err := shell.DecodeClaims(cfg.Token)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Failed to decode token.")
-		os.Exit(1)
-	}
-
-	var claims struct {
-		Email    string `json:"email"`
-		Customer string `json:"customer"`
-		Tier     string `json:"tier"`
-		IssuedAt int64  `json:"iat"`
-		Expires  int64  `json:"exp"`
-	}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		fmt.Fprintln(os.Stderr, "Failed to parse token claims.")
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
@@ -191,7 +171,21 @@ func runDevShell() {
 }
 
 func runShell(s *shell.Shell) {
-	// Set user for the prompt if not already set.
+	// Prefer the JWT identity for the prompt — `alice@acme` reads
+	// better than the OS user against a generic "@weft". Fall back to
+	// the OS user when there's no token (dev fixtures path).
+	if s.User == "" || s.Customer == "" {
+		if cfg, err := shell.LoadConfig(); err == nil && cfg.Token != "" {
+			if claims, err := shell.DecodeClaims(cfg.Token); err == nil {
+				if s.User == "" {
+					s.User = shell.EmailLocalPart(claims.Email)
+				}
+				if s.Customer == "" {
+					s.Customer = claims.Customer
+				}
+			}
+		}
+	}
 	if s.User == "" {
 		if u, err := user.Current(); err == nil {
 			s.User = u.Username

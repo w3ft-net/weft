@@ -16,48 +16,10 @@ services:
       timeout: 5s
       retries: 5
 
-  # Shard identity is persisted in shard.json inside the volume at
-  # /opt/app/data — written by the coordinator on first christening.
-  # Named volumes here stand in for per-instance EBS in production.
-  shard-0:
-    build:
-      context: ..
-      dockerfile: weft/Dockerfile
-    entrypoint: ["/usr/local/bin/entrypoint.sh"]
-    environment:
-      ROLE: shard
-      COORDINATOR_ADDR: coordinator:9020
-      HEARTBEAT_INTERVAL: "10s"
-      SHARD_DATA_DIR: /opt/app/data
-      SHARD_SECRET: dev-shard-secret
-    volumes:
-      - shard0_data:/opt/app/data
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    depends_on:
-      coordinator:
-        condition: service_started
-
-  shard-1:
-    build:
-      context: ..
-      dockerfile: weft/Dockerfile
-    entrypoint: ["/usr/local/bin/entrypoint.sh"]
-    environment:
-      ROLE: shard
-      COORDINATOR_ADDR: coordinator:9020
-      HEARTBEAT_INTERVAL: "10s"
-      SHARD_DATA_DIR: /opt/app/data
-      SHARD_SECRET: dev-shard-secret
-    volumes:
-      - shard1_data:/opt/app/data
-    ports:
-      - "9002:9000"
-      - "9003:9001"
-    depends_on:
-      coordinator:
-        condition: service_started
+  # Shards are no longer pre-declared in compose. The coordinator's
+  # DockerLauncher (dev mode) spawns sibling shard containers on
+  # demand, mounting per-shard subdirectories of ./dev/shard-data so
+  # each shard's DuckDB + shard.json survive coordinator restarts.
 
   # Dedicated compute worker. Coordinator fans out rows here for
   # pipeline execution. The weft-compute binary was always built but
@@ -92,6 +54,19 @@ services:
       # Use the real gRPC compute pool instead of in-process so the
       # coordinator→compute boundary is on the wire.
       COMPUTE_ADDR: compute:9010
+      # DockerLauncher config — coordinator spawns sibling shard
+      # containers via the bind-mounted docker socket. Each shard's
+      # DuckDB + shard.json lives in a host subdir under
+      # WEFT_HOST_DATA_ROOT so a coordinator restart doesn't lose data.
+      WEFT_LAUNCHER: docker
+      WEFT_SHARD_IMAGE: weft-coordinator
+      WEFT_DOCKER_NETWORK: weft_default
+      WEFT_HOST_DATA_ROOT: ${WEFT_HOST_DATA_ROOT:-${PWD}/dev/shard-data}
+      WEFT_LOCAL_DATA_ROOT: /opt/app/shard-data
+      WEFT_COORDINATOR_ADDR: coordinator:9020
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${WEFT_HOST_DATA_ROOT:-${PWD}/dev/shard-data}:/opt/app/shard-data
     ports:
       - "9020:9020"
       - "9021:9021"
@@ -185,6 +160,3 @@ services:
       timeout: 5s
       retries: 20
 
-volumes:
-  shard0_data:
-  shard1_data:

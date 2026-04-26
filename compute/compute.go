@@ -22,7 +22,13 @@ type ComputePool interface {
 	// concatenates in arrival order (legacy), "line_num"/"raw"
 	// (optionally " DESC") triggers a k-way merge keyed on that
 	// column. See docs/plans/direct-to-compute.md §4.
-	NewJob(stages []string, shardCount int, mergeKey string) ComputeJob
+	//
+	// limit is the global cap on the merged stream applied BEFORE
+	// stages run; 0 means no cap. Mirrors planner.QueryPlan.Limit
+	// (the user-typed head/tail count). Without it, per-shard
+	// LIMIT N gets multiplied by shard count when downstream stages
+	// see the union — `tail -n N | wc -l` would return N×num_shards.
+	NewJob(stages []string, shardCount int, mergeKey string, limit int) ComputeJob
 }
 
 // ComputeJob receives rows from shards and produces a text result once all

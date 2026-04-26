@@ -33,6 +33,13 @@ RUN CGO_ENABLED=0 go build $BUILD_FLAGS -o /bin/weftd ./cmd/weftd
 
 # Use the same distro as the builder to match glibc.
 FROM golang:1.26
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+# docker-cli is needed in the coordinator role: DockerLauncher (dev
+# mode) execs `docker run` over the bind-mounted /var/run/docker.sock
+# to spawn sibling shard containers. The cli alone is small (~50 MB);
+# we don't pull in dockerd. Other roles ignore it. ca-certificates is
+# still needed for the gRPC tls path on prod.
+RUN apt-get update \
+ && apt-get install -y ca-certificates docker-cli \
+ && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /bin/weft-shard /bin/weft-compute /bin/weft-coordinator /bin/weft-api /bin/lambda-shard /bin/weftd /usr/local/bin/
 COPY --from=builder /src/weft/deploy/entrypoint.sh /usr/local/bin/entrypoint.sh

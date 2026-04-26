@@ -162,7 +162,7 @@ chart mode owns its own throttling.
 
 ### Shell surface
 
-One new builtin in `shellcore/core.go` (parsed alongside `apps`,
+One new builtin in `shellcore/core.go` (parsed alongside
 `history`, `range`):
 
 ```

@@ -206,4 +206,10 @@ export interface WasmCallbacks {
   onRangeChange: (rangeText: string) => void
   loadHistory: () => string
   saveHistory: (lines: string) => void
+  // Identity for the shell prompt prefix (alice@acme). Read once at
+  // shell init by the WASM side; either may return "" (e.g. before
+  // login completes) and the prompt falls back to its non-identified
+  // form.
+  getUser: () => string
+  getCustomer: () => string
 }

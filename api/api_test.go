@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -353,6 +354,46 @@ func TestAuth_Sweep_DeletesExpiredUnverifiedOnly(t *testing.T) {
 	}
 	if _, err := s.GetUserByEmail(verifiedEmail); err != nil {
 		t.Errorf("verified user should still exist: %v", err)
+	}
+}
+
+func TestGetFunction_ReturnsPlainSource(t *testing.T) {
+	srv, s := testServer(t)
+	handler := srv.Handler()
+
+	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("getfn-%d", os.Getpid()))
+	user, _ := s.CreateVerifiedUser(fmt.Sprintf("getfn-%d@example.com", os.Getpid()), cust.ID)
+	s.CreateTeamMember(&store.TeamMember{
+		ID: fmt.Sprintf("tm-getfn-%d", os.Getpid()), CustomerName: cust.Name, Email: user.Email,
+		UserID: &user.ID, Role: "owner", Status: "active",
+	})
+	// GetByID hydrates user.CustomerName via the Customer join — auth.Generate
+	// reads it directly into the JWT's customer claim.
+	user, _ = s.GetUserByID(user.ID)
+	jwt, _ := auth.Generate(user, "trial", "test-secret")
+
+	source := "cat /log/api.log | grep ERROR | wc -l"
+	if err := s.SaveShellFunction(cust.ID, user.ID, "scan", source); err != nil {
+		t.Fatalf("save fn: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/functions/scan", nil)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("GET function: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	body := strings.TrimRight(w.Body.String(), "\n")
+	if body != source {
+		t.Errorf("body should be the script source, got %q\nwant: %q", body, source)
+	}
+	// Spot-check that we did not get the JSON-encoded ShellFunction
+	// struct (the bug surfaced as `cat /bin/scan` printing
+	// `{"ID":...,"Source":"...",...}`).
+	if strings.HasPrefix(body, "{") && strings.Contains(body, `"Source"`) {
+		t.Errorf("body looks JSON-encoded, want plain source: %q", body)
 	}
 }
 

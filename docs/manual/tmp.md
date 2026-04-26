@@ -23,7 +23,7 @@ wc -l /tmp/errs
 grep timeout /tmp/errs | sort | uniq -c | sort -rn | head
 
 # Keep adding to it later
-cat api.log --since 10m | awk '$STATUS >= 500' >> /tmp/errs
+tail -n 200 api.log | awk '$STATUS >= 500' >> /tmp/errs
 
 # Organise an incident
 mkdir /tmp/incident-2026-04-22
@@ -33,8 +33,8 @@ ls -l /tmp/incident-2026-04-22
 
 # Compare two result sets
 cp /tmp/errs /tmp/errs.bak
-cat api.log --since 1h | awk '$LEVEL == "ERROR"' > /tmp/errs
-diff /tmp/errs.bak /tmp/errs           # what's new in the last hour
+tail -n 1000 api.log | awk '$LEVEL == "ERROR"' > /tmp/errs
+diff /tmp/errs.bak /tmp/errs           # what's new in the most recent slice
 comm /tmp/errs.bak /tmp/errs           # three-column shared/unique view
 join orders.csv prices.csv             # relate two result sets by key
 

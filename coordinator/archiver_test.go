@@ -114,7 +114,7 @@ func TestProvisioner_ArchivesExpiredShard(t *testing.T) {
 		CreatedAt: time.Now().Add(-2 * time.Hour), // past retention
 	})
 
-	launcher := NewLocalLauncher()
+	launcher := newLocalLauncher()
 	t.Cleanup(func() { launcher.Close() })
 
 	parquetDir := t.TempDir()

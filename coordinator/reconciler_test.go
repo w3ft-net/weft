@@ -330,7 +330,7 @@ func TestRotateToReadOnlyOp_Apply_Idempotent(t *testing.T) {
 // launchers this means one launchAndConfigure + registry.Add per
 // Apply call.
 func TestLaunchShardOp_Apply_SyncLauncher_LaunchesOneShard(t *testing.T) {
-	launcher := NewLocalLauncher()
+	launcher := newLocalLauncher()
 	t.Cleanup(func() { launcher.Close() })
 
 	reg := NewShardRegistry()

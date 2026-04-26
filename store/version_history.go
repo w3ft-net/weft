@@ -23,6 +23,13 @@ var (
 
 // ShellFunctionVersion is one entry in a /bin script's history,
 // covering both the live row (HEAD) and history rows uniformly.
+//
+// AuthoredByUserID is the actor who *created* this version's
+// content, derived from the captured_by_user_id of the row that
+// displaced it (since the trigger captures the displacing user at
+// that moment). For the oldest version in the chain (where no
+// further history exists), it falls back to the row's original
+// created_by_user_id.
 type ShellFunctionVersion struct {
 	ContentHash       string
 	Source            string
@@ -53,6 +60,20 @@ type shellFunctionHistoryRow struct {
 
 func (shellFunctionHistoryRow) TableName() string { return "shell_function_history" }
 
+// shellFunctionHistoryView is what LogShellFunction reads: the same
+// columns plus a SQL-resolved per-version author derived from the
+// trigger's captured_by trail (see LogShellFunction for the rule).
+type shellFunctionHistoryView struct {
+	ID                 uint64
+	Source             string
+	Language           string
+	ContentHash        string
+	Message            string
+	CapturedAt         time.Time
+	CapturedByUserID   *string
+	ResolvedAuthorID   *string
+}
+
 // computeShellFunctionHash returns the canonical content hash for a
 // /bin script's source. Used at write time and by the backfill
 // migration. SHA-256 hex; matches `encode(digest(source, 'sha256'),
@@ -75,25 +96,51 @@ func (s *Store) LogShellFunction(customerID uint, name string) ([]ShellFunctionV
 		return nil, err
 	}
 
+	// Each version's author = the user who displaced its predecessor,
+	// captured into history's captured_by_user_id at displacement
+	// time. SQL LEAD shifts captured_by_user_id one row toward newer
+	// (the displacer of THIS row's content is the author of the NEXT
+	// row's content); the oldest row in the chain has no successor
+	// and COALESCEs to the live row's created_by_user_id (the
+	// original author). Tiebreak on id DESC so saves within the same
+	// microsecond order deterministically.
+	var rows []shellFunctionHistoryView
+	err = s.db.Raw(`
+		SELECT
+			id, source, language, content_hash, message, captured_at,
+			captured_by_user_id,
+			COALESCE(
+				LEAD(captured_by_user_id) OVER (
+					ORDER BY captured_at DESC, id DESC
+				),
+				?
+			) AS resolved_author_id
+		FROM shell_function_history
+		WHERE function_id = ?
+		ORDER BY captured_at DESC, id DESC
+	`, fn.CreatedByUserID, fn.ID).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	// HEAD lives in shell_functions, not in history. Its author is the
+	// captured_by of the row that would be inserted next — i.e. the
+	// most recent history row's captured_by, falling back to the
+	// original creator when no history exists.
+	headAuthor := fn.CreatedByUserID
+	if len(rows) > 0 && rows[0].CapturedByUserID != nil {
+		headAuthor = rows[0].CapturedByUserID
+	}
+
 	out := []ShellFunctionVersion{{
 		ContentHash:      fn.ContentHash,
 		Source:           fn.Source,
 		Language:         fn.Language,
 		Message:          fn.Message,
 		AuthoredAt:       fn.UpdatedAt,
-		AuthoredByUserID: fn.CreatedByUserID,
+		AuthoredByUserID: headAuthor,
 		IsHead:           true,
 	}}
-
-	var rows []shellFunctionHistoryRow
-	err = s.db.Where("function_id = ?", fn.ID).
-		// Tiebreak on id DESC so saves within the same microsecond
-		// (rare but real on a fast test machine) order deterministically.
-		Order("captured_at DESC, id DESC").
-		Find(&rows).Error
-	if err != nil {
-		return nil, err
-	}
 	for _, r := range rows {
 		out = append(out, ShellFunctionVersion{
 			ContentHash:       r.ContentHash,
@@ -101,7 +148,7 @@ func (s *Store) LogShellFunction(customerID uint, name string) ([]ShellFunctionV
 			Language:          r.Language,
 			Message:           r.Message,
 			AuthoredAt:        r.CapturedAt,
-			AuthoredByUserID:  r.AuthoredByUserID,
+			AuthoredByUserID:  r.ResolvedAuthorID,
 			DisplacedByUserID: r.CapturedByUserID,
 			IsHead:            false,
 		})

@@ -137,29 +137,6 @@ func TestHistoryNavigation(t *testing.T) {
 	}
 }
 
-func TestBuiltinApps(t *testing.T) {
-	core, h := newTestCore([]string{"api", "web"})
-
-	for _, r := range "apps" {
-		core.HandleEvent(KeyEvent{Rune: r})
-	}
-	core.HandleEvent(KeyEvent{Key: KeyEnter})
-
-	// Should NOT dispatch a query — apps is a builtin.
-	for _, a := range h.actions {
-		if _, ok := a.(ActionQuery); ok {
-			t.Error("apps should not dispatch ActionQuery")
-		}
-	}
-
-	if !strings.Contains(h.Scrollback(), "api.log") {
-		t.Error("scrollback should contain api.log")
-	}
-	if !strings.Contains(h.Scrollback(), "web.log") {
-		t.Error("scrollback should contain web.log")
-	}
-}
-
 func TestBuiltinClear(t *testing.T) {
 	core, h := newTestCore(nil)
 

@@ -59,6 +59,21 @@ func TestNamespacePredicate(t *testing.T) {
 			pipeline: `cat /log/weft/metrics.log`,
 			wantSQL:  `SELECT line_num, raw FROM logs WHERE app = 'weft/metrics'`,
 		},
+		{
+			// `cat *.log` (after glob expansion at the call site) lands here
+			// as a multi-arg cat. The planner must union the apps with a
+			// single IN predicate, not silently drop everything past args[0].
+			name:     "multi-arg cat unions apps with IN predicate",
+			pipeline: `cat /log/weft/coordinator.log /log/weft/shard.log`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE app IN ('weft/coordinator', 'weft/shard')`,
+		},
+		{
+			// All args share the same env segment → the env predicate is
+			// preserved alongside the app IN list.
+			name:     "multi-arg cat preserves shared env predicate",
+			pipeline: `cat /log/acme/prod/api.log /log/acme/prod/worker.log`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE app IN ('acme/api', 'acme/worker') AND env = 'prod'`,
+		},
 	}
 
 	for _, tt := range tests {

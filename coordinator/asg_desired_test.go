@@ -232,7 +232,7 @@ func TestSyncASGDesired_NoOpForSyncLauncher(t *testing.T) {
 	}}
 
 	// LocalLauncher doesn't implement TierScaler.
-	launcher := NewLocalLauncher()
+	launcher := newLocalLauncher()
 	t.Cleanup(func() { launcher.Close() })
 
 	prov := &Provisioner{

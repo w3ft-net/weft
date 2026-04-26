@@ -33,13 +33,13 @@ func NewServer(pool compute.ComputePool) *Server {
 
 func (s *Server) CreateJob(_ context.Context, req *pb.CreateJobRequest) (*pb.CreateJobResponse, error) {
 	jobID := uuid.New().String()
-	job := s.pool.NewJob(req.Stages, int(req.ShardCount), req.MergeKey)
+	job := s.pool.NewJob(req.Stages, int(req.ShardCount), req.MergeKey, int(req.Limit))
 
 	s.mu.Lock()
 	s.jobs[jobID] = job
 	s.mu.Unlock()
 
-	log.Printf("job %s created: shards=%d merge_key=%q stages=%v", jobID, req.ShardCount, req.MergeKey, req.Stages)
+	log.Printf("job %s created: shards=%d merge_key=%q limit=%d stages=%v", jobID, req.ShardCount, req.MergeKey, req.Limit, req.Stages)
 	return &pb.CreateJobResponse{JobId: jobID}, nil
 }
 

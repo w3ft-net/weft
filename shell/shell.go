@@ -51,7 +51,8 @@ type Shell struct {
 	End    time.Time
 	Apps   []string
 	FS     shellcore.FS
-	User   string // username shown in prompt (e.g. "paul")
+	User     string // username shown in prompt (e.g. "alice")
+	Customer string // customer/team shown after the @ in the prompt (e.g. "acme"); empty falls back to "weft"
 }
 
 // Run starts the interactive shell.
@@ -86,6 +87,9 @@ func (s *Shell) Run() error {
 	}
 	if s.User != "" {
 		runner.core.SetUser(s.User)
+	}
+	if s.Customer != "" {
+		runner.core.SetCustomer(s.Customer)
 	}
 	runner.core.SetHistoryStore(NewFileHistoryStore())
 	runner.core.SetRange(s.Start, s.End)

@@ -40,7 +40,7 @@ Events are written to a reserved pseudofile — the coordinator writes every `Au
 cat /log/_audit.log | grep token
 cat /log/_audit.log | jq 'select(.kind == "permission.grant")'
 tail -f /log/_audit.log                      # live view during an incident
-cat /log/_audit.log --since 7d | jq '.actor_id' | sort | uniq -c
+tail -n 5000 /log/_audit.log | jq '.actor_id' | sort | uniq -c
 ```
 
 Watches and alerts work the same way:
@@ -48,7 +48,7 @@ Watches and alerts work the same way:
 ```
 # /cron.d/audit-alarming-grants
 # schedule: every 5m
-cat /log/_audit.log --since 5m \
+tail -n 200 /log/_audit.log \
   | jq 'select(.kind == "permission.grant" and .detail.role == "owner")' \
   | wc -l \
   | alert above 0 --notify=security

@@ -15,7 +15,7 @@ web:
 - `cat /log/<app>.log` — stream all lines for an app
 - `head /log/<app>.log` — first N lines (oldest)
 - `tail /log/<app>.log` — last N lines; `tail -f` follows
-- `apps` — list available apps
+- `ls /log` — list available apps (browse the namespace tree)
 
 ## Text pipeline
 
