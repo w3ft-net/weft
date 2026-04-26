@@ -496,12 +496,29 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 		}
 	}
 
-	// Query pipeline. Strip a pager suffix — one-shot mode doesn't
-	// have a screen to page against.
-	weftPipeline, _ := shellcore.SplitTerminalStage(line)
+	// Query pipeline. Strip a pager suffix or pipe-stage chart —
+	// one-shot mode has no screen to page or live-redraw against,
+	// but pipe-stage chart renders to stdout once and exits, so it
+	// is supported.
+	weftPipeline, chartArgs, errMsg := shellcore.SplitChartPipeline(line)
+	if errMsg != "" {
+		return fmt.Errorf("chart: %s", errMsg)
+	}
+	if chartArgs == nil {
+		weftPipeline, _ = shellcore.SplitTerminalStage(line)
+	}
 	result, err := s.Query(weftPipeline, s.Start, s.End)
 	if err != nil {
 		return err
+	}
+	if chartArgs != nil {
+		lines := queryResultLines(result)
+		out, errMsg := shellcore.RenderChartFromStream(lines, *chartArgs, 80, 20)
+		if errMsg != "" {
+			return fmt.Errorf("chart: %s", errMsg)
+		}
+		fmt.Fprint(w, out)
+		return nil
 	}
 	if result.Text != "" {
 		fmt.Fprint(w, result.Text)
@@ -511,6 +528,34 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// queryResultLines flattens a *QueryResult into one trimmed input line
+// per upstream output row, dropping blanks. Used by the non-interactive
+// pipe-stage chart path.
+func queryResultLines(r *QueryResult) []string {
+	if r == nil {
+		return nil
+	}
+	if r.Text != "" {
+		raw := strings.Split(r.Text, "\n")
+		out := make([]string, 0, len(raw))
+		for _, ln := range raw {
+			if strings.TrimSpace(ln) == "" {
+				continue
+			}
+			out = append(out, ln)
+		}
+		return out
+	}
+	out := make([]string, 0, len(r.Rows))
+	for _, row := range r.Rows {
+		if strings.TrimSpace(row.Raw) == "" {
+			continue
+		}
+		out = append(out, row.Raw)
+	}
+	return out
 }
 
 // execFSBuiltin handles ls, cat, stat for FS paths in non-interactive mode.

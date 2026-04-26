@@ -24,12 +24,18 @@ Stdin always passes through to stdout unchanged (tee behavior).</p>
 <p>See <code>man alert</code> for grammar, <code>--duration</code>, <code>--average</code>, <code>--msg</code>.</p>
 <h2>Single-row vs multi-row</h2>
 <p>By default alert treats stdin as one scalar per tick. With
-<code>-k &lt;N&gt;</code>, each non-blank line is one row and field N (1-indexed,
-whitespace-split) is the value. With <code>-t &lt;N&gt;</code>, another field
-names the row for per-tag incident dedup.</p>
-<pre><code># per-host disk alert
+<code>-k &lt;field&gt;</code>, each non-blank line is one row and <code>&lt;field&gt;</code> is
+the value to compare. With <code>-t &lt;field&gt;</code>, another field names
+the row for per-tag incident dedup. <code>&lt;field&gt;</code> is either a
+1-indexed whitespace column (<code>-k 2</code>) or a <code>.</code>-prefixed JSON
+path (<code>-k .latency_ms</code>); -k and -t must agree on which form.</p>
+<pre><code># per-host disk alert (positional)
 tail /log/shard.log | jq -r '&quot;\\(.host) \\(.pct)&quot;' \\
   | alert above 80 -k 2 -t 1 --notify=ops
+
+# same alert against JSONL — no jq -r reformatting
+tail /log/shard.log | jq 'select(.type==&quot;disk&quot;)' \\
+  | alert above 80 -k .pct -t .host --notify=ops
 </code></pre>
 <h2>/etc/notify.conf</h2>
 <p><code>--notify=&lt;alias&gt;</code> looks up a destination from your notify.conf

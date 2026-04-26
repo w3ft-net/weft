@@ -20,8 +20,8 @@ cat nginx.log | jq '.status' | sort | uniq -c | sort -rn
 # Grep across all sources
 cat *.log | grep &quot;connection refused&quot;
 
-# Time-bounded queries
-cat myapp.log --since 2h --until 30m | head -100
+# Most recent N lines (cheap)
+tail -n 100 myapp.log
 </code></pre>
 <p>The weft query planner analyzes your full pipeline and pushes
 predicates down into SQL — you write familiar shell commands, weft
@@ -95,7 +95,7 @@ numeric value. Whitespace separated; tag first, value second.</li>
 every minute:</p>
 <pre><code># /cron.d/memory-per-host
 # schedule: every 1m
-tail /log/weft/metrics.log --since 1m \\
+tail -n 200 /log/weft/metrics.log \\
   | jq -r 'select(.type == &quot;memory&quot;) | &quot;\\(._host) \\(.pct)&quot;'
 </code></pre>
 <p>That emits lines like:</p>
@@ -107,13 +107,21 @@ api-east   71.9
 when memory passes 80%, pipe into <code>alert</code> in multi-row mode:</p>
 <pre><code># /cron.d/memory-alert
 # schedule: every 1m
-tail /log/weft/metrics.log --since 1m \\
+tail -n 200 /log/weft/metrics.log \\
   | jq -r 'select(.type == &quot;memory&quot;) | &quot;\\(._host) \\(.pct)&quot;' \\
   | alert above 80 -k 2 -t 1 --notify=ops
 </code></pre>
 <p><code>-k 2</code> says &quot;field 2 holds the numeric value&quot;; <code>-t 1</code> says &quot;field
 1 names this row&quot; (the host) so each host opens and closes
 incidents independently.</p>
+<p><code>-k</code> and <code>-t</code> also accept JSON paths against JSONL stdin, which
+removes the <code>jq -r</code> reformatting step:</p>
+<pre><code>tail /log/weft/metrics.log --since 1m \\
+  | jq 'select(.type == &quot;memory&quot;)' \\
+  | alert above 80 -k .pct -t ._host --notify=ops
+</code></pre>
+<p>A single alert may not mix the two forms — both <code>-k</code> and <code>-t</code> must
+be positional, or both must be <code>.</code>-prefixed paths.</p>
 <p>The same shape works with any indexed dimension as the tag —
 swap <code>\\(._host)</code> for <code>\\(._deployment)</code>, <code>\\(._pod)</code>, <code>\\(._region)</code>,
 or any combination (<code>&quot;\\(._region) \\(._host) \\(.pct)&quot;</code> for region-
@@ -126,6 +134,28 @@ one number, so the per-tag history is a follow-up. For now the
 recipe above gives you per-bucket per-tag values; for the rolling
 average across buckets, point a second watch at it via
 <code>weft.latest</code>.</p>
+<h2>Charting a query</h2>
+<p>Pipe any pipeline into <code>chart</code> to render the result as a chart in
+the terminal — no need to first commit it to a saved watch. The
+chart is the terminal stage of the pipeline (no commands after it).</p>
+<pre><code># Time-bucketed p95 latency over the last hour
+cat /log/api.log --since 1h \\
+  | chart -x .ts -y .latency_ms --bucket 1m -a p95
+
+# Distribution of total latency by path
+cat /log/api.log | jq '{path, latency}' \\
+  | chart -x .path -y .latency -a sum
+
+# Plot a stream of numbers from jq
+cat /log/api.log | jq '.cpu_pct' | chart
+</code></pre>
+<p><code>-x</code> and <code>-y</code> accept either a 1-indexed whitespace column (<code>-x 1</code>)
+or a <code>.</code>-prefixed JSON path (<code>-x .ts</code>). With no flags, x is the
+row sequence and y is the last whitespace field of each line — so
+something like <code>wc -l | chart</code> plots a single value, and a
+multi-line stream of bare numbers from <code>jq</code> plots one point per
+line. See <code>man chart</code> for the full flag surface (aggregation,
+bucketing, chart kind, title).</p>
 <h2>Saving a result set</h2>
 <p>Redirect a pipeline into <code>/tmp</code> to hold onto the output and slice it
 a few different ways without re-running the whole query:</p>

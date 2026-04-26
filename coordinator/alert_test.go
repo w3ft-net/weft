@@ -38,6 +38,27 @@ func TestAlert_AnyEmpty(t *testing.T) {
 	}
 }
 
+func TestAlert_MultiRow_JSONPath_FiresPerRow(t *testing.T) {
+	// JSONL stdin (e.g. produced by jq); -k and -t are JSON paths.
+	stdin := `{"host":"shard-a","disk":85}
+{"host":"shard-b","disk":90}
+{"host":"shard-c","disk":50}
+`
+	_, stderr, code := runAlert("above 80 -k .disk -t .host", stdin)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
+	}
+	if !strings.Contains(stderr, "shard-a") {
+		t.Errorf("stderr missing shard-a alert: %q", stderr)
+	}
+	if !strings.Contains(stderr, "shard-b") {
+		t.Errorf("stderr missing shard-b alert: %q", stderr)
+	}
+	if strings.Contains(stderr, "shard-c") {
+		t.Errorf("shard-c (50) should not have fired: %q", stderr)
+	}
+}
+
 func TestAlert_MultiRow_FiresPerRow(t *testing.T) {
 	// Three hosts; only the first two are above 80. Both should fire, each
 	// with its own tag prefix in the stderr line.
@@ -252,8 +273,14 @@ func TestAlert_ParseArgs(t *testing.T) {
 		{"-k positive", "above 1 -k 2", true},
 		{"-k non-numeric", "above 1 -k abc", false},
 		{"-k zero rejected", "above 1 -k 0", false},
+		{"-k JSON path", "above 1 -k .latency_ms", true},
+		{"-k nested JSON path", "above 1 -k .req.latency_ms", true},
+		{"-k bare dot rejected", "above 1 -k .", false},
 		{"-t positive", "above 1 -k 2 -t 1", true},
 		{"--tag long form", "above 1 -k 2 --tag 3", true},
+		{"-t JSON path", "above 1 -k .v -t .host", true},
+		{"mixing -k positional with -t JSON path rejected", "above 1 -k 2 -t .host", false},
+		{"mixing -k JSON path with -t positional rejected", "above 1 -k .v -t 1", false},
 	}
 
 	for _, tt := range tests {

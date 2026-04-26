@@ -51,7 +51,7 @@ func AlertCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wr
 	condStr := strings.Join(args, " ")
 	rows := splitAlertRows(string(data), parsed)
 
-	if parsed.Tag > 0 && len(rows) > 1 {
+	if !parsed.Tag.IsZero() && len(rows) > 1 {
 		for _, r := range rows {
 			if r.tag == "" {
 				fmt.Fprintf(stderr, "alert: skipping row with empty tag: %q\n", r.raw)
@@ -64,7 +64,7 @@ func AlertCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wr
 	// trimmed stdin — keeps the legacy scalar path unchanged.
 	exit := 0
 	for _, r := range rows {
-		if parsed.Key > 0 && parsed.Tag > 0 && r.tag == "" {
+		if !parsed.Key.IsZero() && !parsed.Tag.IsZero() && r.tag == "" {
 			continue
 		}
 		rc := evaluateAlertRow(r, parsed, condStr, ctx, stderr)
@@ -86,10 +86,12 @@ type alertRow struct {
 }
 
 // splitAlertRows turns stdin into rows per the parser's extractors. Blank
-// lines are skipped; lines without enough fields for -k or -t produce a row
-// with an empty value/tag (evaluated as non-numeric downstream).
+// lines are skipped; lines that fail field extraction produce a row with
+// an empty value/tag (evaluated as non-numeric downstream). When -k uses
+// a JSON-path spec each line is parsed as JSON; for positional specs
+// each line is split on whitespace.
 func splitAlertRows(data string, parsed *shellcore.AlertArgs) []alertRow {
-	if parsed.Key == 0 {
+	if parsed.Key.IsZero() {
 		return []alertRow{{raw: strings.TrimSpace(data), value: strings.TrimSpace(data)}}
 	}
 	var rows []alertRow
@@ -101,13 +103,14 @@ func splitAlertRows(data string, parsed *shellcore.AlertArgs) []alertRow {
 		if trim == "" {
 			continue
 		}
-		fields := strings.Fields(trim)
 		r := alertRow{raw: trim}
-		if parsed.Key > 0 && parsed.Key <= len(fields) {
-			r.value = fields[parsed.Key-1]
+		if v, err := shellcore.ResolveField(parsed.Key, trim); err == nil {
+			r.value = v
 		}
-		if parsed.Tag > 0 && parsed.Tag <= len(fields) {
-			r.tag = fields[parsed.Tag-1]
+		if !parsed.Tag.IsZero() {
+			if t, err := shellcore.ResolveField(parsed.Tag, trim); err == nil {
+				r.tag = t
+			}
 		}
 		rows = append(rows, r)
 	}

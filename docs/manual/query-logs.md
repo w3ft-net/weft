@@ -146,6 +146,18 @@ tail -n 200 /log/weft/metrics.log \
 1 names this row" (the host) so each host opens and closes
 incidents independently.
 
+`-k` and `-t` also accept JSON paths against JSONL stdin, which
+removes the `jq -r` reformatting step:
+
+```
+tail /log/weft/metrics.log --since 1m \
+  | jq 'select(.type == "memory")' \
+  | alert above 80 -k .pct -t ._host --notify=ops
+```
+
+A single alert may not mix the two forms — both `-k` and `-t` must
+be positional, or both must be `.`-prefixed paths.
+
 The same shape works with any indexed dimension as the tag —
 swap `\(._host)` for `\(._deployment)`, `\(._pod)`, `\(._region)`,
 or any combination (`"\(._region) \(._host) \(.pct)"` for region-
@@ -159,6 +171,33 @@ one number, so the per-tag history is a follow-up. For now the
 recipe above gives you per-bucket per-tag values; for the rolling
 average across buckets, point a second watch at it via
 `weft.latest`.
+
+## Charting a query
+
+Pipe any pipeline into `chart` to render the result as a chart in
+the terminal — no need to first commit it to a saved watch. The
+chart is the terminal stage of the pipeline (no commands after it).
+
+```
+# Time-bucketed p95 latency over the last hour
+cat /log/api.log --since 1h \
+  | chart -x .ts -y .latency_ms --bucket 1m -a p95
+
+# Distribution of total latency by path
+cat /log/api.log | jq '{path, latency}' \
+  | chart -x .path -y .latency -a sum
+
+# Plot a stream of numbers from jq
+cat /log/api.log | jq '.cpu_pct' | chart
+```
+
+`-x` and `-y` accept either a 1-indexed whitespace column (`-x 1`)
+or a `.`-prefixed JSON path (`-x .ts`). With no flags, x is the
+row sequence and y is the last whitespace field of each line — so
+something like `wc -l | chart` plots a single value, and a
+multi-line stream of bare numbers from `jq` plots one point per
+line. See `man chart` for the full flag surface (aggregation,
+bucketing, chart kind, title).
 
 ## Saving a result set
 

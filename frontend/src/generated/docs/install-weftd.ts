@@ -106,8 +106,8 @@ tail /log/myns/metrics.log \\
   | jq -r 'select(.type == &quot;disk&quot;) | &quot;\\(.host) \\(.pct)&quot;' \\
   | alert above 80 -k 2 -t 1 --notify=ops
 
-# 5-minute load average by host
-cat /log/myns/metrics.log --since 1h \\
+# Recent load averages by host
+tail -n 1000 /log/myns/metrics.log \\
   | jq 'select(.type == &quot;load&quot;) | {host, load5}'
 </code></pre>
 <p>Metrics only run on Linux (the collectors read <code>/proc/stat</code>,

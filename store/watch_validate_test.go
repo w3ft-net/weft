@@ -40,14 +40,16 @@ func TestCompileWatchPipeline(t *testing.T) {
 	cases := []struct {
 		name     string
 		pipeline string
-		wantKey  *int
-		wantTag  *int
+		wantKey  *string
+		wantTag  *string
 	}{
 		{"no alert", `cat /log/app.log`, nil, nil},
 		{"alert without -k/-t", `foo | alert above 1`, nil, nil},
-		{"alert with -k only", `foo | alert above 1 -k 2`, intPtr(2), nil},
-		{"alert with -k and -t", `foo | alert above 1 -k 2 -t 1`, intPtr(2), intPtr(1)},
-		{"alert with --tag long form", `foo | alert above 1 -k 3 --tag 2`, intPtr(3), intPtr(2)},
+		{"alert with -k only", `foo | alert above 1 -k 2`, strPtr("2"), nil},
+		{"alert with -k and -t", `foo | alert above 1 -k 2 -t 1`, strPtr("2"), strPtr("1")},
+		{"alert with --tag long form", `foo | alert above 1 -k 3 --tag 2`, strPtr("3"), strPtr("2")},
+		{"alert with JSON-path -k", `foo | alert above 1 -k .latency_ms`, strPtr(".latency_ms"), nil},
+		{"alert with JSON-path -k and -t", `foo | alert above 1 -k .v -t .host`, strPtr(".v"), strPtr(".host")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -55,11 +57,11 @@ func TestCompileWatchPipeline(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if !eqIntPtr(cw.AlertKey, c.wantKey) {
-				t.Errorf("AlertKey = %v, want %v", cw.AlertKey, c.wantKey)
+			if !eqStrPtr(cw.AlertKey, c.wantKey) {
+				t.Errorf("AlertKey = %v, want %v", derefStr(cw.AlertKey), derefStr(c.wantKey))
 			}
-			if !eqIntPtr(cw.AlertTag, c.wantTag) {
-				t.Errorf("AlertTag = %v, want %v", cw.AlertTag, c.wantTag)
+			if !eqStrPtr(cw.AlertTag, c.wantTag) {
+				t.Errorf("AlertTag = %v, want %v", derefStr(cw.AlertTag), derefStr(c.wantTag))
 			}
 		})
 	}

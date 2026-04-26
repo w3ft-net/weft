@@ -33,14 +33,20 @@ See `man alert` for grammar, `--duration`, `--average`, `--msg`.
 ## Single-row vs multi-row
 
 By default alert treats stdin as one scalar per tick. With
-`-k <N>`, each non-blank line is one row and field N (1-indexed,
-whitespace-split) is the value. With `-t <N>`, another field
-names the row for per-tag incident dedup.
+`-k <field>`, each non-blank line is one row and `<field>` is
+the value to compare. With `-t <field>`, another field names
+the row for per-tag incident dedup. `<field>` is either a
+1-indexed whitespace column (`-k 2`) or a `.`-prefixed JSON
+path (`-k .latency_ms`); -k and -t must agree on which form.
 
 ```
-# per-host disk alert
+# per-host disk alert (positional)
 tail /log/shard.log | jq -r '"\(.host) \(.pct)"' \
   | alert above 80 -k 2 -t 1 --notify=ops
+
+# same alert against JSONL — no jq -r reformatting
+tail /log/shard.log | jq 'select(.type=="disk")' \
+  | alert above 80 -k .pct -t .host --notify=ops
 ```
 
 ## /etc/notify.conf

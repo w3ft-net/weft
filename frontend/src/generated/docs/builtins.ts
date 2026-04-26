@@ -31,7 +31,7 @@ const builtins = {
 <li><code>ls [-l] [-a] [-h] [path]</code> — list <code>/bin</code>, <code>/cron.d</code>, <code>/etc</code>, <code>/log</code>, <code>/tmp</code>; <code>ls -l /cron.d/</code> adds a sparkline</li>
 <li><code>cat /bin/&lt;fn&gt;</code> — view a saved function</li>
 <li><code>cat /cron.d/&lt;watch&gt;</code> — view a watch definition</li>
-<li><code>chart &lt;watch&gt;</code> — render recent watch results in the terminal (<code>man chart</code>)</li>
+<li><code>chart &lt;watch&gt;</code> / <code>... | chart [-x ... -y ...]</code> — render a saved watch or a pipeline as an in-terminal chart (<code>man chart</code>)</li>
 <li><code>&gt;</code> / <code>&gt;&gt;</code> — redirect pipeline output into <code>/tmp</code></li>
 <li><code>mkdir /tmp/&lt;dir&gt;</code> — organise scratch files into folders</li>
 <li><code>cp &lt;src&gt; &lt;dst&gt;</code> / <code>mv &lt;src&gt; &lt;dst&gt;</code> — duplicate / rename (within <code>/tmp</code>)</li>

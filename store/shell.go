@@ -323,9 +323,11 @@ func (s *Store) DeleteShellFunction(customerID uint, name string) error {
 // --- Cron Watches (/cron.d/) ---
 
 // CronWatch is a scheduled pipeline run. AlertKey and AlertTag are the
-// pre-parsed -k and -t field positions from the pipeline's `| alert` stage;
+// pre-parsed -k and -t selectors from the pipeline's `| alert` stage;
 // nil means single-row mode (no extraction). They're populated by
 // SaveCronWatch so the executor doesn't reparse the pipeline every tick.
+// Stored as text — either a 1-indexed column number ("3") or a
+// dot-prefixed JSON path (".foo.bar"); see shellcore.FieldSpec.
 type CronWatch struct {
 	gorm.Model
 	CustomerID uint   `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
@@ -335,8 +337,8 @@ type CronWatch struct {
 	Enabled    bool   `gorm:"not null;default:true"`
 	LastRunAt  *time.Time
 	LastStatus string                           // "ok", "error", "stderr"
-	AlertKey   *int `gorm:"column:alert_key"`
-	AlertTag   *int `gorm:"column:alert_tag"`
+	AlertKey   *string `gorm:"column:alert_key"`
+	AlertTag   *string `gorm:"column:alert_tag"`
 	// AlertCondition + AlertThreshold are the dashboard projection of
 	// the `alert` stage's numeric cutoff. Populated only for
 	// above/below/eq/neq — conditions without a single absolute
@@ -408,8 +410,11 @@ func (s *Store) SaveCronWatch(customerID uint, userID, name, schedule, pipeline 
 // threshold-line rendering and are only populated for conditions with a
 // single numeric cutoff (above, below, eq, neq).
 type CompiledWatch struct {
-	AlertKey       *int
-	AlertTag       *int
+	// AlertKey/AlertTag are stamped as the FieldSpec source form
+	// ("3" or ".foo.bar"); the executor re-parses them via
+	// shellcore.ParseFieldSpec to recover the FieldSpec.
+	AlertKey       *string
+	AlertTag       *string
 	AlertCondition *string
 	AlertThreshold *float64
 }
@@ -421,8 +426,8 @@ type CompiledWatch struct {
 //   - The pipeline must parse as bash.
 //   - `alert` may appear at most once in the pipeline. The single stage is
 //     the sole incident-dedup boundary per watch run.
-//   - `-k` / `-t` must be positive integers if present (enforced by
-//     shellcore.ParseAlertArgs).
+//   - `-k` / `-t` must be a positive integer or a `.`-prefixed JSON path
+//     if present (enforced by shellcore.ParseAlertArgs).
 //
 // The AST walk catches alerts nested in command substitutions, compound
 // commands, and function bodies so the only way past validation is alias
@@ -454,13 +459,13 @@ func CompileWatchPipeline(pipeline string) (CompiledWatch, error) {
 		if perr != nil {
 			return out, fmt.Errorf("alert: %w", perr)
 		}
-		if parsed.Key > 0 {
-			k := parsed.Key
-			out.AlertKey = &k
+		if !parsed.Key.IsZero() {
+			s := parsed.Key.String()
+			out.AlertKey = &s
 		}
-		if parsed.Tag > 0 {
-			t := parsed.Tag
-			out.AlertTag = &t
+		if !parsed.Tag.IsZero() {
+			s := parsed.Tag.String()
+			out.AlertTag = &s
 		}
 		// Stamp the condition + numeric threshold for dashboard line
 		// rendering. Only above/below/eq/neq carry a single absolute

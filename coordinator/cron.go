@@ -3,12 +3,14 @@ package coordinator
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/kevlarcon/weft/shellcore"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -203,14 +205,14 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch) {
 }
 
 // persistResults writes one or more cron_results rows for this tick. In
-// single-row mode (watch.AlertKey nil) we write a single row with tag='' and
-// let SaveCronResult auto-parse Stdout into Value. In multi-row mode we
-// split stdout into lines, extract value from field AlertKey and tag from
-// AlertTag, and write one row per non-blank line. Lines whose value field
-// is non-numeric are still persisted — with Value=NULL — so the history
-// stays a faithful record; aggregates ignore NULLs. Stderr and exit_code
-// are only attached to the first row in multi-row mode (they describe the
-// whole tick, not a specific row).
+// single-row mode (watch.AlertKey nil) we write a single row with tag=''
+// and let SaveCronResult auto-parse Stdout into Value. In multi-row mode
+// we split stdout into lines, resolve Value from the watch's -k spec
+// (positional or JSON path) and Tag from the -t spec, and write one row
+// per non-blank line. Lines whose value field isn't numeric are still
+// persisted — with Value=NULL — so the history stays a faithful record;
+// aggregates ignore NULLs. Stderr and exit_code are only attached to the
+// first row in multi-row mode (they describe the whole tick, not a row).
 func (ce *CronExecutor) persistResults(watch store.CronWatch, ranAt time.Time, stdout, stderr string, exitCode int, duration time.Duration) error {
 	if watch.AlertKey == nil {
 		return ce.Store.SaveCronResult(&store.CronResult{
@@ -223,10 +225,16 @@ func (ce *CronExecutor) persistResults(watch store.CronWatch, ranAt time.Time, s
 		})
 	}
 
-	k := *watch.AlertKey
-	tagField := 0
+	keySpec, err := shellcore.ParseFieldSpec(*watch.AlertKey)
+	if err != nil {
+		return fmt.Errorf("alert_key %q: %w", *watch.AlertKey, err)
+	}
+	var tagSpec shellcore.FieldSpec
 	if watch.AlertTag != nil {
-		tagField = *watch.AlertTag
+		tagSpec, err = shellcore.ParseFieldSpec(*watch.AlertTag)
+		if err != nil {
+			return fmt.Errorf("alert_tag %q: %w", *watch.AlertTag, err)
+		}
 	}
 
 	var rows []store.CronResult
@@ -238,7 +246,6 @@ func (ce *CronExecutor) persistResults(watch store.CronWatch, ranAt time.Time, s
 		if line == "" {
 			continue
 		}
-		fields := strings.Fields(line)
 
 		r := store.CronResult{
 			CronWatchID: watch.ID,
@@ -251,13 +258,15 @@ func (ce *CronExecutor) persistResults(watch store.CronWatch, ranAt time.Time, s
 			r.Stderr = stderr
 			first = false
 		}
-		if k > 0 && k <= len(fields) {
-			if v, err := strconv.ParseFloat(fields[k-1], 64); err == nil {
+		if val, err := shellcore.ResolveField(keySpec, line); err == nil && val != "" {
+			if v, err := strconv.ParseFloat(val, 64); err == nil {
 				r.Value = &v
 			}
 		}
-		if tagField > 0 && tagField <= len(fields) {
-			r.Tag = fields[tagField-1]
+		if !tagSpec.IsZero() {
+			if t, err := shellcore.ResolveField(tagSpec, line); err == nil {
+				r.Tag = t
+			}
 		}
 		rows = append(rows, r)
 	}

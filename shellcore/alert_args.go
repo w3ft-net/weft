@@ -60,8 +60,8 @@ type AlertArgs struct {
 	Average   bool          // --average flag (above/below with duration)
 	Msg       string        // --msg override
 	Notify    string        // --notify=<alias> → notify.conf lookup
-	Key       int           // -k <N>, 1-indexed; 0 means "whole line"
-	Tag       int           // -t/--tag <N>, 1-indexed; 0 means no tag
+	Key       FieldSpec     // -k: 1-indexed column or .json.path; zero = "whole line"
+	Tag       FieldSpec     // -t/--tag: same shape; zero = no tag
 }
 
 // ParseAlertArgs parses the argv following `alert` on the command line.
@@ -215,25 +215,38 @@ func ParseAlertArgs(args []string) (*AlertArgs, error) {
 		case "-k":
 			i++
 			if i >= len(args) {
-				return nil, fmt.Errorf("-k requires a field number")
+				return nil, fmt.Errorf("-k requires a field number or .json.path")
 			}
-			n, err := strconv.Atoi(args[i])
-			if err != nil || n < 1 {
-				return nil, fmt.Errorf("-k requires a positive integer, got %q", args[i])
+			spec, err := ParseFieldSpec(args[i])
+			if err != nil {
+				return nil, fmt.Errorf("-k: %w", err)
 			}
-			parsed.Key = n
+			if spec.IsZero() {
+				return nil, fmt.Errorf("-k requires a field number or .json.path, got empty value")
+			}
+			parsed.Key = spec
 		case "-t", "--tag":
 			i++
 			if i >= len(args) {
-				return nil, fmt.Errorf("%s requires a field number", a)
+				return nil, fmt.Errorf("%s requires a field number or .json.path", a)
 			}
-			n, err := strconv.Atoi(args[i])
-			if err != nil || n < 1 {
-				return nil, fmt.Errorf("%s requires a positive integer, got %q", a, args[i])
+			spec, err := ParseFieldSpec(args[i])
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", a, err)
 			}
-			parsed.Tag = n
+			if spec.IsZero() {
+				return nil, fmt.Errorf("%s requires a field number or .json.path, got empty value", a)
+			}
+			parsed.Tag = spec
 		}
 		i++
+	}
+
+	// -k and -t must agree on positional vs JSON-path. Mixing them
+	// on the same line is incoherent — one parser sees whitespace
+	// columns, the other parses the line as JSON.
+	if !parsed.Key.IsZero() && !parsed.Tag.IsZero() && parsed.Key.IsJSON() != parsed.Tag.IsJSON() {
+		return nil, fmt.Errorf("-k and -t must both be positional or both .json.path")
 	}
 
 	return parsed, nil

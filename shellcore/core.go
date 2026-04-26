@@ -6,11 +6,14 @@ import (
 	"time"
 )
 
-// terminalCommands are commands recognised as a terminal pager suffix
-// in a shell pipeline. Today only `less` is wired through ModeLess;
-// `more` would need its own path.
+// terminalCommands are commands recognised as a terminal stage in a
+// shell pipeline. Recognised commands are stripped client-side before
+// the upstream pipeline is sent to the coordinator, and the result is
+// routed to the matching renderer (less → ModeLess, chart →
+// RenderChartFromStream).
 var terminalCommands = map[string]bool{
-	"less": true,
+	"less":  true,
+	"chart": true,
 }
 
 // ShellCore is the shared shell state machine.
@@ -49,6 +52,12 @@ type ShellCore struct {
 	// runs stripped of the terminal stage and the result enters the
 	// pager on arrival instead of landing in scrollback.
 	pendingLess bool
+
+	// pendingChart holds parsed pipe-stage chart args when the user
+	// typed `... | chart [-x ...]`; nil otherwise. Like pendingLess,
+	// the chart stage is stripped from the upstream pipeline and the
+	// result lines are fed into RenderChartFromStream on arrival.
+	pendingChart *ChartPipeArgs
 
 	// tierLimits provides the runtime tier→watch-cap table for
 	// `help cron`. nil = fall back to a generic "see your plan" line.
@@ -925,8 +934,23 @@ func (c *ShellCore) resolveFunction(line string) string {
 // ── Query handling ──────────────────────────────────────────
 
 func (c *ShellCore) startQuery(line string) {
-	weftPipeline, termCmd := splitTerminalStage(line)
-	c.pendingLess = termCmd == "less"
+	weftPipeline, termTokens := splitTerminalStage(line)
+	c.pendingLess = false
+	c.pendingChart = nil
+	if len(termTokens) > 0 {
+		switch termTokens[0] {
+		case "less":
+			c.pendingLess = true
+		case "chart":
+			args, errMsg := parseChartPipeArgs(termTokens[1:])
+			if errMsg != "" {
+				c.appendScrollback(ErrorText(errMsg) + "\n")
+				c.redrawPrompt()
+				return
+			}
+			c.pendingChart = &args
+		}
+	}
 
 	if isFollowPipeline(weftPipeline) {
 		c.mode = ModeFollowing
@@ -945,6 +969,7 @@ func (c *ShellCore) handleQueryResult(ev QueryResultEvent) {
 
 	if ev.Err != nil {
 		c.pendingLess = false
+		c.pendingChart = nil
 		errMsg := cleanError(ev.Err.Error())
 		c.appendScrollback(ErrorText(errMsg) + "\n")
 		c.redrawPrompt()
@@ -963,6 +988,21 @@ func (c *ShellCore) handleQueryResult(ev QueryResultEvent) {
 			text = sb.String()
 		}
 		c.enterLess(text, "")
+		return
+	}
+
+	if c.pendingChart != nil {
+		args := *c.pendingChart
+		c.pendingChart = nil
+		lines := resultLines(ev)
+		w, h := c.chartDims()
+		out, errMsg := RenderChartFromStream(lines, args, w, h)
+		if errMsg != "" {
+			c.appendScrollback(ErrorText("chart: "+errMsg) + "\n")
+		} else {
+			c.appendScrollback(out)
+		}
+		c.redrawPrompt()
 		return
 	}
 
@@ -991,6 +1031,32 @@ func (c *ShellCore) handleFollowDone(ev FollowDoneEvent) {
 		c.appendScrollback(DimText("[tail stopped]") + "\n")
 		c.redrawPrompt()
 	}
+}
+
+// resultLines converts the rows-or-text result of a query into a
+// slice of trimmed input lines for downstream consumers (today: the
+// pipe-stage chart renderer). Both pipeline shapes deliver the same
+// thing — one row per line of upstream output.
+func resultLines(ev QueryResultEvent) []string {
+	if ev.Text != "" {
+		raw := strings.Split(ev.Text, "\n")
+		out := make([]string, 0, len(raw))
+		for _, ln := range raw {
+			if strings.TrimSpace(ln) == "" {
+				continue
+			}
+			out = append(out, ln)
+		}
+		return out
+	}
+	out := make([]string, 0, len(ev.Rows))
+	for _, r := range ev.Rows {
+		if strings.TrimSpace(r.Raw) == "" {
+			continue
+		}
+		out = append(out, r.Raw)
+	}
+	return out
 }
 
 // cleanError strips noisy gRPC/transport wrappers from error messages
@@ -1039,28 +1105,93 @@ func isFollowPipeline(pipeline string) bool {
 }
 
 // splitTerminalStage checks if the pipeline ends with a terminal command
-// (less, more) and splits it off. The termPart is the bare command name
-// ("less" or "more") rather than the whole last-stage string — the
-// caller doesn't need flags today and stripping them avoids confusing
-// future pager invocations with stray argv.
-func splitTerminalStage(pipeline string) (weftPart, termPart string) {
+// (less, chart) and splits it off. termTokens is the tokenized last
+// stage with quoted strings unwrapped — termTokens[0] is the command
+// name and the rest are its argv. Returns (pipeline, nil) when the
+// last stage isn't a terminal command.
+func splitTerminalStage(pipeline string) (weftPart string, termTokens []string) {
 	idx := strings.LastIndex(pipeline, "|")
 	if idx == -1 {
-		return pipeline, ""
+		return pipeline, nil
 	}
 	lastStage := strings.TrimSpace(pipeline[idx+1:])
-	cmd := strings.Fields(lastStage)
-	if len(cmd) > 0 && terminalCommands[cmd[0]] {
-		return strings.TrimSpace(pipeline[:idx]), cmd[0]
+	tokens := tokenizeArgv(lastStage)
+	if len(tokens) == 0 || !terminalCommands[tokens[0]] {
+		return pipeline, nil
 	}
-	return pipeline, ""
+	return strings.TrimSpace(pipeline[:idx]), tokens
 }
 
 // SplitTerminalStage is the exported form for non-interactive callers
 // (e.g. `weft sh -c 'cat foo.log | less'`) that want to strip a pager
-// suffix before sending the pipeline to the coordinator.
+// suffix before sending the pipeline to the coordinator. It returns
+// only the bare command name to keep the legacy contract; callers that
+// want argv use the package-internal splitTerminalStage.
 func SplitTerminalStage(pipeline string) (weftPart, termPart string) {
-	return splitTerminalStage(pipeline)
+	weft, tokens := splitTerminalStage(pipeline)
+	if len(tokens) == 0 {
+		return weft, ""
+	}
+	return weft, tokens[0]
+}
+
+// tokenizeArgv splits a single command stage into argv tokens with
+// quote unwrapping. Used to recover chart's flag arguments from the
+// last stage of a pipeline; the existing whole-pipeline Tokenize
+// helper produces typed-token output that's awkward for argv use.
+func tokenizeArgv(s string) []string {
+	var out []string
+	i := 0
+	for i < len(s) {
+		// Skip whitespace.
+		for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+			i++
+		}
+		if i >= len(s) {
+			break
+		}
+		// Single-quoted run.
+		if s[i] == '\'' {
+			j := i + 1
+			for j < len(s) && s[j] != '\'' {
+				j++
+			}
+			out = append(out, s[i+1:j])
+			if j < len(s) {
+				j++ // consume closing quote
+			}
+			i = j
+			continue
+		}
+		// Double-quoted run; honor backslash escapes.
+		if s[i] == '"' {
+			var b strings.Builder
+			j := i + 1
+			for j < len(s) && s[j] != '"' {
+				if s[j] == '\\' && j+1 < len(s) {
+					b.WriteByte(s[j+1])
+					j += 2
+					continue
+				}
+				b.WriteByte(s[j])
+				j++
+			}
+			out = append(out, b.String())
+			if j < len(s) {
+				j++
+			}
+			i = j
+			continue
+		}
+		// Bare word.
+		j := i
+		for j < len(s) && s[j] != ' ' && s[j] != '\t' && s[j] != '\'' && s[j] != '"' {
+			j++
+		}
+		out = append(out, s[i:j])
+		i = j
+	}
+	return out
 }
 
 // ── Output helpers ──────────────────────────────────────────

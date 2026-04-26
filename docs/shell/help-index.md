@@ -20,7 +20,7 @@ shell:
 ## Reference pages
 
 - `man alert` — alert grammar and options
-- `man chart` — render a watch as an in-terminal chart
+- `man chart` — render a watch or pipeline as an in-terminal chart
 - `man range` — set the query time window
 - `man less` — the in-shell pager
 
