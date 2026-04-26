@@ -187,7 +187,9 @@ This is the part that makes `ls -al` and `wit log` interesting. For each custome
 
 - **`/bin/scan`** — three versions, written initially by user1, refined by user2, refined again by user1. So `wit log` shows the alternation.
 - **`/bin/count_errors`** — single version by user2.
+- **`/bin/mem_history`** — single version by user2. Reshape script for piping into `chart`: emits `{ts, pct}` JSONL from a metrics log so the user can do `mem_history /log/<...>/api_metrics.log | chart -x .ts -y .pct --bucket 1m -a avg`.
 - **`/cron.d/error-rate`** — two versions: initial single-line by user1, expanded to use `weft.avg` aggregation by user2.
+- **`/cron.d/mem-pressure`** — single version by user1. Per-host memory alert that exercises `alert -k .pct -t .host` against JSONL produced by `jq 'select(.type == "memory")'`. No `jq -r` reformatting; the alert reads JSON paths directly.
 
 Authored by setting `weft.acting_user_id` GUC the same way live code does. The seed CLI does this inline. We also stamp a few of the version rows with commit messages so the `wit log` output isn't all blank.
 
@@ -234,35 +236,83 @@ weft> cat api.log | awk '$ENV == "staging"' | wc -l
 ```
 First two have rows, third returns zero — acme has no `staging` env, even though globex does. Confirms the coordinator is honoring the token-bound env (migration 034) and not just trusting the agent or leaking env names across customers.
 
-### Charts on a known shape
+### Charts on a known shape — watch form
 
-`chart` reads from a saved watch's recent results. To make the
-rate-shape choices visible, the seed creates a per-service
-`request-rate` watch (one per app per env) that emits one number
-per tick — the count of lines in the last minute:
+`chart <watch>` reads from a saved watch's recent results. The
+existing `error-rate` watch fires every 5 minutes; pointing the
+chart at it surfaces the rate-shape generator's curve:
 
 ```
-# /cron.d/api-prod-rate
+weft> chart error-rate
+weft> chart error-rate -f             # follow, redraws on tick
+```
+
+On `acme/api` (prod, `sine:20,40,600`) the chart should trace a
+clean ~10-minute-period sine modulated by the `ERROR_RATIO`. On
+`acme/worker` (sand, sawtooth) it should show ramp-and-snap. On
+`globex/billing` (staging, `monotonic` with no reset) it should
+climb steadily and the chart should auto-rescale as the y-axis
+blows out. Side-by-side across two terminals, billing/staging
+(unbounded) and billing/prod (bounded) should look identical
+until prod snaps back.
+
+### Charts ad-hoc — pipe form
+
+The pipe-stage chart renders a one-shot pipeline without first
+naming a watch. The seeded `/bin/mem_history` script reshapes a
+metrics log into chart-friendly JSONL; pipe it into `chart`:
+
+```
+weft> mem_history /log/acme/prod/api_metrics.log \
+    | chart -x .ts -y .pct --bucket 1m -a avg
+```
+
+Time-bucketed average memory percentage over the last hour. With
+`-x .ts -y .pct` the chart parses each upstream line as JSON.
+Switch reductions inline:
+
+```
+weft> mem_history /log/acme/prod/api_metrics.log \
+    | chart -x .ts -y .pct --bucket 1m -a p95
+weft> mem_history /log/acme/prod/api_metrics.log \
+    | chart -x .ts -y .pct --bucket 30s -a max
+```
+
+Categorical x (no time bucketing) is the other shape worth seeing —
+distribution of total request latency by path:
+
+```
+weft> cat /log/acme/prod/api.log --since 1h \
+    | jq '{path, latency}' \
+    | chart -x .path -y .latency -a sum
+```
+
+Default chart kind is `bar` for categorical x, `line` when
+`--bucket` is set; `-t bar|line|sparkline` overrides.
+
+### JSON-path alerts
+
+The `mem-pressure` watch exercises `alert -k .pct -t .host`
+against JSONL — no `jq -r` reformatting, the alert reads the JSON
+field directly:
+
+```
+# /cron.d/mem-pressure
 # schedule: every 1m
-cat /log/acme/prod/api.log | wc -l
+tail /log/acme/prod/api_metrics.log --since 2m \
+  | jq 'select(.type == "memory")' \
+  | alert above 70 -k .pct -t .host
 ```
 
-Then in the shell:
+Compare with the older positional form (still supported, still
+present in the manual examples) — both forms work in one repo, and
+mixing positional and JSON-path within a single alert call is
+rejected at parse time:
 
 ```
-weft> chart api-prod-rate
-weft> chart api-prod-rate -f          # follow, redraws on tick
+weft> echo "host-a 85" | alert above 80 -k 2 -t .host
+alert: -k and -t must both be positional or both .json.path
 ```
-
-On `acme/api` (prod, sine:20,40,600) `chart api-prod-rate -f`
-should trace a clean ~10-minute-period sine. On `acme/worker`
-(sand, sawtooth) `chart worker-sand-rate -f` should show
-ramp-and-snap. On `globex/billing` (staging, monotonic with no
-reset) `chart billing-staging-rate -f` should climb steadily and
-the chart should auto-rescale as the y-axis blows out. Side-by-side
-across two terminals, `chart billing-staging-rate -f` (unbounded)
-and `chart billing-prod-rate -f` (bounded) should look identical
-until the prod one snaps back.
 
 ### Metrics piggy-back
 

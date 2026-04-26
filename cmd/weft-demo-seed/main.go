@@ -375,7 +375,59 @@ func preseedScripts(s *store.Store, custID uint, customerName string, members []
 			}
 		}
 	}
+
+	// /cron.d/mem-pressure: per-host JSON-path alert against the metrics
+	// stream (one line per metrics tick from weftd, JSON-shaped). This is
+	// the demo's exercise of `alert -k .field -t .field` — no jq -r
+	// reformatting, the alert reads JSON paths directly. With one
+	// container per service the tag set is small, but the wire works
+	// the same as it would with many.
+	primaryEnv := map[string]string{
+		"acme":   "prod",
+		"globex": "prod",
+	}[customerName]
+	metricsLog := fmt.Sprintf("/log/%s/%s/%s_metrics.log",
+		customerName, primaryEnv, lastSegment(primaryApp))
+	memPressure := fmt.Sprintf(
+		"tail %s --since 2m | jq 'select(.type == \"memory\")' "+
+			"| alert above 70 -k .pct -t .host",
+		metricsLog)
+	if existing, _ := s.GetCronWatch(custID, "mem-pressure"); existing == nil || existing.Pipeline != memPressure {
+		if err := s.SaveCronWatch(custID, user1.ID, "mem-pressure", "*/1 * * * *", memPressure); err != nil {
+			return fmt.Errorf("mem-pressure: %w", err)
+		}
+		if err := s.AmendCronWatchMessage(custID, "mem-pressure", "HEAD",
+			"per-host memory alert; uses JSON paths against weftd metrics"); err != nil {
+			return fmt.Errorf("mem-pressure message: %w", err)
+		}
+	}
+
+	// /bin/mem_history: a chart-friendly reshape of metrics output. The
+	// demo verification pipes this into `chart` to exercise the new
+	// pipe-stage chart with --bucket and -a flags. Single version, but
+	// authored by user2 so `ls -al /bin/` shows multiple authors.
+	memHistory := "tail $1 --since 1h | jq 'select(.type == \"memory\") | {ts, pct}'"
+	if existing, _ := s.GetShellFunction(custID, "mem_history"); existing == nil {
+		if err := s.SaveShellFunction(custID, user2.ID, "mem_history", memHistory); err != nil {
+			return fmt.Errorf("mem_history: %w", err)
+		}
+		if err := s.AmendShellFunctionMessage(custID, "mem_history", "HEAD",
+			"reshape metrics for `| chart -x .ts -y .pct --bucket 1m -a avg`"); err != nil {
+			return fmt.Errorf("mem_history message: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// lastSegment returns the suffix after the final "/", or the whole
+// string if there is none. Used to derive the bare app name (e.g.
+// "api" from "acme/api") for metrics-log path construction.
+func lastSegment(s string) string {
+	if i := strings.LastIndex(s, "/"); i >= 0 {
+		return s[i+1:]
+	}
+	return s
 }
 
 type mintedToken struct {
