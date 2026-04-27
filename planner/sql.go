@@ -6,12 +6,21 @@ import (
 )
 
 // sqlBuilder accumulates the parts of a shard SQL query.
+//
+// limitFrozen is set the moment any LIMIT pushdown lands (source
+// head/tail, non-source head/tail, or an awk NR-window). The
+// planner's stage loop uses the flag to stop pushing further
+// predicates: post-limit filters belong on the *globally merged*
+// top-N stream, not at the shard. Per-shard `LIMIT N WHERE filter`
+// silently lets the cross-shard merge re-saturate the result. See
+// docs/plans/cross-shard-post-limit-filter.md.
 type sqlBuilder struct {
-	rawExpr    string   // SQL expression for the raw column (default: "raw")
-	predicates []string // WHERE clause fragments, ANDed together
-	orderBy    string   // e.g. "ts ASC" or "ts DESC"
-	limit      int      // 0 = no limit
-	offset     int      // 0 = no offset
+	rawExpr     string   // SQL expression for the raw column (default: "raw")
+	predicates  []string // WHERE fragments, ANDed together
+	orderBy     string   // e.g. "ts ASC" or "ts DESC"
+	limit       int      // 0 = no limit
+	offset      int      // 0 = no offset
+	limitFrozen bool     // a LIMIT has been pinned; further stages must run in compute
 }
 
 func newSQLBuilder() *sqlBuilder {
@@ -29,11 +38,13 @@ func (b *sqlBuilder) addPredicate(pred string) {
 func (b *sqlBuilder) setOrderLimit(order string, limit int) {
 	b.orderBy = order
 	b.limit = limit
+	b.limitFrozen = true
 }
 
 func (b *sqlBuilder) setLimitOffset(limit, offset int) {
 	b.limit = limit
 	b.offset = offset
+	b.limitFrozen = true
 }
 
 // build produces the final SQL string.
@@ -76,20 +87,38 @@ func (b *sqlBuilder) buildWith(orderBy string, limit int) string {
 	return sb.String()
 }
 
-// InjectCustomer prepends a customer = '...' predicate to an existing SQL
-// query's WHERE clause. If the query has no WHERE clause, one is added.
-// This is the row-level security boundary — the coordinator calls this on
-// every query before sending it to a shard.
+// InjectCustomer attaches a customer = '...' predicate to the inner
+// scan over `FROM logs`, regardless of whether the planner emitted a
+// flat or nested query. The coordinator runs this on every shard SQL
+// before dispatch — it is the row-level security boundary.
+//
+// Anchoring on the first `FROM logs` is what makes nested SQL safe:
+// `SELECT … FROM (SELECT … FROM logs … LIMIT N) WHERE …` keeps the
+// LIMIT bounded per-tenant when the customer predicate goes inside
+// the subquery, not on the outer wrapper. A naive first-WHERE search
+// would land on the outer in the no-inner-WHERE case and silently
+// turn the per-shard LIMIT into a cross-tenant bottleneck.
 func InjectCustomer(sql, customer string) string {
 	pred := fmt.Sprintf("customer = '%s'", strings.ReplaceAll(customer, "'", "''"))
-	if strings.Contains(sql, " WHERE ") {
-		return strings.Replace(sql, " WHERE ", " WHERE "+pred+" AND ", 1)
+	const fromLogs = "FROM logs"
+	idx := strings.Index(sql, fromLogs)
+	if idx == -1 {
+		return sql
 	}
-	// No WHERE clause — insert before ORDER BY, LIMIT, or at the end.
-	for _, kw := range []string{" ORDER BY ", " LIMIT "} {
-		if idx := strings.Index(sql, kw); idx != -1 {
-			return sql[:idx] + " WHERE " + pred + sql[idx:]
+	rest := sql[idx+len(fromLogs):]
+	// Find the next clause keyword that bounds the inner SELECT scope.
+	// `)` marks the subquery boundary; nothing past it belongs to the
+	// inner.
+	end := len(rest)
+	for _, kw := range []string{" WHERE ", " ORDER BY ", " LIMIT ", " OFFSET ", ")"} {
+		if i := strings.Index(rest, kw); i != -1 && i < end {
+			end = i
 		}
 	}
-	return sql + " WHERE " + pred
+	head := sql[:idx+len(fromLogs)+end]
+	tail := sql[idx+len(fromLogs)+end:]
+	if strings.HasPrefix(tail, " WHERE ") {
+		return head + " WHERE " + pred + " AND " + tail[len(" WHERE "):]
+	}
+	return head + " WHERE " + pred + tail
 }

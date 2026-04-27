@@ -735,12 +735,17 @@ func TestEdge_PipelineOrdering(t *testing.T) {
 			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw LIKE '%ERROR%' ORDER BY ts DESC LIMIT 5`,
 			wantCompute: nil,
 		},
-		// head as source then filter
+		// head as source then filter — pipeline order says "first 50
+		// rows, then keep ERROR matches" (count: 0..50). The LIMIT
+		// pushes per-shard; the filter runs in compute on the global
+		// merged top-50 stream. Per-shard filter pushdown would let
+		// the cross-shard merge re-saturate. See
+		// docs/plans/cross-shard-post-limit-filter.md.
 		{
 			name:        "head source then awk filter",
 			pipeline:    `head -50 vimgym.log | awk '$LEVEL == "ERROR"'`,
-			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' ORDER BY ts ASC LIMIT 50`,
-			wantCompute: nil,
+			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') ORDER BY ts ASC LIMIT 50`,
+			wantCompute: []string{`awk '$LEVEL == "ERROR"'`},
 		},
 		// -n flag in mid-pipeline position
 		{

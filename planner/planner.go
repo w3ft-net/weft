@@ -140,6 +140,23 @@ func Plan(pipeline string) (*QueryPlan, error) {
 			continue
 		}
 
+		// Once a head/tail (or awk NR-window) bounds the source, every
+		// later stage must operate on the *globally* merged top-N
+		// stream. Pushing a filter shard-side after the LIMIT freezes
+		// would let cross-shard merge inflate the post-filter set —
+		// e.g. `tail -n 2000 | grep -v ERROR | wc -l` would saturate
+		// at 2000 again because each shard returned its own ≤2000
+		// non-ERROR rows. Compute already enforces the global cap
+		// before stages run; route the post-limit stages there.
+		// Pre-limit filters (filter | tail) are unaffected — the
+		// freeze is set by the LIMIT pushdown itself, not by entering
+		// the loop. See docs/plans/cross-shard-post-limit-filter.md.
+		if sql.limitFrozen {
+			pushing = false
+			computeStages = append(computeStages, stage)
+			continue
+		}
+
 		r := tryPushdown(stage, sql)
 		if r.pushed {
 			if r.predicate != "" {
