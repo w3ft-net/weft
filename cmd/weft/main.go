@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/weft/coordinator"
 	"github.com/kevlarcon/weft/ingest"
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/shell"
@@ -91,13 +90,10 @@ func printUsage() {
 }
 
 func runShellCmd() {
-	// Load config.
 	cfg, err := shell.LoadConfig()
 	if err != nil {
-		// Fall back to dev mode with fixtures.
-		fmt.Fprintln(os.Stderr, dimText("no .weft.yaml found, using dev fixtures"))
-		runDevShell()
-		return
+		fmt.Fprintln(os.Stderr, "Not logged in. Run 'weft login' to authenticate.")
+		os.Exit(1)
 	}
 
 	s, cleanup, err := connectRemote(cfg)
@@ -142,38 +138,9 @@ func runWhoami() {
 	}
 }
 
-func runDevShell() {
-	coord, cleanup, err := coordinator.NewDevCoordinator()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to start: %v\n", err)
-		os.Exit(1)
-	}
-	defer cleanup()
-
-	apps := coordinator.DevApps()
-	s := &shell.Shell{
-		Query: func(pipeline string, start, end time.Time) (*shell.QueryResult, error) {
-			tr := coordinator.TimeRange{Start: start, End: end}
-			r, err := coord.Query(pipeline, tr, "kevlar", "")
-			if err != nil {
-				return nil, err
-			}
-			return &shell.QueryResult{Rows: r.Rows, Text: r.Text}, nil
-		},
-		Start: coordinator.DevT0,
-		End:   coordinator.DevT2,
-		Apps:  apps,
-		// Dev shell uses in-memory FS (no gRPC coordinator to proxy through).
-		FS: shell.NewRemoteFS(shell.NewMemBackend(), apps),
-	}
-
-	runShell(s)
-}
-
 func runShell(s *shell.Shell) {
 	// Prefer the JWT identity for the prompt — `alice@acme` reads
-	// better than the OS user against a generic "@weft". Fall back to
-	// the OS user when there's no token (dev fixtures path).
+	// better than the OS user against a generic "@weft".
 	if s.User == "" || s.Customer == "" {
 		if cfg, err := shell.LoadConfig(); err == nil && cfg.Token != "" {
 			if claims, err := shell.DecodeClaims(cfg.Token); err == nil {

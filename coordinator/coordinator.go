@@ -392,27 +392,21 @@ func (c *Coordinator) QueryForWatch(pipeline string, tr TimeRange, watch *store.
 	// The watch carries its own CustomerID so we can resolve the name
 	// here without a second Store round-trip. A miss means a deleted
 	// customer race; surface it rather than running with custName="".
-	if c.Store != nil {
-		cust, err := c.Store.GetCustomerByID(watch.CustomerID)
-		if err != nil {
-			return nil, fmt.Errorf("watch %d: resolve customer %d: %w", watch.ID, watch.CustomerID, err)
-		}
-		return c.query(pipeline, tr, cust.Name, "", ctx)
+	cust, err := c.Store.GetCustomerByID(watch.CustomerID)
+	if err != nil {
+		return nil, fmt.Errorf("watch %d: resolve customer %d: %w", watch.ID, watch.CustomerID, err)
 	}
-	return c.query(pipeline, tr, "", "", ctx)
+	return c.query(pipeline, tr, cust.Name, "", ctx)
 }
 
 // query is the shared implementation for Query and QueryForWatch.
 // alertCtx = nil means "use interactive defaults if the pipeline has an
 // alert stage." A non-nil alertCtx binds the alert to that context.
 func (c *Coordinator) query(pipeline string, tr TimeRange, customer, userID string, alertCtx *AlertContext) (*QueryResult, error) {
-	// Resolve the customer name to an ID. Store may be nil in unit
-	// tests that exercise registry/shard plumbing without a DB
-	// (NewCoordinator leaves Store unset; production wires it
-	// immediately after via coord.Store = db). When Store is set, a
-	// resolution failure is a real auth/data integrity bug — propagate.
+	// Resolve the customer name to an ID. A resolution failure is a
+	// real auth/data integrity bug — propagate.
 	var custID uint
-	if c.Store != nil && customer != "" {
+	if customer != "" {
 		cust, err := c.Store.GetCustomerByName(customer)
 		if err != nil {
 			return nil, fmt.Errorf("resolve customer %q: %w", customer, err)
@@ -503,9 +497,8 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	// resolve to a namespace this customer owns. Gate here, before the
 	// app name ever reaches SQL interpolation — the planner escapes
 	// string literals, but an allowlist is the correct posture for a
-	// user-controlled identifier. Store may be nil in unit tests that
-	// don't wire a real DB; in production the gate runs unconditionally.
-	if plan.SourceApp != "" && c.Store != nil {
+	// user-controlled identifier.
+	if plan.SourceApp != "" {
 		cust, err := c.Store.GetCustomerByName(customer)
 		if err != nil {
 			return nil, fmt.Errorf("validate source: resolve customer %q: %w", customer, err)
@@ -532,14 +525,9 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	// up to (now − LogRetention(tier)) inside MatchingShards, so a
 	// customer never reaches a shard whose data is entirely past their
 	// advertised retention. An unresolved customer (custID==0) yields
-	// tier "" which falls back to the trial retention. Store is nil in
-	// unit tests; fall back to the most permissive tier so shard tests
-	// whose data lives in the distant past stay queryable.
+	// tier "" which falls back to the trial retention.
 	var tier store.Tier
-	switch {
-	case c.Store == nil:
-		tier = store.TierBolt
-	case custID != 0:
+	if custID != 0 {
 		tier = c.Store.TierForCustomer(custID)
 	}
 	matching := c.Registry.MatchingShards(tr, plan.FollowApp, tier)
@@ -720,7 +708,7 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 	bash.RegisterToolCommands(interp)
 
 	noticeQueue := NewNoticeQueue(c.Store, userID)
-	if c.Store != nil && custID != 0 {
+	if custID != 0 {
 		tier := c.Store.TierForCustomer(custID)
 		opts := []shellfs.Option{
 			shellfs.WithTier(tier),

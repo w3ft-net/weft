@@ -4,9 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/kevlarcon/weft/compute"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
 )
 
 // DevFixtureTime constants for the sample data time windows.
@@ -34,50 +32,6 @@ func devRow(lineNum int64, raw string, fields []string, ts time.Time, level, app
 		Customer:    customer,
 		PayloadJson: payload,
 	}
-}
-
-// NewDevCoordinator creates a coordinator with two in-memory DuckDB shards
-// populated with sample log data. Useful for development and demos.
-// The caller must call the returned cleanup function when done.
-func NewDevCoordinator() (*Coordinator, func(), error) {
-	s0, err := shard.NewDuckDBShard("shard-0", "")
-	if err != nil {
-		return nil, nil, err
-	}
-
-	s1, err := shard.NewDuckDBShard("shard-1", "")
-	if err != nil {
-		s0.Close()
-		return nil, nil, err
-	}
-
-	if err := s0.Ingest(devShard0Rows()); err != nil {
-		s0.Close()
-		s1.Close()
-		return nil, nil, err
-	}
-	if err := s1.Ingest(devShard1Rows()); err != nil {
-		s0.Close()
-		s1.Close()
-		return nil, nil, err
-	}
-
-	cleanup := func() {
-		s0.Close()
-		s1.Close()
-	}
-
-	c := NewCoordinator(CoordinatorConfig{
-		Shards: []shard.Shard{s0, s1},
-		Pool:   &compute.LocalComputePool{Parallelism: 2},
-	})
-
-	return c, cleanup, nil
-}
-
-// DevApps returns the list of app names available in the dev fixtures.
-func DevApps() []string {
-	return []string{"vimgym", "callbox"}
 }
 
 // DevShardRows returns fixture rows for the named shard ("shard-0" or "shard-1").
