@@ -29,10 +29,10 @@ func TestRunLocal_InfiniteLoopHitsTimeout(t *testing.T) {
 		t.Fatalf("save script: %v", err)
 	}
 
-	c := &Coordinator{
+	c := NewCoordinator(CoordinatorConfig{
 		Store:                  db,
 		ScriptExecutionTimeout: 200 * time.Millisecond,
-	}
+	})
 
 	start := time.Now()
 	_, err = c.runLocal("runaway", TimeRange{}, cust.Name, custID, "", nil)
@@ -66,10 +66,10 @@ func TestRunLocal_QuickScriptCompletesNormally(t *testing.T) {
 		t.Fatalf("save script: %v", err)
 	}
 
-	c := &Coordinator{
+	c := NewCoordinator(CoordinatorConfig{
 		Store:                  db,
 		ScriptExecutionTimeout: 5 * time.Second,
-	}
+	})
 
 	result, err := c.runLocal("quick", TimeRange{}, cust.Name, custID, "", nil)
 	if err != nil {

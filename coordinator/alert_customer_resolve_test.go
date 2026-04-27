@@ -39,10 +39,10 @@ func TestQuery_InteractiveAlertResolvesCallerCustomer(t *testing.T) {
 
 	// Prod-shaped Coordinator: Store + Notifier are set, but CustomerID
 	// is zero (it's never set by cmd/coordinator/main.go either).
-	c := &Coordinator{
+	c := NewCoordinator(CoordinatorConfig{
 		Store:    db,
 		Notifier: NewNotifier(db),
-	}
+	})
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	result, err := c.Query(`echo 40 | alert above 30 --notify=foo`, tr, cust.Name, "")
@@ -104,11 +104,11 @@ func TestQuery_InteractiveBinExpandResolvesCallerCustomer(t *testing.T) {
 		t.Fatalf("save script: %v", err)
 	}
 
-	c := &Coordinator{
+	c := NewCoordinator(CoordinatorConfig{
 		Store:    db,
 		Notifier: NewNotifier(db),
 		// CustomerID intentionally zero.
-	}
+	})
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	result, err := c.Query(`echo_first disk`, tr, cust.Name, "")

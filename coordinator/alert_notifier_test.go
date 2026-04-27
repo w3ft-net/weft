@@ -24,10 +24,10 @@ func TestQuery_InteractiveAlertUsesCoordinatorNotifier(t *testing.T) {
 		t.Fatalf("get customer: %v", err)
 	}
 
-	c := &Coordinator{
+	c := NewCoordinator(CoordinatorConfig{
 		Store:    db,
 		Notifier: NewNotifier(db),
-	}
+	})
 
 	// No alias is defined in /etc/notify.conf, so Notifier.Send returns
 	// "no notify.conf configured". The point is that Send is REACHED —
@@ -58,10 +58,10 @@ func TestQuery_InteractiveAlertFallbackWhenNoNotifier(t *testing.T) {
 		t.Fatalf("get customer: %v", err)
 	}
 
-	c := &Coordinator{
+	c := NewCoordinator(CoordinatorConfig{
 		Store: db,
 		// Notifier: nil
-	}
+	})
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	result, err := c.Query(`echo 40 | alert above 30 --notify=foo`, tr, cust.Name, "")

@@ -18,7 +18,7 @@ func TestCoordinatorQuery_RecordsCreatorOnTmpWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := &Coordinator{Store: db}
+	c := NewCoordinator(CoordinatorConfig{Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
 	// Use the customer's name (not its ID) — Query takes a name.
@@ -48,7 +48,7 @@ func TestCoordinatorQuery_RecordsCreatorOnTmpWrite(t *testing.T) {
 func TestCoordinatorQuery_EmptyUserStoresNullCreator(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	c := &Coordinator{Store: db}
+	c := NewCoordinator(CoordinatorConfig{Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
 	cust, _ := db.GetCustomerByID(custID)
@@ -74,7 +74,7 @@ func TestCoordinatorQuery_AttachesTmpExpiryNoticeOnFirstWrite(t *testing.T) {
 	alice, _ := db.CreateUser("alice-notice@example.test", custID)
 	bob, _ := db.CreateUser("bob-notice@example.test", custID)
 
-	c := &Coordinator{Store: db}
+	c := NewCoordinator(CoordinatorConfig{Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	cust, _ := db.GetCustomerByID(custID)
 
@@ -128,7 +128,7 @@ func TestCoordinatorQueryForWatch_StoresNullCreator(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := &Coordinator{Store: db}
+	c := NewCoordinator(CoordinatorConfig{Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	if _, err := c.QueryForWatch(`echo from-watch > /tmp/watchnote`, tr, w); err != nil {
 		t.Fatalf("QueryForWatch: %v", err)
