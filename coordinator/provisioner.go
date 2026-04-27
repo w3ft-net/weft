@@ -83,7 +83,20 @@ type ProvisionerConfig struct {
 	// the ASG handoff; main.go sets it to the full *store.Store in
 	// production.
 	ShardOps ShardOpsStore
+	// CloseRebindGrace is how long the rebind path waits before
+	// closing the old gRPC conn after a shard's address changes.
+	// Long enough that in-flight queries holding a reference to the
+	// old shard can complete on the old conn rather than getting cut
+	// with code=Canceled mid-stream. Zero falls back to
+	// defaultCloseRebindGrace.
+	CloseRebindGrace time.Duration
 }
+
+// defaultCloseRebindGrace is the production default for the rebind
+// close-defer window: long enough that typical user queries (<1s) and
+// most cron-watch pipelines drain on the old conn, short enough that
+// connection leak windows don't accumulate.
+const defaultCloseRebindGrace = 5 * time.Second
 
 // DefaultProvisionerConfig returns sensible production defaults.
 // IngestingPerBucket and RetentionPeriod aren't here — both live on
@@ -449,12 +462,27 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 			return
 		}
 		log.Printf("provisioner: shard %s moved %s → %s", hb.ShardID, existing.Addr, hb.Addr)
-		existing.Shard.Close()
+		oldShard := existing.Shard
 		existing.Shard = gs
 		existing.Addr = hb.Addr
 		existing.InstanceID = hb.InstanceID
 		existing.Suspended = false
 		p.registry.PersistState(existing)
+		// Defer the close: queries that grabbed the old shard.Shard via
+		// MatchingShards before the rebind would otherwise see their
+		// gRPC stream cancelled mid-flight. Phase 2's retry softens the
+		// user-visible impact, but giving the old conn a window to drain
+		// is the right primary fix.
+		grace := p.config.CloseRebindGrace
+		if grace == 0 {
+			grace = defaultCloseRebindGrace
+		}
+		go func(shardID string, s shard.Shard) {
+			time.Sleep(grace)
+			if err := s.Close(); err != nil {
+				log.Printf("provisioner: deferred close of %s failed: %v", shardID, err)
+			}
+		}(hb.ShardID, oldShard)
 		return
 	}
 

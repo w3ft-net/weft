@@ -32,6 +32,15 @@ belt-and-suspenders alongside `reapDeadShards` (which actually `Remove`s
 the entry from the registry on the next tick): the filter takes effect
 immediately, the reaper does the cleanup.
 
+**Phase 1 (defer-close on rebind) shipped (2026-04-26):** the rebind path
+in `ProcessHeartbeat` no longer calls `Close()` synchronously — queries
+that already grabbed the old `shard.Shard` via `MatchingShards` would
+otherwise see their gRPC stream cut with `code = Canceled` mid-flight.
+The close is now spawned in a goroutine after `ProvisionerConfig.CloseRebindGrace`
+(default 5s, configurable for tests). Phase 2's retry still softens the
+user-visible impact when an RPC outlives the grace window. Tests in
+`coordinator/rebind_close_test.go`.
+
 **Still open (next):**
 - Phase 3 (coalesce rapid rebinds during `adoptFromHeartbeats`): mostly a
   dev-mode comfort. Production wouldn't see the cascade outside fleet-wide
