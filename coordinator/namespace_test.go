@@ -82,7 +82,7 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 		t.Fatalf("ingest: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{})
+	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "graybeard", "weft", "grantcentral")})
 	c.Registry.Add(&ShardEntry{
 		ID:          "ns-shard-0",
 		Apps:        []string{"weft/coordinator", "weft/shard", "weft/metrics", "grantcentral"},

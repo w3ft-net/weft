@@ -33,6 +33,49 @@ func testStoreAndCustomer(t *testing.T) (*store.Store, uint) {
 	return tx, cust.ID
 }
 
+// testQueryStore prepares a tx-scoped Store satisfying the wiring
+// Coordinator.Query expects: a customer of the given name, the listed
+// namespaces under it, and a bolt-tier subscription so the planner's
+// retention clamp doesn't trim test fixtures whose timestamps are
+// older than trial retention. Used by shard-fan-out tests that exercise
+// the whole Query path against in-memory shards.
+func testQueryStore(t *testing.T, customer string, namespaces ...string) *store.Store {
+	t.Helper()
+	dsn := os.Getenv("WEFT_TEST_DSN")
+	if dsn == "" {
+		dsn = "host=localhost port=5433 dbname=weft user=weft password=weft sslmode=disable"
+	}
+	db, err := store.Open(dsn)
+	if err != nil {
+		t.Skipf("postgres unavailable: %v", err)
+	}
+	tx, rollback := db.BeginTest()
+	t.Cleanup(func() {
+		rollback()
+		db.Close()
+	})
+
+	cust, err := tx.FindOrCreateCustomer(customer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ns := range namespaces {
+		if _, err := tx.FindOrCreateNamespace(cust.ID, ns); err != nil {
+			t.Fatalf("create namespace %s: %v", ns, err)
+		}
+	}
+	if err := tx.CreateSubscription(&store.Subscription{
+		ID:         "test-bolt-" + customer,
+		CustomerID: customer,
+		Tier:       string(store.TierBolt),
+		Status:     "active",
+		StartsAt:   time.Now().Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("seed bolt subscription: %v", err)
+	}
+	return tx
+}
+
 func seedWatch(t *testing.T, db *store.Store, custID uint, name string, values []string, interval time.Duration) {
 	t.Helper()
 	err := db.SaveCronWatch(custID, "", name, "every 1m", "echo test")

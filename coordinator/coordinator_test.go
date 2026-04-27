@@ -59,7 +59,7 @@ func setupTestCoordinator(t *testing.T) *Coordinator {
 	}
 
 	apps := []string{"vimgym", "callbox"}
-	c := NewCoordinator(CoordinatorConfig{})
+	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox", "warp")})
 	c.Registry.Add(&ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: t0, WindowEnd: t1,
