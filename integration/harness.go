@@ -14,7 +14,9 @@ package integration
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net/http"
@@ -86,11 +88,20 @@ func seedFixtures() error {
 	}
 	defer conn.Close()
 
-	// customer id for kevlar (created by the coordinator's own
-	// FindOrCreateCustomer flow at startup via WEFT_CUSTOMER).
+	// customer id for kevlar. The coordinator container's own
+	// FindOrCreateCustomer flow normally creates this row at startup
+	// via WEFT_CUSTOMER, but the demo seed's --reset path can clobber
+	// the dev DB out from under a long-running coordinator. Upsert
+	// here so the integration suite owns its preconditions instead of
+	// inheriting them from the operator's compose-stack lifecycle.
 	var kevID int64
-	if err := conn.QueryRow(`SELECT id FROM customers WHERE name = 'kevlar'`).Scan(&kevID); err != nil {
-		return fmt.Errorf("lookup kevlar customer: %w", err)
+	if err := conn.QueryRow(`
+		INSERT INTO customers (name, created_at, updated_at)
+		VALUES ('kevlar', now(), now())
+		ON CONFLICT (name) DO UPDATE SET updated_at = now()
+		RETURNING id
+	`).Scan(&kevID); err != nil {
+		return fmt.Errorf("ensure kevlar customer: %w", err)
 	}
 
 	// Namespaces that tests call ensureToken()/queryPipeline() against.
@@ -130,6 +141,42 @@ func seedFixtures() error {
 	if err != nil {
 		return fmt.Errorf("seed dev user: %w", err)
 	}
+
+	// Dev agent token wft_dev_0000000000000000 under kevlar/kevlar.
+	// Mirrors store.SeedDevAgentToken — duplicated here so the
+	// integration harness owns its own preconditions even when the
+	// coordinator's customer-creation flow at startup ran against a
+	// previous (now-deleted) row, which cascaded the original token.
+	const devToken = "wft_dev_0000000000000000"
+	tokenSum := sha256.Sum256([]byte(devToken))
+	tokenHash := hex.EncodeToString(tokenSum[:])
+	tokenPrefix := devToken[:8]
+
+	var devNSID int64
+	if err := conn.QueryRow(`
+		INSERT INTO namespaces (customer_id, name, created_at, updated_at)
+		VALUES ($1, 'kevlar', now(), now())
+		ON CONFLICT (customer_id, name) DO UPDATE SET updated_at = now()
+		RETURNING id
+	`, kevID).Scan(&devNSID); err != nil {
+		return fmt.Errorf("ensure kevlar namespace: %w", err)
+	}
+
+	if _, err := conn.Exec(`
+		INSERT INTO agent_tokens (
+			customer_id, namespace_id, token_hash, prefix, label,
+			revoked, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, 'dev-agent', false, now(), now())
+		ON CONFLICT (token_hash) DO UPDATE SET
+			customer_id = EXCLUDED.customer_id,
+			namespace_id = EXCLUDED.namespace_id,
+			revoked = false,
+			updated_at = now()
+	`, kevID, devNSID, tokenHash, tokenPrefix); err != nil {
+		return fmt.Errorf("ensure dev agent token: %w", err)
+	}
+
 	return nil
 }
 

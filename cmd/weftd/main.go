@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -518,13 +520,133 @@ func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, custome
 	}
 }
 
+// fixedPrefix returns the longest leading run of `pattern` that contains
+// no glob wildcard. Trailing characters after the last separator are
+// dropped so the prefix is always a directory path. For
+// "/var/log/*/api.log" returns "/var/log/"; for "/var/log/api.log"
+// returns "/var/log/api.log" (no wildcards = whole pattern is fixed);
+// for "**/*.log" returns "" (wildcards from the start).
+func fixedPrefix(pattern string) string {
+	i := strings.IndexAny(pattern, "*?[")
+	if i < 0 {
+		return pattern
+	}
+	j := strings.LastIndex(pattern[:i], string(filepath.Separator))
+	if j < 0 {
+		return ""
+	}
+	return pattern[:j+1]
+}
+
+// matchPath reports whether `path` matches `pattern`, where `**`
+// matches zero or more path segments and other wildcards behave as in
+// filepath.Match. Pattern and path are split on the OS separator and
+// matched segment-by-segment.
+func matchPath(pattern, path string) (bool, error) {
+	sep := string(filepath.Separator)
+	pp := strings.Split(pattern, sep)
+	sp := strings.Split(path, sep)
+	return matchSegments(pp, sp)
+}
+
+func matchSegments(pp, sp []string) (bool, error) {
+	if len(pp) == 0 {
+		return len(sp) == 0, nil
+	}
+	if pp[0] == "**" {
+		// `**` is greedy across zero or more segments. Try every length.
+		for i := 0; i <= len(sp); i++ {
+			ok, err := matchSegments(pp[1:], sp[i:])
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	if len(sp) == 0 {
+		return false, nil
+	}
+	ok, err := filepath.Match(pp[0], sp[0])
+	if err != nil || !ok {
+		return ok, err
+	}
+	return matchSegments(pp[1:], sp[1:])
+}
+
+// globMatch returns the file paths matching `pattern`. Unlike
+// filepath.Glob, supports `**` for recursive matching. Walking starts
+// from fixedPrefix(pattern); a missing prefix dir is not an error
+// (returns no matches), matching filepath.Glob's behavior.
+func globMatch(pattern string) ([]string, error) {
+	if !strings.Contains(pattern, "**") {
+		return filepath.Glob(pattern)
+	}
+	root := fixedPrefix(pattern)
+	if root == "" {
+		root = "."
+	}
+	var matches []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if errors.Is(walkErr, fs.ErrNotExist) {
+				return filepath.SkipDir
+			}
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		ok, _ := matchPath(pattern, path)
+		if ok {
+			matches = append(matches, path)
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	return matches, nil
+}
+
+// appFromPath derives the app name for a matched file. It strips the
+// fixed prefix from `path`, normalises separators to `/`, and strips
+// the file extension. For pattern "*.log" matching "/var/log/api.log"
+// returns "api"; for "*/access.log" matching ".../api/access.log"
+// returns "api/access"; for "**/*.log" matching ".../v1/access.log"
+// returns "v1/access". Path-segment apps round-trip through the
+// coordinator's namespace check (it allows any app under the
+// authenticated namespace) so the multi-segment form is safe.
+func appFromPath(pattern, path string) string {
+	prefix := fixedPrefix(pattern)
+	rel := strings.TrimPrefix(path, prefix)
+	rel = filepath.ToSlash(rel)
+	rel = strings.TrimSuffix(rel, filepath.Ext(rel))
+	return rel
+}
+
 // watchGlob watches a directory for new files matching a glob pattern. For
 // each matching file — both files present at startup and files created later —
 // it runs onboardAndRun with the file's real path and a per-file app name
-// derived from the filename. This handles the case where log files don't
-// exist yet at startup (e.g. gunicorn creates them on first request).
+// derived from the path. Two files that share a basename across different
+// subdirectories produce distinct apps (e.g. `*/access.log` matching
+// `api/access.log` and `web/access.log` yields apps `api/access` and
+// `web/access`). `**` recurses across zero or more path segments.
+//
+// fsnotify watching is one-level only: it adds the longest fixed prefix
+// of the pattern to the watcher and reacts to Create events at that
+// depth. Files that appear deeper than the prefix at runtime are not
+// auto-discovered — that's the well-known limitation of fsnotify
+// without a recursive subscriber. Startup-time discovery via
+// globMatch handles the deep case.
 func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, customer, instance, namespace, pattern string) {
-	dir := filepath.Dir(pattern)
+	prefix := fixedPrefix(pattern)
+	watchDir := strings.TrimSuffix(prefix, string(filepath.Separator))
+	if watchDir == "" {
+		watchDir = "."
+	}
 	tailing := make(map[string]bool)
 
 	startFile := func(p string) {
@@ -532,8 +654,7 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, cust
 			return
 		}
 		tailing[p] = true
-		base := filepath.Base(p)
-		app := strings.TrimSuffix(base, filepath.Ext(base))
+		app := appFromPath(pattern, p)
 		fullApp := namespace + "/" + app
 		go func() {
 			if err := onboardAndRun(ctx, client, token, customer, app, p, instance, fullApp, func() {
@@ -546,7 +667,7 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, cust
 
 	// Onboard + tail any files that already match.
 	startMatching := func() {
-		paths, _ := filepath.Glob(pattern)
+		paths, _ := globMatch(pattern)
 		for _, p := range paths {
 			startFile(p)
 		}
@@ -560,14 +681,14 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, cust
 	// Watch directory for new files.
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Printf("[%s] watch %s: %v", namespace, dir, err)
+		log.Printf("[%s] watch %s: %v", namespace, watchDir, err)
 		return
 	}
 	defer watcher.Close()
 
-	if err := watcher.Add(dir); err != nil {
+	if err := watcher.Add(watchDir); err != nil {
 		// Directory doesn't exist yet — wait for it.
-		log.Printf("[%s] directory %s not found, waiting...", namespace, dir)
+		log.Printf("[%s] directory %s not found, waiting...", namespace, watchDir)
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -575,8 +696,8 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, cust
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if err := watcher.Add(dir); err == nil {
-					log.Printf("[%s] directory %s appeared", namespace, dir)
+				if err := watcher.Add(watchDir); err == nil {
+					log.Printf("[%s] directory %s appeared", namespace, watchDir)
 					startMatching()
 					goto watch
 				}
@@ -594,7 +715,7 @@ watch:
 				return
 			}
 			if event.Op&fsnotify.Create == fsnotify.Create {
-				matched, _ := filepath.Match(filepath.Base(pattern), filepath.Base(event.Name))
+				matched, _ := matchPath(pattern, event.Name)
 				if matched {
 					log.Printf("[%s] new file %s", namespace, event.Name)
 					startFile(event.Name)

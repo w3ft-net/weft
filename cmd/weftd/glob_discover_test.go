@@ -109,87 +109,63 @@ func TestGlob_DiscoversAllFilesInFlatDirectory(t *testing.T) {
 	}
 }
 
-// TestGlob_DoubleStarDoesNotRecurse — documents the subtle truth about
-// `**` in Go's filepath.Glob. Users coming from shell/git/rsync expect
-// `dir/**/*.log` to find files at any depth. It doesn't: `**` is
-// parsed as two adjacent `*` wildcards, and `*` doesn't match path
-// separators. So `dir/**/*.log` is effectively `dir/*/*.log` — it
-// matches ONE segment down, not arbitrary depth.
-//
-// Files at depth 2 from `dir` get missed silently.
-func TestGlob_DoubleStarDoesNotRecurse(t *testing.T) {
+// TestGlob_DoubleStarRecurses — `**/*.log` matches at any depth, the
+// way users coming from shell/git/rsync expect. weftd's globber
+// (cmd/weftd/main.go:globMatch) implements `**` itself because Go's
+// filepath.Glob treats it as two adjacent single-segment wildcards.
+// Each match's app name comes from the variable portion of the path,
+// joined with `/`, so the three files below produce three distinct
+// apps under the namespace.
+func TestGlob_DoubleStarRecurses(t *testing.T) {
 	dir := t.TempDir()
-	// Depth 1 (shallow) — SHOULD match dir/**/*.log
 	writeFile(t, filepath.Join(dir, "shallow", "access.log"), "line\n")
-	// Depth 2+ — SHOULD NOT match dir/**/*.log (this is the bug
-	// reproduction if a user believes `**` means recursive)
 	writeFile(t, filepath.Join(dir, "api", "v1", "access.log"), "line\n")
 	writeFile(t, filepath.Join(dir, "api", "v2", "access.log"), "line\n")
 
 	got := runWatchGlob(t, filepath.Join(dir, "**", "*.log"), 3)
 
-	// Deep files SHOULD appear under a user's intent — but they don't.
-	// Fail the test loudly so we're forced to notice.
-	if contains(got, "access") && len(got) >= 3 {
-		t.Log("`**` apparently recursed — Go stdlib changed? Investigate.")
-		return
+	want := []string{"api/v1/access", "api/v2/access", "shallow/access"}
+	if !equalStrings(got, want) {
+		t.Errorf("expected `**/*.log` to recurse into all three files\n want %v\n  got %v", want, got)
 	}
-	t.Errorf("user expected `**/*.log` to recurse into v1/ and v2/ but it only hit the shallow file. got=%v", got)
 }
 
-// TestGlob_AppNameCollisionCollapsesSources — every file weftd
-// discovers derives its app name from `strings.TrimSuffix(base, ext)`.
-// Two matched files that share a basename (e.g., `api/access.log`
-// and `web/access.log`) both get `app="access"`. Both trigger
-// SubmitSample client-side, but server-side UpsertPendingSource is
-// keyed on (customer, namespace, app) — the second overwrites the
-// first, so the admin sees only one pending source in the UI and has
-// no way to tell the two files apart. One of them is silently
-// invisible.
-//
-// Test expectation: watchGlob DOES call SubmitSample twice (the bug is
-// not a dropped client call), but both carry the same App value.
-func TestGlob_AppNameCollisionCollapsesSources(t *testing.T) {
+// TestGlob_PathDisambiguatesAppNames — two files that share a basename
+// across different subdirectories get distinct apps because app names
+// come from the variable portion of the matched path, not just the
+// file's basename. For pattern `*/access.log` matching
+// `api/access.log` and `web/access.log`, the apps are `api/access`
+// and `web/access`. Server-side UpsertPendingSource is keyed on
+// (customer, namespace, app) so distinct apps get distinct rows;
+// neither file is silently lost.
+func TestGlob_PathDisambiguatesAppNames(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "api", "access.log"), "api access\n")
 	writeFile(t, filepath.Join(dir, "web", "access.log"), "web access\n")
 
 	got := runWatchGlob(t, filepath.Join(dir, "*", "access.log"), 2)
 
-	// Both files triggered SubmitSample — good, the discovery half works.
-	if len(got) != 2 {
-		t.Fatalf("expected 2 SubmitSample calls, got %d: %v", len(got), got)
+	want := []string{"api/access", "web/access"}
+	if !equalStrings(got, want) {
+		t.Errorf("expected disambiguated app names\n want %v\n  got %v", want, got)
 	}
-	// …but they all carry the same App, so server-side they collapse to
-	// a single pending_source row — the user's "one file invisible"
-	// repro.
-	if got[0] != got[1] || got[0] != "access" {
-		t.Fatalf("expected both SubmitSample calls to collide on app=access; got %v", got)
-	}
-	t.Errorf("confirmed: two files onboarded with duplicate app=%q — server will keep only one pending_source row and the user loses a log stream", got[0])
 }
 
-// TestGlob_MultiDirPatternBreaksWatcher — when the pattern spans a
-// glob-expansion at a directory level (e.g., `/var/log/*/app.log`),
-// `filepath.Dir(pattern)` returns `/var/log/*` which is not a real
-// directory, so fsnotify.Add fails silently and any *later-created*
-// file won't get picked up. The initial-scan files DO get discovered
-// via filepath.Glob, so this test asserts exactly that: start-time
-// files are seen but we lose runtime-created files.
-//
-// Documented here as a mismatch between Glob's capabilities and
-// watchGlob's fsnotify bookkeeping.
-func TestGlob_MultiDirPatternFindsStartupFilesOnly(t *testing.T) {
+// TestGlob_MultiDirPatternFindsStartupFiles — patterns that span a
+// directory-level wildcard (e.g. `/var/log/*/app.log`) discover
+// startup-time matches via filepath.WalkDir over the fixed prefix.
+// Runtime detection of files newly created at deeper levels is a
+// known limitation of fsnotify-without-recursive-add; this test
+// covers only the startup case.
+func TestGlob_MultiDirPatternFindsStartupFiles(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "api", "server.log"), "startup\n")
 
 	pattern := filepath.Join(dir, "*", "server.log")
 	got := runWatchGlob(t, pattern, 1)
-	if len(got) != 1 || got[0] != "server" {
-		t.Errorf("expected startup-time file to onboard as 'server', got %v", got)
+	if len(got) != 1 || got[0] != "api/server" {
+		t.Errorf("expected startup-time file to onboard as 'api/server', got %v", got)
 	}
-	// The test doesn't attempt to validate the late-file case (fsnotify
-	// on /tmp/*/ can't be set up) — the log message above is the point.
 }
 
 // TestGlob_EmptyFileNeverOnboards — onboardAndRun → SubmitSample reads
