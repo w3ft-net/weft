@@ -37,9 +37,9 @@ func runIngest(ctx context.Context, cfg *Config, report *Report) {
 		// Each simulated customer needs its own token — IngestStream
 		// validates the bearer and attributes rows to the token's customer.
 		tokResp, err := cfg.Client.CreateToken(ctx, &pb.CreateTokenRequest{
-			Customer: customer,
-			App:      app,
-			Label:    "loadtest",
+			Customer:  customer,
+			Namespace: app,
+			Label:     "loadtest",
 		})
 		if err != nil {
 			errors.Add(1)

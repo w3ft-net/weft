@@ -223,9 +223,9 @@ func parseStage(cmd *bash.SimpleCommand) stageInfo {
 }
 
 // extractApp extracts the app name from a pseudofile name.
-// "/log/weft/coordinator.log" → "weft/coordinator"
-// "/log/vimgym.log" → "vimgym" (flat namespace, backward compat)
-// "warp.log" → "" (all apps)
+// "/log/weft/coordinator.log" → "weft/coordinator"  (namespaced sub-app)
+// "/log/vimgym.log"           → "vimgym"            (single-segment: matches flat apps named "vimgym" AND every sub-app under namespace "vimgym")
+// "warp.log"                  → ""                  (whole-customer query)
 //
 // Three-level paths (/log/<ns>/<env>/<app>.log) are also accepted —
 // the env segment is consumed by extractEnv, and this function returns

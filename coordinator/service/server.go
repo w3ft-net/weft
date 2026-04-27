@@ -426,53 +426,15 @@ func (s *Server) CreateToken(ctx context.Context, req *pb.CreateTokenRequest) (*
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "customer %q not found", callerCust)
 	}
-	// App field used as namespace name for backward compat with gRPC callers.
-	ns, err := s.Store.GetNamespace(customer.ID, req.App)
+	ns, err := s.Store.GetNamespace(customer.ID, req.Namespace)
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "namespace %q not found — create it first", req.App)
+		return nil, status.Errorf(codes.NotFound, "namespace %q not found — create it first", req.Namespace)
 	}
 	raw, _, err := s.Store.CreateAgentToken(customer.ID, ns.ID, req.Label, req.Env)
 	if err != nil {
 		return nil, fmt.Errorf("create token: %w", err)
 	}
 	return &pb.CreateTokenResponse{Token: raw}, nil
-}
-
-func (s *Server) ListTokens(ctx context.Context, _ *pb.ListTokensRequest) (*pb.ListTokensResponse, error) {
-	callerCust, err := callerCustomer(ctx)
-	if err != nil {
-		return nil, err
-	}
-	customer, err := s.Store.GetCustomerByName(callerCust)
-	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "customer %q not found", callerCust)
-	}
-	tokens, err := s.Store.ListAgentTokens(customer.ID)
-	if err != nil {
-		return nil, err
-	}
-	var infos []*pb.TokenInfo
-	for _, t := range tokens {
-		// TokenInfo.Token is legacy proto; populate with the public
-		// Prefix since the raw value no longer exists server-side.
-		// Dead path — no callers; retained for proto-compat until we
-		// regen with an id+prefix schema.
-		infos = append(infos, &pb.TokenInfo{
-			Token:     t.Prefix,
-			Label:     t.Label,
-			App:       t.Namespace.Name,
-			Revoked:   t.Revoked,
-			CreatedAt: t.CreatedAt.Format(time.RFC3339),
-		})
-	}
-	return &pb.ListTokensResponse{Tokens: infos}, nil
-}
-
-func (s *Server) RevokeToken(_ context.Context, req *pb.RevokeTokenRequest) (*pb.RevokeTokenResponse, error) {
-	if err := s.Store.RevokeAgentTokenByRawToken(req.Token); err != nil {
-		return nil, err
-	}
-	return &pb.RevokeTokenResponse{}, nil
 }
 
 // IngestStream accepts a stream of LogRows from weftd agents and forwards

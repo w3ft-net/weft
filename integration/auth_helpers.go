@@ -17,9 +17,9 @@ import (
 func ensureToken(t *testing.T, client pb.WeftCoordinatorClient, customer, namespace string) string {
 	t.Helper()
 	resp, err := client.CreateToken(context.Background(), &pb.CreateTokenRequest{
-		Customer: customer,
-		App:      namespace,
-		Label:    "integration-test",
+		Customer:  customer,
+		Namespace: namespace,
+		Label:     "integration-test",
 	})
 	if err != nil {
 		t.Fatalf("create token for %s: %v", customer, err)

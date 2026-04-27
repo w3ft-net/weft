@@ -94,11 +94,6 @@ func (s *Store) AgentNamespaceNames() ([]string, error) {
 	return names, err
 }
 
-// AgentAppNames is a backward compat alias.
-func (s *Store) AgentAppNames() ([]string, error) {
-	return s.AgentNamespaceNames()
-}
-
 // AgentAuthResult holds the result of agent token validation.
 type AgentAuthResult struct {
 	Customer  *Customer
@@ -132,14 +127,6 @@ func (s *Store) ValidateAgentToken(token string) (*AgentAuthResult, error) {
 // the ID + prefix after creation, so revocation is ID-based.
 func (s *Store) RevokeAgentToken(id uint) error {
 	return s.db.Model(&AgentToken{}).Where("id = ?", id).Update("revoked", true).Error
-}
-
-// RevokeAgentTokenByRawToken is the gRPC-path equivalent of
-// RevokeAgentToken — takes a raw wft_<...> string, hashes it, and
-// revokes the matching row. Only used by the legacy coordinator gRPC
-// RevokeToken RPC; the REST path uses RevokeAgentToken(id) directly.
-func (s *Store) RevokeAgentTokenByRawToken(raw string) error {
-	return s.db.Model(&AgentToken{}).Where("token_hash = ?", hashAgentToken(raw)).Update("revoked", true).Error
 }
 
 // ListAgentTokens returns all tokens for a customer, with namespace preloaded.

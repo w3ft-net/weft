@@ -1220,9 +1220,9 @@ func (x *GetUsageResponse) GetPeriodEnd() string {
 type CreateTokenRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
-	Label         string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"` // human-readable label (e.g., "vimgym-prod")
-	App           string                 `protobuf:"bytes,3,opt,name=app,proto3" json:"app,omitempty"`     // app name this token authorizes (e.g., "vimgym")
-	Env           string                 `protobuf:"bytes,4,opt,name=env,proto3" json:"env,omitempty"`     // optional deployment-environment dimension stamped on every row
+	Label         string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`         // human-readable label (e.g., "vimgym-prod")
+	Namespace     string                 `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"` // namespace this token authorizes (e.g., "vimgym")
+	Env           string                 `protobuf:"bytes,4,opt,name=env,proto3" json:"env,omitempty"`             // optional deployment-environment dimension stamped on every row
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1271,9 +1271,9 @@ func (x *CreateTokenRequest) GetLabel() string {
 	return ""
 }
 
-func (x *CreateTokenRequest) GetApp() string {
+func (x *CreateTokenRequest) GetNamespace() string {
 	if x != nil {
-		return x.App
+		return x.Namespace
 	}
 	return ""
 }
@@ -3973,11 +3973,11 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x0ebytes_ingested\x18\x01 \x01(\x03R\rbytesIngested\x12!\n" +
 	"\fperiod_start\x18\x02 \x01(\tR\vperiodStart\x12\x1d\n" +
 	"\n" +
-	"period_end\x18\x03 \x01(\tR\tperiodEnd\"j\n" +
+	"period_end\x18\x03 \x01(\tR\tperiodEnd\"v\n" +
 	"\x12CreateTokenRequest\x12\x1a\n" +
 	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x14\n" +
-	"\x05label\x18\x02 \x01(\tR\x05label\x12\x10\n" +
-	"\x03app\x18\x03 \x01(\tR\x03app\x12\x10\n" +
+	"\x05label\x18\x02 \x01(\tR\x05label\x12\x1c\n" +
+	"\tnamespace\x18\x03 \x01(\tR\tnamespace\x12\x10\n" +
 	"\x03env\x18\x04 \x01(\tR\x03env\"+\n" +
 	"\x13CreateTokenResponse\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\"/\n" +

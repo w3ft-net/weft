@@ -49,9 +49,9 @@ func TestIngestStream_RejectsDeletedCustomer(t *testing.T) {
 	// ── 1. Create customer + namespace + token via gRPC, capturing the
 	// token the way a real weftd would have it at startup.
 	tokResp, err := client.CreateToken(ctx, &pb.CreateTokenRequest{
-		Customer: custName,
-		App:      custName + "-ns",
-		Label:    "ghost-agent",
+		Customer:  custName,
+		Namespace: custName + "-ns",
+		Label:     "ghost-agent",
 	})
 	if err != nil {
 		t.Fatalf("create token: %v", err)

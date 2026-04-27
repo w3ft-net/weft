@@ -250,9 +250,9 @@ message GetUsageResponse {
 
 message CreateTokenRequest {
   string customer = 1;
-  string label = 2;  // human-readable label (e.g., "vimgym-prod")
-  string app = 3;    // app name this token authorizes (e.g., "vimgym")
-  string env = 4;    // optional deployment-environment dimension stamped on every row
+  string label = 2;     // human-readable label (e.g., "vimgym-prod")
+  string namespace = 3; // namespace this token authorizes (e.g., "vimgym")
+  string env = 4;       // optional deployment-environment dimension stamped on every row
 }
 
 message CreateTokenResponse {

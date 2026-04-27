@@ -34,7 +34,6 @@ func main() {
 	port := flag.Int("port", 9020, "gRPC listen port")
 	healthPort := flag.Int("health-port", 9021, "HTTP health listen port")
 	shardsFlag := flag.String("shards", "", "comma-separated shard specs: id=addr=start=end,... (for Docker/dev)")
-	shardASG := flag.String("shard-asg", "", "shard ASG name for AWS discovery (legacy single-tier)")
 	shardASGSmall := flag.String("shard-asg-small", "", "small tier shard ASG name")
 	shardASGMedium := flag.String("shard-asg-medium", "", "medium tier shard ASG name")
 	shardASGLarge := flag.String("shard-asg-large", "", "large tier shard ASG name")
@@ -136,12 +135,9 @@ func main() {
 	defer drainCancel()
 	coord.StartDrain(drainCtx)
 
-	// Build tiered ASG map. Fall back to legacy single --shard-asg.
 	shardTiers := make(map[string]string)
 	if *shardASGSmall != "" {
 		shardTiers["small"] = *shardASGSmall
-	} else if *shardASG != "" {
-		shardTiers["small"] = *shardASG // legacy: single ASG = small tier
 	}
 	if *shardASGMedium != "" {
 		shardTiers["medium"] = *shardASGMedium
