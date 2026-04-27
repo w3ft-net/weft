@@ -60,9 +60,15 @@ func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, 
 	}
 
 	c := NewCoordinator(CoordinatorConfig{
-		Shards: []shard.Shard{s},
-		Pool:   &compute.LocalComputePool{Parallelism: 1},
-		Store:  db,
+		Pool:  &compute.LocalComputePool{Parallelism: 1},
+		Store: db,
+	})
+	c.Registry.Add(&ShardEntry{
+		ID:        s.ID(),
+		Apps:      []string{"api", "web"},
+		State:     StateIngesting,
+		Shard:     s,
+		CreatedAt: time.Now(),
 	})
 
 	return c, db, cust.Name, custID

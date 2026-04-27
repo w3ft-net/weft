@@ -159,8 +159,9 @@ func (s *SeenApps) Names(customer string) []string {
 // than Provisioner — see CoordinatorConfig for why that one is the
 // exception.
 //
-// Shards in cfg.Shards are registered with empty Apps (legacy: matches
-// all apps).
+// Shards in cfg.Shards are registered with no Apps populated; callers
+// that need the entries to participate in app-specific query routing
+// must add them via coord.Registry.Add(...) with explicit Apps.
 func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 	reg := NewShardRegistry()
 	for _, s := range cfg.Shards {
@@ -304,52 +305,6 @@ func (c *Coordinator) flushUsage(store *store.Store) {
 	if len(entries) > 0 {
 		log.Printf("usage flush: wrote %d hourly entries", len(entries))
 	}
-}
-
-// SetShards replaces the shard list via the registry. Used by ASG re-discovery.
-// Entries are created with empty Apps (legacy: matches all apps).
-func (c *Coordinator) SetShards(shards []shard.Shard) {
-	// Build set of new IDs.
-	newIDs := make(map[string]bool)
-	for _, s := range shards {
-		newIDs[s.ID()] = true
-	}
-
-	// Collect old shards to close after updating.
-	var toClose []shard.Shard
-	for _, e := range c.Registry.Entries() {
-		if !newIDs[e.ID] {
-			if e.Shard != nil {
-				toClose = append(toClose, e.Shard)
-			}
-			c.Registry.Remove(e.ID)
-		}
-	}
-
-	// Add/update new entries.
-	for _, s := range shards {
-		if existing := c.Registry.Get(s.ID()); existing != nil {
-			old := existing.Shard
-			existing.Shard = s
-			if old != nil && old != s {
-				toClose = append(toClose, old)
-			}
-			continue
-		}
-		c.Registry.Add(&ShardEntry{
-			ID:        s.ID(),
-			State:     StateIngesting,
-			Shard:     s,
-			CreatedAt: time.Now(),
-		})
-	}
-
-	// Note: old shard connections are not closed here. In-flight queries
-	// may still hold references. For gRPC shards, the connection will be
-	// garbage collected. For in-process DuckDB shards (tests), the test's
-	// t.Cleanup or defer handles closure.
-
-	log.Printf("coordinator: shard list updated (%d shards)", c.Registry.Count())
 }
 
 // GetShards returns all live shard connections.

@@ -26,7 +26,7 @@ const (
 // ShardEntry is the registry's per-shard metadata.
 type ShardEntry struct {
 	ID             string
-	Apps           []string // apps this shard owns; empty = all apps (legacy/shared)
+	Apps           []string // apps this shard owns; required (an empty list means the shard is unreachable for any specific-app query)
 	WindowStart    time.Time
 	WindowEnd      time.Time
 	State          ShardState
@@ -84,14 +84,10 @@ func (e *ShardEntry) isStale() bool {
 	return time.Since(e.LastHeartbeatAt) > heartbeatStaleThreshold
 }
 
-// hasApp returns true if this entry owns the given app. Empty Apps
-// means the shard is a catch-all (heartbeat-adopted shards start with
-// no app assignments and accept everything).
+// hasApp returns true if this entry owns the given app. Both exact
+// match and namespace-prefix match (e.g. e.Apps={"weft/coordinator"}
+// matches app="weft" — same namespace) count.
 func (e *ShardEntry) hasApp(app string) bool {
-	if len(e.Apps) == 0 {
-		return true // catch-all shard
-	}
-
 	// Extract namespace from query: weft/coordinator → weft, weft → weft
 	queryNS := app
 	if idx := strings.Index(queryNS, "/"); idx >= 0 {
@@ -447,19 +443,12 @@ func (r *ShardRegistry) IngestingCount(app string) int {
 	return n
 }
 
-// DefaultIngestingShard returns any INGESTING shard, preferring one with
-// an empty Apps list (shared/catch-all). Fallback for unknown apps.
+// DefaultIngestingShard returns any non-suspended INGESTING shard.
+// Used by the ingest drain when no specific-app match exists yet.
 func (r *ShardRegistry) DefaultIngestingShard() shard.Shard {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// Prefer shared (empty Apps) shard.
-	for _, e := range r.entries {
-		if e.State == StateIngesting && e.Shard != nil && !e.Suspended && len(e.Apps) == 0 {
-			return e.Shard
-		}
-	}
-	// Fallback: any non-suspended ingesting shard.
 	for _, e := range r.entries {
 		if e.State == StateIngesting && e.Shard != nil && !e.Suspended {
 			return e.Shard

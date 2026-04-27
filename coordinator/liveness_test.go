@@ -244,7 +244,8 @@ func TestUnsuspend_OnHeartbeat(t *testing.T) {
 
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
-		ID: "shard-0", State: StateIngesting, Shard: ds,
+		ID: "shard-0", Apps: []string{"anything"},
+		State: StateIngesting, Shard: ds,
 		Addr: "10.0.0.1:9000", Suspended: true, CreatedAt: time.Now(),
 	})
 
@@ -509,7 +510,8 @@ func TestSuspended_ExcludedFromWrites_IncludedInQueries(t *testing.T) {
 
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
-		ID: "shard-0", State: StateIngesting, Shard: ds,
+		ID: "shard-0", Apps: []string{"vimgym"},
+		State: StateIngesting, Shard: ds,
 		Suspended: true, WindowStart: t0, WindowEnd: t2, CreatedAt: time.Now(),
 	})
 
