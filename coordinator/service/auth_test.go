@@ -24,7 +24,7 @@ func TestAuthenticate_NoShardAddr(t *testing.T) {
 	}
 	defer s0.Close()
 
-	coord := coordinator.NewCoordinator([]shard.Shard{s0}, nil)
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Shards: []shard.Shard{s0}})
 	srv := &Server{Coord: coord, Store: store}
 
 	// Create a token.
@@ -71,7 +71,7 @@ func TestAuthenticate_MetricsConfigSync(t *testing.T) {
 	}
 	defer s0.Close()
 
-	coord := coordinator.NewCoordinator([]shard.Shard{s0}, nil)
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Shards: []shard.Shard{s0}})
 	srv := &Server{Coord: coord, Store: store}
 
 	cust, err := store.FindOrCreateCustomer("kevlar")
@@ -122,7 +122,7 @@ func TestAuthenticate_InvalidToken(t *testing.T) {
 	}
 	defer s0.Close()
 
-	coord := coordinator.NewCoordinator([]shard.Shard{s0}, nil)
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Shards: []shard.Shard{s0}})
 	srv := &Server{Coord: coord, Store: store}
 
 	_, err = srv.Authenticate(context.Background(), &pb.AuthenticateRequest{Token: "wft_bogus"})

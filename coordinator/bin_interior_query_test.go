@@ -59,8 +59,11 @@ func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, 
 		t.Fatalf("ingest: %v", err)
 	}
 
-	c := NewCoordinator([]shard.Shard{s}, &compute.LocalComputePool{Parallelism: 1})
-	c.Store = db
+	c := NewCoordinator(CoordinatorConfig{
+		Shards: []shard.Shard{s},
+		Pool:   &compute.LocalComputePool{Parallelism: 1},
+		Store:  db,
+	})
 
 	return c, db, cust.Name, custID
 }

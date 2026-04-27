@@ -59,8 +59,10 @@ func TestQueryRPC_EmitsNoticesOnFirstTmpWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sh.Close()
-	coord := coordinator.NewCoordinator([]shard.Shard{sh}, nil)
-	coord.Store = st
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{
+		Shards: []shard.Shard{sh},
+		Store:  st,
+	})
 	srv := &Server{Coord: coord, Store: st}
 
 	// Inject the authenticated caller into the context (the auth

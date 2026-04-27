@@ -59,7 +59,7 @@ func setupTestCoordinator(t *testing.T) *Coordinator {
 	}
 
 	apps := []string{"vimgym", "callbox"}
-	c := NewCoordinator(nil, nil)
+	c := NewCoordinator(CoordinatorConfig{})
 	c.Registry.Add(&ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: t0, WindowEnd: t1,

@@ -116,14 +116,21 @@ func main() {
 	db = d
 	defer db.Close()
 
-	coord := coordinator.NewCoordinator(shards, pool)
-	// query() resolves the caller's customer name → ID via the store
-	// to scope /bin lookup, alert dispatch, and weft.* functions.
-	// Without this, those paths silently no-op.
-	coord.Store = db
-	coord.Tail = coordinator.NewTailBroker()
-	coord.Ingest = coordinator.NewRingBuffer(1_000_000) // 1M row buffer
-	coord.Usage = coordinator.NewCustomerUsageStats()
+	// Notifier is built from db so it can pre-resolve aliases for the
+	// alert stage. Sharing one instance between Coordinator and
+	// CronExecutor below keeps interactive `alert --notify=foo` and
+	// scheduled-watch dispatch on the same path.
+	notifier := coordinator.NewNotifier(db)
+
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{
+		Shards:   shards,
+		Pool:     pool,
+		Store:    db,
+		Notifier: notifier,
+		Tail:     coordinator.NewTailBroker(),
+		Ingest:   coordinator.NewRingBuffer(1_000_000), // 1M row buffer
+		Usage:    coordinator.NewCustomerUsageStats(),
+	})
 
 	drainCtx, drainCancel := context.WithCancel(context.Background())
 	defer drainCancel()
@@ -274,13 +281,7 @@ func main() {
 		defer cancel()
 		p.Start(ctx)
 
-		// Share one Notifier between cron watches and the Coordinator so
-		// interactive `alert --notify=foo` runs dispatch through the same
-		// path as scheduled watches.
-		notifier := coordinator.NewNotifier(db)
-		coord.Notifier = notifier
-
-		// Start cron executor for scheduled watches.
+		// Cron executor reuses the Notifier already wired into coord.
 		cronExec := &coordinator.CronExecutor{
 			Store:    db,
 			Coord:    coord,

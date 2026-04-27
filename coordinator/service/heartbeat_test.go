@@ -16,7 +16,7 @@ import (
 // known heartbeat token. Used by every heartbeat-auth test below.
 func newRegisteredShard(t *testing.T, shardID, token string) *Server {
 	t.Helper()
-	coord := coordinator.NewCoordinator(nil, nil)
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
 	coord.Registry.Add(&coordinator.ShardEntry{
 		ID:             shardID,
 		State:          coordinator.StateIngesting,
@@ -80,7 +80,7 @@ func TestHeartbeat_BadBearer_Rejected(t *testing.T) {
 // The coordinator's provisioner is what mints the identity + token in
 // response.
 func TestHeartbeat_EmptyShardID_Christen(t *testing.T) {
-	coord := coordinator.NewCoordinator(nil, nil)
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
 	srv := &Server{Coord: coord}
 
 	_, err := srv.Heartbeat(context.Background(), &pb.ShardHeartbeatRequest{
@@ -117,7 +117,7 @@ func TestHeartbeat_PreMigrationShard_Accepted(t *testing.T) {
 // provisioner has its own gate before accepting a non-christen-path
 // unknown ID.
 func TestHeartbeat_UnknownShardID_Accepted(t *testing.T) {
-	coord := coordinator.NewCoordinator(nil, nil)
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
 	srv := &Server{Coord: coord}
 
 	_, err := srv.Heartbeat(context.Background(), &pb.ShardHeartbeatRequest{

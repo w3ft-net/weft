@@ -38,21 +38,54 @@ type QueryResult struct {
 // customer identity of its own — tenant scope is resolved per-request
 // from the customer name passed to Query / QueryForWatch, which then
 // propagates to ShellFS, AlertContext, and /bin script resolution.
+//
+// Built via NewCoordinator(CoordinatorConfig). Every dependency is
+// resolved at construction time; the only post-init mutator is
+// Provisioner (it needs to point at coord.Registry, so it can't be
+// passed in until the registry exists).
 type Coordinator struct {
 	Registry    *ShardRegistry
-	Pool        compute.ComputePool // nil = no compute support
-	Tail        *TailBroker
-	Ingest      *RingBuffer    // write path: IngestStream → buffer → shards
-	Provisioner *Provisioner   // shard lifecycle management (nil = no auto-provisioning)
-	Usage       *CustomerUsageStats // per-customer byte metering
-	Store       *store.Store   // nil = no tenant-scoped features (/bin, alert dispatch)
-	SeenApps    *SeenApps      // distinct app names from ingest stream
-	DLQ         *DLQ           // S3 dead-letter queue for failed ingests
+	Pool        compute.ComputePool     // nil = no compute support
+	Tail        *TailBroker             // nil = no live-tail subscriptions
+	Ingest      *RingBuffer             // write path: IngestStream → buffer → shards; nil disables StartDrain
+	Provisioner *Provisioner            // shard lifecycle management (nil = no auto-provisioning); set post-construction
+	Usage       *CustomerUsageStats     // nil = no per-customer byte metering
+	Store       *store.Store            // nil = no tenant-scoped features (/bin, alert dispatch); test-only
+	SeenApps    *SeenApps               // ingest-stream app discovery; constructor always installs
+	DLQ         *DLQ                    // S3 dead-letter queue for failed ingests
 	Errors      *IngestionErrorRecorder // async error persistence
-	Notifier    *Notifier      // per-customer alert dispatcher (nil = disabled)
+	Notifier    NotifyDispatcher        // per-customer alert dispatcher (nil = disabled). Interface type so a nil value is true-nil — no typed-nil-via-concrete-pointer trap when callers thread it into AlertContext.
 	// ScriptExecutionTimeout caps how long a single runLocal invocation
 	// may run. Zero = use the package-level default (scriptExecutionTimeout).
 	// Tests override to shorten the wait.
+	ScriptExecutionTimeout time.Duration
+}
+
+// CoordinatorConfig wires every Coordinator dependency at construction
+// time. Replaces the old "build empty + assign fields after" pattern in
+// cmd/coordinator/main.go that the defensive-code audit flagged: when
+// the canonical wire path mutates fields after construction, every
+// runtime path has to defend against the half-built window.
+//
+// Required: Pool. Everything else is optional — nil means "feature
+// disabled" with a documented runtime fall-through, not "we forgot to
+// wire it." Provisioner is intentionally absent: it takes a
+// *ShardRegistry that NewCoordinator builds, so circular ordering
+// forces it to be assigned after construction. See coord.Provisioner.
+type CoordinatorConfig struct {
+	Pool   compute.ComputePool
+	Shards []shard.Shard
+
+	Store    *store.Store
+	Notifier NotifyDispatcher
+	Tail     *TailBroker
+	Ingest   *RingBuffer
+	Usage    *CustomerUsageStats
+	DLQ      *DLQ
+	Errors   *IngestionErrorRecorder
+
+	// ScriptExecutionTimeout overrides the package-level default for
+	// runLocal. Zero leaves the default in place.
 	ScriptExecutionTimeout time.Duration
 }
 
@@ -120,13 +153,17 @@ func (s *SeenApps) Names(customer string) []string {
 	return names
 }
 
-// NewCoordinator creates a coordinator with the given initial shard list.
-// Shards are registered with empty Apps (legacy: matches all apps).
-// Callers are responsible for setting Store, Notifier, and other
-// tenant-scoped dependencies before the coordinator serves requests.
-func NewCoordinator(shards []shard.Shard, pool compute.ComputePool) *Coordinator {
+// NewCoordinator builds a fully-wired coordinator from cfg. The
+// returned coordinator is ready to serve requests immediately; no
+// post-construction field mutation is required (or expected) other
+// than Provisioner — see CoordinatorConfig for why that one is the
+// exception.
+//
+// Shards in cfg.Shards are registered with empty Apps (legacy: matches
+// all apps).
+func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 	reg := NewShardRegistry()
-	for _, s := range shards {
+	for _, s := range cfg.Shards {
 		reg.Add(&ShardEntry{
 			ID:        s.ID(),
 			State:     StateIngesting,
@@ -135,9 +172,17 @@ func NewCoordinator(shards []shard.Shard, pool compute.ComputePool) *Coordinator
 		})
 	}
 	return &Coordinator{
-		Registry: reg,
-		Pool:     pool,
-		SeenApps: NewSeenApps(),
+		Registry:               reg,
+		Pool:                   cfg.Pool,
+		Tail:                   cfg.Tail,
+		Ingest:                 cfg.Ingest,
+		Usage:                  cfg.Usage,
+		Store:                  cfg.Store,
+		SeenApps:               NewSeenApps(),
+		DLQ:                    cfg.DLQ,
+		Errors:                 cfg.Errors,
+		Notifier:               cfg.Notifier,
+		ScriptExecutionTimeout: cfg.ScriptExecutionTimeout,
 	}
 }
 
@@ -335,17 +380,14 @@ func (c *Coordinator) Query(pipeline string, tr TimeRange, customer, userID stri
 // of interactive-mode defaults. Watches run as the system, not as a user
 // — any writes the watch performs land with NULL creator.
 func (c *Coordinator) QueryForWatch(pipeline string, tr TimeRange, watch *store.CronWatch) (*QueryResult, error) {
+	// c.Notifier is the NotifyDispatcher interface, so a nil-Notifier
+	// coordinator threads true-nil into AlertContext (no typed-nil-via-
+	// concrete-pointer trap).
 	ctx := &AlertContext{
 		Store:      c.Store,
 		Watch:      watch,
 		CustomerID: watch.CustomerID,
-	}
-	// Notifier is an interface; assigning a typed-nil *Notifier would
-	// defeat the `ctx.Notifier != nil` guard inside evaluateAlertRow.
-	// Tests build Coordinator with Notifier=nil to exercise the
-	// no-dispatch fallback.
-	if c.Notifier != nil {
-		ctx.Notifier = c.Notifier
+		Notifier:   c.Notifier,
 	}
 	// The watch carries its own CustomerID so we can resolve the name
 	// here without a second Store round-trip. A miss means a deleted
@@ -435,10 +477,7 @@ func (c *Coordinator) query(pipeline string, tr TimeRange, customer, userID stri
 				Store:       c.Store,
 				CustomerID:  custID,
 				Interactive: true,
-			}
-			// See QueryForWatch — typed-nil interface trap.
-			if c.Notifier != nil {
-				alertCtx.Notifier = c.Notifier
+				Notifier:    c.Notifier,
 			}
 		}
 		runAlertStage(result, plan.AlertArgs, alertCtx)

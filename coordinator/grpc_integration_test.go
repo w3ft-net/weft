@@ -64,7 +64,7 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 	t.Cleanup(func() { pool.Close() })
 
 	apps := []string{"vimgym", "callbox"}
-	c := NewCoordinator(nil, pool)
+	c := NewCoordinator(CoordinatorConfig{Pool: pool})
 	c.Registry.Add(&ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: DevT0, WindowEnd: DevT1,

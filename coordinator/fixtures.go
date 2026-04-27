@@ -67,10 +67,10 @@ func NewDevCoordinator() (*Coordinator, func(), error) {
 		s1.Close()
 	}
 
-	c := NewCoordinator(
-		[]shard.Shard{s0, s1},
-		&compute.LocalComputePool{Parallelism: 2},
-	)
+	c := NewCoordinator(CoordinatorConfig{
+		Shards: []shard.Shard{s0, s1},
+		Pool:   &compute.LocalComputePool{Parallelism: 2},
+	})
 
 	return c, cleanup, nil
 }
