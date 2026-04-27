@@ -216,12 +216,7 @@ func (s *Server) ListApps(ctx context.Context, _ *pb.ListAppsRequest) (*pb.ListA
 		}
 	}
 
-	// Fall back to DB namespaces for this customer. Store may be nil
-	// only in heartbeat-style unit tests that bypass the real
-	// constructor; production always wires it.
-	if s.Store == nil {
-		return &pb.ListAppsResponse{}, nil
-	}
+	// Fall back to DB namespaces for this customer.
 	if customer != "" {
 		cust, err := s.Store.GetCustomerByName(customer)
 		if err != nil {
@@ -259,14 +254,12 @@ func (s *Server) SampleCloudWatchSource(ctx context.Context, req *pb.SampleCloud
 	if req.Namespace == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "namespace required")
 	}
-	if s.Store != nil {
-		customer, err := s.Store.GetCustomerByName(callerCust)
-		if err != nil {
-			return nil, status.Errorf(codes.NotFound, "customer %q not found", callerCust)
-		}
-		if _, err := s.Store.GetNamespace(customer.ID, req.Namespace); err != nil {
-			return nil, status.Errorf(codes.NotFound, "namespace %q not found", req.Namespace)
-		}
+	customer, err := s.Store.GetCustomerByName(callerCust)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "customer %q not found", callerCust)
+	}
+	if _, err := s.Store.GetNamespace(customer.ID, req.Namespace); err != nil {
+		return nil, status.Errorf(codes.NotFound, "namespace %q not found", req.Namespace)
 	}
 
 	result, err := ingest.FetchCloudWatch(ctx, ingest.CloudWatchFetchOpts{
@@ -299,9 +292,6 @@ func (s *Server) SampleCloudWatchSource(ctx context.Context, req *pb.SampleCloud
 }
 
 func (s *Server) AddSource(ctx context.Context, req *pb.AddSourceRequest) (*pb.AddSourceResponse, error) {
-	if s.Store == nil {
-		return nil, fmt.Errorf("config store not available")
-	}
 	if req.Namespace == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "namespace required")
 	}
@@ -352,9 +342,6 @@ func (s *Server) AddSource(ctx context.Context, req *pb.AddSourceRequest) (*pb.A
 }
 
 func (s *Server) ListSources(_ context.Context, _ *pb.ListSourcesRequest) (*pb.ListSourcesResponse, error) {
-	if s.Store == nil {
-		return &pb.ListSourcesResponse{}, nil
-	}
 	logGroups, err := s.Store.AllLogGroups()
 	if err != nil {
 		return nil, err
@@ -375,9 +362,6 @@ func (s *Server) ListSources(_ context.Context, _ *pb.ListSourcesRequest) (*pb.L
 }
 
 func (s *Server) RemoveSource(ctx context.Context, req *pb.RemoveSourceRequest) (*pb.RemoveSourceResponse, error) {
-	if s.Store == nil {
-		return nil, fmt.Errorf("config store not available")
-	}
 	if req.Namespace == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "namespace required")
 	}
@@ -402,10 +386,6 @@ func (s *Server) RemoveSource(ctx context.Context, req *pb.RemoveSourceRequest) 
 // Authenticate validates an agent token. Agents stream through the
 // coordinator via IngestStream — they never connect to shards directly.
 func (s *Server) Authenticate(_ context.Context, req *pb.AuthenticateRequest) (*pb.AuthenticateResponse, error) {
-	if s.Store == nil {
-		return nil, fmt.Errorf("config store not available")
-	}
-
 	auth, err := s.Store.ValidateAgentToken(req.Token)
 	if err != nil {
 		return nil, fmt.Errorf("validate token: %w", err)
@@ -438,9 +418,6 @@ func (s *Server) Authenticate(_ context.Context, req *pb.AuthenticateRequest) (*
 }
 
 func (s *Server) CreateToken(ctx context.Context, req *pb.CreateTokenRequest) (*pb.CreateTokenResponse, error) {
-	if s.Store == nil {
-		return nil, fmt.Errorf("config store not available")
-	}
 	callerCust, err := callerCustomer(ctx)
 	if err != nil {
 		return nil, err
@@ -462,9 +439,6 @@ func (s *Server) CreateToken(ctx context.Context, req *pb.CreateTokenRequest) (*
 }
 
 func (s *Server) ListTokens(ctx context.Context, _ *pb.ListTokensRequest) (*pb.ListTokensResponse, error) {
-	if s.Store == nil {
-		return &pb.ListTokensResponse{}, nil
-	}
 	callerCust, err := callerCustomer(ctx)
 	if err != nil {
 		return nil, err
@@ -495,9 +469,6 @@ func (s *Server) ListTokens(ctx context.Context, _ *pb.ListTokensRequest) (*pb.L
 }
 
 func (s *Server) RevokeToken(_ context.Context, req *pb.RevokeTokenRequest) (*pb.RevokeTokenResponse, error) {
-	if s.Store == nil {
-		return nil, fmt.Errorf("config store not available")
-	}
 	if err := s.Store.RevokeAgentTokenByRawToken(req.Token); err != nil {
 		return nil, err
 	}
@@ -633,9 +604,6 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 // and returns the resolved customer/namespace. Used by streaming RPCs
 // where the token isn't part of the request body.
 func (s *Server) authenticateStream(ctx context.Context) (*store.AgentAuthResult, error) {
-	if s.Store == nil {
-		return nil, status.Errorf(codes.Unauthenticated, "store unavailable")
-	}
 	md, _ := metadata.FromIncomingContext(ctx)
 	values := md.Get("authorization")
 	if len(values) == 0 {
@@ -715,12 +683,10 @@ func (s *Server) GetUsage(ctx context.Context, req *pb.GetUsageRequest) (*pb.Get
 	periodEnd := t.AddDate(0, 1, 0)
 
 	var dbBytes int64
-	if s.Store != nil {
-		dbBytes, err = s.Store.QueryUsage(customer, periodStart, periodEnd)
-		if err != nil {
-			log.Printf("GetUsage DB query error: %v", err)
-			// Continue with in-memory only.
-		}
+	dbBytes, err = s.Store.QueryUsage(customer, periodStart, periodEnd)
+	if err != nil {
+		log.Printf("GetUsage DB query error: %v", err)
+		// Continue with in-memory only.
 	}
 
 	// Add the current (not-yet-flushed) hour.
@@ -743,9 +709,6 @@ func (s *Server) GetUsage(ctx context.Context, req *pb.GetUsageRequest) (*pb.Get
 // request — the verified principal from the JWT interceptor is the sole
 // source of truth for identity.
 func (s *Server) resolveCallerCustomerID(ctx context.Context) (uint, error) {
-	if s.Store == nil {
-		return 0, fmt.Errorf("config store not available")
-	}
 	name, err := callerCustomer(ctx)
 	if err != nil {
 		return 0, err
@@ -920,6 +883,8 @@ func (s *Server) Heartbeat(ctx context.Context, req *pb.ShardHeartbeatRequest) (
 		RowCount:   req.RowCount,
 		DiskBytes:  req.DiskBytes,
 	}
+	// Persistence is opt-in: a Store-less Server still validates and
+	// dispatches, it just doesn't keep a row.
 	if s.Store != nil {
 		if err := s.Store.InsertHeartbeat(&hb); err != nil {
 			log.Printf("heartbeat: failed to persist for %s: %v", req.ShardId, err)
@@ -970,9 +935,6 @@ func (s *Server) authenticateHeartbeat(ctx context.Context, shardID string) erro
 
 // authenticateToken is a helper that validates an agent token and returns auth info.
 func (s *Server) authenticateToken(token string) (*store.AgentAuthResult, error) {
-	if s.Store == nil {
-		return nil, fmt.Errorf("config store not available")
-	}
 	auth, err := s.Store.ValidateAgentToken(token)
 	if err != nil {
 		return nil, fmt.Errorf("validate token: %w", err)
