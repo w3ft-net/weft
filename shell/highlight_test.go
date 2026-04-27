@@ -3,7 +3,7 @@ package shell
 import (
 	"testing"
 
-	"github.com/kevlarcon/weft/shellcore"
+	"github.com/kevlarcon/warp/pkg/shellcore"
 )
 
 func TestTokenizeDelegation(t *testing.T) {

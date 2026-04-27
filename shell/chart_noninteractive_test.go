@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/weft/shellcore"
+	"github.com/kevlarcon/warp/pkg/shellcore"
 )
 
 // TestExecNonInteractiveChart is the documented smoke test from the

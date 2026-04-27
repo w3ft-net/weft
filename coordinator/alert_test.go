@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/weft/shellcore"
+	"github.com/kevlarcon/warp/pkg/shellcore"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 

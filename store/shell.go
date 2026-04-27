@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/kevlarcon/warp/pkg/bash"
-	"github.com/kevlarcon/weft/shellcore"
+	"github.com/kevlarcon/warp/pkg/shellcore"
 	luaparse "github.com/yuin/gopher-lua/parse"
 	"gorm.io/gorm"
 )

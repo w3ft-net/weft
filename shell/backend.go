@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/kevlarcon/weft/shellcore"
+	"github.com/kevlarcon/warp/pkg/shellcore"
 )
 
 // WatchData holds the deserialized fields of a cron watch.

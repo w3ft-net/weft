@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/weft/shellcore"
+	"github.com/kevlarcon/warp/pkg/shellcore"
 )
 
 // HTTPBackend implements Backend over the weft HTTP API.

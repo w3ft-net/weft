@@ -14,7 +14,7 @@ import (
 	"golang.org/x/term"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shellcore"
+	"github.com/kevlarcon/warp/pkg/shellcore"
 )
 
 // QueryResult is the output of a query — either result rows or text,

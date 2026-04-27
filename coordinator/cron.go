@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kevlarcon/weft/shellcore"
+	"github.com/kevlarcon/warp/pkg/shellcore"
 	"github.com/kevlarcon/weft/store"
 )
 

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/shellcore"
+	"github.com/kevlarcon/warp/pkg/shellcore"
 )
 
 // TestShellCoreDirect tests shellcore through the same write-to-buffer
