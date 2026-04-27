@@ -3833,9 +3833,14 @@ func (x *GetSourceStatusRequest) GetApp() string {
 }
 
 type GetSourceStatusResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Status        string                 `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`                           // "unknown", "pending", "configured"
-	SchemaYaml    string                 `protobuf:"bytes,2,opt,name=schema_yaml,json=schemaYaml,proto3" json:"schema_yaml,omitempty"` // populated when status = "configured"
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Status     string                 `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`                           // "unknown", "pending", "configured"
+	SchemaYaml string                 `protobuf:"bytes,2,opt,name=schema_yaml,json=schemaYaml,proto3" json:"schema_yaml,omitempty"` // populated when status = "configured"
+	// schema_hash is the SHA-256 (hex) of the schema_yaml bytes.
+	// Agents poll GetSourceStatus on a 60s ticker after onboarding;
+	// an unchanged hash means no parser-rebuild is needed. Empty for
+	// status != "configured".
+	SchemaHash    string `protobuf:"bytes,3,opt,name=schema_hash,json=schemaHash,proto3" json:"schema_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3880,6 +3885,13 @@ func (x *GetSourceStatusResponse) GetStatus() string {
 func (x *GetSourceStatusResponse) GetSchemaYaml() string {
 	if x != nil {
 		return x.SchemaYaml
+	}
+	return ""
+}
+
+func (x *GetSourceStatusResponse) GetSchemaHash() string {
+	if x != nil {
+		return x.SchemaHash
 	}
 	return ""
 }
@@ -4149,11 +4161,13 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x06status\x18\x01 \x01(\tR\x06status\"@\n" +
 	"\x16GetSourceStatusRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x10\n" +
-	"\x03app\x18\x02 \x01(\tR\x03app\"R\n" +
+	"\x03app\x18\x02 \x01(\tR\x03app\"s\n" +
 	"\x17GetSourceStatusResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x1f\n" +
 	"\vschema_yaml\x18\x02 \x01(\tR\n" +
-	"schemaYaml2\xb8\x02\n" +
+	"schemaYaml\x12\x1f\n" +
+	"\vschema_hash\x18\x03 \x01(\tR\n" +
+	"schemaHash2\xb8\x02\n" +
 	"\n" +
 	"ShardQuery\x12.\n" +
 	"\x05Query\x12\x12.weft.QueryRequest\x1a\x0f.weft.ResultRow0\x01\x12K\n" +

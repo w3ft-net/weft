@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -962,7 +964,12 @@ func (s *Server) GetSourceStatus(_ context.Context, req *pb.GetSourceStatusReque
 		return nil, fmt.Errorf("store: %w", err)
 	}
 	if configured {
-		return &pb.GetSourceStatusResponse{Status: "configured", SchemaYaml: schemaYAML}, nil
+		sum := sha256.Sum256([]byte(schemaYAML))
+		return &pb.GetSourceStatusResponse{
+			Status:     "configured",
+			SchemaYaml: schemaYAML,
+			SchemaHash: hex.EncodeToString(sum[:]),
+		}, nil
 	}
 
 	// Check if pending.

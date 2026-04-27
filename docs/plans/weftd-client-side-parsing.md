@@ -2,11 +2,12 @@
 
 ## Status
 
-**Proposed.** Closes the gap that left `$LEVEL`, parsed `$TS`, and
-`expand_keys` JSON-promotions broken for the weftd path even though the
-schema YAML is already persisted on `log_groups`. CloudWatch (poller) and
-the offline `weft ingest` CLI already consume the schema via
-`ingest.Parser`; weftd does not.
+**Proposed.** Closes the gap that left `$LEVEL` and parsed `$TS` broken
+for the weftd path even though the schema YAML is already persisted on
+`log_groups` and even already returned to the agent on onboarding (see
+`cmd/weftd/main.go:286` — the value is fetched and dropped on the floor).
+CloudWatch (poller) and the offline `weft ingest` CLI already consume
+the schema via `ingest.Parser`; weftd does not.
 
 ## Why client-side, not server-side
 
@@ -48,8 +49,8 @@ below.
 
 ## What's in scope
 
-The five fields the schema today declares for content-derived
-extraction:
+The four fields the schema today declares that drive content-derived
+extraction in `ingest.Parser`:
 
 - `timestamp_field` + `timestamp_format` — pull `ts_unix_ns` from a
   positional whitespace field or a JSON dot-path; fall back to
@@ -59,13 +60,20 @@ extraction:
   `INFO/MainProcess` → `INFO`).
 - `field_separator` — non-whitespace separators (CSV, pipe, etc.).
 - `json_start_field` (prefix_json mode) — parse JSON from a known
-  positional offset.
-- `expand_keys` — promote a fixed list of JSON keys into typed
-  columns (`payload_json` already ships; this is about the columns
-  the planner pushes against).
+  positional offset; `payload_json` ships as bytes on the `LogRow`.
 
-These are the same five `ingest.Parser` already implements for the
-CloudWatch + offline-CLI paths. **Reuse, don't fork.**
+These are the same four `ingest.Parser` already implements for the
+CloudWatch + offline-CLI paths. **Reuse, don't fork.** Parser stays
+in `ingest/` for now; a future plan can relocate it once the
+CloudWatch Lambda forwarder removes the last server-side caller.
+
+`expand_keys` is intentionally **not** in scope. It is declared in
+the schema and round-tripped through the API but is currently inert
+across the entire codebase — no DDL materializes the columns, no
+parser fills them, no planner pushdown reads them. Wiring it up is a
+separate plan that owns per-app DDL, schema migrations, and the
+planner-side recognition. Listing it here would imply weftd changes
+unblock pushdown, which they do not.
 
 ## What's explicitly out of scope
 
@@ -89,21 +97,29 @@ CloudWatch + offline-CLI paths. **Reuse, don't fork.**
 
 ### Schema delivery
 
-A new gRPC: `WeftCoordinator.GetAppSchema(app)` returning the
-schema_yaml string + a content hash. weftd:
+No new RPC. weftd already calls `GetSourceStatus` during onboarding
+(`weftd/onboard.go:26-37`) and the response already carries
+`schema_yaml`. We extend the existing response with a `schema_hash`
+field (SHA-256 of the YAML bytes) and keep the loop running after
+onboarding completes:
 
-1. Calls it once per `(customer, app)` at startup.
-2. Refreshes on a TTL (default 5 min) — if the hash changed, swap the
-   active parser atomically; if not, no-op.
-3. On parse failure (malformed line vs schema), increments a counter
-   and ships the row with `Level=""` / ingestion-time `ts` rather
-   than dropping it. The agent never silently discards data because
-   of a schema drift.
+1. Onboarding finishes → first parser is built from the YAML the
+   agent already received.
+2. A 60s ticker per `(customer, app)` calls `GetSourceStatus`. If
+   `schema_hash` matches the cached parser's hash, no-op. If it
+   differs, build a fresh parser and atomically swap the pointer.
+3. On parse failure (malformed line vs schema, missing-but-declared
+   level field, etc.), increment a per-app counter and ship the row
+   with `Level=""` / ingestion-time `ts` rather than dropping it.
+   The agent never silently discards data because of schema drift.
 
-The TTL + hash give us cheap polling (one round-trip per app per 5
-min) without a push channel. If a configuration UX wants
-near-instant propagation later, we add a "schemas changed" gRPC
-event — the cache shape doesn't change.
+A 60s ceiling on hot-reload is short enough to feel responsive while
+a customer is editing a regex in the dashboard, and the per-app
+round-trip is one unary RPC every 60s — negligible against the
+streaming ingest the agent is already doing. If onboarding telemetry
+shows operators want sub-second propagation, a "schemas changed"
+push event is additive (one new field on `IngestStreamResponse` or a
+streaming notification RPC); the cache shape doesn't change.
 
 ### Parser placement
 
@@ -119,7 +135,7 @@ stream.Send(row)
 ```
 
 The compiled regex (`Schema.LevelPattern`) lives in the parser; we
-don't recompile per row. Schema swap on TTL refresh creates a fresh
+don't recompile per row. Schema swap on hash change creates a fresh
 parser and atomically replaces the pointer — readers see either the
 old or new parser, never a partial.
 
@@ -139,17 +155,14 @@ To stay inside ≤ 80 MiB RSS / ≤ 0.3 vCPU at 5 MB/sec, the
 implementation rules:
 
 1. **One parser per app, not per line.** Cache `(customer, app) →
-   *Parser` in weftd; build at first row, refresh on TTL.
+   *Parser` in weftd; build at onboarding completion, refresh only
+   when `schema_hash` changes.
 2. **Compiled regex only.** No `regexp.MatchString` per row; pre-
-   compile in `NewParser`.
-3. **Bounded JSON depth.** `payload_json` is shipped as bytes;
-   `expand_keys` runs through `gjson.GetBytes` with a flat key list
-   (no path traversal beyond two segments). gjson is already a
-   dependency for the alert path.
-4. **No allocations inside the hot loop where avoidable.** Reuse the
+   compile in `NewParser` (already the case in `ingest/parse.go:24-30`).
+3. **No allocations inside the hot loop where avoidable.** Reuse the
    `[]string` buffer for `strings.Fields`; reuse a single
    `LogRow` builder via a sync.Pool keyed by app.
-5. **Bench-gated.** A `go test -bench BenchmarkWeftdParse` runs at PR
+4. **Bench-gated.** A `go test -bench BenchmarkWeftdParse` runs at PR
    time over a 50k-line sample (api/worker/edge/orders/billing/
    notifier shapes) and asserts:
    - `B/op < 600` per row (one allocation budget for fields slice +
@@ -157,14 +170,25 @@ implementation rules:
    - `ns/op < 4500` per row → ≥ 220k rows/sec → ≥ 47 MB/sec at
      ~216-byte rows. That's 9× our target throughput; gives us
      headroom for the field of customers running unusual workloads.
-   - Process RSS at end of bench < 80 MiB.
+
+RSS is **not** gated in CI. Process RSS measured inside `go test`
+includes the test binary, the testing runner, and bench-only
+allocations — it is not a faithful proxy for the deployed weftd's
+working set. The fleet-week telemetry gate in rollout step 4 is the
+real RSS measurement.
 
 ## Failure modes
 
-- **Coordinator unreachable at startup.** weftd retries the schema
-  fetch with backoff; while waiting, it tails files and ships rows
-  with `Level=""` (the old behavior). No data loss, just degraded
-  enrichment until the coordinator answers.
+- **Coordinator unreachable at startup.** Onboarding's existing
+  `WaitForConfiguration` loop (`weftd/onboard.go:95-112`) keeps
+  retrying with a 5s tick; until the schema arrives, the file
+  tailer hasn't started so there's nothing to parse. No data loss
+  — same posture as today.
+- **Refresh tick fails post-onboarding.** Agent keeps using the
+  cached parser from the last successful fetch. Logs the error and
+  retries on the next tick. Customer's queries continue working with
+  the schema they had; new schema changes just take longer to
+  propagate.
 - **Schema changes mid-tail.** Next refresh tick picks up the new
   hash; the swap is per-app atomic. In-flight rows of the old
   parser ship with old fields. Acceptable.
@@ -172,31 +196,42 @@ implementation rules:
   `level_field: "5"` but the line only has 3 fields). The parser
   skips that field and continues — the row ships with `Level=""`.
   Counter increments. No crash, no drop.
-- **Customer ships agents older than the coordinator** that lack
-  the schema-fetch RPC. The new RPC is added, not retired; old
-  agents keep working in the no-schema fallback path the agent has
-  today. New extraction features only kick in for fleets that
-  upgrade — same posture as every other agent vendor.
+- **Customer ships agents older than the coordinator.** The
+  `schema_hash` field is added to the existing
+  `GetSourceStatusResponse`, never retired. Old agents keep working
+  in the no-schema fallback path they had before the upgrade. New
+  extraction features only kick in for fleets that upgrade — same
+  posture as every other agent vendor.
+- **High-volume parse failures stay invisible.** A schema with the
+  wrong `level_field` would silently produce 100% empty levels.
+  weftd emits a periodic `[<app>] parse stats: N ok, M missing-level
+  (P%)` log line so a misconfigured schema is greppable from the
+  agent host without dashboard plumbing. Surfacing the same counter
+  in `weft sources status` is a follow-up.
 
 ## Rollout
 
-1. Land the gRPC + coordinator handler. Existing weftd unaffected.
-2. Land the parser-cache in weftd behind a feature flag
-   (`WEFTD_PARSE_CLIENT_SIDE=1`). CI runs the bench gate.
+1. Land the proto change (`schema_hash` on `GetSourceStatusResponse`)
+   and coordinator hash computation. Existing weftd unaffected
+   because it ignores the new field.
+2. Land the parser-cache + 60s refresh + parse-stats logging in
+   weftd behind a feature flag (`WEFTD_PARSE_CLIENT_SIDE=1`). CI
+   runs the bench gate.
 3. Flip the demo's twelve agents on, re-run the multi-customer
    verification, confirm `awk '$LEVEL == "ERROR"'` returns the
    plausible 5-15% of rows depending on `ERROR_RATIO`.
 4. Flip on by default after one fleet-week of telemetry confirming
-   the RSS ceiling holds under real workloads.
+   the RSS budget (≤ 80 MiB) holds under real workloads.
 5. Remove the flag.
 
 ## Test plan
 
-- **Unit (weftd):** parser-cache TTL behaviour; hash-based no-op
-  refresh; concurrent reads during swap; malformed-line counter.
-- **Unit (coordinator):** `GetAppSchema` returns the right YAML for
-  the right `(customer, app)`; namespace-scope enforcement; missing-
-  app returns NOT_FOUND.
+- **Unit (weftd):** parser-cache hash-based no-op refresh;
+  parser-swap atomicity under concurrent line ingestion; malformed-
+  line counter increments and the periodic stats line emits.
+- **Unit (coordinator):** `GetSourceStatus` returns a stable
+  `schema_hash` for unchanged YAML and a different hash after
+  `ConfigureLogGroup` writes new YAML.
 - **Integration:** the multi-customer demo (already in
   `dev/demo/`) is the on-host happy path; `awk '$LEVEL ==
   "ERROR"'` and `jq 'select(._level == "ERROR")'` both return non-
@@ -205,17 +240,12 @@ implementation rules:
 
 ## Open questions
 
-- **Schema fetch transport: gRPC or HTTP/2?** The agent already has a
-  bidi gRPC stream open to the coordinator for ingest; adding a
-  unary RPC over the same connection costs nothing. Default to gRPC.
 - **What happens when an app has zero rows but a schema exists?** No
-  parser is built (nothing to parse). The fetch is lazy on first
-  row. Trade-off: a one-row burst takes one extra round-trip; we
-  could pre-fetch on startup for declared apps if the latency
-  bothers anyone. Defer.
-- **Do we want hot-reload of the level regex?** Today schema changes
-  go through `ConfigureLogGroup`. If a customer fixes a regex while
-  watching live data, do we want it to apply within seconds rather
-  than within the 5-min TTL? Probably yes for the dashboard
-  flow. Add a "schemas changed" gRPC event in v2 if the TTL feels
-  slow during real onboarding.
+  parser is built (nothing to parse). The fetch already happened at
+  onboarding, so the YAML is in hand — first-row latency is just
+  the parser construction. Acceptable.
+- **Sub-60s hot-reload?** A 60s ceiling is the v1 ceiling. If the
+  dashboard's live-edit UX shows operators want faster, we add a
+  push notification (one new field on `IngestStreamResponse`
+  signalling "your schema changed, refetch") rather than tightening
+  the polling interval. The cache shape doesn't change.

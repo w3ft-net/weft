@@ -523,4 +523,9 @@ message GetSourceStatusRequest {
 message GetSourceStatusResponse {
   string status = 1;       // "unknown", "pending", "configured"
   string schema_yaml = 2;  // populated when status = "configured"
+  // schema_hash is the SHA-256 (hex) of the schema_yaml bytes.
+  // Agents poll GetSourceStatus on a 60s ticker after onboarding;
+  // an unchanged hash means no parser-rebuild is needed. Empty for
+  // status != "configured".
+  string schema_hash = 3;
 }

@@ -20,6 +20,7 @@ const (
 type SourceStatus struct {
 	Status     string // "unknown", "pending", "configured"
 	SchemaYAML string // populated when Status == "configured"
+	SchemaHash string // SHA-256 hex of the YAML; empty when not configured
 }
 
 // CheckSourceStatus queries the coordinator for the configuration status of a source.
@@ -34,6 +35,7 @@ func CheckSourceStatus(ctx context.Context, client pb.WeftCoordinatorClient, tok
 	return &SourceStatus{
 		Status:     resp.Status,
 		SchemaYAML: resp.SchemaYaml,
+		SchemaHash: resp.SchemaHash,
 	}, nil
 }
 

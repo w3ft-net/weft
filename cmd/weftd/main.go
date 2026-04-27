@@ -39,6 +39,17 @@ var globalRegion string
 // versions.
 var versionReaders = map[string]*weftd.VersionReader{}
 
+// parserCache holds per-app schema-driven parsers. Populated when
+// onboarding completes; consulted on the row-stamping path when
+// parseClientSide is enabled.
+var parserCache = weftd.NewParserCache()
+
+// parseClientSide gates the schema-driven parsing path during rollout.
+// When false (default), weftd ships rows with raw + Fields only, same
+// behavior as before this plan. When true, lines pass through
+// ingest.Parser to extract Level / TsUnixNs / PayloadJson before send.
+var parseClientSide = os.Getenv("WEFTD_PARSE_CLIENT_SIDE") == "1"
+
 type Config struct {
 	Endpoint   string         `yaml:"endpoint"`   // coordinator address
 	Token      string         `yaml:"token"`      // agent auth token (wft_...)
@@ -211,7 +222,7 @@ func main() {
 
 		if src.Unit != "" {
 			go func() {
-				if err := onboardAndRun(ctx, coordClient, cfg.Token, app, src.Path, hostname, fullApp, func() {
+				if err := onboardAndRun(ctx, coordClient, cfg.Token, customer, app, src.Path, hostname, fullApp, func() {
 					runJournalTailer(ctx, coordClient, customer, hostname, fullApp, src.Unit)
 				}); err != nil {
 					log.Printf("[%s] onboard failed: %v", fullApp, err)
@@ -225,7 +236,7 @@ func main() {
 			} else {
 				// Single file: onboard once, then tail.
 				go func() {
-					if err := onboardAndRun(ctx, coordClient, cfg.Token, app, src.Path, hostname, fullApp, func() {
+					if err := onboardAndRun(ctx, coordClient, cfg.Token, customer, app, src.Path, hostname, fullApp, func() {
 						runFileTailer(ctx, coordClient, customer, hostname, fullApp, src.Path)
 					}); err != nil {
 						log.Printf("[%s] onboard failed: %v", fullApp, err)
@@ -249,6 +260,11 @@ func main() {
 		log.Printf("listening on socket %s", cfg.Socket)
 	}
 
+	if parseClientSide {
+		go runSchemaRefresher(ctx, coordClient, cfg.Token, customer, namespace)
+		go runParseStatsReporter(ctx)
+	}
+
 	log.Printf("weftd started: %d sources, streaming to %s", len(cfg.Sources), cfg.Endpoint)
 
 	sig := make(chan os.Signal, 1)
@@ -260,12 +276,16 @@ func main() {
 
 // onboardAndRun checks if a source is already configured. If so, runs the
 // tailer immediately. If not, submits a sample and polls until configured.
-func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, app, path, hostname, fullApp string, run func()) error {
+// In both paths, when parseClientSide is on, the schema YAML returned by
+// the coordinator is compiled into a per-app parser and stashed in the
+// parserCache so the row-stamping hot path can use it.
+func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, customer, app, path, hostname, fullApp string, run func()) error {
 	// Check if already configured.
-	status, err := weftd.CheckSourceStatus(ctx, client, token, app)
+	st, err := weftd.CheckSourceStatus(ctx, client, token, app)
 	if err != nil {
 		log.Printf("[%s] status check failed: %v — proceeding to sample", fullApp, err)
-	} else if status.Status == "configured" {
+	} else if st.Status == "configured" {
+		installParser(fullApp, customer, st.SchemaYAML)
 		log.Printf("[%s] already configured — starting", fullApp)
 		run()
 		return nil
@@ -283,10 +303,109 @@ func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 	if err != nil {
 		return err
 	}
-	_ = schemaYAML // TODO: apply schema to parser when weftd gains client-side parsing
+	installParser(fullApp, customer, schemaYAML)
 	log.Printf("[%s] configured — starting", fullApp)
 	run()
 	return nil
+}
+
+// installParser compiles schemaYAML into a parser for fullApp and
+// stashes it in the cache. No-op when parseClientSide is off or the
+// YAML is empty (e.g. unconfigured source). Logs and continues on
+// compile failures — the row-stamping path falls back to no-parse.
+func installParser(fullApp, customer, schemaYAML string) {
+	if !parseClientSide || schemaYAML == "" {
+		return
+	}
+	if _, err := parserCache.Install(fullApp, customer, schemaYAML); err != nil {
+		log.Printf("[%s] schema install failed, falling back to no-parse: %v", fullApp, err)
+	}
+}
+
+// runSchemaRefresher polls GetSourceStatus on a 60s ticker for every
+// app in the parser cache. When schema_hash differs from the cached
+// value, installs a fresh parser; an unchanged hash is a one-RPC no-op.
+// A misconfigured source whose status drops back to "pending" stops
+// receiving fresh parsers, but the previously installed one keeps
+// running until process restart — same posture as today's onboarding.
+func runSchemaRefresher(ctx context.Context, client pb.WeftCoordinatorClient, token, customer, namespace string) {
+	if !parseClientSide {
+		return
+	}
+	const interval = 60 * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		for _, fullApp := range parserCache.Apps() {
+			bareApp := strings.TrimPrefix(fullApp, namespace+"/")
+			if bareApp == fullApp {
+				continue
+			}
+			st, err := weftd.CheckSourceStatus(ctx, client, token, bareApp)
+			if err != nil {
+				log.Printf("[%s] schema refresh failed: %v", fullApp, err)
+				continue
+			}
+			if st.Status != "configured" || st.SchemaYAML == "" {
+				continue
+			}
+			cached := parserCache.Slot(fullApp).Hash()
+			if cached == st.SchemaHash {
+				continue
+			}
+			if _, err := parserCache.Install(fullApp, customer, st.SchemaYAML); err != nil {
+				log.Printf("[%s] schema reinstall failed (keeping previous parser): %v", fullApp, err)
+				continue
+			}
+			log.Printf("[%s] schema updated (hash %s → %s)", fullApp, shortHash(cached), shortHash(st.SchemaHash))
+		}
+	}
+}
+
+// shortHash trims a sha256 hex digest down to 8 chars for log lines.
+// Empty stays empty (used to render a "(new)" arrow on first install).
+func shortHash(h string) string {
+	if len(h) < 8 {
+		return "(new)"
+	}
+	return h[:8]
+}
+
+// runParseStatsReporter drains the parser cache's per-app counters
+// every 60s and emits one log line per app that processed traffic.
+// Misconfigured schemas show up as a high missing-level percentage,
+// which is the cheapest customer-visible signal we can ship without
+// dashboard plumbing. Quiet apps (zero rows in the window) emit no
+// line so the log isn't pure noise on idle hosts.
+func runParseStatsReporter(ctx context.Context) {
+	const interval = 60 * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		for _, app := range parserCache.Apps() {
+			ok, missing := parserCache.Slot(app).SwapStats()
+			total := ok + missing
+			if total == 0 {
+				continue
+			}
+			pct := float64(missing) * 100 / float64(total)
+			if missing > 0 {
+				log.Printf("[%s] parse stats: %d ok, %d missing-level (%.1f%%)", app, ok, missing, pct)
+			} else {
+				log.Printf("[%s] parse stats: %d ok", app, ok)
+			}
+		}
+	}
 }
 
 // bearerToken implements grpc.PerRPCCredentials so every outgoing RPC
@@ -417,7 +536,7 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, cust
 		app := strings.TrimSuffix(base, filepath.Ext(base))
 		fullApp := namespace + "/" + app
 		go func() {
-			if err := onboardAndRun(ctx, client, token, app, p, instance, fullApp, func() {
+			if err := onboardAndRun(ctx, client, token, customer, app, p, instance, fullApp, func() {
 				runFileTailer(ctx, client, customer, instance, fullApp, p)
 			}); err != nil {
 				log.Printf("[%s] onboard failed: %v", fullApp, err)
@@ -551,14 +670,36 @@ func versionForApp(app string) string {
 	return ""
 }
 
-// sendLineWithReconnect sends a line, opening or reconnecting the stream as needed.
-func sendLineWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient, ss *streamState, line, customer, instance, app string) error {
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return nil
+// buildLogRow constructs a LogRow for `line`. When parseClientSide is on
+// and an app-specific parser is installed, the line passes through
+// ingest.Parser to extract Level / TsUnixNs / PayloadJson from the
+// schema; agent-derived fields (Customer, Instance, Deployment, Region,
+// Version) are stamped on top. When no parser is available, falls back
+// to the pre-flag behavior: raw + Fields, ingestion-time timestamp,
+// empty Level.
+func buildLogRow(line, customer, instance, app string) *pb.LogRow {
+	now := time.Now()
+
+	if parseClientSide {
+		slot := parserCache.Slot(app)
+		if parser := slot.Parser(); parser != nil {
+			msg, _ := parser.ParseLine(line, now)
+			msg.App = app
+			msg.Customer = customer
+			msg.Instance = instance
+			msg.Deployment = globalDeployment
+			msg.Region = globalRegion
+			msg.Version = versionForApp(app)
+			if slot.HasLevelField() && msg.Level == "" {
+				slot.RecordMissingLevel()
+			} else {
+				slot.RecordOK()
+			}
+			return msg
+		}
 	}
 
-	msg := &pb.LogRow{
+	return &pb.LogRow{
 		App:        app,
 		Customer:   customer,
 		Instance:   instance,
@@ -566,9 +707,19 @@ func sendLineWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient,
 		Region:     globalRegion,
 		Version:    versionForApp(app),
 		Raw:        line,
-		TsUnixNs:   time.Now().UnixNano(),
+		TsUnixNs:   now.UnixNano(),
 		Fields:     strings.Fields(line),
 	}
+}
+
+// sendLineWithReconnect sends a line, opening or reconnecting the stream as needed.
+func sendLineWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient, ss *streamState, line, customer, instance, app string) error {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return nil
+	}
+
+	msg := buildLogRow(line, customer, instance, app)
 
 	// Try sending on existing stream.
 	if ss.stream != nil {
