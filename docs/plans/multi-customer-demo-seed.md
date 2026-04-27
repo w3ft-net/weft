@@ -303,7 +303,7 @@ The `p95` chart should track noticeably higher than `avg`; the
 `bar` for categorical x, `line` for `--bucket`; `-t` overrides.
 
 ```
-weft> cat /log/acme/prod/api.log --since 1h \
+weft> cat /log/acme/prod/api.log \
     | jq '{path, latency}' \
     | chart -x .path -y .latency -a sum
 ```
@@ -335,7 +335,7 @@ field directly.
 ```
 weft> cat /cron.d/mem-pressure
 schedule: */1 * * * *
-tail /log/acme/prod/api_metrics.log --since 2m \
+tail -n 12 /log/acme/prod/api_metrics.log \
   | jq 'select(.type == "memory")' \
   | alert above 70 -k .pct -t .host
 ```

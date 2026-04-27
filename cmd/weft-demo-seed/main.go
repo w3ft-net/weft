@@ -252,7 +252,10 @@ func ensureActiveSubscription(s *store.Store, customerName string) error {
 	return s.CreateSubscription(&store.Subscription{
 		ID:         "demo-sub-" + customerName,
 		CustomerID: customerName,
-		Tier:       "swatch",
+		// Yard tier: allows the 1-minute mem-pressure schedule
+		// the demo's verification checklist depends on. Swatch caps
+		// watches at 5-minute intervals (store.MinWatchInterval).
+		Tier:       "yard",
 		Status:     "active",
 		StartsAt:   now,
 		CreatedAt:  now,
@@ -268,12 +271,21 @@ func upsertVerifiedUser(s *store.Store, email string, customerID uint) (*store.U
 }
 
 func minimalSchemaYAML(app string) string {
-	// Keep the schema permissive — the demo logs are unstructured-ish; we
-	// rely on awk/grep more than on field projection. The schema just
-	// needs to be parseable so AddLogGroup accepts it.
+	// The generator emits one line per request/job/order/etc. as
+	// `<ts> <LEVEL> <action> key=value …` — same shape across api,
+	// worker, edge, orders, billing, notifier. Extracting the
+	// timestamp + level into real columns is what makes
+	// `awk '$LEVEL == "ERROR"'` push down to a SQL `level = 'ERROR'`
+	// predicate (otherwise it filters on a column that doesn't
+	// exist and silently returns 0). The metrics streams emitted
+	// by weftd are JSONL with no level field; their schema is
+	// auto-discovered on first ingest, not seeded here.
 	return fmt.Sprintf(`fields:
   - name: line
     type: string
+timestamp_field: "1"
+timestamp_format: "2006-01-02T15:04:05.000Z"
+level_field: "2"
 app: %s
 `, app)
 }
@@ -389,7 +401,7 @@ func preseedScripts(s *store.Store, custID uint, customerName string, members []
 	metricsLog := fmt.Sprintf("/log/%s/%s/%s_metrics.log",
 		customerName, primaryEnv, lastSegment(primaryApp))
 	memPressure := fmt.Sprintf(
-		"tail %s --since 2m | jq 'select(.type == \"memory\")' "+
+		"tail -n 12 %s | jq 'select(.type == \"memory\")' "+
 			"| alert above 70 -k .pct -t .host",
 		metricsLog)
 	if existing, _ := s.GetCronWatch(custID, "mem-pressure"); existing == nil || existing.Pipeline != memPressure {
@@ -406,7 +418,7 @@ func preseedScripts(s *store.Store, custID uint, customerName string, members []
 	// demo verification pipes this into `chart` to exercise the new
 	// pipe-stage chart with --bucket and -a flags. Single version, but
 	// authored by user2 so `ls -al /bin/` shows multiple authors.
-	memHistory := "tail $1 --since 1h | jq 'select(.type == \"memory\") | {ts, pct}'"
+	memHistory := "tail -n 360 $1 | jq 'select(.type == \"memory\") | {ts, pct}'"
 	if existing, _ := s.GetShellFunction(custID, "mem_history"); existing == nil {
 		if err := s.SaveShellFunction(custID, user2.ID, "mem_history", memHistory); err != nil {
 			return fmt.Errorf("mem_history: %w", err)

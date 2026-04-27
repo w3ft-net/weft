@@ -11,7 +11,7 @@ func TestValidateWatchPipeline(t *testing.T) {
 		pipeline string
 		wantErr  bool
 	}{
-		{"no alert", `cat /log/app.log --since 5m | grep ERROR`, false},
+		{"no alert", `cat /log/app.log | grep ERROR`, false},
 		{"one alert", `check_errors | alert above 50`, false},
 		{"one alert with notify", `check_errors | alert above 50 --notify=ops`, false},
 		{"two alerts in pipeline", `check_errors | alert above 50 | alert below 10`, true},

@@ -92,8 +92,8 @@ chart error-rate --follow               live; press q to exit
 cat /log/api.log | jq '{path, latency}' \
   | chart -x .path -y .latency -a sum
 
-# Pipe form: time-bucketed p95 over the last hour
-cat /log/api.log --since 1h \
+# Pipe form: time-bucketed p95 over the current range
+cat /log/api.log \
   | chart -x .ts -y .latency_ms --bucket 1m -a p95
 
 # Pipe form: just plot a stream of numbers from jq

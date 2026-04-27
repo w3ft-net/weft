@@ -150,7 +150,7 @@ incidents independently.
 removes the `jq -r` reformatting step:
 
 ```
-tail /log/weft/metrics.log --since 1m \
+tail -n 6 /log/weft/metrics.log \
   | jq 'select(.type == "memory")' \
   | alert above 80 -k .pct -t ._host --notify=ops
 ```
@@ -179,8 +179,8 @@ the terminal — no need to first commit it to a saved watch. The
 chart is the terminal stage of the pipeline (no commands after it).
 
 ```
-# Time-bucketed p95 latency over the last hour
-cat /log/api.log --since 1h \
+# Time-bucketed p95 latency over the current range
+cat /log/api.log \
   | chart -x .ts -y .latency_ms --bucket 1m -a p95
 
 # Distribution of total latency by path

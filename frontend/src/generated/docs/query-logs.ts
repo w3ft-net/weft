@@ -116,7 +116,7 @@ tail -n 200 /log/weft/metrics.log \\
 incidents independently.</p>
 <p><code>-k</code> and <code>-t</code> also accept JSON paths against JSONL stdin, which
 removes the <code>jq -r</code> reformatting step:</p>
-<pre><code>tail /log/weft/metrics.log --since 1m \\
+<pre><code>tail -n 6 /log/weft/metrics.log \\
   | jq 'select(.type == &quot;memory&quot;)' \\
   | alert above 80 -k .pct -t ._host --notify=ops
 </code></pre>
@@ -138,8 +138,8 @@ average across buckets, point a second watch at it via
 <p>Pipe any pipeline into <code>chart</code> to render the result as a chart in
 the terminal — no need to first commit it to a saved watch. The
 chart is the terminal stage of the pipeline (no commands after it).</p>
-<pre><code># Time-bucketed p95 latency over the last hour
-cat /log/api.log --since 1h \\
+<pre><code># Time-bucketed p95 latency over the current range
+cat /log/api.log \\
   | chart -x .ts -y .latency_ms --bucket 1m -a p95
 
 # Distribution of total latency by path
