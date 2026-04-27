@@ -67,7 +67,7 @@ func TestQueryDispatch(t *testing.T) {
 	var buf strings.Builder
 	var dispatched string
 
-	fs := NewRemoteFS(NewMemBackend(),[]string{"test"})
+	fs := NewRemoteFS(NewMemBackend(), []string{"test"})
 	core := shellcore.NewShellCore(
 		[]string{"test"}, 80, 24,
 		func(b []byte) { buf.Write(b) },
@@ -117,7 +117,7 @@ func TestSpaceWorks(t *testing.T) {
 func TestRemoteFSReadDir(t *testing.T) {
 	// Verify RemoteFS basics without a gRPC connection (just the app list).
 	// Full gRPC tests would require a running coordinator.
-	fs := NewRemoteFS(NewMemBackend(),[]string{"api", "web"})
+	fs := NewRemoteFS(NewMemBackend(), []string{"api", "web"})
 
 	entries, err := fs.ReadDir("/")
 	if err != nil {
@@ -137,7 +137,7 @@ func TestRemoteFSReadDir(t *testing.T) {
 }
 
 func TestDevFSWriteRead(t *testing.T) {
-	fs := NewRemoteFS(NewMemBackend(),[]string{"api"})
+	fs := NewRemoteFS(NewMemBackend(), []string{"api"})
 
 	err := fs.WriteFile("/bin/check", []byte("echo hi"))
 	if err != nil {

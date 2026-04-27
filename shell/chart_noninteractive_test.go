@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/kevlarcon/weft/chart"
 )
 
 // TestExecNonInteractiveChart is the documented smoke test from the
@@ -14,7 +14,7 @@ import (
 func TestExecNonInteractiveChart(t *testing.T) {
 	s := &Shell{
 		FS: &chartTestFS{
-			results: []shellcore.WatchResultValue{
+			results: []chart.WatchResultValue{
 				{Value: "1", RanAt: "2026-04-25T12:00:00Z"},
 				{Value: "5", RanAt: "2026-04-25T12:01:00Z"},
 				{Value: "3", RanAt: "2026-04-25T12:02:00Z"},
@@ -44,7 +44,7 @@ func TestExecNonInteractiveChart(t *testing.T) {
 func TestExecNonInteractiveChartSparkline(t *testing.T) {
 	s := &Shell{
 		FS: &chartTestFS{
-			results: []shellcore.WatchResultValue{
+			results: []chart.WatchResultValue{
 				{Value: "1", RanAt: "2026-04-25T12:00:00Z"},
 				{Value: "5", RanAt: "2026-04-25T12:01:00Z"},
 				{Value: "3", RanAt: "2026-04-25T12:02:00Z"},
@@ -73,7 +73,7 @@ func TestExecNonInteractiveChartFollowFlagIgnored(t *testing.T) {
 	// redraw into); the runner should treat it as a one-shot anyway.
 	s := &Shell{
 		FS: &chartTestFS{
-			results: []shellcore.WatchResultValue{
+			results: []chart.WatchResultValue{
 				{Value: "5", RanAt: "2026-04-25T12:00:00Z"},
 				{Value: "8", RanAt: "2026-04-25T12:01:00Z"},
 			},
@@ -105,13 +105,13 @@ func TestExecNonInteractiveChartUnknownWatch(t *testing.T) {
 // chartTestFS implements FS + WatchResultsProvider for non-interactive
 // shell tests.
 type chartTestFS struct {
-	results []shellcore.WatchResultValue
+	results []chart.WatchResultValue
 }
 
 func (f *chartTestFS) ReadFile(string) ([]byte, error)  { return nil, nil }
 func (f *chartTestFS) WriteFile(string, []byte) error   { return nil }
 func (f *chartTestFS) ReadDir(string) ([]string, error) { return nil, nil }
 func (f *chartTestFS) Remove(string) error              { return nil }
-func (f *chartTestFS) GetWatchResults(string, int) ([]shellcore.WatchResultValue, error) {
+func (f *chartTestFS) GetWatchResults(string, int) ([]chart.WatchResultValue, error) {
 	return f.results, nil
 }

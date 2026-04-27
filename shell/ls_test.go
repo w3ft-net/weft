@@ -11,7 +11,7 @@ import (
 type testFS struct{}
 
 func (testFS) ReadFile(path string) ([]byte, error)     { return nil, fmt.Errorf("not found") }
-func (testFS) WriteFile(path string, data []byte) error  { return nil }
+func (testFS) WriteFile(path string, data []byte) error { return nil }
 func (testFS) ReadDir(path string) ([]string, error) {
 	switch path {
 	case "/":

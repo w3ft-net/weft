@@ -9,7 +9,7 @@ import (
 // SplitAlertStage separates a trailing "| alert ..." stage from a pipeline.
 // When the last pipe stage is `alert`, it returns the pipeline with that
 // stage removed plus the alert's argv (the tokens *after* the "alert"
-// command name — matching what shellcore.ParseAlertArgs expects). When
+// command name — matching what alert.ParseArgs expects). When
 // the pipeline is just `alert ...`, queryPart is empty. When there is
 // no terminal alert stage, returns (pipeline, nil).
 //

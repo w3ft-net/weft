@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/kevlarcon/weft/chart"
 )
 
 var core *shellcore.ShellCore
@@ -82,7 +83,14 @@ func wasmInit(_ js.Value, args []js.Value) any {
 	)
 
 	// Set up JS-backed virtual filesystem.
-	core.SetFS(&jsFS{callbacks: jsCallbacks})
+	jsfs := &jsFS{callbacks: jsCallbacks}
+	core.SetFS(jsfs)
+
+	// Wire weft's chart View, builtin, and pipe stage. The jsFS
+	// satisfies chart.WatchResultsProvider (GetWatchResults), so the
+	// chart code can fetch /cron.d/<watch> results via the same JS
+	// callback path the rest of the FS uses.
+	chart.Register(core, jsfs)
 
 	// Set up history persistence via localStorage.
 	loadFn := jsCallbacks.Get("loadHistory")
@@ -122,7 +130,7 @@ func wasmInit(_ js.Value, args []js.Value) any {
 	return nil
 }
 
-// jsFS implements shellcore.FS and shellcore.WatchResultsProvider
+// jsFS implements shellcore.FS and chart.WatchResultsProvider
 // by calling JS callbacks that proxy to the API.
 type jsFS struct {
 	callbacks js.Value
@@ -171,7 +179,7 @@ func (f *jsFS) Remove(path string) error {
 	return jsResultError(result)
 }
 
-func (f *jsFS) GetWatchResults(name string, limit int) ([]shellcore.WatchResultValue, error) {
+func (f *jsFS) GetWatchResults(name string, limit int) ([]chart.WatchResultValue, error) {
 	result := f.callbacks.Call("fsGetWatchResults", name, limit)
 	if result.IsNull() || result.IsUndefined() {
 		return nil, jsError("no results")
@@ -183,10 +191,10 @@ func (f *jsFS) GetWatchResults(name string, limit int) ([]shellcore.WatchResultV
 	if items.IsUndefined() || items.IsNull() {
 		return nil, nil
 	}
-	var out []shellcore.WatchResultValue
+	var out []chart.WatchResultValue
 	for i := 0; i < items.Length(); i++ {
 		item := items.Index(i)
-		out = append(out, shellcore.WatchResultValue{
+		out = append(out, chart.WatchResultValue{
 			Value: item.Get("stdout").String(),
 			RanAt: item.Get("ran_at").String(),
 		})

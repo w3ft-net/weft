@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/kevlarcon/weft/chart"
 )
 
 // WatchData holds the deserialized fields of a cron watch.
@@ -35,7 +35,7 @@ type Backend interface {
 // WatchResultsBackend is optionally implemented by backends that can
 // return historical cron watch results.
 type WatchResultsBackend interface {
-	GetWatchResults(name string, limit int) ([]shellcore.WatchResultValue, error)
+	GetWatchResults(name string, limit int) ([]chart.WatchResultValue, error)
 }
 
 // RemoteFS implements shellcore.FS by combining a Backend (transport)
@@ -205,7 +205,7 @@ func (f *RemoteFS) Remove(path string) error {
 }
 
 // GetWatchResults delegates to the backend if it supports it.
-func (f *RemoteFS) GetWatchResults(name string, limit int) ([]shellcore.WatchResultValue, error) {
+func (f *RemoteFS) GetWatchResults(name string, limit int) ([]chart.WatchResultValue, error) {
 	if wrb, ok := f.backend.(WatchResultsBackend); ok {
 		return wrb.GetWatchResults(name, limit)
 	}

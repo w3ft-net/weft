@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/kevlarcon/weft/chart"
 )
 
 // HTTPBackend implements Backend over the weft HTTP API.
@@ -110,7 +110,7 @@ func (b *HTTPBackend) SaveNotifyConfig(content string) error {
 // GetWatchResults returns recent watch runs. Used by the shell to render
 // sparkline / last-run values inside the interactive UI. limit is the
 // server-side max; a limit of 0 tells the api to apply its default.
-func (b *HTTPBackend) GetWatchResults(name string, limit int) ([]shellcore.WatchResultValue, error) {
+func (b *HTTPBackend) GetWatchResults(name string, limit int) ([]chart.WatchResultValue, error) {
 	url := "/api/watches/" + name + "/results"
 	if limit > 0 {
 		url += "?limit=" + strconv.Itoa(limit)
@@ -132,9 +132,9 @@ func (b *HTTPBackend) GetWatchResults(name string, limit int) ([]shellcore.Watch
 	if err := json.Unmarshal(data, &rows); err != nil {
 		return nil, err
 	}
-	out := make([]shellcore.WatchResultValue, 0, len(rows))
+	out := make([]chart.WatchResultValue, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, shellcore.WatchResultValue{
+		out = append(out, chart.WatchResultValue{
 			Value: strings.TrimSpace(r.Stdout),
 			RanAt: r.RanAt,
 		})

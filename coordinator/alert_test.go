@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/kevlarcon/weft/alert"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
@@ -120,7 +120,7 @@ func TestAlert_MultiRow_NonNumericFieldSkipped(t *testing.T) {
 func TestAlert_NotifyFlagForms(t *testing.T) {
 	// Both --notify=x and --notify x should parse the alias.
 	for _, args := range []string{"--notify=ops", "--notify ops"} {
-		parsed, err := shellcore.ParseAlertArgs(strings.Fields(args))
+		parsed, err := alert.ParseArgs(strings.Fields(args))
 		if err != nil {
 			t.Fatalf("%s: %v", args, err)
 		}
@@ -285,12 +285,12 @@ func TestAlert_ParseArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := shellcore.ParseAlertArgs(strings.Fields(tt.args))
+			_, err := alert.ParseArgs(strings.Fields(tt.args))
 			if tt.ok && err != nil {
-				t.Errorf("shellcore.ParseAlertArgs(%q): unexpected error: %v", tt.args, err)
+				t.Errorf("alert.ParseArgs(%q): unexpected error: %v", tt.args, err)
 			}
 			if !tt.ok && err == nil {
-				t.Errorf("shellcore.ParseAlertArgs(%q): expected error", tt.args)
+				t.Errorf("alert.ParseArgs(%q): expected error", tt.args)
 			}
 		})
 	}

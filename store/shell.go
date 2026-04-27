@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/kevlarcon/warp/pkg/bash"
-	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/kevlarcon/weft/alert"
 	luaparse "github.com/yuin/gopher-lua/parse"
 	"gorm.io/gorm"
 )
@@ -427,7 +427,7 @@ type CompiledWatch struct {
 //   - `alert` may appear at most once in the pipeline. The single stage is
 //     the sole incident-dedup boundary per watch run.
 //   - `-k` / `-t` must be a positive integer or a `.`-prefixed JSON path
-//     if present (enforced by shellcore.ParseAlertArgs).
+//     if present (enforced by alert.ParseArgs).
 //
 // The AST walk catches alerts nested in command substitutions, compound
 // commands, and function bodies so the only way past validation is alias
@@ -455,7 +455,7 @@ func CompileWatchPipeline(pipeline string) (CompiledWatch, error) {
 		for _, w := range alertCmds[0].Words[1:] {
 			argv = append(argv, w.Literal())
 		}
-		parsed, perr := shellcore.ParseAlertArgs(argv)
+		parsed, perr := alert.ParseArgs(argv)
 		if perr != nil {
 			return out, fmt.Errorf("alert: %w", perr)
 		}
@@ -471,7 +471,7 @@ func CompileWatchPipeline(pipeline string) (CompiledWatch, error) {
 		// rendering. Only above/below/eq/neq carry a single absolute
 		// threshold — other conditions leave both fields nil.
 		switch parsed.Condition {
-		case shellcore.AlertAbove, shellcore.AlertBelow, shellcore.AlertEq, shellcore.AlertNeq:
+		case alert.Above, alert.Below, alert.Eq, alert.Neq:
 			cond := parsed.Condition.String()
 			thr := parsed.Threshold
 			out.AlertCondition = &cond

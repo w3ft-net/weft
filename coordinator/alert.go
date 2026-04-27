@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/kevlarcon/weft/alert"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -42,7 +43,7 @@ func AlertCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wr
 	data, _ := io.ReadAll(stdin)
 	stdout.Write(data)
 
-	parsed, err := shellcore.ParseAlertArgs(args)
+	parsed, err := alert.ParseArgs(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "alert: %v\n", err)
 		return 1
@@ -90,7 +91,7 @@ type alertRow struct {
 // an empty value/tag (evaluated as non-numeric downstream). When -k uses
 // a JSON-path spec each line is parsed as JSON; for positional specs
 // each line is split on whitespace.
-func splitAlertRows(data string, parsed *shellcore.AlertArgs) []alertRow {
+func splitAlertRows(data string, parsed *alert.Args) []alertRow {
 	if parsed.Key.IsZero() {
 		return []alertRow{{raw: strings.TrimSpace(data), value: strings.TrimSpace(data)}}
 	}
@@ -120,7 +121,7 @@ func splitAlertRows(data string, parsed *shellcore.AlertArgs) []alertRow {
 // evaluateAlertRow runs condition evaluation + dedup + dispatch for one row.
 // Returns 1 on a hard parse/eval error that the caller should propagate as
 // the exit code.
-func evaluateAlertRow(r alertRow, parsed *shellcore.AlertArgs, condStr string, ctx *AlertContext, stderr io.Writer) int {
+func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *AlertContext, stderr io.Writer) int {
 	current, numErr := strconv.ParseFloat(r.value, 64)
 	isNumeric := numErr == nil
 
@@ -156,13 +157,13 @@ func evaluateAlertRow(r alertRow, parsed *shellcore.AlertArgs, condStr string, c
 	var reason string
 
 	switch parsed.Condition {
-	case shellcore.AlertAny:
+	case alert.Any:
 		triggered = r.value != ""
 		if triggered {
 			reason = "non-empty output"
 		}
 
-	case shellcore.AlertAbove:
+	case alert.Above:
 		if !isNumeric {
 			fmt.Fprintf(stderr, "alert: non-numeric value %q\n", r.value)
 			return 1
@@ -179,7 +180,7 @@ func evaluateAlertRow(r alertRow, parsed *shellcore.AlertArgs, condStr string, c
 			reason = fmt.Sprintf("%.1f > %.1f", current, parsed.Threshold)
 		}
 
-	case shellcore.AlertBelow:
+	case alert.Below:
 		if !isNumeric {
 			fmt.Fprintf(stderr, "alert: non-numeric value %q\n", r.value)
 			return 1
@@ -196,7 +197,7 @@ func evaluateAlertRow(r alertRow, parsed *shellcore.AlertArgs, condStr string, c
 			reason = fmt.Sprintf("%.1f < %.1f", current, parsed.Threshold)
 		}
 
-	case shellcore.AlertEq:
+	case alert.Eq:
 		if !isNumeric {
 			fmt.Fprintf(stderr, "alert: non-numeric value %q\n", r.value)
 			return 1
@@ -204,7 +205,7 @@ func evaluateAlertRow(r alertRow, parsed *shellcore.AlertArgs, condStr string, c
 		triggered = current == parsed.Threshold
 		reason = fmt.Sprintf("%.1f == %.1f", current, parsed.Threshold)
 
-	case shellcore.AlertNeq:
+	case alert.Neq:
 		if !isNumeric {
 			fmt.Fprintf(stderr, "alert: non-numeric value %q\n", r.value)
 			return 1
@@ -212,7 +213,7 @@ func evaluateAlertRow(r alertRow, parsed *shellcore.AlertArgs, condStr string, c
 		triggered = current != parsed.Threshold
 		reason = fmt.Sprintf("%.1f != %.1f", current, parsed.Threshold)
 
-	case shellcore.AlertChanged:
+	case alert.Changed:
 		if hasPrev || prevStdout != "" {
 			triggered = r.value != prevStdout
 			if triggered {
@@ -220,7 +221,7 @@ func evaluateAlertRow(r alertRow, parsed *shellcore.AlertArgs, condStr string, c
 			}
 		}
 
-	case shellcore.AlertAbsent:
+	case alert.Absent:
 		if parsed.Duration == 0 {
 			triggered = r.value == ""
 		} else if ctx.Store != nil && ctx.Watch != nil {
@@ -231,7 +232,7 @@ func evaluateAlertRow(r alertRow, parsed *shellcore.AlertArgs, condStr string, c
 		}
 		reason = fmt.Sprintf("absent for %s", parsed.Duration)
 
-	case shellcore.AlertRising:
+	case alert.Rising:
 		if !isNumeric {
 			fmt.Fprintf(stderr, "alert: non-numeric value %q\n", r.value)
 			return 1
@@ -251,7 +252,7 @@ func evaluateAlertRow(r alertRow, parsed *shellcore.AlertArgs, condStr string, c
 			reason = fmt.Sprintf("rose %.0f%% (from %.1f to %.1f)", pctChange*100, baseline, current)
 		}
 
-	case shellcore.AlertFalling:
+	case alert.Falling:
 		if !isNumeric {
 			fmt.Fprintf(stderr, "alert: non-numeric value %q\n", r.value)
 			return 1

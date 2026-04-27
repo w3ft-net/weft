@@ -15,6 +15,7 @@ import (
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/kevlarcon/weft/chart"
 )
 
 // QueryResult is the output of a query — either result rows or text,
@@ -84,6 +85,12 @@ func (s *Shell) Run() error {
 	)
 	if s.FS != nil {
 		runner.core.SetFS(s.FS)
+		// Wire chart if the FS satisfies the WatchResultsProvider
+		// contract — the chart View and pipe-stage handler need a
+		// data source.
+		if wr, ok := s.FS.(chart.WatchResultsProvider); ok {
+			chart.Register(runner.core, wr)
+		}
 	}
 	if s.User != "" {
 		runner.core.SetUser(s.User)
@@ -500,7 +507,7 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 	// one-shot mode has no screen to page or live-redraw against,
 	// but pipe-stage chart renders to stdout once and exits, so it
 	// is supported.
-	weftPipeline, chartArgs, errMsg := shellcore.SplitChartPipeline(line)
+	weftPipeline, chartArgs, errMsg := chart.SplitPipeline(line)
 	if errMsg != "" {
 		return fmt.Errorf("chart: %s", errMsg)
 	}
@@ -523,7 +530,7 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 	}
 	if chartArgs != nil {
 		lines := queryResultLines(result)
-		out, errMsg := shellcore.RenderChartFromStream(lines, *chartArgs, 80, 20)
+		out, errMsg := chart.RenderFromStream(lines, *chartArgs, 80, 20)
 		if errMsg != "" {
 			return fmt.Errorf("chart: %s", errMsg)
 		}
@@ -627,7 +634,7 @@ func (s *Shell) execFSBuiltin(line string) (bool, string) {
 		// Non-interactive chart: render a single frame and return.
 		// `--follow` is meaningless here (no terminal to redraw into),
 		// so we ignore the flag and just paint the latest frame.
-		wr, ok := s.FS.(shellcore.WatchResultsProvider)
+		wr, ok := s.FS.(chart.WatchResultsProvider)
 		if !ok {
 			return true, "chart: watch results not supported in this backend\n"
 		}
@@ -664,7 +671,7 @@ func (s *Shell) execFSBuiltin(line string) (bool, string) {
 		}
 		name = strings.TrimPrefix(name, "/cron.d/")
 		name = strings.TrimPrefix(name, "cron.d/")
-		out, errMsg := shellcore.RenderChartOneShot(wr, name, kind, limit, 80, 20)
+		out, errMsg := chart.RenderOneShot(wr, name, kind, limit, 80, 20)
 		if errMsg != "" {
 			return true, "chart: " + errMsg + "\n"
 		}
