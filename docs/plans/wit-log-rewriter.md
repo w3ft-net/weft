@@ -2,12 +2,17 @@
 
 ## Status
 
-**Proposed.** Captured during the multi-customer demo verification:
-`wit log /bin/scan` and `wit log /cron.d/error-rate` both fail with
+**Resolved — ready to land.** Captured during the multi-customer
+demo verification: `weft sh -c 'wit log /bin/scan'` fails with
 `wit: unknown subcommand "/log"`. The bug is in warp's path
-rewriter. The other four wit subcommands (`show`, `diff`,
-`checkout`, `amend`) work fine — only `log` is hit because of a
-naming collision with the customer's `/log` namespace root.
+rewriter, hit only via `ExecNonInteractive` (`shell/shell.go:523`,
+the only `RewritePaths` call site in weft). The other four wit
+subcommands (`show`, `diff`, `checkout`, `amend`) escape because
+their keywords don't collide with a `/...` namespace prefix.
+
+Interactive `weft` shell is **not** affected — the prompt path
+sends the line straight through `ActionQuery` to the coordinator
+without invoking `RewritePaths`. The bug only fires in `weft sh -c`.
 
 ## The bug
 
@@ -71,48 +76,78 @@ builtin registry.
 
 ## Recommendation
 
-Extend warp's extension surface with a third hook that *only*
-informs the rewriter:
+Encode `wit`'s **grammar** at the rewriter call site — register
+the explicit keyword set, and have the rewriter check `Words[1]`
+against that set before applying its default path rules. The
+registration is a parameter to `RewritePaths`, not a method on
+`ShellCore`, because the only call site (`ExecNonInteractive`)
+holds no `ShellCore` instance.
 
 ```go
-// RegisterSubcommandBuiltin marks `name` as a command whose first
-// positional argument is a subcommand keyword (not a path). The
-// rewriter skips rewriting Words[1] for these commands; Words[2:]
-// are still walked and rewritten as normal.
-//
-// Use this for embedder commands shaped like `git log <path>`:
-// the second word is a fixed keyword, the third+ are real paths.
-func (c *ShellCore) RegisterSubcommandBuiltin(name string)
+// In warp/pkg/shellcore/rewrite.go
+type RewriteOption func(*rewriteConfig)
+
+// WithSubcommandBuiltin declares that `name` is a command with a
+// fixed subcommand grammar. The rewriter checks Words[1] against
+// `subs` — if Words[1] is one of the keywords, it is left alone
+// (it is grammar, not a path). Words[2:] are still walked.
+func WithSubcommandBuiltin(name string, subs ...string) RewriteOption
+
+func RewritePaths(line string, ds bash.DirStack, opts ...RewriteOption) (string, error)
+```
+
+Weft's call site:
+
+```go
+shellcore.RewritePaths(weftPipeline, shellcore.NewTransientDirStack(),
+    shellcore.WithSubcommandBuiltin("wit",
+        "log", "show", "diff", "checkout", "amend"))
 ```
 
 Implementation:
 
-1. **warp/pkg/shellcore/extension.go** — add the registry
-   (`embedderSubcommandBuiltins map[string]struct{}`) and the
-   register/unregister functions.
-2. **warp/pkg/shellcore/rewrite.go** — `rewriteSourceArgs` consults
-   the registry. If `Words[0]` is a registered subcommand-shaped
-   builtin, walk starts at `i := 2` instead of `i := 1`.
-3. **weft/shell/shell.go** (or wherever else weft instantiates
-   ShellCore) — call `core.RegisterSubcommandBuiltin("wit")` once
-   at construction.
+1. **warp/pkg/shellcore/rewrite.go** — add `RewriteOption`,
+   `rewriteConfig`, `WithSubcommandBuiltin`. Convert
+   `rewriteSourceArgs` to a closure-returning factory that
+   captures the config; if `Words[0]` has a registered subcommand
+   set and `Words[1]` is in it, walk starts at `i := 2`. Otherwise
+   walk starts at `i := 1` (current behavior).
+2. **weft/shell/shell.go** — pass `WithSubcommandBuiltin("wit", …)`
+   to the existing `RewritePaths` call in `ExecNonInteractive`.
 
-This stays weft-agnostic in warp (the registry is just a name set;
-warp doesn't import wit semantics) and is a 2-line registration on
-the weft side.
+This stays weft-agnostic in warp (the registry is just `(name,
+keyword-set)` data; warp doesn't import wit semantics) and is a
+single-call-site change on the weft side.
+
+### Why grammar, not "first arg is a name"
+
+A weaker hook ("skip Words[1] for any registered name") would
+also fix the bug, but it pretends user-supplied names like watch
+identifiers (`chart <watch>`, `weft.latest <watch>`) need
+grammar-level protection. They don't — if a user names a watch
+`log`, `weft.latest log` colliding with `/log` is user error, not
+a tooling bug. Subcommand keywords *are* grammar. Only register
+the grammar.
 
 ### Why not extend BuiltinFunc itself
 
 `BuiltinFunc` is for **top-level** commands typed at the prompt —
 the embedder owns the entire dispatch. `wit` doesn't need that:
-its execution still happens via `interp.RegisterCommand` against
-the bash interpreter (warp/pkg/bash), because `wit` is invoked
-from inside a pipeline / sub-shell / etc. as well as bare. The
-new hook is *purely* about the rewriter, decoupled from execution.
+its execution happens via `interp.RegisterCommand` against the
+bash interpreter (warp/pkg/bash), because `wit` is invoked from
+inside a pipeline / sub-shell / etc. as well as bare. The new
+hook is *purely* about the rewriter, decoupled from execution.
 
-If a future weft command genuinely needs both ("custom prompt
-dispatch + first-arg-is-subcommand"), it registers with both hooks.
-They compose.
+### Why not a ShellCore method
+
+The plan originally proposed `(*ShellCore).RegisterSubcommandBuiltin`,
+mirroring the existing `RegisterBuiltin` / `RegisterPipeStage`
+methods. That doesn't work: `RewritePaths` is the only path with
+the bug, and it's called as a package-level function from
+`ExecNonInteractive`, which deliberately holds no `ShellCore`. A
+method on `ShellCore` would not reach the bug. The variadic-option
+parameter keeps the registry local to each call without globals
+or a shared instance.
 
 ### Why not move RewritePaths after /bin expansion
 
@@ -129,56 +164,56 @@ query — fixing wit by punching a much bigger hole.
 
 ## What needs editing
 
-This plan does not intend to land changes itself; it captures the
-shape so the next session can do it discretely.
-
 ```
 warp/
   pkg/shellcore/
-    extension.go            # RegisterSubcommandBuiltin + registry
-    extension_test.go       # round-trip + collision with builtins
-    rewrite.go              # rewriteSourceArgs reads the registry
-    rewrite_test.go         # `wit log /bin/scan` round-trip
+    rewrite.go              # RewriteOption + WithSubcommandBuiltin;
+                            # closure-returning visitor
+    rewrite_test.go         # subcommand-keyword tests
 weft/
-  shell/shell.go            # core.RegisterSubcommandBuiltin("wit")
-  shell/wit_log_test.go     # ExecNonInteractive("wit log /bin/scan")
+  shell/shell.go            # WithSubcommandBuiltin("wit", "log", ...)
+  shell/wit_log_test.go     # ExecNonInteractive round-trip assertion
 ```
 
-Estimated diff: ~50 lines warp + ~5 lines weft + tests.
+Estimated diff: ~40 lines warp + ~3 lines weft + tests.
 
 ## Test plan
 
-- **warp unit:** the rewriter leaves `Words[1]` alone for a
-  registered subcommand-shaped builtin while still rewriting
-  `Words[2:]`. Counter-test: an unregistered command name still
-  has `Words[1]` rewritten (current behaviour preserved).
-- **warp unit (regression):** unregistration removes the rewriter
-  exception.
-- **weft integration:** `weft sh -c 'wit log /bin/scan'` returns
-  the three-version history we saw at session start (`Alice fix
-  the awk filter` / `Bob tighten error pattern` / `Alice initial
-  pass`). Add as a non-interactive test alongside the existing
-  shell tests.
-- **demo verification:** the multi-customer demo's "Authorship
-  plumbing" step in `docs/plans/multi-customer-demo-seed.md` walks
-  `wit log /bin/scan`. Once landed, that step actually runs.
+- **warp unit, positive:** with `WithSubcommandBuiltin("wit",
+  "log", ...)`, `wit log /bin/scan` round-trips unchanged.
+- **warp unit, Words[2:] still rewriting:** with the same
+  registration, `wit log api.log` from `cwd=/log/acme` rewrites
+  to `wit log /log/acme/api.log`.
+- **warp unit, regression:** *without* registration,
+  `wit log /bin/scan` becomes `wit /log /bin/scan` (documents
+  that the bug exists when the grammar isn't passed in — i.e.,
+  the registration is load-bearing, not redundant).
+- **weft integration:** new `shell/wit_log_test.go` runs
+  `ExecNonInteractive("wit log /bin/scan")` against a stub
+  `Query` and asserts the pipeline reaching `Query` is exactly
+  `wit log /bin/scan` (not `wit /log /bin/scan`).
+- **demo verification:** the multi-customer demo's authorship
+  step in `docs/plans/multi-customer-demo-seed.md` walks
+  `wit log /bin/scan`. Once landed, that step works under
+  `weft sh -c` as well as interactively.
 
-## Open questions
+## Resolved decisions
 
-- **Should `RegisterBuiltin` imply `RegisterSubcommandBuiltin`?**
-  Today `chart <watch>` is registered via `RegisterBuiltin` and
-  takes a watch-name first arg, not a path. If the watch name
-  ever collided with a customer namespace root (`chart log`?),
-  we'd hit the same bug. Auto-registering BuiltinFunc-registered
-  names as subcommand-shaped is conservative and probably right.
-- **Is there any other weft command with the same shape?** `weft.*`
-  — `weft.latest`, `weft.avg`, etc. — take a watch name as first
-  arg. If a customer has a watch literally named `log`, the same
-  rewriter would mangle `weft.latest log` → `weft.latest /log`.
-  Today nothing protects against that. Worth grepping the weft
-  surface for other "command + keyword + path" shapes when the
-  fix lands.
-- **Does this affect the web shell?** The web shell also calls
-  `RewritePaths` (via shellcore on the wasm side). The same
-  `RegisterSubcommandBuiltin("wit")` registration on web-shell
-  startup applies; symmetry with the CLI is the easy path.
+These were open questions before the design was tightened to
+"register grammar, not name-shape":
+
+- **Auto-register `RegisterBuiltin` names as subcommand-shaped?**
+  No. `chart <watch>` and `range <duration>` take user-supplied
+  arguments, not subcommand keywords. They have no fixed
+  grammar to register. Auto-imply would give them protection
+  they don't deserve.
+- **Cover `weft.*` (`weft.latest`, `weft.avg`, …)?** No. They
+  take a user-supplied watch name. If a customer names a watch
+  `log` and runs `weft.latest log`, the rewriter mangling it
+  is the same class of error as naming a file `--help` —
+  user-side, not a tooling bug.
+- **Web shell parity?** Not today. `cmd/wasm/main.go` does not
+  call `RewritePaths`; the web shell sends pipelines straight
+  to the coordinator over HTTP. If the web shell ever adopts
+  client-side path rewriting, register `wit`'s grammar there
+  the same way.

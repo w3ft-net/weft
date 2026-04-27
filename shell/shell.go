@@ -520,7 +520,13 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 	// to `cd /log/acme && cat /log/acme/api.log` before reaching the
 	// planner. Without this the planner sees the bare `api.log` and
 	// rejects it as an unknown namespace.
-	if rewritten, err := shellcore.RewritePaths(weftPipeline, shellcore.NewTransientDirStack()); err == nil {
+	//
+	// `wit` has a fixed subcommand grammar; declare it so the rewriter
+	// preserves the keyword in `wit log /bin/scan` instead of joining
+	// `log` against `/` and resolving it to the `/log` namespace root.
+	if rewritten, err := shellcore.RewritePaths(weftPipeline, shellcore.NewTransientDirStack(),
+		shellcore.WithSubcommandBuiltin("wit", "log", "show", "diff", "checkout", "amend"),
+	); err == nil {
 		weftPipeline = rewritten
 	}
 
