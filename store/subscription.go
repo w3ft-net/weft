@@ -1,6 +1,9 @@
 package store
 
-import "time"
+import (
+	"log"
+	"time"
+)
 
 // Subscription tracks a customer's billing state. A customer can have
 // multiple subscriptions over time (trial -> paid -> cancelled -> new paid).
@@ -53,21 +56,25 @@ func (s *Store) CreateSubscription(sub *Subscription) error {
 }
 
 // SeedDevSubscription ensures an active dev subscription exists. Idempotent.
+// The row id is namespaced per customer so seeding multiple customers in
+// the same DB doesn't collide on the subscriptions primary key.
 func (s *Store) SeedDevSubscription(customerName string) {
 	sub, _ := s.ActiveSubscription(customerName)
 	if sub != nil {
 		return
 	}
 	now := time.Now()
-	s.db.Create(&Subscription{
-		ID:         "dev-sub",
+	if err := s.db.Create(&Subscription{
+		ID:         "dev-sub-" + customerName,
 		CustomerID: customerName,
 		Tier:       "swatch",
 		Status:     "active",
 		StartsAt:   now,
 		CreatedAt:  now,
 		UpdatedAt:  now,
-	})
+	}).Error; err != nil {
+		log.Printf("store: SeedDevSubscription(%s): %v", customerName, err)
+	}
 }
 
 // CancelSubscription marks a subscription as cancelled by Stripe subscription ID.
