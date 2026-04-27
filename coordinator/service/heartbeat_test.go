@@ -10,6 +10,7 @@ import (
 
 	"github.com/kevlarcon/weft/coordinator"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/store"
 )
 
 // newRegisteredShard builds a Server with one registry entry that has a
@@ -94,29 +95,30 @@ func TestHeartbeat_EmptyShardID_Christen(t *testing.T) {
 	}
 }
 
-// TestHeartbeat_PreMigrationShard_Accepted pins the grandfather clause:
-// shards that predate migration 015 have an empty HeartbeatToken in
-// the registry and must still be accepted during the rollout. Once the
-// fleet rotates, those tokens get minted at next christen and the
-// accepting branch stops firing.
-func TestHeartbeat_PreMigrationShard_Accepted(t *testing.T) {
+// TestHeartbeat_EmptyToken_Rejected pins the post-grandfather behavior:
+// shards whose registry entry carries an empty HeartbeatToken can't be
+// authenticated, so we reject rather than waving them through. The
+// pre-migration-015 fleet that this clause used to cover has rotated.
+func TestHeartbeat_EmptyToken_Rejected(t *testing.T) {
 	srv := newRegisteredShard(t, "shard-legacy", "")
 	_, err := srv.Heartbeat(context.Background(), &pb.ShardHeartbeatRequest{
 		ShardId: "shard-legacy",
 		Addr:    "10.0.0.1:9000",
 	})
-	if err != nil {
-		t.Fatalf("pre-migration shard heartbeat rejected: %v", err)
+	if err == nil {
+		t.Fatal("empty-token shard heartbeat should be rejected")
+	}
+	if s, _ := status.FromError(err); s.Code() != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %s", s.Code())
 	}
 }
 
-// TestHeartbeat_UnknownShardID_Accepted verifies that heartbeats for
-// shard ids not in the registry pass through to the provisioner —
-// that's how rebind (EBS volume moved to a new instance) and other
-// adoption paths work. If this changes we need to make sure the
-// provisioner has its own gate before accepting a non-christen-path
-// unknown ID.
-func TestHeartbeat_UnknownShardID_Accepted(t *testing.T) {
+// TestHeartbeat_UnknownShardID_Rejected — once §8's grandfather clause
+// is gone, an unknown shard id (not in registry, not in Store) is an
+// unauthenticated request. The legitimate "registry empty after coord
+// restart" case is now handled by falling back to a Store lookup
+// (TestHeartbeat_UnknownInRegistry_LoadFromStore).
+func TestHeartbeat_UnknownShardID_Rejected(t *testing.T) {
 	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
 	srv := &Server{Coord: coord}
 
@@ -124,7 +126,66 @@ func TestHeartbeat_UnknownShardID_Accepted(t *testing.T) {
 		ShardId: "shard-unknown",
 		Addr:    "10.0.0.2:9000",
 	})
+	if err == nil {
+		t.Fatal("unknown shard heartbeat should be rejected")
+	}
+	if s, _ := status.FromError(err); s.Code() != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %s", s.Code())
+	}
+}
+
+// TestHeartbeat_UnknownInRegistry_LoadFromStore covers the
+// rebind-after-coord-restart path: live shards aren't reloaded into
+// the in-memory registry on coord boot (LoadFromStore filters to
+// ARCHIVED), so the first heartbeat from a live shard arrives with the
+// registry empty for that id. The auth path must look the token up in
+// the persisted ShardRecord — otherwise tightening the grandfather
+// clause would lock the fleet out of the coordinator after every
+// rolling restart.
+func TestHeartbeat_UnknownInRegistry_LoadFromStore(t *testing.T) {
+	tx, cleanup := testStore(t)
+	defer cleanup()
+
+	const shardID = "shard-restart-rebind"
+	token, err := store.GenerateShardHeartbeatToken()
 	if err != nil {
-		t.Fatalf("unknown-ID heartbeat rejected: %v", err)
+		t.Fatal(err)
+	}
+	if err := tx.SaveShard(&store.ShardRecord{
+		ID:             shardID,
+		Apps:           "[]",
+		WindowStart:    "2026-04-21T00:00:00Z",
+		WindowEnd:      "2026-04-22T00:00:00Z",
+		State:          string(coordinator.StateIngesting),
+		HeartbeatToken: token,
+		Tier:           "small",
+		BucketID:       1,
+		CreatedAt:      "2026-04-21T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed shard record: %v", err)
+	}
+
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
+	srv := &Server{Coord: coord, Store: tx}
+
+	_, err = srv.Heartbeat(heartbeatCtx(token), &pb.ShardHeartbeatRequest{
+		ShardId: shardID,
+		Addr:    "10.0.0.5:9000",
+		State:   "INGESTING",
+	})
+	if err != nil {
+		t.Fatalf("post-restart heartbeat with valid persisted token rejected: %v", err)
+	}
+
+	// And bad bearer is still rejected on the same path.
+	_, err = srv.Heartbeat(heartbeatCtx("not-the-real-token"), &pb.ShardHeartbeatRequest{
+		ShardId: shardID,
+		Addr:    "10.0.0.5:9000",
+	})
+	if err == nil {
+		t.Fatal("bad bearer against persisted token should be rejected")
+	}
+	if s, _ := status.FromError(err); s.Code() != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %s", s.Code())
 	}
 }

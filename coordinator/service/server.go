@@ -901,22 +901,28 @@ func (s *Server) Heartbeat(ctx context.Context, req *pb.ShardHeartbeatRequest) (
 
 // authenticateHeartbeat validates the bearer token attached to an
 // incoming Heartbeat for a known shard. Returns Unauthenticated on
-// mismatch; accepts any token for shards whose HeartbeatToken is still
-// empty in the registry (grandfathered pre-migration-015 entries) and
-// logs a warning so we can see the tail of the rollout.
+// any miss: missing bearer, mismatched bearer, unknown shard id, or
+// shard whose persisted HeartbeatToken is empty.
+//
+// Lookup order is registry → store: a coord restart leaves the
+// in-memory registry empty for live shards (LoadFromStore filters to
+// ARCHIVED), so the first heartbeat from a returning shard has to
+// validate against the persisted ShardRecord.
 func (s *Server) authenticateHeartbeat(ctx context.Context, shardID string) error {
-	entry := s.Coord.Registry.Get(shardID)
-	if entry == nil {
-		// Unknown shard id — not necessarily an attack; the provisioner
-		// may adopt it on the ProcessHeartbeat path. Let it through so
-		// legacy rebind behaviour is preserved; future tightening can
-		// reject here once we've confirmed no legitimate flow relies on
-		// an unknown id.
-		return nil
+	expectedToken := ""
+	if entry := s.Coord.Registry.Get(shardID); entry != nil {
+		expectedToken = entry.HeartbeatToken
+	} else if s.Store != nil {
+		rec, ok, err := s.Store.GetShard(shardID)
+		if err != nil {
+			return status.Errorf(codes.Internal, "lookup shard %s: %v", shardID, err)
+		}
+		if ok {
+			expectedToken = rec.HeartbeatToken
+		}
 	}
-	if entry.HeartbeatToken == "" {
-		log.Printf("heartbeat: %s has no stored token (pre-015 shard); accepting", shardID)
-		return nil
+	if expectedToken == "" {
+		return status.Errorf(codes.Unauthenticated, "unknown or untokened shard %s", shardID)
 	}
 
 	md, _ := metadata.FromIncomingContext(ctx)
@@ -925,7 +931,7 @@ func (s *Server) authenticateHeartbeat(ctx context.Context, shardID string) erro
 		return status.Errorf(codes.Unauthenticated, "heartbeat missing authorization bearer for %s", shardID)
 	}
 	presented := strings.TrimPrefix(values[0], "Bearer ")
-	if !store.ConstantTimeTokenEqual(entry.HeartbeatToken, presented) {
+	if !store.ConstantTimeTokenEqual(expectedToken, presented) {
 		return status.Errorf(codes.Unauthenticated, "heartbeat bearer mismatch for %s", shardID)
 	}
 	return nil

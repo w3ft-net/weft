@@ -26,11 +26,10 @@ type ShardRecord struct {
 	CreatedAt   string `gorm:"not null"` // RFC3339
 	EBSVolumeID string                   // EBS volume holding this shard's DuckDB (empty = not on a dedicated volume yet)
 	// HeartbeatToken is a per-shard bearer the shard presents on every
-	// Heartbeat RPC. Minted by the provisioner at christen, returned to
-	// the shard in the Configure response, and persisted in shard.json.
-	// NULL for shards created before migration 015 — the Heartbeat
-	// handler accepts them during the transition window and logs a
-	// warning so the fleet can roll naturally.
+	// Heartbeat RPC. Minted by the provisioner at christen, returned
+	// to the shard in the Configure response, and persisted in
+	// shard.json. Required: a record with an empty token can no
+	// longer authenticate.
 	HeartbeatToken string
 	// BucketID references buckets.id (surrogate bigint since
 	// migration 022). Every shard belongs to exactly one bucket;
@@ -52,9 +51,9 @@ func GenerateShardHeartbeatToken() (string, error) {
 }
 
 // ConstantTimeTokenEqual compares two heartbeat tokens in constant
-// time. Returns false if either side is empty so callers don't need a
-// separate check — "empty vs empty equals true" would be a trap since
-// the Heartbeat handler treats empty-token as a grandfather fallback.
+// time. Returns false if either side is empty — an empty stored token
+// means "no token to authenticate against" and must never match an
+// empty presented bearer.
 func ConstantTimeTokenEqual(stored, presented string) bool {
 	if stored == "" || presented == "" {
 		return false
