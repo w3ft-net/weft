@@ -434,6 +434,7 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 
 	existing := p.registry.Get(hb.ShardID)
 	if existing != nil {
+		existing.LastHeartbeatAt = time.Now()
 		if existing.Addr == hb.Addr {
 			if existing.Suspended {
 				log.Printf("provisioner: unsuspending shard %s (heartbeat received)", hb.ShardID)
@@ -476,13 +477,14 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 	}
 
 	entry := &ShardEntry{
-		ID:         hb.ShardID,
-		Addr:       hb.Addr,
-		InstanceID: hb.InstanceID,
-		State:      state,
-		RowCount:   hb.RowCount,
-		Shard:      gs,
-		CreatedAt:  time.Now(),
+		ID:              hb.ShardID,
+		Addr:            hb.Addr,
+		InstanceID:      hb.InstanceID,
+		State:           state,
+		RowCount:        hb.RowCount,
+		Shard:           gs,
+		CreatedAt:       time.Now(),
+		LastHeartbeatAt: time.Now(),
 	}
 
 	if p.registry.store != nil {
@@ -616,20 +618,21 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 	}
 
 	p.registry.Add(&ShardEntry{
-		ID:             row.ID,
-		Apps:           apps,
-		WindowStart:    windowStart,
-		WindowEnd:      windowEnd,
-		State:          StateIngesting,
-		Addr:           hb.Addr,
-		InstanceID:     hb.InstanceID,
-		RowCount:       hb.RowCount,
-		EBSVolumeID:    volumeID,
-		Shard:          sh,
-		CreatedAt:      createdAt,
-		HeartbeatToken: row.HeartbeatToken,
-		Tier:           row.Tier,
-		BucketID:       row.BucketID,
+		ID:              row.ID,
+		Apps:            apps,
+		WindowStart:     windowStart,
+		WindowEnd:       windowEnd,
+		State:           StateIngesting,
+		Addr:            hb.Addr,
+		InstanceID:      hb.InstanceID,
+		RowCount:        hb.RowCount,
+		EBSVolumeID:     volumeID,
+		Shard:           sh,
+		CreatedAt:       createdAt,
+		HeartbeatToken:  row.HeartbeatToken,
+		Tier:            row.Tier,
+		BucketID:        row.BucketID,
+		LastHeartbeatAt: time.Now(),
 	})
 	log.Printf("provisioner: christened %s at %s (bucket=%s(%d) window %s–%s volume=%s)",
 		row.ID, hb.Addr, bucket.Label, bucket.ID, row.WindowStart, row.WindowEnd, volumeID)

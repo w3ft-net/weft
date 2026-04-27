@@ -22,13 +22,17 @@ After the retry budget elapses (~200ms), the next attempt picks up the new
 conn and succeeds. In an AWS deploy roll, this turns "some users see 5xx"
 into "tail latency goes up by 100ms during the roll."
 
+**Stale-shard pruning shipped (2026-04-26):** `ShardEntry.LastHeartbeatAt`
+is now updated by `ProcessHeartbeat` (and christen on first registration).
+`MatchingShards` and `IngestingShard` skip entries whose last heartbeat is
+older than `heartbeatStaleThreshold` (2 minutes). Direct-init test fixtures
+without the field set count as fresh, so legacy `&ShardEntry{...}` literals
+keep working. Tests in `coordinator/registry_stale_test.go`. This is
+belt-and-suspenders alongside `reapDeadShards` (which actually `Remove`s
+the entry from the registry on the next tick): the filter takes effect
+immediately, the reaper does the cleanup.
+
 **Still open (next):**
-- Stale-shard pruning: if a registered shard's last heartbeat is >2min old,
-  either suspend it (skip from `MatchingShards`) or evict it. Today such
-  entries linger forever, and Phase 2 retries against their dead Addrs
-  produce repeated errors for the duration of any user session that touches
-  apps owned by those shards. This is launcher-agnostic but more visible in
-  Docker dev where container churn creates dead entries faster.
 - Phase 3 (coalesce rapid rebinds during `adoptFromHeartbeats`): mostly a
   dev-mode comfort. Production wouldn't see the cascade outside fleet-wide
   replacements.

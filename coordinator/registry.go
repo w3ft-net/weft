@@ -50,12 +50,39 @@ type ShardEntry struct {
 	// literals without a bucket need to supply one explicitly, since
 	// persist() no longer papers over the zero case.
 	BucketID int64
+	// LastHeartbeatAt is the wall-clock time of the most recent
+	// heartbeat the provisioner observed for this shard. Updated by
+	// ProcessHeartbeat (and christen on first registration). Read by
+	// MatchingShards / IngestingShard to skip entries whose underlying
+	// container has died and gone silent — without that filter, the
+	// registry holds stale Addrs forever and Phase 2 retries against
+	// them produce repeated errors. Zero (unset) is treated as fresh
+	// so direct-init test fixtures don't get filtered out.
+	LastHeartbeatAt time.Time
 }
 
 // suspendFailureThreshold is the number of consecutive ingest failures
 // that marks a shard as suspended. One flaky RPC shouldn't take a shard
 // out of rotation; a sustained run of failures should.
 const suspendFailureThreshold = 3
+
+// heartbeatStaleThreshold is how long since the last heartbeat before
+// MatchingShards/IngestingShard treat an entry as dead and skip it.
+// Aligns with adoptFromHeartbeats's "2 minutes" lookback window: a
+// shard that hasn't heartbeat'd in that window won't be re-adopted
+// after a coordinator restart either, so the registry shouldn't keep
+// routing traffic to it.
+const heartbeatStaleThreshold = 2 * time.Minute
+
+// isStale reports whether this entry's last observed heartbeat is
+// older than heartbeatStaleThreshold. Zero (never set) counts as
+// fresh — see the LastHeartbeatAt field comment.
+func (e *ShardEntry) isStale() bool {
+	if e.LastHeartbeatAt.IsZero() {
+		return false
+	}
+	return time.Since(e.LastHeartbeatAt) > heartbeatStaleThreshold
+}
 
 // hasApp returns true if this entry owns the given app. Empty Apps
 // means the shard is a catch-all (heartbeat-adopted shards start with
@@ -354,6 +381,9 @@ func (r *ShardRegistry) MatchingShards(tr TimeRange, app string, tier store.Tier
 		if e.State == StateExpiring {
 			continue
 		}
+		if e.isStale() {
+			continue
+		}
 		// Zero-value windows = unbounded (heartbeat-adopted shards).
 		hasWindow := !e.WindowStart.IsZero() && !e.WindowEnd.IsZero()
 		if hasWindow && (!e.WindowStart.Before(tr.End) || !e.WindowEnd.After(tr.Start)) {
@@ -376,7 +406,7 @@ func (r *ShardRegistry) IngestingShard(app string) shard.Shard {
 
 	var candidates []shard.Shard
 	for _, e := range r.entries {
-		if e.State != StateIngesting || e.Shard == nil || e.Suspended {
+		if e.State != StateIngesting || e.Shard == nil || e.Suspended || e.isStale() {
 			continue
 		}
 		if e.hasApp(app) {
