@@ -19,7 +19,12 @@ func TestValidateWatchPipeline(t *testing.T) {
 		{"alert inside command sub", `echo $(check | alert above 1) | alert below 2`, true},
 		{"alert inside if", `if true; then alert above 1; fi`, false},
 		{"two alerts across if/for", `if true; then alert above 1; fi; for x in a; do alert below 2; done`, true},
-		{"unparseable pipeline is passed through", `<<< broken syntax >>>`, false},
+		// Malformed shell syntax now surfaces as a parse error from
+		// warp's tightened parser, so the validator rejects the
+		// pipeline rather than silently letting it through. That's
+		// the desired behaviour — a typo in a saved watch should be
+		// caught at save time, not at run time.
+		{"malformed pipeline is rejected", `<<< broken syntax >>>`, true},
 		{"bad -k value", `foo | alert above 1 -k abc`, true},
 		{"bad -t value", `foo | alert above 1 -k 2 -t 0`, true},
 	}
