@@ -47,6 +47,28 @@ func DefaultReadPolicy() Policy {
 	}
 }
 
+// DefaultCronPolicy is the policy applied to the pipeline body of
+// a cron proposal. It is DefaultReadPolicy plus the `alert` pipe
+// stage, which crons use to register an alert condition.
+//
+// Crons that do *not* alert (pure scheduled jobs) pass this policy
+// trivially — they look the same as a one-shot read pipeline.
+// Crons that do alert end with `| alert <condition> [-k …] [-t …]
+// [--notify …]`, all of which are vetted as flag values rather than
+// positional paths so the alert key (which can be a JSON path like
+// `.latency_ms`) doesn't trip the path validator.
+func DefaultCronPolicy() Policy {
+	p := DefaultReadPolicy()
+	p.AllowedCommands["alert"] = CommandRule{
+		FlagsWithValue: map[string]bool{
+			"-k": true, "-t": true,
+			"--tag":    true,
+			"--notify": true,
+		},
+	}
+	return p
+}
+
 // underLog is the path validator used by the read policy: every
 // positional path argument must be rooted at /log/ and must not
 // contain '..' segments. Bare names (no slash) are also accepted —

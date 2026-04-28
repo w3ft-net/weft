@@ -64,6 +64,12 @@ func main() {
 		case "token":
 			runToken()
 			return
+		case "mcp":
+			runMCP()
+			return
+		case "propose":
+			runPropose()
+			return
 		}
 	}
 
@@ -85,6 +91,8 @@ func printUsage() {
 	fmt.Println("  source          Manage log sources (add, list, remove, pending, configure)")
 	fmt.Println("  setup           Interactive schema setup from a sample file")
 	fmt.Println("  ingest          Ingest a log file into a local DuckDB shard")
+	fmt.Println("  mcp             Start an MCP server on stdio for LLM clients")
+	fmt.Println("  propose         Review or apply MCP-staged mutations (review|apply|clear)")
 	fmt.Println()
 	fmt.Println("Run 'weft <command> --help' for details on a specific command.")
 }
