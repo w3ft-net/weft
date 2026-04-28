@@ -2,7 +2,7 @@ module github.com/kevlarcon/weft
 
 go 1.25.0
 
-replace github.com/kevlarcon/warp => ../../../../warp/.claude/worktrees/vim-hooks-extend
+replace github.com/kevlarcon/warp => ../warp
 
 require (
 	github.com/aws/aws-lambda-go v1.54.0
