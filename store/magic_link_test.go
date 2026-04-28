@@ -42,9 +42,14 @@ func TestMagicLink_ConcurrentConsume(t *testing.T) {
 	// Needs a fresh connection pool (not a BeginTest transaction) —
 	// pgx serializes queries on one connection and two goroutines racing
 	// on one tx will trip the driver instead of the DB's row lock.
+	// Same dedicated `weft_test` database as testOpen so this race test
+	// doesn't write into the dev/integration stack's `weft` DB.
 	dsn := os.Getenv("WEFT_TEST_DSN")
 	if dsn == "" {
-		dsn = "host=localhost port=5433 dbname=weft user=weft password=weft sslmode=disable"
+		dsn = "host=localhost port=5433 dbname=weft_test user=weft password=weft sslmode=disable"
+	}
+	if err := ensureTestDatabase(dsn); err != nil {
+		t.Skipf("postgres unavailable: %v", err)
 	}
 	db, err := Open(dsn)
 	if err != nil {

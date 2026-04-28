@@ -5,11 +5,27 @@ import (
 	"testing"
 )
 
+// testOpen connects to the dedicated `weft_test` database on the dev
+// postgres server and returns a transaction-wrapped Store that rolls
+// back on test cleanup. The test DB is auto-provisioned the first
+// time tests run so contributors don't have to remember a manual
+// createdb step.
+//
+// We don't share the `weft` database with the running dev/integration
+// stack: a coordinator+shards mid-write at :5433 contends with
+// BeginTest's tx for connections and isolation, and a unit test that
+// happens to land during heavy stack churn can see CreateUser fail
+// with a duplicate-email surprise (a previously-rolled-back insert
+// re-replayed via a connection-pool oddity). Pointing tests at their
+// own database removes the contention class entirely.
 func testOpen(t *testing.T) *Store {
 	t.Helper()
 	dsn := os.Getenv("WEFT_TEST_DSN")
 	if dsn == "" {
-		dsn = "host=localhost port=5433 dbname=weft user=weft password=weft sslmode=disable"
+		dsn = "host=localhost port=5433 dbname=weft_test user=weft password=weft sslmode=disable"
+	}
+	if err := ensureTestDatabase(dsn); err != nil {
+		t.Skipf("postgres unavailable: %v", err)
 	}
 	db, err := Open(dsn)
 	if err != nil {
