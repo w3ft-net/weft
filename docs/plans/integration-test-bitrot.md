@@ -55,14 +55,18 @@ N > 20 points at cumulative residue.
 everything it ingested (by customer+app), or switch the assertion
 from exact-count to "at least the rows I ingested are present."
 
-### `TestLambdaColdShard_DockerIntegration`
+### `TestLambdaColdShard_DockerIntegration` — ✅ resolved (2026-04-28)
 
-**Where it fails:** haven't dug in. Fails fast (~0.05s), probably
-an auth or setup issue similar to what the bitrot pass already
-fixed; just hasn't been looked at.
-
-**Next step:** rerun in isolation with `-v`, share the failure
-mode, triage from there.
+The lambda-shard compose service was collateral damage in
+5a175bf (Provisioner manages shard lifecycle in dev and prod —
+ripped the static shard containers, took the lambda-shard
+container with it). The Dockerfile still built the binary and
+the test still expected :9030 to answer, so it dialed and got
+"connection refused" in 50ms. Restored the lambda-shard service
+in docker-compose.yml (S3_* env shape per 05a0a6f's WEFT_-prefix
+drop) and tagged lambda_test.go with //go:build integration so it
+runs alongside the other heavy tests. 5/5 green; cold-shard query
+via the LambdaColdShard path is back in coverage.
 
 ### `TestLifecycle_Integration_ChristenPath` — ✅ resolved (2026-04-27, 9927ae4)
 

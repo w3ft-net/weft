@@ -126,6 +126,31 @@ services:
       coordinator:
         condition: service_started
 
+  # Dev/Docker stand-in for the production Lambda function URL that
+  # backs LambdaColdShard. cmd/lambda-shard switches to plain HTTP
+  # mode when AWS_LAMBDA_RUNTIME_API isn't set, so the same binary
+  # answers parquet-cold-shard queries on :9030 here and as a
+  # streaming Lambda response in prod. integration/lambda_test.go
+  # depends on this; without it the cold-shard query path is only
+  # unit-tested.
+  lambda-shard:
+    build:
+      context: ..
+      dockerfile: weft/Dockerfile
+    command:
+      - /usr/local/bin/lambda-shard
+    environment:
+      PORT: "9030"
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_REGION: us-east-1
+      S3_USE_SSL: "false"
+    ports:
+      - "9030:9030"
+    depends_on:
+      - minio
+
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9091"
