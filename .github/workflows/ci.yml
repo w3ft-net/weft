@@ -1,0 +1,161 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel in-flight CI runs for the same ref when a new push lands.
+# Saves runner minutes; the latest commit is what matters.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout weft
+        uses: actions/checkout@v4
+        with:
+          path: weft
+      - name: Checkout warp (sibling for go.mod replace)
+        uses: actions/checkout@v4
+        with:
+          repository: kevlarcon/warp
+          path: warp
+          token: ${{ secrets.WARP_READ_TOKEN }}
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: weft/go.mod
+          cache-dependency-path: weft/go.sum
+      - name: go test ./...
+        working-directory: weft
+        run: go test -count=1 -timeout 5m ./...
+
+  integration:
+    name: Integration (generic)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout weft
+        uses: actions/checkout@v4
+        with:
+          path: weft
+      - name: Checkout warp (sibling for go.mod replace)
+        uses: actions/checkout@v4
+        with:
+          repository: kevlarcon/warp
+          path: warp
+          token: ${{ secrets.WARP_READ_TOKEN }}
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: weft/go.mod
+          cache-dependency-path: weft/go.sum
+      - name: Compose up (base)
+        working-directory: weft
+        run: |
+          docker compose up -d --build
+          # Restart any service that crashed on the cold-start migration
+          # race (api can lose to coordinator on goose up). Idempotent
+          # for healthy services.
+          sleep 5
+          docker compose up -d
+      - name: Run -tags integration
+        working-directory: weft
+        run: go test -tags integration -count=1 -timeout 10m -v ./integration/
+      - name: Dump container logs on failure
+        if: failure()
+        working-directory: weft
+        run: docker compose logs --tail=200
+      - name: Compose down
+        if: always()
+        working-directory: weft
+        run: docker compose down -v --remove-orphans
+
+  integration-localstack:
+    name: Integration (localstack)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout weft
+        uses: actions/checkout@v4
+        with:
+          path: weft
+      - name: Checkout warp (sibling for go.mod replace)
+        uses: actions/checkout@v4
+        with:
+          repository: kevlarcon/warp
+          path: warp
+          token: ${{ secrets.WARP_READ_TOKEN }}
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: weft/go.mod
+          cache-dependency-path: weft/go.sum
+      - name: Compose up (base + localstack)
+        working-directory: weft
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.localstack.yml up -d --build
+          sleep 5
+          docker compose -f docker-compose.yml -f docker-compose.localstack.yml up -d
+      - name: Run -tags integration,localstack
+        working-directory: weft
+        run: go test -tags integration,localstack -count=1 -timeout 10m -v ./integration/
+      - name: Dump container logs on failure
+        if: failure()
+        working-directory: weft
+        run: docker compose -f docker-compose.yml -f docker-compose.localstack.yml logs --tail=200
+      - name: Compose down
+        if: always()
+        working-directory: weft
+        run: docker compose -f docker-compose.yml -f docker-compose.localstack.yml down -v --remove-orphans
+
+  integration-coverage:
+    name: Integration (coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout weft
+        uses: actions/checkout@v4
+        with:
+          path: weft
+      - name: Checkout warp (sibling for go.mod replace)
+        uses: actions/checkout@v4
+        with:
+          repository: kevlarcon/warp
+          path: warp
+          token: ${{ secrets.WARP_READ_TOKEN }}
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: weft/go.mod
+          cache-dependency-path: weft/go.sum
+      - name: Prepare per-service coverage dirs
+        working-directory: weft
+        run: mkdir -p coverage/{coordinator,shard-0,shard-1,compute,api}
+      - name: Compose up (base + localstack + cover)
+        working-directory: weft
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.localstack.yml -f docker-compose.cover.yml up -d --build
+          sleep 5
+          docker compose -f docker-compose.yml -f docker-compose.localstack.yml -f docker-compose.cover.yml up -d
+      - name: Run generic suite under coverage
+        working-directory: weft
+        run: go test -tags integration -count=1 -timeout 10m -v ./integration/
+      - name: Run localstack suite under coverage
+        working-directory: weft
+        run: go test -tags integration,localstack -count=1 -timeout 10m -v ./integration/
+      - name: Stop stack (SIGTERM so Go counters flush)
+        if: always()
+        working-directory: weft
+        run: docker compose -f docker-compose.yml -f docker-compose.localstack.yml -f docker-compose.cover.yml down --remove-orphans
+      - name: Build coverage report
+        working-directory: weft
+        run: scripts/coverage-report.sh
+      - name: Upload coverage profiles
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-profiles
+          path: weft/coverage/
+          if-no-files-found: error

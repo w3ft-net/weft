@@ -29,12 +29,37 @@ Grants: Packer AMI builds, SSM parameter access (AMI IDs), ASG instance refresh,
 
 #### `ci.yml` — runs on PRs and push to main
 
-Two parallel jobs:
+Four parallel jobs, partitioned by the docker overlay each one needs.
+The harness no longer manages Docker itself — every job brings the
+stack up explicitly before invoking `go test`, and `requireStackRunning()`
+in `integration/harness.go` fails fast if nothing is listening on
+`:9021/health`.
 
-- **Unit tests**: `go test ./...` (fast, no Docker). The `integration` build tag keeps integration tests out by default.
-- **Integration tests**: `go test -tags=integration ./integration/...`. The harness no longer manages Docker itself — the job brings the stack up explicitly (`docker compose up -d --build`) before running tests, and the harness fails fast with a clear message if nothing's listening on `:9021/health`. See `integration/harness.go`.
+- **`unit`**: `go test ./...` (no Docker). The `integration` build tag keeps integration tests out.
+- **`integration`** (generic): `docker compose up`, then `go test -tags integration`. Runs every test tagged `integration && !localstack` — the bulk of the suite (ingest/query, onboard, buckets, jq, lambda-cold-shard, direct-to-compute ops, ingest-auth).
+- **`integration-localstack`**: `docker compose -f docker-compose.yml -f docker-compose.localstack.yml up`, then `go test -tags integration,localstack`. Runs only AWS-emulator-touching tests (`integration && localstack` files: lifecycle, prewarm, terminate-on-archive). Cleanly partitioned from `integration` via the `!localstack` constraint on the generic files.
+- **`integration-coverage`**: `docker compose -f docker-compose.yml -f docker-compose.localstack.yml -f docker-compose.cover.yml up` to bring up coverage-instrumented binaries (per `docker-compose.cover.yml`). Runs both partitions back-to-back (`-tags integration` then `-tags integration,localstack`) so the merged profile reflects the entire surface, then `scripts/coverage-report.sh` consolidates per-service `.out` files and they're uploaded as a workflow artifact.
 
-Both jobs need the `warp` repo checked out as a sibling (local replace directive in go.mod: `replace github.com/kevlarcon/warp => ../warp`).
+The build-tag convention:
+
+| File set                           | Constraint                              |
+|------------------------------------|------------------------------------------|
+| Generic integration tests          | `//go:build integration && !localstack` |
+| AWS-emulator-touching tests        | `//go:build integration && localstack`  |
+| Helpers (`auth_helpers.go` et al.) | `//go:build integration` (visible to both) |
+| TestMain owner (`cold_storage_test.go`) | no tag (compiles in both jobs)        |
+
+Adding a new test that needs LocalStack: tag the file
+`//go:build integration && localstack`. Adding a new test that doesn't:
+`//go:build integration && !localstack`. The CI partitioning is enforced
+at compile time.
+
+All jobs need the `warp` repo checked out as a sibling (local replace
+directive in go.mod: `replace github.com/kevlarcon/warp => ../warp`).
+The workflow uses `actions/checkout@v4` with `path: weft` and a second
+`path: warp` to lay them out next to each other; `kevlarcon/warp` is
+private, so a `WARP_READ_TOKEN` repo secret (fine-grained PAT, read
+access to that repo) is required.
 
 #### `deploy.yml` — runs on push to main, after CI passes
 
@@ -51,16 +76,18 @@ Both jobs need the `warp` repo checked out as a sibling (local replace directive
 work) and `infrastructure-live/management/kevcons-releases/` for the
 bucket + OIDC role (Phase 1).
 
-### GitHub Repository Secret
+### GitHub Repository Secrets
 
-After applying the Terraform, set one secret on `kevlarcon/weft`:
+Two secrets on `kevlarcon/weft`:
 
 ```
 AWS_DEPLOY_ROLE = <role ARN from terraform output>
+WARP_READ_TOKEN = <fine-grained PAT, read access to kevlarcon/warp>
 ```
 
 ## Open Questions
 
-- **warp dependency**: `kevlarcon/warp` is referenced via local replace. CI needs it checked out as a sibling. Should it stay as a local replace, or move to a versioned Go module reference?
+- **warp dependency**: `kevlarcon/warp` is referenced via local replace. CI fetches it via `actions/checkout` + a `WARP_READ_TOKEN` PAT for now. Two cleaner alternatives if the friction shows up: publish warp as a tagged Go module (drop the replace directive), or use a deploy key on the warp repo (ties to the workflow rather than a person).
 - **OIDC provider**: Confirm whether the GitHub OIDC provider already exists in account 220664822695 (grantcentral may have created it). If not, set `create_oidc_provider = true`.
 - **kevcons in CI**: The deploy job needs `kevcons` installed. Options: build from source in the workflow, or publish a release binary.
+- **api migration race on cold start**: When the stack comes up fresh, both `api` and `coordinator` race to apply goose migrations and the loser crashes on `relation already exists`. The CI workflow papers over this with a redundant `docker compose up -d` after the initial up, which restarts crashed services on Docker's healthcheck-aware retry path. A real fix would be to designate one service as the migration owner; tracked separately.

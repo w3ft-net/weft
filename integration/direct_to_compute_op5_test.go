@@ -1,4 +1,4 @@
-//go:build integration
+//go:build integration && !localstack
 
 // Direct-to-compute op 5 coverage: the coordinator's executeQuery
 // compute-stage branch fans out per-shard queries directly into the

@@ -1,4 +1,4 @@
-//go:build integration
+//go:build integration && !localstack
 
 // Package integration contains tests that run against a live docker compose stack.
 //

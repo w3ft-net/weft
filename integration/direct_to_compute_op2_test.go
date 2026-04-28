@@ -1,4 +1,4 @@
-//go:build integration
+//go:build integration && !localstack
 
 // Direct-to-compute op 2: compute's k-way merge across shard input
 // streams when CreateJobRequest.MergeKey is set. See

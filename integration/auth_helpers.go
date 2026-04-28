@@ -9,7 +9,22 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/store"
 )
+
+// openTestStore connects to the dev postgres instance the
+// docker-compose stack stands up. Migrations are already applied by
+// the running coordinator; store.Open re-runs goose.Up which is a
+// no-op when all migrations are current. Lives here so both the
+// `!localstack` and `localstack` test partitions can use it.
+func openTestStore(t *testing.T) *store.Store {
+	t.Helper()
+	db, err := store.Open(postgresURL)
+	if err != nil {
+		t.Fatalf("open store at %s: %v", postgresURL, err)
+	}
+	return db
+}
 
 // ensureToken creates (or re-uses) a token for the given customer/namespace
 // via the coordinator's CreateToken RPC. Used by tests that open authed

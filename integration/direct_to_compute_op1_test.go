@@ -1,4 +1,4 @@
-//go:build integration
+//go:build integration && !localstack
 
 // Direct-to-compute op 1: shard's QueryToCompute RPC streams rows
 // directly to a compute worker. See docs/plans/direct-to-compute.md.

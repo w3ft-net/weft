@@ -1,4 +1,4 @@
-//go:build integration
+//go:build integration && !localstack
 
 package integration
 
@@ -236,15 +236,3 @@ func TestBuckets_OnboardAppPropagates(t *testing.T) {
 		ingestingChecked, appName, readOnlyChecked)
 }
 
-// openTestStore connects to the dev postgres instance the
-// docker-compose stack stands up. Migrations are already applied by
-// the running coordinator; store.Open re-runs goose.Up which is a
-// no-op when all migrations are current.
-func openTestStore(t *testing.T) *store.Store {
-	t.Helper()
-	db, err := store.Open(postgresURL)
-	if err != nil {
-		t.Fatalf("open store at %s: %v", postgresURL, err)
-	}
-	return db
-}
