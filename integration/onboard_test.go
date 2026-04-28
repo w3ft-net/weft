@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -135,15 +138,53 @@ func TestOnboardFlow(t *testing.T) {
 	}
 	t.Logf("  schema YAML present (%d bytes)", len(resp.SchemaYaml))
 
-	// ── Phase 5: Wait for data to flow and become queryable ───────
+	// ── Phase 5: Drive a fresh row through the configured pipeline ──
+	//
+	// weftd's Tailer opens the file and seeks to EOF (production-correct:
+	// a restart shouldn't replay the entire log). The 6 fixture lines in
+	// dev/testapp.log were already past the tailer's cursor by the time
+	// configuration completed — they were used for the SubmitSample read
+	// (which os.Opens fresh from byte 0), not for streaming. To verify
+	// the post-configure streaming path actually works, we have to write
+	// fresh lines to the host-side file and confirm one shows up via
+	// query. The bind mount surfaces the inotify Write event into the
+	// container; the cleanup restores the file so the working tree
+	// stays clean across runs.
+	//
+	// Cold-start race: weftd's WaitForConfiguration polls every 5s, so
+	// there's a window between the test seeing status=configured and
+	// weftd's poll loop waking up to start the Tailer. A single append
+	// done before the Tailer exists lands behind its EOF cursor and is
+	// never emitted. Solution: append on every poll iteration with a
+	// fresh marker so at least one write lands after the Tailer is
+	// running.
 
-	t.Log("waiting for data to flow through weftd → coordinator → shard...")
+	logPath := testappLogPath(t)
+	original, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read testapp.log: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.WriteFile(logPath, original, 0o644); err != nil {
+			t.Logf("restore testapp.log: %v", err)
+		}
+	})
+
+	tag := fmt.Sprintf("onboard-test-%d", time.Now().UnixNano())
+	pipeline := fmt.Sprintf("cat /log/kevlar/testapp.log | grep %s", tag)
+
+	t.Logf("appending tagged lines and polling for tagged row to flow through weftd → coordinator → shard...")
 	var rows []*pb.ResultRow
 	deadline = time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
+	for attempt := 1; time.Now().Before(deadline); attempt++ {
+		freshLine := fmt.Sprintf("2026-04-27T22:00:00Z INFO %s attempt-%d\n", tag, attempt)
+		if err := appendLine(logPath, freshLine); err != nil {
+			t.Fatalf("append to testapp.log: %v", err)
+		}
+
 		time.Sleep(3 * time.Second)
 		stream, err := client.Query(context.Background(), &pb.CoordinatorQueryRequest{
-			Pipeline: "cat /log/kevlar/testapp.log",
+			Pipeline: pipeline,
 			Customer: "kevlar",
 		})
 		if err != nil {
@@ -159,33 +200,42 @@ func TestOnboardFlow(t *testing.T) {
 			rows = append(rows, resp.Rows...)
 		}
 		if len(rows) > 0 {
-			t.Logf("  got %d rows", len(rows))
+			t.Logf("  got %d rows after %d append(s)", len(rows), attempt)
 			break
 		}
-		t.Log("  0 rows (retrying)")
+		t.Logf("  attempt %d: 0 rows (retrying)", attempt)
 	}
 	if len(rows) == 0 {
-		t.Fatal("timed out waiting for queryable data — weftd may not have started streaming after configuration")
+		t.Fatal("timed out waiting for tagged row — weftd's Tailer didn't pick up the host-side appends, or the row didn't reach a queryable shard")
 	}
 
-	// Verify content looks right.
-	foundStart := false
-	foundError := false
-	for _, r := range rows {
-		if strings.Contains(r.Raw, "starting application") {
-			foundStart = true
-		}
-		if strings.Contains(r.Raw, "ERROR") {
-			foundError = true
-		}
+	if !strings.Contains(rows[0].Raw, tag) {
+		t.Errorf("first row Raw=%q did not contain tag %q", rows[0].Raw, tag)
 	}
-	if !foundStart {
-		t.Error("expected a row containing 'starting application'")
+	t.Logf("onboard flow complete: tagged row queryable")
+}
+
+func appendLine(path, line string) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
 	}
-	if !foundError {
-		t.Error("expected a row containing 'ERROR'")
+	defer f.Close()
+	_, err = f.WriteString(line)
+	return err
+}
+
+// testappLogPath returns the absolute host path of dev/testapp.log,
+// resolved relative to this test file rather than the cwd. The
+// docker-compose.yml bind-mounts the same path into the weftd
+// container at /var/log/testapp.log.
+func testappLogPath(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
 	}
-	t.Logf("onboard flow complete: %d rows queryable, content verified", len(rows))
+	return filepath.Join(filepath.Dir(thisFile), "..", "dev", "testapp.log")
 }
 
 // TestGlobOnboardFlow reproduces the multi-file glob onboarding case used in
