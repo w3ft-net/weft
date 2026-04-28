@@ -1,20 +1,25 @@
 #!/bin/bash
-# One-shot wrapper for CI: build + start the docker stack, run integration
-# tests, then tear it down. For local development, just `docker compose up
-# -d --build` once and run `go test -tags integration ./integration/`
-# directly — the harness applies migrations and checks readiness itself.
+# One-shot wrapper for CI: build + start the docker stack (with the
+# LocalStack overlay so AWS-SDK-touching tests have an endpoint to hit),
+# run integration tests, then tear it down.
+#
+# For local development, run the same compose-up incantation once and
+# call `go test -tags integration ./integration/` directly — the harness
+# applies migrations and checks readiness itself.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.localstack.yml)
+
 cleanup() {
     echo "=== Tearing down docker stack ==="
-    docker compose down -v --remove-orphans 2>/dev/null || true
+    docker compose "${COMPOSE_FILES[@]}" down -v --remove-orphans 2>/dev/null || true
 }
 trap cleanup EXIT
 
-echo "=== Building + starting docker stack ==="
-docker compose up -d --build
+echo "=== Building + starting docker stack (with localstack) ==="
+docker compose "${COMPOSE_FILES[@]}" up -d --build
 
 # Give shards a moment to heartbeat and get adopted before tests run.
 # (The harness handles coordinator readiness, but shard adoption happens

@@ -22,6 +22,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
 	"github.com/kevlarcon/weft/coordinator"
+	"github.com/kevlarcon/weft/store"
 )
 
 // LocalStack endpoint from docker-compose. Set LOCALSTACK_ENDPOINT to
@@ -182,25 +183,49 @@ func waitForAttached(t *testing.T, cfg aws.Config, instanceID string, timeout ti
 
 // ── Tests ────────────────────────────────────────────────────
 
-// End-to-end christen: publish a launch event, the poller consumes
-// it, the handler creates a volume and attaches it, the ASG stub gets
-// CONTINUE.
+// End-to-end christen: pre-seed a reconciler-minted LAUNCHING row,
+// publish a launch event, the poller consumes it, the handler claims
+// the row, creates a volume tagged with the row's shard_id, attaches
+// it, and the ASG stub gets CONTINUE.
 func TestLifecycle_Integration_ChristenPath(t *testing.T) {
 	cfg := awsTestConfig(t)
 	topic, queue := setupQueue(t, cfg, "lifecycle-christen-"+testSuffix())
 
 	instanceID := seedInstance(t, cfg, "us-east-2a")
 	asgName := "weft-shard-small"
-
 	asgRecorder := &recordingASG{}
 	reg := coordinator.NewShardRegistry()
 	vm := coordinator.NewEC2VolumeManagerWithClient(ec2.NewFromConfig(cfg))
+
+	// Christen needs a LAUNCHING row to claim — that's the
+	// reconciler's pre-mint (coordinator/lifecycle.go:201-216). Seed
+	// one in the dev postgres instance and pass the store as
+	// ShardOps; without this the handler returns ABANDON.
+	db := openTestStore(t)
+	defer db.Close()
+
+	shardID := "shard-christen-" + testSuffix()
+	if err := db.SaveShard(&store.ShardRecord{
+		ID:             shardID,
+		State:          string(coordinator.StateLaunching),
+		Tier:           "small",
+		BucketID:       1, // default bucket — auto-created at coordinator startup
+		Apps:           "null",
+		WindowStart:    time.Now().UTC().Format(time.RFC3339),
+		WindowEnd:      time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339),
+		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+		HeartbeatToken: "lifecycle-test-token",
+	}); err != nil {
+		t.Fatalf("seed LAUNCHING row: %v", err)
+	}
+	t.Cleanup(func() { _ = db.DeleteShard(shardID) })
 
 	handler := coordinator.NewLifecycleHandler(coordinator.LifecycleHandlerConfig{
 		Volumes:      vm,
 		EC2Instances: ec2.NewFromConfig(cfg),
 		ASG:          asgRecorder,
 		Registry:     reg,
+		ShardOps:     db,
 		TierByASG:    map[string]string{asgName: "small"},
 		SizeByTier:   map[string]int32{"small": 10},
 		DeviceName:   "/dev/sdf",
@@ -222,13 +247,15 @@ func TestLifecycle_Integration_ChristenPath(t *testing.T) {
 		t.Fatal("no volume attached")
 	}
 
-	// The volume should have a shard_tier tag and a placeholder shard_id.
+	// The volume should be tagged with the seeded shard_id (no
+	// placeholder — the row's id is final at christen time, see
+	// coordinator/lifecycle.go:201-228).
 	tags := describeVolumeTags(t, cfg, *mapping.Ebs.VolumeId)
 	if tags["shard_tier"] != "small" {
 		t.Errorf("shard_tier tag: got %q want small", tags["shard_tier"])
 	}
-	if !strings.HasPrefix(tags["shard_id"], "pending-") {
-		t.Errorf("shard_id tag: got %q want pending-...", tags["shard_id"])
+	if tags["shard_id"] != shardID {
+		t.Errorf("shard_id tag: got %q want %q", tags["shard_id"], shardID)
 	}
 
 	// Wait for the CONTINUE call.
