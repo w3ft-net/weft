@@ -16,41 +16,29 @@ rather than silently accepted as baseline noise.
 
 ## Failing tests
 
-### `TestOnboardFlow` (integration/onboard_test.go)
+### `TestOnboardFlow` (integration/onboard_test.go) — ✅ resolved (2026-04-27, a9a75ab)
 
-**Where it fails:** after `configureSource()` returns 200, the test
-polls `cat /log/testapp.log` for the rows weftd should now be
-streaming. It times out at 60 seconds seeing zero rows.
+The original timeout was test-setup, not a product bug. weftd's
+Tailer (weftd/tailer.go:30) Seek(0, io.SeekEnd)s on open —
+production-correct, since restarts shouldn't replay the whole log.
+The 6 fixture lines in dev/testapp.log were behind that cursor by
+the time configuration completed, so nothing flowed. Cold-start had
+an additional race against weftd's 5-second `WaitForConfiguration`
+ticker. Fix snapshots the file, appends a uniquely-tagged line on
+each poll iteration, and asserts on the tag with `| grep`. Cleanup
+restores the fixture.
 
-**Suspicion:** weftd isn't transitioning from "sampled, waiting"
-into "streaming" after the API approves the pending source. Either
-weftd doesn't notice the config change, or the pending→configured
-transition isn't propagated back down the source-status wire, or
-weftd is streaming but the data isn't making it into a shard.
+### `TestBuckets_OnboardAppPropagates` (integration/buckets_test.go) — ✅ resolved (2026-04-27)
 
-**How to diagnose:**
-- Watch `docker compose logs weftd -f` during a fresh test run.
-- Check the coordinator's shard-write path for this row batch.
-- Check the /api/sources/<ns>/<app>/configure handler's post-
-  approval behaviour — does it push anything to weftd?
-
-### `TestBuckets_OnboardAppPropagates` (integration/buckets_test.go)
-
-**Where it fails:** after `AddSource` succeeds and buckets get the
-new app name propagated, the test walks every INGESTING shard in
-the default bucket and asserts each one has the new app in its
-`shard_records.apps` list. One of the three INGESTING shards
-consistently misses the propagation.
-
-**Suspicion:** race between bucket-level propagation and per-shard
-`shard_records.apps` update. The coordinator broadcasts the new
-app to the bucket but the enqueue-to-every-shard step isn't atomic
-with the bucket write.
-
-**How to diagnose:** look at the coordinator's `AddAppToShard` /
-bucket-onboarding code path and check whether every INGESTING
-shard in the bucket is actually iterated, or whether there's an
-early-exit that misses one.
+The "1 of 3 shards consistently misses propagation" failure is gone.
+Verified at 2-shard config (5/5 green) and at 3-shard config after
+manually bumping `buckets.target_ingesting_count` (5/5 green); test
+asserts every INGESTING shard receives the new app via the
+reconciler's `AddAppToShardOp` fanout. Likely fixed by some
+combination of intermediate work; the most relevant change is
+`aea6d7e coordinator: drop "empty Apps = all apps" catch-all`,
+which made any propagation miss surface as missing query data
+rather than being masked by the catch-all.
 
 ### `TestDockerStack_IngestAndQuery`, `TestDockerStack_JqFieldExtraction`
 
@@ -76,14 +64,18 @@ fixed; just hasn't been looked at.
 **Next step:** rerun in isolation with `-v`, share the failure
 mode, triage from there.
 
-### `TestLifecycle_Integration_ChristenPath`
+### `TestLifecycle_Integration_ChristenPath` — ✅ resolved (2026-04-27, 9927ae4)
 
-**Where it fails:** 30-second timeout (hits the default shard-
-adoption deadline). Probably waiting for something that used to
-happen but no longer does after an unrelated change.
-
-**Next step:** rerun in isolation with `-v`, share the failure
-mode, triage from there.
+Two stacked problems hidden behind one unreachable endpoint.
+LocalStack on :4566 was never running, so every AWS-SDK-touching
+test timed out at the first client call — added
+`docker-compose.localstack.yml` overlay (SNS/SQS/EC2; ASG isn't in
+Community, so the one ASG-touching test stubs that client). With
+LocalStack up, christen exposed real test bitrot: the path got a
+ShardOps requirement when ASG desired_capacity moved to the
+reconciler, but the test never threaded one through. Now seeds the
+reconciler-minted LAUNCHING row, passes a real ShardOps, and
+asserts the volume tag carries the seeded shard id.
 
 ## Why this is a doc rather than a fix
 
