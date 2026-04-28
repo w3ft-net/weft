@@ -25,6 +25,11 @@ func TestDockerStack_JqFieldExtraction(t *testing.T) {
 	token := ensureToken(t, client, "testcust", "jqtest")
 	stream := openAuthedStream(t, context.Background(), client, token)
 
+	// Per-run app so repeated runs against a long-lived stack don't
+	// see each other's metrics rows in the count assertions.
+	app := fmt.Sprintf("jqtest/r%d-metrics", time.Now().UnixNano())
+	logPath := fmt.Sprintf("/log/%s.log", app)
+
 	now := time.Now()
 	metrics := []map[string]any{
 		{"type": "memory", "pct": 57.49, "total_mb": 7864, "used_mb": 4521},
@@ -37,13 +42,13 @@ func TestDockerStack_JqFieldExtraction(t *testing.T) {
 	for i, m := range metrics {
 		payload, _ := json.Marshal(m)
 		stream.Send(&pb.LogRow{
-			App:         "jqtest/metrics",
+			App:         app,
 			Customer:    "testcust",
 			Raw:         string(payload),
 			PayloadJson: payload,
 			Level:       "INFO",
 			Instance:    "test-host",
-			TsUnixNs:   now.Add(time.Duration(i) * time.Second).UnixNano(),
+			TsUnixNs:    now.Add(time.Duration(i) * time.Second).UnixNano(),
 		})
 	}
 
@@ -59,7 +64,7 @@ func TestDockerStack_JqFieldExtraction(t *testing.T) {
 	var allRows []*pb.ResultRow
 	for attempt := 0; attempt < 10; attempt++ {
 		time.Sleep(2 * time.Second)
-		allRows = queryPipeline(t, client, "cat /log/jqtest/metrics.log", "testcust")
+		allRows = queryPipeline(t, client, "cat "+logPath, "testcust")
 		if len(allRows) >= len(metrics) {
 			break
 		}
@@ -72,7 +77,7 @@ func TestDockerStack_JqFieldExtraction(t *testing.T) {
 	// Test 1: jq select alone (full pushdown, no compute) — should work.
 	t.Run("jq select only", func(t *testing.T) {
 		rows := queryPipeline(t, client,
-			`cat /log/jqtest/metrics.log | jq 'select(.type == "memory")'`, "testcust")
+			fmt.Sprintf(`cat %s | jq 'select(.type == "memory")'`, logPath), "testcust")
 		if len(rows) != 3 {
 			t.Errorf("expected 3 memory rows, got %d", len(rows))
 		}
@@ -82,7 +87,7 @@ func TestDockerStack_JqFieldExtraction(t *testing.T) {
 	// This is the failing pipeline.
 	t.Run("jq select and field extraction", func(t *testing.T) {
 		text := queryText(t, client,
-			`cat /log/jqtest/metrics.log | jq 'select(.type == "memory") | .pct'`, "testcust")
+			fmt.Sprintf(`cat %s | jq 'select(.type == "memory") | .pct'`, logPath), "testcust")
 		lines := nonEmpty(strings.Split(strings.TrimSpace(text), "\n"))
 		if len(lines) != 3 {
 			t.Fatalf("expected 3 pct values, got %d (text=%q)", len(lines), text)
@@ -95,7 +100,7 @@ func TestDockerStack_JqFieldExtraction(t *testing.T) {
 	// Test 3: simple field extraction without select (all compute).
 	t.Run("jq field extraction only", func(t *testing.T) {
 		text := queryText(t, client,
-			`cat /log/jqtest/metrics.log | jq '.type'`, "testcust")
+			fmt.Sprintf(`cat %s | jq '.type'`, logPath), "testcust")
 		lines := nonEmpty(strings.Split(strings.TrimSpace(text), "\n"))
 		if len(lines) != len(metrics) {
 			t.Fatalf("expected %d type values, got %d (text=%q)", len(metrics), len(lines), text)

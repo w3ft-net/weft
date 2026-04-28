@@ -40,20 +40,18 @@ combination of intermediate work; the most relevant change is
 which made any propagation miss surface as missing query data
 rather than being masked by the catch-all.
 
-### `TestDockerStack_IngestAndQuery`, `TestDockerStack_JqFieldExtraction`
+### `TestDockerStack_IngestAndQuery`, `TestDockerStack_JqFieldExtraction` — ✅ resolved (2026-04-28)
 
-**Where they fail:** pass cleanly when run in isolation
-(`go test -run TestDockerStack_IngestAndQuery`); fail when run
-under the full suite.
-
-**Suspicion:** shared-state pollution between tests — an earlier
-test leaves rows or shard state that poisons these queries' row-
-count assertions. The assertion "expected 20 rows, got N" where
-N > 20 points at cumulative residue.
-
-**How to diagnose:** add a `t.Cleanup` to each test that deletes
-everything it ingested (by customer+app), or switch the assertion
-from exact-count to "at least the rows I ingested are present."
+The failure was test-design, not product: each run ingested under
+a fixed `(namespace, app)` pair (`integration/app-a`,
+`jqtest/metrics`) and asserted exact row counts in queries scoped
+to that namespace. Long-lived stacks accumulated rows across runs
+(20 → 40 → 80 for IngestAndQuery; 5 → 10 → 15 for jq), tripping
+exact-count checks. Switched both tests to per-run app suffixes
+(`integration/r<nanos>-a`, `jqtest/r<nanos>-metrics`); namespace-
+wide queries become multi-arg cat across this run's apps (still
+exercises the planner's IN-list union path). 5/5 green even on a
+stack saturated with prior-run residue.
 
 ### `TestLambdaColdShard_DockerIntegration` — ✅ resolved (2026-04-28)
 
@@ -81,15 +79,13 @@ reconciler, but the test never threaded one through. Now seeds the
 reconciler-minted LAUNCHING row, passes a real ShardOps, and
 asserts the volume tag carries the seeded shard id.
 
-## Why this is a doc rather than a fix
+## Status (2026-04-28)
 
-Every one of the above is likely half a day to a day of focused
-investigation. They aren't in the direct-to-compute path and
-debugging each would extend the prep phase indefinitely. Capturing
-them here keeps the baseline signal honest — new direct-to-compute
-tests run against a suite where "these six tests are known to fail
-and why" — without letting the list grow unchecked.
+All five originally-listed bitrot items are resolved. The doc is
+kept around for the audit trail of how the fixes landed, and as a
+template for the hermetic-per-run-app pattern that the
+ingest-and-query / jq tests adopted in 902a432.
 
-New direct-to-compute tests are written hermetically (each creates
-its own namespace + data, tears down on completion) so they don't
-participate in the ordering-flakiness class.
+New tests should be written hermetically (per-run app suffixes or
+namespaces, no exact-count dependence on cumulative state) so they
+don't slip back into the ordering-flakiness class.

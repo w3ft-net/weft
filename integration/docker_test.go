@@ -76,10 +76,19 @@ func TestDockerStack_IngestAndQuery(t *testing.T) {
 	token := ensureToken(t, client, "testcust", "integration")
 	stream := openAuthedStream(t, context.Background(), client, token)
 
+	// Per-run app suffix so re-runs against a long-lived stack don't
+	// see each other's rows. The "integration" namespace is shared
+	// fixture state; scoping the assertions to per-run apps within it
+	// keeps exact-count checks honest without forcing a namespace
+	// teardown between runs.
+	run := time.Now().UnixNano()
+	appA := fmt.Sprintf("integration/r%d-a", run)
+	appB := fmt.Sprintf("integration/r%d-b", run)
+
 	now := time.Now()
 	for i := 0; i < 10; i++ {
 		stream.Send(&pb.LogRow{
-			App:      "integration/app-a",
+			App:      appA,
 			Customer: "testcust",
 			Raw:      fmt.Sprintf("app-a log line %d", i),
 			Level:    "INFO",
@@ -89,7 +98,7 @@ func TestDockerStack_IngestAndQuery(t *testing.T) {
 	}
 	for i := 0; i < 10; i++ {
 		stream.Send(&pb.LogRow{
-			App:      "integration/app-b",
+			App:      appB,
 			Customer: "testcust",
 			Raw:      fmt.Sprintf("app-b log line %d", i),
 			Level:    "ERROR",
@@ -106,30 +115,31 @@ func TestDockerStack_IngestAndQuery(t *testing.T) {
 		t.Errorf("expected 20 rows ingested, got %d", resp.RowsReceived)
 	}
 
-	// Wait for drain loop to flush to shard, with retry.
+	// Wait for drain loop to flush to shard. Multi-arg cat unions
+	// the two sub-apps with a single IN predicate (planner.go), which
+	// exercises the namespace-style query path while staying scoped
+	// to this run.
+	bothApps := fmt.Sprintf("cat /log/%s.log /log/%s.log", appA, appB)
 	var queryResp []*pb.ResultRow
 	for attempt := 0; attempt < 10; attempt++ {
 		time.Sleep(2 * time.Second)
-		queryResp = queryPipeline(t, client, "cat /log/integration.log", "testcust")
-		if len(queryResp) > 0 {
+		queryResp = queryPipeline(t, client, bothApps, "testcust")
+		if len(queryResp) >= 20 {
 			break
 		}
 	}
-	if len(queryResp) == 0 {
-		t.Fatal("namespace query returned 0 rows after 20s — drain may not have flushed")
-	}
 	if len(queryResp) != 20 {
-		t.Errorf("namespace query: expected 20 rows, got %d", len(queryResp))
+		t.Fatalf("multi-app query: expected 20 rows, got %d (drain may not have flushed)", len(queryResp))
 	}
 
-	// Query sub-app — should return only 10 rows.
-	subResp := queryPipeline(t, client, "cat /log/integration/app-a.log", "testcust")
+	// Sub-app: app-a only.
+	subResp := queryPipeline(t, client, fmt.Sprintf("cat /log/%s.log", appA), "testcust")
 	if len(subResp) != 10 {
 		t.Errorf("sub-app query: expected 10 rows, got %d", len(subResp))
 	}
 
-	// Query with filter — ERROR rows only from app-b.
-	filteredResp := queryPipeline(t, client, `cat /log/integration.log | awk '$LEVEL == "ERROR"'`, "testcust")
+	// awk filter across both this-run apps — ERROR rows belong to app-b only.
+	filteredResp := queryPipeline(t, client, bothApps+` | awk '$LEVEL == "ERROR"'`, "testcust")
 	if len(filteredResp) != 10 {
 		t.Errorf("filtered query: expected 10 ERROR rows, got %d", len(filteredResp))
 	}
