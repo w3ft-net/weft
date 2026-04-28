@@ -2,6 +2,19 @@
 // Called from Go WASM via JS callbacks; parses SSE stream and
 // calls back into WASM with results.
 
+// Local declaration of the wasm* exports we call here. The full
+// surface is declared in @warp/shellcore-wasm; under
+// verbatimModuleSyntax + bundler-mode we can't rely on a bare
+// side-effect import to merge those globals into this file's
+// scope, so we re-declare the subset network.ts uses directly.
+declare global {
+  interface Window {
+    wasmHandleQueryResult: (text: string, errMsg: string) => void
+    wasmHandleFollowRow: (raw: string) => void
+    wasmHandleFollowDone: (errMsg: string) => void
+  }
+}
+
 const API_BASE = import.meta.env.VITE_API_URL || ''
 
 let abortController: AbortController | null = null
@@ -177,39 +190,6 @@ export async function execFollow(pipeline: string) {
   }
 }
 
-// Type declarations for WASM global functions.
-declare global {
-  interface Window {
-    wasmInit: (apps: string[], width: number, height: number, callbacks: WasmCallbacks) => void
-    wasmHandleInput: (data: string) => void
-    wasmHandleQueryResult: (text: string, errMsg: string) => void
-    wasmHandleFollowRow: (raw: string) => void
-    wasmHandleFollowDone: (errMsg: string) => void
-    wasmResize: (cols: number, rows: number) => void
-    wasmSpinnerTick: () => void
-    wasmSetInput: (text: string) => void
-    wasmGetInput: () => string
-  }
-}
-
-export interface WasmCallbacks {
-  write: (data: string) => void
-  startQuery: (pipeline: string) => void
-  startFollow: (pipeline: string) => void
-  cancelQuery: () => void
-  notifyQuit: () => void
-  fsReadFile: (path: string) => { content?: string; error?: string }
-  fsWriteFile: (path: string, content: string) => { error?: string }
-  fsReadDir: (path: string) => { entries?: string[]; error?: string }
-  fsRemove: (path: string) => { error?: string }
-  fsGetWatchResults: (name: string, limit: number) => { results?: { stdout: string; ran_at: string }[]; error?: string }
-  onRangeChange: (rangeText: string) => void
-  loadHistory: () => string
-  saveHistory: (lines: string) => void
-  // Identity for the shell prompt prefix (alice@acme). Read once at
-  // shell init by the WASM side; either may return "" (e.g. before
-  // login completes) and the prompt falls back to its non-identified
-  // form.
-  getUser: () => string
-  getCustomer: () => string
-}
+// wasm* JS-side globals are declared in @warp/shellcore-wasm. This
+// file uses wasmHandleQueryResult / wasmHandleFollowRow / wasmHandleFollowDone
+// from that surface — no per-package re-declaration needed.
