@@ -138,6 +138,13 @@ token: ${WEFTD_TOKEN}
 deployment: ${ROLE}
 socket: /var/run/weftd.sock
 services: ${SERVICES}
+dimensions:
+  # \$NODE = stable workload identity. Reads shard.json's shard_id
+  # on shard hosts; non-shard hosts have no shard.json so the column
+  # stays NULL there. Live-watched: when the provisioner christens a
+  # blank shard mid-run by writing shard.json, subsequent metrics rows
+  # pick up the new ID without restarting weftd.
+  node: /opt/app/data/shard.json:.shard_id
 sources:
   - path: /opt/app/logs/*.log
     metrics:

@@ -90,6 +90,7 @@ message LogRow {
   string k8s_namespace = 15;  // k8s namespace (k8s mode only)
   string pod = 16;            // k8s pod name (k8s mode only)
   string container = 17;      // k8s container name (k8s mode only)
+  string node = 18;           // stable workload identity (file-sourced; see docs/plans/dimensions-from-files.md)
 }
 
 message IngestRequest {

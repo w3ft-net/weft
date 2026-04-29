@@ -35,6 +35,7 @@ var metaVars = map[string]string{
 	"K8S_NAMESPACE": "k8s_namespace",
 	"POD":           "pod",
 	"CONTAINER":     "container",
+	"NODE":          "node",
 }
 
 // tryAwkPushdown attempts to extract a pushable predicate from an awk program string.

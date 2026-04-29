@@ -38,8 +38,15 @@ var globalRegion string
 // versionReaders maps a per-source version_file path to the live
 // reader watching it. Built at startup; consulted from the LogRow
 // stamping path. Per-source so multi-app hosts can have distinct
-// versions.
+// versions. Per-source `version_file:` is independent of the
+// host-wide `dimensions.version:`; the per-source value wins when
+// both are configured.
 var versionReaders = map[string]*weftd.VersionReader{}
+
+// dimensionReaders holds the live FileValueReader per allowed
+// column when `dimensions:` is configured. Lookup is by column
+// name; missing entries return "" via Current() on a zero reader.
+var dimensionReaders = map[string]*weftd.FileValueReader{}
 
 // parserCache holds per-app schema-driven parsers. Populated when
 // onboarding completes; consulted on the row-stamping path when
@@ -53,15 +60,28 @@ var parserCache = weftd.NewParserCache()
 var parseClientSide = os.Getenv("WEFTD_PARSE_CLIENT_SIDE") == "1"
 
 type Config struct {
-	Endpoint   string          `yaml:"endpoint"`   // coordinator address
-	Token      string          `yaml:"token"`      // agent auth token (wft_...)
-	Customer   string          `yaml:"customer"`   // fallback if not returned by auth
-	Deployment string          `yaml:"deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
-	Region     string          `yaml:"region"`     // optional override; otherwise probed from cloud metadata
-	Socket     string          `yaml:"socket"`
-	Services   []string        `yaml:"services"`  // logical services co-located on this host; metrics + heartbeats fan out one stream per name
-	Heartbeat  HeartbeatConfig `yaml:"heartbeat"` // local app-heartbeat listener
-	Sources    []SourceConfig  `yaml:"sources"`
+	Endpoint   string            `yaml:"endpoint"`   // coordinator address
+	Token      string            `yaml:"token"`      // agent auth token (wft_...)
+	Customer   string            `yaml:"customer"`   // fallback if not returned by auth
+	Deployment string            `yaml:"deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
+	Region     string            `yaml:"region"`     // optional override; otherwise probed from cloud metadata
+	Socket     string            `yaml:"socket"`
+	Services   []string          `yaml:"services"`   // logical services co-located on this host; metrics + heartbeats fan out one stream per name
+	Dimensions map[string]string `yaml:"dimensions"` // file-sourced dimension values; see docs/plans/dimensions-from-files.md
+	Heartbeat  HeartbeatConfig   `yaml:"heartbeat"`  // local app-heartbeat listener
+	Sources    []SourceConfig    `yaml:"sources"`
+}
+
+// allowedDimensionColumns lists the columns that can be populated
+// from the `dimensions:` config map. `env`, `app`, `instance`,
+// `level`, `ts`, and the k8s-derived columns are intentionally
+// excluded — see docs/plans/dimensions-from-files.md for the why.
+var allowedDimensionColumns = map[string]bool{
+	"deployment": true,
+	"version":    true,
+	"region":     true,
+	"cluster":    true,
+	"node":       true,
 }
 
 type SourceConfig struct {
@@ -200,6 +220,22 @@ func main() {
 	globalRegion = weftd.DetectRegion(ctx, cfg.Region)
 	if globalRegion != "" {
 		log.Printf("region detected: %s", globalRegion)
+	}
+
+	// Initialize file-sourced dimension readers. Each entry validates
+	// the column is in the allowed set and the value parses; weftd
+	// refuses to start on bad config rather than silently dropping
+	// stamps.
+	for col, raw := range cfg.Dimensions {
+		if !allowedDimensionColumns[col] {
+			log.Fatalf("dimensions: column %q is not file-sourceable; allowed: deployment, version, region, cluster, node", col)
+		}
+		spec, err := weftd.ParseFileValueSpec(raw)
+		if err != nil {
+			log.Fatalf("dimensions.%s: %v", col, err)
+		}
+		dimensionReaders[col] = weftd.NewFileValueReader(ctx, spec)
+		log.Printf("dimensions.%s: watching %s", col, spec.Path)
 	}
 
 	// Start sources — each independently onboards then streams.
@@ -820,15 +856,45 @@ type streamState struct {
 	stream pb.WeftCoordinator_IngestStreamClient
 }
 
-// versionForApp returns the live version dimension for `app` if a
-// version_file was configured; "" otherwise. The reader is lock-free
-// (atomic pointer load), safe to call from the hot row-stamping
-// path.
+// versionForApp returns the live version dimension for `app`. Falls
+// back to dimensions.version when no per-source version_file is
+// configured. Lock-free; safe on the hot row-stamping path.
 func versionForApp(app string) string {
 	if r, ok := versionReaders[app]; ok {
 		return r.Current()
 	}
+	return dimensionValue("version")
+}
+
+// dimensionValue reads the latest value for a dimensions-config
+// column. Returns "" when the column isn't configured, which lets
+// callers compose this with other fallbacks via plain string-OR.
+func dimensionValue(col string) string {
+	if r, ok := dimensionReaders[col]; ok {
+		return r.Current()
+	}
 	return ""
+}
+
+// stampDimensions overlays the configured dimensions: values onto a
+// LogRow. Operator config wins over auto-derived sources per the
+// resolution order in dimensions-from-files.md.
+func stampDimensions(row *pb.LogRow) {
+	if v := dimensionValue("deployment"); v != "" {
+		row.Deployment = v
+	}
+	if v := dimensionValue("region"); v != "" {
+		row.Region = v
+	}
+	if v := dimensionValue("cluster"); v != "" {
+		row.Cluster = v
+	}
+	if v := dimensionValue("node"); v != "" {
+		row.Node = v
+	}
+	// `version` is folded into the row at construction via
+	// versionForApp, which already consults dimensionValue("version")
+	// as a fallback. Don't double-stamp here.
 }
 
 // buildLogRow constructs a LogRow for `line`. When parseClientSide is on
@@ -851,6 +917,7 @@ func buildLogRow(line, customer, instance, app string) *pb.LogRow {
 			msg.Deployment = globalDeployment
 			msg.Region = globalRegion
 			msg.Version = versionForApp(app)
+			stampDimensions(msg)
 			if slot.HasLevelField() && msg.Level == "" {
 				slot.RecordMissingLevel()
 			} else {
@@ -860,7 +927,7 @@ func buildLogRow(line, customer, instance, app string) *pb.LogRow {
 		}
 	}
 
-	return &pb.LogRow{
+	row := &pb.LogRow{
 		App:        app,
 		Customer:   customer,
 		Instance:   instance,
@@ -871,6 +938,8 @@ func buildLogRow(line, customer, instance, app string) *pb.LogRow {
 		TsUnixNs:   now.UnixNano(),
 		Fields:     strings.Fields(line),
 	}
+	stampDimensions(row)
+	return row
 }
 
 // sendLineWithReconnect sends a line, opening or reconnecting the stream as needed.

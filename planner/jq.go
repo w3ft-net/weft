@@ -28,6 +28,7 @@ var jqMetaVars = map[string]string{
 	"_k8s_namespace": "k8s_namespace",
 	"_pod":           "pod",
 	"_container":     "container",
+	"_node":          "node",
 }
 
 // tryJqPushdown attempts to extract a pushable predicate from a jq expression string.

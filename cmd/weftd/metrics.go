@@ -458,6 +458,7 @@ func sendRowWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient,
 	row.Deployment = globalDeployment
 	row.Region = globalRegion
 	// metrics rows have no source-bound version_file; leave empty.
+	stampDimensions(row)
 
 	if ss.stream != nil {
 		if err := ss.stream.Send(row); err == nil {

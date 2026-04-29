@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS logs (
     cluster        TEXT,
     k8s_namespace  TEXT,
     pod            TEXT,
-    container      TEXT
+    container      TEXT,
+    node           TEXT
 );
 `
 
@@ -76,6 +77,7 @@ var migrationSteps = []string{
 	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS k8s_namespace TEXT`,
 	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS pod TEXT`,
 	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS container TEXT`,
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS node TEXT`,
 }
 
 // NewDuckDBShard opens or creates a DuckDB database at path and initializes the
@@ -127,14 +129,14 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("INSERT INTO logs (line_num, raw, fields, ts, level, app, instance, customer, payload, deployment, env, version, region, cluster, k8s_namespace, pod, container) VALUES ")
+	sb.WriteString("INSERT INTO logs (line_num, raw, fields, ts, level, app, instance, customer, payload, deployment, env, version, region, cluster, k8s_namespace, pod, container, node) VALUES ")
 
-	args := make([]any, 0, len(rows)*17)
+	args := make([]any, 0, len(rows)*18)
 	for i, r := range rows {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 
 		payloadStr := "{}"
 		if len(r.PayloadJson) > 0 {
@@ -159,6 +161,7 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
 			r.K8SNamespace,
 			r.Pod,
 			r.Container,
+			r.Node,
 		)
 	}
 

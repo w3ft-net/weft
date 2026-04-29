@@ -35,6 +35,12 @@ services: [api]               # logical services co-located on this
                               # host; metrics and heartbeat snapshots
                               # fan out one stream per service —
                               # /log/<ns>/<service>/{metrics,heartbeats}.log
+dimensions:                   # optional: column values sourced from
+                              # files on disk and watched live via
+                              # fsnotify, so a deploy that touches
+                              # the file flows through to the next
+                              # row without an agent restart
+  node: /etc/weft/identity.json:.shard_id
 
 sources:
   - app: myapp
@@ -57,6 +63,23 @@ The `deployment`, `region`, and per-source `version_file` values
 become first-class query dimensions — see the **Meta-variables**
 section in **Query your logs** for the full list and how they
 appear in awk and jq.
+
+### File-sourced dimensions
+
+Each entry under `dimensions:` is `<column>: <path>` or
+`<column>: <path>:.<json.path>`. The reader stamps the resulting
+value on every row weftd ships from this host. Operator config
+wins over auto-derived sources (e.g. `dimensions.region` overrides
+the cloud-metadata probe). Allowed columns: `deployment`,
+`version`, `region`, `cluster`, `node`. Other columns are
+populated by other mechanisms (token-bound env, schema-extracted
+fields, k8s log-path metadata) and refusing to override them
+keeps those guarantees intact.
+
+The JSON-path syntax is a minimal subset of jq — bare field
+access (`.foo`), nested fields (`.foo.bar`), and array indices
+(`.items[0].name`). For richer extraction, pre-process the file
+with your own tooling and point weftd at the result.
 
 ### Schema types
 

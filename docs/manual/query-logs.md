@@ -55,6 +55,7 @@ slower JSON-extract path.
 | `$K8S_NAMESPACE` | `._k8s_namespace` | `k8s_namespace` | k8s mode only: pod's k8s namespace |
 | `$POD` | `._pod` | `pod` | k8s mode only: pod name |
 | `$CONTAINER` | `._container` | `container` | k8s mode only: container name |
+| `$NODE` | `._node` | `node` | stable workload identity (e.g. shard ID) — file-sourced via the agent's `dimensions:` config; never auto-derived |
 
 A few examples:
 
