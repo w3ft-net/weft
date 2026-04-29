@@ -55,6 +55,154 @@ func TestSeedDevSubscription_MultipleCustomers(t *testing.T) {
 	}
 }
 
+// TestGrantCompSubscription_OverridesActive confirms that granting a
+// comp sub cancels any prior active sub and lands the customer at the
+// requested tier. Validates the path from "trial customer who never
+// paid" → "comp swatch" without going through Stripe.
+func TestGrantCompSubscription_OverridesActive(t *testing.T) {
+	db := testOpen(t)
+	cust, err := db.FindOrCreateCustomer("comp-grant-overrides")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SeedDevSubscription(cust.Name) // creates a swatch dev sub
+
+	if err := db.GrantCompSubscription(cust.Name, string(TierBolt), "owner"); err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+
+	sub, err := db.ActiveSubscription(cust.Name)
+	if err != nil || sub == nil {
+		t.Fatalf("active sub after grant: sub=%+v err=%v", sub, err)
+	}
+	if sub.Tier != string(TierBolt) {
+		t.Errorf("tier = %q, want bolt", sub.Tier)
+	}
+	if sub.CompReason != "owner" {
+		t.Errorf("comp_reason = %q, want owner", sub.CompReason)
+	}
+	if !sub.IsComp() {
+		t.Error("IsComp() = false, want true")
+	}
+
+	// Exactly one active sub should remain.
+	var count int64
+	db.db.Model(&Subscription{}).Where("customer_id = ? AND status = 'active'", cust.Name).Count(&count)
+	if count != 1 {
+		t.Errorf("active sub count = %d, want 1", count)
+	}
+}
+
+// TestGrantCompSubscription_Idempotent reproduces re-granting the same
+// (customer, tier, reason) tuple as a no-op — no duplicate rows, no
+// silent error.
+func TestGrantCompSubscription_Idempotent(t *testing.T) {
+	db := testOpen(t)
+	cust, _ := db.FindOrCreateCustomer("comp-grant-idem")
+
+	if err := db.GrantCompSubscription(cust.Name, string(TierSwatch), "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.GrantCompSubscription(cust.Name, string(TierSwatch), "alpha"); err != nil {
+		t.Fatal(err)
+	}
+
+	var total int64
+	db.db.Model(&Subscription{}).Where("customer_id = ?", cust.Name).Count(&total)
+	if total != 1 {
+		t.Errorf("total sub rows = %d, want 1 (re-grant should be a no-op)", total)
+	}
+}
+
+// TestGrantCompSubscription_RequiresReason refuses to silently flip a
+// row to comp without the audit trail. Reason is the only durable
+// signal that a sub was granted out of band.
+func TestGrantCompSubscription_RequiresReason(t *testing.T) {
+	db := testOpen(t)
+	cust, _ := db.FindOrCreateCustomer("comp-grant-no-reason")
+	if err := db.GrantCompSubscription(cust.Name, string(TierSwatch), ""); err == nil {
+		t.Error("expected error on empty reason")
+	}
+}
+
+// TestRevokeCompSubscription cancels a comp sub but leaves paid subs
+// alone — even if you call it on a customer that's currently paying,
+// nothing changes.
+func TestRevokeCompSubscription(t *testing.T) {
+	db := testOpen(t)
+	cust, _ := db.FindOrCreateCustomer("comp-revoke")
+
+	// Grant then revoke.
+	if err := db.GrantCompSubscription(cust.Name, string(TierBolt), "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RevokeCompSubscription(cust.Name); err != nil {
+		t.Fatal(err)
+	}
+	sub, _ := db.ActiveSubscription(cust.Name)
+	if sub != nil {
+		t.Errorf("expected no active sub after revoke, got %+v", sub)
+	}
+
+	// Now seed a paid (non-comp) sub and verify revoke leaves it.
+	db.SeedDevSubscription(cust.Name) // dev sub has comp_reason = ""
+	if err := db.RevokeCompSubscription(cust.Name); err != nil {
+		t.Fatal(err)
+	}
+	sub, _ = db.ActiveSubscription(cust.Name)
+	if sub == nil || sub.Tier != string(TierSwatch) {
+		t.Errorf("paid sub should survive revoke; got %+v", sub)
+	}
+}
+
+// TestWebhookGuard_SkipsCompSub confirms that the Stripe-keyed
+// mutators (CancelSubscription, SetSubscriptionStatus, PromoteSubscriptionTier)
+// refuse to touch a row with a non-empty comp_reason — even if the row
+// somehow has a stripe_subscription_id attached. Defense against ID
+// collision and webhook-misroute scenarios.
+func TestWebhookGuard_SkipsCompSub(t *testing.T) {
+	db := testOpen(t)
+	cust, _ := db.FindOrCreateCustomer("comp-guard")
+	if err := db.GrantCompSubscription(cust.Name, string(TierBolt), "owner"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Force a Stripe sub ID onto the comp row to simulate the misroute.
+	const fakeStripeID = "sub_fake_misroute"
+	if err := db.db.Model(&Subscription{}).
+		Where("customer_id = ?", cust.Name).
+		Update("stripe_subscription_id", fakeStripeID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Webhook tries to cancel by Stripe ID. Comp guard must skip.
+	if err := db.CancelSubscription(fakeStripeID); err != nil {
+		t.Fatal(err)
+	}
+	sub, _ := db.ActiveSubscription(cust.Name)
+	if sub == nil {
+		t.Fatal("comp sub was cancelled by Stripe webhook (guard failed)")
+	}
+
+	// Same for status flip.
+	if err := db.SetSubscriptionStatus(fakeStripeID, "past_due"); err != nil {
+		t.Fatal(err)
+	}
+	sub, _ = db.ActiveSubscription(cust.Name)
+	if sub == nil || sub.Status != "active" {
+		t.Errorf("comp sub status was changed (guard failed); got %+v", sub)
+	}
+
+	// Same for tier promotion.
+	if err := db.PromoteSubscriptionTier(fakeStripeID, string(TierTrial)); err != nil {
+		t.Fatal(err)
+	}
+	sub, _ = db.ActiveSubscription(cust.Name)
+	if sub == nil || sub.Tier != string(TierBolt) {
+		t.Errorf("comp sub tier was changed (guard failed); got %+v", sub)
+	}
+}
+
 // TestSeedDevSubscription_Idempotent confirms re-seeding the same
 // customer is a no-op rather than producing duplicate rows or
 // aborting on PK conflict against the customer's own prior row.

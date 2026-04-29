@@ -1,8 +1,11 @@
 package store
 
 import (
+	"fmt"
 	"log"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // Subscription tracks a customer's billing state. A customer can have
@@ -16,9 +19,20 @@ type Subscription struct {
 	StartsAt             time.Time  `gorm:"not null"`
 	ExpiresAt            *time.Time                         // nil = no expiry (paid tiers)
 	StripeSubscriptionID string
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
+	// CompReason is the audit string when this subscription is comped
+	// rather than paid (owner / design-partner / etc.). Empty for paid
+	// subs. The Stripe webhook mutators refuse to touch rows where this
+	// is non-empty, so a misfire can never accidentally cancel a comp.
+	CompReason string `gorm:"not null;default:''"`
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
+
+// IsComp returns true if this subscription was granted out-of-band
+// rather than created through Stripe. Callers that want to distinguish
+// "shouldn't appear on a billing dashboard" use this; tier-limit
+// callers don't care — comp swatch behaves identically to paid swatch.
+func (sub *Subscription) IsComp() bool { return sub.CompReason != "" }
 
 // IsActive returns true if this subscription grants access.
 // Cancelled subscriptions are inactive. Active subscriptions with an
@@ -77,10 +91,13 @@ func (s *Store) SeedDevSubscription(customerName string) {
 	}
 }
 
-// CancelSubscription marks a subscription as cancelled by Stripe subscription ID.
+// CancelSubscription marks a subscription as cancelled by Stripe
+// subscription ID. Comp subs (comp_reason != '') are skipped — they
+// have no Stripe sub ID anyway, but the guard makes the intent
+// explicit and protects against ID collisions.
 func (s *Store) CancelSubscription(stripeSubID string) error {
 	return s.db.Model(&Subscription{}).
-		Where("stripe_subscription_id = ?", stripeSubID).
+		Where("stripe_subscription_id = ? AND comp_reason = ''", stripeSubID).
 		Updates(map[string]any{
 			"status":     "cancelled",
 			"updated_at": time.Now(),
@@ -108,11 +125,11 @@ func (s *Store) GetSubscriptionByStripeID(stripeSubID string) (*Subscription, er
 	return &sub, nil
 }
 
-// SetSubscriptionStatus updates the status field on a local subscription row
-// identified by its Stripe subscription ID.
+// SetSubscriptionStatus updates the status field on a local subscription
+// row identified by its Stripe subscription ID. Comp subs are skipped.
 func (s *Store) SetSubscriptionStatus(stripeSubID, status string) error {
 	return s.db.Model(&Subscription{}).
-		Where("stripe_subscription_id = ?", stripeSubID).
+		Where("stripe_subscription_id = ? AND comp_reason = ''", stripeSubID).
 		Updates(map[string]any{
 			"status":     status,
 			"updated_at": time.Now(),
@@ -120,14 +137,73 @@ func (s *Store) SetSubscriptionStatus(stripeSubID, status string) error {
 }
 
 // PromoteSubscriptionTier upgrades a subscription's tier and clears its
-// trial expiry once payment is confirmed.
+// trial expiry once payment is confirmed. Comp subs are skipped.
 func (s *Store) PromoteSubscriptionTier(stripeSubID, tier string) error {
 	return s.db.Model(&Subscription{}).
-		Where("stripe_subscription_id = ?", stripeSubID).
+		Where("stripe_subscription_id = ? AND comp_reason = ''", stripeSubID).
 		Updates(map[string]any{
 			"tier":       tier,
 			"status":     "active",
 			"expires_at": nil,
+			"updated_at": time.Now(),
+		}).Error
+}
+
+// GrantCompSubscription cancels any active subscription for the customer
+// and inserts a fresh comp subscription at the given tier. Idempotent:
+// re-granting the same (customer, tier, reason) is a no-op when the
+// active sub already matches; otherwise it cancels-and-replaces.
+//
+// Customer is the customer *name*, not the numeric id (subscriptions
+// joins on the name, see store/shell.go's TierForCustomer). Reason
+// must be non-empty so it can be distinguished from a paid sub.
+func (s *Store) GrantCompSubscription(customerName, tier, reason string) error {
+	if reason == "" {
+		return fmt.Errorf("comp grant requires a non-empty reason")
+	}
+
+	now := time.Now()
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		// Idempotent: if the most recent active sub already matches,
+		// skip the cancel+insert.
+		var current Subscription
+		err := tx.Where("customer_id = ? AND status = 'active'", customerName).
+			Order("created_at DESC").First(&current).Error
+		if err == nil && current.Tier == tier && current.CompReason == reason {
+			return nil
+		}
+
+		// Cancel any active subscription for this customer.
+		if err := tx.Model(&Subscription{}).
+			Where("customer_id = ? AND status = 'active'", customerName).
+			Updates(map[string]any{
+				"status":     "cancelled",
+				"updated_at": now,
+			}).Error; err != nil {
+			return err
+		}
+
+		return tx.Create(&Subscription{
+			ID:         "comp-" + customerName + "-" + now.Format("20060102150405"),
+			CustomerID: customerName,
+			Tier:       tier,
+			Status:     "active",
+			StartsAt:   now,
+			CompReason: reason,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}).Error
+	})
+}
+
+// RevokeCompSubscription cancels the active comp subscription for the
+// customer. Refuses to touch a paid sub. Returns nil if there is no
+// active comp sub (idempotent).
+func (s *Store) RevokeCompSubscription(customerName string) error {
+	return s.db.Model(&Subscription{}).
+		Where("customer_id = ? AND status = 'active' AND comp_reason != ''", customerName).
+		Updates(map[string]any{
+			"status":     "cancelled",
 			"updated_at": time.Now(),
 		}).Error
 }
