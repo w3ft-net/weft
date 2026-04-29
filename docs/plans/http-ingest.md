@@ -6,7 +6,7 @@ A single JSON-over-HTTPS intake that anything not-weftd-and-not-CloudWatch can t
 
 Today the write path has exactly two shapes: weftd's gRPC `IngestStream` for agents, and the CloudWatch poller for logs already in AWS. Anything else — a Django app on Heroku, a Cloudflare Worker, a Raspberry Pi on someone's desk — has no supported way in. The adjacent `docs/plans/cloudwatch-lambda-forwarder.md` defines a CloudWatch-shaped `POST /api/ingest/cloudwatch`; this plan generalizes that idea to the primary ingest route.
 
-Once the endpoint exists, every "but how do I use weft from Python?" question collapses to "POST NDJSON to this URL with your token." A thin Python SDK is ~50 lines on top of it.
+Once the endpoint exists, every "but how do I use weft from Python?" question collapses to "POST NDJSON to this URL with your token." A thin Python SDK is ~50 lines on top of it; a Go SDK is the parallel deliverable for in-process emission from internal services (weft's own coordinator/shard binaries included) and is defined in [`go-sdk.md`](go-sdk.md).
 
 ## Architecture
 
@@ -51,6 +51,7 @@ No new transport between coordinator and shards. The endpoint is a source-side a
 5. **Metering** — byte and event counts feed the existing `usage_hourly` table alongside weftd and poll.
 6. **`docs/manual/http-ingest.md`** — curl recipe, schema auto-detect note, per-tier QPS caps, gzip/ndjson examples, OTel attribute mapping table.
 7. **Reference Python SDK** — `clients/python/weft/__init__.py`, ~50 lines: bearer-auth session, batching, gzip, retry. Ships to PyPI on the existing release pipeline (`.kevcons/ext/release.lua`).
+8. **Go SDK** — defined in its own plan ([`go-sdk.md`](go-sdk.md)) because the surface is bigger than Python's: in addition to the generic event API it provides a runtime-stats collector that periodically POSTs `runtime.MemStats` / goroutine count / FD count / GC pause histograms. Two drivers: external customers' Go services, and weft's own coordinator / shard / weftd binaries self-monitoring through the same channel. Out of scope for the http-ingest deliverable itself; cross-linked here so the dependency is obvious.
 
 ## Cost and rate-limit posture
 
@@ -65,7 +66,7 @@ The `ingest.w3ft.net` hostname points at the coordinator ALB. A v1 limit of 1000
 - Manual + curl recipe + OTel mapping table: **0.5 day**
 - Python SDK: **0.5 day**
 
-**Total: ~3.5 days** to first working version; another day for a Vector / Fluent Bit / OTel collector recipe and a second SDK (Node or Go).
+**Total: ~3.5 days** to first working version. The Go SDK ships separately on the schedule defined in [`go-sdk.md`](go-sdk.md). A Vector / Fluent Bit / OTel collector recipe is another half-day on top.
 
 ## Non-goals
 

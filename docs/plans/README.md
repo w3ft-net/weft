@@ -26,6 +26,8 @@ Each unblocks a meaningful slice of downstream work.
 | ✅ [ingest-dimensions](ingest-dimensions.md) | 8d | Indexed dimension columns; gates k8s + group-by recipes |
 | [app-heartbeats](app-heartbeats.md) | 3d | Wire protocol — Unix socket + optional TCP heartbeat endpoint, snapshot stream |
 | [http-ingest](http-ingest.md) | 3.5d | Generic POST endpoint; unblocks SDKs, Vector/Fluent Bit/OTel receivers |
+| [go-sdk](go-sdk.md) | 3.5d | In-process emission, heartbeats, runtime stats. Ships in lockstep with python-sdk. |
+| [python-sdk](python-sdk.md) | 3.5d | Same surface as go-sdk; Python-flavored runtime stats. Ships in lockstep. |
 | [audit-log](audit-log.md) | 4.75d | Cheap to wire once before five downstream plans want to emit events |
 
 ### Phase 1 — table-stakes commercial
