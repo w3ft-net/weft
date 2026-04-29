@@ -18,6 +18,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
+	weftsdk "github.com/w3ft-net/weft-go"
+	weftruntime "github.com/w3ft-net/weft-go/runtime"
+
 	"github.com/kevlarcon/weft/auth"
 	weftcfg "github.com/kevlarcon/weft/config"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
@@ -108,6 +111,11 @@ func main() {
 	if *coordAddr != "" {
 		go runHeartbeat(*coordAddr, *grpcPort, *hbInterval, srv)
 	}
+
+	wc, _ := weftsdk.New()
+	defer wc.Close()
+	go wc.HeartbeatLoop(cfgCtx, "shard", 30*time.Second)
+	weftruntime.Start(cfgCtx, wc, "shard", weftruntime.DefaultInterval)
 
 	// HTTP health endpoint.
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

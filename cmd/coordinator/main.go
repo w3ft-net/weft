@@ -18,6 +18,9 @@ import (
 
 	"google.golang.org/grpc"
 
+	weftsdk "github.com/w3ft-net/weft-go"
+	weftruntime "github.com/w3ft-net/weft-go/runtime"
+
 	"github.com/kevlarcon/weft/auth"
 	"github.com/kevlarcon/weft/compute"
 	weftcfg "github.com/kevlarcon/weft/config"
@@ -361,6 +364,11 @@ func main() {
 	})
 
 	log.Printf("coordinator listening on :%d (%d shards, customer=%s)", *port, len(shards), *customer)
+
+	wc, _ := weftsdk.New()
+	defer wc.Close()
+	go wc.HeartbeatLoop(cfgCtx, "coordinator", 30*time.Second)
+	weftruntime.Start(cfgCtx, wc, "coordinator", weftruntime.DefaultInterval)
 
 	// Signal handling. Needed so `go build -cover` binaries flush
 	// coverage counters on `docker compose down` — SIGKILL skips the
