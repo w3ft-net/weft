@@ -53,13 +53,14 @@ var parserCache = weftd.NewParserCache()
 var parseClientSide = os.Getenv("WEFTD_PARSE_CLIENT_SIDE") == "1"
 
 type Config struct {
-	Endpoint   string         `yaml:"endpoint"`   // coordinator address
-	Token      string         `yaml:"token"`      // agent auth token (wft_...)
-	Customer   string         `yaml:"customer"`   // fallback if not returned by auth
-	Deployment string         `yaml:"deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
-	Region     string         `yaml:"region"`     // optional override; otherwise probed from cloud metadata
-	Socket     string         `yaml:"socket"`
-	Sources    []SourceConfig `yaml:"sources"`
+	Endpoint   string          `yaml:"endpoint"`   // coordinator address
+	Token      string          `yaml:"token"`      // agent auth token (wft_...)
+	Customer   string          `yaml:"customer"`   // fallback if not returned by auth
+	Deployment string          `yaml:"deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
+	Region     string          `yaml:"region"`     // optional override; otherwise probed from cloud metadata
+	Socket     string          `yaml:"socket"`
+	Heartbeat  HeartbeatConfig `yaml:"heartbeat"` // local app-heartbeat listener
+	Sources    []SourceConfig  `yaml:"sources"`
 }
 
 type SourceConfig struct {
@@ -260,6 +261,12 @@ func main() {
 		defer sock.Close()
 		go runSocketIngester(ctx, coordClient, customer, hostname, sock)
 		log.Printf("listening on socket %s", cfg.Socket)
+	}
+
+	// Start the app-heartbeat listener and snapshot ticker. Always
+	// on by default with a Unix socket; opt-in for the TCP listener.
+	if _, err := startHeartbeat(ctx, cfg.Heartbeat, coordClient, customer, hostname, namespace); err != nil {
+		log.Printf("heartbeat: disabled (%v)", err)
 	}
 
 	if parseClientSide {
