@@ -60,7 +60,16 @@ func runHandler(cfg Config, args RunArgs) *mcp.CallToolResult {
 		return errorResult("pipeline is required")
 	}
 
-	_, violations := policy.Validate(args.Pipeline, policy.DefaultReadPolicy())
+	pol := policy.DefaultReadPolicy()
+	if cfg.ListScripts != nil {
+		if names, err := cfg.ListScripts(); err == nil && len(names) > 0 {
+			pol.UserDefinedCommands = make(map[string]bool, len(names))
+			for _, n := range names {
+				pol.UserDefinedCommands[n] = true
+			}
+		}
+	}
+	_, violations := policy.Validate(args.Pipeline, pol)
 	if len(violations) > 0 {
 		return errorResult(formatViolations(violations))
 	}
