@@ -108,13 +108,10 @@ func startHeartbeat(ctx context.Context, cfg HeartbeatConfig, coordClient pb.Wef
 		log.Printf("heartbeat: listening on %s", addr)
 	}
 
-	// Match the metrics-app naming convention: deployment-prefixed
-	// when set so per-host streams don't collide in the namespace.
-	heartbeatsApp := namespace + "/heartbeats"
-	if d := sanitizeDeployment(globalDeployment); d != "" {
-		heartbeatsApp = namespace + "/" + d + "_heartbeats"
-	}
-	go runHeartbeatSnapshots(ctx, coordClient, h, customer, instance, heartbeatsApp, snapshotInterval)
+	// Each service gets its own /log/<ns>/<service>/heartbeats.log
+	// pseudofile — the snapshot ticker fans out one row per known
+	// service to its own app stream.
+	go runHeartbeatSnapshots(ctx, coordClient, h, customer, instance, namespace, snapshotInterval)
 
 	return h, nil
 }
@@ -137,10 +134,11 @@ func serveHTTPUntil(ctx context.Context, l net.Listener, handler http.Handler, l
 }
 
 // runHeartbeatSnapshots emits one record per known service every
-// interval. Empty snapshots produce no rows (and don't open a
-// stream), so a quiet host costs nothing on the wire.
+// interval, each at app=<namespace>/<service>/heartbeats. Empty
+// snapshots produce no rows (and don't open a stream), so a quiet
+// host costs nothing on the wire.
 func runHeartbeatSnapshots(ctx context.Context, client pb.WeftCoordinatorClient,
-	h *heartbeat.Heartbeats, customer, instance, app string, interval time.Duration) {
+	h *heartbeat.Heartbeats, customer, instance, namespace string, interval time.Duration) {
 
 	ss := &streamState{}
 	ticker := time.NewTicker(interval)
@@ -164,6 +162,7 @@ func runHeartbeatSnapshots(ctx context.Context, client pb.WeftCoordinatorClient,
 					log.Printf("heartbeat: marshal: %v", err)
 					continue
 				}
+				app := namespace + "/" + s.Service + "/heartbeats"
 				row := &pb.LogRow{
 					App:         app,
 					Customer:    customer,

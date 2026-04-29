@@ -73,8 +73,8 @@ func TestStartHeartbeat_SnapshotEmitsRow(t *testing.T) {
 	row := stream.sent[0]
 	stream.mu.Unlock()
 
-	if row.App != "myns/heartbeats" {
-		t.Errorf("row.App = %q, want %q", row.App, "myns/heartbeats")
+	if row.App != "myns/test-svc/heartbeats" {
+		t.Errorf("row.App = %q, want %q", row.App, "myns/test-svc/heartbeats")
 	}
 	if row.Customer != "kevlar" {
 		t.Errorf("row.Customer = %q, want %q", row.Customer, "kevlar")
@@ -193,16 +193,12 @@ func TestStartHeartbeat_TCPListener(t *testing.T) {
 	}
 }
 
-// TestStartHeartbeat_DeploymentInAppName confirms the metrics-app
-// naming convention applies to heartbeats too: when globalDeployment
-// is set, the snapshot stream lands at <ns>/<deployment>_heartbeats.
-func TestStartHeartbeat_DeploymentInAppName(t *testing.T) {
+// TestStartHeartbeat_FansOutPerService confirms each registered
+// service gets its own <ns>/<service>/heartbeats app stream rather
+// than being bundled into a single <ns>/heartbeats stream.
+func TestStartHeartbeat_FansOutPerService(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	prev := globalDeployment
-	globalDeployment = "shard"
-	defer func() { globalDeployment = prev }()
 
 	cfg := HeartbeatConfig{
 		Socket:           shortSocketPath(t),
@@ -215,22 +211,30 @@ func TestStartHeartbeat_DeploymentInAppName(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.Hit("coordinator")
+	h.Hit("api")
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if s := client.latestStream(); s != nil && s.sentCount() > 0 {
+		if s := client.latestStream(); s != nil && s.sentCount() >= 2 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	stream := client.latestStream()
-	if stream == nil || stream.sentCount() == 0 {
+	if stream == nil {
 		t.Fatal("snapshot row never emitted")
 	}
+
 	stream.mu.Lock()
-	got := stream.sent[0].App
+	apps := map[string]bool{}
+	for _, r := range stream.sent {
+		apps[r.App] = true
+	}
 	stream.mu.Unlock()
-	if got != "weft/shard_heartbeats" {
-		t.Errorf("App = %q, want weft/shard_heartbeats", got)
+
+	for _, want := range []string{"weft/coordinator/heartbeats", "weft/api/heartbeats"} {
+		if !apps[want] {
+			t.Errorf("missing app %q in fan-out; got %v", want, apps)
+		}
 	}
 }

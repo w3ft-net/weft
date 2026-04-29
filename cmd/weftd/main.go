@@ -59,6 +59,7 @@ type Config struct {
 	Deployment string          `yaml:"deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
 	Region     string          `yaml:"region"`     // optional override; otherwise probed from cloud metadata
 	Socket     string          `yaml:"socket"`
+	Services   []string        `yaml:"services"`  // logical services co-located on this host; metrics + heartbeats fan out one stream per name
 	Heartbeat  HeartbeatConfig `yaml:"heartbeat"` // local app-heartbeat listener
 	Sources    []SourceConfig  `yaml:"sources"`
 }
@@ -248,7 +249,7 @@ func main() {
 			}
 		}
 		if src.Metrics.Enabled {
-			go runMetricsCollector(ctx, coordClient, customer, hostname, namespace, src.Metrics)
+			go runMetricsCollector(ctx, coordClient, customer, hostname, namespace, effectiveServices(cfg), src.Metrics)
 		}
 	}
 
@@ -259,7 +260,7 @@ func main() {
 			log.Fatalf("socket listener: %v", err)
 		}
 		defer sock.Close()
-		go runSocketIngester(ctx, coordClient, customer, hostname, sock)
+		go runSocketIngester(ctx, coordClient, customer, hostname, namespace, sock)
 		log.Printf("listening on socket %s", cfg.Socket)
 	}
 
@@ -737,7 +738,37 @@ watch:
 	}
 }
 
-func runSocketIngester(ctx context.Context, client pb.WeftCoordinatorClient, customer, instance string, sock *weftd.SocketListener) {
+// prefixNamespace stamps the configured namespace on bare app names
+// posted to the records socket. SDKs send a logical app like
+// "coordinator/runtime"; weftd promotes it to "<ns>/coordinator/runtime"
+// so the coordinator's namespace check accepts the row and the
+// pseudofile renderer drops it under /log/<ns>/. App names that are
+// already qualified pass through untouched.
+func prefixNamespace(namespace, app string) string {
+	if namespace == "" {
+		return app
+	}
+	if app == namespace || strings.HasPrefix(app, namespace+"/") {
+		return app
+	}
+	return namespace + "/" + app
+}
+
+// effectiveServices returns the list of logical services co-located
+// on this host. Falls back to a single-element list using deployment
+// when `services:` is unset, so existing single-role deploys keep
+// working without explicit config.
+func effectiveServices(cfg Config) []string {
+	if len(cfg.Services) > 0 {
+		return cfg.Services
+	}
+	if cfg.Deployment != "" {
+		return []string{cfg.Deployment}
+	}
+	return nil
+}
+
+func runSocketIngester(ctx context.Context, client pb.WeftCoordinatorClient, customer, instance, namespace string, sock *weftd.SocketListener) {
 	lines := sock.Lines()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -746,6 +777,8 @@ func runSocketIngester(ctx context.Context, client pb.WeftCoordinatorClient, cus
 
 	type appLine struct{ app, line string }
 	var buf []appLine
+
+	prefix := func(app string) string { return prefixNamespace(namespace, app) }
 
 	for {
 		select {
@@ -764,7 +797,7 @@ func runSocketIngester(ctx context.Context, client pb.WeftCoordinatorClient, cus
 				}
 				return
 			}
-			buf = append(buf, appLine{app: sl.App, line: sl.Line})
+			buf = append(buf, appLine{app: prefix(sl.App), line: sl.Line})
 			if len(buf) >= 100 {
 				for _, al := range buf {
 					sendLineWithReconnect(ctx, client, ss, al.line, customer, instance, al.app)

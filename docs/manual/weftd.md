@@ -31,6 +31,10 @@ deployment: api               # optional; the fleet/scaling-unit
                               # AWS ASG, etc.) — stamped on every row
 region: us-east-2             # optional override; auto-detected from
                               # cloud metadata at startup if omitted
+services: [api]               # logical services co-located on this
+                              # host; metrics and heartbeat snapshots
+                              # fan out one stream per service —
+                              # /log/<ns>/<service>/{metrics,heartbeats}.log
 
 sources:
   - app: myapp
@@ -97,9 +101,11 @@ sources:
 ```
 
 Samples are read from `/proc` (Linux only) and streamed as JSON log
-rows to an app named `<namespace>/metrics`. If you set `deployment`,
-the app becomes `<namespace>/<deployment>_metrics` so that different
-tiers of hosts land in separate pseudofiles.
+rows. The top-level `services:` list controls the destination paths:
+each entry produces its own `/log/<namespace>/<service>/metrics.log`
+stream. Co-located services (e.g., `services: [coordinator, api]`
+on a host that runs both) get byte-identical rows under each path,
+filterable by the `host` field when the ASG scales out.
 
 Each tick emits one row per metric type, with one extra row per
 mount (disk) and per interface (network):
@@ -207,8 +213,9 @@ go c.HeartbeatLoop(ctx, "my-service", 30*time.Second)
 Service names are restricted to `[a-zA-Z0-9._-]`, 1–128 chars.
 
 Each tick of the snapshot ticker (default 5s) emits one row per
-known service to `<namespace>/heartbeats` (or
-`<namespace>/<deployment>_heartbeats` when `deployment:` is set):
+known service to its own `/log/<namespace>/<service>/heartbeats.log`
+stream — the per-service path makes "is X alive right now?" a
+direct `tail`, no filtering required:
 
 ```
 {"type":"heartbeat","ts":"2026-04-29T14:55:36Z",
@@ -222,9 +229,9 @@ catch a stalling service before it disappears with a normal
 alert pipeline:
 
 ```
-# Alert when any service hasn't checked in for 30s+
-tail -n 1 /log/myns/heartbeats.log \
-  | jq 'select(.age_s > 30) | .service' \
+# Alert when billing hasn't checked in for 30s+
+tail -n 1 /log/myns/billing/heartbeats.log \
+  | jq 'select(.age_s > 30)' \
   | alert above 0 -t 1 --notify=ops
 ```
 

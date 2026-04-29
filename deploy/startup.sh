@@ -124,10 +124,20 @@ fi
 # populated by load-app-env from the /weft/WEFTD_TOKEN secret.
 if [ -n "${WEFTD_TOKEN:-}" ] && command -v weftd >/dev/null 2>&1; then
   mkdir -p /etc/weftd
+  # The coordinator role co-hosts api today; both surfaces want their
+  # own /log/weft/<service>/{metrics,heartbeats}.log streams. Other
+  # roles ship metrics under their single role name.
+  case "$ROLE" in
+    coordinator) SERVICES='[coordinator, api]' ;;
+    *)           SERVICES="[${ROLE}]" ;;
+  esac
+
   cat > /etc/weftd/config.yaml <<WEFTCFG
 endpoint: ingest.w3ft.net:9020
 token: ${WEFTD_TOKEN}
-host_group: ${ROLE}
+deployment: ${ROLE}
+socket: /var/run/weftd.sock
+services: ${SERVICES}
 sources:
   - path: /opt/app/logs/*.log
     metrics:

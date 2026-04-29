@@ -38,15 +38,22 @@ type netState struct {
 
 // runMetricsCollector runs in its own goroutine, collecting system metrics
 // at the configured interval and sending them as LogRows through the
-// coordinator IngestStream.
+// coordinator IngestStream. One row per (tick × service in services) so
+// every co-located service has its own /log/<ns>/<service>/metrics.log
+// stream; rows are byte-identical except for the App field.
 func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
-	customer, instance, namespace string, mcfg MetricsConfig) {
+	customer, instance, namespace string, services []string, mcfg MetricsConfig) {
+
+	if len(services) == 0 {
+		log.Printf("metrics: no services configured (set top-level `services:` list); skipping")
+		return
+	}
 
 	interval := 30 * time.Second
 	if mcfg.Interval != "" {
 		d, err := time.ParseDuration(mcfg.Interval)
 		if err != nil {
-			log.Printf("[%s/metrics] bad interval %q, using 30s", namespace, mcfg.Interval)
+			log.Printf("metrics: bad interval %q, using 30s", mcfg.Interval)
 		} else {
 			interval = d
 		}
@@ -62,11 +69,11 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 		}
 	}
 
-	metricsApp := namespace + "/metrics"
-	if d := sanitizeDeployment(globalDeployment); d != "" {
-		metricsApp = namespace + "/" + d + "_metrics"
+	apps := make([]string, len(services))
+	for i, s := range services {
+		apps[i] = namespace + "/" + s + "/metrics"
 	}
-	log.Printf("[%s] metrics enabled: interval=%s collectors=%v", metricsApp, interval, mcfg.Collectors)
+	log.Printf("metrics: services=%v interval=%s collectors=%v", services, interval, mcfg.Collectors)
 
 	ss := &streamState{}
 
@@ -88,32 +95,35 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 				elapsed = 0
 			}
 
+			// Build the rows once with apps[0] as a placeholder; the
+			// fan-out loop below restamps App per service before send.
+			placeholder := apps[0]
 			var rows []*pb.LogRow
 
 			if collectors["cpu"] {
 				cur, err := readCPU()
 				if err == nil {
 					if prevCPU != nil {
-						rows = append(rows, buildCPURow(metricsApp, customer, instance, now, prevCPU, cur))
+						rows = append(rows, buildCPURow(placeholder, customer, instance, now, prevCPU, cur))
 					}
 					prevCPU = cur
 				}
 			}
 
 			if collectors["memory"] {
-				if row, err := buildMemoryRow(metricsApp, customer, instance, now); err == nil {
+				if row, err := buildMemoryRow(placeholder, customer, instance, now); err == nil {
 					rows = append(rows, row)
 				}
 			}
 
 			if collectors["disk"] {
-				if diskRows, err := buildDiskRows(metricsApp, customer, instance, now); err == nil {
+				if diskRows, err := buildDiskRows(placeholder, customer, instance, now); err == nil {
 					rows = append(rows, diskRows...)
 				}
 			}
 
 			if collectors["load"] {
-				if row, err := buildLoadRow(metricsApp, customer, instance, now); err == nil {
+				if row, err := buildLoadRow(placeholder, customer, instance, now); err == nil {
 					rows = append(rows, row)
 				}
 			}
@@ -121,7 +131,7 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 			if collectors["network"] {
 				curNet, err := readNetDev()
 				if err == nil && len(prevNet) > 0 && elapsed > 0 {
-					rows = append(rows, buildNetworkRows(metricsApp, customer, instance, now, prevNet, curNet, elapsed)...)
+					rows = append(rows, buildNetworkRows(placeholder, customer, instance, now, prevNet, curNet, elapsed)...)
 				}
 				if err == nil {
 					prevNet = curNet
@@ -131,8 +141,11 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 			prevTime = now
 
 			for _, row := range rows {
-				if err := sendRowWithReconnect(ctx, client, ss, row, metricsApp); err != nil {
-					return // context cancelled
+				for _, app := range apps {
+					row.App = app
+					if err := sendRowWithReconnect(ctx, client, ss, row, app); err != nil {
+						return // context cancelled
+					}
 				}
 			}
 		}
