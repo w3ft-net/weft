@@ -223,16 +223,19 @@ func parseStage(cmd *bash.SimpleCommand) stageInfo {
 }
 
 // extractApp extracts the app name from a pseudofile name.
-// "/log/weft/coordinator.log" → "weft/coordinator"  (namespaced sub-app)
-// "/log/vimgym.log"           → "vimgym"            (single-segment: matches flat apps named "vimgym" AND every sub-app under namespace "vimgym")
-// "warp.log"                  → ""                  (whole-customer query)
 //
-// Three-level paths (/log/<ns>/<env>/<app>.log) are also accepted —
-// the env segment is consumed by extractEnv, and this function returns
-// just <ns>/<app> as the app filter. See docs/plans/ingest-dimensions.md
-// for the path-layout rationale.
+// Path layout (segments after /log/):
+//
+//	1 seg → "<app>"                       whole-customer query (flat or namespace-prefix wildcard)
+//	2 seg → "<ns>/<app>"                  app within a namespace; env (if any) supplied by the token
+//	3 seg → "<ns>/<service>/<kind>"       telemetry stream: metrics/heartbeats/runtime per service
+//	4 seg → "<ns>/<env>/<service>/<kind>" same as 3 seg with an explicit env filter (env-bound multi-env tokens)
+//
+// "warp.log" remains the all-apps wildcard. The previous 3-seg form
+// "<ns>/<env>/<app>" no longer applies — env-bound tokens get the env
+// predicate stamped server-side via the auth interceptor; multi-env
+// tokens that need a specific env in the path use the 4-seg form.
 func extractApp(filename string) string {
-	// Strip /log/ or log/ prefix if present.
 	filename = strings.TrimPrefix(filename, "/log/")
 	filename = strings.TrimPrefix(filename, "log/")
 	name := strings.TrimSuffix(filename, ".log")
@@ -240,23 +243,22 @@ func extractApp(filename string) string {
 		return ""
 	}
 	parts := strings.Split(name, "/")
-	if len(parts) == 3 {
-		// /log/<ns>/<env>/<app>.log → app filter is <ns>/<app>
-		return parts[0] + "/" + parts[2]
+	if len(parts) == 4 {
+		return parts[0] + "/" + parts[2] + "/" + parts[3]
 	}
 	return name
 }
 
-// extractEnv pulls the env segment from a 3-level pseudofile path.
-// "/log/weft/prod/coordinator.log" → "prod"
-// "/log/weft/coordinator.log" → "" (no env filter — token wasn't env-bearing)
-// See docs/plans/ingest-dimensions.md.
+// extractEnv pulls the env segment from a 4-level pseudofile path.
+// "/log/weft/prod/coordinator/runtime.log" → "prod"
+// "/log/weft/coordinator/runtime.log"      → ""
+// See extractApp for the full layout rules.
 func extractEnv(filename string) string {
 	filename = strings.TrimPrefix(filename, "/log/")
 	filename = strings.TrimPrefix(filename, "log/")
 	name := strings.TrimSuffix(filename, ".log")
 	parts := strings.Split(name, "/")
-	if len(parts) == 3 {
+	if len(parts) == 4 {
 		return parts[1]
 	}
 	return ""

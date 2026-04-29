@@ -131,11 +131,13 @@ func (f *RemoteFS) ReadDir(path string) ([]string, error) {
 		return []string{"notify.conf", "usage"}, nil
 	}
 
-	// /log/<namespace>/[<env>/] — see docs/plans/ingest-dimensions.md.
+	// /log/<namespace>/[<service>/] — see docs/plans/ingest-dimensions.md.
 	// At /log/<ns>/ we emit a mix:
-	//   - <env>/ subdirectories (deduped) for env-bearing apps,
-	//   - <app>.log files for env-less apps in that namespace.
-	// At /log/<ns>/<env>/ we emit just <app>.log files filtered by env.
+	//   - <service>/ subdirectories (deduped) for apps with a path component
+	//     after the namespace (e.g., weft/coordinator/runtime),
+	//   - <app>.log files for plain apps in that namespace.
+	// At /log/<ns>/<service>/ we emit just <kind>.log files for the apps
+	// whose names start with <ns>/<service>/.
 	if strings.HasPrefix(p, "/log/") {
 		segs := strings.Split(strings.TrimPrefix(strings.TrimSuffix(p, "/"), "/log/"), "/")
 		switch len(segs) {
@@ -143,21 +145,21 @@ func (f *RemoteFS) ReadDir(path string) ([]string, error) {
 			ns := segs[0]
 			return f.entriesForNamespace(ns), nil
 		case 2:
-			ns, env := segs[0], segs[1]
-			return f.entriesForNamespaceEnv(ns, env), nil
+			ns, service := segs[0], segs[1]
+			return f.entriesForNamespaceService(ns, service), nil
 		}
 	}
 
 	return nil, fmt.Errorf("%s: no such directory", path)
 }
 
-// entriesForNamespace returns the mixed listing for /log/<ns>/. App
-// entries known with no env produce ".log" files; app entries known
-// only with envs produce env-named subdirectories (deduped). Result
-// can contain both shapes when a namespace has a mix.
+// entriesForNamespace returns the mixed listing for /log/<ns>/. Plain
+// apps (no extra path component) appear as ".log" files; apps with a
+// path component after the namespace (e.g. <ns>/coordinator/runtime)
+// produce a deduped <service>/ subdirectory entry.
 func (f *RemoteFS) entriesForNamespace(ns string) []string {
 	prefix := ns + "/"
-	envSeen := map[string]bool{}
+	serviceSeen := map[string]bool{}
 	var entries []string
 	for _, name := range f.apps {
 		if !strings.HasPrefix(name, prefix) {
@@ -165,10 +167,10 @@ func (f *RemoteFS) entriesForNamespace(ns string) []string {
 		}
 		rest := strings.TrimPrefix(name, prefix)
 		if i := strings.Index(rest, "/"); i >= 0 {
-			env := rest[:i]
-			if !envSeen[env] {
-				envSeen[env] = true
-				entries = append(entries, env+"/")
+			service := rest[:i]
+			if !serviceSeen[service] {
+				serviceSeen[service] = true
+				entries = append(entries, service+"/")
 			}
 		} else {
 			entries = append(entries, rest+".log")
@@ -177,10 +179,10 @@ func (f *RemoteFS) entriesForNamespace(ns string) []string {
 	return entries
 }
 
-// entriesForNamespaceEnv returns the apps known under a specific
-// (ns, env) pair, formatted as "<app>.log".
-func (f *RemoteFS) entriesForNamespaceEnv(ns, env string) []string {
-	prefix := ns + "/" + env + "/"
+// entriesForNamespaceService returns the apps known under a specific
+// (ns, service) pair, formatted as "<kind>.log".
+func (f *RemoteFS) entriesForNamespaceService(ns, service string) []string {
+	prefix := ns + "/" + service + "/"
 	var entries []string
 	for _, name := range f.apps {
 		if !strings.HasPrefix(name, prefix) {

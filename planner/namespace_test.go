@@ -71,8 +71,8 @@ func TestNamespacePredicate(t *testing.T) {
 			// All args share the same env segment → the env predicate is
 			// preserved alongside the app IN list.
 			name:     "multi-arg cat preserves shared env predicate",
-			pipeline: `cat /log/acme/prod/api.log /log/acme/prod/worker.log`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE app IN ('acme/api', 'acme/worker') AND env = 'prod'`,
+			pipeline: `cat /log/acme/prod/api/metrics.log /log/acme/prod/worker/metrics.log`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE app IN ('acme/api/metrics', 'acme/worker/metrics') AND env = 'prod'`,
 		},
 	}
 

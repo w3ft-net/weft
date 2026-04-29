@@ -33,8 +33,12 @@ The token-create form has an Env field; from the CLI:
 weft token create --namespace myco --label api-prod --env prod
 ```
 
-Tokens with env produce three-level pseudofile paths
-(`/log/myco/prod/api.log`); tokens without env produce the original
-two-level layout (`/log/myco/api.log`). A namespace can hold a mix
-during a migration. See **Query your logs** for how `$ENV` surfaces
-in awk and jq.
+Every row picks up the bound env at ingest time, so any query the
+token authenticates implicitly filters to that env — no path
+contortions required. Plain apps stay at the two-level layout
+(`/log/myco/api.log`); telemetry streams (metrics, heartbeats,
+runtime) land under their service's directory
+(`/log/myco/<service>/<kind>.log`); a token spanning multiple envs
+can disambiguate explicitly with the four-level form
+(`/log/myco/<env>/<service>/<kind>.log`). See **Query your logs**
+for how `$ENV` surfaces in awk and jq.

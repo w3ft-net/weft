@@ -83,22 +83,28 @@ func TestPathLayout_EnvSegment(t *testing.T) {
 			wantEnv:  "", // no env predicate in 2-level paths
 		},
 		{
-			name:     "three-level path with env",
-			pipeline: `cat /log/weft/prod/coordinator.log`,
-			wantApp:  "app = 'weft/coordinator'",
+			name:     "three-level telemetry path",
+			pipeline: `cat /log/weft/coordinator/runtime.log`,
+			wantApp:  "app = 'weft/coordinator/runtime'",
+			wantEnv:  "", // no env predicate in 3-level paths
+		},
+		{
+			name:     "three-level metrics path",
+			pipeline: `tail /log/weft/coordinator/metrics.log`,
+			wantApp:  "app = 'weft/coordinator/metrics'",
+			wantEnv:  "",
+		},
+		{
+			name:     "four-level path with env",
+			pipeline: `cat /log/weft/prod/coordinator/runtime.log`,
+			wantApp:  "app = 'weft/coordinator/runtime'",
 			wantEnv:  "env = 'prod'",
 		},
 		{
-			name:     "three-level path with staging",
-			pipeline: `cat /log/myco/staging/api.log`,
-			wantApp:  "app = 'myco/api'",
+			name:     "four-level path with staging",
+			pipeline: `cat /log/myco/staging/api/metrics.log`,
+			wantApp:  "app = 'myco/api/metrics'",
 			wantEnv:  "env = 'staging'",
-		},
-		{
-			name:     "three-level + tail",
-			pipeline: `tail /log/weft/prod/metrics.log`,
-			wantApp:  "app = 'weft/metrics'",
-			wantEnv:  "env = 'prod'",
 		},
 	}
 
