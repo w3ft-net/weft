@@ -3,6 +3,7 @@ package coordinator
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -14,7 +15,16 @@ import (
 // Compile-time check that WeftFuncs implements luapkg.WeftFuncs.
 var _ luapkg.WeftFuncs = (*WeftFuncs)(nil)
 
+// maxAggDuration is the cap for true aggregates (avg, max, min, sum,
+// stddev, count, percentile, rate) — funcs that touch every result
+// in the window. Bounds compute cost.
 const maxAggDuration = 24 * time.Hour
+
+// maxEndpointDuration is the cap for endpoint funcs (first, delta,
+// slope) that read O(1) anchor results — the chronologically first
+// result still in the window plus the latest. They can safely span
+// a longer window, useful for trend / fill-prediction queries.
+const maxEndpointDuration = 14 * 24 * time.Hour
 
 // WeftFuncs provides cron result query functions for /bin/ scripts.
 // Both bash (ExternalCmdFunc) and Lua (weft.* table) use this.
@@ -117,10 +127,117 @@ func (w *WeftFuncs) Stddev(watchName string, dur time.Duration) (float64, error)
 	return math.Sqrt(variance), nil
 }
 
+// First returns the chronologically oldest numeric stdout still in
+// the window — the anchor for delta/slope. Cap is the longer
+// maxEndpointDuration since this reads a single result, not an
+// aggregate.
+func (w *WeftFuncs) First(watchName string, dur time.Duration) (float64, error) {
+	vals, err := w.numericResultsCap(watchName, dur, maxEndpointDuration)
+	if err != nil {
+		return 0, err
+	}
+	if len(vals) == 0 {
+		return 0, fmt.Errorf("weft.first: no numeric results for %q", watchName)
+	}
+	// QueryCronResults returns DESC (newest first); oldest is the last element.
+	return vals[len(vals)-1], nil
+}
+
+// Count returns the number of results recorded for the watch within
+// the window — numeric or not, since "how many times did the watch
+// fire" is the natural question. Returns float for interface uniformity.
+func (w *WeftFuncs) Count(watchName string, dur time.Duration) (float64, error) {
+	if dur > maxAggDuration {
+		return 0, fmt.Errorf("duration %s exceeds maximum of %s", dur, maxAggDuration)
+	}
+	if dur <= 0 {
+		return 0, fmt.Errorf("duration must be positive")
+	}
+	since := time.Now().Add(-dur)
+	results, err := w.Store.QueryCronResults(w.CustomerID, watchName, since)
+	if err != nil {
+		return 0, fmt.Errorf("weft.count: watch %q: %w", watchName, err)
+	}
+	return float64(len(results)), nil
+}
+
+// Percentile returns the p-th percentile (p in 0..100) of numeric
+// stdout values in the window using linear interpolation between
+// adjacent ranks (R-7 / Excel / numpy default). p=0 is min, p=50 is
+// median, p=100 is max.
+func (w *WeftFuncs) Percentile(watchName string, dur time.Duration, p float64) (float64, error) {
+	if p < 0 || p > 100 {
+		return 0, fmt.Errorf("weft.percentile: p must be in [0, 100], got %v", p)
+	}
+	vals, err := w.numericResults(watchName, dur)
+	if err != nil {
+		return 0, err
+	}
+	if len(vals) == 0 {
+		return 0, fmt.Errorf("weft.percentile: no numeric results for %q", watchName)
+	}
+	sort.Float64s(vals)
+	if len(vals) == 1 {
+		return vals[0], nil
+	}
+	rank := p / 100.0 * float64(len(vals)-1)
+	lo := int(rank)
+	frac := rank - float64(lo)
+	if lo+1 >= len(vals) {
+		return vals[len(vals)-1], nil
+	}
+	return vals[lo] + frac*(vals[lo+1]-vals[lo]), nil
+}
+
+// Delta returns latest_numeric - first_numeric over the window.
+// Composite of weft.latest and weft.first; implemented natively for
+// performance and to share the single-fetch slice. Cap is
+// maxEndpointDuration since the underlying anchors are O(1).
+func (w *WeftFuncs) Delta(watchName string, dur time.Duration) (float64, error) {
+	vals, err := w.numericResultsCap(watchName, dur, maxEndpointDuration)
+	if err != nil {
+		return 0, err
+	}
+	if len(vals) < 2 {
+		return 0, fmt.Errorf("weft.delta: need at least 2 numeric results for %q", watchName)
+	}
+	// vals[0] is newest, vals[len-1] is oldest.
+	return vals[0] - vals[len(vals)-1], nil
+}
+
+// Slope returns Delta / dur.Seconds() — the average rate of change
+// per second across the window. Caller multiplies for other units.
+// Cap is maxEndpointDuration.
+func (w *WeftFuncs) Slope(watchName string, dur time.Duration) (float64, error) {
+	d, err := w.Delta(watchName, dur)
+	if err != nil {
+		return 0, err
+	}
+	return d / dur.Seconds(), nil
+}
+
+// Rate returns Sum / dur.Seconds() — events-per-second when the
+// watch's stdout is a per-period count. Caller multiplies for
+// per-minute / per-hour. Cap is maxAggDuration since this is a true
+// aggregate over every result.
+func (w *WeftFuncs) Rate(watchName string, dur time.Duration) (float64, error) {
+	s, err := w.Sum(watchName, dur)
+	if err != nil {
+		return 0, err
+	}
+	return s / dur.Seconds(), nil
+}
+
 // numericResults fetches results in a time range and parses numeric stdout values.
 func (w *WeftFuncs) numericResults(watchName string, dur time.Duration) ([]float64, error) {
-	if dur > maxAggDuration {
-		return nil, fmt.Errorf("duration %s exceeds maximum of %s", dur, maxAggDuration)
+	return w.numericResultsCap(watchName, dur, maxAggDuration)
+}
+
+// numericResultsCap is numericResults with a caller-supplied cap, so
+// endpoint funcs can use a longer window than true aggregates.
+func (w *WeftFuncs) numericResultsCap(watchName string, dur time.Duration, maxDur time.Duration) ([]float64, error) {
+	if dur > maxDur {
+		return nil, fmt.Errorf("duration %s exceeds maximum of %s", dur, maxDur)
 	}
 	if dur <= 0 {
 		return nil, fmt.Errorf("duration must be positive")
@@ -148,6 +265,22 @@ func ParseAggDuration(s string) (time.Duration, error) {
 	}
 	if d > maxAggDuration {
 		return 0, fmt.Errorf("duration %s exceeds maximum of %s", d, maxAggDuration)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("duration must be positive")
+	}
+	return d, nil
+}
+
+// ParseEndpointDuration parses a duration string for endpoint funcs
+// (first, delta, slope), allowing windows up to maxEndpointDuration.
+func ParseEndpointDuration(s string) (time.Duration, error) {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration %q (use e.g., 1h, 24h, 7d-equivalent in hours)", s)
+	}
+	if d > maxEndpointDuration {
+		return 0, fmt.Errorf("duration %s exceeds maximum of %s", d, maxEndpointDuration)
 	}
 	if d <= 0 {
 		return 0, fmt.Errorf("duration must be positive")

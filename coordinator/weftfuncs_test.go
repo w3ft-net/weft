@@ -352,3 +352,171 @@ func TestParseAggDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestParseEndpointDuration_AllowsLongerWindow(t *testing.T) {
+	// Endpoint funcs (first/delta/slope) should accept windows up to 14d
+	// where the agg cap rejects.
+	if _, err := ParseAggDuration("48h"); err == nil {
+		t.Fatal("precondition: ParseAggDuration should reject 48h")
+	}
+	if d, err := ParseEndpointDuration("48h"); err != nil {
+		t.Errorf("ParseEndpointDuration(48h): unexpected error: %v", err)
+	} else if d != 48*time.Hour {
+		t.Errorf("ParseEndpointDuration(48h): got %v, want 48h", d)
+	}
+	// 360h = 15d, just over the 14d cap — should reject.
+	if _, err := ParseEndpointDuration("360h"); err == nil {
+		t.Error("ParseEndpointDuration(360h=15d): expected reject, got nil")
+	}
+}
+
+func TestWeftFuncs_First(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+	// seedWatch lays values left-to-right with the LAST element at now.
+	// So "10" is oldest, "30" is newest.
+	seedWatch(t, db, custID, "first-test", []string{"10", "20", "30"}, time.Minute)
+
+	wf := &WeftFuncs{Store: db, CustomerID: custID}
+	got, err := wf.First("first-test", 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 10.0 {
+		t.Errorf("First: expected 10, got %f", got)
+	}
+}
+
+func TestWeftFuncs_First_AcceptsLongerWindow(t *testing.T) {
+	// First should accept a window > 24h (uses maxEndpointDuration cap).
+	db, custID := testStoreAndCustomer(t)
+	seedWatch(t, db, custID, "first-long", []string{"5"}, time.Minute)
+	wf := &WeftFuncs{Store: db, CustomerID: custID}
+	if _, err := wf.First("first-long", 48*time.Hour); err != nil {
+		t.Errorf("First with 48h window: unexpected error: %v", err)
+	}
+	if _, err := wf.First("first-long", 15*24*time.Hour); err == nil {
+		t.Error("First with 15d window: expected cap error, got nil")
+	}
+}
+
+func TestWeftFuncs_Count(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+	// Mix numeric and non-numeric — Count counts all, not just numeric.
+	seedWatch(t, db, custID, "count-test", []string{"10", "ERROR", "30", "20"}, time.Minute)
+	wf := &WeftFuncs{Store: db, CustomerID: custID}
+	got, err := wf.Count("count-test", 1*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 4.0 {
+		t.Errorf("Count: expected 4, got %f", got)
+	}
+}
+
+func TestWeftFuncs_Percentile(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+	seedWatch(t, db, custID, "pct-test", []string{"10", "20", "30", "40", "50"}, time.Minute)
+	wf := &WeftFuncs{Store: db, CustomerID: custID}
+
+	cases := []struct {
+		p    float64
+		want float64
+	}{
+		{0, 10},   // min
+		{50, 30},  // median (middle of 5)
+		{100, 50}, // max
+		{25, 20},  // exact rank 1
+		{75, 40},  // exact rank 3
+	}
+	for _, c := range cases {
+		got, err := wf.Percentile("pct-test", 1*time.Hour, c.p)
+		if err != nil {
+			t.Fatalf("p=%v: %v", c.p, err)
+		}
+		if math.Abs(got-c.want) > 1e-9 {
+			t.Errorf("p=%v: got %f, want %f", c.p, got, c.want)
+		}
+	}
+}
+
+func TestWeftFuncs_Percentile_LinearInterpolation(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+	// 4 values: ranks 0..3. p=33.33 → rank 1.0 = value at index 1.
+	// p=50 → rank 1.5 = midpoint between index 1 and index 2.
+	seedWatch(t, db, custID, "pct-interp", []string{"10", "20", "30", "40"}, time.Minute)
+	wf := &WeftFuncs{Store: db, CustomerID: custID}
+	got, err := wf.Percentile("pct-interp", 1*time.Hour, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// rank = 0.5 * 3 = 1.5 → vals[1] + 0.5*(vals[2]-vals[1]) = 20 + 5 = 25.
+	if math.Abs(got-25.0) > 1e-9 {
+		t.Errorf("p=50 of [10,20,30,40]: got %f, want 25", got)
+	}
+}
+
+func TestWeftFuncs_Percentile_OutOfRange(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+	seedWatch(t, db, custID, "pct-bounds", []string{"1", "2", "3"}, time.Minute)
+	wf := &WeftFuncs{Store: db, CustomerID: custID}
+	if _, err := wf.Percentile("pct-bounds", 1*time.Hour, -1); err == nil {
+		t.Error("expected error for p < 0")
+	}
+	if _, err := wf.Percentile("pct-bounds", 1*time.Hour, 101); err == nil {
+		t.Error("expected error for p > 100")
+	}
+}
+
+func TestWeftFuncs_Delta(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+	// Oldest=10, newest=50.
+	seedWatch(t, db, custID, "delta-test", []string{"10", "20", "30", "40", "50"}, time.Minute)
+	wf := &WeftFuncs{Store: db, CustomerID: custID}
+	got, err := wf.Delta("delta-test", 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 40.0 { // 50 - 10
+		t.Errorf("Delta: expected 40, got %f", got)
+	}
+}
+
+func TestWeftFuncs_Delta_NeedsTwoResults(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+	seedWatch(t, db, custID, "delta-one", []string{"42"}, time.Minute)
+	wf := &WeftFuncs{Store: db, CustomerID: custID}
+	if _, err := wf.Delta("delta-one", 1*time.Hour); err == nil {
+		t.Error("expected error for single result")
+	}
+}
+
+func TestWeftFuncs_Slope(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+	// Delta = 50 - 10 = 40, over a window of 600s → slope = 40/600.
+	seedWatch(t, db, custID, "slope-test", []string{"10", "20", "30", "40", "50"}, time.Minute)
+	wf := &WeftFuncs{Store: db, CustomerID: custID}
+	got, err := wf.Slope("slope-test", 600*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := 40.0 / 600.0
+	if math.Abs(got-want) > 1e-9 {
+		t.Errorf("Slope: got %f, want %f", got, want)
+	}
+}
+
+func TestWeftFuncs_Rate(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+	// 3 values over 2 minutes wall time, 10-minute window so all fall in.
+	// Sum = 10+20+30 = 60; window = 600s → rate = 0.1/sec.
+	seedWatch(t, db, custID, "rate-test", []string{"10", "20", "30"}, time.Minute)
+	wf := &WeftFuncs{Store: db, CustomerID: custID}
+	got, err := wf.Rate("rate-test", 600*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := 0.1
+	if math.Abs(got-want) > 1e-9 {
+		t.Errorf("Rate: got %f, want %f", got, want)
+	}
+}
