@@ -1005,10 +1005,12 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Actual tier from the DB subscription, not the JWT (which may be
-	// stale). Fall back to the JWT value when no active sub exists,
-	// keeping pre-subscription trial users visible.
-	tier := store.Tier(claims.Tier)
+	// Tier always comes from the live DB subscription. JWTs are minted
+	// at login and stay valid for 30 days, but tier can change in the
+	// meantime (Stripe upgrade, comp grant, trial expiry). Reading the
+	// JWT here would let a paid customer keep their trial caps for a
+	// month, or — worse — keep a tier they're no longer paying for.
+	tier := store.TierTrial
 	if sub, _ := s.store.ActiveSubscription(claims.CustomerName); sub != nil {
 		tier = store.Tier(sub.Tier)
 	}
@@ -1386,8 +1388,13 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enforce tier limits on watches.
-	tier := store.Tier(claims.Tier)
+	// Enforce tier limits on watches. Tier comes from the live DB
+	// subscription — JWTs are 30-day, so reading claims.Tier would
+	// give a stale answer for an hour-old upgrade or comp grant.
+	tier := s.store.TierForCustomer(custID)
+	if tier == "" {
+		tier = store.TierTrial
+	}
 	maxWatches := store.WatchLimit(tier)
 	if maxWatches == 0 {
 		http.Error(w, "watches are not available on the trial plan", http.StatusForbidden)

@@ -151,6 +151,60 @@ func TestAuth_Me(t *testing.T) {
 	}
 }
 
+// TestWatchCreate_TierFromDB_NotJWT pins the regression that comp grants
+// (or any tier change) propagate without a re-login. We mint a JWT
+// while the customer is on trial, then upgrade them to swatch in the
+// DB out-of-band, then use the OLD trial JWT to create a watch.
+// Pre-fix the request would fail with "watches are not available on
+// the trial plan" because handleSaveWatch read tier from claims.
+func TestWatchCreate_TierFromDB_NotJWT(t *testing.T) {
+	srv, s := testServer(t)
+	handler := srv.Handler()
+
+	cust, _ := s.FindOrCreateCustomer("tier-from-db")
+	email := fmt.Sprintf("tdb-%d@example.com", os.Getpid())
+	user, _ := s.CreateUser(email, cust.ID)
+	now := time.Now()
+	verified := now
+	user.EmailVerifiedAt = &verified
+	s.MarkUserVerified(user.ID)
+	user.CustomerName = cust.Name
+
+	// JWT minted while the customer is on trial.
+	trialEnd := now.Add(14 * 24 * time.Hour)
+	s.CreateSubscription(&store.Subscription{
+		ID:         "trial-" + cust.Name,
+		CustomerID: cust.Name,
+		Tier:       string(store.TierTrial),
+		Status:     "active",
+		StartsAt:   now,
+		ExpiresAt:  &trialEnd,
+	})
+	jwt, err := auth.Generate(user, string(store.TierTrial), "test-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Comp-grant out-of-band — JWT now stale.
+	if err := s.GrantCompSubscription(cust.Name, string(store.TierBolt), "test-grant"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Use the stale JWT to create a watch. Should succeed because the
+	// handler reads tier from the live DB (now bolt = 50 watches).
+	body := []byte(`{"schedule":"*/5 * * * *","pipeline":"echo 1"}`)
+	req := httptest.NewRequest("PUT", "/api/watches/test-watch", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != 200 && w.Code != 201 {
+		t.Errorf("watch create with stale-trial JWT but live-bolt DB: got %d %s",
+			w.Code, w.Body.String())
+	}
+}
+
 func TestAuth_Unauthorized(t *testing.T) {
 	srv, _ := testServer(t)
 	handler := srv.Handler()

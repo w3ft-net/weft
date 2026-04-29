@@ -41,8 +41,15 @@ type Claims struct {
 // link before the cleanup sweep deletes the account.
 const UnverifiedGracePeriod = 24 * time.Hour
 
-// Generate creates a signed JWT for the user. Tier is for display only
-// (dashboard "your plan: Swatch") — enforcement queries the DB.
+// Generate creates a signed JWT for the user. Tier travels in the
+// claims for display only — the dashboard's "Plan: Swatch" badge,
+// the CLI prompt — and **must not be read for enforcement** anywhere
+// in the server. JWTs are valid for 30 days; tier changes (Stripe
+// upgrade/downgrade, comp grant/revoke, trial expiry) flow through
+// the subscriptions table immediately, and any code path that gates
+// behavior on tier reads from the DB so those changes propagate
+// without a re-login. See store.TierForCustomer for the canonical
+// lookup.
 func Generate(user *store.User, tier string, secret string) (string, error) {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
 
