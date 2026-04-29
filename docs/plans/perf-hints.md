@@ -75,6 +75,32 @@ returns zero or one suggestion. Rules are unit-testable in isolation.
   `QueryPlan`, return a `Hint{rewrittenPipeline, reason}` or nil.
 - Add a `hints.Suggest` integration test per rule using a baked plan.
 
+## MCP integration
+
+The same rule engine should back an MCP tool — `weft.suggest_query`
+(or similar) — that an LLM can call with a candidate pipeline and
+get back the rewritten form + reason without having to run the slow
+query first. This is the same insight as the response-time-triggered
+hint, but pulled forward to *before* the query runs.
+
+Shape:
+
+  Input:  pipeline string
+  Output: { rewrites: [{ pipeline, reason }, ...] }
+
+Rules library is shared. The MCP path skips the duration / row-count
+triggers (they need a real run to evaluate) and only fires the
+plan-shape rewrites — pipeline reordering, stage merging, better-
+shape, source narrowing, predicate hoisting. The MCP tool is an
+opt-in step the agent calls when it wants to spot-check a draft
+pipeline before staging a cron or running it via weft.run; the
+existing post-execution hint path still handles the "user just ran
+something slow" case for human callers.
+
+Wire it through `cmd/weft/mcp/tools_*.go` once `hints.Suggest`
+lands as a stable API. The system prompt should mention the tool
+exists so the agent knows to reach for it.
+
 ## Out of scope (v1)
 
 - **Auto-rewrite.** We suggest; the user runs the new query if they want.
