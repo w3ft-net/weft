@@ -114,7 +114,20 @@ func cronProposeHandler(cfg Config, a CronProposeArgs) *mcp.CallToolResult {
 	// can't slip through); CompileWatchPipeline enforces alert
 	// shape (at most one alert; valid -k / -t args). Both run so
 	// the model sees every off-policy fact at once.
-	if _, vs := policy.Validate(a.Pipeline, policy.DefaultCronPolicy()); len(vs) > 0 {
+	//
+	// User-defined bin/ scripts are looked up fresh per-call: a
+	// script proposed and applied earlier in the same session is
+	// usable as a cron command immediately, with no MCP restart.
+	pol := policy.DefaultCronPolicy()
+	if cfg.ListScripts != nil {
+		if names, err := cfg.ListScripts(); err == nil && len(names) > 0 {
+			pol.UserDefinedCommands = make(map[string]bool, len(names))
+			for _, n := range names {
+				pol.UserDefinedCommands[n] = true
+			}
+		}
+	}
+	if _, vs := policy.Validate(a.Pipeline, pol); len(vs) > 0 {
 		return errorResult(formatViolations(vs))
 	}
 	if _, err := store.CompileWatchPipeline(a.Pipeline); err != nil {

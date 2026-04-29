@@ -126,6 +126,13 @@ func checkSimple(c *bash.SimpleCommand, p Policy, vs *[]Violation) {
 	name := c.Words[0].Literal()
 	rule, ok := p.AllowedCommands[name]
 	if !ok {
+		// Fall back to user-defined bin/ scripts. Their bodies were
+		// validated against the script policy at propose time, so
+		// they're safe to invoke here without further argument checks
+		// — positional path scoping is the script body's problem.
+		if p.UserDefinedCommands[name] {
+			return
+		}
 		*vs = append(*vs, Violation{Kind: "command_forbidden", Detail: name})
 		return
 	}

@@ -18,6 +18,13 @@ type proposeBackend struct {
 func (b *proposeBackend) wire(cfg *Config) {
 	cfg.GetScript = func(name string) (string, error) { return b.scripts[name], nil }
 	cfg.GetCron = func(name string) (string, error) { return b.crons[name], nil }
+	cfg.ListScripts = func() ([]string, error) {
+		out := make([]string, 0, len(b.scripts))
+		for name := range b.scripts {
+			out = append(out, name)
+		}
+		return out, nil
+	}
 }
 
 // freshSession sets up a session whose Config has propose tools
@@ -226,6 +233,52 @@ func TestCronPropose_AlertingPipeline(t *testing.T) {
 	ps, _ := store.List()
 	if len(ps) != 1 || ps[0].Kind != "cron" {
 		t.Fatalf("expected 1 cron proposal, got %+v", ps)
+	}
+}
+
+// TestCronPropose_UserDefinedScriptAccepted: a bin/ script previously
+// staged through script_propose can be invoked by name in a cron
+// pipeline. Without UserDefinedCommands plumbing this fails with
+// command_forbidden, defeating the point of saving reusable scripts.
+func TestCronPropose_UserDefinedScriptAccepted(t *testing.T) {
+	store, _ := proposals.New(t.TempDir())
+	cfg := Config{Run: neverRunFn(t), Proposals: store}
+	(&proposeBackend{
+		scripts: map[string]string{
+			"runtime-field": "tail -n 1 /log/weft/$1/runtime.log | jq -r \".$2\"",
+		},
+	}).wire(&cfg)
+	s := testSession(t, cfg)
+
+	res := callTool(t, s, "weft.cron_propose", map[string]any{
+		"name":     "coord-goroutines",
+		"schedule": "* * * * *",
+		"pipeline": "runtime-field coordinator goroutines",
+	})
+	if res.IsError {
+		t.Fatalf("user-defined script rejected: %q", textContent(res))
+	}
+}
+
+// TestCronPropose_UnsavedScriptRejected: a script name the customer
+// has never staged is still command_forbidden — the policy doesn't
+// blanket-trust unknown commands just because they look script-like.
+func TestCronPropose_UnsavedScriptRejected(t *testing.T) {
+	store, _ := proposals.New(t.TempDir())
+	cfg := Config{Run: neverRunFn(t), Proposals: store}
+	(&proposeBackend{}).wire(&cfg)
+	s := testSession(t, cfg)
+
+	res := callTool(t, s, "weft.cron_propose", map[string]any{
+		"name":     "uses-undefined",
+		"schedule": "* * * * *",
+		"pipeline": "definitely-not-a-real-script foo",
+	})
+	if !res.IsError {
+		t.Fatal("expected rejection of pipeline referencing undefined script")
+	}
+	if !strings.Contains(textContent(res), "command_forbidden") {
+		t.Errorf("expected command_forbidden detail, got %q", textContent(res))
 	}
 }
 

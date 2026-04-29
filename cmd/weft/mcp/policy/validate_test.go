@@ -206,6 +206,26 @@ func TestValidate_CronPolicy(t *testing.T) {
 			}
 		})
 	}
+
+	// User-defined-commands path: when a bin/ script has been staged,
+	// the cron policy should accept it as a pipeline command. Pre-fix,
+	// every cron that referenced /bin/foo got command_forbidden(foo).
+	t.Run("user-defined script accepted in cron pipeline", func(t *testing.T) {
+		p := DefaultCronPolicy()
+		p.UserDefinedCommands = map[string]bool{"runtime-field": true}
+		_, vs := Validate(`runtime-field coordinator goroutines | alert above 1000 --notify=weft-info`, p)
+		if len(vs) != 0 {
+			t.Errorf("expected no violations, got %+v", vs)
+		}
+	})
+
+	t.Run("user-defined script absent from list still forbidden", func(t *testing.T) {
+		_, vs := Validate(`runtime-field coordinator goroutines`, DefaultCronPolicy())
+		if len(vs) == 0 {
+			t.Error("expected command_forbidden when UserDefinedCommands is empty")
+		}
+	})
+
 }
 
 // TestValidate_ScriptPolicy exercises DefaultScriptPolicy() against

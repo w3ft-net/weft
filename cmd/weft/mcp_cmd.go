@@ -107,6 +107,7 @@ func wireProposalBackend(cfg *mcp.Config, b *shell.HTTPBackend) {
 		}
 		return s, nil
 	}
+	cfg.ListScripts = b.ListFunctions
 	cfg.GetCron = func(name string) (string, error) {
 		w, err := b.GetWatch(name)
 		if err != nil {

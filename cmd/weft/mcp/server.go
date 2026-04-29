@@ -67,6 +67,13 @@ type Config struct {
 	GetScript GetterFunc
 	GetCron   GetterFunc
 
+	// ListScripts returns the names of every saved bin/ script for
+	// the authenticated customer. Used by cron_propose to populate
+	// policy.UserDefinedCommands so a cron pipeline can reference a
+	// user-defined script the same way the live shell does. Nil is
+	// fine — propose just falls back to the static allowlist.
+	ListScripts func() ([]string, error)
+
 	// SaveScript / SaveCron persist a proposal's proposed body to
 	// the backend. DeleteScript / DeleteCron remove a resource.
 	// Both are invoked by proposals_apply once the human has

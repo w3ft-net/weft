@@ -19,8 +19,19 @@ package policy
 type Policy struct {
 	// AllowedCommands maps a command name (the literal first word of a
 	// SimpleCommand) to a CommandRule. A command not present in the map
-	// is rejected.
+	// is rejected — unless it appears in UserDefinedCommands below.
 	AllowedCommands map[string]CommandRule
+
+	// UserDefinedCommands names bin/ scripts that have already been
+	// staged through script_propose (and therefore validated against
+	// DefaultScriptPolicy at write time). When a pipeline references
+	// one, treat it as allowed with no path validation — the script
+	// itself enforces path scoping on its positional inputs.
+	//
+	// Populated per-call by the MCP server from the customer's saved
+	// scripts; the static policies in defaults.go leave it nil so the
+	// AllowedCommands list stays the source of truth for built-ins.
+	UserDefinedCommands map[string]bool
 
 	// AllowFunctions controls whether FuncDef nodes are permitted.
 	AllowFunctions bool
