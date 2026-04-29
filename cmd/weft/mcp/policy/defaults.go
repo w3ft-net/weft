@@ -34,6 +34,26 @@ func DefaultReadPolicy() Policy {
 			"cut":   {FlagsWithValue: map[string]bool{"-d": true, "-f": true, "-c": true}},
 			"tr":    {},
 			"chart": {FlagsWithValue: map[string]bool{"-t": true, "-n": true}},
+
+			// Cron-result aggregators. These read history from a named
+			// watch — args are (watchName, duration) or
+			// (watchName, duration, p) — and never touch the /log/
+			// filesystem, so no path validator is needed. Useful both
+			// inside cron alert pipelines (e.g.
+			// `weft.latest coord-heartbeat-age | alert above 90`) and
+			// as one-shot reads via weft.run.
+			"weft.latest":     {},
+			"weft.avg":        {},
+			"weft.max":        {},
+			"weft.min":        {},
+			"weft.sum":        {},
+			"weft.stddev":     {},
+			"weft.first":      {},
+			"weft.count":      {},
+			"weft.percentile": {},
+			"weft.delta":      {},
+			"weft.slope":      {},
+			"weft.rate":       {},
 		},
 		AllowFunctions:     false,
 		AllowControlFlow:   false,
