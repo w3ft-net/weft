@@ -377,26 +377,52 @@ func parseComputeString(s string) *stageInfo {
 	return &stageInfo{cmd: cmd, args: args}
 }
 
+// shellMetachars must be quoted so the joined compute-stage script
+// re-parses to the same argv when the compute pool feeds it back to
+// the bash interpreter. Whitespace alone wasn't enough — `grep
+// '(empty)'` joined as bare `grep (empty)` parses as a subshell and
+// grep ends up with no positional arg ("missing pattern" in prod).
+const shellMetachars = " \t\n();&|<>*?[]{}~!#$`'\"\\"
+
 func joinArgs(args []string) string {
 	result := ""
 	for i, a := range args {
 		if i > 0 {
 			result += " "
 		}
-		// Quote arguments that contain whitespace or are empty.
-		if strings.ContainsAny(a, " \t") || a == "" {
-			// If it's a flag+value combo like "-d ", split the flag prefix
-			// from the value to produce: -d' '
+		if needsShellQuote(a) {
+			// If it's a short flag bundling its value (`-d `), keep the
+			// flag prefix outside the quotes so the quoted form is
+			// `-d' '` rather than `'-d '` — same shape awk/sed expect.
 			if len(a) > 2 && a[0] == '-' && !strings.HasPrefix(a, "--") {
 				flag := a[:2]
 				val := a[2:]
-				result += flag + "'" + val + "'"
+				result += flag + singleQuote(val)
 			} else {
-				result += "'" + a + "'"
+				result += singleQuote(a)
 			}
 		} else {
 			result += a
 		}
 	}
 	return result
+}
+
+// needsShellQuote reports whether s would be reinterpreted by the
+// bash parser if emitted bare. Empty string requires quoting too —
+// it must round-trip as `''`, not collapse to nothing.
+func needsShellQuote(s string) bool {
+	if s == "" {
+		return true
+	}
+	return strings.ContainsAny(s, shellMetachars)
+}
+
+// singleQuote wraps s in single quotes, escaping any embedded
+// single-quote with the standard `'\''` close-reopen idiom.
+func singleQuote(s string) string {
+	if !strings.Contains(s, "'") {
+		return "'" + s + "'"
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

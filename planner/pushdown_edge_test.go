@@ -559,7 +559,7 @@ func TestEdge_Grep(t *testing.T) {
 				name:        "grep -E extended regex",
 				pipeline:    `cat vimgym.log | grep -E 'error|warn'`,
 				wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
-				wantCompute: []string{`grep -E error|warn`},
+				wantCompute: []string{`grep -E 'error|warn'`},
 			},
 			{
 				name:        "grep -w word match",
