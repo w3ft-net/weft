@@ -101,6 +101,12 @@ func (s *Shell) Run() error {
 	runner.core.SetHistoryStore(NewFileHistoryStore())
 	runner.core.SetRange(s.Start, s.End)
 	runner.core.SetTierLimits(storeTierLimits{})
+	// Same grammar declared at the non-interactive call site
+	// (ExecNonInteractive). When the user types `wit log /bin/scan`
+	// in a chained line, the interactive rewriter must preserve
+	// `log` as wit's subcommand keyword instead of joining it
+	// against `/` to the /log namespace root.
+	runner.core.RegisterRewriteGrammar("wit", "log", "show", "diff", "checkout", "amend")
 
 	// Handle window resize.
 	sigCh := make(chan os.Signal, 1)
