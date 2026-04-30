@@ -35,13 +35,20 @@ var globalDeployment string
 // supplied via config override) and stamped on every LogRow.
 var globalRegion string
 
-// versionReaders maps a per-source version_file path to the live
+// versionReaders maps a per-source `version.file` path to the live
 // reader watching it. Built at startup; consulted from the LogRow
 // stamping path. Per-source so multi-app hosts can have distinct
-// versions. Per-source `version_file:` is independent of the
-// host-wide `dimensions.version:`; the per-source value wins when
-// both are configured.
+// versions. Per-source `version:` is independent of the host-wide
+// `dimensions.version:`; the per-source value wins when both are
+// configured.
 var versionReaders = map[string]*weftd.VersionReader{}
+
+// versionEnvs holds the per-source `version.env` value captured at
+// startup. Read once via os.Getenv; no live refresh, by design — env
+// vars can't change for a running process anyway. An empty entry (key
+// present, value "") means the env was configured but was unset at
+// startup.
+var versionEnvs = map[string]string{}
 
 // dimensionReaders holds the live FileValueReader per allowed
 // column when `dimensions:` is configured. Lookup is by column
@@ -84,12 +91,20 @@ var allowedDimensionColumns = map[string]bool{
 	"node":       true,
 }
 
+// VersionConfig declares how weftd discovers this source's version
+// dimension. Exactly one of `file:` or `env:` should be set; if both
+// are, `file:` wins (it's the live-refresh path).
+type VersionConfig struct {
+	File string `yaml:"file,omitempty"` // path to a file containing the version; fsnotify-watched, refreshed on change
+	Env  string `yaml:"env,omitempty"`  // environment-variable name; read once at startup, no live refresh
+}
+
 type SourceConfig struct {
-	App         string        `yaml:"app,omitempty"`          // bare app name within namespace (e.g. "coordinator")
-	Path        string        `yaml:"path"`                   // file path or glob (file tailing)
-	Unit        string        `yaml:"unit,omitempty"`         // systemd unit name (journal tailing)
-	VersionFile string        `yaml:"version_file,omitempty"` // path to a file containing this source's version; fsnotify-watched
-	Metrics     MetricsConfig `yaml:"metrics,omitempty"`      // optional system metrics collection
+	App     string        `yaml:"app,omitempty"`     // bare app name within namespace (e.g. "coordinator")
+	Path    string        `yaml:"path"`              // file path or glob (file tailing)
+	Unit    string        `yaml:"unit,omitempty"`    // systemd unit name (journal tailing)
+	Version VersionConfig `yaml:"version,omitempty"` // how to discover this source's version dimension
+	Metrics MetricsConfig `yaml:"metrics,omitempty"` // optional system metrics collection
 }
 
 func main() {
@@ -254,10 +269,14 @@ func main() {
 		}
 		fullApp := namespace + "/" + app
 
-		// If this source declares a version_file, spin up a reader so
-		// row-stamping can fetch the current version cheaply.
-		if src.VersionFile != "" {
-			versionReaders[fullApp] = weftd.NewVersionReader(ctx, src.VersionFile)
+		// Per-source version dimension: file path wins (live-refresh
+		// via fsnotify), env-var name is the read-once-at-startup
+		// fallback. Both empty → the row inherits dimensions.version
+		// at row-stamping time, or "" when neither is configured.
+		if src.Version.File != "" {
+			versionReaders[fullApp] = weftd.NewVersionReader(ctx, src.Version.File)
+		} else if src.Version.Env != "" {
+			versionEnvs[fullApp] = os.Getenv(src.Version.Env)
 		}
 
 		if src.Unit != "" {
@@ -856,12 +875,16 @@ type streamState struct {
 	stream pb.WeftCoordinator_IngestStreamClient
 }
 
-// versionForApp returns the live version dimension for `app`. Falls
-// back to dimensions.version when no per-source version_file is
-// configured. Lock-free; safe on the hot row-stamping path.
+// versionForApp returns the live version dimension for `app`.
+// Resolution order: per-source `version.file` (live), per-source
+// `version.env` (snapshot at startup), then host-wide
+// `dimensions.version`. Lock-free; safe on the hot row-stamping path.
 func versionForApp(app string) string {
 	if r, ok := versionReaders[app]; ok {
 		return r.Current()
+	}
+	if v, ok := versionEnvs[app]; ok {
+		return v
 	}
 	return dimensionValue("version")
 }

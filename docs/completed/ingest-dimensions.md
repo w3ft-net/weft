@@ -63,20 +63,22 @@ weft token create --namespace myco --env prod
 
 A token without env stamps NULL. Queries on `$ENV` simply don't filter such rows in or out. Used in path layout (next section).
 
-### version — agent file + fsnotify
+### version — agent file + fsnotify (with env-var fallback)
 
-Per-source agent config:
+Per-source agent config nests both file and env under a single `version:` key:
 
 ```yaml
 sources:
   - app: api
     path: /var/log/api.log
-    version_file: /opt/api/VERSION
+    version:
+      file: /opt/api/VERSION   # live: fsnotify-watched, refreshed on change
+      # env: APP_VERSION       # snapshot: read once at startup, no live refresh
 ```
 
-weftd reads the file at startup, watches for changes via fsnotify, stamps `version` on every row from that source. The deploy system writes the file as part of a release; subsequent rows carry the new version without an agent restart.
+`version.file` is the primary path: weftd reads it at startup, watches for changes via fsnotify, stamps `version` on every row from that source. The deploy system writes the file as part of a release; subsequent rows carry the new version without an agent restart.
 
-`version_env: APP_VERSION` is a fallback for environments that prefer env vars (read once at startup, no live refresh). `version_command:` is deliberately omitted — too easy to misuse.
+`version.env` is a fallback for environments that prefer env vars — read once at startup via `os.Getenv`, no live refresh (a running process can't see env-var changes anyway). When both are set, `version.file` wins. `version.command:` is deliberately omitted — too easy to misuse.
 
 ### region — cloud-metadata probe
 
@@ -149,12 +151,10 @@ The metrics case is special because metrics is the only built-in source where th
 3. **Coordinator stamping** — token lookup at ingest receipt sets `env`. The other dimensions arrive pre-stamped from the agent.
 4. **weftd version reader** — `version_file` + fsnotify in the per-source goroutine; cached, refreshed on file change.
 5. **weftd region probe** — startup-only cloud-metadata client (3 vendors), sets a global; config override if needed.
-6. **weftd k8s population** — handled by `docs/plans/weftd-k8s.md`; this plan defines the column targets.
-7. **Planner table extensions** — append entries to `metaVars` and `jqMetaVars`. Two new alias entries (`service` → `app`, `host` → `instance`).
-8. **shellfs path layout** — `/log/...` resolver handles 2-or-3-level under each namespace based on whether the underlying row has `env` stamped. `ls` lists either subdirectories or `.log` files at each level.
-9. **Token-mint UX** — `weft token create --env prod` (CLI) + Account UI field. Optional; tokens without env keep working.
-10. **OTel-attribute normalization** — at HTTP ingest (`docs/plans/http-ingest.md`), map standard OTel attribute keys onto weft column names: `deployment.environment.name` → `env`, `service.name` → `app`, `service.version` → `version`, `cloud.region` → `region`, `k8s.cluster.name` → `cluster`, `k8s.namespace.name` → `k8s_namespace`, `k8s.pod.name` → `pod`, `k8s.container.name` → `container`, `k8s.deployment.name` → `deployment`, with `aws.autoscaling.group.name`, `k8s.daemonset.name`, and `k8s.statefulset.name` falling through to `deployment` when no Deployment is present. Unmapped OTel attributes land in payload like any other JSON field.
-11. **Docs** — rewrite `docs/manual/weftd.md` to remove `host_group`, add `version_file` and `region:` overrides. New `docs/manual/dimensions.md` with the table, the path layout, and the per-host avg recipe.
+6. **Planner table extensions** — append entries to `metaVars` and `jqMetaVars`. Two new alias entries (`service` → `app`, `host` → `instance`).
+7. **shellfs path layout** — `/log/...` resolver handles 2-or-3-level under each namespace based on whether the underlying row has `env` stamped. `ls` lists either subdirectories or `.log` files at each level.
+8. **Token-mint UX** — `weft token create --env prod` (CLI) + Account UI field. Optional; tokens without env keep working.
+9. **metavars** — rewrite `docs/manual/weftd.md` to remove `host_group`, add `version_file` and `region:` overrides. New `docs/manual/metavars.md` with the meta-var table (awk + jq spellings), the path layout, and the per-host avg recipe.
 
 ## Pushdown semantics
 
@@ -199,11 +199,10 @@ That emits one row per host per minute. The watch's schedule is the bucket size;
 - Planner meta-var table extensions + alias support: **0.5 day**
 - shellfs 2-or-3-level path layout: **1 day**
 - `host_group` → `deployment` rename across the codebase (proto, store, weftd config, shard schema, planner table): **0.75 day**
-- OTel attribute normalization at HTTP ingest: **0.5 day**
-- Docs (weftd + new dimensions page + path layout): **1 day**
+- Metavars docs (weftd + new metavars page + path layout): **1 day**
 - Tests (per dimension, alias resolution, mixed-namespace path resolution): **1 day**
 
-**Total: ~8 days** standalone. The four k8s-derived columns gate on `docs/plans/weftd-k8s.md` actually shipping the k8s mode — this plan defines the column targets but doesn't populate them.
+**Total: ~7.5 days** standalone. The four k8s-derived columns (`cluster`, `k8s_namespace`, `pod`, `container`) are defined here but populated by `docs/plans/weftd-k8s.md`; outside k8s mode they stamp NULL.
 
 ## Non-goals
 
@@ -213,4 +212,3 @@ That emits one row per host per minute. The watch's schedule is the bucket size;
 - **No version inference from log content.** Version comes from the file/env config, never from parsing the log line itself.
 - **No region in the path.** Region is a query-time filter only. No `/log/<ns>/<region>/...` layouts.
 - **No backfill of env onto historical rows.** Old rows stamp NULL in `env` permanently; mixed-namespace path layouts are the deliberate consequence.
-- **No automatic OTel attribute promotion beyond the named reserved mappings.** Arbitrary OTel attributes land in payload like any other JSON field.
