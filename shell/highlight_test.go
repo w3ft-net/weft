@@ -6,16 +6,10 @@ import (
 	"github.com/kevlarcon/warp/pkg/shellcore"
 )
 
-func TestTokenizeDelegation(t *testing.T) {
-	tokens := shellcore.Tokenize("cat api.log | grep ERROR")
-	if len(tokens) == 0 {
-		t.Fatal("expected tokens from shellcore.Tokenize")
-	}
-	if tokens[0].Kind != shellcore.TokCmd || tokens[0].Value != "cat" {
-		t.Errorf("first token: got {%d %q}, want {%d %q}",
-			tokens[0].Kind, tokens[0].Value, shellcore.TokCmd, "cat")
-	}
-}
+// shellcore's Tokenize/Token surface was deleted when the bash
+// highlighter moved to pkg/syntax. Tokenization-level coverage now
+// lives in pkg/syntax/bash_test.go; weft's smoke tests below stick to
+// the public ANSI rendering API that weft itself depends on.
 
 func TestANSIHighlight(t *testing.T) {
 	out := shellcore.HighlightPipeline("cat *.log | grep ERROR | sort -rn")
