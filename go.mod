@@ -29,7 +29,7 @@ require (
 	github.com/pressly/goose/v3 v3.27.0
 	github.com/sergi/go-diff v1.4.0
 	github.com/stripe/stripe-go/v82 v82.5.1
-	github.com/w3ft-net/weft-go v0.0.0-20260429104541-7bef2d24f757
+	github.com/w3ft-net/weft-go v0.0.0-20260430093444-94ff76c4a30e
 	github.com/yuin/goldmark v1.8.2
 	github.com/yuin/gopher-lua v1.1.2
 	golang.org/x/term v0.42.0
