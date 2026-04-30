@@ -4,8 +4,6 @@ go 1.25.0
 
 replace github.com/kevlarcon/warp => ../warp
 
-replace github.com/w3ft-net/weft-go => ../weft-go
-
 require (
 	github.com/aws/aws-lambda-go v1.54.0
 	github.com/aws/aws-sdk-go-v2 v1.41.6

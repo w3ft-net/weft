@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
 
 	weftsdk "github.com/w3ft-net/weft-go"
+	weftruntime "github.com/w3ft-net/weft-go/runtime"
 
 	"github.com/kevlarcon/weft/compute"
 	computesvc "github.com/kevlarcon/weft/compute/service"
@@ -38,8 +40,8 @@ func main() {
 	defer sdkCancel()
 	wc, _ := weftsdk.New()
 	defer wc.Close()
-	go wc.Heartbeat(sdkCtx, "compute", weftsdk.DefaultHeartbeatInterval)
-	go wc.RuntimeStats(sdkCtx, "compute", weftsdk.DefaultRuntimeStatsInterval)
+	go wc.HeartbeatLoop(sdkCtx, "compute", 30*time.Second)
+	weftruntime.Start(sdkCtx, wc, "compute", weftruntime.DefaultInterval)
 
 	// Handle SIGTERM / SIGINT so the process exits cleanly from
 	// main() — under `go build -cover` that's the only path that

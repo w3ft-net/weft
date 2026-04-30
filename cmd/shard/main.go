@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	weftsdk "github.com/w3ft-net/weft-go"
+	weftruntime "github.com/w3ft-net/weft-go/runtime"
 
 	"github.com/kevlarcon/weft/auth"
 	weftcfg "github.com/kevlarcon/weft/config"
@@ -113,8 +114,8 @@ func main() {
 
 	wc, _ := weftsdk.New()
 	defer wc.Close()
-	go wc.Heartbeat(cfgCtx, "shard", weftsdk.DefaultHeartbeatInterval)
-	go wc.RuntimeStats(cfgCtx, "shard", weftsdk.DefaultRuntimeStatsInterval)
+	go wc.HeartbeatLoop(cfgCtx, "shard", 30*time.Second)
+	weftruntime.Start(cfgCtx, wc, "shard", weftruntime.DefaultInterval)
 
 	// HTTP health endpoint.
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
