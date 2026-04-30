@@ -188,10 +188,21 @@ func (r *ShardRegistry) PersistState(entry *ShardEntry) {
 	r.persist(entry)
 }
 
-// LoadFromStore loads archived (and optionally other) shard records from
-// the store and calls the provided function to reconstruct each shard.
-// The reconstruct function should create the appropriate Shard implementation
-// (ColdShard for ARCHIVED, GRPCShard for live) and return it.
+// LoadFromStore loads every shard record from the store into the
+// registry. The reconstruct function attaches a live shard.Shard
+// (typically a ColdShard for ARCHIVED rows) when it can; if it
+// returns an error the entry still loads, just without a Shard
+// pointer — the missing Shard gets attached lazily by the
+// heartbeat-adopt path or an explicit dial when the row's
+// instance reappears.
+//
+// Pre-fix this dropped any record whose reconstruct failed —
+// every non-ARCHIVED row, because cmd/coordinator/main.go's
+// reconstruct only handled cold shards. That left every live row
+// invisible to the registry after a coordinator restart, breaking
+// every code path that walked Entries (the reconciler's Op 3
+// rotate-at-WindowEnd in particular). See
+// coordinator/zombie_repro_test.go for the cascade.
 func (r *ShardRegistry) LoadFromStore(reconstruct func(rec store.ShardRecord) (shard.Shard, error)) error {
 	if r.store == nil {
 		return nil
@@ -201,10 +212,10 @@ func (r *ShardRegistry) LoadFromStore(reconstruct func(rec store.ShardRecord) (s
 		return err
 	}
 	for _, rec := range records {
-		sh, err := reconstruct(rec)
-		if err != nil {
-			continue // skip unrecoverable entries
-		}
+		// reconstruct's error is informational — a non-ARCHIVED row
+		// (or one we can't open data for yet) still belongs in the
+		// registry. Drop the Shard pointer; everything else loads.
+		sh, _ := reconstruct(rec)
 		var apps []string
 		json.Unmarshal([]byte(rec.Apps), &apps)
 		windowStart, _ := time.Parse(time.RFC3339, rec.WindowStart)

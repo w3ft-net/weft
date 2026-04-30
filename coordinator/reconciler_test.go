@@ -243,10 +243,17 @@ func TestReconcile_UnderCapacity_LaunchingCountsTowardTarget(t *testing.T) {
 
 // At or above target, no launch ops. (The "above" case comes up
 // naturally if two concurrent ticks both emit launches and both
-// apply.)
+// apply.) Op 2 derives IngestingCount from snap.Entries — the
+// snapshot must carry a registry entry per INGESTING shard, which
+// matches what snapshotForBucket produces in production.
 func TestReconcile_UnderCapacity_AboveTargetNoOp(t *testing.T) {
 	bucket := &AppBucket{ID: 1, Target: 2, Tier: "small"}
-	snap := ReconcilerSnapshot{Bucket: bucket, LaunchingCount: 0, IngestingCount: 3, Now: time.Now()}
+	entries := []*ShardEntry{
+		{ID: "shard-a", BucketID: 1, State: StateIngesting},
+		{ID: "shard-b", BucketID: 1, State: StateIngesting},
+		{ID: "shard-c", BucketID: 1, State: StateIngesting},
+	}
+	snap := ReconcilerSnapshot{Bucket: bucket, Entries: entries, LaunchingCount: 0, Now: time.Now()}
 
 	for _, op := range reconcile(snap) {
 		if _, ok := op.(LaunchShardOp); ok {

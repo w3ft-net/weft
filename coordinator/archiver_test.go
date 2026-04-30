@@ -215,19 +215,21 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The archived shard should be restored. LoadFromStore skips rows
-	// where the reconstruct func returns err, so Count() includes only
-	// our test shard — not whatever other shard_records LocalStack /
-	// the running coordinator has in the DB.
-	if reg2.Count() != 1 {
-		t.Fatalf("expected 1 restored shard, got %d", reg2.Count())
-	}
+	// LoadFromStore now loads every record (live or archived); the
+	// reconstruct func only decides which entries get a hot Shard
+	// pointer. We can't assert reg2.Count() == 1 anymore — the
+	// shared dev DB legitimately has other live rows from concurrent
+	// integration tests / a running coordinator. Just check our row
+	// landed and was reconstructed correctly.
 	entry := reg2.Get(shardID)
 	if entry == nil {
 		t.Fatalf("%s not found after restore", shardID)
 	}
 	if entry.State != StateArchived {
 		t.Fatalf("expected ARCHIVED, got %s", entry.State)
+	}
+	if entry.Shard == nil {
+		t.Fatalf("%s loaded without a Shard pointer; reconstruct should attach for ARCHIVED rows", shardID)
 	}
 
 	// Query should work on the restored ColdShard.

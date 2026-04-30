@@ -45,6 +45,12 @@ import (
 // back to LAUNCHING (so the reconciler/lifecycle hook can re-claim
 // it). What happens today: nothing.
 func TestZombie_WipeAndAwaitRebind_PersistsForever(t *testing.T) {
+	// Override the production 15-min rebind timeout so the test's
+	// tight loop crosses it. Restored on test exit.
+	prev := rebindTimeout
+	rebindTimeout = time.Nanosecond
+	t.Cleanup(func() { rebindTimeout = prev })
+
 	reg := NewShardRegistry()
 	fake := newFakeRegistryStore()
 	reg.SetStore(fake)

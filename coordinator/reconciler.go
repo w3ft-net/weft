@@ -98,7 +98,22 @@ func reconcile(snap ReconcilerSnapshot) []ReconcileOp {
 	// apply is idempotent at the list level because the next
 	// tick's snapshot sees the new LAUNCHING/INGESTING row and the
 	// gap shrinks.
-	effective := snap.LaunchingCount + snap.IngestingCount
+	//
+	// IngestingCount is derived from snap.Entries here rather than
+	// trusting any pre-computed snap.IngestingCount field — Op 3
+	// (rotate at WindowEnd) walks Entries, so deriving Op 2's count
+	// from the same source keeps the two ops symmetric. A row in
+	// the DB but absent from the registry no longer counts toward
+	// target-met; the reconciler launches a replacement, and the
+	// stuck row gets cleaned up when its instance is rebound or the
+	// reaper archives it.
+	ingesting := 0
+	for _, e := range snap.Entries {
+		if e.State == StateIngesting {
+			ingesting++
+		}
+	}
+	effective := snap.LaunchingCount + ingesting
 	for i := effective; i < snap.Bucket.Target; i++ {
 		ops = append(ops, LaunchShardOp{Bucket: snap.Bucket})
 	}
@@ -350,30 +365,41 @@ func (p *Provisioner) snapshotForBucket(bucket *AppBucket) ReconcilerSnapshot {
 		}
 	}
 
-	if snap.IsAsyncLauncher {
-		if p.config.ShardOps != nil {
-			if n, err := p.config.ShardOps.CountShardsInBucket(bucket.ID, []string{string(StateLaunching)}); err != nil {
-				log.Printf("reconciler: bucket %d LAUNCHING count: %v", bucket.ID, err)
-			} else {
-				snap.LaunchingCount = n
-			}
-			if n, err := p.config.ShardOps.CountShardsInBucket(bucket.ID, []string{string(StateIngesting)}); err != nil {
-				log.Printf("reconciler: bucket %d INGESTING count: %v", bucket.ID, err)
-			} else {
-				snap.IngestingCount = n
-			}
-			currentStart, _ := bucket.CurrentWindow(snap.Now)
-			if n, err := p.config.ShardOps.CountShardsInBucketForFutureWindows(bucket.ID, currentStart); err != nil {
-				log.Printf("reconciler: bucket %d future-LAUNCHING count: %v", bucket.ID, err)
-			} else {
-				snap.FutureLaunchingCount = n
-			}
+	// IngestingCount and LAUNCHING-related counts are answered from
+	// different sources by design:
+	//
+	//   - INGESTING: walked from snap.Entries (registry). Op 3
+	//     (rotate-at-WindowEnd) also walks Entries, so the two ops
+	//     stay symmetric — counting INGESTING from the DB while
+	//     rotating from the registry was the asymmetry that produced
+	//     the prod orphan-christen loop on 2026-04-29 (a stale row
+	//     in the DB but absent from the registry counted toward the
+	//     target while never getting rotated). The registry is now
+	//     fully populated from the DB at boot via LoadFromStore, so
+	//     the registry walk is authoritative.
+	//
+	//   - LAUNCHING (current and future-window): counted from the DB
+	//     because LAUNCHING rows live in shard_records with no
+	//     registry presence — they're the lifecycle hook's intent
+	//     rows, claimed by instance_id at hook time, only transitioning
+	//     to INGESTING (and entering the registry) once the shard
+	//     christens.
+	for _, e := range snap.Entries {
+		if e.State == StateIngesting {
+			snap.IngestingCount++
 		}
-	} else {
-		for _, e := range snap.Entries {
-			if e.State == StateIngesting {
-				snap.IngestingCount++
-			}
+	}
+	if snap.IsAsyncLauncher && p.config.ShardOps != nil {
+		if n, err := p.config.ShardOps.CountShardsInBucket(bucket.ID, []string{string(StateLaunching)}); err != nil {
+			log.Printf("reconciler: bucket %d LAUNCHING count: %v", bucket.ID, err)
+		} else {
+			snap.LaunchingCount = n
+		}
+		currentStart, _ := bucket.CurrentWindow(snap.Now)
+		if n, err := p.config.ShardOps.CountShardsInBucketForFutureWindows(bucket.ID, currentStart); err != nil {
+			log.Printf("reconciler: bucket %d future-LAUNCHING count: %v", bucket.ID, err)
+		} else {
+			snap.FutureLaunchingCount = n
 		}
 	}
 

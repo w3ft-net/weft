@@ -61,6 +61,18 @@ type ShardOpsStore interface {
 // window plus a coordinator tick.
 const staleLaunchingAge = 10 * time.Minute
 
+// rebindTimeout is how long after wipe-and-await we give up on rebind
+// and archive the orphaned row. The wipe-and-await path
+// (reapDeadShards' EBS branch) blanks instance_id/addr in the
+// registry and DB so a replacement instance can re-stamp them via
+// the heartbeat-adopt path; if no replacement ever heartbeats with
+// this shard's id (volume gone, lifecycle hook claimed a different
+// LAUNCHING row, etc.), the row sits in INGESTING-with-no-instance
+// indefinitely without this timeout. 15 min covers the typical AWS
+// instance-replacement cycle plus a coordinator tick or two; package-
+// level so tests can override.
+var rebindTimeout = 15 * time.Minute
+
 // ProvisionerConfig controls shard rotation thresholds.
 type ProvisionerConfig struct {
 	PollInterval      time.Duration   // how often to check (default 5min)
@@ -733,11 +745,37 @@ func (p *Provisioner) reapDeadShards() {
 							entry.ID, entry.InstanceID, entry.EBSVolumeID)
 						entry.InstanceID = ""
 						entry.Addr = ""
+						// Stamp the wipe time so the rebind-timeout
+						// branch below can decide when to give up.
+						// Re-using LastHeartbeatAt: there are no real
+						// heartbeats coming for this entry until rebind,
+						// and "when did we last interact with the live
+						// shard" is the right intuition for a timeout.
+						entry.LastHeartbeatAt = time.Now()
 						p.registry.PersistState(entry)
 					}
 				} else {
 					log.Printf("provisioner: shard %s stale heartbeat — launcher has no RecoveryTerminator; falling back to ASG health-check",
 						entry.ID)
+				}
+			} else {
+				// Post-wipe: the registry entry is waiting for a
+				// rebind that may never come. Give up after
+				// rebindTimeout and archive — the volume's data is
+				// presumed lost (or claimed by a different shard's
+				// recovery branch), and freeing this entry's slot
+				// lets the reconciler mint a fresh LAUNCHING row.
+				// Zero LastHeartbeatAt = the entry was loaded from
+				// the DB at boot with no in-memory wall-clock anchor;
+				// such rows are always "old enough" to archive (the
+				// wipe was at least one coordinator restart ago).
+				stale := entry.LastHeartbeatAt.IsZero() ||
+					time.Since(entry.LastHeartbeatAt) > rebindTimeout
+				if stale {
+					log.Printf("provisioner: archiving zombie %s — rebind never landed (vol=%s presumed lost or reclaimed)",
+						entry.ID, entry.EBSVolumeID)
+					entry.State = StateArchived
+					p.registry.PersistState(entry)
 				}
 			}
 			continue
