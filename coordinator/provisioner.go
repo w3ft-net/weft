@@ -498,16 +498,24 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 		// gRPC stream cancelled mid-flight. Phase 2's retry softens the
 		// user-visible impact, but giving the old conn a window to drain
 		// is the right primary fix.
-		grace := p.config.CloseRebindGrace
-		if grace == 0 {
-			grace = defaultCloseRebindGrace
-		}
-		go func(shardID string, s shard.Shard) {
-			time.Sleep(grace)
-			if err := s.Close(); err != nil {
-				log.Printf("provisioner: deferred close of %s failed: %v", shardID, err)
+		//
+		// Nil-guard: LoadFromStore leaves Shard=nil for live (non-
+		// archived) entries — the heartbeat-adopt path attaches a
+		// GRPCShard later. If the very first heartbeat after restart
+		// arrives at a new addr (e.g. instance refresh in flight), the
+		// rebind path runs against a nil oldShard. No conn to close.
+		if oldShard != nil {
+			grace := p.config.CloseRebindGrace
+			if grace == 0 {
+				grace = defaultCloseRebindGrace
 			}
-		}(hb.ShardID, oldShard)
+			go func(shardID string, s shard.Shard) {
+				time.Sleep(grace)
+				if err := s.Close(); err != nil {
+					log.Printf("provisioner: deferred close of %s failed: %v", shardID, err)
+				}
+			}(hb.ShardID, oldShard)
+		}
 		return
 	}
 
