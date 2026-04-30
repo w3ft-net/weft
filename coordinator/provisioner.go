@@ -358,16 +358,29 @@ func (p *Provisioner) syncASGDesiredCapacity(ctx context.Context) {
 
 		max, err := scaler.TierMaxSize(ctx, tier)
 		if err != nil {
-			log.Printf("provisioner: sync desired: TierMaxSize(%s): %v — skipping clamp",
+			log.Printf("provisioner: sync-desired tier=%s err=%v reason=tier-max-lookup-failed; skipping clamp",
 				tier, err)
 		} else if max > 0 && desired > max {
-			log.Printf("provisioner: sync desired: tier %s computed=%d > max=%d — clamping",
+			log.Printf("provisioner: sync-desired tier=%s computed=%d max=%d clamped=true",
 				tier, desired, max)
 			desired = max
 		}
 
+		// One canonical line per tier per tick — every input to the
+		// formula, the final desired, and the clamp ceiling. Lets the
+		// on-call diff coordinator-computed desired against ASG
+		// actual to localise refresh-time divergence.
+		log.Printf("provisioner: sync-desired tier=%s target=%d read_only=%d future_launching=%d desired=%d max=%d",
+			tier,
+			targetByTier[tier],
+			readOnlyByTier[tier],
+			futureLaunchingByTier[tier],
+			desired,
+			max,
+		)
+
 		if err := scaler.SetDesiredCapacity(ctx, tier, desired); err != nil {
-			log.Printf("provisioner: sync desired: SetDesiredCapacity(%s, %d): %v",
+			log.Printf("provisioner: sync-desired tier=%s desired=%d err=%v",
 				tier, desired, err)
 		}
 	}

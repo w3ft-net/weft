@@ -266,15 +266,12 @@ emits Go heap, GC pause, goroutine, and FD-count telemetry.
 Three-line setup in `main()`:
 
 ```
-import (
-    "github.com/w3ft-net/weft-go"
-    weftruntime "github.com/w3ft-net/weft-go/runtime"
-)
+import "github.com/w3ft-net/weft-go"
 
 c, _ := weft.New()
 defer c.Close()
-go c.HeartbeatLoop(ctx, "my-service", 30*time.Second)
-weftruntime.Start(ctx, c, "my-service", weftruntime.DefaultInterval)
+go c.Heartbeat(ctx, "my-service", weft.DefaultHeartbeatInterval)
+go c.RuntimeStats(ctx, "my-service", weft.DefaultRuntimeStatsInterval)
 ```
 
 The SDK prefers the local Unix socket and falls back to an HTTP

@@ -247,7 +247,7 @@ day. Drift between them is a bug.
 ## Components to build
 
 1. **`clients/go/weft/`** — new top-level module
-   `github.com/kevlarcon/weft-go`. Single-package public API as
+   `github.com/w3ft-net/weft-go`. Single-package public API as
    sketched above. Internal types stay unexported.
    - `transport_socket.go` — Unix-socket NDJSON writer with
      reconnect-on-error and a small in-memory ring (the SDK's local
@@ -255,14 +255,16 @@ day. Drift between them is a bug.
    - `transport_http.go` — bearer-auth `http.Client` with gzip,
      batching, retry-with-backoff. Fewer features than weftd because
      spool is out of scope (see Non-goals).
-   - `heartbeat.go` — `Heartbeat` and `HeartbeatLoop`. Talks to the
-     dedicated heartbeat endpoint defined in `app-heartbeats.md`
-     (Unix socket or localhost TCP); not the same channel as record
-     emission. Loop helper spawns a goroutine bound to ctx.
+   - `heartbeat.go` — `Heartbeat(ctx, service, interval)` runs the
+     ticker loop until ctx is cancelled. Talks to the dedicated
+     heartbeat endpoint defined in `app-heartbeats.md`; not the
+     same channel as record emission.
    - `client.go` — public API; transport selection at construction.
-2. **`clients/go/weft/runtime/`** — sub-package with the periodic
-   collector. Imports the parent only, not vice versa.
-3. **`clients/go/weft/runtime/fds_linux.go`** — `/proc/self/fd` count.
+2. **Runtime stats — same package, not a sub-package.**
+   `c.RuntimeStats(ctx, service, interval)` is a method on
+   `*Client` that periodically emits Go-runtime telemetry. No
+   separate import.
+3. **`clients/go/weft/fds_linux.go`** — `/proc/self/fd` count.
    Linux-only build tag; non-Linux is a stub returning 0.
 4. **`clients/go/weft/CHANGELOG.md`** — versioned independently
    from the main module so the SDK can iterate without forcing
@@ -273,8 +275,8 @@ day. Drift between them is a bug.
    ```go
    wc, _ := weft.New()
    defer wc.Close()
-   go wc.HeartbeatLoop(ctx, "coordinator", 30*time.Second)
-   weftruntime.Start(ctx, wc, "coordinator", 30*time.Second)
+   go wc.Heartbeat(ctx, "coordinator", weft.DefaultHeartbeatInterval)
+   go wc.RuntimeStats(ctx, "coordinator", weft.DefaultRuntimeStatsInterval)
    ```
 6. **Internal weftd self-monitoring** — `cmd/weftd/runtime.go`,
    pulls from the same `runtime.MemStats` source but emits via the

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -114,38 +115,83 @@ func NewLifecycleHandler(cfg LifecycleHandlerConfig) *LifecycleHandler {
 // the instance's AZ, decides christen/recover/abandon, creates or
 // attaches the volume, signals the ASG. Returns the decision so the
 // SQS poller can log + metric on the outcome.
+//
+// Logging contract: every event produces (1) an `event` line at entry
+// with asg/instance/transition; (2) a `scan` line summarising the
+// recovery candidate evaluation (or `decision … reason=…` if we
+// short-circuit before scanning); (3) per-candidate `candidate` lines
+// when there are any; (4) a final `decision` line with the outcome,
+// volume, shard, and reason in key=value form. The orphan-christen
+// scenario is grep'able via `decision=ABANDON reason=no-launching-row`.
 func (h *LifecycleHandler) HandleLaunchEvent(ctx context.Context, ev LifecycleEvent) (LifecycleDecision, error) {
+	log.Printf("lifecycle: event asg=%s instance=%s transition=%s",
+		ev.ASGName, ev.InstanceID, ev.LifecycleTransition)
+
 	if ev.LifecycleTransition != "" && ev.LifecycleTransition != "autoscaling:EC2_INSTANCE_LAUNCHING" {
 		// Terminating hooks aren't wired yet; ignore.
+		log.Printf("lifecycle: decision instance=%s decision=ABANDON reason=ignored-transition transition=%s",
+			ev.InstanceID, ev.LifecycleTransition)
 		return DecisionAbandon, fmt.Errorf("ignored transition %q", ev.LifecycleTransition)
 	}
 	tier, ok := h.tierByASG[ev.ASGName]
 	if !ok {
+		log.Printf("lifecycle: decision instance=%s asg=%s decision=ABANDON reason=unknown-asg",
+			ev.InstanceID, ev.ASGName)
 		return DecisionAbandon, fmt.Errorf("unknown ASG %q (not a shard tier)", ev.ASGName)
 	}
 
 	az, err := h.lookupInstanceAZ(ctx, ev.InstanceID)
 	if err != nil {
+		log.Printf("lifecycle: decision instance=%s tier=%s decision=ABANDON reason=az-lookup-failed err=%v",
+			ev.InstanceID, tier, err)
 		return DecisionAbandon, fmt.Errorf("lookup AZ for %s: %w", ev.InstanceID, err)
 	}
 
-	decision, volumeID, err := h.decide(ctx, ev.InstanceID, tier, az)
+	decision, volumeID, shardID, err := h.decide(ctx, ev.InstanceID, tier, az)
 	if err != nil {
-		log.Printf("lifecycle: decide %s/%s: %v", tier, ev.InstanceID, err)
+		log.Printf("lifecycle: decision instance=%s tier=%s az=%s decision=%s reason=%s err=%v",
+			ev.InstanceID, tier, az, decision, abandonReason(err), err)
 		h.signal(ctx, ev, "ABANDON")
 		return DecisionAbandon, err
 	}
 
 	if err := h.volumes.AttachToInstance(ctx, volumeID, ev.InstanceID, h.deviceName); err != nil {
-		log.Printf("lifecycle: attach %s → %s: %v", volumeID, ev.InstanceID, err)
+		log.Printf("lifecycle: decision instance=%s tier=%s az=%s decision=ABANDON reason=attach-failed volume=%s err=%v",
+			ev.InstanceID, tier, az, volumeID, err)
 		h.signal(ctx, ev, "ABANDON")
 		return DecisionAbandon, err
 	}
 
-	log.Printf("lifecycle: %s instance %s with volume %s (tier=%s az=%s)",
-		decision, ev.InstanceID, volumeID, tier, az)
+	log.Printf("lifecycle: decision asg=%s instance=%s tier=%s az=%s decision=%s volume=%s shard=%s",
+		ev.ASGName, ev.InstanceID, tier, az, decision, volumeID, shardID)
 	h.signal(ctx, ev, "CONTINUE")
 	return decision, nil
+}
+
+// abandonReason maps decide()'s error messages back to a stable
+// short reason tag for log filtering. Adds no semantic info — exists
+// purely so on-call greps land on a consistent key.
+func abandonReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "no LAUNCHING row"):
+		return "no-launching-row"
+	case strings.Contains(msg, "ambiguous recovery"):
+		return "ambiguous-recovery"
+	case strings.Contains(msg, "no data_volume_size_gb"):
+		return "no-tier-size"
+	case strings.Contains(msg, "no ShardOps store"):
+		return "no-shardops-store"
+	case strings.Contains(msg, "create volume"):
+		return "create-volume-failed"
+	case strings.Contains(msg, "claim LAUNCHING row"):
+		return "claim-failed"
+	default:
+		return "unknown"
+	}
 }
 
 // decide runs the christen-vs-recover-vs-abandon tree. Returns the
@@ -168,11 +214,18 @@ func (h *LifecycleHandler) HandleLaunchEvent(ctx context.Context, ev LifecycleEv
 // Inverting this (preferring the LAUNCHING row) would let the
 // orphan volume sit unattached and eventually get reaped or
 // deleted, destroying the shard's data. See cleanup.md §7.
-func (h *LifecycleHandler) decide(ctx context.Context, instanceID, tier, az string) (LifecycleDecision, string, error) {
+// decide returns (decision, volumeID, shardID, err). shardID is the
+// recovered shard's id on RECOVER, the freshly-claimed row's id on
+// CHRISTEN, or empty on ABANDON.
+func (h *LifecycleHandler) decide(ctx context.Context, instanceID, tier, az string) (LifecycleDecision, string, string, error) {
 	candidates, err := h.volumes.ListAvailableByTier(ctx, tier, az)
 	if err != nil {
-		return DecisionAbandon, "", err
+		log.Printf("lifecycle: scan tier=%s az=%s instance=%s status=err err=%v",
+			tier, az, instanceID, err)
+		return DecisionAbandon, "", "", err
 	}
+	log.Printf("lifecycle: scan tier=%s az=%s instance=%s candidates=%d",
+		tier, az, instanceID, len(candidates))
 
 	// Filter to volumes whose shard id we actually recognize as
 	// "live" in the registry/store. Untagged volumes (shard_id
@@ -182,21 +235,29 @@ func (h *LifecycleHandler) decide(ctx context.Context, instanceID, tier, az stri
 	var recoverable []VolumeInfo
 	for _, v := range candidates {
 		if v.ShardID == "" {
+			log.Printf("lifecycle: candidate volume=%s shard= status=skip reason=untagged",
+				v.VolumeID)
 			continue
 		}
 		if !h.recognisedAsDead(v.ShardID) {
+			log.Printf("lifecycle: candidate volume=%s shard=%s status=filter reason=not-recognised-as-dead",
+				v.VolumeID, v.ShardID)
 			continue
 		}
+		log.Printf("lifecycle: candidate volume=%s shard=%s status=accept",
+			v.VolumeID, v.ShardID)
 		recoverable = append(recoverable, v)
 	}
+	log.Printf("lifecycle: scan tier=%s instance=%s recoverable=%d",
+		tier, instanceID, len(recoverable))
 
 	switch len(recoverable) {
 	case 1:
-		return DecisionRecover, recoverable[0].VolumeID, nil
+		return DecisionRecover, recoverable[0].VolumeID, recoverable[0].ShardID, nil
 	case 0:
 		size, ok := h.sizeByTier[tier]
 		if !ok || size <= 0 {
-			return DecisionAbandon, "", fmt.Errorf("no data_volume_size_gb configured for tier %q", tier)
+			return DecisionAbandon, "", "", fmt.Errorf("no data_volume_size_gb configured for tier %q", tier)
 		}
 		// CHRISTEN requires a reconciler-minted LAUNCHING row
 		// naming this tier. The row becomes the volume's shard_id
@@ -205,17 +266,17 @@ func (h *LifecycleHandler) decide(ctx context.Context, instanceID, tier, az stri
 		// scaled out-of-band, or reconciler/ASG state diverged):
 		// ABANDON so the ASG terminates it.
 		if h.shardOps == nil {
-			return DecisionAbandon, "", fmt.Errorf("christen for %s: no ShardOps store — can't claim LAUNCHING row", instanceID)
+			return DecisionAbandon, "", "", fmt.Errorf("christen for %s: no ShardOps store — can't claim LAUNCHING row", instanceID)
 		}
 		claimed, claimOK, err := h.shardOps.ClaimLaunchingForTier(tier, instanceID)
 		if err != nil {
-			return DecisionAbandon, "", fmt.Errorf("claim LAUNCHING row for %s/%s: %w", tier, instanceID, err)
+			return DecisionAbandon, "", "", fmt.Errorf("claim LAUNCHING row for %s/%s: %w", tier, instanceID, err)
 		}
 		if !claimOK {
-			return DecisionAbandon, "", fmt.Errorf("no LAUNCHING row for tier %s; instance %s is an orphan", tier, instanceID)
+			return DecisionAbandon, "", "", fmt.Errorf("no LAUNCHING row for tier %s; instance %s is an orphan", tier, instanceID)
 		}
-		log.Printf("lifecycle: claimed LAUNCHING row %s for instance %s (tier=%s)",
-			claimed.ID, instanceID, tier)
+		log.Printf("lifecycle: claim tier=%s instance=%s row=%s status=ok",
+			tier, instanceID, claimed.ID)
 		id, err := h.volumes.CreateForShard(ctx, CreateVolumeOpts{
 			ShardID: claimed.ID,
 			Tier:    tier,
@@ -223,15 +284,15 @@ func (h *LifecycleHandler) decide(ctx context.Context, instanceID, tier, az stri
 			SizeGB:  size,
 		})
 		if err != nil {
-			return DecisionAbandon, "", fmt.Errorf("create volume for new shard: %w", err)
+			return DecisionAbandon, "", "", fmt.Errorf("create volume for new shard: %w", err)
 		}
-		return DecisionChristen, id, nil
+		return DecisionChristen, id, claimed.ID, nil
 	default:
 		ids := make([]string, 0, len(recoverable))
 		for _, v := range recoverable {
 			ids = append(ids, v.VolumeID+"/"+v.ShardID)
 		}
-		return DecisionAbandon, "", fmt.Errorf("ambiguous recovery: %d candidate volumes in %s for %s (%v)",
+		return DecisionAbandon, "", "", fmt.Errorf("ambiguous recovery: %d candidate volumes in %s for %s (%v)",
 			len(recoverable), az, tier, ids)
 	}
 }
@@ -241,36 +302,47 @@ func (h *LifecycleHandler) decide(ctx context.Context, instanceID, tier, az stri
 // last instance's heartbeat is stale enough that we're comfortable
 // yanking the volume out from under it.
 //
-// For MVP: if the shard is in the registry and has no recent
-// heartbeat, we consider it dead. A more sophisticated check (cross-
-// referencing the instance id, confirming the instance is actually
-// terminated) is possible but harder to unit-test.
+// Logs the per-shard determination at every call so refresh-induced
+// ABANDON traces in prod can be reconstructed: each filtered volume
+// is matched up with the reason its shard didn't qualify (registry
+// miss, archived state, live heartbeat within deadFor).
 func (h *LifecycleHandler) recognisedAsDead(shardID string) bool {
 	if h.registry == nil {
+		log.Printf("lifecycle: recognised-as-dead shard=%s result=false reason=no-registry",
+			shardID)
 		return false
 	}
 	entry := h.registry.Get(shardID)
 	if entry == nil {
+		log.Printf("lifecycle: recognised-as-dead shard=%s result=false reason=not-in-registry",
+			shardID)
 		return false
 	}
 	if entry.State == StateArchived || entry.State == StateExpiring {
+		log.Printf("lifecycle: recognised-as-dead shard=%s result=false reason=state state=%s",
+			shardID, entry.State)
 		return false
 	}
-	// If the registry thinks the shard is still live at an addr, and
-	// we have a recent heartbeat, the prior instance isn't dead yet —
-	// leave it alone.
 	if h.store == nil {
+		log.Printf("lifecycle: recognised-as-dead shard=%s result=true reason=no-store",
+			shardID)
 		return true
 	}
 	heartbeats, err := h.store.LiveShardHeartbeats(fmt.Sprintf("%d seconds", int(h.deadFor.Seconds())))
 	if err != nil {
+		log.Printf("lifecycle: recognised-as-dead shard=%s result=true reason=store-err err=%v",
+			shardID, err)
 		return true // we'd rather recover than leave a shard stranded on a store hiccup
 	}
 	for _, hb := range heartbeats {
 		if hb.ShardID == shardID {
+			log.Printf("lifecycle: recognised-as-dead shard=%s result=false reason=heartbeat-live deadFor=%s",
+				shardID, h.deadFor)
 			return false
 		}
 	}
+	log.Printf("lifecycle: recognised-as-dead shard=%s result=true reason=no-recent-heartbeat deadFor=%s",
+		shardID, h.deadFor)
 	return true
 }
 

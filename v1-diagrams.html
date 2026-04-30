@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Shard lifecycle — comprehensive flowcharts</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --muted: #555;
+    --accent: #0a4d8a;
+    --bg: #fafaf7;
+    --card: #ffffff;
+    --rule: #e2e2dc;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    max-width: 1100px;
+    margin: 2em auto;
+    padding: 0 1.5em;
+    line-height: 1.55;
+  }
+  h1 { font-size: 1.6em; margin-bottom: 0.2em; }
+  h2 {
+    font-size: 1.25em;
+    margin-top: 2.2em;
+    padding-bottom: 0.3em;
+    border-bottom: 1px solid var(--rule);
+  }
+  h1 + p { color: var(--muted); margin-top: 0.4em; }
+  p, li { font-size: 0.97em; }
+  code {
+    background: #f0eee8;
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.9em;
+  }
+  .note {
+    background: #fffae6;
+    border-left: 3px solid #c8a838;
+    padding: 0.6em 1em;
+    margin: 1em 0;
+    font-size: 0.93em;
+  }
+  .diagram {
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 1em;
+    margin: 1em 0 2em;
+    overflow-x: auto;
+  }
+  .diagram .mermaid { text-align: center; }
+  footer { color: var(--muted); font-size: 0.85em; margin-top: 3em; }
+</style>
+</head>
+<body>
+
+<h1>Shard lifecycle — comprehensive flowcharts</h1>
+<p>Companion to <code>v1.md</code>. Three diagrams covering the launch / live / wind-down loop of a shard:
+the state machine, the lifecycle hook decision tree (where the orphan-christen ABANDON path lives),
+and one reconciler tick.</p>
+
+<div class="note">
+<code>StateExpiring</code> is defined in <code>coordinator/registry.go:22</code> but no transition writes it. Treat it as a ghost.
+</div>
+
+<h2>1. Shard state machine</h2>
+<p>Every state a shard row can occupy and the transitions between them. The italicised note on
+<code>LAUNCHING</code> covers the RECOVER bypass; the note on <code>INGESTING</code> covers the
+<code>syncASGDesiredCapacity</code> formula.</p>
+
+<div class="diagram">
+<pre class="mermaid">
+stateDiagram-v2
+    direction TB
+
+    [*] --&gt; LU : reconciler op 2 (under-cap)\nor op 4 (pre-warm)\nmintLaunchingRow → INSERT
+
+    state "LAUNCHING\ninstance_id=''\nshard_id, window,\ntoken, tier set" as LU
+    state "LAUNCHING\ninstance_id stamped\nEBS created+tagged+attached" as LC
+    state "INGESTING — live\naddr+id populated\nshard.json on EBS" as IL
+    state "INGESTING — stale\naddr+id wiped\nLastHeartbeatAt set\n(zombie if rebind never lands)" as IS
+    state "READ_ONLY\nno new writes\nstill serves queries" as RO
+    state "ARCHIVED\nParquet on S3\nColdShard handle" as AR
+    state "ABANDONED instance\n(terminal for instance,\nNOT for any shard)" as ABI
+
+    LU --&gt; LC : Hook CHRISTEN\nClaimLaunchingForTier\nCreateForShard, AttachToInstance\nCONTINUE
+    LU --&gt; [*] : reapStaleLaunching\n&gt;10 min, instance_id=''\nDELETE row
+    LU --&gt; ABI : Hook ABANDON — surprise instance\n(refresh / out-of-band scale)\nno row to claim → CHRISTEN fails\nrow stays unclaimed
+
+    LC --&gt; IL : christen\nempty-id heartbeat from i-X\nFindLaunchingByInstance\nConfigure RPC\nUPSERT LAUNCHING→INGESTING
+    LC --&gt; ABI : reapStaleLaunching\n&gt;10 min, stamped, no heartbeat\nABANDON-signal ASG, DELETE
+
+    IL --&gt; IS : reapDeadShards\nheartbeat stale &gt;2 min\nentry.EBSVolumeID populated\nTerminateForReplacement\n(decrement=false)
+    IS --&gt; IL : rebind\nreplacement instance reads\nshard.json, heartbeats with\ndurable shard_id\nupdate addr+InstanceID
+    IS --&gt; AR : rebindTimeout (15 min)\nentry presumed lost\n→ archive zombie
+
+    IL --&gt; RO : op 3 RotateToReadOnlyOp\nnow ≥ WindowEnd
+    IS --&gt; RO : op 3 (same trigger)
+
+    RO --&gt; AR : op 5 ArchiveShardOp\nnow − WindowEnd &gt; RetentionPeriod\nDuckDB → Parquet\nswap to ColdShard\nsnapshot+detach+delete EBS
+
+    AR --&gt; [*] : op 6 TerminateArchivedInstanceOp\nTerminateInstanceInASG\n(decrement=true)\nnull InstanceID\n(ColdShard keeps serving)
+
+    ABI --&gt; [*] : ASG terminates instance\nno data lost (volume not\ncreated in ABANDON branch)
+
+    note right of LU
+      RECOVER (hook) bypasses LAUNCHING entirely:
+      orphan EBS in tier+AZ tagged with a
+      registry shard_id whose heartbeat is stale
+      → reattach, instance heartbeats durable id
+      → IS→IL rebind without consuming a row
+    end note
+
+    note right of IL
+      syncASGDesiredCapacity, every tick:
+      desired = Σ bucket.target
+              + READ_ONLY count (per tier)
+              + future-window LAUNCHING (per tier)
+      Drives ASG actual via SetDesiredCapacity.
+    end note
+</pre>
+</div>
+
+<h2>2. Lifecycle hook decision tree</h2>
+<p>Where v1.md's bug lives — the <em>ABANDON: no LAUNCHING row</em> path is hit any time AWS
+launches an instance the reconciler didn't pre-mint a row for (instance refresh, manual scale, ASG
+self-healing during the 2-min <code>recognisedAsDead</code> blackout window).</p>
+
+<div class="diagram">
+<pre class="mermaid">
+flowchart TD
+    Hook[EC2_INSTANCE_LAUNCHING&lt;br/&gt;SNS → SQS → coordinator&lt;br/&gt;hook fires for new instance i-X]
+    Hook --&gt; T{ASG name in tierByASG?}
+    T -- no --&gt; A1[ABANDON&lt;br/&gt;unknown ASG]
+    T -- yes --&gt; AZ{DescribeInstances&lt;br/&gt;→ AZ?}
+    AZ -- err --&gt; A2[ABANDON&lt;br/&gt;AZ lookup failed]
+    AZ -- ok --&gt; LV[ListAvailableByTier tier+az&lt;br/&gt;filter to volumes whose&lt;br/&gt;shard_id is recognisedAsDead]
+    LV --&gt; N{recoverable count}
+    N -- "1" --&gt; R[RECOVER&lt;br/&gt;AttachToInstance volumeID, /dev/sdf&lt;br/&gt;CONTINUE]
+    R --&gt; RB[Instance reads shard.json&lt;br/&gt;heartbeats durable shard_id&lt;br/&gt;→ rebind path in ProcessHeartbeat]
+    N -- "≥2" --&gt; A3[ABANDON&lt;br/&gt;ambiguous recovery]
+    N -- "0" --&gt; CL{ClaimLaunchingForTier&lt;br/&gt;SELECT FOR UPDATE SKIP LOCKED&lt;br/&gt;oldest row, instance_id=''}
+    CL -- "false" --&gt; A4[ABANDON&lt;br/&gt;no LAUNCHING row&lt;br/&gt;← refresh / out-of-band scale&lt;br/&gt;← prior shard heartbeat&lt;br/&gt;   still 'live' so RECOVER&lt;br/&gt;   filtered the volume out]
+    CL -- "true" --&gt; CV[CreateForShard&lt;br/&gt;gp3 volume tagged&lt;br/&gt;shard_id=claimed.ID]
+    CV --&gt; AT{AttachToInstance&lt;br/&gt;/dev/sdf}
+    AT -- err --&gt; A5[ABANDON&lt;br/&gt;attach failed]
+    AT -- ok --&gt; C[CHRISTEN&lt;br/&gt;CompleteLifecycleAction CONTINUE]
+    C --&gt; HB[Instance boots, fresh EBS,&lt;br/&gt;empty shard.json,&lt;br/&gt;heartbeats with shard_id=''&lt;br/&gt;→ christen path promotes&lt;br/&gt;LAUNCHING → INGESTING]
+
+    classDef abandon fill:#fdd,stroke:#900,color:#400
+    classDef good fill:#dfd,stroke:#090,color:#040
+    class A1,A2,A3,A4,A5 abandon
+    class C,R good
+</pre>
+</div>
+
+<h2>3. One reconciler tick</h2>
+<p>The order of work each <code>PollInterval</code>. The two yellow-tinted boxes (<code>Snap</code> and <code>O2</code>)
+are where the v1.md story plays out: <code>Snap</code> is the post-fix DB-cache walk that previously inflated
+<code>IngestingCount</code> with zombie DB rows; <code>O2</code> is what <em>should</em> mint a recovery row
+when an instance refresh kills a shard, but doesn't — because <code>IngestingCount</code> stays at target until the
+15-min <code>rebindTimeout</code> flushes the stale entry.</p>
+
+<div class="diagram">
+<pre class="mermaid">
+flowchart TD
+    Tick[ticker fires&lt;br/&gt;PollInterval = 5 min prod / 5 s dev]
+    Tick --&gt; AH[adoptFromHeartbeats&lt;br/&gt;LiveShardHeartbeats 2 min&lt;br/&gt;→ ProcessHeartbeat each:&lt;br/&gt;christen / rebind / unsuspend / adopt]
+    AH --&gt; RD[reapDeadShards&lt;br/&gt;for each registry entry not in heartbeats:&lt;br/&gt;EBS-bound → TerminateForReplacement,&lt;br/&gt;wipe addr+id, await rebind&lt;br/&gt;or 15 min timeout → archive&lt;br/&gt;else → Remove + TerminateInstance]
+    RD --&gt; RL[reapStaleLaunching&lt;br/&gt;rows older than 10 min:&lt;br/&gt;id='' → DELETE&lt;br/&gt;id set, no HB → ABANDON+DELETE]
+    RL --&gt; Check[check — per-bucket loop]
+    Check --&gt; Snap[snapshotForBucket&lt;br/&gt;Entries from registry,&lt;br/&gt;LaunchingCount/FutureLaunching from DB,&lt;br/&gt;IngestingCount derived from registry walk&lt;br/&gt;← orphan-christen fix lives here]
+    Snap --&gt; Reconcile[reconcile snap → ordered ops]
+
+    Reconcile --&gt; O1[op 1 AddAppToShardOp&lt;br/&gt;app drift — bucket.Apps not on shard]
+    O1 --&gt; O3[op 3 RotateToReadOnlyOp&lt;br/&gt;INGESTING past WindowEnd]
+    O3 --&gt; O2[op 2 LaunchShardOp&lt;br/&gt;mint one row per gap&lt;br/&gt;until effective hits target&lt;br/&gt;effective = LaunchingCount&lt;br/&gt;+ registry-walked INGESTING&lt;br/&gt;→ provisionForBucket → mintLaunchingRow]
+    O2 --&gt; O4[op 4 PrewarmNextWindowOp&lt;br/&gt;WindowEnd − now ≤ PrewarmLead&lt;br/&gt;and FutureLaunching=0&lt;br/&gt;→ Target × mintLaunchingRowForWindow]
+    O4 --&gt; O5[op 5 ArchiveShardOp&lt;br/&gt;READ_ONLY past RetentionPeriod&lt;br/&gt;→ Parquet export, ColdShard,&lt;br/&gt;retire EBS volume]
+    O5 --&gt; O6[op 6 TerminateArchivedInstanceOp&lt;br/&gt;ARCHIVED w/ instance_id&lt;br/&gt;→ TerminateInstanceInASG&lt;br/&gt;decrement=true]
+
+    O6 --&gt; Sync[syncASGDesiredCapacity&lt;br/&gt;per tier:&lt;br/&gt;desired = Σ bucket.target&lt;br/&gt;          + count READ_ONLY&lt;br/&gt;          + count future-window LAUNCHING&lt;br/&gt;clamp to MaxSize, log if clamped&lt;br/&gt;SetDesiredCapacity tier, desired]
+    Sync --&gt; Done[next tick]
+
+    classDef bug fill:#ffd,stroke:#a80,color:#640
+    class Snap,O2 bug
+</pre>
+</div>
+
+<footer>Open this file directly in a browser. Mermaid is loaded from jsdelivr CDN.</footer>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default',
+    flowchart: { htmlLabels: true, curve: 'basis' },
+    state: { useMaxWidth: true }
+  });
+</script>
+
+</body>
+</html>

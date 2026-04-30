@@ -411,11 +411,40 @@ func (p *Provisioner) snapshotForBucket(bucket *AppBucket) ReconcilerSnapshot {
 // periodic catchup and from OnboardApp for immediate propagation.
 // Concurrent callers are serialised by per-op idempotency and
 // state re-checks, not a lock here.
+//
+// Logs a one-line summary at the start of every pass so the
+// reconciler's view of the bucket (target / ingesting / launching /
+// future-launching, plus emitted op count) is greppable in prod.
+// During a refresh-induced ABANDON storm this is the line that
+// answers "did the reconciler think anything was wrong yet?"
 func (p *Provisioner) ReconcileBucket(ctx context.Context, bucket *AppBucket) {
 	snap := p.snapshotForBucket(bucket)
-	for _, op := range reconcile(snap) {
+	ops := reconcile(snap)
+	log.Printf("reconciler: bucket=%s id=%d tier=%s target=%d ingesting=%d launching=%d future_launching=%d ops=%d",
+		bucket.Label, bucket.ID, bucket.Tier,
+		bucket.Target,
+		ingestingFromEntries(snap.Entries),
+		snap.LaunchingCount,
+		snap.FutureLaunchingCount,
+		len(ops),
+	)
+	for _, op := range ops {
 		if err := op.Apply(ctx, p); err != nil {
 			log.Printf("reconciler: apply %s: %v", op.Describe(), err)
 		}
 	}
+}
+
+// ingestingFromEntries returns the count of INGESTING entries in a
+// snapshot's registry slice. Mirrors reconcile()'s internal walk so
+// the per-tick log line and the under-capacity arithmetic agree on
+// what counts.
+func ingestingFromEntries(entries []*ShardEntry) int {
+	n := 0
+	for _, e := range entries {
+		if e.State == StateIngesting {
+			n++
+		}
+	}
+	return n
 }

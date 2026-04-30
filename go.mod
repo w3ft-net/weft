@@ -4,6 +4,8 @@ go 1.25.0
 
 replace github.com/kevlarcon/warp => ../warp
 
+replace github.com/w3ft-net/weft-go => ../weft-go
+
 require (
 	github.com/aws/aws-lambda-go v1.54.0
 	github.com/aws/aws-sdk-go-v2 v1.41.6
@@ -29,6 +31,7 @@ require (
 	github.com/pressly/goose/v3 v3.27.0
 	github.com/sergi/go-diff v1.4.0
 	github.com/stripe/stripe-go/v82 v82.5.1
+	github.com/w3ft-net/weft-go v0.0.0-20260429104541-7bef2d24f757
 	github.com/yuin/goldmark v1.8.2
 	github.com/yuin/gopher-lua v1.1.2
 	golang.org/x/term v0.42.0
@@ -109,7 +112,6 @@ require (
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
-	github.com/w3ft-net/weft-go v0.0.0-20260429104541-7bef2d24f757 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
