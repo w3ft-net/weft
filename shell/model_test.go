@@ -78,6 +78,11 @@ func TestQueryDispatch(t *testing.T) {
 		},
 	)
 	core.SetFS(fs)
+	// Path classifier is no longer baked into shellcore; weft
+	// installs it at construction in production via shell.New.
+	// Tests that drive a ShellCore directly need to install it
+	// explicitly to exercise /log → PathQuery dispatch.
+	core.SetPathClassifier(PathClassifier)
 	core.Redraw()
 
 	for _, r := range "cat /log/test.log" {

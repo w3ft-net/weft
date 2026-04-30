@@ -83,6 +83,13 @@ func (s *Shell) Run() error {
 		func(b []byte) { os.Stdout.Write(b) },
 		func(a shellcore.Action) { runner.handleAction(a) },
 	)
+	// shellcore's stock builtins (cat, head, tail) and the path
+	// rewriter consult the registered classifier to decide whether
+	// to FS-read or call StartQuery. Without this line the default
+	// ("everything is PathLocal") would silently disable query
+	// routing for /log/. The classifier moved out of shellcore
+	// when warp made the path hierarchy embedder-supplied.
+	runner.core.SetPathClassifier(PathClassifier)
 	if s.FS != nil {
 		runner.core.SetFS(s.FS)
 		// Wire chart if the FS satisfies the WatchResultsProvider
@@ -532,6 +539,7 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 	// `log` against `/` and resolving it to the `/log` namespace root.
 	if rewritten, err := shellcore.RewritePaths(weftPipeline, shellcore.NewTransientDirStack(),
 		shellcore.WithSubcommandBuiltin("wit", "log", "show", "diff", "checkout", "amend"),
+		shellcore.WithPathClassifier(PathClassifier),
 	); err == nil {
 		weftPipeline = rewritten
 	}
