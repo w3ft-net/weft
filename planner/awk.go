@@ -95,12 +95,14 @@ func tryAwkPushdown(program string) *awkPushdown {
 		pd = extractAwkExpr(pat.Expr)
 	case *awk.RegexPattern:
 		// awk '/pat/' is a positive regex match against the whole row.
-		// Use DuckDB's `~` regex operator (RE2) so anchors / character
-		// classes / quantifiers actually work. The previous LIKE-with-
-		// escaped-LIKE-specials encoding silently mismatched anything
-		// containing `^`, `$`, `.`, etc.
+		// Use DuckDB's regexp_matches (substring/find) so anchors /
+		// character classes / quantifiers actually work. The previous
+		// `raw ~` encoding looked right but `~` in DuckDB is whole-
+		// string regex (SIMILAR TO semantics); regexp_matches is the
+		// PostgreSQL-`~` equivalent the user actually wants from awk
+		// regex matching.
 		pd = &awkPushdown{
-			predicate: fmt.Sprintf("raw ~ '%s'", escapeSQLString(pat.Pattern)),
+			predicate: fmt.Sprintf("regexp_matches(raw, '%s')", escapeSQLString(pat.Pattern)),
 			limitSafe: true,
 		}
 	}
@@ -415,10 +417,15 @@ func extractAwkMatch(e *awk.MatchExpr) *awkPushdown {
 	// to matching rows). `$0 !~ /pat/` is inverted (inclusive — not
 	// limit-safe; falls back to compute when the source has a
 	// frozen LIMIT, per the cross-shard saturation hazard).
-	op := "~"
+	//
+	// regexp_matches(raw, 'pat') is DuckDB's substring/find form —
+	// the equivalent of PostgreSQL's `~`. DuckDB's own `~` operator
+	// is whole-string match (SIMILAR TO semantics), which silently
+	// returns no rows for typical user patterns.
+	predicate := fmt.Sprintf("regexp_matches(raw, '%s')", pattern)
 	limitSafe := true
 	if e.Negated {
-		op = "!~"
+		predicate = "NOT " + predicate
 		limitSafe = false
 	}
 
@@ -426,7 +433,7 @@ func extractAwkMatch(e *awk.MatchExpr) *awkPushdown {
 	if fe, ok := e.Expr.(*awk.FieldExpr); ok {
 		if nl, ok := fe.Index.(*awk.NumberLit); ok && nl.Value == 0 {
 			return &awkPushdown{
-				predicate: fmt.Sprintf("raw %s '%s'", op, pattern),
+				predicate: predicate,
 				limitSafe: limitSafe,
 			}
 		}

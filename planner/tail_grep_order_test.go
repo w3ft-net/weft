@@ -6,7 +6,7 @@ import "testing"
 // (negation, regex with no anchor on a low-cardinality field, etc.):
 // `tail -n N | grep -v ERROR | wc -l` asks "of the last N rows, count
 // those NOT matching ERROR." If the planner merged that into a single
-// `WHERE raw !~ 'ERROR' ORDER BY ts DESC LIMIT N`, each shard would
+// `WHERE NOT regexp_matches(raw, 'ERROR') ORDER BY ts DESC LIMIT N`, each shard would
 // return N non-ERROR rows, the cross-shard merge would trim back to N,
 // and the count saturates at N regardless of how many rows actually
 // have ERROR. See docs/plans/cross-shard-post-limit-filter.md.
@@ -127,13 +127,13 @@ func TestPushdown_LimitSafePushdown(t *testing.T) {
 		{
 			name:        "tail then plain grep (positive)",
 			pipeline:    `cat vimgym.log | tail -n 2000 | grep ERROR | wc -l`,
-			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw ~ 'ERROR' ORDER BY ts DESC LIMIT 2000`,
+			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND regexp_matches(raw, 'ERROR') ORDER BY ts DESC LIMIT 2000`,
 			wantCompute: []string{"wc -l"},
 		},
 		{
 			name:        "head then awk regex",
 			pipeline:    `cat vimgym.log | head -n 100 | awk '$0 ~ /^ERROR/'`,
-			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw ~ '^ERROR' ORDER BY ts ASC LIMIT 100`,
+			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND regexp_matches(raw, '^ERROR') ORDER BY ts ASC LIMIT 100`,
 			wantCompute: nil,
 		},
 	}

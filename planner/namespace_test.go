@@ -42,12 +42,12 @@ func TestNamespacePredicate(t *testing.T) {
 		{
 			name:     "grep with sub-app",
 			pipeline: `cat /log/weft/shard.log | grep ERROR`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE app = 'weft/shard' AND raw ~ 'ERROR'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE app = 'weft/shard' AND regexp_matches(raw, 'ERROR')`,
 		},
 		{
 			name:     "grep with namespace",
 			pipeline: `cat /log/weft.log | grep timeout`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'weft' OR app LIKE 'weft/%') AND raw ~ 'timeout'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'weft' OR app LIKE 'weft/%') AND regexp_matches(raw, 'timeout')`,
 		},
 		{
 			name:     "awk filter with namespace",

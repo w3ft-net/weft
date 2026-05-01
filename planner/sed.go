@@ -49,9 +49,9 @@ func trySedPushdown(args []string) string {
 		return "" // range addresses not supported yet
 	}
 
-	// sed regex addresses use BRE; map to DuckDB's `~` (RE2). Same
-	// flavor caveat as grep — for the substring patterns most users
-	// write the flavors agree, and the previous LIKE-substring
-	// encoding silently mismatched real regex specials.
-	return fmt.Sprintf("raw ~ '%s'", escapeSQLString(cmd.Addr1.Regex))
+	// sed regex addresses use BRE; map to DuckDB's regexp_matches
+	// (RE2 substring/find). DuckDB's `~` operator is whole-string
+	// match (SIMILAR TO semantics) and silently returns no rows for
+	// the substring patterns sed users actually write.
+	return fmt.Sprintf("regexp_matches(raw, '%s')", escapeSQLString(cmd.Addr1.Regex))
 }

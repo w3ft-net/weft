@@ -72,15 +72,17 @@ func tryGrepPushdown(args []string) string {
 		return ""
 	}
 
-	op := "~"
-	switch {
-	case ignoreCase && invert:
-		op = "!~*"
-	case ignoreCase:
-		op = "~*"
-	case invert:
-		op = "!~"
+	// DuckDB's `~` operator is whole-string regex match (SIMILAR TO
+	// semantics), not PostgreSQL-style substring match — and `~*` /
+	// `!~*` don't exist as scalar functions at all. Use regexp_matches
+	// which is the substring/find form the user expects from grep.
+	// Third arg "i" enables case-insensitive matching.
+	expr := fmt.Sprintf("regexp_matches(raw, '%s')", escapeSQLString(pattern))
+	if ignoreCase {
+		expr = fmt.Sprintf("regexp_matches(raw, '%s', 'i')", escapeSQLString(pattern))
 	}
-
-	return fmt.Sprintf("raw %s '%s'", op, escapeSQLString(pattern))
+	if invert {
+		expr = "NOT " + expr
+	}
+	return expr
 }

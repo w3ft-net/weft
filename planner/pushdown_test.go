@@ -66,17 +66,17 @@ func TestPushdown_SingleStage_Awk(t *testing.T) {
 		{
 			name:     "bare regex pattern",
 			pipeline: `cat vimgym.log | awk '/timeout/'`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw ~ 'timeout'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND regexp_matches(raw, 'timeout')`,
 		},
 		{
 			name:     "field regex match",
 			pipeline: `cat vimgym.log | awk '$0 ~ /timeout/'`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw ~ 'timeout'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND regexp_matches(raw, 'timeout')`,
 		},
 		{
 			name:     "negated regex",
 			pipeline: `cat vimgym.log | awk '$0 !~ /timeout/'`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw !~ 'timeout'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND NOT regexp_matches(raw, 'timeout')`,
 		},
 
 		// Compound conditions
@@ -188,22 +188,22 @@ func TestPushdown_SingleStage_Grep(t *testing.T) {
 		{
 			name:     "literal string",
 			pipeline: `cat vimgym.log | grep timeout`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw ~ 'timeout'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND regexp_matches(raw, 'timeout')`,
 		},
 		{
 			name:     "case insensitive",
 			pipeline: `cat vimgym.log | grep -i error`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw ~* 'error'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND regexp_matches(raw, 'error', 'i')`,
 		},
 		{
 			name:     "inverted match",
 			pipeline: `cat vimgym.log | grep -v DEBUG`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw !~ 'DEBUG'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND NOT regexp_matches(raw, 'DEBUG')`,
 		},
 		{
 			name:     "inverted case insensitive",
 			pipeline: `cat vimgym.log | grep -iv debug`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw !~* 'debug'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND NOT regexp_matches(raw, 'debug', 'i')`,
 		},
 	}
 
@@ -232,7 +232,7 @@ func TestPushdown_SingleStage_Sed(t *testing.T) {
 		{
 			name:     "address pattern filter",
 			pipeline: `cat vimgym.log | sed -n '/timeout/p'`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw ~ 'timeout'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND regexp_matches(raw, 'timeout')`,
 		},
 	}
 
@@ -357,14 +357,14 @@ func TestPushdown_MergedStages(t *testing.T) {
 		{
 			name:     "awk filter then grep",
 			pipeline: `cat vimgym.log | awk '$LEVEL == "ERROR"' | grep timeout`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' AND raw ~ 'timeout'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' AND regexp_matches(raw, 'timeout')`,
 		},
 
 		// grep | awk → AND merge
 		{
 			name:     "grep then awk filter",
 			pipeline: `cat vimgym.log | grep timeout | awk '$LEVEL == "ERROR"'`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw ~ 'timeout' AND level = 'ERROR'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND regexp_matches(raw, 'timeout') AND level = 'ERROR'`,
 		},
 
 		// awk | awk → AND merge
@@ -385,28 +385,28 @@ func TestPushdown_MergedStages(t *testing.T) {
 		{
 			name:     "two greps",
 			pipeline: `cat vimgym.log | grep timeout | grep ERROR`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw ~ 'timeout' AND raw ~ 'ERROR'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND regexp_matches(raw, 'timeout') AND regexp_matches(raw, 'ERROR')`,
 		},
 
 		// grep -v | grep → AND merge (inverted + normal)
 		{
 			name:     "inverted grep then grep",
 			pipeline: `cat vimgym.log | grep -v DEBUG | grep timeout`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw !~ 'DEBUG' AND raw ~ 'timeout'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND NOT regexp_matches(raw, 'DEBUG') AND regexp_matches(raw, 'timeout')`,
 		},
 
 		// awk | grep -i → AND merge with ILIKE
 		{
 			name:     "awk filter then case-insensitive grep",
 			pipeline: `cat vimgym.log | awk '$LEVEL == "ERROR"' | grep -i timeout`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' AND raw ~* 'timeout'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' AND regexp_matches(raw, 'timeout', 'i')`,
 		},
 
 		// jq select | grep → AND merge
 		{
 			name:     "jq select then grep",
 			pipeline: `cat vimgym.log | jq 'select(.status == 500)' | grep timeout`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND raw ~ 'timeout'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND regexp_matches(raw, 'timeout')`,
 		},
 
 		// awk filter | head → WHERE + LIMIT
@@ -420,21 +420,21 @@ func TestPushdown_MergedStages(t *testing.T) {
 		{
 			name:     "grep then head",
 			pipeline: `cat vimgym.log | grep timeout | head -5`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw ~ 'timeout' ORDER BY ts ASC LIMIT 5`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND regexp_matches(raw, 'timeout') ORDER BY ts ASC LIMIT 5`,
 		},
 
 		// awk | sed address filter → AND merge
 		{
 			name:     "awk filter then sed address",
 			pipeline: `cat vimgym.log | awk '$LEVEL == "ERROR"' | sed -n '/fatal/p'`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' AND raw ~ 'fatal'`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' AND regexp_matches(raw, 'fatal')`,
 		},
 
 		// three stages all pushable
 		{
 			name:     "three pushable stages",
 			pipeline: `cat vimgym.log | awk '$LEVEL == "ERROR"' | grep timeout | head -10`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' AND raw ~ 'timeout' ORDER BY ts ASC LIMIT 10`,
+			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND level = 'ERROR' AND regexp_matches(raw, 'timeout') ORDER BY ts ASC LIMIT 10`,
 		},
 	}
 
@@ -537,7 +537,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "grep then awk END block",
 			pipeline:    `cat vimgym.log | grep timeout | awk '{ count++ } END { print count }'`,
-			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw ~ 'timeout'`,
+			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND regexp_matches(raw, 'timeout')`,
 			wantCompute: []string{`awk '{ count++ } END { print count }'`},
 		},
 
@@ -553,7 +553,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "grep then sort then head",
 			pipeline:    `cat vimgym.log | grep timeout | sort | head -20`,
-			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw ~ 'timeout'`,
+			wantSQL:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND regexp_matches(raw, 'timeout')`,
 			wantCompute: []string{"sort", "head -20"},
 		},
 
