@@ -1,8 +1,11 @@
-//go:build integration && !localstack
+//go:build integration && cover && !localstack
 
 // Direct-to-compute op 2: compute's k-way merge across shard input
 // streams when CreateJobRequest.MergeKey is set. See
-// docs/plans/direct-to-compute.md §4.
+// docs/plans/direct-to-compute.md §4. Gated behind the `cover` tag
+// because the test dials shard-0/shard-1 on localhost — those host
+// port mappings come with the docker-compose.cover.yml overlay. Run
+// via scripts/cover-test.sh.
 //
 // Op 1 landed the shard side: one shard streams its rows (already in
 // local ORDER BY) to compute. Op 2 glues multiple shard streams

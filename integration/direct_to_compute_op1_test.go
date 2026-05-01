@@ -1,7 +1,11 @@
-//go:build integration && !localstack
+//go:build integration && cover && !localstack
 
 // Direct-to-compute op 1: shard's QueryToCompute RPC streams rows
 // directly to a compute worker. See docs/plans/direct-to-compute.md.
+// Gated behind the `cover` tag because the test dials shard-0 on
+// localhost:9000 — that mapping comes with the docker-compose.cover.yml
+// overlay (which also instruments containers for the boundary
+// coverage check below). Run via scripts/cover-test.sh.
 //
 // This test dials shard-0 and compute directly — the coordinator is
 // deliberately *not* on the RPC path. If data ends up in the compute

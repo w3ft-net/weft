@@ -7,6 +7,10 @@ import (
 	"testing"
 )
 
+// TestParseFuncLine has no infrastructure dependency — it tests the
+// parseFuncLine helper directly. The two TestRequireRanIn_* tests
+// that need a coverage profile on disk live in coverage_cover_test.go
+// under the `cover` build tag.
 func TestParseFuncLine(t *testing.T) {
 	cases := []struct {
 		name string
@@ -54,33 +58,3 @@ func TestParseFuncLine(t *testing.T) {
 	}
 }
 
-// TestRequireRanIn_AgainstRealProfile is an end-to-end sanity check
-// of the assertion helper. `main` is always hit by the -cover test
-// entrypoint in the coordinator binary. If coverage/coordinator.out
-// exists (meaning we're on the cover overlay), this passes; otherwise
-// it skips.
-func TestRequireRanIn_AgainstRealProfile(t *testing.T) {
-	RequireRanIn(t, "coordinator", "cmd/coordinator/main.go", "main")
-}
-
-// TestRequireRanIn_DetectsAbsentFunction proves the negative case:
-// asking for a function that doesn't exist in the named service's
-// profile should fail. We capture the failure via a sub-testing.T
-// so the outer test stays green.
-func TestRequireRanIn_DetectsAbsentFunction(t *testing.T) {
-	entries, err := LoadServiceCoverage("coordinator")
-	if err != nil {
-		t.Fatalf("load coordinator profile: %v", err)
-	}
-	if entries == nil {
-		t.Skip("no coverage profile on disk")
-	}
-
-	// Walk entries directly: if the helper's suffix+name matching is
-	// correct, "definitely_does_not_exist" must be absent.
-	for _, e := range entries {
-		if e.Function == "definitely_does_not_exist" {
-			t.Fatalf("unexpected entry for nonexistent function: %+v", e)
-		}
-	}
-}

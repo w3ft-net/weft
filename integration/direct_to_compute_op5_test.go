@@ -127,12 +127,6 @@ func TestDirectToCompute_Op5_CoordinatorComputeStageRoundtrip(t *testing.T) {
 	}
 }
 
-// TestDirectToCompute_Op5_BoundaryCoverage pins op 5's new code path:
-// the coordinator's direct-to-compute branch (not the legacy
-// buffered branch that the plan deleted) must be what ran. Checks
-// that the branch symbol `executeQuery` has positive coverage in the
-// coordinator profile — if op 5 regressed and we took some other
-// path, this breaks the expected coverage footprint.
-func TestDirectToCompute_Op5_BoundaryCoverage(t *testing.T) {
-	RequireRanIn(t, "coordinator", "coordinator/coordinator.go", "executeQuery")
-}
+// TestDirectToCompute_Op5_BoundaryCoverage moved to
+// direct_to_compute_op5_cover_test.go under the `cover` build tag
+// since it depends on coverage/coordinator.out being on disk.
