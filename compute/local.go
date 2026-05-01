@@ -30,6 +30,7 @@ func (p *LocalComputePool) NewJob(stages []string, shardCount int, mergeKey stri
 
 type jobResult struct {
 	text string
+	rows []*pb.ResultRow // populated for zero-stage jobs; nil otherwise
 	err  error
 }
 
@@ -44,6 +45,8 @@ type LocalComputeJob struct {
 	ch          chan ComputeMessage
 	done        chan jobResult
 	once        sync.Once
+	resultOnce  sync.Once
+	result      jobResult
 }
 
 func (j *LocalComputeJob) ensureStarted() {
@@ -65,20 +68,58 @@ func (j *LocalComputeJob) SendSentinel(shardID string) {
 	j.Send(ComputeMessage{ShardID: shardID, Sentinel: true})
 }
 
-func (j *LocalComputeJob) Result() (string, error) {
+// readResult blocks until consume() finishes, then caches the result
+// so subsequent Result/Stream/MergedRows calls return immediately. The
+// done channel is buffered with size 1; without caching, the second
+// reader would block forever.
+func (j *LocalComputeJob) readResult() jobResult {
 	j.ensureStarted()
-	r := <-j.done
+	j.resultOnce.Do(func() {
+		j.result = <-j.done
+	})
+	return j.result
+}
+
+func (j *LocalComputeJob) Result() (string, error) {
+	r := j.readResult()
 	return r.text, r.err
+}
+
+// Stream returns the job's output as a forward-only line stream. The
+// underlying merge + pipeline still runs as a single batch (Result is
+// invoked once on first Next); the LineStream surface is in place so
+// callers (coordinator → gRPC server) can be migrated against it
+// before the producer side is converted to true streaming.
+func (j *LocalComputeJob) Stream() LineStream {
+	return newBufferedLineStream(j.Result)
+}
+
+// MergedRows blocks until the job has consumed all sentinels and
+// returns the merged rows for a zero-stage job. Returns nil for staged
+// jobs (the post-stage text output discards row metadata). Used by the
+// coordinator transitionally while QueryResult still carries Rows;
+// deleted in Phase 4 when the wire moves to LineStream.
+func (j *LocalComputeJob) MergedRows() ([]*pb.ResultRow, error) {
+	r := j.readResult()
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.rows, nil
 }
 
 // consume reads all messages from the channel until every shard's
 // sentinel has arrived, then flattens rows into a single input stream
-// for the compute pipeline. When mergeKey is set, shards' per-stream
-// ordering (baked into their SQL via ORDER BY) is preserved through a
-// k-way merge on the join column; when empty, rows land in arrival
-// order (the legacy single-sink concat).
+// for the compute pipeline. Shards' per-stream ordering (baked into
+// their SQL via ORDER BY) is preserved through a k-way merge on the
+// join column; an empty / unknown mergeKey falls back to arrival-order
+// concat inside mergeRowsFull.
+//
+// For zero-stage jobs the merged rows are also stored on jobResult so
+// MergedRows callers can recover the full *pb.ResultRow values
+// (line_num, fields, etc.) that the staged-output text path discards.
+// This is a transitional affordance for callers that still want the
+// Rows shape; phase 4 deletes it when the wire moves to LineStream.
 func (j *LocalComputeJob) consume() {
-	var lines []string
 	perShard := map[string][]*pb.ResultRow{}
 	sentinels := 0
 
@@ -91,17 +132,10 @@ func (j *LocalComputeJob) consume() {
 		if msg.Row == nil {
 			continue
 		}
-		if j.mergeKey == "" {
-			// Fast path: just append in arrival order.
-			lines = append(lines, msg.Row.Raw)
-		} else {
-			perShard[msg.ShardID] = append(perShard[msg.ShardID], msg.Row)
-		}
+		perShard[msg.ShardID] = append(perShard[msg.ShardID], msg.Row)
 	}
 
-	if j.mergeKey != "" {
-		lines = mergeRows(perShard, j.mergeKey)
-	}
+	merged := mergeRowsFull(perShard, j.mergeKey)
 
 	// Global tail/head cap: the per-shard LIMIT was already applied
 	// by the SQL builder; this truncates the union before downstream
@@ -110,14 +144,35 @@ func (j *LocalComputeJob) consume() {
 	// in any deterministic ordering," but downstream stages that need
 	// determinism shouldn't be running over an unmerged stream
 	// anyway.
-	if j.limit > 0 && len(lines) > j.limit {
-		lines = lines[:j.limit]
+	if j.limit > 0 && len(merged) > j.limit {
+		merged = merged[:j.limit]
 	}
 
-	input := strings.Join(lines, "\n")
-	if len(lines) > 0 {
-		input += "\n"
+	// Zero-stage job: the merged rows ARE the output. Skip the bash
+	// pipeline entirely — running RunWithParallelism with an empty
+	// pipeline string returns empty stdout. This is the path a plain
+	// `cat /log/foo.log` takes after Phase 2 routes it through compute.
+	if len(j.stages) == 0 {
+		var sb strings.Builder
+		for _, r := range merged {
+			sb.WriteString(r.Raw)
+			sb.WriteByte('\n')
+		}
+		j.done <- jobResult{text: sb.String(), rows: merged}
+		return
 	}
+
+	var sb strings.Builder
+	for i, r := range merged {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(r.Raw)
+	}
+	if len(merged) > 0 {
+		sb.WriteByte('\n')
+	}
+	input := sb.String()
 
 	pipeline := strings.Join(j.stages, " | ")
 	stdout, stderr, exitCode, err := bash.RunWithParallelism(pipeline, input, j.parallelism)

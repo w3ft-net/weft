@@ -172,9 +172,18 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 			CreatedAt: time.Now(),
 		})
 	}
+	pool := cfg.Pool
+	if pool == nil {
+		// Every query routes through the compute pool — including the
+		// zero-stage shard-only case — so a Coordinator without a Pool
+		// would have nothing to dispatch to. Default to an in-process
+		// LocalComputePool; callers wanting remote compute pass a
+		// GRPCComputePool explicitly.
+		pool = &compute.LocalComputePool{Parallelism: 4}
+	}
 	return &Coordinator{
 		Registry:               reg,
-		Pool:                   cfg.Pool,
+		Pool:                   pool,
 		Tail:                   cfg.Tail,
 		Ingest:                 cfg.Ingest,
 		Usage:                  cfg.Usage,
@@ -513,11 +522,11 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 
 	// For the compute-stage branch we use plan.DirectShardSQL so each
 	// shard emits rows in the order compute's k-way merge expects
-	// (see docs/plans/direct-to-compute.md §3). For the no-compute-
-	// stage path the legacy ShardSQL keeps the old ts-ordered
-	// behavior — callers that iterate rows directly don't need the
-	// merge ordering.
-	sql := planner.InjectCustomer(plan.ShardSQL, customer)
+	// Every shard query goes through plan.DirectShardSQL so each shard
+	// emits rows in the order compute's k-way merge expects (see
+	// docs/plans/direct-to-compute.md §3). The compute job handles
+	// merge / limit / staged transforms uniformly; zero stages means
+	// "just merge and limit, no transforms."
 	directSQL := planner.InjectCustomer(plan.DirectShardSQL, customer)
 
 	// Shard selection honors plan-tier retention: tr.Start is clamped
@@ -540,94 +549,69 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 		shardIDs[i] = s.ID()
 	}
 	log.Printf("query: app=%s shards=%v compute=%v sql=%s",
-		plan.SourceApp, shardIDs, plan.ComputeStages, sql)
+		plan.SourceApp, shardIDs, plan.ComputeStages, directSQL)
 
-	// Direct-to-compute branch: shards stream rows straight into the
-	// compute job (no coordinator-side buffer). Each shard's SQL is
-	// ORDER BY'd to match plan.ShardOrderBy so compute's k-way merge
-	// can advance a single heap head without re-sorting. See
-	// docs/plans/direct-to-compute.md §§4-5.
-	if len(plan.ComputeStages) > 0 && c.Pool != nil {
-		job := c.Pool.NewJob(plan.ComputeStages, len(matching), plan.ShardOrderBy, plan.Limit)
+	job := c.Pool.NewJob(plan.ComputeStages, len(matching), plan.ShardOrderBy, plan.Limit)
 
-		var wg sync.WaitGroup
-		wg.Add(len(matching))
-		errs := make(chan error, len(matching))
-		for _, s := range matching {
-			go func(s shard.Shard) {
-				defer wg.Done()
-				defer job.SendSentinel(s.ID())
-				rows, err := s.Query(directSQL)
-				if err != nil {
-					errs <- fmt.Errorf("shard %s: %w", s.ID(), err)
-					return
-				}
-				for _, r := range rows {
-					job.SendRow(r, s.ID())
-				}
-			}(s)
+	var wg sync.WaitGroup
+	wg.Add(len(matching))
+	errs := make(chan error, len(matching))
+	for _, s := range matching {
+		go func(s shard.Shard) {
+			defer wg.Done()
+			defer job.SendSentinel(s.ID())
+			rows, err := s.Query(directSQL)
+			if err != nil {
+				errs <- fmt.Errorf("shard %s: %w", s.ID(), err)
+				return
+			}
+			for _, r := range rows {
+				job.SendRow(r, s.ID())
+			}
+		}(s)
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		log.Printf("query: %v", e)
+		return nil, e
+	}
+
+	// Zero-stage queries return Rows so callers that iterate row
+	// metadata (LineNum, structured fields) still work. Phase 4
+	// replaces this with a LineStream that carries Line metadata
+	// uniformly. The rowsExposer type assertion is the transitional
+	// hook: LocalComputeJob exposes MergedRows; GRPCComputeJob doesn't
+	// (rows ship as text over the wire) and falls through to text.
+	if len(plan.ComputeStages) == 0 {
+		type rowsExposer interface {
+			MergedRows() ([]*pb.ResultRow, error)
 		}
-		wg.Wait()
-		close(errs)
-		for e := range errs {
-			log.Printf("query: %v", e)
-			return nil, e
+		if y, ok := job.(rowsExposer); ok {
+			rows, err := y.MergedRows()
+			if err != nil {
+				return nil, err
+			}
+			log.Printf("query: %d shards merged into %d rows", len(matching), len(rows))
+			return &QueryResult{Rows: rows}, nil
 		}
-
+		// Fallback: remote compute pool — accept the text, rendered as
+		// the merged result. Loses LineNum metadata; today's clients
+		// don't read it.
 		text, err := job.Result()
 		if err != nil {
-			log.Printf("query: compute error: %v (stages=%v)", err, plan.ComputeStages)
 			return nil, err
 		}
-		log.Printf("query: compute complete, output=%d bytes (stages=%v)", len(text), plan.ComputeStages)
 		return &QueryResult{Text: text}, nil
 	}
 
-	// No compute stages — fall back to fetch-and-return rows. This
-	// path stays on ShardSQL (legacy ts-ordered SQL) because plan.
-	// OrderDesc + plan.Limit still describe the expected post-merge
-	// shape for callers that iterate rows directly.
-	type shardResult struct {
-		rows []*pb.ResultRow
-		err  error
+	text, err := job.Result()
+	if err != nil {
+		log.Printf("query: compute error: %v (stages=%v)", err, plan.ComputeStages)
+		return nil, err
 	}
-	results := make([]shardResult, len(matching))
-	var wg sync.WaitGroup
-	wg.Add(len(matching))
-	for i, s := range matching {
-		go func(i int, s shard.Shard) {
-			defer wg.Done()
-			rows, err := s.Query(sql)
-			results[i] = shardResult{rows, err}
-		}(i, s)
-	}
-	wg.Wait()
-
-	var allRows []*pb.ResultRow
-	for i, r := range results {
-		if r.err != nil {
-			log.Printf("query: shard %s returned error: %v", matching[i].ID(), r.err)
-			return nil, fmt.Errorf("shard %s: %w", matching[i].ID(), r.err)
-		}
-		allRows = append(allRows, r.rows...)
-	}
-	log.Printf("query: %d shards returned %d total rows", len(matching), len(allRows))
-
-	if plan.OrderDesc {
-		sort.Slice(allRows, func(i, j int) bool {
-			return allRows[i].LineNum > allRows[j].LineNum
-		})
-	} else {
-		sort.Slice(allRows, func(i, j int) bool {
-			return allRows[i].LineNum < allRows[j].LineNum
-		})
-	}
-
-	if plan.Limit > 0 && len(allRows) > plan.Limit {
-		allRows = allRows[:plan.Limit]
-	}
-
-	return &QueryResult{Rows: allRows}, nil
+	log.Printf("query: compute complete, output=%d bytes (stages=%v)", len(text), plan.ComputeStages)
+	return &QueryResult{Text: text}, nil
 }
 
 // runAlertStage feeds a QueryResult's text (or joined raw rows) into

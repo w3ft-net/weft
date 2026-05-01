@@ -3,6 +3,7 @@ package compute
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -129,13 +130,44 @@ func (j *GRPCComputeJob) Result() (string, error) {
 	return resp.Text, nil
 }
 
+// Stream wraps the existing batched Result in a line stream. The
+// remote compute RPC is still single-shot; phase 4 replaces this with
+// a streaming RPC.
+func (j *GRPCComputeJob) Stream() LineStream {
+	return newBufferedLineStream(j.Result)
+}
+
+// MergedRows synthesizes a Rows-shape result from the remote text
+// output. LineNum is zeroed — the wire doesn't carry per-row metadata
+// today. Used by the coordinator transitionally for zero-stage
+// queries; phase 4 deletes the type-assertion in executeQuery once the
+// wire moves to LineStream and Rows-shape return is gone.
+func (j *GRPCComputeJob) MergedRows() ([]*pb.ResultRow, error) {
+	text, err := j.Result()
+	if err != nil {
+		return nil, err
+	}
+	if text == "" {
+		return nil, nil
+	}
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	rows := make([]*pb.ResultRow, len(lines))
+	for i, line := range lines {
+		rows[i] = &pb.ResultRow{Raw: line}
+	}
+	return rows, nil
+}
+
 // errJob is a ComputeJob that immediately returns an error.
 type errJob struct {
 	err error
 }
 
-func (j *errJob) Send(ComputeMessage)               {}
-func (j *errJob) SendRow(*pb.ResultRow, string)      {}
-func (j *errJob) SendSentinel(string)                {}
-func (j *errJob) Result() (string, error)            { return "", j.err }
+func (j *errJob) Send(ComputeMessage)            {}
+func (j *errJob) SendRow(*pb.ResultRow, string)  {}
+func (j *errJob) SendSentinel(string)            {}
+func (j *errJob) Result() (string, error)        { return "", j.err }
+func (j *errJob) Stream() LineStream {
+	return newBufferedLineStream(j.Result)
+}
 

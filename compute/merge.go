@@ -24,6 +24,19 @@ import (
 // planner is the source of truth for mergeKey, and a mismatch there
 // surfaces as "rows came out in wrong order," not as a 500.
 func mergeRows(perShard map[string][]*pb.ResultRow, mergeKey string) []string {
+	merged := mergeRowsFull(perShard, mergeKey)
+	out := make([]string, len(merged))
+	for i, r := range merged {
+		out[i] = r.Raw
+	}
+	return out
+}
+
+// mergeRowsFull is the row-preserving counterpart to mergeRows. Used
+// by LocalComputeJob to expose merged rows (with line_num intact) to
+// callers that haven't migrated to LineStream yet — see
+// LocalComputeJob.MergedRows.
+func mergeRowsFull(perShard map[string][]*pb.ResultRow, mergeKey string) []*pb.ResultRow {
 	key, desc := parseMergeKey(mergeKey)
 
 	var less func(a, b *pb.ResultRow) bool
@@ -33,11 +46,9 @@ func mergeRows(perShard map[string][]*pb.ResultRow, mergeKey string) []string {
 	case "raw":
 		less = func(a, b *pb.ResultRow) bool { return a.Raw < b.Raw }
 	default:
-		var out []string
+		var out []*pb.ResultRow
 		for _, rows := range perShard {
-			for _, r := range rows {
-				out = append(out, r.Raw)
-			}
+			out = append(out, rows...)
 		}
 		return out
 	}
@@ -55,10 +66,10 @@ func mergeRows(perShard map[string][]*pb.ResultRow, mergeKey string) []string {
 	h := &rowHeap{cursors: cursors, less: less}
 	heap.Init(h)
 
-	out := make([]string, 0)
+	out := make([]*pb.ResultRow, 0)
 	for h.Len() > 0 {
 		c := heap.Pop(h).(*shardCursor)
-		out = append(out, c.rows[c.idx].Raw)
+		out = append(out, c.rows[c.idx])
 		c.idx++
 		if c.idx < len(c.rows) {
 			heap.Push(h, c)

@@ -31,14 +31,19 @@ type ComputePool interface {
 	NewJob(stages []string, shardCount int, mergeKey string, limit int) ComputeJob
 }
 
-// ComputeJob receives rows from shards and produces a text result once all
-// shards have sent their sentinel. It implements shard.RowSink so shards
-// can stream directly to it.
+// ComputeJob receives rows from shards and produces output as a stream
+// of lines. It implements shard.RowSink so shards can stream directly
+// to it.
 type ComputeJob interface {
 	shard.RowSink
 	// Send delivers a row or sentinel from a shard. Safe for concurrent use.
 	Send(msg ComputeMessage)
+	// Stream returns a forward-only line stream of the job's output.
+	// Multiple calls return independent views over the same underlying
+	// result; the underlying pipeline runs once.
+	Stream() LineStream
 	// Result blocks until all sentinels are received and the pipeline has
-	// finished executing. Returns the text output.
+	// finished executing, then returns the full text output. Convenience
+	// wrapper over Stream for callers that want the whole blob.
 	Result() (string, error)
 }
