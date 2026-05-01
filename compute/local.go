@@ -24,33 +24,39 @@ func (p *LocalComputePool) NewJob(stages []string, shardCount int, mergeKey stri
 		limit:       limit,
 		parallelism: p.Parallelism,
 		ch:          make(chan ComputeMessage, 1024),
-		done:        make(chan jobResult, 1),
+		streamCh:    make(chan Line, 1024),
 	}
 }
 
-type jobResult struct {
-	text string
-	rows []*pb.ResultRow // populated for zero-stage jobs; nil otherwise
-	err  error
-}
-
-// LocalComputeJob collects rows from shards via a channel, then executes the
-// pipeline once all sentinels have been received.
+// LocalComputeJob collects rows from shards via a channel and pushes
+// merged + (optionally) staged output as Lines into streamCh.
+//
+// The job is single-consumer on the output side: callers either drain
+// streamCh via Stream() OR call Result()/MergedRows() (which drain
+// internally into a cache). Mixing the two on one job is not
+// supported; the cache only fires when no live consumer has the
+// channel.
 type LocalComputeJob struct {
 	stages      []string
 	shardCount  int
 	mergeKey    string // see ComputePool.NewJob; empty = concat, otherwise k-way merge
 	limit       int    // see ComputePool.NewJob; 0 = no cap
 	parallelism int
-	ch          chan ComputeMessage
-	done        chan jobResult
-	once        sync.Once
-	resultOnce  sync.Once
-	result      jobResult
+
+	ch        chan ComputeMessage // shards push rows + sentinels here
+	streamCh  chan Line           // consume() pushes output here
+	streamErr error               // set by consume before closing streamCh
+
+	consumeOnce sync.Once
+
+	// drain cache — populated on first Result/MergedRows call.
+	drainOnce    sync.Once
+	drainedLines []Line
+	drainedErr   error
 }
 
 func (j *LocalComputeJob) ensureStarted() {
-	j.once.Do(func() { go j.consume() })
+	j.consumeOnce.Do(func() { go j.consume() })
 }
 
 func (j *LocalComputeJob) Send(msg ComputeMessage) {
@@ -68,58 +74,74 @@ func (j *LocalComputeJob) SendSentinel(shardID string) {
 	j.Send(ComputeMessage{ShardID: shardID, Sentinel: true})
 }
 
-// readResult blocks until consume() finishes, then caches the result
-// so subsequent Result/Stream/MergedRows calls return immediately. The
-// done channel is buffered with size 1; without caching, the second
-// reader would block forever.
-func (j *LocalComputeJob) readResult() jobResult {
-	j.ensureStarted()
-	j.resultOnce.Do(func() {
-		j.result = <-j.done
-	})
-	return j.result
-}
-
-func (j *LocalComputeJob) Result() (string, error) {
-	r := j.readResult()
-	return r.text, r.err
-}
-
-// Stream returns the job's output as a forward-only line stream. The
-// underlying merge + pipeline still runs as a single batch (Result is
-// invoked once on first Next); the LineStream surface is in place so
-// callers (coordinator → gRPC server) can be migrated against it
-// before the producer side is converted to true streaming.
+// Stream returns a forward-only line stream of the job's output. Lines
+// are emitted as the merge advances (zero-stage jobs) or as the bash
+// pipeline finishes and its stdout is split (staged jobs). Single-
+// consumer: callers must NOT also call Result/MergedRows on the same
+// job once Stream has been claimed.
 func (j *LocalComputeJob) Stream() LineStream {
-	return newBufferedLineStream(j.Result)
+	j.ensureStarted()
+	return newChannelLineStream(j.streamCh, &j.streamErr)
 }
 
-// MergedRows blocks until the job has consumed all sentinels and
-// returns the merged rows for a zero-stage job. Returns nil for staged
-// jobs (the post-stage text output discards row metadata). Used by the
-// coordinator transitionally while QueryResult still carries Rows;
-// deleted in Phase 4 when the wire moves to LineStream.
-func (j *LocalComputeJob) MergedRows() ([]*pb.ResultRow, error) {
-	r := j.readResult()
-	if r.err != nil {
-		return nil, r.err
+// drain reads streamCh to exhaustion into a cached slice. Used by
+// Result and MergedRows; fires once via sync.Once so multiple batch-
+// API callers see consistent data.
+func (j *LocalComputeJob) drain() ([]Line, error) {
+	j.ensureStarted()
+	j.drainOnce.Do(func() {
+		for line := range j.streamCh {
+			j.drainedLines = append(j.drainedLines, line)
+		}
+		j.drainedErr = j.streamErr
+	})
+	return j.drainedLines, j.drainedErr
+}
+
+// Result drains the stream and returns the joined text. Convenience
+// for callers that want the whole output as one string.
+func (j *LocalComputeJob) Result() (string, error) {
+	lines, err := j.drain()
+	if err != nil {
+		return "", err
 	}
-	return r.rows, nil
+	return linesToText(lines), nil
 }
 
-// consume reads all messages from the channel until every shard's
-// sentinel has arrived, then flattens rows into a single input stream
-// for the compute pipeline. Shards' per-stream ordering (baked into
-// their SQL via ORDER BY) is preserved through a k-way merge on the
-// join column; an empty / unknown mergeKey falls back to arrival-order
-// concat inside mergeRowsFull.
+// MergedRows drains the stream and reconstructs *pb.ResultRow entries
+// for zero-stage jobs (each line maps back to one row, preserving
+// LineNum). Returns nil for staged jobs — the post-stage text path
+// loses row metadata. Used by the coordinator transitionally while
+// QueryResult still carries Rows; phase 4 follow-ups will route
+// callers to Stream() directly.
+func (j *LocalComputeJob) MergedRows() ([]*pb.ResultRow, error) {
+	if len(j.stages) > 0 {
+		return nil, nil
+	}
+	lines, err := j.drain()
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]*pb.ResultRow, len(lines))
+	for i, l := range lines {
+		rows[i] = &pb.ResultRow{LineNum: l.LineNum, Raw: l.Raw}
+	}
+	return rows, nil
+}
+
+// consume reads all messages from j.ch until every shard's sentinel
+// has arrived, k-way-merges the per-shard buffers, applies the
+// global head/tail cap, and pushes Lines onto j.streamCh as the
+// merge produces them. For zero-stage jobs the merged rows ARE the
+// output; for staged jobs the merged rows are joined + fed through
+// warp and the stdout is split into Lines after the pipeline
+// completes (warp doesn't expose a streaming bytes API today).
 //
-// For zero-stage jobs the merged rows are also stored on jobResult so
-// MergedRows callers can recover the full *pb.ResultRow values
-// (line_num, fields, etc.) that the staged-output text path discards.
-// This is a transitional affordance for callers that still want the
-// Rows shape; phase 4 deletes it when the wire moves to LineStream.
+// streamErr is set BEFORE the channel is closed so consumers see
+// the error after the channel signals exhaustion.
 func (j *LocalComputeJob) consume() {
+	defer close(j.streamCh)
+
 	perShard := map[string][]*pb.ResultRow{}
 	sentinels := 0
 
@@ -148,20 +170,21 @@ func (j *LocalComputeJob) consume() {
 		merged = merged[:j.limit]
 	}
 
-	// Zero-stage job: the merged rows ARE the output. Skip the bash
-	// pipeline entirely — running RunWithParallelism with an empty
-	// pipeline string returns empty stdout. This is the path a plain
-	// `cat /log/foo.log` takes after Phase 2 routes it through compute.
 	if len(j.stages) == 0 {
-		var sb strings.Builder
+		// Zero stages: merged rows ARE the output. Push each line as
+		// the heap walk produces it (today mergeRowsFull is a single
+		// pass that returns a slice; in a future iteration we can
+		// inline the heap walk here to truly stream).
 		for _, r := range merged {
-			sb.WriteString(r.Raw)
-			sb.WriteByte('\n')
+			j.streamCh <- Line{Raw: r.Raw, LineNum: r.LineNum}
 		}
-		j.done <- jobResult{text: sb.String(), rows: merged}
 		return
 	}
 
+	// Staged: feed merged rows into warp as one batch. warp's
+	// RunWithParallelism is non-streaming; once it returns we split
+	// the stdout into Lines. Future warp work could expose a
+	// streaming exec API and turn this into per-line pushes too.
 	var sb strings.Builder
 	for i, r := range merged {
 		if i > 0 {
@@ -177,13 +200,18 @@ func (j *LocalComputeJob) consume() {
 	pipeline := strings.Join(j.stages, " | ")
 	stdout, stderr, exitCode, err := bash.RunWithParallelism(pipeline, input, j.parallelism)
 	if err != nil {
-		j.done <- jobResult{err: fmt.Errorf("compute: %w", err)}
+		j.streamErr = fmt.Errorf("compute: %w", err)
 		return
 	}
 	if exitCode != 0 && stderr != "" {
-		j.done <- jobResult{err: fmt.Errorf("compute exit %d: %s", exitCode, stderr)}
+		j.streamErr = fmt.Errorf("compute exit %d: %s", exitCode, stderr)
 		return
 	}
 
-	j.done <- jobResult{text: stdout}
+	if stdout == "" {
+		return
+	}
+	for _, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
+		j.streamCh <- Line{Raw: line}
+	}
 }

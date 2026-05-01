@@ -130,11 +130,25 @@ func (j *GRPCComputeJob) Result() (string, error) {
 	return resp.Text, nil
 }
 
-// Stream wraps the existing batched Result in a line stream. The
-// remote compute RPC is still single-shot; phase 4 replaces this with
-// a streaming RPC.
+// Stream wraps the remote Result call in a slice-backed line stream.
+// The compute gRPC is still single-shot — the whole text comes back
+// in one response, gets split into Lines, and replays. A future
+// streaming compute RPC would replace this with a channel pumped
+// directly from the wire.
 func (j *GRPCComputeJob) Stream() LineStream {
-	return newBufferedLineStream(j.Result)
+	text, err := j.Result()
+	if err != nil {
+		return newSliceLineStream(nil, err)
+	}
+	if text == "" {
+		return newSliceLineStream(nil, nil)
+	}
+	parts := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	lines := make([]Line, len(parts))
+	for i, p := range parts {
+		lines[i] = Line{Raw: p}
+	}
+	return newSliceLineStream(lines, nil)
 }
 
 // MergedRows synthesizes a Rows-shape result from the remote text
@@ -168,6 +182,6 @@ func (j *errJob) SendRow(*pb.ResultRow, string)  {}
 func (j *errJob) SendSentinel(string)            {}
 func (j *errJob) Result() (string, error)        { return "", j.err }
 func (j *errJob) Stream() LineStream {
-	return newBufferedLineStream(j.Result)
+	return newSliceLineStream(nil, j.err)
 }
 

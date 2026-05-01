@@ -7,10 +7,12 @@ import (
 
 // Line is one row of output from a compute job. Mirrors what the user
 // would see in their shell — a rendered line with optional metadata
-// for callers that need it.
+// for callers that need it. Stderr=true tags alert/error output so
+// clients can render distinctly (red ANSI, separate channel, etc.).
 type Line struct {
 	Raw     string
 	LineNum int64 // 0 when not shard-sourced or post-stage
+	Stderr  bool
 }
 
 // LineStream is a forward-only stream of compute job output. Next
@@ -21,40 +23,90 @@ type LineStream interface {
 	Close() error
 }
 
-// bufferedLineStream adapts a "produce the whole text" function into a
-// LineStream. The full text is materialized on the first Next call and
-// then walked line-by-line. This is the bridge implementation used
-// while ComputeJob still computes results as a single blob; a future
-// pass replaces it with a producer-side line channel for true
-// incremental delivery.
-type bufferedLineStream struct {
-	produce func() (string, error)
-	lines   []string
-	idx     int
-	init    bool
+// channelLineStream wraps a chan Line so producers can push lines
+// incrementally — used by LocalComputeJob.consume after Phase 4's
+// producer-side streaming refactor. Errors propagate via the
+// dedicated err pointer; producer sets it before closing the channel
+// so consumers see the error after the channel signals exhaustion.
+type channelLineStream struct {
+	ch     <-chan Line
+	errPtr *error // populated by producer before closing ch; nil = success
 }
 
-func newBufferedLineStream(produce func() (string, error)) *bufferedLineStream {
-	return &bufferedLineStream{produce: produce}
+func newChannelLineStream(ch <-chan Line, errPtr *error) *channelLineStream {
+	return &channelLineStream{ch: ch, errPtr: errPtr}
 }
 
-func (s *bufferedLineStream) Next(_ context.Context) (Line, bool, error) {
-	if !s.init {
-		text, err := s.produce()
-		s.init = true
-		if err != nil {
-			return Line{}, false, err
+func (s *channelLineStream) Next(ctx context.Context) (Line, bool, error) {
+	select {
+	case <-ctx.Done():
+		return Line{}, false, ctx.Err()
+	case line, ok := <-s.ch:
+		if !ok {
+			if s.errPtr != nil && *s.errPtr != nil {
+				return Line{}, false, *s.errPtr
+			}
+			return Line{}, false, nil
 		}
-		if text != "" {
-			s.lines = strings.Split(strings.TrimRight(text, "\n"), "\n")
-		}
+		return line, true, nil
 	}
+}
+
+func (s *channelLineStream) Close() error { return nil }
+
+// sliceLineStream replays an in-memory []Line. Used as a buffered
+// view over a previously-drained stream — Result() drains the
+// channel into a slice, then subsequent Stream() calls replay from
+// the slice so multiple readers can see the same output.
+type sliceLineStream struct {
+	lines []Line
+	err   error
+	idx   int
+}
+
+func newSliceLineStream(lines []Line, err error) *sliceLineStream {
+	return &sliceLineStream{lines: lines, err: err}
+}
+
+func (s *sliceLineStream) Next(_ context.Context) (Line, bool, error) {
 	if s.idx >= len(s.lines) {
-		return Line{}, false, nil
+		return Line{}, false, s.err
 	}
-	line := Line{Raw: s.lines[s.idx]}
+	line := s.lines[s.idx]
 	s.idx++
 	return line, true, nil
 }
 
-func (s *bufferedLineStream) Close() error { return nil }
+func (s *sliceLineStream) Close() error { return nil }
+
+// drainLineStream reads s to exhaustion and returns the lines plus
+// any terminal error. Used by Result() to materialize the full text.
+func drainLineStream(s LineStream) ([]Line, error) {
+	ctx := context.Background()
+	var out []Line
+	for {
+		line, ok, err := s.Next(ctx)
+		if err != nil {
+			return out, err
+		}
+		if !ok {
+			return out, nil
+		}
+		out = append(out, line)
+	}
+}
+
+// linesToText joins drained lines into a newline-terminated string.
+// Stderr lines are emitted as-is (no ANSI wrapping — the wire format
+// carries Stderr as its own field).
+func linesToText(lines []Line) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, line := range lines {
+		sb.WriteString(line.Raw)
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
