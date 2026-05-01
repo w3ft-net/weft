@@ -20,7 +20,7 @@ import (
 type captureStream struct {
 	grpc.ServerStream
 	ctx       context.Context
-	responses []*pb.CoordinatorQueryResponse
+	responses []*pb.CoordinatorExecuteResponse
 }
 
 func newCaptureStream(ctx context.Context) *captureStream {
@@ -28,7 +28,7 @@ func newCaptureStream(ctx context.Context) *captureStream {
 }
 
 func (s *captureStream) Context() context.Context              { return s.ctx }
-func (s *captureStream) Send(r *pb.CoordinatorQueryResponse) error {
+func (s *captureStream) Send(r *pb.CoordinatorExecuteResponse) error {
 	s.responses = append(s.responses, r)
 	return nil
 }
@@ -42,7 +42,7 @@ func (s *captureStream) RecvMsg(m any) error          { return nil }
 // integration: when a /tmp write triggers a notice, the gRPC
 // response carries that notice in its `notices` field. If anything
 // in coordinator.QueryResult → service.Server.Query →
-// CoordinatorQueryResponse drops the notices, this test fails.
+// CoordinatorExecuteResponse drops the notices, this test fails.
 func TestQueryRPC_EmitsNoticesOnFirstTmpWrite(t *testing.T) {
 	st, cleanup := testStore(t)
 	defer cleanup()
@@ -72,7 +72,7 @@ func TestQueryRPC_EmitsNoticesOnFirstTmpWrite(t *testing.T) {
 		UserID:       user.ID,
 	})
 
-	req := &pb.CoordinatorQueryRequest{
+	req := &pb.CoordinatorExecuteRequest{
 		Pipeline:    `echo first > /tmp/wire`,
 		UserId:      user.ID,
 		TimeStartNs: time.Now().Add(-time.Hour).UnixNano(),
@@ -80,7 +80,7 @@ func TestQueryRPC_EmitsNoticesOnFirstTmpWrite(t *testing.T) {
 	}
 
 	stream := newCaptureStream(ctx)
-	if err := srv.Query(req, stream); err != nil {
+	if err := srv.Execute(req, stream); err != nil {
 		t.Fatalf("Query: %v", err)
 	}
 

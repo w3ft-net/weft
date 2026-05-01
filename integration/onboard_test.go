@@ -183,7 +183,7 @@ func TestOnboardFlow(t *testing.T) {
 		}
 
 		time.Sleep(3 * time.Second)
-		stream, err := client.Query(context.Background(), &pb.CoordinatorQueryRequest{
+		stream, err := client.Execute(context.Background(), &pb.CoordinatorExecuteRequest{
 			Pipeline: pipeline,
 			Customer: "kevlar",
 		})

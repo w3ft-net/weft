@@ -73,7 +73,7 @@ func TestDirectToCompute_Op5_CoordinatorComputeStageRoundtrip(t *testing.T) {
 		t.Log("waiting for drain...")
 		time.Sleep(2 * time.Second)
 
-		qstream, err := client.Query(ctx, &pb.CoordinatorQueryRequest{
+		qstream, err := client.Execute(ctx, &pb.CoordinatorExecuteRequest{
 			Pipeline: `cat /log/op5compute.log | grep "` + unique + `" | sort`,
 			Customer: "kevlar",
 		})

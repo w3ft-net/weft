@@ -76,7 +76,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(s.coordCtx(r))
 	defer cancel()
 
-	stream, err := s.coordClient.Query(ctx, &pb.CoordinatorQueryRequest{
+	stream, err := s.coordClient.Execute(ctx, &pb.CoordinatorExecuteRequest{
 		Pipeline: req.Pipeline,
 		Follow:   req.Follow,
 		Customer: claims.CustomerName,
@@ -93,7 +93,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	// predictable cadence. http.ResponseWriter isn't safe for concurrent
 	// writes — the goroutine does only Recv, never Write.
 	type recvResult struct {
-		resp *pb.CoordinatorQueryResponse
+		resp *pb.CoordinatorExecuteResponse
 		err  error
 	}
 	recvCh := make(chan recvResult)

@@ -32,7 +32,7 @@ func runTails(ctx context.Context, cfg *Config, report *Report) {
 }
 
 func tailSubscribe(ctx context.Context, client pb.WeftCoordinatorClient, pipeline string) {
-	stream, err := client.Query(ctx, &pb.CoordinatorQueryRequest{
+	stream, err := client.Execute(ctx, &pb.CoordinatorExecuteRequest{
 		Pipeline: pipeline,
 		Follow:   true,
 	})

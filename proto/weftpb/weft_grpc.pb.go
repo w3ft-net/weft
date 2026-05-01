@@ -466,7 +466,7 @@ var WeftCompute_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	WeftCoordinator_Query_FullMethodName                  = "/weft.WeftCoordinator/Query"
+	WeftCoordinator_Execute_FullMethodName                = "/weft.WeftCoordinator/Execute"
 	WeftCoordinator_ListApps_FullMethodName               = "/weft.WeftCoordinator/ListApps"
 	WeftCoordinator_SampleCloudWatchSource_FullMethodName = "/weft.WeftCoordinator/SampleCloudWatchSource"
 	WeftCoordinator_AddSource_FullMethodName              = "/weft.WeftCoordinator/AddSource"
@@ -496,8 +496,11 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type WeftCoordinatorClient interface {
-	// Query executes a weft pipeline and streams results back.
-	Query(ctx context.Context, in *CoordinatorQueryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CoordinatorQueryResponse], error)
+	// Execute runs a user-typed weft pipeline (any shape — log query,
+	// plain bash, /bin script, or a mix) and streams results back. The
+	// coordinator's Execute method classifies and dispatches: log
+	// queries go to the strict planner; non-log work runs through warp.
+	Execute(ctx context.Context, in *CoordinatorExecuteRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CoordinatorExecuteResponse], error)
 	// ListApps returns the available app names (pseudofiles).
 	ListApps(ctx context.Context, in *ListAppsRequest, opts ...grpc.CallOption) (*ListAppsResponse, error)
 	// SampleCloudWatchSource assumes the customer's cross-account role and
@@ -548,13 +551,13 @@ func NewWeftCoordinatorClient(cc grpc.ClientConnInterface) WeftCoordinatorClient
 	return &weftCoordinatorClient{cc}
 }
 
-func (c *weftCoordinatorClient) Query(ctx context.Context, in *CoordinatorQueryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CoordinatorQueryResponse], error) {
+func (c *weftCoordinatorClient) Execute(ctx context.Context, in *CoordinatorExecuteRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CoordinatorExecuteResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WeftCoordinator_ServiceDesc.Streams[0], WeftCoordinator_Query_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WeftCoordinator_ServiceDesc.Streams[0], WeftCoordinator_Execute_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[CoordinatorQueryRequest, CoordinatorQueryResponse]{ClientStream: stream}
+	x := &grpc.GenericClientStream[CoordinatorExecuteRequest, CoordinatorExecuteResponse]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -565,7 +568,7 @@ func (c *weftCoordinatorClient) Query(ctx context.Context, in *CoordinatorQueryR
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WeftCoordinator_QueryClient = grpc.ServerStreamingClient[CoordinatorQueryResponse]
+type WeftCoordinator_ExecuteClient = grpc.ServerStreamingClient[CoordinatorExecuteResponse]
 
 func (c *weftCoordinatorClient) ListApps(ctx context.Context, in *ListAppsRequest, opts ...grpc.CallOption) (*ListAppsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -804,8 +807,11 @@ func (c *weftCoordinatorClient) Heartbeat(ctx context.Context, in *ShardHeartbea
 // All implementations must embed UnimplementedWeftCoordinatorServer
 // for forward compatibility.
 type WeftCoordinatorServer interface {
-	// Query executes a weft pipeline and streams results back.
-	Query(*CoordinatorQueryRequest, grpc.ServerStreamingServer[CoordinatorQueryResponse]) error
+	// Execute runs a user-typed weft pipeline (any shape — log query,
+	// plain bash, /bin script, or a mix) and streams results back. The
+	// coordinator's Execute method classifies and dispatches: log
+	// queries go to the strict planner; non-log work runs through warp.
+	Execute(*CoordinatorExecuteRequest, grpc.ServerStreamingServer[CoordinatorExecuteResponse]) error
 	// ListApps returns the available app names (pseudofiles).
 	ListApps(context.Context, *ListAppsRequest) (*ListAppsResponse, error)
 	// SampleCloudWatchSource assumes the customer's cross-account role and
@@ -856,8 +862,8 @@ type WeftCoordinatorServer interface {
 // pointer dereference when methods are called.
 type UnimplementedWeftCoordinatorServer struct{}
 
-func (UnimplementedWeftCoordinatorServer) Query(*CoordinatorQueryRequest, grpc.ServerStreamingServer[CoordinatorQueryResponse]) error {
-	return status.Error(codes.Unimplemented, "method Query not implemented")
+func (UnimplementedWeftCoordinatorServer) Execute(*CoordinatorExecuteRequest, grpc.ServerStreamingServer[CoordinatorExecuteResponse]) error {
+	return status.Error(codes.Unimplemented, "method Execute not implemented")
 }
 func (UnimplementedWeftCoordinatorServer) ListApps(context.Context, *ListAppsRequest) (*ListAppsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListApps not implemented")
@@ -949,16 +955,16 @@ func RegisterWeftCoordinatorServer(s grpc.ServiceRegistrar, srv WeftCoordinatorS
 	s.RegisterService(&WeftCoordinator_ServiceDesc, srv)
 }
 
-func _WeftCoordinator_Query_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(CoordinatorQueryRequest)
+func _WeftCoordinator_Execute_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(CoordinatorExecuteRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(WeftCoordinatorServer).Query(m, &grpc.GenericServerStream[CoordinatorQueryRequest, CoordinatorQueryResponse]{ServerStream: stream})
+	return srv.(WeftCoordinatorServer).Execute(m, &grpc.GenericServerStream[CoordinatorExecuteRequest, CoordinatorExecuteResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WeftCoordinator_QueryServer = grpc.ServerStreamingServer[CoordinatorQueryResponse]
+type WeftCoordinator_ExecuteServer = grpc.ServerStreamingServer[CoordinatorExecuteResponse]
 
 func _WeftCoordinator_ListApps_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListAppsRequest)
@@ -1461,8 +1467,8 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 	},
 	Streams: []grpc.StreamDesc{
 		{
-			StreamName:    "Query",
-			Handler:       _WeftCoordinator_Query_Handler,
+			StreamName:    "Execute",
+			Handler:       _WeftCoordinator_Execute_Handler,
 			ServerStreams: true,
 		},
 		{

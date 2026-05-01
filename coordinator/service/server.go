@@ -98,7 +98,7 @@ func (s *Server) runtimeCfg() *weftcfg.Runtime {
 	return s.CfgPtr.Load()
 }
 
-func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinator_QueryServer) error {
+func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordinator_ExecuteServer) error {
 	customer, err := callerCustomer(stream.Context())
 	if err != nil {
 		return err
@@ -130,7 +130,7 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 			// Render stderr in red ANSI so the shell displays it appropriately.
 			text += "\033[38;5;1m" + result.Stderr + "\033[0m"
 		}
-		return stream.Send(&pb.CoordinatorQueryResponse{Text: text, Notices: notices})
+		return stream.Send(&pb.CoordinatorExecuteResponse{Text: text, Notices: notices})
 	}
 
 	// Stream rows in batches to stay under gRPC message size limit.
@@ -142,7 +142,7 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 		if end > len(result.Rows) {
 			end = len(result.Rows)
 		}
-		resp := &pb.CoordinatorQueryResponse{
+		resp := &pb.CoordinatorExecuteResponse{
 			Rows: result.Rows[i:end],
 		}
 		if i == 0 {
@@ -156,7 +156,7 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 	// still want the user to see the warning. Emit a notices-only
 	// response.
 	if len(result.Rows) == 0 && result.Text == "" && result.Stderr == "" && len(notices) > 0 {
-		if err := stream.Send(&pb.CoordinatorQueryResponse{Notices: notices}); err != nil {
+		if err := stream.Send(&pb.CoordinatorExecuteResponse{Notices: notices}); err != nil {
 			return err
 		}
 	}
@@ -202,7 +202,7 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 			for i, ln := range lines {
 				rows[i] = &pb.ResultRow{LineNum: row.LineNum, Raw: ln}
 			}
-			if err := stream.Send(&pb.CoordinatorQueryResponse{Rows: rows}); err != nil {
+			if err := stream.Send(&pb.CoordinatorExecuteResponse{Rows: rows}); err != nil {
 				return err
 			}
 		}

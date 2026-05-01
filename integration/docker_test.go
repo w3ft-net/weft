@@ -304,7 +304,7 @@ func integrationJWT(t *testing.T) string {
 
 func queryPipeline(t *testing.T, client pb.WeftCoordinatorClient, pipeline, customer string) []*pb.ResultRow {
 	t.Helper()
-	stream, err := client.Query(context.Background(), &pb.CoordinatorQueryRequest{
+	stream, err := client.Execute(context.Background(), &pb.CoordinatorExecuteRequest{
 		Pipeline: pipeline,
 		Customer: customer,
 	})

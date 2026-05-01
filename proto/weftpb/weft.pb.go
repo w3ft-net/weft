@@ -1745,7 +1745,7 @@ func (x *AuthenticateResponse) GetNamespace() string {
 	return ""
 }
 
-type CoordinatorQueryRequest struct {
+type CoordinatorExecuteRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Pipeline      string                 `protobuf:"bytes,1,opt,name=pipeline,proto3" json:"pipeline,omitempty"`
 	TimeStartNs   int64                  `protobuf:"varint,2,opt,name=time_start_ns,json=timeStartNs,proto3" json:"time_start_ns,omitempty"` // 0 = use default
@@ -1757,20 +1757,20 @@ type CoordinatorQueryRequest struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CoordinatorQueryRequest) Reset() {
-	*x = CoordinatorQueryRequest{}
+func (x *CoordinatorExecuteRequest) Reset() {
+	*x = CoordinatorExecuteRequest{}
 	mi := &file_weft_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CoordinatorQueryRequest) String() string {
+func (x *CoordinatorExecuteRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CoordinatorQueryRequest) ProtoMessage() {}
+func (*CoordinatorExecuteRequest) ProtoMessage() {}
 
-func (x *CoordinatorQueryRequest) ProtoReflect() protoreflect.Message {
+func (x *CoordinatorExecuteRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_weft_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1782,54 +1782,54 @@ func (x *CoordinatorQueryRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CoordinatorQueryRequest.ProtoReflect.Descriptor instead.
-func (*CoordinatorQueryRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use CoordinatorExecuteRequest.ProtoReflect.Descriptor instead.
+func (*CoordinatorExecuteRequest) Descriptor() ([]byte, []int) {
 	return file_weft_proto_rawDescGZIP(), []int{30}
 }
 
-func (x *CoordinatorQueryRequest) GetPipeline() string {
+func (x *CoordinatorExecuteRequest) GetPipeline() string {
 	if x != nil {
 		return x.Pipeline
 	}
 	return ""
 }
 
-func (x *CoordinatorQueryRequest) GetTimeStartNs() int64 {
+func (x *CoordinatorExecuteRequest) GetTimeStartNs() int64 {
 	if x != nil {
 		return x.TimeStartNs
 	}
 	return 0
 }
 
-func (x *CoordinatorQueryRequest) GetTimeEndNs() int64 {
+func (x *CoordinatorExecuteRequest) GetTimeEndNs() int64 {
 	if x != nil {
 		return x.TimeEndNs
 	}
 	return 0
 }
 
-func (x *CoordinatorQueryRequest) GetFollow() bool {
+func (x *CoordinatorExecuteRequest) GetFollow() bool {
 	if x != nil {
 		return x.Follow
 	}
 	return false
 }
 
-func (x *CoordinatorQueryRequest) GetCustomer() string {
+func (x *CoordinatorExecuteRequest) GetCustomer() string {
 	if x != nil {
 		return x.Customer
 	}
 	return ""
 }
 
-func (x *CoordinatorQueryRequest) GetUserId() string {
+func (x *CoordinatorExecuteRequest) GetUserId() string {
 	if x != nil {
 		return x.UserId
 	}
 	return ""
 }
 
-type CoordinatorQueryResponse struct {
+type CoordinatorExecuteResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// One of these is populated depending on whether compute stages ran.
 	Rows []*ResultRow `protobuf:"bytes,1,rep,name=rows,proto3" json:"rows,omitempty"`
@@ -1842,20 +1842,20 @@ type CoordinatorQueryResponse struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CoordinatorQueryResponse) Reset() {
-	*x = CoordinatorQueryResponse{}
+func (x *CoordinatorExecuteResponse) Reset() {
+	*x = CoordinatorExecuteResponse{}
 	mi := &file_weft_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CoordinatorQueryResponse) String() string {
+func (x *CoordinatorExecuteResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CoordinatorQueryResponse) ProtoMessage() {}
+func (*CoordinatorExecuteResponse) ProtoMessage() {}
 
-func (x *CoordinatorQueryResponse) ProtoReflect() protoreflect.Message {
+func (x *CoordinatorExecuteResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_weft_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1867,26 +1867,26 @@ func (x *CoordinatorQueryResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CoordinatorQueryResponse.ProtoReflect.Descriptor instead.
-func (*CoordinatorQueryResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use CoordinatorExecuteResponse.ProtoReflect.Descriptor instead.
+func (*CoordinatorExecuteResponse) Descriptor() ([]byte, []int) {
 	return file_weft_proto_rawDescGZIP(), []int{31}
 }
 
-func (x *CoordinatorQueryResponse) GetRows() []*ResultRow {
+func (x *CoordinatorExecuteResponse) GetRows() []*ResultRow {
 	if x != nil {
 		return x.Rows
 	}
 	return nil
 }
 
-func (x *CoordinatorQueryResponse) GetText() string {
+func (x *CoordinatorExecuteResponse) GetText() string {
 	if x != nil {
 		return x.Text
 	}
 	return ""
 }
 
-func (x *CoordinatorQueryResponse) GetNotices() []*Notice {
+func (x *CoordinatorExecuteResponse) GetNotices() []*Notice {
 	if x != nil {
 		return x.Notices
 	}
@@ -4029,15 +4029,15 @@ const file_weft_proto_rawDesc = "" +
 	"\x14AuthenticateResponse\x12\x1a\n" +
 	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x1c\n" +
 	"\tnamespace\x18\x05 \x01(\tR\tnamespaceJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\n" +
-	"shard_addrR\vshard_tokenR\rexpires_at_ns\"\xc6\x01\n" +
-	"\x17CoordinatorQueryRequest\x12\x1a\n" +
+	"shard_addrR\vshard_tokenR\rexpires_at_ns\"\xc8\x01\n" +
+	"\x19CoordinatorExecuteRequest\x12\x1a\n" +
 	"\bpipeline\x18\x01 \x01(\tR\bpipeline\x12\"\n" +
 	"\rtime_start_ns\x18\x02 \x01(\x03R\vtimeStartNs\x12\x1e\n" +
 	"\vtime_end_ns\x18\x03 \x01(\x03R\ttimeEndNs\x12\x16\n" +
 	"\x06follow\x18\x04 \x01(\bR\x06follow\x12\x1a\n" +
 	"\bcustomer\x18\x05 \x01(\tR\bcustomer\x12\x17\n" +
-	"\auser_id\x18\x06 \x01(\tR\x06userId\"{\n" +
-	"\x18CoordinatorQueryResponse\x12#\n" +
+	"\auser_id\x18\x06 \x01(\tR\x06userId\"}\n" +
+	"\x1aCoordinatorExecuteResponse\x12#\n" +
 	"\x04rows\x18\x01 \x03(\v2\x0f.weft.ResultRowR\x04rows\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\x12&\n" +
 	"\anotices\x18\x03 \x03(\v2\f.weft.NoticeR\anotices\"X\n" +
@@ -4188,9 +4188,9 @@ const file_weft_proto_rawDesc = "" +
 	"\vWeftCompute\x12<\n" +
 	"\tCreateJob\x12\x16.weft.CreateJobRequest\x1a\x17.weft.CreateJobResponse\x12:\n" +
 	"\bSendRows\x12\x14.weft.ComputeMessage\x1a\x16.weft.SendRowsResponse(\x01\x12<\n" +
-	"\tGetResult\x12\x16.weft.GetResultRequest\x1a\x17.weft.GetResultResponse2\x98\r\n" +
-	"\x0fWeftCoordinator\x12H\n" +
-	"\x05Query\x12\x1d.weft.CoordinatorQueryRequest\x1a\x1e.weft.CoordinatorQueryResponse0\x01\x129\n" +
+	"\tGetResult\x12\x16.weft.GetResultRequest\x1a\x17.weft.GetResultResponse2\x9e\r\n" +
+	"\x0fWeftCoordinator\x12N\n" +
+	"\aExecute\x12\x1f.weft.CoordinatorExecuteRequest\x1a .weft.CoordinatorExecuteResponse0\x01\x129\n" +
 	"\bListApps\x12\x15.weft.ListAppsRequest\x1a\x16.weft.ListAppsResponse\x12c\n" +
 	"\x16SampleCloudWatchSource\x12#.weft.SampleCloudWatchSourceRequest\x1a$.weft.SampleCloudWatchSourceResponse\x12<\n" +
 	"\tAddSource\x12\x16.weft.AddSourceRequest\x1a\x17.weft.AddSourceResponse\x12B\n" +
@@ -4260,8 +4260,8 @@ var file_weft_proto_goTypes = []any{
 	(*AuthenticateRequest)(nil),            // 27: weft.AuthenticateRequest
 	(*MetricsConfig)(nil),                  // 28: weft.MetricsConfig
 	(*AuthenticateResponse)(nil),           // 29: weft.AuthenticateResponse
-	(*CoordinatorQueryRequest)(nil),        // 30: weft.CoordinatorQueryRequest
-	(*CoordinatorQueryResponse)(nil),       // 31: weft.CoordinatorQueryResponse
+	(*CoordinatorExecuteRequest)(nil),      // 30: weft.CoordinatorExecuteRequest
+	(*CoordinatorExecuteResponse)(nil),     // 31: weft.CoordinatorExecuteResponse
 	(*Notice)(nil),                         // 32: weft.Notice
 	(*ListAppsRequest)(nil),                // 33: weft.ListAppsRequest
 	(*ListAppsResponse)(nil),               // 34: weft.ListAppsResponse
@@ -4304,8 +4304,8 @@ var file_weft_proto_depIdxs = []int32{
 	6,  // 1: weft.ComputeMessage.row:type_name -> weft.ResultRow
 	24, // 2: weft.ListTokensResponse.tokens:type_name -> weft.TokenInfo
 	28, // 3: weft.AuthenticateRequest.metrics_config:type_name -> weft.MetricsConfig
-	6,  // 4: weft.CoordinatorQueryResponse.rows:type_name -> weft.ResultRow
-	32, // 5: weft.CoordinatorQueryResponse.notices:type_name -> weft.Notice
+	6,  // 4: weft.CoordinatorExecuteResponse.rows:type_name -> weft.ResultRow
+	32, // 5: weft.CoordinatorExecuteResponse.notices:type_name -> weft.Notice
 	41, // 6: weft.ListSourcesResponse.sources:type_name -> weft.SourceInfo
 	62, // 7: weft.GetWatchResultsResponse.results:type_name -> weft.WatchResult
 	3,  // 8: weft.ShardQuery.Query:input_type -> weft.QueryRequest
@@ -4316,7 +4316,7 @@ var file_weft_proto_depIdxs = []int32{
 	10, // 13: weft.WeftCompute.CreateJob:input_type -> weft.CreateJobRequest
 	12, // 14: weft.WeftCompute.SendRows:input_type -> weft.ComputeMessage
 	14, // 15: weft.WeftCompute.GetResult:input_type -> weft.GetResultRequest
-	30, // 16: weft.WeftCoordinator.Query:input_type -> weft.CoordinatorQueryRequest
+	30, // 16: weft.WeftCoordinator.Execute:input_type -> weft.CoordinatorExecuteRequest
 	33, // 17: weft.WeftCoordinator.ListApps:input_type -> weft.ListAppsRequest
 	37, // 18: weft.WeftCoordinator.SampleCloudWatchSource:input_type -> weft.SampleCloudWatchSourceRequest
 	35, // 19: weft.WeftCoordinator.AddSource:input_type -> weft.AddSourceRequest
@@ -4348,7 +4348,7 @@ var file_weft_proto_depIdxs = []int32{
 	11, // 45: weft.WeftCompute.CreateJob:output_type -> weft.CreateJobResponse
 	13, // 46: weft.WeftCompute.SendRows:output_type -> weft.SendRowsResponse
 	15, // 47: weft.WeftCompute.GetResult:output_type -> weft.GetResultResponse
-	31, // 48: weft.WeftCoordinator.Query:output_type -> weft.CoordinatorQueryResponse
+	31, // 48: weft.WeftCoordinator.Execute:output_type -> weft.CoordinatorExecuteResponse
 	34, // 49: weft.WeftCoordinator.ListApps:output_type -> weft.ListAppsResponse
 	38, // 50: weft.WeftCoordinator.SampleCloudWatchSource:output_type -> weft.SampleCloudWatchSourceResponse
 	36, // 51: weft.WeftCoordinator.AddSource:output_type -> weft.AddSourceResponse

@@ -76,7 +76,7 @@ func Setup() func() {
 }
 
 // seedFixtures idempotently inserts the customers + namespaces the
-// integration tests assume exist. The CoordinatorQueryRequest's
+// integration tests assume exist. The CoordinatorExecuteRequest's
 // customer field is ignored server-side (callerCustomer() reads the
 // JWT), so every test-internal customer name collapses onto the JWT's
 // customer (kevlar). Seeding under kevlar covers all the namespace

@@ -31,7 +31,7 @@ type fakeCoord struct {
 	authSeen chan string
 }
 
-func (f *fakeCoord) Query(_ *pb.CoordinatorQueryRequest, stream grpc.ServerStreamingServer[pb.CoordinatorQueryResponse]) error {
+func (f *fakeCoord) Query(_ *pb.CoordinatorExecuteRequest, stream grpc.ServerStreamingServer[pb.CoordinatorExecuteResponse]) error {
 	md, _ := metadata.FromIncomingContext(stream.Context())
 	vals := md.Get("authorization")
 	var seen string
@@ -45,7 +45,7 @@ func (f *fakeCoord) Query(_ *pb.CoordinatorQueryRequest, stream grpc.ServerStrea
 	if seen == "" {
 		return status.Errorf(codes.Unauthenticated, "missing authorization metadata")
 	}
-	return stream.Send(&pb.CoordinatorQueryResponse{Text: "ok\n"})
+	return stream.Send(&pb.CoordinatorExecuteResponse{Text: "ok\n"})
 }
 
 // TestShellExec_ForwardsBearerToCoordinator reproduces the prod symptom

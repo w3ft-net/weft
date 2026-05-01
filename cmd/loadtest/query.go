@@ -81,7 +81,7 @@ func execQuery(ctx context.Context, client pb.WeftCoordinatorClient, pipeline st
 	queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	stream, err := client.Query(queryCtx, &pb.CoordinatorQueryRequest{Pipeline: pipeline})
+	stream, err := client.Execute(queryCtx, &pb.CoordinatorExecuteRequest{Pipeline: pipeline})
 	if err != nil {
 		return err
 	}

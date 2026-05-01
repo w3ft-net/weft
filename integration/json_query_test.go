@@ -111,7 +111,7 @@ func TestDockerStack_JqFieldExtraction(t *testing.T) {
 // queryText queries a pipeline and returns the text result (from the compute path).
 func queryText(t *testing.T, client pb.WeftCoordinatorClient, pipeline, customer string) string {
 	t.Helper()
-	stream, err := client.Query(context.Background(), &pb.CoordinatorQueryRequest{
+	stream, err := client.Execute(context.Background(), &pb.CoordinatorExecuteRequest{
 		Pipeline: pipeline,
 		Customer: customer,
 	})

@@ -177,7 +177,7 @@ func ensureData(tb testing.TB, _ pb.WeftCoordinatorClient, n int) {
 
 func query(tb testing.TB, client pb.WeftCoordinatorClient, pipeline string) int {
 	tb.Helper()
-	stream, err := client.Query(context.Background(), &pb.CoordinatorQueryRequest{
+	stream, err := client.Query(context.Background(), &pb.CoordinatorExecuteRequest{
 		Pipeline: pipeline,
 	})
 	if err != nil {
@@ -394,7 +394,7 @@ func benchTailFanout(b *testing.B, numSubscribers int) {
 			pipeline := tailPipelines[s%len(tailPipelines)]
 			go func() {
 				defer wg.Done()
-				stream, err := client.Query(ctx, &pb.CoordinatorQueryRequest{
+				stream, err := client.Execute(ctx, &pb.CoordinatorExecuteRequest{
 					Pipeline: pipeline,
 					Follow:   true,
 				})
