@@ -83,37 +83,7 @@ func (s *Shell) Run() error {
 		func(b []byte) { os.Stdout.Write(b) },
 		func(a shellcore.Action) { runner.handleAction(a) },
 	)
-	// shellcore's stock builtins (cat, head, tail) and the path
-	// rewriter consult the registered classifier to decide whether
-	// to FS-read or call StartQuery. Without this line the default
-	// ("everything is PathLocal") would silently disable query
-	// routing for /log/. The classifier moved out of shellcore
-	// when warp made the path hierarchy embedder-supplied.
-	runner.core.SetPathClassifier(PathClassifier)
-	if s.FS != nil {
-		runner.core.SetFS(s.FS)
-		// Wire chart if the FS satisfies the WatchResultsProvider
-		// contract — the chart View and pipe-stage handler need a
-		// data source.
-		if wr, ok := s.FS.(chart.WatchResultsProvider); ok {
-			chart.Register(runner.core, wr)
-		}
-	}
-	if s.User != "" {
-		runner.core.SetUser(s.User)
-	}
-	if s.Customer != "" {
-		runner.core.SetCustomer(s.Customer)
-	}
-	runner.core.SetHistoryStore(NewFileHistoryStore())
-	runner.core.SetRange(s.Start, s.End)
-	runner.core.SetTierLimits(storeTierLimits{})
-	// Same grammar declared at the non-interactive call site
-	// (ExecNonInteractive). When the user types `wit log /bin/scan`
-	// in a chained line, the interactive rewriter must preserve
-	// `log` as wit's subcommand keyword instead of joining it
-	// against `/` to the /log namespace root.
-	runner.core.RegisterRewriteGrammar("wit", "log", "show", "diff", "checkout", "amend")
+	s.configureCore(runner.core)
 
 	// Handle window resize.
 	sigCh := make(chan os.Signal, 1)
@@ -487,6 +457,45 @@ func stripBoth(line string) string {
 
 // ExecNonInteractive runs a single command through the shell and prints to w.
 // Supports all builtins (ls, cat /etc/, range, etc.) as well as queries.
+// configureCore wires the shellcore handle the way Shell.Run does:
+// path classifier, FS adapter (with chart hookup when supported),
+// user + customer, history, range, tier limits, and the wit
+// subcommand grammar.
+//
+// Extracted from Run so tests can drive a real shellcore through
+// the same setup without raw-mode terminal management. New
+// configuration knobs go through this method, not directly into
+// Run, so tests pick them up automatically.
+//
+// Customer default: when Shell.Customer is empty, weft installs
+// "weft" explicitly. Pre-A.4.5 this was warp's shellcore default;
+// after the cleanup the default moved here so warp-resident
+// embedders that aren't weft don't inherit weft's tenancy name.
+func (s *Shell) configureCore(core *shellcore.ShellCore) {
+	core.SetPathClassifier(PathClassifier)
+	if s.FS != nil {
+		core.SetFS(s.FS)
+		if wr, ok := s.FS.(chart.WatchResultsProvider); ok {
+			chart.Register(core, wr)
+		}
+	}
+	if s.User != "" {
+		core.SetUser(s.User)
+	}
+	customer := s.Customer
+	if customer == "" {
+		customer = "weft"
+	}
+	core.SetCustomer(customer)
+	core.SetHistoryStore(NewFileHistoryStore())
+	core.SetRange(s.Start, s.End)
+	core.SetTierLimits(storeTierLimits{})
+	// Subcommand grammar matches the one ExecNonInteractive passes:
+	// `wit log <path>` must preserve the keyword instead of
+	// resolving `log` against `/` to the /log namespace.
+	core.RegisterRewriteGrammar("wit", "log", "show", "diff", "checkout", "amend")
+}
+
 func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 	line = strings.TrimSpace(line)
 
