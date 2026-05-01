@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -97,19 +98,25 @@ func TestPlan_AlertArgsPropagated(t *testing.T) {
 		}
 	}
 
-	// Local pipeline (`echo` is not a weft source): planner falls back to
-	// Local mode but still extracts AlertArgs.
-	plan, err = Plan(`echo 42 | alert above 0`)
+	// Non-log pipeline (`echo` is not a weft source): Plan returns
+	// ErrNotPlannable. The caller (Coordinator.Execute) is
+	// responsible for peeling alert separately via SplitAlertStage
+	// when it routes the residual to warp.
+	_, err = Plan(`echo 42 | alert above 0`)
+	if !errors.Is(err, ErrNotPlannable) {
+		t.Fatalf("Plan(echo 42 | alert ...) err = %v, want ErrNotPlannable", err)
+	}
+
+	// Alert-only pipeline (no source at all). Plan returns a plan
+	// carrying just the AlertArgs; ShardSQL is empty.
+	plan, err = Plan(`alert above 5`)
 	if err != nil {
-		t.Fatalf("Plan local: %v", err)
+		t.Fatalf("Plan(alert above 5): %v", err)
 	}
-	if !plan.Local {
-		t.Error("expected Local = true for echo pipeline")
+	if plan.ShardSQL != "" {
+		t.Errorf("alert-only ShardSQL = %q, want empty", plan.ShardSQL)
 	}
-	if plan.LocalPipeline != "echo 42" {
-		t.Errorf("LocalPipeline = %q, want %q", plan.LocalPipeline, "echo 42")
-	}
-	if !reflect.DeepEqual(plan.AlertArgs, []string{"above", "0"}) {
-		t.Errorf("AlertArgs = %v, want [above 0]", plan.AlertArgs)
+	if !reflect.DeepEqual(plan.AlertArgs, []string{"above", "5"}) {
+		t.Errorf("alert-only AlertArgs = %v, want [above 5]", plan.AlertArgs)
 	}
 }

@@ -44,9 +44,6 @@ func TestBinPushdown_SinglePipelineBody_PushesDown(t *testing.T) {
 
 	plan := planAfterExpand(t, fs, "errors api.log")
 
-	if plan.Local {
-		t.Fatalf("single-pipeline body should push down, got Local=true (LocalPipeline=%q)", plan.LocalPipeline)
-	}
 	if plan.ShardSQL == "" {
 		t.Fatalf("single-pipeline body should produce ShardSQL, got empty (plan=%+v)", plan)
 	}

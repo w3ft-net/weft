@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -38,15 +39,9 @@ func TestEdge_Source(t *testing.T) {
 	})
 
 	t.Run("local pipeline", func(t *testing.T) {
-		plan, err := Plan("echo 42")
-		if err != nil {
-			t.Fatalf("Plan(\"echo 42\"): unexpected error: %v", err)
-		}
-		if !plan.Local {
-			t.Error("expected Local=true for sourceless pipeline")
-		}
-		if plan.LocalPipeline != "echo 42" {
-			t.Errorf("LocalPipeline = %q, want %q", plan.LocalPipeline, "echo 42")
+		_, err := Plan("echo 42")
+		if !errors.Is(err, ErrNotPlannable) {
+			t.Fatalf("Plan(\"echo 42\") err = %v, want ErrNotPlannable", err)
 		}
 	})
 

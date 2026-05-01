@@ -94,6 +94,12 @@ services:
         condition: service_healthy
       coordinator:
         condition: service_started
+    # api and coordinator both run goose up at startup. They depend
+    # on postgres but not on each other for migrations, so they race.
+    # The loser hits "relation already exists" mid-migration and
+    # crashes. restart on failure means the loser's second attempt
+    # finds migrations already applied and proceeds normally.
+    restart: on-failure
 
   weftd:
     build:

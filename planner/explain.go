@@ -17,8 +17,12 @@ func Explain(pipeline string) string {
 
 	fmt.Fprintf(&b, "Pipeline: %s\n", pipeline)
 
-	if plan.Local {
-		fmt.Fprintf(&b, "\nLocal pipeline (no log source):\n  %s\n", plan.LocalPipeline)
+	// Alert-only pipeline carries AlertArgs but no SQL/source; render
+	// the trailing alert and return.
+	if plan.ShardSQL == "" {
+		if plan.AlertArgs != nil {
+			fmt.Fprintf(&b, "\nAlert-only pipeline:\n  alert %s\n", strings.Join(plan.AlertArgs, " "))
+		}
 		return b.String()
 	}
 

@@ -26,11 +26,9 @@ type QueryPlan struct {
 	// coordinator.BuildLiveFilter so the live broker rows go through
 	// the same transformations as the historical batch.
 	LiveStages []string
-	Local          bool          // true if pipeline has no log source (run through warp locally)
-	LocalPipeline  string        // the full pipeline string for local execution
 	SourceCmd      string        // source command: "cat", "head", or "tail"
 	SourceApp      string        // app extracted from pseudofile ("" = all apps)
-	AlertArgs      []string      // argv for a terminal `alert` stage; nil if absent
+	AlertArgs      []string      // argv for a terminal `alert` stage; nil if absent. Set even for alert-only pipelines (ShardSQL is empty in that case).
 
 	// Direct-to-compute mode (see docs/plans/direct-to-compute.md §3).
 	// Populated from classifyShardMode walking ComputeStages for the
@@ -140,12 +138,11 @@ func IsLogQuery(pipeline string) bool {
 func Plan(pipeline string) (*QueryPlan, error) {
 	queryPart, alertArgs := SplitAlertStage(pipeline)
 
-	// Pipeline is just `alert ...` — nothing to query. The caller runs
-	// AlertCommand with empty stdin (mostly useful for `alert absent`
-	// or test-dispatch flows). A wholly empty input falls through so
-	// parsePipeline reports the usual "empty pipeline" error.
+	// Alert-only pipeline (`alert ...` with nothing in front). Return
+	// a plan that carries only the alert args; the empty ShardSQL is
+	// the caller's signal to short-circuit shard execution.
 	if queryPart == "" && alertArgs != nil {
-		return &QueryPlan{Local: true, LocalPipeline: "", AlertArgs: alertArgs}, nil
+		return &QueryPlan{AlertArgs: alertArgs}, nil
 	}
 
 	// Strip a trailing `> /tmp/...` (or other shellfs namespace)
@@ -160,24 +157,11 @@ func Plan(pipeline string) (*QueryPlan, error) {
 
 	info, err := parsePipeline(queryPart)
 	if err != nil {
-		// If the source command is unknown, this is a local pipeline
-		// (e.g., "echo 42 | alert above 0"). Same treatment for source
-		// args that name a non-log shellfs namespace (/bin, /cron.d,
-		// /etc, /tmp) — those reads go through warp+shellfs at
-		// runtime, so any redirects honour FS write semantics.
+		// Not a log query — non-/log/ source path or an unknown
+		// source command. Caller (Coordinator.Execute) routes these
+		// to warp via runLocal; ErrNotPlannable is the typed signal.
 		if strings.Contains(err.Error(), "unknown source command") || errors.Is(err, errLocalSourcePath) {
-			// Preserve the original redirect alongside the local
-			// pipeline so warp+shellfs can apply it natively at
-			// exec time.
-			local := queryPart
-			if redirTarget != "" {
-				op := ">"
-				if redirAppend {
-					op = ">>"
-				}
-				local = local + " " + op + " " + redirTarget
-			}
-			return &QueryPlan{Local: true, LocalPipeline: local, AlertArgs: alertArgs}, nil
+			return nil, ErrNotPlannable
 		}
 		return nil, fmt.Errorf("plan: %w", err)
 	}

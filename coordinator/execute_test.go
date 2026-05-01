@@ -8,6 +8,28 @@ import (
 	"github.com/kevlarcon/weft/planner"
 )
 
+// TestPlan_StrictRejectsNonLogPipeline drives the planner-side
+// strictness step: planner.Plan returns ErrNotPlannable for any
+// pipeline whose first command isn't a /log/... source. The
+// coordinator's Execute path catches the error and routes through
+// warp; Query propagates it.
+func TestPlan_StrictRejectsNonLogPipeline(t *testing.T) {
+	cases := []string{
+		"echo 42",
+		"echo 42 | alert above 0",
+		"cat /tmp/notes",
+		"seq 1 5 | wc -l",
+	}
+	for _, p := range cases {
+		t.Run(p, func(t *testing.T) {
+			_, err := planner.Plan(p)
+			if !errors.Is(err, planner.ErrNotPlannable) {
+				t.Fatalf("Plan(%q) err = %v, want ErrNotPlannable", p, err)
+			}
+		})
+	}
+}
+
 // TestQuery_StrictRejectsNonLogPipeline pins Phase 3's planner-strictness
 // change: Coordinator.Query is for plannable log queries only. A
 // non-log pipeline like `echo 42` returns ErrNotPlannable instead of

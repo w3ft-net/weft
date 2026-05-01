@@ -3,6 +3,7 @@ package coordinator
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -449,6 +450,35 @@ func (c *Coordinator) query(pipeline string, tr TimeRange, customer, userID stri
 
 	plan, err := planner.Plan(pipeline)
 	if err != nil {
+		// Non-log pipeline (planner doesn't recognise the source
+		// command, or the source addresses a non-/log/ shellfs
+		// namespace). Run the original pipeline through warp; warp+
+		// shellfs handles redirects, /bin scripts, and any embedded
+		// log queries (via rewriteQueryPipelines).
+		if errors.Is(err, planner.ErrNotPlannable) {
+			// runLocal still expects an alertCtx — we let the warp
+			// path peel the trailing alert separately and run it
+			// against runLocal's output below. The pipeline passed
+			// to runLocal must NOT include the alert stage (warp
+			// has no `alert` builtin); peel it via SplitAlertStage.
+			queryPart, alertArgs := planner.SplitAlertStage(pipeline)
+			result, err := c.runLocal(queryPart, tr, customer, custID, userID, alertCtx)
+			if err != nil {
+				return nil, err
+			}
+			if alertArgs != nil {
+				if alertCtx == nil {
+					alertCtx = &AlertContext{
+						Store:       c.Store,
+						CustomerID:  custID,
+						Interactive: true,
+						Notifier:    c.Notifier,
+					}
+				}
+				runAlertStage(result, alertArgs, alertCtx)
+			}
+			return result, nil
+		}
 		log.Printf("query: plan error: %v (pipeline=%q)", err, pipeline)
 		return nil, fmt.Errorf("plan: %w", err)
 	}
@@ -470,12 +500,13 @@ func (c *Coordinator) query(pipeline string, tr TimeRange, customer, userID stri
 		runAlertStage(result, plan.AlertArgs, alertCtx)
 	}
 
-	// Honour a trailing `> /tmp/...` redirect on the query pipeline.
-	// runLocal already handles redirects natively (warp+shellfs); only
-	// the executeQuery path (a real /log query) drops them, so apply
-	// the write here against the same shellfs the local path would
-	// have used.
-	if plan.RedirectTarget != "" && custID != 0 && !plan.Local {
+	// Honour a trailing `> /tmp/...` redirect on a /log/... query.
+	// runLocal handles redirects natively (warp+shellfs); only the
+	// executeQuery path drops them, so apply the write here against
+	// the same shellfs the local path would have used. This is
+	// transitional — phase 4 plans to delete the special case by
+	// routing redirect-bearing log queries through warp too.
+	if plan.RedirectTarget != "" && custID != 0 {
 		if err := c.writeQueryResultToFS(result, plan, custID, userID); err != nil {
 			return nil, fmt.Errorf("redirect: %w", err)
 		}
@@ -523,11 +554,12 @@ func (c *Coordinator) writeQueryResultToFS(result *QueryResult, plan *planner.Qu
 // to runLocal so interior queries dispatched by the interceptor inherit
 // the caller's alert identity; may be nil.
 func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext) (*QueryResult, error) {
-	if plan.Local {
-		if plan.LocalPipeline == "" {
-			return &QueryResult{}, nil
-		}
-		return c.runLocal(plan.LocalPipeline, tr, customer, custID, userID, alertCtx)
+	// Alert-only pipeline: the planner's caller (c.query) sees an
+	// empty ShardSQL and runs the alert against an empty result. Hit
+	// the same shape here so direct callers of executeQuery (tests)
+	// behave identically.
+	if plan.ShardSQL == "" {
+		return &QueryResult{}, nil
 	}
 
 	// Allowlist: the pipeline's source app (the part before '/') must
