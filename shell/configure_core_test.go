@@ -104,6 +104,70 @@ func TestConfigureCore_RangeBuiltinAcceptsSpec(t *testing.T) {
 	}
 }
 
+// TestConfigureCore_HelpBuiltinsServesWeftCorpus locks in the
+// behavior that `help builtins` prints the weft-flavored corpus
+// (cat /log/<app>.log, ls /cron.d, wit, alert, range, etc.). Test
+// is the regression guard around the move that takes the docs_gen
+// constants + dispatch out of warp's shellcore (where it was the
+// hardcoded default) and into weft (where it lives as the
+// HelpProvider weft installs via configureCore).
+//
+// Pre-move: passes via warp's default shellDocTopics map.
+// Post-move: passes via weft's HelpProvider returning the same
+// corpus. Same observable result either way.
+func TestConfigureCore_HelpBuiltinsServesWeftCorpus(t *testing.T) {
+	var output strings.Builder
+	// Use a tall viewport so the help corpus renders inline rather
+	// than entering the pager (which only shows the first screenful
+	// in scrollback) — tests assert on the full corpus.
+	core := shellcore.NewShellCore(nil, 200, 200,
+		func(b []byte) { output.Write(b) },
+		func(a shellcore.Action) {},
+	)
+	(&Shell{User: "alice"}).configureCore(core)
+
+	for _, r := range "help builtins" {
+		core.HandleEvent(shellcore.KeyEvent{Rune: r})
+	}
+	core.HandleEvent(shellcore.KeyEvent{Key: shellcore.KeyEnter})
+
+	visible := stripANSI(output.String())
+	for _, marker := range []string{
+		"Querying logs",
+		"cat /log/",
+		"wit",
+		"chart",
+	} {
+		if !strings.Contains(visible, marker) {
+			t.Errorf("help builtins should mention %q; got: %q", marker, visible)
+		}
+	}
+}
+
+// TestConfigureCore_HelpCronInterpolatesTierLimits exercises the
+// {{TIER_LIMITS}} placeholder in the cron help topic. The provider
+// must consult weft's storeTierLimits to render the per-tier watch
+// caps. Pre-move warp held this logic; after the cleanup it lives
+// in weft's HelpProvider.
+func TestConfigureCore_HelpCronInterpolatesTierLimits(t *testing.T) {
+	var output strings.Builder
+	core := shellcore.NewShellCore(nil, 200, 200,
+		func(b []byte) { output.Write(b) },
+		func(a shellcore.Action) {},
+	)
+	(&Shell{User: "alice"}).configureCore(core)
+
+	for _, r := range "help cron" {
+		core.HandleEvent(shellcore.KeyEvent{Rune: r})
+	}
+	core.HandleEvent(shellcore.KeyEvent{Key: shellcore.KeyEnter})
+
+	visible := stripANSI(output.String())
+	if strings.Contains(visible, "{{TIER_LIMITS}}") {
+		t.Error("help cron should interpolate {{TIER_LIMITS}} placeholder")
+	}
+}
+
 // TestConfigureCore_HonoursExplicitCustomer verifies the override
 // path: when Shell.Customer is set, that wins over the "weft"
 // fallback.

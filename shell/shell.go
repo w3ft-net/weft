@@ -489,7 +489,7 @@ func (s *Shell) configureCore(core *shellcore.ShellCore) {
 	core.SetCustomer(customer)
 	core.SetHistoryStore(NewFileHistoryStore())
 	core.SetRange(s.Start, s.End)
-	core.SetTierLimits(storeTierLimits{})
+	core.SetHelp(weftHelp{tiers: storeTierLimits{}})
 	// Subcommand grammar matches the one ExecNonInteractive passes:
 	// `wit log <path>` must preserve the keyword instead of
 	// resolving `log` against `/` to the /log namespace.
@@ -512,6 +512,11 @@ func (s *Shell) configureCore(core *shellcore.ShellCore) {
 	// `range <spec>` (set new) — same UX warp's inline version
 	// provided.
 	core.RegisterBuiltin("range", rangeBuiltin)
+	// Post-save commit-message popup for /bin/<name> and
+	// /cron.d/<name>. Pre-A.4.5 this lived in shellcore as the
+	// default OnQuit branch; now installed by weft as embedder
+	// VimHooks via StartVimBuffer.
+	core.SetVimHooks(installVimPopupHooks(core))
 }
 
 // rangeBuiltin handles the `range` command. With no arg it prints

@@ -18,7 +18,7 @@ import (
 
 var (
 	docsDirs = flag.String("docs", "docs/shell,docs/manual", "comma-separated markdown input dirs")
-	shellOut = flag.String("shell-out", "shellcore/docs_gen.go", "generated Go file for shell consts")
+	shellOut = flag.String("shell-out", "shell/help_corpus_gen.go", "generated Go file for shell consts")
 	webOut   = flag.String("web-out", "frontend/src/generated/docs", "output dir for web TS modules")
 )
 
