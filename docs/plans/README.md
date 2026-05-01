@@ -117,6 +117,11 @@ than product strategy.
 | [alert-multirow-tier-limits](alert-multirow-tier-limits.md) | Per-tier caps on multi-row alert fan-out |
 | [oidc](oidc.md) | GitHub Actions deploy via OIDC (NOT user SSO — see `user-sso.md`) |
 | [integration-test-bitrot](integration-test-bitrot.md) | Tests that drift out of sync with code |
+| [end-to-end-streaming](end-to-end-streaming.md) | Online merge + forward stream + warp streaming exec — true incremental delivery for log queries |
+| [follow-via-execute](follow-via-execute.md) | Unify Follow into Coordinator.Execute as a continuous stream (concat historical + broker) |
+| [log-redirect-via-warp](log-redirect-via-warp.md) | Delete `writeQueryResultToFS` once warp's `CallbackCommand` carries Redirects (phase 3 carryover) |
+| [executeresult-buffered-cleanup](executeresult-buffered-cleanup.md) | Drain ExecuteResult.{Rows,Text,Stderr} fields after the test sweep migrates to `res.Drain(ctx)` |
+| [streaming-backpressure](streaming-backpressure.md) | Bounded per-shard queues + configurable streamCh; defer until production hits memory pressure |
 
 ## Conventions for new plans
 
