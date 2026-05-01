@@ -188,9 +188,14 @@ func awkProgramToSQL(prog *awk.Program) (string, []int, bool) {
 		return "", nil, false
 	}
 
-	// BEGIN/END blocks run outside the per-row loop — can't be expressed as SQL.
-	switch rule.Pattern.(type) {
-	case *awk.BeginPattern, *awk.EndPattern:
+	// Any non-nil pattern is a filter (ExprPattern, RegexPattern) or a
+	// scope marker (BEGIN/END). The action alone doesn't capture the
+	// filter — claiming the program is "just a projection" here would
+	// let the caller drop the stage and silently lose the filter,
+	// which is exactly the bug TestEdge_Awk_FilterAfterLimitFreezeMustSurvive
+	// guards against. A nil pattern means "run the action on every
+	// row" which IS expressible as a pure projection.
+	if rule.Pattern != nil {
 		return "", nil, false
 	}
 

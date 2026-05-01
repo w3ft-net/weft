@@ -182,6 +182,82 @@ func TestEdge_Awk_NonPushable(t *testing.T) {
 	}
 }
 
+// TestEdge_Awk_FilterAfterLimitFreezeMustSurvive documents the
+// post-`tail` / post-`head` awk filter case that user-facing queries
+// actually hit:
+//
+//	tail /log/weft/coordinator.log | awk '$4 == "compute" {print}'
+//
+// Two facts collide here. (1) After tail freezes the LIMIT, every
+// subsequent stage MUST run in compute — pushing a filter shard-side
+// post-LIMIT lets cross-shard merge re-saturate the result (see
+// docs/plans/cross-shard-post-limit-filter.md). (2) extractRawExpr's
+// awkProgramToSQL helper looks at the print action only; for a bare
+// `{print}` it returns ("raw", true) — meaning "this stage is
+// equivalent to projecting raw, drop it." But the FILTER pattern
+// `$4 == "compute"` was attached to that action; declaring the stage
+// redundant silently strips the filter.
+//
+// Result: the planner returns ShardSQL with no awk predicate AND
+// empty ComputeStages. cmd/explain even cheerfully reports "Compute
+// stages: (none — fully pushed down)." The shard returns the last 10
+// rows ordered by ts DESC, none of them filtered.
+//
+// Invariant for any pipeline containing an awk pattern: the filter
+// pattern's predicate has to appear *somewhere* — as a shard SQL
+// predicate (when pushdown is safe), as a compute stage (when not),
+// or as a projection that incorporates the filter. It must NOT
+// silently disappear.
+func TestEdge_Awk_FilterAfterLimitFreezeMustSurvive(t *testing.T) {
+	tests := []struct {
+		name     string
+		pipeline string
+	}{
+		{
+			name:     "tail then awk positional equality with explicit print",
+			pipeline: `tail /log/weft/coordinator.log | awk '$4 == "compute" {print}'`,
+		},
+		{
+			name:     "head then awk positional equality with explicit print",
+			pipeline: `head /log/weft/coordinator.log | awk '$3 == "compute" {print}'`,
+		},
+		{
+			name:     "tail then awk positional equality with default action",
+			pipeline: `tail /log/weft/coordinator.log | awk '$4 == "compute"'`,
+		},
+		{
+			name:     "tail then awk regex on $0 with explicit print",
+			pipeline: `tail /log/weft/coordinator.log | awk '$0 ~ /compute/ {print}'`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan, err := Plan(tt.pipeline)
+			if err != nil {
+				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
+			}
+
+			// The filter must survive as either a SQL predicate (the
+			// `list_extract(fields, N) = '…'` / `raw LIKE '%…%'` shape)
+			// or as a compute stage carrying the original awk program.
+			// Anywhere is fine — but somewhere is required.
+			pushedToSQL := strings.Contains(plan.ShardSQL, "list_extract(fields,") ||
+				strings.Contains(plan.ShardSQL, "raw LIKE")
+			pushedToCompute := false
+			for _, s := range plan.ComputeStages {
+				if strings.Contains(s, "awk") {
+					pushedToCompute = true
+					break
+				}
+			}
+			if !pushedToSQL && !pushedToCompute {
+				t.Errorf("filter silently dropped\n  ShardSQL = %s\n  ComputeStages = %v",
+					plan.ShardSQL, plan.ComputeStages)
+			}
+		})
+	}
+}
+
 func TestEdge_Awk_Pushable(t *testing.T) {
 	tests := []struct {
 		name     string
