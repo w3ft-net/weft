@@ -30,6 +30,16 @@ func parseGrepArgs(args []string) (pattern string, ignoreCase, invert bool) {
 
 // tryGrepPushdown extracts a SQL predicate from grep arguments.
 // Returns the SQL WHERE fragment, or "" if not pushable.
+//
+// grep patterns are real regex (BRE/ERE depending on flags); we map
+// them to DuckDB's `~` operator (RE2). For typical patterns the
+// flavors agree; for BRE-specific shapes (e.g. `\(...\)` for groups)
+// the pushdown is best-effort and may differ — operators reaching
+// for those edges should use grep -E or awk for semantic clarity.
+//
+// The previous LIKE-substring encoding silently mismatched any
+// pattern with regex specials (`^ERROR` was matched as the literal
+// string `^ERROR`, never appearing in real text).
 func tryGrepPushdown(args []string) string {
 	pattern := ""
 	ignoreCase := false
@@ -62,14 +72,15 @@ func tryGrepPushdown(args []string) string {
 		return ""
 	}
 
-	likeOp := "LIKE"
-	if ignoreCase && invert {
-		likeOp = "NOT ILIKE"
-	} else if ignoreCase {
-		likeOp = "ILIKE"
-	} else if invert {
-		likeOp = "NOT LIKE"
+	op := "~"
+	switch {
+	case ignoreCase && invert:
+		op = "!~*"
+	case ignoreCase:
+		op = "~*"
+	case invert:
+		op = "!~"
 	}
 
-	return fmt.Sprintf("raw %s '%%%s%%'", likeOp, escapeSQLLike(pattern))
+	return fmt.Sprintf("raw %s '%s'", op, escapeSQLString(pattern))
 }

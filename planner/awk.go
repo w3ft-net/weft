@@ -14,6 +14,18 @@ type awkPushdown struct {
 	offset     int    // from NR range, 0 = none
 	compute    string // non-empty if the stage partially pushes down, leaving a compute remainder
 	nrSentinel bool   // true if this is an intermediate NR bound, not a final result
+
+	// limitSafe is true when the predicate is a pure field/meta-var
+	// equality (or AND-chain of such), with literal RHS. The
+	// cross-shard-post-limit-filter doc routes post-LIMIT predicates
+	// to compute by default to avoid the saturation hazard, but
+	// equality on a field is the user's "give me recent rows where
+	// $N matches this value" intent — they want the predicate
+	// shard-side regardless of LIMIT order. Negation, inequality,
+	// regex match, OR-chains, and comparisons (<, >) do NOT set this
+	// flag; they take the conservative route through compute when
+	// LIMIT is frozen.
+	limitSafe bool
 }
 
 // metaVars maps weft meta-variable names to SQL column names. The
@@ -82,8 +94,14 @@ func tryAwkPushdown(program string) *awkPushdown {
 	case *awk.ExprPattern:
 		pd = extractAwkExpr(pat.Expr)
 	case *awk.RegexPattern:
+		// awk '/pat/' is a positive regex match against the whole row.
+		// Use DuckDB's `~` regex operator (RE2) so anchors / character
+		// classes / quantifiers actually work. The previous LIKE-with-
+		// escaped-LIKE-specials encoding silently mismatched anything
+		// containing `^`, `$`, `.`, etc.
 		pd = &awkPushdown{
-			predicate: fmt.Sprintf("raw LIKE '%%%s%%'", escapeSQLLike(pat.Pattern)),
+			predicate: fmt.Sprintf("raw ~ '%s'", escapeSQLString(pat.Pattern)),
+			limitSafe: true,
 		}
 	}
 	if pd == nil || pd.nrSentinel {
@@ -240,12 +258,18 @@ func extractAwkLogical(e *awk.BinaryExpr, sqlOp string) *awkPushdown {
 	if sqlOp == "OR" {
 		lp := parenthesizeIfCompound(left.predicate)
 		rp := parenthesizeIfCompound(right.predicate)
+		// OR is never limit-safe: even when both sides are
+		// field-equality, a disjunction widens the matching set in
+		// ways that can quickly become inclusive (e.g.
+		// `$N == "info" || $N == "debug"`).
 		return &awkPushdown{
 			predicate: fmt.Sprintf("(%s OR %s)", lp, rp),
 		}
 	}
+	// AND of two limit-safe halves stays limit-safe.
 	return &awkPushdown{
 		predicate: fmt.Sprintf("%s AND %s", left.predicate, right.predicate),
+		limitSafe: left.limitSafe && right.limitSafe,
 	}
 }
 
@@ -303,8 +327,23 @@ func extractAwkComparison(e *awk.BinaryExpr) *awkPushdown {
 		sqlRight = fmt.Sprintf("CAST(%s AS DOUBLE)", sqlRight)
 	}
 
+	// Equality (==) on a field-or-meta-var with a literal RHS is the
+	// canonical limit-safe shape: the predicate narrows to specific
+	// values, which is what `tail | awk '$N == "foo"'` users want.
+	// Other operators (!=, <, >, etc.) are not flagged — the
+	// inverted/range cases hit the cross-shard saturation hazard.
+	limitSafe := false
+	if e.Op == "==" {
+		left := leftType == "field" || leftType == "meta"
+		right := rightType == "string" || rightType == "number"
+		if (left && right) || ((rightType == "field" || rightType == "meta") && (leftType == "string" || leftType == "number")) {
+			limitSafe = true
+		}
+	}
+
 	return &awkPushdown{
 		predicate: fmt.Sprintf("%s %s %s", sqlLeft, op, sqlRight),
+		limitSafe: limitSafe,
 	}
 }
 
@@ -370,19 +409,25 @@ func extractAwkMatch(e *awk.MatchExpr) *awkPushdown {
 	if !ok {
 		return nil
 	}
-	pattern := escapeSQLLike(regex.Pattern)
+	pattern := escapeSQLString(regex.Pattern)
 
-	// $0 ~ /pat/ or bare match on full record.
-	likeOp := "LIKE"
+	// `$0 ~ /pat/` is a positive regex match (limit-safe — narrows
+	// to matching rows). `$0 !~ /pat/` is inverted (inclusive — not
+	// limit-safe; falls back to compute when the source has a
+	// frozen LIMIT, per the cross-shard saturation hazard).
+	op := "~"
+	limitSafe := true
 	if e.Negated {
-		likeOp = "NOT LIKE"
+		op = "!~"
+		limitSafe = false
 	}
 
 	// Check if matching against $0 (the whole line).
 	if fe, ok := e.Expr.(*awk.FieldExpr); ok {
 		if nl, ok := fe.Index.(*awk.NumberLit); ok && nl.Value == 0 {
 			return &awkPushdown{
-				predicate: fmt.Sprintf("raw %s '%%%s%%'", likeOp, pattern),
+				predicate: fmt.Sprintf("raw %s '%s'", op, pattern),
+				limitSafe: limitSafe,
 			}
 		}
 	}
@@ -398,7 +443,12 @@ func parenthesizeIfCompound(pred string) string {
 	return pred
 }
 
-// escapeSQLString escapes single quotes for SQL string literals.
+// escapeSQLString doubles single quotes for safe embedding in a SQL
+// '...' string literal. Regex-pushdown callers (DuckDB's `~` operator)
+// use this — the pattern goes in as a plain string literal, with
+// regex specials (`^`, `$`, `.`, `*`, `+`, `?`, `(`, `)`, `[`, `]`,
+// `{`, `}`, `|`, `\`) preserved so the predicate actually means
+// what the user wrote.
 func escapeSQLString(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
 }

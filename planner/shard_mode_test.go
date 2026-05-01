@@ -176,7 +176,7 @@ func TestDirectShardSQL(t *testing.T) {
 		{
 			name:     "mode A no head/tail — appends ORDER BY line_num",
 			pipeline: `cat vimgym.log | grep ERROR`,
-			want:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw LIKE '%ERROR%' ORDER BY line_num`,
+			want:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND raw ~ 'ERROR' ORDER BY line_num`,
 		},
 		{
 			name:     "mode A with head — ORDER BY line_num LIMIT N",

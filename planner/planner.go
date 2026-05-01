@@ -57,6 +57,18 @@ type pushdownResult struct {
 	pushed    bool   // true if at least a predicate was extracted
 	predicate string // SQL WHERE fragment (may be "" even if pushed, e.g. head/tail)
 	compute   string // non-empty if the stage was partially pushed, leaving a compute remainder
+
+	// limitSafe is set by stage-specific pushdown helpers when the
+	// extracted predicate is *selective* — its intent is to narrow
+	// the result to matching rows, not to invert/include. Selective
+	// predicates (field equality, positive regex, plain grep) push
+	// past a frozen LIMIT because the user's intent on
+	// `tail | filter` is "recent matching rows," and pushing them
+	// shard-side delivers that without a network roundtrip.
+	// Inclusive predicates (negation, inequality) keep the
+	// conservative compute-side route — see
+	// docs/plans/cross-shard-post-limit-filter.md.
+	limitSafe bool
 }
 
 // Plan parses a weft shell pipeline and produces a QueryPlan by pushing
@@ -140,18 +152,33 @@ func Plan(pipeline string) (*QueryPlan, error) {
 			continue
 		}
 
-		// Once a head/tail (or awk NR-window) bounds the source, every
-		// later stage must operate on the *globally* merged top-N
-		// stream. Pushing a filter shard-side after the LIMIT freezes
-		// would let cross-shard merge inflate the post-filter set —
-		// e.g. `tail -n 2000 | grep -v ERROR | wc -l` would saturate
-		// at 2000 again because each shard returned its own ≤2000
-		// non-ERROR rows. Compute already enforces the global cap
-		// before stages run; route the post-limit stages there.
-		// Pre-limit filters (filter | tail) are unaffected — the
-		// freeze is set by the LIMIT pushdown itself, not by entering
-		// the loop. See docs/plans/cross-shard-post-limit-filter.md.
+		// Once a head/tail (or awk NR-window) bounds the source,
+		// post-LIMIT *inclusive* stages must operate on the globally
+		// merged top-N stream — `tail -n 2000 | grep -v ERROR | wc -l`
+		// would saturate at 2000 if each shard returned its own
+		// ≤2000 non-ERROR rows. See
+		// docs/plans/cross-shard-post-limit-filter.md.
+		//
+		// Carve-out: a stage that pushes a *limit-safe* predicate
+		// (field/meta-var equality, positive regex match, plain grep)
+		// gets through the gate. The user's intent on
+		// `tail | awk '$N == "foo"'` is "recent rows where field N
+		// matches" — pushing the predicate shard-side delivers that
+		// directly. Saturation hazards live in negation / inclusive
+		// filters, not in selective ones. The action remainder, when
+		// present (filter + projection), is appended to compute
+		// strings just like a non-frozen partial pushdown.
 		if sql.limitFrozen {
+			r := tryPushdown(stage, sql)
+			if r.pushed && r.limitSafe {
+				if r.predicate != "" {
+					sql.addPredicate(r.predicate)
+				}
+				if r.compute != "" {
+					computeStrings = append(computeStrings, r.compute)
+				}
+				continue
+			}
 			pushing = false
 			computeStages = append(computeStages, stage)
 			continue
@@ -267,7 +294,12 @@ func tryPushdown(stage stageInfo, sql *sqlBuilder) pushdownResult {
 			sql.setLimitOffset(pd.limit, pd.offset)
 			return pushdownResult{pushed: true}
 		}
-		return pushdownResult{pushed: true, predicate: pd.predicate, compute: pd.compute}
+		return pushdownResult{
+			pushed:    true,
+			predicate: pd.predicate,
+			compute:   pd.compute,
+			limitSafe: pd.limitSafe,
+		}
 
 	case "jq":
 		if len(stage.args) == 0 {
@@ -284,14 +316,27 @@ func tryPushdown(stage stageInfo, sql *sqlBuilder) pushdownResult {
 		if pred == "" {
 			return pushdownResult{}
 		}
-		return pushdownResult{pushed: true, predicate: pred}
+		// grep with -v is inverted/inclusive — not limit-safe (the
+		// cross-shard saturation hazard the doc warned about). Plain
+		// grep / grep -i is selective.
+		_, _, invert := parseGrepArgs(stage.args)
+		return pushdownResult{
+			pushed:    true,
+			predicate: pred,
+			limitSafe: !invert,
+		}
 
 	case "sed":
 		pred := trySedPushdown(stage.args)
 		if pred == "" {
 			return pushdownResult{}
 		}
-		return pushdownResult{pushed: true, predicate: pred}
+		// `sed -n '/pat/p'` is positive selection.
+		return pushdownResult{
+			pushed:    true,
+			predicate: pred,
+			limitSafe: true,
+		}
 
 	case "head":
 		n := parseLineCount(stage.args)

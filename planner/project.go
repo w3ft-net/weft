@@ -191,10 +191,13 @@ func awkProgramToSQL(prog *awk.Program) (string, []int, bool) {
 	// Any non-nil pattern is a filter (ExprPattern, RegexPattern) or a
 	// scope marker (BEGIN/END). The action alone doesn't capture the
 	// filter — claiming the program is "just a projection" here would
-	// let the caller drop the stage and silently lose the filter,
-	// which is exactly the bug TestEdge_Awk_FilterAfterLimitFreezeMustSurvive
-	// guards against. A nil pattern means "run the action on every
-	// row" which IS expressible as a pure projection.
+	// let the caller drop the stage and silently lose the filter
+	// (TestEdge_Awk_FilterAfterLimitFreezeMustSurvive guards against
+	// that). The limit-safe field-equality carve-out in planner.go
+	// catches the most common case (`tail | awk '$N == "foo"'`)
+	// before stages reach this projection extraction; what's left
+	// here is the regex / inequality / non-limit-safe shapes, all
+	// of which need to keep their pattern through compute.
 	if rule.Pattern != nil {
 		return "", nil, false
 	}
