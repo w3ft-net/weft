@@ -160,6 +160,11 @@ func applyOne(cfg Config, p proposals.Proposal) error {
 			return fmt.Errorf("SaveCron not configured")
 		}
 		return cfg.SaveCron(p.Name, p.Proposed)
+	case "dashboard":
+		if cfg.SaveDashboard == nil {
+			return fmt.Errorf("SaveDashboard not configured")
+		}
+		return cfg.SaveDashboard(p.Name, p.Proposed)
 	case "delete":
 		switch p.SubKind {
 		case "script":
@@ -172,6 +177,11 @@ func applyOne(cfg Config, p proposals.Proposal) error {
 				return fmt.Errorf("DeleteCron not configured")
 			}
 			return cfg.DeleteCron(p.Name)
+		case "dashboard":
+			if cfg.DeleteDashboard == nil {
+				return fmt.Errorf("DeleteDashboard not configured")
+			}
+			return cfg.DeleteDashboard(p.Name)
 		default:
 			return fmt.Errorf("unknown delete sub-kind %q", p.SubKind)
 		}

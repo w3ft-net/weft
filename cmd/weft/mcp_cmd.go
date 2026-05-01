@@ -132,4 +132,19 @@ func wireProposalBackend(cfg *mcp.Config, b *shell.HTTPBackend) {
 		})
 	}
 	cfg.DeleteCron = b.DeleteWatch
+
+	// Dashboard wiring: the proposal body is the raw YAML, so save
+	// is a thin pass-through. ListWatches feeds the watch-ref check
+	// in dashboard_propose so the model can't stage a dashboard
+	// referencing watches that don't exist yet.
+	cfg.GetDashboard = func(name string) (string, error) {
+		body, err := b.GetDashboard(name)
+		if err != nil {
+			return "", nil
+		}
+		return body, nil
+	}
+	cfg.ListWatches = b.ListWatches
+	cfg.SaveDashboard = b.SaveDashboard
+	cfg.DeleteDashboard = b.DeleteDashboard
 }

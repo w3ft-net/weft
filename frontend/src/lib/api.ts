@@ -623,4 +623,61 @@ export function addCloudWatchSource(req: AddCloudWatchSourceRequest): Promise<vo
   })
 }
 
+// Dashboards (/etc/dashboards/)
+export type DashboardTileSize = 'sm' | 'md' | 'lg'
+export type DashboardTileKind = 'sparkline' | 'counter' | 'gauge' | 'table'
+
+export interface DashboardThreshold {
+  warn?: number
+  crit?: number
+  max?: number
+}
+
+export interface DashboardTile {
+  kind: DashboardTileKind
+  watch: string
+  size?: DashboardTileSize
+  format?: string
+  threshold?: DashboardThreshold
+  columns?: string[]
+}
+
+export interface DashboardSection {
+  title?: string
+  tiles: DashboardTile[]
+}
+
+export interface DashboardSpec {
+  title?: string
+  sections: DashboardSection[]
+}
+
+export interface DashboardWatchPayload {
+  watch: CronWatch
+  results: CronResult[]
+}
+
+export interface DashboardListItem {
+  name: string
+  title?: string
+  updated_at?: string
+  invalid?: boolean
+}
+
+export interface DashboardResponse {
+  name: string
+  updated_at?: string
+  spec: DashboardSpec
+  watches: Record<string, DashboardWatchPayload | null>
+}
+
+export async function listDashboards(): Promise<DashboardListItem[]> {
+  const resp = await apiFetch<{ dashboards: DashboardListItem[] }>('/api/dashboards')
+  return resp.dashboards || []
+}
+
+export function getDashboard(name: string): Promise<DashboardResponse> {
+  return apiFetch(`/api/dashboards/${encodeURIComponent(name)}`)
+}
+
 export { apiFetch }

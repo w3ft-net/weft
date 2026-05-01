@@ -107,6 +107,50 @@ func (b *HTTPBackend) SaveNotifyConfig(content string) error {
 	return b.apiPut("/api/notify", map[string]string{"aliases_yaml": content})
 }
 
+// ── Dashboards (/etc/dashboards/) ──────────────────────────────
+
+func (b *HTTPBackend) ListDashboards() ([]string, error) {
+	data, err := b.apiGet("/api/dashboards")
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Dashboards []struct {
+			Name string `json:"name"`
+		} `json:"dashboards"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("parse dashboards: %w", err)
+	}
+	out := make([]string, len(resp.Dashboards))
+	for i, d := range resp.Dashboards {
+		out[i] = d.Name
+	}
+	return out, nil
+}
+
+func (b *HTTPBackend) GetDashboard(name string) (string, error) {
+	data, err := b.apiGet("/api/dashboards/" + name)
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		YAMLBody string `json:"yaml_body"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return "", fmt.Errorf("parse dashboard: %w", err)
+	}
+	return resp.YAMLBody, nil
+}
+
+func (b *HTTPBackend) SaveDashboard(name, body string) error {
+	return b.apiPut("/api/dashboards/"+name, map[string]string{"yaml_body": body})
+}
+
+func (b *HTTPBackend) DeleteDashboard(name string) error {
+	return b.apiDelete("/api/dashboards/" + name)
+}
+
 // GetWatchResults returns recent watch runs. Used by the shell to render
 // sparkline / last-run values inside the interactive UI. limit is the
 // server-side max; a limit of 0 tells the api to apply its default.

@@ -1,11 +1,12 @@
 // Package shellfs implements the warp bash.FS interface backed by PostgreSQL
 // via the store. It presents a virtual filesystem to the weft shell:
 //
-//	/log/*.log   — read-only pseudofiles backed by shard queries
-//	/bin/*       — user-defined bash functions
-//	/cron.d/*    — scheduled watch definitions
-//	/etc/notify.conf — notification channel configuration
-//	/tmp/*       — per-customer scratch files (persistent for 48h)
+//	/log/*.log              — read-only pseudofiles backed by shard queries
+//	/bin/*                  — user-defined bash functions
+//	/cron.d/*               — scheduled watch definitions
+//	/etc/notify.conf        — notification channel configuration
+//	/etc/dashboards/*.conf  — named dashboards (sections/tiles YAML)
+//	/tmp/*                  — per-customer scratch files (persistent for 48h)
 package shellfs
 
 import (
@@ -130,6 +131,13 @@ func (f *ShellFS) ReadFile(path string) ([]byte, error) {
 		}
 		if name == "usage" {
 			return []byte(f.buildUsageReport()), nil
+		}
+		if dashName, ok := dashboardName(name); ok {
+			d, err := f.store.GetDashboard(f.customerID, dashName)
+			if err != nil {
+				return nil, fmt.Errorf("%s: no such file", path)
+			}
+			return []byte(d.YAMLBody), nil
 		}
 		return nil, fmt.Errorf("%s: no such file", path)
 
@@ -349,6 +357,17 @@ func (f *ShellFS) WriteFile(path string, data []byte) error {
 			}
 			return f.store.SaveNotifyAliases(f.customerID, validated)
 		}
+		if dashName, ok := dashboardName(name); ok {
+			body := string(data)
+			spec, err := store.ParseDashboardYAML(body)
+			if err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
+			if err := f.store.ValidateDashboardWatchRefs(f.customerID, spec); err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
+			return f.store.SaveDashboard(f.customerID, f.userID, dashName, body)
+		}
 		return fmt.Errorf("%s: read-only", path)
 
 	case "log":
@@ -402,6 +421,14 @@ func (f *ShellFS) Stat(path string) (fs.FileInfo, error) {
 		}
 		if name == "usage" {
 			return &vfsFileInfo{name: name, mtime: time.Now()}, nil
+		}
+		if name == "dashboards" {
+			return &vfsFileInfo{name: "dashboards", dir: true}, nil
+		}
+		if dashName, ok := dashboardName(name); ok {
+			if d, err := f.store.GetDashboard(f.customerID, dashName); err == nil {
+				return &vfsFileInfo{name: lastSegment(name), size: int64(len(d.YAMLBody)), mtime: d.UpdatedAt}, nil
+			}
 		}
 	case "log":
 		// Could be a namespace dir (name="weft") or a file (name="vimgym.log" or "weft/coordinator.log").
@@ -511,6 +538,34 @@ func (f *ShellFS) ReadDir(path string) ([]fs.DirEntry, error) {
 		return entries, nil
 
 	case "etc":
+		_, sub := splitPath(path)
+		if sub == "dashboards" {
+			dashboards, err := f.store.ListDashboards(f.customerID)
+			if err != nil {
+				return nil, err
+			}
+			ids := make([]string, 0, len(dashboards))
+			for _, d := range dashboards {
+				if d.CreatedByUserID != nil {
+					ids = append(ids, *d.CreatedByUserID)
+				}
+			}
+			owners := f.resolveOwners(ids)
+			entries := make([]fs.DirEntry, len(dashboards))
+			for i, d := range dashboards {
+				owner := ""
+				if d.CreatedByUserID != nil {
+					owner = owners[*d.CreatedByUserID]
+				}
+				entries[i] = &vfsDirEntry{
+					name:  d.Name + ".conf",
+					size:  int64(len(d.YAMLBody)),
+					mtime: d.UpdatedAt,
+					owner: owner,
+				}
+			}
+			return entries, nil
+		}
 		var notifySize int64
 		var notifyMtime time.Time
 		if nc, err := f.store.GetNotifyConfig(f.customerID); err == nil {
@@ -518,6 +573,7 @@ func (f *ShellFS) ReadDir(path string) ([]fs.DirEntry, error) {
 			notifyMtime = nc.UpdatedAt
 		}
 		return []fs.DirEntry{
+			&vfsDirEntry{name: "dashboards", dir: true},
 			&vfsDirEntry{name: "notify.conf", size: notifySize, mtime: notifyMtime},
 			&vfsDirEntry{name: "usage", mtime: time.Now()},
 		}, nil
@@ -610,7 +666,12 @@ func (f *ShellFS) Remove(path string) error {
 		return f.store.DeleteShellFunction(f.customerID, name)
 	case "cron.d":
 		return f.store.DeleteCronWatch(f.customerID, name)
-	case "log", "etc":
+	case "etc":
+		if dashName, ok := dashboardName(name); ok {
+			return f.store.DeleteDashboard(f.customerID, dashName)
+		}
+		return fmt.Errorf("%s: operation not permitted", path)
+	case "log":
 		return fmt.Errorf("%s: operation not permitted", path)
 	case "tmp":
 		// rm doesn't trigger the first-write notice — deletion
@@ -863,6 +924,29 @@ func splitPath(path string) (dir, name string) {
 		return path[:idx], path[idx+1:]
 	}
 	return path, ""
+}
+
+// ── Dashboard helpers ───────────────────────────────────────
+
+// dashboardName returns the trailing dashboard name (without .conf
+// suffix) when `name` is the path-relative form of /etc/dashboards/<n>.conf,
+// e.g. splitPath("/etc/dashboards/prod.conf") yields name="dashboards/prod.conf".
+// Returns false for any other shape so the etc branch can fall through.
+func dashboardName(name string) (string, bool) {
+	const prefix = "dashboards/"
+	const suffix = ".conf"
+	if !strings.HasPrefix(name, prefix) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(name, prefix)
+	if !strings.HasSuffix(rest, suffix) {
+		return "", false
+	}
+	dn := strings.TrimSuffix(rest, suffix)
+	if dn == "" || strings.Contains(dn, "/") {
+		return "", false
+	}
+	return dn, true
 }
 
 // ── Cron file serialization ─────────────────────────────────

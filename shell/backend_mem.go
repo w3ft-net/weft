@@ -71,6 +71,31 @@ func (b *MemBackend) DeleteWatch(name string) error {
 	return nil
 }
 
+func (b *MemBackend) ListDashboards() ([]string, error) {
+	return b.listPrefix("etc/dashboards/"), nil
+}
+
+func (b *MemBackend) GetDashboard(name string) (string, error) {
+	if body, ok := b.files["etc/dashboards/"+name]; ok {
+		return body, nil
+	}
+	return "", fmt.Errorf("not found: %s", name)
+}
+
+func (b *MemBackend) SaveDashboard(name, body string) error {
+	b.files["etc/dashboards/"+name] = body
+	return nil
+}
+
+func (b *MemBackend) DeleteDashboard(name string) error {
+	key := "etc/dashboards/" + name
+	if _, ok := b.files[key]; !ok {
+		return fmt.Errorf("not found: %s", name)
+	}
+	delete(b.files, key)
+	return nil
+}
+
 func (b *MemBackend) GetNotifyConfig() (string, error) {
 	return b.files["etc/notify.conf"], nil
 }

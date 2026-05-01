@@ -18,6 +18,10 @@ func (stubBackend) ListWatches() ([]string, error)               { return nil, n
 func (stubBackend) GetWatch(name string) (*WatchData, error)     { return nil, nil }
 func (stubBackend) SaveWatch(name string, w *WatchData) error    { return nil }
 func (stubBackend) DeleteWatch(name string) error                { return nil }
+func (stubBackend) ListDashboards() ([]string, error)            { return nil, nil }
+func (stubBackend) GetDashboard(name string) (string, error)     { return "", nil }
+func (stubBackend) SaveDashboard(name, body string) error        { return nil }
+func (stubBackend) DeleteDashboard(name string) error            { return nil }
 func (stubBackend) GetNotifyConfig() (string, error)             { return "", nil }
 func (stubBackend) SaveNotifyConfig(content string) error        { return nil }
 

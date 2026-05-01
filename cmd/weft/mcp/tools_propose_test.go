@@ -11,19 +11,25 @@ import (
 // Each map represents one of the resource namespaces; the tool
 // looks up "current" contents via the matching Get function.
 type proposeBackend struct {
-	scripts map[string]string
-	crons   map[string]string
+	scripts    map[string]string
+	crons      map[string]string
+	dashboards map[string]string
+	watches    []string // names that ListWatches should return
 }
 
 func (b *proposeBackend) wire(cfg *Config) {
 	cfg.GetScript = func(name string) (string, error) { return b.scripts[name], nil }
 	cfg.GetCron = func(name string) (string, error) { return b.crons[name], nil }
+	cfg.GetDashboard = func(name string) (string, error) { return b.dashboards[name], nil }
 	cfg.ListScripts = func() ([]string, error) {
 		out := make([]string, 0, len(b.scripts))
 		for name := range b.scripts {
 			out = append(out, name)
 		}
 		return out, nil
+	}
+	cfg.ListWatches = func() ([]string, error) {
+		return b.watches, nil
 	}
 }
 
@@ -346,5 +352,141 @@ func TestProposalDelete_MissingResource(t *testing.T) {
 	})
 	if !res.IsError {
 		t.Fatalf("expected IsError when resource doesn't exist")
+	}
+}
+
+// TestDashboardPropose_HappyPath: a valid dashboard YAML stages
+// cleanly when every referenced watch exists.
+func TestDashboardPropose_HappyPath(t *testing.T) {
+	store, _ := proposals.New(t.TempDir())
+	cfg := Config{Run: neverRunFn(t), Proposals: store}
+	(&proposeBackend{watches: []string{"err-rate", "pending"}}).wire(&cfg)
+	s := testSession(t, cfg)
+
+	body := `title: Production
+sections:
+  - title: Errors
+    tiles:
+      - kind: sparkline
+        watch: err-rate
+        size: md
+      - kind: counter
+        watch: pending
+`
+	res := callTool(t, s, "weft.dashboard_propose", map[string]any{
+		"name": "prod",
+		"body": body,
+	})
+	if res.IsError {
+		t.Fatalf("unexpected IsError; %q", textContent(res))
+	}
+	ps, _ := store.List()
+	if len(ps) != 1 {
+		t.Fatalf("expected 1 staged proposal; got %d", len(ps))
+	}
+	if ps[0].Kind != "dashboard" || ps[0].Name != "prod" {
+		t.Errorf("staged proposal mismatch: %+v", ps[0])
+	}
+	if !strings.Contains(ps[0].Proposed, "title: Production") {
+		t.Errorf("proposed body lost title; got %q", ps[0].Proposed)
+	}
+}
+
+// TestDashboardPropose_BadYAMLRejected: ParseDashboardYAML errors
+// surface as IsError without staging.
+func TestDashboardPropose_BadYAMLRejected(t *testing.T) {
+	store, _ := proposals.New(t.TempDir())
+	cfg := Config{Run: neverRunFn(t), Proposals: store}
+	(&proposeBackend{}).wire(&cfg)
+	s := testSession(t, cfg)
+
+	res := callTool(t, s, "weft.dashboard_propose", map[string]any{
+		"name": "broken",
+		"body": "tiles:\n  - kind: pizza\n    watch: foo\n",
+	})
+	if !res.IsError {
+		t.Fatalf("expected IsError for unknown kind")
+	}
+	if !strings.Contains(textContent(res), "unknown kind") {
+		t.Errorf("expected unknown-kind message; got %q", textContent(res))
+	}
+	if ps, _ := store.List(); len(ps) != 0 {
+		t.Errorf("rejected proposal must not persist; got %d staged", len(ps))
+	}
+}
+
+// TestDashboardPropose_UnknownWatchRejected: every tile.watch is
+// validated against ListWatches; unknown names abort the propose.
+func TestDashboardPropose_UnknownWatchRejected(t *testing.T) {
+	store, _ := proposals.New(t.TempDir())
+	cfg := Config{Run: neverRunFn(t), Proposals: store}
+	(&proposeBackend{watches: []string{"err-rate"}}).wire(&cfg)
+	s := testSession(t, cfg)
+
+	body := `tiles:
+  - kind: counter
+    watch: ghost
+`
+	res := callTool(t, s, "weft.dashboard_propose", map[string]any{
+		"name": "broken",
+		"body": body,
+	})
+	if !res.IsError {
+		t.Fatalf("expected IsError for unknown watch")
+	}
+	if !strings.Contains(textContent(res), "ghost") {
+		t.Errorf("expected unknown watch named in error; got %q", textContent(res))
+	}
+}
+
+// TestDashboardPropose_DiffAgainstCurrent: when an existing
+// dashboard is replaced, the diff shows real removals + additions.
+func TestDashboardPropose_DiffAgainstCurrent(t *testing.T) {
+	store, _ := proposals.New(t.TempDir())
+	cfg := Config{Run: neverRunFn(t), Proposals: store}
+	(&proposeBackend{
+		watches: []string{"a", "b"},
+		dashboards: map[string]string{
+			"prod": "tiles:\n  - kind: counter\n    watch: a\n",
+		},
+	}).wire(&cfg)
+	s := testSession(t, cfg)
+
+	res := callTool(t, s, "weft.dashboard_propose", map[string]any{
+		"name": "prod",
+		"body": "tiles:\n  - kind: counter\n    watch: b\n",
+	})
+	if res.IsError {
+		t.Fatalf("unexpected IsError; %q", textContent(res))
+	}
+	got := textContent(res)
+	if !strings.Contains(got, "-    watch: a") {
+		t.Errorf("expected removed line in diff; got %q", got)
+	}
+	if !strings.Contains(got, "+    watch: b") {
+		t.Errorf("expected added line in diff; got %q", got)
+	}
+}
+
+// TestProposalDelete_Dashboard: dashboard kind is recognized by
+// proposal_delete and the current contents are recorded.
+func TestProposalDelete_Dashboard(t *testing.T) {
+	store, _ := proposals.New(t.TempDir())
+	cfg := Config{Run: neverRunFn(t), Proposals: store}
+	(&proposeBackend{
+		dashboards: map[string]string{"old": "title: Old\ntiles:\n  - kind: counter\n    watch: x\n"},
+	}).wire(&cfg)
+	s := testSession(t, cfg)
+
+	res := callTool(t, s, "weft.proposal_delete", map[string]any{
+		"kind": "dashboard",
+		"name": "old",
+	})
+	if res.IsError {
+		t.Fatalf("unexpected IsError; %q", textContent(res))
+	}
+	ps, _ := store.List()
+	if len(ps) != 1 || ps[0].SubKind != "dashboard" {
+		t.Errorf("expected 1 dashboard delete proposal; got %+v", ps)
 	}
 }

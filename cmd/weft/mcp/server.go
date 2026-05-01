@@ -60,12 +60,13 @@ type Config struct {
 	// not registered.
 	Proposals *proposals.Store
 
-	// GetScript / GetCron return the current backend state of a
-	// named resource so propose tools can render diffs against
-	// current. An empty string with nil error means the resource
-	// does not yet exist.
-	GetScript GetterFunc
-	GetCron   GetterFunc
+	// GetScript / GetCron / GetDashboard return the current backend
+	// state of a named resource so propose tools can render diffs
+	// against current. An empty string with nil error means the
+	// resource does not yet exist.
+	GetScript    GetterFunc
+	GetCron      GetterFunc
+	GetDashboard GetterFunc
 
 	// ListScripts returns the names of every saved bin/ script for
 	// the authenticated customer. Used by cron_propose to populate
@@ -74,15 +75,23 @@ type Config struct {
 	// fine — propose just falls back to the static allowlist.
 	ListScripts func() ([]string, error)
 
-	// SaveScript / SaveCron persist a proposal's proposed body to
-	// the backend. DeleteScript / DeleteCron remove a resource.
-	// Both are invoked by proposals_apply once the human has
-	// approved a batch.
-	SaveScript func(name, body string) error
-	SaveCron   func(name, body string) error
+	// ListWatches returns the names of every saved cron watch.
+	// dashboard_propose uses it to validate that every tile's
+	// `watch:` reference exists. Nil disables the check (the
+	// proposal still stages but the human sees raw YAML).
+	ListWatches func() ([]string, error)
 
-	DeleteScript func(name string) error
-	DeleteCron   func(name string) error
+	// SaveScript / SaveCron / SaveDashboard persist a proposal's
+	// proposed body to the backend. Delete* remove a resource. All
+	// are invoked by proposals_apply once the human has approved a
+	// batch.
+	SaveScript    func(name, body string) error
+	SaveCron      func(name, body string) error
+	SaveDashboard func(name, body string) error
+
+	DeleteScript    func(name string) error
+	DeleteCron      func(name string) error
+	DeleteDashboard func(name string) error
 
 	// MaxRows caps the number of rows weft.run / weft.cat return
 	// to the model. 0 means "use default" (DefaultMaxRows).

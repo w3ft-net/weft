@@ -28,6 +28,11 @@ type Backend interface {
 	SaveWatch(name string, w *WatchData) error
 	DeleteWatch(name string) error
 
+	ListDashboards() ([]string, error)
+	GetDashboard(name string) (string, error)
+	SaveDashboard(name, body string) error
+	DeleteDashboard(name string) error
+
 	GetNotifyConfig() (string, error)
 	SaveNotifyConfig(content string) error
 }

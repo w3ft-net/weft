@@ -31,8 +31,14 @@ type CronProposeArgs struct {
 	Rationale string `json:"rationale,omitempty"`
 }
 
+type DashboardProposeArgs struct {
+	Name      string `json:"name" jsonschema:"name of the dashboard (lands at /etc/dashboards/<name>.conf)"`
+	Body      string `json:"body" jsonschema:"the dashboard YAML — sections + tiles, see manual/dashboards.md"`
+	Rationale string `json:"rationale,omitempty" jsonschema:"one-sentence reason for the change; shown alongside the diff at review time"`
+}
+
 type ProposalDeleteArgs struct {
-	Kind string `json:"kind" jsonschema:"one of: script | cron"`
+	Kind string `json:"kind" jsonschema:"one of: script | cron | dashboard"`
 	Name string `json:"name" jsonschema:"name of the resource to remove"`
 }
 
@@ -49,7 +55,13 @@ A cron is a scheduled pipeline. To make it an alert, end the pipeline with '| al
 
 Pipelines pass the same allowlist as weft.run plus the alert pipe stage. Returns proposal id + unified diff.`
 
-	proposalDeleteDescription = `Stage the deletion of an existing script or cron.
+	dashboardProposeDescription = `Stage a new (or updated) dashboard for human review.
+
+The body is the dashboard YAML — top-level title plus a list of sections (each with a heading and tiles), or a flat top-level tiles: shorthand. Tiles have a kind (sparkline | counter | gauge | table), a watch reference, an optional size hint (sm | md | lg), and kind-specific fields like format, threshold, or columns.
+
+The body is parsed against weft's dashboard YAML grammar and every tile's watch: reference is checked against the existing cron watches. Returns proposal id + unified diff.`
+
+	proposalDeleteDescription = `Stage the deletion of an existing script, cron, or dashboard.
 
 The current contents are recorded so the human can see exactly what is being removed in the review. Errors if the resource doesn't exist.`
 )
@@ -65,6 +77,12 @@ func registerPropose(server *mcp.Server, cfg Config) {
 		&mcp.Tool{Name: "weft.cron_propose", Description: cronProposeDescription},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a CronProposeArgs) (*mcp.CallToolResult, any, error) {
 			return cronProposeHandler(cfg, a), nil, nil
+		},
+	)
+	mcp.AddTool(server,
+		&mcp.Tool{Name: "weft.dashboard_propose", Description: dashboardProposeDescription},
+		func(ctx context.Context, _ *mcp.CallToolRequest, a DashboardProposeArgs) (*mcp.CallToolResult, any, error) {
+			return dashboardProposeHandler(cfg, a), nil, nil
 		},
 	)
 	mcp.AddTool(server,
@@ -147,13 +165,67 @@ func cronProposeHandler(cfg Config, a CronProposeArgs) *mcp.CallToolResult {
 	})
 }
 
+func dashboardProposeHandler(cfg Config, a DashboardProposeArgs) *mcp.CallToolResult {
+	if a.Name == "" || a.Body == "" {
+		return errorResult("name and body are required")
+	}
+	spec, err := store.ParseDashboardYAML(a.Body)
+	if err != nil {
+		return errorResult(fmt.Sprintf("dashboard yaml rejected: %v", err))
+	}
+	// Watch-ref check uses the same population pattern as
+	// cron_propose's UserDefinedCommands: pull a fresh list per
+	// call, so a watch proposed and applied earlier in the same
+	// session is usable as a tile target immediately. When
+	// ListWatches is unset we skip the check rather than falsely
+	// failing — propose still stages, the human review catches
+	// dangling refs.
+	if cfg.ListWatches != nil {
+		names, err := cfg.ListWatches()
+		if err != nil {
+			return errorResult(fmt.Sprintf("list watches: %v", err))
+		}
+		known := make(map[string]bool, len(names))
+		for _, n := range names {
+			known[n] = true
+		}
+		var missing []string
+		seen := map[string]bool{}
+		for _, sec := range spec.Sections {
+			for _, tile := range sec.Tiles {
+				if seen[tile.Watch] {
+					continue
+				}
+				seen[tile.Watch] = true
+				if !known[tile.Watch] {
+					missing = append(missing, tile.Watch)
+				}
+			}
+		}
+		if len(missing) > 0 {
+			return errorResult(fmt.Sprintf("dashboard references unknown watches: %s", strings.Join(missing, ", ")))
+		}
+	}
+	current, err := getCurrent(cfg.GetDashboard, a.Name)
+	if err != nil {
+		return errorResult(fmt.Sprintf("fetch current dashboard: %v", err))
+	}
+	return stageProposal(cfg.Proposals, proposals.Proposal{
+		Kind:      "dashboard",
+		Name:      a.Name,
+		Rationale: a.Rationale,
+		Current:   current,
+		Proposed:  a.Body,
+	})
+}
+
 func proposalDeleteHandler(cfg Config, a ProposalDeleteArgs) *mcp.CallToolResult {
 	if a.Kind == "" || a.Name == "" {
 		return errorResult("kind and name are required")
 	}
 	getter := getterFor(cfg, a.Kind)
 	if getter == nil {
-		return errorResult(fmt.Sprintf("unknown kind %q (want script|cron)", a.Kind))
+		return errorResult(fmt.Sprintf("unknown kind %q (want script|cron|dashboard)", a.Kind))
 	}
 	current, err := getter(a.Name)
 	if err != nil {
@@ -190,6 +262,8 @@ func getterFor(cfg Config, kind string) GetterFunc {
 		return cfg.GetScript
 	case "cron":
 		return cfg.GetCron
+	case "dashboard":
+		return cfg.GetDashboard
 	}
 	return nil
 }

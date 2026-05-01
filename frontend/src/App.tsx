@@ -12,6 +12,7 @@ import Device from './pages/Device'
 import Namespaces from './pages/Namespaces'
 import Manual from './pages/Manual'
 import Watch from './pages/Watch'
+import Dashboards from './pages/Dashboards'
 import ProtectedRoute from './components/ProtectedRoute'
 
 export default function App() {
@@ -47,6 +48,12 @@ export default function App() {
       } />
       <Route path="/watch/:name" element={
         <ProtectedRoute><Watch /></ProtectedRoute>
+      } />
+      <Route path="/dashboards" element={
+        <ProtectedRoute><Dashboards /></ProtectedRoute>
+      } />
+      <Route path="/dashboards/:name" element={
+        <ProtectedRoute><Dashboards /></ProtectedRoute>
       } />
     </Routes>
   )
