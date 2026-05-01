@@ -49,6 +49,37 @@ func TestShellFunction_FirstSaveCreatesNoHistory(t *testing.T) {
 	}
 }
 
+func TestShellFunction_IdenticalResaveDoesNotCapture(t *testing.T) {
+	db := testOpen(t)
+	cust, _ := db.FindOrCreateCustomer("vh-noop")
+	user, _ := db.CreateUser("alice-noop@example.test", cust.ID)
+
+	// First save creates HEAD, no history (covered above).
+	if err := db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v1"); err != nil {
+		t.Fatal(err)
+	}
+	// Re-saving identical content (e.g. :w on an unchanged buffer)
+	// must not append a duplicate-hash history row, otherwise HEAD^N
+	// navigation and hash-prefix resolution get clogged with no-op
+	// artifacts.
+	for i := 0; i < 3; i++ {
+		if err := db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := historyCount(t, db, cust.ID, "scan"); got != 0 {
+		t.Errorf("identical re-saves should produce no history rows; got %d", got)
+	}
+
+	// And a real change after the no-ops captures exactly one row.
+	if err := db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v2"); err != nil {
+		t.Fatal(err)
+	}
+	if got := historyCount(t, db, cust.ID, "scan"); got != 1 {
+		t.Errorf("real change after no-ops: got %d rows, want 1", got)
+	}
+}
+
 func TestShellFunction_UpdateCapturesPriorVersion(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-update")

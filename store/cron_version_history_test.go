@@ -41,6 +41,31 @@ func TestCronWatch_FirstSaveCreatesNoHistory(t *testing.T) {
 	}
 }
 
+func TestCronWatch_IdenticalResaveDoesNotCapture(t *testing.T) {
+	db := testOpen(t)
+	cust, _ := db.FindOrCreateCustomer("cvh-noop")
+	user, _ := db.CreateUser("alice-cron-noop@example.test", cust.ID)
+
+	if err := db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo 1"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo 1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := cronHistoryCount(t, db, cust.ID, "errors"); got != 0 {
+		t.Errorf("identical re-saves should produce no history rows; got %d", got)
+	}
+
+	if err := db.SaveCronWatch(cust.ID, user.ID, "errors", "every 5m", "echo 1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := cronHistoryCount(t, db, cust.ID, "errors"); got != 1 {
+		t.Errorf("real change after no-ops: got %d rows, want 1", got)
+	}
+}
+
 func TestCronWatch_UpdateCapturesPriorVersion(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("cvh-update")

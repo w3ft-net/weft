@@ -92,6 +92,13 @@ func (s *Store) SaveShellFunction(customerID uint, userID, name, source string) 
 			}
 			return tx.Create(row).Error
 		}
+		// No-op save (e.g. :w on an unchanged buffer): skip the UPDATE
+		// so HEAD's updated_at doesn't drift and history isn't
+		// polluted. The DB-level trigger guard would also prevent the
+		// history INSERT, but skipping here saves the roundtrip.
+		if fn.ContentHash == hash {
+			return nil
+		}
 		// Existing rows keep their original creator on overwrite —
 		// only source / language / hash change. Editing isn't authoring.
 		return tx.Model(&fn).Updates(map[string]any{
@@ -389,6 +396,10 @@ func (s *Store) SaveCronWatch(customerID uint, userID, name, schedule, pipeline 
 				row.CreatedByUserID = &userID
 			}
 			return tx.Create(row).Error
+		}
+		// No-op save: skip the UPDATE. See SaveShellFunction for why.
+		if w.ContentHash == hash {
+			return nil
 		}
 		// Existing watches keep their original creator on overwrite.
 		return tx.Model(&w).Updates(map[string]any{
