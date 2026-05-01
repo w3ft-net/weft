@@ -87,7 +87,7 @@ func TestCoordinatorQuery_CatRedirectFromEtcToTmp(t *testing.T) {
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	cust, _ := db.GetCustomerByID(custID)
 
-	if _, err := c.Query(`cat /etc/notify.conf > /tmp/notify.yaml`, tr, cust.Name, ""); err != nil {
+	if _, err := c.Execute(`cat /etc/notify.conf > /tmp/notify.yaml`, tr, cust.Name, ""); err != nil {
 		t.Fatalf("cat-redirect Query: %v", err)
 	}
 
@@ -123,7 +123,7 @@ func TestCoordinatorQuery_CatTmpReturnsContent(t *testing.T) {
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	cust, _ := db.GetCustomerByID(custID)
 
-	res, err := c.Query(`cat /tmp/note`, tr, cust.Name, "")
+	res, err := c.Execute(`cat /tmp/note`, tr, cust.Name, "")
 	if err != nil {
 		t.Fatalf("cat /tmp/note: %v", err)
 	}

@@ -34,7 +34,7 @@ func TestQuery_InteractiveAlertUsesCoordinatorNotifier(t *testing.T) {
 	// meaning Coordinator.Notifier propagated into the interactive
 	// AlertContext.
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	result, err := c.Query(`echo 40 | alert above 30 --notify=foo`, tr, cust.Name, "")
+	result, err := c.Execute(`echo 40 | alert above 30 --notify=foo`, tr, cust.Name, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestQuery_InteractiveAlertFallbackWhenNoNotifier(t *testing.T) {
 	})
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	result, err := c.Query(`echo 40 | alert above 30 --notify=foo`, tr, cust.Name, "")
+	result, err := c.Execute(`echo 40 | alert above 30 --notify=foo`, tr, cust.Name, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}

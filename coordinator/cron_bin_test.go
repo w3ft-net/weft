@@ -7,7 +7,7 @@ import (
 )
 
 // TestCronShareScriptAcrossWatches — the motivating use case. One /bin
-// script, two watches passing different args. Each QueryForWatch
+// script, two watches passing different args. Each ExecuteForWatch
 // dispatches the script's body with the watch's arg bound, producing
 // distinct output per watch. This is the path a real cron tick takes.
 func TestCronShareScriptAcrossWatches(t *testing.T) {
@@ -36,7 +36,7 @@ func TestCronShareScriptAcrossWatches(t *testing.T) {
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
-	diskResult, err := c.QueryForWatch(strings.TrimSpace(diskW.Pipeline), tr, diskW)
+	diskResult, err := c.ExecuteForWatch(strings.TrimSpace(diskW.Pipeline), tr, diskW)
 	if err != nil {
 		t.Fatalf("disk: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestCronShareScriptAcrossWatches(t *testing.T) {
 		t.Errorf("disk: got %q, want source=disk.log (stderr=%q)", got, diskResult.Stderr)
 	}
 
-	cpuResult, err := c.QueryForWatch(strings.TrimSpace(cpuW.Pipeline), tr, cpuW)
+	cpuResult, err := c.ExecuteForWatch(strings.TrimSpace(cpuW.Pipeline), tr, cpuW)
 	if err != nil {
 		t.Fatalf("cpu: %v", err)
 	}
@@ -72,9 +72,9 @@ func TestCronBareNameStillWorks(t *testing.T) {
 
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	result, err := c.QueryForWatch(strings.TrimSpace(w.Pipeline), tr, w)
+	result, err := c.ExecuteForWatch(strings.TrimSpace(w.Pipeline), tr, w)
 	if err != nil {
-		t.Fatalf("QueryForWatch: %v", err)
+		t.Fatalf("ExecuteForWatch: %v", err)
 	}
 	if got := strings.TrimSpace(result.Text); got != "hello" {
 		t.Errorf("got %q, want hello", got)

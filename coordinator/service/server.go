@@ -113,7 +113,11 @@ func (s *Server) Query(req *pb.CoordinatorQueryRequest, stream pb.WeftCoordinato
 		tr.End = time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
 	}
 
-	result, err := s.Coord.Query(req.Pipeline, tr, customer, req.UserId)
+	// Pipeline can be any user-typed shape — log query, plain bash,
+	// /bin script, or a mix. Execute is the dispatch layer that
+	// classifies and routes; Coord.Query is reserved for callers
+	// that already know they have a plannable log query.
+	result, err := s.Coord.Execute(req.Pipeline, tr, customer, req.UserId)
 	if err != nil {
 		log.Printf("query rpc: error for customer=%s pipeline=%q: %v", customer, req.Pipeline, err)
 		return err

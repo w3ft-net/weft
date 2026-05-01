@@ -108,7 +108,7 @@ echo finished`
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Query("scan", lastHourRange(), custName, "")
+	result, err := c.Execute("scan", lastHourRange(), custName, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -149,7 +149,7 @@ cat /log/$1.log | grep ERROR | wc -l`
 	}
 	for _, tc := range cases {
 		t.Run(tc.arg, func(t *testing.T) {
-			result, err := c.Query("scan "+tc.arg, lastHourRange(), custName, "")
+			result, err := c.Execute("scan "+tc.arg, lastHourRange(), custName, "")
 			if err != nil {
 				t.Fatalf("Query: %v", err)
 			}
@@ -178,7 +178,7 @@ done`
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Query("loop", lastHourRange(), custName, "")
+	result, err := c.Execute("loop", lastHourRange(), custName, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -208,7 +208,7 @@ echo "found $count"`
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Query("count_errs", lastHourRange(), custName, "")
+	result, err := c.Execute("count_errs", lastHourRange(), custName, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestInteriorQuery_AndShortCircuit(t *testing.T) {
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Query("and_ok", lastHourRange(), custName, "")
+	result, err := c.Execute("and_ok", lastHourRange(), custName, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -279,7 +279,7 @@ error_check web`
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Query("check_all", lastHourRange(), custName, "")
+	result, err := c.Execute("check_all", lastHourRange(), custName, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -334,7 +334,7 @@ echo web: $(error_count web)`
 		t.Fatalf("save report: %v", err)
 	}
 
-	result, err := c.Query("report", lastHourRange(), custName, "")
+	result, err := c.Execute("report", lastHourRange(), custName, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -362,7 +362,7 @@ func TestInteriorQuery_SinglePipelineStillSplices(t *testing.T) {
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Query("errs api", lastHourRange(), custName, "")
+	result, err := c.Execute("errs api", lastHourRange(), custName, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}

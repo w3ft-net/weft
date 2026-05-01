@@ -153,11 +153,11 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch) {
 		Start: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
 		End:   time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
-	// QueryForWatch runs the query and (if the pipeline ends with `| alert`)
+	// ExecuteForWatch runs the query and (if the pipeline ends with `| alert`)
 	// evaluates the alert in the watch's AlertContext — incident dedup and
 	// notifier dispatch both key off the watch identity instead of an
 	// interactive-mode synthetic one.
-	result, err := ce.Coord.QueryForWatch(pipeline, tr, &watch)
+	result, err := ce.Coord.ExecuteForWatch(pipeline, tr, &watch)
 
 	duration := time.Since(start)
 	status := "ok"

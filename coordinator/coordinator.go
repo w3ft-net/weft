@@ -36,7 +36,7 @@ type QueryResult struct {
 
 // Coordinator routes queries to shards and merges results. It holds no
 // customer identity of its own — tenant scope is resolved per-request
-// from the customer name passed to Query / QueryForWatch, which then
+// from the customer name passed to Query / ExecuteForWatch, which then
 // propagates to ShellFS, AlertContext, and /bin script resolution.
 //
 // Built via NewCoordinator(CoordinatorConfig). Every dependency is
@@ -326,24 +326,53 @@ func (c *Coordinator) IngestingShard(app string) shard.Shard {
 	return c.Registry.IngestingShard(app)
 }
 
-// Query parses a pipeline, routes the pushed-down SQL to matching shards,
-// and returns results. If compute stages exist and a Pool is set, shard
-// rows are streamed to the compute pool for post-processing. A trailing
-// `| alert ...` stage, if present, runs in interactive AlertContext after
-// the query; cron uses QueryForWatch to bind the alert to a watch.
+// Execute is the bash entry point: it accepts any user-typed pipeline
+// (a /log query, a plain shell pipeline, a /bin script invocation, or
+// a combination) and produces a QueryResult. Embedded log-query-shaped
+// stages get hot-swapped into callbacks that delegate to Query; the
+// surrounding bash runs through warp.
 //
 // userID identifies the human who invoked the pipeline — used to attribute
 // any /bin /cron.d /tmp writes the pipeline performs. Empty string means
 // "no attribution" (system invocation, automated path).
-func (c *Coordinator) Query(pipeline string, tr TimeRange, customer, userID string) (*QueryResult, error) {
+//
+// Phase 3 transitional shape: Execute currently delegates to the
+// shared query() helper, which still handles both log and non-log
+// pipelines. Subsequent steps split the responsibilities — Execute
+// keeps the warp+dispatch path, Query becomes strict (log-only) —
+// without changing the public contract here.
+func (c *Coordinator) Execute(pipeline string, tr TimeRange, customer, userID string) (*QueryResult, error) {
 	return c.query(pipeline, tr, customer, userID, nil)
 }
 
-// QueryForWatch runs pipeline with the supplied watch bound to the alert
-// stage (if any), so incidents and dispatches use watch identity instead
-// of interactive-mode defaults. Watches run as the system, not as a user
-// — any writes the watch performs land with NULL creator.
-func (c *Coordinator) QueryForWatch(pipeline string, tr TimeRange, watch *store.CronWatch) (*QueryResult, error) {
+// Query parses a pipeline, routes the pushed-down SQL to matching shards,
+// and returns results. If compute stages exist and a Pool is set, shard
+// rows are streamed to the compute pool for post-processing. A trailing
+// `| alert ...` stage, if present, runs in interactive AlertContext after
+// the query; cron uses ExecuteForWatch to bind the alert to a watch.
+//
+// userID identifies the human who invoked the pipeline — used to attribute
+// any /bin /cron.d /tmp writes the pipeline performs. Empty string means
+// "no attribution" (system invocation, automated path).
+//
+// Returns planner.ErrNotPlannable for pipelines without a /log/...
+// source. Use Execute for any caller that doesn't know up front
+// whether the input is a log query.
+func (c *Coordinator) Query(pipeline string, tr TimeRange, customer, userID string) (*QueryResult, error) {
+	if !planner.IsLogQuery(pipeline) {
+		return nil, fmt.Errorf("Coordinator.Query: %w", planner.ErrNotPlannable)
+	}
+	return c.query(pipeline, tr, customer, userID, nil)
+}
+
+// ExecuteForWatch runs pipeline with the supplied watch bound to the
+// alert stage (if any), so incidents and dispatches use watch identity
+// instead of interactive-mode defaults. Watches run as the system, not
+// as a user — any writes the watch performs land with NULL creator.
+//
+// Same dispatch surface as Execute (any user-typed pipeline shape);
+// the only difference is the AlertContext binding.
+func (c *Coordinator) ExecuteForWatch(pipeline string, tr TimeRange, watch *store.CronWatch) (*QueryResult, error) {
 	// c.Notifier is the NotifyDispatcher interface, so a nil-Notifier
 	// coordinator threads true-nil into AlertContext (no typed-nil-via-
 	// concrete-pointer trap).
@@ -363,7 +392,7 @@ func (c *Coordinator) QueryForWatch(pipeline string, tr TimeRange, watch *store.
 	return c.query(pipeline, tr, cust.Name, "", ctx)
 }
 
-// query is the shared implementation for Query and QueryForWatch.
+// query is the shared implementation for Query and ExecuteForWatch.
 // alertCtx = nil means "use interactive defaults if the pipeline has an
 // alert stage." A non-nil alertCtx binds the alert to that context.
 func (c *Coordinator) query(pipeline string, tr TimeRange, customer, userID string, alertCtx *AlertContext) (*QueryResult, error) {

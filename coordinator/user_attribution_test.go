@@ -27,7 +27,7 @@ func TestCoordinatorQuery_RecordsCreatorOnTmpWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := c.Query(`echo coord-test > /tmp/note`, tr, cust.Name, user.ID); err != nil {
+	if _, err := c.Execute(`echo coord-test > /tmp/note`, tr, cust.Name, user.ID); err != nil {
 		t.Fatalf("Query: %v", err)
 	}
 
@@ -52,7 +52,7 @@ func TestCoordinatorQuery_EmptyUserStoresNullCreator(t *testing.T) {
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
 	cust, _ := db.GetCustomerByID(custID)
-	if _, err := c.Query(`echo system > /tmp/auto`, tr, cust.Name, ""); err != nil {
+	if _, err := c.Execute(`echo system > /tmp/auto`, tr, cust.Name, ""); err != nil {
 		t.Fatalf("Query: %v", err)
 	}
 
@@ -79,7 +79,7 @@ func TestCoordinatorQuery_AttachesTmpExpiryNoticeOnFirstWrite(t *testing.T) {
 	cust, _ := db.GetCustomerByID(custID)
 
 	// Alice's first /tmp write — should get the notice.
-	r1, err := c.Query(`echo first > /tmp/a`, tr, cust.Name, alice.ID)
+	r1, err := c.Execute(`echo first > /tmp/a`, tr, cust.Name, alice.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestCoordinatorQuery_AttachesTmpExpiryNoticeOnFirstWrite(t *testing.T) {
 	}
 
 	// Alice's second write — should NOT get the notice.
-	r2, err := c.Query(`echo second >> /tmp/a`, tr, cust.Name, alice.ID)
+	r2, err := c.Execute(`echo second >> /tmp/a`, tr, cust.Name, alice.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestCoordinatorQuery_AttachesTmpExpiryNoticeOnFirstWrite(t *testing.T) {
 	}
 
 	// Bob's first write — should get HIS first notice (independent of alice).
-	r3, err := c.Query(`echo bobs > /tmp/b`, tr, cust.Name, bob.ID)
+	r3, err := c.Execute(`echo bobs > /tmp/b`, tr, cust.Name, bob.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,11 +112,11 @@ func TestCoordinatorQuery_AttachesTmpExpiryNoticeOnFirstWrite(t *testing.T) {
 	}
 }
 
-// TestCoordinatorQueryForWatch_StoresNullCreator: watches run as the
+// TestCoordinatorExecuteForWatch_StoresNullCreator: watches run as the
 // system, not as a user. Any /tmp write a watch performs (rare, but
 // possible — `cat /log/x | filter > /tmp/scratch` from inside a
 // watch body) lands with NULL creator.
-func TestCoordinatorQueryForWatch_StoresNullCreator(t *testing.T) {
+func TestCoordinatorExecuteForWatch_StoresNullCreator(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
 	if err := db.SaveCronWatch(custID, "", "scratchwrite", "every 1m",
@@ -130,8 +130,8 @@ func TestCoordinatorQueryForWatch_StoresNullCreator(t *testing.T) {
 
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	if _, err := c.QueryForWatch(`echo from-watch > /tmp/watchnote`, tr, w); err != nil {
-		t.Fatalf("QueryForWatch: %v", err)
+	if _, err := c.ExecuteForWatch(`echo from-watch > /tmp/watchnote`, tr, w); err != nil {
+		t.Fatalf("ExecuteForWatch: %v", err)
 	}
 
 	row, err := db.GetTmpFile(custID, "/tmp/watchnote")

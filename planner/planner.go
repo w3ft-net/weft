@@ -79,6 +79,60 @@ type pushdownResult struct {
 	limitSafe bool
 }
 
+// ErrNotPlannable is the typed sentinel callers see when a pipeline
+// has no /log/... source — i.e. it isn't something the planner can
+// turn into shard SQL. Today Plan still returns Local: true / nil
+// error for these (for the runLocal fallback that the c.query helper
+// uses), but a future cleanup will switch Plan over to returning
+// ErrNotPlannable directly. The sentinel is exposed now so
+// Coordinator.Query (the strict log-only entry point) can reject
+// non-log pipelines without re-running the classification logic.
+var ErrNotPlannable = errors.New("not a plannable log query")
+
+// IsLogQuery reports whether pipeline begins with a weft source
+// command (cat / head / tail) targeting a /log/... pseudofile.
+// Cheap lexical check — used by Coordinator.Execute to dispatch
+// between the strict log path (Query) and the warp+shellfs local
+// path. Mirrors coordinator/query_rewrite.go's isQueryShape and
+// stays in sync with parseSource above.
+func IsLogQuery(pipeline string) bool {
+	pipeline = strings.TrimSpace(pipeline)
+	if pipeline == "" {
+		return false
+	}
+	// A bash pipeline can start with `(...)` or other shapes Plan
+	// would not recognise as a log query either; the lexical
+	// `<cmd> <arg>` check is enough for the common path.
+	rest, _ := SplitAlertStage(pipeline)
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return false
+	}
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return false
+	}
+	switch fields[0] {
+	case "cat", "head", "tail":
+		// Walk args until the first pipe. If any arg names a
+		// non-log shellfs namespace, this is a local read, not a
+		// log query.
+		for _, w := range fields[1:] {
+			if w == "|" {
+				break
+			}
+			if strings.HasPrefix(w, "-") {
+				continue
+			}
+			if IsLocalFSPath(w) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // Plan parses a weft shell pipeline and produces a QueryPlan by pushing
 // down as many stages as possible into shard-level SQL. A trailing
 // `| alert ...` stage is peeled off and returned as QueryPlan.AlertArgs
