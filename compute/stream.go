@@ -68,6 +68,14 @@ func newSliceLineStream(lines []Line, err error) *sliceLineStream {
 	return &sliceLineStream{lines: lines, err: err}
 }
 
+// NewSliceLineStream is the exported constructor for callers outside
+// compute that need a buffered LineStream — typically the coordinator
+// when it has to stream a previously-drained body (alert post-
+// processing, redirect to /tmp, etc.).
+func NewSliceLineStream(lines []Line, err error) LineStream {
+	return newSliceLineStream(lines, err)
+}
+
 func (s *sliceLineStream) Next(_ context.Context) (Line, bool, error) {
 	if s.idx >= len(s.lines) {
 		return Line{}, false, s.err

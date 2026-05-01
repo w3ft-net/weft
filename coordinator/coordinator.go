@@ -26,13 +26,72 @@ type TimeRange struct {
 	End   time.Time
 }
 
-// QueryResult holds the output of a coordinated query. Either Rows is
-// populated (no compute stages) or Text is populated (compute stages ran).
+// QueryResult is the legacy buffered shape: Rows for shard output,
+// Text for compute output, Stderr for alert output, Notices for one-
+// time messages. Internal-only as of phase 4 — the public surface
+// (Coordinator.Execute / Query / ExecuteForWatch) now returns
+// *ExecuteResult, which carries a LineStream. The internal helpers
+// (c.query, executeQuery, runLocal, alert + redirect post-processing)
+// still build QueryResult so the buffered code paths can stay
+// unchanged; the public boundary converts to ExecuteResult on the
+// way out via queryResultToExecuteResult.
 type QueryResult struct {
 	Rows    []*pb.ResultRow
 	Text    string
 	Stderr  string   // alert/error output — rendered in red by the shell
 	Notices []Notice // one-time per-user notices to surface in the response
+}
+
+// ExecuteResult is the public shape returned by Coordinator.Execute,
+// Query, and ExecuteForWatch. Stream emits all output lines (body
+// and alert stderr) in a single forward-only sequence — the gRPC
+// server pumps it onto the wire batch-by-batch.
+//
+// Rows/Text/Stderr/Notices are the legacy buffered view, populated
+// eagerly from the same QueryResult that Stream replays. They are
+// transitional: callers that don't pump bytes (tests, alert post-
+// processors) keep using them so this commit doesn't blanket the
+// codebase with mechanical drains. A follow-up pass migrates
+// callers to consume Stream and deletes the duplicate fields.
+type ExecuteResult struct {
+	Stream  compute.LineStream
+	Notices []Notice
+
+	// Legacy buffered view — same data as Stream replays. Kept
+	// during phase 4 so the test surface stays stable.
+	Rows    []*pb.ResultRow
+	Text    string
+	Stderr  string
+}
+
+// queryResultToExecuteResult wraps an internal buffered QueryResult
+// in the public ExecuteResult shape. Stream is a slice replay over
+// the same Rows/Text/Stderr the legacy fields expose; both views
+// see consistent data. Future passes can swap individual paths to
+// forward live channel-backed streams from compute directly,
+// bypassing QueryResult entirely.
+func queryResultToExecuteResult(qr *QueryResult) *ExecuteResult {
+	var lines []compute.Line
+	for _, r := range qr.Rows {
+		lines = append(lines, compute.Line{Raw: r.Raw, LineNum: r.LineNum})
+	}
+	if qr.Text != "" {
+		for _, t := range strings.Split(strings.TrimRight(qr.Text, "\n"), "\n") {
+			lines = append(lines, compute.Line{Raw: t})
+		}
+	}
+	if qr.Stderr != "" {
+		for _, t := range strings.Split(strings.TrimRight(qr.Stderr, "\n"), "\n") {
+			lines = append(lines, compute.Line{Raw: t, Stderr: true})
+		}
+	}
+	return &ExecuteResult{
+		Stream:  compute.NewSliceLineStream(lines, nil),
+		Notices: qr.Notices,
+		Rows:    qr.Rows,
+		Text:    qr.Text,
+		Stderr:  qr.Stderr,
+	}
 }
 
 // Coordinator routes queries to shards and merges results. It holds no
@@ -329,21 +388,24 @@ func (c *Coordinator) IngestingShard(app string) shard.Shard {
 
 // Execute is the bash entry point: it accepts any user-typed pipeline
 // (a /log query, a plain shell pipeline, a /bin script invocation, or
-// a combination) and produces a QueryResult. Embedded log-query-shaped
-// stages get hot-swapped into callbacks that delegate to Query; the
-// surrounding bash runs through warp.
+// a combination) and returns an ExecuteResult whose Stream emits
+// output lines forward-only. Embedded log-query-shaped stages get
+// hot-swapped into callbacks that delegate to Query; the surrounding
+// bash runs through warp.
 //
 // userID identifies the human who invoked the pipeline — used to attribute
 // any /bin /cron.d /tmp writes the pipeline performs. Empty string means
 // "no attribution" (system invocation, automated path).
 //
-// Phase 3 transitional shape: Execute currently delegates to the
-// shared query() helper, which still handles both log and non-log
-// pipelines. Subsequent steps split the responsibilities — Execute
-// keeps the warp+dispatch path, Query becomes strict (log-only) —
-// without changing the public contract here.
-func (c *Coordinator) Execute(pipeline string, tr TimeRange, customer, userID string) (*QueryResult, error) {
-	return c.query(pipeline, tr, customer, userID, nil)
+// Callers that don't pump bytes themselves (tests, alert post-
+// processors) drain the stream into a buffered DrainedResult via
+// res.Drain(ctx).
+func (c *Coordinator) Execute(pipeline string, tr TimeRange, customer, userID string) (*ExecuteResult, error) {
+	qr, err := c.query(pipeline, tr, customer, userID, nil)
+	if err != nil {
+		return nil, err
+	}
+	return queryResultToExecuteResult(qr), nil
 }
 
 // Query parses a pipeline, routes the pushed-down SQL to matching shards,
@@ -359,11 +421,15 @@ func (c *Coordinator) Execute(pipeline string, tr TimeRange, customer, userID st
 // Returns planner.ErrNotPlannable for pipelines without a /log/...
 // source. Use Execute for any caller that doesn't know up front
 // whether the input is a log query.
-func (c *Coordinator) Query(pipeline string, tr TimeRange, customer, userID string) (*QueryResult, error) {
+func (c *Coordinator) Query(pipeline string, tr TimeRange, customer, userID string) (*ExecuteResult, error) {
 	if !planner.IsLogQuery(pipeline) {
 		return nil, fmt.Errorf("Coordinator.Query: %w", planner.ErrNotPlannable)
 	}
-	return c.query(pipeline, tr, customer, userID, nil)
+	qr, err := c.query(pipeline, tr, customer, userID, nil)
+	if err != nil {
+		return nil, err
+	}
+	return queryResultToExecuteResult(qr), nil
 }
 
 // ExecuteForWatch runs pipeline with the supplied watch bound to the
@@ -373,7 +439,7 @@ func (c *Coordinator) Query(pipeline string, tr TimeRange, customer, userID stri
 //
 // Same dispatch surface as Execute (any user-typed pipeline shape);
 // the only difference is the AlertContext binding.
-func (c *Coordinator) ExecuteForWatch(pipeline string, tr TimeRange, watch *store.CronWatch) (*QueryResult, error) {
+func (c *Coordinator) ExecuteForWatch(pipeline string, tr TimeRange, watch *store.CronWatch) (*ExecuteResult, error) {
 	// c.Notifier is the NotifyDispatcher interface, so a nil-Notifier
 	// coordinator threads true-nil into AlertContext (no typed-nil-via-
 	// concrete-pointer trap).
@@ -390,7 +456,11 @@ func (c *Coordinator) ExecuteForWatch(pipeline string, tr TimeRange, watch *stor
 	if err != nil {
 		return nil, fmt.Errorf("watch %d: resolve customer %d: %w", watch.ID, watch.CustomerID, err)
 	}
-	return c.query(pipeline, tr, cust.Name, "", ctx)
+	qr, err := c.query(pipeline, tr, cust.Name, "", ctx)
+	if err != nil {
+		return nil, err
+	}
+	return queryResultToExecuteResult(qr), nil
 }
 
 // query is the shared implementation for Query and ExecuteForWatch.

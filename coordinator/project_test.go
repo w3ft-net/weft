@@ -185,9 +185,9 @@ func TestProjectCoord_NoProjectionRegression(t *testing.T) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// resultText returns the text output from a QueryResult, preferring .Text
+// resultText returns the text output from an ExecuteResult, preferring .Text
 // over formatted .Rows.
-func resultText(t *testing.T, res *QueryResult) string {
+func resultText(t *testing.T, res *ExecuteResult) string {
 	t.Helper()
 	if res.Text != "" {
 		return res.Text
