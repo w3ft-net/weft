@@ -295,27 +295,25 @@ func main() {
 		cronExec.Start(ctx)
 	}
 
-	// HTTP health endpoint with subsystem metrics for load testing.
-	go func() {
-		http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-			var mem runtime.MemStats
-			runtime.ReadMemStats(&mem)
+	// HTTP server (deferred until the coordinator service is built so
+	// the Heroku ingest handler can hang off it).
+	httpMux := http.NewServeMux()
+	httpMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		var mem runtime.MemStats
+		runtime.ReadMemStats(&mem)
 
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{
-				"status": "ok",
-				"shards": len(coord.GetShards()),
-				"system": map[string]any{
-					"goroutines":  runtime.NumGoroutine(),
-					"heap_mb":     mem.HeapAlloc / 1024 / 1024,
-					"heap_sys_mb": mem.HeapSys / 1024 / 1024,
-					"gc_cycles":   mem.NumGC,
-				},
-			})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "ok",
+			"shards": len(coord.GetShards()),
+			"system": map[string]any{
+				"goroutines":  runtime.NumGoroutine(),
+				"heap_mb":     mem.HeapAlloc / 1024 / 1024,
+				"heap_sys_mb": mem.HeapSys / 1024 / 1024,
+				"gc_cycles":   mem.NumGC,
+			},
 		})
-		log.Printf("coordinator health on :%d", *healthPort)
-		http.ListenAndServe(fmt.Sprintf(":%d", *healthPort), nil)
-	}()
+	})
 
 	// gRPC server with auth interceptors.
 	//
@@ -363,11 +361,25 @@ func main() {
 		grpc.UnaryInterceptor(auth.UnaryServerInterceptor(jwtSecret, skip)),
 		grpc.StreamInterceptor(auth.StreamServerInterceptor(jwtSecret, skip)),
 	)
-	pb.RegisterWeftCoordinatorServer(srv, &coordsvc.Server{
+	coordsvcServer := &coordsvc.Server{
 		Coord:  coord,
 		Store:  db,
 		CfgPtr: cfgPtr,
-	})
+	}
+	pb.RegisterWeftCoordinatorServer(srv, coordsvcServer)
+
+	// HTTP ingest endpoints. Heroku log drains POST RFC5424 frames at
+	// /api/ingest/heroku/{token}; the token authenticates and the body
+	// drops into the same drain IngestStream feeds. See
+	// docs/plans/http-ingest.md for the broader adapter family.
+	httpMux.Handle("POST /api/ingest/heroku/{token}", coordsvcServer.IngestHandler(coordsvc.HerokuAdapter{}))
+
+	go func() {
+		log.Printf("coordinator http (health + ingest) on :%d", *healthPort)
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", *healthPort), httpMux); err != nil {
+			log.Printf("http serve error: %v", err)
+		}
+	}()
 
 	log.Printf("coordinator listening on :%d (%d shards, customer=%s)", *port, len(shards), *customer)
 
