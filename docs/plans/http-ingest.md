@@ -30,7 +30,7 @@ CloudWatch subscription filter           → /api/ingest/cloudwatch         → 
                                          - RingBuffer → existing StartDrain → INGESTING shard
 ```
 
-No new transport between coordinator and shards; the adapters are source-side translators whose output drops into the same drain pipeline weftd's gRPC stream already feeds.
+The HTTP endpoints live on the public **api** service (the existing weft-api ASG, ALB-fronted at `api.w3ft.net`). The api service is the only public-internet HTTP frontend; the coordinator's HTTP port is internal (`/health`, kevcons-only). Each adapter validates the token locally for fast 401s, then forwards the parsed rows to the coordinator over the existing gRPC `IngestStream` — same path weftd takes, same scoping/onboarding/drain logic. No new RPC surface; no new transport between coordinator and shards.
 
 ## Adapter interface
 
@@ -55,33 +55,42 @@ type Adapter interface {
 }
 ```
 
-The shared handler (`coordinator/service/ingest_http.go`) wires it up:
+The shared handler (`api/adapter.go`'s `Server.IngestHandler`) wires it up:
 
 ```go
-func makeIngestHandler(a Adapter, deps ...) http.Handler {
+func (s *Server) IngestHandler(a Adapter) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
         token, err := a.Auth(req)
-        if err != nil { writeAuthErr(w, err); return }
-        info, err := lookupToken(token)        // existing agent_tokens path
-        if err != nil { writeAuthErr(w, err); return }
+        if err != nil { http.Error(w, ..., 401); return }
+        auth, err := s.store.ValidateAgentToken(token)   // fast 401 on miss
+        if err != nil || auth == nil { http.Error(w, ..., 401); return }
 
-        if !rateLimit.Allow(token) { write429(w); return }
+        // Body cap is per-adapter (1 MB JSON / Heroku, 6 MB CloudWatch).
+        req.Body = http.MaxBytesReader(w, req.Body, a.ContentLimit())
+        rows, err := a.Parse(req.Body, req.Header)
+        if err != nil { … }
 
-        rows, err := a.Parse(io.LimitReader(req.Body, a.ContentLimit()), req.Header)
-        if err != nil { writeBodyErr(w, err); return }
-
+        // Adapter emits unprefixed names ("myapp/web"); api stitches in
+        // the namespace before forwarding so coordinator's existing
+        // scope check passes.
         for _, r := range rows {
-            r.Customer = info.Customer
-            if info.Env != "" { r.Env = info.Env }
-            r.App = enforceNamespace(info.Namespace, r.App)   // same check IngestStream uses
-            // schema bootstrap on first batch per (customer, app)
+            r.App = prefixNamespace(auth.Namespace, r.App)
         }
-        coord.Ingest(rows)
-        meter.Add(token, len(rows), bodyBytes)
+
+        // Forward via the existing gRPC IngestStream. Same bearer
+        // token in metadata; coordinator's authenticateStream stamps
+        // customer/env, runs SeenApps onboarding, drains to shards.
+        ctx := metadata.AppendToOutgoingContext(req.Context(),
+            "authorization", "Bearer "+token)
+        stream, err := s.coordClient.IngestStream(ctx)
+        for _, r := range rows { stream.Send(r) }
+        stream.CloseAndRecv()
         w.WriteHeader(http.StatusNoContent)
     })
 }
 ```
+
+The api thus becomes a thin protocol translator: it knows HTTP wire formats and token auth; the coordinator owns drain semantics. No customer-fields stamping, no SeenApps tracking, no Provisioner.OnboardApp on the api side — those are all the coordinator's job, reached via the same gRPC method weftd uses.
 
 ## JSONAdapter — generic SDK / curl / collector intake
 
@@ -168,12 +177,12 @@ That plan defines the wire format (CloudWatch Logs subscription event JSON), the
 
 ## Components to build
 
-1. **`coordinator/service/ingest_http.go`** — shared handler factory taking an `Adapter`. Wires auth, token lookup, schema bootstrap, env stamp, namespace check, drain hand-off, rate limit, metering. Thin glue.
-2. **`coordinator/service/adapter_json.go`** — JSONAdapter: ndjson + JSON shapes, gzip/deflate, Bearer header auth.
-3. **`coordinator/service/adapter_heroku.go`** — HerokuAdapter: RFC5424 octet-counted framing parser, per-frame extraction, l2met line detection, procid sub-app split, URL-path token auth.
-4. **`coordinator/service/adapter_cloudwatch.go`** — recast of the existing CloudWatch path into the Adapter interface (mostly file move + signature change).
-5. **Schema bootstrap reuse** — first batch per `(customer, app)` goes through the existing onboarding flow (`weftd.CheckSourceStatus` → `SubmitSample` → `WaitForConfiguration`); subsequent batches stream straight to drain. Same pattern weftd uses today.
-6. **Rate limit + bytes-in metering** — `rate.Limiter` keyed on token, default 1000 events/sec per token, per-tier caps in `store/user.go`. Bytes-in count feeds `usage_hourly` alongside the event count, on the same code path weftd's gRPC stream uses for byte accounting. Over-limit returns 429 with `Retry-After`.
+1. **`api/adapter.go`** — Adapter interface + shared `Server.IngestHandler` factory. Token lookup, namespace prefixing, gRPC `IngestStream` forwarding. Thin glue.
+2. **`api/adapter_json.go`** — JSONAdapter: ndjson + JSON shapes, gzip/deflate, Bearer header auth.
+3. **`api/adapter_heroku.go`** — HerokuAdapter: RFC5424 octet-counted framing parser, per-frame extraction, l2met line detection, procid sub-app split, URL-path token auth. **Landed.**
+4. **`api/adapter_cloudwatch.go`** — recast of the existing CloudWatch path (currently in coordinator) into the Adapter interface. The existing CloudWatch poller stays where it is; this is the push-based forwarder shape from `cloudwatch-lambda-forwarder.md`.
+5. **Schema bootstrap reuse** — happens coordinator-side, on the gRPC `IngestStream` path the api forwards into. No api-side work; `SeenApps.Add` already triggers `Provisioner.OnboardApp` on first sight per (customer, app).
+6. **Rate limit + bytes-in metering** — `api.RouteLimit` already supports per-route token-bucket limiting; add a `LimitIngest` rule keyed on the URL-path token. Bytes-in count feeds `usage_hourly` on the existing path the gRPC stream already updates — same row, same code, doesn't matter which adapter delivered the bytes. Over-limit returns 429 with `Retry-After`.
 7. **`docs/manual/http-ingest.md`** — generic curl recipe, gzip/ndjson examples, per-tier QPS caps.
 8. **`docs/manual/heroku.md`** — two-command customer flow (`weft token create` + `heroku drains:add`), the procid → sub-app mapping table, the l2met → metrics auto-routing note, the "you don't run weftd on Heroku" framing.
 9. **Reference Python SDK** — `clients/python/weft/__init__.py`, ~50 lines wrapping the JSON endpoint. Bearer-auth session, batching, gzip, retry. Ships to PyPI on the existing release pipeline.

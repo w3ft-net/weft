@@ -277,6 +277,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/team/accept", guarded(LimitAnonAuth, cfg.AuthBodyMax, s.handleAcceptInvite))
 	mux.HandleFunc("GET /api/integrations/slack/callback", s.handleSlackCallback)
 
+	// Heroku log drain: customer adds a drain via `heroku drains:add
+	// https://api.w3ft.net/api/ingest/heroku/<token>`. Auth is the
+	// {token} URL path component (Heroku doesn't speak Bearer
+	// headers); the handler validates against agent_tokens, parses
+	// the RFC5424 octet-counted body, and forwards to the coordinator
+	// via the existing IngestStream gRPC. See docs/plans/http-ingest.md.
+	mux.Handle("POST /api/ingest/heroku/{token}", s.IngestHandler(HerokuAdapter{}))
+
 	// Agent-facing routes (agent token auth).
 	agentMux := http.NewServeMux()
 	agentMux.HandleFunc("POST /api/agent/sample", s.handleAgentSample)
