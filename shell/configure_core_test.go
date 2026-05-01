@@ -54,6 +54,56 @@ func TestConfigureCore_DefaultsToWeftCustomerWhenUnset(t *testing.T) {
 	}
 }
 
+// TestConfigureCore_RangeBuiltinDisplaysCurrentWindow verifies that
+// `range` (no arg) prints the current time window. Locks in the
+// behavior moved out of warp's inline shellcore dispatch — the
+// builtin is now embedder-registered via configureCore, and bare
+// invocation must still produce a "range: <start> .. <end>" line.
+func TestConfigureCore_RangeBuiltinDisplaysCurrentWindow(t *testing.T) {
+	var output strings.Builder
+	core := shellcore.NewShellCore(nil, 80, 24,
+		func(b []byte) { output.Write(b) },
+		func(a shellcore.Action) {},
+	)
+	(&Shell{User: "alice"}).configureCore(core)
+
+	for _, r := range "range" {
+		core.HandleEvent(shellcore.KeyEvent{Rune: r})
+	}
+	core.HandleEvent(shellcore.KeyEvent{Key: shellcore.KeyEnter})
+
+	visible := stripANSI(output.String())
+	if !strings.Contains(visible, "range:") {
+		t.Errorf("bare `range` should display current window header; got: %q", visible)
+	}
+}
+
+// TestConfigureCore_RangeBuiltinAcceptsSpec verifies that
+// `range 30m..` parses + dispatches an ActionSetRange. The builtin
+// must update both the core's internal range AND fire the action
+// the embedder uses to retransmit the window upstream.
+func TestConfigureCore_RangeBuiltinAcceptsSpec(t *testing.T) {
+	var dispatched bool
+	core := shellcore.NewShellCore(nil, 80, 24,
+		func(b []byte) {},
+		func(a shellcore.Action) {
+			if _, ok := a.(shellcore.ActionSetRange); ok {
+				dispatched = true
+			}
+		},
+	)
+	(&Shell{User: "alice"}).configureCore(core)
+
+	for _, r := range "range 30m.." {
+		core.HandleEvent(shellcore.KeyEvent{Rune: r})
+	}
+	core.HandleEvent(shellcore.KeyEvent{Key: shellcore.KeyEnter})
+
+	if !dispatched {
+		t.Error("range <spec> should dispatch ActionSetRange")
+	}
+}
+
 // TestConfigureCore_HonoursExplicitCustomer verifies the override
 // path: when Shell.Customer is set, that wins over the "weft"
 // fallback.

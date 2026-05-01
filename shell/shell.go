@@ -494,6 +494,51 @@ func (s *Shell) configureCore(core *shellcore.ShellCore) {
 	// `wit log <path>` must preserve the keyword instead of
 	// resolving `log` against `/` to the /log namespace.
 	core.RegisterRewriteGrammar("wit", "log", "show", "diff", "checkout", "amend")
+	// Reserve weft's natively-implemented command names so a saved
+	// /bin/<name> function can't shadow them. These run through the
+	// bash interpreter's RegisterCommand path (see
+	// coordinator/weftcmds.go), not shellcore's RegisterBuiltin.
+	for _, name := range []string{
+		"alert",
+		"weft.latest", "weft.avg", "weft.max", "weft.min",
+		"weft.sum", "weft.stddev", "weft.first", "weft.count",
+		"weft.percentile", "weft.delta", "weft.slope", "weft.rate",
+	} {
+		core.RegisterReservedName(name)
+	}
+	// `range` was a shellcore-inline builtin; it's a weft concept
+	// (the query time window) and now lives here. The handler
+	// covers both bare `range` (display current) and
+	// `range <spec>` (set new) — same UX warp's inline version
+	// provided.
+	core.RegisterBuiltin("range", rangeBuiltin)
+}
+
+// rangeBuiltin handles the `range` command. With no arg it prints
+// the current window; with a single arg it parses the spec via
+// shellcore.ParseRange, calls SetRange (which dispatches
+// ActionSetRange), and prints the new window. Returning true means
+// "handled" — shellcore's dispatcher doesn't fall through to bash.
+func rangeBuiltin(c *shellcore.ShellCore, args []string) bool {
+	if len(args) == 1 {
+		// bare "range" — display current
+		start, end := c.Range()
+		c.AppendScrollback(shellcore.FormatRange(start, end))
+		return true
+	}
+	if len(args) >= 2 {
+		spec := strings.Join(args[1:], " ")
+		start, end, err := shellcore.ParseRange(spec)
+		if err != nil {
+			c.AppendScrollback(shellcore.ErrorText("range: "+err.Error()) + "\n")
+			return true
+		}
+		c.SetRange(start, end)
+		c.Dispatch(shellcore.ActionSetRange{Start: start, End: end})
+		c.AppendScrollback(shellcore.FormatRange(start, end))
+		return true
+	}
+	return false
 }
 
 func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
