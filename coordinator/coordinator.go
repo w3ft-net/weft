@@ -432,7 +432,51 @@ func (c *Coordinator) query(pipeline string, tr TimeRange, customer, userID stri
 		runAlertStage(result, plan.AlertArgs, alertCtx)
 	}
 
+	// Honour a trailing `> /tmp/...` redirect on the query pipeline.
+	// runLocal already handles redirects natively (warp+shellfs); only
+	// the executeQuery path (a real /log query) drops them, so apply
+	// the write here against the same shellfs the local path would
+	// have used.
+	if plan.RedirectTarget != "" && custID != 0 && !plan.Local {
+		if err := c.writeQueryResultToFS(result, plan, custID, userID); err != nil {
+			return nil, fmt.Errorf("redirect: %w", err)
+		}
+		// Once written, the result is "consumed" by the redirect — the
+		// shell shouldn't also print it. Mirror bash semantics where a
+		// redirected pipeline produces no terminal output.
+		result.Rows = nil
+		result.Text = ""
+	}
+
 	return result, nil
+}
+
+// writeQueryResultToFS materializes a query result as the same plain
+// text the shell would render (rows joined with newlines, or the
+// pre-rendered Text from a compute pipeline) and pushes it into
+// shellfs at plan.RedirectTarget. Honours the append flag (`>>` vs
+// `>`).
+func (c *Coordinator) writeQueryResultToFS(result *QueryResult, plan *planner.QueryPlan, custID uint, userID string) error {
+	tier := c.Store.TierForCustomer(custID)
+	opts := []shellfs.Option{shellfs.WithTier(tier)}
+	if userID != "" {
+		opts = append(opts, shellfs.WithUser(userID, false))
+	}
+	fs := shellfs.New(c.Store, custID, nil, opts...)
+
+	body := result.Text
+	if body == "" && len(result.Rows) > 0 {
+		var sb strings.Builder
+		for _, row := range result.Rows {
+			sb.WriteString(row.Raw)
+			sb.WriteByte('\n')
+		}
+		body = sb.String()
+	}
+	if plan.RedirectAppend {
+		return fs.AppendFile(plan.RedirectTarget, []byte(body))
+	}
+	return fs.WriteFile(plan.RedirectTarget, []byte(body))
 }
 
 // executeQuery runs the query half of a plan (everything except alert).

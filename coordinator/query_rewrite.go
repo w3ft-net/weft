@@ -74,6 +74,12 @@ func rewriteQueryPipelines(script *bash.Script, c *Coordinator, tr TimeRange, cu
 // re-classifies and returns an error if the pipeline turns out not
 // to be one. Kept in sync with planner/parse.go's parseSource: any
 // source the planner recognises must appear here.
+//
+// Reads against non-log shellfs namespaces (/bin, /cron.d, /etc,
+// /tmp) are explicitly excluded — Plan routes those to Local mode
+// so warp+shellfs serve them, and wrapping them in a query callback
+// here would just funnel them straight back into runLocal and
+// infinite-loop.
 func isQueryShape(pipe *bash.Pipeline) bool {
 	if pipe == nil || len(pipe.Commands) == 0 {
 		return false
@@ -84,6 +90,11 @@ func isQueryShape(pipe *bash.Pipeline) bool {
 	}
 	switch sc.Words[0].Literal() {
 	case "cat", "head", "tail":
+		for _, w := range sc.Words[1:] {
+			if planner.IsLocalFSPath(w.Literal()) {
+				return false
+			}
+		}
 		return true
 	}
 	return false

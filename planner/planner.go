@@ -1,8 +1,11 @@
 package planner
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/kevlarcon/warp/pkg/bash"
 )
 
 // QueryPlan is the result of analyzing a weft pipeline. ShardSQL is the
@@ -43,6 +46,15 @@ type QueryPlan struct {
 	// RPC (no compute stages, backward-compat tests) see the old
 	// behavior in ShardSQL.
 	DirectShardSQL string
+
+	// RedirectTarget is the destination of a trailing `> /tmp/...`
+	// (or other shellfs namespace) redirect on the source-query
+	// pipeline. Empty means no redirect. Coordinators write the
+	// rendered query result to this path via shellfs after executing
+	// the rest of the pipeline.
+	RedirectTarget string
+	// RedirectAppend distinguishes `>>` (append) from `>` (overwrite).
+	RedirectAppend bool
 }
 
 // GrepPattern captures a grep filter for live tail matching.
@@ -59,15 +71,11 @@ type pushdownResult struct {
 	compute   string // non-empty if the stage was partially pushed, leaving a compute remainder
 
 	// limitSafe is set by stage-specific pushdown helpers when the
-	// extracted predicate is *selective* — its intent is to narrow
-	// the result to matching rows, not to invert/include. Selective
-	// predicates (field equality, positive regex, plain grep) push
-	// past a frozen LIMIT because the user's intent on
-	// `tail | filter` is "recent matching rows," and pushing them
-	// shard-side delivers that without a network roundtrip.
-	// Inclusive predicates (negation, inequality) keep the
-	// conservative compute-side route — see
-	// docs/plans/cross-shard-post-limit-filter.md.
+	// extracted predicate is safe to apply shard-side even after a
+	// LIMIT has been frozen by an upstream head/tail. Today only awk
+	// field/meta-var equality opts in; see
+	// docs/plans/cross-shard-post-limit-filter.md for the conservative
+	// default and the carve-out reasoning.
 	limitSafe bool
 }
 
@@ -86,12 +94,36 @@ func Plan(pipeline string) (*QueryPlan, error) {
 		return &QueryPlan{Local: true, LocalPipeline: "", AlertArgs: alertArgs}, nil
 	}
 
+	// Strip a trailing `> /tmp/...` (or other shellfs namespace)
+	// redirect off the query pipeline before classification. Without
+	// this the redirect would be silently dropped by executeQuery —
+	// the result rows never reach FS write machinery. We capture the
+	// target and rebuild queryPart from the surviving AST.
+	queryPart, redirTarget, redirAppend, err := extractTrailingFSRedirect(queryPart)
+	if err != nil {
+		return nil, fmt.Errorf("plan: %w", err)
+	}
+
 	info, err := parsePipeline(queryPart)
 	if err != nil {
 		// If the source command is unknown, this is a local pipeline
-		// (e.g., "echo 42 | alert above 0"). Run it entirely through warp.
-		if strings.Contains(err.Error(), "unknown source command") {
-			return &QueryPlan{Local: true, LocalPipeline: queryPart, AlertArgs: alertArgs}, nil
+		// (e.g., "echo 42 | alert above 0"). Same treatment for source
+		// args that name a non-log shellfs namespace (/bin, /cron.d,
+		// /etc, /tmp) — those reads go through warp+shellfs at
+		// runtime, so any redirects honour FS write semantics.
+		if strings.Contains(err.Error(), "unknown source command") || errors.Is(err, errLocalSourcePath) {
+			// Preserve the original redirect alongside the local
+			// pipeline so warp+shellfs can apply it natively at
+			// exec time.
+			local := queryPart
+			if redirTarget != "" {
+				op := ">"
+				if redirAppend {
+					op = ">>"
+				}
+				local = local + " " + op + " " + redirTarget
+			}
+			return &QueryPlan{Local: true, LocalPipeline: local, AlertArgs: alertArgs}, nil
 		}
 		return nil, fmt.Errorf("plan: %w", err)
 	}
@@ -152,20 +184,25 @@ func Plan(pipeline string) (*QueryPlan, error) {
 			continue
 		}
 
-		// Once a head/tail (or awk NR-window) bounds the source,
-		// post-LIMIT *inclusive* stages must operate on the globally
-		// merged top-N stream — `tail -n 2000 | grep -v ERROR | wc -l`
-		// would saturate at 2000 if each shard returned its own
-		// ≤2000 non-ERROR rows. See
-		// docs/plans/cross-shard-post-limit-filter.md.
+		// Once a head/tail (or awk NR-window) bounds the source, every
+		// later stage must operate on the *globally* merged top-N
+		// stream. Pushing a filter shard-side after the LIMIT freezes
+		// would let cross-shard merge inflate the post-filter set —
+		// e.g. `tail -n 2000 | grep -v ERROR | wc -l` would saturate
+		// at 2000 again because each shard returned its own ≤2000
+		// non-ERROR rows. Compute already enforces the global cap
+		// before stages run; route the post-limit stages there.
+		// Pre-limit filters (filter | tail) are unaffected — the
+		// freeze is set by the LIMIT pushdown itself, not by entering
+		// the loop. See docs/plans/cross-shard-post-limit-filter.md.
 		//
 		// Carve-out: a stage that pushes a *limit-safe* predicate
-		// (field/meta-var equality, positive regex match, plain grep)
+		// (today: awk field/meta-var equality with a literal RHS)
 		// gets through the gate. The user's intent on
 		// `tail | awk '$N == "foo"'` is "recent rows where field N
-		// matches" — pushing the predicate shard-side delivers that
+		// matches" — pushing the predicate shard-side gives that
 		// directly. Saturation hazards live in negation / inclusive
-		// filters, not in selective ones. The action remainder, when
+		// filters, not in value equality. The action remainder, when
 		// present (filter + projection), is appended to compute
 		// strings just like a non-frozen partial pushdown.
 		if sql.limitFrozen {
@@ -276,7 +313,57 @@ func Plan(pipeline string) (*QueryPlan, error) {
 		AlertArgs:      alertArgs,
 		ShardOrderBy:   shardOrderBy,
 		ShardLimit:     shardLimit,
+		RedirectTarget: redirTarget,
+		RedirectAppend: redirAppend,
 	}, nil
+}
+
+// extractTrailingFSRedirect detects a `> /tmp/...` (or `>>`, or any
+// other non-log shellfs namespace) redirect on the last command of
+// the leading pipeline. When found, it returns the pipeline string
+// rebuilt without the redirect plus the captured target/append flag.
+// Redirects that don't address a known shellfs namespace are left in
+// place — they belong to a downstream stage's normal exec semantics
+// and the planner has nothing useful to add. Multiple redirects on
+// the same command are handled by stripping the last fs-targeted one
+// and leaving the rest intact.
+func extractTrailingFSRedirect(pipeline string) (string, string, bool, error) {
+	if pipeline == "" {
+		return pipeline, "", false, nil
+	}
+	script, err := bash.Parse(pipeline)
+	if err != nil {
+		// Let parsePipeline surface the parse error in its usual shape.
+		return pipeline, "", false, nil
+	}
+	if len(script.Commands) == 0 || script.Commands[0] == nil || script.Commands[0].First == nil {
+		return pipeline, "", false, nil
+	}
+	pipe := script.Commands[0].First
+	if len(pipe.Commands) == 0 {
+		return pipeline, "", false, nil
+	}
+	last, ok := pipe.Commands[len(pipe.Commands)-1].(*bash.SimpleCommand)
+	if !ok || len(last.Redirects) == 0 {
+		return pipeline, "", false, nil
+	}
+	// Walk the redirects right-to-left so we strip the *last* fs-bound
+	// one (matching shell precedence: `> /tmp/a > /tmp/b` lands the
+	// final write at /tmp/b).
+	for i := len(last.Redirects) - 1; i >= 0; i-- {
+		r := last.Redirects[i]
+		if r.Op != ">" && r.Op != ">>" {
+			continue
+		}
+		target := r.Target.Literal()
+		if !IsLocalFSPath(target) {
+			continue
+		}
+		isAppend := r.Op == ">>"
+		last.Redirects = append(last.Redirects[:i], last.Redirects[i+1:]...)
+		return bash.Unparse(script), target, isAppend, nil
+	}
+	return pipeline, "", false, nil
 }
 
 // tryPushdown attempts to push a single stage into the SQL builder.
@@ -318,7 +405,7 @@ func tryPushdown(stage stageInfo, sql *sqlBuilder) pushdownResult {
 		}
 		// grep with -v is inverted/inclusive — not limit-safe (the
 		// cross-shard saturation hazard the doc warned about). Plain
-		// grep / grep -i is selective.
+		// grep / grep -i is selective — limit-safe.
 		_, _, invert := parseGrepArgs(stage.args)
 		return pushdownResult{
 			pushed:    true,
@@ -331,7 +418,7 @@ func tryPushdown(stage stageInfo, sql *sqlBuilder) pushdownResult {
 		if pred == "" {
 			return pushdownResult{}
 		}
-		// `sed -n '/pat/p'` is positive selection.
+		// `sed -n '/pat/p'` is positive selection; limit-safe.
 		return pushdownResult{
 			pushed:    true,
 			predicate: pred,

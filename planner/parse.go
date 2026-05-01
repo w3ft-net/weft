@@ -90,6 +90,25 @@ func parsePipeline(pipeline string) (*pipelineInfo, error) {
 	return &pipelineInfo{source: *src, stages: stages}, nil
 }
 
+// errLocalSourcePath is returned by parseSource when a cat/head/tail
+// source argument addresses a non-log virtual-FS namespace (/bin,
+// /cron.d, /etc, /tmp). Plan turns this into Local mode so warp+
+// shellfs handle the read (and any redirects) at runtime instead of
+// the path being routed off the source-app allowlist.
+var errLocalSourcePath = fmt.Errorf("local source path")
+
+// IsLocalFSPath reports whether p points at a shellfs namespace that
+// is not a log query — /bin, /cron.d, /etc, /tmp. These are read
+// from the FS at runtime, not pushed down as shard SQL. Exported so
+// the coordinator's pipeline-rewrite pass can skip wrapping such
+// reads in a callback (which would infinite-loop back through Plan).
+func IsLocalFSPath(p string) bool {
+	return strings.HasPrefix(p, "/bin/") ||
+		strings.HasPrefix(p, "/cron.d/") ||
+		strings.HasPrefix(p, "/etc/") ||
+		strings.HasPrefix(p, "/tmp/")
+}
+
 // parseSource extracts the source command info from the first pipeline command.
 func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 	if len(cmd.Words) == 0 {
@@ -103,6 +122,11 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 	case "cat":
 		if len(args) == 0 {
 			return nil, fmt.Errorf("cat: missing pseudofile argument")
+		}
+		for _, a := range args {
+			if IsLocalFSPath(a) {
+				return nil, errLocalSourcePath
+			}
 		}
 		apps, env, err := extractAppsEnv(args, "cat")
 		if err != nil {
@@ -129,6 +153,11 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 		}
 		if len(files) == 0 {
 			return nil, fmt.Errorf("head: missing pseudofile argument")
+		}
+		for _, f := range files {
+			if IsLocalFSPath(f) {
+				return nil, errLocalSourcePath
+			}
 		}
 		apps, env, err := extractAppsEnv(files, "head")
 		if err != nil {
@@ -158,6 +187,11 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 		}
 		if len(files) == 0 {
 			return nil, fmt.Errorf("tail: missing pseudofile argument")
+		}
+		for _, f := range files {
+			if IsLocalFSPath(f) {
+				return nil, errLocalSourcePath
+			}
 		}
 		apps, env, err := extractAppsEnv(files, "tail")
 		if err != nil {
