@@ -313,13 +313,31 @@ message CoordinatorExecuteRequest {
 }
 
 message CoordinatorExecuteResponse {
-  // One of these is populated depending on whether compute stages ran.
-  repeated ResultRow rows = 1;
-  string text = 2;
+  // Streamed in batches as the producer emits. Multiple responses
+  // may be sent over a single Execute call; clients append lines in
+  // arrival order. Replaces the old rows/text duality — every
+  // pipeline shape (log query, compute output, /bin script, follow)
+  // now produces lines uniformly.
+  repeated Line lines = 1;
+
   // One-time per-user notices to surface in the UI / CLI. Typically
-  // emitted on the first response in a stream; empty for subsequent
-  // responses or follow-mode rows.
-  repeated Notice notices = 3;
+  // sent on the first response in a stream; empty for subsequent
+  // batches and follow-mode rows.
+  repeated Notice notices = 2;
+
+  // Stderr accumulator (alert output, error messages). Sent on the
+  // response carrying the alert result; empty otherwise. Clients
+  // render in red.
+  string stderr = 3;
+}
+
+// Line is one row of output from an Execute call. line_num carries
+// the shard-side row index for log queries (lets clients dedupe
+// against follow-mode broker rows); zero for compute output and
+// non-shard sources.
+message Line {
+  string raw      = 1;
+  int64  line_num = 2;
 }
 
 // Notice is a one-time message attached to a Query response — the

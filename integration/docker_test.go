@@ -321,7 +321,11 @@ func queryPipeline(t *testing.T, client pb.WeftCoordinatorClient, pipeline, cust
 			}
 			t.Fatalf("recv: %v", err)
 		}
-		rows = append(rows, resp.Rows...)
+		// Convert wire Lines to ResultRow shape so callers that
+		// pre-date the wire change keep working.
+		for _, line := range resp.Lines {
+			rows = append(rows, &pb.ResultRow{Raw: line.Raw, LineNum: line.LineNum})
+		}
 	}
 	return rows
 }

@@ -163,17 +163,17 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 					"body":  n.Body,
 				})
 			}
-			if rr.resp.Text != "" {
-				writeSSEEvent(w, map[string]any{"type": "output", "text": rr.resp.Text})
-			}
-			for _, row := range rr.resp.Rows {
+			for _, line := range rr.resp.Lines {
 				writeSSEEvent(w, map[string]any{
-					"type": "row",
+					"type": "line",
 					"data": map[string]any{
-						"line_num": row.LineNum,
-						"raw":      row.Raw,
+						"line_num": line.LineNum,
+						"raw":      line.Raw,
 					},
 				})
+			}
+			if rr.resp.Stderr != "" {
+				writeSSEEvent(w, map[string]any{"type": "stderr", "text": rr.resp.Stderr})
 			}
 			flusher.Flush()
 		}

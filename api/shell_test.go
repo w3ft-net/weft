@@ -45,7 +45,7 @@ func (f *fakeCoord) Query(_ *pb.CoordinatorExecuteRequest, stream grpc.ServerStr
 	if seen == "" {
 		return status.Errorf(codes.Unauthenticated, "missing authorization metadata")
 	}
-	return stream.Send(&pb.CoordinatorExecuteResponse{Text: "ok\n"})
+	return stream.Send(&pb.CoordinatorExecuteResponse{Lines: []*pb.Line{{Raw: "ok"}}})
 }
 
 // TestShellExec_ForwardsBearerToCoordinator reproduces the prod symptom

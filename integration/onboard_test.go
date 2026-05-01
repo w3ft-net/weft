@@ -197,7 +197,9 @@ func TestOnboardFlow(t *testing.T) {
 			if err != nil {
 				break
 			}
-			rows = append(rows, resp.Rows...)
+			for _, line := range resp.Lines {
+				rows = append(rows, &pb.ResultRow{Raw: line.Raw, LineNum: line.LineNum})
+			}
 		}
 		if len(rows) > 0 {
 			t.Logf("  got %d rows after %d append(s)", len(rows), attempt)

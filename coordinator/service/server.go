@@ -124,40 +124,54 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 	}
 
 	notices := convertNotices(result.Notices)
-	if result.Text != "" || result.Stderr != "" {
-		text := result.Text
-		if result.Stderr != "" {
-			// Render stderr in red ANSI so the shell displays it appropriately.
-			text += "\033[38;5;1m" + result.Stderr + "\033[0m"
+
+	// Convert the QueryResult's polymorphic shape (Rows | Text) into
+	// a uniform sequence of Lines. This is the wire-side homogenization
+	// described in docs/plans/direct-to-compute.md and the LineStream
+	// design notes — clients see one shape regardless of which
+	// execution path produced the bytes. A future pass will move the
+	// conversion upstream into Coordinator.Execute itself (returning a
+	// LineStream directly) so the server pumps from a true producer
+	// stream rather than a buffered QueryResult.
+	var lines []*pb.Line
+	if result.Text != "" {
+		for _, line := range strings.Split(strings.TrimRight(result.Text, "\n"), "\n") {
+			lines = append(lines, &pb.Line{Raw: line})
 		}
-		return stream.Send(&pb.CoordinatorExecuteResponse{Text: text, Notices: notices})
+	} else {
+		for _, r := range result.Rows {
+			lines = append(lines, &pb.Line{Raw: r.Raw, LineNum: r.LineNum})
+		}
 	}
 
-	// Stream rows in batches to stay under gRPC message size limit.
-	// Notices ride along on the first batch so the client surfaces them
-	// before any rows render; subsequent batches don't repeat them.
-	const batchSize = 500
-	for i := 0; i < len(result.Rows); i += batchSize {
-		end := i + batchSize
-		if end > len(result.Rows) {
-			end = len(result.Rows)
+	if len(lines) == 0 {
+		if len(notices) > 0 || result.Stderr != "" {
+			return stream.Send(&pb.CoordinatorExecuteResponse{
+				Notices: notices,
+				Stderr:  result.Stderr,
+			})
 		}
-		resp := &pb.CoordinatorExecuteResponse{
-			Rows: result.Rows[i:end],
-		}
-		if i == 0 {
-			resp.Notices = notices
-		}
-		if err := stream.Send(resp); err != nil {
-			return err
-		}
-	}
-	// Empty result + notices: nothing above sent anything, but we
-	// still want the user to see the warning. Emit a notices-only
-	// response.
-	if len(result.Rows) == 0 && result.Text == "" && result.Stderr == "" && len(notices) > 0 {
-		if err := stream.Send(&pb.CoordinatorExecuteResponse{Notices: notices}); err != nil {
-			return err
+	} else {
+		// Batch lines to stay under gRPC message-size limits. Notices
+		// ride along on the first batch (clients surface once before
+		// any line output renders); stderr rides along on the last
+		// batch (alert output flushes after the body).
+		const batchSize = 500
+		for i := 0; i < len(lines); i += batchSize {
+			end := i + batchSize
+			if end > len(lines) {
+				end = len(lines)
+			}
+			resp := &pb.CoordinatorExecuteResponse{Lines: lines[i:end]}
+			if i == 0 {
+				resp.Notices = notices
+			}
+			if end == len(lines) {
+				resp.Stderr = result.Stderr
+			}
+			if err := stream.Send(resp); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -194,15 +208,15 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 			if !ok {
 				return nil
 			}
-			lines := filter(row)
-			if len(lines) == 0 {
+			liveLines := filter(row)
+			if len(liveLines) == 0 {
 				continue
 			}
-			rows := make([]*pb.ResultRow, len(lines))
-			for i, ln := range lines {
-				rows[i] = &pb.ResultRow{LineNum: row.LineNum, Raw: ln}
+			outLines := make([]*pb.Line, len(liveLines))
+			for i, ln := range liveLines {
+				outLines[i] = &pb.Line{LineNum: row.LineNum, Raw: ln}
 			}
-			if err := stream.Send(&pb.CoordinatorExecuteResponse{Rows: rows}); err != nil {
+			if err := stream.Send(&pb.CoordinatorExecuteResponse{Lines: outLines}); err != nil {
 				return err
 			}
 		}

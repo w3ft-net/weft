@@ -170,7 +170,7 @@ func (h *HTTPCoordinator) Follow(ctx context.Context, pipeline string, onRow fun
 		}
 
 		switch event["type"] {
-		case "row":
+		case "line":
 			if rowData, ok := event["data"].(map[string]any); ok {
 				onRow(mapToResultRow(rowData))
 			}
@@ -353,13 +353,14 @@ func parseSSEResponse(r io.Reader) (*RemoteQueryResult, error) {
 		}
 
 		switch event["type"] {
-		case "output":
-			if text, ok := event["text"].(string); ok {
-				result.Text += text
-			}
-		case "row":
+		case "line":
 			if rowData, ok := event["data"].(map[string]any); ok {
 				result.Rows = append(result.Rows, mapToResultRow(rowData))
+			}
+		case "stderr":
+			// Render stderr in red ANSI so the shell displays it appropriately.
+			if text, ok := event["text"].(string); ok {
+				result.Text += "\033[38;5;1m" + text + "\033[0m"
 			}
 		case "notice":
 			result.Notices = append(result.Notices, RemoteNotice{

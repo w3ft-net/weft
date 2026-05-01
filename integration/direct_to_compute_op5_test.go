@@ -87,12 +87,13 @@ func TestDirectToCompute_Op5_CoordinatorComputeStageRoundtrip(t *testing.T) {
 			if err != nil {
 				break
 			}
-			if resp.Text != "" {
-				buf.WriteString(resp.Text)
-			}
-			// Mode B compute path returns Text; Rows should be empty.
-			if len(resp.Rows) > 0 {
-				t.Fatalf("unexpected Rows in compute response: %d rows", len(resp.Rows))
+			// All output now flows as Lines (the wire dropped the
+			// rows/text duality). Compute pipelines emit one Line per
+			// rendered output row; LineNum is 0 because compute
+			// strips row metadata.
+			for _, line := range resp.Lines {
+				buf.WriteString(line.Raw)
+				buf.WriteByte('\n')
 			}
 		}
 		if buf.Len() > 0 {

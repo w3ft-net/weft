@@ -128,10 +128,9 @@ func queryText(t *testing.T, client pb.WeftCoordinatorClient, pipeline, customer
 		if err != nil {
 			t.Fatalf("query %q: recv error: %v", pipeline, err)
 		}
-		text.WriteString(resp.Text)
-		// Also collect any rows as formatted text (fallback).
-		for _, row := range resp.Rows {
-			fmt.Fprintln(&text, row.Raw)
+		// Each Line maps to one output row in the rendered text.
+		for _, line := range resp.Lines {
+			fmt.Fprintln(&text, line.Raw)
 		}
 	}
 	return text.String()
