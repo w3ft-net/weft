@@ -34,25 +34,56 @@ services:
     volumes:
       - ./coverage/coordinator:/coverage
 
+  # shard-0 and shard-1 are pre-provisioned test fixtures that the
+  # direct-to-compute op1/op2 tests dial directly (they run Configure
+  # + Ingest + QueryToCompute themselves rather than going through
+  # the coordinator's DockerLauncher). Each container's gRPC port
+  # (9000 internal) is mapped to a distinct host port so a single
+  # test can reach both without ambiguity. No COORDINATOR_ADDR is set
+  # — these shards don't heartbeat; they're isolated test endpoints,
+  # not part of the coordinator's shard registry.
   shard-0:
     build:
+      context: ..
+      dockerfile: weft/Dockerfile
       args:
         BUILD_FLAGS: "-cover -coverpkg=github.com/kevlarcon/weft/..."
+    entrypoint: ["/usr/local/bin/entrypoint.sh"]
     environment:
+      ROLE: shard
       GOCOVERDIR: /coverage
+      # Match the secret in dialShard (integration/direct_to_compute_op1_test.go).
+      # Without this the shard defaults to a different value and rejects
+      # the test's Configure RPC with "shared token mismatch".
+      SHARD_SECRET: dev-shard-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
     volumes:
       - ./coverage/shard-0:/coverage
       - shard0_data:/opt/app/data
+    depends_on:
+      - compute
 
   shard-1:
     build:
+      context: ..
+      dockerfile: weft/Dockerfile
       args:
         BUILD_FLAGS: "-cover -coverpkg=github.com/kevlarcon/weft/..."
+    entrypoint: ["/usr/local/bin/entrypoint.sh"]
     environment:
+      ROLE: shard
       GOCOVERDIR: /coverage
+      SHARD_SECRET: dev-shard-secret
+    ports:
+      - "9002:9000"
+      - "9003:9001"
     volumes:
       - ./coverage/shard-1:/coverage
       - shard1_data:/opt/app/data
+    depends_on:
+      - compute
 
   api:
     build:
@@ -62,3 +93,16 @@ services:
       GOCOVERDIR: /coverage
     volumes:
       - ./coverage/api:/coverage
+    # Cover-instrumented binaries are slow enough to expose a pre-
+    # existing migration race between coordinator and api: both read
+    # goose_db_version, both try to apply pending migrations, and
+    # whichever loses races out with "column already exists". Restart
+    # on failure so api's second attempt finds migrations already
+    # applied and proceeds normally. The non-cover stack races just as
+    # much but is fast enough that one wins cleanly before the other
+    # even starts goose.
+    restart: on-failure
+
+volumes:
+  shard0_data:
+  shard1_data:

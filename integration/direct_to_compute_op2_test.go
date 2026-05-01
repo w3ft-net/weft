@@ -157,12 +157,17 @@ func TestDirectToCompute_Op2_ComputeMergesAcrossShards(t *testing.T) {
 }
 
 // TestDirectToCompute_Op2_BoundaryCoverage is the compute-side
-// counterpart of op 1's shard-side assertion: mergeRows must execute
-// in the compute container. If this ever lights up with the wrong
-// service's profile, someone moved merge logic back into the
+// counterpart of op 1's shard-side assertion: the k-way merge must
+// execute in the compute container. If this ever lights up with the
+// wrong service's profile, someone moved merge logic back into the
 // coordinator binary — which defeats the whole plan.
+//
+// Asserts mergeRowsFull (the row-preserving merge) since that's what
+// LocalComputeJob.consume calls directly after Phase 2; the older
+// mergeRows is now a thin wrapper used only by unit tests inside the
+// compute package, never by the compute service binary.
 func TestDirectToCompute_Op2_BoundaryCoverage(t *testing.T) {
-	RequireRanIn(t, "compute", "compute/merge.go", "mergeRows")
+	RequireRanIn(t, "compute", "compute/merge.go", "mergeRowsFull")
 }
 
 // configureIfNeeded christens a shard that doesn't already carry an

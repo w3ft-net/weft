@@ -66,7 +66,10 @@ echo "=== Materializing coverage profiles ==="
 scripts/coverage-report.sh
 
 # Pass 2: just the boundary checks. No docker stack needed — these
-# tests are pure assertions over the on-disk profiles.
+# tests are pure assertions over the on-disk profiles. Setup() in
+# integration/harness.go honors WEFT_SKIP_STACK_CHECK=1 to bypass the
+# coordinator health probe, which would otherwise fail since we tore
+# the stack down to flush coverage counters.
 echo "=== Pass 2: boundary coverage checks against fresh profiles ==="
-go test -tags "$COVER_TAGS" ./integration/ -v -count=1 -timeout 60s \
-    -run '^(TestRequireRanIn_|TestDirectToCompute_Op[125]_BoundaryCoverage)$'
+WEFT_SKIP_STACK_CHECK=1 go test -tags "$COVER_TAGS" ./integration/ -v -count=1 -timeout 60s \
+    -run '^(TestRequireRanIn_.*|TestDirectToCompute_Op[125]_BoundaryCoverage)$'
