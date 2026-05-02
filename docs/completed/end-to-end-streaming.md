@@ -2,32 +2,29 @@
 
 ## Status
 
-**Wire + public API in place** as of phase 4 (commits `a5947cf`,
-`49dd5e9`, `0202d16`, `8745e98`). The producer side of compute now
-pushes lines into a channel; `Coordinator.Execute` returns
-`*ExecuteResult { Stream, Notices, ... }`; `Server.Execute` pumps the
-stream onto the wire batch-by-batch.
+Done. All three steps shipped:
 
-The middle layer still buffers — the Stream is currently a
-slice-replay over a fully-materialized `*QueryResult`. To deliver
-true incremental delivery (lines arrive at the client as soon as the
-slowest active shard produces them), three additional changes are
-required, in this sequence:
+1. **Online k-way merge in compute** — `compute/online_merge.go`
+   replaces the wait-for-all-sentinels stage in
+   `LocalComputeJob.consume`.
+2. **Forward compute stream from coord** — `executeLogStreaming`
+   in `coordinator/coordinator.go` wraps the compute job's
+   channel-backed stream directly in `*ExecuteResult.Stream` for
+   the common case (zero-stage, no alert).
+3. **Streaming warp exec for stream-safe stages** — warp gained
+   `RunStreaming`; `awk`, `sed`, `jq`, `tee`, `uniq` rewritten to
+   emit incrementally.
 
-1. **Online k-way merge in compute** — eliminate the
-   wait-for-all-sentinels stage in `LocalComputeJob.consume`.
-2. **Forward compute stream from coord** — replace `c.query`'s
-   QueryResult intermediate with a passthrough to the compute
-   stream for the common case (zero-stage, no alert, no redirect).
-3. **Streaming warp exec for stream-safe stages** — let staged
-   pipelines (`grep`, `awk` without END, `sed`) emit lines as the
-   bash pipeline consumes them.
+Follow-ons (now their own plans, two also already shipped):
 
-Each step delivers some win on its own and is independently
-testable. (1) before (2) is required: (2) without (1) just
-relocates the buffer from coord into compute. (3) is optional —
-useful for big results that survive a stream-safe filter, no help
-for batch-only stages (`sort`, `wc`, `uniq`, `awk` with `END`).
+- ✅ `executeresult-buffered-cleanup.md` — `Stream`/`Notices` the
+  only public fields on `ExecuteResult`; tests use `drainExec`.
+- ✅ `log-redirect-via-warp.md` — redirects lifted from displaced
+  pipelines onto `CallbackCommand`; `writeQueryResultToFS` deleted.
+- 🟡 `streaming-backpressure.md` — bounded queues, deferred until
+  production hits memory pressure.
+- 🟡 `streaming-parallel-warp.md` — chunked intra-stage parallelism
+  in warp, design only.
 
 ## Why it exists
 

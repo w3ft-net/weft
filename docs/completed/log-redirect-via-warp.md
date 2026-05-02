@@ -2,10 +2,13 @@
 
 ## Status
 
-Designed, not started. Phase-3 carryover called out in commit
-`d5b30cc`'s message: deleting `QueryPlan.RedirectTarget` /
-`writeQueryResultToFS` requires teaching warp's `CallbackCommand`
-to carry redirects.
+Done. Warp's `CallbackCommand` gained a `Redirects` field;
+`coordinator/query_rewrite.go` lifts redirects from the displaced
+pipeline onto the substituting `CallbackCommand` and strips them
+from the snap before re-rendering, so warp's own redirect machinery
+(via shellfs's writer) handles the FS write. `writeQueryResultToFS`
+is deleted and `QueryPlan.RedirectTarget` is no longer consulted
+by the dispatch path.
 
 ## Why
 

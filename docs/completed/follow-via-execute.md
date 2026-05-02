@@ -2,10 +2,16 @@
 
 ## Status
 
-Designed, not started. Composes naturally with the streaming
-work in `end-to-end-streaming.md` — Follow's broker subscription
-already produces lines, and the new `ExecuteResult.Stream` is the
-right shape to expose them.
+Done. `Coordinator.ExecuteFollow(ctx, pipeline, tr, customer, userID)`
+returns a `*ExecuteResult` whose `Stream` is a `concatStream`
+splicing the historical batch into a `brokerStream` over
+`TailBroker.Subscribe`. `Server.Execute` collapsed to a single pump
+loop that dispatches to `ExecuteFollow` when `req.Follow` is set,
+otherwise `Execute`. New types live in
+`coordinator/concat_stream.go` and `coordinator/broker_stream.go`;
+unit tests in `coordinator/concat_stream_test.go` and
+`coordinator/broker_stream_test.go`, plus an end-to-end transition
+test in `coordinator/execute_follow_test.go`.
 
 ## Why
 

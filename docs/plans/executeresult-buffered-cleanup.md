@@ -2,9 +2,9 @@
 
 ## Status
 
-Designed, not started. Test-migration follow-on to commit `8745e98`,
-which deliberately kept the buffered fields to avoid a 120-site
-test sweep mid-refactor.
+Done. `ExecuteResult` is now `{Stream, Notices}` only; tests use the
+`drainExec(t, res) *DrainedResult` helper to assert against the
+buffered shape.
 
 ## Why
 
