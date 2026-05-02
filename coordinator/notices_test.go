@@ -9,7 +9,7 @@ import (
 func TestNoticeQueue_FirstSignalQueues(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
 	cust, _ := db.FindOrCreateCustomer("nq-first")
-	user, _ := db.CreateUser("alice-nq1@example.test", cust.ID)
+	user, _ := db.CreateUser("alice-nq1@example.test")
 
 	q := NewNoticeQueue(db, user.ID)
 	q.Maybe("tmp_48h_expiry")
@@ -31,7 +31,7 @@ func TestNoticeQueue_FirstSignalQueues(t *testing.T) {
 func TestNoticeQueue_MaybeIsIdempotent(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
 	cust, _ := db.FindOrCreateCustomer("nq-idem")
-	user, _ := db.CreateUser("alice-nq2@example.test", cust.ID)
+	user, _ := db.CreateUser("alice-nq2@example.test")
 
 	q := NewNoticeQueue(db, user.ID)
 	q.Maybe("tmp_48h_expiry")
@@ -48,7 +48,7 @@ func TestNoticeQueue_MaybeIsIdempotent(t *testing.T) {
 func TestNoticeQueue_FlushMarksSeen(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
 	cust, _ := db.FindOrCreateCustomer("nq-flush")
-	user, _ := db.CreateUser("alice-nq3@example.test", cust.ID)
+	user, _ := db.CreateUser("alice-nq3@example.test")
 
 	q1 := NewNoticeQueue(db, user.ID)
 	q1.Maybe("tmp_48h_expiry")
@@ -80,7 +80,7 @@ func TestNoticeQueue_EmptyUserNoOp(t *testing.T) {
 func TestNoticeQueue_UnknownKeyNoOp(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
 	cust, _ := db.FindOrCreateCustomer("nq-unknown")
-	user, _ := db.CreateUser("alice-nq4@example.test", cust.ID)
+	user, _ := db.CreateUser("alice-nq4@example.test")
 
 	q := NewNoticeQueue(db, user.ID)
 	q.Maybe("not_a_real_key")
@@ -93,8 +93,8 @@ func TestNoticeQueue_UnknownKeyNoOp(t *testing.T) {
 func TestNoticeQueue_PerUser(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
 	cust, _ := db.FindOrCreateCustomer("nq-peruser")
-	alice, _ := db.CreateUser("alice-pu2@example.test", cust.ID)
-	bob, _ := db.CreateUser("bob-pu2@example.test", cust.ID)
+	alice, _ := db.CreateUser("alice-pu2@example.test")
+	bob, _ := db.CreateUser("bob-pu2@example.test")
 
 	// Alice sees + dismisses.
 	qA := NewNoticeQueue(db, alice.ID)

@@ -148,13 +148,13 @@ func OverageRatePerGB(tier Tier) int {
 	}
 }
 
-// User represents a weft user. A user belongs to a customer (org).
-// The composite unique index allows a user to exist under multiple customers.
+// User represents a weft account. A single user can be a member of
+// multiple customers (orgs) via team_members rows; the User row itself
+// no longer carries a customer pointer. LastActiveCustomerID records
+// where the user last operated so reconnects land in the same place.
 type User struct {
-	ID                 string   `gorm:"primaryKey"`
-	Email              string   `gorm:"not null;uniqueIndex:idx_user_email_customer"`
-	CustomerID         uint     `gorm:"not null;uniqueIndex:idx_user_email_customer"`
-	Customer           Customer `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
+	ID                 string `gorm:"primaryKey"`
+	Email              string `gorm:"not null;uniqueIndex:idx_users_email"`
 	Name               string
 	StripeCustomerID   string
 	CanCreateNamespace bool `gorm:"not null;default:false"`
@@ -168,11 +168,13 @@ type User struct {
 	// this being non-nil; the cleanup sweep deletes users where this is
 	// still nil more than 24h after CreatedAt.
 	EmailVerifiedAt *time.Time
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-
-	// Deprecated: use CustomerID. Kept temporarily for migration.
-	CustomerName string `gorm:"-"` // excluded from DB, computed on read
+	// LastActiveCustomerID is the customer the user was most recently
+	// scoped to. The middleware uses it as the default active org when
+	// the request omits the X-Active-Org header. Nullable because new
+	// users haven't picked one yet.
+	LastActiveCustomerID *uint
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 // MagicLink is a one-time-use login token.
@@ -194,19 +196,22 @@ type SavedQuery struct {
 	UpdatedAt time.Time
 }
 
-// TeamMember tracks membership in a customer team.
+// TeamMember tracks membership of a user (or pending invite) in a
+// customer. CustomerID is the FK boundary; queries that need to scope
+// by customer should join on it rather than on a name string.
 type TeamMember struct {
-	ID           string  `gorm:"primaryKey"`
-	CustomerName string  `gorm:"not null;index"`
-	Email        string  `gorm:"not null"`
-	UserID       *string `gorm:"index"`
-	Role         string  `gorm:"not null;default:member"`  // "owner" or "member"
-	Status       string  `gorm:"not null;default:pending"` // "pending", "active", "removed"
-	InvitedBy    string
-	InvitedAt    time.Time
-	AcceptedAt   *time.Time
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID         string   `gorm:"primaryKey"`
+	CustomerID uint     `gorm:"not null;index;uniqueIndex:idx_team_members_customer_user"`
+	Customer   Customer `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
+	Email      string   `gorm:"not null"`
+	UserID     *string  `gorm:"index;uniqueIndex:idx_team_members_customer_user"`
+	Role       string   `gorm:"not null;default:member"`  // "owner" or "member"
+	Status     string   `gorm:"not null;default:pending"` // "pending", "active", "removed"
+	InvitedBy  string
+	InvitedAt  time.Time
+	AcceptedAt *time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // SeatLimit returns the max number of team members for a tier.
@@ -225,17 +230,16 @@ func SeatLimit(tier Tier) int {
 
 // --- Users ---
 
-// CreateUser inserts a new user with EmailVerifiedAt == nil. Callers that
-// know the email has already been proven (e.g. brand-new magic-link flow)
-// should use CreateVerifiedUser instead.
-func (s *Store) CreateUser(email string, customerID uint) (*User, error) {
+// CreateUser inserts a new user with EmailVerifiedAt == nil. Membership
+// in any specific customer is established by inserting a TeamMember row
+// after creation; the User row itself no longer carries a customer.
+func (s *Store) CreateUser(email string) (*User, error) {
 	now := time.Now()
 	user := User{
-		ID:         uuid.New().String(),
-		Email:      email,
-		CustomerID: customerID,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:        uuid.New().String(),
+		Email:     email,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	if err := s.db.Create(&user).Error; err != nil {
 		return nil, err
@@ -244,14 +248,13 @@ func (s *Store) CreateUser(email string, customerID uint) (*User, error) {
 }
 
 // CreateVerifiedUser is like CreateUser but marks EmailVerifiedAt = now.
-// Used by the magic-link signup path where ownership is proven in a single
-// round-trip (the user wouldn't receive the email otherwise).
-func (s *Store) CreateVerifiedUser(email string, customerID uint) (*User, error) {
+// Used by the magic-link signup path where ownership is proven in a
+// single round-trip (the user wouldn't receive the email otherwise).
+func (s *Store) CreateVerifiedUser(email string) (*User, error) {
 	now := time.Now()
 	user := User{
 		ID:              uuid.New().String(),
 		Email:           email,
-		CustomerID:      customerID,
 		EmailVerifiedAt: &now,
 		CreatedAt:       now,
 		UpdatedAt:       now,
@@ -298,30 +301,28 @@ func (s *Store) DeleteExpiredUnverifiedUsers(cutoff time.Time) (int64, error) {
 
 func (s *Store) GetUserByEmail(email string) (*User, error) {
 	var user User
-	if err := s.db.Preload("Customer").Where("email = ?", email).First(&user).Error; err != nil {
+	if err := s.db.Where("email = ?", email).First(&user).Error; err != nil {
 		return nil, err
 	}
-	user.CustomerName = user.Customer.Name
-	return &user, nil
-}
-
-// GetUserByEmailAndCustomer finds a user for a specific customer.
-func (s *Store) GetUserByEmailAndCustomer(email string, customerID uint) (*User, error) {
-	var user User
-	if err := s.db.Preload("Customer").Where("email = ? AND customer_id = ?", email, customerID).First(&user).Error; err != nil {
-		return nil, err
-	}
-	user.CustomerName = user.Customer.Name
 	return &user, nil
 }
 
 func (s *Store) GetUserByID(id string) (*User, error) {
 	var user User
-	if err := s.db.Preload("Customer").First(&user, "id = ?", id).Error; err != nil {
+	if err := s.db.First(&user, "id = ?", id).Error; err != nil {
 		return nil, err
 	}
-	user.CustomerName = user.Customer.Name
 	return &user, nil
+}
+
+// UpdateUserLastActiveCustomer flips users.last_active_customer_id so a
+// reconnect lands the user back in the org they were last operating
+// in. No-op when customerID matches the existing value.
+func (s *Store) UpdateUserLastActiveCustomer(userID string, customerID uint) error {
+	return s.db.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
+		"last_active_customer_id": customerID,
+		"updated_at":              time.Now(),
+	}).Error
 }
 
 func (s *Store) UpdateUserStripeCustomer(userID, stripeCustomerID string) error {
@@ -450,9 +451,9 @@ func (s *Store) DeleteSavedQuery(userID, queryID string) error {
 // --- Team Members ---
 
 // ListTeamMembers returns active and pending members (not removed).
-func (s *Store) ListTeamMembers(customerName string) ([]TeamMember, error) {
+func (s *Store) ListTeamMembers(customerID uint) ([]TeamMember, error) {
 	var members []TeamMember
-	err := s.db.Where("customer_name = ? AND status != ?", customerName, "removed").
+	err := s.db.Where("customer_id = ? AND status != ?", customerID, "removed").
 		Order("role ASC, created_at ASC").Find(&members).Error
 	return members, err
 }
@@ -463,14 +464,40 @@ func (s *Store) CreateTeamMember(m *TeamMember) error {
 }
 
 // GetTeamMemberByEmail finds a non-removed member by email.
-func (s *Store) GetTeamMemberByEmail(customerName, email string) (*TeamMember, error) {
+func (s *Store) GetTeamMemberByEmail(customerID uint, email string) (*TeamMember, error) {
 	var m TeamMember
-	err := s.db.Where("customer_name = ? AND email = ? AND status != ?", customerName, email, "removed").
+	err := s.db.Where("customer_id = ? AND email = ? AND status != ?", customerID, email, "removed").
 		First(&m).Error
 	if err != nil {
 		return nil, err
 	}
 	return &m, nil
+}
+
+// GetTeamMemberByUserID finds a non-removed member by (user, customer).
+// This is the canonical "is this user a member of this org" lookup; the
+// auth middleware uses it to validate X-Active-Org against the user's
+// memberships.
+func (s *Store) GetTeamMemberByUserID(customerID uint, userID string) (*TeamMember, error) {
+	var m TeamMember
+	err := s.db.Where("customer_id = ? AND user_id = ? AND status != ?", customerID, userID, "removed").
+		First(&m).Error
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// ListUserMemberships returns every active membership for a user, with
+// the Customer eagerly loaded so callers can render org names without
+// a second round-trip. Used by the org-switcher and by login flows that
+// need to pick a default active customer.
+func (s *Store) ListUserMemberships(userID string) ([]TeamMember, error) {
+	var members []TeamMember
+	err := s.db.Preload("Customer").
+		Where("user_id = ? AND status = ?", userID, "active").
+		Order("created_at ASC").Find(&members).Error
+	return members, err
 }
 
 // GetPendingTeamMemberByEmail finds a pending invite by email (across all customers).
@@ -512,20 +539,12 @@ func (s *Store) RemoveTeamMember(id string) error {
 }
 
 // CountTeamMembers returns the count of active + pending members.
-func (s *Store) CountTeamMembers(customerName string) (int, error) {
+func (s *Store) CountTeamMembers(customerID uint) (int, error) {
 	var count int64
 	err := s.db.Model(&TeamMember{}).
-		Where("customer_name = ? AND status != ?", customerName, "removed").
+		Where("customer_id = ? AND status != ?", customerID, "removed").
 		Count(&count).Error
 	return int(count), err
-}
-
-// UpdateUserCustomer sets the customer association for a user.
-func (s *Store) UpdateUserCustomer(userID string, customerID uint) error {
-	return s.db.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
-		"customer_id": customerID,
-		"updated_at":  time.Now(),
-	}).Error
 }
 
 // SetUserName updates a user's free-text display name. Used for

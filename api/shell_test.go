@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/kevlarcon/weft/auth"
+	"github.com/kevlarcon/weft/store"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
@@ -67,14 +68,17 @@ func TestShellExec_ForwardsBearerToCoordinator(t *testing.T) {
 	// before we reach the coordinator call.
 	s.SeedDevSubscription(custName)
 
-	user, err := s.CreateUser(fmt.Sprintf("shellauth-%d@example.com", os.Getpid()), cust.ID)
+	user, err := s.CreateUser(fmt.Sprintf("shellauth-%d@example.com", os.Getpid()))
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	// Generate() reads CustomerName off the User struct; CreateUser
-	// leaves it blank, so set it so the JWT claim matches the
-	// subscription we just seeded.
-	user.CustomerName = custName
+	// The user needs an active membership in the customer for
+	// BuildSession (and the active-subscription gate in handleShellExec)
+	// to resolve to the seeded subscription.
+	s.CreateTeamMember(&store.TeamMember{
+		ID: "tm-shellauth", CustomerID: cust.ID, Email: user.Email,
+		UserID: &user.ID, Role: "owner", Status: "active",
+	})
 	jwt, err := auth.Generate(user, "test-secret")
 	if err != nil {
 		t.Fatalf("generate jwt: %v", err)

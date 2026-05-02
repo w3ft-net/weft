@@ -39,7 +39,6 @@ func benchJWT(tb testing.TB) string {
 	user := &store.User{
 		ID:              "bench-user",
 		Email:           "bench@example.com",
-		CustomerName:    "kevlar",
 		EmailVerifiedAt: &now,
 		CreatedAt:       now,
 	}

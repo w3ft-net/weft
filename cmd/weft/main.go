@@ -20,7 +20,39 @@ import (
 	"github.com/kevlarcon/weft/shell"
 )
 
+// orgOverride is the active org chosen via --org / WEFT_ORG, applied
+// on top of whatever the yaml config says. Set once at startup by
+// extractTopLevelFlags so any LoadConfig() consumer picks it up
+// without threading the flag explicitly.
+var orgOverride string
+
+// extractTopLevelFlags pulls global flags (currently just --org) out of
+// os.Args before subcommand dispatch. Supports both --org=NAME and
+// --org NAME forms, and the short -o variant. Removes them from
+// os.Args so subcommands' own arg parsing isn't tripped up.
+func extractTopLevelFlags() {
+	out := []string{os.Args[0]}
+	for i := 1; i < len(os.Args); i++ {
+		a := os.Args[i]
+		switch {
+		case a == "--org" || a == "-o":
+			if i+1 < len(os.Args) {
+				orgOverride = os.Args[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "--org="):
+			orgOverride = strings.TrimPrefix(a, "--org=")
+		case strings.HasPrefix(a, "-o="):
+			orgOverride = strings.TrimPrefix(a, "-o=")
+		default:
+			out = append(out, a)
+		}
+	}
+	os.Args = out
+}
+
 func main() {
+	extractTopLevelFlags()
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "sh":
@@ -52,6 +84,9 @@ func main() {
 		case "namespace", "ns":
 			runNamespace()
 			return
+		case "org":
+			runOrg()
+			return
 		case "setup":
 			runSetup()
 			return
@@ -70,6 +105,16 @@ func main() {
 	printUsage()
 }
 
+// effectiveOrg returns the active org for the current invocation:
+// --org flag (or WEFT_ORG env, applied during LoadConfig) wins over
+// the yaml-stored org.
+func effectiveOrg(cfg *shell.Config) string {
+	if orgOverride != "" {
+		return orgOverride
+	}
+	return cfg.Org
+}
+
 func printUsage() {
 	fmt.Println("weft — log analysis for operators")
 	fmt.Println()
@@ -80,6 +125,7 @@ func printUsage() {
 	fmt.Println("  sh -c 'CMD'     Run a single pipeline and exit")
 	fmt.Println("  whoami          Show current user, team, and plan")
 	fmt.Println("  login           Authenticate via browser device flow")
+	fmt.Println("  org             List or switch active org (e.g. weft org switch demo-source)")
 	fmt.Println("  namespace       Manage namespaces (list, create)")
 	fmt.Println("  token           Manage agent tokens (create, list, revoke)")
 	fmt.Println("  source          Manage log sources (add, list, remove, pending, configure)")
@@ -129,9 +175,13 @@ func runWhoami() {
 
 	// Identity (email, team, plan) lives on the server now — the JWT
 	// only carries the user ID. Fetch from /api/auth/me so display
-	// reflects current DB state, not whatever was cached at login.
+	// reflects current DB state (including the active org from the
+	// X-Active-Org header).
 	req, _ := http.NewRequest("GET", cfg.Endpoint+"/api/auth/me", nil)
 	req.Header.Set("Authorization", "Bearer "+cfg.Token)
+	if org := effectiveOrg(cfg); org != "" {
+		req.Header.Set("X-Active-Org", org)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fetch identity: %v\n", err)
@@ -167,12 +217,15 @@ func runWhoami() {
 // fetchPromptIdentity calls /api/auth/me to get the email + customer
 // for prompt rendering. Returns ok=false on any failure; callers fall
 // through to the OS user so a network blip never blocks the shell.
-func fetchPromptIdentity(endpoint, token string) (email, customer string, ok bool) {
+func fetchPromptIdentity(endpoint, token, org string) (email, customer string, ok bool) {
 	req, err := http.NewRequest("GET", endpoint+"/api/auth/me", nil)
 	if err != nil {
 		return "", "", false
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	if org != "" {
+		req.Header.Set("X-Active-Org", org)
+	}
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -199,7 +252,7 @@ func runShell(s *shell.Shell) {
 	// the shell from starting.
 	if s.User == "" || s.Customer == "" {
 		if cfg, err := shell.LoadConfig(); err == nil && cfg.Token != "" {
-			if email, customer, ok := fetchPromptIdentity(cfg.Endpoint, cfg.Token); ok {
+			if email, customer, ok := fetchPromptIdentity(cfg.Endpoint, cfg.Token, effectiveOrg(cfg)); ok {
 				if s.User == "" {
 					s.User = shell.EmailLocalPart(email)
 				}
@@ -361,7 +414,7 @@ func runNamespace() {
 		os.Exit(1)
 	}
 
-	remote := shell.NewHTTPCoordinator(cfg.Endpoint, cfg.Token)
+	remote := shell.NewHTTPCoordinator(cfg.Endpoint, cfg.Token, effectiveOrg(cfg))
 
 	switch os.Args[2] {
 	case "list":
@@ -423,7 +476,7 @@ func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 		return nil, nil, fmt.Errorf("WEFT_TOKEN required — run `weft login` to get one")
 	}
 
-	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token)
+	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token, effectiveOrg(cfg))
 	apps, err := remote.ListApps()
 	if err != nil {
 		return nil, nil, fmt.Errorf("list apps: %w", err)
@@ -461,7 +514,7 @@ func runSourcePending(cfg *shell.Config) {
 		fmt.Fprintln(os.Stderr, "source pending requires HTTP endpoint")
 		os.Exit(1)
 	}
-	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token)
+	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token, effectiveOrg(cfg))
 
 	var namespace string
 	args := os.Args[3:]
@@ -500,7 +553,7 @@ func runSourceConfigure(cfg *shell.Config) {
 		fmt.Fprintln(os.Stderr, "source configure requires HTTP endpoint")
 		os.Exit(1)
 	}
-	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token)
+	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token, effectiveOrg(cfg))
 
 	target := os.Args[3]
 	parts := strings.SplitN(target, "/", 2)
@@ -732,7 +785,7 @@ func httpClient(cfg *shell.Config) (*shell.HTTPCoordinator, error) {
 	if cfg.Token == "" {
 		return nil, fmt.Errorf("WEFT_TOKEN required — run `weft login`")
 	}
-	return shell.NewHTTPCoordinator(cfg.Endpoint, cfg.Token), nil
+	return shell.NewHTTPCoordinator(cfg.Endpoint, cfg.Token, effectiveOrg(cfg)), nil
 }
 
 func runSourceAdd(client *shell.HTTPCoordinator) {
@@ -1009,4 +1062,113 @@ func runTokenRevoke(client *shell.HTTPCoordinator) {
 		os.Exit(1)
 	}
 	fmt.Printf("Revoked token id %d\n", id)
+}
+
+// --- Org subcommand ---
+
+func runOrg() {
+	args := os.Args[2:]
+	if len(args) == 0 {
+		args = []string{"list"}
+	}
+	switch args[0] {
+	case "list", "ls":
+		runOrgList()
+	case "switch", "use":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: weft org switch <name>")
+			os.Exit(1)
+		}
+		runOrgSwitch(args[1])
+	default:
+		fmt.Fprintln(os.Stderr, "usage: weft org [list|switch <name>]")
+		os.Exit(1)
+	}
+}
+
+// fetchMe returns the /api/auth/me payload, including the orgs list.
+// Used by both `weft org list` and `weft org switch` (the latter to
+// validate the target name before persisting).
+func fetchMe(cfg *shell.Config) (map[string]any, error) {
+	req, err := http.NewRequest("GET", cfg.Endpoint+"/api/auth/me", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+cfg.Token)
+	if org := effectiveOrg(cfg); org != "" {
+		req.Header.Set("X-Active-Org", org)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var me map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		return nil, err
+	}
+	return me, nil
+}
+
+func runOrgList() {
+	cfg, err := shell.LoadConfig()
+	if err != nil || cfg.Token == "" {
+		fmt.Fprintln(os.Stderr, "Not logged in. Run 'weft login' to authenticate.")
+		os.Exit(1)
+	}
+	me, err := fetchMe(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fetch orgs: %v\n", err)
+		os.Exit(1)
+	}
+	orgs, _ := me["orgs"].([]any)
+	if len(orgs) == 0 {
+		fmt.Println("No org memberships.")
+		return
+	}
+	fmt.Println("ACTIVE  NAME                 ROLE")
+	for _, o := range orgs {
+		m, _ := o.(map[string]any)
+		marker := "        "
+		if active, _ := m["active"].(bool); active {
+			marker = "  *     "
+		}
+		fmt.Printf("%s%-20s %s\n", marker, m["name"], m["role"])
+	}
+}
+
+func runOrgSwitch(name string) {
+	cfg, err := shell.LoadConfig()
+	if err != nil || cfg.Token == "" {
+		fmt.Fprintln(os.Stderr, "Not logged in. Run 'weft login' to authenticate.")
+		os.Exit(1)
+	}
+	me, err := fetchMe(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fetch orgs: %v\n", err)
+		os.Exit(1)
+	}
+	orgs, _ := me["orgs"].([]any)
+	found := false
+	for _, o := range orgs {
+		m, _ := o.(map[string]any)
+		if n, _ := m["name"].(string); n == name {
+			found = true
+			break
+		}
+	}
+	if !found {
+		fmt.Fprintf(os.Stderr, "not a member of %q. Run `weft org list` to see available orgs.\n", name)
+		os.Exit(1)
+	}
+	cfg.Org = name
+	if err := shell.SaveConfig(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "save config: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Switched to org: %s\n", name)
 }

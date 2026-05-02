@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -9,16 +10,35 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// SessionBuilder resolves a user ID to a Session. The interceptor
-// invokes it after JWT validation. The concrete production builder
-// closes over a store handle (see auth.BuildSession); tests pass a
-// fake to assert behavior without a DB.
-type SessionBuilder func(userID string) (*Session, error)
+// SessionBuilder resolves a user ID + active-org selector into a
+// Session. The interceptor invokes it after JWT validation, passing
+// the X-Active-Org header (or empty if unset) so production builders
+// can route through auth.BuildSession; tests pass a fake to assert
+// behavior without a DB.
+type SessionBuilder func(userID, orgSelector string) (*Session, error)
+
+// activeOrgMetadataKey is the gRPC metadata key for the requested
+// active org. gRPC normalizes header names to lowercase; the wire-
+// level form is "x-active-org" (matching the HTTP X-Active-Org header
+// the api server reads).
+const activeOrgMetadataKey = "x-active-org"
 
 // SkipMethods is the set of gRPC full method names the interceptors pass
 // through without requiring a JWT. Populated with methods that authenticate
 // by some other means (agent tokens, unauthenticated bootstrap).
 type SkipMethods map[string]bool
+
+// extractActiveOrg returns the X-Active-Org metadata value if present,
+// or "" if absent. Empty selector triggers BuildSession's default
+// (last-active or oldest membership).
+func extractActiveOrg(ctx context.Context) string {
+	md, _ := metadata.FromIncomingContext(ctx)
+	values := md.Get(activeOrgMetadataKey)
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
 
 // ExtractJWT reads the authorization metadata from an incoming gRPC
 // context, strips the "Bearer " prefix, and validates the signature.
@@ -58,9 +78,9 @@ func UnaryServerInterceptor(build SessionBuilder, secret string, skip SkipMethod
 		if err != nil {
 			return nil, err
 		}
-		session, err := build(claims.UserID)
+		session, err := build(claims.UserID, extractActiveOrg(ctx))
 		if err != nil {
-			return nil, status.Errorf(codes.Unauthenticated, "session: %v", err)
+			return nil, sessionErrToStatus(err)
 		}
 		ctx = WithClaims(ctx, claims)
 		ctx = WithSession(ctx, session)
@@ -79,13 +99,28 @@ func StreamServerInterceptor(build SessionBuilder, secret string, skip SkipMetho
 		if err != nil {
 			return err
 		}
-		session, err := build(claims.UserID)
+		session, err := build(claims.UserID, extractActiveOrg(ss.Context()))
 		if err != nil {
-			return status.Errorf(codes.Unauthenticated, "session: %v", err)
+			return sessionErrToStatus(err)
 		}
 		ctx := WithClaims(ss.Context(), claims)
 		ctx = WithSession(ctx, session)
 		return handler(srv, &claimsServerStream{ServerStream: ss, ctx: ctx})
+	}
+}
+
+// sessionErrToStatus translates BuildSession's typed errors into gRPC
+// status codes. ErrNoMembership and ErrOrgNotMember are PermissionDenied
+// (the JWT is valid, the user just isn't allowed to act in the
+// requested scope); anything else is Unauthenticated.
+func sessionErrToStatus(err error) error {
+	switch {
+	case errors.Is(err, ErrOrgNotMember):
+		return status.Errorf(codes.PermissionDenied, "not a member of the requested org")
+	case errors.Is(err, ErrNoMembership):
+		return status.Errorf(codes.PermissionDenied, "no org memberships")
+	default:
+		return status.Errorf(codes.Unauthenticated, "session: %v", err)
 	}
 }
 

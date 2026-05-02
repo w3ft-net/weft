@@ -13,7 +13,7 @@ import (
 func TestCoordinatorQuery_RecordsCreatorOnTmpWrite(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	user, err := db.CreateUser("alice-coord@example.test", custID)
+	user, err := db.CreateUser("alice-coord@example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,8 +71,8 @@ func TestCoordinatorQuery_EmptyUserStoresNullCreator(t *testing.T) {
 // produces no notice. Different user gets their own notice.
 func TestCoordinatorQuery_AttachesTmpExpiryNoticeOnFirstWrite(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
-	alice, _ := db.CreateUser("alice-notice@example.test", custID)
-	bob, _ := db.CreateUser("bob-notice@example.test", custID)
+	alice, _ := db.CreateUser("alice-notice@example.test")
+	bob, _ := db.CreateUser("bob-notice@example.test")
 
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}

@@ -19,7 +19,7 @@ import (
 // handleListIntegrations returns the current integration status.
 func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.HomeCustomerName)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -72,7 +72,7 @@ func (s *Server) handleSlackConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate a state token (signed JWT with customer info).
-	stateToken, err := generateStateToken(session.HomeCustomerName, s.jwtSecret)
+	stateToken, err := generateStateToken(session.ActiveCustomerName, s.jwtSecret)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -141,7 +141,7 @@ func (s *Server) handleSlackCallback(w http.ResponseWriter, r *http.Request) {
 // handleSlackDisconnect removes the Slack integration.
 func (s *Server) handleSlackDisconnect(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.HomeCustomerName)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -154,7 +154,7 @@ func (s *Server) handleSlackDisconnect(w http.ResponseWriter, r *http.Request) {
 // Body: {"name": "ops", "key": "<routing-key>", "description": "optional"}.
 func (s *Server) handlePagerDutySave(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.HomeCustomerName)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -179,7 +179,7 @@ func (s *Server) handlePagerDutySave(w http.ResponseWriter, r *http.Request) {
 // Path: DELETE /api/integrations/pagerduty/{name}
 func (s *Server) handlePagerDutyDelete(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.HomeCustomerName)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -200,7 +200,7 @@ func (s *Server) handlePagerDutyDelete(w http.ResponseWriter, r *http.Request) {
 // An absent row yields an empty string — the shell treats that as a blank file.
 func (s *Server) handleGetNotifyConfig(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.HomeCustomerName)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -218,7 +218,7 @@ func (s *Server) handleGetNotifyConfig(w http.ResponseWriter, r *http.Request) {
 // errors back (missing targets, bad PD severity, malformed YAML).
 func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.HomeCustomerName)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -244,7 +244,7 @@ func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) 
 // handlePagerDutyDisconnect removes all PagerDuty integrations for the customer.
 func (s *Server) handlePagerDutyDisconnect(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.HomeCustomerName)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

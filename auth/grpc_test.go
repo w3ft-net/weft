@@ -15,12 +15,12 @@ import (
 
 const testSecret = "unit-test-secret"
 
-func signUserJWT(t *testing.T, customer string) string {
+func signUserJWT(t *testing.T, _ string) string {
 	t.Helper()
 	now := time.Now()
 	tok, err := Generate(&store.User{
 		ID: "u1", Email: "u1@example.com",
-		CustomerName: customer, EmailVerifiedAt: &now, CreatedAt: now,
+		EmailVerifiedAt: &now, CreatedAt: now,
 	}, testSecret)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
@@ -28,15 +28,17 @@ func signUserJWT(t *testing.T, customer string) string {
 	return tok
 }
 
-// fakeBuilder returns a Session whose home customer matches the requested
-// name. Used by interceptor tests so they don't need a real DB.
+// fakeBuilder returns a Session whose active org matches the requested
+// name. Used by interceptor tests so they don't need a real DB. The
+// builder ignores the orgSelector arg — tests assert against a fixed
+// active customer regardless of any X-Active-Org metadata.
 func fakeBuilder(customer string) SessionBuilder {
-	return func(userID string) (*Session, error) {
+	return func(userID, _ string) (*Session, error) {
 		return &Session{
-			UserID:           userID,
-			Email:            userID + "@example.com",
-			HomeCustomerName: customer,
-			HomeCustomerID:   1,
+			UserID:             userID,
+			Email:              userID + "@example.com",
+			ActiveCustomerName: customer,
+			ActiveCustomerID:   1,
 		}, nil
 	}
 }
@@ -101,8 +103,8 @@ func TestUnaryInterceptor_AcceptsValidJWT(t *testing.T) {
 	if session == nil {
 		t.Fatal("session not injected into context")
 	}
-	if session.HomeCustomerName != "kevlar" {
-		t.Errorf("customer = %q, want kevlar", session.HomeCustomerName)
+	if session.ActiveCustomerName != "kevlar" {
+		t.Errorf("customer = %q, want kevlar", session.ActiveCustomerName)
 	}
 }
 

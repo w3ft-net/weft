@@ -31,7 +31,7 @@ func cronHashOf(schedule, pipeline string) string {
 func TestCronWatch_FirstSaveCreatesNoHistory(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("cvh-first")
-	user, _ := db.CreateUser("alice-cron-first@example.test", cust.ID)
+	user, _ := db.CreateUser("alice-cron-first@example.test")
 
 	if err := db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo 1"); err != nil {
 		t.Fatal(err)
@@ -44,8 +44,8 @@ func TestCronWatch_FirstSaveCreatesNoHistory(t *testing.T) {
 func TestCronWatch_UpdateCapturesPriorVersion(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("cvh-update")
-	alice, _ := db.CreateUser("alice-cron-up@example.test", cust.ID)
-	bob, _ := db.CreateUser("bob-cron-up@example.test", cust.ID)
+	alice, _ := db.CreateUser("alice-cron-up@example.test")
+	bob, _ := db.CreateUser("bob-cron-up@example.test")
 
 	if err := db.SaveCronWatch(cust.ID, alice.ID, "errors", "every 5m", "echo 1"); err != nil {
 		t.Fatal(err)
@@ -94,7 +94,7 @@ func TestCronWatch_UpdateCapturesPriorVersion(t *testing.T) {
 func TestCronWatch_FiveCapDropsOldest(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("cvh-cap")
-	user, _ := db.CreateUser("alice-cron-cap@example.test", cust.ID)
+	user, _ := db.CreateUser("alice-cron-cap@example.test")
 
 	for i := 1; i <= 7; i++ {
 		pipe := "echo v" + string(rune('0'+i))
@@ -114,7 +114,7 @@ func TestCronWatch_ScheduleOnlyChangeCapturesHistory(t *testing.T) {
 	// (without touching pipeline) still captures the prior version.
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("cvh-schedchange")
-	user, _ := db.CreateUser("alice-cron-sched@example.test", cust.ID)
+	user, _ := db.CreateUser("alice-cron-sched@example.test")
 
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 5m", "echo 1")
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo 1")
@@ -127,7 +127,7 @@ func TestCronWatch_ScheduleOnlyChangeCapturesHistory(t *testing.T) {
 func TestLogCronWatch_OrderAndShape(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("cvh-log")
-	user, _ := db.CreateUser("alice-cron-log@example.test", cust.ID)
+	user, _ := db.CreateUser("alice-cron-log@example.test")
 
 	saves := []struct{ s, p string }{
 		{"every 5m", "echo v1"},
@@ -159,7 +159,7 @@ func TestLogCronWatch_OrderAndShape(t *testing.T) {
 func TestResolveCronWatchRef_HEAD(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("cvh-resolve-head")
-	user, _ := db.CreateUser("alice@example.test", cust.ID)
+	user, _ := db.CreateUser("alice@example.test")
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo current")
 
 	v, err := db.ResolveCronWatchRef(cust.ID, "errors", "HEAD")
@@ -174,7 +174,7 @@ func TestResolveCronWatchRef_HEAD(t *testing.T) {
 func TestResolveCronWatchRef_HEADCaret(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("cvh-resolve-caret")
-	user, _ := db.CreateUser("alice@example.test", cust.ID)
+	user, _ := db.CreateUser("alice@example.test")
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo old")
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo new")
 
@@ -190,7 +190,7 @@ func TestResolveCronWatchRef_HEADCaret(t *testing.T) {
 func TestResolveCronWatchRef_HashPrefix(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("cvh-resolve-hash")
-	user, _ := db.CreateUser("alice@example.test", cust.ID)
+	user, _ := db.CreateUser("alice@example.test")
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo target")
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo other")
 
@@ -207,7 +207,7 @@ func TestResolveCronWatchRef_HashPrefix(t *testing.T) {
 func TestResolveCronWatchRef_UnknownHash(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("cvh-resolve-unknown")
-	user, _ := db.CreateUser("alice@example.test", cust.ID)
+	user, _ := db.CreateUser("alice@example.test")
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo here")
 
 	if _, err := db.ResolveCronWatchRef(cust.ID, "errors", "deadbeef"); !errors.Is(err, ErrRefNotFound) {
@@ -218,8 +218,8 @@ func TestResolveCronWatchRef_UnknownHash(t *testing.T) {
 func TestCheckoutCronWatch_RoundTrip(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("cvh-checkout")
-	alice, _ := db.CreateUser("alice@example.test", cust.ID)
-	bob, _ := db.CreateUser("bob@example.test", cust.ID)
+	alice, _ := db.CreateUser("alice@example.test")
+	bob, _ := db.CreateUser("bob@example.test")
 
 	db.SaveCronWatch(cust.ID, alice.ID, "errors", "every 5m", "echo v1")
 	db.SaveCronWatch(cust.ID, alice.ID, "errors", "every 5m", "echo v2")
@@ -241,7 +241,7 @@ func TestCheckoutCronWatch_RoundTrip(t *testing.T) {
 func TestAmendCronWatchMessage_HEAD_DoesNotCapture(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("cvh-amend-head")
-	user, _ := db.CreateUser("alice@example.test", cust.ID)
+	user, _ := db.CreateUser("alice@example.test")
 
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo v1")
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo v2")
@@ -262,7 +262,7 @@ func TestAmendCronWatchMessage_HEAD_DoesNotCapture(t *testing.T) {
 func TestAmendCronWatchMessage_HistoryRef(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("cvh-amend-history")
-	user, _ := db.CreateUser("alice@example.test", cust.ID)
+	user, _ := db.CreateUser("alice@example.test")
 
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "v1")
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "v2")

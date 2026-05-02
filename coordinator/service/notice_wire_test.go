@@ -68,7 +68,7 @@ func TestQueryRPC_EmitsNoticesOnFirstTmpWrite(t *testing.T) {
 	// Inject the authenticated caller into the context (the auth
 	// interceptor would do this in production).
 	ctx := auth.WithClaims(context.Background(), &auth.Claims{
-		CustomerName: cust.Name,
+		CustomerID: cust.ID,
 		UserID:       user.ID,
 	})
 

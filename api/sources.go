@@ -121,7 +121,7 @@ func (s *Server) handleAgentSourceStatus(w http.ResponseWriter, r *http.Request)
 func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 
-	customer, err := s.store.GetCustomerByName(session.HomeCustomerName)
+	customer, err := s.store.GetCustomerByName(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "customer not found", http.StatusNotFound)
 		return
@@ -176,7 +176,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	customer, err := s.store.GetCustomerByName(session.HomeCustomerName)
+	customer, err := s.store.GetCustomerByName(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "customer not found", http.StatusNotFound)
 		return
@@ -217,7 +217,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	// Build schema.
 	schema := &ingest.Schema{
 		App:             fullApp,
-		Customer:        session.HomeCustomerName,
+		Customer:        session.ActiveCustomerName,
 		Format:          req.Format,
 		TimestampField:  req.TimestampField,
 		TimestampFormat: req.TimestampFormat,
@@ -262,7 +262,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 // level is trivial.
 func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	customer, err := s.store.GetCustomerByName(session.HomeCustomerName)
+	customer, err := s.store.GetCustomerByName(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "customer not found", http.StatusNotFound)
 		return
@@ -400,7 +400,7 @@ func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Reques
 	fullApp := req.Namespace + "/" + req.App
 	schema := &ingest.Schema{
 		App:             fullApp,
-		Customer:        session.HomeCustomerName,
+		Customer:        session.ActiveCustomerName,
 		Format:          req.Format,
 		TimestampField:  req.TimestampField,
 		TimestampFormat: req.TimestampFormat,
@@ -468,10 +468,10 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 // dedicated CanManageSources flag — but for now the two tend to travel
 // together (both register data ingestion) so reusing the flag is honest.
 func (s *Server) authorizeSourceEdit(session *auth.Session, namespace string) error {
-	if session.IsHomeOwner {
+	if session.IsOwner {
 		return nil
 	}
-	ns, err := s.store.GetNamespace(session.HomeCustomerID, namespace)
+	ns, err := s.store.GetNamespace(session.ActiveCustomerID, namespace)
 	if err != nil {
 		return errForbidden("namespace not found")
 	}
