@@ -135,12 +135,13 @@ func TestCoordinator_RediscoveryDoesNotLoseData(t *testing.T) {
 
 	// Verify queryable.
 	tr := TimeRange{Start: DevT0, End: DevT1}
-	result, err := coord.Query("cat /log/myapp.log", tr, "testcust", "")
+	result, err := coord.Execute("cat /log/myapp.log", tr, "testcust", "")
 	if err != nil {
 		t.Fatalf("query before: %v", err)
 	}
-	if len(result.Rows) != 1 {
-		t.Fatalf("expected 1 row before, got %d", len(result.Rows))
+	resultD := drainExec(t, result)
+	if len(resultD.Rows) != 1 {
+		t.Fatalf("expected 1 row before, got %d", len(resultD.Rows))
 	}
 
 	// Simulate what the old rediscovery loop did: create new shards
@@ -156,11 +157,12 @@ func TestCoordinator_RediscoveryDoesNotLoseData(t *testing.T) {
 	// remote side but the coordinator's registry forgets the metadata.
 
 	// After rediscovery, the shard should still have data.
-	result2, err := coord.Query("cat /log/myapp.log", tr, "testcust", "")
+	result2, err := coord.Execute("cat /log/myapp.log", tr, "testcust", "")
 	if err != nil {
 		t.Fatalf("query after: %v", err)
 	}
-	if len(result2.Rows) != 1 {
-		t.Fatalf("expected 1 row after, got %d", len(result2.Rows))
+	result2D := drainExec(t, result2)
+	if len(result2D.Rows) != 1 {
+		t.Fatalf("expected 1 row after, got %d", len(result2D.Rows))
 	}
 }

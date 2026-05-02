@@ -49,18 +49,19 @@ func TestQuery_InteractiveAlertResolvesCallerCustomer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
+	resultD := drainExec(t, result)
 
 	// Red assertion: today this fails because stderr is
 	// 'alert: dispatch to "foo" failed: no notify.conf configured'
 	// — the notifier used customerID=0 instead of resolving cust.Name.
-	if strings.Contains(result.Stderr, "no notify.conf configured") {
-		t.Errorf("notifier used wrong customer (got config-not-found):\n  stderr=%q", result.Stderr)
+	if strings.Contains(resultD.Stderr, "no notify.conf configured") {
+		t.Errorf("notifier used wrong customer (got config-not-found):\n  stderr=%q", resultD.Stderr)
 	}
 
 	// Positive assertion: a fixed implementation reaches the alias and
 	// fails at the Slack credentials step.
-	if !strings.Contains(result.Stderr, "no Slack credentials configured") {
-		t.Errorf("expected to reach Slack-credentials check, got stderr=%q", result.Stderr)
+	if !strings.Contains(resultD.Stderr, "no Slack credentials configured") {
+		t.Errorf("expected to reach Slack-credentials check, got stderr=%q", resultD.Stderr)
 	}
 }
 
@@ -115,13 +116,14 @@ func TestQuery_InteractiveBinExpandResolvesCallerCustomer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
+	resultD := drainExec(t, result)
 
 	// If /bin resolution is broken at the prod customer boundary,
 	// warp emits "echo_first: command not found".
-	if strings.Contains(result.Stderr, "command not found") {
-		t.Errorf("/bin lookup broken for named customer:\n  stderr=%q", result.Stderr)
+	if strings.Contains(resultD.Stderr, "command not found") {
+		t.Errorf("/bin lookup broken for named customer:\n  stderr=%q", resultD.Stderr)
 	}
-	if got := strings.TrimSpace(result.Text); got != "disk" {
-		t.Errorf("echo_first disk = %q, want disk (stderr=%q)", got, result.Stderr)
+	if got := strings.TrimSpace(resultD.Text); got != "disk" {
+		t.Errorf("echo_first disk = %q, want disk (stderr=%q)", got, resultD.Stderr)
 	}
 }

@@ -126,11 +126,12 @@ func otherCustomerRows() []*pb.LogRow {
 
 func TestQuery_AwkLevelFilter(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Query(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := res.Rows
+	resD := drainExec(t, res)
+	rows := resD.Rows
 	for _, r := range rows {
 		if !strings.Contains(r.Raw, "vimgym") {
 			t.Errorf("expected raw to contain 'vimgym', got %q (line %d)", r.Raw, r.LineNum)
@@ -147,11 +148,12 @@ func TestQuery_AwkLevelFilter(t *testing.T) {
 
 func TestQuery_GrepTimeout(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Query(`cat warp.log | grep timeout`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat warp.log | grep timeout`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := res.Rows
+	resD := drainExec(t, res)
+	rows := resD.Rows
 	for _, r := range rows {
 		if !strings.Contains(strings.ToLower(r.Raw), "timeout") {
 			t.Errorf("expected raw to contain 'timeout', got %q (line %d)", r.Raw, r.LineNum)
@@ -168,11 +170,12 @@ func TestQuery_GrepTimeout(t *testing.T) {
 
 func TestQuery_JqSelectStatus500(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Query(`cat vimgym.log | jq 'select(.status == 500)'`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | jq 'select(.status == 500)'`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := res.Rows
+	resD := drainExec(t, res)
+	rows := resD.Rows
 	for _, r := range rows {
 		if !strings.Contains(r.Raw, "vimgym") {
 			t.Errorf("expected raw to contain 'vimgym', got %q (line %d)", r.Raw, r.LineNum)
@@ -186,11 +189,12 @@ func TestQuery_JqSelectStatus500(t *testing.T) {
 
 func TestQuery_HeadLimit(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Query(`head -3 vimgym.log`, fullRange, "kevlar", "")
+	res, err := c.Execute(`head -3 vimgym.log`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := res.Rows
+	resD := drainExec(t, res)
+	rows := resD.Rows
 	if len(rows) > 3 {
 		t.Errorf("expected at most 3 rows, got %d", len(rows))
 	}
@@ -203,11 +207,12 @@ func TestQuery_HeadLimit(t *testing.T) {
 
 func TestQuery_TailLimit(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Query(`tail -3 vimgym.log`, fullRange, "kevlar", "")
+	res, err := c.Execute(`tail -3 vimgym.log`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := res.Rows
+	resD := drainExec(t, res)
+	rows := resD.Rows
 	if len(rows) > 3 {
 		t.Errorf("expected at most 3 rows, got %d", len(rows))
 	}
@@ -221,19 +226,23 @@ func TestQuery_TailLimit(t *testing.T) {
 func TestQuery_TimeRangeScoping_Shard0Only(t *testing.T) {
 	c := setupTestCoordinator(t)
 	tr := TimeRange{Start: t0, End: t1} // only shard 0
-	res, err := c.Query(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, tr, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, tr, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := res.Rows
-	// Shard 0 vimgym ERROR: lines 1, 4, 9
+	resD := drainExec(t, res)
+	rows := resD.Rows
+	// Shard 0 vimgym ERROR: lines 1, 4, 9 — all timestamped 10:xx.
 	if len(rows) != 3 {
 		t.Errorf("expected 3 rows from shard 0, got %d", len(rows))
 	}
-	// ResultRow only has LineNum and Raw; verify we got shard-0 rows by line number.
+	// Shard-0 rows have timestamps 10:xx (window t0..t1); shard-1
+	// rows would be 11:xx (window t1..t2). Check the timestamp prefix
+	// in Raw rather than LineNum — warp's bytes-only stdout drops
+	// LineNum metadata, but Raw still carries the original timestamp.
 	for _, r := range rows {
-		if r.LineNum > 15 {
-			t.Errorf("got row outside shard 0 range: line %d", r.LineNum)
+		if !strings.Contains(r.Raw, "T10:") {
+			t.Errorf("got row outside shard 0 range: %q", r.Raw)
 		}
 	}
 }
@@ -241,24 +250,32 @@ func TestQuery_TimeRangeScoping_Shard0Only(t *testing.T) {
 func TestQuery_TimeRangeScoping_Shard1Only(t *testing.T) {
 	c := setupTestCoordinator(t)
 	tr := TimeRange{Start: t1, End: t2} // only shard 1
-	res, err := c.Query(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, tr, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, tr, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := res.Rows
-	// Shard 1 vimgym ERROR: lines 17, 23
+	resD := drainExec(t, res)
+	rows := resD.Rows
+	// Shard 1 vimgym ERROR: lines 17, 23 — both timestamped 11:xx.
 	if len(rows) != 2 {
 		t.Errorf("expected 2 rows from shard 1, got %d", len(rows))
+	}
+	// Shard-1 rows are 11:xx; reject anything from shard 0 (10:xx).
+	for _, r := range rows {
+		if !strings.Contains(r.Raw, "T11:") {
+			t.Errorf("got row outside shard 1 range: %q", r.Raw)
+		}
 	}
 }
 
 func TestQuery_CustomerIsolation(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Query(`cat vimgym.log`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := res.Rows
+	resD := drainExec(t, res)
+	rows := resD.Rows
 	// Customer isolation is enforced at the SQL level (WHERE customer = 'kevlar').
 	// With ResultRow we can only verify none of the "acme" rows leaked through.
 	for _, r := range rows {
@@ -270,11 +287,12 @@ func TestQuery_CustomerIsolation(t *testing.T) {
 
 func TestQuery_WarpLogAppFilter(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Query(`cat warp.log | awk '$APP == "callbox"'`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat warp.log | awk '$APP == "callbox"'`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := res.Rows
+	resD := drainExec(t, res)
+	rows := resD.Rows
 	for _, r := range rows {
 		if !strings.Contains(r.Raw, "callbox") {
 			t.Errorf("expected raw to contain 'callbox', got %q (line %d)", r.Raw, r.LineNum)
@@ -292,37 +310,53 @@ func TestQuery_WarpLogAppFilter(t *testing.T) {
 
 func TestQuery_ResultsOrderedByTimestamp(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Query(`cat warp.log`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat warp.log`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := res.Rows
-	// ResultRow only has LineNum and Raw. Verify ordering by line_num
-	// (which corresponds to insertion order, i.e. timestamp order).
+	resD := drainExec(t, res)
+	rows := resD.Rows
+	// Order: each Raw starts with an ISO-8601 timestamp prefix
+	// ("2026-03-28T10:00:01 ..."). Sort-stable ordering through the
+	// pipeline means consecutive rows must have non-decreasing
+	// timestamp prefixes. (Pre-streaming-runLocal we asserted via
+	// LineNum, but warp's bytes-only stdout drops that metadata; the
+	// timestamp on the wire is the surviving order key.)
+	tsPrefix := func(raw string) string {
+		// First 19 chars are "YYYY-MM-DDTHH:MM:SS" given the fixture.
+		if len(raw) >= 19 {
+			return raw[:19]
+		}
+		return raw
+	}
 	for i := 1; i < len(rows); i++ {
-		if rows[i].LineNum < rows[i-1].LineNum {
-			t.Errorf("results not ordered: row %d (line_num=%d) before row %d (line_num=%d)",
-				i-1, rows[i-1].LineNum, i, rows[i].LineNum)
+		if tsPrefix(rows[i].Raw) < tsPrefix(rows[i-1].Raw) {
+			t.Errorf("results not ordered: row %d (%q) before row %d (%q)",
+				i-1, rows[i-1].Raw, i, rows[i].Raw)
 		}
 	}
 }
 
 func TestQuery_MergesAcrossShards(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Query(`cat warp.log | grep timeout`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat warp.log | grep timeout`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := res.Rows
-	// Should have rows from both shards, interleaved by timestamp.
-	// Verify results from both shards by line number range.
-	// Shard 0 lines are 1-15, shard 1 lines are 16-25.
+	resD := drainExec(t, res)
+	rows := resD.Rows
+	// Detect shard origin via the timestamp prefix in Raw: shard-0
+	// rows are at 10:xx (window t0..t1), shard-1 at 11:xx (t1..t2).
+	// LineNum used to disambiguate but the unified-dispatch path
+	// renders rows through warp's stdout, which is bytes-only —
+	// LineNum is dropped. Raw still carries the original timestamp.
 	hasShard0 := false
 	hasShard1 := false
 	for _, r := range rows {
-		if r.LineNum <= 15 {
+		switch {
+		case strings.Contains(r.Raw, "T10:"):
 			hasShard0 = true
-		} else {
+		case strings.Contains(r.Raw, "T11:"):
 			hasShard1 = true
 		}
 	}
@@ -338,20 +372,21 @@ func TestQuery_MergesAcrossShards(t *testing.T) {
 func setupTestCoordinatorWithCompute(t *testing.T) *Coordinator {
 	t.Helper()
 	c := setupTestCoordinator(t)
-	c.Pool = &compute.LocalComputePool{Parallelism: 2}
+	c.Pool = &compute.LocalComputePool{}
 	return c
 }
 
 func TestCompute_Sort(t *testing.T) {
 	c := setupTestCoordinatorWithCompute(t)
-	res, err := c.Query(`cat vimgym.log | awk '$LEVEL == "ERROR"' | sort`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | awk '$LEVEL == "ERROR"' | sort`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Text == "" {
+	resD := drainExec(t, res)
+	if resD.Text == "" {
 		t.Fatal("expected text output from compute pipeline, got empty")
 	}
-	lines := nonEmptyLines(res.Text)
+	lines := nonEmptyLines(resD.Text)
 	// Should be sorted lexicographically.
 	for i := 1; i < len(lines); i++ {
 		if lines[i] < lines[i-1] {
@@ -369,16 +404,17 @@ func TestCompute_Sort(t *testing.T) {
 
 func TestCompute_WcCount(t *testing.T) {
 	c := setupTestCoordinatorWithCompute(t)
-	res, err := c.Query(`cat warp.log | grep timeout | wc -l`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat warp.log | grep timeout | wc -l`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Text == "" {
+	resD := drainExec(t, res)
+	if resD.Text == "" {
 		t.Fatal("expected text output, got empty")
 	}
 	// wc -l should output the count of timeout lines.
 	// We know there are 5 timeout lines from the grep test.
-	trimmed := strings.TrimSpace(res.Text)
+	trimmed := strings.TrimSpace(resD.Text)
 	if trimmed != "5" {
 		t.Errorf("expected wc -l = 5, got %q", trimmed)
 	}
@@ -387,14 +423,15 @@ func TestCompute_WcCount(t *testing.T) {
 func TestCompute_SortUniqCount(t *testing.T) {
 	c := setupTestCoordinatorWithCompute(t)
 	// Get ERROR lines from all apps, sort them, count unique lines.
-	res, err := c.Query(`cat warp.log | awk '$LEVEL == "ERROR"' | sort | uniq -c`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat warp.log | awk '$LEVEL == "ERROR"' | sort | uniq -c`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Text == "" {
+	resD := drainExec(t, res)
+	if resD.Text == "" {
 		t.Fatal("expected text output, got empty")
 	}
-	lines := nonEmptyLines(res.Text)
+	lines := nonEmptyLines(resD.Text)
 	// Each unique ERROR line should appear with a count prefix.
 	if len(lines) == 0 {
 		t.Error("expected non-empty output from sort | uniq -c")
@@ -412,15 +449,16 @@ func TestCompute_AwkFieldExtract(t *testing.T) {
 	c := setupTestCoordinatorWithCompute(t)
 	// Grep for ERROR, then print just the third field (app name).
 	// Simple $N print is fully pushed down as a projection — no compute stage.
-	res, err := c.Query(`cat warp.log | grep ERROR | awk '{ print $3 }'`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat warp.log | grep ERROR | awk '{ print $3 }'`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
+	resD := drainExec(t, res)
 	// Projection returns rows (not text) since there are no compute stages.
-	if len(res.Rows) == 0 {
+	if len(resD.Rows) == 0 {
 		t.Fatal("expected rows, got none")
 	}
-	for _, row := range res.Rows {
+	for _, row := range resD.Rows {
 		if row.Raw != "vimgym" && row.Raw != "callbox" {
 			t.Errorf("expected app name, got %q", row.Raw)
 		}

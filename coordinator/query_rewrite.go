@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"fmt"
 	"io"
 
@@ -26,7 +27,7 @@ import (
 // conditionals, functions — anywhere warp.Walk reaches — so query
 // pipelines anywhere in the tree are substituted regardless of
 // nesting depth.
-func rewriteQueryPipelines(script *bash.Script, c *Coordinator, tr TimeRange, customer, userID string, alertCtx *AlertContext) {
+func rewriteQueryPipelines(script *bash.Script, c *Coordinator, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext) {
 	if script == nil {
 		return
 	}
@@ -40,21 +41,92 @@ func rewriteQueryPipelines(script *bash.Script, c *Coordinator, tr TimeRange, cu
 		// has had its Commands replaced and no longer carries the
 		// source-command stages.
 		snap := *pipe
+		// Lift redirects off the displaced commands onto the
+		// substituted callback. Bash semantics put pipeline-output
+		// redirects on the LAST command (`cat | grep > out` redirects
+		// grep's stdout, which IS the pipeline output) and pipeline-
+		// input redirects on the FIRST. Since the entire pipeline
+		// becomes one CallbackCommand, both classes have to migrate
+		// onto it or warp's interpreter loses the binding when the
+		// original SimpleCommand nodes are dropped.
+		// After lifting, ALSO strip the lifted redirects from the
+		// snap's SimpleCommands. The snap is used to re-render the
+		// pipeline as a source string for runQuery; leaving the
+		// redirect in the rendered string would have the planner
+		// see it twice (once via the lifted CallbackCommand redirect
+		// that warp will honor, once as plan.RedirectTarget on the
+		// re-parsed pipeline). Stripping keeps redirect handling
+		// solely on the CallbackCommand.
+		var liftedRedirects []bash.Redirect
+		switch n := len(snap.Commands); {
+		case n == 1:
+			// Single-stage pipeline: every redirect on the lone
+			// SimpleCommand becomes a CallbackCommand redirect.
+			if sc, ok := snap.Commands[0].(*bash.SimpleCommand); ok {
+				liftedRedirects = append(liftedRedirects, sc.Redirects...)
+				sc.Redirects = nil
+			}
+		case n > 1:
+			// Multi-stage: stdin redirects belong to the FIRST
+			// command, stdout/stderr/append redirects to the LAST
+			// (bash's pipeline-output convention). Mid-pipeline
+			// redirects on intermediate stages stay where they are
+			// — those are a less common shape we don't lift.
+			if first, ok := snap.Commands[0].(*bash.SimpleCommand); ok {
+				keep := first.Redirects[:0:0]
+				for _, r := range first.Redirects {
+					if isStdinRedirect(r.Op) {
+						liftedRedirects = append(liftedRedirects, r)
+					} else {
+						keep = append(keep, r)
+					}
+				}
+				first.Redirects = keep
+			}
+			if last, ok := snap.Commands[n-1].(*bash.SimpleCommand); ok {
+				keep := last.Redirects[:0:0]
+				for _, r := range last.Redirects {
+					if !isStdinRedirect(r.Op) {
+						liftedRedirects = append(liftedRedirects, r)
+					} else {
+						keep = append(keep, r)
+					}
+				}
+				last.Redirects = keep
+			}
+		}
 		pipe.Commands = []bash.Command{
 			&bash.CallbackCommand{
-				Name: "weft-query",
+				Name:      "weft-query",
+				Redirects: liftedRedirects,
 				Run: func(interp *bash.Interpreter, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
 					src := bash.UnparsePipelineExpanded(&snap, interp.ExpandWord)
-					result, err := c.query(src, tr, customer, userID, alertCtx)
+					// runQuery is only callable from this callback in
+					// the unified-dispatch model — Execute always hands
+					// the pipeline to warp+rewriter, and the rewriter
+					// re-enters runQuery for each substituted log
+					// pipeline.
+					result, err := c.runQuery(src, tr, customer, custID, userID, alertCtx)
 					if err != nil {
 						fmt.Fprintf(stderr, "query: %v\n", err)
 						return 1
 					}
-					if result.Text != "" {
-						_, _ = io.WriteString(stdout, result.Text)
-					}
-					if result.Stderr != "" {
-						_, _ = io.WriteString(stderr, result.Stderr)
+					ctx := context.Background()
+					for {
+						line, ok, err := result.Stream.Next(ctx)
+						if err != nil {
+							fmt.Fprintf(stderr, "query: %v\n", err)
+							return 1
+						}
+						if !ok {
+							break
+						}
+						w := stdout
+						if line.Stderr {
+							w = stderr
+						}
+						_, _ = io.WriteString(w, line.Raw)
+						_, _ = io.WriteString(w, "\n")
 					}
 					return 0
 				},
@@ -65,6 +137,21 @@ func rewriteQueryPipelines(script *bash.Script, c *Coordinator, tr TimeRange, cu
 		// held alive only through the snapshot captured above.
 		return false
 	})
+}
+
+// isStdinRedirect reports whether the redirect operator reads input
+// (and thus, on a multi-stage pipeline, lives on the FIRST command).
+// Stdout/stderr-flavored ops live on the LAST command in bash's
+// pipeline-output convention. The split matters when lifting
+// redirects off a displaced pipeline onto a single CallbackCommand —
+// stdin ops come from the head of the pipeline, the rest from the
+// tail.
+func isStdinRedirect(op string) bool {
+	switch op {
+	case "<", "<<", "<<<":
+		return true
+	}
+	return false
 }
 
 // isQueryShape recognises pipelines whose leading command is one of

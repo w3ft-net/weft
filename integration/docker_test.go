@@ -198,47 +198,79 @@ func TestDockerStack_ShardSuspendAndRecovery(t *testing.T) {
 }
 
 // TestDockerStack_CustomerIsolation verifies that one customer can't see
-// another's data in query results.
+// another's data in query results, end-to-end through the docker stack.
+//
+// Setup uses two distinct JWTs (alpha and beta) so the coordinator's
+// per-request customer (resolved from JWT claims) actually differs
+// across calls — under a single-JWT harness, every "customer" name
+// collapses onto the JWT's tenant and the test's invariant is vacuous.
 func TestDockerStack_CustomerIsolation(t *testing.T) {
-	// Currently skipped: the test assumes per-request customer
-	// identity (ingest as alpha, query as beta, expect zero cross-
-	// visibility) but the coordinator RPC layer overrides the
-	// client-supplied customer with whatever the JWT claims — every
-	// request in the test uses the same kevlar JWT, so "alpha" and
-	// "beta" collapse to the same tenant server-side and the test's
-	// invariant is vacuous. Store-level customer isolation is
-	// covered by InjectCustomer unit tests (planner/pushdown_edge_
-	// test.go). Re-enabling here needs a multi-JWT harness.
-	t.Skip("test predates single-JWT auth; needs multi-JWT harness to reinstate")
+	// Hermetic per-run names so reruns against a persistent docker
+	// stack don't collide on the customers table.
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	alphaName := "alpha-" + suffix
+	betaName := "beta-" + suffix
 
-	conn, client := grpcClient(t)
-	defer conn.Close()
+	alphaCustID, _ := seedCustomerWithNamespace(t, alphaName, "isolation")
+	_, _ = seedCustomerWithNamespace(t, betaName, "isolation")
+	t.Cleanup(func() {
+		deleteCustomer(t, alphaName)
+		deleteCustomer(t, betaName)
+	})
+	_ = alphaCustID
 
-	// Ingest as customer "alpha". The token's customer overrides whatever
-	// row.Customer the client sends server-side.
-	alphaToken := ensureToken(t, client, "alpha", "isolation")
-	_ = ensureToken(t, client, "beta", "isolation") // just to make beta a real customer for the query
-	stream := openAuthedStream(t, context.Background(), client, alphaToken)
+	alphaConn, alphaClient := grpcClientAs(t, alphaName)
+	defer alphaConn.Close()
+	betaConn, betaClient := grpcClientAs(t, betaName)
+	defer betaConn.Close()
+
+	// Mint an agent token under alpha. CreateToken reads the customer
+	// from alphaClient's JWT, so this lands under alpha unambiguously.
+	alphaTokenResp, err := alphaClient.CreateToken(context.Background(), &pb.CreateTokenRequest{
+		Namespace: "isolation",
+		Label:     "alpha-isolation-test",
+	})
+	if err != nil {
+		t.Fatalf("alpha CreateToken: %v", err)
+	}
+	alphaAgentToken := alphaTokenResp.Token
+
+	// Ingest as alpha: agent token is authoritative server-side.
+	stream := openAuthedStream(t, context.Background(), alphaClient, alphaAgentToken)
 	now := time.Now()
 	for i := 0; i < 5; i++ {
-		stream.Send(&pb.LogRow{
+		if err := stream.Send(&pb.LogRow{
 			App:      "isolation/secret",
-			Customer: "alpha",
 			Raw:      fmt.Sprintf("alpha secret line %d", i),
 			TsUnixNs: now.Add(time.Duration(i) * time.Second).UnixNano(),
-		})
+		}); err != nil {
+			t.Fatalf("send row %d: %v", i, err)
+		}
 	}
-	stream.CloseAndRecv()
+	if _, err := stream.CloseAndRecv(); err != nil {
+		t.Fatalf("close stream: %v", err)
+	}
+	// Drain to shard. The ingest path batches every 2s or 100 rows; a
+	// 5-row stream has to wait on the 2s ticker. Pad slightly.
 	time.Sleep(5 * time.Second)
 
-	// Query as customer "beta" — should see 0 rows.
-	betaRows := queryPipeline(t, client, "cat /log/isolation.log", "beta")
+	// Query as beta — JWT claims beta, so callerCustomer returns beta,
+	// the WHERE clause filters by customer='beta', and alpha's rows
+	// must not leak through. The req.Customer field is ignored.
+	betaRows := queryPipeline(t, betaClient, "cat /log/isolation.log", betaName)
 	if len(betaRows) != 0 {
 		t.Errorf("customer isolation broken: beta saw %d rows from alpha", len(betaRows))
+		for i, r := range betaRows {
+			if i >= 3 {
+				t.Logf("  …and %d more", len(betaRows)-3)
+				break
+			}
+			t.Logf("  leaked row: %q", r.Raw)
+		}
 	}
 
-	// Query as customer "alpha" — should see rows.
-	alphaRows := queryPipeline(t, client, "cat /log/isolation.log", "alpha")
+	// Query as alpha — should see all 5 rows.
+	alphaRows := queryPipeline(t, alphaClient, "cat /log/isolation.log", alphaName)
 	if len(alphaRows) != 5 {
 		t.Errorf("alpha should see 5 rows, got %d", len(alphaRows))
 	}

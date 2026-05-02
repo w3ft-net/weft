@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -35,7 +36,14 @@ func TestRunLocal_InfiniteLoopHitsTimeout(t *testing.T) {
 	})
 
 	start := time.Now()
-	_, err = c.runLocal("runaway", TimeRange{}, cust.Name, custID, "", nil)
+	res, err := c.runLocal("runaway", TimeRange{}, cust.Name, custID, "", nil)
+	if err != nil {
+		t.Fatalf("runLocal returned synchronous error before stream drain: %v", err)
+	}
+	// Streaming runLocal surfaces the timeout via the terminal Next
+	// after the watcher cancels warp and the goroutine closes the
+	// pipes. Drain to provoke that terminal call.
+	_, err = res.Drain(context.Background())
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -75,7 +83,8 @@ func TestRunLocal_QuickScriptCompletesNormally(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runLocal: %v", err)
 	}
-	if strings.TrimSpace(result.Text) != "ok" {
-		t.Errorf("stdout = %q, want `ok`", result.Text)
+	resultD := drainExec(t, result)
+	if strings.TrimSpace(resultD.Text) != "ok" {
+		t.Errorf("stdout = %q, want `ok`", resultD.Text)
 	}
 }

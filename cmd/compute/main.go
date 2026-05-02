@@ -21,10 +21,9 @@ import (
 
 func main() {
 	port := flag.Int("port", 9010, "gRPC listen port")
-	parallelism := flag.Int("parallelism", 2, "warp parallelism per job")
 	flag.Parse()
 
-	pool := &compute.LocalComputePool{Parallelism: *parallelism}
+	pool := &compute.LocalComputePool{}
 	srv := grpc.NewServer()
 	pb.RegisterWeftComputeServer(srv, computesvc.NewServer(pool))
 
@@ -32,7 +31,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
-	log.Printf("compute worker listening on :%d (parallelism=%d)", *port, *parallelism)
+	log.Printf("compute worker listening on :%d", *port)
 
 	sdkCtx, sdkCancel := context.WithCancel(context.Background())
 	defer sdkCancel()

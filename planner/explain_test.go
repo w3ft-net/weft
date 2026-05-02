@@ -3,6 +3,7 @@
 package planner
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -10,11 +11,19 @@ import (
 	"github.com/kevlarcon/warp/pkg/jq"
 )
 
+func runJq(expr, input string) (string, error) {
+	var out bytes.Buffer
+	if err := jq.Run(expr, strings.NewReader(input), &out); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(out.String(), "\n"), nil
+}
+
 func TestExplain_JqPctExtraction(t *testing.T) {
 	metricsJSON := `{"type":"memory","total_mb":7864,"used_mb":4521,"available_mb":3343,"swap_used_mb":0,"pct":57.49}`
 
 	t.Run("jq.Run extracts .pct from raw JSON", func(t *testing.T) {
-		out, err := jq.Run(".pct", metricsJSON)
+		out, err := runJq(".pct", metricsJSON)
 		if err != nil {
 			t.Fatalf("jq.Run: %v", err)
 		}
@@ -61,7 +70,7 @@ func TestExplain_JqPctExtraction(t *testing.T) {
 
 	t.Run("double-quoted JSON fails jq parse", func(t *testing.T) {
 		doubleQuoted := `"{\"type\":\"memory\",\"pct\":57.49}"`
-		_, err := jq.Run(".pct", doubleQuoted)
+		_, err := runJq(".pct", doubleQuoted)
 		if err == nil {
 			t.Error("expected error indexing a string with .pct, got nil")
 		}

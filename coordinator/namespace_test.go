@@ -105,19 +105,20 @@ var nsRange = TimeRange{
 func TestNamespaceQuery_All(t *testing.T) {
 	c := setupNamespaceCoordinator(t)
 
-	result, err := c.Query("cat /log/weft.log", nsRange, "graybeard", "")
+	result, err := c.Execute("cat /log/weft.log", nsRange, "graybeard", "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
+	resultD := drainExec(t, result)
 
 	// Should get all 15 rows (5 coordinator + 5 shard + 5 metrics)
-	if len(result.Rows) != 15 {
-		t.Errorf("expected 15 rows for namespace query, got %d", len(result.Rows))
+	if len(resultD.Rows) != 15 {
+		t.Errorf("expected 15 rows for namespace query, got %d", len(resultD.Rows))
 	}
 
 	// Verify all three sub-apps are represented by checking raw content.
 	appCounts := map[string]int{}
-	for _, r := range result.Rows {
+	for _, r := range resultD.Rows {
 		switch {
 		case strings.Contains(r.Raw, "coordinator:"):
 			appCounts["weft/coordinator"]++
@@ -146,15 +147,16 @@ func TestNamespaceQuery_All(t *testing.T) {
 func TestNamespaceQuery_SubApp(t *testing.T) {
 	c := setupNamespaceCoordinator(t)
 
-	result, err := c.Query("cat /log/weft/coordinator.log", nsRange, "graybeard", "")
+	result, err := c.Execute("cat /log/weft/coordinator.log", nsRange, "graybeard", "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
+	resultD := drainExec(t, result)
 
-	if len(result.Rows) != 5 {
-		t.Errorf("expected 5 rows for sub-app query, got %d", len(result.Rows))
+	if len(resultD.Rows) != 5 {
+		t.Errorf("expected 5 rows for sub-app query, got %d", len(resultD.Rows))
 	}
-	for _, r := range result.Rows {
+	for _, r := range resultD.Rows {
 		if !strings.Contains(r.Raw, "coordinator:") {
 			t.Errorf("unexpected raw in sub-app query: %q", r.Raw)
 		}
@@ -166,15 +168,16 @@ func TestNamespaceQuery_SubApp(t *testing.T) {
 func TestNamespaceQuery_Metrics(t *testing.T) {
 	c := setupNamespaceCoordinator(t)
 
-	result, err := c.Query("cat /log/weft/metrics.log", nsRange, "graybeard", "")
+	result, err := c.Execute("cat /log/weft/metrics.log", nsRange, "graybeard", "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
+	resultD := drainExec(t, result)
 
-	if len(result.Rows) != 5 {
-		t.Errorf("expected 5 rows for metrics query, got %d", len(result.Rows))
+	if len(resultD.Rows) != 5 {
+		t.Errorf("expected 5 rows for metrics query, got %d", len(resultD.Rows))
 	}
-	for _, r := range result.Rows {
+	for _, r := range resultD.Rows {
 		if !strings.Contains(r.Raw, "collector") {
 			t.Errorf("unexpected raw in metrics query: %q", r.Raw)
 		}
@@ -185,20 +188,22 @@ func TestNamespaceQuery_Metrics(t *testing.T) {
 func TestNamespaceQuery_HeadTail(t *testing.T) {
 	c := setupNamespaceCoordinator(t)
 
-	result, err := c.Query("head -3 /log/weft.log", nsRange, "graybeard", "")
+	result, err := c.Execute("head -3 /log/weft.log", nsRange, "graybeard", "")
 	if err != nil {
 		t.Fatalf("head query: %v", err)
 	}
-	if len(result.Rows) != 3 {
-		t.Errorf("expected 3 rows for head -3, got %d", len(result.Rows))
+	resultD := drainExec(t, result)
+	if len(resultD.Rows) != 3 {
+		t.Errorf("expected 3 rows for head -3, got %d", len(resultD.Rows))
 	}
 
-	result, err = c.Query("tail -3 /log/weft.log", nsRange, "graybeard", "")
+	result, err = c.Execute("tail -3 /log/weft.log", nsRange, "graybeard", "")
 	if err != nil {
 		t.Fatalf("tail query: %v", err)
 	}
-	if len(result.Rows) != 3 {
-		t.Errorf("expected 3 rows for tail -3, got %d", len(result.Rows))
+	resultD2 := drainExec(t, result)
+	if len(resultD2.Rows) != 3 {
+		t.Errorf("expected 3 rows for tail -3, got %d", len(resultD2.Rows))
 	}
 }
 
@@ -208,21 +213,23 @@ func TestNamespaceQuery_FilterAcrossSubApps(t *testing.T) {
 	c := setupNamespaceCoordinator(t)
 
 	// grep for "coordinator" — should only match weft/coordinator rows
-	result, err := c.Query(`cat /log/weft.log | grep coordinator`, nsRange, "graybeard", "")
+	result, err := c.Execute(`cat /log/weft.log | grep coordinator`, nsRange, "graybeard", "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
-	if len(result.Rows) != 5 {
-		t.Errorf("expected 5 rows matching 'coordinator', got %d", len(result.Rows))
+	resultD := drainExec(t, result)
+	if len(resultD.Rows) != 5 {
+		t.Errorf("expected 5 rows matching 'coordinator', got %d", len(resultD.Rows))
 	}
 
 	// awk filter on instance — should match only shard rows
-	result, err = c.Query(`cat /log/weft.log | awk '$INSTANCE == "i-shard-001"'`, nsRange, "graybeard", "")
+	result, err = c.Execute(`cat /log/weft.log | awk '$INSTANCE == "i-shard-001"'`, nsRange, "graybeard", "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
-	if len(result.Rows) != 5 {
-		t.Errorf("expected 5 rows from i-shard-001, got %d", len(result.Rows))
+	resultD2 := drainExec(t, result)
+	if len(resultD2.Rows) != 5 {
+		t.Errorf("expected 5 rows from i-shard-001, got %d", len(resultD2.Rows))
 	}
 }
 

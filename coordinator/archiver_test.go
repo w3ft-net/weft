@@ -68,20 +68,21 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 	})
 
 	// Query spanning both windows.
-	result, err := c.Query("cat vimgym.log", TimeRange{Start: t0, End: t2}, "kevlar", "")
+	result, err := c.Execute("cat vimgym.log", TimeRange{Start: t0, End: t2}, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
+	resultD := drainExec(t, result)
 
 	// Should get all 5 rows (3 cold + 2 live), sorted by timestamp.
-	if len(result.Rows) != 5 {
-		t.Fatalf("expected 5 rows (3 cold + 2 live), got %d", len(result.Rows))
+	if len(resultD.Rows) != 5 {
+		t.Fatalf("expected 5 rows (3 cold + 2 live), got %d", len(resultD.Rows))
 	}
 
 	// Verify all rows are present (ordering across shards is by line_num,
 	// which is per-shard — not globally chronological).
 	rawSet := map[string]bool{}
-	for _, r := range result.Rows {
+	for _, r := range resultD.Rows {
 		rawSet[r.Raw] = true
 	}
 	for _, want := range []string{"cold row 1", "cold row 2", "cold row 3", "live row 1", "live row 2"} {

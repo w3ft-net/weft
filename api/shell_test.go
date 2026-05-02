@@ -21,7 +21,7 @@ import (
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
-// fakeCoord stands in for the coordinator's Query RPC. It records the
+// fakeCoord stands in for the coordinator's Execute RPC. It records the
 // incoming "authorization" metadata so the test can assert the api server
 // forwarded the caller's bearer token. If the metadata is missing it
 // returns the same Unauthenticated error the real coordinator would, so a
@@ -31,7 +31,7 @@ type fakeCoord struct {
 	authSeen chan string
 }
 
-func (f *fakeCoord) Query(_ *pb.CoordinatorExecuteRequest, stream grpc.ServerStreamingServer[pb.CoordinatorExecuteResponse]) error {
+func (f *fakeCoord) Execute(_ *pb.CoordinatorExecuteRequest, stream grpc.ServerStreamingServer[pb.CoordinatorExecuteResponse]) error {
 	md, _ := metadata.FromIncomingContext(stream.Context())
 	vals := md.Get("authorization")
 	var seen string
@@ -109,7 +109,7 @@ func TestShellExec_ForwardsBearerToCoordinator(t *testing.T) {
 	select {
 	case got = <-fake.authSeen:
 	case <-time.After(2 * time.Second):
-		t.Fatalf("coordinator Query was never called (status=%d body=%s)", w.Code, w.Body.String())
+		t.Fatalf("coordinator Execute was never called (status=%d body=%s)", w.Code, w.Body.String())
 	}
 
 	if got == "" {

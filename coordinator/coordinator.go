@@ -1,14 +1,14 @@
 package coordinator
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
+	"io"
 	"log"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kevlarcon/warp/pkg/bash"
@@ -47,27 +47,17 @@ type QueryResult struct {
 // and alert stderr) in a single forward-only sequence — the gRPC
 // server pumps it onto the wire batch-by-batch.
 //
-// Rows/Text/Stderr/Notices are the legacy buffered view, populated
-// eagerly from the same QueryResult that Stream replays. They are
-// transitional: callers that don't pump bytes (tests, alert post-
-// processors) keep using them so this commit doesn't blanket the
-// codebase with mechanical drains. A follow-up pass migrates
-// callers to consume Stream and deletes the duplicate fields.
+// Notices is populated by the producer goroutine before pipe close;
+// callers read it after the stream exhausts (Drain handles this).
 type ExecuteResult struct {
 	Stream  compute.LineStream
 	Notices []Notice
-
-	// Legacy buffered view — same data as Stream replays. Kept
-	// during phase 4 so the test surface stays stable.
-	Rows    []*pb.ResultRow
-	Text    string
-	Stderr  string
 }
 
 // queryResultToExecuteResult wraps an internal buffered QueryResult
-// in the public ExecuteResult shape. Stream is a slice replay over
-// the same Rows/Text/Stderr the legacy fields expose; both views
-// see consistent data. Future passes can swap individual paths to
+// in the public ExecuteResult shape. The QueryResult's rows/text/
+// stderr are flattened into a single line sequence and replayed via
+// SliceLineStream. Future passes can swap individual paths to
 // forward live channel-backed streams from compute directly,
 // bypassing QueryResult entirely.
 func queryResultToExecuteResult(qr *QueryResult) *ExecuteResult {
@@ -88,10 +78,61 @@ func queryResultToExecuteResult(qr *QueryResult) *ExecuteResult {
 	return &ExecuteResult{
 		Stream:  compute.NewSliceLineStream(lines, nil),
 		Notices: qr.Notices,
-		Rows:    qr.Rows,
-		Text:    qr.Text,
-		Stderr:  qr.Stderr,
 	}
+}
+
+// DrainedResult is the buffered shape produced by ExecuteResult.Drain.
+// Tests and post-processors that don't consume the stream byte-by-byte
+// drain the result here; production callers (the gRPC server) pump
+// Stream directly onto the wire and skip the drain.
+type DrainedResult struct {
+	Rows    []*pb.ResultRow
+	Text    string
+	Stderr  string
+	Notices []Notice
+}
+
+// Drain reads ExecuteResult.Stream to exhaustion and returns the
+// buffered shape. Body lines (Stderr=false) become Rows + Text; alert
+// stderr lines (Stderr=true) become Stderr.
+//
+// Notices are read from r.Notices AFTER the stream exhausts — the
+// streaming runLocal populates Notices in its goroutine right before
+// closing the pipe writers, so reading Notices at the end of Drain
+// (after EOF) is when the populated value is visible. Reading at the
+// start would see the goroutine's pre-execution zero value.
+func (r *ExecuteResult) Drain(ctx context.Context) (*DrainedResult, error) {
+	out := &DrainedResult{}
+	if r.Stream == nil {
+		out.Notices = r.Notices
+		return out, nil
+	}
+	var stderrSb, textSb strings.Builder
+	for {
+		line, ok, err := r.Stream.Next(ctx)
+		if err != nil {
+			out.Notices = r.Notices
+			return out, err
+		}
+		if !ok {
+			break
+		}
+		if line.Stderr {
+			stderrSb.WriteString(line.Raw)
+			stderrSb.WriteByte('\n')
+			continue
+		}
+		out.Rows = append(out.Rows, &pb.ResultRow{Raw: line.Raw, LineNum: line.LineNum})
+		textSb.WriteString(line.Raw)
+		textSb.WriteByte('\n')
+	}
+	out.Text = textSb.String()
+	out.Stderr = stderrSb.String()
+	// After stream EOF, the runLocal goroutine has populated Notices
+	// (its program order: ExecScript → Notices = noticeQueue.Flush() →
+	// pipes close → scanners EOF → channel close → consumer Next).
+	out.Notices = r.Notices
+	return out, nil
 }
 
 // Coordinator routes queries to shards and merges results. It holds no
@@ -239,7 +280,7 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		// would have nothing to dispatch to. Default to an in-process
 		// LocalComputePool; callers wanting remote compute pass a
 		// GRPCComputePool explicitly.
-		pool = &compute.LocalComputePool{Parallelism: 4}
+		pool = &compute.LocalComputePool{}
 	}
 	return &Coordinator{
 		Registry:               reg,
@@ -386,171 +427,198 @@ func (c *Coordinator) IngestingShard(app string) shard.Shard {
 	return c.Registry.IngestingShard(app)
 }
 
-// Execute is the bash entry point: it accepts any user-typed pipeline
-// (a /log query, a plain shell pipeline, a /bin script invocation, or
-// a combination) and returns an ExecuteResult whose Stream emits
-// output lines forward-only. Embedded log-query-shaped stages get
-// hot-swapped into callbacks that delegate to Query; the surrounding
-// bash runs through warp.
+// Execute is the single dispatch entry point. It accepts any user-
+// typed pipeline (a /log query, a plain shell pipeline, a /bin
+// script invocation, a mix) and returns an ExecuteResult whose
+// Stream emits output lines forward-only.
 //
-// userID identifies the human who invoked the pipeline — used to attribute
-// any /bin /cron.d /tmp writes the pipeline performs. Empty string means
-// "no attribution" (system invocation, automated path).
+// Internally Execute always routes through warp + shellfs with the
+// log-query rewriter installed: rewriteQueryPipelines walks the
+// parsed AST and substitutes any pipeline whose first command is
+// `cat`/`head`/`tail` on `/log/...` with a CallbackCommand that
+// re-enters runQuery for that one pipeline. So a pipeline like
+// `for app in api web; do cat /log/$app.log | wc -l; done` produces
+// two callback dispatches (one per loop iteration), interleaved
+// with the surrounding bash that warp executes natively. Top-level
+// log queries are just the trivial single-pipeline case of the same
+// rewrite.
+//
+// userID identifies the human who invoked the pipeline — used to
+// attribute any /bin /cron.d /tmp writes the pipeline performs.
+// Empty string means "no attribution" (system invocation, automated
+// path).
 //
 // Callers that don't pump bytes themselves (tests, alert post-
 // processors) drain the stream into a buffered DrainedResult via
 // res.Drain(ctx).
 func (c *Coordinator) Execute(pipeline string, tr TimeRange, customer, userID string) (*ExecuteResult, error) {
-	qr, err := c.query(pipeline, tr, customer, userID, nil)
+	return c.execute(pipeline, tr, customer, userID, nil)
+}
+
+// ExecuteFollow runs pipeline with live-tail semantics. The returned
+// stream emits the historical batch (same shape as Execute) and then
+// transitions to a TailBroker subscription that emits matching rows
+// as the shards receive them, until ctx cancels.
+//
+// pipeline must be a plannable log query (`tail -f /log/...` or any
+// `cat`/`head`/`tail` shape over /log paths) — non-log shapes return
+// planner.ErrNotPlannable. c.Tail must be configured.
+//
+// Notices from the historical phase are not surfaced. Today's only
+// notice trigger (/tmp writes) doesn't fire on follow's read-only
+// historical pass; if that changes, plumb Notices through the concat
+// transition.
+func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr TimeRange, customer, userID string) (*ExecuteResult, error) {
+	if c.Tail == nil {
+		return nil, fmt.Errorf("ExecuteFollow: coordinator has no tail broker")
+	}
+	plan, err := planner.Plan(pipeline)
 	if err != nil {
 		return nil, err
 	}
-	return queryResultToExecuteResult(qr), nil
-}
 
-// Query parses a pipeline, routes the pushed-down SQL to matching shards,
-// and returns results. If compute stages exist and a Pool is set, shard
-// rows are streamed to the compute pool for post-processing. A trailing
-// `| alert ...` stage, if present, runs in interactive AlertContext after
-// the query; cron uses ExecuteForWatch to bind the alert to a watch.
-//
-// userID identifies the human who invoked the pipeline — used to attribute
-// any /bin /cron.d /tmp writes the pipeline performs. Empty string means
-// "no attribution" (system invocation, automated path).
-//
-// Returns planner.ErrNotPlannable for pipelines without a /log/...
-// source. Use Execute for any caller that doesn't know up front
-// whether the input is a log query.
-func (c *Coordinator) Query(pipeline string, tr TimeRange, customer, userID string) (*ExecuteResult, error) {
-	if !planner.IsLogQuery(pipeline) {
-		return nil, fmt.Errorf("Coordinator.Query: %w", planner.ErrNotPlannable)
-	}
-	qr, err := c.query(pipeline, tr, customer, userID, nil)
+	historical, err := c.execute(pipeline, tr, customer, userID, nil)
 	if err != nil {
 		return nil, err
 	}
-	return queryResultToExecuteResult(qr), nil
+
+	matcher := &RowMatcher{App: plan.FollowApp, Patterns: plan.FollowPatterns}
+	filter := BuildLiveFilter(plan)
+
+	next := func() compute.LineStream {
+		id, ch := c.Tail.Subscribe(ctx, matcher)
+		return &brokerStream{
+			ch:     ch,
+			filter: filter,
+			unsub:  func() { c.Tail.Unsubscribe(id) },
+		}
+	}
+
+	return &ExecuteResult{
+		Stream: &concatStream{primary: historical.Stream, next: next},
+	}, nil
 }
 
-// ExecuteForWatch runs pipeline with the supplied watch bound to the
-// alert stage (if any), so incidents and dispatches use watch identity
-// instead of interactive-mode defaults. Watches run as the system, not
-// as a user — any writes the watch performs land with NULL creator.
+// ExecuteForWatch runs pipeline with the supplied watch bound to
+// the alert stage (if any), so incidents and dispatches use watch
+// identity instead of interactive-mode defaults. Watches run as the
+// system, not as a user — any writes the watch performs land with
+// NULL creator.
 //
-// Same dispatch surface as Execute (any user-typed pipeline shape);
-// the only difference is the AlertContext binding.
+// Same dispatch surface as Execute; the only difference is the
+// AlertContext binding.
 func (c *Coordinator) ExecuteForWatch(pipeline string, tr TimeRange, watch *store.CronWatch) (*ExecuteResult, error) {
 	// c.Notifier is the NotifyDispatcher interface, so a nil-Notifier
-	// coordinator threads true-nil into AlertContext (no typed-nil-via-
-	// concrete-pointer trap).
-	ctx := &AlertContext{
+	// coordinator threads true-nil into AlertContext (no typed-nil-
+	// via-concrete-pointer trap).
+	alertCtx := &AlertContext{
 		Store:      c.Store,
 		Watch:      watch,
 		CustomerID: watch.CustomerID,
 		Notifier:   c.Notifier,
 	}
-	// The watch carries its own CustomerID so we can resolve the name
-	// here without a second Store round-trip. A miss means a deleted
-	// customer race; surface it rather than running with custName="".
+	// The watch carries its own CustomerID so we can resolve the
+	// name here without a second Store round-trip. A miss means a
+	// deleted-customer race; surface it rather than running with
+	// custName="".
 	cust, err := c.Store.GetCustomerByID(watch.CustomerID)
 	if err != nil {
 		return nil, fmt.Errorf("watch %d: resolve customer %d: %w", watch.ID, watch.CustomerID, err)
 	}
-	qr, err := c.query(pipeline, tr, cust.Name, "", ctx)
+	return c.execute(pipeline, tr, cust.Name, "", alertCtx)
+}
+
+// execute is the unified dispatcher. Preflights (resolves customer
+// name, expands source-arg globs against SeenApps), peels a
+// trailing `| alert ...` stage (warp has no `alert` builtin), runs
+// the rest through warp+shellfs+rewriter via streaming runLocal,
+// then applies alert post-processing if needed.
+//
+// alertCtx threads the watch identity through for ExecuteForWatch
+// invocations. Public Execute passes nil so an alert stage runs in
+// interactive defaults; the rewriter callback also picks up
+// alertCtx for interior queries inside cron-driven /bin scripts.
+//
+// Without an alert stage, the live ExecuteResult from runLocal is
+// returned as-is — bytes flow from warp through the pipe to the
+// consumer as warp produces them. With an alert stage, the live
+// stream is drained into a buffered shape (alerts are inherently
+// terminal-aggregate, the whole body is needed before the alert can
+// fire), runAlertStage post-processes, and a buffered ExecuteResult
+// is returned.
+func (c *Coordinator) execute(pipeline string, tr TimeRange, customer, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
+	custID, expanded, err := c.preflight(pipeline, customer)
 	if err != nil {
 		return nil, err
 	}
+
+	queryPart, alertArgs := planner.SplitAlertStage(expanded)
+
+	res, err := c.runLocal(queryPart, tr, customer, custID, userID, alertCtx)
+	if err != nil {
+		return nil, err
+	}
+
+	if alertArgs == nil {
+		// No alert: streaming pass-through.
+		return res, nil
+	}
+
+	// Alert path: drain the live stream into the buffered shape,
+	// run the alert against it, return a buffered ExecuteResult.
+	drained, drainErr := res.Drain(context.Background())
+	if drainErr != nil {
+		return nil, drainErr
+	}
+	if alertCtx == nil {
+		alertCtx = &AlertContext{
+			Store:       c.Store,
+			CustomerID:  custID,
+			Interactive: true,
+			Notifier:    c.Notifier,
+		}
+	}
+	qr := &QueryResult{
+		Rows:    drained.Rows,
+		Text:    drained.Text,
+		Stderr:  drained.Stderr,
+		Notices: drained.Notices,
+	}
+	runAlertStage(qr, alertArgs, alertCtx)
 	return queryResultToExecuteResult(qr), nil
 }
 
-// query is the shared implementation for Query and ExecuteForWatch.
-// alertCtx = nil means "use interactive defaults if the pipeline has an
-// alert stage." A non-nil alertCtx binds the alert to that context.
-func (c *Coordinator) query(pipeline string, tr TimeRange, customer, userID string, alertCtx *AlertContext) (*QueryResult, error) {
-	// Resolve the customer name to an ID. A resolution failure is a
-	// real auth/data integrity bug — propagate.
-	var custID uint
-	if customer != "" {
-		cust, err := c.Store.GetCustomerByName(customer)
-		if err != nil {
-			return nil, fmt.Errorf("resolve customer %q: %w", customer, err)
-		}
-		custID = cust.ID
-	}
-
-	// Pre-expand /bin bash invocations so the planner can see their body
-	// and push down `cat /log/...` stages. Lua and complex bodies pass
-	// through untouched; warp resolves them at execution time.
-	if custID != 0 {
-		fs := shellfs.New(c.Store, custID, nil)
-		// Reject `tail -f ... | <bin-script>` before inlining. Bash bodies
-		// get spliced by expandBinPipeline below, so if we waited until
-		// after expansion, a follow pipeline calling a bash /bin script
-		// would slip through looking like a regular pipeline (and Lua
-		// scripts would pass silently because they're opaque). Failing
-		// here keeps the rule uniform and the error pointed at the
-		// right stage name.
-		if err := rejectBinInFollow(pipeline, fs); err != nil {
-			return nil, err
-		}
-		if expanded, err := expandBinPipeline(pipeline, fs); err != nil {
-			return nil, fmt.Errorf("expand /bin: %w", err)
-		} else {
-			pipeline = expanded
-		}
-
-		// Expand source-arg globs (`cat /log/<ns>/<env>/*.log`) to a
-		// concrete multi-arg form the planner can union. Fan-out is
-		// scoped to apps observed in this customer's ingest stream
-		// (SeenApps) — that includes weftd metrics streams that
-		// don't have a configured log_groups row. The per-customer
-		// namespace allowlist downstream still vets the result.
-		// SeenApps guard supports tests that build Coordinator
-		// without going through NewCoordinator.
-		if c.SeenApps != nil {
-			if apps := c.SeenApps.Names(customer); len(apps) > 0 {
-				expanded, err := planner.ExpandSourceGlobs(pipeline, apps)
-				if err != nil {
-					return nil, fmt.Errorf("expand glob: %w", err)
-				}
-				pipeline = expanded
-			}
-		}
-	}
-
+// runQuery plans a single log pipeline (already preflighted, with
+// any trailing `| alert ...` collapsed into plan.AlertArgs by the
+// planner) and dispatches it through the compute pool. Callable
+// only from rewriteQueryPipelines's CallbackCommand — the rewriter
+// is the only thing that classifies pipelines as log queries; the
+// public Execute / Query / ExecuteForWatch surface goes through the
+// warp+rewriter path and never hits runQuery directly.
+//
+// Forks between a streaming-direct path (compute's live channel
+// stream forwarded straight to ExecuteResult.Stream) and a buffered
+// path (executeQuery → QueryResult → slice-replay stream). The
+// streaming path applies when the plan has zero compute stages and
+// no alert; everything else buffers because alert post-processing
+// requires the full result up front. RedirectTarget is always empty
+// here — the rewriter strips redirects from the snapshot before
+// re-rendering, lifting them onto the CallbackCommand so warp's
+// own redirect machinery handles the FS write.
+func (c *Coordinator) runQuery(pipeline string, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
 	plan, err := planner.Plan(pipeline)
 	if err != nil {
-		// Non-log pipeline (planner doesn't recognise the source
-		// command, or the source addresses a non-/log/ shellfs
-		// namespace). Run the original pipeline through warp; warp+
-		// shellfs handles redirects, /bin scripts, and any embedded
-		// log queries (via rewriteQueryPipelines).
-		if errors.Is(err, planner.ErrNotPlannable) {
-			// runLocal still expects an alertCtx — we let the warp
-			// path peel the trailing alert separately and run it
-			// against runLocal's output below. The pipeline passed
-			// to runLocal must NOT include the alert stage (warp
-			// has no `alert` builtin); peel it via SplitAlertStage.
-			queryPart, alertArgs := planner.SplitAlertStage(pipeline)
-			result, err := c.runLocal(queryPart, tr, customer, custID, userID, alertCtx)
-			if err != nil {
-				return nil, err
-			}
-			if alertArgs != nil {
-				if alertCtx == nil {
-					alertCtx = &AlertContext{
-						Store:       c.Store,
-						CustomerID:  custID,
-						Interactive: true,
-						Notifier:    c.Notifier,
-					}
-				}
-				runAlertStage(result, alertArgs, alertCtx)
-			}
-			return result, nil
-		}
-		log.Printf("query: plan error: %v (pipeline=%q)", err, pipeline)
+		// The rewriter only substitutes pipelines whose first command
+		// is on /log/..., which the planner accepts. ErrNotPlannable
+		// here would mean the pipeline shape changed between
+		// substitution and re-render — surface it.
+		log.Printf("rewriter callback: plan error: %v (pipeline=%q)", err, pipeline)
 		return nil, fmt.Errorf("plan: %w", err)
+	}
+
+	canStream := plan.AlertArgs == nil && len(plan.ComputeStages) == 0
+	if canStream {
+		return c.executeLogStreaming(plan, tr, customer, custID)
 	}
 
 	result, err := c.executeQuery(plan, tr, customer, custID, userID, alertCtx)
@@ -570,53 +638,187 @@ func (c *Coordinator) query(pipeline string, tr TimeRange, customer, userID stri
 		runAlertStage(result, plan.AlertArgs, alertCtx)
 	}
 
-	// Honour a trailing `> /tmp/...` redirect on a /log/... query.
-	// runLocal handles redirects natively (warp+shellfs); only the
-	// executeQuery path drops them, so apply the write here against
-	// the same shellfs the local path would have used. This is
-	// transitional — phase 4 plans to delete the special case by
-	// routing redirect-bearing log queries through warp too.
-	if plan.RedirectTarget != "" && custID != 0 {
-		if err := c.writeQueryResultToFS(result, plan, custID, userID); err != nil {
-			return nil, fmt.Errorf("redirect: %w", err)
-		}
-		// Once written, the result is "consumed" by the redirect — the
-		// shell shouldn't also print it. Mirror bash semantics where a
-		// redirected pipeline produces no terminal output.
-		result.Rows = nil
-		result.Text = ""
-	}
-
-	return result, nil
+	return queryResultToExecuteResult(result), nil
 }
 
-// writeQueryResultToFS materializes a query result as the same plain
-// text the shell would render (rows joined with newlines, or the
-// pre-rendered Text from a compute pipeline) and pushes it into
-// shellfs at plan.RedirectTarget. Honours the append flag (`>>` vs
-// `>`).
-func (c *Coordinator) writeQueryResultToFS(result *QueryResult, plan *planner.QueryPlan, custID uint, userID string) error {
-	tier := c.Store.TierForCustomer(custID)
-	opts := []shellfs.Option{shellfs.WithTier(tier)}
-	if userID != "" {
-		opts = append(opts, shellfs.WithUser(userID, false))
-	}
-	fs := shellfs.New(c.Store, custID, nil, opts...)
-
-	body := result.Text
-	if body == "" && len(result.Rows) > 0 {
-		var sb strings.Builder
-		for _, row := range result.Rows {
-			sb.WriteString(row.Raw)
-			sb.WriteByte('\n')
+// preflight resolves the customer name to an ID, pre-expands /bin
+// bash invocations (so the planner can see their body), and expands
+// source-arg globs against SeenApps. Shared by runQuery and
+// executeLocal so non-log pipelines that fall through Execute pay
+// the expansion cost twice — acceptable since the steps are
+// idempotent and the DB hits are cache-friendly. ExecuteForWatch
+// hits preflight once via runQuery on the happy path.
+func (c *Coordinator) preflight(pipeline string, customer string) (uint, string, error) {
+	var custID uint
+	if customer != "" {
+		cust, err := c.Store.GetCustomerByName(customer)
+		if err != nil {
+			return 0, "", fmt.Errorf("resolve customer %q: %w", customer, err)
 		}
-		body = sb.String()
+		custID = cust.ID
 	}
-	if plan.RedirectAppend {
-		return fs.AppendFile(plan.RedirectTarget, []byte(body))
+
+	if custID != 0 {
+		fs := shellfs.New(c.Store, custID, nil)
+		// Reject `tail -f ... | <bin-script>` before inlining. Bash
+		// bodies get spliced by expandBinPipeline below, so if we
+		// waited until after expansion, a follow pipeline calling a
+		// bash /bin script would slip through looking like a regular
+		// pipeline (and Lua scripts would pass silently because
+		// they're opaque). Failing here keeps the rule uniform and
+		// the error pointed at the right stage name.
+		if err := rejectBinInFollow(pipeline, fs); err != nil {
+			return 0, "", err
+		}
+		expanded, err := expandBinPipeline(pipeline, fs)
+		if err != nil {
+			return 0, "", fmt.Errorf("expand /bin: %w", err)
+		}
+		pipeline = expanded
+
+		// Expand source-arg globs (`cat /log/<ns>/<env>/*.log`) to a
+		// concrete multi-arg form the planner can union. Fan-out is
+		// scoped to apps observed in this customer's ingest stream
+		// (SeenApps) — that includes weftd metrics streams that
+		// don't have a configured log_groups row. The per-customer
+		// namespace allowlist downstream still vets the result.
+		// SeenApps guard supports tests that build Coordinator
+		// without going through NewCoordinator.
+		if c.SeenApps != nil {
+			if apps := c.SeenApps.Names(customer); len(apps) > 0 {
+				expanded, err := planner.ExpandSourceGlobs(pipeline, apps)
+				if err != nil {
+					return 0, "", fmt.Errorf("expand glob: %w", err)
+				}
+				pipeline = expanded
+			}
+		}
 	}
-	return fs.WriteFile(plan.RedirectTarget, []byte(body))
+
+	return custID, pipeline, nil
 }
+
+// executeLogStreaming runs the streaming-direct path: zero compute
+// stages, no alert, no redirect. Shard goroutines pump rows into a
+// compute job and the job's channel-backed Stream is returned in the
+// ExecuteResult untouched. Lines flow to the wire as compute's online
+// k-way merge advances — no coord-side QueryResult buffering.
+//
+// Shard errors are surfaced through a wrapper stream that, after the
+// inner channel exhausts, blocks until the error-collector goroutine
+// has drained errs and then propagates the first error (if any).
+// Successful runs return nil error from the wrapper after EOF.
+func (c *Coordinator) executeLogStreaming(plan *planner.QueryPlan, tr TimeRange, customer string, custID uint) (*ExecuteResult, error) {
+	if plan.SourceApp != "" {
+		cust, err := c.Store.GetCustomerByName(customer)
+		if err != nil {
+			return nil, fmt.Errorf("validate source: resolve customer %q: %w", customer, err)
+		}
+		ok, err := c.Store.CustomerHasSource(cust.ID, plan.SourceApp)
+		if err != nil {
+			return nil, fmt.Errorf("validate source: %w", err)
+		}
+		if !ok {
+			return nil, fmt.Errorf("unknown source: %s", plan.SourceApp)
+		}
+	}
+
+	directSQL := planner.InjectCustomer(plan.DirectShardSQL, customer)
+
+	var tier store.Tier
+	if custID != 0 {
+		tier = c.Store.TierForCustomer(custID)
+	}
+	matching := c.Registry.MatchingShards(tr, plan.FollowApp, tier)
+	if len(matching) == 0 {
+		log.Printf("query: no matching shards (app=%s, customer=%s)", plan.SourceApp, customer)
+		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
+	}
+
+	shardIDs := make([]string, len(matching))
+	for i, s := range matching {
+		shardIDs[i] = s.ID()
+	}
+	log.Printf("query: app=%s shards=%v stream=true sql=%s", plan.SourceApp, shardIDs, directSQL)
+
+	job := c.Pool.NewJob(nil, len(matching), plan.ShardOrderBy, plan.Limit)
+
+	var wg sync.WaitGroup
+	wg.Add(len(matching))
+	errs := make(chan error, len(matching))
+	for _, s := range matching {
+		go func(s shard.Shard) {
+			defer wg.Done()
+			defer job.SendSentinel(s.ID())
+			rows, err := s.Query(directSQL)
+			if err != nil {
+				errs <- fmt.Errorf("shard %s: %w", s.ID(), err)
+				return
+			}
+			for _, r := range rows {
+				job.SendRow(r, s.ID())
+			}
+		}(s)
+	}
+
+	collector := &shardErrCollector{done: make(chan struct{})}
+	go func() {
+		wg.Wait()
+		close(errs)
+		for e := range errs {
+			log.Printf("query: %v", e)
+			if collector.err.Load() == nil {
+				collector.err.Store(&e)
+			}
+		}
+		close(collector.done)
+	}()
+
+	return &ExecuteResult{
+		Stream: &shardErrAwareStream{
+			inner:     job.Stream(),
+			collector: collector,
+		},
+	}, nil
+}
+
+// shardErrCollector holds the first shard error (if any) and signals
+// completion of the wg.Wait/errs-drain goroutine via done. err is
+// stored as an atomic.Pointer[error] so the streaming consumer can
+// read it without locking after done is closed.
+type shardErrCollector struct {
+	err  atomic.Pointer[error]
+	done chan struct{}
+}
+
+// shardErrAwareStream wraps a compute LineStream and surfaces shard-
+// level errors that the inner stream isn't aware of (the inner stream
+// only sees compute-internal errors). After the inner stream exhausts,
+// Next blocks until the error collector finishes draining errs, then
+// returns the first shard error (if any) on the terminal call.
+type shardErrAwareStream struct {
+	inner     compute.LineStream
+	collector *shardErrCollector
+}
+
+func (s *shardErrAwareStream) Next(ctx context.Context) (compute.Line, bool, error) {
+	line, ok, err := s.inner.Next(ctx)
+	if err != nil || ok {
+		return line, ok, err
+	}
+	// Inner stream exhausted. Wait for the error collector.
+	select {
+	case <-s.collector.done:
+	case <-ctx.Done():
+		return line, false, ctx.Err()
+	}
+	if e := s.collector.err.Load(); e != nil {
+		return line, false, *e
+	}
+	return line, false, nil
+}
+
+func (s *shardErrAwareStream) Close() error { return s.inner.Close() }
 
 // executeQuery runs the query half of a plan (everything except alert).
 // customer is the name used for shard routing; custID (0 if unresolved)
@@ -777,36 +979,43 @@ func runAlertStage(result *QueryResult, args []string, ctx *AlertContext) {
 // own; the cap stops bash-level work between AST boundaries.
 const scriptExecutionTimeout = 30 * time.Second
 
-// runLocal executes a sourceless pipeline (no top-level log query) through
-// warp locally. The planner strips any trailing `alert` before this point,
-// so the interpreter doesn't need to register it. custID (non-zero) scopes
-// the ShellFS and weft.* functions to one tenant; zero disables both.
+// runLocal executes a pipeline through warp locally with the log-
+// query rewriter installed. Returns immediately with an
+// ExecuteResult whose Stream is backed by io.Pipes that warp writes
+// to as it runs — bytes flow to the consumer as they're produced,
+// not after warp finishes.
 //
-// tr/customer/alertCtx are captured by BinScriptTransform so that interior
-// query pipelines inside /bin scripts — substituted at load time with
-// CallbackCommand nodes — inherit the caller's time window, customer
-// scope, and alert identity. Tests that don't exercise interior queries
-// can pass zero values.
+// custID (non-zero) scopes ShellFS and weft.* functions to one
+// tenant; zero disables both. tr/customer/alertCtx are captured by
+// BinScriptTransform so that interior query pipelines inside /bin
+// scripts — substituted at load time with CallbackCommand nodes —
+// inherit the caller's time window, customer scope, and alert
+// identity.
 //
-// Interior query pipelines are turned into callbacks by rewriteQueryPipelines,
-// invoked at two points:
-//   1. On the top-level AST here, covering query pipelines the caller
-//      typed directly.
-//   2. Via interp.BinScriptTransform, on each /bin/<name> script body
-//      as warp parses it at invocation time — that's where the
-//      interesting cases (loops, command substitutions, function
-//      bodies) live, because /bin scripts are how users compose
-//      multi-line / multi-pipeline logic.
+// Interior query pipelines are turned into callbacks by
+// rewriteQueryPipelines, invoked at two points:
+//  1. On the top-level AST here, covering query pipelines the caller
+//     typed directly.
+//  2. Via interp.BinScriptTransform, on each /bin/<name> script body
+//     as warp parses it at invocation time — that's where the
+//     interesting cases (loops, command substitutions, function
+//     bodies) live, because /bin scripts are how users compose
+//     multi-line / multi-pipeline logic.
 //
-// Both paths call the same rewriter, so the AST that warp executes has
-// no pipelines left that need weft-side dispatching at runtime.
+// Both paths call the same rewriter, so the AST that warp executes
+// has no pipelines left that need weft-side dispatching at runtime.
 //
-// Execution is capped at scriptExecutionTimeout. When the cap fires the
-// interpreter is cancelled cooperatively; warp stops at the next AST
-// boundary (between top-level lists or loop iterations). Whatever the
-// script produced before the cut-off is returned along with a timeout
-// error.
-func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext) (*QueryResult, error) {
+// Execution is capped at scriptExecutionTimeout. When the cap fires
+// the interpreter is cancelled cooperatively; warp stops at the
+// next AST boundary (between top-level lists or loop iterations).
+// The timeout error is surfaced as the stream's terminal Next
+// error, after the partial output already written has drained
+// through.
+//
+// Notices are populated on the returned ExecuteResult AFTER warp
+// finishes, BEFORE the pipe writers close — so consumers reading
+// Notices past stream EOF see the populated value.
+func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
 	ast, err := bash.Parse(pipeline)
 	if err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
@@ -815,9 +1024,10 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 	interp := bash.NewInterpreter()
 	interp.SetStdin(strings.NewReader(""))
 
-	var outBuf, errBuf bytes.Buffer
-	interp.SetStdout(&outBuf)
-	interp.SetStderr(&errBuf)
+	stdoutR, stdoutW := io.Pipe()
+	stderrR, stderrW := io.Pipe()
+	interp.SetStdout(stdoutW)
+	interp.SetStderr(stderrW)
 
 	bash.RegisterToolCommands(interp)
 
@@ -844,53 +1054,50 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 		witFn := &WitFuncs{Store: c.Store, CustomerID: custID, UserID: userID}
 		RegisterWitCommands(interp, witFn)
 
-		rewriteQueryPipelines(ast, c, tr, customer, userID, alertCtx)
+		rewriteQueryPipelines(ast, c, tr, customer, custID, userID, alertCtx)
 		interp.BinScriptTransform = func(_ string, script *bash.Script) {
-			rewriteQueryPipelines(script, c, tr, customer, userID, alertCtx)
+			rewriteQueryPipelines(script, c, tr, customer, custID, userID, alertCtx)
 		}
 	}
 
-	// Run the interpreter under a hard time cap. The watcher goroutine
-	// signals cooperative cancellation; warp observes this at its next
-	// list/loop boundary and winds down. If the script completes in
-	// time the deferred cancel() makes the watcher exit cleanly.
+	stream := newLiveScriptStream(stdoutR, stderrR)
+	res := &ExecuteResult{Stream: stream}
+
+	// Run warp asynchronously. The goroutine sets res.Notices and any
+	// terminal error on the stream BEFORE closing the pipe writers,
+	// so a consumer that reads res.Notices after stream EOF sees the
+	// populated value (program-order: write Notices → write runErr →
+	// close writers; pipe-close synchronizes-with scanner-EOF on the
+	// reader side, which synchronizes-with the consumer's terminal
+	// Next via the channel send/receive in liveScriptStream).
 	timeout := c.ScriptExecutionTimeout
 	if timeout <= 0 {
 		timeout = scriptExecutionTimeout
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	done := make(chan struct{})
 	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		// Watcher: on timeout, ask the interpreter to stop at the
+		// next AST boundary. ExecScript winds down cooperatively.
+		watchDone := make(chan struct{})
+		go func() {
+			select {
+			case <-ctx.Done():
+				interp.Cancel()
+			case <-watchDone:
+			}
+		}()
 		interp.ExecScript(ast)
-		close(done)
+		close(watchDone)
+
+		res.Notices = noticeQueue.Flush()
+		if ctx.Err() == context.DeadlineExceeded {
+			stream.setRunErr(fmt.Errorf("script exceeded %s execution time limit", timeout))
+		}
+		stdoutW.Close()
+		stderrW.Close()
 	}()
 
-	select {
-	case <-done:
-		return &QueryResult{
-			Text:    outBuf.String(),
-			Stderr:  errBuf.String(),
-			Notices: noticeQueue.Flush(),
-		}, nil
-	case <-ctx.Done():
-		interp.Cancel()
-		// Give the interpreter a brief grace period to stop at the
-		// next AST boundary before we return. Anything that's busy in
-		// an unresponsive path (a shard query mid-flight, a
-		// runaway awk program past AwkMaxSteps safeguards) will still
-		// be running in the background goroutine when we return; the
-		// caller sees the timeout promptly.
-		select {
-		case <-done:
-		case <-time.After(500 * time.Millisecond):
-			log.Printf("runLocal: interpreter did not halt within grace period after %s timeout", timeout)
-		}
-		return &QueryResult{
-			Text:    outBuf.String(),
-			Stderr:  errBuf.String(),
-			Notices: noticeQueue.Flush(),
-		}, fmt.Errorf("script exceeded %s execution time limit", timeout)
-	}
+	return res, nil
 }
 

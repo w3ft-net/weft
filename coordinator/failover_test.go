@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -24,12 +25,13 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 	// when no shard instances are InService yet.
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
 
-	res, err := c.Query("cat vimgym.log", failoverRange, "kevlar", "")
+	res, err := c.Execute("cat vimgym.log", failoverRange, "kevlar", "")
 	if err != nil {
 		t.Fatalf("query with no shards should not error, got: %v", err)
 	}
-	if len(res.Rows) != 0 {
-		t.Fatalf("expected 0 rows with no shards, got %d", len(res.Rows))
+	resD := drainExec(t, res)
+	if len(resD.Rows) != 0 {
+		t.Fatalf("expected 0 rows with no shards, got %d", len(resD.Rows))
 	}
 
 	// Simulate re-discovery finding shard instances.
@@ -49,11 +51,12 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 		CreatedAt: time.Now(),
 	})
 
-	res, err = c.Query("cat vimgym.log", failoverRange, "kevlar", "")
+	res, err = c.Execute("cat vimgym.log", failoverRange, "kevlar", "")
 	if err != nil {
 		t.Fatalf("query after adding shard: %v", err)
 	}
-	if len(res.Rows) == 0 {
+	resD2 := drainExec(t, res)
+	if len(resD2.Rows) == 0 {
 		t.Fatal("expected rows after adding shard, got 0")
 	}
 }
@@ -80,11 +83,12 @@ func TestFailover_ShardReplacement(t *testing.T) {
 		CreatedAt: time.Now(),
 	})
 
-	res, err := c.Query("cat vimgym.log", failoverRange, "kevlar", "")
+	res, err := c.Execute("cat vimgym.log", failoverRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Rows) == 0 {
+	resD := drainExec(t, res)
+	if len(resD.Rows) == 0 {
 		t.Fatal("expected rows from initial shard")
 	}
 
@@ -133,16 +137,27 @@ func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
 	})
 
 	var wg sync.WaitGroup
-	errors := make(chan error, 200)
+	errors := make(chan error, 40)
 
-	// Queries in parallel.
-	for i := 0; i < 10; i++ {
+	// Queries in parallel. Drain each result so the streaming path's
+	// producer goroutines (shard fan-out + compute consume) terminate
+	// cleanly between iterations rather than leaking on backpressure.
+	//
+	// Iteration count is intentionally modest. testQueryStore returns
+	// a single shared transaction; gorm/pgx isn't goroutine-safe across
+	// one tx, so heavier concurrency exposes pgx scan races that
+	// aren't this test's concern.
+	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 20; j++ {
-				_, err := c.Query("cat vimgym.log", failoverRange, "kevlar", "")
+			for j := 0; j < 10; j++ {
+				res, err := c.Execute("cat vimgym.log", failoverRange, "kevlar", "")
 				if err != nil {
+					errors <- err
+					continue
+				}
+				if _, err := res.Drain(context.Background()); err != nil {
 					errors <- err
 				}
 			}

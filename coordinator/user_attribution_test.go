@@ -27,9 +27,11 @@ func TestCoordinatorQuery_RecordsCreatorOnTmpWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := c.Execute(`echo coord-test > /tmp/note`, tr, cust.Name, user.ID); err != nil {
+	res, err := c.Execute(`echo coord-test > /tmp/note`, tr, cust.Name, user.ID)
+	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
+	drainExec(t, res)
 
 	row, err := db.GetTmpFile(custID, "/tmp/note")
 	if err != nil {
@@ -52,9 +54,11 @@ func TestCoordinatorQuery_EmptyUserStoresNullCreator(t *testing.T) {
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
 	cust, _ := db.GetCustomerByID(custID)
-	if _, err := c.Execute(`echo system > /tmp/auto`, tr, cust.Name, ""); err != nil {
+	res, err := c.Execute(`echo system > /tmp/auto`, tr, cust.Name, "")
+	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
+	drainExec(t, res)
 
 	row, err := db.GetTmpFile(custID, "/tmp/auto")
 	if err != nil {
@@ -83,14 +87,15 @@ func TestCoordinatorQuery_AttachesTmpExpiryNoticeOnFirstWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(r1.Notices) != 1 {
-		t.Fatalf("alice's first write: got %d notices, want 1", len(r1.Notices))
+	r1D := drainExec(t, r1)
+	if len(r1D.Notices) != 1 {
+		t.Fatalf("alice's first write: got %d notices, want 1", len(r1D.Notices))
 	}
-	if r1.Notices[0].Key != "tmp_48h_expiry" {
-		t.Errorf("notice key: got %q, want tmp_48h_expiry", r1.Notices[0].Key)
+	if r1D.Notices[0].Key != "tmp_48h_expiry" {
+		t.Errorf("notice key: got %q, want tmp_48h_expiry", r1D.Notices[0].Key)
 	}
-	if r1.Notices[0].Kind != NoticeKindWarning {
-		t.Errorf("notice kind: got %q, want warning", r1.Notices[0].Kind)
+	if r1D.Notices[0].Kind != NoticeKindWarning {
+		t.Errorf("notice kind: got %q, want warning", r1D.Notices[0].Kind)
 	}
 
 	// Alice's second write — should NOT get the notice.
@@ -98,8 +103,9 @@ func TestCoordinatorQuery_AttachesTmpExpiryNoticeOnFirstWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(r2.Notices) != 0 {
-		t.Errorf("alice's second write: got %d notices, want 0", len(r2.Notices))
+	r2D := drainExec(t, r2)
+	if len(r2D.Notices) != 0 {
+		t.Errorf("alice's second write: got %d notices, want 0", len(r2D.Notices))
 	}
 
 	// Bob's first write — should get HIS first notice (independent of alice).
@@ -107,8 +113,9 @@ func TestCoordinatorQuery_AttachesTmpExpiryNoticeOnFirstWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(r3.Notices) != 1 {
-		t.Errorf("bob's first write: got %d notices, want 1 (per-user, not per-customer)", len(r3.Notices))
+	r3D := drainExec(t, r3)
+	if len(r3D.Notices) != 1 {
+		t.Errorf("bob's first write: got %d notices, want 1 (per-user, not per-customer)", len(r3D.Notices))
 	}
 }
 
@@ -130,9 +137,11 @@ func TestCoordinatorExecuteForWatch_StoresNullCreator(t *testing.T) {
 
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	if _, err := c.ExecuteForWatch(`echo from-watch > /tmp/watchnote`, tr, w); err != nil {
+	res, err := c.ExecuteForWatch(`echo from-watch > /tmp/watchnote`, tr, w)
+	if err != nil {
 		t.Fatalf("ExecuteForWatch: %v", err)
 	}
+	drainExec(t, res)
 
 	row, err := db.GetTmpFile(custID, "/tmp/watchnote")
 	if err != nil {

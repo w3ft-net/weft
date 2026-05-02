@@ -55,16 +55,17 @@ func (p *spyPool) NewJob(stages []string, shardCount int, mergeKey string, limit
 // here is just that NewJob was called.
 func TestQuery_NoStages_RoutesThroughComputePool(t *testing.T) {
 	c := setupTestCoordinator(t)
-	pool := &spyPool{inner: &compute.LocalComputePool{Parallelism: 2}}
+	pool := &spyPool{inner: &compute.LocalComputePool{}}
 	c.Pool = pool
 
-	res, err := c.Query(`cat vimgym.log`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
+	resD := drainExec(t, res)
 	// Sanity — the query must return something so we know the pool
 	// path actually ran end-to-end, not just that NewJob was called.
-	if len(res.Rows) == 0 && res.Text == "" {
+	if len(resD.Rows) == 0 && resD.Text == "" {
 		t.Fatalf("query produced no output")
 	}
 

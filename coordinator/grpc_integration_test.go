@@ -100,7 +100,7 @@ func startComputeServer(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pool := &compute.LocalComputePool{Parallelism: 2}
+	pool := &compute.LocalComputePool{}
 	srv := grpc.NewServer()
 	pb.RegisterWeftComputeServer(srv, computesvc.NewServer(pool))
 	go srv.Serve(lis)
@@ -116,11 +116,12 @@ var grpcFullRange = TimeRange{Start: DevT0, End: DevT2}
 
 func TestGRPC_AwkLevelFilter(t *testing.T) {
 	c := setupGRPCCoordinator(t)
-	res, err := c.Query(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, grpcFullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, grpcFullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := res.Rows
+	resD := drainExec(t, res)
+	rows := resD.Rows
 	for _, r := range rows {
 		if !strings.Contains(r.Raw, "vimgym") {
 			t.Errorf("expected raw to contain 'vimgym', got %q (line %d)", r.Raw, r.LineNum)
@@ -136,49 +137,53 @@ func TestGRPC_AwkLevelFilter(t *testing.T) {
 
 func TestGRPC_GrepTimeout(t *testing.T) {
 	c := setupGRPCCoordinator(t)
-	res, err := c.Query(`cat warp.log | grep timeout`, grpcFullRange, "kevlar", "")
+	res, err := c.Execute(`cat warp.log | grep timeout`, grpcFullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Rows) != 5 {
-		t.Errorf("expected 5 rows, got %d", len(res.Rows))
+	resD := drainExec(t, res)
+	if len(resD.Rows) != 5 {
+		t.Errorf("expected 5 rows, got %d", len(resD.Rows))
 	}
 }
 
 func TestGRPC_JqSelect(t *testing.T) {
 	c := setupGRPCCoordinator(t)
-	res, err := c.Query(`cat vimgym.log | jq 'select(.status == 500)'`, grpcFullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | jq 'select(.status == 500)'`, grpcFullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range res.Rows {
+	resD := drainExec(t, res)
+	for _, r := range resD.Rows {
 		if !strings.Contains(r.Raw, "vimgym") {
 			t.Errorf("expected raw to contain 'vimgym', got %q", r.Raw)
 		}
 	}
-	if len(res.Rows) != 3 {
-		t.Errorf("expected 3 rows, got %d", len(res.Rows))
+	if len(resD.Rows) != 3 {
+		t.Errorf("expected 3 rows, got %d", len(resD.Rows))
 	}
 }
 
 func TestGRPC_HeadLimit(t *testing.T) {
 	c := setupGRPCCoordinator(t)
-	res, err := c.Query(`head -3 vimgym.log`, grpcFullRange, "kevlar", "")
+	res, err := c.Execute(`head -3 vimgym.log`, grpcFullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Rows) > 3 {
-		t.Errorf("expected at most 3 rows, got %d", len(res.Rows))
+	resD := drainExec(t, res)
+	if len(resD.Rows) > 3 {
+		t.Errorf("expected at most 3 rows, got %d", len(resD.Rows))
 	}
 }
 
 func TestGRPC_CustomerIsolation(t *testing.T) {
 	c := setupGRPCCoordinator(t)
-	res, err := c.Query(`cat vimgym.log`, grpcFullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log`, grpcFullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range res.Rows {
+	resD := drainExec(t, res)
+	for _, r := range resD.Rows {
 		if strings.Contains(r.Raw, "should not appear") {
 			t.Fatalf("customer isolation broken: acme row leaked on line %d", r.LineNum)
 		}
@@ -187,14 +192,15 @@ func TestGRPC_CustomerIsolation(t *testing.T) {
 
 func TestGRPC_ComputeSort(t *testing.T) {
 	c := setupGRPCCoordinator(t)
-	res, err := c.Query(`cat vimgym.log | awk '$LEVEL == "ERROR"' | sort`, grpcFullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | awk '$LEVEL == "ERROR"' | sort`, grpcFullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Text == "" {
+	resD := drainExec(t, res)
+	if resD.Text == "" {
 		t.Fatal("expected text output")
 	}
-	lines := grpcNonEmptyLines(res.Text)
+	lines := grpcNonEmptyLines(resD.Text)
 	if len(lines) != 5 {
 		t.Errorf("expected 5 lines, got %d", len(lines))
 	}
@@ -207,24 +213,26 @@ func TestGRPC_ComputeSort(t *testing.T) {
 
 func TestGRPC_ComputeWcCount(t *testing.T) {
 	c := setupGRPCCoordinator(t)
-	res, err := c.Query(`cat warp.log | grep timeout | wc -l`, grpcFullRange, "kevlar", "")
+	res, err := c.Execute(`cat warp.log | grep timeout | wc -l`, grpcFullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(res.Text) != "5" {
-		t.Errorf("expected 5, got %q", strings.TrimSpace(res.Text))
+	resD := drainExec(t, res)
+	if strings.TrimSpace(resD.Text) != "5" {
+		t.Errorf("expected 5, got %q", strings.TrimSpace(resD.Text))
 	}
 }
 
 func TestGRPC_TimeRangeScoping(t *testing.T) {
 	c := setupGRPCCoordinator(t)
 	tr := TimeRange{Start: DevT0, End: DevT1}
-	res, err := c.Query(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, tr, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, tr, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Rows) != 3 {
-		t.Errorf("expected 3 from shard 0, got %d", len(res.Rows))
+	resD := drainExec(t, res)
+	if len(resD.Rows) != 3 {
+		t.Errorf("expected 3 from shard 0, got %d", len(resD.Rows))
 	}
 }
 

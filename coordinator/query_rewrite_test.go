@@ -1,0 +1,121 @@
+package coordinator
+
+import (
+	"testing"
+
+	"github.com/kevlarcon/warp/pkg/bash"
+)
+
+// TestRewriteQueryPipelines_PreservesStdoutRedirect pins that when
+// rewriteQueryPipelines substitutes a log pipeline with a
+// CallbackCommand, any `>` redirect on the displaced pipeline is
+// carried onto the callback. Without this, a /bin script body like
+// `cat /log/foo.log > /tmp/snapshot` silently produces nothing —
+// warp's rewriter swaps in a callback whose stdout flows through to
+// the parent context, while the redirect that should have caught it
+// is dropped on the floor.
+func TestRewriteQueryPipelines_PreservesStdoutRedirect(t *testing.T) {
+	script, err := bash.Parse(`cat /log/foo.log > /tmp/snapshot`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// rewriteQueryPipelines is the production rewriter the coordinator
+	// installs on warp interpreters. It walks the AST and substitutes
+	// log-shaped pipelines with CallbackCommands. Pass nil for the
+	// coordinator-bound parameters — we only inspect the resulting AST
+	// shape here, the callback's body is irrelevant to this test.
+	rewriteQueryPipelines(script, nil, TimeRange{}, "kevlar", 0, "", nil)
+
+	cb := singleCallbackInScript(t, script)
+	if got := len(cb.Redirects); got != 1 {
+		t.Fatalf("expected callback to carry 1 redirect (the displaced `> /tmp/snapshot`), got %d", got)
+	}
+	r := cb.Redirects[0]
+	if r.Op != ">" {
+		t.Errorf("redirect op = %q, want %q", r.Op, ">")
+	}
+	target := r.Target.Literal()
+	if target != "/tmp/snapshot" {
+		t.Errorf("redirect target = %q, want %q", target, "/tmp/snapshot")
+	}
+}
+
+// TestRewriteQueryPipelines_PreservesAppendRedirect — same, for `>>`.
+// The append flag must round-trip; otherwise a script that incremen-
+// tally appends query results to a tmp file would clobber it instead.
+func TestRewriteQueryPipelines_PreservesAppendRedirect(t *testing.T) {
+	script, err := bash.Parse(`tail -n 100 /log/api.log >> /tmp/audit`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	rewriteQueryPipelines(script, nil, TimeRange{}, "kevlar", 0, "", nil)
+
+	cb := singleCallbackInScript(t, script)
+	if got := len(cb.Redirects); got != 1 {
+		t.Fatalf("expected 1 redirect, got %d", got)
+	}
+	if cb.Redirects[0].Op != ">>" {
+		t.Errorf("op = %q, want %q", cb.Redirects[0].Op, ">>")
+	}
+}
+
+// TestRewriteQueryPipelines_RedirectOnLastStage — for a multi-stage
+// pipeline `cat /log/foo | grep ERROR > out`, bash semantics put the
+// redirect on grep (the last stage), but the entire pipeline becomes
+// one callback. The redirect must be lifted from the last command and
+// attached to the callback so the captured pipeline output lands at
+// `out`.
+func TestRewriteQueryPipelines_RedirectOnLastStage(t *testing.T) {
+	script, err := bash.Parse(`cat /log/foo.log | grep ERROR > /tmp/errors`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	rewriteQueryPipelines(script, nil, TimeRange{}, "kevlar", 0, "", nil)
+
+	cb := singleCallbackInScript(t, script)
+	if got := len(cb.Redirects); got != 1 {
+		t.Fatalf("expected 1 redirect lifted from last stage, got %d", got)
+	}
+	if cb.Redirects[0].Op != ">" {
+		t.Errorf("op = %q, want %q", cb.Redirects[0].Op, ">")
+	}
+	if got := cb.Redirects[0].Target.Literal(); got != "/tmp/errors" {
+		t.Errorf("target = %q, want %q", got, "/tmp/errors")
+	}
+}
+
+// TestRewriteQueryPipelines_NoRedirect — sanity: a plain query
+// pipeline produces a callback with no redirects. Guards against an
+// over-eager harvester that allocates a slice for nothing.
+func TestRewriteQueryPipelines_NoRedirect(t *testing.T) {
+	script, err := bash.Parse(`cat /log/foo.log`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	rewriteQueryPipelines(script, nil, TimeRange{}, "kevlar", 0, "", nil)
+
+	cb := singleCallbackInScript(t, script)
+	if len(cb.Redirects) != 0 {
+		t.Errorf("expected no redirects on bare cat callback, got %d: %+v", len(cb.Redirects), cb.Redirects)
+	}
+}
+
+// singleCallbackInScript walks the rewritten script, asserts that
+// exactly one CallbackCommand was substituted (which is what the
+// rewriter does for a single-pipeline log query), and returns it.
+// Reused across the rewriter tests above.
+func singleCallbackInScript(t *testing.T, script *bash.Script) *bash.CallbackCommand {
+	t.Helper()
+	var found []*bash.CallbackCommand
+	bash.Walk(script, func(n bash.Node) bool {
+		if cb, ok := n.(*bash.CallbackCommand); ok {
+			found = append(found, cb)
+		}
+		return true
+	})
+	if len(found) != 1 {
+		t.Fatalf("expected 1 CallbackCommand after rewrite, got %d", len(found))
+	}
+	return found[0]
+}

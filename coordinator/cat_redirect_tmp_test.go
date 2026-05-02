@@ -26,14 +26,15 @@ func TestCoordinatorQuery_LogQueryRedirectToTmp(t *testing.T) {
 	c := setupTestCoordinator(t)
 	const tmpPath = "/tmp/errs"
 
-	res, err := c.Query(`cat /log/vimgym.log | awk '$LEVEL == "ERROR"' > `+tmpPath,
+	res, err := c.Execute(`cat /log/vimgym.log | awk '$LEVEL == "ERROR"' > `+tmpPath,
 		fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
-	if res.Text != "" || len(res.Rows) != 0 {
+	resD := drainExec(t, res)
+	if resD.Text != "" || len(resD.Rows) != 0 {
 		t.Errorf("redirected query should leave the response empty (the file is the sink); got Text=%q rows=%d",
-			res.Text, len(res.Rows))
+			resD.Text, len(resD.Rows))
 	}
 
 	cust, err := c.Store.GetCustomerByName("kevlar")
@@ -87,9 +88,11 @@ func TestCoordinatorQuery_CatRedirectFromEtcToTmp(t *testing.T) {
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	cust, _ := db.GetCustomerByID(custID)
 
-	if _, err := c.Execute(`cat /etc/notify.conf > /tmp/notify.yaml`, tr, cust.Name, ""); err != nil {
+	res, err := c.Execute(`cat /etc/notify.conf > /tmp/notify.yaml`, tr, cust.Name, "")
+	if err != nil {
 		t.Fatalf("cat-redirect Query: %v", err)
 	}
+	drainExec(t, res)
 
 	row, err := db.GetTmpFile(custID, "/tmp/notify.yaml")
 	if err != nil {
@@ -127,10 +130,11 @@ func TestCoordinatorQuery_CatTmpReturnsContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cat /tmp/note: %v", err)
 	}
-	got := res.Text
+	resD := drainExec(t, res)
+	got := resD.Text
 	if got == "" {
 		var sb strings.Builder
-		for _, r := range res.Rows {
+		for _, r := range resD.Rows {
 			sb.WriteString(r.Raw)
 			sb.WriteByte('\n')
 		}

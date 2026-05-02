@@ -1,7 +1,9 @@
 package compute
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 
@@ -10,21 +12,23 @@ import (
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
-// LocalComputePool executes compute stages in-process using warp's bash
-// interpreter with chunked parallelism.
-type LocalComputePool struct {
-	Parallelism int // goroutine count for bash.RunWithParallelism (0 = streaming)
-}
+// LocalComputePool executes compute stages in-process using warp's
+// bash interpreter through bash.RunStreaming. Streaming requires
+// warp's per-stage io.Pipe execution path, which is mutually
+// exclusive with warp's chunked intra-stage parallelism today. See
+// docs/plans/streaming-parallel-warp.md for the planned warp-side
+// work to combine streaming with chunk-level parallelism; until
+// that lands, weft's compute stages are always single-worker.
+type LocalComputePool struct{}
 
 func (p *LocalComputePool) NewJob(stages []string, shardCount int, mergeKey string, limit int) ComputeJob {
 	return &LocalComputeJob{
-		stages:      stages,
-		shardCount:  shardCount,
-		mergeKey:    mergeKey,
-		limit:       limit,
-		parallelism: p.Parallelism,
-		ch:          make(chan ComputeMessage, 1024),
-		streamCh:    make(chan Line, 1024),
+		stages:     stages,
+		shardCount: shardCount,
+		mergeKey:   mergeKey,
+		limit:      limit,
+		ch:         make(chan ComputeMessage, 1024),
+		streamCh:   make(chan Line, 1024),
 	}
 }
 
@@ -37,11 +41,10 @@ func (p *LocalComputePool) NewJob(stages []string, shardCount int, mergeKey stri
 // supported; the cache only fires when no live consumer has the
 // channel.
 type LocalComputeJob struct {
-	stages      []string
-	shardCount  int
-	mergeKey    string // see ComputePool.NewJob; empty = concat, otherwise k-way merge
-	limit       int    // see ComputePool.NewJob; 0 = no cap
-	parallelism int
+	stages     []string
+	shardCount int
+	mergeKey   string // see ComputePool.NewJob; empty = concat, otherwise k-way merge
+	limit      int    // see ComputePool.NewJob; 0 = no cap
 
 	ch        chan ComputeMessage // shards push rows + sentinels here
 	streamCh  chan Line           // consume() pushes output here
@@ -129,89 +132,95 @@ func (j *LocalComputeJob) MergedRows() ([]*pb.ResultRow, error) {
 	return rows, nil
 }
 
-// consume reads all messages from j.ch until every shard's sentinel
-// has arrived, k-way-merges the per-shard buffers, applies the
-// global head/tail cap, and pushes Lines onto j.streamCh as the
-// merge produces them. For zero-stage jobs the merged rows ARE the
-// output; for staged jobs the merged rows are joined + fed through
-// warp and the stdout is split into Lines after the pipeline
-// completes (warp doesn't expose a streaming bytes API today).
+// consume drives onlineMerge over the per-shard rows arriving on j.ch
+// and pushes Lines onto j.streamCh as the merge produces them.
 //
-// streamErr is set BEFORE the channel is closed so consumers see
-// the error after the channel signals exhaustion.
+// Zero-stage jobs forward each merged row directly to streamCh as
+// soon as the k-way merge determines its position.
+//
+// Staged jobs route the merged stream through warp via an io.Pipe:
+// a writer goroutine pumps merged rows into the pipe (one row + "\n"
+// per emit); warp's bash.RunStreaming reads from the pipe, runs the
+// pipeline (with stream-safe stages emitting incrementally), and
+// writes to a second io.Pipe whose read side is scanned line-by-line
+// into streamCh. End-to-end this gives stream-safe pipelines (grep,
+// awk no-END, sed, head, cut, tr, tee, uniq) per-line latency from
+// shard arrival to client; batch-only stages (sort, wc, tail -N)
+// still buffer to EOF as their semantics require.
+//
+// streamErr is set BEFORE the channel is closed so consumers see the
+// error after the channel signals exhaustion.
 func (j *LocalComputeJob) consume() {
 	defer close(j.streamCh)
 
-	perShard := map[string][]*pb.ResultRow{}
-	sentinels := 0
-
-	for sentinels < j.shardCount {
-		msg := <-j.ch
-		if msg.Sentinel {
-			sentinels++
-			continue
-		}
-		if msg.Row == nil {
-			continue
-		}
-		perShard[msg.ShardID] = append(perShard[msg.ShardID], msg.Row)
-	}
-
-	merged := mergeRowsFull(perShard, j.mergeKey)
-
-	// Global tail/head cap: the per-shard LIMIT was already applied
-	// by the SQL builder; this truncates the union before downstream
-	// stages see it. Concat path (mergeKey == "") also gets capped —
-	// without an order it's "first N to arrive" rather than "first N
-	// in any deterministic ordering," but downstream stages that need
-	// determinism shouldn't be running over an unmerged stream
-	// anyway.
-	if j.limit > 0 && len(merged) > j.limit {
-		merged = merged[:j.limit]
-	}
-
 	if len(j.stages) == 0 {
-		// Zero stages: merged rows ARE the output. Push each line as
-		// the heap walk produces it (today mergeRowsFull is a single
-		// pass that returns a slice; in a future iteration we can
-		// inline the heap walk here to truly stream).
-		for _, r := range merged {
-			j.streamCh <- Line{Raw: r.Raw, LineNum: r.LineNum}
-		}
+		emitted := 0
+		onlineMerge(j.ch, j.shardCount, j.mergeKey, func(row *pb.ResultRow) bool {
+			if j.limit > 0 && emitted >= j.limit {
+				return false
+			}
+			j.streamCh <- Line{Raw: row.Raw, LineNum: row.LineNum}
+			emitted++
+			return true
+		})
 		return
 	}
-
-	// Staged: feed merged rows into warp as one batch. warp's
-	// RunWithParallelism is non-streaming; once it returns we split
-	// the stdout into Lines. Future warp work could expose a
-	// streaming exec API and turn this into per-line pushes too.
-	var sb strings.Builder
-	for i, r := range merged {
-		if i > 0 {
-			sb.WriteByte('\n')
-		}
-		sb.WriteString(r.Raw)
-	}
-	if len(merged) > 0 {
-		sb.WriteByte('\n')
-	}
-	input := sb.String()
 
 	pipeline := strings.Join(j.stages, " | ")
-	stdout, stderr, exitCode, err := bash.RunWithParallelism(pipeline, input, j.parallelism)
-	if err != nil {
-		j.streamErr = fmt.Errorf("compute: %w", err)
-		return
-	}
-	if exitCode != 0 && stderr != "" {
-		j.streamErr = fmt.Errorf("compute exit %d: %s", exitCode, stderr)
-		return
-	}
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
 
-	if stdout == "" {
+	// Writer: pump merged rows into warp's stdin. Closing stdinW
+	// signals EOF to the pipeline, which lets sort/wc/etc. flush.
+	go func() {
+		defer stdinW.Close()
+		emitted := 0
+		onlineMerge(j.ch, j.shardCount, j.mergeKey, func(row *pb.ResultRow) bool {
+			if j.limit > 0 && emitted >= j.limit {
+				return false
+			}
+			if _, err := io.WriteString(stdinW, row.Raw); err != nil {
+				return false
+			}
+			if _, err := stdinW.Write([]byte{'\n'}); err != nil {
+				return false
+			}
+			emitted++
+			return true
+		})
+	}()
+
+	// Runner: warp executes the pipeline. Its stdout writes go to
+	// stdoutW; closing stdoutW after ExecScript returns lets the
+	// reader loop below see EOF.
+	var stderrBuf strings.Builder
+	runErrCh := make(chan error, 1)
+	go func() {
+		defer stdoutW.Close()
+		exitCode, err := bash.RunStreaming(pipeline, stdinR, stdoutW, &stderrBuf)
+		if err != nil {
+			runErrCh <- fmt.Errorf("compute: %w", err)
+			return
+		}
+		if exitCode != 0 && stderrBuf.Len() > 0 {
+			runErrCh <- fmt.Errorf("compute exit %d: %s", exitCode, stderrBuf.String())
+			return
+		}
+		runErrCh <- nil
+	}()
+
+	scanner := bufio.NewScanner(stdoutR)
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for scanner.Scan() {
+		j.streamCh <- Line{Raw: scanner.Text()}
+	}
+	if err := scanner.Err(); err != nil {
+		j.streamErr = fmt.Errorf("compute: read stdout: %w", err)
+		// Drain runner before returning so we don't leak the goroutine.
+		<-runErrCh
 		return
 	}
-	for _, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
-		j.streamCh <- Line{Raw: line}
+	if err := <-runErrCh; err != nil {
+		j.streamErr = err
 	}
 }

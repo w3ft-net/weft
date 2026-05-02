@@ -4,11 +4,10 @@ package integration
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
@@ -28,17 +27,12 @@ import (
 // alongside the customer. So a weftd holding a token for a deleted
 // customer can no longer authenticate — the stream is rejected before any
 // row is accepted.
+//
+// CreateToken now derives the customer from the caller's JWT (rather
+// than accepting it as a request field), so this test seeds the ghost
+// customer + namespace + agent token directly in postgres, mirroring
+// what `kevcons /bin/save` would have produced for a real agent.
 func TestIngestStream_RejectsDeletedCustomer(t *testing.T) {
-	// Currently skipped: CreateToken used to be find-or-create
-	// (accepting caller-supplied Customer + App as the pair to
-	// create), but the current RPC requires those to pre-exist —
-	// it uses the JWT's customer and looks up the namespace under
-	// it. Recreating the ghost-customer flow here needs direct
-	// postgres inserts before calling CreateToken, which is
-	// orthogonal to the behavior being tested (deleted-customer
-	// rejection). Rewriting in the harness seed path is cleaner.
-	t.Skip("test predates auth-scoped CreateToken; rewrite needs direct-DB ghost customer setup")
-
 	ctx := context.Background()
 
 	conn, client := grpcClient(t)
@@ -46,35 +40,32 @@ func TestIngestStream_RejectsDeletedCustomer(t *testing.T) {
 
 	custName := fmt.Sprintf("ghost-%d", time.Now().UnixNano())
 
-	// ── 1. Create customer + namespace + token via gRPC, capturing the
-	// token the way a real weftd would have it at startup.
-	tokResp, err := client.CreateToken(ctx, &pb.CreateTokenRequest{
-		Customer:  custName,
-		Namespace: custName + "-ns",
-		Label:     "ghost-agent",
-	})
-	if err != nil {
-		t.Fatalf("create token: %v", err)
+	// ── 1. Seed customer + namespace + agent token directly. The
+	// hash scheme matches store.CreateAgentToken so the coordinator's
+	// ValidateAgentToken accepts the raw value.
+	custID, nsID := seedCustomerWithNamespace(t, custName, custName+"-ns")
+	ghostToken := seedAgentToken(t, custID, nsID, "ghost-agent")
+
+	// Sanity: the token validates BEFORE we delete the customer. If
+	// this fails the seeding scheme is wrong, not the validation.
+	if _, err := client.IngestStream(authedContext(ctx, ghostToken)); err != nil {
+		t.Fatalf("precondition: token rejected before customer delete: %v", err)
 	}
-	ghostToken := tokResp.Token
 
 	// ── 2. Delete the customer directly from Postgres — mirrors what
-	// happened in prod when kevlar was removed. The FK cascade migration
-	// is applied by the harness (see Setup in harness.go), so a single
-	// DELETE on the parent row is sufficient.
-	dbConn, err := pgx.Connect(ctx, postgresURL)
+	// happened in prod when kevlar was removed. The FK cascade
+	// migration is applied by the harness, so a single DELETE on the
+	// parent row drops the agent token alongside it.
+	deleteCustomer(t, custName)
+
+	// Verify the customer row really is gone (paranoia, but cheap).
+	dbConn, err := sql.Open("pgx", postgresURL)
 	if err != nil {
-		t.Fatalf("connect postgres: %v", err)
+		t.Fatalf("open postgres: %v", err)
 	}
-	defer dbConn.Close(ctx)
-
-	if _, err := dbConn.Exec(ctx, `DELETE FROM customers WHERE name = $1`, custName); err != nil {
-		t.Fatalf("delete customer: %v", err)
-	}
-
-	// Verify the customer row really is gone.
+	defer dbConn.Close()
 	var remaining int
-	if err := dbConn.QueryRow(ctx,
+	if err := dbConn.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM customers WHERE name = $1`, custName,
 	).Scan(&remaining); err != nil {
 		t.Fatalf("count customers: %v", err)
@@ -92,8 +83,9 @@ func TestIngestStream_RejectsDeletedCustomer(t *testing.T) {
 	}
 	const nRows = 5
 	for i := 0; i < nRows; i++ {
-		// Some of these Sends may fail once the server rejects the stream —
-		// that's fine, the assertion is on the final CloseAndRecv.
+		// Some of these Sends may fail once the server rejects the
+		// stream — that's fine, the assertion is on the final
+		// CloseAndRecv.
 		_ = stream.Send(&pb.LogRow{
 			App:      "integration/ghost",
 			Customer: custName,

@@ -60,7 +60,7 @@ func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, 
 	}
 
 	c := NewCoordinator(CoordinatorConfig{
-		Pool:  &compute.LocalComputePool{Parallelism: 1},
+		Pool:  &compute.LocalComputePool{},
 		Store: db,
 	})
 	c.Registry.Add(&ShardEntry{
@@ -112,10 +112,11 @@ echo finished`
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
+	resultD := drainExec(t, result)
 
-	lines := strings.Split(strings.TrimSpace(result.Text), "\n")
+	lines := strings.Split(strings.TrimSpace(resultD.Text), "\n")
 	if len(lines) != 3 {
-		t.Fatalf("want 3 output lines, got %d: %q (stderr=%q)", len(lines), result.Text, result.Stderr)
+		t.Fatalf("want 3 output lines, got %d: %q (stderr=%q)", len(lines), resultD.Text, resultD.Stderr)
 	}
 	if lines[0] != "starting" {
 		t.Errorf("line 0: want `starting`, got %q", lines[0])
@@ -153,9 +154,10 @@ cat /log/$1.log | grep ERROR | wc -l`
 			if err != nil {
 				t.Fatalf("Query: %v", err)
 			}
-			lines := strings.Split(strings.TrimSpace(result.Text), "\n")
+			resultD := drainExec(t, result)
+			lines := strings.Split(strings.TrimSpace(resultD.Text), "\n")
 			if len(lines) < 2 {
-				t.Fatalf("want >=2 lines, got %q (stderr=%q)", result.Text, result.Stderr)
+				t.Fatalf("want >=2 lines, got %q (stderr=%q)", resultD.Text, resultD.Stderr)
 			}
 			if lines[1] != tc.want {
 				t.Errorf("arg=%s: ERROR count = %q, want %q", tc.arg, lines[1], tc.want)
@@ -182,17 +184,67 @@ done`
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
+	resultD := drainExec(t, result)
 
-	lines := strings.Split(strings.TrimSpace(result.Text), "\n")
+	lines := strings.Split(strings.TrimSpace(resultD.Text), "\n")
 	// Two iterations: api has 2 ERRORs, web has 1.
 	if len(lines) != 2 {
-		t.Fatalf("want 2 lines (one per iteration), got %d: %q", len(lines), result.Text)
+		t.Fatalf("want 2 lines (one per iteration), got %d: %q", len(lines), resultD.Text)
 	}
 	if lines[0] != "2" {
 		t.Errorf("iter 0 (api): want 2, got %q", lines[0])
 	}
 	if lines[1] != "1" {
 		t.Errorf("iter 1 (web): want 1, got %q", lines[1])
+	}
+}
+
+// Interior redirect: a /bin script body that contains
+// `cat /log/api.log > /tmp/snapshot` must land the captured rows in
+// shellfs at /tmp/snapshot. Pre-fix, rewriteQueryPipelines dropped
+// the redirect when substituting the pipeline with a
+// CallbackCommand — the callback's stdout would flow through to the
+// outer pipe and the FS write never happened.
+func TestInteriorQuery_RedirectInBinBody(t *testing.T) {
+	c, db, custName, custID := newInteriorQueryFixture(t)
+
+	const snapPath = "/tmp/snapshot"
+	body := `cat /log/api.log > ` + snapPath + `
+echo finished`
+	if err := db.SaveShellFunction(custID, "", "snapshot", body); err != nil {
+		t.Fatalf("save script: %v", err)
+	}
+
+	result, err := c.Execute("snapshot", lastHourRange(), custName, "")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	resultD := drainExec(t, result)
+
+	// The redirect must have captured the cat output, so stdout from
+	// the script is just the trailing echo.
+	if got := strings.TrimSpace(resultD.Text); got != "finished" {
+		t.Errorf("script stdout = %q, want %q (the redirect leaked output back to stdout)", got, "done")
+	}
+
+	t.Logf("script stderr: %q", resultD.Stderr)
+
+	// And /tmp/snapshot in the customer's shellfs should contain the
+	// 3 api rows from the fixture (LineNum 1, 2, 3 — ERROR/ERROR/INFO).
+	data, err := db.ReadTmpFile(custID, snapPath)
+	if err != nil {
+		t.Fatalf("read %s back: %v (the redirect was probably dropped)", snapPath, err)
+	}
+	contents := string(data)
+	if !strings.Contains(contents, "ERROR api line") {
+		t.Errorf("%s missing api ERROR rows; got:\n%s", snapPath, contents)
+	}
+	if !strings.Contains(contents, "INFO api line") {
+		t.Errorf("%s missing api INFO row; got:\n%s", snapPath, contents)
+	}
+	// Negative: web rows must NOT appear (the cat targets api.log only).
+	if strings.Contains(contents, "web line") {
+		t.Errorf("%s leaked web rows; got:\n%s", snapPath, contents)
 	}
 }
 
@@ -212,8 +264,9 @@ echo "found $count"`
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
+	resultD := drainExec(t, result)
 
-	got := strings.TrimSpace(result.Text)
+	got := strings.TrimSpace(resultD.Text)
 	if got != "found 2" {
 		t.Errorf("stdout = %q, want `found 2`", got)
 	}
@@ -236,10 +289,11 @@ func TestInteriorQuery_AndShortCircuit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
+	resultD := drainExec(t, result)
 
-	lines := strings.Split(strings.TrimSpace(result.Text), "\n")
+	lines := strings.Split(strings.TrimSpace(resultD.Text), "\n")
 	if len(lines) != 2 {
-		t.Fatalf("want 2 lines (count + ok), got %d: %q", len(lines), result.Text)
+		t.Fatalf("want 2 lines (count + ok), got %d: %q", len(lines), resultD.Text)
 	}
 	if lines[0] != "2" {
 		t.Errorf("line 0: want 2, got %q", lines[0])
@@ -283,10 +337,11 @@ error_check web`
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
+	resultD := drainExec(t, result)
 
-	lines := strings.Split(strings.TrimSpace(result.Text), "\n")
+	lines := strings.Split(strings.TrimSpace(resultD.Text), "\n")
 	if len(lines) != 2 {
-		t.Fatalf("want 2 lines (one per error_check call), got %d: %q (stderr=%q)", len(lines), result.Text, result.Stderr)
+		t.Fatalf("want 2 lines (one per error_check call), got %d: %q (stderr=%q)", len(lines), resultD.Text, resultD.Stderr)
 	}
 	if lines[0] != "api: high (2)" {
 		t.Errorf("api branch: got %q, want `api: high (2)`", lines[0])
@@ -338,10 +393,11 @@ echo web: $(error_count web)`
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
+	resultD := drainExec(t, result)
 
-	lines := strings.Split(strings.TrimSpace(result.Text), "\n")
+	lines := strings.Split(strings.TrimSpace(resultD.Text), "\n")
 	if len(lines) != 2 {
-		t.Fatalf("want 2 lines, got %d: %q (stderr=%q)", len(lines), result.Text, result.Stderr)
+		t.Fatalf("want 2 lines, got %d: %q (stderr=%q)", len(lines), resultD.Text, resultD.Stderr)
 	}
 	if lines[0] != "api: 2" {
 		t.Errorf("line 0: got %q, want `api: 2`", lines[0])
@@ -366,7 +422,8 @@ func TestInteriorQuery_SinglePipelineStillSplices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
-	if got := strings.TrimSpace(result.Text); got != "2" {
+	resultD := drainExec(t, result)
+	if got := strings.TrimSpace(resultD.Text); got != "2" {
 		t.Errorf("stdout = %q, want 2", got)
 	}
 }

@@ -21,8 +21,9 @@ func TestRunLocal_BinBashScriptResolution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runLocal: %v", err)
 	}
-	if got := strings.TrimSpace(result.Text); got != "alice" {
-		t.Errorf("runLocal(who alice) stdout = %q, want alice (stderr=%q)", got, result.Stderr)
+	resultD := drainExec(t, result)
+	if got := strings.TrimSpace(resultD.Text); got != "alice" {
+		t.Errorf("runLocal(who alice) stdout = %q, want alice (stderr=%q)", got, resultD.Stderr)
 	}
 }
 
@@ -44,8 +45,9 @@ func TestRunLocal_BinLuaScriptResolution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runLocal: %v", err)
 	}
-	if got := strings.TrimSpace(result.Text); got != "world" {
-		t.Errorf("runLocal(greet world) stdout = %q, want world (stderr=%q)", got, result.Stderr)
+	resultD := drainExec(t, result)
+	if got := strings.TrimSpace(resultD.Text); got != "world" {
+		t.Errorf("runLocal(greet world) stdout = %q, want world (stderr=%q)", got, resultD.Stderr)
 	}
 }
 
@@ -64,7 +66,8 @@ func TestRunLocal_BinBashPositionalRebinds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(alice.Text); got != "hello alice" {
+	aliceD := drainExec(t, alice)
+	if got := strings.TrimSpace(aliceD.Text); got != "hello alice" {
 		t.Errorf("greet alice = %q, want `hello alice`", got)
 	}
 
@@ -72,7 +75,8 @@ func TestRunLocal_BinBashPositionalRebinds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(bob.Text); got != "hello bob" {
+	bobD := drainExec(t, bob)
+	if got := strings.TrimSpace(bobD.Text); got != "hello bob" {
 		t.Errorf("greet bob = %q, want `hello bob`", got)
 	}
 }

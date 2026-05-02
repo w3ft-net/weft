@@ -169,19 +169,31 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch) {
 		stderr = err.Error()
 		exitCode = 1
 	} else {
-		if result.Text != "" {
-			stdout = result.Text
-		} else if len(result.Rows) > 0 {
-			var sb strings.Builder
-			for _, row := range result.Rows {
-				sb.WriteString(row.Raw)
-				sb.WriteByte('\n')
+		// Streaming-eligible pipelines return ExecuteResult with only
+		// Stream populated; drain to materialize Text/Rows/Stderr for
+		// the persistence path below. Buffered paths (alert, redirect,
+		// staged compute) short-circuit inside Drain when those fields
+		// are already set, so this is cheap in either case.
+		drained, drainErr := result.Drain(context.Background())
+		if drainErr != nil {
+			status = "error"
+			stderr = drainErr.Error()
+			exitCode = 1
+		} else {
+			if drained.Text != "" {
+				stdout = drained.Text
+			} else if len(drained.Rows) > 0 {
+				var sb strings.Builder
+				for _, row := range drained.Rows {
+					sb.WriteString(row.Raw)
+					sb.WriteByte('\n')
+				}
+				stdout = sb.String()
 			}
-			stdout = sb.String()
-		}
-		if result.Stderr != "" {
-			stderr = result.Stderr
-			status = "alert"
+			if drained.Stderr != "" {
+				stderr = drained.Stderr
+				status = "alert"
+			}
 		}
 	}
 

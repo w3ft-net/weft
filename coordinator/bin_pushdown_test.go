@@ -17,7 +17,7 @@ import (
 // (which the splicer deliberately skips — see bin_expand.go — and
 // which run through the runtime PipelineInterceptor instead) is
 // covered by coordinator/bin_interior_query_test.go. Those tests
-// exercise the full coord.Query path with real shards and assert on
+// exercise the full coord.Execute path with real shards and assert on
 // the stitched-together stdout, not planner output.
 
 func planAfterExpand(t *testing.T, fs *testFS, pipeline string) *planner.QueryPlan {

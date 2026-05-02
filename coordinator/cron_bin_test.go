@@ -40,16 +40,18 @@ func TestCronShareScriptAcrossWatches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("disk: %v", err)
 	}
-	if got := strings.TrimSpace(diskResult.Text); got != "source=disk.log" {
-		t.Errorf("disk: got %q, want source=disk.log (stderr=%q)", got, diskResult.Stderr)
+	diskResultD := drainExec(t, diskResult)
+	if got := strings.TrimSpace(diskResultD.Text); got != "source=disk.log" {
+		t.Errorf("disk: got %q, want source=disk.log (stderr=%q)", got, diskResultD.Stderr)
 	}
 
 	cpuResult, err := c.ExecuteForWatch(strings.TrimSpace(cpuW.Pipeline), tr, cpuW)
 	if err != nil {
 		t.Fatalf("cpu: %v", err)
 	}
-	if got := strings.TrimSpace(cpuResult.Text); got != "source=cpu.log" {
-		t.Errorf("cpu: got %q, want source=cpu.log (stderr=%q)", got, cpuResult.Stderr)
+	cpuResultD := drainExec(t, cpuResult)
+	if got := strings.TrimSpace(cpuResultD.Text); got != "source=cpu.log" {
+		t.Errorf("cpu: got %q, want source=cpu.log (stderr=%q)", got, cpuResultD.Stderr)
 	}
 }
 
@@ -76,7 +78,8 @@ func TestCronBareNameStillWorks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteForWatch: %v", err)
 	}
-	if got := strings.TrimSpace(result.Text); got != "hello" {
+	resultD := drainExec(t, result)
+	if got := strings.TrimSpace(resultD.Text); got != "hello" {
 		t.Errorf("got %q, want hello", got)
 	}
 }

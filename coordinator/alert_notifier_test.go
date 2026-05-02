@@ -38,12 +38,13 @@ func TestQuery_InteractiveAlertUsesCoordinatorNotifier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
+	resultD := drainExec(t, result)
 
-	if strings.Contains(result.Stderr, "notifier unavailable") {
-		t.Errorf("fallback path hit — Notifier didn't propagate:\nstderr=%q", result.Stderr)
+	if strings.Contains(resultD.Stderr, "notifier unavailable") {
+		t.Errorf("fallback path hit — Notifier didn't propagate:\nstderr=%q", resultD.Stderr)
 	}
-	if !strings.Contains(result.Stderr, "dispatch to \"foo\" failed") {
-		t.Errorf("expected dispatch-attempt error, got stderr=%q", result.Stderr)
+	if !strings.Contains(resultD.Stderr, "dispatch to \"foo\" failed") {
+		t.Errorf("expected dispatch-attempt error, got stderr=%q", resultD.Stderr)
 	}
 }
 
@@ -68,8 +69,9 @@ func TestQuery_InteractiveAlertFallbackWhenNoNotifier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
+	resultD := drainExec(t, result)
 
-	if !strings.Contains(result.Stderr, "notifier unavailable") {
-		t.Errorf("expected fallback message, got stderr=%q", result.Stderr)
+	if !strings.Contains(resultD.Stderr, "notifier unavailable") {
+		t.Errorf("expected fallback message, got stderr=%q", resultD.Stderr)
 	}
 }

@@ -22,7 +22,6 @@ import (
 	weftcfg "github.com/kevlarcon/weft/config"
 	"github.com/kevlarcon/weft/coordinator"
 	"github.com/kevlarcon/weft/ingest"
-	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/store"
 )
@@ -115,29 +114,43 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 
 	// Pipeline can be any user-typed shape — log query, plain bash,
 	// /bin script, or a mix. Execute is the dispatch layer that
-	// classifies and routes; Coord.Query is reserved for callers
-	// that already know they have a plannable log query.
-	result, err := s.Coord.Execute(req.Pipeline, tr, customer, req.UserId)
+	// classifies and routes; ExecuteFollow is the variant that splices
+	// a live broker subscription onto the end of the historical batch.
+	ctx := stream.Context()
+	var result *coordinator.ExecuteResult
+	if req.Follow && s.Coord.Tail != nil {
+		result, err = s.Coord.ExecuteFollow(ctx, req.Pipeline, tr, customer, req.UserId)
+	} else {
+		result, err = s.Coord.Execute(req.Pipeline, tr, customer, req.UserId)
+	}
 	if err != nil {
 		log.Printf("query rpc: error for customer=%s pipeline=%q: %v", customer, req.Pipeline, err)
 		return err
 	}
 
-	notices := convertNotices(result.Notices)
-
 	// Pump ExecuteResult.Stream onto the wire. Lines arrive batched
 	// (500 max) to stay under the gRPC message-size limit; notices
-	// ride on the first batch and stderr on the last. The stream is
-	// the producer's view, so wire delivery follows whatever the
-	// underlying compute pipeline emits — for plain shard queries
-	// this is incremental as compute's k-way merge advances.
+	// ride on the FINAL batch and stderr also on the last. With the
+	// streaming-runLocal change, result.Notices is populated by the
+	// runLocal goroutine AFTER warp finishes (right before the pipe
+	// writers close). The consumer sees its terminal Next return
+	// ok=false BEFORE the writers close has propagated, but the
+	// happens-before relationship (Notices write → pipe close →
+	// scanner EOF → channel close → consumer Next) guarantees the
+	// read past EOF sees the populated value.
+	//
+	// Follow mode collapses into the same loop: ExecuteFollow returns
+	// a stream that splices historical → broker, so Next exits only
+	// when ctx cancels (client disconnect) or, rarely, the broker
+	// channel closes. Notices from follow's historical phase are not
+	// surfaced today (no /tmp writes happen during a read-only
+	// historical batch).
 	const batchSize = 500
 	var batch []*pb.Line
 	var stderrAcc strings.Builder
 	firstBatchSent := false
-	ctx := stream.Context()
 
-	flush := func(final bool) error {
+	flush := func(final bool, notices []*pb.Notice) error {
 		if !final && len(batch) == 0 {
 			return nil
 		}
@@ -145,23 +158,27 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 			return nil
 		}
 		resp := &pb.CoordinatorExecuteResponse{Lines: batch}
-		if !firstBatchSent {
-			resp.Notices = notices
-			firstBatchSent = true
-		}
 		if final {
+			resp.Notices = notices
 			resp.Stderr = stderrAcc.String()
 		}
 		if err := stream.Send(resp); err != nil {
 			return err
 		}
 		batch = nil
+		firstBatchSent = true
 		return nil
 	}
 
 	for {
 		line, ok, err := result.Stream.Next(ctx)
 		if err != nil {
+			// Client disconnect / ctx cancel surfaces here in follow
+			// mode; treat it as a clean stream end so the rpc returns
+			// nil instead of context.Canceled bubbling to the wire.
+			if ctx.Err() != nil {
+				return nil
+			}
 			return err
 		}
 		if !ok {
@@ -174,60 +191,14 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 		}
 		batch = append(batch, &pb.Line{Raw: line.Raw, LineNum: line.LineNum})
 		if len(batch) >= batchSize {
-			if err := flush(false); err != nil {
+			if err := flush(false, nil); err != nil {
 				return err
 			}
 		}
 	}
-	if err := flush(true); err != nil {
-		return err
-	}
-
-	if !req.Follow || s.Coord.Tail == nil {
-		return nil
-	}
-
-	// Follow mode: subscribe and stream live rows until client disconnects.
-	plan, err := planner.Plan(req.Pipeline)
-	if err != nil {
-		return err
-	}
-
-	matcher := &coordinator.RowMatcher{
-		App:      plan.FollowApp,
-		Patterns: plan.FollowPatterns,
-	}
-	// LiveFilter re-runs the user's post-source pipeline stages against
-	// each broker row so the live tail and the historical batch stay
-	// consistent — without it, `tail -f log | cut -d' ' -f3` shows the
-	// projection on the initial DB read and raw whole lines on every
-	// row that arrives afterward.
-	filter := coordinator.BuildLiveFilter(plan)
-
-	id, ch := s.Coord.Tail.Subscribe(ctx, matcher)
-	defer s.Coord.Tail.Unsubscribe(id)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case row, ok := <-ch:
-			if !ok {
-				return nil
-			}
-			liveLines := filter(row)
-			if len(liveLines) == 0 {
-				continue
-			}
-			outLines := make([]*pb.Line, len(liveLines))
-			for i, ln := range liveLines {
-				outLines[i] = &pb.Line{LineNum: row.LineNum, Raw: ln}
-			}
-			if err := stream.Send(&pb.CoordinatorExecuteResponse{Lines: outLines}); err != nil {
-				return err
-			}
-		}
-	}
+	// Stream done — Notices is now populated by the runLocal
+	// goroutine. Send on the final flush.
+	return flush(true, convertNotices(result.Notices))
 }
 
 func (s *Server) ListApps(ctx context.Context, _ *pb.ListAppsRequest) (*pb.ListAppsResponse, error) {

@@ -12,7 +12,7 @@ import (
 func setupProjectCoordinator(t *testing.T) *Coordinator {
 	t.Helper()
 	c := setupTestCoordinator(t)
-	c.Pool = &compute.LocalComputePool{Parallelism: 2}
+	c.Pool = &compute.LocalComputePool{}
 	return c
 }
 
@@ -23,7 +23,7 @@ func setupProjectCoordinator(t *testing.T) *Coordinator {
 func TestProjectCoord_CutSingleField(t *testing.T) {
 	c := setupProjectCoordinator(t)
 	// cut -d' ' -f3 should return only the 3rd field of each line (the app name).
-	res, err := c.Query(`cat vimgym.log | cut -d' ' -f3`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | cut -d' ' -f3`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestProjectCoord_CutSingleField(t *testing.T) {
 func TestProjectCoord_CutMultipleFields(t *testing.T) {
 	c := setupProjectCoordinator(t)
 	// cut -d' ' -f1,2 should return timestamp and level.
-	res, err := c.Query(`cat vimgym.log | grep ERROR | cut -d' ' -f1,2`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | grep ERROR | cut -d' ' -f1,2`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestProjectCoord_CutMultipleFields(t *testing.T) {
 func TestProjectCoord_CutOpenEnded(t *testing.T) {
 	c := setupProjectCoordinator(t)
 	// cut -d' ' -f5- should return everything from field 5 onward (the message).
-	res, err := c.Query(`cat vimgym.log | grep ERROR | cut -d' ' -f5-`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | grep ERROR | cut -d' ' -f5-`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestProjectCoord_CutOpenEnded(t *testing.T) {
 func TestProjectCoord_CutThenSort(t *testing.T) {
 	c := setupProjectCoordinator(t)
 	// cut then sort — projection narrows, sort runs in compute on narrowed data.
-	res, err := c.Query(`cat vimgym.log | cut -d' ' -f2 | sort | uniq -c`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | cut -d' ' -f2 | sort | uniq -c`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestProjectCoord_CutThenSort(t *testing.T) {
 func TestProjectCoord_AwkPrintField(t *testing.T) {
 	c := setupProjectCoordinator(t)
 	// awk print $3 — projection on field 3, compute still runs awk for formatting.
-	res, err := c.Query(`cat vimgym.log | awk '{ print $3 }'`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | awk '{ print $3 }'`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestProjectCoord_AwkPrintField(t *testing.T) {
 func TestProjectCoord_JqObjectConstruction(t *testing.T) {
 	c := setupProjectCoordinator(t)
 	// jq object construction should work and only needs specific JSON keys.
-	res, err := c.Query(`cat vimgym.log | awk '$LEVEL == "ERROR"' | jq '{action: .action}'`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | awk '$LEVEL == "ERROR"' | jq '{action: .action}'`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,21 +163,23 @@ func TestProjectCoord_NoProjectionRegression(t *testing.T) {
 	c := setupProjectCoordinator(t)
 
 	// Pure filter — no projection.
-	res, err := c.Query(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Rows) != 5 {
-		t.Errorf("expected 5 rows, got %d", len(res.Rows))
+	resD := drainExec(t, res)
+	if len(resD.Rows) != 5 {
+		t.Errorf("expected 5 rows, got %d", len(resD.Rows))
 	}
 
 	// grep + wc — compute only, no projection.
-	res2, err := c.Query(`cat warp.log | grep timeout | wc -l`, fullRange, "kevlar", "")
+	res2, err := c.Execute(`cat warp.log | grep timeout | wc -l`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(res2.Text) != "5" {
-		t.Errorf("expected 5, got %q", res2.Text)
+	res2D := drainExec(t, res2)
+	if strings.TrimSpace(res2D.Text) != "5" {
+		t.Errorf("expected 5, got %q", res2D.Text)
 	}
 }
 
@@ -186,14 +188,16 @@ func TestProjectCoord_NoProjectionRegression(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // resultText returns the text output from an ExecuteResult, preferring .Text
-// over formatted .Rows.
+// over formatted .Rows. Drains the stream (no-op for already-buffered
+// results) so callers don't need to.
 func resultText(t *testing.T, res *ExecuteResult) string {
 	t.Helper()
-	if res.Text != "" {
-		return res.Text
+	resD := drainExec(t, res)
+	if resD.Text != "" {
+		return resD.Text
 	}
 	var sb strings.Builder
-	for _, r := range res.Rows {
+	for _, r := range resD.Rows {
 		sb.WriteString(r.Raw)
 		sb.WriteByte('\n')
 	}

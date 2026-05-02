@@ -83,7 +83,7 @@ func main() {
 		addrs, err := disc.DiscoverAddrs(context.Background())
 		if err != nil || len(addrs) == 0 {
 			log.Printf("no compute workers found, using local pool")
-			pool = &compute.LocalComputePool{Parallelism: 2}
+			pool = &compute.LocalComputePool{}
 		} else {
 			p, err := compute.NewGRPCComputePool(addrs[0])
 			if err != nil {
@@ -93,8 +93,8 @@ func main() {
 			log.Printf("connected to compute at %s (from ASG)", addrs[0])
 		}
 	} else {
-		pool = &compute.LocalComputePool{Parallelism: 2}
-		log.Printf("using local compute pool (parallelism=2)")
+		pool = &compute.LocalComputePool{}
+		log.Printf("using local compute pool")
 	}
 
 	// Open the store before building the Coordinator so /bin lookup,
