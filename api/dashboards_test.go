@@ -8,16 +8,28 @@ import (
 	"testing"
 
 	"github.com/kevlarcon/weft/auth"
+	"github.com/kevlarcon/weft/store"
 )
+
+// dashTeamMember registers `user` as an owner of `cust` so the
+// auth middleware's BuildSession finds a membership and resolves
+// the active org. Without this the dashboards-handler chain hits
+// ErrNoMembership and returns 403.
+func dashTeamMember(s *store.Store, cust *store.Customer, user *store.User, idSuffix string) {
+	_ = s.CreateTeamMember(&store.TeamMember{
+		ID: "tm-dash-" + idSuffix, CustomerID: cust.ID, Email: user.Email,
+		UserID: &user.ID, Role: "owner", Status: "active",
+	})
+}
 
 func TestDashboards_ListAndGet(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
 
 	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("dashapi-%d", os.Getpid()))
-	user, _ := s.CreateUser(fmt.Sprintf("dash-%d@example.com", os.Getpid()), cust.ID)
-	user.CustomerName = cust.Name
-	jwt, _ := auth.Generate(user, "swatch", "test-secret")
+	user, _ := s.CreateUser(fmt.Sprintf("dash-%d@example.com", os.Getpid()))
+	dashTeamMember(s, cust, user, fmt.Sprintf("la-%d", os.Getpid()))
+	jwt, _ := auth.Generate(user, "test-secret")
 
 	// Seed a watch and a dashboard that references it.
 	if err := s.SaveCronWatch(cust.ID, user.ID, "error-rate-hourly", "every 5m", "echo 1"); err != nil {
@@ -91,8 +103,9 @@ func TestDashboards_Get_NotFound(t *testing.T) {
 	handler := srv.Handler()
 
 	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("dashapi-nf-%d", os.Getpid()))
-	user, _ := s.CreateUser(fmt.Sprintf("dash-nf-%d@example.com", os.Getpid()), cust.ID)
-	jwt, _ := auth.Generate(user, "swatch", "test-secret")
+	user, _ := s.CreateUser(fmt.Sprintf("dash-nf-%d@example.com", os.Getpid()))
+	dashTeamMember(s, cust, user, fmt.Sprintf("nf-%d", os.Getpid()))
+	jwt, _ := auth.Generate(user, "test-secret")
 
 	req := httptest.NewRequest("GET", "/api/dashboards/nope", nil)
 	req.Header.Set("Authorization", "Bearer "+jwt)
@@ -108,8 +121,9 @@ func TestDashboards_List_Empty(t *testing.T) {
 	handler := srv.Handler()
 
 	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("dashapi-empty-%d", os.Getpid()))
-	user, _ := s.CreateUser(fmt.Sprintf("dash-empty-%d@example.com", os.Getpid()), cust.ID)
-	jwt, _ := auth.Generate(user, "swatch", "test-secret")
+	user, _ := s.CreateUser(fmt.Sprintf("dash-empty-%d@example.com", os.Getpid()))
+	dashTeamMember(s, cust, user, fmt.Sprintf("e-%d", os.Getpid()))
+	jwt, _ := auth.Generate(user, "test-secret")
 
 	req := httptest.NewRequest("GET", "/api/dashboards", nil)
 	req.Header.Set("Authorization", "Bearer "+jwt)

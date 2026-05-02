@@ -42,8 +42,8 @@ type dashboardListItem struct {
 }
 
 func (s *Server) handleListDashboards(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
-	custID, err := s.resolveCustomerID(claims.CustomerName)
+	session := GetSession(r)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -72,13 +72,13 @@ func (s *Server) handleListDashboards(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
+	session := GetSession(r)
 	name := r.PathValue("name")
 	if name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	custID, err := s.resolveCustomerID(claims.CustomerName)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -138,7 +138,7 @@ func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 // {"yaml_body": "..."}. Validates the YAML grammar and that every
 // referenced watch exists for this customer before persisting.
 func (s *Server) handleSaveDashboard(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
+	session := GetSession(r)
 	name := r.PathValue("name")
 	if name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
@@ -151,7 +151,7 @@ func (s *Server) handleSaveDashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "yaml_body required", http.StatusBadRequest)
 		return
 	}
-	custID, err := s.resolveCustomerID(claims.CustomerName)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -165,7 +165,7 @@ func (s *Server) handleSaveDashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
-	if err := s.store.SaveDashboard(custID, claims.UserID, name, req.YAMLBody); err != nil {
+	if err := s.store.SaveDashboard(custID, session.UserID, name, req.YAMLBody); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -173,13 +173,13 @@ func (s *Server) handleSaveDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteDashboard(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
+	session := GetSession(r)
 	name := r.PathValue("name")
 	if name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	custID, err := s.resolveCustomerID(claims.CustomerName)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

@@ -44,8 +44,8 @@ var sseKeepaliveInterval = 20 * time.Second
 // HTTP/2 frame timers) don't drop the connection during quiet periods.
 // Clients ignore comment lines per the SSE spec.
 func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
-	if sub, _ := s.store.ActiveSubscription(claims.CustomerName); sub == nil {
+	session := GetSession(r)
+	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerName); sub == nil {
 		http.Error(w, "no active subscription", http.StatusPaymentRequired)
 		return
 	}
@@ -79,8 +79,8 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	stream, err := s.coordClient.Execute(ctx, &pb.CoordinatorExecuteRequest{
 		Pipeline: req.Pipeline,
 		Follow:   req.Follow,
-		Customer: claims.CustomerName,
-		UserId:   claims.UserID,
+		Customer: session.ActiveCustomerName,
+		UserId:   session.UserID,
 	})
 	if err != nil {
 		writeSSEEvent(w, map[string]any{"type": "error", "message": err.Error()})

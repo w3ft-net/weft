@@ -14,7 +14,7 @@ func witHelper(t *testing.T, slug string, n int) (*WitFuncs, string) {
 	db, custID := testStoreAndCustomer(t)
 	cust, _ := db.GetCustomerByID(custID)
 	_ = cust
-	user, err := db.CreateUser("alice-"+slug+"@example.test", custID)
+	user, err := db.CreateUser("alice-"+slug+"@example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,14 +47,14 @@ func runWit(t *testing.T, wf *WitFuncs, args ...string) (string, string, int) {
 func witMultiActorHelper(t *testing.T) *WitFuncs {
 	t.Helper()
 	db, custID := testStoreAndCustomer(t)
-	alice, err := db.CreateUser("alice@example.test", custID)
+	alice, err := db.CreateUser("alice@example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SetUserName(alice.ID, "Alice"); err != nil {
 		t.Fatal(err)
 	}
-	bob, err := db.CreateUser("bob@example.test", custID)
+	bob, err := db.CreateUser("bob@example.test")
 	if err != nil {
 		t.Fatal(err)
 	}

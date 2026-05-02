@@ -119,9 +119,9 @@ func (s *Server) handleAgentSourceStatus(w http.ResponseWriter, r *http.Request)
 // handlePendingSources lists pending sources for the authenticated customer.
 // GET /api/sources/pending[?namespace=X]
 func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
+	session := GetSession(r)
 
-	customer, err := s.store.GetCustomerByName(claims.CustomerName)
+	customer, err := s.store.GetCustomerByName(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "customer not found", http.StatusNotFound)
 		return
@@ -167,7 +167,7 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 // handleConfigureSource confirms the schema for a pending source.
 // POST /api/sources/{namespace}/{app}/configure
 func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
+	session := GetSession(r)
 
 	namespace := r.PathValue("namespace")
 	app := r.PathValue("app")
@@ -176,7 +176,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	customer, err := s.store.GetCustomerByName(claims.CustomerName)
+	customer, err := s.store.GetCustomerByName(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "customer not found", http.StatusNotFound)
 		return
@@ -217,7 +217,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	// Build schema.
 	schema := &ingest.Schema{
 		App:             fullApp,
-		Customer:        claims.CustomerName,
+		Customer:        session.ActiveCustomerName,
 		Format:          req.Format,
 		TimestampField:  req.TimestampField,
 		TimestampFormat: req.TimestampFormat,
@@ -261,8 +261,8 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 // api server owns the store handle and filtering by customer at the DB
 // level is trivial.
 func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
-	customer, err := s.store.GetCustomerByName(claims.CustomerName)
+	session := GetSession(r)
+	customer, err := s.store.GetCustomerByName(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "customer not found", http.StatusNotFound)
 		return
@@ -329,7 +329,7 @@ type cloudWatchFormBase struct {
 // schema before committing. Requires the same authorization as creating a
 // source (see handleAddCloudWatchSource).
 func (s *Server) handleSampleCloudWatchSource(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
+	session := GetSession(r)
 
 	var req cloudWatchFormBase
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -341,7 +341,7 @@ func (s *Server) handleSampleCloudWatchSource(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if err := s.authorizeSourceEdit(claims, req.Namespace); err != nil {
+	if err := s.authorizeSourceEdit(session, req.Namespace); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -371,7 +371,7 @@ func (s *Server) handleSampleCloudWatchSource(w http.ResponseWriter, r *http.Req
 // is now committing. Builds the Schema YAML server-side from the submitted
 // form fields rather than trusting a client-supplied YAML blob.
 func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
+	session := GetSession(r)
 
 	var req struct {
 		cloudWatchFormBase
@@ -392,7 +392,7 @@ func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := s.authorizeSourceEdit(claims, req.Namespace); err != nil {
+	if err := s.authorizeSourceEdit(session, req.Namespace); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -400,7 +400,7 @@ func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Reques
 	fullApp := req.Namespace + "/" + req.App
 	schema := &ingest.Schema{
 		App:             fullApp,
-		Customer:        claims.CustomerName,
+		Customer:        session.ActiveCustomerName,
 		Format:          req.Format,
 		TimestampField:  req.TimestampField,
 		TimestampFormat: req.TimestampFormat,
@@ -437,7 +437,7 @@ func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Reques
 // DELETE /api/sources/{namespace}/{app}. app is the sub-app name; the
 // stored log_groups.app is "{namespace}/{app}" so we reconstruct it here.
 func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
+	session := GetSession(r)
 
 	namespace := r.PathValue("namespace")
 	app := r.PathValue("app")
@@ -446,7 +446,7 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.authorizeSourceEdit(claims, namespace); err != nil {
+	if err := s.authorizeSourceEdit(session, namespace); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -467,19 +467,15 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 // we ever split source permissions from token permissions we'd add a
 // dedicated CanManageSources flag — but for now the two tend to travel
 // together (both register data ingestion) so reusing the flag is honest.
-func (s *Server) authorizeSourceEdit(claims *auth.Claims, namespace string) error {
-	if s.isOwner(claims.CustomerName, claims.Email) {
+func (s *Server) authorizeSourceEdit(session *auth.Session, namespace string) error {
+	if session.IsOwner {
 		return nil
 	}
-	cust, err := s.store.GetCustomerByName(claims.CustomerName)
-	if err != nil {
-		return errForbidden("customer not found")
-	}
-	ns, err := s.store.GetNamespace(cust.ID, namespace)
+	ns, err := s.store.GetNamespace(session.ActiveCustomerID, namespace)
 	if err != nil {
 		return errForbidden("namespace not found")
 	}
-	perm, err := s.store.GetNamespacePermission(claims.UserID, ns.ID)
+	perm, err := s.store.GetNamespacePermission(session.UserID, ns.ID)
 	if err != nil || !perm.CanCreateTokens {
 		return errForbidden("no permission to manage sources in this namespace")
 	}

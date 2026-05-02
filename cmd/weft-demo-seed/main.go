@@ -264,10 +264,46 @@ func ensureActiveSubscription(s *store.Store, customerName string) error {
 }
 
 func upsertVerifiedUser(s *store.Store, email string, customerID uint) (*store.User, error) {
-	if u, err := s.GetUserByEmailAndCustomer(email, customerID); err == nil && u != nil {
+	if u, err := s.GetUserByEmail(email); err == nil && u != nil {
+		// Ensure the user has a team_member row in this customer so the
+		// demo seed treats them as an org member (the seed reruns
+		// idempotently; CreateTeamMember below upserts on the unique
+		// (customer_id, user_id) constraint).
+		if _, err := s.GetTeamMemberByUserID(customerID, u.ID); err != nil {
+			now := time.Now()
+			_ = s.CreateTeamMember(&store.TeamMember{
+				ID:         "demo-tm-" + u.ID + "-" + fmt.Sprint(customerID),
+				CustomerID: customerID,
+				Email:      u.Email,
+				UserID:     &u.ID,
+				Role:       "member",
+				Status:     "active",
+				InvitedAt:  now,
+				CreatedAt:  now,
+				UpdatedAt:  now,
+			})
+		}
 		return u, nil
 	}
-	return s.CreateVerifiedUser(email, customerID)
+	u, err := s.CreateVerifiedUser(email)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	if err := s.CreateTeamMember(&store.TeamMember{
+		ID:         "demo-tm-" + u.ID + "-" + fmt.Sprint(customerID),
+		CustomerID: customerID,
+		Email:      u.Email,
+		UserID:     &u.ID,
+		Role:       "owner",
+		Status:     "active",
+		InvitedAt:  now,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}); err != nil {
+		return nil, fmt.Errorf("team_member: %w", err)
+	}
+	return u, nil
 }
 
 func minimalSchemaYAML(app string) string {

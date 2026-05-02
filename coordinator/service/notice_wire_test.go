@@ -49,7 +49,7 @@ func TestQueryRPC_EmitsNoticesOnFirstTmpWrite(t *testing.T) {
 
 	cust, _ := st.FindOrCreateCustomer("notice-wire")
 	st.SeedDevSubscription(cust.Name)
-	user, err := st.CreateUser("alice-wire@example.test", cust.ID)
+	user, err := st.CreateUser("alice-wire@example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,10 +66,18 @@ func TestQueryRPC_EmitsNoticesOnFirstTmpWrite(t *testing.T) {
 	srv := &Server{Coord: coord, Store: st}
 
 	// Inject the authenticated caller into the context (the auth
-	// interceptor would do this in production).
+	// interceptor would do this in production). The 3NF Claims only
+	// carry UserID; the Server reads identity from the Session that
+	// the interceptor materializes via BuildSession.
 	ctx := auth.WithClaims(context.Background(), &auth.Claims{
-		CustomerName: cust.Name,
-		UserID:       user.ID,
+		UserID: user.ID,
+	})
+	ctx = auth.WithSession(ctx, &auth.Session{
+		UserID:             user.ID,
+		Email:              user.Email,
+		ActiveCustomerID:   cust.ID,
+		ActiveCustomerName: cust.Name,
+		EmailVerified:      true,
 	})
 
 	req := &pb.CoordinatorExecuteRequest{

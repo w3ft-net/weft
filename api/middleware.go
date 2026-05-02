@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -12,11 +14,24 @@ import (
 
 type contextKey string
 
-// AuthMiddleware validates JWT tokens from the Authorization header and
-// stashes the claims in the request context via auth.WithClaims so
-// handlers can pull them through GetClaims (REST) or auth.FromContext
-// (any protocol).
-func AuthMiddleware(secret string, next http.Handler) http.Handler {
+// ActiveOrgHeader is the request header that selects which org
+// (customer) the user is acting as for this call. CLI sends it from
+// the --org flag; the web UI from a navbar selector. When absent, the
+// middleware falls back to the user's last_active_customer_id, then to
+// their oldest membership.
+const ActiveOrgHeader = "X-Active-Org"
+
+// AuthMiddleware validates JWT tokens from the Authorization header,
+// resolves the caller's full identity (including which org to scope
+// to) from the DB, and stashes both the (slim) claims and the
+// resolved Session on the request context. Handlers retrieve via
+// GetSession (REST) or auth.SessionFromContext (any protocol).
+//
+// When the resolved active org differs from the user's stored
+// last_active_customer_id, the middleware writes the new value back
+// async — that way reconnecting later (without an explicit X-Active-Org
+// header) lands the user in the org they last operated in.
+func AuthMiddleware(st *store.Store, secret string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hdr := r.Header.Get("Authorization")
 		if !strings.HasPrefix(hdr, "Bearer ") {
@@ -29,27 +44,48 @@ func AuthMiddleware(secret string, next http.Handler) http.Handler {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(auth.WithClaims(r.Context(), claims)))
+		orgSelector := r.Header.Get(ActiveOrgHeader)
+		session, err := auth.BuildSession(st, claims.UserID, orgSelector)
+		if err != nil {
+			switch {
+			case errors.Is(err, auth.ErrOrgNotMember):
+				http.Error(w, "not a member of the requested org", http.StatusForbidden)
+			case errors.Is(err, auth.ErrNoMembership):
+				http.Error(w, "no org memberships", http.StatusForbidden)
+			default:
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+			}
+			return
+		}
+		go persistLastActive(st, session)
+		ctx := auth.WithClaims(r.Context(), claims)
+		ctx = auth.WithSession(ctx, session)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// RequireEmailVerified gates state-changing endpoints on a verified email.
-// Reads claims out of the ctx that AuthMiddleware inserts, then re-reads
-// the DB so a user who verified after their JWT was issued doesn't need
-// to re-login to unlock.
-func RequireEmailVerified(st *store.Store, next http.Handler) http.Handler {
+// persistLastActive flips users.last_active_customer_id when the
+// resolved active org doesn't match what's stored. Runs in a goroutine
+// so the user-facing latency doesn't pay for the write; failures log
+// but never block the request (the next request will retry).
+func persistLastActive(st *store.Store, session *auth.Session) {
+	if err := st.UpdateUserLastActiveCustomer(session.UserID, session.ActiveCustomerID); err != nil {
+		log.Printf("update last_active_customer_id for %s: %v", session.UserID, err)
+	}
+}
+
+// RequireEmailVerified gates state-changing endpoints on a verified
+// email. Reads the Session that AuthMiddleware inserts (which already
+// reflects the current DB state), so a user who verified after their
+// JWT was issued passes this gate without re-logging in.
+func RequireEmailVerified(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims := auth.FromContext(r.Context())
-		if claims == nil {
+		session := auth.SessionFromContext(r.Context())
+		if session == nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		user, err := st.GetUserByID(claims.UserID)
-		if err != nil || user == nil {
-			http.Error(w, "user not found", http.StatusNotFound)
-			return
-		}
-		if user.EmailVerifiedAt == nil {
+		if !session.EmailVerified {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
 			_ = writeJSON(w, map[string]any{
@@ -72,9 +108,17 @@ func writeJSON(w http.ResponseWriter, v any) error {
 	return err
 }
 
-// GetClaims extracts JWT claims from the REST request context.
+// GetClaims extracts JWT claims from the REST request context. Most
+// handlers should use GetSession instead — the slim claims only carry
+// the user ID, while Session has the full resolved identity.
 func GetClaims(r *http.Request) *auth.Claims {
 	return auth.FromContext(r.Context())
+}
+
+// GetSession extracts the resolved Session from the REST request
+// context. Returns nil if AuthMiddleware was not applied to the route.
+func GetSession(r *http.Request) *auth.Session {
+	return auth.SessionFromContext(r.Context())
 }
 
 // agentAuthKey holds the validated agent auth result in the request context.

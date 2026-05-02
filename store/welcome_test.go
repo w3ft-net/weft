@@ -8,11 +8,10 @@ import "testing"
 func TestMarkWelcomeSeen(t *testing.T) {
 	db := testOpen(t)
 
-	cust, err := db.FindOrCreateCustomer("welcome-test")
-	if err != nil {
+	if _, err := db.FindOrCreateCustomer("welcome-test"); err != nil {
 		t.Fatal(err)
 	}
-	user, err := db.CreateUser("welcome@example.test", cust.ID)
+	user, err := db.CreateUser("welcome@example.test")
 	if err != nil {
 		t.Fatal(err)
 	}

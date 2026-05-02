@@ -80,16 +80,27 @@ type TokenInfo struct {
 type HTTPCoordinator struct {
 	baseURL      string // e.g., "https://api.w3ft.net"
 	token        string // JWT for Authorization header
+	org          string // X-Active-Org for the user's currently-selected org
 	client       *http.Client
 	streamClient *http.Client
 }
 
-func NewHTTPCoordinator(baseURL, token string) *HTTPCoordinator {
+func NewHTTPCoordinator(baseURL, token, org string) *HTTPCoordinator {
 	return &HTTPCoordinator{
 		baseURL:      strings.TrimSuffix(baseURL, "/"),
 		token:        token,
+		org:          org,
 		client:       &http.Client{Timeout: 10 * time.Second},
 		streamClient: &http.Client{},
+	}
+}
+
+// setAuthHeaders applies Authorization + X-Active-Org to every outgoing
+// request. Centralized so a new endpoint can't forget the org header.
+func (h *HTTPCoordinator) setAuthHeaders(req *http.Request) {
+	req.Header.Set("Authorization", "Bearer "+h.token)
+	if h.org != "" {
+		req.Header.Set("X-Active-Org", h.org)
 	}
 }
 
@@ -106,7 +117,7 @@ func (h *HTTPCoordinator) Query(pipeline string, start, end time.Time) (*RemoteQ
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+h.token)
+	h.setAuthHeaders(req)
 
 	resp, err := h.client.Do(req)
 	if err != nil {
@@ -136,7 +147,7 @@ func (h *HTTPCoordinator) Follow(ctx context.Context, pipeline string, onRow fun
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+h.token)
+	h.setAuthHeaders(req)
 
 	// streamClient has no wall-clock Timeout — the request lives for the
 	// duration of the caller's ctx.
@@ -185,7 +196,7 @@ func (h *HTTPCoordinator) Follow(ctx context.Context, pipeline string, onRow fun
 
 func (h *HTTPCoordinator) ListApps() ([]string, error) {
 	req, _ := http.NewRequest("GET", h.baseURL+"/api/apps", nil)
-	req.Header.Set("Authorization", "Bearer "+h.token)
+	h.setAuthHeaders(req)
 
 	resp, err := h.client.Do(req)
 	if err != nil {
@@ -213,7 +224,7 @@ type NamespaceInfo struct {
 
 func (h *HTTPCoordinator) ListNamespaces() ([]NamespaceInfo, error) {
 	req, _ := http.NewRequest("GET", h.baseURL+"/api/namespaces", nil)
-	req.Header.Set("Authorization", "Bearer "+h.token)
+	h.setAuthHeaders(req)
 
 	resp, err := h.client.Do(req)
 	if err != nil {
@@ -235,7 +246,7 @@ func (h *HTTPCoordinator) CreateNamespace(name string) (*NamespaceInfo, error) {
 	body, _ := json.Marshal(map[string]string{"name": name})
 	req, _ := http.NewRequest("POST", h.baseURL+"/api/namespaces", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+h.token)
+	h.setAuthHeaders(req)
 
 	resp, err := h.client.Do(req)
 	if err != nil {
@@ -255,7 +266,7 @@ func (h *HTTPCoordinator) CreateToken(customer, label, namespace, env string) (s
 	body, _ := json.Marshal(map[string]string{"label": label, "namespace": namespace, "env": env})
 	req, _ := http.NewRequest("POST", h.baseURL+"/api/tokens", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+h.token)
+	h.setAuthHeaders(req)
 
 	resp, err := h.client.Do(req)
 	if err != nil {
@@ -273,7 +284,7 @@ func (h *HTTPCoordinator) CreateToken(customer, label, namespace, env string) (s
 
 func (h *HTTPCoordinator) ListTokens(customer string) ([]TokenInfo, error) {
 	req, _ := http.NewRequest("GET", h.baseURL+"/api/tokens", nil)
-	req.Header.Set("Authorization", "Bearer "+h.token)
+	h.setAuthHeaders(req)
 
 	resp, err := h.client.Do(req)
 	if err != nil {
@@ -290,7 +301,7 @@ func (h *HTTPCoordinator) ListTokens(customer string) ([]TokenInfo, error) {
 
 func (h *HTTPCoordinator) RevokeToken(id uint) error {
 	req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/api/tokens/%d", h.baseURL, id), nil)
-	req.Header.Set("Authorization", "Bearer "+h.token)
+	h.setAuthHeaders(req)
 
 	resp, err := h.client.Do(req)
 	if err != nil {
@@ -402,7 +413,7 @@ func (h *HTTPCoordinator) ListPendingSources(namespace string) ([]PendingSource,
 		url += "?namespace=" + namespace
 	}
 	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("Authorization", "Bearer "+h.token)
+	h.setAuthHeaders(req)
 
 	resp, err := h.client.Do(req)
 	if err != nil {
@@ -428,7 +439,7 @@ func (h *HTTPCoordinator) ConfigureSource(namespace, app string, config map[stri
 	url := fmt.Sprintf("%s/api/sources/%s/%s/configure", h.baseURL, namespace, app)
 	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+h.token)
+	h.setAuthHeaders(req)
 
 	resp, err := h.client.Do(req)
 	if err != nil {
@@ -483,7 +494,7 @@ func (h *HTTPCoordinator) AddCloudWatchSource(req AddCloudWatchSourceRequest) er
 	body, _ := json.Marshal(req)
 	r, _ := http.NewRequest("POST", h.baseURL+"/api/sources/cloudwatch", bytes.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("Authorization", "Bearer "+h.token)
+	h.setAuthHeaders(r)
 
 	resp, err := h.client.Do(r)
 	if err != nil {
@@ -500,7 +511,7 @@ func (h *HTTPCoordinator) AddCloudWatchSource(req AddCloudWatchSourceRequest) er
 // ListSources returns every configured source for the caller's customer.
 func (h *HTTPCoordinator) ListSources() ([]SourceInfo, error) {
 	req, _ := http.NewRequest("GET", h.baseURL+"/api/sources", nil)
-	req.Header.Set("Authorization", "Bearer "+h.token)
+	h.setAuthHeaders(req)
 
 	resp, err := h.client.Do(req)
 	if err != nil {
@@ -523,7 +534,7 @@ func (h *HTTPCoordinator) ListSources() ([]SourceInfo, error) {
 func (h *HTTPCoordinator) RemoveSource(namespace, app string) error {
 	url := fmt.Sprintf("%s/api/sources/%s/%s", h.baseURL, namespace, app)
 	req, _ := http.NewRequest("DELETE", url, nil)
-	req.Header.Set("Authorization", "Bearer "+h.token)
+	h.setAuthHeaders(req)
 
 	resp, err := h.client.Do(req)
 	if err != nil {

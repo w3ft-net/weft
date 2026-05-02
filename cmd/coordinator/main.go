@@ -360,8 +360,12 @@ func main() {
 	}
 	srv := grpc.NewServer(
 		grpc.MaxRecvMsgSize(bootCfg.GRPCMaxRecvBytes),
-		grpc.UnaryInterceptor(auth.UnaryServerInterceptor(jwtSecret, skip)),
-		grpc.StreamInterceptor(auth.StreamServerInterceptor(jwtSecret, skip)),
+		grpc.UnaryInterceptor(auth.UnaryServerInterceptor(
+			func(uid, org string) (*auth.Session, error) { return auth.BuildSession(db, uid, org) },
+			jwtSecret, skip)),
+		grpc.StreamInterceptor(auth.StreamServerInterceptor(
+			func(uid, org string) (*auth.Session, error) { return auth.BuildSession(db, uid, org) },
+			jwtSecret, skip)),
 	)
 	pb.RegisterWeftCoordinatorServer(srv, &coordsvc.Server{
 		Coord:  coord,

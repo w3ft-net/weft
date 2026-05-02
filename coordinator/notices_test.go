@@ -8,8 +8,7 @@ import (
 // notice should queue and flush exactly one entry.
 func TestNoticeQueue_FirstSignalQueues(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
-	cust, _ := db.FindOrCreateCustomer("nq-first")
-	user, _ := db.CreateUser("alice-nq1@example.test", cust.ID)
+	user, _ := db.CreateUser("alice-nq1@example.test")
 
 	q := NewNoticeQueue(db, user.ID)
 	q.Maybe("tmp_48h_expiry")
@@ -30,8 +29,7 @@ func TestNoticeQueue_FirstSignalQueues(t *testing.T) {
 // repeatedly within a session queues at most once.
 func TestNoticeQueue_MaybeIsIdempotent(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
-	cust, _ := db.FindOrCreateCustomer("nq-idem")
-	user, _ := db.CreateUser("alice-nq2@example.test", cust.ID)
+	user, _ := db.CreateUser("alice-nq2@example.test")
 
 	q := NewNoticeQueue(db, user.ID)
 	q.Maybe("tmp_48h_expiry")
@@ -47,8 +45,7 @@ func TestNoticeQueue_MaybeIsIdempotent(t *testing.T) {
 // session does NOT queue (it was marked seen).
 func TestNoticeQueue_FlushMarksSeen(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
-	cust, _ := db.FindOrCreateCustomer("nq-flush")
-	user, _ := db.CreateUser("alice-nq3@example.test", cust.ID)
+	user, _ := db.CreateUser("alice-nq3@example.test")
 
 	q1 := NewNoticeQueue(db, user.ID)
 	q1.Maybe("tmp_48h_expiry")
@@ -79,8 +76,7 @@ func TestNoticeQueue_EmptyUserNoOp(t *testing.T) {
 // crash a request.
 func TestNoticeQueue_UnknownKeyNoOp(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
-	cust, _ := db.FindOrCreateCustomer("nq-unknown")
-	user, _ := db.CreateUser("alice-nq4@example.test", cust.ID)
+	user, _ := db.CreateUser("alice-nq4@example.test")
 
 	q := NewNoticeQueue(db, user.ID)
 	q.Maybe("not_a_real_key")
@@ -92,9 +88,8 @@ func TestNoticeQueue_UnknownKeyNoOp(t *testing.T) {
 // TestNoticeQueue_PerUser: alice's seen state doesn't burn bob's.
 func TestNoticeQueue_PerUser(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
-	cust, _ := db.FindOrCreateCustomer("nq-peruser")
-	alice, _ := db.CreateUser("alice-pu2@example.test", cust.ID)
-	bob, _ := db.CreateUser("bob-pu2@example.test", cust.ID)
+	alice, _ := db.CreateUser("alice-pu2@example.test")
+	bob, _ := db.CreateUser("bob-pu2@example.test")
 
 	// Alice sees + dismisses.
 	qA := NewNoticeQueue(db, alice.ID)

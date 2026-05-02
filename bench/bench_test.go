@@ -39,11 +39,10 @@ func benchJWT(tb testing.TB) string {
 	user := &store.User{
 		ID:              "bench-user",
 		Email:           "bench@example.com",
-		CustomerName:    "kevlar",
 		EmailVerifiedAt: &now,
 		CreatedAt:       now,
 	}
-	tok, err := auth.Generate(user, "trial", benchJWTSecret)
+	tok, err := auth.Generate(user, benchJWTSecret)
 	if err != nil {
 		tb.Fatalf("sign bench JWT: %v", err)
 	}

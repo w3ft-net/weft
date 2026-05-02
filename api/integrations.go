@@ -1,6 +1,9 @@
 package api
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,15 +11,15 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
-	"github.com/kevlarcon/weft/auth"
 	"github.com/kevlarcon/weft/store"
 )
 
 // handleListIntegrations returns the current integration status.
 func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
-	custID, err := s.resolveCustomerID(claims.CustomerName)
+	session := GetSession(r)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -61,7 +64,7 @@ func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) 
 
 // handleSlackConnect starts the Slack OAuth flow.
 func (s *Server) handleSlackConnect(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
+	session := GetSession(r)
 
 	if s.SlackClientID == "" {
 		http.Error(w, "Slack integration not configured", http.StatusServiceUnavailable)
@@ -69,7 +72,7 @@ func (s *Server) handleSlackConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate a state token (signed JWT with customer info).
-	stateToken, err := generateStateToken(claims.CustomerName, s.jwtSecret)
+	stateToken, err := generateStateToken(session.ActiveCustomerName, s.jwtSecret)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -137,8 +140,8 @@ func (s *Server) handleSlackCallback(w http.ResponseWriter, r *http.Request) {
 
 // handleSlackDisconnect removes the Slack integration.
 func (s *Server) handleSlackDisconnect(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
-	custID, err := s.resolveCustomerID(claims.CustomerName)
+	session := GetSession(r)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -150,8 +153,8 @@ func (s *Server) handleSlackDisconnect(w http.ResponseWriter, r *http.Request) {
 // handlePagerDutySave creates or updates a single named PagerDuty integration.
 // Body: {"name": "ops", "key": "<routing-key>", "description": "optional"}.
 func (s *Server) handlePagerDutySave(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
-	custID, err := s.resolveCustomerID(claims.CustomerName)
+	session := GetSession(r)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -175,8 +178,8 @@ func (s *Server) handlePagerDutySave(w http.ResponseWriter, r *http.Request) {
 // handlePagerDutyDelete removes a single integration by name.
 // Path: DELETE /api/integrations/pagerduty/{name}
 func (s *Server) handlePagerDutyDelete(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
-	custID, err := s.resolveCustomerID(claims.CustomerName)
+	session := GetSession(r)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -196,8 +199,8 @@ func (s *Server) handlePagerDutyDelete(w http.ResponseWriter, r *http.Request) {
 // handleGetNotifyConfig returns the customer's /etc/notify.conf YAML.
 // An absent row yields an empty string — the shell treats that as a blank file.
 func (s *Server) handleGetNotifyConfig(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
-	custID, err := s.resolveCustomerID(claims.CustomerName)
+	session := GetSession(r)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -214,8 +217,8 @@ func (s *Server) handleGetNotifyConfig(w http.ResponseWriter, r *http.Request) {
 // Validation mirrors the in-process shellfs path so both shells get the same
 // errors back (missing targets, bad PD severity, malformed YAML).
 func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
-	custID, err := s.resolveCustomerID(claims.CustomerName)
+	session := GetSession(r)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -240,8 +243,8 @@ func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) 
 
 // handlePagerDutyDisconnect removes all PagerDuty integrations for the customer.
 func (s *Server) handlePagerDutyDisconnect(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
-	custID, err := s.resolveCustomerID(claims.CustomerName)
+	session := GetSession(r)
+	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -296,19 +299,54 @@ func exchangeSlackCode(code, clientID, clientSecret, redirectURI string) (*slack
 	return &result, nil
 }
 
-// generateStateToken creates a signed token containing the customer name.
+// oauthStateTTL is how long a generated OAuth state token is valid.
+// Slack's redirect happens within seconds; an aggressive TTL bounds
+// any replay window if the token leaks via a referrer or proxy log.
+const oauthStateTTL = 10 * time.Minute
+
+// generateStateToken signs a CSRF-style state token that round-trips
+// the customer name through the third-party OAuth redirect. It is
+// intentionally NOT a JWT — JWTs are for authenticated users, this
+// is just an HMAC over (customer, timestamp). Format:
+// base64(customer "." unix_ts) "." base64(hmac).
 func generateStateToken(customerName, secret string) (string, error) {
-	user := &store.User{CustomerName: customerName}
-	return auth.Generate(user, "oauth-state", secret)
+	payload := fmt.Sprintf("%s.%d", customerName, time.Now().Unix())
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(payload))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." + sig, nil
 }
 
-// validateStateToken validates and extracts the customer name from a state token.
+// validateStateToken verifies a state token and extracts the customer
+// name. Returns an error on bad format, bad signature, or expiry.
 func validateStateToken(token, secret string) (string, error) {
-	claims, err := auth.Validate(token, secret)
-	if err != nil {
-		return "", err
+	parts := strings.SplitN(token, ".", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid state token format")
 	}
-	return claims.CustomerName, nil
+	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return "", fmt.Errorf("decode state token: %w", err)
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(payload)
+	expected := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(parts[1]), []byte(expected)) {
+		return "", fmt.Errorf("invalid state token signature")
+	}
+	dot := strings.LastIndexByte(string(payload), '.')
+	if dot < 0 {
+		return "", fmt.Errorf("invalid state token payload")
+	}
+	customerName := string(payload[:dot])
+	var ts int64
+	if _, err := fmt.Sscanf(string(payload[dot+1:]), "%d", &ts); err != nil {
+		return "", fmt.Errorf("invalid state token timestamp: %w", err)
+	}
+	if time.Since(time.Unix(ts, 0)) > oauthStateTTL {
+		return "", fmt.Errorf("state token expired")
+	}
+	return customerName, nil
 }
 
 // maskKey displays only the first/last few characters of a secret.

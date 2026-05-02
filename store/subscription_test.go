@@ -50,7 +50,7 @@ func TestSeedDevSubscription_MultipleCustomers(t *testing.T) {
 	// The transaction must still be usable — a follow-up insert
 	// would fail with SQLSTATE 25P02 if the silent Create error in
 	// the second SeedDevSubscription poisoned it.
-	if _, err := db.CreateUser("seed-mc-canary@example.test", beta.ID); err != nil {
+	if _, err := db.CreateUser("seed-mc-canary@example.test"); err != nil {
 		t.Fatalf("post-seed CreateUser failed (transaction poisoned?): %v", err)
 	}
 }

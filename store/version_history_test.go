@@ -39,7 +39,7 @@ func hashOf(source string) string {
 func TestShellFunction_FirstSaveCreatesNoHistory(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-first")
-	user, _ := db.CreateUser("alice-first@example.test", cust.ID)
+	user, _ := db.CreateUser("alice-first@example.test")
 
 	if err := db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v1"); err != nil {
 		t.Fatal(err)
@@ -52,7 +52,7 @@ func TestShellFunction_FirstSaveCreatesNoHistory(t *testing.T) {
 func TestShellFunction_IdenticalResaveDoesNotCapture(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-noop")
-	user, _ := db.CreateUser("alice-noop@example.test", cust.ID)
+	user, _ := db.CreateUser("alice-noop@example.test")
 
 	// First save creates HEAD, no history (covered above).
 	if err := db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v1"); err != nil {
@@ -83,8 +83,8 @@ func TestShellFunction_IdenticalResaveDoesNotCapture(t *testing.T) {
 func TestShellFunction_UpdateCapturesPriorVersion(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-update")
-	alice, _ := db.CreateUser("alice-up@example.test", cust.ID)
-	bob, _ := db.CreateUser("bob-up@example.test", cust.ID)
+	alice, _ := db.CreateUser("alice-up@example.test")
+	bob, _ := db.CreateUser("bob-up@example.test")
 
 	// Alice writes v1.
 	if err := db.SaveShellFunction(cust.ID, alice.ID, "scan", "echo v1"); err != nil {
@@ -133,7 +133,7 @@ func TestShellFunction_UpdateCapturesPriorVersion(t *testing.T) {
 func TestShellFunction_PredecessorChain(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-chain")
-	user, _ := db.CreateUser("alice-chain@example.test", cust.ID)
+	user, _ := db.CreateUser("alice-chain@example.test")
 
 	for _, src := range []string{"echo v1", "echo v2", "echo v3", "echo v4"} {
 		if err := db.SaveShellFunction(cust.ID, user.ID, "scan", src); err != nil {
@@ -179,7 +179,7 @@ func TestShellFunction_PredecessorChain(t *testing.T) {
 func TestShellFunction_FiveCapDropsOldest(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-cap")
-	user, _ := db.CreateUser("alice-cap@example.test", cust.ID)
+	user, _ := db.CreateUser("alice-cap@example.test")
 
 	// 7 saves: 1 initial + 6 updates. After update 6, history has
 	// captured v1 through v6. The cap drops the oldest (v1) when
@@ -215,7 +215,7 @@ func TestShellFunction_FiveCapDropsOldest(t *testing.T) {
 func TestShellFunction_NoActingUserStoresNullCapturedBy(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-noacting")
-	alice, _ := db.CreateUser("alice-noact@example.test", cust.ID)
+	alice, _ := db.CreateUser("alice-noact@example.test")
 
 	if err := db.SaveShellFunction(cust.ID, alice.ID, "scan", "echo v1"); err != nil {
 		t.Fatal(err)
@@ -275,7 +275,7 @@ func TestShellFunction_ContentHashIsDeterministic(t *testing.T) {
 func TestLogShellFunction_OrderAndShape(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-log")
-	user, _ := db.CreateUser("alice-log@example.test", cust.ID)
+	user, _ := db.CreateUser("alice-log@example.test")
 
 	saves := []string{"echo v1", "echo v2", "echo v3"}
 	for _, src := range saves {
@@ -311,7 +311,7 @@ func TestLogShellFunction_OrderAndShape(t *testing.T) {
 func TestResolveShellFunctionRef_HEAD(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-resolve-head")
-	user, _ := db.CreateUser("alice@example.test", cust.ID)
+	user, _ := db.CreateUser("alice@example.test")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo current")
 
 	v, err := db.ResolveShellFunctionRef(cust.ID, "scan", "HEAD")
@@ -326,7 +326,7 @@ func TestResolveShellFunctionRef_HEAD(t *testing.T) {
 func TestResolveShellFunctionRef_HEADCaret(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-resolve-caret")
-	user, _ := db.CreateUser("alice@example.test", cust.ID)
+	user, _ := db.CreateUser("alice@example.test")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo old")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo new")
 
@@ -345,7 +345,7 @@ func TestResolveShellFunctionRef_HEADCaret(t *testing.T) {
 func TestResolveShellFunctionRef_HEADCaretN(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-resolve-caretn")
-	user, _ := db.CreateUser("alice@example.test", cust.ID)
+	user, _ := db.CreateUser("alice@example.test")
 	for _, s := range []string{"v1", "v2", "v3", "v4"} {
 		db.SaveShellFunction(cust.ID, user.ID, "scan", s)
 	}
@@ -362,7 +362,7 @@ func TestResolveShellFunctionRef_HEADCaretN(t *testing.T) {
 func TestResolveShellFunctionRef_HashPrefix(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-resolve-hash")
-	user, _ := db.CreateUser("alice@example.test", cust.ID)
+	user, _ := db.CreateUser("alice@example.test")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo target")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo other")
 
@@ -384,7 +384,7 @@ func TestResolveShellFunctionRef_HashPrefix(t *testing.T) {
 func TestResolveShellFunctionRef_ShortPrefixRejected(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-resolve-short")
-	user, _ := db.CreateUser("alice@example.test", cust.ID)
+	user, _ := db.CreateUser("alice@example.test")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo target")
 
 	// 3 chars is below the 4-char minimum.
@@ -397,7 +397,7 @@ func TestResolveShellFunctionRef_ShortPrefixRejected(t *testing.T) {
 func TestResolveShellFunctionRef_UnknownHash(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-resolve-unknown")
-	user, _ := db.CreateUser("alice@example.test", cust.ID)
+	user, _ := db.CreateUser("alice@example.test")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo here")
 
 	if _, err := db.ResolveShellFunctionRef(cust.ID, "scan", "deadbeef"); !errors.Is(err, ErrRefNotFound) {
@@ -408,7 +408,7 @@ func TestResolveShellFunctionRef_UnknownHash(t *testing.T) {
 func TestResolveShellFunctionRef_BeyondCap(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-resolve-beyond")
-	user, _ := db.CreateUser("alice@example.test", cust.ID)
+	user, _ := db.CreateUser("alice@example.test")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "v1")
 
 	// HEAD^1 with no history should fail.
@@ -426,8 +426,8 @@ func TestResolveShellFunctionRef_BeyondCap(t *testing.T) {
 func TestCheckoutShellFunction_RoundTrip(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-checkout")
-	alice, _ := db.CreateUser("alice@example.test", cust.ID)
-	bob, _ := db.CreateUser("bob@example.test", cust.ID)
+	alice, _ := db.CreateUser("alice@example.test")
+	bob, _ := db.CreateUser("bob@example.test")
 
 	// Alice writes v1, alice writes v2, bob writes v3.
 	db.SaveShellFunction(cust.ID, alice.ID, "scan", "echo v1")
@@ -459,7 +459,7 @@ func TestCheckoutShellFunction_RoundTrip(t *testing.T) {
 func TestAmendShellFunctionMessage_HEAD_DoesNotCapture(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-amend-head")
-	user, _ := db.CreateUser("alice@example.test", cust.ID)
+	user, _ := db.CreateUser("alice@example.test")
 
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v1")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v2")
@@ -483,7 +483,7 @@ func TestAmendShellFunctionMessage_HEAD_DoesNotCapture(t *testing.T) {
 func TestAmendShellFunctionMessage_HistoryRef(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-amend-history")
-	user, _ := db.CreateUser("alice@example.test", cust.ID)
+	user, _ := db.CreateUser("alice@example.test")
 
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "v1")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "v2")
