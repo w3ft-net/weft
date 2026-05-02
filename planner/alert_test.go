@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestSplitAlertStage(t *testing.T) {
@@ -85,7 +86,7 @@ func TestSplitAlertStage(t *testing.T) {
 func TestPlan_AlertArgsPropagated(t *testing.T) {
 	// Source-backed pipeline: planner should treat alert as terminal,
 	// not as a compute stage.
-	plan, err := Plan(`tail shard_metrics.log | jq -r '.pct' | alert above 5`)
+	plan, err := Plan(`tail shard_metrics.log | jq -r '.pct' | alert above 5`, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -102,14 +103,14 @@ func TestPlan_AlertArgsPropagated(t *testing.T) {
 	// ErrNotPlannable. The caller (Coordinator.Execute) is
 	// responsible for peeling alert separately via SplitAlertStage
 	// when it routes the residual to warp.
-	_, err = Plan(`echo 42 | alert above 0`)
+	_, err = Plan(`echo 42 | alert above 0`, "", time.Time{}, time.Time{})
 	if !errors.Is(err, ErrNotPlannable) {
 		t.Fatalf("Plan(echo 42 | alert ...) err = %v, want ErrNotPlannable", err)
 	}
 
 	// Alert-only pipeline (no source at all). Plan returns a plan
 	// carrying just the AlertArgs; ShardSQL is empty.
-	plan, err = Plan(`alert above 5`)
+	plan, err = Plan(`alert above 5`, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan(alert above 5): %v", err)
 	}

@@ -3,6 +3,7 @@ package planner
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestPushdown_NewDimensions verifies the seven new dimension meta-vars
@@ -53,7 +54,7 @@ func TestPushdown_NewDimensions(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			plan, err := Plan(tc.pipeline)
+			plan, err := Plan(tc.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tc.pipeline, err)
 			}
@@ -112,7 +113,7 @@ func TestPathLayout_EnvSegment(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			plan, err := Plan(tc.pipeline)
+			plan, err := Plan(tc.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tc.pipeline, err)
 			}

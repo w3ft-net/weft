@@ -427,6 +427,27 @@ func (c *Coordinator) IngestingShard(app string) shard.Shard {
 	return c.Registry.IngestingShard(app)
 }
 
+// clampTimeRange floors tr.Start at (now − LogRetention(tier)) so that
+// the SQL ts predicate the planner emits and the shard-set the registry
+// returns share the same lower bound. Without the clamp here, a
+// boundary-spanning shard could return rows older than the customer's
+// retention because the planner's ts predicate would carry the user's
+// raw start time. custID == 0 falls back to the trial retention.
+//
+// The registry's MatchingShards re-applies this clamp as defense in
+// depth — idempotent because we pass the already-clamped value.
+func (c *Coordinator) clampTimeRange(tr TimeRange, custID uint) TimeRange {
+	var tier store.Tier
+	if custID != 0 && c.Store != nil {
+		tier = c.Store.TierForCustomer(custID)
+	}
+	cap := time.Now().Add(-store.LogRetention(tier))
+	if !tr.Start.IsZero() && tr.Start.Before(cap) {
+		tr.Start = cap
+	}
+	return tr
+}
+
 // Execute is the single dispatch entry point. It accepts any user-
 // typed pipeline (a /log query, a plain shell pipeline, a /bin
 // script invocation, a mix) and returns an ExecuteResult whose
@@ -472,7 +493,12 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 	if c.Tail == nil {
 		return nil, fmt.Errorf("ExecuteFollow: coordinator has no tail broker")
 	}
-	plan, err := planner.Plan(pipeline)
+	// Plan again here just to extract the live-filter args
+	// (FollowApp/FollowPatterns/LiveStages). The historical batch
+	// re-plans inside the rewriter callback, so customer + bounds
+	// don't need to match exactly — pass empty/zero so this Plan
+	// call never produces SQL we'd care about.
+	plan, err := planner.Plan(pipeline, "", time.Time{}, time.Time{})
 	if err != nil {
 		return nil, err
 	}
@@ -606,7 +632,14 @@ func (c *Coordinator) execute(pipeline string, tr TimeRange, customer, userID st
 // re-rendering, lifting them onto the CallbackCommand so warp's
 // own redirect machinery handles the FS write.
 func (c *Coordinator) runQuery(pipeline string, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
-	plan, err := planner.Plan(pipeline)
+	// Clamp tr to the customer's tier retention BEFORE planning so the
+	// SQL's ts predicates and the shard-selection in MatchingShards
+	// agree on the same start. Without the clamp here, a boundary-
+	// spanning shard could return rows older than the customer's
+	// retention because the SQL would have no lower-bound predicate.
+	tr = c.clampTimeRange(tr, custID)
+
+	plan, err := planner.Plan(pipeline, customer, tr.Start, tr.End)
 	if err != nil {
 		// The rewriter only substitutes pipelines whose first command
 		// is on /log/..., which the planner accepts. ErrNotPlannable
@@ -723,7 +756,9 @@ func (c *Coordinator) executeLogStreaming(plan *planner.QueryPlan, tr TimeRange,
 		}
 	}
 
-	directSQL := planner.InjectCustomer(plan.DirectShardSQL, customer)
+	// directSQL already carries customer + ts predicates from Plan
+	// (see planner.Plan). No post-facto surgery needed.
+	directSQL := plan.DirectShardSQL
 
 	var tier store.Tier
 	if custID != 0 {
@@ -853,20 +888,19 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 		}
 	}
 
-	// For the compute-stage branch we use plan.DirectShardSQL so each
-	// shard emits rows in the order compute's k-way merge expects
 	// Every shard query goes through plan.DirectShardSQL so each shard
 	// emits rows in the order compute's k-way merge expects (see
 	// docs/plans/direct-to-compute.md §3). The compute job handles
 	// merge / limit / staged transforms uniformly; zero stages means
-	// "just merge and limit, no transforms."
-	directSQL := planner.InjectCustomer(plan.DirectShardSQL, customer)
+	// "just merge and limit, no transforms." Customer + ts predicates
+	// are baked in by the planner.
+	directSQL := plan.DirectShardSQL
 
 	// Shard selection honors plan-tier retention: tr.Start is clamped
-	// up to (now − LogRetention(tier)) inside MatchingShards, so a
-	// customer never reaches a shard whose data is entirely past their
-	// advertised retention. An unresolved customer (custID==0) yields
-	// tier "" which falls back to the trial retention.
+	// up to (now − LogRetention(tier)) inside MatchingShards as defense
+	// in depth. The caller (runQuery) has already applied the same clamp
+	// before invoking Plan so the SQL's ts predicate is consistent with
+	// the shard set.
 	var tier store.Tier
 	if custID != 0 {
 		tier = c.Store.TierForCustomer(custID)

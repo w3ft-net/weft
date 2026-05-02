@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ===========================================================================
@@ -30,7 +31,7 @@ func TestEdge_Source(t *testing.T) {
 		}
 		for _, tt := range errorCases {
 			t.Run(tt.name, func(t *testing.T) {
-				_, err := Plan(tt.pipeline)
+				_, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 				if err == nil {
 					t.Errorf("Plan(%q): expected error, got nil", tt.pipeline)
 				}
@@ -39,7 +40,7 @@ func TestEdge_Source(t *testing.T) {
 	})
 
 	t.Run("local pipeline", func(t *testing.T) {
-		_, err := Plan("echo 42")
+		_, err := Plan("echo 42", "", time.Time{}, time.Time{})
 		if !errors.Is(err, ErrNotPlannable) {
 			t.Fatalf("Plan(\"echo 42\") err = %v, want ErrNotPlannable", err)
 		}
@@ -79,7 +80,7 @@ func TestEdge_Source(t *testing.T) {
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				plan, err := Plan(tt.pipeline)
+				plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 				if err != nil {
 					t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 				}
@@ -157,7 +158,7 @@ func TestEdge_Awk_NonPushable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -227,7 +228,7 @@ func TestEdge_Awk_FilterAfterLimitFreezeMustSurvive(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -308,7 +309,7 @@ func TestEdge_Awk_Pushable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -358,7 +359,7 @@ func TestEdge_Awk_PartialPushdown(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -453,7 +454,7 @@ func TestEdge_Jq_NonPushable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -507,7 +508,7 @@ func TestEdge_Jq_Pushable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -584,7 +585,7 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -644,7 +645,7 @@ func TestEdge_Grep(t *testing.T) {
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				plan, err := Plan(tt.pipeline)
+				plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 				if err != nil {
 					t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 				}
@@ -715,7 +716,7 @@ func TestEdge_Sed(t *testing.T) {
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				plan, err := Plan(tt.pipeline)
+				plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 				if err != nil {
 					t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 				}
@@ -775,7 +776,7 @@ func TestEdge_SQLEscaping(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -887,7 +888,7 @@ func TestEdge_PipelineOrdering(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -957,7 +958,7 @@ func TestEdge_CrossTool(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -1020,7 +1021,7 @@ func TestEdge_NR(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -1076,7 +1077,7 @@ func TestEdge_WarpLog(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -1166,7 +1167,7 @@ func TestEdge_ProjectionSafety(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -1189,9 +1190,10 @@ func TestEdge_ProjectionSafety(t *testing.T) {
 // ---------------------------------------------------------------------------
 // SQL-injection regressions. User-derived bytes that land inside a SQL
 // string literal must be quote-escaped so the literal can't be closed
-// early. Every case here must also survive InjectCustomer with the
-// customer predicate AND-dominant (i.e. appearing immediately after
-// "WHERE ").
+// early. Every case here must also produce a customer-predicate-led
+// WHERE clause when Plan is given a customer (the row-level security
+// boundary lives at the head of the inner SELECT regardless of any
+// outer LIMIT-bound subquery shape).
 // ---------------------------------------------------------------------------
 
 func TestEdge_SQLInjection(t *testing.T) {
@@ -1218,16 +1220,23 @@ func TestEdge_SQLInjection(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
 			if plan.ShardSQL != tt.wantSQL {
 				t.Errorf("ShardSQL mismatch\n  got:  %s\n  want: %s", plan.ShardSQL, tt.wantSQL)
 			}
-			injected := InjectCustomer(plan.ShardSQL, "victim-co")
-			if !strings.Contains(injected, "WHERE customer = 'victim-co' AND ") {
-				t.Errorf("customer predicate not AND-dominant after InjectCustomer:\n  %s", injected)
+			// Re-plan with a customer; the customer predicate must lead
+			// the inner WHERE clause (immediately after "WHERE ") so
+			// LIMIT-bound subqueries stay tenant-scoped before the
+			// outer wrapper applies any cross-shard merge.
+			withCust, err := Plan(tt.pipeline, "victim-co", time.Time{}, time.Time{})
+			if err != nil {
+				t.Fatalf("Plan(%q) with customer: %v", tt.pipeline, err)
+			}
+			if !strings.Contains(withCust.ShardSQL, "WHERE customer = 'victim-co' AND ") {
+				t.Errorf("customer predicate not AND-dominant after Plan with customer:\n  %s", withCust.ShardSQL)
 			}
 		})
 	}

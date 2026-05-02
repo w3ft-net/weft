@@ -4,12 +4,16 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/kevlarcon/warp/pkg/bash"
 )
 
 // QueryPlan is the result of analyzing a weft pipeline. ShardSQL is the
 // pushed-down SQL sent to shard nodes — always SELECT line_num, {raw_expr} as raw.
+// The customer = '...' predicate and ts >= / ts <= bounds are baked in
+// at plan time (see Plan's customer / start / end arguments) so callers
+// dispatch ShardSQL directly without further surgery.
 // ComputeStages lists the pipeline stages that must run in the compute layer.
 type QueryPlan struct {
 	ShardSQL       string
@@ -89,7 +93,13 @@ var ErrNotPlannable = errors.New("not a plannable log query")
 // down as many stages as possible into shard-level SQL. A trailing
 // `| alert ...` stage is peeled off and returned as QueryPlan.AlertArgs
 // for the coordinator (or cron) to evaluate against the query's output.
-func Plan(pipeline string) (*QueryPlan, error) {
+//
+// customer is the row-level security boundary — empty string emits no
+// customer predicate (test-only). start/end bound the SQL's ts column;
+// either zero-value skips the corresponding bound. The caller is
+// responsible for clamping start to the customer's tier retention; the
+// coordinator does this via a clampTimeRange helper before dispatch.
+func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 	queryPart, alertArgs := SplitAlertStage(pipeline)
 
 	// Alert-only pipeline (`alert ...` with nothing in front). Return
@@ -121,6 +131,11 @@ func Plan(pipeline string) (*QueryPlan, error) {
 	}
 
 	sql := newSQLBuilder()
+	// Customer + time bounds first so they sit at the head of the
+	// WHERE clause regardless of subsequent app/source/stage pushdowns.
+	// addCustomer/addTimeBounds are no-ops on empty/zero values.
+	sql.addCustomer(customer)
+	sql.addTimeBounds(start, end)
 
 	// Snapshot the user's post-source stages before pushdown rewrites
 	// them. LiveStages is a faithful reconstruction of "everything that

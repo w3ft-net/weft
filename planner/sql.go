@@ -3,6 +3,7 @@ package planner
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // sqlBuilder accumulates the parts of a shard SQL query.
@@ -33,6 +34,38 @@ func (b *sqlBuilder) setSelect(rawExpr string) {
 
 func (b *sqlBuilder) addPredicate(pred string) {
 	b.predicates = append(b.predicates, pred)
+}
+
+// addCustomer attaches the row-level security predicate. Empty
+// customer is a no-op (no caller in production passes empty, but
+// tests do). The escape mirrors what the old InjectCustomer did
+// before being removed: doubled single-quotes prevent SQL injection
+// via the customer name.
+func (b *sqlBuilder) addCustomer(customer string) {
+	if customer == "" {
+		return
+	}
+	escaped := strings.ReplaceAll(customer, "'", "''")
+	b.addPredicate(fmt.Sprintf("customer = '%s'", escaped))
+}
+
+// addTimeBounds attaches ts >= / ts <= predicates for the user's
+// query window. Either bound may be zero-value, in which case it is
+// skipped — Plan callers thread time.Time values through directly,
+// and IsZero() is the sentinel for "no bound on this side." Real
+// timestamps from epoch (time.Unix(0,0)) are not zero-value and do
+// emit a (harmless) `ts >= TIMESTAMP '1970-01-01 00:00:00'` clause.
+//
+// The format is DuckDB-friendly. .999999 microseconds match the
+// shard's TIMESTAMP column resolution (rows ingest via
+// time.Unix(0, ts_unix_ns), so microsecond precision is the floor).
+func (b *sqlBuilder) addTimeBounds(start, end time.Time) {
+	if !start.IsZero() {
+		b.addPredicate(fmt.Sprintf("ts >= TIMESTAMP '%s'", start.UTC().Format("2006-01-02 15:04:05.999999")))
+	}
+	if !end.IsZero() {
+		b.addPredicate(fmt.Sprintf("ts <= TIMESTAMP '%s'", end.UTC().Format("2006-01-02 15:04:05.999999")))
+	}
 }
 
 func (b *sqlBuilder) setOrderLimit(order string, limit int) {
@@ -87,38 +120,3 @@ func (b *sqlBuilder) buildWith(orderBy string, limit int) string {
 	return sb.String()
 }
 
-// InjectCustomer attaches a customer = '...' predicate to the inner
-// scan over `FROM logs`, regardless of whether the planner emitted a
-// flat or nested query. The coordinator runs this on every shard SQL
-// before dispatch — it is the row-level security boundary.
-//
-// Anchoring on the first `FROM logs` is what makes nested SQL safe:
-// `SELECT … FROM (SELECT … FROM logs … LIMIT N) WHERE …` keeps the
-// LIMIT bounded per-tenant when the customer predicate goes inside
-// the subquery, not on the outer wrapper. A naive first-WHERE search
-// would land on the outer in the no-inner-WHERE case and silently
-// turn the per-shard LIMIT into a cross-tenant bottleneck.
-func InjectCustomer(sql, customer string) string {
-	pred := fmt.Sprintf("customer = '%s'", strings.ReplaceAll(customer, "'", "''"))
-	const fromLogs = "FROM logs"
-	idx := strings.Index(sql, fromLogs)
-	if idx == -1 {
-		return sql
-	}
-	rest := sql[idx+len(fromLogs):]
-	// Find the next clause keyword that bounds the inner SELECT scope.
-	// `)` marks the subquery boundary; nothing past it belongs to the
-	// inner.
-	end := len(rest)
-	for _, kw := range []string{" WHERE ", " ORDER BY ", " LIMIT ", " OFFSET ", ")"} {
-		if i := strings.Index(rest, kw); i != -1 && i < end {
-			end = i
-		}
-	}
-	head := sql[:idx+len(fromLogs)+end]
-	tail := sql[idx+len(fromLogs)+end:]
-	if strings.HasPrefix(tail, " WHERE ") {
-		return head + " WHERE " + pred + " AND " + tail[len(" WHERE "):]
-	}
-	return head + " WHERE " + pred + tail
-}

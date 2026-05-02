@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/kevlarcon/weft/planner"
+	"time"
 )
 
 // This file documents the PRE-PLAN splicer path specifically: when
@@ -26,7 +27,7 @@ func planAfterExpand(t *testing.T, fs *testFS, pipeline string) *planner.QueryPl
 	if err != nil {
 		t.Fatalf("expandBinPipeline: %v", err)
 	}
-	plan, err := planner.Plan(expanded)
+	plan, err := planner.Plan(expanded, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("planner.Plan(%q): %v", expanded, err)
 	}

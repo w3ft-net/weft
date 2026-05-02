@@ -1,6 +1,9 @@
 package planner
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // TestNamespacePredicate verifies that the planner generates correct SQL
 // predicates for namespace-level vs sub-app-level queries.
@@ -78,7 +81,7 @@ func TestNamespacePredicate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}

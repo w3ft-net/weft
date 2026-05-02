@@ -3,6 +3,7 @@ package planner
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestRawExpr_Cut verifies that cut projections produce the correct SQL raw expression.
@@ -35,7 +36,7 @@ func TestRawExpr_Cut(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
@@ -73,7 +74,7 @@ func TestRawExpr_AwkPrint(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
@@ -112,7 +113,7 @@ func TestRawExpr_Jq(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
@@ -145,7 +146,7 @@ func TestRawExpr_NoProjection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}

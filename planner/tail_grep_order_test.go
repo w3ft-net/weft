@@ -1,6 +1,9 @@
 package planner
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // Pipeline order matters when the post-LIMIT filter is *inclusive*
 // (negation, regex with no anchor on a low-cardinality field, etc.):
@@ -51,7 +54,7 @@ func TestPushdown_LimitBeforeFilter_DoesNotMerge(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -76,25 +79,20 @@ func TestPushdown_LimitBeforeFilter_DoesNotMerge(t *testing.T) {
 // All-apps wildcard `cat warp.log | tail -n N | grep -v ERROR` emits
 // a flat SQL with no source predicate; the LIMIT is pushed and the
 // inverted grep runs in compute (saturation hazard — see above).
-// InjectCustomer must still attach a customer predicate to bound the
+// Plan must still attach the customer predicate to bound the
 // per-shard scan — otherwise a noisy neighbor's rows get pulled into
 // LIMIT N alongside this customer's and silently shrink what they
 // see (no leak, but skewed view). Uses an inclusive filter so the
 // compute-side ordering invariant survives the test.
-func TestInjectCustomer_BoundsPerShardLimit(t *testing.T) {
+func TestPlanCustomer_BoundsPerShardLimit(t *testing.T) {
 	pipeline := `cat warp.log | tail -n 100 | grep -v ERROR | wc -l`
-	plan, err := Plan(pipeline)
+	plan, err := Plan(pipeline, "victim-co", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	want := `SELECT line_num, raw FROM logs ORDER BY ts DESC LIMIT 100`
+	want := `SELECT line_num, raw FROM logs WHERE customer = 'victim-co' ORDER BY ts DESC LIMIT 100`
 	if plan.ShardSQL != want {
-		t.Fatalf("ShardSQL\n got: %s\nwant: %s", plan.ShardSQL, want)
-	}
-	injected := InjectCustomer(plan.ShardSQL, "victim-co")
-	wantInjected := `SELECT line_num, raw FROM logs WHERE customer = 'victim-co' ORDER BY ts DESC LIMIT 100`
-	if injected != wantInjected {
-		t.Errorf("InjectCustomer must bound the LIMIT scan\n got: %s\nwant: %s", injected, wantInjected)
+		t.Errorf("ShardSQL must place customer predicate before the LIMIT\n got: %s\nwant: %s", plan.ShardSQL, want)
 	}
 }
 
@@ -140,7 +138,7 @@ func TestPushdown_LimitSafePushdown(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}

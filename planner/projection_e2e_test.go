@@ -113,7 +113,7 @@ func TestProjection_E2E(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline)
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}

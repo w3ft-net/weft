@@ -366,12 +366,15 @@ func (r *ShardRegistry) HasAddr(addr string) bool {
 // AND whose app set includes the given app. If app is "", all shards with
 // overlapping time windows are returned.
 //
-// The caller's plan tier clamps tr.Start up to now − LogRetention(tier),
-// so a customer never reaches a shard whose data falls entirely outside
-// their advertised retention. Boundary-spanning shards (window started
-// before the cap, ended after it) still match; the SQL predicate is
-// responsible for hiding the portion before the cap within that shard.
-// Pass tier="" to get the trial-tier retention (24h) — conservative.
+// tr.Start is clamped up to now − LogRetention(tier) so a customer
+// never reaches a shard whose data falls entirely outside their
+// advertised retention. Boundary-spanning shards (window started
+// before the cap, ended after it) still match — the planner's
+// `ts >= TIMESTAMP '...'` predicate (built from the same already-
+// clamped tr at the call site) hides the portion before the cap
+// within that shard. The clamp here is defense in depth; passing the
+// already-clamped value keeps it idempotent. tier="" yields the
+// trial-tier retention (24h, conservative).
 func (r *ShardRegistry) MatchingShards(tr TimeRange, app string, tier store.Tier) []shard.Shard {
 	if cap := time.Now().Add(-store.LogRetention(tier)); tr.Start.Before(cap) {
 		tr.Start = cap

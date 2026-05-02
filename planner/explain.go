@@ -3,12 +3,16 @@ package planner
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Explain runs the planner on a pipeline and returns a human-readable
 // breakdown of the query plan: source, shard SQL, and compute stages.
+// Customer + bounds are passed empty/zero — Explain is for human
+// inspection, not dispatch, so the row-level security predicates are
+// elided to keep the output focused on pipeline shape.
 func Explain(pipeline string) string {
-	plan, err := Plan(pipeline)
+	plan, err := Plan(pipeline, "", time.Time{}, time.Time{})
 	if err != nil {
 		return fmt.Sprintf("Error: %v\n", err)
 	}
