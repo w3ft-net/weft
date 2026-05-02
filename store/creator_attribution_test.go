@@ -14,7 +14,7 @@ import (
 func TestSaveShellFunction_RecordsCreator(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("creator-bin")
-	user, err := db.CreateUser("alice-bin@example.test", cust.ID)
+	user, err := db.CreateUser("alice-bin@example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestSaveShellFunction_EmptyUserStoresNull(t *testing.T) {
 func TestSaveCronWatch_RecordsCreator(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("creator-cron")
-	user, err := db.CreateUser("alice-cron@example.test", cust.ID)
+	user, err := db.CreateUser("alice-cron@example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestSaveCronWatch_RecordsCreator(t *testing.T) {
 func TestWriteTmpFile_RecordsCreator(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("creator-tmp")
-	user, err := db.CreateUser("alice-tmp@example.test", cust.ID)
+	user, err := db.CreateUser("alice-tmp@example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,8 +90,8 @@ func TestWriteTmpFile_RecordsCreator(t *testing.T) {
 func TestAppendTmpFile_PreservesCreator(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("creator-tmp-append")
-	alice, _ := db.CreateUser("alice-app@example.test", cust.ID)
-	bob, _ := db.CreateUser("bob-app@example.test", cust.ID)
+	alice, _ := db.CreateUser("alice-app@example.test")
+	bob, _ := db.CreateUser("bob-app@example.test")
 
 	if err := db.WriteTmpFile(cust.ID, TierSwatch, alice.ID, "/tmp/notes", []byte("first\n")); err != nil {
 		t.Fatal(err)
@@ -111,8 +111,8 @@ func TestAppendTmpFile_PreservesCreator(t *testing.T) {
 func TestCopyTmpFile_RecordsCopierAsCreator(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("creator-tmp-copy")
-	alice, _ := db.CreateUser("alice-cp@example.test", cust.ID)
-	bob, _ := db.CreateUser("bob-cp@example.test", cust.ID)
+	alice, _ := db.CreateUser("alice-cp@example.test")
+	bob, _ := db.CreateUser("bob-cp@example.test")
 
 	if err := db.WriteTmpFile(cust.ID, TierSwatch, alice.ID, "/tmp/src", []byte("data\n")); err != nil {
 		t.Fatal(err)
@@ -134,7 +134,7 @@ func TestCopyTmpFile_RecordsCopierAsCreator(t *testing.T) {
 func TestRenameTmpFile_PreservesCreator(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("creator-tmp-mv")
-	alice, _ := db.CreateUser("alice-mv@example.test", cust.ID)
+	alice, _ := db.CreateUser("alice-mv@example.test")
 
 	if err := db.WriteTmpFile(cust.ID, TierSwatch, alice.ID, "/tmp/old", []byte("x\n")); err != nil {
 		t.Fatal(err)
@@ -151,7 +151,7 @@ func TestRenameTmpFile_PreservesCreator(t *testing.T) {
 func TestMkdir_RecordsCreator(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("creator-tmp-mkdir")
-	alice, _ := db.CreateUser("alice-mkdir@example.test", cust.ID)
+	alice, _ := db.CreateUser("alice-mkdir@example.test")
 
 	if err := db.Mkdir(cust.ID, alice.ID, "/tmp/projects"); err != nil {
 		t.Fatal(err)

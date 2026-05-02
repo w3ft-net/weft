@@ -130,7 +130,11 @@ func TestAuth_Me(t *testing.T) {
 	handler := srv.Handler()
 
 	cust, _ := s.FindOrCreateCustomer("kevlar")
-	user, _ := s.CreateUser(fmt.Sprintf("me-%d@example.com", os.Getpid()), cust.ID)
+	user, _ := s.CreateUser(fmt.Sprintf("me-%d@example.com", os.Getpid()))
+	s.CreateTeamMember(&store.TeamMember{
+		ID: "tm-me", CustomerID: cust.ID, Email: user.Email,
+		UserID: &user.ID, Role: "owner", Status: "active",
+	})
 	jwt, _ := auth.Generate(user, "test-secret")
 
 	req := httptest.NewRequest("GET", "/api/auth/me", nil)
@@ -176,7 +180,11 @@ func TestSavedQueries_CRUD(t *testing.T) {
 	handler := srv.Handler()
 
 	cust2, _ := s.FindOrCreateCustomer("kevlar")
-	user, _ := s.CreateUser(fmt.Sprintf("queries-%d@example.com", os.Getpid()), cust2.ID)
+	user, _ := s.CreateUser(fmt.Sprintf("queries-%d@example.com", os.Getpid()))
+	s.CreateTeamMember(&store.TeamMember{
+		ID: "tm-queries", CustomerID: cust2.ID, Email: user.Email,
+		UserID: &user.ID, Role: "owner", Status: "active",
+	})
 	jwt, _ := auth.Generate(user, "test-secret")
 
 	// Create.
@@ -263,12 +271,12 @@ func TestAuth_UnverifiedUser_CannotCreateToken(t *testing.T) {
 	handler := srv.Handler()
 
 	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("unverified-%d", os.Getpid()))
-	user, _ := s.CreateUser(fmt.Sprintf("unverified-%d@example.com", os.Getpid()), cust.ID)
+	user, _ := s.CreateUser(fmt.Sprintf("unverified-%d@example.com", os.Getpid()))
 	// Owner membership so the isOwner check in handleCreateToken would
 	// otherwise pass — we want to be sure the 403 comes from the
 	// verification gate, not from permission.
 	s.CreateTeamMember(&store.TeamMember{
-		ID: "tm-unverified", CustomerName: cust.Name, Email: user.Email,
+		ID: "tm-unverified", CustomerID: cust.ID, Email: user.Email,
 		UserID: &user.ID, Role: "owner", Status: "active",
 	})
 	s.FindOrCreateNamespace(cust.ID, "default")
@@ -295,9 +303,9 @@ func TestAuth_MarkVerified_UnlocksTokenCreation(t *testing.T) {
 	handler := srv.Handler()
 
 	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("verify-unlock-%d", os.Getpid()))
-	user, _ := s.CreateUser(fmt.Sprintf("verify-unlock-%d@example.com", os.Getpid()), cust.ID)
+	user, _ := s.CreateUser(fmt.Sprintf("verify-unlock-%d@example.com", os.Getpid()))
 	s.CreateTeamMember(&store.TeamMember{
-		ID: "tm-verify-unlock", CustomerName: cust.Name, Email: user.Email,
+		ID: "tm-verify-unlock", CustomerID: cust.ID, Email: user.Email,
 		UserID: &user.ID, Role: "owner", Status: "active",
 	})
 	s.FindOrCreateNamespace(cust.ID, "default")
@@ -323,12 +331,14 @@ func TestAuth_MarkVerified_UnlocksTokenCreation(t *testing.T) {
 func TestAuth_Sweep_DeletesExpiredUnverifiedOnly(t *testing.T) {
 	_, s := testServer(t)
 
-	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("sweep-%d", os.Getpid()))
+	if _, err := s.FindOrCreateCustomer(fmt.Sprintf("sweep-%d", os.Getpid())); err != nil {
+		t.Fatal(err)
+	}
 	unverifiedEmail := fmt.Sprintf("sweep-unverified-%d@example.com", os.Getpid())
 	verifiedEmail := fmt.Sprintf("sweep-verified-%d@example.com", os.Getpid())
 
-	unverified, _ := s.CreateUser(unverifiedEmail, cust.ID)
-	_, _ = s.CreateVerifiedUser(verifiedEmail, cust.ID)
+	unverified, _ := s.CreateUser(unverifiedEmail)
+	_, _ = s.CreateVerifiedUser(verifiedEmail)
 
 	// Cutoff one hour in the future sweeps ALL users whose EmailVerifiedAt
 	// is nil regardless of CreatedAt, so we don't have to surgically
@@ -355,9 +365,9 @@ func TestGetFunction_ReturnsPlainSource(t *testing.T) {
 	handler := srv.Handler()
 
 	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("getfn-%d", os.Getpid()))
-	user, _ := s.CreateVerifiedUser(fmt.Sprintf("getfn-%d@example.com", os.Getpid()), cust.ID)
+	user, _ := s.CreateVerifiedUser(fmt.Sprintf("getfn-%d@example.com", os.Getpid()))
 	s.CreateTeamMember(&store.TeamMember{
-		ID: fmt.Sprintf("tm-getfn-%d", os.Getpid()), CustomerName: cust.Name, Email: user.Email,
+		ID: fmt.Sprintf("tm-getfn-%d", os.Getpid()), CustomerID: cust.ID, Email: user.Email,
 		UserID: &user.ID, Role: "owner", Status: "active",
 	})
 	// GetByID hydrates user.CustomerName via the Customer join — auth.Generate
@@ -395,9 +405,9 @@ func TestNotifyConfig_PutAndGet(t *testing.T) {
 	handler := srv.Handler()
 
 	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("notify-%d", os.Getpid()))
-	user, _ := s.CreateVerifiedUser(fmt.Sprintf("notify-%d@example.com", os.Getpid()), cust.ID)
+	user, _ := s.CreateVerifiedUser(fmt.Sprintf("notify-%d@example.com", os.Getpid()))
 	s.CreateTeamMember(&store.TeamMember{
-		ID: fmt.Sprintf("tm-notify-%d", os.Getpid()), CustomerName: cust.Name, Email: user.Email,
+		ID: fmt.Sprintf("tm-notify-%d", os.Getpid()), CustomerID: cust.ID, Email: user.Email,
 		UserID: &user.ID, Role: "owner", Status: "active",
 	})
 	jwt, _ := auth.Generate(user, "test-secret")

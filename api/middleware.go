@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -12,12 +14,23 @@ import (
 
 type contextKey string
 
+// ActiveOrgHeader is the request header that selects which org
+// (customer) the user is acting as for this call. CLI sends it from
+// the --org flag; the web UI from a navbar selector. When absent, the
+// middleware falls back to the user's last_active_customer_id, then to
+// their oldest membership.
+const ActiveOrgHeader = "X-Active-Org"
+
 // AuthMiddleware validates JWT tokens from the Authorization header,
-// resolves the caller's full identity from the DB, and stashes both
-// the (slim) claims and the resolved Session on the request context.
-// Handlers retrieve via GetSession (REST) or auth.SessionFromContext
-// (any protocol). The Session is the canonical identity — claims are
-// only the JWT proof.
+// resolves the caller's full identity (including which org to scope
+// to) from the DB, and stashes both the (slim) claims and the
+// resolved Session on the request context. Handlers retrieve via
+// GetSession (REST) or auth.SessionFromContext (any protocol).
+//
+// When the resolved active org differs from the user's stored
+// last_active_customer_id, the middleware writes the new value back
+// async — that way reconnecting later (without an explicit X-Active-Org
+// header) lands the user in the org they last operated in.
 func AuthMiddleware(st *store.Store, secret string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hdr := r.Header.Get("Authorization")
@@ -31,15 +44,34 @@ func AuthMiddleware(st *store.Store, secret string, next http.Handler) http.Hand
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		session, err := auth.BuildSession(st, claims.UserID)
+		orgSelector := r.Header.Get(ActiveOrgHeader)
+		session, err := auth.BuildSession(st, claims.UserID, orgSelector)
 		if err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			switch {
+			case errors.Is(err, auth.ErrOrgNotMember):
+				http.Error(w, "not a member of the requested org", http.StatusForbidden)
+			case errors.Is(err, auth.ErrNoMembership):
+				http.Error(w, "no org memberships", http.StatusForbidden)
+			default:
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+			}
 			return
 		}
+		go persistLastActive(st, session)
 		ctx := auth.WithClaims(r.Context(), claims)
 		ctx = auth.WithSession(ctx, session)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// persistLastActive flips users.last_active_customer_id when the
+// resolved active org doesn't match what's stored. Runs in a goroutine
+// so the user-facing latency doesn't pay for the write; failures log
+// but never block the request (the next request will retry).
+func persistLastActive(st *store.Store, session *auth.Session) {
+	if err := st.UpdateUserLastActiveCustomer(session.UserID, session.ActiveCustomerID); err != nil {
+		log.Printf("update last_active_customer_id for %s: %v", session.UserID, err)
+	}
 }
 
 // RequireEmailVerified gates state-changing endpoints on a verified

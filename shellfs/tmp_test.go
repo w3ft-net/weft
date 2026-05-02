@@ -346,7 +346,7 @@ func TestTmp_WcOverPostgres(t *testing.T) {
 func TestTmp_WriteRecordsCreatorViaShell(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateCustomer("tmp-shell-creator")
-	user, err := db.CreateUser("alice-shell@example.test", cust.ID)
+	user, err := db.CreateUser("alice-shell@example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,13 +437,13 @@ func TestTmp_MkdirSignals(t *testing.T) {
 func TestTmp_LsLongShowsOwner(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateCustomer("tmp-shell-lsowner")
-	alice, _ := db.CreateUser("alice-lsl@example.test", cust.ID)
+	alice, _ := db.CreateUser("alice-lsl@example.test")
 	// Give alice a friendly name so the rendering uses User.Name
 	// rather than the email local-part.
 	if err := db.SetUserName(alice.ID, "Alice"); err != nil {
 		t.Fatal(err)
 	}
-	bob, _ := db.CreateUser("bob-lsl@example.test", cust.ID)
+	bob, _ := db.CreateUser("bob-lsl@example.test")
 	// Bob has no Name set — should render as the email local-part.
 
 	fsAlice := New(db, cust.ID, nil, WithTier("swatch"), WithUser(alice.ID, false))

@@ -191,7 +191,7 @@ func TestReadFile_LogNamespace_PermissionDenied(t *testing.T) {
 		t.Fatal(err)
 	}
 	email := fmt.Sprintf("restricted-%d@example.com", os.Getpid())
-	user, err := db.CreateUser(email, cust.ID)
+	user, err := db.CreateUser(email)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestReadDir_Log_FiltersNamespaces(t *testing.T) {
 	_ = nsB
 
 	// User has read on "allowed" but not "blocked".
-	user, err := db.CreateUser(fmt.Sprintf("filtered-%d@example.com", os.Getpid()), cust.ID)
+	user, err := db.CreateUser(fmt.Sprintf("filtered-%d@example.com", os.Getpid()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestReadFile_LogNamespace_OwnerBypass(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.FindOrCreateNamespace(cust.ID, "private")
-	user, err := db.CreateUser(fmt.Sprintf("owner-%d@example.com", os.Getpid()), cust.ID)
+	user, err := db.CreateUser(fmt.Sprintf("owner-%d@example.com", os.Getpid()))
 	if err != nil {
 		t.Fatal(err)
 	}

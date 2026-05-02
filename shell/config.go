@@ -54,10 +54,13 @@ func EmailLocalPart(email string) string {
 // Config is the .weft.yaml configuration. Endpoint must be an http(s)
 // URL pointing at the weft api server; the CLI speaks HTTP end-to-end
 // now (no direct-to-coordinator gRPC). `weft login` writes this file
-// automatically after the device-flow round-trip.
+// automatically after the device-flow round-trip. Org pins the user
+// to a specific membership; the --org flag overrides it per call so
+// people can poke at the demo without editing the file.
 type Config struct {
 	Endpoint string `yaml:"endpoint"` // api base URL, e.g. https://api.w3ft.net
 	Token    string `yaml:"token"`    // JWT from the device flow
+	Org      string `yaml:"org"`      // active org slug (sent as X-Active-Org)
 }
 
 // LoadConfig resolves configuration from the following chain (first wins):
@@ -80,6 +83,9 @@ func LoadConfig() (*Config, error) {
 	}
 	if v := os.Getenv("WEFT_TOKEN"); v != "" {
 		cfg.Token = v
+	}
+	if v := os.Getenv("WEFT_ORG"); v != "" {
+		cfg.Org = v
 	}
 
 	if cfg.Endpoint == "" {
@@ -115,4 +121,19 @@ func loadConfigFrom(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return &cfg, nil
+}
+
+// SaveConfig writes the config to ~/.weft.yaml. Used by `weft login`
+// (writes endpoint+token+org after device-flow approval) and `weft org
+// switch` (rewrites just the org field).
+func SaveConfig(cfg *Config) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(home, ".weft.yaml"), data, 0o600)
 }
