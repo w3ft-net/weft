@@ -15,14 +15,27 @@ export class ApiError extends Error {
   }
 }
 
+// localStorage keys are exported so AuthContext / login flow can clear
+// or rewrite them without re-stringing the names. Keep both in sync —
+// orphaned weft_org entries against a logged-out token are harmless
+// but read confusingly in devtools.
+export const TOKEN_STORAGE_KEY = 'weft_token'
+export const ORG_STORAGE_KEY = 'weft_org'
+
 async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = localStorage.getItem('weft_token')
+  const token = localStorage.getItem(TOKEN_STORAGE_KEY)
+  const org = localStorage.getItem(ORG_STORAGE_KEY)
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> || {}),
   }
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
+  }
+  // X-Active-Org pins this request to a specific membership. Absent →
+  // server falls back to last_active_customer_id, then oldest membership.
+  if (org) {
+    headers['X-Active-Org'] = org
   }
 
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers })
@@ -227,12 +240,20 @@ export function resendVerification(): Promise<{ status: string }> {
 }
 
 // Types
+export interface OrgMembership {
+  id: number
+  name: string
+  role: string  // "owner" or "member"
+  active: boolean
+}
+
 export interface User {
   id: string
   email: string
   name: string
   tier: string
-  customer: string
+  customer: string  // active org's slug — same as the entry in orgs[] where active=true
+  orgs: OrgMembership[]
   email_verified?: boolean
   verification_deadline?: number // unix seconds; present only when unverified
   has_seen_welcome?: boolean

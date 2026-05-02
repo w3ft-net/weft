@@ -15,7 +15,7 @@ const NAV_ITEMS = [
 ]
 
 export default function SidebarNav() {
-  const { user, logout } = useAuth()
+  const { user, logout, switchOrg } = useAuth()
   const navigate = useNavigate()
   const [pendingCount, setPendingCount] = useState(0)
 
@@ -76,6 +76,27 @@ export default function SidebarNav() {
       </div>
 
       <div className="sidebar-bottom">
+        {user && user.orgs && user.orgs.length > 1 && (
+          <label className="sidebar-org" data-testid="sidebar-org-label">
+            <span className="sidebar-org-label">org</span>
+            <select
+              className="sidebar-org-select"
+              data-testid="sidebar-org-select"
+              value={user.customer}
+              onChange={e => switchOrg(e.target.value)}
+            >
+              {user.orgs.map(o => (
+                <option
+                  key={o.id}
+                  value={o.name}
+                  data-testid={`sidebar-org-option-${o.name}`}
+                >
+                  {o.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {user && (
           <div className="sidebar-email" data-testid="sidebar-user-email">
             {user.email}
