@@ -75,7 +75,7 @@ func TestShellExec_ForwardsBearerToCoordinator(t *testing.T) {
 	// leaves it blank, so set it so the JWT claim matches the
 	// subscription we just seeded.
 	user.CustomerName = custName
-	jwt, err := auth.Generate(user, "trial", "test-secret")
+	jwt, err := auth.Generate(user, "test-secret")
 	if err != nil {
 		t.Fatalf("generate jwt: %v", err)
 	}

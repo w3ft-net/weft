@@ -1,8 +1,14 @@
 // Package auth owns JWT issuance and validation for weft. It's shared
-// between the api server (which signs tokens during login/verify) and the
-// coordinator gRPC server (which validates incoming user-path RPCs via
-// an interceptor) so both halves use exactly the same claims shape and
-// signature scheme.
+// between the api server (which signs tokens during login/verify) and
+// the coordinator gRPC server (which validates incoming user-path RPCs
+// via an interceptor) so both halves use exactly the same claims shape
+// and signature scheme.
+//
+// The JWT carries only the user ID. Everything else a handler needs
+// (home customer, tier, email, owner role, verification state) is
+// materialized per request from the DB via auth.BuildSession. See
+// auth/session.go for the resolved-identity story; the JWT is just
+// proof of who is calling.
 package auth
 
 import (
@@ -18,49 +24,30 @@ import (
 	"github.com/kevlarcon/weft/store"
 )
 
-// Claims are the payload of a weft JWT.
+// Claims are the payload of a weft JWT — strictly the user ID and
+// timing fields. Anything else lives on Session, looked up per request,
+// so state changes (tier, email verification, owner promotion, customer
+// rename) propagate without forcing a re-login.
 type Claims struct {
-	UserID       string `json:"sub"`
-	Email        string `json:"email"`
-	CustomerName string `json:"customer"`
-	Tier         string `json:"tier"`
-	IssuedAt     int64  `json:"iat"`
-	ExpiresAt    int64  `json:"exp"`
-	// EmailVerified is the verification state AT TOKEN ISSUE. It's
-	// advisory — any handler that truly gates on verification re-checks
-	// the DB, because a user issued an unverified token who later
-	// verifies shouldn't need to re-login to unlock.
-	EmailVerified bool `json:"email_verified"`
-	// VerificationDeadline is the unix time by which the user must
-	// verify or be swept. Non-zero only for unverified tokens; sent to
-	// the frontend so the banner can show a deadline.
-	VerificationDeadline int64 `json:"verification_deadline,omitempty"`
+	UserID    string `json:"sub"`
+	IssuedAt  int64  `json:"iat"`
+	ExpiresAt int64  `json:"exp"`
 }
 
 // UnverifiedGracePeriod is the window a user has to click their verify
 // link before the cleanup sweep deletes the account.
 const UnverifiedGracePeriod = 24 * time.Hour
 
-// Generate creates a signed JWT for the user. Tier is for display only
-// (dashboard "your plan: Swatch") — enforcement queries the DB.
-func Generate(user *store.User, tier string, secret string) (string, error) {
+// Generate creates a signed JWT for the user. JWTs are valid for 30
+// days and carry only the user ID; all other identity attributes are
+// resolved per-request from the DB.
+func Generate(user *store.User, secret string) (string, error) {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
 
-	verified := user.EmailVerifiedAt != nil
-	var deadline int64
-	if !verified {
-		deadline = user.CreatedAt.Add(UnverifiedGracePeriod).Unix()
-	}
-
 	claims := Claims{
-		UserID:               user.ID,
-		Email:                user.Email,
-		CustomerName:         user.CustomerName,
-		Tier:                 tier,
-		IssuedAt:             time.Now().Unix(),
-		ExpiresAt:            time.Now().Add(30 * 24 * time.Hour).Unix(),
-		EmailVerified:        verified,
-		VerificationDeadline: deadline,
+		UserID:    user.ID,
+		IssuedAt:  time.Now().Unix(),
+		ExpiresAt: time.Now().Add(30 * 24 * time.Hour).Unix(),
 	}
 	claimsJSON, err := json.Marshal(claims)
 	if err != nil {

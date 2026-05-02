@@ -9,6 +9,12 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// SessionBuilder resolves a user ID to a Session. The interceptor
+// invokes it after JWT validation. The concrete production builder
+// closes over a store handle (see auth.BuildSession); tests pass a
+// fake to assert behavior without a DB.
+type SessionBuilder func(userID string) (*Session, error)
+
 // SkipMethods is the set of gRPC full method names the interceptors pass
 // through without requiring a JWT. Populated with methods that authenticate
 // by some other means (agent tokens, unauthenticated bootstrap).
@@ -38,11 +44,12 @@ func ExtractJWT(ctx context.Context, secret string) (*Claims, error) {
 }
 
 // UnaryServerInterceptor validates a JWT on every unary RPC not listed
-// in skip and injects the resulting claims into the handler's context.
+// in skip, materializes the caller's Session via build, and injects
+// both the claims and the resolved Session into the handler's context.
 // Methods in skip pass through untouched so they can do their own auth
 // (e.g. agent-token bearer for IngestStream, pre-auth bootstrap for
 // Authenticate itself).
-func UnaryServerInterceptor(secret string, skip SkipMethods) grpc.UnaryServerInterceptor {
+func UnaryServerInterceptor(build SessionBuilder, secret string, skip SkipMethods) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if skip[info.FullMethod] {
 			return handler(ctx, req)
@@ -51,13 +58,19 @@ func UnaryServerInterceptor(secret string, skip SkipMethods) grpc.UnaryServerInt
 		if err != nil {
 			return nil, err
 		}
-		return handler(WithClaims(ctx, claims), req)
+		session, err := build(claims.UserID)
+		if err != nil {
+			return nil, status.Errorf(codes.Unauthenticated, "session: %v", err)
+		}
+		ctx = WithClaims(ctx, claims)
+		ctx = WithSession(ctx, session)
+		return handler(ctx, req)
 	}
 }
 
 // StreamServerInterceptor is the streaming counterpart to
 // UnaryServerInterceptor.
-func StreamServerInterceptor(secret string, skip SkipMethods) grpc.StreamServerInterceptor {
+func StreamServerInterceptor(build SessionBuilder, secret string, skip SkipMethods) grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if skip[info.FullMethod] {
 			return handler(srv, ss)
@@ -66,7 +79,13 @@ func StreamServerInterceptor(secret string, skip SkipMethods) grpc.StreamServerI
 		if err != nil {
 			return err
 		}
-		return handler(srv, &claimsServerStream{ServerStream: ss, ctx: WithClaims(ss.Context(), claims)})
+		session, err := build(claims.UserID)
+		if err != nil {
+			return status.Errorf(codes.Unauthenticated, "session: %v", err)
+		}
+		ctx := WithClaims(ss.Context(), claims)
+		ctx = WithSession(ctx, session)
+		return handler(srv, &claimsServerStream{ServerStream: ss, ctx: ctx})
 	}
 }
 

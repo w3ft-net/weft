@@ -12,11 +12,13 @@ import (
 
 type contextKey string
 
-// AuthMiddleware validates JWT tokens from the Authorization header and
-// stashes the claims in the request context via auth.WithClaims so
-// handlers can pull them through GetClaims (REST) or auth.FromContext
-// (any protocol).
-func AuthMiddleware(secret string, next http.Handler) http.Handler {
+// AuthMiddleware validates JWT tokens from the Authorization header,
+// resolves the caller's full identity from the DB, and stashes both
+// the (slim) claims and the resolved Session on the request context.
+// Handlers retrieve via GetSession (REST) or auth.SessionFromContext
+// (any protocol). The Session is the canonical identity — claims are
+// only the JWT proof.
+func AuthMiddleware(st *store.Store, secret string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hdr := r.Header.Get("Authorization")
 		if !strings.HasPrefix(hdr, "Bearer ") {
@@ -29,27 +31,29 @@ func AuthMiddleware(secret string, next http.Handler) http.Handler {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(auth.WithClaims(r.Context(), claims)))
-	})
-}
-
-// RequireEmailVerified gates state-changing endpoints on a verified email.
-// Reads claims out of the ctx that AuthMiddleware inserts, then re-reads
-// the DB so a user who verified after their JWT was issued doesn't need
-// to re-login to unlock.
-func RequireEmailVerified(st *store.Store, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims := auth.FromContext(r.Context())
-		if claims == nil {
+		session, err := auth.BuildSession(st, claims.UserID)
+		if err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		user, err := st.GetUserByID(claims.UserID)
-		if err != nil || user == nil {
-			http.Error(w, "user not found", http.StatusNotFound)
+		ctx := auth.WithClaims(r.Context(), claims)
+		ctx = auth.WithSession(ctx, session)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// RequireEmailVerified gates state-changing endpoints on a verified
+// email. Reads the Session that AuthMiddleware inserts (which already
+// reflects the current DB state), so a user who verified after their
+// JWT was issued passes this gate without re-logging in.
+func RequireEmailVerified(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		session := auth.SessionFromContext(r.Context())
+		if session == nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if user.EmailVerifiedAt == nil {
+		if !session.EmailVerified {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
 			_ = writeJSON(w, map[string]any{
@@ -72,9 +76,17 @@ func writeJSON(w http.ResponseWriter, v any) error {
 	return err
 }
 
-// GetClaims extracts JWT claims from the REST request context.
+// GetClaims extracts JWT claims from the REST request context. Most
+// handlers should use GetSession instead — the slim claims only carry
+// the user ID, while Session has the full resolved identity.
 func GetClaims(r *http.Request) *auth.Claims {
 	return auth.FromContext(r.Context())
+}
+
+// GetSession extracts the resolved Session from the REST request
+// context. Returns nil if AuthMiddleware was not applied to the route.
+func GetSession(r *http.Request) *auth.Session {
+	return auth.SessionFromContext(r.Context())
 }
 
 // agentAuthKey holds the validated agent auth result in the request context.

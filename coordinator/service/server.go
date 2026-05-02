@@ -47,22 +47,22 @@ func convertNotices(in []coordinator.Notice) []*pb.Notice {
 	return out
 }
 
-// callerCustomer returns the customer name of the authenticated caller,
-// derived from JWT claims injected by the auth interceptor. Any non-empty
-// `Customer` field on the request proto is IGNORED — clients don't get to
-// declare which tenant they are; the verified principal is authoritative.
-// Returns an Unauthenticated error when called without an interceptor-
-// populated context (shouldn't happen in production because the
-// interceptor gates every JWT-protected RPC).
+// callerCustomer returns the home customer name of the authenticated
+// caller, derived from the Session the auth interceptor materialized.
+// Any non-empty `Customer` field on the request proto is IGNORED —
+// clients don't get to declare which tenant they are; the verified
+// principal is authoritative. Returns an Unauthenticated error when
+// called without an interceptor-populated context (shouldn't happen in
+// production because the interceptor gates every JWT-protected RPC).
 func callerCustomer(ctx context.Context) (string, error) {
-	c := auth.FromContext(ctx)
-	if c == nil {
+	s := auth.SessionFromContext(ctx)
+	if s == nil {
 		return "", status.Errorf(codes.Unauthenticated, "no authenticated caller")
 	}
-	if c.CustomerName == "" {
+	if s.HomeCustomerName == "" {
 		return "", status.Errorf(codes.PermissionDenied, "authenticated user has no customer")
 	}
-	return c.CustomerName, nil
+	return s.HomeCustomerName, nil
 }
 
 // callerUserID returns the authenticated user's ID, or "" when no

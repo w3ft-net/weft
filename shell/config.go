@@ -11,14 +11,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// TokenClaims holds the JWT fields the CLI needs for prompt rendering
-// and `weft whoami`. Decoded WITHOUT verifying the signature — the CLI
-// doesn't have the issuing secret — so callers must not trust these
-// values for security decisions; it's display-only.
+// TokenClaims holds the (slim) JWT fields the CLI can read locally —
+// just the user ID and expiry. Anything identity-shaped (email, team,
+// plan) lives on the server; the CLI fetches it from /api/auth/me when
+// it needs to render the prompt or `weft whoami`. Decoded WITHOUT
+// verifying the signature; callers must not trust these for security.
 type TokenClaims struct {
-	Email    string `json:"email"`
-	Customer string `json:"customer"`
-	Tier     string `json:"tier"`
+	UserID   string `json:"sub"`
 	IssuedAt int64  `json:"iat"`
 	Expires  int64  `json:"exp"`
 }
