@@ -124,7 +124,10 @@ func ensureData(tb testing.TB, _ pb.WeftCoordinatorClient, n int) {
 		tb.Fatalf("open ingest stream: %v", err)
 	}
 
-	apps := []string{"vimgym", "grantcentral", "callbox", "xylem"}
+	// Namespace-prefixed: the dev-agent token is scoped to namespace
+	// "kevlar", so every ingested row's App must be "kevlar" or
+	// "kevlar/<sub>". See coordinator/service/server.go IngestStream.
+	apps := []string{"kevlar/vimgym", "kevlar/grantcentral", "kevlar/callbox", "kevlar/xylem", "kevlar/warp"}
 	levels := []string{"INFO", "WARN", "ERROR", "DEBUG"}
 	instances := []string{"i-001", "i-002", "i-003", "i-004"}
 	actions := []string{
@@ -200,7 +203,7 @@ func BenchmarkQuery_CatApp(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		n := query(b, client, "cat vimgym.log")
+		n := query(b, client, "cat kevlar/vimgym.log")
 		if n == 0 {
 			b.Fatal("no rows returned")
 		}
@@ -213,7 +216,7 @@ func BenchmarkQuery_CatAll(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		n := query(b, client, "cat warp.log")
+		n := query(b, client, "cat kevlar/warp.log")
 		if n == 0 {
 			b.Fatal("no rows returned")
 		}
@@ -226,7 +229,7 @@ func BenchmarkQuery_GrepError(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		query(b, client, "cat vimgym.log | grep ERROR")
+		query(b, client, "cat kevlar/vimgym.log | grep ERROR")
 	}
 }
 
@@ -236,7 +239,7 @@ func BenchmarkQuery_GrepCaseInsensitive(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		query(b, client, "cat warp.log | grep -i timeout")
+		query(b, client, "cat kevlar/warp.log | grep -i timeout")
 	}
 }
 
@@ -246,7 +249,7 @@ func BenchmarkQuery_AwkLevelFilter(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		query(b, client, `cat vimgym.log | awk '$LEVEL == "ERROR"'`)
+		query(b, client, `cat kevlar/vimgym.log | awk '$LEVEL == "ERROR"'`)
 	}
 }
 
@@ -256,7 +259,7 @@ func BenchmarkQuery_HeadLimit(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		query(b, client, "head -50 warp.log")
+		query(b, client, "head -50 kevlar/warp.log")
 	}
 }
 
@@ -266,7 +269,7 @@ func BenchmarkQuery_TailLimit(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		query(b, client, "tail -50 warp.log")
+		query(b, client, "tail -50 kevlar/warp.log")
 	}
 }
 
@@ -276,7 +279,7 @@ func BenchmarkQuery_GrepPipeline(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		query(b, client, "cat warp.log | grep ERROR | grep -v timeout")
+		query(b, client, "cat kevlar/warp.log | grep ERROR | grep -v timeout")
 	}
 }
 
@@ -286,7 +289,7 @@ func BenchmarkQuery_ComputeSort(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		query(b, client, `cat vimgym.log | awk '$LEVEL == "ERROR"' | sort`)
+		query(b, client, `cat kevlar/vimgym.log | awk '$LEVEL == "ERROR"' | sort`)
 	}
 }
 
@@ -296,7 +299,7 @@ func BenchmarkQuery_ComputeWcl(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		query(b, client, "cat warp.log | grep timeout | wc -l")
+		query(b, client, "cat kevlar/warp.log | grep timeout | wc -l")
 	}
 }
 
@@ -306,7 +309,7 @@ func BenchmarkQuery_ComputeSortUniqCount(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		query(b, client, `cat warp.log | awk '$LEVEL == "ERROR"' | sort | uniq -c`)
+		query(b, client, `cat kevlar/warp.log | awk '$LEVEL == "ERROR"' | sort | uniq -c`)
 	}
 }
 
@@ -329,7 +332,7 @@ func benchIngest(b *testing.B, rows int) {
 		prebuilt[i] = &pb.LogRow{
 			LineNum:  int64(i),
 			Raw:      fmt.Sprintf("%s INFO bench i-001 test row %d", ts.Format("2006/01/02 15:04:05"), r.Int()),
-			App:      "bench",
+			App:      "kevlar/bench",
 			Level:    "INFO",
 			Instance: "i-001",
 			Customer: "kevlar",
@@ -417,7 +420,7 @@ func benchTailFanout(b *testing.B, numSubscribers int) {
 			b.Fatal(err)
 		}
 
-		apps := []string{"vimgym", "grantcentral", "callbox", "xylem"}
+		apps := []string{"kevlar/vimgym", "kevlar/grantcentral", "kevlar/callbox", "kevlar/xylem"}
 		levels := []string{"INFO", "ERROR", "WARN", "DEBUG"}
 		actions := []string{
 			"request completed", "connection timeout", "health check ok",
