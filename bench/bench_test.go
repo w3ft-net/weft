@@ -139,7 +139,13 @@ func ensureData(tb testing.TB, _ pb.WeftCoordinatorClient, n int) {
 		"disk usage above 80%", "cache warmed 2500 keys",
 	}
 
-	baseTime := time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC)
+	// Anchor seed timestamps within the kevlar customer's tier
+	// retention window (swatch = 30 days). The new planner ts
+	// predicate filters rows older than now − retention; an absolute
+	// baseTime in the past would exceed retention as wall-clock time
+	// advances and silently drop every query. Walk backward from now
+	// at 100µs per row so 100k rows span ~10 seconds of "history."
+	baseTime := time.Now().Add(-1 * time.Hour)
 	r := rand.New(rand.NewSource(42))
 
 	for i := 0; i < n; i++ {
@@ -147,7 +153,7 @@ func ensureData(tb testing.TB, _ pb.WeftCoordinatorClient, n int) {
 		level := levels[r.Intn(len(levels))]
 		inst := instances[r.Intn(len(instances))]
 		action := actions[r.Intn(len(actions))]
-		ts := baseTime.Add(time.Duration(i) * time.Millisecond * 100)
+		ts := baseTime.Add(time.Duration(i) * time.Microsecond * 100)
 		status := 200 + r.Intn(4)*100 // 200, 300, 400, 500
 
 		raw := fmt.Sprintf("%s %s %s %s %s status=%d",
@@ -173,6 +179,11 @@ func ensureData(tb testing.TB, _ pb.WeftCoordinatorClient, n int) {
 	if err != nil {
 		tb.Fatalf("close ingest stream: %v", err)
 	}
+	// Give the drain a beat to flush ringbuffer → shard. CloseAndRecv
+	// only confirms the coordinator's accept; the rows may still be
+	// in-flight to disk when the next query fires. Empirically a
+	// 200ms pause is enough on the dev stack.
+	time.Sleep(200 * time.Millisecond)
 	tb.Logf("loaded %d rows in %v", resp.RowsReceived, time.Since(start))
 }
 
@@ -322,7 +333,8 @@ func BenchmarkIngest_100k(b *testing.B) { benchIngest(b, 100_000) }
 func benchIngest(b *testing.B, rows int) {
 	// IngestStream needs an agent-token bearer, not a user JWT.
 	client := connectIngest(b)
-	baseTime := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	// Recent baseTime — see ensureData for the same retention rationale.
+	baseTime := time.Now().Add(-30 * time.Minute)
 	r := rand.New(rand.NewSource(99))
 
 	// Pre-build rows to exclude generation from timing.
