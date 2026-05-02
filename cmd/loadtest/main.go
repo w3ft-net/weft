@@ -55,7 +55,7 @@ func main() {
 	loadtestJWT, err := auth.Generate(&store.User{
 		ID: "loadtest-user", Email: "loadtest@example.com",
 		CustomerName: "kevlar", EmailVerifiedAt: &now, CreatedAt: now,
-	}, "trial", jwtSecret)
+	}, jwtSecret)
 	if err != nil {
 		log.Fatalf("sign loadtest JWT: %v", err)
 	}

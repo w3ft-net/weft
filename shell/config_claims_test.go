@@ -28,16 +28,16 @@ func TestEmailLocalPart(t *testing.T) {
 }
 
 // TestDecodeClaims_RoundTrip builds a fake JWT (header.payload.sig)
-// with known claims and confirms DecodeClaims pulls email + customer
-// out unchanged. We don't validate the signature in this path —
+// with known claims and confirms DecodeClaims pulls the user ID and
+// expiry out unchanged. We don't validate the signature in this path —
 // that's the api server's job — so any well-formed JWT shape works.
+// Identity fields beyond `sub` aren't on the JWT anymore; the CLI
+// fetches them from /api/auth/me when it needs them.
 func TestDecodeClaims_RoundTrip(t *testing.T) {
 	payload, _ := json.Marshal(map[string]any{
-		"email":    "alice@acme.test",
-		"customer": "acme",
-		"tier":     "swatch",
-		"iat":      1700000000,
-		"exp":      1900000000,
+		"sub": "user-123",
+		"iat": 1700000000,
+		"exp": 1900000000,
 	})
 	tok := strings.Join([]string{
 		base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256"}`)),
@@ -49,14 +49,8 @@ func TestDecodeClaims_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeClaims: %v", err)
 	}
-	if claims.Email != "alice@acme.test" {
-		t.Errorf("Email = %q, want alice@acme.test", claims.Email)
-	}
-	if claims.Customer != "acme" {
-		t.Errorf("Customer = %q, want acme", claims.Customer)
-	}
-	if claims.Tier != "swatch" {
-		t.Errorf("Tier = %q, want swatch", claims.Tier)
+	if claims.UserID != "user-123" {
+		t.Errorf("UserID = %q, want user-123", claims.UserID)
 	}
 	if claims.Expires != 1900000000 {
 		t.Errorf("Expires = %d, want 1900000000", claims.Expires)

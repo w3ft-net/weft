@@ -118,18 +118,44 @@ func runWhoami() {
 		os.Exit(1)
 	}
 
+	// Token expiry comes from the JWT itself (no DB hit needed).
 	claims, err := shell.DecodeClaims(cfg.Token)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-
 	expires := time.Unix(claims.Expires, 0)
 	expired := time.Now().After(expires)
 
-	fmt.Printf("Email:    %s\n", claims.Email)
-	fmt.Printf("Team:     %s\n", claims.Customer)
-	fmt.Printf("Plan:     %s\n", claims.Tier)
+	// Identity (email, team, plan) lives on the server now — the JWT
+	// only carries the user ID. Fetch from /api/auth/me so display
+	// reflects current DB state, not whatever was cached at login.
+	req, _ := http.NewRequest("GET", cfg.Endpoint+"/api/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+cfg.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fetch identity: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Fprintf(os.Stderr, "identity lookup failed (%d): %s\n", resp.StatusCode, string(body))
+		os.Exit(1)
+	}
+	var me struct {
+		Email    string `json:"email"`
+		Customer string `json:"customer"`
+		Tier     string `json:"tier"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		fmt.Fprintf(os.Stderr, "parse identity: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Email:    %s\n", me.Email)
+	fmt.Printf("Team:     %s\n", me.Customer)
+	fmt.Printf("Plan:     %s\n", me.Tier)
 	fmt.Printf("Endpoint: %s\n", cfg.Endpoint)
 	if expired {
 		fmt.Printf("Token:    expired (%s) — run 'weft login' to re-authenticate\n", expires.Format("2006-01-02"))
@@ -138,17 +164,47 @@ func runWhoami() {
 	}
 }
 
+// fetchPromptIdentity calls /api/auth/me to get the email + customer
+// for prompt rendering. Returns ok=false on any failure; callers fall
+// through to the OS user so a network blip never blocks the shell.
+func fetchPromptIdentity(endpoint, token string) (email, customer string, ok bool) {
+	req, err := http.NewRequest("GET", endpoint+"/api/auth/me", nil)
+	if err != nil {
+		return "", "", false
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", false
+	}
+	var me struct {
+		Email    string `json:"email"`
+		Customer string `json:"customer"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		return "", "", false
+	}
+	return me.Email, me.Customer, true
+}
+
 func runShell(s *shell.Shell) {
-	// Prefer the JWT identity for the prompt — `alice@acme` reads
-	// better than the OS user against a generic "@weft".
+	// Identity for the `alice@acme` prompt comes from the API now —
+	// the JWT carries only the user ID. Fall through to OS user if
+	// the lookup fails so a transient network error doesn't block
+	// the shell from starting.
 	if s.User == "" || s.Customer == "" {
 		if cfg, err := shell.LoadConfig(); err == nil && cfg.Token != "" {
-			if claims, err := shell.DecodeClaims(cfg.Token); err == nil {
+			if email, customer, ok := fetchPromptIdentity(cfg.Endpoint, cfg.Token); ok {
 				if s.User == "" {
-					s.User = shell.EmailLocalPart(claims.Email)
+					s.User = shell.EmailLocalPart(email)
 				}
 				if s.Customer == "" {
-					s.Customer = claims.Customer
+					s.Customer = customer
 				}
 			}
 		}

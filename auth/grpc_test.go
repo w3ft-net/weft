@@ -21,11 +21,24 @@ func signUserJWT(t *testing.T, customer string) string {
 	tok, err := Generate(&store.User{
 		ID: "u1", Email: "u1@example.com",
 		CustomerName: customer, EmailVerifiedAt: &now, CreatedAt: now,
-	}, "trial", testSecret)
+	}, testSecret)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
 	return tok
+}
+
+// fakeBuilder returns a Session whose home customer matches the requested
+// name. Used by interceptor tests so they don't need a real DB.
+func fakeBuilder(customer string) SessionBuilder {
+	return func(userID string) (*Session, error) {
+		return &Session{
+			UserID:           userID,
+			Email:            userID + "@example.com",
+			HomeCustomerName: customer,
+			HomeCustomerID:   1,
+		}, nil
+	}
 }
 
 func incomingCtx(pairs ...string) context.Context {
@@ -33,14 +46,14 @@ func incomingCtx(pairs ...string) context.Context {
 	return metadata.NewIncomingContext(context.Background(), md)
 }
 
-// passthroughHandler returns the claims it saw as the response so tests
+// passthroughHandler returns the session it saw as the response so tests
 // can assert what the interceptor injected into the context.
 func passthroughHandler(ctx context.Context, _ any) (any, error) {
-	return FromContext(ctx), nil
+	return SessionFromContext(ctx), nil
 }
 
 func TestUnaryInterceptor_RejectsMissingAuth(t *testing.T) {
-	interceptor := UnaryServerInterceptor(testSecret, nil)
+	interceptor := UnaryServerInterceptor(fakeBuilder("kevlar"), testSecret, nil)
 	info := &grpc.UnaryServerInfo{FullMethod: "/weft.WeftCoordinator/Query"}
 
 	_, err := interceptor(incomingCtx(), nil, info, passthroughHandler)
@@ -53,7 +66,7 @@ func TestUnaryInterceptor_RejectsMissingAuth(t *testing.T) {
 }
 
 func TestUnaryInterceptor_RejectsBadSignature(t *testing.T) {
-	interceptor := UnaryServerInterceptor(testSecret, nil)
+	interceptor := UnaryServerInterceptor(fakeBuilder("kevlar"), testSecret, nil)
 	info := &grpc.UnaryServerInfo{FullMethod: "/weft.WeftCoordinator/Query"}
 
 	// Token signed with a different secret should fail validation here.
@@ -73,7 +86,7 @@ func TestUnaryInterceptor_RejectsBadSignature(t *testing.T) {
 }
 
 func TestUnaryInterceptor_AcceptsValidJWT(t *testing.T) {
-	interceptor := UnaryServerInterceptor(testSecret, nil)
+	interceptor := UnaryServerInterceptor(fakeBuilder("kevlar"), testSecret, nil)
 	info := &grpc.UnaryServerInfo{FullMethod: "/weft.WeftCoordinator/Query"}
 
 	tok := signUserJWT(t, "kevlar")
@@ -84,18 +97,18 @@ func TestUnaryInterceptor_AcceptsValidJWT(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	claims, _ := got.(*Claims)
-	if claims == nil {
-		t.Fatal("claims not injected into context")
+	session, _ := got.(*Session)
+	if session == nil {
+		t.Fatal("session not injected into context")
 	}
-	if claims.CustomerName != "kevlar" {
-		t.Errorf("customer = %q, want kevlar", claims.CustomerName)
+	if session.HomeCustomerName != "kevlar" {
+		t.Errorf("customer = %q, want kevlar", session.HomeCustomerName)
 	}
 }
 
 func TestUnaryInterceptor_SkipListBypassesAuth(t *testing.T) {
 	skip := SkipMethods{"/weft.WeftCoordinator/IngestStream": true}
-	interceptor := UnaryServerInterceptor(testSecret, skip)
+	interceptor := UnaryServerInterceptor(fakeBuilder("kevlar"), testSecret, skip)
 	info := &grpc.UnaryServerInfo{FullMethod: "/weft.WeftCoordinator/IngestStream"}
 
 	// No auth header — but this method is skipped, so it should pass.
@@ -103,8 +116,8 @@ func TestUnaryInterceptor_SkipListBypassesAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("skipped method should not require auth: %v", err)
 	}
-	if claims, _ := got.(*Claims); claims != nil {
-		t.Error("skipped method should not inject claims")
+	if session, _ := got.(*Session); session != nil {
+		t.Error("skipped method should not inject session")
 	}
 }
 

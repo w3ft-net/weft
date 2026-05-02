@@ -43,7 +43,7 @@ func benchJWT(tb testing.TB) string {
 		EmailVerifiedAt: &now,
 		CreatedAt:       now,
 	}
-	tok, err := auth.Generate(user, "trial", benchJWTSecret)
+	tok, err := auth.Generate(user, benchJWTSecret)
 	if err != nil {
 		tb.Fatalf("sign bench JWT: %v", err)
 	}

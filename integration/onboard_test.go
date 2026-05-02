@@ -352,7 +352,7 @@ func generateDevJWT(t *testing.T) string {
 		Email: "dev@test.local",
 	}
 	user.CustomerName = "kevlar"
-	token, err := auth.Generate(user, "dev", jwtSecret)
+	token, err := auth.Generate(user, jwtSecret)
 	if err != nil {
 		t.Fatalf("generate JWT: %v", err)
 	}

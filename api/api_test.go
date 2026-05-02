@@ -82,16 +82,14 @@ func TestAuth_LoginAndVerify(t *testing.T) {
 		t.Fatal("no JWT in response")
 	}
 
-	// Verify JWT is valid.
+	// Verify JWT is valid. Identity fields (email, tier) live on the
+	// server now; the JWT only carries the user ID.
 	claims, err := auth.Validate(jwt, "test-secret")
 	if err != nil {
 		t.Fatalf("validate JWT: %v", err)
 	}
-	if claims.Email != email {
-		t.Errorf("expected email %s, got %s", email, claims.Email)
-	}
-	if claims.Tier != "trial" {
-		t.Errorf("expected tier trial, got %s", claims.Tier)
+	if claims.UserID == "" {
+		t.Errorf("expected non-empty user ID")
 	}
 }
 
@@ -133,7 +131,7 @@ func TestAuth_Me(t *testing.T) {
 
 	cust, _ := s.FindOrCreateCustomer("kevlar")
 	user, _ := s.CreateUser(fmt.Sprintf("me-%d@example.com", os.Getpid()), cust.ID)
-	jwt, _ := auth.Generate(user, "trial", "test-secret")
+	jwt, _ := auth.Generate(user, "test-secret")
 
 	req := httptest.NewRequest("GET", "/api/auth/me", nil)
 	req.Header.Set("Authorization", "Bearer "+jwt)
@@ -179,7 +177,7 @@ func TestSavedQueries_CRUD(t *testing.T) {
 
 	cust2, _ := s.FindOrCreateCustomer("kevlar")
 	user, _ := s.CreateUser(fmt.Sprintf("queries-%d@example.com", os.Getpid()), cust2.ID)
-	jwt, _ := auth.Generate(user, "trial", "test-secret")
+	jwt, _ := auth.Generate(user, "test-secret")
 
 	// Create.
 	body, _ := json.Marshal(map[string]string{"name": "error check", "query": "cat vimgym.log | grep ERROR"})
@@ -251,17 +249,12 @@ func TestAuth_Signup_ReturnsUnverifiedUser(t *testing.T) {
 		t.Errorf("signup user should be unverified, got email_verified=%v", user["email_verified"])
 	}
 
-	// JWT claim should agree.
+	// JWT must validate — but verification state lives on the server
+	// now, not in the claim, so the response body's email_verified
+	// (asserted above) is the authoritative check.
 	jwt, _ := resp["token"].(string)
-	claims, err := auth.Validate(jwt, "test-secret")
-	if err != nil {
+	if _, err := auth.Validate(jwt, "test-secret"); err != nil {
 		t.Fatalf("validate JWT: %v", err)
-	}
-	if claims.EmailVerified {
-		t.Error("JWT claim email_verified should be false on signup")
-	}
-	if claims.VerificationDeadline == 0 {
-		t.Error("JWT should carry a verification_deadline for unverified users")
 	}
 }
 
@@ -279,7 +272,7 @@ func TestAuth_UnverifiedUser_CannotCreateToken(t *testing.T) {
 		UserID: &user.ID, Role: "owner", Status: "active",
 	})
 	s.FindOrCreateNamespace(cust.ID, "default")
-	jwt, _ := auth.Generate(user, "trial", "test-secret")
+	jwt, _ := auth.Generate(user, "test-secret")
 
 	body, _ := json.Marshal(map[string]string{"label": "prod", "namespace": "default"})
 	req := httptest.NewRequest("POST", "/api/tokens", bytes.NewReader(body))
@@ -314,7 +307,7 @@ func TestAuth_MarkVerified_UnlocksTokenCreation(t *testing.T) {
 		t.Fatalf("mark verified: %v", err)
 	}
 	user, _ = s.GetUserByID(user.ID)
-	jwt, _ := auth.Generate(user, "trial", "test-secret")
+	jwt, _ := auth.Generate(user, "test-secret")
 
 	body, _ := json.Marshal(map[string]string{"label": "prod", "namespace": "default"})
 	req := httptest.NewRequest("POST", "/api/tokens", bytes.NewReader(body))
@@ -370,7 +363,7 @@ func TestGetFunction_ReturnsPlainSource(t *testing.T) {
 	// GetByID hydrates user.CustomerName via the Customer join — auth.Generate
 	// reads it directly into the JWT's customer claim.
 	user, _ = s.GetUserByID(user.ID)
-	jwt, _ := auth.Generate(user, "trial", "test-secret")
+	jwt, _ := auth.Generate(user, "test-secret")
 
 	source := "cat /log/api.log | grep ERROR | wc -l"
 	if err := s.SaveShellFunction(cust.ID, user.ID, "scan", source); err != nil {
@@ -407,7 +400,7 @@ func TestNotifyConfig_PutAndGet(t *testing.T) {
 		ID: fmt.Sprintf("tm-notify-%d", os.Getpid()), CustomerName: cust.Name, Email: user.Email,
 		UserID: &user.ID, Role: "owner", Status: "active",
 	})
-	jwt, _ := auth.Generate(user, "trial", "test-secret")
+	jwt, _ := auth.Generate(user, "test-secret")
 
 	// GET on an untouched customer returns empty yaml, not 404.
 	req := httptest.NewRequest("GET", "/api/notify", nil)
