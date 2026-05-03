@@ -24,6 +24,7 @@ func (stubBackend) SaveDashboard(name, body string) error        { return nil }
 func (stubBackend) DeleteDashboard(name string) error            { return nil }
 func (stubBackend) GetNotifyConfig() (string, error)             { return "", nil }
 func (stubBackend) SaveNotifyConfig(content string) error        { return nil }
+func (stubBackend) GetFile(path string) ([]byte, error)          { return nil, nil }
 
 // TestRemoteFS_LogPathDiscovery verifies the 2-or-3-level /log/
 // listing layout: env-bearing entries in a namespace surface as

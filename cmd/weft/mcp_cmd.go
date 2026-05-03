@@ -54,7 +54,7 @@ func runMCP() {
 	if dir, err := defaultProposalsDir(); err == nil {
 		if store, err := proposals.New(dir); err == nil {
 			mcpCfg.Proposals = store
-			backend := shell.NewHTTPBackend(cfg.Endpoint, cfg.Token)
+			backend := shell.NewHTTPBackend(cfg.Endpoint, cfg.Token, effectiveOrg(cfg))
 			wireProposalBackend(&mcpCfg, backend)
 		} else {
 			fmt.Fprintf(os.Stderr, "warning: propose tools disabled — could not open %s: %v\n", dir, err)

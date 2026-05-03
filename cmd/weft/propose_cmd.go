@@ -118,7 +118,7 @@ func runProposeApply() {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-	backend := shell.NewHTTPBackend(cfg.Endpoint, cfg.Token)
+	backend := shell.NewHTTPBackend(cfg.Endpoint, cfg.Token, effectiveOrg(cfg))
 	_ = client // currently unused; reserved for tighter audit later
 
 	store, err := openProposalsStore()

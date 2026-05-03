@@ -17,15 +17,30 @@ import (
 type HTTPBackend struct {
 	baseURL string
 	token   string
+	org     string // X-Active-Org header value; empty omits the header
 	client  *http.Client
 }
 
 // NewHTTPBackend creates a backend using the coordinator HTTP API.
-func NewHTTPBackend(baseURL, token string) *HTTPBackend {
+// org is the X-Active-Org value to send on every request — empty
+// lets the server fall back to the user's last-active or oldest
+// membership.
+func NewHTTPBackend(baseURL, token, org string) *HTTPBackend {
 	return &HTTPBackend{
 		baseURL: strings.TrimSuffix(baseURL, "/"),
 		token:   token,
+		org:     org,
 		client:  &http.Client{Timeout: 10 * time.Second},
+	}
+}
+
+// setAuthHeaders applies Authorization + X-Active-Org. Centralized
+// so a new endpoint can't forget the org header (same pattern as
+// HTTPCoordinator).
+func (b *HTTPBackend) setAuthHeaders(req *http.Request) {
+	req.Header.Set("Authorization", "Bearer "+b.token)
+	if b.org != "" {
+		req.Header.Set("X-Active-Org", b.org)
 	}
 }
 
@@ -186,11 +201,34 @@ func (b *HTTPBackend) GetWatchResults(name string, limit int) ([]chart.WatchResu
 	return out, nil
 }
 
+// GetFile is the generic fallback used by RemoteFS for paths the
+// specialized endpoints don't cover (e.g. /etc/usage).
+func (b *HTTPBackend) GetFile(path string) ([]byte, error) {
+	return b.apiGet("/api/fs/read?path=" + urlQueryEscape(path))
+}
+
+// urlQueryEscape inlines a tiny escape so we don't drag net/url just
+// for one query-parameter encoding.
+func urlQueryEscape(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'),
+			c == '-' || c == '_' || c == '.' || c == '~' || c == '/':
+			b.WriteByte(c)
+		default:
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
+}
+
 // ── HTTP helpers ──────────────────────────────────────────────
 
 func (b *HTTPBackend) apiGet(endpoint string) ([]byte, error) {
 	req, _ := http.NewRequest("GET", b.baseURL+endpoint, nil)
-	req.Header.Set("Authorization", "Bearer "+b.token)
+	b.setAuthHeaders(req)
 
 	resp, err := b.client.Do(req)
 	if err != nil {
@@ -212,7 +250,7 @@ func (b *HTTPBackend) apiPut(endpoint string, payload any) error {
 	body, _ := json.Marshal(payload)
 	req, _ := http.NewRequest("PUT", b.baseURL+endpoint, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+b.token)
+	b.setAuthHeaders(req)
 
 	resp, err := b.client.Do(req)
 	if err != nil {
@@ -229,7 +267,7 @@ func (b *HTTPBackend) apiPut(endpoint string, payload any) error {
 
 func (b *HTTPBackend) apiDelete(endpoint string) error {
 	req, _ := http.NewRequest("DELETE", b.baseURL+endpoint, nil)
-	req.Header.Set("Authorization", "Bearer "+b.token)
+	b.setAuthHeaders(req)
 
 	resp, err := b.client.Do(req)
 	if err != nil {

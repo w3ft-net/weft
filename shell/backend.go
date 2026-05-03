@@ -35,6 +35,12 @@ type Backend interface {
 
 	GetNotifyConfig() (string, error)
 	SaveNotifyConfig(content string) error
+
+	// GetFile reads the bytes of a virtual file the specialized
+	// methods don't cover (e.g. /etc/usage, which is generated rather
+	// than stored). RemoteFS falls back to this for any /etc path
+	// that isn't notify.yaml or under /bin / /cron.d / /log.
+	GetFile(path string) ([]byte, error)
 }
 
 // WatchResultsBackend is optionally implemented by backends that can
@@ -81,8 +87,16 @@ func (f *RemoteFS) ReadFile(path string) ([]byte, error) {
 			}
 			return []byte(yaml), nil
 		}
+		// /etc/usage and /etc/dashboards/<name>.conf fall through to
+		// the generic GetFile path. The server's shellfs.ReadFile
+		// is the canonical handler — keeping it server-side means
+		// the CLI doesn't need to know about every new virtual
+		// file the server exposes.
 	}
 
+	if data, err := f.backend.GetFile(path); err == nil {
+		return data, nil
+	}
 	return nil, fmt.Errorf("%s: not found", path)
 }
 

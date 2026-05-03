@@ -52,3 +52,30 @@ func (s *Server) handleListFS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"entries": out})
 }
+
+// handleReadFS returns the raw bytes of a virtual file. Used by the
+// CLI's RemoteFS as a fallback for paths not covered by the
+// specialized GetFunction / GetWatch / GetNotifyConfig endpoints
+// (notably /etc/usage, which is a generated report rather than
+// stored content, and /etc/dashboards/<name>.conf).
+//
+// We return text/plain rather than JSON because the file's bytes
+// are the response body verbatim — wrapping them in JSON would
+// force callers to base64 or string-escape them at zero benefit.
+func (s *Server) handleReadFS(w http.ResponseWriter, r *http.Request) {
+	session := GetSession(r)
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "path query parameter required", http.StatusBadRequest)
+		return
+	}
+
+	fs := shellfs.New(s.store, session.ActiveCustomerID, nil)
+	data, err := fs.ReadFile(path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write(data)
+}

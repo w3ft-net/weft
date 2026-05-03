@@ -105,6 +105,14 @@ func (b *MemBackend) SaveNotifyConfig(content string) error {
 	return nil
 }
 
+// GetFile is the generic-fallback counterpart to HTTPBackend.GetFile.
+// In-memory tests don't simulate the server's generated /etc/usage
+// report — return "not found" so callers see the same shape they'd
+// see for any unrecognized path.
+func (b *MemBackend) GetFile(path string) ([]byte, error) {
+	return nil, fmt.Errorf("%s: not found", path)
+}
+
 func (b *MemBackend) listPrefix(prefix string) []string {
 	var names []string
 	for k := range b.files {
