@@ -13,6 +13,7 @@ ExecStart=/opt/app/bin/weft-coordinator \
     --shard-asg-small=${SHARD_ASG_SMALL} \
     --shard-asg-medium=${SHARD_ASG_MEDIUM} \
     --shard-asg-large=${SHARD_ASG_LARGE} \
+    --compute=${COMPUTE_NLB} \
     --compute-asg=${COMPUTE_ASG_NAME} \
     --region=${AWS_REGION}
 Restart=always
