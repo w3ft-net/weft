@@ -589,6 +589,19 @@ func (s *Store) RemoveTeamMember(id string) error {
 	}).Error
 }
 
+// RemoveTeamMemberByUserAndCustomer is the (user_id, customer_id)
+// counterpart to RemoveTeamMember(id), used by onboarding graduation
+// where the caller knows the user + customer but not the membership
+// row id. Soft-removes any active row; idempotent.
+func (s *Store) RemoveTeamMemberByUserAndCustomer(userID string, customerID uint) error {
+	return s.db.Model(&TeamMember{}).
+		Where("user_id = ? AND customer_id = ?", userID, customerID).
+		Updates(map[string]any{
+			"status":     "removed",
+			"updated_at": time.Now(),
+		}).Error
+}
+
 // CountTeamMembers returns the count of active + pending members.
 func (s *Store) CountTeamMembers(customerID uint) (int, error) {
 	var count int64

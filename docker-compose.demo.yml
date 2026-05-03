@@ -138,3 +138,67 @@ services:
       WEFTD_TOKEN: ${GLOBEX_NOTIFIER_PROD_TOKEN}
       RATE_SHAPE: "sine:8,16,420"
       ERROR_RATIO: "0.05"
+
+  # Loom Inc — the populated demo org used by the onboarding tour.
+  # New signups get a read-only membership in this customer; the tour
+  # walks them through these streams. Keep error ratios non-trivial
+  # (~5-8%) so the "filter for ERROR" lessons have visible matches.
+  loom-api-sand:
+    <<: *demo-service
+    environment:
+      SERVICE: api
+      CUSTOMER: loom
+      ENV: sand
+      WEFTD_TOKEN: ${LOOM_API_SAND_TOKEN}
+      RATE_SHAPE: "const:6"
+      ERROR_RATIO: "0.05"
+
+  loom-api-prod:
+    <<: *demo-service
+    environment:
+      SERVICE: api
+      CUSTOMER: loom
+      ENV: prod
+      WEFTD_TOKEN: ${LOOM_API_PROD_TOKEN}
+      RATE_SHAPE: "sine:25,50,600"
+      ERROR_RATIO: "0.08"
+
+  loom-worker-sand:
+    <<: *demo-service
+    environment:
+      SERVICE: worker
+      CUSTOMER: loom
+      ENV: sand
+      WEFTD_TOKEN: ${LOOM_WORKER_SAND_TOKEN}
+      RATE_SHAPE: "const:3"
+      ERROR_RATIO: "0.05"
+
+  loom-worker-prod:
+    <<: *demo-service
+    environment:
+      SERVICE: worker
+      CUSTOMER: loom
+      ENV: prod
+      WEFTD_TOKEN: ${LOOM_WORKER_PROD_TOKEN}
+      RATE_SHAPE: "sawtooth:5,0.08,30"
+      ERROR_RATIO: "0.04"
+
+  loom-edge-sand:
+    <<: *demo-service
+    environment:
+      SERVICE: edge
+      CUSTOMER: loom
+      ENV: sand
+      WEFTD_TOKEN: ${LOOM_EDGE_SAND_TOKEN}
+      RATE_SHAPE: "const:2"
+      ERROR_RATIO: "0.05"
+
+  loom-edge-prod:
+    <<: *demo-service
+    environment:
+      SERVICE: edge
+      CUSTOMER: loom
+      ENV: prod
+      WEFTD_TOKEN: ${LOOM_EDGE_PROD_TOKEN}
+      RATE_SHAPE: "const:6"
+      ERROR_RATIO: "0.05"

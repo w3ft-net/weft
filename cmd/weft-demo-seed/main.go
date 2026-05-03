@@ -98,6 +98,24 @@ var spec = []customerSpec{
 			{Email: "frida@globex.test", Name: "Frida Lukoja", ReadOnly: true},
 		},
 	},
+	// Loom Inc is the populated demo org every signup gets a read-only
+	// membership in (api/onboarding.go's grantLoomMembership). The
+	// onboarding tour walks the user through Loom's data, so this
+	// customer needs the richest fixture set — multiple busy services,
+	// pre-seeded bin/ + cron.d/ + notify.conf + dashboards. The
+	// docker-compose.demo.yml producer containers feed it live data.
+	{
+		Name:        "loom",
+		DisplayName: "Loom Inc",
+		Envs:        []string{"sand", "prod"},
+		Apps:        []string{"api", "worker", "edge"},
+		Members: []teamMember{
+			// One owner so the org has a "real" admin in the seam
+			// data; signup adds every fresh user as an additional
+			// (read-only) member via grantLoomMembership.
+			{Email: "ops@loom.test", Name: "Loom Ops", CanCreateNS: true},
+		},
+	},
 }
 
 var shapes = map[shapeKey]string{
@@ -113,6 +131,15 @@ var shapes = map[shapeKey]string{
 	{"globex", "billing", "prod"}:     "monotonic:5,0.05,40",
 	{"globex", "notifier", "staging"}: "const:4",
 	{"globex", "notifier", "prod"}:    "sine:8,16,420",
+	// Loom traffic shapes — picked so a tour user can find ERROR
+	// lines in api/prod (8% errors), see latency variation in worker,
+	// and see steady "boring" traffic in edge.
+	{"loom", "api", "sand"}:    "const:6",
+	{"loom", "api", "prod"}:    "sine:25,50,600",
+	{"loom", "worker", "sand"}: "const:3",
+	{"loom", "worker", "prod"}: "sawtooth:5,0.08,30",
+	{"loom", "edge", "sand"}:   "const:2",
+	{"loom", "edge", "prod"}:   "const:6",
 }
 
 // errorRatios mirrors shapes — a couple of "noisy" services give the
@@ -121,6 +148,8 @@ var errorRatios = map[shapeKey]float64{
 	{"acme", "api", "prod"}:          0.08,
 	{"globex", "billing", "staging"}: 0.12,
 	{"globex", "billing", "prod"}:    0.10,
+	{"loom", "api", "prod"}:          0.08, // tour finds ERROR lines here
+	{"loom", "worker", "prod"}:       0.04,
 	// everything else: default 0.05 inside entrypoint.sh
 }
 
@@ -346,6 +375,7 @@ func preseedScripts(s *store.Store, custID uint, customerName string, members []
 	primaryApp := map[string]string{
 		"acme":   "acme/api",
 		"globex": "globex/orders",
+		"loom":   "loom/api",
 	}[customerName]
 	if primaryApp == "" {
 		return fmt.Errorf("preseedScripts: no primary app configured for customer %q", customerName)
@@ -433,6 +463,7 @@ func preseedScripts(s *store.Store, custID uint, customerName string, members []
 	primaryEnv := map[string]string{
 		"acme":   "prod",
 		"globex": "prod",
+		"loom":   "prod",
 	}[customerName]
 	metricsLog := fmt.Sprintf("/log/%s/%s/%s_metrics.log",
 		customerName, primaryEnv, lastSegment(primaryApp))

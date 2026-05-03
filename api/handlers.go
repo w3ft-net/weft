@@ -225,6 +225,8 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/auth/device/approve", s.handleDeviceApprove)
 	auth.HandleFunc("POST /api/auth/resend-verification", s.handleResendVerification)
 	auth.HandleFunc("POST /api/account/welcome-dismiss", s.handleWelcomeDismiss)
+	auth.HandleFunc("POST /api/onboarding/advance", s.handleOnboardingAdvance)
+	auth.HandleFunc("POST /api/onboarding/dismiss", s.handleOnboardingDismiss)
 	auth.HandleFunc("POST /api/billing/checkout", s.handleCheckout)
 	auth.HandleFunc("POST /api/billing/setup-intent", s.handleSetupIntent)
 	auth.HandleFunc("GET /api/billing/usage", s.handleUsage)
@@ -324,6 +326,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/namespaces/", AuthMiddleware(s.store, s.jwtSecret, auth))
 	mux.Handle("/api/team", AuthMiddleware(s.store, s.jwtSecret, auth))
 	mux.Handle("/api/team/", AuthMiddleware(s.store, s.jwtSecret, auth))
+	mux.Handle("/api/onboarding/", AuthMiddleware(s.store, s.jwtSecret, auth))
 
 	return CORSMiddleware(s.baseURL, mux)
 }
@@ -427,6 +430,13 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 
 	// Land the user in their fresh org by default on next request.
 	_ = s.store.UpdateUserLastActiveCustomer(user.ID, cust.ID)
+
+	// Grant read-only membership in Loom Inc so the welcome modal has
+	// somewhere to point. Soft-fails when Loom isn't seeded — see
+	// grantLoomMembership.
+	if err := s.grantLoomMembership(user.ID, req.Email); err != nil {
+		log.Printf("signup: grant Loom membership for %s: %v", req.Email, err)
+	}
 
 	// Send the verification email. We ignore the send failure on purpose:
 	// signup succeeds either way so the user still has a working session,
