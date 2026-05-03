@@ -159,6 +159,42 @@ build {
     ]
   }
 
+  # DuckDB CLI for direct shard inspection. The shard binary embeds
+  # DuckDB via the Go binding (github.com/duckdb/duckdb-go/v2) which
+  # statically links the engine; the CLI here is just for operators
+  # opening /opt/app/data/shard.duckdb in --readonly mode after an
+  # incident. Pinned to match the Go binding's underlying engine
+  # version so the file format / extensions agree exactly.
+  #
+  # Keep DUCKDB_VERSION below in sync with go.mod's
+  # github.com/duckdb/duckdb-go/v2 line. The binding's version string
+  # encodes the engine: v2.10501.0 → engine 1.5.1.
+  provisioner "shell" {
+    inline = [
+      <<-EOT
+        set -euo pipefail
+        DUCKDB_VERSION=v1.5.1
+        # Map uname -m to DuckDB's release-asset arch labels.
+        # DuckDB names assets duckdb_cli-linux-arm64.zip and
+        # duckdb_cli-linux-amd64.zip — not aarch64/x86_64.
+        case "$(uname -m)" in
+          aarch64|arm64) DUCKDB_ARCH=linux-arm64 ;;
+          x86_64|amd64)  DUCKDB_ARCH=linux-amd64 ;;
+          *) echo "unsupported arch: $(uname -m)"; exit 1 ;;
+        esac
+        URL="https://github.com/duckdb/duckdb/releases/download/$${DUCKDB_VERSION}/duckdb_cli-$${DUCKDB_ARCH}.zip"
+        echo "Installing DuckDB CLI from $${URL}"
+        curl -fsSL -o /tmp/duckdb.zip "$${URL}"
+        sudo unzip -qo /tmp/duckdb.zip -d /usr/local/bin/
+        sudo chmod +x /usr/local/bin/duckdb
+        rm /tmp/duckdb.zip
+        # Smoke-test so a 404 / wrong-arch download fails the build
+        # instead of a silent miss noticed only at incident time.
+        /usr/local/bin/duckdb --version
+      EOT
+    ]
+  }
+
   # Copy startup scripts
   provisioner "file" {
     source      = "deploy/startup.sh"
