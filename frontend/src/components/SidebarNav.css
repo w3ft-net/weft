@@ -13,6 +13,68 @@
   height: 100vh;
 }
 
+/* Hamburger toggle. Hidden by default; the narrow-viewport @media
+   block below shows it. position: fixed so it floats over whatever
+   page content the layout puts below it. */
+.sidebar-hamburger {
+  display: none;
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 110;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  width: 36px;
+  height: 36px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.sidebar-hamburger:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 100;
+}
+
+@media (max-width: 768px) {
+  /* Sidebar slides off-screen by default; the .sidebar-open class
+     brings it back. position: fixed lifts it out of flow so page
+     content fills the freed width underneath. */
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    height: auto;
+    z-index: 105;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease-in-out;
+  }
+  .sidebar.sidebar-open {
+    transform: translateX(0);
+  }
+  .sidebar-hamburger {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .sidebar-backdrop {
+    display: block;
+  }
+}
+
 .sidebar-top {
   display: flex;
   flex-direction: column;

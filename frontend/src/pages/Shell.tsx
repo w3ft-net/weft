@@ -22,7 +22,6 @@ export default function Shell() {
   const [watchLimits, setWatchLimits] = useState({ count: 0, limit: 0, min_interval: '' })
   const [sidebarTab, setSidebarTab] = useState<'functions' | 'watches' | null>(null)
   const [, setWasmReady] = useState(false)
-  const [rangeText, setRangeText] = useState('')
 
   useEffect(() => {
     getFunctions().then(setFunctions).catch(() => {})
@@ -51,7 +50,7 @@ export default function Shell() {
       bridge = await initShellWasm(
         termContainerRef.current,
         apps,
-        (text) => setRangeText(text.trim()),
+        undefined, // range display removed; range is shown in PS1 + accessible via `range`
         identity,
       )
       if (disposed) {
@@ -115,9 +114,6 @@ export default function Shell() {
               <span className="dot yellow" />
               <span className="dot green" />
             </div>
-            <span className="terminal-title" data-testid="shell-range-display">
-              {rangeText || 'weft shell'}
-            </span>
             <div className="shell-chrome-actions">
               <button
                 className={`shell-chrome-btn${sidebarTab === 'functions' ? ' shell-chrome-btn-active' : ''}`}

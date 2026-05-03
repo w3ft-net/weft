@@ -18,6 +18,10 @@ export default function SidebarNav() {
   const { user, logout, switchOrg } = useAuth()
   const navigate = useNavigate()
   const [pendingCount, setPendingCount] = useState(0)
+  // open drives the narrow-viewport drawer behavior. The wide-
+  // viewport CSS ignores this state and shows the sidebar always;
+  // narrow viewport CSS slides the sidebar in when open=true.
+  const [open, setOpen] = useState(false)
 
   useEffect(() => {
     function refresh() {
@@ -41,39 +45,67 @@ export default function SidebarNav() {
     navigate('/login')
   }
 
-  return (
-    <aside className="sidebar" data-testid="sidebar-nav">
-      <div className="sidebar-top">
-        <div className="sidebar-logo" data-testid="sidebar-logo">
-          <img src="/weft-logo.svg" alt="weft" className="sidebar-logo-svg" data-testid="weft-logo-svg" />
-        </div>
+  // Close the drawer when the user picks a nav item — keeps mobile
+  // navigation feeling like a native phone app rather than leaving a
+  // 200px-wide pane covering half the screen on the destination page.
+  function handleNavClick() {
+    setOpen(false)
+  }
 
-        <nav className="sidebar-links">
-          {NAV_ITEMS.map(item => {
-            const showPendingDot = item.to === '/namespaces' && pendingCount > 0
-            return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                className={({ isActive }) =>
-                  `sidebar-link${isActive ? ' sidebar-link-active' : ''}`
-                }
-                data-testid={`sidebar-${item.label.toLowerCase()}-link`}
-              >
-                <span className="sidebar-link-icon">{item.icon}</span>
-                <span className="sidebar-link-label">{item.label}</span>
-                {showPendingDot && (
-                  <span
-                    className="sidebar-pending-dot"
-                    title={`${pendingCount} source${pendingCount === 1 ? '' : 's'} awaiting configuration`}
-                    data-testid="sidebar-pending-dot"
-                  />
-                )}
-              </NavLink>
-            )
-          })}
-        </nav>
-      </div>
+  return (
+    <>
+      <button
+        className="sidebar-hamburger"
+        type="button"
+        aria-label="toggle navigation"
+        onClick={() => setOpen(o => !o)}
+        data-testid="sidebar-hamburger-button"
+      >
+        ☰
+      </button>
+      {open && (
+        <div
+          className="sidebar-backdrop"
+          onClick={() => setOpen(false)}
+          data-testid="sidebar-backdrop"
+        />
+      )}
+      <aside
+        className={`sidebar${open ? ' sidebar-open' : ''}`}
+        data-testid="sidebar-nav"
+      >
+        <div className="sidebar-top">
+          <div className="sidebar-logo" data-testid="sidebar-logo">
+            <img src="/weft-logo.svg" alt="weft" className="sidebar-logo-svg" data-testid="weft-logo-svg" />
+          </div>
+
+          <nav className="sidebar-links">
+            {NAV_ITEMS.map(item => {
+              const showPendingDot = item.to === '/namespaces' && pendingCount > 0
+              return (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  className={({ isActive }) =>
+                    `sidebar-link${isActive ? ' sidebar-link-active' : ''}`
+                  }
+                  onClick={handleNavClick}
+                  data-testid={`sidebar-${item.label.toLowerCase()}-link`}
+                >
+                  <span className="sidebar-link-icon">{item.icon}</span>
+                  <span className="sidebar-link-label">{item.label}</span>
+                  {showPendingDot && (
+                    <span
+                      className="sidebar-pending-dot"
+                      title={`${pendingCount} source${pendingCount === 1 ? '' : 's'} awaiting configuration`}
+                      data-testid="sidebar-pending-dot"
+                    />
+                  )}
+                </NavLink>
+              )
+            })}
+          </nav>
+        </div>
 
       <div className="sidebar-bottom">
         {user && user.orgs && user.orgs.length > 1 && (
@@ -110,6 +142,7 @@ export default function SidebarNav() {
           sign out
         </button>
       </div>
-    </aside>
+      </aside>
+    </>
   )
 }
