@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"embed"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -61,7 +62,13 @@ func Migrate(dsn string) error {
 	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("set dialect: %w", err)
 	}
-	if err := goose.Up(db, "migrations"); err != nil {
+	// goose.Up returns ErrNoMigrationFiles when the embedded
+	// migrations/ directory holds no .sql files. After a successful
+	// `make collapse`, migrations/ is empty (just a .gitkeep) — every
+	// historical migration has been folded into schema.sql. Treat the
+	// empty case as a no-op: the schema is already at the collapsed
+	// high-water mark and there's nothing further to apply.
+	if err := goose.Up(db, "migrations"); err != nil && !errors.Is(err, goose.ErrNoMigrationFiles) {
 		return fmt.Errorf("goose up: %w", err)
 	}
 	return nil
@@ -119,11 +126,33 @@ func applyCollapsedSchema(db *sql.DB, dsn string) error {
 	}
 
 	cmd := exec.Command("psql", "-v", "ON_ERROR_STOP=1", "-d", dsn)
-	cmd.Stdin = strings.NewReader(schemaSQL)
+	cmd.Stdin = strings.NewReader(stripUnknownPSQLMetaCommands(schemaSQL))
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("psql apply schema.sql: %w", err)
 	}
 	return nil
+}
+
+// stripUnknownPSQLMetaCommands removes psql meta-commands that
+// older client versions don't recognise. pg_dump emits `\restrict`
+// and `\unrestrict` as ACL gates for the restore session — these
+// were added to psql in a recent version (17+ or 18+ depending on
+// the source); a Debian-stable psql client (typically 15.x in our
+// AMIs, 17.4 on dev macOS) errors with "invalid command \restrict".
+// Stripping them is safe: they're access-control wrappers, not DDL,
+// and the calling user (the migration runner) already has the
+// permissions they're meant to gate.
+func stripUnknownPSQLMetaCommands(sql string) string {
+	lines := strings.Split(sql, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, `\restrict`) || strings.HasPrefix(trimmed, `\unrestrict`) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
