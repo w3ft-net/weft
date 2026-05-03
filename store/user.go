@@ -173,6 +173,13 @@ type User struct {
 	// the request omits the X-Active-Org header. Nullable because new
 	// users haven't picked one yet.
 	LastActiveCustomerID *uint
+	// OnboardingStep tracks where the user is in the Loom-Inc tour
+	// state machine. 'welcome' is the default for new signups; 'done'
+	// marks a graduate. The middleware reads this to decide whether
+	// the welcome modal / tour overlays render; the shell hooks read
+	// it to decide whether OnboardingHooks attach.
+	OnboardingStep       string `gorm:"not null;default:welcome"`
+	OnboardingDismissed  bool   `gorm:"not null;default:false"`
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 }
@@ -186,14 +193,19 @@ type MagicLink struct {
 	Used      bool `gorm:"not null;default:false"`
 }
 
-// SavedQuery is a user's bookmarked pipeline.
+// SavedQuery is a user's bookmarked pipeline within an org. Scoped
+// by (customer_id, user_id) so queries saved while acting in one org
+// don't bleed into another (specifically: onboarding-era queries
+// against Loom Inc don't follow the user back into their own org
+// after graduation).
 type SavedQuery struct {
-	ID        string `gorm:"primaryKey"`
-	UserID    string `gorm:"not null;index"`
-	Name      string `gorm:"not null"`
-	Query     string `gorm:"not null"` // the pipeline text
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID         string `gorm:"primaryKey"`
+	CustomerID uint   `gorm:"not null;index:idx_saved_queries_customer_user"`
+	UserID     string `gorm:"not null;index:idx_saved_queries_customer_user"`
+	Name       string `gorm:"not null"`
+	Query      string `gorm:"not null"` // the pipeline text
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // TeamMember tracks membership of a user (or pending invite) in a
@@ -325,6 +337,34 @@ func (s *Store) UpdateUserLastActiveCustomer(userID string, customerID uint) err
 	}).Error
 }
 
+// AdvanceOnboardingStep is a compare-and-swap on onboarding_step.
+// Returns true when the swap succeeded; false when the current step
+// didn't match `expected` (concurrent advance from another client,
+// or a stale request). Idempotent: a request for a step the user is
+// already past returns false but is otherwise harmless.
+func (s *Store) AdvanceOnboardingStep(userID, expected, next string) (bool, error) {
+	res := s.db.Model(&User{}).
+		Where("id = ? AND onboarding_step = ?", userID, expected).
+		Updates(map[string]any{
+			"onboarding_step": next,
+			"updated_at":      time.Now(),
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
+// DismissOnboarding sets onboarding_dismissed=true. Doesn't revoke
+// Loom membership — the user can still switch into the org from the
+// dropdown and poke around; they just won't see overlays.
+func (s *Store) DismissOnboarding(userID string) error {
+	return s.db.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
+		"onboarding_dismissed": true,
+		"updated_at":           time.Now(),
+	}).Error
+}
+
 func (s *Store) UpdateUserStripeCustomer(userID, stripeCustomerID string) error {
 	return s.db.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
 		"stripe_customer_id": stripeCustomerID,
@@ -423,14 +463,15 @@ func (s *Store) rememberRawMagicLink(email, raw string) {
 
 // --- Saved Queries ---
 
-func (s *Store) CreateSavedQuery(userID, name, query string) (*SavedQuery, error) {
+func (s *Store) CreateSavedQuery(customerID uint, userID, name, query string) (*SavedQuery, error) {
 	sq := SavedQuery{
-		ID:        uuid.New().String(),
-		UserID:    userID,
-		Name:      name,
-		Query:     query,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		ID:         uuid.New().String(),
+		CustomerID: customerID,
+		UserID:     userID,
+		Name:       name,
+		Query:      query,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
 	}
 	if err := s.db.Create(&sq).Error; err != nil {
 		return nil, err
@@ -438,10 +479,20 @@ func (s *Store) CreateSavedQuery(userID, name, query string) (*SavedQuery, error
 	return &sq, nil
 }
 
-func (s *Store) ListSavedQueries(userID string) ([]SavedQuery, error) {
+func (s *Store) ListSavedQueries(customerID uint, userID string) ([]SavedQuery, error) {
 	var queries []SavedQuery
-	err := s.db.Where("user_id = ?", userID).Order("created_at DESC").Find(&queries).Error
+	err := s.db.Where("customer_id = ? AND user_id = ?", customerID, userID).
+		Order("created_at DESC").Find(&queries).Error
 	return queries, err
+}
+
+// DeleteSavedQueriesForUserInCustomer drops every saved query a user
+// holds in a specific customer. Called at onboarding graduation to
+// clean up Loom-era bookmarks that the user no longer has membership
+// to act on.
+func (s *Store) DeleteSavedQueriesForUserInCustomer(customerID uint, userID string) error {
+	return s.db.Where("customer_id = ? AND user_id = ?", customerID, userID).
+		Delete(&SavedQuery{}).Error
 }
 
 func (s *Store) DeleteSavedQuery(userID, queryID string) error {

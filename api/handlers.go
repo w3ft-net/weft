@@ -1073,7 +1073,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListQueries(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	queries, err := s.store.ListSavedQueries(session.UserID)
+	queries, err := s.store.ListSavedQueries(session.ActiveCustomerID, session.UserID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1092,7 +1092,7 @@ func (s *Server) handleCreateQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sq, err := s.store.CreateSavedQuery(session.UserID, req.Name, req.Query)
+	sq, err := s.store.CreateSavedQuery(session.ActiveCustomerID, session.UserID, req.Name, req.Query)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
