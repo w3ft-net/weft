@@ -66,9 +66,14 @@ func (s *Shell) Run() error {
 	}
 	defer term.Restore(int(os.Stdin.Fd()), oldState)
 
-	// Switch to alt screen and show cursor.
-	os.Stdout.WriteString("\x1b[?1049h\x1b[?25h")
-	defer os.Stdout.WriteString("\x1b[?1049l") // restore main screen on exit
+	// Run on the main screen so the terminal emulator's native
+	// scrollback works (cmd+up in iTerm/Terminal/wezterm/kitty/etc.)
+	// — altscreen is the right call for vim/less, which manage their
+	// own 1049h/1049l lifecycle in shellcore. Show the cursor (the
+	// raw-mode hop hides it on some terminals) and emit a final
+	// newline on exit so the post-shell prompt lands on a clean row.
+	os.Stdout.WriteString("\x1b[?25h")
+	defer os.Stdout.WriteString("\n")
 
 	w, h, _ := term.GetSize(int(os.Stdout.Fd()))
 	if w == 0 {
