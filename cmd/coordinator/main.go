@@ -256,24 +256,23 @@ func main() {
 		s3cfg := shard.S3ConfigFromEnv()
 		lambdaURL := os.Getenv("LAMBDA_FUNCTION_URL")
 
+		// Reconstruct attaches live shard.Shard pointers for every
+		// persisted row that has somewhere to dial. Live rows
+		// (INGESTING / READ_ONLY) get a GRPCShard against their
+		// recorded addr; ARCHIVED rows with a parquet path get a
+		// ColdShard or LambdaColdShard. States that genuinely have
+		// nowhere to point (LAUNCHING, post-wipe rebind, zombie
+		// ARCHIVED) return an error which LoadFromStore swallows —
+		// they remain in the registry as metadata-only entries and
+		// the heartbeat-adopt path fills them when their live
+		// instance shows up.
+		reconstructCfg := coordinator.ReconstructConfig{
+			ShardSecret:       shardSecret,
+			LambdaFunctionURL: lambdaURL,
+			S3Config:          s3cfg,
+		}
 		if err := coord.Registry.LoadFromStore(func(rec store.ShardRecord) (shard.Shard, error) {
-			// LoadFromStore loads every record into the registry; this
-			// reconstruct func only attaches a live shard.Shard for
-			// archived rows (where ParquetPath points at retained
-			// data). Live rows (INGESTING / READ_ONLY / LAUNCHING)
-			// come back with no Shard pointer — the heartbeat-adopt
-			// path attaches a GRPCShard when the instance reappears,
-			// and the reconciler/reaper can act on the row meanwhile.
-			if rec.State != string(coordinator.StateArchived) || rec.ParquetPath == "" {
-				return nil, fmt.Errorf("no cold-shard reconstruction for %s state=%s", rec.ID, rec.State)
-			}
-			var apps []string
-			json.Unmarshal([]byte(rec.Apps), &apps)
-
-			if lambdaURL != "" {
-				return shard.NewLambdaColdShard(rec.ID, apps, lambdaURL, rec.ParquetPath), nil
-			}
-			return shard.NewColdShard(rec.ID, apps, rec.ParquetPath, s3cfg)
+			return coordinator.ReconstructShard(rec, reconstructCfg)
 		}); err != nil {
 			log.Printf("warning: load shards from store: %v", err)
 		} else {
