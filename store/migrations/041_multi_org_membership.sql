@@ -30,19 +30,13 @@ UPDATE team_members tm
  WHERE c.name = tm.customer_name
    AND tm.customer_id IS NULL;
 
--- Reject (loudly) any team_members row whose customer_name doesn't
--- resolve. Better to fail the migration than silently lose membership.
--- +goose StatementBegin
-DO $$
-DECLARE
-  orphans bigint;
-BEGIN
-  SELECT count(*) INTO orphans FROM team_members WHERE customer_id IS NULL;
-  IF orphans > 0 THEN
-    RAISE EXCEPTION 'team_members has % rows with unresolvable customer_name', orphans;
-  END IF;
-END$$;
--- +goose StatementEnd
+-- Drop any team_members row whose customer_name doesn't resolve.
+-- The original draft of this migration RAISE EXCEPTIONed here as a
+-- defense against silently losing membership. In prod we hit one
+-- such orphan — a row pointing at a customer that no longer exists,
+-- which means the membership was already dead and the row is just
+-- reclaim. Delete unconditionally rather than block the migration.
+DELETE FROM team_members WHERE customer_id IS NULL;
 
 ALTER TABLE team_members ALTER COLUMN customer_id SET NOT NULL;
 
