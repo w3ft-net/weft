@@ -473,11 +473,20 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 	existing := p.registry.Get(hb.ShardID)
 	if existing != nil {
 		existing.LastHeartbeatAt = time.Now()
+		// RowCount comes from the shard's running DuckDBShard.RowCount();
+		// it's the only signal the registry has about ingest-volume
+		// progress on a steady-state instance. Lift it on every
+		// heartbeat (same-addr OR rebind) and persist so dashboards
+		// and shard_records reflect reality. Without this update the
+		// row_count column froze at the value captured the moment the
+		// shard was first christened/adopted.
+		existing.RowCount = hb.RowCount
 		if existing.Addr == hb.Addr {
 			if existing.Suspended {
 				log.Printf("provisioner: unsuspending shard %s (heartbeat received)", hb.ShardID)
 				existing.Suspended = false
 			}
+			p.registry.PersistState(existing)
 			return
 		}
 		// Rebind: same durable id, instance moved.
