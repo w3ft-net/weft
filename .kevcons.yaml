@@ -24,3 +24,19 @@ build:
           --exclude='.git' --exclude='node_modules' --exclude='*.duckdb' \
           --exclude='weft/weft' --exclude='weft/server' --exclude='weft/bin' \
           weft warp
+
+# Run after a successful prod deploy. The collapse target folds the
+# now-applied migrations into store/schema.sql so a virgin DB matches
+# prod's schema (and goose_db_version ledger) by construction. See
+# docs/plans/migration-collapse.md.
+#
+# on_error: warn — the deploy itself already succeeded; if the local
+# `make collapse` or its commit/push trips, that's a housekeeping fix-
+# up, not grounds to roll the deploy back.
+post_deploy:
+  - name: Collapse migrations through the just-deployed AMI
+    run: make collapse
+    commit:
+      paths: [store/schema.sql, store/migrations/]
+      message: "store: collapse migrations through the just-deployed AMI"
+      on_error: warn
