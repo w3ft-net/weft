@@ -199,6 +199,7 @@ func main() {
 					TierByASG:  tierByASG,
 					SizeByTier: sizeByTier,
 					DeviceName: os.Getenv("SHARD_VOLUME_DEVICE"),
+					Store:      db,
 					ShardOps:   db,
 				}
 				poller, err := coordinator.BuildLifecyclePoller(provCtx, *awsRegion, queueURL, lcCfg)

@@ -144,6 +144,12 @@ func baseHandler(vm VolumeManager, asg ASGLifecycleAPI, reg *ShardRegistry, stor
 }
 
 func handlerWithShardOps(vm VolumeManager, asg ASGLifecycleAPI, reg *ShardRegistry, storeIface HeartbeatStore, shardOps ShardOpsStore) *LifecycleHandler {
+	if storeIface == nil {
+		// Tests that don't exercise recognisedAsDead can pass nil;
+		// NewLifecycleHandler now refuses Registry-without-Store, so
+		// supply an empty mock that returns no heartbeats.
+		storeIface = &mockHeartbeatStore{}
+	}
 	return NewLifecycleHandler(LifecycleHandlerConfig{
 		Volumes:      vm,
 		EC2Instances: &fakeEC2Instances{},
@@ -352,6 +358,36 @@ func TestLifecycle_LiveShardVolume_NotARecovery(t *testing.T) {
 	if decision != DecisionChristen {
 		t.Errorf("decision: got %s want %s", decision, DecisionChristen)
 	}
+}
+
+// NewLifecycleHandler must refuse a Registry-without-Store config:
+// recognisedAsDead consults live heartbeats from Store before letting
+// the recovery scan yank a volume, and a nil Store can't answer. The
+// 2026-05-03 prod outage was exactly this — cmd/coordinator/main.go
+// passed ShardOps but forgot Store, recognisedAsDead's nil-store
+// branch defaulted to "true (dead)", and the next launch event
+// recovered the live shard's EBS volume out from under it. The fix
+// is to refuse to construct the handler at all rather than to invent
+// a runtime fallback for a misconfiguration.
+func TestNewLifecycleHandler_PanicsWhenRegistrySetButStoreNil(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("NewLifecycleHandler with Registry but nil Store: expected panic, got none")
+		}
+	}()
+
+	reg := NewShardRegistry()
+	_ = NewLifecycleHandler(LifecycleHandlerConfig{
+		Volumes:      &fakeVolumeManager{},
+		EC2Instances: &fakeEC2Instances{},
+		ASG:          &fakeLifecycleASG{},
+		ShardOps:     newFakeRegistryStore(),
+		Registry:     reg, // set
+		// Store omitted — this is the bug we're catching.
+		TierByASG:  map[string]string{"weft-shard-small": "small"},
+		SizeByTier: map[string]int32{"small": 100},
+	})
 }
 
 // SNS-wrapped payload should be unwrapped; raw payload should also

@@ -21,6 +21,10 @@ import (
 
 func main() {
 	port := flag.Int("port", 9010, "gRPC listen port")
+	// Accepted but unused until docs/plans/streaming-parallel-warp.md
+	// lands. The systemd unit passes --parallelism=4 today; without
+	// this stub flag.Parse rejects the binary on boot.
+	_ = flag.Int("parallelism", 0, "(reserved) intra-stage parallelism; see streaming-parallel-warp.md")
 	flag.Parse()
 
 	pool := &compute.LocalComputePool{}

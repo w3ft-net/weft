@@ -89,7 +89,18 @@ type LifecycleHandlerConfig struct {
 // NewLifecycleHandler constructs a handler. Defaults:
 //   - DeviceName  = /dev/sdf
 //   - DeadFor     = 2 minutes
+//
+// Invariant: when Registry is set, Store must also be set. The
+// recovery scan checks live heartbeats via Store before yanking a
+// volume; without Store, recognisedAsDead would have to guess, and a
+// guess of "dead" recovers volumes out from under live shards (the
+// 2026-05-03 prod outage). Tests that don't exercise the recovery
+// path can pass a nil Registry and nil Store together; production
+// callers always supply both.
 func NewLifecycleHandler(cfg LifecycleHandlerConfig) *LifecycleHandler {
+	if cfg.Registry != nil && cfg.Store == nil {
+		panic("coordinator.NewLifecycleHandler: Registry set without Store — recognisedAsDead needs heartbeats to make the recover-vs-leave decision")
+	}
 	h := &LifecycleHandler{
 		volumes:      cfg.Volumes,
 		ec2Instances: cfg.EC2Instances,
@@ -323,11 +334,9 @@ func (h *LifecycleHandler) recognisedAsDead(shardID string) bool {
 			shardID, entry.State)
 		return false
 	}
-	if h.store == nil {
-		log.Printf("lifecycle: recognised-as-dead shard=%s result=true reason=no-store",
-			shardID)
-		return true
-	}
+	// h.store is enforced non-nil by NewLifecycleHandler; no defensive
+	// branch here. A nil store is a construction-time invariant
+	// violation, not a runtime decision.
 	heartbeats, err := h.store.LiveShardHeartbeats(fmt.Sprintf("%d seconds", int(h.deadFor.Seconds())))
 	if err != nil {
 		log.Printf("lifecycle: recognised-as-dead shard=%s result=true reason=store-err err=%v",

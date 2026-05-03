@@ -91,6 +91,7 @@ func TestLifecycleHook_ClaimsOldestLaunchingRow(t *testing.T) {
 		Volumes:      vm,
 		EC2Instances: &fakeEC2Instances{},
 		ASG:          asg,
+		Store:        &mockHeartbeatStore{},
 		ShardOps:     fake,
 		Registry:     reg,
 		TierByASG:    map[string]string{"weft-shard-small": "small"},
