@@ -262,6 +262,12 @@ export interface User {
   // The UI keys the welcome modal + tour overlays off these.
   onboarding_step?: string
   onboarding_dismissed?: boolean
+  // onboarding_prompt is the lesson copy for shell-* steps, rendered
+  // server-side so the lesson list lives in one place. Empty for
+  // non-shell steps (panel-tour copy is hardcoded in the frontend
+  // because it references UI element names we want to keep close to
+  // the components).
+  onboarding_prompt?: string
 }
 
 // Flips the authenticated user's has_seen_welcome flag to true. Call

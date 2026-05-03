@@ -129,6 +129,18 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if rr.err == io.EOF {
+				// Pipeline finished cleanly. If the user is in the
+				// shell-* phase of onboarding and the pipeline matches
+				// the current lesson's predicate, advance the step
+				// and emit the next lesson's prompt so the UI banner
+				// can update without waiting for a /me poll.
+				if newStep, prompt, advanced := s.maybeAdvanceShellLesson(session, req.Pipeline); advanced {
+					writeSSEEvent(w, map[string]any{
+						"type":   "tour_advance",
+						"step":   newStep,
+						"prompt": prompt,
+					})
+				}
 				if !req.Follow {
 					writeSSEEvent(w, map[string]any{"type": "done"})
 					flusher.Flush()

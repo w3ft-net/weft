@@ -86,6 +86,15 @@ body[data-tour-highlight="sidebar-downloads-link"] [data-testid="sidebar-downloa
   animation: tour-sidebar-pulse 1.8s ease-in-out infinite;
 }
 
+/* Shell-chrome buttons — same pulse, applied to whichever button the
+   active shell-* step targets (functions for /bin lessons, watches
+   for /cron.d lessons). */
+body[data-tour-highlight="shell-functions-toggle-button"] [data-testid="shell-functions-toggle-button"],
+body[data-tour-highlight="shell-watches-toggle-button"] [data-testid="shell-watches-toggle-button"] {
+  border-color: var(--accent) !important;
+  animation: tour-sidebar-pulse 1.8s ease-in-out infinite;
+}
+
 @keyframes tour-sidebar-pulse {
   0%   { box-shadow: 0 0 0 0 var(--accent-glow, rgba(255, 200, 100, 0.5)); }
   70%  { box-shadow: 0 0 0 6px transparent; }

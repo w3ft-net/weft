@@ -1,15 +1,16 @@
 import { useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext'
-import { advanceOnboarding, getMe } from '../lib/api'
+import { advanceOnboarding } from '../lib/api'
 import './TourOverlay.css'
 
 // PanelStep describes one step of the panel-tour stage. Each step
 // targets a specific sidebar item; the user advances by clicking the
 // pulsing item (which navigates AND auto-advances) or by hitting Next.
 //
-// The shell-* steps are NOT in this list — they're handled by a
-// shell-side overlay later in the flow.
+// The shell-* steps live in a separate map below — their copy comes
+// from the server (onboarding_prompt), so the frontend only needs the
+// step → highlight-target mapping.
 interface PanelStep {
   step: string
   route: string
@@ -47,98 +48,126 @@ const PANEL_STEPS: PanelStep[] = [
   },
 ]
 
-const SHELL_HANDOFF_STEP = 'shell-ls'
+// shell-* step → which shell-chrome button to highlight (if any).
+// Steps not in this map render the floating overlay only, no
+// highlighted button. Hardcoded on the client because the testids
+// are UI-element names that already live here.
+const SHELL_HIGHLIGHT_TARGETS: Record<string, string> = {
+  'shell-cron':     'shell-watches-toggle-button',
+  'shell-bin-bash': 'shell-functions-toggle-button',
+  'shell-bin-lua':  'shell-functions-toggle-button',
+}
+
+const REFRESH_INTERVAL_MS = 3000
 
 export default function TourOverlay() {
-  const { user } = useAuth()
+  const { user, refreshUser } = useAuth()
   const location = useLocation()
 
   const step = user?.onboarding_step
   const dismissed = user?.onboarding_dismissed
   const inLoom = user?.customer === 'loom'
+  const isShell = !!step && step.startsWith('shell-')
+  const panel = step ? PANEL_STEPS.find(s => s.step === step) : null
 
-  // Auto-advance: when the user navigates to the route the current
-  // step targets, the server CASes onboarding_step forward. The next
-  // /me poll refreshes the User and the overlay slides to the next
-  // step (or unmounts if the tour ended).
+  // Panel-tour auto-advance: navigating to the highlighted route
+  // bumps the step server-side; AuthContext picks up the new step
+  // on the next refresh.
   useEffect(() => {
     if (!step || dismissed || !inLoom) return
-    const current = PANEL_STEPS.find(s => s.step === step)
-    if (!current) return
-    if (location.pathname === current.route) {
+    if (!panel) return
+    if (location.pathname === panel.route) {
       advanceOnboarding(step)
-        .then(() => getMe())
+        .then(() => refreshUser())
         .catch(e => console.error('panel-tour advance:', e))
     }
-  }, [step, dismissed, inLoom, location.pathname])
+  }, [step, dismissed, inLoom, location.pathname, panel, refreshUser])
+
+  // Shell-tour polling: while in shell-* phase, poll /me so the
+  // banner updates within a few seconds when the server-side
+  // shell-exec hook advances the step. This is the no-SSE path —
+  // the SSE event from /api/shell/exec is a low-latency
+  // optimization on top of this; if it gets dropped, the poll
+  // catches up.
+  useEffect(() => {
+    if (!isShell || dismissed || !inLoom) return
+    const id = setInterval(() => {
+      refreshUser().catch(() => {})
+    }, REFRESH_INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [isShell, dismissed, inLoom, refreshUser])
+
+  // Update body[data-tour-highlight] every render so CSS can pulse
+  // the right element. Cleanup runs in a separate effect so we
+  // don't strand a stale value on unmount.
+  useEffect(() => {
+    if (!step || dismissed || !inLoom) {
+      delete document.body.dataset.tourHighlight
+      return
+    }
+    if (panel) {
+      document.body.dataset.tourHighlight = panel.testId
+    } else if (isShell && SHELL_HIGHLIGHT_TARGETS[step]) {
+      document.body.dataset.tourHighlight = SHELL_HIGHLIGHT_TARGETS[step]
+    } else {
+      delete document.body.dataset.tourHighlight
+    }
+  }, [step, dismissed, inLoom, panel, isShell])
 
   if (!step || dismissed || !inLoom) return null
-  const active = PANEL_STEPS.find(s => s.step === step)
-  if (!active) return null
+  if (!panel && !isShell) return null
 
-  // Annotate the body with a data attribute the sidebar's CSS uses to
-  // pulse the matching item. Single source of truth: this component
-  // owns "what's the active step" and the sidebar reacts purely via
-  // CSS on the data-tour-highlight attribute.
-  document.body.dataset.tourHighlight = active.testId
+  // Build the current copy + actions.
+  let copy: string
+  let progress: string
+  let primaryAction: { label: string; testId: string; onClick: () => void } | null = null
 
-  async function handleNext() {
-    if (!active) return
-    try {
-      await advanceOnboarding(active.step)
-      // Re-fetch /me so the overlay flips to the next step or unmounts.
-      // AuthContext currently doesn't expose a refresh method; reload
-      // is the simplest correct path. (Pages cached against the old
-      // step would otherwise still show stale highlight.)
-      window.location.reload()
-    } catch (e) {
-      console.error('panel-tour next:', e)
+  if (panel) {
+    copy = panel.copy
+    const idx = PANEL_STEPS.findIndex(s => s.step === step)
+    progress = `Tour · ${idx + 1} of ${PANEL_STEPS.length}`
+    const isLastPanel = idx === PANEL_STEPS.length - 1
+    primaryAction = {
+      label: isLastPanel ? 'Drop into the shell →' : 'Next →',
+      testId: isLastPanel ? 'tour-overlay-shell-button' : 'tour-overlay-next-button',
+      onClick: () => {
+        advanceOnboarding(step)
+          .then(() => {
+            // Reload here — panel→shell handoff means the user is
+            // about to navigate to /shell where every cached query
+            // gets re-issued anyway.
+            window.location.reload()
+          })
+          .catch(e => console.error('panel-tour next:', e))
+      },
     }
+  } else {
+    // Shell phase. Copy comes from the server; no Next button —
+    // the user advances by running the pipeline that satisfies the
+    // current lesson's predicate.
+    copy = user.onboarding_prompt || `Lesson ${step}…`
+    progress = 'Tour · shell phase'
   }
-
-  // Where in the flow are we? "step 2 of 3" etc.
-  const idx = PANEL_STEPS.findIndex(s => s.step === step)
-  const progress = `${idx + 1} of ${PANEL_STEPS.length}`
-
-  // After downloads, the next step is the shell handoff — show a
-  // distinct "Drop into the shell" CTA instead of plain Next.
-  const isLastPanel = active.step === PANEL_STEPS[PANEL_STEPS.length - 1].step
 
   return (
     <div className="tour-overlay" data-testid="tour-overlay">
       <div className="tour-overlay-progress" data-testid="tour-overlay-progress">
-        Tour · {progress}
+        {progress}
       </div>
       <div className="tour-overlay-copy" data-testid="tour-overlay-copy">
-        {active.copy}
+        {copy}
       </div>
-      <div className="tour-overlay-actions">
-        {isLastPanel ? (
+      {primaryAction && (
+        <div className="tour-overlay-actions">
           <button
             className="tour-overlay-button tour-overlay-button-primary"
-            onClick={handleNext}
-            data-testid="tour-overlay-shell-button"
+            onClick={primaryAction.onClick}
+            data-testid={primaryAction.testId}
           >
-            Drop into the shell →
+            {primaryAction.label}
           </button>
-        ) : (
-          <button
-            className="tour-overlay-button tour-overlay-button-primary"
-            onClick={handleNext}
-            data-testid="tour-overlay-next-button"
-          >
-            Next →
-          </button>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   )
-}
-
-// Helper for shell-* steps — exported so the Shell page can import it
-// and decide whether to mount the in-shell tour banner. Placed here
-// so the canonical "is this step a shell step?" predicate lives next
-// to PANEL_STEPS rather than being duplicated.
-export function isShellStep(step: string | undefined): boolean {
-  return !!step && step.startsWith('shell-') && step !== SHELL_HANDOFF_STEP.replace('shell-', '')
 }

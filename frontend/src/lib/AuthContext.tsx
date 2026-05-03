@@ -20,6 +20,11 @@ interface AuthContextValue {
   // against the new active customer. A pure refetch without reload
   // would leave stale data on screens the user already opened.
   switchOrg: (orgName: string) => void
+  // refreshUser re-fetches /api/auth/me without reloading the page.
+  // Used by TourOverlay to pick up onboarding step changes the
+  // shell-side hook drove (advancing through lessons) so the banner
+  // updates without forcing a navigation.
+  refreshUser: () => Promise<void>
   loading: boolean
 }
 
@@ -86,8 +91,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.location.reload()
   }
 
+  async function refreshUser(): Promise<void> {
+    try {
+      const u = await getMe()
+      setUser(u)
+    } catch (e) {
+      // Best effort: a transient network error shouldn't blow up the
+      // app. The next refresh tick will catch it.
+      console.error('refreshUser:', e)
+    }
+  }
+
   return (
-    <AuthContext.Provider value={{ user, token, login, verify, loginWithToken, logout, switchOrg, loading }}>
+    <AuthContext.Provider value={{ user, token, login, verify, loginWithToken, logout, switchOrg, refreshUser, loading }}>
       {children}
     </AuthContext.Provider>
   )

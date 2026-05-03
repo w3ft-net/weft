@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/kevlarcon/weft/auth"
+	"github.com/kevlarcon/weft/coordinator/onboarding"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/store"
 )
@@ -699,6 +700,12 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"has_seen_welcome":     user.HasSeenWelcome,
 		"onboarding_step":      user.OnboardingStep,
 		"onboarding_dismissed": user.OnboardingDismissed,
+		// onboarding_prompt is the lesson copy for the current
+		// shell-* step. The frontend renders it verbatim — that
+		// way the lesson list lives in one place (the Go package)
+		// and the UI doesn't need updating each time we add a
+		// lesson.
+		"onboarding_prompt": onboarding.PromptFor(user.OnboardingStep),
 	}
 	if user.EmailVerifiedAt == nil {
 		resp["verification_deadline"] = user.CreatedAt.Add(auth.UnverifiedGracePeriod).Unix()

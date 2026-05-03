@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/kevlarcon/weft/auth"
+	"github.com/kevlarcon/weft/coordinator/onboarding"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -199,4 +201,48 @@ func (s *Server) handleOnboardingDismiss(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// maybeAdvanceShellLesson is the shell-side hook into the onboarding
+// state machine. handleShellExec calls it after every successful
+// pipeline completion (EOF on the gRPC stream). If the user is in a
+// shell-* lesson AND the just-run pipeline matches the lesson's
+// predicate, it advances the step and returns the new step + the
+// next lesson's prompt for the SSE/CLI banner to render. Returns
+// advanced=false (with empty step/prompt) for any of: not in Loom,
+// dismissed, no current shell lesson, predicate didn't match,
+// or store error (logged).
+func (s *Server) maybeAdvanceShellLesson(session *auth.Session, pipeline string) (newStep, prompt string, advanced bool) {
+	if session == nil || session.ActiveCustomerName != LoomCustomerSlug {
+		return "", "", false
+	}
+	user, err := s.store.GetUserByID(session.UserID)
+	if err != nil || user == nil {
+		return "", "", false
+	}
+	if user.OnboardingDismissed {
+		return "", "", false
+	}
+	current := user.OnboardingStep
+	if !onboarding.CheckPipeline(current, pipeline) {
+		return "", "", false
+	}
+	next := nextOnboardingStep(current)
+	if next == "" {
+		return "", "", false
+	}
+	advanced, err = s.store.AdvanceOnboardingStep(user.ID, current, next)
+	if err != nil {
+		log.Printf("onboarding: shell advance %s→%s for %s: %v", current, next, user.ID, err)
+		return "", "", false
+	}
+	if !advanced {
+		return "", "", false
+	}
+	if next == "done" {
+		if err := s.graduateOnboarding(user.ID); err != nil {
+			log.Printf("onboarding: graduate from shell hook for %s: %v", user.ID, err)
+		}
+	}
+	return next, onboarding.PromptFor(next), true
 }
