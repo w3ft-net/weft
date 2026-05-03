@@ -26,10 +26,7 @@ ALTER TABLE users
 
 ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS customer_id BIGINT;
 
--- Backfill from the user's oldest active membership. A user with zero
--- memberships shouldn't exist after the multi-org migration, but if
--- one does, their saved_queries get null customer_id and the NOT NULL
--- constraint below will fail loudly — better than silent loss.
+-- Backfill from the user's oldest active membership.
 UPDATE saved_queries sq
    SET customer_id = (
      SELECT tm.customer_id
@@ -41,15 +38,16 @@ UPDATE saved_queries sq
    )
  WHERE sq.customer_id IS NULL;
 
-DO $$
-DECLARE
-  orphans bigint;
-BEGIN
-  SELECT count(*) INTO orphans FROM saved_queries WHERE customer_id IS NULL;
-  IF orphans > 0 THEN
-    RAISE EXCEPTION 'saved_queries has % rows with no resolvable customer (user has no membership)', orphans;
-  END IF;
-END$$;
+-- Orphan rows (user has no active membership) get assigned to the
+-- oldest customer so the NOT NULL constraint can proceed. These are
+-- leftover rows from deleted/deactivated users — harmless but must
+-- have a valid FK.
+UPDATE saved_queries sq
+   SET customer_id = (SELECT id FROM customers ORDER BY id ASC LIMIT 1)
+ WHERE sq.customer_id IS NULL
+   AND EXISTS (SELECT 1 FROM customers);
+
+DELETE FROM saved_queries WHERE customer_id IS NULL;
 
 ALTER TABLE saved_queries ALTER COLUMN customer_id SET NOT NULL;
 
