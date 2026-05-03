@@ -9,9 +9,12 @@
 // embedded goose runner records applied migrations in the
 // `goose_db_version` table.
 //
-// The DSN comes from $DB_DSN (set by fetch-config.sh into
-// /opt/app/.env before the lifecycle hook executes). --db-dsn is available
-// for one-off manual runs.
+// The DSN comes from $DB_DSN, written into /opt/app/.env by
+// load-app-env's per-app hook (deploy/load-app-env-extra.sh, which
+// composes the DSN from DATABASE_HOST/NAME/USER/PASSWORD that
+// load-app-env populated from the SSM config blob and the
+// credentials secret). --db-dsn is available for one-off manual
+// runs.
 package main
 
 import (

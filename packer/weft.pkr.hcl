@@ -216,10 +216,24 @@ build {
     destination = "/tmp/start-role.sh"
   }
 
+  # load-app-env-extra is weft's per-app hook for the universal
+  # /usr/local/bin/load-app-env loader. Composes DB_DSN from the
+  # DATABASE_* component env vars (DATABASE_HOST/NAME from the SSM
+  # blob; DATABASE_USER/PASSWORD from the credentials secret) so
+  # weft-coordinator / weft-api / weft-migrate get a full DSN string
+  # in $DB_DSN without load-app-env having to know about postgres.
+  # The loader checks /opt/app/scripts/load-app-env-extra at the end
+  # of its run; the file's absence is a no-op.
+  provisioner "file" {
+    source      = "deploy/load-app-env-extra.sh"
+    destination = "/tmp/load-app-env-extra"
+  }
+
   provisioner "shell" {
     inline = [
       "sudo mv /tmp/startup.sh /tmp/fetch-config.sh /tmp/start-role.sh /opt/app/scripts/",
-      "sudo chmod +x /opt/app/scripts/startup.sh /opt/app/scripts/fetch-config.sh /opt/app/scripts/start-role.sh",
+      "sudo mv /tmp/load-app-env-extra /opt/app/scripts/load-app-env-extra",
+      "sudo chmod +x /opt/app/scripts/startup.sh /opt/app/scripts/fetch-config.sh /opt/app/scripts/start-role.sh /opt/app/scripts/load-app-env-extra",
     ]
   }
 
