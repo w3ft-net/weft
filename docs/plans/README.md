@@ -120,6 +120,7 @@ than product strategy.
 | [executeresult-buffered-cleanup](executeresult-buffered-cleanup.md) | Drain ExecuteResult.{Rows,Text,Stderr} fields after the test sweep migrates to `res.Drain(ctx)` |
 | [streaming-backpressure](streaming-backpressure.md) | Bounded per-shard queues + configurable streamCh; defer until production hits memory pressure |
 | [streaming-parallel-warp](streaming-parallel-warp.md) | Combine streaming + chunked intra-stage parallelism in warp |
+| [migration-collapse](migration-collapse.md) | store/schema.sql snapshot + post-deploy collapse hook so a virgin DB matches prod by construction |
 
 ## Conventions for new plans
 
