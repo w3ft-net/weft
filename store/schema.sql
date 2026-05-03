@@ -11,7 +11,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict T866diS4GuVmoS1KA0jiwxObCb4g0xFIgTlGuWmA4fg3vbHfqYZAUpmPmV6aixW
+\restrict C2TZlq1KgyEbrQexPOaZjoMkNTGtl05g60fBKKrlZPZqNb1xhOGexahEVryv0Lg
 
 -- Dumped from database version 16.13 (Debian 16.13-1.pgdg13+1)
 -- Dumped by pg_dump version 16.13 (Debian 16.13-1.pgdg13+1)
@@ -1733,7 +1733,8 @@ CREATE TABLE public.saved_queries (
     name text NOT NULL,
     query text NOT NULL,
     created_at timestamp with time zone,
-    updated_at timestamp with time zone
+    updated_at timestamp with time zone,
+    customer_id bigint NOT NULL
 );
 
 
@@ -2578,7 +2579,9 @@ CREATE TABLE public.users (
     updated_at timestamp with time zone,
     email_verified_at timestamp with time zone,
     has_seen_welcome boolean DEFAULT false NOT NULL,
-    last_active_customer_id bigint
+    last_active_customer_id bigint,
+    onboarding_step text DEFAULT 'welcome'::text NOT NULL,
+    onboarding_dismissed boolean DEFAULT false NOT NULL
 );
 
 
@@ -4632,6 +4635,13 @@ CREATE INDEX idx_pd_integrations_deleted_at ON public.pagerduty_integrations USI
 
 
 --
+-- Name: idx_saved_queries_customer_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_saved_queries_customer_user ON public.saved_queries USING btree (customer_id, user_id);
+
+
+--
 -- Name: idx_saved_queries_user_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5856,6 +5866,14 @@ ALTER TABLE ONLY public.namespaces
 
 
 --
+-- Name: saved_queries fk_saved_queries_customer; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.saved_queries
+    ADD CONSTRAINT fk_saved_queries_customer FOREIGN KEY (customer_id) REFERENCES public.customers(id) ON DELETE CASCADE;
+
+
+--
 -- Name: team_members fk_team_members_customer; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5915,13 +5933,13 @@ ALTER TABLE ONLY public.users
 -- PostgreSQL database dump complete
 --
 
-\unrestrict T866diS4GuVmoS1KA0jiwxObCb4g0xFIgTlGuWmA4fg3vbHfqYZAUpmPmV6aixW
+\unrestrict C2TZlq1KgyEbrQexPOaZjoMkNTGtl05g60fBKKrlZPZqNb1xhOGexahEVryv0Lg
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict 2xy8I7IWhTWHcqHDBg75Vzx8NbRi0hTXWKNAKe9MhsVh0VxxrC11JGLL2Z4KPJg
+\restrict TUtBczk1KfbBmBS5rGMkIPz3gR8fFeUkzM3leGIjH0EvTdUpiFtNMVO9JI28HT7
 
 -- Dumped from database version 16.13 (Debian 16.13-1.pgdg13+1)
 -- Dumped by pg_dump version 16.13 (Debian 16.13-1.pgdg13+1)
@@ -5983,18 +6001,19 @@ INSERT INTO public.goose_db_version VALUES (39, 38, true, '2026-05-03 02:48:57.3
 INSERT INTO public.goose_db_version VALUES (40, 39, true, '2026-05-03 02:48:57.391753');
 INSERT INTO public.goose_db_version VALUES (41, 40, true, '2026-05-03 02:48:57.396071');
 INSERT INTO public.goose_db_version VALUES (42, 41, true, '2026-05-03 02:48:57.423244');
+INSERT INTO public.goose_db_version VALUES (43, 42, true, '2026-05-03 22:15:10.307328');
 
 
 --
 -- Name: goose_db_version_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
-SELECT pg_catalog.setval('public.goose_db_version_id_seq', 42, true);
+SELECT pg_catalog.setval('public.goose_db_version_id_seq', 43, true);
 
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict 2xy8I7IWhTWHcqHDBg75Vzx8NbRi0hTXWKNAKe9MhsVh0VxxrC11JGLL2Z4KPJg
+\unrestrict TUtBczk1KfbBmBS5rGMkIPz3gR8fFeUkzM3leGIjH0EvTdUpiFtNMVO9JI28HT7
 
