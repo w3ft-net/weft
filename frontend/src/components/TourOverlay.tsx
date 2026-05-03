@@ -53,9 +53,13 @@ const PANEL_STEPS: PanelStep[] = [
 // highlighted button. Hardcoded on the client because the testids
 // are UI-element names that already live here.
 const SHELL_HIGHLIGHT_TARGETS: Record<string, string> = {
-  'shell-cron':     'shell-watches-toggle-button',
-  'shell-bin-bash': 'shell-functions-toggle-button',
-  'shell-bin-lua':  'shell-functions-toggle-button',
+  'shell-cron':           'shell-watches-toggle-button',
+  'shell-bin-bash':       'shell-functions-toggle-button',
+  'shell-bin-lua':        'shell-functions-toggle-button',
+  'shell-notify':         'shell-etc-toggle-button',  // /etc/notify.conf
+  'shell-usage':          'shell-etc-toggle-button',  // /etc/usage
+  'shell-dashboard-yaml': 'shell-etc-toggle-button',  // /etc/dashboards/*.conf
+  'shell-tmp':            'shell-tmp-toggle-button',
 }
 
 const REFRESH_INTERVAL_MS = 3000

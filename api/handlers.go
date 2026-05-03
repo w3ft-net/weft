@@ -228,6 +228,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/account/welcome-dismiss", s.handleWelcomeDismiss)
 	auth.HandleFunc("POST /api/onboarding/advance", s.handleOnboardingAdvance)
 	auth.HandleFunc("POST /api/onboarding/dismiss", s.handleOnboardingDismiss)
+	auth.HandleFunc("GET /api/fs/list", s.handleListFS)
 	auth.HandleFunc("POST /api/billing/checkout", s.handleCheckout)
 	auth.HandleFunc("POST /api/billing/setup-intent", s.handleSetupIntent)
 	auth.HandleFunc("GET /api/billing/usage", s.handleUsage)
@@ -328,6 +329,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/team", AuthMiddleware(s.store, s.jwtSecret, auth))
 	mux.Handle("/api/team/", AuthMiddleware(s.store, s.jwtSecret, auth))
 	mux.Handle("/api/onboarding/", AuthMiddleware(s.store, s.jwtSecret, auth))
+	mux.Handle("/api/fs/", AuthMiddleware(s.store, s.jwtSecret, auth))
 
 	return CORSMiddleware(s.baseURL, mux)
 }

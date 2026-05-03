@@ -297,6 +297,21 @@ export function dismissOnboarding(): Promise<void> {
   return apiFetch('/api/onboarding/dismiss', { method: 'POST' })
 }
 
+// FSEntry mirrors api.FSEntry on the server: one row in a directory
+// listing returned by /api/fs/list, used by the shell chrome's
+// tree sidebars.
+export interface FSEntry {
+  name: string
+  is_dir: boolean
+}
+
+// listFS returns the immediate children of a path. Empty `entries`
+// is a real result (an empty directory) — distinct from a 404 which
+// throws.
+export function listFS(path: string): Promise<{ entries: FSEntry[] }> {
+  return apiFetch(`/api/fs/list?path=${encodeURIComponent(path)}`)
+}
+
 export interface Usage {
   tier: string
   bytes_ingested: number

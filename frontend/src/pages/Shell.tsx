@@ -7,6 +7,7 @@ import {
 } from '../lib/api'
 import { initShellWasm, type ShellBridge } from '../wasm/bridge'
 import { useAuth } from '../lib/AuthContext'
+import FileTreeSidebar from '../components/FileTreeSidebar'
 import '@xterm/xterm/css/xterm.css'
 import './Shell.css'
 
@@ -20,7 +21,7 @@ export default function Shell() {
   const [functions, setFunctions] = useState<ShellFunction[]>([])
   const [watches, setWatches] = useState<CronWatch[]>([])
   const [watchLimits, setWatchLimits] = useState({ count: 0, limit: 0, min_interval: '' })
-  const [sidebarTab, setSidebarTab] = useState<'functions' | 'watches' | null>(null)
+  const [sidebarTab, setSidebarTab] = useState<'functions' | 'watches' | 'tmp' | 'etc' | null>(null)
   const [, setWasmReady] = useState(false)
 
   useEffect(() => {
@@ -98,9 +99,20 @@ export default function Shell() {
     setWatches(prev => prev.filter(w => w.Name !== name))
   }
 
-  function toggleSidebar(tab: 'functions' | 'watches') {
+  function toggleSidebar(tab: 'functions' | 'watches' | 'tmp' | 'etc') {
     setSidebarTab(prev => prev === tab ? null : tab)
   }
+
+  // handleFSPick is the file-tree leaf callback. Both /tmp and /etc
+  // sidebars use it; the distinction was relevant when /etc was a
+  // .conf-only world (cat) and /tmp was a scratch world (vim), but
+  // both currently want `cat` since the tour is read-only and edits
+  // happen via vi from the prompt anyway.
+  const handleFSPick = useCallback((absPath: string) => {
+    bridgeRef.current?.setInput(`cat ${absPath}`)
+    setSidebarTab(null)
+    bridgeRef.current?.terminal.focus()
+  }, [])
 
   return (
     <div className="app-layout">
@@ -128,6 +140,20 @@ export default function Shell() {
                 data-testid="shell-watches-toggle-button"
               >
                 /cron.d
+              </button>
+              <button
+                className={`shell-chrome-btn${sidebarTab === 'tmp' ? ' shell-chrome-btn-active' : ''}`}
+                onClick={() => toggleSidebar('tmp')}
+                data-testid="shell-tmp-toggle-button"
+              >
+                /tmp
+              </button>
+              <button
+                className={`shell-chrome-btn${sidebarTab === 'etc' ? ' shell-chrome-btn-active' : ''}`}
+                onClick={() => toggleSidebar('etc')}
+                data-testid="shell-etc-toggle-button"
+              >
+                /etc
               </button>
             </div>
           </div>
@@ -164,6 +190,20 @@ export default function Shell() {
               </ul>
             )}
           </div>
+          <FileTreeSidebar
+            root="/tmp"
+            open={sidebarTab === 'tmp'}
+            onClose={() => setSidebarTab(null)}
+            onPickFile={handleFSPick}
+            testIdPrefix="shell-tmp"
+          />
+          <FileTreeSidebar
+            root="/etc"
+            open={sidebarTab === 'etc'}
+            onClose={() => setSidebarTab(null)}
+            onPickFile={handleFSPick}
+            testIdPrefix="shell-etc"
+          />
           <div className={`shell-query-sidebar${sidebarTab === 'watches' ? ' shell-query-sidebar-open' : ''}`}
             data-testid="shell-watches-sidebar">
             <div className="shell-query-sidebar-header">
