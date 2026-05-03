@@ -38,3 +38,7 @@ dev/shard-data/
 # Sub-agent worktree scratch directories created by `Agent` /
 # isolation: "worktree". Local-only.
 .claude/worktrees/
+
+# Diagnostic dumps from EC2 console output investigations.
+console.log
+tail.log
