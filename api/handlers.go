@@ -689,14 +689,16 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]any{
-		"id":               user.ID,
-		"email":            user.Email,
-		"name":             user.Name,
-		"tier":             tier,
-		"customer":         session.ActiveCustomerName,
-		"orgs":             orgs,
-		"email_verified":   user.EmailVerifiedAt != nil,
-		"has_seen_welcome": user.HasSeenWelcome,
+		"id":                   user.ID,
+		"email":                user.Email,
+		"name":                 user.Name,
+		"tier":                 tier,
+		"customer":             session.ActiveCustomerName,
+		"orgs":                 orgs,
+		"email_verified":       user.EmailVerifiedAt != nil,
+		"has_seen_welcome":     user.HasSeenWelcome,
+		"onboarding_step":      user.OnboardingStep,
+		"onboarding_dismissed": user.OnboardingDismissed,
 	}
 	if user.EmailVerifiedAt == nil {
 		resp["verification_deadline"] = user.CreatedAt.Add(auth.UnverifiedGracePeriod).Unix()

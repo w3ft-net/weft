@@ -1,0 +1,93 @@
+.tour-overlay {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 360px;
+  background: var(--bg-surface);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 18px 20px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+  font-family: var(--font-mono);
+  z-index: 150;
+  /* Pulse the border subtly so the overlay reads as "the live thing
+     guiding you" rather than blending into the page chrome. */
+  animation: tour-overlay-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes tour-overlay-pulse {
+  0%   { box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), 0 0 0 0 var(--accent-glow, rgba(255, 200, 100, 0.4)); }
+  60%  { box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), 0 0 0 6px transparent; }
+  100% { box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), 0 0 0 0 transparent; }
+}
+
+.tour-overlay-progress {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 10px;
+}
+
+.tour-overlay-copy {
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  margin: 0 0 16px;
+}
+
+.tour-overlay-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.tour-overlay-button {
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+  padding: 7px 14px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-secondary);
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+}
+
+.tour-overlay-button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.tour-overlay-button-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-base);
+  font-weight: 600;
+}
+
+.tour-overlay-button-primary:hover {
+  background: transparent;
+  color: var(--accent);
+}
+
+/* Sidebar pulse for the tour-highlighted nav item. The body's
+   data-tour-highlight attribute names a data-testid; the sidebar's
+   matching link gets the pulse. Reuses the existing
+   sidebar-pending-pulse keyframes from SidebarNav.css. */
+body[data-tour-highlight] [data-testid] {
+  /* Default: not the highlighted one, no pulse. */
+}
+
+body[data-tour-highlight="sidebar-dashboards-link"] [data-testid="sidebar-dashboards-link"],
+body[data-tour-highlight="sidebar-namespaces-link"] [data-testid="sidebar-namespaces-link"],
+body[data-tour-highlight="sidebar-downloads-link"] [data-testid="sidebar-downloads-link"] {
+  border: 1px solid var(--accent) !important;
+  border-radius: 6px;
+  animation: tour-sidebar-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes tour-sidebar-pulse {
+  0%   { box-shadow: 0 0 0 0 var(--accent-glow, rgba(255, 200, 100, 0.5)); }
+  70%  { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}

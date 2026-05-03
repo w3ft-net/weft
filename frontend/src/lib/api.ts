@@ -257,6 +257,11 @@ export interface User {
   email_verified?: boolean
   verification_deadline?: number // unix seconds; present only when unverified
   has_seen_welcome?: boolean
+  // Onboarding state. 'welcome' is the default for new signups;
+  // 'done' marks a graduate (membership in Loom Inc has been revoked).
+  // The UI keys the welcome modal + tour overlays off these.
+  onboarding_step?: string
+  onboarding_dismissed?: boolean
 }
 
 // Flips the authenticated user's has_seen_welcome flag to true. Call
@@ -264,6 +269,26 @@ export interface User {
 // login. Server-side is idempotent.
 export function dismissWelcome(): Promise<void> {
   return apiFetch('/api/account/welcome-dismiss', { method: 'POST' })
+}
+
+// advanceOnboarding bumps onboarding_step from `expected` to the
+// next step in the server-side sequence. The server returns the new
+// step (or the current step, unchanged, on race). When the new step
+// is 'done', the server has already revoked Loom membership and
+// dropped a graduation notice — callers should refresh the user
+// record to pick up the new orgs[] list.
+export function advanceOnboarding(expected: string): Promise<{ step: string; advanced: boolean }> {
+  return apiFetch('/api/onboarding/advance', {
+    method: 'POST',
+    body: JSON.stringify({ step: expected }),
+  })
+}
+
+// dismissOnboarding flips onboarding_dismissed=true so the modal +
+// tour overlays go quiet. Doesn't revoke Loom membership; the user
+// can still browse via the org switcher.
+export function dismissOnboarding(): Promise<void> {
+  return apiFetch('/api/onboarding/dismiss', { method: 'POST' })
 }
 
 export interface Usage {

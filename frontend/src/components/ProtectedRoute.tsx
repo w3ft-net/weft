@@ -2,6 +2,8 @@ import { type ReactNode } from 'react'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext'
 import VerificationBanner from './VerificationBanner'
+import WelcomeModal from './WelcomeModal'
+import TourOverlay from './TourOverlay'
 
 export default function ProtectedRoute({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth()
@@ -28,10 +30,13 @@ export default function ProtectedRoute({ children }: { children: ReactNode }) {
 
   // Banner renders itself as null when email_verified !== false, so every
   // authenticated page picks up the verify-your-email prompt automatically
-  // without each page having to remember to include it.
+  // without each page having to remember to include it. WelcomeModal
+  // self-gates on onboarding_step + dismissed using the same pattern.
   return (
     <>
       <VerificationBanner />
+      <WelcomeModal />
+      <TourOverlay />
       {children}
     </>
   )
