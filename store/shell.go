@@ -797,7 +797,7 @@ func (s *Store) LatestCronResult(customerID uint, watchName string) (*CronResult
 // Slack credentials live here (OAuth bot token; webhook kept only for
 // tenants that never re-authed). PagerDuty integration keys live in
 // their own pagerduty_integrations table keyed by (customer_id, name).
-// AliasesYAML is the raw /etc/notify.conf document — a map of alias →
+// AliasesYAML is the raw /etc/notify.yaml document — a map of alias →
 // per-service entries consumed by the Notifier.
 type NotifyConfig struct {
 	gorm.Model
@@ -810,7 +810,7 @@ type NotifyConfig struct {
 }
 
 // PagerDutyIntegration is a single named PagerDuty integration key for a
-// customer. notify.conf aliases reference rows here by Name.
+// customer. notify.yaml aliases reference rows here by Name.
 type PagerDutyIntegration struct {
 	gorm.Model
 	CustomerID     uint   `gorm:"not null;index:idx_pd_integrations_customer_name,unique,where:deleted_at IS NULL"`
@@ -865,7 +865,7 @@ func (s *Store) DisconnectSlack(customerID uint) error {
 	}).Error
 }
 
-// SaveNotifyAliases writes the raw /etc/notify.conf YAML for a customer.
+// SaveNotifyAliases writes the raw /etc/notify.yaml YAML for a customer.
 // Callers must validate the YAML before invoking this.
 func (s *Store) SaveNotifyAliases(customerID uint, aliasesYAML string) error {
 	var nc NotifyConfig

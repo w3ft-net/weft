@@ -74,7 +74,7 @@ func (f *RemoteFS) ReadFile(path string) ([]byte, error) {
 		return []byte(serializeCronFile(w)), nil
 
 	case "etc":
-		if name == "notify.conf" {
+		if name == "notify.yaml" {
 			yaml, err := f.backend.GetNotifyConfig()
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", path, err)
@@ -100,7 +100,7 @@ func (f *RemoteFS) WriteFile(path string, data []byte) error {
 			Enabled:  true,
 		})
 	case "etc":
-		if name == "notify.conf" {
+		if name == "notify.yaml" {
 			return f.backend.SaveNotifyConfig(string(data))
 		}
 	}
@@ -133,7 +133,7 @@ func (f *RemoteFS) ReadDir(path string) ([]string, error) {
 		return names, nil
 
 	case "/etc":
-		return []string{"notify.conf", "usage"}, nil
+		return []string{"notify.yaml", "usage"}, nil
 	}
 
 	// /log/<namespace>/[<service>/] — see docs/plans/ingest-dimensions.md.

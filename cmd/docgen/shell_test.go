@@ -21,7 +21,7 @@ When the condition holds, ` + "`alert`" + ` writes to stderr.
 
 See ` + "`man alert`" + ` for grammar.
 
-## /etc/notify.conf
+## /etc/notify.yaml
 
 ` + "`--notify=<alias>`" + ` looks up a destination. Example:
 
@@ -39,7 +39,7 @@ ops:
 	// Section headings should be orange-wrapped. The exact escape is
 	// the ANSI 256-color code 208 (orange), same as shellcore's
 	// ansiAccent.
-	wantOrange := []string{"Alerts", "Conditions", "/etc/notify.conf"}
+	wantOrange := []string{"Alerts", "Conditions", "/etc/notify.yaml"}
 	for _, h := range wantOrange {
 		wrapped := "\x1b[38;5;208m" + h + "\x1b[0m"
 		if !strings.Contains(out, wrapped) {

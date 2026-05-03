@@ -8,7 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// AliasMap is the parsed form of /etc/notify.conf. Keys are alias names
+// AliasMap is the parsed form of /etc/notify.yaml. Keys are alias names
 // that cron watches reference via `notify: <alias>`. Each value bundles
 // per-service target lists.
 type AliasMap map[string]*Alias
@@ -97,7 +97,7 @@ func (p *PDTarget) UnmarshalYAML(node *yaml.Node) error {
 	return fmt.Errorf("pagerduty target must be a string or mapping")
 }
 
-// ParseNotifyAliases parses a /etc/notify.conf document. Empty input parses
+// ParseNotifyAliases parses a /etc/notify.yaml document. Empty input parses
 // to an empty map without error (customers without any aliases defined).
 func ParseNotifyAliases(raw string) (AliasMap, error) {
 	if strings.TrimSpace(raw) == "" {
@@ -105,14 +105,14 @@ func ParseNotifyAliases(raw string) (AliasMap, error) {
 	}
 	var m AliasMap
 	if err := yaml.Unmarshal([]byte(raw), &m); err != nil {
-		return nil, fmt.Errorf("notify.conf: %w", err)
+		return nil, fmt.Errorf("notify.yaml: %w", err)
 	}
 	for name, alias := range m {
 		if alias == nil {
-			return nil, fmt.Errorf("notify.conf: alias %q is empty", name)
+			return nil, fmt.Errorf("notify.yaml: alias %q is empty", name)
 		}
 		if len(alias.Slack) == 0 && len(alias.PagerDuty) == 0 {
-			return nil, fmt.Errorf("notify.conf: alias %q has no targets", name)
+			return nil, fmt.Errorf("notify.yaml: alias %q has no targets", name)
 		}
 		for i, t := range alias.PagerDuty {
 			if t.Severity == "" {

@@ -4,7 +4,7 @@
 //	/log/*.log              — read-only pseudofiles backed by shard queries
 //	/bin/*                  — user-defined bash functions
 //	/cron.d/*               — scheduled watch definitions
-//	/etc/notify.conf        — notification channel configuration
+//	/etc/notify.yaml        — notification channel configuration
 //	/etc/dashboards/*.conf  — named dashboards (sections/tiles YAML)
 //	/tmp/*                  — per-customer scratch files (persistent for 48h)
 package shellfs
@@ -122,7 +122,7 @@ func (f *ShellFS) ReadFile(path string) ([]byte, error) {
 		return []byte(serializeCron(w)), nil
 
 	case "etc":
-		if name == "notify.conf" {
+		if name == "notify.yaml" {
 			nc, err := f.store.GetNotifyConfig(f.customerID)
 			if err != nil {
 				return []byte(""), nil // empty config is valid
@@ -350,7 +350,7 @@ func (f *ShellFS) WriteFile(path string, data []byte) error {
 		return f.store.SaveCronWatch(f.customerID, f.userID, name, schedule, pipeline)
 
 	case "etc":
-		if name == "notify.conf" {
+		if name == "notify.yaml" {
 			validated, err := parseNotifyConfig(string(data))
 			if err != nil {
 				return fmt.Errorf("%s: %w", path, err)
@@ -412,7 +412,7 @@ func (f *ShellFS) Stat(path string) (fs.FileInfo, error) {
 			return &vfsFileInfo{name: name, size: int64(len(serializeCron(w))), mtime: w.UpdatedAt}, nil
 		}
 	case "etc":
-		if name == "notify.conf" {
+		if name == "notify.yaml" {
 			if nc, err := f.store.GetNotifyConfig(f.customerID); err == nil {
 				return &vfsFileInfo{name: name, size: int64(len(nc.AliasesYAML)), mtime: nc.UpdatedAt}, nil
 			}
@@ -574,7 +574,7 @@ func (f *ShellFS) ReadDir(path string) ([]fs.DirEntry, error) {
 		}
 		return []fs.DirEntry{
 			&vfsDirEntry{name: "dashboards", dir: true},
-			&vfsDirEntry{name: "notify.conf", size: notifySize, mtime: notifyMtime},
+			&vfsDirEntry{name: "notify.yaml", size: notifySize, mtime: notifyMtime},
 			&vfsDirEntry{name: "usage", mtime: time.Now()},
 		}, nil
 
@@ -991,7 +991,7 @@ func parseCron(content string) (schedule, pipeline string, err error) {
 
 // ── Notify config serialization ─────────────────────────────
 //
-// /etc/notify.conf is a YAML map of alias → per-service targets. Example:
+// /etc/notify.yaml is a YAML map of alias → per-service targets. Example:
 //
 //     ops:
 //       slack: ["#ops-alerts"]
@@ -1001,7 +1001,7 @@ func parseCron(content string) (schedule, pipeline string, err error) {
 //
 // Cron watches reference aliases via `notify: <alias-name>`. Slack credentials
 // and PagerDuty integration keys live in the database (managed through the
-// Account → Integrations UI); notify.conf carries routing only, never secrets.
+// Account → Integrations UI); notify.yaml carries routing only, never secrets.
 
 func serializeNotifyConfig(nc *store.NotifyConfig) string {
 	if nc == nil {

@@ -23,7 +23,7 @@ as a cron result; writes to stderr are treated as alert firings
 
 ```
 # schedule: every 1m          (or cron: */5 * * * *)
-# notify: ops                 (alias from /etc/notify.conf)
+# notify: ops                 (alias from /etc/notify.yaml)
 cat /log/api.log | grep ERROR | wc -l
 ```
 

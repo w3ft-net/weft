@@ -70,7 +70,7 @@ type Args struct {
 	Duration  time.Duration // --duration window; 0 means no window
 	Average   bool          // --average flag (above/below with duration)
 	Msg       string        // --msg override
-	Notify    string        // --notify=<alias> → notify.conf lookup
+	Notify    string        // --notify=<alias> → notify.yaml lookup
 	Key       shellcore.FieldSpec     // -k: 1-indexed column or .json.path; zero = "whole line"
 	Tag       shellcore.FieldSpec     // -t/--tag: same shape; zero = no tag
 }

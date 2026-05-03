@@ -25,7 +25,7 @@ Just a snapshot trail of recent versions.
 |-----------------------|----------|
 | `/bin/<name>`         | ✓ — saves to scripts produce versions |
 | `/cron.d/<name>`      | ✓ — saves to watches produce versions |
-| `/etc/notify.conf`    | ✗ |
+| `/etc/notify.yaml`    | ✗ |
 | `/log/...`            | ✗ |
 | `/tmp/...`            | ✗ |
 
@@ -219,7 +219,7 @@ message.
 ## What `wit` does NOT do
 
 - **No branches, no merges.** It's a linear snapshot trail.
-- **No history for `/etc/notify.conf` or `/tmp`.** Notify config
+- **No history for `/etc/notify.yaml` or `/tmp`.** Notify config
   is rare-edit shared state; `/tmp` is intentionally ephemeral
   with its own 48-hour expiry.
 - **No recovery from `rm`.** Deleting a script or watch deletes

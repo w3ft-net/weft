@@ -29,8 +29,8 @@ func TestQuery_InteractiveAlertUsesCoordinatorNotifier(t *testing.T) {
 		Notifier: NewNotifier(db),
 	})
 
-	// No alias is defined in /etc/notify.conf, so Notifier.Send returns
-	// "no notify.conf configured". The point is that Send is REACHED —
+	// No alias is defined in /etc/notify.yaml, so Notifier.Send returns
+	// "no notify.yaml configured". The point is that Send is REACHED —
 	// meaning Coordinator.Notifier propagated into the interactive
 	// AlertContext.
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}

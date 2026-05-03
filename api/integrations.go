@@ -196,7 +196,7 @@ func (s *Server) handlePagerDutyDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleGetNotifyConfig returns the customer's /etc/notify.conf YAML.
+// handleGetNotifyConfig returns the customer's /etc/notify.yaml YAML.
 // An absent row yields an empty string — the shell treats that as a blank file.
 func (s *Server) handleGetNotifyConfig(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
@@ -213,7 +213,7 @@ func (s *Server) handleGetNotifyConfig(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"aliases_yaml": yaml})
 }
 
-// handleSaveNotifyConfig validates and persists the customer's notify.conf.
+// handleSaveNotifyConfig validates and persists the customer's notify.yaml.
 // Validation mirrors the in-process shellfs path so both shells get the same
 // errors back (missing targets, bad PD severity, malformed YAML).
 func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) {

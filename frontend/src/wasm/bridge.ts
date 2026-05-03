@@ -86,9 +86,9 @@ const API_BASE = import.meta.env.VITE_API_URL || ''
 function fsApiPath(fsPath: string): { endpoint: string; name: string } | null {
   // /bin/check_errors → PUT /api/functions/check_errors
   // /cron.d/api-errors → PUT /api/watches/api-errors
-  // /etc/notify.conf → PUT /api/notify
-  if (fsPath === '/etc/notify.conf') {
-    return { endpoint: '/api/notify', name: 'notify.conf' }
+  // /etc/notify.yaml → PUT /api/notify
+  if (fsPath === '/etc/notify.yaml') {
+    return { endpoint: '/api/notify', name: 'notify.yaml' }
   }
   const m = fsPath.match(/^\/(bin|cron\.d)\/(.+)$/)
   if (m) {
@@ -119,7 +119,7 @@ function fsApiSync(method: string, path: string, content?: string): { content?: 
       } else if (path.startsWith('/cron.d/')) {
         const parsed = parseCronFile(content)
         xhr.send(JSON.stringify(parsed))
-      } else if (path === '/etc/notify.conf') {
+      } else if (path === '/etc/notify.yaml') {
         xhr.send(JSON.stringify({ aliases_yaml: content }))
       }
     } else if (method === 'GET') {
@@ -216,7 +216,7 @@ function fsApiSyncDir(path: string): { entries?: string[]; error?: string } {
     if (entries.length > 0) return { entries }
     return { error: `${path}: no such directory` }
   } else if (path === '/etc' || path === '/etc/') {
-    return { entries: ['notify.conf', 'usage'] }
+    return { entries: ['notify.yaml', 'usage'] }
   } else {
     return { error: `${path}: not a directory` }
   }

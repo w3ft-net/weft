@@ -388,7 +388,7 @@ zero for `Size()` and `ModTime()`. Populate both:
   `UpdatedAt`; size can be the serialized form's byte length.
 - For **`/tmp`**: `byte_size` and `updated_at` columns on `tmp_files`
   are designed for this.
-- For **`/etc/notify.conf`**: size = len of stored YAML, ModTime =
+- For **`/etc/notify.yaml`**: size = len of stored YAML, ModTime =
   `updated_at` on `notify_config`.
 - For **`/etc/usage`**: synthetic — size 0, ModTime `time.Now()`.
   That's fine.

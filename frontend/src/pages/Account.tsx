@@ -414,7 +414,7 @@ function IntegrationsCard({ integrations, onRefresh }: { integrations: Integrati
 
       {/* Info */}
       <div className="dash-empty" style={{ paddingTop: 12 }}>
-        Configure notification routing in <code>/etc/notify.conf</code> or per-watch with <code># notify: slack:#channel</code>
+        Configure notification routing in <code>/etc/notify.yaml</code> or per-watch with <code># notify: slack:#channel</code>
       </div>
     </div>
   )

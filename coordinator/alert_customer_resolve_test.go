@@ -15,15 +15,15 @@ import (
 // c.CustomerID instead of resolving the passed-in name.
 //
 // Result: Notifier.Send(0, "foo", ...) → Store.GetNotifyConfig(0)
-// finds nothing → "no notify.conf configured" — even when the calling
-// customer has a perfectly valid /etc/notify.conf with alias "foo".
+// finds nothing → "no notify.yaml configured" — even when the calling
+// customer has a perfectly valid /etc/notify.yaml with alias "foo".
 //
-// This test seeds a customer with notify.conf that defines "foo", but
+// This test seeds a customer with notify.yaml that defines "foo", but
 // without Slack credentials configured. If the customer resolution
 // works, dispatch reaches the alias, finds the slack target, then
 // fails at credentials with "no Slack credentials configured". If it
 // doesn't work (current bug), dispatch fails earlier at the config
-// lookup with "no notify.conf configured".
+// lookup with "no notify.yaml configured".
 func TestQuery_InteractiveAlertResolvesCallerCustomer(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
@@ -52,9 +52,9 @@ func TestQuery_InteractiveAlertResolvesCallerCustomer(t *testing.T) {
 	resultD := drainExec(t, result)
 
 	// Red assertion: today this fails because stderr is
-	// 'alert: dispatch to "foo" failed: no notify.conf configured'
+	// 'alert: dispatch to "foo" failed: no notify.yaml configured'
 	// — the notifier used customerID=0 instead of resolving cust.Name.
-	if strings.Contains(resultD.Stderr, "no notify.conf configured") {
+	if strings.Contains(resultD.Stderr, "no notify.yaml configured") {
 		t.Errorf("notifier used wrong customer (got config-not-found):\n  stderr=%q", resultD.Stderr)
 	}
 

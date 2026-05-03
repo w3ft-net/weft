@@ -97,11 +97,11 @@ func (b *MemBackend) DeleteDashboard(name string) error {
 }
 
 func (b *MemBackend) GetNotifyConfig() (string, error) {
-	return b.files["etc/notify.conf"], nil
+	return b.files["etc/notify.yaml"], nil
 }
 
 func (b *MemBackend) SaveNotifyConfig(content string) error {
-	b.files["etc/notify.conf"] = content
+	b.files["etc/notify.yaml"] = content
 	return nil
 }
 

@@ -15,7 +15,7 @@ shell:
 
 - `help builtins` — commands you can use in a pipeline
 - `help cron` — scheduled watches, result accessors, tier limits
-- `help alerts` — alert conditions, notify.conf, dispatching
+- `help alerts` — alert conditions, notify.yaml, dispatching
 
 ## Reference pages
 

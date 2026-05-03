@@ -20,7 +20,7 @@ Just a snapshot trail of recent versions.</p>
 |-----------------------|----------|
 | <code>/bin/&lt;name&gt;</code>         | ✓ — saves to scripts produce versions |
 | <code>/cron.d/&lt;name&gt;</code>      | ✓ — saves to watches produce versions |
-| <code>/etc/notify.conf</code>    | ✗ |
+| <code>/etc/notify.yaml</code>    | ✗ |
 | <code>/log/...</code>            | ✗ |
 | <code>/tmp/...</code>            | ✗ |</p>
 <p><code>wit</code> commands against any non-tracked path return
@@ -170,7 +170,7 @@ message.</p>
 <h2>What <code>wit</code> does NOT do</h2>
 <ul>
 <li><strong>No branches, no merges.</strong> It's a linear snapshot trail.</li>
-<li><strong>No history for <code>/etc/notify.conf</code> or <code>/tmp</code>.</strong> Notify config
+<li><strong>No history for <code>/etc/notify.yaml</code> or <code>/tmp</code>.</strong> Notify config
 is rare-edit shared state; <code>/tmp</code> is intentionally ephemeral
 with its own 48-hour expiry.</li>
 <li><strong>No recovery from <code>rm</code>.</strong> Deleting a script or watch deletes

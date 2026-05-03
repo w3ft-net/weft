@@ -87,7 +87,7 @@ func (b *HTTPBackend) DeleteWatch(name string) error {
 func (b *HTTPBackend) GetNotifyConfig() (string, error) {
 	data, err := b.apiGet("/api/notify")
 	if err != nil {
-		// An unset notify.conf is a 404 from the API by design; the shell
+		// An unset notify.yaml is a 404 from the API by design; the shell
 		// should see that as an empty file, not an error.
 		if err.Error() == "not found" {
 			return "", nil

@@ -632,7 +632,7 @@ Three PRs, each green standalone:
   backing store is the only source of truth.
 - Per-line blame. We capture entire-file versions; if you want to
   know which line was added when, `diff` two versions.
-- History for `/etc/notify.conf` or `/tmp`. Notify is rare-edit
+- History for `/etc/notify.yaml` or `/tmp`. Notify is rare-edit
   config (could add later); /tmp is intentionally ephemeral.
 - Recovery from `rm`. Deleting an entity drops history with it.
   Future safety net via a `--force`-on-rm prompt or a `/trash`

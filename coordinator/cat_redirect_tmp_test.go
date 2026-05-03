@@ -69,11 +69,11 @@ func TestCoordinatorQuery_LogQueryRedirectToTmp(t *testing.T) {
 }
 
 // TestCoordinatorQuery_CatRedirectFromEtcToTmp covers the user-reported
-// flow: `cat /etc/notify.conf > /tmp/notify.yaml` should write the
+// flow: `cat /etc/notify.yaml > /tmp/notify.yaml` should write the
 // /etc file's contents into /tmp via shellfs. Today the planner sees
-// `cat /etc/notify.conf` and routes it as a log query against the
-// (non-existent) source app `/etc/notify.conf`, so the coordinator
-// rejects it with "unknown source: /etc/notify.conf" and the
+// `cat /etc/notify.yaml` and routes it as a log query against the
+// (non-existent) source app `/etc/notify.yaml`, so the coordinator
+// rejects it with "unknown source: /etc/notify.yaml" and the
 // follow-up `cat /tmp/notify.yaml` returns nothing because nothing
 // was ever written.
 func TestCoordinatorQuery_CatRedirectFromEtcToTmp(t *testing.T) {
@@ -81,14 +81,14 @@ func TestCoordinatorQuery_CatRedirectFromEtcToTmp(t *testing.T) {
 
 	const conf = "weft-info:\n  slack:\n    - \"#weft-auto\"\n"
 	if err := db.SaveNotifyAliases(custID, conf); err != nil {
-		t.Fatalf("seed /etc/notify.conf: %v", err)
+		t.Fatalf("seed /etc/notify.yaml: %v", err)
 	}
 
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	cust, _ := db.GetCustomerByID(custID)
 
-	res, err := c.Execute(`cat /etc/notify.conf > /tmp/notify.yaml`, tr, cust.Name, "")
+	res, err := c.Execute(`cat /etc/notify.yaml > /tmp/notify.yaml`, tr, cust.Name, "")
 	if err != nil {
 		t.Fatalf("cat-redirect Query: %v", err)
 	}

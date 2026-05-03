@@ -16,7 +16,7 @@ import (
 var pdEventsURL = "https://events.pagerduty.com/v2/enqueue"
 
 // Notifier dispatches alerts through the per-customer alias map stored in
-// /etc/notify.conf. A cron watch's `notify:` field names an alias; the alias
+// /etc/notify.yaml. A cron watch's `notify:` field names an alias; the alias
 // fans out to one or more Slack / PagerDuty targets.
 type Notifier struct {
 	Store  *store.Store
@@ -32,7 +32,7 @@ func NewNotifier(s *store.Store) *Notifier {
 }
 
 // Send dispatches a notification to the named alias from the customer's
-// /etc/notify.conf. watchName is used to build the PagerDuty dedup key so
+// /etc/notify.yaml. watchName is used to build the PagerDuty dedup key so
 // a watch firing repeatedly during an outage collapses to one incident —
 // ad-hoc shell invocations should pass a fresh synthetic name (see
 // AlertContext.dispatchIdentity). body is the alert text; individual
@@ -45,15 +45,15 @@ func (n *Notifier) Send(customerID uint, aliasName, watchName, body string) erro
 
 	nc, err := n.Store.GetNotifyConfig(customerID)
 	if err != nil {
-		return fmt.Errorf("no notify.conf configured")
+		return fmt.Errorf("no notify.yaml configured")
 	}
 	aliases, err := store.ParseNotifyAliases(nc.AliasesYAML)
 	if err != nil {
-		return fmt.Errorf("parse notify.conf: %w", err)
+		return fmt.Errorf("parse notify.yaml: %w", err)
 	}
 	alias, ok := aliases[aliasName]
 	if !ok {
-		return fmt.Errorf("alias %q not defined in /etc/notify.conf", aliasName)
+		return fmt.Errorf("alias %q not defined in /etc/notify.yaml", aliasName)
 	}
 
 	var firstErr error

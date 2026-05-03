@@ -37,10 +37,10 @@ tail /log/shard.log | jq -r '&quot;\\(.host) \\(.pct)&quot;' \\
 tail /log/shard.log | jq 'select(.type==&quot;disk&quot;)' \\
   | alert above 80 -k .pct -t .host --notify=ops
 </code></pre>
-<h2>/etc/notify.conf</h2>
-<p><code>--notify=&lt;alias&gt;</code> looks up a destination from your notify.conf
+<h2>/etc/notify.yaml</h2>
+<p><code>--notify=&lt;alias&gt;</code> looks up a destination from your notify.yaml
 — a YAML map of alias name → per-service targets. Edit with:</p>
-<pre><code>vi /etc/notify.conf
+<pre><code>vi /etc/notify.yaml
 </code></pre>
 <p>Each alias bundles one or more Slack channels and/or PagerDuty
 integrations. <code>slack:</code> and <code>pagerduty:</code> are always lists; each entry
@@ -64,7 +64,7 @@ mappings. PagerDuty entries are integration names (strings, severity
 defaults to <code>error</code>), or <code>{name: &quot;...&quot;, severity: &quot;...&quot;}</code> where severity
 is one of <code>critical</code>, <code>error</code>, <code>warning</code>, <code>info</code>.</p>
 <p>Slack and PagerDuty credentials are configured under Account →
-Integrations; notify.conf only names destinations. The PagerDuty
+Integrations; notify.yaml only names destinations. The PagerDuty
 integration name must match one you've registered there.</p>
 <h2>Testing an alias</h2>
 <pre><code>echo &quot;test fire&quot; | alert --notify=ops
