@@ -5,6 +5,9 @@ import (
 	_ "embed"
 	"embed"
 	"fmt"
+	"os"
+	"os/exec"
+	"strings"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // register "pgx" driver with database/sql
 	"github.com/pressly/goose/v3"
@@ -31,9 +34,18 @@ var migrationsFS embed.FS
 //go:embed schema.sql
 var schemaSQL string
 
-// Migrate applies the collapsed schema (if the DB is virgin) and then
-// runs any pending migration deltas. Idempotent: re-running on a fully-
-// migrated DB is a no-op.
+// AllowSchemaBootstrapEnv is the env-var gate on schema.sql apply.
+// When the DB has no `goose_db_version` table, applyCollapsedSchema
+// refuses to run unless this is "1". Production DBs are always
+// already bootstrapped — a missing version table on prod indicates
+// corruption, not first-run, and we'd rather fail loud than silently
+// restore a possibly-stale snapshot. Dev/CI bootstrap entry points
+// (test fixtures, dev/demo/up.sh) set the flag explicitly.
+const AllowSchemaBootstrapEnv = "WEFT_ALLOW_SCHEMA_BOOTSTRAP"
+
+// Migrate applies the collapsed schema (if the DB is virgin and
+// AllowSchemaBootstrapEnv is set) and then runs any pending migration
+// deltas. Idempotent: re-running on a fully-migrated DB is a no-op.
 func Migrate(dsn string) error {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -41,7 +53,7 @@ func Migrate(dsn string) error {
 	}
 	defer db.Close()
 
-	if err := applyCollapsedSchema(db); err != nil {
+	if err := applyCollapsedSchema(db, dsn); err != nil {
 		return fmt.Errorf("apply schema.sql: %w", err)
 	}
 
@@ -55,15 +67,28 @@ func Migrate(dsn string) error {
 	return nil
 }
 
-// applyCollapsedSchema runs schema.sql exactly once per database, on a
-// DB that has not yet been bootstrapped (no goose_db_version table).
-// Subsequent calls find the table already present and short-circuit.
+// applyCollapsedSchema runs schema.sql via psql exactly once per
+// database, on a virgin DB (no goose_db_version table) where
+// AllowSchemaBootstrapEnv is set. Subsequent calls find the table
+// already present and short-circuit.
 //
-// schema.sql carries both the DDL and the goose_db_version row data
-// (via `pg_dump --data-only --table=goose_db_version --inserts`), so
-// after this runs goose's max version equals the prod high-water mark
-// and goose.Up only applies post-collapse migrations.
-func applyCollapsedSchema(db *sql.DB) error {
+// We shell out to psql rather than db.Exec(schemaSQL) for two
+// semantic reasons:
+//   1. schema.sql is pg_dump output. Modern pg_dump (16.x+) emits
+//      psql meta-commands like `\restrict <key>` / `\unrestrict <key>`
+//      that gate the restore behind a one-shot ACL — those are
+//      psql-only and the SQL wire protocol rejects them.
+//   2. pg_dump puts `SELECT set_config('search_path', '', false)` at
+//      the top of its output to force fully-qualified DDL. That
+//      setting is session-scoped, but in the *sql.DB pool path the
+//      poisoned connection goes back to the pool and goose picks it
+//      up — failing to find unqualified `goose_db_version`. psql
+//      runs in its own subprocess; the SET stays contained.
+//
+// The env-var guard is the safety net: prod should never hit a virgin
+// DB, and if it does, blindly restoring an embedded snapshot is the
+// wrong move. Dev/CI explicitly opt in.
+func applyCollapsedSchema(db *sql.DB, dsn string) error {
 	if len(schemaSQL) == 0 {
 		return nil // pre-collapse repos have an empty placeholder schema.sql
 	}
@@ -82,8 +107,23 @@ func applyCollapsedSchema(db *sql.DB) error {
 		return nil
 	}
 
-	if _, err := db.Exec(schemaSQL); err != nil {
-		return fmt.Errorf("exec schema.sql: %w", err)
+	if os.Getenv(AllowSchemaBootstrapEnv) != "1" {
+		return fmt.Errorf(
+			"DB has no goose_db_version table and %s is not set: "+
+				"refusing to apply store/schema.sql. Production DBs are "+
+				"always already bootstrapped — a missing version table on "+
+				"prod indicates corruption, not first-run. Set %s=1 only "+
+				"in dev/CI bootstrap paths (test fixtures, dev/demo/up.sh).",
+			AllowSchemaBootstrapEnv, AllowSchemaBootstrapEnv,
+		)
+	}
+
+	cmd := exec.Command("psql", "-v", "ON_ERROR_STOP=1", "-d", dsn)
+	cmd.Stdin = strings.NewReader(schemaSQL)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("psql apply schema.sql: %w", err)
 	}
 	return nil
 }

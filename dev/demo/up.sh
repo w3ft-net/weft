@@ -24,7 +24,13 @@ echo "→ building seed CLI"
 go build -o "${SEED_BIN}" ./cmd/weft-demo-seed
 
 echo "→ seeding customers/users/tokens (idempotent)"
-"./${SEED_BIN}" --db-dsn "${DSN}" --tokens-out "${TOKENS}"
+# A fresh dev DB is virgin (no goose_db_version table yet) so
+# store.Migrate has to apply schema.sql via psql for bootstrap. That
+# path is gated by WEFT_ALLOW_SCHEMA_BOOTSTRAP — production never
+# hits it (the prod DB is always already bootstrapped), and we'd
+# rather fail loud than silently restore a stale embedded snapshot
+# if it ever did.
+WEFT_ALLOW_SCHEMA_BOOTSTRAP=1 "./${SEED_BIN}" --db-dsn "${DSN}" --tokens-out "${TOKENS}"
 
 echo "→ bringing up 12 demo services"
 docker compose \

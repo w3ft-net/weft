@@ -27,6 +27,9 @@ func testOpen(t *testing.T) *Store {
 	if err := ensureTestDatabase(dsn); err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}
+	// The test DB might be virgin (first run on a fresh postgres) —
+	// allow Open's bootstrap path to apply schema.sql via psql.
+	t.Setenv(AllowSchemaBootstrapEnv, "1")
 	db, err := Open(dsn)
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
