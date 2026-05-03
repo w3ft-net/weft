@@ -802,6 +802,30 @@ func (p *Provisioner) reapDeadShards() {
 				stale := entry.LastHeartbeatAt.IsZero() ||
 					time.Since(entry.LastHeartbeatAt) > rebindTimeout
 				if stale {
+					// Best-effort snapshot of the orphaned volume before
+					// we give up. The shard's data was never exported to
+					// parquet (this is the path that fires when no
+					// graceful archive() ran), so the EBS snapshot is
+					// the only path back to the rows for an operator's
+					// recovery. Failures don't block the ARCHIVED
+					// transition — leaving the entry in INGESTING-with-
+					// no-instance is the worse outcome (it inflates
+					// IngestingCount and blocks reconciler relaunch).
+					if p.volumes != nil && entry.EBSVolumeID != "" {
+						snapCtx, snapCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+						snapID, err := p.volumes.SnapshotVolume(snapCtx, SnapshotOpts{
+							VolumeID: entry.EBSVolumeID,
+							ShardID:  entry.ID,
+						})
+						snapCancel()
+						if err != nil {
+							log.Printf("provisioner: zombie %s — snapshot %s failed: %v (data unrecoverable)",
+								entry.ID, entry.EBSVolumeID, err)
+						} else {
+							log.Printf("provisioner: zombie %s — snapshotted %s → %s before archive (recover via tag:WeftShardId=%s)",
+								entry.ID, entry.EBSVolumeID, snapID, entry.ID)
+						}
+					}
 					log.Printf("provisioner: archiving zombie %s — rebind never landed (vol=%s presumed lost or reclaimed)",
 						entry.ID, entry.EBSVolumeID)
 					entry.State = StateArchived
