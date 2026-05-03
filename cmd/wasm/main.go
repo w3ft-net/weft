@@ -13,6 +13,7 @@ import (
 
 	"github.com/kevlarcon/warp/pkg/shellcore"
 	"github.com/kevlarcon/warp/pkg/shellcore/wasm"
+	"github.com/kevlarcon/warp/pkg/syntax"
 	"github.com/kevlarcon/weft/chart"
 )
 
@@ -59,6 +60,7 @@ func wasmInit(_ js.Value, args []js.Value) any {
 		Callbacks: jsCallbacks,
 		OnAction:  handleWeftAction,
 	})
+	core.SetSyntaxFallback(syntax.LangBash)
 
 	// Chart View + builtin + pipe stage — weft-specific. Uses a
 	// dedicated WatchResultsProvider that calls fsGetWatchResults

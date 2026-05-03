@@ -15,6 +15,7 @@ import (
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/kevlarcon/warp/pkg/syntax"
 	"github.com/kevlarcon/weft/chart"
 )
 
@@ -473,6 +474,7 @@ func stripBoth(line string) string {
 // embedders that aren't weft don't inherit weft's tenancy name.
 func (s *Shell) configureCore(core *shellcore.ShellCore) {
 	core.SetPathClassifier(PathClassifier)
+	core.SetSyntaxFallback(syntax.LangBash)
 	if s.FS != nil {
 		core.SetFS(s.FS)
 		if wr, ok := s.FS.(chart.WatchResultsProvider); ok {
