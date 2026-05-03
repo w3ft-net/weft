@@ -120,6 +120,37 @@
   font-weight: 600;
 }
 
+.sidebar-org {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.sidebar-org-label {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sidebar-org-select {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 6px 8px;
+  cursor: pointer;
+  width: 100%;
+}
+
+.sidebar-org-select:hover {
+  border-color: var(--accent);
+}
+
 .sidebar-email {
   font-family: var(--font-mono);
   font-size: 0.72rem;
