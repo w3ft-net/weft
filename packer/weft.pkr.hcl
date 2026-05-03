@@ -169,7 +169,12 @@ build {
   # Keep DUCKDB_VERSION below in sync with go.mod's
   # github.com/duckdb/duckdb-go/v2 line. The binding's version string
   # encodes the engine: v2.10501.0 → engine 1.5.1.
+  #
+  # inline_shebang pins bash because the script uses `set -o pipefail`,
+  # a bashism — packer's default `/bin/sh` is dash on Debian and
+  # rejects it.
   provisioner "shell" {
+    inline_shebang = "/bin/bash -e"
     inline = [
       <<-EOT
         set -euo pipefail
