@@ -45,12 +45,6 @@ import (
 // back to LAUNCHING (so the reconciler/lifecycle hook can re-claim
 // it). What happens today: nothing.
 func TestZombie_WipeAndAwaitRebind_PersistsForever(t *testing.T) {
-	// Override the production 15-min rebind timeout so the test's
-	// tight loop crosses it. Restored on test exit.
-	prev := rebindTimeout
-	rebindTimeout = time.Nanosecond
-	t.Cleanup(func() { rebindTimeout = prev })
-
 	reg := NewShardRegistry()
 	fake := newFakeRegistryStore()
 	reg.SetStore(fake)
@@ -84,13 +78,14 @@ func TestZombie_WipeAndAwaitRebind_PersistsForever(t *testing.T) {
 	}
 	prov.reapDeadShards()
 
-	// Confirm: the wipe landed.
+	// Confirm: the wipe landed. State should now be SUSPENDED (not
+	// INGESTING) so the reconciler doesn't count it toward target.
 	rec, ok := fake.get(id)
 	if !ok {
 		t.Fatal("zombie row missing after wipe; expected the reaper to preserve it")
 	}
-	if rec.State != string(StateIngesting) {
-		t.Fatalf("state after wipe = %q, expected INGESTING", rec.State)
+	if rec.State != string(StateSuspended) {
+		t.Fatalf("state after wipe = %q, expected SUSPENDED", rec.State)
 	}
 	if rec.InstanceID != "" || rec.Addr != "" {
 		t.Fatalf("instance_id/addr should be wiped (await rebind); got %q / %q",
@@ -104,17 +99,14 @@ func TestZombie_WipeAndAwaitRebind_PersistsForever(t *testing.T) {
 		prov.reapDeadShards()
 	}
 
-	// FAILING ASSERTION: the zombie row is still INGESTING-with-no-
-	// instance. There is no rebind timeout, so the row sits forever
-	// counted toward IngestingCount, occupying a slot the reconciler
-	// won't replace. Want: the reaper should transition it out of
-	// INGESTING (to ARCHIVED, or back to LAUNCHING) once the rebind
-	// window has plausibly closed.
+	// SUSPENDED entries persist until a RECOVER rebinds them. No
+	// timeout-based archival — the volume stays recoverable. The key
+	// property: SUSPENDED does NOT count toward IngestingCount, so the
+	// reconciler isn't blocked.
 	rec, _ = fake.get(id)
-	if rec.State == string(StateIngesting) && rec.InstanceID == "" {
-		t.Errorf("after 50 reaper ticks with no rebind, shard %s is still "+
-			"state=%s instance_id=%q — wipe-and-await-rebind has no timeout",
-			id, rec.State, rec.InstanceID)
+	if rec.State != string(StateSuspended) {
+		t.Errorf("after 50 reaper ticks, shard %s state=%s — expected SUSPENDED (no timeout archival)",
+			id, rec.State)
 	}
 }
 

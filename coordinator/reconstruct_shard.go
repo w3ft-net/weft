@@ -64,12 +64,13 @@ func ReconstructShard(rec store.ShardRecord, cfg ReconstructConfig) (shard.Shard
 		}
 		return shard.NewColdShard(rec.ID, apps, rec.ParquetPath, cfg.S3Config)
 
+	case StateSuspended:
+		// Instance dead, awaiting replacement. No shard to dial; the
+		// rebind path attaches a GRPCShard when the replacement heartbeats.
+		return nil, fmt.Errorf("SUSPENDED shard %s awaiting rebind", rec.ID)
+
 	case StateIngesting, StateReadOnly:
 		if rec.Addr == "" {
-			// Post-wipe state — instance is gone, awaiting rebind.
-			// Return error so LoadFromStore leaves Shard=nil; the
-			// rebind branch of ProcessHeartbeat attaches a GRPCShard
-			// when the replacement instance heartbeats.
 			return nil, fmt.Errorf("%s shard %s has no addr (post-wipe-await-rebind)", rec.State, rec.ID)
 		}
 		return shard.NewGRPCShard(rec.ID, rec.Addr, cfg.ShardSecret)

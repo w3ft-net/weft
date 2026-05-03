@@ -169,17 +169,15 @@ func TestInstanceRefresh_StaleHeartbeat_NoRow_Recovers(t *testing.T) {
 	}
 }
 
-// While the registry still has an INGESTING entry — even one whose
-// instance_id has been wiped by reapDeadShards — the reconciler walks
-// it as part of IngestingCount and does NOT emit a LaunchShardOp.
-// This is what blocks recovery during the ~15-minute rebindTimeout
-// window: the gap exists in reality (instance gone) but not in the
-// reconciler's view (entry still INGESTING).
-//
-// Pre-fix, this was the orphan-christen-loop's underlying mechanism;
-// the registry-as-DB-cache fix moved IngestingCount to a registry walk,
-// which corrected one source of error but doesn't help when the
-// registry itself contains the post-wipe zombie.
+// Documents the reconciler's counting semantics: an INGESTING entry
+// counts toward target regardless of whether it has an instance. With
+// the SUSPENDED-state fix, reapDeadShards no longer leaves wiped
+// entries in INGESTING — they transition to SUSPENDED immediately. But
+// this test remains to document the property: should a stale INGESTING
+// entry exist for any reason (legacy row in DB, logic bug), the
+// reconciler will not launch a replacement for it. The second half of
+// the test demonstrates the escape: any non-INGESTING state frees the
+// slot.
 func TestReconciler_PostReaperWipeEntry_BlocksLaunchOp(t *testing.T) {
 	now := time.Now().UTC()
 
@@ -469,29 +467,23 @@ func TestReconcile_LogsPerBucketSummary(t *testing.T) {
 	)
 }
 
-// rebindTimeout is the only thing that flushes a post-wipe zombie to
-// ARCHIVED, freeing the slot for the reconciler to fill. Default is
-// 15 min. This test pins that bound — anything that lengthens it
-// extends the v1.md outage window.
-func TestReap_RebindTimeoutFlushesZombieToArchived(t *testing.T) {
-	// Reduce the timeout to something fast so we can cross it in
-	// the test. Restored on cleanup.
-	prev := rebindTimeout
-	rebindTimeout = 10 * time.Millisecond
-	t.Cleanup(func() { rebindTimeout = prev })
-
+// SUSPENDED entries are never archived by the reaper. They persist
+// until a RECOVER rebinds them. This pins the "no timeout" guarantee:
+// even after arbitrary time, reapDeadShards does not transition a
+// SUSPENDED entry to ARCHIVED.
+func TestReap_SuspendedEntryPersistsIndefinitely(t *testing.T) {
 	reg := NewShardRegistry()
 	fake := newFakeRegistryStore()
 	reg.SetStore(fake)
 
-	const id = "shard-zombie"
+	const id = "shard-suspended"
 	reg.Add(&ShardEntry{
 		ID:              id,
-		State:           StateIngesting,
+		State:           StateSuspended,
 		Addr:            "",
 		InstanceID:      "",
 		EBSVolumeID:     "vol-data",
-		LastHeartbeatAt: time.Now().Add(-time.Hour), // wiped a long time ago
+		LastHeartbeatAt: time.Now().Add(-time.Hour),
 		CreatedAt:       time.Now().Add(-2 * time.Hour),
 	})
 
@@ -510,9 +502,9 @@ func TestReap_RebindTimeoutFlushesZombieToArchived(t *testing.T) {
 
 	got := reg.Get(id)
 	if got == nil {
-		t.Fatal("zombie entry was removed; expected ARCHIVED transition (entry preserved)")
+		t.Fatal("SUSPENDED entry was removed — must persist for RECOVER")
 	}
-	if got.State != StateArchived {
-		t.Errorf("after rebindTimeout, zombie state = %s; want ARCHIVED", got.State)
+	if got.State != StateSuspended {
+		t.Errorf("SUSPENDED entry state changed to %s — must stay SUSPENDED", got.State)
 	}
 }

@@ -18,6 +18,7 @@ type ShardState string
 const (
 	StateLaunching ShardState = "LAUNCHING"
 	StateIngesting ShardState = "INGESTING"
+	StateSuspended ShardState = "SUSPENDED"
 	StateReadOnly  ShardState = "READ_ONLY"
 	StateExpiring  ShardState = "EXPIRING"
 	StateArchived  ShardState = "ARCHIVED"
