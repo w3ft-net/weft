@@ -32,6 +32,7 @@ UPDATE team_members tm
 
 -- Reject (loudly) any team_members row whose customer_name doesn't
 -- resolve. Better to fail the migration than silently lose membership.
+-- +goose StatementBegin
 DO $$
 DECLARE
   orphans bigint;
@@ -41,6 +42,7 @@ BEGIN
     RAISE EXCEPTION 'team_members has % rows with unresolvable customer_name', orphans;
   END IF;
 END$$;
+-- +goose StatementEnd
 
 ALTER TABLE team_members ALTER COLUMN customer_id SET NOT NULL;
 
@@ -99,10 +101,11 @@ UPDATE team_members          SET user_id = r.canonical_id FROM _user_remap r WHE
 UPDATE device_codes          SET user_id = r.canonical_id FROM _user_remap r WHERE device_codes.user_id          = r.old_id;
 UPDATE user_notices          SET user_id = r.canonical_id FROM _user_remap r WHERE user_notices.user_id          = r.old_id;
 
--- creator-attribution columns (migration 032)
+-- creator-attribution columns (migration 032). notify_configs is
+-- intentionally absent — that table never carried a created_by_user_id
+-- column despite the original draft of this migration listing it.
 UPDATE cron_watches      SET created_by_user_id = r.canonical_id FROM _user_remap r WHERE cron_watches.created_by_user_id      = r.old_id;
 UPDATE shell_functions   SET created_by_user_id = r.canonical_id FROM _user_remap r WHERE shell_functions.created_by_user_id   = r.old_id;
-UPDATE notify_configs    SET created_by_user_id = r.canonical_id FROM _user_remap r WHERE notify_configs.created_by_user_id    = r.old_id;
 
 -- script_history (migration 036) — both captured_by and authored_by are
 -- nullable, but if set they should also be repointed.
