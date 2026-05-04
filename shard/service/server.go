@@ -186,6 +186,22 @@ func (s *Server) Configure(_ context.Context, req *pb.ConfigureRequest) (*pb.Con
 	return &pb.ConfigureResponse{}, nil
 }
 
+// Archive exports the shard's data to Parquet on S3. The shard builds the
+// full path from the prefix and its own identity, configures DuckDB's httpfs
+// from the instance's environment (IAM role + AWS_REGION), and writes directly.
+func (s *Server) Archive(ctx context.Context, req *pb.ArchiveRequest) (*pb.ArchiveResponse, error) {
+	ds, err := s.getShard()
+	if err != nil {
+		return nil, err
+	}
+	path, err := ds.Archive(ctx, req.S3Prefix)
+	if err != nil {
+		return nil, fmt.Errorf("archive shard %s: %w", s.id, err)
+	}
+	log.Printf("shard %s: archived to %s", s.id, path)
+	return &pb.ArchiveResponse{ParquetPath: path}, nil
+}
+
 // Query executes SQL and streams result rows (line_num, raw) to the client.
 // Per-request deadline from the runtime config caps pathological queries
 // (deep OR chains, raw LIKE '%...%' across billions of rows) — DuckDB

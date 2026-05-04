@@ -139,11 +139,12 @@ type errShard struct {
 	id string
 }
 
-func (s *errShard) ID() string                              { return s.id }
-func (s *errShard) Query(string) ([]*pb.ResultRow, error)   { return nil, errSynthetic }
-func (s *errShard) QueryToSink(string, shard.RowSink)       {}
-func (s *errShard) Ingest([]*pb.LogRow) error               { return nil }
-func (s *errShard) Close() error                            { return nil }
+func (s *errShard) ID() string                                          { return s.id }
+func (s *errShard) Query(string) ([]*pb.ResultRow, error)               { return nil, errSynthetic }
+func (s *errShard) QueryToSink(string, shard.RowSink)                   {}
+func (s *errShard) Ingest([]*pb.LogRow) error                           { return nil }
+func (s *errShard) Archive(_ context.Context, _ string) (string, error) { return "", nil }
+func (s *errShard) Close() error                                        { return nil }
 
 type syntheticErr struct{}
 

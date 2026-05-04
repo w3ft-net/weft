@@ -24,6 +24,7 @@ const (
 	ShardQuery_Ingest_FullMethodName         = "/weft.ShardQuery/Ingest"
 	ShardQuery_IngestStream_FullMethodName   = "/weft.ShardQuery/IngestStream"
 	ShardQuery_Configure_FullMethodName      = "/weft.ShardQuery/Configure"
+	ShardQuery_Archive_FullMethodName        = "/weft.ShardQuery/Archive"
 )
 
 // ShardQueryClient is the client API for ShardQuery service.
@@ -44,6 +45,10 @@ type ShardQueryClient interface {
 	// Configure assigns an identity and time window to a blank shard.
 	// Called by the coordinator after discovering a new instance.
 	Configure(ctx context.Context, in *ConfigureRequest, opts ...grpc.CallOption) (*ConfigureResponse, error)
+	// Archive exports the shard's data to Parquet on S3 and returns the
+	// path written. Called by the coordinator when a READ_ONLY shard
+	// exceeds its retention window.
+	Archive(ctx context.Context, in *ArchiveRequest, opts ...grpc.CallOption) (*ArchiveResponse, error)
 }
 
 type shardQueryClient struct {
@@ -116,6 +121,16 @@ func (c *shardQueryClient) Configure(ctx context.Context, in *ConfigureRequest, 
 	return out, nil
 }
 
+func (c *shardQueryClient) Archive(ctx context.Context, in *ArchiveRequest, opts ...grpc.CallOption) (*ArchiveResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ArchiveResponse)
+	err := c.cc.Invoke(ctx, ShardQuery_Archive_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ShardQueryServer is the server API for ShardQuery service.
 // All implementations must embed UnimplementedShardQueryServer
 // for forward compatibility.
@@ -134,6 +149,10 @@ type ShardQueryServer interface {
 	// Configure assigns an identity and time window to a blank shard.
 	// Called by the coordinator after discovering a new instance.
 	Configure(context.Context, *ConfigureRequest) (*ConfigureResponse, error)
+	// Archive exports the shard's data to Parquet on S3 and returns the
+	// path written. Called by the coordinator when a READ_ONLY shard
+	// exceeds its retention window.
+	Archive(context.Context, *ArchiveRequest) (*ArchiveResponse, error)
 	mustEmbedUnimplementedShardQueryServer()
 }
 
@@ -158,6 +177,9 @@ func (UnimplementedShardQueryServer) IngestStream(grpc.ClientStreamingServer[Log
 }
 func (UnimplementedShardQueryServer) Configure(context.Context, *ConfigureRequest) (*ConfigureResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Configure not implemented")
+}
+func (UnimplementedShardQueryServer) Archive(context.Context, *ArchiveRequest) (*ArchiveResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Archive not implemented")
 }
 func (UnimplementedShardQueryServer) mustEmbedUnimplementedShardQueryServer() {}
 func (UnimplementedShardQueryServer) testEmbeddedByValue()                    {}
@@ -252,6 +274,24 @@ func _ShardQuery_Configure_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ShardQuery_Archive_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ArchiveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ShardQueryServer).Archive(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ShardQuery_Archive_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ShardQueryServer).Archive(ctx, req.(*ArchiveRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ShardQuery_ServiceDesc is the grpc.ServiceDesc for ShardQuery service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -270,6 +310,10 @@ var ShardQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Configure",
 			Handler:    _ShardQuery_Configure_Handler,
+		},
+		{
+			MethodName: "Archive",
+			Handler:    _ShardQuery_Archive_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

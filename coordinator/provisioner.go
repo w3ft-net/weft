@@ -7,9 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -979,45 +976,31 @@ func (p *Provisioner) check(ctx context.Context) {
 	p.syncASGDesiredCapacity(ctx)
 }
 
-// archive exports a READ_ONLY shard to Parquet and replaces it with a ColdShard.
+// archive tells the shard to export its data to Parquet and replaces
+// the live shard with a ColdShard for subsequent queries.
 func (p *Provisioner) archive(entry *ShardEntry) {
-	appLabel := joinApps(entry.Apps)
-	parquetPath := fmt.Sprintf("%s/%s/%s.parquet",
-		p.config.ParquetDir, appLabel, entry.ID)
-
-	s3cfg := p.config.S3Config
-	isS3 := strings.HasPrefix(p.config.ParquetDir, "s3://")
-
-	ds, ok := entry.Shard.(*shard.DuckDBShard)
-	if !ok {
-		log.Printf("provisioner: cannot export non-DuckDB shard %s (type %T)", entry.ID, entry.Shard)
+	if entry.Shard == nil {
+		log.Printf("provisioner: cannot archive shard %s: no Shard attached", entry.ID)
 		return
 	}
 
-	if isS3 && s3cfg != nil {
-		// Export directly to S3 via DuckDB httpfs.
-		if err := ds.ExportToS3Parquet(parquetPath, s3cfg); err != nil {
-			log.Printf("provisioner: S3 export %s failed: %v", entry.ID, err)
-			return
-		}
-	} else {
-		// Export to local filesystem.
-		if err := os.MkdirAll(filepath.Dir(parquetPath), 0755); err != nil {
-			log.Printf("provisioner: mkdir for %s: %v", parquetPath, err)
-			return
-		}
-		if err := ds.ExportToParquet(parquetPath); err != nil {
-			log.Printf("provisioner: export %s failed: %v", entry.ID, err)
-			return
-		}
+	appLabel := joinApps(entry.Apps)
+	s3Prefix := fmt.Sprintf("%s/%s", p.config.ParquetDir, appLabel)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	parquetPath, err := entry.Shard.Archive(ctx, s3Prefix)
+	if err != nil {
+		log.Printf("provisioner: archive %s: %v", entry.ID, err)
+		return
 	}
 
-	// Create cold shard — Lambda if function URL is configured, in-process otherwise.
 	var coldShard shard.Shard
 	if p.config.LambdaFunctionURL != "" {
 		coldShard = shard.NewLambdaColdShard(entry.ID, entry.Apps, p.config.LambdaFunctionURL, parquetPath)
 	} else {
-		cs, err := shard.NewColdShard(entry.ID, entry.Apps, parquetPath, s3cfg)
+		cs, err := shard.NewColdShard(entry.ID, entry.Apps, parquetPath, p.config.S3Config)
 		if err != nil {
 			log.Printf("provisioner: create cold shard for %s: %v", entry.ID, err)
 			return
@@ -1025,23 +1008,14 @@ func (p *Provisioner) archive(entry *ShardEntry) {
 		coldShard = cs
 	}
 
-	// Swap: close old shard, replace with cold.
 	entry.Shard.Close()
 	entry.Shard = coldShard
 	entry.State = StateArchived
 	entry.ParquetPath = parquetPath
-
-	// Persist the state change.
 	p.registry.PersistState(entry)
 
 	log.Printf("provisioner: shard %s archived to %s", entry.ID, parquetPath)
 
-	// Retire the data volume: snapshot → detach → delete. Skip when
-	// no volume is bound (shards from the pre-S5 era, or dev-mode
-	// shards). Snapshot first so a detach/delete failure after a
-	// successful snapshot leaves us with durable data; a snapshot
-	// failure aborts the whole sequence and leaves the volume intact
-	// for a retry.
 	if p.volumes != nil && entry.EBSVolumeID != "" {
 		p.retireVolume(entry)
 	}

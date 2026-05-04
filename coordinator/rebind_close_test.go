@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,11 +18,12 @@ type closeTrackingShard struct {
 	closed atomic.Bool
 }
 
-func (s *closeTrackingShard) ID() string                              { return s.id }
-func (s *closeTrackingShard) Query(string) ([]*pb.ResultRow, error)   { return nil, nil }
-func (s *closeTrackingShard) QueryToSink(string, shard.RowSink)       {}
-func (s *closeTrackingShard) Ingest(_ []*pb.LogRow) error             { return nil }
-func (s *closeTrackingShard) Close() error                            { s.closed.Store(true); return nil }
+func (s *closeTrackingShard) ID() string                                            { return s.id }
+func (s *closeTrackingShard) Query(string) ([]*pb.ResultRow, error)                 { return nil, nil }
+func (s *closeTrackingShard) QueryToSink(string, shard.RowSink)                     {}
+func (s *closeTrackingShard) Ingest(_ []*pb.LogRow) error                           { return nil }
+func (s *closeTrackingShard) Archive(_ context.Context, _ string) (string, error)   { return "", nil }
+func (s *closeTrackingShard) Close() error                                          { s.closed.Store(true); return nil }
 
 // TestProcessHeartbeat_RebindDefersOldClose pins the close-during-RPC
 // fix from docs/plans/shard-grpc-resilience.md Phase 1. When a heartbeat

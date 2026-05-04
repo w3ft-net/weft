@@ -2,6 +2,7 @@ package shard
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -39,6 +40,10 @@ func NewLambdaColdShard(id string, apps []string, functionURL, parquetPath strin
 }
 
 func (s *LambdaColdShard) ID() string { return s.id }
+
+func (s *LambdaColdShard) Archive(_ context.Context, _ string) (string, error) {
+	return "", fmt.Errorf("lambda cold shard %s is already archived", s.id)
+}
 
 // Query calls the Lambda with the SQL and Parquet path, reads the
 // streaming protobuf response, and returns all rows.

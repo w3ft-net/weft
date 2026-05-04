@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -27,6 +29,7 @@ type Shard interface {
 	Query(sql string) ([]*pb.ResultRow, error)
 	QueryToSink(sql string, sink RowSink)
 	Ingest(rows []*pb.LogRow) error
+	Archive(ctx context.Context, s3Prefix string) (string, error)
 	Close() error
 }
 
@@ -175,6 +178,17 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
 // RowCount returns the total number of rows ingested into this shard.
 func (s *DuckDBShard) RowCount() int64 {
 	return s.rowCount.Load()
+}
+
+func (s *DuckDBShard) Archive(_ context.Context, s3Prefix string) (string, error) {
+	path := fmt.Sprintf("%s/%s.parquet", s3Prefix, s.id)
+	if s3cfg := S3ConfigFromEnv(); s3cfg != nil {
+		return path, s.ExportToS3Parquet(path, s3cfg)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return "", fmt.Errorf("mkdir for %s: %w", path, err)
+	}
+	return path, s.ExportToParquet(path)
 }
 
 // ExportToParquet exports the logs table to a Parquet file (local path).

@@ -82,6 +82,14 @@ func (s *GRPCShard) Configure(ctx context.Context, cfg *pb.ConfigureRequest) err
 
 func (s *GRPCShard) ID() string { return s.id }
 
+func (s *GRPCShard) Archive(ctx context.Context, s3Prefix string) (string, error) {
+	resp, err := s.client.Archive(ctx, &pb.ArchiveRequest{S3Prefix: s3Prefix})
+	if err != nil {
+		return "", fmt.Errorf("archive shard %s: %w", s.id, err)
+	}
+	return resp.ParquetPath, nil
+}
+
 func (s *GRPCShard) Close() error {
 	return s.conn.Close()
 }

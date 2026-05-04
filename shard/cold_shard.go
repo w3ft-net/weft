@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -44,6 +45,10 @@ func NewColdShard(id string, apps []string, parquetPath string, s3cfg ...*S3Conf
 }
 
 func (s *ColdShard) ID() string { return s.id }
+
+func (s *ColdShard) Archive(_ context.Context, _ string) (string, error) {
+	return "", fmt.Errorf("cold shard %s is already archived", s.id)
+}
 
 // Query rewrites FROM logs to FROM read_parquet('path') and executes.
 func (s *ColdShard) Query(query string) ([]*pb.ResultRow, error) {

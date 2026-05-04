@@ -28,8 +28,9 @@ func (s *failingShard) ID() string { return s.id }
 func (s *failingShard) Query(sql string) ([]*pb.ResultRow, error) {
 	return nil, nil
 }
-func (s *failingShard) QueryToSink(sql string, sink shard.RowSink) {}
-func (s *failingShard) Close() error                               { return nil }
+func (s *failingShard) QueryToSink(sql string, sink shard.RowSink)              {}
+func (s *failingShard) Close() error                                            { return nil }
+func (s *failingShard) Archive(_ context.Context, _ string) (string, error)     { return "", nil }
 
 func (s *failingShard) Ingest(rows []*pb.LogRow) error {
 	s.mu.Lock()

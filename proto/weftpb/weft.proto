@@ -27,6 +27,11 @@ service ShardQuery {
   // Configure assigns an identity and time window to a blank shard.
   // Called by the coordinator after discovering a new instance.
   rpc Configure(ConfigureRequest) returns (ConfigureResponse);
+
+  // Archive exports the shard's data to Parquet on S3 and returns the
+  // path written. Called by the coordinator when a READ_ONLY shard
+  // exceeds its retention window.
+  rpc Archive(ArchiveRequest) returns (ArchiveResponse);
 }
 
 message ConfigureRequest {
@@ -43,6 +48,14 @@ message ConfigureRequest {
 }
 
 message ConfigureResponse {}
+
+message ArchiveRequest {
+  string s3_prefix = 1; // e.g. "s3://bucket/apps" — shard appends /<shard_id>.parquet
+}
+
+message ArchiveResponse {
+  string parquet_path = 1; // full S3 path written
+}
 
 message IngestStreamResponse {
   int64 rows_received = 1;
