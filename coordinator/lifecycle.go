@@ -173,6 +173,15 @@ func (h *LifecycleHandler) HandleLaunchEvent(ctx context.Context, ev LifecycleEv
 		return DecisionAbandon, err
 	}
 
+	if decision == DecisionRecover && h.registry != nil {
+		if entry := h.registry.Get(shardID); entry != nil && entry.State == StateSuspended {
+			entry.InstanceID = ev.InstanceID
+			entry.EBSVolumeID = volumeID
+			entry.State = StateIngesting
+			log.Printf("lifecycle: recovered shard=%s instance=%s — cleared SUSPENDED", shardID, ev.InstanceID)
+		}
+	}
+
 	log.Printf("lifecycle: decision asg=%s instance=%s tier=%s az=%s decision=%s volume=%s shard=%s",
 		ev.ASGName, ev.InstanceID, tier, az, decision, volumeID, shardID)
 	h.signal(ctx, ev, "CONTINUE")

@@ -355,6 +355,20 @@ func TestLifecycle_SuspendedShardsWithOrphanVolumes_Recovers(t *testing.T) {
 	if asg.lastResult() != "CONTINUE" {
 		t.Errorf("CompleteLifecycleAction result: got %q want CONTINUE", asg.lastResult())
 	}
+
+	// The recovered shard's SUSPENDED entry must be cleared in-band.
+	entry := reg.Get("shard-20260427T0000-334c5f87")
+	if entry.State == StateSuspended {
+		t.Errorf("recovered shard still SUSPENDED — should have been cleared in-band")
+	}
+	if entry.InstanceID != "i-new-launch" {
+		t.Errorf("recovered shard InstanceID: got %q want %q", entry.InstanceID, "i-new-launch")
+	}
+	// The other SUSPENDED shard must still be SUSPENDED (not touched).
+	other := reg.Get("shard-20260504T0000-75aae944")
+	if other.State != StateSuspended {
+		t.Errorf("unreovered shard: got %s want SUSPENDED", other.State)
+	}
 }
 
 // An available volume whose shard_id is still heartbeating is NOT a
