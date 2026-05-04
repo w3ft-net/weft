@@ -13,7 +13,7 @@ import (
 func bucketStub(target int, retention time.Duration) *stubBuckets {
 	return &stubBuckets{bucket: &AppBucket{
 		ID: defaultBucketID, Label: "default", Apps: nil,
-		Target: target, RetentionPeriod: retention, Tier: "small",
+		Target: target, WindowDuration: retention, Tier: "small",
 	}}
 }
 
@@ -99,7 +99,7 @@ func TestCheck_WindowEndInFuture_NoRotation(t *testing.T) {
 	}
 }
 
-// A READ_ONLY shard whose WindowEnd is more than RetentionPeriod in
+// A READ_ONLY shard whose WindowEnd is more than WindowDuration in
 // the past must be archived on the next tick.
 func TestCheck_ReadOnlyPastRetention_TriggersArchive(t *testing.T) {
 	vm := &retiringVolumeManager{}

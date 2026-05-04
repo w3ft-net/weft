@@ -356,11 +356,11 @@ func TestLaunchShardOp_Apply_SyncLauncher_LaunchesOneShard(t *testing.T) {
 }
 
 // Op 5 — retention-archive: a READ_ONLY shard whose WindowEnd is
-// older than bucket.RetentionPeriod gets an ArchiveShardOp.
+// older than bucket.WindowDuration gets an ArchiveShardOp.
 
 func TestReconcile_Retention_EmitsArchiveOp(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Target: 0, RetentionPeriod: time.Hour, Tier: "small"}
+	bucket := &AppBucket{ID: 1, Target: 0, WindowDuration: time.Hour, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-ripe", BucketID: 1, State: StateReadOnly,
 			WindowStart: now.Add(-3 * time.Hour), WindowEnd: now.Add(-2 * time.Hour)}, // 2h past, retention 1h
@@ -383,7 +383,7 @@ func TestReconcile_Retention_EmitsArchiveOp(t *testing.T) {
 
 func TestReconcile_Retention_WithinRetentionNoOp(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, RetentionPeriod: 2 * time.Hour, Tier: "small"}
+	bucket := &AppBucket{ID: 1, WindowDuration: 2 * time.Hour, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-warm", BucketID: 1, State: StateReadOnly,
 			WindowStart: now.Add(-90 * time.Minute), WindowEnd: now.Add(-30 * time.Minute)},
@@ -397,11 +397,11 @@ func TestReconcile_Retention_WithinRetentionNoOp(t *testing.T) {
 	}
 }
 
-// RetentionPeriod=0 means "archive disabled for this bucket" —
+// WindowDuration=0 means "archive disabled for this bucket" —
 // no ArchiveShardOp should fire regardless of age.
 func TestReconcile_Retention_ZeroRetentionDisables(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, RetentionPeriod: 0, Tier: "small"}
+	bucket := &AppBucket{ID: 1, WindowDuration: 0, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-ancient", BucketID: 1, State: StateReadOnly,
 			WindowStart: now.Add(-10 * 24 * time.Hour), WindowEnd: now.Add(-9 * 24 * time.Hour)},
@@ -419,7 +419,7 @@ func TestReconcile_Retention_ZeroRetentionDisables(t *testing.T) {
 // how stale they are.
 func TestReconcile_Retention_SkipsZeroWindow(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, RetentionPeriod: time.Hour, Tier: "small"}
+	bucket := &AppBucket{ID: 1, WindowDuration: time.Hour, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-nowindow", BucketID: 1, State: StateReadOnly}, // zero WindowEnd
 	}

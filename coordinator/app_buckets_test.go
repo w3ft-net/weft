@@ -35,7 +35,6 @@ func (f *fakeBucketStore) seedBucket(label string, apps []string) *store.Bucket 
 		TargetIngestingCount: 2,
 		Tier:                 "small",
 		WindowDuration:       "168h",
-		RetentionPeriod:      "168h",
 		CreatedAt:            "2026-04-21T00:00:00Z",
 	}
 	f.nextID++

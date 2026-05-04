@@ -13,17 +13,17 @@ import (
 // FK target that shard_records.bucket_id points at; Label is the
 // stable human-readable name (unique) code looks up by. Target is
 // the desired number of INGESTING shards; Tier is the instance class.
-// WindowDuration and RetentionPeriod govern rotation and archive
-// timing per-bucket.
+// WindowDuration governs both rotation (INGESTING→READ_ONLY at
+// window_end) and archive timing (READ_ONLY→ARCHIVED after the
+// same duration past window_end).
 type AppBucket struct {
-	ID              int64
-	Label           string
-	Apps            []string
-	Target          int
-	Tier            string
-	WindowDuration  time.Duration
-	RetentionPeriod time.Duration
-	CreatedAt       string
+	ID             int64
+	Label          string
+	Apps           []string
+	Target         int
+	Tier           string
+	WindowDuration time.Duration
+	CreatedAt      string
 }
 
 // BucketStore is the subset of *store.Store that BucketManager needs.
@@ -209,7 +209,6 @@ func (bm *BucketManager) Split(app string) (*AppBucket, error) {
 		Target:          src.Target,
 		Tier:            src.Tier,
 		WindowDuration:  src.WindowDuration,
-		RetentionPeriod: src.RetentionPeriod,
 	}
 	if err := bm.save(dedicated); err != nil {
 		return nil, fmt.Errorf("persist dedicated bucket: %w", err)
@@ -261,7 +260,6 @@ func (bm *BucketManager) save(b *AppBucket) error {
 		TargetIngestingCount: b.Target,
 		Tier:                 b.Tier,
 		WindowDuration:       b.WindowDuration.String(),
-		RetentionPeriod:      b.RetentionPeriod.String(),
 		CreatedAt:            b.CreatedAt,
 	}
 	if err := bm.store.SaveBucket(rec); err != nil {
@@ -335,7 +333,7 @@ func recordToAppBucket(r store.Bucket) *AppBucket {
 	if r.Apps != "" && r.Apps != "null" {
 		_ = json.Unmarshal([]byte(r.Apps), &apps)
 	}
-	var winDur, retDur time.Duration
+	var winDur time.Duration
 	if r.WindowDuration != "" {
 		if d, err := time.ParseDuration(r.WindowDuration); err == nil {
 			winDur = d
@@ -344,22 +342,13 @@ func recordToAppBucket(r store.Bucket) *AppBucket {
 				r.ID, r.Label, r.WindowDuration, err)
 		}
 	}
-	if r.RetentionPeriod != "" {
-		if d, err := time.ParseDuration(r.RetentionPeriod); err == nil {
-			retDur = d
-		} else {
-			log.Printf("bucket-manager: bucket id=%d label=%s unparseable retention_period %q: %v",
-				r.ID, r.Label, r.RetentionPeriod, err)
-		}
-	}
 	return &AppBucket{
-		ID:              r.ID,
-		Label:           r.Label,
-		Apps:            apps,
-		Target:          r.TargetIngestingCount,
-		Tier:            r.Tier,
-		WindowDuration:  winDur,
-		RetentionPeriod: retDur,
-		CreatedAt:       r.CreatedAt,
+		ID:             r.ID,
+		Label:          r.Label,
+		Apps:           apps,
+		Target:         r.TargetIngestingCount,
+		Tier:           r.Tier,
+		WindowDuration: winDur,
+		CreatedAt:      r.CreatedAt,
 	}
 }

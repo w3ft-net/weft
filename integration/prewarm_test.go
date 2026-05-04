@@ -39,7 +39,6 @@ func TestPrewarm_InsertsNextWindowRow_AndBumpsDesired(t *testing.T) {
 		TargetIngestingCount: 1,
 		Tier:                 "small",
 		WindowDuration:       (5 * time.Minute).String(),
-		RetentionPeriod:      (24 * time.Hour).String(),
 		CreatedAt:            time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := db.SaveBucket(bucketRec); err != nil {

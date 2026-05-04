@@ -71,7 +71,6 @@ func TestRefreshCascade_EndToEnd(t *testing.T) {
 		Target:          2,
 		Tier:            "small",
 		WindowDuration:  7 * 24 * time.Hour,
-		RetentionPeriod: 14 * 24 * time.Hour,
 	}
 
 	// --- Phase 1: Simulate coordinator restart (LoadFromStore) ---
@@ -233,7 +232,6 @@ func TestRefreshCascade_SuspendedStateBreaksChain(t *testing.T) {
 		Target:          2,
 		Tier:            "small",
 		WindowDuration:  7 * 24 * time.Hour,
-		RetentionPeriod: 14 * 24 * time.Hour,
 	}
 
 	reg := NewShardRegistry()

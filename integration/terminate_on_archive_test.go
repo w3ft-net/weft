@@ -149,7 +149,7 @@ func TestTerminateOnArchive_CallsASGTerminate(t *testing.T) {
 		Apps:            nil,
 		Target:          0,
 		Tier:            "small",
-		RetentionPeriod: time.Hour,
+		WindowDuration: time.Hour,
 	}
 
 	reg := coordinator.NewShardRegistry()

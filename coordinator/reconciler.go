@@ -138,9 +138,9 @@ func reconcile(snap ReconcilerSnapshot) []ReconcileOp {
 	}
 
 	// Op 5 — retention-archive. A READ_ONLY shard whose WindowEnd
-	// is older than bucket.RetentionPeriod gets archived. Zero
-	// retention means "archive disabled for this bucket."
-	if snap.Bucket.RetentionPeriod > 0 {
+	// is older than bucket.WindowDuration gets archived. Zero
+	// duration means "archive disabled for this bucket."
+	if snap.Bucket.WindowDuration > 0 {
 		for _, e := range snap.Entries {
 			if e.State != StateReadOnly {
 				continue
@@ -148,7 +148,7 @@ func reconcile(snap ReconcilerSnapshot) []ReconcileOp {
 			if e.WindowEnd.IsZero() {
 				continue
 			}
-			if snap.Now.Sub(e.WindowEnd) <= snap.Bucket.RetentionPeriod {
+			if snap.Now.Sub(e.WindowEnd) <= snap.Bucket.WindowDuration {
 				continue
 			}
 			ops = append(ops, ArchiveShardOp{ShardID: e.ID})
@@ -276,7 +276,7 @@ func (o TerminateArchivedInstanceOp) Apply(ctx context.Context, p *Provisioner) 
 }
 
 // ArchiveShardOp archives one READ_ONLY shard past its bucket's
-// retention_period. Apply delegates to provisioner.archive(), which
+// window_duration. Apply delegates to provisioner.archive(), which
 // handles Parquet export, ColdShard swap, and volume retirement.
 // The ParquetDir config gate lives in Apply (coordinator-level
 // concern, not a per-bucket decision); a shard no longer in

@@ -19,7 +19,6 @@ type Bucket struct {
 	Tier                 string `gorm:"not null;column:tier"`
 	CreatedAt            string `gorm:"not null;column:created_at"`
 	WindowDuration       string `gorm:"not null;column:window_duration"`
-	RetentionPeriod      string `gorm:"not null;column:retention_period"`
 }
 
 func (Bucket) TableName() string { return "buckets" }

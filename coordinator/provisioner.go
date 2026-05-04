@@ -99,8 +99,8 @@ type ProvisionerConfig struct {
 const defaultCloseRebindGrace = 5 * time.Second
 
 // DefaultProvisionerConfig returns sensible production defaults.
-// IngestingPerBucket and RetentionPeriod aren't here — both live on
-// each bucket row in the DB (migrations 020/021).
+// IngestingPerBucket isn't here — it lives on each bucket row in
+// the DB (migration 020).
 func DefaultProvisionerConfig() ProvisionerConfig {
 	return ProvisionerConfig{
 		PollInterval:   5 * time.Minute,

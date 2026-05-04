@@ -545,7 +545,6 @@ CREATE TABLE public.buckets (
     tier text DEFAULT 'small'::text NOT NULL,
     created_at text NOT NULL,
     window_duration text DEFAULT '168h'::text NOT NULL,
-    retention_period text DEFAULT '168h'::text NOT NULL,
     label text NOT NULL,
     id bigint NOT NULL
 );

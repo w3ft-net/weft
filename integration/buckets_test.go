@@ -60,9 +60,6 @@ func TestBuckets_DefaultSeeded(t *testing.T) {
 	if d, err := time.ParseDuration(b.WindowDuration); err != nil || d != want {
 		t.Errorf("default.window_duration: got %q (%v, err=%v), want 168h", b.WindowDuration, d, err)
 	}
-	if d, err := time.ParseDuration(b.RetentionPeriod); err != nil || d != want {
-		t.Errorf("default.retention_period: got %q (%v, err=%v), want 168h", b.RetentionPeriod, d, err)
-	}
 }
 
 // TestBuckets_ShardsBoundToValidBuckets asserts every non-terminal
