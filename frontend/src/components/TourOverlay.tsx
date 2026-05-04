@@ -56,9 +56,9 @@ const SHELL_HIGHLIGHT_TARGETS: Record<string, string> = {
   'shell-cron':           'shell-watches-toggle-button',
   'shell-bin-bash':       'shell-functions-toggle-button',
   'shell-bin-lua':        'shell-functions-toggle-button',
-  'shell-notify':         'shell-etc-toggle-button',  // /etc/notify.conf
+  'shell-notify':         'shell-etc-toggle-button',  // /etc/notify.yaml
   'shell-usage':          'shell-etc-toggle-button',  // /etc/usage
-  'shell-dashboard-yaml': 'shell-etc-toggle-button',  // /etc/dashboards/*.conf
+  'shell-dashboard-yaml': 'shell-etc-toggle-button',  // /etc/dashboards/*.yaml
   'shell-tmp':            'shell-tmp-toggle-button',
 }
 

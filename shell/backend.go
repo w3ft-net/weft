@@ -12,6 +12,7 @@ type WatchData struct {
 	Schedule string
 	Pipeline string
 	Enabled  bool
+	Title    string // optional human-friendly name from "# title: ..." comment
 }
 
 // Backend is the transport layer for coordinator storage operations.
@@ -87,11 +88,15 @@ func (f *RemoteFS) ReadFile(path string) ([]byte, error) {
 			}
 			return []byte(yaml), nil
 		}
-		// /etc/usage and /etc/dashboards/<name>.conf fall through to
-		// the generic GetFile path. The server's shellfs.ReadFile
-		// is the canonical handler — keeping it server-side means
-		// the CLI doesn't need to know about every new virtual
-		// file the server exposes.
+		if strings.HasPrefix(name, "dashboards/") {
+			dName := strings.TrimPrefix(name, "dashboards/")
+			dName = strings.TrimSuffix(dName, ".yaml")
+			body, err := f.backend.GetDashboard(dName)
+			if err != nil {
+				return nil, fmt.Errorf("%s: not found", path)
+			}
+			return []byte(body), nil
+		}
 	}
 
 	if data, err := f.backend.GetFile(path); err == nil {
@@ -116,6 +121,11 @@ func (f *RemoteFS) WriteFile(path string, data []byte) error {
 	case "etc":
 		if name == "notify.yaml" {
 			return f.backend.SaveNotifyConfig(string(data))
+		}
+		if strings.HasPrefix(name, "dashboards/") {
+			dName := strings.TrimPrefix(name, "dashboards/")
+			dName = strings.TrimSuffix(dName, ".yaml")
+			return f.backend.SaveDashboard(dName, string(data))
 		}
 	}
 
@@ -147,7 +157,17 @@ func (f *RemoteFS) ReadDir(path string) ([]string, error) {
 		return names, nil
 
 	case "/etc":
-		return []string{"notify.yaml", "usage"}, nil
+		return []string{"dashboards/", "notify.yaml", "usage"}, nil
+
+	case "/etc/dashboards":
+		names, err := f.backend.ListDashboards()
+		if err != nil {
+			return []string{}, nil
+		}
+		for i, n := range names {
+			names[i] = n + ".yaml"
+		}
+		return names, nil
 	}
 
 	// /log/<namespace>/[<service>/] — see docs/plans/ingest-dimensions.md.
@@ -233,6 +253,16 @@ func (f *RemoteFS) GetWatchResults(name string, limit int) ([]chart.WatchResultV
 	return nil, fmt.Errorf("watch results not supported")
 }
 
+// GetDashboard delegates to the backend.
+func (f *RemoteFS) GetDashboard(name string) (string, error) {
+	return f.backend.GetDashboard(name)
+}
+
+// ListDashboards delegates to the backend.
+func (f *RemoteFS) ListDashboards() ([]string, error) {
+	return f.backend.ListDashboards()
+}
+
 // logEntries groups apps by namespace prefix for /log/ listing.
 func (f *RemoteFS) logEntries() []string {
 	seen := map[string]bool{}
@@ -277,6 +307,9 @@ func splitFSPath(path string) (dir, name string) {
 func serializeCronFile(w *WatchData) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# schedule: %s\n", w.Schedule)
+	if w.Title != "" {
+		fmt.Fprintf(&b, "# %s\n", w.Title)
+	}
 	if !w.Enabled {
 		b.WriteString("# enabled: false\n")
 	}

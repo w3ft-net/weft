@@ -42,6 +42,7 @@ type DashboardSection struct {
 type DashboardTile struct {
 	Kind      string             `yaml:"kind" json:"kind"`
 	Watch     string             `yaml:"watch" json:"watch"`
+	Title     string             `yaml:"title,omitempty" json:"title,omitempty"`
 	Size      string             `yaml:"size,omitempty" json:"size,omitempty"`
 	Format    string             `yaml:"format,omitempty" json:"format,omitempty"`
 	Threshold *DashboardThresh   `yaml:"threshold,omitempty" json:"threshold,omitempty"`

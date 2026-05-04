@@ -17,6 +17,7 @@ import (
 	"github.com/kevlarcon/warp/pkg/shellcore"
 	"github.com/kevlarcon/warp/pkg/syntax"
 	"github.com/kevlarcon/weft/chart"
+	"github.com/kevlarcon/weft/dashboard"
 )
 
 // QueryResult is the output of a query — either result rows or text,
@@ -484,6 +485,9 @@ func (s *Shell) configureCore(core *shellcore.ShellCore) {
 		core.SetFS(s.FS)
 		if wr, ok := s.FS.(chart.WatchResultsProvider); ok {
 			chart.Register(core, wr)
+		}
+		if dp, ok := s.FS.(dashboard.Provider); ok {
+			dashboard.Register(core, dp)
 		}
 	}
 	if s.User != "" {

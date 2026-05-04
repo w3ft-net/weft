@@ -84,7 +84,7 @@ function DashboardEmptyState({ hasAny }: { hasAny: boolean }) {
         Dashboards are YAML files under <code>/etc/dashboards/</code>. Create one
         from the shell:
       </p>
-      <pre className="dashboards-empty-snippet">vi /etc/dashboards/prod.conf</pre>
+      <pre className="dashboards-empty-snippet">vi /etc/dashboards/prod.yaml</pre>
       <p>
         Each dashboard groups watch-driven tiles into sections. See the{' '}
         <Link to="/manual" data-testid="dashboards-empty-manual-link">manual</Link>{' '}

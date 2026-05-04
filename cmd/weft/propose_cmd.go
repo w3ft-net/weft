@@ -222,12 +222,16 @@ func applyProposal(b *shell.HTTPBackend, p proposals.Proposal) error {
 			Schedule: schedule,
 			Pipeline: pipeline,
 		})
+	case "dashboard":
+		return b.SaveDashboard(p.Name, p.Proposed)
 	case "delete":
 		switch p.SubKind {
 		case "script":
 			return b.DeleteFunction(p.Name)
 		case "cron":
 			return b.DeleteWatch(p.Name)
+		case "dashboard":
+			return b.DeleteDashboard(p.Name)
 		default:
 			return fmt.Errorf("unknown delete sub-kind %q", p.SubKind)
 		}

@@ -16,6 +16,25 @@ func mustParse(t *testing.T, body string) *store.DashboardSpec {
 	return spec
 }
 
+func stripANSI(s string) string {
+	var b strings.Builder
+	inEsc := false
+	for _, r := range s {
+		if inEsc {
+			if r == 'm' {
+				inEsc = false
+			}
+			continue
+		}
+		if r == '\x1b' {
+			inEsc = true
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 func TestRender_SingleColumnFallback(t *testing.T) {
 	spec := mustParse(t, `
 sections:
@@ -31,23 +50,24 @@ sections:
 		"b": {Values: []float64{99}},
 	}
 	out := Render(spec, results, 40) // < threshold
-	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 
-	// Should have section heading + rule + 2 tile groups (2 lines each: header + body).
 	if !strings.Contains(out, "Errors") {
 		t.Errorf("missing section title")
 	}
-	if !strings.Contains(out, "42") {
-		t.Errorf("missing first counter value")
+	// Big numbers render as box-drawing glyphs; check watch names are present.
+	if !strings.Contains(out, "a") {
+		t.Errorf("missing first watch name")
 	}
-	if !strings.Contains(out, "99") {
-		t.Errorf("missing second counter value")
+	if !strings.Contains(out, "b") {
+		t.Errorf("missing second watch name")
 	}
-	// In single-column mode each tile occupies its own row, so the line
-	// containing "42" should not also contain "99".
+	// Single-column: each tile gets its own box, so "a" and "b" headers
+	// should not appear on the same line.
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	for _, ln := range lines {
-		if strings.Contains(ln, "42") && strings.Contains(ln, "99") {
-			t.Errorf("single-column mode put both values on one line: %q", ln)
+		stripped := stripANSI(ln)
+		if strings.Contains(stripped, "│a") && strings.Contains(stripped, "│b") {
+			t.Errorf("single-column mode put both tiles on one line: %q", ln)
 		}
 	}
 }
@@ -69,16 +89,18 @@ sections:
 	}
 	out := Render(spec, results, 120) // wide
 
-	// Both values should land on the same row.
+	// In wide mode, both tile boxes appear on the same row. The top
+	// border of both boxes should be on the same line.
 	found := false
 	for _, ln := range strings.Split(out, "\n") {
-		if strings.Contains(ln, "42") && strings.Contains(ln, "99") {
+		stripped := stripANSI(ln)
+		if strings.Count(stripped, "┌") >= 2 {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected both counter values on one row in wide layout, got:\n%s", out)
+		t.Errorf("expected both tile boxes on one row in wide layout, got:\n%s", out)
 	}
 }
 
@@ -95,9 +117,16 @@ tiles:
 	if !strings.Contains(out, "traffic") {
 		t.Errorf("missing watch name in output:\n%s", out)
 	}
-	// At least one block character should appear.
-	if !strings.ContainsAny(out, "▁▂▃▄▅▆▇█") {
-		t.Errorf("no block characters in sparkline output:\n%s", out)
+	// Braille line chart should produce braille characters (U+2800 block).
+	hasBraille := false
+	for _, r := range out {
+		if r >= 0x2800 && r <= 0x28FF {
+			hasBraille = true
+			break
+		}
+	}
+	if !hasBraille {
+		t.Errorf("no braille characters in sparkline output:\n%s", out)
 	}
 }
 

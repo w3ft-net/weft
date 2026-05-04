@@ -58,6 +58,13 @@ func Render(spec *store.DashboardSpec, results map[string]WatchSeries, w int) st
 const (
 	singleColumnThreshold = 60
 	tileGap               = 2
+
+	clrOrange   = 208
+	clrPeach    = 209 // focused tile border
+	clrPurple   = 105 // inactive tile border
+	clrCyan      = 6
+	clrBlue      = 4
+	clrGray      = 245
 )
 
 // renderSection lays out one section's tiles into rows that fit w.
@@ -80,10 +87,25 @@ type packedTile struct {
 	width int
 }
 
-// packRows greedily groups tiles into rows that fit w columns, taking
-// per-tile size hints + kind minimums into account. Below
-// singleColumnThreshold the layout collapses to one tile per row at
-// full width.
+const gridCols = 4
+
+// tileSpan maps a size hint to a column span in the grid.
+func tileSpan(t store.DashboardTile) int {
+	switch t.Size {
+	case "sm":
+		return 1
+	case "lg":
+		return 3
+	default: // md or unset
+		return 2
+	}
+}
+
+// packRows groups tiles into rows using a fixed column grid. Each
+// tile occupies 1–4 column spans; rows break when adding the next
+// tile would exceed gridCols. Tile widths are computed proportionally
+// from the available space (total width minus inter-tile gaps).
+// Below singleColumnThreshold everything collapses to one per row.
 func packRows(tiles []store.DashboardTile, w int) [][]packedTile {
 	if w < singleColumnThreshold {
 		rows := make([][]packedTile, len(tiles))
@@ -93,86 +115,59 @@ func packRows(tiles []store.DashboardTile, w int) [][]packedTile {
 		return rows
 	}
 
-	var rows [][]packedTile
-	var cur []packedTile
-	curW := 0
+	type spanTile struct {
+		tile store.DashboardTile
+		span int
+	}
+
+	var rows [][]spanTile
+	var cur []spanTile
+	curSpan := 0
 	for _, t := range tiles {
-		preferred := preferredWidth(t, w)
-		min := minTileWidth(t)
-		need := preferred
-		if len(cur) > 0 {
-			need += tileGap
+		s := tileSpan(t)
+		if s > gridCols {
+			s = gridCols
 		}
-		if curW+need > w {
-			// Flush current row, start new with this tile.
+		if curSpan+s > gridCols {
 			if len(cur) > 0 {
 				rows = append(rows, cur)
-				cur = nil
-				curW = 0
 			}
-			// Use full width if this tile alone wouldn't have fit otherwise.
-			width := preferred
-			if width > w {
-				width = w
-			}
-			if width < min {
-				width = min
-			}
-			cur = []packedTile{{tile: t, width: width}}
-			curW = width
-			continue
+			cur = nil
+			curSpan = 0
 		}
-		cur = append(cur, packedTile{tile: t, width: preferred})
-		curW += need
+		cur = append(cur, spanTile{tile: t, span: s})
+		curSpan += s
 	}
 	if len(cur) > 0 {
 		rows = append(rows, cur)
 	}
-	return rows
+
+	var out [][]packedTile
+	for _, row := range rows {
+		totalSpan := 0
+		for _, st := range row {
+			totalSpan += st.span
+		}
+		available := w - (len(row)-1)*tileGap
+		packed := make([]packedTile, len(row))
+		assigned := 0
+		for i, st := range row {
+			if i == len(row)-1 {
+				packed[i] = packedTile{tile: st.tile, width: available - assigned}
+			} else {
+				tw := available * st.span / totalSpan
+				packed[i] = packedTile{tile: st.tile, width: tw}
+				assigned += tw
+			}
+		}
+		out = append(out, packed)
+	}
+	return out
 }
 
-// preferredWidth maps the tile's size hint onto the available row
-// width. Defaults to "md" when unset.
-func preferredWidth(t store.DashboardTile, rowW int) int {
-	size := t.Size
-	if size == "" {
-		size = "md"
-	}
-	var frac float64
-	switch size {
-	case "sm":
-		frac = 0.25
-	case "lg":
-		frac = 0.66
-	default: // md
-		frac = 0.5
-	}
-	wOut := int(float64(rowW) * frac)
-	if wOut < minTileWidth(t) {
-		wOut = minTileWidth(t)
-	}
-	if wOut > rowW {
-		wOut = rowW
-	}
-	return wOut
-}
 
-func minTileWidth(t store.DashboardTile) int {
-	switch t.Kind {
-	case "counter":
-		return 14
-	case "gauge":
-		return 18
-	case "sparkline":
-		return 24
-	case "table":
-		return 22
-	}
-	return 16
-}
-
-// writeRow renders one row of tiles side-by-side. Each tile becomes a
-// list of lines; we pad to the tallest tile and concat line-wise.
+// writeRow renders one row of tiles side-by-side, each wrapped in a
+// box-drawing border. Tiles are padded to the tallest in the row.
 func writeRow(b *strings.Builder, row []packedTile, results map[string]WatchSeries) {
 	if len(row) == 0 {
 		return
@@ -180,74 +175,132 @@ func writeRow(b *strings.Builder, row []packedTile, results map[string]WatchSeri
 	cells := make([][]string, len(row))
 	maxLines := 0
 	for i, pt := range row {
+		// Inner width is tile width minus 2 for the left/right border chars.
+		innerW := pt.width - 2
+		if innerW < 4 {
+			innerW = 4
+		}
 		series, ok := results[pt.tile.Watch]
 		var content []string
 		if !ok {
-			content = renderMissing(pt.tile, pt.width)
+			content = renderMissing(pt.tile, innerW)
 		} else {
-			content = renderTile(pt.tile, series, pt.width)
+			content = renderTile(pt.tile, series, innerW)
 		}
 		cells[i] = content
 		if len(content) > maxLines {
 			maxLines = len(content)
 		}
 	}
+	// Pad shorter cells at the TOP so content sits flush at the bottom.
 	for i := range cells {
 		for len(cells[i]) < maxLines {
-			cells[i] = append(cells[i], strings.Repeat(" ", row[i].width))
+			innerW := row[i].width - 2
+			if innerW < 4 {
+				innerW = 4
+			}
+			cells[i] = append([]string{strings.Repeat(" ", innerW)}, cells[i]...)
 		}
 	}
+	// Top border with inset title
+	for i, pt := range row {
+		if i > 0 {
+			b.WriteString(strings.Repeat(" ", tileGap))
+		}
+		innerW := pt.width - 2
+		if innerW < 4 {
+			innerW = 4
+		}
+		label := tileLabel(pt.tile)
+		maxLabel := innerW - 4 // room for "─ " + " ─" around label
+		if maxLabel < 0 {
+			maxLabel = 0
+		}
+		if len(label) > maxLabel {
+			label = label[:maxLabel]
+		}
+		if label != "" {
+			trail := innerW - 2 - len(label) - 1 // ┌─ label ───┐
+			if trail < 1 {
+				trail = 1
+			}
+			b.WriteString(colorize(clrPurple, "┌─"))
+			b.WriteString(fmt.Sprintf(" \x1b[1;38;5;%dm%s\x1b[0m ", clrOrange, label))
+			b.WriteString(colorize(clrPurple, strings.Repeat("─", trail)+"┐"))
+		} else {
+			b.WriteString(colorize(clrPurple, "┌"+strings.Repeat("─", innerW)+"┐"))
+		}
+	}
+	b.WriteByte('\n')
+	// Padding row below top border
+	for i, pt := range row {
+		if i > 0 {
+			b.WriteString(strings.Repeat(" ", tileGap))
+		}
+		innerW := pt.width - 2
+		if innerW < 4 {
+			innerW = 4
+		}
+		b.WriteString(colorize(clrPurple, "│"))
+		b.WriteString(strings.Repeat(" ", innerW))
+		b.WriteString(colorize(clrPurple, "│"))
+	}
+	b.WriteByte('\n')
+	// Content rows
 	for line := 0; line < maxLines; line++ {
 		for i, cell := range cells {
 			if i > 0 {
 				b.WriteString(strings.Repeat(" ", tileGap))
 			}
-			b.WriteString(padRight(cell[line], row[i].width))
+			innerW := row[i].width - 2
+			if innerW < 4 {
+				innerW = 4
+			}
+			b.WriteString(colorize(clrPurple, "│"))
+			b.WriteString(padRight(cell[line], innerW))
+			b.WriteString(colorize(clrPurple, "│"))
 		}
 		b.WriteByte('\n')
 	}
+	// Bottom border
+	for i, pt := range row {
+		if i > 0 {
+			b.WriteString(strings.Repeat(" ", tileGap))
+		}
+		innerW := pt.width - 2
+		if innerW < 4 {
+			innerW = 4
+		}
+		b.WriteString(colorize(clrPurple, "└"+strings.Repeat("─", innerW)+"┘"))
+	}
+	b.WriteByte('\n')
 }
 
 func renderMissing(t store.DashboardTile, w int) []string {
 	return []string{
-		tileHeader(t, w),
-		padRight("  <no data>", w),
+		padRight("  "+colorize(clrGray, "<no data>"), w),
 	}
 }
 
-// renderTile dispatches per-kind rendering. All renderings have the
-// header line + one-or-more body lines.
+// renderTile dispatches per-kind rendering.
 func renderTile(t store.DashboardTile, series WatchSeries, w int) []string {
-	header := tileHeader(t, w)
 	switch t.Kind {
 	case "counter":
-		return []string{header, renderCounter(t, series, w)}
+		return renderCounter(t, series, w)
 	case "gauge":
-		return []string{header, renderGauge(t, series, w)}
+		return []string{renderGauge(t, series, w)}
 	case "sparkline":
-		return []string{header, renderSparkline(series, w)}
+		return renderSparkline(series, w)
 	case "table":
-		out := []string{header}
-		out = append(out, renderTable(t, series, w)...)
-		return out
+		return renderTable(t, series, w)
 	}
-	return []string{header, padRight("  ?", w)}
+	return []string{padRight("  ?", w)}
 }
 
-func tileHeader(t store.DashboardTile, w int) string {
-	label := t.Watch
-	if t.Kind != "" {
-		label = label + "  (" + t.Kind + ")"
-	}
-	if visualLen(label) > w-2 {
-		label = label[:w-2]
-	}
-	return padRight("\x1b[1m"+label+"\x1b[0m", w+len("\x1b[1m\x1b[0m"))
-}
 
-func renderCounter(t store.DashboardTile, series WatchSeries, w int) string {
+func renderCounter(t store.DashboardTile, series WatchSeries, w int) []string {
 	if len(series.Values) == 0 {
-		return padRight("  <no data>", w)
+		return []string{padRight("  "+colorize(clrGray, "<no data>"), w)}
 	}
 	v := series.Values[0]
 	text := formatNumber(v)
@@ -255,13 +308,24 @@ func renderCounter(t store.DashboardTile, series WatchSeries, w int) string {
 		text = fmt.Sprintf(t.Format, v)
 	}
 	color := thresholdColor(t.Threshold, v)
-	display := "  " + colorize(color, text)
-	return padRight(display, w+colorPad(color))
+	lines := bigNumber(text)
+	var out []string
+	for _, line := range lines {
+		contentW := visualLen(line)
+		lpad := (w - contentW) / 2
+		if lpad < 0 {
+			lpad = 0
+		}
+		display := strings.Repeat(" ", lpad) + colorize(color, line)
+		out = append(out, padRight(display, w))
+	}
+	out = append(out, strings.Repeat(" ", w))
+	return out
 }
 
 func renderGauge(t store.DashboardTile, series WatchSeries, w int) string {
 	if len(series.Values) == 0 {
-		return padRight("  <no data>", w)
+		return padRight("  "+colorize(clrGray, "<no data>"), w)
 	}
 	v := series.Values[0]
 	max := 100.0
@@ -278,9 +342,8 @@ func renderGauge(t store.DashboardTile, series WatchSeries, w int) string {
 	if pct > 1 {
 		pct = 1
 	}
-	// Gauge bar: width = w - 2 (margin) - len(value text) - len("/max ")
 	suffix := fmt.Sprintf(" %s/%s", formatNumber(v), formatNumber(max))
-	barW := w - 2 - len(suffix)
+	barW := w - 2 - len(suffix) - 2 // -2 for []
 	if barW < 4 {
 		barW = 4
 	}
@@ -288,44 +351,49 @@ func renderGauge(t store.DashboardTile, series WatchSeries, w int) string {
 	color := thresholdColor(t.Threshold, v)
 	bar := "[" + colorize(color, strings.Repeat("█", filled)) + strings.Repeat("░", barW-filled) + "]"
 	display := "  " + bar + suffix
-	return padRight(display, w+colorPad(color))
+	return padRight(display, w)
 }
 
-func renderSparkline(series WatchSeries, w int) string {
+const sparklineHeight = 4
+
+func renderSparkline(series WatchSeries, w int) []string {
 	if len(series.Values) == 0 {
-		return padRight("  <no data>", w)
+		return []string{padRight("  "+colorize(clrGray, "<no data>"), w)}
 	}
-	// Reverse to chronological order, downsample to width-2.
-	target := w - 2
-	if target < 2 {
-		target = 2
+	// Build points oldest-first (series.Values is newest-first).
+	n := len(series.Values)
+	pts := make([]chart.Point, n)
+	for i := range series.Values {
+		pts[i] = chart.Point{X: float64(i), Y: series.Values[n-1-i]}
 	}
-	chrono := make([]float64, len(series.Values))
-	for i, v := range series.Values {
-		chrono[len(series.Values)-1-i] = v
+	rendered, err := chart.Line(w, sparklineHeight).Points(pts).Render()
+	if err != nil {
+		return []string{padRight("  "+colorize(clrGray, "<render error>"), w)}
 	}
-	if len(chrono) > target {
-		chrono = chrono[len(chrono)-target:]
+	// Split into lines and colorize + pad each.
+	raw := strings.Split(strings.TrimRight(rendered, "\n"), "\n")
+	out := make([]string, len(raw))
+	for i, line := range raw {
+		out[i] = padRight(colorize(clrCyan, line), w)
 	}
-	spark := chart.Sparkline(chrono)
-	display := "  " + spark
-	return padRight(display, w+visualLen(spark)-runeCount(spark))
+	return out
 }
 
 func renderTable(t store.DashboardTile, series WatchSeries, w int) []string {
 	if series.LatestText == "" {
-		return []string{padRight("  <no data>", w)}
+		return []string{padRight("  "+colorize(clrGray, "<no data>"), w)}
 	}
 	headers := t.Columns
 	colCount := len(headers)
 	if colCount == 0 {
-		return []string{padRight("  (no columns)", w)}
+		return []string{padRight("  "+colorize(clrGray, "(no columns)"), w)}
 	}
 	colW := (w - 2) / colCount
 	if colW < 4 {
 		colW = 4
 	}
-	out := []string{padRight("  "+joinCols(headers, colW), w)}
+	headerLine := "  " + colorize(clrBlue, joinCols(headers, colW))
+	out := []string{padRight(headerLine, w)}
 	for _, line := range strings.Split(strings.TrimSpace(series.LatestText), "\n") {
 		fields := strings.Fields(line)
 		out = append(out, padRight("  "+joinCols(fields, colW), w))
@@ -334,6 +402,13 @@ func renderTable(t store.DashboardTile, series WatchSeries, w int) []string {
 		}
 	}
 	return out
+}
+
+func tileLabel(t store.DashboardTile) string {
+	if t.Title != "" {
+		return t.Title
+	}
+	return t.Watch
 }
 
 func joinCols(cols []string, colW int) string {
@@ -349,7 +424,7 @@ func joinCols(cols []string, colW int) string {
 
 func thresholdColor(th *store.DashboardThresh, v float64) int {
 	if th == nil {
-		return 0
+		return clrOrange
 	}
 	if th.Crit != nil && v >= *th.Crit {
 		return 1 // red
@@ -357,7 +432,7 @@ func thresholdColor(th *store.DashboardThresh, v float64) int {
 	if th.Warn != nil && v >= *th.Warn {
 		return 3 // yellow
 	}
-	return 0
+	return clrOrange
 }
 
 // colorize wraps s in an ANSI 256-color sequence. color=0 means no color.
@@ -368,14 +443,6 @@ func colorize(color int, s string) string {
 	return fmt.Sprintf("\x1b[38;5;%dm%s\x1b[0m", color, s)
 }
 
-// colorPad returns the byte overhead of the color sequence so padRight
-// can extend the field properly when the visible content is shorter.
-func colorPad(color int) int {
-	if color == 0 {
-		return 0
-	}
-	return len(fmt.Sprintf("\x1b[38;5;%dm\x1b[0m", color))
-}
 
 func formatNumber(v float64) string {
 	if v == float64(int64(v)) {
@@ -385,12 +452,12 @@ func formatNumber(v float64) string {
 }
 
 func sectionHeading(title string, w int) string {
-	rule := strings.Repeat("─", w)
-	return "\x1b[1m" + title + "\x1b[0m\n" + rule
+	rule := colorize(clrGray, strings.Repeat("─", w))
+	return fmt.Sprintf("\x1b[1;38;5;%dm%s\x1b[0m\n%s", clrBlue, title, rule)
 }
 
 func boldTitle(title string) string {
-	return "\x1b[1m" + title + "\x1b[0m"
+	return fmt.Sprintf("\x1b[1;38;5;%dm%s\x1b[0m", clrCyan, title)
 }
 
 // padRight pads s with spaces so its rendered width is `w` columns,
@@ -433,4 +500,45 @@ func runeCount(s string) int {
 		n++
 	}
 	return n
+}
+
+const bigHeight = 5
+
+// bigNumber renders a numeric string as 5-line tall block art.
+func bigNumber(s string) []string {
+	lines := [bigHeight]strings.Builder{}
+	for _, ch := range s {
+		glyph, ok := bigDigits[ch]
+		if !ok {
+			glyph = bigDigits['?']
+		}
+		for row := 0; row < bigHeight; row++ {
+			if lines[row].Len() > 0 {
+				lines[row].WriteByte(' ')
+			}
+			lines[row].WriteString(glyph[row])
+		}
+	}
+	out := make([]string, bigHeight)
+	for i := range out {
+		out[i] = lines[i].String()
+	}
+	return out
+}
+
+var bigDigits = map[rune][bigHeight]string{
+	'0': {"█▀▀█", "█  █", "█  █", "█  █", "█▄▄█"},
+	'1': {" ▄█ ", "  █ ", "  █ ", "  █ ", "  █ "},
+	'2': {"█▀▀█", "   █", "▄▄▄█", "█   ", "█▄▄▄"},
+	'3': {"█▀▀█", "   █", " ▀▀█", "   █", "█▄▄█"},
+	'4': {"█  █", "█  █", "▀▀▀█", "   █", "   █"},
+	'5': {"█▀▀▀", "█   ", "█▀▀█", "   █", "█▄▄█"},
+	'6': {"█▀▀▀", "█   ", "█▀▀█", "█  █", "█▄▄█"},
+	'7': {"▀▀▀█", "   █", "   █", "  █ ", "  █ "},
+	'8': {"█▀▀█", "█  █", "█▀▀█", "█  █", "█▄▄█"},
+	'9': {"█▀▀█", "█  █", "▀▀▀█", "   █", "█▄▄█"},
+	'.': {"    ", "    ", "    ", "    ", " ▄  "},
+	',': {"    ", "    ", "    ", " ▄  ", " ▀  "},
+	'-': {"    ", "    ", "▀▀▀▀", "    ", "    "},
+	'?': {"    ", " ▄▄ ", "  █ ", "    ", "  ▄ "},
 }
