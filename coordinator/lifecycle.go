@@ -190,8 +190,6 @@ func abandonReason(err error) string {
 	switch {
 	case strings.Contains(msg, "no LAUNCHING row"):
 		return "no-launching-row"
-	case strings.Contains(msg, "ambiguous recovery"):
-		return "ambiguous-recovery"
 	case strings.Contains(msg, "no data_volume_size_gb"):
 		return "no-tier-size"
 	case strings.Contains(msg, "no ShardOps store"):
@@ -262,10 +260,10 @@ func (h *LifecycleHandler) decide(ctx context.Context, instanceID, tier, az stri
 	log.Printf("lifecycle: scan tier=%s instance=%s recoverable=%d",
 		tier, instanceID, len(recoverable))
 
-	switch len(recoverable) {
-	case 1:
+	switch {
+	case len(recoverable) > 0:
 		return DecisionRecover, recoverable[0].VolumeID, recoverable[0].ShardID, nil
-	case 0:
+	default:
 		size, ok := h.sizeByTier[tier]
 		if !ok || size <= 0 {
 			return DecisionAbandon, "", "", fmt.Errorf("no data_volume_size_gb configured for tier %q", tier)
@@ -298,13 +296,6 @@ func (h *LifecycleHandler) decide(ctx context.Context, instanceID, tier, az stri
 			return DecisionAbandon, "", "", fmt.Errorf("create volume for new shard: %w", err)
 		}
 		return DecisionChristen, id, claimed.ID, nil
-	default:
-		ids := make([]string, 0, len(recoverable))
-		for _, v := range recoverable {
-			ids = append(ids, v.VolumeID+"/"+v.ShardID)
-		}
-		return DecisionAbandon, "", "", fmt.Errorf("ambiguous recovery: %d candidate volumes in %s for %s (%v)",
-			len(recoverable), az, tier, ids)
 	}
 }
 

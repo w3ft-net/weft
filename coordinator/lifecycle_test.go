@@ -278,9 +278,9 @@ func TestLifecycle_OrphanVolume_Recovers(t *testing.T) {
 	}
 }
 
-// Two orphan volumes for the same tier+AZ → alarm (ABANDON, no
-// attach). Safer than guessing.
-func TestLifecycle_AmbiguousRecovery_Abandons(t *testing.T) {
+// Two orphan volumes for the same tier+AZ → recover the first one.
+// The second volume will be picked up by the next instance launch.
+func TestLifecycle_MultipleRecoverable_PicksFirst(t *testing.T) {
 	vm := &fakeVolumeManager{
 		availableByTier: map[string][]VolumeInfo{
 			"small/us-east-2a": {
@@ -302,17 +302,58 @@ func TestLifecycle_AmbiguousRecovery_Abandons(t *testing.T) {
 		LifecycleTransition: "autoscaling:EC2_INSTANCE_LAUNCHING",
 	}
 	decision, err := h.HandleLaunchEvent(context.Background(), ev)
-	if err == nil {
-		t.Fatal("expected an error for ambiguous recovery")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if decision != DecisionAbandon {
-		t.Errorf("decision: got %s want %s", decision, DecisionAbandon)
+	if decision != DecisionRecover {
+		t.Errorf("decision: got %s want %s", decision, DecisionRecover)
 	}
-	if len(vm.attached) != 0 {
-		t.Errorf("expected no attach on abandon, got %d", len(vm.attached))
+	if len(vm.attached) != 1 || vm.attached[0].volumeID != "vol-a" {
+		t.Errorf("expected attach of vol-a, got %v", vm.attached)
 	}
-	if asg.lastResult() != "ABANDON" {
-		t.Errorf("CompleteLifecycleAction result: got %q want ABANDON", asg.lastResult())
+	if asg.lastResult() != "CONTINUE" {
+		t.Errorf("CompleteLifecycleAction result: got %q want CONTINUE", asg.lastResult())
+	}
+}
+
+// Models the 2026-05-04 production scenario: two SUSPENDED shards
+// with orphan volumes in the same AZ/tier block a LAUNCHING shard
+// from getting an instance. Before the fix, the handler abandoned
+// with "ambiguous recovery"; after, it picks the first volume.
+func TestLifecycle_SuspendedShardsWithOrphanVolumes_Recovers(t *testing.T) {
+	vm := &fakeVolumeManager{
+		availableByTier: map[string][]VolumeInfo{
+			"small/us-east-2a": {
+				{VolumeID: "vol-07f6d57da29aa4599", AZ: "us-east-2a", ShardID: "shard-20260427T0000-334c5f87", State: "available", Tier: "small"},
+				{VolumeID: "vol-0ec7d50ec17585a99", AZ: "us-east-2a", ShardID: "shard-20260504T0000-75aae944", State: "available", Tier: "small"},
+			},
+		},
+	}
+	asg := &fakeLifecycleASG{}
+	reg := NewShardRegistry()
+	reg.Add(&ShardEntry{ID: "shard-20260427T0000-334c5f87", State: StateSuspended})
+	reg.Add(&ShardEntry{ID: "shard-20260504T0000-75aae944", State: StateSuspended})
+	reg.Add(&ShardEntry{ID: "shard-20260504T1800-ba56011d", State: StateLaunching})
+
+	h := baseHandler(vm, asg, reg, &mockHeartbeatStore{heartbeats: nil})
+
+	ev := LifecycleEvent{
+		ASGName:             "weft-shard-small",
+		InstanceID:          "i-new-launch",
+		LifecycleTransition: "autoscaling:EC2_INSTANCE_LAUNCHING",
+	}
+	decision, err := h.HandleLaunchEvent(context.Background(), ev)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if decision != DecisionRecover {
+		t.Errorf("decision: got %s want %s", decision, DecisionRecover)
+	}
+	if len(vm.attached) != 1 || vm.attached[0].volumeID != "vol-07f6d57da29aa4599" {
+		t.Errorf("expected attach of vol-07f6d57da29aa4599 (first recoverable), got %v", vm.attached)
+	}
+	if asg.lastResult() != "CONTINUE" {
+		t.Errorf("CompleteLifecycleAction result: got %q want CONTINUE", asg.lastResult())
 	}
 }
 
