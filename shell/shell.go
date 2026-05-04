@@ -92,6 +92,11 @@ func (s *Shell) Run() error {
 	)
 	s.configureCore(runner.core)
 
+	// Prefetch directory listings while the logo dissolves.
+	if rfs, ok := s.FS.(*RemoteFS); ok {
+		go rfs.Prefetch()
+	}
+
 	// Handle window resize.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGWINCH)

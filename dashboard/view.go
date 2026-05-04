@@ -13,10 +13,12 @@ import (
 const viewName = "dashboard"
 
 // ViewArgs is passed to OnEnter when the dashboard view is activated.
+// Results may be nil; the view renders the frame immediately and fills
+// tile data asynchronously.
 type ViewArgs struct {
 	Name    string // dashboard name (used as fallback title)
 	Spec    *store.DashboardSpec
-	Results map[string]WatchSeries
+	Results map[string]WatchSeries // nil = fetch async
 }
 
 // DashboardView implements shellcore.View for interactive dashboard
@@ -33,6 +35,8 @@ type DashboardView struct {
 	zoom     bool
 	scroll   int   // line offset into the rendered grid
 	lastTick int64 // unix seconds of last refresh
+
+	pending chan map[string]WatchSeries // async data delivery (cap 1)
 }
 
 func NewView(p Provider) *DashboardView {
@@ -63,6 +67,13 @@ func (v *DashboardView) OnEnter(c *shellcore.ShellCore, args any) error {
 	}
 
 	c.Write([]byte("\x1b[?1049h"))
+
+	if v.results == nil {
+		v.pending = make(chan map[string]WatchSeries, 1)
+		go func() {
+			v.pending <- fetchAllSeries(v.provider, v.spec)
+		}()
+	}
 	return nil
 }
 
@@ -548,6 +559,19 @@ func (v *DashboardView) renderZoomedTable(t store.DashboardTile, series WatchSer
 const refreshInterval = 30 // seconds between live data refreshes
 
 func (v *DashboardView) Tick(c *shellcore.ShellCore) {
+	// Check for async data from initial load.
+	if v.pending != nil {
+		select {
+		case data := <-v.pending:
+			v.results = data
+			v.pending = nil
+			v.lastTick = time.Now().Unix()
+			v.Render(c)
+			return
+		default:
+		}
+	}
+
 	if v.zoom {
 		return
 	}

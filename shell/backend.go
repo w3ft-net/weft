@@ -3,8 +3,10 @@ package shell
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/kevlarcon/weft/chart"
+	"github.com/kevlarcon/weft/store"
 )
 
 // WatchData holds the deserialized fields of a cron watch.
@@ -55,11 +57,69 @@ type WatchResultsBackend interface {
 type RemoteFS struct {
 	backend Backend
 	apps    []string
+
+	mu        sync.RWMutex
+	dirCache  map[string][]string          // path → entries
+	specCache map[string]*store.DashboardSpec // dashboard name → parsed spec
 }
 
 // NewRemoteFS creates an FS backed by the given transport.
 func NewRemoteFS(backend Backend, apps []string) *RemoteFS {
-	return &RemoteFS{backend: backend, apps: apps}
+	return &RemoteFS{
+		backend:   backend,
+		apps:      apps,
+		dirCache:  make(map[string][]string),
+		specCache: make(map[string]*store.DashboardSpec),
+	}
+}
+
+// Prefetch populates the directory cache for paths that require network
+// calls. Call from a goroutine during startup (e.g. while the logo
+// dissolves) so tab completion is instant from the first keypress.
+func (f *RemoteFS) Prefetch() {
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		if names, err := f.backend.ListFunctions(); err == nil {
+			f.setDirCache("/bin", names)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if names, err := f.backend.ListWatches(); err == nil {
+			f.setDirCache("/cron.d", names)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if names, err := f.backend.ListDashboards(); err == nil {
+			for i, n := range names {
+				names[i] = n + ".yaml"
+			}
+			f.setDirCache("/etc/dashboards", names)
+		}
+	}()
+	wg.Wait()
+}
+
+func (f *RemoteFS) setDirCache(path string, entries []string) {
+	f.mu.Lock()
+	f.dirCache[path] = entries
+	f.mu.Unlock()
+}
+
+func (f *RemoteFS) getDirCache(path string) ([]string, bool) {
+	f.mu.RLock()
+	entries, ok := f.dirCache[path]
+	f.mu.RUnlock()
+	return entries, ok
+}
+
+func (f *RemoteFS) invalidateDirCache(path string) {
+	f.mu.Lock()
+	delete(f.dirCache, path)
+	f.mu.Unlock()
 }
 
 func (f *RemoteFS) ReadFile(path string) ([]byte, error) {
@@ -110,14 +170,22 @@ func (f *RemoteFS) WriteFile(path string, data []byte) error {
 
 	switch dir {
 	case "bin":
-		return f.backend.SaveFunction(name, string(data))
+		if err := f.backend.SaveFunction(name, string(data)); err != nil {
+			return err
+		}
+		f.invalidateDirCache("/bin")
+		return nil
 	case "cron.d":
 		schedule, pipeline := parseCronFileContent(string(data))
-		return f.backend.SaveWatch(name, &WatchData{
+		if err := f.backend.SaveWatch(name, &WatchData{
 			Schedule: schedule,
 			Pipeline: pipeline,
 			Enabled:  true,
-		})
+		}); err != nil {
+			return err
+		}
+		f.invalidateDirCache("/cron.d")
+		return nil
 	case "etc":
 		if name == "notify.yaml" {
 			return f.backend.SaveNotifyConfig(string(data))
@@ -125,7 +193,16 @@ func (f *RemoteFS) WriteFile(path string, data []byte) error {
 		if strings.HasPrefix(name, "dashboards/") {
 			dName := strings.TrimPrefix(name, "dashboards/")
 			dName = strings.TrimSuffix(dName, ".yaml")
-			return f.backend.SaveDashboard(dName, string(data))
+			if err := f.backend.SaveDashboard(dName, string(data)); err != nil {
+				return err
+			}
+			f.invalidateDirCache("/etc/dashboards")
+			if spec, err := store.ParseDashboardYAML(string(data)); err == nil {
+				f.mu.Lock()
+				f.specCache[dName] = spec
+				f.mu.Unlock()
+			}
+			return nil
 		}
 	}
 
@@ -143,23 +220,34 @@ func (f *RemoteFS) ReadDir(path string) ([]string, error) {
 		return f.logEntries(), nil
 
 	case "/bin":
+		if cached, ok := f.getDirCache("/bin"); ok {
+			return cached, nil
+		}
 		names, err := f.backend.ListFunctions()
 		if err != nil {
 			return []string{}, nil
 		}
+		f.setDirCache("/bin", names)
 		return names, nil
 
 	case "/cron.d":
+		if cached, ok := f.getDirCache("/cron.d"); ok {
+			return cached, nil
+		}
 		names, err := f.backend.ListWatches()
 		if err != nil {
 			return []string{}, nil
 		}
+		f.setDirCache("/cron.d", names)
 		return names, nil
 
 	case "/etc":
 		return []string{"dashboards/", "notify.yaml", "usage"}, nil
 
 	case "/etc/dashboards":
+		if cached, ok := f.getDirCache("/etc/dashboards"); ok {
+			return cached, nil
+		}
 		names, err := f.backend.ListDashboards()
 		if err != nil {
 			return []string{}, nil
@@ -167,6 +255,7 @@ func (f *RemoteFS) ReadDir(path string) ([]string, error) {
 		for i, n := range names {
 			names[i] = n + ".yaml"
 		}
+		f.setDirCache("/etc/dashboards", names)
 		return names, nil
 	}
 
@@ -237,9 +326,30 @@ func (f *RemoteFS) Remove(path string) error {
 
 	switch dir {
 	case "bin":
-		return f.backend.DeleteFunction(name)
+		if err := f.backend.DeleteFunction(name); err != nil {
+			return err
+		}
+		f.invalidateDirCache("/bin")
+		return nil
 	case "cron.d":
-		return f.backend.DeleteWatch(name)
+		if err := f.backend.DeleteWatch(name); err != nil {
+			return err
+		}
+		f.invalidateDirCache("/cron.d")
+		return nil
+	case "etc":
+		if strings.HasPrefix(name, "dashboards/") {
+			dName := strings.TrimPrefix(name, "dashboards/")
+			dName = strings.TrimSuffix(dName, ".yaml")
+			if err := f.backend.DeleteDashboard(dName); err != nil {
+				return err
+			}
+			f.invalidateDirCache("/etc/dashboards")
+			f.mu.Lock()
+			delete(f.specCache, dName)
+			f.mu.Unlock()
+			return nil
+		}
 	}
 
 	return fmt.Errorf("%s: operation not permitted", path)
@@ -253,9 +363,35 @@ func (f *RemoteFS) GetWatchResults(name string, limit int) ([]chart.WatchResultV
 	return nil, fmt.Errorf("watch results not supported")
 }
 
-// GetDashboard delegates to the backend.
+// GetDashboard delegates to the backend and caches the parsed spec.
 func (f *RemoteFS) GetDashboard(name string) (string, error) {
-	return f.backend.GetDashboard(name)
+	body, err := f.backend.GetDashboard(name)
+	if err != nil {
+		return "", err
+	}
+	if spec, perr := store.ParseDashboardYAML(body); perr == nil {
+		f.mu.Lock()
+		f.specCache[name] = spec
+		f.mu.Unlock()
+	}
+	return body, nil
+}
+
+// GetDashboardSpec returns the cached parsed spec for a dashboard, or
+// fetches + parses it if not cached. Used by the dashboard view to
+// render the frame without re-fetching YAML.
+func (f *RemoteFS) GetDashboardSpec(name string) (*store.DashboardSpec, error) {
+	f.mu.RLock()
+	spec, ok := f.specCache[name]
+	f.mu.RUnlock()
+	if ok {
+		return spec, nil
+	}
+	body, err := f.GetDashboard(name)
+	if err != nil {
+		return nil, err
+	}
+	return store.ParseDashboardYAML(body)
 }
 
 // ListDashboards delegates to the backend.

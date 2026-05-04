@@ -276,10 +276,34 @@ func writeRow(b *strings.Builder, row []packedTile, results map[string]WatchSeri
 	b.WriteByte('\n')
 }
 
-func renderMissing(t store.DashboardTile, w int) []string {
-	return []string{
-		padRight("  "+colorize(clrGray, "<no data>"), w),
+// tileContentHeight returns the expected content height for a tile kind
+// so the frame can be pre-allocated before data arrives.
+func tileContentHeight(kind string) int {
+	switch kind {
+	case "counter":
+		return bigHeight + 1
+	case "sparkline":
+		return sparklineHeight
+	case "table":
+		return 7
+	case "gauge":
+		return 1
 	}
+	return 1
+}
+
+func renderMissing(t store.DashboardTile, w int) []string {
+	h := tileContentHeight(t.Kind)
+	out := make([]string, h)
+	mid := h / 2
+	for i := range out {
+		if i == mid {
+			out[i] = padRight("  "+colorize(clrGray, "<no data>"), w)
+		} else {
+			out[i] = strings.Repeat(" ", w)
+		}
+	}
+	return out
 }
 
 // renderTile dispatches per-kind rendering.
@@ -300,7 +324,7 @@ func renderTile(t store.DashboardTile, series WatchSeries, w int) []string {
 
 func renderCounter(t store.DashboardTile, series WatchSeries, w int) []string {
 	if len(series.Values) == 0 {
-		return []string{padRight("  "+colorize(clrGray, "<no data>"), w)}
+		return renderMissing(t, w)
 	}
 	v := series.Values[0]
 	text := formatNumber(v)
@@ -325,7 +349,7 @@ func renderCounter(t store.DashboardTile, series WatchSeries, w int) []string {
 
 func renderGauge(t store.DashboardTile, series WatchSeries, w int) string {
 	if len(series.Values) == 0 {
-		return padRight("  "+colorize(clrGray, "<no data>"), w)
+		return padRight("  "+colorize(clrGray, "<no data>"), w) // gauge is 1 line; no padding needed
 	}
 	v := series.Values[0]
 	max := 100.0
@@ -358,7 +382,7 @@ const sparklineHeight = 4
 
 func renderSparkline(series WatchSeries, w int) []string {
 	if len(series.Values) == 0 {
-		return []string{padRight("  "+colorize(clrGray, "<no data>"), w)}
+		return renderMissing(store.DashboardTile{Kind: "sparkline"}, w)
 	}
 	// Build points oldest-first (series.Values is newest-first).
 	n := len(series.Values)
@@ -381,12 +405,12 @@ func renderSparkline(series WatchSeries, w int) []string {
 
 func renderTable(t store.DashboardTile, series WatchSeries, w int) []string {
 	if series.LatestText == "" {
-		return []string{padRight("  "+colorize(clrGray, "<no data>"), w)}
+		return renderMissing(t, w)
 	}
 	headers := t.Columns
 	colCount := len(headers)
 	if colCount == 0 {
-		return []string{padRight("  "+colorize(clrGray, "(no columns)"), w)}
+		return renderMissing(t, w)
 	}
 	colW := (w - 2) / colCount
 	if colW < 4 {

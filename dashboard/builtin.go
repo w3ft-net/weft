@@ -12,18 +12,20 @@ import (
 
 // Provider is the data source the dashboard builtin needs:
 //   - GetDashboard fetches the YAML body for a named dashboard.
+//   - GetDashboardSpec returns the cached parsed spec (avoids re-fetch + YAML parse).
 //   - ListDashboards returns available dashboard names.
 //   - GetWatchResults is the same hook chart.WatchResultsProvider uses
 //     so existing FS implementations satisfy it for free.
 type Provider interface {
 	chart.WatchResultsProvider
 	GetDashboard(name string) (string, error)
+	GetDashboardSpec(name string) (*store.DashboardSpec, error)
 	ListDashboards() ([]string, error)
 }
 
 // Builtin returns a shellcore.BuiltinFunc that handles `dashboard <name>`
-// typed at the prompt. Fetches the spec and watch results, then enters
-// the interactive dashboard view.
+// typed at the prompt. Renders the frame immediately from the cached
+// spec, then fills tile data asynchronously.
 //
 // Wire it via core.RegisterBuiltin("dashboard", dashboard.Builtin(p)).
 func Builtin(p Provider) shellcore.BuiltinFunc {
@@ -44,18 +46,12 @@ func Builtin(p Provider) shellcore.BuiltinFunc {
 			return true
 		}
 		name := parts[1]
-		body, err := p.GetDashboard(name)
+		spec, err := p.GetDashboardSpec(name)
 		if err != nil {
 			c.AppendScrollback(shellcore.ErrorText("dashboard: "+err.Error()) + "\n")
 			return true
 		}
-		spec, err := store.ParseDashboardYAML(body)
-		if err != nil {
-			c.AppendScrollback(shellcore.ErrorText("dashboard: "+err.Error()) + "\n")
-			return true
-		}
-		results := fetchAllSeries(p, spec)
-		if err := c.EnterView(viewName, &ViewArgs{Name: name, Spec: spec, Results: results}); err != nil {
+		if err := c.EnterView(viewName, &ViewArgs{Name: name, Spec: spec}); err != nil {
 			c.AppendScrollback(shellcore.ErrorText("dashboard: "+err.Error()) + "\n")
 		}
 		return true
