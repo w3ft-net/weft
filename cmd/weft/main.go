@@ -18,6 +18,7 @@ import (
 	"github.com/kevlarcon/weft/ingest"
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/shell"
+	"github.com/kevlarcon/warp/pkg/shellcore"
 )
 
 // orgOverride is the active org chosen via --org / WEFT_ORG, applied
@@ -56,13 +57,27 @@ func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "sh":
-			// weft sh [-c 'pipeline']
-			if len(os.Args) > 2 && os.Args[2] == "-c" {
-				if len(os.Args) < 4 {
-					fmt.Fprintln(os.Stderr, "usage: weft sh -c 'pipeline'")
+			// weft sh [--range <spec>] [-c 'pipeline']
+			args := os.Args[2:]
+			var rangeSpec string
+			for i := 0; i < len(args); i++ {
+				if args[i] == "--range" && i+1 < len(args) {
+					rangeSpec = args[i+1]
+					args = append(args[:i], args[i+2:]...)
+					break
+				}
+				if strings.HasPrefix(args[i], "--range=") {
+					rangeSpec = strings.TrimPrefix(args[i], "--range=")
+					args = append(args[:i], args[i+1:]...)
+					break
+				}
+			}
+			if len(args) > 0 && args[0] == "-c" {
+				if len(args) < 2 {
+					fmt.Fprintln(os.Stderr, "usage: weft sh [--range <start>..<end>] -c 'pipeline'")
 					os.Exit(1)
 				}
-				runOneShot(strings.Join(os.Args[3:], " "))
+				runOneShot(strings.Join(args[1:], " "), rangeSpec)
 				return
 			}
 			runShellCmd()
@@ -73,7 +88,7 @@ func main() {
 				fmt.Fprintln(os.Stderr, "usage: weft -c 'pipeline'")
 				os.Exit(1)
 			}
-			runOneShot(strings.Join(os.Args[2:], " "))
+			runOneShot(strings.Join(os.Args[2:], " "), "")
 			return
 		case "whoami":
 			runWhoami()
@@ -294,7 +309,7 @@ func runShell(s *shell.Shell) {
 	}
 }
 
-func runOneShot(pipeline string) {
+func runOneShot(pipeline, rangeSpec string) {
 	cfg, err := shell.LoadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "no .weft.yaml: %v\n", err)
@@ -307,6 +322,16 @@ func runOneShot(pipeline string) {
 		os.Exit(1)
 	}
 	defer cleanup()
+
+	if rangeSpec != "" {
+		start, end, err := shellcore.ParseRange(rangeSpec)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid --range: %v\n", err)
+			os.Exit(1)
+		}
+		s.Start = start
+		s.End = end
+	}
 
 	if err := s.ExecNonInteractive(pipeline, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

@@ -23,7 +23,9 @@ import (
 // accepted, writing output to w. It is the seam between the MCP
 // server and the rest of weft: production wires it to
 // shell.Shell.ExecNonInteractive, tests inject a stub.
-type RunFunc func(pipeline string, w io.Writer) error
+// The optional rangeSpec (e.g. "2h..", "2026-04-27..2026-04-28")
+// narrows the query time window; empty uses the shell default.
+type RunFunc func(pipeline string, rangeSpec string, w io.Writer) error
 
 // LsFunc returns the entries directly under a /log path. Production
 // wires it to shellfs.RemoteFS.ReadDir; tests inject a stub.

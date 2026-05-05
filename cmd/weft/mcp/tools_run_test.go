@@ -13,7 +13,7 @@ import (
 func TestRun_HappyPath(t *testing.T) {
 	captured := ""
 	s := testSession(t, Config{
-		Run: func(pipeline string, w io.Writer) error {
+		Run: func(pipeline string, _ string, w io.Writer) error {
 			captured = pipeline
 			fmt.Fprintln(w, `level=ERROR msg="oops"`)
 			return nil
@@ -80,7 +80,7 @@ func TestRun_InjectionStyleProse(t *testing.T) {
 // it has the full result and may reason from a partial answer.
 func TestRun_OutputCappedByRows(t *testing.T) {
 	s := testSession(t, Config{
-		Run: func(_ string, w io.Writer) error {
+		Run: func(_ string, _ string, w io.Writer) error {
 			for i := 0; i < 1000; i++ {
 				fmt.Fprintf(w, "row %d\n", i)
 			}
@@ -114,7 +114,7 @@ func TestRun_OutputCappedByRows(t *testing.T) {
 // line could blow past the byte budget.
 func TestRun_OutputCappedByBytes(t *testing.T) {
 	s := testSession(t, Config{
-		Run: func(_ string, w io.Writer) error {
+		Run: func(_ string, _ string, w io.Writer) error {
 			fmt.Fprintln(w, strings.Repeat("x", 200_000))
 			return nil
 		},
@@ -142,7 +142,7 @@ func TestRun_OutputCappedByBytes(t *testing.T) {
 // swallowed.
 func TestRun_RunFuncErrorSurfaced(t *testing.T) {
 	s := testSession(t, Config{
-		Run: func(_ string, _ io.Writer) error {
+		Run: func(_ string, _ string, _ io.Writer) error {
 			return fmt.Errorf("shard 4: connection refused")
 		},
 	})

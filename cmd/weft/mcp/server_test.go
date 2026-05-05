@@ -69,7 +69,7 @@ func textContent(res *mcp.CallToolResult) string {
 // before any execution happens.
 func neverRunFn(t *testing.T) RunFunc {
 	t.Helper()
-	return func(_ string, _ io.Writer) error {
+	return func(_ string, _ string, _ io.Writer) error {
 		t.Errorf("RunFunc must not be called for this fixture")
 		return nil
 	}

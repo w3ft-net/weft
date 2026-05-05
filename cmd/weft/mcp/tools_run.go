@@ -20,6 +20,11 @@ type RunArgs struct {
 	// | jq '.level' | sort | uniq -c` but cannot smuggle a `rm`,
 	// a redirect, or a command substitution past the boundary.
 	Pipeline string `json:"pipeline" jsonschema:"the weft shell pipeline to execute (read-only verbs only, paths must be under /log/)"`
+	// Range narrows the query time window. Format: <start>..<end>
+	// where each side is an ISO timestamp or relative duration (2h, 7d).
+	// Examples: "2h..", "2026-04-27..2026-04-28", "30m..10m".
+	// Empty uses the default (last 24h).
+	Range string `json:"range,omitempty" jsonschema:"time range for the query, e.g. '2h..' or '2026-05-01..2026-05-02'. Empty = last 24h."`
 }
 
 // runDescription doubles as the tool's user-facing help and the
@@ -75,7 +80,7 @@ func runHandler(cfg Config, args RunArgs) *mcp.CallToolResult {
 	}
 
 	w := newCapWriter(cfg.MaxRows, cfg.MaxBytes)
-	if err := cfg.Run(args.Pipeline, w); err != nil {
+	if err := cfg.Run(args.Pipeline, args.Range, w); err != nil {
 		return errorResult(fmt.Sprintf("execution failed: %v", err))
 	}
 

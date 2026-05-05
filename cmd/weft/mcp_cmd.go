@@ -8,6 +8,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/kevlarcon/warp/pkg/shellcore"
 	"github.com/kevlarcon/weft/cmd/weft/mcp"
 	"github.com/kevlarcon/weft/cmd/weft/mcp/proposals"
 	"github.com/kevlarcon/weft/shell"
@@ -40,7 +41,15 @@ func runMCP() {
 	defer cleanup()
 
 	mcpCfg := mcp.Config{
-		Run: func(pipeline string, w io.Writer) error {
+		Run: func(pipeline string, rangeSpec string, w io.Writer) error {
+			if rangeSpec != "" {
+				start, end, err := shellcore.ParseRange(rangeSpec)
+				if err != nil {
+					return fmt.Errorf("invalid range %q: %w", rangeSpec, err)
+				}
+				s.Start = start
+				s.End = end
+			}
 			return s.ExecNonInteractive(pipeline, w)
 		},
 		Ls:  fsLs(s),
