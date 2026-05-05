@@ -39,7 +39,7 @@ FROM golang:1.26
 # we don't pull in dockerd. Other roles ignore it. ca-certificates is
 # still needed for the gRPC tls path on prod.
 RUN apt-get update \
- && apt-get install -y ca-certificates docker-cli \
+ && apt-get install -y ca-certificates docker-cli postgresql-client \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /bin/weft-shard /bin/weft-compute /bin/weft-coordinator /bin/weft-api /bin/lambda-shard /bin/weftd /usr/local/bin/
 COPY --from=builder /src/weft/deploy/entrypoint.sh /usr/local/bin/entrypoint.sh

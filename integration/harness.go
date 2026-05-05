@@ -133,13 +133,40 @@ func seedFixtures() error {
 	// user up to confirm. Seed a verified user for that ID so the
 	// middleware lets the request through.
 	_, err = conn.Exec(`
-		INSERT INTO users (id, email, customer_id, name, email_verified_at, created_at, updated_at)
-		VALUES ('dev-user', 'dev@test.local', $1, 'Dev User', now(), now(), now())
-		ON CONFLICT (email, customer_id) DO UPDATE SET email_verified_at = now()`,
+		INSERT INTO users (id, email, name, email_verified_at, last_active_customer_id, created_at, updated_at)
+		VALUES ('dev-user', 'dev@test.local', 'Dev User', now(), $1, now(), now())
+		ON CONFLICT (email) DO UPDATE SET email_verified_at = now(), last_active_customer_id = $1`,
 		kevID,
 	)
 	if err != nil {
 		return fmt.Errorf("seed dev user: %w", err)
+	}
+	_, err = conn.Exec(`
+		INSERT INTO team_members (id, email, user_id, role, status, customer_id, accepted_at, created_at, updated_at)
+		VALUES ('tm-dev-kevlar', 'dev@test.local', 'dev-user', 'owner', 'active', $1, now(), now(), now())
+		ON CONFLICT (id) DO UPDATE SET customer_id = $1`,
+		kevID,
+	)
+	if err != nil {
+		return fmt.Errorf("seed dev team member: %w", err)
+	}
+	_, err = conn.Exec(`
+		INSERT INTO users (id, email, name, email_verified_at, last_active_customer_id, created_at, updated_at)
+		VALUES ('integration-user', 'it@example.com', 'Integration User', now(), $1, now(), now())
+		ON CONFLICT (email) DO UPDATE SET email_verified_at = now(), last_active_customer_id = $1`,
+		kevID,
+	)
+	if err != nil {
+		return fmt.Errorf("seed integration user: %w", err)
+	}
+	_, err = conn.Exec(`
+		INSERT INTO team_members (id, email, user_id, role, status, customer_id, accepted_at, created_at, updated_at)
+		VALUES ('tm-integ-kevlar', 'it@example.com', 'integration-user', 'owner', 'active', $1, now(), now(), now())
+		ON CONFLICT (id) DO UPDATE SET customer_id = $1`,
+		kevID,
+	)
+	if err != nil {
+		return fmt.Errorf("seed integration team member: %w", err)
 	}
 
 	// Dev agent token wft_dev_0000000000000000 under kevlar/kevlar.

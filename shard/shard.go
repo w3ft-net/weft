@@ -36,6 +36,7 @@ type Shard interface {
 // DuckDBShard is an in-process shard backed by a local DuckDB database.
 type DuckDBShard struct {
 	id       string
+	dbPath   string
 	db       *sql.DB
 	rowCount atomic.Int64
 }
@@ -100,7 +101,7 @@ func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
 	for _, step := range migrationSteps {
 		_, _ = db.Exec(step)
 	}
-	return &DuckDBShard{id: id, db: db}, nil
+	return &DuckDBShard{id: id, dbPath: path, db: db}, nil
 }
 
 func (s *DuckDBShard) ID() string { return s.id }
@@ -181,24 +182,125 @@ func (s *DuckDBShard) RowCount() int64 {
 }
 
 func (s *DuckDBShard) Archive(_ context.Context, s3Prefix string) (string, error) {
-	path := fmt.Sprintf("%s/%s.parquet", s3Prefix, s.id)
+	gran, err := s.pickPartitionGranularity()
+	if err != nil {
+		return "", fmt.Errorf("partition sizing: %w", err)
+	}
+
 	if s3cfg := S3ConfigFromEnv(); s3cfg != nil {
-		return path, s.ExportToS3Parquet(path, s3cfg)
+		if err := s3cfg.ConfigureDuckDB(s.db); err != nil {
+			return "", err
+		}
+		return s.exportParquet(fmt.Sprintf("%s/%s", s3Prefix, s.id), gran)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return "", fmt.Errorf("mkdir for %s: %w", path, err)
+
+	dir := fmt.Sprintf("%s/%s", s3Prefix, s.id)
+	if gran == "" {
+		// Small shard — single file, no partition.
+		path := dir + ".parquet"
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return "", fmt.Errorf("mkdir for %s: %w", path, err)
+		}
+		_, err := s.db.Exec(fmt.Sprintf("COPY logs TO '%s' (FORMAT PARQUET)", path))
+		return path, err
 	}
-	return path, s.ExportToParquet(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("mkdir for %s: %w", dir, err)
+	}
+	return s.exportParquet(dir, gran)
 }
 
-// ExportToParquet exports the logs table to a Parquet file (local path).
+const targetFileBytes = 150 * 1024 * 1024 // 150 MB
+
+type partitionGranularity string
+
+const (
+	granDay    partitionGranularity = "date_trunc('day', ts)"
+	granHour   partitionGranularity = "date_trunc('hour', ts)"
+	gran10Min  partitionGranularity = "time_bucket(INTERVAL '10 minutes', ts)"
+	gran1Min   partitionGranularity = "time_bucket(INTERVAL '1 minute', ts)"
+)
+
+// pickPartitionGranularity determines how to split the archive export.
+// Returns "" if the data is small enough for a single file.
+func (s *DuckDBShard) pickPartitionGranularity() (partitionGranularity, error) {
+	var dbBytes int64
+	if s.dbPath != "" && s.dbPath != ":memory:" {
+		fi, err := os.Stat(s.dbPath)
+		if err == nil {
+			dbBytes = fi.Size()
+		}
+	}
+	if dbBytes == 0 {
+		// Fallback: query row count and estimate ~200 bytes/row in Parquet.
+		var count int64
+		if err := s.db.QueryRow("SELECT COUNT(*) FROM logs").Scan(&count); err != nil {
+			return "", err
+		}
+		dbBytes = count * 500 // rough DuckDB row size to approximate
+	}
+
+	estimatedParquet := int64(float64(dbBytes) * 0.4)
+	if estimatedParquet < 100*1024*1024 {
+		return "", nil
+	}
+
+	targetFiles := estimatedParquet / targetFileBytes
+	if targetFiles < 2 {
+		return "", nil
+	}
+
+	var tsMin, tsMax time.Time
+	err := s.db.QueryRow("SELECT MIN(ts), MAX(ts) FROM logs").Scan(&tsMin, &tsMax)
+	if err != nil {
+		return "", err
+	}
+	span := tsMax.Sub(tsMin)
+	if span <= 0 {
+		return "", nil
+	}
+
+	interval := span / time.Duration(targetFiles)
+	switch {
+	case interval >= 24*time.Hour:
+		return granDay, nil
+	case interval >= time.Hour:
+		return granHour, nil
+	case interval >= 10*time.Minute:
+		return gran10Min, nil
+	default:
+		return gran1Min, nil
+	}
+}
+
+// exportParquet writes partitioned (or single-file) Parquet to the given path.
+// If gran is empty, writes a single file at path+".parquet".
+// If gran is set, writes hive-partitioned files under path/.
+func (s *DuckDBShard) exportParquet(path string, gran partitionGranularity) (string, error) {
+	if gran == "" {
+		outPath := path + ".parquet"
+		_, err := s.db.Exec(fmt.Sprintf("COPY logs TO '%s' (FORMAT PARQUET)", outPath))
+		return outPath, err
+	}
+	// Partitioned export: DuckDB writes hive-style directories.
+	sql := fmt.Sprintf(
+		"COPY (SELECT *, %s AS _part FROM logs) TO '%s' (FORMAT PARQUET, PARTITION_BY (_part), OVERWRITE_OR_IGNORE)",
+		string(gran), path,
+	)
+	_, err := s.db.Exec(sql)
+	if err != nil {
+		return "", err
+	}
+	return path + "/**/*.parquet", nil
+}
+
+// ExportToParquet exports the logs table to a single Parquet file (local path).
 func (s *DuckDBShard) ExportToParquet(path string) error {
 	_, err := s.db.Exec(fmt.Sprintf("COPY logs TO '%s' (FORMAT PARQUET)", path))
 	return err
 }
 
-// ExportToS3Parquet exports the logs table to a Parquet file on S3.
-// Configures httpfs on this DuckDB connection, then writes directly.
+// ExportToS3Parquet exports the logs table to a single Parquet file on S3.
 func (s *DuckDBShard) ExportToS3Parquet(s3Path string, cfg *S3Config) error {
 	if err := cfg.ConfigureDuckDB(s.db); err != nil {
 		return err

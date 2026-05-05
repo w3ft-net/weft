@@ -43,10 +43,9 @@ func customerJWT(t *testing.T, customer string) string {
 	tok, err := auth.Generate(&store.User{
 		ID:              fmt.Sprintf("test-user-%s", customer),
 		Email:           fmt.Sprintf("%s@test.local", customer),
-		CustomerName:    customer,
 		EmailVerifiedAt: &now,
 		CreatedAt:       now,
-	}, "trial", devJWTSecret())
+	}, devJWTSecret())
 	if err != nil {
 		t.Fatalf("sign JWT for %s: %v", customer, err)
 	}

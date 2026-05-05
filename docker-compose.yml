@@ -48,6 +48,7 @@ services:
     environment:
       ROLE: coordinator
       DB_DSN: host=postgres dbname=weft user=weft password=weft sslmode=disable
+      WEFT_ALLOW_SCHEMA_BOOTSTRAP: "1"
       WEFT_CUSTOMER: kevlar
       SHARD_SECRET: dev-shard-secret
       JWT_SECRET: dev-secret-change-in-production

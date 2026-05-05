@@ -37,7 +37,14 @@ func HandleQuery(w io.Writer, req QueryRequest, s3cfg *shard.S3Config) error {
 	}
 
 	// Rewrite FROM logs → FROM read_parquet('path').
-	query := strings.Replace(req.SQL, "FROM logs", fmt.Sprintf("FROM read_parquet('%s')", req.ParquetPath), 1)
+	// Glob paths (partitioned archives) enable hive_partitioning for file pruning.
+	var readExpr string
+	if strings.Contains(req.ParquetPath, "*") {
+		readExpr = fmt.Sprintf("read_parquet('%s', hive_partitioning=true)", req.ParquetPath)
+	} else {
+		readExpr = fmt.Sprintf("read_parquet('%s')", req.ParquetPath)
+	}
+	query := strings.Replace(req.SQL, "FROM logs", "FROM "+readExpr, 1)
 
 	rows, err := db.Query(query)
 	if err != nil {

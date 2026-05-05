@@ -1012,6 +1012,7 @@ func (p *Provisioner) archive(entry *ShardEntry) {
 	entry.Shard = coldShard
 	entry.State = StateArchived
 	entry.ParquetPath = parquetPath
+	entry.LastHeartbeatAt = time.Time{}
 	p.registry.PersistState(entry)
 
 	log.Printf("provisioner: shard %s archived to %s", entry.ID, parquetPath)

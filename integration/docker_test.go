@@ -326,7 +326,7 @@ func integrationJWT(t *testing.T) string {
 	now := time.Now()
 	tok, err := auth.Generate(&store.User{
 		ID: "integration-user", Email: "it@example.com",
-		CustomerName: "kevlar", EmailVerifiedAt: &now, CreatedAt: now,
+		EmailVerifiedAt: &now, CreatedAt: now,
 	}, secret)
 	if err != nil {
 		t.Fatalf("sign integration JWT: %v", err)

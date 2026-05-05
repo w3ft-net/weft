@@ -51,8 +51,15 @@ func (s *ColdShard) Archive(_ context.Context, _ string) (string, error) {
 }
 
 // Query rewrites FROM logs to FROM read_parquet('path') and executes.
+// Partitioned archives use a glob path and hive_partitioning for file pruning.
 func (s *ColdShard) Query(query string) ([]*pb.ResultRow, error) {
-	rewritten := strings.Replace(query, "FROM logs", fmt.Sprintf("FROM read_parquet('%s')", s.parquetPath), 1)
+	var readExpr string
+	if strings.Contains(s.parquetPath, "*") {
+		readExpr = fmt.Sprintf("read_parquet('%s', hive_partitioning=true)", s.parquetPath)
+	} else {
+		readExpr = fmt.Sprintf("read_parquet('%s')", s.parquetPath)
+	}
+	rewritten := strings.Replace(query, "FROM logs", "FROM "+readExpr, 1)
 	sqlRows, err := s.db.Query(rewritten)
 	if err != nil {
 		return nil, fmt.Errorf("cold query %s: %w", s.id, err)
