@@ -23,9 +23,9 @@ jobs:
       - name: Checkout warp (sibling for go.mod replace)
         uses: actions/checkout@v4
         with:
-          repository: kevlarcon/warp
+          repository: graybeardcorp/warp
           path: warp
-          token: ${{ secrets.WARP_READ_TOKEN }}
+          ssh-key: ${{ secrets.WARP_DEPLOY_KEY }}
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -46,9 +46,9 @@ jobs:
       - name: Checkout warp (sibling for go.mod replace)
         uses: actions/checkout@v4
         with:
-          repository: kevlarcon/warp
+          repository: graybeardcorp/warp
           path: warp
-          token: ${{ secrets.WARP_READ_TOKEN }}
+          ssh-key: ${{ secrets.WARP_DEPLOY_KEY }}
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -86,9 +86,9 @@ jobs:
       - name: Checkout warp (sibling for go.mod replace)
         uses: actions/checkout@v4
         with:
-          repository: kevlarcon/warp
+          repository: graybeardcorp/warp
           path: warp
-          token: ${{ secrets.WARP_READ_TOKEN }}
+          ssh-key: ${{ secrets.WARP_DEPLOY_KEY }}
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -123,9 +123,9 @@ jobs:
       - name: Checkout warp (sibling for go.mod replace)
         uses: actions/checkout@v4
         with:
-          repository: kevlarcon/warp
+          repository: graybeardcorp/warp
           path: warp
-          token: ${{ secrets.WARP_READ_TOKEN }}
+          ssh-key: ${{ secrets.WARP_DEPLOY_KEY }}
       - name: Set up Go
         uses: actions/setup-go@v5
         with:

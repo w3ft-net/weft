@@ -15,7 +15,7 @@ module "github_deploy" {
   source = "../../../infrastructure-catalog/modules/github-asg-deployment"
 
   app_name          = "weft"
-  github_repository = "kevlarcon/weft"
+  github_repository = "graybeardcorp/weft"
   role_name         = "weft-github-deploy"
   create_oidc_provider = false  # verify if already exists in 220664822695
 
@@ -57,37 +57,39 @@ at compile time.
 All jobs need the `warp` repo checked out as a sibling (local replace
 directive in go.mod: `replace github.com/kevlarcon/warp => ../warp`).
 The workflow uses `actions/checkout@v4` with `path: weft` and a second
-`path: warp` to lay them out next to each other; `kevlarcon/warp` is
-private, so a `WARP_READ_TOKEN` repo secret (fine-grained PAT, read
-access to that repo) is required.
+`path: warp` to lay them out next to each other. `graybeardcorp/warp`
+is private, so the second checkout authenticates via a read-only deploy
+key on the warp repo, with the private half stored as the
+`WARP_DEPLOY_KEY` secret on weft. This avoids tying CI auth to any
+individual's PAT.
 
 #### `deploy.yml` — runs on push to main, after CI passes
 
 1. Assumes the OIDC role via `aws-actions/configure-aws-credentials`.
-2. Installs the kevcons binary via the composite action `kevlarcon/kevcons/.github/actions/install` (downloads from `s3://kevlar-releases-289202785125/kevcons/`). No build step.
+2. Installs the kevcons binary via the composite action `graybeardcorp/kevcons/.github/actions/install` (downloads from `s3://kevlar-releases-289202785125/kevcons/`). No build step.
 3. Runs `kevcons build -y`.
 4. Runs `kevcons deploy -y`.
 
 ### Prerequisite: kevcons releases + base AMI integration
 
 `deploy.yml` depends on the kevcons release bucket existing and the
-`kevlarcon/kevcons` repo having at least one `v*` tag pushed. See
+`graybeardcorp/kevcons` repo having at least one `v*` tag pushed. See
 `docs/kevcons_in_ami.md` for the AMI-side counterpart (Phase 3 of this
 work) and `infrastructure-live/management/kevcons-releases/` for the
 bucket + OIDC role (Phase 1).
 
 ### GitHub Repository Secrets
 
-Two secrets on `kevlarcon/weft`:
+Two secrets on `graybeardcorp/weft`:
 
 ```
 AWS_DEPLOY_ROLE = <role ARN from terraform output>
-WARP_READ_TOKEN = <fine-grained PAT, read access to kevlarcon/warp>
+WARP_DEPLOY_KEY = <ed25519 private key; public half is a read-only deploy key on graybeardcorp/warp>
 ```
 
 ## Open Questions
 
-- **warp dependency**: `kevlarcon/warp` is referenced via local replace. CI fetches it via `actions/checkout` + a `WARP_READ_TOKEN` PAT for now. Two cleaner alternatives if the friction shows up: publish warp as a tagged Go module (drop the replace directive), or use a deploy key on the warp repo (ties to the workflow rather than a person).
+- **warp dependency**: `graybeardcorp/warp` is referenced via local replace. CI fetches it via `actions/checkout` + a read-only deploy key (`WARP_DEPLOY_KEY` on weft, public half on warp). A cleaner long-term alternative would be to publish warp as a tagged Go module and drop the replace directive entirely; deferred until that friction shows up.
 - **OIDC provider**: Confirm whether the GitHub OIDC provider already exists in account 220664822695 (grantcentral may have created it). If not, set `create_oidc_provider = true`.
 - **kevcons in CI**: The deploy job needs `kevcons` installed. Options: build from source in the workflow, or publish a release binary.
 - **api migration race on cold start**: When the stack comes up fresh, both `api` and `coordinator` race to apply goose migrations and the loser crashes on `relation already exists`. The CI workflow papers over this with a redundant `docker compose up -d` after the initial up, which restarts crashed services on Docker's healthcheck-aware retry path. A real fix would be to designate one service as the migration owner; tracked separately.
