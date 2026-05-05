@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
 )
@@ -29,6 +31,12 @@ type ReconstructConfig struct {
 	// empty. Nil works for local dev (filesystem parquet) but is
 	// required in prod where parquet lives in S3.
 	S3Config *shard.S3Config
+
+	// AWSCredentials and AWSRegion enable SigV4 signing on Lambda
+	// function URL requests. Required when LambdaFunctionURL uses
+	// AWS_IAM authorization. Nil skips signing (test httptest servers).
+	AWSCredentials aws.CredentialsProvider
+	AWSRegion      string
 }
 
 // ReconstructShard turns a persisted shard_records row into a live
@@ -59,10 +67,14 @@ func ReconstructShard(rec store.ShardRecord, cfg ReconstructConfig) (shard.Shard
 		}
 		var apps []string
 		_ = json.Unmarshal([]byte(rec.Apps), &apps)
-		if cfg.LambdaFunctionURL != "" {
-			return shard.NewLambdaColdShard(rec.ID, apps, cfg.LambdaFunctionURL, rec.ParquetPath), nil
+		cs, err := shard.NewColdShard(rec.ID, apps, rec.ParquetPath, cfg.LambdaFunctionURL, cfg.S3Config)
+		if err != nil {
+			return nil, err
 		}
-		return shard.NewColdShard(rec.ID, apps, rec.ParquetPath, cfg.S3Config)
+		if cfg.AWSCredentials != nil && cfg.LambdaFunctionURL != "" {
+			cs.WithAWSAuth(cfg.AWSCredentials, cfg.AWSRegion)
+		}
+		return cs, nil
 
 	case StateSuspended:
 		// Instance dead, awaiting replacement. No shard to dial; the

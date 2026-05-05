@@ -18,6 +18,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	weftsdk "github.com/w3ft-net/weft-go"
 
 	"github.com/kevlarcon/weft/auth"
@@ -153,6 +154,13 @@ func main() {
 	provCtx, provCancel := context.WithCancel(context.Background())
 	defer provCancel()
 
+	// Load AWS credentials once for Lambda SigV4 signing. Used by
+	// both the provisioner (archive path) and reconstruct (boot).
+	awsCfg, awsCfgErr := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(*awsRegion))
+	if awsCfgErr != nil {
+		log.Printf("warning: AWS config unavailable — Lambda cold queries will fail: %v", awsCfgErr)
+	}
+
 	if len(shardTiers) > 0 {
 		// Production: ASG launcher for shard EC2 instances.
 		asgLauncher, err := coordinator.NewASGLauncher(*awsRegion, shardTiers, 9000)
@@ -164,6 +172,10 @@ func main() {
 			provConfig.S3Config = shard.S3ConfigFromEnv()
 			provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
 			provConfig.LambdaFunctionURL = os.Getenv("LAMBDA_FUNCTION_URL")
+			if awsCfgErr == nil {
+				provConfig.AWSCredentials = awsCfg.Credentials
+				provConfig.AWSRegion = *awsRegion
+			}
 			prov := coordinator.NewProvisioner(coord.Registry, asgLauncher, provConfig)
 			coord.Provisioner = prov
 
@@ -261,7 +273,7 @@ func main() {
 		// persisted row that has somewhere to dial. Live rows
 		// (INGESTING / READ_ONLY) get a GRPCShard against their
 		// recorded addr; ARCHIVED rows with a parquet path get a
-		// ColdShard or LambdaColdShard. States that genuinely have
+		// ColdShard. States that genuinely have
 		// nowhere to point (LAUNCHING, post-wipe rebind, zombie
 		// ARCHIVED) return an error which LoadFromStore swallows —
 		// they remain in the registry as metadata-only entries and
@@ -271,6 +283,10 @@ func main() {
 			ShardSecret:       shardSecret,
 			LambdaFunctionURL: lambdaURL,
 			S3Config:          s3cfg,
+		}
+		if awsCfgErr == nil {
+			reconstructCfg.AWSCredentials = awsCfg.Credentials
+			reconstructCfg.AWSRegion = *awsRegion
 		}
 		if err := coord.Registry.LoadFromStore(func(rec store.ShardRecord) (shard.Shard, error) {
 			return coordinator.ReconstructShard(rec, reconstructCfg)
