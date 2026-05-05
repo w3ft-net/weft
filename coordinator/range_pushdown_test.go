@@ -45,7 +45,7 @@ func TestCoordinator_PlannerInjectsTimeRange(t *testing.T) {
 	}
 	coldDS.Close()
 
-	cold, err := shard.NewColdShard("shard-cold", []string{"vimgym"}, parquetPath)
+	cold, err := shard.NewColdShard("shard-cold", []string{"vimgym"}, parquetPath, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

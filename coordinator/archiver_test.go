@@ -50,7 +50,7 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 	}
 	coldDS.Close()
 
-	cold, err := shard.NewColdShard("shard-cold", []string{"vimgym"}, parquetPath)
+	cold, err := shard.NewColdShard("shard-cold", []string{"vimgym"}, parquetPath, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 	ds.ExportToParquet(parquetPath)
 	ds.Close()
 
-	cold, err := shard.NewColdShard(shardID, []string{"vimgym"}, parquetPath, nil)
+	cold, err := shard.NewColdShard(shardID, []string{"vimgym"}, parquetPath, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 		if rec.State == string(StateArchived) && rec.ParquetPath != "" {
 			var apps []string
 			json.Unmarshal([]byte(rec.Apps), &apps)
-			return shard.NewColdShard(rec.ID, apps, rec.ParquetPath, nil)
+			return shard.NewColdShard(rec.ID, apps, rec.ParquetPath, "", nil)
 		}
 		return nil, fmt.Errorf("skip live shard %s", rec.ID)
 	})

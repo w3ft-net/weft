@@ -59,33 +59,41 @@ func lambdaHandler(t *testing.T) http.HandlerFunc {
 	}
 }
 
-func TestLambdaColdShard_Query(t *testing.T) {
+func TestColdShard_RemoteQuery(t *testing.T) {
 	parquetPath := exportToParquet(t, testRows())
 
 	srv := httptest.NewServer(lambdaHandler(t))
 	defer srv.Close()
 
-	shard := NewLambdaColdShard("lambda-test", []string{"vimgym", "callbox"}, srv.URL, parquetPath)
-
-	rows, err := shard.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")
+	cs, err := NewColdShard("remote-test", []string{"vimgym", "callbox"}, parquetPath, srv.URL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 4 { // 5 total minus 1 acme customer
+	defer cs.Close()
+
+	rows, err := cs.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 4 {
 		t.Fatalf("expected 4 kevlar rows, got %d", len(rows))
 	}
 }
 
-func TestLambdaColdShard_QueryToSink(t *testing.T) {
+func TestColdShard_RemoteQueryToSink(t *testing.T) {
 	parquetPath := exportToParquet(t, testRows())
 
 	srv := httptest.NewServer(lambdaHandler(t))
 	defer srv.Close()
 
-	shard := NewLambdaColdShard("lambda-test", []string{"vimgym"}, srv.URL, parquetPath)
+	cs, err := NewColdShard("remote-test", []string{"vimgym"}, parquetPath, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
 
 	sink := &testSink{}
-	shard.QueryToSink("SELECT line_num, raw FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'", sink)
+	cs.QueryToSink("SELECT line_num, raw FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'", sink)
 
 	if !sink.sentinelReceived {
 		t.Error("expected sentinel")
@@ -95,23 +103,32 @@ func TestLambdaColdShard_QueryToSink(t *testing.T) {
 	}
 }
 
-func TestLambdaColdShard_ReadOnly(t *testing.T) {
-	shard := NewLambdaColdShard("lambda-test", nil, "http://unused", "")
-	err := shard.Ingest([]*pb.LogRow{{Raw: "nope"}})
+func TestColdShard_RemoteReadOnly(t *testing.T) {
+	cs, err := NewColdShard("remote-test", nil, "", "http://unused", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+
+	err = cs.Ingest([]*pb.LogRow{{Raw: "nope"}})
 	if err == nil {
 		t.Fatal("expected error on Ingest")
 	}
 }
 
-func TestLambdaColdShard_FiltersByApp(t *testing.T) {
+func TestColdShard_RemoteFiltersByApp(t *testing.T) {
 	parquetPath := exportToParquet(t, testRows())
 
 	srv := httptest.NewServer(lambdaHandler(t))
 	defer srv.Close()
 
-	shard := NewLambdaColdShard("lambda-test", []string{"callbox"}, srv.URL, parquetPath)
+	cs, err := NewColdShard("remote-test", []string{"callbox"}, parquetPath, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
 
-	rows, err := shard.Query("SELECT line_num, raw FROM logs WHERE app = 'callbox' AND customer = 'kevlar'")
+	rows, err := cs.Query("SELECT line_num, raw FROM logs WHERE app = 'callbox' AND customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,8 +137,7 @@ func TestLambdaColdShard_FiltersByApp(t *testing.T) {
 	}
 }
 
-func BenchmarkLambdaColdShard_Query(b *testing.B) {
-	// Build a Parquet file with 10K rows.
+func BenchmarkColdShard_RemoteQuery(b *testing.B) {
 	ds, err := NewDuckDBShard("bench", "")
 	if err != nil {
 		b.Fatal(err)
@@ -158,10 +174,14 @@ func BenchmarkLambdaColdShard_Query(b *testing.B) {
 	}))
 	defer srv.Close()
 
-	shard := NewLambdaColdShard("bench", []string{"vimgym"}, srv.URL, path)
+	cs, err := NewColdShard("bench", []string{"vimgym"}, path, srv.URL, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer cs.Close()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		shard.Query("SELECT line_num, raw FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
+		cs.Query("SELECT line_num, raw FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
 	}
 }

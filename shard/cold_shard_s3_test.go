@@ -103,7 +103,7 @@ func TestColdShard_S3Integration(t *testing.T) {
 
 	// Create ColdShard pointing at MinIO S3.
 	s3Path := fmt.Sprintf("s3://%s/%s", minioBucket, s3Key)
-	cs, err := NewColdShard("cold-s3", []string{"vimgym", "callbox"}, s3Path, &S3Config{
+	cs, err := NewColdShard("cold-s3", []string{"vimgym", "callbox"}, s3Path, "", &S3Config{
 		Endpoint:  "localhost:9050",
 		AccessKey: minioAccessKey,
 		SecretKey: minioSecretKey,

@@ -48,7 +48,7 @@ func testRows() []*pb.LogRow {
 func TestColdShard_QueryParquet(t *testing.T) {
 	path := exportToParquet(t, testRows())
 
-	cs, err := NewColdShard("cold-0", []string{"vimgym", "callbox"}, path)
+	cs, err := NewColdShard("cold-0", []string{"vimgym", "callbox"}, path, "", nil)
 	if err != nil {
 		t.Fatalf("create cold shard: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestColdShard_QueryParquet(t *testing.T) {
 func TestColdShard_FiltersByApp(t *testing.T) {
 	path := exportToParquet(t, testRows())
 
-	cs, err := NewColdShard("cold-0", []string{"vimgym", "callbox"}, path)
+	cs, err := NewColdShard("cold-0", []string{"vimgym", "callbox"}, path, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestColdShard_FiltersByApp(t *testing.T) {
 func TestColdShard_ReadOnly(t *testing.T) {
 	path := exportToParquet(t, testRows())
 
-	cs, err := NewColdShard("cold-0", []string{"vimgym"}, path)
+	cs, err := NewColdShard("cold-0", []string{"vimgym"}, path, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestColdShard_ReadOnly(t *testing.T) {
 func TestColdShard_TimeWindow(t *testing.T) {
 	path := exportToParquet(t, testRows())
 
-	cs, err := NewColdShard("cold-test-id", []string{"vimgym"}, path)
+	cs, err := NewColdShard("cold-test-id", []string{"vimgym"}, path, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestColdShard_TimeWindow(t *testing.T) {
 func TestColdShard_QueryToSink(t *testing.T) {
 	path := exportToParquet(t, testRows())
 
-	cs, err := NewColdShard("cold-0", []string{"vimgym", "callbox"}, path)
+	cs, err := NewColdShard("cold-0", []string{"vimgym", "callbox"}, path, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestColdShard_QueryToSink(t *testing.T) {
 func TestColdShard_EmptyResult(t *testing.T) {
 	path := exportToParquet(t, testRows())
 
-	cs, err := NewColdShard("cold-0", []string{"vimgym"}, path)
+	cs, err := NewColdShard("cold-0", []string{"vimgym"}, path, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func benchColdQuery(b *testing.B, n int) {
 	}
 	ds.Close()
 
-	cs, err := NewColdShard("bench-cold", []string{"vimgym"}, path)
+	cs, err := NewColdShard("bench-cold", []string{"vimgym"}, path, "", nil)
 	if err != nil {
 		b.Fatal(err)
 	}

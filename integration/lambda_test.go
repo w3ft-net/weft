@@ -60,7 +60,10 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	// MinIO endpoint (minio:9000), not localhost:9050.
 	containerS3Path := fmt.Sprintf("s3://%s/lambda-test/shard-lambda-int.parquet", ColdBucket)
 
-	cs := shard.NewLambdaColdShard("cold-lambda", []string{"vimgym", "callbox"}, lambdaURL, containerS3Path)
+	cs, err := shard.NewColdShard("cold-lambda", []string{"vimgym", "callbox"}, containerS3Path, lambdaURL, nil)
+	if err != nil {
+		t.Fatalf("create cold shard: %v", err)
+	}
 
 	// Query all kevlar rows.
 	result, err := cs.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")

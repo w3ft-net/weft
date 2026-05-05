@@ -96,7 +96,7 @@ func TestColdShardQueryRouting(t *testing.T) {
 	}
 	s1.Close()
 
-	cold, err := shard.NewColdShard("cold-route-1", apps, s3Path, s3cfg)
+	cold, err := shard.NewColdShard("cold-route-1", apps, s3Path, "", s3cfg)
 	if err != nil {
 		t.Fatalf("create cold shard: %v", err)
 	}
