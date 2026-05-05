@@ -780,32 +780,16 @@ func (c *Coordinator) executeLogStreaming(plan *planner.QueryPlan, tr TimeRange,
 
 	var wg sync.WaitGroup
 	wg.Add(len(matching))
-	errs := make(chan error, len(matching))
 	for _, s := range matching {
 		go func(s shard.Shard) {
 			defer wg.Done()
-			defer job.SendSentinel(s.ID())
-			rows, err := s.Query(directSQL)
-			if err != nil {
-				errs <- fmt.Errorf("shard %s: %w", s.ID(), err)
-				return
-			}
-			for _, r := range rows {
-				job.SendRow(r, s.ID())
-			}
+			s.QueryToSink(directSQL, job)
 		}(s)
 	}
 
 	collector := &shardErrCollector{done: make(chan struct{})}
 	go func() {
 		wg.Wait()
-		close(errs)
-		for e := range errs {
-			log.Printf("query: %v", e)
-			if collector.err.Load() == nil {
-				collector.err.Store(&e)
-			}
-		}
 		close(collector.done)
 	}()
 
@@ -922,27 +906,13 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 
 	var wg sync.WaitGroup
 	wg.Add(len(matching))
-	errs := make(chan error, len(matching))
 	for _, s := range matching {
 		go func(s shard.Shard) {
 			defer wg.Done()
-			defer job.SendSentinel(s.ID())
-			rows, err := s.Query(directSQL)
-			if err != nil {
-				errs <- fmt.Errorf("shard %s: %w", s.ID(), err)
-				return
-			}
-			for _, r := range rows {
-				job.SendRow(r, s.ID())
-			}
+			s.QueryToSink(directSQL, job)
 		}(s)
 	}
 	wg.Wait()
-	close(errs)
-	for e := range errs {
-		log.Printf("query: %v", e)
-		return nil, e
-	}
 
 	// Zero-stage queries return Rows so callers that iterate row
 	// metadata (LineNum, structured fields) still work. Phase 4

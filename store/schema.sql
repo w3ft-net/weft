@@ -5955,6 +5955,15 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 --
+-- Data for Name: buckets; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+INSERT INTO public.buckets (label, apps, target_ingesting_count, tier, created_at)
+VALUES ('default', '[]', 2, 'small', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
+ON CONFLICT (label) DO NOTHING;
+
+
+--
 -- Data for Name: goose_db_version; Type: TABLE DATA; Schema: public; Owner: -
 --
 

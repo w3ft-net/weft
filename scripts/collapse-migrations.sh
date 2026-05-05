@@ -80,6 +80,14 @@ EOF
   docker exec "$PROJECT" pg_dump \
     --schema-only --no-owner --no-acl --no-comments \
     -U weft weft
+  # Seed-bearing tables: dump --data-only so future collapses don't
+  # silently drop seeds that past migrations inserted. `buckets` has
+  # the day-1 'default' row from migration 020. Add tables here as
+  # new migrations introduce seed data.
+  docker exec "$PROJECT" pg_dump \
+    --data-only --table=public.buckets --inserts \
+    --no-owner --no-acl \
+    -U weft weft
   docker exec "$PROJECT" pg_dump \
     --data-only --table=public.goose_db_version --inserts \
     --no-owner --no-acl \
