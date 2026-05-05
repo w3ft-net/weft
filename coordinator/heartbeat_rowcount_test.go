@@ -151,4 +151,10 @@ func (f *rowCountFakeStore) SaveShard(rec *store.ShardRecord) error {
 func (f *rowCountFakeStore) DeleteShard(id string) error                          { return nil }
 func (f *rowCountFakeStore) ListShards() ([]store.ShardRecord, error)             { return nil, nil }
 func (f *rowCountFakeStore) GetShard(id string) (store.ShardRecord, bool, error)  { return store.ShardRecord{}, false, nil }
+func (f *rowCountFakeStore) TouchHeartbeat(id string, rowCount int64) error {
+	if rec, ok := f.saved[id]; ok {
+		rec.RowCount = rowCount
+	}
+	return nil
+}
 func (f *rowCountFakeStore) lastSaved(id string) *store.ShardRecord               { return f.saved[id] }

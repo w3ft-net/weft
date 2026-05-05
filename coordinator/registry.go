@@ -116,11 +116,8 @@ type RegistryStore interface {
 	SaveShard(rec *store.ShardRecord) error
 	DeleteShard(id string) error
 	ListShards() ([]store.ShardRecord, error)
-	// GetShard returns the record for id, or (zero, false) if absent.
-	// Used by the adopt path so it can preserve WindowStart/End/
-	// HeartbeatToken/Apps when creating a ShardEntry for a shard
-	// the registry has no in-memory record of but the DB does.
 	GetShard(id string) (store.ShardRecord, bool, error)
+	TouchHeartbeat(id string, rowCount int64) error
 }
 
 // ShardRegistry tracks all shard entries. Thread-safe.
@@ -187,6 +184,19 @@ func (r *ShardRegistry) persist(entry *ShardEntry) {
 // Call after modifying State, ParquetPath, RowCount, etc.
 func (r *ShardRegistry) PersistState(entry *ShardEntry) {
 	r.persist(entry)
+}
+
+// TouchHeartbeat persists only heartbeat-owned fields (row_count)
+// without overwriting lifecycle-owned fields like window bounds,
+// state, or apps. Prevents the heartbeat path from clobbering
+// manual DB edits or reconciler-driven state changes.
+func (r *ShardRegistry) TouchHeartbeat(entry *ShardEntry) {
+	if r.store == nil {
+		return
+	}
+	if err := r.store.TouchHeartbeat(entry.ID, entry.RowCount); err != nil {
+		log.Printf("registry: touch heartbeat %s: %v", entry.ID, err)
+	}
 }
 
 // RefreshFromStore re-reads every shard record from the DB and

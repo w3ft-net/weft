@@ -62,6 +62,16 @@ func (f *fakeRegistryStore) GetShard(id string) (store.ShardRecord, bool, error)
 	return r, true, nil
 }
 
+func (f *fakeRegistryStore) TouchHeartbeat(id string, rowCount int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if rec, ok := f.records[id]; ok {
+		rec.RowCount = rowCount
+		f.records[id] = rec
+	}
+	return nil
+}
+
 func (f *fakeRegistryStore) get(id string) (store.ShardRecord, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

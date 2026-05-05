@@ -85,6 +85,14 @@ func (s *Store) GetShard(id string) (ShardRecord, bool, error) {
 	return rec, true, nil
 }
 
+// TouchHeartbeat updates only the fields a heartbeat owns: row_count
+// and (if suspended) state. Everything else — window bounds, apps,
+// tier, etc. — is left untouched so manual DB edits aren't clobbered.
+func (s *Store) TouchHeartbeat(id string, rowCount int64) error {
+	return s.db.Model(&ShardRecord{}).Where("id = ?", id).
+		Update("row_count", rowCount).Error
+}
+
 // DeleteShard removes a shard record.
 func (s *Store) DeleteShard(id string) error {
 	return s.db.Delete(&ShardRecord{}, "id = ?", id).Error

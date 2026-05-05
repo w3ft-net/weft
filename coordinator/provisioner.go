@@ -477,8 +477,10 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 			if existing.Suspended {
 				log.Printf("provisioner: unsuspending shard %s (heartbeat received)", hb.ShardID)
 				existing.Suspended = false
+				p.registry.PersistState(existing)
+			} else {
+				p.registry.TouchHeartbeat(existing)
 			}
-			p.registry.PersistState(existing)
 			return
 		}
 		// Rebind: same durable id, instance moved.
