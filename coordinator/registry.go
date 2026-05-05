@@ -189,6 +189,57 @@ func (r *ShardRegistry) PersistState(entry *ShardEntry) {
 	r.persist(entry)
 }
 
+// RefreshFromStore re-reads every shard record from the DB and
+// updates in-memory metadata fields to match. The Shard pointer
+// (live gRPC connection) is preserved — only declarative fields
+// (state, window bounds, bucket_id, apps, etc.) are overwritten.
+// This closes the drift window between the DB and the registry:
+// manual edits, out-of-band state changes, or PersistState calls
+// from the heartbeat path that clobber a field changed underneath
+// all get corrected within one tick.
+func (r *ShardRegistry) RefreshFromStore() {
+	if r.store == nil {
+		return
+	}
+	records, err := r.store.ListShards()
+	if err != nil {
+		log.Printf("registry: RefreshFromStore: %v", err)
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, rec := range records {
+		entry, ok := r.entries[rec.ID]
+		if !ok {
+			continue
+		}
+		entry.State = ShardState(rec.State)
+		if ws, err := time.Parse(time.RFC3339, rec.WindowStart); err == nil {
+			entry.WindowStart = ws
+		}
+		if we, err := time.Parse(time.RFC3339, rec.WindowEnd); err == nil {
+			entry.WindowEnd = we
+		}
+		if ca, err := time.Parse(time.RFC3339, rec.CreatedAt); err == nil {
+			entry.CreatedAt = ca
+		}
+		entry.Addr = rec.Addr
+		entry.InstanceID = rec.InstanceID
+		entry.ParquetPath = rec.ParquetPath
+		entry.Tier = rec.Tier
+		entry.RowCount = rec.RowCount
+		entry.EBSVolumeID = rec.EBSVolumeID
+		entry.HeartbeatToken = rec.HeartbeatToken
+		entry.BucketID = rec.BucketID
+		if rec.Apps != "" && rec.Apps != "null" {
+			var apps []string
+			if err := json.Unmarshal([]byte(rec.Apps), &apps); err == nil {
+				entry.Apps = apps
+			}
+		}
+	}
+}
+
 // LoadFromStore loads every shard record from the store into the
 // registry. The reconstruct function attaches a live shard.Shard
 // (typically a ColdShard for ARCHIVED rows) when it can; if it

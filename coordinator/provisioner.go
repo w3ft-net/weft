@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
@@ -87,6 +89,11 @@ type ProvisionerConfig struct {
 	// with code=Canceled mid-stream. Zero falls back to
 	// defaultCloseRebindGrace.
 	CloseRebindGrace time.Duration
+	// AWSCredentials and AWSRegion enable SigV4 signing on Lambda
+	// function URL requests when archiving shards. Populated from
+	// the coordinator's aws.Config in cmd/coordinator/main.go.
+	AWSCredentials aws.CredentialsProvider
+	AWSRegion      string
 }
 
 // defaultCloseRebindGrace is the production default for the rebind
@@ -938,6 +945,8 @@ func (p *Provisioner) OnboardApp(app string) error {
 // split evaluation, per-bucket reconciliation, then an absolute
 // ASG desired_capacity sync for each tier.
 func (p *Provisioner) check(ctx context.Context) {
+	p.registry.RefreshFromStore()
+
 	// Evaluate bucket splits based on ingestion stats.
 	if p.Buckets != nil {
 		snapshot := p.stats.Snapshot()
@@ -996,16 +1005,13 @@ func (p *Provisioner) archive(entry *ShardEntry) {
 		return
 	}
 
-	var coldShard shard.Shard
-	if p.config.LambdaFunctionURL != "" {
-		coldShard = shard.NewLambdaColdShard(entry.ID, entry.Apps, p.config.LambdaFunctionURL, parquetPath)
-	} else {
-		cs, err := shard.NewColdShard(entry.ID, entry.Apps, parquetPath, p.config.S3Config)
-		if err != nil {
-			log.Printf("provisioner: create cold shard for %s: %v", entry.ID, err)
-			return
-		}
-		coldShard = cs
+	coldShard, err := shard.NewColdShard(entry.ID, entry.Apps, parquetPath, p.config.LambdaFunctionURL, p.config.S3Config)
+	if err != nil {
+		log.Printf("provisioner: create cold shard for %s: %v", entry.ID, err)
+		return
+	}
+	if p.config.AWSCredentials != nil && p.config.LambdaFunctionURL != "" {
+		coldShard.WithAWSAuth(p.config.AWSCredentials, p.config.AWSRegion)
 	}
 
 	entry.Shard.Close()
