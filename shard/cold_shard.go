@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -140,7 +142,8 @@ func (s *ColdShard) queryRemote(query string) ([]*pb.ResultRow, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("lambda %s returned %d", s.id, resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("lambda %s returned %d: %s", s.id, resp.StatusCode, body)
 	}
 
 	return ReadAllResultRows(resp.Body)
@@ -189,6 +192,8 @@ func (s *ColdShard) queryToSinkRemote(query string, sink RowSink) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("cold shard %s: lambda returned %d: %s", s.id, resp.StatusCode, body)
 		return
 	}
 
