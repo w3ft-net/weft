@@ -382,9 +382,9 @@ func TestProvisioner_ScalesUpToConfiguredCount(t *testing.T) {
 		ID:       "shard-only",
 		BucketID: b.ID, // reconciler filters snapshot.Entries by BucketID
 		Apps:     []string{"vimgym"},
-		// Future WindowEnd keeps the wall-clock rotation from
-		// preempting the bucket-scale-up this test exercises.
-		WindowStart: time.Now().UTC(), WindowEnd: time.Now().UTC().Add(100 * 365 * 24 * time.Hour),
+		// WindowEnd within bucket duration (168h) but in the future
+		// so wall-clock rotation doesn't preempt the scale-up test.
+		WindowStart: time.Now().UTC(), WindowEnd: time.Now().UTC().Add(24 * time.Hour),
 		State: StateIngesting,
 		Shard: ds, CreatedAt: time.Now(),
 	})

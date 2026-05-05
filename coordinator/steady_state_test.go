@@ -269,14 +269,11 @@ func TestRefreshFromStore_PreservesShardPointer(t *testing.T) {
 // TestSteadyState_LegacyWideWindowShards reproduces the production
 // bug: the bucket's WindowDuration was changed from 7d to 1h, but
 // shards launched under the old duration have window_end far in the
-// future. An operator edits window_end in the DB to force rotation.
-// With RefreshFromStore, the next tick picks up the edit and rotates
-// them — without it, the in-memory WindowEnd stays stale and the
-// shards sit in INGESTING forever.
+// future. The reconciler detects that the window span exceeds the
+// bucket's current WindowDuration and auto-rotates them — no manual
+// DB edit required.
 func TestSteadyState_LegacyWideWindowShards(t *testing.T) {
-	fake := newFakeRegistryStore()
 	reg := NewShardRegistry()
-	reg.SetStore(fake)
 
 	now := time.Now().UTC().Truncate(time.Second)
 	bucket := &AppBucket{
@@ -296,48 +293,13 @@ func TestSteadyState_LegacyWideWindowShards(t *testing.T) {
 		})
 	}
 
-	// Reconciler tick: WindowEnd is in the future → no rotation.
+	// Reconciler tick: window span (7d) exceeds bucket duration (1h) → rotate.
 	snap := ReconcilerSnapshot{
 		Bucket:  bucket,
 		Entries: reg.Entries(),
 		Now:     now,
 	}
 	ops := reconcile(snap)
-	for _, op := range ops {
-		if _, ok := op.(RotateToReadOnlyOp); ok {
-			t.Fatal("legacy shards should NOT rotate before DB edit")
-		}
-	}
-
-	// Operator edits both rows: window_end = now - 1m.
-	closedEnd := now.Add(-time.Minute)
-	for _, id := range []string{"shard-legacy-a", "shard-legacy-b"} {
-		rec, ok := fake.get(id)
-		if !ok {
-			t.Fatalf("%s missing from store", id)
-		}
-		rec.WindowEnd = closedEnd.Format(time.RFC3339)
-		fake.mu.Lock()
-		fake.records[id] = rec
-		fake.mu.Unlock()
-	}
-
-	// Refresh picks up the edit.
-	reg.RefreshFromStore()
-
-	for _, id := range []string{"shard-legacy-a", "shard-legacy-b"} {
-		if got := reg.Get(id).WindowEnd; !got.Equal(closedEnd) {
-			t.Fatalf("%s WindowEnd after refresh: got %v want %v", id, got, closedEnd)
-		}
-	}
-
-	// Next reconciler tick: both shards rotate.
-	snap = ReconcilerSnapshot{
-		Bucket:  bucket,
-		Entries: reg.Entries(),
-		Now:     now,
-	}
-	ops = reconcile(snap)
 	rotated := 0
 	for _, op := range ops {
 		if _, ok := op.(RotateToReadOnlyOp); ok {
@@ -345,7 +307,7 @@ func TestSteadyState_LegacyWideWindowShards(t *testing.T) {
 		}
 	}
 	if rotated != 2 {
-		t.Errorf("want 2 RotateToReadOnlyOps after DB edit + refresh, got %d: %v",
+		t.Errorf("want 2 RotateToReadOnlyOps for stale-window shards, got %d: %v",
 			rotated, describeOps(ops))
 	}
 }

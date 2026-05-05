@@ -783,6 +783,51 @@ func TestPrewarmNextWindowOp_Apply_InsertsLaunchingRowForNextWindow(t *testing.T
 	}
 }
 
+// Op 3 — stale window span: an INGESTING shard whose window span
+// exceeds the bucket's current WindowDuration must rotate even if
+// its WindowEnd is in the future. This catches legacy shards
+// created under a wider window config.
+func TestReconcile_WindowClosed_RotatesStaleWindowSpan(t *testing.T) {
+	now := time.Now().UTC()
+	bucket := &AppBucket{ID: 1, Target: 1, Tier: "small", WindowDuration: time.Hour}
+	entries := []*ShardEntry{
+		{ID: "shard-7d", BucketID: 1, State: StateIngesting,
+			WindowStart: now.Add(-24 * time.Hour),
+			WindowEnd:   now.Add(6 * 24 * time.Hour)}, // 7-day span, bucket wants 1h
+	}
+	snap := ReconcilerSnapshot{Bucket: bucket, Entries: entries, IngestingCount: 1, Now: now}
+
+	rotates := 0
+	for _, op := range reconcile(snap) {
+		if _, ok := op.(RotateToReadOnlyOp); ok {
+			rotates++
+		}
+	}
+	if rotates != 1 {
+		t.Errorf("want 1 RotateToReadOnlyOp for stale-span shard, got %d: %v",
+			rotates, describeOps(reconcile(snap)))
+	}
+}
+
+// A shard whose window span matches the bucket's WindowDuration and
+// whose WindowEnd is still in the future must NOT rotate.
+func TestReconcile_WindowClosed_CurrentSpanNoRotation(t *testing.T) {
+	now := time.Now().UTC()
+	bucket := &AppBucket{ID: 1, Target: 1, Tier: "small", WindowDuration: time.Hour}
+	entries := []*ShardEntry{
+		{ID: "shard-ok", BucketID: 1, State: StateIngesting,
+			WindowStart: now.Add(-30 * time.Minute),
+			WindowEnd:   now.Add(30 * time.Minute)}, // 1h span, matching bucket
+	}
+	snap := ReconcilerSnapshot{Bucket: bucket, Entries: entries, IngestingCount: 1, Now: now}
+
+	for _, op := range reconcile(snap) {
+		if _, ok := op.(RotateToReadOnlyOp); ok {
+			t.Errorf("unexpected rotation for current-span shard: %s", op.Describe())
+		}
+	}
+}
+
 func describeOps(ops []ReconcileOp) []string {
 	out := make([]string, 0, len(ops))
 	for _, op := range ops {

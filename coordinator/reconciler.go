@@ -80,6 +80,11 @@ func reconcile(snap ReconcilerSnapshot) []ReconcileOp {
 	// Runs before op 2 so last-minute app-drift reaches the shard
 	// before it freezes; replacement launches happen naturally on
 	// the next tick once IngestingCount drops.
+	//
+	// Also catches shards whose window span exceeds the bucket's
+	// current WindowDuration — legacy shards created under an older
+	// (wider) window config that will never reach their original
+	// WindowEnd under the new schedule.
 	for _, e := range snap.Entries {
 		if e.State != StateIngesting {
 			continue
@@ -87,7 +92,10 @@ func reconcile(snap ReconcilerSnapshot) []ReconcileOp {
 		if e.WindowEnd.IsZero() {
 			continue
 		}
-		if snap.Now.Before(e.WindowEnd) {
+		pastWindowEnd := !snap.Now.Before(e.WindowEnd)
+		staleWindow := snap.Bucket.WindowDuration > 0 &&
+			e.WindowEnd.Sub(e.WindowStart) > snap.Bucket.WindowDuration
+		if !pastWindowEnd && !staleWindow {
 			continue
 		}
 		ops = append(ops, RotateToReadOnlyOp{ShardID: e.ID})
