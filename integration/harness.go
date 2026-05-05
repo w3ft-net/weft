@@ -1,3 +1,5 @@
+//go:build integration
+
 // Package integration provides the shared test harness for weft integration
 // tests. TestMain verifies the docker stack is running and ensures the
 // MinIO cold-storage bucket exists. Migrations are the coordinator's

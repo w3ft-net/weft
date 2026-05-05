@@ -1,3 +1,5 @@
+//go:build integration
+
 // Coverage-boundary helpers for integration tests.
 //
 // The docker-compose.cover.yml overlay bind-mounts ./coverage/<service>

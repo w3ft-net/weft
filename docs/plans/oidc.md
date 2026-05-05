@@ -42,12 +42,13 @@ in `integration/harness.go` fails fast if nothing is listening on
 
 The build-tag convention:
 
-| File set                           | Constraint                              |
-|------------------------------------|------------------------------------------|
-| Generic integration tests          | `//go:build integration && !localstack` |
-| AWS-emulator-touching tests        | `//go:build integration && localstack`  |
-| Helpers (`auth_helpers.go` et al.) | `//go:build integration` (visible to both) |
-| TestMain owner (`cold_storage_test.go`) | no tag (compiles in both jobs)        |
+| File set                                    | Constraint                              |
+|---------------------------------------------|------------------------------------------|
+| Generic integration tests                   | `//go:build integration && !localstack` |
+| AWS-emulator-touching tests                 | `//go:build integration && localstack`  |
+| Helpers (`auth_helpers.go` et al.)          | `//go:build integration` (visible to both) |
+| TestMain owner (`cold_storage_test.go`)     | `//go:build integration` (visible to both) |
+| Package-level helpers (`harness.go`, `coverage.go`) | `//go:build integration` (visible to both) |
 
 Adding a new test that needs LocalStack: tag the file
 `//go:build integration && localstack`. Adding a new test that doesn't:
