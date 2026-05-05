@@ -65,11 +65,16 @@ func (c *S3Config) ConfigureDuckDB(db *sql.DB) error {
 		fmt.Sprintf("SET s3_use_ssl=%s", ssl),
 		"SET s3_url_style='path'",
 	}
-	// Explicit credentials (MinIO, tests). Omit for IAM (Lambda, EC2).
 	if c.AccessKey != "" {
+		// Explicit credentials (MinIO, tests).
 		stmts = append(stmts,
 			fmt.Sprintf("SET s3_access_key_id='%s'", c.AccessKey),
 			fmt.Sprintf("SET s3_secret_access_key='%s'", c.SecretKey),
+		)
+	} else {
+		// IAM credential chain (EC2 instance metadata, env vars, etc.).
+		stmts = append(stmts,
+			"CREATE SECRET IF NOT EXISTS (TYPE S3, PROVIDER CREDENTIAL_CHAIN)",
 		)
 	}
 	if c.Endpoint != "" {
