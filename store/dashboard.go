@@ -88,7 +88,9 @@ func ParseDashboardYAML(body string) (*DashboardSpec, error) {
 		return nil, errors.New("dashboard is empty")
 	}
 	var raw dashboardYAMLRaw
-	if err := yaml.Unmarshal([]byte(body), &raw); err != nil {
+	dec := yaml.NewDecoder(strings.NewReader(body))
+	dec.KnownFields(true)
+	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("yaml: %w", err)
 	}
 
