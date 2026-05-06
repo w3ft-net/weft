@@ -225,6 +225,7 @@ func TestLifecycle_Integration_ChristenPath(t *testing.T) {
 		EC2Instances: ec2.NewFromConfig(cfg),
 		ASG:          asgRecorder,
 		Registry:     reg,
+		Store:        db,
 		ShardOps:     db,
 		TierByASG:    map[string]string{asgName: "small"},
 		SizeByTier:   map[string]int32{"small": 10},
@@ -316,6 +317,11 @@ func TestLifecycle_Integration_RecoverPath(t *testing.T) {
 		Addr:  "10.0.0.1:9000",
 	})
 
+	// Store with no heartbeat seeded for shardID → recognisedAsDead
+	// returns "dead", so the handler recovers the orphan volume.
+	db := openTestStore(t)
+	defer db.Close()
+
 	asgRecorder := &recordingASG{}
 	vm := coordinator.NewEC2VolumeManagerWithClient(ec2c)
 	handler := coordinator.NewLifecycleHandler(coordinator.LifecycleHandlerConfig{
@@ -323,10 +329,10 @@ func TestLifecycle_Integration_RecoverPath(t *testing.T) {
 		EC2Instances: ec2c,
 		ASG:          asgRecorder,
 		Registry:     reg,
-		// No Store → recognisedAsDead returns true (we'd rather recover than strand).
-		TierByASG:  map[string]string{asgName: "small"},
-		SizeByTier: map[string]int32{"small": 10},
-		DeviceName: "/dev/sdf",
+		Store:        db,
+		TierByASG:    map[string]string{asgName: "small"},
+		SizeByTier:   map[string]int32{"small": 10},
+		DeviceName:   "/dev/sdf",
 	})
 	poller := coordinator.NewLifecyclePoller(handler, sqs.NewFromConfig(cfg), queue)
 	poller.WaitTimeSeconds = 2
