@@ -12,11 +12,13 @@ import (
 // call so tests can assert that all queries route through the pool.
 type spyPool struct {
 	execCount atomic.Int32
+	lastReq   *pb.ExecuteQueryRequest
 	inner     compute.ComputePool
 }
 
 func (p *spyPool) ExecuteQuery(req *pb.ExecuteQueryRequest) (string, error) {
 	p.execCount.Add(1)
+	p.lastReq = req
 	return p.inner.ExecuteQuery(req)
 }
 

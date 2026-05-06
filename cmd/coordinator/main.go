@@ -125,13 +125,15 @@ func main() {
 	notifier := coordinator.NewNotifier(db)
 
 	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{
-		Shards:   shards,
-		Pool:     pool,
-		Store:    db,
-		Notifier: notifier,
-		Tail:     coordinator.NewTailBroker(),
-		Ingest:   coordinator.NewRingBuffer(1_000_000), // 1M row buffer
-		Usage:    coordinator.NewCustomerUsageStats(),
+		Shards:            shards,
+		Pool:              pool,
+		Store:             db,
+		Notifier:          notifier,
+		Tail:              coordinator.NewTailBroker(),
+		Ingest:            coordinator.NewRingBuffer(1_000_000),
+		Usage:             coordinator.NewCustomerUsageStats(),
+		ShardSecret:       shardSecret,
+		LambdaFunctionURL: os.Getenv("LAMBDA_FUNCTION_URL"),
 	})
 
 	drainCtx, drainCancel := context.WithCancel(context.Background())

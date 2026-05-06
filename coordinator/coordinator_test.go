@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kevlarcon/weft/compute"
+	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
@@ -600,6 +601,84 @@ func TestRegistry_ExpiringShardExcluded(t *testing.T) {
 	matching := reg.MatchingEntries(fullRange, "", "bolt")
 	if len(matching) != 0 {
 		t.Fatalf("expected 0 shards (expiring), got %d", len(matching))
+	}
+}
+
+// TestExecuteQuery_DescriptorFields verifies that ShardSecret and
+// LambdaFunctionURL from CoordinatorConfig propagate into the
+// ExecuteQueryRequest that reaches the compute pool.
+func TestExecuteQuery_DescriptorFields(t *testing.T) {
+	s0, err := shard.NewDuckDBShard("shard-live", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s0.Close() })
+	if err := s0.Ingest(shard0Rows()); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	apps := []string{"vimgym", "callbox"}
+
+	c := NewCoordinator(CoordinatorConfig{
+		ShardSecret:       "test-secret-token",
+		LambdaFunctionURL: "https://lambda.example.com/cold-query",
+	})
+	spy := &spyPool{inner: &registryPool{registry: c.Registry}}
+	c.Pool = spy
+
+	c.Registry.Add(&ShardEntry{
+		ID: "shard-live", Apps: apps,
+		WindowStart: now.Add(-2 * time.Hour), WindowEnd: now.Add(-1 * time.Hour),
+		State: StateIngesting, Shard: s0, Addr: "10.0.0.1:9000",
+		CreatedAt: now,
+	})
+	c.Registry.Add(&ShardEntry{
+		ID: "shard-archived", Apps: apps,
+		WindowStart: now.Add(-1 * time.Hour), WindowEnd: now,
+		State: StateArchived, Shard: s0, ParquetPath: "s3://bucket/shard-archived.parquet",
+		CreatedAt: now,
+	})
+
+	tr := TimeRange{Start: now.Add(-2 * time.Hour), End: now}
+	plan := &planner.QueryPlan{
+		ShardSQL:       "SELECT line_num, raw FROM logs WHERE customer = 'kevlar' ORDER BY line_num",
+		DirectShardSQL: "SELECT line_num, raw FROM logs WHERE customer = 'kevlar' ORDER BY line_num",
+		FollowApp:      "vimgym",
+	}
+
+	_, err = c.executeQuery(plan, tr, "kevlar", 0, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spy.lastReq == nil {
+		t.Fatal("pool never received an ExecuteQueryRequest")
+	}
+
+	if spy.lastReq.ShardSecret != "test-secret-token" {
+		t.Errorf("ShardSecret = %q, want %q", spy.lastReq.ShardSecret, "test-secret-token")
+	}
+
+	descByID := map[string]*pb.ShardDescriptor{}
+	for _, d := range spy.lastReq.Shards {
+		descByID[d.ShardId] = d
+	}
+
+	if live := descByID["shard-live"]; live == nil {
+		t.Fatal("missing descriptor for shard-live")
+	} else if live.GrpcAddr != "10.0.0.1:9000" {
+		t.Errorf("shard-live GrpcAddr = %q, want %q", live.GrpcAddr, "10.0.0.1:9000")
+	}
+
+	if archived := descByID["shard-archived"]; archived == nil {
+		t.Fatal("missing descriptor for shard-archived")
+	} else {
+		if archived.LambdaUrl != "https://lambda.example.com/cold-query" {
+			t.Errorf("shard-archived LambdaUrl = %q, want %q", archived.LambdaUrl, "https://lambda.example.com/cold-query")
+		}
+		if archived.ParquetPath != "s3://bucket/shard-archived.parquet" {
+			t.Errorf("shard-archived ParquetPath = %q, want %q", archived.ParquetPath, "s3://bucket/shard-archived.parquet")
+		}
 	}
 }
 
