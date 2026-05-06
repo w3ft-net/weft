@@ -11,7 +11,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict C2TZlq1KgyEbrQexPOaZjoMkNTGtl05g60fBKKrlZPZqNb1xhOGexahEVryv0Lg
+\restrict 1xkQrKQJ3etE2R6ho5ZdF4krQXfHAjlddpO1XwY55ytuNTPOH3OhnKaeH00QHIV
 
 -- Dumped from database version 16.13 (Debian 16.13-1.pgdg13+1)
 -- Dumped by pg_dump version 16.13 (Debian 16.13-1.pgdg13+1)
@@ -5932,13 +5932,13 @@ ALTER TABLE ONLY public.users
 -- PostgreSQL database dump complete
 --
 
-\unrestrict C2TZlq1KgyEbrQexPOaZjoMkNTGtl05g60fBKKrlZPZqNb1xhOGexahEVryv0Lg
+\unrestrict 1xkQrKQJ3etE2R6ho5ZdF4krQXfHAjlddpO1XwY55ytuNTPOH3OhnKaeH00QHIV
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict TUtBczk1KfbBmBS5rGMkIPz3gR8fFeUkzM3leGIjH0EvTdUpiFtNMVO9JI28HT7
+\restrict wNqvOYec5I4nceFYtf0YtjA6CZ1zOdloshWCnhfd2gPm8V8jxdLPZpMuUrh7A7U
 
 -- Dumped from database version 16.13 (Debian 16.13-1.pgdg13+1)
 -- Dumped by pg_dump version 16.13 (Debian 16.13-1.pgdg13+1)
@@ -5958,10 +5958,41 @@ SET row_security = off;
 -- Data for Name: buckets; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-INSERT INTO public.buckets (label, apps, target_ingesting_count, tier, created_at)
-VALUES ('default', '[]', 2, 'small', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
-ON CONFLICT (label) DO NOTHING;
+INSERT INTO public.buckets VALUES ('[]', 2, 'small', '2026-05-06T04:47:55Z', '168h', 'default', 1);
 
+
+--
+-- Name: buckets_new_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
+--
+
+SELECT pg_catalog.setval('public.buckets_new_id_seq', 1, true);
+
+
+--
+-- PostgreSQL database dump complete
+--
+
+\unrestrict wNqvOYec5I4nceFYtf0YtjA6CZ1zOdloshWCnhfd2gPm8V8jxdLPZpMuUrh7A7U
+
+--
+-- PostgreSQL database dump
+--
+
+\restrict r9vaK3b7BRXUxrL4bDeQw20jethn6qME1Rifx4jXIoTuAcMNpAQgllBSQvGtn9N
+
+-- Dumped from database version 16.13 (Debian 16.13-1.pgdg13+1)
+-- Dumped by pg_dump version 16.13 (Debian 16.13-1.pgdg13+1)
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
 
 --
 -- Data for Name: goose_db_version; Type: TABLE DATA; Schema: public; Owner: -
@@ -6010,18 +6041,19 @@ INSERT INTO public.goose_db_version VALUES (40, 39, true, '2026-05-03 02:48:57.3
 INSERT INTO public.goose_db_version VALUES (41, 40, true, '2026-05-03 02:48:57.396071');
 INSERT INTO public.goose_db_version VALUES (42, 41, true, '2026-05-03 02:48:57.423244');
 INSERT INTO public.goose_db_version VALUES (43, 42, true, '2026-05-03 22:15:10.307328');
+INSERT INTO public.goose_db_version VALUES (44, 43, true, '2026-05-06 04:47:56.807461');
 
 
 --
 -- Name: goose_db_version_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
-SELECT pg_catalog.setval('public.goose_db_version_id_seq', 43, true);
+SELECT pg_catalog.setval('public.goose_db_version_id_seq', 44, true);
 
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict TUtBczk1KfbBmBS5rGMkIPz3gR8fFeUkzM3leGIjH0EvTdUpiFtNMVO9JI28HT7
+\unrestrict r9vaK3b7BRXUxrL4bDeQw20jethn6qME1Rifx4jXIoTuAcMNpAQgllBSQvGtn9N
 
