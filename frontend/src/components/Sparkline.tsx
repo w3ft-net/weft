@@ -111,7 +111,7 @@ export function Sparkline({ series, threshold, condition, viewWidth = 120, viewH
   const thresholdY = hasThresh ? yForValue(threshold as number) : null
 
   return (
-    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="watch-sparkline">
+    <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="watch-sparkline">
       {hasThresh && (condition === 'above' || condition === 'below') && thresholdY !== null && (
         <rect
           x={0}

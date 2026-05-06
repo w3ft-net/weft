@@ -165,8 +165,7 @@ function WatchChart({ series, hidden, threshold, condition, granularity, rangeSt
   return (
     <div className="watch-chart-wrap">
       <svg
-        width={w}
-        height={h}
+        width="100%"
         viewBox={`0 0 ${w} ${h}`}
         className="watch-chart"
         data-testid="watch-chart-svg"
