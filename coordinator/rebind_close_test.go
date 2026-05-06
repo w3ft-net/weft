@@ -30,7 +30,7 @@ func (s *closeTrackingShard) Close() error                                      
 // arrives at a new address for a known shard id, ProcessHeartbeat
 // rebinds the gRPC connection. If it closes the old conn synchronously,
 // any in-flight query that already grabbed a reference to the old
-// shard.Shard via MatchingShards has its stream cut with code=Canceled.
+// shard.Shard via MatchingEntries has its stream cut with code=Canceled.
 // Phase 2's retry softens the user-visible impact, but the right fix
 // is to defer the close so RPCs can drain on the old conn first.
 func TestProcessHeartbeat_RebindDefersOldClose(t *testing.T) {

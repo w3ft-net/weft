@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/kevlarcon/warp/pkg/bash"
@@ -36,7 +35,6 @@ type TimeRange struct {
 // unchanged; the public boundary converts to ExecuteResult on the
 // way out via queryResultToExecuteResult.
 type QueryResult struct {
-	Rows    []*pb.ResultRow
 	Text    string
 	Stderr  string   // alert/error output — rendered in red by the shell
 	Notices []Notice // one-time per-user notices to surface in the response
@@ -55,16 +53,10 @@ type ExecuteResult struct {
 }
 
 // queryResultToExecuteResult wraps an internal buffered QueryResult
-// in the public ExecuteResult shape. The QueryResult's rows/text/
-// stderr are flattened into a single line sequence and replayed via
-// SliceLineStream. Future passes can swap individual paths to
-// forward live channel-backed streams from compute directly,
-// bypassing QueryResult entirely.
+// in the public ExecuteResult shape. Text and stderr are split into
+// lines and replayed via SliceLineStream.
 func queryResultToExecuteResult(qr *QueryResult) *ExecuteResult {
 	var lines []compute.Line
-	for _, r := range qr.Rows {
-		lines = append(lines, compute.Line{Raw: r.Raw, LineNum: r.LineNum})
-	}
 	if qr.Text != "" {
 		for _, t := range strings.Split(strings.TrimRight(qr.Text, "\n"), "\n") {
 			lines = append(lines, compute.Line{Raw: t})
@@ -156,6 +148,8 @@ type Coordinator struct {
 	DLQ         *DLQ                    // S3 dead-letter queue for failed ingests
 	Errors      *IngestionErrorRecorder // async error persistence
 	Notifier    NotifyDispatcher        // per-customer alert dispatcher (nil = disabled). Interface type so a nil value is true-nil — no typed-nil-via-concrete-pointer trap when callers thread it into AlertContext.
+	shardSecret       string
+	lambdaFunctionURL string
 	// ScriptExecutionTimeout caps how long a single runLocal invocation
 	// may run. Zero = use the package-level default (scriptExecutionTimeout).
 	// Tests override to shorten the wait.
@@ -184,6 +178,13 @@ type CoordinatorConfig struct {
 	Usage    *CustomerUsageStats
 	DLQ      *DLQ
 	Errors   *IngestionErrorRecorder
+
+	// ShardSecret is the bearer token for shard gRPC auth. Passed
+	// to compute workers so they can dial shards directly.
+	ShardSecret string
+	// LambdaFunctionURL is the Lambda endpoint for cold shard queries.
+	// Passed to compute workers for archived shard descriptors.
+	LambdaFunctionURL string
 
 	// ScriptExecutionTimeout overrides the package-level default for
 	// runLocal. Zero leaves the default in place.
@@ -293,6 +294,8 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		DLQ:                    cfg.DLQ,
 		Errors:                 cfg.Errors,
 		Notifier:               cfg.Notifier,
+		shardSecret:            cfg.ShardSecret,
+		lambdaFunctionURL:      cfg.LambdaFunctionURL,
 		ScriptExecutionTimeout: cfg.ScriptExecutionTimeout,
 	}
 }
@@ -434,7 +437,7 @@ func (c *Coordinator) IngestingShard(app string) shard.Shard {
 // retention because the planner's ts predicate would carry the user's
 // raw start time. custID == 0 falls back to the trial retention.
 //
-// The registry's MatchingShards re-applies this clamp as defense in
+// The registry's MatchingEntries re-applies this clamp as defense in
 // depth — idempotent because we pass the already-clamped value.
 func (c *Coordinator) clampTimeRange(tr TimeRange, custID uint) TimeRange {
 	var tier store.Tier
@@ -605,7 +608,6 @@ func (c *Coordinator) execute(pipeline string, tr TimeRange, customer, userID st
 		}
 	}
 	qr := &QueryResult{
-		Rows:    drained.Rows,
 		Text:    drained.Text,
 		Stderr:  drained.Stderr,
 		Notices: drained.Notices,
@@ -633,7 +635,7 @@ func (c *Coordinator) execute(pipeline string, tr TimeRange, customer, userID st
 // own redirect machinery handles the FS write.
 func (c *Coordinator) runQuery(pipeline string, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
 	// Clamp tr to the customer's tier retention BEFORE planning so the
-	// SQL's ts predicates and the shard-selection in MatchingShards
+	// SQL's ts predicates and the shard-selection in MatchingEntries
 	// agree on the same start. Without the clamp here, a boundary-
 	// spanning shard could return rows older than the customer's
 	// retention because the SQL would have no lower-bound predicate.
@@ -647,11 +649,6 @@ func (c *Coordinator) runQuery(pipeline string, tr TimeRange, customer string, c
 		// substitution and re-render — surface it.
 		log.Printf("rewriter callback: plan error: %v (pipeline=%q)", err, pipeline)
 		return nil, fmt.Errorf("plan: %w", err)
-	}
-
-	canStream := plan.AlertArgs == nil && len(plan.ComputeStages) == 0
-	if canStream {
-		return c.executeLogStreaming(plan, tr, customer, custID)
 	}
 
 	result, err := c.executeQuery(plan, tr, customer, custID, userID, alertCtx)
@@ -731,114 +728,6 @@ func (c *Coordinator) preflight(pipeline string, customer string) (uint, string,
 	return custID, pipeline, nil
 }
 
-// executeLogStreaming runs the streaming-direct path: zero compute
-// stages, no alert, no redirect. Shard goroutines pump rows into a
-// compute job and the job's channel-backed Stream is returned in the
-// ExecuteResult untouched. Lines flow to the wire as compute's online
-// k-way merge advances — no coord-side QueryResult buffering.
-//
-// Shard errors are surfaced through a wrapper stream that, after the
-// inner channel exhausts, blocks until the error-collector goroutine
-// has drained errs and then propagates the first error (if any).
-// Successful runs return nil error from the wrapper after EOF.
-func (c *Coordinator) executeLogStreaming(plan *planner.QueryPlan, tr TimeRange, customer string, custID uint) (*ExecuteResult, error) {
-	if plan.SourceApp != "" {
-		cust, err := c.Store.GetCustomerByName(customer)
-		if err != nil {
-			return nil, fmt.Errorf("validate source: resolve customer %q: %w", customer, err)
-		}
-		ok, err := c.Store.CustomerHasSource(cust.ID, plan.SourceApp)
-		if err != nil {
-			return nil, fmt.Errorf("validate source: %w", err)
-		}
-		if !ok {
-			return nil, fmt.Errorf("unknown source: %s", plan.SourceApp)
-		}
-	}
-
-	// directSQL already carries customer + ts predicates from Plan
-	// (see planner.Plan). No post-facto surgery needed.
-	directSQL := plan.DirectShardSQL
-
-	var tier store.Tier
-	if custID != 0 {
-		tier = c.Store.TierForCustomer(custID)
-	}
-	matching := c.Registry.MatchingShards(tr, plan.FollowApp, tier)
-	if len(matching) == 0 {
-		log.Printf("query: no matching shards (app=%s, customer=%s)", plan.SourceApp, customer)
-		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
-	}
-
-	shardIDs := make([]string, len(matching))
-	for i, s := range matching {
-		shardIDs[i] = s.ID()
-	}
-	log.Printf("query: app=%s shards=%v stream=true sql=%s", plan.SourceApp, shardIDs, directSQL)
-
-	job := c.Pool.NewJob(nil, len(matching), plan.ShardOrderBy, plan.Limit)
-
-	var wg sync.WaitGroup
-	wg.Add(len(matching))
-	for _, s := range matching {
-		go func(s shard.Shard) {
-			defer wg.Done()
-			s.QueryToSink(directSQL, job)
-		}(s)
-	}
-
-	collector := &shardErrCollector{done: make(chan struct{})}
-	go func() {
-		wg.Wait()
-		close(collector.done)
-	}()
-
-	return &ExecuteResult{
-		Stream: &shardErrAwareStream{
-			inner:     job.Stream(),
-			collector: collector,
-		},
-	}, nil
-}
-
-// shardErrCollector holds the first shard error (if any) and signals
-// completion of the wg.Wait/errs-drain goroutine via done. err is
-// stored as an atomic.Pointer[error] so the streaming consumer can
-// read it without locking after done is closed.
-type shardErrCollector struct {
-	err  atomic.Pointer[error]
-	done chan struct{}
-}
-
-// shardErrAwareStream wraps a compute LineStream and surfaces shard-
-// level errors that the inner stream isn't aware of (the inner stream
-// only sees compute-internal errors). After the inner stream exhausts,
-// Next blocks until the error collector finishes draining errs, then
-// returns the first shard error (if any) on the terminal call.
-type shardErrAwareStream struct {
-	inner     compute.LineStream
-	collector *shardErrCollector
-}
-
-func (s *shardErrAwareStream) Next(ctx context.Context) (compute.Line, bool, error) {
-	line, ok, err := s.inner.Next(ctx)
-	if err != nil || ok {
-		return line, ok, err
-	}
-	// Inner stream exhausted. Wait for the error collector.
-	select {
-	case <-s.collector.done:
-	case <-ctx.Done():
-		return line, false, ctx.Err()
-	}
-	if e := s.collector.err.Load(); e != nil {
-		return line, false, *e
-	}
-	return line, false, nil
-}
-
-func (s *shardErrAwareStream) Close() error { return s.inner.Close() }
-
 // executeQuery runs the query half of a plan (everything except alert).
 // customer is the name used for shard routing; custID (0 if unresolved)
 // scopes tenant-backed features (ShellFS, weft.*). alertCtx is forwarded
@@ -881,7 +770,7 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	directSQL := plan.DirectShardSQL
 
 	// Shard selection honors plan-tier retention: tr.Start is clamped
-	// up to (now − LogRetention(tier)) inside MatchingShards as defense
+	// up to (now − LogRetention(tier)) inside MatchingEntries as defense
 	// in depth. The caller (runQuery) has already applied the same clamp
 	// before invoking Plan so the SQL's ts predicate is consistent with
 	// the shard set.
@@ -889,84 +778,49 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	if custID != 0 {
 		tier = c.Store.TierForCustomer(custID)
 	}
-	matching := c.Registry.MatchingShards(tr, plan.FollowApp, tier)
-	if len(matching) == 0 {
+	entries := c.Registry.MatchingEntries(tr, plan.FollowApp, tier)
+	if len(entries) == 0 {
 		log.Printf("query: no matching shards (app=%s, customer=%s)", plan.SourceApp, customer)
 		return &QueryResult{}, nil
 	}
 
-	shardIDs := make([]string, len(matching))
-	for i, s := range matching {
-		shardIDs[i] = s.ID()
+	descs := make([]*pb.ShardDescriptor, len(entries))
+	shardIDs := make([]string, len(entries))
+	for i, e := range entries {
+		shardIDs[i] = e.ID
+		d := &pb.ShardDescriptor{ShardId: e.ID, Apps: e.Apps}
+		if e.State == StateArchived {
+			d.LambdaUrl = c.lambdaFunctionURL
+			d.ParquetPath = e.ParquetPath
+		} else {
+			d.GrpcAddr = e.Addr
+		}
+		descs[i] = d
 	}
 	log.Printf("query: app=%s shards=%v compute=%v sql=%s",
 		plan.SourceApp, shardIDs, plan.ComputeStages, directSQL)
 
-	job := c.Pool.NewJob(plan.ComputeStages, len(matching), plan.ShardOrderBy, plan.Limit)
-
-	var wg sync.WaitGroup
-	wg.Add(len(matching))
-	for _, s := range matching {
-		go func(s shard.Shard) {
-			defer wg.Done()
-			s.QueryToSink(directSQL, job)
-		}(s)
-	}
-	wg.Wait()
-
-	// Zero-stage queries return Rows so callers that iterate row
-	// metadata (LineNum, structured fields) still work. Phase 4
-	// replaces this with a LineStream that carries Line metadata
-	// uniformly. The rowsExposer type assertion is the transitional
-	// hook: LocalComputeJob exposes MergedRows; GRPCComputeJob doesn't
-	// (rows ship as text over the wire) and falls through to text.
-	if len(plan.ComputeStages) == 0 {
-		type rowsExposer interface {
-			MergedRows() ([]*pb.ResultRow, error)
-		}
-		if y, ok := job.(rowsExposer); ok {
-			rows, err := y.MergedRows()
-			if err != nil {
-				return nil, err
-			}
-			log.Printf("query: %d shards merged into %d rows", len(matching), len(rows))
-			return &QueryResult{Rows: rows}, nil
-		}
-		// Fallback: remote compute pool — accept the text, rendered as
-		// the merged result. Loses LineNum metadata; today's clients
-		// don't read it.
-		text, err := job.Result()
-		if err != nil {
-			return nil, err
-		}
-		return &QueryResult{Text: text}, nil
-	}
-
-	text, err := job.Result()
+	text, err := c.Pool.ExecuteQuery(&pb.ExecuteQueryRequest{
+		Sql:         directSQL,
+		Shards:      descs,
+		Stages:      plan.ComputeStages,
+		MergeKey:    plan.ShardOrderBy,
+		Limit:       int32(plan.Limit),
+		ShardSecret: c.shardSecret,
+	})
 	if err != nil {
-		log.Printf("query: compute error: %v (stages=%v)", err, plan.ComputeStages)
+		log.Printf("query: compute error: %v", err)
 		return nil, err
 	}
-	log.Printf("query: compute complete, output=%d bytes (stages=%v)", len(text), plan.ComputeStages)
 	return &QueryResult{Text: text}, nil
 }
 
-// runAlertStage feeds a QueryResult's text (or joined raw rows) into
-// AlertCommand and merges its stderr into result.Stderr so the caller
-// sees the alert message. AlertCommand's stdout is a tee of stdin and
-// is discarded — the original result.Text/Rows already carry that.
+// runAlertStage feeds a QueryResult's text into AlertCommand and
+// merges its stderr into result.Stderr so the caller sees the alert
+// message.
 func runAlertStage(result *QueryResult, args []string, ctx *AlertContext) {
-	stdin := result.Text
-	if stdin == "" && len(result.Rows) > 0 {
-		var sb strings.Builder
-		for _, r := range result.Rows {
-			sb.WriteString(r.Raw)
-			sb.WriteByte('\n')
-		}
-		stdin = sb.String()
-	}
 	var out, errOut strings.Builder
-	AlertCommand(args, strings.NewReader(stdin), &out, &errOut, ctx)
+	AlertCommand(args, strings.NewReader(result.Text), &out, &errOut, ctx)
 	if errOut.Len() == 0 {
 		return
 	}

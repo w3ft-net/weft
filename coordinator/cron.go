@@ -182,13 +182,6 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch) {
 		} else {
 			if drained.Text != "" {
 				stdout = drained.Text
-			} else if len(drained.Rows) > 0 {
-				var sb strings.Builder
-				for _, row := range drained.Rows {
-					sb.WriteString(row.Raw)
-					sb.WriteByte('\n')
-				}
-				stdout = sb.String()
 			}
 			if drained.Stderr != "" {
 				stderr = drained.Stderr

@@ -525,9 +525,9 @@ func TestSuspended_ExcludedFromWrites_IncludedInQueries(t *testing.T) {
 	}
 
 	// Query routing should include it.
-	matching := reg.MatchingShards(fullRange, "vimgym", "bolt")
+	matching := reg.MatchingEntries(fullRange, "vimgym", "bolt")
 	if len(matching) != 1 {
-		t.Errorf("MatchingShards should include suspended shard, got %d", len(matching))
+		t.Errorf("MatchingEntries should include suspended shard, got %d", len(matching))
 	}
 }
 

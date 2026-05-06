@@ -503,22 +503,22 @@ func TestRegistry_AppScopedQueryRouting(t *testing.T) {
 	})
 
 	// Query for vimgym should only hit shard-vimgym.
-	matching := reg.MatchingShards(fullRange, "vimgym", "bolt")
+	matching := reg.MatchingEntries(fullRange, "vimgym", "bolt")
 	if len(matching) != 1 {
 		t.Fatalf("expected 1 shard for vimgym, got %d", len(matching))
 	}
-	if matching[0].ID() != "shard-vimgym" {
-		t.Fatalf("expected shard-vimgym, got %s", matching[0].ID())
+	if matching[0].ID != "shard-vimgym" {
+		t.Fatalf("expected shard-vimgym, got %s", matching[0].ID)
 	}
 
 	// Query for callbox should only hit shard-callbox.
-	matching = reg.MatchingShards(fullRange, "callbox", "bolt")
+	matching = reg.MatchingEntries(fullRange, "callbox", "bolt")
 	if len(matching) != 1 {
 		t.Fatalf("expected 1 shard for callbox, got %d", len(matching))
 	}
 
 	// Query for all apps (empty string) should hit both.
-	matching = reg.MatchingShards(fullRange, "", "bolt")
+	matching = reg.MatchingEntries(fullRange, "", "bolt")
 	if len(matching) != 2 {
 		t.Fatalf("expected 2 shards for all apps, got %d", len(matching))
 	}
@@ -561,7 +561,7 @@ func TestRegistry_ExpiringShardExcluded(t *testing.T) {
 		State: StateExpiring, Shard: s0,
 	})
 
-	matching := reg.MatchingShards(fullRange, "", "bolt")
+	matching := reg.MatchingEntries(fullRange, "", "bolt")
 	if len(matching) != 0 {
 		t.Fatalf("expected 0 shards (expiring), got %d", len(matching))
 	}

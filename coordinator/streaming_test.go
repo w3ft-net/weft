@@ -154,7 +154,7 @@ var errSynthetic = syntheticErr{}
 
 // _ keeps compute imported when other helpers in this file don't
 // reference it directly.
-var _ compute.LineStream = (*shardErrAwareStream)(nil)
+var _ compute.LineStream = (compute.LineStream)(nil)
 
 // _ keeps sync imported.
 var _ sync.WaitGroup

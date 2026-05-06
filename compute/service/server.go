@@ -117,5 +117,13 @@ func (s *Server) GetResult(_ context.Context, req *pb.GetResultRequest) (*pb.Get
 	return &pb.GetResultResponse{Text: text}, nil
 }
 
+func (s *Server) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) (*pb.ExecuteQueryResponse, error) {
+	text, err := s.pool.ExecuteQuery(req)
+	if err != nil {
+		return &pb.ExecuteQueryResponse{Error: err.Error()}, nil
+	}
+	return &pb.ExecuteQueryResponse{Text: text}, nil
+}
+
 // Verify at compile time that ComputeJob implements RowSink.
 var _ shard.RowSink = (compute.ComputeJob)(nil)

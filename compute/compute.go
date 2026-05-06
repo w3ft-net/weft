@@ -1,6 +1,12 @@
 package compute
 
 import (
+	"fmt"
+	"log"
+	"sync"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
@@ -17,18 +23,52 @@ type ComputeMessage struct {
 //   - LocalComputePool: in-process execution via warp's bash interpreter
 //   - GRPCComputePool: fans out to remote compute workers
 type ComputePool interface {
-	// NewJob creates a job that will receive rows from shardCount
-	// shard streams. mergeKey controls cross-shard ordering: empty
-	// concatenates in arrival order (legacy), "line_num"/"raw"
-	// (optionally " DESC") triggers a k-way merge keyed on that
-	// column. See docs/plans/direct-to-compute.md §4.
-	//
-	// limit is the global cap on the merged stream applied BEFORE
-	// stages run; 0 means no cap. Mirrors planner.QueryPlan.Limit
-	// (the user-typed head/tail count). Without it, per-shard
-	// LIMIT N gets multiplied by shard count when downstream stages
-	// see the union — `tail -n N | wc -l` would return N×num_shards.
 	NewJob(stages []string, shardCount int, mergeKey string, limit int) ComputeJob
+
+	// ExecuteQuery fans out SQL to the given shards, merges results,
+	// applies pipeline stages, and returns the output. The caller
+	// provides shard descriptors so compute does all shard I/O.
+	ExecuteQuery(req *pb.ExecuteQueryRequest) (string, error)
+}
+
+// DialShard creates a shard.Shard from a proto ShardDescriptor.
+// For cold shards (Lambda-backed), creds and region enable SigV4
+// request signing. Pass nil creds to skip signing.
+func DialShard(d *pb.ShardDescriptor, secret string, creds aws.CredentialsProvider, region string) (shard.Shard, error) {
+	if d.GrpcAddr != "" {
+		return shard.NewGRPCShard(d.ShardId, d.GrpcAddr, secret)
+	}
+	if d.LambdaUrl != "" {
+		cs, err := shard.NewColdShard(d.ShardId, d.Apps, d.ParquetPath, d.LambdaUrl, nil)
+		if err != nil {
+			return nil, err
+		}
+		if creds != nil {
+			cs.WithAWSAuth(creds, region)
+		}
+		return cs, nil
+	}
+	return nil, fmt.Errorf("shard %s: no grpc_addr or lambda_url", d.ShardId)
+}
+
+// FanOutToShards dials each shard, runs QueryToSink, and waits.
+func FanOutToShards(req *pb.ExecuteQueryRequest, job ComputeJob, creds aws.CredentialsProvider, region string) {
+	var wg sync.WaitGroup
+	wg.Add(len(req.Shards))
+	for _, desc := range req.Shards {
+		go func(d *pb.ShardDescriptor) {
+			defer wg.Done()
+			sh, err := DialShard(d, req.ShardSecret, creds, region)
+			if err != nil {
+				log.Printf("execute-query: dial shard %s: %v", d.ShardId, err)
+				job.SendSentinel(d.ShardId)
+				return
+			}
+			defer sh.Close()
+			sh.QueryToSink(req.Sql, job)
+		}(desc)
+	}
+	wg.Wait()
 }
 
 // ComputeJob receives rows from shards and produces output as a stream

@@ -8,14 +8,10 @@ import (
 	"github.com/kevlarcon/weft/store"
 )
 
-// TestRegistry_MatchingShards_SkipsStaleHeartbeat confirms that shards
+// TestRegistry_MatchingEntries_SkipsStaleHeartbeat confirms that shards
 // whose LastHeartbeatAt is older than heartbeatStaleThreshold are
-// excluded from query routing. Without this, the coordinator's registry
-// holds entries pointing at containers that died and never came back,
-// and Phase 2 retries against those dead Addrs produce repeated errors
-// for the duration of any user session that touches apps owned by
-// those shards.
-func TestRegistry_MatchingShards_SkipsStaleHeartbeat(t *testing.T) {
+// excluded from query routing.
+func TestRegistry_MatchingEntries_SkipsStaleHeartbeat(t *testing.T) {
 	freshShard, err := shard.NewDuckDBShard("fresh", "")
 	if err != nil {
 		t.Fatal(err)
@@ -41,12 +37,12 @@ func TestRegistry_MatchingShards_SkipsStaleHeartbeat(t *testing.T) {
 		LastHeartbeatAt: time.Now().Add(-5 * time.Minute),
 	})
 
-	matching := reg.MatchingShards(fullRange, "vimgym", "bolt")
+	matching := reg.MatchingEntries(fullRange, "vimgym", "bolt")
 	if len(matching) != 1 {
 		t.Fatalf("expected 1 matching shard (stale skipped), got %d", len(matching))
 	}
-	if matching[0].ID() != "fresh" {
-		t.Fatalf("expected fresh shard, got %s", matching[0].ID())
+	if matching[0].ID != "fresh" {
+		t.Fatalf("expected fresh shard, got %s", matching[0].ID)
 	}
 }
 
@@ -110,7 +106,7 @@ func TestRegistry_ZeroLastHeartbeatAtCountsAsFresh(t *testing.T) {
 		// LastHeartbeatAt left zero.
 	})
 
-	matching := reg.MatchingShards(fullRange, "vimgym", "bolt")
+	matching := reg.MatchingEntries(fullRange, "vimgym", "bolt")
 	if len(matching) != 1 {
 		t.Fatalf("zero LastHeartbeatAt should count as fresh; got %d matching", len(matching))
 	}
@@ -141,13 +137,13 @@ func TestRegistry_HasApp_EmptyAppsNoLongerCatchAll(t *testing.T) {
 	})
 
 	// Specific-app query should miss.
-	if matching := reg.MatchingShards(fullRange, "vimgym", "bolt"); len(matching) != 0 {
+	if matching := reg.MatchingEntries(fullRange, "vimgym", "bolt"); len(matching) != 0 {
 		t.Errorf("empty-Apps shard should NOT match specific app query, got %d", len(matching))
 	}
 	// Whole-customer query (app=="") still sees all shards — that's a
 	// different code path (the hasApp filter is skipped when app is
 	// empty), independent of the catch-all rip.
-	if matching := reg.MatchingShards(fullRange, "", "bolt"); len(matching) != 1 {
+	if matching := reg.MatchingEntries(fullRange, "", "bolt"); len(matching) != 1 {
 		t.Errorf("whole-customer query should see the shard, got %d", len(matching))
 	}
 	// Write routing: an empty-Apps entry shouldn't be picked for any

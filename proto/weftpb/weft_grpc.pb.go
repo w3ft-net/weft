@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v5.29.3
-// source: weft.proto
+// source: proto/weftpb/weft.proto
 
 package weftpb
 
@@ -328,13 +328,14 @@ var ShardQuery_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "weft.proto",
+	Metadata: "proto/weftpb/weft.proto",
 }
 
 const (
-	WeftCompute_CreateJob_FullMethodName = "/weft.WeftCompute/CreateJob"
-	WeftCompute_SendRows_FullMethodName  = "/weft.WeftCompute/SendRows"
-	WeftCompute_GetResult_FullMethodName = "/weft.WeftCompute/GetResult"
+	WeftCompute_CreateJob_FullMethodName    = "/weft.WeftCompute/CreateJob"
+	WeftCompute_SendRows_FullMethodName     = "/weft.WeftCompute/SendRows"
+	WeftCompute_GetResult_FullMethodName    = "/weft.WeftCompute/GetResult"
+	WeftCompute_ExecuteQuery_FullMethodName = "/weft.WeftCompute/ExecuteQuery"
 )
 
 // WeftComputeClient is the client API for WeftCompute service.
@@ -347,6 +348,10 @@ type WeftComputeClient interface {
 	SendRows(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ComputeMessage, SendRowsResponse], error)
 	// GetResult blocks until the job is complete and returns the output.
 	GetResult(ctx context.Context, in *GetResultRequest, opts ...grpc.CallOption) (*GetResultResponse, error)
+	// ExecuteQuery fans out SQL to shards, merges results, applies
+	// pipeline stages, and returns the output. The coordinator sends
+	// the full plan; compute does all shard I/O.
+	ExecuteQuery(ctx context.Context, in *ExecuteQueryRequest, opts ...grpc.CallOption) (*ExecuteQueryResponse, error)
 }
 
 type weftComputeClient struct {
@@ -390,6 +395,16 @@ func (c *weftComputeClient) GetResult(ctx context.Context, in *GetResultRequest,
 	return out, nil
 }
 
+func (c *weftComputeClient) ExecuteQuery(ctx context.Context, in *ExecuteQueryRequest, opts ...grpc.CallOption) (*ExecuteQueryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExecuteQueryResponse)
+	err := c.cc.Invoke(ctx, WeftCompute_ExecuteQuery_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WeftComputeServer is the server API for WeftCompute service.
 // All implementations must embed UnimplementedWeftComputeServer
 // for forward compatibility.
@@ -400,6 +415,10 @@ type WeftComputeServer interface {
 	SendRows(grpc.ClientStreamingServer[ComputeMessage, SendRowsResponse]) error
 	// GetResult blocks until the job is complete and returns the output.
 	GetResult(context.Context, *GetResultRequest) (*GetResultResponse, error)
+	// ExecuteQuery fans out SQL to shards, merges results, applies
+	// pipeline stages, and returns the output. The coordinator sends
+	// the full plan; compute does all shard I/O.
+	ExecuteQuery(context.Context, *ExecuteQueryRequest) (*ExecuteQueryResponse, error)
 	mustEmbedUnimplementedWeftComputeServer()
 }
 
@@ -418,6 +437,9 @@ func (UnimplementedWeftComputeServer) SendRows(grpc.ClientStreamingServer[Comput
 }
 func (UnimplementedWeftComputeServer) GetResult(context.Context, *GetResultRequest) (*GetResultResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetResult not implemented")
+}
+func (UnimplementedWeftComputeServer) ExecuteQuery(context.Context, *ExecuteQueryRequest) (*ExecuteQueryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExecuteQuery not implemented")
 }
 func (UnimplementedWeftComputeServer) mustEmbedUnimplementedWeftComputeServer() {}
 func (UnimplementedWeftComputeServer) testEmbeddedByValue()                     {}
@@ -483,6 +505,24 @@ func _WeftCompute_GetResult_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WeftCompute_ExecuteQuery_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExecuteQueryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftComputeServer).ExecuteQuery(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCompute_ExecuteQuery_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftComputeServer).ExecuteQuery(ctx, req.(*ExecuteQueryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WeftCompute_ServiceDesc is the grpc.ServiceDesc for WeftCompute service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -498,6 +538,10 @@ var WeftCompute_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "GetResult",
 			Handler:    _WeftCompute_GetResult_Handler,
 		},
+		{
+			MethodName: "ExecuteQuery",
+			Handler:    _WeftCompute_ExecuteQuery_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -506,7 +550,7 @@ var WeftCompute_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "weft.proto",
+	Metadata: "proto/weftpb/weft.proto",
 }
 
 const (
@@ -1521,5 +1565,5 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "weft.proto",
+	Metadata: "proto/weftpb/weft.proto",
 }

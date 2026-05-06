@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/kevlarcon/warp/pkg/bash"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
@@ -19,7 +20,16 @@ import (
 // docs/plans/streaming-parallel-warp.md for the planned warp-side
 // work to combine streaming with chunk-level parallelism; until
 // that lands, weft's compute stages are always single-worker.
-type LocalComputePool struct{}
+type LocalComputePool struct {
+	AWSCreds  aws.CredentialsProvider
+	AWSRegion string
+}
+
+func (p *LocalComputePool) ExecuteQuery(req *pb.ExecuteQueryRequest) (string, error) {
+	job := p.NewJob(req.Stages, len(req.Shards), req.MergeKey, int(req.Limit))
+	FanOutToShards(req, job, p.AWSCreds, p.AWSRegion)
+	return job.Result()
+}
 
 func (p *LocalComputePool) NewJob(stages []string, shardCount int, mergeKey string, limit int) ComputeJob {
 	return &LocalComputeJob{

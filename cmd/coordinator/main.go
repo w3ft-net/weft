@@ -160,6 +160,12 @@ func main() {
 	if awsCfgErr != nil {
 		log.Printf("warning: AWS config unavailable — Lambda cold queries will fail: %v", awsCfgErr)
 	}
+	if awsCfgErr == nil {
+		if lp, ok := pool.(*compute.LocalComputePool); ok {
+			lp.AWSCreds = awsCfg.Credentials
+			lp.AWSRegion = *awsRegion
+		}
+	}
 
 	if len(shardTiers) > 0 {
 		// Production: ASG launcher for shard EC2 instances.

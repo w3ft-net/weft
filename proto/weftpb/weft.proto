@@ -127,6 +127,11 @@ service WeftCompute {
 
   // GetResult blocks until the job is complete and returns the output.
   rpc GetResult(GetResultRequest) returns (GetResultResponse);
+
+  // ExecuteQuery fans out SQL to shards, merges results, applies
+  // pipeline stages, and returns the output. The coordinator sends
+  // the full plan; compute does all shard I/O.
+  rpc ExecuteQuery(ExecuteQueryRequest) returns (ExecuteQueryResponse);
 }
 
 message CreateJobRequest {
@@ -174,6 +179,35 @@ message GetResultRequest {
 }
 
 message GetResultResponse {
+  string text = 1;
+  string error = 2;
+}
+
+// ShardDescriptor tells compute how to reach a shard.
+// Exactly one of grpc_addr or lambda_url is set.
+message ShardDescriptor {
+  string shard_id = 1;
+  // Hot shard: gRPC address (ip:port).
+  string grpc_addr = 2;
+  // Cold shard: Lambda function URL for parquet queries.
+  string lambda_url = 3;
+  // Parquet path in S3 (cold shards only).
+  string parquet_path = 4;
+  // Apps this shard covers (cold shards need this for ColdShard construction).
+  repeated string apps = 5;
+}
+
+message ExecuteQueryRequest {
+  string sql = 1;
+  repeated ShardDescriptor shards = 2;
+  repeated string stages = 3;
+  string merge_key = 4;
+  int32 limit = 5;
+  // Bearer token for gRPC shard auth.
+  string shard_secret = 6;
+}
+
+message ExecuteQueryResponse {
   string text = 1;
   string error = 2;
 }

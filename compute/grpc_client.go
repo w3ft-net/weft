@@ -39,6 +39,17 @@ func (p *GRPCComputePool) Close() error {
 	return p.conn.Close()
 }
 
+func (p *GRPCComputePool) ExecuteQuery(req *pb.ExecuteQueryRequest) (string, error) {
+	resp, err := p.client.ExecuteQuery(context.Background(), req)
+	if err != nil {
+		return "", fmt.Errorf("execute query: %w", err)
+	}
+	if resp.Error != "" {
+		return "", fmt.Errorf("compute error: %s", resp.Error)
+	}
+	return resp.Text, nil
+}
+
 func (p *GRPCComputePool) NewJob(stages []string, shardCount int, mergeKey string, limit int) ComputeJob {
 	resp, err := p.client.CreateJob(context.Background(), &pb.CreateJobRequest{
 		Stages:     stages,

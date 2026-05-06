@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/kevlarcon/weft/alert"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
 func runAlert(args string, stdin string) (stdout, stderr string, exitCode int) {
@@ -315,10 +314,7 @@ func TestRunAlertStage(t *testing.T) {
 	})
 
 	t.Run("rows multi-row tagged", func(t *testing.T) {
-		result := &QueryResult{Rows: []*pb.ResultRow{
-			{Raw: "shard-a 85"},
-			{Raw: "shard-b 50"},
-		}}
+		result := &QueryResult{Text: "shard-a 85\nshard-b 50\n"}
 		runAlertStage(result, []string{"above", "80", "-k", "2", "-t", "1"},
 			&AlertContext{Interactive: true})
 		if !strings.Contains(result.Stderr, "shard-a") {

@@ -95,7 +95,7 @@ func TestAddAppToShardOp_Apply_Idempotent(t *testing.T) {
 }
 
 // AddAppToShard's mutation must be lock-protected so a concurrent
-// IngestingShard or MatchingShards read doesn't see a torn Apps
+// IngestingShard or MatchingEntries read doesn't see a torn Apps
 // slice header. Run with -race (which the standard test invocation
 // enables in CI); the assertion is that the test doesn't panic or
 // trip the race detector.
@@ -127,7 +127,7 @@ func TestAddAppToShard_RaceSafeAgainstReaders(t *testing.T) {
 				default:
 				}
 				_ = reg.IngestingShard("weft")
-				_ = reg.MatchingShards(TimeRange{}, "weft", "bolt")
+				_ = reg.MatchingEntries(TimeRange{}, "weft", "bolt")
 			}
 		}()
 	}

@@ -10,7 +10,7 @@ import (
 // TestReconstructShard_IngestingDials covers the post-restart bootstrap
 // path: a persisted INGESTING row with a known address must come back
 // from LoadFromStore with a live shard.Shard pointer attached. Without
-// it, MatchingShards (registry.go's nil-Shard guard) silently skips
+// it, MatchingEntries (registry.go's nil-Shard guard) silently skips
 // the entry and queries return zero rows until a heartbeat arrives —
 // the symptom that motivated this work.
 func TestReconstructShard_IngestingDials(t *testing.T) {
@@ -95,8 +95,8 @@ func TestReconstructShard_LaunchingNoDial(t *testing.T) {
 // TestReconstructShard_ArchivedNoParquet: a "zombie archive" — entry
 // transitioned to ARCHIVED via reapDeadShards' rebind-timeout branch
 // without parquet export. Nothing to dial, nothing to read; surfaces
-// as an error so LoadFromStore leaves Shard=nil. MatchingShards
-// already skips ARCHIVED entries in MatchingShards' state check
+// as an error so LoadFromStore leaves Shard=nil. MatchingEntries
+// already skips ARCHIVED entries in MatchingEntries' state check
 // regardless, so the nil pointer is harmless in the query path.
 func TestReconstructShard_ArchivedNoParquet(t *testing.T) {
 	rec := store.ShardRecord{

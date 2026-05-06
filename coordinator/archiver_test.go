@@ -243,7 +243,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 	}
 }
 
-func TestRegistry_MatchingShards_IncludesArchived(t *testing.T) {
+func TestRegistry_MatchingEntries_IncludesArchived(t *testing.T) {
 	ds, err := shard.NewDuckDBShard("shard-arch", "")
 	if err != nil {
 		t.Fatal(err)
@@ -257,7 +257,7 @@ func TestRegistry_MatchingShards_IncludesArchived(t *testing.T) {
 		State: StateArchived, Shard: ds,
 	})
 
-	matching := reg.MatchingShards(TimeRange{Start: t0, End: t1}, "vimgym", "bolt")
+	matching := reg.MatchingEntries(TimeRange{Start: t0, End: t1}, "vimgym", "bolt")
 	if len(matching) != 1 {
 		t.Fatalf("expected 1 archived shard in results, got %d", len(matching))
 	}

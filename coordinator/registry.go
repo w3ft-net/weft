@@ -437,7 +437,7 @@ func (r *ShardRegistry) HasAddr(addr string) bool {
 // within that shard. The clamp here is defense in depth; passing the
 // already-clamped value keeps it idempotent. tier="" yields the
 // trial-tier retention (24h, conservative).
-func (r *ShardRegistry) MatchingShards(tr TimeRange, app string, tier store.Tier) []shard.Shard {
+func (r *ShardRegistry) MatchingEntries(tr TimeRange, app string, tier store.Tier) []*ShardEntry {
 	if cap := time.Now().Add(-store.LogRetention(tier)); tr.Start.Before(cap) {
 		tr.Start = cap
 	}
@@ -445,7 +445,7 @@ func (r *ShardRegistry) MatchingShards(tr TimeRange, app string, tier store.Tier
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var out []shard.Shard
+	var out []*ShardEntry
 	for _, e := range r.entries {
 		if e.Shard == nil {
 			continue
@@ -456,7 +456,6 @@ func (r *ShardRegistry) MatchingShards(tr TimeRange, app string, tier store.Tier
 		if e.isStale() {
 			continue
 		}
-		// Zero-value windows = unbounded (heartbeat-adopted shards).
 		hasWindow := !e.WindowStart.IsZero() && !e.WindowEnd.IsZero()
 		if hasWindow && (!e.WindowStart.Before(tr.End) || !e.WindowEnd.After(tr.Start)) {
 			continue
@@ -464,7 +463,7 @@ func (r *ShardRegistry) MatchingShards(tr TimeRange, app string, tier store.Tier
 		if app != "" && !e.hasApp(app) {
 			continue
 		}
-		out = append(out, e.Shard)
+		out = append(out, e)
 	}
 	return out
 }

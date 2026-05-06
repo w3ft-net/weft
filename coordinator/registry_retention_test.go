@@ -7,7 +7,7 @@ import (
 	"github.com/kevlarcon/weft/store"
 )
 
-// TestMatchingShards_ClampsToPlanRetention is an **intentionally failing**
+// TestMatchingEntries_ClampsToPlanRetention is an **intentionally failing**
 // test that demonstrates the log-query analog of
 // `TestCronAggregate_ClampsToPlanRetention` (store/rollup_test.go).
 //
@@ -17,7 +17,7 @@ import (
 // metric buckets.
 //
 // The log-query path does not clamp. The coordinator hands the caller's
-// raw TimeRange straight to Registry.MatchingShards, which filters by
+// raw TimeRange straight to Registry.MatchingEntries, which filters by
 // overlap with the query window and app membership — neither field
 // knows about the caller's plan. A swatch customer asking for a year
 // back will therefore reach shards whose windows fall outside their
@@ -29,7 +29,7 @@ import (
 //   - spanning: [-45d, -20d]     — straddles the 30d boundary
 //   - old:      [-200d, -195d]   — entirely outside 30d retention
 //
-// It calls MatchingShards with a 1-year window and asserts that:
+// It calls MatchingEntries with a 1-year window and asserts that:
 //   - `recent`   matches (trivially in-window)
 //   - `spanning` matches (some rows are still visible, -30d..-20d)
 //   - `old`      does NOT match (every row is past retention)
@@ -45,12 +45,12 @@ import (
 //
 // Fix direction (for the future change that makes this pass): either
 // clamp tr.Start to now − LogRetention(tier) in coordinator.query
-// before the MatchingShards call (mirroring clampRetention in
-// store/shell.go), or add a tier argument to MatchingShards itself so
+// before the MatchingEntries call (mirroring clampRetention in
+// store/shell.go), or add a tier argument to MatchingEntries itself so
 // the filter happens at shard-selection time.
 //
 // Until then, this test documents the gap.
-func TestMatchingShards_ClampsToPlanRetention(t *testing.T) {
+func TestMatchingEntries_ClampsToPlanRetention(t *testing.T) {
 	registry := NewShardRegistry()
 
 	now := time.Now()
@@ -83,7 +83,7 @@ func TestMatchingShards_ClampsToPlanRetention(t *testing.T) {
 	registry.Add(old)
 
 	// Mirror the coordinator.query call site: pass the caller's raw
-	// TimeRange (one year back) into MatchingShards. When tier-aware
+	// TimeRange (one year back) into MatchingEntries. When tier-aware
 	// clamping lands, the old shard must drop out.
 	tier := store.TierSwatch // 30-day retention
 	tr := TimeRange{
@@ -91,11 +91,11 @@ func TestMatchingShards_ClampsToPlanRetention(t *testing.T) {
 		End:   now,
 	}
 
-	matched := registry.MatchingShards(tr, "ops", tier)
+	matched := registry.MatchingEntries(tr, "ops", tier)
 
 	ids := make(map[string]bool, len(matched))
-	for _, s := range matched {
-		ids[s.ID()] = true
+	for _, e := range matched {
+		ids[e.ID] = true
 	}
 
 	if ids["old"] {

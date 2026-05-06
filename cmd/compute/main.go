@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"google.golang.org/grpc"
 
 	weftsdk "github.com/w3ft-net/weft-go"
@@ -28,6 +29,12 @@ func main() {
 	flag.Parse()
 
 	pool := &compute.LocalComputePool{}
+	if awsCfg, err := awsconfig.LoadDefaultConfig(context.Background()); err != nil {
+		log.Printf("warning: AWS config unavailable — cold shard queries will fail: %v", err)
+	} else {
+		pool.AWSCreds = awsCfg.Credentials
+		pool.AWSRegion = awsCfg.Region
+	}
 	srv := grpc.NewServer()
 	pb.RegisterWeftComputeServer(srv, computesvc.NewServer(pool))
 

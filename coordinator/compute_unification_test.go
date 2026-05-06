@@ -27,6 +27,10 @@ type spyJobCall struct {
 	Limit      int
 }
 
+func (p *spyPool) ExecuteQuery(req *pb.ExecuteQueryRequest) (string, error) {
+	return p.inner.ExecuteQuery(req)
+}
+
 func (p *spyPool) NewJob(stages []string, shardCount int, mergeKey string, limit int) compute.ComputeJob {
 	p.mu.Lock()
 	p.calls = append(p.calls, spyJobCall{
