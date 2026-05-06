@@ -1,10 +1,9 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 import PaymentSetup from './pages/PaymentSetup'
 import Verify from './pages/Verify'
-import Dashboard from './pages/Dashboard'
 import Shell from './pages/Shell'
 import Downloads from './pages/Downloads'
 import Account from './pages/Account'
@@ -26,7 +25,7 @@ export default function App() {
       } />
       <Route path="/verify" element={<Verify />} />
       <Route path="/dashboard" element={
-        <ProtectedRoute><Dashboard /></ProtectedRoute>
+        <ProtectedRoute><Navigate to="/dashboards" replace /></ProtectedRoute>
       } />
       <Route path="/shell" element={
         <ProtectedRoute><Shell /></ProtectedRoute>

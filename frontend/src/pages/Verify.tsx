@@ -39,7 +39,7 @@ export default function Verify() {
           setState('needs-org')
         } else {
           setState('success')
-          setTimeout(() => navigate('/dashboard'), 1200)
+          setTimeout(() => navigate('/dashboards'), 1200)
         }
       })
       .catch(err => {
@@ -60,7 +60,7 @@ export default function Verify() {
         return
       }
       setState('success')
-      setTimeout(() => navigate('/dashboard'), 1200)
+      setTimeout(() => navigate('/dashboards'), 1200)
     } catch (err) {
       setState('error')
       setErrorMsg(err instanceof Error ? err.message : 'Failed to create account.')
@@ -75,7 +75,7 @@ export default function Verify() {
         await loginWithToken(result.token)
       }
       setState('success')
-      setTimeout(() => navigate('/dashboard'), 1200)
+      setTimeout(() => navigate('/dashboards'), 1200)
     } catch (err) {
       setState('error')
       setErrorMsg(err instanceof Error ? err.message : 'Failed to accept invite.')

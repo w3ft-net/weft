@@ -5,7 +5,6 @@ import { getPendingSources, onPendingSourcesChanged } from '../lib/api'
 import './SidebarNav.css'
 
 const NAV_ITEMS = [
-  { to: '/dashboard', label: 'Dashboard', icon: '▦' },
   { to: '/dashboards', label: 'Dashboards', icon: '▤' },
   { to: '/shell', label: 'Shell', icon: '>' },
   { to: '/namespaces', label: 'Namespaces', icon: '◫' },

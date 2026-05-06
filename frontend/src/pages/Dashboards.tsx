@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import SidebarNav from '../components/SidebarNav'
+import { Sparkline, SparkLegend, groupResultsByTag } from '../components/Sparkline'
 import {
   listDashboards, getDashboard,
   type DashboardListItem, type DashboardResponse,
@@ -8,8 +9,11 @@ import {
 } from '../lib/api'
 import './Dashboards.css'
 
+const LAST_DASHBOARD_KEY = 'weft_last_dashboard'
+
 export default function Dashboards() {
   const { name } = useParams<{ name?: string }>()
+  const navigate = useNavigate()
   const [list, setList] = useState<DashboardListItem[] | null>(null)
   const [listError, setListError] = useState<string | null>(null)
 
@@ -19,67 +23,75 @@ export default function Dashboards() {
       .catch(e => setListError(e.message ?? String(e)))
   }, [])
 
+  useEffect(() => {
+    if (name || list === null) return
+    if (list.length === 0) return
+    if (list.length === 1) {
+      navigate(`/dashboards/${encodeURIComponent(list[0].name)}`, { replace: true })
+      return
+    }
+    const last = localStorage.getItem(LAST_DASHBOARD_KEY)
+    const target = (last && list.some(d => d.name === last))
+      ? last
+      : list[0].name
+    navigate(`/dashboards/${encodeURIComponent(target)}`, { replace: true })
+  }, [name, list, navigate])
+
+  useEffect(() => {
+    if (name) {
+      localStorage.setItem(LAST_DASHBOARD_KEY, name)
+    }
+  }, [name])
+
   return (
-    <div className="dashboards-page">
+    <div className="app-layout">
       <SidebarNav />
-      <div className="dashboards-body">
-        <DashboardSidebar list={list} listError={listError} selectedName={name} />
-        <main className="dashboards-main">
+      <main className="app-main">
+        <div className="dashboards-content">
+          {listError && (
+            <div className="dashboards-error" data-testid="dashboards-error">{listError}</div>
+          )}
           {name
-            ? <DashboardView name={name} />
-            : <DashboardEmptyState hasAny={list !== null && list.length > 0} />}
-        </main>
-      </div>
+            ? <DashboardView name={name} list={list} />
+            : list !== null && list.length === 0 && <DashboardEmptyState />}
+        </div>
+      </main>
     </div>
   )
 }
 
-// ── Sidebar of named dashboards ────────────────────────────────────────────
+// ── Switcher dropdown ──────────────────────────────────────────────────────
 
-function DashboardSidebar({
-  list, listError, selectedName,
-}: {
-  list: DashboardListItem[] | null
-  listError: string | null
-  selectedName?: string
+function DashboardSwitcher({ list, currentName }: {
+  list: DashboardListItem[]
+  currentName: string
 }) {
+  const navigate = useNavigate()
+  if (list.length <= 1) return null
   return (
-    <nav className="dashboards-sidebar" data-testid="dashboards-sidebar">
-      <h2 className="dashboards-sidebar-heading">Dashboards</h2>
-      {listError && <p className="dashboards-sidebar-error">{listError}</p>}
-      {list === null && !listError && <p className="dashboards-sidebar-loading">Loading…</p>}
-      {list && list.length === 0 && (
-        <p className="dashboards-sidebar-empty">No dashboards yet.</p>
-      )}
-      {list && list.length > 0 && (
-        <ul className="dashboards-sidebar-list">
-          {list.map(d => (
-            <li key={d.name}>
-              <Link
-                to={`/dashboards/${encodeURIComponent(d.name)}`}
-                className={`dashboards-sidebar-item${d.name === selectedName ? ' dashboards-sidebar-item-active' : ''}`}
-                data-testid={`dashboards-sidebar-link-${d.name}`}
-              >
-                <span className="dashboards-sidebar-name">{d.name}</span>
-                {d.title && d.title !== d.name && (
-                  <span className="dashboards-sidebar-title">{d.title}</span>
-                )}
-                {d.invalid && <span className="dashboards-sidebar-invalid">invalid</span>}
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
-    </nav>
+    <div className="dashboards-switcher">
+      <select
+        className="dashboards-switcher-select"
+        value={currentName}
+        onChange={e => navigate(`/dashboards/${encodeURIComponent(e.target.value)}`, { replace: true })}
+        data-testid="dashboards-switcher-select"
+      >
+        {list.map(d => (
+          <option key={d.name} value={d.name}>
+            {d.title && d.title !== d.name ? `${d.name} — ${d.title}` : d.name}
+          </option>
+        ))}
+      </select>
+    </div>
   )
 }
 
-// ── Empty / index view ─────────────────────────────────────────────────────
+// ── Empty state ────────────────────────────────────────────────────────────
 
-function DashboardEmptyState({ hasAny }: { hasAny: boolean }) {
+function DashboardEmptyState() {
   return (
     <div className="dashboards-empty" data-testid="dashboards-empty-state">
-      <h1>{hasAny ? 'Pick a dashboard' : 'No dashboards yet'}</h1>
+      <h1>No dashboards yet</h1>
       <p>
         Dashboards are YAML files under <code>/etc/dashboards/</code>. Create one
         from the shell:
@@ -87,7 +99,7 @@ function DashboardEmptyState({ hasAny }: { hasAny: boolean }) {
       <pre className="dashboards-empty-snippet">vi /etc/dashboards/prod.yaml</pre>
       <p>
         Each dashboard groups watch-driven tiles into sections. See the{' '}
-        <Link to="/manual" data-testid="dashboards-empty-manual-link">manual</Link>{' '}
+        <Link to="/manual#dashboards" data-testid="dashboards-empty-manual-link">manual</Link>{' '}
         for the YAML grammar and tile recipes.
       </p>
     </div>
@@ -96,7 +108,7 @@ function DashboardEmptyState({ hasAny }: { hasAny: boolean }) {
 
 // ── Detail view ────────────────────────────────────────────────────────────
 
-function DashboardView({ name }: { name: string }) {
+function DashboardView({ name, list }: { name: string; list: DashboardListItem[] | null }) {
   const [data, setData] = useState<DashboardResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -117,16 +129,14 @@ function DashboardView({ name }: { name: string }) {
 
   return (
     <div className="dashboards-view" data-testid={`dashboards-view-${name}`}>
+      {list && <DashboardSwitcher list={list} currentName={name} />}
       {data.spec.title && <h1 className="dashboards-title">{data.spec.title}</h1>}
       {data.spec.sections.map((section, si) => (
-        <section
+        <CollapsibleSection
           key={si}
-          className="dashboards-section"
-          data-testid={`dashboards-section-${si}`}
+          title={section.title}
+          testId={`dashboards-section-${si}`}
         >
-          {section.title && (
-            <h2 className="dashboards-section-title">{section.title}</h2>
-          )}
           <div className="dashboards-grid">
             {section.tiles.map((tile, ti) => (
               <Tile
@@ -136,9 +146,36 @@ function DashboardView({ name }: { name: string }) {
               />
             ))}
           </div>
-        </section>
+        </CollapsibleSection>
       ))}
     </div>
+  )
+}
+
+// ── Collapsible section ───────────────────────────────────────────────────
+
+function CollapsibleSection({ title, testId, children }: {
+  title?: string
+  testId: string
+  children: React.ReactNode
+}) {
+  const [collapsed, setCollapsed] = useState(false)
+  return (
+    <section className="dashboards-section" data-testid={testId}>
+      {title && (
+        <h2
+          className="dashboards-section-title dashboards-section-title-clickable"
+          onClick={() => setCollapsed(c => !c)}
+          data-testid={`section-toggle-${title}`}
+        >
+          <span className="dashboards-section-chevron">
+            {collapsed ? '▸' : '▾'}
+          </span>
+          {title}
+        </h2>
+      )}
+      {!collapsed && children}
+    </section>
   )
 }
 
@@ -160,7 +197,6 @@ function Tile({ tile, payload }: {
         className="dashboards-tile-header"
       >
         <span className="dashboards-tile-watch">{tile.watch}</span>
-        <span className="dashboards-tile-kind">{tile.kind}</span>
       </Link>
       <div className="dashboards-tile-body">
         {payload === null
@@ -239,57 +275,35 @@ function SparklineTile({ tile, payload }: {
   tile: DashboardTile
   payload: DashboardWatchPayload
 }) {
-  const points = useMemo(() => {
-    return payload.results
-      .filter(r => r.Value !== null)
-      .map(r => ({ t: new Date(r.RanAt).getTime(), v: r.Value as number }))
-      .sort((a, b) => a.t - b.t)
-  }, [payload])
+  const series = useMemo(
+    () => groupResultsByTag(payload.results.slice(0, 50)),
+    [payload],
+  )
 
-  if (points.length < 2) {
+  if (series.length === 0 || series.every(s => s.points.length < 2)) {
     return <NoData />
   }
 
-  const w = 200
-  const h = 48
-  const pad = 2
-
-  let tMin = points[0].t, tMax = points[points.length - 1].t
-  let vMin = Infinity, vMax = -Infinity
-  for (const p of points) {
-    if (p.v < vMin) vMin = p.v
-    if (p.v > vMax) vMax = p.v
-  }
-  const tRange = tMax - tMin || 1
-  const vRange = vMax - vMin || 1
-
-  const polyline = points.map(p => {
-    const x = pad + ((p.t - tMin) / tRange) * (w - pad * 2)
-    const y = h - pad - ((p.v - vMin) / vRange) * (h - pad * 2)
-    return `${x},${y}`
-  }).join(' ')
-
-  const last = points[points.length - 1]
-  const lastX = pad + ((last.t - tMin) / tRange) * (w - pad * 2)
-  const lastY = h - pad - ((last.v - vMin) / vRange) * (h - pad * 2)
-
-  const tone = thresholdTone(tile.threshold, last.v)
+  const tagged = series.some(s => s.tag !== '')
+  const latest = !tagged && series.length === 1 ? series[0].latest : null
+  const tone = latest !== null ? thresholdTone(tile.threshold, parseFloat(latest)) : 'normal'
 
   return (
     <div className="dashboards-sparkline-wrap" data-testid={`sparkline-${tile.watch}`}>
-      <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="dashboards-sparkline">
-        <polyline
-          points={polyline}
-          fill="none"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <circle cx={lastX} cy={lastY} r="2.5" />
-      </svg>
-      <div className={`dashboards-sparkline-latest dashboards-tone-${tone}`}>
-        {formatNum(last.v)}
-      </div>
+      <Sparkline
+        series={series}
+        threshold={payload.watch.AlertThreshold}
+        condition={payload.watch.AlertCondition}
+        viewWidth={200}
+        viewHeight={48}
+      />
+      {tagged
+        ? <SparkLegend series={series} />
+        : latest !== null && (
+          <div className={`dashboards-sparkline-latest dashboards-tone-${tone}`}>
+            {latest}
+          </div>
+        )}
     </div>
   )
 }

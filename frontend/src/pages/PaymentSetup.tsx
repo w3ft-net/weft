@@ -127,7 +127,7 @@ export default function PaymentSetup() {
 
         <button
           className="login-back"
-          onClick={() => navigate('/dashboard')}
+          onClick={() => navigate('/dashboards')}
           data-testid="payment-setup-skip-button"
           style={{ background: 'none', border: 'none', cursor: 'pointer', marginTop: 16 }}
         >
