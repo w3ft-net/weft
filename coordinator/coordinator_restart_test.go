@@ -115,6 +115,7 @@ func TestCoordinator_RediscoveryDoesNotLoseData(t *testing.T) {
 	t.Cleanup(func() { s0.Close() })
 
 	coord := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "testcust", "myapp")})
+	coord.Pool = &registryPool{registry: coord.Registry}
 	coord.Registry.Add(&ShardEntry{
 		ID:          "shard-0",
 		Apps:        []string{"myapp"},

@@ -105,14 +105,14 @@ func TestExecute_StagedPipelinePopulatesText(t *testing.T) {
 
 // TestExecute_ShardErrorSurfaces — a shard whose Query fails surfaces
 // its error through the rewriter callback to the result's Stderr.
-// The callback writes `query: <err>` to stderr; runLocal's errBuf
-// captures it; the public ExecuteResult exposes it via Stderr after
-// drain.
-func TestExecute_ShardErrorSurfaces(t *testing.T) {
+// TestExecute_ShardErrorReturnsPartialResults verifies that a shard
+// which produces no rows (simulating a failure) doesn't crash the
+// query — the coordinator returns partial results from the working
+// shard. Per-shard error surfacing in Stderr was removed with
+// shardErrAwareStream in d477ea2; the new compute path logs dial/
+// query failures server-side.
+func TestExecute_ShardErrorReturnsPartialResults(t *testing.T) {
 	c := setupTestCoordinator(t)
-	// Replace shard-1 with one that always errors. The base setup
-	// uses shard-0 (10:00–11:00) and shard-1 (11:00–12:00) — both
-	// match fullRange.
 	c.Registry.Add(&ShardEntry{
 		ID:          "shard-1",
 		Apps:        []string{"vimgym", "callbox"},
@@ -126,9 +126,15 @@ func TestExecute_ShardErrorSurfaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	drained, _ := res.Drain(context.Background())
-	if drained == nil || (drained.Stderr == "" && len(drained.Rows) > 0) {
-		t.Fatal("expected shard error to surface in Stderr")
+	drained, drainErr := res.Drain(context.Background())
+	if drainErr != nil {
+		t.Fatalf("Drain: %v", drainErr)
+	}
+	if drained == nil {
+		t.Fatal("expected partial results from working shard")
+	}
+	if len(drained.Rows) == 0 && drained.Text == "" {
+		t.Fatal("expected rows from shard-0; got empty result")
 	}
 }
 
@@ -141,7 +147,7 @@ type errShard struct {
 
 func (s *errShard) ID() string                                          { return s.id }
 func (s *errShard) Query(string) ([]*pb.ResultRow, error)               { return nil, errSynthetic }
-func (s *errShard) QueryToSink(string, shard.RowSink)                   {}
+func (s *errShard) QueryToSink(_ string, sink shard.RowSink)            { sink.SendSentinel(s.id) }
 func (s *errShard) Ingest([]*pb.LogRow) error                           { return nil }
 func (s *errShard) Archive(_ context.Context, _ string) (string, error) { return "", nil }
 func (s *errShard) Close() error                                        { return nil }

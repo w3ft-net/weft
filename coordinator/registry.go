@@ -447,7 +447,7 @@ func (r *ShardRegistry) MatchingEntries(tr TimeRange, app string, tier store.Tie
 
 	var out []*ShardEntry
 	for _, e := range r.entries {
-		if e.Shard == nil {
+		if e.Addr == "" && e.Shard == nil {
 			continue
 		}
 		if e.State == StateExpiring {

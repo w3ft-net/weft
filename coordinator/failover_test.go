@@ -24,6 +24,7 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 	// Start with zero shards — simulates startup during ASG replacement
 	// when no shard instances are InService yet.
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
+	c.Pool = &registryPool{registry: c.Registry}
 
 	res, err := c.Execute("cat vimgym.log", failoverRange, "kevlar", "")
 	if err != nil {
@@ -76,6 +77,7 @@ func TestFailover_ShardReplacement(t *testing.T) {
 	}
 
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
+	c.Pool = &registryPool{registry: c.Registry}
 	c.Registry.Add(&ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: t0, WindowEnd: t1,
@@ -129,6 +131,7 @@ func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
 
 	apps := []string{"vimgym", "callbox"}
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
+	c.Pool = &registryPool{registry: c.Registry}
 	c.Registry.Add(&ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: t0, WindowEnd: t1,

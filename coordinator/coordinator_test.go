@@ -2,7 +2,9 @@ package coordinator
 
 import (
 	"encoding/json"
+	"log"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +12,41 @@ import (
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
+
+// registryPool is a test-only ComputePool that resolves shards from
+// the coordinator's registry entries instead of dialing gRPC. After
+// d477ea2 the coordinator sends ShardDescriptors to compute, which
+// dials fresh connections — but unit tests use in-memory DuckDB shards
+// that don't listen on any address. This pool bridges the gap: it
+// looks up each descriptor's shard ID in the registry, grabs the
+// entry's Shard pointer, and calls QueryToSink directly.
+type registryPool struct {
+	registry *ShardRegistry
+}
+
+func (p *registryPool) ExecuteQuery(req *pb.ExecuteQueryRequest) (string, error) {
+	job := (&compute.LocalComputePool{}).NewJob(req.Stages, len(req.Shards), req.MergeKey, int(req.Limit))
+	var wg sync.WaitGroup
+	wg.Add(len(req.Shards))
+	for _, d := range req.Shards {
+		go func(d *pb.ShardDescriptor) {
+			defer wg.Done()
+			e := p.registry.Get(d.ShardId)
+			if e == nil || e.Shard == nil {
+				log.Printf("registryPool: shard %s not found or has nil Shard", d.ShardId)
+				job.SendSentinel(d.ShardId)
+				return
+			}
+			e.Shard.QueryToSink(req.Sql, job)
+		}(d)
+	}
+	wg.Wait()
+	return job.Result()
+}
+
+func (p *registryPool) NewJob(stages []string, shardCount int, mergeKey string, limit int) compute.ComputeJob {
+	return (&compute.LocalComputePool{}).NewJob(stages, shardCount, mergeKey, limit)
+}
 
 // Base times for test fixtures. Shard 0 covers 10:00–11:00, shard 1 covers 11:00–12:00.
 var (
@@ -60,6 +97,7 @@ func setupTestCoordinator(t *testing.T) *Coordinator {
 
 	apps := []string{"vimgym", "callbox"}
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox", "warp")})
+	c.Pool = &registryPool{registry: c.Registry}
 	c.Registry.Add(&ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: t0, WindowEnd: t1,
@@ -371,9 +409,7 @@ func TestQuery_MergesAcrossShards(t *testing.T) {
 
 func setupTestCoordinatorWithCompute(t *testing.T) *Coordinator {
 	t.Helper()
-	c := setupTestCoordinator(t)
-	c.Pool = &compute.LocalComputePool{}
-	return c
+	return setupTestCoordinator(t)
 }
 
 func TestCompute_Sort(t *testing.T) {

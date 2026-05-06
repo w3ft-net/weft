@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/compute"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
@@ -60,9 +59,9 @@ func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, 
 	}
 
 	c := NewCoordinator(CoordinatorConfig{
-		Pool:  &compute.LocalComputePool{},
 		Store: db,
 	})
+	c.Pool = &registryPool{registry: c.Registry}
 	c.Registry.Add(&ShardEntry{
 		ID:        s.ID(),
 		Apps:      []string{"api", "web"},

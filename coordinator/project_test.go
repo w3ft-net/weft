@@ -3,17 +3,13 @@ package coordinator
 import (
 	"strings"
 	"testing"
-
-	"github.com/kevlarcon/weft/compute"
 )
 
 // setupProjectCoordinator creates a coordinator with compute pool for
 // projection tests.
 func setupProjectCoordinator(t *testing.T) *Coordinator {
 	t.Helper()
-	c := setupTestCoordinator(t)
-	c.Pool = &compute.LocalComputePool{}
-	return c
+	return setupTestCoordinator(t)
 }
 
 // ---------------------------------------------------------------------------

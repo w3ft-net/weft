@@ -83,6 +83,7 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 	}
 
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "graybeard", "weft", "grantcentral")})
+	c.Pool = &registryPool{registry: c.Registry}
 	c.Registry.Add(&ShardEntry{
 		ID:          "ns-shard-0",
 		Apps:        []string{"weft/coordinator", "weft/shard", "weft/metrics", "grantcentral"},

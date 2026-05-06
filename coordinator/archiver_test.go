@@ -58,6 +58,7 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 
 	// Build coordinator with both shards.
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym")})
+	c.Pool = &registryPool{registry: c.Registry}
 	c.Registry.Add(&ShardEntry{
 		ID: "shard-live", Apps: []string{"vimgym"},
 		WindowStart: t1, WindowEnd: t2, State: StateIngesting, Shard: live,

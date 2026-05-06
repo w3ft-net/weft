@@ -68,12 +68,12 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 	c.Registry.Add(&ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: DevT0, WindowEnd: DevT1,
-		State: StateIngesting, Shard: gs0,
+		State: StateIngesting, Shard: gs0, Addr: shard0Addr,
 	})
 	c.Registry.Add(&ShardEntry{
 		ID: "shard-1", Apps: apps,
 		WindowStart: DevT1, WindowEnd: DevT2,
-		State: StateIngesting, Shard: gs1,
+		State: StateIngesting, Shard: gs1, Addr: shard1Addr,
 	})
 	return c
 }
