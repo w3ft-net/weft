@@ -1,0 +1,98 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-2
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+
+    steps:
+    - name: Checkout weft
+      uses: actions/checkout@v4
+      with:
+        path: weft
+
+    - name: Checkout warp
+      uses: actions/checkout@v4
+      with:
+        repository: graybeardcorp/warp
+        path: warp
+        ssh-key: ${{ secrets.WARP_DEPLOY_KEY }}
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-region: ${{ env.AWS_REGION }}
+        role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE }}
+        role-session-name: weft-deploy
+
+    - name: Install kevcons
+      run: |
+        VERSION=$(aws s3 cp s3://kevlar-releases-289202785125/kevcons/LATEST -)
+        aws s3 cp --no-progress \
+          "s3://kevlar-releases-289202785125/kevcons/${VERSION}/kevcons-linux-amd64" \
+          /tmp/kevcons
+        sudo install -m 0755 /tmp/kevcons /usr/local/bin/kevcons
+        kevcons --version
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: weft/go.mod
+        cache-dependency-path: weft/go.sum
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: npm
+        cache-dependency-path: weft/frontend/package-lock.json
+
+    - name: Build and deploy frontend
+      working-directory: weft
+      run: kevcons ext release-frontend
+
+    - name: Release weftd binaries
+      working-directory: weft
+      run: kevcons ext release weftd
+
+    - name: Deploy cold shard Lambda
+      working-directory: weft
+      run: kevcons ext release-lambda
+
+    - name: Build AMI
+      working-directory: weft
+      run: kevcons build -y
+
+    - name: Deploy to ASG
+      working-directory: weft
+      run: kevcons deploy --yes
+
+    - name: Smoke test
+      run: |
+        sleep 30
+        for i in $(seq 1 12); do
+          if curl -sf https://api.w3ft.net/health > /dev/null; then
+            echo "Health check passed after $((i * 30 + 30))s"
+            exit 0
+          fi
+          sleep 30
+        done
+        echo "Health check failed after 6.5 minutes"
+        exit 1
