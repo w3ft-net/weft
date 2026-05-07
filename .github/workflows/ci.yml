@@ -15,6 +15,9 @@ jobs:
   unit:
     name: Unit tests
     runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
     steps:
       - name: Checkout weft
         uses: actions/checkout@v4
@@ -31,16 +34,28 @@ jobs:
         with:
           go-version-file: weft/go.mod
           cache-dependency-path: weft/go.sum
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
       - name: WASM build check
         working-directory: weft
         run: GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/wasm
       - name: go test ./...
         working-directory: weft
-        run: go test -count=1 -timeout 5m ./...
+        run: gotestsum --junitfile unit-report.xml -- -count=1 -timeout 5m ./...
+      - name: Test report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Unit test results
+          path: weft/unit-report.xml
+          reporter: java-junit
 
   integration:
     name: Integration (generic)
     runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
     steps:
       - name: Checkout weft
         uses: actions/checkout@v4
@@ -57,6 +72,8 @@ jobs:
         with:
           go-version-file: weft/go.mod
           cache-dependency-path: weft/go.sum
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
       - name: Compose up (base)
         working-directory: weft
         run: |
@@ -68,7 +85,14 @@ jobs:
           docker compose up -d
       - name: Run -tags integration
         working-directory: weft
-        run: go test -tags integration -count=1 -timeout 10m -v ./integration/
+        run: gotestsum --junitfile integration-report.xml -- -tags integration -count=1 -timeout 10m -v ./integration/
+      - name: Test report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Integration (generic) results
+          path: weft/integration-report.xml
+          reporter: java-junit
       - name: Dump container logs on failure
         if: failure()
         working-directory: weft
@@ -81,6 +105,9 @@ jobs:
   integration-localstack:
     name: Integration (localstack)
     runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
     steps:
       - name: Checkout weft
         uses: actions/checkout@v4
@@ -97,6 +124,8 @@ jobs:
         with:
           go-version-file: weft/go.mod
           cache-dependency-path: weft/go.sum
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
       - name: Compose up (base + localstack)
         working-directory: weft
         run: |
@@ -105,7 +134,14 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.localstack.yml up -d
       - name: Run -tags integration,localstack
         working-directory: weft
-        run: go test -tags integration,localstack -count=1 -timeout 10m -v ./integration/
+        run: gotestsum --junitfile localstack-report.xml -- -tags integration,localstack -count=1 -timeout 10m -v ./integration/
+      - name: Test report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Integration (localstack) results
+          path: weft/localstack-report.xml
+          reporter: java-junit
       - name: Dump container logs on failure
         if: failure()
         working-directory: weft
@@ -118,6 +154,9 @@ jobs:
   integration-coverage:
     name: Integration (coverage)
     runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
     steps:
       - name: Checkout weft
         uses: actions/checkout@v4
@@ -134,6 +173,8 @@ jobs:
         with:
           go-version-file: weft/go.mod
           cache-dependency-path: weft/go.sum
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
       - name: Prepare per-service coverage dirs
         working-directory: weft
         run: mkdir -p coverage/{coordinator,shard-0,shard-1,compute,api}
@@ -145,10 +186,17 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.localstack.yml -f docker-compose.cover.yml up -d
       - name: Run generic suite under coverage
         working-directory: weft
-        run: go test -tags integration -count=1 -timeout 10m -v ./integration/
+        run: gotestsum --junitfile coverage-generic-report.xml -- -tags integration -count=1 -timeout 10m -v ./integration/
       - name: Run localstack suite under coverage
         working-directory: weft
-        run: go test -tags integration,localstack -count=1 -timeout 10m -v ./integration/
+        run: gotestsum --junitfile coverage-localstack-report.xml -- -tags integration,localstack -count=1 -timeout 10m -v ./integration/
+      - name: Test report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Integration (coverage) results
+          path: weft/coverage-*-report.xml
+          reporter: java-junit
       - name: Stop stack (SIGTERM so Go counters flush)
         if: always()
         working-directory: weft
