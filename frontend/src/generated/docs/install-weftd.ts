@@ -24,6 +24,16 @@ deployment: api               # optional; the fleet/scaling-unit
                               # AWS ASG, etc.) — stamped on every row
 region: us-east-2             # optional override; auto-detected from
                               # cloud metadata at startup if omitted
+services: [api]               # logical services co-located on this
+                              # host; metrics and heartbeat snapshots
+                              # fan out one stream per service —
+                              # /log/&lt;ns&gt;/&lt;service&gt;/{metrics,heartbeats}.log
+dimensions:                   # optional: column values sourced from
+                              # files on disk and watched live via
+                              # fsnotify, so a deploy that touches
+                              # the file flows through to the next
+                              # row without an agent restart
+  node: /etc/weft/identity.json:.shard_id
 
 sources:
   - app: myapp
@@ -45,6 +55,20 @@ sources:
 become first-class query dimensions — see the <strong>Meta-variables</strong>
 section in <strong>Query your logs</strong> for the full list and how they
 appear in awk and jq.</p>
+<h3>File-sourced dimensions</h3>
+<p>Each entry under <code>dimensions:</code> is <code>&lt;column&gt;: &lt;path&gt;</code> or
+<code>&lt;column&gt;: &lt;path&gt;:.&lt;json.path&gt;</code>. The reader stamps the resulting
+value on every row weftd ships from this host. Operator config
+wins over auto-derived sources (e.g. <code>dimensions.region</code> overrides
+the cloud-metadata probe). Allowed columns: <code>deployment</code>,
+<code>version</code>, <code>region</code>, <code>cluster</code>, <code>node</code>. Other columns are
+populated by other mechanisms (token-bound env, schema-extracted
+fields, k8s log-path metadata) and refusing to override them
+keeps those guarantees intact.</p>
+<p>The JSON-path syntax is a minimal subset of jq — bare field
+access (<code>.foo</code>), nested fields (<code>.foo.bar</code>), and array indices
+(<code>.items[0].name</code>). For richer extraction, pre-process the file
+with your own tooling and point weftd at the result.</p>
 <h3>Schema types</h3>
 <ul>
 <li><code>json</code> — pure JSON lines, no prefix</li>
@@ -82,9 +106,11 @@ sources:
         - network
 </code></pre>
 <p>Samples are read from <code>/proc</code> (Linux only) and streamed as JSON log
-rows to an app named <code>&lt;namespace&gt;/metrics</code>. If you set <code>deployment</code>,
-the app becomes <code>&lt;namespace&gt;/&lt;deployment&gt;_metrics</code> so that different
-tiers of hosts land in separate pseudofiles.</p>
+rows. The top-level <code>services:</code> list controls the destination paths:
+each entry produces its own <code>/log/&lt;namespace&gt;/&lt;service&gt;/metrics.log</code>
+stream. Co-located services (e.g., <code>services: [coordinator, api]</code>
+on a host that runs both) get byte-identical rows under each path,
+filterable by the <code>host</code> field when the ASG scales out.</p>
 <p>Each tick emits one row per metric type, with one extra row per
 mount (disk) and per interface (network):</p>
 <p>| <code>type</code> | Fields |
@@ -113,6 +139,91 @@ tail -n 1000 /log/myns/metrics.log \\
 <p>Metrics only run on Linux (the collectors read <code>/proc/stat</code>,
 <code>/proc/meminfo</code>, <code>/proc/mounts</code>, <code>/proc/loadavg</code>, and
 <code>/proc/net/dev</code>). On other kernels the block is ignored.</p>
+<h3>App API: emit events and heartbeats from your services</h3>
+<p>Beyond tailing files, weftd exposes two local endpoints that
+running applications can talk to directly. Both bind to Unix
+sockets by default, so process-local apps can ship to weft without
+a token, network call, or extra dependency. There is a typed Go
+SDK at <a href="https://github.com/w3ft-net/weft-go">https://github.com/w3ft-net/weft-go</a> for callers that
+prefer not to wire up sockets by hand.</p>
+<h4>Records socket</h4>
+<p>Add a <code>socket:</code> line to <code>config.yaml</code> and weftd will accept
+newline-delimited frames in the format <code>&lt;app&gt;:&lt;line&gt;\\n</code>. Each
+line is forwarded to the same ingest path file tailers use,
+stamped with whichever <code>&lt;app&gt;</code> prefix you write before the colon.</p>
+<pre><code># /etc/weftd/config.yaml
+socket: /var/run/weftd.sock
+</code></pre>
+<pre><code># Shell scripts and cron entries — anything that can write to a socket
+echo &quot;billing:user signup id=42&quot; | nc -U /var/run/weftd.sock
+
+# Go services via the SDK
+import &quot;github.com/w3ft-net/weft-go&quot;
+
+c, _ := weft.New()
+defer c.Close()
+c.Send(&quot;billing&quot;, map[string]any{&quot;event&quot;: &quot;signup&quot;, &quot;id&quot;: 42})
+</code></pre>
+<p>The SDK looks for the socket at <code>/var/run/weftd.sock</code> by default;
+override with <code>WEFT_SOCKET</code> or <code>weft.WithSocket(...)</code>.</p>
+<h4>Heartbeat endpoint</h4>
+<p>weftd also runs a tiny heartbeat listener that records &quot;this
+service is alive&quot; pings and emits the table as a periodic
+snapshot to a pseudofile at <code>/log/&lt;namespace&gt;/heartbeats.log</code> —
+absence-of-heartbeat becomes a regular weft query. Anything that
+speaks HTTP can hit it; the SDK wraps the wire shape in one line.</p>
+<pre><code># /etc/weftd/config.yaml
+heartbeat:
+  socket: /var/run/weftd-heartbeat.sock   # default; &quot;&quot; disables
+  port: 14001                              # optional; 0 disables (default)
+  snapshot_interval: 5s                    # default
+  stale_after: 60s                         # drop services silent past this
+</code></pre>
+<p>Every POST to <code>/h/&lt;service&gt;</code> registers a heartbeat for that
+service. Empty body, 204 on success.</p>
+<pre><code># From cron, shell scripts, k8s liveness probes
+curl -X POST --unix-socket /var/run/weftd-heartbeat.sock \\
+  http://localhost/h/my-service
+
+# Or over the optional TCP listener
+curl -X POST http://127.0.0.1:14001/h/my-service
+
+# From Go via the SDK — one line in main()
+go c.HeartbeatLoop(ctx, &quot;my-service&quot;, 30*time.Second)
+</code></pre>
+<p>Service names are restricted to <code>[a-zA-Z0-9._-]</code>, 1–128 chars.</p>
+<p>Each tick of the snapshot ticker (default 5s) emits one row per
+known service to its own <code>/log/&lt;namespace&gt;/&lt;service&gt;/heartbeats.log</code>
+stream — the per-service path makes &quot;is X alive right now?&quot; a
+direct <code>tail</code>, no filtering required:</p>
+<pre><code>{&quot;type&quot;:&quot;heartbeat&quot;,&quot;ts&quot;:&quot;2026-04-29T14:55:36Z&quot;,
+ &quot;service&quot;:&quot;my-service&quot;,&quot;last_seen&quot;:&quot;2026-04-29T14:55:35.4Z&quot;,&quot;age_s&quot;:0.6}
+</code></pre>
+<p>A service silent past <code>stale_after</code> is dropped from subsequent
+snapshots, so the live set is always self-cleaning. The <code>age_s</code>
+field grows from 0 toward <code>stale_after</code> as a service goes quiet —
+catch a stalling service before it disappears with a normal
+alert pipeline:</p>
+<pre><code># Alert when billing hasn't checked in for 30s+
+tail -n 1 /log/myns/billing/heartbeats.log \\
+  | jq 'select(.age_s &gt; 30)' \\
+  | alert above 0 -t 1 --notify=ops
+</code></pre>
+<h4>Go SDK</h4>
+<p><code>github.com/w3ft-net/weft-go</code> is the typed front door for both
+endpoints above plus a runtime-stats collector that periodically
+emits Go heap, GC pause, goroutine, and FD-count telemetry.
+Three-line setup in <code>main()</code>:</p>
+<pre><code>import &quot;github.com/w3ft-net/weft-go&quot;
+
+c, _ := weft.New()
+defer c.Close()
+go c.Heartbeat(ctx, &quot;my-service&quot;, weft.DefaultHeartbeatInterval)
+go c.RuntimeStats(ctx, &quot;my-service&quot;, weft.DefaultRuntimeStatsInterval)
+</code></pre>
+<p>The SDK prefers the local Unix socket and falls back to an HTTP
+endpoint when configured (<code>WEFT_ENDPOINT</code> + <code>WEFT_TOKEN</code>). See
+the repo's README for the full env-var table and option list.</p>
 `,
 } as const;
 

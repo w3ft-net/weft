@@ -1,3 +1,11 @@
+---
+id: manual-metavars
+title: Meta-variables
+web:
+  section: metavars
+  order: 60
+---
+
 # Meta-variables
 
 Meta-variables expose row-level dimensions as fast-path filters in

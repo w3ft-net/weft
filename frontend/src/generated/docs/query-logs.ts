@@ -46,7 +46,8 @@ slower JSON-extract path.</p>
 | <code>$CLUSTER</code> | <code>._cluster</code> | <code>cluster</code> | k8s mode only: cluster name from the DaemonSet config |
 | <code>$K8S_NAMESPACE</code> | <code>._k8s_namespace</code> | <code>k8s_namespace</code> | k8s mode only: pod's k8s namespace |
 | <code>$POD</code> | <code>._pod</code> | <code>pod</code> | k8s mode only: pod name |
-| <code>$CONTAINER</code> | <code>._container</code> | <code>container</code> | k8s mode only: container name |</p>
+| <code>$CONTAINER</code> | <code>._container</code> | <code>container</code> | k8s mode only: container name |
+| <code>$NODE</code> | <code>._node</code> | <code>node</code> | stable workload identity (e.g. shard ID) — file-sourced via the agent's <code>dimensions:</code> config; never auto-derived |</p>
 <p>A few examples:</p>
 <pre><code># Errors in production for one specific deployment
 cat /log/myco/prod/api.log | awk '$LEVEL == &quot;ERROR&quot; &amp;&amp; $DEPLOYMENT == &quot;api-east&quot;'

@@ -18,7 +18,7 @@ Dashboards live as YAML files under `/etc/dashboards/`. Create one from
 the shell:
 
 ```
-vi /etc/dashboards/prod.conf
+vi /etc/dashboards/prod.yaml
 ```
 
 Each customer can have any number of dashboards, distinguished by name.
@@ -143,7 +143,7 @@ selection, and per-tag legend.
 Remove a dashboard from the shell:
 
 ```
-rm /etc/dashboards/old.conf
+rm /etc/dashboards/old.yaml
 ```
 
 ## Validation

@@ -6,9 +6,11 @@ import installWeftd from './install-weftd';
 import connectCloudwatch from './connect-cloudwatch';
 import schemaSetup from './schema-setup';
 import watches from './watches';
+import dashboards from './dashboards';
 import queryLogs from './query-logs';
 import tmp from './tmp';
 import builtins from './builtins';
+import metavars from './metavars';
 import scripts from './scripts';
 import wit from './wit';
 import alerting from './alerting';
@@ -28,9 +30,11 @@ export const manualSections: readonly ManualSection[] = [
   connectCloudwatch,
   schemaSetup,
   watches,
+  dashboards,
   queryLogs,
   tmp,
   builtins,
+  metavars,
   scripts,
   wit,
   alerting,

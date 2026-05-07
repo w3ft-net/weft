@@ -22,11 +22,15 @@ secretly write rows tagged as staging.</p>
 <p>The token-create form has an Env field; from the CLI:</p>
 <pre><code>weft token create --namespace myco --label api-prod --env prod
 </code></pre>
-<p>Tokens with env produce three-level pseudofile paths
-(<code>/log/myco/prod/api.log</code>); tokens without env produce the original
-two-level layout (<code>/log/myco/api.log</code>). A namespace can hold a mix
-during a migration. See <strong>Query your logs</strong> for how <code>$ENV</code> surfaces
-in awk and jq.</p>
+<p>Every row picks up the bound env at ingest time, so any query the
+token authenticates implicitly filters to that env — no path
+contortions required. Plain apps stay at the two-level layout
+(<code>/log/myco/api.log</code>); telemetry streams (metrics, heartbeats,
+runtime) land under their service's directory
+(<code>/log/myco/&lt;service&gt;/&lt;kind&gt;.log</code>); a token spanning multiple envs
+can disambiguate explicitly with the four-level form
+(<code>/log/myco/&lt;env&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>). See <strong>Query your logs</strong>
+for how <code>$ENV</code> surfaces in awk and jq.</p>
 `,
 } as const;
 
