@@ -4,13 +4,23 @@ package integration
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	_ "github.com/duckdb/duckdb-go/v2"
+	"google.golang.org/grpc"
 
 	"github.com/kevlarcon/weft/coordinator"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
+	shardservice "github.com/kevlarcon/weft/shard/service"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -73,40 +83,37 @@ func TestColdShardQueryRouting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	apps := []string{"vimgym"}
-	c := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Store: tx})
-	c.Registry.Add(&coordinator.ShardEntry{
-		ID: "cold-route-0", Apps: apps,
-		WindowStart: t0, WindowEnd: t1,
-		State: coordinator.StateIngesting, Shard: s0,
-		CreatedAt: time.Now(),
-	})
-	c.Registry.Add(&coordinator.ShardEntry{
-		ID: "cold-route-1", Apps: apps,
-		WindowStart: t1, WindowEnd: t2,
-		State: coordinator.StateIngesting, Shard: s1,
-		CreatedAt: time.Now(),
-	})
+	// Start shard-0 as a gRPC server so the compute pool can dial it.
+	s0Addr := startShardGRPC(t, s0)
 
-	// --- Archive shard-1 to MinIO, swap in ColdShard ---
-
+	// Export shard-1 to MinIO, then serve a test Lambda handler so the
+	// compute pool can query archived data via HTTP (same path as the
+	// real Lambda cold-shard function).
 	s3Path := fmt.Sprintf("s3://%s/test/cold-route-1.parquet", ColdBucket)
 	if err := s1.ExportToS3Parquet(s3Path, s3cfg); err != nil {
 		t.Fatalf("export to MinIO: %v", err)
 	}
 	s1.Close()
 
-	cold, err := shard.NewColdShard("cold-route-1", apps, s3Path, "", s3cfg)
-	if err != nil {
-		t.Fatalf("create cold shard: %v", err)
-	}
-	t.Cleanup(func() { cold.Close() })
+	lambdaSrv := startColdShardHTTP(t, s3cfg)
 
-	entry1 := c.Registry.Get("cold-route-1")
-	entry1.Shard = cold
-	entry1.State = coordinator.StateArchived
-	entry1.ParquetPath = s3Path
-	entry1.LastHeartbeatAt = time.Time{}
+	apps := []string{"vimgym"}
+	c := coordinator.NewCoordinator(coordinator.CoordinatorConfig{
+		Store:             tx,
+		LambdaFunctionURL: lambdaSrv.URL,
+	})
+	c.Registry.Add(&coordinator.ShardEntry{
+		ID: "cold-route-0", Apps: apps,
+		WindowStart: t0, WindowEnd: t1,
+		State: coordinator.StateIngesting, Addr: s0Addr,
+		CreatedAt: time.Now(),
+	})
+	c.Registry.Add(&coordinator.ShardEntry{
+		ID: "cold-route-1", Apps: apps,
+		WindowStart: t1, WindowEnd: t2,
+		State: coordinator.StateArchived, ParquetPath: s3Path,
+		CreatedAt: time.Now(),
+	})
 
 	// --- Query each window independently, then combined ---
 
@@ -135,6 +142,7 @@ func TestColdShardQueryRouting(t *testing.T) {
 	// Regression: a stale LastHeartbeatAt must not hide an archived shard.
 	// Before the fix, archive() didn't zero LastHeartbeatAt, so after 2min
 	// the cold shard became invisible to MatchingShards.
+	entry1 := c.Registry.Get("cold-route-1")
 	entry1.LastHeartbeatAt = time.Now().Add(-5 * time.Minute)
 	staleRows := drainQuery(t, c, `cat vimgym.log`, coldWindow)
 	if len(staleRows) != 0 {
@@ -147,6 +155,70 @@ func TestColdShardQueryRouting(t *testing.T) {
 	if len(restoredRows) == 0 {
 		t.Fatal("archived shard invisible after zeroing LastHeartbeatAt — isStale check broken")
 	}
+}
+
+// startShardGRPC wraps a DuckDBShard in a gRPC server and returns the
+// listener address. The server is stopped when the test ends.
+func startShardGRPC(t *testing.T, ds *shard.DuckDBShard) string {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	gs := grpc.NewServer()
+	pb.RegisterShardQueryServer(gs, shardservice.NewServer(ds))
+	go gs.Serve(lis)
+	t.Cleanup(func() { gs.GracefulStop() })
+	return lis.Addr().String()
+}
+
+// startColdShardHTTP starts an httptest server that mimics the Lambda
+// cold-shard query handler: accepts {sql, parquet_path}, runs the query
+// against the Parquet file via DuckDB+S3, and returns protobuf-streamed
+// rows. Stopped when the test ends.
+func startColdShardHTTP(t *testing.T, s3cfg *shard.S3Config) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			SQL         string `json:"sql"`
+			ParquetPath string `json:"parquet_path"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		db, err := sql.Open("duckdb", "")
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		defer db.Close()
+		if s3cfg != nil {
+			if err := s3cfg.ConfigureDuckDB(db); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+		}
+		query := strings.Replace(req.SQL, "FROM logs", fmt.Sprintf("FROM read_parquet('%s')", req.ParquetPath), 1)
+		rows, err := db.Query(query)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		defer rows.Close()
+		results, err := shard.ScanResultRows(rows)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-protobuf-stream")
+		for _, row := range results {
+			shard.WriteResultRow(w, row)
+		}
+		shard.WriteStreamEnd(w)
+	}))
+	t.Cleanup(func() { srv.Close() })
+	return srv
 }
 
 func drainQuery(t *testing.T, c *coordinator.Coordinator, pipeline string, tr coordinator.TimeRange) []*pb.ResultRow {

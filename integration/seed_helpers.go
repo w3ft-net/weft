@@ -32,11 +32,11 @@ func devJWTSecret() string {
 }
 
 // customerJWT signs a JWT for the named customer. The auth interceptor
-// validates signature only — it doesn't look up the user — so this is
-// sufficient to drive RPCs as a chosen tenant. Used by tests that need
-// per-tenant identity (cross-tenant isolation, multi-customer flows)
-// where the global integrationJWT (always "kevlar") collapses every
-// caller to one tenant.
+// validates the signature and resolves the user via BuildSession, so
+// the user row must exist (see seedCustomerWithNamespace). Used by tests
+// that need per-tenant identity (cross-tenant isolation, multi-customer
+// flows) where the global integrationJWT (always "kevlar") collapses
+// every caller to one tenant.
 func customerJWT(t *testing.T, customer string) string {
 	t.Helper()
 	now := time.Now()
@@ -69,11 +69,11 @@ func grpcClientAs(t *testing.T, customer string) (*grpc.ClientConn, pb.WeftCoord
 	return conn, pb.NewWeftCoordinatorClient(conn)
 }
 
-// seedCustomerWithNamespace upserts a customer row and a namespace under
-// it directly via postgres. Returns (customerID, namespaceID). Used by
-// tests that need a tenant which the coordinator's auto-seed wouldn't
-// produce (e.g. the multi-JWT customer-isolation harness, where alpha
-// and beta have to exist alongside the standard kevlar fixture).
+// seedCustomerWithNamespace upserts a customer row, a namespace, a user,
+// and a team_members row directly via postgres. Returns (customerID,
+// namespaceID). The user ID matches what customerJWT embeds
+// ("test-user-<customer>") so BuildSession can resolve the JWT into a
+// session with the correct customer.
 func seedCustomerWithNamespace(t *testing.T, customer, namespace string) (int64, int64) {
 	t.Helper()
 	conn, err := sql.Open("pgx", postgresURL)
@@ -101,6 +101,24 @@ func seedCustomerWithNamespace(t *testing.T, customer, namespace string) (int64,
 	`, custID, namespace).Scan(&nsID); err != nil {
 		t.Fatalf("seed namespace %s/%s: %v", customer, namespace, err)
 	}
+
+	userID := fmt.Sprintf("test-user-%s", customer)
+	email := fmt.Sprintf("%s@test.local", customer)
+	if _, err := conn.Exec(`
+		INSERT INTO users (id, email, email_verified_at, created_at, updated_at)
+		VALUES ($1, $2, now(), now(), now())
+		ON CONFLICT (id) DO NOTHING
+	`, userID, email); err != nil {
+		t.Fatalf("seed user for %s: %v", customer, err)
+	}
+	if _, err := conn.Exec(`
+		INSERT INTO team_members (id, customer_id, email, user_id, role, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'owner', 'active', now(), now())
+		ON CONFLICT DO NOTHING
+	`, fmt.Sprintf("tm-%s", customer), custID, email, userID); err != nil {
+		t.Fatalf("seed team_member for %s: %v", customer, err)
+	}
+
 	return custID, nsID
 }
 
