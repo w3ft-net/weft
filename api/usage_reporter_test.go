@@ -46,11 +46,22 @@ func derefStr(p *string) string {
 func seedReporterFixtures(t *testing.T, srv *Server, s *store.Store, customerName string, bytes int64, yesterday time.Time) {
 	t.Helper()
 
-	if _, err := s.FindOrCreateCustomer(customerName); err != nil {
+	cust, err := s.FindOrCreateCustomer(customerName)
+	if err != nil {
 		t.Fatal(err)
 	}
 	user, err := s.CreateUser(customerName+"@example.test")
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateTeamMember(&store.TeamMember{
+		ID:         "tm-" + customerName,
+		CustomerID: cust.ID,
+		Email:      user.Email,
+		UserID:     &user.ID,
+		Role:       "owner",
+		Status:     "active",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.UpdateUserStripeCustomer(user.ID, "cus_"+customerName); err != nil {

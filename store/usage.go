@@ -87,7 +87,8 @@ func (s *Store) StripeCustomerIDForCustomerName(customerName string) (string, er
 	err := s.db.Raw(`
 		SELECT u.stripe_customer_id
 		FROM users u
-		JOIN customers c ON u.customer_id = c.id
+		JOIN team_members tm ON tm.user_id = u.id
+		JOIN customers c ON tm.customer_id = c.id
 		WHERE c.name = ? AND u.stripe_customer_id <> ''
 		ORDER BY u.created_at ASC
 		LIMIT 1`, customerName,

@@ -57,7 +57,7 @@ func AuthMiddleware(st *store.Store, secret string, next http.Handler) http.Hand
 			}
 			return
 		}
-		go persistLastActive(st, session)
+		persistLastActive(st, session)
 		ctx := auth.WithClaims(r.Context(), claims)
 		ctx = auth.WithSession(ctx, session)
 		next.ServeHTTP(w, r.WithContext(ctx))
