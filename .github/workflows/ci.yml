@@ -47,8 +47,9 @@ jobs:
         if: always()
         with:
           name: Unit test results
-          path: weft/unit-report.xml
+          path: unit-report.xml
           reporter: java-junit
+          working-directory: weft
 
   integration:
     name: Integration (generic)
@@ -91,8 +92,9 @@ jobs:
         if: always()
         with:
           name: Integration (generic) results
-          path: weft/integration-report.xml
+          path: integration-report.xml
           reporter: java-junit
+          working-directory: weft
       - name: Dump container logs on failure
         if: failure()
         working-directory: weft
@@ -140,8 +142,9 @@ jobs:
         if: always()
         with:
           name: Integration (localstack) results
-          path: weft/localstack-report.xml
+          path: localstack-report.xml
           reporter: java-junit
+          working-directory: weft
       - name: Dump container logs on failure
         if: failure()
         working-directory: weft
@@ -195,8 +198,9 @@ jobs:
         if: always()
         with:
           name: Integration (coverage) results
-          path: weft/coverage-*-report.xml
+          path: coverage-*-report.xml
           reporter: java-junit
+          working-directory: weft
       - name: Stop stack (SIGTERM so Go counters flush)
         if: always()
         working-directory: weft
