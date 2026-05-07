@@ -97,6 +97,17 @@ func TestColdShardQueryRouting(t *testing.T) {
 
 	lambdaSrv := startColdShardHTTP(t, s3cfg)
 
+	// The registry filter requires Shard != nil for entries without an
+	// Addr (line 450 of registry.go). In production the provisioner sets
+	// entry.Shard to a ColdShard; replicate that here. The compute pool
+	// dials its own shard via DialShard, so this ColdShard is only used
+	// to pass the filter.
+	cold, err := shard.NewColdShard("cold-route-1", []string{"vimgym"}, s3Path, lambdaSrv.URL, nil)
+	if err != nil {
+		t.Fatalf("create cold shard: %v", err)
+	}
+	t.Cleanup(func() { cold.Close() })
+
 	apps := []string{"vimgym"}
 	c := coordinator.NewCoordinator(coordinator.CoordinatorConfig{
 		Store:             tx,
@@ -112,6 +123,7 @@ func TestColdShardQueryRouting(t *testing.T) {
 		ID: "cold-route-1", Apps: apps,
 		WindowStart: t1, WindowEnd: t2,
 		State: coordinator.StateArchived, ParquetPath: s3Path,
+		Shard: cold,
 		CreatedAt: time.Now(),
 	})
 
