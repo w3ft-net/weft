@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useSearchParams, Link } from 'react-router-dom'
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  ReferenceLine, ReferenceArea, ResponsiveContainer,
+} from 'recharts'
 import SidebarNav from '../components/SidebarNav'
+import { colorForTag, niceTimeTicks, formatTimeTick } from '../components/Sparkline'
 import { useAuth } from '../lib/AuthContext'
 import {
   getWatch, getWatchChart,
@@ -9,26 +14,7 @@ import {
 } from '../lib/api'
 import './Watch.css'
 
-// ── Tag colors ─────────────────────────────────────────────────────────────
-// Palette parallels Dashboard.tsx's sparklines so users see the same color
-// for the same tag on both views.
-const TAG_PALETTE = [
-  'var(--accent)', '#7ec8ff', '#a29bfe', '#ffb36b',
-  '#6de3a0', '#ff7aa8', '#ffd36b', '#9ef0d8',
-]
-function colorForTag(tag: string): string {
-  if (tag === '') return 'var(--accent)'
-  let h = 0
-  for (let i = 0; i < tag.length; i++) {
-    h = (h * 31 + tag.charCodeAt(i)) & 0xffff
-  }
-  return TAG_PALETTE[h % TAG_PALETTE.length]
-}
-
 // ── Plan retention → which ranges are disabled ─────────────────────────────
-// Map the user's tier to its retention cap (in ms) so ranges that would
-// exceed the cap can be greyed out. Server is still authoritative; this
-// is UX-only.
 function retentionMsForTier(tier: string): number {
   switch (tier) {
     case 'swatch': return 30 * 24 * 60 * 60 * 1000
@@ -44,7 +30,6 @@ interface Series {
   tag: string
   color: string
   points: ChartPoint[]
-  // Window stats for the legend. avg is sample-weighted across buckets.
   count: number
   avg: number
   min: number
@@ -81,8 +66,6 @@ function buildSeries(points: ChartPoint[]): Series[] {
       latest: pts[pts.length - 1].value,
     })
   }
-  // Empty tag first so a single-row watch's unnamed series is always
-  // the anchor color.
   series.sort((a, b) => {
     if (a.tag === '') return -1
     if (b.tag === '') return 1
@@ -98,7 +81,16 @@ function fmtNum(v: number): string {
   return v.toFixed(2).replace(/\.?0+$/, '')
 }
 
+function seriesKey(tag: string): string {
+  return tag || '_default'
+}
+
 // ── Chart ──────────────────────────────────────────────────────────────────
+
+const TICK_STYLE = { fontSize: 11, fill: '#484f58', fontFamily: "'JetBrains Mono', monospace" }
+const GRID_STROKE = '#21262d'
+const SAFE_FILL = 'rgba(109, 227, 160, 0.10)'
+const THRESH_STROKE = 'rgba(239, 85, 85, 0.65)'
 
 interface ChartProps {
   series: Series[]
@@ -110,18 +102,25 @@ interface ChartProps {
   rangeEndMs: number
 }
 
-function WatchChart({ series, hidden, threshold, condition, granularity, rangeStartMs, rangeEndMs }: ChartProps) {
+function WatchChart({ series, hidden, threshold, condition, rangeStartMs, rangeEndMs }: ChartProps) {
   const visible = series.filter(s => !hidden.has(s.tag))
-  const w = 640
-  const h = 240
-  const padL = 40 // room for y-tick labels
-  const padR = 8
-  const padT = 8
-  const padB = 22 // room for x-tick labels
 
-  // y-scale rescales to visible tags — the whole point of toggling is
-  // to focus. Threshold (if set) extends the range so the line stays
-  // in-frame even when no point has crossed it.
+  const data = useMemo(() => {
+    const byTs = new Map<number, Record<string, number>>()
+    for (const s of visible) {
+      const key = seriesKey(s.tag)
+      for (const p of s.points) {
+        let row = byTs.get(p.ts)
+        if (!row) {
+          row = { ts: p.ts }
+          byTs.set(p.ts, row)
+        }
+        row[key] = p.value
+      }
+    }
+    return [...byTs.values()].sort((a, b) => a.ts - b.ts)
+  }, [visible])
+
   let vMin = Infinity, vMax = -Infinity
   for (const s of visible) {
     for (const p of s.points) {
@@ -134,114 +133,82 @@ function WatchChart({ series, hidden, threshold, condition, granularity, rangeSt
     if ((threshold as number) < vMin) vMin = threshold as number
     if ((threshold as number) > vMax) vMax = threshold as number
   }
-  if (!isFinite(vMin) || !isFinite(vMax)) {
-    // No visible data — keep the frame usable.
-    vMin = 0
-    vMax = 1
-  }
-  if (vMin === vMax) {
-    vMin -= 0.5
-    vMax += 0.5
-  }
+  if (!isFinite(vMin) || !isFinite(vMax)) { vMin = 0; vMax = 1 }
+  if (vMin === vMax) { vMin -= 0.5; vMax += 0.5 }
 
-  const tMin = rangeStartMs
-  const tMax = rangeEndMs
-  const tRange = tMax - tMin || 1
-  const vRange = vMax - vMin || 1
-
-  const plotW = w - padL - padR
-  const plotH = h - padT - padB
-  const xFor = (t: number) => padL + ((t - tMin) / tRange) * plotW
-  const yFor = (v: number) => padT + plotH - ((v - vMin) / vRange) * plotH
-
-  const thresholdY = hasThresh ? yFor(threshold as number) : null
-
-  const mid = (vMin + vMax) / 2
-  const yTicks = [vMin, mid, vMax]
-
-  const startLabel = new Date(tMin).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-  const endLabel = 'now'
+  const spanMs = rangeEndMs - rangeStartMs
+  const xTicks = niceTimeTicks(rangeStartMs, rangeEndMs, 8)
 
   return (
-    <div className="watch-chart-wrap">
-      <svg
-        width="100%"
-        viewBox={`0 0 ${w} ${h}`}
-        className="watch-chart"
-        data-testid="watch-chart-svg"
-      >
-        {/* Safe-side green tint. Same logic as the dashboard sparkline. */}
-        {hasThresh && (condition === 'above' || condition === 'below') && thresholdY !== null && (
-          <rect
-            x={padL}
-            y={condition === 'above' ? thresholdY : padT}
-            width={plotW}
-            height={condition === 'above' ? (padT + plotH) - thresholdY : thresholdY - padT}
-            className="watch-chart-safe"
+    <div className="watch-chart-wrap" data-testid="watch-chart-svg">
+      <ResponsiveContainer width="100%" height={240}>
+        <LineChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
+          <CartesianGrid strokeDasharray="2 3" stroke={GRID_STROKE} vertical={false} />
+          <XAxis
+            dataKey="ts"
+            type="number"
+            domain={[rangeStartMs, rangeEndMs]}
+            ticks={xTicks}
+            tickFormatter={(v: number) => formatTimeTick(v, spanMs)}
+            tick={TICK_STYLE}
+            axisLine={false}
+            tickLine={false}
           />
-        )}
+          <YAxis
+            domain={[vMin, vMax]}
+            tickFormatter={fmtNum}
+            tick={TICK_STYLE}
+            axisLine={false}
+            tickLine={false}
+            width={48}
+          />
 
-        {/* y-axis tick lines + labels */}
-        {yTicks.map((v, i) => {
-          const y = yFor(v)
-          return (
-            <g key={i} className="watch-chart-ytick">
-              <line x1={padL} x2={w - padR} y1={y} y2={y} />
-              <text x={padL - 6} y={y + 3} textAnchor="end">{fmtNum(v)}</text>
-            </g>
-          )
-        })}
-
-        {/* x-axis endpoints */}
-        <text x={padL} y={h - 6} className="watch-chart-xtick" textAnchor="start">{startLabel}</text>
-        <text x={w - padR} y={h - 6} className="watch-chart-xtick" textAnchor="end">{endLabel}</text>
-
-        {/* Min/max band for rollup tiers. Raw data is a single point
-            per row so the band collapses to the line; skip the fill
-            to avoid muddying. */}
-        {granularity !== 'raw' && visible.map(s => {
-          if (s.points.length < 2) return null
-          const upper = s.points.map(p => `${xFor(p.ts)},${yFor(p.max)}`).join(' ')
-          const lower = [...s.points].reverse().map(p => `${xFor(p.ts)},${yFor(p.min)}`).join(' ')
-          return (
-            <polygon
-              key={`band-${s.tag || '_'}`}
-              points={`${upper} ${lower}`}
-              fill={s.color}
-              className="watch-chart-band"
+          {hasThresh && (condition === 'above' || condition === 'below') && (
+            <ReferenceArea
+              y1={condition === 'above' ? vMin : (threshold as number)}
+              y2={condition === 'above' ? (threshold as number) : vMax}
+              fill={SAFE_FILL}
+              ifOverflow="hidden"
             />
-          )
-        })}
+          )}
 
-        {/* Per-tag polyline of avg values */}
-        {visible.map(s => {
-          if (s.points.length === 0) return null
-          const pts = s.points.map(p => `${xFor(p.ts)},${yFor(p.value)}`).join(' ')
-          return (
-            <polyline
+          {visible.map(s => (
+            <Line
               key={s.tag || '_'}
-              points={pts}
-              fill="none"
+              dataKey={seriesKey(s.tag)}
               stroke={s.color}
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+              strokeWidth={1.6}
+              dot={false}
+              isAnimationActive={false}
+              connectNulls={false}
             />
-          )
-        })}
+          ))}
 
-        {/* Threshold line on top */}
-        {thresholdY !== null && (
-          <line
-            x1={padL}
-            x2={w - padR}
-            y1={thresholdY}
-            y2={thresholdY}
-            className="watch-chart-threshold"
-            data-testid="watch-chart-threshold"
+          {hasThresh && (
+            <ReferenceLine
+              y={threshold as number}
+              stroke={THRESH_STROKE}
+              strokeDasharray="4 3"
+              label={false}
+            />
+          )}
+
+          <Tooltip
+            contentStyle={{
+              background: '#161b22',
+              border: '1px solid #21262d',
+              borderRadius: 6,
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 12,
+            }}
+            labelFormatter={(v) => {
+              const d = new Date(Number(v))
+              return d.toUTCString().replace(' GMT', ' UTC')
+            }}
+            formatter={(v) => [fmtNum(Number(v)), '']}
           />
-        )}
-      </svg>
+        </LineChart>
+      </ResponsiveContainer>
     </div>
   )
 }
@@ -265,8 +232,6 @@ export default function Watch() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Watch metadata (name, schedule, pipeline, alert projection). Only
-  // reloads when the name param changes.
   useEffect(() => {
     if (!name) return
     getWatch(name)
@@ -274,7 +239,6 @@ export default function Watch() {
       .catch(e => setError(String(e)))
   }, [name])
 
-  // Chart data. Refetches whenever the range qs changes.
   useEffect(() => {
     if (!name) return
     setLoading(true)
@@ -312,8 +276,8 @@ export default function Watch() {
       <main className="app-main">
         <div className="watch-detail" data-testid="watch-detail-main">
           <div className="watch-detail-header">
-            <Link to="/dashboard" className="watch-detail-back" data-testid="watch-detail-back-link">
-              ← Dashboard
+            <Link to="/dashboards" className="watch-detail-back" data-testid="watch-detail-back-link">
+              ← Dashboards
             </Link>
             <h1 className="watch-detail-name" data-testid="watch-detail-name">
               {name}

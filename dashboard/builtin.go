@@ -95,10 +95,8 @@ func toWatchSeries(results []chart.WatchResultValue) WatchSeries {
 	}
 	ws.LatestText = strings.TrimSpace(results[0].Value)
 	for _, r := range results {
-		// Skip rows that don't parse as RFC3339; otherwise they'd show
-		// up as the literal text. Parsing is cheap and gates the
-		// numeric extraction.
-		if _, err := time.Parse(time.RFC3339, r.RanAt); err != nil {
+		t, err := time.Parse(time.RFC3339, r.RanAt)
+		if err != nil {
 			continue
 		}
 		val := strings.TrimSpace(r.Value)
@@ -114,6 +112,7 @@ func toWatchSeries(results []chart.WatchResultValue) WatchSeries {
 			continue
 		}
 		ws.Values = append(ws.Values, f)
+		ws.Times = append(ws.Times, float64(t.Unix()))
 	}
 	return ws
 }

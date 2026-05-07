@@ -35,11 +35,11 @@ func TestDashboards_WriteReadStat(t *testing.T) {
 
 	seedDashboardWatch(t, sfs, "error-rate-hourly")
 
-	if err := sfs.WriteFile("/etc/dashboards/prod.conf", []byte(sampleDashboardYAML)); err != nil {
+	if err := sfs.WriteFile("/etc/dashboards/prod.yaml", []byte(sampleDashboardYAML)); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
-	got, err := sfs.ReadFile("/etc/dashboards/prod.conf")
+	got, err := sfs.ReadFile("/etc/dashboards/prod.yaml")
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -47,11 +47,11 @@ func TestDashboards_WriteReadStat(t *testing.T) {
 		t.Errorf("read body mismatch:\n got: %q\nwant: %q", got, sampleDashboardYAML)
 	}
 
-	info, err := sfs.Stat("/etc/dashboards/prod.conf")
+	info, err := sfs.Stat("/etc/dashboards/prod.yaml")
 	if err != nil {
 		t.Fatalf("stat file: %v", err)
 	}
-	if info.Name() != "prod.conf" || info.IsDir() {
+	if info.Name() != "prod.yaml" || info.IsDir() {
 		t.Errorf("stat got name=%q dir=%v", info.Name(), info.IsDir())
 	}
 
@@ -75,10 +75,10 @@ func TestDashboards_ReadDir(t *testing.T) {
 	seedDashboardWatch(t, sfs, "watch-a")
 	seedDashboardWatch(t, sfs, "watch-b")
 
-	if err := sfs.WriteFile("/etc/dashboards/alpha.conf", []byte("tiles:\n  - {kind: counter, watch: watch-a}\n")); err != nil {
+	if err := sfs.WriteFile("/etc/dashboards/alpha.yaml", []byte("tiles:\n  - {kind: counter, watch: watch-a}\n")); err != nil {
 		t.Fatalf("write alpha: %v", err)
 	}
-	if err := sfs.WriteFile("/etc/dashboards/beta.conf", []byte("tiles:\n  - {kind: counter, watch: watch-b}\n")); err != nil {
+	if err := sfs.WriteFile("/etc/dashboards/beta.yaml", []byte("tiles:\n  - {kind: counter, watch: watch-b}\n")); err != nil {
 		t.Fatalf("write beta: %v", err)
 	}
 
@@ -87,7 +87,7 @@ func TestDashboards_ReadDir(t *testing.T) {
 		t.Fatalf("readdir: %v", err)
 	}
 	got := names(entries)
-	want := []string{"alpha.conf", "beta.conf"}
+	want := []string{"alpha.yaml", "beta.yaml"}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Errorf("listing got %v, want %v", got, want)
 	}
@@ -109,7 +109,7 @@ func TestDashboards_WriteRejectsBadYAML(t *testing.T) {
 	}
 	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"))
 
-	err = sfs.WriteFile("/etc/dashboards/broken.conf", []byte("tiles:\n  - kind: pizza\n    watch: nope\n"))
+	err = sfs.WriteFile("/etc/dashboards/broken.yaml", []byte("tiles:\n  - kind: pizza\n    watch: nope\n"))
 	if err == nil {
 		t.Fatal("expected error for unknown kind")
 	}
@@ -126,7 +126,7 @@ func TestDashboards_WriteRejectsMissingWatch(t *testing.T) {
 	}
 	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"))
 
-	err = sfs.WriteFile("/etc/dashboards/orphan.conf", []byte("tiles:\n  - kind: counter\n    watch: does-not-exist\n"))
+	err = sfs.WriteFile("/etc/dashboards/orphan.yaml", []byte("tiles:\n  - kind: counter\n    watch: does-not-exist\n"))
 	if err == nil {
 		t.Fatal("expected error for missing watch")
 	}
@@ -144,13 +144,13 @@ func TestDashboards_Remove(t *testing.T) {
 	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"))
 	seedDashboardWatch(t, sfs, "w")
 
-	if err := sfs.WriteFile("/etc/dashboards/x.conf", []byte("tiles:\n  - {kind: counter, watch: w}\n")); err != nil {
+	if err := sfs.WriteFile("/etc/dashboards/x.yaml", []byte("tiles:\n  - {kind: counter, watch: w}\n")); err != nil {
 		t.Fatal(err)
 	}
-	if err := sfs.Remove("/etc/dashboards/x.conf"); err != nil {
+	if err := sfs.Remove("/etc/dashboards/x.yaml"); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	if _, err := sfs.ReadFile("/etc/dashboards/x.conf"); err == nil {
+	if _, err := sfs.ReadFile("/etc/dashboards/x.yaml"); err == nil {
 		t.Error("expected file gone after remove")
 	}
 }

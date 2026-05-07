@@ -83,9 +83,9 @@ func TestParseDashboardYAML_Errors(t *testing.T) {
 		{"table no columns", "tiles:\n  - kind: table\n    watch: foo\n", "table tile requires `columns:`"},
 		{"sections + flat tiles", "tiles:\n  - kind: counter\n    watch: foo\nsections:\n  - tiles:\n      - kind: counter\n        watch: bar\n", "cannot mix"},
 		{"empty section", "sections:\n  - title: foo\n    tiles: []\n", "no tiles"},
-		{"unknown field at top", "title: x\nfoo: bar\ntiles:\n  - kind: counter\n    watch: a\n", "not found"},
-		{"unknown field in section", "sections:\n  - heading: Ops\n    tiles:\n      - kind: counter\n        watch: a\n", "not found"},
-		{"unknown field in tile", "tiles:\n  - kind: counter\n    watch: a\n    color: red\n", "not found"},
+		{"unknown field at top", "title: x\nfoo: bar\ntiles:\n  - kind: counter\n    watch: a\n", "not a valid key"},
+		{"unknown field in section", "sections:\n  - heading: Ops\n    tiles:\n      - kind: counter\n        watch: a\n", "'heading' is not a valid key"},
+		{"unknown field in tile", "tiles:\n  - kind: counter\n    watch: a\n    color: red\n", "'color' is not a valid key"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

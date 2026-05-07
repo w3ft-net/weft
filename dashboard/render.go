@@ -19,6 +19,7 @@ import (
 // renderer reverses for left-to-right time when needed.
 type WatchSeries struct {
 	Values     []float64 // numeric values, newest-first
+	Times      []float64 // epoch seconds, parallel to Values, newest-first
 	LatestText string    // raw stdout of the most recent run (for table)
 }
 
@@ -59,12 +60,12 @@ const (
 	singleColumnThreshold = 60
 	tileGap               = 2
 
-	clrOrange   = 208
-	clrPeach    = 209 // focused tile border
-	clrPurple   = 105 // inactive tile border
-	clrCyan      = 6
-	clrBlue      = 4
-	clrGray      = 245
+	clrOrange = 208
+	clrPeach  = 209 // focused tile border
+	clrPurple = 105 // inactive tile border
+	clrCyan   = 6
+	clrBlue   = 4
+	clrGray   = 245
 )
 
 // renderSection lays out one section's tiles into rows that fit w.
@@ -164,7 +165,6 @@ func packRows(tiles []store.DashboardTile, w int) [][]packedTile {
 	}
 	return out
 }
-
 
 // writeRow renders one row of tiles side-by-side, each wrapped in a
 // box-drawing border. Tiles are padded to the tallest in the row.
@@ -321,7 +321,6 @@ func renderTile(t store.DashboardTile, series WatchSeries, w int) []string {
 	return []string{padRight("  ?", w)}
 }
 
-
 func renderCounter(t store.DashboardTile, series WatchSeries, w int) []string {
 	if len(series.Values) == 0 {
 		return renderMissing(t, w)
@@ -384,17 +383,25 @@ func renderSparkline(series WatchSeries, w int) []string {
 	if len(series.Values) == 0 {
 		return renderMissing(store.DashboardTile{Kind: "sparkline"}, w)
 	}
-	// Build points oldest-first (series.Values is newest-first).
 	n := len(series.Values)
+	hasTimes := len(series.Times) == n
 	pts := make([]chart.Point, n)
 	for i := range series.Values {
-		pts[i] = chart.Point{X: float64(i), Y: series.Values[n-1-i]}
+		ri := n - 1 - i // oldest-first
+		x := float64(i)
+		if hasTimes {
+			x = series.Times[ri]
+		}
+		pts[i] = chart.Point{X: x, Y: series.Values[ri]}
 	}
-	rendered, err := chart.Line(w, sparklineHeight).Points(pts).Render()
+	b := chart.Line(w, sparklineHeight).Points(pts)
+	if hasTimes {
+		b = b.XAxisTime()
+	}
+	rendered, err := b.Render()
 	if err != nil {
 		return []string{padRight("  "+colorize(clrGray, "<render error>"), w)}
 	}
-	// Split into lines and colorize + pad each.
 	raw := strings.Split(strings.TrimRight(rendered, "\n"), "\n")
 	out := make([]string, len(raw))
 	for i, line := range raw {
@@ -467,7 +474,6 @@ func colorize(color int, s string) string {
 	return fmt.Sprintf("\x1b[38;5;%dm%s\x1b[0m", color, s)
 }
 
-
 func formatNumber(v float64) string {
 	if v == float64(int64(v)) {
 		return strconv.FormatInt(int64(v), 10)
@@ -476,7 +482,7 @@ func formatNumber(v float64) string {
 }
 
 func sectionHeading(title string, w int) string {
-	rule := colorize(clrGray, strings.Repeat("─", w))
+	rule := colorize(clrGray, strings.Repeat("─", w-len(title)))
 	return fmt.Sprintf("\x1b[1;38;5;%dm%s\x1b[0m\n%s", clrBlue, title, rule)
 }
 

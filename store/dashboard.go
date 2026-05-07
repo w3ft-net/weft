@@ -11,7 +11,7 @@ import (
 
 // Dashboard is a customer-scoped named dashboard. The YAML body is the
 // authoritative form — exactly what the user wrote into
-// /etc/dashboards/<name>.conf. The shell reads/writes it as a file; the
+// /etc/dashboards/<name>.yaml. The shell reads/writes it as a file; the
 // API parses it on read via ParseDashboardYAML to return a structured
 // spec to the frontend.
 type Dashboard struct {
@@ -78,6 +78,43 @@ var (
 	}
 )
 
+// knownKeys lists the valid YAML keys at each nesting level so
+// friendlyYAMLError can suggest what the user probably meant.
+var knownKeys = map[string][]string{
+	"dashboardYAMLRaw": {"title", "sections", "tiles"},
+	"DashboardSection": {"title", "tiles"},
+	"DashboardTile":    {"kind", "watch", "title", "size", "format", "threshold", "columns"},
+	"DashboardThresh":  {"warn", "crit", "max"},
+}
+
+// friendlyYAMLError rewrites the opaque yaml.v3 "field X not found in
+// type store.Y" message into something actionable.
+func friendlyYAMLError(err error) error {
+	msg := err.Error()
+	// yaml.v3 KnownFields errors look like:
+	//   "line N: field FOO not found in type store.BAR"
+	// or multiple of those joined in a yaml.TypeError.
+	idx := strings.Index(msg, "field ")
+	typeIdx := strings.Index(msg, "not found in type store.")
+	if idx < 0 || typeIdx < 0 {
+		return fmt.Errorf("yaml: %w", err)
+	}
+	field := strings.TrimSpace(msg[idx+len("field ") : typeIdx])
+	typeName := msg[typeIdx+len("not found in type store."):]
+	// Strip any trailing context (e.g. from multi-error joins).
+	if i := strings.IndexByte(typeName, '\n'); i >= 0 {
+		typeName = typeName[:i]
+	}
+	typeName = strings.TrimSpace(typeName)
+
+	valid := knownKeys[typeName]
+	if len(valid) == 0 {
+		return fmt.Errorf("'%s' is not a valid key — run `man dashboard` for the YAML grammar", field)
+	}
+	return fmt.Errorf("'%s' is not a valid key (expected one of: %s) — run `man dashboard` for the YAML grammar",
+		field, strings.Join(valid, ", "))
+}
+
 // ParseDashboardYAML parses and grammar-validates a dashboard body.
 // Returns a normalized DashboardSpec — flat `tiles:` becomes a single
 // untitled section. Does not check that referenced watches exist;
@@ -91,7 +128,7 @@ func ParseDashboardYAML(body string) (*DashboardSpec, error) {
 	dec := yaml.NewDecoder(strings.NewReader(body))
 	dec.KnownFields(true)
 	if err := dec.Decode(&raw); err != nil {
-		return nil, fmt.Errorf("yaml: %w", err)
+		return nil, friendlyYAMLError(err)
 	}
 
 	if len(raw.Sections) > 0 && len(raw.Tiles) > 0 {

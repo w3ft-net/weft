@@ -294,8 +294,8 @@ function SparklineTile({ tile, payload }: {
         series={series}
         threshold={payload.watch.AlertThreshold}
         condition={payload.watch.AlertCondition}
-        viewWidth={200}
-        viewHeight={48}
+        height={80}
+        showTimeAxis
       />
       {tagged
         ? <SparkLegend series={series} />

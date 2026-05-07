@@ -13,7 +13,7 @@ The fix isn't a full BI product. It's two things: (1) let the customer name more
 Dashboards are shell-editable YAML files under `/etc/dashboards/`:
 
 ```yaml
-# /etc/dashboards/prod.conf
+# /etc/dashboards/prod.yaml
 title: Production
 
 sections:
@@ -67,7 +67,7 @@ For v1 the host is dumb: walk the section's tiles in order, ask each for a desir
 ## Components to build
 
 1. **`store.Dashboard`** — `{customer_id, name, yaml_body, updated_at}`. Name unique per customer.
-2. **Shell filesystem integration** — `/etc/dashboards/` is a real path in `shellfs/`. `ls /etc/dashboards`, `vi /etc/dashboards/prod.conf`, `rm /etc/dashboards/stale.conf` all work. Save-time validation checks that every referenced `watch:` exists, `kind:` is known, `size:` is one of the allowed hints, and the YAML parses.
+2. **Shell filesystem integration** — `/etc/dashboards/` is a real path in `shellfs/`. `ls /etc/dashboards`, `vi /etc/dashboards/prod.yaml`, `rm /etc/dashboards/stale.yaml` all work. Save-time validation checks that every referenced `watch:` exists, `kind:` is known, `size:` is one of the allowed hints, and the YAML parses.
 3. **API**:
    - `GET /api/dashboards` — list by name.
    - `GET /api/dashboards/{name}` — returns parsed + validated dashboard spec plus the current values for every referenced watch in one round-trip.
@@ -105,4 +105,4 @@ For v1 the host is dumb: walk the section's tiles in order, ask each for a desir
 - **No global time-range picker on the dashboard.** Time scope is the watch's history depth, controlled by plan retention.
 - **No tile-level alert status.** If the watch has an alert condition, the tile can color-code the current value using the same threshold config; there's no separate "has-firing-incident" badge on the tile in v1.
 - **No sharing a dashboard read-only with non-team-members.** Same scope rule as saved queries — team-visible, not public.
-- **No auto-seeded default dashboard.** Empty state in the Dashboards page tells the user to run `vi /etc/dashboards/<name>.conf`. Seeding a default at signup means seeding an empty dashboard (no watches yet); seeding lazily on first list is invisible magic that surprises users when they delete it.
+- **No auto-seeded default dashboard.** Empty state in the Dashboards page tells the user to run `vi /etc/dashboards/<name>.yaml`. Seeding a default at signup means seeding an empty dashboard (no watches yet); seeding lazily on first list is invisible magic that surprises users when they delete it.

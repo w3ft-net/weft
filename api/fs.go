@@ -57,7 +57,7 @@ func (s *Server) handleListFS(w http.ResponseWriter, r *http.Request) {
 // CLI's RemoteFS as a fallback for paths not covered by the
 // specialized GetFunction / GetWatch / GetNotifyConfig endpoints
 // (notably /etc/usage, which is a generated report rather than
-// stored content, and /etc/dashboards/<name>.conf).
+// stored content, and /etc/dashboards/<name>.yaml).
 //
 // We return text/plain rather than JSON because the file's bytes
 // are the response body verbatim — wrapping them in JSON would

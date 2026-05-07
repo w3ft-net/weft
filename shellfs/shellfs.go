@@ -5,7 +5,7 @@
 //	/bin/*                  — user-defined bash functions
 //	/cron.d/*               — scheduled watch definitions
 //	/etc/notify.yaml        — notification channel configuration
-//	/etc/dashboards/*.conf  — named dashboards (sections/tiles YAML)
+//	/etc/dashboards/*.yaml  — named dashboards (sections/tiles YAML)
 //	/tmp/*                  — per-customer scratch files (persistent for 48h)
 package shellfs
 
@@ -558,7 +558,7 @@ func (f *ShellFS) ReadDir(path string) ([]fs.DirEntry, error) {
 					owner = owners[*d.CreatedByUserID]
 				}
 				entries[i] = &vfsDirEntry{
-					name:  d.Name + ".conf",
+					name:  d.Name + ".yaml",
 					size:  int64(len(d.YAMLBody)),
 					mtime: d.UpdatedAt,
 					owner: owner,
@@ -928,13 +928,13 @@ func splitPath(path string) (dir, name string) {
 
 // ── Dashboard helpers ───────────────────────────────────────
 
-// dashboardName returns the trailing dashboard name (without .conf
-// suffix) when `name` is the path-relative form of /etc/dashboards/<n>.conf,
-// e.g. splitPath("/etc/dashboards/prod.conf") yields name="dashboards/prod.conf".
+// dashboardName returns the trailing dashboard name (without .yaml
+// suffix) when `name` is the path-relative form of /etc/dashboards/<n>.yaml,
+// e.g. splitPath("/etc/dashboards/prod.yaml") yields name="dashboards/prod.yaml".
 // Returns false for any other shape so the etc branch can fall through.
 func dashboardName(name string) (string, bool) {
 	const prefix = "dashboards/"
-	const suffix = ".conf"
+	const suffix = ".yaml"
 	if !strings.HasPrefix(name, prefix) {
 		return "", false
 	}

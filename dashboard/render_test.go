@@ -180,6 +180,28 @@ func TestRender_GaugeWithThreshold(t *testing.T) {
 	}
 }
 
+func TestRender_SparklineTimeAxis(t *testing.T) {
+	spec := mustParse(t, `
+tiles:
+  - kind: sparkline
+    watch: mem
+`)
+	base := 1746550800.0 // 2025-05-06 17:00:00 UTC
+	results := map[string]WatchSeries{
+		"mem": {
+			Values: []float64{80, 75, 70, 65, 60, 55, 50}, // newest-first
+			Times:  []float64{base + 360, base + 300, base + 240, base + 180, base + 120, base + 60, base},
+		},
+	}
+	out := stripANSI(Render(spec, results, 80))
+	if !strings.Contains(out, ":") {
+		t.Errorf("expected time-formatted x-axis labels (HH:MM), got:\n%s", out)
+	}
+	if strings.Contains(out, "5.00") || strings.Contains(out, "10.00") {
+		t.Errorf("x-axis still shows index numbers instead of times:\n%s", out)
+	}
+}
+
 func TestRender_DashboardTitleAndSectionTitles(t *testing.T) {
 	spec := mustParse(t, `
 title: Production

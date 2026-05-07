@@ -32,7 +32,7 @@ type CronProposeArgs struct {
 }
 
 type DashboardProposeArgs struct {
-	Name      string `json:"name" jsonschema:"name of the dashboard (lands at /etc/dashboards/<name>.conf)"`
+	Name      string `json:"name" jsonschema:"name of the dashboard (lands at /etc/dashboards/<name>.yaml)"`
 	Body      string `json:"body" jsonschema:"the dashboard YAML — sections + tiles, see manual/dashboards.md"`
 	Rationale string `json:"rationale,omitempty" jsonschema:"one-sentence reason for the change; shown alongside the diff at review time"`
 }
