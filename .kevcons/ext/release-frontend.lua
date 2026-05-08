@@ -4,17 +4,18 @@ local bucket = "weft-frontend-220664822695"
 local distribution_id_ssm = "/weft/config/cloudfront-distribution-id"
 
 function run(args)
-    -- Build the Go-to-WebAssembly shell core first. frontend/public is
-    -- copied verbatim into frontend/dist/ by Vite, so the fresh
-    -- shell.wasm gets picked up automatically by the npm build below.
-    -- Without this step the browser shell runs whatever bytes were last
-    -- committed to frontend/public/shell.wasm — usually stale.
-    kevcons.log("building shell.wasm...")
-    kevcons.exec("bash", {"-c", "GOOS=js GOARCH=wasm go build -o frontend/public/shell.wasm ./cmd/wasm/"})
+    -- Build steps can be skipped if the caller already built (e.g. CI
+    -- runs them as visible workflow steps for better error output).
+    local dist_exists = os.execute("test -d frontend/dist")
+    if not dist_exists then
+        kevcons.log("building shell.wasm...")
+        kevcons.exec("bash", {"-c", "GOOS=js GOARCH=wasm go build -o frontend/public/shell.wasm ./cmd/wasm/"})
 
-    -- Build the production frontend (npm ci must have run already)
-    kevcons.log("building frontend...")
-    kevcons.exec("bash", {"-c", "cd frontend && VITE_API_URL=https://api.w3ft.net npm run build"})
+        kevcons.log("building frontend...")
+        kevcons.exec("bash", {"-c", "cd frontend && npm ci && VITE_API_URL=https://api.w3ft.net npm run build"})
+    else
+        kevcons.log("frontend/dist already exists, skipping build")
+    end
 
     -- Sync to S3 with correct MIME types
     kevcons.log("deploying to s3://" .. bucket .. "/...")

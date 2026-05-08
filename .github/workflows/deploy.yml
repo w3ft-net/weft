@@ -68,7 +68,15 @@ jobs:
       working-directory: weft/frontend
       run: npm ci
 
-    - name: Build and deploy frontend
+    - name: Build shell.wasm
+      working-directory: weft
+      run: GOOS=js GOARCH=wasm go build -o frontend/public/shell.wasm ./cmd/wasm/
+
+    - name: Build frontend
+      working-directory: weft/frontend
+      run: VITE_API_URL=https://api.w3ft.net npm run build
+
+    - name: Deploy frontend
       working-directory: weft
       run: kevcons ext release-frontend
 
