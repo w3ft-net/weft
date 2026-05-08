@@ -58,11 +58,12 @@ function run(args)
         return
     end
 
-    -- Check tag doesn't already exist
-    local existing = kevcons.exec("git", {"tag", "-l", tag})
-    existing = existing:match("^%s*(.-)%s*$")
-    if existing ~= "" then
-        kevcons.log("error: tag " .. tag .. " already exists — bump version in " .. target.version_file)
+    -- Skip if this version is already released (check remote tags since
+    -- CI shallow clones don't fetch tags locally)
+    local remote_tags = kevcons.exec("git", {"ls-remote", "--tags", "origin", "refs/tags/" .. tag})
+    remote_tags = remote_tags:match("^%s*(.-)%s*$")
+    if remote_tags ~= "" then
+        kevcons.log(tag .. " already released, skipping (bump version in " .. target.version_file .. " to release)")
         return
     end
 
