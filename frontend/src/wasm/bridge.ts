@@ -39,8 +39,8 @@ export async function initShellWasm(
         earlyWrites.push(data)
       }
     },
-    startQuery: (pipeline, timeStartNs, timeEndNs) => execQuery(pipeline, timeStartNs, timeEndNs),
-    startFollow: (pipeline, timeStartNs, timeEndNs) => execFollow(pipeline, timeStartNs, timeEndNs),
+    startQuery: (pipeline: string, timeStartNs?: number, timeEndNs?: number) => { execQuery(pipeline, timeStartNs, timeEndNs) },
+    startFollow: (pipeline: string, timeStartNs?: number, timeEndNs?: number) => { execFollow(pipeline, timeStartNs, timeEndNs) },
     cancelQuery: () => cancelQuery(),
     notifyQuit: () => {},
 
