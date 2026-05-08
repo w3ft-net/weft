@@ -34,10 +34,9 @@ var sseKeepaliveInterval = 20 * time.Second
 //
 // Each SSE event is JSON in one of two shapes:
 //
-//	{"type":"output","text":"..."}          — raw text output
-//	{"type":"row","data":{...log fields}}   — a structured log row
-//	{"type":"error","message":"..."}        — terminal error
-//	{"type":"done"}                         — stream complete (non-follow mode)
+//	{"type":"line","data":{"raw":"..."}}   — a log line
+//	{"type":"error","message":"..."}       — terminal error
+//	{"type":"done"}                        — stream complete (non-follow mode)
 //
 // Between events, the handler writes SSE comment lines (`: keepalive`)
 // at sseKeepaliveInterval so intermediate proxies (ALB, nginx, browser

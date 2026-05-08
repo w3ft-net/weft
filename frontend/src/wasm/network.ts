@@ -84,9 +84,7 @@ export async function execQuery(pipeline: string, timeStartNs?: number, timeEndN
         if (!raw || raw === '[DONE]') continue
         try {
           const evt = JSON.parse(raw) as { type: string; text?: string; message?: string; data?: { raw?: string } }
-          if (evt.type === 'output' && evt.text != null) {
-            outputChunks.push(evt.text)
-          } else if (evt.type === 'row' && evt.data?.raw != null) {
+          if (evt.type === 'line' && evt.data?.raw != null) {
             outputChunks.push(evt.data.raw)
           } else if (evt.type === 'error') {
             window.wasmHandleQueryResult('', evt.text || evt.message || 'unknown error')
@@ -162,9 +160,9 @@ export async function execFollow(pipeline: string, timeStartNs?: number, timeEnd
         const raw = line.slice(5).trim()
         if (!raw || raw === '[DONE]') continue
         try {
-          const evt = JSON.parse(raw) as { type: string; text?: string }
-          if (evt.type === 'output' && evt.text != null) {
-            window.wasmHandleFollowRow(evt.text)
+          const evt = JSON.parse(raw) as { type: string; text?: string; data?: { raw?: string } }
+          if (evt.type === 'line' && evt.data?.raw != null) {
+            window.wasmHandleFollowRow(evt.data.raw)
           } else if (evt.type === 'error' && evt.text != null) {
             window.wasmHandleFollowDone(evt.text)
             return
