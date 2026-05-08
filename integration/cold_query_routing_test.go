@@ -71,14 +71,14 @@ func TestColdShardQueryRouting(t *testing.T) {
 	}
 
 	if err := s0.Ingest([]*pb.LogRow{
-		{LineNum: 1, Raw: "hot line 1", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(time.Minute).UnixNano()},
-		{LineNum: 2, Raw: "hot line 2", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Minute).UnixNano()},
+		{Raw: "hot line 1", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(time.Minute).UnixNano()},
+		{Raw: "hot line 2", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Minute).UnixNano()},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s1.Ingest([]*pb.LogRow{
-		{LineNum: 3, Raw: "cold line 3", App: "vimgym", Level: "WARN", Customer: "kevlar", TsUnixNs: t1.Add(time.Minute).UnixNano()},
-		{LineNum: 4, Raw: "cold line 4", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t1.Add(2 * time.Minute).UnixNano()},
+		{Raw: "cold line 3", App: "vimgym", Level: "WARN", Customer: "kevlar", TsUnixNs: t1.Add(time.Minute).UnixNano()},
+		{Raw: "cold line 4", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t1.Add(2 * time.Minute).UnixNano()},
 	}); err != nil {
 		t.Fatal(err)
 	}

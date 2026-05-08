@@ -198,7 +198,7 @@ func TestOnboardFlow(t *testing.T) {
 				break
 			}
 			for _, line := range resp.Lines {
-				rows = append(rows, &pb.ResultRow{Raw: line.Raw, LineNum: line.LineNum})
+				rows = append(rows, &pb.ResultRow{Raw: line.Raw})
 			}
 		}
 		if len(rows) > 0 {

@@ -33,10 +33,10 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	defer ds.Close()
 
 	rows := []*pb.LogRow{
-		{LineNum: 1, Raw: "lambda integration row 1", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
-		{LineNum: 2, Raw: "lambda integration row 2", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
-		{LineNum: 3, Raw: "lambda integration row 3", App: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
-		{LineNum: 4, Raw: "lambda integration row 4", App: "vimgym", Level: "DEBUG", Customer: "acme", TsUnixNs: t0.Add(4 * time.Second).UnixNano()},
+		{Raw: "lambda integration row 1", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
+		{Raw: "lambda integration row 2", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
+		{Raw: "lambda integration row 3", App: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
+		{Raw: "lambda integration row 4", App: "vimgym", Level: "DEBUG", Customer: "acme", TsUnixNs: t0.Add(4 * time.Second).UnixNano()},
 	}
 	if err := ds.Ingest(rows); err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	}
 
 	// Query all kevlar rows.
-	result, err := cs.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")
+	result, err := cs.Query("SELECT raw, ts FROM logs WHERE customer = 'kevlar'")
 	if err != nil {
 		t.Fatalf("query via Lambda: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	t.Logf("queried %d rows via Lambda container", len(result))
 
 	// Filter by app.
-	result, err = cs.Query("SELECT line_num, raw FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'")
+	result, err = cs.Query("SELECT raw, ts FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	}
 
 	// Filter by level.
-	result, err = cs.Query("SELECT line_num, raw FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
+	result, err = cs.Query("SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 
 	// QueryToSink.
 	sink := &testSink{}
-	cs.QueryToSink("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'", sink)
+	cs.QueryToSink("SELECT raw, ts FROM logs WHERE customer = 'kevlar'", sink)
 	if !sink.sentinelReceived {
 		t.Error("expected sentinel")
 	}

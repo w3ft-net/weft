@@ -87,7 +87,6 @@ func TestDirectToCompute_Op1_ShardStreamsDirectlyToCompute(t *testing.T) {
 	rows := make([]*pb.LogRow, nRows)
 	for i := range rows {
 		rows[i] = &pb.LogRow{
-			LineNum:  int64(i + 1),
 			Raw:      fmt.Sprintf("%s-row-%d", prefix, i),
 			App:      "directcompute/app",
 			Level:    "INFO",
@@ -126,7 +125,7 @@ func TestDirectToCompute_Op1_ShardStreamsDirectlyToCompute(t *testing.T) {
 	// "localhost:9010" would only work if compute were in the same
 	// container, which it isn't.
 	qtcResp, err := shardClient.QueryToCompute(ctx, &pb.QueryToComputeRequest{
-		Sql:         fmt.Sprintf("SELECT line_num, raw FROM logs WHERE raw LIKE '%s-row-%%' ORDER BY line_num", prefix),
+		Sql:         fmt.Sprintf("SELECT raw, ts FROM logs WHERE raw LIKE '%s-row-%%' ORDER BY ts", prefix),
 		ComputeAddr: computeAddrDocker,
 		JobId:       jobResp.JobId,
 	})

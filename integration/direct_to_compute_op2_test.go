@@ -10,16 +10,15 @@
 // Op 1 landed the shard side: one shard streams its rows (already in
 // local ORDER BY) to compute. Op 2 glues multiple shard streams
 // together inside compute. With two shards each emitting its own
-// sorted line_num range, the merged output must interleave by
-// line_num. The existing concat path (merge_key="") drops rows in
-// arrival order, which for interleaved shard data is a jumble.
+// sorted ts range, the merged output must interleave by ts. The
+// existing concat path (merge_key="") drops rows in arrival order,
+// which for interleaved shard data is a jumble.
 //
 // This test drives two docker shards with *disjoint, interleavable*
-// line_num ranges (odd numbers → shard-0, even numbers → shard-1)
-// and asserts the final compute output is globally sorted by
-// line_num. Against the pre-op-2 concat-only implementation the
-// assertion fails because the rows land in shard-arrival order, not
-// merged order.
+// timestamp ranges (odd ns → shard-0, even ns → shard-1) and asserts
+// the final compute output is globally sorted by ts. Against the
+// pre-op-2 concat-only implementation the assertion fails because the
+// rows land in shard-arrival order, not merged order.
 package integration
 
 import (
@@ -58,21 +57,22 @@ func TestDirectToCompute_Op2_ComputeMergesAcrossShards(t *testing.T) {
 	shard1Client := pb.NewShardQueryClient(shard1Conn)
 	configureIfNeeded(t, ctx, shard1Client, "test-op2-shard-1")
 
-	// ---- 2. Split line_nums across the two shards ------------------
+	// ---- 2. Split timestamps across the two shards -----------------
 	//
-	// Odd line_nums (1,3,5,…,19) → shard-0
-	// Even line_nums (2,4,6,…,20) → shard-1
-	// Each shard's SQL is "ORDER BY line_num ASC" so its emitted
-	// stream is monotonically increasing within the shard. The
-	// global merge of the two streams is 1..20.
+	// Odd ns (1,3,5,…,19) → shard-0
+	// Even ns (2,4,6,…,20) → shard-1
+	// Each shard's SQL is "ORDER BY ts ASC" so its emitted stream is
+	// monotonically increasing within the shard. The global merge of
+	// the two streams is 1..20.
 	const perShardRows = 10
-	ingestOrdered(t, ctx, shard0Client, prefix, func(i int) int64 { return int64(2*i + 1) }, perShardRows)
-	ingestOrdered(t, ctx, shard1Client, prefix, func(i int) int64 { return int64(2*i + 2) }, perShardRows)
+	baseTs := time.Date(2026, 4, 23, 12, 0, 0, 0, time.UTC)
+	ingestInterleaved(t, ctx, shard0Client, prefix, baseTs, func(i int) int { return 2*i + 1 }, perShardRows)
+	ingestInterleaved(t, ctx, shard1Client, prefix, baseTs, func(i int) int { return 2*i + 2 }, perShardRows)
 
 	// ---- 3. Create a compute job with merge_key set ----------------
 	//
 	// ShardCount=2 so compute waits for both sentinels. MergeKey set
-	// to "line_num" to request the new k-way merge path.
+	// to "ts" to request the k-way merge path.
 	computeConn := dialCompute(t, computeAddrHostPort)
 	defer computeConn.Close()
 	computeClient := pb.NewWeftComputeClient(computeConn)
@@ -80,7 +80,7 @@ func TestDirectToCompute_Op2_ComputeMergesAcrossShards(t *testing.T) {
 	jobResp, err := computeClient.CreateJob(ctx, &pb.CreateJobRequest{
 		Stages:     []string{"cat"},
 		ShardCount: 2,
-		MergeKey:   "line_num",
+		MergeKey:   "ts",
 	})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
@@ -90,10 +90,10 @@ func TestDirectToCompute_Op2_ComputeMergesAcrossShards(t *testing.T) {
 	//
 	// Both shard containers dial compute at "compute:9010" — the same
 	// job_id, so compute's SendRows handler buckets by msg.ShardId.
-	// Each shard's SQL includes ORDER BY line_num so its own stream
-	// is pre-sorted — what compute has to merge, not re-sort.
+	// Each shard's SQL includes ORDER BY ts so its own stream is
+	// pre-sorted — what compute has to merge, not re-sort.
 	sql := fmt.Sprintf(
-		"SELECT line_num, raw FROM logs WHERE raw LIKE '%s-%%' ORDER BY line_num",
+		"SELECT raw, ts FROM logs WHERE raw LIKE '%s-%%' ORDER BY ts",
 		prefix,
 	)
 
@@ -134,23 +134,24 @@ func TestDirectToCompute_Op2_ComputeMergesAcrossShards(t *testing.T) {
 	}
 
 	// The "cat" stage is an identity filter, so result.Text is one
-	// row per line, each row.Raw was "<prefix>-<line_num>".
-	gotLineNums := parseLineNums(t, result.Text, prefix)
+	// row per line, each row.Raw was "<prefix>-<seqN>".
+	gotSeqs := parseSeqNums(t, result.Text, prefix)
 
-	if len(gotLineNums) != 2*perShardRows {
-		t.Fatalf("expected %d total rows, got %d. Text:\n%s", 2*perShardRows, len(gotLineNums), result.Text)
+	if len(gotSeqs) != 2*perShardRows {
+		t.Fatalf("expected %d total rows, got %d. Text:\n%s", 2*perShardRows, len(gotSeqs), result.Text)
 	}
 
-	// The merge assertion: rows must come out in ascending line_num
-	// order. Concat-only (pre-op-2) fails here because each shard's
-	// block lands contiguously in arrival order, not interleaved.
-	for i := 1; i < len(gotLineNums); i++ {
-		if gotLineNums[i] <= gotLineNums[i-1] {
+	// The merge assertion: rows must come out in ascending sequence
+	// order (which mirrors ts order since seq N maps to baseTs+N*ms).
+	// Concat-only (pre-op-2) fails here because each shard's block
+	// lands contiguously in arrival order, not interleaved.
+	for i := 1; i < len(gotSeqs); i++ {
+		if gotSeqs[i] <= gotSeqs[i-1] {
 			t.Fatalf(
-				"merge not in sorted order: gotLineNums[%d]=%d, gotLineNums[%d]=%d.\n"+
+				"merge not in sorted order: gotSeqs[%d]=%d, gotSeqs[%d]=%d.\n"+
 					"Full sequence: %v\n"+
-					"(With merge_key=\"line_num\", compute should k-way merge the two shard streams.)",
-				i-1, gotLineNums[i-1], i, gotLineNums[i], gotLineNums,
+					"(With merge_key=\"ts\", compute should k-way merge the two shard streams.)",
+				i-1, gotSeqs[i-1], i, gotSeqs[i], gotSeqs,
 			)
 		}
 	}
@@ -189,30 +190,30 @@ func configureIfNeeded(t *testing.T, ctx context.Context, client pb.ShardQueryCl
 	}
 }
 
-// ingestOrdered pushes n rows to a shard with line_num derived from
-// the index-mapping fn. Raw is "<prefix>-<lineNum>" so the result
-// parser can recover line_num from the compute output even when the
-// "cat" stage strips structure.
-func ingestOrdered(
+// ingestInterleaved pushes n rows to a shard with timestamps derived
+// from seqFn(i). Raw is "<prefix>-<seq>" so the result parser can
+// recover the sequence number from the compute output even when the
+// "cat" stage strips structure. Timestamps are baseTs + seq*ms so the
+// sequence order equals ts order.
+func ingestInterleaved(
 	t *testing.T,
 	ctx context.Context,
 	client pb.ShardQueryClient,
 	prefix string,
-	lineFn func(i int) int64,
+	baseTs time.Time,
+	seqFn func(i int) int,
 	n int,
 ) {
 	t.Helper()
 	rows := make([]*pb.LogRow, n)
-	now := time.Now()
 	for i := range rows {
-		ln := lineFn(i)
+		seq := seqFn(i)
 		rows[i] = &pb.LogRow{
-			LineNum:  ln,
-			Raw:      fmt.Sprintf("%s-%d", prefix, ln),
+			Raw:      fmt.Sprintf("%s-%d", prefix, seq),
 			App:      "directcompute/op2",
 			Level:    "INFO",
 			Customer: "kevlar",
-			TsUnixNs: now.Add(time.Duration(i) * time.Second).UnixNano(),
+			TsUnixNs: baseTs.Add(time.Duration(seq) * time.Millisecond).UnixNano(),
 		}
 	}
 	resp, err := client.Ingest(ctx, &pb.IngestRequest{Rows: rows})
@@ -224,10 +225,10 @@ func ingestOrdered(
 	}
 }
 
-// parseLineNums splits compute's text output on newlines and extracts
+// parseSeqNums splits compute's text output on newlines and extracts
 // the numeric suffix of each line. Our test raws are "<prefix>-<N>",
-// so splitting after the last "-" gets us the line_num back.
-func parseLineNums(t *testing.T, text, prefix string) []int {
+// so splitting after the last "-" gets us the sequence number back.
+func parseSeqNums(t *testing.T, text, prefix string) []int {
 	t.Helper()
 	out := []int{}
 	for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
@@ -235,15 +236,12 @@ func parseLineNums(t *testing.T, text, prefix string) []int {
 			continue
 		}
 		if !strings.HasPrefix(line, prefix+"-") {
-			// Rows from other tests share the shard volume but the
-			// prefix filter on the SQL side already drops them.
-			// Anything else here is a real format surprise — fail.
 			t.Fatalf("unexpected row in compute output: %q", line)
 		}
 		suf := strings.TrimPrefix(line, prefix+"-")
 		n, err := strconv.Atoi(suf)
 		if err != nil {
-			t.Fatalf("parse line_num from %q: %v", line, err)
+			t.Fatalf("parse seq from %q: %v", line, err)
 		}
 		out = append(out, n)
 	}

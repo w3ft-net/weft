@@ -31,9 +31,9 @@ func TestExportToS3_DirectWrite(t *testing.T) {
 	defer ds.Close()
 
 	rows := []*pb.LogRow{
-		{LineNum: 1, Raw: "direct s3 export row 1", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
-		{LineNum: 2, Raw: "direct s3 export row 2", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
-		{LineNum: 3, Raw: "direct s3 export row 3", App: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
+		{Raw: "direct s3 export row 1", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
+		{Raw: "direct s3 export row 2", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
+		{Raw: "direct s3 export row 3", App: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
 	}
 	if err := ds.Ingest(rows); err != nil {
 		t.Fatal(err)
@@ -58,7 +58,7 @@ func TestExportToS3_DirectWrite(t *testing.T) {
 	}
 	defer cs.Close()
 
-	result, err := cs.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")
+	result, err := cs.Query("SELECT raw, ts FROM logs WHERE customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,8 +80,8 @@ func TestExportToS3_AppPartitioned(t *testing.T) {
 		t.Fatal(err)
 	}
 	dsVim.Ingest([]*pb.LogRow{
-		{LineNum: 1, Raw: "vimgym log", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
-		{LineNum: 2, Raw: "vimgym error", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
+		{Raw: "vimgym log", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
+		{Raw: "vimgym error", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
 	})
 	vimPath := fmt.Sprintf("s3://%s/kevlar/vimgym/2026/03/shard-vimgym.parquet", ColdBucket)
 	if err := dsVim.ExportToS3Parquet(vimPath, s3cfg); err != nil {
@@ -95,7 +95,7 @@ func TestExportToS3_AppPartitioned(t *testing.T) {
 		t.Fatal(err)
 	}
 	dsCb.Ingest([]*pb.LogRow{
-		{LineNum: 3, Raw: "callbox log", App: "callbox", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
+		{Raw: "callbox log", App: "callbox", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
 	})
 	cbPath := fmt.Sprintf("s3://%s/kevlar/callbox/2026/03/shard-callbox.parquet", ColdBucket)
 	if err := dsCb.ExportToS3Parquet(cbPath, s3cfg); err != nil {
@@ -112,7 +112,7 @@ func TestExportToS3_AppPartitioned(t *testing.T) {
 	}
 	defer csVim.Close()
 
-	result, err := csVim.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")
+	result, err := csVim.Query("SELECT raw, ts FROM logs WHERE customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestExportToS3_AppPartitioned(t *testing.T) {
 	}
 	defer csCb.Close()
 
-	result, err = csCb.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")
+	result, err = csCb.Query("SELECT raw, ts FROM logs WHERE customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
