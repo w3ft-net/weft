@@ -64,6 +64,10 @@ jobs:
         cache: npm
         cache-dependency-path: weft/frontend/package-lock.json
 
+    - name: Install warp shellcore-wasm dependencies
+      working-directory: warp/frontend/shellcore-wasm
+      run: npm ci
+
     - name: Install frontend dependencies
       working-directory: weft/frontend
       run: npm ci
