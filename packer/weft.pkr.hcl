@@ -85,9 +85,12 @@ source "amazon-ebs" "weft" {
   instance_type = var.instance_type
   region        = var.region
 
-  assume_role {
-    role_arn     = "arn:aws:iam::${var.assume_role_account_id}:role/${var.assume_role_name}"
-    session_name = "packer-weft-build"
+  dynamic "assume_role" {
+    for_each = var.assume_role_account_id != "" ? [1] : []
+    content {
+      role_arn     = "arn:aws:iam::${var.assume_role_account_id}:role/${var.assume_role_name}"
+      session_name = "packer-weft-build"
+    }
   }
 
   source_ami = var.base_ami_id != "" ? var.base_ami_id : null

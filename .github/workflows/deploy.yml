@@ -93,6 +93,16 @@ jobs:
       working-directory: weft
       run: kevcons ext release-lambda
 
+    - name: Install Packer
+      run: |
+        curl -fsSL https://releases.hashicorp.com/packer/1.12.0/packer_1.12.0_linux_amd64.zip -o /tmp/packer.zip
+        unzip -o /tmp/packer.zip -d /tmp
+        sudo install -m 0755 /tmp/packer /usr/local/bin/packer
+
+    - name: Init Packer plugins
+      working-directory: weft
+      run: packer init packer/weft.pkr.hcl
+
     - name: Build AMI
       working-directory: weft
       run: kevcons build -y
