@@ -12,9 +12,9 @@ function run(args)
     kevcons.log("building shell.wasm...")
     kevcons.exec("bash", {"-c", "GOOS=js GOARCH=wasm go build -o frontend/public/shell.wasm ./cmd/wasm/"})
 
-    -- Install dependencies and build the production frontend
+    -- Build the production frontend (npm ci must have run already)
     kevcons.log("building frontend...")
-    kevcons.exec("bash", {"-c", "cd frontend && npm ci && VITE_API_URL=https://api.w3ft.net npm run build"})
+    kevcons.exec("bash", {"-c", "cd frontend && VITE_API_URL=https://api.w3ft.net npm run build"})
 
     -- Sync to S3 with correct MIME types
     kevcons.log("deploying to s3://" .. bucket .. "/...")

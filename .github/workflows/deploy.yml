@@ -64,6 +64,10 @@ jobs:
         cache: npm
         cache-dependency-path: weft/frontend/package-lock.json
 
+    - name: Install frontend dependencies
+      working-directory: weft/frontend
+      run: npm ci
+
     - name: Build and deploy frontend
       working-directory: weft
       run: kevcons ext release-frontend
