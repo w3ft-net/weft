@@ -5,7 +5,7 @@ import "strings"
 // classifyShardMode decides the shard's ORDER BY + LIMIT for the
 // direct-to-compute path. See docs/plans/direct-to-compute.md §3:
 //
-//	Mode A (default — no sort) → "line_num" ordering, direction from
+//	Mode A (default — no sort) → "ts" ordering, direction from
 //	                             a terminal head/tail, limit = plan.Limit.
 //	Mode B (plain sort first)  → "raw" ordering, direction from sort -r.
 //	                             Limit only if already pushed (plan.Limit).
@@ -30,9 +30,9 @@ func classifyShardMode(computeStages []string, orderDesc bool, limit int) (order
 	// --- Mode A: no sort anywhere ---------------------------------
 	if sortIdx < 0 {
 		if orderDesc {
-			return "line_num DESC", limit
+			return "ts DESC", limit
 		}
-		return "line_num", limit
+		return "ts", limit
 	}
 
 	// --- Inspect sort flags ---------------------------------------

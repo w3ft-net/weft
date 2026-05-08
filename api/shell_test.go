@@ -30,9 +30,10 @@ import (
 type fakeCoord struct {
 	pb.UnimplementedWeftCoordinatorServer
 	authSeen chan string
+	lastReq  chan *pb.CoordinatorExecuteRequest
 }
 
-func (f *fakeCoord) Execute(_ *pb.CoordinatorExecuteRequest, stream grpc.ServerStreamingServer[pb.CoordinatorExecuteResponse]) error {
+func (f *fakeCoord) Execute(req *pb.CoordinatorExecuteRequest, stream grpc.ServerStreamingServer[pb.CoordinatorExecuteResponse]) error {
 	md, _ := metadata.FromIncomingContext(stream.Context())
 	vals := md.Get("authorization")
 	var seen string
@@ -42,6 +43,12 @@ func (f *fakeCoord) Execute(_ *pb.CoordinatorExecuteRequest, stream grpc.ServerS
 	select {
 	case f.authSeen <- seen:
 	default:
+	}
+	if f.lastReq != nil {
+		select {
+		case f.lastReq <- req:
+		default:
+		}
 	}
 	if seen == "" {
 		return status.Errorf(codes.Unauthenticated, "missing authorization metadata")
@@ -126,5 +133,84 @@ func TestShellExec_ForwardsBearerToCoordinator(t *testing.T) {
 	// And the SSE stream should not contain an error event.
 	if strings.Contains(w.Body.String(), `"type":"error"`) {
 		t.Errorf("unexpected SSE error in stream:\n%s", w.Body.String())
+	}
+}
+
+// TestShellExec_ForwardsTimeRange verifies that when the client sends
+// time_start_ns / time_end_ns in the request body, those values reach
+// the coordinator's Execute RPC. Without this, the user's selected
+// range (e.g. "1d") has no effect — every query scans all shards.
+func TestShellExec_ForwardsTimeRange(t *testing.T) {
+	srv, s := testServer(t)
+
+	custName := fmt.Sprintf("timerange-%d", os.Getpid())
+	cust, err := s.FindOrCreateCustomer(custName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SeedDevSubscription(custName)
+
+	user, err := s.CreateUser(fmt.Sprintf("timerange-%d@example.com", os.Getpid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.CreateTeamMember(&store.TeamMember{
+		ID: "tm-timerange", CustomerID: cust.ID, Email: user.Email,
+		UserID: &user.ID, Role: "owner", Status: "active",
+	})
+	jwt, err := auth.Generate(user, "test-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeCoord{
+		authSeen: make(chan string, 1),
+		lastReq:  make(chan *pb.CoordinatorExecuteRequest, 1),
+	}
+	grpcSrv := grpc.NewServer()
+	pb.RegisterWeftCoordinatorServer(grpcSrv, fake)
+	go grpcSrv.Serve(lis)
+	t.Cleanup(grpcSrv.Stop)
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	srv.coordClient = pb.NewWeftCoordinatorClient(conn)
+
+	wantStart := time.Now().Add(-24 * time.Hour)
+	wantEnd := time.Now()
+
+	body, _ := json.Marshal(map[string]any{
+		"pipeline":      "cat vimgym.log",
+		"time_start_ns": wantStart.UnixNano(),
+		"time_end_ns":   wantEnd.UnixNano(),
+	})
+	req := httptest.NewRequest("POST", "/api/shell/exec", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	var got *pb.CoordinatorExecuteRequest
+	select {
+	case got = <-fake.lastReq:
+	case <-time.After(2 * time.Second):
+		t.Fatal("coordinator Execute was never called")
+	}
+
+	if got.TimeStartNs == 0 || got.TimeEndNs == 0 {
+		t.Fatalf("time range not forwarded: TimeStartNs=%d TimeEndNs=%d (both should be non-zero)",
+			got.TimeStartNs, got.TimeEndNs)
+	}
+	if got.TimeStartNs != wantStart.UnixNano() {
+		t.Errorf("TimeStartNs = %d, want %d", got.TimeStartNs, wantStart.UnixNano())
+	}
+	if got.TimeEndNs != wantEnd.UnixNano() {
+		t.Errorf("TimeEndNs = %d, want %d", got.TimeEndNs, wantEnd.UnixNano())
 	}
 }

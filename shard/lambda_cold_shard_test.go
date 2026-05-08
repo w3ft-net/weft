@@ -71,7 +71,7 @@ func TestColdShard_RemoteQuery(t *testing.T) {
 	}
 	defer cs.Close()
 
-	rows, err := cs.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")
+	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestColdShard_RemoteQueryToSink(t *testing.T) {
 	defer cs.Close()
 
 	sink := &testSink{}
-	cs.QueryToSink("SELECT line_num, raw FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'", sink)
+	cs.QueryToSink("SELECT raw, ts FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'", sink)
 
 	if !sink.sentinelReceived {
 		t.Error("expected sentinel")
@@ -110,7 +110,7 @@ func TestColdShard_RemoteReadOnly(t *testing.T) {
 	}
 	defer cs.Close()
 
-	err = cs.Ingest([]*pb.LogRow{{Raw: "nope"}})
+	err = cs.Ingest([]*pb.LogRow{{Raw: "nope", TsUnixNs: time.Now().UnixNano()}})
 	if err == nil {
 		t.Fatal("expected error on Ingest")
 	}
@@ -128,7 +128,7 @@ func TestColdShard_RemoteFiltersByApp(t *testing.T) {
 	}
 	defer cs.Close()
 
-	rows, err := cs.Query("SELECT line_num, raw FROM logs WHERE app = 'callbox' AND customer = 'kevlar'")
+	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE app = 'callbox' AND customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func BenchmarkColdShard_RemoteQuery(b *testing.B) {
 	rows := make([]*pb.LogRow, 10_000)
 	for i := range rows {
 		rows[i] = &pb.LogRow{
-			LineNum: int64(i), Raw: "bench log line", App: "vimgym",
+			Raw: "bench log line", App: "vimgym",
 			Level: "INFO", Customer: "kevlar",
 			TsUnixNs: coldT0.Add(time.Duration(i) * time.Millisecond).UnixNano(),
 		}
@@ -182,6 +182,6 @@ func BenchmarkColdShard_RemoteQuery(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		cs.Query("SELECT line_num, raw FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
+		cs.Query("SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
 	}
 }

@@ -19,9 +19,9 @@ func testParquet(t *testing.T) string {
 	defer ds.Close()
 
 	rows := []*pb.LogRow{
-		{LineNum: 1, Raw: "error in vimgym", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
-		{LineNum: 2, Raw: "info in vimgym", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
-		{LineNum: 3, Raw: "warn in callbox", App: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
+		{Raw: "error in vimgym", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
+		{Raw: "info in vimgym", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
+		{Raw: "warn in callbox", App: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
 	}
 	if err := ds.Ingest(rows); err != nil {
 		t.Fatal(err)
@@ -38,7 +38,7 @@ func TestLambdaHandler_QueryParquet(t *testing.T) {
 	var buf bytes.Buffer
 
 	err := HandleQuery(&buf, QueryRequest{
-		SQL:         "SELECT line_num, raw FROM logs WHERE customer = 'kevlar'",
+		SQL:         "SELECT raw, ts FROM logs WHERE customer = 'kevlar'",
 		ParquetPath: path,
 	}, nil)
 	if err != nil {
@@ -59,7 +59,7 @@ func TestLambdaHandler_FiltersByApp(t *testing.T) {
 	var buf bytes.Buffer
 
 	err := HandleQuery(&buf, QueryRequest{
-		SQL:         "SELECT line_num, raw FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'",
+		SQL:         "SELECT raw, ts FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'",
 		ParquetPath: path,
 	}, nil)
 	if err != nil {
@@ -80,7 +80,7 @@ func TestLambdaHandler_EmptyResult(t *testing.T) {
 	var buf bytes.Buffer
 
 	err := HandleQuery(&buf, QueryRequest{
-		SQL:         "SELECT line_num, raw FROM logs WHERE app = 'nonexistent'",
+		SQL:         "SELECT raw, ts FROM logs WHERE app = 'nonexistent'",
 		ParquetPath: path,
 	}, nil)
 	if err != nil {

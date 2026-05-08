@@ -19,7 +19,7 @@ type onlineCursor struct {
 // determine the next row.
 //
 // Streaming property: emit fires BEFORE every shard has sent its
-// sentinel. For two shards A and B with mergeKey "line_num":
+// sentinel. For two shards A and B with mergeKey "ts":
 //   - A sends row 1 first → no emission yet (B might have a smaller row).
 //   - B sends row 2 → emit can fire on A's row 1 (1 < 2, both heads known).
 //   - As more rows arrive on either side, emission advances incrementally.
@@ -27,7 +27,7 @@ type onlineCursor struct {
 // When emit returns false (e.g. limit reached) onlineMerge keeps
 // draining ch so the producers don't deadlock, but stops calling emit.
 //
-// mergeKey accepts the same values as mergeRows ("line_num"[ DESC],
+// mergeKey accepts the same values as mergeRows ("ts"[ DESC],
 // "raw"[ DESC]). Unknown or empty keys fall back to FIFO arrival order
 // — fine for the planner's Mode C path where downstream stages decide
 // the global order anyway.
@@ -137,8 +137,8 @@ func makeLess(mergeKey string) func(a, b *pb.ResultRow) bool {
 	key, desc := parseMergeKey(mergeKey)
 	var less func(a, b *pb.ResultRow) bool
 	switch key {
-	case "line_num":
-		less = func(a, b *pb.ResultRow) bool { return a.LineNum < b.LineNum }
+	case "ts":
+		less = func(a, b *pb.ResultRow) bool { return a.TsUnixNs < b.TsUnixNs }
 	case "raw":
 		less = func(a, b *pb.ResultRow) bool { return a.Raw < b.Raw }
 	default:

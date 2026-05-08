@@ -52,15 +52,15 @@ func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
 	ingestShard := chosen.Shard
 
 	rows := []*pb.LogRow{
-		{LineNum: 1, Raw: "test log line 1", App: "weft/coordinator", Customer: "testcust", Level: "INFO", TsUnixNs: time.Now().UnixNano()},
-		{LineNum: 2, Raw: "test log line 2", App: "weft/coordinator", Customer: "testcust", Level: "ERROR", TsUnixNs: time.Now().UnixNano()},
+		{Raw: "test log line 1", App: "weft/coordinator", Customer: "testcust", Level: "INFO", TsUnixNs: time.Now().UnixNano()},
+		{Raw: "test log line 2", App: "weft/coordinator", Customer: "testcust", Level: "ERROR", TsUnixNs: time.Now().UnixNano()},
 	}
 	if err := ingestShard.Ingest(rows); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 
 	// Verify data is queryable.
-	result, err := ingestShard.Query("SELECT line_num, raw FROM logs WHERE customer = 'testcust'")
+	result, err := ingestShard.Query("SELECT raw, ts FROM logs WHERE customer = 'testcust'")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
 	})
 
 	// Query through the new registry's shard — data should still be there.
-	result2, err := gs.Query("SELECT line_num, raw FROM logs WHERE customer = 'testcust'")
+	result2, err := gs.Query("SELECT raw, ts FROM logs WHERE customer = 'testcust'")
 	if err != nil {
 		t.Fatalf("query after restart: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestCoordinator_RediscoveryDoesNotLoseData(t *testing.T) {
 
 	// Ingest data.
 	rows := []*pb.LogRow{
-		{LineNum: 1, Raw: "important data", App: "myapp", Customer: "testcust", Level: "INFO", TsUnixNs: DevT0.Add(time.Second).UnixNano()},
+		{Raw: "important data", App: "myapp", Customer: "testcust", Level: "INFO", TsUnixNs: DevT0.Add(time.Second).UnixNano()},
 	}
 	if err := s0.Ingest(rows); err != nil {
 		t.Fatal(err)

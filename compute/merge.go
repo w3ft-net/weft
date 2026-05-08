@@ -14,10 +14,10 @@ import (
 //
 // Supported merge keys:
 //
-//	"line_num"       → ascending by ResultRow.LineNum
-//	"line_num DESC"  → descending by LineNum
-//	"raw"            → ascending by ResultRow.Raw
-//	"raw DESC"       → descending by Raw
+//	"ts"       → ascending by ResultRow.TsUnixNs
+//	"ts DESC"  → descending by TsUnixNs
+//	"raw"      → ascending by ResultRow.Raw
+//	"raw DESC" → descending by Raw
 //
 // Unknown keys fall back to a deterministic concat (shards in map
 // iteration order) so a bad key is loud but doesn't crash — the
@@ -32,17 +32,14 @@ func mergeRows(perShard map[string][]*pb.ResultRow, mergeKey string) []string {
 	return out
 }
 
-// mergeRowsFull is the row-preserving counterpart to mergeRows. Used
-// by LocalComputeJob to expose merged rows (with line_num intact) to
-// callers that haven't migrated to LineStream yet — see
-// LocalComputeJob.MergedRows.
+// mergeRowsFull is the row-preserving counterpart to mergeRows.
 func mergeRowsFull(perShard map[string][]*pb.ResultRow, mergeKey string) []*pb.ResultRow {
 	key, desc := parseMergeKey(mergeKey)
 
 	var less func(a, b *pb.ResultRow) bool
 	switch key {
-	case "line_num":
-		less = func(a, b *pb.ResultRow) bool { return a.LineNum < b.LineNum }
+	case "ts":
+		less = func(a, b *pb.ResultRow) bool { return a.TsUnixNs < b.TsUnixNs }
 	case "raw":
 		less = func(a, b *pb.ResultRow) bool { return a.Raw < b.Raw }
 	default:
@@ -78,7 +75,7 @@ func mergeRowsFull(perShard map[string][]*pb.ResultRow, mergeKey string) []*pb.R
 	return out
 }
 
-// parseMergeKey splits "line_num DESC" → ("line_num", true).
+// parseMergeKey splits "ts DESC" → ("ts", true).
 func parseMergeKey(mk string) (col string, desc bool) {
 	mk = strings.TrimSpace(mk)
 	if u := strings.ToUpper(mk); strings.HasSuffix(u, " DESC") {

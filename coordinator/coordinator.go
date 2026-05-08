@@ -114,7 +114,7 @@ func (r *ExecuteResult) Drain(ctx context.Context) (*DrainedResult, error) {
 			stderrSb.WriteByte('\n')
 			continue
 		}
-		out.Rows = append(out.Rows, &pb.ResultRow{Raw: line.Raw, LineNum: line.LineNum})
+		out.Rows = append(out.Rows, &pb.ResultRow{Raw: line.Raw})
 		textSb.WriteString(line.Raw)
 		textSb.WriteByte('\n')
 	}

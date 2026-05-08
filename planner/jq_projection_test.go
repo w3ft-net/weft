@@ -235,7 +235,7 @@ func TestRawExpr_JqInternalPipeBreak(t *testing.T) {
 				t.Fatalf("Plan: %v", err)
 			}
 			if tt.notPushable {
-				if !strings.Contains(plan.ShardSQL, "SELECT line_num, raw FROM logs") {
+				if !strings.Contains(plan.ShardSQL, "SELECT raw, ts FROM logs") {
 					t.Errorf("expected un-projected SELECT, got: %s", plan.ShardSQL)
 				}
 			} else {

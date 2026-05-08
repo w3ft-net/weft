@@ -15,7 +15,6 @@ import (
 type Parser struct {
 	schema       *Schema
 	levelRe      *regexp.Regexp
-	lineNum      int64
 }
 
 // NewParser creates a parser for the given schema.
@@ -34,10 +33,7 @@ func NewParser(s *Schema) (*Parser, error) {
 // ParseLine parses a single raw log line into a LogRow.
 // ingestTime is the time the line was received (used as fallback timestamp).
 func (p *Parser) ParseLine(raw string, ingestTime time.Time) (*pb.LogRow, error) {
-	p.lineNum++
-
 	row := &pb.LogRow{
-		LineNum:  p.lineNum,
 		Raw:      raw,
 		App:      p.schema.App,
 		Customer: p.schema.Customer,

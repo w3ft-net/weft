@@ -38,7 +38,7 @@ func (s *brokerStream) Next(ctx context.Context) (compute.Line, bool, error) {
 			}
 			s.queue = s.queue[:0]
 			for _, raw := range lines {
-				s.queue = append(s.queue, compute.Line{LineNum: row.LineNum, Raw: raw})
+				s.queue = append(s.queue, compute.Line{Raw: raw})
 			}
 			line := s.queue[0]
 			s.queue = s.queue[1:]

@@ -11,7 +11,7 @@ import (
 // clients can render distinctly (red ANSI, separate channel, etc.).
 type Line struct {
 	Raw     string
-	LineNum int64 // 0 when not shard-sourced or post-stage
+	LineNum int64 // 1-based sequential counter for zero-stage jobs; 0 for staged output
 	Stderr  bool
 }
 

@@ -7,28 +7,28 @@ import (
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
-func row(n int64, raw string) *pb.ResultRow {
-	return &pb.ResultRow{LineNum: n, Raw: raw}
+func row(ts int64, raw string) *pb.ResultRow {
+	return &pb.ResultRow{TsUnixNs: ts, Raw: raw}
 }
 
-func TestMergeRows_LineNumAsc(t *testing.T) {
+func TestMergeRows_TsAsc(t *testing.T) {
 	perShard := map[string][]*pb.ResultRow{
 		"a": {row(1, "one"), row(3, "three"), row(5, "five")},
 		"b": {row(2, "two"), row(4, "four"), row(6, "six")},
 	}
-	got := mergeRows(perShard, "line_num")
+	got := mergeRows(perShard, "ts")
 	want := []string{"one", "two", "three", "four", "five", "six"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }
 
-func TestMergeRows_LineNumDesc(t *testing.T) {
+func TestMergeRows_TsDesc(t *testing.T) {
 	perShard := map[string][]*pb.ResultRow{
 		"a": {row(5, "five"), row(3, "three"), row(1, "one")},
 		"b": {row(6, "six"), row(4, "four"), row(2, "two")},
 	}
-	got := mergeRows(perShard, "line_num DESC")
+	got := mergeRows(perShard, "ts DESC")
 	want := []string{"six", "five", "four", "three", "two", "one"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
@@ -52,7 +52,7 @@ func TestMergeRows_EmptyShard(t *testing.T) {
 		"a": {row(1, "one"), row(3, "three")},
 		"b": {},
 	}
-	got := mergeRows(perShard, "line_num")
+	got := mergeRows(perShard, "ts")
 	want := []string{"one", "three"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
@@ -76,8 +76,8 @@ func TestParseMergeKey(t *testing.T) {
 		wantCol  string
 		wantDesc bool
 	}{
-		{"line_num", "line_num", false},
-		{"line_num DESC", "line_num", true},
+		{"ts", "ts", false},
+		{"ts DESC", "ts", true},
 		{"raw", "raw", false},
 		{"raw DESC", "raw", true},
 		{"raw desc", "raw", true},

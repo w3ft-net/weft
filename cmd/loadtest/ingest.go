@@ -79,7 +79,6 @@ func ingestCustomer(ctx context.Context, client pb.WeftCoordinatorClient, custom
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	lineNum := int64(0)
 	for {
 		select {
 		case <-ctx.Done():
@@ -89,8 +88,7 @@ func ingestCustomer(ctx context.Context, client pb.WeftCoordinatorClient, custom
 			}
 			return
 		case <-ticker.C:
-			lineNum++
-			row := generateRow(lineNum, customer, app)
+			row := generateRow(customer, app)
 			if err := stream.Send(row); err != nil {
 				errors.Add(1)
 				return
@@ -100,7 +98,7 @@ func ingestCustomer(ctx context.Context, client pb.WeftCoordinatorClient, custom
 	}
 }
 
-func generateRow(lineNum int64, customer, app string) *pb.LogRow {
+func generateRow(customer, app string) *pb.LogRow {
 	now := time.Now()
 	level := levels[rand.Intn(len(levels))]
 	action := actions[rand.Intn(len(actions))]
@@ -122,7 +120,6 @@ func generateRow(lineNum int64, customer, app string) *pb.LogRow {
 	})
 
 	return &pb.LogRow{
-		LineNum:     lineNum,
 		Raw:         raw,
 		App:         app,
 		Level:       level,

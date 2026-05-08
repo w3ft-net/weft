@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"io"
 	"testing"
+	"time"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
 func TestProtoStream_RoundTrip(t *testing.T) {
 	rows := []*pb.ResultRow{
-		{LineNum: 1, Raw: "test row 1"},
-		{LineNum: 2, Raw: "test row 2"},
-		{LineNum: 3, Raw: "test row 3"},
+		{Raw: "test row 1", TsUnixNs: coldT0.Add(1 * time.Second).UnixNano()},
+		{Raw: "test row 2", TsUnixNs: coldT0.Add(2 * time.Second).UnixNano()},
+		{Raw: "test row 3", TsUnixNs: coldT0.Add(3 * time.Second).UnixNano()},
 	}
 
 	var buf bytes.Buffer
@@ -40,9 +41,6 @@ func TestProtoStream_RoundTrip(t *testing.T) {
 		if r.Raw != rows[i].Raw {
 			t.Errorf("row %d: expected Raw=%q, got %q", i, rows[i].Raw, r.Raw)
 		}
-		if r.LineNum != rows[i].LineNum {
-			t.Errorf("row %d: expected LineNum=%d, got %d", i, rows[i].LineNum, r.LineNum)
-		}
 	}
 }
 
@@ -61,7 +59,7 @@ func TestProtoStream_EmptyStream(t *testing.T) {
 
 func TestProtoStream_SingleRow(t *testing.T) {
 	var buf bytes.Buffer
-	row := &pb.ResultRow{LineNum: 42, Raw: "single"}
+	row := &pb.ResultRow{Raw: "single", TsUnixNs: coldT0.UnixNano()}
 	WriteResultRow(&buf, row)
 	WriteStreamEnd(&buf)
 
@@ -69,8 +67,8 @@ func TestProtoStream_SingleRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result) != 1 || result[0].LineNum != 42 {
-		t.Fatalf("expected 1 row with LineNum=42, got %v", result)
+	if len(result) != 1 || result[0].Raw != "single" {
+		t.Fatalf("expected 1 row with Raw=single, got %v", result)
 	}
 }
 
@@ -83,7 +81,7 @@ func TestProtoStream_ReadResultRow_EOF(t *testing.T) {
 }
 
 func BenchmarkProtoStream_Write1K(b *testing.B) {
-	row := &pb.ResultRow{LineNum: 1, Raw: "benchmark row with realistic content"}
+	row := &pb.ResultRow{Raw: "benchmark row with realistic content", TsUnixNs: coldT0.UnixNano()}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var buf bytes.Buffer
@@ -95,7 +93,7 @@ func BenchmarkProtoStream_Write1K(b *testing.B) {
 }
 
 func BenchmarkProtoStream_Read1K(b *testing.B) {
-	row := &pb.ResultRow{LineNum: 1, Raw: "benchmark row with realistic content"}
+	row := &pb.ResultRow{Raw: "benchmark row with realistic content", TsUnixNs: coldT0.UnixNano()}
 	var source bytes.Buffer
 	for j := 0; j < 1000; j++ {
 		WriteResultRow(&source, row)

@@ -459,9 +459,6 @@ func mapToResultRow(m map[string]any) *pb.ResultRow {
 	if v, ok := m["raw"].(string); ok {
 		row.Raw = v
 	}
-	if v, ok := m["line_num"].(float64); ok {
-		row.LineNum = int64(v)
-	}
 	return row
 }
 

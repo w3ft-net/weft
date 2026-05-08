@@ -10,7 +10,7 @@ import (
 )
 
 // QueryPlan is the result of analyzing a weft pipeline. ShardSQL is the
-// pushed-down SQL sent to shard nodes — always SELECT line_num, {raw_expr} as raw.
+// pushed-down SQL sent to shard nodes — always SELECT {raw_expr} as raw, ts.
 // The customer = '...' predicate and ts >= / ts <= bounds are baked in
 // at plan time (see Plan's customer / start / end arguments) so callers
 // dispatch ShardSQL directly without further surgery.
@@ -38,7 +38,7 @@ type QueryPlan struct {
 	// Populated from classifyShardMode walking ComputeStages for the
 	// terminal sort. Consumed by compute's merge_key and by the
 	// coordinator when taking the direct-to-compute path.
-	ShardOrderBy string // "", "line_num[ DESC]", or "raw[ DESC]"
+	ShardOrderBy string // "", "ts[ DESC]", or "raw[ DESC]"
 	ShardLimit   int    // per-shard LIMIT; 0 when pushdown is unsafe
 
 	// DirectShardSQL is the SQL the coordinator sends to shards via

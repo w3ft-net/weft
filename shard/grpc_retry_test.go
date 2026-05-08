@@ -29,7 +29,7 @@ func (s *retryServer) Query(_ *pb.QueryRequest, stream grpc.ServerStreamingServe
 	if n <= s.failBeforeOK {
 		return status.Error(s.failCode, s.failMsg)
 	}
-	return stream.Send(&pb.ResultRow{LineNum: 42, Raw: "after-retry"})
+	return stream.Send(&pb.ResultRow{Raw: "after-retry", TsUnixNs: coldT0.UnixNano()})
 }
 
 func startRetryServer(t *testing.T, srv *retryServer) (addr string, stop func()) {
@@ -68,8 +68,8 @@ func TestGRPCShard_Query_RetriesOnCanceled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Query after retry: %v", err)
 	}
-	if len(rows) != 1 || rows[0].LineNum != 42 {
-		t.Errorf("rows = %v, want one row with line_num=42", rows)
+	if len(rows) != 1 || rows[0].Raw != "after-retry" {
+		t.Errorf("rows = %v, want one row with Raw=after-retry", rows)
 	}
 	if got := srv.calls.Load(); got != 2 {
 		t.Errorf("server saw %d calls, want 2 (one fail + one retry)", got)

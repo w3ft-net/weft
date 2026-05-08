@@ -418,13 +418,15 @@ func (x *QueryToComputeResponse) GetRowsSent() int64 {
 	return 0
 }
 
-// ResultRow is the query result type — shards always return (line_num, raw).
+// ResultRow is the query result type — shards return (raw, ts).
 // The planner bakes projections into the SQL so raw contains exactly what
 // the consumer needs (full log line, JSON payload, projected fields, etc.).
 type ResultRow struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	LineNum       int64                  `protobuf:"varint,1,opt,name=line_num,json=lineNum,proto3" json:"line_num,omitempty"`
-	Raw           string                 `protobuf:"bytes,2,opt,name=raw,proto3" json:"raw,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Deprecated: Marked as deprecated in proto/weftpb/weft.proto.
+	LineNum       int64  `protobuf:"varint,1,opt,name=line_num,json=lineNum,proto3" json:"line_num,omitempty"`
+	Raw           string `protobuf:"bytes,2,opt,name=raw,proto3" json:"raw,omitempty"`
+	TsUnixNs      int64  `protobuf:"varint,3,opt,name=ts_unix_ns,json=tsUnixNs,proto3" json:"ts_unix_ns,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -459,6 +461,7 @@ func (*ResultRow) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{8}
 }
 
+// Deprecated: Marked as deprecated in proto/weftpb/weft.proto.
 func (x *ResultRow) GetLineNum() int64 {
 	if x != nil {
 		return x.LineNum
@@ -473,28 +476,36 @@ func (x *ResultRow) GetRaw() string {
 	return ""
 }
 
+func (x *ResultRow) GetTsUnixNs() int64 {
+	if x != nil {
+		return x.TsUnixNs
+	}
+	return 0
+}
+
 // LogRow is the ingestion type — weftd agents and CloudWatch poller send
 // structured rows to the coordinator for insertion into shards.
 type LogRow struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	LineNum       int64                  `protobuf:"varint,1,opt,name=line_num,json=lineNum,proto3" json:"line_num,omitempty"`
-	Raw           string                 `protobuf:"bytes,2,opt,name=raw,proto3" json:"raw,omitempty"`
-	App           string                 `protobuf:"bytes,3,opt,name=app,proto3" json:"app,omitempty"`
-	Level         string                 `protobuf:"bytes,4,opt,name=level,proto3" json:"level,omitempty"`
-	TsUnixNs      int64                  `protobuf:"varint,5,opt,name=ts_unix_ns,json=tsUnixNs,proto3" json:"ts_unix_ns,omitempty"`
-	Instance      string                 `protobuf:"bytes,6,opt,name=instance,proto3" json:"instance,omitempty"` // hostname of the emitting machine
-	PayloadJson   []byte                 `protobuf:"bytes,7,opt,name=payload_json,json=payloadJson,proto3" json:"payload_json,omitempty"`
-	Fields        []string               `protobuf:"bytes,8,rep,name=fields,proto3" json:"fields,omitempty"`
-	Customer      string                 `protobuf:"bytes,9,opt,name=customer,proto3" json:"customer,omitempty"`
-	Deployment    string                 `protobuf:"bytes,10,opt,name=deployment,proto3" json:"deployment,omitempty"`                         // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
-	Env           string                 `protobuf:"bytes,11,opt,name=env,proto3" json:"env,omitempty"`                                       // deployment environment (token-derived)
-	Version       string                 `protobuf:"bytes,12,opt,name=version,proto3" json:"version,omitempty"`                               // service version (agent version_file)
-	Region        string                 `protobuf:"bytes,13,opt,name=region,proto3" json:"region,omitempty"`                                 // cloud region (agent cloud-metadata probe)
-	Cluster       string                 `protobuf:"bytes,14,opt,name=cluster,proto3" json:"cluster,omitempty"`                               // k8s cluster name (k8s mode only)
-	K8SNamespace  string                 `protobuf:"bytes,15,opt,name=k8s_namespace,json=k8sNamespace,proto3" json:"k8s_namespace,omitempty"` // k8s namespace (k8s mode only)
-	Pod           string                 `protobuf:"bytes,16,opt,name=pod,proto3" json:"pod,omitempty"`                                       // k8s pod name (k8s mode only)
-	Container     string                 `protobuf:"bytes,17,opt,name=container,proto3" json:"container,omitempty"`                           // k8s container name (k8s mode only)
-	Node          string                 `protobuf:"bytes,18,opt,name=node,proto3" json:"node,omitempty"`                                     // stable workload identity (file-sourced; see docs/plans/dimensions-from-files.md)
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Deprecated: Marked as deprecated in proto/weftpb/weft.proto.
+	LineNum       int64    `protobuf:"varint,1,opt,name=line_num,json=lineNum,proto3" json:"line_num,omitempty"`
+	Raw           string   `protobuf:"bytes,2,opt,name=raw,proto3" json:"raw,omitempty"`
+	App           string   `protobuf:"bytes,3,opt,name=app,proto3" json:"app,omitempty"`
+	Level         string   `protobuf:"bytes,4,opt,name=level,proto3" json:"level,omitempty"`
+	TsUnixNs      int64    `protobuf:"varint,5,opt,name=ts_unix_ns,json=tsUnixNs,proto3" json:"ts_unix_ns,omitempty"`
+	Instance      string   `protobuf:"bytes,6,opt,name=instance,proto3" json:"instance,omitempty"` // hostname of the emitting machine
+	PayloadJson   []byte   `protobuf:"bytes,7,opt,name=payload_json,json=payloadJson,proto3" json:"payload_json,omitempty"`
+	Fields        []string `protobuf:"bytes,8,rep,name=fields,proto3" json:"fields,omitempty"`
+	Customer      string   `protobuf:"bytes,9,opt,name=customer,proto3" json:"customer,omitempty"`
+	Deployment    string   `protobuf:"bytes,10,opt,name=deployment,proto3" json:"deployment,omitempty"`                         // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
+	Env           string   `protobuf:"bytes,11,opt,name=env,proto3" json:"env,omitempty"`                                       // deployment environment (token-derived)
+	Version       string   `protobuf:"bytes,12,opt,name=version,proto3" json:"version,omitempty"`                               // service version (agent version_file)
+	Region        string   `protobuf:"bytes,13,opt,name=region,proto3" json:"region,omitempty"`                                 // cloud region (agent cloud-metadata probe)
+	Cluster       string   `protobuf:"bytes,14,opt,name=cluster,proto3" json:"cluster,omitempty"`                               // k8s cluster name (k8s mode only)
+	K8SNamespace  string   `protobuf:"bytes,15,opt,name=k8s_namespace,json=k8sNamespace,proto3" json:"k8s_namespace,omitempty"` // k8s namespace (k8s mode only)
+	Pod           string   `protobuf:"bytes,16,opt,name=pod,proto3" json:"pod,omitempty"`                                       // k8s pod name (k8s mode only)
+	Container     string   `protobuf:"bytes,17,opt,name=container,proto3" json:"container,omitempty"`                           // k8s container name (k8s mode only)
+	Node          string   `protobuf:"bytes,18,opt,name=node,proto3" json:"node,omitempty"`                                     // stable workload identity (file-sourced; see docs/plans/dimensions-from-files.md)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -529,6 +540,7 @@ func (*LogRow) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{9}
 }
 
+// Deprecated: Marked as deprecated in proto/weftpb/weft.proto.
 func (x *LogRow) GetLineNum() int64 {
 	if x != nil {
 		return x.LineNum
@@ -751,10 +763,10 @@ type CreateJobRequest struct {
 	// streams. One of:
 	//
 	//	""             → concat (rows emitted in arrival order).
-	//	"line_num"     → merge by line_num ascending.
-	//	"line_num DESC" → merge by line_num descending.
-	//	"raw"           → merge by raw ascending.
-	//	"raw DESC"      → merge by raw descending.
+	//	"ts"           → merge by ts_unix_ns ascending.
+	//	"ts DESC"      → merge by ts_unix_ns descending.
+	//	"raw"          → merge by raw ascending.
+	//	"raw DESC"     → merge by raw descending.
 	//
 	// Shards bake the same ORDER BY into their SQL so their per-shard
 	// output is already sorted; merge_key tells compute which column
@@ -2207,14 +2219,12 @@ func (x *CoordinatorExecuteResponse) GetStderr() string {
 	return ""
 }
 
-// Line is one row of output from an Execute call. line_num carries
-// the shard-side row index for log queries (lets clients dedupe
-// against follow-mode broker rows); zero for compute output and
-// non-shard sources.
+// Line is one row of output from an Execute call.
 type Line struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Raw           string                 `protobuf:"bytes,1,opt,name=raw,proto3" json:"raw,omitempty"`
-	LineNum       int64                  `protobuf:"varint,2,opt,name=line_num,json=lineNum,proto3" json:"line_num,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Raw   string                 `protobuf:"bytes,1,opt,name=raw,proto3" json:"raw,omitempty"`
+	// Deprecated: Marked as deprecated in proto/weftpb/weft.proto.
+	LineNum       int64 `protobuf:"varint,2,opt,name=line_num,json=lineNum,proto3" json:"line_num,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2256,6 +2266,7 @@ func (x *Line) GetRaw() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in proto/weftpb/weft.proto.
 func (x *Line) GetLineNum() int64 {
 	if x != nil {
 		return x.LineNum
@@ -4468,12 +4479,14 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\fcompute_addr\x18\x02 \x01(\tR\vcomputeAddr\x12\x15\n" +
 	"\x06job_id\x18\x03 \x01(\tR\x05jobId\"5\n" +
 	"\x16QueryToComputeResponse\x12\x1b\n" +
-	"\trows_sent\x18\x01 \x01(\x03R\browsSent\"8\n" +
-	"\tResultRow\x12\x19\n" +
-	"\bline_num\x18\x01 \x01(\x03R\alineNum\x12\x10\n" +
-	"\x03raw\x18\x02 \x01(\tR\x03raw\"\xd5\x03\n" +
-	"\x06LogRow\x12\x19\n" +
-	"\bline_num\x18\x01 \x01(\x03R\alineNum\x12\x10\n" +
+	"\trows_sent\x18\x01 \x01(\x03R\browsSent\"Z\n" +
+	"\tResultRow\x12\x1d\n" +
+	"\bline_num\x18\x01 \x01(\x03B\x02\x18\x01R\alineNum\x12\x10\n" +
+	"\x03raw\x18\x02 \x01(\tR\x03raw\x12\x1c\n" +
+	"\n" +
+	"ts_unix_ns\x18\x03 \x01(\x03R\btsUnixNs\"\xd9\x03\n" +
+	"\x06LogRow\x12\x1d\n" +
+	"\bline_num\x18\x01 \x01(\x03B\x02\x18\x01R\alineNum\x12\x10\n" +
 	"\x03raw\x18\x02 \x01(\tR\x03raw\x12\x10\n" +
 	"\x03app\x18\x03 \x01(\tR\x03app\x12\x14\n" +
 	"\x05level\x18\x04 \x01(\tR\x05level\x12\x1c\n" +
@@ -4599,10 +4612,10 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x05lines\x18\x01 \x03(\v2\n" +
 	".weft.LineR\x05lines\x12&\n" +
 	"\anotices\x18\x02 \x03(\v2\f.weft.NoticeR\anotices\x12\x16\n" +
-	"\x06stderr\x18\x03 \x01(\tR\x06stderr\"3\n" +
+	"\x06stderr\x18\x03 \x01(\tR\x06stderr\"7\n" +
 	"\x04Line\x12\x10\n" +
-	"\x03raw\x18\x01 \x01(\tR\x03raw\x12\x19\n" +
-	"\bline_num\x18\x02 \x01(\x03R\alineNum\"X\n" +
+	"\x03raw\x18\x01 \x01(\tR\x03raw\x12\x1d\n" +
+	"\bline_num\x18\x02 \x01(\x03B\x02\x18\x01R\alineNum\"X\n" +
 	"\x06Notice\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x14\n" +

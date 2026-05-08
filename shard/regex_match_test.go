@@ -33,9 +33,9 @@ func TestDuckDB_RegexpMatches_PinsPushdownContract(t *testing.T) {
 	defer s.Close()
 
 	rows := []*pb.LogRow{
-		{LineNum: 1, Raw: "2026-03-28T10:00:01 ERROR vimgym i-001 connection timeout", Customer: "kevlar", App: "vimgym"},
-		{LineNum: 2, Raw: "2026-03-28T10:00:05 INFO vimgym i-001 request completed", Customer: "kevlar", App: "vimgym"},
-		{LineNum: 3, Raw: "2026-03-28T10:00:09 DEBUG vimgym i-001 cache miss", Customer: "kevlar", App: "vimgym"},
+		{Raw: "2026-03-28T10:00:01 ERROR vimgym i-001 connection timeout", Customer: "kevlar", App: "vimgym", TsUnixNs: 1},
+		{Raw: "2026-03-28T10:00:05 INFO vimgym i-001 request completed", Customer: "kevlar", App: "vimgym", TsUnixNs: 2},
+		{Raw: "2026-03-28T10:00:09 DEBUG vimgym i-001 cache miss", Customer: "kevlar", App: "vimgym", TsUnixNs: 3},
 	}
 	if err := s.Ingest(rows); err != nil {
 		t.Fatalf("ingest: %v", err)
@@ -48,27 +48,27 @@ func TestDuckDB_RegexpMatches_PinsPushdownContract(t *testing.T) {
 	}{
 		{
 			name: "case-sensitive substring (grep, awk regex, sed)",
-			sql:  "SELECT line_num, raw FROM logs WHERE customer = 'kevlar' AND regexp_matches(raw, 'timeout')",
+			sql:  "SELECT raw, ts FROM logs WHERE customer = 'kevlar' AND regexp_matches(raw, 'timeout')",
 			want: 1,
 		},
 		{
 			name: "case-insensitive substring (grep -i)",
-			sql:  "SELECT line_num, raw FROM logs WHERE customer = 'kevlar' AND regexp_matches(raw, 'TIMEOUT', 'i')",
+			sql:  "SELECT raw, ts FROM logs WHERE customer = 'kevlar' AND regexp_matches(raw, 'TIMEOUT', 'i')",
 			want: 1,
 		},
 		{
 			name: "negated substring (grep -v, awk !~)",
-			sql:  "SELECT line_num, raw FROM logs WHERE customer = 'kevlar' AND NOT regexp_matches(raw, 'timeout')",
+			sql:  "SELECT raw, ts FROM logs WHERE customer = 'kevlar' AND NOT regexp_matches(raw, 'timeout')",
 			want: 2,
 		},
 		{
 			name: "negated case-insensitive (grep -iv)",
-			sql:  "SELECT line_num, raw FROM logs WHERE customer = 'kevlar' AND NOT regexp_matches(raw, 'DEBUG', 'i')",
+			sql:  "SELECT raw, ts FROM logs WHERE customer = 'kevlar' AND NOT regexp_matches(raw, 'DEBUG', 'i')",
 			want: 2,
 		},
 		{
 			name: "anchored pattern (^ERROR — what `raw ~` would silently break)",
-			sql:  "SELECT line_num, raw FROM logs WHERE customer = 'kevlar' AND regexp_matches(raw, 'ERROR')",
+			sql:  "SELECT raw, ts FROM logs WHERE customer = 'kevlar' AND regexp_matches(raw, 'ERROR')",
 			want: 1,
 		},
 	}

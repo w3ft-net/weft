@@ -23,8 +23,8 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 	t.Cleanup(func() { live.Close() })
 
 	liveRows := []*pb.LogRow{
-		{LineNum: 1, Raw: "live row 1", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t1.Add(1 * time.Second).UnixNano()},
-		{LineNum: 2, Raw: "live row 2", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t1.Add(2 * time.Second).UnixNano()},
+		{Raw: "live row 1", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t1.Add(1 * time.Second).UnixNano()},
+		{Raw: "live row 2", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t1.Add(2 * time.Second).UnixNano()},
 	}
 	if err := live.Ingest(liveRows); err != nil {
 		t.Fatal(err)
@@ -36,9 +36,9 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 		t.Fatal(err)
 	}
 	coldRows := []*pb.LogRow{
-		{LineNum: 10, Raw: "cold row 1", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
-		{LineNum: 11, Raw: "cold row 2", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
-		{LineNum: 12, Raw: "cold row 3", App: "vimgym", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
+		{Raw: "cold row 1", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
+		{Raw: "cold row 2", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
+		{Raw: "cold row 3", App: "vimgym", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
 	}
 	if err := coldDS.Ingest(coldRows); err != nil {
 		t.Fatal(err)
@@ -101,7 +101,7 @@ func TestProvisioner_ArchivesExpiredShard(t *testing.T) {
 	t.Cleanup(func() { ds.Close() })
 
 	rows := []*pb.LogRow{
-		{LineNum: 1, Raw: "test row", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
+		{Raw: "test row", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
 	}
 	if err := ds.Ingest(rows); err != nil {
 		t.Fatal(err)
@@ -139,7 +139,7 @@ func TestProvisioner_ArchivesExpiredShard(t *testing.T) {
 	}
 
 	// Verify the ColdShard is queryable.
-	result, err := entry.Shard.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")
+	result, err := entry.Shard.Query("SELECT raw, ts FROM logs WHERE customer = 'kevlar'")
 	if err != nil {
 		t.Fatalf("query archived shard: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ds.Ingest([]*pb.LogRow{{LineNum: 1, Raw: "persisted", App: "vimgym", Customer: "kevlar", TsUnixNs: t0.UnixNano()}})
+	ds.Ingest([]*pb.LogRow{{Raw: "persisted", App: "vimgym", Customer: "kevlar", TsUnixNs: t0.UnixNano()}})
 	ds.ExportToParquet(parquetPath)
 	ds.Close()
 
@@ -235,7 +235,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 	}
 
 	// Query should work on the restored ColdShard.
-	rows, err := entry.Shard.Query("SELECT line_num, raw FROM logs WHERE customer = 'kevlar'")
+	rows, err := entry.Shard.Query("SELECT raw, ts FROM logs WHERE customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}

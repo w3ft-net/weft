@@ -6,9 +6,9 @@ import (
 )
 
 // TestClassifyShardMode_A_NoSort covers Mode A: no `sort` anywhere in
-// the compute pipeline. ShardOrderBy is "line_num" (with direction
-// following a terminal head/tail), and ShardLimit mirrors Plan.Limit
-// when head/tail pushed down, else 0.
+// the compute pipeline. ShardOrderBy is "ts" (with direction following
+// a terminal head/tail), and ShardLimit mirrors Plan.Limit when
+// head/tail pushed down, else 0.
 func TestClassifyShardMode_A_NoSort(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -19,43 +19,43 @@ func TestClassifyShardMode_A_NoSort(t *testing.T) {
 		{
 			name:     "plain cat (no head/tail, no sort)",
 			pipeline: `cat vimgym.log`,
-			wantOrd:  "line_num",
+			wantOrd:  "ts",
 			wantLim:  0,
 		},
 		{
 			name:     "cat + grep only",
 			pipeline: `cat vimgym.log | grep ERROR`,
-			wantOrd:  "line_num",
+			wantOrd:  "ts",
 			wantLim:  0,
 		},
 		{
 			name:     "head 5 as source",
 			pipeline: `head -5 vimgym.log`,
-			wantOrd:  "line_num",
+			wantOrd:  "ts",
 			wantLim:  5,
 		},
 		{
 			name:     "tail 10 as source",
 			pipeline: `tail -10 vimgym.log`,
-			wantOrd:  "line_num DESC",
+			wantOrd:  "ts DESC",
 			wantLim:  10,
 		},
 		{
 			name:     "cat + head stage",
 			pipeline: `cat vimgym.log | head -20`,
-			wantOrd:  "line_num",
+			wantOrd:  "ts",
 			wantLim:  20,
 		},
 		{
 			name:     "filter + head stage pushes both",
 			pipeline: `cat vimgym.log | grep timeout | head -7`,
-			wantOrd:  "line_num",
+			wantOrd:  "ts",
 			wantLim:  7,
 		},
 		{
 			name:     "awk END block stays in compute — no sort → still Mode A",
 			pipeline: `cat vimgym.log | awk '{ count++ } END { print count }'`,
-			wantOrd:  "line_num",
+			wantOrd:  "ts",
 			wantLim:  0,
 		},
 	}
@@ -177,34 +177,34 @@ func TestDirectShardSQL(t *testing.T) {
 		want     string
 	}{
 		{
-			name:     "mode A no head/tail — appends ORDER BY line_num",
+			name:     "mode A no head/tail — appends ORDER BY ts",
 			pipeline: `cat vimgym.log | grep ERROR`,
-			want:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND regexp_matches(raw, 'ERROR') ORDER BY line_num`,
+			want:     `SELECT raw, ts FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') AND regexp_matches(raw, 'ERROR') ORDER BY ts`,
 		},
 		{
-			name:     "mode A with head — ORDER BY line_num LIMIT N",
+			name:     "mode A with head — ORDER BY ts LIMIT N",
 			pipeline: `cat vimgym.log | head -5`,
-			want:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') ORDER BY line_num LIMIT 5`,
+			want:     `SELECT raw, ts FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') ORDER BY ts LIMIT 5`,
 		},
 		{
-			name:     "mode A with tail — ORDER BY line_num DESC LIMIT N",
+			name:     "mode A with tail — ORDER BY ts DESC LIMIT N",
 			pipeline: `tail -10 vimgym.log`,
-			want:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') ORDER BY line_num DESC LIMIT 10`,
+			want:     `SELECT raw, ts FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') ORDER BY ts DESC LIMIT 10`,
 		},
 		{
 			name:     "mode B plain sort — ORDER BY raw",
 			pipeline: `cat vimgym.log | sort`,
-			want:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') ORDER BY raw`,
+			want:     `SELECT raw, ts FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') ORDER BY raw`,
 		},
 		{
 			name:     "mode B sort -r — ORDER BY raw DESC",
 			pipeline: `cat vimgym.log | sort -r`,
-			want:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') ORDER BY raw DESC`,
+			want:     `SELECT raw, ts FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') ORDER BY raw DESC`,
 		},
 		{
 			name:     "mode C sort -n — no ORDER BY",
 			pipeline: `cat vimgym.log | sort -n`,
-			want:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
+			want:     `SELECT raw, ts FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 		},
 		{
 			// The awk print folds into the SELECT projection so the
@@ -213,7 +213,7 @@ func TestDirectShardSQL(t *testing.T) {
 			// raw produces the same global order `awk | sort` would.
 			name:     "mode B after projection fold — sort-as-first stage",
 			pipeline: `cat vimgym.log | awk '{ print $3 }' | sort`,
-			want:     `SELECT line_num, list_extract(fields, 3) as raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') ORDER BY raw`,
+			want:     `SELECT list_extract(fields, 3) as raw, ts FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%') ORDER BY raw`,
 		},
 		{
 			// awk END block is a genuine compute-side transform that
@@ -221,7 +221,7 @@ func TestDirectShardSQL(t *testing.T) {
 			// compute stage → Mode C.
 			name:     "mode C — awk END block before sort",
 			pipeline: `cat vimgym.log | awk '{ count++ } END { print count }' | sort`,
-			want:     `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
+			want:     `SELECT raw, ts FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 		},
 	}
 	for _, tc := range cases {

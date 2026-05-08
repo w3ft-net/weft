@@ -122,11 +122,8 @@ func (j *LocalComputeJob) Result() (string, error) {
 }
 
 // MergedRows drains the stream and reconstructs *pb.ResultRow entries
-// for zero-stage jobs (each line maps back to one row, preserving
-// LineNum). Returns nil for staged jobs — the post-stage text path
-// loses row metadata. Used by the coordinator transitionally while
-// QueryResult still carries Rows; phase 4 follow-ups will route
-// callers to Stream() directly.
+// for zero-stage jobs. Returns nil for staged jobs — the post-stage
+// text path loses row metadata.
 func (j *LocalComputeJob) MergedRows() ([]*pb.ResultRow, error) {
 	if len(j.stages) > 0 {
 		return nil, nil
@@ -137,7 +134,7 @@ func (j *LocalComputeJob) MergedRows() ([]*pb.ResultRow, error) {
 	}
 	rows := make([]*pb.ResultRow, len(lines))
 	for i, l := range lines {
-		rows[i] = &pb.ResultRow{LineNum: l.LineNum, Raw: l.Raw}
+		rows[i] = &pb.ResultRow{Raw: l.Raw}
 	}
 	return rows, nil
 }
@@ -169,8 +166,8 @@ func (j *LocalComputeJob) consume() {
 			if j.limit > 0 && emitted >= j.limit {
 				return false
 			}
-			j.streamCh <- Line{Raw: row.Raw, LineNum: row.LineNum}
 			emitted++
+			j.streamCh <- Line{Raw: row.Raw, LineNum: int64(emitted)}
 			return true
 		})
 		return

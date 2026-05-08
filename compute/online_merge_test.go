@@ -38,7 +38,7 @@ func rawsOf(rows []*pb.ResultRow) []string {
 	return out
 }
 
-func TestOnlineMerge_LineNumAsc_FullyOrdered(t *testing.T) {
+func TestOnlineMerge_TsAsc_FullyOrdered(t *testing.T) {
 	script := []ComputeMessage{
 		{Row: row(1, "one"), ShardID: "a"},
 		{Row: row(3, "three"), ShardID: "a"},
@@ -49,7 +49,7 @@ func TestOnlineMerge_LineNumAsc_FullyOrdered(t *testing.T) {
 		{Row: row(6, "six"), ShardID: "b"},
 		{ShardID: "b", Sentinel: true},
 	}
-	got := rawsOf(drainOnlineMerge(t, script, 2, "line_num", 0))
+	got := rawsOf(drainOnlineMerge(t, script, 2, "ts", 0))
 	want := []string{"one", "two", "three", "four", "five", "six"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("merge order = %v, want %v", got, want)
@@ -71,7 +71,7 @@ func TestOnlineMerge_OneShardLeadsTheOther(t *testing.T) {
 		{Row: row(6, "six"), ShardID: "b"},
 		{ShardID: "b", Sentinel: true},
 	}
-	got := rawsOf(drainOnlineMerge(t, script, 2, "line_num", 0))
+	got := rawsOf(drainOnlineMerge(t, script, 2, "ts", 0))
 	want := []string{"one", "two", "three", "four", "five", "six"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("merge order = %v, want %v", got, want)
@@ -89,7 +89,7 @@ func TestOnlineMerge_ShardSentinelMidstream(t *testing.T) {
 		{Row: row(4, "four"), ShardID: "b"},
 		{ShardID: "b", Sentinel: true},
 	}
-	got := rawsOf(drainOnlineMerge(t, script, 2, "line_num", 0))
+	got := rawsOf(drainOnlineMerge(t, script, 2, "ts", 0))
 	want := []string{"one", "two", "three", "four"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("merge order = %v, want %v", got, want)
@@ -106,14 +106,14 @@ func TestOnlineMerge_EmptyShardSentinelOnly(t *testing.T) {
 		{ShardID: "a", Sentinel: true},
 		{ShardID: "b", Sentinel: true},
 	}
-	got := rawsOf(drainOnlineMerge(t, script, 2, "line_num", 0))
+	got := rawsOf(drainOnlineMerge(t, script, 2, "ts", 0))
 	want := []string{"one", "two", "three"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("merge order = %v, want %v", got, want)
 	}
 }
 
-func TestOnlineMerge_LineNumDesc(t *testing.T) {
+func TestOnlineMerge_TsDesc(t *testing.T) {
 	script := []ComputeMessage{
 		{Row: row(5, "five"), ShardID: "a"},
 		{Row: row(3, "three"), ShardID: "a"},
@@ -124,7 +124,7 @@ func TestOnlineMerge_LineNumDesc(t *testing.T) {
 		{Row: row(2, "two"), ShardID: "b"},
 		{ShardID: "b", Sentinel: true},
 	}
-	got := rawsOf(drainOnlineMerge(t, script, 2, "line_num DESC", 0))
+	got := rawsOf(drainOnlineMerge(t, script, 2, "ts DESC", 0))
 	want := []string{"six", "five", "four", "three", "two", "one"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("merge order = %v, want %v", got, want)
@@ -178,7 +178,7 @@ func TestOnlineMerge_GlobalLimit(t *testing.T) {
 		{Row: row(6, "six"), ShardID: "b"},
 		{ShardID: "b", Sentinel: true},
 	}
-	got := rawsOf(drainOnlineMerge(t, script, 2, "line_num", 3))
+	got := rawsOf(drainOnlineMerge(t, script, 2, "ts", 3))
 	want := []string{"one", "two", "three"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("limited merge = %v, want %v", got, want)
@@ -197,7 +197,7 @@ func TestOnlineMerge_StreamingProperty(t *testing.T) {
 
 	go func() {
 		defer close(done)
-		onlineMerge(ch, 2, "line_num", func(r *pb.ResultRow) bool {
+		onlineMerge(ch, 2, "ts", func(r *pb.ResultRow) bool {
 			emitted <- r
 			return true
 		})
@@ -251,7 +251,7 @@ func TestOnlineMerge_ZeroShardsExitsImmediately(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		onlineMerge(ch, 0, "line_num", func(*pb.ResultRow) bool { return true })
+		onlineMerge(ch, 0, "ts", func(*pb.ResultRow) bool { return true })
 	}()
 	select {
 	case <-done:
@@ -268,7 +268,7 @@ func TestOnlineMerge_OneShard(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		onlineMerge(ch, 1, "line_num", func(r *pb.ResultRow) bool {
+		onlineMerge(ch, 1, "ts", func(r *pb.ResultRow) bool {
 			emitted <- r
 			return true
 		})
@@ -292,7 +292,7 @@ func TestOnlineMerge_OneShard(t *testing.T) {
 // refactor to onlineMerge actually surfaces the stream end-to-end.
 func TestLocalComputeJob_OnlineStreaming(t *testing.T) {
 	pool := &LocalComputePool{}
-	job := pool.NewJob(nil, 2, "line_num", 0)
+	job := pool.NewJob(nil, 2, "ts", 0)
 
 	job.SendRow(row(1, "one"), "a")
 	job.SendRow(row(2, "two"), "b")

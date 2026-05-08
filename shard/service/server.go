@@ -202,7 +202,7 @@ func (s *Server) Archive(ctx context.Context, req *pb.ArchiveRequest) (*pb.Archi
 	return &pb.ArchiveResponse{ParquetPath: path}, nil
 }
 
-// Query executes SQL and streams result rows (line_num, raw) to the client.
+// Query executes SQL and streams result rows (raw, ts) to the client.
 // Per-request deadline from the runtime config caps pathological queries
 // (deep OR chains, raw LIKE '%...%' across billions of rows) — DuckDB
 // honors ctx cancellation at row boundaries.

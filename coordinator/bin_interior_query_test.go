@@ -48,11 +48,11 @@ func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, 
 
 	now := time.Now()
 	rows := []*pb.LogRow{
-		logRow(1, "api", "ERROR", cust.Name, now.Add(-10*time.Minute)),
-		logRow(2, "api", "ERROR", cust.Name, now.Add(-8*time.Minute)),
-		logRow(3, "api", "INFO", cust.Name, now.Add(-6*time.Minute)),
-		logRow(4, "web", "ERROR", cust.Name, now.Add(-5*time.Minute)),
-		logRow(5, "web", "WARN", cust.Name, now.Add(-2*time.Minute)),
+		logRow("api", "ERROR", cust.Name, now.Add(-10*time.Minute)),
+		logRow("api", "ERROR", cust.Name, now.Add(-8*time.Minute)),
+		logRow("api", "INFO", cust.Name, now.Add(-6*time.Minute)),
+		logRow("web", "ERROR", cust.Name, now.Add(-5*time.Minute)),
+		logRow("web", "WARN", cust.Name, now.Add(-2*time.Minute)),
 	}
 	if err := s.Ingest(rows); err != nil {
 		t.Fatalf("ingest: %v", err)
@@ -73,9 +73,8 @@ func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, 
 	return c, db, cust.Name, custID
 }
 
-func logRow(lineNum int64, app, level, customer string, ts time.Time) *pb.LogRow {
+func logRow(app, level, customer string, ts time.Time) *pb.LogRow {
 	return &pb.LogRow{
-		LineNum:  lineNum,
 		Raw:      level + " " + app + " line",
 		Fields:   []string{level, app, "line"},
 		TsUnixNs: ts.UnixNano(),
@@ -229,7 +228,7 @@ echo finished`
 	t.Logf("script stderr: %q", resultD.Stderr)
 
 	// And /tmp/snapshot in the customer's shellfs should contain the
-	// 3 api rows from the fixture (LineNum 1, 2, 3 — ERROR/ERROR/INFO).
+	// 3 api rows from the fixture (ERROR/ERROR/INFO).
 	data, err := db.ReadTmpFile(custID, snapPath)
 	if err != nil {
 		t.Fatalf("read %s back: %v (the redirect was probably dropped)", snapPath, err)

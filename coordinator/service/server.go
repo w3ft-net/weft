@@ -189,7 +189,7 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 			stderrAcc.WriteByte('\n')
 			continue
 		}
-		batch = append(batch, &pb.Line{Raw: line.Raw, LineNum: line.LineNum})
+		batch = append(batch, &pb.Line{Raw: line.Raw})
 		if len(batch) >= batchSize {
 			if err := flush(false, nil); err != nil {
 				return err

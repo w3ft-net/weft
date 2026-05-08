@@ -9,10 +9,6 @@ import (
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
-// TestBrokerStream_RowsThroughFilter feeds two rows into the channel
-// and asserts the LiveFilter projects each row's Raw onto the stream.
-// passthrough filter is what BuildLiveFilter returns for stage-less
-// pipelines.
 func TestBrokerStream_RowsThroughFilter(t *testing.T) {
 	ch := make(chan *pb.LogRow, 4)
 	bs := &brokerStream{
@@ -20,27 +16,24 @@ func TestBrokerStream_RowsThroughFilter(t *testing.T) {
 		filter: passthroughFilter,
 	}
 
-	ch <- &pb.LogRow{LineNum: 1, Raw: "first"}
-	ch <- &pb.LogRow{LineNum: 2, Raw: "second"}
+	ch <- &pb.LogRow{Raw: "first"}
+	ch <- &pb.LogRow{Raw: "second"}
 	close(ch)
 
 	ctx := context.Background()
-	got, _ := drainBroker(t, ctx, bs)
+	got := drainBrokerRaws(t, ctx, bs)
 	want := []string{"first", "second"}
 	if !equal(got, want) {
 		t.Errorf("lines = %v, want %v", got, want)
 	}
 }
 
-// TestBrokerStream_FilterReturnsZero_RowSkipped covers the empty-
-// filter-output path: rows whose filter() returns nil are dropped
-// silently and the stream waits for the next channel send.
 func TestBrokerStream_FilterReturnsZero_RowSkipped(t *testing.T) {
 	ch := make(chan *pb.LogRow, 4)
 	rejectAll := func(*pb.LogRow) []string { return nil }
 	bs := &brokerStream{ch: ch, filter: rejectAll}
 
-	ch <- &pb.LogRow{LineNum: 1, Raw: "rejected"}
+	ch <- &pb.LogRow{Raw: "rejected"}
 	close(ch)
 
 	ctx := context.Background()
@@ -53,9 +46,6 @@ func TestBrokerStream_FilterReturnsZero_RowSkipped(t *testing.T) {
 	}
 }
 
-// TestBrokerStream_MultiLineFilter_QueuesExtras verifies that when a
-// filter returns several lines for a single row, brokerStream emits
-// them across consecutive Next calls without losing any.
 func TestBrokerStream_MultiLineFilter_QueuesExtras(t *testing.T) {
 	ch := make(chan *pb.LogRow, 1)
 	expand := func(row *pb.LogRow) []string {
@@ -63,28 +53,19 @@ func TestBrokerStream_MultiLineFilter_QueuesExtras(t *testing.T) {
 	}
 	bs := &brokerStream{ch: ch, filter: expand}
 
-	ch <- &pb.LogRow{LineNum: 5, Raw: "row"}
+	ch <- &pb.LogRow{Raw: "row"}
 	close(ch)
 
 	ctx := context.Background()
-	got, lineNums := drainBroker(t, ctx, bs)
+	got := drainBrokerRaws(t, ctx, bs)
 	want := []string{"row-a", "row-b", "row-c"}
 	if !equal(got, want) {
 		t.Errorf("lines = %v, want %v", got, want)
 	}
-	for _, ln := range lineNums {
-		if ln != 5 {
-			t.Errorf("LineNum = %d, want 5 on every emitted line", ln)
-		}
-	}
 }
 
-// TestBrokerStream_CtxCancel_Returns: pin the cancellation contract.
-// A blocked Next returns ctx.Err() promptly when the context cancels —
-// without that, follow streams would leak goroutines on client
-// disconnect.
 func TestBrokerStream_CtxCancel_Returns(t *testing.T) {
-	ch := make(chan *pb.LogRow) // unbuffered + never sent on → blocks
+	ch := make(chan *pb.LogRow)
 	bs := &brokerStream{ch: ch, filter: passthroughFilter}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -99,8 +80,6 @@ func TestBrokerStream_CtxCancel_Returns(t *testing.T) {
 	}
 }
 
-// TestBrokerStream_Close_Unsubscribes pins the cleanup contract.
-// Close runs the unsub callback exactly once even on repeated calls.
 func TestBrokerStream_Close_Unsubscribes(t *testing.T) {
 	calls := 0
 	bs := &brokerStream{
@@ -123,19 +102,17 @@ func passthroughFilter(row *pb.LogRow) []string {
 	return []string{row.Raw}
 }
 
-func drainBroker(t *testing.T, ctx context.Context, bs *brokerStream) ([]string, []int64) {
+func drainBrokerRaws(t *testing.T, ctx context.Context, bs *brokerStream) []string {
 	t.Helper()
 	var raws []string
-	var nums []int64
 	for {
 		line, ok, err := bs.Next(ctx)
 		if err != nil {
 			t.Fatalf("Next: %v", err)
 		}
 		if !ok {
-			return raws, nums
+			return raws
 		}
 		raws = append(raws, line.Raw)
-		nums = append(nums, line.LineNum)
 	}
 }

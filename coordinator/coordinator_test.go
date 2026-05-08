@@ -117,45 +117,45 @@ func setupTestCoordinator(t *testing.T) *Coordinator {
 func shard0Rows() []*pb.LogRow {
 	base := t0
 	return []*pb.LogRow{
-		{LineNum: 1, Raw: "2026-03-28T10:00:01 ERROR vimgym i-001 connection timeout", Fields: []string{"2026-03-28T10:00:01", "ERROR", "vimgym", "i-001", "connection", "timeout"}, TsUnixNs: base.Add(1 * time.Second).UnixNano(), Level: "ERROR", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 500, "action": "login", "user_id": "u1"})},
-		{LineNum: 2, Raw: "2026-03-28T10:00:05 INFO vimgym i-001 request completed", Fields: []string{"2026-03-28T10:00:05", "INFO", "vimgym", "i-001", "request", "completed"}, TsUnixNs: base.Add(5 * time.Second).UnixNano(), Level: "INFO", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "list", "duration_ms": 45})},
-		{LineNum: 3, Raw: "2026-03-28T10:01:00 WARN callbox i-002 slow query detected", Fields: []string{"2026-03-28T10:01:00", "WARN", "callbox", "i-002", "slow", "query", "detected"}, TsUnixNs: base.Add(1 * time.Minute).UnixNano(), Level: "WARN", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "search", "duration_ms": 1500})},
-		{LineNum: 4, Raw: "2026-03-28T10:02:00 ERROR vimgym i-001 null pointer exception", Fields: []string{"2026-03-28T10:02:00", "ERROR", "vimgym", "i-001", "null", "pointer", "exception"}, TsUnixNs: base.Add(2 * time.Minute).UnixNano(), Level: "ERROR", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 500, "action": "update", "user_id": "u2"})},
-		{LineNum: 5, Raw: "2026-03-28T10:03:00 INFO callbox i-002 health check ok", Fields: []string{"2026-03-28T10:03:00", "INFO", "callbox", "i-002", "health", "check", "ok"}, TsUnixNs: base.Add(3 * time.Minute).UnixNano(), Level: "INFO", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "health"})},
-		{LineNum: 6, Raw: "2026-03-28T10:05:00 ERROR callbox i-002 connection timeout to database", Fields: []string{"2026-03-28T10:05:00", "ERROR", "callbox", "i-002", "connection", "timeout", "to", "database"}, TsUnixNs: base.Add(5 * time.Minute).UnixNano(), Level: "ERROR", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 503, "action": "query"})},
-		{LineNum: 7, Raw: "2026-03-28T10:10:00 INFO vimgym i-003 user signup completed", Fields: []string{"2026-03-28T10:10:00", "INFO", "vimgym", "i-003", "user", "signup", "completed"}, TsUnixNs: base.Add(10 * time.Minute).UnixNano(), Level: "INFO", App: "vimgym", Instance: "i-003", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 201, "action": "signup", "user_id": "u3"})},
-		{LineNum: 8, Raw: "2026-03-28T10:15:00 DEBUG vimgym i-001 cache miss for key session:u1", Fields: []string{"2026-03-28T10:15:00", "DEBUG", "vimgym", "i-001", "cache", "miss", "for", "key", "session:u1"}, TsUnixNs: base.Add(15 * time.Minute).UnixNano(), Level: "DEBUG", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "cache_lookup"})},
-		{LineNum: 9, Raw: "2026-03-28T10:20:00 ERROR vimgym i-003 timeout waiting for response", Fields: []string{"2026-03-28T10:20:00", "ERROR", "vimgym", "i-003", "timeout", "waiting", "for", "response"}, TsUnixNs: base.Add(20 * time.Minute).UnixNano(), Level: "ERROR", App: "vimgym", Instance: "i-003", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 504, "action": "proxy"})},
-		{LineNum: 10, Raw: "2026-03-28T10:25:00 INFO callbox i-002 batch job completed 150 records", Fields: []string{"2026-03-28T10:25:00", "INFO", "callbox", "i-002", "batch", "job", "completed", "150", "records"}, TsUnixNs: base.Add(25 * time.Minute).UnixNano(), Level: "INFO", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "batch", "count": 150})},
-		{LineNum: 11, Raw: "2026-03-28T10:30:00 WARN vimgym i-001 high memory usage 85%", Fields: []string{"2026-03-28T10:30:00", "WARN", "vimgym", "i-001", "high", "memory", "usage", "85%"}, TsUnixNs: base.Add(30 * time.Minute).UnixNano(), Level: "WARN", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "monitor", "memory_pct": 85})},
-		{LineNum: 12, Raw: "2026-03-28T10:35:00 INFO vimgym i-001 request completed", Fields: []string{"2026-03-28T10:35:00", "INFO", "vimgym", "i-001", "request", "completed"}, TsUnixNs: base.Add(35 * time.Minute).UnixNano(), Level: "INFO", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "list", "duration_ms": 32})},
-		{LineNum: 13, Raw: "2026-03-28T10:40:00 ERROR callbox i-002 authentication failed for tenant acme", Fields: []string{"2026-03-28T10:40:00", "ERROR", "callbox", "i-002", "authentication", "failed", "for", "tenant", "acme"}, TsUnixNs: base.Add(40 * time.Minute).UnixNano(), Level: "ERROR", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 401, "action": "auth"})},
-		{LineNum: 14, Raw: "2026-03-28T10:45:00 INFO vimgym i-003 deploy v2.3.1 started", Fields: []string{"2026-03-28T10:45:00", "INFO", "vimgym", "i-003", "deploy", "v2.3.1", "started"}, TsUnixNs: base.Add(45 * time.Minute).UnixNano(), Level: "INFO", App: "vimgym", Instance: "i-003", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "deploy", "version": "v2.3.1"})},
-		{LineNum: 15, Raw: "2026-03-28T10:50:00 INFO callbox i-002 connection pool resized to 20", Fields: []string{"2026-03-28T10:50:00", "INFO", "callbox", "i-002", "connection", "pool", "resized", "to", "20"}, TsUnixNs: base.Add(50 * time.Minute).UnixNano(), Level: "INFO", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "pool_resize", "size": 20})},
+		{Raw: "2026-03-28T10:00:01 ERROR vimgym i-001 connection timeout", Fields: []string{"2026-03-28T10:00:01", "ERROR", "vimgym", "i-001", "connection", "timeout"}, TsUnixNs: base.Add(1 * time.Second).UnixNano(), Level: "ERROR", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 500, "action": "login", "user_id": "u1"})},
+		{Raw: "2026-03-28T10:00:05 INFO vimgym i-001 request completed", Fields: []string{"2026-03-28T10:00:05", "INFO", "vimgym", "i-001", "request", "completed"}, TsUnixNs: base.Add(5 * time.Second).UnixNano(), Level: "INFO", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "list", "duration_ms": 45})},
+		{Raw: "2026-03-28T10:01:00 WARN callbox i-002 slow query detected", Fields: []string{"2026-03-28T10:01:00", "WARN", "callbox", "i-002", "slow", "query", "detected"}, TsUnixNs: base.Add(1 * time.Minute).UnixNano(), Level: "WARN", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "search", "duration_ms": 1500})},
+		{Raw: "2026-03-28T10:02:00 ERROR vimgym i-001 null pointer exception", Fields: []string{"2026-03-28T10:02:00", "ERROR", "vimgym", "i-001", "null", "pointer", "exception"}, TsUnixNs: base.Add(2 * time.Minute).UnixNano(), Level: "ERROR", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 500, "action": "update", "user_id": "u2"})},
+		{Raw: "2026-03-28T10:03:00 INFO callbox i-002 health check ok", Fields: []string{"2026-03-28T10:03:00", "INFO", "callbox", "i-002", "health", "check", "ok"}, TsUnixNs: base.Add(3 * time.Minute).UnixNano(), Level: "INFO", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "health"})},
+		{Raw: "2026-03-28T10:05:00 ERROR callbox i-002 connection timeout to database", Fields: []string{"2026-03-28T10:05:00", "ERROR", "callbox", "i-002", "connection", "timeout", "to", "database"}, TsUnixNs: base.Add(5 * time.Minute).UnixNano(), Level: "ERROR", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 503, "action": "query"})},
+		{Raw: "2026-03-28T10:10:00 INFO vimgym i-003 user signup completed", Fields: []string{"2026-03-28T10:10:00", "INFO", "vimgym", "i-003", "user", "signup", "completed"}, TsUnixNs: base.Add(10 * time.Minute).UnixNano(), Level: "INFO", App: "vimgym", Instance: "i-003", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 201, "action": "signup", "user_id": "u3"})},
+		{Raw: "2026-03-28T10:15:00 DEBUG vimgym i-001 cache miss for key session:u1", Fields: []string{"2026-03-28T10:15:00", "DEBUG", "vimgym", "i-001", "cache", "miss", "for", "key", "session:u1"}, TsUnixNs: base.Add(15 * time.Minute).UnixNano(), Level: "DEBUG", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "cache_lookup"})},
+		{Raw: "2026-03-28T10:20:00 ERROR vimgym i-003 timeout waiting for response", Fields: []string{"2026-03-28T10:20:00", "ERROR", "vimgym", "i-003", "timeout", "waiting", "for", "response"}, TsUnixNs: base.Add(20 * time.Minute).UnixNano(), Level: "ERROR", App: "vimgym", Instance: "i-003", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 504, "action": "proxy"})},
+		{Raw: "2026-03-28T10:25:00 INFO callbox i-002 batch job completed 150 records", Fields: []string{"2026-03-28T10:25:00", "INFO", "callbox", "i-002", "batch", "job", "completed", "150", "records"}, TsUnixNs: base.Add(25 * time.Minute).UnixNano(), Level: "INFO", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "batch", "count": 150})},
+		{Raw: "2026-03-28T10:30:00 WARN vimgym i-001 high memory usage 85%", Fields: []string{"2026-03-28T10:30:00", "WARN", "vimgym", "i-001", "high", "memory", "usage", "85%"}, TsUnixNs: base.Add(30 * time.Minute).UnixNano(), Level: "WARN", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "monitor", "memory_pct": 85})},
+		{Raw: "2026-03-28T10:35:00 INFO vimgym i-001 request completed", Fields: []string{"2026-03-28T10:35:00", "INFO", "vimgym", "i-001", "request", "completed"}, TsUnixNs: base.Add(35 * time.Minute).UnixNano(), Level: "INFO", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "list", "duration_ms": 32})},
+		{Raw: "2026-03-28T10:40:00 ERROR callbox i-002 authentication failed for tenant acme", Fields: []string{"2026-03-28T10:40:00", "ERROR", "callbox", "i-002", "authentication", "failed", "for", "tenant", "acme"}, TsUnixNs: base.Add(40 * time.Minute).UnixNano(), Level: "ERROR", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 401, "action": "auth"})},
+		{Raw: "2026-03-28T10:45:00 INFO vimgym i-003 deploy v2.3.1 started", Fields: []string{"2026-03-28T10:45:00", "INFO", "vimgym", "i-003", "deploy", "v2.3.1", "started"}, TsUnixNs: base.Add(45 * time.Minute).UnixNano(), Level: "INFO", App: "vimgym", Instance: "i-003", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "deploy", "version": "v2.3.1"})},
+		{Raw: "2026-03-28T10:50:00 INFO callbox i-002 connection pool resized to 20", Fields: []string{"2026-03-28T10:50:00", "INFO", "callbox", "i-002", "connection", "pool", "resized", "to", "20"}, TsUnixNs: base.Add(50 * time.Minute).UnixNano(), Level: "INFO", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "pool_resize", "size": 20})},
 	}
 }
 
 func shard1Rows() []*pb.LogRow {
 	base := t1
 	return []*pb.LogRow{
-		{LineNum: 16, Raw: "2026-03-28T11:00:01 INFO vimgym i-001 deploy v2.3.1 completed", Fields: []string{"2026-03-28T11:00:01", "INFO", "vimgym", "i-001", "deploy", "v2.3.1", "completed"}, TsUnixNs: base.Add(1 * time.Second).UnixNano(), Level: "INFO", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "deploy", "version": "v2.3.1"})},
-		{LineNum: 17, Raw: "2026-03-28T11:01:00 ERROR vimgym i-001 500 internal server error on /api/users", Fields: []string{"2026-03-28T11:01:00", "ERROR", "vimgym", "i-001", "500", "internal", "server", "error", "on", "/api/users"}, TsUnixNs: base.Add(1 * time.Minute).UnixNano(), Level: "ERROR", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 500, "action": "api", "path": "/api/users"})},
-		{LineNum: 18, Raw: "2026-03-28T11:05:00 WARN callbox i-002 disk usage above 80%", Fields: []string{"2026-03-28T11:05:00", "WARN", "callbox", "i-002", "disk", "usage", "above", "80%"}, TsUnixNs: base.Add(5 * time.Minute).UnixNano(), Level: "WARN", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "monitor", "disk_pct": 82})},
-		{LineNum: 19, Raw: "2026-03-28T11:10:00 INFO vimgym i-003 cache warmed 2500 keys", Fields: []string{"2026-03-28T11:10:00", "INFO", "vimgym", "i-003", "cache", "warmed", "2500", "keys"}, TsUnixNs: base.Add(10 * time.Minute).UnixNano(), Level: "INFO", App: "vimgym", Instance: "i-003", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "cache_warm", "keys": 2500})},
-		{LineNum: 20, Raw: "2026-03-28T11:15:00 ERROR callbox i-002 timeout connecting to redis", Fields: []string{"2026-03-28T11:15:00", "ERROR", "callbox", "i-002", "timeout", "connecting", "to", "redis"}, TsUnixNs: base.Add(15 * time.Minute).UnixNano(), Level: "ERROR", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 503, "action": "cache"})},
-		{LineNum: 21, Raw: "2026-03-28T11:20:00 INFO vimgym i-001 request completed", Fields: []string{"2026-03-28T11:20:00", "INFO", "vimgym", "i-001", "request", "completed"}, TsUnixNs: base.Add(20 * time.Minute).UnixNano(), Level: "INFO", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "list", "duration_ms": 28})},
-		{LineNum: 22, Raw: "2026-03-28T11:25:00 WARN vimgym i-003 request latency spike p99=2.3s", Fields: []string{"2026-03-28T11:25:00", "WARN", "vimgym", "i-003", "request", "latency", "spike", "p99=2.3s"}, TsUnixNs: base.Add(25 * time.Minute).UnixNano(), Level: "WARN", App: "vimgym", Instance: "i-003", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "monitor", "p99_ms": 2300})},
-		{LineNum: 23, Raw: "2026-03-28T11:30:00 ERROR vimgym i-001 connection timeout to upstream", Fields: []string{"2026-03-28T11:30:00", "ERROR", "vimgym", "i-001", "connection", "timeout", "to", "upstream"}, TsUnixNs: base.Add(30 * time.Minute).UnixNano(), Level: "ERROR", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 504, "action": "proxy"})},
-		{LineNum: 24, Raw: "2026-03-28T11:40:00 INFO callbox i-002 health check ok", Fields: []string{"2026-03-28T11:40:00", "INFO", "callbox", "i-002", "health", "check", "ok"}, TsUnixNs: base.Add(40 * time.Minute).UnixNano(), Level: "INFO", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "health"})},
-		{LineNum: 25, Raw: "2026-03-28T11:50:00 INFO vimgym i-003 graceful shutdown initiated", Fields: []string{"2026-03-28T11:50:00", "INFO", "vimgym", "i-003", "graceful", "shutdown", "initiated"}, TsUnixNs: base.Add(50 * time.Minute).UnixNano(), Level: "INFO", App: "vimgym", Instance: "i-003", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "shutdown"})},
+		{Raw: "2026-03-28T11:00:01 INFO vimgym i-001 deploy v2.3.1 completed", Fields: []string{"2026-03-28T11:00:01", "INFO", "vimgym", "i-001", "deploy", "v2.3.1", "completed"}, TsUnixNs: base.Add(1 * time.Second).UnixNano(), Level: "INFO", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "deploy", "version": "v2.3.1"})},
+		{Raw: "2026-03-28T11:01:00 ERROR vimgym i-001 500 internal server error on /api/users", Fields: []string{"2026-03-28T11:01:00", "ERROR", "vimgym", "i-001", "500", "internal", "server", "error", "on", "/api/users"}, TsUnixNs: base.Add(1 * time.Minute).UnixNano(), Level: "ERROR", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 500, "action": "api", "path": "/api/users"})},
+		{Raw: "2026-03-28T11:05:00 WARN callbox i-002 disk usage above 80%", Fields: []string{"2026-03-28T11:05:00", "WARN", "callbox", "i-002", "disk", "usage", "above", "80%"}, TsUnixNs: base.Add(5 * time.Minute).UnixNano(), Level: "WARN", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "monitor", "disk_pct": 82})},
+		{Raw: "2026-03-28T11:10:00 INFO vimgym i-003 cache warmed 2500 keys", Fields: []string{"2026-03-28T11:10:00", "INFO", "vimgym", "i-003", "cache", "warmed", "2500", "keys"}, TsUnixNs: base.Add(10 * time.Minute).UnixNano(), Level: "INFO", App: "vimgym", Instance: "i-003", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "cache_warm", "keys": 2500})},
+		{Raw: "2026-03-28T11:15:00 ERROR callbox i-002 timeout connecting to redis", Fields: []string{"2026-03-28T11:15:00", "ERROR", "callbox", "i-002", "timeout", "connecting", "to", "redis"}, TsUnixNs: base.Add(15 * time.Minute).UnixNano(), Level: "ERROR", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 503, "action": "cache"})},
+		{Raw: "2026-03-28T11:20:00 INFO vimgym i-001 request completed", Fields: []string{"2026-03-28T11:20:00", "INFO", "vimgym", "i-001", "request", "completed"}, TsUnixNs: base.Add(20 * time.Minute).UnixNano(), Level: "INFO", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "list", "duration_ms": 28})},
+		{Raw: "2026-03-28T11:25:00 WARN vimgym i-003 request latency spike p99=2.3s", Fields: []string{"2026-03-28T11:25:00", "WARN", "vimgym", "i-003", "request", "latency", "spike", "p99=2.3s"}, TsUnixNs: base.Add(25 * time.Minute).UnixNano(), Level: "WARN", App: "vimgym", Instance: "i-003", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "monitor", "p99_ms": 2300})},
+		{Raw: "2026-03-28T11:30:00 ERROR vimgym i-001 connection timeout to upstream", Fields: []string{"2026-03-28T11:30:00", "ERROR", "vimgym", "i-001", "connection", "timeout", "to", "upstream"}, TsUnixNs: base.Add(30 * time.Minute).UnixNano(), Level: "ERROR", App: "vimgym", Instance: "i-001", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 504, "action": "proxy"})},
+		{Raw: "2026-03-28T11:40:00 INFO callbox i-002 health check ok", Fields: []string{"2026-03-28T11:40:00", "INFO", "callbox", "i-002", "health", "check", "ok"}, TsUnixNs: base.Add(40 * time.Minute).UnixNano(), Level: "INFO", App: "callbox", Instance: "i-002", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "health"})},
+		{Raw: "2026-03-28T11:50:00 INFO vimgym i-003 graceful shutdown initiated", Fields: []string{"2026-03-28T11:50:00", "INFO", "vimgym", "i-003", "graceful", "shutdown", "initiated"}, TsUnixNs: base.Add(50 * time.Minute).UnixNano(), Level: "INFO", App: "vimgym", Instance: "i-003", Customer: "kevlar", PayloadJson: payload(map[string]any{"status": 200, "action": "shutdown"})},
 	}
 }
 
 // otherCustomerRows returns rows from a different customer to test isolation.
 func otherCustomerRows() []*pb.LogRow {
 	return []*pb.LogRow{
-		{LineNum: 100, Raw: "2026-03-28T10:00:30 ERROR vimgym i-999 should not appear", Fields: []string{"2026-03-28T10:00:30", "ERROR", "vimgym", "i-999"}, TsUnixNs: t0.Add(30 * time.Second).UnixNano(), Level: "ERROR", App: "vimgym", Instance: "i-999", Customer: "acme", PayloadJson: payload(map[string]any{"status": 500})},
-		{LineNum: 101, Raw: "2026-03-28T10:01:30 INFO callbox i-999 should not appear", Fields: []string{"2026-03-28T10:01:30", "INFO", "callbox", "i-999"}, TsUnixNs: t0.Add(90 * time.Second).UnixNano(), Level: "INFO", App: "callbox", Instance: "i-999", Customer: "acme", PayloadJson: payload(map[string]any{"status": 200})},
+		{Raw: "2026-03-28T10:00:30 ERROR vimgym i-999 should not appear", Fields: []string{"2026-03-28T10:00:30", "ERROR", "vimgym", "i-999"}, TsUnixNs: t0.Add(30 * time.Second).UnixNano(), Level: "ERROR", App: "vimgym", Instance: "i-999", Customer: "acme", PayloadJson: payload(map[string]any{"status": 500})},
+		{Raw: "2026-03-28T10:01:30 INFO callbox i-999 should not appear", Fields: []string{"2026-03-28T10:01:30", "INFO", "callbox", "i-999"}, TsUnixNs: t0.Add(90 * time.Second).UnixNano(), Level: "INFO", App: "callbox", Instance: "i-999", Customer: "acme", PayloadJson: payload(map[string]any{"status": 200})},
 	}
 }
 
@@ -173,10 +173,10 @@ func TestQuery_AwkLevelFilter(t *testing.T) {
 	rows := resD.Rows
 	for _, r := range rows {
 		if !strings.Contains(r.Raw, "vimgym") {
-			t.Errorf("expected raw to contain 'vimgym', got %q (line %d)", r.Raw, r.LineNum)
+			t.Errorf("expected raw to contain 'vimgym', got %q", r.Raw)
 		}
 		if !strings.Contains(r.Raw, "ERROR") {
-			t.Errorf("expected raw to contain 'ERROR', got %q (line %d)", r.Raw, r.LineNum)
+			t.Errorf("expected raw to contain 'ERROR', got %q", r.Raw)
 		}
 	}
 	// Shard 0 has vimgym ERROR lines: 1, 4, 9. Shard 1 has: 17, 23. Total 5.
@@ -195,14 +195,14 @@ func TestQuery_GrepTimeout(t *testing.T) {
 	rows := resD.Rows
 	for _, r := range rows {
 		if !strings.Contains(strings.ToLower(r.Raw), "timeout") {
-			t.Errorf("expected raw to contain 'timeout', got %q (line %d)", r.Raw, r.LineNum)
+			t.Errorf("expected raw to contain 'timeout', got %q", r.Raw)
 		}
 	}
 	// "timeout" appears in lines: 1, 6, 9 (shard 0), 20, 23 (shard 1) = 5
 	if len(rows) != 5 {
 		t.Errorf("expected 5 timeout rows, got %d", len(rows))
 		for _, r := range rows {
-			t.Logf("  line %d: %s", r.LineNum, r.Raw)
+			t.Logf("  %s", r.Raw)
 		}
 	}
 }
@@ -217,7 +217,7 @@ func TestQuery_JqSelectStatus500(t *testing.T) {
 	rows := resD.Rows
 	for _, r := range rows {
 		if !strings.Contains(r.Raw, "vimgym") {
-			t.Errorf("expected raw to contain 'vimgym', got %q (line %d)", r.Raw, r.LineNum)
+			t.Errorf("expected raw to contain 'vimgym', got %q", r.Raw)
 		}
 	}
 	// status=500 in vimgym: lines 1, 4 (shard 0), 17 (shard 1) = 3
@@ -277,8 +277,8 @@ func TestQuery_TimeRangeScoping_Shard0Only(t *testing.T) {
 	}
 	// Shard-0 rows have timestamps 10:xx (window t0..t1); shard-1
 	// rows would be 11:xx (window t1..t2). Check the timestamp prefix
-	// in Raw rather than LineNum — warp's bytes-only stdout drops
-	// LineNum metadata, but Raw still carries the original timestamp.
+	// in Raw — warp's bytes-only stdout drops
+	// metadata, but Raw still carries the original timestamp.
 	for _, r := range rows {
 		if !strings.Contains(r.Raw, "T10:") {
 			t.Errorf("got row outside shard 0 range: %q", r.Raw)
@@ -319,7 +319,7 @@ func TestQuery_CustomerIsolation(t *testing.T) {
 	// With ResultRow we can only verify none of the "acme" rows leaked through.
 	for _, r := range rows {
 		if strings.Contains(r.Raw, "should not appear") {
-			t.Fatalf("customer isolation broken: acme row leaked through on line %d", r.LineNum)
+			t.Fatal("customer isolation broken: acme row leaked through")
 		}
 	}
 }
@@ -334,7 +334,7 @@ func TestQuery_WarpLogAppFilter(t *testing.T) {
 	rows := resD.Rows
 	for _, r := range rows {
 		if !strings.Contains(r.Raw, "callbox") {
-			t.Errorf("expected raw to contain 'callbox', got %q (line %d)", r.Raw, r.LineNum)
+			t.Errorf("expected raw to contain 'callbox', got %q", r.Raw)
 		}
 	}
 	// Callbox rows in kevlar: shard 0 has 5 (lines 3,5,6,10,13,15=6), shard 1 has 3 (18,20,24)
@@ -342,7 +342,7 @@ func TestQuery_WarpLogAppFilter(t *testing.T) {
 	if len(rows) != 9 {
 		t.Errorf("expected 9 callbox rows, got %d", len(rows))
 		for _, r := range rows {
-			t.Logf("  line %d: %s", r.LineNum, r.Raw)
+			t.Logf("  %s", r.Raw)
 		}
 	}
 }
@@ -359,7 +359,7 @@ func TestQuery_ResultsOrderedByTimestamp(t *testing.T) {
 	// ("2026-03-28T10:00:01 ..."). Sort-stable ordering through the
 	// pipeline means consecutive rows must have non-decreasing
 	// timestamp prefixes. (Pre-streaming-runLocal we asserted via
-	// LineNum, but warp's bytes-only stdout drops that metadata; the
+	// metadata since warp's bytes-only stdout drops it; the
 	// timestamp on the wire is the surviving order key.)
 	tsPrefix := func(raw string) string {
 		// First 19 chars are "YYYY-MM-DDTHH:MM:SS" given the fixture.
@@ -386,9 +386,9 @@ func TestQuery_MergesAcrossShards(t *testing.T) {
 	rows := resD.Rows
 	// Detect shard origin via the timestamp prefix in Raw: shard-0
 	// rows are at 10:xx (window t0..t1), shard-1 at 11:xx (t1..t2).
-	// LineNum used to disambiguate but the unified-dispatch path
+	// the unified-dispatch path
 	// renders rows through warp's stdout, which is bytes-only —
-	// LineNum is dropped. Raw still carries the original timestamp.
+	// Raw still carries the original timestamp.
 	hasShard0 := false
 	hasShard1 := false
 	for _, r := range rows {
@@ -642,8 +642,8 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 
 	tr := TimeRange{Start: now.Add(-2 * time.Hour), End: now}
 	plan := &planner.QueryPlan{
-		ShardSQL:       "SELECT line_num, raw FROM logs WHERE customer = 'kevlar' ORDER BY line_num",
-		DirectShardSQL: "SELECT line_num, raw FROM logs WHERE customer = 'kevlar' ORDER BY line_num",
+		ShardSQL:       "SELECT raw, ts FROM logs WHERE customer = 'kevlar' ORDER BY ts",
+		DirectShardSQL: "SELECT raw, ts FROM logs WHERE customer = 'kevlar' ORDER BY ts",
 		FollowApp:      "vimgym",
 	}
 

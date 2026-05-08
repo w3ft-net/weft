@@ -81,7 +81,7 @@ func (b *sqlBuilder) setLimitOffset(limit, offset int) {
 }
 
 // build produces the final SQL string.
-// Always: SELECT line_num, {rawExpr} as raw FROM logs ...
+// Always: SELECT {rawExpr} as raw, ts FROM logs ...
 func (b *sqlBuilder) build() string {
 	return b.buildWith(b.orderBy, b.limit)
 }
@@ -89,15 +89,15 @@ func (b *sqlBuilder) build() string {
 // buildWith produces SQL with the given orderBy + limit, ignoring the
 // builder's own orderBy / limit fields. Used by the direct-to-compute
 // path (see docs/plans/direct-to-compute.md §3) so the shard SQL
-// carries the mode-classified "line_num" / "raw" ordering instead of
+// carries the mode-classified "ts" / "raw" ordering instead of
 // the head/tail-derived "ts ASC".
 func (b *sqlBuilder) buildWith(orderBy string, limit int) string {
 	var sb strings.Builder
 
 	if b.rawExpr == "raw" {
-		sb.WriteString("SELECT line_num, raw FROM logs")
+		sb.WriteString("SELECT raw, ts FROM logs")
 	} else {
-		sb.WriteString(fmt.Sprintf("SELECT line_num, %s as raw FROM logs", b.rawExpr))
+		sb.WriteString(fmt.Sprintf("SELECT %s as raw, ts FROM logs", b.rawExpr))
 	}
 
 	if len(b.predicates) > 0 {

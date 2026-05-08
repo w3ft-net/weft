@@ -108,7 +108,7 @@ func TestIngestRoundTrip_GrantCentralWorker(t *testing.T) {
 	}
 
 	// Query: all rows for this app.
-	allRows, err := ds.Query("SELECT line_num, raw FROM logs WHERE app = 'grantcentral-worker' AND customer = 'kevlar'")
+	allRows, err := ds.Query("SELECT raw, ts FROM logs WHERE app = 'grantcentral-worker' AND customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestIngestRoundTrip_GrantCentralWorker(t *testing.T) {
 	}
 
 	// Query: ERROR rows only.
-	errorRows, err := ds.Query("SELECT line_num, raw FROM logs WHERE app = 'grantcentral-worker' AND customer = 'kevlar' AND level = 'ERROR'")
+	errorRows, err := ds.Query("SELECT raw, ts FROM logs WHERE app = 'grantcentral-worker' AND customer = 'kevlar' AND level = 'ERROR'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestIngestRoundTrip_GrantCentralWorker(t *testing.T) {
 	}
 
 	// Query: grep for "timeout" in raw.
-	timeoutRows, err := ds.Query("SELECT line_num, raw FROM logs WHERE app = 'grantcentral-worker' AND customer = 'kevlar' AND raw LIKE '%timeout%'")
+	timeoutRows, err := ds.Query("SELECT raw, ts FROM logs WHERE app = 'grantcentral-worker' AND customer = 'kevlar' AND raw LIKE '%timeout%'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestIngestRoundTrip_VimGym(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	allRows, err := ds.Query("SELECT line_num, raw FROM logs WHERE app = 'vimgym'")
+	allRows, err := ds.Query("SELECT raw, ts FROM logs WHERE app = 'vimgym'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func TestIngestRoundTrip_VimGym(t *testing.T) {
 	}
 
 	// Grep for "bot:" which appears in several vimgym lines.
-	botRows, err := ds.Query("SELECT line_num, raw FROM logs WHERE app = 'vimgym' AND raw LIKE '%bot:%'")
+	botRows, err := ds.Query("SELECT raw, ts FROM logs WHERE app = 'vimgym' AND raw LIKE '%bot:%'")
 	if err != nil {
 		t.Fatal(err)
 	}

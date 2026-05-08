@@ -43,7 +43,6 @@ type DuckDBShard struct {
 
 const createTableSQL = `
 CREATE TABLE IF NOT EXISTS logs (
-    line_num       BIGINT,
     raw            TEXT,
     fields         TEXT[],
     ts             TIMESTAMP,
@@ -82,6 +81,7 @@ var migrationSteps = []string{
 	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS pod TEXT`,
 	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS container TEXT`,
 	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS node TEXT`,
+	`ALTER TABLE logs DROP COLUMN IF EXISTS line_num`,
 }
 
 // NewDuckDBShard opens or creates a DuckDB database at path and initializes the
@@ -133,14 +133,14 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("INSERT INTO logs (line_num, raw, fields, ts, level, app, instance, customer, payload, deployment, env, version, region, cluster, k8s_namespace, pod, container, node) VALUES ")
+	sb.WriteString("INSERT INTO logs (raw, fields, ts, level, app, instance, customer, payload, deployment, env, version, region, cluster, k8s_namespace, pod, container, node) VALUES ")
 
-	args := make([]any, 0, len(rows)*18)
+	args := make([]any, 0, len(rows)*17)
 	for i, r := range rows {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 
 		payloadStr := "{}"
 		if len(r.PayloadJson) > 0 {
@@ -148,7 +148,6 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
 		}
 
 		args = append(args,
-			r.LineNum,
 			r.Raw,
 			r.Fields,
 			time.Unix(0, r.TsUnixNs),
@@ -310,7 +309,7 @@ func (s *DuckDBShard) ExportToS3Parquet(s3Path string, cfg *S3Config) error {
 }
 
 // Query executes a SQL query and returns the matching result rows.
-// The SQL is expected to return (line_num, raw) — two columns.
+// The SQL is expected to return (raw, ts).
 func (s *DuckDBShard) Query(query string) ([]*pb.ResultRow, error) {
 	return s.QueryContext(context.Background(), query)
 }

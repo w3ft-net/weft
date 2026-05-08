@@ -43,7 +43,6 @@ func TestExecuteFollow_HistoricalThenBroker(t *testing.T) {
 	// (vimgym). The brokerStream's filter is BuildLiveFilter(plan),
 	// which for `tail vimgym.log` is a passthrough scoped to vimgym.
 	c.Tail.Broadcast([]*pb.LogRow{{
-		LineNum:  9999,
 		Raw:      "2026-03-28T12:00:00 INFO vimgym i-001 live broadcast",
 		App:      "vimgym",
 		Customer: "kevlar",
@@ -61,9 +60,6 @@ func TestExecuteFollow_HistoricalThenBroker(t *testing.T) {
 	}
 	if line.Raw != "2026-03-28T12:00:00 INFO vimgym i-001 live broadcast" {
 		t.Errorf("broker row Raw = %q, want the broadcast we sent", line.Raw)
-	}
-	if line.LineNum != 9999 {
-		t.Errorf("broker row LineNum = %d, want 9999", line.LineNum)
 	}
 }
 

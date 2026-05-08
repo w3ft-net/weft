@@ -7,39 +7,25 @@ import (
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
-// TestLocalComputeJob_LimitTruncatesMergedStream is the regression
-// test for the tail-N-per-shard amplification bug:
-//
-//	WEFT_ENDPOINT=http://localhost:8080 weft sh -c \
-//	  "tail -n 500 /log/acme/api.log | wc -l"
-//	# expected: ≤ 500
-//	# actual (before fix): ≈ 500 × num_shards (per-shard LIMIT was the
-//	# only one applied; compute saw the full union and counted it)
-//
-// The compute pool must truncate the merged stream to the planner's
-// global limit before the stages run, otherwise downstream stages
-// (`wc -l`, `head`, `awk`) see the unmerged amplification.
 func TestLocalComputeJob_LimitTruncatesMergedStream(t *testing.T) {
 	pool := &LocalComputePool{}
-	// Two shards, 5 rows each, line_num-interleaved so the merge
-	// produces a deterministic 1..10 sequence.
-	job := pool.NewJob([]string{"wc -l"}, 2, "line_num", 3)
+	job := pool.NewJob([]string{"wc -l"}, 2, "ts", 3)
 	for _, r := range []*pb.ResultRow{
-		{LineNum: 1, Raw: "one"},
-		{LineNum: 3, Raw: "three"},
-		{LineNum: 5, Raw: "five"},
-		{LineNum: 7, Raw: "seven"},
-		{LineNum: 9, Raw: "nine"},
+		{TsUnixNs: 1000, Raw: "one"},
+		{TsUnixNs: 3000, Raw: "three"},
+		{TsUnixNs: 5000, Raw: "five"},
+		{TsUnixNs: 7000, Raw: "seven"},
+		{TsUnixNs: 9000, Raw: "nine"},
 	} {
 		job.SendRow(r, "a")
 	}
 	job.SendSentinel("a")
 	for _, r := range []*pb.ResultRow{
-		{LineNum: 2, Raw: "two"},
-		{LineNum: 4, Raw: "four"},
-		{LineNum: 6, Raw: "six"},
-		{LineNum: 8, Raw: "eight"},
-		{LineNum: 10, Raw: "ten"},
+		{TsUnixNs: 2000, Raw: "two"},
+		{TsUnixNs: 4000, Raw: "four"},
+		{TsUnixNs: 6000, Raw: "six"},
+		{TsUnixNs: 8000, Raw: "eight"},
+		{TsUnixNs: 10000, Raw: "ten"},
 	} {
 		job.SendRow(r, "b")
 	}
@@ -55,23 +41,19 @@ func TestLocalComputeJob_LimitTruncatesMergedStream(t *testing.T) {
 	}
 }
 
-// TestLocalComputeJob_LimitZeroIsUnlimited verifies the existing
-// "no limit" code path still passes the full merged stream through.
-// Catches a future refactor where Limit becomes a required field
-// and zero accidentally truncates everything.
 func TestLocalComputeJob_LimitZeroIsUnlimited(t *testing.T) {
 	pool := &LocalComputePool{}
-	job := pool.NewJob([]string{"wc -l"}, 2, "line_num", 0)
+	job := pool.NewJob([]string{"wc -l"}, 2, "ts", 0)
 	for _, r := range []*pb.ResultRow{
-		{LineNum: 1, Raw: "one"},
-		{LineNum: 3, Raw: "three"},
+		{TsUnixNs: 1000, Raw: "one"},
+		{TsUnixNs: 3000, Raw: "three"},
 	} {
 		job.SendRow(r, "a")
 	}
 	job.SendSentinel("a")
 	for _, r := range []*pb.ResultRow{
-		{LineNum: 2, Raw: "two"},
-		{LineNum: 4, Raw: "four"},
+		{TsUnixNs: 2000, Raw: "two"},
+		{TsUnixNs: 4000, Raw: "four"},
 	} {
 		job.SendRow(r, "b")
 	}

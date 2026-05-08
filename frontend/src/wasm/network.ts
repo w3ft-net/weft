@@ -24,7 +24,7 @@ export function cancelQuery() {
   abortController = null
 }
 
-export async function execQuery(pipeline: string) {
+export async function execQuery(pipeline: string, timeStartNs?: number, timeEndNs?: number) {
   cancelQuery()
   abortController = new AbortController()
   const token = localStorage.getItem('weft_token')
@@ -42,7 +42,7 @@ export async function execQuery(pipeline: string) {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ pipeline, follow: false }),
+      body: JSON.stringify({ pipeline, follow: false, time_start_ns: timeStartNs ?? 0, time_end_ns: timeEndNs ?? 0 }),
       signal: abortController.signal,
     })
     clearTimeout(timeout)
@@ -117,7 +117,7 @@ export async function execQuery(pipeline: string) {
   }
 }
 
-export async function execFollow(pipeline: string) {
+export async function execFollow(pipeline: string, timeStartNs?: number, timeEndNs?: number) {
   cancelQuery()
   abortController = new AbortController()
   const token = localStorage.getItem('weft_token')
@@ -129,7 +129,7 @@ export async function execFollow(pipeline: string) {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ pipeline, follow: true }),
+      body: JSON.stringify({ pipeline, follow: true, time_start_ns: timeStartNs ?? 0, time_end_ns: timeEndNs ?? 0 }),
       signal: abortController.signal,
     })
 

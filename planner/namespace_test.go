@@ -20,47 +20,47 @@ func TestNamespacePredicate(t *testing.T) {
 		{
 			name:     "namespace query uses OR with LIKE",
 			pipeline: `cat /log/weft.log`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'weft' OR app LIKE 'weft/%')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE (app = 'weft' OR app LIKE 'weft/%')`,
 		},
 		{
 			name:     "sub-app query uses exact match",
 			pipeline: `cat /log/weft/coordinator.log`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE app = 'weft/coordinator'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE app = 'weft/coordinator'`,
 		},
 		{
 			name:     "flat app also uses namespace pattern",
 			pipeline: `cat vimgym.log`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
 		},
 		{
 			name:     "head with namespace",
 			pipeline: `head -5 /log/weft.log`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'weft' OR app LIKE 'weft/%') ORDER BY ts ASC LIMIT 5`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE (app = 'weft' OR app LIKE 'weft/%') ORDER BY ts ASC LIMIT 5`,
 		},
 		{
 			name:     "tail with sub-app",
 			pipeline: `tail -10 /log/weft/shard.log`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE app = 'weft/shard' ORDER BY ts DESC LIMIT 10`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE app = 'weft/shard' ORDER BY ts DESC LIMIT 10`,
 		},
 		{
 			name:     "grep with sub-app",
 			pipeline: `cat /log/weft/shard.log | grep ERROR`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE app = 'weft/shard' AND regexp_matches(raw, 'ERROR')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE app = 'weft/shard' AND regexp_matches(raw, 'ERROR')`,
 		},
 		{
 			name:     "grep with namespace",
 			pipeline: `cat /log/weft.log | grep timeout`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'weft' OR app LIKE 'weft/%') AND regexp_matches(raw, 'timeout')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE (app = 'weft' OR app LIKE 'weft/%') AND regexp_matches(raw, 'timeout')`,
 		},
 		{
 			name:     "awk filter with namespace",
 			pipeline: `cat /log/weft.log | awk '$LEVEL == "ERROR"'`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE (app = 'weft' OR app LIKE 'weft/%') AND level = 'ERROR'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE (app = 'weft' OR app LIKE 'weft/%') AND level = 'ERROR'`,
 		},
 		{
 			name:     "metrics sub-app uses exact match",
 			pipeline: `cat /log/weft/metrics.log`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE app = 'weft/metrics'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE app = 'weft/metrics'`,
 		},
 		{
 			// `cat *.log` (after glob expansion at the call site) lands here
@@ -68,14 +68,14 @@ func TestNamespacePredicate(t *testing.T) {
 			// single IN predicate, not silently drop everything past args[0].
 			name:     "multi-arg cat unions apps with IN predicate",
 			pipeline: `cat /log/weft/coordinator.log /log/weft/shard.log`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE app IN ('weft/coordinator', 'weft/shard')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE app IN ('weft/coordinator', 'weft/shard')`,
 		},
 		{
 			// All args share the same env segment → the env predicate is
 			// preserved alongside the app IN list.
 			name:     "multi-arg cat preserves shared env predicate",
 			pipeline: `cat /log/acme/prod/api/metrics.log /log/acme/prod/worker/metrics.log`,
-			wantSQL:  `SELECT line_num, raw FROM logs WHERE app IN ('acme/api/metrics', 'acme/worker/metrics') AND env = 'prod'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE app IN ('acme/api/metrics', 'acme/worker/metrics') AND env = 'prod'`,
 		},
 	}
 

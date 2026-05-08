@@ -9,7 +9,7 @@ option go_package = "github.com/kevlarcon/weft/proto/weftpb";
 // ---------------------------------------------------------------------------
 
 service ShardQuery {
-  // Query executes pushed-down SQL and streams result rows (line_num, raw).
+  // Query executes pushed-down SQL and streams result rows (raw, ts).
   rpc Query(QueryRequest) returns (stream ResultRow);
 
   // QueryToCompute executes SQL and streams rows directly to a compute
@@ -75,18 +75,19 @@ message QueryToComputeResponse {
   int64 rows_sent = 1;
 }
 
-// ResultRow is the query result type — shards always return (line_num, raw).
+// ResultRow is the query result type — shards return (raw, ts).
 // The planner bakes projections into the SQL so raw contains exactly what
 // the consumer needs (full log line, JSON payload, projected fields, etc.).
 message ResultRow {
-  int64 line_num = 1;
+  int64 line_num = 1 [deprecated = true];
   string raw = 2;
+  int64 ts_unix_ns = 3;
 }
 
 // LogRow is the ingestion type — weftd agents and CloudWatch poller send
 // structured rows to the coordinator for insertion into shards.
 message LogRow {
-  int64 line_num = 1;
+  int64 line_num = 1 [deprecated = true];
   string raw = 2;
   string app = 3;
   string level = 4;
@@ -141,10 +142,10 @@ message CreateJobRequest {
   // Ordering key for compute's k-way merge across shard input
   // streams. One of:
   //   ""             → concat (rows emitted in arrival order).
-  //   "line_num"     → merge by line_num ascending.
-  //   "line_num DESC" → merge by line_num descending.
-  //   "raw"           → merge by raw ascending.
-  //   "raw DESC"      → merge by raw descending.
+  //   "ts"           → merge by ts_unix_ns ascending.
+  //   "ts DESC"      → merge by ts_unix_ns descending.
+  //   "raw"          → merge by raw ascending.
+  //   "raw DESC"     → merge by raw descending.
   // Shards bake the same ORDER BY into their SQL so their per-shard
   // output is already sorted; merge_key tells compute which column
   // to walk through the heap on. Empty = "don't merge, just concat"
@@ -384,13 +385,10 @@ message CoordinatorExecuteResponse {
   string stderr = 3;
 }
 
-// Line is one row of output from an Execute call. line_num carries
-// the shard-side row index for log queries (lets clients dedupe
-// against follow-mode broker rows); zero for compute output and
-// non-shard sources.
+// Line is one row of output from an Execute call.
 message Line {
   string raw      = 1;
-  int64  line_num = 2;
+  int64  line_num = 2 [deprecated = true];
 }
 
 // Notice is a one-time message attached to a Query response — the

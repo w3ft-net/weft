@@ -31,7 +31,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ShardQueryClient interface {
-	// Query executes pushed-down SQL and streams result rows (line_num, raw).
+	// Query executes pushed-down SQL and streams result rows (raw, ts).
 	Query(ctx context.Context, in *QueryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ResultRow], error)
 	// QueryToCompute executes SQL and streams rows directly to a compute
 	// job, followed by a sentinel. The shard manages its own connection
@@ -135,7 +135,7 @@ func (c *shardQueryClient) Archive(ctx context.Context, in *ArchiveRequest, opts
 // All implementations must embed UnimplementedShardQueryServer
 // for forward compatibility.
 type ShardQueryServer interface {
-	// Query executes pushed-down SQL and streams result rows (line_num, raw).
+	// Query executes pushed-down SQL and streams result rows (raw, ts).
 	Query(*QueryRequest, grpc.ServerStreamingServer[ResultRow]) error
 	// QueryToCompute executes SQL and streams rows directly to a compute
 	// job, followed by a sentinel. The shard manages its own connection

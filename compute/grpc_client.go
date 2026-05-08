@@ -163,10 +163,8 @@ func (j *GRPCComputeJob) Stream() LineStream {
 }
 
 // MergedRows synthesizes a Rows-shape result from the remote text
-// output. LineNum is zeroed — the wire doesn't carry per-row metadata
-// today. Used by the coordinator transitionally for zero-stage
-// queries; phase 4 deletes the type-assertion in executeQuery once the
-// wire moves to LineStream and Rows-shape return is gone.
+// output. Used by the coordinator transitionally for zero-stage
+// queries.
 func (j *GRPCComputeJob) MergedRows() ([]*pb.ResultRow, error) {
 	text, err := j.Result()
 	if err != nil {

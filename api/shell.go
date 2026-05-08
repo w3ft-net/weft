@@ -51,8 +51,10 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Pipeline string `json:"pipeline"`
-		Follow   bool   `json:"follow"`
+		Pipeline    string `json:"pipeline"`
+		Follow      bool   `json:"follow"`
+		TimeStartNs int64  `json:"time_start_ns"`
+		TimeEndNs   int64  `json:"time_end_ns"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pipeline == "" {
 		http.Error(w, "pipeline required", http.StatusBadRequest)
@@ -77,10 +79,12 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	stream, err := s.coordClient.Execute(ctx, &pb.CoordinatorExecuteRequest{
-		Pipeline: req.Pipeline,
-		Follow:   req.Follow,
-		Customer: session.ActiveCustomerName,
-		UserId:   session.UserID,
+		Pipeline:    req.Pipeline,
+		Follow:      req.Follow,
+		Customer:    session.ActiveCustomerName,
+		UserId:      session.UserID,
+		TimeStartNs: req.TimeStartNs,
+		TimeEndNs:   req.TimeEndNs,
 	})
 	if err != nil {
 		writeSSEEvent(w, map[string]any{"type": "error", "message": err.Error()})
@@ -179,8 +183,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 				writeSSEEvent(w, map[string]any{
 					"type": "line",
 					"data": map[string]any{
-						"line_num": line.LineNum,
-						"raw":      line.Raw,
+						"raw": line.Raw,
 					},
 				})
 			}

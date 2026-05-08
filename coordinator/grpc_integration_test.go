@@ -124,10 +124,10 @@ func TestGRPC_AwkLevelFilter(t *testing.T) {
 	rows := resD.Rows
 	for _, r := range rows {
 		if !strings.Contains(r.Raw, "vimgym") {
-			t.Errorf("expected raw to contain 'vimgym', got %q (line %d)", r.Raw, r.LineNum)
+			t.Errorf("expected raw to contain 'vimgym', got %q", r.Raw)
 		}
 		if !strings.Contains(r.Raw, "ERROR") {
-			t.Errorf("expected raw to contain 'ERROR', got %q (line %d)", r.Raw, r.LineNum)
+			t.Errorf("expected raw to contain 'ERROR', got %q", r.Raw)
 		}
 	}
 	if len(rows) != 5 {
@@ -185,7 +185,7 @@ func TestGRPC_CustomerIsolation(t *testing.T) {
 	resD := drainExec(t, res)
 	for _, r := range resD.Rows {
 		if strings.Contains(r.Raw, "should not appear") {
-			t.Fatalf("customer isolation broken: acme row leaked on line %d", r.LineNum)
+			t.Fatal("customer isolation broken: acme row leaked")
 		}
 	}
 }
