@@ -198,6 +198,10 @@ func (s *Server) Handler() http.Handler {
 		return BodyCap(bodyMax, s.limiter.RateLimit(route, h))
 	}
 
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok\n"))
+	})
+
 	// Public routes (no auth) — each guarded per the audit §1 budgets.
 	mux.Handle("POST /api/auth/login", guarded(LimitLogin, cfg.AuthBodyMax, s.handleLogin))
 	mux.Handle("POST /api/auth/signup", guarded(LimitAnonAuth, cfg.AuthBodyMax, s.handleSignup))
