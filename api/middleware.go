@@ -98,6 +98,19 @@ func RequireEmailVerified(next http.Handler) http.Handler {
 	})
 }
 
+// RequireSuperadmin gates admin endpoints on is_superadmin. Reads the
+// Session that AuthMiddleware already materialized from the DB.
+func RequireSuperadmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		session := auth.SessionFromContext(r.Context())
+		if session == nil || !session.IsSuperadmin {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // writeJSON is a tiny helper to keep the middleware body readable.
 func writeJSON(w http.ResponseWriter, v any) error {
 	b, err := json.Marshal(v)

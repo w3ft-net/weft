@@ -294,6 +294,20 @@ func (s *Server) Handler() http.Handler {
 	// via the existing IngestStream gRPC. See docs/plans/http-ingest.md.
 	mux.Handle("POST /api/ingest/heroku/{token}", s.IngestHandler(HerokuAdapter{}))
 
+	// Admin routes (superadmin only).
+	adminMux := http.NewServeMux()
+	adminMux.HandleFunc("GET /api/admin/customers", s.handleAdminListCustomers)
+	adminMux.HandleFunc("GET /api/admin/customers/{name}", s.handleAdminGetCustomer)
+	adminMux.HandleFunc("POST /api/admin/customers/{name}/comp", s.handleAdminSetComp)
+	adminMux.HandleFunc("POST /api/admin/customers/{name}/tier", s.handleAdminSetTier)
+	adminMux.HandleFunc("GET /api/admin/buckets", s.handleAdminListBuckets)
+	adminMux.HandleFunc("GET /api/admin/buckets/{id}", s.handleAdminGetBucket)
+	adminMux.HandleFunc("PUT /api/admin/buckets/{id}", s.handleAdminUpdateBucket)
+	adminMux.HandleFunc("GET /api/admin/buckets/{id}/shards", s.handleAdminListShards)
+	adminMux.HandleFunc("POST /api/admin/shards/{id}/archive", s.handleAdminArchiveShard)
+	adminMux.HandleFunc("DELETE /api/admin/shards/{id}", s.handleAdminDeleteShard)
+	mux.Handle("/api/admin/", AuthMiddleware(s.store, s.jwtSecret, RequireSuperadmin(adminMux)))
+
 	// Agent-facing routes (agent token auth).
 	agentMux := http.NewServeMux()
 	agentMux.HandleFunc("POST /api/agent/sample", s.handleAgentSample)
@@ -708,6 +722,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// way the lesson list lives in one place (the Go package)
 		// and the UI doesn't need updating each time we add a
 		// lesson.
+		"is_superadmin":     user.IsSuperadmin,
 		"onboarding_prompt": onboarding.PromptFor(user.OnboardingStep),
 	}
 	if user.EmailVerifiedAt == nil {

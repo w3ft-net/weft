@@ -578,6 +578,8 @@ const (
 	WeftCoordinator_SubmitSample_FullMethodName           = "/weft.WeftCoordinator/SubmitSample"
 	WeftCoordinator_GetSourceStatus_FullMethodName        = "/weft.WeftCoordinator/GetSourceStatus"
 	WeftCoordinator_Heartbeat_FullMethodName              = "/weft.WeftCoordinator/Heartbeat"
+	WeftCoordinator_ForceArchiveShard_FullMethodName      = "/weft.WeftCoordinator/ForceArchiveShard"
+	WeftCoordinator_DeleteArchivedShard_FullMethodName    = "/weft.WeftCoordinator/DeleteArchivedShard"
 )
 
 // WeftCoordinatorClient is the client API for WeftCoordinator service.
@@ -629,6 +631,10 @@ type WeftCoordinatorClient interface {
 	GetSourceStatus(ctx context.Context, in *GetSourceStatusRequest, opts ...grpc.CallOption) (*GetSourceStatusResponse, error)
 	// Shard heartbeat — shards push their state to the coordinator every 60s.
 	Heartbeat(ctx context.Context, in *ShardHeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
+	// Admin: force-archive a READ_ONLY shard.
+	ForceArchiveShard(ctx context.Context, in *ForceArchiveShardRequest, opts ...grpc.CallOption) (*ForceArchiveShardResponse, error)
+	// Admin: delete an ARCHIVED shard and its data.
+	DeleteArchivedShard(ctx context.Context, in *DeleteArchivedShardRequest, opts ...grpc.CallOption) (*DeleteArchivedShardResponse, error)
 }
 
 type weftCoordinatorClient struct {
@@ -891,6 +897,26 @@ func (c *weftCoordinatorClient) Heartbeat(ctx context.Context, in *ShardHeartbea
 	return out, nil
 }
 
+func (c *weftCoordinatorClient) ForceArchiveShard(ctx context.Context, in *ForceArchiveShardRequest, opts ...grpc.CallOption) (*ForceArchiveShardResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ForceArchiveShardResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_ForceArchiveShard_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftCoordinatorClient) DeleteArchivedShard(ctx context.Context, in *DeleteArchivedShardRequest, opts ...grpc.CallOption) (*DeleteArchivedShardResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteArchivedShardResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_DeleteArchivedShard_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WeftCoordinatorServer is the server API for WeftCoordinator service.
 // All implementations must embed UnimplementedWeftCoordinatorServer
 // for forward compatibility.
@@ -940,6 +966,10 @@ type WeftCoordinatorServer interface {
 	GetSourceStatus(context.Context, *GetSourceStatusRequest) (*GetSourceStatusResponse, error)
 	// Shard heartbeat — shards push their state to the coordinator every 60s.
 	Heartbeat(context.Context, *ShardHeartbeatRequest) (*HeartbeatResponse, error)
+	// Admin: force-archive a READ_ONLY shard.
+	ForceArchiveShard(context.Context, *ForceArchiveShardRequest) (*ForceArchiveShardResponse, error)
+	// Admin: delete an ARCHIVED shard and its data.
+	DeleteArchivedShard(context.Context, *DeleteArchivedShardRequest) (*DeleteArchivedShardResponse, error)
 	mustEmbedUnimplementedWeftCoordinatorServer()
 }
 
@@ -1021,6 +1051,12 @@ func (UnimplementedWeftCoordinatorServer) GetSourceStatus(context.Context, *GetS
 }
 func (UnimplementedWeftCoordinatorServer) Heartbeat(context.Context, *ShardHeartbeatRequest) (*HeartbeatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Heartbeat not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) ForceArchiveShard(context.Context, *ForceArchiveShardRequest) (*ForceArchiveShardResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ForceArchiveShard not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) DeleteArchivedShard(context.Context, *DeleteArchivedShardRequest) (*DeleteArchivedShardResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteArchivedShard not implemented")
 }
 func (UnimplementedWeftCoordinatorServer) mustEmbedUnimplementedWeftCoordinatorServer() {}
 func (UnimplementedWeftCoordinatorServer) testEmbeddedByValue()                         {}
@@ -1457,6 +1493,42 @@ func _WeftCoordinator_Heartbeat_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WeftCoordinator_ForceArchiveShard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ForceArchiveShardRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).ForceArchiveShard(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_ForceArchiveShard_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).ForceArchiveShard(ctx, req.(*ForceArchiveShardRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftCoordinator_DeleteArchivedShard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteArchivedShardRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).DeleteArchivedShard(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_DeleteArchivedShard_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).DeleteArchivedShard(ctx, req.(*DeleteArchivedShardRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WeftCoordinator_ServiceDesc is the grpc.ServiceDesc for WeftCoordinator service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1551,6 +1623,14 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Heartbeat",
 			Handler:    _WeftCoordinator_Heartbeat_Handler,
+		},
+		{
+			MethodName: "ForceArchiveShard",
+			Handler:    _WeftCoordinator_ForceArchiveShard_Handler,
+		},
+		{
+			MethodName: "DeleteArchivedShard",
+			Handler:    _WeftCoordinator_DeleteArchivedShard_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

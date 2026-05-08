@@ -268,6 +268,7 @@ export interface User {
   // because it references UI element names we want to keep close to
   // the components).
   onboarding_prompt?: string
+  is_superadmin?: boolean
 }
 
 // Flips the authenticated user's has_seen_welcome flag to true. Call
@@ -745,6 +746,118 @@ export async function listDashboards(): Promise<DashboardListItem[]> {
 
 export function getDashboard(name: string): Promise<DashboardResponse> {
   return apiFetch(`/api/dashboards/${encodeURIComponent(name)}`)
+}
+
+// ── Admin API ─────────────────────────────────────────────────────────────
+
+export interface AdminCustomer {
+  id: number
+  name: string
+  display_name: string
+  tier: string
+  is_comp: boolean
+  comp_reason?: string
+  status: string
+  created_at: string
+}
+
+export interface AdminCustomerDetail {
+  id: number
+  name: string
+  display_name: string
+  namespaces: { id: number; name: string }[]
+  team: { email: string; role: string; status: string }[]
+  created_at: string
+  subscription?: {
+    id: number
+    tier: string
+    status: string
+    is_comp: boolean
+    comp_reason: string
+    starts_at: string
+  }
+}
+
+export interface AdminBucket {
+  ID: number
+  Apps: string
+  WindowDuration: string
+  TargetIngestingCount: number
+  Tier: string
+  CreatedAt: string
+}
+
+export interface AdminShard {
+  ID: string
+  Apps: string
+  WindowStart: string
+  WindowEnd: string
+  State: string
+  Addr: string
+  InstanceID: string
+  ParquetPath: string
+  Tier: string
+  RowCount: number
+  CreatedAt: string
+  BucketID: number
+}
+
+export function adminListCustomers(): Promise<AdminCustomer[]> {
+  return apiFetch('/api/admin/customers')
+}
+
+export function adminGetCustomer(name: string): Promise<AdminCustomerDetail> {
+  return apiFetch(`/api/admin/customers/${encodeURIComponent(name)}`)
+}
+
+export function adminSetComp(name: string, comp: boolean, tier?: string, reason?: string): Promise<void> {
+  return apiFetch(`/api/admin/customers/${encodeURIComponent(name)}/comp`, {
+    method: 'POST',
+    body: JSON.stringify({ comp, tier, reason }),
+  })
+}
+
+export function adminSetTier(name: string, tier: string): Promise<void> {
+  return apiFetch(`/api/admin/customers/${encodeURIComponent(name)}/tier`, {
+    method: 'POST',
+    body: JSON.stringify({ tier }),
+  })
+}
+
+export function adminListBuckets(): Promise<AdminBucket[]> {
+  return apiFetch('/api/admin/buckets')
+}
+
+export function adminGetBucket(id: number): Promise<AdminBucket> {
+  return apiFetch(`/api/admin/buckets/${id}`)
+}
+
+export function adminUpdateBucket(id: number, updates: Partial<Pick<AdminBucket, 'WindowDuration' | 'TargetIngestingCount' | 'Tier'>>): Promise<AdminBucket> {
+  return apiFetch(`/api/admin/buckets/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      window_duration: updates.WindowDuration,
+      target_ingesting_count: updates.TargetIngestingCount,
+      tier: updates.Tier,
+    }),
+  })
+}
+
+export function adminListShards(bucketId: number): Promise<AdminShard[]> {
+  return apiFetch(`/api/admin/buckets/${bucketId}/shards`)
+}
+
+export function adminArchiveShard(shardId: string): Promise<void> {
+  return apiFetch(`/api/admin/shards/${encodeURIComponent(shardId)}/archive`, {
+    method: 'POST',
+  })
+}
+
+export function adminDeleteShard(shardId: string, force?: boolean): Promise<void> {
+  return apiFetch(`/api/admin/shards/${encodeURIComponent(shardId)}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ force: !!force }),
+  })
 }
 
 export { apiFetch }

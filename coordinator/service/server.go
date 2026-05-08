@@ -985,3 +985,23 @@ func (s *Server) GetSourceStatus(_ context.Context, req *pb.GetSourceStatusReque
 	return &pb.GetSourceStatusResponse{Status: "unknown"}, nil
 }
 
+func (s *Server) ForceArchiveShard(_ context.Context, req *pb.ForceArchiveShardRequest) (*pb.ForceArchiveShardResponse, error) {
+	if s.Coord.Provisioner == nil {
+		return nil, status.Errorf(codes.Unavailable, "provisioner not running")
+	}
+	if err := s.Coord.Provisioner.ForceArchive(req.ShardId); err != nil {
+		return nil, status.Errorf(codes.Internal, "%v", err)
+	}
+	return &pb.ForceArchiveShardResponse{}, nil
+}
+
+func (s *Server) DeleteArchivedShard(_ context.Context, req *pb.DeleteArchivedShardRequest) (*pb.DeleteArchivedShardResponse, error) {
+	if s.Coord.Provisioner == nil {
+		return nil, status.Errorf(codes.Unavailable, "provisioner not running")
+	}
+	if err := s.Coord.Provisioner.DeleteArchived(req.ShardId); err != nil {
+		return nil, status.Errorf(codes.Internal, "%v", err)
+	}
+	return &pb.DeleteArchivedShardResponse{}, nil
+}
+

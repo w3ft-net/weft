@@ -28,6 +28,7 @@ type Session struct {
 	Tier               store.Tier
 	EmailVerified      bool
 	IsOwner            bool
+	IsSuperadmin       bool
 }
 
 type sessionContextKey struct{}
@@ -99,6 +100,7 @@ func BuildSession(st *store.Store, userID string, orgSelector string) (*Session,
 		Tier:               tier,
 		EmailVerified:      user.EmailVerifiedAt != nil,
 		IsOwner:            active.Role == "owner",
+		IsSuperadmin:       user.IsSuperadmin,
 	}, nil
 }
 

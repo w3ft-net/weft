@@ -20,6 +20,13 @@ type Namespace struct {
 	Name       string `gorm:"not null;uniqueIndex:idx_ns_customer_name"`
 }
 
+// ListAllCustomers returns every customer ordered by name.
+func (s *Store) ListAllCustomers() ([]Customer, error) {
+	var out []Customer
+	err := s.db.Order("name").Find(&out).Error
+	return out, err
+}
+
 // FindOrCreateCustomer returns the customer, creating if needed.
 func (s *Store) FindOrCreateCustomer(name string) (*Customer, error) {
 	var c Customer

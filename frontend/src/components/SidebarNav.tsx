@@ -103,6 +103,19 @@ export default function SidebarNav() {
                 </NavLink>
               )
             })}
+            {user?.is_superadmin && (
+              <NavLink
+                to="/admin"
+                className={({ isActive }) =>
+                  `sidebar-link${isActive ? ' sidebar-link-active' : ''}`
+                }
+                onClick={handleNavClick}
+                data-testid="sidebar-admin-link"
+              >
+                <span className="sidebar-link-icon">*</span>
+                <span className="sidebar-link-label">Admin</span>
+              </NavLink>
+            )}
           </nav>
         </div>
 

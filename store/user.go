@@ -158,6 +158,7 @@ type User struct {
 	Name               string
 	StripeCustomerID   string
 	CanCreateNamespace bool `gorm:"not null;default:false"`
+	IsSuperadmin       bool `gorm:"not null;default:false"`
 	// HasSeenWelcome flips true when the user dismisses the first-time
 	// welcome modal. The modal re-shows on every login until the flip
 	// happens — new users get one chance per session to read the tour.

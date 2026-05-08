@@ -12,6 +12,7 @@ import Namespaces from './pages/Namespaces'
 import Manual from './pages/Manual'
 import Watch from './pages/Watch'
 import Dashboards from './pages/Dashboards'
+import Admin from './pages/Admin'
 import ProtectedRoute from './components/ProtectedRoute'
 
 export default function App() {
@@ -53,6 +54,9 @@ export default function App() {
       } />
       <Route path="/dashboards/:name" element={
         <ProtectedRoute><Dashboards /></ProtectedRoute>
+      } />
+      <Route path="/admin" element={
+        <ProtectedRoute><Admin /></ProtectedRoute>
       } />
     </Routes>
   )

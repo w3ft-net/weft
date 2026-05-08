@@ -1,0 +1,50 @@
+.admin-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.admin-tab {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 500;
+  padding: 8px 20px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px 4px 0 0;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.admin-tab:hover {
+  color: var(--text-secondary);
+  border-color: var(--border-bright);
+}
+
+.admin-tab-active {
+  color: var(--text-primary);
+  border-color: var(--accent);
+  border-bottom-color: transparent;
+  background: var(--bg-elevated);
+}
+
+.admin-comp-badge {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--cyan);
+  background: rgba(86, 182, 194, 0.08);
+  border: 1px solid rgba(86, 182, 194, 0.2);
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.admin-row-selected td {
+  background: var(--bg-card) !important;
+  border-color: var(--accent);
+}

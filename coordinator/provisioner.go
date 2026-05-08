@@ -989,6 +989,46 @@ func (p *Provisioner) check(ctx context.Context) {
 
 // archive tells the shard to export its data to Parquet and replaces
 // the live shard with a ColdShard for subsequent queries.
+// ForceArchive is the admin-facing entry point for archiving a
+// READ_ONLY shard on demand, bypassing the reconciler's retention
+// window check. Returns an error if the shard can't be archived.
+func (p *Provisioner) ForceArchive(shardID string) error {
+	entry := p.registry.Get(shardID)
+	if entry == nil {
+		return fmt.Errorf("shard %s not found in registry", shardID)
+	}
+	if entry.State != StateReadOnly {
+		return fmt.Errorf("shard %s is %s, not READ_ONLY", shardID, entry.State)
+	}
+	p.archive(entry)
+	if entry.State != StateArchived {
+		return fmt.Errorf("archive failed for shard %s", shardID)
+	}
+	return nil
+}
+
+// DeleteArchived removes an archived shard from the registry and
+// deletes its DB record. The Parquet data on S3 is left in place
+// (tombstone cleanup is a separate concern).
+func (p *Provisioner) DeleteArchived(shardID string) error {
+	entry := p.registry.Get(shardID)
+	if entry == nil {
+		return fmt.Errorf("shard %s not found in registry", shardID)
+	}
+	if entry.State != StateArchived {
+		return fmt.Errorf("shard %s is %s, not ARCHIVED", shardID, entry.State)
+	}
+	if entry.Shard != nil {
+		entry.Shard.Close()
+	}
+	p.registry.Remove(shardID)
+	if err := p.config.ShardOps.DeleteShard(shardID); err != nil {
+		return fmt.Errorf("delete shard record: %w", err)
+	}
+	log.Printf("provisioner: archived shard %s deleted", shardID)
+	return nil
+}
+
 func (p *Provisioner) archive(entry *ShardEntry) {
 	if entry.Shard == nil {
 		log.Printf("provisioner: cannot archive shard %s: no Shard attached", entry.ID)

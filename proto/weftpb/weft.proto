@@ -275,6 +275,12 @@ service WeftCoordinator {
 
   // Shard heartbeat — shards push their state to the coordinator every 60s.
   rpc Heartbeat(ShardHeartbeatRequest) returns (HeartbeatResponse);
+
+  // Admin: force-archive a READ_ONLY shard.
+  rpc ForceArchiveShard(ForceArchiveShardRequest) returns (ForceArchiveShardResponse);
+
+  // Admin: delete an ARCHIVED shard and its data.
+  rpc DeleteArchivedShard(DeleteArchivedShardRequest) returns (DeleteArchivedShardResponse);
 }
 
 message ShardHeartbeatRequest {
@@ -598,3 +604,18 @@ message GetSourceStatusResponse {
   // status != "configured".
   string schema_hash = 3;
 }
+
+// ── Admin RPCs ──────────────────────────────────────────────────────
+
+message ForceArchiveShardRequest {
+  string shard_id = 1;
+}
+
+message ForceArchiveShardResponse {}
+
+message DeleteArchivedShardRequest {
+  string shard_id = 1;
+  bool force = 2;
+}
+
+message DeleteArchivedShardResponse {}
