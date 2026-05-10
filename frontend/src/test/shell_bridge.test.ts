@@ -119,7 +119,7 @@ async function bootShell(files: File[]): Promise<{
 
   // wasmInit is registered by cmd/wasm/main.go
   const wasmInit = (globalThis as Record<string, unknown>).wasmInit as
-    (width: number, height: number, callbacks: typeof callbacks) => void
+    (width: number, height: number, cb: typeof callbacks) => void
   wasmInit(80, 24, callbacks)
 
   // Drain the initial render output.
