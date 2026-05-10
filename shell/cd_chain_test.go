@@ -23,6 +23,7 @@ import (
 func newCaptureShell() (*Shell, *string) {
 	var captured string
 	s := &Shell{
+		FS: testMountFS(nil),
 		Query: func(pipeline string, _, _ time.Time) (*QueryResult, error) {
 			captured = pipeline
 			return &QueryResult{Text: ""}, nil

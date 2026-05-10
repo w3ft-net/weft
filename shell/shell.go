@@ -93,8 +93,8 @@ func (s *Shell) Run() error {
 	s.configureCore(runner.core)
 
 	// Prefetch directory listings while the logo dissolves.
-	if rfs, ok := s.FS.(*RemoteFS); ok {
-		go rfs.Prefetch()
+	if pfs, ok := s.FS.(*ProxyFS); ok {
+		go pfs.Prefetch()
 	}
 
 	// Handle window resize.
@@ -475,16 +475,7 @@ func stripBoth(line string) string {
 // subcommand grammar.
 //
 // Extracted from Run so tests can drive a real shellcore through
-// the same setup without raw-mode terminal management. New
-// configuration knobs go through this method, not directly into
-// Run, so tests pick them up automatically.
-//
-// Customer default: when Shell.Customer is empty, weft installs
-// "weft" explicitly. Pre-A.4.5 this was warp's shellcore default;
-// after the cleanup the default moved here so warp-resident
-// embedders that aren't weft don't inherit weft's tenancy name.
 func (s *Shell) configureCore(core *shellcore.ShellCore) {
-	core.SetPathClassifier(PathClassifier)
 	core.SetSyntaxFallback(syntax.LangBash)
 	if s.FS != nil {
 		core.SetFS(s.FS)
@@ -612,9 +603,13 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 	// `wit` has a fixed subcommand grammar; declare it so the rewriter
 	// preserves the keyword in `wit log /bin/scan` instead of joining
 	// `log` against `/` and resolving it to the `/log` namespace root.
+	var rewriteOpts []shellcore.RewriteOption
+	rewriteOpts = append(rewriteOpts, shellcore.WithSubcommandBuiltin("wit", "log", "show", "diff", "checkout", "amend"))
+	if pc, ok := s.FS.(interface{ ClassifyPath(string) shellcore.PathKind }); ok {
+		rewriteOpts = append(rewriteOpts, shellcore.WithPathClassifier(pc.ClassifyPath))
+	}
 	if rewritten, err := shellcore.RewritePaths(weftPipeline, shellcore.NewTransientDirStack(),
-		shellcore.WithSubcommandBuiltin("wit", "log", "show", "diff", "checkout", "amend"),
-		shellcore.WithPathClassifier(PathClassifier),
+		rewriteOpts...,
 	); err == nil {
 		weftPipeline = rewritten
 	}

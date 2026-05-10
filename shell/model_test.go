@@ -1,9 +1,9 @@
 package shell
 
 import (
+	"io/fs"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kevlarcon/warp/pkg/shellcore"
 )
@@ -37,14 +37,14 @@ func TestShellCoreDirect(t *testing.T) {
 
 func TestShellCoreWithFS(t *testing.T) {
 	var buf strings.Builder
-	fs := NewRemoteFS(NewMemBackend(), []string{"api", "web"})
+	mfs := testMountFS([]string{"api", "web"})
 
 	core := shellcore.NewShellCore(
 		[]string{"api", "web"}, 80, 24,
 		func(b []byte) { buf.Write(b) },
 		func(a shellcore.Action) {},
 	)
-	core.SetFS(fs)
+	core.SetFS(mfs)
 	core.Redraw()
 	buf.Reset()
 
@@ -67,7 +67,7 @@ func TestQueryDispatch(t *testing.T) {
 	var buf strings.Builder
 	var dispatched string
 
-	fs := NewRemoteFS(NewMemBackend(), []string{"test"})
+	mfs := testMountFS([]string{"test"})
 	core := shellcore.NewShellCore(
 		[]string{"test"}, 80, 24,
 		func(b []byte) { buf.Write(b) },
@@ -77,12 +77,7 @@ func TestQueryDispatch(t *testing.T) {
 			}
 		},
 	)
-	core.SetFS(fs)
-	// Path classifier is no longer baked into shellcore; weft
-	// installs it at construction in production via shell.New.
-	// Tests that drive a ShellCore directly need to install it
-	// explicitly to exercise /log → PathQuery dispatch.
-	core.SetPathClassifier(PathClassifier)
+	core.SetFS(mfs)
 	core.Redraw()
 
 	for _, r := range "cat /log/test.log" {
@@ -113,56 +108,8 @@ func TestSpaceWorks(t *testing.T) {
 		core.HandleEvent(shellcore.KeyEvent{Rune: r})
 	}
 
-	// Check that core has "ls /log" in its input (space preserved).
 	if core.GetInput() != "ls /log" {
 		t.Errorf("input = %q, want %q", core.GetInput(), "ls /log")
-	}
-}
-
-func TestRemoteFSReadDir(t *testing.T) {
-	// Verify RemoteFS basics without a gRPC connection (just the app list).
-	// Full gRPC tests would require a running coordinator.
-	fs := NewRemoteFS(NewMemBackend(), []string{"api", "web"})
-
-	entries, err := fs.ReadDir("/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 4 {
-		t.Errorf("root entries = %d, want 4", len(entries))
-	}
-
-	logEntries, err := fs.ReadDir("/log")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(logEntries) != 2 {
-		t.Errorf("log entries = %d, want 2", len(logEntries))
-	}
-}
-
-func TestDevFSWriteRead(t *testing.T) {
-	fs := NewRemoteFS(NewMemBackend(), []string{"api"})
-
-	err := fs.WriteFile("/bin/check", []byte("echo hi"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	data, err := fs.ReadFile("/bin/check")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "echo hi" {
-		t.Errorf("read = %q, want %q", string(data), "echo hi")
-	}
-
-	entries, err := fs.ReadDir("/bin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 || entries[0] != "check" {
-		t.Errorf("ls /bin = %v, want [check]", entries)
 	}
 }
 
@@ -173,5 +120,46 @@ func min(a, b int) int {
 	return b
 }
 
-// Ensure unused import doesn't break.
-var _ = time.Now
+// testMountFS builds a MountFS with stub mounts matching the weft
+// virtual layout, suitable for tests that exercise shellcore integration.
+func testMountFS(apps []string) *shellcore.MountFS {
+	mfs := shellcore.NewMountFS()
+	mfs.Register(&stubMount{prefix: "/bin", kind: shellcore.MountLocal})
+	mfs.Register(&stubMount{prefix: "/cron.d", kind: shellcore.MountLocal})
+	mfs.Register(&stubMount{prefix: "/etc", kind: shellcore.MountLocal})
+	mfs.Register(&stubMount{prefix: "/log", kind: shellcore.MountQuery, apps: apps})
+	mfs.Register(&stubMount{prefix: "/tmp", kind: shellcore.MountLocal})
+	return mfs
+}
+
+type stubMount struct {
+	prefix string
+	kind   shellcore.MountKind
+	apps   []string
+}
+
+func (m *stubMount) Prefix() string { return m.prefix }
+func (m *stubMount) Caps() shellcore.MountCaps {
+	return shellcore.MountCaps{Kind: m.kind, Writable: m.kind == shellcore.MountLocal}
+}
+func (m *stubMount) ReadDir(rel string) ([]fs.DirEntry, error) {
+	if m.prefix == "/log" && rel == "" {
+		var entries []fs.DirEntry
+		for _, app := range m.apps {
+			entries = append(entries, &stubDirEntry{name: app + ".log"})
+		}
+		return entries, nil
+	}
+	return nil, nil
+}
+func (m *stubMount) ReadFile(string) ([]byte, error)  { return nil, nil }
+func (m *stubMount) Stat(string) (fs.FileInfo, error) { return nil, nil }
+func (m *stubMount) WriteFile(string, []byte) error   { return nil }
+func (m *stubMount) Remove(string) error              { return nil }
+
+type stubDirEntry struct{ name string }
+
+func (e *stubDirEntry) Name() string               { return e.name }
+func (e *stubDirEntry) IsDir() bool                { return false }
+func (e *stubDirEntry) Type() fs.FileMode          { return 0 }
+func (e *stubDirEntry) Info() (fs.FileInfo, error) { return nil, nil }

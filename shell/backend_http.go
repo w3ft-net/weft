@@ -13,6 +13,14 @@ import (
 	"github.com/kevlarcon/weft/chart"
 )
 
+// WatchData holds the deserialized fields of a cron watch.
+type WatchData struct {
+	Schedule string
+	Pipeline string
+	Enabled  bool
+	Title    string
+}
+
 // HTTPBackend implements Backend over the weft HTTP API.
 type HTTPBackend struct {
 	baseURL string
@@ -201,8 +209,7 @@ func (b *HTTPBackend) GetWatchResults(name string, limit int) ([]chart.WatchResu
 	return out, nil
 }
 
-// GetFile is the generic fallback used by RemoteFS for paths the
-// specialized endpoints don't cover (e.g. /etc/usage).
+// GetFile reads a file via the generic /api/fs/read endpoint.
 func (b *HTTPBackend) GetFile(path string) ([]byte, error) {
 	return b.apiGet("/api/fs/read?path=" + urlQueryEscape(path))
 }
