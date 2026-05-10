@@ -169,6 +169,35 @@ func main() {
 		}
 	}
 
+	// Hydrate the shard registry from postgres BEFORE starting the
+	// provisioner or lifecycle poller. The lifecycle handler's
+	// recognisedAsDead checks the registry to decide whether an
+	// orphan EBS volume should be recovered; an empty registry
+	// causes every volume to be abandoned, orphaning data on every
+	// deploy. The store-fallback in recognisedAsDead is defense in
+	// depth; populating the registry first is the primary fix.
+	{
+		coord.Registry.SetStore(db)
+		s3cfg := shard.S3ConfigFromEnv()
+		lambdaURL := os.Getenv("LAMBDA_FUNCTION_URL")
+		reconstructCfg := coordinator.ReconstructConfig{
+			ShardSecret:       shardSecret,
+			LambdaFunctionURL: lambdaURL,
+			S3Config:          s3cfg,
+		}
+		if awsCfgErr == nil {
+			reconstructCfg.AWSCredentials = awsCfg.Credentials
+			reconstructCfg.AWSRegion = *awsRegion
+		}
+		if err := coord.Registry.LoadFromStore(func(rec store.ShardRecord) (shard.Shard, error) {
+			return coordinator.ReconstructShard(rec, reconstructCfg)
+		}); err != nil {
+			log.Printf("warning: load shards from store: %v", err)
+		} else {
+			log.Printf("coordinator: restored shards from store")
+		}
+	}
+
 	if len(shardTiers) > 0 {
 		// Production: ASG launcher for shard EC2 instances.
 		asgLauncher, err := coordinator.NewASGLauncher(*awsRegion, shardTiers, 9000)
@@ -270,38 +299,6 @@ func main() {
 				db.SeedDevSubscription(cust.Name)
 				db.SeedDevAgentToken(cust.ID, "dev-agent", *customer)
 			}
-		}
-
-		// Restore archived shards from the registry.
-		coord.Registry.SetStore(db)
-		s3cfg := shard.S3ConfigFromEnv()
-		lambdaURL := os.Getenv("LAMBDA_FUNCTION_URL")
-
-		// Reconstruct attaches live shard.Shard pointers for every
-		// persisted row that has somewhere to dial. Live rows
-		// (INGESTING / READ_ONLY) get a GRPCShard against their
-		// recorded addr; ARCHIVED rows with a parquet path get a
-		// ColdShard. States that genuinely have
-		// nowhere to point (LAUNCHING, post-wipe rebind, zombie
-		// ARCHIVED) return an error which LoadFromStore swallows —
-		// they remain in the registry as metadata-only entries and
-		// the heartbeat-adopt path fills them when their live
-		// instance shows up.
-		reconstructCfg := coordinator.ReconstructConfig{
-			ShardSecret:       shardSecret,
-			LambdaFunctionURL: lambdaURL,
-			S3Config:          s3cfg,
-		}
-		if awsCfgErr == nil {
-			reconstructCfg.AWSCredentials = awsCfg.Credentials
-			reconstructCfg.AWSRegion = *awsRegion
-		}
-		if err := coord.Registry.LoadFromStore(func(rec store.ShardRecord) (shard.Shard, error) {
-			return coordinator.ReconstructShard(rec, reconstructCfg)
-		}); err != nil {
-			log.Printf("warning: load shards from store: %v", err)
-		} else {
-			log.Printf("coordinator: restored shards from store")
 		}
 
 		// Start CloudWatch poller for configured sources.

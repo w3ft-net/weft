@@ -325,9 +325,29 @@ func (h *LifecycleHandler) recognisedAsDead(shardID string) bool {
 	}
 	entry := h.registry.Get(shardID)
 	if entry == nil {
-		log.Printf("lifecycle: recognised-as-dead shard=%s result=false reason=not-in-registry",
-			shardID)
-		return false
+		// Registry miss — the shard may exist in the DB but
+		// LoadFromStore hasn't run yet (boot-order race). Fall back
+		// to the store so a deploy doesn't orphan the volume.
+		if h.shardOps == nil {
+			log.Printf("lifecycle: recognised-as-dead shard=%s result=false reason=not-in-registry",
+				shardID)
+			return false
+		}
+		rec, found, err := h.shardOps.GetShard(shardID)
+		if err != nil || !found {
+			log.Printf("lifecycle: recognised-as-dead shard=%s result=false reason=not-in-registry-or-store",
+				shardID)
+			return false
+		}
+		state := ShardState(rec.State)
+		if state == StateArchived || state == StateExpiring {
+			log.Printf("lifecycle: recognised-as-dead shard=%s result=false reason=state state=%s (store-fallback)",
+				shardID, state)
+			return false
+		}
+		log.Printf("lifecycle: recognised-as-dead shard=%s result=true reason=store-fallback state=%s",
+			shardID, state)
+		return true
 	}
 	if entry.State == StateArchived || entry.State == StateExpiring {
 		log.Printf("lifecycle: recognised-as-dead shard=%s result=false reason=state state=%s",

@@ -44,6 +44,7 @@ type HeartbeatStore interface {
 type ShardOpsStore interface {
 	SaveShard(rec *store.ShardRecord) error
 	DeleteShard(id string) error
+	GetShard(id string) (store.ShardRecord, bool, error)
 	ClaimLaunchingForTier(tier, instanceID string) (store.ShardRecord, bool, error)
 	FindLaunchingByInstance(instanceID string) (store.ShardRecord, bool, error)
 	ListStaleLaunching(olderThan time.Duration) ([]store.ShardRecord, error)
