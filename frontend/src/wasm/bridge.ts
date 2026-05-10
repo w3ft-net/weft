@@ -1,16 +1,15 @@
 // bridge.ts — Weft-specific xterm.js + WASM bridge.
 //
-// Wraps @warp/shellcore-wasm's loadShellWasm with the weft-specific
-// callbacks: API-backed virtual filesystem (/bin → /api/functions,
-// /cron.d → /api/watches, /etc → /api/notify), watch-results lookup,
-// time-range display callback, and identity (user@customer).
+// All filesystem operations proxy through /api/fs/ endpoints. The server's
+// MountFS handles path routing, serialization, and validation — no per-path
+// logic lives here.
 
 import {
   loadShellWasm,
   type WasmCallbacks,
   type ShellBridge as BaseShellBridge,
 } from '@warp/shellcore-wasm'
-import { execQuery, execFollow, cancelQuery } from './network'
+import { execQuery, execFollow, cancelQuery, notifyBuiltinExecuted } from './network'
 
 export type ShellBridge = BaseShellBridge
 
@@ -25,9 +24,6 @@ export async function initShellWasm(
   onRangeChange?: (rangeText: string) => void,
   identity?: ShellIdentity,
 ): Promise<ShellBridge> {
-  // The shared package owns the Terminal; we route writes into it
-  // after loadShellWasm returns. Until then, buffer any writes that
-  // arrive synchronously during wasmInit.
   let terminalRef: BaseShellBridge['terminal'] | null = null
   const earlyWrites: string[] = []
 
@@ -44,24 +40,23 @@ export async function initShellWasm(
     cancelQuery: () => cancelQuery(),
     notifyQuit: () => {},
 
-    fsReadFile: (path) => fsApiSync('GET', path),
-    fsWriteFile: (path, content) => fsApiSync('PUT', path, content),
-    fsReadDir: (path) => fsApiSyncDir(path),
-    fsRemove: (path) => fsApiSync('DELETE', path),
+    fsReadFile: (path) => fsRead(path),
+    fsWriteFile: (path, content) => fsWrite(path, content),
+    fsReadDir: (path) => fsList(path),
+    fsRemove: (path) => fsRemove(path),
 
     loadHistory: () => localStorage.getItem('weft_history') || '',
     saveHistory: (lines) => localStorage.setItem('weft_history', lines),
 
     getUser: () => identity?.user ?? '',
 
-    // Weft-specific extras. The shared package treats them as
-    // opaque fields and forwards them as-is to the WASM side.
     getCustomer: () => identity?.customer ?? '',
     getApps: () => apps,
     fsGetWatchResults: (name: string, limit: number) => fsGetWatchResults(name, limit),
     onRangeChange: (rangeText: string) => {
       if (onRangeChange) onRangeChange(rangeText)
     },
+    builtinExecuted: (pipeline: string) => notifyBuiltinExecuted(pipeline),
   }
 
   const bridge = await loadShellWasm(container, {
@@ -77,176 +72,66 @@ export async function initShellWasm(
   return bridge
 }
 
-// ── Synchronous FS API helpers ──────────────────────────────
-// These use XMLHttpRequest (synchronous mode) because Go WASM's
+// ── Synchronous FS proxy ───────────────────────────────────────
+// All FS callbacks use synchronous XHR because Go WASM's
 // js.Value.Call() blocks until the JS function returns.
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
 
-function fsApiPath(fsPath: string): { endpoint: string; name: string } | null {
-  // /bin/check_errors → PUT /api/functions/check_errors
-  // /cron.d/api-errors → PUT /api/watches/api-errors
-  // /etc/notify.yaml → PUT /api/notify
-  if (fsPath === '/etc/notify.yaml') {
-    return { endpoint: '/api/notify', name: 'notify.yaml' }
-  }
-  const m = fsPath.match(/^\/(bin|cron\.d)\/(.+)$/)
-  if (m) {
-    const dir = m[1]
-    const name = m[2]
-    if (dir === 'bin') return { endpoint: `/api/functions/${encodeURIComponent(name)}`, name }
-    if (dir === 'cron.d') return { endpoint: `/api/watches/${encodeURIComponent(name)}`, name }
-  }
-  return null
+function authHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const token = localStorage.getItem('weft_token')
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  const org = localStorage.getItem('weft_org')
+  if (org) headers['X-Active-Org'] = org
+  return headers
 }
 
-function fsApiSync(method: string, path: string, content?: string): { content?: string; error?: string } {
-  const mapped = fsApiPath(path)
-  if (!mapped) {
-    return { error: `${path}: unsupported path` }
-  }
-
-  const token = localStorage.getItem('weft_token')
+function fsList(path: string): { entries?: string[]; error?: string } {
   const xhr = new XMLHttpRequest()
-  xhr.open(method, `${API_BASE}${mapped.endpoint}`, false)
-  xhr.setRequestHeader('Content-Type', 'application/json')
-  if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
-
-  try {
-    if (method === 'PUT' && content !== undefined) {
-      if (path.startsWith('/bin/')) {
-        xhr.send(JSON.stringify({ source: content }))
-      } else if (path.startsWith('/cron.d/')) {
-        const parsed = parseCronFile(content)
-        xhr.send(JSON.stringify(parsed))
-      } else if (path === '/etc/notify.yaml') {
-        xhr.send(JSON.stringify({ aliases_yaml: content }))
-      }
-    } else if (method === 'GET') {
-      xhr.send()
-    } else if (method === 'DELETE') {
-      xhr.send()
-    }
-  } catch {
-    return { error: 'network error' }
-  }
-
-  if (xhr.status === 404 || xhr.status === 204) {
-    if (method === 'DELETE') return {}
-    return { error: `${path}: not found` }
-  }
-  if (xhr.status >= 400) {
-    return { error: xhr.responseText || `HTTP ${xhr.status}` }
-  }
-
-  if (method === 'GET') {
-    try {
-      const data = JSON.parse(xhr.responseText)
-      if (data.Source !== undefined) {
-        return { content: data.Source }
-      }
-      if (data.Pipeline !== undefined) {
-        return { content: serializeCronFile(data) }
-      }
-      if (data.aliases_yaml !== undefined) {
-        return { content: data.aliases_yaml }
-      }
-      return { content: xhr.responseText }
-    } catch {
-      return { content: xhr.responseText }
-    }
-  }
-
-  return {}
-}
-
-function fetchApps(): string[] | null {
-  const token = localStorage.getItem('weft_token')
-  const xhr = new XMLHttpRequest()
-  xhr.open('GET', `${API_BASE}/api/apps`, false)
-  xhr.setRequestHeader('Content-Type', 'application/json')
-  if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
-  try { xhr.send() } catch { return null }
-  if (xhr.status >= 400) return null
-  try {
-    return JSON.parse(xhr.responseText) as string[]
-  } catch {
-    return null
-  }
-}
-
-function fsApiSyncDir(path: string): { entries?: string[]; error?: string } {
-  const token = localStorage.getItem('weft_token')
-  let endpoint: string
-
-  if (path === '/' || path === '') {
-    return { entries: ['bin/', 'cron.d/', 'log/', 'etc/'] }
-  } else if (path === '/bin' || path === '/bin/') {
-    endpoint = '/api/functions'
-  } else if (path === '/cron.d' || path === '/cron.d/') {
-    endpoint = '/api/watches'
-  } else if (path === '/log' || path === '/log/' || path.startsWith('/log/')) {
-    const apps = fetchApps()
-    if (apps === null) return { entries: [] }
-
-    const norm = path.replace(/\/+$/, '')
-    if (norm === '/log') {
-      const seen = new Set<string>()
-      const entries: string[] = []
-      for (const app of apps) {
-        const slash = app.indexOf('/')
-        if (slash >= 0) {
-          const ns = app.substring(0, slash)
-          if (!seen.has(ns)) {
-            seen.add(ns)
-            entries.push(ns + '/')
-          }
-        } else {
-          entries.push(app + '.log')
-        }
-      }
-      return { entries }
-    }
-
-    const ns = norm.substring('/log/'.length)
-    const prefix = ns + '/'
-    const entries = apps
-      .filter(a => a.startsWith(prefix))
-      .map(a => a.substring(prefix.length) + '.log')
-    if (entries.length > 0) return { entries }
-    return { error: `${path}: no such directory` }
-  } else if (path === '/etc' || path === '/etc/') {
-    return { entries: ['notify.yaml', 'usage'] }
-  } else {
-    return { error: `${path}: not a directory` }
-  }
-
-  const xhr = new XMLHttpRequest()
-  xhr.open('GET', `${API_BASE}${endpoint}`, false)
-  xhr.setRequestHeader('Content-Type', 'application/json')
-  if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
-
+  xhr.open('GET', `${API_BASE}/api/fs/list?path=${encodeURIComponent(path)}`, false)
+  for (const [k, v] of Object.entries(authHeaders())) xhr.setRequestHeader(k, v)
   try { xhr.send() } catch { return { error: 'network error' } }
-
-  if (xhr.status >= 400) {
-    return { error: xhr.responseText || `HTTP ${xhr.status}` }
-  }
-
+  if (xhr.status >= 400) return { error: xhr.responseText || `HTTP ${xhr.status}` }
   try {
-    const parsed = JSON.parse(xhr.responseText)
-    const items: { Name: string }[] = parsed.functions || parsed.watches || []
-    return { entries: (items || []).map(i => i.Name) }
+    const data = JSON.parse(xhr.responseText) as { entries: { name: string; is_dir: boolean }[] }
+    return { entries: (data.entries || []).map(e => e.is_dir ? e.name + '/' : e.name) }
   } catch {
     return { entries: [] }
   }
 }
 
+function fsRead(path: string): { content?: string; error?: string } {
+  const xhr = new XMLHttpRequest()
+  xhr.open('GET', `${API_BASE}/api/fs/read?path=${encodeURIComponent(path)}`, false)
+  for (const [k, v] of Object.entries(authHeaders())) xhr.setRequestHeader(k, v)
+  try { xhr.send() } catch { return { error: 'network error' } }
+  if (xhr.status >= 400) return { error: xhr.responseText || `HTTP ${xhr.status}` }
+  return { content: xhr.responseText }
+}
+
+function fsWrite(path: string, content: string): { error?: string } {
+  const xhr = new XMLHttpRequest()
+  xhr.open('PUT', `${API_BASE}/api/fs/write`, false)
+  for (const [k, v] of Object.entries(authHeaders())) xhr.setRequestHeader(k, v)
+  try { xhr.send(JSON.stringify({ path, content })) } catch { return { error: 'network error' } }
+  if (xhr.status >= 400) return { error: xhr.responseText || `HTTP ${xhr.status}` }
+  return {}
+}
+
+function fsRemove(path: string): { error?: string } {
+  const xhr = new XMLHttpRequest()
+  xhr.open('DELETE', `${API_BASE}/api/fs/remove?path=${encodeURIComponent(path)}`, false)
+  for (const [k, v] of Object.entries(authHeaders())) xhr.setRequestHeader(k, v)
+  try { xhr.send() } catch { return { error: 'network error' } }
+  if (xhr.status >= 400) return { error: xhr.responseText || `HTTP ${xhr.status}` }
+  return {}
+}
+
 function fsGetWatchResults(name: string, limit: number): { results?: { stdout: string; ran_at: string }[]; error?: string } {
-  const token = localStorage.getItem('weft_token')
   const xhr = new XMLHttpRequest()
   xhr.open('GET', `${API_BASE}/api/watches/${encodeURIComponent(name)}/results`, false)
-  xhr.setRequestHeader('Content-Type', 'application/json')
-  if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+  for (const [k, v] of Object.entries(authHeaders())) xhr.setRequestHeader(k, v)
   try { xhr.send() } catch { return { error: 'network error' } }
   if (xhr.status >= 400) return { error: xhr.responseText || `HTTP ${xhr.status}` }
   try {
@@ -260,26 +145,4 @@ function fsGetWatchResults(name: string, limit: number): { results?: { stdout: s
   } catch {
     return { results: [] }
   }
-}
-
-function parseCronFile(content: string): { schedule: string; pipeline: string } {
-  let schedule = ''
-  const pipelineLines: string[] = []
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim()
-    if (trimmed.startsWith('# schedule:')) {
-      schedule = trimmed.replace('# schedule:', '').trim()
-    } else if (trimmed && !trimmed.startsWith('#')) {
-      pipelineLines.push(line)
-    }
-  }
-  return { schedule, pipeline: pipelineLines.join('\n') }
-}
-
-function serializeCronFile(data: { Schedule: string; Pipeline: string; Enabled?: boolean }): string {
-  let out = `# schedule: ${data.Schedule}\n`
-  if (data.Enabled === false) out += `# enabled: false\n`
-  out += data.Pipeline
-  if (!data.Pipeline.endsWith('\n')) out += '\n'
-  return out
 }

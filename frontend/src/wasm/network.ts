@@ -16,8 +16,26 @@ declare global {
 }
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
+const ORG_STORAGE_KEY = 'weft_org'
+
+function authHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const token = localStorage.getItem('weft_token')
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  const org = localStorage.getItem(ORG_STORAGE_KEY)
+  if (org) headers['X-Active-Org'] = org
+  return headers
+}
 
 let abortController: AbortController | null = null
+
+export function notifyBuiltinExecuted(pipeline: string) {
+  fetch(`${API_BASE}/api/shell/builtin`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ pipeline }),
+  }).catch(() => {})
+}
 
 export function cancelQuery() {
   abortController?.abort()
@@ -27,7 +45,6 @@ export function cancelQuery() {
 export async function execQuery(pipeline: string, timeStartNs?: number, timeEndNs?: number) {
   cancelQuery()
   abortController = new AbortController()
-  const token = localStorage.getItem('weft_token')
   let timedOut = false
 
   const timeout = setTimeout(() => {
@@ -38,10 +55,7 @@ export async function execQuery(pipeline: string, timeStartNs?: number, timeEndN
   try {
     const res = await fetch(`${API_BASE}/api/shell/exec`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
+      headers: authHeaders(),
       body: JSON.stringify({ pipeline, follow: false, time_start_ns: timeStartNs ?? 0, time_end_ns: timeEndNs ?? 0 }),
       signal: abortController.signal,
     })
@@ -118,15 +132,11 @@ export async function execQuery(pipeline: string, timeStartNs?: number, timeEndN
 export async function execFollow(pipeline: string, timeStartNs?: number, timeEndNs?: number) {
   cancelQuery()
   abortController = new AbortController()
-  const token = localStorage.getItem('weft_token')
 
   try {
     const res = await fetch(`${API_BASE}/api/shell/exec`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
+      headers: authHeaders(),
       body: JSON.stringify({ pipeline, follow: true, time_start_ns: timeStartNs ?? 0, time_end_ns: timeEndNs ?? 0 }),
       signal: abortController.signal,
     })

@@ -62,6 +62,17 @@ func wasmInit(_ js.Value, args []js.Value) any {
 	})
 	core.SetSyntaxFallback(syntax.LangBash)
 
+	// Build MountFS with JSMount entries — each delegates FS ops to the
+	// JS callbacks. SetFS auto-derives the PathClassifier from the
+	// MountFS, so no separate SetPathClassifier call is needed.
+	mfs := shellcore.NewMountFS()
+	mfs.Register(wasm.NewJSMount("/bin", shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true}, jsCallbacks, "bash"))
+	mfs.Register(wasm.NewJSMount("/cron.d", shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true}, jsCallbacks, "bash"))
+	mfs.Register(wasm.NewJSMount("/etc", shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true}, jsCallbacks, "yaml"))
+	mfs.Register(wasm.NewJSMount("/log", shellcore.MountCaps{Kind: shellcore.MountQuery, Writable: false}, jsCallbacks, ""))
+	mfs.Register(wasm.NewJSMount("/tmp", shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true}, jsCallbacks, ""))
+	core.SetFS(mfs)
+
 	// Chart View + builtin + pipe stage — weft-specific. Uses a
 	// dedicated WatchResultsProvider that calls fsGetWatchResults
 	// on the same callbacks object the FS proxy uses.
@@ -92,6 +103,11 @@ func handleWeftAction(a shellcore.Action) bool {
 	switch a := a.(type) {
 	case shellcore.ActionSetRange:
 		jsCallbacks.Call("onRangeChange", shellcore.FormatRangePlain(a.Start, a.End))
+		return true
+	case shellcore.ActionBuiltinExecuted:
+		if fn := jsCallbacks.Get("builtinExecuted"); !fn.IsUndefined() && !fn.IsNull() {
+			jsCallbacks.Call("builtinExecuted", a.Pipeline)
+		}
 		return true
 	}
 	return false
@@ -132,3 +148,4 @@ func (w *watchResultsProvider) GetWatchResults(name string, limit int) ([]chart.
 type jsError string
 
 func (e jsError) Error() string { return string(e) }
+

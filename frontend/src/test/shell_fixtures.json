@@ -1,0 +1,158 @@
+[
+  {
+    "name": "root listing",
+    "files": [
+      {
+        "path": "/bin/hello",
+        "content": "echo hi"
+      },
+      {
+        "path": "/tmp/scratch",
+        "content": "temp"
+      }
+    ],
+    "cases": [
+      {
+        "name": "ls / shows mount prefixes",
+        "command": "ls /",
+        "want": "bin/\ncron.d/\netc/\nlog/\ntmp/\n"
+      }
+    ]
+  },
+  {
+    "name": "bin operations",
+    "files": [
+      {
+        "path": "/bin/hello",
+        "content": "echo hi"
+      },
+      {
+        "path": "/bin/check",
+        "content": "#!/usr/bin/env lua\nprint('ok')"
+      }
+    ],
+    "cases": [
+      {
+        "name": "ls /bin lists functions",
+        "command": "ls /bin",
+        "want": "check\nhello\n"
+      },
+      {
+        "name": "cat /bin/hello returns content",
+        "command": "cat /bin/hello",
+        "want": "echo hi\n"
+      },
+      {
+        "name": "cat nonexistent file errors",
+        "command": "cat /bin/nope",
+        "want": "",
+        "want_err": "no such file"
+      }
+    ]
+  },
+  {
+    "name": "log path classification",
+    "files": [
+      {
+        "path": "/bin/hello",
+        "content": "echo hi"
+      }
+    ],
+    "cases": [
+      {
+        "name": "cat /log path dispatches query",
+        "command": "cat /log/myapp.log",
+        "want": "__QUERY_DISPATCHED__"
+      },
+      {
+        "name": "ls /log lists apps",
+        "command": "ls /log",
+        "want": "myapp.log\n"
+      }
+    ]
+  },
+  {
+    "name": "tmp operations",
+    "files": [
+      {
+        "path": "/tmp/notes.txt",
+        "content": "remember this"
+      }
+    ],
+    "cases": [
+      {
+        "name": "cat /tmp/notes.txt",
+        "command": "cat /tmp/notes.txt",
+        "want": "remember this\n"
+      },
+      {
+        "name": "ls /tmp",
+        "command": "ls /tmp",
+        "want": "notes.txt\n"
+      }
+    ]
+  },
+  {
+    "name": "cron.d operations",
+    "files": [
+      {
+        "path": "/cron.d/heartbeat",
+        "content": "# schedule: */5 * * * *\ncurl localhost/health\n"
+      }
+    ],
+    "cases": [
+      {
+        "name": "ls /cron.d",
+        "command": "ls /cron.d",
+        "want": "heartbeat\n"
+      },
+      {
+        "name": "cat /cron.d/heartbeat",
+        "command": "cat /cron.d/heartbeat",
+        "want": "# schedule: */5 * * * *\ncurl localhost/health\n"
+      }
+    ]
+  },
+  {
+    "name": "rm on read-only mount",
+    "files": [
+      {
+        "path": "/bin/hello",
+        "content": "echo hi"
+      }
+    ],
+    "cases": [
+      {
+        "name": "rm /log/x fails read-only",
+        "command": "rm /log/myapp.log",
+        "want": "",
+        "want_err": "read-only"
+      }
+    ]
+  },
+  {
+    "name": "etc subdirectories",
+    "files": [
+      {
+        "path": "/etc/dashboards/ops.yaml",
+        "content": "title: ops"
+      },
+      {
+        "path": "/etc/notify.yaml",
+        "content": "aliases: {}"
+      }
+    ],
+    "cases": [
+      {
+        "name": "ls /etc shows subdirs and files",
+        "command": "ls /etc",
+        "want": "dashboards/\nnotify.yaml\n"
+      },
+      {
+        "name": "cat /etc/notify.yaml",
+        "command": "cat /etc/notify.yaml",
+        "want": "aliases: {}\n"
+      }
+    ]
+  }
+]
