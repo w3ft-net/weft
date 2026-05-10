@@ -218,21 +218,20 @@ func TestTmp_TouchThroughShell(t *testing.T) {
 	}
 }
 
-func TestTmp_CpRejectsCrossNamespace(t *testing.T) {
+func TestTmp_CpCrossMount(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateCustomer("tmp-shell-xns")
 	fs := New(db, cust.ID, nil, WithTier("swatch"))
 
 	runShell(t, fs, `echo notascript > /tmp/x`)
-	_, errOut := runShell(t, fs, `cp /tmp/x /bin/y`)
-	if !strings.Contains(strings.ToLower(errOut), "cross-namespace") {
-		t.Errorf("expected cross-namespace error, got %q", errOut)
+	runShell(t, fs, `cp /tmp/x /bin/y`)
+	// Cross-mount copy should succeed — BinMount.WriteFile handles it.
+	out, _ := runShell(t, fs, `cat /bin/y`)
+	if !strings.Contains(out, "notascript") {
+		t.Errorf("cross-mount cp should write to /bin; cat /bin/y = %q", out)
 	}
-	// /bin/y should not exist.
-	out, _ := runShell(t, fs, `ls /bin`)
-	if strings.Contains(out, "y") {
-		t.Errorf("cross-namespace cp should not have written /bin/y; ls /bin = %q", out)
-	}
+	// Clean up.
+	runShell(t, fs, `rm /bin/y`)
 }
 
 // The next group exercises the multi-file analysis builtins against

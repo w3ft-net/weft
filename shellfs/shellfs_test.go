@@ -306,3 +306,98 @@ func TestStat_EtcUsage(t *testing.T) {
 		t.Error("expected file, got directory")
 	}
 }
+
+func TestReadDir_LogNamespaceNoSenders(t *testing.T) {
+	// A namespace with no log senders (bare name, no slash) should
+	// appear as an empty directory, not a .log file.
+	sfs := New(nil, 1, []string{"loom"})
+
+	entries, err := sfs.ReadDir("/log")
+	if err != nil {
+		t.Fatalf("ReadDir /log: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].Name() != "loom" {
+		t.Errorf("expected name 'loom', got %q", entries[0].Name())
+	}
+	if !entries[0].IsDir() {
+		t.Errorf("namespace with no senders should be a directory, got file %q", entries[0].Name())
+	}
+}
+
+func TestReadDir_LogNamespaceNoSendersEmpty(t *testing.T) {
+	// Drilling into a namespace with no senders should return an
+	// empty directory, not an error.
+	sfs := New(nil, 1, []string{"loom"})
+
+	entries, err := sfs.ReadDir("/log/loom")
+	if err != nil {
+		t.Fatalf("ReadDir /log/loom: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries for namespace with no senders, got %d", len(entries))
+	}
+}
+
+func TestReadDir_LogNamespaceWithApps(t *testing.T) {
+	sfs := New(nil, 1, []string{"loom/api", "loom/worker", "loom/edge"})
+
+	entries, err := sfs.ReadDir("/log")
+	if err != nil {
+		t.Fatalf("ReadDir /log: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].Name() != "loom" {
+		t.Errorf("expected 'loom', got %q", entries[0].Name())
+	}
+	if !entries[0].IsDir() {
+		t.Error("namespace with apps should be a directory")
+	}
+
+	// Drilling in shows app .log files.
+	appEntries, err := sfs.ReadDir("/log/loom")
+	if err != nil {
+		t.Fatalf("ReadDir /log/loom: %v", err)
+	}
+	if len(appEntries) != 3 {
+		t.Fatalf("expected 3 app entries, got %d", len(appEntries))
+	}
+	names := make([]string, len(appEntries))
+	for i, e := range appEntries {
+		names[i] = e.Name()
+	}
+	for _, want := range []string{"api.log", "worker.log", "edge.log"} {
+		found := false
+		for _, n := range names {
+			if n == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected %q in entries, got %v", want, names)
+		}
+	}
+}
+
+func TestReadDir_LogMixedNamespaces(t *testing.T) {
+	// Mix of bare namespace and namespaced apps — both should be directories.
+	sfs := New(nil, 1, []string{"loom", "loom/api", "acme/orders"})
+
+	entries, err := sfs.ReadDir("/log")
+	if err != nil {
+		t.Fatalf("ReadDir /log: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			t.Errorf("%q should be a directory", e.Name())
+		}
+	}
+}
