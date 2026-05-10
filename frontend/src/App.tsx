@@ -22,7 +22,7 @@ export default function App() {
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
       <Route path="/signup/payment" element={
-        <ProtectedRoute><PaymentSetup /></ProtectedRoute>
+        <ProtectedRoute bare><PaymentSetup /></ProtectedRoute>
       } />
       <Route path="/verify" element={<Verify />} />
       <Route path="/dashboard" element={

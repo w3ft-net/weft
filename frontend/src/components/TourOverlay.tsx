@@ -20,31 +20,25 @@ interface PanelStep {
 
 const PANEL_STEPS: PanelStep[] = [
   {
-    step: 'dashboards',
-    route: '/dashboards',
-    testId: 'sidebar-dashboards-link',
+    step: 'downloads',
+    route: '/downloads',
+    testId: 'sidebar-downloads-link',
     copy:
-      "Dashboards. Live charts of every metric Loom emits — error rates, " +
-      "latency, throughput. The pulsing item is what we'll explore now; " +
-      "click it to dive in, or hit Next.",
+      "You'll want to grab the weft CLI, and — if you have deployments where you run it — weftd, our logging agent — to start shipping those log lines.",
   },
   {
     step: 'namespaces',
     route: '/namespaces',
     testId: 'sidebar-namespaces-link',
     copy:
-      "Namespaces. Each app's logs live in its own namespace, with its " +
-      "own access controls and retention. This is where you'd configure " +
-      "ingestion when you're ready to ship your own logs.",
+      "Namespaces are containers for log integrations, whether via weftd, CloudWatch, or Heroku. You can slice up your log producers however you want, but we tend to think of namespaces as an application, and then the environments and services in that application get assigned tokens within that namespace. You can create namespaces here in the browser or using the weft cli.",
   },
   {
-    step: 'downloads',
-    route: '/downloads',
-    testId: 'sidebar-downloads-link',
+    step: 'dashboards',
+    route: '/dashboards',
+    testId: 'sidebar-dashboards-link',
     copy:
-      "Downloads. Grab the weft CLI and the weftd agent — that's how " +
-      "you'll stream logs into your own org from your servers and " +
-      "containers. After this, we'll drop you into the shell.",
+      "Dashboards can be viewed here in the browser or in the terminal. Dashboards are defined in YAML and are built on top of timeseries data you create with crons operating on your logs or metrics data from weftd — all of which happens in the weft shell.",
   },
 ]
 

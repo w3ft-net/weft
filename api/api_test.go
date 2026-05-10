@@ -49,6 +49,11 @@ func TestAuth_LoginAndVerify(t *testing.T) {
 	handler := srv.Handler()
 	email := uniqueEmail(t)
 
+	// Login requires an existing account.
+	if _, err := s.CreateUser(email); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
 	// Login — request magic link.
 	body, _ := json.Marshal(map[string]string{"email": email})
 	req := httptest.NewRequest("POST", "/api/auth/login", bytes.NewReader(body))
@@ -97,6 +102,11 @@ func TestAuth_MagicLinkOneTimeUse(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
 	email := fmt.Sprintf("oneuse-%d@example.com", os.Getpid())
+
+	// Login requires an existing account.
+	if _, err := s.CreateUser(email); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
 
 	// Create magic link.
 	body, _ := json.Marshal(map[string]string{"email": email})

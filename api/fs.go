@@ -2,30 +2,21 @@ package api
 
 import (
 	"encoding/json"
+	"io"
+	"log"
 	"net/http"
+	"strings"
 
+	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shellfs"
 )
 
-// FSEntry is one row in a directory listing — either a file or a
-// nested directory. The frontend uses IsDir to decide whether
-// clicking expands the row in place (directory) or stuffs `cat
-// <path>` into the prompt (file).
+// FSEntry is one row in a directory listing.
 type FSEntry struct {
 	Name  string `json:"name"`
 	IsDir bool   `json:"is_dir"`
 }
 
-// handleListFS returns the immediate children of a path under the
-// caller's active customer. Used by the shell-chrome /tmp + /etc
-// tree sidebars; `cat` and the rest of the shell drive their own
-// output via the gRPC stream.
-//
-// path is the URL-encoded absolute path (e.g. /tmp, /etc,
-// /etc/dashboards). Anything not rooted at one of the user-visible
-// virtual filesystems gets the same 400 ReadDir would emit — we
-// don't impose a separate allowlist here because shellfs already
-// gates everything through the customer scope.
 func (s *Server) handleListFS(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 	path := r.URL.Query().Get("path")
@@ -34,11 +25,13 @@ func (s *Server) handleListFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// shellfs is cheap to construct per-request; nil logApps because
-	// the tree sidebars only target /tmp and /etc, neither of which
-	// uses the log-app list. (If a future caller wants to list
-	// /log/ via this endpoint, we'll thread the apps in then.)
-	fs := shellfs.New(s.store, session.ActiveCustomerID, nil)
+	var logApps []string
+	if strings.HasPrefix(path, "/log") {
+		logApps = s.fetchLogApps(r)
+	}
+
+	opts := []shellfs.Option{shellfs.WithUser(session.UserID, session.IsOwner)}
+	fs := shellfs.New(s.store, session.ActiveCustomerID, logApps, opts...)
 	entries, err := fs.ReadDir(path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -53,15 +46,6 @@ func (s *Server) handleListFS(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"entries": out})
 }
 
-// handleReadFS returns the raw bytes of a virtual file. Used by the
-// CLI's RemoteFS as a fallback for paths not covered by the
-// specialized GetFunction / GetWatch / GetNotifyConfig endpoints
-// (notably /etc/usage, which is a generated report rather than
-// stored content, and /etc/dashboards/<name>.yaml).
-//
-// We return text/plain rather than JSON because the file's bytes
-// are the response body verbatim — wrapping them in JSON would
-// force callers to base64 or string-escape them at zero benefit.
 func (s *Server) handleReadFS(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 	path := r.URL.Query().Get("path")
@@ -70,7 +54,8 @@ func (s *Server) handleReadFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fs := shellfs.New(s.store, session.ActiveCustomerID, nil)
+	opts := []shellfs.Option{shellfs.WithUser(session.UserID, session.IsOwner)}
+	fs := shellfs.New(s.store, session.ActiveCustomerID, nil, opts...)
 	data, err := fs.ReadFile(path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -78,4 +63,60 @@ func (s *Server) handleReadFS(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write(data)
+}
+
+func (s *Server) handleWriteFS(w http.ResponseWriter, r *http.Request) {
+	session := GetSession(r)
+
+	var req struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if req.Path == "" {
+		http.Error(w, "path required", http.StatusBadRequest)
+		return
+	}
+
+	opts := []shellfs.Option{shellfs.WithUser(session.UserID, session.IsOwner)}
+	fs := shellfs.New(s.store, session.ActiveCustomerID, nil, opts...)
+	if err := fs.WriteFile(req.Path, []byte(req.Content)); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleRemoveFS(w http.ResponseWriter, r *http.Request) {
+	session := GetSession(r)
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "path query parameter required", http.StatusBadRequest)
+		return
+	}
+
+	opts := []shellfs.Option{shellfs.WithUser(session.UserID, session.IsOwner)}
+	fs := shellfs.New(s.store, session.ActiveCustomerID, nil, opts...)
+	if err := fs.Remove(path); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) fetchLogApps(r *http.Request) []string {
+	resp, err := s.coordClient.ListApps(s.coordCtx(r), &pb.ListAppsRequest{})
+	if err != nil {
+		log.Printf("fetchLogApps: coordinator ListApps: %v", err)
+		return nil
+	}
+	return resp.Apps
 }

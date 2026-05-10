@@ -33,7 +33,7 @@ const LoomDemoNamespace = "loom"
 // skip lessons.
 var onboardingSequence = []string{
 	"welcome",
-	"dashboards", "namespaces", "downloads",
+	"downloads", "namespaces", "dashboards",
 	"shell-ls", "shell-cat", "shell-grep-awk", "shell-alert",
 	"shell-notify", "shell-cron", "shell-weftfunc",
 	"shell-bin-bash", "shell-bin-lua", "shell-usage",
@@ -203,6 +203,30 @@ func (s *Server) handleOnboardingDismiss(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleShellBuiltin receives pipeline strings from builtins that
+// executed locally in the WASM shell (ls, cat /etc/..., etc.) and
+// checks them against onboarding predicates. Without this, commands
+// handled entirely client-side never reach maybeAdvanceShellLesson.
+func (s *Server) handleShellBuiltin(w http.ResponseWriter, r *http.Request) {
+	session := GetSession(r)
+	var req struct {
+		Pipeline string `json:"pipeline"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pipeline == "" {
+		http.Error(w, "pipeline required", http.StatusBadRequest)
+		return
+	}
+	if newStep, prompt, advanced := s.maybeAdvanceShellLesson(session, req.Pipeline); advanced {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"step":   newStep,
+			"prompt": prompt,
+		})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // maybeAdvanceShellLesson is the shell-side hook into the onboarding
 // state machine. handleShellExec calls it after every successful
 // pipeline completion (EOF on the gRPC stream). If the user is in a
@@ -214,16 +238,20 @@ func (s *Server) handleOnboardingDismiss(w http.ResponseWriter, r *http.Request)
 // or store error (logged).
 func (s *Server) maybeAdvanceShellLesson(session *auth.Session, pipeline string) (newStep, prompt string, advanced bool) {
 	if session == nil || session.ActiveCustomerName != LoomCustomerSlug {
+		log.Printf("onboarding: skip — active org is %q, not loom", session.ActiveCustomerName)
 		return "", "", false
 	}
 	user, err := s.store.GetUserByID(session.UserID)
 	if err != nil || user == nil {
+		log.Printf("onboarding: skip — user lookup failed: %v", err)
 		return "", "", false
 	}
 	if user.OnboardingDismissed {
+		log.Printf("onboarding: skip — dismissed")
 		return "", "", false
 	}
 	current := user.OnboardingStep
+	log.Printf("onboarding: step=%q pipeline=%q match=%v", current, pipeline, onboarding.CheckPipeline(current, pipeline))
 	if !onboarding.CheckPipeline(current, pipeline) {
 		return "", "", false
 	}

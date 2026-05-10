@@ -145,11 +145,14 @@ func (s *Server) Close() {
 // as outgoing gRPC metadata so the coordinator's auth interceptor sees
 // the same bearer token the api middleware already validated.
 func (s *Server) coordCtx(r *http.Request) context.Context {
-	hdr := r.Header.Get("Authorization")
-	if hdr == "" {
-		return r.Context()
+	ctx := r.Context()
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", auth)
 	}
-	return metadata.AppendToOutgoingContext(r.Context(), "authorization", hdr)
+	if org := r.Header.Get("X-Active-Org"); org != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "x-active-org", org)
+	}
+	return ctx
 }
 
 // StartUnverifiedSweep starts a background goroutine that periodically
@@ -234,6 +237,8 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/onboarding/dismiss", s.handleOnboardingDismiss)
 	auth.HandleFunc("GET /api/fs/list", s.handleListFS)
 	auth.HandleFunc("GET /api/fs/read", s.handleReadFS)
+	auth.HandleFunc("PUT /api/fs/write", s.handleWriteFS)
+	auth.HandleFunc("DELETE /api/fs/remove", s.handleRemoveFS)
 	auth.HandleFunc("POST /api/billing/checkout", s.handleCheckout)
 	auth.HandleFunc("POST /api/billing/setup-intent", s.handleSetupIntent)
 	auth.HandleFunc("GET /api/billing/usage", s.handleUsage)
@@ -246,6 +251,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/apps", s.handleListApps)
 	auth.HandleFunc("GET /api/ingestion-status", s.handleIngestionStatus)
 	auth.Handle("POST /api/shell/exec", BodyCapFunc(cfg.ShellExecBodyMax, s.handleShellExec))
+	auth.HandleFunc("POST /api/shell/builtin", s.handleShellBuiltin)
 	auth.HandleFunc("GET /api/functions", s.handleListFunctions)
 	auth.HandleFunc("GET /api/functions/{name}", s.handleGetFunction)
 	auth.Handle("PUT /api/functions/{name}", BodyCap(cfg.FunctionBodyMax, protected(s.handleSaveFunction)))
@@ -334,6 +340,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/tokens/", AuthMiddleware(s.store, s.jwtSecret, auth))
 	mux.Handle("/api/apps", AuthMiddleware(s.store, s.jwtSecret, auth))
 	mux.Handle("/api/shell/exec", AuthMiddleware(s.store, s.jwtSecret, auth))
+	mux.Handle("/api/shell/builtin", AuthMiddleware(s.store, s.jwtSecret, auth))
 	mux.Handle("/api/functions", AuthMiddleware(s.store, s.jwtSecret, auth))
 	mux.Handle("/api/functions/", AuthMiddleware(s.store, s.jwtSecret, auth))
 	mux.Handle("/api/watches", AuthMiddleware(s.store, s.jwtSecret, auth))
@@ -361,6 +368,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Email == "" {
 		http.Error(w, "email required", http.StatusBadRequest)
+		return
+	}
+
+	user, _ := s.store.GetUserByEmail(req.Email)
+	invite, _ := s.store.GetPendingTeamMemberByEmail(req.Email)
+	if user == nil && invite == nil {
+		http.Error(w, "no account found — sign up first", http.StatusNotFound)
 		return
 	}
 
