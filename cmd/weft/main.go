@@ -536,7 +536,7 @@ func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 		Start:  time.Now().Add(-24 * time.Hour),
 		End:    time.Now(),
 		Apps:   apps,
-		FS:     shell.NewRemoteFS(shell.NewHTTPBackend(endpoint, cfg.Token, effectiveOrg(cfg)), apps),
+		FS:     shell.NewProxyFS(endpoint, cfg.Token, effectiveOrg(cfg)),
 	}
 	return s, func() {}, nil
 }

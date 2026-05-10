@@ -110,10 +110,9 @@ var spec = []customerSpec{
 		Envs:        []string{"sand", "prod"},
 		Apps:        []string{"api", "worker", "edge"},
 		Members: []teamMember{
-			// One owner so the org has a "real" admin in the seam
-			// data; signup adds every fresh user as an additional
-			// (read-only) member via grantLoomMembership.
 			{Email: "ops@loom.test", Name: "Loom Ops", CanCreateNS: true},
+			{Email: "kai@loom.test", Name: "Kai Nakamura"},
+			{Email: "priya@loom.test", Name: "Priya Sharma"},
 		},
 	},
 }
@@ -159,6 +158,7 @@ func seed(s *store.Store, tokensOut string) error {
 	tokensExist := fileExists(tokensOut)
 
 	var tokenLines []mintedToken
+	var nonLoomUsers []nonLoomUser
 
 	for _, c := range spec {
 		log.Printf("customer %s …", c.Name)
@@ -243,6 +243,16 @@ func seed(s *store.Store, tokensOut string) error {
 		if err := preseedScripts(s, cust.ID, c.Name, members); err != nil {
 			return fmt.Errorf("preseed %s: %w", c.Name, err)
 		}
+
+		if c.Name != "loom" {
+			for _, u := range members {
+				nonLoomUsers = append(nonLoomUsers, nonLoomUser{user: u, email: u.Email})
+			}
+		}
+	}
+
+	if err := grantLoomMemberships(s, nonLoomUsers); err != nil {
+		return fmt.Errorf("loom memberships: %w", err)
 	}
 
 	if !tokensExist {
@@ -363,15 +373,11 @@ func fileExists(p string) bool {
 // --- pre-seeded /bin and /cron.d --------------------------------------
 
 func preseedScripts(s *store.Store, custID uint, customerName string, members []*store.User) error {
-	if len(members) < 2 {
+	if len(members) < 3 {
 		return nil
 	}
-	user1, user2 := members[0], members[1]
+	user1, user2, user3 := members[0], members[1], members[2]
 
-	// Pick a primary app per customer so the canned watch points at a
-	// path that resolves. Both customers carry the same set of apps in
-	// the demo, so this is just a per-tenant choice for "the app worth
-	// watching" — not a generic mapping.
 	primaryApp := map[string]string{
 		"acme":   "acme/api",
 		"globex": "globex/orders",
@@ -381,29 +387,29 @@ func preseedScripts(s *store.Store, custID uint, customerName string, members []
 		return fmt.Errorf("preseedScripts: no primary app configured for customer %q", customerName)
 	}
 	primaryLog := "/log/" + primaryApp + ".log"
+	primaryEnv := map[string]string{
+		"acme":   "prod",
+		"globex": "prod",
+		"loom":   "prod",
+	}[customerName]
+	metricsLog := fmt.Sprintf("/log/%s/%s/%s_metrics.log",
+		customerName, primaryEnv, lastSegment(primaryApp))
 
-	// /bin/scan: three versions, alternating authors → wit log shows the
-	// back-and-forth that the wit feature was built for.
+	// --- /bin/scan: three versions, three authors -------------------------
 	//
 	// Idempotency: the version-history trigger fires on every UPDATE
-	// targeting `source`, including same-value writes. Re-running the
-	// v1→v2→v3 playback therefore captures three new history rows each
-	// time. Guard with a "live row already at final version" check —
-	// once the trail is laid down on first seed, subsequent runs are
-	// no-ops.
+	// targeting `source`, including same-value writes. Guard with a
+	// "live row already at final version" check.
 	scanV1 := fmt.Sprintf("cat %s | grep -i error | wc -l", primaryLog)
 	scanV2 := fmt.Sprintf("cat %s | grep ERROR | wc -l", primaryLog)
 	scanV3 := fmt.Sprintf("cat %s | awk '$LEVEL == \"ERROR\"' | head -100 | wc -l", primaryLog)
 	if existing, _ := s.GetShellFunction(custID, "scan"); existing == nil || existing.Source != scanV3 {
-		// Each save is followed by a HEAD-amend so the version
-		// dropping into history on the *next* save carries the
-		// commit message (the trigger captures OLD.message).
 		versions := []struct {
 			userID, source, message string
 		}{
-			{user1.ID, scanV1, "initial pass"},
-			{user2.ID, scanV2, "tighten error pattern"},
-			{user1.ID, scanV3, "fix the awk filter"},
+			{user1.ID, scanV1, "initial pass — case-insensitive grep"},
+			{user2.ID, scanV2, "tighten to exact ERROR match"},
+			{user3.ID, scanV3, "use awk pushdown so shards filter server-side"},
 		}
 		for i, v := range versions {
 			if err := s.SaveShellFunction(custID, v.userID, "scan", v.source); err != nil {
@@ -415,36 +421,61 @@ func preseedScripts(s *store.Store, custID uint, customerName string, members []
 		}
 	}
 
-	// /bin/count_errors: single version.
-	countErrors := "cat /log/$1 | grep ERROR | wc -l"
-	if existing, _ := s.GetShellFunction(custID, "count_errors"); existing == nil {
-		if err := s.SaveShellFunction(custID, user2.ID, "count_errors", countErrors); err != nil {
-			return fmt.Errorf("count_errors: %w", err)
+	// --- /bin/count_errors: two versions ----------------------------------
+	countV1 := "cat /log/$1 | grep ERROR | wc -l"
+	countV2 := "cat /log/$1 | awk '$LEVEL == \"ERROR\"' | wc -l"
+	if existing, _ := s.GetShellFunction(custID, "count_errors"); existing == nil || existing.Source != countV2 {
+		versions := []struct {
+			userID, source, message string
+		}{
+			{user2.ID, countV1, "count ERROR lines in any log"},
+			{user3.ID, countV2, "switch to awk for pushdown"},
 		}
-		if err := s.AmendShellFunctionMessage(custID, "count_errors", "HEAD", "count ERROR lines in any log"); err != nil {
-			return fmt.Errorf("count_errors message: %w", err)
+		for i, v := range versions {
+			if err := s.SaveShellFunction(custID, v.userID, "count_errors", v.source); err != nil {
+				return fmt.Errorf("count_errors v%d: %w", i+1, err)
+			}
+			if err := s.AmendShellFunctionMessage(custID, "count_errors", "HEAD", v.message); err != nil {
+				return fmt.Errorf("count_errors v%d message: %w", i+1, err)
+			}
 		}
 	}
 
-	// /cron.d/error-rate: two versions — a narrow per-tick window via
-	// tail, then widened. The watch's TimeRange is unbounded today
-	// (cron.go:150-153), so a bare `cat` would count every error
-	// since ingest started; tail -N bounds the slice to the most
-	// recent rows so the value reflects the rate-shape generator's
-	// current ERROR_RATIO and varies tick-to-tick. v2 must NOT
-	// reference its own past results — weft.avg over a freshly seeded
-	// watch emits empty stdout, which `alert` then rejects as
-	// "non-numeric value", failing every tick.
+	// --- /bin/mem_history: three versions ---------------------------------
+	memV1 := fmt.Sprintf("tail -n 100 %s | jq '.pct'", metricsLog)
+	memV2 := fmt.Sprintf("tail -n 360 %s | jq 'select(.type == \"memory\") | {ts, pct}'", metricsLog)
+	memV3 := "tail -n 360 $1 | jq 'select(.type == \"memory\") | {ts, pct}'"
+	if existing, _ := s.GetShellFunction(custID, "mem_history"); existing == nil || existing.Source != memV3 {
+		versions := []struct {
+			userID, source, message string
+		}{
+			{user1.ID, memV1, "quick memory dump"},
+			{user2.ID, memV2, "add timestamp, filter to memory type"},
+			{user3.ID, memV3, "take path as $1 so it works for any metrics log"},
+		}
+		for i, v := range versions {
+			if err := s.SaveShellFunction(custID, v.userID, "mem_history", v.source); err != nil {
+				return fmt.Errorf("mem_history v%d: %w", i+1, err)
+			}
+			if err := s.AmendShellFunctionMessage(custID, "mem_history", "HEAD", v.message); err != nil {
+				return fmt.Errorf("mem_history v%d message: %w", i+1, err)
+			}
+		}
+	}
+
+	// --- /cron.d/error-rate: three versions -------------------------------
 	rateV1 := fmt.Sprintf("tail -n 500 %s | grep ERROR | wc -l | alert above 50", primaryLog)
 	rateV2 := fmt.Sprintf("tail -n 2000 %s | grep ERROR | wc -l | alert above 200", primaryLog)
-	if existing, _ := s.GetCronWatch(custID, "error-rate"); existing == nil || existing.Pipeline != rateV2 {
-		watches := []struct {
+	rateV3 := fmt.Sprintf("tail -n 2000 %s | awk '$LEVEL == \"ERROR\"' | wc -l | alert above 200", primaryLog)
+	if existing, _ := s.GetCronWatch(custID, "error-rate"); existing == nil || existing.Pipeline != rateV3 {
+		versions := []struct {
 			userID, pipeline, message string
 		}{
-			{user1.ID, rateV1, "5m error count"},
-			{user2.ID, rateV2, "widen to 1h for a smoother chart"},
+			{user1.ID, rateV1, "5m error count with low threshold"},
+			{user2.ID, rateV2, "widen window to reduce flapping"},
+			{user3.ID, rateV3, "switch to awk for shard pushdown"},
 		}
-		for i, v := range watches {
+		for i, v := range versions {
 			if err := s.SaveCronWatch(custID, v.userID, "error-rate", "*/5 * * * *", v.pipeline); err != nil {
 				return fmt.Errorf("error-rate v%d: %w", i+1, err)
 			}
@@ -454,46 +485,60 @@ func preseedScripts(s *store.Store, custID uint, customerName string, members []
 		}
 	}
 
-	// /cron.d/mem-pressure: per-host JSON-path alert against the metrics
-	// stream (one line per metrics tick from weftd, JSON-shaped). This is
-	// the demo's exercise of `alert -k .field -t .field` — no jq -r
-	// reformatting, the alert reads JSON paths directly. With one
-	// container per service the tag set is small, but the wire works
-	// the same as it would with many.
-	primaryEnv := map[string]string{
-		"acme":   "prod",
-		"globex": "prod",
-		"loom":   "prod",
-	}[customerName]
-	metricsLog := fmt.Sprintf("/log/%s/%s/%s_metrics.log",
-		customerName, primaryEnv, lastSegment(primaryApp))
-	memPressure := fmt.Sprintf(
+	// --- /cron.d/mem-pressure: two versions -------------------------------
+	memPressureV1 := fmt.Sprintf(
+		"tail -n 12 %s | jq 'select(.type == \"memory\") | .pct' | alert above 80",
+		metricsLog)
+	memPressureV2 := fmt.Sprintf(
 		"tail -n 12 %s | jq 'select(.type == \"memory\")' "+
 			"| alert above 70 -k .pct -t .host",
 		metricsLog)
-	if existing, _ := s.GetCronWatch(custID, "mem-pressure"); existing == nil || existing.Pipeline != memPressure {
-		if err := s.SaveCronWatch(custID, user1.ID, "mem-pressure", "*/1 * * * *", memPressure); err != nil {
-			return fmt.Errorf("mem-pressure: %w", err)
+	if existing, _ := s.GetCronWatch(custID, "mem-pressure"); existing == nil || existing.Pipeline != memPressureV2 {
+		versions := []struct {
+			userID, pipeline, message string
+		}{
+			{user1.ID, memPressureV1, "basic memory threshold"},
+			{user2.ID, memPressureV2, "lower to 70, add per-host tag so alerts identify the box"},
 		}
-		if err := s.AmendCronWatchMessage(custID, "mem-pressure", "HEAD",
-			"per-host memory alert; uses JSON paths against weftd metrics"); err != nil {
-			return fmt.Errorf("mem-pressure message: %w", err)
+		for i, v := range versions {
+			if err := s.SaveCronWatch(custID, v.userID, "mem-pressure", "*/1 * * * *", v.pipeline); err != nil {
+				return fmt.Errorf("mem-pressure v%d: %w", i+1, err)
+			}
+			if err := s.AmendCronWatchMessage(custID, "mem-pressure", "HEAD", v.message); err != nil {
+				return fmt.Errorf("mem-pressure v%d message: %w", i+1, err)
+			}
 		}
 	}
 
-	// /bin/mem_history: a chart-friendly reshape of metrics output. The
-	// demo verification pipes this into `chart` to exercise the new
-	// pipe-stage chart with --bucket and -a flags. Single version, but
-	// authored by user2 so `ls -al /bin/` shows multiple authors.
-	memHistory := "tail -n 360 $1 | jq 'select(.type == \"memory\") | {ts, pct}'"
-	if existing, _ := s.GetShellFunction(custID, "mem_history"); existing == nil {
-		if err := s.SaveShellFunction(custID, user2.ID, "mem_history", memHistory); err != nil {
-			return fmt.Errorf("mem_history: %w", err)
-		}
-		if err := s.AmendShellFunctionMessage(custID, "mem_history", "HEAD",
-			"reshape metrics for `| chart -x .ts -y .pct --bucket 1m -a avg`"); err != nil {
-			return fmt.Errorf("mem_history message: %w", err)
-		}
+	// --- /etc/dashboards/prod ---------------------------------------------
+	prodDashboard := `title: Production overview
+sections:
+  - title: Errors
+    tiles:
+      - kind: sparkline
+        watch: error-rate
+        title: Error count (5m)
+        size: lg
+      - kind: counter
+        watch: error-rate
+        title: Current errors
+        size: sm
+        threshold:
+          warn: 50
+          crit: 200
+  - title: Memory
+    tiles:
+      - kind: gauge
+        watch: mem-pressure
+        title: Memory pressure
+        size: md
+        threshold:
+          warn: 70
+          crit: 90
+          max: 100
+`
+	if err := s.SaveDashboard(custID, user1.ID, "prod", prodDashboard); err != nil {
+		return fmt.Errorf("dashboard prod: %w", err)
 	}
 
 	return nil
@@ -512,6 +557,50 @@ func lastSegment(s string) string {
 type mintedToken struct {
 	varName string
 	raw     string
+}
+
+type nonLoomUser struct {
+	user  *store.User
+	email string
+}
+
+func grantLoomMemberships(s *store.Store, users []nonLoomUser) error {
+	cust, err := s.GetCustomerByName("loom")
+	if err != nil {
+		return fmt.Errorf("loom customer: %w", err)
+	}
+	ns, err := s.GetNamespace(cust.ID, "loom")
+	if err != nil {
+		return fmt.Errorf("loom namespace: %w", err)
+	}
+	for _, u := range users {
+		if _, err := s.GetTeamMemberByUserID(cust.ID, u.user.ID); err == nil {
+			continue
+		}
+		now := time.Now()
+		if err := s.CreateTeamMember(&store.TeamMember{
+			ID:         "demo-loom-" + u.user.ID,
+			CustomerID: cust.ID,
+			Email:      u.email,
+			UserID:     &u.user.ID,
+			Role:       "member",
+			Status:     "active",
+			InvitedAt:  now,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}); err != nil {
+			return fmt.Errorf("loom team_member %s: %w", u.email, err)
+		}
+		if err := s.UpsertNamespacePermission(&store.NamespacePermission{
+			UserID:      u.user.ID,
+			NamespaceID: ns.ID,
+			CanRead:     true,
+		}); err != nil {
+			return fmt.Errorf("loom perm %s: %w", u.email, err)
+		}
+		log.Printf("  granted loom membership to %s", u.email)
+	}
+	return nil
 }
 
 // --- reset ------------------------------------------------------------

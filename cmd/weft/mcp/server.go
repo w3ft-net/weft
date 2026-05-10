@@ -28,11 +28,11 @@ import (
 type RunFunc func(pipeline string, rangeSpec string, w io.Writer) error
 
 // LsFunc returns the entries directly under a /log path. Production
-// wires it to shellfs.RemoteFS.ReadDir; tests inject a stub.
+// wires it to ProxyFS.ReadDir; tests inject a stub.
 type LsFunc func(path string) ([]string, error)
 
 // CatFunc returns the bytes of a file under /log. Production wires
-// it to shellfs.RemoteFS.ReadFile; tests inject a stub.
+// it to ProxyFS.ReadFile; tests inject a stub.
 type CatFunc func(path string) ([]byte, error)
 
 // GetterFunc fetches the current backend state of a resource by

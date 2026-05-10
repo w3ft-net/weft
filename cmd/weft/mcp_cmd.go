@@ -17,7 +17,7 @@ import (
 // runMCP starts the weft MCP server on stdio. It reuses the same
 // auth/connection path as `weft sh`: load ~/.weft.yaml, connect to
 // the api server with the user's JWT, and surface the resulting
-// Shell + RemoteFS to the SDK as the seam underneath weft.run /
+// Shell + ProxyFS to the SDK as the seam underneath weft.run /
 // weft.ls / weft.cat.
 //
 // Stdio is the right transport for the local-LLM use case (Claude
@@ -81,7 +81,7 @@ func runMCP() {
 	}
 }
 
-// fsLs and fsCat adapt the shell's RemoteFS to the typed function
+// fsLs and fsCat adapt the shell's ProxyFS to the typed function
 // fields the MCP server takes. Wrapping rather than passing the FS
 // directly keeps the mcp package free of weft-internal types.
 func fsLs(s *shell.Shell) mcp.LsFunc {
