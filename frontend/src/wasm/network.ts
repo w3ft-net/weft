@@ -100,6 +100,8 @@ export async function execQuery(pipeline: string, timeStartNs?: number, timeEndN
           const evt = JSON.parse(raw) as { type: string; text?: string; message?: string; data?: { raw?: string } }
           if (evt.type === 'line' && evt.data?.raw != null) {
             outputChunks.push(evt.data.raw)
+          } else if (evt.type === 'tour_advance') {
+            window.dispatchEvent(new CustomEvent('tour-advance'))
           } else if (evt.type === 'error') {
             window.wasmHandleQueryResult('', evt.text || evt.message || 'unknown error')
             return

@@ -81,18 +81,18 @@ export default function TourOverlay() {
     }
   }, [step, dismissed, inLoom, location.pathname, panel, refreshUser])
 
-  // Shell-tour polling: while in shell-* phase, poll /me so the
-  // banner updates within a few seconds when the server-side
-  // shell-exec hook advances the step. This is the no-SSE path —
-  // the SSE event from /api/shell/exec is a low-latency
-  // optimization on top of this; if it gets dropped, the poll
-  // catches up.
+  // Shell-tour advancement: listen for the tour-advance DOM event
+  // fired by the SSE parser when the server advances the step.
+  // Falls back to polling /me every 3s in case the event is dropped.
   useEffect(() => {
     if (!isShell || dismissed || !inLoom) return
-    const id = setInterval(() => {
-      refreshUser().catch(() => {})
-    }, REFRESH_INTERVAL_MS)
-    return () => clearInterval(id)
+    const onAdvance = () => { refreshUser().catch(() => {}) }
+    window.addEventListener('tour-advance', onAdvance)
+    const id = setInterval(onAdvance, REFRESH_INTERVAL_MS)
+    return () => {
+      window.removeEventListener('tour-advance', onAdvance)
+      clearInterval(id)
+    }
   }, [isShell, dismissed, inLoom, refreshUser])
 
   // Update body[data-tour-highlight] every render so CSS can pulse
