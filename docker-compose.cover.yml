@@ -27,6 +27,8 @@ services:
 
   coordinator:
     build:
+      context: ..
+      dockerfile: weft/Dockerfile
       args:
         BUILD_FLAGS: "-cover -coverpkg=github.com/kevlarcon/weft/..."
     environment:
@@ -87,6 +89,8 @@ services:
 
   api:
     build:
+      context: ..
+      dockerfile: weft/Dockerfile
       args:
         BUILD_FLAGS: "-cover -coverpkg=github.com/kevlarcon/weft/..."
     environment:

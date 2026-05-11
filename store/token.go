@@ -129,6 +129,12 @@ func (s *Store) RevokeAgentToken(id uint) error {
 	return s.db.Model(&AgentToken{}).Where("id = ?", id).Update("revoked", true).Error
 }
 
+func (s *Store) RevokeAgentTokensByLabel(customerID uint, label string) error {
+	return s.db.Model(&AgentToken{}).
+		Where("customer_id = ? AND label = ? AND revoked = ?", customerID, label, false).
+		Update("revoked", true).Error
+}
+
 // ListAgentTokens returns all tokens for a customer, with namespace preloaded.
 func (s *Store) ListAgentTokens(customerID uint) ([]AgentToken, error) {
 	var tokens []AgentToken

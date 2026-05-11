@@ -1,14 +1,12 @@
 #!/bin/bash
 # Bring up the multi-customer demo:
 #   1. ensure base stack (postgres, coordinator, etc.) is running
-#   2. mint tokens via weft-demo-seed (idempotent; skipped if tokens.env exists)
+#   2. mint fresh agent tokens via weft-demo-seed (always; old tokens revoked)
 #   3. start the 18 demo service containers (acme: 6, globex: 6, loom: 6)
 #
 # Loom Inc is the populated org used by the onboarding tour — every
 # signup gets a read-only membership in it. Its producer containers
 # follow the same shape as acme/globex.
-#
-# Re-mint tokens by deleting dev/demo/tokens.env first.
 #
 #   ./dev/demo/up.sh
 
@@ -21,13 +19,23 @@ DSN="${DB_DSN:-host=localhost port=5433 user=weft password=weft dbname=weft sslm
 TOKENS="dev/demo/tokens.env"
 SEED_BIN="dev/demo/weft-demo-seed"
 
-echo "→ ensuring base stack is up"
-docker compose up -d postgres coordinator api
+echo "→ starting postgres"
+docker compose up -d postgres
+
+echo "→ waiting for postgres to accept connections"
+until docker compose exec -T postgres pg_isready -U weft -q 2>/dev/null; do
+  sleep 1
+done
 
 echo "→ building seed CLI"
 go build -o "${SEED_BIN}" ./cmd/weft-demo-seed
 
-echo "→ seeding customers/users/tokens (idempotent)"
+# Always re-mint tokens so they match the current DB state. Without
+# this, a postgres volume recreate leaves tokens.env pointing at hashes
+# that no longer exist, and all 18 producers crash-loop on auth.
+rm -f "${TOKENS}"
+
+echo "→ seeding customers/users/tokens (before API starts)"
 # A fresh dev DB is virgin (no goose_db_version table yet) so
 # store.Migrate has to apply schema.sql via psql for bootstrap. That
 # path is gated by WEFT_ALLOW_SCHEMA_BOOTSTRAP — production never
@@ -35,6 +43,9 @@ echo "→ seeding customers/users/tokens (idempotent)"
 # rather fail loud than silently restore a stale embedded snapshot
 # if it ever did.
 WEFT_ALLOW_SCHEMA_BOOTSTRAP=1 "./${SEED_BIN}" --db-dsn "${DSN}" --tokens-out "${TOKENS}"
+
+echo "→ building weft-server image + starting coordinator, api, compute"
+docker compose up -d --build compute coordinator api
 
 echo "→ bringing up 18 demo services (acme + globex + loom)"
 docker compose \
