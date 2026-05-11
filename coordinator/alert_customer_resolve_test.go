@@ -41,7 +41,7 @@ func TestQuery_InteractiveAlertResolvesCallerCustomer(t *testing.T) {
 	// is zero (it's never set by cmd/coordinator/main.go either).
 	c := NewCoordinator(CoordinatorConfig{
 		Store:    db,
-		Notifier: NewNotifier(db),
+		Notifier: NewNotifier(db, nil),
 	})
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
@@ -107,7 +107,7 @@ func TestQuery_InteractiveBinExpandResolvesCallerCustomer(t *testing.T) {
 
 	c := NewCoordinator(CoordinatorConfig{
 		Store:    db,
-		Notifier: NewNotifier(db),
+		Notifier: NewNotifier(db, nil),
 		// CustomerID intentionally zero.
 	})
 

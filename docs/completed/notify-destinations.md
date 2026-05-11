@@ -1,6 +1,8 @@
-# Plan: Additional notify destinations
+# Plan: Additional notify destinations [DONE]
 
-Extend `/etc/notify.yaml` beyond Slack + PagerDuty to cover generic webhook, email, Opsgenie, and Microsoft Teams. Minimum change to cover the majority of customers who don't run PagerDuty.
+Extend `/etc/notify.yaml` beyond Slack + PagerDuty to cover generic webhook
+and email. Opsgenie and Teams were dropped — generic webhook covers both
+(and any other service with an incoming-webhook URL).
 
 ## Why add this
 

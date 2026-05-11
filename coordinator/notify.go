@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kevlarcon/weft/internal/email"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -20,13 +21,15 @@ var pdEventsURL = "https://events.pagerduty.com/v2/enqueue"
 // fans out to one or more Slack / PagerDuty targets.
 type Notifier struct {
 	Store  *store.Store
+	Email  *email.Config // nil = email notifications disabled (dev mode)
 	client *http.Client
 }
 
 // NewNotifier creates a notifier with a default HTTP client.
-func NewNotifier(s *store.Store) *Notifier {
+func NewNotifier(s *store.Store, emailCfg *email.Config) *Notifier {
 	return &Notifier{
 		Store:  s,
+		Email:  emailCfg,
 		client: &http.Client{Timeout: 10 * time.Second},
 	}
 }
@@ -68,6 +71,22 @@ func (n *Notifier) Send(customerID uint, aliasName, watchName, body string) erro
 	for _, t := range alias.PagerDuty {
 		if err := n.sendPagerDuty(customerID, watchName, t, body); err != nil {
 			log.Printf("notify[%s]: pagerduty %s: %v", watchName, t.Name, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	for _, t := range alias.Webhook {
+		if err := n.sendWebhook(aliasName, watchName, t, body); err != nil {
+			log.Printf("notify[%s]: webhook %s: %v", watchName, t.URL, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	for _, t := range alias.Email {
+		if err := n.sendEmail(watchName, t, body); err != nil {
+			log.Printf("notify[%s]: email %s: %v", watchName, t.Address, err)
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -215,6 +234,63 @@ func (n *Notifier) sendPagerDuty(customerID uint, watchName string, target store
 	n.Store.RecordPagerDutySend(customerID, target.Name, "")
 	log.Printf("notify: sent PagerDuty alert for watch %s to integration %s (severity %s)",
 		watchName, target.Name, target.Severity)
+	return nil
+}
+
+// ── Webhook ──────────────────────────────────────────
+
+// webhookPayload is the versioned JSON shape sent to generic webhook targets.
+type webhookPayload struct {
+	V     int    `json:"v"`
+	Watch string `json:"watch"`
+	Alias string `json:"alias"`
+	TsUnix int64  `json:"ts_unix"`
+	Body  string `json:"body"`
+}
+
+func (n *Notifier) sendWebhook(aliasName, watchName string, target store.WebhookTarget, body string) error {
+	payload, _ := json.Marshal(webhookPayload{
+		V:      1,
+		Watch:  watchName,
+		Alias:  aliasName,
+		TsUnix: time.Now().Unix(),
+		Body:   truncate(body, 4000),
+	})
+
+	req, err := http.NewRequest("POST", target.URL, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("webhook: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range target.Headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := n.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("webhook POST: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("webhook returned %d", resp.StatusCode)
+	}
+
+	log.Printf("notify: sent webhook alert for watch %s to %s", watchName, target.URL)
+	return nil
+}
+
+// ── Email ────────────────────────────────────────────
+
+func (n *Notifier) sendEmail(watchName string, target store.EmailTarget, body string) error {
+	if n.Email == nil {
+		return fmt.Errorf("no SMTP configuration (set EMAIL_HOST_PASSWORD)")
+	}
+	subject := fmt.Sprintf("weft alert: %s", watchName)
+	if err := email.SendPlain(n.Email, target.Address, subject, truncate(body, 4000)); err != nil {
+		return fmt.Errorf("email send: %w", err)
+	}
+	log.Printf("notify: sent email alert for watch %s to %s", watchName, target.Address)
 	return nil
 }
 

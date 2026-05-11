@@ -3,9 +3,9 @@
 // docs/plans/multi-customer-demo-seed.md.
 //
 // Idempotent: every step uses FirstOrCreate / "skip if exists" so
-// re-running is safe. Token re-mint is gated by tokens.env existing —
-// if it does, no new tokens are written; if it doesn't, twelve fresh
-// tokens are minted and the file is created.
+// re-running is safe. Tokens are always freshly minted (previous
+// tokens with the same label are revoked first), and written to the
+// output file.
 //
 // Usage:
 //   weft-demo-seed --db-dsn "host=localhost port=5433 ..." \
@@ -155,8 +155,6 @@ var errorRatios = map[shapeKey]float64{
 // --- the seed ---------------------------------------------------------
 
 func seed(s *store.Store, tokensOut string) error {
-	tokensExist := fileExists(tokensOut)
-
 	var tokenLines []mintedToken
 	var nonLoomUsers []nonLoomUser
 
@@ -220,14 +218,13 @@ func seed(s *store.Store, tokensOut string) error {
 			}
 		}
 
-		// Agent tokens — one per (app, env). Skipped if tokens.env already exists.
+		// Agent tokens — one per (app, env). Revoke any previous tokens
+		// with the same label so we don't accumulate orphans across restarts.
 		for _, app := range c.Apps {
 			for _, env := range c.Envs {
 				varName := tokenEnvVar(c.Name, app, env)
-				if tokensExist {
-					continue
-				}
 				label := fmt.Sprintf("%s-%s-%s", c.Name, app, env)
+				_ = s.RevokeAgentTokensByLabel(cust.ID, label)
 				raw, _, err := s.CreateAgentToken(cust.ID, ns.ID, label, env)
 				if err != nil {
 					return fmt.Errorf("token %s: %w", label, err)
@@ -255,12 +252,8 @@ func seed(s *store.Store, tokensOut string) error {
 		return fmt.Errorf("loom memberships: %w", err)
 	}
 
-	if !tokensExist {
-		if err := writeTokensFile(tokensOut, tokenLines); err != nil {
-			return err
-		}
-	} else {
-		log.Printf("tokens.env already present at %s — leaving in place", tokensOut)
+	if err := writeTokensFile(tokensOut, tokenLines); err != nil {
+		return err
 	}
 	return nil
 }
@@ -363,11 +356,6 @@ timestamp_format: "2006-01-02T15:04:05.000Z"
 level_field: "2"
 app: %s
 `, app)
-}
-
-func fileExists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
 }
 
 // --- pre-seeded /bin and /cron.d --------------------------------------
@@ -539,6 +527,26 @@ sections:
 `
 	if err := s.SaveDashboard(custID, user1.ID, "prod", prodDashboard); err != nil {
 		return fmt.Errorf("dashboard prod: %w", err)
+	}
+
+	// --- /etc/notify.yaml -------------------------------------------------
+	notifyYAML := `ops:
+  webhook:
+    - "https://hooks.loom.test/weft/ops"
+  email:
+    - "ops@loom.test"
+    - "kai@loom.test"
+
+oncall:
+  webhook:
+    - url: "https://hooks.loom.test/weft/oncall"
+      headers:
+        X-Signing-Secret: "loom-demo-secret"
+  email:
+    - "oncall@loom.test"
+`
+	if err := s.SaveNotifyAliases(custID, notifyYAML); err != nil {
+		return fmt.Errorf("notify.yaml: %w", err)
 	}
 
 	return nil

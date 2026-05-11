@@ -58,9 +58,9 @@ tail /log/shard.log | jq 'select(.type=="disk")' \
 vi /etc/notify.yaml
 ```
 
-Each alias bundles one or more Slack channels and/or PagerDuty
-integrations. `slack:` and `pagerduty:` are always lists; each entry
-is either a bare string or a mapping.
+Each alias bundles one or more targets across four service types:
+`slack:`, `pagerduty:`, `webhook:`, and `email:`. All are lists;
+each entry is either a bare string or a mapping.
 
 ```
 ops:
@@ -68,6 +68,10 @@ ops:
     - "#alerts"
   pagerduty:
     - ops-daytime
+  webhook:
+    - "https://hooks.example.com/weft/ops"
+  email:
+    - "oncall@example.com"
 
 critical:
   slack:
@@ -76,16 +80,28 @@ critical:
   pagerduty:
     - name: primary
       severity: critical
+  webhook:
+    - url: "https://intake.example.com/alerts"
+      headers:
+        X-Signing-Secret: "s3cret"
+  email:
+    - "oncall@example.com"
+    - "paul@example.com"
 ```
 
-Slack entries are channel names (strings), or `{channel: "#name"}`
-mappings. PagerDuty entries are integration names (strings, severity
-defaults to `error`), or `{name: "...", severity: "..."}` where severity
-is one of `critical`, `error`, `warning`, `info`.
+**Slack** — channel names (`"#ops"`) or `{channel: "#name"}`.
+**PagerDuty** — integration names (severity defaults to `error`),
+or `{name: "...", severity: "..."}` (`critical`/`error`/`warning`/`info`).
+**Webhook** — bare URL strings, or `{url: "...", headers: {...}}`.
+POSTs a JSON payload with `v`, `watch`, `alias`, `ts_unix`, `body`.
+**Email** — bare addresses, or `{address: "..."}`. Sends a plain-text
+email with the watch name as subject (requires SMTP configuration).
 
 Slack and PagerDuty credentials are configured under Account →
 Integrations; notify.yaml only names destinations. The PagerDuty
-integration name must match one you've registered there.
+integration name must match one you've registered there. Webhook
+and email destinations need no account-level credentials — URLs
+and addresses are per-alias.
 
 ## Testing an alias
 

@@ -25,6 +25,7 @@ import (
 	"github.com/kevlarcon/weft/compute"
 	weftcfg "github.com/kevlarcon/weft/config"
 	"github.com/kevlarcon/weft/coordinator"
+	"github.com/kevlarcon/weft/internal/email"
 	"github.com/kevlarcon/weft/coordinator/discovery"
 	"github.com/kevlarcon/weft/coordinator/poller"
 	coordsvc "github.com/kevlarcon/weft/coordinator/service"
@@ -122,7 +123,7 @@ func main() {
 	// alert stage. Sharing one instance between Coordinator and
 	// CronExecutor below keeps interactive `alert --notify=foo` and
 	// scheduled-watch dispatch on the same path.
-	notifier := coordinator.NewNotifier(db)
+	notifier := coordinator.NewNotifier(db, email.ConfigFromEnv())
 
 	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{
 		Shards:            shards,

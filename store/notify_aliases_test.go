@@ -94,3 +94,99 @@ simple:
 		t.Errorf("pd bare string didn't parse: %+v", simple.PagerDuty[0])
 	}
 }
+
+func TestParseNotifyAliases_Webhook(t *testing.T) {
+	raw := `
+ops:
+  webhook:
+    - "https://hooks.example.com/weft/ops"
+    - url: "https://intake.example.com/alerts"
+      headers:
+        X-Signing-Secret: "s3cret"
+`
+	m, err := ParseNotifyAliases(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	ops := m["ops"]
+	if len(ops.Webhook) != 2 {
+		t.Fatalf("want 2 webhook targets, got %d", len(ops.Webhook))
+	}
+	if ops.Webhook[0].URL != "https://hooks.example.com/weft/ops" {
+		t.Errorf("webhook[0] URL wrong: %+v", ops.Webhook[0])
+	}
+	if len(ops.Webhook[0].Headers) != 0 {
+		t.Errorf("webhook[0] should have no headers: %+v", ops.Webhook[0])
+	}
+	if ops.Webhook[1].URL != "https://intake.example.com/alerts" {
+		t.Errorf("webhook[1] URL wrong: %+v", ops.Webhook[1])
+	}
+	if ops.Webhook[1].Headers["X-Signing-Secret"] != "s3cret" {
+		t.Errorf("webhook[1] headers wrong: %+v", ops.Webhook[1].Headers)
+	}
+}
+
+func TestParseNotifyAliases_Email(t *testing.T) {
+	raw := `
+oncall:
+  email:
+    - "oncall@example.com"
+    - address: "paul@example.com"
+`
+	m, err := ParseNotifyAliases(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	oncall := m["oncall"]
+	if len(oncall.Email) != 2 {
+		t.Fatalf("want 2 email targets, got %d", len(oncall.Email))
+	}
+	if oncall.Email[0].Address != "oncall@example.com" {
+		t.Errorf("email[0] wrong: %+v", oncall.Email[0])
+	}
+	if oncall.Email[1].Address != "paul@example.com" {
+		t.Errorf("email[1] wrong: %+v", oncall.Email[1])
+	}
+}
+
+func TestParseNotifyAliases_WebhookMissingURL(t *testing.T) {
+	raw := `
+bad:
+  webhook:
+    - url: ""
+`
+	_, err := ParseNotifyAliases(raw)
+	if err == nil || !strings.Contains(err.Error(), "url") {
+		t.Fatalf("want url error, got %v", err)
+	}
+}
+
+func TestParseNotifyAliases_EmailOnly(t *testing.T) {
+	raw := `
+simple:
+  email:
+    - "alert@example.com"
+`
+	m, err := ParseNotifyAliases(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(m["simple"].Email) != 1 {
+		t.Fatalf("want 1 email target, got %d", len(m["simple"].Email))
+	}
+}
+
+func TestParseNotifyAliases_WebhookOnly(t *testing.T) {
+	raw := `
+hook:
+  webhook:
+    - "https://example.com/hook"
+`
+	m, err := ParseNotifyAliases(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(m["hook"].Webhook) != 1 {
+		t.Fatalf("want 1 webhook target, got %d", len(m["hook"].Webhook))
+	}
+}

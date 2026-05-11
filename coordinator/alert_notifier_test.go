@@ -26,7 +26,7 @@ func TestQuery_InteractiveAlertUsesCoordinatorNotifier(t *testing.T) {
 
 	c := NewCoordinator(CoordinatorConfig{
 		Store:    db,
-		Notifier: NewNotifier(db),
+		Notifier: NewNotifier(db, nil),
 	})
 
 	// No alias is defined in /etc/notify.yaml, so Notifier.Send returns

@@ -26,7 +26,7 @@ alert — evaluate conditions and dispatch notifications
 Reads a value from stdin and evaluates it against a condition.
 If the condition is met, writes an alert message to stderr and,
 when `--notify` is supplied, dispatches the alias from `/etc/notify.yaml`
-to its Slack and/or PagerDuty targets.
+to its Slack, PagerDuty, webhook, and/or email targets.
 
 If no condition is given, the default is "any": the alert fires
 whenever stdin is non-empty.
