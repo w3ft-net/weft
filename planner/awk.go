@@ -34,8 +34,8 @@ type awkPushdown struct {
 // See docs/plans/ingest-dimensions.md.
 var metaVars = map[string]string{
 	"LEVEL":         "level",
-	"APP":           "app",
-	"SERVICE":       "app",
+	"APP":           "namespace",
+	"SERVICE":       "namespace",
 	"INSTANCE":      "instance",
 	"HOST":          "instance",
 	"TS":            "ts",

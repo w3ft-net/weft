@@ -6,11 +6,12 @@ import (
 )
 
 // TestNamespacePredicate verifies that the planner generates correct SQL
-// predicates for namespace-level vs sub-app-level queries.
+// predicates using the normalized namespace/service/env columns.
 //
-// Namespace queries (no "/" in app name) must use an OR predicate to match
-// both the namespace itself and all sub-apps: (app = 'X' OR app LIKE 'X/%').
-// Sub-app queries (containing "/") must use exact match: app = 'X/Y'.
+// Path layout:
+//   1 seg → namespace wildcard (all services in namespace)
+//   2 seg → namespace + service (no env)
+//   3+ seg → namespace + env + service (env at position 1)
 func TestNamespacePredicate(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -18,64 +19,64 @@ func TestNamespacePredicate(t *testing.T) {
 		wantSQL  string
 	}{
 		{
-			name:     "namespace query uses OR with LIKE",
+			name:     "namespace-only query (1 segment)",
 			pipeline: `cat /log/weft.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE (app = 'weft' OR app LIKE 'weft/%')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'weft'`,
 		},
 		{
-			name:     "sub-app query uses exact match",
+			name:     "two-level: namespace + service, no env",
 			pipeline: `cat /log/weft/coordinator.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE app = 'weft/coordinator'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'weft' AND service = 'coordinator'`,
 		},
 		{
-			name:     "flat app also uses namespace pattern",
+			name:     "bare name also namespace-only",
 			pipeline: `cat vimgym.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE (app = 'vimgym' OR app LIKE 'vimgym/%')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym'`,
 		},
 		{
-			name:     "head with namespace",
+			name:     "head with namespace-only",
 			pipeline: `head -5 /log/weft.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE (app = 'weft' OR app LIKE 'weft/%') ORDER BY ts ASC LIMIT 5`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'weft' ORDER BY ts ASC LIMIT 5`,
 		},
 		{
-			name:     "tail with sub-app",
+			name:     "tail with namespace+service (no env)",
 			pipeline: `tail -10 /log/weft/shard.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE app = 'weft/shard' ORDER BY ts DESC LIMIT 10`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'weft' AND service = 'shard' ORDER BY ts DESC LIMIT 10`,
 		},
 		{
-			name:     "grep with sub-app",
+			name:     "grep with namespace+service",
 			pipeline: `cat /log/weft/shard.log | grep ERROR`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE app = 'weft/shard' AND regexp_matches(raw, 'ERROR')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'weft' AND service = 'shard' AND regexp_matches(raw, 'ERROR')`,
 		},
 		{
-			name:     "grep with namespace",
+			name:     "grep with namespace-only",
 			pipeline: `cat /log/weft.log | grep timeout`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE (app = 'weft' OR app LIKE 'weft/%') AND regexp_matches(raw, 'timeout')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'weft' AND regexp_matches(raw, 'timeout')`,
 		},
 		{
-			name:     "awk filter with namespace",
+			name:     "awk filter with namespace-only",
 			pipeline: `cat /log/weft.log | awk '$LEVEL == "ERROR"'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE (app = 'weft' OR app LIKE 'weft/%') AND level = 'ERROR'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'weft' AND level = 'ERROR'`,
 		},
 		{
-			name:     "metrics sub-app uses exact match",
+			name:     "two-level metrics (no env)",
 			pipeline: `cat /log/weft/metrics.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE app = 'weft/metrics'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'weft' AND service = 'metrics'`,
 		},
 		{
-			// `cat *.log` (after glob expansion at the call site) lands here
-			// as a multi-arg cat. The planner must union the apps with a
-			// single IN predicate, not silently drop everything past args[0].
-			name:     "multi-arg cat unions apps with IN predicate",
+			name:     "multi-arg cat unions services",
 			pipeline: `cat /log/weft/coordinator.log /log/weft/shard.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE app IN ('weft/coordinator', 'weft/shard')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'weft' AND service IN ('coordinator', 'shard')`,
 		},
 		{
-			// All args share the same env segment → the env predicate is
-			// preserved alongside the app IN list.
-			name:     "multi-arg cat preserves shared env predicate",
+			name:     "multi-arg cat with env preserves env predicate",
 			pipeline: `cat /log/acme/prod/api/metrics.log /log/acme/prod/worker/metrics.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE app IN ('acme/api/metrics', 'acme/worker/metrics') AND env = 'prod'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE env = 'prod' AND namespace = 'acme' AND service IN ('api/metrics', 'worker/metrics')`,
+		},
+		{
+			name:     "three-level path: namespace + env + service",
+			pipeline: `cat /log/loom/prod/api.log`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE env = 'prod' AND namespace = 'loom' AND service = 'api'`,
 		},
 	}
 

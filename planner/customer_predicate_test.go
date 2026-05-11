@@ -13,7 +13,7 @@ func TestPlanCustomer_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	want := `SELECT raw, ts FROM logs WHERE customer = 'kevlar' AND (app = 'foo' OR app LIKE 'foo/%')`
+	want := `SELECT raw, ts FROM logs WHERE customer = 'kevlar' AND namespace = 'foo'`
 	if plan.ShardSQL != want {
 		t.Errorf("ShardSQL\n got: %s\nwant: %s", plan.ShardSQL, want)
 	}

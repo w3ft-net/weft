@@ -32,7 +32,7 @@ func TestPushdown_NewDimensions(t *testing.T) {
 		{"awk node", `cat vimgym.log | awk '$NODE == "shard-abc"'`, "node = 'shard-abc'"},
 
 		// SERVICE alias for app — should rewrite to the same column.
-		{"awk service alias", `cat vimgym.log | awk '$SERVICE == "api"'`, "app = 'api'"},
+		{"awk service alias", `cat vimgym.log | awk '$SERVICE == "api"'`, "namespace = 'api'"},
 		// HOST alias for instance.
 		{"awk host alias", `cat vimgym.log | awk '$HOST == "i-abc"'`, "instance = 'i-abc'"},
 
@@ -48,7 +48,7 @@ func TestPushdown_NewDimensions(t *testing.T) {
 		{"jq node", `cat vimgym.log | jq 'select(._node == "shard-abc")'`, "node = 'shard-abc'"},
 
 		// jq aliases.
-		{"jq service alias", `cat vimgym.log | jq 'select(._service == "api")'`, "app = 'api'"},
+		{"jq service alias", `cat vimgym.log | jq 'select(._service == "api")'`, "namespace = 'api'"},
 		{"jq host alias", `cat vimgym.log | jq 'select(._host == "i-abc")'`, "instance = 'i-abc'"},
 	}
 
@@ -68,46 +68,54 @@ func TestPushdown_NewDimensions(t *testing.T) {
 	}
 }
 
-// TestPathLayout_EnvSegment verifies a 3-level pseudofile path
-// /log/<ns>/<env>/<app>.log produces both an app filter and an env
-// filter — the env layer slots in between namespace and app-leaf.
-// See docs/plans/ingest-dimensions.md.
+// TestPathLayout_EnvSegment verifies pseudofile path parsing into
+// namespace/env/service predicates.
+//
+// Path layout:
+//   2 seg → <ns>/<service>                 no env (env-less token)
+//   3+ seg → <ns>/<env>/<service[/sub]>    env at position 1
 func TestPathLayout_EnvSegment(t *testing.T) {
 	tests := []struct {
-		name      string
-		pipeline  string
-		wantApp   string // app predicate fragment
-		wantEnv   string // env predicate fragment ("" = no env predicate expected)
+		name    string
+		pipeline string
+		wantNS  string
+		wantSvc string
+		wantEnv string
 	}{
 		{
 			name:     "two-level path (no env)",
 			pipeline: `cat /log/weft/coordinator.log`,
-			wantApp:  "app = 'weft/coordinator'",
-			wantEnv:  "", // no env predicate in 2-level paths
-		},
-		{
-			name:     "three-level telemetry path",
-			pipeline: `cat /log/weft/coordinator/runtime.log`,
-			wantApp:  "app = 'weft/coordinator/runtime'",
-			wantEnv:  "", // no env predicate in 3-level paths
-		},
-		{
-			name:     "three-level metrics path",
-			pipeline: `tail /log/weft/coordinator/metrics.log`,
-			wantApp:  "app = 'weft/coordinator/metrics'",
+			wantNS:   "namespace = 'weft'",
+			wantSvc:  "service = 'coordinator'",
 			wantEnv:  "",
 		},
 		{
-			name:     "four-level path with env",
-			pipeline: `cat /log/weft/prod/coordinator/runtime.log`,
-			wantApp:  "app = 'weft/coordinator/runtime'",
+			name:     "three-level path with env",
+			pipeline: `cat /log/weft/prod/coordinator.log`,
+			wantNS:   "namespace = 'weft'",
+			wantSvc:  "service = 'coordinator'",
 			wantEnv:  "env = 'prod'",
 		},
 		{
-			name:     "four-level path with staging",
+			name:     "four-level path: compound service with env",
+			pipeline: `cat /log/weft/prod/coordinator/runtime.log`,
+			wantNS:   "namespace = 'weft'",
+			wantSvc:  "service = 'coordinator/runtime'",
+			wantEnv:  "env = 'prod'",
+		},
+		{
+			name:     "four-level path staging metrics",
 			pipeline: `cat /log/myco/staging/api/metrics.log`,
-			wantApp:  "app = 'myco/api/metrics'",
+			wantNS:   "namespace = 'myco'",
+			wantSvc:  "service = 'api/metrics'",
 			wantEnv:  "env = 'staging'",
+		},
+		{
+			name:     "tail with env",
+			pipeline: `tail /log/loom/prod/api.log`,
+			wantNS:   "namespace = 'loom'",
+			wantSvc:  "service = 'api'",
+			wantEnv:  "env = 'prod'",
 		},
 	}
 
@@ -117,8 +125,11 @@ func TestPathLayout_EnvSegment(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tc.pipeline, err)
 			}
-			if !strings.Contains(plan.ShardSQL, tc.wantApp) {
-				t.Errorf("ShardSQL missing app predicate %q\n  got: %s", tc.wantApp, plan.ShardSQL)
+			if !strings.Contains(plan.ShardSQL, tc.wantNS) {
+				t.Errorf("ShardSQL missing namespace predicate %q\n  got: %s", tc.wantNS, plan.ShardSQL)
+			}
+			if tc.wantSvc != "" && !strings.Contains(plan.ShardSQL, tc.wantSvc) {
+				t.Errorf("ShardSQL missing service predicate %q\n  got: %s", tc.wantSvc, plan.ShardSQL)
 			}
 			if tc.wantEnv == "" {
 				if strings.Contains(plan.ShardSQL, "env = ") {

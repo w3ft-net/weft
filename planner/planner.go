@@ -31,7 +31,8 @@ type QueryPlan struct {
 	// the same transformations as the historical batch.
 	LiveStages []string
 	SourceCmd      string        // source command: "cat", "head", or "tail"
-	SourceApp      string        // app extracted from pseudofile ("" = all apps)
+	SourceApp      string        // composite app name for shard routing ("" = all apps)
+	SourceNamespace string       // namespace for shard routing
 	AlertArgs      []string      // argv for a terminal `alert` stage; nil if absent. Set even for alert-only pipelines (ShardSQL is empty in that case).
 
 	// Direct-to-compute mode (see docs/plans/direct-to-compute.md §3).
@@ -144,31 +145,34 @@ func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 	// stay consistent with the historical batch.
 	liveStages := formatComputeStages(info.stages)
 
-	// Apply source: app filter + head/tail ordering.
-	// One app: namespace OR-LIKE for bare names, exact match for sub-apps.
-	// Many apps (multi-arg cat or post-glob expansion): single IN list.
-	switch len(info.source.apps) {
-	case 0:
-		// warp.log — no app filter.
-	case 1:
-		app := info.source.apps[0]
-		if strings.Contains(app, "/") {
-			sql.addPredicate(fmt.Sprintf("app = '%s'", app))
-		} else {
-			sql.addPredicate(fmt.Sprintf("(app = '%s' OR app LIKE '%s/%%')", app, app))
-		}
-	default:
-		quoted := make([]string, len(info.source.apps))
-		for i, a := range info.source.apps {
-			quoted[i] = "'" + a + "'"
-		}
-		sql.addPredicate(fmt.Sprintf("app IN (%s)", strings.Join(quoted, ", ")))
-	}
-
-	// Three-level pseudofile path /log/<ns>/<env>/<app>.log adds an
-	// env predicate. See docs/plans/ingest-dimensions.md.
+	// Apply source filters from the pseudofile path. Each path segment
+	// maps to a column: namespace, env, service.
 	if info.source.env != "" {
 		sql.addPredicate(fmt.Sprintf("env = '%s'", info.source.env))
+	}
+	switch len(info.source.namespaces) {
+	case 0:
+		// warp.log — no namespace/service filter.
+	case 1:
+		sql.addPredicate(fmt.Sprintf("namespace = '%s'", info.source.namespaces[0]))
+	default:
+		quoted := make([]string, len(info.source.namespaces))
+		for i, ns := range info.source.namespaces {
+			quoted[i] = "'" + ns + "'"
+		}
+		sql.addPredicate(fmt.Sprintf("namespace IN (%s)", strings.Join(quoted, ", ")))
+	}
+	switch len(info.source.services) {
+	case 0:
+		// No service filter (namespace-level wildcard or warp.log).
+	case 1:
+		sql.addPredicate(fmt.Sprintf("service = '%s'", info.source.services[0]))
+	default:
+		quoted := make([]string, len(info.source.services))
+		for i, svc := range info.source.services {
+			quoted[i] = "'" + svc + "'"
+		}
+		sql.addPredicate(fmt.Sprintf("service IN (%s)", strings.Join(quoted, ", ")))
 	}
 
 	switch info.source.cmd {
@@ -317,12 +321,20 @@ func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 		LiveStages:     liveStages,
 		SourceCmd:      info.source.cmd,
 		SourceApp:      info.source.app(),
+		SourceNamespace: firstOrEmpty(info.source.namespaces),
 		AlertArgs:      alertArgs,
 		ShardOrderBy:   shardOrderBy,
 		ShardLimit:     shardLimit,
 		RedirectTarget: redirTarget,
 		RedirectAppend: redirAppend,
 	}, nil
+}
+
+func firstOrEmpty(s []string) string {
+	if len(s) > 0 {
+		return s[0]
+	}
+	return ""
 }
 
 // extractTrailingFSRedirect detects a `> /tmp/...` (or `>>`, or any

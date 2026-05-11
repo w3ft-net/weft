@@ -14,8 +14,8 @@ import (
 // so the underscore is more reliable than casing. See
 // docs/plans/ingest-dimensions.md.
 var jqMetaVars = map[string]string{
-	"_app":           "app",
-	"_service":       "app",
+	"_app":           "namespace",
+	"_service":       "namespace",
 	"_level":         "level",
 	"_instance":      "instance",
 	"_host":          "instance",

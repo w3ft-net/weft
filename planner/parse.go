@@ -16,16 +16,16 @@ import (
 // (all apps); a one-element apps means a single-app query and uses
 // `app =`/`LIKE` predicates.
 type sourceInfo struct {
-	apps   []string // app names; empty = warp.log (no app filter)
-	env    string   // env extracted from pseudofile path; shared across all apps
-	cmd    string   // "cat", "head", or "tail"
-	limit  int      // for head/tail: line count (0 = unlimited for cat)
-	follow bool     // tail -f
+	apps       []string // composite app names (namespace/service) for shard routing
+	namespaces []string // namespace column values for SQL predicates
+	services   []string // service column values for SQL predicates
+	env        string   // env extracted from pseudofile path; shared across all apps
+	cmd        string   // "cat", "head", or "tail"
+	limit      int      // for head/tail: line count (0 = unlimited for cat)
+	follow     bool     // tail -f
 }
 
-// app returns the single app name for queries that source a single
-// pseudofile. Use only in code paths that already gate on
-// len(apps) == 1.
+// app returns the single composite app name for shard routing.
 func (s sourceInfo) app() string {
 	if len(s.apps) == 0 {
 		return ""
@@ -128,11 +128,11 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 				return nil, errLocalSourcePath
 			}
 		}
-		apps, env, err := extractAppsEnv(args, "cat")
+		sf, err := extractAppsEnv(args, "cat")
 		if err != nil {
 			return nil, err
 		}
-		return &sourceInfo{apps: apps, env: env, cmd: "cat"}, nil
+		return &sourceInfo{apps: sf.apps, namespaces: sf.namespaces, services: sf.services, env: sf.env, cmd: "cat"}, nil
 
 	case "head":
 		limit := 10
@@ -159,11 +159,11 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 				return nil, errLocalSourcePath
 			}
 		}
-		apps, env, err := extractAppsEnv(files, "head")
+		sf, err := extractAppsEnv(files, "head")
 		if err != nil {
 			return nil, err
 		}
-		return &sourceInfo{apps: apps, env: env, cmd: "head", limit: limit}, nil
+		return &sourceInfo{apps: sf.apps, namespaces: sf.namespaces, services: sf.services, env: sf.env, cmd: "head", limit: limit}, nil
 
 	case "tail":
 		limit := 10
@@ -193,11 +193,11 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 				return nil, errLocalSourcePath
 			}
 		}
-		apps, env, err := extractAppsEnv(files, "tail")
+		sf, err := extractAppsEnv(files, "tail")
 		if err != nil {
 			return nil, err
 		}
-		return &sourceInfo{apps: apps, env: env, cmd: "tail", limit: limit, follow: follow}, nil
+		return &sourceInfo{apps: sf.apps, namespaces: sf.namespaces, services: sf.services, env: sf.env, cmd: "tail", limit: limit, follow: follow}, nil
 
 	default:
 		return nil, fmt.Errorf("unknown source command: %s", name)
@@ -212,30 +212,55 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 // which means no app predicate at all, equivalent to a fan-out across
 // every app the customer can read. Apps are deduplicated and sorted
 // for stable SQL output.
-func extractAppsEnv(files []string, cmd string) ([]string, string, error) {
-	seen := map[string]struct{}{}
-	var apps []string
-	var env string
+type sourceFields struct {
+	apps       []string
+	namespaces []string
+	services   []string
+	env        string
+}
+
+func extractAppsEnv(files []string, cmd string) (sourceFields, error) {
+	seenApps := map[string]struct{}{}
+	seenNS := map[string]struct{}{}
+	seenSvc := map[string]struct{}{}
+	var sf sourceFields
 	for i, f := range files {
 		a := extractApp(f)
 		if a != "" {
-			if _, ok := seen[a]; !ok {
-				seen[a] = struct{}{}
-				apps = append(apps, a)
+			if _, ok := seenApps[a]; !ok {
+				seenApps[a] = struct{}{}
+				sf.apps = append(sf.apps, a)
 			}
 		}
-		e := extractEnv(f)
+		ns, env, svc := parsePseudofilePath(f)
+		if ns != "" {
+			if _, ok := seenNS[ns]; !ok {
+				seenNS[ns] = struct{}{}
+				sf.namespaces = append(sf.namespaces, ns)
+			}
+		}
+		if svc != "" {
+			if _, ok := seenSvc[svc]; !ok {
+				seenSvc[svc] = struct{}{}
+				sf.services = append(sf.services, svc)
+			}
+		}
 		if i == 0 {
-			env = e
-		} else if e != env {
-			return nil, "", fmt.Errorf("%s: cannot mix env=%q and env=%q in one pipeline", cmd, env, e)
+			sf.env = env
+		} else if env != sf.env {
+			return sourceFields{}, fmt.Errorf("%s: cannot mix env=%q and env=%q in one pipeline", cmd, sf.env, env)
 		}
 	}
-	// Stable order so SQL is deterministic for tests and caching.
-	if len(apps) > 1 {
-		strSliceSort(apps)
+	if len(sf.apps) > 1 {
+		strSliceSort(sf.apps)
 	}
-	return apps, env, nil
+	if len(sf.namespaces) > 1 {
+		strSliceSort(sf.namespaces)
+	}
+	if len(sf.services) > 1 {
+		strSliceSort(sf.services)
+	}
+	return sf, nil
 }
 
 func strSliceSort(s []string) {
@@ -256,46 +281,56 @@ func parseStage(cmd *bash.SimpleCommand) stageInfo {
 	return stageInfo{cmd: name, args: args}
 }
 
-// extractApp extracts the app name from a pseudofile name.
+// parsePseudofilePath extracts namespace, env, and service from a /log/ path.
 //
-// Path layout (segments after /log/):
+// Path layout (segments after /log/, .log suffix stripped):
 //
-//	1 seg → "<app>"                       whole-customer query (flat or namespace-prefix wildcard)
-//	2 seg → "<ns>/<app>"                  app within a namespace; env (if any) supplied by the token
-//	3 seg → "<ns>/<service>/<kind>"       telemetry stream: metrics/heartbeats/runtime per service
-//	4 seg → "<ns>/<env>/<service>/<kind>" same as 3 seg with an explicit env filter (env-bound multi-env tokens)
+//	1 seg → "<ns>"                            namespace wildcard (all services)
+//	2 seg → "<ns>/<service>"                  service with no env (env-less token)
+//	3+ seg → "<ns>/<env>/<service[/sub...]>"  env + service (env-bearing token)
 //
-// "warp.log" remains the all-apps wildcard. The previous 3-seg form
-// "<ns>/<env>/<app>" no longer applies — env-bound tokens get the env
-// predicate stamped server-side via the auth interceptor; multi-env
-// tokens that need a specific env in the path use the 4-seg form.
-func extractApp(filename string) string {
+// The 2-seg vs 3-seg distinction comes from SeenApps.encodeName: it
+// only splices env when the token carries one, so 2-seg paths never
+// have an env dimension.
+func parsePseudofilePath(filename string) (namespace, env, service string) {
 	filename = strings.TrimPrefix(filename, "/log/")
 	filename = strings.TrimPrefix(filename, "log/")
 	name := strings.TrimSuffix(filename, ".log")
 	if name == "warp" {
-		return ""
+		return "", "", ""
 	}
 	parts := strings.Split(name, "/")
-	if len(parts) == 4 {
-		return parts[0] + "/" + parts[2] + "/" + parts[3]
+	switch len(parts) {
+	case 1:
+		namespace = parts[0]
+	case 2:
+		namespace = parts[0]
+		service = parts[1]
+	default:
+		namespace = parts[0]
+		env = parts[1]
+		service = strings.Join(parts[2:], "/")
 	}
-	return name
+	return
 }
 
-// extractEnv pulls the env segment from a 4-level pseudofile path.
-// "/log/weft/prod/coordinator/runtime.log" → "prod"
-// "/log/weft/coordinator/runtime.log"      → ""
-// See extractApp for the full layout rules.
-func extractEnv(filename string) string {
-	filename = strings.TrimPrefix(filename, "/log/")
-	filename = strings.TrimPrefix(filename, "log/")
-	name := strings.TrimSuffix(filename, ".log")
-	parts := strings.Split(name, "/")
-	if len(parts) == 4 {
-		return parts[1]
+// extractApp returns the composite app name for shard routing (hasApp).
+// Reconstructs "namespace/service" from the path, skipping env.
+func extractApp(filename string) string {
+	ns, _, svc := parsePseudofilePath(filename)
+	if ns == "" {
+		return ""
 	}
-	return ""
+	if svc == "" {
+		return ns
+	}
+	return ns + "/" + svc
+}
+
+// extractEnv returns the env segment from a pseudofile path.
+func extractEnv(filename string) string {
+	_, env, _ := parsePseudofilePath(filename)
+	return env
 }
 
 // parseLineCount extracts the line count from head/tail arguments.

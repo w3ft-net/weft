@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS logs (
     fields         TEXT[],
     ts             TIMESTAMP,
     level          TEXT,
+    namespace      TEXT,
+    service        TEXT,
     app            TEXT,
     instance       TEXT,
     customer       TEXT,
@@ -82,6 +84,10 @@ var migrationSteps = []string{
 	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS container TEXT`,
 	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS node TEXT`,
 	`ALTER TABLE logs DROP COLUMN IF EXISTS line_num`,
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS namespace TEXT`,
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS service TEXT`,
+	// Backfill namespace/service from composite app column for existing rows.
+	`UPDATE logs SET namespace = split_part(app, '/', 1), service = substr(app, position('/' in app) + 1) WHERE namespace IS NULL AND app IS NOT NULL AND position('/' in app) > 0`,
 }
 
 // NewDuckDBShard opens or creates a DuckDB database at path and initializes the
@@ -133,25 +139,28 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("INSERT INTO logs (raw, fields, ts, level, app, instance, customer, payload, deployment, env, version, region, cluster, k8s_namespace, pod, container, node) VALUES ")
+	sb.WriteString("INSERT INTO logs (raw, fields, ts, level, namespace, service, app, instance, customer, payload, deployment, env, version, region, cluster, k8s_namespace, pod, container, node) VALUES ")
 
-	args := make([]any, 0, len(rows)*17)
+	args := make([]any, 0, len(rows)*19)
 	for i, r := range rows {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 
 		payloadStr := "{}"
 		if len(r.PayloadJson) > 0 {
 			payloadStr = string(r.PayloadJson)
 		}
 
+		ns, svc := SplitApp(r.App)
 		args = append(args,
 			r.Raw,
 			r.Fields,
 			time.Unix(0, r.TsUnixNs),
 			r.Level,
+			ns,
+			svc,
 			r.App,
 			r.Instance,
 			r.Customer,
@@ -173,6 +182,14 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
 		s.rowCount.Add(int64(len(rows)))
 	}
 	return err
+}
+
+// SplitApp splits a composite app name ("loom/api") into namespace and service.
+func SplitApp(app string) (namespace, service string) {
+	if i := strings.Index(app, "/"); i >= 0 {
+		return app[:i], app[i+1:]
+	}
+	return app, ""
 }
 
 // RowCount returns the total number of rows ingested into this shard.
