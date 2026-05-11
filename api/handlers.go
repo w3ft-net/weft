@@ -371,24 +371,25 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Always return 200 regardless of whether the account exists.
+	// Leaking existence is an enumeration vector.
 	user, _ := s.store.GetUserByEmail(req.Email)
 	invite, _ := s.store.GetPendingTeamMemberByEmail(req.Email)
 	if user == nil && invite == nil {
-		http.Error(w, "no account found — sign up first", http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		return
 	}
 
 	token, err := s.store.CreateMagicLink(req.Email)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		log.Printf("login: create magic link for %s: %v", req.Email, err)
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		return
 	}
 
 	verifyURL := fmt.Sprintf("%s/verify?token=%s", s.baseURL, token)
 	if err := SendMagicLinkEmail(s.email, req.Email, verifyURL); err != nil {
-		log.Printf("failed to send magic link to %s: %v", req.Email, err)
-		http.Error(w, "failed to send email", http.StatusInternalServerError)
-		return
+		log.Printf("login: send magic link to %s: %v", req.Email, err)
 	}
 
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -613,6 +614,9 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
+			if err := s.grantLoomMembership(user.ID, email); err != nil {
+				log.Printf("verify: grant Loom membership for %s: %v", email, err)
+			}
 		}
 		s.store.AcceptTeamMember(invite.ID, user.ID)
 		_ = s.store.UpdateUserLastActiveCustomer(user.ID, invite.CustomerID)
@@ -658,6 +662,10 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 				UpdatedAt:  time.Now(),
 			})
 			_ = s.store.UpdateUserLastActiveCustomer(user.ID, cust.ID)
+
+			if err := s.grantLoomMembership(user.ID, email); err != nil {
+				log.Printf("verify: grant Loom membership for %s: %v", email, err)
+			}
 		} else {
 			// Existing user — this is the signup-verification round-trip.
 			// Flip EmailVerifiedAt if not already set so the middleware

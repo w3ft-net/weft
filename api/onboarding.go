@@ -53,7 +53,7 @@ func nextOnboardingStep(current string) string {
 	return ""
 }
 
-// grantLoomMembership is called from the signup handler to give a
+// grantLoomMembership is called during user creation to give a
 // fresh user a read-only membership in the Loom demo org. The
 // welcome modal (and everything downstream) keys off this row's
 // presence, so signup is the only place this happens.
