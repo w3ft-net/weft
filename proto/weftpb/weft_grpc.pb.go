@@ -332,10 +332,11 @@ var ShardQuery_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	WeftCompute_CreateJob_FullMethodName    = "/weft.WeftCompute/CreateJob"
-	WeftCompute_SendRows_FullMethodName     = "/weft.WeftCompute/SendRows"
-	WeftCompute_GetResult_FullMethodName    = "/weft.WeftCompute/GetResult"
-	WeftCompute_ExecuteQuery_FullMethodName = "/weft.WeftCompute/ExecuteQuery"
+	WeftCompute_CreateJob_FullMethodName          = "/weft.WeftCompute/CreateJob"
+	WeftCompute_SendRows_FullMethodName           = "/weft.WeftCompute/SendRows"
+	WeftCompute_GetResult_FullMethodName          = "/weft.WeftCompute/GetResult"
+	WeftCompute_ExecuteQuery_FullMethodName       = "/weft.WeftCompute/ExecuteQuery"
+	WeftCompute_ExecuteQueryStream_FullMethodName = "/weft.WeftCompute/ExecuteQueryStream"
 )
 
 // WeftComputeClient is the client API for WeftCompute service.
@@ -352,6 +353,9 @@ type WeftComputeClient interface {
 	// pipeline stages, and returns the output. The coordinator sends
 	// the full plan; compute does all shard I/O.
 	ExecuteQuery(ctx context.Context, in *ExecuteQueryRequest, opts ...grpc.CallOption) (*ExecuteQueryResponse, error)
+	// ExecuteQueryStream is the streaming variant of ExecuteQuery.
+	// Lines are sent in batches as the merge/pipeline produces them.
+	ExecuteQueryStream(ctx context.Context, in *ExecuteQueryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExecuteQueryStreamResponse], error)
 }
 
 type weftComputeClient struct {
@@ -405,6 +409,25 @@ func (c *weftComputeClient) ExecuteQuery(ctx context.Context, in *ExecuteQueryRe
 	return out, nil
 }
 
+func (c *weftComputeClient) ExecuteQueryStream(ctx context.Context, in *ExecuteQueryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExecuteQueryStreamResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &WeftCompute_ServiceDesc.Streams[1], WeftCompute_ExecuteQueryStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ExecuteQueryRequest, ExecuteQueryStreamResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WeftCompute_ExecuteQueryStreamClient = grpc.ServerStreamingClient[ExecuteQueryStreamResponse]
+
 // WeftComputeServer is the server API for WeftCompute service.
 // All implementations must embed UnimplementedWeftComputeServer
 // for forward compatibility.
@@ -419,6 +442,9 @@ type WeftComputeServer interface {
 	// pipeline stages, and returns the output. The coordinator sends
 	// the full plan; compute does all shard I/O.
 	ExecuteQuery(context.Context, *ExecuteQueryRequest) (*ExecuteQueryResponse, error)
+	// ExecuteQueryStream is the streaming variant of ExecuteQuery.
+	// Lines are sent in batches as the merge/pipeline produces them.
+	ExecuteQueryStream(*ExecuteQueryRequest, grpc.ServerStreamingServer[ExecuteQueryStreamResponse]) error
 	mustEmbedUnimplementedWeftComputeServer()
 }
 
@@ -440,6 +466,9 @@ func (UnimplementedWeftComputeServer) GetResult(context.Context, *GetResultReque
 }
 func (UnimplementedWeftComputeServer) ExecuteQuery(context.Context, *ExecuteQueryRequest) (*ExecuteQueryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExecuteQuery not implemented")
+}
+func (UnimplementedWeftComputeServer) ExecuteQueryStream(*ExecuteQueryRequest, grpc.ServerStreamingServer[ExecuteQueryStreamResponse]) error {
+	return status.Error(codes.Unimplemented, "method ExecuteQueryStream not implemented")
 }
 func (UnimplementedWeftComputeServer) mustEmbedUnimplementedWeftComputeServer() {}
 func (UnimplementedWeftComputeServer) testEmbeddedByValue()                     {}
@@ -523,6 +552,17 @@ func _WeftCompute_ExecuteQuery_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WeftCompute_ExecuteQueryStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ExecuteQueryRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(WeftComputeServer).ExecuteQueryStream(m, &grpc.GenericServerStream[ExecuteQueryRequest, ExecuteQueryStreamResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WeftCompute_ExecuteQueryStreamServer = grpc.ServerStreamingServer[ExecuteQueryStreamResponse]
+
 // WeftCompute_ServiceDesc is the grpc.ServiceDesc for WeftCompute service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -548,6 +588,11 @@ var WeftCompute_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "SendRows",
 			Handler:       _WeftCompute_SendRows_Handler,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "ExecuteQueryStream",
+			Handler:       _WeftCompute_ExecuteQueryStream_Handler,
+			ServerStreams: true,
 		},
 	},
 	Metadata: "proto/weftpb/weft.proto",

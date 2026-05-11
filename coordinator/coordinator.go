@@ -651,24 +651,31 @@ func (c *Coordinator) runQuery(pipeline string, tr TimeRange, customer string, c
 		return nil, fmt.Errorf("plan: %w", err)
 	}
 
-	result, err := c.executeQuery(plan, tr, customer, custID, userID, alertCtx)
+	execResult, err := c.executeQuery(plan, tr, customer, custID, userID, alertCtx)
 	if err != nil {
 		return nil, err
 	}
 
-	if plan.AlertArgs != nil {
-		if alertCtx == nil {
-			alertCtx = &AlertContext{
-				Store:       c.Store,
-				CustomerID:  custID,
-				Interactive: true,
-				Notifier:    c.Notifier,
-			}
-		}
-		runAlertStage(result, plan.AlertArgs, alertCtx)
+	if plan.AlertArgs == nil {
+		return execResult, nil
 	}
 
-	return queryResultToExecuteResult(result), nil
+	// Alert post-processing needs the full text — drain the stream.
+	drained, err := execResult.Drain(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("drain for alert: %w", err)
+	}
+	qr := &QueryResult{Text: drained.Text, Notices: drained.Notices}
+	if alertCtx == nil {
+		alertCtx = &AlertContext{
+			Store:       c.Store,
+			CustomerID:  custID,
+			Interactive: true,
+			Notifier:    c.Notifier,
+		}
+	}
+	runAlertStage(qr, plan.AlertArgs, alertCtx)
+	return queryResultToExecuteResult(qr), nil
 }
 
 // preflight resolves the customer name to an ID, pre-expands /bin
@@ -733,13 +740,9 @@ func (c *Coordinator) preflight(pipeline string, customer string) (uint, string,
 // scopes tenant-backed features (ShellFS, weft.*). alertCtx is forwarded
 // to runLocal so interior queries dispatched by the interceptor inherit
 // the caller's alert identity; may be nil.
-func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext) (*QueryResult, error) {
-	// Alert-only pipeline: the planner's caller (c.query) sees an
-	// empty ShardSQL and runs the alert against an empty result. Hit
-	// the same shape here so direct callers of executeQuery (tests)
-	// behave identically.
+func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
 	if plan.ShardSQL == "" {
-		return &QueryResult{}, nil
+		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
 
 	// Allowlist: the pipeline's source app (the part before '/') must
@@ -781,7 +784,7 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	entries := c.Registry.MatchingEntries(tr, plan.FollowApp, tier)
 	if len(entries) == 0 {
 		log.Printf("query: no matching shards (app=%s, customer=%s)", plan.SourceApp, customer)
-		return &QueryResult{}, nil
+		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
 
 	descs := make([]*pb.ShardDescriptor, len(entries))
@@ -800,7 +803,7 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	log.Printf("query: app=%s shards=%v compute=%v sql=%s",
 		plan.SourceApp, shardIDs, plan.ComputeStages, directSQL)
 
-	text, err := c.Pool.ExecuteQuery(&pb.ExecuteQueryRequest{
+	stream, err := c.Pool.ExecuteQuery(&pb.ExecuteQueryRequest{
 		Sql:         directSQL,
 		Shards:      descs,
 		Stages:      plan.ComputeStages,
@@ -812,7 +815,7 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 		log.Printf("query: compute error: %v", err)
 		return nil, err
 	}
-	return &QueryResult{Text: text}, nil
+	return &ExecuteResult{Stream: stream}, nil
 }
 
 // runAlertStage feeds a QueryResult's text into AlertCommand and
@@ -823,6 +826,9 @@ func runAlertStage(result *QueryResult, args []string, ctx *AlertContext) {
 	AlertCommand(args, strings.NewReader(result.Text), &out, &errOut, ctx)
 	if errOut.Len() == 0 {
 		return
+	}
+	if ctx != nil && ctx.Interactive {
+		result.Text = ""
 	}
 	if result.Stderr != "" && !strings.HasSuffix(result.Stderr, "\n") {
 		result.Stderr += "\n"

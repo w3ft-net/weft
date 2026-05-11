@@ -118,11 +118,46 @@ func (s *Server) GetResult(_ context.Context, req *pb.GetResultRequest) (*pb.Get
 }
 
 func (s *Server) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) (*pb.ExecuteQueryResponse, error) {
-	text, err := s.pool.ExecuteQuery(req)
+	stream, err := s.pool.ExecuteQuery(req)
 	if err != nil {
 		return &pb.ExecuteQueryResponse{Error: err.Error()}, nil
 	}
-	return &pb.ExecuteQueryResponse{Text: text}, nil
+	lines, err := compute.DrainLineStream(stream)
+	if err != nil {
+		return &pb.ExecuteQueryResponse{Error: err.Error()}, nil
+	}
+	return &pb.ExecuteQueryResponse{Text: compute.LinesToText(lines)}, nil
+}
+
+func (s *Server) ExecuteQueryStream(req *pb.ExecuteQueryRequest, out pb.WeftCompute_ExecuteQueryStreamServer) error {
+	stream, err := s.pool.ExecuteQuery(req)
+	if err != nil {
+		return out.Send(&pb.ExecuteQueryStreamResponse{Error: err.Error()})
+	}
+	const batchSize = 500
+	var batch []string
+	for {
+		line, ok, err := stream.Next(out.Context())
+		if err != nil {
+			return out.Send(&pb.ExecuteQueryStreamResponse{Error: err.Error()})
+		}
+		if !ok {
+			break
+		}
+		batch = append(batch, line.Raw)
+		if len(batch) >= batchSize {
+			if err := out.Send(&pb.ExecuteQueryStreamResponse{Lines: batch}); err != nil {
+				return err
+			}
+			batch = nil
+		}
+	}
+	if len(batch) > 0 {
+		if err := out.Send(&pb.ExecuteQueryStreamResponse{Lines: batch}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Verify at compile time that ComputeJob implements RowSink.

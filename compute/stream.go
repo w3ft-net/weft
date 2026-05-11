@@ -87,8 +87,12 @@ func (s *sliceLineStream) Next(_ context.Context) (Line, bool, error) {
 
 func (s *sliceLineStream) Close() error { return nil }
 
-// drainLineStream reads s to exhaustion and returns the lines plus
-// any terminal error. Used by Result() to materialize the full text.
+// DrainLineStream reads s to exhaustion and returns the lines plus
+// any terminal error.
+func DrainLineStream(s LineStream) ([]Line, error) {
+	return drainLineStream(s)
+}
+
 func drainLineStream(s LineStream) ([]Line, error) {
 	ctx := context.Background()
 	var out []Line
@@ -104,9 +108,11 @@ func drainLineStream(s LineStream) ([]Line, error) {
 	}
 }
 
-// linesToText joins drained lines into a newline-terminated string.
-// Stderr lines are emitted as-is (no ANSI wrapping — the wire format
-// carries Stderr as its own field).
+// LinesToText joins drained lines into a newline-terminated string.
+func LinesToText(lines []Line) string {
+	return linesToText(lines)
+}
+
 func linesToText(lines []Line) string {
 	if len(lines) == 0 {
 		return ""

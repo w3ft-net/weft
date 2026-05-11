@@ -26,9 +26,8 @@ type ComputePool interface {
 	NewJob(stages []string, shardCount int, mergeKey string, limit int) ComputeJob
 
 	// ExecuteQuery fans out SQL to the given shards, merges results,
-	// applies pipeline stages, and returns the output. The caller
-	// provides shard descriptors so compute does all shard I/O.
-	ExecuteQuery(req *pb.ExecuteQueryRequest) (string, error)
+	// applies pipeline stages, and streams output lines back.
+	ExecuteQuery(req *pb.ExecuteQueryRequest) (LineStream, error)
 }
 
 // DialShard creates a shard.Shard from a proto ShardDescriptor.

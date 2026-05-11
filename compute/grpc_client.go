@@ -3,6 +3,7 @@ package compute
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,16 +40,42 @@ func (p *GRPCComputePool) Close() error {
 	return p.conn.Close()
 }
 
-func (p *GRPCComputePool) ExecuteQuery(req *pb.ExecuteQueryRequest) (string, error) {
-	resp, err := p.client.ExecuteQuery(context.Background(), req)
+func (p *GRPCComputePool) ExecuteQuery(req *pb.ExecuteQueryRequest) (LineStream, error) {
+	stream, err := p.client.ExecuteQueryStream(context.Background(), req)
 	if err != nil {
-		return "", fmt.Errorf("execute query: %w", err)
+		return nil, fmt.Errorf("execute query stream: %w", err)
 	}
-	if resp.Error != "" {
-		return "", fmt.Errorf("compute error: %s", resp.Error)
-	}
-	return resp.Text, nil
+	return &grpcLineStream{stream: stream}, nil
 }
+
+// grpcLineStream adapts a gRPC server-stream into a compute.LineStream.
+type grpcLineStream struct {
+	stream pb.WeftCompute_ExecuteQueryStreamClient
+	buf    []string
+	idx    int
+}
+
+func (s *grpcLineStream) Next(_ context.Context) (Line, bool, error) {
+	for s.idx >= len(s.buf) {
+		resp, err := s.stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				return Line{}, false, nil
+			}
+			return Line{}, false, fmt.Errorf("compute stream: %w", err)
+		}
+		if resp.Error != "" {
+			return Line{}, false, fmt.Errorf("compute error: %s", resp.Error)
+		}
+		s.buf = resp.Lines
+		s.idx = 0
+	}
+	line := Line{Raw: s.buf[s.idx]}
+	s.idx++
+	return line, true, nil
+}
+
+func (s *grpcLineStream) Close() error { return nil }
 
 func (p *GRPCComputePool) NewJob(stages []string, shardCount int, mergeKey string, limit int) ComputeJob {
 	resp, err := p.client.CreateJob(context.Background(), &pb.CreateJobRequest{

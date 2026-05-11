@@ -25,10 +25,10 @@ type LocalComputePool struct {
 	AWSRegion string
 }
 
-func (p *LocalComputePool) ExecuteQuery(req *pb.ExecuteQueryRequest) (string, error) {
+func (p *LocalComputePool) ExecuteQuery(req *pb.ExecuteQueryRequest) (LineStream, error) {
 	job := p.NewJob(req.Stages, len(req.Shards), req.MergeKey, int(req.Limit))
-	FanOutToShards(req, job, p.AWSCreds, p.AWSRegion)
-	return job.Result()
+	go FanOutToShards(req, job, p.AWSCreds, p.AWSRegion)
+	return job.Stream(), nil
 }
 
 func (p *LocalComputePool) NewJob(stages []string, shardCount int, mergeKey string, limit int) ComputeJob {

@@ -306,10 +306,8 @@ func TestRunAlertStage(t *testing.T) {
 		if result.Stderr == "" || !strings.Contains(result.Stderr, "73") {
 			t.Errorf("expected 'above' alert in Stderr, got %q", result.Stderr)
 		}
-		// Text untouched (alert is a tee; we discard its stdout since it
-		// duplicates the input).
-		if result.Text != "73\n" {
-			t.Errorf("Text mutated: %q", result.Text)
+		if result.Text != "" {
+			t.Errorf("interactive alert should suppress stdout, got %q", result.Text)
 		}
 	})
 

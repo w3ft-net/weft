@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -25,13 +24,10 @@ type registryPool struct {
 	registry *ShardRegistry
 }
 
-func (p *registryPool) ExecuteQuery(req *pb.ExecuteQueryRequest) (string, error) {
+func (p *registryPool) ExecuteQuery(req *pb.ExecuteQueryRequest) (compute.LineStream, error) {
 	job := (&compute.LocalComputePool{}).NewJob(req.Stages, len(req.Shards), req.MergeKey, int(req.Limit))
-	var wg sync.WaitGroup
-	wg.Add(len(req.Shards))
 	for _, d := range req.Shards {
 		go func(d *pb.ShardDescriptor) {
-			defer wg.Done()
 			e := p.registry.Get(d.ShardId)
 			if e == nil || e.Shard == nil {
 				log.Printf("registryPool: shard %s not found or has nil Shard", d.ShardId)
@@ -41,8 +37,7 @@ func (p *registryPool) ExecuteQuery(req *pb.ExecuteQueryRequest) (string, error)
 			e.Shard.QueryToSink(req.Sql, job)
 		}(d)
 	}
-	wg.Wait()
-	return job.Result()
+	return job.Stream(), nil
 }
 
 func (p *registryPool) NewJob(stages []string, shardCount int, mergeKey string, limit int) compute.ComputeJob {

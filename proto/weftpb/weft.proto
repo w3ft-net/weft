@@ -133,6 +133,10 @@ service WeftCompute {
   // pipeline stages, and returns the output. The coordinator sends
   // the full plan; compute does all shard I/O.
   rpc ExecuteQuery(ExecuteQueryRequest) returns (ExecuteQueryResponse);
+
+  // ExecuteQueryStream is the streaming variant of ExecuteQuery.
+  // Lines are sent in batches as the merge/pipeline produces them.
+  rpc ExecuteQueryStream(ExecuteQueryRequest) returns (stream ExecuteQueryStreamResponse);
 }
 
 message CreateJobRequest {
@@ -210,6 +214,11 @@ message ExecuteQueryRequest {
 
 message ExecuteQueryResponse {
   string text = 1;
+  string error = 2;
+}
+
+message ExecuteQueryStreamResponse {
+  repeated string lines = 1;
   string error = 2;
 }
 

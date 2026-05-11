@@ -16,7 +16,7 @@ type spyPool struct {
 	inner     compute.ComputePool
 }
 
-func (p *spyPool) ExecuteQuery(req *pb.ExecuteQueryRequest) (string, error) {
+func (p *spyPool) ExecuteQuery(req *pb.ExecuteQueryRequest) (compute.LineStream, error) {
 	p.execCount.Add(1)
 	p.lastReq = req
 	return p.inner.ExecuteQuery(req)
