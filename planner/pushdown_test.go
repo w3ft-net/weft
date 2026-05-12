@@ -511,6 +511,40 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 			wantCompute: nil, // simple $N print is fully pushed down as projection
 		},
 
+		// awk print with bare metavar — projects the column directly.
+		{
+			name:        "awk print bare metavar",
+			pipeline:    `cat vimgym.log | awk '{ print $HOST }'`,
+			wantSQL:     `SELECT instance as raw, ts FROM logs WHERE namespace = 'vimgym'`,
+			wantCompute: nil,
+		},
+
+		// awk print mixing metavar and positional fields — the motivating case.
+		{
+			name:        "awk print metavar with positional fields",
+			pipeline:    `cat vimgym.log | awk '{ print $HOST, $1, $4 }'`,
+			wantSQL:     `SELECT concat_ws(' ', instance, list_extract(fields, 1), list_extract(fields, 4)) as raw, ts FROM logs WHERE namespace = 'vimgym'`,
+			wantCompute: nil,
+		},
+
+		// awk print concatenating a metavar with a positional field — exercises
+		// the recursive ConcatExpr path picking up the new IdentExpr index branch.
+		{
+			name:        "awk print concat metavar and field",
+			pipeline:    `cat vimgym.log | awk '{ print $HOST "/" $1 }'`,
+			wantSQL:     `SELECT concat(concat(instance, '/'), list_extract(fields, 1)) as raw, ts FROM logs WHERE namespace = 'vimgym'`,
+			wantCompute: nil,
+		},
+
+		// Unknown $IDENT (not a known metavar) bails — the awk stage stays in
+		// compute so the user-defined variable semantics survive.
+		{
+			name:        "awk print unknown metavar stays in compute",
+			pipeline:    `cat vimgym.log | awk '{ print $FOO }'`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym'`,
+			wantCompute: []string{`awk '{ print $FOO }'`},
+		},
+
 		// jq object construction — pushes both as the WHERE (awk filter) and
 		// as a json_object SELECT (jq construction folded into projection).
 		{
@@ -560,12 +594,13 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 			wantCompute: []string{"sort", "head -20"},
 		},
 
-		// Partial pushdown: awk with filter AND print action
+		// Awk with filter AND print action — both predicate and projection
+		// fold; the metavar in the print body resolves to its column.
 		{
-			name:        "awk with filter and print splits",
+			name:        "awk filter + metavar projection fully folds",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR" { print $3, $INSTANCE }'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR'`,
-			wantCompute: []string{`awk '{ print $3, $INSTANCE }'`},
+			wantSQL:     `SELECT concat_ws(' ', list_extract(fields, 3), instance) as raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR'`,
+			wantCompute: nil,
 		},
 
 		// Pushable stage after a non-pushable stage stays in compute

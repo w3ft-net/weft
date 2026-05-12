@@ -143,7 +143,7 @@ func TestClassifyShardMode_C(t *testing.T) {
 		},
 		{
 			name:     "transform before sort — awk print + sort",
-			pipeline: `cat vimgym.log | awk '{ print $3, $INSTANCE }' | sort`,
+			pipeline: `cat vimgym.log | awk '{ print toupper($1) }' | sort`,
 		},
 		{
 			name:     "awk END block before sort",

@@ -241,15 +241,19 @@ func awkPrintToSQL(ps *awk.PrintStmt) (string, []int, bool) {
 func awkPrintArgToSQL(expr awk.Expr) (string, []int, bool) {
 	switch e := expr.(type) {
 	case *awk.FieldExpr:
-		nl, ok := e.Index.(*awk.NumberLit)
-		if !ok {
-			return "", nil, false
+		switch idx := e.Index.(type) {
+		case *awk.NumberLit:
+			n := int(idx.Value)
+			if n == 0 {
+				return "raw", nil, true
+			}
+			return fmt.Sprintf("list_extract(fields, %d)", n), []int{n}, true
+		case *awk.IdentExpr:
+			if col, ok := metaVars[idx.Name]; ok {
+				return col, nil, true
+			}
 		}
-		n := int(nl.Value)
-		if n == 0 {
-			return "raw", nil, true
-		}
-		return fmt.Sprintf("list_extract(fields, %d)", n), []int{n}, true
+		return "", nil, false
 
 	case *awk.StringLit:
 		return fmt.Sprintf("'%s'", escapeSQLString(e.Value)), nil, true
