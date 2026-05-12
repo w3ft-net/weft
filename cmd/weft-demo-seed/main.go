@@ -451,6 +451,58 @@ func preseedScripts(s *store.Store, custID uint, customerName string, members []
 		}
 	}
 
+	// --- /bin/severity: lua via shebang -----------------------------------
+	//
+	// Demonstrates the shebang-marked Lua path (detectLanguage in
+	// store/shell.go strips the `#!` line and stores Language="lua").
+	// Computes a weighted severity score from a log stream — the kind
+	// of accumulator that's awkward in pure bash but two lines of
+	// Lua. The tour's `shell-bin-lua` lesson points here.
+	severityV1 := `#!/usr/bin/lua
+-- Weighted severity sum from a log stream. ERROR=1, WARN=0.1.
+-- See /bin/severity for the version-history; ` + "`wit log /bin/severity`" + `.
+local total = 0
+for line in lines() do
+  if line:find("ERROR") then total = total + 1
+  elseif line:find("WARN") then total = total + 0.1
+  end
+end
+print(string.format("%.1f", total))
+`
+	if existing, _ := s.GetShellFunction(custID, "severity"); existing == nil || existing.Source != strings.TrimPrefix(severityV1, "#!/usr/bin/lua\n") {
+		if err := s.SaveShellFunction(custID, user2.ID, "severity", severityV1); err != nil {
+			return fmt.Errorf("severity: %w", err)
+		}
+		if err := s.AmendShellFunctionMessage(custID, "severity", "HEAD", "lua-driven severity weighting"); err != nil {
+			return fmt.Errorf("severity message: %w", err)
+		}
+	}
+
+	// --- /bin/status.lua: lua via filename extension ----------------------
+	//
+	// The .lua suffix is enough for detectLanguage to mark this as
+	// Lua — no shebang. Demonstrates table-as-map + sort, a shape
+	// that bash needs awkward awk for.
+	statusLua := `-- Tally HTTP status codes from request lines, ascending order.
+local counts = {}
+for line in lines() do
+  local code = line:match("status=(%d+)")
+  if code then counts[code] = (counts[code] or 0) + 1 end
+end
+local keys = {}
+for k in pairs(counts) do keys[#keys+1] = k end
+table.sort(keys)
+for _, k in ipairs(keys) do print(k, counts[k]) end
+`
+	if existing, _ := s.GetShellFunction(custID, "status.lua"); existing == nil || existing.Source != statusLua {
+		if err := s.SaveShellFunction(custID, user3.ID, "status.lua", statusLua); err != nil {
+			return fmt.Errorf("status.lua: %w", err)
+		}
+		if err := s.AmendShellFunctionMessage(custID, "status.lua", "HEAD", "lua via .lua extension; no shebang needed"); err != nil {
+			return fmt.Errorf("status.lua message: %w", err)
+		}
+	}
+
 	// --- /cron.d/error-rate: three versions -------------------------------
 	rateV1 := fmt.Sprintf("tail -n 500 %s | grep ERROR | wc -l | alert above 50", primaryLog)
 	rateV2 := fmt.Sprintf("tail -n 2000 %s | grep ERROR | wc -l | alert above 200", primaryLog)

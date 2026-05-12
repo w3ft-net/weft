@@ -60,7 +60,7 @@ type ShellFunction struct {
 }
 
 func (s *Store) SaveShellFunction(customerID uint, userID, name, source string) error {
-	lang, cleanSource := detectLanguage(source)
+	lang, cleanSource := detectLanguage(name, source)
 	if err := validateSource(lang, cleanSource); err != nil {
 		return err
 	}
@@ -297,15 +297,52 @@ func terminalAlertOf(list *bash.List) *bash.SimpleCommand {
 	return sc
 }
 
-// detectLanguage checks for a Lua shebang and returns the language
-// and source with the shebang stripped.
-func detectLanguage(source string) (lang, cleanSource string) {
-	firstLine, rest, _ := strings.Cut(source, "\n")
-	trimmed := strings.TrimSpace(firstLine)
-	if strings.HasPrefix(trimmed, "#!") && strings.Contains(trimmed, "lua") {
+// detectLanguage classifies the script by name suffix and/or
+// shebang. The name's basename suffix is consulted first — `.lua`
+// marks the script as Lua regardless of body — then the first-line
+// shebang. A shebang's Lua marker also strips the shebang from the
+// stored source so callers don't have to handle it later; an
+// extension-only Lua script returns its source unchanged.
+//
+// Bash is the default for everything else: bare names with no
+// shebang, names like `mylua_helper` (substring isn't suffix), or
+// any source without an explicit Lua signal.
+func detectLanguage(name, source string) (lang, cleanSource string) {
+	if strings.HasSuffix(baseName(name), ".lua") {
+		_, rest, hasShebang := stripLuaShebang(source)
+		if hasShebang {
+			return "lua", rest
+		}
+		return "lua", source
+	}
+	if _, rest, ok := stripLuaShebang(source); ok {
 		return "lua", rest
 	}
 	return "bash", source
+}
+
+// baseName returns the trailing path component of name, so the
+// suffix check works whether the caller passed "foo.lua" or
+// "/bin/foo.lua". Doesn't import path/filepath because we only
+// need the "/" split — keeps detectLanguage allocation-free.
+func baseName(name string) string {
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		return name[i+1:]
+	}
+	return name
+}
+
+// stripLuaShebang returns the source with its leading `#!…lua…`
+// line removed, and a bool indicating whether such a line was
+// present. Returns the original source untouched when no Lua
+// shebang is found.
+func stripLuaShebang(source string) (firstLine, rest string, hasLuaShebang bool) {
+	firstLine, rest, _ = strings.Cut(source, "\n")
+	trimmed := strings.TrimSpace(firstLine)
+	if strings.HasPrefix(trimmed, "#!") && strings.Contains(trimmed, "lua") {
+		return firstLine, rest, true
+	}
+	return firstLine, source, false
 }
 
 func (s *Store) GetShellFunction(customerID uint, name string) (*ShellFunction, error) {
