@@ -41,7 +41,7 @@ func TestShellFunction_FirstSaveCreatesNoHistory(t *testing.T) {
 	cust, _ := db.FindOrCreateCustomer("vh-first")
 	user, _ := db.CreateUser("alice-first@example.test")
 
-	if err := db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v1"); err != nil {
+	if err := db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v1", "bash"); err != nil {
 		t.Fatal(err)
 	}
 	if got := historyCount(t, db, cust.ID, "scan"); got != 0 {
@@ -55,7 +55,7 @@ func TestShellFunction_IdenticalResaveDoesNotCapture(t *testing.T) {
 	user, _ := db.CreateUser("alice-noop@example.test")
 
 	// First save creates HEAD, no history (covered above).
-	if err := db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v1"); err != nil {
+	if err := db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v1", "bash"); err != nil {
 		t.Fatal(err)
 	}
 	// Re-saving identical content (e.g. :w on an unchanged buffer)
@@ -63,7 +63,7 @@ func TestShellFunction_IdenticalResaveDoesNotCapture(t *testing.T) {
 	// navigation and hash-prefix resolution get clogged with no-op
 	// artifacts.
 	for i := 0; i < 3; i++ {
-		if err := db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v1"); err != nil {
+		if err := db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v1", "bash"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -72,7 +72,7 @@ func TestShellFunction_IdenticalResaveDoesNotCapture(t *testing.T) {
 	}
 
 	// And a real change after the no-ops captures exactly one row.
-	if err := db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v2"); err != nil {
+	if err := db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v2", "bash"); err != nil {
 		t.Fatal(err)
 	}
 	if got := historyCount(t, db, cust.ID, "scan"); got != 1 {
@@ -87,11 +87,11 @@ func TestShellFunction_UpdateCapturesPriorVersion(t *testing.T) {
 	bob, _ := db.CreateUser("bob-up@example.test")
 
 	// Alice writes v1.
-	if err := db.SaveShellFunction(cust.ID, alice.ID, "scan", "echo v1"); err != nil {
+	if err := db.SaveShellFunction(cust.ID, alice.ID, "scan", "echo v1", "bash"); err != nil {
 		t.Fatal(err)
 	}
 	// Bob overwrites with v2 — captures v1 into history.
-	if err := db.SaveShellFunction(cust.ID, bob.ID, "scan", "echo v2"); err != nil {
+	if err := db.SaveShellFunction(cust.ID, bob.ID, "scan", "echo v2", "bash"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -136,7 +136,7 @@ func TestShellFunction_PredecessorChain(t *testing.T) {
 	user, _ := db.CreateUser("alice-chain@example.test")
 
 	for _, src := range []string{"echo v1", "echo v2", "echo v3", "echo v4"} {
-		if err := db.SaveShellFunction(cust.ID, user.ID, "scan", src); err != nil {
+		if err := db.SaveShellFunction(cust.ID, user.ID, "scan", src, "bash"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -186,7 +186,7 @@ func TestShellFunction_FiveCapDropsOldest(t *testing.T) {
 	// the 6th update fires, leaving history at exactly 5 rows.
 	for i := 1; i <= 7; i++ {
 		src := "echo v" + string(rune('0'+i))
-		if err := db.SaveShellFunction(cust.ID, user.ID, "scan", src); err != nil {
+		if err := db.SaveShellFunction(cust.ID, user.ID, "scan", src, "bash"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -217,11 +217,11 @@ func TestShellFunction_NoActingUserStoresNullCapturedBy(t *testing.T) {
 	cust, _ := db.FindOrCreateCustomer("vh-noacting")
 	alice, _ := db.CreateUser("alice-noact@example.test")
 
-	if err := db.SaveShellFunction(cust.ID, alice.ID, "scan", "echo v1"); err != nil {
+	if err := db.SaveShellFunction(cust.ID, alice.ID, "scan", "echo v1", "bash"); err != nil {
 		t.Fatal(err)
 	}
 	// Update with empty userID — system call.
-	if err := db.SaveShellFunction(cust.ID, "", "scan", "echo v2"); err != nil {
+	if err := db.SaveShellFunction(cust.ID, "", "scan", "echo v2", "bash"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -246,10 +246,10 @@ func TestShellFunction_ContentHashIsDeterministic(t *testing.T) {
 	a, _ := db.FindOrCreateCustomer("vh-hash-a")
 	b, _ := db.FindOrCreateCustomer("vh-hash-b")
 
-	if err := db.SaveShellFunction(a.ID, "", "scan", "echo same"); err != nil {
+	if err := db.SaveShellFunction(a.ID, "", "scan", "echo same", "bash"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveShellFunction(b.ID, "", "scan", "echo same"); err != nil {
+	if err := db.SaveShellFunction(b.ID, "", "scan", "echo same", "bash"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -279,7 +279,7 @@ func TestLogShellFunction_OrderAndShape(t *testing.T) {
 
 	saves := []string{"echo v1", "echo v2", "echo v3"}
 	for _, src := range saves {
-		if err := db.SaveShellFunction(cust.ID, user.ID, "scan", src); err != nil {
+		if err := db.SaveShellFunction(cust.ID, user.ID, "scan", src, "bash"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -312,7 +312,7 @@ func TestResolveShellFunctionRef_HEAD(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-resolve-head")
 	user, _ := db.CreateUser("alice@example.test")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo current")
+	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo current", "bash")
 
 	v, err := db.ResolveShellFunctionRef(cust.ID, "scan", "HEAD")
 	if err != nil {
@@ -327,8 +327,8 @@ func TestResolveShellFunctionRef_HEADCaret(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-resolve-caret")
 	user, _ := db.CreateUser("alice@example.test")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo old")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo new")
+	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo old", "bash")
+	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo new", "bash")
 
 	v, err := db.ResolveShellFunctionRef(cust.ID, "scan", "HEAD^")
 	if err != nil {
@@ -347,7 +347,7 @@ func TestResolveShellFunctionRef_HEADCaretN(t *testing.T) {
 	cust, _ := db.FindOrCreateCustomer("vh-resolve-caretn")
 	user, _ := db.CreateUser("alice@example.test")
 	for _, s := range []string{"v1", "v2", "v3", "v4"} {
-		db.SaveShellFunction(cust.ID, user.ID, "scan", s)
+		db.SaveShellFunction(cust.ID, user.ID, "scan", s, "bash")
 	}
 
 	v, err := db.ResolveShellFunctionRef(cust.ID, "scan", "HEAD^2")
@@ -363,8 +363,8 @@ func TestResolveShellFunctionRef_HashPrefix(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-resolve-hash")
 	user, _ := db.CreateUser("alice@example.test")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo target")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo other")
+	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo target", "bash")
+	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo other", "bash")
 
 	target := hashOf("echo target")
 	prefix := target[:8]
@@ -385,7 +385,7 @@ func TestResolveShellFunctionRef_ShortPrefixRejected(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-resolve-short")
 	user, _ := db.CreateUser("alice@example.test")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo target")
+	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo target", "bash")
 
 	// 3 chars is below the 4-char minimum.
 	short := hashOf("echo target")[:3]
@@ -398,7 +398,7 @@ func TestResolveShellFunctionRef_UnknownHash(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-resolve-unknown")
 	user, _ := db.CreateUser("alice@example.test")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo here")
+	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo here", "bash")
 
 	if _, err := db.ResolveShellFunctionRef(cust.ID, "scan", "deadbeef"); !errors.Is(err, ErrRefNotFound) {
 		t.Errorf("unknown hash: got %v, want ErrRefNotFound", err)
@@ -409,7 +409,7 @@ func TestResolveShellFunctionRef_BeyondCap(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("vh-resolve-beyond")
 	user, _ := db.CreateUser("alice@example.test")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "v1")
+	db.SaveShellFunction(cust.ID, user.ID, "scan", "v1", "bash")
 
 	// HEAD^1 with no history should fail.
 	if _, err := db.ResolveShellFunctionRef(cust.ID, "scan", "HEAD^"); !errors.Is(err, ErrRefNotFound) {
@@ -430,9 +430,9 @@ func TestCheckoutShellFunction_RoundTrip(t *testing.T) {
 	bob, _ := db.CreateUser("bob@example.test")
 
 	// Alice writes v1, alice writes v2, bob writes v3.
-	db.SaveShellFunction(cust.ID, alice.ID, "scan", "echo v1")
-	db.SaveShellFunction(cust.ID, alice.ID, "scan", "echo v2")
-	db.SaveShellFunction(cust.ID, bob.ID, "scan", "echo v3")
+	db.SaveShellFunction(cust.ID, alice.ID, "scan", "echo v1", "bash")
+	db.SaveShellFunction(cust.ID, alice.ID, "scan", "echo v2", "bash")
+	db.SaveShellFunction(cust.ID, bob.ID, "scan", "echo v3", "bash")
 
 	// Bob checks out HEAD^2 (which is v1 by alice).
 	if err := db.CheckoutShellFunction(cust.ID, bob.ID, "scan", "HEAD^2"); err != nil {
@@ -461,8 +461,8 @@ func TestAmendShellFunctionMessage_HEAD_DoesNotCapture(t *testing.T) {
 	cust, _ := db.FindOrCreateCustomer("vh-amend-head")
 	user, _ := db.CreateUser("alice@example.test")
 
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v1")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v2")
+	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v1", "bash")
+	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v2", "bash")
 	before := historyCount(t, db, cust.ID, "scan")
 
 	if err := db.AmendShellFunctionMessage(cust.ID, "scan", "HEAD", "first message"); err != nil {
@@ -485,9 +485,9 @@ func TestAmendShellFunctionMessage_HistoryRef(t *testing.T) {
 	cust, _ := db.FindOrCreateCustomer("vh-amend-history")
 	user, _ := db.CreateUser("alice@example.test")
 
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "v1")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "v2")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "v3")
+	db.SaveShellFunction(cust.ID, user.ID, "scan", "v1", "bash")
+	db.SaveShellFunction(cust.ID, user.ID, "scan", "v2", "bash")
+	db.SaveShellFunction(cust.ID, user.ID, "scan", "v3", "bash")
 
 	if err := db.AmendShellFunctionMessage(cust.ID, "scan", "HEAD^2", "v1's late label"); err != nil {
 		t.Fatal(err)

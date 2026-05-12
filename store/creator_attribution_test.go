@@ -19,7 +19,7 @@ func TestSaveShellFunction_RecordsCreator(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := db.SaveShellFunction(cust.ID, user.ID, "scan", "echo hi"); err != nil {
+	if err := db.SaveShellFunction(cust.ID, user.ID, "scan", "echo hi", "bash"); err != nil {
 		t.Fatal(err)
 	}
 	fn, err := db.GetShellFunction(cust.ID, "scan")
@@ -35,7 +35,7 @@ func TestSaveShellFunction_EmptyUserStoresNull(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("creator-bin-empty")
 
-	if err := db.SaveShellFunction(cust.ID, "", "scan", "echo hi"); err != nil {
+	if err := db.SaveShellFunction(cust.ID, "", "scan", "echo hi", "bash"); err != nil {
 		t.Fatal(err)
 	}
 	fn, _ := db.GetShellFunction(cust.ID, "scan")

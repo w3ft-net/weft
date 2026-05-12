@@ -101,7 +101,7 @@ func TestQuery_InteractiveBinExpandResolvesCallerCustomer(t *testing.T) {
 	// end-to-end whether via pre-expand or runLocal+FS. A subsequent
 	// assertion on `plan.AlertArgs`-style introspection would catch
 	// the pre-expand regression specifically, but requires new hooks.
-	if err := db.SaveShellFunction(custID, "", "echo_first", "echo $1"); err != nil {
+	if err := db.SaveShellFunction(custID, "", "echo_first", "echo $1", "bash"); err != nil {
 		t.Fatalf("save script: %v", err)
 	}
 

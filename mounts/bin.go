@@ -72,7 +72,8 @@ func (m *BinMount) Stat(rel string) (fs.FileInfo, error) {
 }
 
 func (m *BinMount) WriteFile(rel string, data []byte) error {
-	return m.cfg.Store.SaveShellFunction(m.cfg.CustomerID, m.cfg.UserID, rel, string(data))
+	lang, cleanSource := ClassifyBinScript(rel, string(data))
+	return m.cfg.Store.SaveShellFunction(m.cfg.CustomerID, m.cfg.UserID, rel, cleanSource, lang)
 }
 
 func (m *BinMount) Remove(rel string) error {

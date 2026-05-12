@@ -12,7 +12,7 @@ import (
 func TestRunLocal_BinBashScriptResolution(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	if err := db.SaveShellFunction(custID, "", "who", "echo $1"); err != nil {
+	if err := db.SaveShellFunction(custID, "", "who", "echo $1", "bash"); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
@@ -36,7 +36,7 @@ func TestRunLocal_BinLuaScriptResolution(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
 	src := "#!/usr/bin/env lua\nprint(arg[1])"
-	if err := db.SaveShellFunction(custID, "", "greet", src); err != nil {
+	if err := db.SaveShellFunction(custID, "", "greet", src, "bash"); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
@@ -57,7 +57,7 @@ func TestRunLocal_BinLuaScriptResolution(t *testing.T) {
 func TestRunLocal_BinBashPositionalRebinds(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	if err := db.SaveShellFunction(custID, "", "greet", `echo "hello $1"`); err != nil {
+	if err := db.SaveShellFunction(custID, "", "greet", `echo "hello $1"`, "bash"); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	c := NewCoordinator(CoordinatorConfig{Store: db})

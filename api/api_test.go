@@ -443,7 +443,7 @@ func TestGetFunction_ReturnsPlainSource(t *testing.T) {
 	jwt, _ := auth.Generate(user, "test-secret")
 
 	source := "cat /log/api.log | grep ERROR | wc -l"
-	if err := s.SaveShellFunction(cust.ID, user.ID, "scan", source); err != nil {
+	if err := s.SaveShellFunction(cust.ID, user.ID, "scan", source, "bash"); err != nil {
 		t.Fatalf("save fn: %v", err)
 	}
 

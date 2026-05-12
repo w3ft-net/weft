@@ -400,7 +400,7 @@ func preseedScripts(s *store.Store, custID uint, customerName string, members []
 			{user3.ID, scanV3, "use awk pushdown so shards filter server-side"},
 		}
 		for i, v := range versions {
-			if err := s.SaveShellFunction(custID, v.userID, "scan", v.source); err != nil {
+			if err := s.SaveShellFunction(custID, v.userID, "scan", v.source, "bash"); err != nil {
 				return fmt.Errorf("scan v%d: %w", i+1, err)
 			}
 			if err := s.AmendShellFunctionMessage(custID, "scan", "HEAD", v.message); err != nil {
@@ -420,7 +420,7 @@ func preseedScripts(s *store.Store, custID uint, customerName string, members []
 			{user3.ID, countV2, "switch to awk for pushdown"},
 		}
 		for i, v := range versions {
-			if err := s.SaveShellFunction(custID, v.userID, "count_errors", v.source); err != nil {
+			if err := s.SaveShellFunction(custID, v.userID, "count_errors", v.source, "bash"); err != nil {
 				return fmt.Errorf("count_errors v%d: %w", i+1, err)
 			}
 			if err := s.AmendShellFunctionMessage(custID, "count_errors", "HEAD", v.message); err != nil {
@@ -442,7 +442,7 @@ func preseedScripts(s *store.Store, custID uint, customerName string, members []
 			{user3.ID, memV3, "take path as $1 so it works for any metrics log"},
 		}
 		for i, v := range versions {
-			if err := s.SaveShellFunction(custID, v.userID, "mem_history", v.source); err != nil {
+			if err := s.SaveShellFunction(custID, v.userID, "mem_history", v.source, "bash"); err != nil {
 				return fmt.Errorf("mem_history v%d: %w", i+1, err)
 			}
 			if err := s.AmendShellFunctionMessage(custID, "mem_history", "HEAD", v.message); err != nil {
@@ -469,8 +469,9 @@ for line in lines() do
 end
 print(string.format("%.1f", total))
 `
-	if existing, _ := s.GetShellFunction(custID, "severity"); existing == nil || existing.Source != strings.TrimPrefix(severityV1, "#!/usr/bin/lua\n") {
-		if err := s.SaveShellFunction(custID, user2.ID, "severity", severityV1); err != nil {
+	severityClean := strings.TrimPrefix(severityV1, "#!/usr/bin/lua\n")
+	if existing, _ := s.GetShellFunction(custID, "severity"); existing == nil || existing.Source != severityClean {
+		if err := s.SaveShellFunction(custID, user2.ID, "severity", severityClean, "lua"); err != nil {
 			return fmt.Errorf("severity: %w", err)
 		}
 		if err := s.AmendShellFunctionMessage(custID, "severity", "HEAD", "lua-driven severity weighting"); err != nil {
@@ -495,7 +496,7 @@ table.sort(keys)
 for _, k in ipairs(keys) do print(k, counts[k]) end
 `
 	if existing, _ := s.GetShellFunction(custID, "status.lua"); existing == nil || existing.Source != statusLua {
-		if err := s.SaveShellFunction(custID, user3.ID, "status.lua", statusLua); err != nil {
+		if err := s.SaveShellFunction(custID, user3.ID, "status.lua", statusLua, "lua"); err != nil {
 			return fmt.Errorf("status.lua: %w", err)
 		}
 		if err := s.AmendShellFunctionMessage(custID, "status.lua", "HEAD", "lua via .lua extension; no shebang needed"); err != nil {

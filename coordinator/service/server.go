@@ -22,6 +22,7 @@ import (
 	weftcfg "github.com/kevlarcon/weft/config"
 	"github.com/kevlarcon/weft/coordinator"
 	"github.com/kevlarcon/weft/ingest"
+	"github.com/kevlarcon/weft/mounts"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/store"
 )
@@ -685,7 +686,8 @@ func (s *Server) SaveFunction(ctx context.Context, req *pb.SaveFunctionRequest) 
 	if err != nil {
 		return nil, err
 	}
-	if err := s.Store.SaveShellFunction(custID, callerUserID(ctx), req.Name, req.Source); err != nil {
+	lang, cleanSource := mounts.ClassifyBinScript(req.Name, req.Source)
+	if err := s.Store.SaveShellFunction(custID, callerUserID(ctx), req.Name, cleanSource, lang); err != nil {
 		return nil, err
 	}
 	return &pb.SaveFunctionResponse{}, nil

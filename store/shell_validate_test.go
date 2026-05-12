@@ -68,7 +68,7 @@ func saveTestSetup(t *testing.T) (*Store, uint) {
 func TestSaveShellFunction_RejectsInvalidBash(t *testing.T) {
 	db, custID := saveTestSetup(t)
 	// Use a form TestValidateSource_BashSyntaxError proves warp rejects.
-	err := db.SaveShellFunction(custID, "", "broken", `echo hello; done`)
+	err := db.SaveShellFunction(custID, "", "broken", `echo hello; done`, "bash")
 	if err == nil {
 		t.Fatal("expected error saving broken bash")
 	}
@@ -79,7 +79,10 @@ func TestSaveShellFunction_RejectsInvalidBash(t *testing.T) {
 
 func TestSaveShellFunction_RejectsInvalidLua(t *testing.T) {
 	db, custID := saveTestSetup(t)
-	err := db.SaveShellFunction(custID, "", "bad", "#!/usr/bin/env lua\nprint(arg[1]")
+	// Lua source passed pre-stripped (caller's job now that the store
+	// no longer detects). Source ends with an unclosed bracket so the
+	// parser rejects it.
+	err := db.SaveShellFunction(custID, "", "bad", "print(arg[1]", "lua")
 	if err == nil {
 		t.Fatal("expected error saving broken lua")
 	}

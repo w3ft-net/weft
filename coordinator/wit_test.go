@@ -23,7 +23,7 @@ func witHelper(t *testing.T, slug string, n int) (*WitFuncs, string) {
 	}
 	for i := 1; i <= n; i++ {
 		src := "echo v" + string(rune('0'+i))
-		if err := db.SaveShellFunction(custID, user.ID, "scan", src); err != nil {
+		if err := db.SaveShellFunction(custID, user.ID, "scan", src, "bash"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -71,7 +71,7 @@ func witMultiActorHelper(t *testing.T) *WitFuncs {
 		{alice.ID, "echo v3"},
 	}
 	for _, s := range saves {
-		if err := db.SaveShellFunction(custID, s.userID, "scan", s.src); err != nil {
+		if err := db.SaveShellFunction(custID, s.userID, "scan", s.src, "bash"); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -26,7 +26,7 @@ func TestRunLocal_InfiniteLoopHitsTimeout(t *testing.T) {
 	// No internal I/O, just pure loop iterations going through
 	// execWhile's per-iteration exiting check.
 	body := `while true; do echo spin; done`
-	if err := db.SaveShellFunction(custID, "", "runaway", body); err != nil {
+	if err := db.SaveShellFunction(custID, "", "runaway", body, "bash"); err != nil {
 		t.Fatalf("save script: %v", err)
 	}
 
@@ -70,7 +70,7 @@ func TestRunLocal_QuickScriptCompletesNormally(t *testing.T) {
 		t.Fatalf("get customer: %v", err)
 	}
 
-	if err := db.SaveShellFunction(custID, "", "quick", `echo ok`); err != nil {
+	if err := db.SaveShellFunction(custID, "", "quick", `echo ok`, "bash"); err != nil {
 		t.Fatalf("save script: %v", err)
 	}
 

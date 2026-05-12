@@ -13,7 +13,7 @@ import (
 func TestCronShareScriptAcrossWatches(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	if err := db.SaveShellFunction(custID, "", "announce", `echo "source=$1"`); err != nil {
+	if err := db.SaveShellFunction(custID, "", "announce", `echo "source=$1"`, "bash"); err != nil {
 		t.Fatalf("save script: %v", err)
 	}
 
@@ -61,7 +61,7 @@ func TestCronShareScriptAcrossWatches(t *testing.T) {
 func TestCronBareNameStillWorks(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	if err := db.SaveShellFunction(custID, "", "hello", `echo hello`); err != nil {
+	if err := db.SaveShellFunction(custID, "", "hello", `echo hello`, "bash"); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SaveCronWatch(custID, "", "greeter", "every 1m", "hello"); err != nil {

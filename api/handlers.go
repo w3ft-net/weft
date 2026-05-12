@@ -25,6 +25,7 @@ import (
 
 	"github.com/kevlarcon/weft/auth"
 	"github.com/kevlarcon/weft/coordinator/onboarding"
+	"github.com/kevlarcon/weft/mounts"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/store"
 )
@@ -1389,7 +1390,8 @@ func (s *Server) handleSaveFunction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if err := s.store.SaveShellFunction(custID, session.UserID, name, req.Source); err != nil {
+	lang, cleanSource := mounts.ClassifyBinScript(name, req.Source)
+	if err := s.store.SaveShellFunction(custID, session.UserID, name, cleanSource, lang); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

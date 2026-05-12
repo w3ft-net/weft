@@ -59,12 +59,19 @@ type ShellFunction struct {
 	CreatedByUserID *string `gorm:"column:created_by_user_id"`
 }
 
-func (s *Store) SaveShellFunction(customerID uint, userID, name, source string) error {
-	lang, cleanSource := detectLanguage(name, source)
-	if err := validateSource(lang, cleanSource); err != nil {
+// SaveShellFunction persists a /bin/<name> entry. The caller is
+// responsible for classifying the script — language must be "bash"
+// or "lua", and source must already have any shebang stripped if
+// language == "lua" (the lua parser rejects shebang-prefixed
+// sources). The bin-mount-domain classifier lives in
+// mounts.ClassifyBinScript; the store stays oblivious to the
+// .lua-extension convention so name only matters here as the row
+// key, never as a language signal.
+func (s *Store) SaveShellFunction(customerID uint, userID, name, source, language string) error {
+	if err := validateSource(language, source); err != nil {
 		return err
 	}
-	hash := computeShellFunctionHash(cleanSource)
+	hash := computeShellFunctionHash(source)
 
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		// Set the per-transaction GUC the version-history trigger
@@ -84,7 +91,7 @@ func (s *Store) SaveShellFunction(customerID uint, userID, name, source string) 
 		if result.Error == gorm.ErrRecordNotFound {
 			row := &ShellFunction{
 				CustomerID: customerID, Name: name,
-				Source: cleanSource, Language: lang,
+				Source: source, Language: language,
 				ContentHash: hash,
 			}
 			if userID != "" {
@@ -102,8 +109,8 @@ func (s *Store) SaveShellFunction(customerID uint, userID, name, source string) 
 		// Existing rows keep their original creator on overwrite —
 		// only source / language / hash change. Editing isn't authoring.
 		return tx.Model(&fn).Updates(map[string]any{
-			"source":       cleanSource,
-			"language":     lang,
+			"source":       source,
+			"language":     language,
 			"content_hash": hash,
 		}).Error
 	})
@@ -295,54 +302,6 @@ func terminalAlertOf(list *bash.List) *bash.SimpleCommand {
 		return nil
 	}
 	return sc
-}
-
-// detectLanguage classifies the script by name suffix and/or
-// shebang. The name's basename suffix is consulted first — `.lua`
-// marks the script as Lua regardless of body — then the first-line
-// shebang. A shebang's Lua marker also strips the shebang from the
-// stored source so callers don't have to handle it later; an
-// extension-only Lua script returns its source unchanged.
-//
-// Bash is the default for everything else: bare names with no
-// shebang, names like `mylua_helper` (substring isn't suffix), or
-// any source without an explicit Lua signal.
-func detectLanguage(name, source string) (lang, cleanSource string) {
-	if strings.HasSuffix(baseName(name), ".lua") {
-		_, rest, hasShebang := stripLuaShebang(source)
-		if hasShebang {
-			return "lua", rest
-		}
-		return "lua", source
-	}
-	if _, rest, ok := stripLuaShebang(source); ok {
-		return "lua", rest
-	}
-	return "bash", source
-}
-
-// baseName returns the trailing path component of name, so the
-// suffix check works whether the caller passed "foo.lua" or
-// "/bin/foo.lua". Doesn't import path/filepath because we only
-// need the "/" split — keeps detectLanguage allocation-free.
-func baseName(name string) string {
-	if i := strings.LastIndex(name, "/"); i >= 0 {
-		return name[i+1:]
-	}
-	return name
-}
-
-// stripLuaShebang returns the source with its leading `#!…lua…`
-// line removed, and a bool indicating whether such a line was
-// present. Returns the original source untouched when no Lua
-// shebang is found.
-func stripLuaShebang(source string) (firstLine, rest string, hasLuaShebang bool) {
-	firstLine, rest, _ = strings.Cut(source, "\n")
-	trimmed := strings.TrimSpace(firstLine)
-	if strings.HasPrefix(trimmed, "#!") && strings.Contains(trimmed, "lua") {
-		return firstLine, rest, true
-	}
-	return firstLine, source, false
 }
 
 func (s *Store) GetShellFunction(customerID uint, name string) (*ShellFunction, error) {
