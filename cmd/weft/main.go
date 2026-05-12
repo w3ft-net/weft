@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,7 +16,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kevlarcon/weft/cmd/weft/runner"
+	"github.com/kevlarcon/weft/cmd/weft/setup"
 	"github.com/kevlarcon/weft/ingest"
+	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/shell"
 	"github.com/kevlarcon/warp/pkg/shellcore"
@@ -303,7 +307,7 @@ func runShell(s *shell.Shell) {
 		return
 	}
 
-	if err := s.Run(); err != nil {
+	if err := runner.Run(s); err != nil {
 		fmt.Fprintf(os.Stderr, "shell error: %v\n", err)
 		os.Exit(1)
 	}
@@ -530,9 +534,17 @@ func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 					Body:  n.Body,
 				}
 			}
-			return &shell.QueryResult{Rows: r.Rows, Text: r.Text, Notices: notices}, nil
+			rows := make([]shell.Row, len(r.Rows))
+			for i, row := range r.Rows {
+				rows[i] = shell.Row{Raw: row.Raw}
+			}
+			return &shell.QueryResult{Rows: rows, Text: r.Text, Notices: notices}, nil
 		},
-		Follow: remote.Follow,
+		Follow: func(ctx context.Context, pipeline string, onRow func(shell.Row)) error {
+			return remote.Follow(ctx, pipeline, func(row *pb.ResultRow) {
+				onRow(shell.Row{Raw: row.Raw})
+			})
+		},
 		Start:  time.Now().Add(-24 * time.Hour),
 		End:    time.Now(),
 		Apps:   apps,
@@ -623,7 +635,7 @@ func runSourceConfigure(cfg *shell.Config) {
 	}
 
 	// Run the interactive setup wizard with the remote sample.
-	schema, err := shell.RunSetupFromLines(namespace+"/"+app, lines)
+	schema, err := setup.RunSetupFromLines(namespace+"/"+app, lines)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "setup: %v\n", err)
 		os.Exit(1)
@@ -674,7 +686,7 @@ func runSetup() {
 		os.Exit(1)
 	}
 
-	_, err := shell.RunSetup(app, sampleFile)
+	_, err := setup.RunSetup(app, sampleFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "setup failed: %v\n", err)
 		os.Exit(1)

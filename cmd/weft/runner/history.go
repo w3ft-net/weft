@@ -1,4 +1,4 @@
-package shell
+package runner
 
 import (
 	"os"
@@ -8,7 +8,7 @@ import (
 	"github.com/kevlarcon/warp/pkg/shellcore"
 )
 
-// FileHistoryStore persists history to ~/.weft_history.
+// FileHistoryStore persists shell command history to ~/.weft_history.
 type FileHistoryStore struct {
 	path string
 }
@@ -25,7 +25,6 @@ func (s *FileHistoryStore) Load() ([]string, error) {
 		return nil, err
 	}
 	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-	// Filter empty lines.
 	var entries []string
 	for _, line := range lines {
 		if line != "" {

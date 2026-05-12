@@ -4,27 +4,28 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"os/signal"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
-	"golang.org/x/term"
-
-	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/warp/pkg/shellcore"
 	"github.com/kevlarcon/warp/pkg/syntax"
 	"github.com/kevlarcon/weft/chart"
-	"github.com/kevlarcon/weft/dashboard"
 )
+
+// Row is a single result row consumed by the shell. Carries only
+// Raw — historically this was *pb.ResultRow, but the shell never
+// needed more than the rendered line, and depending on the proto
+// type pulled grpc+protobuf into the WASM build.
+type Row struct {
+	Raw string
+}
 
 // QueryResult is the output of a query — either result rows or text,
 // optionally accompanied by per-user one-time notices that the
 // runner prepends to the displayed output.
 type QueryResult struct {
-	Rows    []*pb.ResultRow
+	Rows    []Row
 	Text    string
 	Notices []QueryResultNotice
 }
@@ -44,7 +45,7 @@ type QueryResultNotice struct {
 type QueryFunc func(pipeline string, start, end time.Time) (*QueryResult, error)
 
 // FollowFunc is the function signature for tail -f streaming.
-type FollowFunc func(ctx context.Context, pipeline string, onRow func(*pb.ResultRow)) error
+type FollowFunc func(ctx context.Context, pipeline string, onRow func(Row)) error
 
 // Shell is the weft interactive shell.
 type Shell struct {
@@ -54,437 +55,53 @@ type Shell struct {
 	End    time.Time
 	Apps   []string
 	FS     shellcore.FS
+	// Chart, when non-nil, takes over both `chart <name>` and
+	// `... | chart` instead of registering chart's ASCII renderers.
+	// The browser shell uses this to open a React modal that re-uses
+	// the dashboard chart-tile component, rather than rasterising into
+	// xterm scrollback. When nil, ConfigureCore falls back to
+	// chart.Register against the FS's WatchResultsProvider — the CLI
+	// path. See ChartRequest for the payload shape.
+	Chart func(ChartRequest)
+	// Dashboard, when non-nil, takes over the `dashboard` builtin and
+	// is invoked with the requested dashboard name (empty string for
+	// bare `dashboard`). The browser shell uses this to navigate the
+	// React app to /dashboards/<name> instead of rendering an
+	// in-terminal view. When nil, ConfigureCore falls back to
+	// dashboard.Register if the FS satisfies dashboard.Provider —
+	// that's the CLI path.
+	Dashboard func(name string)
 	User     string // username shown in prompt (e.g. "alice")
 	Customer string // customer/team shown after the @ in the prompt (e.g. "acme"); empty falls back to "weft"
 }
 
-// Run starts the interactive shell.
-func (s *Shell) Run() error {
-	// Put terminal in raw mode.
-	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil {
-		return fmt.Errorf("raw mode: %w", err)
-	}
-	defer term.Restore(int(os.Stdin.Fd()), oldState)
 
-	// Run on the main screen so the terminal emulator's native
-	// scrollback works (cmd+up in iTerm/Terminal/wezterm/kitty/etc.)
-	// — altscreen is the right call for vim/less, which manage their
-	// own 1049h/1049l lifecycle in shellcore. Show the cursor (the
-	// raw-mode hop hides it on some terminals) and emit a final
-	// newline on exit so the post-shell prompt lands on a clean row.
-	os.Stdout.WriteString("\x1b[?25h")
-	defer os.Stdout.WriteString("\n")
-
-	w, h, _ := term.GetSize(int(os.Stdout.Fd()))
-	if w == 0 {
-		w = 80
-	}
-	if h == 0 {
-		h = 24
-	}
-
-	runner := &shellRunner{shell: s}
-	runner.core = shellcore.NewShellCore(
-		s.Apps, w, h,
-		func(b []byte) { os.Stdout.Write(b) },
-		func(a shellcore.Action) { runner.handleAction(a) },
-	)
-	s.configureCore(runner.core)
-
-	// Prefetch directory listings while the logo dissolves.
-	if pfs, ok := s.FS.(*ProxyFS); ok {
-		go pfs.Prefetch()
-	}
-
-	// Handle window resize.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGWINCH)
-	defer signal.Stop(sigCh)
-
-	go func() {
-		for range sigCh {
-			w, h, _ := term.GetSize(int(os.Stdout.Fd()))
-			if w > 0 && h > 0 {
-				runner.core.HandleEvent(shellcore.ResizeEvent{Width: w, Height: h})
-			}
-		}
-	}()
-
-	// Logo dissolve animation.
-	runner.dissolve(w, h)
-
-	// Show initial prompt.
-	runner.core.Redraw()
-
-	// Spinner ticker.
-	spinnerDone := make(chan struct{})
-	defer close(spinnerDone)
-	go func() {
-		ticker := time.NewTicker(80 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-spinnerDone:
-				return
-			case <-ticker.C:
-				runner.core.SpinnerTick()
-			}
-		}
-	}()
-
-	// Read input.
-	buf := make([]byte, 256)
-	for {
-		n, err := os.Stdin.Read(buf)
-		if err != nil {
-			break
-		}
-		events := parseTermInput(buf[:n])
-		for _, ev := range events {
-			runner.core.HandleEvent(ev)
-		}
-		if runner.core.Quitting() {
-			break
-		}
-	}
-
-	return nil
-}
-
-// shellRunner holds mutable state for the running shell.
-type shellRunner struct {
-	shell        *Shell
-	core         *shellcore.ShellCore
-	followCancel context.CancelFunc
-}
-
-func (r *shellRunner) handleAction(a shellcore.Action) {
-	switch a := a.(type) {
-	case shellcore.ActionQuery:
-		go r.runQuery(a.Pipeline)
-	case shellcore.ActionFollow:
-		go r.runFollow(a.Pipeline)
-	case shellcore.ActionCancel:
-		if r.followCancel != nil {
-			r.followCancel()
-			r.followCancel = nil
-		}
-	case shellcore.ActionVimSave:
-		if r.shell.FS != nil {
-			r.shell.FS.WriteFile(a.Path, []byte(a.Content))
-		}
-	case shellcore.ActionSetRange:
-		r.shell.Start = a.Start
-		r.shell.End = a.End
-	case shellcore.ActionQuit:
-		// Handled by checking core.Quitting() in the read loop.
-	}
-}
-
-func (r *shellRunner) runQuery(pipeline string) {
-	// The shell core already stripped `| less` before dispatching this
-	// pipeline — whatever comes back goes straight to the core, which
-	// routes into ModeLess when the user typed the pager suffix.
-	result, err := r.shell.Query(pipeline, r.shell.Start, r.shell.End)
-
-	ev := shellcore.QueryResultEvent{Err: err}
-	if err == nil {
-		// Notices are prepended to the rendered output as a labeled
-		// block. They originate as one-time per-user system messages
-		// (e.g. /tmp 48h expiry) and the shell surfaces them once
-		// before any command output renders.
-		var notices string
-		for _, n := range result.Notices {
-			notices += renderNotice(n)
-		}
-		if result.Text != "" || notices != "" {
-			ev.Text = notices + result.Text
-		}
-		if result.Text == "" && len(result.Rows) > 0 {
-			for _, row := range result.Rows {
-				ev.Rows = append(ev.Rows, shellcore.OutputRow{Raw: row.Raw})
-			}
-			// Notices alongside row-shaped output: prepend as a
-			// synthetic Text payload that renders before rows.
-			if notices != "" {
-				ev.Text = notices
-			}
-		}
-	}
-
-	r.core.HandleEvent(ev)
-}
-
-// renderNotice formats a notice into a labeled block ready to be
-// shown in the terminal. ANSI color picked by Kind; Body is left
-// as-is. Trailing rule provides visual separation from output.
-func renderNotice(n QueryResultNotice) string {
-	var color string
-	switch n.Kind {
-	case "success":
-		color = "\033[38;5;2m" // green
-	case "error":
-		color = "\033[38;5;1m" // red
-	default: // warning / unknown
-		color = "\033[38;5;3m" // yellow
-	}
-	const reset = "\033[0m"
-	const rule = "─────────────────────────────────────────────────────\n"
-	return rule + color + n.Title + reset + "\n" + n.Body + "\n" + rule + "\n"
-}
-
-func (r *shellRunner) runFollow(pipeline string) {
-	ctx, cancel := context.WithCancel(context.Background())
-	r.followCancel = cancel
-
-	if r.shell.Follow != nil {
-		r.shell.Follow(ctx, pipeline, func(row *pb.ResultRow) {
-			r.core.HandleEvent(shellcore.FollowRowEvent{Raw: row.Raw})
-		})
-	}
-
-	r.core.HandleEvent(shellcore.FollowDoneEvent{})
-}
-
-// ── Logo dissolve ───────────────────────────────────────────
-
-func (r *shellRunner) dissolve(w, h int) {
-	logo := shellcore.RenderLogo()
-	logoLines := strings.Split(strings.TrimRight(logo, "\n"), "\n")
-	if len(logoLines) == 0 {
-		return
-	}
-
-	rows := len(logoLines)
-	logoWidth := shellcore.VisualWidth(logoLines[0])
-	topPad := (h - rows) / 2
-	leftPad := (w - logoWidth) / 2
-	if topPad < 0 {
-		topPad = 0
-	}
-	if leftPad < 0 {
-		leftPad = 0
-	}
-	padStr := strings.Repeat(" ", leftPad)
-
-	renderFrame := func(phase int) {
-		os.Stdout.WriteString("\x1b[H") // home
-		for i := 0; i < topPad; i++ {
-			os.Stdout.WriteString("\r\n")
-		}
-		for row, line := range logoLines {
-			os.Stdout.WriteString(padStr)
-			if phase <= 4 {
-				if phase >= row {
-					os.Stdout.WriteString(stripWarp(line))
-				} else {
-					os.Stdout.WriteString(line)
-				}
-			} else {
-				weftPhase := phase - 5
-				if weftPhase >= row {
-					os.Stdout.WriteString(stripBoth(line))
-				} else {
-					os.Stdout.WriteString(stripWarp(line))
-				}
-			}
-			os.Stdout.WriteString("\r\n")
-		}
-	}
-
-	// Clear screen and show full logo.
-	os.Stdout.WriteString("\x1b[2J")
-	renderFrame(-1) // -1 = full logo, no dissolve
-	time.Sleep(400 * time.Millisecond)
-
-	// Dissolve phases.
-	for phase := 0; phase < 10; phase++ {
-		renderFrame(phase)
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-// ── Terminal input parsing ──────────────────────────────────
-
-func parseTermInput(data []byte) []shellcore.KeyEvent {
-	var events []shellcore.KeyEvent
-	s := string(data)
-	i := 0
-	for i < len(s) {
-		// CSI sequences: ESC [ ...
-		if s[i] == '\x1b' && i+2 < len(s) && s[i+1] == '[' {
-			consumed, ev := parseCSI(s[i+2:])
-			if ev != nil {
-				events = append(events, *ev)
-			}
-			i += 2 + consumed
-			continue
-		}
-		// Bare ESC.
-		if s[i] == '\x1b' {
-			events = append(events, shellcore.KeyEvent{Key: shellcore.KeyEsc})
-			i++
-			continue
-		}
-		switch s[i] {
-		case '\r', '\n':
-			events = append(events, shellcore.KeyEvent{Key: shellcore.KeyEnter})
-		case '\t':
-			events = append(events, shellcore.KeyEvent{Key: shellcore.KeyTab})
-		case '\x01':
-			events = append(events, shellcore.KeyEvent{Key: shellcore.KeyCtrlA})
-		case '\x03':
-			events = append(events, shellcore.KeyEvent{Key: shellcore.KeyCtrlC})
-		case '\x04':
-			events = append(events, shellcore.KeyEvent{Key: shellcore.KeyCtrlD})
-		case '\x05':
-			events = append(events, shellcore.KeyEvent{Key: shellcore.KeyCtrlE})
-		case '\x0b':
-			events = append(events, shellcore.KeyEvent{Key: shellcore.KeyCtrlK})
-		case '\x12':
-			events = append(events, shellcore.KeyEvent{Key: shellcore.KeyCtrlR})
-		case '\x15':
-			events = append(events, shellcore.KeyEvent{Key: shellcore.KeyCtrlU})
-		case '\x17':
-			events = append(events, shellcore.KeyEvent{Key: shellcore.KeyCtrlW})
-		case ' ':
-			events = append(events, shellcore.KeyEvent{Rune: ' '})
-		case '\x7f', '\x08':
-			events = append(events, shellcore.KeyEvent{Key: shellcore.KeyBackspace})
-		default:
-			if s[i] >= 32 && s[i] < 127 {
-				events = append(events, shellcore.KeyEvent{Rune: rune(s[i])})
-			}
-		}
-		i++
-	}
-	return events
-}
-
-func parseCSI(data string) (int, *shellcore.KeyEvent) {
-	if len(data) == 0 {
-		return 0, nil
-	}
-	switch data[0] {
-	case 'A':
-		return 1, &shellcore.KeyEvent{Key: shellcore.KeyUp}
-	case 'B':
-		return 1, &shellcore.KeyEvent{Key: shellcore.KeyDown}
-	case 'C':
-		return 1, &shellcore.KeyEvent{Key: shellcore.KeyRight}
-	case 'D':
-		return 1, &shellcore.KeyEvent{Key: shellcore.KeyLeft}
-	case 'H':
-		return 1, &shellcore.KeyEvent{Key: shellcore.KeyHome}
-	case 'F':
-		return 1, &shellcore.KeyEvent{Key: shellcore.KeyEnd}
-	case 'Z':
-		return 1, &shellcore.KeyEvent{Key: shellcore.KeyShiftTab}
-	}
-	if len(data) >= 2 && data[1] == '~' {
-		switch data[0] {
-		case '3':
-			return 2, &shellcore.KeyEvent{Key: shellcore.KeyDelete}
-		case '5':
-			return 2, &shellcore.KeyEvent{Key: shellcore.KeyPgUp}
-		case '6':
-			return 2, &shellcore.KeyEvent{Key: shellcore.KeyPgDown}
-		}
-	}
-	return 1, nil
-}
-
-// ── Logo dissolve helpers ───────────────────────────────────
-
-// stripWarp removes warp characters (║) from a logo line, replacing with spaces.
-func stripWarp(line string) string {
-	var b strings.Builder
-	runes := []rune(line)
-	i := 0
-	for i < len(runes) {
-		if runes[i] == '\033' {
-			escStart := i
-			i++
-			for i < len(runes) && runes[i] != 'm' {
-				i++
-			}
-			if i < len(runes) {
-				i++ // skip 'm'
-			}
-			if i < len(runes) && runes[i] == '║' {
-				b.WriteByte(' ')
-				i++
-				if i < len(runes) && runes[i] == '\033' {
-					for i < len(runes) && runes[i] != 'm' {
-						i++
-					}
-					if i < len(runes) {
-						i++
-					}
-				}
-			} else {
-				b.WriteString(string(runes[escStart:i]))
-			}
-			continue
-		}
-		b.WriteRune(runes[i])
-		i++
-	}
-	return b.String()
-}
-
-// stripBoth removes both warp (║) and weft (═) characters, leaving only spaces.
-func stripBoth(line string) string {
-	var b strings.Builder
-	runes := []rune(line)
-	i := 0
-	for i < len(runes) {
-		if runes[i] == '\033' {
-			for i < len(runes) && runes[i] != 'm' {
-				i++
-			}
-			if i < len(runes) {
-				i++
-			}
-			if i < len(runes) && (runes[i] == '║' || runes[i] == '═') {
-				b.WriteByte(' ')
-				i++
-				if i < len(runes) && runes[i] == '\033' {
-					for i < len(runes) && runes[i] != 'm' {
-						i++
-					}
-					if i < len(runes) {
-						i++
-					}
-				}
-			}
-			continue
-		}
-		b.WriteRune(runes[i])
-		i++
-	}
-	return b.String()
-}
-
-// ExecNonInteractive runs a single command through the shell and prints to w.
-// Supports all builtins (ls, cat /etc/, range, etc.) as well as queries.
-// configureCore wires the shellcore handle the way Shell.Run does:
-// path classifier, FS adapter (with chart hookup when supported),
-// user + customer, history, range, tier limits, and the wit
-// subcommand grammar.
-//
-// Extracted from Run so tests can drive a real shellcore through
-func (s *Shell) configureCore(core *shellcore.ShellCore) {
+// ConfigureCore wires every embedder-owned surface weft installs on a
+// fresh shellcore — syntax fallback, FS + chart/dashboard hookups,
+// user/customer prompt, range, help corpus, wit subcommand grammar,
+// reserved names, `range` builtin, and the vim post-save popup. The
+// CLI Run() and the browser cmd/wasm bridge both go through this
+// single entry point. History persistence is intentionally NOT set
+// here: CLI installs a file-backed store; wasm.Boot installs a
+// JS-callback-backed store before this runs.
+func (s *Shell) ConfigureCore(core *shellcore.ShellCore) {
 	core.SetSyntaxFallback(syntax.LangBash)
 	if s.FS != nil {
 		core.SetFS(s.FS)
-		if wr, ok := s.FS.(chart.WatchResultsProvider); ok {
-			chart.Register(core, wr)
-		}
-		if dp, ok := s.FS.(dashboard.Provider); ok {
-			dashboard.Register(core, dp)
-		}
+	}
+	// Dashboard + chart fallback registration (the CLI path that
+	// rasterises into scrollback) lives in cmd/weft/runner because
+	// it imports the heavy `dashboard` and full `chart` packages —
+	// pulling those into the shell/ import graph adds multi-MB to
+	// the WASM build for code the browser never runs. Browser-side
+	// callback hookup stays here so a single Shell{} + ConfigureCore
+	// call still wires the full surface.
+	if s.Dashboard != nil {
+		core.RegisterBuiltin("dashboard", dashboardNavigateBuiltin(s.Dashboard))
+	}
+	if s.Chart != nil {
+		core.RegisterBuiltin("chart", chartRequestBuiltin(s.Chart))
+		core.RegisterPipeStage("chart", chart.ParsePipeArgs, chartRequestPipe(s.Chart))
 	}
 	if s.User != "" {
 		core.SetUser(s.User)
@@ -494,9 +111,8 @@ func (s *Shell) configureCore(core *shellcore.ShellCore) {
 		customer = "weft"
 	}
 	core.SetCustomer(customer)
-	core.SetHistoryStore(NewFileHistoryStore())
 	core.SetRange(s.Start, s.End)
-	core.SetHelp(weftHelp{tiers: storeTierLimits{}})
+	core.SetHelp(weftHelp{tiers: defaultTierLimits{}})
 	// Subcommand grammar matches the one ExecNonInteractive passes:
 	// `wit log <path>` must preserve the keyword instead of
 	// resolving `log` against `/` to the /log namespace.
@@ -526,6 +142,96 @@ func (s *Shell) configureCore(core *shellcore.ShellCore) {
 	core.SetVimHooks(installVimPopupHooks(core))
 }
 
+// ChartRequest is the payload Shell.Chart receives when the browser
+// shell intercepts a `chart` invocation. Exactly one of Watch or
+// Lines is set — Watch for the standalone `chart <name>` form, Lines
+// for the pipe-stage `... | chart` form. The remaining fields carry
+// the parsed render options so the modal can fully reproduce what
+// the CLI would have drawn to scrollback.
+type ChartRequest struct {
+	// Watch is the watch name when the user typed `chart <name>`.
+	// Empty when the request originates from `... | chart`.
+	Watch string
+	// Lines is the upstream pipeline snapshot for `... | chart`. The
+	// browser modal renders this directly; re-fetching the underlying
+	// pipeline isn't supported at this layer because the original
+	// pipeline string isn't reachable from a pipe-stage renderer.
+	Lines []string
+	// Kind is line / bar / sparkline / area / table.
+	Kind string
+	// Title is the user-supplied title for pipe form (--title);
+	// empty for watch form.
+	Title string
+	// Limit is the watch-history depth for the watch form
+	// (`chart <name> -n N`); ignored for pipe form.
+	Limit int
+}
+
+// chartRequestBuiltin returns a `chart` builtin that forwards the
+// parsed watch args to the embedder callback. Used by the browser
+// shell; the CLI registers chart.Builtin (ASCII renderer) instead.
+func chartRequestBuiltin(emit func(ChartRequest)) shellcore.BuiltinFunc {
+	return func(c *shellcore.ShellCore, args []string) bool {
+		if len(args) == 0 || args[0] != "chart" {
+			return false
+		}
+		parsed, errMsg := chart.ParseWatchCmd(args[1:])
+		if errMsg != "" {
+			c.AppendScrollback(shellcore.ErrorText(errMsg) + "\n")
+			return true
+		}
+		if parsed.Follow {
+			c.AppendScrollback(shellcore.ErrorText("chart: --follow is not supported in the browser; open the watch page instead") + "\n")
+			return true
+		}
+		emit(ChartRequest{
+			Watch: parsed.Name,
+			Kind:  parsed.Kind,
+			Limit: parsed.Limit,
+		})
+		return true
+	}
+}
+
+// chartRequestPipe returns a PipeStageRenderFunc that hands the
+// upstream pipeline snapshot to the embedder callback and writes a
+// terse placeholder to scrollback (so the user sees that something
+// happened — the chart itself appears in a separate React modal).
+func chartRequestPipe(emit func(ChartRequest)) shellcore.PipeStageRenderFunc {
+	return func(_ *shellcore.ShellCore, lines []string, parsed any) (string, string) {
+		args, ok := parsed.(chart.PipeArgs)
+		if !ok {
+			return "", "chart: internal error: parsed args not PipeArgs"
+		}
+		emit(ChartRequest{
+			Lines: lines,
+			Kind:  args.Kind,
+			Title: args.Title,
+		})
+		return shellcore.DimText("[chart] opened in modal ("+strconv.Itoa(len(lines))+" rows)") + "\n", ""
+	}
+}
+
+// dashboardNavigateBuiltin returns a `dashboard` builtin that forwards
+// the requested name to a Go-side callback rather than rendering a
+// shellcore View. The browser embedder uses this so `dashboard prod`
+// at the prompt navigates the React app to /dashboards/prod. Bare
+// `dashboard` passes "" — the embedder decides whether that means
+// "go to the index" or "show usage".
+func dashboardNavigateBuiltin(navigate func(name string)) shellcore.BuiltinFunc {
+	return func(c *shellcore.ShellCore, args []string) bool {
+		if len(args) == 0 || args[0] != "dashboard" {
+			return false
+		}
+		name := ""
+		if len(args) >= 2 {
+			name = args[1]
+		}
+		navigate(name)
+		return true
+	}
+}
+
 // rangeBuiltin handles the `range` command. With no arg it prints
 // the current window; with a single arg it parses the spec via
 // shellcore.ParseRange, calls SetRange (which dispatches
@@ -553,22 +259,37 @@ func rangeBuiltin(c *shellcore.ShellCore, args []string) bool {
 	return false
 }
 
+// applyRangeLine handles a bare `range` or `range <spec>` input
+// against the Shell's stored window — same surface as rangeBuiltin
+// but for the one-shot, non-interactive path that doesn't drive
+// through shellcore. Returns (handled, output, err).
+//   - handled=false: line wasn't a range command; caller continues.
+//   - handled=true, err!=nil: caller returns the err.
+//   - handled=true, err==nil: caller writes output and returns.
+func (s *Shell) applyRangeLine(line string) (handled bool, output string, err error) {
+	if line == "range" {
+		return true, shellcore.FormatRangePlain(s.Start, s.End), nil
+	}
+	if !strings.HasPrefix(line, "range ") {
+		return false, "", nil
+	}
+	start, end, perr := shellcore.ParseRange(strings.TrimPrefix(line, "range "))
+	if perr != nil {
+		return true, "", perr
+	}
+	s.Start = start
+	s.End = end
+	return true, shellcore.FormatRangePlain(start, end), nil
+}
+
 func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 	line = strings.TrimSpace(line)
 
-	// Handle range locally (modifies shell state).
-	if line == "range" {
-		fmt.Fprint(w, shellcore.FormatRangePlain(s.Start, s.End))
-		return nil
-	}
-	if strings.HasPrefix(line, "range ") {
-		start, end, err := shellcore.ParseRange(strings.TrimPrefix(line, "range "))
+	if handled, out, err := s.applyRangeLine(line); handled {
 		if err != nil {
 			return err
 		}
-		s.Start = start
-		s.End = end
-		fmt.Fprint(w, shellcore.FormatRangePlain(start, end))
+		fmt.Fprint(w, out)
 		return nil
 	}
 

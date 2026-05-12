@@ -1,4 +1,11 @@
-package shell
+// Package setup hosts the interactive schema-detection wizard the
+// `weft setup` CLI subcommand drives. Lives under cmd/weft because
+// it depends on huh + lipgloss (TUI form library + ANSI styling)
+// and is meaningless outside a CLI tty — keeping it out of the
+// shell/ package is what lets shell/ build under GOOS=js/GOARCH=wasm
+// so the browser shell can reuse the same ConfigureCore wiring as
+// the CLI.
+package setup
 
 import (
 	"fmt"

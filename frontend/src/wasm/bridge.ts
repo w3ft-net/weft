@@ -18,11 +18,24 @@ export interface ShellIdentity {
   customer: string // customer/team slug — "acme"
 }
 
+// ChartOpenSpec is the payload the Go-side `chart` handler hands us
+// in place of rendering ASCII. Either `watch` (chart <name>) or
+// `lines` (... | chart) is populated.
+export interface ChartOpenSpec {
+  watch?: string
+  lines?: string[]
+  kind?: string
+  title?: string
+  limit?: number
+}
+
 export async function initShellWasm(
   container: HTMLElement,
   apps: string[],
   onRangeChange?: (rangeText: string) => void,
   identity?: ShellIdentity,
+  onDashboardNavigate?: (name: string) => void,
+  onChartOpen?: (spec: ChartOpenSpec) => void,
 ): Promise<ShellBridge> {
   let terminalRef: BaseShellBridge['terminal'] | null = null
   const earlyWrites: string[] = []
@@ -56,7 +69,22 @@ export async function initShellWasm(
     onRangeChange: (rangeText: string) => {
       if (onRangeChange) onRangeChange(rangeText)
     },
+    // dashboardNavigate is invoked by the `dashboard <name>` builtin
+    // inside cmd/wasm. Bare `dashboard` passes "" — we treat that as
+    // a request to land on the /dashboards index.
+    dashboardNavigate: (name: string) => {
+      if (onDashboardNavigate) onDashboardNavigate(name)
+    },
+    // chartOpen is invoked by both `chart <name>` and `... | chart`
+    // in the browser. The Go side hands us the parsed spec; the React
+    // side renders the actual tile.
+    chartOpen: (spec: ChartOpenSpec) => {
+      if (onChartOpen) onChartOpen(spec)
+    },
     builtinExecuted: (pipeline: string) => notifyBuiltinExecuted(pipeline),
+  } as WasmCallbacks & {
+    dashboardNavigate: (name: string) => void
+    chartOpen: (spec: ChartOpenSpec) => void
   }
 
   const bridge = await loadShellWasm(container, {

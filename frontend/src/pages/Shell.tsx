@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import SidebarNav from '../components/SidebarNav'
 import {
   getFunctions, deleteFunction, type ShellFunction,
   getWatches, deleteWatch, type CronWatch,
 } from '../lib/api'
-import { initShellWasm, type ShellBridge } from '../wasm/bridge'
+import { initShellWasm, type ShellBridge, type ChartOpenSpec } from '../wasm/bridge'
+import ShellChartModal from '../components/ShellChartModal'
 import { useAuth } from '../lib/AuthContext'
 import FileTreeSidebar from '../components/FileTreeSidebar'
 import '@xterm/xterm/css/xterm.css'
@@ -15,6 +16,7 @@ import './Shell.css'
 
 export default function Shell() {
   const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const { user } = useAuth()
   const termContainerRef = useRef<HTMLDivElement>(null)
   const bridgeRef = useRef<ShellBridge | null>(null)
@@ -23,6 +25,7 @@ export default function Shell() {
   const [watchLimits, setWatchLimits] = useState({ count: 0, limit: 0, min_interval: '' })
   const [sidebarTab, setSidebarTab] = useState<'functions' | 'watches' | 'tmp' | 'etc' | null>(null)
   const [, setWasmReady] = useState(false)
+  const [chartSpec, setChartSpec] = useState<ChartOpenSpec | null>(null)
 
   useEffect(() => {
     getFunctions().then(setFunctions).catch(() => {})
@@ -53,6 +56,15 @@ export default function Shell() {
         apps,
         undefined, // range display removed; range is shown in PS1 + accessible via `range`
         identity,
+        // `dashboard <name>` at the prompt routes to the dashboards
+        // page. Empty name = land on the index.
+        (name: string) => {
+          navigate(name ? `/dashboards/${encodeURIComponent(name)}` : '/dashboards')
+        },
+        // `chart <name>` and `... | chart` open a modal with the
+        // chart tile rendered in React. The modal owns its own
+        // re-fetch for the watch form so it stays live.
+        (spec: ChartOpenSpec) => setChartSpec(spec),
       )
       if (disposed) {
         bridge.dispose()
@@ -238,6 +250,10 @@ export default function Shell() {
         </div>
 
       </main>
+
+      {chartSpec && (
+        <ShellChartModal spec={chartSpec} onClose={() => setChartSpec(null)} />
+      )}
     </div>
   )
 }

@@ -1,8 +1,14 @@
 //go:build js && wasm
 
 // Command wasm builds weft's shellcore WASM binary for use with
-// xterm.js. Weft-specific bits live here; cross-cutting plumbing
-// lives in warp/pkg/shellcore/wasm and is invoked via wasm.Boot.
+// xterm.js. The bridge plumbing (shellcore <-> JS callbacks, xterm
+// input, history) lives in warp/pkg/shellcore/wasm.Boot. After Boot,
+// the browser shell is configured the same way the CLI shell is:
+// by constructing a *shell.Shell and calling its ConfigureCore.
+// That single entry point is what guarantees the browser and CLI
+// surfaces stay aligned — every embedder-owned bit (range builtin,
+// reserved names, wit grammar, help corpus, vim popup hooks, FS,
+// customer prompt) is installed in one place.
 //
 // Build: GOOS=js GOARCH=wasm go build -o frontend/public/shell.wasm ./cmd/wasm/
 package main
@@ -13,87 +19,119 @@ import (
 
 	"github.com/kevlarcon/warp/pkg/shellcore"
 	"github.com/kevlarcon/warp/pkg/shellcore/wasm"
-	"github.com/kevlarcon/warp/pkg/syntax"
-	"github.com/kevlarcon/weft/chart"
+	"github.com/kevlarcon/weft/shell"
 )
 
-var (
-	core         *shellcore.ShellCore
-	jsCallbacks  js.Value
-)
+var jsCallbacks js.Value
 
 func main() {
 	js.Global().Set("wasmInit", js.FuncOf(wasmInit))
 	// All other wasm* exports (HandleInput, Resize, SpinnerTick,
 	// SetInput, GetInput, HandleQueryResult, HandleFollowRow,
-	// HandleFollowDone) are registered by wasm.Boot — they share
-	// the same `active` core inside warp's package and don't need
-	// weft-side wiring.
+	// HandleFollowDone) are registered by wasm.Boot.
 	select {}
 }
 
 // wasmInit(width: number, height: number, callbacks: object)
 // callbacks: write, startQuery, startFollow, cancelQuery, notifyQuit,
 // fsReadFile, fsWriteFile, fsReadDir, fsRemove, fsGetWatchResults,
-// onRangeChange, loadHistory, saveHistory, getUser, getCustomer,
-// getApps.
+// onRangeChange, builtinExecuted, loadHistory, saveHistory, getUser,
+// getCustomer, getApps.
 func wasmInit(_ js.Value, args []js.Value) any {
 	width := args[0].Int()
 	height := args[1].Int()
 	jsCallbacks = args[2]
 
-	// Apps list is weft-specific — read via callback rather than
-	// passed as a direct init arg, so the loadShellWasm signature
-	// stays app-agnostic.
-	var apps []string
-	if appsFn := jsCallbacks.Get("getApps"); !appsFn.IsUndefined() && !appsFn.IsNull() {
-		appsJS := jsCallbacks.Call("getApps")
-		for i := 0; i < appsJS.Length(); i++ {
-			apps = append(apps, appsJS.Index(i).String())
-		}
-	}
+	apps := readApps(jsCallbacks)
 
-	core = wasm.Boot(wasm.BootOpts{
+	core := wasm.Boot(wasm.BootOpts{
 		Apps:      apps,
 		Width:     width,
 		Height:    height,
 		Callbacks: jsCallbacks,
 		OnAction:  handleWeftAction,
 	})
-	core.SetSyntaxFallback(syntax.LangBash)
 
-	// Build MountFS with JSMount entries — each delegates FS ops to the
-	// JS callbacks. SetFS auto-derives the PathClassifier from the
-	// MountFS, so no separate SetPathClassifier call is needed.
+	// Build the JS-backed MountFS. SetFS in ConfigureCore picks this
+	// up and auto-derives the PathClassifier from it.
 	mfs := shellcore.NewMountFS()
 	mfs.Register(wasm.NewJSMount("/bin", shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true}, jsCallbacks, "bash"))
 	mfs.Register(wasm.NewJSMount("/cron.d", shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true}, jsCallbacks, "bash"))
 	mfs.Register(wasm.NewJSMount("/etc", shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true}, jsCallbacks, "yaml"))
 	mfs.Register(wasm.NewJSMount("/log", shellcore.MountCaps{Kind: shellcore.MountQuery, Writable: false}, jsCallbacks, ""))
 	mfs.Register(wasm.NewJSMount("/tmp", shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true}, jsCallbacks, ""))
-	core.SetFS(mfs)
 
-	// Chart View + builtin + pipe stage — weft-specific. Uses a
-	// dedicated WatchResultsProvider that calls fsGetWatchResults
-	// on the same callbacks object the FS proxy uses.
-	chart.Register(core, &watchResultsProvider{callbacks: jsCallbacks})
-
-	// Optional customer suffix on the prompt prefix (weft-specific).
-	if getCustomerFn := jsCallbacks.Get("getCustomer"); !getCustomerFn.IsUndefined() && !getCustomerFn.IsNull() {
-		customer := jsCallbacks.Call("getCustomer").String()
-		if customer != "" && customer != "undefined" {
-			core.SetCustomer(customer)
-		}
+	// Default time range: last 24h.
+	now := time.Now()
+	s := &shell.Shell{
+		Apps:     apps,
+		FS:       mfs,
+		Customer: readCustomer(jsCallbacks),
+		Start:    now.Add(-24 * time.Hour),
+		End:      now,
+		// Browser `dashboard <name>` routes to React-router navigation;
+		// no in-terminal view. Bare `dashboard` sends "" so the JS side
+		// can decide between the index page or a usage hint.
+		Dashboard: func(name string) {
+			jsCallbacks.Call("dashboardNavigate", name)
+		},
+		// Browser `chart <name>` and `... | chart` open a modal in
+		// React instead of rendering ASCII into xterm. The JS side
+		// owns the actual tile rendering (re-using dashboard
+		// components); we just hand over the parsed parameters.
+		Chart: func(r shell.ChartRequest) {
+			spec := map[string]any{
+				"watch": r.Watch,
+				"kind":  r.Kind,
+				"title": r.Title,
+				"limit": r.Limit,
+			}
+			if r.Lines != nil {
+				// js.Value can't marshal a []string directly through
+				// the map — it wants an explicit []any.
+				items := make([]any, len(r.Lines))
+				for i, ln := range r.Lines {
+					items[i] = ln
+				}
+				spec["lines"] = items
+			}
+			jsCallbacks.Call("chartOpen", spec)
+		},
 	}
+	s.ConfigureCore(core)
 
-	// Default time range: last 24h (weft-specific).
-	rangeStart := time.Now().Add(-24 * time.Hour)
-	rangeEnd := time.Now()
-	core.SetRange(rangeStart, rangeEnd)
-	jsCallbacks.Call("onRangeChange", shellcore.FormatRangePlain(rangeStart, rangeEnd))
+	// Mirror the initial range to JS — the CLI's tty prompt shows
+	// the window inline; the browser displays it in a separate
+	// header chip via the onRangeChange callback.
+	jsCallbacks.Call("onRangeChange", shellcore.FormatRangePlain(s.Start, s.End))
 
 	core.Redraw()
 	return nil
+}
+
+func readApps(cb js.Value) []string {
+	fn := cb.Get("getApps")
+	if fn.IsUndefined() || fn.IsNull() {
+		return nil
+	}
+	val := cb.Call("getApps")
+	apps := make([]string, 0, val.Length())
+	for i := 0; i < val.Length(); i++ {
+		apps = append(apps, val.Index(i).String())
+	}
+	return apps
+}
+
+func readCustomer(cb js.Value) string {
+	fn := cb.Get("getCustomer")
+	if fn.IsUndefined() || fn.IsNull() {
+		return ""
+	}
+	c := cb.Call("getCustomer").String()
+	if c == "undefined" {
+		return ""
+	}
+	return c
 }
 
 // handleWeftAction dispatches shellcore Actions warp's bridge doesn't
@@ -112,40 +150,4 @@ func handleWeftAction(a shellcore.Action) bool {
 	}
 	return false
 }
-
-// watchResultsProvider satisfies chart.WatchResultsProvider by
-// delegating to the JS-side fsGetWatchResults callback.
-type watchResultsProvider struct {
-	callbacks js.Value
-}
-
-func (w *watchResultsProvider) GetWatchResults(name string, limit int) ([]chart.WatchResultValue, error) {
-	result := w.callbacks.Call("fsGetWatchResults", name, limit)
-	if result.IsNull() || result.IsUndefined() {
-		return nil, jsError("no results")
-	}
-	if errVal := result.Get("error"); !errVal.IsUndefined() && !errVal.IsNull() {
-		if s := errVal.String(); s != "" {
-			return nil, jsError(s)
-		}
-	}
-	items := result.Get("results")
-	if items.IsUndefined() || items.IsNull() {
-		return nil, nil
-	}
-	out := make([]chart.WatchResultValue, 0, items.Length())
-	for i := 0; i < items.Length(); i++ {
-		item := items.Index(i)
-		out = append(out, chart.WatchResultValue{
-			Value: item.Get("stdout").String(),
-			RanAt: item.Get("ran_at").String(),
-		})
-	}
-	return out, nil
-}
-
-// jsError implements the error interface for a JS-string error.
-type jsError string
-
-func (e jsError) Error() string { return string(e) }
 

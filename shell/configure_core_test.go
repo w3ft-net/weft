@@ -37,7 +37,7 @@ func stripANSI(s string) string {
 // This test is the regression guard around the cleanup that moves
 // the "weft" default out of warp's shellcore (where it was a
 // hardcoded fallback for the customer field) into weft's
-// configureCore (where the embedder owns its own naming).
+// ConfigureCore (where the embedder owns its own naming).
 func TestConfigureCore_DefaultsToWeftCustomerWhenUnset(t *testing.T) {
 	var output strings.Builder
 	core := shellcore.NewShellCore(nil, 80, 24,
@@ -45,7 +45,7 @@ func TestConfigureCore_DefaultsToWeftCustomerWhenUnset(t *testing.T) {
 		func(a shellcore.Action) {},
 	)
 
-	(&Shell{User: "alice"}).configureCore(core)
+	(&Shell{User: "alice"}).ConfigureCore(core)
 	core.Redraw()
 
 	visible := stripANSI(output.String())
@@ -57,7 +57,7 @@ func TestConfigureCore_DefaultsToWeftCustomerWhenUnset(t *testing.T) {
 // TestConfigureCore_RangeBuiltinDisplaysCurrentWindow verifies that
 // `range` (no arg) prints the current time window. Locks in the
 // behavior moved out of warp's inline shellcore dispatch — the
-// builtin is now embedder-registered via configureCore, and bare
+// builtin is now embedder-registered via ConfigureCore, and bare
 // invocation must still produce a "range: <start> .. <end>" line.
 func TestConfigureCore_RangeBuiltinDisplaysCurrentWindow(t *testing.T) {
 	var output strings.Builder
@@ -65,7 +65,7 @@ func TestConfigureCore_RangeBuiltinDisplaysCurrentWindow(t *testing.T) {
 		func(b []byte) { output.Write(b) },
 		func(a shellcore.Action) {},
 	)
-	(&Shell{User: "alice"}).configureCore(core)
+	(&Shell{User: "alice"}).ConfigureCore(core)
 
 	for _, r := range "range" {
 		core.HandleEvent(shellcore.KeyEvent{Rune: r})
@@ -92,7 +92,7 @@ func TestConfigureCore_RangeBuiltinAcceptsSpec(t *testing.T) {
 			}
 		},
 	)
-	(&Shell{User: "alice"}).configureCore(core)
+	(&Shell{User: "alice"}).ConfigureCore(core)
 
 	for _, r := range "range 30m.." {
 		core.HandleEvent(shellcore.KeyEvent{Rune: r})
@@ -110,7 +110,7 @@ func TestConfigureCore_RangeBuiltinAcceptsSpec(t *testing.T) {
 // is the regression guard around the move that takes the docs_gen
 // constants + dispatch out of warp's shellcore (where it was the
 // hardcoded default) and into weft (where it lives as the
-// HelpProvider weft installs via configureCore).
+// HelpProvider weft installs via ConfigureCore).
 //
 // Pre-move: passes via warp's default shellDocTopics map.
 // Post-move: passes via weft's HelpProvider returning the same
@@ -124,7 +124,7 @@ func TestConfigureCore_HelpBuiltinsServesWeftCorpus(t *testing.T) {
 		func(b []byte) { output.Write(b) },
 		func(a shellcore.Action) {},
 	)
-	(&Shell{User: "alice"}).configureCore(core)
+	(&Shell{User: "alice"}).ConfigureCore(core)
 
 	for _, r := range "help builtins" {
 		core.HandleEvent(shellcore.KeyEvent{Rune: r})
@@ -155,7 +155,7 @@ func TestConfigureCore_HelpCronInterpolatesTierLimits(t *testing.T) {
 		func(b []byte) { output.Write(b) },
 		func(a shellcore.Action) {},
 	)
-	(&Shell{User: "alice"}).configureCore(core)
+	(&Shell{User: "alice"}).ConfigureCore(core)
 
 	for _, r := range "help cron" {
 		core.HandleEvent(shellcore.KeyEvent{Rune: r})
@@ -178,7 +178,7 @@ func TestConfigureCore_HonoursExplicitCustomer(t *testing.T) {
 		func(a shellcore.Action) {},
 	)
 
-	(&Shell{User: "alice", Customer: "acme"}).configureCore(core)
+	(&Shell{User: "alice", Customer: "acme"}).ConfigureCore(core)
 	core.Redraw()
 
 	visible := stripANSI(output.String())

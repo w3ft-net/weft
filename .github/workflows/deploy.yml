@@ -75,7 +75,10 @@ jobs:
 
     - name: Build shell.wasm
       working-directory: weft
-      run: GOOS=js GOARCH=wasm go build -o frontend/public/shell.wasm ./cmd/wasm/
+      # -ldflags="-s -w" strips Go's symbol table and DWARF debug
+      # sections from the wasm binary, saving ~5% raw and ~10%
+      # compressed without losing any runtime functionality.
+      run: GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o frontend/public/shell.wasm ./cmd/wasm/
 
     - name: Build frontend
       working-directory: weft/frontend

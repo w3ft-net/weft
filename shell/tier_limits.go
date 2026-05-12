@@ -1,36 +1,44 @@
 package shell
 
-import (
-	"time"
+import "time"
 
-	"github.com/kevlarcon/weft/store"
-)
+// defaultTierLimits mirrors the WatchLimit / MinWatchInterval / tier
+// list from store/user.go. Duplicated rather than imported because
+// pulling the full store package into this file would drag the entire
+// DB layer (pgx, migrations, GORM models, gRPC types) into the WASM
+// build through the configureCore import path — a multi-megabyte cost
+// for four numbers that change once a year. The store package keeps
+// its own copies for the API / coordinator side; if these ever drift
+// the configure_core_test will catch the help-corpus diff.
+//
+// Source of truth is still store/user.go; treat this as a read-only
+// mirror.
+type defaultTierLimits struct{}
 
-// storeTierLimits adapts store's tier helpers to the
-// shellcore.TierLimitsProvider interface. Lives in shell/ (not
-// shellcore/) so shellcore stays independent of the database layer
-// — the same core is reused by the WASM frontend which has no
-// store dependency.
-type storeTierLimits struct{}
-
-// shellcore's TierLimitsProvider interface is string-typed (it runs
-// from WASM and must not take a dep on the store package). The two
-// methods below bridge that string boundary to the typed store.Tier
-// API by wrapping the caller's string in store.Tier at the door.
-func (storeTierLimits) WatchLimit(tier string) int { return store.WatchLimit(store.Tier(tier)) }
-
-func (storeTierLimits) MinWatchInterval(tier string) time.Duration {
-	return store.MinWatchInterval(store.Tier(tier))
+func (defaultTierLimits) WatchLimit(tier string) int {
+	switch tier {
+	case "swatch":
+		return 5
+	case "yard":
+		return 10
+	case "bolt":
+		return 50
+	default:
+		return 1
+	}
 }
 
-// Tiers lists every plan name help cron should render. Kept here
-// rather than store/ because the enumeration is a presentation
-// concern — store/ only answers questions per-tier.
-func (storeTierLimits) Tiers() []string {
-	return []string{
-		string(store.TierTrial),
-		string(store.TierSwatch),
-		string(store.TierYard),
-		string(store.TierBolt),
+func (defaultTierLimits) MinWatchInterval(tier string) time.Duration {
+	switch tier {
+	case "swatch", "trial":
+		return 5 * time.Minute
+	case "yard", "bolt":
+		return 1 * time.Minute
+	default:
+		return 0
 	}
+}
+
+func (defaultTierLimits) Tiers() []string {
+	return []string{"trial", "swatch", "yard", "bolt"}
 }

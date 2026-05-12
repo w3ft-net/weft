@@ -41,7 +41,7 @@ func (f *stubPopupFS) AmendVersionMessage(path, message string) error {
 	return nil
 }
 
-// newConfiguredCore builds a ShellCore wired through Shell.configureCore
+// newConfiguredCore builds a ShellCore wired through Shell.ConfigureCore
 // with a stub FS, so the popup-flow tests exercise the same code path
 // production weft uses.
 func newConfiguredCore(t *testing.T, fs shellcore.FS) *shellcore.ShellCore {
@@ -50,7 +50,7 @@ func newConfiguredCore(t *testing.T, fs shellcore.FS) *shellcore.ShellCore {
 		func(p []byte) {},
 		func(shellcore.Action) {},
 	)
-	(&Shell{User: "alice", FS: fs}).configureCore(core)
+	(&Shell{User: "alice", FS: fs}).ConfigureCore(core)
 	return core
 }
 
@@ -58,7 +58,7 @@ func newConfiguredCore(t *testing.T, fs shellcore.FS) *shellcore.ShellCore {
 // the move that takes the post-save commit-message popup out of warp's
 // shellcore (where it was hardcoded as the default OnQuit branch on
 // versioned paths) and into weft (where it lives as embedder VimHooks
-// installed via configureCore).
+// installed via ConfigureCore).
 //
 // Pre-move: passes via shellcore's default isVersionedPath +
 // openMessagePopup. Post-move: passes via weft's VimHooks. Same
