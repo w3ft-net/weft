@@ -84,6 +84,37 @@ func TestFormatVersionDiff_NoTrailingNewline(t *testing.T) {
 	}
 }
 
+// TestColorDiff_AppliesSyntaxColors verifies that the wrapper that
+// sits between formatVersionDiff and the writer actually applies the
+// syntax-package diff highlighter. We don't pin exact SGR codes —
+// the palette owns those — only that some ANSI opener appears in
+// the output and the underlying lines survive intact.
+func TestColorDiff_AppliesSyntaxColors(t *testing.T) {
+	plain := "--- a/scan\told\n+++ b/scan\tnew\n@@ -1 +1 @@\n-echo v1\n+echo v2\n"
+	colored := colorDiff(plain)
+	if colored == plain {
+		t.Errorf("colorDiff should add ANSI; got unchanged %q", colored)
+	}
+	if !strings.Contains(colored, "\x1b[") {
+		t.Errorf("colorDiff output should contain an ANSI opener; got %q", colored)
+	}
+	// Byte-faithful through the diff text — the source lines survive.
+	for _, frag := range []string{"--- a/scan", "+++ b/scan", "@@ -1 +1 @@", "echo v1", "echo v2"} {
+		if !strings.Contains(colored, frag) {
+			t.Errorf("colored output lost %q; got %q", frag, colored)
+		}
+	}
+}
+
+// TestColorDiff_EmptyIsEmpty: a no-op diff (identical content)
+// gives the empty string with no stray reset code that would
+// otherwise leak into the surrounding scrollback.
+func TestColorDiff_EmptyIsEmpty(t *testing.T) {
+	if got := colorDiff(""); got != "" {
+		t.Errorf("empty in should give empty out; got %q", got)
+	}
+}
+
 // TestFormatVersionDiff_MultipleHunks verifies that two distant
 // changes in the same file produce two hunks separated by a fresh
 // @@ header — not one giant hunk covering everything between.

@@ -9,6 +9,7 @@ import (
 	"github.com/pmezard/go-difflib/difflib"
 
 	"github.com/kevlarcon/warp/pkg/bash"
+	"github.com/kevlarcon/warp/pkg/syntax"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -129,10 +130,10 @@ func (w *WitFuncs) logBin(name string, patch bool, stdout, stderr io.Writer) int
 		writeLogLine(stdout, i, v.ContentHash, v.Message, v.AuthoredAt.Format("2006-01-02 15:04"),
 			ownerLabel(w.Store, v.AuthoredByUserID), v.IsHead)
 		if patch && i+1 < len(versions) {
-			fmt.Fprint(stdout, formatVersionDiff(
+			fmt.Fprint(stdout, colorDiff(formatVersionDiff(
 				versions[i+1].Source, versions[i].Source, name,
 				refLabel(i+1)+" "+versions[i+1].ContentHash[:7],
-				refLabel(i)+" "+versions[i].ContentHash[:7]))
+				refLabel(i)+" "+versions[i].ContentHash[:7])))
 		}
 	}
 	return 0
@@ -152,11 +153,11 @@ func (w *WitFuncs) logCron(name string, patch bool, stdout, stderr io.Writer) in
 		writeLogLine(stdout, i, v.ContentHash, v.Message, v.AuthoredAt.Format("2006-01-02 15:04"),
 			ownerLabel(w.Store, v.AuthoredByUserID), v.IsHead)
 		if patch && i+1 < len(versions) {
-			fmt.Fprint(stdout, formatVersionDiff(
+			fmt.Fprint(stdout, colorDiff(formatVersionDiff(
 				versions[i+1].Schedule+"\n"+versions[i+1].Pipeline,
 				versions[i].Schedule+"\n"+versions[i].Pipeline, name,
 				refLabel(i+1)+" "+versions[i+1].ContentHash[:7],
-				refLabel(i)+" "+versions[i].ContentHash[:7]))
+				refLabel(i)+" "+versions[i].ContentHash[:7])))
 		}
 	}
 	return 0
@@ -292,10 +293,10 @@ func (w *WitFuncs) runDiff(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "wit diff: %v\n", err)
 			return 1
 		}
-		fmt.Fprint(stdout, formatVersionDiff(
+		fmt.Fprint(stdout, colorDiff(formatVersionDiff(
 			va.Source, vb.Source, name,
 			diffLabel(va.ContentHash, ownerLabel(w.Store, va.AuthoredByUserID)),
-			diffLabel(vb.ContentHash, ownerLabel(w.Store, vb.AuthoredByUserID))))
+			diffLabel(vb.ContentHash, ownerLabel(w.Store, vb.AuthoredByUserID)))))
 	case "cron.d":
 		va, err := w.Store.ResolveCronWatchRef(w.CustomerID, name, aRef)
 		if err != nil {
@@ -307,13 +308,32 @@ func (w *WitFuncs) runDiff(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "wit diff: %v\n", err)
 			return 1
 		}
-		fmt.Fprint(stdout, formatVersionDiff(
+		fmt.Fprint(stdout, colorDiff(formatVersionDiff(
 			va.Schedule+"\n"+va.Pipeline,
 			vb.Schedule+"\n"+vb.Pipeline, name,
 			diffLabel(va.ContentHash, ownerLabel(w.Store, va.AuthoredByUserID)),
-			diffLabel(vb.ContentHash, ownerLabel(w.Store, vb.AuthoredByUserID))))
+			diffLabel(vb.ContentHash, ownerLabel(w.Store, vb.AuthoredByUserID)))))
 	}
 	return 0
+}
+
+// colorDiff wraps a unified-diff string with ANSI colors from
+// warp's syntax package. Empty in → empty out (so callers that
+// skipped a no-op diff section don't get a stray reset code).
+//
+// Color is unconditional today: wit output flows
+// coordinator → SSE → shell, and by the time bytes reach a terminal
+// the immediate writer at this call site can't see whether the
+// destination is a TTY. The interactive shell — the only realistic
+// consumer — renders the ANSI faithfully; tests substring-match
+// through it. A user piping wit output to `patch(1)` would strip
+// the codes (e.g. `sed 's/\x1b\[[0-9;]*m//g'`); we can grow a
+// `--no-color` flag if anyone asks.
+func colorDiff(s string) string {
+	if s == "" {
+		return ""
+	}
+	return syntax.Render(syntax.LangDiff, s)
 }
 
 // diffLabel formats the hash+owner annotation that goes into the
