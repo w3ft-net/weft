@@ -161,7 +161,11 @@ services:
       ENV: prod
       WEFTD_TOKEN: ${LOOM_API_PROD_TOKEN}
       RATE_SHAPE: "sine:25,50,600"
-      ERROR_RATIO: "0.08"
+      # Onboarding tour drives `weft.avg error-rate 1h` and
+      # `chart error-rate` off this stream — a constant ratio
+      # would average to ~160 forever. Sine 4%..14% over 15min
+      # gives the cron a real signal to track.
+      ERROR_RATIO: "sine:0.04,0.10,900"
 
   loom-worker-sand:
     <<: *demo-service

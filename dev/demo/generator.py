@@ -205,10 +205,24 @@ def _pick_level(error_ratio: float) -> str:
     return "INFO"
 
 
+def parse_error_ratio(spec: str) -> RateShape:
+    """ERROR_RATIO accepts either a bare float (constant) or a full
+    shape spec (e.g. sine:0.04,0.10,900). Returning a RateShape lets
+    the main loop sample error ratio as a function of elapsed time
+    just like the line-rate shape — the cron pipeline
+    `tail -n 2000 | awk '$LEVEL == "ERROR"' | wc -l` only varies if
+    the underlying ratio does.
+    """
+    try:
+        return RateShape(kind="const", params={"rate": float(spec)})
+    except ValueError:
+        return parse_shape(spec)
+
+
 def main() -> int:
     service = os.environ.get("SERVICE", "api")
     shape_spec = os.environ.get("RATE_SHAPE", "const:1")
-    error_ratio = float(os.environ.get("ERROR_RATIO", "0.05"))
+    error_spec = os.environ.get("ERROR_RATIO", "0.05")
     log_path = os.environ.get("LOG_PATH", f"/var/log/{service}.log")
 
     try:
@@ -217,7 +231,13 @@ def main() -> int:
         print(f"generator: bad RATE_SHAPE {shape_spec!r}: {e}", file=sys.stderr)
         return 2
 
-    print(f"generator: service={service} shape={shape_spec} error_ratio={error_ratio} log={log_path}",
+    try:
+        error_shape = parse_error_ratio(error_spec)
+    except ShapeError as e:
+        print(f"generator: bad ERROR_RATIO {error_spec!r}: {e}", file=sys.stderr)
+        return 2
+
+    print(f"generator: service={service} shape={shape_spec} error_ratio={error_spec} log={log_path}",
           file=sys.stderr)
 
     # Append-mode so a restart doesn't truncate weftd's view of the file.
@@ -235,6 +255,7 @@ def main() -> int:
             last = now
 
             rate = shape.rate_at(elapsed)
+            error_ratio = max(0.0, min(1.0, error_shape.rate_at(elapsed)))
             accumulator += rate * tick
 
             while accumulator >= 1.0:

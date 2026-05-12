@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from generator import RateShape, parse_shape, line_for, ShapeError  # noqa: E402
+from generator import RateShape, parse_shape, line_for, parse_error_ratio, ShapeError  # noqa: E402
 
 
 class ParseShapeTest(unittest.TestCase):
@@ -138,6 +138,21 @@ class IntegratedEmitTest(unittest.TestCase):
                     for t in range(600))
         self.assertGreaterEqual(count, 260)
         self.assertLessEqual(count, 340)
+
+
+class ParseErrorRatioTest(unittest.TestCase):
+    def test_bare_float_is_constant(self):
+        s = parse_error_ratio("0.08")
+        self.assertEqual(s.kind, "const")
+        self.assertAlmostEqual(s.rate_at(0), 0.08)
+        self.assertAlmostEqual(s.rate_at(9999), 0.08)
+
+    def test_shape_spec_oscillates(self):
+        # base=0.04 amp=0.10 period=600 → mid=0.09 at t=0, max=0.14 at quarter.
+        s = parse_error_ratio("sine:0.04,0.10,600")
+        self.assertAlmostEqual(s.rate_at(0), 0.09, places=6)
+        self.assertAlmostEqual(s.rate_at(150), 0.14, places=6)
+        self.assertAlmostEqual(s.rate_at(450), 0.04, places=6)
 
 
 if __name__ == "__main__":

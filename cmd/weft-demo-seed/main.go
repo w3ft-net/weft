@@ -17,6 +17,8 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -508,6 +510,10 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 	rateV1 := fmt.Sprintf("tail -n 500 %s | grep ERROR | wc -l | alert above 50", primaryLog)
 	rateV2 := fmt.Sprintf("tail -n 2000 %s | grep ERROR | wc -l | alert above 200", primaryLog)
 	rateV3 := fmt.Sprintf("tail -n 2000 %s | awk '$LEVEL == \"ERROR\"' | wc -l | alert above 200", primaryLog)
+	// 1-minute cadence gives the tour 60 datapoints per `weft.avg
+	// error-rate 1h` window and a chartable sparkline; yard tier (the
+	// demo subscription) allows it.
+	const errorRateSchedule = "*/1 * * * *"
 	if existing, _ := s.GetCronWatch(custID, "error-rate"); existing == nil || existing.Pipeline != rateV3 {
 		versions := []struct {
 			userID, pipeline, message string
@@ -517,12 +523,24 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 			{user3.ID, rateV3, "switch to awk for shard pushdown"},
 		}
 		for i, v := range versions {
-			if err := s.SaveCronWatch(custID, v.userID, "error-rate", "*/5 * * * *", v.pipeline); err != nil {
+			if err := s.SaveCronWatch(custID, v.userID, "error-rate", errorRateSchedule, v.pipeline); err != nil {
 				return fmt.Errorf("error-rate v%d: %w", i+1, err)
 			}
 			if err := s.AmendCronWatchMessage(custID, "error-rate", "HEAD", v.message); err != nil {
 				return fmt.Errorf("error-rate v%d message: %w", i+1, err)
 			}
+		}
+	}
+
+	// Loom-only: pre-seed an hour-plus of error-rate cron history so a
+	// brand-new signup hits `weft.avg error-rate 1h` and `chart error-rate`
+	// with a meaningful series instead of waiting for the live cron to
+	// accumulate ticks. The shape matches the loom-api-prod ERROR_RATIO
+	// sine in docker-compose.demo.yml, so synthetic and live datapoints
+	// line up continuously.
+	if customerName == "loom" {
+		if err := preseedLoomErrorRateHistory(s, custID); err != nil {
+			return fmt.Errorf("error-rate preseed: %w", err)
 		}
 	}
 
@@ -602,6 +620,68 @@ oncall:
 		return fmt.Errorf("notify.yaml: %w", err)
 	}
 
+	return nil
+}
+
+// preseedLoomErrorRateHistory synthesizes ~70 minutes of cron_results
+// for loom's error-rate watch so the onboarding tour's `weft.avg
+// error-rate 1h` and `chart error-rate` steps land on a populated
+// series instead of a near-empty window. Each row mirrors what the
+// live cron would have written: an integer wc-l count of ERROR lines
+// drawn from a 4%..14% sine over 900s (matching loom-api-prod's
+// ERROR_RATIO in docker-compose.demo.yml), scaled by the 2000-line
+// tail window with a touch of binomial-flavored noise.
+//
+// Idempotent: any existing result for the watch short-circuits — we
+// never want re-runs of the seed to stack a second synthetic hour on
+// top of real ticks.
+func preseedLoomErrorRateHistory(s *store.Store, custID uint) error {
+	watch, err := s.GetCronWatch(custID, "error-rate")
+	if err != nil {
+		return fmt.Errorf("lookup: %w", err)
+	}
+	existing, err := s.ListCronResults(watch.ID, 1, "")
+	if err != nil {
+		return fmt.Errorf("list existing: %w", err)
+	}
+	if len(existing) > 0 {
+		return nil
+	}
+
+	const (
+		points       = 70                  // one row per minute
+		tailWindow   = 2000.0              // matches `tail -n 2000` in rateV3
+		ratioBase    = 0.04                // matches sine:0.04,0.10,900
+		ratioAmp     = 0.10                //
+		ratioPeriod  = 900.0               // seconds
+		jitterStddev = 5.0                 // count units; small relative to ~180 mean
+	)
+	rng := rand.New(rand.NewSource(int64(custID)))
+	now := time.Now()
+	rows := make([]store.CronResult, 0, points)
+	for i := 0; i < points; i++ {
+		ranAt := now.Add(-time.Duration(points-i) * time.Minute)
+		// Anchor the sine to wall-clock so the synthetic series flows
+		// continuously into the live cron's first real tick.
+		ratio := ratioBase + ratioAmp*(1+math.Sin(2*math.Pi*float64(ranAt.Unix())/ratioPeriod))/2
+		count := math.Round(tailWindow*ratio + rng.NormFloat64()*jitterStddev)
+		if count < 0 {
+			count = 0
+		}
+		v := count
+		rows = append(rows, store.CronResult{
+			CronWatchID: watch.ID,
+			RanAt:       ranAt,
+			Stdout:      fmt.Sprintf("%d\n", int(count)),
+			ExitCode:    0,
+			DurationMs:  50,
+			Value:       &v,
+		})
+	}
+	if err := s.SaveCronResults(rows); err != nil {
+		return fmt.Errorf("save: %w", err)
+	}
+	log.Printf("  preseeded %d error-rate datapoints for loom", len(rows))
 	return nil
 }
 
