@@ -27,7 +27,6 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/pressly/goose/v3 v3.27.0
-	github.com/sergi/go-diff v1.4.0
 	github.com/stripe/stripe-go/v82 v82.5.1
 	github.com/w3ft-net/weft-go v0.0.0-20260430093444-94ff76c4a30e
 	github.com/yuin/goldmark v1.8.2
@@ -106,6 +105,7 @@ require (
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
+	github.com/sergi/go-diff v1.4.0 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect

@@ -35,8 +35,10 @@ func TestRunLocal_BinBashScriptResolution(t *testing.T) {
 func TestRunLocal_BinLuaScriptResolution(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	src := "#!/usr/bin/env lua\nprint(arg[1])"
-	if err := db.SaveShellFunction(custID, "", "greet", src, "bash"); err != nil {
+	// Body is stored without the shebang (the bin mount strips it
+	// pre-store now); ShellFS re-prepends on read for display fidelity.
+	src := "print(arg[1])"
+	if err := db.SaveShellFunction(custID, "", "greet", src, "lua"); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 

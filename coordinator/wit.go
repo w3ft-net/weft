@@ -6,7 +6,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/sergi/go-diff/diffmatchpatch"
+	"github.com/pmezard/go-difflib/difflib"
 
 	"github.com/kevlarcon/warp/pkg/bash"
 	"github.com/kevlarcon/weft/store"
@@ -129,10 +129,10 @@ func (w *WitFuncs) logBin(name string, patch bool, stdout, stderr io.Writer) int
 		writeLogLine(stdout, i, v.ContentHash, v.Message, v.AuthoredAt.Format("2006-01-02 15:04"),
 			ownerLabel(w.Store, v.AuthoredByUserID), v.IsHead)
 		if patch && i+1 < len(versions) {
-			writeDiffSection(stdout,
-				versions[i+1].Source, versions[i].Source,
+			fmt.Fprint(stdout, formatVersionDiff(
+				versions[i+1].Source, versions[i].Source, name,
 				refLabel(i+1)+" "+versions[i+1].ContentHash[:7],
-				refLabel(i)+" "+versions[i].ContentHash[:7])
+				refLabel(i)+" "+versions[i].ContentHash[:7]))
 		}
 	}
 	return 0
@@ -152,11 +152,11 @@ func (w *WitFuncs) logCron(name string, patch bool, stdout, stderr io.Writer) in
 		writeLogLine(stdout, i, v.ContentHash, v.Message, v.AuthoredAt.Format("2006-01-02 15:04"),
 			ownerLabel(w.Store, v.AuthoredByUserID), v.IsHead)
 		if patch && i+1 < len(versions) {
-			writeDiffSection(stdout,
+			fmt.Fprint(stdout, formatVersionDiff(
 				versions[i+1].Schedule+"\n"+versions[i+1].Pipeline,
-				versions[i].Schedule+"\n"+versions[i].Pipeline,
+				versions[i].Schedule+"\n"+versions[i].Pipeline, name,
 				refLabel(i+1)+" "+versions[i+1].ContentHash[:7],
-				refLabel(i)+" "+versions[i].ContentHash[:7])
+				refLabel(i)+" "+versions[i].ContentHash[:7]))
 		}
 	}
 	return 0
@@ -223,42 +223,6 @@ func ownerLabel(s *store.Store, userID *string) string {
 	return truncate(*userID, 12)
 }
 
-// writeDiffSection emits a unified-diff block between two version
-// contents, labeled with the supplied refs. Used by log -p between
-// consecutive entries.
-func writeDiffSection(w io.Writer, oldContent, newContent, oldLabel, newLabel string) {
-	fmt.Fprintf(w, "diff %s ← %s:\n", newLabel, oldLabel)
-	dmp := diffmatchpatch.New()
-	a, b, lines := dmp.DiffLinesToRunes(oldContent, newContent)
-	diffs := dmp.DiffMainRunes(a, b, false)
-	diffs = dmp.DiffCharsToLines(diffs, lines)
-	for _, d := range diffs {
-		switch d.Type {
-		case diffmatchpatch.DiffEqual:
-			// Skip context for compactness.
-		case diffmatchpatch.DiffInsert:
-			for _, line := range strings.SplitAfter(d.Text, "\n") {
-				if line == "" {
-					continue
-				}
-				if !strings.HasSuffix(line, "\n") {
-					line += "\n"
-				}
-				fmt.Fprintf(w, "+ %s", line)
-			}
-		case diffmatchpatch.DiffDelete:
-			for _, line := range strings.SplitAfter(d.Text, "\n") {
-				if line == "" {
-					continue
-				}
-				if !strings.HasSuffix(line, "\n") {
-					line += "\n"
-				}
-				fmt.Fprintf(w, "- %s", line)
-			}
-		}
-	}
-}
 
 // show ------------------------------------------------------------
 
@@ -328,10 +292,10 @@ func (w *WitFuncs) runDiff(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "wit diff: %v\n", err)
 			return 1
 		}
-		writeUnifiedDiff(stdout, name, va.Source, vb.Source,
-			va.ContentHash, vb.ContentHash,
-			ownerLabel(w.Store, va.AuthoredByUserID),
-			ownerLabel(w.Store, vb.AuthoredByUserID))
+		fmt.Fprint(stdout, formatVersionDiff(
+			va.Source, vb.Source, name,
+			diffLabel(va.ContentHash, ownerLabel(w.Store, va.AuthoredByUserID)),
+			diffLabel(vb.ContentHash, ownerLabel(w.Store, vb.AuthoredByUserID))))
 	case "cron.d":
 		va, err := w.Store.ResolveCronWatchRef(w.CustomerID, name, aRef)
 		if err != nil {
@@ -343,57 +307,56 @@ func (w *WitFuncs) runDiff(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "wit diff: %v\n", err)
 			return 1
 		}
-		writeUnifiedDiff(stdout, name,
+		fmt.Fprint(stdout, formatVersionDiff(
 			va.Schedule+"\n"+va.Pipeline,
-			vb.Schedule+"\n"+vb.Pipeline,
-			va.ContentHash, vb.ContentHash,
-			ownerLabel(w.Store, va.AuthoredByUserID),
-			ownerLabel(w.Store, vb.AuthoredByUserID))
+			vb.Schedule+"\n"+vb.Pipeline, name,
+			diffLabel(va.ContentHash, ownerLabel(w.Store, va.AuthoredByUserID)),
+			diffLabel(vb.ContentHash, ownerLabel(w.Store, vb.AuthoredByUserID))))
 	}
 	return 0
 }
 
-// writeUnifiedDiff emits a diff with --- a/<name> / +++ b/<name>
-// headers and short-hash + owner annotations.
-func writeUnifiedDiff(w io.Writer, name, oldContent, newContent, oldHash, newHash, oldOwner, newOwner string) {
-	short := func(h string) string {
-		if len(h) >= 7 {
-			return h[:7]
-		}
-		return h
+// diffLabel formats the hash+owner annotation that goes into the
+// tab-separated tail of `--- a/foo` and `+++ b/foo` lines.
+// `patch(1)` ignores anything after the tab, so this is free real
+// estate for human-readable provenance.
+func diffLabel(hash, owner string) string {
+	short := hash
+	if len(hash) >= 7 {
+		short = hash[:7]
 	}
-	fmt.Fprintf(w, "--- a/%s (%s, %s)\n", name, short(oldHash), oldOwner)
-	fmt.Fprintf(w, "+++ b/%s (%s, %s)\n", name, short(newHash), newOwner)
-	dmp := diffmatchpatch.New()
-	a, b, lines := dmp.DiffLinesToRunes(oldContent, newContent)
-	diffs := dmp.DiffMainRunes(a, b, false)
-	diffs = dmp.DiffCharsToLines(diffs, lines)
-	for _, d := range diffs {
-		switch d.Type {
-		case diffmatchpatch.DiffEqual:
-			// Skip context lines in this minimal renderer.
-		case diffmatchpatch.DiffInsert:
-			for _, line := range strings.SplitAfter(d.Text, "\n") {
-				if line == "" {
-					continue
-				}
-				if !strings.HasSuffix(line, "\n") {
-					line += "\n"
-				}
-				fmt.Fprintf(w, "+ %s", line)
-			}
-		case diffmatchpatch.DiffDelete:
-			for _, line := range strings.SplitAfter(d.Text, "\n") {
-				if line == "" {
-					continue
-				}
-				if !strings.HasSuffix(line, "\n") {
-					line += "\n"
-				}
-				fmt.Fprintf(w, "- %s", line)
-			}
-		}
+	return short + " " + owner
+}
+
+// formatVersionDiff renders a standard unified diff between two
+// version contents, using `--- a/<name>` and `+++ b/<name>` headers
+// with the supplied labels carried in the tab-separated tail (where
+// `patch(1)` ignores them but `git diff` and IDE viewers display
+// them). Three lines of context per hunk, multiple hunks when
+// changes are far apart. Returns the empty string when contents
+// are identical, so callers can decide whether to suppress the
+// surrounding log entry / header section entirely.
+//
+// `oldLabel` and `newLabel` are free-form — `wit diff` passes
+// hash+owner, `wit log -p` passes refLabel+hash. The trailing-newline
+// quirk in difflib.SplitLines (it appends an extra empty line when
+// input ends in `\n`) is normalized away here so callers don't have
+// to worry about it.
+func formatVersionDiff(oldContent, newContent, name, oldLabel, newLabel string) string {
+	if oldContent == newContent {
+		return ""
 	}
+	d := difflib.UnifiedDiff{
+		A:        difflib.SplitLines(strings.TrimRight(oldContent, "\n")),
+		B:        difflib.SplitLines(strings.TrimRight(newContent, "\n")),
+		FromFile: "a/" + name,
+		FromDate: oldLabel,
+		ToFile:   "b/" + name,
+		ToDate:   newLabel,
+		Context:  3,
+	}
+	s, _ := difflib.GetUnifiedDiffString(d)
+	return s
 }
 
 // checkout --------------------------------------------------------

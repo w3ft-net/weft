@@ -147,16 +147,17 @@ func TestWit_Log_DashP_IncludesDiffsBetweenVersions(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("wit log -p: code=%d", code)
 	}
-	// Diff sections appear between consecutive entries.
-	if !strings.Contains(out, "diff ") {
-		t.Errorf("wit log -p should include 'diff' section: %q", out)
+	// Standard unified diff: `--- a/scan` / `+++ b/scan` between
+	// each pair of consecutive versions.
+	if !strings.Contains(out, "--- a/scan") || !strings.Contains(out, "+++ b/scan") {
+		t.Errorf("wit log -p should include unified diff headers: %q", out)
 	}
-	// Unified-style markers.
-	if !strings.Contains(out, "- echo v2") {
-		t.Errorf("expected '- echo v2' in diff output: %q", out)
+	// Hunk markers (no space after sigil — patch-compatible shape).
+	if !strings.Contains(out, "-echo v2") {
+		t.Errorf("expected '-echo v2' in diff output: %q", out)
 	}
-	if !strings.Contains(out, "+ echo v3") {
-		t.Errorf("expected '+ echo v3' in diff output: %q", out)
+	if !strings.Contains(out, "+echo v3") {
+		t.Errorf("expected '+echo v3' in diff output: %q", out)
 	}
 }
 
@@ -196,11 +197,16 @@ func TestWit_Diff_Range(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("diff: code=%d", code)
 	}
-	// Header: --- a/scan (... ) and +++ b/scan (...).
+	// Header: --- a/scan\t<label> and +++ b/scan\t<label>.
 	if !strings.Contains(out, "--- a/scan") || !strings.Contains(out, "+++ b/scan") {
 		t.Errorf("diff missing unified headers: %q", out)
 	}
-	if !strings.Contains(out, "- echo v1") || !strings.Contains(out, "+ echo v3") {
+	// Hunk header is present.
+	if !strings.Contains(out, "@@") {
+		t.Errorf("diff missing hunk header: %q", out)
+	}
+	// Single-character sigil, no space (patch-compatible shape).
+	if !strings.Contains(out, "-echo v1") || !strings.Contains(out, "+echo v3") {
 		t.Errorf("diff missing change markers: %q", out)
 	}
 }
