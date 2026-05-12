@@ -31,7 +31,7 @@ const PANEL_STEPS: PanelStep[] = [
     route: '/namespaces',
     testId: 'sidebar-namespaces-link',
     copy:
-      "Namespaces are containers for log integrations, whether via weftd, CloudWatch, or Heroku. You can slice up your log producers however you want, but we tend to think of namespaces as an application, and then the environments and services in that application get assigned tokens within that namespace. You can create namespaces here in the browser or using the weft cli.",
+      "Namespaces are containers for log integrations, whether via weftd, CloudWatch, or Heroku. You can slice up your log producers however you want, but we tend to think of namespaces as an application, and then the environments and services in that application get assigned tokens within that namespace. You can create namespaces here in the browser or using the weft cli. Note that Loom Inc has only one namespace (loom). We'll see that again in a bit",
   },
   {
     step: 'dashboards',
@@ -55,8 +55,6 @@ const SHELL_HIGHLIGHT_TARGETS: Record<string, string> = {
   'shell-dashboard-yaml': 'shell-etc-toggle-button',  // /etc/dashboards/*.yaml
   'shell-tmp':            'shell-tmp-toggle-button',
 }
-
-const REFRESH_INTERVAL_MS = 3000
 
 export default function TourOverlay() {
   const { user, refreshUser } = useAuth()
@@ -82,16 +80,16 @@ export default function TourOverlay() {
   }, [step, dismissed, inLoom, location.pathname, panel, refreshUser])
 
   // Shell-tour advancement: listen for the tour-advance DOM event
-  // fired by the SSE parser when the server advances the step.
-  // Falls back to polling /me every 3s in case the event is dropped.
+  // fired by the SSE parser when the server advances the step, AND
+  // by notifyBuiltinExecuted when a browser-side builtin (ls, cat
+  // /etc/…) finishes — those never round-trip through SSE, so the
+  // event from network.ts is the only signal we get for them.
   useEffect(() => {
     if (!isShell || dismissed || !inLoom) return
     const onAdvance = () => { refreshUser().catch(() => {}) }
     window.addEventListener('tour-advance', onAdvance)
-    const id = setInterval(onAdvance, REFRESH_INTERVAL_MS)
     return () => {
       window.removeEventListener('tour-advance', onAdvance)
-      clearInterval(id)
     }
   }, [isShell, dismissed, inLoom, refreshUser])
 

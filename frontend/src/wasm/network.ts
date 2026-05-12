@@ -34,6 +34,10 @@ export function notifyBuiltinExecuted(pipeline: string) {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify({ pipeline }),
+  }).then(res => {
+    if (res.ok && res.status === 200) {
+      window.dispatchEvent(new CustomEvent('tour-advance'))
+    }
   }).catch(() => {})
 }
 
