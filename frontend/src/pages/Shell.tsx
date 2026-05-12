@@ -24,7 +24,7 @@ export default function Shell() {
   const [watches, setWatches] = useState<CronWatch[]>([])
   const [watchLimits, setWatchLimits] = useState({ count: 0, limit: 0, min_interval: '' })
   const [sidebarTab, setSidebarTab] = useState<'functions' | 'watches' | 'tmp' | 'etc' | null>(null)
-  const [, setWasmReady] = useState(false)
+  const [wasmReady, setWasmReady] = useState(false)
   const [chartSpec, setChartSpec] = useState<ChartOpenSpec | null>(null)
 
   useEffect(() => {
@@ -88,6 +88,35 @@ export default function Shell() {
       bridgeRef.current = null
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Inject the current lesson's suggested command into the input
+  // buffer whenever the onboarding step advances. The user only has
+  // to hit enter — they can still edit or clear it. We trigger on
+  // step change rather than on every user refresh so we don't fight
+  // edits the user has made mid-lesson.
+  const step = user?.onboarding_step
+  const action = user?.onboarding_action
+  useEffect(() => {
+    if (!wasmReady || !bridgeRef.current) return
+    if (!step || !step.startsWith('shell-') || !action) return
+    bridgeRef.current.setInput(action)
+    bridgeRef.current.terminal.focus()
+  }, [wasmReady, step, action])
+
+  // The tour overlay's re-paste button fires this event; we don't
+  // pass the action through the event since the latest value is
+  // already in user state.
+  useEffect(() => {
+    if (!wasmReady) return
+    const onPaste = () => {
+      const a = user?.onboarding_action
+      if (!a || !bridgeRef.current) return
+      bridgeRef.current.setInput(a)
+      bridgeRef.current.terminal.focus()
+    }
+    window.addEventListener('tour-action-paste', onPaste)
+    return () => window.removeEventListener('tour-action-paste', onPaste)
+  }, [wasmReady, user?.onboarding_action])
 
   const handleFunctionSelect = useCallback((name: string) => {
     bridgeRef.current?.setInput(name)

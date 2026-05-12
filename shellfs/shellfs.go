@@ -64,11 +64,18 @@ func WithCustomerName(name string) Option {
 	return func(c *mounts.Config) { c.CustomerName = name }
 }
 
-// WithUser sets the user ID for permission checks.
-func WithUser(userID string, isOwner bool) Option {
+// WithUser sets the user ID and org-scoped permission flags for
+// permission checks. Owners pass IsOwner=true and the three CanManage*
+// flags are ignored (owners bypass). Members pass IsOwner=false and
+// the three flags reflect their OrgPermission row, defaulting to all
+// false (read-only).
+func WithUser(userID string, perms mounts.OrgPerms) Option {
 	return func(c *mounts.Config) {
 		c.UserID = userID
-		c.IsOwner = isOwner
+		c.IsOwner = perms.IsOwner
+		c.CanManageFunctions = perms.CanManageFunctions
+		c.CanManageWatches = perms.CanManageWatches
+		c.CanManageEtc = perms.CanManageEtc
 	}
 }
 

@@ -112,7 +112,7 @@ func (s *Store) BeginTest() (*Store, func()) {
 
 // TruncateTestTables removes all data from GORM-managed tables. For tests only.
 func (s *Store) TruncateTestTables() {
-	s.db.Exec("TRUNCATE TABLE cron_results, cron_watches, shell_functions, agent_tokens, notify_configs, namespace_permissions, namespaces, alert_incidents, device_codes, magic_links, saved_queries, team_members, shard_records, subscriptions, users, customers CASCADE")
+	s.db.Exec("TRUNCATE TABLE cron_results, cron_watches, shell_functions, agent_tokens, notify_configs, namespace_permissions, org_permissions, namespaces, alert_incidents, device_codes, magic_links, saved_queries, team_members, shard_records, subscriptions, users, customers CASCADE")
 }
 
 // Close releases the database connection.

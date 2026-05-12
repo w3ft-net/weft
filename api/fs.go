@@ -7,9 +7,22 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/kevlarcon/weft/auth"
+	"github.com/kevlarcon/weft/mounts"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shellfs"
 )
+
+// sessionPerms projects a Session's role + org-permission flags into
+// the shape shellfs.WithUser expects. One helper, four call sites.
+func sessionPerms(s *auth.Session) mounts.OrgPerms {
+	return mounts.OrgPerms{
+		IsOwner:            s.IsOwner,
+		CanManageFunctions: s.CanManageFunctions,
+		CanManageWatches:   s.CanManageWatches,
+		CanManageEtc:       s.CanManageEtc,
+	}
+}
 
 // FSEntry is one row in a directory listing.
 type FSEntry struct {
@@ -30,7 +43,7 @@ func (s *Server) handleListFS(w http.ResponseWriter, r *http.Request) {
 		logApps = s.fetchLogApps(r)
 	}
 
-	opts := []shellfs.Option{shellfs.WithUser(session.UserID, session.IsOwner)}
+	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session))}
 	fs := shellfs.New(s.store, session.ActiveCustomerID, logApps, opts...)
 	entries, err := fs.ReadDir(path)
 	if err != nil {
@@ -54,7 +67,7 @@ func (s *Server) handleReadFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := []shellfs.Option{shellfs.WithUser(session.UserID, session.IsOwner)}
+	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session))}
 	fs := shellfs.New(s.store, session.ActiveCustomerID, nil, opts...)
 	data, err := fs.ReadFile(path)
 	if err != nil {
@@ -86,7 +99,7 @@ func (s *Server) handleWriteFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := []shellfs.Option{shellfs.WithUser(session.UserID, session.IsOwner)}
+	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session))}
 	fs := shellfs.New(s.store, session.ActiveCustomerID, nil, opts...)
 	if err := fs.WriteFile(req.Path, []byte(req.Content)); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -103,7 +116,7 @@ func (s *Server) handleRemoveFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := []shellfs.Option{shellfs.WithUser(session.UserID, session.IsOwner)}
+	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session))}
 	fs := shellfs.New(s.store, session.ActiveCustomerID, nil, opts...)
 	if err := fs.Remove(path); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

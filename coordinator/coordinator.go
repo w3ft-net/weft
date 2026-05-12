@@ -15,6 +15,7 @@ import (
 	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
+	"github.com/kevlarcon/weft/mounts"
 	"github.com/kevlarcon/weft/shellfs"
 	"github.com/kevlarcon/weft/store"
 )
@@ -904,7 +905,13 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 			shellfs.WithNoticeQueue(noticeQueue),
 		}
 		if userID != "" {
-			opts = append(opts, shellfs.WithUser(userID, false))
+			// The coordinator runLocal path is reached by query
+			// execution and script runs — never by interactive vim
+			// writes (those land on /api/fs/write). Defaulting to
+			// zero perms means a pipeline redirect like `... > /bin/x`
+			// is denied for non-owners; owners route through the FS
+			// endpoint with their session, where it'll succeed.
+			opts = append(opts, shellfs.WithUser(userID, mounts.OrgPerms{}))
 		}
 		interp.SetFS(shellfs.New(c.Store, custID, nil, opts...))
 

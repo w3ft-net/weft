@@ -72,11 +72,17 @@ func (m *BinMount) Stat(rel string) (fs.FileInfo, error) {
 }
 
 func (m *BinMount) WriteFile(rel string, data []byte) error {
+	if !m.cfg.IsOwner && !m.cfg.CanManageFunctions {
+		return denyWrite("/bin")
+	}
 	lang, cleanSource := ClassifyBinScript(rel, string(data))
 	return m.cfg.Store.SaveShellFunction(m.cfg.CustomerID, m.cfg.UserID, rel, cleanSource, lang)
 }
 
 func (m *BinMount) Remove(rel string) error {
+	if !m.cfg.IsOwner && !m.cfg.CanManageFunctions {
+		return denyWrite("/bin")
+	}
 	return m.cfg.Store.DeleteShellFunction(m.cfg.CustomerID, rel)
 }
 
@@ -91,6 +97,9 @@ func (m *BinMount) FileLanguage(rel string) string {
 
 // AmendVersionMessage allows the vim popup to record a commit message.
 func (m *BinMount) AmendVersionMessage(rel, message string) error {
+	if !m.cfg.IsOwner && !m.cfg.CanManageFunctions {
+		return denyWrite("/bin")
+	}
 	return m.cfg.Store.AmendShellFunctionMessage(m.cfg.CustomerID, rel, "HEAD", message)
 }
 

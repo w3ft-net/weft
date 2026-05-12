@@ -26,19 +26,23 @@ const LoomCustomerSlug = "loom"
 // /log/<this>/...
 const LoomDemoNamespace = "loom"
 
-// Lesson keys for onboarding_step. Listed in order — the only place
-// the sequence is canonical. Bumping the list is the same as
-// bumping the lesson set; AdvanceOnboardingStep CASes against the
-// expected current step so a mid-flight schema change can't silently
-// skip lessons.
-var onboardingSequence = []string{
-	"welcome",
-	"downloads", "namespaces", "dashboards",
-	"shell-ls", "shell-cat", "shell-grep-awk", "shell-alert",
-	"shell-notify", "shell-cron", "shell-weftfunc",
-	"shell-bin-bash", "shell-bin-lua", "shell-usage",
-	"shell-tmp", "shell-wit", "shell-dashboard-yaml",
-	"done",
+// onboardingSequence is the full ordered list of onboarding_step
+// values. The non-shell prefix (welcome → panel tour) is hardcoded
+// here because it's tied to UI elements that live in the frontend;
+// the shell-* middle comes from the lesson package (canonical
+// source); "done" terminates. Renaming or reordering shell lessons
+// in coordinator/onboarding/lessons.go automatically reflows the
+// state machine.
+var onboardingSequence = buildOnboardingSequence()
+
+func buildOnboardingSequence() []string {
+	prefix := []string{"welcome", "downloads", "namespaces", "dashboards"}
+	shell := onboarding.Steps()
+	out := make([]string, 0, len(prefix)+len(shell)+1)
+	out = append(out, prefix...)
+	out = append(out, shell...)
+	out = append(out, "done")
+	return out
 }
 
 // nextOnboardingStep returns the step that follows current. Returns

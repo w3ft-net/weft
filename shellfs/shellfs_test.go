@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kevlarcon/weft/mounts"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -204,7 +205,7 @@ func TestReadFile_LogNamespace_PermissionDenied(t *testing.T) {
 	fs := New(db, cust.ID, []string{"secret/app"},
 		WithTier("swatch"),
 		WithCustomerName("nsperm-test"),
-		WithUser(user.ID, false))
+		WithUser(user.ID, mounts.OrgPerms{}))
 
 	// ReadFile should return permission denied.
 	_, err = fs.ReadFile("/log/secret/app.log")
@@ -242,7 +243,7 @@ func TestReadDir_Log_FiltersNamespaces(t *testing.T) {
 	fs := New(db, cust.ID, []string{"allowed/web", "blocked/api"},
 		WithTier("swatch"),
 		WithCustomerName("nsfilter-test"),
-		WithUser(user.ID, false))
+		WithUser(user.ID, mounts.OrgPerms{}))
 
 	entries, err := fs.ReadDir("/log")
 	if err != nil {
@@ -276,7 +277,7 @@ func TestReadFile_LogNamespace_OwnerBypass(t *testing.T) {
 	fs := New(db, cust.ID, []string{"private/app"},
 		WithTier("swatch"),
 		WithCustomerName("nsowner-test"),
-		WithUser(user.ID, true)) // isOwner=true
+		WithUser(user.ID, mounts.OrgPerms{IsOwner: true}))
 
 	// Owner should have access despite no permission row.
 	_, err = fs.ReadFile("/log/private/app.log")

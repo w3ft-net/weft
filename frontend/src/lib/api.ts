@@ -266,8 +266,10 @@ export interface User {
   // server-side so the lesson list lives in one place. Empty for
   // non-shell steps (panel-tour copy is hardcoded in the frontend
   // because it references UI element names we want to keep close to
-  // the components).
+  // the components). onboarding_action is the suggested command for
+  // the current step; Shell.tsx injects it into the input buffer.
   onboarding_prompt?: string
+  onboarding_action?: string
   is_superadmin?: boolean
 }
 
@@ -420,6 +422,38 @@ export function removeMember(id: string): Promise<void> {
   return apiFetch(`/api/team/${id}`, { method: 'DELETE' })
 }
 
+// Org permissions
+
+export type AccessLevel = 'edit' | 'read-only'
+
+export interface NamespaceAcl {
+  read: boolean
+  create_tokens?: boolean
+}
+
+export interface MemberPerms {
+  bin: AccessLevel
+  cron: AccessLevel
+  etc: AccessLevel
+  namespaces?: Record<string, NamespaceAcl>
+}
+
+// PermissionsDoc keys are member emails. Owners are not represented
+// (they have implicit full access); non-owners missing from the doc
+// have default-deny (all read-only, no namespace access).
+export type PermissionsDoc = Record<string, MemberPerms>
+
+export function getPermissions(): Promise<PermissionsDoc> {
+  return apiFetch('/api/permissions')
+}
+
+export function setPermissions(doc: PermissionsDoc): Promise<void> {
+  return apiFetch('/api/permissions', {
+    method: 'PUT',
+    body: JSON.stringify(doc),
+  })
+}
+
 export function updateTeamName(name: string): Promise<{ name: string }> {
   return apiFetch('/api/team/name', {
     method: 'PUT',
@@ -504,9 +538,6 @@ export function createNamespace(name: string): Promise<NamespaceInfo> {
 export interface NamespacePermission {
   can_read: boolean
   can_create_tokens: boolean
-  can_manage_watches: boolean
-  can_manage_functions: boolean
-  can_manage_integrations: boolean
 }
 
 export function setNamespacePermission(

@@ -278,6 +278,8 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/namespaces", s.handleListNamespaces)
 	auth.Handle("POST /api/namespaces", protected(s.handleCreateNamespace))
 	auth.Handle("PUT /api/namespaces/{name}/permissions/{userId}", protected(s.handleSetNamespacePermission))
+	auth.HandleFunc("GET /api/permissions", s.handleGetPermissions)
+	auth.Handle("PUT /api/permissions", protected(s.handleSetPermissions))
 	auth.HandleFunc("GET /api/team", s.handleListTeam)
 	auth.HandleFunc("PUT /api/team/name", s.handleUpdateTeamName)
 	auth.Handle("POST /api/team/invite", protected(s.handleInviteTeamMember))
@@ -353,6 +355,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/notify", AuthMiddleware(s.store, s.jwtSecret, auth))
 	mux.Handle("/api/namespaces", AuthMiddleware(s.store, s.jwtSecret, auth))
 	mux.Handle("/api/namespaces/", AuthMiddleware(s.store, s.jwtSecret, auth))
+	mux.Handle("/api/permissions", AuthMiddleware(s.store, s.jwtSecret, auth))
 	mux.Handle("/api/team", AuthMiddleware(s.store, s.jwtSecret, auth))
 	mux.Handle("/api/team/", AuthMiddleware(s.store, s.jwtSecret, auth))
 	mux.Handle("/api/onboarding/", AuthMiddleware(s.store, s.jwtSecret, auth))
@@ -748,9 +751,12 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// shell-* step. The frontend renders it verbatim — that
 		// way the lesson list lives in one place (the Go package)
 		// and the UI doesn't need updating each time we add a
-		// lesson.
+		// lesson. onboarding_action is the suggested command; the
+		// web shell injects it into the input so the user can just
+		// hit enter.
 		"is_superadmin":     user.IsSuperadmin,
 		"onboarding_prompt": onboarding.PromptFor(user.OnboardingStep),
+		"onboarding_action": onboarding.ActionFor(user.OnboardingStep),
 	}
 	if user.EmailVerifiedAt == nil {
 		resp["verification_deadline"] = user.CreatedAt.Add(auth.UnverifiedGracePeriod).Unix()
@@ -2055,6 +2061,42 @@ func (s *Server) handleSetNamespacePermission(w http.ResponseWriter, r *http.Req
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// handleGetPermissions returns the active org's TeamPermsDoc — what
+// every non-owner member can do across /bin /cron.d /etc and per-
+// namespace. Readable by every authenticated org member (transparency
+// matches how /etc/team.yaml itself is readable).
+func (s *Server) handleGetPermissions(w http.ResponseWriter, r *http.Request) {
+	session := GetSession(r)
+	doc, err := s.store.BuildTeamPerms(session.ActiveCustomerID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(doc)
+}
+
+// handleSetPermissions is the JSON twin of writing /etc/team.yaml.
+// Owner-only; same validate-then-upsert path. Validation errors come
+// back as 400 with a readable message so the UI can surface them.
+func (s *Server) handleSetPermissions(w http.ResponseWriter, r *http.Request) {
+	session := GetSession(r)
+	if !session.IsOwner {
+		http.Error(w, "forbidden: owner only", http.StatusForbidden)
+		return
+	}
+	var doc store.TeamPermsDoc
+	if err := json.NewDecoder(r.Body).Decode(&doc); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if err := s.store.ApplyTeamPerms(session.ActiveCustomerID, doc); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Owner checks have moved to session.IsOwner — the active membership's

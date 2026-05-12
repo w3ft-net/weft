@@ -7,7 +7,9 @@ import {
   getUsage, changeSubscription,
   getTeam, inviteMember, removeMember, updateTeamName,
   getIntegrations, connectSlack, disconnectSlack, savePagerDutyKey, disconnectPagerDuty,
+  getPermissions, setPermissions,
   type Usage, type TeamResponse, type IntegrationsResponse,
+  type PermissionsDoc, type MemberPerms, type AccessLevel,
 } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import './Dashboard.css'
@@ -625,6 +627,134 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
   )
 }
 
+// ── Permissions Card ───────────────────────────────────────────────────────
+
+// PermissionsCard is the owner-administered grid that grants each
+// non-owner member edit access to /bin, /cron.d, /etc. Namespace
+// permissions are intentionally left out of the UI — owners who need
+// per-namespace tweaks use `vi /etc/team.yaml` (same data model,
+// fuller surface). The card still renders the namespace summary so
+// owners can see whether the YAML and the UI agree.
+function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse | null; isOwner: boolean; currentEmail: string }) {
+  const [doc, setDoc] = useState<PermissionsDoc | null>(null)
+  const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+
+  useEffect(() => {
+    getPermissions().then(setDoc).catch(() => setDoc({}))
+  }, [])
+
+  if (!team || !doc) return null
+  const nonOwners = (team.members ?? []).filter(m => m.Role !== 'owner' && m.Status === 'active' && m.UserID)
+  if (nonOwners.length === 0) return null
+
+  function permsFor(email: string): MemberPerms {
+    return doc?.[email] ?? { bin: 'read-only', cron: 'read-only', etc: 'read-only' }
+  }
+
+  function flip(email: string, key: 'bin' | 'cron' | 'etc') {
+    if (!doc) return
+    const cur = permsFor(email)
+    const next: MemberPerms = { ...cur, [key]: cur[key] === 'edit' ? 'read-only' : 'edit' }
+    setDoc({ ...doc, [email]: next })
+    setDirty(true)
+  }
+
+  async function handleSave() {
+    if (!doc) return
+    setSaving(true)
+    setSaveError('')
+    try {
+      await setPermissions(doc)
+      setDirty(false)
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to save permissions.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="dash-card" data-testid="account-permissions-card">
+      <div className="dash-card-header">
+        <h2 className="dash-card-title">Permissions</h2>
+        {isOwner && (
+          <button
+            className="btn-action btn-action-primary"
+            onClick={handleSave}
+            disabled={!dirty || saving}
+            data-testid="account-permissions-save-button"
+          >
+            {saving ? 'Saving...' : 'Save changes'}
+          </button>
+        )}
+      </div>
+      {!isOwner && (
+        <div className="dash-empty" style={{ marginBottom: 12 }}>
+          Read-only view. Owners can edit who has write access to <code>/bin</code>, <code>/cron.d</code>, and <code>/etc</code>.
+        </div>
+      )}
+      {saveError && <div className="form-error">{saveError}</div>}
+      <div className="dash-table-wrap">
+        <table className="dash-table" data-testid="account-permissions-table">
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>/bin</th>
+              <th>/cron.d</th>
+              <th>/etc</th>
+              <th>Namespaces</th>
+            </tr>
+          </thead>
+          <tbody>
+            {nonOwners.map(m => {
+              const p = permsFor(m.Email)
+              const nsSummary = summarizeNs(p)
+              return (
+                <tr key={m.ID} data-testid={`account-permissions-row-${m.ID}`}>
+                  <td className="token-label">{m.Email}{m.Email === currentEmail && ' (you)'}</td>
+                  <PermCheckCell isOwner={isOwner} level={p.bin} testIdBase={`account-permissions-${m.ID}-bin`} onFlip={() => flip(m.Email, 'bin')} />
+                  <PermCheckCell isOwner={isOwner} level={p.cron} testIdBase={`account-permissions-${m.ID}-cron`} onFlip={() => flip(m.Email, 'cron')} />
+                  <PermCheckCell isOwner={isOwner} level={p.etc} testIdBase={`account-permissions-${m.ID}-etc`} onFlip={() => flip(m.Email, 'etc')} />
+                  <td className="token-date" title={nsSummary.title}>{nsSummary.short}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="dash-empty" style={{ marginTop: 10, fontSize: '0.78rem' }}>
+        Per-namespace permissions are managed via <code>vi /etc/team.yaml</code>.
+      </div>
+    </div>
+  )
+}
+
+function PermCheckCell({ isOwner, level, testIdBase, onFlip }: { isOwner: boolean; level: AccessLevel; testIdBase: string; onFlip: () => void }) {
+  const editable = isOwner
+  return (
+    <td>
+      <input
+        type="checkbox"
+        checked={level === 'edit'}
+        disabled={!editable}
+        onChange={onFlip}
+        data-testid={`${testIdBase}-checkbox`}
+        aria-label={level === 'edit' ? 'editable' : 'read-only'}
+      />
+    </td>
+  )
+}
+
+function summarizeNs(p: MemberPerms): { short: string; title: string } {
+  const entries = Object.entries(p.namespaces ?? {})
+  if (entries.length === 0) return { short: '—', title: 'No namespace access' }
+  const readable = entries.filter(([, acl]) => acl.read).map(([n]) => n)
+  if (readable.length === 0) return { short: '—', title: 'No namespace access' }
+  return { short: `${readable.length} ns`, title: readable.join(', ') }
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────
 
 export default function Account() {
@@ -654,6 +784,11 @@ export default function Account() {
           <SubscriptionCard usage={usage} onRefresh={loadData} />
           <IntegrationsCard integrations={integrations} onRefresh={loadData} />
           <TeamCard team={team} onRefresh={loadData} currentEmail={user?.email ?? ''} />
+          <PermissionsCard
+            team={team}
+            isOwner={(team?.members ?? []).some(m => m.Email === user?.email && m.Role === 'owner')}
+            currentEmail={user?.email ?? ''}
+          />
         </div>
       </main>
     </div>

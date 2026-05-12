@@ -104,6 +104,13 @@ export async function execQuery(pipeline: string, timeStartNs?: number, timeEndN
           const evt = JSON.parse(raw) as { type: string; text?: string; message?: string; data?: { raw?: string } }
           if (evt.type === 'line' && evt.data?.raw != null) {
             outputChunks.push(evt.data.raw)
+          } else if (evt.type === 'stderr' && evt.text != null) {
+            // Non-fatal diagnostics (alert messages, "non-numeric
+            // value", etc.) emitted alongside stdout. Render red so
+            // they're distinguishable in the same scrollback; the
+            // stream keeps going. `error` events are terminal, this
+            // one isn't.
+            outputChunks.push(`\x1b[91m${evt.text.replace(/\n$/, '')}\x1b[0m`)
           } else if (evt.type === 'tour_advance') {
             window.dispatchEvent(new CustomEvent('tour-advance'))
           } else if (evt.type === 'error') {

@@ -41,6 +41,41 @@
   justify-content: flex-end;
 }
 
+/* Re-paste affordance shown on shell-* steps. Looks like a quoted
+   command line so it reads as "click to drop this back in the
+   prompt" rather than a generic button. */
+.tour-overlay-paste {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  margin: -4px 0 12px;
+  background: var(--bg-base);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.2s, color 0.2s;
+}
+
+.tour-overlay-paste:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.tour-overlay-paste-text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: inherit;
+  color: inherit;
+}
+
 .tour-overlay-button {
   font-family: var(--font-mono);
   font-size: 0.84rem;

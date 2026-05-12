@@ -20,6 +20,10 @@ import (
 // to. A user can be a member of many orgs; the active one is chosen
 // per request via the X-Active-Org header (or a CLI flag), defaulting
 // to the user's last-active and finally to their oldest membership.
+//
+// CanManageFunctions/Watches/Etc gate writes to /bin, /cron.d, /etc.
+// Owners get all three implicitly; members with no OrgPermission row
+// default to all-false (read-only).
 type Session struct {
 	UserID             string
 	Email              string
@@ -29,6 +33,9 @@ type Session struct {
 	EmailVerified      bool
 	IsOwner            bool
 	IsSuperadmin       bool
+	CanManageFunctions bool
+	CanManageWatches   bool
+	CanManageEtc       bool
 }
 
 type sessionContextKey struct{}
@@ -91,6 +98,22 @@ func BuildSession(st *store.Store, userID string, orgSelector string) (*Session,
 	}
 
 	tier := st.TierForCustomer(active.CustomerID)
+	isOwner := active.Role == "owner"
+
+	// Owners get implicit write access to all org-scoped dirs; members
+	// inherit from their OrgPermission row, defaulting to read-only
+	// when no row exists.
+	canFunctions, canWatches, canEtc := isOwner, isOwner, isOwner
+	if !isOwner {
+		perm, err := st.GetOrgPermission(active.CustomerID, user.ID)
+		if err == nil && perm != nil {
+			canFunctions = perm.CanManageFunctions
+			canWatches = perm.CanManageWatches
+			canEtc = perm.CanManageEtc
+		} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("load org perms: %w", err)
+		}
+	}
 
 	return &Session{
 		UserID:             user.ID,
@@ -99,8 +122,11 @@ func BuildSession(st *store.Store, userID string, orgSelector string) (*Session,
 		ActiveCustomerName: active.Customer.Name,
 		Tier:               tier,
 		EmailVerified:      user.EmailVerifiedAt != nil,
-		IsOwner:            active.Role == "owner",
+		IsOwner:            isOwner,
 		IsSuperadmin:       user.IsSuperadmin,
+		CanManageFunctions: canFunctions,
+		CanManageWatches:   canWatches,
+		CanManageEtc:       canEtc,
 	}, nil
 }
 

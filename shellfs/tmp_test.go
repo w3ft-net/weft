@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/kevlarcon/warp/pkg/bash"
+
+	"github.com/kevlarcon/weft/mounts"
 )
 
 // runShell executes a bash script against a ShellFS-backed interpreter
@@ -221,7 +223,11 @@ func TestTmp_TouchThroughShell(t *testing.T) {
 func TestTmp_CpCrossMount(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateCustomer("tmp-shell-xns")
-	fs := New(db, cust.ID, nil, WithTier("swatch"))
+	// Cross-mount copy exercises BinMount.WriteFile, which now gates
+	// on org perms — give the test an owner so the gate doesn't get
+	// in the way of what we're actually verifying.
+	fs := New(db, cust.ID, nil, WithTier("swatch"),
+		WithUser("test-owner", mounts.OrgPerms{IsOwner: true}))
 
 	runShell(t, fs, `echo notascript > /tmp/x`)
 	runShell(t, fs, `cp /tmp/x /bin/y`)
@@ -349,7 +355,7 @@ func TestTmp_WriteRecordsCreatorViaShell(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fs := New(db, cust.ID, nil, WithTier("swatch"), WithUser(user.ID, false))
+	fs := New(db, cust.ID, nil, WithTier("swatch"), WithUser(user.ID, mounts.OrgPerms{}))
 
 	runShell(t, fs, `echo hi > /tmp/note`)
 
@@ -445,8 +451,8 @@ func TestTmp_LsLongShowsOwner(t *testing.T) {
 	bob, _ := db.CreateUser("bob-lsl@example.test")
 	// Bob has no Name set — should render as the email local-part.
 
-	fsAlice := New(db, cust.ID, nil, WithTier("swatch"), WithUser(alice.ID, false))
-	fsBob := New(db, cust.ID, nil, WithTier("swatch"), WithUser(bob.ID, false))
+	fsAlice := New(db, cust.ID, nil, WithTier("swatch"), WithUser(alice.ID, mounts.OrgPerms{}))
+	fsBob := New(db, cust.ID, nil, WithTier("swatch"), WithUser(bob.ID, mounts.OrgPerms{}))
 	// System write — no userID — should render as "-".
 	fsSystem := New(db, cust.ID, nil, WithTier("swatch"))
 

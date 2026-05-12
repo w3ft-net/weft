@@ -138,12 +138,14 @@ export default function TourOverlay() {
       },
     }
   } else {
-    // Shell phase. Copy comes from the server; no Next button —
-    // the user advances by running the pipeline that satisfies the
-    // current lesson's predicate.
+    // Shell phase. Copy comes from the server; the user advances by
+    // running the lesson's Action verbatim (we pre-inject it into the
+    // input).
     copy = user.onboarding_prompt || `Lesson ${step}…`
     progress = 'Tour · shell phase'
   }
+
+  const shellAction = isShell ? user.onboarding_action : undefined
 
   return (
     <div className="tour-overlay" data-testid="tour-overlay">
@@ -153,6 +155,30 @@ export default function TourOverlay() {
       <div className="tour-overlay-copy" data-testid="tour-overlay-copy">
         {copy}
       </div>
+      {shellAction && (
+        <button
+          type="button"
+          className="tour-overlay-paste"
+          title={`Re-paste: ${shellAction}`}
+          aria-label="Re-paste suggested command"
+          data-testid="tour-overlay-paste-button"
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent('tour-action-paste'))
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M5 3.5h6M5 3.5a1 1 0 0 0-1 1V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.5a1 1 0 0 0-1-1M6.5 2.5h3a1 1 0 0 1 1 1v.5h-5v-.5a1 1 0 0 1 1-1Z"
+            />
+          </svg>
+          <code className="tour-overlay-paste-text">{shellAction}</code>
+        </button>
+      )}
       {primaryAction && (
         <div className="tour-overlay-actions">
           <button

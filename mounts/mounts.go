@@ -4,9 +4,19 @@
 package mounts
 
 import (
+	"fmt"
+	"io/fs"
+
 	"github.com/kevlarcon/warp/pkg/shellcore"
 	"github.com/kevlarcon/weft/store"
 )
+
+// denyWrite is the error mounts return when a non-owner without the
+// corresponding OrgPermission flag attempts to mutate a directory.
+// Wrapping fs.ErrPermission lets callers test with errors.Is.
+func denyWrite(dir string) error {
+	return fmt.Errorf("%s: %w (owner only)", dir, fs.ErrPermission)
+}
 
 // NoticeSink is the narrow interface mounts use to signal one-time notices.
 type NoticeSink interface {
@@ -15,14 +25,27 @@ type NoticeSink interface {
 
 // Config holds the shared state that mount implementations need.
 type Config struct {
-	Store        *store.Store
-	CustomerID   uint
-	CustomerName string
-	Tier         store.Tier
-	UserID       string
-	IsOwner      bool
-	LogApps      []string
-	NoticeQueue  NoticeSink
+	Store              *store.Store
+	CustomerID         uint
+	CustomerName       string
+	Tier               store.Tier
+	UserID             string
+	IsOwner            bool
+	CanManageFunctions bool // gates writes to /bin
+	CanManageWatches   bool // gates writes to /cron.d
+	CanManageEtc       bool // gates writes to /etc (except /etc/team.yaml — owner-only)
+	LogApps            []string
+	NoticeQueue        NoticeSink
+}
+
+// OrgPerms is the org-scoped permission bundle a session carries. The
+// values mirror auth.Session's CanManage* flags but the type lives
+// here so embedders can build a Config without an auth dependency.
+type OrgPerms struct {
+	IsOwner            bool
+	CanManageFunctions bool
+	CanManageWatches   bool
+	CanManageEtc       bool
 }
 
 // New constructs a MountFS with all weft virtual directories registered.
