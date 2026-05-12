@@ -12,6 +12,7 @@ import tmp from './tmp';
 import builtins from './builtins';
 import metavars from './metavars';
 import scripts from './scripts';
+import sharing from './sharing';
 import wit from './wit';
 import alerting from './alerting';
 
@@ -36,6 +37,7 @@ export const manualSections: readonly ManualSection[] = [
   builtins,
   metavars,
   scripts,
+  sharing,
   wit,
   alerting,
 ];

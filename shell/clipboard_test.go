@@ -6,35 +6,11 @@ import (
 	"testing"
 )
 
-func TestParseBinRef(t *testing.T) {
-	cases := []struct {
-		in        string
-		path, ver string
-		ok        bool
-	}{
-		{"/bin/error-rate", "/bin/error-rate", "", true},
-		{"/bin/error-rate@7", "/bin/error-rate", "7", true},
-		{"/bin/nested/path@v2", "/bin/nested/path", "v2", true},
-		{"/cron.d/foo", "", "", false},
-		{"error-rate", "", "", false},
-		// Leading "@" with no name part isn't a version pin.
-		{"/bin/@7", "/bin/@7", "", true},
-	}
-	for _, c := range cases {
-		path, ver, ok := parseBinRef(c.in)
-		if ok != c.ok || path != c.path || ver != c.ver {
-			t.Errorf("parseBinRef(%q) = (%q, %q, %v), want (%q, %q, %v)",
-				c.in, path, ver, ok, c.path, c.ver, c.ok)
-		}
-	}
-}
-
 func TestBuildClipboardURL(t *testing.T) {
 	cases := []struct {
 		name     string
 		base     string
 		path     string
-		version  string
 		rng      string
 		args     []string
 		wantHost string
@@ -51,14 +27,13 @@ func TestBuildClipboardURL(t *testing.T) {
 			wantMiss: []string{"v=", "args="},
 		},
 		{
-			name:     "with version and args",
+			name:     "with args",
 			base:     "https://w3ft.net/",
 			path:     "/bin/error-rate",
-			version:  "7",
 			rng:      "24h..",
 			args:     []string{"--app=loom", "--since=1h"},
 			wantHost: "https://w3ft.net/shell?",
-			wantHave: []string{"bin=%2Fbin%2Ferror-rate", "v=7", "range=24h..", "args=--app%3Dloom+--since%3D1h"},
+			wantHave: []string{"bin=%2Fbin%2Ferror-rate", "range=24h..", "args=--app%3Dloom+--since%3D1h"},
 		},
 		{
 			name:     "trailing slash on base is normalized",
@@ -70,7 +45,7 @@ func TestBuildClipboardURL(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := buildClipboardURL(c.base, c.path, c.version, c.rng, c.args)
+			got := buildClipboardURL(c.base, c.path, c.rng, c.args)
 			if !strings.HasPrefix(got, c.wantHost) {
 				t.Fatalf("missing host prefix\n  got:  %s\n  want prefix: %s", got, c.wantHost)
 			}

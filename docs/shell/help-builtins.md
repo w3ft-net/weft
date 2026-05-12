@@ -64,6 +64,10 @@ web:
 Refs: `HEAD`, `HEAD^`, `HEAD^N`, or a hash prefix (≥4 hex chars).
 Tracked under `/bin` and `/cron.d` only; last 5 versions retained.
 
+## Sharing
+
+- `clipboard /bin/<name>` — copy a deep link to the script (current range + args) to the system clipboard; teammates open it in their shell pre-filled (`man clipboard`)
+
 ## Alerting
 
 - `<pipeline> | alert <condition>` — see `help alerts` or `man alert`

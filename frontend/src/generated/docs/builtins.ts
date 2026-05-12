@@ -58,6 +58,10 @@ const builtins = {
 </ul>
 <p>Refs: <code>HEAD</code>, <code>HEAD^</code>, <code>HEAD^N</code>, or a hash prefix (≥4 hex chars).
 Tracked under <code>/bin</code> and <code>/cron.d</code> only; last 5 versions retained.</p>
+<h2>Sharing</h2>
+<ul>
+<li><code>clipboard /bin/&lt;name&gt;</code> — copy a deep link to the script (current range + args) to the system clipboard; teammates open it in their shell pre-filled (<code>man clipboard</code>)</li>
+</ul>
 <h2>Alerting</h2>
 <ul>
 <li><code>&lt;pipeline&gt; | alert &lt;condition&gt;</code> — see <code>help alerts</code> or <code>man alert</code></li>

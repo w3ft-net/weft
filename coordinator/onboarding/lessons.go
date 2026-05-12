@@ -91,6 +91,11 @@ var lessons = []*Lesson{
 		Prompt: "Without a shebang, weft assumes your extensionless scripts are bash. You don't need the shebang for lua if you add the extension.\n\nNow that we're in vim, make a few edits to the file and try to save. You'll see that you haven't been granted full permissions in the Loom org so your write access is restricted. Then you can `:q!` to quit.",
 	},
 	{
+		Step:   "shell-clipboard",
+		Action: "clipboard /bin/scan",
+		Prompt: "When a /bin/ script is worth showing to a teammate, `clipboard` builds a deep link that captures the script path, your current range, and any args, and pushes it onto your system clipboard via OSC-52. Anyone signed in to the same org can paste the URL into a browser to land in the shell with the invocation pre-filled. More in `man clipboard`.",
+	},
+	{
 		Step:   "shell-team-yaml",
 		Action: "cat /etc/team.yaml",
 		Prompt: "The reason that save failed: /etc/team.yaml is the org's permissions file. Owners list each non-owner member here with `edit` or `read-only` against /bin, /cron.d, and /etc, plus a per-namespace block. Owners don't appear — they have implicit full access. The file is editable like any other (`vi /etc/team.yaml`), but writes are owner-only no matter what permissions the editor has elsewhere. The Members tab in the dashboard reads and writes the same data through a checkbox grid.",

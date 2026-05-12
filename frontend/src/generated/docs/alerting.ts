@@ -42,14 +42,18 @@ tail /log/shard.log | jq 'select(.type==&quot;disk&quot;)' \\
 — a YAML map of alias name → per-service targets. Edit with:</p>
 <pre><code>vi /etc/notify.yaml
 </code></pre>
-<p>Each alias bundles one or more Slack channels and/or PagerDuty
-integrations. <code>slack:</code> and <code>pagerduty:</code> are always lists; each entry
-is either a bare string or a mapping.</p>
+<p>Each alias bundles one or more targets across four service types:
+<code>slack:</code>, <code>pagerduty:</code>, <code>webhook:</code>, and <code>email:</code>. All are lists;
+each entry is either a bare string or a mapping.</p>
 <pre><code>ops:
   slack:
     - &quot;#alerts&quot;
   pagerduty:
     - ops-daytime
+  webhook:
+    - &quot;https://hooks.example.com/weft/ops&quot;
+  email:
+    - &quot;oncall@example.com&quot;
 
 critical:
   slack:
@@ -58,14 +62,26 @@ critical:
   pagerduty:
     - name: primary
       severity: critical
+  webhook:
+    - url: &quot;https://intake.example.com/alerts&quot;
+      headers:
+        X-Signing-Secret: &quot;s3cret&quot;
+  email:
+    - &quot;oncall@example.com&quot;
+    - &quot;paul@example.com&quot;
 </code></pre>
-<p>Slack entries are channel names (strings), or <code>{channel: &quot;#name&quot;}</code>
-mappings. PagerDuty entries are integration names (strings, severity
-defaults to <code>error</code>), or <code>{name: &quot;...&quot;, severity: &quot;...&quot;}</code> where severity
-is one of <code>critical</code>, <code>error</code>, <code>warning</code>, <code>info</code>.</p>
+<p><strong>Slack</strong> — channel names (<code>&quot;#ops&quot;</code>) or <code>{channel: &quot;#name&quot;}</code>.
+<strong>PagerDuty</strong> — integration names (severity defaults to <code>error</code>),
+or <code>{name: &quot;...&quot;, severity: &quot;...&quot;}</code> (<code>critical</code>/<code>error</code>/<code>warning</code>/<code>info</code>).
+<strong>Webhook</strong> — bare URL strings, or <code>{url: &quot;...&quot;, headers: {...}}</code>.
+POSTs a JSON payload with <code>v</code>, <code>watch</code>, <code>alias</code>, <code>ts_unix</code>, <code>body</code>.
+<strong>Email</strong> — bare addresses, or <code>{address: &quot;...&quot;}</code>. Sends a plain-text
+email with the watch name as subject (requires SMTP configuration).</p>
 <p>Slack and PagerDuty credentials are configured under Account →
 Integrations; notify.yaml only names destinations. The PagerDuty
-integration name must match one you've registered there.</p>
+integration name must match one you've registered there. Webhook
+and email destinations need no account-level credentials — URLs
+and addresses are per-alias.</p>
 <h2>Testing an alias</h2>
 <pre><code>echo &quot;test fire&quot; | alert --notify=ops
 </code></pre>
