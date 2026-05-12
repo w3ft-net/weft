@@ -78,6 +78,21 @@ export default function Shell() {
       if (q) {
         bridge.setInput(decodeURIComponent(q))
       }
+
+      // Pre-fill from a `clipboard`-shared deep link:
+      //   ?bin=/bin/<name>&v=<n>&range=<spec>&args=<scriptArgs>
+      // We don't auto-run — user reviews and hits Enter.
+      const bin = searchParams.get('bin')
+      if (bin) {
+        const rng = searchParams.get('range') || ''
+        const scriptArgs = searchParams.get('args') || ''
+        // v= is informational in v1 (the prefilled command resolves to
+        // HEAD); preserved in the URL so future versions can pin
+        // execution without breaking older links.
+        const cmd = scriptArgs ? `${bin} ${scriptArgs}` : bin
+        const line = rng ? `range ${rng}; ${cmd}` : cmd
+        bridge.setInput(line)
+      }
     }
 
     init()

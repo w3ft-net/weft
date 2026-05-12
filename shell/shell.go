@@ -73,6 +73,11 @@ type Shell struct {
 	Dashboard func(name string)
 	User     string // username shown in prompt (e.g. "alice")
 	Customer string // customer/team shown after the @ in the prompt (e.g. "acme"); empty falls back to "weft"
+	// ShareURLBase is the absolute base URL the `clipboard` builtin
+	// embeds in deep-link URLs (e.g. https://w3ft.net). Empty falls
+	// back to the production host so a CLI invocation without explicit
+	// config still produces a shareable link.
+	ShareURLBase string
 }
 
 
@@ -135,6 +140,15 @@ func (s *Shell) ConfigureCore(core *shellcore.ShellCore) {
 	// `range <spec>` (set new) — same UX warp's inline version
 	// provided.
 	core.RegisterBuiltin("range", rangeBuiltin)
+	// `clipboard /bin/<name>` builds a deep-link URL for the current
+	// range and pushes it onto the user's system clipboard via OSC-52.
+	// The reader (Shell.tsx hydration) pre-fills the prompt rather
+	// than auto-running, so the link is safe to hand to a teammate.
+	shareBase := s.ShareURLBase
+	if shareBase == "" {
+		shareBase = "https://w3ft.net"
+	}
+	core.RegisterBuiltin("clipboard", clipboardBuiltin(shareBase))
 	// Post-save commit-message popup for /bin/<name> and
 	// /cron.d/<name>. Pre-A.4.5 this lived in shellcore as the
 	// default OnQuit branch; now installed by weft as embedder

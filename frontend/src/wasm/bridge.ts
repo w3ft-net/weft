@@ -97,6 +97,29 @@ export async function initShellWasm(
     bridge.terminal.write(data)
   }
 
+  // OSC-52 handler — the `clipboard` builtin emits ESC ] 52 ; c ; <b64> BEL.
+  // We decode and write to the system clipboard; returning true keeps the
+  // sequence out of scrollback. The plain confirmation line the builtin
+  // also prints stays visible as a fallback in case the clipboard API
+  // is unavailable.
+  bridge.terminal.parser.registerOscHandler(52, (data) => {
+    // Payload looks like "c;<base64>" or "p;<base64>" — we accept either,
+    // since the underlying selection is the user's clipboard either way.
+    const semi = data.indexOf(';')
+    if (semi < 0) return false
+    const b64 = data.slice(semi + 1)
+    let text: string
+    try {
+      text = atob(b64)
+    } catch {
+      return false
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {})
+    }
+    return true
+  })
+
   return bridge
 }
 
