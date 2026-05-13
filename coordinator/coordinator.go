@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kevlarcon/warp/pkg/bash"
+	luapkg "github.com/kevlarcon/warp/pkg/lua"
 	"github.com/kevlarcon/weft/compute"
 	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
@@ -918,7 +919,7 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 		wf := &WeftFuncs{Store: c.Store, CustomerID: custID}
 		RegisterWeftCommands(interp, wf)
 		RegisterWeftPredicates(interp, wf)
-		interp.LuaWeftFuncs = wf
+		interp.LuaExtensions = []luapkg.Extension{wf.LuaExtension()}
 
 		// `wit` version-history surface — log/show/diff/checkout/amend
 		// for /bin and /cron.d entities. Same scope as the weft.*

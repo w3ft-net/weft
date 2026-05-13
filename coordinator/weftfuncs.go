@@ -10,10 +10,8 @@ import (
 
 	luapkg "github.com/kevlarcon/warp/pkg/lua"
 	"github.com/kevlarcon/weft/store"
+	lua "github.com/yuin/gopher-lua"
 )
-
-// Compile-time check that WeftFuncs implements luapkg.WeftFuncs.
-var _ luapkg.WeftFuncs = (*WeftFuncs)(nil)
 
 // maxAggDuration is the cap for true aggregates (avg, max, min, sum,
 // stddev, count, percentile, rate) — funcs that touch every result
@@ -31,6 +29,14 @@ const maxEndpointDuration = 14 * 24 * time.Hour
 type WeftFuncs struct {
 	Store      *store.Store
 	CustomerID uint
+}
+
+// SeasonalStatsResult is the {avg, stddev, samples} triple over the
+// subset of a watch's history restricted to "same time of period."
+type SeasonalStatsResult struct {
+	Avg     float64
+	Stddev  float64
+	Samples int
 }
 
 func (w *WeftFuncs) Latest(watchName string) (string, error) {
@@ -254,21 +260,21 @@ func (w *WeftFuncs) Rate(watchName string, dur time.Duration) (float64, error) {
 // alert seasonal condition. Cap is maxEndpointDuration since the
 // window can legitimately span multiple weeks. The result type lives
 // in warp's lua package to keep the WeftFuncs interface standalone.
-func (w *WeftFuncs) SeasonalStats(watchName string, period, window time.Duration) (luapkg.SeasonalStatsResult, error) {
+func (w *WeftFuncs) SeasonalStats(watchName string, period, window time.Duration) (SeasonalStatsResult, error) {
 	if window > maxEndpointDuration {
-		return luapkg.SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: window %s exceeds maximum of %s", window, maxEndpointDuration)
+		return SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: window %s exceeds maximum of %s", window, maxEndpointDuration)
 	}
 	if window <= 0 || period <= 0 {
-		return luapkg.SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: window and period must be positive")
+		return SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: window and period must be positive")
 	}
 	if period >= window {
-		return luapkg.SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: window must be larger than period")
+		return SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: window must be larger than period")
 	}
 	avg, stddev, samples, err := w.Store.SeasonalCronStats(w.CustomerID, watchName, period, window)
 	if err != nil {
-		return luapkg.SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: watch %q: %w", watchName, err)
+		return SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: watch %q: %w", watchName, err)
 	}
-	return luapkg.SeasonalStatsResult{Avg: avg, Stddev: stddev, Samples: samples}, nil
+	return SeasonalStatsResult{Avg: avg, Stddev: stddev, Samples: samples}, nil
 }
 
 // numericResults fetches results in a time range and parses numeric stdout values.
@@ -329,4 +335,415 @@ func ParseEndpointDuration(s string) (time.Duration, error) {
 		return 0, fmt.Errorf("duration must be positive")
 	}
 	return d, nil
+}
+
+// weftQueryFuncs is the cron-result query surface the weft.* Lua
+// table is built on top of. *WeftFuncs is the production
+// implementation; tests substitute a stub via this interface.
+type weftQueryFuncs interface {
+	Latest(name string) (string, error)
+	Previous(name string) (string, error)
+	Avg(name string, dur time.Duration) (float64, error)
+	Max(name string, dur time.Duration) (float64, error)
+	Min(name string, dur time.Duration) (float64, error)
+	Sum(name string, dur time.Duration) (float64, error)
+	Stddev(name string, dur time.Duration) (float64, error)
+	First(name string, dur time.Duration) (float64, error)
+	Count(name string, dur time.Duration) (float64, error)
+	Percentile(name string, dur time.Duration, p float64) (float64, error)
+	Delta(name string, dur time.Duration) (float64, error)
+	Slope(name string, dur time.Duration) (float64, error)
+	Rate(name string, dur time.Duration) (float64, error)
+	SeasonalStats(name string, period, window time.Duration) (SeasonalStatsResult, error)
+}
+
+// LuaExtension returns a luapkg.Extension that installs the `weft.*`
+// table on a Lua sandbox: value primitives (latest/previous/avg/...)
+// plus boolean predicates (is_above/is_below/is_rising/...). Wire it
+// onto an interp via `interp.LuaExtensions = []luapkg.Extension{wf.LuaExtension()}`.
+func (w *WeftFuncs) LuaExtension() luapkg.Extension {
+	return buildWeftLuaExtension(w)
+}
+
+func buildWeftLuaExtension(w weftQueryFuncs) luapkg.Extension {
+	return func(L *lua.LState) {
+		mod := L.NewTable()
+
+		mod.RawSetString("latest", L.NewFunction(func(L *lua.LState) int {
+			name := L.CheckString(1)
+			val, err := w.Latest(name)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LString(val))
+			return 1
+		}))
+
+		for _, fn := range []struct {
+			name   string
+			call   func(string, time.Duration) (float64, error)
+			maxDur time.Duration
+		}{
+			{"avg", w.Avg, maxAggDuration},
+			{"max", w.Max, maxAggDuration},
+			{"min", w.Min, maxAggDuration},
+			{"sum", w.Sum, maxAggDuration},
+			{"stddev", w.Stddev, maxAggDuration},
+			{"count", w.Count, maxAggDuration},
+			{"rate", w.Rate, maxAggDuration},
+			{"first", w.First, maxEndpointDuration},
+			{"delta", w.Delta, maxEndpointDuration},
+			{"slope", w.Slope, maxEndpointDuration},
+		} {
+			fn := fn
+			mod.RawSetString(fn.name, L.NewFunction(func(L *lua.LState) int {
+				name := L.CheckString(1)
+				durStr := L.CheckString(2)
+				dur, err := time.ParseDuration(durStr)
+				if err != nil {
+					L.Push(lua.LNil)
+					L.Push(lua.LString("invalid duration: " + durStr))
+					return 2
+				}
+				if dur > fn.maxDur || dur <= 0 {
+					L.Push(lua.LNil)
+					L.Push(lua.LString(fmt.Sprintf("duration must be between 0 and %s", fn.maxDur)))
+					return 2
+				}
+				val, err := fn.call(name, dur)
+				if err != nil {
+					L.Push(lua.LNil)
+					L.Push(lua.LString(err.Error()))
+					return 2
+				}
+				L.Push(lua.LNumber(val))
+				return 1
+			}))
+		}
+
+		mod.RawSetString("percentile", L.NewFunction(func(L *lua.LState) int {
+			name := L.CheckString(1)
+			durStr := L.CheckString(2)
+			p := float64(L.CheckNumber(3))
+			dur, err := time.ParseDuration(durStr)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString("invalid duration: " + durStr))
+				return 2
+			}
+			if dur > maxAggDuration || dur <= 0 {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(fmt.Sprintf("duration must be between 0 and %s", maxAggDuration)))
+				return 2
+			}
+			val, err := w.Percentile(name, dur, p)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LNumber(val))
+			return 1
+		}))
+
+		mod.RawSetString("previous", L.NewFunction(func(L *lua.LState) int {
+			name := L.CheckString(1)
+			val, err := w.Previous(name)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LString(val))
+			return 1
+		}))
+
+		registerWeftLuaPredicates(L, mod, w)
+
+		L.SetGlobal("weft", mod)
+	}
+}
+
+// registerWeftLuaPredicates registers boolean wrappers over the value
+// primitives — weft.is_above / is_below / is_absent / has_changed /
+// is_rising / is_falling / is_outlier / is_seasonal. Each returns a
+// Lua bool so composition uses native `and`/`or`/`not`:
+//
+//	if weft.is_above("error-rate", 50) and weft.is_absent("canary-ping") then
+//	  print(1)
+//	else
+//	  print(0)
+//	end
+//
+// On absent data or computation errors, predicates return false (not
+// nil+err) — "we can't say yes, so it doesn't fire" matches how
+// alerts skip on missing history.
+func registerWeftLuaPredicates(L *lua.LState, mod *lua.LTable, w weftQueryFuncs) {
+	latestFloat := func(name string) (float64, bool) {
+		s, err := w.Latest(name)
+		if err != nil || s == "" {
+			return 0, false
+		}
+		f, perr := parseLuaFloat(s)
+		if perr != nil {
+			return 0, false
+		}
+		return f, true
+	}
+
+	mod.RawSetString("is_above", L.NewFunction(func(L *lua.LState) int {
+		name := L.CheckString(1)
+		threshold := float64(L.CheckNumber(2))
+		if L.GetTop() >= 3 {
+			dur, ok := optLuaDuration(L, 3)
+			if !ok {
+				L.Push(lua.LFalse)
+				return 1
+			}
+			useAvg := L.OptBool(4, false)
+			var v float64
+			var err error
+			if useAvg {
+				v, err = w.Avg(name, dur)
+			} else {
+				v, err = w.Min(name, dur)
+			}
+			if err != nil {
+				L.Push(lua.LFalse)
+				return 1
+			}
+			L.Push(lua.LBool(v > threshold))
+			return 1
+		}
+		v, ok := latestFloat(name)
+		if !ok {
+			L.Push(lua.LFalse)
+			return 1
+		}
+		L.Push(lua.LBool(v > threshold))
+		return 1
+	}))
+
+	mod.RawSetString("is_below", L.NewFunction(func(L *lua.LState) int {
+		name := L.CheckString(1)
+		threshold := float64(L.CheckNumber(2))
+		if L.GetTop() >= 3 {
+			dur, ok := optLuaDuration(L, 3)
+			if !ok {
+				L.Push(lua.LFalse)
+				return 1
+			}
+			useAvg := L.OptBool(4, false)
+			var v float64
+			var err error
+			if useAvg {
+				v, err = w.Avg(name, dur)
+			} else {
+				v, err = w.Max(name, dur)
+			}
+			if err != nil {
+				L.Push(lua.LFalse)
+				return 1
+			}
+			L.Push(lua.LBool(v < threshold))
+			return 1
+		}
+		v, ok := latestFloat(name)
+		if !ok {
+			L.Push(lua.LFalse)
+			return 1
+		}
+		L.Push(lua.LBool(v < threshold))
+		return 1
+	}))
+
+	mod.RawSetString("is_absent", L.NewFunction(func(L *lua.LState) int {
+		name := L.CheckString(1)
+		if L.GetTop() >= 2 {
+			dur, ok := optLuaDuration(L, 2)
+			if !ok {
+				L.Push(lua.LFalse)
+				return 1
+			}
+			n, err := w.Count(name, dur)
+			if err != nil {
+				L.Push(lua.LFalse)
+				return 1
+			}
+			L.Push(lua.LBool(n == 0))
+			return 1
+		}
+		s, err := w.Latest(name)
+		if err != nil {
+			L.Push(lua.LTrue)
+			return 1
+		}
+		L.Push(lua.LBool(s == ""))
+		return 1
+	}))
+
+	mod.RawSetString("has_changed", L.NewFunction(func(L *lua.LState) int {
+		name := L.CheckString(1)
+		latest, err := w.Latest(name)
+		if err != nil {
+			L.Push(lua.LFalse)
+			return 1
+		}
+		prev, err := w.Previous(name)
+		if err != nil || prev == "" {
+			L.Push(lua.LFalse)
+			return 1
+		}
+		L.Push(lua.LBool(latest != prev))
+		return 1
+	}))
+
+	mod.RawSetString("is_rising", L.NewFunction(func(L *lua.LState) int {
+		L.Push(lua.LBool(evalTrendLua(L, w, true)))
+		return 1
+	}))
+	mod.RawSetString("is_falling", L.NewFunction(func(L *lua.LState) int {
+		L.Push(lua.LBool(evalTrendLua(L, w, false)))
+		return 1
+	}))
+
+	mod.RawSetString("is_outlier", L.NewFunction(func(L *lua.LState) int {
+		name := L.CheckString(1)
+		nSigma := float64(L.CheckNumber(2))
+		dur, ok := optLuaDuration(L, 3)
+		if !ok {
+			L.Push(lua.LFalse)
+			return 1
+		}
+		direction := L.OptString(4, "")
+		current, ok := latestFloat(name)
+		if !ok {
+			L.Push(lua.LFalse)
+			return 1
+		}
+		avg, err := w.Avg(name, dur)
+		if err != nil {
+			L.Push(lua.LFalse)
+			return 1
+		}
+		stddev, err := w.Stddev(name, dur)
+		if err != nil {
+			L.Push(lua.LFalse)
+			return 1
+		}
+		floor := 0.01 * absFloat(avg)
+		if floor < 1e-9 {
+			floor = 1e-9
+		}
+		if stddev < floor {
+			L.Push(lua.LFalse)
+			return 1
+		}
+		delta := current - avg
+		switch direction {
+		case "above":
+			L.Push(lua.LBool(delta > nSigma*stddev))
+		case "below":
+			L.Push(lua.LBool(-delta > nSigma*stddev))
+		default:
+			L.Push(lua.LBool(absFloat(delta) > nSigma*stddev))
+		}
+		return 1
+	}))
+
+	mod.RawSetString("is_seasonal", L.NewFunction(func(L *lua.LState) int {
+		name := L.CheckString(1)
+		nSigma := float64(L.CheckNumber(2))
+		period, ok := optLuaDuration(L, 3)
+		if !ok {
+			L.Push(lua.LFalse)
+			return 1
+		}
+		window, ok := optLuaDuration(L, 4)
+		if !ok {
+			L.Push(lua.LFalse)
+			return 1
+		}
+		current, ok := latestFloat(name)
+		if !ok {
+			L.Push(lua.LFalse)
+			return 1
+		}
+		stats, err := w.SeasonalStats(name, period, window)
+		if err != nil || stats.Samples < 4 {
+			L.Push(lua.LFalse)
+			return 1
+		}
+		floor := 0.01 * absFloat(stats.Avg)
+		if floor < 1e-9 {
+			floor = 1e-9
+		}
+		if stats.Stddev < floor {
+			L.Push(lua.LFalse)
+			return 1
+		}
+		L.Push(lua.LBool(absFloat(current-stats.Avg) > nSigma*stats.Stddev))
+		return 1
+	}))
+}
+
+func evalTrendLua(L *lua.LState, w weftQueryFuncs, rising bool) bool {
+	name := L.CheckString(1)
+	pct := float64(L.OptNumber(2, 0)) / 100.0
+	latestStr, err := w.Latest(name)
+	if err != nil || latestStr == "" {
+		return false
+	}
+	current, err := parseLuaFloat(latestStr)
+	if err != nil {
+		return false
+	}
+	var baseline float64
+	if L.GetTop() >= 3 {
+		dur, ok := optLuaDuration(L, 3)
+		if !ok {
+			return false
+		}
+		v, err := w.Avg(name, dur)
+		if err != nil {
+			return false
+		}
+		baseline = v
+	} else {
+		prev, err := w.Previous(name)
+		if err != nil || prev == "" {
+			return false
+		}
+		v, err := parseLuaFloat(prev)
+		if err != nil {
+			return false
+		}
+		baseline = v
+	}
+	if baseline == 0 {
+		return false
+	}
+	pctChange := (current - baseline) / baseline
+	if rising {
+		return pctChange >= pct
+	}
+	return -pctChange >= pct
+}
+
+func optLuaDuration(L *lua.LState, idx int) (time.Duration, bool) {
+	s := L.CheckString(idx)
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return 0, false
+	}
+	if d > maxEndpointDuration {
+		return 0, false
+	}
+	return d, true
+}
+
+func parseLuaFloat(s string) (float64, error) {
+	return strconv.ParseFloat(strings.TrimSpace(s), 64)
 }
