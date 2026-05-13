@@ -107,7 +107,7 @@ var lessons = []*Lesson{
 	},
 	{
 		Step:   "shell-tmp",
-		Action: "echo hello > /tmp/note && cat /tmp/note",
+		Action: "echo hello > /tmp/note",
 		Prompt: "If you are working through an issue where it's easier to stage output from some one-liners and run `comm` or `join` on those files, dump them to /tmp. Because scratch files tend to abide by gas laws and fill the size of the container, we automatically delete files that haven't been written to for 48 hrs.",
 	},
 	{
