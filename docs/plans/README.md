@@ -107,6 +107,7 @@ than product strategy.
 | [shard-archive-test](shard-archive-test.md) | Integration test harness for cold-shard rehydration |
 | [streaming-backpressure](streaming-backpressure.md) | Bounded per-shard queues + configurable streamCh; defer until production hits memory pressure |
 | [streaming-parallel-warp](streaming-parallel-warp.md) | Combine streaming + chunked intra-stage parallelism in warp |
+| [coverage-improvement](coverage-improvement.md) | Per-PR coverage delta, per-package floors, eliminating the `-p 1` test-isolation workaround |
 
 ## Conventions for new plans
 
