@@ -24,10 +24,15 @@ type RowSink interface {
 
 // Shard is the interface the coordinator uses to interact with a shard node.
 // Shards are dumb storage — the coordinator manages time windows and routing.
+//
+// args carries positional placeholder values for `?` markers in sql.
+// Empty when the planner emitted no placeholders (legacy paths still
+// using string-interpolated SQL); the DuckDB driver tolerates 0-arg
+// calls on prepared statements with no placeholders.
 type Shard interface {
 	ID() string
-	Query(sql string) ([]*pb.ResultRow, error)
-	QueryToSink(sql string, sink RowSink)
+	Query(sql string, args ...any) ([]*pb.ResultRow, error)
+	QueryToSink(sql string, args []any, sink RowSink)
 	Ingest(rows []*pb.LogRow) error
 	Archive(ctx context.Context, s3Prefix string) (string, error)
 	Close() error
@@ -119,12 +124,12 @@ func (s *DuckDBShard) Close() error {
 // QueryToSink executes SQL and streams matching rows to the sink, then
 // sends a sentinel. If the query fails, the sentinel is still sent so the
 // compute job doesn't hang.
-func (s *DuckDBShard) QueryToSink(query string, sink RowSink) {
+func (s *DuckDBShard) QueryToSink(query string, args []any, sink RowSink) {
 	defer sink.SendSentinel(s.id)
 
-	rows, err := s.Query(query)
+	rows, err := s.Query(query, args...)
 	if err != nil {
-		log.Printf("shard %s: QueryToSink error: %v (sql=%s)", s.id, err, query)
+		log.Printf("shard %s: QueryToSink error: %v (sql=%s args=%v)", s.id, err, query, args)
 		return // sentinel still sent via defer
 	}
 	for _, r := range rows {
@@ -326,17 +331,19 @@ func (s *DuckDBShard) ExportToS3Parquet(s3Path string, cfg *S3Config) error {
 }
 
 // Query executes a SQL query and returns the matching result rows.
-// The SQL is expected to return (raw, ts).
-func (s *DuckDBShard) Query(query string) ([]*pb.ResultRow, error) {
-	return s.QueryContext(context.Background(), query)
+// The SQL is expected to return (raw, ts). args binds positional
+// `?` placeholders (planner-supplied customer name, timestamps,
+// namespace/env/service names); pass none for legacy fully-baked SQL.
+func (s *DuckDBShard) Query(query string, args ...any) ([]*pb.ResultRow, error) {
+	return s.QueryContext(context.Background(), query, args...)
 }
 
 // QueryContext is Query with a deadline. The DuckDB Go driver honors
 // context cancellation at row boundaries, so a context timeout trims
 // pathological long-running queries (the main motivation for the
 // SHARD_QUERY_TIMEOUT_SECONDS runtime config).
-func (s *DuckDBShard) QueryContext(ctx context.Context, query string) ([]*pb.ResultRow, error) {
-	sqlRows, err := s.db.QueryContext(ctx, query)
+func (s *DuckDBShard) QueryContext(ctx context.Context, query string, args ...any) ([]*pb.ResultRow, error) {
+	sqlRows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query shard %s: %w", s.id, err)
 	}

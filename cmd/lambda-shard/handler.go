@@ -14,9 +14,13 @@ import (
 )
 
 // QueryRequest is the JSON request body for a cold shard query.
+// Args carries positional placeholder values for `?` markers in SQL;
+// empty for legacy callers still using string-interpolated SQL. Keep
+// in sync with shard.LambdaQueryRequest.
 type QueryRequest struct {
-	SQL         string `json:"sql"`
-	ParquetPath string `json:"parquet_path"`
+	SQL         string   `json:"sql"`
+	ParquetPath string   `json:"parquet_path"`
+	Args        []string `json:"args,omitempty"`
 }
 
 // HandleQuery executes a SQL query against a Parquet file and streams
@@ -46,7 +50,11 @@ func HandleQuery(w io.Writer, req QueryRequest, s3cfg *shard.S3Config) error {
 	}
 	query := strings.Replace(req.SQL, "FROM logs", "FROM "+readExpr, 1)
 
-	rows, err := db.Query(query)
+	args := make([]any, len(req.Args))
+	for i, a := range req.Args {
+		args[i] = a
+	}
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return fmt.Errorf("query: %w", err)
 	}

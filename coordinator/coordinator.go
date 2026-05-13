@@ -805,8 +805,22 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	log.Printf("query: app=%s shards=%v compute=%v sql=%s",
 		plan.SourceApp, shardIDs, plan.ComputeStages, directSQL)
 
+	argStrs := make([]string, len(plan.Args))
+	for i, a := range plan.Args {
+		if s, ok := a.(string); ok {
+			argStrs[i] = s
+		} else {
+			// Today the planner only emits string args (customer name,
+			// namespace name, ISO timestamps). Non-string slips through
+			// as %v rendering — surface it as a typed bug if it ever
+			// happens rather than silent data loss.
+			argStrs[i] = fmt.Sprintf("%v", a)
+			log.Printf("query: non-string arg at position %d (%T %v) — bound via fmt", i, a, a)
+		}
+	}
 	stream, err := c.Pool.ExecuteQuery(&pb.ExecuteQueryRequest{
 		Sql:         directSQL,
+		Args:        argStrs,
 		Shards:      descs,
 		Stages:      plan.ComputeStages,
 		MergeKey:    plan.ShardOrderBy,

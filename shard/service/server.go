@@ -220,9 +220,9 @@ func (s *Server) Query(req *pb.QueryRequest, stream pb.ShardQuery_QueryServer) e
 		defer cancel()
 	}
 
-	rows, err := ds.QueryContext(ctx, req.Sql)
+	rows, err := ds.QueryContext(ctx, req.Sql, stringArgsToAny(req.Args)...)
 	if err != nil {
-		log.Printf("shard %s: query error: %v (sql=%s)", s.id, err, req.Sql)
+		log.Printf("shard %s: query error: %v (sql=%s args=%v)", s.id, err, req.Sql, req.Args)
 		return err
 	}
 
@@ -232,6 +232,20 @@ func (s *Server) Query(req *pb.QueryRequest, stream pb.ShardQuery_QueryServer) e
 		}
 	}
 	return nil
+}
+
+// stringArgsToAny widens the on-wire []string back to the []any shape
+// DuckDB's driver expects. Empty in → nil out so callers without
+// placeholders use a 0-arg QueryContext.
+func stringArgsToAny(args []string) []any {
+	if len(args) == 0 {
+		return nil
+	}
+	out := make([]any, len(args))
+	for i, a := range args {
+		out[i] = a
+	}
+	return out
 }
 
 // QueryToCompute runs the pushed-down SQL and streams rows straight
@@ -263,9 +277,9 @@ func (s *Server) QueryToCompute(ctx context.Context, req *pb.QueryToComputeReque
 		defer cancel()
 	}
 
-	rows, err := ds.QueryContext(ctx, req.Sql)
+	rows, err := ds.QueryContext(ctx, req.Sql, stringArgsToAny(req.Args)...)
 	if err != nil {
-		log.Printf("shard %s: QueryToCompute query error: %v (sql=%s)", s.id, err, req.Sql)
+		log.Printf("shard %s: QueryToCompute query error: %v (sql=%s args=%v)", s.id, err, req.Sql, req.Args)
 		return nil, err
 	}
 

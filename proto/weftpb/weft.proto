@@ -63,12 +63,18 @@ message IngestStreamResponse {
 
 message QueryRequest {
   string sql = 1;
+  // Positional placeholder values for `?` markers in sql, in render
+  // order. See ExecuteQueryRequest.args for the binding contract.
+  repeated string args = 2;
 }
 
 message QueryToComputeRequest {
   string sql = 1;
   string compute_addr = 2;  // address of the compute worker
   string job_id = 3;        // compute job to send rows to
+  // Positional placeholder values for `?` markers in sql. See
+  // ExecuteQueryRequest.args.
+  repeated string args = 7;
 }
 
 message QueryToComputeResponse {
@@ -227,6 +233,14 @@ message ExecuteQueryRequest {
   // subquery flip lands rows in ts ASC, so the global last N can't be
   // resolved by stopping early. See compute/local.go::consume.
   bool keep_last = 7;
+  // Positional placeholder values for `?` markers in sql, in render
+  // order. Today the planner ships values as strings (customer name,
+  // namespace name, ISO-formatted timestamps for CAST(? AS TIMESTAMP));
+  // DuckDB binds them as VARCHAR and casts where needed. If the cast
+  // path ever turns out unreliable in practice we promote to typed
+  // args via a `repeated google.protobuf.Value`. See
+  // planner/sql.go::Query.ToSQL for the source of args.
+  repeated string args = 8;
 }
 
 message ExecuteQueryResponse {

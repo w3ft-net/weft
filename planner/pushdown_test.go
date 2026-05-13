@@ -23,7 +23,7 @@ func TestPushdown_SingleStage_Awk(t *testing.T) {
 		{
 			name:     "level equals string",
 			pipeline: `cat vimgym.log | awk '$LEVEL == "ERROR"'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 		},
 		{
 			name:     "app equals string",
@@ -33,77 +33,77 @@ func TestPushdown_SingleStage_Awk(t *testing.T) {
 		{
 			name:     "instance equals string",
 			pipeline: `cat vimgym.log | awk '$INSTANCE == "i-abc123"'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND instance = 'i-abc123'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND instance = 'i-abc123'`,
 		},
 
 		// Meta-variable inequality / comparison
 		{
 			name:     "level not equal",
 			pipeline: `cat vimgym.log | awk '$LEVEL != "DEBUG"'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level != 'DEBUG'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level != 'DEBUG'`,
 		},
 
 		// Positional field comparison (numeric)
 		{
 			name:     "field greater than int",
 			pipeline: `cat vimgym.log | awk '$3 > 100'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND CAST(list_extract(fields, 3) AS DOUBLE) > 100`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(list_extract(fields, 3) AS DOUBLE) > 100`,
 		},
 		{
 			name:     "field less than int",
 			pipeline: `cat vimgym.log | awk '$3 < 50'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND CAST(list_extract(fields, 3) AS DOUBLE) < 50`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(list_extract(fields, 3) AS DOUBLE) < 50`,
 		},
 		{
 			name:     "field greater than or equal",
 			pipeline: `cat vimgym.log | awk '$3 >= 100'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND CAST(list_extract(fields, 3) AS DOUBLE) >= 100`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(list_extract(fields, 3) AS DOUBLE) >= 100`,
 		},
 		{
 			name:     "field equals string",
 			pipeline: `cat vimgym.log | awk '$2 == "POST"'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND list_extract(fields, 2) = 'POST'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND list_extract(fields, 2) = 'POST'`,
 		},
 
 		// Regex match
 		{
 			name:     "bare regex pattern",
 			pipeline: `cat vimgym.log | awk '/timeout/'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND regexp_matches(raw, 'timeout')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'timeout')`,
 		},
 		{
 			name:     "field regex match",
 			pipeline: `cat vimgym.log | awk '$0 ~ /timeout/'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND regexp_matches(raw, 'timeout')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'timeout')`,
 		},
 		{
 			name:     "negated regex",
 			pipeline: `cat vimgym.log | awk '$0 !~ /timeout/'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND NOT regexp_matches(raw, 'timeout')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND NOT regexp_matches(raw, 'timeout')`,
 		},
 
 		// Compound conditions
 		{
 			name:     "AND two meta-vars",
 			pipeline: `cat vimgym.log | awk '$LEVEL == "ERROR" && $INSTANCE == "i-abc123"'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR' AND instance = 'i-abc123'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND instance = 'i-abc123'`,
 		},
 		{
 			name:     "OR two meta-vars",
 			pipeline: `cat vimgym.log | awk '$LEVEL == "ERROR" || $LEVEL == "WARN"'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND (level = 'ERROR' OR level = 'WARN')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND (level = 'ERROR' OR level = 'WARN')`,
 		},
 		{
 			name:     "mixed AND with field and meta-var",
 			pipeline: `cat vimgym.log | awk '$LEVEL == "ERROR" && $3 > 100'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR' AND CAST(list_extract(fields, 3) AS DOUBLE) > 100`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND CAST(list_extract(fields, 3) AS DOUBLE) > 100`,
 		},
 
 		// NR (row number) ranges → LIMIT/OFFSET
 		{
 			name:     "NR range",
 			pipeline: `cat vimgym.log | awk 'NR >= 10 && NR <= 50'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' LIMIT 41 OFFSET 9`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? LIMIT 41 OFFSET 9`,
 		},
 	}
 
@@ -132,12 +132,12 @@ func TestPushdown_SingleStage_Jq(t *testing.T) {
 		{
 			name:     "select on json field equality",
 			pipeline: `cat vimgym.log | jq 'select(.status == 500)'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
 		},
 		{
 			name:     "select on json field string",
 			pipeline: `cat vimgym.log | jq 'select(.action == "login")'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND json_extract_string(payload, '$.action') = 'login'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND json_extract_string(payload, '$.action') = 'login'`,
 		},
 		{
 			name:     "select on meta _app",
@@ -147,22 +147,22 @@ func TestPushdown_SingleStage_Jq(t *testing.T) {
 		{
 			name:     "select on meta _level",
 			pipeline: `cat vimgym.log | jq 'select(._level == "ERROR")'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 		},
 		{
 			name:     "select with numeric comparison",
 			pipeline: `cat vimgym.log | jq 'select(.duration_ms > 1000)'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND CAST(json_extract(payload, '$.duration_ms') AS DOUBLE) > 1000`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.duration_ms') AS DOUBLE) > 1000`,
 		},
 		{
 			name:     "select not equal",
 			pipeline: `cat vimgym.log | jq 'select(.status != 200)'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND CAST(json_extract(payload, '$.status') AS INT) != 200`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) != 200`,
 		},
 		{
 			name:     "chained selects inside jq",
 			pipeline: `cat vimgym.log | jq 'select(.status == 500) | select(.action == "login")'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND json_extract_string(payload, '$.action') = 'login'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND json_extract_string(payload, '$.action') = 'login'`,
 		},
 	}
 
@@ -191,22 +191,22 @@ func TestPushdown_SingleStage_Grep(t *testing.T) {
 		{
 			name:     "literal string",
 			pipeline: `cat vimgym.log | grep timeout`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND regexp_matches(raw, 'timeout')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'timeout')`,
 		},
 		{
 			name:     "case insensitive",
 			pipeline: `cat vimgym.log | grep -i error`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND regexp_matches(raw, 'error', 'i')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'error', 'i')`,
 		},
 		{
 			name:     "inverted match",
 			pipeline: `cat vimgym.log | grep -v DEBUG`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND NOT regexp_matches(raw, 'DEBUG')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND NOT regexp_matches(raw, 'DEBUG')`,
 		},
 		{
 			name:     "inverted case insensitive",
 			pipeline: `cat vimgym.log | grep -iv debug`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND NOT regexp_matches(raw, 'debug', 'i')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND NOT regexp_matches(raw, 'debug', 'i')`,
 		},
 	}
 
@@ -235,7 +235,7 @@ func TestPushdown_SingleStage_Sed(t *testing.T) {
 		{
 			name:     "address pattern filter",
 			pipeline: `cat vimgym.log | sed -n '/timeout/p'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND regexp_matches(raw, 'timeout')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'timeout')`,
 		},
 	}
 
@@ -264,12 +264,12 @@ func TestPushdown_SingleStage_HeadTail(t *testing.T) {
 		{
 			name:     "head default",
 			pipeline: `head vimgym.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts ASC LIMIT 10`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? ORDER BY ts ASC LIMIT 10`,
 		},
 		{
 			name:     "head with count",
 			pipeline: `head -50 vimgym.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts ASC LIMIT 50`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? ORDER BY ts ASC LIMIT 50`,
 		},
 		{
 			// tail wraps its DESC-LIMIT pushdown in an outer ASC SELECT so
@@ -278,22 +278,22 @@ func TestPushdown_SingleStage_HeadTail(t *testing.T) {
 			// cheap per-shard top-N work; the outer flip is free.
 			name:     "tail default",
 			pipeline: `tail vimgym.log`,
-			wantSQL:  `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC LIMIT 10) AS t ORDER BY ts ASC`,
+			wantSQL:  `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = ? ORDER BY ts DESC LIMIT 10) AS t ORDER BY ts ASC`,
 		},
 		{
 			name:     "tail with count",
 			pipeline: `tail -100 vimgym.log`,
-			wantSQL:  `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC LIMIT 100) AS t ORDER BY ts ASC`,
+			wantSQL:  `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = ? ORDER BY ts DESC LIMIT 100) AS t ORDER BY ts ASC`,
 		},
 		{
 			name:     "head -n flag",
 			pipeline: `head -n 25 vimgym.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts ASC LIMIT 25`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? ORDER BY ts ASC LIMIT 25`,
 		},
 		{
 			name:     "tail -n flag",
 			pipeline: `tail -n 50 vimgym.log`,
-			wantSQL:  `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC LIMIT 50) AS t ORDER BY ts ASC`,
+			wantSQL:  `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = ? ORDER BY ts DESC LIMIT 50) AS t ORDER BY ts ASC`,
 		},
 	}
 
@@ -322,7 +322,7 @@ func TestPushdown_SingleStage_Source(t *testing.T) {
 		{
 			name:     "cat bare — all rows for app",
 			pipeline: `cat vimgym.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ?`,
 		},
 		{
 			name:     "cat warp.log — all apps",
@@ -364,84 +364,84 @@ func TestPushdown_MergedStages(t *testing.T) {
 		{
 			name:     "awk filter then grep",
 			pipeline: `cat vimgym.log | awk '$LEVEL == "ERROR"' | grep timeout`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR' AND regexp_matches(raw, 'timeout')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND regexp_matches(raw, 'timeout')`,
 		},
 
 		// grep | awk → AND merge
 		{
 			name:     "grep then awk filter",
 			pipeline: `cat vimgym.log | grep timeout | awk '$LEVEL == "ERROR"'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND regexp_matches(raw, 'timeout') AND level = 'ERROR'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'timeout') AND level = 'ERROR'`,
 		},
 
 		// awk | awk → AND merge
 		{
 			name:     "two awk filters",
 			pipeline: `cat vimgym.log | awk '$LEVEL == "ERROR"' | awk '$3 > 100'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR' AND CAST(list_extract(fields, 3) AS DOUBLE) > 100`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND CAST(list_extract(fields, 3) AS DOUBLE) > 100`,
 		},
 
 		// jq select | jq select → AND merge
 		{
 			name:     "two jq selects",
 			pipeline: `cat vimgym.log | jq 'select(.status == 500)' | jq 'select(.action == "login")'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND json_extract_string(payload, '$.action') = 'login'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND json_extract_string(payload, '$.action') = 'login'`,
 		},
 
 		// grep | grep → AND merge
 		{
 			name:     "two greps",
 			pipeline: `cat vimgym.log | grep timeout | grep ERROR`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND regexp_matches(raw, 'timeout') AND regexp_matches(raw, 'ERROR')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'timeout') AND regexp_matches(raw, 'ERROR')`,
 		},
 
 		// grep -v | grep → AND merge (inverted + normal)
 		{
 			name:     "inverted grep then grep",
 			pipeline: `cat vimgym.log | grep -v DEBUG | grep timeout`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND NOT regexp_matches(raw, 'DEBUG') AND regexp_matches(raw, 'timeout')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND NOT regexp_matches(raw, 'DEBUG') AND regexp_matches(raw, 'timeout')`,
 		},
 
 		// awk | grep -i → AND merge with ILIKE
 		{
 			name:     "awk filter then case-insensitive grep",
 			pipeline: `cat vimgym.log | awk '$LEVEL == "ERROR"' | grep -i timeout`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR' AND regexp_matches(raw, 'timeout', 'i')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND regexp_matches(raw, 'timeout', 'i')`,
 		},
 
 		// jq select | grep → AND merge
 		{
 			name:     "jq select then grep",
 			pipeline: `cat vimgym.log | jq 'select(.status == 500)' | grep timeout`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND regexp_matches(raw, 'timeout')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND regexp_matches(raw, 'timeout')`,
 		},
 
 		// awk filter | head → WHERE + LIMIT
 		{
 			name:     "awk filter then head",
 			pipeline: `cat vimgym.log | awk '$LEVEL == "ERROR"' | head -20`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR' ORDER BY ts ASC LIMIT 20`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' ORDER BY ts ASC LIMIT 20`,
 		},
 
 		// grep | head → WHERE + LIMIT
 		{
 			name:     "grep then head",
 			pipeline: `cat vimgym.log | grep timeout | head -5`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND regexp_matches(raw, 'timeout') ORDER BY ts ASC LIMIT 5`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'timeout') ORDER BY ts ASC LIMIT 5`,
 		},
 
 		// awk | sed address filter → AND merge
 		{
 			name:     "awk filter then sed address",
 			pipeline: `cat vimgym.log | awk '$LEVEL == "ERROR"' | sed -n '/fatal/p'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR' AND regexp_matches(raw, 'fatal')`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND regexp_matches(raw, 'fatal')`,
 		},
 
 		// three stages all pushable
 		{
 			name:     "three pushable stages",
 			pipeline: `cat vimgym.log | awk '$LEVEL == "ERROR"' | grep timeout | head -10`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR' AND regexp_matches(raw, 'timeout') ORDER BY ts ASC LIMIT 10`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND regexp_matches(raw, 'timeout') ORDER BY ts ASC LIMIT 10`,
 		},
 	}
 
@@ -479,7 +479,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk filter then sort",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR"' | sort`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR'`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: []string{"sort"},
 		},
 
@@ -487,7 +487,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk filter then uniq -c",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR"' | uniq -c`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR'`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: []string{"uniq -c"},
 		},
 
@@ -495,7 +495,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk filter then wc -l",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR"' | wc -l`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR'`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: []string{"wc -l"},
 		},
 
@@ -503,7 +503,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk filter then sed substitution",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR"' | sed 's/foo/bar/'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR'`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: []string{"sed 's/foo/bar/'"},
 		},
 
@@ -511,7 +511,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk filter then awk print",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR"' | awk '{ print $2, $1 }'`,
-			wantSQL:     `SELECT concat_ws(' ', list_extract(fields, 2), list_extract(fields, 1)) as raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR'`,
+			wantSQL:     `SELECT concat_ws(' ', list_extract(fields, 2), list_extract(fields, 1)) as raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: nil, // simple $N print is fully pushed down as projection
 		},
 
@@ -519,7 +519,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk print bare metavar",
 			pipeline:    `cat vimgym.log | awk '{ print $HOST }'`,
-			wantSQL:     `SELECT instance as raw, ts FROM logs WHERE namespace = 'vimgym'`,
+			wantSQL:     `SELECT instance as raw, ts FROM logs WHERE namespace = ?`,
 			wantCompute: nil,
 		},
 
@@ -527,7 +527,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk print metavar with positional fields",
 			pipeline:    `cat vimgym.log | awk '{ print $HOST, $1, $4 }'`,
-			wantSQL:     `SELECT concat_ws(' ', instance, list_extract(fields, 1), list_extract(fields, 4)) as raw, ts FROM logs WHERE namespace = 'vimgym'`,
+			wantSQL:     `SELECT concat_ws(' ', instance, list_extract(fields, 1), list_extract(fields, 4)) as raw, ts FROM logs WHERE namespace = ?`,
 			wantCompute: nil,
 		},
 
@@ -536,7 +536,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk print concat metavar and field",
 			pipeline:    `cat vimgym.log | awk '{ print $HOST "/" $1 }'`,
-			wantSQL:     `SELECT concat(concat(instance, '/'), list_extract(fields, 1)) as raw, ts FROM logs WHERE namespace = 'vimgym'`,
+			wantSQL:     `SELECT concat(concat(instance, '/'), list_extract(fields, 1)) as raw, ts FROM logs WHERE namespace = ?`,
 			wantCompute: nil,
 		},
 
@@ -545,7 +545,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk print unknown metavar stays in compute",
 			pipeline:    `cat vimgym.log | awk '{ print $FOO }'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym'`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
 			wantCompute: []string{`awk '{ print $FOO }'`},
 		},
 
@@ -554,7 +554,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk filter then jq construction",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR"' | jq '{ts: ._ts, msg: .message}'`,
-			wantSQL:     `SELECT CAST(json_object('ts', ts, 'msg', json_extract(payload, '$.message')) AS VARCHAR) as raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR'`,
+			wantSQL:     `SELECT CAST(json_object('ts', ts, 'msg', json_extract(payload, '$.message')) AS VARCHAR) as raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: nil,
 		},
 
@@ -562,7 +562,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk with END block",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR" { count++ } END { print count }'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR'`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: []string{`awk '$LEVEL == "ERROR" { count++ } END { print count }'`},
 		},
 
@@ -570,7 +570,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "jq select then sort",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500)' | sort`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
 			wantCompute: []string{"sort"},
 		},
 
@@ -578,7 +578,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "grep then awk END block",
 			pipeline:    `cat vimgym.log | grep timeout | awk '{ count++ } END { print count }'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND regexp_matches(raw, 'timeout')`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'timeout')`,
 			wantCompute: []string{`awk '{ count++ } END { print count }'`},
 		},
 
@@ -586,7 +586,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk filter then sort then uniq -c",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR"' | sort | uniq -c`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR'`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: []string{"sort", "uniq -c"},
 		},
 
@@ -594,7 +594,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "grep then sort then head",
 			pipeline:    `cat vimgym.log | grep timeout | sort | head -20`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND regexp_matches(raw, 'timeout')`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'timeout')`,
 			wantCompute: []string{"sort", "head -20"},
 		},
 
@@ -603,7 +603,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk filter + metavar projection fully folds",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR" { print $3, $INSTANCE }'`,
-			wantSQL:     `SELECT concat_ws(' ', list_extract(fields, 3), instance) as raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR'`,
+			wantSQL:     `SELECT concat_ws(' ', list_extract(fields, 3), instance) as raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: nil,
 		},
 
@@ -611,7 +611,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "sort between two pushable stages",
 			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR"' | sort | grep timeout`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR'`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: []string{"sort", "grep timeout"},
 		},
 
@@ -620,7 +620,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "jq select piped to object construction",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500) | {ts: ._ts, msg: .message}'`,
-			wantSQL:     `SELECT CAST(json_object('ts', ts, 'msg', json_extract(payload, '$.message')) AS VARCHAR) as raw, ts FROM logs WHERE namespace = 'vimgym' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantSQL:     `SELECT CAST(json_object('ts', ts, 'msg', json_extract(payload, '$.message')) AS VARCHAR) as raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
 			wantCompute: nil,
 		},
 	}

@@ -110,10 +110,10 @@ func (s *GRPCShard) Ingest(rows []*pb.LogRow) error {
 // rows. Retries the entire attempt on Canceled/Unavailable up to
 // maxRetryAttempts times — the buffered slice is local, so a failed
 // mid-stream attempt is safely discarded and re-driven from scratch.
-func (s *GRPCShard) Query(sql string) ([]*pb.ResultRow, error) {
+func (s *GRPCShard) Query(sql string, args ...any) ([]*pb.ResultRow, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxRetryAttempts; attempt++ {
-		rows, err := s.queryOnce(sql)
+		rows, err := s.queryOnce(sql, args)
 		if err == nil {
 			return rows, nil
 		}
@@ -129,8 +129,8 @@ func (s *GRPCShard) Query(sql string) ([]*pb.ResultRow, error) {
 	return nil, fmt.Errorf("shard %s: gave up after %d attempts: %w", s.id, maxRetryAttempts, lastErr)
 }
 
-func (s *GRPCShard) queryOnce(sql string) ([]*pb.ResultRow, error) {
-	stream, err := s.client.Query(context.Background(), &pb.QueryRequest{Sql: sql})
+func (s *GRPCShard) queryOnce(sql string, args []any) ([]*pb.ResultRow, error) {
+	stream, err := s.client.Query(context.Background(), &pb.QueryRequest{Sql: sql, Args: anyArgsToStrings(args)})
 	if err != nil {
 		return nil, fmt.Errorf("query shard %s: %w", s.id, err)
 	}
@@ -153,12 +153,12 @@ func (s *GRPCShard) queryOnce(sql string) ([]*pb.ResultRow, error) {
 // and a first-Recv-with-no-rows-yet are safe to retry because the
 // sink hasn't been written to. Once any row reaches the sink, a
 // retry would double-send, so a mid-stream failure logs and bails.
-func (s *GRPCShard) QueryToSink(sql string, sink RowSink) {
+func (s *GRPCShard) QueryToSink(sql string, args []any, sink RowSink) {
 	defer sink.SendSentinel(s.id)
 
 	var lastErr error
 	for attempt := 0; attempt < maxRetryAttempts; attempt++ {
-		rowsSent, err := s.queryToSinkOnce(sql, sink)
+		rowsSent, err := s.queryToSinkOnce(sql, args, sink)
 		if err == nil {
 			return
 		}
@@ -184,8 +184,8 @@ func (s *GRPCShard) QueryToSink(sql string, sink RowSink) {
 // Returns (rowsSent, err); err==nil means EOF after streaming
 // completed. A non-nil err with rowsSent==0 is safe to retry; with
 // rowsSent>0 it isn't.
-func (s *GRPCShard) queryToSinkOnce(sql string, sink RowSink) (int, error) {
-	stream, err := s.client.Query(context.Background(), &pb.QueryRequest{Sql: sql})
+func (s *GRPCShard) queryToSinkOnce(sql string, args []any, sink RowSink) (int, error) {
+	stream, err := s.client.Query(context.Background(), &pb.QueryRequest{Sql: sql, Args: anyArgsToStrings(args)})
 	if err != nil {
 		return 0, err
 	}

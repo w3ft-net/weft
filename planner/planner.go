@@ -11,12 +11,15 @@ import (
 
 // QueryPlan is the result of analyzing a weft pipeline. ShardSQL is the
 // pushed-down SQL sent to shard nodes — always SELECT {raw_expr} as raw, ts.
-// The customer = '...' predicate and ts >= / ts <= bounds are baked in
-// at plan time (see Plan's customer / start / end arguments) so callers
-// dispatch ShardSQL directly without further surgery.
-// ComputeStages lists the pipeline stages that must run in the compute layer.
+// The customer + ts >=/<= bounds + namespace/env/service predicates are
+// parameterized via positional `?` placeholders; the bound values live
+// in Args, in render order. Coordinator ships Args alongside Sql to the
+// shard's QueryContext, which forwards to DuckDB's prepared-statement
+// path. ComputeStages lists the pipeline stages that must run in the
+// compute layer.
 type QueryPlan struct {
 	ShardSQL       string
+	Args           []any         // positional values for ShardSQL/DirectShardSQL placeholders, in render order
 	ComputeStages  []string
 	Limit          int           // post-merge limit (from head/tail), 0 = unlimited
 	// TailMode is true when the source command is `tail` (or an inline
@@ -74,6 +77,14 @@ type GrepPattern struct {
 }
 
 // pushdownResult is the outcome of attempting to push a stage into SQL.
+// predicate is a raw SQL fragment with literals baked in — the per-
+// stage emitters (grep, awk, sed, jq, project) still produce string
+// predicates and rely on escapeSQLString for safety. Step 8b (a
+// follow-on) migrates them to Predicate{SQL, Args}. The pre-stage
+// adders in Plan() (customer/timestamps/namespace/env/service) DO use
+// placeholders today — they're the highest-value parameterization
+// targets (customer is the row-level security boundary; ts shifts
+// every request and is the biggest plan-cache miss).
 type pushdownResult struct {
 	pushed    bool   // true if at least a predicate was extracted
 	predicate string // SQL WHERE fragment (may be "" even if pushed, e.g. head/tail)
@@ -152,33 +163,39 @@ func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 	liveStages := formatComputeStages(info.stages)
 
 	// Apply source filters from the pseudofile path. Each path segment
-	// maps to a column: namespace, env, service.
+	// maps to a column: namespace, env, service. These are customer-
+	// supplied identifiers, so they go through positional placeholders
+	// rather than string interpolation — defense in depth against an
+	// adversarial namespace name even though the coordinator's
+	// CustomerHasSource allowlist gates the source up front.
 	if info.source.env != "" {
-		sql.addPredicate(fmt.Sprintf("env = '%s'", info.source.env))
+		sql.addPredicate("env = ?", info.source.env)
 	}
 	switch len(info.source.namespaces) {
 	case 0:
 		// warp.log — no namespace/service filter.
 	case 1:
-		sql.addPredicate(fmt.Sprintf("namespace = '%s'", info.source.namespaces[0]))
+		sql.addPredicate("namespace = ?", info.source.namespaces[0])
 	default:
-		quoted := make([]string, len(info.source.namespaces))
+		placeholders := strings.Repeat("?, ", len(info.source.namespaces)-1) + "?"
+		nsArgs := make([]any, len(info.source.namespaces))
 		for i, ns := range info.source.namespaces {
-			quoted[i] = "'" + ns + "'"
+			nsArgs[i] = ns
 		}
-		sql.addPredicate(fmt.Sprintf("namespace IN (%s)", strings.Join(quoted, ", ")))
+		sql.addPredicate("namespace IN ("+placeholders+")", nsArgs...)
 	}
 	switch len(info.source.services) {
 	case 0:
 		// No service filter (namespace-level wildcard or warp.log).
 	case 1:
-		sql.addPredicate(fmt.Sprintf("service = '%s'", info.source.services[0]))
+		sql.addPredicate("service = ?", info.source.services[0])
 	default:
-		quoted := make([]string, len(info.source.services))
+		placeholders := strings.Repeat("?, ", len(info.source.services)-1) + "?"
+		svcArgs := make([]any, len(info.source.services))
 		for i, svc := range info.source.services {
-			quoted[i] = "'" + svc + "'"
+			svcArgs[i] = svc
 		}
-		sql.addPredicate(fmt.Sprintf("service IN (%s)", strings.Join(quoted, ", ")))
+		sql.addPredicate("service IN ("+placeholders+")", svcArgs...)
 	}
 
 	switch info.source.cmd {
@@ -324,15 +341,21 @@ func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 	// classifyShardMode — wrap whenever that's "ts DESC" (Mode A with
 	// tail). Other DESC keys (raw DESC from sort -r) are explicit user
 	// intent and not wrapped.
-	shardSQL := sql.build()
+	shardQuery := sql
 	if sql.orderBy == "ts DESC" {
-		shardSQL = sql.Wrap("ts ASC").build()
+		shardQuery = sql.Wrap("ts ASC")
 	}
+	shardSQL, shardArgs := shardQuery.ToSQL()
+
 	directInner := sql.WithOrderLimit(shardOrderBy, shardLimit)
-	directShardSQL := directInner.build()
+	directQuery := directInner
 	if shardOrderBy == "ts DESC" {
-		directShardSQL = directInner.Wrap("ts ASC").build()
+		directQuery = directInner.Wrap("ts ASC")
 	}
+	directShardSQL, _ := directQuery.ToSQL()
+	// ShardSQL and DirectShardSQL render identical WHERE clauses (only
+	// order/limit differ), so their args slices match — Args lives once
+	// on the plan rather than duplicating per build path.
 
 	// After the wrap, rows reach compute in ts ASC even though the
 	// inner pushdown was DESC. Reflect that in the merge-key the
@@ -345,6 +368,7 @@ func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 
 	return &QueryPlan{
 		ShardSQL:       shardSQL,
+		Args:           shardArgs,
 		DirectShardSQL: directShardSQL,
 		ComputeStages:  compute,
 		Limit:          sql.limit,

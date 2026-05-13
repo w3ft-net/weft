@@ -271,8 +271,11 @@ func (x *IngestStreamResponse) GetRowsReceived() int64 {
 }
 
 type QueryRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Sql           string                 `protobuf:"bytes,1,opt,name=sql,proto3" json:"sql,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Sql   string                 `protobuf:"bytes,1,opt,name=sql,proto3" json:"sql,omitempty"`
+	// Positional placeholder values for `?` markers in sql, in render
+	// order. See ExecuteQueryRequest.args for the binding contract.
+	Args          []string `protobuf:"bytes,2,rep,name=args,proto3" json:"args,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -314,11 +317,21 @@ func (x *QueryRequest) GetSql() string {
 	return ""
 }
 
+func (x *QueryRequest) GetArgs() []string {
+	if x != nil {
+		return x.Args
+	}
+	return nil
+}
+
 type QueryToComputeRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Sql           string                 `protobuf:"bytes,1,opt,name=sql,proto3" json:"sql,omitempty"`
-	ComputeAddr   string                 `protobuf:"bytes,2,opt,name=compute_addr,json=computeAddr,proto3" json:"compute_addr,omitempty"` // address of the compute worker
-	JobId         string                 `protobuf:"bytes,3,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`                   // compute job to send rows to
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Sql         string                 `protobuf:"bytes,1,opt,name=sql,proto3" json:"sql,omitempty"`
+	ComputeAddr string                 `protobuf:"bytes,2,opt,name=compute_addr,json=computeAddr,proto3" json:"compute_addr,omitempty"` // address of the compute worker
+	JobId       string                 `protobuf:"bytes,3,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`                   // compute job to send rows to
+	// Positional placeholder values for `?` markers in sql. See
+	// ExecuteQueryRequest.args.
+	Args          []string `protobuf:"bytes,7,rep,name=args,proto3" json:"args,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -372,6 +385,13 @@ func (x *QueryToComputeRequest) GetJobId() string {
 		return x.JobId
 	}
 	return ""
+}
+
+func (x *QueryToComputeRequest) GetArgs() []string {
+	if x != nil {
+		return x.Args
+	}
+	return nil
 }
 
 type QueryToComputeResponse struct {
@@ -1206,7 +1226,15 @@ type ExecuteQueryRequest struct {
 	// coordinator when planner.QueryPlan.TailMode is true — tail's
 	// subquery flip lands rows in ts ASC, so the global last N can't be
 	// resolved by stopping early. See compute/local.go::consume.
-	KeepLast      bool `protobuf:"varint,7,opt,name=keep_last,json=keepLast,proto3" json:"keep_last,omitempty"`
+	KeepLast bool `protobuf:"varint,7,opt,name=keep_last,json=keepLast,proto3" json:"keep_last,omitempty"`
+	// Positional placeholder values for `?` markers in sql, in render
+	// order. Today the planner ships values as strings (customer name,
+	// namespace name, ISO-formatted timestamps for CAST(? AS TIMESTAMP));
+	// DuckDB binds them as VARCHAR and casts where needed. If the cast
+	// path ever turns out unreliable in practice we promote to typed
+	// args via a `repeated google.protobuf.Value`. See
+	// planner/sql.go::Query.ToSQL for the source of args.
+	Args          []string `protobuf:"bytes,8,rep,name=args,proto3" json:"args,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1288,6 +1316,13 @@ func (x *ExecuteQueryRequest) GetKeepLast() bool {
 		return x.KeepLast
 	}
 	return false
+}
+
+func (x *ExecuteQueryRequest) GetArgs() []string {
+	if x != nil {
+		return x.Args
+	}
+	return nil
 }
 
 type ExecuteQueryResponse struct {
@@ -4553,13 +4588,15 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x0fArchiveResponse\x12!\n" +
 	"\fparquet_path\x18\x01 \x01(\tR\vparquetPath\";\n" +
 	"\x14IngestStreamResponse\x12#\n" +
-	"\rrows_received\x18\x01 \x01(\x03R\frowsReceived\" \n" +
+	"\rrows_received\x18\x01 \x01(\x03R\frowsReceived\"4\n" +
 	"\fQueryRequest\x12\x10\n" +
-	"\x03sql\x18\x01 \x01(\tR\x03sql\"c\n" +
+	"\x03sql\x18\x01 \x01(\tR\x03sql\x12\x12\n" +
+	"\x04args\x18\x02 \x03(\tR\x04args\"w\n" +
 	"\x15QueryToComputeRequest\x12\x10\n" +
 	"\x03sql\x18\x01 \x01(\tR\x03sql\x12!\n" +
 	"\fcompute_addr\x18\x02 \x01(\tR\vcomputeAddr\x12\x15\n" +
-	"\x06job_id\x18\x03 \x01(\tR\x05jobId\"5\n" +
+	"\x06job_id\x18\x03 \x01(\tR\x05jobId\x12\x12\n" +
+	"\x04args\x18\a \x03(\tR\x04args\"5\n" +
 	"\x16QueryToComputeResponse\x12\x1b\n" +
 	"\trows_sent\x18\x01 \x01(\x03R\browsSent\"Z\n" +
 	"\tResultRow\x12\x1d\n" +
@@ -4621,7 +4658,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
 	"lambda_url\x18\x03 \x01(\tR\tlambdaUrl\x12!\n" +
 	"\fparquet_path\x18\x04 \x01(\tR\vparquetPath\x12\x12\n" +
-	"\x04apps\x18\x05 \x03(\tR\x04apps\"\xe1\x01\n" +
+	"\x04apps\x18\x05 \x03(\tR\x04apps\"\xf5\x01\n" +
 	"\x13ExecuteQueryRequest\x12\x10\n" +
 	"\x03sql\x18\x01 \x01(\tR\x03sql\x12-\n" +
 	"\x06shards\x18\x02 \x03(\v2\x15.weft.ShardDescriptorR\x06shards\x12\x16\n" +
@@ -4629,7 +4666,8 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\tmerge_key\x18\x04 \x01(\tR\bmergeKey\x12\x14\n" +
 	"\x05limit\x18\x05 \x01(\x05R\x05limit\x12!\n" +
 	"\fshard_secret\x18\x06 \x01(\tR\vshardSecret\x12\x1b\n" +
-	"\tkeep_last\x18\a \x01(\bR\bkeepLast\"@\n" +
+	"\tkeep_last\x18\a \x01(\bR\bkeepLast\x12\x12\n" +
+	"\x04args\x18\b \x03(\tR\x04args\"@\n" +
 	"\x14ExecuteQueryResponse\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"H\n" +

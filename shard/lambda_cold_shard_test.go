@@ -93,7 +93,7 @@ func TestColdShard_RemoteQueryToSink(t *testing.T) {
 	defer cs.Close()
 
 	sink := &testSink{}
-	cs.QueryToSink("SELECT raw, ts FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'", sink)
+	cs.QueryToSink("SELECT raw, ts FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'", nil, sink)
 
 	if !sink.sentinelReceived {
 		t.Error("expected sentinel")

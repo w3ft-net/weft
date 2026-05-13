@@ -19,8 +19,8 @@ type closeTrackingShard struct {
 }
 
 func (s *closeTrackingShard) ID() string                                            { return s.id }
-func (s *closeTrackingShard) Query(string) ([]*pb.ResultRow, error)                 { return nil, nil }
-func (s *closeTrackingShard) QueryToSink(string, shard.RowSink)                     {}
+func (s *closeTrackingShard) Query(string, ...any) ([]*pb.ResultRow, error)         { return nil, nil }
+func (s *closeTrackingShard) QueryToSink(string, []any, shard.RowSink)              {}
 func (s *closeTrackingShard) Ingest(_ []*pb.LogRow) error                           { return nil }
 func (s *closeTrackingShard) Archive(_ context.Context, _ string) (string, error)   { return "", nil }
 func (s *closeTrackingShard) Close() error                                          { s.closed.Store(true); return nil }

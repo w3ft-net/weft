@@ -34,7 +34,11 @@ func (p *registryPool) ExecuteQuery(req *pb.ExecuteQueryRequest) (compute.LineSt
 				job.SendSentinel(d.ShardId)
 				return
 			}
-			e.Shard.QueryToSink(req.Sql, job)
+			args := make([]any, len(req.Args))
+			for i, a := range req.Args {
+				args[i] = a
+			}
+			e.Shard.QueryToSink(req.Sql, args, job)
 		}(d)
 	}
 	return job.Stream(), nil

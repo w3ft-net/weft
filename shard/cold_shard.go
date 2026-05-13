@@ -41,9 +41,35 @@ type ColdShard struct {
 }
 
 // LambdaQueryRequest is the JSON request body sent to a remote cold-query handler.
+//
+// Args carries positional placeholder values for `?` markers in SQL.
+// Omitted (omitempty) for legacy/in-process callers that still use
+// string-interpolated SQL — the lambda handler tolerates empty args.
+// Strings only today; see ExecuteQueryRequest.args for the rationale.
 type LambdaQueryRequest struct {
-	SQL         string `json:"sql"`
-	ParquetPath string `json:"parquet_path"`
+	SQL         string   `json:"sql"`
+	ParquetPath string   `json:"parquet_path"`
+	Args        []string `json:"args,omitempty"`
+}
+
+// anyArgsToStrings narrows planner-supplied []any to []string for the
+// wire format. The planner produces strings only (customer name,
+// ISO-formatted timestamps, namespace/env/service names); non-string
+// values fall through as fmt.Sprintf("%v", a) and surface in shard
+// logs as a typed-bug breadcrumb.
+func anyArgsToStrings(args []any) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	out := make([]string, len(args))
+	for i, a := range args {
+		if s, ok := a.(string); ok {
+			out[i] = s
+		} else {
+			out[i] = fmt.Sprintf("%v", a)
+		}
+	}
+	return out
 }
 
 // NewColdShard creates a read-only shard backed by a Parquet file.
@@ -100,16 +126,17 @@ func (s *ColdShard) readParquetExpr() string {
 }
 
 // Query executes a SQL query against the archived Parquet data.
-func (s *ColdShard) Query(query string) ([]*pb.ResultRow, error) {
+// args carries positional placeholder values for `?` markers in query.
+func (s *ColdShard) Query(query string, args ...any) ([]*pb.ResultRow, error) {
 	if s.functionURL != "" {
-		return s.queryRemote(query)
+		return s.queryRemote(query, args)
 	}
-	return s.queryLocal(query)
+	return s.queryLocal(query, args)
 }
 
-func (s *ColdShard) queryLocal(query string) ([]*pb.ResultRow, error) {
+func (s *ColdShard) queryLocal(query string, args []any) ([]*pb.ResultRow, error) {
 	rewritten := strings.Replace(query, "FROM logs", "FROM "+s.readParquetExpr(), 1)
-	sqlRows, err := s.db.Query(rewritten)
+	sqlRows, err := s.db.Query(rewritten, args...)
 	if err != nil {
 		return nil, fmt.Errorf("cold query %s: %w", s.id, err)
 	}
@@ -117,10 +144,11 @@ func (s *ColdShard) queryLocal(query string) ([]*pb.ResultRow, error) {
 	return ScanResultRows(sqlRows)
 }
 
-func (s *ColdShard) queryRemote(query string) ([]*pb.ResultRow, error) {
+func (s *ColdShard) queryRemote(query string, args []any) ([]*pb.ResultRow, error) {
 	body, err := json.Marshal(LambdaQueryRequest{
 		SQL:         query,
 		ParquetPath: s.parquetPath,
+		Args:        anyArgsToStrings(args),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -150,15 +178,15 @@ func (s *ColdShard) queryRemote(query string) ([]*pb.ResultRow, error) {
 }
 
 // QueryToSink streams query results to a RowSink.
-func (s *ColdShard) QueryToSink(query string, sink RowSink) {
+func (s *ColdShard) QueryToSink(query string, args []any, sink RowSink) {
 	defer sink.SendSentinel(s.id)
 
 	if s.functionURL != "" {
-		s.queryToSinkRemote(query, sink)
+		s.queryToSinkRemote(query, args, sink)
 		return
 	}
 
-	rows, err := s.queryLocal(query)
+	rows, err := s.queryLocal(query, args)
 	if err != nil {
 		return
 	}
@@ -167,10 +195,11 @@ func (s *ColdShard) QueryToSink(query string, sink RowSink) {
 	}
 }
 
-func (s *ColdShard) queryToSinkRemote(query string, sink RowSink) {
+func (s *ColdShard) queryToSinkRemote(query string, args []any, sink RowSink) {
 	body, err := json.Marshal(LambdaQueryRequest{
 		SQL:         query,
 		ParquetPath: s.parquetPath,
+		Args:        anyArgsToStrings(args),
 	})
 	if err != nil {
 		return

@@ -68,34 +68,38 @@ func newSQLBuilder() *Query {
 
 func (q *Query) setSelect(rawExpr string) { q.rawExpr = rawExpr }
 
-func (q *Query) addPredicate(pred string) {
-	q.predicates = append(q.predicates, Predicate{SQL: pred})
+// addPredicate appends a WHERE fragment with optional positional args.
+// Variadic args is the migration ergonomic: callers that haven't yet
+// switched to placeholders pass no args (the existing string form);
+// callers that have pass `?` placeholders + values. The args are
+// rendered out by ToSQL in their original order — see
+// TestQueryBuilder_ToSQLArgs for the recursion contract.
+func (q *Query) addPredicate(pred string, args ...any) {
+	q.predicates = append(q.predicates, Predicate{SQL: pred, Args: args})
 }
 
 // addCustomer attaches the row-level security predicate. Empty
 // customer is a no-op (no production caller passes empty; tests do).
-// Doubled single-quotes escape any apostrophes in the customer name —
-// inherited from the old sqlBuilder, gone once Step 8 lands real
-// placeholders.
 func (q *Query) addCustomer(customer string) {
 	if customer == "" {
 		return
 	}
-	escaped := strings.ReplaceAll(customer, "'", "''")
-	q.addPredicate(fmt.Sprintf("customer = '%s'", escaped))
+	q.addPredicate("customer = ?", customer)
 }
 
 // addTimeBounds attaches ts >= / ts <= predicates for the user's query
-// window. Either bound may be zero-value, in which case it's skipped —
-// callers thread time.Time directly through and IsZero() is the sentinel
-// for "no bound on this side." The DuckDB-friendly TIMESTAMP literal
-// uses .999999 microseconds to match the shard's ts column resolution.
+// window. Either bound may be zero-value, in which case it's skipped.
+// The cast wrapping (CAST(? AS TIMESTAMP)) lets DuckDB accept the
+// timestamp as a string arg over the wire — string is the only proto
+// arg type we ship (see ExecuteQueryRequest.args). The DuckDB-friendly
+// ISO format uses .999999 microseconds to match the shard's ts column
+// resolution.
 func (q *Query) addTimeBounds(start, end time.Time) {
 	if !start.IsZero() {
-		q.addPredicate(fmt.Sprintf("ts >= TIMESTAMP '%s'", start.UTC().Format("2006-01-02 15:04:05.999999")))
+		q.addPredicate("ts >= CAST(? AS TIMESTAMP)", start.UTC().Format("2006-01-02 15:04:05.999999"))
 	}
 	if !end.IsZero() {
-		q.addPredicate(fmt.Sprintf("ts <= TIMESTAMP '%s'", end.UTC().Format("2006-01-02 15:04:05.999999")))
+		q.addPredicate("ts <= CAST(? AS TIMESTAMP)", end.UTC().Format("2006-01-02 15:04:05.999999"))
 	}
 }
 

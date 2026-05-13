@@ -32,7 +32,7 @@ func TestPushdown_NewDimensions(t *testing.T) {
 		{"awk node", `cat vimgym.log | awk '$NODE == "shard-abc"'`, "node = 'shard-abc'"},
 
 		// SERVICE alias for app — should rewrite to the same column.
-		{"awk service alias", `cat vimgym.log | awk '$SERVICE == "api"'`, "namespace = 'api'"},
+		{"awk service alias", `cat vimgym.log | awk '$SERVICE == "api"'`, "namespace = ?"},
 		// HOST alias for instance.
 		{"awk host alias", `cat vimgym.log | awk '$HOST == "i-abc"'`, "instance = 'i-abc'"},
 
@@ -48,7 +48,7 @@ func TestPushdown_NewDimensions(t *testing.T) {
 		{"jq node", `cat vimgym.log | jq 'select(._node == "shard-abc")'`, "node = 'shard-abc'"},
 
 		// jq aliases.
-		{"jq service alias", `cat vimgym.log | jq 'select(._service == "api")'`, "namespace = 'api'"},
+		{"jq service alias", `cat vimgym.log | jq 'select(._service == "api")'`, "namespace = ?"},
 		{"jq host alias", `cat vimgym.log | jq 'select(._host == "i-abc")'`, "instance = 'i-abc'"},
 	}
 
@@ -85,37 +85,37 @@ func TestPathLayout_EnvSegment(t *testing.T) {
 		{
 			name:     "two-level path (no env)",
 			pipeline: `cat /log/weft/coordinator.log`,
-			wantNS:   "namespace = 'weft'",
-			wantSvc:  "service = 'coordinator'",
+			wantNS:   "namespace = ?",
+			wantSvc:  "service = ?",
 			wantEnv:  "",
 		},
 		{
 			name:     "three-level path with env",
 			pipeline: `cat /log/weft/prod/coordinator.log`,
-			wantNS:   "namespace = 'weft'",
-			wantSvc:  "service = 'coordinator'",
-			wantEnv:  "env = 'prod'",
+			wantNS:   "namespace = ?",
+			wantSvc:  "service = ?",
+			wantEnv:  "env = ?",
 		},
 		{
 			name:     "four-level path: compound service with env",
 			pipeline: `cat /log/weft/prod/coordinator/runtime.log`,
-			wantNS:   "namespace = 'weft'",
-			wantSvc:  "service = 'coordinator/runtime'",
-			wantEnv:  "env = 'prod'",
+			wantNS:   "namespace = ?",
+			wantSvc:  "service = ?",
+			wantEnv:  "env = ?",
 		},
 		{
 			name:     "four-level path staging metrics",
 			pipeline: `cat /log/myco/staging/api/metrics.log`,
-			wantNS:   "namespace = 'myco'",
-			wantSvc:  "service = 'api/metrics'",
-			wantEnv:  "env = 'staging'",
+			wantNS:   "namespace = ?",
+			wantSvc:  "service = ?",
+			wantEnv:  "env = ?",
 		},
 		{
 			name:     "tail with env",
 			pipeline: `tail /log/loom/prod/api.log`,
-			wantNS:   "namespace = 'loom'",
-			wantSvc:  "service = 'api'",
-			wantEnv:  "env = 'prod'",
+			wantNS:   "namespace = ?",
+			wantSvc:  "service = ?",
+			wantEnv:  "env = ?",
 		},
 	}
 

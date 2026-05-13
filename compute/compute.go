@@ -57,6 +57,10 @@ func DialShard(d *pb.ShardDescriptor, secret string, creds aws.CredentialsProvid
 
 // FanOutToShards dials each shard, runs QueryToSink, and waits.
 func FanOutToShards(req *pb.ExecuteQueryRequest, job ComputeJob, creds aws.CredentialsProvider, region string) {
+	args := make([]any, len(req.Args))
+	for i, a := range req.Args {
+		args[i] = a
+	}
 	var wg sync.WaitGroup
 	wg.Add(len(req.Shards))
 	for _, desc := range req.Shards {
@@ -69,7 +73,7 @@ func FanOutToShards(req *pb.ExecuteQueryRequest, job ComputeJob, creds aws.Crede
 				return
 			}
 			defer sh.Close()
-			sh.QueryToSink(req.Sql, job)
+			sh.QueryToSink(req.Sql, args, job)
 		}(desc)
 	}
 	wg.Wait()

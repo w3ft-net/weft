@@ -7,15 +7,19 @@ import (
 )
 
 // TestPlanCustomer_HappyPath: a normal customer name lands as the first
-// predicate in the WHERE clause.
+// predicate in the WHERE clause, bound via a placeholder.
 func TestPlanCustomer_HappyPath(t *testing.T) {
 	plan, err := Plan(`cat foo.log`, "kevlar", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	want := `SELECT raw, ts FROM logs WHERE customer = 'kevlar' AND namespace = 'foo'`
-	if plan.ShardSQL != want {
-		t.Errorf("ShardSQL\n got: %s\nwant: %s", plan.ShardSQL, want)
+	wantSQL := `SELECT raw, ts FROM logs WHERE customer = ? AND namespace = ?`
+	if plan.ShardSQL != wantSQL {
+		t.Errorf("ShardSQL\n got: %s\nwant: %s", plan.ShardSQL, wantSQL)
+	}
+	wantArgs := []any{"kevlar", "foo"}
+	if len(plan.Args) != len(wantArgs) || plan.Args[0] != wantArgs[0] || plan.Args[1] != wantArgs[1] {
+		t.Errorf("Args: got %v, want %v", plan.Args, wantArgs)
 	}
 }
 
@@ -32,24 +36,28 @@ func TestPlanCustomer_EmptySkipsPredicate(t *testing.T) {
 	}
 }
 
-// TestPlanCustomer_QuoteEscape: an apostrophe in the customer name is
-// doubled per SQL string-literal escape rules. Without this guard, a
-// hostile customer name like `acme' OR 1=1 --` would close the literal
-// early. The escape moved from the (now-deleted) InjectCustomer helper
-// into addCustomer; this test pins it where the new code lives.
-func TestPlanCustomer_QuoteEscape(t *testing.T) {
-	plan, err := Plan(`cat foo.log`, `acme's-team`, time.Time{}, time.Time{})
+// TestPlanCustomer_Injection: a hostile customer name carrying SQL
+// metacharacters lands as a bound positional value, not as inline SQL.
+// Pre-parameterization this property was held by a manual quote-double
+// in addCustomer; now the placeholder makes it structural.
+func TestPlanCustomer_Injection(t *testing.T) {
+	plan, err := Plan(`cat foo.log`, `acme'; DROP TABLE logs; --`, time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if !strings.Contains(plan.ShardSQL, "customer = 'acme''s-team'") {
-		t.Errorf("apostrophe not doubled in customer literal: %s", plan.ShardSQL)
+	if !strings.Contains(plan.ShardSQL, "customer = ?") {
+		t.Errorf("customer predicate missing placeholder: %s", plan.ShardSQL)
+	}
+	if len(plan.Args) == 0 || plan.Args[0] != `acme'; DROP TABLE logs; --` {
+		t.Errorf("customer arg: got %v, want exactly the malicious string", plan.Args)
 	}
 }
 
-// TestPlanTimeBounds_BothSet bakes ts >= and ts <= predicates into the
-// SQL when both bounds are non-zero. The clamp at the call site ensures
-// the lower bound has already been advanced to the tier's retention cap.
+// TestPlanTimeBounds_BothSet emits ts >= and ts <= predicates with
+// CAST(? AS TIMESTAMP) placeholders when both bounds are non-zero. The
+// timestamp value is shipped as a string arg over the wire so we don't
+// need typed proto args. The clamp at the call site ensures the lower
+// bound has already been advanced to the tier's retention cap.
 func TestPlanTimeBounds_BothSet(t *testing.T) {
 	start := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
@@ -57,11 +65,21 @@ func TestPlanTimeBounds_BothSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if !strings.Contains(plan.ShardSQL, "ts >= TIMESTAMP '2026-04-01 12:00:00'") {
+	if !strings.Contains(plan.ShardSQL, "ts >= CAST(? AS TIMESTAMP)") {
 		t.Errorf("missing lower bound predicate: %s", plan.ShardSQL)
 	}
-	if !strings.Contains(plan.ShardSQL, "ts <= TIMESTAMP '2026-04-02 12:00:00'") {
+	if !strings.Contains(plan.ShardSQL, "ts <= CAST(? AS TIMESTAMP)") {
 		t.Errorf("missing upper bound predicate: %s", plan.ShardSQL)
+	}
+	// Args order: customer, start, end, namespace.
+	wantArgs := []any{"kevlar", "2026-04-01 12:00:00", "2026-04-02 12:00:00", "foo"}
+	if len(plan.Args) != len(wantArgs) {
+		t.Fatalf("Args length: got %v, want %v", plan.Args, wantArgs)
+	}
+	for i, w := range wantArgs {
+		if plan.Args[i] != w {
+			t.Errorf("Args[%d]: got %v, want %v", i, plan.Args[i], w)
+		}
 	}
 }
 
@@ -74,7 +92,7 @@ func TestPlanTimeBounds_LowerOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if !strings.Contains(plan.ShardSQL, "ts >= TIMESTAMP '2026-04-01 12:00:00'") {
+	if !strings.Contains(plan.ShardSQL, "ts >= CAST(? AS TIMESTAMP)") {
 		t.Errorf("missing lower bound: %s", plan.ShardSQL)
 	}
 	if strings.Contains(plan.ShardSQL, "ts <= ") {
@@ -125,8 +143,11 @@ func TestPlanCustomer_InsideLimitBoundedSubquery(t *testing.T) {
 		t.Fatalf("expected WHERE clause: %s", sql)
 	}
 	clause := rest[whereIdx+len(" WHERE "):]
-	if !strings.HasPrefix(clause, "customer = 'tenant-a'") {
+	if !strings.HasPrefix(clause, "customer = ?") {
 		t.Errorf("customer predicate not at head of inner WHERE:\n  rendered: %s\n  clause start: %q", sql, clause[:min(60, len(clause))])
+	}
+	if len(plan.Args) == 0 || plan.Args[0] != "tenant-a" {
+		t.Errorf("customer arg: got %v, want first arg to be 'tenant-a'", plan.Args)
 	}
 }
 

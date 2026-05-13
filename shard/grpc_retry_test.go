@@ -182,7 +182,7 @@ func TestGRPCShard_QueryToSink_RetriesInitialSetup(t *testing.T) {
 	defer gs.Close()
 
 	sink := &captureSink{}
-	gs.QueryToSink("SELECT 1", sink)
+	gs.QueryToSink("SELECT 1", nil, sink)
 
 	if !sink.sawSentinel {
 		t.Error("sink never saw sentinel")
