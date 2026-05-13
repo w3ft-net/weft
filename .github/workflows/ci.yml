@@ -259,9 +259,14 @@ jobs:
         working-directory: weft
         env:
           # Core coverage gate. Build fails if merged core % drops below
-          # this. Baseline at time of introduction was 54.6%; we leave
-          # 4-5 points of slack so unrelated PRs aren't blocked by noise.
-          WEFT_COVERAGE_MIN: "50"
+          # this. History (most recent first):
+          #   2026-05-13  56.0% — shell + store gap-fill
+          #   2026-05-13  54.3% — bootstrap + skip rewrite (post un-skip)
+          #   2026-05-13  54.4% — gate introduced (with two CI=true skips)
+          # The 3pt slack between gate and current absorbs ordinary
+          # noise (sub-0.1pt across runs) plus an unrelated PR or two.
+          # Bump when meaningful jumps land; don't chase 0.1pt moves.
+          WEFT_COVERAGE_MIN: "53"
         run: scripts/coverage-report.sh
       - name: Upload coverage profiles
         uses: actions/upload-artifact@v4
