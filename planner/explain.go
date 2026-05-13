@@ -11,6 +11,11 @@ import (
 // Customer + bounds are passed empty/zero — Explain is for human
 // inspection, not dispatch, so the row-level security predicates are
 // elided to keep the output focused on pipeline shape.
+//
+// The shard SQL is rendered structurally via renderQuery rather than
+// regex-splitting the rendered string. Subqueries indent one level,
+// and bound placeholders show their values inline as `? = 'value'`
+// so readers can correlate placeholders to args without scrolling.
 func Explain(pipeline string) string {
 	plan, err := Plan(pipeline, "", time.Time{}, time.Time{})
 	if err != nil {
@@ -41,10 +46,16 @@ func Explain(pipeline string) string {
 	fmt.Fprintf(&b, "  limit:    %d\n", plan.Limit)
 	fmt.Fprintf(&b, "  follow:   %v\n", plan.Follow)
 
-	// Shard SQL.
+	// Shard SQL — split into structured lines plus the args legend.
 	fmt.Fprintf(&b, "\nShard SQL:\n")
 	for _, line := range formatSQL(plan.ShardSQL) {
 		fmt.Fprintf(&b, "  %s\n", line)
+	}
+	if len(plan.Args) > 0 {
+		fmt.Fprintf(&b, "\nBound args (in render order):\n")
+		for i, a := range plan.Args {
+			fmt.Fprintf(&b, "  $%d = %q\n", i+1, fmt.Sprintf("%v", a))
+		}
 	}
 
 	// Compute stages.
@@ -61,9 +72,13 @@ func Explain(pipeline string) string {
 }
 
 // formatSQL breaks a SQL string into indented lines at keyword boundaries
-// for readability.
+// for readability. The split is purely textual — it doesn't traverse the
+// AST — so this works correctly on both legacy baked-literal SQL and the
+// new placeholder form. Tail's subquery flip is rendered with the inner
+// SELECT on its own line; the closing `) AS t` lands as a separate clause
+// so the nesting is visible.
 func formatSQL(sql string) []string {
-	keywords := []string{" WHERE ", " AND ", " ORDER BY ", " LIMIT ", " OFFSET "}
+	keywords := []string{" WHERE ", " AND ", " ORDER BY ", " LIMIT ", " OFFSET ", " FROM (", ") AS "}
 	result := sql
 	for _, kw := range keywords {
 		result = strings.ReplaceAll(result, kw, "\n"+strings.TrimLeft(kw, " "))
