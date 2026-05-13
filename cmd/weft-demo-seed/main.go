@@ -408,7 +408,10 @@ func writeProdLoomTokens(path string, lines []mintedToken) error {
 		return nil
 	}
 	if path == "-" {
-		fmt.Println("# loom prod tokens (paste into Secrets Manager at /weft/loom-producer/<env>-token)")
+		fmt.Println("# loom prod tokens. Paste each into the kevcons-managed weft secret store:")
+		fmt.Println("#   kevcons secrets set LOOM_PROD_TOKEN <value>")
+		fmt.Println("#   kevcons secrets set LOOM_SAND_TOKEN <value>")
+		fmt.Println("# load-app-env on the loom-producer host will then emit them as env vars.")
 		for _, l := range lines {
 			fmt.Printf("%s=%s\n", l.varName, l.raw)
 		}

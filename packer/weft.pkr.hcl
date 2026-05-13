@@ -279,13 +279,14 @@ build {
     ]
   }
 
-  # loom-producer assets — units, render script, streams.yaml. Not
-  # enabled at AMI build time; only the dedicated weft-loom-producer
-  # host's install.sh enables them. Every other AMI consumer ignores
-  # these files entirely.
+  # loom-producer assets — units, render script, streams.yaml. The
+  # role unit is named weft-loom-producer.service so the AMI's
+  # weft-startup.service can pick it up via the existing
+  # `systemctl start weft-$ROLE` path when an instance is tagged
+  # Role=loom-producer. Other roles never start it.
   provisioner "file" {
-    source      = "deploy/loom-producer/loom-producer.service"
-    destination = "/tmp/loom-producer.service"
+    source      = "deploy/loom-producer/weft-loom-producer.service"
+    destination = "/tmp/weft-loom-producer.service"
   }
 
   provisioner "file" {
@@ -299,11 +300,6 @@ build {
   }
 
   provisioner "file" {
-    source      = "deploy/loom-producer/install.sh"
-    destination = "/tmp/loom-producer-install.sh"
-  }
-
-  provisioner "file" {
     source      = "deploy/loom-producer/streams.yaml"
     destination = "/tmp/streams.yaml"
   }
@@ -311,11 +307,10 @@ build {
   provisioner "shell" {
     inline = [
       "sudo install -d -m 0755 /opt/app/scripts/loom-producer /etc/loom-producer",
-      "sudo mv /tmp/loom-producer.service /tmp/weftd-loom@.service /etc/systemd/system/",
+      "sudo mv /tmp/weft-loom-producer.service /tmp/weftd-loom@.service /etc/systemd/system/",
       "sudo mv /tmp/render-weftd-config.sh /opt/app/scripts/loom-producer/render-weftd-config.sh",
-      "sudo mv /tmp/loom-producer-install.sh /opt/app/scripts/loom-producer/install.sh",
       "sudo mv /tmp/streams.yaml /etc/loom-producer/streams.yaml",
-      "sudo chmod +x /opt/app/scripts/loom-producer/render-weftd-config.sh /opt/app/scripts/loom-producer/install.sh",
+      "sudo chmod +x /opt/app/scripts/loom-producer/render-weftd-config.sh",
       "sudo systemctl daemon-reload",
     ]
   }

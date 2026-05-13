@@ -122,7 +122,11 @@ fi
 
 # Start weftd on all roles if a token is available. WEFTD_TOKEN is
 # populated by load-app-env from the /weft/WEFTD_TOKEN secret.
-if [ -n "${WEFTD_TOKEN:-}" ] && command -v weftd >/dev/null 2>&1; then
+#
+# Skip on the loom-producer role: that host runs its own weftd-loom@
+# instances under per-env LOOM_*_TOKEN values, and the ops-side
+# WEFTD_TOKEN would conflict with the host's customer/env binding.
+if [ "$ROLE" != "loom-producer" ] && [ -n "${WEFTD_TOKEN:-}" ] && command -v weftd >/dev/null 2>&1; then
   mkdir -p /etc/weftd
   # The coordinator role co-hosts api today; both surfaces want their
   # own /log/weft/<service>/{metrics,heartbeats}.log streams. Other

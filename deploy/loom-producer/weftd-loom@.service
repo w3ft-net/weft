@@ -1,15 +1,17 @@
 [Unit]
 Description=weftd-loom forwarder (env=%i)
-After=network-online.target loom-producer.service
+After=weft-loom-producer.service network-online.target
 Wants=network-online.target
-PartOf=loom-producer.service
+PartOf=weft-loom-producer.service
 
 [Service]
 Type=simple
 User=root
-# Carries WEFTD_TOKEN bound to env=%i. Written by the producer host's
-# user data after pulling the per-env token from Secrets Manager.
-EnvironmentFile=/etc/default/weftd-loom-%i
+# /opt/app/.env is populated by the AMI's weft-startup.service via
+# load-app-env (which pulls every /weft/* secret through kevcons). It
+# carries LOOM_PROD_TOKEN / LOOM_SAND_TOKEN; render-weftd-config.sh
+# below picks the one matching this instance's %i and writes config.yaml.
+EnvironmentFile=/opt/app/.env
 ExecStartPre=/opt/app/scripts/loom-producer/render-weftd-config.sh %i
 ExecStart=/usr/local/bin/weftd --config /etc/weftd-loom-%i/config.yaml
 Restart=always

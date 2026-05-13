@@ -101,72 +101,67 @@ the shared seed steps from the dev-only customers if needed. Reuse
 `seedLoomCustomer` / `preseedScripts` / `preseedLoomErrorRateHistory`
 unchanged.
 
-### 2. Token storage in Secrets Manager
+### 2. Token storage in the kevcons-managed `/weft/*` namespace
 
-One AWS Secrets Manager secret per environment, both in the weft
-account (`us-east-2`):
+Two secrets, flat names under `/weft/` in the existing
+kevcons-managed Secrets Manager namespace:
 
-| Secret name                          | Value (plain string)          |
-|--------------------------------------|-------------------------------|
-| `/weft/loom-producer/prod-token`     | raw `wft_...` for `loom-prod` |
-| `/weft/loom-producer/sand-token`     | raw `wft_...` for `loom-sand` |
+| Secret name              | Value                         |
+|--------------------------|-------------------------------|
+| `/weft/LOOM_PROD_TOKEN`  | raw `wft_...` for `loom-prod` |
+| `/weft/LOOM_SAND_TOKEN`  | raw `wft_...` for `loom-sand` |
 
-Two separate secrets (rather than a single JSON blob) so the
-instance's IAM policy can grant `secretsmanager:GetSecretValue`
-against the path prefix `/weft/loom-producer/*` without having to
-re-issue when we add or rename a token. SSM `SecureString` is
-equivalent here; Secrets Manager wins because the existing
-`load-app-env` pattern in weft already pulls Secrets Manager
-entries by convention and we get rotation-tracking metadata for
-free.
+SCREAMING_SNAKE_CASE names are required by `load-app-env`'s
+contract — it iterates every `/weft/*` secret name with `kevcons
+secrets list` and emits each as `NAME='value'` into `/opt/app/.env`.
+Slashes in the secret name would either be skipped or get munged
+into invalid env var names; the flat form makes load-app-env emit
+`$LOOM_PROD_TOKEN` and `$LOOM_SAND_TOKEN` directly.
 
-Tokens are written **manually**: an operator runs `weft-demo-seed
---prod-loom --tokens-out=-` once against the prod DB, copies the
-two values into Secrets Manager, and never thinks about it again.
-Terraform must **not** manage the secret values (only the secret
-resources + IAM); we don't want a `terraform apply` to silently
-rotate producer tokens.
+Terraform does **not** own these secrets. They're created and
+maintained out-of-band via `kevcons secrets set` — same lifecycle
+as every other `/weft/*` secret (`JWT_SECRET`, `WEFTD_TOKEN`, the
+Stripe keys). The producer's IAM doesn't even need to be scoped
+to them: the existing `weft-instance-profile` already grants
+`secretsmanager:GetSecretValue` on `/weft/*`, which load-app-env
+uses on every weft host. The two tokens become two more entries
+in `/opt/app/.env`.
 
-### 3. New Terraform stack `prod/weft-loom-producer`
+Token minting is manual: the operator runs `weft-demo-seed
+--prod-loom --tokens-out=-` once against the prod DB, pipes the
+two output values into `kevcons secrets set`, and never thinks
+about them again. The seed binary is idempotent — it only mints
+when no live token with the matching label exists, so re-running
+is safe.
 
-A standalone stack (not part of `asg-weft-application`) — the
-producer is independent of coordinator/shard/compute scaling and
-shouldn't ride those AMI rebuilds.
+### 3. Minimal Terraform stack `prod/weft-loom-producer`
+
+A standalone stack — the producer is independent of
+coordinator/shard/compute scaling and shouldn't ride those AMI
+rebuilds. Resource list is intentionally tiny because everything
+about secrets, IAM, and config flow is already baked into the AMI
+and the kevcons-managed `/weft/*` namespace.
 
 `infrastructure-live/prod/weft-loom-producer/main.tf`:
 
-- Single `aws_instance` (no ASG — there's no scaling story and no
-  failover requirement; if it crashes, the tour goes quiet for a
-  few minutes and the next signup sees a flat error-rate chart).
-- `instance_type = "t4g.nano"` (with `t4g.micro` documented as the
-  fallback if 512 MB ends up tight).
-- AMI: **reuse the live weft AMI** (`local.ami_id` from the same
-  SSM parameter `/weft/config/latest-ami`). The weft AMI already
-  bundles `/usr/local/bin/weftd` and all the systemd plumbing for
-  `load-app-env`. We pay a few extra hundred MB of disk for the
-  coordinator/shard/compute binaries we won't run, in exchange for
-  zero new AMI lifecycle. The instance ignores its Role tag (or
-  carries `Role=loom-producer`, which `start-role.sh` no-ops on).
-- IAM role with `secretsmanager:GetSecretValue` on
-  `/weft/loom-producer/*` and the standard CloudWatch agent /
-  SSM Session Manager permissions.
-- Security group: egress only. Ingress is closed — operators reach
-  it via SSM Session Manager (no SSH key, no public IP).
-- Subnet: any private subnet with NAT egress (reuse one of the
-  existing `nat_private_subnet_ids`).
-- User data: writes `/etc/loom-producer.env` listing the six
-  `(app, env, rate-shape, error-ratio)` tuples, fetches the two
-  tokens from Secrets Manager, drops them into
-  `/etc/default/weftd-loom-{prod,sand}`, and `systemctl enable
-  --now` the eight units described below.
-- Route53 entry: none. The host doesn't serve traffic.
+- `data.aws_ssm_parameter.ami_id` reading `/weft/ami/latest` (the
+  same parameter `asg-weft-application` reads).
+- `data.aws_iam_instance_profile.weft` referencing the existing
+  `weft-instance-profile`. The producer attaches it directly —
+  it already grants the secretsmanager and SSM permissions
+  load-app-env needs.
+- `data.aws_subnets.weft_private` filtered by the asg-weft-application
+  stack's `Tier=private` + `Name=weft-private-*` tags.
+- One `aws_security_group` — egress-only, no ingress (operator
+  access is via SSM Session Manager).
+- One `aws_instance` — t4g.nano, `Role=loom-producer` tag,
+  no public IP, IMDSv2 required, `instance_metadata_tags=enabled`
+  so `startup.sh` can read the Role tag, gp3 root volume.
 
-Files:
-- `infrastructure-live/prod/weft-loom-producer/{main,variables}.tf`
-- (optional) `infrastructure-catalog/stacks/loom-producer/main.tf`
-  if we want to lift it into a reusable module, but the resource
-  set is small enough to live entirely in the live stack on first
-  pass.
+No user_data, no IAM resources, no aws_secretsmanager_secret
+resources. The AMI does all the work via the existing
+`weft-startup.service` → `startup.sh` → `load-app-env` →
+`systemctl start weft-loom-producer.service` chain.
 
 ### 4. `cmd/loom-producer` — Go port of the generator
 
@@ -225,26 +220,34 @@ dev keeps the one-container-per-service model.
 
 ### 5. Systemd unit set in the weft AMI
 
-Add to the AMI (provisioned via `packer/weft.pkr.hcl`) — keeping
-them in the same AMI means a `kevcons build` already ships them,
-no second image to maintain:
+Three files in `deploy/loom-producer/`, all baked into the AMI by
+`packer/weft.pkr.hcl`. Other roles ignore them entirely; only the
+`Role=loom-producer` host activates them.
 
-- `deploy/loom-producer/loom-producer.service` — single unit, no
-  templating. `ExecStart=/opt/app/bin/loom-producer --config
-  /etc/loom-producer/streams.yaml`. `Restart=always`.
-- `deploy/loom-producer/weftd-loom@.service` — templated unit, one
-  instance per env. `EnvironmentFile=/etc/default/weftd-loom-${env}`
-  (env carries `WEFTD_TOKEN`); `ExecStartPre` renders
+- `weft-loom-producer.service` — role unit. Named with the
+  `weft-$ROLE` prefix so `startup.sh`'s existing
+  `systemctl start weft-$ROLE` line picks it up for free.
+  `EnvironmentFile=-/opt/app/.env` (the leading `-` makes missing
+  the file non-fatal — `weft-startup.service` writes it before us
+  via the `After=` ordering). `Wants=weftd-loom@prod.service
+  weftd-loom@sand.service` so starting the role cascades to the
+  two forwarders.
+- `weftd-loom@.service` — templated, one instance per env.
+  `EnvironmentFile=/opt/app/.env` so the unit sees every
+  `/weft/*` secret kevcons emitted. `ExecStartPre` runs
+  `render-weftd-config.sh %i`, which picks `LOOM_${ENV^^}_TOKEN`
+  out of the environment and writes
   `/etc/weftd-loom-${env}/config.yaml` listing the three matching
-  log paths with their `app:` tags.
-- `deploy/loom-producer/install.sh` — idempotent installer called
-  from user data: drops `streams.yaml`, enables
-  `loom-producer.service` + `weftd-loom@prod.service` +
-  `weftd-loom@sand.service`, creates `/var/log/loom`.
-- `systemctl mask weftd.service` on this host so the AMI's
-  ops-side weftd unit can't fire — this host has no
-  coordinator/shard/compute role, and a stray ops-token weftd
-  would just spam empty heartbeats.
+  log paths with their `app:` tags. `PartOf=weft-loom-producer.service`
+  so stopping the role cascades down too.
+- `streams.yaml` at `/etc/loom-producer/`. Static manifest of the
+  six streams with shapes + error-ratios — same values as
+  `docker-compose.demo.yml`'s loom-* services.
+
+No install.sh. No `systemctl mask weftd.service`. The role-skip
+for the ops-side weftd lives in `deploy/startup.sh`: a
+one-line `[ "$ROLE" != "loom-producer" ]` guard in front of the
+existing block that starts the ops weftd.
 
 ### 6. Producer-specific weftd config rendering
 
@@ -274,27 +277,41 @@ end-to-end shape: identical to what the dev producers send today.
 
 ## Run sheet
 
-1. **Seed Loom in prod**. From a host with prod DB access (the
-   bastion or a coordinator over SSM), run:
+1. **Seed Loom in the prod DB**, opening a tunnel through kevcons:
    ```bash
-   weft-demo-seed --prod-loom --db-dsn "$PROD_DSN" --tokens-out -
+   cd ~/dev/weft
+   go build -o /tmp/weft-demo-seed ./cmd/weft-demo-seed
+   kevcons db tunnel -- bash -c '
+     DB_DSN="host=$PGHOST port=$PGPORT user=$PGUSER password=$PGPASSWORD dbname=$PGDATABASE sslmode=require" \
+       /tmp/weft-demo-seed --prod-loom --tokens-out=-
+   '
    ```
-   Capture the two tokens.
-2. **Stash tokens in Secrets Manager**:
+   stdout has two lines: `LOOM_PROD_TOKEN=wft_...` and
+   `LOOM_SAND_TOKEN=wft_...`. Idempotent: re-running skips mint if
+   tokens already exist.
+
+2. **Store the tokens** in the kevcons-managed `/weft/*` namespace:
    ```bash
-   kevcons aws secretsmanager put-secret-value \
-     --secret-id /weft/loom-producer/prod-token --secret-string "$LOOM_PROD"
-   kevcons aws secretsmanager put-secret-value \
-     --secret-id /weft/loom-producer/sand-token --secret-string "$LOOM_SAND"
+   kevcons secrets set LOOM_PROD_TOKEN '<paste prod value>'
+   kevcons secrets set LOOM_SAND_TOKEN '<paste sand value>'
    ```
+
 3. **Apply the producer stack**:
    ```bash
    cd ~/dev/infrastructure-live/prod/weft-loom-producer
+   terraform init
    terraform apply
    ```
-   Instance comes up, user data starts the eight units.
-4. **Verify** from the api host (or any weft shell logged in as a
-   real prod user with Loom membership):
+   Instance launches. `weft-startup.service` runs `load-app-env`
+   which writes `LOOM_*_TOKEN` into `/opt/app/.env`, then
+   `systemctl start weft-loom-producer.service` cascades through
+   the two `weftd-loom@` instances. First boot is clean — no
+   crash-loop, no taint+reapply dance.
+
+4. **Verify**. From any weft shell logged in as a real prod user
+   with Loom membership (signing up a new account at
+   `https://w3ft.net` works — the membership grant fires on
+   signup):
    ```
    weft> tail /log/loom/prod/api.log
    weft> tail /log/loom/prod/api.log | grep ERROR | wc -l

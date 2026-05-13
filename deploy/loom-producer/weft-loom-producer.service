@@ -1,0 +1,21 @@
+[Unit]
+Description=Loom Inc synthetic log producer (drives onboarding tour live data)
+After=weft-startup.service network-online.target
+Wants=weftd-loom@prod.service weftd-loom@sand.service
+
+[Service]
+Type=simple
+User=root
+# /opt/app/.env carries the kevcons-managed /weft/* secrets — including
+# LOOM_PROD_TOKEN / LOOM_SAND_TOKEN consumed by the weftd-loom@ instances
+# we Wants. The producer binary itself doesn't need them, but loading the
+# env file keeps configuration consistent across the loom-producer units.
+EnvironmentFile=-/opt/app/.env
+ExecStart=/opt/app/bin/loom-producer --config /etc/loom-producer/streams.yaml
+Restart=always
+RestartSec=5
+# Avoid the producer pinning the host CPU if a config loop misfires.
+CPUWeight=50
+
+[Install]
+WantedBy=multi-user.target
