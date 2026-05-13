@@ -29,7 +29,7 @@ export default function Login() {
     <div className="login-page">
       <div className="login-card">
         <div className="login-logo">weft</div>
-        <div className="login-tagline">log analysis for operators</div>
+        <div className="login-tagline">log analysis for your Unix heart</div>
 
         {sent ? (
           <div className="login-sent" data-testid="login-sent-message">

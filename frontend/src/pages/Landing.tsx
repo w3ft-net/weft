@@ -28,17 +28,17 @@ export default function Landing() {
 
           <div className="narrative" style={{ paddingTop: 32 }}>
             <p>
-              <strong>Another year. Another log vendor. Another proprietary syntax.</strong>
-              <br />
-              <strong>Sick of it? Do you want your old tools back?</strong>
-              <br />
-              <br />
-              <strong>Mend the tattered fabric of the Unix way with...</strong>
+              <strong>Hey you! Why be shackled to the browser with another proprietary DSL when you can use...</strong>
             </p>
           </div>
           <section className="hero-center">
             <AsciiLogo />
           </section>
+          <div className="narrative" style={{ paddingTop: 32 }}>
+            <p>
+              <strong>A log aggregation platform that loves the terminal as much as you do. A balm for your Unix soul.</strong>
+            </p>
+          </div>
 
           <div className="cta-center" style={{ marginTop: 28, marginBottom: 16 }}>
             <Link to="/signup" className="cta-cmd" data-testid="hero-cta-button">

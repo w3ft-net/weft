@@ -7,44 +7,54 @@ const NARRATIVES: { start: number; end: number; title: string; body: ReactNode }
   {
     start: 0,
     end: 0.45,
-    title: 'connect weft everywhere',
+    title: 'ingest from anywhere',
     body: <>
-      <code>tail -f</code> all your logs like the old days — from the <em>weft</em>{' '}
-      shell, in your terminal or right in your browser.
+      install <em>weftd</em> on a linux host to tail log files and ship{' '}
+      <code>/proc</code> metrics over gRPC. for lambda, ECS, API gateway,
+      anything in <em>CloudWatch</em> — weft polls a cross-account IAM role.
+      no agent required.
     </>,
   },
   {
     start: 0.45,
     end: 0.58,
-    title: 'bring back your old friends',
+    title: 'your shell, just bigger',
     body: <>
-      just because your logs are distributed doesn’t mean you can’t have{' '}
-      <em>coreutils</em>.
+      log sources are pseudofiles under <code>/log/&lt;ns&gt;/&lt;env&gt;/&lt;app&gt;.log</code>.
+      pipe through <code>awk</code>, <code>jq</code>, <code>grep</code>,{' '}
+      <code>sed</code> — meta-vars like <code>$LEVEL</code> and <code>$HOST</code>{' '}
+      push down to column scans, not <em>json_extract</em>.
     </>,
   },
   {
     start: 0.58,
     end: 0.71,
-    title: 'metrics, too',
+    title: 'metrics ride the same wires',
     body: <>
-      optionally stream system metrics and slice them with <code>jq</code>.
+      <em>weftd</em> samples <code>/proc</code> and ships cpu, memory, disk, load,
+      network rows as JSON to <code>metrics.log</code>. no second product, no
+      second query language — just <code>tail | jq</code>.
     </>,
   },
   {
     start: 0.71,
     end: 0.84,
-    title: 'reusable 1-liners',
+    title: 'schedule it, alert on it',
     body: <>
-      write scripts in bash or lua, save them to <code>/bin</code>, and monitor
-      your fleet by dropping specs into <code>cron.d</code>.
+      drop a <code># schedule:</code> file in <code>/cron.d/</code>. numeric stdout
+      draws a sparkline; pipe to <code>alert above N --notify=&lt;alias&gt;</code> to
+      page slack, pagerduty, email, or any webhook. aliases live in{' '}
+      <code>/etc/notify.yaml</code>.
     </>,
   },
   {
     start: 0.84,
     end: 1.01,
-    title: 'get notified',
+    title: 'terminal or browser, same shell',
     body: <>
-      slack, pagerduty, email — just pipe to <code>alert</code>.
+      <code>chart</code> and <code>dashboard</code> render in both. scripts in{' '}
+      <code>/bin</code> (bash or lua) compose into pipelines; every save is
+      versioned with <code>wit</code>.
     </>,
   },
 ]
@@ -65,45 +75,52 @@ const BG = '#0f0f1a'
 
 const SVG_W = 560
 const SVG_H_DIAGRAM = 500
-const SVG_H_SHELL = 340
+const SVG_H_SHELL = 500
 
 // ── Service data ──────────────────────────────────────────────────────
+// `weftLabel` is what replaces `log` once weftification kicks in.
+// EC2 hosts run the weftd agent over gRPC; Lambda/ECS land in
+// CloudWatch and are pulled by weft's cross-account poller — two
+// real ingest paths.
 const ROWS = [
-  { labels: ['web-1', 'web-2', 'web-3'], infra: 'EC2', log: '/var/log/*' },
-  { labels: ['payment', 'notify', 'resize-img'], infra: 'Lambda', log: 'CloudWatch' },
-  { labels: ['importer', 'scheduler'], infra: 'ECS Fargate', log: 'CloudWatch' },
+  { labels: ['web-1', 'web-2', 'web-3'], infra: 'EC2', log: '/var/log/*', weftLabel: 'weftd ●' },
+  { labels: ['payment', 'notify', 'resize-img'], infra: 'Lambda', log: 'CloudWatch', weftLabel: 'cw poll ◆' },
+  { labels: ['importer', 'scheduler'], infra: 'ECS Fargate', log: 'CloudWatch', weftLabel: 'cw poll ◆' },
 ]
 
 // ── Shell commands ────────────────────────────────────────────────────
 const SHELL_COMMANDS = [
   {
-    cmd: "cat api-gateway.log | awk '$DURATION > 2000' | sort -k2 -rn | head -3",
+    cmd: `cat /log/loom/prod/api.log | awk '$LEVEL == "ERROR"' | head -3`,
     output: [
-      '/api/reports/generate   4820ms',
-      '/api/exports/csv       3201ms',
-      '/api/search            2445ms',
+      '14:23:11  api-7f9b   timeout to upstream',
+      '14:23:14  api-3a2e   invalid auth token',
+      '14:23:17  api-7f9b   redis CLUSTERDOWN',
     ],
   },
   {
-    cmd: "tail -f host-metrics | jq 'select(.cpu > 80) | .host'",
+    cmd: `tail /log/loom/metrics.log | jq 'select(.type=="cpu" and .user>80)'`,
     output: [
-      '"web-2"',
-      '"importer"',
-      '"web-2"',
+      '{"type":"cpu","_host":"web-2","user":94,"idle":3}',
+      '{"type":"cpu","_host":"importer","user":88,"idle":11}',
+      '{"type":"cpu","_host":"web-2","user":91,"idle":6}',
     ],
   },
   {
-    cmd: 'cat /etc/cron.d/fleet-health',
+    cmd: 'cat /cron.d/error-rate',
     output: [
-      '*/5 * * * *   health-check',
-      '0   * * * *   slow-reqs | alert',
-      '0   9 * * *   daily-summary',
+      '# schedule: every 1m',
+      'tail -n 500 /log/loom/prod/api.log \\',
+      '  | grep ERROR | wc -l \\',
+      '  | alert above 50 --notify=ops',
     ],
   },
   {
-    cmd: 'health-check | alert slack:#oncall',
+    // Output is the exact glyph sequence chart.Sparkline() emits for
+    // the realistic error-rate series in chart/landing_sparkline_test.go.
+    cmd: 'chart error-rate -t sparkline',
     output: [
-      '\u2192 slack #oncall: 2 hosts unhealthy',
+      '\u2581\u2581\u2581\u2582\u2582\u2582\u2582\u2583\u2583\u2584\u2585\u2584\u2586\u2585\u2587\u2588\u2586\u2584\u2583\u2582\u2582\u2581\u2581\u2581',
     ],
   },
 ]
@@ -128,8 +145,9 @@ const TERM_BOX = {
 }
 
 // ── Box component ─────────────────────────────────────────────────────
-function ServiceBox({ x, y, label, infra, log, weftified }: {
-  x: number; y: number; label: string; infra: string; log: string; weftified: boolean
+function ServiceBox({ x, y, label, infra, log, weftLabel, weftified }: {
+  x: number; y: number; label: string; infra: string; log: string;
+  weftLabel: string; weftified: boolean
 }) {
   return (
     <g>
@@ -140,7 +158,7 @@ function ServiceBox({ x, y, label, infra, log, weftified }: {
       <text x={x + 10} y={y + 48} fontSize={FONT_SIZE - 1} fontFamily={FONT}
         fill={weftified ? ORANGE : DIM}
         style={{ transition: 'fill 0.4s' }}
-      >{weftified ? 'weftd \u25CF' : log}</text>
+      >{weftified ? weftLabel : log}</text>
     </g>
   )
 }
@@ -207,6 +225,7 @@ export default function ScrollDiagram() {
                 label={label}
                 infra={row.infra}
                 log={row.log}
+                weftLabel={row.weftLabel}
                 weftified={weftified}
               />
             ))
