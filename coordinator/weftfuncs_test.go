@@ -73,14 +73,17 @@ func testQueryStoreOpts(t *testing.T, customer string, realDB bool, namespaces .
 		})
 		target = tx
 	} else {
-		// Truncate before AND after: a previous test that crashed mid-run
-		// could have left rows behind, and we don't want our subscription
-		// insert to collide with one from a previous customer="kevlar" run.
-		db.TruncateTestTables()
+		// Scoped cleanup: delete only the rows this test inserts, not
+		// every row in the shared weft DB. A blanket TruncateTestTables
+		// races other packages' tests (api/*, store/team_perms) that
+		// run in parallel against the same database.
 		t.Cleanup(func() {
-			db.TruncateTestTables()
+			deleteCustomerData(db, customer)
 			db.Close()
 		})
+		// Pre-clean too, in case a previous crashed run left this
+		// customer behind.
+		deleteCustomerData(db, customer)
 	}
 
 	cust, err := target.FindOrCreateCustomer(customer)
@@ -102,6 +105,16 @@ func testQueryStoreOpts(t *testing.T, customer string, realDB bool, namespaces .
 		t.Fatalf("seed bolt subscription: %v", err)
 	}
 	return target
+}
+
+// deleteCustomerData removes every row scoped to a single customer
+// from the shared weft DB, leaving other test packages' data alone.
+// Subscription.CustomerID is the customer NAME (not the numeric id);
+// namespaces and the customer row use the numeric id.
+func deleteCustomerData(db *store.Store, customer string) {
+	_ = db.ExecForTest("DELETE FROM subscriptions WHERE customer_id = ?", customer)
+	_ = db.ExecForTest("DELETE FROM namespaces WHERE customer_id IN (SELECT id FROM customers WHERE name = ?)", customer)
+	_ = db.ExecForTest("DELETE FROM customers WHERE name = ?", customer)
 }
 
 func seedWatch(t *testing.T, db *store.Store, custID uint, name string, values []string, interval time.Duration) {

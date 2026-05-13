@@ -115,6 +115,14 @@ func (s *Store) TruncateTestTables() {
 	s.db.Exec("TRUNCATE TABLE cron_results, cron_watches, shell_functions, agent_tokens, notify_configs, namespace_permissions, org_permissions, namespaces, alert_incidents, device_codes, magic_links, saved_queries, team_members, shard_records, subscriptions, users, customers CASCADE")
 }
 
+// ExecForTest runs raw SQL on the store's connection. Test-only:
+// most production paths should go through GORM methods. Use this
+// for scoped cleanup that doesn't have a single Store method (e.g.
+// "delete everything owned by customer X").
+func (s *Store) ExecForTest(sql string, args ...any) error {
+	return s.db.Exec(sql, args...).Error
+}
+
 // Close releases the database connection.
 func (s *Store) Close() error {
 	db, err := s.db.DB()
