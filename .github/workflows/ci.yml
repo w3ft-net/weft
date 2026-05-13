@@ -50,6 +50,16 @@ jobs:
           done
       - name: go test ./...
         working-directory: weft
+        env:
+          # Several "unit" tests (shellfs, coordinator, parts of api)
+          # call store.Open against the dev `weft` database and skip
+          # when migrations haven't been applied yet — locally they
+          # rely on the dev stack having been up. Enabling the
+          # bootstrap path here lets them connect against the fresh
+          # postgres we started above. store/* unit tests target
+          # weft_test and set this themselves; this env var is the
+          # umbrella for everyone else.
+          WEFT_ALLOW_SCHEMA_BOOTSTRAP: "1"
         run: |
           mkdir -p coverage/unit
           gotestsum --junitfile unit-report.xml -- -count=1 -timeout 5m -cover -coverpkg=./... ./... -args -test.gocoverdir="$PWD/coverage/unit"
