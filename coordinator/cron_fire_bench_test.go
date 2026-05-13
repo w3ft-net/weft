@@ -2,9 +2,11 @@ package coordinator
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/kevlarcon/weft/compute"
+	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/store"
 )
@@ -60,15 +62,17 @@ func BenchmarkExecuteForWatch(b *testing.B) {
 	cases := []struct {
 		name     string
 		pipeline string
+		// lowered: when true, the bench seeds watch.LoweredPlan so the
+		// fire path takes the save-time-lowered shortcut (no Plan,
+		// no preflight, no GetCustomerByID DB hit). When false, the
+		// fire path takes the inline-Plan fallback. Comparing the two
+		// per-op numbers IS the Phase B win.
+		lowered bool
 	}{
-		{
-			name:     "bare",
-			pipeline: `cat /log/vimgym.log | grep ERROR`,
-		},
-		{
-			name:     "with_bin",
-			pipeline: `/bin/loom-error-rate | head -5`,
-		},
+		{name: "bare_inline", pipeline: `cat /log/vimgym.log | grep ERROR`, lowered: false},
+		{name: "bare_lowered", pipeline: `cat /log/vimgym.log | grep ERROR`, lowered: true},
+		{name: "with_bin_inline", pipeline: `/bin/loom-error-rate | head -5`, lowered: false},
+		{name: "with_bin_lowered", pipeline: `/bin/loom-error-rate | head -5`, lowered: true},
 	}
 
 	tr := TimeRange{
@@ -86,6 +90,23 @@ func BenchmarkExecuteForWatch(b *testing.B) {
 				Enabled:    true,
 			}
 
+			if tc.lowered {
+				lp, err := planner.Lower(tc.pipeline, "kevlar", noBinResolver{})
+				if err != nil {
+					// Pipelines that don't lower (e.g. /bin/ refs the
+					// stub can't inline) skip the lowered sub-bench
+					// rather than fail the entire run. With_bin will
+					// land here today; remove this skip once Lower
+					// gets full /bin inlining.
+					b.Skipf("Lower not yet supported for %q: %v", tc.pipeline, err)
+				}
+				js, err := json.Marshal(lp)
+				if err != nil {
+					b.Fatalf("marshal lowered plan: %v", err)
+				}
+				w.LoweredPlan = js
+			}
+
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
@@ -93,9 +114,6 @@ func BenchmarkExecuteForWatch(b *testing.B) {
 				if err != nil {
 					b.Fatalf("ExecuteForWatch: %v", err)
 				}
-				// Drain the (empty) noop stream so any warp goroutine
-				// spawned during runLocal finishes before the next
-				// iteration's GetCustomerByID hits the same DB conn.
 				if res != nil && res.Stream != nil {
 					_, _ = res.Drain(context.Background())
 				}

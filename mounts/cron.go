@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/kevlarcon/weft/planner"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -97,7 +98,32 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 		return fmt.Errorf("minimum schedule interval for %s plan is %s", m.cfg.Tier, minInterval)
 	}
 
-	return m.cfg.Store.SaveCronWatch(m.cfg.CustomerID, m.cfg.UserID, rel, schedule, pipeline)
+	// Lower at save time so the fire path can skip preflight + Plan.
+	// LowerForStorage returns nil on any failure (e.g. unsupported
+	// /bin/ pipeline) — the save still succeeds, and the fire path
+	// falls back to inline Plan() for those.
+	resolver := cronBinResolver{store: m.cfg.Store, customerID: m.cfg.CustomerID}
+	loweredJSON := planner.LowerForStorage(pipeline, m.cfg.CustomerName, resolver)
+
+	return m.cfg.Store.SaveCronWatch(m.cfg.CustomerID, m.cfg.UserID, rel, schedule, pipeline, loweredJSON)
+}
+
+// cronBinResolver adapts the shell mount's store + customer scope to
+// planner.BinResolver. Mirrors the adapter in api/handlers.go and
+// coordinator/service/server.go — kept duplicated rather than shared
+// because the type is tiny and pulling a helper package together for
+// three identical 10-line adapters is unjustified.
+type cronBinResolver struct {
+	store      *store.Store
+	customerID uint
+}
+
+func (r cronBinResolver) Source(name string) (string, string, bool) {
+	fn, err := r.store.GetShellFunction(r.customerID, name)
+	if err != nil || fn == nil {
+		return "", "", false
+	}
+	return fn.Source, planner.HashBinSource(fn.Source), true
 }
 
 func (m *CronMount) Remove(rel string) error {

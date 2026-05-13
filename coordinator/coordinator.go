@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -548,15 +549,185 @@ func (c *Coordinator) ExecuteForWatch(pipeline string, tr TimeRange, watch *stor
 		CustomerID: watch.CustomerID,
 		Notifier:   c.Notifier,
 	}
-	// The watch carries its own CustomerID so we can resolve the
-	// name here without a second Store round-trip. A miss means a
-	// deleted-customer race; surface it rather than running with
-	// custName="".
+
+	// Fast path: the watch was lowered at save time and the lowered
+	// form is still hot. Hydrate args + dispatch directly, bypassing
+	// preflight (which hits the DB to resolve the customer name) and
+	// Plan (which re-parses + re-walks the pipeline). Phase A profiling
+	// pinned customer-resolve + Plan + expandBin at ~15-25% of the
+	// per-fire coordinator cost; this is where that saves cleanly.
+	if res, ok := c.executeLowered(watch, tr, alertCtx); ok {
+		return res, nil
+	}
+
+	// Fall-through: lowered form is missing, stale (version bump or
+	// /bin invalidation), or unrenderable. Run the original path and
+	// opportunistically re-lower + write back so the next fire is hot.
 	cust, err := c.Store.GetCustomerByID(watch.CustomerID)
 	if err != nil {
 		return nil, fmt.Errorf("watch %d: resolve customer %d: %w", watch.ID, watch.CustomerID, err)
 	}
+	go c.refreshLoweredAsync(watch, cust.Name)
 	return c.execute(pipeline, tr, cust.Name, "", alertCtx)
+}
+
+// executeLowered tries the hot-path dispatch using watch.LoweredPlan.
+// Returns (nil, false) on any condition that should fall through to
+// the slow path: no plan persisted, version mismatch, /bin dep hash
+// drift, marshalling error, or follow/alert features the lowered
+// path doesn't handle yet. The caller surfaces those as a slow-path
+// re-plan + opportunistic re-lowering.
+func (c *Coordinator) executeLowered(watch *store.CronWatch, tr TimeRange, alertCtx *AlertContext) (*ExecuteResult, bool) {
+	if len(watch.LoweredPlan) == 0 {
+		return nil, false
+	}
+	var lp planner.LoweredPlan
+	if err := json.Unmarshal(watch.LoweredPlan, &lp); err != nil {
+		log.Printf("watch %d: lowered_plan unmarshal: %v — falling back to inline Plan", watch.ID, err)
+		return nil, false
+	}
+	if lp.PlannerVersion != planner.PlannerVersion {
+		log.Printf("watch %d: lowered_plan stamped at version %d, planner is at %d — recompiling",
+			watch.ID, lp.PlannerVersion, planner.PlannerVersion)
+		return nil, false
+	}
+	// Check every recorded /bin dep against the current source hash.
+	// A drift (someone edited /bin/foo) invalidates the lowered plan
+	// for every watch that referenced it. The slow path re-lowers.
+	for _, dep := range lp.BinDeps {
+		fn, err := c.Store.GetShellFunction(watch.CustomerID, dep.Name)
+		if err != nil || fn == nil {
+			return nil, false
+		}
+		if planner.HashBinSource(fn.Source) != dep.Hash {
+			return nil, false
+		}
+	}
+	// TODO Phase B v2: alert post-processing + follow mode through
+	// the lowered path. Today fall through to slow path for both —
+	// the bench numbers don't include either, and the slow-path
+	// re-lowering keeps the lowered_plan populated for non-alert
+	// non-follow fires.
+	if len(lp.AlertArgs) > 0 || lp.Follow {
+		return nil, false
+	}
+	// Clamp time range to tier retention (matches runQuery's pre-Plan
+	// step) and hydrate args against the fire-time ResolveCtx. The
+	// hydrated args are []any; the coordinator dispatch path widens
+	// to []string for the proto.
+	tr = c.clampTimeRange(tr, watch.CustomerID)
+	ctx := planner.ResolveCtx{Customer: lp.Customer, Start: tr.Start, End: tr.End}
+	args := lp.Hydrate(ctx)
+	res, err := c.dispatchLowered(&lp, args, tr, watch.CustomerID, alertCtx)
+	if err != nil {
+		log.Printf("watch %d: lowered dispatch failed: %v — falling back to inline Plan", watch.ID, err)
+		return nil, false
+	}
+	return res, true
+}
+
+// dispatchLowered ships the hydrated lowered plan to shards. Mirrors
+// executeQuery's shard-selection + ExecuteQueryRequest construction
+// but skips preflight (no source-app allowlist check — that's already
+// implicit in the saved lowered_plan since unlowerable shapes never
+// made it past Lower) and skips Plan (already done at save time).
+func (c *Coordinator) dispatchLowered(lp *planner.LoweredPlan, args []any, tr TimeRange, custID uint, alertCtx *AlertContext) (*ExecuteResult, error) {
+	// Source-app allowlist on saved watches: a watch saved with
+	// access to /log/loom/api still has it at fire time (the
+	// allowlist is per-customer + per-source; revoking source
+	// access doesn't migrate to invalidating watches, so this
+	// check is duplicate work in the slow path AND the lowered
+	// path). Keep it.
+	if lp.SourceApp != "" {
+		ok, err := c.Store.CustomerHasSource(custID, lp.SourceApp)
+		if err != nil {
+			return nil, fmt.Errorf("validate source: %w", err)
+		}
+		if !ok {
+			return nil, fmt.Errorf("unknown source: %s", lp.SourceApp)
+		}
+	}
+	var tier store.Tier
+	if custID != 0 {
+		tier = c.Store.TierForCustomer(custID)
+	}
+	entries := c.Registry.MatchingEntries(tr, lp.FollowApp, tier)
+	if len(entries) == 0 {
+		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
+	}
+	descs := make([]*pb.ShardDescriptor, len(entries))
+	for i, e := range entries {
+		d := &pb.ShardDescriptor{ShardId: e.ID, Apps: e.Apps}
+		if e.State == StateArchived {
+			d.LambdaUrl = c.lambdaFunctionURL
+			d.ParquetPath = e.ParquetPath
+		} else {
+			d.GrpcAddr = e.Addr
+		}
+		descs[i] = d
+	}
+	argStrs := make([]string, len(args))
+	for i, a := range args {
+		if s, ok := a.(string); ok {
+			argStrs[i] = s
+		} else {
+			argStrs[i] = fmt.Sprintf("%v", a)
+		}
+	}
+	stream, err := c.Pool.ExecuteQuery(&pb.ExecuteQueryRequest{
+		Sql:         lp.DirectShardSQL,
+		Args:        argStrs,
+		Shards:      descs,
+		Stages:      lp.ComputeStages,
+		MergeKey:    lp.MergeKey,
+		Limit:       int32(lp.Limit),
+		ShardSecret: c.shardSecret,
+		KeepLast:    lp.TailMode,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &ExecuteResult{Stream: stream}, nil
+}
+
+// refreshLoweredAsync is the background re-lowering invoked from the
+// fallback path. Runs Lower on the watch's current pipeline + writes
+// the JSON back via RefreshWatchLoweredPlan. Failures log but don't
+// retry — the next fire's fallback path will try again.
+//
+// Skips watches with ID == 0: those aren't persisted (in-memory test
+// fixtures, benchmark scaffolding, ephemeral pipelines from the
+// interactive shell that briefly impersonate a watch via
+// ExecuteForWatch). Writing back would either fail noisily or thrash
+// the test DB conn.
+func (c *Coordinator) refreshLoweredAsync(watch *store.CronWatch, customerName string) {
+	if watch.ID == 0 {
+		return
+	}
+	resolver := watchBinResolver{store: c.Store, customerID: watch.CustomerID}
+	loweredJSON := planner.LowerForStorage(watch.Pipeline, customerName, resolver)
+	if loweredJSON == nil {
+		return
+	}
+	if err := c.Store.RefreshWatchLoweredPlan(watch.ID, loweredJSON); err != nil {
+		log.Printf("watch %d: refresh lowered_plan: %v", watch.ID, err)
+	}
+}
+
+// watchBinResolver is the coordinator-side BinResolver used by the
+// async refresh path. Mirrors the adapter in api/handlers.go and
+// mounts/cron.go — kept duplicated rather than shared (10-line type).
+type watchBinResolver struct {
+	store      *store.Store
+	customerID uint
+}
+
+func (r watchBinResolver) Source(name string) (string, string, bool) {
+	fn, err := r.store.GetShellFunction(r.customerID, name)
+	if err != nil || fn == nil {
+		return "", "", false
+	}
+	return fn.Source, planner.HashBinSource(fn.Source), true
 }
 
 // execute is the unified dispatcher. Preflights (resolves customer

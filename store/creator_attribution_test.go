@@ -52,7 +52,7 @@ func TestSaveCronWatch_RecordsCreator(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := db.SaveCronWatch(cust.ID, user.ID, "errors", "*/5 * * * *", "echo 1"); err != nil {
+	if err := db.SaveCronWatch(cust.ID, user.ID, "errors", "*/5 * * * *", "echo 1", nil); err != nil {
 		t.Fatal(err)
 	}
 	w, err := db.GetCronWatch(cust.ID, "errors")

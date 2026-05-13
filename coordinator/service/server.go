@@ -23,6 +23,7 @@ import (
 	"github.com/kevlarcon/weft/coordinator"
 	"github.com/kevlarcon/weft/ingest"
 	"github.com/kevlarcon/weft/mounts"
+	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/store"
 )
@@ -739,10 +740,36 @@ func (s *Server) SaveWatch(ctx context.Context, req *pb.SaveWatchRequest) (*pb.S
 	if err != nil {
 		return nil, err
 	}
-	if err := s.Store.SaveCronWatch(custID, callerUserID(ctx), req.Name, req.Schedule, req.Pipeline); err != nil {
+	// Look up customer name for the LoweredPlan's ArgCustomer source.
+	// On a save-time race where the customer was deleted between auth
+	// and here, skip lowering rather than fail the save.
+	var loweredJSON []byte
+	if cust, err := s.Store.GetCustomerByID(custID); err == nil && cust != nil {
+		resolver := storeBinResolver{store: s.Store, customerID: custID}
+		loweredJSON = planner.LowerForStorage(req.Pipeline, cust.Name, resolver)
+	}
+	if err := s.Store.SaveCronWatch(custID, callerUserID(ctx), req.Name, req.Schedule, req.Pipeline, loweredJSON); err != nil {
 		return nil, err
 	}
 	return &pb.SaveWatchResponse{}, nil
+}
+
+// storeBinResolver adapts the gRPC service's store + customer scope to
+// planner.BinResolver for save-time pipeline inlining. Mirrors the
+// adapter in api/handlers.go — kept duplicated rather than shared
+// because the two save paths sit in different packages and the type
+// is genuinely tiny.
+type storeBinResolver struct {
+	store      *store.Store
+	customerID uint
+}
+
+func (r storeBinResolver) Source(name string) (string, string, bool) {
+	fn, err := r.store.GetShellFunction(r.customerID, name)
+	if err != nil || fn == nil {
+		return "", "", false
+	}
+	return fn.Source, planner.HashBinSource(fn.Source), true
 }
 
 func (s *Server) GetWatch(ctx context.Context, req *pb.GetWatchRequest) (*pb.GetWatchResponse, error) {

@@ -18,7 +18,7 @@ func TestRollupHourly_AggregatesRawCorrectly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := db.SaveCronWatch(cust.ID, "", "rollup-w", "*/1 * * * *", "echo 1"); err != nil {
+	if err := db.SaveCronWatch(cust.ID, "", "rollup-w", "*/1 * * * *", "echo 1", nil); err != nil {
 		t.Fatal(err)
 	}
 	var watchID uint
@@ -123,7 +123,7 @@ func TestRollup_4hCombinesHourly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1"); err != nil {
+	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1", nil); err != nil {
 		t.Fatal(err)
 	}
 	var watchID uint
@@ -215,7 +215,7 @@ func TestCronAggregate_PicksTierByWindow(t *testing.T) {
 		VALUES (?, ?, 'bolt', 'active', now(), now(), now())`, "sub-"+cust.Name, cust.Name).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1"); err != nil {
+	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1", nil); err != nil {
 		t.Fatal(err)
 	}
 	var watchID uint
@@ -288,7 +288,7 @@ func TestQueryCronSeries_PicksTierAndReturnsBuckets(t *testing.T) {
 		"sub-"+cust.Name, cust.Name).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1"); err != nil {
+	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1", nil); err != nil {
 		t.Fatal(err)
 	}
 	var watchID uint
@@ -365,7 +365,7 @@ func TestCronAggregate_ClampsToPlanRetention(t *testing.T) {
 		VALUES (?, ?, 'swatch', 'active', now(), now(), now())`, "sub-"+cust.Name, cust.Name).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1"); err != nil {
+	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1", nil); err != nil {
 		t.Fatal(err)
 	}
 	var watchID uint

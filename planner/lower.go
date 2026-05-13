@@ -3,7 +3,9 @@ package planner
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 )
 
@@ -29,6 +31,14 @@ const PlannerVersion = 1
 // `weft.cat /cron.d/foo` or a SQL query. New fields go at the end
 // with omitempty; renames trigger a PlannerVersion bump.
 type LoweredPlan struct {
+	// Customer is the row-level-security boundary captured at save
+	// time. The fire path uses it to construct ResolveCtx without
+	// looking up the customer name by ID — which is the dominant
+	// non-warp cost of an uncached cron fire (see Phase A bench
+	// profile). Customer renames invalidate this field; the fire
+	// path will need to re-lower if it diverges, but renames are
+	// rare enough that the bake-in is worth the saved DB hit.
+	Customer        string      `json:"customer"`
 	ShardSQL        string      `json:"shard_sql"`
 	DirectShardSQL  string      `json:"direct_shard_sql"`
 	ArgSources      []ArgSource `json:"args,omitempty"`
@@ -134,6 +144,7 @@ func Lower(pipeline, customer string, resolveBin BinResolver) (*LoweredPlan, err
 	}
 
 	return &LoweredPlan{
+		Customer:        customer,
 		ShardSQL:        plan.ShardSQL,
 		DirectShardSQL:  plan.DirectShardSQL,
 		ArgSources:      plan.ArgSources,
@@ -176,6 +187,26 @@ func (lp *LoweredPlan) Hydrate(ctx ResolveCtx) []any {
 func HashBinSource(source string) string {
 	sum := sha256.Sum256([]byte(source))
 	return hex.EncodeToString(sum[:])
+}
+
+// LowerForStorage wraps Lower + json.Marshal for save handlers. On
+// failure (unsupported pipeline shape, /bin not yet inlineable, JSON
+// error) it logs and returns nil so the caller passes a NULL
+// lowered_plan into SaveCronWatch — the watch saves cleanly and the
+// fire path falls back to inline Plan(). This is the canonical entry
+// point for save handlers; do NOT call Lower + Marshal directly.
+func LowerForStorage(pipeline, customer string, resolveBin BinResolver) []byte {
+	lp, err := Lower(pipeline, customer, resolveBin)
+	if err != nil {
+		log.Printf("lower: skip save-time lowering for pipeline (customer=%s): %v", customer, err)
+		return nil
+	}
+	b, err := json.Marshal(lp)
+	if err != nil {
+		log.Printf("lower: marshal LoweredPlan (customer=%s): %v", customer, err)
+		return nil
+	}
+	return b
 }
 
 // expandForLowering is the lowering-side counterpart to coordinator's

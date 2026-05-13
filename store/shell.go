@@ -351,6 +351,13 @@ type CronWatch struct {
 	ContentHash     string   `gorm:"column:content_hash"`
 	Message         string   `gorm:"column:message"`
 	CreatedByUserID *string  `gorm:"column:created_by_user_id"`
+	// LoweredPlan is the JSON-encoded planner.LoweredPlan produced at
+	// save time. NULL when the pipeline couldn't be lowered (e.g. a
+	// /bin/ reference the lowering pass can't inline yet); the fire
+	// path falls back to inline planner.Plan() in that case. JSONB
+	// in Postgres so operators can introspect via `SELECT
+	// lowered_plan -> 'shard_sql' FROM cron_watches`.
+	LoweredPlan []byte `gorm:"column:lowered_plan;type:jsonb"`
 }
 
 // computeCronWatchHash returns the canonical content hash for a
@@ -361,7 +368,11 @@ func computeCronWatchHash(schedule, pipeline string) string {
 	return hex.EncodeToString(h[:])
 }
 
-func (s *Store) SaveCronWatch(customerID uint, userID, name, schedule, pipeline string) error {
+// SaveCronWatch persists a watch row. loweredPlan is the JSON-encoded
+// planner.LoweredPlan from a save-time Lower() call; pass nil when
+// the pipeline didn't lower (e.g. /bin/ inlining isn't implemented
+// for this shape yet) — the fire path falls back to inline Plan().
+func (s *Store) SaveCronWatch(customerID uint, userID, name, schedule, pipeline string, loweredPlan []byte) error {
 	compiled, err := CompileWatchPipeline(pipeline)
 	if err != nil {
 		return err
@@ -387,6 +398,7 @@ func (s *Store) SaveCronWatch(customerID uint, userID, name, schedule, pipeline 
 				AlertCondition: compiled.AlertCondition,
 				AlertThreshold: compiled.AlertThreshold,
 				ContentHash:    hash,
+				LoweredPlan:    loweredPlan,
 			}
 			if userID != "" {
 				row.CreatedByUserID = &userID
@@ -406,8 +418,22 @@ func (s *Store) SaveCronWatch(customerID uint, userID, name, schedule, pipeline 
 			"alert_tag":       compiled.AlertTag,
 			"alert_condition": compiled.AlertCondition,
 			"alert_threshold": compiled.AlertThreshold,
+			"lowered_plan":    loweredPlan,
 		}).Error
 	})
+}
+
+// RefreshWatchLoweredPlan updates only the lowered_plan column. Used
+// by the fire path's lazy-backfill branch: when the lowered_plan is
+// stale (e.g. a referenced /bin/ has been edited) or missing
+// (pre-migration row), the fire computes a fresh one inline and
+// writes it back without touching the pipeline string or content
+// hash.
+func (s *Store) RefreshWatchLoweredPlan(watchID uint, loweredPlan []byte) error {
+	return s.db.Model(&CronWatch{}).
+		Where("id = ?", watchID).
+		Update("lowered_plan", loweredPlan).
+		Error
 }
 
 // CompiledWatch holds the pre-parsed bits of an `alert` stage that we want

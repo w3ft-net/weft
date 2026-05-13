@@ -692,7 +692,7 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 			{user3.ID, rateV3, "switch to awk for shard pushdown"},
 		}
 		for i, v := range versions {
-			if err := s.SaveCronWatch(custID, v.userID, "error-rate", errorRateSchedule, v.pipeline); err != nil {
+			if err := s.SaveCronWatch(custID, v.userID, "error-rate", errorRateSchedule, v.pipeline, nil); err != nil {
 				return fmt.Errorf("error-rate v%d: %w", i+1, err)
 			}
 			if err := s.AmendCronWatchMessage(custID, "error-rate", "HEAD", v.message); err != nil {
@@ -729,7 +729,7 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 			{user2.ID, memPressureV2, "lower to 70, add per-host tag so alerts identify the box"},
 		}
 		for i, v := range versions {
-			if err := s.SaveCronWatch(custID, v.userID, "mem-pressure", "*/1 * * * *", v.pipeline); err != nil {
+			if err := s.SaveCronWatch(custID, v.userID, "mem-pressure", "*/1 * * * *", v.pipeline, nil); err != nil {
 				return fmt.Errorf("mem-pressure v%d: %w", i+1, err)
 			}
 			if err := s.AmendCronWatchMessage(custID, "mem-pressure", "HEAD", v.message); err != nil {

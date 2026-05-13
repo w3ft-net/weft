@@ -26,6 +26,7 @@ import (
 	"github.com/kevlarcon/weft/auth"
 	"github.com/kevlarcon/weft/coordinator/onboarding"
 	"github.com/kevlarcon/weft/mounts"
+	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/store"
 )
@@ -1534,11 +1535,39 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.SaveCronWatch(custID, session.UserID, name, req.Schedule, req.Pipeline); err != nil {
+	// Lower at save time. LowerForStorage swallows errors (returns nil)
+	// so a pipeline shape the lowerer can't handle yet (e.g. /bin/
+	// inlining stub) saves with NULL lowered_plan — the fire path falls
+	// back to inline Plan(). This is the canonical save-time entry
+	// point; the gRPC and shell save paths use the same helper.
+	resolver := storeBinResolver{store: s.store, customerID: custID}
+	loweredJSON := planner.LowerForStorage(req.Pipeline, session.ActiveCustomerName, resolver)
+
+	if err := s.store.SaveCronWatch(custID, session.UserID, name, req.Schedule, req.Pipeline, loweredJSON); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// storeBinResolver adapts a *store.Store + customer scope to the
+// planner.BinResolver interface. Save handlers wrap their store in
+// this adapter so Lower can read /bin/ source for inlining. Returns
+// ok=false for any error path (missing /bin, DB miss) — Lower then
+// leaves the /bin/ token unexpanded and the lowering may surface the
+// resulting unplannable shape as a Lower error, in which case
+// LowerForStorage logs and returns nil.
+type storeBinResolver struct {
+	store      *store.Store
+	customerID uint
+}
+
+func (r storeBinResolver) Source(name string) (string, string, bool) {
+	fn, err := r.store.GetShellFunction(r.customerID, name)
+	if err != nil || fn == nil {
+		return "", "", false
+	}
+	return fn.Source, planner.HashBinSource(fn.Source), true
 }
 
 func (s *Server) handleDeleteWatch(w http.ResponseWriter, r *http.Request) {
