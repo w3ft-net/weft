@@ -6,6 +6,7 @@ app:
   additional_roles:
     shard-small: shard-small
     compute: compute
+    loom-producer: loom-producer
   account_id: "220664822695"
   infrastructure_live_dir: /Users/paul/dev/infrastructure-live
 
