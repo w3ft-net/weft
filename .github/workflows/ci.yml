@@ -39,11 +39,24 @@ jobs:
       - name: WASM build check
         working-directory: weft
         run: GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/wasm
+      - name: Start postgres (needed by store/coordinator/api unit tests)
+        working-directory: weft
+        run: |
+          docker compose up -d postgres
+          # Wait for ready. pg_isready reflects the postgres process,
+          # which is good enough for store/test_db.go's ensureTestDatabase.
+          until docker compose exec -T postgres pg_isready -U weft; do
+            sleep 1
+          done
       - name: go test ./...
         working-directory: weft
         run: |
           mkdir -p coverage/unit
           gotestsum --junitfile unit-report.xml -- -count=1 -timeout 5m -cover -coverpkg=./... ./... -args -test.gocoverdir="$PWD/coverage/unit"
+      - name: Stop postgres
+        if: always()
+        working-directory: weft
+        run: docker compose down -v --remove-orphans
       - name: Test report
         uses: dorny/test-reporter@v1
         if: always()
