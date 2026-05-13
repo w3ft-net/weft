@@ -4,14 +4,23 @@ const scripts = {
   id: "manual-scripts",
   section: "scripts",
   title: "Custom scripts",
+  category: "customize",
   order: 60,
-  html: `<h2>Custom scripts in /bin</h2>
+  headings: [
+    { level: 2, id: "custom-scripts-in-bin", text: "Custom scripts in /bin" },
+    { level: 3, id: "writing-a-script", text: "Writing a script" },
+    { level: 2, id: "language-support", text: "Language support" },
+    { level: 3, id: "bash", text: "Bash" },
+    { level: 3, id: "lua", text: "Lua" },
+    { level: 2, id: "editing-a-script-with-vi", text: "Editing a script with vi" },
+  ],
+  html: `<h2 id="custom-scripts-in-bin">Custom scripts in /bin</h2>
 <p>Anything you can type at the shell prompt can be saved as a named script under
 <code>/bin/</code>. Scripts are available from every shell session and every watch
 belonging to your account.  Create scripts with vim or with <code>cat - &gt; myscript</code>.
 Writing the file will validate the script for syntax errors and some
 weft-specific semantics.</p>
-<h3>Writing a script</h3>
+<h3 id="writing-a-script">Writing a script</h3>
 <p>The script body is just a pipeline. Positional parameters (<code>$1</code>, <code>$2</code>,
 …) bind to the arguments the caller passes at invocation.</p>
 <pre><code># /bin/count_errors
@@ -22,11 +31,11 @@ cat /log/$1 | grep ERROR | wc -l
 count_errors disk.log | wc -l     # scripts compose into pipelines
 </code></pre>
 <p>We recommend keeping your scripts small and pipelined where possible -- weft optimizes these cases well -- but you can write more sophisticated scripts where needed.</p>
-<h2>Language support</h2>
+<h2 id="language-support">Language support</h2>
 <p>The weft shell supports a generous subset of <strong>bash</strong> and <strong>Lua</strong>.
 Scripts default to bash; declare Lua with a shebang on the first
 line.</p>
-<h3>Bash</h3>
+<h3 id="bash">Bash</h3>
 <p>Effectively the full bash grammar is available:</p>
 <ul>
 <li>pipes (<code>|</code>), redirects (<code>&gt;</code>, <code>&gt;&gt;</code>, <code>&lt;</code>, <code>2&gt;</code>), subshells (<code>( ... )</code>)
@@ -41,7 +50,7 @@ arithmetic expansion (<code>$(( ... ))</code>)</li>
 <code>cut</code>, <code>sort</code>, <code>uniq</code>, <code>wc</code>, <code>tee</code>, <code>tr</code>, <code>xargs</code>, <code>head</code>, <code>tail</code>,
 <code>cat</code>, <code>echo</code>, <code>less</code></li>
 </ul>
-<h3>Lua</h3>
+<h3 id="lua">Lua</h3>
 <p>You might reach for Lua if you need arithmetic, string
 manipulation, JSON assembly, etc.</p>
 <pre><code>#!/usr/bin/env lua
@@ -64,7 +73,7 @@ disabled, and scripts time out after 30 seconds.</p>
 | <code>io.read(&quot;*l&quot; \\| &quot;*a&quot; \\| &quot;*n&quot;)</code> | Read a line, all of stdin, or a number |
 | <code>lines()</code> | Iterator over stdin lines — <code>for line in lines() do ... end</code> |
 | <code>json.encode(v)</code> / <code>json.decode(s)</code> | JSON ↔ Lua table |
-| <code>weft.*</code> | Watch aggregates — see <strong>Watches</strong> |</p>
+| <code>weft.*</code> | Watch aggregates and predicates — see <strong>Weft functions</strong> |</p>
 <p>Because Lua can read stdin with <code>lines()</code> or <code>io.read(&quot;*l&quot;)</code>, a Lua
 script can act as a pipeline stage:</p>
 <pre><code>#!/usr/bin/env lua
@@ -79,7 +88,7 @@ end
 <p>Weft cannot optimize Lua scripts in the same way it can coreutils pipelines. If
 you need Lua, keep it at the end of a pipeline wherever you can for best
 performance.</p>
-<h2>Editing a script with <code>vi</code></h2>
+<h2 id="editing-a-script-with-vi">Editing a script with <code>vi</code></h2>
 <p><code>vi /bin/&lt;name&gt;</code> opens the script for editing. After <code>:w</code>, the
 shell drops you into a follow-up buffer asking for an optional
 commit message — <code>:wq</code> to record, <code>:q!</code> to skip. See <strong>wit</strong> for

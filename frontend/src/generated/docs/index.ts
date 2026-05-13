@@ -3,41 +3,69 @@
 import namespaces from './namespaces';
 import tokens from './tokens';
 import installWeftd from './install-weftd';
+import connectHeroku from './connect-heroku';
 import connectCloudwatch from './connect-cloudwatch';
 import schemaSetup from './schema-setup';
-import watches from './watches';
-import dashboards from './dashboards';
 import queryLogs from './query-logs';
 import tmp from './tmp';
 import builtins from './builtins';
 import metavars from './metavars';
+import watches from './watches';
+import alertingStrategies from './alerting-strategies';
+import dashboards from './dashboards';
+import alerting from './alerting';
+import weftFuncs from './weft-funcs';
 import scripts from './scripts';
 import sharing from './sharing';
 import wit from './wit';
-import alerting from './alerting';
+
+export type ManualHeading = {
+  level: number;
+  id: string;
+  text: string;
+};
 
 export type ManualSection = {
   id: string;
   section: string;
   title: string;
+  category: string;
   order: number;
+  headings: readonly ManualHeading[];
   html: string;
 };
+
+export type ManualCategory = {
+  id: string;
+  label: string;
+  summary: string;
+};
+
+export const manualCategories: readonly ManualCategory[] = [
+  { id: "getting-started", label: "Getting started", summary: `Carve out namespaces for your environments and mint the tokens that agents and drains use to authenticate.` },
+  { id: "connect-source", label: "Connect a source", summary: `Wire up logs from a host agent (weftd), an AWS CloudWatch log group, a Heroku app, or any custom line format.` },
+  { id: "query", label: "Query", summary: `Read pseudofiles in the interactive shell, filter with awk/sed/jq, reach for meta-variables, and stash intermediates in /tmp.` },
+  { id: "alert-visualize", label: "Alert & visualize", summary: `Run pipelines on a schedule with watches, choose an alerting strategy that suits the signal, and pin live queries to dashboards.` },
+  { id: "customize", label: "Customize", summary: `Build named weft functions, save reusable scripts, share them across the team, and review their history with wit.` },
+];
 
 export const manualSections: readonly ManualSection[] = [
   namespaces,
   tokens,
   installWeftd,
+  connectHeroku,
   connectCloudwatch,
   schemaSetup,
-  watches,
-  dashboards,
   queryLogs,
   tmp,
   builtins,
   metavars,
+  watches,
+  alertingStrategies,
+  dashboards,
+  alerting,
+  weftFuncs,
   scripts,
   sharing,
   wit,
-  alerting,
 ];

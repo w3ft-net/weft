@@ -4,13 +4,20 @@ const alerting = {
   id: "help-alerts",
   section: "alerting",
   title: "Alerts",
+  category: "alert-visualize",
   order: 70,
-  html: `<h2>Alerts</h2>
-<p>An alert evaluates a value from stdin against a condition.
+  headings: [
+    { level: 2, id: "conditions-summary", text: "Conditions (summary)" },
+    { level: 2, id: "composite-alerts-state-across-multiple-watches", text: "Composite alerts (state across multiple watches)" },
+    { level: 2, id: "single-row-vs-multi-row", text: "Single-row vs multi-row" },
+    { level: 2, id: "etcnotifyyaml", text: "/etc/notify.yaml" },
+    { level: 2, id: "testing-an-alias", text: "Testing an alias" },
+  ],
+  html: `<p>An alert evaluates a value from stdin against a condition.
 When the condition holds, <code>alert</code> writes to stderr — in a
 watch, that stderr is what drives incidents and notifications.
 Stdin always passes through to stdout unchanged (tee behavior).</p>
-<h2>Conditions (summary)</h2>
+<h2 id="conditions-summary">Conditions (summary)</h2>
 <ul>
 <li><code>above &lt;N&gt;</code> — value greater than N</li>
 <li><code>below &lt;N&gt;</code> — value less than N</li>
@@ -22,7 +29,21 @@ Stdin always passes through to stdout unchanged (tee behavior).</p>
 <li>(no keyword) — &quot;any&quot;; fires when stdin is non-empty</li>
 </ul>
 <p>See <code>man alert</code> for grammar, <code>--duration</code>, <code>--average</code>, <code>--msg</code>.</p>
-<h2>Single-row vs multi-row</h2>
+<h2 id="composite-alerts-state-across-multiple-watches">Composite alerts (state across multiple watches)</h2>
+<p>To fire on the combined state of more than one watch, compose
+predicate builtins with bash <code>&amp;&amp;</code> <code>||</code> <code>!</code> and hand the result
+to alert via <code>--if-zero &quot;$?&quot;</code>:</p>
+<pre><code>weft::is_above error-rate 50 &amp;&amp; weft::is_absent canary-ping
+alert --if-zero &quot;$?&quot; --notify=critical
+</code></pre>
+<p>The predicate family — <code>weft::is_above</code>, <code>weft::is_below</code>,
+<code>weft::is_absent</code>, <code>weft::has_changed</code>, <code>weft::is_rising</code>,
+<code>weft::is_falling</code>, <code>weft::is_outlier</code>, <code>weft::is_seasonal</code> — each
+exits 0/1 and has a Lua mirror (<code>weft.is_above(...)</code> etc.) that
+returns true/false. See <code>docs/manual/alerting-strategies.md</code> for
+the full catalogue plus seasonal/outlier guidance and
+<code>docs/manual/weft-funcs.md</code> for the per-function reference.</p>
+<h2 id="single-row-vs-multi-row">Single-row vs multi-row</h2>
 <p>By default alert treats stdin as one scalar per tick. With
 <code>-k &lt;field&gt;</code>, each non-blank line is one row and <code>&lt;field&gt;</code> is
 the value to compare. With <code>-t &lt;field&gt;</code>, another field names
@@ -37,7 +58,7 @@ tail /log/shard.log | jq -r '&quot;\\(.host) \\(.pct)&quot;' \\
 tail /log/shard.log | jq 'select(.type==&quot;disk&quot;)' \\
   | alert above 80 -k .pct -t .host --notify=ops
 </code></pre>
-<h2>/etc/notify.yaml</h2>
+<h2 id="etcnotifyyaml">/etc/notify.yaml</h2>
 <p><code>--notify=&lt;alias&gt;</code> looks up a destination from your notify.yaml
 — a YAML map of alias name → per-service targets. Edit with:</p>
 <pre><code>vi /etc/notify.yaml
@@ -82,7 +103,7 @@ Integrations; notify.yaml only names destinations. The PagerDuty
 integration name must match one you've registered there. Webhook
 and email destinations need no account-level credentials — URLs
 and addresses are per-alias.</p>
-<h2>Testing an alias</h2>
+<h2 id="testing-an-alias">Testing an alias</h2>
 <pre><code>echo &quot;test fire&quot; | alert --notify=ops
 </code></pre>
 <p>Interactive runs dispatch immediately; they don't open an incident

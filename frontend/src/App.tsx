@@ -9,7 +9,7 @@ import Downloads from './pages/Downloads'
 import Account from './pages/Account'
 import Device from './pages/Device'
 import Namespaces from './pages/Namespaces'
-import Manual from './pages/Manual'
+import Manual, { ManualTopic } from './pages/Manual'
 import Watch from './pages/Watch'
 import Dashboards from './pages/Dashboards'
 import Admin from './pages/Admin'
@@ -45,6 +45,9 @@ export default function App() {
       } />
       <Route path="/manual" element={
         <ProtectedRoute><Manual /></ProtectedRoute>
+      } />
+      <Route path="/manual/:slug" element={
+        <ProtectedRoute><ManualTopic /></ProtectedRoute>
       } />
       <Route path="/watch/:name" element={
         <ProtectedRoute><Watch /></ProtectedRoute>

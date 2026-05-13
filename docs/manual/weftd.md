@@ -3,6 +3,7 @@ id: manual-weftd
 title: Install weftd
 web:
   section: install-weftd
+  category: connect-source
   order: 30
 ---
 

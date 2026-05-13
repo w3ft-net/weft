@@ -4,15 +4,26 @@ const builtins = {
   id: "help-builtins",
   section: "builtins",
   title: "Builtins",
+  category: "query",
   order: 60,
-  html: `<h2>Querying logs</h2>
+  headings: [
+    { level: 2, id: "querying-logs", text: "Querying logs" },
+    { level: 2, id: "text-pipeline", text: "Text pipeline" },
+    { level: 2, id: "filesystem", text: "Filesystem" },
+    { level: 2, id: "working-on-saved-results", text: "Working on saved results" },
+    { level: 2, id: "version-history-wit", text: "Version history (wit)" },
+    { level: 2, id: "sharing", text: "Sharing" },
+    { level: 2, id: "alerting", text: "Alerting" },
+    { level: 2, id: "shell", text: "Shell" },
+  ],
+  html: `<h2 id="querying-logs">Querying logs</h2>
 <ul>
 <li><code>cat /log/&lt;app&gt;.log</code> — stream all lines for an app</li>
 <li><code>head /log/&lt;app&gt;.log</code> — first N lines (oldest)</li>
 <li><code>tail /log/&lt;app&gt;.log</code> — last N lines; <code>tail -f</code> follows</li>
 <li><code>ls /log</code> — list available apps (browse the namespace tree)</li>
 </ul>
-<h2>Text pipeline</h2>
+<h2 id="text-pipeline">Text pipeline</h2>
 <ul>
 <li><code>grep</code> — filter lines by pattern</li>
 <li><code>awk</code> — field-oriented extraction / predicates</li>
@@ -26,7 +37,7 @@ const builtins = {
 <li><code>xargs</code> — build commands from stdin</li>
 <li><code>less</code> — page the final output (see <code>man less</code>)</li>
 </ul>
-<h2>Filesystem</h2>
+<h2 id="filesystem">Filesystem</h2>
 <ul>
 <li><code>ls [-l] [-a] [-h] [path]</code> — list <code>/bin</code>, <code>/cron.d</code>, <code>/etc</code>, <code>/log</code>, <code>/tmp</code>; <code>ls -l /cron.d/</code> adds a sparkline</li>
 <li><code>cat /bin/&lt;fn&gt;</code> — view a saved function</li>
@@ -40,7 +51,7 @@ const builtins = {
 <li><code>vi &lt;path&gt;</code> — edit (vim keys)</li>
 <li><code>cd &lt;path&gt;</code> — change the virtual cwd</li>
 </ul>
-<h2>Working on saved results</h2>
+<h2 id="working-on-saved-results">Working on saved results</h2>
 <ul>
 <li><code>diff &lt;a&gt; &lt;b&gt;</code> — line-level differences between two files</li>
 <li><code>comm &lt;a&gt; &lt;b&gt;</code> — sorted-set merge: only-in-a, only-in-b, in-both</li>
@@ -48,7 +59,7 @@ const builtins = {
 <li><code>paste &lt;a&gt; &lt;b&gt; [...]</code> — column-merge files line-by-line (<code>-d</code>)</li>
 <li><code>wc &lt;files&gt;</code> — <code>-l</code> lines, <code>-w</code> words, <code>-c</code> bytes, <code>-m</code> chars, <code>-L</code> longest line</li>
 </ul>
-<h2>Version history (wit)</h2>
+<h2 id="version-history-wit">Version history (wit)</h2>
 <ul>
 <li><code>wit log &lt;path&gt;</code> — list versions; <code>-p</code> includes diffs</li>
 <li><code>wit show &lt;path&gt; &lt;ref&gt;</code> — print a version's content</li>
@@ -58,15 +69,15 @@ const builtins = {
 </ul>
 <p>Refs: <code>HEAD</code>, <code>HEAD^</code>, <code>HEAD^N</code>, or a hash prefix (≥4 hex chars).
 Tracked under <code>/bin</code> and <code>/cron.d</code> only; last 5 versions retained.</p>
-<h2>Sharing</h2>
+<h2 id="sharing">Sharing</h2>
 <ul>
 <li><code>clipboard /bin/&lt;name&gt;</code> — copy a deep link to the script (current range + args) to the system clipboard; teammates open it in their shell pre-filled (<code>man clipboard</code>)</li>
 </ul>
-<h2>Alerting</h2>
+<h2 id="alerting">Alerting</h2>
 <ul>
 <li><code>&lt;pipeline&gt; | alert &lt;condition&gt;</code> — see <code>help alerts</code> or <code>man alert</code></li>
 </ul>
-<h2>Shell</h2>
+<h2 id="shell">Shell</h2>
 <ul>
 <li><code>range</code> — show or set the query window</li>
 <li><code>which &lt;name&gt;</code> — show where a command lives</li>

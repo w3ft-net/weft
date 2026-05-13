@@ -3,6 +3,7 @@ id: manual-weft-funcs
 title: Weft functions
 web:
   section: weft-funcs
+  category: customize
   order: 52
 ---
 

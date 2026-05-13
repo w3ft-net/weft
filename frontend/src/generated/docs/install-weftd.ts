@@ -4,9 +4,15 @@ const installWeftd = {
   id: "manual-weftd",
   section: "install-weftd",
   title: "Install weftd",
+  category: "connect-source",
   order: 30,
-  html: `<h2>Install weftd</h2>
-<p>weftd is a lightweight Go binary that tails log files and ships structured
+  headings: [
+    { level: 3, id: "file-sourced-dimensions", text: "File-sourced dimensions" },
+    { level: 3, id: "schema-types", text: "Schema types" },
+    { level: 3, id: "system-metrics-optional", text: "System metrics (optional)" },
+    { level: 3, id: "app-api-emit-events-and-heartbeats-from-your-services", text: "App API: emit events and heartbeats from your services" },
+  ],
+  html: `<p>weftd is a lightweight Go binary that tails log files and ships structured
 lines to weft over gRPC. Download it from the <strong>Downloads</strong> page.</p>
 <pre><code># Download and install
 curl -fsSL https://w3ft.net/install.sh | sh
@@ -55,7 +61,7 @@ sources:
 become first-class query dimensions — see the <strong>Meta-variables</strong>
 section in <strong>Query your logs</strong> for the full list and how they
 appear in awk and jq.</p>
-<h3>File-sourced dimensions</h3>
+<h3 id="file-sourced-dimensions">File-sourced dimensions</h3>
 <p>Each entry under <code>dimensions:</code> is <code>&lt;column&gt;: &lt;path&gt;</code> or
 <code>&lt;column&gt;: &lt;path&gt;:.&lt;json.path&gt;</code>. The reader stamps the resulting
 value on every row weftd ships from this host. Operator config
@@ -69,7 +75,7 @@ keeps those guarantees intact.</p>
 access (<code>.foo</code>), nested fields (<code>.foo.bar</code>), and array indices
 (<code>.items[0].name</code>). For richer extraction, pre-process the file
 with your own tooling and point weftd at the result.</p>
-<h3>Schema types</h3>
+<h3 id="schema-types">Schema types</h3>
 <ul>
 <li><code>json</code> — pure JSON lines, no prefix</li>
 <li><code>prefix_json</code> — fixed-width prefix fields followed by a JSON payload</li>
@@ -82,7 +88,7 @@ sudo systemctl enable --now weftd
 sudo systemctl status weftd
 journalctl -u weftd -f
 </code></pre>
-<h3>System metrics (optional)</h3>
+<h3 id="system-metrics-optional">System metrics (optional)</h3>
 <p>weftd can also ship host metrics alongside log lines. Opt in by
 attaching a <code>metrics:</code> block to any source in the config — the block
 is independent of what that source tails, it just rides along on the
@@ -139,14 +145,14 @@ tail -n 1000 /log/myns/metrics.log \\
 <p>Metrics only run on Linux (the collectors read <code>/proc/stat</code>,
 <code>/proc/meminfo</code>, <code>/proc/mounts</code>, <code>/proc/loadavg</code>, and
 <code>/proc/net/dev</code>). On other kernels the block is ignored.</p>
-<h3>App API: emit events and heartbeats from your services</h3>
+<h3 id="app-api-emit-events-and-heartbeats-from-your-services">App API: emit events and heartbeats from your services</h3>
 <p>Beyond tailing files, weftd exposes two local endpoints that
 running applications can talk to directly. Both bind to Unix
 sockets by default, so process-local apps can ship to weft without
 a token, network call, or extra dependency. There is a typed Go
 SDK at <a href="https://github.com/w3ft-net/weft-go">https://github.com/w3ft-net/weft-go</a> for callers that
 prefer not to wire up sockets by hand.</p>
-<h4>Records socket</h4>
+<h4 id="records-socket">Records socket</h4>
 <p>Add a <code>socket:</code> line to <code>config.yaml</code> and weftd will accept
 newline-delimited frames in the format <code>&lt;app&gt;:&lt;line&gt;\\n</code>. Each
 line is forwarded to the same ingest path file tailers use,
@@ -166,7 +172,7 @@ c.Send(&quot;billing&quot;, map[string]any{&quot;event&quot;: &quot;signup&quot;
 </code></pre>
 <p>The SDK looks for the socket at <code>/var/run/weftd.sock</code> by default;
 override with <code>WEFT_SOCKET</code> or <code>weft.WithSocket(...)</code>.</p>
-<h4>Heartbeat endpoint</h4>
+<h4 id="heartbeat-endpoint">Heartbeat endpoint</h4>
 <p>weftd also runs a tiny heartbeat listener that records &quot;this
 service is alive&quot; pings and emits the table as a periodic
 snapshot to a pseudofile at <code>/log/&lt;namespace&gt;/heartbeats.log</code> —
@@ -209,7 +215,7 @@ tail -n 1 /log/myns/billing/heartbeats.log \\
   | jq 'select(.age_s &gt; 30)' \\
   | alert above 0 -t 1 --notify=ops
 </code></pre>
-<h4>Go SDK</h4>
+<h4 id="go-sdk">Go SDK</h4>
 <p><code>github.com/w3ft-net/weft-go</code> is the typed front door for both
 endpoints above plus a runtime-stats collector that periodically
 emits Go heap, GC pause, goroutine, and FD-count telemetry.

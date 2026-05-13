@@ -4,8 +4,12 @@ const namespaces = {
   id: "manual-namespaces",
   section: "namespaces",
   title: "Namespaces",
+  category: "getting-started",
   order: 10,
-  html: `<h2>Create a namespace</h2>
+  headings: [
+    { level: 2, id: "create-a-namespace", text: "Create a namespace" },
+  ],
+  html: `<h2 id="create-a-namespace">Create a namespace</h2>
 <p>Namespaces group related log sources. A typical setup has one namespace per
 environment (e.g. <code>production</code>, <code>staging</code>) or per team.</p>
 <p>Go to <strong>Namespaces</strong> in the sidebar and click <strong>Create namespace</strong>. Choose a

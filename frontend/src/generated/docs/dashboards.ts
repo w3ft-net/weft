@@ -4,8 +4,21 @@ const dashboards = {
   id: "manual-dashboards",
   section: "dashboards",
   title: "Dashboards",
+  category: "alert-visualize",
   order: 55,
-  html: `<h2>What dashboards are</h2>
+  headings: [
+    { level: 2, id: "what-dashboards-are", text: "What dashboards are" },
+    { level: 2, id: "yaml-grammar", text: "YAML grammar" },
+    { level: 2, id: "tile-kinds", text: "Tile kinds" },
+    { level: 2, id: "threshold-colors", text: "Threshold colors" },
+    { level: 2, id: "sections", text: "Sections" },
+    { level: 2, id: "layout", text: "Layout" },
+    { level: 2, id: "navigation", text: "Navigation" },
+    { level: 2, id: "deletion", text: "Deletion" },
+    { level: 2, id: "validation", text: "Validation" },
+    { level: 2, id: "authoring-via-the-mcp-server", text: "Authoring via the MCP server" },
+  ],
+  html: `<h2 id="what-dashboards-are">What dashboards are</h2>
 <p>A dashboard is a named view that arranges existing watches into tiles.
 Each tile reads from a watch — there are no pipelines, no template
 variables, and no time-range pickers. The watch's schedule and history
@@ -16,7 +29,7 @@ the shell:</p>
 <pre><code>vi /etc/dashboards/prod.yaml
 </code></pre>
 <p>Each customer can have any number of dashboards, distinguished by name.</p>
-<h2>YAML grammar</h2>
+<h2 id="yaml-grammar">YAML grammar</h2>
 <pre><code class="language-yaml">title: Production
 sections:
   - title: Errors
@@ -50,7 +63,7 @@ sections:
 | <code>sections</code> | yes*    | List of grouped tile sections.                  |
 | <code>tiles</code>    | yes*    | Shorthand: a flat tile list = one untitled section. |</p>
 <p>* Use either <code>sections:</code> or top-level <code>tiles:</code>, not both.</p>
-<h2>Tile kinds</h2>
+<h2 id="tile-kinds">Tile kinds</h2>
 <p>| Kind        | Body                                                       | Required fields           |
 |-------------|------------------------------------------------------------|---------------------------|
 | <code>sparkline</code> | Time-series glyph from the watch's recent results.         | <code>watch</code>                   |
@@ -70,14 +83,14 @@ sections:
 (browser / terminal) maps the hint onto its own viewport. On a wide
 browser an <code>lg</code> tile spans the full row; on a narrow terminal it falls
 back to single-column.</p>
-<h2>Threshold colors</h2>
+<h2 id="threshold-colors">Threshold colors</h2>
 <p><code>counter</code>, <code>gauge</code>, and <code>sparkline</code> accept a <code>threshold:</code> map:</p>
 <pre><code class="language-yaml">threshold: { warn: 70, crit: 90 }
 </code></pre>
 <p>Values at or above <code>crit</code> render in red; values at or above <code>warn</code> (and
 below <code>crit</code>) render in yellow. <code>gauge</code> additionally uses
 <code>threshold.max</code> to pick its full-scale value (default 100).</p>
-<h2>Sections</h2>
+<h2 id="sections">Sections</h2>
 <p>Each section gets its own heading + grid. Sections are how you split a
 dashboard into &quot;Errors&quot; / &quot;Capacity&quot; / &quot;Throughput&quot; rather than dumping
 every tile into one strip.</p>
@@ -89,7 +102,7 @@ tiles:
   - kind: sparkline
     watch: error-rate
 </code></pre>
-<h2>Layout</h2>
+<h2 id="layout">Layout</h2>
 <p>Dashboards describe <em>intent</em>, not pixel-perfect layouts. The renderer
 flows tiles row-major and chooses how many fit per row based on the
 viewport and each tile's <code>size:</code> hint.</p>
@@ -102,20 +115,20 @@ Below ~60 columns the layout collapses to one tile per row.</li>
 </ul>
 <p>There is no drag-and-drop and no per-tile pixel positioning. The order
 in YAML is the order on screen.</p>
-<h2>Navigation</h2>
+<h2 id="navigation">Navigation</h2>
 <p>Tile headers link to the watch's detail page (<code>/watch/&lt;name&gt;</code>) so
 clicking a tile takes you to its full history with zoom, range
 selection, and per-tag legend.</p>
-<h2>Deletion</h2>
+<h2 id="deletion">Deletion</h2>
 <p>Remove a dashboard from the shell:</p>
 <pre><code>rm /etc/dashboards/old.yaml
 </code></pre>
-<h2>Validation</h2>
+<h2 id="validation">Validation</h2>
 <p>Saving a dashboard checks the YAML parses, every <code>kind:</code> is recognized,
 every <code>size:</code> is one of <code>sm</code> / <code>md</code> / <code>lg</code>, every <code>table</code> tile has
 <code>columns:</code>, and every referenced watch exists. A bad file is rejected
 at write time — your previous version stays intact.</p>
-<h2>Authoring via the MCP server</h2>
+<h2 id="authoring-via-the-mcp-server">Authoring via the MCP server</h2>
 <p>Connect Claude Code (or any MCP host) to the weft MCP server and the
 model can stage dashboards through the same review-and-apply pipeline
 as scripts and crons:</p>

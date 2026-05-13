@@ -3,6 +3,7 @@ id: manual-schema-setup
 title: Check schema setup
 web:
   section: schema-setup
+  category: connect-source
   order: 45
 ---
 

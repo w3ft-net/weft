@@ -3,6 +3,7 @@ id: manual-tmp
 title: Saving results to /tmp
 web:
   section: tmp
+  category: query
   order: 57
 ---
 

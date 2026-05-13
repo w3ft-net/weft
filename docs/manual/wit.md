@@ -3,6 +3,7 @@ id: manual-wit
 title: wit — version history for /bin and /cron.d
 web:
   section: wit
+  category: customize
   order: 65
 ---
 

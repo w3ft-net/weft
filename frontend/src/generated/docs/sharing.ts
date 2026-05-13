@@ -4,8 +4,16 @@ const sharing = {
   id: "manual-sharing",
   section: "sharing",
   title: "Sharing scripts",
+  category: "customize",
   order: 62,
-  html: `<h2>Sharing a script with a teammate</h2>
+  headings: [
+    { level: 2, id: "sharing-a-script-with-a-teammate", text: "Sharing a script with a teammate" },
+    { level: 2, id: "what-the-link-encodes", text: "What the link encodes" },
+    { level: 2, id: "why-this-and-not-copy-paste", text: "Why this and not copy-paste" },
+    { level: 2, id: "examples", text: "Examples" },
+    { level: 2, id: "whats-not-shared", text: "What's not shared" },
+  ],
+  html: `<h2 id="sharing-a-script-with-a-teammate">Sharing a script with a teammate</h2>
 <p>When a <code>/bin/</code> script is worth showing to someone else — a runbook
 link, a teammate investigating the same incident — <code>clipboard</code> builds
 a deep link that reproduces what you're looking at and copies it to
@@ -17,7 +25,7 @@ copied: https://w3ft.net/shell?bin=%2Fbin%2Ferror-rate&amp;range=2026-05-12T08%3
 and a signed-in teammate who clicks it lands in the web shell with
 the script invocation pre-filled. They review, hit Enter, and see
 the same output you saw.</p>
-<h2>What the link encodes</h2>
+<h2 id="what-the-link-encodes">What the link encodes</h2>
 <p>Three things travel in the URL:</p>
 <ul>
 <li><strong><code>bin=</code></strong> the script path, always <code>/bin/&lt;name&gt;</code>.</li>
@@ -31,7 +39,7 @@ original shell quoting.</li>
 specific past version isn't supported today; if a teammate needs to
 see how the script behaved before someone edited it, they pair the
 link with <code>wit log /bin/&lt;name&gt;</code> to read the history.</p>
-<h2>Why this and not copy-paste</h2>
+<h2 id="why-this-and-not-copy-paste">Why this and not copy-paste</h2>
 <p>Pasting a pipeline directly into Slack loses the time window, often
 breaks single-quote rich content like <code>awk</code> and <code>jq</code> programs, and
 makes parameterised scripts hard to share. A <code>/bin/</code> script with a
@@ -46,7 +54,7 @@ clipboard /bin/check-foo
 </code></pre>
 <p>A few seconds of friction to name the artifact pays back every time
 it gets re-used.</p>
-<h2>Examples</h2>
+<h2 id="examples">Examples</h2>
 <pre><code>clipboard /bin/error-rate
                         current range, no args
 
@@ -60,7 +68,7 @@ clipboard /bin/check --range=yesterday..today -- prod
                         yesterday's window, one positional arg
 </code></pre>
 <p>See <code>man clipboard</code> for the full command reference.</p>
-<h2>What's not shared</h2>
+<h2 id="whats-not-shared">What's not shared</h2>
 <p>The link does not grant access. The recipient still has to be
 signed in to the same org and have the namespace permissions they'd
 normally need to run the script. Pasting a link into a public

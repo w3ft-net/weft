@@ -3,6 +3,7 @@ id: manual-watches
 title: Watches
 web:
   section: watches
+  category: alert-visualize
   order: 50
 ---
 

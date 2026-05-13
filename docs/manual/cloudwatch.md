@@ -3,6 +3,7 @@ id: manual-cloudwatch
 title: Connect a CloudWatch source
 web:
   section: connect-cloudwatch
+  category: connect-source
   order: 40
 ---
 

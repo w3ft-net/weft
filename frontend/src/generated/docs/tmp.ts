@@ -4,9 +4,16 @@ const tmp = {
   id: "manual-tmp",
   section: "tmp",
   title: "Saving results to /tmp",
+  category: "query",
   order: 57,
-  html: `<h2>Saving results to /tmp</h2>
-<p>Every weft account has a scratch area at <code>/tmp</code>. Use it to save the output
+  headings: [
+    { level: 3, id: "files-expire-after-48-hours", text: "Files expire after 48 hours" },
+    { level: 3, id: "storage-limits", text: "Storage limits" },
+    { level: 3, id: "what-tmp-is-not", text: "What /tmp is not" },
+    { level: 3, id: "working-on-saved-results", text: "Working on saved results" },
+    { level: 3, id: "listing-with-ls--l", text: "Listing with ls -l" },
+  ],
+  html: `<p>Every weft account has a scratch area at <code>/tmp</code>. Use it to save the output
 of a pipeline, take notes during an incident, or hold a filtered result
 set long enough to slice it a few different ways. It behaves the way a
 Unix <code>/tmp</code> does: write with <code>&gt;</code>, append with <code>&gt;&gt;</code>, edit with <code>vi</code>, list
@@ -41,7 +48,7 @@ touch /tmp/incident-errs               # reset the 48h clock
 # Clean up when you're done
 rm -rf /tmp/incident-2026-04-22
 </code></pre>
-<h3>Files expire after 48 hours</h3>
+<h3 id="files-expire-after-48-hours">Files expire after 48 hours</h3>
 <p>Despite the shell rules, /tmp is durable storage — your files survive
 logouts and are visible from every session. But every file is deleted
 48 hours after it was last edited. Any of <code>&gt;</code>, <code>&gt;&gt;</code>, <code>cp</code>, <code>mv</code>, or
@@ -56,7 +63,7 @@ you keep anything you'll need next week. For long-term storage of a
 pipeline's output, save the pipeline itself as a watch (see the
 <strong>Watches</strong> section) — watch results are retained for the full history
 your plan covers.</p>
-<h3>Storage limits</h3>
+<h3 id="storage-limits">Storage limits</h3>
 <p>| Plan    | /tmp space | Per-file limit |
 |---------|-----------:|---------------:|
 | Trial   |     500 KB |         512 KB |
@@ -70,7 +77,7 @@ error; the partial output is not written.</p>
 <p>Check your current usage from the shell:</p>
 <pre><code>cat /etc/usage
 </code></pre>
-<h3>What /tmp is not</h3>
+<h3 id="what-tmp-is-not">What /tmp is not</h3>
 <ul>
 <li><strong>Not executable.</strong> Files in /tmp are never treated as scripts.
 <code>vi /tmp/foo</code> is a text editor opening a text file; typing <code>foo</code> at
@@ -84,7 +91,7 @@ in this release.</li>
 of your account sees the same /tmp; users from other accounts never
 see any of it.</li>
 </ul>
-<h3>Working on saved results</h3>
+<h3 id="working-on-saved-results">Working on saved results</h3>
 <p>Once you have a couple of saved result sets, the standard Unix
 analysis kit is available for comparing and combining them:</p>
 <p>| Command            | What it does                                                              |
@@ -101,7 +108,7 @@ analysis kit is available for comparing and combining them:</p>
 text into <code>/bin</code> would route around weft's script validation. If
 that's actually what you want, <code>cat /tmp/x &gt; /bin/y</code> does it through
 the normal save path.</p>
-<h3>Listing with <code>ls -l</code></h3>
+<h3 id="listing-with-ls--l">Listing with <code>ls -l</code></h3>
 <p><code>ls</code> accepts the usual flags — <code>-l</code> for long format, <code>-a</code> to include
 dotfiles, <code>-h</code> for human-readable sizes. Long format shows size and
 last-modified time, which is how you can tell how much of your 48h

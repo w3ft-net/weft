@@ -3,6 +3,7 @@ id: manual-metavars
 title: Meta-variables
 web:
   section: metavars
+  category: query
   order: 60
 ---
 

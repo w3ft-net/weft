@@ -4,14 +4,25 @@ const metavars = {
   id: "manual-metavars",
   section: "metavars",
   title: "Meta-variables",
+  category: "query",
   order: 60,
-  html: `<h1>Meta-variables</h1>
+  headings: [
+    { level: 2, id: "reserved-set", text: "Reserved set" },
+    { level: 3, id: "naming-convention", text: "Naming convention" },
+    { level: 2, id: "path-layout", text: "Path layout" },
+    { level: 2, id: "pushdown", text: "Pushdown" },
+    { level: 2, id: "recipes", text: "Recipes" },
+    { level: 3, id: "per-host-average-over-a-window", text: "Per-host average over a window" },
+    { level: 3, id: "filter-by-env-across-deployments", text: "Filter by env across deployments" },
+    { level: 3, id: "compare-a-single-deployment-across-regions", text: "Compare a single deployment across regions" },
+  ],
+  html: `<h1 id="meta-variables">Meta-variables</h1>
 <p>Meta-variables expose row-level dimensions as fast-path filters in
 awk and jq pipelines. Where a payload field would resolve through
 <code>json_extract</code>, a meta-variable maps directly to a real column on the
 shard — order-of-magnitude faster, and the row-group min/max
 statistics stay useful.</p>
-<h2>Reserved set</h2>
+<h2 id="reserved-set">Reserved set</h2>
 <p>| awk                        | jq                       | Column           | Source                                                    |
 |----------------------------|--------------------------|------------------|-----------------------------------------------------------|
 | <code>$APP</code> <em>(alias <code>$SERVICE</code>)</em> | <code>._app</code> <em>(alias <code>._service</code>)</em> | <code>app</code>            | log filename, source declaration, or HTTP ingest payload  |
@@ -30,7 +41,7 @@ statistics stay useful.</p>
 <p>A row that wasn't tagged with a given dimension stamps <code>NULL</code> —
 queries on <code>$ENV == &quot;prod&quot;</code> neither include nor exclude such rows;
 they simply don't match the predicate.</p>
-<h3>Naming convention</h3>
+<h3 id="naming-convention">Naming convention</h3>
 <p>awk meta-variables are all-caps short flat names — <code>$ENV</code>, <code>$POD</code>,
 <code>$DEPLOYMENT</code> — matching the pre-existing <code>$LEVEL</code> / <code>$APP</code> /
 <code>$INSTANCE</code> shape.</p>
@@ -43,7 +54,7 @@ so the underscore is more reliable than relying on case alone.</p>
 <code>._k8s_namespace</code>). The shorter <code>namespace</code> is unavailable because
 weft already uses &quot;namespace&quot; for the customer's logical
 token-grouping in the path (<code>/log/&lt;namespace&gt;/...</code>).</p>
-<h2>Path layout</h2>
+<h2 id="path-layout">Path layout</h2>
 <p>The pseudofile path encodes the namespace and (optionally) the env:</p>
 <pre><code>/log/&lt;namespace&gt;/&lt;app&gt;.log
 /log/&lt;namespace&gt;/&lt;env&gt;/&lt;app&gt;.log
@@ -63,7 +74,7 @@ backfill, no synthetic placeholder env.</p>
 query-time filter (<code>awk '$REGION == &quot;us-east-2&quot;'</code>) only. Same for
 deployment, host, cluster, pod: those are query-time dimensions, not
 filesystem axes.</p>
-<h2>Pushdown</h2>
+<h2 id="pushdown">Pushdown</h2>
 <p>Each reserved meta-variable rewrites to a direct column predicate:</p>
 <pre><code>awk '$ENV == &quot;prod&quot;'                  → WHERE env = 'prod'
 jq 'select(._env == &quot;prod&quot;)'          → WHERE env = 'prod'
@@ -78,8 +89,8 @@ applies — slower than a column predicate, but still pushdown:</p>
 <p>A pipeline mixing both becomes a single <code>WHERE</code> with the column
 predicate (fast) AND the JSON-extract predicate (slower); DuckDB
 plans it as one stage.</p>
-<h2>Recipes</h2>
-<h3>Per-host average over a window</h3>
+<h2 id="recipes">Recipes</h2>
+<h3 id="per-host-average-over-a-window">Per-host average over a window</h3>
 <p>A <code>cron.d</code> watch with <code>$HOST</code> carrying the dimension makes
 &quot;avg memory pct by host over 1h&quot; a one-liner:</p>
 <pre><code># /cron.d/memory-per-host
@@ -89,7 +100,7 @@ tail -n 200 /log/myco/metrics.log \\
 </code></pre>
 <p>Each tick emits one row per host. Multi-row alerts (<code>alert above 80 -k 2 -t 1</code>) page per host independently because <code>$HOST</code> is a real
 column the alert grouping understands.</p>
-<h3>Filter by env across deployments</h3>
+<h3 id="filter-by-env-across-deployments">Filter by env across deployments</h3>
 <pre><code>cat /log/myco/prod/*.log \\
   | jq 'select(._level == &quot;ERROR&quot; and ._deployment == &quot;api&quot;)' \\
   | head -50
@@ -97,7 +108,7 @@ column the alert grouping understands.</p>
 <p>The path narrows to env=prod; the column predicate further narrows
 to deployment=api; the resulting shard query is two indexable WHERE
 clauses, no JSON parsing.</p>
-<h3>Compare a single deployment across regions</h3>
+<h3 id="compare-a-single-deployment-across-regions">Compare a single deployment across regions</h3>
 <pre><code>cat /log/myco/api.log \\
   | jq 'select(._deployment == &quot;api&quot;)' \\
   | jq -r '&quot;\\(._region) \\(._level)&quot;' \\

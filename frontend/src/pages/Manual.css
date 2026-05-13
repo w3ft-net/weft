@@ -1,27 +1,177 @@
-.manual-content {
+/* Manual layout: app sidebar | manual sidebar | content body. The
+   inner flex container is set up by manual-layout so the per-manual
+   sidebar can sit beside the body without disturbing the outer
+   app-layout. */
+.manual-layout {
+  display: flex;
+  align-items: stretch;
+  min-height: 100vh;
+}
+
+.manual-body {
+  flex: 1;
   max-width: 760px;
   padding: 48px 36px;
 }
 
 .manual-page-title {
   font-family: var(--font-mono);
-  font-size: 1.4rem;
+  font-size: 1.5rem;
   font-weight: 600;
   color: var(--text-primary);
-  margin-bottom: 36px;
+  margin-bottom: 12px;
 }
 
-.manual-section {
-  margin-bottom: 48px;
+.manual-intro {
+  font-size: 0.92rem;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  margin-bottom: 32px;
 }
 
-.manual-section h2 {
+/* Landing page: category cards. Stack vertically on narrow viewports,
+   two columns at wide. */
+.manual-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 20px;
+}
+
+/* Cards are anchors: the whole surface is clickable and routes to the
+   category's first topic. Per-topic navigation lives in the sidebar. */
+.manual-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px 22px;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.manual-card:hover {
+  border-color: var(--accent);
+  background: var(--bg-elevated);
+}
+
+.manual-card-title {
   font-family: var(--font-mono);
-  font-size: 1.15rem;
+  font-size: 0.95rem;
   font-weight: 600;
   color: var(--accent);
-  margin-bottom: 16px;
-  padding-top: 16px;
+  margin: 0;
+}
+
+.manual-card-summary {
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.manual-card-cta {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.manual-card:hover .manual-card-cta {
+  color: var(--accent);
+}
+
+/* Topic page breadcrumb and title. The body's own H2 is stripped by
+   docgen when it duplicates the frontmatter title, so the H1 below is
+   the canonical heading. */
+.manual-breadcrumb {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+
+.manual-breadcrumb a {
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.manual-breadcrumb a:hover {
+  color: var(--accent);
+}
+
+.manual-breadcrumb-sep {
+  margin: 0 4px;
+  color: var(--text-dim);
+}
+
+.manual-topic-title {
+  font-family: var(--font-mono);
+  font-size: 1.4rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin: 0 0 18px 0;
+}
+
+/* Inline TOC at the top of a topic. Compact list; h3 entries indent
+   relative to h2 entries so the visual hierarchy reads. */
+.manual-topic-toc {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 18px;
+  margin-bottom: 32px;
+}
+
+.manual-topic-toc-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 8px;
+}
+
+.manual-topic-toc ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.manual-topic-toc a {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.manual-topic-toc a:hover {
+  color: var(--accent);
+}
+
+.manual-topic-toc-h3 {
+  padding-left: 16px;
+  font-size: 0.82rem;
+}
+
+/* Body content rendered from markdown HTML. Style headings, paragraphs,
+   lists, code, and code fences — unchanged from the pre-split design,
+   just scoped via .manual-section inside the per-topic article. */
+.manual-section h2 {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin-top: 32px;
+  margin-bottom: 14px;
+  scroll-margin-top: 16px;
 }
 
 .manual-section h3 {
@@ -29,8 +179,14 @@
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--text-primary);
-  margin-top: 20px;
+  margin-top: 24px;
   margin-bottom: 10px;
+  scroll-margin-top: 16px;
+}
+
+.manual-section h2:first-child,
+.manual-section h3:first-child {
+  margin-top: 0;
 }
 
 .manual-section p {
@@ -72,9 +228,6 @@
   margin-bottom: 6px;
 }
 
-/* Code fences from goldmark arrive as <pre><code>…</code></pre>.
-   Style the outer pre as the code block and let the nested <code>
-   inherit — don't double up background. */
 .manual-section pre {
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -97,22 +250,31 @@
   font-size: inherit;
 }
 
-.manual-toc {
-  list-style: none;
-  padding: 0;
-  margin: 0 0 36px 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 8px 20px;
+.manual-section table {
+  border-collapse: collapse;
+  margin: 14px 0 18px 0;
+  font-size: 0.88rem;
 }
 
-.manual-toc a {
+.manual-section th,
+.manual-section td {
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  text-align: left;
   color: var(--text-secondary);
-  text-decoration: none;
-  font-size: 0.9rem;
-  transition: color 0.2s;
 }
 
-.manual-toc a:hover {
-  color: var(--accent);
+.manual-section th {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+@media (max-width: 900px) {
+  .manual-layout {
+    flex-direction: column;
+  }
+  .manual-body {
+    padding: 24px 18px;
+  }
 }

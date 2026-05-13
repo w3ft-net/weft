@@ -4,8 +4,13 @@ const tokens = {
   id: "manual-tokens",
   section: "tokens",
   title: "Tokens",
+  category: "getting-started",
   order: 20,
-  html: `<h2>Create a token</h2>
+  headings: [
+    { level: 2, id: "create-a-token", text: "Create a token" },
+    { level: 3, id: "binding-env-to-a-token", text: "Binding env to a token" },
+  ],
+  html: `<h2 id="create-a-token">Create a token</h2>
 <p>Tokens authenticate weftd agents. Each token is scoped to a single namespace.
 Go to <strong>Namespaces</strong>, select your namespace, and click <strong>Create token</strong>.</p>
 <p>Copy the token immediately — it's only shown once. It looks like
@@ -13,7 +18,7 @@ Go to <strong>Namespaces</strong>, select your namespace, and click <strong>Crea
 <pre><code># Store the token in your weftd config
 token: wft_a1b2c3d4e5f6...
 </code></pre>
-<h3>Binding env to a token</h3>
+<h3 id="binding-env-to-a-token">Binding env to a token</h3>
 <p>When creating a token you can optionally bind a deployment environment
 (<code>prod</code>, <code>staging</code>, <code>qa</code>, …). Every row from an agent using that token
 gets the env value stamped on the row before it reaches a shard — the

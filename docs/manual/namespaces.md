@@ -3,6 +3,7 @@ id: manual-namespaces
 title: Namespaces
 web:
   section: namespaces
+  category: getting-started
   order: 10
 ---
 

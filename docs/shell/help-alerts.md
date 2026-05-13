@@ -7,6 +7,7 @@ shell:
     - "help alerts"
 web:
   section: alerting
+  category: alert-visualize
   order: 70
 ---
 

@@ -9,36 +9,136 @@ import (
 	"strings"
 
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/renderer/html"
+	gmtext "github.com/yuin/goldmark/text"
 )
 
-// renderHTML produces the HTML body for a doc that has `web:`
-// frontmatter. Unsafe HTML in source is disallowed (the manual renders
-// the output with `dangerouslySetInnerHTML` — we don't want stray raw
-// HTML from authors to land in production without review).
-func renderHTML(body []byte) (string, error) {
+// manualCategory is one bucket in the manual sidebar / landing page.
+// The slice below is the source of truth: order here = render order,
+// and the summary is what appears on the /manual landing-page card.
+type manualCategory struct {
+	ID      string
+	Label   string
+	Summary string
+}
+
+var manualCategories = []manualCategory{
+	{
+		ID:      "getting-started",
+		Label:   "Getting started",
+		Summary: "Carve out namespaces for your environments and mint the tokens that agents and drains use to authenticate.",
+	},
+	{
+		ID:      "connect-source",
+		Label:   "Connect a source",
+		Summary: "Wire up logs from a host agent (weftd), an AWS CloudWatch log group, a Heroku app, or any custom line format.",
+	},
+	{
+		ID:      "query",
+		Label:   "Query",
+		Summary: "Read pseudofiles in the interactive shell, filter with awk/sed/jq, reach for meta-variables, and stash intermediates in /tmp.",
+	},
+	{
+		ID:      "alert-visualize",
+		Label:   "Alert & visualize",
+		Summary: "Run pipelines on a schedule with watches, choose an alerting strategy that suits the signal, and pin live queries to dashboards.",
+	},
+	{
+		ID:      "customize",
+		Label:   "Customize",
+		Summary: "Build named weft functions, save reusable scripts, share them across the team, and review their history with wit.",
+	},
+}
+
+func categoryOrder(id string) (int, bool) {
+	for i, c := range manualCategories {
+		if c.ID == id {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+// headingEntry is one h2/h3 anchor inside a topic, surfaced to the
+// frontend so the per-topic TOC can render without parsing HTML.
+type headingEntry struct {
+	Level int
+	ID    string
+	Text  string
+}
+
+// renderTopic parses a doc body, extracts h2/h3 headings (with their
+// auto-assigned IDs), strips a redundant title-H2 if present, and
+// returns the rendered HTML alongside the heading list.
+func renderTopic(body []byte, title string) (string, []headingEntry, error) {
 	md := goldmark.New(
+		goldmark.WithParserOptions(parser.WithAutoHeadingID()),
 		goldmark.WithRendererOptions(html.WithXHTML()),
 	)
-	var out bytes.Buffer
-	if err := md.Convert(body, &out); err != nil {
-		return "", err
+	reader := gmtext.NewReader(body)
+	root := md.Parser().Parse(reader)
+
+	// If the first block is an H2 whose plain text equals the
+	// frontmatter title, drop it from the tree before rendering. The
+	// topic page already shows the title once via the frontmatter; a
+	// second identical line is noise.
+	if first := root.FirstChild(); first != nil {
+		if h, ok := first.(*ast.Heading); ok && h.Level == 2 {
+			if strings.EqualFold(strings.TrimSpace(collectText(h, body)), strings.TrimSpace(title)) {
+				root.RemoveChild(root, first)
+			}
+		}
 	}
-	return out.String(), nil
+
+	var headings []headingEntry
+	err := ast.Walk(root, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		h, ok := n.(*ast.Heading)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		if h.Level < 2 || h.Level > 3 {
+			return ast.WalkContinue, nil
+		}
+		idAttr, ok := h.AttributeString("id")
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		id, _ := idAttr.([]byte)
+		headings = append(headings, headingEntry{
+			Level: h.Level,
+			ID:    string(id),
+			Text:  collectText(h, body),
+		})
+		return ast.WalkContinue, nil
+	})
+	if err != nil {
+		return "", nil, err
+	}
+
+	var out bytes.Buffer
+	if err := md.Renderer().Render(&out, body, root); err != nil {
+		return "", nil, err
+	}
+	return out.String(), headings, nil
 }
 
 // writeWeb writes one TS module per web-enabled doc plus an index.ts
-// that re-exports them in manual order.
+// that re-exports them grouped by category.
 func writeWeb(dir string, docs []*doc) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 
-	// First pass: render and write each per-doc module.
 	type entry struct {
-		d      *doc
-		module string // filename base, e.g. "alerting"
-		ident  string // TS identifier for the default export
+		d        *doc
+		module   string // filename base, e.g. "connect-heroku"
+		ident    string // TS identifier for the default export
+		headings []headingEntry
 	}
 	var entries []entry
 
@@ -49,7 +149,13 @@ func writeWeb(dir string, docs []*doc) error {
 		if d.Web.Section == "" {
 			return fmt.Errorf("%s: web.section is required", d.path)
 		}
-		htmlBody, err := renderHTML(d.body)
+		if d.Web.Category == "" {
+			return fmt.Errorf("%s: web.category is required", d.path)
+		}
+		if _, ok := categoryOrder(d.Web.Category); !ok {
+			return fmt.Errorf("%s: web.category %q is not in cmd/docgen's known set", d.path, d.Web.Category)
+		}
+		htmlBody, headings, err := renderTopic(d.body, d.Title)
 		if err != nil {
 			return fmt.Errorf("%s: render html: %w", d.path, err)
 		}
@@ -62,7 +168,14 @@ func writeWeb(dir string, docs []*doc) error {
 		fmt.Fprintf(&buf, "  id: %s,\n", tsString(d.ID))
 		fmt.Fprintf(&buf, "  section: %s,\n", tsString(d.Web.Section))
 		fmt.Fprintf(&buf, "  title: %s,\n", tsString(d.Title))
+		fmt.Fprintf(&buf, "  category: %s,\n", tsString(d.Web.Category))
 		fmt.Fprintf(&buf, "  order: %d,\n", d.Web.Order)
+		fmt.Fprintf(&buf, "  headings: [\n")
+		for _, h := range headings {
+			fmt.Fprintf(&buf, "    { level: %d, id: %s, text: %s },\n",
+				h.Level, tsString(h.ID), tsString(h.Text))
+		}
+		buf.WriteString("  ],\n")
 		fmt.Fprintf(&buf, "  html: %s,\n", tsString(htmlBody))
 		buf.WriteString("} as const;\n\n")
 		fmt.Fprintf(&buf, "export default %s;\n", ident)
@@ -71,11 +184,17 @@ func writeWeb(dir string, docs []*doc) error {
 		if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
 			return err
 		}
-		entries = append(entries, entry{d, modBase, ident})
+		entries = append(entries, entry{d, modBase, ident, headings})
 	}
 
-	// Index: sort by (order, section) so the manual has a stable layout.
+	// Sort by (categoryOrder, doc.order, section) for a stable
+	// landing-page and sidebar layout.
 	sort.Slice(entries, func(i, j int) bool {
+		ci, _ := categoryOrder(entries[i].d.Web.Category)
+		cj, _ := categoryOrder(entries[j].d.Web.Category)
+		if ci != cj {
+			return ci < cj
+		}
 		if entries[i].d.Web.Order != entries[j].d.Web.Order {
 			return entries[i].d.Web.Order < entries[j].d.Web.Order
 		}
@@ -87,13 +206,31 @@ func writeWeb(dir string, docs []*doc) error {
 	for _, e := range entries {
 		fmt.Fprintf(&idx, "import %s from './%s';\n", e.ident, e.module)
 	}
-	idx.WriteString("\nexport type ManualSection = {\n")
+	idx.WriteString("\nexport type ManualHeading = {\n")
+	idx.WriteString("  level: number;\n")
+	idx.WriteString("  id: string;\n")
+	idx.WriteString("  text: string;\n")
+	idx.WriteString("};\n\n")
+	idx.WriteString("export type ManualSection = {\n")
 	idx.WriteString("  id: string;\n")
 	idx.WriteString("  section: string;\n")
 	idx.WriteString("  title: string;\n")
+	idx.WriteString("  category: string;\n")
 	idx.WriteString("  order: number;\n")
+	idx.WriteString("  headings: readonly ManualHeading[];\n")
 	idx.WriteString("  html: string;\n")
 	idx.WriteString("};\n\n")
+	idx.WriteString("export type ManualCategory = {\n")
+	idx.WriteString("  id: string;\n")
+	idx.WriteString("  label: string;\n")
+	idx.WriteString("  summary: string;\n")
+	idx.WriteString("};\n\n")
+	idx.WriteString("export const manualCategories: readonly ManualCategory[] = [\n")
+	for _, c := range manualCategories {
+		fmt.Fprintf(&idx, "  { id: %s, label: %s, summary: %s },\n",
+			tsString(c.ID), tsString(c.Label), tsString(c.Summary))
+	}
+	idx.WriteString("];\n\n")
 	idx.WriteString("export const manualSections: readonly ManualSection[] = [\n")
 	for _, e := range entries {
 		fmt.Fprintf(&idx, "  %s,\n", e.ident)

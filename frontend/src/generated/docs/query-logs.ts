@@ -4,9 +4,18 @@ const queryLogs = {
   id: "manual-query-logs",
   section: "query-logs",
   title: "Query your logs",
+  category: "query",
   order: 55,
-  html: `<h2>Query your logs</h2>
-<p>Open the <strong>Shell</strong> or use the <code>weft</code> CLI. Log sources appear as
+  headings: [
+    { level: 2, id: "meta-variables", text: "Meta-variables" },
+    { level: 3, id: "why-two-naming-styles", text: "Why two naming styles" },
+    { level: 3, id: "custom-fields-fall-through-to-json-extract", text: "Custom fields fall through to JSON-extract" },
+    { level: 2, id: "per-tag-values-over-time", text: "Per-tag values over time" },
+    { level: 2, id: "charting-a-query", text: "Charting a query" },
+    { level: 2, id: "saving-a-result-set", text: "Saving a result set" },
+    { level: 2, id: "plan-retention-and-the-archive", text: "Plan retention and the archive" },
+  ],
+  html: `<p>Open the <strong>Shell</strong> or use the <code>weft</code> CLI. Log sources appear as
 pseudofiles — use standard Unix pipeline idioms:</p>
 <pre><code># Tail logs in real time
 tail -f myapp.log
@@ -26,7 +35,7 @@ tail -n 100 myapp.log
 <p>The weft query planner analyzes your full pipeline and pushes
 predicates down into SQL — you write familiar shell commands, weft
 makes them fast.</p>
-<h2>Meta-variables</h2>
+<h2 id="meta-variables">Meta-variables</h2>
 <p>Each row weft stores has a fixed set of indexed columns alongside
 its raw text and JSON payload. Filtering on these columns is the
 fastest path through the planner — predicates rewrite to direct
@@ -61,7 +70,7 @@ tail /log/weft/metrics.log | jq 'select(._host == &quot;shard-3&quot; and .type 
 # Region-scoped grep
 cat /log/myco/prod/api.log | awk '$REGION == &quot;us-east-2&quot;' | grep &quot;timeout&quot;
 </code></pre>
-<h3>Why two naming styles</h3>
+<h3 id="why-two-naming-styles">Why two naming styles</h3>
 <p>awk meta-variables are uppercase short names (<code>$APP</code>, <code>$ENV</code>); jq
 uses leading-underscore lowercase (<code>._app</code>, <code>._env</code>). The
 underscore is the disambiguation convention — jq is case-sensitive
@@ -71,7 +80,7 @@ and real JSONL sometimes carries keys like <code>Pod</code> or <code>pod</code>,
 <p><code>$SERVICE</code> / <code>._service</code> is an alias for <code>$APP</code> / <code>._app</code>, and
 <code>$HOST</code> / <code>._host</code> is an alias for <code>$INSTANCE</code> / <code>._instance</code> — use
 whichever name fits your team's vocabulary.</p>
-<h3>Custom fields fall through to JSON-extract</h3>
+<h3 id="custom-fields-fall-through-to-json-extract">Custom fields fall through to JSON-extract</h3>
 <p>Anything not in the table above lives in your row's JSON payload
 and is still queryable — just slower:</p>
 <pre><code>cat /log/myco/prod/api.log | jq 'select(.feature_flag == &quot;abc&quot;)'
@@ -80,62 +89,23 @@ and is still queryable — just slower:</p>
 row-group statistics for skip-ahead — every row in the time range
 is read and parsed. For dimensions you query constantly, prefer
 the indexed columns.</p>
-<h2>Per-tag averages over time</h2>
-<p>The combination of indexed dimensions, watches, and the multi-row
-alert form gets you &quot;avg cpu by host over the last hour&quot; without
-any new infrastructure. Three pieces compose:</p>
-<ol>
-<li>A <strong>watch</strong> with a frequent schedule — the schedule is your
-bucket size. Every tick produces stdout that's stored as a row.</li>
-<li>The watch body emits <strong>one line per tag</strong>, with the tag and a
-numeric value. Whitespace separated; tag first, value second.</li>
-<li><code>weft.avg &lt;watch&gt; &lt;duration&gt;</code> (or <code>weft.max</code>, <code>weft.min</code>,
-<code>weft.sum</code>, <code>weft.stddev</code>) reads back the run history.</li>
-</ol>
-<p>A concrete example — average memory pressure per host, bucketed
-every minute:</p>
-<pre><code># /cron.d/memory-per-host
-# schedule: every 1m
-tail -n 200 /log/weft/metrics.log \\
-  | jq -r 'select(.type == &quot;memory&quot;) | &quot;\\(._host) \\(.pct)&quot;'
-</code></pre>
-<p>That emits lines like:</p>
-<pre><code>shard-0    62.4
-shard-1    58.1
-api-east   71.9
-</code></pre>
-<p>Each line is a per-host bucket for this minute. To alert per host
-when memory passes 80%, pipe into <code>alert</code> in multi-row mode:</p>
-<pre><code># /cron.d/memory-alert
-# schedule: every 1m
-tail -n 200 /log/weft/metrics.log \\
-  | jq -r 'select(.type == &quot;memory&quot;) | &quot;\\(._host) \\(.pct)&quot;' \\
-  | alert above 80 -k 2 -t 1 --notify=ops
-</code></pre>
-<p><code>-k 2</code> says &quot;field 2 holds the numeric value&quot;; <code>-t 1</code> says &quot;field
-1 names this row&quot; (the host) so each host opens and closes
-incidents independently.</p>
-<p><code>-k</code> and <code>-t</code> also accept JSON paths against JSONL stdin, which
-removes the <code>jq -r</code> reformatting step:</p>
-<pre><code>tail -n 6 /log/weft/metrics.log \\
-  | jq 'select(.type == &quot;memory&quot;)' \\
-  | alert above 80 -k .pct -t ._host --notify=ops
-</code></pre>
-<p>A single alert may not mix the two forms — both <code>-k</code> and <code>-t</code> must
-be positional, or both must be <code>.</code>-prefixed paths.</p>
-<p>The same shape works with any indexed dimension as the tag —
-swap <code>\\(._host)</code> for <code>\\(._deployment)</code>, <code>\\(._pod)</code>, <code>\\(._region)</code>,
-or any combination (<code>&quot;\\(._region) \\(._host) \\(.pct)&quot;</code> for region-
-prefixed host names). For string dimensions there's no perf
-penalty: each is a real column, queries push down with row-group
-statistics.</p>
-<p>Window aggregates over the watch's history (<code>weft.avg</code>,
-<code>weft.max</code>, etc.) currently summarize the entire run's stdout as
-one number, so the per-tag history is a follow-up. For now the
-recipe above gives you per-bucket per-tag values; for the rolling
-average across buckets, point a second watch at it via
-<code>weft.latest</code>.</p>
-<h2>Charting a query</h2>
+<h2 id="per-tag-values-over-time">Per-tag values over time</h2>
+<p>Indexed dimensions + a frequent watch + the multi-row alert form
+together give you &quot;value by host (or service / region / pod) over
+time&quot; without any new infrastructure. The full recipe — including
+per-tag incident dedup with <code>-k</code>/<code>-t</code> and per-tag debouncing — is
+in <strong>Alerting strategies</strong>.</p>
+<p>In short: write a watch whose body emits one line per tag (e.g.
+<code>&quot;\\(._host) \\(.pct)&quot;</code> from <code>jq -r</code>) and pipe it through
+<code>alert above N -k 2 -t 1 --notify=ops</code>. Each host opens and closes
+incidents independently against its tag.</p>
+<p>Window aggregates over the watch's history (<code>weft::avg</code>,
+<code>weft::max</code>, etc.) currently summarize the entire run's stdout as
+one number, so the per-tag <em>aggregated history</em> is a follow-up.
+For now the recipe gives you per-bucket per-tag values; for the
+rolling average across buckets, point a second watch at it via
+<code>weft::latest</code>.</p>
+<h2 id="charting-a-query">Charting a query</h2>
 <p>Pipe any pipeline into <code>chart</code> to render the result as a chart in
 the terminal — no need to first commit it to a saved watch. The
 chart is the terminal stage of the pipeline (no commands after it).</p>
@@ -157,7 +127,7 @@ something like <code>wc -l | chart</code> plots a single value, and a
 multi-line stream of bare numbers from <code>jq</code> plots one point per
 line. See <code>man chart</code> for the full flag surface (aggregation,
 bucketing, chart kind, title).</p>
-<h2>Saving a result set</h2>
+<h2 id="saving-a-result-set">Saving a result set</h2>
 <p>Redirect a pipeline into <code>/tmp</code> to hold onto the output and slice it
 a few different ways without re-running the whole query:</p>
 <pre><code>cat api.log | awk '$LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
@@ -165,7 +135,7 @@ grep timeout /tmp/errs | sort | uniq -c | sort -rn
 </code></pre>
 <p>Files in <code>/tmp</code> live for 48 hours. See the <strong>Saving results to /tmp</strong>
 section for storage limits and the full set of operations.</p>
-<h2>Plan retention and the archive</h2>
+<h2 id="plan-retention-and-the-archive">Plan retention and the archive</h2>
 <p>Your plan determines how far back queries can read — Trial keeps a
 day, Bolt keeps a year. The <strong>Account</strong> page shows your current cap;
 runs older than that are filtered out of every query, even if the

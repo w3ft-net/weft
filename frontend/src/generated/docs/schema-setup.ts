@@ -4,9 +4,11 @@ const schemaSetup = {
   id: "manual-schema-setup",
   section: "schema-setup",
   title: "Check schema setup",
+  category: "connect-source",
   order: 45,
-  html: `<h2>Check schema setup</h2>
-<p>Once weftd is shipping logs, weft auto-detects the schema from the
+  headings: [
+  ],
+  html: `<p>Once weftd is shipping logs, weft auto-detects the schema from the
 first batch of lines. Go to <strong>Namespaces</strong> to see detected apps and
 their field schemas.</p>
 <p>If you see a <strong>pending source</strong> notification on the dashboard, it

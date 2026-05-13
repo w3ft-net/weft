@@ -34,9 +34,13 @@ type shellConfig struct {
 
 // webConfig controls how a doc appears in the /manual web page.
 type webConfig struct {
-	// Section is the anchor id used in /manual (`<section id="...">`).
+	// Section is the URL slug (`/manual/<section>`) and the anchor id
+	// used inside the rendered topic.
 	Section string `yaml:"section"`
-	// Order controls render order within the manual. Lower first.
+	// Category groups this doc in the manual sidebar and landing page.
+	// Must match a key in cmd/docgen's known category map.
+	Category string `yaml:"category"`
+	// Order controls render order within the category. Lower first.
 	Order int `yaml:"order"`
 }
 

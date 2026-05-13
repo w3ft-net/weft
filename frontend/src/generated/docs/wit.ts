@@ -4,8 +4,24 @@ const wit = {
   id: "manual-wit",
   section: "wit",
   title: "wit — version history for /bin and /cron.d",
+  category: "customize",
   order: 65,
-  html: `<h2>Version history with <code>wit</code></h2>
+  headings: [
+    { level: 2, id: "version-history-with-wit", text: "Version history with wit" },
+    { level: 2, id: "whats-tracked", text: "What's tracked" },
+    { level: 2, id: "how-a-version-is-identified", text: "How a version is identified" },
+    { level: 2, id: "the-five-version-cap", text: "The five-version cap" },
+    { level: 2, id: "commands", text: "Commands" },
+    { level: 3, id: "wit-log-path", text: "wit log <path>" },
+    { level: 3, id: "wit-show-path-ref", text: "wit show <path> <ref>" },
+    { level: 3, id: "wit-diff-path-ab", text: "wit diff <path> <a>..<b>" },
+    { level: 3, id: "wit-checkout-path-ref", text: "wit checkout <path> <ref>" },
+    { level: 3, id: "wit-amend--m-msg-path-ref", text: "wit amend [-m MSG] <path> [<ref>]" },
+    { level: 2, id: "commit-messages-at-save-time", text: "Commit messages at save time" },
+    { level: 2, id: "permissions", text: "Permissions" },
+    { level: 2, id: "what-wit-does-not-do", text: "What wit does NOT do" },
+  ],
+  html: `<h2 id="version-history-with-wit">Version history with <code>wit</code></h2>
 <p>Every save to <code>/bin/&lt;name&gt;</code> or <code>/cron.d/&lt;name&gt;</code> is captured in a
 short, browseable history. If you fat-finger an edit, push a
 script that breaks an alert at 2am, or just want to see what your
@@ -15,7 +31,7 @@ watch looked like last week, the <code>wit</code> builtin has you covered.</p>
 save is a &quot;commit&quot; on a single linear branch — but the surface is
 deliberately small. There's no merging, no rebasing, no remotes.
 Just a snapshot trail of recent versions.</p>
-<h2>What's tracked</h2>
+<h2 id="whats-tracked">What's tracked</h2>
 <p>| Path                  | Tracked? |
 |-----------------------|----------|
 | <code>/bin/&lt;name&gt;</code>         | ✓ — saves to scripts produce versions |
@@ -25,7 +41,7 @@ Just a snapshot trail of recent versions.</p>
 | <code>/tmp/...</code>            | ✗ |</p>
 <p><code>wit</code> commands against any non-tracked path return
 <code>history not tracked here</code>.</p>
-<h2>How a version is identified</h2>
+<h2 id="how-a-version-is-identified">How a version is identified</h2>
 <p>Two ways to refer to a version, both accepted by every <code>wit</code>
 subcommand that takes a ref:</p>
 <ul>
@@ -41,15 +57,15 @@ match the current one, the new &quot;save&quot; event reuses the hash.</li>
 <p>Sequential <code>v1, v2, v3</code> numbering is <strong>not</strong> a stable identifier.
 A <code>wit checkout</code> of an older version shifts what &quot;v3&quot; means.
 Hashes don't drift.</p>
-<h2>The five-version cap</h2>
+<h2 id="the-five-version-cap">The five-version cap</h2>
 <p>We keep the <strong>last five</strong> past versions per entity. Every save
 beyond that drops the oldest one. Versions older than five saves
 ago are gone — there's no recycle bin.</p>
 <p>Keep this in the back of your head when iterating quickly. If
 you've been hammering <code>:w</code> ten times a minute polishing a watch,
 the version you started from this morning is no longer reachable.</p>
-<h2>Commands</h2>
-<h3><code>wit log &lt;path&gt;</code></h3>
+<h2 id="commands">Commands</h2>
+<h3 id="wit-log-path"><code>wit log &lt;path&gt;</code></h3>
 <p>Newest-first listing of versions, including HEAD.</p>
 <pre><code>weft&gt; wit log /bin/scan
 * a4fb0c2  HEAD     2026-04-25 09:42  alice    &quot;fix the awk filter&quot;
@@ -76,7 +92,7 @@ diff 3d2e91f ← c01b745:
   c01b745  HEAD^2   ...  bob
   ...
 </code></pre>
-<h3><code>wit show &lt;path&gt; &lt;ref&gt;</code></h3>
+<h3 id="wit-show-path-ref"><code>wit show &lt;path&gt; &lt;ref&gt;</code></h3>
 <p>Print a version's content. Useful for re-running an old script
 without committing to a checkout:</p>
 <pre><code>weft&gt; wit show /bin/scan HEAD^2
@@ -88,7 +104,7 @@ cat /log/api.log | awk '$LEVEL == &quot;ERROR&quot;' | wc -l | alert above 0 --n
 </code></pre>
 <p>Watches show their <code># schedule:</code> directive on the first line so
 you can read the version as a complete watch file.</p>
-<h3><code>wit diff &lt;path&gt; &lt;a&gt;..&lt;b&gt;</code></h3>
+<h3 id="wit-diff-path-ab"><code>wit diff &lt;path&gt; &lt;a&gt;..&lt;b&gt;</code></h3>
 <p>Unified diff between two refs. Headers carry the short hash and
 author of each side:</p>
 <pre><code>weft&gt; wit diff /bin/scan HEAD^2..HEAD
@@ -99,7 +115,7 @@ author of each side:</p>
 </code></pre>
 <p>The range syntax is one rigid form: <code>&lt;a&gt;..&lt;b&gt;</code>. Both endpoints
 must resolve to a real version; either side can use any ref form.</p>
-<h3><code>wit checkout &lt;path&gt; &lt;ref&gt;</code></h3>
+<h3 id="wit-checkout-path-ref"><code>wit checkout &lt;path&gt; &lt;ref&gt;</code></h3>
 <p>Make an older version the new HEAD. The current HEAD drops into
 history (where it can be checked out again later), and the
 restored version becomes the live row.</p>
@@ -124,7 +140,7 @@ out the wrong thing and want to know who, <code>wit log</code> will say.</li>
 <li>The 5-cap can drop versions during a checkout if the chain was
 already at five entries.</li>
 </ul>
-<h3><code>wit amend [-m MSG] &lt;path&gt; [&lt;ref&gt;]</code></h3>
+<h3 id="wit-amend--m-msg-path-ref"><code>wit amend [-m MSG] &lt;path&gt; [&lt;ref&gt;]</code></h3>
 <p>Set or replace a commit message. Default ref is <code>HEAD</code>:</p>
 <pre><code>weft&gt; wit amend -m 'restore working version' /bin/scan
 amended a4fb0c2: &quot;restore working version&quot;
@@ -136,7 +152,7 @@ amended 1e8a02c (HEAD^3): &quot;first cut&quot;
 label to the live version isn't authoring new content. Same for
 amending a history ref: only the message column changes, the
 underlying version is untouched.</p>
-<h2>Commit messages at save time</h2>
+<h2 id="commit-messages-at-save-time">Commit messages at save time</h2>
 <p>Right after a successful save (<code>:w</code> in vi, or any other write to
 <code>/bin/&lt;name&gt;</code> or <code>/cron.d/&lt;name&gt;</code>), the shell drops you into a
 follow-up vi buffer pre-filled with a comment-prefixed prompt:</p>
@@ -160,14 +176,14 @@ for future use.</li>
 </ul>
 <p>If you skipped the popup and want to add a message after the fact,
 that's what <code>wit amend</code> is for.</p>
-<h2>Permissions</h2>
+<h2 id="permissions">Permissions</h2>
 <p><code>wit log</code> / <code>wit show</code> / <code>wit diff</code> are read-only — same access
 as <code>cat /bin/foo</code> or <code>cat /cron.d/foo</code>.</p>
 <p><code>wit checkout</code> and <code>wit amend</code> are writes. Same namespace
 permissions as the existing FS write path; if you can save the
 file, you can check out an older version of it or amend a
 message.</p>
-<h2>What <code>wit</code> does NOT do</h2>
+<h2 id="what-wit-does-not-do">What <code>wit</code> does NOT do</h2>
 <ul>
 <li><strong>No branches, no merges.</strong> It's a linear snapshot trail.</li>
 <li><strong>No history for <code>/etc/notify.yaml</code> or <code>/tmp</code>.</strong> Notify config

@@ -3,6 +3,7 @@ id: manual-query-logs
 title: Query your logs
 web:
   section: query-logs
+  category: query
   order: 55
 ---
 

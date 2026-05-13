@@ -1,0 +1,117 @@
+.manual-sidebar {
+  font-family: var(--font-mono);
+}
+
+/* Wide-viewport rail: sits to the left of the topic body. Sticky so
+   scrolling a long topic doesn't lose the topic list. */
+.manual-sidebar-wide {
+  width: 220px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  padding: 36px 20px 36px 28px;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  max-height: 100vh;
+  overflow-y: auto;
+}
+
+.manual-sidebar-narrow {
+  display: none;
+}
+
+.manual-sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.manual-sidebar-home {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+
+.manual-sidebar-home:hover {
+  color: var(--accent);
+}
+
+.manual-sidebar-home-active {
+  color: var(--accent);
+}
+
+.manual-sidebar-group-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+
+.manual-sidebar-topics {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.manual-sidebar-topic {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: 4px 8px;
+  border-radius: 4px;
+  line-height: 1.4;
+  transition: background 0.15s, color 0.15s;
+}
+
+.manual-sidebar-topic:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.manual-sidebar-topic-active {
+  color: var(--accent);
+  background: var(--bg-card);
+}
+
+/* Narrow-viewport details disclosure. The main app SidebarNav already
+   owns the mobile hamburger; we don't want a second one fighting for
+   space, so the manual nav inlines as expandable content at the top of
+   the page instead. */
+@media (max-width: 900px) {
+  .manual-sidebar-wide {
+    display: none;
+  }
+  .manual-sidebar-narrow {
+    display: block;
+    border-bottom: 1px solid var(--border);
+    padding: 16px 20px;
+    margin-bottom: 16px;
+  }
+  .manual-sidebar-narrow summary {
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: var(--accent);
+    padding: 4px 0;
+    list-style: none;
+  }
+  .manual-sidebar-narrow summary::before {
+    content: "▸ ";
+    display: inline-block;
+    transition: transform 0.15s;
+  }
+  .manual-sidebar-narrow[open] summary::before {
+    content: "▾ ";
+  }
+  .manual-sidebar-narrow .manual-sidebar-nav {
+    margin-top: 14px;
+  }
+}

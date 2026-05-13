@@ -7,6 +7,7 @@ shell:
     - "help builtins"
 web:
   section: builtins
+  category: query
   order: 60
 ---
 

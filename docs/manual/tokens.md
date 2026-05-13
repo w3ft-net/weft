@@ -3,6 +3,7 @@ id: manual-tokens
 title: Tokens
 web:
   section: tokens
+  category: getting-started
   order: 20
 ---
 

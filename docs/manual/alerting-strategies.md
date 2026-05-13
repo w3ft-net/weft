@@ -3,6 +3,7 @@ id: manual-alerting-strategies
 title: Alerting strategies
 web:
   section: alerting-strategies
+  category: alert-visualize
   order: 53
 ---
 

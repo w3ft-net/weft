@@ -4,9 +4,15 @@ const connectCloudwatch = {
   id: "manual-cloudwatch",
   section: "connect-cloudwatch",
   title: "Connect a CloudWatch source",
+  category: "connect-source",
   order: 40,
-  html: `<h2>Connect a CloudWatch source</h2>
-<p>If your logs already land in AWS CloudWatch Logs — Lambda, ECS/Fargate,
+  headings: [
+    { level: 3, id: "1-create-the-cross-account-iam-role", text: "1. Create the cross-account IAM role" },
+    { level: 3, id: "2-write-a-schema-file", text: "2. Write a schema file" },
+    { level: 3, id: "3-register-the-source", text: "3. Register the source" },
+    { level: 3, id: "troubleshooting", text: "Troubleshooting" },
+  ],
+  html: `<p>If your logs already land in AWS CloudWatch Logs — Lambda, ECS/Fargate,
 API Gateway, RDS, or anything else that writes to a log group — weft can
 ingest directly without installing an agent. You grant a cross-account
 IAM role, point weft at a log group, and weft polls CloudWatch on a
@@ -15,7 +21,7 @@ schedule (default 30s).</p>
 run. Latency is bounded by CloudWatch's own ingestion delay plus the
 poll interval — usually well under a minute. For sub-second tailing
 install weftd instead.</p>
-<h3>1. Create the cross-account IAM role</h3>
+<h3 id="1-create-the-cross-account-iam-role">1. Create the cross-account IAM role</h3>
 <p>In the AWS account that owns the log group, create an IAM role that
 trusts weft's ingestion account and has read access to the log group.
 Pick an external ID — any hard-to-guess string — and keep it secret;
@@ -51,7 +57,7 @@ you'll paste it into weft in step 3.</p>
 <p>Scope <code>Resource</code> to a single log group (recommended) or a prefix
 (<code>.../log-group:/aws/lambda/*</code>) to share a whole tier at once. Note the
 trailing <code>:*</code> — CloudWatch Logs ARNs require it.</p>
-<h3>2. Write a schema file</h3>
+<h3 id="2-write-a-schema-file">2. Write a schema file</h3>
 <p>Weft needs to know how to parse each log line. The schema file is a
 short YAML document that names the app and tells weft where to find the
 timestamp. For a typical CloudWatch-flavored line
@@ -70,7 +76,7 @@ format: json
 timestamp_field: time         # the JSON key holding the timestamp
 timestamp_format: &quot;2006-01-02T15:04:05.000Z&quot;
 </code></pre>
-<h3>3. Register the source</h3>
+<h3 id="3-register-the-source">3. Register the source</h3>
 <p>Use the <code>weft</code> CLI to tell weft about the account and log group.
 Run this from any machine with the <code>weft</code> binary installed and a
 valid login.</p>
@@ -91,7 +97,7 @@ recent log events, and start writing rows. Confirm the source is live:</p>
 # And in the shell
 cat /log/my-app.log | head
 </code></pre>
-<h3>Troubleshooting</h3>
+<h3 id="troubleshooting">Troubleshooting</h3>
 <ul>
 <li><strong>No rows appearing</strong> — the most common causes are a missing
 external ID, the role's resource ARN not matching your log group, or

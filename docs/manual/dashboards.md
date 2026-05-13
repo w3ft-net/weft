@@ -3,6 +3,7 @@ id: manual-dashboards
 title: Dashboards
 web:
   section: dashboards
+  category: alert-visualize
   order: 55
 ---
 

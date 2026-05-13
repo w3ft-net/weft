@@ -3,6 +3,7 @@ id: manual-sharing
 title: Sharing scripts
 web:
   section: sharing
+  category: customize
   order: 62
 ---
 

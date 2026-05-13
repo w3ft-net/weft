@@ -3,6 +3,7 @@ id: manual-scripts
 title: Custom scripts
 web:
   section: scripts
+  category: customize
   order: 60
 ---
 
