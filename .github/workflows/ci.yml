@@ -60,9 +60,16 @@ jobs:
           # weft_test and set this themselves; this env var is the
           # umbrella for everyone else.
           WEFT_ALLOW_SCHEMA_BOOTSTRAP: "1"
+        # -p 1 serializes package execution. Several test packages
+        # (api/, shellfs/, store/team_perms_test, coordinator/) share
+        # the `weft` database and call TruncateTestTables in cleanup;
+        # running their binaries in parallel races. Within a single
+        # package, tests still serialize (no t.Parallel()), so the
+        # only cost of -p 1 is that non-DB packages can't fan out
+        # alongside DB packages. CI cost: ~30s.
         run: |
           mkdir -p coverage/unit
-          gotestsum --junitfile unit-report.xml -- -count=1 -timeout 5m -cover -coverpkg=./... ./... -args -test.gocoverdir="$PWD/coverage/unit"
+          gotestsum --junitfile unit-report.xml -- -count=1 -timeout 10m -cover -coverpkg=./... -p 1 ./... -args -test.gocoverdir="$PWD/coverage/unit"
       - name: Stop postgres
         if: always()
         working-directory: weft
