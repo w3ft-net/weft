@@ -1,0 +1,19 @@
+[Unit]
+Description=weftd-loom forwarder (env=%i)
+After=network-online.target loom-producer.service
+Wants=network-online.target
+PartOf=loom-producer.service
+
+[Service]
+Type=simple
+User=root
+# Carries WEFTD_TOKEN bound to env=%i. Written by the producer host's
+# user data after pulling the per-env token from Secrets Manager.
+EnvironmentFile=/etc/default/weftd-loom-%i
+ExecStartPre=/opt/app/scripts/loom-producer/render-weftd-config.sh %i
+ExecStart=/usr/local/bin/weftd --config /etc/weftd-loom-%i/config.yaml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

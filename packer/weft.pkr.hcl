@@ -151,12 +151,17 @@ build {
       "cd /tmp/weft && CGO_ENABLED=0 go build -o /tmp/weft-api ./cmd/api",
       "cd /tmp/weft && CGO_ENABLED=0 go build -o /tmp/weftd ./cmd/weftd",
       "cd /tmp/weft && CGO_ENABLED=0 go build -o /tmp/weft-migrate ./cmd/weft-migrate",
-      "sudo mv /tmp/weft-coordinator /tmp/weft-shard /tmp/weft-compute /tmp/weft-api /opt/app/bin/",
+      # loom-producer is only invoked on the dedicated weft-loom-producer
+      # host (a separate TF stack); coordinator/shard/compute hosts ship
+      # the binary but never start the unit. Built static so the t4g.nano
+      # producer can run it without dragging in cgo deps.
+      "cd /tmp/weft && CGO_ENABLED=0 go build -o /tmp/loom-producer ./cmd/loom-producer",
+      "sudo mv /tmp/weft-coordinator /tmp/weft-shard /tmp/weft-compute /tmp/weft-api /tmp/loom-producer /opt/app/bin/",
       "sudo mv /tmp/weftd /usr/local/bin/weftd",
       "sudo mv /tmp/weft-migrate /usr/local/bin/weft-migrate",
       "sudo chmod +x /usr/local/bin/weft-migrate",
-      "sudo chmod +x /opt/app/bin/weft-*",
-      "sudo chown app:app /opt/app/bin/weft-*",
+      "sudo chmod +x /opt/app/bin/weft-* /opt/app/bin/loom-producer",
+      "sudo chown app:app /opt/app/bin/weft-* /opt/app/bin/loom-producer",
       # Clean up source and build artifacts (keep Go + gcc for future rebuilds if needed)
       "sudo rm -rf /tmp/weft /tmp/warp /tmp/app-source.tar.gz /tmp/go",
     ]
@@ -271,6 +276,47 @@ build {
       "sudo mv /tmp/weft-startup.service /tmp/weft-coordinator.service /tmp/weft-shard.service /tmp/weft-compute.service /tmp/weft-api.service /etc/systemd/system/",
       "sudo systemctl daemon-reload",
       "sudo systemctl enable weft-startup",
+    ]
+  }
+
+  # loom-producer assets — units, render script, streams.yaml. Not
+  # enabled at AMI build time; only the dedicated weft-loom-producer
+  # host's install.sh enables them. Every other AMI consumer ignores
+  # these files entirely.
+  provisioner "file" {
+    source      = "deploy/loom-producer/loom-producer.service"
+    destination = "/tmp/loom-producer.service"
+  }
+
+  provisioner "file" {
+    source      = "deploy/loom-producer/weftd-loom@.service"
+    destination = "/tmp/weftd-loom@.service"
+  }
+
+  provisioner "file" {
+    source      = "deploy/loom-producer/render-weftd-config.sh"
+    destination = "/tmp/render-weftd-config.sh"
+  }
+
+  provisioner "file" {
+    source      = "deploy/loom-producer/install.sh"
+    destination = "/tmp/loom-producer-install.sh"
+  }
+
+  provisioner "file" {
+    source      = "deploy/loom-producer/streams.yaml"
+    destination = "/tmp/streams.yaml"
+  }
+
+  provisioner "shell" {
+    inline = [
+      "sudo install -d -m 0755 /opt/app/scripts/loom-producer /etc/loom-producer",
+      "sudo mv /tmp/loom-producer.service /tmp/weftd-loom@.service /etc/systemd/system/",
+      "sudo mv /tmp/render-weftd-config.sh /opt/app/scripts/loom-producer/render-weftd-config.sh",
+      "sudo mv /tmp/loom-producer-install.sh /opt/app/scripts/loom-producer/install.sh",
+      "sudo mv /tmp/streams.yaml /etc/loom-producer/streams.yaml",
+      "sudo chmod +x /opt/app/scripts/loom-producer/render-weftd-config.sh /opt/app/scripts/loom-producer/install.sh",
+      "sudo systemctl daemon-reload",
     ]
   }
 

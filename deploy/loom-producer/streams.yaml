@@ -1,0 +1,50 @@
+# loom-producer stream definitions.
+#
+# Six streams = 3 apps × 2 envs. Shape / error_ratio values mirror
+# docker-compose.demo.yml's loom-* services, so prod produces the
+# same wire content as dev's compose stack.
+#
+# Files are tailed by /etc/systemd/system/weftd-loom@{prod,sand}.service,
+# which forward to ingest.w3ft.net:9020 under the env-bound agent
+# tokens stored in /etc/default/weftd-loom-{prod,sand}.
+streams:
+  - app: api
+    env: prod
+    log: /var/log/loom/api-prod.log
+    shape: "sine:25,50,600"
+    # 4%..14% sine over 900s — the onboarding tour's `weft.avg
+    # error-rate 1h` and `chart error-rate` queries chart this curve.
+    # Keep in lockstep with docker-compose.demo.yml's loom-api-prod
+    # so the preseeded cron_results history transitions seamlessly
+    # into live data.
+    error_ratio: "sine:0.04,0.10,900"
+
+  - app: api
+    env: sand
+    log: /var/log/loom/api-sand.log
+    shape: "const:6"
+    error_ratio: "0.05"
+
+  - app: worker
+    env: prod
+    log: /var/log/loom/worker-prod.log
+    shape: "sawtooth:5,0.08,30"
+    error_ratio: "0.04"
+
+  - app: worker
+    env: sand
+    log: /var/log/loom/worker-sand.log
+    shape: "const:3"
+    error_ratio: "0.05"
+
+  - app: edge
+    env: prod
+    log: /var/log/loom/edge-prod.log
+    shape: "const:6"
+    error_ratio: "0.05"
+
+  - app: edge
+    env: sand
+    log: /var/log/loom/edge-sand.log
+    shape: "const:2"
+    error_ratio: "0.05"

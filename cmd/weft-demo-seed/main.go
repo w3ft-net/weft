@@ -29,8 +29,9 @@ import (
 
 func main() {
 	dsn := flag.String("db-dsn", os.Getenv("DB_DSN"), "postgres DSN; falls back to $DB_DSN")
-	tokensOut := flag.String("tokens-out", "dev/demo/tokens.env", "path to write minted token env vars to")
+	tokensOut := flag.String("tokens-out", "dev/demo/tokens.env", "path to write minted token env vars to; '-' means stdout")
 	reset := flag.Bool("reset", false, "delete demo customers (cascades through users, namespaces, log_groups, tokens, scripts, watches) and exit")
+	prodLoom := flag.Bool("prod-loom", false, "seed only Loom Inc with two per-env tokens (loom-prod, loom-sand); idempotent — existing live tokens are not rotated. For setting up the prod producer host.")
 	flag.Parse()
 
 	if *dsn == "" {
@@ -48,6 +49,13 @@ func main() {
 			log.Fatalf("reset: %v", err)
 		}
 		log.Print("demo customers deleted")
+		return
+	}
+
+	if *prodLoom {
+		if err := seedProdLoom(s, *tokensOut); err != nil {
+			log.Fatalf("prod-loom seed: %v", err)
+		}
 		return
 	}
 
@@ -263,6 +271,164 @@ func seed(s *store.Store, tokensOut string) error {
 func tokenEnvVar(customer, app, env string) string {
 	// e.g. ACME_API_SAND_TOKEN
 	return strings.ToUpper(fmt.Sprintf("%s_%s_%s_TOKEN", customer, app, env))
+}
+
+// seedProdLoom seeds the Loom customer and mints two per-env tokens
+// (one per env, used by the prod producer host's two weftd-loom@
+// units to forward all three of Loom's apps under a single token).
+//
+// Idempotency contract:
+//
+//   - Customer, namespace, users, log_groups, preseeded scripts /
+//     cron / dashboards / notify / error-rate history are all
+//     idempotent today; re-running this against an already-seeded
+//     prod DB is a no-op except for writes to the timestamp columns.
+//   - Tokens are **never rotated** by this path. A token is minted
+//     only if no live (non-revoked) token with that label exists.
+//     If the operator loses a token and needs to re-mint, they must
+//     revoke the existing live token first (e.g. via the dashboard);
+//     this is deliberately a manual step so a config-drift bug can't
+//     silently invalidate the producer host's live secret.
+func seedProdLoom(s *store.Store, tokensOut string) error {
+	var loomSpec *customerSpec
+	for i := range spec {
+		if spec[i].Name == "loom" {
+			loomSpec = &spec[i]
+			break
+		}
+	}
+	if loomSpec == nil {
+		return fmt.Errorf("loom not found in spec (this is a programming error)")
+	}
+
+	log.Printf("seeding loom into prod DB (idempotent)…")
+	cust, err := s.FindOrCreateCustomer(loomSpec.Name)
+	if err != nil {
+		return fmt.Errorf("customer: %w", err)
+	}
+	if err := s.UpdateCustomerDisplayName(loomSpec.Name, loomSpec.DisplayName); err != nil {
+		return fmt.Errorf("display name: %w", err)
+	}
+	if err := ensureActiveSubscription(s, loomSpec.Name); err != nil {
+		return fmt.Errorf("subscription: %w", err)
+	}
+	ns, err := s.FindOrCreateNamespace(cust.ID, loomSpec.Name)
+	if err != nil {
+		return fmt.Errorf("namespace: %w", err)
+	}
+
+	// Users — the same three @loom.test addresses dev uses. They're
+	// here in prod long-term to give wit log non-NULL authors for the
+	// preseeded /bin and /cron.d history; they're unreachable so a
+	// magic-link login attempt against them just dead-ends.
+	var members []*store.User
+	for _, m := range loomSpec.Members {
+		u, err := upsertVerifiedUser(s, m.Email, cust.ID)
+		if err != nil {
+			return fmt.Errorf("user %s: %w", m.Email, err)
+		}
+		if err := s.SetUserName(u.ID, m.Name); err != nil {
+			return fmt.Errorf("user %s name: %w", m.Email, err)
+		}
+		if err := s.SetCanCreateNamespace(u.ID, m.CanCreateNS); err != nil {
+			return fmt.Errorf("user %s can_create_namespace: %w", m.Email, err)
+		}
+		if m.ReadOnly {
+			if err := s.UpsertNamespacePermission(&store.NamespacePermission{
+				UserID: u.ID, NamespaceID: ns.ID, CanRead: true,
+			}); err != nil {
+				return fmt.Errorf("user %s perm: %w", m.Email, err)
+			}
+		} else {
+			if err := s.GrantFullNamespaceAccess(u.ID, ns.ID); err != nil {
+				return fmt.Errorf("user %s grant: %w", m.Email, err)
+			}
+		}
+		members = append(members, u)
+	}
+
+	// Log groups — same three apps as the dev seed.
+	for _, app := range loomSpec.Apps {
+		fullApp := loomSpec.Name + "/" + app
+		if err := s.AddLogGroup(ns.ID, nil, store.SourceTypeWeftd,
+			fullApp, fullApp, "us-east-2", minimalSchemaYAML(app), "30s"); err != nil {
+			return fmt.Errorf("log_group %s: %w", fullApp, err)
+		}
+	}
+
+	// Tokens — one per env (not per (app, env) like dev). Each token
+	// is bound to the env value; the producer host's weftd-loom@ENV
+	// units carry three sources (one per app) sharing that token, and
+	// the coordinator stamps $ENV on every row from the token's
+	// binding. Skip mint when a live token with the label already
+	// exists so re-runs don't invalidate the host's stored secret.
+	existing, err := s.ListAgentTokens(cust.ID)
+	if err != nil {
+		return fmt.Errorf("list tokens: %w", err)
+	}
+	liveLabels := make(map[string]bool)
+	for _, t := range existing {
+		if !t.Revoked {
+			liveLabels[t.Label] = true
+		}
+	}
+	var mintedLines []mintedToken
+	for _, env := range loomSpec.Envs {
+		label := fmt.Sprintf("%s-%s", loomSpec.Name, env) // e.g. loom-prod
+		if liveLabels[label] {
+			log.Printf("  token %s already live — skipping mint", label)
+			continue
+		}
+		raw, _, err := s.CreateAgentToken(cust.ID, ns.ID, label, env)
+		if err != nil {
+			return fmt.Errorf("token %s: %w", label, err)
+		}
+		varName := strings.ToUpper(fmt.Sprintf("%s_%s_TOKEN", loomSpec.Name, env))
+		mintedLines = append(mintedLines, mintedToken{varName: varName, raw: raw})
+		log.Printf("  minted token %s", label)
+	}
+
+	// Scripts, crons, dashboards, notify aliases, error-rate history.
+	// All paths here are idempotent (see preseedScripts comments).
+	if err := preseedScripts(s, cust.ID, loomSpec.Name, members); err != nil {
+		return fmt.Errorf("preseed: %w", err)
+	}
+
+	return writeProdLoomTokens(tokensOut, mintedLines)
+}
+
+// writeProdLoomTokens writes minted tokens to a file or stdout. An
+// empty list (re-run with both tokens already live) is reported, not
+// silently skipped — the operator needs to know whether to expect
+// values to copy into Secrets Manager.
+func writeProdLoomTokens(path string, lines []mintedToken) error {
+	if len(lines) == 0 {
+		log.Print("no new tokens minted; both env tokens already live in DB")
+		log.Print("if you need to re-mint, revoke the existing token first via the dashboard")
+		return nil
+	}
+	if path == "-" {
+		fmt.Println("# loom prod tokens (paste into Secrets Manager at /weft/loom-producer/<env>-token)")
+		for _, l := range lines {
+			fmt.Printf("%s=%s\n", l.varName, l.raw)
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	var b strings.Builder
+	b.WriteString("# Generated by weft-demo-seed --prod-loom; paste values into\n")
+	b.WriteString("# AWS Secrets Manager at /weft/loom-producer/<env>-token and\n")
+	b.WriteString("# delete this file. Do not check it in.\n\n")
+	for _, l := range lines {
+		fmt.Fprintf(&b, "%s=%s\n", l.varName, l.raw)
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		return err
+	}
+	log.Printf("tokens written to %s — copy to Secrets Manager and delete the file", path)
+	return nil
 }
 
 func writeTokensFile(path string, lines []mintedToken) error {
