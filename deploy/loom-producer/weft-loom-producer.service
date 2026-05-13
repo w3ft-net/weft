@@ -1,6 +1,11 @@
 [Unit]
 Description=Loom Inc synthetic log producer (drives onboarding tour live data)
-After=weft-startup.service network-online.target
+# Do NOT add After=weft-startup.service — that creates a circular dep,
+# since weft-startup.service's ExecStart runs `systemctl start weft-$ROLE`
+# and would block on this unit becoming active. /opt/app/.env is already
+# populated by the time weft-startup calls us; network.target is the
+# only ordering we actually need.
+After=network.target
 Wants=weftd-loom@prod.service weftd-loom@sand.service
 
 [Service]

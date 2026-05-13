@@ -1,7 +1,10 @@
 [Unit]
 Description=weftd-loom forwarder (env=%i)
-After=weft-loom-producer.service network-online.target
-Wants=network-online.target
+# Started via weft-loom-producer.service's Wants= so it gets activated
+# in the same `systemctl start weft-loom-producer` call. After= is
+# ordering only - we still need network up before weftd dials home.
+After=network.target
+Wants=network.target
 PartOf=weft-loom-producer.service
 
 [Service]
