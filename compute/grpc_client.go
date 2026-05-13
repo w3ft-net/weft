@@ -77,12 +77,13 @@ func (s *grpcLineStream) Next(_ context.Context) (Line, bool, error) {
 
 func (s *grpcLineStream) Close() error { return nil }
 
-func (p *GRPCComputePool) NewJob(stages []string, shardCount int, mergeKey string, limit int) ComputeJob {
+func (p *GRPCComputePool) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool) ComputeJob {
 	resp, err := p.client.CreateJob(context.Background(), &pb.CreateJobRequest{
 		Stages:     stages,
 		ShardCount: int32(shardCount),
 		MergeKey:   mergeKey,
 		Limit:      int32(limit),
+		KeepLast:   keepLast,
 	})
 	if err != nil {
 		// Return a job that immediately errors on Result().

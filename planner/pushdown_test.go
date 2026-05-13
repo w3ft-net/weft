@@ -272,14 +272,18 @@ func TestPushdown_SingleStage_HeadTail(t *testing.T) {
 			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts ASC LIMIT 50`,
 		},
 		{
+			// tail wraps its DESC-LIMIT pushdown in an outer ASC SELECT so
+			// rows reach the user in chronological order, matching how a
+			// tail of a file on disk reads. Inner subquery still does the
+			// cheap per-shard top-N work; the outer flip is free.
 			name:     "tail default",
 			pipeline: `tail vimgym.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC LIMIT 10`,
+			wantSQL:  `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC LIMIT 10) AS t ORDER BY ts ASC`,
 		},
 		{
 			name:     "tail with count",
 			pipeline: `tail -100 vimgym.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC LIMIT 100`,
+			wantSQL:  `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC LIMIT 100) AS t ORDER BY ts ASC`,
 		},
 		{
 			name:     "head -n flag",
@@ -289,7 +293,7 @@ func TestPushdown_SingleStage_HeadTail(t *testing.T) {
 		{
 			name:     "tail -n flag",
 			pipeline: `tail -n 50 vimgym.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC LIMIT 50`,
+			wantSQL:  `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC LIMIT 50) AS t ORDER BY ts ASC`,
 		},
 	}
 

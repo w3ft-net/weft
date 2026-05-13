@@ -25,7 +25,7 @@ type registryPool struct {
 }
 
 func (p *registryPool) ExecuteQuery(req *pb.ExecuteQueryRequest) (compute.LineStream, error) {
-	job := (&compute.LocalComputePool{}).NewJob(req.Stages, len(req.Shards), req.MergeKey, int(req.Limit))
+	job := (&compute.LocalComputePool{}).NewJob(req.Stages, len(req.Shards), req.MergeKey, int(req.Limit), req.KeepLast)
 	for _, d := range req.Shards {
 		go func(d *pb.ShardDescriptor) {
 			e := p.registry.Get(d.ShardId)
@@ -40,8 +40,8 @@ func (p *registryPool) ExecuteQuery(req *pb.ExecuteQueryRequest) (compute.LineSt
 	return job.Stream(), nil
 }
 
-func (p *registryPool) NewJob(stages []string, shardCount int, mergeKey string, limit int) compute.ComputeJob {
-	return (&compute.LocalComputePool{}).NewJob(stages, shardCount, mergeKey, limit)
+func (p *registryPool) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool) compute.ComputeJob {
+	return (&compute.LocalComputePool{}).NewJob(stages, shardCount, mergeKey, limit, keepLast)
 }
 
 // Base times for test fixtures. Shard 0 covers 10:00–11:00, shard 1 covers 11:00–12:00.

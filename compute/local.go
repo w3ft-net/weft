@@ -26,17 +26,18 @@ type LocalComputePool struct {
 }
 
 func (p *LocalComputePool) ExecuteQuery(req *pb.ExecuteQueryRequest) (LineStream, error) {
-	job := p.NewJob(req.Stages, len(req.Shards), req.MergeKey, int(req.Limit))
+	job := p.NewJob(req.Stages, len(req.Shards), req.MergeKey, int(req.Limit), req.KeepLast)
 	go FanOutToShards(req, job, p.AWSCreds, p.AWSRegion)
 	return job.Stream(), nil
 }
 
-func (p *LocalComputePool) NewJob(stages []string, shardCount int, mergeKey string, limit int) ComputeJob {
+func (p *LocalComputePool) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool) ComputeJob {
 	return &LocalComputeJob{
 		stages:     stages,
 		shardCount: shardCount,
 		mergeKey:   mergeKey,
 		limit:      limit,
+		keepLast:   keepLast,
 		ch:         make(chan ComputeMessage, 1024),
 		streamCh:   make(chan Line, 1024),
 	}
@@ -55,6 +56,7 @@ type LocalComputeJob struct {
 	shardCount int
 	mergeKey   string // see ComputePool.NewJob; empty = concat, otherwise k-way merge
 	limit      int    // see ComputePool.NewJob; 0 = no cap
+	keepLast   bool   // tail-mode: retain last N from the merged stream and emit at EOF
 
 	ch        chan ComputeMessage // shards push rows + sentinels here
 	streamCh  chan Line           // consume() pushes output here
@@ -155,12 +157,63 @@ func (j *LocalComputeJob) MergedRows() ([]*pb.ResultRow, error) {
 // shard arrival to client; batch-only stages (sort, wc, tail -N)
 // still buffer to EOF as their semantics require.
 //
+// retainLast drains the merged stream to exhaustion and returns the
+// final j.limit rows in arrival (i.e. merge-key) order. Used by tail-
+// mode (keep_last): per-shard SQL has the tail subquery flip so rows
+// arrive ASC, and "last N globally" can't be computed by stopping
+// early — we have to see every row to know which ones make the cut.
+// The buffer is a fixed-size deque implemented as a circular slice;
+// memory stays at O(N) regardless of stream length.
+//
+// Returns the rows in the order they should be emitted to the
+// downstream consumer (ASC for the tail-flip case). The buffer is
+// never larger than j.limit, so memory is bounded by the user's
+// requested N.
+func (j *LocalComputeJob) retainLast() []*pb.ResultRow {
+	if j.limit <= 0 {
+		return nil
+	}
+	buf := make([]*pb.ResultRow, 0, j.limit)
+	head := 0 // index of the oldest row when len(buf) == j.limit
+	full := false
+	onlineMerge(j.ch, j.shardCount, j.mergeKey, func(row *pb.ResultRow) bool {
+		if !full {
+			buf = append(buf, row)
+			if len(buf) == j.limit {
+				full = true
+			}
+		} else {
+			buf[head] = row
+			head++
+			if head == j.limit {
+				head = 0
+			}
+		}
+		return true
+	})
+	if !full {
+		return buf
+	}
+	// Rotate so oldest is at index 0.
+	out := make([]*pb.ResultRow, j.limit)
+	copy(out, buf[head:])
+	copy(out[j.limit-head:], buf[:head])
+	return out
+}
+
 // streamErr is set BEFORE the channel is closed so consumers see the
 // error after the channel signals exhaustion.
 func (j *LocalComputeJob) consume() {
 	defer close(j.streamCh)
 
 	if len(j.stages) == 0 {
+		if j.keepLast && j.limit > 0 {
+			buf := j.retainLast()
+			for i, r := range buf {
+				j.streamCh <- Line{Raw: r.Raw, LineNum: int64(i + 1)}
+			}
+			return
+		}
 		emitted := 0
 		onlineMerge(j.ch, j.shardCount, j.mergeKey, func(row *pb.ResultRow) bool {
 			if j.limit > 0 && emitted >= j.limit {
@@ -179,8 +232,27 @@ func (j *LocalComputeJob) consume() {
 
 	// Writer: pump merged rows into warp's stdin. Closing stdinW
 	// signals EOF to the pipeline, which lets sort/wc/etc. flush.
+	//
+	// Tail mode (keep_last): the merge runs to exhaustion into a ring
+	// buffer of N rows; only after EOF do we feed the buffer into the
+	// pipeline's stdin in order. The bash stages run as usual on those
+	// N lines. Tradeoff: tail loses streaming — first user-visible row
+	// comes only after all shards drain — which is intrinsic to "last
+	// N" semantics (the merge can't know what the last N are until it
+	// has seen everything).
 	go func() {
 		defer stdinW.Close()
+		if j.keepLast && j.limit > 0 {
+			for _, r := range j.retainLast() {
+				if _, err := io.WriteString(stdinW, r.Raw); err != nil {
+					return
+				}
+				if _, err := stdinW.Write([]byte{'\n'}); err != nil {
+					return
+				}
+			}
+			return
+		}
 		emitted := 0
 		onlineMerge(j.ch, j.shardCount, j.mergeKey, func(row *pb.ResultRow) bool {
 			if j.limit > 0 && emitted >= j.limit {

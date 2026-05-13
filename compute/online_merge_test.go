@@ -292,7 +292,7 @@ func TestOnlineMerge_OneShard(t *testing.T) {
 // refactor to onlineMerge actually surfaces the stream end-to-end.
 func TestLocalComputeJob_OnlineStreaming(t *testing.T) {
 	pool := &LocalComputePool{}
-	job := pool.NewJob(nil, 2, "ts", 0)
+	job := pool.NewJob(nil, 2, "ts", 0, false)
 
 	job.SendRow(row(1, "one"), "a")
 	job.SendRow(row(2, "two"), "b")

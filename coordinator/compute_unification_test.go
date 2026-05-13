@@ -22,8 +22,8 @@ func (p *spyPool) ExecuteQuery(req *pb.ExecuteQueryRequest) (compute.LineStream,
 	return p.inner.ExecuteQuery(req)
 }
 
-func (p *spyPool) NewJob(stages []string, shardCount int, mergeKey string, limit int) compute.ComputeJob {
-	return p.inner.NewJob(stages, shardCount, mergeKey, limit)
+func (p *spyPool) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool) compute.ComputeJob {
+	return p.inner.NewJob(stages, shardCount, mergeKey, limit, keepLast)
 }
 
 // TestQuery_NoStages_RoutesThroughComputePool pins the behavior that

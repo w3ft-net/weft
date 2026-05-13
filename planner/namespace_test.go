@@ -41,7 +41,7 @@ func TestNamespacePredicate(t *testing.T) {
 		{
 			name:     "tail with namespace+service (no env)",
 			pipeline: `tail -10 /log/weft/shard.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'weft' AND service = 'shard' ORDER BY ts DESC LIMIT 10`,
+			wantSQL:  `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = 'weft' AND service = 'shard' ORDER BY ts DESC LIMIT 10) AS t ORDER BY ts ASC`,
 		},
 		{
 			name:     "grep with namespace+service",

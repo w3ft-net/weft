@@ -162,6 +162,16 @@ message CreateJobRequest {
   // by shard count when downstream stages see the union — a bare
   // `tail -n N | wc -l` would return N×num_shards.
   int32 limit = 4;
+
+  // keep_last selects the limit semantics. false (default) is the
+  // head-style "stop after N emitted" trim. true switches to tail-
+  // style "retain the last N seen, emit at EOF" — required when the
+  // shard SQL is the tail subquery flip (inner ts-DESC LIMIT N, outer
+  // ts-ASC) and rows arrive at compute in ASC: cross-shard LIMIT N on
+  // an ASC merge would otherwise return the *oldest* N of the per-
+  // shard tails, not the global last N. See
+  // planner/sql.go::Query.Wrap.
+  bool keep_last = 5;
 }
 
 message CreateJobResponse {
@@ -210,6 +220,13 @@ message ExecuteQueryRequest {
   int32 limit = 5;
   // Bearer token for gRPC shard auth.
   string shard_secret = 6;
+  // keep_last switches the limit semantic: false (default) trims after
+  // N emitted (head); true retains a ring buffer of the LAST N rows
+  // seen across the merged stream and emits at EOF (tail). Set by the
+  // coordinator when planner.QueryPlan.TailMode is true — tail's
+  // subquery flip lands rows in ts ASC, so the global last N can't be
+  // resolved by stopping early. See compute/local.go::consume.
+  bool keep_last = 7;
 }
 
 message ExecuteQueryResponse {

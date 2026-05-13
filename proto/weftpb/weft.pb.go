@@ -778,7 +778,16 @@ type CreateJobRequest struct {
 	// head/tail count). Without this, per-shard LIMIT N gets multiplied
 	// by shard count when downstream stages see the union — a bare
 	// `tail -n N | wc -l` would return N×num_shards.
-	Limit         int32 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
+	Limit int32 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
+	// keep_last selects the limit semantics. false (default) is the
+	// head-style "stop after N emitted" trim. true switches to tail-
+	// style "retain the last N seen, emit at EOF" — required when the
+	// shard SQL is the tail subquery flip (inner ts-DESC LIMIT N, outer
+	// ts-ASC) and rows arrive at compute in ASC: cross-shard LIMIT N on
+	// an ASC merge would otherwise return the *oldest* N of the per-
+	// shard tails, not the global last N. See
+	// planner/sql.go::Query.Wrap.
+	KeepLast      bool `protobuf:"varint,5,opt,name=keep_last,json=keepLast,proto3" json:"keep_last,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -839,6 +848,13 @@ func (x *CreateJobRequest) GetLimit() int32 {
 		return x.Limit
 	}
 	return 0
+}
+
+func (x *CreateJobRequest) GetKeepLast() bool {
+	if x != nil {
+		return x.KeepLast
+	}
+	return false
 }
 
 type CreateJobResponse struct {
@@ -1183,7 +1199,14 @@ type ExecuteQueryRequest struct {
 	MergeKey string                 `protobuf:"bytes,4,opt,name=merge_key,json=mergeKey,proto3" json:"merge_key,omitempty"`
 	Limit    int32                  `protobuf:"varint,5,opt,name=limit,proto3" json:"limit,omitempty"`
 	// Bearer token for gRPC shard auth.
-	ShardSecret   string `protobuf:"bytes,6,opt,name=shard_secret,json=shardSecret,proto3" json:"shard_secret,omitempty"`
+	ShardSecret string `protobuf:"bytes,6,opt,name=shard_secret,json=shardSecret,proto3" json:"shard_secret,omitempty"`
+	// keep_last switches the limit semantic: false (default) trims after
+	// N emitted (head); true retains a ring buffer of the LAST N rows
+	// seen across the merged stream and emits at EOF (tail). Set by the
+	// coordinator when planner.QueryPlan.TailMode is true — tail's
+	// subquery flip lands rows in ts ASC, so the global last N can't be
+	// resolved by stopping early. See compute/local.go::consume.
+	KeepLast      bool `protobuf:"varint,7,opt,name=keep_last,json=keepLast,proto3" json:"keep_last,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1258,6 +1281,13 @@ func (x *ExecuteQueryRequest) GetShardSecret() string {
 		return x.ShardSecret
 	}
 	return ""
+}
+
+func (x *ExecuteQueryRequest) GetKeepLast() bool {
+	if x != nil {
+		return x.KeepLast
+	}
+	return false
 }
 
 type ExecuteQueryResponse struct {
@@ -4563,13 +4593,14 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\rIngestRequest\x12 \n" +
 	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\"5\n" +
 	"\x0eIngestResponse\x12#\n" +
-	"\rrows_ingested\x18\x01 \x01(\x03R\frowsIngested\"~\n" +
+	"\rrows_ingested\x18\x01 \x01(\x03R\frowsIngested\"\x9b\x01\n" +
 	"\x10CreateJobRequest\x12\x16\n" +
 	"\x06stages\x18\x01 \x03(\tR\x06stages\x12\x1f\n" +
 	"\vshard_count\x18\x02 \x01(\x05R\n" +
 	"shardCount\x12\x1b\n" +
 	"\tmerge_key\x18\x03 \x01(\tR\bmergeKey\x12\x14\n" +
-	"\x05limit\x18\x04 \x01(\x05R\x05limit\"*\n" +
+	"\x05limit\x18\x04 \x01(\x05R\x05limit\x12\x1b\n" +
+	"\tkeep_last\x18\x05 \x01(\bR\bkeepLast\"*\n" +
 	"\x11CreateJobResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"\x81\x01\n" +
 	"\x0eComputeMessage\x12\x15\n" +
@@ -4590,14 +4621,15 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
 	"lambda_url\x18\x03 \x01(\tR\tlambdaUrl\x12!\n" +
 	"\fparquet_path\x18\x04 \x01(\tR\vparquetPath\x12\x12\n" +
-	"\x04apps\x18\x05 \x03(\tR\x04apps\"\xc4\x01\n" +
+	"\x04apps\x18\x05 \x03(\tR\x04apps\"\xe1\x01\n" +
 	"\x13ExecuteQueryRequest\x12\x10\n" +
 	"\x03sql\x18\x01 \x01(\tR\x03sql\x12-\n" +
 	"\x06shards\x18\x02 \x03(\v2\x15.weft.ShardDescriptorR\x06shards\x12\x16\n" +
 	"\x06stages\x18\x03 \x03(\tR\x06stages\x12\x1b\n" +
 	"\tmerge_key\x18\x04 \x01(\tR\bmergeKey\x12\x14\n" +
 	"\x05limit\x18\x05 \x01(\x05R\x05limit\x12!\n" +
-	"\fshard_secret\x18\x06 \x01(\tR\vshardSecret\"@\n" +
+	"\fshard_secret\x18\x06 \x01(\tR\vshardSecret\x12\x1b\n" +
+	"\tkeep_last\x18\a \x01(\bR\bkeepLast\"@\n" +
 	"\x14ExecuteQueryResponse\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"H\n" +

@@ -35,7 +35,7 @@ func TestPushdown_LimitBeforeFilter_DoesNotMerge(t *testing.T) {
 		{
 			name:        "tail then inverted grep (saturation hazard)",
 			pipeline:    `cat vimgym.log | tail -n 2000 | grep -v ERROR | wc -l`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC LIMIT 2000`,
+			wantSQL:     `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC LIMIT 2000) AS t ORDER BY ts ASC`,
 			wantCompute: []string{"grep -v ERROR", "wc -l"},
 		},
 		{
@@ -47,7 +47,7 @@ func TestPushdown_LimitBeforeFilter_DoesNotMerge(t *testing.T) {
 		{
 			name:        "tail then awk negated regex (not limit-safe)",
 			pipeline:    `cat vimgym.log | tail -n 100 | awk '$0 !~ /ERROR/'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC LIMIT 100`,
+			wantSQL:     `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC LIMIT 100) AS t ORDER BY ts ASC`,
 			wantCompute: []string{`awk '$0 !~ /ERROR/'`},
 		},
 	}
@@ -90,7 +90,7 @@ func TestPlanCustomer_BoundsPerShardLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	want := `SELECT raw, ts FROM logs WHERE customer = 'victim-co' ORDER BY ts DESC LIMIT 100`
+	want := `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE customer = 'victim-co' ORDER BY ts DESC LIMIT 100) AS t ORDER BY ts ASC`
 	if plan.ShardSQL != want {
 		t.Errorf("ShardSQL must place customer predicate before the LIMIT\n got: %s\nwant: %s", plan.ShardSQL, want)
 	}
@@ -113,19 +113,19 @@ func TestPushdown_LimitSafePushdown(t *testing.T) {
 		{
 			name:        "tail then awk meta-var equality",
 			pipeline:    `cat vimgym.log | tail -n 100 | awk '$LEVEL == "ERROR"'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR' ORDER BY ts DESC LIMIT 100`,
+			wantSQL:     `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR' ORDER BY ts DESC LIMIT 100) AS t ORDER BY ts ASC`,
 			wantCompute: nil,
 		},
 		{
 			name:        "tail then awk positional equality",
 			pipeline:    `cat vimgym.log | tail -n 100 | awk '$3 == "foo"'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND list_extract(fields, 3) = 'foo' ORDER BY ts DESC LIMIT 100`,
+			wantSQL:     `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND list_extract(fields, 3) = 'foo' ORDER BY ts DESC LIMIT 100) AS t ORDER BY ts ASC`,
 			wantCompute: nil,
 		},
 		{
 			name:        "tail then plain grep (positive)",
 			pipeline:    `cat vimgym.log | tail -n 2000 | grep ERROR | wc -l`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND regexp_matches(raw, 'ERROR') ORDER BY ts DESC LIMIT 2000`,
+			wantSQL:     `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND regexp_matches(raw, 'ERROR') ORDER BY ts DESC LIMIT 2000) AS t ORDER BY ts ASC`,
 			wantCompute: []string{"wc -l"},
 		},
 		{

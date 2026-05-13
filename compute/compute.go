@@ -22,8 +22,13 @@ type ComputeMessage struct {
 // ComputePool creates compute jobs. Implementations:
 //   - LocalComputePool: in-process execution via warp's bash interpreter
 //   - GRPCComputePool: fans out to remote compute workers
+//
+// keepLast selects the limit semantic: false is the default head-style
+// "stop after N emitted"; true switches to tail-style "retain last N,
+// emit at EOF" — required when shards return ASC after the tail
+// subquery flip (see planner/sql.go::Query.Wrap).
 type ComputePool interface {
-	NewJob(stages []string, shardCount int, mergeKey string, limit int) ComputeJob
+	NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool) ComputeJob
 
 	// ExecuteQuery fans out SQL to the given shards, merges results,
 	// applies pipeline stages, and streams output lines back.

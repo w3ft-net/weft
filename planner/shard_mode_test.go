@@ -35,9 +35,13 @@ func TestClassifyShardMode_A_NoSort(t *testing.T) {
 			wantLim:  5,
 		},
 		{
+			// tail's per-shard SQL still grabs the DESC top-N inside an
+			// inner subquery, but the outer flip makes rows arrive at
+			// compute in ts ASC. The merge key follows the wire-order,
+			// not the inner pushdown.
 			name:     "tail 10 as source",
 			pipeline: `tail -10 vimgym.log`,
-			wantOrd:  "ts DESC",
+			wantOrd:  "ts",
 			wantLim:  10,
 		},
 		{
@@ -187,9 +191,13 @@ func TestDirectShardSQL(t *testing.T) {
 			want:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts LIMIT 5`,
 		},
 		{
-			name:     "mode A with tail — ORDER BY ts DESC LIMIT N",
+			// tail wraps inner DESC+LIMIT in an outer ASC re-emit so the
+			// merge key (and the user-facing output) is ts ASC, not DESC.
+			// Per-shard CPU is unchanged from the pre-flip days; the
+			// outer SELECT is a cheap re-sort of the bounded inner.
+			name:     "mode A with tail — subquery flips to ts ASC display",
 			pipeline: `tail -10 vimgym.log`,
-			want:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC LIMIT 10`,
+			want:     `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC LIMIT 10) AS t ORDER BY ts ASC`,
 		},
 		{
 			name:     "mode B plain sort — ORDER BY raw",

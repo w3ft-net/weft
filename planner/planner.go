@@ -19,7 +19,13 @@ type QueryPlan struct {
 	ShardSQL       string
 	ComputeStages  []string
 	Limit          int           // post-merge limit (from head/tail), 0 = unlimited
-	OrderDesc      bool          // true for tail (DESC), false for head (ASC)
+	// TailMode is true when the source command is `tail` (or an inline
+	// `tail` stage). Coordinator forwards it to compute as KeepLast,
+	// which switches the merged-stream trim from "stop after N emitted"
+	// (head semantics) to "retain last N, emit at EOF" (tail semantics)
+	// — required because the tail subquery flip lands rows in ts ASC at
+	// compute, so the global last N can't be resolved by stopping early.
+	TailMode bool
 	Follow         bool          // tail -f: keep stream open for live updates
 	FollowApp      string        // app to subscribe to ("" = all)
 	FollowPatterns []GrepPattern // grep filters applied to live rows
@@ -309,12 +315,40 @@ func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 	orderDesc := sql.orderBy == "ts DESC"
 	shardOrderBy, shardLimit := classifyShardMode(compute, orderDesc, sql.limit)
 
+	// tail wraps its inner DESC + LIMIT pushdown in an outer ASC re-emit
+	// so the user-visible rows arrive in chronological order. The inner
+	// keeps doing the cheap per-shard top-N work; the outer flip is a
+	// bounded re-sort. ShardSQL preserves the head/tail-derived inner
+	// ordering verbatim, so we wrap iff the inner is "ts DESC". The
+	// DirectShardSQL path's inner uses the mode-classified order from
+	// classifyShardMode — wrap whenever that's "ts DESC" (Mode A with
+	// tail). Other DESC keys (raw DESC from sort -r) are explicit user
+	// intent and not wrapped.
+	shardSQL := sql.build()
+	if sql.orderBy == "ts DESC" {
+		shardSQL = sql.Wrap("ts ASC").build()
+	}
+	directInner := sql.WithOrderLimit(shardOrderBy, shardLimit)
+	directShardSQL := directInner.build()
+	if shardOrderBy == "ts DESC" {
+		directShardSQL = directInner.Wrap("ts ASC").build()
+	}
+
+	// After the wrap, rows reach compute in ts ASC even though the
+	// inner pushdown was DESC. Reflect that in the merge-key the
+	// coordinator forwards to compute, otherwise the k-way merge
+	// walks the per-shard streams in the wrong direction.
+	mergeOrderBy := shardOrderBy
+	if shardOrderBy == "ts DESC" {
+		mergeOrderBy = "ts"
+	}
+
 	return &QueryPlan{
-		ShardSQL:       sql.build(),
-		DirectShardSQL: sql.buildWith(shardOrderBy, shardLimit),
+		ShardSQL:       shardSQL,
+		DirectShardSQL: directShardSQL,
 		ComputeStages:  compute,
 		Limit:          sql.limit,
-		OrderDesc:      orderDesc,
+		TailMode:       orderDesc,
 		Follow:         info.source.follow,
 		FollowApp:      info.source.app(),
 		FollowPatterns: grepPatterns,
@@ -323,7 +357,7 @@ func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 		SourceApp:      info.source.app(),
 		SourceNamespace: firstOrEmpty(info.source.namespaces),
 		AlertArgs:      alertArgs,
-		ShardOrderBy:   shardOrderBy,
+		ShardOrderBy:   mergeOrderBy,
 		ShardLimit:     shardLimit,
 		RedirectTarget: redirTarget,
 		RedirectAppend: redirAppend,
@@ -386,7 +420,7 @@ func extractTrailingFSRedirect(pipeline string) (string, string, bool, error) {
 }
 
 // tryPushdown attempts to push a single stage into the SQL builder.
-func tryPushdown(stage stageInfo, sql *sqlBuilder) pushdownResult {
+func tryPushdown(stage stageInfo, sql *Query) pushdownResult {
 	switch stage.cmd {
 	case "awk":
 		if len(stage.args) == 0 {

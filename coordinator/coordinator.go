@@ -812,6 +812,9 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 		MergeKey:    plan.ShardOrderBy,
 		Limit:       int32(plan.Limit),
 		ShardSecret: c.shardSecret,
+		// tail-mode: shard SQL wraps to ASC; compute must retain
+		// last-N instead of stopping after first-N emitted.
+		KeepLast: plan.TailMode,
 	})
 	if err != nil {
 		log.Printf("query: compute error: %v", err)

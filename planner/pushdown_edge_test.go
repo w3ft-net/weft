@@ -75,7 +75,7 @@ func TestEdge_Source(t *testing.T) {
 			{
 				name:     "tail on warp.log",
 				pipeline: `tail -50 warp.log`,
-				wantSQL:  `SELECT raw, ts FROM logs ORDER BY ts DESC LIMIT 50`,
+				wantSQL:  `SELECT raw, ts FROM (SELECT raw, ts FROM logs ORDER BY ts DESC LIMIT 50) AS t ORDER BY ts ASC`,
 			},
 		}
 		for _, tt := range tests {
@@ -805,11 +805,12 @@ func TestEdge_PipelineOrdering(t *testing.T) {
 			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND regexp_matches(raw, 'ERROR') ORDER BY ts ASC LIMIT 5`,
 			wantCompute: nil,
 		},
-		// tail in the middle — should merge
+		// tail in the middle — should merge. Wrapped in outer ASC for
+		// chronological display (the user-facing ORDER BY).
 		{
 			name:        "filter then tail in pipeline",
 			pipeline:    `cat vimgym.log | grep ERROR | tail -5`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND regexp_matches(raw, 'ERROR') ORDER BY ts DESC LIMIT 5`,
+			wantSQL:     `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND regexp_matches(raw, 'ERROR') ORDER BY ts DESC LIMIT 5) AS t ORDER BY ts ASC`,
 			wantCompute: nil,
 		},
 		// head as source then awk meta-var equality — limit-safe.
@@ -831,7 +832,7 @@ func TestEdge_PipelineOrdering(t *testing.T) {
 		{
 			name:        "filter then tail -n in pipeline",
 			pipeline:    `cat vimgym.log | grep ERROR | tail -n 20`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND regexp_matches(raw, 'ERROR') ORDER BY ts DESC LIMIT 20`,
+			wantSQL:     `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND regexp_matches(raw, 'ERROR') ORDER BY ts DESC LIMIT 20) AS t ORDER BY ts ASC`,
 			wantCompute: nil,
 		},
 		// All compute — no pushable stages at all
