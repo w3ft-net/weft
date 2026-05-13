@@ -39,7 +39,7 @@ func testStoreAndCustomer(t *testing.T) (*store.Store, uint) {
 // retention clamp doesn't trim test fixtures whose timestamps are
 // older than trial retention. Used by shard-fan-out tests that exercise
 // the whole Query path against in-memory shards.
-func testQueryStore(t *testing.T, customer string, namespaces ...string) *store.Store {
+func testQueryStore(t testing.TB, customer string, namespaces ...string) *store.Store {
 	return testQueryStoreOpts(t, customer, false, namespaces...)
 }
 
@@ -49,11 +49,11 @@ func testQueryStore(t *testing.T, customer string, namespaces ...string) *store.
 // doesn't allow goroutines to share. The real store goes through
 // gorm's connection pool, so each goroutine gets its own. Cleanup
 // truncates the touched tables.
-func testQueryStoreReal(t *testing.T, customer string, namespaces ...string) *store.Store {
+func testQueryStoreReal(t testing.TB, customer string, namespaces ...string) *store.Store {
 	return testQueryStoreOpts(t, customer, true, namespaces...)
 }
 
-func testQueryStoreOpts(t *testing.T, customer string, realDB bool, namespaces ...string) *store.Store {
+func testQueryStoreOpts(t testing.TB, customer string, realDB bool, namespaces ...string) *store.Store {
 	t.Helper()
 	dsn := os.Getenv("WEFT_TEST_DSN")
 	if dsn == "" {

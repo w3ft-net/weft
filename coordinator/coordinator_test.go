@@ -64,8 +64,10 @@ func payload(m map[string]any) []byte {
 }
 
 // setupTestCoordinator creates two in-memory DuckDB shards with realistic
-// log data and returns a Coordinator ready for querying.
-func setupTestCoordinator(t *testing.T) *Coordinator {
+// log data and returns a Coordinator ready for querying. Takes
+// testing.TB so benchmarks can reuse the fixture without duplicating
+// the shard/registry boilerplate.
+func setupTestCoordinator(t testing.TB) *Coordinator {
 	t.Helper()
 
 	s0, err := shard.NewDuckDBShard("shard-0", "")
