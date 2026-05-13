@@ -40,6 +40,20 @@ func testStoreAndCustomer(t *testing.T) (*store.Store, uint) {
 // older than trial retention. Used by shard-fan-out tests that exercise
 // the whole Query path against in-memory shards.
 func testQueryStore(t *testing.T, customer string, namespaces ...string) *store.Store {
+	return testQueryStoreOpts(t, customer, false, namespaces...)
+}
+
+// testQueryStoreReal returns a real-DB Store (NOT BeginTest-wrapped).
+// Use this when the test runs concurrent queries against the store —
+// BeginTest binds a single *sql.Tx to one connection, which pgx
+// doesn't allow goroutines to share. The real store goes through
+// gorm's connection pool, so each goroutine gets its own. Cleanup
+// truncates the touched tables.
+func testQueryStoreReal(t *testing.T, customer string, namespaces ...string) *store.Store {
+	return testQueryStoreOpts(t, customer, true, namespaces...)
+}
+
+func testQueryStoreOpts(t *testing.T, customer string, realDB bool, namespaces ...string) *store.Store {
 	t.Helper()
 	dsn := os.Getenv("WEFT_TEST_DSN")
 	if dsn == "" {
@@ -49,22 +63,36 @@ func testQueryStore(t *testing.T, customer string, namespaces ...string) *store.
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}
-	tx, rollback := db.BeginTest()
-	t.Cleanup(func() {
-		rollback()
-		db.Close()
-	})
 
-	cust, err := tx.FindOrCreateCustomer(customer)
+	target := db
+	if !realDB {
+		tx, rollback := db.BeginTest()
+		t.Cleanup(func() {
+			rollback()
+			db.Close()
+		})
+		target = tx
+	} else {
+		// Truncate before AND after: a previous test that crashed mid-run
+		// could have left rows behind, and we don't want our subscription
+		// insert to collide with one from a previous customer="kevlar" run.
+		db.TruncateTestTables()
+		t.Cleanup(func() {
+			db.TruncateTestTables()
+			db.Close()
+		})
+	}
+
+	cust, err := target.FindOrCreateCustomer(customer)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, ns := range namespaces {
-		if _, err := tx.FindOrCreateNamespace(cust.ID, ns); err != nil {
+		if _, err := target.FindOrCreateNamespace(cust.ID, ns); err != nil {
 			t.Fatalf("create namespace %s: %v", ns, err)
 		}
 	}
-	if err := tx.CreateSubscription(&store.Subscription{
+	if err := target.CreateSubscription(&store.Subscription{
 		ID:         "test-bolt-" + customer,
 		CustomerID: customer,
 		Tier:       string(store.TierBolt),
@@ -73,7 +101,7 @@ func testQueryStore(t *testing.T, customer string, namespaces ...string) *store.
 	}); err != nil {
 		t.Fatalf("seed bolt subscription: %v", err)
 	}
-	return tx
+	return target
 }
 
 func seedWatch(t *testing.T, db *store.Store, custID uint, name string, values []string, interval time.Duration) {

@@ -2,7 +2,6 @@ package coordinator
 
 import (
 	"context"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -76,18 +75,12 @@ func TestExecute_StreamsLiveThroughRunLocal(t *testing.T) {
 // through warp+rewriter, then runAlertStage post-processes the
 // captured output.
 //
-// Skipped under CI: a pre-existing failure surfaced once
-// WEFT_ALLOW_SCHEMA_BOOTSTRAP let this test actually run against
-// a virgin postgres. Locally with the dev stack up, the alert
-// path returns Rows/Text; under the unit-job's freshly-migrated
-// schema it returns empty. Filed as a TODO — the alert body
-// capture probably depends on a row in cron_results or
-// cron_watches that the dev stack incidentally has and the
-// virgin DB doesn't.
+// The body of `cat vimgym.log` is whitespace-delimited log lines —
+// non-numeric to alert, which emits "non-numeric value" stderr and
+// (interactively) clears the body. We assert on Stderr rather than
+// the body because Stderr is the signal that runAlertStage actually
+// ran: an empty Stderr would mean the alert was never invoked.
 func TestExecute_AlertPathPostProcesses(t *testing.T) {
-	if os.Getenv("CI") == "true" {
-		t.Skip("alert body capture depends on dev-stack-seeded DB state; see comment above")
-	}
 	c := setupTestCoordinator(t)
 
 	res, err := c.Execute(`cat vimgym.log | alert above 100`, fullRange, "kevlar", "")
@@ -95,8 +88,8 @@ func TestExecute_AlertPathPostProcesses(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	resD := drainExec(t, res)
-	if len(resD.Rows) == 0 && resD.Text == "" {
-		t.Fatal("alert path should produce body output via runLocal")
+	if resD.Stderr == "" {
+		t.Fatal("alert path should produce stderr output via runAlertStage")
 	}
 }
 
