@@ -2,12 +2,13 @@
 
 ## Status
 
-Designed, not started. Depends on the multi-org membership work
-that landed in commits `0d42e41` (server-side X-Active-Org) and
-`7448ca6` (frontend org switcher) — without those, none of this
-works. The remaining ground-up work decomposes into the five PRs
-sketched at the bottom; the plan exists so we can sequence them
-without losing the through-line.
+Shipped. The five PRs sketched at the bottom all landed: Loom demo
+seed + producers, signup-time Loom membership grant, welcome modal,
+panel tour, instrumented shell with lesson hooks, and graduation
+(membership revocation + home-org redirect + one-shot success
+banner). See `coordinator/onboarding/lessons.go`,
+`api/onboarding.go`, and `frontend/src/components/{TourOverlay,
+WelcomeModal,GraduationBanner}.tsx`.
 
 ## Why
 

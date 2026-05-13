@@ -9,8 +9,8 @@ own designs.
 
 | Plan | State |
 |---|---|
-| [ingest-dimensions](ingest-dimensions.md) | ✅ Shipped |
-| Everything else | 🟡 Designed, not started |
+| Shipped plans live in `docs/completed/`. Recent additions: `query-sharing`, `dashboard-builder`, `onboarding`, `oidc`, `cross-shard-post-limit-filter`, `executeresult-buffered-cleanup`, `shard-grpc-resilience` (Phase 3 deferred), `notify-destinations`, `migration-collapse`. |
+| Everything in this directory | 🟡 Designed, not started (or partially shipped — read the plan's own Status section) |
 
 ## Roadmap
 
@@ -23,11 +23,8 @@ Each unblocks a meaningful slice of downstream work.
 
 | Plan | Effort | Why first |
 |---|---:|---|
-| ✅ [ingest-dimensions](ingest-dimensions.md) | 8d | Indexed dimension columns; gates k8s + group-by recipes |
-| [app-heartbeats](app-heartbeats.md) | 3d | Wire protocol — Unix socket + optional TCP heartbeat endpoint, snapshot stream |
-| [http-ingest](http-ingest.md) | 3.5d | Generic POST endpoint; unblocks SDKs, Vector/Fluent Bit/OTel receivers |
-| [go-sdk](go-sdk.md) | 3.5d | In-process emission, heartbeats, runtime stats. Ships in lockstep with python-sdk. |
-| [python-sdk](python-sdk.md) | 3.5d | Same surface as go-sdk; Python-flavored runtime stats. Ships in lockstep. |
+| [http-ingest](http-ingest.md) | ~2d remaining | Heroku adapter shipped; JSONAdapter (`/api/ingest`) + CloudWatchAdapter still pending |
+| [python-sdk](python-sdk.md) | 3.5d | Python-flavored runtime stats. Pairs with the now-shipped go-sdk. |
 | [audit-log](audit-log.md) | 4.75d | Cheap to wire once before five downstream plans want to emit events |
 
 ### Phase 1 — table-stakes commercial
@@ -36,7 +33,6 @@ Things customers will name in the first sales call.
 
 | Plan | Effort | Notes |
 |---|---:|---|
-| [notify-destinations](notify-destinations.md) | 3d | Webhook + email + Opsgenie + Teams beyond Slack/PD |
 | [user-sso](user-sso.md) | 4.5d | OIDC for Google + generic; SAML/SCIM deferred |
 | [ingest-governance](ingest-governance.md) | 4.5d | Ordered drop / sample / redact rules at the drain |
 | [log-to-metric](log-to-metric.md) | 1.5d | Tiny extension of governance; ship together |
@@ -56,8 +52,6 @@ Quality-of-life that compounds, mostly independent.
 
 | Plan | Effort | Notes |
 |---|---:|---|
-| [dashboard-builder](dashboard-builder.md) | 4d | Tile-based dashboards over watch outputs |
-| [query-sharing](query-sharing.md) | 2.5d | Team-visible saved queries + share URLs |
 | [anomaly-conditions](anomaly-conditions.md) | 2.75d | `outlier`, `seasonal` alert conditions |
 | [composite-alerts](composite-alerts.md) | 2.25d | Mostly docs + `weft.combine` helper |
 
@@ -74,27 +68,23 @@ Each one a buying-blocker for some procurement team.
 
 ## Dependency map
 
+`ingest-dimensions` and `notify-destinations` already shipped; the
+remaining hard prereqs are:
+
 ```
-                     ingest-dimensions ──┐
-                            │             │
-        http-ingest ────────┤             │
-                            │             │
-                     ingest-governance ──┬┤
-                            │            ││
-                     log-to-metric ◀─────┘│
-                            │             │
-                     weftd-k8s ◀──────────┘
+        http-ingest ────────┐
+                            │
+                     ingest-governance ──┬─→ log-to-metric
+                            │            └─→ weftd-k8s
                             │
                      audit-log ──── (referenced by governance,
-                            │       silencing, redaction, sso, byok)
-                            │
-                     notify-destinations
-                            │
-                     alert-silencing ◀────┘
+                                     silencing, redaction, sso, byok)
+
+                     alert-silencing  (independent of notify-destinations
+                                       now that it shipped)
 ```
 
-Solid arrows = hard prereqs. Everything else is independent and
-parallelizable.
+Everything else is independent and parallelizable.
 
 ## Operational / infra plans
 
@@ -113,14 +103,10 @@ than product strategy.
 | [compute-scaling](compute-scaling.md) | When the compute pool needs to scale beyond 1 |
 | [cloudwatch-lambda-forwarder](cloudwatch-lambda-forwarder.md) | Push-based CloudWatch alternative to today's poll |
 | [perf-hints](perf-hints.md) | Performance optimization opportunities |
-| [script-body-query-detection](script-body-query-detection.md) | Detect query shape inside `/bin` script bodies |
 | [alert-multirow-tier-limits](alert-multirow-tier-limits.md) | Per-tier caps on multi-row alert fan-out |
-| [oidc](oidc.md) | GitHub Actions deploy via OIDC (NOT user SSO — see `user-sso.md`) |
-| [integration-test-bitrot](integration-test-bitrot.md) | Tests that drift out of sync with code |
-| [executeresult-buffered-cleanup](executeresult-buffered-cleanup.md) | Drain ExecuteResult.{Rows,Text,Stderr} fields after the test sweep migrates to `res.Drain(ctx)` |
+| [shard-archive-test](shard-archive-test.md) | Integration test harness for cold-shard rehydration |
 | [streaming-backpressure](streaming-backpressure.md) | Bounded per-shard queues + configurable streamCh; defer until production hits memory pressure |
 | [streaming-parallel-warp](streaming-parallel-warp.md) | Combine streaming + chunked intra-stage parallelism in warp |
-| [migration-collapse](migration-collapse.md) | store/schema.sql snapshot + post-deploy collapse hook so a virgin DB matches prod by construction |
 
 ## Conventions for new plans
 
