@@ -1,0 +1,66 @@
+.graduation-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  background: linear-gradient(90deg, rgba(110, 200, 130, 0.18), rgba(110, 200, 130, 0.06));
+  border-bottom: 1px solid rgba(110, 200, 130, 0.5);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 0.92rem;
+}
+
+.graduation-banner-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.graduation-banner-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+  color: #b9e8c2;
+  letter-spacing: 0.01em;
+}
+
+.graduation-banner-copy {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.graduation-banner-copy a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px dashed currentColor;
+}
+
+.graduation-banner-copy a:hover {
+  color: var(--text-primary);
+}
+
+.graduation-banner-dismiss {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.graduation-banner-dismiss:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+.graduation-banner-dismiss:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

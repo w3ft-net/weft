@@ -1,8 +1,32 @@
-import { useEffect } from 'react'
+import { useEffect, Fragment, type ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext'
 import { advanceOnboarding } from '../lib/api'
 import './TourOverlay.css'
+
+// renderPromptCopy turns a lesson Prompt string into React nodes, with
+// `backtick`-wrapped spans becoming <code> and \n\n splitting into
+// paragraphs. Lesson copy in coordinator/onboarding/lessons.go only
+// uses those two features — keeping this inline avoids pulling in a
+// full markdown dep just for the overlay.
+function renderPromptCopy(text: string): ReactNode {
+  const paragraphs = text.split(/\n\n+/)
+  return paragraphs.map((p, pi) => (
+    <p key={pi} className="tour-overlay-copy-paragraph">
+      {renderInlineBackticks(p)}
+    </p>
+  ))
+}
+
+function renderInlineBackticks(text: string): ReactNode[] {
+  const parts = text.split(/(`[^`]+`)/g)
+  return parts.map((part, i) => {
+    if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
+      return <code key={i}>{part.slice(1, -1)}</code>
+    }
+    return <Fragment key={i}>{part}</Fragment>
+  })
+}
 
 // PanelStep describes one step of the panel-tour stage. Each step
 // targets a specific sidebar item; the user advances by clicking the
@@ -84,9 +108,23 @@ export default function TourOverlay() {
   // by notifyBuiltinExecuted when a browser-side builtin (ls, cat
   // /etc/…) finishes — those never round-trip through SSE, so the
   // event from network.ts is the only signal we get for them.
+  //
+  // step==='done' is the graduation transition. The server has
+  // already revoked Loom membership and pinned the home org as
+  // last_active, so the next /me with X-Active-Org=loom would 403.
+  // Drop the stored org and hard-navigate to /dashboards so the
+  // user lands on the (new) home org with the success banner.
   useEffect(() => {
     if (!isShell || dismissed || !inLoom) return
-    const onAdvance = () => { refreshUser().catch(() => {}) }
+    const onAdvance = (e: Event) => {
+      const detail = (e as CustomEvent<{ step?: string }>).detail
+      if (detail?.step === 'done') {
+        localStorage.removeItem('weft_org')
+        window.location.href = '/dashboards'
+        return
+      }
+      refreshUser().catch(() => {})
+    }
     window.addEventListener('tour-advance', onAdvance)
     return () => {
       window.removeEventListener('tour-advance', onAdvance)
@@ -153,7 +191,7 @@ export default function TourOverlay() {
         {progress}
       </div>
       <div className="tour-overlay-copy" data-testid="tour-overlay-copy">
-        {copy}
+        {renderPromptCopy(copy)}
       </div>
       {shellAction && (
         <button

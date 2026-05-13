@@ -236,6 +236,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/account/welcome-dismiss", s.handleWelcomeDismiss)
 	auth.HandleFunc("POST /api/onboarding/advance", s.handleOnboardingAdvance)
 	auth.HandleFunc("POST /api/onboarding/dismiss", s.handleOnboardingDismiss)
+	auth.HandleFunc("POST /api/onboarding/graduation-seen", s.handleGraduationNoticeSeen)
 	auth.HandleFunc("GET /api/fs/list", s.handleListFS)
 	auth.HandleFunc("GET /api/fs/read", s.handleReadFS)
 	auth.HandleFunc("PUT /api/fs/write", s.handleWriteFS)
@@ -736,6 +737,17 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// pending_graduation_notice is the one-shot success banner the
+	// home org shows after a Loom tour completion. True only when the
+	// user reached 'done' AND hasn't dismissed the banner yet.
+	pendingGraduation := false
+	if user.OnboardingStep == "done" {
+		seen, err := s.store.HasSeenNotice(user.ID, GraduationNoticeKey)
+		if err == nil && !seen {
+			pendingGraduation = true
+		}
+	}
+
 	resp := map[string]any{
 		"id":                   user.ID,
 		"email":                user.Email,
@@ -754,9 +766,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// lesson. onboarding_action is the suggested command; the
 		// web shell injects it into the input so the user can just
 		// hit enter.
-		"is_superadmin":     user.IsSuperadmin,
-		"onboarding_prompt": onboarding.PromptFor(user.OnboardingStep),
-		"onboarding_action": onboarding.ActionFor(user.OnboardingStep),
+		"is_superadmin":              user.IsSuperadmin,
+		"onboarding_prompt":          onboarding.PromptFor(user.OnboardingStep),
+		"onboarding_action":          onboarding.ActionFor(user.OnboardingStep),
+		"pending_graduation_notice":  pendingGraduation,
 	}
 	if user.EmailVerifiedAt == nil {
 		resp["verification_deadline"] = user.CreatedAt.Add(auth.UnverifiedGracePeriod).Unix()

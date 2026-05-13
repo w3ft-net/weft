@@ -270,6 +270,11 @@ export interface User {
   // the current step; Shell.tsx injects it into the input buffer.
   onboarding_prompt?: string
   onboarding_action?: string
+  // pending_graduation_notice is true between tour completion
+  // (onboarding_step === 'done') and the user dismissing the
+  // graduation banner. Gates GraduationBanner so the success message
+  // shows exactly once per account.
+  pending_graduation_notice?: boolean
   is_superadmin?: boolean
 }
 
@@ -298,6 +303,13 @@ export function advanceOnboarding(expected: string): Promise<{ step: string; adv
 // can still browse via the org switcher.
 export function dismissOnboarding(): Promise<void> {
   return apiFetch('/api/onboarding/dismiss', { method: 'POST' })
+}
+
+// dismissGraduationNotice marks the one-shot post-tour success
+// banner as seen so subsequent /me responses set
+// pending_graduation_notice=false. Idempotent.
+export function dismissGraduationNotice(): Promise<void> {
+  return apiFetch('/api/onboarding/graduation-seen', { method: 'POST' })
 }
 
 // FSEntry mirrors api.FSEntry on the server: one row in a directory

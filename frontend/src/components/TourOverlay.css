@@ -8,7 +8,7 @@
   border-radius: 8px;
   padding: 18px 20px;
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
   z-index: 150;
   /* Pulse the border subtly so the overlay reads as "the live thing
      guiding you" rather than blending into the page chrome. */
@@ -30,10 +30,28 @@
 }
 
 .tour-overlay-copy {
-  font-size: 0.86rem;
+  font-size: 0.92rem;
   line-height: 1.55;
   color: var(--text-secondary);
   margin: 0 0 16px;
+}
+
+.tour-overlay-copy-paragraph {
+  margin: 0 0 10px;
+}
+
+.tour-overlay-copy-paragraph:last-child {
+  margin-bottom: 0;
+}
+
+.tour-overlay-copy code {
+  font-family: var(--font-mono);
+  font-size: 0.84em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-base);
+  color: var(--accent);
+  border: 1px solid var(--border);
 }
 
 .tour-overlay-actions {

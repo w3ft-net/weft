@@ -147,11 +147,28 @@ func (s *Server) graduateOnboarding(userID string) error {
 		_ = s.store.UpdateUserLastActiveCustomer(userID, memberships[0].CustomerID)
 	}
 
-	// One-shot banner: "you've graduated — go set up your own org."
-	if err := s.store.MarkNoticeSeen(userID, "onboarding_graduated", "success"); err != nil {
-		log.Printf("onboarding: insert graduation notice for %s: %v", userID, err)
-	}
+	// Graduation banner is gated on (step==done && !HasSeenNotice).
+	// Marking happens when the user dismisses the banner via
+	// handleGraduationNoticeSeen — not here.
 	return nil
+}
+
+// GraduationNoticeKey is the user_notices key for the one-shot
+// "you've graduated, go set up your own org" banner that shows on
+// the home org after a user finishes the Loom tour. Exported so the
+// /me handler and the dismiss endpoint stay aligned.
+const GraduationNoticeKey = "onboarding_graduated"
+
+// handleGraduationNoticeSeen flips the user_notices row for the
+// graduation banner so it doesn't render on subsequent loads. One-
+// shot; idempotent.
+func (s *Server) handleGraduationNoticeSeen(w http.ResponseWriter, r *http.Request) {
+	session := GetSession(r)
+	if err := s.store.MarkNoticeSeen(session.UserID, GraduationNoticeKey, "success"); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleOnboardingAdvance transitions the user's onboarding_step

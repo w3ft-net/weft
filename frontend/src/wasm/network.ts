@@ -34,10 +34,14 @@ export function notifyBuiltinExecuted(pipeline: string) {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify({ pipeline }),
-  }).then(res => {
-    if (res.ok && res.status === 200) {
-      window.dispatchEvent(new CustomEvent('tour-advance'))
-    }
+  }).then(async res => {
+    if (!res.ok || res.status !== 200) return
+    let step: string | undefined
+    try {
+      const body = await res.json() as { step?: string }
+      step = body.step
+    } catch { /* tolerate no-body */ }
+    window.dispatchEvent(new CustomEvent('tour-advance', { detail: { step } }))
   }).catch(() => {})
 }
 
@@ -101,7 +105,7 @@ export async function execQuery(pipeline: string, timeStartNs?: number, timeEndN
         const raw = line.slice(5).trim()
         if (!raw || raw === '[DONE]') continue
         try {
-          const evt = JSON.parse(raw) as { type: string; text?: string; message?: string; data?: { raw?: string } }
+          const evt = JSON.parse(raw) as { type: string; step?: string; text?: string; message?: string; data?: { raw?: string } }
           if (evt.type === 'line' && evt.data?.raw != null) {
             outputChunks.push(evt.data.raw)
           } else if (evt.type === 'stderr' && evt.text != null) {
@@ -112,7 +116,7 @@ export async function execQuery(pipeline: string, timeStartNs?: number, timeEndN
             // one isn't.
             outputChunks.push(`\x1b[91m${evt.text.replace(/\n$/, '')}\x1b[0m`)
           } else if (evt.type === 'tour_advance') {
-            window.dispatchEvent(new CustomEvent('tour-advance'))
+            window.dispatchEvent(new CustomEvent('tour-advance', { detail: { step: evt.step } }))
           } else if (evt.type === 'error') {
             window.wasmHandleQueryResult('', evt.text || evt.message || 'unknown error')
             return

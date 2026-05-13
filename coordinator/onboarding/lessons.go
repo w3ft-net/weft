@@ -52,12 +52,12 @@ var lessons = []*Lesson{
 	},
 	{
 		Step:   "shell-grep-awk",
-		Action: "cat /log/loom/prod/api.log | grep ERROR | awk '{print $HOST, $1, $4}'",
+		Action: "tail /log/loom/prod/api.log | grep ERROR | awk '{print $HOST, $1, $4}'",
 		Prompt: "So obviously we have support for awk and grep, but the more material point is `$HOST` in the awk program. Weft augments normal field variables in awk and jq with a number of meta-variables to help you isolate exactly where those log lines were produced. More info in the manual.",
 	},
 	{
 		Step:   "shell-alert",
-		Action: "cat /log/loom/prod/api.log | grep ERROR | wc -l | alert above 0",
+		Action: "tail /log/loom/prod/api.log | grep ERROR | wc -l | alert above 0",
 		Prompt: "Weft contains a special builtin called alert. For now, this is just going to log to stderr, but you can get all sorts of alerting targets on a cron (more info shortly). The api/prod stream emits errors at ~8% so this fires every time.",
 	},
 	{
@@ -91,23 +91,23 @@ var lessons = []*Lesson{
 		Prompt: "Without a shebang, weft assumes your extensionless scripts are bash. You don't need the shebang for lua if you add the extension.\n\nNow that we're in vim, make a few edits to the file and try to save. You'll see that you haven't been granted full permissions in the Loom org so your write access is restricted. Then you can `:q!` to quit.",
 	},
 	{
-		Step:   "shell-clipboard",
-		Action: "clipboard /bin/scan",
-		Prompt: "When a /bin/ script is worth showing to a teammate, `clipboard` builds a deep link that captures the script path, your current range, and any args, and pushes it onto your system clipboard via OSC-52. Anyone signed in to the same org can paste the URL into a browser to land in the shell with the invocation pre-filled. More in `man clipboard`.",
-	},
-	{
 		Step:   "shell-team-yaml",
 		Action: "cat /etc/team.yaml",
 		Prompt: "The reason that save failed: /etc/team.yaml is the org's permissions file. Owners list each non-owner member here with `edit` or `read-only` against /bin, /cron.d, and /etc, plus a per-namespace block. Owners don't appear — they have implicit full access. The file is editable like any other (`vi /etc/team.yaml`), but writes are owner-only no matter what permissions the editor has elsewhere. The Members tab in the dashboard reads and writes the same data through a checkbox grid.",
 	},
 	{
+		Step:   "shell-clipboard",
+		Action: "clipboard /bin/scan",
+		Prompt: "When a /bin/ script is worth showing to a teammate, `clipboard` builds a deep link that captures the script path, your current range, and any args, and pushes it onto your system clipboard. Anyone signed in to the same org can paste the URL into a browser to land in the shell with the invocation pre-filled. More in `man clipboard`.",
+	},
+	{
 		Step:   "shell-weftfunc",
-		Action: "weft.avg error-rate 1h",
-		Prompt: "Once you have some scripts running in cron.d, there are some convenience functions for aggregations namespaced under `weft.<fn>`, exposed both in bash and in lua. Most of these take a duration (`weft.latest` does not). These compose naturally into alerts, e.g. `weft.avg error-rate 1m | alert above 100`. The full list of functions available is in the manual.",
+		Action: "weft::avg error-rate 1h",
+		Prompt: "Once you have some scripts running in cron.d, there are some convenience functions for aggregations namespaced under `weft::<fn>` in bash (or `weft.<fn>(...)` in lua). Most take a duration (`weft::latest` does not); there's also a parallel family of predicates like `weft::is_above` and `weft::is_outlier`. These compose naturally into alerts, e.g. `weft::avg error-rate 1m | alert above 100`. Full reference: `man weft`.",
 	},
 	{
 		Step:   "shell-tmp",
-		Action: "echo hello > /tmp/note; cat /tmp/note",
+		Action: "echo hello > /tmp/note && cat /tmp/note",
 		Prompt: "If you are working through an issue where it's easier to stage output from some one-liners and run `comm` or `join` on those files, dump them to /tmp. Because scratch files tend to abide by gas laws and fill the size of the container, we automatically delete files that haven't been written to for 48 hrs.",
 	},
 	{
@@ -127,8 +127,8 @@ var lessons = []*Lesson{
 	},
 	{
 		Step:   "shell-usage",
-		Action: "what costs you what",
-		Prompt: "Try `cat /etc/usage` — weft's tally of bytes ingested per stream, and what you'd be billed at the current tier.",
+		Action: "cat /etc/usage",
+		Prompt: "Last one: `cat /etc/usage` — weft's tally of bytes ingested per stream, and what you'd be billed at the current tier. When you run this, the tour wraps up and we'll drop you back into your own org.",
 	},
 }
 

@@ -4,6 +4,7 @@ import { useAuth } from '../lib/AuthContext'
 import VerificationBanner from './VerificationBanner'
 import WelcomeModal from './WelcomeModal'
 import TourOverlay from './TourOverlay'
+import GraduationBanner from './GraduationBanner'
 
 export default function ProtectedRoute({ children, bare }: { children: ReactNode; bare?: boolean }) {
   const { user, loading } = useAuth()
@@ -33,6 +34,7 @@ export default function ProtectedRoute({ children, bare }: { children: ReactNode
   return (
     <>
       <VerificationBanner />
+      <GraduationBanner />
       <WelcomeModal />
       <TourOverlay />
       {children}
