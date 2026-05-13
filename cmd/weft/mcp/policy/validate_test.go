@@ -42,14 +42,14 @@ func TestValidate_ReadPolicy(t *testing.T) {
 			`ls /log/billing/`, nil},
 
 		// --- weft.* cron-result aggregators ---------------------------------
-		{"weft.latest",
-			`weft.latest coord-heartbeat-age`, nil},
-		{"weft.delta piped to alert is the cron-shape; here just the head",
-			`weft.delta coord-goroutines 1h`, nil},
-		{"weft.percentile takes 3 args",
-			`weft.percentile request-latency 1h 99`, nil},
-		{"weft.* are not paths so /log scoping doesn't apply",
-			`weft.avg /log/whatever 1h`, nil},
+		{"weft::latest",
+			`weft::latest coord-heartbeat-age`, nil},
+		{"weft::delta piped to alert is the cron-shape; here just the head",
+			`weft::delta coord-goroutines 1h`, nil},
+		{"weft::percentile takes 3 args",
+			`weft::percentile request-latency 1h 99`, nil},
+		{"weft::* are not paths so /log scoping doesn't apply",
+			`weft::avg /log/whatever 1h`, nil},
 
 		// --- command allowlist ---------------------------------------------
 		{"rm rejected",
@@ -170,27 +170,27 @@ func TestValidate_CronPolicy(t *testing.T) {
 		want []string
 	}
 	cases := []row{
-		{"weft.latest piped to alert",
-			`weft.latest coord-heartbeat-age | alert above 90 -t 1 --notify=page`, nil},
-		{"weft.delta piped to alert with above",
-			`weft.delta coord-goroutines 1h | alert above 100 --notify=slack`, nil},
-		{"weft.slope piped to alert with notify",
-			`weft.slope coord-fds 6h | alert above 0.05 --notify=slack`, nil},
-		{"weft.percentile feeding alert",
-			`weft.percentile request-latency 1h 99 | alert above 500 --notify=page`, nil},
+		{"weft::latest piped to alert",
+			`weft::latest coord-heartbeat-age | alert above 90 -t 1 --notify=page`, nil},
+		{"weft::delta piped to alert with above",
+			`weft::delta coord-goroutines 1h | alert above 100 --notify=slack`, nil},
+		{"weft::slope piped to alert with notify",
+			`weft::slope coord-fds 6h | alert above 0.05 --notify=slack`, nil},
+		{"weft::percentile feeding alert",
+			`weft::percentile request-latency 1h 99 | alert above 500 --notify=page`, nil},
 		{"plain cat + jq + alert (the existing recipe)",
 			`tail -n 1 /log/weft/coordinator/runtime.log | jq -r .uptime_s | alert below 300 --notify=page`, nil},
 		{"alert without --notify is fine",
-			`weft.avg error-rate 1h | alert above 50`, nil},
+			`weft::avg error-rate 1h | alert above 50`, nil},
 		{"alert as a non-terminal stage is rejected (it's a sink, not a transform)",
 			// Treated as a regular command — so a downstream stage is OK syntactically;
 			// runtime semantics enforce sink-only. The validator only enforces verb +
 			// args here. This case documents that today it parses cleanly.
-			`weft.avg error-rate 1h | alert above 50 | wc -l`, nil},
+			`weft::avg error-rate 1h | alert above 50 | wc -l`, nil},
 		{"path-forbidden still applies",
 			`cat /etc/notify.yaml | alert above 0`, []string{"path_forbidden"}},
 		{"command-sub still forbidden",
-			`echo $(weft.latest x) | alert above 0`,
+			`echo $(weft::latest x) | alert above 0`,
 			[]string{"command_forbidden", "command_sub_forbidden"}}, // echo isn't in read policy
 	}
 

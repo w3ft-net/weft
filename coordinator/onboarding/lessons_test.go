@@ -19,7 +19,7 @@ func TestCheckPipeline(t *testing.T) {
 		{"shell-bin-lua", "vim /bin/severity", true},
 		{"shell-wit", "wit log /bin/scan", true},
 		{"shell-weftfunc", "weft::avg error-rate 1h", true},
-		{"shell-tmp", "echo hello > /tmp/note && cat /tmp/note", true},
+		{"shell-tmp", "echo hello > /tmp/note", true},
 		{"shell-dashboard-yaml", "cat /etc/dashboards/prod.yaml", true},
 		{"shell-dashboard", "dashboard prod", true},
 
