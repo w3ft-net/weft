@@ -510,7 +510,7 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 	rateV1 := fmt.Sprintf("tail -n 500 %s | grep ERROR | wc -l | alert above 50", primaryLog)
 	rateV2 := fmt.Sprintf("tail -n 2000 %s | grep ERROR | wc -l | alert above 200", primaryLog)
 	rateV3 := fmt.Sprintf("tail -n 2000 %s | awk '$LEVEL == \"ERROR\"' | wc -l | alert above 200", primaryLog)
-	// 1-minute cadence gives the tour 60 datapoints per `weft.avg
+	// 1-minute cadence gives the tour 60 datapoints per `weft::avg
 	// error-rate 1h` window and a chartable sparkline; yard tier (the
 	// demo subscription) allows it.
 	const errorRateSchedule = "*/1 * * * *"
@@ -533,7 +533,7 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 	}
 
 	// Loom-only: pre-seed an hour-plus of error-rate cron history so a
-	// brand-new signup hits `weft.avg error-rate 1h` and `chart error-rate`
+	// brand-new signup hits `weft::avg error-rate 1h` and `chart error-rate`
 	// with a meaningful series instead of waiting for the live cron to
 	// accumulate ticks. The shape matches the loom-api-prod ERROR_RATIO
 	// sine in docker-compose.demo.yml, so synthetic and live datapoints
@@ -624,7 +624,7 @@ oncall:
 }
 
 // preseedLoomErrorRateHistory synthesizes ~70 minutes of cron_results
-// for loom's error-rate watch so the onboarding tour's `weft.avg
+// for loom's error-rate watch so the onboarding tour's `weft::avg
 // error-rate 1h` and `chart error-rate` steps land on a populated
 // series instead of a near-empty window. Each row mirrors what the
 // live cron would have written: an integer wc-l count of ERROR lines

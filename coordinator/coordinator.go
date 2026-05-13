@@ -917,6 +917,7 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 
 		wf := &WeftFuncs{Store: c.Store, CustomerID: custID}
 		RegisterWeftCommands(interp, wf)
+		RegisterWeftPredicates(interp, wf)
 		interp.LuaWeftFuncs = wf
 
 		// `wit` version-history surface — log/show/diff/checkout/amend

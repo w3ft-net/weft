@@ -36,9 +36,28 @@ type WeftFuncs struct {
 func (w *WeftFuncs) Latest(watchName string) (string, error) {
 	r, err := w.Store.LatestCronResult(w.CustomerID, watchName)
 	if err != nil {
-		return "", fmt.Errorf("weft.latest: watch %q: %w", watchName, err)
+		return "", fmt.Errorf("weft::latest: watch %q: %w", watchName, err)
 	}
 	return strings.TrimSpace(r.Stdout), nil
+}
+
+// Previous returns the trimmed stdout of the second-most-recent
+// result for a named watch — the value just before Latest. Used by
+// changed/rising/falling predicates for prev-tick semantics.
+// Returns "" with no error when fewer than 2 results exist.
+func (w *WeftFuncs) Previous(watchName string) (string, error) {
+	cw, err := w.Store.GetCronWatch(w.CustomerID, watchName)
+	if err != nil {
+		return "", fmt.Errorf("weft::previous: watch %q: %w", watchName, err)
+	}
+	results, err := w.Store.ListCronResults(cw.ID, 2, "")
+	if err != nil {
+		return "", fmt.Errorf("weft::previous: watch %q: %w", watchName, err)
+	}
+	if len(results) < 2 {
+		return "", nil
+	}
+	return strings.TrimSpace(results[1].Stdout), nil
 }
 
 func (w *WeftFuncs) Avg(watchName string, dur time.Duration) (float64, error) {
@@ -47,7 +66,7 @@ func (w *WeftFuncs) Avg(watchName string, dur time.Duration) (float64, error) {
 		return 0, err
 	}
 	if len(vals) == 0 {
-		return 0, fmt.Errorf("weft.avg: no numeric results for %q", watchName)
+		return 0, fmt.Errorf("weft::avg: no numeric results for %q", watchName)
 	}
 	var sum float64
 	for _, v := range vals {
@@ -62,7 +81,7 @@ func (w *WeftFuncs) Max(watchName string, dur time.Duration) (float64, error) {
 		return 0, err
 	}
 	if len(vals) == 0 {
-		return 0, fmt.Errorf("weft.max: no numeric results for %q", watchName)
+		return 0, fmt.Errorf("weft::max: no numeric results for %q", watchName)
 	}
 	max := vals[0]
 	for _, v := range vals[1:] {
@@ -79,7 +98,7 @@ func (w *WeftFuncs) Min(watchName string, dur time.Duration) (float64, error) {
 		return 0, err
 	}
 	if len(vals) == 0 {
-		return 0, fmt.Errorf("weft.min: no numeric results for %q", watchName)
+		return 0, fmt.Errorf("weft::min: no numeric results for %q", watchName)
 	}
 	min := vals[0]
 	for _, v := range vals[1:] {
@@ -96,7 +115,7 @@ func (w *WeftFuncs) Sum(watchName string, dur time.Duration) (float64, error) {
 		return 0, err
 	}
 	if len(vals) == 0 {
-		return 0, fmt.Errorf("weft.sum: no numeric results for %q", watchName)
+		return 0, fmt.Errorf("weft::sum: no numeric results for %q", watchName)
 	}
 	var sum float64
 	for _, v := range vals {
@@ -111,7 +130,7 @@ func (w *WeftFuncs) Stddev(watchName string, dur time.Duration) (float64, error)
 		return 0, err
 	}
 	if len(vals) < 2 {
-		return 0, fmt.Errorf("weft.stddev: need at least 2 results for %q", watchName)
+		return 0, fmt.Errorf("weft::stddev: need at least 2 results for %q", watchName)
 	}
 	var sum float64
 	for _, v := range vals {
@@ -137,7 +156,7 @@ func (w *WeftFuncs) First(watchName string, dur time.Duration) (float64, error) 
 		return 0, err
 	}
 	if len(vals) == 0 {
-		return 0, fmt.Errorf("weft.first: no numeric results for %q", watchName)
+		return 0, fmt.Errorf("weft::first: no numeric results for %q", watchName)
 	}
 	// QueryCronResults returns DESC (newest first); oldest is the last element.
 	return vals[len(vals)-1], nil
@@ -156,7 +175,7 @@ func (w *WeftFuncs) Count(watchName string, dur time.Duration) (float64, error) 
 	since := time.Now().Add(-dur)
 	results, err := w.Store.QueryCronResults(w.CustomerID, watchName, since)
 	if err != nil {
-		return 0, fmt.Errorf("weft.count: watch %q: %w", watchName, err)
+		return 0, fmt.Errorf("weft::count: watch %q: %w", watchName, err)
 	}
 	return float64(len(results)), nil
 }
@@ -167,14 +186,14 @@ func (w *WeftFuncs) Count(watchName string, dur time.Duration) (float64, error) 
 // median, p=100 is max.
 func (w *WeftFuncs) Percentile(watchName string, dur time.Duration, p float64) (float64, error) {
 	if p < 0 || p > 100 {
-		return 0, fmt.Errorf("weft.percentile: p must be in [0, 100], got %v", p)
+		return 0, fmt.Errorf("weft::percentile: p must be in [0, 100], got %v", p)
 	}
 	vals, err := w.numericResults(watchName, dur)
 	if err != nil {
 		return 0, err
 	}
 	if len(vals) == 0 {
-		return 0, fmt.Errorf("weft.percentile: no numeric results for %q", watchName)
+		return 0, fmt.Errorf("weft::percentile: no numeric results for %q", watchName)
 	}
 	sort.Float64s(vals)
 	if len(vals) == 1 {
@@ -190,7 +209,7 @@ func (w *WeftFuncs) Percentile(watchName string, dur time.Duration, p float64) (
 }
 
 // Delta returns latest_numeric - first_numeric over the window.
-// Composite of weft.latest and weft.first; implemented natively for
+// Composite of weft::latest and weft::first; implemented natively for
 // performance and to share the single-fetch slice. Cap is
 // maxEndpointDuration since the underlying anchors are O(1).
 func (w *WeftFuncs) Delta(watchName string, dur time.Duration) (float64, error) {
@@ -199,7 +218,7 @@ func (w *WeftFuncs) Delta(watchName string, dur time.Duration) (float64, error) 
 		return 0, err
 	}
 	if len(vals) < 2 {
-		return 0, fmt.Errorf("weft.delta: need at least 2 numeric results for %q", watchName)
+		return 0, fmt.Errorf("weft::delta: need at least 2 numeric results for %q", watchName)
 	}
 	// vals[0] is newest, vals[len-1] is oldest.
 	return vals[0] - vals[len(vals)-1], nil
@@ -226,6 +245,30 @@ func (w *WeftFuncs) Rate(watchName string, dur time.Duration) (float64, error) {
 		return 0, err
 	}
 	return s / dur.Seconds(), nil
+}
+
+// SeasonalStats returns avg/stddev/samples of the watch's history
+// restricted to "same time of period" — e.g. for period=1d and
+// window=4w it computes over the readings from this hour on each of
+// the last four days. Used by the seasonal predicate and (future)
+// alert seasonal condition. Cap is maxEndpointDuration since the
+// window can legitimately span multiple weeks. The result type lives
+// in warp's lua package to keep the WeftFuncs interface standalone.
+func (w *WeftFuncs) SeasonalStats(watchName string, period, window time.Duration) (luapkg.SeasonalStatsResult, error) {
+	if window > maxEndpointDuration {
+		return luapkg.SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: window %s exceeds maximum of %s", window, maxEndpointDuration)
+	}
+	if window <= 0 || period <= 0 {
+		return luapkg.SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: window and period must be positive")
+	}
+	if period >= window {
+		return luapkg.SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: window must be larger than period")
+	}
+	avg, stddev, samples, err := w.Store.SeasonalCronStats(w.CustomerID, watchName, period, window)
+	if err != nil {
+		return luapkg.SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: watch %q: %w", watchName, err)
+	}
+	return luapkg.SeasonalStatsResult{Avg: avg, Stddev: stddev, Samples: samples}, nil
 }
 
 // numericResults fetches results in a time range and parses numeric stdout values.

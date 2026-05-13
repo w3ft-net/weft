@@ -101,77 +101,25 @@ row-group statistics for skip-ahead — every row in the time range
 is read and parsed. For dimensions you query constantly, prefer
 the indexed columns.
 
-## Per-tag averages over time
+## Per-tag values over time
 
-The combination of indexed dimensions, watches, and the multi-row
-alert form gets you "avg cpu by host over the last hour" without
-any new infrastructure. Three pieces compose:
+Indexed dimensions + a frequent watch + the multi-row alert form
+together give you "value by host (or service / region / pod) over
+time" without any new infrastructure. The full recipe — including
+per-tag incident dedup with `-k`/`-t` and per-tag debouncing — is
+in **Alerting strategies**.
 
-1. A **watch** with a frequent schedule — the schedule is your
-   bucket size. Every tick produces stdout that's stored as a row.
-2. The watch body emits **one line per tag**, with the tag and a
-   numeric value. Whitespace separated; tag first, value second.
-3. `weft.avg <watch> <duration>` (or `weft.max`, `weft.min`,
-   `weft.sum`, `weft.stddev`) reads back the run history.
+In short: write a watch whose body emits one line per tag (e.g.
+`"\(._host) \(.pct)"` from `jq -r`) and pipe it through
+`alert above N -k 2 -t 1 --notify=ops`. Each host opens and closes
+incidents independently against its tag.
 
-A concrete example — average memory pressure per host, bucketed
-every minute:
-
-```
-# /cron.d/memory-per-host
-# schedule: every 1m
-tail -n 200 /log/weft/metrics.log \
-  | jq -r 'select(.type == "memory") | "\(._host) \(.pct)"'
-```
-
-That emits lines like:
-
-```
-shard-0    62.4
-shard-1    58.1
-api-east   71.9
-```
-
-Each line is a per-host bucket for this minute. To alert per host
-when memory passes 80%, pipe into `alert` in multi-row mode:
-
-```
-# /cron.d/memory-alert
-# schedule: every 1m
-tail -n 200 /log/weft/metrics.log \
-  | jq -r 'select(.type == "memory") | "\(._host) \(.pct)"' \
-  | alert above 80 -k 2 -t 1 --notify=ops
-```
-
-`-k 2` says "field 2 holds the numeric value"; `-t 1` says "field
-1 names this row" (the host) so each host opens and closes
-incidents independently.
-
-`-k` and `-t` also accept JSON paths against JSONL stdin, which
-removes the `jq -r` reformatting step:
-
-```
-tail -n 6 /log/weft/metrics.log \
-  | jq 'select(.type == "memory")' \
-  | alert above 80 -k .pct -t ._host --notify=ops
-```
-
-A single alert may not mix the two forms — both `-k` and `-t` must
-be positional, or both must be `.`-prefixed paths.
-
-The same shape works with any indexed dimension as the tag —
-swap `\(._host)` for `\(._deployment)`, `\(._pod)`, `\(._region)`,
-or any combination (`"\(._region) \(._host) \(.pct)"` for region-
-prefixed host names). For string dimensions there's no perf
-penalty: each is a real column, queries push down with row-group
-statistics.
-
-Window aggregates over the watch's history (`weft.avg`,
-`weft.max`, etc.) currently summarize the entire run's stdout as
-one number, so the per-tag history is a follow-up. For now the
-recipe above gives you per-bucket per-tag values; for the rolling
-average across buckets, point a second watch at it via
-`weft.latest`.
+Window aggregates over the watch's history (`weft::avg`,
+`weft::max`, etc.) currently summarize the entire run's stdout as
+one number, so the per-tag *aggregated history* is a follow-up.
+For now the recipe gives you per-bucket per-tag values; for the
+rolling average across buckets, point a second watch at it via
+`weft::latest`.
 
 ## Charting a query
 

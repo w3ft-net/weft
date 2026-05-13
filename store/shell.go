@@ -773,6 +773,75 @@ func (s *Store) TierForCustomer(customerID uint) Tier {
 	return Tier(tier)
 }
 
+// SeasonalCronStats returns avg/stddev/samples of cron_results.value
+// for the subset of results whose `ran_at` is at the same offset
+// modulo `period` as `now`, within the last `window`. Used by the
+// seasonal alert/predicate: e.g. period=1d window=4w compares the
+// current value against the four readings taken at this same hour
+// across the last four days.
+//
+// Tolerance is min(period/20, 5*time.Minute) — wide enough to catch a
+// natural cron jitter, narrow enough that we don't bleed neighbouring
+// buckets into the comparison set. Reads raw rows only (the rollup
+// tables are time-bucketed in a way that doesn't preserve same-time-
+// of-day grouping).
+func (s *Store) SeasonalCronStats(customerID uint, watchName string, period, window time.Duration) (avg, stddev float64, samples int, err error) {
+	var watch CronWatch
+	if err := s.db.Where("customer_id = ? AND name = ?", customerID, watchName).First(&watch).Error; err != nil {
+		return 0, 0, 0, err
+	}
+	now := time.Now()
+	since := clampRetention(s.TierForCustomer(customerID), now.Add(-window))
+	tol := period / 20
+	if tol > 5*time.Minute {
+		tol = 5 * time.Minute
+	}
+	periodSec := period.Seconds()
+	tolSec := tol.Seconds()
+	var row struct {
+		Avg     *float64
+		Samples int
+	}
+	avgQ := `
+		SELECT AVG(value) AS avg, COUNT(*) AS samples
+		FROM cron_results
+		WHERE cron_watch_id = ?
+		  AND ran_at >= ?
+		  AND value IS NOT NULL
+		  AND LEAST(
+		        MOD(EXTRACT(EPOCH FROM (? - ran_at))::numeric, ?::numeric),
+		        ?::numeric - MOD(EXTRACT(EPOCH FROM (? - ran_at))::numeric, ?::numeric)
+		      ) <= ?`
+	if err := s.db.Raw(avgQ, watch.ID, since, now, periodSec, periodSec, now, periodSec, tolSec).Scan(&row).Error; err != nil {
+		return 0, 0, 0, err
+	}
+	samples = row.Samples
+	if samples == 0 || row.Avg == nil {
+		return 0, 0, samples, nil
+	}
+	avg = *row.Avg
+	// Sample stddev from the same row set, with one extra round-trip
+	// rather than complicating the first query.
+	var sd struct{ Stddev *float64 }
+	sdQ := `
+		SELECT STDDEV_SAMP(value) AS stddev
+		FROM cron_results
+		WHERE cron_watch_id = ?
+		  AND ran_at >= ?
+		  AND value IS NOT NULL
+		  AND LEAST(
+		        MOD(EXTRACT(EPOCH FROM (? - ran_at))::numeric, ?::numeric),
+		        ?::numeric - MOD(EXTRACT(EPOCH FROM (? - ran_at))::numeric, ?::numeric)
+		      ) <= ?`
+	if err := s.db.Raw(sdQ, watch.ID, since, now, periodSec, periodSec, now, periodSec, tolSec).Scan(&sd).Error; err != nil {
+		return avg, 0, samples, err
+	}
+	if sd.Stddev != nil {
+		stddev = *sd.Stddev
+	}
+	return avg, stddev, samples, nil
+}
+
 // LatestCronResult returns the most recent result for a named watch.
 func (s *Store) LatestCronResult(customerID uint, watchName string) (*CronResult, error) {
 	var watch CronWatch

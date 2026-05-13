@@ -342,3 +342,46 @@ func TestRunAlertStage(t *testing.T) {
 		}
 	})
 }
+
+// --if-zero / --if-nonzero exit-status forms. The cron composes
+// predicates with bash &&/||, then `alert --if-zero "$?"` reads the
+// expanded exit code directly — no `echo $? | alert below 1` plumbing.
+
+func TestAlert_IfZero_ChainSucceeded(t *testing.T) {
+	// "$?" expanded to "0" → chain succeeded → fire.
+	_, stderr, code := runAlert("--if-zero 0 --notify=ops", "")
+	if code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if !strings.Contains(stderr, "if-zero") {
+		t.Errorf("expected predicate-composite alert msg, got %q", stderr)
+	}
+}
+
+func TestAlert_IfZero_ChainFailed(t *testing.T) {
+	// "$?" expanded to "1" → chain failed → no fire.
+	_, stderr, code := runAlert("--if-zero 1 --notify=ops", "")
+	if code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if stderr != "" {
+		t.Errorf("expected no alert for non-zero exit, got %q", stderr)
+	}
+}
+
+func TestAlert_IfNonzero_ChainFailed(t *testing.T) {
+	_, stderr, code := runAlert("--if-nonzero 1 --notify=ops", "")
+	if code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if !strings.Contains(stderr, "if-nonzero") {
+		t.Errorf("expected predicate-composite alert msg, got %q", stderr)
+	}
+}
+
+func TestAlert_IfMode_RejectsConditionKeyword(t *testing.T) {
+	parsed, err := alert.ParseArgs(strings.Fields("above 50 --if-zero 0"))
+	if err == nil {
+		t.Errorf("expected parse error mixing condition + --if-zero, got %+v", parsed)
+	}
+}

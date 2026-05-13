@@ -84,7 +84,7 @@ On top of the standard library, weft adds:
 | `io.read("*l" \| "*a" \| "*n")` | Read a line, all of stdin, or a number |
 | `lines()` | Iterator over stdin lines — `for line in lines() do ... end` |
 | `json.encode(v)` / `json.decode(s)` | JSON ↔ Lua table |
-| `weft.*` | Watch aggregates — see **Watches** |
+| `weft.*` | Watch aggregates and predicates — see **Weft functions** |
 
 Because Lua can read stdin with `lines()` or `io.read("*l")`, a Lua
 script can act as a pipeline stage:

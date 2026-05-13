@@ -40,20 +40,32 @@ func DefaultReadPolicy() Policy {
 			// (watchName, duration, p) — and never touch the /log/
 			// filesystem, so no path validator is needed. Useful both
 			// inside cron alert pipelines (e.g.
-			// `weft.latest coord-heartbeat-age | alert above 90`) and
+			// `weft::latest coord-heartbeat-age | alert above 90`) and
 			// as one-shot reads via weft.run.
-			"weft.latest":     {},
-			"weft.avg":        {},
-			"weft.max":        {},
-			"weft.min":        {},
-			"weft.sum":        {},
-			"weft.stddev":     {},
-			"weft.first":      {},
-			"weft.count":      {},
-			"weft.percentile": {},
-			"weft.delta":      {},
-			"weft.slope":      {},
-			"weft.rate":       {},
+			"weft::latest":     {},
+			"weft::avg":        {},
+			"weft::max":        {},
+			"weft::min":        {},
+			"weft::sum":        {},
+			"weft::stddev":     {},
+			"weft::first":      {},
+			"weft::count":      {},
+			"weft::percentile": {},
+			"weft::delta":      {},
+			"weft::slope":      {},
+			"weft::rate":       {},
+			// Predicates — exit-code only, side-effect-free reads of
+			// watch state, safe in the same MCP allowlist.
+			"weft::is_above":    {},
+			"weft::is_below":    {},
+			"weft::is_absent":   {},
+			"weft::has_changed": {},
+			"weft::is_rising":   {},
+			"weft::is_falling":  {},
+			"weft::is_outlier":  {},
+			"weft::is_seasonal": {},
+			"weft::is_gt":       {},
+			"weft::is_lt":       {},
 		},
 		AllowFunctions:     false,
 		AllowControlFlow:   false,

@@ -29,17 +29,14 @@ cat /log/api.log | grep ERROR | wc -l
 
 ## Accessing past results
 
-- `weft.latest <watch>` — most recent value
-- `weft.avg <watch> <duration>` — rolling average over window
-- `weft.max <watch> <duration>` — window maximum
-- `weft.min <watch> <duration>` — window minimum
-- `weft.sum <watch> <duration>` — window sum
-- `weft.stddev <watch> <duration>` — window standard deviation
-
-Example:
+`weft::latest`, `weft::avg`, `weft::max`, `weft::min`, `weft::sum`,
+`weft::stddev`, and the rest of the `weft::*` family read this
+watch's history. There's also a parallel family of predicates
+(`weft::is_above`, `weft::is_outlier`, etc.) that return exit codes
+for composing alerts. Full reference: `man weft`.
 
 ```
-echo $(weft.avg error-rate 1h) | alert above 50 --notify=ops
+echo $(weft::avg error-rate 1h) | alert above 50 --notify=ops
 ```
 
 ## Tier limits

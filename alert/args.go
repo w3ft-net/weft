@@ -73,7 +73,24 @@ type Args struct {
 	Notify    string        // --notify=<alias> → notify.yaml lookup
 	Key       shellcore.FieldSpec     // -k: 1-indexed column or .json.path; zero = "whole line"
 	Tag       shellcore.FieldSpec     // -t/--tag: same shape; zero = no tag
+	// IfMode/IfValue support `alert --if-zero "$?"` and
+	// `alert --if-nonzero "$?"` — a cron composes predicates with
+	// bash &&/||, then passes the resulting exit code to alert
+	// directly, no `echo $? | alert below 1` plumbing.
+	IfMode  IfMode // IfNone | IfZero | IfNonzero
+	IfValue string // the captured value (typically "$?" → "0" or "1")
 }
+
+// IfMode selects between exit-code modes for `alert --if-zero` /
+// `alert --if-nonzero`. IfNone means use the stdin-condition path
+// (the default — every condition keyword in this file).
+type IfMode int
+
+const (
+	IfNone IfMode = iota
+	IfZero
+	IfNonzero
+)
 
 // ParseArgs parses the argv following `alert` on the command line.
 // Returns an error for malformed flags, unknown conditions, or missing
@@ -249,8 +266,26 @@ func ParseArgs(args []string) (*Args, error) {
 				return nil, fmt.Errorf("%s requires a field number or .json.path, got empty value", a)
 			}
 			parsed.Tag = spec
+		case "--if-zero":
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("--if-zero requires a value (typically \"$?\")")
+			}
+			parsed.IfMode = IfZero
+			parsed.IfValue = args[i]
+		case "--if-nonzero":
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("--if-nonzero requires a value (typically \"$?\")")
+			}
+			parsed.IfMode = IfNonzero
+			parsed.IfValue = args[i]
 		}
 		i++
+	}
+
+	if parsed.IfMode != IfNone && parsed.Condition != Any {
+		return nil, fmt.Errorf("--if-zero/--if-nonzero is exclusive with condition keywords")
 	}
 
 	// -k and -t must agree on positional vs JSON-path. Mixing them

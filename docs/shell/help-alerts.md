@@ -30,6 +30,25 @@ Stdin always passes through to stdout unchanged (tee behavior).
 
 See `man alert` for grammar, `--duration`, `--average`, `--msg`.
 
+## Composite alerts (state across multiple watches)
+
+To fire on the combined state of more than one watch, compose
+predicate builtins with bash `&&` `||` `!` and hand the result
+to alert via `--if-zero "$?"`:
+
+```
+weft::is_above error-rate 50 && weft::is_absent canary-ping
+alert --if-zero "$?" --notify=critical
+```
+
+The predicate family — `weft::is_above`, `weft::is_below`,
+`weft::is_absent`, `weft::has_changed`, `weft::is_rising`,
+`weft::is_falling`, `weft::is_outlier`, `weft::is_seasonal` — each
+exits 0/1 and has a Lua mirror (`weft.is_above(...)` etc.) that
+returns true/false. See `docs/manual/alerting-strategies.md` for
+the full catalogue plus seasonal/outlier guidance and
+`docs/manual/weft-funcs.md` for the per-function reference.
+
 ## Single-row vs multi-row
 
 By default alert treats stdin as one scalar per tick. With

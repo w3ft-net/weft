@@ -50,6 +50,22 @@ func AlertCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wr
 	}
 
 	condStr := strings.Join(args, " ")
+
+	// --if-zero / --if-nonzero short-circuit the stdin path. The cron
+	// composed predicates with bash &&/|| and the resulting exit code
+	// arrived via `"$?"`. Treat that as the trigger signal directly.
+	if parsed.IfMode != alert.IfNone {
+		v := strings.TrimSpace(parsed.IfValue)
+		fired := false
+		switch parsed.IfMode {
+		case alert.IfZero:
+			fired = v == "0"
+		case alert.IfNonzero:
+			fired = v != "0" && v != ""
+		}
+		return evaluateIfMode(fired, parsed, condStr, ctx, stderr)
+	}
+
 	rows := splitAlertRows(string(data), parsed)
 
 	if !parsed.Tag.IsZero() && len(rows) > 1 {
@@ -339,6 +355,53 @@ func truncateAlertBody(s string) string {
 		return s
 	}
 	return s[:max] + "\n... (truncated)"
+}
+
+// evaluateIfMode runs the dispatch+incident-dedup half of an alert
+// invocation given a triggered/not-triggered signal from --if-zero
+// or --if-nonzero. Carries the same incident open/close behavior as
+// evaluateAlertRow so a composite predicate watch behaves identically
+// to a stdin-condition watch — alerts open when the predicate trips,
+// close when it stops tripping.
+func evaluateIfMode(triggered bool, parsed *alert.Args, condStr string, ctx *AlertContext, stderr io.Writer) int {
+	if !triggered {
+		if ctx.Watch != nil && ctx.Store != nil {
+			checkIncident(ctx.Store, ctx.Watch.ID, condStr, "", false)
+		}
+		return 0
+	}
+
+	msg := parsed.Msg
+	if msg == "" {
+		prefix := "weft"
+		if ctx.Watch != nil {
+			prefix = ctx.Watch.Name
+		}
+		mode := "if-zero"
+		if parsed.IfMode == alert.IfNonzero {
+			mode = "if-nonzero"
+		}
+		msg = prefix + ": predicate composite (" + mode + ") fired"
+	}
+
+	shouldDispatch := true
+	if ctx.Watch != nil && ctx.Store != nil {
+		shouldDispatch = checkIncident(ctx.Store, ctx.Watch.ID, condStr, "", true)
+	}
+
+	fmt.Fprintln(stderr, msg)
+
+	if shouldDispatch && parsed.Notify != "" && ctx.Notifier != nil {
+		body := truncateAlertBody(msg)
+		watchName, customerID := ctx.dispatchIdentity("")
+		if err := ctx.Notifier.Send(customerID, parsed.Notify, watchName, body); err != nil {
+			fmt.Fprintf(stderr, "alert: dispatch to %q failed: %v\n", parsed.Notify, err)
+			return 1
+		}
+	} else if parsed.Notify != "" && ctx.Notifier == nil && ctx.Interactive {
+		fmt.Fprintf(stderr, "alert: notifier unavailable — would dispatch to %q\n", parsed.Notify)
+	}
+	return 0
 }
 
 // checkIncident manages per-tag incident dedup. Returns true if this is a

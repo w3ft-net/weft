@@ -81,9 +81,31 @@ A single alert may not mix the two forms across `-k` and `-t`.
 - `rising <N>%` — value increased by N% compared to previous/window average
 - `falling <N>%` — value decreased by N% compared to previous/window average
 
+## COMPOSITE PREDICATES
+
+A cron that needs to fire on the state of more than one watch composes
+predicate builtins (`weft::is_above`, `weft::is_absent`, etc. — see
+`man weft`) with bash `&&` `||` `!` or Lua `and` `or` `not`, then
+hands the resulting exit code to alert via `--if-zero "$?"`:
+
+```
+# /cron.d/deploy-danger
+weft::is_above error-rate 50 && weft::is_absent canary-ping
+alert --if-zero "$?" --notify=critical
+```
+
+`--if-zero <value>` fires when the value is "0" (the convention bash uses
+for *success*, matching the right-hand interpretation of `&&` chains).
+`--if-nonzero <value>` is the inverse. The two are mutually exclusive
+with the stdin condition keywords above.
+
+See `docs/manual/alerting-strategies.md` for the full pattern catalogue
+(single-watch scalar, multi-row per-tag, composite, aggregated-value).
+
 ## OPTIONS
 
 - `--notify=<alias>` — dispatch to the named alias in `/etc/notify.yaml`. Without `--notify`, alert only writes to stderr.
+- `--if-zero <value>` / `--if-nonzero <value>` — fire based on a literal exit-code value (typically `"$?"` from the prior compound). Mutually exclusive with stdin condition keywords.
 - `-k <field>` — multi-row mode: each line of stdin is one row, and `<field>` selects the numeric value. `<field>` is either a 1-indexed whitespace column (e.g. `2`) or a `.`-prefixed JSON path against the line parsed as JSON (e.g. `.req.latency_ms`).
 - `-t <field>`, `--tag <field>` — multi-row mode: `<field>` names this row for per-tag incident dedup and per-tag notifications. Same field grammar as `-k`. Must agree with `-k` on positional vs JSON-path. Required when the pipeline can produce more than one row per tick.
 - `--duration <dur>` — time window for sustained conditions. For above/below: condition must hold for ALL runs in the window. For rising/falling: compares against the window average. For absent: no non-empty output in the window. Examples: 5m, 1h, 30s.
