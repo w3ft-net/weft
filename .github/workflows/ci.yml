@@ -41,7 +41,9 @@ jobs:
         run: GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/wasm
       - name: go test ./...
         working-directory: weft
-        run: gotestsum --junitfile unit-report.xml -- -count=1 -timeout 5m ./...
+        run: |
+          mkdir -p coverage/unit
+          gotestsum --junitfile unit-report.xml -- -count=1 -timeout 5m -cover -coverpkg=./... ./... -args -test.gocoverdir="$PWD/coverage/unit"
       - name: Test report
         uses: dorny/test-reporter@v1
         if: always()
@@ -50,6 +52,16 @@ jobs:
           path: unit-report.xml
           reporter: java-junit
           working-directory: weft
+      - name: Upload unit coverage counters
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-coverage
+          path: weft/coverage/unit/
+          # Warn (don't fail) when the unit suite died before any
+          # counter files were dropped. The coverage job's gate will
+          # then fail visibly on the missing data, not on the upload.
+          if-no-files-found: warn
 
   integration:
     name: Integration (generic)
@@ -157,6 +169,9 @@ jobs:
   integration-coverage:
     name: Integration (coverage)
     runs-on: ubuntu-latest
+    # Depend on unit so we can merge its counters into the coverage
+    # totals. Unit is the shorter of the two jobs, so the wait is small.
+    needs: unit
     permissions:
       checks: write
       contents: read
@@ -181,6 +196,11 @@ jobs:
       - name: Prepare per-service coverage dirs
         working-directory: weft
         run: mkdir -p coverage/{coordinator,shard-0,shard-1,compute,api}
+      - name: Download unit coverage counters
+        uses: actions/download-artifact@v4
+        with:
+          name: unit-coverage
+          path: weft/coverage/unit/
       - name: Compose up (base + localstack + cover)
         working-directory: weft
         run: |
@@ -207,6 +227,11 @@ jobs:
         run: docker compose -f docker-compose.yml -f docker-compose.localstack.yml -f docker-compose.cover.yml down --remove-orphans
       - name: Build coverage report
         working-directory: weft
+        env:
+          # Core coverage gate. Build fails if merged core % drops below
+          # this. Baseline at time of introduction was 54.6%; we leave
+          # 4-5 points of slack so unrelated PRs aren't blocked by noise.
+          WEFT_COVERAGE_MIN: "50"
         run: scripts/coverage-report.sh
       - name: Upload coverage profiles
         uses: actions/upload-artifact@v4
