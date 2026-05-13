@@ -529,3 +529,108 @@ func TestNotifyConfig_PutAndGet(t *testing.T) {
 		t.Errorf("round-trip mismatch:\nwant: %q\ngot:  %q", valid, got.AliasesYAML)
 	}
 }
+
+// TestOnboarding_StartTour_KeepsUserLoggedIn reproduces the flow the
+// welcome modal's "Start the tour" button drives:
+//
+//  1. Fresh signup → server lands user with own org + Loom membership,
+//     onboarding_step="welcome".
+//  2. Client POSTs /api/onboarding/advance with step=welcome (modal's
+//     advanceOnboarding call).
+//  3. Client sets weft_org=loom in localStorage and reloads — on the
+//     next /me, the request carries X-Active-Org: loom.
+//
+// The user reported that this final /me returns a state that makes the
+// SPA render the login page (anything non-2xx triggers the AuthContext
+// catch that wipes the token). The pin is: that /me must come back 200.
+func TestOnboarding_StartTour_KeepsUserLoggedIn(t *testing.T) {
+	srv, s := testServer(t)
+	srv.StripePrices[store.TierSwatch] = TierPrices{Flat: "price_test"}
+	handler := srv.Handler()
+
+	// Seed Loom (customer + namespace) so grantLoomMembership at signup
+	// has somewhere to land. In prod this is weft-demo-seed's job; here
+	// we set up just what the onboarding code reads.
+	loomCust, err := s.FindOrCreateCustomer(LoomCustomerSlug)
+	if err != nil {
+		t.Fatalf("seed loom customer: %v", err)
+	}
+	if _, err := s.FindOrCreateNamespace(loomCust.ID, LoomDemoNamespace); err != nil {
+		t.Fatalf("seed loom namespace: %v", err)
+	}
+
+	// Sign up the user via the public endpoint (not a hand-rolled fixture
+	// — we want every side effect handleSignup has).
+	email := fmt.Sprintf("tour-%d@example.com", os.Getpid())
+	orgName := fmt.Sprintf("tour-org-%d", os.Getpid())
+	body, _ := json.Marshal(map[string]string{
+		"email": email, "org_name": orgName, "tier": "swatch",
+	})
+	req := httptest.NewRequest("POST", "/api/auth/signup", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("signup: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var signupResp map[string]any
+	json.Unmarshal(w.Body.Bytes(), &signupResp)
+	jwt, _ := signupResp["token"].(string)
+	if jwt == "" {
+		t.Fatal("signup: no JWT in response")
+	}
+
+	// First /me: confirms the welcome-modal preconditions. This is what
+	// the SPA sees right after PaymentSetup redirects to /dashboards.
+	req = httptest.NewRequest("GET", "/api/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("me-before: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var meBefore map[string]any
+	json.Unmarshal(w.Body.Bytes(), &meBefore)
+	if step, _ := meBefore["onboarding_step"].(string); step != "welcome" {
+		t.Fatalf("expected onboarding_step=welcome, got %q", step)
+	}
+	var hasLoom bool
+	for _, o := range meBefore["orgs"].([]any) {
+		if o.(map[string]any)["name"] == "loom" {
+			hasLoom = true
+		}
+	}
+	if !hasLoom {
+		t.Fatal("fresh signup is missing loom membership (welcome modal's Start button would be disabled)")
+	}
+
+	// Step 2 — the modal's first server hop: POST /api/onboarding/advance.
+	body, _ = json.Marshal(map[string]string{"step": "welcome"})
+	req = httptest.NewRequest("POST", "/api/onboarding/advance", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("advance: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Step 3 — switchOrg sets weft_org=loom and reloads. AuthContext's
+	// post-reload /me carries X-Active-Org: loom. If this 4xxs the SPA
+	// boots the login screen (token gets cleared in the catch handler).
+	req = httptest.NewRequest("GET", "/api/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("X-Active-Org", "loom")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("me-after-switchOrg: expected 200, got %d: %s\n(this is the bug — the SPA treats a non-200 here as logged-out and shows the login screen)",
+			w.Code, w.Body.String())
+	}
+	var meAfter map[string]any
+	json.Unmarshal(w.Body.Bytes(), &meAfter)
+	if cust, _ := meAfter["customer"].(string); cust != "loom" {
+		t.Errorf("active customer after switchOrg: want loom, got %q", cust)
+	}
+	if step, _ := meAfter["onboarding_step"].(string); step != "downloads" {
+		t.Errorf("onboarding_step after advance: want downloads, got %q", step)
+	}
+}
