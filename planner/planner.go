@@ -20,6 +20,11 @@ import (
 type QueryPlan struct {
 	ShardSQL       string
 	Args           []any         // positional values for ShardSQL/DirectShardSQL placeholders, in render order
+	// ArgSources is the same args slice but each entry is tagged with its
+	// Kind (Customer, TimeStart, TimeEnd, Literal). Live dispatch ignores
+	// this; save-time lowering reads it so each fire can re-resolve the
+	// runtime kinds from fresh context. 1:1 with Args.
+	ArgSources     []ArgSource
 	ComputeStages  []string
 	Limit          int           // post-merge limit (from head/tail), 0 = unlimited
 	// TailMode is true when the source command is `tail` (or an inline
@@ -178,11 +183,7 @@ func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 		sql.addPredicate("namespace = ?", info.source.namespaces[0])
 	default:
 		placeholders := strings.Repeat("?, ", len(info.source.namespaces)-1) + "?"
-		nsArgs := make([]any, len(info.source.namespaces))
-		for i, ns := range info.source.namespaces {
-			nsArgs[i] = ns
-		}
-		sql.addPredicate("namespace IN ("+placeholders+")", nsArgs...)
+		sql.addPredicate("namespace IN ("+placeholders+")", info.source.namespaces...)
 	}
 	switch len(info.source.services) {
 	case 0:
@@ -191,11 +192,7 @@ func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 		sql.addPredicate("service = ?", info.source.services[0])
 	default:
 		placeholders := strings.Repeat("?, ", len(info.source.services)-1) + "?"
-		svcArgs := make([]any, len(info.source.services))
-		for i, svc := range info.source.services {
-			svcArgs[i] = svc
-		}
-		sql.addPredicate("service IN ("+placeholders+")", svcArgs...)
+		sql.addPredicate("service IN ("+placeholders+")", info.source.services...)
 	}
 
 	switch info.source.cmd {
@@ -345,7 +342,7 @@ func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 	if sql.orderBy == "ts DESC" {
 		shardQuery = sql.Wrap("ts ASC")
 	}
-	shardSQL, shardArgs := shardQuery.ToSQL()
+	shardSQL, shardArgs, shardArgSources := shardQuery.ToSQLWithSources()
 
 	directInner := sql.WithOrderLimit(shardOrderBy, shardLimit)
 	directQuery := directInner
@@ -369,6 +366,7 @@ func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 	return &QueryPlan{
 		ShardSQL:       shardSQL,
 		Args:           shardArgs,
+		ArgSources:     shardArgSources,
 		DirectShardSQL: directShardSQL,
 		ComputeStages:  compute,
 		Limit:          sql.limit,

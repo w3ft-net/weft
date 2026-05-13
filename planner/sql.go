@@ -47,13 +47,47 @@ type From struct {
 	Alias    string
 }
 
-// Predicate is one WHERE fragment with its positional args. Args is
-// nil today; Step 7 plumbs it through ToSQL. The SQL field holds the
-// raw fragment (e.g. "namespace = 'vimgym'" today; "namespace = ?"
-// after parameterization).
+// Predicate is one WHERE fragment with its positional args. The SQL
+// field holds the raw fragment ("namespace = ?"); each Args entry
+// carries both the resolved value (what ToSQL needs to ship to shards
+// today) and the source kind (what ToLowered needs to know about for
+// save-time lowering).
 type Predicate struct {
 	SQL  string
-	Args []any
+	Args []ArgSource
+}
+
+// ArgKind tags how a positional `?` placeholder gets resolved. The
+// distinction matters at save-time lowering: literals get baked into
+// the persisted form; the runtime-context kinds (Customer, TimeStart,
+// TimeEnd) get resolved fresh at each fire from the watch's customer
+// and the fire's time window.
+type ArgKind int
+
+const (
+	// ArgLiteral is a value baked into the pipeline (namespace name,
+	// service name, env, etc.). The pipeline can't reference it at
+	// fire time — it IS the pipeline.
+	ArgLiteral ArgKind = iota
+	// ArgCustomer is the row-level-security boundary. Resolved from
+	// the watch's stored CustomerID at fire time (or the active
+	// session's customer for interactive queries).
+	ArgCustomer
+	// ArgTimeStart / ArgTimeEnd are the time window. Resolved from
+	// the fire's TimeRange.
+	ArgTimeStart
+	ArgTimeEnd
+)
+
+// ArgSource describes one positional argument. Value carries the
+// resolved value as of the Plan() that produced this source —
+// for ArgLiteral that's the only place the value comes from;
+// for ArgCustomer/TimeStart/TimeEnd that's the current call's
+// resolved value but a save-time-lowering consumer ignores Value
+// and re-resolves from fire-time context.
+type ArgSource struct {
+	Kind  ArgKind
+	Value string
 }
 
 // newSQLBuilder returns a fresh Query rooted at the logs table with
@@ -68,39 +102,60 @@ func newSQLBuilder() *Query {
 
 func (q *Query) setSelect(rawExpr string) { q.rawExpr = rawExpr }
 
-// addPredicate appends a WHERE fragment with optional positional args.
-// Variadic args is the migration ergonomic: callers that haven't yet
-// switched to placeholders pass no args (the existing string form);
-// callers that have pass `?` placeholders + values. The args are
-// rendered out by ToSQL in their original order — see
-// TestQueryBuilder_ToSQLArgs for the recursion contract.
-func (q *Query) addPredicate(pred string, args ...any) {
+// addPredicate appends a WHERE fragment whose `?` placeholders are
+// literal values from the pipeline (namespace name, service name,
+// etc.). Use addCustomer / addTimeBounds for the runtime-resolved
+// sources — those tag Args differently so save-time lowering can
+// distinguish bake-at-save from resolve-at-fire.
+func (q *Query) addPredicate(pred string, literals ...string) {
+	args := make([]ArgSource, len(literals))
+	for i, v := range literals {
+		args[i] = ArgSource{Kind: ArgLiteral, Value: v}
+	}
 	q.predicates = append(q.predicates, Predicate{SQL: pred, Args: args})
 }
 
 // addCustomer attaches the row-level security predicate. Empty
 // customer is a no-op (no production caller passes empty; tests do).
+// Tagged ArgCustomer so a save-time-lowered form resolves this from
+// the watch's stored CustomerID at fire time, not from whatever
+// customer was active during Plan().
 func (q *Query) addCustomer(customer string) {
 	if customer == "" {
 		return
 	}
-	q.addPredicate("customer = ?", customer)
+	q.predicates = append(q.predicates, Predicate{
+		SQL:  "customer = ?",
+		Args: []ArgSource{{Kind: ArgCustomer, Value: customer}},
+	})
 }
 
 // addTimeBounds attaches ts >= / ts <= predicates for the user's query
 // window. Either bound may be zero-value, in which case it's skipped.
-// The cast wrapping (CAST(? AS TIMESTAMP)) lets DuckDB accept the
-// timestamp as a string arg over the wire — string is the only proto
-// arg type we ship (see ExecuteQueryRequest.args). The DuckDB-friendly
-// ISO format uses .999999 microseconds to match the shard's ts column
-// resolution.
+// Tagged ArgTimeStart / ArgTimeEnd so save-time lowering re-resolves
+// from each fire's TimeRange rather than baking in the Plan-call time
+// bounds.
 func (q *Query) addTimeBounds(start, end time.Time) {
 	if !start.IsZero() {
-		q.addPredicate("ts >= CAST(? AS TIMESTAMP)", start.UTC().Format("2006-01-02 15:04:05.999999"))
+		q.predicates = append(q.predicates, Predicate{
+			SQL:  "ts >= CAST(? AS TIMESTAMP)",
+			Args: []ArgSource{{Kind: ArgTimeStart, Value: formatTS(start)}},
+		})
 	}
 	if !end.IsZero() {
-		q.addPredicate("ts <= CAST(? AS TIMESTAMP)", end.UTC().Format("2006-01-02 15:04:05.999999"))
+		q.predicates = append(q.predicates, Predicate{
+			SQL:  "ts <= CAST(? AS TIMESTAMP)",
+			Args: []ArgSource{{Kind: ArgTimeEnd, Value: formatTS(end)}},
+		})
 	}
+}
+
+// formatTS renders a time.Time as DuckDB-friendly ISO with microsecond
+// precision (matching the shard's ts column resolution). The format
+// lives here so save-time lowering and live dispatch produce identical
+// argument strings for the same time.Time.
+func formatTS(t time.Time) string {
+	return t.UTC().Format("2006-01-02 15:04:05.999999")
 }
 
 func (q *Query) setOrderLimit(order string, limit int) {
@@ -160,21 +215,50 @@ func (q *Query) buildWith(orderBy string, limit int) string {
 	return q.WithOrderLimit(orderBy, limit).build()
 }
 
-// ToSQL walks the AST and emits (sql, args). Predicate fragments come
-// through as-is; subqueries recurse with parentheses + alias. Each
-// Predicate's Args are appended to the returned slice in render order
-// — outer SELECT's WHERE first, then any recursive Predicate.Args from
-// a subquery's WHERE in their original position relative to the
-// placeholders, and so on. Today every Predicate carries Args == nil
-// so the slice always comes back empty; Step 8 lights this up.
+// ToSQL walks the AST and emits (sql, args) using each ArgSource's
+// resolved-at-Plan-time Value. This is what the coordinator ships to
+// shards. Subqueries recurse into the same args slice, so render
+// order matches placeholder order.
 func (q *Query) ToSQL() (string, []any) {
 	var b strings.Builder
 	var args []any
-	q.renderInto(&b, &args)
+	q.renderInto(&b, func(src ArgSource) {
+		args = append(args, src.Value)
+	})
 	return b.String(), args
 }
 
-func (q *Query) renderInto(b *strings.Builder, args *[]any) {
+// ToLowered walks the AST and emits (sql, sources). Sources carry the
+// kind (Customer / TimeStart / TimeEnd / Literal) rather than resolved
+// values — a save-time-lowered consumer re-resolves runtime kinds at
+// each fire and uses Value as-is for ArgLiteral.
+func (q *Query) ToLowered() (string, []ArgSource) {
+	var b strings.Builder
+	var sources []ArgSource
+	q.renderInto(&b, func(src ArgSource) {
+		sources = append(sources, src)
+	})
+	return b.String(), sources
+}
+
+// ToSQLWithSources renders once and returns both views. Plan() uses
+// this so it can populate QueryPlan.Args (for live dispatch) and
+// QueryPlan.ArgSources (for save-time lowering) without walking the
+// AST twice.
+func (q *Query) ToSQLWithSources() (sql string, args []any, sources []ArgSource) {
+	var b strings.Builder
+	q.renderInto(&b, func(src ArgSource) {
+		args = append(args, src.Value)
+		sources = append(sources, src)
+	})
+	return b.String(), args, sources
+}
+
+// renderInto is the shared rendering loop for ToSQL and ToLowered. The
+// onArg callback is invoked once per arg in render order; the two
+// public methods supply different callbacks to collect the form of
+// arg they need.
+func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 	b.WriteString("SELECT ")
 	if q.rawExpr == "" || q.rawExpr == "raw" {
 		b.WriteString("raw, ts")
@@ -184,10 +268,7 @@ func (q *Query) renderInto(b *strings.Builder, args *[]any) {
 	b.WriteString(" FROM ")
 	if q.from.Subquery != nil {
 		b.WriteByte('(')
-		// Subquery's predicates emit their placeholders before the outer
-		// query's. Args collection order = render order, so the subquery
-		// recurses into the same args slice.
-		q.from.Subquery.renderInto(b, args)
+		q.from.Subquery.renderInto(b, onArg)
 		b.WriteString(") AS ")
 		b.WriteString(q.from.Alias)
 	} else {
@@ -200,8 +281,8 @@ func (q *Query) renderInto(b *strings.Builder, args *[]any) {
 				b.WriteString(" AND ")
 			}
 			b.WriteString(p.SQL)
-			if len(p.Args) > 0 {
-				*args = append(*args, p.Args...)
+			for _, a := range p.Args {
+				onArg(a)
 			}
 		}
 	}

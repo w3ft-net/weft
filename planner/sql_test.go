@@ -132,12 +132,18 @@ func TestQueryBuilder_WrapPreservesInner(t *testing.T) {
 // switch to ? + Args, the binding order Just Works.
 func TestQueryBuilder_ToSQLArgs(t *testing.T) {
 	inner := newSQLBuilder()
-	inner.predicates = append(inner.predicates, Predicate{SQL: "namespace = ?", Args: []any{"vimgym"}})
-	inner.predicates = append(inner.predicates, Predicate{SQL: "service = ?", Args: []any{"shard"}})
+	inner.predicates = append(inner.predicates, Predicate{
+		SQL: "namespace = ?", Args: []ArgSource{{Kind: ArgLiteral, Value: "vimgym"}},
+	})
+	inner.predicates = append(inner.predicates, Predicate{
+		SQL: "service = ?", Args: []ArgSource{{Kind: ArgLiteral, Value: "shard"}},
+	})
 	inner.setOrderLimit("ts DESC", 50)
 
 	outer := inner.Wrap("ts ASC")
-	outer.predicates = append(outer.predicates, Predicate{SQL: "ts >= ?", Args: []any{"2026-04-01"}})
+	outer.predicates = append(outer.predicates, Predicate{
+		SQL: "ts >= ?", Args: []ArgSource{{Kind: ArgTimeStart, Value: "2026-04-01"}},
+	})
 
 	sql, args := outer.ToSQL()
 	wantSQL := "SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = ? AND service = ? ORDER BY ts DESC LIMIT 50) AS t WHERE ts >= ? ORDER BY ts ASC"
