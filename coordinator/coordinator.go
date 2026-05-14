@@ -157,6 +157,23 @@ type Coordinator struct {
 	// may run. Zero = use the package-level default (scriptExecutionTimeout).
 	// Tests override to shorten the wait.
 	ScriptExecutionTimeout time.Duration
+
+	// loweredCache memoizes the decoded planner.LoweredPlan per watch
+	// so the hot fire path skips the JSON unmarshal that otherwise
+	// dominates the per-fire cost (~9µs of the ~10µs lowered total).
+	// Keyed by watch.ID; the value's contentHash mirrors CronWatch.
+	// ContentHash so a save (which bumps content_hash) invalidates the
+	// entry. Pre-fork in-memory only — restart-as-cache-invalidation.
+	loweredCache sync.Map // map[uint]*loweredCacheEntry
+}
+
+// loweredCacheEntry pairs a decoded LoweredPlan with the
+// CronWatch.ContentHash it was decoded from. Compare hash to detect
+// stale entries (the watch was re-saved on this Coordinator or on
+// another; either way the cache misses and re-unmarshals).
+type loweredCacheEntry struct {
+	contentHash string
+	plan        *planner.LoweredPlan
 }
 
 // CoordinatorConfig wires every Coordinator dependency at construction
@@ -567,7 +584,14 @@ func (c *Coordinator) ExecuteForWatch(pipeline string, tr TimeRange, watch *stor
 	if err != nil {
 		return nil, fmt.Errorf("watch %d: resolve customer %d: %w", watch.ID, watch.CustomerID, err)
 	}
-	go c.refreshLoweredAsync(watch, cust.Name)
+	// Refresh runs synchronously rather than via a goroutine. Two
+	// reasons: (1) it shares the same DB connection as the rest of
+	// the fire, and an async goroutine over a BeginTest-wrapped
+	// store thrashes the single conn; (2) on the slow path the
+	// fire is already ~1ms, so an extra ~hundred-µs of refresh DB
+	// write doesn't move user-perceived latency. The next fire
+	// takes the hot path either way.
+	c.refreshLoweredSync(watch, cust.Name)
 	return c.execute(pipeline, tr, cust.Name, "", alertCtx)
 }
 
@@ -581,14 +605,15 @@ func (c *Coordinator) executeLowered(watch *store.CronWatch, tr TimeRange, alert
 	if len(watch.LoweredPlan) == 0 {
 		return nil, false
 	}
-	var lp planner.LoweredPlan
-	if err := json.Unmarshal(watch.LoweredPlan, &lp); err != nil {
-		log.Printf("watch %d: lowered_plan unmarshal: %v — falling back to inline Plan", watch.ID, err)
+	lp, ok := c.loadLoweredPlan(watch)
+	if !ok {
 		return nil, false
 	}
 	if lp.PlannerVersion != planner.PlannerVersion {
 		log.Printf("watch %d: lowered_plan stamped at version %d, planner is at %d — recompiling",
 			watch.ID, lp.PlannerVersion, planner.PlannerVersion)
+		// Stale planner version invalidates the cache entry too.
+		c.loweredCache.Delete(watch.ID)
 		return nil, false
 	}
 	// Check every recorded /bin dep against the current source hash.
@@ -623,7 +648,7 @@ func (c *Coordinator) executeLowered(watch *store.CronWatch, tr TimeRange, alert
 	}
 	ctx := planner.ResolveCtx{Customer: lp.Customer, Start: tr.Start, End: tr.End}
 	args := lp.Hydrate(ctx)
-	res, err := c.dispatchLoweredWithTier(&lp, args, tr, tier, alertCtx)
+	res, err := c.dispatchLoweredWithTier(lp, args, tr, tier, alertCtx)
 	if err != nil {
 		log.Printf("watch %d: lowered dispatch failed: %v — falling back to inline Plan", watch.ID, err)
 		return nil, false
@@ -679,17 +704,51 @@ func (c *Coordinator) dispatchLoweredWithTier(lp *planner.LoweredPlan, args []an
 	return &ExecuteResult{Stream: stream}, nil
 }
 
-// refreshLoweredAsync is the background re-lowering invoked from the
-// fallback path. Runs Lower on the watch's current pipeline + writes
-// the JSON back via RefreshWatchLoweredPlan. Failures log but don't
-// retry — the next fire's fallback path will try again.
+// loadLoweredPlan decodes watch.LoweredPlan, memoizing the result in
+// loweredCache keyed by watch.ID. Cache hits compare contentHash
+// against the current watch.ContentHash so a save (which rewrites
+// content_hash) misses cleanly and we re-unmarshal. Returns (nil,
+// false) if the JSON can't be unmarshalled — the caller treats that
+// as cache miss + fallback.
+func (c *Coordinator) loadLoweredPlan(watch *store.CronWatch) (*planner.LoweredPlan, bool) {
+	if cached, ok := c.loweredCache.Load(watch.ID); ok {
+		entry := cached.(*loweredCacheEntry)
+		if entry.contentHash == watch.ContentHash {
+			return entry.plan, true
+		}
+	}
+	var lp planner.LoweredPlan
+	if err := json.Unmarshal(watch.LoweredPlan, &lp); err != nil {
+		log.Printf("watch %d: lowered_plan unmarshal: %v — falling back to inline Plan", watch.ID, err)
+		return nil, false
+	}
+	// Store by-value into the entry so concurrent fires share the
+	// decoded *LoweredPlan — its fields are read-only past this
+	// point (Hydrate constructs a fresh args slice per call).
+	c.loweredCache.Store(watch.ID, &loweredCacheEntry{
+		contentHash: watch.ContentHash,
+		plan:        &lp,
+	})
+	return &lp, true
+}
+
+// refreshLoweredSync is the re-lowering invoked from the fallback
+// path. Runs Lower on the watch's current pipeline + writes the JSON
+// back via RefreshWatchLoweredPlan. Failures log but don't retry —
+// the next fire's fallback path will try again.
 //
 // Skips watches with ID == 0: those aren't persisted (in-memory test
 // fixtures, benchmark scaffolding, ephemeral pipelines from the
 // interactive shell that briefly impersonate a watch via
 // ExecuteForWatch). Writing back would either fail noisily or thrash
 // the test DB conn.
-func (c *Coordinator) refreshLoweredAsync(watch *store.CronWatch, customerName string) {
+//
+// Synchronous (not a goroutine) so it shares the caller's DB
+// connection — the BeginTest-wrapped store binds to a single conn
+// and a concurrent goroutine over that conn races the main fire's
+// own DB activity. The latency cost (~hundreds of µs of DB writes)
+// is paid once per slow-path fire; the next fire is on the hot path.
+func (c *Coordinator) refreshLoweredSync(watch *store.CronWatch, customerName string) {
 	if watch.ID == 0 {
 		return
 	}
@@ -701,7 +760,13 @@ func (c *Coordinator) refreshLoweredAsync(watch *store.CronWatch, customerName s
 	}
 	if err := c.Store.RefreshWatchLoweredPlan(watch.ID, loweredJSON); err != nil {
 		log.Printf("watch %d: refresh lowered_plan: %v", watch.ID, err)
+		return
 	}
+	// Refresh wrote a new lowered_plan; the next fire's loadLoweredPlan
+	// will see the fresh bytes on watch.LoweredPlan + the unchanged
+	// ContentHash (refresh doesn't bump it, only save does). Invalidate
+	// the cache so the next hit re-unmarshals from the fresh bytes.
+	c.loweredCache.Delete(watch.ID)
 }
 
 // watchBinResolver is the coordinator-side BinResolver used by the

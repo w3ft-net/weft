@@ -27,6 +27,21 @@ func (noopPool) NewJob(_ []string, _ int, _ string, _ int, _ bool) compute.Compu
 	return nil
 }
 
+// benchBinResolver is the in-process BinResolver used by /bin-using
+// sub-benches. Mirrors production's storeBinResolver but without the
+// DB hit at setup time.
+type benchBinResolver struct {
+	byName map[string]string
+}
+
+func (r benchBinResolver) Source(name string) (string, string, bool) {
+	source, ok := r.byName[name]
+	if !ok {
+		return "", "", false
+	}
+	return source, planner.HashBinSource(source), true
+}
+
 // BenchmarkExecuteForWatch measures the per-fire cost of the
 // coordinator-side work: preflight (customer resolve + /bin expansion +
 // glob expansion) and Plan(). The compute pool is a true no-op so the
@@ -59,6 +74,13 @@ func BenchmarkExecuteForWatch(b *testing.B) {
 		b.Fatalf("seed /bin/loom-error-rate: %v", err)
 	}
 
+	// Resolver the lowered sub-benches use to inline the /bin script
+	// at save time. Mirrors the production storeBinResolver but in-
+	// process here so the bench doesn't hit the DB at setup time.
+	binResolver := benchBinResolver{
+		byName: map[string]string{"loom-error-rate": binScript},
+	}
+
 	cases := []struct {
 		name     string
 		pipeline string
@@ -68,11 +90,15 @@ func BenchmarkExecuteForWatch(b *testing.B) {
 		// fire path takes the inline-Plan fallback. Comparing the two
 		// per-op numbers IS the Phase B win.
 		lowered bool
+		// resolver: which BinResolver the lowered sub-bench uses.
+		// Bare cases (no /bin/) work with noBinResolver. /bin cases
+		// need a real resolver that can return the script body.
+		resolver planner.BinResolver
 	}{
-		{name: "bare_inline", pipeline: `cat /log/vimgym.log | grep ERROR`, lowered: false},
-		{name: "bare_lowered", pipeline: `cat /log/vimgym.log | grep ERROR`, lowered: true},
-		{name: "with_bin_inline", pipeline: `/bin/loom-error-rate | head -5`, lowered: false},
-		{name: "with_bin_lowered", pipeline: `/bin/loom-error-rate | head -5`, lowered: true},
+		{name: "bare_inline", pipeline: `cat /log/vimgym.log | grep ERROR`, lowered: false, resolver: noBinResolver{}},
+		{name: "bare_lowered", pipeline: `cat /log/vimgym.log | grep ERROR`, lowered: true, resolver: noBinResolver{}},
+		{name: "with_bin_inline", pipeline: `loom-error-rate | head -5`, lowered: false, resolver: binResolver},
+		{name: "with_bin_lowered", pipeline: `loom-error-rate | head -5`, lowered: true, resolver: binResolver},
 	}
 
 	tr := TimeRange{
@@ -91,7 +117,7 @@ func BenchmarkExecuteForWatch(b *testing.B) {
 			}
 
 			if tc.lowered {
-				lp, err := planner.Lower(tc.pipeline, "kevlar", "bolt", noBinResolver{})
+				lp, err := planner.Lower(tc.pipeline, "kevlar", "bolt", tc.resolver)
 				if err != nil {
 					// Pipelines that don't lower (e.g. /bin/ refs the
 					// stub can't inline) skip the lowered sub-bench

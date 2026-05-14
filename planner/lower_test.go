@@ -3,6 +3,7 @@ package planner
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -132,6 +133,75 @@ func TestLower_PlannerVersion(t *testing.T) {
 	}
 	if lp.PlannerVersion != PlannerVersion {
 		t.Errorf("PlannerVersion: got %d, want %d", lp.PlannerVersion, PlannerVersion)
+	}
+}
+
+// fakeBinResolver is the test-controlled BinResolver for /bin
+// inlining tests. binByName is the script body; hash is computed
+// by HashBinSource at fixture-load time so Lower's recorded
+// BinDep.Hash matches what the fire path's invalidation check
+// would produce.
+type fakeBinResolver struct {
+	binByName map[string]string
+}
+
+func (r fakeBinResolver) Source(name string) (string, string, bool) {
+	source, ok := r.binByName[name]
+	if !ok {
+		return "", "", false
+	}
+	return source, HashBinSource(source), true
+}
+
+// TestLower_InlinesBinScript pins the save-time /bin inlining that
+// lets /bin-referencing watches use the fast fire path. The lowered
+// plan must:
+//   - render SQL that reflects the inlined body, not the /bin/<name>
+//     token (which Plan would reject as unplannable)
+//   - record a BinDep with the bin's name + content hash so the fire
+//     path can invalidate on /bin edit
+//   - bind positional args from the invocation into the body
+func TestLower_InlinesBinScript(t *testing.T) {
+	binBody := `cat /log/loom/api/prod.log | grep $1`
+	resolver := fakeBinResolver{
+		binByName: map[string]string{"find-errors": binBody},
+	}
+
+	lp, err := Lower(`find-errors ERROR | wc -l`, "kevlar", "bolt", resolver)
+	if err != nil {
+		t.Fatalf("Lower: %v", err)
+	}
+
+	// SQL should reflect the inlined body — regexp_matches for the
+	// bound $1, namespace/service for the inlined /log/.../prod.log.
+	if !strings.Contains(lp.ShardSQL, "regexp_matches(raw, 'ERROR')") {
+		t.Errorf("expected inlined grep predicate; got: %s", lp.ShardSQL)
+	}
+	if !strings.Contains(lp.ShardSQL, "namespace = ?") {
+		t.Errorf("expected inlined namespace predicate; got: %s", lp.ShardSQL)
+	}
+
+	// BinDep records the script with its hash for fire-time invalidation.
+	if len(lp.BinDeps) != 1 {
+		t.Fatalf("BinDeps: got %d, want 1: %v", len(lp.BinDeps), lp.BinDeps)
+	}
+	if lp.BinDeps[0].Name != "find-errors" {
+		t.Errorf("BinDep name: got %q, want find-errors", lp.BinDeps[0].Name)
+	}
+	if lp.BinDeps[0].Hash != HashBinSource(binBody) {
+		t.Errorf("BinDep hash diverges from HashBinSource(body)")
+	}
+
+	// The trailing `| wc -l` from the outer pipeline survives as a
+	// compute stage.
+	foundWc := false
+	for _, s := range lp.ComputeStages {
+		if s == "wc -l" {
+			foundWc = true
+		}
+	}
+	if !foundWc {
+		t.Errorf("outer pipeline's `wc -l` lost during inlining; got compute stages: %v", lp.ComputeStages)
 	}
 }
 

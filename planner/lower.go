@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"time"
+
+	"github.com/kevlarcon/warp/pkg/bash"
 )
 
 // PlannerVersion stamps every LoweredPlan with the version of the
@@ -219,36 +221,97 @@ func LowerForStorage(pipeline, customer, tier string, resolveBin BinResolver) []
 	return b
 }
 
-// expandForLowering is the lowering-side counterpart to coordinator's
-// expandBinPipeline. It inlines top-level /bin/ bash invocations and
-// records each inlined name + content hash so the lowered plan can
-// detect /bin edits at fire time. Returns the expanded pipeline + the
-// list of inlined bin deps.
+// expandForLowering is the save-time counterpart to coordinator's
+// expandBinPipeline. It walks the pipeline's bash AST, finds the
+// leading command, and if that's a /bin/<name> bash invocation,
+// inlines the script body. Behavior mirrors expandBinPipeline so
+// the save-time pre-inlined SQL matches what the fire-time fallback
+// would produce — same shape constraints (single-pipeline body,
+// SimpleCommand stages only, positional-arg binding), same fall-
+// through ("can't splice this shape → leave the pipeline alone").
 //
-// Today this delegates to a tiny scan-and-substitute pass that
-// matches the same shape expandBinPipeline does. A future revision
-// could share the expandBinPipeline implementation by lifting it out
-// of the coordinator package — for now duplicating the small surface
-// avoids the cross-package dep.
+// Each successfully inlined /bin/<name> is recorded as a BinDep
+// with the SHA-256 of its source. The fire path compares each dep's
+// recorded hash against the live shell_functions row at every fire;
+// a drift forces fallback + async re-lowering. This is the
+// invalidation channel for /bin edits.
 //
-// IMPORTANT: this function does NOT recurse through nested /bin/ →
-// /bin/ references the way expandBinPipeline does for the watch
-// path. Phase B's scope is watches with at most one level of /bin
-// inlining; deeper nesting falls back to per-fire Plan(). The
-// fall-back is the same path the lowered-plan-miss branch uses.
+// Recursion: this is single-level expansion. A /bin/foo that itself
+// invokes /bin/bar leaves the /bin/bar token in place — Plan() will
+// reject the resulting "not a /log/... source" shape and Lower will
+// return an error. The save handler treats that as "didn't lower,
+// store NULL," and the fire path runs Plan() inline. Phase B v3
+// could recurse, but the iteration cost is best paid only after
+// telemetry shows nested /bin in production watches.
 func expandForLowering(pipeline string, resolveBin BinResolver) (string, []BinDep, error) {
-	// Phase B v1: no inlining yet — leave the pipeline untouched and
-	// record zero deps. Plan() will see /bin/foo as a literal token
-	// and treat it as a non-log source (returns ErrNotPlannable),
-	// which Lower surfaces as an error.
-	//
-	// This is a deliberate stub: it lets the rest of Phase B land
-	// without entangling with coordinator/bin_expand.go's bash AST
-	// walk. The proper inlining (and BinDep tracking) lands as a
-	// follow-on commit before the fire-path switch — the
-	// SaveCronWatch path can refuse to save when expandForLowering
-	// can't fully lower a pipeline, falling back to "lowered_plan is
-	// NULL, fire path uses Plan() inline."
-	_ = resolveBin
-	return pipeline, nil, nil
+	if resolveBin == nil {
+		return pipeline, nil, nil
+	}
+	ast, err := bash.Parse(pipeline)
+	if err != nil {
+		// Plan() will surface the parse error with its own context.
+		return pipeline, nil, nil
+	}
+	if len(ast.Commands) == 0 {
+		return pipeline, nil, nil
+	}
+	list := ast.Commands[0]
+	if list == nil || list.First == nil || len(list.First.Commands) == 0 {
+		return pipeline, nil, nil
+	}
+	leading, ok := list.First.Commands[0].(*bash.SimpleCommand)
+	if !ok || len(leading.Words) == 0 {
+		return pipeline, nil, nil
+	}
+	name := leading.Words[0].Literal()
+	if name == "" {
+		return pipeline, nil, nil
+	}
+
+	source, hash, ok := resolveBin.Source(name)
+	if !ok {
+		// Not a /bin/<name> script — leading command stays as-is. If
+		// the result isn't /log/-source-shaped Plan will return an
+		// error; the save handler swallows it and stores NULL.
+		return pipeline, nil, nil
+	}
+
+	bodyAST, err := bash.Parse(source)
+	if err != nil {
+		return "", nil, fmt.Errorf("/bin/%s: parse body: %w", name, err)
+	}
+	if len(bodyAST.Commands) != 1 || len(bodyAST.Commands[0].Rest) != 0 {
+		// Multi-list body can't be spliced cleanly. Fall through —
+		// the fire path's expandBinPipeline has the same restriction.
+		return pipeline, nil, nil
+	}
+	bodyList := bodyAST.Commands[0]
+	if bodyList.First == nil {
+		return pipeline, nil, nil
+	}
+	bodyCmds := bodyList.First.Commands
+	if len(bodyCmds) == 0 {
+		return pipeline, nil, nil
+	}
+	for _, c := range bodyCmds {
+		if _, isSimple := c.(*bash.SimpleCommand); !isSimple {
+			return pipeline, nil, nil
+		}
+	}
+
+	// Bind positionals from the invocation into the body — same as
+	// coordinator/bin_expand.go::expandBinPipeline. Literal-only args:
+	// expansions like $VAR or `subshell` are not evaluated.
+	args := make([]string, 0, len(leading.Words)-1)
+	for _, w := range leading.Words[1:] {
+		args = append(args, w.Literal())
+	}
+	bash.BindPositionals(bodyAST, args)
+
+	// Splice the body's commands into the outer pipeline, replacing
+	// the original /bin invocation. Subsequent stages of the outer
+	// pipeline tail in unchanged.
+	list.First.Commands = append(bodyCmds, list.First.Commands[1:]...)
+
+	return bash.Unparse(ast), []BinDep{{Name: name, Hash: hash}}, nil
 }
