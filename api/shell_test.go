@@ -108,7 +108,7 @@ func TestShellExec_ForwardsBearerToCoordinator(t *testing.T) {
 	t.Cleanup(func() { conn.Close() })
 	srv.coordClient = pb.NewWeftCoordinatorClient(conn)
 
-	body, _ := json.Marshal(map[string]any{"pipeline": "cat vimgym.log", "follow": false})
+	body, _ := json.Marshal(map[string]any{"pipeline": "cat vimgym.log", "follow": false, "range": "1d.."})
 	req := httptest.NewRequest("POST", "/api/shell/exec", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	w := httptest.NewRecorder()
@@ -136,26 +136,34 @@ func TestShellExec_ForwardsBearerToCoordinator(t *testing.T) {
 	}
 }
 
-// TestShellExec_ForwardsTimeRange verifies that when the client sends
-// time_start_ns / time_end_ns in the request body, those values reach
-// the coordinator's Execute RPC. Without this, the user's selected
-// range (e.g. "1d") has no effect — every query scans all shards.
-func TestShellExec_ForwardsTimeRange(t *testing.T) {
+// shellExecFixture builds the JWT-authenticated test rig used by every
+// /api/shell/exec test: a fakeCoord behind a real gRPC server wired into the
+// API server's coordClient, plus a valid bearer token. Returned fields are
+// the http handler, the fakeCoord (read .lastReq), and the auth header.
+type shellExecFixture struct {
+	t       *testing.T
+	srv     *Server
+	fake    *fakeCoord
+	bearer  string
+}
+
+func newShellExecFixture(t *testing.T, tag string) *shellExecFixture {
+	t.Helper()
 	srv, s := testServer(t)
 
-	custName := fmt.Sprintf("timerange-%d", os.Getpid())
+	custName := fmt.Sprintf("%s-%d", tag, os.Getpid())
 	cust, err := s.FindOrCreateCustomer(custName)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.SeedDevSubscription(custName)
 
-	user, err := s.CreateUser(fmt.Sprintf("timerange-%d@example.com", os.Getpid()))
+	user, err := s.CreateUser(fmt.Sprintf("%s-%d@example.com", tag, os.Getpid()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.CreateTeamMember(&store.TeamMember{
-		ID: "tm-timerange", CustomerID: cust.ID, Email: user.Email,
+		ID: "tm-" + tag, CustomerID: cust.ID, Email: user.Email,
 		UserID: &user.ID, Role: "owner", Status: "active",
 	})
 	jwt, err := auth.Generate(user, "test-secret")
@@ -168,8 +176,8 @@ func TestShellExec_ForwardsTimeRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake := &fakeCoord{
-		authSeen: make(chan string, 1),
-		lastReq:  make(chan *pb.CoordinatorExecuteRequest, 1),
+		authSeen: make(chan string, 8),
+		lastReq:  make(chan *pb.CoordinatorExecuteRequest, 8),
 	}
 	grpcSrv := grpc.NewServer()
 	pb.RegisterWeftCoordinatorServer(grpcSrv, fake)
@@ -183,30 +191,107 @@ func TestShellExec_ForwardsTimeRange(t *testing.T) {
 	t.Cleanup(func() { conn.Close() })
 	srv.coordClient = pb.NewWeftCoordinatorClient(conn)
 
-	wantStart := time.Now().Add(-24 * time.Hour)
-	wantEnd := time.Now()
+	return &shellExecFixture{t: t, srv: srv, fake: fake, bearer: "Bearer " + jwt}
+}
 
-	body, _ := json.Marshal(map[string]any{
-		"pipeline":      "cat vimgym.log",
-		"time_start_ns": wantStart.UnixNano(),
-		"time_end_ns":   wantEnd.UnixNano(),
-	})
-	req := httptest.NewRequest("POST", "/api/shell/exec", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+jwt)
+// post fires a single /api/shell/exec request with the given JSON body and
+// returns the coordinator request the fake observed.
+func (f *shellExecFixture) post(body map[string]any) *pb.CoordinatorExecuteRequest {
+	f.t.Helper()
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/api/shell/exec", bytes.NewReader(raw))
+	req.Header.Set("Authorization", f.bearer)
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
-
-	var got *pb.CoordinatorExecuteRequest
+	f.srv.Handler().ServeHTTP(w, req)
 	select {
-	case got = <-fake.lastReq:
+	case got := <-f.fake.lastReq:
+		return got
 	case <-time.After(2 * time.Second):
-		t.Fatal("coordinator Execute was never called")
+		f.t.Fatalf("coordinator Execute was never called (status=%d body=%s)", w.Code, w.Body.String())
+		return nil
 	}
+}
 
-	if got.TimeStartNs == 0 || got.TimeEndNs == 0 {
-		t.Fatalf("time range not forwarded: TimeStartNs=%d TimeEndNs=%d (both should be non-zero)",
-			got.TimeStartNs, got.TimeEndNs)
+// absDelta is helper for time-near assertions in nanos.
+func absDelta(a, b int64) int64 {
+	if a > b {
+		return a - b
 	}
+	return b - a
+}
+
+// TestShellExec_ResolvesRangeSpec verifies that the API server resolves a
+// relative range spec on every request against its own clock. This is the
+// fix for the "12-hour-old pane shows stale logs" bug: the client must NOT
+// pre-resolve the window — it ships the raw spec and the server anchors it.
+func TestShellExec_ResolvesRangeSpec(t *testing.T) {
+	f := newShellExecFixture(t, "rangespec")
+
+	beforeNs := time.Now().UnixNano()
+	got := f.post(map[string]any{
+		"pipeline": "cat vimgym.log",
+		"range":    "1d..",
+	})
+	afterNs := time.Now().UnixNano()
+
+	if got.TimeEndNs < beforeNs || got.TimeEndNs > afterNs {
+		t.Errorf("TimeEndNs not anchored to server now: got=%d window=[%d,%d]",
+			got.TimeEndNs, beforeNs, afterNs)
+	}
+	wantStartMin := beforeNs - int64(24*time.Hour)
+	wantStartMax := afterNs - int64(24*time.Hour)
+	if got.TimeStartNs < wantStartMin || got.TimeStartNs > wantStartMax {
+		t.Errorf("TimeStartNs not anchored to now-24h: got=%d wantRange=[%d,%d]",
+			got.TimeStartNs, wantStartMin, wantStartMax)
+	}
+}
+
+// TestShellExec_ResolvesPerRequest fires two requests with the same "1d.."
+// spec a measurable delay apart and asserts the resolved start advances. This
+// is the bug repro at the server boundary: today the API would scan with
+// the same TimeStartNs every time because there's no spec-driven resolution.
+func TestShellExec_ResolvesPerRequest(t *testing.T) {
+	f := newShellExecFixture(t, "perreq")
+
+	first := f.post(map[string]any{"pipeline": "cat vimgym.log", "range": "1d.."})
+	time.Sleep(30 * time.Millisecond)
+	second := f.post(map[string]any{"pipeline": "cat vimgym.log", "range": "1d.."})
+
+	if second.TimeStartNs <= first.TimeStartNs {
+		t.Errorf("range did not advance between requests: first=%d second=%d (delta=%d)",
+			first.TimeStartNs, second.TimeStartNs, second.TimeStartNs-first.TimeStartNs)
+	}
+	if second.TimeEndNs <= first.TimeEndNs {
+		t.Errorf("range end did not advance between requests: first=%d second=%d",
+			first.TimeEndNs, second.TimeEndNs)
+	}
+}
+
+// TestShellExec_RejectsMissingRange asserts the server refuses requests that
+// don't carry a Range spec. There's no implicit default: defaults are the
+// client's job (CLI/WASM each seed "1d..").
+func TestShellExec_RejectsMissingRange(t *testing.T) {
+	f := newShellExecFixture(t, "norange")
+	raw, _ := json.Marshal(map[string]any{"pipeline": "cat vimgym.log"})
+	req := httptest.NewRequest("POST", "/api/shell/exec", bytes.NewReader(raw))
+	req.Header.Set("Authorization", f.bearer)
+	w := httptest.NewRecorder()
+	f.srv.Handler().ServeHTTP(w, req)
+	if w.Code != 400 {
+		t.Errorf("expected 400, got %d (body=%s)", w.Code, w.Body.String())
+	}
+}
+
+// TestShellExec_AbsoluteRangeSpec sends a fully-qualified ISO range and
+// asserts the resolved nanos match exactly.
+func TestShellExec_AbsoluteRangeSpec(t *testing.T) {
+	f := newShellExecFixture(t, "absrange")
+	got := f.post(map[string]any{
+		"pipeline": "cat vimgym.log",
+		"range":    "2026-04-01..2026-04-12",
+	})
+	wantStart, _ := time.Parse("2006-01-02", "2026-04-01")
+	wantEnd, _ := time.Parse("2006-01-02", "2026-04-12")
 	if got.TimeStartNs != wantStart.UnixNano() {
 		t.Errorf("TimeStartNs = %d, want %d", got.TimeStartNs, wantStart.UnixNano())
 	}

@@ -6,7 +6,6 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/kevlarcon/warp/pkg/shellcore"
 	"github.com/kevlarcon/warp/pkg/syntax"
@@ -42,19 +41,25 @@ type QueryResultNotice struct {
 }
 
 // QueryFunc is the function signature the shell uses to execute queries.
-type QueryFunc func(pipeline string, start, end time.Time) (*QueryResult, error)
+// rangeSpec is the un-resolved user-typed window ("1d..", "30m..", or an ISO
+// pair). The API server resolves it on every request against server-side
+// time.Now() — clients deliberately do NOT pre-resolve, so a long-lived
+// shell pane never queries against a stale window.
+type QueryFunc func(pipeline, rangeSpec string) (*QueryResult, error)
 
 // FollowFunc is the function signature for tail -f streaming.
-type FollowFunc func(ctx context.Context, pipeline string, onRow func(Row)) error
+type FollowFunc func(ctx context.Context, pipeline, rangeSpec string, onRow func(Row)) error
 
 // Shell is the weft interactive shell.
 type Shell struct {
 	Query  QueryFunc
 	Follow FollowFunc
-	Start  time.Time
-	End    time.Time
-	Apps   []string
-	FS     shellcore.FS
+	// Range is the current un-resolved range spec. Defaults to "1d..".
+	// Updated by the `range <spec>` builtin and by --range one-shot flags.
+	// Shipped verbatim to the API server, which resolves against its clock.
+	Range string
+	Apps  []string
+	FS    shellcore.FS
 	// Chart, when non-nil, takes over both `chart <name>` and
 	// `... | chart` instead of registering chart's ASCII renderers.
 	// The browser shell uses this to open a React modal that re-uses
@@ -116,7 +121,14 @@ func (s *Shell) ConfigureCore(core *shellcore.ShellCore) {
 		customer = "weft"
 	}
 	core.SetCustomer(customer)
-	core.SetRange(s.Start, s.End)
+	// Resolve once for the PS1 duration label. The server is what actually
+	// runs the query against an up-to-date "now"; this snapshot just exists
+	// so the prompt can render `[1d]` (formatDuration(end-start)) — that
+	// duration is stable for both relative and absolute specs, so a stale
+	// snapshot is harmless for display purposes.
+	if start, end, err := shellcore.ParseRange(s.Range); err == nil {
+		core.SetRange(start, end)
+	}
 	core.SetHelp(weftHelp{tiers: defaultTierLimits{}})
 	// Subcommand grammar matches the one ExecNonInteractive passes:
 	// `wit log <path>` must preserve the keyword instead of
@@ -139,7 +151,7 @@ func (s *Shell) ConfigureCore(core *shellcore.ShellCore) {
 	// covers both bare `range` (display current) and
 	// `range <spec>` (set new) — same UX warp's inline version
 	// provided.
-	core.RegisterBuiltin("range", rangeBuiltin)
+	core.RegisterBuiltin("range", rangeBuiltinFor(s))
 	// `clipboard /bin/<name>` builds a deep-link URL for the current
 	// range and pushes it onto the user's system clipboard via OSC-52.
 	// The reader (Shell.tsx hydration) pre-fills the prompt rather
@@ -148,7 +160,7 @@ func (s *Shell) ConfigureCore(core *shellcore.ShellCore) {
 	if shareBase == "" {
 		shareBase = "https://w3ft.net"
 	}
-	core.RegisterBuiltin("clipboard", clipboardBuiltin(shareBase))
+	core.RegisterBuiltin("clipboard", clipboardBuiltin(s, shareBase))
 	// Post-save commit-message popup for /bin/<name> and
 	// /cron.d/<name>. Pre-A.4.5 this lived in shellcore as the
 	// default OnQuit branch; now installed by weft as embedder
@@ -246,53 +258,59 @@ func dashboardNavigateBuiltin(navigate func(name string)) shellcore.BuiltinFunc 
 	}
 }
 
-// rangeBuiltin handles the `range` command. With no arg it prints
-// the current window; with a single arg it parses the spec via
-// shellcore.ParseRange, calls SetRange (which dispatches
-// ActionSetRange), and prints the new window. Returning true means
-// "handled" — shellcore's dispatcher doesn't fall through to bash.
-func rangeBuiltin(c *shellcore.ShellCore, args []string) bool {
-	if len(args) == 1 {
-		// bare "range" — display current
-		start, end := c.Range()
-		c.AppendScrollback(shellcore.FormatRange(start, end))
-		return true
-	}
-	if len(args) >= 2 {
-		spec := strings.Join(args[1:], " ")
-		start, end, err := shellcore.ParseRange(spec)
-		if err != nil {
-			c.AppendScrollback(shellcore.ErrorText("range: "+err.Error()) + "\n")
+// rangeBuiltinFor returns a `range` builtin closure bound to a specific
+// Shell. The closure stores the un-resolved spec on s.Range so subsequent
+// queries ship it verbatim to the server; it also calls c.SetRange with a
+// freshly-resolved snapshot so the PS1 duration label is non-zero, and
+// dispatches ActionSetRange so the browser chip callback fires.
+func rangeBuiltinFor(s *Shell) shellcore.BuiltinFunc {
+	return func(c *shellcore.ShellCore, args []string) bool {
+		if len(args) == 1 {
+			start, end := c.Range()
+			c.AppendScrollback(shellcore.FormatRange(start, end))
 			return true
 		}
-		c.SetRange(start, end)
-		c.Dispatch(shellcore.ActionSetRange{Start: start, End: end})
-		c.AppendScrollback(shellcore.FormatRange(start, end))
-		return true
+		if len(args) >= 2 {
+			spec := strings.Join(args[1:], " ")
+			start, end, err := shellcore.ParseRange(spec)
+			if err != nil {
+				c.AppendScrollback(shellcore.ErrorText("range: "+err.Error()) + "\n")
+				return true
+			}
+			s.Range = spec
+			c.SetRange(start, end)
+			c.Dispatch(shellcore.ActionSetRange{Start: start, End: end})
+			c.AppendScrollback(shellcore.FormatRange(start, end))
+			return true
+		}
+		return false
 	}
-	return false
 }
 
 // applyRangeLine handles a bare `range` or `range <spec>` input
-// against the Shell's stored window — same surface as rangeBuiltin
+// against the Shell's stored spec — same surface as rangeBuiltinFor
 // but for the one-shot, non-interactive path that doesn't drive
 // through shellcore. Returns (handled, output, err).
 //   - handled=false: line wasn't a range command; caller continues.
-//   - handled=true, err!=nil: caller returns the err.
+//   - handled=true, err!=nil: caller returns the err (s.Range untouched).
 //   - handled=true, err==nil: caller writes output and returns.
 func (s *Shell) applyRangeLine(line string) (handled bool, output string, err error) {
 	if line == "range" {
-		return true, shellcore.FormatRangePlain(s.Start, s.End), nil
+		start, end, perr := shellcore.ParseRange(s.Range)
+		if perr != nil {
+			return true, "", perr
+		}
+		return true, shellcore.FormatRangePlain(start, end), nil
 	}
 	if !strings.HasPrefix(line, "range ") {
 		return false, "", nil
 	}
-	start, end, perr := shellcore.ParseRange(strings.TrimPrefix(line, "range "))
+	spec := strings.TrimPrefix(line, "range ")
+	start, end, perr := shellcore.ParseRange(spec)
 	if perr != nil {
 		return true, "", perr
 	}
-	s.Start = start
-	s.End = end
+	s.Range = spec
 	return true, shellcore.FormatRangePlain(start, end), nil
 }
 
@@ -349,7 +367,7 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 		weftPipeline = rewritten
 	}
 
-	result, err := s.Query(weftPipeline, s.Start, s.End)
+	result, err := s.Query(weftPipeline, s.Range)
 	if err != nil {
 		return err
 	}

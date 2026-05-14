@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"strings"
 	"testing"
-	"time"
 )
 
 // These tests codify the examples in docs/plans/cd-cwd-state-hook.md
@@ -24,7 +23,7 @@ func newCaptureShell() (*Shell, *string) {
 	var captured string
 	s := &Shell{
 		FS: testMountFS(nil),
-		Query: func(pipeline string, _, _ time.Time) (*QueryResult, error) {
+		Query: func(pipeline, _ string) (*QueryResult, error) {
 			captured = pipeline
 			return &QueryResult{Text: ""}, nil
 		},

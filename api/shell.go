@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/grpc/status"
 
+	"github.com/kevlarcon/warp/pkg/shellcore"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
@@ -50,13 +51,27 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Pipeline    string `json:"pipeline"`
-		Follow      bool   `json:"follow"`
-		TimeStartNs int64  `json:"time_start_ns"`
-		TimeEndNs   int64  `json:"time_end_ns"`
+		Pipeline string `json:"pipeline"`
+		Follow   bool   `json:"follow"`
+		// Range is an unresolved time-window spec ("1d..", "30m..10m",
+		// "2026-04-01..2026-04-12", "05-14T09:00..05-14T17:00"). The
+		// server resolves it on every request against its own clock so a
+		// long-lived shell pane never queries against a stale window. An
+		// empty Range is rejected — defaults are the client's job.
+		Range string `json:"range"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pipeline == "" {
 		http.Error(w, "pipeline required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Range == "" {
+		http.Error(w, "range required", http.StatusBadRequest)
+		return
+	}
+	start, end, err := shellcore.ParseRange(req.Range)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("range: %v", err), http.StatusBadRequest)
 		return
 	}
 
@@ -82,8 +97,8 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 		Follow:      req.Follow,
 		Customer:    session.ActiveCustomerName,
 		UserId:      session.UserID,
-		TimeStartNs: req.TimeStartNs,
-		TimeEndNs:   req.TimeEndNs,
+		TimeStartNs: start.UnixNano(),
+		TimeEndNs:   end.UnixNano(),
 	})
 	if err != nil {
 		writeSSEEvent(w, map[string]any{"type": "error", "message": err.Error()})

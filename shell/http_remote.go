@@ -108,10 +108,16 @@ func (h *HTTPCoordinator) setAuthHeaders(req *http.Request) {
 
 func (h *HTTPCoordinator) Close() error { return nil }
 
-func (h *HTTPCoordinator) Query(pipeline string, start, end time.Time) (*RemoteQueryResult, error) {
+// Query runs a one-shot pipeline against the given range spec. rangeSpec is
+// the un-resolved string the user typed ("1d..", "30m..10m",
+// "2026-04-01..2026-04-12"); the API server resolves it against its own clock
+// per request. See [[feedback_no_legacy_support]] for why we don't pass
+// pre-resolved nanos.
+func (h *HTTPCoordinator) Query(pipeline, rangeSpec string) (*RemoteQueryResult, error) {
 	body, _ := json.Marshal(map[string]any{
 		"pipeline": pipeline,
 		"follow":   false,
+		"range":    rangeSpec,
 	})
 
 	req, err := http.NewRequest("POST", h.baseURL+"/api/shell/exec", bytes.NewReader(body))
@@ -138,10 +144,11 @@ func (h *HTTPCoordinator) Query(pipeline string, start, end time.Time) (*RemoteQ
 	return parseSSEResponse(resp.Body)
 }
 
-func (h *HTTPCoordinator) Follow(ctx context.Context, pipeline string, onRow func(*pb.ResultRow)) error {
+func (h *HTTPCoordinator) Follow(ctx context.Context, pipeline, rangeSpec string, onRow func(*pb.ResultRow)) error {
 	body, _ := json.Marshal(map[string]any{
 		"pipeline": pipeline,
 		"follow":   true,
+		"range":    rangeSpec,
 	})
 
 	req, err := http.NewRequestWithContext(ctx, "POST", h.baseURL+"/api/shell/exec", bytes.NewReader(body))

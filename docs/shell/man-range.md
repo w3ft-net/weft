@@ -27,20 +27,38 @@ With no arguments, range displays the current query time window.
 
 With a `<start>..<end>` argument, range sets the time window used
 by all subsequent queries. If `<end>` is omitted, it defaults to
-now.
+now. Relative specs are re-resolved against the server's clock on
+every query — `range 1d..` always means "the last 24 hours", not
+"the 24 hours ending when you typed the command".
 
 Each side of the range can be:
 
-### ISO TIMESTAMP (any resolution)
+### ABSOLUTE TIMESTAMP
+
+A calendar date or instant. Missing components default to the
+start of the period: an omitted time means `00:00:00`, an omitted
+day means the 1st, an omitted month means January. An omitted
+year defaults to the *current* year — there is no roll-forward,
+so `01-15` in March means current-year January, not next.
+Server-local timezone unless the literal carries one.
 
 ```
-2026-04-12T10:30:00Z    full RFC3339
+2026-04-12T10:30:00Z    full RFC3339 with timezone
+2026-04-12T10:30:00     second resolution
 2026-04-12T10:30        minute resolution
+2026-04-12T10           hour resolution
 2026-04-12              day resolution
 2026-04                 month resolution
+2026                    year resolution
+04-12T10:30             current-year shorthand with time
+04-12                   current-year shorthand, midnight
 ```
 
 ### RELATIVE DURATION
+
+Distance back from "now". Re-anchored against the server's clock
+on every query, so a long-lived shell pane never queries against
+a stale window.
 
 ```
 30m                     30 minutes ago
@@ -66,8 +84,12 @@ range 7d..              last 7 days
 range 1h..10m           from 1 hour ago to 10 minutes ago
 range yesterday..today  all of yesterday
 range yesterday..       yesterday to now
+range 04-01..05-14      current-year date span (Apr 1 → May 14)
+range 05-14..           from May 14 midnight to now
+range 05-14T09..05-14T17
+                        business hours on May 14 (current year)
 range 2026-04-01..2026-04-12
-                        specific date range
+                        explicit-year date range
 range 2026-04-12T10:00..2026-04-12T11:00
                         specific hour
 ```

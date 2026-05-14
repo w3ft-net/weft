@@ -164,8 +164,11 @@ func (r *runner) handleAction(a shellcore.Action) {
 			r.shell.FS.WriteFile(a.Path, []byte(a.Content))
 		}
 	case shellcore.ActionSetRange:
-		r.shell.Start = a.Start
-		r.shell.End = a.End
+		// rangeBuiltinFor already wrote the new spec onto r.shell.Range
+		// via its closure; nothing to do here. The CLI doesn't need to
+		// mirror the resolved absolutes anywhere else — they're
+		// re-resolved server-side on each query.
+		_ = a
 	case shellcore.ActionQuit:
 		// Handled by checking core.Quitting() in the read loop.
 	}
@@ -175,7 +178,7 @@ func (r *runner) runQuery(pipeline string) {
 	// The shell core already stripped `| less` before dispatching this
 	// pipeline — whatever comes back goes straight to the core, which
 	// routes into ModeLess when the user typed the pager suffix.
-	result, err := r.shell.Query(pipeline, r.shell.Start, r.shell.End)
+	result, err := r.shell.Query(pipeline, r.shell.Range)
 
 	ev := shellcore.QueryResultEvent{Err: err}
 	if err == nil {
@@ -229,7 +232,7 @@ func (r *runner) runFollow(pipeline string) {
 	r.followCancel = cancel
 
 	if r.shell.Follow != nil {
-		r.shell.Follow(ctx, pipeline, func(row shell.Row) {
+		r.shell.Follow(ctx, pipeline, r.shell.Range, func(row shell.Row) {
 			r.core.HandleEvent(shellcore.FollowRowEvent{Raw: row.Raw})
 		})
 	}

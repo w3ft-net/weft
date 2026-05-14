@@ -9,7 +9,7 @@ import {
   type WasmCallbacks,
   type ShellBridge as BaseShellBridge,
 } from '@warp/shellcore-wasm'
-import { execQuery, execFollow, cancelQuery, notifyBuiltinExecuted } from './network'
+import { execQuery, execFollow, cancelQuery, notifyBuiltinExecuted, setCurrentRangeSpec } from './network'
 
 export type ShellBridge = BaseShellBridge
 
@@ -48,8 +48,11 @@ export async function initShellWasm(
         earlyWrites.push(data)
       }
     },
-    startQuery: (pipeline: string, timeStartNs?: number, timeEndNs?: number) => { execQuery(pipeline, timeStartNs, timeEndNs) },
-    startFollow: (pipeline: string, timeStartNs?: number, timeEndNs?: number) => { execFollow(pipeline, timeStartNs, timeEndNs) },
+    // warp's bridge still passes timeStartNs/timeEndNs as 2nd/3rd args
+    // for vimgym compat; we ignore them. The server resolves the range
+    // spec stored via setCurrentRangeSpec (see onRangeChange below).
+    startQuery: (pipeline: string) => { execQuery(pipeline) },
+    startFollow: (pipeline: string) => { execFollow(pipeline) },
     cancelQuery: () => cancelQuery(),
     notifyQuit: () => {},
 
@@ -66,8 +69,13 @@ export async function initShellWasm(
     getCustomer: () => identity?.customer ?? '',
     getApps: () => apps,
     fsGetWatchResults: (name: string, limit: number) => fsGetWatchResults(name, limit),
-    onRangeChange: (rangeText: string) => {
-      if (onRangeChange) onRangeChange(rangeText)
+    // The Go-side wasm bridge calls onRangeChange(rawSpec, label):
+    //   rawSpec  — un-resolved spec ("1d..", "30m..", ISO pair, etc).
+    //              Stored for the network layer to ship on every fetch.
+    //   label    — formatted display text for the chip.
+    onRangeChange: (rawSpec: string, label?: string) => {
+      setCurrentRangeSpec(rawSpec)
+      if (onRangeChange) onRangeChange(label ?? rawSpec)
     },
     // dashboardNavigate is invoked by the `dashboard <name>` builtin
     // inside cmd/wasm. Bare `dashboard` passes "" — we treat that as

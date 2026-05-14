@@ -3,7 +3,6 @@ package shell
 import (
 	"bytes"
 	"testing"
-	"time"
 )
 
 // TestExecNonInteractiveWitLogPreservesSubcommand is the round-trip
@@ -16,7 +15,8 @@ import (
 func TestExecNonInteractiveWitLogPreservesSubcommand(t *testing.T) {
 	var captured string
 	s := &Shell{
-		Query: func(pipeline string, start, end time.Time) (*QueryResult, error) {
+		Range: "1d..",
+		Query: func(pipeline, _ string) (*QueryResult, error) {
 			captured = pipeline
 			return &QueryResult{Text: ""}, nil
 		},

@@ -29,6 +29,21 @@ function authHeaders(): Record<string, string> {
 
 let abortController: AbortController | null = null
 
+// currentRangeSpec holds the un-resolved range spec ("1d..", "30m..10m",
+// "2026-04-01..2026-04-12"). The Go-side `range` builtin pushes updates via
+// the onRangeChange JS callback (see bridge.ts → setCurrentRangeSpec). The
+// server resolves it on every request, so even a tab left open for hours
+// always queries against a fresh window.
+let currentRangeSpec = '1d..'
+
+export function setCurrentRangeSpec(spec: string) {
+  if (spec) currentRangeSpec = spec
+}
+
+export function getCurrentRangeSpec(): string {
+  return currentRangeSpec
+}
+
 export function notifyBuiltinExecuted(pipeline: string) {
   fetch(`${API_BASE}/api/shell/builtin`, {
     method: 'POST',
@@ -50,7 +65,7 @@ export function cancelQuery() {
   abortController = null
 }
 
-export async function execQuery(pipeline: string, timeStartNs?: number, timeEndNs?: number) {
+export async function execQuery(pipeline: string) {
   cancelQuery()
   abortController = new AbortController()
   let timedOut = false
@@ -64,7 +79,7 @@ export async function execQuery(pipeline: string, timeStartNs?: number, timeEndN
     const res = await fetch(`${API_BASE}/api/shell/exec`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ pipeline, follow: false, time_start_ns: timeStartNs ?? 0, time_end_ns: timeEndNs ?? 0 }),
+      body: JSON.stringify({ pipeline, follow: false, range: currentRangeSpec }),
       signal: abortController.signal,
     })
     clearTimeout(timeout)
@@ -146,7 +161,7 @@ export async function execQuery(pipeline: string, timeStartNs?: number, timeEndN
   }
 }
 
-export async function execFollow(pipeline: string, timeStartNs?: number, timeEndNs?: number) {
+export async function execFollow(pipeline: string) {
   cancelQuery()
   abortController = new AbortController()
 
@@ -154,7 +169,7 @@ export async function execFollow(pipeline: string, timeStartNs?: number, timeEnd
     const res = await fetch(`${API_BASE}/api/shell/exec`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ pipeline, follow: true, time_start_ns: timeStartNs ?? 0, time_end_ns: timeEndNs ?? 0 }),
+      body: JSON.stringify({ pipeline, follow: true, range: currentRangeSpec }),
       signal: abortController.signal,
     })
 

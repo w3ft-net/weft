@@ -43,12 +43,10 @@ func runMCP() {
 	mcpCfg := mcp.Config{
 		Run: func(pipeline string, rangeSpec string, w io.Writer) error {
 			if rangeSpec != "" {
-				start, end, err := shellcore.ParseRange(rangeSpec)
-				if err != nil {
+				if _, _, err := shellcore.ParseRange(rangeSpec); err != nil {
 					return fmt.Errorf("invalid range %q: %w", rangeSpec, err)
 				}
-				s.Start = start
-				s.End = end
+				s.Range = rangeSpec
 			}
 			return s.ExecNonInteractive(pipeline, w)
 		},

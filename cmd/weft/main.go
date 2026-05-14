@@ -328,13 +328,13 @@ func runOneShot(pipeline, rangeSpec string) {
 	defer cleanup()
 
 	if rangeSpec != "" {
-		start, end, err := shellcore.ParseRange(rangeSpec)
-		if err != nil {
+		// Validate locally so a typo errors out before we round-trip to
+		// the server. The server is the canonical resolver.
+		if _, _, err := shellcore.ParseRange(rangeSpec); err != nil {
 			fmt.Fprintf(os.Stderr, "invalid --range: %v\n", err)
 			os.Exit(1)
 		}
-		s.Start = start
-		s.End = end
+		s.Range = rangeSpec
 	}
 
 	if err := s.ExecNonInteractive(pipeline, os.Stdout); err != nil {
@@ -520,8 +520,8 @@ func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 	}
 
 	s := &shell.Shell{
-		Query: func(pipeline string, start, end time.Time) (*shell.QueryResult, error) {
-			r, err := remote.Query(pipeline, start, end)
+		Query: func(pipeline, rangeSpec string) (*shell.QueryResult, error) {
+			r, err := remote.Query(pipeline, rangeSpec)
 			if err != nil {
 				return nil, err
 			}
@@ -540,13 +540,12 @@ func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 			}
 			return &shell.QueryResult{Rows: rows, Text: r.Text, Notices: notices}, nil
 		},
-		Follow: func(ctx context.Context, pipeline string, onRow func(shell.Row)) error {
-			return remote.Follow(ctx, pipeline, func(row *pb.ResultRow) {
+		Follow: func(ctx context.Context, pipeline, rangeSpec string, onRow func(shell.Row)) error {
+			return remote.Follow(ctx, pipeline, rangeSpec, func(row *pb.ResultRow) {
 				onRow(shell.Row{Raw: row.Raw})
 			})
 		},
-		Start: time.Now().Add(-24 * time.Hour),
-		End:   time.Now(),
+		Range: "1d..",
 		Apps:  apps,
 		FS:    shell.NewProxyFS(endpoint, cfg.Token, effectiveOrg(cfg)),
 	}

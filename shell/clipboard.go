@@ -21,7 +21,7 @@ import (
 // manipulation, which keeps it network-free and identical between CLI
 // and web shells. The reader (Shell.tsx) resolves the script at HEAD
 // when the link is opened.
-func clipboardBuiltin(shareBase string) shellcore.BuiltinFunc {
+func clipboardBuiltin(s *Shell, shareBase string) shellcore.BuiltinFunc {
 	return func(c *shellcore.ShellCore, args []string) bool {
 		if len(args) == 0 || args[0] != "clipboard" {
 			return false
@@ -54,7 +54,16 @@ func clipboardBuiltin(shareBase string) shellcore.BuiltinFunc {
 		}
 
 		if rangeSpec == "" {
-			start, end := c.Range()
+			// Resolve s.Range fresh at copy time so the deep link pins a
+			// concrete window (the recipient's clock is irrelevant — they
+			// should see exactly what the sender saw). c.Range()'s
+			// snapshot was set at last `range` change, which may be hours
+			// stale; ParseRange anchors to now.
+			start, end, err := shellcore.ParseRange(s.Range)
+			if err != nil {
+				c.AppendScrollback(shellcore.ErrorText("clipboard: invalid current range: "+err.Error()) + "\n")
+				return true
+			}
 			rangeSpec = start.UTC().Format("2006-01-02T15:04:05Z") + ".." + end.UTC().Format("2006-01-02T15:04:05Z")
 		}
 

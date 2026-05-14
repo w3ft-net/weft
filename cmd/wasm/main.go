@@ -15,14 +15,20 @@ package main
 
 import (
 	"syscall/js"
-	"time"
 
 	"github.com/kevlarcon/warp/pkg/shellcore"
 	"github.com/kevlarcon/warp/pkg/shellcore/wasm"
 	"github.com/kevlarcon/weft/shell"
 )
 
-var jsCallbacks js.Value
+var (
+	jsCallbacks js.Value
+	// weftShell is set in wasmInit and read by handleWeftAction so the
+	// ActionSetRange path can read the latest spec (mutated by
+	// rangeBuiltinFor before dispatch). WASM is single-threaded so no
+	// guarding is needed.
+	weftShell *shell.Shell
+)
 
 func main() {
 	js.Global().Set("wasmInit", js.FuncOf(wasmInit))
@@ -61,14 +67,17 @@ func wasmInit(_ js.Value, args []js.Value) any {
 	mfs.Register(wasm.NewJSMount("/log", shellcore.MountCaps{Kind: shellcore.MountQuery, Writable: false}, jsCallbacks, ""))
 	mfs.Register(wasm.NewJSMount("/tmp", shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true}, jsCallbacks, ""))
 
-	// Default time range: last 24h.
-	now := time.Now()
+	// Default time range: last 24h. Resolution happens server-side on each
+	// request — the client just ships the spec verbatim, so a tab left
+	// open all day never queries against a stale window.
 	s := &shell.Shell{
 		Apps:     apps,
 		FS:       mfs,
 		Customer: readCustomer(jsCallbacks),
-		Start:    now.Add(-24 * time.Hour),
-		End:      now,
+		Range:    "1d..",
+		// Browser shell has no local Query/Follow: the JS network layer
+		// (frontend/src/wasm/network.ts) owns those fetches and is driven
+		// by warp's startQuery/startFollow JS callbacks.
 		// Browser `dashboard <name>` routes to React-router navigation;
 		// no in-terminal view. Bare `dashboard` sends "" so the JS side
 		// can decide between the index page or a usage hint.
@@ -98,12 +107,17 @@ func wasmInit(_ js.Value, args []js.Value) any {
 			jsCallbacks.Call("chartOpen", spec)
 		},
 	}
+	weftShell = s
 	s.ConfigureCore(core)
 
-	// Mirror the initial range to JS — the CLI's tty prompt shows
-	// the window inline; the browser displays it in a separate
-	// header chip via the onRangeChange callback.
-	jsCallbacks.Call("onRangeChange", shellcore.FormatRangePlain(s.Start, s.End))
+	// Mirror the initial range to JS — the CLI's tty prompt shows the
+	// window inline; the browser displays it in a separate header chip via
+	// the onRangeChange callback. We pass both the raw spec (which the JS
+	// network layer reuses on every fetch) and the formatted label for the
+	// chip. Format with a fresh ParseRange snapshot — the duration label
+	// is stable across the lifetime of a relative spec.
+	rsStart, rsEnd, _ := shellcore.ParseRange(s.Range)
+	jsCallbacks.Call("onRangeChange", s.Range, shellcore.FormatRangePlain(rsStart, rsEnd))
 
 	core.Redraw()
 	return nil
@@ -140,7 +154,10 @@ func readCustomer(cb js.Value) string {
 func handleWeftAction(a shellcore.Action) bool {
 	switch a := a.(type) {
 	case shellcore.ActionSetRange:
-		jsCallbacks.Call("onRangeChange", shellcore.FormatRangePlain(a.Start, a.End))
+		// rangeBuiltinFor already mutated weftShell.Range to the new
+		// spec; pass it to JS alongside the formatted label so the
+		// network layer ships the latest spec on subsequent fetches.
+		jsCallbacks.Call("onRangeChange", weftShell.Range, shellcore.FormatRangePlain(a.Start, a.End))
 		return true
 	case shellcore.ActionBuiltinExecuted:
 		if fn := jsCallbacks.Get("builtinExecuted"); !fn.IsUndefined() && !fn.IsNull() {
