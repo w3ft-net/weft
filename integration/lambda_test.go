@@ -95,7 +95,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 
 	// QueryToSink.
 	sink := &testSink{}
-	cs.QueryToSink("SELECT raw, ts FROM logs WHERE customer = 'kevlar'", sink)
+	cs.QueryToSink("SELECT raw, ts FROM logs WHERE customer = 'kevlar'", nil, sink)
 	if !sink.sentinelReceived {
 		t.Error("expected sentinel")
 	}

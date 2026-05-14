@@ -16,13 +16,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kevlarcon/warp/pkg/shellcore"
 	"github.com/kevlarcon/weft/cmd/weft/runner"
 	"github.com/kevlarcon/weft/cmd/weft/setup"
 	"github.com/kevlarcon/weft/ingest"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/shell"
-	"github.com/kevlarcon/warp/pkg/shellcore"
 )
 
 // orgOverride is the active org chosen via --org / WEFT_ORG, applied
@@ -141,7 +141,7 @@ func effectiveOrg(cfg *shell.Config) string {
 }
 
 func printUsage() {
-	fmt.Println("weft — log analysis for operators")
+	fmt.Println("weft — log analysis for your Unix heart")
 	fmt.Println()
 	fmt.Println("Usage: weft <command> [options]")
 	fmt.Println()
@@ -545,10 +545,10 @@ func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 				onRow(shell.Row{Raw: row.Raw})
 			})
 		},
-		Start:  time.Now().Add(-24 * time.Hour),
-		End:    time.Now(),
-		Apps:   apps,
-		FS:     shell.NewProxyFS(endpoint, cfg.Token, effectiveOrg(cfg)),
+		Start: time.Now().Add(-24 * time.Hour),
+		End:   time.Now(),
+		Apps:  apps,
+		FS:    shell.NewProxyFS(endpoint, cfg.Token, effectiveOrg(cfg)),
 	}
 	return s, func() {}, nil
 }
