@@ -746,7 +746,8 @@ func (s *Server) SaveWatch(ctx context.Context, req *pb.SaveWatchRequest) (*pb.S
 	var loweredJSON []byte
 	if cust, err := s.Store.GetCustomerByID(custID); err == nil && cust != nil {
 		resolver := storeBinResolver{store: s.Store, customerID: custID}
-		loweredJSON = planner.LowerForStorage(req.Pipeline, cust.Name, resolver)
+		tier := string(s.Store.TierForCustomer(custID))
+		loweredJSON = planner.LowerForStorage(req.Pipeline, cust.Name, tier, resolver)
 	}
 	if err := s.Store.SaveCronWatch(custID, callerUserID(ctx), req.Name, req.Schedule, req.Pipeline, loweredJSON); err != nil {
 		return nil, err

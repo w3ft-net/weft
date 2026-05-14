@@ -30,7 +30,7 @@ func TestLower_RoundTrip(t *testing.T) {
 
 	// Lower at save time (customer matters for the row-level
 	// boundary; time bounds are sentinels and don't matter here).
-	lp, err := Lower(pipeline, customer, noResolver{})
+	lp, err := Lower(pipeline, customer, "bolt", noResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestLower_RoundTrip(t *testing.T) {
 // windows.
 func TestLower_HydrateUsesFireTimeBounds(t *testing.T) {
 	pipeline := `cat /log/loom/api/prod.log | grep ERROR`
-	lp, err := Lower(pipeline, "kevlar", noResolver{})
+	lp, err := Lower(pipeline, "kevlar", "bolt", noResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestLower_HydrateUsesFireTimeBounds(t *testing.T) {
 // must carry the current PlannerVersion. Consumers compare against
 // PlannerVersion to detect stale plans after a planner-breaking change.
 func TestLower_PlannerVersion(t *testing.T) {
-	lp, err := Lower(`cat /log/foo.log`, "kevlar", noResolver{})
+	lp, err := Lower(`cat /log/foo.log`, "kevlar", "bolt", noResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestLower_PlannerVersion(t *testing.T) {
 // for watches — but the test pins it as a property so a future Lower
 // caller doesn't quietly add a customer="" path.)
 func TestLower_NoArgSourcesWhenCustomerEmpty(t *testing.T) {
-	lp, err := Lower(`cat /log/foo.log`, "", noResolver{})
+	lp, err := Lower(`cat /log/foo.log`, "", "bolt", noResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}

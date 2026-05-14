@@ -1541,7 +1541,7 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 	// back to inline Plan(). This is the canonical save-time entry
 	// point; the gRPC and shell save paths use the same helper.
 	resolver := storeBinResolver{store: s.store, customerID: custID}
-	loweredJSON := planner.LowerForStorage(req.Pipeline, session.ActiveCustomerName, resolver)
+	loweredJSON := planner.LowerForStorage(req.Pipeline, session.ActiveCustomerName, string(tier), resolver)
 
 	if err := s.store.SaveCronWatch(custID, session.UserID, name, req.Schedule, req.Pipeline, loweredJSON); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)

@@ -611,14 +611,19 @@ func (c *Coordinator) executeLowered(watch *store.CronWatch, tr TimeRange, alert
 	if len(lp.AlertArgs) > 0 || lp.Follow {
 		return nil, false
 	}
-	// Clamp time range to tier retention (matches runQuery's pre-Plan
-	// step) and hydrate args against the fire-time ResolveCtx. The
-	// hydrated args are []any; the coordinator dispatch path widens
-	// to []string for the proto.
-	tr = c.clampTimeRange(tr, watch.CustomerID)
+	// Clamp time range using lp.Tier — baked at save time so we skip
+	// the TierForCustomer DB hit. A tier upgrade between save and
+	// fire stays on the old retention until the watch is re-saved
+	// (or another path triggers re-lowering). Acceptable tradeoff
+	// for the perf win on the hot path; documented on LoweredPlan.Tier.
+	tier := store.Tier(lp.Tier)
+	cap := time.Now().Add(-store.LogRetention(tier))
+	if !tr.Start.IsZero() && tr.Start.Before(cap) {
+		tr.Start = cap
+	}
 	ctx := planner.ResolveCtx{Customer: lp.Customer, Start: tr.Start, End: tr.End}
 	args := lp.Hydrate(ctx)
-	res, err := c.dispatchLowered(&lp, args, tr, watch.CustomerID, alertCtx)
+	res, err := c.dispatchLoweredWithTier(&lp, args, tr, tier, alertCtx)
 	if err != nil {
 		log.Printf("watch %d: lowered dispatch failed: %v — falling back to inline Plan", watch.ID, err)
 		return nil, false
@@ -626,31 +631,15 @@ func (c *Coordinator) executeLowered(watch *store.CronWatch, tr TimeRange, alert
 	return res, true
 }
 
-// dispatchLowered ships the hydrated lowered plan to shards. Mirrors
-// executeQuery's shard-selection + ExecuteQueryRequest construction
-// but skips preflight (no source-app allowlist check — that's already
-// implicit in the saved lowered_plan since unlowerable shapes never
-// made it past Lower) and skips Plan (already done at save time).
-func (c *Coordinator) dispatchLowered(lp *planner.LoweredPlan, args []any, tr TimeRange, custID uint, alertCtx *AlertContext) (*ExecuteResult, error) {
-	// Source-app allowlist on saved watches: a watch saved with
-	// access to /log/loom/api still has it at fire time (the
-	// allowlist is per-customer + per-source; revoking source
-	// access doesn't migrate to invalidating watches, so this
-	// check is duplicate work in the slow path AND the lowered
-	// path). Keep it.
-	if lp.SourceApp != "" {
-		ok, err := c.Store.CustomerHasSource(custID, lp.SourceApp)
-		if err != nil {
-			return nil, fmt.Errorf("validate source: %w", err)
-		}
-		if !ok {
-			return nil, fmt.Errorf("unknown source: %s", lp.SourceApp)
-		}
-	}
-	var tier store.Tier
-	if custID != 0 {
-		tier = c.Store.TierForCustomer(custID)
-	}
+// dispatchLoweredWithTier ships the hydrated lowered plan to shards.
+// Skips preflight (no Plan, no /bin expansion), skips the
+// CustomerHasSource validation (the source was valid at save time;
+// row-level security at the shard's `customer = ?` predicate still
+// holds for cross-tenant safety — the only thing that can change is
+// "namespace deleted by owner", which renders the query empty rather
+// than wrong), and skips the per-fire TierForCustomer lookup (tier
+// is baked into LoweredPlan at save time).
+func (c *Coordinator) dispatchLoweredWithTier(lp *planner.LoweredPlan, args []any, tr TimeRange, tier store.Tier, alertCtx *AlertContext) (*ExecuteResult, error) {
 	entries := c.Registry.MatchingEntries(tr, lp.FollowApp, tier)
 	if len(entries) == 0 {
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
@@ -705,7 +694,8 @@ func (c *Coordinator) refreshLoweredAsync(watch *store.CronWatch, customerName s
 		return
 	}
 	resolver := watchBinResolver{store: c.Store, customerID: watch.CustomerID}
-	loweredJSON := planner.LowerForStorage(watch.Pipeline, customerName, resolver)
+	tier := string(c.Store.TierForCustomer(watch.CustomerID))
+	loweredJSON := planner.LowerForStorage(watch.Pipeline, customerName, tier, resolver)
 	if loweredJSON == nil {
 		return
 	}

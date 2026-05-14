@@ -25,7 +25,7 @@ func TestExecuteForWatch_LoweredHotPath(t *testing.T) {
 	pipeline := `cat /log/vimgym.log | grep ERROR`
 
 	// Compile the watch the same way the save handlers do.
-	lp, err := planner.Lower(pipeline, "kevlar", noBinResolver{})
+	lp, err := planner.Lower(pipeline, "kevlar", "bolt", noBinResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestExecuteForWatch_LoweredVersionMismatch(t *testing.T) {
 	cust, _ := c.Store.GetCustomerByName("kevlar")
 
 	pipeline := `cat /log/vimgym.log | grep ERROR`
-	lp, err := planner.Lower(pipeline, "kevlar", noBinResolver{})
+	lp, err := planner.Lower(pipeline, "kevlar", "bolt", noBinResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
