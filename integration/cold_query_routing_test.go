@@ -192,8 +192,9 @@ func startColdShardHTTP(t *testing.T, s3cfg *shard.S3Config) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			SQL         string `json:"sql"`
-			ParquetPath string `json:"parquet_path"`
+			SQL         string   `json:"sql"`
+			ParquetPath string   `json:"parquet_path"`
+			Args        []string `json:"args,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), 400)
@@ -212,7 +213,11 @@ func startColdShardHTTP(t *testing.T, s3cfg *shard.S3Config) *httptest.Server {
 			}
 		}
 		query := strings.Replace(req.SQL, "FROM logs", fmt.Sprintf("FROM read_parquet('%s')", req.ParquetPath), 1)
-		rows, err := db.Query(query)
+		args := make([]any, len(req.Args))
+		for i, a := range req.Args {
+			args[i] = a
+		}
+		rows, err := db.Query(query, args...)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
