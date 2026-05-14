@@ -282,6 +282,66 @@ func TestShellExec_RejectsMissingRange(t *testing.T) {
 	}
 }
 
+// TestShellExec_RejectsOldClient pins the version-gate: a request whose
+// X-Weft-Client declares a version below MIN_WEFT_CLI_VERSION must be
+// answered with HTTP 426 (Upgrade Required) before reaching the
+// coordinator. Without this we ship broken old binaries to a confused user
+// instead of a clear "weft update" prompt.
+func TestShellExec_RejectsOldClient(t *testing.T) {
+	t.Setenv("MIN_WEFT_CLI_VERSION", "0.3.0")
+	f := newShellExecFixture(t, "oldclient")
+
+	body, _ := json.Marshal(map[string]any{
+		"pipeline": "cat vimgym.log",
+		"range":    "1d..",
+	})
+	req := httptest.NewRequest("POST", "/api/shell/exec", bytes.NewReader(body))
+	req.Header.Set("Authorization", f.bearer)
+	req.Header.Set("X-Weft-Client", "weft/0.0.1")
+	w := httptest.NewRecorder()
+	f.srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != 426 {
+		t.Fatalf("expected 426, got %d (body=%s)", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("body is not JSON: %v body=%s", err, w.Body.String())
+	}
+	if resp["error"] != "client too old" {
+		t.Errorf("body.error = %v, want 'client too old'", resp["error"])
+	}
+	if resp["required"] != "0.3.0" {
+		t.Errorf("body.required = %v, want 0.3.0", resp["required"])
+	}
+}
+
+// TestShellExec_AcceptsCurrentClient verifies the gate doesn't false-fire
+// when the client is at or above the minimum.
+func TestShellExec_AcceptsCurrentClient(t *testing.T) {
+	t.Setenv("MIN_WEFT_CLI_VERSION", "0.3.0")
+	f := newShellExecFixture(t, "curclient")
+
+	body, _ := json.Marshal(map[string]any{
+		"pipeline": "cat vimgym.log",
+		"range":    "1d..",
+	})
+	req := httptest.NewRequest("POST", "/api/shell/exec", bytes.NewReader(body))
+	req.Header.Set("Authorization", f.bearer)
+	req.Header.Set("X-Weft-Client", "weft/0.3.0")
+	w := httptest.NewRecorder()
+	f.srv.Handler().ServeHTTP(w, req)
+
+	if w.Code == 426 {
+		t.Fatalf("current client got 426: %s", w.Body.String())
+	}
+	select {
+	case <-f.fake.lastReq:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("coordinator never called for current client (status=%d body=%s)", w.Code, w.Body.String())
+	}
+}
+
 // TestShellExec_AbsoluteRangeSpec sends a fully-qualified ISO range and
 // asserts the resolved nanos match exactly.
 func TestShellExec_AbsoluteRangeSpec(t *testing.T) {

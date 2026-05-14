@@ -34,6 +34,13 @@ type AgentToken struct {
 	MetricsEnabled    bool      `gorm:"not null;default:false"`
 	MetricsInterval   string    // e.g., "30s"
 	MetricsCollectors string    // JSON array, e.g., `["cpu","memory","disk"]`
+	// LastSeenVersion is the weft-client identifier the coordinator
+	// read off the most recent gRPC connection from this token. Used
+	// to decide when an old wire-shape parser branch can be deleted
+	// (no traffic from agents below version X in N days). Empty until
+	// the agent reconnects after migration 048.
+	LastSeenVersion string     `gorm:"column:last_seen_version;not null;default:''"`
+	LastSeenAt      *time.Time `gorm:"column:last_seen_at"`
 }
 
 // hashAgentToken returns the sha256 hex digest used for lookup in
@@ -96,6 +103,7 @@ func (s *Store) AgentNamespaceNames() ([]string, error) {
 
 // AgentAuthResult holds the result of agent token validation.
 type AgentAuthResult struct {
+	TokenID   uint // primary key of the agent_tokens row; used by RecordAgentVersion
 	Customer  *Customer
 	Namespace string // namespace name from the token
 	Env       string // optional env dimension to stamp on every row from this token
@@ -117,6 +125,7 @@ func (s *Store) ValidateAgentToken(token string) (*AgentAuthResult, error) {
 		return nil, result.Error
 	}
 	return &AgentAuthResult{
+		TokenID:   t.ID,
 		Customer:  &t.Customer,
 		Namespace: t.Namespace.Name,
 		Env:       t.Env,
@@ -243,4 +252,67 @@ func generateToken() (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("wft_%x", b), nil
+}
+
+// RecordAgentVersion stamps the most-recent weft-client identifier and
+// timestamp on a token row. Called once per IngestStream open. Fire and
+// forget: a write failure here shouldn't kill the customer's ingest, so
+// callers log the error and continue.
+func (s *Store) RecordAgentVersion(tokenID uint, version string) error {
+	now := time.Now()
+	return s.db.Model(&AgentToken{}).
+		Where("id = ?", tokenID).
+		Updates(map[string]any{
+			"last_seen_version": version,
+			"last_seen_at":      &now,
+		}).Error
+}
+
+// AgentVersionSighting summarises one token's recent connection state.
+// Returned by AgentsAtOrBelow for the operator-facing /api/admin/agents
+// query.
+type AgentVersionSighting struct {
+	TokenID         uint
+	Prefix          string
+	CustomerID      uint
+	NamespaceID     uint
+	LastSeenVersion string
+	LastSeenAt      *time.Time
+}
+
+// AgentsAtOrBelow returns every non-revoked agent token whose
+// last_seen_version is non-empty and lexicographically <= the given
+// version, with last_seen_at within the lookback window. Used to answer
+// "is anyone still on weftd 0.14.x" so the operator can safely delete the
+// 0.14-shape parser branch on the server.
+//
+// The lexicographic compare is sufficient for our use because we always
+// query in the same major series (e.g. "0.14.99" is always > "0.14.0"
+// while staying < "0.15.0"). Callers that need cross-major comparison
+// should split into per-major queries.
+func (s *Store) AgentsAtOrBelow(version string, lookback time.Duration) ([]AgentVersionSighting, error) {
+	cutoff := time.Now().Add(-lookback)
+	var rows []AgentToken
+	err := s.db.
+		Where("revoked = ?", false).
+		Where("last_seen_version != ''").
+		Where("last_seen_version <= ?", version).
+		Where("last_seen_at >= ?", cutoff).
+		Order("last_seen_version, last_seen_at DESC").
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AgentVersionSighting, len(rows))
+	for i, r := range rows {
+		out[i] = AgentVersionSighting{
+			TokenID:         r.ID,
+			Prefix:          r.Prefix,
+			CustomerID:      r.CustomerID,
+			NamespaceID:     r.NamespaceID,
+			LastSeenVersion: r.LastSeenVersion,
+			LastSeenAt:      r.LastSeenAt,
+		}
+	}
+	return out, nil
 }

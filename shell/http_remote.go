@@ -83,6 +83,7 @@ type HTTPCoordinator struct {
 	baseURL      string // e.g., "https://api.w3ft.net"
 	token        string // JWT for Authorization header
 	org          string // X-Active-Org for the user's currently-selected org
+	clientID     string // X-Weft-Client; set by cmd/weft via SetClientID
 	client       *http.Client
 	streamClient *http.Client
 }
@@ -97,12 +98,24 @@ func NewHTTPCoordinator(baseURL, token, org string) *HTTPCoordinator {
 	}
 }
 
-// setAuthHeaders applies Authorization + X-Active-Org to every outgoing
-// request. Centralized so a new endpoint can't forget the org header.
+// SetClientID sets the X-Weft-Client header value. cmd/weft populates this
+// from the build-time ClientID() so the API server can read the binary
+// version on every request. Leaving it empty means the request omits the
+// header (used by unit tests that don't care about the gate).
+func (h *HTTPCoordinator) SetClientID(id string) {
+	h.clientID = id
+}
+
+// setAuthHeaders applies Authorization + X-Active-Org + X-Weft-Client to
+// every outgoing request. Centralized so a new endpoint can't forget any
+// of them.
 func (h *HTTPCoordinator) setAuthHeaders(req *http.Request) {
 	req.Header.Set("Authorization", "Bearer "+h.token)
 	if h.org != "" {
 		req.Header.Set("X-Active-Org", h.org)
+	}
+	if h.clientID != "" {
+		req.Header.Set("X-Weft-Client", h.clientID)
 	}
 }
 
@@ -136,12 +149,38 @@ func (h *HTTPCoordinator) Query(pipeline, rangeSpec string) (*RemoteQueryResult,
 	if resp.StatusCode == http.StatusUnauthorized {
 		return nil, fmt.Errorf("unauthorized — run `weft login` or check WEFT_TOKEN")
 	}
+	if resp.StatusCode == http.StatusUpgradeRequired {
+		return nil, formatUpgradeRequired(resp.Body)
+	}
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 	}
 
 	return parseSSEResponse(resp.Body)
+}
+
+// formatUpgradeRequired turns the server's 426 JSON body into a
+// human-friendly error. The server response shape is
+// {"error":"client too old","running":"…","required":"…","upgrade":"…"} —
+// surface the required version + the upgrade hint so the user knows
+// exactly what to do without dumping a stack trace.
+func formatUpgradeRequired(body io.Reader) error {
+	var payload struct {
+		Error    string `json:"error"`
+		Running  string `json:"running"`
+		Required string `json:"required"`
+		Upgrade  string `json:"upgrade"`
+	}
+	if err := json.NewDecoder(body).Decode(&payload); err != nil {
+		return fmt.Errorf("this weft CLI is too old for the server — run `weft update`")
+	}
+	hint := payload.Upgrade
+	if hint == "" {
+		hint = "run `weft update`"
+	}
+	return fmt.Errorf("this weft CLI (%s) is too old — server requires %s. %s",
+		payload.Running, payload.Required, hint)
 }
 
 func (h *HTTPCoordinator) Follow(ctx context.Context, pipeline, rangeSpec string, onRow func(*pb.ResultRow)) error {
@@ -166,6 +205,9 @@ func (h *HTTPCoordinator) Follow(ctx context.Context, pipeline, rangeSpec string
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUpgradeRequired {
+		return formatUpgradeRequired(resp.Body)
+	}
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))

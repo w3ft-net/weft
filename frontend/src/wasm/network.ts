@@ -13,6 +13,11 @@ declare global {
     wasmHandleFollowRow: (raw: string) => void
     wasmHandleFollowDone: (errMsg: string) => void
   }
+  // __WEFT_WEB_SHA__ is injected by Vite at build time (see vite.config.ts).
+  // The string is the short git SHA the bundle was built from, or "dev"
+  // when no git repo was present. Used to identify the frontend on every
+  // server-bound fetch as X-Weft-Client: weft-web/<sha>.
+  const __WEFT_WEB_SHA__: string
 }
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
@@ -24,6 +29,11 @@ function authHeaders(): Record<string, string> {
   if (token) headers['Authorization'] = `Bearer ${token}`
   const org = localStorage.getItem(ORG_STORAGE_KEY)
   if (org) headers['X-Active-Org'] = org
+  // The API server's ClientVersionMiddleware only enforces a min on
+  // `weft/<ver>` (CLI). `weft-web/<sha>` ships in lockstep so it's
+  // exempt from the gate — but the header still flows so admin
+  // dashboards can see which browser build hit which endpoint.
+  headers['X-Weft-Client'] = `weft-web/${__WEFT_WEB_SHA__}`
   return headers
 }
 

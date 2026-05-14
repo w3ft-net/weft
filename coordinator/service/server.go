@@ -455,6 +455,29 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 	authNamespace := auth.Namespace
 	authEnv := auth.Env
 
+	// Read the agent's reported client identity from gRPC metadata and
+	// (a) record it on the token row for the operator dashboard and the
+	// deprecation-window query, and (b) enforce the hard floor — an
+	// agent below WEFTD_HARD_FLOOR is refused outright. Soft tolerance
+	// for old wire shapes happens per-row inside the parse path, keyed
+	// on the recorded version.
+	clientID := readClientID(stream.Context())
+	if clientID != "" {
+		if err := s.Store.RecordAgentVersion(auth.TokenID, clientID); err != nil {
+			// Don't kill the stream over a version-stamp write failure —
+			// the customer's logs flowing is more important than the
+			// operator dashboard being current.
+			log.Printf("ingest-stream: RecordAgentVersion(token=%d, %q): %v", auth.TokenID, clientID, err)
+		}
+	}
+	if floor := s.runtimeCfg().WeftdHardFloor; floor != "" {
+		if clientBelow(clientID, floor) {
+			return status.Errorf(codes.FailedPrecondition,
+				"weftd version %q is below the hard floor %q — upgrade weftd; see https://releases.w3ft.net/weftd/latest/",
+				clientID, floor)
+		}
+	}
+
 	// Per-stream byte budget — caps a hostile agent's ability to OOM
 	// the coordinator by holding a stream open and firing rows forever.
 	// Read once at accept time; an operator tightening the budget mid-

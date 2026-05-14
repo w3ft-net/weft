@@ -12,6 +12,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  wire-bump:
+    name: Wire-bump tripwire
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout weft (full history for diff vs base)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check wire-affecting changes bump a binary version
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          scripts/check-wire-bump.sh
+
   unit:
     name: Unit tests
     runs-on: ubuntu-latest

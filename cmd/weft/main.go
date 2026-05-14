@@ -124,6 +124,12 @@ func main() {
 		case "propose":
 			runPropose()
 			return
+		case "update":
+			runUpdate()
+			return
+		case "--version", "-v", "version":
+			fmt.Println(ClientID())
+			return
 		}
 	}
 
@@ -158,6 +164,7 @@ func printUsage() {
 	fmt.Println("  ingest          Ingest a log file into a local DuckDB shard")
 	fmt.Println("  mcp             Start an MCP server on stdio for LLM clients")
 	fmt.Println("  propose         Review or apply MCP-staged mutations (review|apply|clear)")
+	fmt.Println("  update          Replace this binary with the latest released weft")
 	fmt.Println()
 	fmt.Println("Run 'weft <command> --help' for details on a specific command.")
 }
@@ -514,6 +521,7 @@ func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 	}
 
 	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token, effectiveOrg(cfg))
+	remote.SetClientID(ClientID())
 	apps, err := remote.ListApps()
 	if err != nil {
 		return nil, nil, fmt.Errorf("list apps: %w", err)

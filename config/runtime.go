@@ -60,6 +60,24 @@ type Runtime struct {
 	// Shard query deadline. Read per-query, so changes take effect
 	// on the next incoming Query RPC.
 	ShardQueryTimeoutSeconds int
+
+	// MinWeftCliVersion is the lowest weft/<version> the HTTP API
+	// accepts on X-Weft-Client; below it returns 426 Upgrade Required.
+	// Empty disables the gate.
+	MinWeftCliVersion string
+
+	// MinWeftdVersion is the lowest weftd/<version> the coordinator
+	// accepts on the weft-client gRPC metadata. Currently advisory —
+	// versions in [MinWeftdVersion, WeftdHardFloor) are allowed but
+	// their connections show up in the AgentsAtOrBelow query so the
+	// operator can pressure the customer. Empty disables.
+	MinWeftdVersion string
+
+	// WeftdHardFloor is the lowest weftd/<version> the coordinator
+	// will *serve* on IngestStream. Below it, the stream is rejected
+	// with codes.FailedPrecondition. Used to retire an old wire shape
+	// once AgentsAtOrBelow(old, lookback) is empty. Empty disables.
+	WeftdHardFloor string
 }
 
 // Defaults returns the compile-time defaults. These are the values
@@ -105,6 +123,9 @@ const (
 	keyGRPCMaxRecvBytes     = "GRPC_MAX_RECV_BYTES"
 	keyIngestStreamBudget   = "GRPC_INGEST_STREAM_BUDGET_BYTES"
 	keyShardQueryTimeoutSec = "SHARD_QUERY_TIMEOUT_SECONDS"
+	keyMinWeftCliVersion    = "MIN_WEFT_CLI_VERSION"
+	keyMinWeftdVersion      = "MIN_WEFTD_VERSION"
+	keyWeftdHardFloor       = "WEFTD_HARD_FLOOR"
 )
 
 // paramPath returns the SSM path the kevcons config-set command writes
@@ -133,6 +154,9 @@ func (r *Runtime) Overlay(blob map[string]string) {
 	overlayInt(blob, keyGRPCMaxRecvBytes, &r.GRPCMaxRecvBytes)
 	overlayInt64(blob, keyIngestStreamBudget, &r.IngestStreamBudgetBytes)
 	overlayInt(blob, keyShardQueryTimeoutSec, &r.ShardQueryTimeoutSeconds)
+	overlayString(blob, keyMinWeftCliVersion, &r.MinWeftCliVersion)
+	overlayString(blob, keyMinWeftdVersion, &r.MinWeftdVersion)
+	overlayString(blob, keyWeftdHardFloor, &r.WeftdHardFloor)
 }
 
 func overlayInt(blob map[string]string, key string, dst *int) {

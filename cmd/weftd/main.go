@@ -113,11 +113,11 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Println("weftd " + Version)
+		fmt.Println(ClientID())
 		os.Exit(0)
 	}
 
-	log.Printf("weftd %s starting", Version)
+	log.Printf("%s starting", ClientID())
 
 	data, err := os.ReadFile(*configPath)
 	if err != nil {
@@ -138,11 +138,19 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Background self-update nag: once a day, fetch the release manifest
+	// and log a warning when a newer weftd is available. No auto-pull
+	// yet — see [[feedback_no_legacy_support]] (the post-launch version):
+	// breaking changes to weftd carry a soft-tolerance window on the
+	// server, so the operator gets time to act on the nag without losing
+	// ingest.
+	go (&weftd.SelfUpdateChecker{CurrentVersion: Version}).Run(ctx)
+
 	// Connect to coordinator. The bearer token is attached to every RPC
 	// via PerRPCCredentials — IngestStream reads it from metadata.
 	coordConn, err := grpc.NewClient(cfg.Endpoint,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithPerRPCCredentials(bearerToken{token: cfg.Token}),
+		grpc.WithPerRPCCredentials(bearerToken{token: cfg.Token, clientID: ClientID()}),
 	)
 	if err != nil {
 		log.Fatalf("connect to coordinator: %v", err)
@@ -474,12 +482,22 @@ func runParseStatsReporter(ctx context.Context) {
 }
 
 // bearerToken implements grpc.PerRPCCredentials so every outgoing RPC
-// carries `authorization: Bearer <token>`. The coordinator reads this in
-// IngestStream (and any other streaming RPC) to validate the caller.
-type bearerToken struct{ token string }
+// carries `authorization: Bearer <token>` plus `weft-client: <ClientID()>`.
+// The coordinator reads the bearer in IngestStream (and any other
+// streaming RPC) to validate the caller, and reads weft-client to record
+// the agent's version on the token row and gate against a hard-floor
+// version.
+type bearerToken struct {
+	token    string
+	clientID string
+}
 
 func (b bearerToken) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
-	return map[string]string{"authorization": "Bearer " + b.token}, nil
+	md := map[string]string{"authorization": "Bearer " + b.token}
+	if b.clientID != "" {
+		md["weft-client"] = b.clientID
+	}
+	return md, nil
 }
 
 func (bearerToken) RequireTransportSecurity() bool { return false }

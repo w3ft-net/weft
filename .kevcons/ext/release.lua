@@ -72,18 +72,43 @@ function run(args)
     local test_result = kevcons.exec("go", {"test", unpack(split(target.test_pkgs))})
     kevcons.log(test_result)
 
+    -- Resolve the current commit SHA (short) so it ends up baked into
+    -- each binary via ldflags. The Version is already in version.go;
+    -- we pass it via -X main.Version=… so the in-source const remains
+    -- the canonical source of truth (a future ldflags-only override
+    -- would let an out-of-band tag drift from the file).
+    local sha = kevcons.exec("git", {"rev-parse", "--short", "HEAD"})
+    sha = sha:match("^%s*(.-)%s*$")
+    local ldflags = "-X main.Version=" .. version .. " -X main.GitSHA=" .. sha
+
+    -- per-platform sha256 records, harvested while we already have the
+    -- artifact on disk. Used to write manifest.json after the loop.
+    local manifest_platforms = {}
+
     -- Build and upload each platform
     for _, plat in ipairs(target.platforms) do
         local binary_name = name .. "-" .. plat.suffix
         local tmp = "/tmp/" .. binary_name
 
         kevcons.log("building " .. binary_name .. "...")
-        kevcons.exec("go", {"build", "-o", tmp, target.pkg}, {
+        kevcons.exec("go", {"build", "-ldflags", ldflags, "-o", tmp, target.pkg}, {
             env = {
                 GOOS = plat.goos,
                 GOARCH = plat.goarch,
                 CGO_ENABLED = target.cgo and "1" or "0",
             },
+        })
+
+        -- sha256 of the freshly-built binary (before any deb wrapping).
+        -- Recorded in manifest.json so `weft update` can verify its
+        -- download. macOS `shasum`, Linux `sha256sum` — try both.
+        local sum = kevcons.exec("sh", {"-c", "shasum -a 256 " .. tmp .. " 2>/dev/null || sha256sum " .. tmp})
+        local sha256 = sum:match("^(%x+)")
+        table.insert(manifest_platforms, {
+            suffix = plat.suffix,
+            goos = plat.goos,
+            goarch = plat.goarch,
+            sha256 = sha256 or "",
         })
 
         if target.deb and plat.deb_arch then
@@ -150,6 +175,43 @@ function run(args)
         -- Clean up binary
         os.remove(tmp)
     end
+
+    -- Write manifest.json — consumed by `weft update` (and the future
+    -- weftd self-update path) to discover the latest version and verify
+    -- downloads. Versioned + latest aliases mirror the binary uploads.
+    local manifest_lines = {
+        '{',
+        '  "binary": "' .. name .. '",',
+        '  "version": "' .. version .. '",',
+        '  "sha": "' .. sha .. '",',
+        '  "platforms": [',
+    }
+    for i, p in ipairs(manifest_platforms) do
+        local sep = i < #manifest_platforms and "," or ""
+        local artifact_name = name .. "-" .. p.suffix
+        local artifact_url = base_url .. "/" .. name .. "/v" .. version .. "/" .. artifact_name
+        table.insert(manifest_lines,
+            '    {"suffix":"' .. p.suffix
+            .. '","goos":"' .. p.goos
+            .. '","goarch":"' .. p.goarch
+            .. '","sha256":"' .. p.sha256
+            .. '","url":"' .. artifact_url
+            .. '"}' .. sep)
+    end
+    table.insert(manifest_lines, '  ]')
+    table.insert(manifest_lines, '}')
+    local manifest_body = table.concat(manifest_lines, "\n") .. "\n"
+    local manifest_tmp = "/tmp/" .. name .. "-manifest.json"
+    write_file(manifest_tmp, manifest_body)
+
+    local s3_versioned_manifest = "s3://" .. bucket .. "/" .. name .. "/v" .. version .. "/manifest.json"
+    kevcons.log("uploading " .. s3_versioned_manifest)
+    kevcons.aws_exec("s3", "cp", manifest_tmp, s3_versioned_manifest)
+
+    local s3_latest_manifest = "s3://" .. bucket .. "/" .. name .. "/latest/manifest.json"
+    kevcons.log("uploading " .. s3_latest_manifest)
+    kevcons.aws_exec("s3", "cp", manifest_tmp, s3_latest_manifest)
+    os.remove(manifest_tmp)
 
     -- Tag and push
     kevcons.log("tagging " .. tag)
