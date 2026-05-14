@@ -10,6 +10,7 @@ import (
 	"github.com/kevlarcon/warp/pkg/shellcore"
 	"github.com/kevlarcon/warp/pkg/syntax"
 	"github.com/kevlarcon/weft/chart"
+	"github.com/kevlarcon/weft/internal/timerange"
 )
 
 // Row is a single result row consumed by the shell. Carries only
@@ -126,7 +127,7 @@ func (s *Shell) ConfigureCore(core *shellcore.ShellCore) {
 	// so the prompt can render `[1d]` (formatDuration(end-start)) — that
 	// duration is stable for both relative and absolute specs, so a stale
 	// snapshot is harmless for display purposes.
-	if start, end, err := shellcore.ParseRange(s.Range); err == nil {
+	if start, end, err := timerange.ParseRange(s.Range); err == nil {
 		core.SetRange(start, end)
 	}
 	core.SetHelp(weftHelp{tiers: defaultTierLimits{}})
@@ -267,12 +268,12 @@ func rangeBuiltinFor(s *Shell) shellcore.BuiltinFunc {
 	return func(c *shellcore.ShellCore, args []string) bool {
 		if len(args) == 1 {
 			start, end := c.Range()
-			c.AppendScrollback(shellcore.FormatRange(start, end))
+			c.AppendScrollback(FormatRange(start, end))
 			return true
 		}
 		if len(args) >= 2 {
 			spec := strings.Join(args[1:], " ")
-			start, end, err := shellcore.ParseRange(spec)
+			start, end, err := timerange.ParseRange(spec)
 			if err != nil {
 				c.AppendScrollback(shellcore.ErrorText("range: "+err.Error()) + "\n")
 				return true
@@ -280,7 +281,7 @@ func rangeBuiltinFor(s *Shell) shellcore.BuiltinFunc {
 			s.Range = spec
 			c.SetRange(start, end)
 			c.Dispatch(shellcore.ActionSetRange{Start: start, End: end})
-			c.AppendScrollback(shellcore.FormatRange(start, end))
+			c.AppendScrollback(FormatRange(start, end))
 			return true
 		}
 		return false
@@ -296,22 +297,22 @@ func rangeBuiltinFor(s *Shell) shellcore.BuiltinFunc {
 //   - handled=true, err==nil: caller writes output and returns.
 func (s *Shell) applyRangeLine(line string) (handled bool, output string, err error) {
 	if line == "range" {
-		start, end, perr := shellcore.ParseRange(s.Range)
+		start, end, perr := timerange.ParseRange(s.Range)
 		if perr != nil {
 			return true, "", perr
 		}
-		return true, shellcore.FormatRangePlain(start, end), nil
+		return true, timerange.FormatRangePlain(start, end), nil
 	}
 	if !strings.HasPrefix(line, "range ") {
 		return false, "", nil
 	}
 	spec := strings.TrimPrefix(line, "range ")
-	start, end, perr := shellcore.ParseRange(spec)
+	start, end, perr := timerange.ParseRange(spec)
 	if perr != nil {
 		return true, "", perr
 	}
 	s.Range = spec
-	return true, shellcore.FormatRangePlain(start, end), nil
+	return true, timerange.FormatRangePlain(start, end), nil
 }
 
 func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {

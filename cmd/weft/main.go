@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/kevlarcon/weft/internal/timerange"
 	"github.com/kevlarcon/weft/cmd/weft/runner"
 	"github.com/kevlarcon/weft/cmd/weft/setup"
 	"github.com/kevlarcon/weft/ingest"
@@ -330,7 +330,7 @@ func runOneShot(pipeline, rangeSpec string) {
 	if rangeSpec != "" {
 		// Validate locally so a typo errors out before we round-trip to
 		// the server. The server is the canonical resolver.
-		if _, _, err := shellcore.ParseRange(rangeSpec); err != nil {
+		if _, _, err := timerange.ParseRange(rangeSpec); err != nil {
 			fmt.Fprintf(os.Stderr, "invalid --range: %v\n", err)
 			os.Exit(1)
 		}

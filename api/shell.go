@@ -11,7 +11,7 @@ import (
 
 	"google.golang.org/grpc/status"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/kevlarcon/weft/internal/timerange"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
@@ -69,7 +69,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "range required", http.StatusBadRequest)
 		return
 	}
-	start, end, err := shellcore.ParseRange(req.Range)
+	start, end, err := timerange.ParseRange(req.Range)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("range: %v", err), http.StatusBadRequest)
 		return

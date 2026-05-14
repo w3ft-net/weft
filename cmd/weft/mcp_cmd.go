@@ -8,7 +8,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/kevlarcon/weft/internal/timerange"
 	"github.com/kevlarcon/weft/cmd/weft/mcp"
 	"github.com/kevlarcon/weft/cmd/weft/mcp/proposals"
 	"github.com/kevlarcon/weft/shell"
@@ -43,7 +43,7 @@ func runMCP() {
 	mcpCfg := mcp.Config{
 		Run: func(pipeline string, rangeSpec string, w io.Writer) error {
 			if rangeSpec != "" {
-				if _, _, err := shellcore.ParseRange(rangeSpec); err != nil {
+				if _, _, err := timerange.ParseRange(rangeSpec); err != nil {
 					return fmt.Errorf("invalid range %q: %w", rangeSpec, err)
 				}
 				s.Range = rangeSpec

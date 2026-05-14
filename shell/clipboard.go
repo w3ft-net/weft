@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/kevlarcon/weft/internal/timerange"
 )
 
 // clipboardBuiltin handles `clipboard /bin/<name> [--range=<spec>] [-- args...]`.
@@ -59,7 +60,7 @@ func clipboardBuiltin(s *Shell, shareBase string) shellcore.BuiltinFunc {
 			// should see exactly what the sender saw). c.Range()'s
 			// snapshot was set at last `range` change, which may be hours
 			// stale; ParseRange anchors to now.
-			start, end, err := shellcore.ParseRange(s.Range)
+			start, end, err := timerange.ParseRange(s.Range)
 			if err != nil {
 				c.AppendScrollback(shellcore.ErrorText("clipboard: invalid current range: "+err.Error()) + "\n")
 				return true

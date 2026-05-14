@@ -18,6 +18,7 @@ import (
 
 	"github.com/kevlarcon/warp/pkg/shellcore"
 	"github.com/kevlarcon/warp/pkg/shellcore/wasm"
+	"github.com/kevlarcon/weft/internal/timerange"
 	"github.com/kevlarcon/weft/shell"
 )
 
@@ -116,8 +117,8 @@ func wasmInit(_ js.Value, args []js.Value) any {
 	// network layer reuses on every fetch) and the formatted label for the
 	// chip. Format with a fresh ParseRange snapshot — the duration label
 	// is stable across the lifetime of a relative spec.
-	rsStart, rsEnd, _ := shellcore.ParseRange(s.Range)
-	jsCallbacks.Call("onRangeChange", s.Range, shellcore.FormatRangePlain(rsStart, rsEnd))
+	rsStart, rsEnd, _ := timerange.ParseRange(s.Range)
+	jsCallbacks.Call("onRangeChange", s.Range, timerange.FormatRangePlain(rsStart, rsEnd))
 
 	core.Redraw()
 	return nil
@@ -157,7 +158,7 @@ func handleWeftAction(a shellcore.Action) bool {
 		// rangeBuiltinFor already mutated weftShell.Range to the new
 		// spec; pass it to JS alongside the formatted label so the
 		// network layer ships the latest spec on subsequent fetches.
-		jsCallbacks.Call("onRangeChange", weftShell.Range, shellcore.FormatRangePlain(a.Start, a.End))
+		jsCallbacks.Call("onRangeChange", weftShell.Range, timerange.FormatRangePlain(a.Start, a.End))
 		return true
 	case shellcore.ActionBuiltinExecuted:
 		if fn := jsCallbacks.Get("builtinExecuted"); !fn.IsUndefined() && !fn.IsNull() {
