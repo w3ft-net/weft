@@ -1,0 +1,57 @@
+# /etc/weftd/config.yaml — weftd agent configuration.
+#
+# This file is the single source of truth for weftd. Copy it to
+# /etc/weftd/config.yaml, edit, then: systemctl start weftd
+#
+# The package never generates, overwrites, or merges this file. Your
+# edits are permanent. weftd refuses to start without it.
+#
+# The auth token may instead come from the WEFTD_TOKEN environment
+# variable (set in /etc/default/weftd). Env wins over the token: below
+# (AWS-shaped credential chain) — use that if a secret injector supplies
+# the token out of band; otherwise just set token: here.
+
+endpoint: w3ft.net:443
+token: wft_REPLACE_ME
+
+# Optional host-wide dimensions stamped on every row.
+deployment: api                 # fleet / scaling-unit (k8s Deployment, ASG)
+region: us-east-2               # optional; auto-detected from cloud metadata
+services: [api]                 # logical services co-located here; metrics
+                                # and heartbeats fan out one stream per name
+
+# --- Anchor holder ---------------------------------------------------
+# weftd ignores unknown top-level keys, so this block only exists to
+# declare reusable fragments. Merge them into sources with `<<: *name`
+# to avoid repeating shared fields. (Standard YAML anchors/merge keys —
+# there is no file-include mechanism; this is intra-file DRY only.)
+x-anchors:
+  json_app: &json_app
+    schema: json
+  with_metrics: &with_metrics
+    metrics:
+      enabled: true
+      interval: 30s
+
+sources:
+  # Ordinary application log. kind defaults to "main" if omitted; shown
+  # explicitly here for clarity. Lands at /log/<ns>/api/main.log.
+  - app: api
+    kind: main
+    path: /var/log/api/*.log
+    <<: [*json_app, *with_metrics]
+
+  # A second stream from the same host under a distinct kind, so it
+  # lands at its own pseudofile /log/<ns>/api/audit.log instead of
+  # folding into api/main.log. If a glob source above also matched this
+  # file, weftd's deconfliction lets this explicit source win (no
+  # double-ingest).
+  - app: api
+    kind: audit
+    path: /var/log/api/audit.log
+    <<: *json_app
+
+  # systemd journal source (no path:; tails the unit's journal).
+  - app: worker
+    unit: worker.service
+    <<: *with_metrics

@@ -2,12 +2,19 @@
 Description=weftd log agent
 After=network-online.target
 Wants=network-online.target
+# An unconfigured host (no /etc/weftd/config.yaml yet) fatals on start.
+# Cap restarts so it lands in `failed` (visible via systemctl status)
+# instead of a silent 5s crash-loop until the operator authors config.
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=root
+# Optional: supplies WEFTD_TOKEN for the credential chain (env wins over
+# the file's token:). All structural config lives in the authored
+# /etc/weftd/config.yaml — there is no generated config anymore.
 EnvironmentFile=-/etc/default/weftd
-ExecStartPre=/usr/lib/weftd/weftd-config.sh
 ExecStart=/usr/local/bin/weftd --config /etc/weftd/config.yaml
 Restart=always
 RestartSec=5

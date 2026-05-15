@@ -121,7 +121,7 @@ function run(args)
             kevcons.exec("rm", {"-rf", pkg_root})
             kevcons.exec("mkdir", {"-p", pkg_root .. "/DEBIAN"})
             kevcons.exec("mkdir", {"-p", pkg_root .. "/usr/local/bin"})
-            kevcons.exec("mkdir", {"-p", pkg_root .. "/usr/lib/weftd"})
+            kevcons.exec("mkdir", {"-p", pkg_root .. "/etc/weftd"})
             kevcons.exec("mkdir", {"-p", pkg_root .. "/etc/default"})
             kevcons.exec("mkdir", {"-p", pkg_root .. "/etc/systemd/system"})
 
@@ -140,8 +140,10 @@ function run(args)
             kevcons.exec("cp", {tmp, pkg_root .. "/usr/local/bin/weftd"})
             kevcons.exec("chmod", {"0755", pkg_root .. "/usr/local/bin/weftd"})
             kevcons.exec("cp", {"deploy/weftd/weftd.service", pkg_root .. "/etc/systemd/system/weftd.service"})
-            kevcons.exec("cp", {"deploy/weftd/weftd-config.sh", pkg_root .. "/usr/lib/weftd/weftd-config.sh"})
-            kevcons.exec("chmod", {"0755", pkg_root .. "/usr/lib/weftd/weftd-config.sh"})
+            -- config.yaml.example ships as docs/sample. config.yaml
+            -- itself is operator-authored and never packaged.
+            kevcons.exec("cp", {"deploy/weftd/config.yaml.example", pkg_root .. "/etc/weftd/config.yaml.example"})
+            kevcons.exec("chmod", {"0644", pkg_root .. "/etc/weftd/config.yaml.example"})
             kevcons.exec("cp", {"deploy/weftd/weftd.default", pkg_root .. "/etc/default/weftd"})
             kevcons.exec("chmod", {"0644", pkg_root .. "/etc/default/weftd"})
 

@@ -120,6 +120,17 @@ func sourceKind(src SourceConfig) string {
 	return "main"
 }
 
+// tokenFromChain resolves the auth token. The environment wins over the
+// authored file (AWS-shaped credential chain): a non-empty WEFTD_TOKEN
+// is authoritative, otherwise the file's token: is used. Token is the
+// only value with an env source — see the call site.
+func tokenFromChain(envToken, fileToken string) string {
+	if envToken != "" {
+		return envToken
+	}
+	return fileToken
+}
+
 func main() {
 	configPath := flag.String("config", "/etc/weftd/config.yaml", "config file path")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -134,6 +145,9 @@ func main() {
 
 	data, err := os.ReadFile(*configPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			log.Fatalf("no config at %s — copy %s.example to it and set your token (see docs/manual/weftd.md)", *configPath, *configPath)
+		}
 		log.Fatalf("read config: %v", err)
 	}
 	var cfg Config
@@ -141,11 +155,18 @@ func main() {
 		log.Fatalf("parse config: %v", err)
 	}
 
+	// Token credential chain (AWS-shaped): WEFTD_TOKEN env wins, else the
+	// authored file's token:. Env is the only value with a non-file
+	// source — the token is a credential, so a secret injector / config
+	// management can supply it without templating the YAML. Nothing
+	// structural ever comes from the environment.
+	cfg.Token = tokenFromChain(os.Getenv("WEFTD_TOKEN"), cfg.Token)
+
 	if cfg.Endpoint == "" {
 		log.Fatal("endpoint is required")
 	}
 	if cfg.Token == "" {
-		log.Fatal("token is required")
+		log.Fatal("token is required: set token: in the config file or WEFTD_TOKEN in the environment")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

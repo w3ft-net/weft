@@ -60,6 +60,21 @@ sources:
     schema: json
 ```
 
+This file is the single source of truth — the package never
+generates or overwrites it. Start from `/etc/weftd/config.yaml.example`.
+Repeated source fields can be DRYed with standard YAML anchors and
+merge keys (`&name` / `<<: *name`); weftd ignores an `x-anchors:`
+holder block, so it's a convenient place to declare them.
+
+### Token
+
+Put `token:` in the config file, **or** supply it via the
+`WEFTD_TOKEN` environment variable (e.g. in `/etc/default/weftd`).
+The environment wins over the file value — an AWS-shaped credential
+chain — so a secret injector can provide the token without templating
+the YAML. It's the only setting with an environment source; everything
+structural lives in the file.
+
 The `deployment`, `region`, and per-source `version_file` values
 become first-class query dimensions — see the **Meta-variables**
 section in **Query your logs** for the full list and how they
