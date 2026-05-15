@@ -1,5 +1,15 @@
 # Retention enforcement (future work)
 
+> **Status: partially shipped.** The query-side skip on the
+> **log-query path** (originally listed under "S3 parquet" below as
+> not-yet-done) now exists: `coordinator/registry.go:440`
+> `MatchingEntries` clamps `tr.Start` up to `now − LogRetention(tier)`
+> so shards entirely outside the caller's retention are never handed
+> to compute (test: `registry_retention_test.go`). The deletion work
+> (Postgres per-customer sweep, S3 lifecycle, cold-storage
+> differentiation) is still unbuilt — the "illusion" framing still
+> holds for on-disk data.
+
 The pricing table on the landing page advertises per-plan log retention
 (`swatch` 30d, `yard` 90d, `bolt` 1y). The metrics rollup migration
 (`026_cron_results_rollups.sql`) introduces an equivalent per-plan cap
@@ -45,9 +55,11 @@ what real enforcement needs so the illusion can be retired.
 
 ### S3 parquet (log shards)
 
-- Each app bucket has a `RetentionPeriod` (default 168h) controlling
-  when a shard gets archived to S3 — but archived doesn't mean
-  deleted. Parquet objects live in S3 indefinitely.
+- Each app bucket has a single `WindowDuration` that governs both
+  rotation (INGESTING→READ_ONLY at `window_end`) and archive timing
+  (READ_ONLY→ARCHIVED after the window) — the old separate
+  `RetentionPeriod` field was dropped. Archived doesn't mean deleted:
+  parquet objects live in S3 indefinitely.
 - `bolt`'s "Cold storage (S3)" feature is actually the current
   default for every tier; there's no differentiation.
 - No S3 lifecycle policy is set. We pay S3 Standard storage on all
@@ -94,10 +106,12 @@ Three pieces:
 2. **S3 Lifecycle rules.** One rule per tier — 30d expiration for
    `tier=swatch` prefix, 90d for `yard`, 365d for `bolt`. AWS handles
    the delete; we just tag correctly at write time.
-3. **Query-side skip.** The shard planner must not hand a shard to
-   the compute pool if its window is entirely outside the caller's
-   retention. This is already implicit via the `bucket_start` filter
-   for metrics; need the analog on the log-query path.
+3. **Query-side skip.** ✅ **Done.** The shard planner does not hand
+   a shard to the compute pool if its window is entirely outside the
+   caller's retention: `coordinator/registry.go:440` `MatchingEntries`
+   clamps `tr.Start` up to `now − LogRetention(tier)` (the log-query
+   analog of the metrics `bucket_start` filter). This is hiding, not
+   deletion — the remaining two pieces still retire the illusion.
 
 ### Cold-storage differentiation
 

@@ -15,7 +15,8 @@ ties them together.
 
 | Plan | State |
 |---|---|
-| Shipped plans live in `docs/completed/`. Recent additions: `query-sharing`, `dashboard-builder`, `onboarding`, `oidc`, `cross-shard-post-limit-filter`, `executeresult-buffered-cleanup`, `shard-grpc-resilience` (Phase 3 deferred), `notify-destinations`, `migration-collapse`. |
+| Shipped plans live in `docs/completed/`. Recent additions: `weftd-authored-config`, `loom-producer-host`, `python-sdk`, `anomaly-conditions` (shipped as the `weft::is_outlier`/`weft::is_seasonal` predicates), `query-sharing`, `dashboard-builder`, `onboarding`, `oidc`, `cross-shard-post-limit-filter`, `executeresult-buffered-cleanup`, `shard-grpc-resilience` (Phase 3 deferred), `notify-destinations`, `migration-collapse`. |
+| `weftd-client-side-parsing` — implemented behind `WEFTD_PARSE_CLIENT_SIDE=1`, in rollout; stays in this dir until the flag is removed. |
 | Everything in this directory | 🟡 Designed, not started (or partially shipped — read the plan's own Status section) |
 
 ## Roadmap
@@ -30,8 +31,10 @@ Each unblocks a meaningful slice of downstream work.
 | Plan | Effort | Why first |
 |---|---:|---|
 | [http-ingest](http-ingest.md) | ~2d remaining | Heroku adapter shipped; JSONAdapter (`/api/ingest`) + CloudWatchAdapter still pending |
-| [python-sdk](python-sdk.md) | 3.5d | Python-flavored runtime stats. Pairs with the now-shipped go-sdk. |
 | [audit-log](compliance/audit-log.md) | 4.75d | Cheap to wire once before five downstream plans want to emit events |
+
+(`python-sdk` shipped — moved to `docs/completed/`. It was built as
+the standalone sibling repo `weft-py`, not `clients/python/`.)
 
 ### Phase 1 — table-stakes commercial
 
@@ -58,8 +61,11 @@ Quality-of-life that compounds, mostly independent.
 
 | Plan | Effort | Notes |
 |---|---:|---|
-| [anomaly-conditions](anomaly-conditions.md) | 2.75d | `outlier`, `seasonal` alert conditions |
-| [composite-alerts](composite-alerts.md) | 2.25d | Mostly docs + `weft.combine` helper |
+| [composite-alerts](../completed/composite-alerts.md) | 2.25d | Mostly docs + `weft.combine` helper |
+
+(`anomaly-conditions` shipped — moved to `docs/completed/`. Landed as
+the `weft::is_outlier` / `weft::is_seasonal` predicates rather than
+`alert outlier`/`alert seasonal` grammar.)
 
 ### Phase 4 — enterprise dealbreakers
 

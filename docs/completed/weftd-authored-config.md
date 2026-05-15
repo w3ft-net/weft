@@ -1,4 +1,4 @@
-# Plan: weftd config is operator-authored YAML, not deb-generated
+# Plan: weftd config is operator-authored YAML, not deb-generated [DONE]
 
 ## Problem
 

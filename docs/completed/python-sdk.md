@@ -1,4 +1,14 @@
-# Plan: Python SDK
+# Plan: Python SDK [DONE]
+
+> **Status: Shipped.** Implemented in the standalone sibling repo
+> [`~/dev/weft-py`](https://github.com/) (its own git repo, published
+> to PyPI as `w3ft`), **not** in `clients/python/` of this repo as the
+> "Components to build" section originally proposed. Every component
+> below exists: module-level `send`/`send_line`/`heartbeat`/
+> `heartbeat_loop`/`configure`/`close`, the socket + HTTP transports,
+> and the `weft.runtime` collector emitting the `py_runtime` schema.
+> Path references below are historical — read them against the
+> `weft-py` repo layout.
 
 A small Python library that lets in-process code ship records to
 weft — either through the local weftd Unix socket (default) or
@@ -209,7 +219,8 @@ day. Drift between them is a bug.
 
 ## Components to build
 
-1. **`clients/python/weft/`** — new package, published to PyPI as
+1. **`weft-py` repo, `weft/` package** (proposed as `clients/python/weft/`;
+   shipped as a standalone sibling repo instead) — published to PyPI as
    `w3ft` (the `weft` name is taken by an unrelated project; the
    import name remains `weft`). Pure Python, no compiled extensions,
    no required deps.

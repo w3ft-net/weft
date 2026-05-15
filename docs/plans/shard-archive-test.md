@@ -14,21 +14,28 @@ live EC2 shards.
 
 ## Step 1: Shorten bucket timings
 
+`window-duration` now drives both rotation and archive — the old
+separate `--retention-period` flag was removed. A READ_ONLY shard
+archives one full `window-duration` after its `window_end` (Op 5,
+`coordinator/reconciler.go:159`: `now − window_end > window_duration`).
+So a 5m window means rotation at `window_end`, then ARCHIVED ~5m later
+— the whole cycle finishes in ~10 min plus reconciler tick slack.
+
 ```bash
-kevcons ext buckets set --label default --window-duration 1h --retention-period 5m
+kevcons ext buckets set --label default --window-duration 5m
 ```
 
 ## Step 2: Pull in the current shard's window_end
 
-The existing INGESTING shard has a window_end set from the old 168h
-boundary. Force it to the next hour mark so rotation fires on the next
-reconciler tick (~5 min):
+The existing INGESTING shard has a `window_end` set from the old wide
+(168h) boundary. Force it a couple minutes out so rotation fires on
+the next reconciler tick:
 
 ```bash
 kevcons db tunnel -- psql -c "
   UPDATE shard_records
   SET window_end = to_char(
-        date_trunc('hour', now() AT TIME ZONE 'UTC') + interval '1 hour',
+        now() AT TIME ZONE 'UTC' + interval '2 minutes',
         'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')
   WHERE state = 'INGESTING';
 "
@@ -39,7 +46,7 @@ kevcons db tunnel -- psql -c "
 Tail coordinator logs and confirm each transition fires:
 
 1. **INGESTING -> READ_ONLY** (Op 3 — reconciler tick after window_end passes)
-2. **READ_ONLY -> ARCHIVED** (Op 5 — reconciler tick after `now - window_end > 5m`)
+2. **READ_ONLY -> ARCHIVED** (Op 5 — reconciler tick after `now - window_end > window_duration`, i.e. ~5m past rotation with the Step 1 setting)
    - Coordinator exports DuckDB to Parquet on S3 (`s3://<cold_storage>/<apps>/<shard_id>.parquet`)
    - Swaps registry entry's Shard impl to LambdaColdShard
    - Retires EBS volume (snapshot -> detach -> delete)
@@ -102,7 +109,7 @@ Drop a markdown table into this file (or a sibling) with:
 After testing, restore production-appropriate values:
 
 ```bash
-kevcons ext buckets set --label default --window-duration 168h --retention-period 168h
+kevcons ext buckets set --label default --window-duration 168h
 ```
 
 ## Failure modes to watch for

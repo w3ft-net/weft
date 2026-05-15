@@ -2,12 +2,23 @@
 
 ## Status
 
-**Proposed.** Closes the gap that left `$LEVEL` and parsed `$TS` broken
-for the weftd path even though the schema YAML is already persisted on
-`log_groups` and even already returned to the agent on onboarding (see
-`cmd/weftd/main.go:286` — the value is fetched and dropped on the floor).
-CloudWatch (poller) and the offline `weft ingest` CLI already consume
-the schema via `ingest.Parser`; weftd does not.
+**Shipped behind a flag; in rollout.** The full design is implemented
+and gated on `WEFTD_PARSE_CLIENT_SIDE=1`, exactly as the Rollout
+section below prescribes (still at the gated step — not yet
+default-on). In code: `weftd/parser_cache.go` (`ParserCache`/
+`ParserSlot`, hash-based refresh, `ingest.NewParser` reuse, OK/
+missing-level counters); `schema_hash` on `GetSourceStatusResponse`
+(`proto/weftpb/weft.proto`), with the coordinator computing the
+SHA-256 (`coordinator/service/server.go`); `runSchemaRefresher` on a
+60s ticker in `cmd/weftd/main.go`; `weftd/parse_bench_test.go`'s
+`BenchmarkWeftdParse`. This closed the gap that left `$LEVEL` and
+parsed `$TS` broken for the weftd path even though the schema YAML is
+already persisted on `log_groups` and returned to the agent on
+onboarding. CloudWatch (poller) and the offline `weft ingest` CLI
+already consumed the schema via `ingest.Parser`; weftd now does too.
+
+When this flips to default-on and the flag is removed, move this plan
+to `docs/completed/`.
 
 ## Why client-side, not server-side
 

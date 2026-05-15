@@ -1,4 +1,11 @@
-# Plan: Loom producer host in prod
+# Plan: Loom producer host in prod [DONE]
+
+> **Status: Shipped** (in-repo scope). `cmd/loom-producer/`,
+> `deploy/loom-producer/` units, the `packer/weft.pkr.hcl` build, the
+> `weft-demo-seed --prod-loom` flag, and the `startup.sh` ops-weftd
+> skip guard are all in place. The only piece outside this repo is the
+> `infrastructure-live` Terraform stack.
+
 
 Stand up a single small EC2 instance in the weft account that runs
 the same Loom Inc log generators we ship in dev's docker-compose
