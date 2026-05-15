@@ -68,54 +68,62 @@ func TestPushdown_NewDimensions(t *testing.T) {
 	}
 }
 
-// TestPathLayout_EnvSegment verifies pseudofile path parsing into
-// namespace/env/service predicates.
+// TestPathLayout_KindSegment verifies pseudofile path parsing into
+// namespace/env/service/kind predicates.
 //
 // Path layout:
-//   2 seg → <ns>/<service>                 no env (env-less token)
-//   3+ seg → <ns>/<env>/<service[/sub]>    env at position 1
-func TestPathLayout_EnvSegment(t *testing.T) {
+//   3 seg → <ns>/<svc>/<kind>          env-less
+//   4 seg → <ns>/<env>/<svc>/<kind>    env-bearing
+//
+// 2-seg paths are rejected (see TestKindPredicate_TwoSegRejected).
+func TestPathLayout_KindSegment(t *testing.T) {
 	tests := []struct {
-		name    string
+		name     string
 		pipeline string
-		wantNS  string
-		wantSvc string
-		wantEnv string
+		wantNS   string
+		wantSvc  string
+		wantKind string
+		wantEnv  bool
 	}{
 		{
-			name:     "two-level path (no env)",
-			pipeline: `cat /log/weft/coordinator.log`,
+			name:     "three-level path: main log (env-less)",
+			pipeline: `cat /log/weft/coordinator/main.log`,
 			wantNS:   "namespace = ?",
 			wantSvc:  "service = ?",
-			wantEnv:  "",
+			wantKind: "kind = ?",
+			wantEnv:  false,
 		},
 		{
-			name:     "three-level path with env",
-			pipeline: `cat /log/weft/prod/coordinator.log`,
+			name:     "three-level path: heartbeats (env-less)",
+			pipeline: `cat /log/weft/compute/heartbeats.log`,
 			wantNS:   "namespace = ?",
 			wantSvc:  "service = ?",
-			wantEnv:  "env = ?",
+			wantKind: "kind = ?",
+			wantEnv:  false,
 		},
 		{
-			name:     "four-level path: compound service with env",
-			pipeline: `cat /log/weft/prod/coordinator/runtime.log`,
+			name:     "four-level path: env-bearing ns/env/svc/kind",
+			pipeline: `cat /log/loom/prod/api/heartbeats.log`,
 			wantNS:   "namespace = ?",
 			wantSvc:  "service = ?",
-			wantEnv:  "env = ?",
+			wantKind: "kind = ?",
+			wantEnv:  true,
 		},
 		{
-			name:     "four-level path staging metrics",
-			pipeline: `cat /log/myco/staging/api/metrics.log`,
+			name:     "metrics under a service (env-less)",
+			pipeline: `cat /log/myco/api/metrics.log`,
 			wantNS:   "namespace = ?",
 			wantSvc:  "service = ?",
-			wantEnv:  "env = ?",
+			wantKind: "kind = ?",
+			wantEnv:  false,
 		},
 		{
-			name:     "tail with env",
-			pipeline: `tail /log/loom/prod/api.log`,
+			name:     "tail env-bearing",
+			pipeline: `tail /log/loom/sand/api/main.log`,
 			wantNS:   "namespace = ?",
 			wantSvc:  "service = ?",
-			wantEnv:  "env = ?",
+			wantKind: "kind = ?",
+			wantEnv:  true,
 		},
 	}
 
@@ -131,12 +139,12 @@ func TestPathLayout_EnvSegment(t *testing.T) {
 			if tc.wantSvc != "" && !strings.Contains(plan.ShardSQL, tc.wantSvc) {
 				t.Errorf("ShardSQL missing service predicate %q\n  got: %s", tc.wantSvc, plan.ShardSQL)
 			}
-			if tc.wantEnv == "" {
-				if strings.Contains(plan.ShardSQL, "env = ") {
-					t.Errorf("expected no env predicate, got: %s", plan.ShardSQL)
-				}
-			} else if !strings.Contains(plan.ShardSQL, tc.wantEnv) {
-				t.Errorf("ShardSQL missing env predicate %q\n  got: %s", tc.wantEnv, plan.ShardSQL)
+			if tc.wantKind != "" && !strings.Contains(plan.ShardSQL, tc.wantKind) {
+				t.Errorf("ShardSQL missing kind predicate %q\n  got: %s", tc.wantKind, plan.ShardSQL)
+			}
+			hasEnv := strings.Contains(plan.ShardSQL, "env = ")
+			if hasEnv != tc.wantEnv {
+				t.Errorf("env predicate present=%v, want %v\n  got: %s", hasEnv, tc.wantEnv, plan.ShardSQL)
 			}
 		})
 	}

@@ -545,14 +545,20 @@ func preseedScripts(s *store.Store, custID uint, customerName string, members []
 	if primaryApp == "" {
 		return fmt.Errorf("preseedScripts: no primary app configured for customer %q", customerName)
 	}
-	primaryLog := "/log/" + primaryApp + ".log"
 	primaryEnv := map[string]string{
 		"acme":   "prod",
 		"globex": "prod",
 		"loom":   "prod",
 	}[customerName]
-	metricsLog := fmt.Sprintf("/log/%s/%s/%s_metrics.log",
-		customerName, primaryEnv, lastSegment(primaryApp))
+	// primaryApp is "<ns>/<svc>"; demo tokens are env-bearing, so the
+	// canonical pseudofile is the 4-seg form
+	// /log/<ns>/<env>/<svc>/<kind>.log. main = regular logs,
+	// metrics = the system-metrics stream.
+	primaryNS, primarySvc := customerName, lastSegment(primaryApp)
+	primaryLog := fmt.Sprintf("/log/%s/%s/%s/main.log",
+		primaryNS, primaryEnv, primarySvc)
+	metricsLog := fmt.Sprintf("/log/%s/%s/%s/metrics.log",
+		primaryNS, primaryEnv, primarySvc)
 
 	// --- /bin/scan: three versions, three authors -------------------------
 	//

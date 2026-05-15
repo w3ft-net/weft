@@ -31,11 +31,11 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 
 	var rows []*pb.LogRow
 
-	// weft/coordinator logs
+	// weft/coordinator main logs (kind=main)
 	for i := 0; i < 5; i++ {
 		rows = append(rows, &pb.LogRow{
 			TsUnixNs: base.Add(time.Duration(i) * time.Minute).UnixNano(),
-			App:      "weft/coordinator",
+			App:      "weft/coordinator/main",
 			Raw:      "coordinator: handling query",
 			Level:    "INFO",
 			Instance: "i-coord-001",
@@ -43,11 +43,11 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 		})
 	}
 
-	// weft/shard logs
+	// weft/shard main logs (kind=main)
 	for i := 0; i < 5; i++ {
 		rows = append(rows, &pb.LogRow{
 			TsUnixNs: base.Add(time.Duration(i) * time.Minute).UnixNano(),
-			App:      "weft/shard",
+			App:      "weft/shard/main",
 			Raw:      "shard: ingesting batch",
 			Level:    "INFO",
 			Instance: "i-shard-001",
@@ -55,11 +55,12 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 		})
 	}
 
-	// weft/metrics rows (JSON payloads, like system metrics from weftd)
+	// weft/coordinator metrics stream (kind=metrics, JSON payloads —
+	// the shape weftd's system-metrics collector ships).
 	for i := 0; i < 5; i++ {
 		rows = append(rows, &pb.LogRow{
 			TsUnixNs:    base.Add(time.Duration(i) * time.Minute).UnixNano(),
-			App:         "weft/metrics",
+			App:         "weft/coordinator/metrics",
 			Raw:         `{"collector":"cpu","value":42}`,
 			Level:       "METRIC",
 			Instance:    "i-coord-001",
@@ -86,7 +87,7 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 	c.Pool = &registryPool{registry: c.Registry}
 	c.Registry.Add(&ShardEntry{
 		ID:          "ns-shard-0",
-		Apps:        []string{"weft/coordinator", "weft/shard", "weft/metrics", "grantcentral"},
+		Apps:        []string{"weft/coordinator/main", "weft/shard/main", "weft/coordinator/metrics", "grantcentral"},
 		WindowStart: base,
 		WindowEnd:   base.Add(time.Hour),
 		State:       StateIngesting,
@@ -122,16 +123,16 @@ func TestNamespaceQuery_All(t *testing.T) {
 	for _, r := range resultD.Rows {
 		switch {
 		case strings.Contains(r.Raw, "coordinator:"):
-			appCounts["weft/coordinator"]++
+			appCounts["weft/coordinator/main"]++
 		case strings.Contains(r.Raw, "shard:"):
-			appCounts["weft/shard"]++
+			appCounts["weft/shard/main"]++
 		case strings.Contains(r.Raw, "collector"):
-			appCounts["weft/metrics"]++
+			appCounts["weft/coordinator/metrics"]++
 		case strings.Contains(r.Raw, "grantcentral"):
 			appCounts["grantcentral"]++
 		}
 	}
-	for _, want := range []string{"weft/coordinator", "weft/shard", "weft/metrics"} {
+	for _, want := range []string{"weft/coordinator/main", "weft/shard/main", "weft/coordinator/metrics"} {
 		if appCounts[want] != 5 {
 			t.Errorf("expected 5 rows for %s, got %d", want, appCounts[want])
 		}
@@ -143,12 +144,13 @@ func TestNamespaceQuery_All(t *testing.T) {
 	}
 }
 
-// TestNamespaceQuery_SubApp verifies that querying a specific sub-app
-// (cat /log/weft/coordinator.log) returns only that sub-app's rows.
+// TestNamespaceQuery_SubApp verifies that querying a specific service's
+// main stream (cat /log/weft/coordinator/main.log) returns only that
+// service's main rows.
 func TestNamespaceQuery_SubApp(t *testing.T) {
 	c := setupNamespaceCoordinator(t)
 
-	result, err := c.Execute("cat /log/weft/coordinator.log", nsRange, "graybeard", "")
+	result, err := c.Execute("cat /log/weft/coordinator/main.log", nsRange, "graybeard", "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -164,12 +166,12 @@ func TestNamespaceQuery_SubApp(t *testing.T) {
 	}
 }
 
-// TestNamespaceQuery_Metrics verifies that metrics sub-app is queryable
-// via the /namespace/metrics path (not the old .metrics convention).
+// TestNamespaceQuery_Metrics verifies that a service's metrics stream
+// is queryable via /log/<ns>/<svc>/metrics.log.
 func TestNamespaceQuery_Metrics(t *testing.T) {
 	c := setupNamespaceCoordinator(t)
 
-	result, err := c.Execute("cat /log/weft/metrics.log", nsRange, "graybeard", "")
+	result, err := c.Execute("cat /log/weft/coordinator/metrics.log", nsRange, "graybeard", "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}

@@ -42,22 +42,22 @@ var lessons = []*Lesson{
 	},
 	{
 		Step:   "shell-range",
-		Prompt: "You can label your access tokens with an environment, and if you do, the next layer down in the directory structure will be the env. Services self-report a name via their integration, so that becomes the log file. If you hae metrics enabled, that will fall under <service>/metrics.log.\n\nNow have a look at your PS1. See that `[1d]`? That's indicating the time range of log lines that will be returned when you hit one of your aggregate log files. Try changing it: you can run `range 1h..` to set it to the past hour.",
+		Prompt: "Log paths are /log/<namespace>/<service>/<kind>.log. <kind> is the stream: `main` for regular logs, plus `heartbeats`, `metrics`, and `runtime` if the service ships telemetry. If you label an access token with an environment, the env slots in right after the namespace: /log/<namespace>/<env>/<service>/<kind>.log. Loom's tokens are env-bearing, which is why you'll see /log/loom/prod/api/main.log.\n\nNow have a look at your PS1. See that `[1d]`? That's indicating the time range of log lines that will be returned when you hit one of your aggregate log files. Try changing it: you can run `range 1h..` to set it to the past hour.",
 		Action: "range 1h..",
 	},
 	{
 		Step:   "shell-tail",
-		Action: "tail /log/loom/prod/api.log",
+		Action: "tail /log/loom/prod/api/main.log",
 		Prompt: "Now tail some logs to see live API request lines flowing in. (Loom Inc might be a fake company but they have real servers.)",
 	},
 	{
 		Step:   "shell-grep-awk",
-		Action: "tail /log/loom/prod/api.log | grep ERROR | awk '{print $HOST, $1, $4}'",
+		Action: "tail /log/loom/prod/api/main.log | grep ERROR | awk '{print $HOST, $1, $4}'",
 		Prompt: "So obviously we have support for awk and grep, but the more material point is `$HOST` in the awk program. Weft augments normal field variables in awk and jq with a number of meta-variables to help you isolate exactly where those log lines were produced. More info in the manual.",
 	},
 	{
 		Step:   "shell-alert",
-		Action: "tail /log/loom/prod/api.log | grep ERROR | wc -l | alert above 0",
+		Action: "tail /log/loom/prod/api/main.log | grep ERROR | wc -l | alert above 0",
 		Prompt: "Weft contains a special builtin called alert. For now, this is just going to log to stderr, but you can get all sorts of alerting targets on a cron (more info shortly). The api/prod stream emits errors at ~8% so this fires every time.",
 	},
 	{

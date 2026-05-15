@@ -24,7 +24,7 @@ func (noResolver) Source(name string) (string, string, bool) { return "", "", fa
 // lowered form is silently shipping different SQL than the live path —
 // which is exactly the regression mode this test guards.
 func TestLower_RoundTrip(t *testing.T) {
-	pipeline := `cat /log/weft/coordinator.log | grep ERROR`
+	pipeline := `cat /log/weft/coordinator/main.log | grep ERROR`
 	customer := "kevlar"
 	start := time.Date(2026, 5, 13, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)

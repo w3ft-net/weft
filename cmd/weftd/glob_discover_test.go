@@ -82,7 +82,7 @@ func runWatchGlob(t *testing.T, pattern string, expected int) []string {
 	defer cancel()
 
 	rec := &sampleSubmitRecorder{}
-	go watchGlob(ctx, rec, "wft_test", "kevlar", "testhost", "testns", pattern)
+	go watchGlob(ctx, rec, "wft_test", "kevlar", "testhost", "testns", "main", pattern)
 
 	deadline := time.Now().Add(2500 * time.Millisecond)
 	for time.Now().Before(deadline) {

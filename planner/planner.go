@@ -168,17 +168,18 @@ func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 	liveStages := formatComputeStages(info.stages)
 
 	// Apply source filters from the pseudofile path. Each path segment
-	// maps to a column: namespace, env, service. These are customer-
-	// supplied identifiers, so they go through positional placeholders
-	// rather than string interpolation — defense in depth against an
-	// adversarial namespace name even though the coordinator's
-	// CustomerHasSource allowlist gates the source up front.
+	// maps to a column: namespace, env, service, kind. These are
+	// customer-supplied identifiers, so they go through positional
+	// placeholders rather than string interpolation — defense in depth
+	// against an adversarial namespace name even though the
+	// coordinator's CustomerHasSource allowlist gates the source up
+	// front.
 	if info.source.env != "" {
 		sql.addPredicate("env = ?", info.source.env)
 	}
 	switch len(info.source.namespaces) {
 	case 0:
-		// warp.log — no namespace/service filter.
+		// warp.log — no namespace/service/kind filter.
 	case 1:
 		sql.addPredicate("namespace = ?", info.source.namespaces[0])
 	default:
@@ -193,6 +194,15 @@ func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 	default:
 		placeholders := strings.Repeat("?, ", len(info.source.services)-1) + "?"
 		sql.addPredicate("service IN ("+placeholders+")", info.source.services...)
+	}
+	switch len(info.source.kinds) {
+	case 0:
+		// No kind filter (namespace wildcard or warp.log).
+	case 1:
+		sql.addPredicate("kind = ?", info.source.kinds[0])
+	default:
+		placeholders := strings.Repeat("?, ", len(info.source.kinds)-1) + "?"
+		sql.addPredicate("kind IN ("+placeholders+")", info.source.kinds...)
 	}
 
 	switch info.source.cmd {

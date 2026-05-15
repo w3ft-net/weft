@@ -136,13 +136,13 @@ func TestExpandBinPipeline_SameScriptDifferentArgs(t *testing.T) {
 // pipeline still has the multi-word literal as a single grep argument.
 func TestExpandBinPipeline_QuotedPositionalWithSpaces(t *testing.T) {
 	fs := newTestFS()
-	fs.setBash("/bin/log-pattern-count", `tail -n $2 /log/weft/$1.log | grep -c "$3"`)
+	fs.setBash("/bin/log-pattern-count", `tail -n $2 /log/weft/$1/main.log | grep -c "$3"`)
 
 	got, err := expandBinPipeline(`log-pattern-count coordinator 500 'compute exit 127'`, fs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `tail -n 500 /log/weft/coordinator.log | grep -c "compute exit 127"`
+	want := `tail -n 500 /log/weft/coordinator/main.log | grep -c "compute exit 127"`
 	if got != want {
 		t.Errorf("\n got: %s\nwant: %s", got, want)
 	}
@@ -186,7 +186,7 @@ func TestExpandBinPipeline_QuotedPositionalWithSpaces(t *testing.T) {
 // re-quote whitespace-bearing args; this pins that.
 func TestExpandBinPipeline_QuotedArgRoundTripsToPlanner(t *testing.T) {
 	fs := newTestFS()
-	fs.setBash("/bin/log-pattern-count", `tail -n $2 /log/weft/$1.log | grep -c "$3"`)
+	fs.setBash("/bin/log-pattern-count", `tail -n $2 /log/weft/$1/main.log | grep -c "$3"`)
 	expanded, err := expandBinPipeline(`log-pattern-count coordinator 500 'compute exit 127'`, fs)
 	if err != nil {
 		t.Fatal(err)

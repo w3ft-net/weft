@@ -10,9 +10,9 @@ func TestCheckPipeline(t *testing.T) {
 	}{
 		// Exact match advances.
 		{"shell-ls", "ls /log", true},
-		{"shell-tail", "tail /log/loom/prod/api.log", true},
-		{"shell-grep-awk", "tail /log/loom/prod/api.log | grep ERROR | awk '{print $HOST, $1, $4}'", true},
-		{"shell-alert", "tail /log/loom/prod/api.log | grep ERROR | wc -l | alert above 0", true},
+		{"shell-tail", "tail /log/loom/prod/api/main.log", true},
+		{"shell-grep-awk", "tail /log/loom/prod/api/main.log | grep ERROR | awk '{print $HOST, $1, $4}'", true},
+		{"shell-alert", "tail /log/loom/prod/api/main.log | grep ERROR | wc -l | alert above 0", true},
 		{"shell-notify", "cat /etc/notify.yaml", true},
 		{"shell-cron", "ls /cron.d/", true},
 		{"shell-bin-bash", "ls /bin/", true},
@@ -31,9 +31,9 @@ func TestCheckPipeline(t *testing.T) {
 		// should re-paste from the tour overlay.
 		{"shell-ls", "ls -la /log", false},
 		{"shell-ls", "ls /log/", false},
-		{"shell-tail", "tail -n 50 /log/loom/prod/api.log", false},
+		{"shell-tail", "tail -n 50 /log/loom/prod/api/main.log", false},
 		{"shell-ls", "cat /log/foo.log", false},
-		{"shell-grep-awk", "cat /log/loom/prod/api.log | grep ERROR", false},
+		{"shell-grep-awk", "cat /log/loom/prod/api/main.log | grep ERROR", false},
 
 		// Unknown step / empty step.
 		{"shell-unknown", "ls /log", false},

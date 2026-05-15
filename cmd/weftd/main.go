@@ -100,11 +100,24 @@ type VersionConfig struct {
 }
 
 type SourceConfig struct {
-	App     string        `yaml:"app,omitempty"`     // bare app name within namespace (e.g. "coordinator")
+	App     string        `yaml:"app,omitempty"`     // bare service name within namespace (e.g. "coordinator")
+	Kind    string        `yaml:"kind,omitempty"`    // log-stream kind; defaults to "main". Heartbeats/metrics/runtime ship their own kinds.
 	Path    string        `yaml:"path"`              // file path or glob (file tailing)
 	Unit    string        `yaml:"unit,omitempty"`    // systemd unit name (journal tailing)
 	Version VersionConfig `yaml:"version,omitempty"` // how to discover this source's version dimension
 	Metrics MetricsConfig `yaml:"metrics,omitempty"` // optional system metrics collection
+}
+
+// sourceKind returns the configured kind for a source, defaulting to
+// "main". Every tailed log row carries a kind so the pseudofile tree
+// is uniform: /log/<ns>/<svc>/<kind>.log. The telemetry streams
+// (heartbeats, metrics, runtime) build their own 3-seg app names
+// directly and never flow through this.
+func sourceKind(src SourceConfig) string {
+	if src.Kind != "" {
+		return src.Kind
+	}
+	return "main"
 }
 
 func main() {
@@ -265,7 +278,7 @@ func main() {
 	for _, src := range cfg.Sources {
 		src := src // capture loop var
 
-		// Derive the app name for this source.
+		// Derive the service name for this source.
 		app := src.App
 		if app == "" && src.Unit != "" {
 			app = strings.TrimSuffix(src.Unit, ".service")
@@ -275,7 +288,8 @@ func main() {
 			base := filepath.Base(src.Path)
 			app = strings.TrimSuffix(base, filepath.Ext(base))
 		}
-		fullApp := namespace + "/" + app
+		// Every tailed log lands at <ns>/<svc>/<kind>; kind defaults to "main".
+		fullApp := namespace + "/" + app + "/" + sourceKind(src)
 
 		// Per-source version dimension: file path wins (live-refresh
 		// via fsnotify), env-var name is the read-once-at-startup
@@ -299,7 +313,7 @@ func main() {
 			if strings.ContainsAny(src.Path, "*?[") {
 				// Glob: each matched file is onboarded independently from inside watchGlob.
 				// The app name derived from the pattern ("*") is meaningless here.
-				go watchGlob(ctx, coordClient, cfg.Token, customer, hostname, namespace, src.Path)
+				go watchGlob(ctx, coordClient, cfg.Token, customer, hostname, namespace, sourceKind(src), src.Path)
 			} else {
 				// Single file: onboard once, then tail.
 				go func() {
@@ -722,7 +736,7 @@ func appFromPath(pattern, path string) string {
 // auto-discovered — that's the well-known limitation of fsnotify
 // without a recursive subscriber. Startup-time discovery via
 // globMatch handles the deep case.
-func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, customer, instance, namespace, pattern string) {
+func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, customer, instance, namespace, kind, pattern string) {
 	prefix := fixedPrefix(pattern)
 	watchDir := strings.TrimSuffix(prefix, string(filepath.Separator))
 	if watchDir == "" {
@@ -736,7 +750,7 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, cust
 		}
 		tailing[p] = true
 		app := appFromPath(pattern, p)
-		fullApp := namespace + "/" + app
+		fullApp := namespace + "/" + app + "/" + kind
 		go func() {
 			if err := onboardAndRun(ctx, client, token, customer, app, p, instance, fullApp, func() {
 				runFileTailer(ctx, client, customer, instance, fullApp, p)

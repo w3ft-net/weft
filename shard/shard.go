@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS logs (
     level          TEXT,
     namespace      TEXT,
     service        TEXT,
+    kind           TEXT,
     app            TEXT,
     instance       TEXT,
     customer       TEXT,
@@ -93,6 +94,19 @@ var migrationSteps = []string{
 	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS service TEXT`,
 	// Backfill namespace/service from composite app column for existing rows.
 	`UPDATE logs SET namespace = split_part(app, '/', 1), service = substr(app, position('/' in app) + 1) WHERE namespace IS NULL AND app IS NOT NULL AND position('/' in app) > 0`,
+	// Add the kind column and backfill from the third path segment of app.
+	// 2-seg apps (ns/svc) get kind='main'; 3+-seg apps (ns/svc/kind[/…])
+	// keep everything past the second slash as kind.
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS kind TEXT`,
+	`UPDATE logs SET kind = CASE
+		WHEN app IS NULL THEN NULL
+		WHEN length(app) - length(replace(app, '/', '')) < 2 THEN 'main'
+		ELSE substr(app, position('/' in substr(app, position('/' in app) + 1)) + position('/' in app) + 1)
+	END WHERE kind IS NULL AND app IS NOT NULL`,
+	// Service should not carry the kind suffix anymore. Strip everything
+	// from the second slash onward so existing service='compute/heartbeats'
+	// rows become service='compute' with kind='heartbeats'.
+	`UPDATE logs SET service = substr(service, 1, position('/' in service) - 1) WHERE service IS NOT NULL AND position('/' in service) > 0`,
 }
 
 // NewDuckDBShard opens or creates a DuckDB database at path and initializes the
@@ -144,21 +158,21 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("INSERT INTO logs (raw, fields, ts, level, namespace, service, app, instance, customer, payload, deployment, env, version, region, cluster, k8s_namespace, pod, container, node) VALUES ")
+	sb.WriteString("INSERT INTO logs (raw, fields, ts, level, namespace, service, kind, app, instance, customer, payload, deployment, env, version, region, cluster, k8s_namespace, pod, container, node) VALUES ")
 
-	args := make([]any, 0, len(rows)*19)
+	args := make([]any, 0, len(rows)*20)
 	for i, r := range rows {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 
 		payloadStr := "{}"
 		if len(r.PayloadJson) > 0 {
 			payloadStr = string(r.PayloadJson)
 		}
 
-		ns, svc := SplitApp(r.App)
+		ns, svc, kind := SplitApp(r.App)
 		args = append(args,
 			r.Raw,
 			r.Fields,
@@ -166,6 +180,7 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
 			r.Level,
 			ns,
 			svc,
+			kind,
 			r.App,
 			r.Instance,
 			r.Customer,
@@ -189,12 +204,30 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
 	return err
 }
 
-// SplitApp splits a composite app name ("loom/api") into namespace and service.
-func SplitApp(app string) (namespace, service string) {
-	if i := strings.Index(app, "/"); i >= 0 {
-		return app[:i], app[i+1:]
+// SplitApp splits a composite app name into namespace, service, and kind.
+// Every row carries a kind: the regular tailed log is "main", telemetry
+// streams (heartbeats, metrics, runtime) use their own kind. Wire-format
+// apps land in one of three shapes:
+//
+//	"<ns>"                  → ns only; svc and kind both default to ""/"main"
+//	"<ns>/<svc>"            → ns + svc; kind defaults to "main"
+//	"<ns>/<svc>/<kind>"     → ns + svc + kind (the canonical shape)
+//
+// 4+ segments are joined into kind ("<ns>/<svc>/<a>/<b>" → kind="a/b").
+// Empty input returns three empty strings.
+func SplitApp(app string) (namespace, service, kind string) {
+	if app == "" {
+		return "", "", ""
 	}
-	return app, ""
+	parts := strings.SplitN(app, "/", 3)
+	switch len(parts) {
+	case 1:
+		return parts[0], "", "main"
+	case 2:
+		return parts[0], parts[1], "main"
+	default:
+		return parts[0], parts[1], parts[2]
+	}
 }
 
 // RowCount returns the total number of rows ingested into this shard.

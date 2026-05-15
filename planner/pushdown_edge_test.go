@@ -182,7 +182,7 @@ func TestEdge_Awk_NonPushable(t *testing.T) {
 // post-`tail` / post-`head` awk filter case that user-facing queries
 // actually hit:
 //
-//	tail /log/weft/coordinator.log | awk '$4 == "compute" {print}'
+//	tail /log/weft/coordinator/main.log | awk '$4 == "compute" {print}'
 //
 // Two facts collide here. (1) After tail freezes the LIMIT, every
 // subsequent stage MUST run in compute — pushing a filter shard-side
@@ -211,19 +211,19 @@ func TestEdge_Awk_FilterAfterLimitFreezeMustSurvive(t *testing.T) {
 	}{
 		{
 			name:     "tail then awk positional equality with explicit print",
-			pipeline: `tail /log/weft/coordinator.log | awk '$4 == "compute" {print}'`,
+			pipeline: `tail /log/weft/coordinator/main.log | awk '$4 == "compute" {print}'`,
 		},
 		{
 			name:     "head then awk positional equality with explicit print",
-			pipeline: `head /log/weft/coordinator.log | awk '$3 == "compute" {print}'`,
+			pipeline: `head /log/weft/coordinator/main.log | awk '$3 == "compute" {print}'`,
 		},
 		{
 			name:     "tail then awk positional equality with default action",
-			pipeline: `tail /log/weft/coordinator.log | awk '$4 == "compute"'`,
+			pipeline: `tail /log/weft/coordinator/main.log | awk '$4 == "compute"'`,
 		},
 		{
 			name:     "tail then awk regex on $0 with explicit print",
-			pipeline: `tail /log/weft/coordinator.log | awk '$0 ~ /compute/ {print}'`,
+			pipeline: `tail /log/weft/coordinator/main.log | awk '$0 ~ /compute/ {print}'`,
 		},
 	}
 	for _, tt := range tests {
