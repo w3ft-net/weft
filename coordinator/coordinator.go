@@ -1011,7 +1011,7 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	}
 	entries := c.Registry.MatchingEntries(tr, plan.FollowApp, tier)
 	if len(entries) == 0 {
-		log.Printf("query: no matching shards (app=%s, customer=%s)", plan.SourceApp, customer)
+		queryLog.Printf("query: no matching shards (app=%s, customer=%s)", plan.SourceApp, customer)
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
 
@@ -1028,7 +1028,7 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 		}
 		descs[i] = d
 	}
-	log.Printf("query: app=%s shards=%v compute=%v sql=%s",
+	queryLog.Printf("query: app=%s shards=%v compute=%v sql=%s",
 		plan.SourceApp, shardIDs, plan.ComputeStages, directSQL)
 
 	argStrs := make([]string, len(plan.Args))
@@ -1041,7 +1041,7 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 			// as %v rendering — surface it as a typed bug if it ever
 			// happens rather than silent data loss.
 			argStrs[i] = fmt.Sprintf("%v", a)
-			log.Printf("query: non-string arg at position %d (%T %v) — bound via fmt", i, a, a)
+			queryLog.Printf("query: non-string arg at position %d (%T %v) — bound via fmt", i, a, a)
 		}
 	}
 	stream, err := c.Pool.ExecuteQuery(&pb.ExecuteQueryRequest{
@@ -1057,7 +1057,7 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 		KeepLast: plan.TailMode,
 	})
 	if err != nil {
-		log.Printf("query: compute error: %v", err)
+		queryLog.Printf("query: compute error: %v", err)
 		return nil, err
 	}
 	return &ExecuteResult{Stream: stream}, nil

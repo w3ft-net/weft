@@ -46,7 +46,15 @@ func main() {
 	awsRegion := flag.String("region", "us-east-2", "AWS region for ASG discovery")
 	customer := flag.String("customer", "", "fallback customer for dev/docker (queries pass customer per-request)")
 	dbDSN := flag.String("db-dsn", "", "PostgreSQL DSN (e.g., host=localhost dbname=weft user=weft password=...)")
+	queryLogPath := flag.String("query-log", "/var/log/weft/queries.log", "path for the query-audit log; falls back to stderr if unwritable")
 	flag.Parse()
+
+	// Route the query-audit stream to its own file so substring monitors
+	// watching weft/coordinator can't self-trigger on the audit probe.
+	// On failure we keep the stderr fallback rather than fail to start.
+	if err := coordinator.SetQueryLog(*queryLogPath); err != nil {
+		log.Printf("warning: query-audit log to %s unavailable, using stderr: %v", *queryLogPath, err)
+	}
 
 	// Shared bearer token for coord ↔ shard gRPC. Coord is the client,
 	// shard is the server; both read the same SHARD_SECRET env var and

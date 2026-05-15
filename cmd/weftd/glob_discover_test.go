@@ -82,7 +82,7 @@ func runWatchGlob(t *testing.T, pattern string, expected int) []string {
 	defer cancel()
 
 	rec := &sampleSubmitRecorder{}
-	go watchGlob(ctx, rec, "wft_test", "kevlar", "testhost", "testns", "main", pattern)
+	go watchGlob(ctx, rec, "wft_test", "kevlar", "testhost", "testns", "main", pattern, nil)
 
 	deadline := time.Now().Add(2500 * time.Millisecond)
 	for time.Now().Before(deadline) {
@@ -215,4 +215,38 @@ func contains(ss []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// TestGlob_SkipsExplicitlyClaimedFile — a concrete file that is also the
+// target of a dedicated explicit source must not be double-ingested by
+// a `*.log` glob. This is the coordinator query-audit case:
+// coordinator-queries.log is tailed by its own (app=coordinator,
+// kind=queries) source, so the glob covering the same directory must
+// skip it while still onboarding the sibling coordinator.log.
+func TestGlob_SkipsExplicitlyClaimedFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "coordinator.log"), "2026-05-15 INFO up\n")
+	claimed := filepath.Join(dir, "coordinator-queries.log")
+	writeFile(t, claimed, "2026-05-15 query: app=weft/coordinator\n")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	rec := &sampleSubmitRecorder{}
+	excluded := map[string]bool{absClean(claimed): true}
+	go watchGlob(ctx, rec, "wft_test", "kevlar", "testhost", "testns", "main",
+		filepath.Join(dir, "*.log"), excluded)
+
+	deadline := time.Now().Add(2500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if len(rec.sampleApps()) >= 1 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	got := rec.sampleApps()
+	if !equalStrings(got, []string{"coordinator"}) {
+		t.Fatalf("glob should onboard only coordinator (coordinator-queries is explicitly claimed)\n got %v", got)
+	}
 }

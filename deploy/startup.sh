@@ -136,6 +136,21 @@ if [ "$ROLE" != "loom-producer" ] && [ -n "${WEFTD_TOKEN:-}" ] && command -v wef
     *)           SERVICES="[${ROLE}]" ;;
   esac
 
+  # The coordinator writes its query-audit stream to a dedicated file
+  # (--query-log in weft-coordinator.service). Tail it as its own
+  # (app=coordinator, kind=queries) source so it lands at
+  # /log/weft/coordinator/queries.log instead of folding into
+  # coordinator.log — substring monitors watching weft/coordinator must
+  # not match the audit probe that produced the line. weftd's
+  # glob/explicit deconfliction keeps the /opt/app/logs/*.log source
+  # below from also ingesting this file. Coordinator role only.
+  QUERIES_SOURCE=""
+  if [ "$ROLE" = "coordinator" ]; then
+    QUERIES_SOURCE="  - path: /opt/app/logs/coordinator-queries.log
+    app: coordinator
+    kind: queries"
+  fi
+
   cat > /etc/weftd/config.yaml <<WEFTCFG
 endpoint: ingest.w3ft.net:9020
 token: ${WEFTD_TOKEN}
@@ -158,6 +173,7 @@ sources:
         - cpu
         - memory
         - disk
+${QUERIES_SOURCE}
 WEFTCFG
   chmod 600 /etc/weftd/config.yaml
 

@@ -274,6 +274,19 @@ func main() {
 		log.Printf("dimensions.%s: watching %s", col, spec.Path)
 	}
 
+	// A concrete file may be matched by a `*.log`-style glob source and
+	// also be the target of a dedicated explicit source (e.g. the
+	// coordinator's query-audit log, tailed with its own kind). Without
+	// deconfliction the file would ingest twice under two different
+	// (app,kind) identities. Explicit wins: collect every non-glob
+	// `path:` and exclude those concrete files from glob expansion.
+	explicitPaths := map[string]bool{}
+	for _, src := range cfg.Sources {
+		if src.Unit == "" && src.Path != "" && !strings.ContainsAny(src.Path, "*?[") {
+			explicitPaths[absClean(src.Path)] = true
+		}
+	}
+
 	// Start sources — each independently onboards then streams.
 	for _, src := range cfg.Sources {
 		src := src // capture loop var
@@ -313,7 +326,7 @@ func main() {
 			if strings.ContainsAny(src.Path, "*?[") {
 				// Glob: each matched file is onboarded independently from inside watchGlob.
 				// The app name derived from the pattern ("*") is meaningless here.
-				go watchGlob(ctx, coordClient, cfg.Token, customer, hostname, namespace, sourceKind(src), src.Path)
+				go watchGlob(ctx, coordClient, cfg.Token, customer, hostname, namespace, sourceKind(src), src.Path, explicitPaths)
 			} else {
 				// Single file: onboard once, then tail.
 				go func() {
@@ -722,6 +735,17 @@ func appFromPath(pattern, path string) string {
 	return rel
 }
 
+// absClean normalises a path for set-membership comparison between a
+// configured explicit `path:` and a glob-matched file. Falls back to a
+// lexical clean when the working dir is unavailable so the comparison
+// is still consistent (both sides go through the same function).
+func absClean(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return filepath.Clean(p)
+}
+
 // watchGlob watches a directory for new files matching a glob pattern. For
 // each matching file — both files present at startup and files created later —
 // it runs onboardAndRun with the file's real path and a per-file app name
@@ -736,7 +760,7 @@ func appFromPath(pattern, path string) string {
 // auto-discovered — that's the well-known limitation of fsnotify
 // without a recursive subscriber. Startup-time discovery via
 // globMatch handles the deep case.
-func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, customer, instance, namespace, kind, pattern string) {
+func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, customer, instance, namespace, kind, pattern string, excluded map[string]bool) {
 	prefix := fixedPrefix(pattern)
 	watchDir := strings.TrimSuffix(prefix, string(filepath.Separator))
 	if watchDir == "" {
@@ -746,6 +770,10 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, cust
 
 	startFile := func(p string) {
 		if tailing[p] {
+			return
+		}
+		if excluded[absClean(p)] {
+			log.Printf("[%s] %s claimed by an explicit source — glob skipping", namespace, p)
 			return
 		}
 		tailing[p] = true
