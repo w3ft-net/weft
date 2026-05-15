@@ -210,7 +210,9 @@ day. Drift between them is a bug.
 ## Components to build
 
 1. **`clients/python/weft/`** — new package, published to PyPI as
-   `weft`. Pure Python, no compiled extensions, no required deps.
+   `w3ft` (the `weft` name is taken by an unrelated project; the
+   import name remains `weft`). Pure Python, no compiled extensions,
+   no required deps.
    Optional `weft[http]` extra pulls in `urllib3` for the HTTP
    fallback if the host's stdlib `http.client` proves too limited
    in practice (probably not — keep it stdlib-only as long as we
@@ -237,7 +239,9 @@ day. Drift between them is a bug.
 4. **PyPI release** — Reuses the existing release pipeline
    (`.kevcons/ext/release.lua`). Versioned independently from the
    main weft module so the SDK can iterate without forcing
-   coordinator/shard rebuilds. First publish: `weft 0.1.0`.
+   coordinator/shard rebuilds. First publish: `w3ft 0.1.0`. See
+   [Publishing to PyPI](#publishing-to-pypi) below for the
+   operational recipe.
 5. **Type stubs** — none needed; the package is fully typed
    inline. PEP 561 marker file (`py.typed`) so consumers' type
    checkers see the annotations.
@@ -257,6 +261,63 @@ day. Drift between them is a bug.
 **Total: ~3.5 days.** Same magnitude as the Go SDK; same upstream
 prereqs (`app-heartbeats.md` for the heartbeat endpoint;
 `http-ingest.md` for the HTTP fallback transport).
+
+## Publishing to PyPI
+
+The PyPI distribution name is **`w3ft`**; the import name remains
+`weft` (the `weft` name on PyPI is held by an unrelated package).
+Set `name = "w3ft"` in `pyproject.toml` — consumers run
+`pip install w3ft` and then `import weft`.
+
+### One-time setup
+
+1. **Create a PyPI API token** at
+   <https://pypi.org/manage/account/token/>. Scope "Entire account"
+   for the first publish; narrow to project-scoped after the
+   project page exists. Repeat at
+   <https://test.pypi.org/manage/account/token/> for TestPyPI.
+2. **Stash both tokens** in `~/.pypirc` with mode 0600:
+   ```ini
+   [pypi]
+   username = __token__
+   password = pypi-AgEI...
+
+   [testpypi]
+   repository = https://test.pypi.org/legacy/
+   username = __token__
+   password = pypi-AgEN...
+   ```
+3. **Decide on ownership before the first upload.** A personal
+   account is fine for a single maintainer; create a `w3ft-net`
+   PyPI org if the SDK should be co-maintained. Re-homing a
+   project from one account to another later is a manual PyPI
+   support ticket — easier to start in the right place.
+4. **Verify project URLs resolve.** `pyproject.toml`'s
+   `[project.urls]` block points at `weft.net` / `weft.net/docs`;
+   dead links on the PyPI project page are a bad first impression.
+
+### Each release
+
+```bash
+cd ~/dev/weft-py
+pipenv run pip install --upgrade build twine
+pipenv run python -m build       # → dist/w3ft-X.Y.Z-py3-none-any.whl + .tar.gz
+pipenv run twine check dist/*    # README rendering sanity check
+
+# TestPyPI dry run — same code path, cheap insurance
+pipenv run twine upload --repository testpypi dist/*
+pip install --index-url https://test.pypi.org/simple/ --no-deps w3ft
+python -c "import weft; print(weft.__version__)"
+
+# Real upload
+pipenv run twine upload dist/*
+```
+
+The version comes from `pyproject.toml`'s `version` field — bump
+it before building. PyPI rejects re-uploads of a version that's
+already been published, even if it was subsequently yanked, so a
+botched release means version-bumping forward rather than
+overwriting.
 
 ## Non-goals
 

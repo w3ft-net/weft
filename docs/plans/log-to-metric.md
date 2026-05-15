@@ -1,6 +1,6 @@
 # Plan: Log-to-metric (ingest-time counters)
 
-A declarative "every row matching X increments a metric tick" mechanism. Small extension of `docs/plans/ingest-governance.md`'s rule engine — same matcher, new terminal action that emits a synthetic metric row instead of (or alongside) dropping/sampling the original.
+A declarative "every row matching X increments a metric tick" mechanism. Small extension of `docs/plans/compliance/ingest-governance.md`'s rule engine — same matcher, new terminal action that emits a synthetic metric row instead of (or alongside) dropping/sampling the original.
 
 ## Why add this
 
@@ -73,7 +73,7 @@ The underscore prefix (`_metrics`) distinguishes rule-generated metrics from wef
 
 ## Relationship to other plans
 
-- **Prereq: `docs/plans/ingest-governance.md`.** Don't ship this without the rule engine; as a standalone feature it's too small to justify its own code path.
+- **Prereq: `docs/plans/compliance/ingest-governance.md`.** Don't ship this without the rule engine; as a standalone feature it's too small to justify its own code path.
 - **Uses: `docs/plans/ingest-dimensions.md`.** The `by:` list of fields picks out dimensions; if the customer has already declared `host`/`region`/`env` as configurable dimensions, `by: [host, region]` just works.
 - **Obviates: per-host polling watches.** A customer who's been running "count 5xx by host every minute" as a watch can delete it and replace with a rule + consume `<namespace>/_metrics` via the same `weft.*` helpers.
 

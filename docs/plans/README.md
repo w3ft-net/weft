@@ -5,6 +5,12 @@ before touching the affected code. This README is the index plus a
 suggested build order; individual plans are authoritative on their
 own designs.
 
+Security & compliance plans are grouped under
+[`compliance/`](compliance/README.md) — the audit trail, ingest- and
+read-time redaction, and the cross-tenant disclosure finding. They keep
+their roadmap phasing below; the subfolder README is the umbrella that
+ties them together.
+
 ## Status
 
 | Plan | State |
@@ -25,7 +31,7 @@ Each unblocks a meaningful slice of downstream work.
 |---|---:|---|
 | [http-ingest](http-ingest.md) | ~2d remaining | Heroku adapter shipped; JSONAdapter (`/api/ingest`) + CloudWatchAdapter still pending |
 | [python-sdk](python-sdk.md) | 3.5d | Python-flavored runtime stats. Pairs with the now-shipped go-sdk. |
-| [audit-log](audit-log.md) | 4.75d | Cheap to wire once before five downstream plans want to emit events |
+| [audit-log](compliance/audit-log.md) | 4.75d | Cheap to wire once before five downstream plans want to emit events |
 
 ### Phase 1 — table-stakes commercial
 
@@ -34,7 +40,7 @@ Things customers will name in the first sales call.
 | Plan | Effort | Notes |
 |---|---:|---|
 | [user-sso](user-sso.md) | 4.5d | OIDC for Google + generic; SAML/SCIM deferred |
-| [ingest-governance](ingest-governance.md) | 4.5d | Ordered drop / sample / redact rules at the drain |
+| [ingest-governance](compliance/ingest-governance.md) | 4.5d | Ordered drop / sample / redact rules at the drain |
 | [log-to-metric](log-to-metric.md) | 1.5d | Tiny extension of governance; ship together |
 
 ### Phase 2 — operational polish
@@ -61,7 +67,7 @@ Each one a buying-blocker for some procurement team.
 
 | Plan | Effort | Notes |
 |---|---:|---|
-| [field-redaction](field-redaction.md) | 5d | Read-time per-role masking |
+| [field-redaction](compliance/field-redaction.md) | 5d | Read-time per-role masking |
 | [weftd-k8s](weftd-k8s.md) | 7d | DaemonSet via Helm; depends on `ingest-dimensions` |
 | [byok-encryption](byok-encryption.md) | 8d | Customer KMS keys for the Parquet archive |
 | [data-residency](data-residency.md) | 16d | Cell-based multi-region; one EU launch |

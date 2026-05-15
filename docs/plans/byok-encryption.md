@@ -67,7 +67,7 @@ The archive process today exports DuckDB to Parquet, uploads to `s3://weft-cold-
 3. **Archive write path** — `coordinator/archiver.go` (or wherever the export lives) gains a per-customer partitioning + per-customer S3 client cache keyed on assumed-role credentials.
 4. **Cold reader** — `coordinator/cold_shard.go` looks up per-customer config, uses the right credentials. Existing rows-from-S3 plumbing is unchanged once `s3.GetObject` returns bytes.
 5. **Web UI** — Account → Encryption page. Form for role ARN + external ID + KMS key ARN. "Test connection" probe. Status badge. Documentation links.
-6. **Audit-log integration** — every config change emits an audit event (`encryption.config_save`, `encryption.config_remove`, `encryption.probe_failed`); folds into `docs/plans/audit-log.md`.
+6. **Audit-log integration** — every config change emits an audit event (`encryption.config_save`, `encryption.config_remove`, `encryption.probe_failed`); folds into `docs/plans/compliance/audit-log.md`.
 7. **Tier gate** — BYOK is an enterprise-tier feature. Cheap users keep AWS-managed encryption.
 8. **Docs** — `docs/manual/byok.md` with the IAM trust policy template, KMS key policy template, and a troubleshooting section.
 

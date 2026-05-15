@@ -1,6 +1,6 @@
 # Plan: Read-time field redaction
 
-Per-namespace rules that mask specific JSON fields based on the reading user's role. Distinct from ingest-time redaction (`docs/plans/ingest-governance.md`): ingest-time redaction means the value never lands on disk; field-redaction means the value persists but is masked at query time when a less-privileged role reads it.
+Per-namespace rules that mask specific JSON fields based on the reading user's role. Distinct from ingest-time redaction (`docs/plans/compliance/ingest-governance.md`): ingest-time redaction means the value never lands on disk; field-redaction means the value persists but is masked at query time when a less-privileged role reads it.
 
 ## Why both, not one
 
@@ -77,7 +77,7 @@ There's a side channel here: a caller can confirm specific values by issuing pre
 3. **Hook in the coordinator query response path** — `coordinator/coordinator.go`'s row-streaming handler runs each row through the redactor before yielding to the client. Watch evaluation runs *unredacted* — watches are server-side and need full data; redaction is purely a client-facing transform.
 4. **Shell editor** — `vi /etc/redaction/<namespace>.conf` opens the rules YAML for that namespace; save-time validation rejects bad field paths and unknown roles.
 5. **Web UI** — Namespace settings → Redaction tab. Form-based rule list + a test pane: paste a sample log row, see what each role would see.
-6. **Audit log integration** — rule changes emit events (`redaction.rule_save`, `redaction.rule_delete`) into `docs/plans/audit-log.md`.
+6. **Audit log integration** — rule changes emit events (`redaction.rule_save`, `redaction.rule_delete`) into `docs/plans/compliance/audit-log.md`.
 7. **Docs** — `docs/manual/field-redaction.md` covering the rule grammar, side-channel caveat, the "mask for everyone except owners" wildcard, and the three plan combos: ingest-time only, read-time only, both.
 
 ## Subtle interaction with watches and `/tmp`
