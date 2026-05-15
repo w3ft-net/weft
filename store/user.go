@@ -29,11 +29,11 @@ const (
 func WatchLimit(tier Tier) int {
 	switch tier {
 	case TierSwatch:
-		return 5
+		return 20
 	case TierYard:
-		return 10
+		return 100
 	case TierBolt:
-		return 50
+		return 500
 	default:
 		return 1 // trial: no watches
 	}
@@ -179,10 +179,10 @@ type User struct {
 	// marks a graduate. The middleware reads this to decide whether
 	// the welcome modal / tour overlays render; the shell hooks read
 	// it to decide whether OnboardingHooks attach.
-	OnboardingStep       string `gorm:"not null;default:welcome"`
-	OnboardingDismissed  bool   `gorm:"not null;default:false"`
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
+	OnboardingStep      string `gorm:"not null;default:welcome"`
+	OnboardingDismissed bool   `gorm:"not null;default:false"`
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // MagicLink is a one-time-use login token.

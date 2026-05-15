@@ -370,7 +370,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/onboarding/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/fs/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 
-	return CORSMiddleware(s.baseURL, mux)
+	return AccessLog(CORSMiddleware(s.baseURL, mux))
 }
 
 // --- Auth handlers ---
