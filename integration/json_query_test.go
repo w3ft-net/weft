@@ -27,7 +27,9 @@ func TestDockerStack_JqFieldExtraction(t *testing.T) {
 
 	// Per-run app so repeated runs against a long-lived stack don't
 	// see each other's metrics rows in the count assertions.
-	app := fmt.Sprintf("jqtest/r%d-metrics", time.Now().UnixNano())
+	// Canonical 3-seg app (<ns>/<svc>/<kind>) — the post-d81b562 layout
+	// requires an explicit kind; "main" is the ordinary-log stream.
+	app := fmt.Sprintf("jqtest/r%d-metrics/main", time.Now().UnixNano())
 	logPath := fmt.Sprintf("/log/%s.log", app)
 
 	now := time.Now()

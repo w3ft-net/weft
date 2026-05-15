@@ -81,9 +81,12 @@ func TestDockerStack_IngestAndQuery(t *testing.T) {
 	// fixture state; scoping the assertions to per-run apps within it
 	// keeps exact-count checks honest without forcing a namespace
 	// teardown between runs.
+	// Canonical 3-seg apps (<ns>/<svc>/<kind>) — the post-d81b562 layout
+	// requires an explicit kind; "main" is the ordinary-log stream that
+	// real producers/weftd ship.
 	run := time.Now().UnixNano()
-	appA := fmt.Sprintf("integration/r%d-a", run)
-	appB := fmt.Sprintf("integration/r%d-b", run)
+	appA := fmt.Sprintf("integration/r%d-a/main", run)
+	appB := fmt.Sprintf("integration/r%d-b/main", run)
 
 	now := time.Now()
 	for i := 0; i < 10; i++ {

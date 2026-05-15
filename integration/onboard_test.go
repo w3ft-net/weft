@@ -171,7 +171,9 @@ func TestOnboardFlow(t *testing.T) {
 	})
 
 	tag := fmt.Sprintf("onboard-test-%d", time.Now().UnixNano())
-	pipeline := fmt.Sprintf("cat /log/kevlar/testapp.log | grep %s", tag)
+	// weftd's file tailer ships <ns>/<svc>/main, so the queryable
+	// pseudofile is the canonical 3-seg form (post-d81b562 layout).
+	pipeline := fmt.Sprintf("cat /log/kevlar/testapp/main.log | grep %s", tag)
 
 	t.Logf("appending tagged lines and polling for tagged row to flow through weftd → coordinator → shard...")
 	var rows []*pb.ResultRow
