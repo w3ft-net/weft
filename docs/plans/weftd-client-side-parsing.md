@@ -2,10 +2,12 @@
 
 ## Status
 
-**Shipped behind a flag; in rollout.** The full design is implemented
-and gated on `WEFTD_PARSE_CLIENT_SIDE=1`, exactly as the Rollout
-section below prescribes (still at the gated step — not yet
-default-on). In code: `weftd/parser_cache.go` (`ParserCache`/
+**Shipped; default-on.** The full design is implemented and is now the
+default path: `WEFTD_PARSE_CLIENT_SIDE` is an opt-*out* — set `=0` to
+fall back to raw + Fields only as a fleet rollback lever. The flag is
+retained (not yet removed) solely as that lever; remove it and move
+this plan to `docs/completed/` once the fleet has run default-on
+without incident. In code: `weftd/parser_cache.go` (`ParserCache`/
 `ParserSlot`, hash-based refresh, `ingest.NewParser` reuse, OK/
 missing-level counters); `schema_hash` on `GetSourceStatusResponse`
 (`proto/weftpb/weft.proto`), with the coordinator computing the
@@ -17,8 +19,7 @@ already persisted on `log_groups` and returned to the agent on
 onboarding. CloudWatch (poller) and the offline `weft ingest` CLI
 already consumed the schema via `ingest.Parser`; weftd now does too.
 
-When this flips to default-on and the flag is removed, move this plan
-to `docs/completed/`.
+When the flag is removed, move this plan to `docs/completed/`.
 
 ## Why client-side, not server-side
 

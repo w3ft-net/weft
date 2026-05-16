@@ -60,11 +60,12 @@ var dimensionReaders = map[string]*weftd.FileValueReader{}
 // parseClientSide is enabled.
 var parserCache = weftd.NewParserCache()
 
-// parseClientSide gates the schema-driven parsing path during rollout.
-// When false (default), weftd ships rows with raw + Fields only, same
-// behavior as before this plan. When true, lines pass through
-// ingest.Parser to extract Level / TsUnixNs / PayloadJson before send.
-var parseClientSide = os.Getenv("WEFTD_PARSE_CLIENT_SIDE") == "1"
+// parseClientSide gates the schema-driven parsing path. Default-on as
+// of the rollout decision: lines pass through ingest.Parser to extract
+// Level / TsUnixNs / PayloadJson before send. Set
+// WEFTD_PARSE_CLIENT_SIDE=0 to fall back to shipping rows with raw +
+// Fields only (pre-plan behavior) as a rollback lever.
+var parseClientSide = os.Getenv("WEFTD_PARSE_CLIENT_SIDE") != "0"
 
 type Config struct {
 	Endpoint   string            `yaml:"endpoint"`   // coordinator address
