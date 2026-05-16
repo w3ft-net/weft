@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -95,16 +96,22 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	s3cfg := shard.S3ConfigFromEnv()
 
+	// Run the query into a buffer before writing the status. HandleQuery
+	// already materializes every result row (ScanResultRows) before it
+	// emits, so buffering does not change the memory profile — but it
+	// lets us return an honest HTTP status. The old path flushed a 200
+	// header first, so a failed query (missing parquet, bad SQL) was
+	// smuggled into the body as text: the coordinator saw 200, failed to
+	// parse the protobuf stream, and silently dropped the shard's rows
+	// with no log line anywhere. A real 5xx makes the existing
+	// "lambda returned %d" client log fire.
+	var buf bytes.Buffer
+	if err := HandleQuery(&buf, req, s3cfg); err != nil {
+		http.Error(w, fmt.Sprintf("query failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/x-protobuf-stream")
 	w.WriteHeader(http.StatusOK)
-
-	// Flush header immediately for streaming.
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
-
-	if err := HandleQuery(w, req, s3cfg); err != nil {
-		// Can't send HTTP error after headers are written — log it.
-		fmt.Fprintf(w, "\nerror: %v\n", err)
-	}
+	_, _ = w.Write(buf.Bytes())
 }

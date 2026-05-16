@@ -202,20 +202,24 @@ func (s *ColdShard) queryToSinkRemote(query string, args []any, sink RowSink) {
 		Args:        anyArgsToStrings(args),
 	})
 	if err != nil {
+		log.Printf("cold shard %s: marshal request: %v", s.id, err)
 		return
 	}
 
 	req, err := http.NewRequest(http.MethodPost, s.functionURL, bytes.NewReader(body))
 	if err != nil {
+		log.Printf("cold shard %s: build request: %v", s.id, err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if err := s.signRequest(req, body); err != nil {
+		log.Printf("cold shard %s: sign request: %v", s.id, err)
 		return
 	}
 
 	resp, err := s.client.Do(req)
 	if err != nil {
+		log.Printf("cold shard %s: lambda call failed: %v", s.id, err)
 		return
 	}
 	defer resp.Body.Close()
@@ -226,11 +230,17 @@ func (s *ColdShard) queryToSinkRemote(query string, args []any, sink RowSink) {
 		return
 	}
 
+	rowsSeen := 0
 	for {
 		row, err := ReadResultRow(resp.Body)
-		if err != nil {
+		if err == io.EOF {
 			return
 		}
+		if err != nil {
+			log.Printf("cold shard %s: stream read error after %d rows: %v", s.id, rowsSeen, err)
+			return
+		}
+		rowsSeen++
 		sink.SendRow(row, s.id)
 	}
 }

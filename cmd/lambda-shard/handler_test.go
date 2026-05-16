@@ -2,7 +2,11 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +76,73 @@ func TestLambdaHandler_FiltersByApp(t *testing.T) {
 	}
 	if len(rows) != 2 {
 		t.Fatalf("expected 2 vimgym rows, got %d", len(rows))
+	}
+}
+
+// TestServeHTTP_QueryFailureReturnsErrorStatus is the observability
+// contract: when the query fails (e.g. the parquet snapshot is missing
+// from S3), the handler must return a non-2xx status so the coordinator
+// logs "lambda returned 5xx" instead of silently dropping the shard's
+// rows. The pre-fix handler flushed a 200 header before running the
+// query, so failures were smuggled into the body as text and the
+// client saw 200 + zero rows with no log line anywhere.
+func TestServeHTTP_QueryFailureReturnsErrorStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(ServeHTTP))
+	defer srv.Close()
+
+	body, _ := json.Marshal(QueryRequest{
+		SQL:         "SELECT raw, ts FROM logs WHERE customer = 'kevlar'",
+		ParquetPath: "/nonexistent/missing-shard.parquet",
+	})
+	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("query against missing parquet returned 200 — failure is "+
+			"invisible to the coordinator; want a 5xx status (got %d)", resp.StatusCode)
+	}
+	if resp.StatusCode < 500 {
+		t.Fatalf("expected a 5xx server error, got %d", resp.StatusCode)
+	}
+
+	rows, _ := shard.ReadAllResultRows(resp.Body)
+	if len(rows) != 0 {
+		t.Fatalf("error response should carry no result rows, got %d", len(rows))
+	}
+}
+
+// TestServeHTTP_SuccessStreamsRows guards the happy path through the
+// HTTP surface (not just HandleQuery): 200 + parseable rows.
+func TestServeHTTP_SuccessStreamsRows(t *testing.T) {
+	path := testParquet(t)
+	srv := httptest.NewServer(http.HandlerFunc(ServeHTTP))
+	defer srv.Close()
+
+	body, _ := json.Marshal(QueryRequest{
+		SQL:         "SELECT raw, ts FROM logs WHERE customer = 'kevlar'",
+		ParquetPath: path,
+	})
+	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	rows, err := shard.ReadAllResultRows(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(rows))
+	}
+	if !strings.Contains(rows[0].Raw, "vimgym") && !strings.Contains(rows[0].Raw, "callbox") {
+		t.Fatalf("unexpected row content: %q", rows[0].Raw)
 	}
 }
 
