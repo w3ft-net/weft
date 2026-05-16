@@ -146,6 +146,49 @@ func TestServeHTTP_SuccessStreamsRows(t *testing.T) {
 	}
 }
 
+// TestServeHTTP_StreamsIncrementally guards against the buffer-the-
+// whole-result-then-write regression: a streamed response flushed per
+// row uses chunked transfer encoding with no Content-Length. A single
+// buffered Write would let net/http set a Content-Length instead.
+func TestServeHTTP_StreamsIncrementally(t *testing.T) {
+	path := testParquet(t)
+	srv := httptest.NewServer(http.HandlerFunc(ServeHTTP))
+	defer srv.Close()
+
+	body, _ := json.Marshal(QueryRequest{
+		SQL:         "SELECT raw, ts FROM logs WHERE customer = 'kevlar'",
+		ParquetPath: path,
+	})
+	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if cl := resp.Header.Get("Content-Length"); cl != "" {
+		t.Fatalf("response has Content-Length %q — result was buffered, not streamed", cl)
+	}
+	chunked := false
+	for _, te := range resp.TransferEncoding {
+		if te == "chunked" {
+			chunked = true
+		}
+	}
+	if !chunked {
+		t.Fatalf("expected chunked transfer encoding (streamed), got %v", resp.TransferEncoding)
+	}
+	rows, err := shard.ReadAllResultRows(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(rows))
+	}
+}
+
 func TestLambdaHandler_EmptyResult(t *testing.T) {
 	path := testParquet(t)
 	var buf bytes.Buffer

@@ -1,16 +1,18 @@
 package main
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 
+	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
 
@@ -24,20 +26,21 @@ type QueryRequest struct {
 	Args        []string `json:"args,omitempty"`
 }
 
-// HandleQuery executes a SQL query against a Parquet file and streams
-// length-prefixed protobuf LogRow messages to the writer.
-// This function is testable without the Lambda runtime.
-func HandleQuery(w io.Writer, req QueryRequest, s3cfg *shard.S3Config) error {
+// runQuery opens an in-memory DuckDB, configures S3, and executes the
+// rewritten query. Every failure here is pre-stream — a missing parquet
+// snapshot or bad SQL surfaces from db.Query() before any bytes are
+// written — so the caller can still return an honest non-2xx status.
+// On success the caller owns closing both the *sql.DB and *sql.Rows.
+func runQuery(req QueryRequest, s3cfg *shard.S3Config) (*sql.DB, *sql.Rows, error) {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
-		return fmt.Errorf("open duckdb: %w", err)
+		return nil, nil, fmt.Errorf("open duckdb: %w", err)
 	}
-	defer db.Close()
 
-	// Configure S3 if needed.
 	if s3cfg != nil {
 		if err := s3cfg.ConfigureDuckDB(db); err != nil {
-			return fmt.Errorf("configure s3: %w", err)
+			db.Close()
+			return nil, nil, fmt.Errorf("configure s3: %w", err)
 		}
 	}
 
@@ -57,22 +60,53 @@ func HandleQuery(w io.Writer, req QueryRequest, s3cfg *shard.S3Config) error {
 	}
 	rows, err := db.Query(query, args...)
 	if err != nil {
-		return fmt.Errorf("query: %w", err)
+		db.Close()
+		return nil, nil, fmt.Errorf("query: %w", err)
 	}
-	defer rows.Close()
+	return db, rows, nil
+}
 
-	// Scan and stream rows.
-	results, err := shard.ScanResultRows(rows)
-	if err != nil {
-		return fmt.Errorf("scan: %w", err)
+// streamRows scans rows one at a time and writes each as a
+// length-prefixed protobuf message, flushing after every row so the
+// coordinator receives results as they are produced rather than after
+// the whole result set is materialized. A non-nil error means the
+// stream is truncated (no end sentinel): callers past the HTTP header
+// can only log it — the coordinator's stream-read-error path then
+// surfaces the truncation on its side.
+func streamRows(w io.Writer, rows *sql.Rows) error {
+	flush := func() {}
+	if f, ok := w.(http.Flusher); ok {
+		flush = f.Flush
 	}
 
-	for _, row := range results {
-		if err := shard.WriteResultRow(w, row); err != nil {
+	for rows.Next() {
+		var raw string
+		var ts time.Time
+		if err := rows.Scan(&raw, &ts); err != nil {
+			return fmt.Errorf("scan row: %w", err)
+		}
+		if err := shard.WriteResultRow(w, &pb.ResultRow{Raw: raw, TsUnixNs: ts.UnixNano()}); err != nil {
 			return fmt.Errorf("write row: %w", err)
 		}
+		flush()
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("rows: %w", err)
 	}
 	return shard.WriteStreamEnd(w)
+}
+
+// HandleQuery executes a SQL query against a Parquet file and streams
+// length-prefixed protobuf ResultRow messages to the writer, one row at
+// a time. Testable without the Lambda runtime.
+func HandleQuery(w io.Writer, req QueryRequest, s3cfg *shard.S3Config) error {
+	db, rows, err := runQuery(req, s3cfg)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	defer rows.Close()
+	return streamRows(w, rows)
 }
 
 // ServeHTTP is the HTTP handler for the query endpoint.
@@ -96,22 +130,32 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	s3cfg := shard.S3ConfigFromEnv()
 
-	// Run the query into a buffer before writing the status. HandleQuery
-	// already materializes every result row (ScanResultRows) before it
-	// emits, so buffering does not change the memory profile — but it
-	// lets us return an honest HTTP status. The old path flushed a 200
-	// header first, so a failed query (missing parquet, bad SQL) was
-	// smuggled into the body as text: the coordinator saw 200, failed to
-	// parse the protobuf stream, and silently dropped the shard's rows
-	// with no log line anywhere. A real 5xx makes the existing
-	// "lambda returned %d" client log fire.
-	var buf bytes.Buffer
-	if err := HandleQuery(&buf, req, s3cfg); err != nil {
+	// Execute before writing the status. A failed query (missing
+	// parquet, bad SQL) surfaces from db.Query() with no bytes written,
+	// so it becomes an honest 500 the coordinator logs as
+	// "lambda returned 500" — instead of the old path, which flushed a
+	// 200 header first and smuggled the error into the body as text
+	// where the coordinator parsed it as a corrupt stream and silently
+	// dropped the shard's rows.
+	db, rows, err := runQuery(req, s3cfg)
+	if err != nil {
 		http.Error(w, fmt.Sprintf("query failed: %v", err), http.StatusInternalServerError)
 		return
 	}
+	defer db.Close()
+	defer rows.Close()
 
 	w.Header().Set("Content-Type", "application/x-protobuf-stream")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(buf.Bytes())
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
+	// Past the header now: a mid-stream failure (e.g. an S3 read
+	// interrupted after the parquet opened) can't change the status.
+	// We stop without the end sentinel; the coordinator's
+	// queryToSinkRemote logs the truncated stream on its side.
+	if err := streamRows(w, rows); err != nil {
+		log.Printf("lambda-shard: mid-stream failure after header sent: %v", err)
+	}
 }
