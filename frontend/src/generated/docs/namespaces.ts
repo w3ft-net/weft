@@ -8,6 +8,7 @@ const namespaces = {
   order: 10,
   headings: [
     { level: 2, id: "create-a-namespace", text: "Create a namespace" },
+    { level: 2, id: "log-path-layout", text: "Log path layout" },
   ],
   html: `<h2 id="create-a-namespace">Create a namespace</h2>
 <p>Namespaces group related log sources. A typical setup has one namespace per
@@ -17,6 +18,34 @@ short, lowercase name — it becomes part of token identifiers and CLI scoping.<
 <pre><code># From the shell
 namespace create production
 </code></pre>
+<h2 id="log-path-layout">Log path layout</h2>
+<p>Every log stream is addressed by a pseudofile path under <code>/log/</code>.
+The namespace is the first segment; the rest of the path names the
+service and stream kind, with an optional env segment for tokens
+that carry one:</p>
+<pre><code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log          env-less token
+/log/&lt;namespace&gt;/&lt;env&gt;/&lt;service&gt;/&lt;kind&gt;.log    env-bearing token
+</code></pre>
+<ul>
+<li><strong><code>&lt;namespace&gt;</code></strong> — the grouping you created above. A single
+<code>/log/&lt;namespace&gt;.log</code> is a namespace-wide wildcard (every
+service and kind under it).</li>
+<li><strong><code>&lt;service&gt;</code></strong> — the source name a producer reports for itself;
+surfaces as <code>$APP</code> / <code>$SERVICE</code> in queries.</li>
+<li><strong><code>&lt;env&gt;</code></strong> — present only for tokens minted with <code>--env</code>. It
+slots in immediately after the namespace, so an env-bearing path
+has four segments and an env-less one has three. Segment count
+alone disambiguates the two; a reader token spanning several envs
+never has to guess.</li>
+<li><strong><code>&lt;kind&gt;</code></strong> — the stream: <code>main</code> for ordinary application logs
+(the default a producer ships unless it says otherwise), plus
+<code>heartbeats</code>, <code>metrics</code>, and <code>runtime</code> for services that emit
+telemetry. It is always present.</li>
+</ul>
+<p>A namespace can hold env-less and env-bearing streams side by side
+as different tokens reauth over time. Env, region, deployment,
+host, and pod are query-time dimensions (<code>awk '$ENV == &quot;prod&quot;'</code>),
+not extra path segments — see <strong>Meta-variables</strong> for the full set.</p>
 `,
 } as const;
 

@@ -9,12 +9,14 @@ presented roughly in the order a user encounters them.
 The core feature. Users query logs through Unix pipeline syntax:
 
 ```
-cat /log/api.log | grep ERROR | awk '{print $3}' | head -20
-tail -f /log/api.log | grep "timeout"
+cat /log/myco/api/main.log | grep ERROR | awk '{print $3}' | head -20
+tail -f /log/myco/api/main.log | grep "timeout"
 ```
 
 Log sources appear as pseudofiles under `/log/`. The path
-hierarchy is `/log/<namespace>/<app>.log`. Users can browse with
+hierarchy is `/log/<namespace>/<service>/<kind>.log` (a
+`<env>` segment slots in after the namespace for env-bearing
+tokens). Users can browse with
 `ls /log/`.
 
 **Implementation path:**
@@ -59,27 +61,27 @@ Key meta-variables: `$APP`, `$HOST`, `$LEVEL`, `$TS`,
 `$DEPLOYMENT`, `$ENV`, `$VERSION`, `$REGION`, `$CLUSTER`,
 `$K8S_NAMESPACE`, `$POD`, `$CONTAINER`, `$NODE`.
 
-## Watches (cron)
+## Crons
 
-A watch is a named, scheduled pipeline. It runs on a cron
+A cron is a named, scheduled pipeline. It runs on a cron
 schedule, captures stdout as the result, and can trigger alerts.
 
 ```
 vi /cron.d/error-count
 ```
 
-Watch file format:
+Cron file format:
 
 ```
 # schedule: */5 * * * *
 # notify: ops
-tail -n 500 /log/api.log | awk '$LEVEL == "ERROR"' | wc -l
+tail -n 500 /log/myco/api/main.log | awk '$LEVEL == "ERROR"' | wc -l
 ```
 
 **Implementation:**
 
 - Model: `store/watch.go` (or related store files).
-- Scheduling: the coordinator's cron executor runs watches on
+- Scheduling: the coordinator's cron executor runs crons on
   their schedule.
 - Results: stored in a `cron_results` table with timestamps,
   enabling time-series queries.
@@ -91,16 +93,16 @@ tail -n 500 /log/api.log | awk '$LEVEL == "ERROR"' | wc -l
 
 ### Result accessors
 
-Watches produce history that other watches and scripts can query:
+Crons produce history that other crons and scripts can query:
 
 | Helper | Returns |
 |---|---|
-| `weft.latest(watch)` | Most recent stdout (trimmed) |
-| `weft.avg(watch, dur)` | Mean of numeric results in window |
-| `weft.max(watch, dur)` | Max in window |
-| `weft.min(watch, dur)` | Min in window |
-| `weft.sum(watch, dur)` | Sum in window |
-| `weft.stddev(watch, dur)` | Population stddev (≥2 samples) |
+| `weft.latest(cron)` | Most recent stdout (trimmed) |
+| `weft.avg(cron, dur)` | Mean of numeric results in window |
+| `weft.max(cron, dur)` | Max in window |
+| `weft.min(cron, dur)` | Min in window |
+| `weft.sum(cron, dur)` | Sum in window |
+| `weft.stddev(cron, dur)` | Population stddev (≥2 samples) |
 
 These are implemented in `coordinator/weftcmds.go` and backed by
 store queries.
@@ -111,7 +113,7 @@ Alerts are pipe stages appended to a pipeline. They evaluate the
 output against a condition and dispatch notifications.
 
 ```
-cat /log/api.log | grep ERROR | wc -l | alert above 50 --notify=ops
+cat /log/myco/api/main.log | grep ERROR | wc -l | alert above 50 --notify=ops
 ```
 
 Conditions: `above`, `below`, `eq`, `changed`, `rising N%`,
@@ -131,7 +133,7 @@ Conditions: `above`, `below`, `eq`, `changed`, `rising N%`,
 
 ## Dashboards
 
-Dashboards compose existing watches into a tile layout. They are
+Dashboards compose existing crons into a tile layout. They are
 YAML files under `/etc/dashboards/`:
 
 ```
@@ -160,7 +162,7 @@ output).
 
 - Model and validation: `store/dashboard.go`. YAML is parsed and
   validated at save time — all `kind:` values must be recognized,
-  all `size:` values must be sm/md/lg, every referenced watch must
+  all `size:` values must be sm/md/lg, every referenced cron must
   exist, and tables must declare `columns:`.
 - Terminal rendering: `dashboard/render.go`. Greedy row-packing
   based on tile size hints and terminal width.
@@ -174,11 +176,11 @@ output).
 
 ## Charts
 
-Charts render watch data as in-terminal visualizations.
+Charts render cron data as in-terminal visualizations.
 
 ```
 chart error-rate-hourly
-cat /log/api.log | grep ERROR | wc -l | chart
+cat /log/myco/api/main.log | grep ERROR | wc -l | chart
 ```
 
 **Implementation:**
@@ -190,7 +192,7 @@ cat /log/api.log | grep ERROR | wc -l | chart
   line charts with range selection, zoom, per-tag legends, and
   threshold reference lines.
 - Sparkline component: `frontend/src/components/Sparkline.tsx`
-  for compact inline charts (used in dashboard tiles and watch
+  for compact inline charts (used in dashboard tiles and cron
   listings).
 
 ## Scripts (/bin/)
@@ -211,7 +213,7 @@ lua` shebang.
 - Execution: the coordinator loads the script body, parses it with
   `bash.Parse()`, applies the `BinScriptTransform` (query
   rewriter), and executes it.
-- Version history: same `wit` integration as watches.
+- Version history: same `wit` integration as crons.
 - Store: scripts are rows in the `shell_functions` table, scoped
   to `customer_id`.
 
@@ -229,6 +231,8 @@ Read-only tools:
   redirects or control flow).
 - `weft.ls` — list `/log/` paths.
 - `weft.cat` — read log content.
+- `weft.crons_list` — list every scheduled cron with its
+  schedule and pipeline (audit / recover-before-propose).
 
 Mutation tools (staged, human-approved):
 
@@ -264,7 +268,7 @@ All in `frontend/src/pages/`:
 |---|---|
 | `Shell.tsx` | WebAssembly shell with xterm.js |
 | `Dashboards.tsx` | Multi-dashboard viewer with sidebar switcher |
-| `Watch.tsx` | Watch detail with Recharts time-series |
+| `Watch.tsx` | Cron detail with Recharts time-series |
 | `Account.tsx` | Team, subscription, and integration management |
 | `Namespaces.tsx` | CloudWatch source management |
 | `Manual.tsx` | Embedded documentation viewer |

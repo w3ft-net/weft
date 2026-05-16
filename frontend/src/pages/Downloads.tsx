@@ -123,40 +123,62 @@ export default function Downloads() {
             </div>
 
             <div className="dl-install">
-              <div className="dl-install-title">Install agent</div>
+              <div className="dl-install-title">1. Install the package</div>
+              <p className="dl-install-note">
+                The package enables weftd on boot but does <strong>not</strong> start
+                it — weftd refuses to run until you author its config (next step).
+              </p>
               <CodeBlock
                 testId="downloads-agent-install-block"
                 code={`curl -LO ${agentUrl('amd64')}
-sudo dpkg -i weftd_latest_amd64.deb
-sudo systemctl enable --now weftd`}
+sudo dpkg -i weftd_latest_amd64.deb`}
               />
             </div>
 
             <div className="dl-install">
-              <div className="dl-install-title">Configure agent token</div>
+              <div className="dl-install-title">2. Author the config</div>
               <p className="dl-install-note">
                 Create a token on the{' '}
                 <a href="/account" data-testid="downloads-account-link">Account</a>{' '}
-                page, then add it to <code>/etc/weftd/weftd.conf</code>:
+                page. weftd is configured entirely by{' '}
+                <code>/etc/weftd/config.yaml</code> — the single source of truth,
+                never generated or overwritten by the package. Copy{' '}
+                <code>/etc/weftd/config.yaml.example</code> and edit:
               </p>
               <CodeBlock
                 testId="downloads-agent-config-block"
-                code={`[agent]
-token = <your-agent-token>
-coordinator = grpc://coordinator.w3ft.net:4317
-app = myapp
+                code={`# /etc/weftd/config.yaml
+endpoint: w3ft.net:443
+token: <your-agent-token>
 
-[logs]
-systemd = true
-paths = ["/var/log/myapp/*.log"]`}
+# Optional host-wide dimensions stamped on every row
+deployment: api
+region: us-east-2
+services: [api]
+
+sources:
+  # kind defaults to "main"; lands at /log/<ns>/myapp/main.log
+  - app: myapp
+    path: /var/log/myapp/*.log
+    schema: json
+
+  # tail a systemd unit's journal instead of a path
+  - app: worker
+    unit: worker.service`}
               />
+              <p className="dl-install-note">
+                The token may instead come from <code>WEFTD_TOKEN</code> in{' '}
+                <code>/etc/default/weftd</code> (env wins over the file value) —
+                useful when a secret injector supplies it out of band.
+              </p>
             </div>
 
             <div className="dl-install">
-              <div className="dl-install-title">Verify connection</div>
+              <div className="dl-install-title">3. Start &amp; verify</div>
               <CodeBlock
                 testId="downloads-agent-verify-block"
-                code={`sudo systemctl status weftd
+                code={`sudo systemctl start weftd
+sudo systemctl status weftd
 journalctl -u weftd -f`}
               />
             </div>

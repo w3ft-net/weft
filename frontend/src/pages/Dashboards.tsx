@@ -98,7 +98,7 @@ function DashboardEmptyState() {
       </p>
       <pre className="dashboards-empty-snippet">vi /etc/dashboards/prod.yaml</pre>
       <p>
-        Each dashboard groups watch-driven tiles into sections. See the{' '}
+        Each dashboard groups cron-driven tiles into sections. See the{' '}
         <Link to="/manual#dashboards" data-testid="dashboards-empty-manual-link">manual</Link>{' '}
         for the YAML grammar and tile recipes.
       </p>

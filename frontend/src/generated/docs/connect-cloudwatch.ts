@@ -95,7 +95,7 @@ recent log events, and start writing rows. Confirm the source is live:</p>
 <pre><code>weft source list
 
 # And in the shell
-cat /log/my-app.log | head
+cat /log/myco/my-app/main.log | head
 </code></pre>
 <h3 id="troubleshooting">Troubleshooting</h3>
 <ul>

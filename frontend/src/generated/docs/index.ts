@@ -10,7 +10,7 @@ import queryLogs from './query-logs';
 import tmp from './tmp';
 import builtins from './builtins';
 import metavars from './metavars';
-import watches from './watches';
+import crons from './crons';
 import alertingStrategies from './alerting-strategies';
 import dashboards from './dashboards';
 import alerting from './alerting';
@@ -45,7 +45,7 @@ export const manualCategories: readonly ManualCategory[] = [
   { id: "getting-started", label: "Getting started", summary: `Carve out namespaces for your environments and mint the tokens that agents and drains use to authenticate.` },
   { id: "connect-source", label: "Connect a source", summary: `Wire up logs from a host agent (weftd), an AWS CloudWatch log group, a Heroku app, or any custom line format.` },
   { id: "query", label: "Query", summary: `Read pseudofiles in the interactive shell, filter with awk/sed/jq, reach for meta-variables, and stash intermediates in /tmp.` },
-  { id: "alert-visualize", label: "Alert & visualize", summary: `Run pipelines on a schedule with watches, choose an alerting strategy that suits the signal, and pin live queries to dashboards.` },
+  { id: "alert-visualize", label: "Alert & visualize", summary: `Run pipelines on a schedule with crons, choose an alerting strategy that suits the signal, and pin live queries to dashboards.` },
   { id: "customize", label: "Customize", summary: `Build named weft functions, save reusable scripts, share them across the team, and review their history with wit.` },
 ];
 
@@ -60,7 +60,7 @@ export const manualSections: readonly ManualSection[] = [
   tmp,
   builtins,
   metavars,
-  watches,
+  crons,
   alertingStrategies,
   dashboards,
   alerting,

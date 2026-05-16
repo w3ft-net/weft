@@ -44,7 +44,7 @@ slower JSON-extract path.
 
 | awk | jq | Column | Source |
 |---|---|---|---|
-| `$APP` (alias `$SERVICE`) | `._app` (alias `._service`) | `app` | the log file's source name (`/log/<ns>/<app>.log`) |
+| `$APP` (alias `$SERVICE`) | `._app` (alias `._service`) | `app` | the log file's source name (the `<service>` in `/log/<ns>/<service>/<kind>.log`) |
 | `$HOST` (alias `$INSTANCE`) | `._host` (alias `._instance`) | `instance` | the agent's hostname |
 | `$LEVEL` | `._level` | `level` | parsed from the line per the source's schema |
 | `$TS` | `._ts` | `ts` | row timestamp |
@@ -62,16 +62,16 @@ A few examples:
 
 ```
 # Errors in production for one specific deployment
-cat /log/myco/prod/api.log | awk '$LEVEL == "ERROR" && $DEPLOYMENT == "api-east"'
+cat /log/myco/prod/api/main.log | awk '$LEVEL == "ERROR" && $DEPLOYMENT == "api-east"'
 
 # Same query in jq form against a JSON source
-cat /log/myco/prod/api.log | jq 'select(._level == "ERROR" and ._deployment == "api-east")'
+cat /log/myco/prod/api/main.log | jq 'select(._level == "ERROR" and ._deployment == "api-east")'
 
 # Per-host memory metrics
-tail /log/weft/metrics.log | jq 'select(._host == "shard-3" and .type == "memory") | .pct'
+tail /log/weft/shard/metrics.log | jq 'select(._host == "shard-3" and .type == "memory") | .pct'
 
 # Region-scoped grep
-cat /log/myco/prod/api.log | awk '$REGION == "us-east-2"' | grep "timeout"
+cat /log/myco/prod/api/main.log | awk '$REGION == "us-east-2"' | grep "timeout"
 ```
 
 ### Why two naming styles
@@ -93,7 +93,7 @@ Anything not in the table above lives in your row's JSON payload
 and is still queryable — just slower:
 
 ```
-cat /log/myco/prod/api.log | jq 'select(.feature_flag == "abc")'
+cat /log/myco/prod/api/main.log | jq 'select(.feature_flag == "abc")'
 ```
 
 The planner pushes that to `WHERE json_extract_string(payload,
@@ -104,41 +104,41 @@ the indexed columns.
 
 ## Per-tag values over time
 
-Indexed dimensions + a frequent watch + the multi-row alert form
+Indexed dimensions + a frequent cron + the multi-row alert form
 together give you "value by host (or service / region / pod) over
 time" without any new infrastructure. The full recipe — including
 per-tag incident dedup with `-k`/`-t` and per-tag debouncing — is
 in **Alerting strategies**.
 
-In short: write a watch whose body emits one line per tag (e.g.
+In short: write a cron whose body emits one line per tag (e.g.
 `"\(._host) \(.pct)"` from `jq -r`) and pipe it through
 `alert above N -k 2 -t 1 --notify=ops`. Each host opens and closes
 incidents independently against its tag.
 
-Window aggregates over the watch's history (`weft::avg`,
+Window aggregates over the cron's history (`weft::avg`,
 `weft::max`, etc.) currently summarize the entire run's stdout as
 one number, so the per-tag *aggregated history* is a follow-up.
 For now the recipe gives you per-bucket per-tag values; for the
-rolling average across buckets, point a second watch at it via
+rolling average across buckets, point a second cron at it via
 `weft::latest`.
 
 ## Charting a query
 
 Pipe any pipeline into `chart` to render the result as a chart in
-the terminal — no need to first commit it to a saved watch. The
+the terminal — no need to first commit it to a saved cron. The
 chart is the terminal stage of the pipeline (no commands after it).
 
 ```
 # Time-bucketed p95 latency over the current range
-cat /log/api.log \
+cat /log/myco/api/main.log \
   | chart -x .ts -y .latency_ms --bucket 1m -a p95
 
 # Distribution of total latency by path
-cat /log/api.log | jq '{path, latency}' \
+cat /log/myco/api/main.log | jq '{path, latency}' \
   | chart -x .path -y .latency -a sum
 
 # Plot a stream of numbers from jq
-cat /log/api.log | jq '.cpu_pct' | chart
+cat /log/myco/api/main.log | jq '.cpu_pct' | chart
 ```
 
 `-x` and `-y` accept either a 1-indexed whitespace column (`-x 1`)

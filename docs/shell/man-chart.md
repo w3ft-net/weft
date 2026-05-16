@@ -11,12 +11,12 @@ shell:
 
 ## NAME
 
-chart — render a chart in the terminal, from a watch or a pipeline
+chart — render a chart in the terminal, from a cron or a pipeline
 
 ## SYNOPSIS
 
 ```
-chart <watch> [-t TYPE] [-n LIMIT] [-i INTERVAL] [-f|--follow]
+chart <cron> [-t TYPE] [-n LIMIT] [-i INTERVAL] [-f|--follow]
 <pipeline> | chart [-x <field>] [-y <field>] [-a <fn>]
                    [--bucket <dur>] [-t TYPE] [--title <text>]
 ```
@@ -25,8 +25,8 @@ chart <watch> [-t TYPE] [-n LIMIT] [-i INTERVAL] [-f|--follow]
 
 `chart` runs in two forms:
 
-**Watch form** — `chart <watch>` reads recent results from a
-`/cron.d/<watch>` and paints a chart in the terminal. The watch
+**Cron form** — `chart <cron>` reads recent results from a
+`/cron.d/<cron>` and paints a chart in the terminal. The cron
 name can be given bare (`chart errors`) or as a path
 (`chart /cron.d/errors`). One-shot renders a single frame and
 returns; `--follow` enters a live-redraw mode that refreshes every
@@ -37,20 +37,20 @@ returns; `--follow` enters a live-redraw mode that refreshes every
 output once and returns to the prompt. The chart stage is the
 terminal of the pipeline (no further commands after it). Useful for
 sketching a chart without first committing the pipeline to a saved
-watch. `--follow` is not supported in pipe form.
+cron. `--follow` is not supported in pipe form.
 
 Charts always self-fit the terminal — they're never paged through
-`less`. A resize re-fits in watch `--follow` mode on the next tick.
+`less`. A resize re-fits in cron `--follow` mode on the next tick.
 There is no zoom or scroll: the chart shows the configured window
 of data, period.
 
-In watch form, the data point for each result is the **last
-whitespace-separated field** of the watch's stdout — matching the
+In cron form, the data point for each result is the **last
+whitespace-separated field** of the cron's stdout — matching the
 multi-row alert convention (`alert -k <N>`). In pipe form, `-x` and
 `-y` pick fields explicitly; without them, x is the row sequence
 and y is the last whitespace field of each line.
 
-## OPTIONS (watch form)
+## OPTIONS (cron form)
 
 - `-t`, `--type` `<line|sparkline|bar>` — chart kind. Default `line`.
   `sparkline` is a single-line ramp; `bar` plots one bar per result
@@ -82,27 +82,27 @@ and y is the last whitespace field of each line.
 ## EXAMPLES
 
 ```
-# Watch form
+# Cron form
 chart error-rate                        one-shot line chart
 chart error-rate -t sparkline           one-line glyph
 chart error-rate -t bar                 vertical bars by timestamp
 chart error-rate --follow               live; press q to exit
 
 # Pipe form: a quick distribution by host
-cat /log/api.log | jq '{path, latency}' \
+cat /log/myco/api/main.log | jq '{path, latency}' \
   | chart -x .path -y .latency -a sum
 
 # Pipe form: time-bucketed p95 over the current range
-cat /log/api.log \
+cat /log/myco/api/main.log \
   | chart -x .ts -y .latency_ms --bucket 1m -a p95
 
 # Pipe form: just plot a stream of numbers from jq
-cat /log/api.log | jq '.cpu_pct' | chart
+cat /log/myco/api/main.log | jq '.cpu_pct' | chart
 ```
 
 ## RELATED
 
-`ls -l /cron.d/` adds a colored sparkline beside each watch name
+`ls -l /cron.d/` adds a colored sparkline beside each cron name
 using the same rendering primitives.
 
 ## SEE ALSO

@@ -10,7 +10,7 @@ web:
 ## Custom scripts in /bin
 
 Anything you can type at the shell prompt can be saved as a named script under
-`/bin/`. Scripts are available from every shell session and every watch
+`/bin/`. Scripts are available from every shell session and every cron
 belonging to your account.  Create scripts with vim or with `cat - > myscript`.
 Writing the file will validate the script for syntax errors and some
 weft-specific semantics.
@@ -85,7 +85,7 @@ On top of the standard library, weft adds:
 | `io.read("*l" \| "*a" \| "*n")` | Read a line, all of stdin, or a number |
 | `lines()` | Iterator over stdin lines — `for line in lines() do ... end` |
 | `json.encode(v)` / `json.decode(s)` | JSON ↔ Lua table |
-| `weft.*` | Watch aggregates and predicates — see **Weft functions** |
+| `weft.*` | Cron aggregates and predicates — see **Weft functions** |
 
 Because Lua can read stdin with `lines()` or `io.read("*l")`, a Lua
 script can act as a pipeline stage:

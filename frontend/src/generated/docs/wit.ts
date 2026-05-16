@@ -25,7 +25,7 @@ const wit = {
 <p>Every save to <code>/bin/&lt;name&gt;</code> or <code>/cron.d/&lt;name&gt;</code> is captured in a
 short, browseable history. If you fat-finger an edit, push a
 script that breaks an alert at 2am, or just want to see what your
-watch looked like last week, the <code>wit</code> builtin has you covered.</p>
+cron looked like last week, the <code>wit</code> builtin has you covered.</p>
 <p>It looks like a tiny git: <code>wit log</code>, <code>wit show</code>, <code>wit diff</code>,
 <code>wit checkout</code>, <code>wit amend</code>. The mental model is the same — each
 save is a &quot;commit&quot; on a single linear branch — but the surface is
@@ -62,7 +62,7 @@ Hashes don't drift.</p>
 beyond that drops the oldest one. Versions older than five saves
 ago are gone — there's no recycle bin.</p>
 <p>Keep this in the back of your head when iterating quickly. If
-you've been hammering <code>:w</code> ten times a minute polishing a watch,
+you've been hammering <code>:w</code> ten times a minute polishing a cron,
 the version you started from this morning is no longer reachable.</p>
 <h2 id="commands">Commands</h2>
 <h3 id="wit-log-path"><code>wit log &lt;path&gt;</code></h3>
@@ -81,13 +81,13 @@ versions:</p>
 <pre><code>weft&gt; wit log -p /bin/scan
 * a4fb0c2  HEAD     ...  alice    &quot;fix the awk filter&quot;
 diff a4fb0c2 ← 3d2e91f:
-- cat /log/api.log | grep ERROR | wc -l
-+ cat /log/api.log | awk '$LEVEL == &quot;ERROR&quot;' | head -100 | wc -l
+- cat /log/myco/api/main.log | grep ERROR | wc -l
++ cat /log/myco/api/main.log | awk '$LEVEL == &quot;ERROR&quot;' | head -100 | wc -l
 
   3d2e91f  HEAD^    ...  alice    &quot;tighten error pattern&quot;
 diff 3d2e91f ← c01b745:
-- cat /log/api.log | grep -i error | wc -l
-+ cat /log/api.log | grep ERROR | wc -l
+- cat /log/myco/api/main.log | grep -i error | wc -l
++ cat /log/myco/api/main.log | grep ERROR | wc -l
 
   c01b745  HEAD^2   ...  bob
   ...
@@ -96,22 +96,22 @@ diff 3d2e91f ← c01b745:
 <p>Print a version's content. Useful for re-running an old script
 without committing to a checkout:</p>
 <pre><code>weft&gt; wit show /bin/scan HEAD^2
-cat /log/api.log | grep ERROR | wc -l
+cat /log/myco/api/main.log | grep ERROR | wc -l
 
 weft&gt; wit show /cron.d/errors HEAD^
 # schedule: every 5m
-cat /log/api.log | awk '$LEVEL == &quot;ERROR&quot;' | wc -l | alert above 0 --notify=ops
+cat /log/myco/api/main.log | awk '$LEVEL == &quot;ERROR&quot;' | wc -l | alert above 0 --notify=ops
 </code></pre>
-<p>Watches show their <code># schedule:</code> directive on the first line so
-you can read the version as a complete watch file.</p>
+<p>Crons show their <code># schedule:</code> directive on the first line so
+you can read the version as a complete cron file.</p>
 <h3 id="wit-diff-path-ab"><code>wit diff &lt;path&gt; &lt;a&gt;..&lt;b&gt;</code></h3>
 <p>Unified diff between two refs. Headers carry the short hash and
 author of each side:</p>
 <pre><code>weft&gt; wit diff /bin/scan HEAD^2..HEAD
 --- a/scan (c01b745, bob)
 +++ b/scan (a4fb0c2, alice)
-- cat /log/api.log | grep ERROR | wc -l
-+ cat /log/api.log | awk '$LEVEL == &quot;ERROR&quot;' | head -100 | wc -l
+- cat /log/myco/api/main.log | grep ERROR | wc -l
++ cat /log/myco/api/main.log | awk '$LEVEL == &quot;ERROR&quot;' | head -100 | wc -l
 </code></pre>
 <p>The range syntax is one rigid form: <code>&lt;a&gt;..&lt;b&gt;</code>. Both endpoints
 must resolve to a real version; either side can use any ref form.</p>
@@ -189,7 +189,7 @@ message.</p>
 <li><strong>No history for <code>/etc/notify.yaml</code> or <code>/tmp</code>.</strong> Notify config
 is rare-edit shared state; <code>/tmp</code> is intentionally ephemeral
 with its own 48-hour expiry.</li>
-<li><strong>No recovery from <code>rm</code>.</strong> Deleting a script or watch deletes
+<li><strong>No recovery from <code>rm</code>.</strong> Deleting a script or cron deletes
 its history with it. There's no <code>wit reflog</code>. If you have
 history you'd want to keep, <code>wit checkout</code> to a new version
 before <code>rm</code>-ing.</li>

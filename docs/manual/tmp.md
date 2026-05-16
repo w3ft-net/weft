@@ -62,8 +62,8 @@ and you want to keep your scratch around past the original 48h.
 Treat /tmp the way you'd treat a shared whiteboard in an operations
 room: great for the investigation you're running right now, not where
 you keep anything you'll need next week. For long-term storage of a
-pipeline's output, save the pipeline itself as a watch (see the
-**Watches** section) — watch results are retained for the full history
+pipeline's output, save the pipeline itself as a cron (see the
+**Crons** section) — cron results are retained for the full history
 your plan covers.
 
 ### Storage limits
@@ -94,7 +94,7 @@ cat /etc/usage
   **Custom scripts** section.
 - **Not a source for `tail -f`.** Follow-mode is a streaming query
   against live logs. You can redirect the output of a finished query
-  into /tmp, but `tail -f /log/api.log > /tmp/stream` is not supported
+  into /tmp, but `tail -f /log/myco/api/main.log > /tmp/stream` is not supported
   in this release.
 - **Not shared across accounts.** /tmp is per-customer. Every member
   of your account sees the same /tmp; users from other accounts never
@@ -137,4 +137,4 @@ drwxr-xr-x     -  2026-04-22 17:03  incident-2026-04-22/
 
 The same flags work anywhere in the filesystem — `ls -l /bin` shows
 when you last edited each of your scripts, `ls -l /cron.d` shows when
-each watch was last modified.
+each cron was last modified.

@@ -56,28 +56,37 @@ token-grouping in the path (`/log/<namespace>/...`).
 
 ## Path layout
 
-The pseudofile path encodes the namespace and (optionally) the env:
+The pseudofile path encodes the namespace, service, and stream
+kind, plus the env when the producing token carries one:
 
 ```
-/log/<namespace>/<app>.log
-/log/<namespace>/<env>/<app>.log
+/log/<namespace>/<service>/<kind>.log          env-less token
+/log/<namespace>/<env>/<service>/<kind>.log    env-bearing token
 ```
+
+`<kind>` is the stream: `main` for ordinary application logs (the
+default a producer ships unless it says otherwise), plus
+`heartbeats`, `metrics`, and `runtime` for services that emit
+telemetry. Every segment is always present; segment count alone
+distinguishes the env-less form from the env-bearing one.
 
 Tokens minted with `weft token create --namespace foo --env prod`
-produce rows that resolve to the 3-level path; tokens without `--env`
-produce rows at the 2-level path. A namespace can hold both layouts
-side by side as different tokens reauth over time.
+produce rows that resolve to the 4-segment path; tokens without
+`--env` produce rows at the 3-segment path. A namespace can hold both
+layouts side by side as different tokens reauth over time — segment
+count alone disambiguates them, so a reader token spanning several
+envs never has to guess.
 
 ```
 weft> ls /log/myco
 prod/                  ← env-bearing token
 staging/               ← env-bearing token
-api.log                ← legacy token without env
+api/                   ← env-less token
 ```
 
-`cat /log/myco/api.log` reads the env-less stream; `cat
-/log/myco/prod/api.log` reads the env-prod stream; `cat
-/log/myco/*/api.log` matches across every env that has one. No
+`cat /log/myco/api/main.log` reads the env-less stream; `cat
+/log/myco/prod/api/main.log` reads the env-prod stream; `cat
+/log/myco/*/api/main.log` matches across every env that has one. No
 backfill, no synthetic placeholder env.
 
 Region is intentionally **not** part of the path layout — it's a
@@ -112,13 +121,13 @@ plans it as one stage.
 
 ### Per-host average over a window
 
-A `cron.d` watch with `$HOST` carrying the dimension makes
+A cron in `/cron.d` with `$HOST` carrying the dimension makes
 "avg memory pct by host over 1h" a one-liner:
 
 ```
 # /cron.d/memory-per-host
 # schedule: every 1m
-tail -n 200 /log/myco/metrics.log \
+tail -n 200 /log/myco/api/metrics.log \
   | jq -r 'select(._level == "INFO" and .type == "memory") | "\(._host) \(.pct)"'
 ```
 
@@ -129,7 +138,7 @@ column the alert grouping understands.
 ### Filter by env across deployments
 
 ```
-cat /log/myco/prod/*.log \
+cat /log/myco/prod/*/main.log \
   | jq 'select(._level == "ERROR" and ._deployment == "api")' \
   | head -50
 ```
@@ -141,7 +150,7 @@ clauses, no JSON parsing.
 ### Compare a single deployment across regions
 
 ```
-cat /log/myco/api.log \
+cat /log/myco/api/main.log \
   | jq 'select(._deployment == "api")' \
   | jq -r '"\(._region) \(._level)"' \
   | sort | uniq -c

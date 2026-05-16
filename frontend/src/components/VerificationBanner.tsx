@@ -36,7 +36,7 @@ export default function VerificationBanner() {
   return (
     <div className="verify-banner" data-testid="verification-banner">
       <div className="verify-banner-msg">
-        <strong>Verify your email</strong> to unlock agent tokens, watches, and integrations.
+        <strong>Verify your email</strong> to unlock agent tokens, crons, and integrations.
         {hoursLeft !== null && hoursLeft > 0 && (
           <> Link expires in <strong>{hoursLeft}h</strong>.</>
         )}

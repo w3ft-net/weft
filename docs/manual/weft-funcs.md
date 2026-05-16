@@ -8,14 +8,14 @@ web:
 ---
 
 The `weft::*` family is the surface for reading and reasoning about
-your own watch history from inside a pipeline. There are three
+your own cron history from inside a pipeline. There are three
 shapes:
 
 - **Value funcs** return the most recent value, an aggregate over a
   window, or an anchor like the slope between two endpoints.
-- **Predicates** return a boolean — "is this watch above 50?",
+- **Predicates** return a boolean — "is this cron above 50?",
   "did it just change?" — for composing alert conditions across
-  multiple watches.
+  multiple crons.
 - **Stdin comparators** turn a piped value into a boolean.
 
 The same set is exposed in two host languages:
@@ -34,7 +34,7 @@ For composing predicates into composite alerts, see
 
 ## Value functions
 
-Each takes a watch name, returns a value, and (with the exception of
+Each takes a cron name, returns a value, and (with the exception of
 `weft::latest` and `weft::previous`) a duration window. Durations use
 Go syntax: `30s`, `5m`, `1h`, `6h`, `24h`.
 
@@ -73,7 +73,7 @@ rows that don't parse. They error when nothing in the window is
 numeric (and `weft::stddev` also errors when fewer than 2 numeric
 samples exist).
 
-`weft::latest` and `weft::previous` return whatever the watch wrote,
+`weft::latest` and `weft::previous` return whatever the cron wrote,
 including non-numeric strings. Cast in Lua with `tonumber(...)`.
 
 ### Retention
@@ -139,7 +139,7 @@ native `>` / `<` operators do the same job, no helper needed.
 
 ## See also
 
-- **Watches** — how watch results get persisted and which `weft::*`
+- **Crons** — how cron results get persisted and which `weft::*`
   funcs read them back.
 - **Alerting strategies** — patterns for composing predicates into
   composite alerts, the multi-row tag-based form, debouncing, and

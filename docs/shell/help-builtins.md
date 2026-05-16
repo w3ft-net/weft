@@ -37,7 +37,7 @@ web:
 - `ls [-l] [-a] [-h] [path]` — list `/bin`, `/cron.d`, `/etc`, `/log`, `/tmp`; `ls -l /cron.d/` adds a sparkline
 - `cat /bin/<fn>` — view a saved function
 - `cat /cron.d/<watch>` — view a watch definition
-- `chart <watch>` / `... | chart [-x ... -y ...]` — render a saved watch or a pipeline as an in-terminal chart (`man chart`)
+- `chart <cron>` / `... | chart [-x ... -y ...]` — render a saved cron or a pipeline as an in-terminal chart (`man chart`)
 - `>` / `>>` — redirect pipeline output into `/tmp`
 - `mkdir /tmp/<dir>` — organise scratch files into folders
 - `cp <src> <dst>` / `mv <src> <dst>` — duplicate / rename (within `/tmp`)

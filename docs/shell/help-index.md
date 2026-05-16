@@ -14,13 +14,13 @@ shell:
 ## Topics
 
 - `help builtins` — commands you can use in a pipeline
-- `help cron` — scheduled watches, result accessors, tier limits
+- `help cron` — scheduled crons, result accessors, tier limits
 - `help alerts` — alert conditions, notify.yaml, dispatching
 
 ## Reference pages
 
 - `man alert` — alert grammar and options
-- `man chart` — render a watch or pipeline as an in-terminal chart
+- `man chart` — render a cron or pipeline as an in-terminal chart
 - `man clipboard` — share a /bin script via deep link
 - `man dashboard` — dashboard YAML grammar and tile kinds
 - `man range` — set the query time window

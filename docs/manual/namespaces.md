@@ -19,3 +19,35 @@ short, lowercase name — it becomes part of token identifiers and CLI scoping.
 # From the shell
 namespace create production
 ```
+
+## Log path layout
+
+Every log stream is addressed by a pseudofile path under `/log/`.
+The namespace is the first segment; the rest of the path names the
+service and stream kind, with an optional env segment for tokens
+that carry one:
+
+```
+/log/<namespace>/<service>/<kind>.log          env-less token
+/log/<namespace>/<env>/<service>/<kind>.log    env-bearing token
+```
+
+- **`<namespace>`** — the grouping you created above. A single
+  `/log/<namespace>.log` is a namespace-wide wildcard (every
+  service and kind under it).
+- **`<service>`** — the source name a producer reports for itself;
+  surfaces as `$APP` / `$SERVICE` in queries.
+- **`<env>`** — present only for tokens minted with `--env`. It
+  slots in immediately after the namespace, so an env-bearing path
+  has four segments and an env-less one has three. Segment count
+  alone disambiguates the two; a reader token spanning several envs
+  never has to guess.
+- **`<kind>`** — the stream: `main` for ordinary application logs
+  (the default a producer ships unless it says otherwise), plus
+  `heartbeats`, `metrics`, and `runtime` for services that emit
+  telemetry. It is always present.
+
+A namespace can hold env-less and env-bearing streams side by side
+as different tokens reauth over time. Env, region, deployment,
+host, and pod are query-time dimensions (`awk '$ENV == "prod"'`),
+not extra path segments — see **Meta-variables** for the full set.

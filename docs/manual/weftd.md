@@ -165,15 +165,15 @@ Query metrics the same way you query any JSON log source:
 
 ```
 # Recent memory pressure
-tail /log/myns/metrics.log | jq 'select(.type == "memory") | .pct'
+tail /log/myns/api/metrics.log | jq 'select(.type == "memory") | .pct'
 
 # Per-host disk usage, alerting above 80%
-tail /log/myns/metrics.log \
+tail /log/myns/api/metrics.log \
   | jq -r 'select(.type == "disk") | "\(.host) \(.pct)"' \
   | alert above 80 -k 2 -t 1 --notify=ops
 
 # Recent load averages by host
-tail -n 1000 /log/myns/metrics.log \
+tail -n 1000 /log/myns/api/metrics.log \
   | jq 'select(.type == "load") | {host, load5}'
 ```
 

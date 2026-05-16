@@ -22,7 +22,7 @@ the previous ones.
    engine works, and how weft overrides it with a virtual
    filesystem, custom builtins, and query rewriting.
 
-4. **[User-Facing Features](features.md)** — watches, dashboards,
+4. **[User-Facing Features](features.md)** — crons, dashboards,
    alerts, charts, meta-variables, and MCP tools; how each is
    implemented end-to-end.
 

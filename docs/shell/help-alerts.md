@@ -15,7 +15,7 @@ web:
 
 An alert evaluates a value from stdin against a condition.
 When the condition holds, `alert` writes to stderr — in a
-watch, that stderr is what drives incidents and notifications.
+cron, that stderr is what drives incidents and notifications.
 Stdin always passes through to stdout unchanged (tee behavior).
 
 ## Conditions (summary)
@@ -31,9 +31,9 @@ Stdin always passes through to stdout unchanged (tee behavior).
 
 See `man alert` for grammar, `--duration`, `--average`, `--msg`.
 
-## Composite alerts (state across multiple watches)
+## Composite alerts (state across multiple crons)
 
-To fire on the combined state of more than one watch, compose
+To fire on the combined state of more than one cron, compose
 predicate builtins with bash `&&` `||` `!` and hand the result
 to alert via `--if-zero "$?"`:
 
@@ -61,11 +61,11 @@ path (`-k .latency_ms`); -k and -t must agree on which form.
 
 ```
 # per-host disk alert (positional)
-tail /log/shard.log | jq -r '"\(.host) \(.pct)"' \
+tail /log/weft/shard/main.log | jq -r '"\(.host) \(.pct)"' \
   | alert above 80 -k 2 -t 1 --notify=ops
 
 # same alert against JSONL — no jq -r reformatting
-tail /log/shard.log | jq 'select(.type=="disk")' \
+tail /log/weft/shard/main.log | jq 'select(.type=="disk")' \
   | alert above 80 -k .pct -t .host --notify=ops
 ```
 
@@ -115,7 +115,7 @@ or `{name: "...", severity: "..."}` (`critical`/`error`/`warning`/`info`).
 **Webhook** — bare URL strings, or `{url: "...", headers: {...}}`.
 POSTs a JSON payload with `v`, `watch`, `alias`, `ts_unix`, `body`.
 **Email** — bare addresses, or `{address: "..."}`. Sends a plain-text
-email with the watch name as subject (requires SMTP configuration).
+email with the cron name as subject (requires SMTP configuration).
 
 Slack and PagerDuty credentials are configured under Account →
 Integrations; notify.yaml only names destinations. The PagerDuty
@@ -130,4 +130,4 @@ echo "test fire" | alert --notify=ops
 ```
 
 Interactive runs dispatch immediately; they don't open an incident
-(incidents are a cron-watch concept).
+(incidents are a cron concept).

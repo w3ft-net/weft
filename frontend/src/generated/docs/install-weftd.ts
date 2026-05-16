@@ -7,6 +7,7 @@ const installWeftd = {
   category: "connect-source",
   order: 30,
   headings: [
+    { level: 3, id: "token", text: "Token" },
     { level: 3, id: "file-sourced-dimensions", text: "File-sourced dimensions" },
     { level: 3, id: "schema-types", text: "Schema types" },
     { level: 3, id: "system-metrics-optional", text: "System metrics (optional)" },
@@ -57,6 +58,18 @@ sources:
     path: /var/log/nginx/access.log
     schema: json
 </code></pre>
+<p>This file is the single source of truth — the package never
+generates or overwrites it. Start from <code>/etc/weftd/config.yaml.example</code>.
+Repeated source fields can be DRYed with standard YAML anchors and
+merge keys (<code>&amp;name</code> / <code>&lt;&lt;: *name</code>); weftd ignores an <code>x-anchors:</code>
+holder block, so it's a convenient place to declare them.</p>
+<h3 id="token">Token</h3>
+<p>Put <code>token:</code> in the config file, <strong>or</strong> supply it via the
+<code>WEFTD_TOKEN</code> environment variable (e.g. in <code>/etc/default/weftd</code>).
+The environment wins over the file value — an AWS-shaped credential
+chain — so a secret injector can provide the token without templating
+the YAML. It's the only setting with an environment source; everything
+structural lives in the file.</p>
 <p>The <code>deployment</code>, <code>region</code>, and per-source <code>version_file</code> values
 become first-class query dimensions — see the <strong>Meta-variables</strong>
 section in <strong>Query your logs</strong> for the full list and how they
@@ -131,15 +144,15 @@ and <code>network</code> need two samples to compute a delta, so the first tick
 after startup is silent for those two.</p>
 <p>Query metrics the same way you query any JSON log source:</p>
 <pre><code># Recent memory pressure
-tail /log/myns/metrics.log | jq 'select(.type == &quot;memory&quot;) | .pct'
+tail /log/myns/api/metrics.log | jq 'select(.type == &quot;memory&quot;) | .pct'
 
 # Per-host disk usage, alerting above 80%
-tail /log/myns/metrics.log \\
+tail /log/myns/api/metrics.log \\
   | jq -r 'select(.type == &quot;disk&quot;) | &quot;\\(.host) \\(.pct)&quot;' \\
   | alert above 80 -k 2 -t 1 --notify=ops
 
 # Recent load averages by host
-tail -n 1000 /log/myns/metrics.log \\
+tail -n 1000 /log/myns/api/metrics.log \\
   | jq 'select(.type == &quot;load&quot;) | {host, load5}'
 </code></pre>
 <p>Metrics only run on Linux (the collectors read <code>/proc/stat</code>,

@@ -16,7 +16,7 @@ const scripts = {
   ],
   html: `<h2 id="custom-scripts-in-bin">Custom scripts in /bin</h2>
 <p>Anything you can type at the shell prompt can be saved as a named script under
-<code>/bin/</code>. Scripts are available from every shell session and every watch
+<code>/bin/</code>. Scripts are available from every shell session and every cron
 belonging to your account.  Create scripts with vim or with <code>cat - &gt; myscript</code>.
 Writing the file will validate the script for syntax errors and some
 weft-specific semantics.</p>
@@ -73,7 +73,7 @@ disabled, and scripts time out after 30 seconds.</p>
 | <code>io.read(&quot;*l&quot; \\| &quot;*a&quot; \\| &quot;*n&quot;)</code> | Read a line, all of stdin, or a number |
 | <code>lines()</code> | Iterator over stdin lines — <code>for line in lines() do ... end</code> |
 | <code>json.encode(v)</code> / <code>json.decode(s)</code> | JSON ↔ Lua table |
-| <code>weft.*</code> | Watch aggregates and predicates — see <strong>Weft functions</strong> |</p>
+| <code>weft.*</code> | Cron aggregates and predicates — see <strong>Weft functions</strong> |</p>
 <p>Because Lua can read stdin with <code>lines()</code> or <code>io.read(&quot;*l&quot;)</code>, a Lua
 script can act as a pipeline stage:</p>
 <pre><code>#!/usr/bin/env lua

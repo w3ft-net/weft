@@ -117,7 +117,7 @@ The integration point is `coordinator/coordinator.go`, in the
 It presents this tree to the shell:
 
 ```
-/log/<ns>/<app>.log    — read-only pseudofiles (shard queries)
+/log/<ns>/<svc>/<kind>.log — read-only pseudofiles (shard queries)
 /bin/<name>            — user-defined bash/lua scripts
 /cron.d/<name>         — scheduled watch definitions
 /etc/notify.yaml       — notification channel config
@@ -135,7 +135,7 @@ Key methods:
   pseudofile marker for `/log/` paths (the actual log data flows
   through the query path, not through FS reads).
 - `WriteFile(path, data)` — validates content (e.g., dashboard
-  YAML must parse, watch schedule must be valid) and saves to the
+  YAML must parse, cron schedule must be valid) and saves to the
   store with version history.
 - `ReadDir(path)` — lists directory contents, merging store
   queries with static entries.
@@ -146,7 +146,7 @@ The most intricate part of the warp integration is query
 rewriting. When the user types:
 
 ```
-cat /log/api.log | grep ERROR | awk '{print $3}' | wc -l
+cat /log/myco/api/main.log | grep ERROR | awk '{print $3}' | wc -l
 ```
 
 Weft doesn't actually read a file and pipe it through grep. The
@@ -203,16 +203,16 @@ Weft registers two families of custom commands on the interpreter:
 
 ### Aggregation helpers (`coordinator/weftcmds.go`)
 
-These read watch results from the store and compute aggregates:
+These read cron results from the store and compute aggregates:
 
-- `weft.latest(watch)` — most recent result as a string.
-- `weft.avg(watch, duration)` — mean of numeric results.
+- `weft.latest(cron)` — most recent result as a string.
+- `weft.avg(cron, duration)` — mean of numeric results.
 - `weft.max`, `weft.min`, `weft.sum`, `weft.stddev` — similar.
 - `weft.count`, `weft.percentile`, `weft.delta`, `weft.slope`,
   `weft.rate` — more exotic aggregations.
 
 These are available everywhere: in the interactive shell, in
-`/bin/` scripts, in watch bodies, and in Lua scripts.
+`/bin/` scripts, in cron bodies, and in Lua scripts.
 
 ### Version history (`coordinator/wit.go`)
 
@@ -247,7 +247,7 @@ The shell runs both in the terminal (native Go) and in the browser
 ## Execution flow diagram
 
 ```
-User types: cat /log/api.log | grep ERROR | wc -l
+User types: cat /log/myco/api/main.log | grep ERROR | wc -l
     │
     ▼
 bash.Parse() → *bash.Script (AST)

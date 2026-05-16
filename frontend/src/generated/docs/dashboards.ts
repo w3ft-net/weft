@@ -19,9 +19,9 @@ const dashboards = {
     { level: 2, id: "authoring-via-the-mcp-server", text: "Authoring via the MCP server" },
   ],
   html: `<h2 id="what-dashboards-are">What dashboards are</h2>
-<p>A dashboard is a named view that arranges existing watches into tiles.
-Each tile reads from a watch — there are no pipelines, no template
-variables, and no time-range pickers. The watch's schedule and history
+<p>A dashboard is a named view that arranges existing crons into tiles.
+Each tile reads from a cron — there are no pipelines, no template
+variables, and no time-range pickers. The cron's schedule and history
 define what the tile shows; the dashboard just composes them into a
 layout.</p>
 <p>Dashboards live as YAML files under <code>/etc/dashboards/</code>. Create one from
@@ -66,7 +66,7 @@ sections:
 <h2 id="tile-kinds">Tile kinds</h2>
 <p>| Kind        | Body                                                       | Required fields           |
 |-------------|------------------------------------------------------------|---------------------------|
-| <code>sparkline</code> | Time-series glyph from the watch's recent results.         | <code>watch</code>                   |
+| <code>sparkline</code> | Time-series glyph from the cron's recent results.          | <code>watch</code>                   |
 | <code>counter</code>   | Latest numeric value.                                      | <code>watch</code>                   |
 | <code>gauge</code>     | Bar from 0 to <code>threshold.max</code> (default 100).               | <code>watch</code>                   |
 | <code>table</code>     | Multi-row stdout parsed as whitespace-split columns.       | <code>watch</code>, <code>columns</code>        |</p>
@@ -74,7 +74,7 @@ sections:
 <p>| Field        | Applies to                | Notes                                                        |
 |--------------|---------------------------|--------------------------------------------------------------|
 | <code>kind</code>       | all                       | One of <code>sparkline</code>, <code>counter</code>, <code>gauge</code>, <code>table</code>.             |
-| <code>watch</code>      | all                       | Name of an existing watch (must exist when the file is saved). |
+| <code>watch</code>      | all                       | Name of an existing cron (must exist when the file is saved). |
 | <code>size</code>       | all                       | <code>sm</code>, <code>md</code>, or <code>lg</code>. Default <code>md</code>. Hint, not pixel size.     |
 | <code>format</code>     | counter                   | Optional <code>%d</code> / <code>%.2f</code> format applied to the value.          |
 | <code>threshold</code>  | counter, gauge, sparkline | <code>warn</code>, <code>crit</code>, <code>max</code> numeric cutoffs.                       |
@@ -116,7 +116,7 @@ Below ~60 columns the layout collapses to one tile per row.</li>
 <p>There is no drag-and-drop and no per-tile pixel positioning. The order
 in YAML is the order on screen.</p>
 <h2 id="navigation">Navigation</h2>
-<p>Tile headers link to the watch's detail page (<code>/watch/&lt;name&gt;</code>) so
+<p>Tile headers link to the cron's detail page (<code>/watch/&lt;name&gt;</code>) so
 clicking a tile takes you to its full history with zoom, range
 selection, and per-tag legend.</p>
 <h2 id="deletion">Deletion</h2>
@@ -126,7 +126,7 @@ selection, and per-tag legend.</p>
 <h2 id="validation">Validation</h2>
 <p>Saving a dashboard checks the YAML parses, every <code>kind:</code> is recognized,
 every <code>size:</code> is one of <code>sm</code> / <code>md</code> / <code>lg</code>, every <code>table</code> tile has
-<code>columns:</code>, and every referenced watch exists. A bad file is rejected
+<code>columns:</code>, and every referenced cron exists. A bad file is rejected
 at write time — your previous version stays intact.</p>
 <h2 id="authoring-via-the-mcp-server">Authoring via the MCP server</h2>
 <p>Connect Claude Code (or any MCP host) to the weft MCP server and the
@@ -134,11 +134,11 @@ model can stage dashboards through the same review-and-apply pipeline
 as scripts and crons:</p>
 <p>| Tool                    | Effect                                                   |
 |-------------------------|----------------------------------------------------------|
-| <code>weft.dashboard_propose</code>| Stage a new or updated dashboard. Validates YAML + watch refs. Returns a unified diff against any existing version. |
+| <code>weft.dashboard_propose</code>| Stage a new or updated dashboard. Validates YAML + cron refs. Returns a unified diff against any existing version. |
 | <code>weft.proposal_delete</code>  | Stage a delete with <code>kind: dashboard, name: &lt;n&gt;</code>.        |
 | <code>weft.proposals_apply</code>  | Commit one or more staged proposals after human review.  |</p>
-<p>Watch references are checked against the live watch list — the model
-can't stage a dashboard pointing at a watch that doesn't exist yet.</p>
+<p>Cron references are checked against the live cron list — the model
+can't stage a dashboard pointing at a cron that doesn't exist yet.</p>
 `,
 } as const;
 

@@ -8,14 +8,14 @@ const alerting = {
   order: 70,
   headings: [
     { level: 2, id: "conditions-summary", text: "Conditions (summary)" },
-    { level: 2, id: "composite-alerts-state-across-multiple-watches", text: "Composite alerts (state across multiple watches)" },
+    { level: 2, id: "composite-alerts-state-across-multiple-crons", text: "Composite alerts (state across multiple crons)" },
     { level: 2, id: "single-row-vs-multi-row", text: "Single-row vs multi-row" },
     { level: 2, id: "etcnotifyyaml", text: "/etc/notify.yaml" },
     { level: 2, id: "testing-an-alias", text: "Testing an alias" },
   ],
   html: `<p>An alert evaluates a value from stdin against a condition.
 When the condition holds, <code>alert</code> writes to stderr — in a
-watch, that stderr is what drives incidents and notifications.
+cron, that stderr is what drives incidents and notifications.
 Stdin always passes through to stdout unchanged (tee behavior).</p>
 <h2 id="conditions-summary">Conditions (summary)</h2>
 <ul>
@@ -29,8 +29,8 @@ Stdin always passes through to stdout unchanged (tee behavior).</p>
 <li>(no keyword) — &quot;any&quot;; fires when stdin is non-empty</li>
 </ul>
 <p>See <code>man alert</code> for grammar, <code>--duration</code>, <code>--average</code>, <code>--msg</code>.</p>
-<h2 id="composite-alerts-state-across-multiple-watches">Composite alerts (state across multiple watches)</h2>
-<p>To fire on the combined state of more than one watch, compose
+<h2 id="composite-alerts-state-across-multiple-crons">Composite alerts (state across multiple crons)</h2>
+<p>To fire on the combined state of more than one cron, compose
 predicate builtins with bash <code>&amp;&amp;</code> <code>||</code> <code>!</code> and hand the result
 to alert via <code>--if-zero &quot;$?&quot;</code>:</p>
 <pre><code>weft::is_above error-rate 50 &amp;&amp; weft::is_absent canary-ping
@@ -51,11 +51,11 @@ the row for per-tag incident dedup. <code>&lt;field&gt;</code> is either a
 1-indexed whitespace column (<code>-k 2</code>) or a <code>.</code>-prefixed JSON
 path (<code>-k .latency_ms</code>); -k and -t must agree on which form.</p>
 <pre><code># per-host disk alert (positional)
-tail /log/shard.log | jq -r '&quot;\\(.host) \\(.pct)&quot;' \\
+tail /log/weft/shard/main.log | jq -r '&quot;\\(.host) \\(.pct)&quot;' \\
   | alert above 80 -k 2 -t 1 --notify=ops
 
 # same alert against JSONL — no jq -r reformatting
-tail /log/shard.log | jq 'select(.type==&quot;disk&quot;)' \\
+tail /log/weft/shard/main.log | jq 'select(.type==&quot;disk&quot;)' \\
   | alert above 80 -k .pct -t .host --notify=ops
 </code></pre>
 <h2 id="etcnotifyyaml">/etc/notify.yaml</h2>
@@ -97,7 +97,7 @@ or <code>{name: &quot;...&quot;, severity: &quot;...&quot;}</code> (<code>critic
 <strong>Webhook</strong> — bare URL strings, or <code>{url: &quot;...&quot;, headers: {...}}</code>.
 POSTs a JSON payload with <code>v</code>, <code>watch</code>, <code>alias</code>, <code>ts_unix</code>, <code>body</code>.
 <strong>Email</strong> — bare addresses, or <code>{address: &quot;...&quot;}</code>. Sends a plain-text
-email with the watch name as subject (requires SMTP configuration).</p>
+email with the cron name as subject (requires SMTP configuration).</p>
 <p>Slack and PagerDuty credentials are configured under Account →
 Integrations; notify.yaml only names destinations. The PagerDuty
 integration name must match one you've registered there. Webhook
@@ -107,7 +107,7 @@ and addresses are per-alias.</p>
 <pre><code>echo &quot;test fire&quot; | alert --notify=ops
 </code></pre>
 <p>Interactive runs dispatch immediately; they don't open an incident
-(incidents are a cron-watch concept).</p>
+(incidents are a cron concept).</p>
 `,
 } as const;
 

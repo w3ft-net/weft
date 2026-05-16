@@ -8,9 +8,9 @@ const alertingStrategies = {
   order: 53,
   headings: [
     { level: 2, id: "the-four-shapes", text: "The four shapes" },
-    { level: 3, id: "1-single-watch-scalar", text: "1. Single-watch scalar" },
+    { level: 3, id: "1-single-cron-scalar", text: "1. Single-cron scalar" },
     { level: 3, id: "2-multi-row-per-tag", text: "2. Multi-row per-tag" },
-    { level: 3, id: "3-composite-state-across-multiple-watches", text: "3. Composite (state across multiple watches)" },
+    { level: 3, id: "3-composite-state-across-multiple-crons", text: "3. Composite (state across multiple crons)" },
     { level: 3, id: "4-aggregated-value-windowed-alerts", text: "4. Aggregated-value (windowed) alerts" },
     { level: 2, id: "trend--anomaly-vs-threshold", text: "Trend / anomaly vs threshold" },
     { level: 2, id: "the-absent-vs-zero-gotcha", text: "The absent-vs-zero gotcha" },
@@ -19,18 +19,18 @@ const alertingStrategies = {
     { level: 2, id: "see-also", text: "See also" },
   ],
   html: `<p>This page is the catalogue of <em>shapes</em> an alert can take in weft —
-single-watch scalar alerts, multi-row per-tag alerts, and composite
-alerts that fire on the combined state of several watches. The
+single-cron scalar alerts, multi-row per-tag alerts, and composite
+alerts that fire on the combined state of several crons. The
 <code>alert</code> builtin's grammar lives in <code>man alert</code>; the <code>weft::*</code> family
 that backs predicates and aggregates lives in <strong>Weft functions</strong>.
 This page is about which shape fits which monitoring problem.</p>
 <h2 id="the-four-shapes">The four shapes</h2>
-<h3 id="1-single-watch-scalar">1. Single-watch scalar</h3>
-<p>The most common form. The watch's pipeline ends in <code>| alert &lt;cond&gt;</code>;
+<h3 id="1-single-cron-scalar">1. Single-cron scalar</h3>
+<p>The most common form. The cron's pipeline ends in <code>| alert &lt;cond&gt;</code>;
 each tick produces one numeric value that the alert evaluates.</p>
 <pre><code># /cron.d/error-rate
 # schedule: every 1m
-tail -n 500 /log/api.log | grep ERROR | wc -l | alert above 50 --notify=ops
+tail -n 500 /log/myco/api/main.log | grep ERROR | wc -l | alert above 50 --notify=ops
 </code></pre>
 <p>Use this when &quot;is the metric above a known threshold?&quot; answers
 your question and the metric is one number.</p>
@@ -41,7 +41,7 @@ your question and the metric is one number.</p>
 independently against its tag.</p>
 <pre><code># /cron.d/disk-per-host
 # schedule: every 1m
-tail /log/shard.log \\
+tail /log/weft/shard/main.log \\
   | jq -r 'select(.type==&quot;disk&quot;) | &quot;\\(._host) \\(.pct)&quot;' \\
   | alert above 80 -k 2 -t 1 --notify=ops
 </code></pre>
@@ -51,7 +51,7 @@ independently — you get one PagerDuty incident per affected host,
 not one giant incident for &quot;anything's disk is over 80%.&quot;</p>
 <p><code>-k</code> and <code>-t</code> also accept JSON paths, which skips the <code>jq -r</code>
 reformatting:</p>
-<pre><code>tail /log/shard.log \\
+<pre><code>tail /log/weft/shard/main.log \\
   | jq 'select(.type==&quot;disk&quot;)' \\
   | alert above 80 -k .pct -t ._host --notify=ops
 </code></pre>
@@ -61,8 +61,8 @@ be positional, or both must be <code>.</code>-prefixed paths.</p>
 <code>._host</code> for <code>._deployment</code>, <code>._pod</code>, <code>._region</code>, or any
 combination (<code>&quot;\\(._region) \\(._host) \\(.pct)&quot;</code> for region-prefixed
 host names).</p>
-<h3 id="3-composite-state-across-multiple-watches">3. Composite (state across multiple watches)</h3>
-<p>When the alert depends on more than one watch — &quot;page me when error-
+<h3 id="3-composite-state-across-multiple-crons">3. Composite (state across multiple crons)</h3>
+<p>When the alert depends on more than one cron — &quot;page me when error-
 rate is high <strong>and</strong> the canary stopped pinging&quot; — compose
 predicates with bash <code>&amp;&amp;</code> <code>||</code> <code>!</code> or Lua <code>and</code> <code>or</code> <code>not</code>, then
 hand the resulting exit code to <code>alert</code> via <code>--if-zero &quot;$?&quot;</code>:</p>
@@ -125,7 +125,7 @@ alert --if-zero &quot;$?&quot; --notify=critical
 </code></pre>
 <p>The aggregates' window caps (24h for <code>avg</code>/<code>min</code>/<code>max</code>/etc., 14d for
 endpoint funcs) limit how far back the rolling window can reach.
-For longer-horizon comparisons, write a watch that itself runs an
+For longer-horizon comparisons, write a cron that itself runs an
 aggregate every 5 minutes — its stored history then <em>is</em> the
 longer-horizon series.</p>
 <h2 id="trend--anomaly-vs-threshold">Trend / anomaly vs threshold</h2>
@@ -135,15 +135,15 @@ longer-horizon series.</p>
 | Value differs from the previous tick at all | <code>weft::has_changed</code> |
 | No result came in | <code>weft::is_absent</code> |
 | Value rose/fell by N% vs recent baseline | <code>alert rising</code> / <code>alert falling</code> (or <code>weft::is_rising</code> / <code>weft::is_falling</code>) |
-| Value is unusual for <em>this watch's recent history</em> | <code>weft::is_outlier</code> |
-| Value is unusual for <em>this watch at this time of day/week</em> | <code>weft::is_seasonal</code> |</p>
+| Value is unusual for <em>this cron's recent history</em> | <code>weft::is_outlier</code> |
+| Value is unusual for <em>this cron at this time of day/week</em> | <code>weft::is_seasonal</code> |</p>
 <p>Use <code>is_outlier</code> when &quot;what's normal&quot; doesn't depend on the clock —
 host memory, queue depth, error rate of a steady-state service. Use
 <code>is_seasonal</code> when traffic has weekly/daily cycles — a Tuesday-2pm
 threshold under-pages on Saturday at 3am and over-pages at the
 nightly batch job.</p>
 <h2 id="the-absent-vs-zero-gotcha">The absent-vs-zero gotcha</h2>
-<p><code>weft::latest</code> of a missing watch returns the empty string;
+<p><code>weft::latest</code> of a missing cron returns the empty string;
 <code>tonumber(&quot;&quot;)</code> in Lua returns <code>nil</code>; arithmetic against <code>nil</code>
 errors. Always guard:</p>
 <pre><code class="language-lua">local v = tonumber(weft.latest(&quot;foo&quot;)) or 0   -- treat absent as zero
@@ -192,7 +192,7 @@ the alert will reject as non-numeric. Either reduce upstream with
 <ul>
 <li><strong>Weft functions</strong> — full reference for the <code>weft::*</code> value funcs,
 predicates, and stdin comparators.</li>
-<li><strong>Watches</strong> — cron watches and incident lifecycle.</li>
+<li><strong>Crons</strong> — scheduled pipelines and incident lifecycle.</li>
 <li><code>man alert</code> — the alert builtin's full grammar.</li>
 <li><code>docs/manual/notify.md</code> — alias and destination configuration.</li>
 </ul>

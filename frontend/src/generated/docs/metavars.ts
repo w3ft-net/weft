@@ -55,20 +55,28 @@ so the underscore is more reliable than relying on case alone.</p>
 weft already uses &quot;namespace&quot; for the customer's logical
 token-grouping in the path (<code>/log/&lt;namespace&gt;/...</code>).</p>
 <h2 id="path-layout">Path layout</h2>
-<p>The pseudofile path encodes the namespace and (optionally) the env:</p>
-<pre><code>/log/&lt;namespace&gt;/&lt;app&gt;.log
-/log/&lt;namespace&gt;/&lt;env&gt;/&lt;app&gt;.log
+<p>The pseudofile path encodes the namespace, service, and stream
+kind, plus the env when the producing token carries one:</p>
+<pre><code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log          env-less token
+/log/&lt;namespace&gt;/&lt;env&gt;/&lt;service&gt;/&lt;kind&gt;.log    env-bearing token
 </code></pre>
+<p><code>&lt;kind&gt;</code> is the stream: <code>main</code> for ordinary application logs (the
+default a producer ships unless it says otherwise), plus
+<code>heartbeats</code>, <code>metrics</code>, and <code>runtime</code> for services that emit
+telemetry. Every segment is always present; segment count alone
+distinguishes the env-less form from the env-bearing one.</p>
 <p>Tokens minted with <code>weft token create --namespace foo --env prod</code>
-produce rows that resolve to the 3-level path; tokens without <code>--env</code>
-produce rows at the 2-level path. A namespace can hold both layouts
-side by side as different tokens reauth over time.</p>
+produce rows that resolve to the 4-segment path; tokens without
+<code>--env</code> produce rows at the 3-segment path. A namespace can hold both
+layouts side by side as different tokens reauth over time — segment
+count alone disambiguates them, so a reader token spanning several
+envs never has to guess.</p>
 <pre><code>weft&gt; ls /log/myco
 prod/                  ← env-bearing token
 staging/               ← env-bearing token
-api.log                ← legacy token without env
+api/                   ← env-less token
 </code></pre>
-<p><code>cat /log/myco/api.log</code> reads the env-less stream; <code>cat /log/myco/prod/api.log</code> reads the env-prod stream; <code>cat /log/myco/*/api.log</code> matches across every env that has one. No
+<p><code>cat /log/myco/api/main.log</code> reads the env-less stream; <code>cat /log/myco/prod/api/main.log</code> reads the env-prod stream; <code>cat /log/myco/*/api/main.log</code> matches across every env that has one. No
 backfill, no synthetic placeholder env.</p>
 <p>Region is intentionally <strong>not</strong> part of the path layout — it's a
 query-time filter (<code>awk '$REGION == &quot;us-east-2&quot;'</code>) only. Same for
@@ -91,17 +99,17 @@ predicate (fast) AND the JSON-extract predicate (slower); DuckDB
 plans it as one stage.</p>
 <h2 id="recipes">Recipes</h2>
 <h3 id="per-host-average-over-a-window">Per-host average over a window</h3>
-<p>A <code>cron.d</code> watch with <code>$HOST</code> carrying the dimension makes
+<p>A cron in <code>/cron.d</code> with <code>$HOST</code> carrying the dimension makes
 &quot;avg memory pct by host over 1h&quot; a one-liner:</p>
 <pre><code># /cron.d/memory-per-host
 # schedule: every 1m
-tail -n 200 /log/myco/metrics.log \\
+tail -n 200 /log/myco/api/metrics.log \\
   | jq -r 'select(._level == &quot;INFO&quot; and .type == &quot;memory&quot;) | &quot;\\(._host) \\(.pct)&quot;'
 </code></pre>
 <p>Each tick emits one row per host. Multi-row alerts (<code>alert above 80 -k 2 -t 1</code>) page per host independently because <code>$HOST</code> is a real
 column the alert grouping understands.</p>
 <h3 id="filter-by-env-across-deployments">Filter by env across deployments</h3>
-<pre><code>cat /log/myco/prod/*.log \\
+<pre><code>cat /log/myco/prod/*/main.log \\
   | jq 'select(._level == &quot;ERROR&quot; and ._deployment == &quot;api&quot;)' \\
   | head -50
 </code></pre>
@@ -109,7 +117,7 @@ column the alert grouping understands.</p>
 to deployment=api; the resulting shard query is two indexable WHERE
 clauses, no JSON parsing.</p>
 <h3 id="compare-a-single-deployment-across-regions">Compare a single deployment across regions</h3>
-<pre><code>cat /log/myco/api.log \\
+<pre><code>cat /log/myco/api/main.log \\
   | jq 'select(._deployment == &quot;api&quot;)' \\
   | jq -r '&quot;\\(._region) \\(._level)&quot;' \\
   | sort | uniq -c

@@ -20,12 +20,12 @@ Responsibilities:
 - Manages shard lifecycle: launches new shards, rotates time
   windows, archives expired shards to Parquet on S3, and
   terminates instances.
-- Runs the cron executor (scheduled watches).
+- Runs the cron executor (scheduled crons).
 - Hosts the CloudWatch log poller.
 - Receives weftd agent streams and routes rows to the active
   ingesting shard.
 
-The coordinator stores metadata (users, teams, tokens, watches,
+The coordinator stores metadata (users, teams, tokens, crons,
 functions, dashboards, shard records) in PostgreSQL via the
 `store` package. The store schema lives at `store/schema.sql`.
 
@@ -163,7 +163,7 @@ Customer isolation is enforced at five layers:
    before it reaches DuckDB. No shard ever receives a query
    without it.
 5. **Storage schema** — every PostgreSQL table that holds
-   customer-specific data (tokens, watches, functions, dashboards)
+   customer-specific data (tokens, crons, functions, dashboards)
    has a `customer_id` foreign key.
 
 `$CUSTOMER` is never exposed as a user-facing meta-variable. It

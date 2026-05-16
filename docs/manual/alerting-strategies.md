@@ -8,23 +8,23 @@ web:
 ---
 
 This page is the catalogue of *shapes* an alert can take in weft —
-single-watch scalar alerts, multi-row per-tag alerts, and composite
-alerts that fire on the combined state of several watches. The
+single-cron scalar alerts, multi-row per-tag alerts, and composite
+alerts that fire on the combined state of several crons. The
 `alert` builtin's grammar lives in `man alert`; the `weft::*` family
 that backs predicates and aggregates lives in **Weft functions**.
 This page is about which shape fits which monitoring problem.
 
 ## The four shapes
 
-### 1. Single-watch scalar
+### 1. Single-cron scalar
 
-The most common form. The watch's pipeline ends in `| alert <cond>`;
+The most common form. The cron's pipeline ends in `| alert <cond>`;
 each tick produces one numeric value that the alert evaluates.
 
 ```
 # /cron.d/error-rate
 # schedule: every 1m
-tail -n 500 /log/api.log | grep ERROR | wc -l | alert above 50 --notify=ops
+tail -n 500 /log/myco/api/main.log | grep ERROR | wc -l | alert above 50 --notify=ops
 ```
 
 Use this when "is the metric above a known threshold?" answers
@@ -40,7 +40,7 @@ independently against its tag.
 ```
 # /cron.d/disk-per-host
 # schedule: every 1m
-tail /log/shard.log \
+tail /log/weft/shard/main.log \
   | jq -r 'select(.type=="disk") | "\(._host) \(.pct)"' \
   | alert above 80 -k 2 -t 1 --notify=ops
 ```
@@ -54,7 +54,7 @@ not one giant incident for "anything's disk is over 80%."
 reformatting:
 
 ```
-tail /log/shard.log \
+tail /log/weft/shard/main.log \
   | jq 'select(.type=="disk")' \
   | alert above 80 -k .pct -t ._host --notify=ops
 ```
@@ -67,9 +67,9 @@ The same shape works with any indexed dimension as the tag — swap
 combination (`"\(._region) \(._host) \(.pct)"` for region-prefixed
 host names).
 
-### 3. Composite (state across multiple watches)
+### 3. Composite (state across multiple crons)
 
-When the alert depends on more than one watch — "page me when error-
+When the alert depends on more than one cron — "page me when error-
 rate is high **and** the canary stopped pinging" — compose
 predicates with bash `&&` `||` `!` or Lua `and` `or` `not`, then
 hand the resulting exit code to `alert` via `--if-zero "$?"`:
@@ -152,7 +152,7 @@ alert --if-zero "$?" --notify=critical
 
 The aggregates' window caps (24h for `avg`/`min`/`max`/etc., 14d for
 endpoint funcs) limit how far back the rolling window can reach.
-For longer-horizon comparisons, write a watch that itself runs an
+For longer-horizon comparisons, write a cron that itself runs an
 aggregate every 5 minutes — its stored history then *is* the
 longer-horizon series.
 
@@ -164,8 +164,8 @@ longer-horizon series.
 | Value differs from the previous tick at all | `weft::has_changed` |
 | No result came in | `weft::is_absent` |
 | Value rose/fell by N% vs recent baseline | `alert rising` / `alert falling` (or `weft::is_rising` / `weft::is_falling`) |
-| Value is unusual for *this watch's recent history* | `weft::is_outlier` |
-| Value is unusual for *this watch at this time of day/week* | `weft::is_seasonal` |
+| Value is unusual for *this cron's recent history* | `weft::is_outlier` |
+| Value is unusual for *this cron at this time of day/week* | `weft::is_seasonal` |
 
 Use `is_outlier` when "what's normal" doesn't depend on the clock —
 host memory, queue depth, error rate of a steady-state service. Use
@@ -175,7 +175,7 @@ nightly batch job.
 
 ## The absent-vs-zero gotcha
 
-`weft::latest` of a missing watch returns the empty string;
+`weft::latest` of a missing cron returns the empty string;
 `tonumber("")` in Lua returns `nil`; arithmetic against `nil`
 errors. Always guard:
 
@@ -239,6 +239,6 @@ incident opens.
 
 - **Weft functions** — full reference for the `weft::*` value funcs,
   predicates, and stdin comparators.
-- **Watches** — cron watches and incident lifecycle.
+- **Crons** — scheduled pipelines and incident lifecycle.
 - `man alert` — the alert builtin's full grammar.
 - `docs/manual/notify.md` — alias and destination configuration.

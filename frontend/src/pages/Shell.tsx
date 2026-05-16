@@ -266,10 +266,10 @@ export default function Shell() {
                 data-testid="shell-watches-sidebar-close-button">×</button>
             </div>
             {watchLimits.limit === 0 ? (
-              <div className="shell-query-empty">Watches not available on trial. <a href="/account">Upgrade</a> to enable.</div>
+              <div className="shell-query-empty">Crons not available on trial. <a href="/account">Upgrade</a> to enable.</div>
             ) : watches.length === 0 ? (
               <div className="shell-query-empty">
-                No watches. Use <code>vi /cron.d/name</code> to create one.
+                No crons. Use <code>vi /cron.d/name</code> to create one.
                 {watchLimits.min_interval && <><br/>Min interval: {watchLimits.min_interval}</>}
               </div>
             ) : (

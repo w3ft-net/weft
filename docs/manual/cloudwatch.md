@@ -112,7 +112,7 @@ recent log events, and start writing rows. Confirm the source is live:
 weft source list
 
 # And in the shell
-cat /log/my-app.log | head
+cat /log/myco/my-app/main.log | head
 ```
 
 ### Troubleshooting

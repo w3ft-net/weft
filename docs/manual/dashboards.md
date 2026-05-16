@@ -9,9 +9,9 @@ web:
 
 ## What dashboards are
 
-A dashboard is a named view that arranges existing watches into tiles.
-Each tile reads from a watch — there are no pipelines, no template
-variables, and no time-range pickers. The watch's schedule and history
+A dashboard is a named view that arranges existing crons into tiles.
+Each tile reads from a cron — there are no pipelines, no template
+variables, and no time-range pickers. The cron's schedule and history
 define what the tile shows; the dashboard just composes them into a
 layout.
 
@@ -68,7 +68,7 @@ Top-level fields:
 
 | Kind        | Body                                                       | Required fields           |
 |-------------|------------------------------------------------------------|---------------------------|
-| `sparkline` | Time-series glyph from the watch's recent results.         | `watch`                   |
+| `sparkline` | Time-series glyph from the cron's recent results.          | `watch`                   |
 | `counter`   | Latest numeric value.                                      | `watch`                   |
 | `gauge`     | Bar from 0 to `threshold.max` (default 100).               | `watch`                   |
 | `table`     | Multi-row stdout parsed as whitespace-split columns.       | `watch`, `columns`        |
@@ -78,7 +78,7 @@ Tile fields:
 | Field        | Applies to                | Notes                                                        |
 |--------------|---------------------------|--------------------------------------------------------------|
 | `kind`       | all                       | One of `sparkline`, `counter`, `gauge`, `table`.             |
-| `watch`      | all                       | Name of an existing watch (must exist when the file is saved). |
+| `watch`      | all                       | Name of an existing cron (must exist when the file is saved). |
 | `size`       | all                       | `sm`, `md`, or `lg`. Default `md`. Hint, not pixel size.     |
 | `format`     | counter                   | Optional `%d` / `%.2f` format applied to the value.          |
 | `threshold`  | counter, gauge, sparkline | `warn`, `crit`, `max` numeric cutoffs.                       |
@@ -135,7 +135,7 @@ in YAML is the order on screen.
 
 ## Navigation
 
-Tile headers link to the watch's detail page (`/watch/<name>`) so
+Tile headers link to the cron's detail page (`/watch/<name>`) so
 clicking a tile takes you to its full history with zoom, range
 selection, and per-tag legend.
 
@@ -151,7 +151,7 @@ rm /etc/dashboards/old.yaml
 
 Saving a dashboard checks the YAML parses, every `kind:` is recognized,
 every `size:` is one of `sm` / `md` / `lg`, every `table` tile has
-`columns:`, and every referenced watch exists. A bad file is rejected
+`columns:`, and every referenced cron exists. A bad file is rejected
 at write time — your previous version stays intact.
 
 ## Authoring via the MCP server
@@ -162,9 +162,9 @@ as scripts and crons:
 
 | Tool                    | Effect                                                   |
 |-------------------------|----------------------------------------------------------|
-| `weft.dashboard_propose`| Stage a new or updated dashboard. Validates YAML + watch refs. Returns a unified diff against any existing version. |
+| `weft.dashboard_propose`| Stage a new or updated dashboard. Validates YAML + cron refs. Returns a unified diff against any existing version. |
 | `weft.proposal_delete`  | Stage a delete with `kind: dashboard, name: <n>`.        |
 | `weft.proposals_apply`  | Commit one or more staged proposals after human review.  |
 
-Watch references are checked against the live watch list — the model
-can't stage a dashboard pointing at a watch that doesn't exist yet.
+Cron references are checked against the live cron list — the model
+can't stage a dashboard pointing at a cron that doesn't exist yet.

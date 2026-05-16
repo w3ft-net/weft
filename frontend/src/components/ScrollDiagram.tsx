@@ -20,7 +20,8 @@ const NARRATIVES: { start: number; end: number; title: string; body: ReactNode }
     end: 0.58,
     title: 'your shell, just bigger',
     body: <>
-      log sources are pseudofiles under <code>/log/&lt;ns&gt;/&lt;env&gt;/&lt;app&gt;.log</code>.
+      log sources are pseudofiles under <code>/log/&lt;ns&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>{' '}
+      (an <code>&lt;env&gt;</code> segment slots in after the namespace for env-bearing tokens).
       pipe through <code>awk</code>, <code>jq</code>, <code>grep</code>,{' '}
       <code>sed</code> — meta-vars like <code>$LEVEL</code> and <code>$HOST</code>{' '}
       push down to column scans, not <em>json_extract</em>.
@@ -91,7 +92,7 @@ const ROWS = [
 // ── Shell commands ────────────────────────────────────────────────────
 const SHELL_COMMANDS = [
   {
-    cmd: `cat /log/loom/prod/api.log | awk '$LEVEL == "ERROR"' | head -3`,
+    cmd: `cat /log/loom/prod/api/main.log | awk '$LEVEL == "ERROR"' | head -3`,
     output: [
       '14:23:11  api-7f9b   timeout to upstream',
       '14:23:14  api-3a2e   invalid auth token',
@@ -99,7 +100,7 @@ const SHELL_COMMANDS = [
     ],
   },
   {
-    cmd: `tail /log/loom/metrics.log | jq 'select(.type=="cpu" and .user>80)'`,
+    cmd: `tail /log/loom/prod/api/metrics.log | jq 'select(.type=="cpu" and .user>80)'`,
     output: [
       '{"type":"cpu","_host":"web-2","user":94,"idle":3}',
       '{"type":"cpu","_host":"importer","user":88,"idle":11}',
@@ -110,7 +111,7 @@ const SHELL_COMMANDS = [
     cmd: 'cat /cron.d/error-rate',
     output: [
       '# schedule: every 1m',
-      'tail -n 500 /log/loom/prod/api.log \\',
+      'tail -n 500 /log/loom/prod/api/main.log \\',
       '  | grep ERROR | wc -l \\',
       '  | alert above 50 --notify=ops',
     ],

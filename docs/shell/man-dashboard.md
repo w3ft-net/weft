@@ -74,11 +74,11 @@ section. You cannot mix `sections:` and top-level `tiles:`.
 ## TILE KEYS
 
 - `kind` — one of `sparkline`, `counter`, `gauge`, `table`.
-- `watch` — name of an existing watch (must exist when saved).
+- `watch` — name of an existing cron (must exist when saved).
 - `size` — `sm`, `md`, or `lg`. Default `md`. A layout hint, not a pixel size.
 - `format` — (counter only) printf-style format, e.g. `"%d jobs"`, `"%.1f%%"`.
 - `threshold` — (counter, gauge, sparkline) `warn`, `crit`, and `max` cutoffs.
-- `columns` — (table only) header labels; rows are whitespace-split from the watch stdout.
+- `columns` — (table only) header labels; rows are whitespace-split from the cron stdout.
 
 ## THRESHOLD KEYS
 

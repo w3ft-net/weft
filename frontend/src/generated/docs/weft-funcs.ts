@@ -18,14 +18,14 @@ const weftFuncs = {
     { level: 2, id: "see-also", text: "See also" },
   ],
   html: `<p>The <code>weft::*</code> family is the surface for reading and reasoning about
-your own watch history from inside a pipeline. There are three
+your own cron history from inside a pipeline. There are three
 shapes:</p>
 <ul>
 <li><strong>Value funcs</strong> return the most recent value, an aggregate over a
 window, or an anchor like the slope between two endpoints.</li>
-<li><strong>Predicates</strong> return a boolean — &quot;is this watch above 50?&quot;,
+<li><strong>Predicates</strong> return a boolean — &quot;is this cron above 50?&quot;,
 &quot;did it just change?&quot; — for composing alert conditions across
-multiple watches.</li>
+multiple crons.</li>
 <li><strong>Stdin comparators</strong> turn a piped value into a boolean.</li>
 </ul>
 <p>The same set is exposed in two host languages:</p>
@@ -39,7 +39,7 @@ implementation backs both — there's no drift to worry about.</p>
 <p>For composing predicates into composite alerts, see
 <strong>Alerting strategies</strong>.</p>
 <h2 id="value-functions">Value functions</h2>
-<p>Each takes a watch name, returns a value, and (with the exception of
+<p>Each takes a cron name, returns a value, and (with the exception of
 <code>weft::latest</code> and <code>weft::previous</code>) a duration window. Durations use
 Go syntax: <code>30s</code>, <code>5m</code>, <code>1h</code>, <code>6h</code>, <code>24h</code>.</p>
 <p>| Bash | Lua | Returns | Notes |
@@ -73,7 +73,7 @@ a longer window is cheap.</li>
 rows that don't parse. They error when nothing in the window is
 numeric (and <code>weft::stddev</code> also errors when fewer than 2 numeric
 samples exist).</p>
-<p><code>weft::latest</code> and <code>weft::previous</code> return whatever the watch wrote,
+<p><code>weft::latest</code> and <code>weft::previous</code> return whatever the cron wrote,
 including non-numeric strings. Cast in Lua with <code>tonumber(...)</code>.</p>
 <h3 id="retention">Retention</h3>
 <p>The aggregates read whatever history your plan's retention covers;
@@ -121,7 +121,7 @@ checking it against a threshold — pipe through one of:</p>
 native <code>&gt;</code> / <code>&lt;</code> operators do the same job, no helper needed.</p>
 <h2 id="see-also">See also</h2>
 <ul>
-<li><strong>Watches</strong> — how watch results get persisted and which <code>weft::*</code>
+<li><strong>Crons</strong> — how cron results get persisted and which <code>weft::*</code>
 funcs read them back.</li>
 <li><strong>Alerting strategies</strong> — patterns for composing predicates into
 composite alerts, the multi-row tag-based form, debouncing, and

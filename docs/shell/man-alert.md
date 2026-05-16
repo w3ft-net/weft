@@ -33,8 +33,8 @@ whenever stdin is non-empty.
 
 Always passes stdin through to stdout unchanged (tee behavior).
 
-In a cron watch (`/cron.d/`), incidents are deduplicated on
-(watch, condition). Subsequent ticks during an open incident
+In a cron (`/cron.d/`), incidents are deduplicated on
+(cron, condition). Subsequent ticks during an open incident
 update it but don't re-page. When the condition clears, the
 incident closes.
 
@@ -83,7 +83,7 @@ A single alert may not mix the two forms across `-k` and `-t`.
 
 ## COMPOSITE PREDICATES
 
-A cron that needs to fire on the state of more than one watch composes
+A cron that needs to fire on the state of more than one cron composes
 predicate builtins (`weft::is_above`, `weft::is_absent`, etc. — see
 `man weft`) with bash `&&` `||` `!` or Lua `and` `or` `not`, then
 hands the resulting exit code to alert via `--if-zero "$?"`:
@@ -100,7 +100,7 @@ for *success*, matching the right-hand interpretation of `&&` chains).
 with the stdin condition keywords above.
 
 See `docs/manual/alerting-strategies.md` for the full pattern catalogue
-(single-watch scalar, multi-row per-tag, composite, aggregated-value).
+(single-cron scalar, multi-row per-tag, composite, aggregated-value).
 
 ## OPTIONS
 
@@ -119,15 +119,15 @@ tail -n 500 myapp.log | awk '$LEVEL == "ERROR"' | alert --notify=ops
 check_errors | alert above 50 --notify=critical
 check_errors | alert above 50 --duration 5m --average --notify=ops
 check_errors | alert rising 100% --notify=critical
-cat /log/canary.log | tail -1 | alert absent --duration 10m --notify=ops
+cat /log/myco/canary/main.log | tail -1 | alert absent --duration 10m --notify=ops
 echo "integration test" | alert --notify=ops
 
 # Multi-row positional: alert per host whose disk use is above 80%.
-tail /log/shard.log | jq -r 'select(.type=="disk") | "\(.host) \(.pct)"' \
+tail /log/weft/shard/main.log | jq -r 'select(.type=="disk") | "\(.host) \(.pct)"' \
     | alert above 80 -k 2 -t 1 --notify=ops
 
 # Multi-row JSON path: same idea, no `jq -r` re-formatting required.
-tail /log/shard.log | jq 'select(.type=="disk")' \
+tail /log/weft/shard/main.log | jq 'select(.type=="disk")' \
     | alert above 80 -k .pct -t .host --notify=ops
 ```
 

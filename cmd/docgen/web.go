@@ -43,7 +43,7 @@ var manualCategories = []manualCategory{
 	{
 		ID:      "alert-visualize",
 		Label:   "Alert & visualize",
-		Summary: "Run pipelines on a schedule with watches, choose an alerting strategy that suits the signal, and pin live queries to dashboards.",
+		Summary: "Run pipelines on a schedule with crons, choose an alerting strategy that suits the signal, and pin live queries to dashboards.",
 	},
 	{
 		ID:      "customize",

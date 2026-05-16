@@ -60,8 +60,8 @@ and you want to keep your scratch around past the original 48h.</p>
 <p>Treat /tmp the way you'd treat a shared whiteboard in an operations
 room: great for the investigation you're running right now, not where
 you keep anything you'll need next week. For long-term storage of a
-pipeline's output, save the pipeline itself as a watch (see the
-<strong>Watches</strong> section) — watch results are retained for the full history
+pipeline's output, save the pipeline itself as a cron (see the
+<strong>Crons</strong> section) — cron results are retained for the full history
 your plan covers.</p>
 <h3 id="storage-limits">Storage limits</h3>
 <p>| Plan    | /tmp space | Per-file limit |
@@ -85,7 +85,7 @@ the prompt afterwards does nothing. Scripts live in <code>/bin</code> — see th
 <strong>Custom scripts</strong> section.</li>
 <li><strong>Not a source for <code>tail -f</code>.</strong> Follow-mode is a streaming query
 against live logs. You can redirect the output of a finished query
-into /tmp, but <code>tail -f /log/api.log &gt; /tmp/stream</code> is not supported
+into /tmp, but <code>tail -f /log/myco/api/main.log &gt; /tmp/stream</code> is not supported
 in this release.</li>
 <li><strong>Not shared across accounts.</strong> /tmp is per-customer. Every member
 of your account sees the same /tmp; users from other accounts never
@@ -120,7 +120,7 @@ drwxr-xr-x     -  2026-04-22 17:03  incident-2026-04-22/
 </code></pre>
 <p>The same flags work anywhere in the filesystem — <code>ls -l /bin</code> shows
 when you last edited each of your scripts, <code>ls -l /cron.d</code> shows when
-each watch was last modified.</p>
+each cron was last modified.</p>
 `,
 } as const;
 

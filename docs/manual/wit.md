@@ -12,7 +12,7 @@ web:
 Every save to `/bin/<name>` or `/cron.d/<name>` is captured in a
 short, browseable history. If you fat-finger an edit, push a
 script that breaks an alert at 2am, or just want to see what your
-watch looked like last week, the `wit` builtin has you covered.
+cron looked like last week, the `wit` builtin has you covered.
 
 It looks like a tiny git: `wit log`, `wit show`, `wit diff`,
 `wit checkout`, `wit amend`. The mental model is the same — each
@@ -58,7 +58,7 @@ beyond that drops the oldest one. Versions older than five saves
 ago are gone — there's no recycle bin.
 
 Keep this in the back of your head when iterating quickly. If
-you've been hammering `:w` ten times a minute polishing a watch,
+you've been hammering `:w` ten times a minute polishing a cron,
 the version you started from this morning is no longer reachable.
 
 ## Commands
@@ -86,13 +86,13 @@ versions:
 weft> wit log -p /bin/scan
 * a4fb0c2  HEAD     ...  alice    "fix the awk filter"
 diff a4fb0c2 ← 3d2e91f:
-- cat /log/api.log | grep ERROR | wc -l
-+ cat /log/api.log | awk '$LEVEL == "ERROR"' | head -100 | wc -l
+- cat /log/myco/api/main.log | grep ERROR | wc -l
++ cat /log/myco/api/main.log | awk '$LEVEL == "ERROR"' | head -100 | wc -l
 
   3d2e91f  HEAD^    ...  alice    "tighten error pattern"
 diff 3d2e91f ← c01b745:
-- cat /log/api.log | grep -i error | wc -l
-+ cat /log/api.log | grep ERROR | wc -l
+- cat /log/myco/api/main.log | grep -i error | wc -l
++ cat /log/myco/api/main.log | grep ERROR | wc -l
 
   c01b745  HEAD^2   ...  bob
   ...
@@ -105,15 +105,15 @@ without committing to a checkout:
 
 ```
 weft> wit show /bin/scan HEAD^2
-cat /log/api.log | grep ERROR | wc -l
+cat /log/myco/api/main.log | grep ERROR | wc -l
 
 weft> wit show /cron.d/errors HEAD^
 # schedule: every 5m
-cat /log/api.log | awk '$LEVEL == "ERROR"' | wc -l | alert above 0 --notify=ops
+cat /log/myco/api/main.log | awk '$LEVEL == "ERROR"' | wc -l | alert above 0 --notify=ops
 ```
 
-Watches show their `# schedule:` directive on the first line so
-you can read the version as a complete watch file.
+Crons show their `# schedule:` directive on the first line so
+you can read the version as a complete cron file.
 
 ### `wit diff <path> <a>..<b>`
 
@@ -124,8 +124,8 @@ author of each side:
 weft> wit diff /bin/scan HEAD^2..HEAD
 --- a/scan (c01b745, bob)
 +++ b/scan (a4fb0c2, alice)
-- cat /log/api.log | grep ERROR | wc -l
-+ cat /log/api.log | awk '$LEVEL == "ERROR"' | head -100 | wc -l
+- cat /log/myco/api/main.log | grep ERROR | wc -l
++ cat /log/myco/api/main.log | awk '$LEVEL == "ERROR"' | head -100 | wc -l
 ```
 
 The range syntax is one rigid form: `<a>..<b>`. Both endpoints
@@ -223,7 +223,7 @@ message.
 - **No history for `/etc/notify.yaml` or `/tmp`.** Notify config
   is rare-edit shared state; `/tmp` is intentionally ephemeral
   with its own 48-hour expiry.
-- **No recovery from `rm`.** Deleting a script or watch deletes
+- **No recovery from `rm`.** Deleting a script or cron deletes
   its history with it. There's no `wit reflog`. If you have
   history you'd want to keep, `wit checkout` to a new version
   before `rm`-ing.

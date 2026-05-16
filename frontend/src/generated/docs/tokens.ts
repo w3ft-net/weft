@@ -29,13 +29,14 @@ secretly write rows tagged as staging.</p>
 </code></pre>
 <p>Every row picks up the bound env at ingest time, so any query the
 token authenticates implicitly filters to that env — no path
-contortions required. Plain apps stay at the two-level layout
-(<code>/log/myco/api.log</code>); telemetry streams (metrics, heartbeats,
-runtime) land under their service's directory
-(<code>/log/myco/&lt;service&gt;/&lt;kind&gt;.log</code>); a token spanning multiple envs
-can disambiguate explicitly with the four-level form
-(<code>/log/myco/&lt;env&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>). See <strong>Query your logs</strong>
-for how <code>$ENV</code> surfaces in awk and jq.</p>
+contortions required. Plain apps land at the three-segment layout
+(<code>/log/myco/api/main.log</code>); telemetry streams reuse that shape with
+the kind segment swapped (<code>/log/myco/api/metrics.log</code>,
+<code>/log/myco/api/heartbeats.log</code>, <code>/log/myco/api/runtime.log</code>); a
+token spanning multiple envs disambiguates with the four-segment
+form (<code>/log/myco/&lt;env&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>). The <code>&lt;kind&gt;</code> segment
+is always present and defaults to <code>main</code>. See <strong>Query your logs</strong> for how <code>$ENV</code>
+surfaces in awk and jq.</p>
 `,
 } as const;
 

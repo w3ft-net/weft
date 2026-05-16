@@ -36,10 +36,11 @@ weft token create --namespace myco --label api-prod --env prod
 
 Every row picks up the bound env at ingest time, so any query the
 token authenticates implicitly filters to that env — no path
-contortions required. Plain apps stay at the two-level layout
-(`/log/myco/api.log`); telemetry streams (metrics, heartbeats,
-runtime) land under their service's directory
-(`/log/myco/<service>/<kind>.log`); a token spanning multiple envs
-can disambiguate explicitly with the four-level form
-(`/log/myco/<env>/<service>/<kind>.log`). See **Query your logs**
-for how `$ENV` surfaces in awk and jq.
+contortions required. Plain apps land at the three-segment layout
+(`/log/myco/api/main.log`); telemetry streams reuse that shape with
+the kind segment swapped (`/log/myco/api/metrics.log`,
+`/log/myco/api/heartbeats.log`, `/log/myco/api/runtime.log`); a
+token spanning multiple envs disambiguates with the four-segment
+form (`/log/myco/<env>/<service>/<kind>.log`). The `<kind>` segment
+is always present and defaults to `main`. See **Query your logs** for how `$ENV`
+surfaces in awk and jq.

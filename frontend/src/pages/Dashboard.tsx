@@ -41,10 +41,10 @@ function WatchesCard({ watches, watchCount, watchLimit, minInterval }: {
     return (
       <div className="dash-card" data-testid="dashboard-watches-card">
         <div className="dash-card-header">
-          <h2 className="dash-card-title">Watches</h2>
+          <h2 className="dash-card-title">Crons</h2>
         </div>
         <div className="dash-empty">
-          Watches are not available on the trial plan.{' '}
+          Crons are not available on the trial plan.{' '}
           <a href="/account">Upgrade</a> to enable scheduled monitoring.
         </div>
       </div>
@@ -55,13 +55,13 @@ function WatchesCard({ watches, watchCount, watchLimit, minInterval }: {
     return (
       <div className="dash-card" data-testid="dashboard-watches-card">
         <div className="dash-card-header">
-          <h2 className="dash-card-title">Watches</h2>
+          <h2 className="dash-card-title">Crons</h2>
           <span className="watch-count-badge">{watchCount} / {watchLimit}</span>
         </div>
         <div className="dash-empty">
-          No watches yet. Create one in the{' '}
+          No crons yet. Create one in the{' '}
           <a href="/shell" data-testid="dashboard-watches-shell-link">shell</a>
-          {' '}with <code>vi /cron.d/my-watch</code>
+          {' '}with <code>vi /cron.d/my-cron</code>
           {minInterval && <span className="dash-empty"> (min interval: {minInterval})</span>}
         </div>
       </div>
@@ -71,7 +71,7 @@ function WatchesCard({ watches, watchCount, watchLimit, minInterval }: {
   return (
     <div className="dash-card" data-testid="dashboard-watches-card">
       <div className="dash-card-header">
-        <h2 className="dash-card-title">Watches</h2>
+        <h2 className="dash-card-title">Crons</h2>
         <span className={`watch-count-badge${atLimit ? ' watch-count-at-limit' : ''}`}>
           {watchCount} / {watchLimit}
         </span>

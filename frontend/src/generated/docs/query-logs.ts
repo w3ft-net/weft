@@ -44,7 +44,7 @@ not in the table below still works in awk/jq, but goes through the
 slower JSON-extract path.</p>
 <p>| awk | jq | Column | Source |
 |---|---|---|---|
-| <code>$APP</code> (alias <code>$SERVICE</code>) | <code>._app</code> (alias <code>._service</code>) | <code>app</code> | the log file's source name (<code>/log/&lt;ns&gt;/&lt;app&gt;.log</code>) |
+| <code>$APP</code> (alias <code>$SERVICE</code>) | <code>._app</code> (alias <code>._service</code>) | <code>app</code> | the log file's source name (the <code>&lt;service&gt;</code> in <code>/log/&lt;ns&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>) |
 | <code>$HOST</code> (alias <code>$INSTANCE</code>) | <code>._host</code> (alias <code>._instance</code>) | <code>instance</code> | the agent's hostname |
 | <code>$LEVEL</code> | <code>._level</code> | <code>level</code> | parsed from the line per the source's schema |
 | <code>$TS</code> | <code>._ts</code> | <code>ts</code> | row timestamp |
@@ -59,16 +59,16 @@ slower JSON-extract path.</p>
 | <code>$NODE</code> | <code>._node</code> | <code>node</code> | stable workload identity (e.g. shard ID) — file-sourced via the agent's <code>dimensions:</code> config; never auto-derived |</p>
 <p>A few examples:</p>
 <pre><code># Errors in production for one specific deployment
-cat /log/myco/prod/api.log | awk '$LEVEL == &quot;ERROR&quot; &amp;&amp; $DEPLOYMENT == &quot;api-east&quot;'
+cat /log/myco/prod/api/main.log | awk '$LEVEL == &quot;ERROR&quot; &amp;&amp; $DEPLOYMENT == &quot;api-east&quot;'
 
 # Same query in jq form against a JSON source
-cat /log/myco/prod/api.log | jq 'select(._level == &quot;ERROR&quot; and ._deployment == &quot;api-east&quot;)'
+cat /log/myco/prod/api/main.log | jq 'select(._level == &quot;ERROR&quot; and ._deployment == &quot;api-east&quot;)'
 
 # Per-host memory metrics
-tail /log/weft/metrics.log | jq 'select(._host == &quot;shard-3&quot; and .type == &quot;memory&quot;) | .pct'
+tail /log/weft/shard/metrics.log | jq 'select(._host == &quot;shard-3&quot; and .type == &quot;memory&quot;) | .pct'
 
 # Region-scoped grep
-cat /log/myco/prod/api.log | awk '$REGION == &quot;us-east-2&quot;' | grep &quot;timeout&quot;
+cat /log/myco/prod/api/main.log | awk '$REGION == &quot;us-east-2&quot;' | grep &quot;timeout&quot;
 </code></pre>
 <h3 id="why-two-naming-styles">Why two naming styles</h3>
 <p>awk meta-variables are uppercase short names (<code>$APP</code>, <code>$ENV</code>); jq
@@ -83,42 +83,42 @@ whichever name fits your team's vocabulary.</p>
 <h3 id="custom-fields-fall-through-to-json-extract">Custom fields fall through to JSON-extract</h3>
 <p>Anything not in the table above lives in your row's JSON payload
 and is still queryable — just slower:</p>
-<pre><code>cat /log/myco/prod/api.log | jq 'select(.feature_flag == &quot;abc&quot;)'
+<pre><code>cat /log/myco/prod/api/main.log | jq 'select(.feature_flag == &quot;abc&quot;)'
 </code></pre>
 <p>The planner pushes that to <code>WHERE json_extract_string(payload, '$.feature_flag') = 'abc'</code>, which works correctly but can't use
 row-group statistics for skip-ahead — every row in the time range
 is read and parsed. For dimensions you query constantly, prefer
 the indexed columns.</p>
 <h2 id="per-tag-values-over-time">Per-tag values over time</h2>
-<p>Indexed dimensions + a frequent watch + the multi-row alert form
+<p>Indexed dimensions + a frequent cron + the multi-row alert form
 together give you &quot;value by host (or service / region / pod) over
 time&quot; without any new infrastructure. The full recipe — including
 per-tag incident dedup with <code>-k</code>/<code>-t</code> and per-tag debouncing — is
 in <strong>Alerting strategies</strong>.</p>
-<p>In short: write a watch whose body emits one line per tag (e.g.
+<p>In short: write a cron whose body emits one line per tag (e.g.
 <code>&quot;\\(._host) \\(.pct)&quot;</code> from <code>jq -r</code>) and pipe it through
 <code>alert above N -k 2 -t 1 --notify=ops</code>. Each host opens and closes
 incidents independently against its tag.</p>
-<p>Window aggregates over the watch's history (<code>weft::avg</code>,
+<p>Window aggregates over the cron's history (<code>weft::avg</code>,
 <code>weft::max</code>, etc.) currently summarize the entire run's stdout as
 one number, so the per-tag <em>aggregated history</em> is a follow-up.
 For now the recipe gives you per-bucket per-tag values; for the
-rolling average across buckets, point a second watch at it via
+rolling average across buckets, point a second cron at it via
 <code>weft::latest</code>.</p>
 <h2 id="charting-a-query">Charting a query</h2>
 <p>Pipe any pipeline into <code>chart</code> to render the result as a chart in
-the terminal — no need to first commit it to a saved watch. The
+the terminal — no need to first commit it to a saved cron. The
 chart is the terminal stage of the pipeline (no commands after it).</p>
 <pre><code># Time-bucketed p95 latency over the current range
-cat /log/api.log \\
+cat /log/myco/api/main.log \\
   | chart -x .ts -y .latency_ms --bucket 1m -a p95
 
 # Distribution of total latency by path
-cat /log/api.log | jq '{path, latency}' \\
+cat /log/myco/api/main.log | jq '{path, latency}' \\
   | chart -x .path -y .latency -a sum
 
 # Plot a stream of numbers from jq
-cat /log/api.log | jq '.cpu_pct' | chart
+cat /log/myco/api/main.log | jq '.cpu_pct' | chart
 </code></pre>
 <p><code>-x</code> and <code>-y</code> accept either a 1-indexed whitespace column (<code>-x 1</code>)
 or a <code>.</code>-prefixed JSON path (<code>-x .ts</code>). With no flags, x is the
