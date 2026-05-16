@@ -206,6 +206,15 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
+// Flush forwards to the wrapped writer so the SSE shell handler's
+// `w.(http.Flusher)` assertion still passes through this wrapper.
+// Without it, AccessLog would silently break every streaming endpoint.
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // CORSMiddleware adds CORS headers for the SPA. Allows the configured
 // origin plus localhost for development.
 func CORSMiddleware(origin string, next http.Handler) http.Handler {

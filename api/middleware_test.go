@@ -7,6 +7,28 @@ import (
 	"testing"
 )
 
+// TestAccessLog_PreservesFlusher pins the regression introduced when
+// AccessLog began wrapping the whole mux: its statusRecorder embedded
+// http.ResponseWriter but did not forward Flush(), so the SSE shell
+// handler's `w.(http.Flusher)` assertion failed and every streaming
+// request 500'd with "streaming unsupported". httptest.ResponseRecorder
+// is itself a Flusher, so a correctly transparent wrapper must keep the
+// downstream writer Flusher-capable.
+func TestAccessLog_PreservesFlusher(t *testing.T) {
+	var gotFlusher bool
+	terminal := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, gotFlusher = w.(http.Flusher)
+	})
+	rec := httptest.NewRecorder()
+	if _, ok := http.ResponseWriter(rec).(http.Flusher); !ok {
+		t.Fatal("precondition: httptest.ResponseRecorder should be an http.Flusher")
+	}
+	AccessLog(terminal).ServeHTTP(rec, httptest.NewRequest("GET", "/x", nil))
+	if !gotFlusher {
+		t.Fatal("AccessLog dropped http.Flusher: SSE/streaming handlers will 500")
+	}
+}
+
 // TestCORS_AllowsActiveOrgHeader pins the regression where the welcome
 // modal's Start-the-tour click fired a cross-origin /api/auth/me with
 // the X-Active-Org header set to "loom" (from switchOrg's localStorage
