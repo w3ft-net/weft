@@ -29,6 +29,75 @@ func TestAccessLog_PreservesFlusher(t *testing.T) {
 	}
 }
 
+// nonFlusherWriter is a minimal http.ResponseWriter that is deliberately
+// NOT an http.Flusher.
+type nonFlusherWriter struct{ h http.Header }
+
+func (n *nonFlusherWriter) Header() http.Header         { return n.h }
+func (n *nonFlusherWriter) Write(b []byte) (int, error) { return len(b), nil }
+func (n *nonFlusherWriter) WriteHeader(int)             {}
+
+// flushSpy records whether Flush() actually reached it.
+type flushSpy struct {
+	*nonFlusherWriter
+	flushed bool
+}
+
+func (f *flushSpy) Flush() { f.flushed = true }
+
+// unwrapToFlusher is NOT itself an http.Flusher; it exposes a flushable
+// writer only via Unwrap() — exactly the shape of a middleware-wrapped
+// or HTTP/2 server ResponseWriter under the http.ResponseController
+// convention (Go 1.20+).
+type unwrapToFlusher struct {
+	*nonFlusherWriter
+	inner *flushSpy
+}
+
+func (u *unwrapToFlusher) Unwrap() http.ResponseWriter { return u.inner }
+
+// TestAccessLog_FlushReachesWriter pins the *delivery* half of the
+// streaming contract that TestAccessLog_PreservesFlusher misses. It is
+// not enough that w.(http.Flusher) is satisfied — it is, because
+// statusRecorder has a Flush method — calling that Flush must actually
+// reach the underlying writer.
+//
+// The shipped 4df18c4 implementation forwards via a one-level
+// `s.ResponseWriter.(http.Flusher)` assertion, which silently no-ops
+// whenever the wrapped writer exposes flushing only through Unwrap()
+// (every non-trivial wrapper and the HTTP/2 server writer). In prod
+// that means w.(http.Flusher) succeeds so the SSE handler does NOT 500
+// (no HTTP status in DevTools), but no bytes are ever flushed: the
+// browser's streaming fetch stalls, the connection resets, and the
+// WASM shell prints "cannot reach API server" for every log query
+// while non-streaming endpoints are unaffected.
+func TestAccessLog_FlushReachesWriter(t *testing.T) {
+	spy := &flushSpy{nonFlusherWriter: &nonFlusherWriter{h: http.Header{}}}
+	base := &unwrapToFlusher{nonFlusherWriter: &nonFlusherWriter{h: http.Header{}}, inner: spy}
+
+	// Precondition: AccessLog wraps a writer that is NOT a direct
+	// Flusher, flushable only through Unwrap() — the realistic shape.
+	if _, ok := http.ResponseWriter(base).(http.Flusher); ok {
+		t.Fatal("precondition: base writer must not be a direct http.Flusher")
+	}
+
+	terminal := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		f, ok := w.(http.Flusher) // exactly what api/shell.go:84 does
+		if !ok {
+			t.Fatal("w.(http.Flusher) failed: SSE handler would 500")
+		}
+		f.Flush()
+	})
+
+	AccessLog(terminal).ServeHTTP(base, httptest.NewRequest("GET", "/x", nil))
+
+	if !spy.flushed {
+		t.Fatal("Flush() through AccessLog's statusRecorder never reached the " +
+			"underlying writer: SSE/streaming silently stalls in prod even though " +
+			"w.(http.Flusher) is satisfied")
+	}
+}
+
 // TestCORS_AllowsActiveOrgHeader pins the regression where the welcome
 // modal's Start-the-tour click fired a cross-origin /api/auth/me with
 // the X-Active-Org header set to "loom" (from switchOrg's localStorage

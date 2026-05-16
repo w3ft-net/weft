@@ -232,13 +232,26 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
-// Flush forwards to the wrapped writer so the SSE shell handler's
-// `w.(http.Flusher)` assertion still passes through this wrapper.
-// Without it, AccessLog would silently break every streaming endpoint.
+// Unwrap exposes the wrapped writer so http.ResponseController (and any
+// outer wrapper following the same convention) can reach the real
+// server writer through this layer.
+func (s *statusRecorder) Unwrap() http.ResponseWriter {
+	return s.ResponseWriter
+}
+
+// Flush keeps the SSE shell handler's `w.(http.Flusher)` assertion
+// satisfied AND actually delivers the flush. A one-level
+// `s.ResponseWriter.(http.Flusher)` assertion silently no-ops whenever
+// the wrapped writer exposes flushing only via Unwrap() — every
+// non-trivial wrapper and the HTTP/2 server writer — which stalls every
+// streaming endpoint while leaving w.(http.Flusher) satisfied (so no
+// 500, just a hung stream). http.NewResponseController walks the
+// Unwrap() chain the way the stdlib intends.
 func (s *statusRecorder) Flush() {
-	if f, ok := s.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
+	//nolint:errcheck // ErrNotSupported only when nothing in the chain
+	// flushes; nothing actionable here and matches http.Flusher's
+	// error-free signature.
+	_ = http.NewResponseController(s.ResponseWriter).Flush()
 }
 
 // CORSMiddleware adds CORS headers for the SPA. Allows the configured
