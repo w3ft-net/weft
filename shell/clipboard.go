@@ -57,9 +57,9 @@ func clipboardBuiltin(s *Shell, shareBase string) shellcore.BuiltinFunc {
 		if rangeSpec == "" {
 			// Resolve s.Range fresh at copy time so the deep link pins a
 			// concrete window (the recipient's clock is irrelevant — they
-			// should see exactly what the sender saw). c.Range()'s
-			// snapshot was set at last `range` change, which may be hours
-			// stale; ParseRange anchors to now.
+			// should see exactly what the sender saw). The prompt's lead
+			// segment is a display-only snapshot from the last `range`
+			// change and may be hours stale; ParseRange anchors to now.
 			start, end, err := timerange.ParseRange(s.Range)
 			if err != nil {
 				c.AppendScrollback(shellcore.ErrorText("clipboard: invalid current range: "+err.Error()) + "\n")

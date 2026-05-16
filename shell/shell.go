@@ -77,15 +77,23 @@ type Shell struct {
 	// dashboard.Register if the FS satisfies dashboard.Provider —
 	// that's the CLI path.
 	Dashboard func(name string)
-	User     string // username shown in prompt (e.g. "alice")
-	Customer string // customer/team shown after the @ in the prompt (e.g. "acme"); empty falls back to "weft"
+	// OnRangeChange, when non-nil, is invoked by the `range <spec>`
+	// builtin with the new un-resolved spec after s.Range is updated.
+	// shellcore no longer carries range state (warp removed
+	// SetRange/ActionSetRange in favor of an opaque prompt
+	// SetLeadSegment), so embedders that mirror the window elsewhere
+	// ship it out-of-band through this hook. The browser bridge uses it
+	// to drive the JS onRangeChange chip callback; the CLI leaves it nil
+	// (the inline prompt segment is the only surface it needs).
+	OnRangeChange func(spec string)
+	User          string // username shown in prompt (e.g. "alice")
+	Customer      string // customer/team shown after the @ in the prompt (e.g. "acme"); empty falls back to "weft"
 	// ShareURLBase is the absolute base URL the `clipboard` builtin
 	// embeds in deep-link URLs (e.g. https://w3ft.net). Empty falls
 	// back to the production host so a CLI invocation without explicit
 	// config still produces a shareable link.
 	ShareURLBase string
 }
-
 
 // ConfigureCore wires every embedder-owned surface weft installs on a
 // fresh shellcore — syntax fallback, FS + chart/dashboard hookups,
@@ -127,8 +135,8 @@ func (s *Shell) ConfigureCore(core *shellcore.ShellCore) {
 	// so the prompt can render `[1d]` (formatDuration(end-start)) — that
 	// duration is stable for both relative and absolute specs, so a stale
 	// snapshot is harmless for display purposes.
-	if start, end, err := timerange.ParseRange(s.Range); err == nil {
-		core.SetRange(start, end)
+	if seg := rangeLeadSegment(s.Range); seg != "" {
+		core.SetLeadSegment(seg)
 	}
 	core.SetHelp(weftHelp{tiers: defaultTierLimits{}})
 	// Subcommand grammar matches the one ExecNonInteractive passes:
@@ -260,14 +268,21 @@ func dashboardNavigateBuiltin(navigate func(name string)) shellcore.BuiltinFunc 
 }
 
 // rangeBuiltinFor returns a `range` builtin closure bound to a specific
-// Shell. The closure stores the un-resolved spec on s.Range so subsequent
-// queries ship it verbatim to the server; it also calls c.SetRange with a
-// freshly-resolved snapshot so the PS1 duration label is non-zero, and
-// dispatches ActionSetRange so the browser chip callback fires.
+// Shell. The closure stores the un-resolved spec on s.Range so
+// subsequent queries ship it verbatim to the server; it also refreshes
+// the prompt's opaque lead segment (warp's SetLeadSegment seam, which
+// replaced the removed SetRange) and fires s.OnRangeChange so embedders
+// that mirror the window out-of-band (the browser chip) stay in sync.
+// Range state lives on the Shell now, not in shellcore — bare `range`
+// reads it back by re-parsing s.Range.
 func rangeBuiltinFor(s *Shell) shellcore.BuiltinFunc {
 	return func(c *shellcore.ShellCore, args []string) bool {
 		if len(args) == 1 {
-			start, end := c.Range()
+			start, end, err := timerange.ParseRange(s.Range)
+			if err != nil {
+				c.AppendScrollback(shellcore.ErrorText("range: "+err.Error()) + "\n")
+				return true
+			}
 			c.AppendScrollback(FormatRange(start, end))
 			return true
 		}
@@ -279,8 +294,10 @@ func rangeBuiltinFor(s *Shell) shellcore.BuiltinFunc {
 				return true
 			}
 			s.Range = spec
-			c.SetRange(start, end)
-			c.Dispatch(shellcore.ActionSetRange{Start: start, End: end})
+			c.SetLeadSegment(rangeLeadSegment(spec))
+			if s.OnRangeChange != nil {
+				s.OnRangeChange(spec)
+			}
 			c.AppendScrollback(FormatRange(start, end))
 			return true
 		}
@@ -359,7 +376,9 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 	// `log` against `/` and resolving it to the `/log` namespace root.
 	var rewriteOpts []shellcore.RewriteOption
 	rewriteOpts = append(rewriteOpts, shellcore.WithSubcommandBuiltin("wit", "log", "show", "diff", "checkout", "amend"))
-	if pc, ok := s.FS.(interface{ ClassifyPath(string) shellcore.PathKind }); ok {
+	if pc, ok := s.FS.(interface {
+		ClassifyPath(string) shellcore.PathKind
+	}); ok {
 		rewriteOpts = append(rewriteOpts, shellcore.WithPathClassifier(pc.ClassifyPath))
 	}
 	if rewritten, err := shellcore.RewritePaths(weftPipeline, shellcore.NewTransientDirStack(),

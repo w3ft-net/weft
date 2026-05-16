@@ -78,29 +78,31 @@ func TestConfigureCore_RangeBuiltinDisplaysCurrentWindow(t *testing.T) {
 	}
 }
 
-// TestConfigureCore_RangeBuiltinAcceptsSpec verifies that
-// `range 30m..` parses + dispatches an ActionSetRange. The builtin
-// must update both the core's internal range AND fire the action
-// the embedder uses to retransmit the window upstream.
+// TestConfigureCore_RangeBuiltinAcceptsSpec verifies that `range 30m..`
+// parses, stores the un-resolved spec on the Shell, and fires the
+// out-of-band OnRangeChange hook embedders use to retransmit the window
+// upstream. warp removed shellcore's internal range + ActionSetRange;
+// the spec now lives on the Shell and the prompt segment is set via
+// SetLeadSegment, so the hook (not a dispatched action) is the contract.
 func TestConfigureCore_RangeBuiltinAcceptsSpec(t *testing.T) {
-	var dispatched bool
+	var got string
+	s := &Shell{User: "alice", OnRangeChange: func(spec string) { got = spec }}
 	core := shellcore.NewShellCore(nil, 80, 24,
 		func(b []byte) {},
-		func(a shellcore.Action) {
-			if _, ok := a.(shellcore.ActionSetRange); ok {
-				dispatched = true
-			}
-		},
+		func(a shellcore.Action) {},
 	)
-	(&Shell{User: "alice"}).ConfigureCore(core)
+	s.ConfigureCore(core)
 
 	for _, r := range "range 30m.." {
 		core.HandleEvent(shellcore.KeyEvent{Rune: r})
 	}
 	core.HandleEvent(shellcore.KeyEvent{Key: shellcore.KeyEnter})
 
-	if !dispatched {
-		t.Error("range <spec> should dispatch ActionSetRange")
+	if got != "30m.." {
+		t.Errorf("range <spec> should fire OnRangeChange(%q); got %q", "30m..", got)
+	}
+	if s.Range != "30m.." {
+		t.Errorf("range <spec> should store the un-resolved spec on s.Range; got %q", s.Range)
 	}
 }
 

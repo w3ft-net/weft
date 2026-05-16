@@ -163,12 +163,6 @@ func (r *runner) handleAction(a shellcore.Action) {
 		if r.shell.FS != nil {
 			r.shell.FS.WriteFile(a.Path, []byte(a.Content))
 		}
-	case shellcore.ActionSetRange:
-		// rangeBuiltinFor already wrote the new spec onto r.shell.Range
-		// via its closure; nothing to do here. The CLI doesn't need to
-		// mirror the resolved absolutes anywhere else — they're
-		// re-resolved server-side on each query.
-		_ = a
 	case shellcore.ActionQuit:
 		// Handled by checking core.Quitting() in the read loop.
 	}

@@ -22,14 +22,7 @@ import (
 	"github.com/kevlarcon/weft/shell"
 )
 
-var (
-	jsCallbacks js.Value
-	// weftShell is set in wasmInit and read by handleWeftAction so the
-	// ActionSetRange path can read the latest spec (mutated by
-	// rangeBuiltinFor before dispatch). WASM is single-threaded so no
-	// guarding is needed.
-	weftShell *shell.Shell
-)
+var jsCallbacks js.Value
 
 func main() {
 	js.Global().Set("wasmInit", js.FuncOf(wasmInit))
@@ -108,7 +101,14 @@ func wasmInit(_ js.Value, args []js.Value) any {
 			jsCallbacks.Call("chartOpen", spec)
 		},
 	}
-	weftShell = s
+	// Range state lives on the Shell now (warp removed shellcore's
+	// SetRange/ActionSetRange). The `range` builtin fires this hook
+	// out-of-band so the JS header chip + network layer pick up the new
+	// spec; the inline prompt segment is handled by SetLeadSegment.
+	s.OnRangeChange = func(spec string) {
+		rs, re, _ := timerange.ParseRange(spec)
+		jsCallbacks.Call("onRangeChange", spec, timerange.FormatRangePlain(rs, re))
+	}
 	s.ConfigureCore(core)
 
 	// Mirror the initial range to JS — the CLI's tty prompt shows the
@@ -154,12 +154,6 @@ func readCustomer(cb js.Value) string {
 // ActionQuit are dispatched by warp directly and never reach here.
 func handleWeftAction(a shellcore.Action) bool {
 	switch a := a.(type) {
-	case shellcore.ActionSetRange:
-		// rangeBuiltinFor already mutated weftShell.Range to the new
-		// spec; pass it to JS alongside the formatted label so the
-		// network layer ships the latest spec on subsequent fetches.
-		jsCallbacks.Call("onRangeChange", weftShell.Range, timerange.FormatRangePlain(a.Start, a.End))
-		return true
 	case shellcore.ActionBuiltinExecuted:
 		if fn := jsCallbacks.Get("builtinExecuted"); !fn.IsUndefined() && !fn.IsNull() {
 			jsCallbacks.Call("builtinExecuted", a.Pipeline)
@@ -168,4 +162,3 @@ func handleWeftAction(a shellcore.Action) bool {
 	}
 	return false
 }
-
