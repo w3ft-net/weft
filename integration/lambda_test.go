@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
+	"github.com/kevlarcon/weft/compute"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
@@ -101,6 +102,86 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	}
 	if len(sink.rows) != 3 {
 		t.Fatalf("expected 3 rows via sink, got %d", len(sink.rows))
+	}
+}
+
+// TestComputeLifecycle_LambdaColdShardReachable is the system-level
+// guard for the prod incident: a compute instance must be able to
+// reach a Lambda-backed cold shard and return rows.
+//
+// Unlike TestLambdaColdShard_DockerIntegration (which calls ColdShard
+// directly), this drives the real compute lifecycle —
+// LocalComputePool.ExecuteQuery → FanOutToShards → DialShard →
+// ColdShard — configured exactly as cmd/compute/main.go configures it,
+// including compute.ResolveRegion(). AWS_REGION is unset here (the
+// prod compute-instance state before the deploy fix), so this also
+// asserts the region resolver is wired into the lifecycle: an empty
+// region would 403 against real Lambda IAM auth.
+func TestComputeLifecycle_LambdaColdShardReachable(t *testing.T) {
+	t.Setenv("AWS_REGION", "")
+
+	lambdaURL := "http://localhost:9030"
+
+	ds, err := shard.NewDuckDBShard("compute-lifecycle", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.Close()
+
+	rows := []*pb.LogRow{
+		{Raw: "compute lifecycle row 1", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
+		{Raw: "compute lifecycle row 2", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
+		{Raw: "compute lifecycle row 3", App: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
+		{Raw: "compute lifecycle row 4", App: "vimgym", Level: "DEBUG", Customer: "acme", TsUnixNs: t0.Add(4 * time.Second).UnixNano()},
+	}
+	if err := ds.Ingest(rows); err != nil {
+		t.Fatal(err)
+	}
+
+	s3cfg := shard.S3ConfigFromEnv()
+	if s3cfg == nil {
+		t.Fatal("S3 config not set")
+	}
+	s3Path := fmt.Sprintf("s3://%s/lambda-test/shard-compute-lifecycle.parquet", ColdBucket)
+	if err := ds.ExportToS3Parquet(s3Path, s3cfg); err != nil {
+		t.Fatalf("export to S3: %v", err)
+	}
+
+	// Configure the pool exactly as cmd/compute/main.go does.
+	pool := &compute.LocalComputePool{AWSRegion: compute.ResolveRegion()}
+
+	stream, err := pool.ExecuteQuery(&pb.ExecuteQueryRequest{
+		Sql: "SELECT raw, ts FROM logs WHERE customer = 'kevlar'",
+		Shards: []*pb.ShardDescriptor{{
+			ShardId:     "cold-compute-lifecycle",
+			LambdaUrl:   lambdaURL,
+			ParquetPath: s3Path,
+			Apps:        []string{"vimgym", "callbox"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteQuery: %v", err)
+	}
+
+	ctx := context.Background()
+	var got int
+	for {
+		line, ok, nerr := stream.Next(ctx)
+		if !ok {
+			if nerr != nil {
+				t.Fatalf("stream error: %v", nerr)
+			}
+			break
+		}
+		if line.Raw != "" {
+			got++
+		}
+	}
+	_ = stream.Close()
+
+	if got != 3 {
+		t.Fatalf("compute lifecycle reached lambda but got %d kevlar rows, want 3 "+
+			"(0 rows is the silent-failure signature of the region 403)", got)
 	}
 }
 

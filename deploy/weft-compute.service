@@ -6,6 +6,7 @@ After=network.target
 Type=simple
 User=app
 Group=app
+EnvironmentFile=/opt/app/.env
 ExecStart=/opt/app/bin/weft-compute \
     --port=9010 \
     --parallelism=4

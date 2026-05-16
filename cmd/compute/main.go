@@ -28,12 +28,16 @@ func main() {
 	_ = flag.Int("parallelism", 0, "(reserved) intra-stage parallelism; see streaming-parallel-warp.md")
 	flag.Parse()
 
-	pool := &compute.LocalComputePool{}
-	if awsCfg, err := awsconfig.LoadDefaultConfig(context.Background()); err != nil {
+	// Region must be threaded explicitly: the SDK default chain does
+	// not reliably resolve it from IMDS, and signing Lambda cold-shard
+	// requests with an empty region yields a 403 from the function
+	// URL's IAM authorizer. See compute.ResolveRegion.
+	region := compute.ResolveRegion()
+	pool := &compute.LocalComputePool{AWSRegion: region}
+	if awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(region)); err != nil {
 		log.Printf("warning: AWS config unavailable — cold shard queries will fail: %v", err)
 	} else {
 		pool.AWSCreds = awsCfg.Credentials
-		pool.AWSRegion = awsCfg.Region
 	}
 	srv := grpc.NewServer()
 	pb.RegisterWeftComputeServer(srv, computesvc.NewServer(pool))
