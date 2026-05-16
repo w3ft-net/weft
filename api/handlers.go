@@ -369,6 +369,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/team/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/onboarding/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/fs/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
+	mux.Handle("/api/account/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
+	mux.Handle("/api/ingestion-status", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 
 	return AccessLog(CORSMiddleware(s.baseURL, mux))
 }

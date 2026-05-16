@@ -59,6 +59,7 @@ func AuthMiddleware(st *store.Store, secret string, next http.Handler) http.Hand
 			return
 		}
 		persistLastActive(st, session)
+		recordAccessIdentity(r, session.UserID)
 		ctx := auth.WithClaims(r.Context(), claims)
 		ctx = auth.WithSession(ctx, session)
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -165,6 +166,7 @@ func AgentTokenMiddleware(s *store.Store, next http.Handler) http.Handler {
 			CustomerName: storeResult.Customer.Name,
 			Namespace:    storeResult.Namespace,
 		}
+		recordAccessIdentity(r, "agent:"+result.CustomerName+"/"+result.Namespace)
 		ctx := context.WithValue(r.Context(), agentAuthKey, result)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -176,6 +178,28 @@ func GetAgentAuth(r *http.Request) *AgentAuthResult {
 	return result
 }
 
+// accessIdentity is a mutable holder AccessLog plants on the request
+// context before dispatching. Downstream middleware (AuthMiddleware,
+// AgentTokenMiddleware) resolve identity into a child context that
+// never propagates back up — so AccessLog can't read the session
+// directly. Writing through this pointer does cross that boundary:
+// the value lives in the parent context AccessLog still holds, and the
+// child contexts only wrap (never copy) it.
+type accessIdentity struct{ label string }
+
+type accessIdentityKeyType struct{}
+
+var accessIdentityKey = accessIdentityKeyType{}
+
+// recordAccessIdentity stamps the caller's identity for the access log.
+// No-op if AccessLog isn't in the chain (e.g. gRPC), so callers don't
+// need to branch.
+func recordAccessIdentity(r *http.Request, label string) {
+	if id, ok := r.Context().Value(accessIdentityKey).(*accessIdentity); ok {
+		id.label = label
+	}
+}
+
 // AccessLog logs one line per HTTP request: method, path, status, duration,
 // user. Wraps the entire mux (outside CORS) so auth failures, 404s, and
 // OPTIONS preflights are all visible. The `log` package supplies the
@@ -184,10 +208,12 @@ func AccessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		id := &accessIdentity{}
+		r = r.WithContext(context.WithValue(r.Context(), accessIdentityKey, id))
 		next.ServeHTTP(rw, r)
-		user := "anon"
-		if s := auth.SessionFromContext(r.Context()); s != nil {
-			user = s.UserID
+		user := id.label
+		if user == "" {
+			user = "anon"
 		}
 		log.Printf("access %s %s %d %s user=%s", r.Method, r.URL.Path, rw.status, time.Since(start), user)
 	})
