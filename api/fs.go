@@ -45,6 +45,18 @@ func (s *Server) handleListFS(w http.ResponseWriter, r *http.Request) {
 
 	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session))}
 	fs := shellfs.New(s.store, session.ActiveCustomerID, logApps, opts...)
+
+	if r.URL.Query().Get("walk") == "1" {
+		paths, err := fs.Walk(path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"paths": paths})
+		return
+	}
+
 	entries, err := fs.ReadDir(path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

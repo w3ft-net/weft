@@ -80,6 +80,37 @@ func (p *ProxyMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	return entries, nil
 }
 
+// Walk satisfies shellcore.WalkMount: one HTTP round-trip returns the
+// entire subtree as mount-relative paths, so `tree` no longer makes
+// O(directories) sequential ReadDir requests (301 for a 7,500-app
+// /log tree). The server resolves the walk in-process — for /log via
+// LogMount's single-pass, memoised-permission fast path.
+func (p *ProxyMount) Walk(rel string) ([]string, error) {
+	path := p.fullPath(rel)
+	u := fmt.Sprintf("%s/api/fs/list?path=%s&walk=1", p.baseURL, url.QueryEscape(path))
+	req, _ := http.NewRequest("GET", u, nil)
+	p.setAuth(req)
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("%s", strings.TrimSpace(string(body)))
+	}
+
+	var data struct {
+		Paths []string `json:"paths"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+	return data.Paths, nil
+}
+
 func (p *ProxyMount) ReadFile(rel string) ([]byte, error) {
 	path := p.fullPath(rel)
 	u := fmt.Sprintf("%s/api/fs/read?path=%s", p.baseURL, url.QueryEscape(path))

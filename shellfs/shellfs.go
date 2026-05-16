@@ -24,6 +24,7 @@ type ShellFS struct {
 	mfs   *shellcore.MountFS
 	store *store.Store
 	custID uint
+	cfg   mounts.Config
 }
 
 // NoticeSink is the narrow interface ShellFS uses to signal events
@@ -48,7 +49,15 @@ func New(s *store.Store, customerID uint, logApps []string, opts ...Option) *She
 		mfs:    mounts.New(cfg),
 		store:  s,
 		custID: customerID,
+		cfg:    cfg,
 	}
+}
+
+// Walk returns the flat subtree under path as mount-relative paths,
+// directories suffixed with "/". It backs the server's tree fast-path
+// (one call instead of O(directories) ReadDir round-trips).
+func (f *ShellFS) Walk(path string) ([]string, error) {
+	return mounts.Walk(f.cfg, path)
 }
 
 // Option configures the mounts via Config.

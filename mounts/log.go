@@ -114,6 +114,74 @@ func (m *LogMount) Stat(rel string) (fs.FileInfo, error) {
 func (m *LogMount) WriteFile(string, []byte) error { return shellcore.ErrReadOnly }
 func (m *LogMount) Remove(string) error            { return shellcore.ErrReadOnly }
 
+// Walk satisfies shellcore.WalkMount: it returns the entire subtree
+// rooted at rel in a single pass over LogApps, so MountFS.Tree skips
+// the per-directory ReadDir recursion (one ReadDir + two full-slice
+// scans + an uncached permission lookup per visited directory). The
+// flat list uses mount-relative paths with "/" separators; files
+// carry the ".log" suffix exactly as ReadDir emits them, and each
+// namespace also yields a bare "ns/" so empty namespaces still show.
+//
+// Permission is checked at most once per namespace (memoised) instead
+// of once per visited directory.
+func (m *LogMount) Walk(rel string) ([]string, error) {
+	var nsFilter, envFilter string
+	if rel != "" {
+		segs := strings.Split(rel, "/")
+		nsFilter = segs[0]
+		if !m.canReadNamespace(nsFilter) {
+			return nil, fmt.Errorf("/log/%s: permission denied", rel)
+		}
+		if len(segs) > 1 {
+			envFilter = segs[1]
+		}
+	}
+
+	permCache := map[string]bool{}
+	canRead := func(ns string) bool {
+		if v, ok := permCache[ns]; ok {
+			return v
+		}
+		v := m.canReadNamespace(ns)
+		permCache[ns] = v
+		return v
+	}
+
+	var out []string
+	nsSeen := map[string]bool{}
+	for _, a := range m.cfg.LogApps {
+		parts := strings.Split(a, "/")
+		ns := parts[0]
+		if nsFilter != "" && ns != nsFilter {
+			continue
+		}
+		if !canRead(ns) {
+			continue
+		}
+		if !nsSeen[ns] {
+			nsSeen[ns] = true
+			out = append(out, ns+"/")
+		}
+		switch {
+		case len(parts) == 1:
+			// Bare namespace, no app — the "ns/" marker is enough.
+		case len(parts) == 2:
+			if envFilter != "" {
+				continue // a 2-part entry has no env segment
+			}
+			out = append(out, ns+"/"+parts[1]+".log")
+		default:
+			env := parts[1]
+			if envFilter != "" && env != envFilter {
+				continue
+			}
+			app := strings.Join(parts[2:], "/")
+			out = append(out, ns+"/"+env+"/"+app+".log")
+		}
+	}
+	return out, nil
+}
+
 // --- log tree helpers ---
 
 func (m *LogMount) logNamespaces() []string {
