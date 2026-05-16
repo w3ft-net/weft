@@ -23,7 +23,13 @@ declare global {
 const API_BASE = import.meta.env.VITE_API_URL || ''
 const ORG_STORAGE_KEY = 'weft_org'
 
-function authHeaders(): Record<string, string> {
+// Exported for cors_contract.test.ts, which pins the set of header
+// names this returns against the server's allow-list source of truth
+// (Go: internal/clientwire/headers.go). A header added here that the
+// api server's CORSMiddleware does not allow makes the browser shell
+// die at preflight while the CLI keeps working — that exact gap shipped
+// twice (X-Active-Org, X-Weft-Client). Keep the two lists in sync.
+export function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   const token = localStorage.getItem('weft_token')
   if (token) headers['Authorization'] = `Bearer ${token}`

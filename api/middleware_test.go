@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/kevlarcon/weft/internal/clientwire"
 )
 
 // TestAccessLog_PreservesFlusher pins the regression introduced when
@@ -131,5 +133,48 @@ func TestCORS_AllowsActiveOrgHeader(t *testing.T) {
 	if !strings.Contains(strings.ToLower(allow), "x-active-org") {
 		t.Fatalf("preflight Access-Control-Allow-Headers must include X-Active-Org (got %q); without it the browser blocks every cross-origin authed call once the SPA has an org pinned",
 			allow)
+	}
+}
+
+// TestCORS_AllowsAllClientWireHeaders is the rot-proof guard for this
+// whole bug class. The X-Active-Org test above and the X-Weft-Client
+// incident were the SAME defect twice: a header was added to the shared
+// shell client but not to CORSMiddleware's Access-Control-Allow-Headers,
+// so the browser shell died at preflight while the CLI (which does no
+// preflight) masked it.
+//
+// No Go test driving the server through the real client can catch this
+// — net/http ignores CORS; only a browser enforces it. So the contract
+// is asserted directly against clientwire.AuthHeaders, the single slice
+// both the client (shell.setAuthHeaders) and the server (CORSMiddleware)
+// derive from. A header added there must surface in the preflight
+// response for every entry, or this fails — and because CORSMiddleware
+// builds the value from the same slice, the two cannot drift. The test
+// also pins the preflight 204 and the browser-equivalent behavior
+// (request named in Access-Control-Request-Headers).
+func TestCORS_AllowsAllClientWireHeaders(t *testing.T) {
+	handler := CORSMiddleware("https://w3ft.net", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/shell/exec", nil)
+	req.Header.Set("Origin", "https://w3ft.net")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set("Access-Control-Request-Headers", strings.ToLower(strings.Join(clientwire.AuthHeaders, ", ")))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("preflight: expected 204, got %d", w.Code)
+	}
+	allow := strings.ToLower(w.Header().Get("Access-Control-Allow-Headers"))
+	for _, name := range clientwire.AuthHeaders {
+		if !strings.Contains(allow, strings.ToLower(name)) {
+			t.Fatalf("the shared client sends %s on cross-origin requests (clientwire.AuthHeaders) "+
+				"but CORSMiddleware Access-Control-Allow-Headers=%q does not list it; the browser "+
+				"shell would block every call at preflight and report \"cannot reach API server\" "+
+				"while the CLI keeps working.",
+				name, w.Header().Get("Access-Control-Allow-Headers"))
+		}
 	}
 }

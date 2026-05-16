@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kevlarcon/weft/auth"
+	"github.com/kevlarcon/weft/internal/clientwire"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -254,6 +255,11 @@ func (s *statusRecorder) Flush() {
 	_ = http.NewResponseController(s.ResponseWriter).Flush()
 }
 
+// allowedRequestHeaders is the Access-Control-Allow-Headers value,
+// derived from the shared client wire contract so it cannot drift from
+// what the shell client actually sends. See package clientwire.
+var allowedRequestHeaders = strings.Join(clientwire.AuthHeaders, ", ")
+
 // CORSMiddleware adds CORS headers for the SPA. Allows the configured
 // origin plus localhost for development.
 func CORSMiddleware(origin string, next http.Handler) http.Handler {
@@ -273,7 +279,7 @@ func CORSMiddleware(origin string, next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, "+ActiveOrgHeader)
+		w.Header().Set("Access-Control-Allow-Headers", allowedRequestHeaders)
 		w.Header().Set("Vary", "Origin")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
