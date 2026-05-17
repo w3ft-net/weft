@@ -126,13 +126,53 @@ func applyCollapsedSchema(db *sql.DB, dsn string) error {
 	}
 
 	cmd := exec.Command("psql", "-v", "ON_ERROR_STOP=1", "-d", dsn)
-	cmd.Stdin = strings.NewReader(stripUnknownPSQLMetaCommands(schemaSQL))
+	cmd.Stdin = strings.NewReader(stripUnknownPSQLMetaCommands(guardPgCronExtension(schemaSQL)))
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("psql apply schema.sql: %w", err)
 	}
 	return nil
+}
+
+// guardPgCronExtension rewrites schema.sql's
+// `CREATE EXTENSION ... pg_cron ...;` into a DO/EXCEPTION block so a
+// failure to create pg_cron is non-fatal.
+//
+// pg_cron refuses CREATE EXTENSION in any database other than the one
+// named by cron.database_name (prod: `weft`). pg_dump emits the
+// statement unconditionally, so bootstrapping any other database
+// (weft_test, CI, a scratch DB) hard-failed here under
+// psql -v ON_ERROR_STOP=1 and aborted the whole restore — pg_cron's
+// scheduled jobs are only meaningful in the prod DB anyway, so on
+// every other database we want the rest of the schema to apply and
+// pg_cron to simply be absent. The real prod `weft` DB still creates
+// it normally (the EXECUTE succeeds there).
+//
+// This lives at apply time alongside stripUnknownPSQLMetaCommands for
+// the same reason: schema.sql is pg_dump output we normalise for the
+// runtime environment rather than hand-editing the generated file.
+// pg_dump emits CREATE EXTENSION as a single line.
+func guardPgCronExtension(sql string) string {
+	lines := strings.Split(sql, "\n")
+	out := make([]string, 0, len(lines)+4)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "CREATE EXTENSION") && strings.Contains(trimmed, "pg_cron") {
+			stmt := strings.TrimSuffix(strings.TrimSpace(trimmed), ";")
+			lit := strings.ReplaceAll(stmt, "'", "''")
+			out = append(out,
+				"DO $weft_pgcron_guard$ BEGIN",
+				"  EXECUTE '"+lit+"';",
+				"EXCEPTION WHEN OTHERS THEN",
+				"  RAISE NOTICE 'weft bootstrap: pg_cron unavailable in this database (%), continuing without it', SQLERRM;",
+				"END $weft_pgcron_guard$;",
+			)
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
 
 // stripUnknownPSQLMetaCommands removes psql meta-commands that
