@@ -2,6 +2,7 @@ package shard
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 
@@ -9,6 +10,18 @@ import (
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
+
+// MaxResultRowBytes caps a single length-prefixed frame. One frame is
+// one ResultRow (a log line + ts), so this is enormously generous —
+// it exists only so a byte-misaligned or truncated stream can't make
+// ReadResultRow allocate gigabytes and OOM the (512 MB) compute worker.
+// A frame over this is treated as stream corruption, not data.
+const MaxResultRowBytes = 64 << 20 // 64 MiB
+
+// ErrOversizeFrame is returned by ReadResultRow when the length prefix
+// exceeds MaxResultRowBytes — i.e. the stream is corrupt/misaligned.
+// Callers should fail that shard, not the whole worker.
+var ErrOversizeFrame = errors.New("result frame exceeds max size (stream corrupt or misaligned)")
 
 // WriteResultRow writes a length-prefixed protobuf ResultRow to the writer.
 // Format: [4-byte big-endian length][serialized protobuf]
@@ -41,6 +54,9 @@ func ReadResultRow(r io.Reader) (*pb.ResultRow, error) {
 	}
 	if length == 0 {
 		return nil, io.EOF // sentinel
+	}
+	if length > MaxResultRowBytes {
+		return nil, fmt.Errorf("%w: %d bytes", ErrOversizeFrame, length)
 	}
 	data := make([]byte, length)
 	if _, err := io.ReadFull(r, data); err != nil {
