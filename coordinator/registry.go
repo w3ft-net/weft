@@ -31,12 +31,12 @@ type ShardEntry struct {
 	WindowStart    time.Time
 	WindowEnd      time.Time
 	State          ShardState
-	Suspended      bool        // true if ingest failed repeatedly — excluded from write routing, still queryable
-	IngestFailures int         // consecutive ingest failures; resets on success; triggers Suspended at suspendFailureThreshold
-	Addr           string      // gRPC address for live shards
-	InstanceID     string      // EC2 instance ID
-	ParquetPath    string      // Parquet file path for archived shards
-	Tier           string      // instance tier (small/medium/large)
+	Suspended      bool   // true if ingest failed repeatedly — excluded from write routing, still queryable
+	IngestFailures int    // consecutive ingest failures; resets on success; triggers Suspended at suspendFailureThreshold
+	Addr           string // gRPC address for live shards
+	InstanceID     string // EC2 instance ID
+	ParquetPath    string // Parquet file path for archived shards
+	Tier           string // instance tier (small/medium/large)
 	RowCount       int64
 	CreatedAt      time.Time
 	EBSVolumeID    string      // EBS volume id for this shard's DuckDB; empty until volume is attached
@@ -450,10 +450,23 @@ func (r *ShardRegistry) MatchingEntries(tr TimeRange, app string, tier store.Tie
 		if e.Addr == "" && e.Shard == nil {
 			continue
 		}
-		if e.State == StateExpiring {
+		// EXPIRING (mid-rotation) and SUSPENDED (instance dead,
+		// Addr/InstanceID cleared, awaiting rebind — see provisioner's
+		// stale-heartbeat path and ReconstructShard) are both
+		// unqueryable: a SUSPENDED entry keeps a stale non-nil Shard
+		// pointer so the Addr==""/Shard==nil guard below doesn't catch
+		// it, and routing it only yields "no grpc_addr or lambda_url".
+		if e.State == StateExpiring || e.State == StateSuspended {
 			continue
 		}
 		if e.isStale() {
+			continue
+		}
+		// An ARCHIVED (cold-Lambda) or READ_ONLY shard with zero rows
+		// has nothing to return; dialing it is pure waste — a cold dial
+		// is a Lambda round-trip. Live INGESTING shards are exempt: a
+		// transient 0 count there just means it hasn't filled yet.
+		if e.RowCount == 0 && (e.State == StateArchived || e.State == StateReadOnly) {
 			continue
 		}
 		hasWindow := !e.WindowStart.IsZero() && !e.WindowEnd.IsZero()

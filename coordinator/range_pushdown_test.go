@@ -61,6 +61,7 @@ func TestCoordinator_PlannerInjectsTimeRange(t *testing.T) {
 	c.Registry.Add(&ShardEntry{
 		ID: "shard-cold", Apps: []string{"vimgym"},
 		WindowStart: t0, WindowEnd: t1, State: StateArchived, Shard: cold,
+		RowCount: 3,
 	})
 
 	// Query spanning both windows.

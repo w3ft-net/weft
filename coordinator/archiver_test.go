@@ -66,6 +66,7 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 	c.Registry.Add(&ShardEntry{
 		ID: "shard-cold", Apps: []string{"vimgym"},
 		WindowStart: t0, WindowEnd: t1, State: StateArchived, Shard: cold,
+		RowCount: 3,
 	})
 
 	// Query spanning both windows.
@@ -113,6 +114,7 @@ func TestProvisioner_ArchivesExpiredShard(t *testing.T) {
 		WindowStart: t0, WindowEnd: t1,
 		State:     StateReadOnly,
 		Shard:     ds,
+		RowCount:  1,
 		CreatedAt: time.Now().Add(-2 * time.Hour), // past retention
 	})
 
@@ -196,6 +198,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 		State:       StateArchived,
 		ParquetPath: parquetPath,
 		Shard:       cold,
+		RowCount:    1,
 		CreatedAt:   time.Now(),
 	})
 
@@ -255,7 +258,7 @@ func TestRegistry_MatchingEntries_IncludesArchived(t *testing.T) {
 	reg.Add(&ShardEntry{
 		ID: "shard-arch", Apps: []string{"vimgym"},
 		WindowStart: t0, WindowEnd: t1,
-		State: StateArchived, Shard: ds,
+		State: StateArchived, Shard: ds, RowCount: 1,
 	})
 
 	matching := reg.MatchingEntries(TimeRange{Start: t0, End: t1}, "vimgym", "bolt")

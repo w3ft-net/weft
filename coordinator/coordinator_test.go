@@ -638,6 +638,7 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 		ID: "shard-archived", Apps: apps,
 		WindowStart: now.Add(-1 * time.Hour), WindowEnd: now,
 		State: StateArchived, Shard: s0, ParquetPath: "s3://bucket/shard-archived.parquet",
+		RowCount:  1,
 		CreatedAt: now,
 	})
 

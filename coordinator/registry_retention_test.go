@@ -61,6 +61,7 @@ func TestMatchingEntries_ClampsToPlanRetention(t *testing.T) {
 		WindowEnd:   now.Add(-5 * 24 * time.Hour),
 		State:       StateReadOnly,
 		Shard:       &failingShard{id: "recent"},
+		RowCount:    1,
 	}
 	spanning := &ShardEntry{
 		ID:          "spanning",
@@ -69,6 +70,7 @@ func TestMatchingEntries_ClampsToPlanRetention(t *testing.T) {
 		WindowEnd:   now.Add(-20 * 24 * time.Hour),
 		State:       StateReadOnly,
 		Shard:       &failingShard{id: "spanning"},
+		RowCount:    1,
 	}
 	old := &ShardEntry{
 		ID:          "old",
@@ -77,6 +79,7 @@ func TestMatchingEntries_ClampsToPlanRetention(t *testing.T) {
 		WindowEnd:   now.Add(-195 * 24 * time.Hour),
 		State:       StateReadOnly,
 		Shard:       &failingShard{id: "old"},
+		RowCount:    1,
 	}
 	registry.Add(recent)
 	registry.Add(spanning)
