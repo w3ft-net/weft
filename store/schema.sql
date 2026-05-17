@@ -11,7 +11,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict 1xkQrKQJ3etE2R6ho5ZdF4krQXfHAjlddpO1XwY55ytuNTPOH3OhnKaeH00QHIV
+\restrict s0shWFShjmpuzs6YAXMQBPMFs2JiESiVDDQ1HdoxnWFQQ0rGk2JKLGFaDpim7Sf
 
 -- Dumped from database version 16.13 (Debian 16.13-1.pgdg13+1)
 -- Dumped by pg_dump version 16.13 (Debian 16.13-1.pgdg13+1)
@@ -184,6 +184,34 @@ BEGIN
     END IF;
 
     RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: log_shard_operation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.log_shard_operation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        INSERT INTO shard_operations (shard_id, from_state, to_state)
+        VALUES (NEW.id, NULL, NEW.state);
+        RETURN NEW;
+    ELSIF TG_OP = 'UPDATE' THEN
+        IF NEW.state IS DISTINCT FROM OLD.state THEN
+            INSERT INTO shard_operations (shard_id, from_state, to_state)
+            VALUES (NEW.id, OLD.state, NEW.state);
+        END IF;
+        RETURN NEW;
+    ELSIF TG_OP = 'DELETE' THEN
+        INSERT INTO shard_operations (shard_id, from_state, to_state)
+        VALUES (OLD.id, OLD.state, NULL);
+        RETURN OLD;
+    END IF;
+    RETURN NULL;
 END;
 $$;
 
@@ -494,7 +522,9 @@ CREATE TABLE public.agent_tokens (
     metrics_interval text,
     metrics_collectors text,
     prefix text NOT NULL,
-    env text DEFAULT ''::text NOT NULL
+    env text DEFAULT ''::text NOT NULL,
+    last_seen_version text DEFAULT ''::text NOT NULL,
+    last_seen_at timestamp with time zone
 );
 
 
@@ -619,118 +649,6 @@ CREATE TABLE public.cron_results_4h_default (
 
 
 --
--- Name: cron_results_4h_p20260412; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_4h_p20260412 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_4h_p20260419; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_4h_p20260419 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_4h_p20260426; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_4h_p20260426 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_4h_p20260503; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_4h_p20260503 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_4h_p20260510; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_4h_p20260510 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_4h_p20260517; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_4h_p20260517 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_4h_p20260524; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_4h_p20260524 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
 -- Name: cron_results_daily; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -832,118 +750,6 @@ CREATE TABLE public.cron_results_daily_default (
 
 
 --
--- Name: cron_results_daily_p20260201; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_daily_p20260201 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_daily_p20260301; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_daily_p20260301 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_daily_p20260401; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_daily_p20260401 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_daily_p20260501; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_daily_p20260501 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_daily_p20260601; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_daily_p20260601 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_daily_p20260701; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_daily_p20260701 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_daily_p20260801; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_daily_p20260801 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
 -- Name: cron_results_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -995,258 +801,6 @@ CREATE TABLE public.cron_results_hourly_default (
     sum_sq double precision NOT NULL,
     min double precision NOT NULL,
     max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_hourly_p20260430; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_hourly_p20260430 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_hourly_p20260501; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_hourly_p20260501 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_hourly_p20260502; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_hourly_p20260502 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_hourly_p20260503; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_hourly_p20260503 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_hourly_p20260504; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_hourly_p20260504 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_hourly_p20260505; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_hourly_p20260505 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_hourly_p20260506; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_hourly_p20260506 (
-    cron_watch_id bigint NOT NULL,
-    tag text DEFAULT ''::text NOT NULL,
-    bucket_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    sum double precision NOT NULL,
-    sum_sq double precision NOT NULL,
-    min double precision NOT NULL,
-    max double precision NOT NULL
-);
-
-
---
--- Name: cron_results_p20260430; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_p20260430 (
-    id bigint DEFAULT nextval('public.cron_results_id_seq'::regclass) NOT NULL,
-    created_at timestamp with time zone,
-    updated_at timestamp with time zone,
-    deleted_at timestamp with time zone,
-    cron_watch_id bigint NOT NULL,
-    ran_at timestamp with time zone NOT NULL,
-    stdout text,
-    stderr text,
-    exit_code bigint,
-    duration_ms bigint,
-    value double precision,
-    tag text DEFAULT ''::text NOT NULL
-);
-
-
---
--- Name: cron_results_p20260501; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_p20260501 (
-    id bigint DEFAULT nextval('public.cron_results_id_seq'::regclass) NOT NULL,
-    created_at timestamp with time zone,
-    updated_at timestamp with time zone,
-    deleted_at timestamp with time zone,
-    cron_watch_id bigint NOT NULL,
-    ran_at timestamp with time zone NOT NULL,
-    stdout text,
-    stderr text,
-    exit_code bigint,
-    duration_ms bigint,
-    value double precision,
-    tag text DEFAULT ''::text NOT NULL
-);
-
-
---
--- Name: cron_results_p20260502; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_p20260502 (
-    id bigint DEFAULT nextval('public.cron_results_id_seq'::regclass) NOT NULL,
-    created_at timestamp with time zone,
-    updated_at timestamp with time zone,
-    deleted_at timestamp with time zone,
-    cron_watch_id bigint NOT NULL,
-    ran_at timestamp with time zone NOT NULL,
-    stdout text,
-    stderr text,
-    exit_code bigint,
-    duration_ms bigint,
-    value double precision,
-    tag text DEFAULT ''::text NOT NULL
-);
-
-
---
--- Name: cron_results_p20260503; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_p20260503 (
-    id bigint DEFAULT nextval('public.cron_results_id_seq'::regclass) NOT NULL,
-    created_at timestamp with time zone,
-    updated_at timestamp with time zone,
-    deleted_at timestamp with time zone,
-    cron_watch_id bigint NOT NULL,
-    ran_at timestamp with time zone NOT NULL,
-    stdout text,
-    stderr text,
-    exit_code bigint,
-    duration_ms bigint,
-    value double precision,
-    tag text DEFAULT ''::text NOT NULL
-);
-
-
---
--- Name: cron_results_p20260504; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_p20260504 (
-    id bigint DEFAULT nextval('public.cron_results_id_seq'::regclass) NOT NULL,
-    created_at timestamp with time zone,
-    updated_at timestamp with time zone,
-    deleted_at timestamp with time zone,
-    cron_watch_id bigint NOT NULL,
-    ran_at timestamp with time zone NOT NULL,
-    stdout text,
-    stderr text,
-    exit_code bigint,
-    duration_ms bigint,
-    value double precision,
-    tag text DEFAULT ''::text NOT NULL
-);
-
-
---
--- Name: cron_results_p20260505; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_p20260505 (
-    id bigint DEFAULT nextval('public.cron_results_id_seq'::regclass) NOT NULL,
-    created_at timestamp with time zone,
-    updated_at timestamp with time zone,
-    deleted_at timestamp with time zone,
-    cron_watch_id bigint NOT NULL,
-    ran_at timestamp with time zone NOT NULL,
-    stdout text,
-    stderr text,
-    exit_code bigint,
-    duration_ms bigint,
-    value double precision,
-    tag text DEFAULT ''::text NOT NULL
-);
-
-
---
--- Name: cron_results_p20260506; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.cron_results_p20260506 (
-    id bigint DEFAULT nextval('public.cron_results_id_seq'::regclass) NOT NULL,
-    created_at timestamp with time zone,
-    updated_at timestamp with time zone,
-    deleted_at timestamp with time zone,
-    cron_watch_id bigint NOT NULL,
-    ran_at timestamp with time zone NOT NULL,
-    stdout text,
-    stderr text,
-    exit_code bigint,
-    duration_ms bigint,
-    value double precision,
-    tag text DEFAULT ''::text NOT NULL
 );
 
 
@@ -1311,7 +865,8 @@ CREATE TABLE public.cron_watches (
     alert_threshold double precision,
     created_by_user_id text,
     content_hash text DEFAULT ''::text NOT NULL,
-    message text DEFAULT ''::text NOT NULL
+    message text DEFAULT ''::text NOT NULL,
+    lowered_plan jsonb
 );
 
 
@@ -1590,10 +1145,7 @@ CREATE TABLE public.namespace_permissions (
     user_id text NOT NULL,
     namespace_id bigint NOT NULL,
     can_read boolean DEFAULT true NOT NULL,
-    can_create_tokens boolean DEFAULT false NOT NULL,
-    can_manage_watches boolean DEFAULT false NOT NULL,
-    can_manage_functions boolean DEFAULT false NOT NULL,
-    can_manage_integrations boolean DEFAULT false NOT NULL
+    can_create_tokens boolean DEFAULT false NOT NULL
 );
 
 
@@ -1687,6 +1239,42 @@ ALTER SEQUENCE public.notify_configs_id_seq OWNED BY public.notify_configs.id;
 
 
 --
+-- Name: org_permissions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.org_permissions (
+    id bigint NOT NULL,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    deleted_at timestamp with time zone,
+    customer_id bigint NOT NULL,
+    user_id text NOT NULL,
+    can_manage_functions boolean DEFAULT false NOT NULL,
+    can_manage_watches boolean DEFAULT false NOT NULL,
+    can_manage_etc boolean DEFAULT false NOT NULL
+);
+
+
+--
+-- Name: org_permissions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.org_permissions_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: org_permissions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.org_permissions_id_seq OWNED BY public.org_permissions.id;
+
+
+--
 -- Name: pagerduty_integrations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1769,77 +1357,14 @@ CREATE TABLE public.shard_heartbeats_default (
 
 
 --
--- Name: shard_heartbeats_p20260503_000000; Type: TABLE; Schema: public; Owner: -
+-- Name: shard_operations; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.shard_heartbeats_p20260503_000000 (
+CREATE TABLE public.shard_operations (
     shard_id text NOT NULL,
-    addr text NOT NULL,
-    instance_id text,
-    state text NOT NULL,
-    row_count bigint DEFAULT 0 NOT NULL,
-    disk_bytes bigint DEFAULT 0 NOT NULL,
-    beat_at timestamp with time zone NOT NULL
-);
-
-
---
--- Name: shard_heartbeats_p20260503_010000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.shard_heartbeats_p20260503_010000 (
-    shard_id text NOT NULL,
-    addr text NOT NULL,
-    instance_id text,
-    state text NOT NULL,
-    row_count bigint DEFAULT 0 NOT NULL,
-    disk_bytes bigint DEFAULT 0 NOT NULL,
-    beat_at timestamp with time zone NOT NULL
-);
-
-
---
--- Name: shard_heartbeats_p20260503_020000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.shard_heartbeats_p20260503_020000 (
-    shard_id text NOT NULL,
-    addr text NOT NULL,
-    instance_id text,
-    state text NOT NULL,
-    row_count bigint DEFAULT 0 NOT NULL,
-    disk_bytes bigint DEFAULT 0 NOT NULL,
-    beat_at timestamp with time zone NOT NULL
-);
-
-
---
--- Name: shard_heartbeats_p20260503_030000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.shard_heartbeats_p20260503_030000 (
-    shard_id text NOT NULL,
-    addr text NOT NULL,
-    instance_id text,
-    state text NOT NULL,
-    row_count bigint DEFAULT 0 NOT NULL,
-    disk_bytes bigint DEFAULT 0 NOT NULL,
-    beat_at timestamp with time zone NOT NULL
-);
-
-
---
--- Name: shard_heartbeats_p20260503_040000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.shard_heartbeats_p20260503_040000 (
-    shard_id text NOT NULL,
-    addr text NOT NULL,
-    instance_id text,
-    state text NOT NULL,
-    row_count bigint DEFAULT 0 NOT NULL,
-    disk_bytes bigint DEFAULT 0 NOT NULL,
-    beat_at timestamp with time zone NOT NULL
+    ts timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    from_state text,
+    to_state text
 );
 
 
@@ -2038,114 +1563,6 @@ CREATE TABLE public.tmp_file_lines_default (
 
 
 --
--- Name: tmp_file_lines_p20260502_220000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_file_lines_p20260502_220000 (
-    file_id bigint NOT NULL,
-    line_num bigint NOT NULL,
-    content text NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-
---
--- Name: tmp_file_lines_p20260502_230000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_file_lines_p20260502_230000 (
-    file_id bigint NOT NULL,
-    line_num bigint NOT NULL,
-    content text NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-
---
--- Name: tmp_file_lines_p20260503_000000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_file_lines_p20260503_000000 (
-    file_id bigint NOT NULL,
-    line_num bigint NOT NULL,
-    content text NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-
---
--- Name: tmp_file_lines_p20260503_010000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_file_lines_p20260503_010000 (
-    file_id bigint NOT NULL,
-    line_num bigint NOT NULL,
-    content text NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-
---
--- Name: tmp_file_lines_p20260503_020000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_file_lines_p20260503_020000 (
-    file_id bigint NOT NULL,
-    line_num bigint NOT NULL,
-    content text NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-
---
--- Name: tmp_file_lines_p20260503_030000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_file_lines_p20260503_030000 (
-    file_id bigint NOT NULL,
-    line_num bigint NOT NULL,
-    content text NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-
---
--- Name: tmp_file_lines_p20260503_040000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_file_lines_p20260503_040000 (
-    file_id bigint NOT NULL,
-    line_num bigint NOT NULL,
-    content text NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-
---
--- Name: tmp_file_lines_p20260503_050000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_file_lines_p20260503_050000 (
-    file_id bigint NOT NULL,
-    line_num bigint NOT NULL,
-    content text NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-
---
--- Name: tmp_file_lines_p20260503_060000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_file_lines_p20260503_060000 (
-    file_id bigint NOT NULL,
-    line_num bigint NOT NULL,
-    content text NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-
---
 -- Name: tmp_files; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2200,159 +1617,6 @@ CREATE TABLE public.tmp_files_default (
 
 
 --
--- Name: tmp_files_p20260502_220000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_files_p20260502_220000 (
-    id bigint DEFAULT nextval('public.tmp_files_id_seq'::regclass) NOT NULL,
-    customer_id bigint NOT NULL,
-    path text NOT NULL,
-    is_dir boolean DEFAULT false NOT NULL,
-    byte_size bigint DEFAULT 0 NOT NULL,
-    line_count bigint DEFAULT 0 NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    created_by_user_id text
-);
-
-
---
--- Name: tmp_files_p20260502_230000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_files_p20260502_230000 (
-    id bigint DEFAULT nextval('public.tmp_files_id_seq'::regclass) NOT NULL,
-    customer_id bigint NOT NULL,
-    path text NOT NULL,
-    is_dir boolean DEFAULT false NOT NULL,
-    byte_size bigint DEFAULT 0 NOT NULL,
-    line_count bigint DEFAULT 0 NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    created_by_user_id text
-);
-
-
---
--- Name: tmp_files_p20260503_000000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_files_p20260503_000000 (
-    id bigint DEFAULT nextval('public.tmp_files_id_seq'::regclass) NOT NULL,
-    customer_id bigint NOT NULL,
-    path text NOT NULL,
-    is_dir boolean DEFAULT false NOT NULL,
-    byte_size bigint DEFAULT 0 NOT NULL,
-    line_count bigint DEFAULT 0 NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    created_by_user_id text
-);
-
-
---
--- Name: tmp_files_p20260503_010000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_files_p20260503_010000 (
-    id bigint DEFAULT nextval('public.tmp_files_id_seq'::regclass) NOT NULL,
-    customer_id bigint NOT NULL,
-    path text NOT NULL,
-    is_dir boolean DEFAULT false NOT NULL,
-    byte_size bigint DEFAULT 0 NOT NULL,
-    line_count bigint DEFAULT 0 NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    created_by_user_id text
-);
-
-
---
--- Name: tmp_files_p20260503_020000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_files_p20260503_020000 (
-    id bigint DEFAULT nextval('public.tmp_files_id_seq'::regclass) NOT NULL,
-    customer_id bigint NOT NULL,
-    path text NOT NULL,
-    is_dir boolean DEFAULT false NOT NULL,
-    byte_size bigint DEFAULT 0 NOT NULL,
-    line_count bigint DEFAULT 0 NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    created_by_user_id text
-);
-
-
---
--- Name: tmp_files_p20260503_030000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_files_p20260503_030000 (
-    id bigint DEFAULT nextval('public.tmp_files_id_seq'::regclass) NOT NULL,
-    customer_id bigint NOT NULL,
-    path text NOT NULL,
-    is_dir boolean DEFAULT false NOT NULL,
-    byte_size bigint DEFAULT 0 NOT NULL,
-    line_count bigint DEFAULT 0 NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    created_by_user_id text
-);
-
-
---
--- Name: tmp_files_p20260503_040000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_files_p20260503_040000 (
-    id bigint DEFAULT nextval('public.tmp_files_id_seq'::regclass) NOT NULL,
-    customer_id bigint NOT NULL,
-    path text NOT NULL,
-    is_dir boolean DEFAULT false NOT NULL,
-    byte_size bigint DEFAULT 0 NOT NULL,
-    line_count bigint DEFAULT 0 NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    created_by_user_id text
-);
-
-
---
--- Name: tmp_files_p20260503_050000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_files_p20260503_050000 (
-    id bigint DEFAULT nextval('public.tmp_files_id_seq'::regclass) NOT NULL,
-    customer_id bigint NOT NULL,
-    path text NOT NULL,
-    is_dir boolean DEFAULT false NOT NULL,
-    byte_size bigint DEFAULT 0 NOT NULL,
-    line_count bigint DEFAULT 0 NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    created_by_user_id text
-);
-
-
---
--- Name: tmp_files_p20260503_060000; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tmp_files_p20260503_060000 (
-    id bigint DEFAULT nextval('public.tmp_files_id_seq'::regclass) NOT NULL,
-    customer_id bigint NOT NULL,
-    path text NOT NULL,
-    is_dir boolean DEFAULT false NOT NULL,
-    byte_size bigint DEFAULT 0 NOT NULL,
-    line_count bigint DEFAULT 0 NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    created_by_user_id text
-);
-
-
---
 -- Name: usage_daily; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2376,83 +1640,6 @@ CREATE TABLE public.usage_daily_default (
 
 
 --
--- Name: usage_daily_p20260201; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.usage_daily_p20260201 (
-    customer_name text NOT NULL,
-    day date NOT NULL,
-    bytes_ingested bigint DEFAULT 0 NOT NULL
-);
-
-
---
--- Name: usage_daily_p20260301; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.usage_daily_p20260301 (
-    customer_name text NOT NULL,
-    day date NOT NULL,
-    bytes_ingested bigint DEFAULT 0 NOT NULL
-);
-
-
---
--- Name: usage_daily_p20260401; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.usage_daily_p20260401 (
-    customer_name text NOT NULL,
-    day date NOT NULL,
-    bytes_ingested bigint DEFAULT 0 NOT NULL
-);
-
-
---
--- Name: usage_daily_p20260501; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.usage_daily_p20260501 (
-    customer_name text NOT NULL,
-    day date NOT NULL,
-    bytes_ingested bigint DEFAULT 0 NOT NULL
-);
-
-
---
--- Name: usage_daily_p20260601; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.usage_daily_p20260601 (
-    customer_name text NOT NULL,
-    day date NOT NULL,
-    bytes_ingested bigint DEFAULT 0 NOT NULL
-);
-
-
---
--- Name: usage_daily_p20260701; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.usage_daily_p20260701 (
-    customer_name text NOT NULL,
-    day date NOT NULL,
-    bytes_ingested bigint DEFAULT 0 NOT NULL
-);
-
-
---
--- Name: usage_daily_p20260801; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.usage_daily_p20260801 (
-    customer_name text NOT NULL,
-    day date NOT NULL,
-    bytes_ingested bigint DEFAULT 0 NOT NULL
-);
-
-
---
 -- Name: usage_hourly; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2469,83 +1656,6 @@ PARTITION BY RANGE (hour);
 --
 
 CREATE TABLE public.usage_hourly_default (
-    customer_name text NOT NULL,
-    hour timestamp with time zone NOT NULL,
-    bytes_ingested bigint DEFAULT 0 NOT NULL
-);
-
-
---
--- Name: usage_hourly_p20260430; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.usage_hourly_p20260430 (
-    customer_name text NOT NULL,
-    hour timestamp with time zone NOT NULL,
-    bytes_ingested bigint DEFAULT 0 NOT NULL
-);
-
-
---
--- Name: usage_hourly_p20260501; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.usage_hourly_p20260501 (
-    customer_name text NOT NULL,
-    hour timestamp with time zone NOT NULL,
-    bytes_ingested bigint DEFAULT 0 NOT NULL
-);
-
-
---
--- Name: usage_hourly_p20260502; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.usage_hourly_p20260502 (
-    customer_name text NOT NULL,
-    hour timestamp with time zone NOT NULL,
-    bytes_ingested bigint DEFAULT 0 NOT NULL
-);
-
-
---
--- Name: usage_hourly_p20260503; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.usage_hourly_p20260503 (
-    customer_name text NOT NULL,
-    hour timestamp with time zone NOT NULL,
-    bytes_ingested bigint DEFAULT 0 NOT NULL
-);
-
-
---
--- Name: usage_hourly_p20260504; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.usage_hourly_p20260504 (
-    customer_name text NOT NULL,
-    hour timestamp with time zone NOT NULL,
-    bytes_ingested bigint DEFAULT 0 NOT NULL
-);
-
-
---
--- Name: usage_hourly_p20260505; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.usage_hourly_p20260505 (
-    customer_name text NOT NULL,
-    hour timestamp with time zone NOT NULL,
-    bytes_ingested bigint DEFAULT 0 NOT NULL
-);
-
-
---
--- Name: usage_hourly_p20260506; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.usage_hourly_p20260506 (
     customer_name text NOT NULL,
     hour timestamp with time zone NOT NULL,
     bytes_ingested bigint DEFAULT 0 NOT NULL
@@ -2580,7 +1690,8 @@ CREATE TABLE public.users (
     has_seen_welcome boolean DEFAULT false NOT NULL,
     last_active_customer_id bigint,
     onboarding_step text DEFAULT 'welcome'::text NOT NULL,
-    onboarding_dismissed boolean DEFAULT false NOT NULL
+    onboarding_dismissed boolean DEFAULT false NOT NULL,
+    is_superadmin boolean DEFAULT false NOT NULL
 );
 
 
@@ -2592,108 +1703,10 @@ ALTER TABLE ONLY public.cron_results_4h ATTACH PARTITION public.cron_results_4h_
 
 
 --
--- Name: cron_results_4h_p20260412; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_4h ATTACH PARTITION public.cron_results_4h_p20260412 FOR VALUES FROM ('2026-04-12 00:00:00+00') TO ('2026-04-19 00:00:00+00');
-
-
---
--- Name: cron_results_4h_p20260419; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_4h ATTACH PARTITION public.cron_results_4h_p20260419 FOR VALUES FROM ('2026-04-19 00:00:00+00') TO ('2026-04-26 00:00:00+00');
-
-
---
--- Name: cron_results_4h_p20260426; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_4h ATTACH PARTITION public.cron_results_4h_p20260426 FOR VALUES FROM ('2026-04-26 00:00:00+00') TO ('2026-05-03 00:00:00+00');
-
-
---
--- Name: cron_results_4h_p20260503; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_4h ATTACH PARTITION public.cron_results_4h_p20260503 FOR VALUES FROM ('2026-05-03 00:00:00+00') TO ('2026-05-10 00:00:00+00');
-
-
---
--- Name: cron_results_4h_p20260510; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_4h ATTACH PARTITION public.cron_results_4h_p20260510 FOR VALUES FROM ('2026-05-10 00:00:00+00') TO ('2026-05-17 00:00:00+00');
-
-
---
--- Name: cron_results_4h_p20260517; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_4h ATTACH PARTITION public.cron_results_4h_p20260517 FOR VALUES FROM ('2026-05-17 00:00:00+00') TO ('2026-05-24 00:00:00+00');
-
-
---
--- Name: cron_results_4h_p20260524; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_4h ATTACH PARTITION public.cron_results_4h_p20260524 FOR VALUES FROM ('2026-05-24 00:00:00+00') TO ('2026-05-31 00:00:00+00');
-
-
---
 -- Name: cron_results_daily_default; Type: TABLE ATTACH; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.cron_results_daily ATTACH PARTITION public.cron_results_daily_default DEFAULT;
-
-
---
--- Name: cron_results_daily_p20260201; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_daily ATTACH PARTITION public.cron_results_daily_p20260201 FOR VALUES FROM ('2026-02-01 00:00:00+00') TO ('2026-03-01 00:00:00+00');
-
-
---
--- Name: cron_results_daily_p20260301; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_daily ATTACH PARTITION public.cron_results_daily_p20260301 FOR VALUES FROM ('2026-03-01 00:00:00+00') TO ('2026-04-01 00:00:00+00');
-
-
---
--- Name: cron_results_daily_p20260401; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_daily ATTACH PARTITION public.cron_results_daily_p20260401 FOR VALUES FROM ('2026-04-01 00:00:00+00') TO ('2026-05-01 00:00:00+00');
-
-
---
--- Name: cron_results_daily_p20260501; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_daily ATTACH PARTITION public.cron_results_daily_p20260501 FOR VALUES FROM ('2026-05-01 00:00:00+00') TO ('2026-06-01 00:00:00+00');
-
-
---
--- Name: cron_results_daily_p20260601; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_daily ATTACH PARTITION public.cron_results_daily_p20260601 FOR VALUES FROM ('2026-06-01 00:00:00+00') TO ('2026-07-01 00:00:00+00');
-
-
---
--- Name: cron_results_daily_p20260701; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_daily ATTACH PARTITION public.cron_results_daily_p20260701 FOR VALUES FROM ('2026-07-01 00:00:00+00') TO ('2026-08-01 00:00:00+00');
-
-
---
--- Name: cron_results_daily_p20260801; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_daily ATTACH PARTITION public.cron_results_daily_p20260801 FOR VALUES FROM ('2026-08-01 00:00:00+00') TO ('2026-09-01 00:00:00+00');
 
 
 --
@@ -2711,143 +1724,10 @@ ALTER TABLE ONLY public.cron_results_hourly ATTACH PARTITION public.cron_results
 
 
 --
--- Name: cron_results_hourly_p20260430; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_hourly ATTACH PARTITION public.cron_results_hourly_p20260430 FOR VALUES FROM ('2026-04-30 00:00:00+00') TO ('2026-05-01 00:00:00+00');
-
-
---
--- Name: cron_results_hourly_p20260501; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_hourly ATTACH PARTITION public.cron_results_hourly_p20260501 FOR VALUES FROM ('2026-05-01 00:00:00+00') TO ('2026-05-02 00:00:00+00');
-
-
---
--- Name: cron_results_hourly_p20260502; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_hourly ATTACH PARTITION public.cron_results_hourly_p20260502 FOR VALUES FROM ('2026-05-02 00:00:00+00') TO ('2026-05-03 00:00:00+00');
-
-
---
--- Name: cron_results_hourly_p20260503; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_hourly ATTACH PARTITION public.cron_results_hourly_p20260503 FOR VALUES FROM ('2026-05-03 00:00:00+00') TO ('2026-05-04 00:00:00+00');
-
-
---
--- Name: cron_results_hourly_p20260504; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_hourly ATTACH PARTITION public.cron_results_hourly_p20260504 FOR VALUES FROM ('2026-05-04 00:00:00+00') TO ('2026-05-05 00:00:00+00');
-
-
---
--- Name: cron_results_hourly_p20260505; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_hourly ATTACH PARTITION public.cron_results_hourly_p20260505 FOR VALUES FROM ('2026-05-05 00:00:00+00') TO ('2026-05-06 00:00:00+00');
-
-
---
--- Name: cron_results_hourly_p20260506; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_hourly ATTACH PARTITION public.cron_results_hourly_p20260506 FOR VALUES FROM ('2026-05-06 00:00:00+00') TO ('2026-05-07 00:00:00+00');
-
-
---
--- Name: cron_results_p20260430; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results ATTACH PARTITION public.cron_results_p20260430 FOR VALUES FROM ('2026-04-30 00:00:00+00') TO ('2026-05-01 00:00:00+00');
-
-
---
--- Name: cron_results_p20260501; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results ATTACH PARTITION public.cron_results_p20260501 FOR VALUES FROM ('2026-05-01 00:00:00+00') TO ('2026-05-02 00:00:00+00');
-
-
---
--- Name: cron_results_p20260502; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results ATTACH PARTITION public.cron_results_p20260502 FOR VALUES FROM ('2026-05-02 00:00:00+00') TO ('2026-05-03 00:00:00+00');
-
-
---
--- Name: cron_results_p20260503; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results ATTACH PARTITION public.cron_results_p20260503 FOR VALUES FROM ('2026-05-03 00:00:00+00') TO ('2026-05-04 00:00:00+00');
-
-
---
--- Name: cron_results_p20260504; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results ATTACH PARTITION public.cron_results_p20260504 FOR VALUES FROM ('2026-05-04 00:00:00+00') TO ('2026-05-05 00:00:00+00');
-
-
---
--- Name: cron_results_p20260505; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results ATTACH PARTITION public.cron_results_p20260505 FOR VALUES FROM ('2026-05-05 00:00:00+00') TO ('2026-05-06 00:00:00+00');
-
-
---
--- Name: cron_results_p20260506; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results ATTACH PARTITION public.cron_results_p20260506 FOR VALUES FROM ('2026-05-06 00:00:00+00') TO ('2026-05-07 00:00:00+00');
-
-
---
 -- Name: shard_heartbeats_default; Type: TABLE ATTACH; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.shard_heartbeats ATTACH PARTITION public.shard_heartbeats_default DEFAULT;
-
-
---
--- Name: shard_heartbeats_p20260503_000000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.shard_heartbeats ATTACH PARTITION public.shard_heartbeats_p20260503_000000 FOR VALUES FROM ('2026-05-03 00:00:00+00') TO ('2026-05-03 01:00:00+00');
-
-
---
--- Name: shard_heartbeats_p20260503_010000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.shard_heartbeats ATTACH PARTITION public.shard_heartbeats_p20260503_010000 FOR VALUES FROM ('2026-05-03 01:00:00+00') TO ('2026-05-03 02:00:00+00');
-
-
---
--- Name: shard_heartbeats_p20260503_020000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.shard_heartbeats ATTACH PARTITION public.shard_heartbeats_p20260503_020000 FOR VALUES FROM ('2026-05-03 02:00:00+00') TO ('2026-05-03 03:00:00+00');
-
-
---
--- Name: shard_heartbeats_p20260503_030000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.shard_heartbeats ATTACH PARTITION public.shard_heartbeats_p20260503_030000 FOR VALUES FROM ('2026-05-03 03:00:00+00') TO ('2026-05-03 04:00:00+00');
-
-
---
--- Name: shard_heartbeats_p20260503_040000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.shard_heartbeats ATTACH PARTITION public.shard_heartbeats_p20260503_040000 FOR VALUES FROM ('2026-05-03 04:00:00+00') TO ('2026-05-03 05:00:00+00');
 
 
 --
@@ -2858,136 +1738,10 @@ ALTER TABLE ONLY public.tmp_file_lines ATTACH PARTITION public.tmp_file_lines_de
 
 
 --
--- Name: tmp_file_lines_p20260502_220000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines ATTACH PARTITION public.tmp_file_lines_p20260502_220000 FOR VALUES FROM ('2026-05-02 22:00:00+00') TO ('2026-05-02 23:00:00+00');
-
-
---
--- Name: tmp_file_lines_p20260502_230000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines ATTACH PARTITION public.tmp_file_lines_p20260502_230000 FOR VALUES FROM ('2026-05-02 23:00:00+00') TO ('2026-05-03 00:00:00+00');
-
-
---
--- Name: tmp_file_lines_p20260503_000000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines ATTACH PARTITION public.tmp_file_lines_p20260503_000000 FOR VALUES FROM ('2026-05-03 00:00:00+00') TO ('2026-05-03 01:00:00+00');
-
-
---
--- Name: tmp_file_lines_p20260503_010000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines ATTACH PARTITION public.tmp_file_lines_p20260503_010000 FOR VALUES FROM ('2026-05-03 01:00:00+00') TO ('2026-05-03 02:00:00+00');
-
-
---
--- Name: tmp_file_lines_p20260503_020000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines ATTACH PARTITION public.tmp_file_lines_p20260503_020000 FOR VALUES FROM ('2026-05-03 02:00:00+00') TO ('2026-05-03 03:00:00+00');
-
-
---
--- Name: tmp_file_lines_p20260503_030000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines ATTACH PARTITION public.tmp_file_lines_p20260503_030000 FOR VALUES FROM ('2026-05-03 03:00:00+00') TO ('2026-05-03 04:00:00+00');
-
-
---
--- Name: tmp_file_lines_p20260503_040000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines ATTACH PARTITION public.tmp_file_lines_p20260503_040000 FOR VALUES FROM ('2026-05-03 04:00:00+00') TO ('2026-05-03 05:00:00+00');
-
-
---
--- Name: tmp_file_lines_p20260503_050000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines ATTACH PARTITION public.tmp_file_lines_p20260503_050000 FOR VALUES FROM ('2026-05-03 05:00:00+00') TO ('2026-05-03 06:00:00+00');
-
-
---
--- Name: tmp_file_lines_p20260503_060000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines ATTACH PARTITION public.tmp_file_lines_p20260503_060000 FOR VALUES FROM ('2026-05-03 06:00:00+00') TO ('2026-05-03 07:00:00+00');
-
-
---
 -- Name: tmp_files_default; Type: TABLE ATTACH; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.tmp_files ATTACH PARTITION public.tmp_files_default DEFAULT;
-
-
---
--- Name: tmp_files_p20260502_220000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files ATTACH PARTITION public.tmp_files_p20260502_220000 FOR VALUES FROM ('2026-05-02 22:00:00+00') TO ('2026-05-02 23:00:00+00');
-
-
---
--- Name: tmp_files_p20260502_230000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files ATTACH PARTITION public.tmp_files_p20260502_230000 FOR VALUES FROM ('2026-05-02 23:00:00+00') TO ('2026-05-03 00:00:00+00');
-
-
---
--- Name: tmp_files_p20260503_000000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files ATTACH PARTITION public.tmp_files_p20260503_000000 FOR VALUES FROM ('2026-05-03 00:00:00+00') TO ('2026-05-03 01:00:00+00');
-
-
---
--- Name: tmp_files_p20260503_010000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files ATTACH PARTITION public.tmp_files_p20260503_010000 FOR VALUES FROM ('2026-05-03 01:00:00+00') TO ('2026-05-03 02:00:00+00');
-
-
---
--- Name: tmp_files_p20260503_020000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files ATTACH PARTITION public.tmp_files_p20260503_020000 FOR VALUES FROM ('2026-05-03 02:00:00+00') TO ('2026-05-03 03:00:00+00');
-
-
---
--- Name: tmp_files_p20260503_030000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files ATTACH PARTITION public.tmp_files_p20260503_030000 FOR VALUES FROM ('2026-05-03 03:00:00+00') TO ('2026-05-03 04:00:00+00');
-
-
---
--- Name: tmp_files_p20260503_040000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files ATTACH PARTITION public.tmp_files_p20260503_040000 FOR VALUES FROM ('2026-05-03 04:00:00+00') TO ('2026-05-03 05:00:00+00');
-
-
---
--- Name: tmp_files_p20260503_050000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files ATTACH PARTITION public.tmp_files_p20260503_050000 FOR VALUES FROM ('2026-05-03 05:00:00+00') TO ('2026-05-03 06:00:00+00');
-
-
---
--- Name: tmp_files_p20260503_060000; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files ATTACH PARTITION public.tmp_files_p20260503_060000 FOR VALUES FROM ('2026-05-03 06:00:00+00') TO ('2026-05-03 07:00:00+00');
 
 
 --
@@ -2998,108 +1752,10 @@ ALTER TABLE ONLY public.usage_daily ATTACH PARTITION public.usage_daily_default 
 
 
 --
--- Name: usage_daily_p20260201; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_daily ATTACH PARTITION public.usage_daily_p20260201 FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
-
-
---
--- Name: usage_daily_p20260301; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_daily ATTACH PARTITION public.usage_daily_p20260301 FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
-
-
---
--- Name: usage_daily_p20260401; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_daily ATTACH PARTITION public.usage_daily_p20260401 FOR VALUES FROM ('2026-04-01') TO ('2026-05-01');
-
-
---
--- Name: usage_daily_p20260501; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_daily ATTACH PARTITION public.usage_daily_p20260501 FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
-
-
---
--- Name: usage_daily_p20260601; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_daily ATTACH PARTITION public.usage_daily_p20260601 FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
-
-
---
--- Name: usage_daily_p20260701; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_daily ATTACH PARTITION public.usage_daily_p20260701 FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');
-
-
---
--- Name: usage_daily_p20260801; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_daily ATTACH PARTITION public.usage_daily_p20260801 FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
-
-
---
 -- Name: usage_hourly_default; Type: TABLE ATTACH; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.usage_hourly ATTACH PARTITION public.usage_hourly_default DEFAULT;
-
-
---
--- Name: usage_hourly_p20260430; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_hourly ATTACH PARTITION public.usage_hourly_p20260430 FOR VALUES FROM ('2026-04-30 00:00:00+00') TO ('2026-05-01 00:00:00+00');
-
-
---
--- Name: usage_hourly_p20260501; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_hourly ATTACH PARTITION public.usage_hourly_p20260501 FOR VALUES FROM ('2026-05-01 00:00:00+00') TO ('2026-05-02 00:00:00+00');
-
-
---
--- Name: usage_hourly_p20260502; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_hourly ATTACH PARTITION public.usage_hourly_p20260502 FOR VALUES FROM ('2026-05-02 00:00:00+00') TO ('2026-05-03 00:00:00+00');
-
-
---
--- Name: usage_hourly_p20260503; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_hourly ATTACH PARTITION public.usage_hourly_p20260503 FOR VALUES FROM ('2026-05-03 00:00:00+00') TO ('2026-05-04 00:00:00+00');
-
-
---
--- Name: usage_hourly_p20260504; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_hourly ATTACH PARTITION public.usage_hourly_p20260504 FOR VALUES FROM ('2026-05-04 00:00:00+00') TO ('2026-05-05 00:00:00+00');
-
-
---
--- Name: usage_hourly_p20260505; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_hourly ATTACH PARTITION public.usage_hourly_p20260505 FOR VALUES FROM ('2026-05-05 00:00:00+00') TO ('2026-05-06 00:00:00+00');
-
-
---
--- Name: usage_hourly_p20260506; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_hourly ATTACH PARTITION public.usage_hourly_p20260506 FOR VALUES FROM ('2026-05-06 00:00:00+00') TO ('2026-05-07 00:00:00+00');
 
 
 --
@@ -3201,6 +1857,13 @@ ALTER TABLE ONLY public.notify_configs ALTER COLUMN id SET DEFAULT nextval('publ
 
 
 --
+-- Name: org_permissions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.org_permissions ALTER COLUMN id SET DEFAULT nextval('public.org_permissions_id_seq'::regclass);
+
+
+--
 -- Name: pagerduty_integrations id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -3284,62 +1947,6 @@ ALTER TABLE ONLY public.cron_results_4h_default
 
 
 --
--- Name: cron_results_4h_p20260412 cron_results_4h_p20260412_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_4h_p20260412
-    ADD CONSTRAINT cron_results_4h_p20260412_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_4h_p20260419 cron_results_4h_p20260419_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_4h_p20260419
-    ADD CONSTRAINT cron_results_4h_p20260419_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_4h_p20260426 cron_results_4h_p20260426_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_4h_p20260426
-    ADD CONSTRAINT cron_results_4h_p20260426_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_4h_p20260503 cron_results_4h_p20260503_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_4h_p20260503
-    ADD CONSTRAINT cron_results_4h_p20260503_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_4h_p20260510 cron_results_4h_p20260510_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_4h_p20260510
-    ADD CONSTRAINT cron_results_4h_p20260510_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_4h_p20260517 cron_results_4h_p20260517_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_4h_p20260517
-    ADD CONSTRAINT cron_results_4h_p20260517_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_4h_p20260524 cron_results_4h_p20260524_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_4h_p20260524
-    ADD CONSTRAINT cron_results_4h_p20260524_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
 -- Name: cron_results_daily cron_results_daily_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3353,62 +1960,6 @@ ALTER TABLE ONLY public.cron_results_daily
 
 ALTER TABLE ONLY public.cron_results_daily_default
     ADD CONSTRAINT cron_results_daily_default_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_daily_p20260201 cron_results_daily_p20260201_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_daily_p20260201
-    ADD CONSTRAINT cron_results_daily_p20260201_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_daily_p20260301 cron_results_daily_p20260301_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_daily_p20260301
-    ADD CONSTRAINT cron_results_daily_p20260301_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_daily_p20260401 cron_results_daily_p20260401_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_daily_p20260401
-    ADD CONSTRAINT cron_results_daily_p20260401_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_daily_p20260501 cron_results_daily_p20260501_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_daily_p20260501
-    ADD CONSTRAINT cron_results_daily_p20260501_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_daily_p20260601 cron_results_daily_p20260601_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_daily_p20260601
-    ADD CONSTRAINT cron_results_daily_p20260601_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_daily_p20260701 cron_results_daily_p20260701_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_daily_p20260701
-    ADD CONSTRAINT cron_results_daily_p20260701_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_daily_p20260801 cron_results_daily_p20260801_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_daily_p20260801
-    ADD CONSTRAINT cron_results_daily_p20260801_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
 
 
 --
@@ -3441,118 +1992,6 @@ ALTER TABLE ONLY public.cron_results_hourly
 
 ALTER TABLE ONLY public.cron_results_hourly_default
     ADD CONSTRAINT cron_results_hourly_default_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_hourly_p20260430 cron_results_hourly_p20260430_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_hourly_p20260430
-    ADD CONSTRAINT cron_results_hourly_p20260430_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_hourly_p20260501 cron_results_hourly_p20260501_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_hourly_p20260501
-    ADD CONSTRAINT cron_results_hourly_p20260501_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_hourly_p20260502 cron_results_hourly_p20260502_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_hourly_p20260502
-    ADD CONSTRAINT cron_results_hourly_p20260502_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_hourly_p20260503 cron_results_hourly_p20260503_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_hourly_p20260503
-    ADD CONSTRAINT cron_results_hourly_p20260503_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_hourly_p20260504 cron_results_hourly_p20260504_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_hourly_p20260504
-    ADD CONSTRAINT cron_results_hourly_p20260504_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_hourly_p20260505 cron_results_hourly_p20260505_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_hourly_p20260505
-    ADD CONSTRAINT cron_results_hourly_p20260505_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_hourly_p20260506 cron_results_hourly_p20260506_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_hourly_p20260506
-    ADD CONSTRAINT cron_results_hourly_p20260506_pkey PRIMARY KEY (cron_watch_id, tag, bucket_start);
-
-
---
--- Name: cron_results_p20260430 cron_results_p20260430_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_p20260430
-    ADD CONSTRAINT cron_results_p20260430_pkey PRIMARY KEY (id, ran_at);
-
-
---
--- Name: cron_results_p20260501 cron_results_p20260501_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_p20260501
-    ADD CONSTRAINT cron_results_p20260501_pkey PRIMARY KEY (id, ran_at);
-
-
---
--- Name: cron_results_p20260502 cron_results_p20260502_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_p20260502
-    ADD CONSTRAINT cron_results_p20260502_pkey PRIMARY KEY (id, ran_at);
-
-
---
--- Name: cron_results_p20260503 cron_results_p20260503_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_p20260503
-    ADD CONSTRAINT cron_results_p20260503_pkey PRIMARY KEY (id, ran_at);
-
-
---
--- Name: cron_results_p20260504 cron_results_p20260504_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_p20260504
-    ADD CONSTRAINT cron_results_p20260504_pkey PRIMARY KEY (id, ran_at);
-
-
---
--- Name: cron_results_p20260505 cron_results_p20260505_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_p20260505
-    ADD CONSTRAINT cron_results_p20260505_pkey PRIMARY KEY (id, ran_at);
-
-
---
--- Name: cron_results_p20260506 cron_results_p20260506_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.cron_results_p20260506
-    ADD CONSTRAINT cron_results_p20260506_pkey PRIMARY KEY (id, ran_at);
 
 
 --
@@ -3652,6 +2091,14 @@ ALTER TABLE ONLY public.notify_configs
 
 
 --
+-- Name: org_permissions org_permissions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.org_permissions
+    ADD CONSTRAINT org_permissions_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: pagerduty_integrations pagerduty_integrations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3681,46 +2128,6 @@ ALTER TABLE ONLY public.shard_heartbeats
 
 ALTER TABLE ONLY public.shard_heartbeats_default
     ADD CONSTRAINT shard_heartbeats_default_pkey PRIMARY KEY (shard_id, beat_at);
-
-
---
--- Name: shard_heartbeats_p20260503_000000 shard_heartbeats_p20260503_000000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.shard_heartbeats_p20260503_000000
-    ADD CONSTRAINT shard_heartbeats_p20260503_000000_pkey PRIMARY KEY (shard_id, beat_at);
-
-
---
--- Name: shard_heartbeats_p20260503_010000 shard_heartbeats_p20260503_010000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.shard_heartbeats_p20260503_010000
-    ADD CONSTRAINT shard_heartbeats_p20260503_010000_pkey PRIMARY KEY (shard_id, beat_at);
-
-
---
--- Name: shard_heartbeats_p20260503_020000 shard_heartbeats_p20260503_020000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.shard_heartbeats_p20260503_020000
-    ADD CONSTRAINT shard_heartbeats_p20260503_020000_pkey PRIMARY KEY (shard_id, beat_at);
-
-
---
--- Name: shard_heartbeats_p20260503_030000 shard_heartbeats_p20260503_030000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.shard_heartbeats_p20260503_030000
-    ADD CONSTRAINT shard_heartbeats_p20260503_030000_pkey PRIMARY KEY (shard_id, beat_at);
-
-
---
--- Name: shard_heartbeats_p20260503_040000 shard_heartbeats_p20260503_040000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.shard_heartbeats_p20260503_040000
-    ADD CONSTRAINT shard_heartbeats_p20260503_040000_pkey PRIMARY KEY (shard_id, beat_at);
 
 
 --
@@ -3796,78 +2203,6 @@ ALTER TABLE ONLY public.tmp_file_lines_default
 
 
 --
--- Name: tmp_file_lines_p20260502_220000 tmp_file_lines_p20260502_220000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines_p20260502_220000
-    ADD CONSTRAINT tmp_file_lines_p20260502_220000_pkey PRIMARY KEY (file_id, line_num, updated_at);
-
-
---
--- Name: tmp_file_lines_p20260502_230000 tmp_file_lines_p20260502_230000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines_p20260502_230000
-    ADD CONSTRAINT tmp_file_lines_p20260502_230000_pkey PRIMARY KEY (file_id, line_num, updated_at);
-
-
---
--- Name: tmp_file_lines_p20260503_000000 tmp_file_lines_p20260503_000000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines_p20260503_000000
-    ADD CONSTRAINT tmp_file_lines_p20260503_000000_pkey PRIMARY KEY (file_id, line_num, updated_at);
-
-
---
--- Name: tmp_file_lines_p20260503_010000 tmp_file_lines_p20260503_010000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines_p20260503_010000
-    ADD CONSTRAINT tmp_file_lines_p20260503_010000_pkey PRIMARY KEY (file_id, line_num, updated_at);
-
-
---
--- Name: tmp_file_lines_p20260503_020000 tmp_file_lines_p20260503_020000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines_p20260503_020000
-    ADD CONSTRAINT tmp_file_lines_p20260503_020000_pkey PRIMARY KEY (file_id, line_num, updated_at);
-
-
---
--- Name: tmp_file_lines_p20260503_030000 tmp_file_lines_p20260503_030000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines_p20260503_030000
-    ADD CONSTRAINT tmp_file_lines_p20260503_030000_pkey PRIMARY KEY (file_id, line_num, updated_at);
-
-
---
--- Name: tmp_file_lines_p20260503_040000 tmp_file_lines_p20260503_040000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines_p20260503_040000
-    ADD CONSTRAINT tmp_file_lines_p20260503_040000_pkey PRIMARY KEY (file_id, line_num, updated_at);
-
-
---
--- Name: tmp_file_lines_p20260503_050000 tmp_file_lines_p20260503_050000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines_p20260503_050000
-    ADD CONSTRAINT tmp_file_lines_p20260503_050000_pkey PRIMARY KEY (file_id, line_num, updated_at);
-
-
---
--- Name: tmp_file_lines_p20260503_060000 tmp_file_lines_p20260503_060000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_file_lines_p20260503_060000
-    ADD CONSTRAINT tmp_file_lines_p20260503_060000_pkey PRIMARY KEY (file_id, line_num, updated_at);
-
-
---
 -- Name: tmp_files tmp_files_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3881,78 +2216,6 @@ ALTER TABLE ONLY public.tmp_files
 
 ALTER TABLE ONLY public.tmp_files_default
     ADD CONSTRAINT tmp_files_default_pkey PRIMARY KEY (id, updated_at);
-
-
---
--- Name: tmp_files_p20260502_220000 tmp_files_p20260502_220000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files_p20260502_220000
-    ADD CONSTRAINT tmp_files_p20260502_220000_pkey PRIMARY KEY (id, updated_at);
-
-
---
--- Name: tmp_files_p20260502_230000 tmp_files_p20260502_230000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files_p20260502_230000
-    ADD CONSTRAINT tmp_files_p20260502_230000_pkey PRIMARY KEY (id, updated_at);
-
-
---
--- Name: tmp_files_p20260503_000000 tmp_files_p20260503_000000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files_p20260503_000000
-    ADD CONSTRAINT tmp_files_p20260503_000000_pkey PRIMARY KEY (id, updated_at);
-
-
---
--- Name: tmp_files_p20260503_010000 tmp_files_p20260503_010000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files_p20260503_010000
-    ADD CONSTRAINT tmp_files_p20260503_010000_pkey PRIMARY KEY (id, updated_at);
-
-
---
--- Name: tmp_files_p20260503_020000 tmp_files_p20260503_020000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files_p20260503_020000
-    ADD CONSTRAINT tmp_files_p20260503_020000_pkey PRIMARY KEY (id, updated_at);
-
-
---
--- Name: tmp_files_p20260503_030000 tmp_files_p20260503_030000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files_p20260503_030000
-    ADD CONSTRAINT tmp_files_p20260503_030000_pkey PRIMARY KEY (id, updated_at);
-
-
---
--- Name: tmp_files_p20260503_040000 tmp_files_p20260503_040000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files_p20260503_040000
-    ADD CONSTRAINT tmp_files_p20260503_040000_pkey PRIMARY KEY (id, updated_at);
-
-
---
--- Name: tmp_files_p20260503_050000 tmp_files_p20260503_050000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files_p20260503_050000
-    ADD CONSTRAINT tmp_files_p20260503_050000_pkey PRIMARY KEY (id, updated_at);
-
-
---
--- Name: tmp_files_p20260503_060000 tmp_files_p20260503_060000_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.tmp_files_p20260503_060000
-    ADD CONSTRAINT tmp_files_p20260503_060000_pkey PRIMARY KEY (id, updated_at);
 
 
 --
@@ -3972,62 +2235,6 @@ ALTER TABLE ONLY public.usage_daily_default
 
 
 --
--- Name: usage_daily_p20260201 usage_daily_p20260201_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_daily_p20260201
-    ADD CONSTRAINT usage_daily_p20260201_pkey PRIMARY KEY (customer_name, day);
-
-
---
--- Name: usage_daily_p20260301 usage_daily_p20260301_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_daily_p20260301
-    ADD CONSTRAINT usage_daily_p20260301_pkey PRIMARY KEY (customer_name, day);
-
-
---
--- Name: usage_daily_p20260401 usage_daily_p20260401_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_daily_p20260401
-    ADD CONSTRAINT usage_daily_p20260401_pkey PRIMARY KEY (customer_name, day);
-
-
---
--- Name: usage_daily_p20260501 usage_daily_p20260501_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_daily_p20260501
-    ADD CONSTRAINT usage_daily_p20260501_pkey PRIMARY KEY (customer_name, day);
-
-
---
--- Name: usage_daily_p20260601 usage_daily_p20260601_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_daily_p20260601
-    ADD CONSTRAINT usage_daily_p20260601_pkey PRIMARY KEY (customer_name, day);
-
-
---
--- Name: usage_daily_p20260701 usage_daily_p20260701_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_daily_p20260701
-    ADD CONSTRAINT usage_daily_p20260701_pkey PRIMARY KEY (customer_name, day);
-
-
---
--- Name: usage_daily_p20260801 usage_daily_p20260801_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_daily_p20260801
-    ADD CONSTRAINT usage_daily_p20260801_pkey PRIMARY KEY (customer_name, day);
-
-
---
 -- Name: usage_hourly usage_hourly_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4041,62 +2248,6 @@ ALTER TABLE ONLY public.usage_hourly
 
 ALTER TABLE ONLY public.usage_hourly_default
     ADD CONSTRAINT usage_hourly_default_pkey PRIMARY KEY (customer_name, hour);
-
-
---
--- Name: usage_hourly_p20260430 usage_hourly_p20260430_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_hourly_p20260430
-    ADD CONSTRAINT usage_hourly_p20260430_pkey PRIMARY KEY (customer_name, hour);
-
-
---
--- Name: usage_hourly_p20260501 usage_hourly_p20260501_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_hourly_p20260501
-    ADD CONSTRAINT usage_hourly_p20260501_pkey PRIMARY KEY (customer_name, hour);
-
-
---
--- Name: usage_hourly_p20260502 usage_hourly_p20260502_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_hourly_p20260502
-    ADD CONSTRAINT usage_hourly_p20260502_pkey PRIMARY KEY (customer_name, hour);
-
-
---
--- Name: usage_hourly_p20260503 usage_hourly_p20260503_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_hourly_p20260503
-    ADD CONSTRAINT usage_hourly_p20260503_pkey PRIMARY KEY (customer_name, hour);
-
-
---
--- Name: usage_hourly_p20260504 usage_hourly_p20260504_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_hourly_p20260504
-    ADD CONSTRAINT usage_hourly_p20260504_pkey PRIMARY KEY (customer_name, hour);
-
-
---
--- Name: usage_hourly_p20260505 usage_hourly_p20260505_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_hourly_p20260505
-    ADD CONSTRAINT usage_hourly_p20260505_pkey PRIMARY KEY (customer_name, hour);
-
-
---
--- Name: usage_hourly_p20260506 usage_hourly_p20260506_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_hourly_p20260506
-    ADD CONSTRAINT usage_hourly_p20260506_pkey PRIMARY KEY (customer_name, hour);
 
 
 --
@@ -4137,55 +2288,6 @@ CREATE INDEX cron_results_4h_default_cron_watch_id_tag_bucket_start_idx ON publi
 
 
 --
--- Name: cron_results_4h_p20260412_cron_watch_id_tag_bucket_start_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_4h_p20260412_cron_watch_id_tag_bucket_start_idx ON public.cron_results_4h_p20260412 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_4h_p20260419_cron_watch_id_tag_bucket_start_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_4h_p20260419_cron_watch_id_tag_bucket_start_idx ON public.cron_results_4h_p20260419 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_4h_p20260426_cron_watch_id_tag_bucket_start_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_4h_p20260426_cron_watch_id_tag_bucket_start_idx ON public.cron_results_4h_p20260426 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_4h_p20260503_cron_watch_id_tag_bucket_start_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_4h_p20260503_cron_watch_id_tag_bucket_start_idx ON public.cron_results_4h_p20260503 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_4h_p20260510_cron_watch_id_tag_bucket_start_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_4h_p20260510_cron_watch_id_tag_bucket_start_idx ON public.cron_results_4h_p20260510 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_4h_p20260517_cron_watch_id_tag_bucket_start_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_4h_p20260517_cron_watch_id_tag_bucket_start_idx ON public.cron_results_4h_p20260517 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_4h_p20260524_cron_watch_id_tag_bucket_start_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_4h_p20260524_cron_watch_id_tag_bucket_start_idx ON public.cron_results_4h_p20260524 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
 -- Name: idx_cron_daily_watch_tag_bucket; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4197,55 +2299,6 @@ CREATE INDEX idx_cron_daily_watch_tag_bucket ON ONLY public.cron_results_daily U
 --
 
 CREATE INDEX cron_results_daily_default_cron_watch_id_tag_bucket_start_idx ON public.cron_results_daily_default USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_daily_p20260201_cron_watch_id_tag_bucket_start_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_daily_p20260201_cron_watch_id_tag_bucket_start_idx ON public.cron_results_daily_p20260201 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_daily_p20260301_cron_watch_id_tag_bucket_start_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_daily_p20260301_cron_watch_id_tag_bucket_start_idx ON public.cron_results_daily_p20260301 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_daily_p20260401_cron_watch_id_tag_bucket_start_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_daily_p20260401_cron_watch_id_tag_bucket_start_idx ON public.cron_results_daily_p20260401 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_daily_p20260501_cron_watch_id_tag_bucket_start_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_daily_p20260501_cron_watch_id_tag_bucket_start_idx ON public.cron_results_daily_p20260501 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_daily_p20260601_cron_watch_id_tag_bucket_start_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_daily_p20260601_cron_watch_id_tag_bucket_start_idx ON public.cron_results_daily_p20260601 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_daily_p20260701_cron_watch_id_tag_bucket_start_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_daily_p20260701_cron_watch_id_tag_bucket_start_idx ON public.cron_results_daily_p20260701 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_daily_p20260801_cron_watch_id_tag_bucket_start_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_daily_p20260801_cron_watch_id_tag_bucket_start_idx ON public.cron_results_daily_p20260801 USING btree (cron_watch_id, tag, bucket_start DESC);
 
 
 --
@@ -4291,153 +2344,6 @@ CREATE INDEX cron_results_hourly_default_cron_watch_id_tag_bucket_start_idx ON p
 
 
 --
--- Name: cron_results_hourly_p20260430_cron_watch_id_tag_bucket_star_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_hourly_p20260430_cron_watch_id_tag_bucket_star_idx ON public.cron_results_hourly_p20260430 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_hourly_p20260501_cron_watch_id_tag_bucket_star_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_hourly_p20260501_cron_watch_id_tag_bucket_star_idx ON public.cron_results_hourly_p20260501 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_hourly_p20260502_cron_watch_id_tag_bucket_star_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_hourly_p20260502_cron_watch_id_tag_bucket_star_idx ON public.cron_results_hourly_p20260502 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_hourly_p20260503_cron_watch_id_tag_bucket_star_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_hourly_p20260503_cron_watch_id_tag_bucket_star_idx ON public.cron_results_hourly_p20260503 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_hourly_p20260504_cron_watch_id_tag_bucket_star_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_hourly_p20260504_cron_watch_id_tag_bucket_star_idx ON public.cron_results_hourly_p20260504 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_hourly_p20260505_cron_watch_id_tag_bucket_star_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_hourly_p20260505_cron_watch_id_tag_bucket_star_idx ON public.cron_results_hourly_p20260505 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_hourly_p20260506_cron_watch_id_tag_bucket_star_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_hourly_p20260506_cron_watch_id_tag_bucket_star_idx ON public.cron_results_hourly_p20260506 USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: cron_results_p20260430_cron_watch_id_tag_ran_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_p20260430_cron_watch_id_tag_ran_at_idx ON public.cron_results_p20260430 USING btree (cron_watch_id, tag, ran_at DESC);
-
-
---
--- Name: cron_results_p20260430_deleted_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_p20260430_deleted_at_idx ON public.cron_results_p20260430 USING btree (deleted_at);
-
-
---
--- Name: cron_results_p20260501_cron_watch_id_tag_ran_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_p20260501_cron_watch_id_tag_ran_at_idx ON public.cron_results_p20260501 USING btree (cron_watch_id, tag, ran_at DESC);
-
-
---
--- Name: cron_results_p20260501_deleted_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_p20260501_deleted_at_idx ON public.cron_results_p20260501 USING btree (deleted_at);
-
-
---
--- Name: cron_results_p20260502_cron_watch_id_tag_ran_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_p20260502_cron_watch_id_tag_ran_at_idx ON public.cron_results_p20260502 USING btree (cron_watch_id, tag, ran_at DESC);
-
-
---
--- Name: cron_results_p20260502_deleted_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_p20260502_deleted_at_idx ON public.cron_results_p20260502 USING btree (deleted_at);
-
-
---
--- Name: cron_results_p20260503_cron_watch_id_tag_ran_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_p20260503_cron_watch_id_tag_ran_at_idx ON public.cron_results_p20260503 USING btree (cron_watch_id, tag, ran_at DESC);
-
-
---
--- Name: cron_results_p20260503_deleted_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_p20260503_deleted_at_idx ON public.cron_results_p20260503 USING btree (deleted_at);
-
-
---
--- Name: cron_results_p20260504_cron_watch_id_tag_ran_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_p20260504_cron_watch_id_tag_ran_at_idx ON public.cron_results_p20260504 USING btree (cron_watch_id, tag, ran_at DESC);
-
-
---
--- Name: cron_results_p20260504_deleted_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_p20260504_deleted_at_idx ON public.cron_results_p20260504 USING btree (deleted_at);
-
-
---
--- Name: cron_results_p20260505_cron_watch_id_tag_ran_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_p20260505_cron_watch_id_tag_ran_at_idx ON public.cron_results_p20260505 USING btree (cron_watch_id, tag, ran_at DESC);
-
-
---
--- Name: cron_results_p20260505_deleted_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_p20260505_deleted_at_idx ON public.cron_results_p20260505 USING btree (deleted_at);
-
-
---
--- Name: cron_results_p20260506_cron_watch_id_tag_ran_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_p20260506_cron_watch_id_tag_ran_at_idx ON public.cron_results_p20260506 USING btree (cron_watch_id, tag, ran_at DESC);
-
-
---
--- Name: cron_results_p20260506_deleted_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cron_results_p20260506_deleted_at_idx ON public.cron_results_p20260506 USING btree (deleted_at);
-
-
---
 -- Name: idx_accounts_deleted_at; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4456,6 +2362,13 @@ CREATE INDEX idx_agent_tokens_deleted_at ON public.agent_tokens USING btree (del
 --
 
 CREATE UNIQUE INDEX idx_agent_tokens_token_hash ON public.agent_tokens USING btree (token_hash);
+
+
+--
+-- Name: idx_agent_tokens_version_seen; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_agent_tokens_version_seen ON public.agent_tokens USING btree (last_seen_version, last_seen_at);
 
 
 --
@@ -4620,6 +2533,20 @@ CREATE UNIQUE INDEX idx_nsperm_user_ns ON public.namespace_permissions USING btr
 
 
 --
+-- Name: idx_org_permissions_deleted_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_org_permissions_deleted_at ON public.org_permissions USING btree (deleted_at);
+
+
+--
+-- Name: idx_orgperm_customer_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_orgperm_customer_user ON public.org_permissions USING btree (customer_id, user_id);
+
+
+--
 -- Name: idx_pd_integrations_customer_name; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4666,6 +2593,20 @@ CREATE INDEX idx_sfh_customer_name ON public.shell_function_history USING btree 
 --
 
 CREATE INDEX idx_sfh_function_id ON public.shell_function_history USING btree (function_id, captured_at DESC);
+
+
+--
+-- Name: idx_shard_operations_shard_ts; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_shard_operations_shard_ts ON public.shard_operations USING btree (shard_id, ts);
+
+
+--
+-- Name: idx_shard_operations_ts; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_shard_operations_ts ON public.shard_operations USING btree (ts);
 
 
 --
@@ -4732,136 +2673,10 @@ CREATE INDEX tmp_file_lines_default_file_id_line_num_idx ON public.tmp_file_line
 
 
 --
--- Name: tmp_file_lines_p20260502_220000_file_id_line_num_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_file_lines_p20260502_220000_file_id_line_num_idx ON public.tmp_file_lines_p20260502_220000 USING btree (file_id, line_num);
-
-
---
--- Name: tmp_file_lines_p20260502_230000_file_id_line_num_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_file_lines_p20260502_230000_file_id_line_num_idx ON public.tmp_file_lines_p20260502_230000 USING btree (file_id, line_num);
-
-
---
--- Name: tmp_file_lines_p20260503_000000_file_id_line_num_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_file_lines_p20260503_000000_file_id_line_num_idx ON public.tmp_file_lines_p20260503_000000 USING btree (file_id, line_num);
-
-
---
--- Name: tmp_file_lines_p20260503_010000_file_id_line_num_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_file_lines_p20260503_010000_file_id_line_num_idx ON public.tmp_file_lines_p20260503_010000 USING btree (file_id, line_num);
-
-
---
--- Name: tmp_file_lines_p20260503_020000_file_id_line_num_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_file_lines_p20260503_020000_file_id_line_num_idx ON public.tmp_file_lines_p20260503_020000 USING btree (file_id, line_num);
-
-
---
--- Name: tmp_file_lines_p20260503_030000_file_id_line_num_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_file_lines_p20260503_030000_file_id_line_num_idx ON public.tmp_file_lines_p20260503_030000 USING btree (file_id, line_num);
-
-
---
--- Name: tmp_file_lines_p20260503_040000_file_id_line_num_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_file_lines_p20260503_040000_file_id_line_num_idx ON public.tmp_file_lines_p20260503_040000 USING btree (file_id, line_num);
-
-
---
--- Name: tmp_file_lines_p20260503_050000_file_id_line_num_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_file_lines_p20260503_050000_file_id_line_num_idx ON public.tmp_file_lines_p20260503_050000 USING btree (file_id, line_num);
-
-
---
--- Name: tmp_file_lines_p20260503_060000_file_id_line_num_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_file_lines_p20260503_060000_file_id_line_num_idx ON public.tmp_file_lines_p20260503_060000 USING btree (file_id, line_num);
-
-
---
 -- Name: tmp_files_default_customer_id_path_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX tmp_files_default_customer_id_path_idx ON public.tmp_files_default USING btree (customer_id, path);
-
-
---
--- Name: tmp_files_p20260502_220000_customer_id_path_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_files_p20260502_220000_customer_id_path_idx ON public.tmp_files_p20260502_220000 USING btree (customer_id, path);
-
-
---
--- Name: tmp_files_p20260502_230000_customer_id_path_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_files_p20260502_230000_customer_id_path_idx ON public.tmp_files_p20260502_230000 USING btree (customer_id, path);
-
-
---
--- Name: tmp_files_p20260503_000000_customer_id_path_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_files_p20260503_000000_customer_id_path_idx ON public.tmp_files_p20260503_000000 USING btree (customer_id, path);
-
-
---
--- Name: tmp_files_p20260503_010000_customer_id_path_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_files_p20260503_010000_customer_id_path_idx ON public.tmp_files_p20260503_010000 USING btree (customer_id, path);
-
-
---
--- Name: tmp_files_p20260503_020000_customer_id_path_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_files_p20260503_020000_customer_id_path_idx ON public.tmp_files_p20260503_020000 USING btree (customer_id, path);
-
-
---
--- Name: tmp_files_p20260503_030000_customer_id_path_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_files_p20260503_030000_customer_id_path_idx ON public.tmp_files_p20260503_030000 USING btree (customer_id, path);
-
-
---
--- Name: tmp_files_p20260503_040000_customer_id_path_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_files_p20260503_040000_customer_id_path_idx ON public.tmp_files_p20260503_040000 USING btree (customer_id, path);
-
-
---
--- Name: tmp_files_p20260503_050000_customer_id_path_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_files_p20260503_050000_customer_id_path_idx ON public.tmp_files_p20260503_050000 USING btree (customer_id, path);
-
-
---
--- Name: tmp_files_p20260503_060000_customer_id_path_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX tmp_files_p20260503_060000_customer_id_path_idx ON public.tmp_files_p20260503_060000 USING btree (customer_id, path);
 
 
 --
@@ -4879,104 +2694,6 @@ ALTER INDEX public.cron_results_4h_pkey ATTACH PARTITION public.cron_results_4h_
 
 
 --
--- Name: cron_results_4h_p20260412_cron_watch_id_tag_bucket_start_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_4h_watch_tag_bucket ATTACH PARTITION public.cron_results_4h_p20260412_cron_watch_id_tag_bucket_start_idx;
-
-
---
--- Name: cron_results_4h_p20260412_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_4h_pkey ATTACH PARTITION public.cron_results_4h_p20260412_pkey;
-
-
---
--- Name: cron_results_4h_p20260419_cron_watch_id_tag_bucket_start_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_4h_watch_tag_bucket ATTACH PARTITION public.cron_results_4h_p20260419_cron_watch_id_tag_bucket_start_idx;
-
-
---
--- Name: cron_results_4h_p20260419_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_4h_pkey ATTACH PARTITION public.cron_results_4h_p20260419_pkey;
-
-
---
--- Name: cron_results_4h_p20260426_cron_watch_id_tag_bucket_start_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_4h_watch_tag_bucket ATTACH PARTITION public.cron_results_4h_p20260426_cron_watch_id_tag_bucket_start_idx;
-
-
---
--- Name: cron_results_4h_p20260426_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_4h_pkey ATTACH PARTITION public.cron_results_4h_p20260426_pkey;
-
-
---
--- Name: cron_results_4h_p20260503_cron_watch_id_tag_bucket_start_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_4h_watch_tag_bucket ATTACH PARTITION public.cron_results_4h_p20260503_cron_watch_id_tag_bucket_start_idx;
-
-
---
--- Name: cron_results_4h_p20260503_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_4h_pkey ATTACH PARTITION public.cron_results_4h_p20260503_pkey;
-
-
---
--- Name: cron_results_4h_p20260510_cron_watch_id_tag_bucket_start_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_4h_watch_tag_bucket ATTACH PARTITION public.cron_results_4h_p20260510_cron_watch_id_tag_bucket_start_idx;
-
-
---
--- Name: cron_results_4h_p20260510_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_4h_pkey ATTACH PARTITION public.cron_results_4h_p20260510_pkey;
-
-
---
--- Name: cron_results_4h_p20260517_cron_watch_id_tag_bucket_start_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_4h_watch_tag_bucket ATTACH PARTITION public.cron_results_4h_p20260517_cron_watch_id_tag_bucket_start_idx;
-
-
---
--- Name: cron_results_4h_p20260517_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_4h_pkey ATTACH PARTITION public.cron_results_4h_p20260517_pkey;
-
-
---
--- Name: cron_results_4h_p20260524_cron_watch_id_tag_bucket_start_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_4h_watch_tag_bucket ATTACH PARTITION public.cron_results_4h_p20260524_cron_watch_id_tag_bucket_start_idx;
-
-
---
--- Name: cron_results_4h_p20260524_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_4h_pkey ATTACH PARTITION public.cron_results_4h_p20260524_pkey;
-
-
---
 -- Name: cron_results_daily_default_cron_watch_id_tag_bucket_start_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
@@ -4988,104 +2705,6 @@ ALTER INDEX public.idx_cron_daily_watch_tag_bucket ATTACH PARTITION public.cron_
 --
 
 ALTER INDEX public.cron_results_daily_pkey ATTACH PARTITION public.cron_results_daily_default_pkey;
-
-
---
--- Name: cron_results_daily_p20260201_cron_watch_id_tag_bucket_start_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_daily_watch_tag_bucket ATTACH PARTITION public.cron_results_daily_p20260201_cron_watch_id_tag_bucket_start_idx;
-
-
---
--- Name: cron_results_daily_p20260201_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_daily_pkey ATTACH PARTITION public.cron_results_daily_p20260201_pkey;
-
-
---
--- Name: cron_results_daily_p20260301_cron_watch_id_tag_bucket_start_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_daily_watch_tag_bucket ATTACH PARTITION public.cron_results_daily_p20260301_cron_watch_id_tag_bucket_start_idx;
-
-
---
--- Name: cron_results_daily_p20260301_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_daily_pkey ATTACH PARTITION public.cron_results_daily_p20260301_pkey;
-
-
---
--- Name: cron_results_daily_p20260401_cron_watch_id_tag_bucket_start_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_daily_watch_tag_bucket ATTACH PARTITION public.cron_results_daily_p20260401_cron_watch_id_tag_bucket_start_idx;
-
-
---
--- Name: cron_results_daily_p20260401_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_daily_pkey ATTACH PARTITION public.cron_results_daily_p20260401_pkey;
-
-
---
--- Name: cron_results_daily_p20260501_cron_watch_id_tag_bucket_start_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_daily_watch_tag_bucket ATTACH PARTITION public.cron_results_daily_p20260501_cron_watch_id_tag_bucket_start_idx;
-
-
---
--- Name: cron_results_daily_p20260501_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_daily_pkey ATTACH PARTITION public.cron_results_daily_p20260501_pkey;
-
-
---
--- Name: cron_results_daily_p20260601_cron_watch_id_tag_bucket_start_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_daily_watch_tag_bucket ATTACH PARTITION public.cron_results_daily_p20260601_cron_watch_id_tag_bucket_start_idx;
-
-
---
--- Name: cron_results_daily_p20260601_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_daily_pkey ATTACH PARTITION public.cron_results_daily_p20260601_pkey;
-
-
---
--- Name: cron_results_daily_p20260701_cron_watch_id_tag_bucket_start_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_daily_watch_tag_bucket ATTACH PARTITION public.cron_results_daily_p20260701_cron_watch_id_tag_bucket_start_idx;
-
-
---
--- Name: cron_results_daily_p20260701_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_daily_pkey ATTACH PARTITION public.cron_results_daily_p20260701_pkey;
-
-
---
--- Name: cron_results_daily_p20260801_cron_watch_id_tag_bucket_start_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_daily_watch_tag_bucket ATTACH PARTITION public.cron_results_daily_p20260801_cron_watch_id_tag_bucket_start_idx;
-
-
---
--- Name: cron_results_daily_p20260801_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_daily_pkey ATTACH PARTITION public.cron_results_daily_p20260801_pkey;
 
 
 --
@@ -5124,290 +2743,10 @@ ALTER INDEX public.cron_results_hourly_pkey ATTACH PARTITION public.cron_results
 
 
 --
--- Name: cron_results_hourly_p20260430_cron_watch_id_tag_bucket_star_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_hourly_watch_tag_bucket ATTACH PARTITION public.cron_results_hourly_p20260430_cron_watch_id_tag_bucket_star_idx;
-
-
---
--- Name: cron_results_hourly_p20260430_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_hourly_pkey ATTACH PARTITION public.cron_results_hourly_p20260430_pkey;
-
-
---
--- Name: cron_results_hourly_p20260501_cron_watch_id_tag_bucket_star_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_hourly_watch_tag_bucket ATTACH PARTITION public.cron_results_hourly_p20260501_cron_watch_id_tag_bucket_star_idx;
-
-
---
--- Name: cron_results_hourly_p20260501_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_hourly_pkey ATTACH PARTITION public.cron_results_hourly_p20260501_pkey;
-
-
---
--- Name: cron_results_hourly_p20260502_cron_watch_id_tag_bucket_star_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_hourly_watch_tag_bucket ATTACH PARTITION public.cron_results_hourly_p20260502_cron_watch_id_tag_bucket_star_idx;
-
-
---
--- Name: cron_results_hourly_p20260502_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_hourly_pkey ATTACH PARTITION public.cron_results_hourly_p20260502_pkey;
-
-
---
--- Name: cron_results_hourly_p20260503_cron_watch_id_tag_bucket_star_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_hourly_watch_tag_bucket ATTACH PARTITION public.cron_results_hourly_p20260503_cron_watch_id_tag_bucket_star_idx;
-
-
---
--- Name: cron_results_hourly_p20260503_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_hourly_pkey ATTACH PARTITION public.cron_results_hourly_p20260503_pkey;
-
-
---
--- Name: cron_results_hourly_p20260504_cron_watch_id_tag_bucket_star_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_hourly_watch_tag_bucket ATTACH PARTITION public.cron_results_hourly_p20260504_cron_watch_id_tag_bucket_star_idx;
-
-
---
--- Name: cron_results_hourly_p20260504_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_hourly_pkey ATTACH PARTITION public.cron_results_hourly_p20260504_pkey;
-
-
---
--- Name: cron_results_hourly_p20260505_cron_watch_id_tag_bucket_star_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_hourly_watch_tag_bucket ATTACH PARTITION public.cron_results_hourly_p20260505_cron_watch_id_tag_bucket_star_idx;
-
-
---
--- Name: cron_results_hourly_p20260505_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_hourly_pkey ATTACH PARTITION public.cron_results_hourly_p20260505_pkey;
-
-
---
--- Name: cron_results_hourly_p20260506_cron_watch_id_tag_bucket_star_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_hourly_watch_tag_bucket ATTACH PARTITION public.cron_results_hourly_p20260506_cron_watch_id_tag_bucket_star_idx;
-
-
---
--- Name: cron_results_hourly_p20260506_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_hourly_pkey ATTACH PARTITION public.cron_results_hourly_p20260506_pkey;
-
-
---
--- Name: cron_results_p20260430_cron_watch_id_tag_ran_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_results_watch_tag_ran_at ATTACH PARTITION public.cron_results_p20260430_cron_watch_id_tag_ran_at_idx;
-
-
---
--- Name: cron_results_p20260430_deleted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_results_deleted_at ATTACH PARTITION public.cron_results_p20260430_deleted_at_idx;
-
-
---
--- Name: cron_results_p20260430_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_pkey ATTACH PARTITION public.cron_results_p20260430_pkey;
-
-
---
--- Name: cron_results_p20260501_cron_watch_id_tag_ran_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_results_watch_tag_ran_at ATTACH PARTITION public.cron_results_p20260501_cron_watch_id_tag_ran_at_idx;
-
-
---
--- Name: cron_results_p20260501_deleted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_results_deleted_at ATTACH PARTITION public.cron_results_p20260501_deleted_at_idx;
-
-
---
--- Name: cron_results_p20260501_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_pkey ATTACH PARTITION public.cron_results_p20260501_pkey;
-
-
---
--- Name: cron_results_p20260502_cron_watch_id_tag_ran_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_results_watch_tag_ran_at ATTACH PARTITION public.cron_results_p20260502_cron_watch_id_tag_ran_at_idx;
-
-
---
--- Name: cron_results_p20260502_deleted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_results_deleted_at ATTACH PARTITION public.cron_results_p20260502_deleted_at_idx;
-
-
---
--- Name: cron_results_p20260502_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_pkey ATTACH PARTITION public.cron_results_p20260502_pkey;
-
-
---
--- Name: cron_results_p20260503_cron_watch_id_tag_ran_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_results_watch_tag_ran_at ATTACH PARTITION public.cron_results_p20260503_cron_watch_id_tag_ran_at_idx;
-
-
---
--- Name: cron_results_p20260503_deleted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_results_deleted_at ATTACH PARTITION public.cron_results_p20260503_deleted_at_idx;
-
-
---
--- Name: cron_results_p20260503_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_pkey ATTACH PARTITION public.cron_results_p20260503_pkey;
-
-
---
--- Name: cron_results_p20260504_cron_watch_id_tag_ran_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_results_watch_tag_ran_at ATTACH PARTITION public.cron_results_p20260504_cron_watch_id_tag_ran_at_idx;
-
-
---
--- Name: cron_results_p20260504_deleted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_results_deleted_at ATTACH PARTITION public.cron_results_p20260504_deleted_at_idx;
-
-
---
--- Name: cron_results_p20260504_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_pkey ATTACH PARTITION public.cron_results_p20260504_pkey;
-
-
---
--- Name: cron_results_p20260505_cron_watch_id_tag_ran_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_results_watch_tag_ran_at ATTACH PARTITION public.cron_results_p20260505_cron_watch_id_tag_ran_at_idx;
-
-
---
--- Name: cron_results_p20260505_deleted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_results_deleted_at ATTACH PARTITION public.cron_results_p20260505_deleted_at_idx;
-
-
---
--- Name: cron_results_p20260505_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_pkey ATTACH PARTITION public.cron_results_p20260505_pkey;
-
-
---
--- Name: cron_results_p20260506_cron_watch_id_tag_ran_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_results_watch_tag_ran_at ATTACH PARTITION public.cron_results_p20260506_cron_watch_id_tag_ran_at_idx;
-
-
---
--- Name: cron_results_p20260506_deleted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_cron_results_deleted_at ATTACH PARTITION public.cron_results_p20260506_deleted_at_idx;
-
-
---
--- Name: cron_results_p20260506_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.cron_results_pkey ATTACH PARTITION public.cron_results_p20260506_pkey;
-
-
---
 -- Name: shard_heartbeats_default_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
 ALTER INDEX public.shard_heartbeats_pkey ATTACH PARTITION public.shard_heartbeats_default_pkey;
-
-
---
--- Name: shard_heartbeats_p20260503_000000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.shard_heartbeats_pkey ATTACH PARTITION public.shard_heartbeats_p20260503_000000_pkey;
-
-
---
--- Name: shard_heartbeats_p20260503_010000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.shard_heartbeats_pkey ATTACH PARTITION public.shard_heartbeats_p20260503_010000_pkey;
-
-
---
--- Name: shard_heartbeats_p20260503_020000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.shard_heartbeats_pkey ATTACH PARTITION public.shard_heartbeats_p20260503_020000_pkey;
-
-
---
--- Name: shard_heartbeats_p20260503_030000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.shard_heartbeats_pkey ATTACH PARTITION public.shard_heartbeats_p20260503_030000_pkey;
-
-
---
--- Name: shard_heartbeats_p20260503_040000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.shard_heartbeats_pkey ATTACH PARTITION public.shard_heartbeats_p20260503_040000_pkey;
 
 
 --
@@ -5425,132 +2764,6 @@ ALTER INDEX public.tmp_file_lines_pkey ATTACH PARTITION public.tmp_file_lines_de
 
 
 --
--- Name: tmp_file_lines_p20260502_220000_file_id_line_num_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_file_lines_file_line ATTACH PARTITION public.tmp_file_lines_p20260502_220000_file_id_line_num_idx;
-
-
---
--- Name: tmp_file_lines_p20260502_220000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_file_lines_pkey ATTACH PARTITION public.tmp_file_lines_p20260502_220000_pkey;
-
-
---
--- Name: tmp_file_lines_p20260502_230000_file_id_line_num_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_file_lines_file_line ATTACH PARTITION public.tmp_file_lines_p20260502_230000_file_id_line_num_idx;
-
-
---
--- Name: tmp_file_lines_p20260502_230000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_file_lines_pkey ATTACH PARTITION public.tmp_file_lines_p20260502_230000_pkey;
-
-
---
--- Name: tmp_file_lines_p20260503_000000_file_id_line_num_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_file_lines_file_line ATTACH PARTITION public.tmp_file_lines_p20260503_000000_file_id_line_num_idx;
-
-
---
--- Name: tmp_file_lines_p20260503_000000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_file_lines_pkey ATTACH PARTITION public.tmp_file_lines_p20260503_000000_pkey;
-
-
---
--- Name: tmp_file_lines_p20260503_010000_file_id_line_num_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_file_lines_file_line ATTACH PARTITION public.tmp_file_lines_p20260503_010000_file_id_line_num_idx;
-
-
---
--- Name: tmp_file_lines_p20260503_010000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_file_lines_pkey ATTACH PARTITION public.tmp_file_lines_p20260503_010000_pkey;
-
-
---
--- Name: tmp_file_lines_p20260503_020000_file_id_line_num_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_file_lines_file_line ATTACH PARTITION public.tmp_file_lines_p20260503_020000_file_id_line_num_idx;
-
-
---
--- Name: tmp_file_lines_p20260503_020000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_file_lines_pkey ATTACH PARTITION public.tmp_file_lines_p20260503_020000_pkey;
-
-
---
--- Name: tmp_file_lines_p20260503_030000_file_id_line_num_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_file_lines_file_line ATTACH PARTITION public.tmp_file_lines_p20260503_030000_file_id_line_num_idx;
-
-
---
--- Name: tmp_file_lines_p20260503_030000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_file_lines_pkey ATTACH PARTITION public.tmp_file_lines_p20260503_030000_pkey;
-
-
---
--- Name: tmp_file_lines_p20260503_040000_file_id_line_num_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_file_lines_file_line ATTACH PARTITION public.tmp_file_lines_p20260503_040000_file_id_line_num_idx;
-
-
---
--- Name: tmp_file_lines_p20260503_040000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_file_lines_pkey ATTACH PARTITION public.tmp_file_lines_p20260503_040000_pkey;
-
-
---
--- Name: tmp_file_lines_p20260503_050000_file_id_line_num_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_file_lines_file_line ATTACH PARTITION public.tmp_file_lines_p20260503_050000_file_id_line_num_idx;
-
-
---
--- Name: tmp_file_lines_p20260503_050000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_file_lines_pkey ATTACH PARTITION public.tmp_file_lines_p20260503_050000_pkey;
-
-
---
--- Name: tmp_file_lines_p20260503_060000_file_id_line_num_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_file_lines_file_line ATTACH PARTITION public.tmp_file_lines_p20260503_060000_file_id_line_num_idx;
-
-
---
--- Name: tmp_file_lines_p20260503_060000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_file_lines_pkey ATTACH PARTITION public.tmp_file_lines_p20260503_060000_pkey;
-
-
---
 -- Name: tmp_files_default_customer_id_path_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
@@ -5565,132 +2778,6 @@ ALTER INDEX public.tmp_files_pkey ATTACH PARTITION public.tmp_files_default_pkey
 
 
 --
--- Name: tmp_files_p20260502_220000_customer_id_path_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_files_customer_path ATTACH PARTITION public.tmp_files_p20260502_220000_customer_id_path_idx;
-
-
---
--- Name: tmp_files_p20260502_220000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_files_pkey ATTACH PARTITION public.tmp_files_p20260502_220000_pkey;
-
-
---
--- Name: tmp_files_p20260502_230000_customer_id_path_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_files_customer_path ATTACH PARTITION public.tmp_files_p20260502_230000_customer_id_path_idx;
-
-
---
--- Name: tmp_files_p20260502_230000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_files_pkey ATTACH PARTITION public.tmp_files_p20260502_230000_pkey;
-
-
---
--- Name: tmp_files_p20260503_000000_customer_id_path_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_files_customer_path ATTACH PARTITION public.tmp_files_p20260503_000000_customer_id_path_idx;
-
-
---
--- Name: tmp_files_p20260503_000000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_files_pkey ATTACH PARTITION public.tmp_files_p20260503_000000_pkey;
-
-
---
--- Name: tmp_files_p20260503_010000_customer_id_path_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_files_customer_path ATTACH PARTITION public.tmp_files_p20260503_010000_customer_id_path_idx;
-
-
---
--- Name: tmp_files_p20260503_010000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_files_pkey ATTACH PARTITION public.tmp_files_p20260503_010000_pkey;
-
-
---
--- Name: tmp_files_p20260503_020000_customer_id_path_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_files_customer_path ATTACH PARTITION public.tmp_files_p20260503_020000_customer_id_path_idx;
-
-
---
--- Name: tmp_files_p20260503_020000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_files_pkey ATTACH PARTITION public.tmp_files_p20260503_020000_pkey;
-
-
---
--- Name: tmp_files_p20260503_030000_customer_id_path_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_files_customer_path ATTACH PARTITION public.tmp_files_p20260503_030000_customer_id_path_idx;
-
-
---
--- Name: tmp_files_p20260503_030000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_files_pkey ATTACH PARTITION public.tmp_files_p20260503_030000_pkey;
-
-
---
--- Name: tmp_files_p20260503_040000_customer_id_path_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_files_customer_path ATTACH PARTITION public.tmp_files_p20260503_040000_customer_id_path_idx;
-
-
---
--- Name: tmp_files_p20260503_040000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_files_pkey ATTACH PARTITION public.tmp_files_p20260503_040000_pkey;
-
-
---
--- Name: tmp_files_p20260503_050000_customer_id_path_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_files_customer_path ATTACH PARTITION public.tmp_files_p20260503_050000_customer_id_path_idx;
-
-
---
--- Name: tmp_files_p20260503_050000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_files_pkey ATTACH PARTITION public.tmp_files_p20260503_050000_pkey;
-
-
---
--- Name: tmp_files_p20260503_060000_customer_id_path_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.idx_tmp_files_customer_path ATTACH PARTITION public.tmp_files_p20260503_060000_customer_id_path_idx;
-
-
---
--- Name: tmp_files_p20260503_060000_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.tmp_files_pkey ATTACH PARTITION public.tmp_files_p20260503_060000_pkey;
-
-
---
 -- Name: usage_daily_default_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
@@ -5698,108 +2785,10 @@ ALTER INDEX public.usage_daily_pkey ATTACH PARTITION public.usage_daily_default_
 
 
 --
--- Name: usage_daily_p20260201_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.usage_daily_pkey ATTACH PARTITION public.usage_daily_p20260201_pkey;
-
-
---
--- Name: usage_daily_p20260301_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.usage_daily_pkey ATTACH PARTITION public.usage_daily_p20260301_pkey;
-
-
---
--- Name: usage_daily_p20260401_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.usage_daily_pkey ATTACH PARTITION public.usage_daily_p20260401_pkey;
-
-
---
--- Name: usage_daily_p20260501_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.usage_daily_pkey ATTACH PARTITION public.usage_daily_p20260501_pkey;
-
-
---
--- Name: usage_daily_p20260601_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.usage_daily_pkey ATTACH PARTITION public.usage_daily_p20260601_pkey;
-
-
---
--- Name: usage_daily_p20260701_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.usage_daily_pkey ATTACH PARTITION public.usage_daily_p20260701_pkey;
-
-
---
--- Name: usage_daily_p20260801_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.usage_daily_pkey ATTACH PARTITION public.usage_daily_p20260801_pkey;
-
-
---
 -- Name: usage_hourly_default_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
 ALTER INDEX public.usage_hourly_pkey ATTACH PARTITION public.usage_hourly_default_pkey;
-
-
---
--- Name: usage_hourly_p20260430_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.usage_hourly_pkey ATTACH PARTITION public.usage_hourly_p20260430_pkey;
-
-
---
--- Name: usage_hourly_p20260501_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.usage_hourly_pkey ATTACH PARTITION public.usage_hourly_p20260501_pkey;
-
-
---
--- Name: usage_hourly_p20260502_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.usage_hourly_pkey ATTACH PARTITION public.usage_hourly_p20260502_pkey;
-
-
---
--- Name: usage_hourly_p20260503_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.usage_hourly_pkey ATTACH PARTITION public.usage_hourly_p20260503_pkey;
-
-
---
--- Name: usage_hourly_p20260504_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.usage_hourly_pkey ATTACH PARTITION public.usage_hourly_p20260504_pkey;
-
-
---
--- Name: usage_hourly_p20260505_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.usage_hourly_pkey ATTACH PARTITION public.usage_hourly_p20260505_pkey;
-
-
---
--- Name: usage_hourly_p20260506_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.usage_hourly_pkey ATTACH PARTITION public.usage_hourly_p20260506_pkey;
 
 
 --
@@ -5814,6 +2803,13 @@ CREATE TRIGGER capture_cron_watch_history_trg BEFORE UPDATE OF schedule, pipelin
 --
 
 CREATE TRIGGER capture_shell_function_history_trg BEFORE UPDATE OF source, language ON public.shell_functions FOR EACH ROW EXECUTE FUNCTION public.capture_shell_function_history();
+
+
+--
+-- Name: shard_records shard_records_audit; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER shard_records_audit AFTER INSERT OR DELETE OR UPDATE ON public.shard_records FOR EACH ROW EXECUTE FUNCTION public.log_shard_operation();
 
 
 --
@@ -5932,13 +2928,13 @@ ALTER TABLE ONLY public.users
 -- PostgreSQL database dump complete
 --
 
-\unrestrict 1xkQrKQJ3etE2R6ho5ZdF4krQXfHAjlddpO1XwY55ytuNTPOH3OhnKaeH00QHIV
+\unrestrict s0shWFShjmpuzs6YAXMQBPMFs2JiESiVDDQ1HdoxnWFQQ0rGk2JKLGFaDpim7Sf
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict wNqvOYec5I4nceFYtf0YtjA6CZ1zOdloshWCnhfd2gPm8V8jxdLPZpMuUrh7A7U
+\restrict f38e93ocV7VovDWw9PaczBOgQn2MjDG0fUQbD8I3wpgzobURulWtqtYxPzmXnvj
 
 -- Dumped from database version 16.13 (Debian 16.13-1.pgdg13+1)
 -- Dumped by pg_dump version 16.13 (Debian 16.13-1.pgdg13+1)
@@ -5972,13 +2968,13 @@ SELECT pg_catalog.setval('public.buckets_new_id_seq', 1, true);
 -- PostgreSQL database dump complete
 --
 
-\unrestrict wNqvOYec5I4nceFYtf0YtjA6CZ1zOdloshWCnhfd2gPm8V8jxdLPZpMuUrh7A7U
+\unrestrict f38e93ocV7VovDWw9PaczBOgQn2MjDG0fUQbD8I3wpgzobURulWtqtYxPzmXnvj
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict r9vaK3b7BRXUxrL4bDeQw20jethn6qME1Rifx4jXIoTuAcMNpAQgllBSQvGtn9N
+\restrict 0efEYyB9E6UvdkNRvWBfdY0UhxwYp6aeY3m3syvKwlBh19DOxxEq8PwGDrna0vS
 
 -- Dumped from database version 16.13 (Debian 16.13-1.pgdg13+1)
 -- Dumped by pg_dump version 16.13 (Debian 16.13-1.pgdg13+1)
@@ -6042,18 +3038,53 @@ INSERT INTO public.goose_db_version VALUES (41, 40, true, '2026-05-03 02:48:57.3
 INSERT INTO public.goose_db_version VALUES (42, 41, true, '2026-05-03 02:48:57.423244');
 INSERT INTO public.goose_db_version VALUES (43, 42, true, '2026-05-03 22:15:10.307328');
 INSERT INTO public.goose_db_version VALUES (44, 43, true, '2026-05-06 04:47:56.807461');
+INSERT INTO public.goose_db_version VALUES (45, 45, true, '2026-05-17 03:49:51.308251');
+INSERT INTO public.goose_db_version VALUES (46, 46, true, '2026-05-17 03:49:51.320019');
+INSERT INTO public.goose_db_version VALUES (47, 47, true, '2026-05-17 03:49:51.339871');
+INSERT INTO public.goose_db_version VALUES (48, 48, true, '2026-05-17 03:49:51.342368');
+INSERT INTO public.goose_db_version VALUES (49, 49, true, '2026-05-17 03:49:51.350201');
+INSERT INTO public.goose_db_version VALUES (50, 50, true, '2026-05-17 03:49:51.368098');
 
 
 --
 -- Name: goose_db_version_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
-SELECT pg_catalog.setval('public.goose_db_version_id_seq', 44, true);
+SELECT pg_catalog.setval('public.goose_db_version_id_seq', 50, true);
 
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict r9vaK3b7BRXUxrL4bDeQw20jethn6qME1Rifx4jXIoTuAcMNpAQgllBSQvGtn9N
+\unrestrict 0efEYyB9E6UvdkNRvWBfdY0UhxwYp6aeY3m3syvKwlBh19DOxxEq8PwGDrna0vS
 
+
+-- +weft partman/cron reconstruction (generated by scripts/collapse-migrations.sh; do not hand-edit)
+DO $wpm$ BEGIN IF NOT EXISTS (SELECT 1 FROM partman.part_config WHERE parent_table='public.cron_results') THEN PERFORM partman.create_parent(p_parent_table:='public.cron_results',p_control:='ran_at',p_type:='range',p_interval:='1 day',p_template_table:='partman.template_public_cron_results',p_premake:=3,p_automatic_maintenance:='on',p_default_table:=false); END IF; END $wpm$;
+DO $wpm$ BEGIN IF NOT EXISTS (SELECT 1 FROM partman.part_config WHERE parent_table='public.cron_results_4h') THEN PERFORM partman.create_parent(p_parent_table:='public.cron_results_4h',p_control:='bucket_start',p_type:='range',p_interval:='7 days',p_template_table:='partman.template_public_cron_results_4h',p_premake:=3,p_automatic_maintenance:='on',p_default_table:=false); END IF; END $wpm$;
+DO $wpm$ BEGIN IF NOT EXISTS (SELECT 1 FROM partman.part_config WHERE parent_table='public.cron_results_daily') THEN PERFORM partman.create_parent(p_parent_table:='public.cron_results_daily',p_control:='bucket_start',p_type:='range',p_interval:='1 mon',p_template_table:='partman.template_public_cron_results_daily',p_premake:=3,p_automatic_maintenance:='on',p_default_table:=false); END IF; END $wpm$;
+DO $wpm$ BEGIN IF NOT EXISTS (SELECT 1 FROM partman.part_config WHERE parent_table='public.cron_results_hourly') THEN PERFORM partman.create_parent(p_parent_table:='public.cron_results_hourly',p_control:='bucket_start',p_type:='range',p_interval:='1 day',p_template_table:='partman.template_public_cron_results_hourly',p_premake:=3,p_automatic_maintenance:='on',p_default_table:=false); END IF; END $wpm$;
+DO $wpm$ BEGIN IF NOT EXISTS (SELECT 1 FROM partman.part_config WHERE parent_table='public.shard_heartbeats') THEN PERFORM partman.create_parent(p_parent_table:='public.shard_heartbeats',p_control:='beat_at',p_type:='range',p_interval:='01:00:00',p_template_table:='partman.template_public_shard_heartbeats',p_premake:=2,p_automatic_maintenance:='on',p_default_table:=false); END IF; END $wpm$;
+DO $wpm$ BEGIN IF NOT EXISTS (SELECT 1 FROM partman.part_config WHERE parent_table='public.tmp_file_lines') THEN PERFORM partman.create_parent(p_parent_table:='public.tmp_file_lines',p_control:='updated_at',p_type:='range',p_interval:='01:00:00',p_template_table:='partman.template_public_tmp_file_lines',p_premake:=4,p_automatic_maintenance:='on',p_default_table:=false); END IF; END $wpm$;
+DO $wpm$ BEGIN IF NOT EXISTS (SELECT 1 FROM partman.part_config WHERE parent_table='public.tmp_files') THEN PERFORM partman.create_parent(p_parent_table:='public.tmp_files',p_control:='updated_at',p_type:='range',p_interval:='01:00:00',p_template_table:='partman.template_public_tmp_files',p_premake:=4,p_automatic_maintenance:='on',p_default_table:=false); END IF; END $wpm$;
+
+UPDATE partman.part_config SET retention='7 days',retention_keep_table='f',retention_keep_index='t',infinite_time_partitions='f',premake=3,automatic_maintenance='on' WHERE parent_table='public.cron_results';
+UPDATE partman.part_config SET retention='35 days',retention_keep_table='f',retention_keep_index='t',infinite_time_partitions='f',premake=3,automatic_maintenance='on' WHERE parent_table='public.cron_results_4h';
+UPDATE partman.part_config SET retention='400 days',retention_keep_table='f',retention_keep_index='t',infinite_time_partitions='f',premake=3,automatic_maintenance='on' WHERE parent_table='public.cron_results_daily';
+UPDATE partman.part_config SET retention='14 days',retention_keep_table='f',retention_keep_index='t',infinite_time_partitions='f',premake=3,automatic_maintenance='on' WHERE parent_table='public.cron_results_hourly';
+UPDATE partman.part_config SET retention='5 minutes',retention_keep_table='f',retention_keep_index='t',infinite_time_partitions='f',premake=2,automatic_maintenance='on' WHERE parent_table='public.shard_heartbeats';
+UPDATE partman.part_config SET retention='48 hours',retention_keep_table='f',retention_keep_index='t',infinite_time_partitions='f',premake=4,automatic_maintenance='on' WHERE parent_table='public.tmp_file_lines';
+UPDATE partman.part_config SET retention='48 hours',retention_keep_table='f',retention_keep_index='t',infinite_time_partitions='f',premake=4,automatic_maintenance='on' WHERE parent_table='public.tmp_files';
+
+DO $wcron$ BEGIN
+  NULL;
+  PERFORM cron.schedule('cron-rollup-4h','15 * * * *','CALL public.rollup_cron_4h()');
+  PERFORM cron.schedule('cron-rollup-daily','30 * * * *','CALL public.rollup_cron_daily()');
+  PERFORM cron.schedule('cron-rollup-hourly','*/5 * * * *','CALL public.rollup_cron_hourly()');
+  PERFORM cron.schedule('partman-maintenance','*/30 * * * *','CALL partman.run_maintenance_proc()');
+  PERFORM cron.schedule('usage-rollup-daily','0 * * * *','CALL public.rollup_usage_daily()');
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'weft schema bootstrap: cron.schedule unavailable (%), skipping cron jobs', SQLERRM;
+END $wcron$;
+-- +weft end partman/cron reconstruction
