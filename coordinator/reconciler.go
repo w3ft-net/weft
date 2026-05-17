@@ -4,18 +4,22 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"time"
 )
 
 // PrewarmLead is the interval before a current-window INGESTING
 // shard's WindowEnd at which the reconciler starts pre-warming
-// next-window shards. Zero disables pre-warm entirely. Package-
-// scoped rather than passed through the op signature: future
+// next-window shards. Pre-warm is always on — the replacement must
+// be INGESTING before the current shard's window closes so the Op 3
+// capacity gate can rotate it without a write-gap. Package-scoped
+// rather than passed through the op signature: future
 // AppBucket.ShouldPrewarmNextWindow implementations might not use a
 // lead duration at all (ingestion burn rate, disk-fill slope,
 // etc.), so the policy shouldn't leak into every caller's
-// signature. main.go can override at boot for per-env tuning.
-var PrewarmLead time.Duration
+// signature. main.go can override at boot for per-env tuning; the
+// default must comfortably exceed instance launch + configure time.
+var PrewarmLead = 10 * time.Minute
 
 // ReconcileOp is one idempotent action the reconciler wants to take
 // to close a drift between desired state (bucket config) and actual
@@ -75,20 +79,31 @@ func reconcile(snap ReconcilerSnapshot) []ReconcileOp {
 		}
 	}
 
-	// Op 3 — wall-clock window-closed. An INGESTING shard past its
-	// WindowEnd stops accepting writes and becomes query-only.
-	// Runs before op 2 so last-minute app-drift reaches the shard
-	// before it freezes; replacement launches happen naturally on
-	// the next tick once IngestingCount drops.
+	// Op 3 — wall-clock window-closed, capacity-gated. An INGESTING
+	// shard past its WindowEnd (or whose span exceeds the bucket's
+	// current WindowDuration — legacy shards under an older, wider
+	// window config) should stop accepting writes and become
+	// query-only.
 	//
-	// Also catches shards whose window span exceeds the bucket's
-	// current WindowDuration — legacy shards created under an older
-	// (wider) window config that will never reach their original
-	// WindowEnd under the new schedule.
+	// SAFETY INVARIANT: a shard never leaves INGESTING if doing so
+	// drops the bucket below Target INGESTING shards. Rotation is
+	// blocked until a replacement has launched AND reached INGESTING
+	// (LAUNCHING does not count — it isn't accepting writes yet).
+	// Without this gate a window roll opens a write-gap: every
+	// current-window shard flips to READ_ONLY on time while the
+	// replacement is still launching, leaving the bucket with no
+	// shard accepting ingest. Oldest-WindowEnd shards rotate first so
+	// the freshest INGESTING shard is the one kept hot.
+	//
+	// Runs before op 2 so last-minute app-drift reaches the shard
+	// before it freezes.
+	var eligible []*ShardEntry
+	ingestingCount := 0
 	for _, e := range snap.Entries {
 		if e.State != StateIngesting {
 			continue
 		}
+		ingestingCount++
 		if e.WindowEnd.IsZero() {
 			continue
 		}
@@ -98,7 +113,22 @@ func reconcile(snap ReconcilerSnapshot) []ReconcileOp {
 		if !pastWindowEnd && !staleWindow {
 			continue
 		}
-		ops = append(ops, RotateToReadOnlyOp{ShardID: e.ID})
+		eligible = append(eligible, e)
+	}
+	// Rotate at most (ingesting − Target) shards so >= Target remain
+	// INGESTING. Target 0 means "no ingest capacity required" → no
+	// gate (all eligible rotate).
+	budget := ingestingCount - snap.Bucket.Target
+	if budget > len(eligible) {
+		budget = len(eligible)
+	}
+	if budget > 0 {
+		sort.SliceStable(eligible, func(i, j int) bool {
+			return eligible[i].WindowEnd.Before(eligible[j].WindowEnd)
+		})
+		for _, e := range eligible[:budget] {
+			ops = append(ops, RotateToReadOnlyOp{ShardID: e.ID})
+		}
 	}
 
 	// Op 2 — under-capacity. Emit one LaunchShardOp per shard
@@ -107,21 +137,18 @@ func reconcile(snap ReconcilerSnapshot) []ReconcileOp {
 	// tick's snapshot sees the new LAUNCHING/INGESTING row and the
 	// gap shrinks.
 	//
-	// IngestingCount is derived from snap.Entries here rather than
-	// trusting any pre-computed snap.IngestingCount field — Op 3
-	// (rotate at WindowEnd) walks Entries, so deriving Op 2's count
-	// from the same source keeps the two ops symmetric. A row in
-	// the DB but absent from the registry no longer counts toward
-	// target-met; the reconciler launches a replacement, and the
-	// stuck row gets cleaned up when its instance is rebound or the
-	// reaper archives it.
-	ingesting := 0
-	for _, e := range snap.Entries {
-		if e.State == StateIngesting {
-			ingesting++
-		}
-	}
-	effective := snap.LaunchingCount + ingesting
+	// All INGESTING shards count toward target — a past-window
+	// shard still accepts writes (Op 3's gate keeps it INGESTING
+	// until its replacement is up) and pre-warm, which is always
+	// on, provisions that replacement ahead of WindowEnd. Op 2
+	// only back-stops genuine under-capacity (a shard that died or
+	// never launched). ingestingCount comes from the Op 3 walk
+	// above so the two ops stay symmetric. A row in the DB but
+	// absent from the registry no longer counts toward target-met;
+	// the reconciler launches a replacement, and the stuck row gets
+	// cleaned up when its instance is rebound or the reaper
+	// archives it.
+	effective := snap.LaunchingCount + ingestingCount
 	for i := effective; i < snap.Bucket.Target; i++ {
 		ops = append(ops, LaunchShardOp{Bucket: snap.Bucket})
 	}

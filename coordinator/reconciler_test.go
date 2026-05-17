@@ -266,14 +266,18 @@ func TestReconcile_UnderCapacity_AboveTargetNoOp(t *testing.T) {
 // gets a RotateToReadOnlyOp. Zero windows (legacy/uninitialised)
 // and non-INGESTING shards are skipped.
 
+// A past-window shard rotates once a replacement is already
+// INGESTING (capacity-gated — see the Op 3 invariant tests below).
 func TestReconcile_WindowClosed_EmitsRotateOp(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Target: 1, Tier: "small"}
+	bucket := &AppBucket{ID: 1, Target: 1, Tier: "small", WindowDuration: time.Hour}
 	entries := []*ShardEntry{
 		{ID: "shard-past", BucketID: 1, State: StateIngesting,
 			WindowStart: now.Add(-2 * time.Hour), WindowEnd: now.Add(-1 * time.Minute)},
+		{ID: "shard-repl", BucketID: 1, State: StateIngesting,
+			WindowStart: now.Add(-1 * time.Minute), WindowEnd: now.Add(59 * time.Minute)},
 	}
-	snap := ReconcilerSnapshot{Bucket: bucket, Entries: entries, IngestingCount: 1, Now: now}
+	snap := ReconcilerSnapshot{Bucket: bucket, Entries: entries, IngestingCount: 2, Now: now}
 
 	rotates := 0
 	for _, op := range reconcile(snap) {
@@ -625,18 +629,6 @@ func TestShouldPrewarmNextWindow_FalseWhenWindowEndFar(t *testing.T) {
 	}
 }
 
-func TestShouldPrewarmNextWindow_FalseWhenLeadZero(t *testing.T) {
-	withPrewarmLead(t, 0)
-	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Tier: "small"}
-	entries := []*ShardEntry{
-		{ID: "s", State: StateIngesting, WindowEnd: now.Add(-time.Minute)},
-	}
-	if bucket.ShouldPrewarmNextWindow(now, entries) {
-		t.Error("PrewarmLead=0 must disable pre-warm entirely")
-	}
-}
-
 func TestShouldPrewarmNextWindow_SkipsNonIngestingAndZeroWindow(t *testing.T) {
 	withPrewarmLead(t, time.Hour)
 	now := time.Now().UTC()
@@ -794,8 +786,12 @@ func TestReconcile_WindowClosed_RotatesStaleWindowSpan(t *testing.T) {
 		{ID: "shard-7d", BucketID: 1, State: StateIngesting,
 			WindowStart: now.Add(-24 * time.Hour),
 			WindowEnd:   now.Add(6 * 24 * time.Hour)}, // 7-day span, bucket wants 1h
+		// Replacement already INGESTING so the stale shard may rotate
+		// without dropping the bucket below Target.
+		{ID: "shard-repl", BucketID: 1, State: StateIngesting,
+			WindowStart: now.Add(-1 * time.Minute), WindowEnd: now.Add(59 * time.Minute)},
 	}
-	snap := ReconcilerSnapshot{Bucket: bucket, Entries: entries, IngestingCount: 1, Now: now}
+	snap := ReconcilerSnapshot{Bucket: bucket, Entries: entries, IngestingCount: 2, Now: now}
 
 	rotates := 0
 	for _, op := range reconcile(snap) {
@@ -825,6 +821,108 @@ func TestReconcile_WindowClosed_CurrentSpanNoRotation(t *testing.T) {
 		if _, ok := op.(RotateToReadOnlyOp); ok {
 			t.Errorf("unexpected rotation for current-span shard: %s", op.Describe())
 		}
+	}
+}
+
+// ── Op 3 capacity-gate invariant ─────────────────────────────────
+//
+// Safety invariant: a shard must never leave INGESTING (window-closed
+// OR stale-span) if doing so drops the bucket below Target INGESTING
+// shards. Rotation is blocked until a replacement has launched AND
+// reached INGESTING — otherwise a window roll opens a write-gap with
+// no shard accepting ingest for the bucket.
+
+// The sole INGESTING shard, past its window, with no replacement yet,
+// must NOT rotate — that would leave the bucket with zero ingest
+// capacity.
+func TestReconcile_WindowClosed_DoesNotRotateBelowTarget(t *testing.T) {
+	now := time.Now().UTC()
+	bucket := &AppBucket{ID: 1, Target: 1, Tier: "small"}
+	entries := []*ShardEntry{
+		{ID: "shard-only", BucketID: 1, State: StateIngesting,
+			WindowStart: now.Add(-2 * time.Hour), WindowEnd: now.Add(-1 * time.Minute)},
+	}
+	snap := ReconcilerSnapshot{Bucket: bucket, Entries: entries, IngestingCount: 1, Now: now}
+
+	for _, op := range reconcile(snap) {
+		if _, ok := op.(RotateToReadOnlyOp); ok {
+			t.Errorf("rotated the only INGESTING shard with no replacement — write-gap: %s", op.Describe())
+		}
+	}
+}
+
+// Once a replacement is INGESTING (Target=1, two INGESTING: one
+// past-window "old", one healthy "new"), the old one rotates and the
+// new one stays — exactly one rotate, and it must be the old shard.
+func TestReconcile_WindowClosed_RotatesOldOnceReplacementIngesting(t *testing.T) {
+	now := time.Now().UTC()
+	bucket := &AppBucket{ID: 1, Target: 1, Tier: "small", WindowDuration: time.Hour}
+	entries := []*ShardEntry{
+		{ID: "shard-old", BucketID: 1, State: StateIngesting,
+			WindowStart: now.Add(-90 * time.Minute), WindowEnd: now.Add(-30 * time.Minute)},
+		{ID: "shard-new", BucketID: 1, State: StateIngesting,
+			WindowStart: now.Add(-1 * time.Minute), WindowEnd: now.Add(59 * time.Minute)},
+	}
+	snap := ReconcilerSnapshot{Bucket: bucket, Entries: entries, IngestingCount: 2, Now: now}
+
+	var rotated []string
+	for _, op := range reconcile(snap) {
+		if r, ok := op.(RotateToReadOnlyOp); ok {
+			rotated = append(rotated, r.ShardID)
+		}
+	}
+	if len(rotated) != 1 || rotated[0] != "shard-old" {
+		t.Errorf("want exactly [shard-old] rotated, got %v: %v", rotated, describeOps(reconcile(snap)))
+	}
+}
+
+// Stale-span rotation is gated the same way: two stale-span INGESTING
+// shards, Target=2, no replacements → zero rotations (rotating any
+// drops below Target).
+func TestReconcile_WindowClosed_StaleSpanGatedByTarget(t *testing.T) {
+	now := time.Now().UTC()
+	bucket := &AppBucket{ID: 1, Target: 2, Tier: "small", WindowDuration: time.Hour}
+	entries := []*ShardEntry{
+		{ID: "stale-a", BucketID: 1, State: StateIngesting,
+			WindowStart: now.Add(-24 * time.Hour), WindowEnd: now.Add(6 * 24 * time.Hour)},
+		{ID: "stale-b", BucketID: 1, State: StateIngesting,
+			WindowStart: now.Add(-24 * time.Hour), WindowEnd: now.Add(6 * 24 * time.Hour)},
+	}
+	snap := ReconcilerSnapshot{Bucket: bucket, Entries: entries, IngestingCount: 2, Now: now}
+
+	for _, op := range reconcile(snap) {
+		if _, ok := op.(RotateToReadOnlyOp); ok {
+			t.Errorf("rotated a stale shard below Target=2 — write-gap: %s", op.Describe())
+		}
+	}
+}
+
+// When more INGESTING shards are eligible than the budget allows,
+// rotate only down to Target and rotate the oldest-WindowEnd first
+// (keep the freshest hot). 3 past-window INGESTING, Target=1 → rotate
+// exactly 2 (the two oldest), leaving the newest INGESTING.
+func TestReconcile_WindowClosed_RotatesOldestFirstDownToTarget(t *testing.T) {
+	now := time.Now().UTC()
+	bucket := &AppBucket{ID: 1, Target: 1, Tier: "small"}
+	entries := []*ShardEntry{
+		{ID: "p-newest", BucketID: 1, State: StateIngesting,
+			WindowStart: now.Add(-70 * time.Minute), WindowEnd: now.Add(-1 * time.Minute)},
+		{ID: "p-oldest", BucketID: 1, State: StateIngesting,
+			WindowStart: now.Add(-3 * time.Hour), WindowEnd: now.Add(-3 * time.Minute)},
+		{ID: "p-middle", BucketID: 1, State: StateIngesting,
+			WindowStart: now.Add(-2 * time.Hour), WindowEnd: now.Add(-2 * time.Minute)},
+	}
+	snap := ReconcilerSnapshot{Bucket: bucket, Entries: entries, IngestingCount: 3, Now: now}
+
+	rotated := map[string]bool{}
+	for _, op := range reconcile(snap) {
+		if r, ok := op.(RotateToReadOnlyOp); ok {
+			rotated[r.ShardID] = true
+		}
+	}
+	if len(rotated) != 2 || !rotated["p-oldest"] || !rotated["p-middle"] {
+		t.Errorf("want exactly {p-oldest,p-middle} rotated (oldest-first, leave 1 for Target), got %v: %v",
+			rotated, describeOps(reconcile(snap)))
 	}
 }
 

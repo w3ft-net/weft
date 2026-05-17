@@ -310,9 +310,6 @@ func (b *AppBucket) NextWindow(now time.Time) (start, end time.Time) {
 // TODO: extend to consider per-shard ingest rate so bursty
 // workloads pre-warm sooner than steady-state ones.
 func (b *AppBucket) ShouldPrewarmNextWindow(now time.Time, ingesting []*ShardEntry) bool {
-	if PrewarmLead <= 0 {
-		return false
-	}
 	threshold := now.Add(PrewarmLead)
 	for _, e := range ingesting {
 		if e.State != StateIngesting {

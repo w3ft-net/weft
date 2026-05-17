@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -73,22 +74,6 @@ func TestSteadyState_LifecycleConverges(t *testing.T) {
 		return descs
 	}
 
-	// stampWindow overwrites every INGESTING shard's window to match
-	// the simulated clock. The sync launcher uses time.Now()
-	// internally, so launched shards carry real-clock windows that
-	// won't match the simulated hour boundaries.
-	stampWindow := func(ws, we time.Time) {
-		for _, e := range reg.Entries() {
-			if e.State == StateIngesting {
-				if e.WindowStart.Equal(ws) && e.WindowEnd.Equal(we) {
-					continue
-				}
-				e.WindowStart = ws
-				e.WindowEnd = we
-			}
-		}
-	}
-
 	countByState := func() (ingesting, readOnly, archived int) {
 		for _, e := range reg.Entries() {
 			switch e.State {
@@ -103,64 +88,76 @@ func TestSteadyState_LifecycleConverges(t *testing.T) {
 		return
 	}
 
-	// ── Hour 0 (T+0): empty registry → launch 2 INGESTING ──
+	// noGap asserts the core invariant the gate exists to enforce:
+	// once bootstrapped the bucket must never drop below Target
+	// INGESTING shards — a window roll never opens a zero-ingest
+	// write-gap.
+	noGap := func(label string) {
+		t.Helper()
+		if ing, _, _ := countByState(); ing < bucket.Target {
+			t.Fatalf("%s: INGESTING=%d < Target=%d — write-gap (state machine violated)", label, ing, bucket.Target)
+		}
+	}
 
-	tick(simNow)
+	// prewarm models the production pre-warm path (always on): before
+	// the current window closes, Target next-window shards are brought
+	// up and reach INGESTING. We launch real shards via LaunchShardOp
+	// (so they're archivable later) then stamp them onto the simulated
+	// next window. The sync launcher assigns real-clock windows (far
+	// future vs the simulated 2026-05-05 clock), so the just-launched
+	// replacements are exactly the INGESTING shards whose WindowStart
+	// is After the simulated window end — aged shards keep their sim
+	// windows and stay rotate-eligible.
+	prewarm := func(ws, we time.Time) {
+		for i := 0; i < bucket.Target; i++ {
+			if err := (LaunchShardOp{Bucket: bucket}).Apply(context.Background(), prov); err != nil {
+				t.Fatalf("prewarm launch: %v", err)
+			}
+		}
+		for _, e := range reg.Entries() {
+			if e.State == StateIngesting && e.WindowStart.After(we) {
+				e.WindowStart = ws
+				e.WindowEnd = we
+			}
+		}
+	}
+
+	// ── Hour 0: bootstrap = pre-warm the first window ──
 	w0s, w0e := simNow, simNow.Add(time.Hour)
-	stampWindow(w0s, w0e)
-
-	ing, ro, arch := countByState()
-	if ing != 2 || ro != 0 || arch != 0 {
+	prewarm(w0s, w0e)
+	tick(simNow)
+	noGap("hour 0")
+	if ing, ro, arch := countByState(); ing != 2 || ro != 0 || arch != 0 {
 		t.Fatalf("hour 0: want 2/0/0 (I/RO/A), got %d/%d/%d", ing, ro, arch)
 	}
 
-	// ── Hour 1 (T+61m): window closed ──
-	// Tick 1a: rotate 2 INGESTING → READ_ONLY (Op 3 fires because
-	// simNow > WindowEnd). Op 2 still sees 2 INGESTING in the
-	// frozen snapshot, so no launches yet.
-	simNow = simNow.Add(61 * time.Minute)
-	tick(simNow)
+	// Each subsequent hour: pre-warm the NEXT window (replacements
+	// reach INGESTING while the current shards are still hot — no
+	// gap), then the clock crosses WindowEnd and a single tick lets
+	// the gate rotate the now-old shards (Target still satisfied by
+	// the pre-warmed replacements) and archive any ripe READ_ONLY.
+	curEnd := w0e
+	wantArch := 0
+	for hour := 1; hour <= 3; hour++ {
+		label := "hour " + strconv.Itoa(hour)
+		nextStart, nextEnd := curEnd, curEnd.Add(time.Hour)
+		prewarm(nextStart, nextEnd) // replacements INGESTING before the roll
+		noGap(label + " prewarm")
 
-	ing, ro, arch = countByState()
-	if ro != 2 {
-		t.Fatalf("hour 1a: want 2 READ_ONLY after rotation, got I=%d RO=%d A=%d", ing, ro, arch)
+		simNow = simNow.Add(61 * time.Minute) // cross curEnd
+		tick(simNow)                          // gate releases: rotate old, archive ripe RO
+		noGap(label + " tick")
+
+		if hour >= 2 {
+			wantArch += 2 // the window two cycles back ages past retention
+		}
+		ing, ro, arch := countByState()
+		if ing != 2 || ro != 2 || arch != wantArch {
+			t.Fatalf("%s: want 2/2/%d (I/RO/A), got %d/%d/%d", label, wantArch, ing, ro, arch)
+		}
+		assertNoWindowOverlap(t, reg, label)
+		curEnd = nextEnd
 	}
-
-	// Tick 1b: fresh snapshot sees 0 INGESTING → launches 2.
-	tick(simNow)
-	w1s, w1e := w0e, w0e.Add(time.Hour)
-	stampWindow(w1s, w1e)
-
-	ing, ro, arch = countByState()
-	if ing != 2 || ro != 2 || arch != 0 {
-		t.Fatalf("hour 1b: want 2/2/0 (I/RO/A), got %d/%d/%d", ing, ro, arch)
-	}
-	assertNoWindowOverlap(t, reg, "hour 1")
-
-	// ── Hour 2 (T+122m): archive old READ_ONLY + rotate current ──
-	simNow = simNow.Add(61 * time.Minute)
-	tick(simNow) // rotate + archive
-	tick(simNow) // launch replacements
-	w2s, w2e := w1e, w1e.Add(time.Hour)
-	stampWindow(w2s, w2e)
-
-	ing, ro, arch = countByState()
-	if ing != 2 || ro != 2 || arch != 2 {
-		t.Fatalf("hour 2: want 2/2/2 (I/RO/A), got %d/%d/%d", ing, ro, arch)
-	}
-	assertNoWindowOverlap(t, reg, "hour 2")
-
-	// ── Hour 3 (T+183m): another cycle ──
-	simNow = simNow.Add(61 * time.Minute)
-	tick(simNow)
-	tick(simNow)
-	stampWindow(w2e, w2e.Add(time.Hour))
-
-	ing, ro, arch = countByState()
-	if ing != 2 || ro != 2 || arch != 4 {
-		t.Fatalf("hour 3: want 2/2/4 (I/RO/A), got %d/%d/%d", ing, ro, arch)
-	}
-	assertNoWindowOverlap(t, reg, "hour 3")
 }
 
 // TestRefreshFromStore_PicksUpExternalDBChanges verifies that a
@@ -269,9 +266,11 @@ func TestRefreshFromStore_PreservesShardPointer(t *testing.T) {
 // TestSteadyState_LegacyWideWindowShards reproduces the production
 // bug: the bucket's WindowDuration was changed from 7d to 1h, but
 // shards launched under the old duration have window_end far in the
-// future. The reconciler detects that the window span exceeds the
-// bucket's current WindowDuration and auto-rotates them — no manual
-// DB edit required.
+// future. The reconciler detects the stale (over-wide) span and
+// retires them — but capacity-gated: it must NOT rotate both legacy
+// shards while the bucket would be left with zero ingest capacity.
+// They keep INGESTING (no write-gap) until pre-warmed replacements
+// reach INGESTING, then they rotate.
 func TestSteadyState_LegacyWideWindowShards(t *testing.T) {
 	reg := NewShardRegistry()
 
@@ -293,22 +292,53 @@ func TestSteadyState_LegacyWideWindowShards(t *testing.T) {
 		})
 	}
 
-	// Reconciler tick: window span (7d) exceeds bucket duration (1h) → rotate.
-	snap := ReconcilerSnapshot{
-		Bucket:  bucket,
-		Entries: reg.Entries(),
-		Now:     now,
-	}
-	ops := reconcile(snap)
-	rotated := 0
-	for _, op := range ops {
-		if _, ok := op.(RotateToReadOnlyOp); ok {
-			rotated++
+	countOps := func(ops []ReconcileOp) (rotate, launch int) {
+		for _, op := range ops {
+			switch op.(type) {
+			case RotateToReadOnlyOp:
+				rotate++
+			case LaunchShardOp:
+				launch++
+			}
 		}
+		return
 	}
-	if rotated != 2 {
-		t.Errorf("want 2 RotateToReadOnlyOps for stale-window shards, got %d: %v",
-			rotated, describeOps(ops))
+
+	// Phase 1 — no replacements yet. The stale span is detected, but
+	// rotating either legacy shard would drop the bucket below
+	// Target=2 INGESTING. The gate blocks rotation entirely (the
+	// legacy shards keep ingesting — no write-gap). Capacity is met
+	// by the two still-INGESTING legacy shards, so Op 2 does not
+	// reactively launch; pre-warm (always on, modelled in
+	// TestSteadyState_LifecycleConverges) is what brings the
+	// replacements up.
+	snap := ReconcilerSnapshot{Bucket: bucket, Entries: reg.Entries(), Now: now}
+	rotate, launch := countOps(reconcile(snap))
+	if rotate != 0 {
+		t.Errorf("phase 1: want 0 rotations (would open a write-gap), got %d", rotate)
+	}
+	if launch != 0 {
+		t.Errorf("phase 1: want 0 LaunchShardOps (capacity met by legacy shards still ingesting), got %d", launch)
+	}
+
+	// Phase 2 — replacements have launched and reached INGESTING with
+	// a valid current window. Now the legacy shards may rotate without
+	// dropping below Target.
+	for _, id := range []string{"shard-new-a", "shard-new-b"} {
+		reg.Add(&ShardEntry{
+			ID:          id,
+			BucketID:    1,
+			State:       StateIngesting,
+			WindowStart: now.Add(-1 * time.Minute),
+			WindowEnd:   now.Add(59 * time.Minute),
+			Shard:       &failingShard{id: id},
+		})
+	}
+	snap = ReconcilerSnapshot{Bucket: bucket, Entries: reg.Entries(), Now: now}
+	rotate, _ = countOps(reconcile(snap))
+	if rotate != 2 {
+		t.Errorf("phase 2: want 2 RotateToReadOnlyOps once replacements INGESTING, got %d: %v",
+			rotate, describeOps(reconcile(snap)))
 	}
 }
 

@@ -20,7 +20,9 @@ func bucketStub(target int, retention time.Duration) *stubBuckets {
 // A shard whose WindowEnd has passed must transition INGESTING →
 // READ_ONLY on the next tick — and the transition must be
 // persisted, so a coordinator restart doesn't see it as still
-// INGESTING.
+// INGESTING. Capacity-gated: a replacement is already INGESTING
+// (Target=1, two INGESTING) so rotating the stale one doesn't open
+// a write-gap. See the Op 3 invariant tests in reconciler_test.go.
 func TestCheck_WindowEndPastNow_RotatesToReadOnly(t *testing.T) {
 	fake := newFakeRegistryStore()
 	reg := NewShardRegistry()
@@ -36,6 +38,17 @@ func TestCheck_WindowEndPastNow_RotatesToReadOnly(t *testing.T) {
 		WindowEnd:   now.Add(-1 * time.Minute), // just past
 		CreatedAt:   now.Add(-2 * time.Hour),
 		EBSVolumeID: "vol-x",
+	})
+	// Replacement already INGESTING — without this the gate (rightly)
+	// blocks rotation to avoid a zero-ingest write-gap.
+	reg.Add(&ShardEntry{
+		ID:          "shard-replacement",
+		BucketID:    defaultBucketID,
+		State:       StateIngesting,
+		Shard:       &failingShard{id: "shard-replacement"},
+		WindowStart: now.Add(-1 * time.Minute),
+		WindowEnd:   now.Add(59 * time.Minute),
+		CreatedAt:   now.Add(-1 * time.Minute),
 	})
 
 	prov := &Provisioner{
