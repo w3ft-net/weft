@@ -250,6 +250,7 @@ func (p *Provisioner) Start(ctx context.Context) {
 				p.adoptFromHeartbeats()
 				p.reapDeadShards()
 				p.reapStaleLaunching()
+				p.reapStrandedSuspended()
 				p.check(ctx)
 			}
 		}
@@ -418,6 +419,53 @@ func (p *Provisioner) reapStaleLaunching() {
 		}
 		if err := p.config.ShardOps.DeleteShard(row.ID); err != nil {
 			log.Printf("provisioner: delete stale LAUNCHING %s: %v", row.ID, err)
+		}
+	}
+}
+
+// reapStrandedSuspended deletes SUSPENDED shard rows whose rebind
+// never completed, but ONLY when deleting the row cannot lose data
+// that isn't already lost or preserved elsewhere:
+//
+//   - FindByShard(entry.ID) returns nil → the volume is either gone
+//     (data already lost — the row is a tombstone; snapshots are
+//     intentionally out of scope) or its shard_id tag moved to a
+//     different shard (data preserved under that shard). Either way
+//     deleting this row loses nothing → reap it.
+//   - FindByShard returns a volume → it still exists tagged to THIS
+//     shard, i.e. this row is the sole pointer to live data. Leave it
+//     for the rebind path (this is the e.g. 822eab40 / 164k-row case).
+//   - FindByShard errors → unknown; skip and retry next tick (fail
+//     safe — never delete on uncertainty).
+//
+// Non-SUSPENDED states are out of scope (reapDeadShards owns the
+// dead-but-not-yet-suspended transition; this only cleans up the
+// terminal stranded case it leaves behind).
+func (p *Provisioner) reapStrandedSuspended() {
+	if p.volumes == nil || p.config.ShardOps == nil {
+		return
+	}
+	for _, entry := range p.registry.Entries() {
+		if entry.State != StateSuspended {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		vi, err := p.volumes.FindByShard(ctx, entry.ID)
+		cancel()
+		if err != nil {
+			log.Printf("provisioner: reap-suspended %s: volume lookup failed (%v) — skipping", entry.ID, err)
+			continue
+		}
+		if vi != nil {
+			// Volume present and still tagged to this shard — sole
+			// pointer to live data. Leave it for rebind.
+			continue
+		}
+		log.Printf("provisioner: reaping stranded SUSPENDED %s (vol=%q gone or re-homed — data not lost by this deletion)",
+			entry.ID, entry.EBSVolumeID)
+		p.registry.Remove(entry.ID)
+		if err := p.config.ShardOps.DeleteShard(entry.ID); err != nil {
+			log.Printf("provisioner: delete stranded SUSPENDED %s: %v", entry.ID, err)
 		}
 	}
 }
@@ -1109,7 +1157,6 @@ func (p *Provisioner) retireVolume(entry *ShardEntry) {
 	entry.EBSVolumeID = ""
 	p.registry.PersistState(entry)
 }
-
 
 // mintLaunchingRow INSERTs a LAUNCHING row for a bucket's current
 // window. Thin wrapper over mintLaunchingRowForWindow; see that

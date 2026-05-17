@@ -20,12 +20,18 @@ import (
 type fakeVolumeManager struct {
 	mu sync.Mutex
 
-	availableByTier map[string][]VolumeInfo  // keyed by tier+az ("small/us-east-2a")
-	createdByShard  map[string]string        // shard_id → volume_id
+	availableByTier map[string][]VolumeInfo // keyed by tier+az ("small/us-east-2a")
+	createdByShard  map[string]string       // shard_id → volume_id
 	attached        []attachedPair
-	tagged          map[string]string        // volume → shard id
+	tagged          map[string]string // volume → shard id
 	createErr       error
 	attachErr       error
+
+	// findResult / findErr drive FindByShard for tests that exercise
+	// volume-existence logic (e.g. the stranded-SUSPENDED reaper).
+	// Unset → FindByShard returns (nil, nil) as before.
+	findResult map[string]*VolumeInfo
+	findErr    map[string]error
 
 	nextVolID int
 }
@@ -50,7 +56,12 @@ func (f *fakeVolumeManager) CreateForShard(_ context.Context, opts CreateVolumeO
 }
 
 func (f *fakeVolumeManager) FindByShard(_ context.Context, shardID string) (*VolumeInfo, error) {
-	return nil, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.findErr[shardID]; err != nil {
+		return nil, err
+	}
+	return f.findResult[shardID], nil
 }
 
 func (f *fakeVolumeManager) ListAvailableByTier(_ context.Context, tier, az string) ([]VolumeInfo, error) {
