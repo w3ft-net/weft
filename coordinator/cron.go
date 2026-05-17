@@ -21,8 +21,8 @@ type CronExecutor struct {
 	Coord    *Coordinator
 	Notifier *Notifier
 
-	mu       sync.Mutex
-	cancels  map[uint]context.CancelFunc // watchID → cancel
+	mu      sync.Mutex
+	cancels map[uint]context.CancelFunc // watchID → cancel
 }
 
 // Start begins the cron executor. It loads watches from the database,
@@ -149,10 +149,7 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch) {
 
 	pipeline := ce.resolvePipeline(watch)
 
-	tr := TimeRange{
-		Start: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
-		End:   time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
-	}
+	tr := watchQueryRange(watch.Schedule, start)
 	// ExecuteForWatch runs the query and (if the pipeline ends with `| alert`)
 	// evaluates the alert in the watch's AlertContext — incident dedup and
 	// notifier dispatch both key off the watch identity instead of an
@@ -210,7 +207,7 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch) {
 }
 
 // persistResults writes one or more cron_results rows for this tick. In
-// single-row mode (watch.AlertKey nil) we write a single row with tag=''
+// single-row mode (watch.AlertKey nil) we write a single row with tag=”
 // and let SaveCronResult auto-parse Stdout into Value. In multi-row mode
 // we split stdout into lines, resolve Value from the watch's -k spec
 // (positional or JSON path) and Tag from the -t spec, and write one row
@@ -300,4 +297,16 @@ func (ce *CronExecutor) tierForWatch(watch store.CronWatch) store.Tier {
 // Delegates to store.ParseScheduleInterval.
 func parseSchedule(schedule string) time.Duration {
 	return store.ParseScheduleInterval(schedule)
+}
+
+// watchQueryRange is the time window a cron run queries: exactly the gap
+// since the previous fire, [now-interval, now]. The interval is the same
+// value runWatch tickers on (parseSchedule), so this tiles fire-to-fire
+// with no gap and never exceeds the interval — which keeps a cron from
+// reaching shards older than its own cadence (notably the archived
+// cold-Lambda shards). Previously this was hardcoded to an all-time
+// [2000..2100] window, which fanned every tick onto every in-retention
+// shard. See cron_window_test.go.
+func watchQueryRange(schedule string, now time.Time) TimeRange {
+	return TimeRange{Start: now.Add(-parseSchedule(schedule)), End: now}
 }
