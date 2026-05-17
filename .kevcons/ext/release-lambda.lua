@@ -8,7 +8,7 @@ function run(args)
     -- (Linux-specific syscalls like clearenv/setresgid don't exist on macOS)
 
     -- Build via Docker
-    kevcons.log("building lambda-shard via Docker (arm64)...")
+    kevcons.log("building lambda-shard via Docker (x86_64)...")
     kevcons.exec("docker", {"build", "-f", "Dockerfile.lambda", "-t", "weft-lambda-shard", ".."})
 
     -- Extract binary from image
@@ -16,6 +16,15 @@ function run(args)
     container = container:match("^%s*(.-)%s*$")
     kevcons.exec("docker", {"cp", container .. ":/var/runtime/bootstrap", "/tmp/bootstrap"})
     kevcons.exec("docker", {"rm", container})
+
+    -- Guard against the arch mismatch that shipped an unrunnable bootstrap
+    -- (amd64 ELF on an arm64 Lambda → exec format error → exit 126). The
+    -- Lambda is configured x86_64; fail loudly here rather than in prod.
+    local arch = kevcons.exec("file", {"/tmp/bootstrap"})
+    if not arch:match("x86%-64") then
+        os.remove("/tmp/bootstrap")
+        error("bootstrap arch mismatch: weft-cold-shard-query is x86_64 but built: " .. arch)
+    end
 
     -- Package zip
     kevcons.log("packaging zip...")

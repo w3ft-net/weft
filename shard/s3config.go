@@ -54,6 +54,21 @@ func S3ConfigFromEnv() *S3Config {
 // When AccessKey is empty, skips credential statements — DuckDB will use
 // the default credential chain (IAM role on EC2/Lambda).
 func (c *S3Config) ConfigureDuckDB(db *sql.DB) error {
+	// DuckDB SET/INSTALL/SECRET state is connection-local, but database/sql
+	// pools connections — so config could land on a different connection
+	// than the query that needs it. Pin the pool to one connection so all
+	// configuration and subsequent queries share the same DuckDB session.
+	db.SetMaxOpenConns(1)
+
+	// The Lambda execution environment has no HOME, so DuckDB can't derive
+	// its extension directory and extension autoloading (httpfs, and aws
+	// for the S3 credential chain) aborts with "Can't find the home
+	// directory". DuckDB resolves this from $HOME at autoload time, so a
+	// SQL `SET home_directory` doesn't reach the autoloader — set the env
+	// itself, but only when absent so EC2/local are untouched.
+	if os.Getenv("HOME") == "" {
+		os.Setenv("HOME", os.TempDir())
+	}
 	if _, err := db.Exec("INSTALL httpfs; LOAD httpfs;"); err != nil {
 		return fmt.Errorf("load httpfs: %w", err)
 	}
