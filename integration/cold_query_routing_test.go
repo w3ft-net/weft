@@ -123,7 +123,8 @@ func TestColdShardQueryRouting(t *testing.T) {
 		ID: "cold-route-1", Apps: apps,
 		WindowStart: t1, WindowEnd: t2,
 		State: coordinator.StateArchived, ParquetPath: s3Path,
-		Shard: cold,
+		Shard:     cold,
+		RowCount:  4, // archived shard holds data; MatchingEntries now skips 0-row cold/RO shards
 		CreatedAt: time.Now(),
 	})
 
