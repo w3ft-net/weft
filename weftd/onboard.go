@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 	"time"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
@@ -48,8 +51,28 @@ func SubmitSample(ctx context.Context, client pb.WeftCoordinatorClient, token, a
 	if len(lines) == 0 {
 		return fmt.Errorf("sample %s: no lines read", path)
 	}
+	return submitSampleLines(ctx, client, token, app, instance, deployment, lines)
+}
 
-	_, err = client.SubmitSample(ctx, &pb.SubmitSampleRequest{
+// SubmitUnitSample reads the most recent N lines from a systemd unit's
+// journal and sends them to the coordinator. Journald (unit:) sources have
+// no file path, so the file-based SubmitSample cannot serve them — it would
+// open("") and fail with ENOENT.
+func SubmitUnitSample(ctx context.Context, client pb.WeftCoordinatorClient, token, app, unit, instance, deployment string) error {
+	lines, err := SampleUnitLines(ctx, unit, sampleLineCount)
+	if err != nil {
+		return fmt.Errorf("sample unit %s: %w", unit, err)
+	}
+	if len(lines) == 0 {
+		return fmt.Errorf("sample unit %s: no lines read", unit)
+	}
+	return submitSampleLines(ctx, client, token, app, instance, deployment, lines)
+}
+
+// submitSampleLines ships an already-collected sample to the coordinator.
+// Shared by the file and journald sampling paths.
+func submitSampleLines(ctx context.Context, client pb.WeftCoordinatorClient, token, app, instance, deployment string, lines []string) error {
+	_, err := client.SubmitSample(ctx, &pb.SubmitSampleRequest{
 		Token:      token,
 		App:        app,
 		Instance:   instance,
@@ -60,6 +83,37 @@ func SubmitSample(ctx context.Context, client pb.WeftCoordinatorClient, token, a
 		return fmt.Errorf("submit sample: %w", err)
 	}
 	return nil
+}
+
+// SampleUnitLines reads up to n recent lines from a systemd unit's journal.
+// Mirrors SampleLines' warm-up retry: a freshly-started unit may not have
+// emitted anything yet. Uses the same journalctl invocation as the tailer
+// (-o cat, --no-pager) minus -f, so the sampled lines match what will be
+// shipped.
+func SampleUnitLines(ctx context.Context, unit string, n int) ([]string, error) {
+	var lines []string
+	for attempt := 0; attempt < 6; attempt++ {
+		cmd := exec.CommandContext(ctx, "journalctl", "-u", unit, "-n", strconv.Itoa(n), "--no-pager", "-o", "cat")
+		out, err := cmd.Output()
+		if err != nil {
+			if attempt < 5 {
+				time.Sleep(pollInterval)
+				continue
+			}
+			return nil, fmt.Errorf("journalctl -u %s: %w", unit, err)
+		}
+		lines = lines[:0]
+		for _, line := range strings.Split(string(out), "\n") {
+			if line != "" && len(lines) < n {
+				lines = append(lines, line)
+			}
+		}
+		if len(lines) > 0 {
+			break
+		}
+		time.Sleep(pollInterval)
+	}
+	return lines, nil
 }
 
 // SampleLines reads up to n lines from a file. If the file doesn't exist yet
