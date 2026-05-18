@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -14,10 +15,10 @@ import (
 // have one (their log_groups.aws_account_id is NULL).
 type AWSAccount struct {
 	gorm.Model
-	CustomerID uint       `gorm:"not null"`
-	Customer   Customer   `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
-	AccountID  string     `gorm:"not null"` // 12-digit AWS account number
-	RoleARN    string     `gorm:"not null"`
+	CustomerID uint     `gorm:"not null"`
+	Customer   Customer `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
+	AccountID  string   `gorm:"not null"` // 12-digit AWS account number
+	RoleARN    string   `gorm:"not null"`
 	ExternalID string
 	LogGroups  []LogGroup `gorm:"foreignKey:AWSAccountID;constraint:OnDelete:CASCADE"`
 }
@@ -34,8 +35,10 @@ const (
 
 // LogGroupStatus tracks whether a human has approved the schema.
 // pending:    weftd has sent a sample but nobody's configured the schema yet
-//             (Sample/Detection hold the auto-detected candidates). The
-//             coordinator ignores pending rows — no polling, no ingest.
+//
+//	(Sample/Detection hold the auto-detected candidates). The
+//	coordinator ignores pending rows — no polling, no ingest.
+//
 // configured: schema_yaml is valid and the source is live.
 // status is orthogonal to source_type: a cloudwatch row today always
 // starts configured (the add-source UI commits schema in one shot), but
@@ -43,7 +46,15 @@ const (
 // UX.
 type LogGroupStatus string
 
+// SampleTarget is the line count a full sample carries. The agent owns
+// the real accumulation; this is the canonical value the coordinator and
+// UIs use to report progress ("N/SampleTarget").
+const SampleTarget = 50
+
 const (
+	// StatusSampling: the agent has announced the source but is still
+	// accumulating toward a full sample. Not yet configurable.
+	StatusSampling   LogGroupStatus = "sampling"
 	StatusPending    LogGroupStatus = "pending"
 	StatusConfigured LogGroupStatus = "configured"
 )
@@ -74,6 +85,16 @@ type LogGroup struct {
 	Deployment   string `gorm:"column:deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.) — pending only
 	Sample       string // JSON array of raw sample lines; cleared on configure
 	Detection    string // JSON-encoded ingest.Detection; cleared on configure
+	// SampleCollected is the accumulation progress (lines so far) while
+	// Status == StatusSampling, so the UI/CLI can report
+	// "<source> hasn't emitted enough lines to sample yet (N/50)".
+	SampleCollected int
+	// ResampleRequestedAt is set when a user asks for a fresh sample of
+	// an already-configured source. The row stays StatusConfigured and
+	// keeps ingesting on its current schema; the agent re-samples
+	// concurrently and the fresh sample lands in Sample/Detection. The
+	// coordinator clears this on the final (non-partial) resample submit.
+	ResampleRequestedAt *time.Time
 }
 
 // FindOrCreateAWSAccount returns the AWS-account registration, creating or
@@ -292,27 +313,44 @@ func (s *Store) AppNames() ([]string, error) {
 // BOTH pending and configured in the UI.
 
 // UpsertPendingLogGroup records the most recent sample + detection from a
-// weftd agent for (namespace_id, app). If a configured row already exists
-// for that key, this is a no-op — the schema is already approved and the
-// sample is stale. If a pending row exists, instance/host_group/sample/
-// detection are refreshed. Otherwise a new pending row is inserted.
-func (s *Store) UpsertPendingLogGroup(namespaceID uint, app, instance, deployment, sampleJSON, detectionJSON string) error {
+// weftd agent for (namespace_id, app). collected is the running line count;
+// partial=true means the agent is still accumulating (a progress ping),
+// partial=false is the final, complete sample.
+//
+// State transitions:
+//   - No row: insert. partial → StatusSampling (still accumulating, not
+//     yet configurable); final → StatusPending (ready for human review).
+//   - StatusSampling/StatusPending row: refresh sample/detection/progress;
+//     partial keeps it StatusSampling, final promotes to StatusPending.
+//   - StatusConfigured row WITH a pending resample: the fresh sample lands
+//     in sample/detection but the row stays configured and keeps ingesting
+//     on its current schema. The final submit clears the resample flag,
+//     making the new sample available for review.
+//   - StatusConfigured row WITHOUT a resample: no-op. The schema is
+//     approved and this sample is stale; preserving this invariant is what
+//     stops a source appearing as both pending and configured.
+func (s *Store) UpsertPendingLogGroup(namespaceID uint, app, instance, deployment, sampleJSON, detectionJSON string, collected int, partial bool) error {
+	status := StatusPending
+	if partial {
+		status = StatusSampling
+	}
 	var lg LogGroup
 	err := s.db.Where("namespace_id = ? AND app = ?", namespaceID, app).First(&lg).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		lg = LogGroup{
-			NamespaceID:  namespaceID,
-			App:          app,
-			Status:       StatusPending,
-			SourceType:   SourceTypeWeftd,
-			LogGroupName: app,
-			Region:       "local",
-			PollInterval: "0s",
-			Enabled:      true,
-			Instance:     instance,
-			Deployment:   deployment,
-			Sample:       sampleJSON,
-			Detection:    detectionJSON,
+			NamespaceID:     namespaceID,
+			App:             app,
+			Status:          status,
+			SourceType:      SourceTypeWeftd,
+			LogGroupName:    app,
+			Region:          "local",
+			PollInterval:    "0s",
+			Enabled:         true,
+			Instance:        instance,
+			Deployment:      deployment,
+			Sample:          sampleJSON,
+			Detection:       detectionJSON,
+			SampleCollected: collected,
 		}
 		return s.db.Create(&lg).Error
 	}
@@ -320,13 +358,31 @@ func (s *Store) UpsertPendingLogGroup(namespaceID uint, app, instance, deploymen
 		return err
 	}
 	if lg.Status == StatusConfigured {
-		return nil
+		if lg.ResampleRequestedAt == nil {
+			return nil // stale sample, schema already approved
+		}
+		// Resample in flight: refresh the fresh sample without
+		// disturbing status/schema (ingestion continues). The final
+		// submit clears the flag so the new sample surfaces for review.
+		updates := map[string]any{
+			"instance":         instance,
+			"deployment":       deployment,
+			"sample":           sampleJSON,
+			"detection":        detectionJSON,
+			"sample_collected": collected,
+		}
+		if !partial {
+			updates["resample_requested_at"] = nil
+		}
+		return s.db.Model(&lg).Updates(updates).Error
 	}
 	return s.db.Model(&lg).Updates(map[string]any{
-		"instance":   instance,
-		"deployment": deployment,
-		"sample":     sampleJSON,
-		"detection":  detectionJSON,
+		"status":           status,
+		"instance":         instance,
+		"deployment":       deployment,
+		"sample":           sampleJSON,
+		"detection":        detectionJSON,
+		"sample_collected": collected,
 	}).Error
 }
 
@@ -336,8 +392,8 @@ func (s *Store) UpsertPendingLogGroup(namespaceID uint, app, instance, deploymen
 // table directly).
 func (s *Store) GetPendingLogGroup(namespaceID uint, app string) (*LogGroup, error) {
 	var lg LogGroup
-	err := s.db.Where("namespace_id = ? AND app = ? AND status = ?",
-		namespaceID, app, StatusPending).First(&lg).Error
+	err := s.db.Where("namespace_id = ? AND app = ? AND status IN ?",
+		namespaceID, app, []LogGroupStatus{StatusSampling, StatusPending}).First(&lg).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
@@ -360,7 +416,8 @@ func (s *Store) ListPendingLogGroups(customerID uint, namespace string) ([]LogGr
 		        namespaces.name as namespace_name`).
 		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
 		Joins("JOIN customers ON namespaces.customer_id = customers.id").
-		Where("log_groups.status = ? AND customers.id = ?", StatusPending, customerID)
+		Where("log_groups.status IN ? AND customers.id = ?",
+			[]LogGroupStatus{StatusSampling, StatusPending}, customerID)
 	if namespace != "" {
 		q = q.Where("namespaces.name = ?", namespace)
 	}
@@ -368,19 +425,28 @@ func (s *Store) ListPendingLogGroups(customerID uint, namespace string) ([]LogGr
 	return results, err
 }
 
-// ConfigureLogGroup flips a pending row to configured. Sample/detection
-// are cleared (they're payload-heavy and no longer needed); instance and
-// host_group are preserved as provenance breadcrumbs. Returns
-// gorm.ErrRecordNotFound if no pending row matches.
+// ConfigureLogGroup applies a schema to a source and marks it configured.
+// It serves two cases:
+//   - a pending source being configured for the first time, and
+//   - an already-configured source whose schema is being swapped after a
+//     resample (the row stayed configured and kept ingesting; this is the
+//     non-disruptive switchover to the new schema).
+//
+// Sample/detection and any resample flag/progress are cleared; instance
+// and deployment are preserved as provenance. A StatusSampling row is not
+// matched — it has no full sample yet, so there's nothing to configure.
+// Returns gorm.ErrRecordNotFound if no eligible row matches.
 func (s *Store) ConfigureLogGroup(namespaceID uint, app, schemaYAML string) error {
 	res := s.db.Model(&LogGroup{}).
-		Where("namespace_id = ? AND app = ? AND status = ?",
-			namespaceID, app, StatusPending).
+		Where("namespace_id = ? AND app = ? AND status IN ?",
+			namespaceID, app, []LogGroupStatus{StatusPending, StatusConfigured}).
 		Updates(map[string]any{
-			"status":      StatusConfigured,
-			"schema_yaml": schemaYAML,
-			"sample":      nil,
-			"detection":   nil,
+			"status":                StatusConfigured,
+			"schema_yaml":           schemaYAML,
+			"sample":                nil,
+			"detection":             nil,
+			"sample_collected":      0,
+			"resample_requested_at": nil,
 		})
 	if res.Error != nil {
 		return res.Error
@@ -389,4 +455,51 @@ func (s *Store) ConfigureLogGroup(namespaceID uint, app, schemaYAML string) erro
 		return gorm.ErrRecordNotFound
 	}
 	return nil
+}
+
+// RequestResample marks a configured source for a fresh sample. The row
+// stays configured and keeps ingesting on its current schema; the agent
+// picks up the flag on its next status poll, re-samples concurrently with
+// its tailer, and resubmits. Returns gorm.ErrRecordNotFound if no
+// configured row matches (only configured sources can be resampled — a
+// pending/sampling source is already producing a fresh sample).
+func (s *Store) RequestResample(namespaceID uint, app string) error {
+	now := time.Now()
+	res := s.db.Model(&LogGroup{}).
+		Where("namespace_id = ? AND app = ? AND status = ?",
+			namespaceID, app, StatusConfigured).
+		Update("resample_requested_at", now)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+// FindLogGroup returns the single log_groups row for (customer, namespace,
+// app) regardless of status, or nil if none exists. Used by the
+// view-schema and resample endpoints, which need the row (and its
+// namespace id / status / schema) before acting.
+func (s *Store) FindLogGroup(customerID uint, namespace, app string) (*LogGroupWithAWSAccount, error) {
+	fullApp := namespace + "/" + app
+	var lg LogGroupWithAWSAccount
+	err := s.db.
+		Table("log_groups").
+		Select(`log_groups.*,
+		        customers.name as customer_name,
+		        namespaces.name as namespace_name`).
+		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
+		Joins("JOIN customers ON namespaces.customer_id = customers.id").
+		Where("customers.id = ? AND namespaces.name = ? AND log_groups.app = ?",
+			customerID, namespace, fullApp).
+		First(&lg).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &lg, nil
 }

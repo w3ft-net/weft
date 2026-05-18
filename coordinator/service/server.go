@@ -964,15 +964,21 @@ func (s *Server) authenticateToken(token string) (*store.AgentAuthResult, error)
 	return auth, nil
 }
 
-// SubmitSample receives sample log lines from weftd for a new source.
+// SubmitSample receives sample log lines from weftd for a source. A partial
+// submit is a progress ping while the agent is still accumulating (the
+// source surfaces as "sampling (N/target)"); the final non-partial submit
+// carries the complete sample and makes the source configurable.
 func (s *Server) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest) (*pb.SubmitSampleResponse, error) {
 	auth, err := s.authenticateToken(req.Token)
 	if err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "%v", err)
 	}
 
-	if req.App == "" || len(req.Lines) == 0 {
-		return nil, status.Errorf(codes.InvalidArgument, "app and lines required")
+	if req.App == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "app required")
+	}
+	if !req.Partial && len(req.Lines) == 0 {
+		return nil, status.Errorf(codes.InvalidArgument, "lines required for a final sample")
 	}
 
 	detection := ingest.Detect(req.Lines)
@@ -988,12 +994,17 @@ func (s *Server) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest) (*
 		ns.ID, fullApp,
 		req.Instance, req.Deployment,
 		string(sampleJSON), string(detectionJSON),
+		len(req.Lines), req.Partial,
 	); err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}
 
-	log.Printf("sample: customer=%s namespace=%s app=%s lines=%d", auth.Customer.Name, auth.Namespace, req.App, len(req.Lines))
-	return &pb.SubmitSampleResponse{Status: "pending"}, nil
+	respStatus := "pending"
+	if req.Partial {
+		respStatus = "sampling"
+	}
+	log.Printf("sample: customer=%s namespace=%s app=%s lines=%d partial=%t", auth.Customer.Name, auth.Namespace, req.App, len(req.Lines), req.Partial)
+	return &pb.SubmitSampleResponse{Status: respStatus}, nil
 }
 
 // GetSourceStatus returns the configuration status of a source.
@@ -1007,35 +1018,38 @@ func (s *Server) GetSourceStatus(_ context.Context, req *pb.GetSourceStatusReque
 		return nil, status.Errorf(codes.InvalidArgument, "app required")
 	}
 
-	// Check if fully configured.
-	configured, schemaYAML, err := s.Store.SourceIsConfigured(auth.Customer.Name, auth.Namespace, req.App)
+	lg, err := s.Store.FindLogGroup(auth.Customer.ID, auth.Namespace, req.App)
 	if err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}
-	if configured {
-		sum := sha256.Sum256([]byte(schemaYAML))
+	if lg == nil {
+		return &pb.GetSourceStatusResponse{Status: "unknown"}, nil
+	}
+
+	switch lg.Status {
+	case store.StatusConfigured:
+		sum := sha256.Sum256([]byte(lg.SchemaYAML))
 		return &pb.GetSourceStatusResponse{
-			Status:     "configured",
-			SchemaYaml: schemaYAML,
-			SchemaHash: hex.EncodeToString(sum[:]),
+			Status:            "configured",
+			SchemaYaml:        lg.SchemaYAML,
+			SchemaHash:        hex.EncodeToString(sum[:]),
+			ResampleRequested: lg.ResampleRequestedAt != nil,
 		}, nil
+	case store.StatusSampling:
+		return &pb.GetSourceStatusResponse{
+			Status:          "sampling",
+			SampleCollected: int32(lg.SampleCollected),
+			SampleTarget:    store.SampleTarget,
+		}, nil
+	case store.StatusPending:
+		return &pb.GetSourceStatusResponse{
+			Status:          "pending",
+			SampleCollected: int32(lg.SampleCollected),
+			SampleTarget:    store.SampleTarget,
+		}, nil
+	default:
+		return &pb.GetSourceStatusResponse{Status: "unknown"}, nil
 	}
-
-	// Check if pending.
-	ns, err := s.Store.GetNamespace(auth.Customer.ID, auth.Namespace)
-	if err != nil {
-		return nil, fmt.Errorf("namespace: %w", err)
-	}
-	fullApp := auth.Namespace + "/" + req.App
-	pending, err := s.Store.GetPendingLogGroup(ns.ID, fullApp)
-	if err != nil {
-		return nil, fmt.Errorf("store: %w", err)
-	}
-	if pending != nil {
-		return &pb.GetSourceStatusResponse{Status: "pending"}, nil
-	}
-
-	return &pb.GetSourceStatusResponse{Status: "unknown"}, nil
 }
 
 func (s *Server) ForceArchiveShard(_ context.Context, req *pb.ForceArchiveShardRequest) (*pb.ForceArchiveShardResponse, error) {
@@ -1057,4 +1071,3 @@ func (s *Server) DeleteArchivedShard(_ context.Context, req *pb.DeleteArchivedSh
 	}
 	return &pb.DeleteArchivedShardResponse{}, nil
 }
-

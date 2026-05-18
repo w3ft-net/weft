@@ -16,10 +16,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/weft/internal/timerange"
 	"github.com/kevlarcon/weft/cmd/weft/runner"
 	"github.com/kevlarcon/weft/cmd/weft/setup"
 	"github.com/kevlarcon/weft/ingest"
+	"github.com/kevlarcon/weft/internal/timerange"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/shell"
@@ -665,6 +665,82 @@ func runSourceConfigure(cfg *shell.Config) {
 	fmt.Printf("Source %s/%s configured.\n", namespace, app)
 }
 
+// runSourceResample asks the agent for a fresh sample of an
+// already-configured source. Ingestion keeps running on the current
+// schema; the new sample shows up for review once the agent has
+// accumulated a full one.
+func runSourceResample(cfg *shell.Config) {
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "usage: weft source resample <namespace>/<app>")
+		os.Exit(1)
+	}
+	endpoint := cfg.Endpoint
+	if !strings.HasPrefix(endpoint, "http") {
+		fmt.Fprintln(os.Stderr, "source resample requires HTTP endpoint")
+		os.Exit(1)
+	}
+	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token, effectiveOrg(cfg))
+
+	parts := strings.SplitN(os.Args[3], "/", 2)
+	if len(parts) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: weft source resample <namespace>/<app>")
+		os.Exit(1)
+	}
+	namespace, app := parts[0], parts[1]
+
+	if err := remote.ResampleSource(namespace, app); err != nil {
+		fmt.Fprintf(os.Stderr, "resample: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Resample requested for %s/%s. The agent will collect a fresh sample; ingestion continues on the current schema meanwhile.\n", namespace, app)
+	fmt.Printf("Track progress with: weft source schema %s/%s\n", namespace, app)
+}
+
+// runSourceSchema prints the live schema for a configured source, or — if
+// the source is still accumulating — how far along the sample is.
+func runSourceSchema(cfg *shell.Config) {
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "usage: weft source schema <namespace>/<app>")
+		os.Exit(1)
+	}
+	endpoint := cfg.Endpoint
+	if !strings.HasPrefix(endpoint, "http") {
+		fmt.Fprintln(os.Stderr, "source schema requires HTTP endpoint")
+		os.Exit(1)
+	}
+	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token, effectiveOrg(cfg))
+
+	parts := strings.SplitN(os.Args[3], "/", 2)
+	if len(parts) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: weft source schema <namespace>/<app>")
+		os.Exit(1)
+	}
+	namespace, app := parts[0], parts[1]
+
+	sch, err := remote.GetSourceSchema(namespace, app)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "schema: %v\n", err)
+		os.Exit(1)
+	}
+
+	switch sch.Status {
+	case "configured":
+		if sch.ResampleRequested {
+			fmt.Fprintf(os.Stderr, "# resample in progress: %d/%d lines collected\n", sch.SampleCollected, sch.SampleTarget)
+		}
+		fmt.Print(sch.SchemaYAML)
+		if !strings.HasSuffix(sch.SchemaYAML, "\n") {
+			fmt.Println()
+		}
+	case "sampling":
+		fmt.Printf("%s/%s hasn't emitted enough lines to sample yet (%d/%d).\n",
+			namespace, app, sch.SampleCollected, sch.SampleTarget)
+	default: // pending
+		fmt.Printf("%s/%s has a sample awaiting configuration (%d/%d lines). Configure it with: weft source configure %s/%s\n",
+			namespace, app, sch.SampleCollected, sch.SampleTarget, namespace, app)
+	}
+}
+
 func dimText(s string) string {
 	return "\033[90m" + s + "\033[0m"
 }
@@ -795,7 +871,7 @@ func runIngest() {
 
 func runSource() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: weft source {add|list|remove|pending|configure}")
+		fmt.Fprintln(os.Stderr, "usage: weft source {add|list|remove|pending|configure|resample|schema}")
 		os.Exit(1)
 	}
 
@@ -821,6 +897,10 @@ func runSource() {
 		runSourcePending(cfg)
 	case "configure":
 		runSourceConfigure(cfg)
+	case "resample":
+		runSourceResample(cfg)
+	case "schema":
+		runSourceSchema(cfg)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown source command: %s\n", os.Args[2])
 		os.Exit(1)

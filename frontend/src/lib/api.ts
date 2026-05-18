@@ -597,6 +597,11 @@ export interface PendingSource {
   sample: string[]
   detection: SourceDetection
   created_at: string
+  // "sampling" = still accumulating (not yet configurable); "pending" =
+  // full sample, ready to configure.
+  status: 'sampling' | 'pending'
+  sample_collected: number
+  sample_target: number
 }
 
 export interface ConfigureSourceRequest {
@@ -679,6 +684,37 @@ export async function listSources(namespace?: string): Promise<SourceInfo[]> {
     : '/api/sources'
   const resp = await apiFetch<SourceInfo[] | null>(path)
   return resp || []
+}
+
+// SourceSchema is the GET /api/sources/{ns}/{app}/schema response. For a
+// configured source, schema_yaml carries the live schema (viewable at any
+// time). For a still-sampling source, sample_collected/sample_target
+// report progress so the UI can say "not enough lines yet (N/target)".
+export interface SourceSchema {
+  status: 'configured' | 'sampling' | 'pending'
+  schema_yaml?: string
+  schema_hash?: string
+  resample_requested?: boolean
+  sample_collected?: number
+  sample_target?: number
+}
+
+export function getSourceSchema(namespace: string, app: string): Promise<SourceSchema> {
+  const sub = app.startsWith(namespace + '/') ? app.slice(namespace.length + 1) : app
+  return apiFetch<SourceSchema>(
+    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(sub)}/schema`,
+  )
+}
+
+// resampleSource asks the agent for a fresh sample of an already-configured
+// source. Ingestion continues on the current schema; the fresh sample
+// appears for review once the agent finishes accumulating.
+export function resampleSource(namespace: string, app: string): Promise<void> {
+  const sub = app.startsWith(namespace + '/') ? app.slice(namespace.length + 1) : app
+  return apiFetch(
+    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(sub)}/resample`,
+    { method: 'POST' },
+  )
 }
 
 export function deleteSource(namespace: string, app: string): Promise<void> {

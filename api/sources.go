@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
@@ -12,6 +14,7 @@ import (
 	"github.com/kevlarcon/weft/auth"
 	"github.com/kevlarcon/weft/ingest"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/store"
 )
 
 // ── Agent-facing endpoints (token-authenticated) ───────────
@@ -31,13 +34,18 @@ func (s *Server) handleAgentSample(w http.ResponseWriter, r *http.Request) {
 		Instance   string   `json:"instance"`
 		Deployment string   `json:"deployment"`
 		Lines      []string `json:"lines"`
+		Partial    bool     `json:"partial"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if req.App == "" || len(req.Lines) == 0 {
-		http.Error(w, "app and lines required", http.StatusBadRequest)
+	if req.App == "" {
+		http.Error(w, "app required", http.StatusBadRequest)
+		return
+	}
+	if !req.Partial && len(req.Lines) == 0 {
+		http.Error(w, "lines required for a final sample", http.StatusBadRequest)
 		return
 	}
 
@@ -56,13 +64,18 @@ func (s *Server) handleAgentSample(w http.ResponseWriter, r *http.Request) {
 		ns.ID, fullApp,
 		req.Instance, req.Deployment,
 		string(sampleJSON), string(detectionJSON),
+		len(req.Lines), req.Partial,
 	); err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	respStatus := "pending"
+	if req.Partial {
+		respStatus = "sampling"
+	}
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "pending"})
+	json.NewEncoder(w).Encode(map[string]string{"status": respStatus})
 }
 
 // handleAgentSourceStatus returns the configuration status of a source.
@@ -76,42 +89,39 @@ func (s *Server) handleAgentSourceStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Check if fully configured (has a schema in log_groups).
-	configured, schemaYAML, err := s.store.SourceIsConfigured(agent.CustomerName, agent.Namespace, app)
+	lg, err := s.store.FindLogGroup(agent.CustomerID, agent.Namespace, app)
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if configured {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"status": "configured",
-			"schema": schemaYAML,
-		})
-		return
-	}
-
-	// Check if pending (sample submitted, awaiting review).
-	ns, err := s.store.GetNamespace(agent.CustomerID, agent.Namespace)
-	if err != nil {
-		http.Error(w, "namespace not found", http.StatusNotFound)
-		return
-	}
-	fullApp := agent.Namespace + "/" + app
-	pending, err := s.store.GetPendingLogGroup(ns.ID, fullApp)
-	if err != nil {
-		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if pending != nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "pending"})
-		return
-	}
-
-	// Unknown source.
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "unknown"})
+	if lg == nil {
+		json.NewEncoder(w).Encode(map[string]any{"status": "unknown"})
+		return
+	}
+
+	switch lg.Status {
+	case store.StatusConfigured:
+		json.NewEncoder(w).Encode(map[string]any{
+			"status":             "configured",
+			"schema":             lg.SchemaYAML,
+			"resample_requested": lg.ResampleRequestedAt != nil,
+		})
+	case store.StatusSampling:
+		json.NewEncoder(w).Encode(map[string]any{
+			"status":           "sampling",
+			"sample_collected": lg.SampleCollected,
+			"sample_target":    store.SampleTarget,
+		})
+	case store.StatusPending:
+		json.NewEncoder(w).Encode(map[string]any{
+			"status":           "pending",
+			"sample_collected": lg.SampleCollected,
+			"sample_target":    store.SampleTarget,
+		})
+	default:
+		json.NewEncoder(w).Encode(map[string]any{"status": "unknown"})
+	}
 }
 
 // ── Dashboard/CLI endpoints (JWT-authenticated) ────────────
@@ -142,6 +152,12 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 		Sample     json.RawMessage `json:"sample"`
 		Detection  json.RawMessage `json:"detection"`
 		CreatedAt  string          `json:"created_at"`
+		// Status is "sampling" (still accumulating) or "pending" (full
+		// sample, ready to configure). SampleCollected/SampleTarget let
+		// the UI show "hasn't emitted enough lines yet (N/target)".
+		Status          string `json:"status"`
+		SampleCollected int    `json:"sample_collected"`
+		SampleTarget    int    `json:"sample_target"`
 	}
 
 	resp := make([]pendingResp, 0, len(sources))
@@ -149,14 +165,25 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 		// Strip the namespace prefix so the response keeps the same
 		// short-form app shape the frontend and weftd agents consume.
 		shortApp := strings.TrimPrefix(lg.App, lg.NamespaceName+"/")
+		sample := lg.Sample
+		if sample == "" {
+			sample = "[]"
+		}
+		detection := lg.Detection
+		if detection == "" {
+			detection = "null"
+		}
 		resp = append(resp, pendingResp{
-			App:        shortApp,
-			Namespace:  lg.NamespaceName,
-			Instance:   lg.Instance,
-			Deployment: lg.Deployment,
-			Sample:     json.RawMessage(lg.Sample),
-			Detection:  json.RawMessage(lg.Detection),
-			CreatedAt:  lg.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			App:             shortApp,
+			Namespace:       lg.NamespaceName,
+			Instance:        lg.Instance,
+			Deployment:      lg.Deployment,
+			Sample:          json.RawMessage(sample),
+			Detection:       json.RawMessage(detection),
+			CreatedAt:       lg.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			Status:          string(lg.Status),
+			SampleCollected: lg.SampleCollected,
+			SampleTarget:    store.SampleTarget,
 		})
 	}
 
@@ -189,15 +216,22 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fullApp := namespace + "/" + app
-	// Verify the pending row exists for this namespace.
-	pending, err := s.store.GetPendingLogGroup(ns.ID, fullApp)
+	// A source is configurable when it's pending (first-time config) or
+	// already configured (swapping schema after a resample — the row
+	// stayed configured and kept ingesting). A still-sampling source has
+	// no full sample yet, so it can't be configured.
+	lg, err := s.store.FindLogGroup(customer.ID, namespace, app)
 	if err != nil {
-		log.Printf("configure source %s/%s: GetPendingLogGroup: %v", namespace, app, err)
+		log.Printf("configure source %s/%s: FindLogGroup: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if pending == nil {
-		http.Error(w, "no pending source found", http.StatusNotFound)
+	if lg == nil {
+		http.Error(w, "no source found", http.StatusNotFound)
+		return
+	}
+	if lg.Status == store.StatusSampling {
+		http.Error(w, "source is still sampling — not enough lines to configure yet", http.StatusConflict)
 		return
 	}
 
@@ -460,6 +494,111 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleResampleSource asks the agent for a fresh sample of an
+// already-configured source. POST /api/sources/{namespace}/{app}/resample
+//
+// The source stays configured and keeps ingesting on its current schema;
+// the agent picks up the flag on its next status poll and re-samples
+// concurrently with its tailer. The fresh sample becomes available for
+// review (and the source re-appears in the pending list) once the agent
+// finishes accumulating.
+func (s *Server) handleResampleSource(w http.ResponseWriter, r *http.Request) {
+	session := GetSession(r)
+
+	namespace := r.PathValue("namespace")
+	app := r.PathValue("app")
+	if namespace == "" || app == "" {
+		http.Error(w, "namespace and app required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.authorizeSourceEdit(session, namespace); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+
+	ns, err := s.store.GetNamespace(session.ActiveCustomerID, namespace)
+	if err != nil {
+		http.Error(w, "namespace not found", http.StatusNotFound)
+		return
+	}
+
+	fullApp := namespace + "/" + app
+	if err := s.store.RequestResample(ns.ID, fullApp); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			http.Error(w, "source is not configured — nothing to resample", http.StatusConflict)
+			return
+		}
+		log.Printf("resample source %s/%s: RequestResample: %v", namespace, app, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "resample_requested"})
+}
+
+// handleSourceSchema returns the current schema (and resample/sampling
+// state) for a source. GET /api/sources/{namespace}/{app}/schema
+//
+// Configured sources return the live schema YAML so it can be viewed at
+// any time. A still-sampling source returns its progress so callers can
+// say "<source> hasn't emitted enough lines to sample yet (N/target)".
+func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
+	session := GetSession(r)
+
+	namespace := r.PathValue("namespace")
+	app := r.PathValue("app")
+	if namespace == "" || app == "" {
+		http.Error(w, "namespace and app required", http.StatusBadRequest)
+		return
+	}
+
+	lg, err := s.store.FindLogGroup(session.ActiveCustomerID, namespace, app)
+	if err != nil {
+		log.Printf("source schema %s/%s: FindLogGroup: %v", namespace, app, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if lg == nil {
+		http.Error(w, "no source found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	switch lg.Status {
+	case store.StatusConfigured:
+		sum := sha256.Sum256([]byte(lg.SchemaYAML))
+		resp := map[string]any{
+			"status":             "configured",
+			"schema_yaml":        lg.SchemaYAML,
+			"schema_hash":        hex.EncodeToString(sum[:]),
+			"resample_requested": lg.ResampleRequestedAt != nil,
+		}
+		// While a resample is in flight the source keeps ingesting on
+		// its current schema; surface accumulation progress so the UI
+		// can show "resample in progress (N/target)".
+		if lg.ResampleRequestedAt != nil {
+			resp["sample_collected"] = lg.SampleCollected
+			resp["sample_target"] = store.SampleTarget
+		}
+		json.NewEncoder(w).Encode(resp)
+	case store.StatusSampling:
+		json.NewEncoder(w).Encode(map[string]any{
+			"status":           "sampling",
+			"sample_collected": lg.SampleCollected,
+			"sample_target":    store.SampleTarget,
+		})
+	default: // pending
+		json.NewEncoder(w).Encode(map[string]any{
+			"status":           "pending",
+			"sample_collected": lg.SampleCollected,
+			"sample_target":    store.SampleTarget,
+			"detection":        json.RawMessage(lg.Detection),
+		})
+	}
 }
 
 // authorizeSourceEdit enforces the same rule as token creation: owners pass

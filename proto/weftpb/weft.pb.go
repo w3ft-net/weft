@@ -4167,12 +4167,17 @@ func (x *ShardHealth) GetLastWrite() string {
 }
 
 type SubmitSampleRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`           // agent token (wft_...) for auth
-	App           string                 `protobuf:"bytes,2,opt,name=app,proto3" json:"app,omitempty"`               // bare app name within namespace
-	Instance      string                 `protobuf:"bytes,3,opt,name=instance,proto3" json:"instance,omitempty"`     // hostname of agent
-	Deployment    string                 `protobuf:"bytes,4,opt,name=deployment,proto3" json:"deployment,omitempty"` // fleet/scaling-unit (was host_group)
-	Lines         []string               `protobuf:"bytes,5,rep,name=lines,proto3" json:"lines,omitempty"`           // sample log lines
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Token      string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`           // agent token (wft_...) for auth
+	App        string                 `protobuf:"bytes,2,opt,name=app,proto3" json:"app,omitempty"`               // bare app name within namespace
+	Instance   string                 `protobuf:"bytes,3,opt,name=instance,proto3" json:"instance,omitempty"`     // hostname of agent
+	Deployment string                 `protobuf:"bytes,4,opt,name=deployment,proto3" json:"deployment,omitempty"` // fleet/scaling-unit (was host_group)
+	Lines      []string               `protobuf:"bytes,5,rep,name=lines,proto3" json:"lines,omitempty"`           // sample log lines
+	// partial=true is a progress ping sent while the agent is still
+	// accumulating toward the full sample target; the source stays in
+	// "sampling" state and is not yet configurable. The agent sends one
+	// final submit with partial=false once it has the full sample.
+	Partial       bool `protobuf:"varint,6,opt,name=partial,proto3" json:"partial,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4242,9 +4247,16 @@ func (x *SubmitSampleRequest) GetLines() []string {
 	return nil
 }
 
+func (x *SubmitSampleRequest) GetPartial() bool {
+	if x != nil {
+		return x.Partial
+	}
+	return false
+}
+
 type SubmitSampleResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Status        string                 `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"` // "pending"
+	Status        string                 `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"` // "sampling", "pending"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4340,15 +4352,26 @@ func (x *GetSourceStatusRequest) GetApp() string {
 
 type GetSourceStatusResponse struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
-	Status     string                 `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`                           // "unknown", "pending", "configured"
+	Status     string                 `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`                           // "unknown", "sampling", "pending", "configured"
 	SchemaYaml string                 `protobuf:"bytes,2,opt,name=schema_yaml,json=schemaYaml,proto3" json:"schema_yaml,omitempty"` // populated when status = "configured"
 	// schema_hash is the SHA-256 (hex) of the schema_yaml bytes.
 	// Agents poll GetSourceStatus on a 60s ticker after onboarding;
 	// an unchanged hash means no parser-rebuild is needed. Empty for
 	// status != "configured".
-	SchemaHash    string `protobuf:"bytes,3,opt,name=schema_hash,json=schemaHash,proto3" json:"schema_hash,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	SchemaHash string `protobuf:"bytes,3,opt,name=schema_hash,json=schemaHash,proto3" json:"schema_hash,omitempty"`
+	// resample_requested is set when a user has asked for a fresh sample
+	// of an already-configured source. The agent re-runs the sampler
+	// concurrently with its tailer (ingestion is not interrupted) and
+	// resubmits via SubmitSample; the server clears the flag on the
+	// final (non-partial) submit.
+	ResampleRequested bool `protobuf:"varint,4,opt,name=resample_requested,json=resampleRequested,proto3" json:"resample_requested,omitempty"`
+	// sample_collected / sample_target report accumulation progress while
+	// status == "sampling", so callers can surface
+	// "<source> hasn't emitted enough lines to sample yet (N/50)".
+	SampleCollected int32 `protobuf:"varint,5,opt,name=sample_collected,json=sampleCollected,proto3" json:"sample_collected,omitempty"`
+	SampleTarget    int32 `protobuf:"varint,6,opt,name=sample_target,json=sampleTarget,proto3" json:"sample_target,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *GetSourceStatusResponse) Reset() {
@@ -4400,6 +4423,27 @@ func (x *GetSourceStatusResponse) GetSchemaHash() string {
 		return x.SchemaHash
 	}
 	return ""
+}
+
+func (x *GetSourceStatusResponse) GetResampleRequested() bool {
+	if x != nil {
+		return x.ResampleRequested
+	}
+	return false
+}
+
+func (x *GetSourceStatusResponse) GetSampleCollected() int32 {
+	if x != nil {
+		return x.SampleCollected
+	}
+	return 0
+}
+
+func (x *GetSourceStatusResponse) GetSampleTarget() int32 {
+	if x != nil {
+		return x.SampleTarget
+	}
+	return 0
 }
 
 type ForceArchiveShardRequest struct {
@@ -4858,7 +4902,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
 	"disk_bytes\x18\x05 \x01(\x03R\tdiskBytes\x12\x1d\n" +
 	"\n" +
-	"last_write\x18\x06 \x01(\tR\tlastWrite\"\x8f\x01\n" +
+	"last_write\x18\x06 \x01(\tR\tlastWrite\"\xa9\x01\n" +
 	"\x13SubmitSampleRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x10\n" +
 	"\x03app\x18\x02 \x01(\tR\x03app\x12\x1a\n" +
@@ -4866,18 +4910,22 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
 	"deployment\x18\x04 \x01(\tR\n" +
 	"deployment\x12\x14\n" +
-	"\x05lines\x18\x05 \x03(\tR\x05lines\".\n" +
+	"\x05lines\x18\x05 \x03(\tR\x05lines\x12\x18\n" +
+	"\apartial\x18\x06 \x01(\bR\apartial\".\n" +
 	"\x14SubmitSampleResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\"@\n" +
 	"\x16GetSourceStatusRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x10\n" +
-	"\x03app\x18\x02 \x01(\tR\x03app\"s\n" +
+	"\x03app\x18\x02 \x01(\tR\x03app\"\xf2\x01\n" +
 	"\x17GetSourceStatusResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x1f\n" +
 	"\vschema_yaml\x18\x02 \x01(\tR\n" +
 	"schemaYaml\x12\x1f\n" +
 	"\vschema_hash\x18\x03 \x01(\tR\n" +
-	"schemaHash\"5\n" +
+	"schemaHash\x12-\n" +
+	"\x12resample_requested\x18\x04 \x01(\bR\x11resampleRequested\x12)\n" +
+	"\x10sample_collected\x18\x05 \x01(\x05R\x0fsampleCollected\x12#\n" +
+	"\rsample_target\x18\x06 \x01(\x05R\fsampleTarget\"5\n" +
 	"\x18ForceArchiveShardRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\"\x1b\n" +
 	"\x19ForceArchiveShardResponse\"M\n" +

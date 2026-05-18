@@ -40,8 +40,8 @@ const unverifiedSweepInterval = 1 * time.Hour
 type Server struct {
 	store     *store.Store
 	jwtSecret string
-	coordAddr string // coordinator gRPC address
-	baseURL   string // e.g., https://w3ft.net
+	coordAddr string       // coordinator gRPC address
+	baseURL   string       // e.g., https://w3ft.net
 	email     *EmailConfig // nil = dev mode (log links)
 
 	// Coordinator gRPC client (connected lazily via Connect).
@@ -290,6 +290,8 @@ func (s *Server) Handler() http.Handler {
 	// Source onboarding (dashboard-authenticated).
 	auth.HandleFunc("GET /api/sources/pending", s.handlePendingSources)
 	auth.Handle("POST /api/sources/{namespace}/{app}/configure", protected(s.handleConfigureSource))
+	auth.Handle("POST /api/sources/{namespace}/{app}/resample", protected(s.handleResampleSource))
+	auth.HandleFunc("GET /api/sources/{namespace}/{app}/schema", s.handleSourceSchema)
 
 	// CloudWatch source management (dashboard-authenticated).
 	auth.HandleFunc("GET /api/sources", s.handleListSources)
@@ -776,10 +778,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// lesson. onboarding_action is the suggested command; the
 		// web shell injects it into the input so the user can just
 		// hit enter.
-		"is_superadmin":              user.IsSuperadmin,
-		"onboarding_prompt":          onboarding.PromptFor(user.OnboardingStep),
-		"onboarding_action":          onboarding.ActionFor(user.OnboardingStep),
-		"pending_graduation_notice":  pendingGraduation,
+		"is_superadmin":             user.IsSuperadmin,
+		"onboarding_prompt":         onboarding.PromptFor(user.OnboardingStep),
+		"onboarding_action":         onboarding.ActionFor(user.OnboardingStep),
+		"pending_graduation_notice": pendingGraduation,
 	}
 	if user.EmailVerifiedAt == nil {
 		resp["verification_deadline"] = user.CreatedAt.Add(auth.UnverifiedGracePeriod).Unix()
@@ -873,8 +875,8 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	params := &stripe.SubscriptionParams{
-		Customer: stripe.String(custID),
-		Items:    items,
+		Customer:        stripe.String(custID),
+		Items:           items,
 		TrialPeriodDays: stripe.Int64(14),
 		PaymentBehavior: stripe.String("default_incomplete"),
 		PaymentSettings: &stripe.SubscriptionPaymentSettingsParams{
@@ -1143,7 +1145,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	result := map[string]any{
 		"bytes_ingested":          resp.BytesIngested,
 		"tier_limit_bytes":        store.VolumeAllowance(tier),
-		"period_start":             resp.PeriodStart,
+		"period_start":            resp.PeriodStart,
 		"period_end":              resp.PeriodEnd,
 		"tier":                    tier,
 		"projected_overage_cents": projectedOverageCents(resp.BytesIngested, tier),
@@ -1153,8 +1155,8 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	if cust, err := s.store.GetCustomerByName(session.ActiveCustomerName); err == nil {
 		if forecast, err := s.store.ForecastMetricsUsage(cust.ID); err == nil && forecast.AgentsWithMetrics > 0 {
 			result["metrics_forecast"] = map[string]any{
-				"agents_with_metrics":     forecast.AgentsWithMetrics,
-				"projected_bytes_month":   forecast.ProjectedBytesMonth,
+				"agents_with_metrics":   forecast.AgentsWithMetrics,
+				"projected_bytes_month": forecast.ProjectedBytesMonth,
 			}
 		}
 	}
@@ -1770,8 +1772,8 @@ func (s *Server) handleInviteTeamMember(w http.ResponseWriter, r *http.Request) 
 		Status:     "pending",
 		InvitedBy:  session.UserID,
 		InvitedAt:  time.Now(),
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
 	}
 	if err := s.store.CreateTeamMember(member); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
