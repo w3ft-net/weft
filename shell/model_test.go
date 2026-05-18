@@ -72,7 +72,7 @@ func TestQueryDispatch(t *testing.T) {
 		[]string{"test"}, 80, 24,
 		func(b []byte) { buf.Write(b) },
 		func(a shellcore.Action) {
-			if q, ok := a.(shellcore.ActionQuery); ok {
+			if q, ok := a.(shellcore.ActionExec); ok {
 				dispatched = q.Pipeline
 			}
 		},

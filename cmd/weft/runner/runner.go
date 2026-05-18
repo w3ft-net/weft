@@ -150,7 +150,7 @@ type runner struct {
 
 func (r *runner) handleAction(a shellcore.Action) {
 	switch a := a.(type) {
-	case shellcore.ActionQuery:
+	case shellcore.ActionExec:
 		go r.runQuery(a.Pipeline)
 	case shellcore.ActionFollow:
 		go r.runFollow(a.Pipeline)
@@ -174,7 +174,7 @@ func (r *runner) runQuery(pipeline string) {
 	// routes into ModeLess when the user typed the pager suffix.
 	result, err := r.shell.Query(pipeline, r.shell.Range)
 
-	ev := shellcore.QueryResultEvent{Err: err}
+	ev := shellcore.ExecResultEvent{Err: err}
 	if err == nil {
 		// Notices are prepended to the rendered output as a labeled
 		// block. They originate as one-time per-user system messages
@@ -189,7 +189,7 @@ func (r *runner) runQuery(pipeline string) {
 		}
 		if result.Text == "" && len(result.Rows) > 0 {
 			for _, row := range result.Rows {
-				ev.Rows = append(ev.Rows, shellcore.OutputRow{Raw: row.Raw})
+				ev.Rows = append(ev.Rows, shellcore.ResultRow{Raw: row.Raw})
 			}
 			// Notices alongside row-shaped output: prepend as a
 			// synthetic Text payload that renders before rows.
