@@ -87,7 +87,19 @@ func fsLs(s *shell.Shell) mcp.LsFunc {
 		if s.FS == nil {
 			return nil, fmt.Errorf("shell has no FS attached")
 		}
-		return s.FS.ReadDir(path)
+		entries, err := s.FS.ReadDir(path)
+		if err != nil {
+			return nil, err
+		}
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			n := e.Name()
+			if e.IsDir() {
+				n += "/"
+			}
+			names = append(names, n)
+		}
+		return names, nil
 	}
 }
 

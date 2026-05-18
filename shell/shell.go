@@ -470,7 +470,10 @@ func (s *Shell) execFSBuiltin(line string) (bool, string) {
 		}
 		var sb strings.Builder
 		for _, e := range entries {
-			sb.WriteString(e)
+			sb.WriteString(e.Name())
+			if e.IsDir() {
+				sb.WriteByte('/')
+			}
 			sb.WriteByte('\n')
 		}
 		return true, sb.String()

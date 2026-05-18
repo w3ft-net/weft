@@ -112,7 +112,7 @@ func (f *ShellFS) Stat(path string) (fs.FileInfo, error) {
 }
 
 func (f *ShellFS) ReadDir(path string) ([]fs.DirEntry, error) {
-	return f.mfs.ReadDirEntries(path)
+	return f.mfs.ReadDir(path)
 }
 
 func (f *ShellFS) Remove(path string) error {

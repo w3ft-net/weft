@@ -2,6 +2,7 @@ package shell
 
 import (
 	"bytes"
+	"io/fs"
 	"strings"
 	"testing"
 
@@ -108,10 +109,11 @@ type chartTestFS struct {
 	results []chart.WatchResultValue
 }
 
-func (f *chartTestFS) ReadFile(string) ([]byte, error)  { return nil, nil }
-func (f *chartTestFS) WriteFile(string, []byte) error   { return nil }
-func (f *chartTestFS) ReadDir(string) ([]string, error) { return nil, nil }
-func (f *chartTestFS) Remove(string) error              { return nil }
+func (f *chartTestFS) ReadFile(string) ([]byte, error)        { return nil, nil }
+func (f *chartTestFS) WriteFile(string, []byte) error         { return nil }
+func (f *chartTestFS) ReadDir(string) ([]fs.DirEntry, error)  { return nil, nil }
+func (f *chartTestFS) Stat(string) (fs.FileInfo, error)       { return nil, fs.ErrNotExist }
+func (f *chartTestFS) Remove(string) error                    { return nil }
 func (f *chartTestFS) GetWatchResults(string, int) ([]chart.WatchResultValue, error) {
 	return f.results, nil
 }

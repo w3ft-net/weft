@@ -135,9 +135,7 @@ func (p *ProxyFS) ListDashboards() ([]string, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		n := e
-		n = strings.TrimSuffix(n, ".yaml")
-		names = append(names, n)
+		names = append(names, strings.TrimSuffix(e.Name(), ".yaml"))
 	}
 	return names, nil
 }

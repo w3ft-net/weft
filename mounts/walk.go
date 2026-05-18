@@ -29,12 +29,11 @@ func Walk(cfg Config, p string) ([]string, error) {
 		if err != nil {
 			return
 		}
-		for _, n := range names {
-			isDir := strings.HasSuffix(n, "/")
-			clean := strings.TrimSuffix(n, "/")
+		for _, de := range names {
+			clean := de.Name()
 			childAbs := strings.TrimSuffix(abs, "/") + "/" + clean
 			rel := strings.TrimPrefix(strings.TrimPrefix(childAbs, prefix), "/")
-			if isDir {
+			if de.IsDir() {
 				out = append(out, rel+"/")
 				rec(childAbs)
 			} else {

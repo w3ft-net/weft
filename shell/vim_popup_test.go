@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"io/fs"
 	"strings"
 	"testing"
 
@@ -33,8 +34,9 @@ func (f *stubPopupFS) WriteFile(p string, d []byte) error {
 	return nil
 }
 
-func (f *stubPopupFS) ReadDir(p string) ([]string, error) { return nil, nil }
-func (f *stubPopupFS) Remove(p string) error              { return nil }
+func (f *stubPopupFS) ReadDir(p string) ([]fs.DirEntry, error) { return nil, nil }
+func (f *stubPopupFS) Stat(p string) (fs.FileInfo, error)      { return nil, fs.ErrNotExist }
+func (f *stubPopupFS) Remove(p string) error                   { return nil }
 
 func (f *stubPopupFS) AmendVersionMessage(path, message string) error {
 	f.amendCalls = append(f.amendCalls, amendCall{path, message})
