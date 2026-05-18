@@ -338,7 +338,7 @@ func main() {
 
 		if src.Unit != "" {
 			go func() {
-				if err := onboardAndRun(ctx, coordClient, cfg.Token, customer, app, src.Path, hostname, fullApp, func() {
+				if err := onboardAndRun(ctx, coordClient, cfg.Token, customer, app, src.Path, src.Unit, hostname, fullApp, func() {
 					runJournalTailer(ctx, coordClient, customer, hostname, fullApp, src.Unit)
 				}); err != nil {
 					log.Printf("[%s] onboard failed: %v", fullApp, err)
@@ -352,7 +352,7 @@ func main() {
 			} else {
 				// Single file: onboard once, then tail.
 				go func() {
-					if err := onboardAndRun(ctx, coordClient, cfg.Token, customer, app, src.Path, hostname, fullApp, func() {
+					if err := onboardAndRun(ctx, coordClient, cfg.Token, customer, app, src.Path, "", hostname, fullApp, func() {
 						runFileTailer(ctx, coordClient, customer, hostname, fullApp, src.Path)
 					}); err != nil {
 						log.Printf("[%s] onboard failed: %v", fullApp, err)
@@ -401,7 +401,9 @@ func main() {
 // In both paths, when parseClientSide is on, the schema YAML returned by
 // the coordinator is compiled into a per-app parser and stashed in the
 // parserCache so the row-stamping hot path can use it.
-func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, customer, app, path, hostname, fullApp string, run func()) error {
+// unit is non-empty for journald sources (which have no file path); path is
+// non-empty for file sources. Exactly one is set.
+func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, customer, app, path, unit, hostname, fullApp string, run func()) error {
 	// Check if already configured.
 	st, err := weftd.CheckSourceStatus(ctx, client, token, app)
 	if err != nil {
@@ -413,9 +415,16 @@ func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 		return nil
 	}
 
-	// Submit sample.
-	log.Printf("[%s] new source — sampling %s", fullApp, path)
-	if err := weftd.SubmitSample(ctx, client, token, app, path, hostname, globalDeployment); err != nil {
+	// Submit sample — from the unit's journal for journald sources, from
+	// the file otherwise.
+	if unit != "" {
+		log.Printf("[%s] new source — sampling unit %s", fullApp, unit)
+		err = weftd.SubmitUnitSample(ctx, client, token, app, unit, hostname, globalDeployment)
+	} else {
+		log.Printf("[%s] new source — sampling %s", fullApp, path)
+		err = weftd.SubmitSample(ctx, client, token, app, path, hostname, globalDeployment)
+	}
+	if err != nil {
 		return err
 	}
 	log.Printf("[%s] sample submitted — waiting for configuration", fullApp)
@@ -802,7 +811,7 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, cust
 		app := appFromPath(pattern, p)
 		fullApp := namespace + "/" + app + "/" + kind
 		go func() {
-			if err := onboardAndRun(ctx, client, token, customer, app, p, instance, fullApp, func() {
+			if err := onboardAndRun(ctx, client, token, customer, app, p, "", instance, fullApp, func() {
 				runFileTailer(ctx, client, customer, instance, fullApp, p)
 			}); err != nil {
 				log.Printf("[%s] onboard failed: %v", fullApp, err)
