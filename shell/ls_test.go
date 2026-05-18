@@ -80,7 +80,7 @@ func TestLsIsNotAQuery(t *testing.T) {
 		[]string{"vimgym"}, 80, 24,
 		func(b []byte) { buf.Write(b) },
 		func(a shellcore.Action) {
-			if _, ok := a.(shellcore.ActionQuery); ok {
+			if _, ok := a.(shellcore.ActionExec); ok {
 				queryDispatched = true
 			}
 		},
@@ -132,7 +132,7 @@ func TestLsWithoutFS(t *testing.T) {
 		[]string{"vimgym"}, 80, 24,
 		func(b []byte) { buf.Write(b) },
 		func(a shellcore.Action) {
-			if _, ok := a.(shellcore.ActionQuery); ok {
+			if _, ok := a.(shellcore.ActionExec); ok {
 				queryDispatched = true
 			}
 		},

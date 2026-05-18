@@ -150,7 +150,7 @@ func readCustomer(cb js.Value) string {
 }
 
 // handleWeftAction dispatches shellcore Actions warp's bridge doesn't
-// own. ActionQuery / ActionFollow / ActionCancel / ActionVimSave /
+// own. ActionExec / ActionFollow / ActionCancel / ActionVimSave /
 // ActionQuit are dispatched by warp directly and never reach here.
 func handleWeftAction(a shellcore.Action) bool {
 	switch a := a.(type) {
