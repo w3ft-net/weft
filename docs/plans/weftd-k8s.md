@@ -56,7 +56,7 @@ Most of weftd works as-is. The four k8s-derived dimensions (`cluster`, `k8s_name
 ```yaml
 # values.yaml
 weftd:
-  endpoint: w3ft.net:443
+  endpoint: ingest.w3ft.net:9020
   token: wft_a1b2c3...
   hostGroup: ""                      # optional, for multi-cluster setups
   metrics:

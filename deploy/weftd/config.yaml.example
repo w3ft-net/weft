@@ -11,7 +11,7 @@
 # (AWS-shaped credential chain) — use that if a secret injector supplies
 # the token out of band; otherwise just set token: here.
 
-endpoint: w3ft.net:443
+endpoint: ingest.w3ft.net:9020
 token: wft_REPLACE_ME
 
 # Optional host-wide dimensions stamped on every row.
