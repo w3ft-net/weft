@@ -2,9 +2,59 @@
 2026-04-16 10:00:02 INFO connected to postgres
 2026-04-16 10:00:03 INFO listening on :8080
 2026-04-16 10:00:04 INFO worker pool=4 started
-2026-04-16 10:00:05 WARN cache miss key=user:1234
+2026-04-16 10:00:05 WARN cache miss key=user:1187
 2026-04-16 10:00:06 INFO request user=alice path=/projects
 2026-04-16 10:00:07 ERROR failed to write: connection reset
 2026-04-16 10:00:08 INFO retry succeeded attempt=2
 2026-04-16 10:00:09 INFO request user=bob path=/dashboard
-2026-04-16 10:00:10 INFO shutdown signal received
+2026-04-16 10:00:10 INFO request user=carol path=/settings
+2026-04-16 10:00:11 WARN slow query 1.4s table=projects
+2026-04-16 10:00:12 INFO job scheduled id=j-3518
+2026-04-16 10:00:13 INFO cache warm complete entries=615
+2026-04-16 10:00:14 ERROR upstream 502 service=billing
+2026-04-16 10:00:15 INFO healthcheck ok
+2026-04-16 10:00:16 INFO app starting up version=1.2.3
+2026-04-16 10:00:17 INFO connected to postgres
+2026-04-16 10:00:18 INFO listening on :8080
+2026-04-16 10:00:19 INFO worker pool=4 started
+2026-04-16 10:00:20 WARN cache miss key=user:9029
+2026-04-16 10:00:21 INFO request user=alice path=/projects
+2026-04-16 10:00:22 ERROR failed to write: connection reset
+2026-04-16 10:00:23 INFO retry succeeded attempt=2
+2026-04-16 10:00:24 INFO request user=bob path=/dashboard
+2026-04-16 10:00:25 INFO request user=carol path=/settings
+2026-04-16 10:00:26 WARN slow query 1.4s table=projects
+2026-04-16 10:00:27 INFO job scheduled id=j-1014
+2026-04-16 10:00:28 INFO cache warm complete entries=9456
+2026-04-16 10:00:29 ERROR upstream 502 service=billing
+2026-04-16 10:00:30 INFO healthcheck ok
+2026-04-16 10:00:31 INFO app starting up version=1.2.3
+2026-04-16 10:00:32 INFO connected to postgres
+2026-04-16 10:00:33 INFO listening on :8080
+2026-04-16 10:00:34 INFO worker pool=4 started
+2026-04-16 10:00:35 WARN cache miss key=user:2182
+2026-04-16 10:00:36 INFO request user=alice path=/projects
+2026-04-16 10:00:37 ERROR failed to write: connection reset
+2026-04-16 10:00:38 INFO retry succeeded attempt=2
+2026-04-16 10:00:39 INFO request user=bob path=/dashboard
+2026-04-16 10:00:40 INFO request user=carol path=/settings
+2026-04-16 10:00:41 WARN slow query 1.4s table=projects
+2026-04-16 10:00:42 INFO job scheduled id=j-5055
+2026-04-16 10:00:43 INFO cache warm complete entries=9180
+2026-04-16 10:00:44 ERROR upstream 502 service=billing
+2026-04-16 10:00:45 INFO healthcheck ok
+2026-04-16 10:00:46 INFO app starting up version=1.2.3
+2026-04-16 10:00:47 INFO connected to postgres
+2026-04-16 10:00:48 INFO listening on :8080
+2026-04-16 10:00:49 INFO worker pool=4 started
+2026-04-16 10:00:50 WARN cache miss key=user:1597
+2026-04-16 10:00:51 INFO request user=alice path=/projects
+2026-04-16 10:00:52 ERROR failed to write: connection reset
+2026-04-16 10:00:53 INFO retry succeeded attempt=2
+2026-04-16 10:00:54 INFO request user=bob path=/dashboard
+2026-04-16 10:00:55 INFO request user=carol path=/settings
+2026-04-16 10:00:56 WARN slow query 1.4s table=projects
+2026-04-16 10:00:57 INFO job scheduled id=j-8712
+2026-04-16 10:00:58 INFO cache warm complete entries=7006
+2026-04-16 10:00:59 ERROR upstream 502 service=billing
+2026-04-16 10:01:00 INFO healthcheck ok
