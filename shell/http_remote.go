@@ -328,7 +328,9 @@ func (h *HTTPCoordinator) CreateToken(customer, label, namespace, env string) (s
 		msg, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 	}
-	var result struct{ Token string `json:"token"` }
+	var result struct {
+		Token string `json:"token"`
+	}
 	json.NewDecoder(resp.Body).Decode(&result)
 	return result.Token, nil
 }
@@ -582,6 +584,61 @@ func (h *HTTPCoordinator) ListSources() ([]SourceInfo, error) {
 func (h *HTTPCoordinator) RemoveSource(namespace, app string) error {
 	url := fmt.Sprintf("%s/api/sources/%s/%s", h.baseURL, namespace, app)
 	req, _ := http.NewRequest("DELETE", url, nil)
+	h.setAuthHeaders(req)
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		msg, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
+
+// SourceSchema is the GET /api/sources/{ns}/{app}/schema response. Which
+// fields are populated depends on Status: "configured" carries the live
+// SchemaYAML; "sampling" (and an in-flight resample) carries the
+// SampleCollected/SampleTarget progress.
+type SourceSchema struct {
+	Status            string `json:"status"`
+	SchemaYAML        string `json:"schema_yaml"`
+	SchemaHash        string `json:"schema_hash"`
+	ResampleRequested bool   `json:"resample_requested"`
+	SampleCollected   int    `json:"sample_collected"`
+	SampleTarget      int    `json:"sample_target"`
+}
+
+// GetSourceSchema fetches the current schema / sampling state for a source.
+func (h *HTTPCoordinator) GetSourceSchema(namespace, app string) (*SourceSchema, error) {
+	url := fmt.Sprintf("%s/api/sources/%s/%s/schema", h.baseURL, namespace, app)
+	req, _ := http.NewRequest("GET", url, nil)
+	h.setAuthHeaders(req)
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		msg, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var sch SourceSchema
+	if err := json.NewDecoder(resp.Body).Decode(&sch); err != nil {
+		return nil, err
+	}
+	return &sch, nil
+}
+
+// ResampleSource asks the agent for a fresh sample of an already-configured
+// source. Ingestion is not interrupted; the fresh sample becomes available
+// for review once the agent finishes accumulating.
+func (h *HTTPCoordinator) ResampleSource(namespace, app string) error {
+	url := fmt.Sprintf("%s/api/sources/%s/%s/resample", h.baseURL, namespace, app)
+	req, _ := http.NewRequest("POST", url, nil)
 	h.setAuthHeaders(req)
 
 	resp, err := h.client.Do(req)

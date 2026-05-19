@@ -54,6 +54,24 @@ message IngestAck {
 
 Authentication: the agent includes its token in gRPC metadata on connection. The coordinator maps the token to a customer and validates the app name.
 
+## Onboarding & sampling
+
+A source is not ingested until a human has reviewed a sample and approved a schema for it. The lifecycle is **sampling → pending → configured**:
+
+1. **Sampling.** When weftd starts a source the coordinator doesn't recognize, the agent collects a sample. It does **not** stop at the first line it sees — it accumulates until it has a full sample (`SampleTarget`, currently 50 non-empty lines), reading existing content and then *following* the source (file tail / `journalctl -f`) for the rest. A quiet source blocks here by design rather than submitting a one-line sample that's useless for deriving a schema. While accumulating, the agent ships throttled `partial` progress submits so the source surfaces in the UI/CLI as `sampling` with an `N/target` count — checking it reports `<source> hasn't emitted enough lines to sample yet (12/50)` instead of stalling invisibly.
+
+2. **Pending.** Once the full sample is collected the agent makes one final (non-partial) submit. The coordinator runs schema auto-detection over it and the source becomes `pending` — visible in the onboarding UI and via `weft source pending`, awaiting a human to confirm a schema.
+
+3. **Configured.** A human approves a schema (`weft source configure <ns/app>` or the dashboard). The agent, which has been polling `GetSourceStatus` on a 60s ticker, picks up the schema, compiles it locally, and starts the tailer (see *Agent behavior* below).
+
+### Resampling a configured source
+
+If the originally-derived schema turns out wrong (e.g. the first sample was unrepresentative), a fresh sample can be requested at any time via `weft source resample <ns/app>`, the **Resample** button in the dashboard, or `POST /api/sources/{ns}/{app}/resample`.
+
+Resampling **does not interrupt ingestion**: the source stays `configured` and keeps streaming on its current schema. The agent notices the resample flag on its next status poll and re-runs the sampler *concurrently* with the live tailer (guarded so a quiet source doesn't stack repeated attempts). When the fresh sample completes it becomes available for review; reconfiguring then swaps the schema in place — there is no window where the source stops ingesting.
+
+The current schema for any configured source can be viewed at any time with `weft source schema <ns/app>`, the dashboard's **View schema** disclosure, or `GET /api/sources/{ns}/{app}/schema`.
+
 ## Configuration
 
 Local file, designed to be managed by Terraform/Ansible/Chef:

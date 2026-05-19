@@ -622,10 +622,15 @@ message SubmitSampleRequest {
   string instance = 3;          // hostname of agent
   string deployment = 4;        // fleet/scaling-unit (was host_group)
   repeated string lines = 5;    // sample log lines
+  // partial=true is a progress ping sent while the agent is still
+  // accumulating toward the full sample target; the source stays in
+  // "sampling" state and is not yet configurable. The agent sends one
+  // final submit with partial=false once it has the full sample.
+  bool partial = 6;
 }
 
 message SubmitSampleResponse {
-  string status = 1; // "pending"
+  string status = 1; // "sampling", "pending"
 }
 
 message GetSourceStatusRequest {
@@ -634,13 +639,24 @@ message GetSourceStatusRequest {
 }
 
 message GetSourceStatusResponse {
-  string status = 1;       // "unknown", "pending", "configured"
+  string status = 1;       // "unknown", "sampling", "pending", "configured"
   string schema_yaml = 2;  // populated when status = "configured"
   // schema_hash is the SHA-256 (hex) of the schema_yaml bytes.
   // Agents poll GetSourceStatus on a 60s ticker after onboarding;
   // an unchanged hash means no parser-rebuild is needed. Empty for
   // status != "configured".
   string schema_hash = 3;
+  // resample_requested is set when a user has asked for a fresh sample
+  // of an already-configured source. The agent re-runs the sampler
+  // concurrently with its tailer (ingestion is not interrupted) and
+  // resubmits via SubmitSample; the server clears the flag on the
+  // final (non-partial) submit.
+  bool resample_requested = 4;
+  // sample_collected / sample_target report accumulation progress while
+  // status == "sampling", so callers can surface
+  // "<source> hasn't emitted enough lines to sample yet (N/50)".
+  int32 sample_collected = 5;
+  int32 sample_target = 6;
 }
 
 // ── Admin RPCs ──────────────────────────────────────────────────────

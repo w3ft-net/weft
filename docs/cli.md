@@ -107,6 +107,16 @@ All of these can be piped through awk/sed/jq/grep/sort/uniq/wc. The query planne
 - `schema [app]` — show detected schema for an app
 - `exit` / `ctrl-d` — quit
 
+### Source onboarding (`weft source …`)
+
+Top-level subcommands (not in-shell) for managing weftd/CloudWatch sources. See `docs/ingestion-weftd.md` for the sampling → pending → configured lifecycle.
+
+- `weft source pending [--namespace N]` — list sources awaiting configuration. A source still accumulating its sample shows as `sampling` with an `N/target` count.
+- `weft source configure <ns/app>` — review the sample and approve a schema (interactive). Also used to swap the schema after a resample — the source keeps ingesting until the new schema is approved.
+- `weft source schema <ns/app>` — print the live schema for a configured source. For a source still sampling, prints `<source> hasn't emitted enough lines to sample yet (N/target)` instead.
+- `weft source resample <ns/app>` — request a fresh sample of an already-configured source. Ingestion continues on the current schema while the agent re-samples; the new sample appears for review when it's ready.
+- `weft source {add|list|remove}` — CloudWatch source management.
+
 ## Open questions
 
 - Prompt format: `weft>`, `weft(vimgym,callbox)>`, something else?

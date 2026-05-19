@@ -232,3 +232,37 @@
 .csl-remove:hover {
   color: #e55;
 }
+
+/* Allow the schema panel to wrap onto its own full-width line below the
+   row's main content + actions. */
+.csl-row {
+  flex-wrap: wrap;
+}
+
+.csl-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.csl-schema-panel {
+  flex-basis: 100%;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+
+.csl-schema-yaml {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+}

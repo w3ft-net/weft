@@ -168,32 +168,30 @@ func TestGlob_MultiDirPatternFindsStartupFiles(t *testing.T) {
 	}
 }
 
-// TestGlob_EmptyFileNeverOnboards — onboardAndRun → SubmitSample reads
-// the first N lines of the file. If the file exists but is empty (and
-// stays empty across SampleLines's 30s retry loop), SubmitSample
-// returns an error and watchGlob logs it without retrying. So an
-// empty-at-startup log file is invisible forever — unless weftd
-// restarts, at which point the file may have grown.
+// TestGlob_EmptyFileAnnouncedWhileSampling — the sampler accumulates a
+// full sample (SampleTarget lines) before a source is configurable, but
+// it does NOT go dark while doing so: it ships a `partial` progress
+// submit as soon as it starts, so even an empty-at-startup file (and a
+// low-volume one) surfaces immediately as `sampling (N/target)` rather
+// than being invisible until weftd restarts.
 //
-// This test DOESN'T repro that end-to-end (would take 30+s), but we
-// can assert the symptom: three files, one empty, the test
-// runWatchGlob deadline expires with only two samples recorded.
-func TestGlob_EmptyFileStallsOnboarding(t *testing.T) {
+// This is the fix for the old "1 line each / empty file never onboards"
+// behavior: previously SubmitSample only fired once the file had content
+// AND returned the first line it saw, so an empty file stalled silently
+// inside SampleLines's retry loop. Now all three files — including the
+// empty one — are announced promptly via a partial submit.
+func TestGlob_EmptyFileAnnouncedWhileSampling(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "api.log"), "line\n")
 	writeFile(t, filepath.Join(dir, "empty.log"), "") // zero bytes
 	writeFile(t, filepath.Join(dir, "worker.log"), "line\n")
 
 	got := runWatchGlob(t, filepath.Join(dir, "*.log"), 3)
-	// With our 2.5s wait, the two non-empty files should onboard; the
-	// empty file's SampleLines is still in its retry loop (30s total).
-	if contains(got, "empty") {
-		t.Errorf("unexpected: empty file onboarded within 2.5s window — our 30s retry might not be hitting")
+	for _, app := range []string{"api", "empty", "worker"} {
+		if !contains(got, app) {
+			t.Errorf("expected %q to be announced (partial sample) within the window; got %v", app, got)
+		}
 	}
-	if !contains(got, "api") || !contains(got, "worker") {
-		t.Errorf("expected api and worker to onboard; got %v", got)
-	}
-	t.Logf("empty-file stall confirmed: onboarded=%v (missing 'empty' because SampleLines is still waiting for content)", got)
 }
 
 func equalStrings(a, b []string) bool {

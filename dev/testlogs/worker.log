@@ -1,10 +1,60 @@
 2026-04-16 10:00:01 INFO worker pid=42 starting
-2026-04-16 10:00:02 INFO picked up job id=j-001 queue=default
-2026-04-16 10:00:03 INFO job j-001 completed duration=120ms
-2026-04-16 10:00:04 INFO picked up job id=j-002 queue=high
-2026-04-16 10:00:05 WARN job j-002 slow duration=5200ms
-2026-04-16 10:00:06 ERROR job j-003 failed: timeout after 30s
-2026-04-16 10:00:07 INFO retrying j-003 attempt=1
-2026-04-16 10:00:08 INFO job j-003 completed duration=210ms
-2026-04-16 10:00:09 INFO picked up job id=j-004 queue=default
+2026-04-16 10:00:02 INFO picked up job id=j-8135 queue=default
+2026-04-16 10:00:03 INFO job j-1321 completed duration=120ms
+2026-04-16 10:00:04 INFO picked up job id=j-2726 queue=high
+2026-04-16 10:00:05 WARN job j-7360 slow duration=5200ms
+2026-04-16 10:00:06 ERROR job j-6581 failed: timeout after 30s
+2026-04-16 10:00:07 INFO retrying j-9003 attempt=1
+2026-04-16 10:00:08 INFO job j-4553 completed duration=210ms
+2026-04-16 10:00:09 INFO picked up job id=j-2244 queue=default
 2026-04-16 10:00:10 INFO idle queue empty
+2026-04-16 10:00:11 INFO heartbeat ok inflight=9015
+2026-04-16 10:00:12 INFO worker pid=42 starting
+2026-04-16 10:00:13 INFO picked up job id=j-6805 queue=default
+2026-04-16 10:00:14 INFO job j-5879 completed duration=120ms
+2026-04-16 10:00:15 INFO picked up job id=j-6234 queue=high
+2026-04-16 10:00:16 WARN job j-3781 slow duration=5200ms
+2026-04-16 10:00:17 ERROR job j-2473 failed: timeout after 30s
+2026-04-16 10:00:18 INFO retrying j-1360 attempt=1
+2026-04-16 10:00:19 INFO job j-2888 completed duration=210ms
+2026-04-16 10:00:20 INFO picked up job id=j-2479 queue=default
+2026-04-16 10:00:21 INFO idle queue empty
+2026-04-16 10:00:22 INFO heartbeat ok inflight=3823
+2026-04-16 10:00:23 INFO worker pid=42 starting
+2026-04-16 10:00:24 INFO picked up job id=j-7946 queue=default
+2026-04-16 10:00:25 INFO job j-9653 completed duration=120ms
+2026-04-16 10:00:26 INFO picked up job id=j-2988 queue=high
+2026-04-16 10:00:27 WARN job j-4305 slow duration=5200ms
+2026-04-16 10:00:28 ERROR job j-4620 failed: timeout after 30s
+2026-04-16 10:00:29 INFO retrying j-68 attempt=1
+2026-04-16 10:00:30 INFO job j-2387 completed duration=210ms
+2026-04-16 10:00:31 INFO picked up job id=j-6865 queue=default
+2026-04-16 10:00:32 INFO idle queue empty
+2026-04-16 10:00:33 INFO heartbeat ok inflight=6050
+2026-04-16 10:00:34 INFO worker pid=42 starting
+2026-04-16 10:00:35 INFO picked up job id=j-9279 queue=default
+2026-04-16 10:00:36 INFO job j-5221 completed duration=120ms
+2026-04-16 10:00:37 INFO picked up job id=j-2057 queue=high
+2026-04-16 10:00:38 WARN job j-8446 slow duration=5200ms
+2026-04-16 10:00:39 ERROR job j-885 failed: timeout after 30s
+2026-04-16 10:00:40 INFO retrying j-7482 attempt=1
+2026-04-16 10:00:41 INFO job j-9164 completed duration=210ms
+2026-04-16 10:00:42 INFO picked up job id=j-6429 queue=default
+2026-04-16 10:00:43 INFO idle queue empty
+2026-04-16 10:00:44 INFO heartbeat ok inflight=6537
+2026-04-16 10:00:45 INFO worker pid=42 starting
+2026-04-16 10:00:46 INFO picked up job id=j-1697 queue=default
+2026-04-16 10:00:47 INFO job j-7890 completed duration=120ms
+2026-04-16 10:00:48 INFO picked up job id=j-6561 queue=high
+2026-04-16 10:00:49 WARN job j-1020 slow duration=5200ms
+2026-04-16 10:00:50 ERROR job j-3123 failed: timeout after 30s
+2026-04-16 10:00:51 INFO retrying j-1104 attempt=1
+2026-04-16 10:00:52 INFO job j-3421 completed duration=210ms
+2026-04-16 10:00:53 INFO picked up job id=j-7220 queue=default
+2026-04-16 10:00:54 INFO idle queue empty
+2026-04-16 10:00:55 INFO heartbeat ok inflight=1802
+2026-04-16 10:00:56 INFO worker pid=42 starting
+2026-04-16 10:00:57 INFO picked up job id=j-9843 queue=default
+2026-04-16 10:00:58 INFO job j-862 completed duration=120ms
+2026-04-16 10:00:59 INFO picked up job id=j-1678 queue=high
+2026-04-16 10:01:00 WARN job j-4 slow duration=5200ms

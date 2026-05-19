@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -59,6 +60,29 @@ var dimensionReaders = map[string]*weftd.FileValueReader{}
 // onboarding completes; consulted on the row-stamping path when
 // parseClientSide is enabled.
 var parserCache = weftd.NewParserCache()
+
+// resampleSource captures the inputs runSchemaRefresher needs to re-run
+// the sampler for an already-configured source when the coordinator
+// reports a pending resample. Registered by onboardAndRun (the one place
+// that knows a source's path/unit) and keyed by fullApp — the same key
+// the parser cache and refresher iterate.
+type resampleSource struct {
+	path     string // file source; empty for journald
+	unit     string // journald source; empty for file
+	instance string
+}
+
+var (
+	resampleMu      sync.Mutex
+	resampleSources = map[string]resampleSource{} // fullApp → sampler inputs
+	resampleActive  = map[string]bool{}           // fullApp → a resample goroutine is in flight
+)
+
+func registerResampleSource(fullApp string, rs resampleSource) {
+	resampleMu.Lock()
+	resampleSources[fullApp] = rs
+	resampleMu.Unlock()
+}
 
 // parseClientSide gates the schema-driven parsing path. Default-on as
 // of the rollout decision: lines pass through ingest.Parser to extract
@@ -404,6 +428,10 @@ func main() {
 // unit is non-empty for journald sources (which have no file path); path is
 // non-empty for file sources. Exactly one is set.
 func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, customer, app, path, unit, hostname, fullApp string, run func()) error {
+	// Record how to re-sample this source, so the schema refresher can
+	// honor a user-requested resample later without disturbing the tailer.
+	registerResampleSource(fullApp, resampleSource{path: path, unit: unit, instance: hostname})
+
 	// Check if already configured.
 	st, err := weftd.CheckSourceStatus(ctx, client, token, app)
 	if err != nil {
@@ -482,6 +510,9 @@ func runSchemaRefresher(ctx context.Context, client pb.WeftCoordinatorClient, to
 				log.Printf("[%s] schema refresh failed: %v", fullApp, err)
 				continue
 			}
+			if st.Status == "configured" && st.ResampleRequested {
+				startResample(ctx, client, token, bareApp, fullApp)
+			}
 			if st.Status != "configured" || st.SchemaYAML == "" {
 				continue
 			}
@@ -496,6 +527,44 @@ func runSchemaRefresher(ctx context.Context, client pb.WeftCoordinatorClient, to
 			log.Printf("[%s] schema updated (hash %s → %s)", fullApp, shortHash(cached), shortHash(st.SchemaHash))
 		}
 	}
+}
+
+// startResample re-runs the sampler for an already-configured source
+// when the user has asked for a fresh sample. The source's tailer keeps
+// running — ingestion is not interrupted. The in-flight guard prevents
+// stacking a new accumulation every refresh tick while a quiet source is
+// still filling its sample (which, by design, can take a while). The
+// coordinator clears the resample flag when the final sample lands, so
+// subsequent ticks stop triggering this.
+func startResample(ctx context.Context, client pb.WeftCoordinatorClient, token, bareApp, fullApp string) {
+	resampleMu.Lock()
+	rs, ok := resampleSources[fullApp]
+	if !ok || resampleActive[fullApp] {
+		resampleMu.Unlock()
+		return
+	}
+	resampleActive[fullApp] = true
+	resampleMu.Unlock()
+
+	log.Printf("[%s] resample requested — sampling concurrently with tailer", fullApp)
+	go func() {
+		defer func() {
+			resampleMu.Lock()
+			delete(resampleActive, fullApp)
+			resampleMu.Unlock()
+		}()
+		var err error
+		if rs.unit != "" {
+			err = weftd.SubmitUnitSample(ctx, client, token, bareApp, rs.unit, rs.instance, globalDeployment)
+		} else {
+			err = weftd.SubmitSample(ctx, client, token, bareApp, rs.path, rs.instance, globalDeployment)
+		}
+		if err != nil {
+			log.Printf("[%s] resample failed: %v", fullApp, err)
+			return
+		}
+		log.Printf("[%s] resample complete — fresh sample submitted for review", fullApp)
+	}()
 }
 
 // shortHash trims a sha256 hex digest down to 8 chars for log lines.
