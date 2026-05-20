@@ -14,10 +14,10 @@ import (
 	"github.com/kevlarcon/warp/pkg/bash"
 	luapkg "github.com/kevlarcon/warp/pkg/lua"
 	"github.com/kevlarcon/weft/compute"
+	"github.com/kevlarcon/weft/mounts"
 	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
-	"github.com/kevlarcon/weft/mounts"
 	"github.com/kevlarcon/weft/shellfs"
 	"github.com/kevlarcon/weft/store"
 )
@@ -140,17 +140,17 @@ func (r *ExecuteResult) Drain(ctx context.Context) (*DrainedResult, error) {
 // Provisioner (it needs to point at coord.Registry, so it can't be
 // passed in until the registry exists).
 type Coordinator struct {
-	Registry    *ShardRegistry
-	Pool        compute.ComputePool     // nil = no compute support
-	Tail        *TailBroker             // nil = no live-tail subscriptions
-	Ingest      *RingBuffer             // write path: IngestStream → buffer → shards; nil disables StartDrain
-	Provisioner *Provisioner            // shard lifecycle management (nil = no auto-provisioning); set post-construction
-	Usage       *CustomerUsageStats     // nil = no per-customer byte metering
-	Store       *store.Store            // nil = no tenant-scoped features (/bin, alert dispatch); test-only
-	SeenApps    *SeenApps               // ingest-stream app discovery; constructor always installs
-	DLQ         *DLQ                    // S3 dead-letter queue for failed ingests
-	Errors      *IngestionErrorRecorder // async error persistence
-	Notifier    NotifyDispatcher        // per-customer alert dispatcher (nil = disabled). Interface type so a nil value is true-nil — no typed-nil-via-concrete-pointer trap when callers thread it into AlertContext.
+	Registry          *ShardRegistry
+	Pool              compute.ComputePool     // nil = no compute support
+	Tail              *TailBroker             // nil = no live-tail subscriptions
+	Ingest            *RingBuffer             // write path: IngestStream → buffer → shards; nil disables StartDrain
+	Provisioner       *Provisioner            // shard lifecycle management (nil = no auto-provisioning); set post-construction
+	Usage             *CustomerUsageStats     // nil = no per-customer byte metering
+	Store             *store.Store            // nil = no tenant-scoped features (/bin, alert dispatch); test-only
+	SeenApps          *SeenApps               // ingest-stream app discovery; constructor always installs
+	DLQ               *DLQ                    // S3 dead-letter queue for failed ingests
+	Errors            *IngestionErrorRecorder // async error persistence
+	Notifier          NotifyDispatcher        // per-customer alert dispatcher (nil = disabled). Interface type so a nil value is true-nil — no typed-nil-via-concrete-pointer trap when callers thread it into AlertContext.
 	shardSecret       string
 	lambdaFunctionURL string
 	// ScriptExecutionTimeout caps how long a single runLocal invocation
@@ -1216,4 +1216,3 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 
 	return res, nil
 }
-

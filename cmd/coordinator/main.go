@@ -2,15 +2,12 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
-	"runtime"
 	"strings"
 	"syscall"
 
@@ -25,10 +22,9 @@ import (
 	"github.com/kevlarcon/weft/compute"
 	weftcfg "github.com/kevlarcon/weft/config"
 	"github.com/kevlarcon/weft/coordinator"
-	"github.com/kevlarcon/weft/internal/email"
-	"github.com/kevlarcon/weft/coordinator/discovery"
 	"github.com/kevlarcon/weft/coordinator/poller"
 	coordsvc "github.com/kevlarcon/weft/coordinator/service"
+	"github.com/kevlarcon/weft/internal/email"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
@@ -36,13 +32,10 @@ import (
 
 func main() {
 	port := flag.Int("port", 9020, "gRPC listen port")
-	healthPort := flag.Int("health-port", 9021, "HTTP health listen port")
-	shardsFlag := flag.String("shards", "", "comma-separated shard specs: id=addr=start=end,... (for Docker/dev)")
 	shardASGSmall := flag.String("shard-asg-small", "", "small tier shard ASG name")
 	shardASGMedium := flag.String("shard-asg-medium", "", "medium tier shard ASG name")
 	shardASGLarge := flag.String("shard-asg-large", "", "large tier shard ASG name")
 	computeAddr := flag.String("compute", "", "compute worker address (host:port)")
-	computeASG := flag.String("compute-asg", "", "compute ASG name for AWS discovery (production)")
 	awsRegion := flag.String("region", "us-east-2", "AWS region for ASG discovery")
 	customer := flag.String("customer", "", "fallback customer for dev/docker (queries pass customer per-request)")
 	dbDSN := flag.String("db-dsn", "", "PostgreSQL DSN (e.g., host=localhost dbname=weft user=weft password=...)")
@@ -67,15 +60,6 @@ func main() {
 		log.Println("WARNING: using default SHARD_SECRET — set SHARD_SECRET in production")
 	}
 
-	var shards []shard.Shard
-
-	// Shard setup: explicit specs, legacy single ASG, or tiered ASGs.
-	if *shardsFlag != "" {
-		shards = parseShardsFlag(*shardsFlag, shardSecret)
-	}
-	// Provisioner manages shard lifecycle. No startup discovery needed —
-	// shards are restored from postgres or bootstrapped by the provisioner.
-
 	// Compute pool setup.
 	var pool compute.ComputePool
 	if *computeAddr != "" {
@@ -85,26 +69,8 @@ func main() {
 		}
 		pool = p
 		log.Printf("connected to compute at %s", *computeAddr)
-	} else if *computeASG != "" {
-		disc, err := discovery.NewASGDiscovery(*awsRegion, *computeASG, 9010)
-		if err != nil {
-			log.Fatalf("init compute discovery: %v", err)
-		}
-		addrs, err := disc.DiscoverAddrs(context.Background())
-		if err != nil || len(addrs) == 0 {
-			log.Printf("no compute workers found, using local pool")
-			pool = &compute.LocalComputePool{}
-		} else {
-			p, err := compute.NewGRPCComputePool(addrs[0])
-			if err != nil {
-				log.Fatalf("connect to compute: %v", err)
-			}
-			pool = p
-			log.Printf("connected to compute at %s (from ASG)", addrs[0])
-		}
 	} else {
-		pool = &compute.LocalComputePool{}
-		log.Printf("using local compute pool")
+		log.Fatalf("no compute addr specified")
 	}
 
 	// Open the store before building the Coordinator so /bin lookup,
@@ -134,7 +100,6 @@ func main() {
 	notifier := coordinator.NewNotifier(db, email.ConfigFromEnv())
 
 	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{
-		Shards:            shards,
 		Pool:              pool,
 		Store:             db,
 		Notifier:          notifier,
@@ -325,28 +290,6 @@ func main() {
 		cronExec.Start(ctx)
 	}
 
-	// HTTP health endpoint with subsystem metrics for load testing.
-	go func() {
-		http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-			var mem runtime.MemStats
-			runtime.ReadMemStats(&mem)
-
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{
-				"status": "ok",
-				"shards": len(coord.GetShards()),
-				"system": map[string]any{
-					"goroutines":  runtime.NumGoroutine(),
-					"heap_mb":     mem.HeapAlloc / 1024 / 1024,
-					"heap_sys_mb": mem.HeapSys / 1024 / 1024,
-					"gc_cycles":   mem.NumGC,
-				},
-			})
-		})
-		log.Printf("coordinator health on :%d", *healthPort)
-		http.ListenAndServe(fmt.Sprintf(":%d", *healthPort), nil)
-	}()
-
 	// gRPC server with auth interceptors.
 	//
 	// JWT-gated RPCs carry the caller's bearer token in metadata; the
@@ -402,8 +345,6 @@ func main() {
 		Store:  db,
 		CfgPtr: cfgPtr,
 	})
-
-	log.Printf("coordinator listening on :%d (%d shards, customer=%s)", *port, len(shards), *customer)
 
 	wc, _ := weftsdk.New()
 	defer wc.Close()
@@ -492,23 +433,4 @@ func parsePositiveInt32(s string) (int32, bool) {
 		return 0, false
 	}
 	return v, true
-}
-
-func parseShardsFlag(flag, shardSecret string) []shard.Shard {
-	var shards []shard.Shard
-	for _, spec := range strings.Split(flag, ",") {
-		parts := strings.SplitN(spec, "=", 2)
-		if len(parts) != 2 {
-			log.Fatalf("invalid shard spec %q: expected id=addr", spec)
-		}
-		id, addr := parts[0], parts[1]
-
-		gs, err := shard.NewGRPCShard(id, addr, shardSecret)
-		if err != nil {
-			log.Fatalf("connect to shard %s at %s: %v", id, addr, err)
-		}
-		shards = append(shards, gs)
-		log.Printf("connected to shard %s at %s", id, addr)
-	}
-	return shards
 }
