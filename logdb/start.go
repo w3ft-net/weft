@@ -34,10 +34,6 @@ type Config struct {
 	// to shut the control plane down.
 	Ctx context.Context
 
-	// Registry is the in-memory shard state. Start hydrates it from
-	// DB and hands it to the Provisioner.
-	Registry *ShardRegistry
-
 	// DB is the postgres-backed shard store. Used for hydration,
 	// lifecycle persistence, app-bucket assignment, and the
 	// lifecycle handler's ShardOps.
@@ -70,20 +66,21 @@ type Config struct {
 // (drain stats, OnboardApp, ProcessHeartbeat, ForceArchive/Delete)
 // can reach it.
 func Start(cfg Config) (*Provisioner, error) {
-	// Hydrate the shard registry from postgres BEFORE constructing
+	// Hydrate the shard registry from postgres BEFORE handing it to
 	// the provisioner. The lifecycle handler's recognisedAsDead
 	// checks the registry to decide whether an orphan EBS volume
 	// should be recovered; an empty registry causes every volume to
 	// be abandoned, orphaning data on every deploy. The store-
 	// fallback in recognisedAsDead is defense in depth; populating
 	// the registry first is the primary fix.
-	cfg.Registry.SetStore(cfg.DB)
+	reg := NewShardRegistry()
+	reg.SetStore(cfg.DB)
 	lambdaURL := os.Getenv("LAMBDA_FUNCTION_URL")
 	reconstructCfg := ReconstructConfig{
 		ShardSecret:       cfg.ShardSecret,
 		LambdaFunctionURL: lambdaURL,
 	}
-	if err := cfg.Registry.LoadFromStore(func(rec store.ShardRecord) (shard.Shard, error) {
+	if err := reg.LoadFromStore(func(rec store.ShardRecord) (shard.Shard, error) {
 		return ReconstructShard(rec, reconstructCfg)
 	}); err != nil {
 		log.Printf("warning: load shards from store: %v", err)
@@ -92,14 +89,14 @@ func Start(cfg Config) (*Provisioner, error) {
 	}
 
 	if len(cfg.ShardTiers) > 0 {
-		return startProd(cfg, lambdaURL)
+		return startProd(cfg, reg, lambdaURL)
 	}
-	return startDev(cfg)
+	return startDev(cfg, reg)
 }
 
 // startProd wires the ASG launcher, provisioner, volume manager, and
 // (optionally) lifecycle poller for production deploys.
-func startProd(cfg Config, lambdaURL string) (*Provisioner, error) {
+func startProd(cfg Config, reg *ShardRegistry, lambdaURL string) (*Provisioner, error) {
 	asgLauncher, err := NewASGLauncher(cfg.AWSRegion, cfg.ShardTiers, 9000)
 	if err != nil {
 		// Non-fatal historically: dev environments without AWS creds
@@ -112,7 +109,7 @@ func startProd(cfg Config, lambdaURL string) (*Provisioner, error) {
 	provConfig.ShardSecret = cfg.ShardSecret
 	provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
 	provConfig.LambdaFunctionURL = lambdaURL
-	prov := NewProvisioner(cfg.Registry, asgLauncher, provConfig)
+	prov := NewProvisioner(reg, asgLauncher, provConfig)
 
 	// Attach a VolumeManager so christen() can tag EBS volumes with
 	// the minted shard id. Unavailable when the EC2 SDK can't load
@@ -141,7 +138,7 @@ func startProd(cfg Config, lambdaURL string) (*Provisioner, error) {
 			tierByASG[asgName] = tier
 		}
 		lcCfg := LifecycleHandlerConfig{
-			Registry:   cfg.Registry,
+			Registry:   reg,
 			TierByASG:  tierByASG,
 			SizeByTier: readTierSizes(),
 			DeviceName: os.Getenv("SHARD_VOLUME_DEVICE"),
@@ -163,12 +160,12 @@ func startProd(cfg Config, lambdaURL string) (*Provisioner, error) {
 // startDev wires the docker-based dev launcher and provisioner. Fatal
 // on missing required env (no in-process fallback in this branch — the
 // operator gets a precise error rather than silent data loss).
-func startDev(cfg Config) (*Provisioner, error) {
+func startDev(cfg Config, reg *ShardRegistry) (*Provisioner, error) {
 	launcher := buildDockerLauncher(cfg.ShardSecret)
 	provConfig := DevProvisionerConfig()
 	provConfig.ShardSecret = cfg.ShardSecret
 	provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
-	prov := NewProvisioner(cfg.Registry, launcher, provConfig)
+	prov := NewProvisioner(reg, launcher, provConfig)
 
 	prov.SetStore(cfg.DB)
 	prov.Buckets.SetStore(cfg.DB)

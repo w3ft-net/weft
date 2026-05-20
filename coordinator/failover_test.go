@@ -25,7 +25,7 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 	// Start with zero shards — simulates startup during ASG replacement
 	// when no shard instances are InService yet.
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
-	c.Pool = &registryPool{registry: c.Registry}
+	c.Pool = &registryPool{prov: c.Provisioner}
 
 	res, err := c.Execute("cat vimgym.log", failoverRange, "kevlar", "")
 	if err != nil {
@@ -46,7 +46,7 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c.Registry.Add(&logdb.ShardEntry{
+	c.Provisioner.Add(&logdb.ShardEntry{
 		ID: "shard-0", Apps: []string{"vimgym", "callbox"},
 		WindowStart: t0, WindowEnd: t1,
 		State: logdb.StateIngesting, Shard: s0,
@@ -78,8 +78,8 @@ func TestFailover_ShardReplacement(t *testing.T) {
 	}
 
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
-	c.Pool = &registryPool{registry: c.Registry}
-	c.Registry.Add(&logdb.ShardEntry{
+	c.Pool = &registryPool{prov: c.Provisioner}
+	c.Provisioner.Add(&logdb.ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: t0, WindowEnd: t1,
 		State: logdb.StateIngesting, Shard: s0,
@@ -105,7 +105,7 @@ func TestFailover_ShardReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c.Registry.Add(&logdb.ShardEntry{
+	c.Provisioner.Add(&logdb.ShardEntry{
 		ID: "shard-1", Apps: apps,
 		WindowStart: t1, WindowEnd: t2,
 		State: logdb.StateIngesting, Shard: s1,
@@ -136,8 +136,8 @@ func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
 
 	apps := []string{"vimgym", "callbox"}
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStoreReal(t, "kevlar", "vimgym", "callbox")})
-	c.Pool = &registryPool{registry: c.Registry}
-	c.Registry.Add(&logdb.ShardEntry{
+	c.Pool = &registryPool{prov: c.Provisioner}
+	c.Provisioner.Add(&logdb.ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: t0, WindowEnd: t1,
 		State: logdb.StateIngesting, Shard: s0,
@@ -199,7 +199,7 @@ func TestFailover_GetShardsSnapshot(t *testing.T) {
 	defer s0.Close()
 
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
-	c.Registry.Add(&logdb.ShardEntry{
+	c.Provisioner.Add(&logdb.ShardEntry{
 		ID: "shard-0", Apps: []string{"vimgym"},
 		WindowStart: t0, WindowEnd: t1,
 		State: logdb.StateIngesting, Shard: s0,

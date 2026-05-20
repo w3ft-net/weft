@@ -31,7 +31,7 @@ func (p *spyPool) NewJob(stages []string, shardCount int, mergeKey string, limit
 // through Pool.ExecuteQuery.
 func TestQuery_NoStages_RoutesThroughComputePool(t *testing.T) {
 	c := setupTestCoordinator(t)
-	pool := &spyPool{inner: &registryPool{registry: c.Registry}}
+	pool := &spyPool{inner: &registryPool{prov: c.Provisioner}}
 	c.Pool = pool
 
 	res, err := c.Execute(`cat vimgym.log`, fullRange, "kevlar", "")

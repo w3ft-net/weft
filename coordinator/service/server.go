@@ -618,7 +618,7 @@ func (s *Server) ingestBatch(rows []*pb.LogRow) {
 
 		// Check buffer pressure.
 		pct := s.Coord.Ingest.UsagePct()
-		if pct > 80 && s.Coord.Registry.TotalIngesting() == 0 {
+		if pct > 80 && s.Coord.Provisioner.TotalIngesting() == 0 {
 			log.Printf("CRITICAL: ring buffer at %d%% with no ingesting shards — data will be lost", pct)
 		}
 	} else {
@@ -923,7 +923,7 @@ func (s *Server) Heartbeat(ctx context.Context, req *pb.ShardHeartbeatRequest) (
 // validate against the persisted ShardRecord.
 func (s *Server) authenticateHeartbeat(ctx context.Context, shardID string) error {
 	expectedToken := ""
-	if entry := s.Coord.Registry.Get(shardID); entry != nil {
+	if entry := s.Coord.Provisioner.Get(shardID); entry != nil {
 		expectedToken = entry.HeartbeatToken
 	} else if s.Store != nil {
 		rec, ok, err := s.Store.GetShard(shardID)

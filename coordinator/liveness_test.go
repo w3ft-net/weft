@@ -10,7 +10,6 @@ import (
 	"github.com/kevlarcon/weft/logdb"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
-	"github.com/kevlarcon/weft/store"
 )
 
 // ---------------------------------------------------------------------------
@@ -102,22 +101,16 @@ func TestSuspend_OnIngestFailure(t *testing.T) {
 	shardA := &failingShard{id: "shard-a"}
 	shardB := &failingShard{id: "shard-b"}
 
-	reg := logdb.NewShardRegistry()
-	reg.Add(&logdb.ShardEntry{
+	c := NewCoordinator(CoordinatorConfig{Ingest: NewRingBuffer(1000)})
+	c.Provisioner.Add(&logdb.ShardEntry{
 		ID: "shard-a", State: logdb.StateIngesting, Shard: shardA, CreatedAt: time.Now(),
 	})
-	reg.Add(&logdb.ShardEntry{
+	c.Provisioner.Add(&logdb.ShardEntry{
 		ID: "shard-b", State: logdb.StateIngesting, Shard: shardB, CreatedAt: time.Now(),
 	})
 
 	// shard-a will fail.
 	shardA.setFailing(true)
-
-	c := &Coordinator{
-		Registry: reg,
-		Ingest:   NewRingBuffer(1000),
-		SeenApps: NewSeenApps(),
-	}
 
 	// Start drain first, then write multiple batches so round-robin
 	// hits both shards. Each batch is a separate ring buffer write.
@@ -133,13 +126,13 @@ func TestSuspend_OnIngestFailure(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	// shard-a should be suspended (it failed on at least one batch).
-	entryA := reg.Get("shard-a")
+	entryA := c.Provisioner.Get("shard-a")
 	if !entryA.Suspended {
 		t.Error("shard-a should be suspended after ingest failure")
 	}
 
 	// shard-b should NOT be suspended.
-	entryB := reg.Get("shard-b")
+	entryB := c.Provisioner.Get("shard-b")
 	if entryB.Suspended {
 		t.Error("shard-b should not be suspended")
 	}
@@ -150,60 +143,15 @@ func TestSuspend_OnIngestFailure(t *testing.T) {
 	}
 }
 
-func TestSuspend_RequiresConsecutiveFailures(t *testing.T) {
-	// One flaky RPC shouldn't suspend a shard — that was the bug that caused
-	// 2026-04-17's shard-count inflation (intermittent NLB-loop heartbeat
-	// failures → immediate suspend → provisioner replaces → orphan
-	// accumulation). Require a consistent string of failures instead.
-	//
-	// Drive the registry's ingest-failure counter directly rather than going
-	// through StartDrain; the drain loop's routing to *other* shards on
-	// failure makes it hard to deterministically deliver N consecutive
-	// attempts to the same shard in a test.
-	reg := logdb.NewShardRegistry()
-	reg.Add(&logdb.ShardEntry{
-		ID: "shard-a", State: logdb.StateIngesting, CreatedAt: time.Now(),
-	})
-
-	// First failure: recorded, but below threshold.
-	reg.RecordIngestFailure("shard-a")
-	if reg.Get("shard-a").Suspended {
-		t.Fatal("one failure should not suspend")
-	}
-
-	// A successful ingest resets the counter.
-	reg.ResetIngestFailures("shard-a")
-
-	// Below-threshold run of consecutive failures — still healthy.
-	for i := 0; i < logdb.SuspendFailureThreshold-1; i++ {
-		reg.RecordIngestFailure("shard-a")
-	}
-	if reg.Get("shard-a").Suspended {
-		t.Fatalf("suspended after only %d failures (threshold is %d)",
-			logdb.SuspendFailureThreshold-1, logdb.SuspendFailureThreshold)
-	}
-
-	// One more failure trips the threshold.
-	reg.RecordIngestFailure("shard-a")
-	if !reg.Get("shard-a").Suspended {
-		t.Fatalf("should be suspended after %d failures", logdb.SuspendFailureThreshold)
-	}
-}
-
 func TestSuspend_AllShardsDown_DLQ(t *testing.T) {
 	shardA := &failingShard{id: "shard-a", failing: true}
 
-	reg := logdb.NewShardRegistry()
-	reg.Add(&logdb.ShardEntry{
+	c := NewCoordinator(CoordinatorConfig{Ingest: NewRingBuffer(1000)})
+	c.Provisioner.Add(&logdb.ShardEntry{
 		ID: "shard-a", State: logdb.StateIngesting, Shard: shardA, CreatedAt: time.Now(),
 	})
 
 	dlq := &testDLQ{}
-	c := &Coordinator{
-		Registry: reg,
-		Ingest:   NewRingBuffer(1000),
-		SeenApps: NewSeenApps(),
-	}
 	// Inject test DLQ — the real DLQ is *DLQ but we need an interface here.
 	// For now, test that the drain loop suspends and we can verify the behavior.
 
@@ -221,103 +169,15 @@ func TestSuspend_AllShardsDown_DLQ(t *testing.T) {
 	}
 
 	// shard-a should be suspended.
-	if !reg.Get("shard-a").Suspended {
+	if !c.Provisioner.Get("shard-a").Suspended {
 		t.Error("shard-a should be suspended")
 	}
 
 	// With only one shard and it's suspended, IngestingShard returns nil.
-	if sh := reg.IngestingShard("weft/shard"); sh != nil {
+	if sh := c.Provisioner.IngestingShard("weft/shard"); sh != nil {
 		t.Error("IngestingShard should return nil when all shards suspended")
 	}
 
 	_ = dlq // DLQ integration tested separately with S3/minio
 }
 
-// ---------------------------------------------------------------------------
-// Tests: Unsuspend on heartbeat
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Tests: Reconnect on address change
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Tests: Reap dead shards
-// ---------------------------------------------------------------------------
-
-// recordingLauncher captures TerminateInstance / TerminateForReplacement
-// calls for assertions. Satisfies logdb.ShardLauncher and
-// logdb.RecoveryTerminator; LaunchInstance is a no-op.
-type recordingLauncher struct {
-	terminated           []string // addr passed to TerminateInstance (ASG decrement semantics)
-	terminatedForReplace []string // instance id passed to TerminateForReplacement (ASG replace semantics)
-	replacementErr       error
-}
-
-func (r *recordingLauncher) LaunchInstance(_ context.Context, _ string) (string, error) {
-	return "", nil
-}
-
-func (r *recordingLauncher) TerminateInstance(_ context.Context, _, addr string) error {
-	r.terminated = append(r.terminated, addr)
-	return nil
-}
-
-func (r *recordingLauncher) TerminateForReplacement(_ context.Context, instanceID string) error {
-	r.terminatedForReplace = append(r.terminatedForReplace, instanceID)
-	return r.replacementErr
-}
-
-// ---------------------------------------------------------------------------
-// Tests: Suspended shards excluded from write routing but included in queries
-// ---------------------------------------------------------------------------
-
-func TestSuspended_ExcludedFromWrites_IncludedInQueries(t *testing.T) {
-	ds, err := shard.NewDuckDBShard("shard-0", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { ds.Close() })
-
-	// Ingest some data so queries return results.
-	ds.Ingest(testRows("vimgym", "kevlar", 5))
-
-	reg := logdb.NewShardRegistry()
-	reg.Add(&logdb.ShardEntry{
-		ID: "shard-0", Apps: []string{"vimgym"},
-		State: logdb.StateIngesting, Shard: ds,
-		Suspended: true, WindowStart: t0, WindowEnd: t2, CreatedAt: time.Now(),
-	})
-
-	// Write routing should skip it.
-	if sh := reg.IngestingShard("vimgym"); sh != nil {
-		t.Error("IngestingShard should skip suspended shard")
-	}
-	if sh := reg.DefaultIngestingShard(); sh != nil {
-		t.Error("DefaultIngestingShard should skip suspended shard")
-	}
-
-	// Query routing should include it.
-	matching := reg.MatchingEntries(fullRange, "vimgym", "bolt")
-	if len(matching) != 1 {
-		t.Errorf("MatchingEntries should include suspended shard, got %d", len(matching))
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Mock store for heartbeat tests
-// ---------------------------------------------------------------------------
-
-// mockHeartbeatStore implements the subset of store.Store used by the provisioner.
-// It satisfies the provisioner's config.Store field via a wrapper.
-type mockHeartbeatStore struct {
-	heartbeats []store.ShardHeartbeat
-}
-
-func (m *mockHeartbeatStore) LiveShardHeartbeats(since string) ([]store.ShardHeartbeat, error) {
-	return m.heartbeats, nil
-}
-
-func (m *mockHeartbeatStore) InsertHeartbeat(hb *store.ShardHeartbeat) error {
-	return nil
-}

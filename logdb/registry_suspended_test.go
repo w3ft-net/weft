@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -61,5 +62,80 @@ func TestMatchingEntries_SkipsSuspended(t *testing.T) {
 	}
 	if !got["shard-live"] {
 		t.Error("healthy INGESTING shard in the same window was excluded — regression")
+	}
+}
+
+// TestSuspend_RequiresConsecutiveFailures — one flaky RPC must not flip
+// a shard to Suspended. That was the bug behind 2026-04-17's
+// shard-count inflation (intermittent NLB-loop heartbeat failures →
+// immediate suspend → provisioner replaces → orphan accumulation). The
+// fix is a consecutive-failure counter that only trips at
+// SuspendFailureThreshold, and any single success resets it.
+//
+// Drives RecordIngestFailure/ResetIngestFailures directly rather than
+// going through Coordinator's drain loop; the drain loop's
+// route-to-other-shards-on-failure behavior makes it hard to
+// deterministically deliver N consecutive attempts to the same shard.
+func TestSuspend_RequiresConsecutiveFailures(t *testing.T) {
+	reg := NewShardRegistry()
+	reg.Add(&ShardEntry{
+		ID: "shard-a", State: StateIngesting, CreatedAt: time.Now(),
+	})
+
+	// First failure: recorded, but below threshold.
+	reg.RecordIngestFailure("shard-a")
+	if reg.Get("shard-a").Suspended {
+		t.Fatal("one failure should not suspend")
+	}
+
+	// A successful ingest resets the counter.
+	reg.ResetIngestFailures("shard-a")
+
+	// Below-threshold run of consecutive failures — still healthy.
+	for i := 0; i < SuspendFailureThreshold-1; i++ {
+		reg.RecordIngestFailure("shard-a")
+	}
+	if reg.Get("shard-a").Suspended {
+		t.Fatalf("suspended after only %d failures (threshold is %d)",
+			SuspendFailureThreshold-1, SuspendFailureThreshold)
+	}
+
+	// One more failure trips the threshold.
+	reg.RecordIngestFailure("shard-a")
+	if !reg.Get("shard-a").Suspended {
+		t.Fatalf("should be suspended after %d failures", SuspendFailureThreshold)
+	}
+}
+
+// TestSuspended_ExcludedFromWrites_IncludedInQueries — once a shard is
+// Suspended, both write-routing entry points (IngestingShard /
+// DefaultIngestingShard) must skip it, but its data remains queryable
+// via MatchingEntries until the lifecycle moves it to a non-queryable
+// state. The Shard pointer stays attached so existing data can still
+// be read.
+func TestSuspended_ExcludedFromWrites_IncludedInQueries(t *testing.T) {
+	ds, err := shard.NewDuckDBShard("shard-0", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ds.Close() })
+
+	reg := NewShardRegistry()
+	reg.Add(&ShardEntry{
+		ID: "shard-0", Apps: []string{"vimgym"},
+		State: StateIngesting, Shard: ds,
+		Suspended: true, WindowStart: t0, WindowEnd: t2, CreatedAt: time.Now(),
+	})
+
+	if sh := reg.IngestingShard("vimgym"); sh != nil {
+		t.Error("IngestingShard should skip suspended shard")
+	}
+	if sh := reg.DefaultIngestingShard(); sh != nil {
+		t.Error("DefaultIngestingShard should skip suspended shard")
+	}
+
+	matching := reg.MatchingEntries(fullRange, "vimgym", store.Tier("bolt"))
+	if len(matching) != 1 {
+		t.Errorf("MatchingEntries should include suspended shard, got %d", len(matching))
 	}
 }

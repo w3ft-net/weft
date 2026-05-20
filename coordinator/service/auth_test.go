@@ -8,7 +8,6 @@ import (
 
 	"github.com/kevlarcon/weft/coordinator"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -18,13 +17,7 @@ func TestAuthenticate_NoShardAddr(t *testing.T) {
 	store, cleanup := testStore(t)
 	defer cleanup()
 
-	s0, err := shard.NewDuckDBShard("shard-0", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s0.Close()
-
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Shards: []shard.Shard{s0}})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
 	srv := &Server{Coord: coord, Store: store}
 
 	// Create a token.
@@ -65,13 +58,7 @@ func TestAuthenticate_MetricsConfigSync(t *testing.T) {
 	store, cleanup := testStore(t)
 	defer cleanup()
 
-	s0, err := shard.NewDuckDBShard("shard-0", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s0.Close()
-
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Shards: []shard.Shard{s0}})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
 	srv := &Server{Coord: coord, Store: store}
 
 	cust, err := store.FindOrCreateCustomer("kevlar")
@@ -116,16 +103,10 @@ func TestAuthenticate_InvalidToken(t *testing.T) {
 	store, cleanup := testStore(t)
 	defer cleanup()
 
-	s0, err := shard.NewDuckDBShard("shard-0", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s0.Close()
-
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Shards: []shard.Shard{s0}})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
 	srv := &Server{Coord: coord, Store: store}
 
-	_, err = srv.Authenticate(context.Background(), &pb.AuthenticateRequest{Token: "wft_bogus"})
+	_, err := srv.Authenticate(context.Background(), &pb.AuthenticateRequest{Token: "wft_bogus"})
 	if err == nil {
 		t.Fatal("expected error for invalid token, got nil")
 	}

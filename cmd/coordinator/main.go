@@ -132,11 +132,11 @@ func main() {
 
 	// Shard-data control plane: registry hydration, provisioner +
 	// launcher, lifecycle poller. All policy from env lives inside
-	// logdb; only the runtime-derived inputs (registry, db, secret,
-	// region, tiers) cross the boundary.
+	// logdb; only the runtime-derived inputs (db, secret, region,
+	// tiers) cross the boundary. logdb.Start owns the registry and
+	// returns it inside the provisioner.
 	prov, err := logdb.Start(logdb.Config{
 		Ctx:         provCtx,
-		Registry:    coord.Registry,
 		DB:          db,
 		ShardSecret: shardSecret,
 		AWSRegion:   *awsRegion,
