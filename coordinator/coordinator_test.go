@@ -2,51 +2,43 @@ package coordinator
 
 import (
 	"encoding/json"
-	"log"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kevlarcon/weft/compute"
+	"github.com/kevlarcon/weft/compute/computetest"
 	"github.com/kevlarcon/weft/logdb"
 	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
 
-// registryPool is a test-only ComputePool that resolves shards from
-// the coordinator's registry entries instead of dialing gRPC. After
-// d477ea2 the coordinator sends ShardDescriptors to compute, which
-// dials fresh connections — but unit tests use in-memory DuckDB shards
-// that don't listen on any address. This pool bridges the gap: it
-// looks up each descriptor's shard ID in the provisioner's registry,
-// grabs the entry's Shard pointer, and calls QueryToSink directly.
-type registryPool struct {
-	prov *logdb.Provisioner
-}
-
-func (p *registryPool) ExecuteQuery(req *pb.ExecuteQueryRequest) (compute.LineStream, error) {
-	job := (&compute.LocalComputePool{}).NewJob(req.Stages, len(req.Shards), req.MergeKey, int(req.Limit), req.KeepLast)
-	for _, d := range req.Shards {
-		go func(d *pb.ShardDescriptor) {
-			e := p.prov.Get(d.ShardId)
-			if e == nil || e.Shard == nil {
-				log.Printf("registryPool: shard %s not found or has nil Shard", d.ShardId)
-				job.SendSentinel(d.ShardId)
-				return
-			}
-			args := make([]any, len(req.Args))
-			for i, a := range req.Args {
-				args[i] = a
-			}
-			e.Shard.QueryToSink(req.Sql, args, job)
-		}(d)
+// poolFromCoord returns the *compute.LocalComputePool that NewCoordinator
+// installs by default. Fails the test if some earlier code wrapped or
+// replaced c.Pool — that's a setup-order bug.
+func poolFromCoord(t testing.TB, c *Coordinator) *compute.LocalComputePool {
+	t.Helper()
+	pool, ok := c.Pool.(*compute.LocalComputePool)
+	if !ok {
+		t.Fatalf("expected c.Pool to be *compute.LocalComputePool, got %T", c.Pool)
 	}
-	return job.Stream(), nil
+	return pool
 }
 
-func (p *registryPool) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool) compute.ComputeJob {
-	return (&compute.LocalComputePool{}).NewJob(stages, shardCount, mergeKey, limit, keepLast)
+// addInProcessShard wires e.Shard into both c.Provisioner (so query
+// planning sees the entry) and c.Pool's resolver overrides (so
+// compute can run QueryToSink against the in-process handle without
+// dialing). This is the unit-test replacement for the old
+// registryPool bypass — compute still owns the dispatch, but the
+// resolver tells it "for this id, use this handle directly."
+func addInProcessShard(t testing.TB, c *Coordinator, e *logdb.ShardEntry) {
+	t.Helper()
+	if e.Shard == nil {
+		t.Fatal("addInProcessShard: entry must have non-nil Shard")
+	}
+	poolFromCoord(t, c).RegisterResolver(computetest.NewInProcessResolver(e.ID, e.Shard))
+	c.Provisioner.Add(e)
 }
 
 // Base times for test fixtures. Shard 0 covers 10:00–11:00, shard 1 covers 11:00–12:00.
@@ -100,14 +92,13 @@ func setupTestCoordinator(t testing.TB) *Coordinator {
 
 	apps := []string{"vimgym", "callbox"}
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox", "warp")})
-	c.Pool = &registryPool{prov: c.Provisioner}
-	c.Provisioner.Add(&logdb.ShardEntry{
+	addInProcessShard(t, c, &logdb.ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: t0, WindowEnd: t1,
 		State: logdb.StateIngesting, Shard: s0,
 		CreatedAt: time.Now(),
 	})
-	c.Provisioner.Add(&logdb.ShardEntry{
+	addInProcessShard(t, c, &logdb.ShardEntry{
 		ID: "shard-1", Apps: apps,
 		WindowStart: t1, WindowEnd: t2,
 		State: logdb.StateIngesting, Shard: s1,
@@ -525,22 +516,24 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 	c := NewCoordinator(CoordinatorConfig{
 		LambdaFunctionURL: "https://lambda.example.com/cold-query",
 	})
-	spy := &spyPool{inner: &registryPool{prov: c.Provisioner}}
-	c.Pool = spy
-
-	c.Provisioner.Add(&logdb.ShardEntry{
+	// Register in-process resolvers on the default LocalComputePool
+	// BEFORE wrapping in spyPool, because addInProcessShard reaches
+	// for the underlying *compute.LocalComputePool through c.Pool.
+	addInProcessShard(t, c, &logdb.ShardEntry{
 		ID: "shard-live", Apps: apps,
 		WindowStart: now.Add(-2 * time.Hour), WindowEnd: now.Add(-1 * time.Hour),
 		State: logdb.StateIngesting, Shard: s0, Addr: "10.0.0.1:9000",
 		CreatedAt: now,
 	})
-	c.Provisioner.Add(&logdb.ShardEntry{
+	addInProcessShard(t, c, &logdb.ShardEntry{
 		ID: "shard-archived", Apps: apps,
 		WindowStart: now.Add(-1 * time.Hour), WindowEnd: now,
 		State: logdb.StateArchived, Shard: s0, ParquetPath: "s3://bucket/shard-archived.parquet",
 		RowCount:  1,
 		CreatedAt: now,
 	})
+	spy := &spyPool{inner: c.Pool}
+	c.Pool = spy
 
 	tr := TimeRange{Start: now.Add(-2 * time.Hour), End: now}
 	plan := &planner.QueryPlan{

@@ -54,12 +54,11 @@ func TestCoordinator_PlannerInjectsTimeRange(t *testing.T) {
 
 	// Build coordinator with both shards.
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym")})
-	c.Pool = &registryPool{prov: c.Provisioner}
-	c.Provisioner.Add(&logdb.ShardEntry{
+	addInProcessShard(t, c, &logdb.ShardEntry{
 		ID: "shard-live", Apps: []string{"vimgym"},
 		WindowStart: t1, WindowEnd: t2, State: logdb.StateIngesting, Shard: live,
 	})
-	c.Provisioner.Add(&logdb.ShardEntry{
+	addInProcessShard(t, c, &logdb.ShardEntry{
 		ID: "shard-cold", Apps: []string{"vimgym"},
 		WindowStart: t0, WindowEnd: t1, State: logdb.StateArchived, Shard: cold,
 		RowCount: 3,

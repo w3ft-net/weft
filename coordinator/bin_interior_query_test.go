@@ -62,8 +62,7 @@ func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, 
 	c := NewCoordinator(CoordinatorConfig{
 		Store: db,
 	})
-	c.Pool = &registryPool{prov: c.Provisioner}
-	c.Provisioner.Add(&logdb.ShardEntry{
+	addInProcessShard(t, c, &logdb.ShardEntry{
 		ID:        s.ID(),
 		Apps:      []string{"api", "web"},
 		State:     logdb.StateIngesting,
