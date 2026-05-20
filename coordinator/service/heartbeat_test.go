@@ -19,7 +19,7 @@ import (
 func newRegisteredShard(t *testing.T, shardID, token string) *Server {
 	t.Helper()
 	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
-	coord.Provisioner.Add(&logdb.ShardEntry{
+	logdb.SeedShard(coord.Provisioner, &logdb.ShardEntry{
 		ID:             shardID,
 		State:          logdb.StateIngesting,
 		Addr:           "10.0.0.1:9000",

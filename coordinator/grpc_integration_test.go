@@ -66,12 +66,12 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 
 	apps := []string{"vimgym", "callbox"}
 	c := NewCoordinator(CoordinatorConfig{Pool: pool, Store: testQueryStore(t, "kevlar", "vimgym", "callbox", "warp")})
-	c.Provisioner.Add(&logdb.ShardEntry{
+	logdb.SeedShard(c.Provisioner, &logdb.ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: DevT0, WindowEnd: DevT1,
 		State: logdb.StateIngesting, Shard: gs0, Addr: shard0Addr,
 	})
-	c.Provisioner.Add(&logdb.ShardEntry{
+	logdb.SeedShard(c.Provisioner, &logdb.ShardEntry{
 		ID: "shard-1", Apps: apps,
 		WindowStart: DevT1, WindowEnd: DevT2,
 		State: logdb.StateIngesting, Shard: gs1, Addr: shard1Addr,

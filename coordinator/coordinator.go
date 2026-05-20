@@ -153,7 +153,6 @@ type Coordinator struct {
 	DLQ               *DLQ                    // S3 dead-letter queue for failed ingests
 	Errors            *IngestionErrorRecorder // async error persistence
 	Notifier          NotifyDispatcher        // per-customer alert dispatcher (nil = disabled). Interface type so a nil value is true-nil — no typed-nil-via-concrete-pointer trap when callers thread it into AlertContext.
-	lambdaFunctionURL string
 	// ScriptExecutionTimeout caps how long a single runLocal invocation
 	// may run. Zero = use the package-level default (scriptExecutionTimeout).
 	// Tests override to shorten the wait.
@@ -277,7 +276,7 @@ func (s *SeenApps) Names(customer string) []string {
 // installed Provisioner is a bare stub with an empty registry and no
 // launcher; main.go swaps in the real one once logdb.Start has wired
 // the production launcher and persistence layer. Tests live on the
-// stub directly and seed it via c.Provisioner.Add(&logdb.ShardEntry{...})
+// stub directly and seed it via logdb.SeedShard(c.Provisioner, ...)
 // — registry population is the provisioner's concern, not the
 // coordinator's.
 func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
@@ -302,8 +301,13 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 	// A no-op Provisioner gives the coordinator a usable registry
 	// surface during the boot window between NewCoordinator and
 	// logdb.Start. Tests run on this default — they never start the
-	// ticker, so a nil launcher/store is fine.
-	prov := logdb.NewProvisioner(logdb.NewShardRegistry(), nil, logdb.ProvisionerConfig{})
+	// ticker, so a nil launcher/store is fine. LambdaFunctionURL is
+	// the only config field tests routinely set (descriptor-building
+	// stamps it onto archived entries); production overwrites the
+	// whole Provisioner via logdb.Start anyway.
+	prov := logdb.NewProvisioner(logdb.NewShardRegistry(), nil, logdb.ProvisionerConfig{
+		LambdaFunctionURL: cfg.LambdaFunctionURL,
+	})
 	return &Coordinator{
 		Pool:                   pool,
 		Provisioner:            prov,
@@ -315,7 +319,6 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		DLQ:                    cfg.DLQ,
 		Errors:                 cfg.Errors,
 		Notifier:               cfg.Notifier,
-		lambdaFunctionURL:      cfg.LambdaFunctionURL,
 		ScriptExecutionTimeout: cfg.ScriptExecutionTimeout,
 	}
 }
@@ -659,20 +662,9 @@ func (c *Coordinator) executeLowered(watch *store.CronWatch, tr TimeRange, alert
 // than wrong), and skips the per-fire TierForCustomer lookup (tier
 // is baked into LoweredPlan at save time).
 func (c *Coordinator) dispatchLoweredWithTier(lp *planner.LoweredPlan, args []any, tr TimeRange, tier store.Tier, alertCtx *AlertContext) (*ExecuteResult, error) {
-	entries := c.Provisioner.MatchingEntries(tr, lp.FollowApp, tier)
-	if len(entries) == 0 {
+	descs := c.Provisioner.ShardDescriptorsFor(tr, lp.FollowApp, tier)
+	if len(descs) == 0 {
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
-	}
-	descs := make([]*pb.ShardDescriptor, len(entries))
-	for i, e := range entries {
-		d := &pb.ShardDescriptor{ShardId: e.ID, Apps: e.Apps}
-		if e.State == logdb.StateArchived {
-			d.LambdaUrl = c.lambdaFunctionURL
-			d.ParquetPath = e.ParquetPath
-		} else {
-			d.GrpcAddr = e.Addr
-		}
-		descs[i] = d
 	}
 	argStrs := make([]string, len(args))
 	for i, a := range args {
@@ -1002,24 +994,14 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	if custID != 0 {
 		tier = c.Store.TierForCustomer(custID)
 	}
-	entries := c.Provisioner.MatchingEntries(tr, plan.FollowApp, tier)
-	if len(entries) == 0 {
+	descs := c.Provisioner.ShardDescriptorsFor(tr, plan.FollowApp, tier)
+	if len(descs) == 0 {
 		queryLog.Printf("query: no matching shards (app=%s, customer=%s)", plan.SourceApp, customer)
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
-
-	descs := make([]*pb.ShardDescriptor, len(entries))
-	shardIDs := make([]string, len(entries))
-	for i, e := range entries {
-		shardIDs[i] = e.ID
-		d := &pb.ShardDescriptor{ShardId: e.ID, Apps: e.Apps}
-		if e.State == logdb.StateArchived {
-			d.LambdaUrl = c.lambdaFunctionURL
-			d.ParquetPath = e.ParquetPath
-		} else {
-			d.GrpcAddr = e.Addr
-		}
-		descs[i] = d
+	shardIDs := make([]string, len(descs))
+	for i, d := range descs {
+		shardIDs[i] = d.ShardId
 	}
 	queryLog.Printf("query: app=%s shards=%v compute=%v sql=%s",
 		plan.SourceApp, shardIDs, plan.ComputeStages, directSQL)

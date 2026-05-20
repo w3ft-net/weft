@@ -228,6 +228,70 @@ func (p *Provisioner) Stats() *AppStats {
 	return p.stats
 }
 
+// Registry-shaped methods. The ShardRegistry is a private field; the
+// methods below are the coordinator-facing surface that keeps the
+// shard-data control plane behind one boundary.
+//
+// IngestingShard / TotalIngesting / RecordIngestFailure /
+// ResetIngestFailures are thin pass-throughs (the last two also
+// satisfy shard.IngestRecorder so drain can pass *Provisioner
+// straight into sh.Ingest). ShardDescriptorsFor is the one
+// exception — it folds the entry→descriptor transform into the
+// boundary so *ShardEntry never leaks across, and the registry
+// stays free of proto knowledge.
+
+// IngestingShard returns an INGESTING shard for app via round-robin
+// across matching shards, or nil if none qualify.
+func (p *Provisioner) IngestingShard(app string) shard.Shard {
+	return p.registry.IngestingShard(app)
+}
+
+// TotalIngesting returns the count of INGESTING shards regardless
+// of app. Used by the disk-pressure check.
+func (p *Provisioner) TotalIngesting() int { return p.registry.TotalIngesting() }
+
+// RecordIngestFailure increments the consecutive-failure counter for
+// id and may flip the entry to Suspended once the threshold trips.
+// Returns (count, threshold). Half of the shard.IngestRecorder
+// contract.
+func (p *Provisioner) RecordIngestFailure(id string) (count, threshold int) {
+	return p.registry.RecordIngestFailure(id)
+}
+
+// ResetIngestFailures clears the consecutive-failure counter for id.
+// Other half of shard.IngestRecorder, called by Shard.Ingest on the
+// success path.
+func (p *Provisioner) ResetIngestFailures(id string) {
+	p.registry.ResetIngestFailures(id)
+}
+
+// ShardDescriptorsFor enumerates shards that intersect tr and serve
+// app, then builds the proto ShardDescriptor each compute worker
+// needs to dial or restore them. tier clamps the time range to the
+// caller's retention window before matching. The provisioner's own
+// LambdaFunctionURL (set from $LAMBDA_FUNCTION_URL in logdb.Start) is
+// stamped onto archived entries for the cold-shard restore path;
+// live entries get the gRPC address instead.
+//
+// Returns an empty slice if nothing matches — callers can range over
+// it without nil-checking. This is the only path coordinator-side
+// code uses to read shard state for queries.
+func (p *Provisioner) ShardDescriptorsFor(tr TimeRange, app string, tier store.Tier) []*pb.ShardDescriptor {
+	entries := p.registry.MatchingEntries(tr, app, tier)
+	out := make([]*pb.ShardDescriptor, len(entries))
+	for i, e := range entries {
+		d := &pb.ShardDescriptor{ShardId: e.ID, Apps: e.Apps}
+		if e.State == StateArchived {
+			d.LambdaUrl = p.config.LambdaFunctionURL
+			d.ParquetPath = e.ParquetPath
+		} else {
+			d.GrpcAddr = e.Addr
+		}
+		out[i] = d
+	}
+	return out
+}
+
 // Start runs the provisioner loop until the context is cancelled.
 // It ensures at least one INGESTING shard exists on startup.
 func (p *Provisioner) Start(ctx context.Context) {

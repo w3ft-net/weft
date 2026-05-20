@@ -2,7 +2,7 @@
 # in `kevcons` (see .kevcons.yaml); this Makefile holds local-dev
 # tasks that don't touch AWS.
 
-.PHONY: collapse test-deploy integration integration-clean
+.PHONY: collapse test test-deploy integration integration-clean
 
 # Collapse store/migrations/* into store/schema.sql. Run after a
 # successful production deploy (kevcons will eventually trigger this
@@ -12,8 +12,17 @@
 collapse:
 	./scripts/collapse-migrations.sh
 
+# Run the Go test suite with the `test` build tag. The tag enables
+# files like logdb/fixtures.go that ship fixture-seeding helpers
+# (logdb.SeedShard) — those are guarded out of production builds so
+# they can't be linked into a deployed coordinator. Plain
+# `go test ./...` without the tag will fail to compile any package
+# whose tests reach for those helpers; that's the intended tripwire.
+test:
+	go test -tags test ./...
+
 # Run bash-side tests for deploy/ scripts (load-app-env-extra etc.).
-# Go tests live under `go test ./...`; this is the bash-only side.
+# Go tests live under `make test`; this is the bash-only side.
 test-deploy:
 	./deploy/load-app-env-extra_test.sh
 

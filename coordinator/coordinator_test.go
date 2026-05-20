@@ -38,7 +38,7 @@ func addInProcessShard(t testing.TB, c *Coordinator, e *logdb.ShardEntry) {
 		t.Fatal("addInProcessShard: entry must have non-nil Shard")
 	}
 	poolFromCoord(t, c).RegisterResolver(computetest.NewInProcessResolver(e.ID, e.Shard))
-	c.Provisioner.Add(e)
+	logdb.SeedShard(c.Provisioner, e)
 }
 
 // Base times for test fixtures. Shard 0 covers 10:00–11:00, shard 1 covers 11:00–12:00.

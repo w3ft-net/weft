@@ -120,7 +120,7 @@ func TestExecute_StagedPipelinePopulatesText(t *testing.T) {
 // query failures server-side.
 func TestExecute_ShardErrorReturnsPartialResults(t *testing.T) {
 	c := setupTestCoordinator(t)
-	c.Provisioner.Add(&logdb.ShardEntry{
+	logdb.SeedShard(c.Provisioner, &logdb.ShardEntry{
 		ID:          "shard-1",
 		Apps:        []string{"vimgym", "callbox"},
 		WindowStart: t1, WindowEnd: t2,

@@ -191,7 +191,7 @@ func TestDrain_PrimaryAndFallbackFail_RoutesToDLQ(t *testing.T) {
 	// Apps must include the row's app, otherwise IngestingShard
 	// returns nil and we'd hit the "no shard owns this app" branch
 	// instead of the primary+fallback-fail one we're pinning here.
-	c.Provisioner.Add(&logdb.ShardEntry{
+	logdb.SeedShard(c.Provisioner, &logdb.ShardEntry{
 		ID: "shard-down", Apps: []string{"weft/coordinator"},
 		State: logdb.StateIngesting,
 		Shard: &dlqFailingShard{id: "shard-down"}, CreatedAt: time.Now(),
