@@ -37,7 +37,7 @@ func TestDuckDB_RegexpMatches_PinsPushdownContract(t *testing.T) {
 		{Raw: "2026-03-28T10:00:05 INFO vimgym i-001 request completed", Customer: "kevlar", App: "vimgym", TsUnixNs: 2},
 		{Raw: "2026-03-28T10:00:09 DEBUG vimgym i-001 cache miss", Customer: "kevlar", App: "vimgym", TsUnixNs: 3},
 	}
-	if err := s.Ingest(rows); err != nil {
+	if err := s.Ingest(rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 

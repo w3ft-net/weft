@@ -369,20 +369,22 @@ func (r *ShardRegistry) Suspend(id string) {
 
 // RecordIngestFailure increments the consecutive-failure counter for the
 // given shard and marks it Suspended once it hits SuspendFailureThreshold.
-// Returns the new count. Callers should pair this with ResetIngestFailures
-// on successful ingest so transient failures don't accumulate forever.
-func (r *ShardRegistry) RecordIngestFailure(id string) int {
+// Returns (count, threshold) so callers (Shard.Ingest impls) can format
+// an error message that names the resulting state without re-importing
+// the threshold constant. Pair with ResetIngestFailures on successful
+// ingest so transient failures don't accumulate forever.
+func (r *ShardRegistry) RecordIngestFailure(id string) (count, threshold int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	e, ok := r.entries[id]
 	if !ok {
-		return 0
+		return 0, SuspendFailureThreshold
 	}
 	e.IngestFailures++
 	if e.IngestFailures >= SuspendFailureThreshold {
 		e.Suspended = true
 	}
-	return e.IngestFailures
+	return e.IngestFailures, SuspendFailureThreshold
 }
 
 // ResetIngestFailures clears the consecutive-failure counter for a shard
@@ -529,34 +531,6 @@ func (r *ShardRegistry) IngestingCount(app string) int {
 		}
 	}
 	return n
-}
-
-// DefaultIngestingShard returns any non-suspended INGESTING shard.
-// Used by the ingest drain when no specific-app match exists yet.
-func (r *ShardRegistry) DefaultIngestingShard() shard.Shard {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	for _, e := range r.entries {
-		if e.State == StateIngesting && e.Shard != nil && !e.Suspended {
-			return e.Shard
-		}
-	}
-	return nil
-}
-
-// AllShards returns all live Shard connections.
-func (r *ShardRegistry) AllShards() []shard.Shard {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	var out []shard.Shard
-	for _, e := range r.entries {
-		if e.Shard != nil {
-			out = append(out, e.Shard)
-		}
-	}
-	return out
 }
 
 // Entries returns a snapshot of all entries (for health/status reporting).

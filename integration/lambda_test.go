@@ -39,7 +39,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 		{Raw: "lambda integration row 3", App: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
 		{Raw: "lambda integration row 4", App: "vimgym", Level: "DEBUG", Customer: "acme", TsUnixNs: t0.Add(4 * time.Second).UnixNano()},
 	}
-	if err := ds.Ingest(rows); err != nil {
+	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -134,7 +134,7 @@ func TestComputeLifecycle_LambdaColdShardReachable(t *testing.T) {
 		{Raw: "compute lifecycle row 3", App: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
 		{Raw: "compute lifecycle row 4", App: "vimgym", Level: "DEBUG", Customer: "acme", TsUnixNs: t0.Add(4 * time.Second).UnixNano()},
 	}
-	if err := ds.Ingest(rows); err != nil {
+	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatal(err)
 	}
 

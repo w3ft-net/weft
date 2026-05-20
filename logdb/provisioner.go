@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -15,6 +16,13 @@ import (
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
 )
+
+// ErrShardAuthFailed marks an AuthenticateShard failure that the
+// caller should surface as gRPC Unauthenticated (unknown shard,
+// no-token shard, or mismatched bearer). Lookup errors — e.g. a
+// store failure on the registry-miss fallback path — are returned
+// raw so the caller can map them to Internal.
+var ErrShardAuthFailed = errors.New("shard heartbeat authentication failed")
 
 // reapGracePeriod is how long a newly-added registry entry is
 // protected from reap, measured from its CreatedAt. Must cover one
@@ -480,6 +488,40 @@ func (p *Provisioner) adoptFromHeartbeats() {
 	for _, hb := range heartbeats {
 		p.ProcessHeartbeat(hb)
 	}
+}
+
+// AuthenticateShard validates the bearer presented for shardID
+// against the heartbeat token the provisioner minted at christen.
+// Lookup order is registry → store: a coordinator restart leaves the
+// in-memory registry empty for live shards (LoadFromStore filters to
+// ARCHIVED), so the first heartbeat from a returning shard has to
+// validate against the persisted ShardRecord.
+//
+// Returns nil on match. On auth misses (unknown shard, no-token
+// shard, mismatched bearer) returns an error wrapping
+// ErrShardAuthFailed; on a store-side lookup failure returns the
+// raw error so the caller can distinguish auth-deny from infra
+// trouble.
+func (p *Provisioner) AuthenticateShard(shardID, presented string) error {
+	expectedToken := ""
+	if entry := p.registry.Get(shardID); entry != nil {
+		expectedToken = entry.HeartbeatToken
+	} else if p.config.ShardOps != nil {
+		rec, ok, err := p.config.ShardOps.GetShard(shardID)
+		if err != nil {
+			return fmt.Errorf("lookup shard %s: %w", shardID, err)
+		}
+		if ok {
+			expectedToken = rec.HeartbeatToken
+		}
+	}
+	if expectedToken == "" {
+		return fmt.Errorf("%w: unknown or untokened shard %s", ErrShardAuthFailed, shardID)
+	}
+	if !store.ConstantTimeTokenEqual(expectedToken, presented) {
+		return fmt.Errorf("%w: bearer mismatch for %s", ErrShardAuthFailed, shardID)
+	}
+	return nil
 }
 
 // ProcessHeartbeat handles one heartbeat synchronously:

@@ -245,8 +245,11 @@ func (s *ColdShard) queryToSinkRemote(query string, args []any, sink RowSink) {
 	}
 }
 
-// Ingest always returns an error — cold shards are read-only.
-func (s *ColdShard) Ingest(rows []*pb.LogRow) error {
+// Ingest always returns an error — cold shards are read-only. The
+// recorder is ignored: a cold shard in the ingest path is a routing
+// bug, not a flaky-shard failure, so it shouldn't trip the
+// suspend counter.
+func (s *ColdShard) Ingest(rows []*pb.LogRow, _ IngestRecorder) error {
 	return fmt.Errorf("cold shard %s is read-only", s.id)
 }
 

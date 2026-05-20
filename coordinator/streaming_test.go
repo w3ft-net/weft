@@ -155,7 +155,7 @@ type errShard struct {
 func (s *errShard) ID() string                                          { return s.id }
 func (s *errShard) Query(string, ...any) ([]*pb.ResultRow, error)       { return nil, errSynthetic }
 func (s *errShard) QueryToSink(_ string, _ []any, sink shard.RowSink)   { sink.SendSentinel(s.id) }
-func (s *errShard) Ingest([]*pb.LogRow) error                           { return nil }
+func (s *errShard) Ingest([]*pb.LogRow, shard.IngestRecorder) error     { return nil }
 func (s *errShard) Archive(_ context.Context, _ string) (string, error) { return "", nil }
 func (s *errShard) Close() error                                        { return nil }
 

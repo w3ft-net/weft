@@ -97,11 +97,19 @@ func (s *GRPCShard) Close() error {
 // Addr returns the gRPC address of this shard.
 func (s *GRPCShard) Addr() string { return s.addr }
 
-// Ingest forwards rows to the remote shard for insertion.
-func (s *GRPCShard) Ingest(rows []*pb.LogRow) error {
+// Ingest forwards rows to the remote shard for insertion. On error,
+// reports the failure to rec (if non-nil) and returns an error that
+// carries the resulting consecutive-failure count, so callers only
+// need a single log line.
+func (s *GRPCShard) Ingest(rows []*pb.LogRow, rec IngestRecorder) error {
 	_, err := s.client.Ingest(context.Background(), &pb.IngestRequest{Rows: rows})
 	if err != nil {
-		return fmt.Errorf("ingest to shard %s: %w", s.id, err)
+		// wrapIngestError already names the shard; pass the raw RPC
+		// error so the formatted message reads as one phrase, not two.
+		return wrapIngestError(s.id, err, rec)
+	}
+	if rec != nil {
+		rec.ResetIngestFailures(s.id)
 	}
 	return nil
 }

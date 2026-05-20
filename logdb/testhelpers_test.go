@@ -34,13 +34,20 @@ func (s *failingShard) QueryToSink(sql string, args []any, sink shard.RowSink) {
 func (s *failingShard) Close() error                                           { return nil }
 func (s *failingShard) Archive(_ context.Context, _ string) (string, error)    { return "", nil }
 
-func (s *failingShard) Ingest(rows []*pb.LogRow) error {
+func (s *failingShard) Ingest(rows []*pb.LogRow, rec shard.IngestRecorder) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failing {
-		return fmt.Errorf("shard %s is down", s.id)
+		err := fmt.Errorf("shard %s is down", s.id)
+		if rec != nil {
+			rec.RecordIngestFailure(s.id)
+		}
+		return err
 	}
 	s.ingested = append(s.ingested, rows...)
+	if rec != nil {
+		rec.ResetIngestFailures(s.id)
+	}
 	return nil
 }
 

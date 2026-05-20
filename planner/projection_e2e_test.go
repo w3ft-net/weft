@@ -49,7 +49,7 @@ func TestProjection_E2E(t *testing.T) {
 			PayloadJson: []byte(`{"status":200,"user_id":"u2","action":"view","foo":{"bar":7},"items":[1],"users":[{"name":"z"}]}`),
 		},
 	}
-	if err := sh.Ingest(rows); err != nil {
+	if err := sh.Ingest(rows, nil); err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
 

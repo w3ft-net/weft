@@ -79,7 +79,7 @@ func testArchiveIngestedShard(t *testing.T, id, volumeID string) *ShardEntry {
 	}
 	if err := ds.Ingest([]*pb.LogRow{
 		{Raw: "row 1", App: "vimgym", Customer: "k", TsUnixNs: time.Now().UnixNano()},
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatal(err)
 	}
 	return &ShardEntry{

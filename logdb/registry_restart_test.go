@@ -55,7 +55,7 @@ func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
 		{Raw: "test log line 1", App: "weft/coordinator", Customer: "testcust", Level: "INFO", TsUnixNs: time.Now().UnixNano()},
 		{Raw: "test log line 2", App: "weft/coordinator", Customer: "testcust", Level: "ERROR", TsUnixNs: time.Now().UnixNano()},
 	}
-	if err := ingestShard.Ingest(rows); err != nil {
+	if err := ingestShard.Ingest(rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 

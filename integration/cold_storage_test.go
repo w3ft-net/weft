@@ -35,7 +35,7 @@ func TestExportToS3_DirectWrite(t *testing.T) {
 		{Raw: "direct s3 export row 2", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
 		{Raw: "direct s3 export row 3", App: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
 	}
-	if err := ds.Ingest(rows); err != nil {
+	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatal(err)
 	}
 

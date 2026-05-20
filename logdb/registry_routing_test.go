@@ -29,10 +29,10 @@ func TestRegistry_AppScopedQueryRouting(t *testing.T) {
 	// drops ShardRowCount==0 archived entries but ingesting entries are
 	// returned regardless. A row each keeps the test honest if that
 	// guard ever tightens.
-	if err := sVim.Ingest([]*pb.LogRow{{App: "vimgym", Customer: "kevlar", TsUnixNs: t0.UnixNano()}}); err != nil {
+	if err := sVim.Ingest([]*pb.LogRow{{App: "vimgym", Customer: "kevlar", TsUnixNs: t0.UnixNano()}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := sCb.Ingest([]*pb.LogRow{{App: "callbox", Customer: "kevlar", TsUnixNs: t0.UnixNano()}}); err != nil {
+	if err := sCb.Ingest([]*pb.LogRow{{App: "callbox", Customer: "kevlar", TsUnixNs: t0.UnixNano()}}, nil); err != nil {
 		t.Fatal(err)
 	}
 

@@ -41,7 +41,7 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s0.Close()
-	if err := s0.Ingest(shard0Rows()); err != nil {
+	if err := s0.Ingest(shard0Rows(), nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -72,7 +72,7 @@ func TestFailover_ShardReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s0.Close()
-	if err := s0.Ingest(shard0Rows()); err != nil {
+	if err := s0.Ingest(shard0Rows(), nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -99,7 +99,7 @@ func TestFailover_ShardReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s1.Close()
-	if err := s1.Ingest(shard1Rows()); err != nil {
+	if err := s1.Ingest(shard1Rows(), nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -110,9 +110,14 @@ func TestFailover_ShardReplacement(t *testing.T) {
 		CreatedAt: time.Now(),
 	})
 
-	shards := c.GetShards()
-	if len(shards) != 2 {
-		t.Fatalf("expected 2 shards after adding, got %d", len(shards))
+	// Querying the wider range must now hit both shards.
+	res2, err := c.Execute("cat vimgym.log", failoverRange, "kevlar", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resD2 := drainExec(t, res2)
+	if len(resD2.Rows) <= len(resD.Rows) {
+		t.Fatalf("expected more rows after adding shard-1 (was %d, now %d)", len(resD.Rows), len(resD2.Rows))
 	}
 }
 
@@ -128,7 +133,7 @@ func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s0.Close()
-	if err := s0.Ingest(shard0Rows()); err != nil {
+	if err := s0.Ingest(shard0Rows(), nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -183,37 +188,6 @@ func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
 	}
 	if errCount > 0 {
 		t.Logf("%d transient errors during concurrent swap (expected)", errCount)
-	}
-}
-
-// TestFailover_GetShardsSnapshot verifies that GetShards returns a defensive
-// copy — mutating the returned slice must not affect the coordinator.
-func TestFailover_GetShardsSnapshot(t *testing.T) {
-	s0, err := shard.NewDuckDBShard("shard-0", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s0.Close()
-
-	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
-	addInProcessShard(t, c, &logdb.ShardEntry{
-		ID: "shard-0", Apps: []string{"vimgym"},
-		WindowStart: t0, WindowEnd: t1,
-		State: logdb.StateIngesting, Shard: s0,
-		CreatedAt: time.Now(),
-	})
-
-	snap := c.GetShards()
-	if len(snap) != 1 {
-		t.Fatalf("expected 1 shard, got %d", len(snap))
-	}
-
-	// Mutating the snapshot must not affect the coordinator.
-	snap[0] = nil
-
-	snap2 := c.GetShards()
-	if len(snap2) != 1 || snap2[0] == nil {
-		t.Fatal("mutating GetShards() result corrupted coordinator state")
 	}
 }
 

@@ -55,7 +55,7 @@ func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, 
 		logRow("web", "ERROR", cust.Name, now.Add(-5*time.Minute)),
 		logRow("web", "WARN", cust.Name, now.Add(-2*time.Minute)),
 	}
-	if err := s.Ingest(rows); err != nil {
+	if err := s.Ingest(rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 

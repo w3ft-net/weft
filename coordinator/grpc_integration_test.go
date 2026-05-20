@@ -27,7 +27,7 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ds0.Ingest(DevShardRows("shard-0")); err != nil {
+	if err := ds0.Ingest(DevShardRows("shard-0"), nil); err != nil {
 		t.Fatal(err)
 	}
 	shard0Addr := startShardServer(t, ds0)
@@ -37,7 +37,7 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ds1.Ingest(DevShardRows("shard-1")); err != nil {
+	if err := ds1.Ingest(DevShardRows("shard-1"), nil); err != nil {
 		t.Fatal(err)
 	}
 	shard1Addr := startShardServer(t, ds1)

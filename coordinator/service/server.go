@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -22,6 +23,7 @@ import (
 	weftcfg "github.com/kevlarcon/weft/config"
 	"github.com/kevlarcon/weft/coordinator"
 	"github.com/kevlarcon/weft/ingest"
+	"github.com/kevlarcon/weft/logdb"
 	"github.com/kevlarcon/weft/mounts"
 	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
@@ -81,9 +83,8 @@ func callerUserID(ctx context.Context) string {
 // Server implements the WeftCoordinator gRPC service.
 type Server struct {
 	pb.UnimplementedWeftCoordinatorServer
-	Coord            *coordinator.Coordinator
-	Store            *store.Store
-	consecutiveDrops int
+	Coord *coordinator.Coordinator
+	Store *store.Store
 
 	// CfgPtr holds the live runtime config. Today only IngestStream
 	// consults it (for the per-stream byte budget); nil is fine in
@@ -612,33 +613,12 @@ func (s *Server) authenticateStream(ctx context.Context) (*store.AgentAuthResult
 }
 
 func (s *Server) ingestBatch(rows []*pb.LogRow) {
-	// Write to ring buffer (non-blocking). Background drain pushes to shards.
-	if s.Coord.Ingest != nil {
-		s.Coord.Ingest.Write(rows)
-
-		// Check buffer pressure.
-		pct := s.Coord.Ingest.UsagePct()
-		if pct > 80 && s.Coord.Provisioner.TotalIngesting() == 0 {
-			log.Printf("CRITICAL: ring buffer at %d%% with no ingesting shards — data will be lost", pct)
-		}
-	} else {
-		// Fallback: direct shard write (dev mode without ring buffer).
-		shards := s.Coord.GetShards()
-		if len(shards) == 0 {
-			s.consecutiveDrops++
-			if s.consecutiveDrops >= 3 {
-				log.Printf("DROPPING %d rows (no shards available, %d consecutive drops)", len(rows), s.consecutiveDrops)
-			}
-			return
-		}
-		s.consecutiveDrops = 0
-		for _, sh := range shards {
-			if err := sh.Ingest(rows); err != nil {
-				log.Printf("ingest: shard write error: %v", err)
-				continue
-			}
-			break
-		}
+	// Write to ring buffer (non-blocking). Background drain pushes to
+	// shards. NewCoordinator always installs a buffer, so no nil-check.
+	s.Coord.Ingest.Write(rows)
+	pct := s.Coord.Ingest.UsagePct()
+	if pct > 80 && s.Coord.Provisioner.TotalIngesting() == 0 {
+		log.Printf("CRITICAL: ring buffer at %d%% with no ingesting shards — data will be lost", pct)
 	}
 
 	// Fan out to tail -f subscribers.
@@ -912,40 +892,22 @@ func (s *Server) Heartbeat(ctx context.Context, req *pb.ShardHeartbeatRequest) (
 	return &pb.HeartbeatResponse{}, nil
 }
 
-// authenticateHeartbeat validates the bearer token attached to an
-// incoming Heartbeat for a known shard. Returns Unauthenticated on
-// any miss: missing bearer, mismatched bearer, unknown shard id, or
-// shard whose persisted HeartbeatToken is empty.
-//
-// Lookup order is registry → store: a coord restart leaves the
-// in-memory registry empty for live shards (LoadFromStore filters to
-// ARCHIVED), so the first heartbeat from a returning shard has to
-// validate against the persisted ShardRecord.
+// authenticateHeartbeat extracts the bearer from the incoming gRPC
+// metadata and hands the verdict to the provisioner. The split keeps
+// transport concerns (metadata, status codes) in the server and the
+// registry→store token lookup behind the provisioner boundary.
 func (s *Server) authenticateHeartbeat(ctx context.Context, shardID string) error {
-	expectedToken := ""
-	if entry := s.Coord.Provisioner.Get(shardID); entry != nil {
-		expectedToken = entry.HeartbeatToken
-	} else if s.Store != nil {
-		rec, ok, err := s.Store.GetShard(shardID)
-		if err != nil {
-			return status.Errorf(codes.Internal, "lookup shard %s: %v", shardID, err)
-		}
-		if ok {
-			expectedToken = rec.HeartbeatToken
-		}
-	}
-	if expectedToken == "" {
-		return status.Errorf(codes.Unauthenticated, "unknown or untokened shard %s", shardID)
-	}
-
 	md, _ := metadata.FromIncomingContext(ctx)
 	values := md.Get("authorization")
 	if len(values) == 0 {
 		return status.Errorf(codes.Unauthenticated, "heartbeat missing authorization bearer for %s", shardID)
 	}
 	presented := strings.TrimPrefix(values[0], "Bearer ")
-	if !store.ConstantTimeTokenEqual(expectedToken, presented) {
-		return status.Errorf(codes.Unauthenticated, "heartbeat bearer mismatch for %s", shardID)
+	if err := s.Coord.Provisioner.AuthenticateShard(shardID, presented); err != nil {
+		if errors.Is(err, logdb.ErrShardAuthFailed) {
+			return status.Errorf(codes.Unauthenticated, "%v", err)
+		}
+		return status.Errorf(codes.Internal, "%v", err)
 	}
 	return nil
 }

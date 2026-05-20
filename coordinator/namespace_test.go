@@ -80,7 +80,7 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 		Customer: "kevlar",
 	})
 
-	if err := ds.Ingest(rows); err != nil {
+	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 

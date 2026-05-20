@@ -17,29 +17,10 @@ import (
 // path and by tests that pre-seed fixtures.
 func (p *Provisioner) Add(entry *ShardEntry) { p.registry.Add(entry) }
 
-// Get returns the entry for id, or nil if not present.
-func (p *Provisioner) Get(id string) *ShardEntry { return p.registry.Get(id) }
-
-// AllShards returns every live Shard connection in the registry, in
-// arbitrary order. Used by status RPCs.
-func (p *Provisioner) AllShards() []shard.Shard { return p.registry.AllShards() }
-
-// Entries returns a snapshot of all registry entries. Used for
-// health/status reporting where the caller needs more than just the
-// Shard connections.
-func (p *Provisioner) Entries() []*ShardEntry { return p.registry.Entries() }
-
 // IngestingShard returns an INGESTING shard for app via round-robin
 // across matching shards, or nil if none qualify.
 func (p *Provisioner) IngestingShard(app string) shard.Shard {
 	return p.registry.IngestingShard(app)
-}
-
-// DefaultIngestingShard returns any non-suspended INGESTING shard.
-// Used by the ingest drain's fallback path when no app-specific
-// shard matches yet.
-func (p *Provisioner) DefaultIngestingShard() shard.Shard {
-	return p.registry.DefaultIngestingShard()
 }
 
 // TotalIngesting returns the count of INGESTING shards regardless
@@ -48,14 +29,15 @@ func (p *Provisioner) TotalIngesting() int { return p.registry.TotalIngesting() 
 
 // RecordIngestFailure increments the consecutive-failure counter for
 // id and may flip the entry to Suspended once the threshold trips.
-// Returns the new failure count.
-func (p *Provisioner) RecordIngestFailure(id string) int {
+// Returns (count, threshold). Satisfies shard.IngestRecorder so the
+// drain loop can pass *Provisioner straight into sh.Ingest.
+func (p *Provisioner) RecordIngestFailure(id string) (count, threshold int) {
 	return p.registry.RecordIngestFailure(id)
 }
 
 // ResetIngestFailures clears the consecutive-failure counter for id.
-// Called on a successful Ingest to keep flaky-but-recovering shards
-// from drifting into Suspended.
+// Other half of the shard.IngestRecorder contract; called by
+// Shard.Ingest on the success path.
 func (p *Provisioner) ResetIngestFailures(id string) {
 	p.registry.ResetIngestFailures(id)
 }

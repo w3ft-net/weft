@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
 )
@@ -130,12 +131,68 @@ func TestSuspended_ExcludedFromWrites_IncludedInQueries(t *testing.T) {
 	if sh := reg.IngestingShard("vimgym"); sh != nil {
 		t.Error("IngestingShard should skip suspended shard")
 	}
-	if sh := reg.DefaultIngestingShard(); sh != nil {
-		t.Error("DefaultIngestingShard should skip suspended shard")
-	}
 
 	matching := reg.MatchingEntries(fullRange, "vimgym", store.Tier("bolt"))
 	if len(matching) != 1 {
 		t.Errorf("MatchingEntries should include suspended shard, got %d", len(matching))
+	}
+}
+
+// TestSuspend_ViaShardIngest verifies the Shard.Ingest →
+// IngestRecorder → registry wiring end-to-end: a failing shard's
+// Ingest calls feed RecordIngestFailure on the registry (passed in
+// as the recorder), and after SuspendFailureThreshold calls the
+// entry flips to Suspended. A healthy sibling, exercised in the
+// same loop, stays unsuspended because each success resets its
+// counter.
+//
+// This was the integration the old coordinator-side liveness test
+// covered; moving it to logdb removes the drain loop from the
+// picture but keeps the bit that actually matters — that Shard.Ingest
+// drives the suspend counter through the recorder interface.
+func TestSuspend_ViaShardIngest(t *testing.T) {
+	reg := NewShardRegistry()
+	shardA := &failingShard{id: "shard-a", failing: true}
+	shardB := &failingShard{id: "shard-b"}
+	reg.Add(&ShardEntry{ID: "shard-a", State: StateIngesting, Shard: shardA, CreatedAt: time.Now()})
+	reg.Add(&ShardEntry{ID: "shard-b", State: StateIngesting, Shard: shardB, CreatedAt: time.Now()})
+
+	// *ShardRegistry directly satisfies shard.IngestRecorder.
+	rows := []*pb.LogRow{{Raw: "x", TsUnixNs: time.Now().UnixNano()}}
+	for i := 0; i < SuspendFailureThreshold; i++ {
+		_ = shardA.Ingest(rows, reg)
+		_ = shardB.Ingest(rows, reg)
+	}
+
+	if !reg.Get("shard-a").Suspended {
+		t.Errorf("shard-a should be Suspended after %d failed Ingest calls", SuspendFailureThreshold)
+	}
+	if reg.Get("shard-b").Suspended {
+		t.Error("shard-b should not be Suspended — every Ingest succeeded")
+	}
+}
+
+// TestSuspend_LastShardDown_NoRouting — when the only INGESTING
+// shard for an app trips the suspend threshold, IngestingShard must
+// stop returning it. Pins the drain-loop's "no shard owns this app"
+// DLQ branch.
+func TestSuspend_LastShardDown_NoRouting(t *testing.T) {
+	reg := NewShardRegistry()
+	shardA := &failingShard{id: "shard-a", failing: true}
+	reg.Add(&ShardEntry{
+		ID: "shard-a", Apps: []string{"weft/coordinator"},
+		State: StateIngesting, Shard: shardA, CreatedAt: time.Now(),
+	})
+
+	rows := []*pb.LogRow{{Raw: "x", TsUnixNs: time.Now().UnixNano()}}
+	for i := 0; i < SuspendFailureThreshold; i++ {
+		_ = shardA.Ingest(rows, reg)
+	}
+
+	if !reg.Get("shard-a").Suspended {
+		t.Fatalf("shard-a should be Suspended after %d failed Ingest calls", SuspendFailureThreshold)
+	}
+	if sh := reg.IngestingShard("weft/coordinator"); sh != nil {
+		t.Errorf("IngestingShard should return nil for an app whose only shard is suspended; got %s", sh.ID())
 	}
 }
