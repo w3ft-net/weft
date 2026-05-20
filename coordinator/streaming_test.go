@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kevlarcon/weft/compute"
+	"github.com/kevlarcon/weft/logdb"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
@@ -119,11 +120,11 @@ func TestExecute_StagedPipelinePopulatesText(t *testing.T) {
 // query failures server-side.
 func TestExecute_ShardErrorReturnsPartialResults(t *testing.T) {
 	c := setupTestCoordinator(t)
-	c.Registry.Add(&ShardEntry{
+	c.Registry.Add(&logdb.ShardEntry{
 		ID:          "shard-1",
 		Apps:        []string{"vimgym", "callbox"},
 		WindowStart: t1, WindowEnd: t2,
-		State:     StateIngesting,
+		State:     logdb.StateIngesting,
 		Shard:     &errShard{id: "shard-1"},
 		CreatedAt: time.Now(),
 	})

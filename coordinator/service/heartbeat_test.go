@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/kevlarcon/weft/coordinator"
+	"github.com/kevlarcon/weft/logdb"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/store"
 )
@@ -18,9 +19,9 @@ import (
 func newRegisteredShard(t *testing.T, shardID, token string) *Server {
 	t.Helper()
 	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
-	coord.Registry.Add(&coordinator.ShardEntry{
+	coord.Registry.Add(&logdb.ShardEntry{
 		ID:             shardID,
-		State:          coordinator.StateIngesting,
+		State:          logdb.StateIngesting,
 		Addr:           "10.0.0.1:9000",
 		HeartbeatToken: token,
 	})
@@ -156,7 +157,7 @@ func TestHeartbeat_UnknownInRegistry_LoadFromStore(t *testing.T) {
 		Apps:           "[]",
 		WindowStart:    "2026-04-21T00:00:00Z",
 		WindowEnd:      "2026-04-22T00:00:00Z",
-		State:          string(coordinator.StateIngesting),
+		State:          string(logdb.StateIngesting),
 		HeartbeatToken: token,
 		Tier:           "small",
 		BucketID:       1,

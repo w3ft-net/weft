@@ -21,7 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
-	"github.com/kevlarcon/weft/coordinator"
+	"github.com/kevlarcon/weft/logdb"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -133,7 +133,7 @@ func seedInstance(t *testing.T, cfg aws.Config, az string) string {
 // the SNS topic. Matches the payload shape AWS emits.
 func publishLaunchEvent(t *testing.T, cfg aws.Config, topicArn, asgName, instanceID string) {
 	t.Helper()
-	event := coordinator.LifecycleEvent{
+	event := logdb.LifecycleEvent{
 		ASGName:             asgName,
 		InstanceID:          instanceID,
 		LifecycleHookName:   asgName + "-launch",
@@ -194,8 +194,8 @@ func TestLifecycle_Integration_ChristenPath(t *testing.T) {
 	instanceID := seedInstance(t, cfg, "us-east-2a")
 	asgName := "weft-shard-small"
 	asgRecorder := &recordingASG{}
-	reg := coordinator.NewShardRegistry()
-	vm := coordinator.NewEC2VolumeManagerWithClient(ec2.NewFromConfig(cfg))
+	reg := logdb.NewShardRegistry()
+	vm := logdb.NewEC2VolumeManagerWithClient(ec2.NewFromConfig(cfg))
 
 	// Christen needs a LAUNCHING row to claim — that's the
 	// reconciler's pre-mint (coordinator/lifecycle.go:201-216). Seed
@@ -207,7 +207,7 @@ func TestLifecycle_Integration_ChristenPath(t *testing.T) {
 	shardID := "shard-christen-" + testSuffix()
 	if err := db.SaveShard(&store.ShardRecord{
 		ID:             shardID,
-		State:          string(coordinator.StateLaunching),
+		State:          string(logdb.StateLaunching),
 		Tier:           "small",
 		BucketID:       1, // default bucket — auto-created at coordinator startup
 		Apps:           "null",
@@ -220,7 +220,7 @@ func TestLifecycle_Integration_ChristenPath(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.DeleteShard(shardID) })
 
-	handler := coordinator.NewLifecycleHandler(coordinator.LifecycleHandlerConfig{
+	handler := logdb.NewLifecycleHandler(logdb.LifecycleHandlerConfig{
 		Volumes:      vm,
 		EC2Instances: ec2.NewFromConfig(cfg),
 		ASG:          asgRecorder,
@@ -231,7 +231,7 @@ func TestLifecycle_Integration_ChristenPath(t *testing.T) {
 		SizeByTier:   map[string]int32{"small": 10},
 		DeviceName:   "/dev/sdf",
 	})
-	poller := coordinator.NewLifecyclePoller(handler, sqs.NewFromConfig(cfg), queue)
+	poller := logdb.NewLifecyclePoller(handler, sqs.NewFromConfig(cfg), queue)
 	poller.WaitTimeSeconds = 2
 	poller.VisibilityTimeout = 30
 
@@ -310,10 +310,10 @@ func TestLifecycle_Integration_RecoverPath(t *testing.T) {
 
 	instanceID := seedInstance(t, cfg, az)
 
-	reg := coordinator.NewShardRegistry()
-	reg.Add(&coordinator.ShardEntry{
+	reg := logdb.NewShardRegistry()
+	reg.Add(&logdb.ShardEntry{
 		ID:    shardID,
-		State: coordinator.StateIngesting,
+		State: logdb.StateIngesting,
 		Addr:  "10.0.0.1:9000",
 	})
 
@@ -323,8 +323,8 @@ func TestLifecycle_Integration_RecoverPath(t *testing.T) {
 	defer db.Close()
 
 	asgRecorder := &recordingASG{}
-	vm := coordinator.NewEC2VolumeManagerWithClient(ec2c)
-	handler := coordinator.NewLifecycleHandler(coordinator.LifecycleHandlerConfig{
+	vm := logdb.NewEC2VolumeManagerWithClient(ec2c)
+	handler := logdb.NewLifecycleHandler(logdb.LifecycleHandlerConfig{
 		Volumes:      vm,
 		EC2Instances: ec2c,
 		ASG:          asgRecorder,
@@ -334,7 +334,7 @@ func TestLifecycle_Integration_RecoverPath(t *testing.T) {
 		SizeByTier:   map[string]int32{"small": 10},
 		DeviceName:   "/dev/sdf",
 	})
-	poller := coordinator.NewLifecyclePoller(handler, sqs.NewFromConfig(cfg), queue)
+	poller := logdb.NewLifecyclePoller(handler, sqs.NewFromConfig(cfg), queue)
 	poller.WaitTimeSeconds = 2
 	poller.VisibilityTimeout = 30
 
@@ -426,14 +426,14 @@ func TestLifecycle_Integration_RetirementPath(t *testing.T) {
 	}
 	volumeID := *volOut.VolumeId
 
-	vm := coordinator.NewEC2VolumeManagerWithClient(ec2c)
+	vm := logdb.NewEC2VolumeManagerWithClient(ec2c)
 
 	// Exercise the production sequence directly — snapshot → detach →
 	// delete — through the real SDK calls. Skips the full archive()
 	// wrapper (which wants a DuckDBShard); this verifies the AWS
 	// side, not the Parquet export.
 	ctx := context.Background()
-	snapID, err := vm.SnapshotVolume(ctx, coordinator.SnapshotOpts{
+	snapID, err := vm.SnapshotVolume(ctx, logdb.SnapshotOpts{
 		VolumeID:    volumeID,
 		ShardID:     shardID,
 		ParquetPath: parquetPath,

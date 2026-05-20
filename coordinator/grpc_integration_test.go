@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/kevlarcon/weft/compute"
+	"github.com/kevlarcon/weft/logdb"
 	computesvc "github.com/kevlarcon/weft/compute/service"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
@@ -65,15 +66,15 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 
 	apps := []string{"vimgym", "callbox"}
 	c := NewCoordinator(CoordinatorConfig{Pool: pool, Store: testQueryStore(t, "kevlar", "vimgym", "callbox", "warp")})
-	c.Registry.Add(&ShardEntry{
+	c.Registry.Add(&logdb.ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: DevT0, WindowEnd: DevT1,
-		State: StateIngesting, Shard: gs0, Addr: shard0Addr,
+		State: logdb.StateIngesting, Shard: gs0, Addr: shard0Addr,
 	})
-	c.Registry.Add(&ShardEntry{
+	c.Registry.Add(&logdb.ShardEntry{
 		ID: "shard-1", Apps: apps,
 		WindowStart: DevT1, WindowEnd: DevT2,
-		State: StateIngesting, Shard: gs1, Addr: shard1Addr,
+		State: logdb.StateIngesting, Shard: gs1, Addr: shard1Addr,
 	})
 	return c
 }

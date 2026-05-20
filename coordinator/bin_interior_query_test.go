@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kevlarcon/weft/logdb"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
@@ -62,10 +63,10 @@ func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, 
 		Store: db,
 	})
 	c.Pool = &registryPool{registry: c.Registry}
-	c.Registry.Add(&ShardEntry{
+	c.Registry.Add(&logdb.ShardEntry{
 		ID:        s.ID(),
 		Apps:      []string{"api", "web"},
-		State:     StateIngesting,
+		State:     logdb.StateIngesting,
 		Shard:     s,
 		CreatedAt: time.Now(),
 	})

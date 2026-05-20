@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/kevlarcon/weft/coordinator"
+	"github.com/kevlarcon/weft/logdb"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 	shardservice "github.com/kevlarcon/weft/shard/service"
@@ -113,16 +114,16 @@ func TestColdShardQueryRouting(t *testing.T) {
 		Store:             tx,
 		LambdaFunctionURL: lambdaSrv.URL,
 	})
-	c.Registry.Add(&coordinator.ShardEntry{
+	c.Registry.Add(&logdb.ShardEntry{
 		ID: "cold-route-0", Apps: apps,
 		WindowStart: t0, WindowEnd: t1,
-		State: coordinator.StateIngesting, Addr: s0Addr,
+		State: logdb.StateIngesting, Addr: s0Addr,
 		CreatedAt: time.Now(),
 	})
-	c.Registry.Add(&coordinator.ShardEntry{
+	c.Registry.Add(&logdb.ShardEntry{
 		ID: "cold-route-1", Apps: apps,
 		WindowStart: t1, WindowEnd: t2,
-		State: coordinator.StateArchived, ParquetPath: s3Path,
+		State: logdb.StateArchived, ParquetPath: s3Path,
 		Shard:     cold,
 		RowCount:  4, // archived shard holds data; MatchingEntries now skips 0-row cold/RO shards
 		CreatedAt: time.Now(),
@@ -130,9 +131,9 @@ func TestColdShardQueryRouting(t *testing.T) {
 
 	// --- Query each window independently, then combined ---
 
-	hotWindow := coordinator.TimeRange{Start: t0, End: t1}
-	coldWindow := coordinator.TimeRange{Start: t1, End: t2}
-	fullWindow := coordinator.TimeRange{Start: t0, End: t2}
+	hotWindow := logdb.TimeRange{Start: t0, End: t1}
+	coldWindow := logdb.TimeRange{Start: t1, End: t2}
+	fullWindow := logdb.TimeRange{Start: t0, End: t2}
 
 	hotRows := drainQuery(t, c, `cat vimgym.log`, hotWindow)
 	if len(hotRows) == 0 {
@@ -239,7 +240,7 @@ func startColdShardHTTP(t *testing.T, s3cfg *shard.S3Config) *httptest.Server {
 	return srv
 }
 
-func drainQuery(t *testing.T, c *coordinator.Coordinator, pipeline string, tr coordinator.TimeRange) []*pb.ResultRow {
+func drainQuery(t *testing.T, c *coordinator.Coordinator, pipeline string, tr logdb.TimeRange) []*pb.ResultRow {
 	t.Helper()
 	res, err := c.Execute(pipeline, tr, "kevlar", "")
 	if err != nil {

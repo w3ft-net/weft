@@ -2,7 +2,7 @@
 # in `kevcons` (see .kevcons.yaml); this Makefile holds local-dev
 # tasks that don't touch AWS.
 
-.PHONY: collapse test-deploy
+.PHONY: collapse test-deploy integration integration-clean
 
 # Collapse store/migrations/* into store/schema.sql. Run after a
 # successful production deploy (kevcons will eventually trigger this
@@ -16,3 +16,20 @@ collapse:
 # Go tests live under `go test ./...`; this is the bash-only side.
 test-deploy:
 	./deploy/load-app-env-extra_test.sh
+
+# One-shot integration suite: bring the docker stack up (with the
+# localstack overlay), run the integration tag set, tear down. Wraps
+# scripts/integration-test.sh.
+integration:
+	./scripts/integration-test.sh
+
+# Wipe the dev state the docker stack accumulates so the next
+# integration run starts from zero. Removes postgres + minio volumes
+# (via compose down -v), the docker-launcher-spawned shard containers
+# (which live outside compose), and the per-shard DuckDB subdirs under
+# dev/shard-data/ that the launcher intentionally preserves across
+# container kills. Idempotent.
+integration-clean:
+	docker compose -f docker-compose.yml -f docker-compose.localstack.yml down -v --remove-orphans 2>/dev/null || true
+	docker ps -aq --filter "name=weft-shard-" | xargs -r docker rm -f >/dev/null 2>&1 || true
+	rm -rf dev/shard-data

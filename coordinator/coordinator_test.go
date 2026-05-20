@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kevlarcon/weft/compute"
+	"github.com/kevlarcon/weft/logdb"
 	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
@@ -21,7 +22,7 @@ import (
 // looks up each descriptor's shard ID in the registry, grabs the
 // entry's Shard pointer, and calls QueryToSink directly.
 type registryPool struct {
-	registry *ShardRegistry
+	registry *logdb.ShardRegistry
 }
 
 func (p *registryPool) ExecuteQuery(req *pb.ExecuteQueryRequest) (compute.LineStream, error) {
@@ -100,16 +101,16 @@ func setupTestCoordinator(t testing.TB) *Coordinator {
 	apps := []string{"vimgym", "callbox"}
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox", "warp")})
 	c.Pool = &registryPool{registry: c.Registry}
-	c.Registry.Add(&ShardEntry{
+	c.Registry.Add(&logdb.ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: t0, WindowEnd: t1,
-		State: StateIngesting, Shard: s0,
+		State: logdb.StateIngesting, Shard: s0,
 		CreatedAt: time.Now(),
 	})
-	c.Registry.Add(&ShardEntry{
+	c.Registry.Add(&logdb.ShardEntry{
 		ID: "shard-1", Apps: apps,
 		WindowStart: t1, WindowEnd: t2,
-		State: StateIngesting, Shard: s1,
+		State: logdb.StateIngesting, Shard: s1,
 		CreatedAt: time.Now(),
 	})
 	return c
@@ -530,14 +531,14 @@ func TestRegistry_AppScopedQueryRouting(t *testing.T) {
 		}
 	}
 
-	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
+	reg := logdb.NewShardRegistry()
+	reg.Add(&logdb.ShardEntry{
 		ID: "shard-vimgym", Apps: []string{"vimgym"},
-		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: sVim,
+		WindowStart: t0, WindowEnd: t2, State: logdb.StateIngesting, Shard: sVim,
 	})
-	reg.Add(&ShardEntry{
+	reg.Add(&logdb.ShardEntry{
 		ID: "shard-callbox", Apps: []string{"callbox"},
-		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: sCb,
+		WindowStart: t0, WindowEnd: t2, State: logdb.StateIngesting, Shard: sCb,
 	})
 
 	// Query for vimgym should only hit shard-vimgym.
@@ -569,10 +570,10 @@ func TestRegistry_IngestingShard(t *testing.T) {
 	}
 	t.Cleanup(func() { s0.Close() })
 
-	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
+	reg := logdb.NewShardRegistry()
+	reg.Add(&logdb.ShardEntry{
 		ID: "s0", Apps: []string{"vimgym", "grantcentral"},
-		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: s0,
+		WindowStart: t0, WindowEnd: t2, State: logdb.StateIngesting, Shard: s0,
 	})
 
 	if sh := reg.IngestingShard("vimgym"); sh == nil {
@@ -593,10 +594,10 @@ func TestRegistry_ExpiringShardExcluded(t *testing.T) {
 	}
 	t.Cleanup(func() { s0.Close() })
 
-	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
+	reg := logdb.NewShardRegistry()
+	reg.Add(&logdb.ShardEntry{
 		ID: "s0", WindowStart: t0, WindowEnd: t2,
-		State: StateExpiring, Shard: s0,
+		State: logdb.StateExpiring, Shard: s0,
 	})
 
 	matching := reg.MatchingEntries(fullRange, "", "bolt")
@@ -605,9 +606,11 @@ func TestRegistry_ExpiringShardExcluded(t *testing.T) {
 	}
 }
 
-// TestExecuteQuery_DescriptorFields verifies that ShardSecret and
-// LambdaFunctionURL from CoordinatorConfig propagate into the
-// ExecuteQueryRequest that reaches the compute pool.
+// TestExecuteQuery_DescriptorFields verifies that LambdaFunctionURL
+// from CoordinatorConfig propagates into the ExecuteQueryRequest that
+// reaches the compute pool, and that live/archived shard descriptors
+// are populated correctly. SHARD_SECRET no longer travels through
+// the request — compute reads it from its own env.
 func TestExecuteQuery_DescriptorFields(t *testing.T) {
 	s0, err := shard.NewDuckDBShard("shard-live", "")
 	if err != nil {
@@ -622,22 +625,21 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 	apps := []string{"vimgym", "callbox"}
 
 	c := NewCoordinator(CoordinatorConfig{
-		ShardSecret:       "test-secret-token",
 		LambdaFunctionURL: "https://lambda.example.com/cold-query",
 	})
 	spy := &spyPool{inner: &registryPool{registry: c.Registry}}
 	c.Pool = spy
 
-	c.Registry.Add(&ShardEntry{
+	c.Registry.Add(&logdb.ShardEntry{
 		ID: "shard-live", Apps: apps,
 		WindowStart: now.Add(-2 * time.Hour), WindowEnd: now.Add(-1 * time.Hour),
-		State: StateIngesting, Shard: s0, Addr: "10.0.0.1:9000",
+		State: logdb.StateIngesting, Shard: s0, Addr: "10.0.0.1:9000",
 		CreatedAt: now,
 	})
-	c.Registry.Add(&ShardEntry{
+	c.Registry.Add(&logdb.ShardEntry{
 		ID: "shard-archived", Apps: apps,
 		WindowStart: now.Add(-1 * time.Hour), WindowEnd: now,
-		State: StateArchived, Shard: s0, ParquetPath: "s3://bucket/shard-archived.parquet",
+		State: logdb.StateArchived, Shard: s0, ParquetPath: "s3://bucket/shard-archived.parquet",
 		RowCount:  1,
 		CreatedAt: now,
 	})
@@ -655,10 +657,6 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 	}
 	if spy.lastReq == nil {
 		t.Fatal("pool never received an ExecuteQueryRequest")
-	}
-
-	if spy.lastReq.ShardSecret != "test-secret-token" {
-		t.Errorf("ShardSecret = %q, want %q", spy.lastReq.ShardSecret, "test-secret-token")
 	}
 
 	descByID := map[string]*pb.ShardDescriptor{}

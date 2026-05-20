@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kevlarcon/weft/logdb"
 	"github.com/kevlarcon/weft/shard"
 )
 
@@ -45,10 +46,10 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c.Registry.Add(&ShardEntry{
+	c.Registry.Add(&logdb.ShardEntry{
 		ID: "shard-0", Apps: []string{"vimgym", "callbox"},
 		WindowStart: t0, WindowEnd: t1,
-		State: StateIngesting, Shard: s0,
+		State: logdb.StateIngesting, Shard: s0,
 		CreatedAt: time.Now(),
 	})
 
@@ -78,10 +79,10 @@ func TestFailover_ShardReplacement(t *testing.T) {
 
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
 	c.Pool = &registryPool{registry: c.Registry}
-	c.Registry.Add(&ShardEntry{
+	c.Registry.Add(&logdb.ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: t0, WindowEnd: t1,
-		State: StateIngesting, Shard: s0,
+		State: logdb.StateIngesting, Shard: s0,
 		CreatedAt: time.Now(),
 	})
 
@@ -104,10 +105,10 @@ func TestFailover_ShardReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c.Registry.Add(&ShardEntry{
+	c.Registry.Add(&logdb.ShardEntry{
 		ID: "shard-1", Apps: apps,
 		WindowStart: t1, WindowEnd: t2,
-		State: StateIngesting, Shard: s1,
+		State: logdb.StateIngesting, Shard: s1,
 		CreatedAt: time.Now(),
 	})
 
@@ -136,10 +137,10 @@ func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
 	apps := []string{"vimgym", "callbox"}
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStoreReal(t, "kevlar", "vimgym", "callbox")})
 	c.Pool = &registryPool{registry: c.Registry}
-	c.Registry.Add(&ShardEntry{
+	c.Registry.Add(&logdb.ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: t0, WindowEnd: t1,
-		State: StateIngesting, Shard: s0,
+		State: logdb.StateIngesting, Shard: s0,
 		CreatedAt: time.Now(),
 	})
 
@@ -198,10 +199,10 @@ func TestFailover_GetShardsSnapshot(t *testing.T) {
 	defer s0.Close()
 
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
-	c.Registry.Add(&ShardEntry{
+	c.Registry.Add(&logdb.ShardEntry{
 		ID: "shard-0", Apps: []string{"vimgym"},
 		WindowStart: t0, WindowEnd: t1,
-		State: StateIngesting, Shard: s0,
+		State: logdb.StateIngesting, Shard: s0,
 		CreatedAt: time.Now(),
 	})
 

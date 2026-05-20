@@ -55,8 +55,11 @@ func DialShard(d *pb.ShardDescriptor, secret string, creds aws.CredentialsProvid
 	return nil, fmt.Errorf("shard %s: no grpc_addr or lambda_url", d.ShardId)
 }
 
-// FanOutToShards dials each shard, runs QueryToSink, and waits.
-func FanOutToShards(req *pb.ExecuteQueryRequest, job ComputeJob, creds aws.CredentialsProvider, region string) {
+// FanOutToShards dials each shard, runs QueryToSink, and waits. The
+// secret is the SHARD_SECRET bearer for the gRPC-shard interceptor;
+// callers (typically a ComputePool) read it from their own env so it
+// never has to travel on the wire from the coordinator.
+func FanOutToShards(req *pb.ExecuteQueryRequest, job ComputeJob, secret string, creds aws.CredentialsProvider, region string) {
 	args := make([]any, len(req.Args))
 	for i, a := range req.Args {
 		args[i] = a
@@ -66,7 +69,7 @@ func FanOutToShards(req *pb.ExecuteQueryRequest, job ComputeJob, creds aws.Crede
 	for _, desc := range req.Shards {
 		go func(d *pb.ShardDescriptor) {
 			defer wg.Done()
-			sh, err := DialShard(d, req.ShardSecret, creds, region)
+			sh, err := DialShard(d, secret, creds, region)
 			if err != nil {
 				log.Printf("execute-query: dial shard %s: %v", d.ShardId, err)
 				job.SendSentinel(d.ShardId)

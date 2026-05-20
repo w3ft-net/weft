@@ -58,16 +58,16 @@ func main() {
 
 	// gRPC server with shared-token auth. Coord↔shard is an internal
 	// link — both ends are trusted services, not the public internet,
-	// so a single shared secret is enough instead of per-peer JWTs. The
-	// coordinator reads the same SHARD_SECRET env var and attaches the
-	// bearer on every outbound call via auth.ClientTokenUnaryInterceptor.
-	// Default dev value so the local docker stack works out of the box;
-	// prod gets SHARD_SECRET populated from SSM/Secrets Manager via the
-	// Packer-baked startup.sh.
+	// so a single shared secret is enough instead of per-peer JWTs.
+	// Both the coordinator and compute read the same SHARD_SECRET env
+	// var and attach the bearer on every outbound call via
+	// auth.ClientTokenUnaryInterceptor. Prod gets SHARD_SECRET from
+	// Secrets Manager via load-app-env; dev sets it explicitly in
+	// docker-compose.yml. No fallback — a process running with an
+	// undeclared shared secret is a misconfiguration, not a default.
 	shardSecret := os.Getenv("SHARD_SECRET")
 	if shardSecret == "" {
-		shardSecret = "dev-shard-secret-change-in-production"
-		log.Println("WARNING: using default SHARD_SECRET — set SHARD_SECRET in production")
+		log.Fatal("no SHARD_SECRET set")
 	}
 
 	// Runtime config watcher — powers the Query timeout and feeds

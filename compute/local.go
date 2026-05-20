@@ -23,11 +23,15 @@ import (
 type LocalComputePool struct {
 	AWSCreds  aws.CredentialsProvider
 	AWSRegion string
+	// ShardSecret is the SHARD_SECRET bearer token attached to outbound
+	// gRPC-shard dials. cmd/compute/main.go reads it from env at startup;
+	// tests that never reach a real shard can leave it empty.
+	ShardSecret string
 }
 
 func (p *LocalComputePool) ExecuteQuery(req *pb.ExecuteQueryRequest) (LineStream, error) {
 	job := p.NewJob(req.Stages, len(req.Shards), req.MergeKey, int(req.Limit), req.KeepLast)
-	go FanOutToShards(req, job, p.AWSCreds, p.AWSRegion)
+	go FanOutToShards(req, job, p.ShardSecret, p.AWSCreds, p.AWSRegion)
 	return job.Stream(), nil
 }
 

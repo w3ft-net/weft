@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kevlarcon/weft/logdb"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
@@ -54,13 +55,13 @@ func TestCoordinator_PlannerInjectsTimeRange(t *testing.T) {
 	// Build coordinator with both shards.
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym")})
 	c.Pool = &registryPool{registry: c.Registry}
-	c.Registry.Add(&ShardEntry{
+	c.Registry.Add(&logdb.ShardEntry{
 		ID: "shard-live", Apps: []string{"vimgym"},
-		WindowStart: t1, WindowEnd: t2, State: StateIngesting, Shard: live,
+		WindowStart: t1, WindowEnd: t2, State: logdb.StateIngesting, Shard: live,
 	})
-	c.Registry.Add(&ShardEntry{
+	c.Registry.Add(&logdb.ShardEntry{
 		ID: "shard-cold", Apps: []string{"vimgym"},
-		WindowStart: t0, WindowEnd: t1, State: StateArchived, Shard: cold,
+		WindowStart: t0, WindowEnd: t1, State: logdb.StateArchived, Shard: cold,
 		RowCount: 3,
 	})
 
