@@ -14,19 +14,20 @@ import (
 	"github.com/kevlarcon/warp/pkg/bash"
 	luapkg "github.com/kevlarcon/warp/pkg/lua"
 	"github.com/kevlarcon/weft/compute"
+	"github.com/kevlarcon/weft/logdb"
+	"github.com/kevlarcon/weft/mounts"
 	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
-	"github.com/kevlarcon/weft/mounts"
 	"github.com/kevlarcon/weft/shellfs"
 	"github.com/kevlarcon/weft/store"
 )
 
-// TimeRange specifies the query time window.
-type TimeRange struct {
-	Start time.Time
-	End   time.Time
-}
+// TimeRange aliases logdb.TimeRange so callers inside the coordinator
+// package can keep using the unqualified name. The canonical type
+// lives in logdb because the registry (which lives there too) bounds
+// its MatchingEntries query on it.
+type TimeRange = logdb.TimeRange
 
 // QueryResult is the legacy buffered shape: Rows for shard output,
 // Text for compute output, Stderr for alert output, Notices for one-
@@ -136,23 +137,22 @@ func (r *ExecuteResult) Drain(ctx context.Context) (*DrainedResult, error) {
 // propagates to ShellFS, AlertContext, and /bin script resolution.
 //
 // Built via NewCoordinator(CoordinatorConfig). Every dependency is
-// resolved at construction time; the only post-init mutator is
-// Provisioner (it needs to point at coord.Registry, so it can't be
-// passed in until the registry exists).
+// resolved at construction time; main.go later swaps in the real
+// logdb.Provisioner once logdb.Start has wired its launcher and store.
+// The default provisioner installed by NewCoordinator carries an empty
+// registry so c.Provisioner is never nil — drain and query paths
+// read fields fresh on every pass, so the swap is safe.
 type Coordinator struct {
-	Registry    *ShardRegistry
-	Pool        compute.ComputePool     // nil = no compute support
-	Tail        *TailBroker             // nil = no live-tail subscriptions
-	Ingest      *RingBuffer             // write path: IngestStream → buffer → shards; nil disables StartDrain
-	Provisioner *Provisioner            // shard lifecycle management (nil = no auto-provisioning); set post-construction
-	Usage       *CustomerUsageStats     // nil = no per-customer byte metering
-	Store       *store.Store            // nil = no tenant-scoped features (/bin, alert dispatch); test-only
-	SeenApps    *SeenApps               // ingest-stream app discovery; constructor always installs
-	DLQ         *DLQ                    // S3 dead-letter queue for failed ingests
-	Errors      *IngestionErrorRecorder // async error persistence
-	Notifier    NotifyDispatcher        // per-customer alert dispatcher (nil = disabled). Interface type so a nil value is true-nil — no typed-nil-via-concrete-pointer trap when callers thread it into AlertContext.
-	shardSecret       string
-	lambdaFunctionURL string
+	Pool              compute.ComputePool     // nil = no compute support
+	Tail              *TailBroker             // nil = no live-tail subscriptions
+	Ingest            *RingBuffer             // write path: IngestStream → buffer → shards. NewCoordinator always installs one; StartDrain still has to be called explicitly.
+	Provisioner       *logdb.Provisioner      // shard lifecycle + registry. Never nil after NewCoordinator; main.go swaps in the real one once logdb.Start completes.
+	Usage             *CustomerUsageStats     // nil = no per-customer byte metering
+	Store             *store.Store            // nil = no tenant-scoped features (/bin, alert dispatch); test-only
+	SeenApps          *SeenApps               // ingest-stream app discovery; constructor always installs
+	DLQ               *DLQ                    // S3 dead-letter queue for failed ingests
+	Errors            *IngestionErrorRecorder // async error persistence
+	Notifier          NotifyDispatcher        // per-customer alert dispatcher (nil = disabled). Interface type so a nil value is true-nil — no typed-nil-via-concrete-pointer trap when callers thread it into AlertContext.
 	// ScriptExecutionTimeout caps how long a single runLocal invocation
 	// may run. Zero = use the package-level default (scriptExecutionTimeout).
 	// Tests override to shorten the wait.
@@ -184,12 +184,11 @@ type loweredCacheEntry struct {
 //
 // Required: Pool. Everything else is optional — nil means "feature
 // disabled" with a documented runtime fall-through, not "we forgot to
-// wire it." Provisioner is intentionally absent: it takes a
-// *ShardRegistry that NewCoordinator builds, so circular ordering
-// forces it to be assigned after construction. See coord.Provisioner.
+// wire it." logdb.Provisioner is intentionally absent: NewCoordinator
+// installs a no-op stub so c.Provisioner is never nil, and main.go
+// swaps in the real one once logdb.Start completes.
 type CoordinatorConfig struct {
-	Pool   compute.ComputePool
-	Shards []shard.Shard
+	Pool compute.ComputePool
 
 	Store    *store.Store
 	Notifier NotifyDispatcher
@@ -199,9 +198,6 @@ type CoordinatorConfig struct {
 	DLQ      *DLQ
 	Errors   *IngestionErrorRecorder
 
-	// ShardSecret is the bearer token for shard gRPC auth. Passed
-	// to compute workers so they can dial shards directly.
-	ShardSecret string
 	// LambdaFunctionURL is the Lambda endpoint for cold shard queries.
 	// Passed to compute workers for archived shard descriptors.
 	LambdaFunctionURL string
@@ -276,24 +272,14 @@ func (s *SeenApps) Names(customer string) []string {
 }
 
 // NewCoordinator builds a fully-wired coordinator from cfg. The
-// returned coordinator is ready to serve requests immediately; no
-// post-construction field mutation is required (or expected) other
-// than Provisioner — see CoordinatorConfig for why that one is the
-// exception.
-//
-// Shards in cfg.Shards are registered with no Apps populated; callers
-// that need the entries to participate in app-specific query routing
-// must add them via coord.Registry.Add(...) with explicit Apps.
+// returned coordinator is ready to serve requests immediately. The
+// installed Provisioner is a bare stub with an empty registry and no
+// launcher; main.go swaps in the real one once logdb.Start has wired
+// the production launcher and persistence layer. Tests live on the
+// stub directly and seed it via logdb.SeedShard(c.Provisioner, ...)
+// — registry population is the provisioner's concern, not the
+// coordinator's.
 func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
-	reg := NewShardRegistry()
-	for _, s := range cfg.Shards {
-		reg.Add(&ShardEntry{
-			ID:        s.ID(),
-			State:     StateIngesting,
-			Shard:     s,
-			CreatedAt: time.Now(),
-		})
-	}
 	pool := cfg.Pool
 	if pool == nil {
 		// Every query routes through the compute pool — including the
@@ -303,19 +289,45 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		// GRPCComputePool explicitly.
 		pool = &compute.LocalComputePool{}
 	}
+	ingest := cfg.Ingest
+	if ingest == nil {
+		// The ring buffer has no external deps and the write path
+		// always goes through it — there's no scenario where a
+		// caller benefits from skipping it. Default keeps test
+		// setups terse without losing the buffer; production wires
+		// a larger capacity in cmd/coordinator/main.go.
+		ingest = NewRingBuffer(1024)
+	}
+	// A no-op Provisioner gives the coordinator a usable registry
+	// surface during the boot window between NewCoordinator and
+	// logdb.Start. Tests run on this default — they never start the
+	// ticker, so a nil launcher/store is fine. LambdaFunctionURL is
+	// the only config field tests routinely set (descriptor-building
+	// stamps it onto archived entries); production overwrites the
+	// whole Provisioner via logdb.Start anyway.
+	prov := logdb.NewProvisioner(logdb.NewShardRegistry(), nil, logdb.ProvisionerConfig{
+		LambdaFunctionURL: cfg.LambdaFunctionURL,
+	})
+	// When a Store is supplied (production, plus tests that exercise
+	// the store-backed fallbacks like the rebind-after-restart auth
+	// path), wire it through to the stub provisioner. logdb.Start
+	// later replaces this provisioner wholesale in production; for
+	// the boot window and for tests, this is what gives
+	// AuthenticateShard et al. a store to read from.
+	if cfg.Store != nil {
+		prov.SetStore(cfg.Store)
+	}
 	return &Coordinator{
-		Registry:               reg,
 		Pool:                   pool,
+		Provisioner:            prov,
 		Tail:                   cfg.Tail,
-		Ingest:                 cfg.Ingest,
+		Ingest:                 ingest,
 		Usage:                  cfg.Usage,
 		Store:                  cfg.Store,
 		SeenApps:               NewSeenApps(),
 		DLQ:                    cfg.DLQ,
 		Errors:                 cfg.Errors,
 		Notifier:               cfg.Notifier,
-		shardSecret:            cfg.ShardSecret,
-		lambdaFunctionURL:      cfg.LambdaFunctionURL,
 		ScriptExecutionTimeout: cfg.ScriptExecutionTimeout,
 	}
 }
@@ -350,41 +362,41 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 				}
 
 				for app, rows := range byApp {
-					sh := c.Registry.IngestingShard(app)
+					// Strict app-scoped routing only. A "default" fallback
+					// across the whole registry would commingle rows onto
+					// shards bound to a *different* customer's namespace
+					// — query-time WHERE customer=... preserves logical
+					// isolation, but the on-disk parquet would carry mixed
+					// tenants and the shard's Apps list would lie.
+					// IngestStream calls OnboardApp on first-seen apps;
+					// rows that arrive before that bucket-add reconciles
+					// land in DLQ and the DLQ scanner re-ingests once
+					// IngestingShard has a match.
+					sh := c.Provisioner.IngestingShard(app)
 					if sh == nil {
-						sh = c.Registry.DefaultIngestingShard()
-					}
-					if sh == nil {
-						// No healthy shards at all — DLQ immediately.
 						dlqPath := c.DLQ.Write(rows)
-						c.Errors.Record("none", "no healthy shards available", rows, dlqPath)
-						log.Printf("drain: DLQ'd %d rows for %s (no healthy shards)", len(rows), app)
+						c.Errors.Record("none", "no shard owns app "+app, rows, dlqPath)
+						log.Printf("drain: DLQ'd %d rows for %s (no shard owns this app)", len(rows), app)
 						continue
 					}
-					if err := sh.Ingest(rows); err != nil {
-						// Count consecutive failures; only suspend once a
-						// sustained failure run crosses suspendFailureThreshold.
-						// One flaky RPC shouldn't take a shard out of rotation.
-						failures := c.Registry.RecordIngestFailure(sh.ID())
-						if c.Registry.Get(sh.ID()).Suspended {
-							log.Printf("drain: suspending shard %s after %d consecutive failures: %v",
-								sh.ID(), failures, err)
-						} else {
-							log.Printf("drain: ingest failed on shard %s (%d/%d): %v",
-								sh.ID(), failures, suspendFailureThreshold, err)
-						}
+					// sh.Ingest reports its own outcome to the provisioner —
+					// incrementing the consecutive-failure counter (and
+					// flipping to Suspended at threshold) on error, resetting
+					// it on success. The returned error already names the
+					// shard and the resulting state, so one log line covers
+					// both the "still healthy, N/M" and "now suspended" cases.
+					if err := sh.Ingest(rows, c.Provisioner); err != nil {
+						log.Printf("drain: %v", err)
 
-						// Retry on a different healthy shard.
-						fallback := c.Registry.IngestingShard(app)
-						if fallback == nil {
-							fallback = c.Registry.DefaultIngestingShard()
-						}
-						if fallback != nil {
-							if retryErr := fallback.Ingest(rows); retryErr == nil {
-								c.Registry.ResetIngestFailures(fallback.ID())
-								if c.Provisioner != nil {
-									c.Provisioner.Stats().Record(app, int64(len(rows)))
-								}
+						// Retry once. IngestingShard round-robins, so a
+						// second call lands on a different candidate if any
+						// exist for this app; a recently-suspended primary
+						// is excluded automatically. With small per-app
+						// candidate sets the two attempts are typically
+						// exhaustive.
+						if fallback := c.Provisioner.IngestingShard(app); fallback != nil {
+							if retryErr := fallback.Ingest(rows, c.Provisioner); retryErr == nil {
+								c.Provisioner.Stats().Record(app, int64(len(rows)))
 								continue // retry succeeded
 							}
 						}
@@ -395,10 +407,7 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 						log.Printf("drain: DLQ'd %d rows for %s (shard %s failed, no fallback)", len(rows), app, sh.ID())
 						continue
 					}
-					c.Registry.ResetIngestFailures(sh.ID())
-					if c.Provisioner != nil {
-						c.Provisioner.Stats().Record(app, int64(len(rows)))
-					}
+					c.Provisioner.Stats().Record(app, int64(len(rows)))
 				}
 			}
 		}
@@ -440,14 +449,11 @@ func (c *Coordinator) flushUsage(store *store.Store) {
 	}
 }
 
-// GetShards returns all live shard connections.
-func (c *Coordinator) GetShards() []shard.Shard {
-	return c.Registry.AllShards()
-}
-
-// IngestingShard returns the current INGESTING shard for the given app.
+// IngestingShard returns the current INGESTING shard for the given
+// app. Exists for poller.ShardProvider; non-poller call sites go
+// through c.Provisioner directly.
 func (c *Coordinator) IngestingShard(app string) shard.Shard {
-	return c.Registry.IngestingShard(app)
+	return c.Provisioner.IngestingShard(app)
 }
 
 // clampTimeRange floors tr.Start at (now − LogRetention(tier)) so that
@@ -665,20 +671,9 @@ func (c *Coordinator) executeLowered(watch *store.CronWatch, tr TimeRange, alert
 // than wrong), and skips the per-fire TierForCustomer lookup (tier
 // is baked into LoweredPlan at save time).
 func (c *Coordinator) dispatchLoweredWithTier(lp *planner.LoweredPlan, args []any, tr TimeRange, tier store.Tier, alertCtx *AlertContext) (*ExecuteResult, error) {
-	entries := c.Registry.MatchingEntries(tr, lp.FollowApp, tier)
-	if len(entries) == 0 {
+	descs := c.Provisioner.ShardDescriptorsFor(tr, lp.FollowApp, tier)
+	if len(descs) == 0 {
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
-	}
-	descs := make([]*pb.ShardDescriptor, len(entries))
-	for i, e := range entries {
-		d := &pb.ShardDescriptor{ShardId: e.ID, Apps: e.Apps}
-		if e.State == StateArchived {
-			d.LambdaUrl = c.lambdaFunctionURL
-			d.ParquetPath = e.ParquetPath
-		} else {
-			d.GrpcAddr = e.Addr
-		}
-		descs[i] = d
 	}
 	argStrs := make([]string, len(args))
 	for i, a := range args {
@@ -689,14 +684,13 @@ func (c *Coordinator) dispatchLoweredWithTier(lp *planner.LoweredPlan, args []an
 		}
 	}
 	stream, err := c.Pool.ExecuteQuery(&pb.ExecuteQueryRequest{
-		Sql:         lp.DirectShardSQL,
-		Args:        argStrs,
-		Shards:      descs,
-		Stages:      lp.ComputeStages,
-		MergeKey:    lp.MergeKey,
-		Limit:       int32(lp.Limit),
-		ShardSecret: c.shardSecret,
-		KeepLast:    lp.TailMode,
+		Sql:      lp.DirectShardSQL,
+		Args:     argStrs,
+		Shards:   descs,
+		Stages:   lp.ComputeStages,
+		MergeKey: lp.MergeKey,
+		Limit:    int32(lp.Limit),
+		KeepLast: lp.TailMode,
 	})
 	if err != nil {
 		return nil, err
@@ -1009,24 +1003,14 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	if custID != 0 {
 		tier = c.Store.TierForCustomer(custID)
 	}
-	entries := c.Registry.MatchingEntries(tr, plan.FollowApp, tier)
-	if len(entries) == 0 {
+	descs := c.Provisioner.ShardDescriptorsFor(tr, plan.FollowApp, tier)
+	if len(descs) == 0 {
 		queryLog.Printf("query: no matching shards (app=%s, customer=%s)", plan.SourceApp, customer)
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
-
-	descs := make([]*pb.ShardDescriptor, len(entries))
-	shardIDs := make([]string, len(entries))
-	for i, e := range entries {
-		shardIDs[i] = e.ID
-		d := &pb.ShardDescriptor{ShardId: e.ID, Apps: e.Apps}
-		if e.State == StateArchived {
-			d.LambdaUrl = c.lambdaFunctionURL
-			d.ParquetPath = e.ParquetPath
-		} else {
-			d.GrpcAddr = e.Addr
-		}
-		descs[i] = d
+	shardIDs := make([]string, len(descs))
+	for i, d := range descs {
+		shardIDs[i] = d.ShardId
 	}
 	queryLog.Printf("query: app=%s shards=%v compute=%v sql=%s",
 		plan.SourceApp, shardIDs, plan.ComputeStages, directSQL)
@@ -1045,13 +1029,12 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 		}
 	}
 	stream, err := c.Pool.ExecuteQuery(&pb.ExecuteQueryRequest{
-		Sql:         directSQL,
-		Args:        argStrs,
-		Shards:      descs,
-		Stages:      plan.ComputeStages,
-		MergeKey:    plan.ShardOrderBy,
-		Limit:       int32(plan.Limit),
-		ShardSecret: c.shardSecret,
+		Sql:      directSQL,
+		Args:     argStrs,
+		Shards:   descs,
+		Stages:   plan.ComputeStages,
+		MergeKey: plan.ShardOrderBy,
+		Limit:    int32(plan.Limit),
 		// tail-mode: shard SQL wraps to ASC; compute must retain
 		// last-N instead of stopping after first-N emitted.
 		KeepLast: plan.TailMode,
@@ -1216,4 +1199,3 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 
 	return res, nil
 }
-

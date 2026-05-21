@@ -224,8 +224,11 @@ message ExecuteQueryRequest {
   repeated string stages = 3;
   string merge_key = 4;
   int32 limit = 5;
-  // Bearer token for gRPC shard auth.
-  string shard_secret = 6;
+  // Tag 6 was string shard_secret; the bearer token now lives on the
+  // compute worker (SHARD_SECRET env var, read in cmd/compute/main.go)
+  // so the coordinator no longer needs to know the shard credential.
+  reserved 6;
+  reserved "shard_secret";
   // keep_last switches the limit semantic: false (default) trims after
   // N emitted (head); true retains a ring buffer of the LAST N rows
   // seen across the merged stream and emits at EOF (tail). Set by the

@@ -33,7 +33,18 @@ func main() {
 	// requests with an empty region yields a 403 from the function
 	// URL's IAM authorizer. See compute.ResolveRegion.
 	region := compute.ResolveRegion()
-	pool := &compute.LocalComputePool{AWSRegion: region}
+
+	// Bearer token for the gRPC-shard interceptor. Compute owns this
+	// now — the coordinator no longer carries it in ExecuteQueryRequest.
+	// Both sides (shard server, compute client) read SHARD_SECRET from
+	// their own env so the credential never travels on the coord→compute
+	// hop. cmd/shard/main.go reads the same var.
+	shardSecret := os.Getenv("SHARD_SECRET")
+	if shardSecret == "" {
+		log.Fatal("no SHARD_SECRET set")
+	}
+
+	pool := &compute.LocalComputePool{AWSRegion: region, ShardSecret: shardSecret}
 	if awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(region)); err != nil {
 		log.Printf("warning: AWS config unavailable — cold shard queries will fail: %v", err)
 	} else {

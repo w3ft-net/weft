@@ -1,11 +1,8 @@
 package compute
 
 import (
-	"fmt"
 	"log"
 	"sync"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
@@ -35,28 +32,19 @@ type ComputePool interface {
 	ExecuteQuery(req *pb.ExecuteQueryRequest) (LineStream, error)
 }
 
-// DialShard creates a shard.Shard from a proto ShardDescriptor.
-// For cold shards (Lambda-backed), creds and region enable SigV4
-// request signing. Pass nil creds to skip signing.
-func DialShard(d *pb.ShardDescriptor, secret string, creds aws.CredentialsProvider, region string) (shard.Shard, error) {
-	if d.GrpcAddr != "" {
-		return shard.NewGRPCShard(d.ShardId, d.GrpcAddr, secret)
-	}
-	if d.LambdaUrl != "" {
-		cs, err := shard.NewColdShard(d.ShardId, d.Apps, d.ParquetPath, d.LambdaUrl, nil)
-		if err != nil {
-			return nil, err
-		}
-		if creds != nil {
-			cs.WithAWSAuth(creds, region)
-		}
-		return cs, nil
-	}
-	return nil, fmt.Errorf("shard %s: no grpc_addr or lambda_url", d.ShardId)
-}
+// ResolveShardFunc materializes a shard.Shard handle for a descriptor.
+// Implementations decide whether to dial fresh, return a cached
+// handle, or consult a registered Resolver override. FanOutToShards
+// is otherwise oblivious to where the handle came from — the boundary
+// is "give me something I can call QueryToSink on."
+type ResolveShardFunc func(d *pb.ShardDescriptor) (shard.Shard, error)
 
-// FanOutToShards dials each shard, runs QueryToSink, and waits.
-func FanOutToShards(req *pb.ExecuteQueryRequest, job ComputeJob, creds aws.CredentialsProvider, region string) {
+// FanOutToShards turns each descriptor into a handle (via resolve),
+// runs QueryToSink concurrently, and waits. The resolver owns
+// connection caching and rebind invalidation; FanOut is intentionally
+// dumb about lifecycle — it does not Close the handle on return,
+// because the pool's cache may keep it for the next query.
+func FanOutToShards(req *pb.ExecuteQueryRequest, job ComputeJob, resolve ResolveShardFunc) {
 	args := make([]any, len(req.Args))
 	for i, a := range req.Args {
 		args[i] = a
@@ -66,13 +54,12 @@ func FanOutToShards(req *pb.ExecuteQueryRequest, job ComputeJob, creds aws.Crede
 	for _, desc := range req.Shards {
 		go func(d *pb.ShardDescriptor) {
 			defer wg.Done()
-			sh, err := DialShard(d, req.ShardSecret, creds, region)
+			sh, err := resolve(d)
 			if err != nil {
-				log.Printf("execute-query: dial shard %s: %v", d.ShardId, err)
+				log.Printf("execute-query: resolve shard %s: %v", d.ShardId, err)
 				job.SendSentinel(d.ShardId)
 				return
 			}
-			defer sh.Close()
 			sh.QueryToSink(req.Sql, args, job)
 		}(desc)
 	}

@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/kevlarcon/weft/compute"
+	"github.com/kevlarcon/weft/logdb"
 	computesvc "github.com/kevlarcon/weft/compute/service"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
@@ -26,7 +27,7 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ds0.Ingest(DevShardRows("shard-0")); err != nil {
+	if err := ds0.Ingest(DevShardRows("shard-0"), nil); err != nil {
 		t.Fatal(err)
 	}
 	shard0Addr := startShardServer(t, ds0)
@@ -36,7 +37,7 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ds1.Ingest(DevShardRows("shard-1")); err != nil {
+	if err := ds1.Ingest(DevShardRows("shard-1"), nil); err != nil {
 		t.Fatal(err)
 	}
 	shard1Addr := startShardServer(t, ds1)
@@ -65,15 +66,15 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 
 	apps := []string{"vimgym", "callbox"}
 	c := NewCoordinator(CoordinatorConfig{Pool: pool, Store: testQueryStore(t, "kevlar", "vimgym", "callbox", "warp")})
-	c.Registry.Add(&ShardEntry{
+	logdb.SeedShard(c.Provisioner, &logdb.ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: DevT0, WindowEnd: DevT1,
-		State: StateIngesting, Shard: gs0, Addr: shard0Addr,
+		State: logdb.StateIngesting, Shard: gs0, Addr: shard0Addr,
 	})
-	c.Registry.Add(&ShardEntry{
+	logdb.SeedShard(c.Provisioner, &logdb.ShardEntry{
 		ID: "shard-1", Apps: apps,
 		WindowStart: DevT1, WindowEnd: DevT2,
-		State: StateIngesting, Shard: gs1, Addr: shard1Addr,
+		State: logdb.StateIngesting, Shard: gs1, Addr: shard1Addr,
 	})
 	return c
 }

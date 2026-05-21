@@ -2,7 +2,7 @@
 # in `kevcons` (see .kevcons.yaml); this Makefile holds local-dev
 # tasks that don't touch AWS.
 
-.PHONY: collapse test-deploy
+.PHONY: collapse test test-deploy integration integration-clean
 
 # Collapse store/migrations/* into store/schema.sql. Run after a
 # successful production deploy (kevcons will eventually trigger this
@@ -12,7 +12,33 @@
 collapse:
 	./scripts/collapse-migrations.sh
 
+# Run the Go test suite with the `test` build tag. The tag enables
+# files like logdb/fixtures.go that ship fixture-seeding helpers
+# (logdb.SeedShard) — those are guarded out of production builds so
+# they can't be linked into a deployed coordinator. Plain
+# `go test ./...` without the tag will fail to compile any package
+# whose tests reach for those helpers; that's the intended tripwire.
+test:
+	go test -tags test ./...
+
 # Run bash-side tests for deploy/ scripts (load-app-env-extra etc.).
-# Go tests live under `go test ./...`; this is the bash-only side.
+# Go tests live under `make test`; this is the bash-only side.
 test-deploy:
 	./deploy/load-app-env-extra_test.sh
+
+# One-shot integration suite: bring the docker stack up (with the
+# localstack overlay), run the integration tag set, tear down. Wraps
+# scripts/integration-test.sh.
+integration:
+	./scripts/integration-test.sh
+
+# Wipe the dev state the docker stack accumulates so the next
+# integration run starts from zero. Removes postgres + minio volumes
+# (via compose down -v), the docker-launcher-spawned shard containers
+# (which live outside compose), and the per-shard DuckDB subdirs under
+# dev/shard-data/ that the launcher intentionally preserves across
+# container kills. Idempotent.
+integration-clean:
+	docker compose -f docker-compose.yml -f docker-compose.localstack.yml down -v --remove-orphans 2>/dev/null || true
+	docker ps -aq --filter "name=weft-shard-" | xargs -r docker rm -f >/dev/null 2>&1 || true
+	rm -rf dev/shard-data

@@ -11,7 +11,6 @@ import (
 	"github.com/kevlarcon/weft/auth"
 	"github.com/kevlarcon/weft/coordinator"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
 )
 
 // captureStream is a minimal grpc.ServerStreamingServer stub that
@@ -54,15 +53,7 @@ func TestQueryRPC_EmitsNoticesOnFirstTmpWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sh, err := shard.NewDuckDBShard("shard-notice-wire", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sh.Close()
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{
-		Shards: []shard.Shard{sh},
-		Store:  st,
-	})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Store: st})
 	srv := &Server{Coord: coord, Store: st}
 
 	// Inject the authenticated caller into the context (the auth

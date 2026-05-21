@@ -858,7 +858,7 @@ func runIngest() {
 	}
 	defer ds.Close()
 
-	if err := ds.Ingest(rows); err != nil {
+	if err := ds.Ingest(rows, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "ingest: %v\n", err)
 		os.Exit(1)
 	}

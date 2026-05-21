@@ -13,10 +13,10 @@ import (
 	astypes "github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 
-	"github.com/kevlarcon/weft/coordinator"
+	"github.com/kevlarcon/weft/logdb"
 )
 
-// recordingASGApi satisfies coordinator.ASGApi so we can drive a real
+// recordingASGApi satisfies logdb.ASGApi so we can drive a real
 // ASGLauncher at integration scope and see exactly which calls it
 // emits. LocalStack Community doesn't implement ASG; stubbing is the
 // only path. Every call is serialized through aws-sdk-go-v2's
@@ -81,38 +81,38 @@ func (r *recordingASGApi) terminates() []recordedTerminate {
 // stubBucketsFromAppBucket wraps a single bucket into the Buckets
 // interface so ReconcileBucket can drive from it.
 type stubBucketsFromAppBucket struct {
-	bucket *coordinator.AppBucket
+	bucket *logdb.AppBucket
 }
 
-func (s *stubBucketsFromAppBucket) Default() (*coordinator.AppBucket, error) {
+func (s *stubBucketsFromAppBucket) Default() (*logdb.AppBucket, error) {
 	return s.bucket, nil
 }
-func (s *stubBucketsFromAppBucket) ByID(id int64) (*coordinator.AppBucket, error) {
+func (s *stubBucketsFromAppBucket) ByID(id int64) (*logdb.AppBucket, error) {
 	if s.bucket != nil && s.bucket.ID == id {
 		return s.bucket, nil
 	}
 	return nil, nil
 }
-func (s *stubBucketsFromAppBucket) ByLabel(label string) (*coordinator.AppBucket, error) {
+func (s *stubBucketsFromAppBucket) ByLabel(label string) (*logdb.AppBucket, error) {
 	if s.bucket != nil && s.bucket.Label == label {
 		return s.bucket, nil
 	}
 	return nil, nil
 }
-func (s *stubBucketsFromAppBucket) All() ([]*coordinator.AppBucket, error) {
+func (s *stubBucketsFromAppBucket) All() ([]*logdb.AppBucket, error) {
 	if s.bucket == nil {
 		return nil, nil
 	}
-	return []*coordinator.AppBucket{s.bucket}, nil
+	return []*logdb.AppBucket{s.bucket}, nil
 }
 func (s *stubBucketsFromAppBucket) EvaluateSplit(_ map[string]int64) (string, error) {
 	return "", nil
 }
-func (s *stubBucketsFromAppBucket) Split(_ string) (*coordinator.AppBucket, error) {
+func (s *stubBucketsFromAppBucket) Split(_ string) (*logdb.AppBucket, error) {
 	return nil, nil
 }
-func (s *stubBucketsFromAppBucket) SetStore(_ coordinator.BucketStore) {}
-func (s *stubBucketsFromAppBucket) AddAppToBucket(_ int64, _ string) (*coordinator.AppBucket, error) {
+func (s *stubBucketsFromAppBucket) SetStore(_ logdb.BucketStore) {}
+func (s *stubBucketsFromAppBucket) AddAppToBucket(_ int64, _ string) (*logdb.AppBucket, error) {
 	return nil, nil
 }
 
@@ -143,7 +143,7 @@ func TestTerminateOnArchive_CallsASGTerminate(t *testing.T) {
 	instanceID := seedInstance(t, cfg, "us-east-2a")
 
 	shardID := "shard-term-" + testSuffix()
-	bucket := &coordinator.AppBucket{
+	bucket := &logdb.AppBucket{
 		ID:              1,
 		Label:           "default",
 		Apps:            nil,
@@ -152,12 +152,12 @@ func TestTerminateOnArchive_CallsASGTerminate(t *testing.T) {
 		WindowDuration: time.Hour,
 	}
 
-	reg := coordinator.NewShardRegistry()
-	reg.Add(&coordinator.ShardEntry{
+	reg := logdb.NewShardRegistry()
+	reg.Add(&logdb.ShardEntry{
 		ID:         shardID,
 		BucketID:   bucket.ID,
 		Tier:       "small",
-		State:      coordinator.StateArchived, // retire already ran; just the compute left
+		State:      logdb.StateArchived, // retire already ran; just the compute left
 		InstanceID: instanceID,
 		Addr:       "10.0.0.10:9000",
 		// EBSVolumeID intentionally empty — volume already retired.
@@ -166,14 +166,14 @@ func TestTerminateOnArchive_CallsASGTerminate(t *testing.T) {
 	asgRec := &recordingASGApi{
 		describeResponses: map[string]int32{"weft-shard-small": 16},
 	}
-	launcher := coordinator.NewASGLauncherWithClients(
+	launcher := logdb.NewASGLauncherWithClients(
 		asgRec,
 		ec2c,
 		map[string]string{"small": "weft-shard-small"},
 		9000,
 	)
 
-	prov := coordinator.NewProvisioner(reg, launcher, coordinator.ProvisionerConfig{})
+	prov := logdb.NewProvisioner(reg, launcher, logdb.ProvisionerConfig{})
 	prov.Buckets = &stubBucketsFromAppBucket{bucket: bucket}
 
 	ctx := context.Background()
@@ -200,7 +200,7 @@ func TestTerminateOnArchive_CallsASGTerminate(t *testing.T) {
 	if entry.Addr != "" {
 		t.Errorf("Addr: got %q want empty", entry.Addr)
 	}
-	if entry.State != coordinator.StateArchived {
+	if entry.State != logdb.StateArchived {
 		t.Errorf("State: got %s want still ARCHIVED", entry.State)
 	}
 

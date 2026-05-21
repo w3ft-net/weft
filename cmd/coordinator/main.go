@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -10,39 +9,33 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"runtime"
-	"strings"
 	"syscall"
 
 	"time"
 
 	"google.golang.org/grpc"
 
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	weftsdk "github.com/w3ft-net/weft-go"
 
 	"github.com/kevlarcon/weft/auth"
 	"github.com/kevlarcon/weft/compute"
 	weftcfg "github.com/kevlarcon/weft/config"
 	"github.com/kevlarcon/weft/coordinator"
-	"github.com/kevlarcon/weft/internal/email"
-	"github.com/kevlarcon/weft/coordinator/discovery"
 	"github.com/kevlarcon/weft/coordinator/poller"
 	coordsvc "github.com/kevlarcon/weft/coordinator/service"
+	"github.com/kevlarcon/weft/internal/email"
+	"github.com/kevlarcon/weft/logdb"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
 )
 
 func main() {
 	port := flag.Int("port", 9020, "gRPC listen port")
-	healthPort := flag.Int("health-port", 9021, "HTTP health listen port")
-	shardsFlag := flag.String("shards", "", "comma-separated shard specs: id=addr=start=end,... (for Docker/dev)")
+	healthPort := flag.Int("health-port", 9021, "HTTP liveness listen port")
 	shardASGSmall := flag.String("shard-asg-small", "", "small tier shard ASG name")
 	shardASGMedium := flag.String("shard-asg-medium", "", "medium tier shard ASG name")
 	shardASGLarge := flag.String("shard-asg-large", "", "large tier shard ASG name")
 	computeAddr := flag.String("compute", "", "compute worker address (host:port)")
-	computeASG := flag.String("compute-asg", "", "compute ASG name for AWS discovery (production)")
 	awsRegion := flag.String("region", "us-east-2", "AWS region for ASG discovery")
 	customer := flag.String("customer", "", "fallback customer for dev/docker (queries pass customer per-request)")
 	dbDSN := flag.String("db-dsn", "", "PostgreSQL DSN (e.g., host=localhost dbname=weft user=weft password=...)")
@@ -56,25 +49,17 @@ func main() {
 		log.Printf("warning: query-audit log to %s unavailable, using stderr: %v", *queryLogPath, err)
 	}
 
-	// Shared bearer token for coord ↔ shard gRPC. Coord is the client,
-	// shard is the server; both read the same SHARD_SECRET env var and
-	// exchange it on every call via auth.ClientToken / SharedToken
-	// interceptors. Default matches cmd/shard/main.go so the local
-	// docker stack works without additional config.
+	// Shared bearer token for coord ↔ shard gRPC. The query path no
+	// longer needs this — compute reads SHARD_SECRET from its own env
+	// and dials shards itself. We still read it here because the
+	// coordinator dials shards directly for Ingest (drain loop),
+	// Archive (rotation), boot rehydration (ReconstructShard), and the
+	// dev DockerLauncher (which injects it into spawned shard
+	// containers as the server-side credential).
 	shardSecret := os.Getenv("SHARD_SECRET")
 	if shardSecret == "" {
-		shardSecret = "dev-shard-secret-change-in-production"
-		log.Println("WARNING: using default SHARD_SECRET — set SHARD_SECRET in production")
+		log.Fatal("no SHARD_SECRET set")
 	}
-
-	var shards []shard.Shard
-
-	// Shard setup: explicit specs, legacy single ASG, or tiered ASGs.
-	if *shardsFlag != "" {
-		shards = parseShardsFlag(*shardsFlag, shardSecret)
-	}
-	// Provisioner manages shard lifecycle. No startup discovery needed —
-	// shards are restored from postgres or bootstrapped by the provisioner.
 
 	// Compute pool setup.
 	var pool compute.ComputePool
@@ -85,26 +70,8 @@ func main() {
 		}
 		pool = p
 		log.Printf("connected to compute at %s", *computeAddr)
-	} else if *computeASG != "" {
-		disc, err := discovery.NewASGDiscovery(*awsRegion, *computeASG, 9010)
-		if err != nil {
-			log.Fatalf("init compute discovery: %v", err)
-		}
-		addrs, err := disc.DiscoverAddrs(context.Background())
-		if err != nil || len(addrs) == 0 {
-			log.Printf("no compute workers found, using local pool")
-			pool = &compute.LocalComputePool{}
-		} else {
-			p, err := compute.NewGRPCComputePool(addrs[0])
-			if err != nil {
-				log.Fatalf("connect to compute: %v", err)
-			}
-			pool = p
-			log.Printf("connected to compute at %s (from ASG)", addrs[0])
-		}
 	} else {
-		pool = &compute.LocalComputePool{}
-		log.Printf("using local compute pool")
+		log.Fatal("no compute addr specified")
 	}
 
 	// Open the store before building the Coordinator so /bin lookup,
@@ -134,14 +101,12 @@ func main() {
 	notifier := coordinator.NewNotifier(db, email.ConfigFromEnv())
 
 	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{
-		Shards:            shards,
 		Pool:              pool,
 		Store:             db,
 		Notifier:          notifier,
 		Tail:              coordinator.NewTailBroker(),
 		Ingest:            coordinator.NewRingBuffer(1_000_000),
 		Usage:             coordinator.NewCustomerUsageStats(),
-		ShardSecret:       shardSecret,
 		LambdaFunctionURL: os.Getenv("LAMBDA_FUNCTION_URL"),
 	})
 
@@ -165,132 +130,22 @@ func main() {
 	provCtx, provCancel := context.WithCancel(context.Background())
 	defer provCancel()
 
-	// Load AWS credentials once for Lambda SigV4 signing. Used by
-	// both the provisioner (archive path) and reconstruct (boot).
-	awsCfg, awsCfgErr := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(*awsRegion))
-	if awsCfgErr != nil {
-		log.Printf("warning: AWS config unavailable — Lambda cold queries will fail: %v", awsCfgErr)
+	// Shard-data control plane: registry hydration, provisioner +
+	// launcher, lifecycle poller. All policy from env lives inside
+	// logdb; only the runtime-derived inputs (db, secret, region,
+	// tiers) cross the boundary. logdb.Start owns the registry and
+	// returns it inside the provisioner.
+	prov, err := logdb.Start(logdb.Config{
+		Ctx:         provCtx,
+		DB:          db,
+		ShardSecret: shardSecret,
+		AWSRegion:   *awsRegion,
+		ShardTiers:  shardTiers,
+	})
+	if err != nil {
+		log.Fatalf("logdb.Start: %v", err)
 	}
-	if awsCfgErr == nil {
-		if lp, ok := pool.(*compute.LocalComputePool); ok {
-			lp.AWSCreds = awsCfg.Credentials
-			lp.AWSRegion = *awsRegion
-		}
-	}
-
-	// Hydrate the shard registry from postgres BEFORE starting the
-	// provisioner or lifecycle poller. The lifecycle handler's
-	// recognisedAsDead checks the registry to decide whether an
-	// orphan EBS volume should be recovered; an empty registry
-	// causes every volume to be abandoned, orphaning data on every
-	// deploy. The store-fallback in recognisedAsDead is defense in
-	// depth; populating the registry first is the primary fix.
-	{
-		coord.Registry.SetStore(db)
-		s3cfg := shard.S3ConfigFromEnv()
-		lambdaURL := os.Getenv("LAMBDA_FUNCTION_URL")
-		reconstructCfg := coordinator.ReconstructConfig{
-			ShardSecret:       shardSecret,
-			LambdaFunctionURL: lambdaURL,
-			S3Config:          s3cfg,
-		}
-		if awsCfgErr == nil {
-			reconstructCfg.AWSCredentials = awsCfg.Credentials
-			reconstructCfg.AWSRegion = *awsRegion
-		}
-		if err := coord.Registry.LoadFromStore(func(rec store.ShardRecord) (shard.Shard, error) {
-			return coordinator.ReconstructShard(rec, reconstructCfg)
-		}); err != nil {
-			log.Printf("warning: load shards from store: %v", err)
-		} else {
-			log.Printf("coordinator: restored shards from store")
-		}
-	}
-
-	if len(shardTiers) > 0 {
-		// Production: ASG launcher for shard EC2 instances.
-		asgLauncher, err := coordinator.NewASGLauncher(*awsRegion, shardTiers, 9000)
-		if err != nil {
-			log.Printf("warning: ASG launcher unavailable: %v", err)
-		} else {
-			provConfig := coordinator.DefaultProvisionerConfig()
-			provConfig.ShardSecret = shardSecret
-			provConfig.S3Config = shard.S3ConfigFromEnv()
-			provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
-			provConfig.LambdaFunctionURL = os.Getenv("LAMBDA_FUNCTION_URL")
-			if awsCfgErr == nil {
-				provConfig.AWSCredentials = awsCfg.Credentials
-				provConfig.AWSRegion = *awsRegion
-			}
-			prov := coordinator.NewProvisioner(coord.Registry, asgLauncher, provConfig)
-			coord.Provisioner = prov
-
-			// Attach a VolumeManager so christen() can tag EBS volumes
-			// with the minted shard id. Runs in prod mode; unavailable
-			// when the SDK can't load (caller warned above).
-			if vm, err := coordinator.NewEC2VolumeManager(*awsRegion); err != nil {
-				log.Printf("warning: VolumeManager unavailable: %v", err)
-			} else {
-				prov.SetVolumeManager(vm)
-			}
-
-			prov.SetStore(db)
-			// No-cache: SetStore on the bucket manager is all that's
-			// needed; every lookup hits the DB.
-			prov.Buckets.SetStore(db)
-
-			prov.Start(provCtx)
-			log.Printf("provisioner: started with ASG tiers %v", shardTiers)
-
-			// Lifecycle poller: consume ASG launch hook events from SQS
-			// and decide christen/recover for each new shard instance.
-			// Controlled by LIFECYCLE_QUEUE_URL so dev/docker
-			// coordinators stay out of this path.
-			if queueURL := os.Getenv("LIFECYCLE_QUEUE_URL"); queueURL != "" {
-				tierByASG := make(map[string]string, len(shardTiers))
-				for tier, asgName := range shardTiers {
-					tierByASG[asgName] = tier
-				}
-				sizeByTier := readTierSizes()
-				lcCfg := coordinator.LifecycleHandlerConfig{
-					Registry:   coord.Registry,
-					TierByASG:  tierByASG,
-					SizeByTier: sizeByTier,
-					DeviceName: os.Getenv("SHARD_VOLUME_DEVICE"),
-					Store:      db,
-					ShardOps:   db,
-				}
-				poller, err := coordinator.BuildLifecyclePoller(provCtx, *awsRegion, queueURL, lcCfg)
-				if err != nil {
-					log.Printf("warning: lifecycle poller unavailable: %v", err)
-				} else if poller != nil {
-					poller.Start(provCtx)
-					log.Printf("lifecycle: subscribed to %s", queueURL)
-				}
-			}
-		}
-	} else {
-		// Dev/Docker: spawn sibling shard containers via DockerLauncher
-		// so each shard has a persistent dataDir on a host bind-mount,
-		// heartbeats independently, and survives a coordinator process
-		// restart. Misconfiguration (missing host data root, missing
-		// docker socket) is fatal in this branch — we don't silently
-		// fall back to in-process shards anymore. Unit tests use the
-		// in-package localLauncher directly, not this code path.
-		launcher := buildDockerLauncher(shardSecret)
-		provConfig := coordinator.DevProvisionerConfig()
-		provConfig.ShardSecret = shardSecret
-		provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
-		prov := coordinator.NewProvisioner(coord.Registry, launcher, provConfig)
-		coord.Provisioner = prov
-
-		prov.SetStore(db)
-		prov.Buckets.SetStore(db)
-
-		prov.Start(provCtx)
-		log.Printf("provisioner: started with docker launcher (dev mode), image=%s data=%s",
-			launcher.Image, launcher.HostDataRoot)
-	}
+	coord.Provisioner = prov
 
 	// Post-provisioner db-dependent setup: usage metering, customer
 	// seeding, archived-shard rehydration, pollers. Everything above
@@ -324,28 +179,6 @@ func main() {
 		}
 		cronExec.Start(ctx)
 	}
-
-	// HTTP health endpoint with subsystem metrics for load testing.
-	go func() {
-		http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-			var mem runtime.MemStats
-			runtime.ReadMemStats(&mem)
-
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{
-				"status": "ok",
-				"shards": len(coord.GetShards()),
-				"system": map[string]any{
-					"goroutines":  runtime.NumGoroutine(),
-					"heap_mb":     mem.HeapAlloc / 1024 / 1024,
-					"heap_sys_mb": mem.HeapSys / 1024 / 1024,
-					"gc_cycles":   mem.NumGC,
-				},
-			})
-		})
-		log.Printf("coordinator health on :%d", *healthPort)
-		http.ListenAndServe(fmt.Sprintf(":%d", *healthPort), nil)
-	}()
 
 	// gRPC server with auth interceptors.
 	//
@@ -384,6 +217,25 @@ func main() {
 	cfgPtr := weftcfg.Watch(cfgCtx, appName, *awsRegion, 60*time.Second)
 	bootCfg := cfgPtr.Load()
 
+	// HTTP liveness endpoint. Deliberately minimal — just 200 OK on
+	// /health so docker compose's healthcheck, the integration harness
+	// (integration/harness.go:217), and any external watchdog can tell
+	// the process is up and accepting requests. No subsystem metrics
+	// here; if we ever need that, expose it on the gRPC API behind
+	// auth, not on an open HTTP port.
+	go func() {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintln(w, "ok")
+		})
+		addr := fmt.Sprintf(":%d", *healthPort)
+		log.Printf("coordinator health on %s", addr)
+		if err := http.ListenAndServe(addr, mux); err != nil {
+			log.Printf("health listener exited: %v", err)
+		}
+	}()
+
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
 		log.Fatalf("listen: %v", err)
@@ -402,8 +254,6 @@ func main() {
 		Store:  db,
 		CfgPtr: cfgPtr,
 	})
-
-	log.Printf("coordinator listening on :%d (%d shards, customer=%s)", *port, len(shards), *customer)
 
 	wc, _ := weftsdk.New()
 	defer wc.Close()
@@ -427,88 +277,3 @@ func main() {
 	}
 }
 
-// readTierSizes returns per-tier data volume sizes from env vars populated
-// by load-app-env out of the TF-managed config blob (see
-// stacks/asg-weft-application/main.tf → aws_ssm_parameter.app_config_blob).
-// Falls back to sensible defaults when a var is missing or unparseable.
-func readTierSizes() map[string]int32 {
-	defaults := map[string]int32{"small": 100, "medium": 500, "large": 2000}
-	sizes := map[string]int32{}
-	for tier, def := range defaults {
-		envKey := fmt.Sprintf("SHARD_%s_VOLUME_GB", strings.ToUpper(tier))
-		if val, ok := parsePositiveInt32(os.Getenv(envKey)); ok {
-			sizes[tier] = val
-		} else {
-			sizes[tier] = def
-		}
-	}
-	return sizes
-}
-
-// buildDockerLauncher constructs a DockerLauncher from env vars set on
-// the coordinator container by docker-compose. Fatal on missing/empty
-// required vars — there's no in-process fallback in this branch, so
-// the operator gets a precise error rather than silent data loss.
-//
-// Required env vars:
-//
-//	WEFT_SHARD_IMAGE      — the image tag to spawn (typically the same
-//	                         image the coordinator runs from)
-//	WEFT_DOCKER_NETWORK   — the docker network name from compose so the
-//	                         spawned shard can resolve "coordinator"
-//	                         by service DNS
-//	WEFT_HOST_DATA_ROOT   — host-side absolute path bind-mounted to
-//	                         WEFT_LOCAL_DATA_ROOT inside both the
-//	                         coordinator and each spawned shard
-//	WEFT_LOCAL_DATA_ROOT  — same volume's path inside the coordinator
-//	                         container; used to mkdir per-shard subdirs
-//	WEFT_COORDINATOR_ADDR — the address shards send heartbeats to;
-//	                         typically "coordinator:9020"
-func buildDockerLauncher(shardSecret string) *coordinator.DockerLauncher {
-	requireEnv := func(name string) string {
-		v := os.Getenv(name)
-		if v == "" {
-			log.Fatalf("docker launcher: %s is required (no in-process fallback in dev mode)", name)
-		}
-		return v
-	}
-	return &coordinator.DockerLauncher{
-		Image:             requireEnv("WEFT_SHARD_IMAGE"),
-		Network:           requireEnv("WEFT_DOCKER_NETWORK"),
-		HostDataRoot:      requireEnv("WEFT_HOST_DATA_ROOT"),
-		LocalDataRoot:     requireEnv("WEFT_LOCAL_DATA_ROOT"),
-		CoordinatorAddr:   requireEnv("WEFT_COORDINATOR_ADDR"),
-		HeartbeatInterval: 10 * time.Second,
-		ShardSecret:       shardSecret,
-	}
-}
-
-func parsePositiveInt32(s string) (int32, bool) {
-	if s == "" {
-		return 0, false
-	}
-	var v int32
-	if _, err := fmt.Sscanf(s, "%d", &v); err != nil || v <= 0 {
-		return 0, false
-	}
-	return v, true
-}
-
-func parseShardsFlag(flag, shardSecret string) []shard.Shard {
-	var shards []shard.Shard
-	for _, spec := range strings.Split(flag, ",") {
-		parts := strings.SplitN(spec, "=", 2)
-		if len(parts) != 2 {
-			log.Fatalf("invalid shard spec %q: expected id=addr", spec)
-		}
-		id, addr := parts[0], parts[1]
-
-		gs, err := shard.NewGRPCShard(id, addr, shardSecret)
-		if err != nil {
-			log.Fatalf("connect to shard %s at %s: %v", id, addr, err)
-		}
-		shards = append(shards, gs)
-		log.Printf("connected to shard %s at %s", id, addr)
-	}
-	return shards
-}

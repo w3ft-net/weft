@@ -2,50 +2,43 @@ package coordinator
 
 import (
 	"encoding/json"
-	"log"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kevlarcon/weft/compute"
+	"github.com/kevlarcon/weft/compute/computetest"
+	"github.com/kevlarcon/weft/logdb"
 	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
 
-// registryPool is a test-only ComputePool that resolves shards from
-// the coordinator's registry entries instead of dialing gRPC. After
-// d477ea2 the coordinator sends ShardDescriptors to compute, which
-// dials fresh connections — but unit tests use in-memory DuckDB shards
-// that don't listen on any address. This pool bridges the gap: it
-// looks up each descriptor's shard ID in the registry, grabs the
-// entry's Shard pointer, and calls QueryToSink directly.
-type registryPool struct {
-	registry *ShardRegistry
-}
-
-func (p *registryPool) ExecuteQuery(req *pb.ExecuteQueryRequest) (compute.LineStream, error) {
-	job := (&compute.LocalComputePool{}).NewJob(req.Stages, len(req.Shards), req.MergeKey, int(req.Limit), req.KeepLast)
-	for _, d := range req.Shards {
-		go func(d *pb.ShardDescriptor) {
-			e := p.registry.Get(d.ShardId)
-			if e == nil || e.Shard == nil {
-				log.Printf("registryPool: shard %s not found or has nil Shard", d.ShardId)
-				job.SendSentinel(d.ShardId)
-				return
-			}
-			args := make([]any, len(req.Args))
-			for i, a := range req.Args {
-				args[i] = a
-			}
-			e.Shard.QueryToSink(req.Sql, args, job)
-		}(d)
+// poolFromCoord returns the *compute.LocalComputePool that NewCoordinator
+// installs by default. Fails the test if some earlier code wrapped or
+// replaced c.Pool — that's a setup-order bug.
+func poolFromCoord(t testing.TB, c *Coordinator) *compute.LocalComputePool {
+	t.Helper()
+	pool, ok := c.Pool.(*compute.LocalComputePool)
+	if !ok {
+		t.Fatalf("expected c.Pool to be *compute.LocalComputePool, got %T", c.Pool)
 	}
-	return job.Stream(), nil
+	return pool
 }
 
-func (p *registryPool) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool) compute.ComputeJob {
-	return (&compute.LocalComputePool{}).NewJob(stages, shardCount, mergeKey, limit, keepLast)
+// addInProcessShard wires e.Shard into both c.Provisioner (so query
+// planning sees the entry) and c.Pool's resolver overrides (so
+// compute can run QueryToSink against the in-process handle without
+// dialing). This is the unit-test replacement for the old
+// registryPool bypass — compute still owns the dispatch, but the
+// resolver tells it "for this id, use this handle directly."
+func addInProcessShard(t testing.TB, c *Coordinator, e *logdb.ShardEntry) {
+	t.Helper()
+	if e.Shard == nil {
+		t.Fatal("addInProcessShard: entry must have non-nil Shard")
+	}
+	poolFromCoord(t, c).RegisterResolver(computetest.NewInProcessResolver(e.ID, e.Shard))
+	logdb.SeedShard(c.Provisioner, e)
 }
 
 // Base times for test fixtures. Shard 0 covers 10:00–11:00, shard 1 covers 11:00–12:00.
@@ -83,33 +76,32 @@ func setupTestCoordinator(t testing.TB) *Coordinator {
 	t.Cleanup(func() { s1.Close() })
 
 	// --- Shard 0: 10:00–11:00, 25 rows ---
-	if err := s0.Ingest(shard0Rows()); err != nil {
+	if err := s0.Ingest(shard0Rows(), nil); err != nil {
 		t.Fatalf("ingest shard-0: %v", err)
 	}
 
 	// --- Shard 1: 11:00–12:00, 25 rows ---
-	if err := s1.Ingest(shard1Rows()); err != nil {
+	if err := s1.Ingest(shard1Rows(), nil); err != nil {
 		t.Fatalf("ingest shard-1: %v", err)
 	}
 
 	// Inject some rows from a different customer to test isolation.
-	if err := s0.Ingest(otherCustomerRows()); err != nil {
+	if err := s0.Ingest(otherCustomerRows(), nil); err != nil {
 		t.Fatalf("ingest other-customer: %v", err)
 	}
 
 	apps := []string{"vimgym", "callbox"}
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox", "warp")})
-	c.Pool = &registryPool{registry: c.Registry}
-	c.Registry.Add(&ShardEntry{
+	addInProcessShard(t, c, &logdb.ShardEntry{
 		ID: "shard-0", Apps: apps,
 		WindowStart: t0, WindowEnd: t1,
-		State: StateIngesting, Shard: s0,
+		State: logdb.StateIngesting, Shard: s0,
 		CreatedAt: time.Now(),
 	})
-	c.Registry.Add(&ShardEntry{
+	addInProcessShard(t, c, &logdb.ShardEntry{
 		ID: "shard-1", Apps: apps,
 		WindowStart: t1, WindowEnd: t2,
-		State: StateIngesting, Shard: s1,
+		State: logdb.StateIngesting, Shard: s1,
 		CreatedAt: time.Now(),
 	})
 	return c
@@ -503,118 +495,18 @@ func TestCompute_AwkFieldExtract(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Registry / app-scoped routing tests
-// ---------------------------------------------------------------------------
-
-func TestRegistry_AppScopedQueryRouting(t *testing.T) {
-	// Create two shards: one owns vimgym, one owns callbox.
-	sVim, err := shard.NewDuckDBShard("shard-vimgym", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { sVim.Close() })
-
-	sCb, err := shard.NewDuckDBShard("shard-callbox", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { sCb.Close() })
-
-	// Ingest vimgym data into vimgym shard, callbox data into callbox shard.
-	for _, r := range shard0Rows() {
-		if r.App == "vimgym" {
-			sVim.Ingest([]*pb.LogRow{r})
-		} else {
-			sCb.Ingest([]*pb.LogRow{r})
-		}
-	}
-
-	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
-		ID: "shard-vimgym", Apps: []string{"vimgym"},
-		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: sVim,
-	})
-	reg.Add(&ShardEntry{
-		ID: "shard-callbox", Apps: []string{"callbox"},
-		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: sCb,
-	})
-
-	// Query for vimgym should only hit shard-vimgym.
-	matching := reg.MatchingEntries(fullRange, "vimgym", "bolt")
-	if len(matching) != 1 {
-		t.Fatalf("expected 1 shard for vimgym, got %d", len(matching))
-	}
-	if matching[0].ID != "shard-vimgym" {
-		t.Fatalf("expected shard-vimgym, got %s", matching[0].ID)
-	}
-
-	// Query for callbox should only hit shard-callbox.
-	matching = reg.MatchingEntries(fullRange, "callbox", "bolt")
-	if len(matching) != 1 {
-		t.Fatalf("expected 1 shard for callbox, got %d", len(matching))
-	}
-
-	// Query for all apps (empty string) should hit both.
-	matching = reg.MatchingEntries(fullRange, "", "bolt")
-	if len(matching) != 2 {
-		t.Fatalf("expected 2 shards for all apps, got %d", len(matching))
-	}
-}
-
-func TestRegistry_IngestingShard(t *testing.T) {
-	s0, err := shard.NewDuckDBShard("s0", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s0.Close() })
-
-	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
-		ID: "s0", Apps: []string{"vimgym", "grantcentral"},
-		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: s0,
-	})
-
-	if sh := reg.IngestingShard("vimgym"); sh == nil {
-		t.Fatal("expected ingesting shard for vimgym")
-	}
-	if sh := reg.IngestingShard("grantcentral"); sh == nil {
-		t.Fatal("expected ingesting shard for grantcentral")
-	}
-	if sh := reg.IngestingShard("unknown"); sh != nil {
-		t.Fatal("expected nil for unknown app")
-	}
-}
-
-func TestRegistry_ExpiringShardExcluded(t *testing.T) {
-	s0, err := shard.NewDuckDBShard("s0", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s0.Close() })
-
-	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
-		ID: "s0", WindowStart: t0, WindowEnd: t2,
-		State: StateExpiring, Shard: s0,
-	})
-
-	matching := reg.MatchingEntries(fullRange, "", "bolt")
-	if len(matching) != 0 {
-		t.Fatalf("expected 0 shards (expiring), got %d", len(matching))
-	}
-}
-
-// TestExecuteQuery_DescriptorFields verifies that ShardSecret and
-// LambdaFunctionURL from CoordinatorConfig propagate into the
-// ExecuteQueryRequest that reaches the compute pool.
+// TestExecuteQuery_DescriptorFields verifies that LambdaFunctionURL
+// from CoordinatorConfig propagates into the ExecuteQueryRequest that
+// reaches the compute pool, and that live/archived shard descriptors
+// are populated correctly. SHARD_SECRET no longer travels through
+// the request — compute reads it from its own env.
 func TestExecuteQuery_DescriptorFields(t *testing.T) {
 	s0, err := shard.NewDuckDBShard("shard-live", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s0.Close() })
-	if err := s0.Ingest(shard0Rows()); err != nil {
+	if err := s0.Ingest(shard0Rows(), nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -622,25 +514,26 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 	apps := []string{"vimgym", "callbox"}
 
 	c := NewCoordinator(CoordinatorConfig{
-		ShardSecret:       "test-secret-token",
 		LambdaFunctionURL: "https://lambda.example.com/cold-query",
 	})
-	spy := &spyPool{inner: &registryPool{registry: c.Registry}}
-	c.Pool = spy
-
-	c.Registry.Add(&ShardEntry{
+	// Register in-process resolvers on the default LocalComputePool
+	// BEFORE wrapping in spyPool, because addInProcessShard reaches
+	// for the underlying *compute.LocalComputePool through c.Pool.
+	addInProcessShard(t, c, &logdb.ShardEntry{
 		ID: "shard-live", Apps: apps,
 		WindowStart: now.Add(-2 * time.Hour), WindowEnd: now.Add(-1 * time.Hour),
-		State: StateIngesting, Shard: s0, Addr: "10.0.0.1:9000",
+		State: logdb.StateIngesting, Shard: s0, Addr: "10.0.0.1:9000",
 		CreatedAt: now,
 	})
-	c.Registry.Add(&ShardEntry{
+	addInProcessShard(t, c, &logdb.ShardEntry{
 		ID: "shard-archived", Apps: apps,
 		WindowStart: now.Add(-1 * time.Hour), WindowEnd: now,
-		State: StateArchived, Shard: s0, ParquetPath: "s3://bucket/shard-archived.parquet",
+		State: logdb.StateArchived, Shard: s0, ParquetPath: "s3://bucket/shard-archived.parquet",
 		RowCount:  1,
 		CreatedAt: now,
 	})
+	spy := &spyPool{inner: c.Pool}
+	c.Pool = spy
 
 	tr := TimeRange{Start: now.Add(-2 * time.Hour), End: now}
 	plan := &planner.QueryPlan{
@@ -655,10 +548,6 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 	}
 	if spy.lastReq == nil {
 		t.Fatal("pool never received an ExecuteQueryRequest")
-	}
-
-	if spy.lastReq.ShardSecret != "test-secret-token" {
-		t.Errorf("ShardSecret = %q, want %q", spy.lastReq.ShardSecret, "test-secret-token")
 	}
 
 	descByID := map[string]*pb.ShardDescriptor{}

@@ -17,10 +17,18 @@ import (
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
+// s3PutObjectAPI is the slice of *s3.Client that DLQ actually uses.
+// Lowercased so it's not part of the package's public surface — its
+// only consumer outside dlq.go is the in-package test that
+// substitutes a recording fake. *s3.Client satisfies it natively.
+type s3PutObjectAPI interface {
+	PutObject(ctx context.Context, in *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+}
+
 // DLQ writes failed ingest batches to S3 as gzipped JSON-lines.
 // A background scanner re-ingests them when healthy shards are available.
 type DLQ struct {
-	client *s3.Client
+	client s3PutObjectAPI
 	bucket string
 	prefix string // e.g. "dlq/"
 }

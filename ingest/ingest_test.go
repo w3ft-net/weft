@@ -103,7 +103,7 @@ func TestIngestRoundTrip_GrantCentralWorker(t *testing.T) {
 	}
 	defer ds.Close()
 
-	if err := ds.Ingest(rows); err != nil {
+	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -190,7 +190,7 @@ func TestIngestRoundTrip_VimGym(t *testing.T) {
 	}
 	defer ds.Close()
 
-	if err := ds.Ingest(rows); err != nil {
+	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatal(err)
 	}
 

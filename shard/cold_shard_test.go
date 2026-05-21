@@ -24,7 +24,7 @@ func exportToParquet(t *testing.T, rows []*pb.LogRow) string {
 	}
 	defer ds.Close()
 
-	if err := ds.Ingest(rows); err != nil {
+	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 
@@ -100,7 +100,7 @@ func TestColdShard_ReadOnly(t *testing.T) {
 	}
 	defer cs.Close()
 
-	err = cs.Ingest([]*pb.LogRow{{Raw: "should fail", TsUnixNs: time.Now().UnixNano()}})
+	err = cs.Ingest([]*pb.LogRow{{Raw: "should fail", TsUnixNs: time.Now().UnixNano()}}, nil)
 	if err == nil {
 		t.Fatal("expected error on Ingest to cold shard")
 	}
@@ -195,7 +195,7 @@ func benchColdQuery(b *testing.B, n int) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	if err := ds.Ingest(rows); err != nil {
+	if err := ds.Ingest(rows, nil); err != nil {
 		b.Fatal(err)
 	}
 

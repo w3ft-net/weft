@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kevlarcon/weft/logdb"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 )
@@ -79,18 +80,17 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 		Customer: "kevlar",
 	})
 
-	if err := ds.Ingest(rows); err != nil {
+	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "graybeard", "weft", "grantcentral")})
-	c.Pool = &registryPool{registry: c.Registry}
-	c.Registry.Add(&ShardEntry{
+	addInProcessShard(t, c, &logdb.ShardEntry{
 		ID:          "ns-shard-0",
 		Apps:        []string{"weft/coordinator/main", "weft/shard/main", "weft/coordinator/metrics", "grantcentral"},
 		WindowStart: base,
 		WindowEnd:   base.Add(time.Hour),
-		State:       StateIngesting,
+		State:       logdb.StateIngesting,
 		Shard:       ds,
 		CreatedAt:   time.Now(),
 	})

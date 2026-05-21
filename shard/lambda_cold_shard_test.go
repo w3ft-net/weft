@@ -110,7 +110,7 @@ func TestColdShard_RemoteReadOnly(t *testing.T) {
 	}
 	defer cs.Close()
 
-	err = cs.Ingest([]*pb.LogRow{{Raw: "nope", TsUnixNs: time.Now().UnixNano()}})
+	err = cs.Ingest([]*pb.LogRow{{Raw: "nope", TsUnixNs: time.Now().UnixNano()}}, nil)
 	if err == nil {
 		t.Fatal("expected error on Ingest")
 	}
@@ -150,7 +150,7 @@ func BenchmarkColdShard_RemoteQuery(b *testing.B) {
 			TsUnixNs: coldT0.Add(time.Duration(i) * time.Millisecond).UnixNano(),
 		}
 	}
-	ds.Ingest(rows)
+	ds.Ingest(rows, nil)
 	path := filepath.Join(b.TempDir(), "bench.parquet")
 	ds.ExportToParquet(path)
 	ds.Close()

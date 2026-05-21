@@ -5,18 +5,42 @@
 #
 # For local development, run the same compose-up incantation once and
 # call `go test -tags integration ./integration/` directly — the harness
-# applies migrations and checks readiness itself.
+# applies migrations and checks readiness itself. `make integration-clean`
+# (or `clean_local_state` below) wipes the dev/shard-data subdirs the
+# DockerLauncher leaves behind across `down -v` runs.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.localstack.yml)
 
+# Wipe all dev state the docker stack accumulates. Run BEFORE up so a
+# previous failed run can't contaminate this one with stale shard rows
+# (postgres heartbeat tokens, archived parquet, …) or stale per-shard
+# DuckDB subdirs that the DockerLauncher intentionally preserves
+# across container kills.
+#
+# Idempotent: down -v on a stack that isn't running is a no-op; rm -rf
+# on a missing directory is too.
+clean_local_state() {
+    docker compose "${COMPOSE_FILES[@]}" down -v --remove-orphans 2>/dev/null || true
+    # DockerLauncher containers aren't part of the compose stack — they
+    # were `docker run`-spawned by the coordinator. Sweep them too so
+    # they don't accumulate across runs.
+    docker ps -aq --filter "name=weft-shard-" | xargs -r docker rm -f >/dev/null 2>&1 || true
+    rm -rf dev/shard-data
+}
+
 cleanup() {
     echo "=== Tearing down docker stack ==="
     docker compose "${COMPOSE_FILES[@]}" down -v --remove-orphans 2>/dev/null || true
+    docker ps -aq --filter "name=weft-shard-" | xargs -r docker rm -f >/dev/null 2>&1 || true
+    rm -rf dev/shard-data
 }
 trap cleanup EXIT
+
+echo "=== Wiping prior dev state ==="
+clean_local_state
 
 echo "=== Building + starting docker stack (with localstack) ==="
 docker compose "${COMPOSE_FILES[@]}" up -d --build

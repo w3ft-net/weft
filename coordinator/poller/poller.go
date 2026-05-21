@@ -13,9 +13,12 @@ import (
 	"github.com/kevlarcon/weft/store"
 )
 
-// ShardProvider routes rows to the correct shard.
+// ShardProvider routes rows to the app-specific INGESTING shard.
+// No cross-app fallback — that would land a customer's logs on
+// shards bound to other customers' namespaces. Rows arriving before
+// the bucket-add reconciles get dropped (the poller path is best-
+// effort; ingest stream's DLQ scanner re-ingests its own).
 type ShardProvider interface {
-	GetShards() []shard.Shard
 	IngestingShard(app string) shard.Shard
 }
 
@@ -132,17 +135,13 @@ func (p *Poller) poll(ctx context.Context, lg store.LogGroupWithAWSAccount) {
 		return
 	}
 
-	// Route to the INGESTING shard for this app.
+	// Route to the INGESTING shard for this app. No cross-app
+	// fallback — see ShardProvider's doc for the tenant-isolation
+	// rationale. If no shard owns this app yet, skip; the next
+	// poll picks up after OnboardApp reconciles.
 	sh := p.provider.IngestingShard(lg.App)
 	if sh == nil {
-		// Fallback: try any shard.
-		for _, s := range p.provider.GetShards() {
-			sh = s
-			break
-		}
-	}
-	if sh == nil {
-		log.Printf("poller[%s]: no shard available for ingestion", lg.App)
+		log.Printf("poller[%s]: no shard owns this app yet — skipping poll", lg.App)
 		return
 	}
 
@@ -154,7 +153,7 @@ func (p *Poller) poll(ctx context.Context, lg store.LogGroupWithAWSAccount) {
 		if end > len(allRows) {
 			end = len(allRows)
 		}
-		if err := sh.Ingest(allRows[i:end]); err != nil {
+		if err := sh.Ingest(allRows[i:end], nil); err != nil {
 			log.Printf("poller[%s]: ingest batch failed: %v", lg.App, err)
 			continue
 		}

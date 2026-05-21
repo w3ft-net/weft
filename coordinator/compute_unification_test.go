@@ -31,7 +31,10 @@ func (p *spyPool) NewJob(stages []string, shardCount int, mergeKey string, limit
 // through Pool.ExecuteQuery.
 func TestQuery_NoStages_RoutesThroughComputePool(t *testing.T) {
 	c := setupTestCoordinator(t)
-	pool := &spyPool{inner: &registryPool{registry: c.Registry}}
+	// setupTestCoordinator already registered InProcessResolvers on
+	// c.Pool (the default LocalComputePool). Wrap it in spyPool so we
+	// can observe ExecuteQuery calls without breaking the resolution.
+	pool := &spyPool{inner: c.Pool}
 	c.Pool = pool
 
 	res, err := c.Execute(`cat vimgym.log`, fullRange, "kevlar", "")

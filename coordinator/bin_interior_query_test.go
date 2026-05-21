@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kevlarcon/weft/logdb"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
@@ -54,18 +55,17 @@ func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, 
 		logRow("web", "ERROR", cust.Name, now.Add(-5*time.Minute)),
 		logRow("web", "WARN", cust.Name, now.Add(-2*time.Minute)),
 	}
-	if err := s.Ingest(rows); err != nil {
+	if err := s.Ingest(rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 
 	c := NewCoordinator(CoordinatorConfig{
 		Store: db,
 	})
-	c.Pool = &registryPool{registry: c.Registry}
-	c.Registry.Add(&ShardEntry{
+	addInProcessShard(t, c, &logdb.ShardEntry{
 		ID:        s.ID(),
 		Apps:      []string{"api", "web"},
-		State:     StateIngesting,
+		State:     logdb.StateIngesting,
 		Shard:     s,
 		CreatedAt: time.Now(),
 	})

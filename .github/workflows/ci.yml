@@ -87,7 +87,7 @@ jobs:
         # alongside DB packages. CI cost: ~30s.
         run: |
           mkdir -p coverage/unit
-          gotestsum --junitfile unit-report.xml -- -count=1 -timeout 10m -cover -coverpkg=./... -p 1 ./... -args -test.gocoverdir="$PWD/coverage/unit"
+          gotestsum --junitfile unit-report.xml -- -tags test -count=1 -timeout 10m -cover -coverpkg=./... -p 1 ./... -args -test.gocoverdir="$PWD/coverage/unit"
       - name: Stop postgres
         if: always()
         working-directory: weft
@@ -146,7 +146,7 @@ jobs:
           docker compose up -d
       - name: Run -tags integration
         working-directory: weft
-        run: gotestsum --junitfile integration-report.xml -- -tags integration -count=1 -timeout 10m -v ./integration/
+        run: gotestsum --junitfile integration-report.xml -- -tags integration,test -count=1 -timeout 10m -v ./integration/
       - name: Test report
         uses: dorny/test-reporter@v1
         if: always()
@@ -196,7 +196,7 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.localstack.yml up -d
       - name: Run -tags integration,localstack
         working-directory: weft
-        run: gotestsum --junitfile localstack-report.xml -- -tags integration,localstack -count=1 -timeout 10m -v ./integration/
+        run: gotestsum --junitfile localstack-report.xml -- -tags integration,localstack,test -count=1 -timeout 10m -v ./integration/
       - name: Test report
         uses: dorny/test-reporter@v1
         if: always()
@@ -257,10 +257,10 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.localstack.yml -f docker-compose.cover.yml up -d
       - name: Run generic suite under coverage
         working-directory: weft
-        run: gotestsum --junitfile coverage-generic-report.xml -- -tags integration -count=1 -timeout 10m -v ./integration/
+        run: gotestsum --junitfile coverage-generic-report.xml -- -tags integration,test -count=1 -timeout 10m -v ./integration/
       - name: Run localstack suite under coverage
         working-directory: weft
-        run: gotestsum --junitfile coverage-localstack-report.xml -- -tags integration,localstack -count=1 -timeout 10m -v ./integration/
+        run: gotestsum --junitfile coverage-localstack-report.xml -- -tags integration,localstack,test -count=1 -timeout 10m -v ./integration/
       - name: Test report
         uses: dorny/test-reporter@v1
         if: always()

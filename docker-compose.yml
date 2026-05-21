@@ -38,6 +38,12 @@ services:
     entrypoint: ["/usr/local/bin/entrypoint.sh"]
     environment:
       ROLE: compute
+      # Compute dials shards directly for query fan-out, so it needs
+      # the SHARD_SECRET bearer (was previously passed per-request in
+      # ExecuteQueryRequest; now compute reads its own env — see
+      # compute.LocalComputePool.ShardSecret). Must match the value
+      # on the coordinator and shard containers.
+      SHARD_SECRET: dev-shard-secret
     ports:
       - "9010:9010"
 

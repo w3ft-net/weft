@@ -338,7 +338,7 @@ func (s *Server) Ingest(_ context.Context, req *pb.IngestRequest) (*pb.IngestRes
 	if err != nil {
 		return nil, err
 	}
-	if err := ds.Ingest(req.Rows); err != nil {
+	if err := ds.Ingest(req.Rows, nil); err != nil {
 		return nil, err
 	}
 	return &pb.IngestResponse{RowsIngested: int64(len(req.Rows))}, nil
@@ -367,7 +367,7 @@ func (s *Server) IngestStream(stream pb.ShardQuery_IngestStreamServer) error {
 		count++
 
 		if len(rows) >= 100 {
-			if err := ds.Ingest(rows); err != nil {
+			if err := ds.Ingest(rows, nil); err != nil {
 				log.Printf("ingest-stream: %v", err)
 			}
 			rows = rows[:0]
@@ -375,7 +375,7 @@ func (s *Server) IngestStream(stream pb.ShardQuery_IngestStreamServer) error {
 	}
 
 	if len(rows) > 0 {
-		if err := ds.Ingest(rows); err != nil {
+		if err := ds.Ingest(rows, nil); err != nil {
 			log.Printf("ingest-stream flush: %v", err)
 		}
 	}

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/coordinator"
+	"github.com/kevlarcon/weft/logdb"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -57,7 +57,7 @@ func TestPrewarm_InsertsNextWindowRow_AndBumpsDesired(t *testing.T) {
 		ID:          ingestingID,
 		BucketID:    bucketRec.ID,
 		Tier:        "small",
-		State:       string(coordinator.StateIngesting),
+		State:       string(logdb.StateIngesting),
 		Apps:        string(apps),
 		WindowStart: windowStart.Format(time.RFC3339),
 		WindowEnd:   windowEnd.Format(time.RFC3339),
@@ -77,21 +77,21 @@ func TestPrewarm_InsertsNextWindowRow_AndBumpsDesired(t *testing.T) {
 	})
 
 	// Override the package-scoped PrewarmLead for this test.
-	prev := coordinator.PrewarmLead
-	coordinator.PrewarmLead = 5 * time.Minute
-	t.Cleanup(func() { coordinator.PrewarmLead = prev })
+	prev := logdb.PrewarmLead
+	logdb.PrewarmLead = 5 * time.Minute
+	t.Cleanup(func() { logdb.PrewarmLead = prev })
 
 	// Registry mirrors the DB for INGESTING/READ_ONLY entries (prod
 	// populates via adoption from heartbeats). Pre-warm reads both:
 	// reconcile() uses the registry INGESTING entry for WindowEnd,
 	// and Apply writes to shard_records via ShardOps.
-	reg := coordinator.NewShardRegistry()
+	reg := logdb.NewShardRegistry()
 	reg.SetStore(db)
-	reg.Add(&coordinator.ShardEntry{
+	reg.Add(&logdb.ShardEntry{
 		ID:          ingRec.ID,
 		BucketID:    ingRec.BucketID,
 		Tier:        "small",
-		State:       coordinator.StateIngesting,
+		State:       logdb.StateIngesting,
 		WindowStart: windowStart,
 		WindowEnd:   windowEnd,
 		CreatedAt:   windowStart,
@@ -105,17 +105,17 @@ func TestPrewarm_InsertsNextWindowRow_AndBumpsDesired(t *testing.T) {
 	asgRec := &recordingASGApi{
 		describeResponses: map[string]int32{"weft-shard-small": 16},
 	}
-	launcher := coordinator.NewASGLauncherWithClients(
+	launcher := logdb.NewASGLauncherWithClients(
 		asgRec, nil,
 		map[string]string{"small": "weft-shard-small"},
 		9000,
 	)
 
-	prov := coordinator.NewProvisioner(reg, launcher, coordinator.ProvisionerConfig{
+	prov := logdb.NewProvisioner(reg, launcher, logdb.ProvisionerConfig{
 		ShardOps:       db,
 		WindowDuration: 5 * time.Minute,
 	})
-	prov.Buckets = coordinator.NewBucketManager(db)
+	prov.Buckets = logdb.NewBucketManager(db)
 
 	// Fetch the bucket through the manager so we use the surrogate id.
 	bucket, err := prov.Buckets.ByLabel(bucketLabel)
@@ -192,7 +192,7 @@ func listLaunchingForBucketAndWindow(t *testing.T, db *store.Store, bucketID int
 		if r.BucketID != bucketID {
 			continue
 		}
-		if r.State != string(coordinator.StateLaunching) {
+		if r.State != string(logdb.StateLaunching) {
 			continue
 		}
 		if r.WindowStart <= threshold {

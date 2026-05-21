@@ -33,9 +33,27 @@ type Shard interface {
 	ID() string
 	Query(sql string, args ...any) ([]*pb.ResultRow, error)
 	QueryToSink(sql string, args []any, sink RowSink)
-	Ingest(rows []*pb.LogRow) error
+	Ingest(rows []*pb.LogRow, rec IngestRecorder) error
 	Archive(ctx context.Context, s3Prefix string) (string, error)
 	Close() error
+}
+
+// IngestRecorder is the surface a Shard.Ingest implementation uses
+// to report its own outcome back to the failure-count / suspension
+// tracker (the provisioner). The Shard formats the error string from
+// (count, threshold) so the caller only needs one log.Printf to
+// surface the full state transition.
+//
+// Nil-safe: callers that don't care about routing failover (tests,
+// in-process server paths) pass nil and Ingest behaves like the old
+// bare-error form.
+type IngestRecorder interface {
+	// RecordIngestFailure increments the consecutive-failure counter
+	// for shardID and returns the new count plus the threshold at
+	// which the recorder considers the shard suspended.
+	RecordIngestFailure(shardID string) (count, threshold int)
+	// ResetIngestFailures clears the counter on a successful ingest.
+	ResetIngestFailures(shardID string)
 }
 
 // DuckDBShard is an in-process shard backed by a local DuckDB database.
@@ -151,8 +169,11 @@ func (s *DuckDBShard) QueryToSink(query string, args []any, sink RowSink) {
 	}
 }
 
-// Ingest batch-inserts rows into the logs table.
-func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
+// Ingest batch-inserts rows into the logs table. On error, reports
+// the failure to rec (if non-nil) and returns an error message that
+// names the shard and the resulting consecutive-failure count so
+// callers only need a single log line.
+func (s *DuckDBShard) Ingest(rows []*pb.LogRow, rec IngestRecorder) error {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -198,10 +219,31 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow) error {
 	}
 
 	_, err := s.db.Exec(sb.String(), args...)
-	if err == nil {
-		s.rowCount.Add(int64(len(rows)))
+	if err != nil {
+		return wrapIngestError(s.id, err, rec)
 	}
-	return err
+	s.rowCount.Add(int64(len(rows)))
+	if rec != nil {
+		rec.ResetIngestFailures(s.id)
+	}
+	return nil
+}
+
+// wrapIngestError reports err to rec (if non-nil) and returns an
+// enriched error that names shardID and the resulting consecutive-
+// failure count. Centralised so DuckDBShard / GRPCShard / test stubs
+// share one format — callers downstream get a single log line.
+func wrapIngestError(shardID string, err error, rec IngestRecorder) error {
+	if rec == nil {
+		return err
+	}
+	count, threshold := rec.RecordIngestFailure(shardID)
+	if count >= threshold {
+		return fmt.Errorf("ingest failed on shard %s (%d/%d consecutive, shard suspended): %w",
+			shardID, count, threshold, err)
+	}
+	return fmt.Errorf("ingest failed on shard %s (%d/%d consecutive): %w",
+		shardID, count, threshold, err)
 }
 
 // SplitApp splits a composite app name into namespace, service, and kind.

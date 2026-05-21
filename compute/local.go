@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"sync"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/kevlarcon/warp/pkg/bash"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/shard"
 )
 
 // LocalComputePool executes compute stages in-process using warp's
@@ -23,11 +25,98 @@ import (
 type LocalComputePool struct {
 	AWSCreds  aws.CredentialsProvider
 	AWSRegion string
+	// ShardSecret is the SHARD_SECRET bearer token attached to outbound
+	// gRPC-shard dials. cmd/compute/main.go reads it from env at startup;
+	// tests that never reach a real shard can leave it empty.
+	ShardSecret string
+
+	// overrides lets callers register pre-built Resolvers keyed by
+	// ShardID. Checked before falling back to descriptor-derived
+	// resolution; the in-process test path (computetest.InProcessResolver)
+	// flows through here. Nothing in production code calls
+	// RegisterResolver, so production builds never have overrides.
+	overrides sync.Map // map[string]Resolver
+
+	// cache holds the dialed shard.Shard for each ShardID alongside
+	// the addr it was dialed at. A subsequent query reuses the cached
+	// handle when the descriptor's addr matches; addr mismatch (which
+	// only happens on rebind) invalidates the entry, closes the stale
+	// connection, and re-dials. Override-derived entries cache too —
+	// their addr is empty and never changes, so the cache hit is
+	// permanent until the pool is dropped.
+	cache sync.Map // map[string]*cachedShard
+}
+
+// cachedShard pairs a dialed handle with the addr it was dialed at so
+// a rebind (descriptor's GrpcAddr changes) is detected on the next
+// query and the stale connection is closed before re-dialing.
+type cachedShard struct {
+	addr string
+	sh   shard.Shard
+}
+
+// RegisterResolver installs an override for a specific ShardID. Used
+// by tests (with computetest.InProcessResolver) and any other caller
+// that wants compute to bypass descriptor-based dialing for a
+// known-id shard. The override applies until the next call for the
+// same id, at which point this one is replaced.
+func (p *LocalComputePool) RegisterResolver(r Resolver) {
+	p.overrides.Store(r.ShardID(), r)
+}
+
+// resolveShard turns a descriptor into a live shard.Shard handle.
+// Precedence: registered override → cache → descriptor-derived
+// resolver. A cache hit with matching addr returns immediately. A
+// cache hit with mismatching addr (rebind) closes the stale handle
+// and re-dials. The freshly-dialed handle is stored in the cache so
+// the next query for this id is a hit.
+func (p *LocalComputePool) resolveShard(d *pb.ShardDescriptor) (shard.Shard, error) {
+	if v, ok := p.overrides.Load(d.ShardId); ok {
+		r := v.(Resolver)
+		// Overrides bypass the addr-based invalidation logic — their
+		// handle is the source of truth, addr is empty/synthetic.
+		// Cache the result so repeat queries skip the Dial call,
+		// which for in-process resolvers is already cheap but for
+		// future override kinds may not be.
+		if cached, ok := p.cache.Load(d.ShardId); ok {
+			return cached.(*cachedShard).sh, nil
+		}
+		sh, err := r.Dial()
+		if err != nil {
+			return nil, err
+		}
+		p.cache.Store(d.ShardId, &cachedShard{sh: sh})
+		return sh, nil
+	}
+
+	if cached, ok := p.cache.Load(d.ShardId); ok {
+		c := cached.(*cachedShard)
+		if c.addr == d.GrpcAddr {
+			return c.sh, nil
+		}
+		// Rebind: addr changed, drop the stale conn. Close errors
+		// are logged but not propagated — the new dial below is the
+		// path that matters.
+		if err := c.sh.Close(); err != nil {
+			log.Printf("compute: close stale handle for %s (addr %s → %s): %v", d.ShardId, c.addr, d.GrpcAddr, err)
+		}
+	}
+
+	r, err := ResolverFromDescriptor(d, p.ShardSecret, p.AWSCreds, p.AWSRegion)
+	if err != nil {
+		return nil, err
+	}
+	sh, err := r.Dial()
+	if err != nil {
+		return nil, err
+	}
+	p.cache.Store(d.ShardId, &cachedShard{addr: d.GrpcAddr, sh: sh})
+	return sh, nil
 }
 
 func (p *LocalComputePool) ExecuteQuery(req *pb.ExecuteQueryRequest) (LineStream, error) {
 	job := p.NewJob(req.Stages, len(req.Shards), req.MergeKey, int(req.Limit), req.KeepLast)
-	go FanOutToShards(req, job, p.AWSCreds, p.AWSRegion)
+	go FanOutToShards(req, job, p.resolveShard)
 	return job.Stream(), nil
 }
 

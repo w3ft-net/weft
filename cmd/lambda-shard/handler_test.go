@@ -27,7 +27,7 @@ func testParquet(t *testing.T) string {
 		{Raw: "info in vimgym", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
 		{Raw: "warn in callbox", App: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
 	}
-	if err := ds.Ingest(rows); err != nil {
+	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "test.parquet")
