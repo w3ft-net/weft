@@ -7,6 +7,12 @@ state machines persisted to postgres. The bucket FSM owns the
 cascade (warming → rotating → archiving → stasis); the shard FSM
 owns its autonomous failure handling.
 
+## Status
+
+Phase 1 partially shipped (commit `55248cb` on branch
+`the_big_lift`). Detail in the "Progress" subsection at the end of
+"Phased rollout"; pick up from Phase 2 next session.
+
 ## Why
 
 The current shard-management code in `logdb/` has accreted around the
@@ -570,6 +576,206 @@ Component 8 in a separate TF PR. Sequence:
 
 ### Phase 4 — docs
 Component 10. Lands after Phase 3 is verified.
+
+### Progress log
+
+**2026-05-21 — Phase 0 + Phase 1 scaffold shipped.** Plan
+committed as `e93e3ef`. FSM scaffolding committed as `55248cb` on
+branch `the_big_lift`:
+
+- Migration `store/migrations/052_state_machine_columns.sql` adds
+  `buckets.state`, `buckets.cascade_started_at`, and the six new
+  `shard_records` columns + the `(bucket_id, window_start)` index.
+- `logdb/states.go` and `logdb/triggers.go` define the typed state
+  + trigger constants (`StateExpiring` retired).
+- `logdb/shardsm.go` (~290 LOC) implements `ShardSM` with every
+  transition wired and action bodies stubbed (logging only).
+- `logdb/bucketsm.go` (~210 LOC) implements `BucketSM` for the full
+  cascade + scale-down branch; action bodies stubbed except for
+  `cascade_started_at` set/clear which is real.
+- `logdb/shardsm_test.go` and `logdb/bucketsm_test.go` cover every
+  transition exhaustively against fakes — all passing.
+- Store gained narrow update methods: `UpdateShardState`,
+  `UpdateBucketState`, `UpdateCascadeStartedAt`,
+  `TouchLastHeartbeatAt`, `ShardsInBucketWithWindow`,
+  `ShardsInBucketBeforeWindow`. `Bucket` and `ShardRecord` structs
+  gained the new fields.
+- `StateExpiring` references removed from `registry.go`,
+  `lifecycle.go`, and the now-vestigial
+  `TestRegistry_ExpiringShardExcluded`.
+
+`go build ./...`, `go vet ./logdb/ ./store/`, and
+`go test ./logdb/ ./store/ -tags test` all clean on the new
+commit.
+
+### What's left
+
+**Phase 1 leftovers (none expected, but verify):**
+- The plan called for `Suspended` boolean removal from
+  `ShardEntry` as part of Phase 1 — **not done yet**. Still
+  present in `logdb/registry.go` with its `RecordIngestFailure` /
+  `ResetIngestFailures` / `Suspend` methods. Defer to Phase 2;
+  removing it touches the heartbeat path and the
+  `shard.IngestRecorder` interface contract, so it belongs in the
+  same PR that rewires `ProcessHeartbeat`.
+- `LoadFromStore` in `registry.go` does not yet instantiate
+  `ShardSM` instances. The registry's `entries` map still holds
+  bare `*ShardEntry` only. Phase 2 task.
+
+**Phase 2 — provisioner cutover (the big one):**
+
+1. **`ASGProvisioner` (component 5).** Rewrite `launcher_asg.go`:
+   - Constructor takes `map[tier]map[az]asgName` parsed from
+     `SHARD_<TIER>_ASGS` (comma-separated AZ list per tier).
+   - Per-(tier, AZ) `sync.Mutex` keyed launches.
+   - `LaunchFresh(tier, az)` and
+     `LaunchRecovery(tier, az, volumeID)`: capture before-set,
+     SetDesiredCapacity, poll DescribeAutoScalingGroups, return
+     new InstanceID once running, tag, then create/attach volume.
+   - `Terminate(instanceID)` keeps current semantics
+     (decrement capacity).
+   - Expose `AZsForTier(tier) []string` and pure helper
+     `StripeAZ(tier string, index int) string`.
+   - Delete `LaunchInstance` (stale stub),
+     `TerminateForReplacement`, exported `SetDesiredCapacity`,
+     `TierMaxSize`.
+   - Delete `asyncLauncher`, `TierScaler`, `RecoveryTerminator`
+     interfaces in `launcher.go`.
+
+2. **Provisioner refactor (component 6).** In
+   `logdb/provisioner.go`:
+   - `Provisioner.check()` becomes
+     `registry.RefreshFromStore()` → for each bucket
+     `bucketSM.Evaluate(ctx)` → for each shard
+     `shardSM.Evaluate(ctx)`.
+   - `ProcessHeartbeat`: look up the SM by id; on empty
+     `hb.ShardID` log + return (christen now happens via the
+     bucket SM's WARMING.OnEntry, not on heartbeat);
+     `sm.Fire(ctx, TriggerHeartbeat, hb)`.
+   - Delete `mintLaunchingRow*`, `christen`, `reapDeadShards`,
+     `reapStaleLaunching`, `reapStrandedSuspended`, `HasAddr`,
+     `recognisedAsDead`, `syncASGDesiredCapacity`,
+     `provisionForBucket` async/sync fork, `currentWindow`
+     helper (folded into bucket SM).
+   - `LoadFromStore` instantiates a `BucketSM` per bucket and a
+     `ShardSM` per shard alongside the registry entry; stash the
+     SMs in new fields on `Provisioner` (`bucketSMs map[int64]*BucketSM`,
+     `shardSMs map[string]*ShardSM`).
+   - Remove `Suspended` bool from `ShardEntry`. Add `IngestUnhealthy`
+     read-through to the persisted column.
+
+3. **Wire the SM action bodies (component 6 cont).** Flesh out the
+   stubs in `shardsm.go` and `bucketsm.go`:
+   - `ShardSM.onEnterLaunching`: `ASGProvisioner.LaunchFresh` or
+     `LaunchRecovery` depending on `spec`; persist `entry.InstanceID`,
+     `entry.AZ`, `entry.StripeIndex`. Bump `launch_attempts`; fire
+     `TriggerLaunchFailed` if budget exhausted.
+   - `ShardSM.configureOnHeartbeat`: dial gRPC via
+     `deps.Configurer`, send Configure RPC, update `entry.Shard`,
+     `entry.Addr`. On rebind variant, schedule deferred close of old conn.
+   - `ShardSM.onEnterSuspended`: clear runtime fields (already
+     done in stub), then call `LaunchRecovery` via deps.
+   - `ShardSM.onEnterArchived`: `shard.Archive` → ColdShard swap
+     → `volumes.SnapshotVolume`/`DetachVolume`/`DeleteVolume` →
+     `launcher.Terminate`. Each step idempotent on retry.
+   - `ShardSM.Evaluate(ctx)`: stale check (fires HeartbeatStale),
+     launch-budget check (fires LaunchFailed), stranded-volume
+     check (fires Stranded). The bucket SM iterates these.
+   - `BucketSM.onEnterWarming`: compute next-window bounds via
+     bucket helper; for each outgoing shard, mint one incoming
+     `ShardSM` inheriting `stripe_index` (or assign 0..Target-1
+     for an initial fill); fire `TriggerLaunch` on each.
+   - `BucketSM.onEnterRotating`: load outgoing shard SMs from
+     the provisioner's map; fire `TriggerRotateRequested` on
+     each.
+   - `BucketSM.onEnterArchiving`: same shape for
+     `TriggerArchiveRequested`.
+   - `BucketSM.onEnterScalingDown`: load INGESTING shards; pick
+     youngest N=current-target; fire `TriggerRotateRequested`.
+   - `BucketSM.Evaluate(ctx)`: in STASIS check rotation-due and
+     scale conditions; in WARMING re-check incoming → INGESTING
+     gate (and run OnTick extension policy if cascade_started_at
+     is older than CascadeStallThreshold); in ROTATING / ARCHIVING /
+     SCALING_DOWN re-check their gates. Fire the advancing
+     trigger when the gate is satisfied.
+   - `BucketSM.OnTick` window-extension: load outgoing shards,
+     update WindowEnd by +ExtensionStep on each, up to
+     MaxExtensions. Persisted via store's existing
+     `SaveShard` (full upsert).
+
+4. **Delete the lifecycle plumbing (component 7).** Drop:
+   - `logdb/lifecycle.go`
+   - `logdb/lifecycle_poller.go`
+   - `logdb/lifecycle_test.go`,
+     `provisioner_lifecycle_test.go`,
+     `provisioner_rebind_nil_test.go`,
+     `christen_test.go`, `launching_test.go`,
+     `reap_test.go`, `reap_recovery_test.go`,
+     `reap_suspended_test.go`,
+     `heartbeat_addr_test.go`, `heartbeat_rowcount_test.go`,
+     `boot_order_test.go`, `instance_refresh_repro_test.go`,
+     `refresh_cascade_test.go`, `zombie_repro_test.go`,
+     `launcher_asg_test.go`, `rebind_close_test.go`,
+     `archiver_logdb_test.go`, `asg_desired_test.go`.
+   - From `store/shard.go`: `ClaimLaunchingForTier`,
+     `FindLaunchingByInstance`, `ListStaleLaunching`,
+     `CountShardsInBucket`,
+     `CountShardsInBucketForFutureWindows`.
+   - From `cmd/coordinator/main.go`: any reading of
+     `LIFECYCLE_QUEUE_URL`.
+
+5. **Test rewrites (component 9).** New scenario tests against
+   the SMs:
+   - `bucketsm_cascade_test.go` (full window rotation under
+     clean, slow-launch, failure-mid-cascade conditions).
+   - `bucketsm_stasis_test.go` (steady-state self-heal).
+   - `shardsm_recovery_test.go` (the lose-compute-keep-volume
+     trace from the plan's "Failure walkthrough" section).
+   - Keep: `volumes_test.go`, `archive_volumes_test.go`,
+     `registry_persistence_test.go`,
+     `registry_routing_test.go`, `registry_stale_test.go`,
+     `registry_empty_shard_test.go`, `fixtures.go`,
+     `testhelpers_test.go`.
+
+**Phase 3 — TF restructure (component 8).** Per-AZ ASGs (3 per
+tier), autoscaling off, lifecycle hooks gone, SNS/SQS gone,
+config blob updated. Detailed in component 8 above. Don't apply
+this phase until Phase 2 has merged and dev mode is clean for at
+least a day.
+
+**Phase 4 — docs (component 10).** Update top-level CLAUDE.md +
+`docs/shard-lifecycle.md` + `docs/architecture.md` to remove
+SNS/SQS/ASG-autoscaling references.
+
+### Pickup notes for a fresh session
+
+- Branch is `the_big_lift`. Don't rebase onto main — there's
+  other in-flight work (see `git log main..the_big_lift`).
+- Stubs in `shardsm.go` / `bucketsm.go` log "stub — Phase 2
+  wires …" — grep for those strings to find every action body
+  still pending.
+- `qmuntal/stateless` v1.8.0 is in `go.mod`. Its public surface:
+  `State` and `Trigger` are `any`; main entry is
+  `NewStateMachineWithExternalStorage(accessor, mutator,
+  FiringQueued)`; `Configure(state).Permit(trigger, dest,
+  guards...)`, `.PermitDynamic(trigger, selector, guards...)`,
+  `.OnEntry(fn)`, `.OnEntryFrom(trigger, fn)`; firing via
+  `FireCtx(ctx, trigger, args...)`. Guards are
+  `func(ctx, args...) bool`, actions are
+  `func(ctx, args...) error`, dynamic selectors are
+  `func(ctx, args...) (State, error)`.
+- The shard SM's `heartbeatArg` helper extracts a
+  `store.ShardHeartbeat` from variadic args; reuse for any
+  trigger that needs to pass payload.
+- Test fixture pattern: `makeFixtureShardSM(t, initialState)` and
+  `makeFixtureBucketSM(t, initialState)` return `(sm, fakeStore,
+  entry/bucket)`. Use those for any new test rather than rolling
+  your own.
+- The Suspended-bool removal is intentionally deferred to Phase 2
+  because it touches the `shard.IngestRecorder` interface
+  (`RecordIngestFailure` / `ResetIngestFailures`); the new
+  approach is a persisted `IngestUnhealthy` column with the
+  registry caching it.
 
 ## Estimated effort
 
