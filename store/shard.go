@@ -36,6 +36,22 @@ type ShardRecord struct {
 	// christen() resolves the target bucket's surrogate via the
 	// BucketManager and stamps the int here.
 	BucketID int64 `gorm:"not null;column:bucket_id"`
+	// IngestFailures, IngestUnhealthy, LastHeartbeatAt, LaunchAttempts,
+	// AZ, StripeIndex are populated by the shard FSM (migration 052).
+	// IngestFailures and IngestUnhealthy persist the in-memory
+	// `Suspended`/IngestFailures pair that previously lost state on
+	// restart. LastHeartbeatAt likewise — its prior in-memory zero
+	// value made every entry look "fresh" for a tick window post-
+	// boot, masking dead shards. LaunchAttempts is the per-shard
+	// retry counter across reap ticks. AZ + StripeIndex carry the
+	// striping assignment so recovery launches don't have to
+	// re-derive them from volume tags.
+	IngestFailures   int       `gorm:"not null;default:0;column:ingest_failures"`
+	IngestUnhealthy  bool      `gorm:"not null;default:false;column:ingest_unhealthy"`
+	LastHeartbeatAt  *time.Time `gorm:"column:last_heartbeat_at"`
+	LaunchAttempts   int       `gorm:"not null;default:0;column:launch_attempts"`
+	AZ               string    `gorm:"column:az"`
+	StripeIndex      *int      `gorm:"column:stripe_index"`
 }
 
 // GenerateShardHeartbeatToken mints a fresh 256-bit random bearer token
@@ -96,6 +112,59 @@ func (s *Store) TouchHeartbeat(id string, rowCount int64) error {
 // DeleteShard removes a shard record.
 func (s *Store) DeleteShard(id string) error {
 	return s.db.Delete(&ShardRecord{}, "id = ?", id).Error
+}
+
+// UpdateShardState writes only the state column. The shard FSM's
+// external-storage mutator calls this on every transition. Narrow
+// by design: lifecycle-owned fields (window bounds, apps, addr) are
+// updated through SaveShard; this method writes nothing else and
+// therefore can't race with concurrent SaveShard writers over those
+// fields.
+func (s *Store) UpdateShardState(id, state string) error {
+	return s.db.Model(&ShardRecord{}).Where("id = ?", id).
+		Update("state", state).Error
+}
+
+// TouchLastHeartbeatAt updates the last_heartbeat_at column to now()
+// without touching anything else. Persisted so post-restart freshness
+// checks can distinguish "never observed" from "observed but stale" —
+// the prior in-memory zero value defaulted to "fresh" on boot and
+// masked dead shards for one tick.
+func (s *Store) TouchLastHeartbeatAt(id string) error {
+	return s.db.Model(&ShardRecord{}).Where("id = ?", id).
+		Update("last_heartbeat_at", time.Now().UTC()).Error
+}
+
+// ShardsInBucketWithWindow returns shards in this bucket whose
+// window_start exactly matches windowStart and whose state is one of
+// the given states. The bucket FSM's incoming() walk: with
+// states=[LAUNCHING, INGESTING] and windowStart=nextWindowStart it
+// returns the cohort minted for the next window.
+func (s *Store) ShardsInBucketWithWindow(bucketID int64, windowStart time.Time, states []string) ([]ShardRecord, error) {
+	if len(states) == 0 {
+		return nil, nil
+	}
+	var out []ShardRecord
+	threshold := windowStart.UTC().Format(time.RFC3339)
+	err := s.db.Where("bucket_id = ? AND window_start = ? AND state IN ?",
+		bucketID, threshold, states).Find(&out).Error
+	return out, err
+}
+
+// ShardsInBucketBeforeWindow returns shards in this bucket whose
+// window_start is strictly less than windowStart and whose state is
+// one of the given states. The bucket FSM's outgoing() walk: with
+// states=[INGESTING, READ_ONLY] and windowStart=currentWindowStart
+// it returns the prior-window shards a cascade is replacing.
+func (s *Store) ShardsInBucketBeforeWindow(bucketID int64, windowStart time.Time, states []string) ([]ShardRecord, error) {
+	if len(states) == 0 {
+		return nil, nil
+	}
+	var out []ShardRecord
+	threshold := windowStart.UTC().Format(time.RFC3339)
+	err := s.db.Where("bucket_id = ? AND window_start < ? AND state IN ?",
+		bucketID, threshold, states).Find(&out).Error
+	return out, err
 }
 
 // ListShards returns all shard records.

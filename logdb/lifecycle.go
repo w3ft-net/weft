@@ -340,7 +340,7 @@ func (h *LifecycleHandler) recognisedAsDead(shardID string) bool {
 			return false
 		}
 		state := ShardState(rec.State)
-		if state == StateArchived || state == StateExpiring {
+		if state == StateArchived {
 			log.Printf("lifecycle: recognised-as-dead shard=%s result=false reason=state state=%s (store-fallback)",
 				shardID, state)
 			return false
@@ -349,7 +349,7 @@ func (h *LifecycleHandler) recognisedAsDead(shardID string) bool {
 			shardID, state)
 		return true
 	}
-	if entry.State == StateArchived || entry.State == StateExpiring {
+	if entry.State == StateArchived {
 		log.Printf("lifecycle: recognised-as-dead shard=%s result=false reason=state state=%s",
 			shardID, entry.State)
 		return false

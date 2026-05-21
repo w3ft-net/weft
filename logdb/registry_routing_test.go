@@ -93,26 +93,7 @@ func TestRegistry_IngestingShard(t *testing.T) {
 	}
 }
 
-// TestRegistry_ExpiringShardExcluded — EXPIRING is the brief window
-// between READ_ONLY and ARCHIVED where the shard is being torn down;
-// query routing must skip it. The state-exclusion list is what does
-// the work, so use empty App (all-apps sentinel) to be sure the
-// filter isn't App-list incidental.
-func TestRegistry_ExpiringShardExcluded(t *testing.T) {
-	s0, err := shard.NewDuckDBShard("s0", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s0.Close() })
-
-	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
-		ID: "s0", WindowStart: t0, WindowEnd: t2,
-		State: StateExpiring, Shard: s0,
-	})
-
-	matching := reg.MatchingEntries(fullRange, "", store.Tier("bolt"))
-	if len(matching) != 0 {
-		t.Fatalf("expected 0 shards (expiring), got %d", len(matching))
-	}
-}
+// TestRegistry_ExpiringShardExcluded was removed alongside
+// StateExpiring itself — the state was declared but never written
+// under the prior model and is gone in the FSM rewrite. See
+// docs/plans/asg-as-api-stateless.md.

@@ -12,17 +12,8 @@ import (
 	"github.com/kevlarcon/weft/store"
 )
 
-// ShardState represents the lifecycle state of a shard.
-type ShardState string
-
-const (
-	StateLaunching ShardState = "LAUNCHING"
-	StateIngesting ShardState = "INGESTING"
-	StateSuspended ShardState = "SUSPENDED"
-	StateReadOnly  ShardState = "READ_ONLY"
-	StateExpiring  ShardState = "EXPIRING"
-	StateArchived  ShardState = "ARCHIVED"
-)
+// ShardState and the State* constants live in states.go now —
+// see also docs/plans/asg-as-api-stateless.md for the full FSM.
 
 // ShardEntry is the registry's per-shard metadata.
 type ShardEntry struct {
@@ -452,13 +443,13 @@ func (r *ShardRegistry) MatchingEntries(tr TimeRange, app string, tier store.Tie
 		if e.Addr == "" && e.Shard == nil {
 			continue
 		}
-		// EXPIRING (mid-rotation) and SUSPENDED (instance dead,
-		// Addr/InstanceID cleared, awaiting rebind — see provisioner's
-		// stale-heartbeat path and ReconstructShard) are both
-		// unqueryable: a SUSPENDED entry keeps a stale non-nil Shard
-		// pointer so the Addr==""/Shard==nil guard below doesn't catch
-		// it, and routing it only yields "no grpc_addr or lambda_url".
-		if e.State == StateExpiring || e.State == StateSuspended {
+		// SUSPENDED (instance dead, Addr/InstanceID cleared, awaiting
+		// rebind — see provisioner's stale-heartbeat path and
+		// ReconstructShard) is unqueryable: a SUSPENDED entry keeps a
+		// stale non-nil Shard pointer so the Addr==""/Shard==nil guard
+		// below doesn't catch it, and routing it only yields "no
+		// grpc_addr or lambda_url".
+		if e.State == StateSuspended {
 			continue
 		}
 		if e.isStale() {
