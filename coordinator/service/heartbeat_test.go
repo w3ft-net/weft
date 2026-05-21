@@ -166,7 +166,11 @@ func TestHeartbeat_UnknownInRegistry_LoadFromStore(t *testing.T) {
 		t.Fatalf("seed shard record: %v", err)
 	}
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
+	// Pass Store via CoordinatorConfig so NewCoordinator wires it into
+	// the provisioner's ShardOps — the auth fallback path now reads
+	// the persisted token through the provisioner, not directly off
+	// Server.Store (big lift moved auth into Provisioner.AuthenticateShard).
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Store: tx})
 	srv := &Server{Coord: coord, Store: tx}
 
 	_, err = srv.Heartbeat(heartbeatCtx(token), &pb.ShardHeartbeatRequest{

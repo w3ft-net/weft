@@ -308,6 +308,15 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 	prov := logdb.NewProvisioner(logdb.NewShardRegistry(), nil, logdb.ProvisionerConfig{
 		LambdaFunctionURL: cfg.LambdaFunctionURL,
 	})
+	// When a Store is supplied (production, plus tests that exercise
+	// the store-backed fallbacks like the rebind-after-restart auth
+	// path), wire it through to the stub provisioner. logdb.Start
+	// later replaces this provisioner wholesale in production; for
+	// the boot window and for tests, this is what gives
+	// AuthenticateShard et al. a store to read from.
+	if cfg.Store != nil {
+		prov.SetStore(cfg.Store)
+	}
 	return &Coordinator{
 		Pool:                   pool,
 		Provisioner:            prov,
