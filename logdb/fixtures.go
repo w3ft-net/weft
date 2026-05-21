@@ -25,3 +25,12 @@ package logdb
 func SeedShard(p *Provisioner, entry *ShardEntry) {
 	p.registry.Add(entry)
 }
+
+// GetEntry reads back a seeded entry by id. The companion to
+// SeedShard for tests that need to inspect or mutate the synthetic
+// entry after planting it (e.g. flipping LastHeartbeatAt to drive
+// stale-handling branches). Returns nil if no entry with that id
+// is registered.
+func GetEntry(p *Provisioner, id string) *ShardEntry {
+	return p.registry.Get(id)
+}

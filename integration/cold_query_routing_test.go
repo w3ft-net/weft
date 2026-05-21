@@ -1,4 +1,4 @@
-//go:build integration && !localstack
+//go:build integration && test && !localstack
 
 package integration
 
@@ -74,13 +74,13 @@ func TestColdShardQueryRouting(t *testing.T) {
 	if err := s0.Ingest([]*pb.LogRow{
 		{Raw: "hot line 1", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(time.Minute).UnixNano()},
 		{Raw: "hot line 2", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Minute).UnixNano()},
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := s1.Ingest([]*pb.LogRow{
 		{Raw: "cold line 3", App: "vimgym", Level: "WARN", Customer: "kevlar", TsUnixNs: t1.Add(time.Minute).UnixNano()},
 		{Raw: "cold line 4", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t1.Add(2 * time.Minute).UnixNano()},
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -114,13 +114,13 @@ func TestColdShardQueryRouting(t *testing.T) {
 		Store:             tx,
 		LambdaFunctionURL: lambdaSrv.URL,
 	})
-	c.Registry.Add(&logdb.ShardEntry{
+	logdb.SeedShard(c.Provisioner, &logdb.ShardEntry{
 		ID: "cold-route-0", Apps: apps,
 		WindowStart: t0, WindowEnd: t1,
 		State: logdb.StateIngesting, Addr: s0Addr,
 		CreatedAt: time.Now(),
 	})
-	c.Registry.Add(&logdb.ShardEntry{
+	logdb.SeedShard(c.Provisioner, &logdb.ShardEntry{
 		ID: "cold-route-1", Apps: apps,
 		WindowStart: t1, WindowEnd: t2,
 		State: logdb.StateArchived, ParquetPath: s3Path,
@@ -156,7 +156,7 @@ func TestColdShardQueryRouting(t *testing.T) {
 	// Regression: a stale LastHeartbeatAt must not hide an archived shard.
 	// Before the fix, archive() didn't zero LastHeartbeatAt, so after 2min
 	// the cold shard became invisible to MatchingShards.
-	entry1 := c.Registry.Get("cold-route-1")
+	entry1 := logdb.GetEntry(c.Provisioner, "cold-route-1")
 	entry1.LastHeartbeatAt = time.Now().Add(-5 * time.Minute)
 	staleRows := drainQuery(t, c, `cat vimgym.log`, coldWindow)
 	if len(staleRows) != 0 {
