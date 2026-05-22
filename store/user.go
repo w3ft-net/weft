@@ -452,20 +452,20 @@ func (s *Store) rememberRawMagicLink(email, raw string) {
 // ListTeamMembers returns active and pending members (not removed).
 func (s *Store) ListTeamMembers(customerID uint) ([]TeamMember, error) {
 	var members []TeamMember
-	err := s.db.Where("customer_id = ? AND status != ?", customerID, "removed").
+	err := s.scoped(customerID).Where("status != ?", "removed").
 		Order("role ASC, created_at ASC").Find(&members).Error
 	return members, err
 }
 
 // CreateTeamMember inserts a new team member record.
 func (s *Store) CreateTeamMember(m *TeamMember) error {
-	return s.db.Create(m).Error
+	return s.scoped(m.CustomerID).Create(m).Error
 }
 
 // GetTeamMemberByEmail finds a non-removed member by email.
 func (s *Store) GetTeamMemberByEmail(customerID uint, email string) (*TeamMember, error) {
 	var m TeamMember
-	err := s.db.Where("customer_id = ? AND email = ? AND status != ?", customerID, email, "removed").
+	err := s.scoped(customerID).Where("email = ? AND status != ?", email, "removed").
 		First(&m).Error
 	if err != nil {
 		return nil, err
@@ -479,7 +479,7 @@ func (s *Store) GetTeamMemberByEmail(customerID uint, email string) (*TeamMember
 // memberships.
 func (s *Store) GetTeamMemberByUserID(customerID uint, userID string) (*TeamMember, error) {
 	var m TeamMember
-	err := s.db.Where("customer_id = ? AND user_id = ? AND status != ?", customerID, userID, "removed").
+	err := s.scoped(customerID).Where("user_id = ? AND status != ?", userID, "removed").
 		First(&m).Error
 	if err != nil {
 		return nil, err
@@ -493,7 +493,9 @@ func (s *Store) GetTeamMemberByUserID(customerID uint, userID string) (*TeamMemb
 // need to pick a default active customer.
 func (s *Store) ListUserMemberships(userID string) ([]TeamMember, error) {
 	var members []TeamMember
-	err := s.db.Preload("Customer").
+	// A user's memberships span every org they belong to — inherently
+	// cross-tenant, so it bypasses the per-customer scope.
+	err := s.crossTenant().Preload("Customer").
 		Where("user_id = ? AND status = ?", userID, "active").
 		Order("created_at ASC").Find(&members).Error
 	return members, err
@@ -502,7 +504,9 @@ func (s *Store) ListUserMemberships(userID string) ([]TeamMember, error) {
 // GetPendingTeamMemberByEmail finds a pending invite by email (across all customers).
 func (s *Store) GetPendingTeamMemberByEmail(email string) (*TeamMember, error) {
 	var m TeamMember
-	err := s.db.Where("email = ? AND status = ?", email, "pending").First(&m).Error
+	// Invite-acceptance flow: the invitee isn't in any org context yet,
+	// so the pending lookup spans customers.
+	err := s.crossTenant().Where("email = ? AND status = ?", email, "pending").First(&m).Error
 	if err != nil {
 		return nil, err
 	}
@@ -512,7 +516,9 @@ func (s *Store) GetPendingTeamMemberByEmail(email string) (*TeamMember, error) {
 // GetTeamMemberByID finds a member by ID.
 func (s *Store) GetTeamMemberByID(id string) (*TeamMember, error) {
 	var m TeamMember
-	if err := s.db.First(&m, "id = ?", id).Error; err != nil {
+	// Keyed by membership id (invite/admin flows) with no customer in
+	// hand — cross-tenant.
+	if err := s.crossTenant().First(&m, "id = ?", id).Error; err != nil {
 		return nil, err
 	}
 	return &m, nil
@@ -521,7 +527,7 @@ func (s *Store) GetTeamMemberByID(id string) (*TeamMember, error) {
 // AcceptTeamMember marks a pending member as active.
 func (s *Store) AcceptTeamMember(id string, userID string) error {
 	now := time.Now()
-	return s.db.Model(&TeamMember{}).Where("id = ?", id).Updates(map[string]any{
+	return s.crossTenant().Model(&TeamMember{}).Where("id = ?", id).Updates(map[string]any{
 		"user_id":     userID,
 		"status":      "active",
 		"accepted_at": &now,
@@ -531,7 +537,7 @@ func (s *Store) AcceptTeamMember(id string, userID string) error {
 
 // RemoveTeamMember sets a member's status to removed.
 func (s *Store) RemoveTeamMember(id string) error {
-	return s.db.Model(&TeamMember{}).Where("id = ?", id).Updates(map[string]any{
+	return s.crossTenant().Model(&TeamMember{}).Where("id = ?", id).Updates(map[string]any{
 		"status":     "removed",
 		"updated_at": time.Now(),
 	}).Error
@@ -542,8 +548,8 @@ func (s *Store) RemoveTeamMember(id string) error {
 // where the caller knows the user + customer but not the membership
 // row id. Soft-removes any active row; idempotent.
 func (s *Store) RemoveTeamMemberByUserAndCustomer(userID string, customerID uint) error {
-	return s.db.Model(&TeamMember{}).
-		Where("user_id = ? AND customer_id = ?", userID, customerID).
+	return s.scoped(customerID).Model(&TeamMember{}).
+		Where("user_id = ?", userID).
 		Updates(map[string]any{
 			"status":     "removed",
 			"updated_at": time.Now(),
@@ -553,8 +559,8 @@ func (s *Store) RemoveTeamMemberByUserAndCustomer(userID string, customerID uint
 // CountTeamMembers returns the count of active + pending members.
 func (s *Store) CountTeamMembers(customerID uint) (int, error) {
 	var count int64
-	err := s.db.Model(&TeamMember{}).
-		Where("customer_id = ? AND status != ?", customerID, "removed").
+	err := s.scoped(customerID).Model(&TeamMember{}).
+		Where("status != ?", "removed").
 		Count(&count).Error
 	return int(count), err
 }

@@ -182,6 +182,7 @@ func (s *Store) enrollTenantModels() {
 		&CronWatch{},
 		&TmpFile{},
 		&Subscription{},
+		&TeamMember{},
 	)
 }
 

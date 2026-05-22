@@ -303,7 +303,7 @@ func TestCountTeamMembers(t *testing.T) {
 
 	// Remove one — should drop to 2.
 	var m TeamMember
-	db.db.Where("customer_id = ?", cust.ID).First(&m)
+	db.scoped(cust.ID).First(&m)
 	db.RemoveTeamMember(m.ID)
 	if n, _ := db.CountTeamMembers(cust.ID); n != 2 {
 		t.Errorf("after remove, count = %d", n)
