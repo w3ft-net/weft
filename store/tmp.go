@@ -101,7 +101,7 @@ func (s *Store) GetTmpFile(customerID uint, path string) (*TmpFile, error) {
 		return nil, err
 	}
 	var f TmpFile
-	err = s.db.Where("customer_id = ? AND path = ?", customerID, p).
+	err = s.scoped(customerID).Where("path = ?", p).
 		Order("updated_at DESC").First(&f).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrTmpNotFound
@@ -130,7 +130,7 @@ func (s *Store) ListTmpFiles(customerID uint, dirPath string) ([]TmpFile, error)
 	}
 
 	var rows []TmpFile
-	q := s.db.Where("customer_id = ?", customerID)
+	q := s.scoped(customerID)
 	if prefix == "" {
 		q = q.Where("path NOT LIKE ?", "%/%")
 	} else {
@@ -189,7 +189,7 @@ func (s *Store) Mkdir(customerID uint, userID, path string) error {
 	if userID != "" {
 		row.CreatedByUserID = &userID
 	}
-	return s.db.Create(row).Error
+	return s.scoped(customerID).Create(row).Error
 }
 
 // ensureParentDirs verifies that every parent component of path exists
@@ -225,7 +225,7 @@ func (s *Store) ensureParentDirs(customerID uint, userID, path string, createMis
 			if userID != "" {
 				row.CreatedByUserID = &userID
 			}
-			if err := s.db.Create(row).Error; err != nil {
+			if err := s.scoped(customerID).Create(row).Error; err != nil {
 				return err
 			}
 			continue
@@ -284,7 +284,7 @@ func (s *Store) WriteTmpFile(customerID uint, tier Tier, userID, path string, da
 	}
 
 	lines := splitLines(data)
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
 		var fileID uint64
 		now := time.Now()
 		if existing != nil {
@@ -382,7 +382,7 @@ func (s *Store) AppendTmpFile(customerID uint, tier Tier, userID, path string, d
 	}
 
 	lines := splitLines(data)
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
 		now := time.Now()
 		var fileID uint64
 		if existing != nil {
@@ -494,7 +494,7 @@ func (s *Store) DeleteTmpFile(customerID uint, path string) error {
 			return fmt.Errorf("tmp: %s: directory not empty", f.Path)
 		}
 	}
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("file_id = ?", f.ID).Delete(&tmpFileLine{}).Error; err != nil {
 			return err
 		}
@@ -511,12 +511,12 @@ func (s *Store) DeleteTmpSubtree(customerID uint, path string) error {
 	if err != nil {
 		return err
 	}
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
 		// Collect every row under this subtree so we can delete their
 		// line contents, then the rows themselves.
 		var files []TmpFile
-		err := tx.Where("customer_id = ? AND (path = ? OR path LIKE ?)",
-			customerID, p, p+"/%").Find(&files).Error
+		err := tx.Where("path = ? OR path LIKE ?",
+			p, p+"/%").Find(&files).Error
 		if err != nil {
 			return err
 		}
@@ -575,7 +575,7 @@ func (s *Store) CopyTmpFile(customerID uint, tier Tier, userID, srcPath, dstPath
 		return fmt.Errorf("%w (%d + %d > %d)", ErrTmpQuotaExceeded, used, src.ByteSize, allowance)
 	}
 
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
 		now := time.Now()
 		dst := TmpFile{
 			CustomerID: customerID,
@@ -623,7 +623,7 @@ func (s *Store) RenameTmpFile(customerID uint, srcPath, dstPath string) error {
 		return err
 	}
 	now := time.Now()
-	return s.db.Model(&TmpFile{}).
+	return s.scoped(customerID).Model(&TmpFile{}).
 		Where("id = ? AND updated_at = ?", src.ID, src.UpdatedAt).
 		Updates(map[string]any{
 			"path":       dstNorm,
@@ -650,7 +650,7 @@ func (s *Store) TouchTmpFile(customerID uint, tier Tier, userID, path string) er
 		return err
 	}
 	now := time.Now()
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&TmpFile{}).
 			Where("id = ? AND updated_at = ?", existing.ID, existing.UpdatedAt).
 			Update("updated_at", now).Error; err != nil {
@@ -673,7 +673,7 @@ func (s *Store) TouchTmpFile(customerID uint, tier Tier, userID, path string) er
 // the store hook runs in the same transaction as customer soft-delete
 // so a re-signup doesn't briefly see stale files.
 func (s *Store) DeleteAllTmpForCustomer(customerID uint) error {
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
 		var ids []uint64
 		if err := tx.Model(&TmpFile{}).
 			Where("customer_id = ?", customerID).
