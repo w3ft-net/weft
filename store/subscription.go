@@ -53,7 +53,7 @@ func (sub *Subscription) IsActive() bool {
 // customer, or nil if none exists or the subscription has expired.
 func (s *Store) ActiveSubscription(customerID uint) (*Subscription, error) {
 	var sub Subscription
-	err := s.db.Where("customer_id = ? AND status = 'active'", customerID).
+	err := s.scoped(customerID).Where("status = 'active'").
 		Order("created_at DESC").First(&sub).Error
 	if err != nil {
 		return nil, err
@@ -66,7 +66,7 @@ func (s *Store) ActiveSubscription(customerID uint) (*Subscription, error) {
 
 // CreateSubscription inserts a new subscription record.
 func (s *Store) CreateSubscription(sub *Subscription) error {
-	return s.db.Create(sub).Error
+	return s.scoped(sub.CustomerID).Create(sub).Error
 }
 
 // SeedDevSubscription ensures an active dev subscription exists. Idempotent.
@@ -78,7 +78,7 @@ func (s *Store) SeedDevSubscription(customerID uint) {
 		return
 	}
 	now := time.Now()
-	if err := s.db.Create(&Subscription{
+	if err := s.scoped(customerID).Create(&Subscription{
 		ID:         fmt.Sprintf("dev-sub-%d", customerID),
 		CustomerID: customerID,
 		Tier:       "swatch",
@@ -96,7 +96,7 @@ func (s *Store) SeedDevSubscription(customerID uint) {
 // have no Stripe sub ID anyway, but the guard makes the intent
 // explicit and protects against ID collisions.
 func (s *Store) CancelSubscription(stripeSubID string) error {
-	return s.db.Model(&Subscription{}).
+	return s.crossTenant().Model(&Subscription{}).
 		Where("stripe_subscription_id = ? AND comp_reason = ''", stripeSubID).
 		Updates(map[string]any{
 			"status":     "cancelled",
@@ -107,7 +107,7 @@ func (s *Store) CancelSubscription(stripeSubID string) error {
 // AttachStripeSubscription sets the Stripe subscription ID on an existing
 // local subscription row by its local ID.
 func (s *Store) AttachStripeSubscription(subID, stripeSubID string) error {
-	return s.db.Model(&Subscription{}).
+	return s.crossTenant().Model(&Subscription{}).
 		Where("id = ?", subID).
 		Updates(map[string]any{
 			"stripe_subscription_id": stripeSubID,
@@ -119,7 +119,7 @@ func (s *Store) AttachStripeSubscription(subID, stripeSubID string) error {
 // Stripe subscription ID, or nil if none.
 func (s *Store) GetSubscriptionByStripeID(stripeSubID string) (*Subscription, error) {
 	var sub Subscription
-	if err := s.db.Where("stripe_subscription_id = ?", stripeSubID).First(&sub).Error; err != nil {
+	if err := s.crossTenant().Where("stripe_subscription_id = ?", stripeSubID).First(&sub).Error; err != nil {
 		return nil, err
 	}
 	return &sub, nil
@@ -128,7 +128,7 @@ func (s *Store) GetSubscriptionByStripeID(stripeSubID string) (*Subscription, er
 // SetSubscriptionStatus updates the status field on a local subscription
 // row identified by its Stripe subscription ID. Comp subs are skipped.
 func (s *Store) SetSubscriptionStatus(stripeSubID, status string) error {
-	return s.db.Model(&Subscription{}).
+	return s.crossTenant().Model(&Subscription{}).
 		Where("stripe_subscription_id = ? AND comp_reason = ''", stripeSubID).
 		Updates(map[string]any{
 			"status":     status,
@@ -139,7 +139,7 @@ func (s *Store) SetSubscriptionStatus(stripeSubID, status string) error {
 // PromoteSubscriptionTier upgrades a subscription's tier and clears its
 // trial expiry once payment is confirmed. Comp subs are skipped.
 func (s *Store) PromoteSubscriptionTier(stripeSubID, tier string) error {
-	return s.db.Model(&Subscription{}).
+	return s.crossTenant().Model(&Subscription{}).
 		Where("stripe_subscription_id = ? AND comp_reason = ''", stripeSubID).
 		Updates(map[string]any{
 			"tier":       tier,
@@ -162,11 +162,11 @@ func (s *Store) GrantCompSubscription(customerID uint, tier, reason string) erro
 	}
 
 	now := time.Now()
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
 		// Idempotent: if the most recent active sub already matches,
 		// skip the cancel+insert.
 		var current Subscription
-		err := tx.Where("customer_id = ? AND status = 'active'", customerID).
+		err := tx.Where("status = 'active'").
 			Order("created_at DESC").First(&current).Error
 		if err == nil && current.Tier == tier && current.CompReason == reason {
 			return nil
@@ -174,7 +174,7 @@ func (s *Store) GrantCompSubscription(customerID uint, tier, reason string) erro
 
 		// Cancel any active subscription for this customer.
 		if err := tx.Model(&Subscription{}).
-			Where("customer_id = ? AND status = 'active'", customerID).
+			Where("status = 'active'").
 			Updates(map[string]any{
 				"status":     "cancelled",
 				"updated_at": now,
@@ -199,8 +199,8 @@ func (s *Store) GrantCompSubscription(customerID uint, tier, reason string) erro
 // customer. Refuses to touch a paid sub. Returns nil if there is no
 // active comp sub (idempotent).
 func (s *Store) RevokeCompSubscription(customerID uint) error {
-	return s.db.Model(&Subscription{}).
-		Where("customer_id = ? AND status = 'active' AND comp_reason != ''", customerID).
+	return s.scoped(customerID).Model(&Subscription{}).
+		Where("status = 'active' AND comp_reason != ''").
 		Updates(map[string]any{
 			"status":     "cancelled",
 			"updated_at": time.Now(),

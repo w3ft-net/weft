@@ -181,6 +181,7 @@ func (s *Store) enrollTenantModels() {
 		&PagerDutyIntegration{},
 		&CronWatch{},
 		&TmpFile{},
+		&Subscription{},
 	)
 }
 

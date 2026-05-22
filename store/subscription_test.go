@@ -115,7 +115,7 @@ func TestGrantCompSubscription_OverridesActive(t *testing.T) {
 
 	// Exactly one active sub should remain.
 	var count int64
-	db.db.Model(&Subscription{}).Where("customer_id = ? AND status = 'active'", cust.ID).Count(&count)
+	db.crossTenant().Model(&Subscription{}).Where("customer_id = ? AND status = 'active'", cust.ID).Count(&count)
 	if count != 1 {
 		t.Errorf("active sub count = %d, want 1", count)
 	}
@@ -136,7 +136,7 @@ func TestGrantCompSubscription_Idempotent(t *testing.T) {
 	}
 
 	var total int64
-	db.db.Model(&Subscription{}).Where("customer_id = ?", cust.ID).Count(&total)
+	db.crossTenant().Model(&Subscription{}).Where("customer_id = ?", cust.ID).Count(&total)
 	if total != 1 {
 		t.Errorf("total sub rows = %d, want 1 (re-grant should be a no-op)", total)
 	}
@@ -197,7 +197,7 @@ func TestWebhookGuard_SkipsCompSub(t *testing.T) {
 
 	// Force a Stripe sub ID onto the comp row to simulate the misroute.
 	const fakeStripeID = "sub_fake_misroute"
-	if err := db.db.Model(&Subscription{}).
+	if err := db.crossTenant().Model(&Subscription{}).
 		Where("customer_id = ?", cust.ID).
 		Update("stripe_subscription_id", fakeStripeID).Error; err != nil {
 		t.Fatal(err)
@@ -249,7 +249,7 @@ func TestSeedDevSubscription_Idempotent(t *testing.T) {
 	// Each customer should have exactly one active dev subscription
 	// regardless of seed-call count.
 	var count int64
-	if err := db.db.Model(&Subscription{}).
+	if err := db.crossTenant().Model(&Subscription{}).
 		Where("customer_id = ? AND status = 'active'", cust.ID).
 		Count(&count).Error; err != nil {
 		t.Fatal(err)
