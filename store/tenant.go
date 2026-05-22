@@ -183,6 +183,7 @@ func (s *Store) enrollTenantModels() {
 		&TmpFile{},
 		&Subscription{},
 		&TeamMember{},
+		&AgentToken{},
 	)
 }
 

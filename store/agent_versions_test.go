@@ -77,7 +77,7 @@ func TestAgentsAtOrBelow_LookbackWindow(t *testing.T) {
 
 	// Backdate the row to two days ago by writing the columns directly.
 	twoDaysAgo := time.Now().Add(-48 * time.Hour)
-	err = db.db.Model(&AgentToken{}).
+	err = db.crossTenant().Model(&AgentToken{}).
 		Where("id = ?", tok.ID).
 		Updates(map[string]any{
 			"last_seen_version": "weftd/0.14.0",

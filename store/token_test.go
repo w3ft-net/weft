@@ -68,7 +68,7 @@ func TestUpdateAgentMetricsConfig(t *testing.T) {
 
 	// Reload and verify.
 	var updated AgentToken
-	db.db.Where("token_hash = ?", tok.TokenHash).First(&updated)
+	db.crossTenant().Where("token_hash = ?", tok.TokenHash).First(&updated)
 
 	if !updated.MetricsEnabled {
 		t.Error("expected metrics_enabled=true")

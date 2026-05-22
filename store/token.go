@@ -85,7 +85,7 @@ func (s *Store) CreateAgentToken(customerID, namespaceID uint, label, env string
 		Label:       label,
 		Env:         env,
 	}
-	if err := s.db.Create(&t).Error; err != nil {
+	if err := s.scoped(customerID).Create(&t).Error; err != nil {
 		return "", nil, err
 	}
 	return raw, &t, nil
@@ -94,7 +94,8 @@ func (s *Store) CreateAgentToken(customerID, namespaceID uint, label, env string
 // AgentNamespaceNames returns distinct namespace names from active agent tokens.
 func (s *Store) AgentNamespaceNames() ([]string, error) {
 	var names []string
-	err := s.db.Model(&AgentToken{}).
+	// Fleet-wide enumeration across all customers' tokens.
+	err := s.crossTenant().Model(&AgentToken{}).
 		Joins("JOIN namespaces ON namespaces.id = agent_tokens.namespace_id").
 		Where("agent_tokens.revoked = ?", false).
 		Distinct().Pluck("namespaces.name", &names).Error
@@ -115,7 +116,9 @@ type AgentAuthResult struct {
 // token is invalid or revoked.
 func (s *Store) ValidateAgentToken(token string) (*AgentAuthResult, error) {
 	var t AgentToken
-	result := s.db.Preload("Customer").Preload("Namespace").
+	// The auth path: the customer is the *result* of this lookup, not an
+	// input, so it must run unscoped (keyed by the secret token hash).
+	result := s.crossTenant().Preload("Customer").Preload("Namespace").
 		Where("token_hash = ? AND revoked = ?", hashAgentToken(token), false).
 		First(&t)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -135,19 +138,20 @@ func (s *Store) ValidateAgentToken(token string) (*AgentAuthResult, error) {
 // RevokeAgentToken disables a token by primary key. The UI only has
 // the ID + prefix after creation, so revocation is ID-based.
 func (s *Store) RevokeAgentToken(id uint) error {
-	return s.db.Model(&AgentToken{}).Where("id = ?", id).Update("revoked", true).Error
+	// UI revokes by token id; no customer in hand. Cross-tenant.
+	return s.crossTenant().Model(&AgentToken{}).Where("id = ?", id).Update("revoked", true).Error
 }
 
 func (s *Store) RevokeAgentTokensByLabel(customerID uint, label string) error {
-	return s.db.Model(&AgentToken{}).
-		Where("customer_id = ? AND label = ? AND revoked = ?", customerID, label, false).
+	return s.scoped(customerID).Model(&AgentToken{}).
+		Where("label = ? AND revoked = ?", label, false).
 		Update("revoked", true).Error
 }
 
 // ListAgentTokens returns all tokens for a customer, with namespace preloaded.
 func (s *Store) ListAgentTokens(customerID uint) ([]AgentToken, error) {
 	var tokens []AgentToken
-	err := s.db.Preload("Namespace").Where("customer_id = ?", customerID).Find(&tokens).Error
+	err := s.scoped(customerID).Preload("Namespace").Find(&tokens).Error
 	return tokens, err
 }
 
@@ -159,7 +163,8 @@ func (s *Store) UpdateAgentMetricsConfig(token string, enabled bool, interval st
 		b, _ := json.Marshal(collectors)
 		collectorsJSON = string(b)
 	}
-	return s.db.Model(&AgentToken{}).Where("token_hash = ?", hashAgentToken(token)).Updates(map[string]any{
+	// Agent self-reports config keyed by its token hash — no customer context.
+	return s.crossTenant().Model(&AgentToken{}).Where("token_hash = ?", hashAgentToken(token)).Updates(map[string]any{
 		"metrics_enabled":    enabled,
 		"metrics_interval":   interval,
 		"metrics_collectors": collectorsJSON,
@@ -175,8 +180,8 @@ type MetricsForecast struct {
 // ForecastMetricsUsage computes projected monthly metric bytes from active agent configs.
 func (s *Store) ForecastMetricsUsage(customerID uint) (*MetricsForecast, error) {
 	var tokens []AgentToken
-	err := s.db.Where("customer_id = ? AND revoked = ? AND metrics_enabled = ?",
-		customerID, false, true).Find(&tokens).Error
+	err := s.scoped(customerID).Where("revoked = ? AND metrics_enabled = ?",
+		false, true).Find(&tokens).Error
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +216,8 @@ func (s *Store) ForecastMetricsUsage(customerID uint) (*MetricsForecast, error) 
 // MetricsAppNames returns "<app>.metrics" for each active agent with metrics enabled.
 func (s *Store) MetricsAppNames() ([]string, error) {
 	var apps []string
-	err := s.db.Model(&AgentToken{}).
+	// Fleet-wide metrics-app enumeration across all customers.
+	err := s.crossTenant().Model(&AgentToken{}).
 		Where("revoked = ? AND metrics_enabled = ? AND app != ''", false, true).
 		Distinct().Pluck("app", &apps).Error
 	if err != nil {
@@ -230,14 +236,14 @@ func (s *Store) SeedDevAgentToken(customerID uint, label, nsName string) {
 	const devToken = "wft_dev_0000000000000000"
 	hash := hashAgentToken(devToken)
 	var existing AgentToken
-	if s.db.Where("token_hash = ?", hash).First(&existing).Error == nil {
+	if s.crossTenant().Where("token_hash = ?", hash).First(&existing).Error == nil {
 		return // already exists
 	}
 	ns, _ := s.FindOrCreateNamespace(customerID, nsName)
 	if ns == nil {
 		return
 	}
-	s.db.Create(&AgentToken{
+	s.scoped(customerID).Create(&AgentToken{
 		CustomerID:  customerID,
 		NamespaceID: ns.ID,
 		TokenHash:   hash,
@@ -260,7 +266,8 @@ func generateToken() (string, error) {
 // callers log the error and continue.
 func (s *Store) RecordAgentVersion(tokenID uint, version string) error {
 	now := time.Now()
-	return s.db.Model(&AgentToken{}).
+	// Ingest-path write by token id (already authenticated upstream).
+	return s.crossTenant().Model(&AgentToken{}).
 		Where("id = ?", tokenID).
 		Updates(map[string]any{
 			"last_seen_version": version,
@@ -293,7 +300,8 @@ type AgentVersionSighting struct {
 func (s *Store) AgentsAtOrBelow(version string, lookback time.Duration) ([]AgentVersionSighting, error) {
 	cutoff := time.Now().Add(-lookback)
 	var rows []AgentToken
-	err := s.db.
+	// Operator fleet-wide query across all customers' agents.
+	err := s.crossTenant().
 		Where("revoked = ?", false).
 		Where("last_seen_version != ''").
 		Where("last_seen_version <= ?", version).
