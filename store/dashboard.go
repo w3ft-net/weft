@@ -212,12 +212,12 @@ func (s *Store) ValidateDashboardWatchRefs(customerID uint, spec *DashboardSpec)
 // ParseDashboardYAML and ValidateDashboardWatchRefs against the body.
 // userID is recorded as the creator on first write; ignored on update.
 func (s *Store) SaveDashboard(customerID uint, userID, name, yamlBody string) error {
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
 			return err
 		}
 		var d Dashboard
-		result := tx.Where("customer_id = ? AND name = ?", customerID, name).First(&d)
+		result := tx.Where("name = ?", name).First(&d)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			row := &Dashboard{
 				CustomerID: customerID,
@@ -236,7 +236,7 @@ func (s *Store) SaveDashboard(customerID uint, userID, name, yamlBody string) er
 // GetDashboard returns one dashboard by name.
 func (s *Store) GetDashboard(customerID uint, name string) (*Dashboard, error) {
 	var d Dashboard
-	err := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&d).Error
+	err := s.scoped(customerID).Where("name = ?", name).First(&d).Error
 	if err != nil {
 		return nil, err
 	}
@@ -246,11 +246,11 @@ func (s *Store) GetDashboard(customerID uint, name string) (*Dashboard, error) {
 // ListDashboards returns dashboards for a customer ordered by name.
 func (s *Store) ListDashboards(customerID uint) ([]Dashboard, error) {
 	var list []Dashboard
-	err := s.db.Where("customer_id = ?", customerID).Order("name").Find(&list).Error
+	err := s.scoped(customerID).Order("name").Find(&list).Error
 	return list, err
 }
 
 // DeleteDashboard removes a dashboard (soft-delete via gorm).
 func (s *Store) DeleteDashboard(customerID uint, name string) error {
-	return s.db.Where("customer_id = ? AND name = ?", customerID, name).Delete(&Dashboard{}).Error
+	return s.scoped(customerID).Where("name = ?", name).Delete(&Dashboard{}).Error
 }

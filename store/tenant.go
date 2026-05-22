@@ -173,7 +173,9 @@ func (ts *tenantScoping) guardCreate(db *gorm.DB) {
 // Models are enrolled here as their call sites are migrated to pass
 // the customer through context (see WithCustomer).
 func (s *Store) enrollTenantModels() {
-	s.tenant.enroll(s.db /* models enrolled incrementally, e.g. &Dashboard{}, &Source{}, … */)
+	s.tenant.enroll(s.db,
+		&Dashboard{},
+	)
 }
 
 // DB exposes the underlying *gorm.DB. Tenant-scoped (enrolled) models
@@ -181,3 +183,22 @@ func (s *Store) enrollTenantModels() {
 // the scoping callbacks can constrain the query — unscoped access to
 // an enrolled model fails closed with ErrNoCustomerInContext.
 func (s *Store) DB() *gorm.DB { return s.db }
+
+// scoped returns a session bound to customerID for enrolled-model
+// access: the scoping callback constrains every query on it to that
+// customer's rows. Shorthand for DB().WithContext(WithCustomer(ctx,
+// id)). Store methods use a background context for now — they don't
+// yet thread a request context (a separate change); the customer is
+// what the boundary needs.
+func (s *Store) scoped(customerID uint) *gorm.DB {
+	return s.db.WithContext(WithCustomer(context.Background(), customerID))
+}
+
+// crossTenant returns a session exempt from tenant scoping, for the
+// legitimate non-scoped access paths against enrolled models (token
+// auth by hash, Stripe webhooks by subscription id, admin fleet
+// views). The deliberate hole — every use is a place we've decided a
+// query may span customers.
+func (s *Store) crossTenant() *gorm.DB {
+	return s.db.WithContext(WithoutTenantScope(context.Background()))
+}
