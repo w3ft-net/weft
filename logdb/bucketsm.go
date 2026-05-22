@@ -131,7 +131,7 @@ func (b *BucketSM) readState(ctx context.Context) (stateless.State, error) {
 		return nil, ErrUnknownBucket
 	}
 	if rec.State == "" {
-		// Defensive: should never happen post-migration-052, but if a
+		// Defensive: should never happen post-migration-056, but if a
 		// row predates the migration somehow, treat as STASIS so the
 		// FSM can converge on the next tick.
 		return BucketStasis, nil

@@ -1,0 +1,1 @@
+If we are going to hae to hae per-az asgs, we will need to ensure that the limited number of asgs we support in our tf are exposed to the provisioner, and the provisioner needs to stripe a bucket across those asgs

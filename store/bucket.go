@@ -21,7 +21,7 @@ type Bucket struct {
 	CreatedAt            string `gorm:"not null;column:created_at"`
 	WindowDuration       string `gorm:"not null;column:window_duration"`
 	// State persists the bucket FSM state (STASIS/WARMING/ROTATING/
-	// ARCHIVING/SCALING_DOWN) — migration 052. Default STASIS so
+	// ARCHIVING/SCALING_DOWN) — migration 056. Default STASIS so
 	// existing rows hydrate cleanly.
 	State string `gorm:"not null;default:'STASIS';column:state"`
 	// CascadeStartedAt is set on STASIS→WARMING and cleared on

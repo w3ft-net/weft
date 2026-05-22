@@ -37,7 +37,7 @@ type ShardRecord struct {
 	// BucketManager and stamps the int here.
 	BucketID int64 `gorm:"not null;column:bucket_id"`
 	// IngestFailures, IngestUnhealthy, LastHeartbeatAt, LaunchAttempts,
-	// AZ, StripeIndex are populated by the shard FSM (migration 052).
+	// AZ, StripeIndex are populated by the shard FSM (migration 056).
 	// IngestFailures and IngestUnhealthy persist the in-memory
 	// `Suspended`/IngestFailures pair that previously lost state on
 	// restart. LastHeartbeatAt likewise — its prior in-memory zero

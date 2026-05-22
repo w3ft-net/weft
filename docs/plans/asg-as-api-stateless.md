@@ -583,7 +583,7 @@ Component 10. Lands after Phase 3 is verified.
 committed as `e93e3ef`. FSM scaffolding committed as `55248cb` on
 branch `the_big_lift`:
 
-- Migration `store/migrations/052_state_machine_columns.sql` adds
+- Migration `store/migrations/056_state_machine_columns.sql` adds
   `buckets.state`, `buckets.cascade_started_at`, and the six new
   `shard_records` columns + the `(bucket_id, window_start)` index.
 - `logdb/states.go` and `logdb/triggers.go` define the typed state
