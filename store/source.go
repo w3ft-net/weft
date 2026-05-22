@@ -69,6 +69,12 @@ type LogGroup struct {
 	gorm.Model
 	NamespaceID  uint               `gorm:"not null;uniqueIndex:idx_ns_app"`
 	Namespace    Namespace          `gorm:"foreignKey:NamespaceID;constraint:OnDelete:CASCADE"`
+	// CustomerID is denormalized from the owning namespace (migration
+	// 054) so log_groups can be tenant-scoped directly. Read-only to
+	// GORM (`->`): the BEFORE INSERT trigger fills it from namespace_id,
+	// so GORM must omit it from INSERTs (a written zero-value would
+	// dodge the trigger's NULL check and trip the customers FK).
+	CustomerID   uint               `gorm:"->"`
 	AWSAccountID *uint              // nullable; required for cloudwatch, nil for weftd
 	AWSAccount   *AWSAccount        `gorm:"foreignKey:AWSAccountID"`
 	App          string             `gorm:"not null;uniqueIndex:idx_ns_app"`
