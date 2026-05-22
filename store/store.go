@@ -14,6 +14,12 @@ import (
 type Store struct {
 	db *gorm.DB
 
+	// tenant holds the enforced multi-tenancy registry + GORM
+	// callbacks (see tenant.go). Shared by pointer across a parent
+	// Store and the transaction-Stores BeginTest derives from it, so
+	// model enrollment and the scoping callbacks read the same set.
+	tenant *tenantScoping
+
 	// Test-only: raw magic-link tokens indexed by email. Populated by
 	// CreateMagicLink; read by GetLastMagicLinkToken. The tokens
 	// themselves are hashed before being persisted, so this map is the
@@ -38,7 +44,9 @@ func Open(dsn string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{db: db}
+	s := &Store{db: db, tenant: newTenantScoping()}
+	s.tenant.install(db)
+	s.enrollTenantModels()
 	if err := s.backfillAlertThresholds(); err != nil {
 		return nil, fmt.Errorf("backfill alert thresholds: %w", err)
 	}
@@ -107,7 +115,7 @@ func (s *Store) backfillAlertThresholds() error {
 // Call the returned rollback function in t.Cleanup to undo all changes.
 func (s *Store) BeginTest() (*Store, func()) {
 	tx := s.db.Begin()
-	return &Store{db: tx}, func() { tx.Rollback() }
+	return &Store{db: tx, tenant: s.tenant}, func() { tx.Rollback() }
 }
 
 // TruncateTestTables removes all data from GORM-managed tables. For tests only.
