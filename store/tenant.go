@@ -180,6 +180,7 @@ func (s *Store) enrollTenantModels() {
 		&NotifyConfig{},
 		&PagerDutyIntegration{},
 		&SavedQuery{},
+		&CronWatch{},
 	)
 }
 

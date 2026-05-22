@@ -379,13 +379,13 @@ func (s *Store) SaveCronWatch(customerID uint, userID, name, schedule, pipeline 
 	}
 	hash := computeCronWatchHash(schedule, pipeline)
 
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
 		// See SaveShellFunction for why we always set, even for empty.
 		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
 			return err
 		}
 		var w CronWatch
-		result := tx.Where("customer_id = ? AND name = ?", customerID, name).First(&w)
+		result := tx.Where("name = ?", name).First(&w)
 		if result.Error == gorm.ErrRecordNotFound {
 			row := &CronWatch{
 				CustomerID:     customerID,
@@ -430,7 +430,10 @@ func (s *Store) SaveCronWatch(customerID uint, userID, name, schedule, pipeline 
 // writes it back without touching the pipeline string or content
 // hash.
 func (s *Store) RefreshWatchLoweredPlan(watchID uint, loweredPlan []byte) error {
-	return s.db.Model(&CronWatch{}).
+	// Fire-path lazy backfill: keyed by watch id on a watch the
+	// scheduler already loaded (via ListEnabledCronWatches). System
+	// actor, not a tenant — crossTenant.
+	return s.crossTenant().Model(&CronWatch{}).
 		Where("id = ?", watchID).
 		Update("lowered_plan", loweredPlan).
 		Error
@@ -523,7 +526,7 @@ func ValidateWatchPipeline(pipeline string) error {
 
 func (s *Store) GetCronWatch(customerID uint, name string) (*CronWatch, error) {
 	var w CronWatch
-	err := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&w).Error
+	err := s.scoped(customerID).Where("name = ?", name).First(&w).Error
 	if err != nil {
 		return nil, err
 	}
@@ -532,30 +535,34 @@ func (s *Store) GetCronWatch(customerID uint, name string) (*CronWatch, error) {
 
 func (s *Store) ListCronWatches(customerID uint) ([]CronWatch, error) {
 	var watches []CronWatch
-	err := s.db.Where("customer_id = ?", customerID).Order("name").Find(&watches).Error
+	err := s.scoped(customerID).Order("name").Find(&watches).Error
 	return watches, err
 }
 
 func (s *Store) ListEnabledCronWatches() ([]CronWatch, error) {
+	// The scheduler enumerates every customer's enabled watches — a
+	// deliberately cross-tenant read (the system fires them all).
 	var watches []CronWatch
-	err := s.db.Where("enabled = ?", true).Find(&watches).Error
+	err := s.crossTenant().Where("enabled = ?", true).Find(&watches).Error
 	return watches, err
 }
 
 func (s *Store) DeleteCronWatch(customerID uint, name string) error {
-	return s.db.Where("customer_id = ? AND name = ?", customerID, name).Delete(&CronWatch{}).Error
+	return s.scoped(customerID).Where("name = ?", name).Delete(&CronWatch{}).Error
 }
 
 // CountCronWatches returns the number of cron watches for a customer.
 func (s *Store) CountCronWatches(customerID uint) (int, error) {
 	var count int64
-	err := s.db.Model(&CronWatch{}).Where("customer_id = ?", customerID).Count(&count).Error
+	err := s.scoped(customerID).Model(&CronWatch{}).Count(&count).Error
 	return int(count), err
 }
 
 func (s *Store) UpdateCronWatchRun(id uint, status string) error {
+	// Fire-path run-status write, keyed by id on an already-loaded
+	// watch. System actor — crossTenant.
 	now := time.Now()
-	return s.db.Model(&CronWatch{}).Where("id = ?", id).Updates(map[string]any{
+	return s.crossTenant().Model(&CronWatch{}).Where("id = ?", id).Updates(map[string]any{
 		"last_run_at": &now,
 		"last_status": status,
 	}).Error
@@ -736,7 +743,7 @@ func (s *Store) CronNonEmptyCount(customerID, cronWatchID uint, since time.Time,
 // caller's plan retention before the query runs.
 func (s *Store) QueryCronResults(customerID uint, watchName string, since time.Time) ([]CronResult, error) {
 	var watch CronWatch
-	if err := s.db.Where("customer_id = ? AND name = ?", customerID, watchName).First(&watch).Error; err != nil {
+	if err := s.scoped(customerID).Where("name = ?", watchName).First(&watch).Error; err != nil {
 		return nil, err
 	}
 	since = clampRetention(s.TierForCustomer(customerID), since)
@@ -812,7 +819,7 @@ func (s *Store) TierForCustomer(customerID uint) Tier {
 // of-day grouping).
 func (s *Store) SeasonalCronStats(customerID uint, watchName string, period, window time.Duration) (avg, stddev float64, samples int, err error) {
 	var watch CronWatch
-	if err := s.db.Where("customer_id = ? AND name = ?", customerID, watchName).First(&watch).Error; err != nil {
+	if err := s.scoped(customerID).Where("name = ?", watchName).First(&watch).Error; err != nil {
 		return 0, 0, 0, err
 	}
 	now := time.Now()
@@ -870,7 +877,7 @@ func (s *Store) SeasonalCronStats(customerID uint, watchName string, period, win
 // LatestCronResult returns the most recent result for a named watch.
 func (s *Store) LatestCronResult(customerID uint, watchName string) (*CronResult, error) {
 	var watch CronWatch
-	if err := s.db.Where("customer_id = ? AND name = ?", customerID, watchName).First(&watch).Error; err != nil {
+	if err := s.scoped(customerID).Where("name = ?", watchName).First(&watch).Error; err != nil {
 		return nil, err
 	}
 	var result CronResult

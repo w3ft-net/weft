@@ -193,7 +193,7 @@ func (s *Store) CheckoutCronWatch(customerID uint, userID, name, ref string) err
 	if err != nil {
 		return err
 	}
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
 		// Always set, even for empty — see SaveShellFunction.
 		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
 			return err
@@ -213,7 +213,7 @@ func (s *Store) CheckoutCronWatch(customerID uint, userID, name, ref string) err
 			updates["created_by_user_id"] = *target.AuthoredByUserID
 		}
 		return tx.Model(&CronWatch{}).
-			Where("customer_id = ? AND name = ?", customerID, name).
+			Where("name = ?", name).
 			Updates(updates).Error
 	})
 }
@@ -229,8 +229,8 @@ func (s *Store) AmendCronWatchMessage(customerID uint, name, ref, message string
 		return err
 	}
 	if v.IsHead {
-		return s.db.Model(&CronWatch{}).
-			Where("customer_id = ? AND name = ?", customerID, name).
+		return s.scoped(customerID).Model(&CronWatch{}).
+			Where("name = ?", name).
 			Update("message", message).Error
 	}
 	w, err := s.GetCronWatch(customerID, name)
