@@ -175,6 +175,8 @@ func (ts *tenantScoping) guardCreate(db *gorm.DB) {
 func (s *Store) enrollTenantModels() {
 	s.tenant.enroll(s.db,
 		&Dashboard{},
+		&ShellFunction{},
+		&OrgPermission{},
 	)
 }
 

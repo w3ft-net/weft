@@ -73,7 +73,7 @@ func (s *Store) SaveShellFunction(customerID uint, userID, name, source, languag
 	}
 	hash := computeShellFunctionHash(source)
 
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
 		// Set the per-transaction GUC the version-history trigger
 		// reads to populate captured_by_user_id. Empty userID is
 		// stored as '' — the trigger collapses '' to NULL. We
@@ -87,7 +87,7 @@ func (s *Store) SaveShellFunction(customerID uint, userID, name, source, languag
 		}
 
 		var fn ShellFunction
-		result := tx.Where("customer_id = ? AND name = ?", customerID, name).First(&fn)
+		result := tx.Where("name = ?", name).First(&fn)
 		if result.Error == gorm.ErrRecordNotFound {
 			row := &ShellFunction{
 				CustomerID: customerID, Name: name,
@@ -306,7 +306,7 @@ func terminalAlertOf(list *bash.List) *bash.SimpleCommand {
 
 func (s *Store) GetShellFunction(customerID uint, name string) (*ShellFunction, error) {
 	var fn ShellFunction
-	err := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&fn).Error
+	err := s.scoped(customerID).Where("name = ?", name).First(&fn).Error
 	if err != nil {
 		return nil, err
 	}
@@ -315,12 +315,12 @@ func (s *Store) GetShellFunction(customerID uint, name string) (*ShellFunction, 
 
 func (s *Store) ListShellFunctions(customerID uint) ([]ShellFunction, error) {
 	var fns []ShellFunction
-	err := s.db.Where("customer_id = ?", customerID).Order("name").Find(&fns).Error
+	err := s.scoped(customerID).Order("name").Find(&fns).Error
 	return fns, err
 }
 
 func (s *Store) DeleteShellFunction(customerID uint, name string) error {
-	return s.db.Where("customer_id = ? AND name = ?", customerID, name).Delete(&ShellFunction{}).Error
+	return s.scoped(customerID).Where("name = ?", name).Delete(&ShellFunction{}).Error
 }
 
 // --- Cron Watches (/cron.d/) ---

@@ -254,7 +254,7 @@ func (s *Store) CheckoutShellFunction(customerID uint, userID, name, ref string)
 	// SaveShellFunction sets userID as the new HEAD's author. We want
 	// the new HEAD to keep the *original* author from `target`. Do
 	// the UPDATE directly with the fields we care about preserving.
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
 		// Always set, even for empty — see SaveShellFunction for why.
 		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
 			return err
@@ -270,7 +270,7 @@ func (s *Store) CheckoutShellFunction(customerID uint, userID, name, ref string)
 			updates["created_by_user_id"] = *target.AuthoredByUserID
 		}
 		return tx.Model(&ShellFunction{}).
-			Where("customer_id = ? AND name = ?", customerID, name).
+			Where("name = ?", name).
 			Updates(updates).Error
 	})
 }
@@ -287,8 +287,8 @@ func (s *Store) AmendShellFunctionMessage(customerID uint, name, ref, message st
 		return err
 	}
 	if v.IsHead {
-		return s.db.Model(&ShellFunction{}).
-			Where("customer_id = ? AND name = ?", customerID, name).
+		return s.scoped(customerID).Model(&ShellFunction{}).
+			Where("name = ?", name).
 			Update("message", message).Error
 	}
 	// History row — find by (function_id, content_hash, captured_at)

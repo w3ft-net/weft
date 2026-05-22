@@ -96,7 +96,7 @@ type OrgPermission struct {
 // translate "not found" into the default-deny (all-false) state.
 func (s *Store) GetOrgPermission(customerID uint, userID string) (*OrgPermission, error) {
 	var p OrgPermission
-	err := s.db.Where("customer_id = ? AND user_id = ?", customerID, userID).First(&p).Error
+	err := s.scoped(customerID).Where("user_id = ?", userID).First(&p).Error
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func (s *Store) GetOrgPermission(customerID uint, userID string) (*OrgPermission
 // Used by the /etc/team.yaml synthesizer and the permissions UI.
 func (s *Store) ListOrgPermissions(customerID uint) ([]OrgPermission, error) {
 	var perms []OrgPermission
-	err := s.db.Where("customer_id = ?", customerID).Find(&perms).Error
+	err := s.scoped(customerID).Find(&perms).Error
 	return perms, err
 }
 
@@ -123,15 +123,15 @@ func (s *Store) UpsertOrgPermission(p *OrgPermission) error {
 		"can_manage_watches":   p.CanManageWatches,
 		"can_manage_etc":       p.CanManageEtc,
 	}
-	result := s.db.Where("customer_id = ? AND user_id = ?", p.CustomerID, p.UserID).First(&existing)
+	result := s.scoped(p.CustomerID).Where("user_id = ?", p.UserID).First(&existing)
 	if result.Error == gorm.ErrRecordNotFound {
-		return s.db.Model(&OrgPermission{}).Create(vals).Error
+		return s.scoped(p.CustomerID).Model(&OrgPermission{}).Create(vals).Error
 	}
-	return s.db.Model(&existing).Updates(vals).Error
+	return s.scoped(p.CustomerID).Model(&existing).Updates(vals).Error
 }
 
 // DeleteOrgPermission removes a row. Called on team-member removal so
 // a re-added user starts from the default-deny state.
 func (s *Store) DeleteOrgPermission(customerID uint, userID string) error {
-	return s.db.Where("customer_id = ? AND user_id = ?", customerID, userID).Delete(&OrgPermission{}).Error
+	return s.scoped(customerID).Where("user_id = ?", userID).Delete(&OrgPermission{}).Error
 }
