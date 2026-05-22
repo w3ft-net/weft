@@ -331,7 +331,9 @@ func TestDeleteSavedQueriesForUserInCustomer(t *testing.T) {
 	}
 	for _, sq := range saves {
 		sq := sq
-		if err := db.db.Create(&sq).Error; err != nil {
+		// Seed across two customers in one loop — deliberately
+		// cross-tenant, so bypass the scoping guard.
+		if err := db.crossTenant().Create(&sq).Error; err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -474,7 +474,7 @@ func (s *Store) CreateSavedQuery(customerID uint, userID, name, query string) (*
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
-	if err := s.db.Create(&sq).Error; err != nil {
+	if err := s.scoped(customerID).Create(&sq).Error; err != nil {
 		return nil, err
 	}
 	return &sq, nil
@@ -482,7 +482,7 @@ func (s *Store) CreateSavedQuery(customerID uint, userID, name, query string) (*
 
 func (s *Store) ListSavedQueries(customerID uint, userID string) ([]SavedQuery, error) {
 	var queries []SavedQuery
-	err := s.db.Where("customer_id = ? AND user_id = ?", customerID, userID).
+	err := s.scoped(customerID).Where("user_id = ?", userID).
 		Order("created_at DESC").Find(&queries).Error
 	return queries, err
 }
@@ -492,12 +492,17 @@ func (s *Store) ListSavedQueries(customerID uint, userID string) ([]SavedQuery, 
 // clean up Loom-era bookmarks that the user no longer has membership
 // to act on.
 func (s *Store) DeleteSavedQueriesForUserInCustomer(customerID uint, userID string) error {
-	return s.db.Where("customer_id = ? AND user_id = ?", customerID, userID).
+	return s.scoped(customerID).Where("user_id = ?", userID).
 		Delete(&SavedQuery{}).Error
 }
 
+// DeleteSavedQuery removes one saved query by id. Ownership is the
+// user_id match, not the customer — a query is a user-owned resource
+// and the caller has only the query id, so this legitimately spans the
+// tenant boundary (crossTenant) while the user_id predicate keeps a
+// user to their own rows.
 func (s *Store) DeleteSavedQuery(userID, queryID string) error {
-	return s.db.Where("id = ? AND user_id = ?", queryID, userID).Delete(&SavedQuery{}).Error
+	return s.crossTenant().Where("id = ? AND user_id = ?", queryID, userID).Delete(&SavedQuery{}).Error
 }
 
 // --- Team Members ---

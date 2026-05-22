@@ -179,6 +179,7 @@ func (s *Store) enrollTenantModels() {
 		&OrgPermission{},
 		&NotifyConfig{},
 		&PagerDutyIntegration{},
+		&SavedQuery{},
 	)
 }
 
