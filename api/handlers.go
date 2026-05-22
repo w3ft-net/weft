@@ -461,7 +461,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	trialEnd := time.Now().Add(14 * 24 * time.Hour)
 	s.store.CreateSubscription(&store.Subscription{
 		ID:         uuid.New().String(),
-		CustomerID: customerName,
+		CustomerID: cust.ID,
 		Tier:       "trial",
 		Status:     "active",
 		StartsAt:   time.Now(),
@@ -639,7 +639,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		_ = s.store.UpdateUserLastActiveCustomer(user.ID, invite.CustomerID)
 
 		if cust, err := s.store.GetCustomerByID(invite.CustomerID); err == nil && cust != nil {
-			if sub, _ := s.store.ActiveSubscription(cust.Name); sub != nil {
+			if sub, _ := s.store.ActiveSubscription(cust.ID); sub != nil {
 				tier = store.Tier(sub.Tier)
 			}
 		}
@@ -659,7 +659,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			trialEnd := time.Now().Add(14 * 24 * time.Hour)
 			s.store.CreateSubscription(&store.Subscription{
 				ID:         uuid.New().String(),
-				CustomerID: customerName,
+				CustomerID: cust.ID,
 				Tier:       "trial",
 				Status:     "active",
 				StartsAt:   time.Now(),
@@ -696,7 +696,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 				user.EmailVerifiedAt = &now
 			}
 			if memberships, _ := s.store.ListUserMemberships(user.ID); len(memberships) > 0 {
-				if sub, _ := s.store.ActiveSubscription(memberships[0].Customer.Name); sub != nil {
+				if sub, _ := s.store.ActiveSubscription(memberships[0].Customer.ID); sub != nil {
 					tier = store.Tier(sub.Tier)
 				}
 			}
@@ -732,7 +732,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// Tier and customer come from the resolved active org, not from a
 	// user.CustomerName field that no longer exists.
 	tier := store.Tier("none")
-	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerName); sub != nil {
+	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerID); sub != nil {
 		tier = store.Tier(sub.Tier)
 	}
 
@@ -850,7 +850,7 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 
 	// Reuse an existing trialing Stripe subscription if the trial row already
 	// has one attached (handles page refresh / retries idempotently).
-	if trial, _ := s.store.ActiveSubscription(session.ActiveCustomerName); trial != nil && trial.StripeSubscriptionID != "" {
+	if trial, _ := s.store.ActiveSubscription(session.ActiveCustomerID); trial != nil && trial.StripeSubscriptionID != "" {
 		getParams := &stripe.SubscriptionParams{}
 		getParams.AddExpand("pending_setup_intent")
 		sub, err := subscription.Get(trial.StripeSubscriptionID, getParams)
@@ -909,7 +909,7 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 
 	// Attach the Stripe subscription ID to our local trial row so refresh
 	// reuses the same subscription and the webhook can promote it on confirm.
-	if trial, _ := s.store.ActiveSubscription(session.ActiveCustomerName); trial != nil {
+	if trial, _ := s.store.ActiveSubscription(session.ActiveCustomerID); trial != nil {
 		_ = s.store.AttachStripeSubscription(trial.ID, sub.ID)
 	}
 
@@ -941,7 +941,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 
 	stripe.Key = s.StripeSecretKey
 
-	currentSub, _ := s.store.ActiveSubscription(session.ActiveCustomerName)
+	currentSub, _ := s.store.ActiveSubscription(session.ActiveCustomerID)
 	if currentSub == nil || currentSub.StripeSubscriptionID == "" {
 		http.Error(w, "no active stripe subscription; complete signup first", http.StatusBadRequest)
 		return
@@ -1122,7 +1122,7 @@ func projectedOverageCents(bytes int64, tier store.Tier) int {
 
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerName); sub == nil {
+	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerID); sub == nil {
 		http.Error(w, "no active subscription", http.StatusPaymentRequired)
 		return
 	}
@@ -1138,7 +1138,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	// via TierForCustomer); fall through to the active subscription
 	// in case display tier evolves separately.
 	tier := session.Tier
-	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerName); sub != nil {
+	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerID); sub != nil {
 		tier = store.Tier(sub.Tier)
 	}
 
@@ -1463,7 +1463,7 @@ func (s *Server) handleListWatches(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tier := store.TierTrial
-	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerName); sub != nil {
+	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerID); sub != nil {
 		tier = store.Tier(sub.Tier)
 	}
 	count, _ := s.store.CountCronWatches(custID)
@@ -1719,7 +1719,7 @@ func (s *Server) handleListTeam(w http.ResponseWriter, r *http.Request) {
 	}
 	count, _ := s.store.CountTeamMembers(session.ActiveCustomerID)
 	tier := store.TierTrial
-	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerName); sub != nil {
+	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerID); sub != nil {
 		tier = store.Tier(sub.Tier)
 	}
 	orgName := session.ActiveCustomerName
@@ -1747,7 +1747,7 @@ func (s *Server) handleInviteTeamMember(w http.ResponseWriter, r *http.Request) 
 
 	// Check seat limit.
 	tier := store.TierTrial
-	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerName); sub != nil {
+	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerID); sub != nil {
 		tier = store.Tier(sub.Tier)
 	}
 	count, _ := s.store.CountTeamMembers(session.ActiveCustomerID)
@@ -1837,7 +1837,7 @@ func (s *Server) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 	_ = s.store.UpdateUserLastActiveCustomer(user.ID, member.CustomerID)
 
 	tier := store.TierTrial
-	if sub, _ := s.store.ActiveSubscription(cust.Name); sub != nil {
+	if sub, _ := s.store.ActiveSubscription(cust.ID); sub != nil {
 		tier = store.Tier(sub.Tier)
 	}
 

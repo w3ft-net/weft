@@ -212,7 +212,7 @@ func TestCronAggregate_PicksTierByWindow(t *testing.T) {
 	// Give them a bolt subscription so LogRetention doesn't clamp.
 	if err := db.db.Exec(`
 		INSERT INTO subscriptions (id, customer_id, tier, status, starts_at, created_at, updated_at)
-		VALUES (?, ?, 'bolt', 'active', now(), now(), now())`, "sub-"+cust.Name, cust.Name).Error; err != nil {
+		VALUES (?, ?, 'bolt', 'active', now(), now(), now())`, "sub-"+cust.Name, cust.ID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1", nil); err != nil {
@@ -285,7 +285,7 @@ func TestQueryCronSeries_PicksTierAndReturnsBuckets(t *testing.T) {
 	if err := db.db.Exec(`
 		INSERT INTO subscriptions (id, customer_id, tier, status, starts_at, created_at, updated_at)
 		VALUES (?, ?, 'bolt', 'active', now(), now(), now())`,
-		"sub-"+cust.Name, cust.Name).Error; err != nil {
+		"sub-"+cust.Name, cust.ID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1", nil); err != nil {
@@ -362,7 +362,7 @@ func TestCronAggregate_ClampsToPlanRetention(t *testing.T) {
 	}
 	if err := db.db.Exec(`
 		INSERT INTO subscriptions (id, customer_id, tier, status, starts_at, created_at, updated_at)
-		VALUES (?, ?, 'swatch', 'active', now(), now(), now())`, "sub-"+cust.Name, cust.Name).Error; err != nil {
+		VALUES (?, ?, 'swatch', 'active', now(), now(), now())`, "sub-"+cust.Name, cust.ID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1", nil); err != nil {

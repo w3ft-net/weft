@@ -13,7 +13,7 @@ import (
 // Only the most recent active one matters for access control.
 type Subscription struct {
 	ID                   string     `gorm:"primaryKey"`
-	CustomerID           string     `gorm:"not null;index"` // customer name
+	CustomerID           uint       `gorm:"not null;index"` // FK → customers.id
 	Tier                 string     `gorm:"not null"`       // trial, swatch, yard, bolt
 	Status               string     `gorm:"not null"`       // active, cancelled
 	StartsAt             time.Time  `gorm:"not null"`
@@ -51,9 +51,9 @@ func (sub *Subscription) IsActive() bool {
 
 // ActiveSubscription returns the most recent active subscription for a
 // customer, or nil if none exists or the subscription has expired.
-func (s *Store) ActiveSubscription(customerName string) (*Subscription, error) {
+func (s *Store) ActiveSubscription(customerID uint) (*Subscription, error) {
 	var sub Subscription
-	err := s.db.Where("customer_id = ? AND status = 'active'", customerName).
+	err := s.db.Where("customer_id = ? AND status = 'active'", customerID).
 		Order("created_at DESC").First(&sub).Error
 	if err != nil {
 		return nil, err
@@ -72,22 +72,22 @@ func (s *Store) CreateSubscription(sub *Subscription) error {
 // SeedDevSubscription ensures an active dev subscription exists. Idempotent.
 // The row id is namespaced per customer so seeding multiple customers in
 // the same DB doesn't collide on the subscriptions primary key.
-func (s *Store) SeedDevSubscription(customerName string) {
-	sub, _ := s.ActiveSubscription(customerName)
+func (s *Store) SeedDevSubscription(customerID uint) {
+	sub, _ := s.ActiveSubscription(customerID)
 	if sub != nil {
 		return
 	}
 	now := time.Now()
 	if err := s.db.Create(&Subscription{
-		ID:         "dev-sub-" + customerName,
-		CustomerID: customerName,
+		ID:         fmt.Sprintf("dev-sub-%d", customerID),
+		CustomerID: customerID,
 		Tier:       "swatch",
 		Status:     "active",
 		StartsAt:   now,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}).Error; err != nil {
-		log.Printf("store: SeedDevSubscription(%s): %v", customerName, err)
+		log.Printf("store: SeedDevSubscription(%d): %v", customerID, err)
 	}
 }
 
@@ -154,10 +154,9 @@ func (s *Store) PromoteSubscriptionTier(stripeSubID, tier string) error {
 // re-granting the same (customer, tier, reason) is a no-op when the
 // active sub already matches; otherwise it cancels-and-replaces.
 //
-// Customer is the customer *name*, not the numeric id (subscriptions
-// joins on the name, see store/shell.go's TierForCustomer). Reason
-// must be non-empty so it can be distinguished from a paid sub.
-func (s *Store) GrantCompSubscription(customerName, tier, reason string) error {
+// Customer is the surrogate id (FK → customers.id). Reason must be
+// non-empty so it can be distinguished from a paid sub.
+func (s *Store) GrantCompSubscription(customerID uint, tier, reason string) error {
 	if reason == "" {
 		return fmt.Errorf("comp grant requires a non-empty reason")
 	}
@@ -167,7 +166,7 @@ func (s *Store) GrantCompSubscription(customerName, tier, reason string) error {
 		// Idempotent: if the most recent active sub already matches,
 		// skip the cancel+insert.
 		var current Subscription
-		err := tx.Where("customer_id = ? AND status = 'active'", customerName).
+		err := tx.Where("customer_id = ? AND status = 'active'", customerID).
 			Order("created_at DESC").First(&current).Error
 		if err == nil && current.Tier == tier && current.CompReason == reason {
 			return nil
@@ -175,7 +174,7 @@ func (s *Store) GrantCompSubscription(customerName, tier, reason string) error {
 
 		// Cancel any active subscription for this customer.
 		if err := tx.Model(&Subscription{}).
-			Where("customer_id = ? AND status = 'active'", customerName).
+			Where("customer_id = ? AND status = 'active'", customerID).
 			Updates(map[string]any{
 				"status":     "cancelled",
 				"updated_at": now,
@@ -184,8 +183,8 @@ func (s *Store) GrantCompSubscription(customerName, tier, reason string) error {
 		}
 
 		return tx.Create(&Subscription{
-			ID:         "comp-" + customerName + "-" + now.Format("20060102150405"),
-			CustomerID: customerName,
+			ID:         fmt.Sprintf("comp-%d-%s", customerID, now.Format("20060102150405")),
+			CustomerID: customerID,
 			Tier:       tier,
 			Status:     "active",
 			StartsAt:   now,
@@ -199,9 +198,9 @@ func (s *Store) GrantCompSubscription(customerName, tier, reason string) error {
 // RevokeCompSubscription cancels the active comp subscription for the
 // customer. Refuses to touch a paid sub. Returns nil if there is no
 // active comp sub (idempotent).
-func (s *Store) RevokeCompSubscription(customerName string) error {
+func (s *Store) RevokeCompSubscription(customerID uint) error {
 	return s.db.Model(&Subscription{}).
-		Where("customer_id = ? AND status = 'active' AND comp_reason != ''", customerName).
+		Where("customer_id = ? AND status = 'active' AND comp_reason != ''", customerID).
 		Updates(map[string]any{
 			"status":     "cancelled",
 			"updated_at": time.Now(),

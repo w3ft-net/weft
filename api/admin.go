@@ -38,7 +38,7 @@ func (s *Server) handleAdminListCustomers(w http.ResponseWriter, r *http.Request
 			DisplayName: c.DisplayName,
 			CreatedAt:   c.CreatedAt.Format(time.RFC3339),
 		}
-		if sub, _ := s.store.ActiveSubscription(c.Name); sub != nil {
+		if sub, _ := s.store.ActiveSubscription(c.ID); sub != nil {
 			r.Tier = sub.Tier
 			r.IsComp = sub.IsComp()
 			r.CompReason = sub.CompReason
@@ -71,7 +71,7 @@ func (s *Server) handleAdminGetCustomer(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var sub *store.Subscription
-	sub, _ = s.store.ActiveSubscription(cust.Name)
+	sub, _ = s.store.ActiveSubscription(cust.ID)
 
 	members, _ := s.store.ListTeamMembers(cust.ID)
 	type memberInfo struct {
@@ -116,6 +116,11 @@ func (s *Server) handleAdminSetComp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	cust, err := s.store.GetCustomerByName(name)
+	if err != nil {
+		http.Error(w, "customer not found", http.StatusNotFound)
+		return
+	}
 	if req.Comp {
 		if req.Tier == "" {
 			req.Tier = "bolt"
@@ -123,13 +128,13 @@ func (s *Server) handleAdminSetComp(w http.ResponseWriter, r *http.Request) {
 		if req.Reason == "" {
 			req.Reason = "admin-comp"
 		}
-		if err := s.store.GrantCompSubscription(name, req.Tier, req.Reason); err != nil {
+		if err := s.store.GrantCompSubscription(cust.ID, req.Tier, req.Reason); err != nil {
 			log.Printf("admin: grant comp for %s: %v", name, err)
 			http.Error(w, "failed to grant comp", http.StatusInternalServerError)
 			return
 		}
 	} else {
-		if err := s.store.RevokeCompSubscription(name); err != nil {
+		if err := s.store.RevokeCompSubscription(cust.ID); err != nil {
 			log.Printf("admin: revoke comp for %s: %v", name, err)
 			http.Error(w, "failed to revoke comp", http.StatusInternalServerError)
 			return
@@ -147,7 +152,12 @@ func (s *Server) handleAdminSetTier(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tier required", http.StatusBadRequest)
 		return
 	}
-	if err := s.store.GrantCompSubscription(name, req.Tier, "admin-set-tier"); err != nil {
+	cust, err := s.store.GetCustomerByName(name)
+	if err != nil {
+		http.Error(w, "customer not found", http.StatusNotFound)
+		return
+	}
+	if err := s.store.GrantCompSubscription(cust.ID, req.Tier, "admin-set-tier"); err != nil {
 		log.Printf("admin: set tier for %s: %v", name, err)
 		http.Error(w, "failed to set tier", http.StatusInternalServerError)
 		return

@@ -286,7 +286,7 @@ func (ce *CronExecutor) tierForWatch(watch store.CronWatch) store.Tier {
 	if err != nil {
 		return ""
 	}
-	sub, err := ce.Store.ActiveSubscription(cust.Name)
+	sub, err := ce.Store.ActiveSubscription(cust.ID)
 	if err != nil || sub == nil {
 		return store.TierTrial
 	}

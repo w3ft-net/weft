@@ -4,6 +4,34 @@ import (
 	"testing"
 )
 
+// TestSubscription_KeyedByCustomerSurrogate pins migration 053: a
+// subscription is keyed by the customer's surrogate id (FK →
+// customers.id), not the name string. Looking up by id round-trips,
+// the persisted column holds the id, and an unrelated id does not
+// resolve to this customer's subscription.
+func TestSubscription_KeyedByCustomerSurrogate(t *testing.T) {
+	db := testOpen(t)
+	cust, err := db.FindOrCreateCustomer("surrogate-key-cust")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SeedDevSubscription(cust.ID)
+
+	sub, err := db.ActiveSubscription(cust.ID)
+	if err != nil || sub == nil {
+		t.Fatalf("ActiveSubscription(%d): sub=%+v err=%v", cust.ID, sub, err)
+	}
+	if sub.CustomerID != cust.ID {
+		t.Errorf("sub.CustomerID = %d, want surrogate id %d", sub.CustomerID, cust.ID)
+	}
+
+	// An unrelated id must not resolve to this customer's subscription
+	// (proves the lookup keys on the surrogate, not a stringly-typed name).
+	if other, _ := db.ActiveSubscription(cust.ID + 99999); other != nil {
+		t.Errorf("ActiveSubscription(unrelated id) resolved to %+v", other)
+	}
+}
+
 // TestSeedDevSubscription_MultipleCustomers reproduces the bug where
 // SeedDevSubscription hardcodes the row's primary key as "dev-sub" —
 // so the second customer's call hits a uniqueness violation against
@@ -29,17 +57,17 @@ func TestSeedDevSubscription_MultipleCustomers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db.SeedDevSubscription(alpha.Name)
-	db.SeedDevSubscription(beta.Name)
+	db.SeedDevSubscription(alpha.ID)
+	db.SeedDevSubscription(beta.ID)
 
-	subA, err := db.ActiveSubscription(alpha.Name)
+	subA, err := db.ActiveSubscription(alpha.ID)
 	if err != nil {
 		t.Fatalf("alpha ActiveSubscription: %v", err)
 	}
 	if subA == nil {
 		t.Fatal("alpha has no active subscription after seed")
 	}
-	subB, err := db.ActiveSubscription(beta.Name)
+	subB, err := db.ActiveSubscription(beta.ID)
 	if err != nil {
 		t.Fatalf("beta ActiveSubscription: %v", err)
 	}
@@ -65,13 +93,13 @@ func TestGrantCompSubscription_OverridesActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db.SeedDevSubscription(cust.Name) // creates a swatch dev sub
+	db.SeedDevSubscription(cust.ID) // creates a swatch dev sub
 
-	if err := db.GrantCompSubscription(cust.Name, string(TierBolt), "owner"); err != nil {
+	if err := db.GrantCompSubscription(cust.ID, string(TierBolt), "owner"); err != nil {
 		t.Fatalf("grant: %v", err)
 	}
 
-	sub, err := db.ActiveSubscription(cust.Name)
+	sub, err := db.ActiveSubscription(cust.ID)
 	if err != nil || sub == nil {
 		t.Fatalf("active sub after grant: sub=%+v err=%v", sub, err)
 	}
@@ -87,7 +115,7 @@ func TestGrantCompSubscription_OverridesActive(t *testing.T) {
 
 	// Exactly one active sub should remain.
 	var count int64
-	db.db.Model(&Subscription{}).Where("customer_id = ? AND status = 'active'", cust.Name).Count(&count)
+	db.db.Model(&Subscription{}).Where("customer_id = ? AND status = 'active'", cust.ID).Count(&count)
 	if count != 1 {
 		t.Errorf("active sub count = %d, want 1", count)
 	}
@@ -100,15 +128,15 @@ func TestGrantCompSubscription_Idempotent(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("comp-grant-idem")
 
-	if err := db.GrantCompSubscription(cust.Name, string(TierSwatch), "alpha"); err != nil {
+	if err := db.GrantCompSubscription(cust.ID, string(TierSwatch), "alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.GrantCompSubscription(cust.Name, string(TierSwatch), "alpha"); err != nil {
+	if err := db.GrantCompSubscription(cust.ID, string(TierSwatch), "alpha"); err != nil {
 		t.Fatal(err)
 	}
 
 	var total int64
-	db.db.Model(&Subscription{}).Where("customer_id = ?", cust.Name).Count(&total)
+	db.db.Model(&Subscription{}).Where("customer_id = ?", cust.ID).Count(&total)
 	if total != 1 {
 		t.Errorf("total sub rows = %d, want 1 (re-grant should be a no-op)", total)
 	}
@@ -120,7 +148,7 @@ func TestGrantCompSubscription_Idempotent(t *testing.T) {
 func TestGrantCompSubscription_RequiresReason(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("comp-grant-no-reason")
-	if err := db.GrantCompSubscription(cust.Name, string(TierSwatch), ""); err == nil {
+	if err := db.GrantCompSubscription(cust.ID, string(TierSwatch), ""); err == nil {
 		t.Error("expected error on empty reason")
 	}
 }
@@ -133,23 +161,23 @@ func TestRevokeCompSubscription(t *testing.T) {
 	cust, _ := db.FindOrCreateCustomer("comp-revoke")
 
 	// Grant then revoke.
-	if err := db.GrantCompSubscription(cust.Name, string(TierBolt), "alpha"); err != nil {
+	if err := db.GrantCompSubscription(cust.ID, string(TierBolt), "alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.RevokeCompSubscription(cust.Name); err != nil {
+	if err := db.RevokeCompSubscription(cust.ID); err != nil {
 		t.Fatal(err)
 	}
-	sub, _ := db.ActiveSubscription(cust.Name)
+	sub, _ := db.ActiveSubscription(cust.ID)
 	if sub != nil {
 		t.Errorf("expected no active sub after revoke, got %+v", sub)
 	}
 
 	// Now seed a paid (non-comp) sub and verify revoke leaves it.
-	db.SeedDevSubscription(cust.Name) // dev sub has comp_reason = ""
-	if err := db.RevokeCompSubscription(cust.Name); err != nil {
+	db.SeedDevSubscription(cust.ID) // dev sub has comp_reason = ""
+	if err := db.RevokeCompSubscription(cust.ID); err != nil {
 		t.Fatal(err)
 	}
-	sub, _ = db.ActiveSubscription(cust.Name)
+	sub, _ = db.ActiveSubscription(cust.ID)
 	if sub == nil || sub.Tier != string(TierSwatch) {
 		t.Errorf("paid sub should survive revoke; got %+v", sub)
 	}
@@ -163,14 +191,14 @@ func TestRevokeCompSubscription(t *testing.T) {
 func TestWebhookGuard_SkipsCompSub(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateCustomer("comp-guard")
-	if err := db.GrantCompSubscription(cust.Name, string(TierBolt), "owner"); err != nil {
+	if err := db.GrantCompSubscription(cust.ID, string(TierBolt), "owner"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Force a Stripe sub ID onto the comp row to simulate the misroute.
 	const fakeStripeID = "sub_fake_misroute"
 	if err := db.db.Model(&Subscription{}).
-		Where("customer_id = ?", cust.Name).
+		Where("customer_id = ?", cust.ID).
 		Update("stripe_subscription_id", fakeStripeID).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +207,7 @@ func TestWebhookGuard_SkipsCompSub(t *testing.T) {
 	if err := db.CancelSubscription(fakeStripeID); err != nil {
 		t.Fatal(err)
 	}
-	sub, _ := db.ActiveSubscription(cust.Name)
+	sub, _ := db.ActiveSubscription(cust.ID)
 	if sub == nil {
 		t.Fatal("comp sub was cancelled by Stripe webhook (guard failed)")
 	}
@@ -188,7 +216,7 @@ func TestWebhookGuard_SkipsCompSub(t *testing.T) {
 	if err := db.SetSubscriptionStatus(fakeStripeID, "past_due"); err != nil {
 		t.Fatal(err)
 	}
-	sub, _ = db.ActiveSubscription(cust.Name)
+	sub, _ = db.ActiveSubscription(cust.ID)
 	if sub == nil || sub.Status != "active" {
 		t.Errorf("comp sub status was changed (guard failed); got %+v", sub)
 	}
@@ -197,7 +225,7 @@ func TestWebhookGuard_SkipsCompSub(t *testing.T) {
 	if err := db.PromoteSubscriptionTier(fakeStripeID, string(TierTrial)); err != nil {
 		t.Fatal(err)
 	}
-	sub, _ = db.ActiveSubscription(cust.Name)
+	sub, _ = db.ActiveSubscription(cust.ID)
 	if sub == nil || sub.Tier != string(TierBolt) {
 		t.Errorf("comp sub tier was changed (guard failed); got %+v", sub)
 	}
@@ -214,19 +242,19 @@ func TestSeedDevSubscription_Idempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db.SeedDevSubscription(cust.Name)
-	db.SeedDevSubscription(cust.Name)
-	db.SeedDevSubscription(cust.Name)
+	db.SeedDevSubscription(cust.ID)
+	db.SeedDevSubscription(cust.ID)
+	db.SeedDevSubscription(cust.ID)
 
 	// Each customer should have exactly one active dev subscription
 	// regardless of seed-call count.
 	var count int64
 	if err := db.db.Model(&Subscription{}).
-		Where("customer_id = ? AND status = 'active'", cust.Name).
+		Where("customer_id = ? AND status = 'active'", cust.ID).
 		Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
-		t.Fatalf("expected 1 active subscription for %s, got %d", cust.Name, count)
+		t.Fatalf("expected 1 active subscription for customer %d, got %d", cust.ID, count)
 	}
 }

@@ -787,8 +787,7 @@ func (s *Store) TierForCustomer(customerID uint) Tier {
 	err := s.db.Raw(`
 		SELECT s.tier
 		FROM subscriptions s
-		JOIN customers c ON s.customer_id = c.name
-		WHERE c.id = ?
+		WHERE s.customer_id = ?
 		  AND s.status = 'active'
 		  AND (s.expires_at IS NULL OR s.expires_at > now())
 		ORDER BY s.created_at DESC

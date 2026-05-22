@@ -396,7 +396,7 @@ func (s *Server) Authenticate(_ context.Context, req *pb.AuthenticateRequest) (*
 	}
 
 	// Check for an active subscription.
-	sub, err := s.Store.ActiveSubscription(auth.Customer.Name)
+	sub, err := s.Store.ActiveSubscription(auth.Customer.ID)
 	if err != nil || sub == nil {
 		log.Printf("auth: customer=%s denied (no active subscription)", auth.Customer.Name)
 		return nil, status.Errorf(codes.PermissionDenied,

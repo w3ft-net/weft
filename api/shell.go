@@ -45,7 +45,7 @@ var sseKeepaliveInterval = 20 * time.Second
 // Clients ignore comment lines per the SSE spec.
 func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerName); sub == nil {
+	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerID); sub == nil {
 		http.Error(w, "no active subscription", http.StatusPaymentRequired)
 		return
 	}

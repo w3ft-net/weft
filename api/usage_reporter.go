@@ -111,7 +111,11 @@ func (s *Server) reportOneCustomer(customerName string, day time.Time, bytes int
 		return nil
 	}
 
-	sub, err := s.store.ActiveSubscription(customerName)
+	cust, err := s.store.GetCustomerByName(customerName)
+	if err != nil || cust == nil {
+		return nil
+	}
+	sub, err := s.store.ActiveSubscription(cust.ID)
 	if err != nil || sub == nil {
 		return nil
 	}

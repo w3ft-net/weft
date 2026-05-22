@@ -189,7 +189,7 @@ func TestWatchCreate_TierFromDB_NotJWT(t *testing.T) {
 	trialEnd := now.Add(14 * 24 * time.Hour)
 	s.CreateSubscription(&store.Subscription{
 		ID:         "trial-" + cust.Name,
-		CustomerID: cust.Name,
+		CustomerID: cust.ID,
 		Tier:       string(store.TierTrial),
 		Status:     "active",
 		StartsAt:   now,
@@ -201,7 +201,7 @@ func TestWatchCreate_TierFromDB_NotJWT(t *testing.T) {
 	}
 
 	// Comp-grant out-of-band — JWT now stale.
-	if err := s.GrantCompSubscription(cust.Name, string(store.TierBolt), "test-grant"); err != nil {
+	if err := s.GrantCompSubscription(cust.ID, string(store.TierBolt), "test-grant"); err != nil {
 		t.Fatal(err)
 	}
 

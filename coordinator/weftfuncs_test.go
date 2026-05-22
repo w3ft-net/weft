@@ -97,7 +97,7 @@ func testQueryStoreOpts(t testing.TB, customer string, realDB bool, namespaces .
 	}
 	if err := target.CreateSubscription(&store.Subscription{
 		ID:         "test-bolt-" + customer,
-		CustomerID: customer,
+		CustomerID: cust.ID,
 		Tier:       string(store.TierBolt),
 		Status:     "active",
 		StartsAt:   time.Now().Add(-time.Hour),
@@ -109,10 +109,10 @@ func testQueryStoreOpts(t testing.TB, customer string, realDB bool, namespaces .
 
 // deleteCustomerData removes every row scoped to a single customer
 // from the shared weft DB, leaving other test packages' data alone.
-// Subscription.CustomerID is the customer NAME (not the numeric id);
-// namespaces and the customer row use the numeric id.
+// All customer-scoped tables (subscriptions included, as of migration
+// 053) key on the numeric customer id, resolved here from the name.
 func deleteCustomerData(db *store.Store, customer string) {
-	_ = db.ExecForTest("DELETE FROM subscriptions WHERE customer_id = ?", customer)
+	_ = db.ExecForTest("DELETE FROM subscriptions WHERE customer_id IN (SELECT id FROM customers WHERE name = ?)", customer)
 	_ = db.ExecForTest("DELETE FROM namespaces WHERE customer_id IN (SELECT id FROM customers WHERE name = ?)", customer)
 	_ = db.ExecForTest("DELETE FROM customers WHERE name = ?", customer)
 }

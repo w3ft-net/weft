@@ -160,7 +160,7 @@ func main() {
 		if *customer != "" {
 			cust, _ := db.FindOrCreateCustomer(*customer)
 			if cust != nil {
-				db.SeedDevSubscription(cust.Name)
+				db.SeedDevSubscription(cust.ID)
 				db.SeedDevAgentToken(cust.ID, "dev-agent", *customer)
 			}
 		}

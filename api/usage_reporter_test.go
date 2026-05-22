@@ -69,7 +69,7 @@ func seedReporterFixtures(t *testing.T, srv *Server, s *store.Store, customerNam
 	}
 	if err := s.CreateSubscription(&store.Subscription{
 		ID:         "sub-" + customerName,
-		CustomerID: customerName, // Subscription.CustomerID stores the customer NAME
+		CustomerID: cust.ID,
 		Tier:       "swatch",
 		Status:     "active",
 		StartsAt:   time.Now().AddDate(0, -1, 0),

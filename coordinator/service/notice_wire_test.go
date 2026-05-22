@@ -47,7 +47,7 @@ func TestQueryRPC_EmitsNoticesOnFirstTmpWrite(t *testing.T) {
 	defer cleanup()
 
 	cust, _ := st.FindOrCreateCustomer("notice-wire")
-	st.SeedDevSubscription(cust.Name)
+	st.SeedDevSubscription(cust.ID)
 	user, err := st.CreateUser("alice-wire@example.test")
 	if err != nil {
 		t.Fatal(err)

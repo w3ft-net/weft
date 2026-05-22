@@ -73,7 +73,7 @@ func TestShellExec_ForwardsBearerToCoordinator(t *testing.T) {
 	}
 	// ActiveSubscription gate in handleShellExec would otherwise 402 us
 	// before we reach the coordinator call.
-	s.SeedDevSubscription(custName)
+	s.SeedDevSubscription(cust.ID)
 
 	user, err := s.CreateUser(fmt.Sprintf("shellauth-%d@example.com", os.Getpid()))
 	if err != nil {
@@ -156,7 +156,7 @@ func newShellExecFixture(t *testing.T, tag string) *shellExecFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.SeedDevSubscription(custName)
+	s.SeedDevSubscription(cust.ID)
 
 	user, err := s.CreateUser(fmt.Sprintf("%s-%d@example.com", tag, os.Getpid()))
 	if err != nil {

@@ -47,7 +47,7 @@ func TestColdShardQueryRouting(t *testing.T) {
 	}
 	if err := tx.CreateSubscription(&store.Subscription{
 		ID:         "cold-query-bolt",
-		CustomerID: "kevlar",
+		CustomerID: cust.ID,
 		Tier:       string(store.TierBolt),
 		Status:     "active",
 		StartsAt:   time.Now().Add(-time.Hour),

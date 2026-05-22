@@ -448,13 +448,17 @@ func writeTokensFile(path string, lines []mintedToken) error {
 }
 
 func ensureActiveSubscription(s *store.Store, customerName string) error {
-	if sub, _ := s.ActiveSubscription(customerName); sub != nil {
+	cust, err := s.GetCustomerByName(customerName)
+	if err != nil {
+		return fmt.Errorf("resolve customer %s: %w", customerName, err)
+	}
+	if sub, _ := s.ActiveSubscription(cust.ID); sub != nil {
 		return nil
 	}
 	now := time.Now()
 	return s.CreateSubscription(&store.Subscription{
 		ID:         "demo-sub-" + customerName,
-		CustomerID: customerName,
+		CustomerID: cust.ID,
 		// Yard tier: allows the 1-minute mem-pressure schedule
 		// the demo's verification checklist depends on. Swatch caps
 		// watches at 5-minute intervals (store.MinWatchInterval).
