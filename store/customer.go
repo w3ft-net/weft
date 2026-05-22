@@ -72,7 +72,7 @@ func (s *Store) DeleteCustomerByName(name string) error {
 // FindOrCreateNamespace returns the namespace, creating if needed.
 func (s *Store) FindOrCreateNamespace(customerID uint, name string) (*Namespace, error) {
 	var ns Namespace
-	result := s.db.Where("customer_id = ? AND name = ?", customerID, name).FirstOrCreate(&ns, Namespace{CustomerID: customerID, Name: name})
+	result := s.scoped(customerID).Where("name = ?", name).FirstOrCreate(&ns, Namespace{CustomerID: customerID, Name: name})
 	return &ns, result.Error
 }
 
@@ -82,7 +82,7 @@ func (s *Store) FindOrCreateNamespace(customerID uint, name string) (*Namespace,
 // namespace under the customer.
 func (s *Store) GetNamespace(customerID uint, name string) (*Namespace, error) {
 	var ns Namespace
-	if err := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&ns).Error; err != nil {
+	if err := s.scoped(customerID).Where("name = ?", name).First(&ns).Error; err != nil {
 		return nil, err
 	}
 	return &ns, nil
@@ -91,20 +91,21 @@ func (s *Store) GetNamespace(customerID uint, name string) (*Namespace, error) {
 // ListNamespaces returns all namespaces for a customer.
 func (s *Store) ListNamespaces(customerID uint) ([]Namespace, error) {
 	var nss []Namespace
-	err := s.db.Where("customer_id = ?", customerID).Order("name").Find(&nss).Error
+	err := s.scoped(customerID).Order("name").Find(&nss).Error
 	return nss, err
 }
 
 // AllNamespaceNames returns distinct namespace names across all customers.
 func (s *Store) AllNamespaceNames() ([]string, error) {
 	var names []string
-	err := s.db.Model(&Namespace{}).Distinct().Pluck("name", &names).Error
+	// Fleet-wide distinct names across every customer.
+	err := s.crossTenant().Model(&Namespace{}).Distinct().Pluck("name", &names).Error
 	return names, err
 }
 
 // DeleteNamespace removes a namespace.
 func (s *Store) DeleteNamespace(customerID uint, name string) error {
-	return s.db.Where("customer_id = ? AND name = ?", customerID, name).Delete(&Namespace{}).Error
+	return s.scoped(customerID).Where("name = ?", name).Delete(&Namespace{}).Error
 }
 
 // --- Backward compat aliases ---

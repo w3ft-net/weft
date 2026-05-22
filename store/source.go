@@ -188,8 +188,8 @@ func (s *Store) CustomerHasSource(customerID uint, app string) (bool, error) {
 		ns = app[:i]
 	}
 	var count int64
-	err := s.db.Model(&Namespace{}).
-		Where("customer_id = ? AND name = ?", customerID, ns).
+	err := s.scoped(customerID).Model(&Namespace{}).
+		Where("name = ?", ns).
 		Count(&count).Error
 	return count > 0, err
 }

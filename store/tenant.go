@@ -184,6 +184,7 @@ func (s *Store) enrollTenantModels() {
 		&Subscription{},
 		&TeamMember{},
 		&AgentToken{},
+		&Namespace{},
 	)
 }
 
