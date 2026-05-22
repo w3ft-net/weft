@@ -177,6 +177,8 @@ func (s *Store) enrollTenantModels() {
 		&Dashboard{},
 		&ShellFunction{},
 		&OrgPermission{},
+		&NotifyConfig{},
+		&PagerDutyIntegration{},
 	)
 }
 

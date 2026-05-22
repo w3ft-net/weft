@@ -916,7 +916,7 @@ func (PagerDutyIntegration) TableName() string { return "pagerduty_integrations"
 
 func (s *Store) GetNotifyConfig(customerID uint) (*NotifyConfig, error) {
 	var nc NotifyConfig
-	err := s.db.Where("customer_id = ?", customerID).First(&nc).Error
+	err := s.scoped(customerID).First(&nc).Error
 	if err != nil {
 		return nil, err
 	}
@@ -930,9 +930,9 @@ func (s *Store) SaveSlackWebhook(customerID uint, webhook, teamName string) erro
 func (s *Store) SaveSlackConfig(customerID uint, webhook, botToken, teamName string) error {
 	now := time.Now()
 	var nc NotifyConfig
-	result := s.db.Where("customer_id = ?", customerID).First(&nc)
+	result := s.scoped(customerID).First(&nc)
 	if result.Error == gorm.ErrRecordNotFound {
-		return s.db.Create(&NotifyConfig{
+		return s.scoped(customerID).Create(&NotifyConfig{
 			CustomerID:    customerID,
 			SlackWebhook:  webhook,
 			SlackBotToken: botToken,
@@ -940,7 +940,7 @@ func (s *Store) SaveSlackConfig(customerID uint, webhook, botToken, teamName str
 			ConfiguredAt:  &now,
 		}).Error
 	}
-	return s.db.Model(&nc).Updates(map[string]any{
+	return s.scoped(customerID).Model(&nc).Updates(map[string]any{
 		"slack_webhook":   webhook,
 		"slack_bot_token": botToken,
 		"slack_team_name": teamName,
@@ -949,7 +949,7 @@ func (s *Store) SaveSlackConfig(customerID uint, webhook, botToken, teamName str
 }
 
 func (s *Store) DisconnectSlack(customerID uint) error {
-	return s.db.Model(&NotifyConfig{}).Where("customer_id = ?", customerID).Updates(map[string]any{
+	return s.scoped(customerID).Model(&NotifyConfig{}).Updates(map[string]any{
 		"slack_webhook":   "",
 		"slack_team_name": "",
 	}).Error
@@ -959,14 +959,14 @@ func (s *Store) DisconnectSlack(customerID uint) error {
 // Callers must validate the YAML before invoking this.
 func (s *Store) SaveNotifyAliases(customerID uint, aliasesYAML string) error {
 	var nc NotifyConfig
-	result := s.db.Where("customer_id = ?", customerID).First(&nc)
+	result := s.scoped(customerID).First(&nc)
 	if result.Error == gorm.ErrRecordNotFound {
-		return s.db.Create(&NotifyConfig{
+		return s.scoped(customerID).Create(&NotifyConfig{
 			CustomerID:  customerID,
 			AliasesYAML: aliasesYAML,
 		}).Error
 	}
-	return s.db.Model(&nc).Update("aliases_yaml", aliasesYAML).Error
+	return s.scoped(customerID).Model(&nc).Update("aliases_yaml", aliasesYAML).Error
 }
 
 // ── PagerDuty integrations ─────────────────────────────
@@ -974,14 +974,14 @@ func (s *Store) SaveNotifyAliases(customerID uint, aliasesYAML string) error {
 // ListPagerDutyIntegrations returns all PD integrations for a customer.
 func (s *Store) ListPagerDutyIntegrations(customerID uint) ([]PagerDutyIntegration, error) {
 	var items []PagerDutyIntegration
-	err := s.db.Where("customer_id = ?", customerID).Order("name").Find(&items).Error
+	err := s.scoped(customerID).Order("name").Find(&items).Error
 	return items, err
 }
 
 // GetPagerDutyIntegration returns a single integration by name.
 func (s *Store) GetPagerDutyIntegration(customerID uint, name string) (*PagerDutyIntegration, error) {
 	var item PagerDutyIntegration
-	err := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&item).Error
+	err := s.scoped(customerID).Where("name = ?", name).First(&item).Error
 	if err != nil {
 		return nil, err
 	}
@@ -991,33 +991,33 @@ func (s *Store) GetPagerDutyIntegration(customerID uint, name string) (*PagerDut
 // SavePagerDutyIntegration inserts or updates a PD integration by (customer, name).
 func (s *Store) SavePagerDutyIntegration(customerID uint, name, key string) error {
 	var item PagerDutyIntegration
-	result := s.db.Where("customer_id = ? AND name = ?", customerID, name).First(&item)
+	result := s.scoped(customerID).Where("name = ?", name).First(&item)
 	if result.Error == gorm.ErrRecordNotFound {
-		return s.db.Create(&PagerDutyIntegration{
+		return s.scoped(customerID).Create(&PagerDutyIntegration{
 			CustomerID:     customerID,
 			Name:           name,
 			IntegrationKey: key,
 		}).Error
 	}
-	return s.db.Model(&item).Update("integration_key", key).Error
+	return s.scoped(customerID).Model(&item).Update("integration_key", key).Error
 }
 
 // DeletePagerDutyIntegration removes a single integration by name.
 func (s *Store) DeletePagerDutyIntegration(customerID uint, name string) error {
-	return s.db.Where("customer_id = ? AND name = ?", customerID, name).Delete(&PagerDutyIntegration{}).Error
+	return s.scoped(customerID).Where("name = ?", name).Delete(&PagerDutyIntegration{}).Error
 }
 
 // DeleteAllPagerDutyIntegrations clears all integrations for a customer.
 func (s *Store) DeleteAllPagerDutyIntegrations(customerID uint) error {
-	return s.db.Where("customer_id = ?", customerID).Delete(&PagerDutyIntegration{}).Error
+	return s.scoped(customerID).Delete(&PagerDutyIntegration{}).Error
 }
 
 // RecordPagerDutySend marks an integration's last_used_at / last_error after
 // a dispatch attempt. sendErr may be empty on success.
 func (s *Store) RecordPagerDutySend(customerID uint, name, sendErr string) error {
 	now := time.Now()
-	return s.db.Model(&PagerDutyIntegration{}).
-		Where("customer_id = ? AND name = ?", customerID, name).
+	return s.scoped(customerID).Model(&PagerDutyIntegration{}).
+		Where("name = ?", name).
 		Updates(map[string]any{
 			"last_used_at": &now,
 			"last_error":   sendErr,
