@@ -242,59 +242,6 @@ func TestAuth_Unauthorized(t *testing.T) {
 	}
 }
 
-func TestSavedQueries_CRUD(t *testing.T) {
-	srv, s := testServer(t)
-	handler := srv.Handler()
-
-	cust2, _ := s.FindOrCreateCustomer("kevlar")
-	user, _ := s.CreateUser(fmt.Sprintf("queries-%d@example.com", os.Getpid()))
-	s.CreateTeamMember(&store.TeamMember{
-		ID: "tm-queries", CustomerID: cust2.ID, Email: user.Email,
-		UserID: &user.ID, Role: "owner", Status: "active",
-	})
-	jwt, _ := auth.Generate(user, "test-secret")
-
-	// Create.
-	body, _ := json.Marshal(map[string]string{"name": "error check", "query": "cat vimgym.log | grep ERROR"})
-	req := httptest.NewRequest("POST", "/api/queries", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+jwt)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	if w.Code != 201 {
-		t.Fatalf("create: expected 201, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var created store.SavedQuery
-	json.Unmarshal(w.Body.Bytes(), &created)
-	if created.Name != "error check" {
-		t.Errorf("expected name 'error check', got %s", created.Name)
-	}
-
-	// List.
-	req = httptest.NewRequest("GET", "/api/queries", nil)
-	req.Header.Set("Authorization", "Bearer "+jwt)
-	w = httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	if w.Code != 200 {
-		t.Fatalf("list: expected 200, got %d", w.Code)
-	}
-
-	var queries []store.SavedQuery
-	json.Unmarshal(w.Body.Bytes(), &queries)
-	if len(queries) < 1 {
-		t.Fatalf("expected at least 1 query, got %d", len(queries))
-	}
-
-	// Delete.
-	req = httptest.NewRequest("DELETE", "/api/queries/"+created.ID, nil)
-	req.Header.Set("Authorization", "Bearer "+jwt)
-	w = httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	if w.Code != 204 {
-		t.Fatalf("delete: expected 204, got %d", w.Code)
-	}
-}
-
 // ── Email verification gating (security audit follow-up) ───────
 
 func TestAuth_Signup_ReturnsUnverifiedUser(t *testing.T) {

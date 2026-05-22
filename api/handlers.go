@@ -245,9 +245,6 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/billing/checkout", s.handleCheckout)
 	auth.HandleFunc("POST /api/billing/setup-intent", s.handleSetupIntent)
 	auth.HandleFunc("GET /api/billing/usage", s.handleUsage)
-	auth.HandleFunc("GET /api/queries", s.handleListQueries)
-	auth.HandleFunc("POST /api/queries", s.handleCreateQuery)
-	auth.HandleFunc("DELETE /api/queries/{id}", s.handleDeleteQuery)
 	auth.HandleFunc("GET /api/tokens", s.handleListTokens)
 	auth.Handle("POST /api/tokens", protected(s.handleCreateToken))
 	auth.Handle("DELETE /api/tokens/{id}", protected(s.handleRevokeToken))
@@ -348,8 +345,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/billing/checkout", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/billing/setup-intent", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/billing/usage", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
-	mux.Handle("/api/queries", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
-	mux.Handle("/api/queries/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/tokens", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/tokens/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/apps", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
@@ -1165,50 +1160,6 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Saved queries handlers ---
-
-func (s *Server) handleListQueries(w http.ResponseWriter, r *http.Request) {
-	session := GetSession(r)
-	queries, err := s.store.ListSavedQueries(session.ActiveCustomerID, session.UserID)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	json.NewEncoder(w).Encode(queries)
-}
-
-func (s *Server) handleCreateQuery(w http.ResponseWriter, r *http.Request) {
-	session := GetSession(r)
-	var req struct {
-		Name  string `json:"name"`
-		Query string `json:"query"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Query == "" {
-		http.Error(w, "name and query required", http.StatusBadRequest)
-		return
-	}
-
-	sq, err := s.store.CreateSavedQuery(session.ActiveCustomerID, session.UserID, req.Name, req.Query)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(sq)
-}
-
-func (s *Server) handleDeleteQuery(w http.ResponseWriter, r *http.Request) {
-	session := GetSession(r)
-	id := r.PathValue("id")
-	if id == "" {
-		http.Error(w, "id required", http.StatusBadRequest)
-		return
-	}
-	if err := s.store.DeleteSavedQuery(session.UserID, id); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
 
 // --- Token management handlers ---
 

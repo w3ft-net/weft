@@ -130,22 +130,6 @@ export function revokeToken(id: number): Promise<void> {
   return apiFetch(`/api/tokens/${id}`, { method: 'DELETE' })
 }
 
-// Queries
-export function getQueries(): Promise<SavedQuery[]> {
-  return apiFetch('/api/queries')
-}
-
-export function createQuery(name: string, query: string): Promise<SavedQuery> {
-  return apiFetch('/api/queries', {
-    method: 'POST',
-    body: JSON.stringify({ name, query }),
-  })
-}
-
-export function deleteQuery(id: string): Promise<void> {
-  return apiFetch(`/api/queries/${id}`, { method: 'DELETE' })
-}
-
 // Functions (/bin/)
 export async function getFunctions(): Promise<ShellFunction[]> {
   const resp = await apiFetch<{ functions: ShellFunction[] }>('/api/functions')
@@ -350,13 +334,6 @@ export interface AgentToken {
   namespace: string
   env: string
   status: 'active' | 'revoked'
-  created_at: string
-}
-
-export interface SavedQuery {
-  id: string
-  name: string
-  query: string
   created_at: string
 }
 

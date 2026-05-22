@@ -194,21 +194,6 @@ type MagicLink struct {
 	Used      bool `gorm:"not null;default:false"`
 }
 
-// SavedQuery is a user's bookmarked pipeline within an org. Scoped
-// by (customer_id, user_id) so queries saved while acting in one org
-// don't bleed into another (specifically: onboarding-era queries
-// against Loom Inc don't follow the user back into their own org
-// after graduation).
-type SavedQuery struct {
-	ID         string `gorm:"primaryKey"`
-	CustomerID uint   `gorm:"not null;index:idx_saved_queries_customer_user"`
-	UserID     string `gorm:"not null;index:idx_saved_queries_customer_user"`
-	Name       string `gorm:"not null"`
-	Query      string `gorm:"not null"` // the pipeline text
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-}
-
 // TeamMember tracks membership of a user (or pending invite) in a
 // customer. CustomerID is the FK boundary; queries that need to scope
 // by customer should join on it rather than on a name string.
@@ -460,49 +445,6 @@ func (s *Store) rememberRawMagicLink(email, raw string) {
 		s.rawMagicLinkTokens = make(map[string]string)
 	}
 	s.rawMagicLinkTokens[email] = raw
-}
-
-// --- Saved Queries ---
-
-func (s *Store) CreateSavedQuery(customerID uint, userID, name, query string) (*SavedQuery, error) {
-	sq := SavedQuery{
-		ID:         uuid.New().String(),
-		CustomerID: customerID,
-		UserID:     userID,
-		Name:       name,
-		Query:      query,
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-	}
-	if err := s.scoped(customerID).Create(&sq).Error; err != nil {
-		return nil, err
-	}
-	return &sq, nil
-}
-
-func (s *Store) ListSavedQueries(customerID uint, userID string) ([]SavedQuery, error) {
-	var queries []SavedQuery
-	err := s.scoped(customerID).Where("user_id = ?", userID).
-		Order("created_at DESC").Find(&queries).Error
-	return queries, err
-}
-
-// DeleteSavedQueriesForUserInCustomer drops every saved query a user
-// holds in a specific customer. Called at onboarding graduation to
-// clean up Loom-era bookmarks that the user no longer has membership
-// to act on.
-func (s *Store) DeleteSavedQueriesForUserInCustomer(customerID uint, userID string) error {
-	return s.scoped(customerID).Where("user_id = ?", userID).
-		Delete(&SavedQuery{}).Error
-}
-
-// DeleteSavedQuery removes one saved query by id. Ownership is the
-// user_id match, not the customer — a query is a user-owned resource
-// and the caller has only the query id, so this legitimately spans the
-// tenant boundary (crossTenant) while the user_id predicate keeps a
-// user to their own rows.
-func (s *Store) DeleteSavedQuery(userID, queryID string) error {
-	return s.crossTenant().Where("id = ? AND user_id = ?", queryID, userID).Delete(&SavedQuery{}).Error
 }
 
 // --- Team Members ---

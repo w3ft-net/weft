@@ -129,12 +129,6 @@ func (s *Server) graduateOnboarding(userID string) error {
 		return err
 	}
 
-	if err := s.store.DeleteSavedQueriesForUserInCustomer(cust.ID, userID); err != nil {
-		log.Printf("onboarding: clean Loom saved_queries for %s: %v", userID, err)
-		// Non-fatal — better to graduate than to leave the user
-		// stuck because of a cleanup hiccup.
-	}
-
 	if err := s.store.RemoveTeamMemberByUserAndCustomer(userID, cust.ID); err != nil {
 		return err
 	}
