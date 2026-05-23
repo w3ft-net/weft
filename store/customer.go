@@ -20,13 +20,6 @@ type Namespace struct {
 	Name       string `gorm:"not null;uniqueIndex:idx_ns_customer_name"`
 }
 
-// ListAllCustomers returns every customer ordered by name.
-func (s *Store) ListAllCustomers() ([]Customer, error) {
-	var out []Customer
-	err := s.db.Order("name").Find(&out).Error
-	return out, err
-}
-
 // FindOrCreateCustomer returns the customer, creating if needed.
 func (s *Store) FindOrCreateCustomer(name string) (*Customer, error) {
 	var c Customer
@@ -57,16 +50,6 @@ func (s *Store) UpdateCustomerDisplayName(name, displayName string) error {
 	return s.db.Model(&Customer{}).Where("name = ?", name).Update("display_name", displayName).Error
 }
 
-// DeleteCustomerByName hard-deletes a customer by name. Cascades through
-// every FK that points at customers.id (accounts, agent_tokens, namespaces,
-// users, etc.), since those constraints are ON DELETE CASCADE.
-//
-// Used by the demo seed's --reset flag to wipe out a fixture customer
-// without disturbing real data; not safe for general use.
-func (s *Store) DeleteCustomerByName(name string) error {
-	return s.db.Unscoped().Where("name = ?", name).Delete(&Customer{}).Error
-}
-
 // --- Namespaces ---
 
 // FindOrCreateNamespace returns the namespace, creating if needed.
@@ -95,19 +78,6 @@ func (s *Store) ListNamespaces(customerID uint) ([]Namespace, error) {
 	return nss, err
 }
 
-// AllNamespaceNames returns distinct namespace names across all customers.
-func (s *Store) AllNamespaceNames() ([]string, error) {
-	var names []string
-	// Fleet-wide distinct names across every customer.
-	err := s.crossTenant().Model(&Namespace{}).Distinct().Pluck("name", &names).Error
-	return names, err
-}
-
-// DeleteNamespace removes a namespace.
-func (s *Store) DeleteNamespace(customerID uint, name string) error {
-	return s.scoped(customerID).Where("name = ?", name).Delete(&Namespace{}).Error
-}
-
 // --- Backward compat aliases ---
 // TODO: remove after all callers are migrated
 
@@ -116,17 +86,8 @@ func (s *Store) FindOrCreateApp(customerID uint, name string) (*Namespace, error
 	return s.FindOrCreateNamespace(customerID, name)
 }
 
-// AllAppNames is an alias for AllNamespaceNames.
-func (s *Store) AllAppNames() ([]string, error) {
-	return s.AllNamespaceNames()
-}
-
 // ListApps is an alias for ListNamespaces.
 func (s *Store) ListApps(customerID uint) ([]Namespace, error) {
 	return s.ListNamespaces(customerID)
 }
 
-// DeleteApp is an alias for DeleteNamespace.
-func (s *Store) DeleteApp(customerID uint, name string) error {
-	return s.DeleteNamespace(customerID, name)
-}

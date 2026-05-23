@@ -91,17 +91,6 @@ func (s *Store) CreateAgentToken(customerID, namespaceID uint, label, env string
 	return raw, &t, nil
 }
 
-// AgentNamespaceNames returns distinct namespace names from active agent tokens.
-func (s *Store) AgentNamespaceNames() ([]string, error) {
-	var names []string
-	// Fleet-wide enumeration across all customers' tokens.
-	err := s.crossTenant().Model(&AgentToken{}).
-		Joins("JOIN namespaces ON namespaces.id = agent_tokens.namespace_id").
-		Where("agent_tokens.revoked = ?", false).
-		Distinct().Pluck("namespaces.name", &names).Error
-	return names, err
-}
-
 // AgentAuthResult holds the result of agent token validation.
 type AgentAuthResult struct {
 	TokenID   uint // primary key of the agent_tokens row; used by RecordAgentVersion
@@ -133,19 +122,6 @@ func (s *Store) ValidateAgentToken(token string) (*AgentAuthResult, error) {
 		Namespace: t.Namespace.Name,
 		Env:       t.Env,
 	}, nil
-}
-
-// RevokeAgentToken disables a token by primary key. The UI only has
-// the ID + prefix after creation, so revocation is ID-based.
-func (s *Store) RevokeAgentToken(id uint) error {
-	// UI revokes by token id; no customer in hand. Cross-tenant.
-	return s.crossTenant().Model(&AgentToken{}).Where("id = ?", id).Update("revoked", true).Error
-}
-
-func (s *Store) RevokeAgentTokensByLabel(customerID uint, label string) error {
-	return s.scoped(customerID).Model(&AgentToken{}).
-		Where("label = ? AND revoked = ?", label, false).
-		Update("revoked", true).Error
 }
 
 // ListAgentTokens returns all tokens for a customer, with namespace preloaded.
@@ -213,22 +189,6 @@ func (s *Store) ForecastMetricsUsage(customerID uint) (*MetricsForecast, error) 
 	}, nil
 }
 
-// MetricsAppNames returns "<app>.metrics" for each active agent with metrics enabled.
-func (s *Store) MetricsAppNames() ([]string, error) {
-	var apps []string
-	// Fleet-wide metrics-app enumeration across all customers.
-	err := s.crossTenant().Model(&AgentToken{}).
-		Where("revoked = ? AND metrics_enabled = ? AND app != ''", false, true).
-		Distinct().Pluck("app", &apps).Error
-	if err != nil {
-		return nil, err
-	}
-	for i, a := range apps {
-		apps[i] = a + ".metrics"
-	}
-	return apps, nil
-}
-
 // SeedDevAgentToken ensures a deterministic dev token exists. Idempotent.
 // The raw token is still the known string; only its sha256 lives in the
 // DB, same as production tokens.
@@ -258,21 +218,6 @@ func generateToken() (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("wft_%x", b), nil
-}
-
-// RecordAgentVersion stamps the most-recent weft-client identifier and
-// timestamp on a token row. Called once per IngestStream open. Fire and
-// forget: a write failure here shouldn't kill the customer's ingest, so
-// callers log the error and continue.
-func (s *Store) RecordAgentVersion(tokenID uint, version string) error {
-	now := time.Now()
-	// Ingest-path write by token id (already authenticated upstream).
-	return s.crossTenant().Model(&AgentToken{}).
-		Where("id = ?", tokenID).
-		Updates(map[string]any{
-			"last_seen_version": version,
-			"last_seen_at":      &now,
-		}).Error
 }
 
 // AgentVersionSighting summarises one token's recent connection state.

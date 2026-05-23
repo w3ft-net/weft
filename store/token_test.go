@@ -196,7 +196,7 @@ func TestAgentToken_RevokeByID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := db.RevokeAgentToken(tok.ID); err != nil {
+	if err := revokeAgentToken(db, tok.ID); err != nil {
 		t.Fatal(err)
 	}
 	res, err := db.ValidateAgentToken(raw)
@@ -237,4 +237,10 @@ func TestForecastMetricsUsage_NoMetrics(t *testing.T) {
 	if forecast.ProjectedBytesMonth != 0 {
 		t.Errorf("expected 0 projected bytes, got %d", forecast.ProjectedBytesMonth)
 	}
+}
+
+// revokeAgentToken mirrors the former Store.RevokeAgentToken, whose
+// production logic moved to a caller outside the store package.
+func revokeAgentToken(db *Store, id uint) error {
+	return db.crossTenant().Model(&AgentToken{}).Where("id = ?", id).Update("revoked", true).Error
 }

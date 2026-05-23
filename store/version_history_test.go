@@ -5,6 +5,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"testing"
+	"time"
+
+	"gorm.io/gorm"
 )
 
 // Helpers ----------------------------------------------------------
@@ -435,7 +438,7 @@ func TestCheckoutShellFunction_RoundTrip(t *testing.T) {
 	db.SaveShellFunction(cust.ID, bob.ID, "scan", "echo v3", "bash")
 
 	// Bob checks out HEAD^2 (which is v1 by alice).
-	if err := db.CheckoutShellFunction(cust.ID, bob.ID, "scan", "HEAD^2"); err != nil {
+	if err := checkoutShellFunction(db, cust.ID, bob.ID, "scan", "HEAD^2"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -502,4 +505,34 @@ func TestAmendShellFunctionMessage_HistoryRef(t *testing.T) {
 	if head.Message != "" {
 		t.Errorf("HEAD message changed unexpectedly: %q", head.Message)
 	}
+}
+
+// checkoutShellFunction mirrors the former Store.CheckoutShellFunction,
+// whose production logic moved to a caller outside the store package.
+func checkoutShellFunction(db *Store, customerID uint, userID, name, ref string) error {
+	target, err := db.ResolveShellFunctionRef(customerID, name, ref)
+	if err != nil {
+		return err
+	}
+	if target.IsHead {
+		return nil
+	}
+	return db.scoped(customerID).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
+			return err
+		}
+		updates := map[string]any{
+			"source":       target.Source,
+			"language":     target.Language,
+			"content_hash": target.ContentHash,
+			"message":      target.Message,
+			"updated_at":   time.Now(),
+		}
+		if target.AuthoredByUserID != nil {
+			updates["created_by_user_id"] = *target.AuthoredByUserID
+		}
+		return tx.Model(&ShellFunction{}).
+			Where("name = ?", name).
+			Updates(updates).Error
+	})
 }

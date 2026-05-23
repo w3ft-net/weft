@@ -2,8 +2,6 @@ package store
 
 import (
 	"time"
-
-	"gorm.io/gorm/clause"
 )
 
 // StripeUsageReport is the audit log for one day of ingestion usage
@@ -29,84 +27,6 @@ func (StripeUsageReport) TableName() string { return "stripe_usage_reports" }
 type UsageForDay struct {
 	CustomerName  string
 	BytesIngested int64
-}
-
-// UsageDailyForDay returns every (customer, bytes) row for a single
-// calendar day from usage_daily. Used by the Stripe reporter to
-// enumerate who needs a meter event posted for yesterday's usage.
-func (s *Store) UsageDailyForDay(day time.Time) ([]UsageForDay, error) {
-	var rows []UsageForDay
-	err := s.db.Raw(`
-		SELECT customer_name, bytes_ingested
-		FROM usage_daily
-		WHERE day = ?::date
-		ORDER BY customer_name`, day,
-	).Scan(&rows).Error
-	return rows, err
-}
-
-// HasUsageReportFor returns true if a (customer, day) usage report
-// has already been successfully posted to Stripe. Cheap — hits the
-// UNIQUE index on stripe_usage_reports.
-func (s *Store) HasUsageReportFor(customerName string, day time.Time) (bool, error) {
-	var n int64
-	err := s.db.Raw(`
-		SELECT COUNT(*) FROM stripe_usage_reports
-		WHERE customer_name = ? AND day = ?::date`,
-		customerName, day,
-	).Scan(&n).Error
-	return n > 0, err
-}
-
-// InsertUsageReport records a successful Stripe meter-event post.
-// Uses ON CONFLICT DO NOTHING so a concurrent reporter run (or a
-// retry that crossed the Stripe API success line before failing
-// afterward) doesn't raise; the UNIQUE constraint is the source of
-// truth for whether a given (customer, day) has been reported.
-func (s *Store) InsertUsageReport(r *StripeUsageReport) error {
-	return s.db.Clauses(clause.OnConflict{DoNothing: true}).Create(r).Error
-}
-
-// CallRollupUsageDaily invokes the rollup_usage_daily() stored
-// procedure from migration 028. Used by tests to deterministically
-// drive the hourly→daily rollup without waiting on pg_cron. Not
-// used in production — the ticker fires the proc via pg_cron.
-func (s *Store) CallRollupUsageDaily() error {
-	return s.db.Exec("CALL public.rollup_usage_daily()").Error
-}
-
-// StripeCustomerIDForCustomerName returns any Stripe customer ID
-// associated with a weft customer. For multi-user customers we pick
-// the first user who has a populated StripeCustomerID; in practice
-// one weft customer maps to one Stripe customer (the one created via
-// ensureStripeCustomer at signup), so "first" is deterministic
-// enough. Returns "" with no error when no users have a Stripe
-// customer ID — that's a signal to the reporter to skip.
-func (s *Store) StripeCustomerIDForCustomerName(customerName string) (string, error) {
-	var id string
-	err := s.db.Raw(`
-		SELECT u.stripe_customer_id
-		FROM users u
-		JOIN team_members tm ON tm.user_id = u.id
-		JOIN customers c ON tm.customer_id = c.id
-		WHERE c.name = ? AND u.stripe_customer_id <> ''
-		ORDER BY u.created_at ASC
-		LIMIT 1`, customerName,
-	).Scan(&id).Error
-	if err != nil {
-		return "", err
-	}
-	return id, nil
-}
-
-// UpsertUsageHourly inserts or increments an hourly usage record.
-func (s *Store) UpsertUsageHourly(customerName string, hour time.Time, bytes int64) error {
-	return s.db.Exec(`
-		INSERT INTO usage_hourly (customer_name, hour, bytes_ingested)
-		VALUES (?, ?, ?)
-		ON CONFLICT (customer_name, hour) DO UPDATE
-		SET bytes_ingested = usage_hourly.bytes_ingested + EXCLUDED.bytes_ingested`,
-		customerName, hour, bytes).Error
 }
 
 // QueryUsage returns total bytes ingested for a customer in a time range.

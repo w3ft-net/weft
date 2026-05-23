@@ -65,9 +65,3 @@ func (s *Store) GetBucketByLabel(label string) (Bucket, bool, error) {
 func (s *Store) SaveBucket(b *Bucket) error {
 	return s.db.Save(b).Error
 }
-
-// DeleteBucket removes a bucket by surrogate id. Fails when
-// shard_records still reference it (FK is RESTRICT-by-default).
-func (s *Store) DeleteBucket(id int64) error {
-	return s.db.Delete(&Bucket{}, "id = ?", id).Error
-}

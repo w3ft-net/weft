@@ -9,6 +9,7 @@ import (
 
 	"github.com/stripe/stripe-go/v82"
 	"github.com/stripe/stripe-go/v82/billing/meterevent"
+	"gorm.io/gorm/clause"
 
 	"github.com/kevlarcon/weft/store"
 )
@@ -68,7 +69,13 @@ func (s *Server) ReportUsageForDay(ctx context.Context, day time.Time) error {
 	if s.StripeSecretKey == "" {
 		return nil // Stripe not configured (dev / test).
 	}
-	rows, err := s.store.UsageDailyForDay(day)
+	var rows []store.UsageForDay
+	err := s.store.DB().Raw(`
+		SELECT customer_name, bytes_ingested
+		FROM usage_daily
+		WHERE day = ?::date
+		ORDER BY customer_name`, day,
+	).Scan(&rows).Error
 	if err != nil {
 		return fmt.Errorf("load usage_daily for %s: %w", day.Format("2006-01-02"), err)
 	}
@@ -92,19 +99,32 @@ func (s *Server) ReportUsageForDay(ctx context.Context, day time.Time) error {
 
 func (s *Server) reportOneCustomer(customerName string, day time.Time, bytes int64) error {
 	// weft-side idempotency — cheap UNIQUE-index lookup.
-	reported, err := s.store.HasUsageReportFor(customerName, day)
+	var reportCount int64
+	err := s.store.DB().Raw(`
+		SELECT COUNT(*) FROM stripe_usage_reports
+		WHERE customer_name = ? AND day = ?::date`,
+		customerName, day,
+	).Scan(&reportCount).Error
 	if err != nil {
 		return fmt.Errorf("check audit: %w", err)
 	}
-	if reported {
+	if reportCount > 0 {
 		return nil
 	}
 
 	// Skip customers without a Stripe customer ID — they never paid
 	// through Stripe (dev tenants, legacy imports, etc.). Trials
 	// that never converted also land here.
-	stripeCustID, err := s.store.StripeCustomerIDForCustomerName(customerName)
-	if err != nil {
+	var stripeCustID string
+	if err := s.store.DB().Raw(`
+		SELECT u.stripe_customer_id
+		FROM users u
+		JOIN team_members tm ON tm.user_id = u.id
+		JOIN customers c ON tm.customer_id = c.id
+		WHERE c.name = ? AND u.stripe_customer_id <> ''
+		ORDER BY u.created_at ASC
+		LIMIT 1`, customerName,
+	).Scan(&stripeCustID).Error; err != nil {
 		return fmt.Errorf("lookup stripe_customer_id: %w", err)
 	}
 	if stripeCustID == "" {
@@ -150,13 +170,13 @@ func (s *Server) reportOneCustomer(customerName string, day time.Time, bytes int
 	if event != nil && event.Identifier != "" {
 		recordedID = event.Identifier
 	}
-	return s.store.InsertUsageReport(&store.StripeUsageReport{
+	return s.store.DB().Clauses(clause.OnConflict{DoNothing: true}).Create(&store.StripeUsageReport{
 		CustomerName:  customerName,
 		Day:           day,
 		KbReported:    kb,
 		StripeEventID: recordedID,
 		ReportedAt:    time.Now(),
-	})
+	}).Error
 }
 
 // startOfUTCDay truncates t to 00:00:00 UTC of the same day.

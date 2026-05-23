@@ -440,7 +440,12 @@ func (c *Coordinator) StartUsageFlush(ctx context.Context, store *store.Store) {
 func (c *Coordinator) flushUsage(store *store.Store) {
 	entries := c.Usage.DrainCompleted()
 	for _, e := range entries {
-		if err := store.UpsertUsageHourly(e.Customer, e.Hour, e.Bytes); err != nil {
+		if err := store.DB().Exec(`
+			INSERT INTO usage_hourly (customer_name, hour, bytes_ingested)
+			VALUES (?, ?, ?)
+			ON CONFLICT (customer_name, hour) DO UPDATE
+			SET bytes_ingested = usage_hourly.bytes_ingested + EXCLUDED.bytes_ingested`,
+			e.Customer, e.Hour, e.Bytes).Error; err != nil {
 			log.Printf("usage flush error: customer=%s hour=%s: %v", e.Customer, e.Hour, err)
 		}
 	}
@@ -752,7 +757,10 @@ func (c *Coordinator) refreshLoweredSync(watch *store.CronWatch, customerName st
 	if loweredJSON == nil {
 		return
 	}
-	if err := c.Store.RefreshWatchLoweredPlan(watch.ID, loweredJSON); err != nil {
+	if err := c.Store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.CronWatch{}).
+		Where("id = ?", watch.ID).
+		Update("lowered_plan", loweredJSON).
+		Error; err != nil {
 		log.Printf("watch %d: refresh lowered_plan: %v", watch.ID, err)
 		return
 	}
@@ -977,7 +985,20 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 		if err != nil {
 			return nil, fmt.Errorf("validate source: resolve customer %q: %w", customer, err)
 		}
-		ok, err := c.Store.CustomerHasSource(cust.ID, plan.SourceApp)
+		ok, err := func(customerID uint, app string) (bool, error) {
+			if app == "" {
+				return true, nil
+			}
+			ns := app
+			if i := strings.IndexByte(app, '/'); i >= 0 {
+				ns = app[:i]
+			}
+			var count int64
+			err := c.Store.DB().WithContext(store.WithCustomer(context.Background(), customerID)).Model(&store.Namespace{}).
+				Where("name = ?", ns).
+				Count(&count).Error
+			return count > 0, err
+		}(cust.ID, plan.SourceApp)
 		if err != nil {
 			return nil, fmt.Errorf("validate source: %w", err)
 		}

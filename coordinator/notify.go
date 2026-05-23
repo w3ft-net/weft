@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -185,7 +186,14 @@ type pagerDutyPayload struct {
 }
 
 func (n *Notifier) sendPagerDuty(customerID uint, watchName string, target store.PDTarget, stderr string) error {
-	integ, err := n.Store.GetPagerDutyIntegration(customerID, target.Name)
+	integ, err := func() (*store.PagerDutyIntegration, error) {
+		var item store.PagerDutyIntegration
+		err := n.Store.DB().WithContext(store.WithCustomer(context.Background(), customerID)).Where("name = ?", target.Name).First(&item).Error
+		if err != nil {
+			return nil, err
+		}
+		return &item, nil
+	}()
 	if err != nil {
 		return fmt.Errorf("no integration named %q (configure under Account → Integrations)", target.Name)
 	}

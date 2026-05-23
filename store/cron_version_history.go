@@ -171,53 +171,6 @@ func (s *Store) ResolveCronWatchRef(customerID uint, name, ref string) (*CronWat
 	return &matches[0], nil
 }
 
-// CronWatchContent returns the (schedule, pipeline) at the given ref.
-func (s *Store) CronWatchContent(customerID uint, name, ref string) (schedule, pipeline string, err error) {
-	v, err := s.ResolveCronWatchRef(customerID, name, ref)
-	if err != nil {
-		return "", "", err
-	}
-	return v.Schedule, v.Pipeline, nil
-}
-
-// CheckoutCronWatch makes the ref's version the new HEAD.
-func (s *Store) CheckoutCronWatch(customerID uint, userID, name, ref string) error {
-	target, err := s.ResolveCronWatchRef(customerID, name, ref)
-	if err != nil {
-		return err
-	}
-	if target.IsHead {
-		return nil
-	}
-	compiled, err := CompileWatchPipeline(target.Pipeline)
-	if err != nil {
-		return err
-	}
-	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
-		// Always set, even for empty — see SaveShellFunction.
-		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
-			return err
-		}
-		updates := map[string]any{
-			"schedule":        target.Schedule,
-			"pipeline":        target.Pipeline,
-			"content_hash":    target.ContentHash,
-			"message":         target.Message,
-			"alert_key":       compiled.AlertKey,
-			"alert_tag":       compiled.AlertTag,
-			"alert_condition": compiled.AlertCondition,
-			"alert_threshold": compiled.AlertThreshold,
-			"updated_at":      time.Now(),
-		}
-		if target.AuthoredByUserID != nil {
-			updates["created_by_user_id"] = *target.AuthoredByUserID
-		}
-		return tx.Model(&CronWatch{}).
-			Where("name = ?", name).
-			Updates(updates).Error
-	})
-}
-
 // AmendCronWatchMessage sets the commit message on the version at
 // `ref`. For HEAD this UPDATEs cron_watches.message — the trigger
 // is scoped to UPDATE OF schedule, pipeline so a message-only edit

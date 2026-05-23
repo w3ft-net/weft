@@ -229,7 +229,7 @@ echo finished`
 
 	// And /tmp/snapshot in the customer's shellfs should contain the
 	// 3 api rows from the fixture (ERROR/ERROR/INFO).
-	data, err := db.ReadTmpFile(custID, snapPath)
+	data, err := readTmpFile(db, custID, snapPath)
 	if err != nil {
 		t.Fatalf("read %s back: %v (the redirect was probably dropped)", snapPath, err)
 	}

@@ -91,64 +91,6 @@ func (s *Store) SeedDevSubscription(customerID uint) {
 	}
 }
 
-// CancelSubscription marks a subscription as cancelled by Stripe
-// subscription ID. Comp subs (comp_reason != '') are skipped — they
-// have no Stripe sub ID anyway, but the guard makes the intent
-// explicit and protects against ID collisions.
-func (s *Store) CancelSubscription(stripeSubID string) error {
-	return s.crossTenant().Model(&Subscription{}).
-		Where("stripe_subscription_id = ? AND comp_reason = ''", stripeSubID).
-		Updates(map[string]any{
-			"status":     "cancelled",
-			"updated_at": time.Now(),
-		}).Error
-}
-
-// AttachStripeSubscription sets the Stripe subscription ID on an existing
-// local subscription row by its local ID.
-func (s *Store) AttachStripeSubscription(subID, stripeSubID string) error {
-	return s.crossTenant().Model(&Subscription{}).
-		Where("id = ?", subID).
-		Updates(map[string]any{
-			"stripe_subscription_id": stripeSubID,
-			"updated_at":             time.Now(),
-		}).Error
-}
-
-// GetSubscriptionByStripeID returns the local subscription row matching a
-// Stripe subscription ID, or nil if none.
-func (s *Store) GetSubscriptionByStripeID(stripeSubID string) (*Subscription, error) {
-	var sub Subscription
-	if err := s.crossTenant().Where("stripe_subscription_id = ?", stripeSubID).First(&sub).Error; err != nil {
-		return nil, err
-	}
-	return &sub, nil
-}
-
-// SetSubscriptionStatus updates the status field on a local subscription
-// row identified by its Stripe subscription ID. Comp subs are skipped.
-func (s *Store) SetSubscriptionStatus(stripeSubID, status string) error {
-	return s.crossTenant().Model(&Subscription{}).
-		Where("stripe_subscription_id = ? AND comp_reason = ''", stripeSubID).
-		Updates(map[string]any{
-			"status":     status,
-			"updated_at": time.Now(),
-		}).Error
-}
-
-// PromoteSubscriptionTier upgrades a subscription's tier and clears its
-// trial expiry once payment is confirmed. Comp subs are skipped.
-func (s *Store) PromoteSubscriptionTier(stripeSubID, tier string) error {
-	return s.crossTenant().Model(&Subscription{}).
-		Where("stripe_subscription_id = ? AND comp_reason = ''", stripeSubID).
-		Updates(map[string]any{
-			"tier":       tier,
-			"status":     "active",
-			"expires_at": nil,
-			"updated_at": time.Now(),
-		}).Error
-}
-
 // GrantCompSubscription cancels any active subscription for the customer
 // and inserts a fresh comp subscription at the given tier. Idempotent:
 // re-granting the same (customer, tier, reason) is a no-op when the
@@ -195,14 +137,3 @@ func (s *Store) GrantCompSubscription(customerID uint, tier, reason string) erro
 	})
 }
 
-// RevokeCompSubscription cancels the active comp subscription for the
-// customer. Refuses to touch a paid sub. Returns nil if there is no
-// active comp sub (idempotent).
-func (s *Store) RevokeCompSubscription(customerID uint) error {
-	return s.scoped(customerID).Model(&Subscription{}).
-		Where("status = 'active' AND comp_reason != ''").
-		Updates(map[string]any{
-			"status":     "cancelled",
-			"updated_at": time.Now(),
-		}).Error
-}

@@ -52,7 +52,8 @@ func (ce *CronExecutor) Start(ctx context.Context) {
 
 // reconcile syncs running goroutines with the database state.
 func (ce *CronExecutor) reconcile(ctx context.Context) {
-	watches, err := ce.Store.ListEnabledCronWatches()
+	var watches []store.CronWatch
+	err := ce.Store.DB().WithContext(store.WithoutTenantScope(context.Background())).Where("enabled = ?", true).Find(&watches).Error
 	if err != nil {
 		log.Printf("cron: failed to list watches: %v", err)
 		return
@@ -198,7 +199,13 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch) {
 	}
 
 	// Update watch status.
-	if updateErr := ce.Store.UpdateCronWatchRun(watch.ID, status); updateErr != nil {
+	if updateErr := func(id uint, status string) error {
+		now := time.Now()
+		return ce.Store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.CronWatch{}).Where("id = ?", id).Updates(map[string]any{
+			"last_run_at": &now,
+			"last_status": status,
+		}).Error
+	}(watch.ID, status); updateErr != nil {
 		log.Printf("cron[%s]: failed to update run status: %v", watch.Name, updateErr)
 	}
 
@@ -217,14 +224,20 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch) {
 // first row in multi-row mode (they describe the whole tick, not a row).
 func (ce *CronExecutor) persistResults(watch store.CronWatch, ranAt time.Time, stdout, stderr string, exitCode int, duration time.Duration) error {
 	if watch.AlertKey == nil {
-		return ce.Store.SaveCronResult(&store.CronResult{
+		result := &store.CronResult{
 			CronWatchID: watch.ID,
 			RanAt:       ranAt,
 			Stdout:      stdout,
 			Stderr:      stderr,
 			ExitCode:    exitCode,
 			DurationMs:  duration.Milliseconds(),
-		})
+		}
+		if result.Value == nil {
+			if v, err := strconv.ParseFloat(strings.TrimSpace(result.Stdout), 64); err == nil {
+				result.Value = &v
+			}
+		}
+		return ce.Store.DB().Create(result).Error
 	}
 
 	keySpec, err := shellcore.ParseFieldSpec(*watch.AlertKey)

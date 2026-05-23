@@ -233,8 +233,9 @@ func (s *Server) ListApps(ctx context.Context, _ *pb.ListAppsRequest) (*pb.ListA
 		}
 		return &pb.ListAppsResponse{Apps: names}, nil
 	}
-	names, err := s.Store.AllAppNames()
-	if err != nil {
+	var names []string
+	if err := s.Store.DB().WithContext(store.WithoutTenantScope(context.Background())).
+		Model(&store.Namespace{}).Distinct().Pluck("name", &names).Error; err != nil {
 		return nil, status.Errorf(codes.Internal, "list apps: %v", err)
 	}
 	return &pb.ListAppsResponse{Apps: names}, nil
@@ -311,8 +312,11 @@ func (s *Server) AddSource(ctx context.Context, req *pb.AddSourceRequest) (*pb.A
 		return nil, status.Errorf(codes.NotFound, "namespace %q not found — create it first", req.Namespace)
 	}
 
-	account, err := s.Store.FindOrCreateAWSAccount(customer.ID, req.AwsAccountId, req.RoleArn, req.ExternalId)
-	if err != nil {
+	account := store.AWSAccount{CustomerID: customer.ID, AccountID: req.AwsAccountId}
+	if err := s.Store.DB().
+		Where(&account).
+		Assign(store.AWSAccount{RoleARN: req.RoleArn, ExternalID: req.ExternalId}).
+		FirstOrCreate(&account).Error; err != nil {
 		return nil, fmt.Errorf("account: %w", err)
 	}
 
@@ -378,7 +382,9 @@ func (s *Server) RemoveSource(ctx context.Context, req *pb.RemoveSourceRequest) 
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "namespace %q not found", req.Namespace)
 	}
-	if err := s.Store.RemoveLogGroup(ns.ID, req.App); err != nil {
+	if err := s.Store.DB().Unscoped().
+		Where("namespace_id = ? AND app = ?", ns.ID, req.App).
+		Delete(&store.LogGroup{}).Error; err != nil {
 		return nil, err
 	}
 	return &pb.RemoveSourceResponse{}, nil
@@ -464,11 +470,18 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 	// on the recorded version.
 	clientID := readClientID(stream.Context())
 	if clientID != "" {
-		if err := s.Store.RecordAgentVersion(auth.TokenID, clientID); err != nil {
+		now := time.Now()
+		// Ingest-path write by token id (already authenticated upstream).
+		if err := s.Store.DB().WithContext(store.WithoutTenantScope(context.Background())).
+			Model(&store.AgentToken{}).Where("id = ?", auth.TokenID).
+			Updates(map[string]any{
+				"last_seen_version": clientID,
+				"last_seen_at":      &now,
+			}).Error; err != nil {
 			// Don't kill the stream over a version-stamp write failure —
 			// the customer's logs flowing is more important than the
 			// operator dashboard being current.
-			log.Printf("ingest-stream: RecordAgentVersion(token=%d, %q): %v", auth.TokenID, clientID, err)
+			log.Printf("ingest-stream: record agent version (token=%d, %q): %v", auth.TokenID, clientID, err)
 		}
 	}
 	if floor := s.runtimeCfg().WeftdHardFloor; floor != "" {

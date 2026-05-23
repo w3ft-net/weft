@@ -263,40 +263,6 @@ func (s *Store) CreateVerifiedUser(email string) (*User, error) {
 	return &user, nil
 }
 
-// MarkUserVerified flips EmailVerifiedAt to now() for an existing user.
-// No-op if already verified.
-func (s *Store) MarkUserVerified(userID string) error {
-	now := time.Now()
-	return s.db.Model(&User{}).
-		Where("id = ? AND email_verified_at IS NULL", userID).
-		Updates(map[string]any{
-			"email_verified_at": &now,
-			"updated_at":        now,
-		}).Error
-}
-
-// MarkWelcomeSeen flips HasSeenWelcome to true. Idempotent — re-dismiss
-// doesn't touch UpdatedAt if the flag is already set.
-func (s *Store) MarkWelcomeSeen(userID string) error {
-	return s.db.Model(&User{}).
-		Where("id = ? AND has_seen_welcome = FALSE", userID).
-		Updates(map[string]any{
-			"has_seen_welcome": true,
-			"updated_at":       time.Now(),
-		}).Error
-}
-
-// DeleteExpiredUnverifiedUsers removes users whose email was never verified
-// and whose CreatedAt is older than cutoff. Cascades via FK constraints to
-// the customer, subscription, team member, tokens, sources, etc. Returns
-// how many users were swept.
-func (s *Store) DeleteExpiredUnverifiedUsers(cutoff time.Time) (int64, error) {
-	result := s.db.
-		Where("email_verified_at IS NULL AND created_at < ?", cutoff).
-		Delete(&User{})
-	return result.RowsAffected, result.Error
-}
-
 func (s *Store) GetUserByEmail(email string) (*User, error) {
 	var user User
 	if err := s.db.Where("email = ?", email).First(&user).Error; err != nil {
@@ -341,23 +307,6 @@ func (s *Store) AdvanceOnboardingStep(userID, expected, next string) (bool, erro
 	return res.RowsAffected == 1, nil
 }
 
-// DismissOnboarding sets onboarding_dismissed=true. Doesn't revoke
-// Loom membership — the user can still switch into the org from the
-// dropdown and poke around; they just won't see overlays.
-func (s *Store) DismissOnboarding(userID string) error {
-	return s.db.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
-		"onboarding_dismissed": true,
-		"updated_at":           time.Now(),
-	}).Error
-}
-
-func (s *Store) UpdateUserStripeCustomer(userID, stripeCustomerID string) error {
-	return s.db.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
-		"stripe_customer_id": stripeCustomerID,
-		"updated_at":         time.Now(),
-	}).Error
-}
-
 // --- Magic Links ---
 //
 // Tokens live plaintext in the email we send and in the URL the user
@@ -385,7 +334,12 @@ func (s *Store) CreateMagicLink(email string) (string, error) {
 	if err := s.db.Create(&link).Error; err != nil {
 		return "", err
 	}
-	s.rememberRawMagicLink(email, raw)
+	s.rawMagicLinkMu.Lock()
+	if s.rawMagicLinkTokens == nil {
+		s.rawMagicLinkTokens = make(map[string]string)
+	}
+	s.rawMagicLinkTokens[email] = raw
+	s.rawMagicLinkMu.Unlock()
 	return raw, nil
 }
 
@@ -436,15 +390,6 @@ func (s *Store) GetLastMagicLinkToken(email string) (string, error) {
 		return "", fmt.Errorf("no magic link for %s", email)
 	}
 	return tok, nil
-}
-
-func (s *Store) rememberRawMagicLink(email, raw string) {
-	s.rawMagicLinkMu.Lock()
-	defer s.rawMagicLinkMu.Unlock()
-	if s.rawMagicLinkTokens == nil {
-		s.rawMagicLinkTokens = make(map[string]string)
-	}
-	s.rawMagicLinkTokens[email] = raw
 }
 
 // --- Team Members ---
@@ -513,17 +458,6 @@ func (s *Store) GetPendingTeamMemberByEmail(email string) (*TeamMember, error) {
 	return &m, nil
 }
 
-// GetTeamMemberByID finds a member by ID.
-func (s *Store) GetTeamMemberByID(id string) (*TeamMember, error) {
-	var m TeamMember
-	// Keyed by membership id (invite/admin flows) with no customer in
-	// hand — cross-tenant.
-	if err := s.crossTenant().First(&m, "id = ?", id).Error; err != nil {
-		return nil, err
-	}
-	return &m, nil
-}
-
 // AcceptTeamMember marks a pending member as active.
 func (s *Store) AcceptTeamMember(id string, userID string) error {
 	now := time.Now()
@@ -533,27 +467,6 @@ func (s *Store) AcceptTeamMember(id string, userID string) error {
 		"accepted_at": &now,
 		"updated_at":  now,
 	}).Error
-}
-
-// RemoveTeamMember sets a member's status to removed.
-func (s *Store) RemoveTeamMember(id string) error {
-	return s.crossTenant().Model(&TeamMember{}).Where("id = ?", id).Updates(map[string]any{
-		"status":     "removed",
-		"updated_at": time.Now(),
-	}).Error
-}
-
-// RemoveTeamMemberByUserAndCustomer is the (user_id, customer_id)
-// counterpart to RemoveTeamMember(id), used by onboarding graduation
-// where the caller knows the user + customer but not the membership
-// row id. Soft-removes any active row; idempotent.
-func (s *Store) RemoveTeamMemberByUserAndCustomer(userID string, customerID uint) error {
-	return s.scoped(customerID).Model(&TeamMember{}).
-		Where("user_id = ?", userID).
-		Updates(map[string]any{
-			"status":     "removed",
-			"updated_at": time.Now(),
-		}).Error
 }
 
 // CountTeamMembers returns the count of active + pending members.

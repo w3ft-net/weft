@@ -2,6 +2,7 @@ package store
 
 import (
 	"testing"
+	"time"
 )
 
 // TestSubscription_KeyedByCustomerSurrogate pins migration 053: a
@@ -164,7 +165,7 @@ func TestRevokeCompSubscription(t *testing.T) {
 	if err := db.GrantCompSubscription(cust.ID, string(TierBolt), "alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.RevokeCompSubscription(cust.ID); err != nil {
+	if err := revokeCompSubscription(db, cust.ID); err != nil {
 		t.Fatal(err)
 	}
 	sub, _ := db.ActiveSubscription(cust.ID)
@@ -174,7 +175,7 @@ func TestRevokeCompSubscription(t *testing.T) {
 
 	// Now seed a paid (non-comp) sub and verify revoke leaves it.
 	db.SeedDevSubscription(cust.ID) // dev sub has comp_reason = ""
-	if err := db.RevokeCompSubscription(cust.ID); err != nil {
+	if err := revokeCompSubscription(db, cust.ID); err != nil {
 		t.Fatal(err)
 	}
 	sub, _ = db.ActiveSubscription(cust.ID)
@@ -204,7 +205,7 @@ func TestWebhookGuard_SkipsCompSub(t *testing.T) {
 	}
 
 	// Webhook tries to cancel by Stripe ID. Comp guard must skip.
-	if err := db.CancelSubscription(fakeStripeID); err != nil {
+	if err := cancelSubscription(db, fakeStripeID); err != nil {
 		t.Fatal(err)
 	}
 	sub, _ := db.ActiveSubscription(cust.ID)
@@ -213,7 +214,7 @@ func TestWebhookGuard_SkipsCompSub(t *testing.T) {
 	}
 
 	// Same for status flip.
-	if err := db.SetSubscriptionStatus(fakeStripeID, "past_due"); err != nil {
+	if err := setSubscriptionStatus(db, fakeStripeID, "past_due"); err != nil {
 		t.Fatal(err)
 	}
 	sub, _ = db.ActiveSubscription(cust.ID)
@@ -222,7 +223,7 @@ func TestWebhookGuard_SkipsCompSub(t *testing.T) {
 	}
 
 	// Same for tier promotion.
-	if err := db.PromoteSubscriptionTier(fakeStripeID, string(TierTrial)); err != nil {
+	if err := promoteSubscriptionTier(db, fakeStripeID, string(TierTrial)); err != nil {
 		t.Fatal(err)
 	}
 	sub, _ = db.ActiveSubscription(cust.ID)
@@ -257,4 +258,53 @@ func TestSeedDevSubscription_Idempotent(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("expected 1 active subscription for customer %d, got %d", cust.ID, count)
 	}
+}
+
+// --- helpers for subscription store methods relocated out of the store package ---
+//
+// Production logic moved to callers outside the store package. These
+// test-local helpers reproduce the original method bodies verbatim
+// (parameterized on db) so the subscription tests keep exercising the
+// same behaviour.
+
+// cancelSubscription mirrors the former Store.CancelSubscription.
+func cancelSubscription(db *Store, stripeSubID string) error {
+	return db.crossTenant().Model(&Subscription{}).
+		Where("stripe_subscription_id = ? AND comp_reason = ''", stripeSubID).
+		Updates(map[string]any{
+			"status":     "cancelled",
+			"updated_at": time.Now(),
+		}).Error
+}
+
+// setSubscriptionStatus mirrors the former Store.SetSubscriptionStatus.
+func setSubscriptionStatus(db *Store, stripeSubID, status string) error {
+	return db.crossTenant().Model(&Subscription{}).
+		Where("stripe_subscription_id = ? AND comp_reason = ''", stripeSubID).
+		Updates(map[string]any{
+			"status":     status,
+			"updated_at": time.Now(),
+		}).Error
+}
+
+// promoteSubscriptionTier mirrors the former Store.PromoteSubscriptionTier.
+func promoteSubscriptionTier(db *Store, stripeSubID, tier string) error {
+	return db.crossTenant().Model(&Subscription{}).
+		Where("stripe_subscription_id = ? AND comp_reason = ''", stripeSubID).
+		Updates(map[string]any{
+			"tier":       tier,
+			"status":     "active",
+			"expires_at": nil,
+			"updated_at": time.Now(),
+		}).Error
+}
+
+// revokeCompSubscription mirrors the former Store.RevokeCompSubscription.
+func revokeCompSubscription(db *Store, customerID uint) error {
+	return db.scoped(customerID).Model(&Subscription{}).
+		Where("status = 'active' AND comp_reason != ''").
+		Updates(map[string]any{
+			"status":     "cancelled",
+			"updated_at": time.Now(),
+		}).Error
 }

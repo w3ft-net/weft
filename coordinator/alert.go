@@ -9,9 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/kevlarcon/warp/pkg/shellcore"
 	"github.com/kevlarcon/weft/alert"
 	"github.com/kevlarcon/weft/store"
+	"gorm.io/gorm"
 )
 
 // NotifyDispatcher is the subset of Notifier the alert stage calls.
@@ -144,7 +146,33 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 	// Window aggregates (per-tag when we have one).
 	var stats store.CronAggStats
 	if parsed.Duration > 0 && ctx.Store != nil && ctx.Watch != nil {
-		stats, _ = ctx.Store.CronAggregate(ctx.CustomerID, ctx.Watch.ID, time.Now().Add(-parsed.Duration), r.tag)
+		stats, _ = func(customerID, cronWatchID uint, since time.Time, tag string) (store.CronAggStats, error) {
+			since = store.ClampRetention(ctx.Store.TierForCustomer(customerID), since)
+			gran := store.PickGranularity(time.Since(since))
+
+			var row struct {
+				Avg     *float64
+				Min     *float64
+				Max     *float64
+				Samples int
+			}
+			query := `
+				SELECT SUM(sum) / NULLIF(SUM(count), 0) AS avg,
+				       MIN(min)                         AS min,
+				       MAX(max)                         AS max,
+				       COALESCE(SUM(count), 0)          AS samples
+				FROM cron_results_all
+				WHERE granularity = ?
+				  AND cron_watch_id = ?
+				  AND bucket_start >= ?`
+			args := []any{gran, cronWatchID, since}
+			if tag != "" {
+				query += " AND tag = ?"
+				args = append(args, tag)
+			}
+			err := ctx.Store.DB().Raw(query, args...).Scan(&row).Error
+			return store.CronAggStats{Avg: row.Avg, Min: row.Min, Max: row.Max, Samples: row.Samples}, err
+		}(ctx.CustomerID, ctx.Watch.ID, time.Now().Add(-parsed.Duration), r.tag)
 	}
 
 	// Previous tick's value for this same tag (changed/rising/falling).
@@ -241,7 +269,20 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 		if parsed.Duration == 0 {
 			triggered = r.value == ""
 		} else if ctx.Store != nil && ctx.Watch != nil {
-			n, _ := ctx.Store.CronNonEmptyCount(ctx.CustomerID, ctx.Watch.ID, time.Now().Add(-parsed.Duration), r.tag)
+			n, _ := func(customerID, cronWatchID uint, since time.Time, tag string) (int, error) {
+				since = store.ClampRetention(ctx.Store.TierForCustomer(customerID), since)
+				var n int64
+				query := `
+					SELECT COUNT(*) FROM cron_results
+					WHERE cron_watch_id = ? AND ran_at >= ? AND stdout <> ''`
+				args := []any{cronWatchID, since}
+				if tag != "" {
+					query += " AND tag = ?"
+					args = append(args, tag)
+				}
+				err := ctx.Store.DB().Raw(query, args...).Scan(&n).Error
+				return int(n), err
+			}(ctx.CustomerID, ctx.Watch.ID, time.Now().Add(-parsed.Duration), r.tag)
 			triggered = n == 0
 		} else {
 			triggered = r.value == ""
@@ -408,7 +449,18 @@ func evaluateIfMode(triggered bool, parsed *alert.Args, condStr string, ctx *Ale
 // NEW incident and dispatch should fire; false if an incident is already
 // open (suppress) or the condition cleared (close).
 func checkIncident(s *store.Store, watchID uint, condition, tag string, triggered bool) bool {
-	existing, err := s.OpenIncident(watchID, condition, tag)
+	existing, err := func() (*store.AlertIncident, error) {
+		var inc store.AlertIncident
+		err := s.DB().Where("cron_watch_id = ? AND condition = ? AND tag = ? AND closed_at IS NULL",
+			watchID, condition, tag).First(&inc).Error
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &inc, nil
+	}()
 	if err != nil {
 		// A swallow here would silently double-fire on every tick;
 		// log loudly so we can spot DB-side regressions.
@@ -416,14 +468,34 @@ func checkIncident(s *store.Store, watchID uint, condition, tag string, triggere
 	}
 	if triggered {
 		if existing != nil {
-			s.UpdateIncidentSeen(existing.ID)
+			now := time.Now()
+			s.DB().Model(&store.AlertIncident{}).Where("id = ?", existing.ID).Updates(map[string]any{
+				"last_seen_at": now,
+				"updated_at":   now,
+			})
 			return false
 		}
-		s.CreateIncident(watchID, condition, tag)
+		now := time.Now()
+		inc := store.AlertIncident{
+			ID:          uuid.New().String(),
+			CronWatchID: watchID,
+			Condition:   condition,
+			Tag:         tag,
+			OpenedAt:    now,
+			LastSeenAt:  now,
+			NotifiedAt:  &now,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		s.DB().Create(&inc)
 		return true
 	}
 	if existing != nil {
-		s.CloseIncident(existing.ID)
+		now := time.Now()
+		s.DB().Model(&store.AlertIncident{}).Where("id = ?", existing.ID).Updates(map[string]any{
+			"closed_at":  &now,
+			"updated_at": now,
+		})
 	}
 	return false
 }

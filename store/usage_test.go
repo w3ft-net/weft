@@ -21,11 +21,11 @@ func TestRollupUsageDaily_AggregatesHourlyCorrectly(t *testing.T) {
 	yesterday := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
 	for h := 5; h < 10; h++ {
 		hour := yesterday.Add(time.Duration(h) * time.Hour)
-		if err := db.UpsertUsageHourly(cust, hour, 100); err != nil {
+		if err := upsertUsageHourly(db, cust, hour, 100); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := db.UpsertUsageHourly(other, yesterday.Add(5*time.Hour), 42); err != nil {
+	if err := upsertUsageHourly(db, other, yesterday.Add(5*time.Hour), 42); err != nil {
 		t.Fatal(err)
 	}
 
@@ -63,7 +63,7 @@ func TestRollupUsageDaily_AggregatesHourlyCorrectly(t *testing.T) {
 	// Now append one more hourly row for our customer (a late-arriving
 	// ingest within the look-back window) and confirm the next rollup
 	// folds it in — daily total goes 500 → 600.
-	if err := db.UpsertUsageHourly(cust, yesterday.Add(15*time.Hour), 100); err != nil {
+	if err := upsertUsageHourly(db, cust, yesterday.Add(15*time.Hour), 100); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.db.Exec("CALL public.rollup_usage_daily()").Error; err != nil {
@@ -87,7 +87,7 @@ func TestQueryUsage_SplitsOnTodayBoundary(t *testing.T) {
 	// rollup keeps hourly rows around until partman drops the
 	// partition). QueryUsage must read yesterday's value from daily
 	// only.
-	if err := db.UpsertUsageHourly(cust, yesterday.Add(10*time.Hour), 1000); err != nil {
+	if err := upsertUsageHourly(db, cust, yesterday.Add(10*time.Hour), 1000); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.db.Exec("CALL public.rollup_usage_daily()").Error; err != nil {
@@ -96,7 +96,7 @@ func TestQueryUsage_SplitsOnTodayBoundary(t *testing.T) {
 
 	// Today — only exists in hourly. QueryUsage must find it there
 	// because the day isn't "complete" yet.
-	if err := db.UpsertUsageHourly(cust, todayStart.Add(2*time.Hour), 42); err != nil {
+	if err := upsertUsageHourly(db, cust, todayStart.Add(2*time.Hour), 42); err != nil {
 		t.Fatal(err)
 	}
 
@@ -128,4 +128,15 @@ func TestQueryUsage_SplitsOnTodayBoundary(t *testing.T) {
 	if total != 42 {
 		t.Errorf("today-only = %d, want 42", total)
 	}
+}
+
+// upsertUsageHourly mirrors the former Store.UpsertUsageHourly, whose
+// production logic moved to a caller outside the store package.
+func upsertUsageHourly(db *Store, customerName string, hour time.Time, bytes int64) error {
+	return db.db.Exec(`
+		INSERT INTO usage_hourly (customer_name, hour, bytes_ingested)
+		VALUES (?, ?, ?)
+		ON CONFLICT (customer_name, hour) DO UPDATE
+		SET bytes_ingested = usage_hourly.bytes_ingested + EXCLUDED.bytes_ingested`,
+		customerName, hour, bytes).Error
 }

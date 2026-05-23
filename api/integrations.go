@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -12,6 +13,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 
 	"github.com/kevlarcon/weft/store"
 )
@@ -40,7 +43,8 @@ func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	pdItems, _ := s.store.ListPagerDutyIntegrations(custID)
+	var pdItems []store.PagerDutyIntegration
+	_ = s.store.DB().WithContext(store.WithCustomer(context.Background(), custID)).Order("name").Find(&pdItems).Error
 	pdKeys := make(map[string]string, len(pdItems))
 	pdMeta := make([]map[string]any, 0, len(pdItems))
 	for _, it := range pdItems {
@@ -146,7 +150,10 @@ func (s *Server) handleSlackDisconnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.store.DisconnectSlack(custID)
+	s.store.DB().WithContext(store.WithCustomer(context.Background(), custID)).Model(&store.NotifyConfig{}).Updates(map[string]any{
+		"slack_webhook":   "",
+		"slack_team_name": "",
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -168,8 +175,20 @@ func (s *Server) handlePagerDutySave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name and key required", http.StatusBadRequest)
 		return
 	}
-	if err := s.store.SavePagerDutyIntegration(custID, req.Name, req.Key); err != nil {
-		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
+	var item store.PagerDutyIntegration
+	result := s.store.DB().WithContext(store.WithCustomer(context.Background(), custID)).Where("name = ?", req.Name).First(&item)
+	var saveErr error
+	if result.Error == gorm.ErrRecordNotFound {
+		saveErr = s.store.DB().WithContext(store.WithCustomer(context.Background(), custID)).Create(&store.PagerDutyIntegration{
+			CustomerID:     custID,
+			Name:           req.Name,
+			IntegrationKey: req.Key,
+		}).Error
+	} else {
+		saveErr = s.store.DB().WithContext(store.WithCustomer(context.Background(), custID)).Model(&item).Update("integration_key", req.Key).Error
+	}
+	if saveErr != nil {
+		http.Error(w, "store error: "+saveErr.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -189,7 +208,10 @@ func (s *Server) handlePagerDutyDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	if err := s.store.DeletePagerDutyIntegration(custID, name); err != nil {
+	err = s.store.DB().
+		WithContext(store.WithCustomer(context.Background(), custID)).
+		Where("name = ?", name).Delete(&store.PagerDutyIntegration{}).Error
+	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -249,7 +271,7 @@ func (s *Server) handlePagerDutyDisconnect(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.store.DeleteAllPagerDutyIntegrations(custID)
+	s.store.DB().WithContext(store.WithCustomer(context.Background(), custID)).Delete(&store.PagerDutyIntegration{})
 	w.WriteHeader(http.StatusNoContent)
 }
 

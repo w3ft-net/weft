@@ -96,7 +96,7 @@ func TestAppendTmpFile_PreservesCreator(t *testing.T) {
 	if err := db.WriteTmpFile(cust.ID, TierSwatch, alice.ID, "/tmp/notes", []byte("first\n")); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AppendTmpFile(cust.ID, TierSwatch, bob.ID, "/tmp/notes", []byte("second\n")); err != nil {
+	if err := appendTmpFile(db, cust.ID, TierSwatch, bob.ID, "/tmp/notes", []byte("second\n")); err != nil {
 		t.Fatal(err)
 	}
 	f, _ := db.GetTmpFile(cust.ID, "/tmp/notes")
@@ -117,7 +117,7 @@ func TestCopyTmpFile_RecordsCopierAsCreator(t *testing.T) {
 	if err := db.WriteTmpFile(cust.ID, TierSwatch, alice.ID, "/tmp/src", []byte("data\n")); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.CopyTmpFile(cust.ID, TierSwatch, bob.ID, "/tmp/src", "/tmp/dst"); err != nil {
+	if err := copyTmpFile(db, cust.ID, TierSwatch, bob.ID, "/tmp/src", "/tmp/dst"); err != nil {
 		t.Fatal(err)
 	}
 	dst, _ := db.GetTmpFile(cust.ID, "/tmp/dst")
@@ -139,7 +139,7 @@ func TestRenameTmpFile_PreservesCreator(t *testing.T) {
 	if err := db.WriteTmpFile(cust.ID, TierSwatch, alice.ID, "/tmp/old", []byte("x\n")); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.RenameTmpFile(cust.ID, "/tmp/old", "/tmp/new"); err != nil {
+	if err := renameTmpFile(db, cust.ID, "/tmp/old", "/tmp/new"); err != nil {
 		t.Fatal(err)
 	}
 	f, _ := db.GetTmpFile(cust.ID, "/tmp/new")

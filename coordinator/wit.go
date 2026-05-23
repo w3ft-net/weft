@@ -1,12 +1,15 @@
 package coordinator
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/pmezard/go-difflib/difflib"
+	"gorm.io/gorm"
 
 	"github.com/kevlarcon/warp/pkg/bash"
 	"github.com/kevlarcon/warp/pkg/syntax"
@@ -239,21 +242,23 @@ func (w *WitFuncs) runShow(args []string, stdout, stderr io.Writer) int {
 	ref := args[1]
 	switch kind {
 	case "bin":
-		content, err := w.Store.ShellFunctionContent(w.CustomerID, name, ref)
+		v, err := w.Store.ResolveShellFunctionRef(w.CustomerID, name, ref)
 		if err != nil {
 			fmt.Fprintf(stderr, "wit show: %v\n", err)
 			return 1
 		}
+		content := v.Source
 		fmt.Fprint(stdout, content)
 		if !strings.HasSuffix(content, "\n") {
 			fmt.Fprintln(stdout)
 		}
 	case "cron.d":
-		schedule, pipeline, err := w.Store.CronWatchContent(w.CustomerID, name, ref)
+		cv, err := w.Store.ResolveCronWatchRef(w.CustomerID, name, ref)
 		if err != nil {
 			fmt.Fprintf(stderr, "wit show: %v\n", err)
 			return 1
 		}
+		schedule, pipeline := cv.Schedule, cv.Pipeline
 		fmt.Fprintf(stdout, "# schedule: %s\n%s", schedule, pipeline)
 		if !strings.HasSuffix(pipeline, "\n") {
 			fmt.Fprintln(stdout)
@@ -399,7 +404,33 @@ func (w *WitFuncs) runCheckout(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "wit checkout: %v\n", err)
 			return 1
 		}
-		if err := w.Store.CheckoutShellFunction(w.CustomerID, w.UserID, name, ref); err != nil {
+		if err := func() error {
+			target, err := w.Store.ResolveShellFunctionRef(w.CustomerID, name, ref)
+			if err != nil {
+				return err
+			}
+			if target.IsHead {
+				return nil
+			}
+			return w.Store.DB().WithContext(store.WithCustomer(context.Background(), w.CustomerID)).Transaction(func(tx *gorm.DB) error {
+				if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", w.UserID).Error; err != nil {
+					return err
+				}
+				updates := map[string]any{
+					"source":       target.Source,
+					"language":     target.Language,
+					"content_hash": target.ContentHash,
+					"message":      target.Message,
+					"updated_at":   time.Now(),
+				}
+				if target.AuthoredByUserID != nil {
+					updates["created_by_user_id"] = *target.AuthoredByUserID
+				}
+				return tx.Model(&store.ShellFunction{}).
+					Where("name = ?", name).
+					Updates(updates).Error
+			})
+		}(); err != nil {
 			fmt.Fprintf(stderr, "wit checkout: %v\n", err)
 			return 1
 		}
@@ -410,7 +441,41 @@ func (w *WitFuncs) runCheckout(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "wit checkout: %v\n", err)
 			return 1
 		}
-		if err := w.Store.CheckoutCronWatch(w.CustomerID, w.UserID, name, ref); err != nil {
+		if err := func() error {
+			target, err := w.Store.ResolveCronWatchRef(w.CustomerID, name, ref)
+			if err != nil {
+				return err
+			}
+			if target.IsHead {
+				return nil
+			}
+			compiled, err := store.CompileWatchPipeline(target.Pipeline)
+			if err != nil {
+				return err
+			}
+			return w.Store.DB().WithContext(store.WithCustomer(context.Background(), w.CustomerID)).Transaction(func(tx *gorm.DB) error {
+				if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", w.UserID).Error; err != nil {
+					return err
+				}
+				updates := map[string]any{
+					"schedule":        target.Schedule,
+					"pipeline":        target.Pipeline,
+					"content_hash":    target.ContentHash,
+					"message":         target.Message,
+					"alert_key":       compiled.AlertKey,
+					"alert_tag":       compiled.AlertTag,
+					"alert_condition": compiled.AlertCondition,
+					"alert_threshold": compiled.AlertThreshold,
+					"updated_at":      time.Now(),
+				}
+				if target.AuthoredByUserID != nil {
+					updates["created_by_user_id"] = *target.AuthoredByUserID
+				}
+				return tx.Model(&store.CronWatch{}).
+					Where("name = ?", name).
+					Updates(updates).Error
+			})
+		}(); err != nil {
 			fmt.Fprintf(stderr, "wit checkout: %v\n", err)
 			return 1
 		}

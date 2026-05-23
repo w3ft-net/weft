@@ -247,13 +247,20 @@ func (s *Store) ApplyTeamPerms(customerID uint, doc TeamPermsDoc) error {
 		for email, mp := range doc {
 			m := memberByEmail[email]
 			uid := *m.UserID
-			err := txStore.UpsertOrgPermission(&OrgPermission{
-				CustomerID:         customerID,
-				UserID:             uid,
-				CanManageFunctions: mp.Bin.CanManage(),
-				CanManageWatches:   mp.Cron.CanManage(),
-				CanManageEtc:       mp.Etc.CanManage(),
-			})
+			var existing OrgPermission
+			vals := map[string]any{
+				"customer_id":          customerID,
+				"user_id":              uid,
+				"can_manage_functions": mp.Bin.CanManage(),
+				"can_manage_watches":   mp.Cron.CanManage(),
+				"can_manage_etc":       mp.Etc.CanManage(),
+			}
+			var err error
+			if txStore.scoped(customerID).Where("user_id = ?", uid).First(&existing).Error == gorm.ErrRecordNotFound {
+				err = txStore.scoped(customerID).Model(&OrgPermission{}).Create(vals).Error
+			} else {
+				err = txStore.scoped(customerID).Model(&existing).Updates(vals).Error
+			}
 			if err != nil {
 				return err
 			}
@@ -271,7 +278,7 @@ func (s *Store) ApplyTeamPerms(customerID uint, doc TeamPermsDoc) error {
 				continue
 			}
 			uid := *m.UserID
-			if err := txStore.DeleteOrgPermission(customerID, uid); err != nil {
+			if err := txStore.scoped(customerID).Where("user_id = ?", uid).Delete(&OrgPermission{}).Error; err != nil {
 				return err
 			}
 			if err := reconcileNsPerms(txStore, uid, nil, nsByName); err != nil {
@@ -311,7 +318,7 @@ func reconcileNsPerms(s *Store, userID string, want map[string]NamespaceAcl, nsB
 	}
 	for nsID := range currentByNsID {
 		if _, keep := wantByNsID[nsID]; !keep {
-			if err := s.DeleteNamespacePermission(userID, nsID); err != nil {
+			if err := s.db.Where("user_id = ? AND namespace_id = ?", userID, nsID).Delete(&NamespacePermission{}).Error; err != nil {
 				return err
 			}
 		}

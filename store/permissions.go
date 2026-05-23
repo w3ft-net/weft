@@ -50,21 +50,6 @@ func (s *Store) UpsertNamespacePermission(p *NamespacePermission) error {
 	return s.db.Model(&existing).Updates(vals).Error
 }
 
-// DeleteNamespacePermission removes a permission record.
-func (s *Store) DeleteNamespacePermission(userID string, namespaceID uint) error {
-	return s.db.Where("user_id = ? AND namespace_id = ?", userID, namespaceID).Delete(&NamespacePermission{}).Error
-}
-
-// ReadableNamespaceIDs returns the namespace IDs a user can read.
-// Returns nil for owners (meaning all namespaces).
-func (s *Store) ReadableNamespaceIDs(userID string) ([]uint, error) {
-	var ids []uint
-	err := s.db.Model(&NamespacePermission{}).
-		Where("user_id = ? AND can_read = ?", userID, true).
-		Pluck("namespace_id", &ids).Error
-	return ids, err
-}
-
 // GrantFullNamespaceAccess gives a user the maximum namespace-scoped
 // access. Used by signup flows to grant a fresh user's own namespaces
 // to themselves before they switch on the org role.
@@ -103,35 +88,3 @@ func (s *Store) GetOrgPermission(customerID uint, userID string) (*OrgPermission
 	return &p, nil
 }
 
-// ListOrgPermissions returns every OrgPermission row for a customer.
-// Used by the /etc/team.yaml synthesizer and the permissions UI.
-func (s *Store) ListOrgPermissions(customerID uint) ([]OrgPermission, error) {
-	var perms []OrgPermission
-	err := s.scoped(customerID).Find(&perms).Error
-	return perms, err
-}
-
-// UpsertOrgPermission creates or updates a row for (customer, user).
-// An all-false upsert is equivalent to "members get read-only on the
-// three dirs"; we still persist it so the UI can show explicit zeros.
-func (s *Store) UpsertOrgPermission(p *OrgPermission) error {
-	var existing OrgPermission
-	vals := map[string]any{
-		"customer_id":          p.CustomerID,
-		"user_id":              p.UserID,
-		"can_manage_functions": p.CanManageFunctions,
-		"can_manage_watches":   p.CanManageWatches,
-		"can_manage_etc":       p.CanManageEtc,
-	}
-	result := s.scoped(p.CustomerID).Where("user_id = ?", p.UserID).First(&existing)
-	if result.Error == gorm.ErrRecordNotFound {
-		return s.scoped(p.CustomerID).Model(&OrgPermission{}).Create(vals).Error
-	}
-	return s.scoped(p.CustomerID).Model(&existing).Updates(vals).Error
-}
-
-// DeleteOrgPermission removes a row. Called on team-member removal so
-// a re-added user starts from the default-deny state.
-func (s *Store) DeleteOrgPermission(customerID uint, userID string) error {
-	return s.scoped(customerID).Where("user_id = ?", userID).Delete(&OrgPermission{}).Error
-}

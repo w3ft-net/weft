@@ -46,69 +46,72 @@ func Open(dsn string) (*Store, error) {
 	}
 	s := &Store{db: db, tenant: newTenantScoping()}
 	s.tenant.install(db)
-	s.enrollTenantModels()
-	if err := s.backfillAlertThresholds(); err != nil {
-		return nil, fmt.Errorf("backfill alert thresholds: %w", err)
+	// Declare which models are tenant-scoped. Enforcement runs through
+	// the scoping callbacks installed just above; models are enrolled
+	// as their call sites learn to pass the customer through context.
+	s.tenant.enroll(s.db,
+		&Dashboard{},
+		&ShellFunction{},
+		&OrgPermission{},
+		&NotifyConfig{},
+		&PagerDutyIntegration{},
+		&CronWatch{},
+		&TmpFile{},
+		&Subscription{},
+		&TeamMember{},
+		&AgentToken{},
+		&Namespace{},
+	)
+	// One-time backfill of (alert_condition, alert_threshold) for
+	// watches that predate migration 027 (the columns were added
+	// nullable, so the migration itself is instant). This second pass
+	// walks rows with NULL values, re-compiles the pipeline, and writes
+	// the projection. Idempotent: once every eligible row has both
+	// columns set the SELECT returns zero and this is a no-op.
+	// Unparseable pipelines are skipped so a bad row can't block startup.
+	{
+		type row struct {
+			ID       uint
+			Pipeline string
+		}
+		var rows []row
+		if err := s.db.Raw(`
+			SELECT id, pipeline
+			FROM cron_watches
+			WHERE deleted_at IS NULL
+			  AND alert_condition IS NULL
+			  AND alert_threshold IS NULL
+		`).Scan(&rows).Error; err != nil {
+			return nil, fmt.Errorf("backfill alert thresholds: %w", err)
+		}
+		backfilled := 0
+		for _, r := range rows {
+			compiled, err := CompileWatchPipeline(r.Pipeline)
+			if err != nil {
+				// A pipeline that no longer parses (or has multiple
+				// alerts, etc.) is a pre-existing bad row — don't let
+				// it block server startup. Leave the columns NULL.
+				continue
+			}
+			if compiled.AlertCondition == nil || compiled.AlertThreshold == nil {
+				// Watch has no numeric-cutoff alert. Nothing to project.
+				continue
+			}
+			if err := s.db.Exec(`
+				UPDATE cron_watches
+				SET alert_condition = ?, alert_threshold = ?
+				WHERE id = ?`,
+				*compiled.AlertCondition, *compiled.AlertThreshold, r.ID,
+			).Error; err != nil {
+				return nil, fmt.Errorf("backfill alert thresholds: %w", err)
+			}
+			backfilled++
+		}
+		if backfilled > 0 {
+			log.Printf("store: backfilled alert_condition/alert_threshold on %d cron_watches", backfilled)
+		}
 	}
 	return s, nil
-}
-
-// backfillAlertThresholds populates (alert_condition, alert_threshold)
-// for watches that predate migration 027. The columns were added
-// nullable so the migration itself is instant; this second pass walks
-// rows with NULL values, re-compiles the pipeline, and writes the
-// projection. Idempotent: once every eligible row has both columns
-// set, the initial SELECT returns zero and the function is a no-op.
-// Unparseable pipelines are skipped so a bad row can't block startup.
-func (s *Store) backfillAlertThresholds() error {
-	type row struct {
-		ID       uint
-		Pipeline string
-	}
-	var rows []row
-	err := s.db.Raw(`
-		SELECT id, pipeline
-		FROM cron_watches
-		WHERE deleted_at IS NULL
-		  AND alert_condition IS NULL
-		  AND alert_threshold IS NULL
-	`).Scan(&rows).Error
-	if err != nil {
-		return err
-	}
-	if len(rows) == 0 {
-		return nil
-	}
-
-	backfilled := 0
-	for _, r := range rows {
-		compiled, err := CompileWatchPipeline(r.Pipeline)
-		if err != nil {
-			// A pipeline that no longer parses (or has multiple
-			// alerts, etc.) is a pre-existing bad row — don't let
-			// it block server startup. Leave the columns NULL; the
-			// dashboard falls back to no threshold line.
-			continue
-		}
-		if compiled.AlertCondition == nil || compiled.AlertThreshold == nil {
-			// Watch has no numeric-cutoff alert. Nothing to
-			// project; leave NULL.
-			continue
-		}
-		if err := s.db.Exec(`
-			UPDATE cron_watches
-			SET alert_condition = ?, alert_threshold = ?
-			WHERE id = ?`,
-			*compiled.AlertCondition, *compiled.AlertThreshold, r.ID,
-		).Error; err != nil {
-			return err
-		}
-		backfilled++
-	}
-	if backfilled > 0 {
-		log.Printf("store: backfilled alert_condition/alert_threshold on %d cron_watches", backfilled)
-	}
-	return nil
 }
 
 // BeginTest starts a transaction and returns a Store that uses it.

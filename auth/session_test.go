@@ -95,12 +95,9 @@ func TestBuildSession_MemberWithFlagsHasThem(t *testing.T) {
 	cust, _ := db.FindOrCreateCustomer(fmt.Sprintf("sess-flags-%d", os.Getpid()))
 	user := addMember(t, db, cust.ID, "member")
 
-	err := db.UpsertOrgPermission(&store.OrgPermission{
-		CustomerID:         cust.ID,
-		UserID:             user.ID,
-		CanManageFunctions: true,
-		CanManageEtc:       true,
-	})
+	err := db.ExecForTest(
+		`INSERT INTO org_permissions (customer_id, user_id, can_manage_functions, can_manage_watches, can_manage_etc) VALUES (?, ?, true, false, true)`,
+		cust.ID, user.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -14,7 +15,8 @@ import (
 // ── Customer handlers ───────────────────────────────────────────────
 
 func (s *Server) handleAdminListCustomers(w http.ResponseWriter, r *http.Request) {
-	customers, err := s.store.ListAllCustomers()
+	var customers []store.Customer
+	err := s.store.DB().Order("name").Find(&customers).Error
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -134,7 +136,12 @@ func (s *Server) handleAdminSetComp(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		if err := s.store.RevokeCompSubscription(cust.ID); err != nil {
+		if err := s.store.DB().WithContext(store.WithCustomer(context.Background(), cust.ID)).Model(&store.Subscription{}).
+			Where("status = 'active' AND comp_reason != ''").
+			Updates(map[string]any{
+				"status":     "cancelled",
+				"updated_at": time.Now(),
+			}).Error; err != nil {
 			log.Printf("admin: revoke comp for %s: %v", name, err)
 			http.Error(w, "failed to revoke comp", http.StatusInternalServerError)
 			return
@@ -238,7 +245,8 @@ func (s *Server) handleAdminListShards(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	records, err := s.store.ListShardsByBucket(id)
+	var records []store.ShardRecord
+	err = s.store.DB().Where("bucket_id = ?", id).Order("window_start DESC").Find(&records).Error
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

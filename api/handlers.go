@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -181,7 +182,10 @@ func (s *Server) StartUnverifiedSweep(ctx context.Context) {
 
 func (s *Server) sweepUnverified() {
 	cutoff := time.Now().Add(-auth.UnverifiedGracePeriod)
-	n, err := s.store.DeleteExpiredUnverifiedUsers(cutoff)
+	result := s.store.DB().
+		Where("email_verified_at IS NULL AND created_at < ?", cutoff).
+		Delete(&store.User{})
+	n, err := result.RowsAffected, result.Error
 	if err != nil {
 		log.Printf("unverified sweep: %v", err)
 		return
@@ -560,7 +564,12 @@ func (s *Server) handleResendVerification(w http.ResponseWriter, r *http.Request
 // skip the modal because /api/auth/me reports has_seen_welcome: true.
 func (s *Server) handleWelcomeDismiss(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if err := s.store.MarkWelcomeSeen(session.UserID); err != nil {
+	if err := s.store.DB().Model(&store.User{}).
+		Where("id = ? AND has_seen_welcome = FALSE", session.UserID).
+		Updates(map[string]any{
+			"has_seen_welcome": true,
+			"updated_at":       time.Now(),
+		}).Error; err != nil {
 		log.Printf("welcome-dismiss: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -684,7 +693,13 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			// unlocks mutating endpoints. No-op for users who were
 			// already verified (e.g. re-clicked the link later).
 			if user.EmailVerifiedAt == nil {
-				if err := s.store.MarkUserVerified(user.ID); err != nil {
+				verifiedNow := time.Now()
+				if err := s.store.DB().Model(&store.User{}).
+					Where("id = ? AND email_verified_at IS NULL", user.ID).
+					Updates(map[string]any{
+						"email_verified_at": &verifiedNow,
+						"updated_at":        verifiedNow,
+					}).Error; err != nil {
 					log.Printf("verify: mark verified for %s: %v", user.ID, err)
 				}
 				now := time.Now()
@@ -802,7 +817,10 @@ func (s *Server) ensureStripeCustomer(u *store.User, customerName string) (strin
 	if err != nil {
 		return "", err
 	}
-	if err := s.store.UpdateUserStripeCustomer(u.ID, cust.ID); err != nil {
+	if err := s.store.DB().Model(&store.User{}).Where("id = ?", u.ID).Updates(map[string]any{
+		"stripe_customer_id": cust.ID,
+		"updated_at":         time.Now(),
+	}).Error; err != nil {
 		return "", err
 	}
 	return cust.ID, nil
@@ -905,7 +923,12 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 	// Attach the Stripe subscription ID to our local trial row so refresh
 	// reuses the same subscription and the webhook can promote it on confirm.
 	if trial, _ := s.store.ActiveSubscription(session.ActiveCustomerID); trial != nil {
-		_ = s.store.AttachStripeSubscription(trial.ID, sub.ID)
+		_ = s.store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.Subscription{}).
+			Where("id = ?", trial.ID).
+			Updates(map[string]any{
+				"stripe_subscription_id": sub.ID,
+				"updated_at":             time.Now(),
+			}).Error
 	}
 
 	json.NewEncoder(w).Encode(map[string]string{
@@ -1058,7 +1081,14 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		// Only promote once the subscription is actually paying (not trialing
 		// without a PM, and not past_due).
 		if tier != "" && (sub.Status == stripe.SubscriptionStatusActive || sub.Status == stripe.SubscriptionStatusTrialing) {
-			if err := s.store.PromoteSubscriptionTier(sub.ID, tier); err != nil {
+			if err := s.store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.Subscription{}).
+				Where("stripe_subscription_id = ? AND comp_reason = ''", sub.ID).
+				Updates(map[string]any{
+					"tier":       tier,
+					"status":     "active",
+					"expires_at": nil,
+					"updated_at": time.Now(),
+				}).Error; err != nil {
 				log.Printf("failed to promote subscription %s: %v", sub.ID, err)
 			} else {
 				log.Printf("subscription promoted: stripe_sub=%s tier=%s status=%s", sub.ID, tier, sub.Status)
@@ -1077,7 +1107,12 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		if inv.Parent.SubscriptionDetails.Subscription != nil {
 			subID := inv.Parent.SubscriptionDetails.Subscription.ID
-			_ = s.store.SetSubscriptionStatus(subID, "past_due")
+			_ = s.store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.Subscription{}).
+				Where("stripe_subscription_id = ? AND comp_reason = ''", subID).
+				Updates(map[string]any{
+					"status":     "past_due",
+					"updated_at": time.Now(),
+				}).Error
 			log.Printf("subscription payment failed: stripe_sub=%s", subID)
 		}
 
@@ -1087,7 +1122,12 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Stripe webhook unmarshal error: %v", err)
 			break
 		}
-		if err := s.store.CancelSubscription(sub.ID); err != nil {
+		if err := s.store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.Subscription{}).
+			Where("stripe_subscription_id = ? AND comp_reason = ''", sub.ID).
+			Updates(map[string]any{
+				"status":     "cancelled",
+				"updated_at": time.Now(),
+			}).Error; err != nil {
 			log.Printf("failed to cancel subscription %s: %v", sub.ID, err)
 		} else {
 			log.Printf("subscription cancelled: %s", sub.ID)
@@ -1278,7 +1318,7 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.RevokeAgentToken(uint(id)); err != nil {
+	if err := s.store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.AgentToken{}).Where("id = ?", uint(id)).Update("revoked", true).Error; err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -1298,7 +1338,13 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleIngestionStatus(w http.ResponseWriter, r *http.Request) {
-	apps, err := s.store.UnresolvedIngestionApps()
+	var apps []string
+	err := s.store.DB().Raw(`
+		SELECT DISTINCT unnest(apps) AS app
+		FROM ingestion_errors
+		WHERE resolved_at IS NULL
+		AND occurred_at > NOW() - interval '1 hour'
+		ORDER BY app`).Scan(&apps).Error
 	if err != nil {
 		apps = []string{}
 	}
@@ -1621,7 +1667,18 @@ func (s *Server) handleWatchChart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	buckets, gran, err := s.store.QueryCronSeries(custID, watch.ID, time.Now().Add(-dur))
+	since := store.ClampRetention(s.store.TierForCustomer(custID), time.Now().Add(-dur))
+	gran := store.PickGranularity(time.Since(since))
+	var buckets []store.CronBucket
+	err = s.store.DB().Raw(`
+		SELECT bucket_start, tag, count, sum, sum_sq, min, max
+		FROM cron_results_all
+		WHERE granularity = ?
+		  AND cron_watch_id = ?
+		  AND bucket_start >= ?
+		ORDER BY bucket_start ASC`,
+		gran, watch.ID, since,
+	).Scan(&buckets).Error
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1824,8 +1881,8 @@ func (s *Server) handleRemoveTeamMember(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Can't remove self.
-	target, err := s.store.GetTeamMemberByID(id)
-	if err != nil {
+	var target store.TeamMember
+	if err := s.store.DB().WithContext(store.WithoutTenantScope(context.Background())).First(&target, "id = ?", id).Error; err != nil {
 		http.Error(w, "member not found", http.StatusNotFound)
 		return
 	}
@@ -1835,7 +1892,10 @@ func (s *Server) handleRemoveTeamMember(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Remove.
-	s.store.RemoveTeamMember(id)
+	s.store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.TeamMember{}).Where("id = ?", id).Updates(map[string]any{
+		"status":     "removed",
+		"updated_at": time.Now(),
+	})
 
 	// Membership is removed; user record itself is unchanged (the user
 	// may belong to other orgs).
@@ -1871,8 +1931,23 @@ func (s *Server) handleUpdateTeamName(w http.ResponseWriter, r *http.Request) {
 // handleDeviceInit creates a new device code for CLI authorization.
 // POST /api/auth/device → {"device_code": "...", "user_code": "XXXX-XX", "expires_in": 600}
 func (s *Server) handleDeviceInit(w http.ResponseWriter, r *http.Request) {
-	dc, err := s.store.CreateDeviceCode()
-	if err != nil {
+	deviceBytes := make([]byte, 16)
+	if _, err := rand.Read(deviceBytes); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	userBytes := make([]byte, 3)
+	if _, err := rand.Read(userBytes); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	dc := store.DeviceCode{
+		DeviceCode: fmt.Sprintf("%x", deviceBytes),
+		UserCode:   fmt.Sprintf("%X-%X", userBytes[:2], userBytes[2:]),
+		ExpiresAt:  time.Now().Add(10 * time.Minute),
+		CreatedAt:  time.Now(),
+	}
+	if err := s.store.DB().Create(&dc).Error; err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -1895,10 +1970,18 @@ func (s *Server) handleDevicePoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, err := s.store.PollDeviceCode(req.DeviceCode)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusGone)
+	var pollDC store.DeviceCode
+	var userID string
+	if err := s.store.DB().Where("device_code = ?", req.DeviceCode).First(&pollDC).Error; err != nil {
+		http.Error(w, "invalid device code", http.StatusGone)
 		return
+	}
+	if time.Now().After(pollDC.ExpiresAt) {
+		http.Error(w, "device code expired", http.StatusGone)
+		return
+	}
+	if pollDC.UserID != nil {
+		userID = *pollDC.UserID
 	}
 	if userID == "" {
 		json.NewEncoder(w).Encode(map[string]string{"status": "pending"})
@@ -1953,8 +2036,15 @@ func (s *Server) handleDeviceApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.ApproveDeviceCode(req.UserCode, session.UserID); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+	result := s.store.DB().Model(&store.DeviceCode{}).
+		Where("user_code = ? AND user_id IS NULL AND expires_at > ?", req.UserCode, time.Now()).
+		Update("user_id", session.UserID)
+	if result.RowsAffected == 0 {
+		http.Error(w, "device code not found or expired", http.StatusNotFound)
+		return
+	}
+	if result.Error != nil {
+		http.Error(w, result.Error.Error(), http.StatusNotFound)
 		return
 	}
 

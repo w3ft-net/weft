@@ -35,7 +35,21 @@ func New(store *store.Store, provider ShardProvider) *Poller {
 
 // Start begins polling all enabled log groups in background goroutines.
 func (p *Poller) Start(ctx context.Context) {
-	logGroups, err := p.store.EnabledLogGroups()
+	var logGroups []store.LogGroupWithAWSAccount
+	err := p.store.DB().
+		Table("log_groups").
+		Select(`log_groups.*,
+		        customers.name as customer_name,
+		        namespaces.name as namespace_name,
+		        aws_accounts.role_arn,
+		        aws_accounts.external_id,
+		        aws_accounts.account_id`).
+		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
+		Joins("JOIN customers ON namespaces.customer_id = customers.id").
+		Joins("JOIN aws_accounts ON log_groups.aws_account_id = aws_accounts.id").
+		Where("log_groups.enabled = ? AND log_groups.source_type = ? AND log_groups.status = ?",
+			true, store.SourceTypeCloudWatch, store.StatusConfigured).
+		Find(&logGroups).Error
 	if err != nil {
 		log.Printf("poller: failed to list log groups: %v", err)
 		return
@@ -163,6 +177,7 @@ func (p *Poller) poll(ctx context.Context, lg store.LogGroupWithAWSAccount) {
 	if ingested > 0 {
 		log.Printf("poller[%s]: ingested %d rows", lg.App, ingested)
 		now := time.Now().UTC().Format(time.RFC3339)
-		p.store.UpdatePollState(lg.ID, now, result.NextToken)
+		p.store.DB().Model(&store.LogGroup{}).Where("id = ?", lg.ID).
+			Updates(map[string]any{"last_poll_at": now, "last_token": result.NextToken})
 	}
 }

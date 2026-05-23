@@ -175,7 +175,15 @@ func (s *Store) ResolveShellFunctionRef(customerID uint, name, ref string) (*She
 				offset = n
 			}
 		}
-		return s.resolveByOffset(customerID, name, offset)
+		versions, err := s.LogShellFunction(customerID, name)
+		if err != nil {
+			return nil, err
+		}
+		if offset >= len(versions) {
+			return nil, fmt.Errorf("%w: HEAD^%d (only %d versions exist)", ErrRefNotFound, offset, len(versions))
+		}
+		v := versions[offset]
+		return &v, nil
 	}
 
 	// Hash prefix. Require ≥ 4 chars to avoid pathological matches.
@@ -185,34 +193,18 @@ func (s *Store) ResolveShellFunctionRef(customerID uint, name, ref string) (*She
 	if !isHexString(ref) {
 		return nil, fmt.Errorf("%w: %q", ErrInvalidRef, ref)
 	}
-	return s.resolveByHashPrefix(customerID, name, ref)
-}
-
-func (s *Store) resolveByOffset(customerID uint, name string, offset int) (*ShellFunctionVersion, error) {
-	versions, err := s.LogShellFunction(customerID, name)
-	if err != nil {
-		return nil, err
-	}
-	if offset >= len(versions) {
-		return nil, fmt.Errorf("%w: HEAD^%d (only %d versions exist)", ErrRefNotFound, offset, len(versions))
-	}
-	v := versions[offset]
-	return &v, nil
-}
-
-func (s *Store) resolveByHashPrefix(customerID uint, name, prefix string) (*ShellFunctionVersion, error) {
 	versions, err := s.LogShellFunction(customerID, name)
 	if err != nil {
 		return nil, err
 	}
 	var matches []ShellFunctionVersion
 	for _, v := range versions {
-		if strings.HasPrefix(v.ContentHash, prefix) {
+		if strings.HasPrefix(v.ContentHash, ref) {
 			matches = append(matches, v)
 		}
 	}
 	if len(matches) == 0 {
-		return nil, fmt.Errorf("%w: %s", ErrRefNotFound, prefix)
+		return nil, fmt.Errorf("%w: %s", ErrRefNotFound, ref)
 	}
 	if len(matches) > 1 {
 		// Build the candidate list at short-hash form for the error.
@@ -220,59 +212,9 @@ func (s *Store) resolveByHashPrefix(customerID uint, name, prefix string) (*Shel
 		for i, m := range matches {
 			cands[i] = m.ContentHash[:7]
 		}
-		return nil, fmt.Errorf("%w: %s matches %s", ErrAmbiguousHash, prefix, strings.Join(cands, ", "))
+		return nil, fmt.Errorf("%w: %s matches %s", ErrAmbiguousHash, ref, strings.Join(cands, ", "))
 	}
 	return &matches[0], nil
-}
-
-// ShellFunctionContent returns the source bytes of the named
-// function at the given ref — what `wit show <path> <ref>` prints.
-func (s *Store) ShellFunctionContent(customerID uint, name, ref string) (string, error) {
-	v, err := s.ResolveShellFunctionRef(customerID, name, ref)
-	if err != nil {
-		return "", err
-	}
-	return v.Source, nil
-}
-
-// CheckoutShellFunction makes the version at `ref` the new HEAD.
-// Internally writes via SaveShellFunction so the trigger fires;
-// the just-displaced live row drops into history. The content's
-// original author is preserved on the new HEAD via
-// created_by_user_id; userID is the user performing the checkout
-// and ends up in captured_by_user_id of the just-captured row.
-func (s *Store) CheckoutShellFunction(customerID uint, userID, name, ref string) error {
-	target, err := s.ResolveShellFunctionRef(customerID, name, ref)
-	if err != nil {
-		return err
-	}
-	// If HEAD already matches the target, nothing to do.
-	if target.IsHead {
-		return nil
-	}
-
-	// SaveShellFunction sets userID as the new HEAD's author. We want
-	// the new HEAD to keep the *original* author from `target`. Do
-	// the UPDATE directly with the fields we care about preserving.
-	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
-		// Always set, even for empty — see SaveShellFunction for why.
-		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
-			return err
-		}
-		updates := map[string]any{
-			"source":       target.Source,
-			"language":     target.Language,
-			"content_hash": target.ContentHash,
-			"message":      target.Message,
-			"updated_at":   time.Now(),
-		}
-		if target.AuthoredByUserID != nil {
-			updates["created_by_user_id"] = *target.AuthoredByUserID
-		}
-		return tx.Model(&ShellFunction{}).
-			Where("name = ?", name).
-			Updates(updates).Error
-	})
 }
 
 // AmendShellFunctionMessage sets the commit message on the version

@@ -14,6 +14,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -234,7 +235,10 @@ func seed(s *store.Store, tokensOut string) error {
 			for _, env := range c.Envs {
 				varName := tokenEnvVar(c.Name, app, env)
 				label := fmt.Sprintf("%s-%s-%s", c.Name, app, env)
-				_ = s.RevokeAgentTokensByLabel(cust.ID, label)
+				_ = s.DB().WithContext(store.WithCustomer(context.Background(), cust.ID)).
+					Model(&store.AgentToken{}).
+					Where("label = ? AND revoked = ?", label, false).
+					Update("revoked", true)
 				raw, _, err := s.CreateAgentToken(cust.ID, ns.ID, label, env)
 				if err != nil {
 					return fmt.Errorf("token %s: %w", label, err)
@@ -927,7 +931,7 @@ func grantLoomMemberships(s *store.Store, users []nonLoomUser) error {
 
 func resetDemo(s *store.Store) error {
 	for _, c := range spec {
-		if err := s.DeleteCustomerByName(c.Name); err != nil {
+		if err := s.DB().Unscoped().Where("name = ?", c.Name).Delete(&store.Customer{}).Error; err != nil {
 			return fmt.Errorf("delete customer %s: %w", c.Name, err)
 		}
 		log.Printf("deleted customer %s (cascade)", c.Name)

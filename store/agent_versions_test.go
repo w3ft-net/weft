@@ -22,8 +22,13 @@ func TestRecordAgentVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := db.RecordAgentVersion(tok.ID, "weftd/0.14.0+abc123"); err != nil {
-		t.Fatalf("RecordAgentVersion: %v", err)
+	now := time.Now()
+	if err := db.crossTenant().Model(&AgentToken{}).Where("id = ?", tok.ID).
+		Updates(map[string]any{
+			"last_seen_version": "weftd/0.14.0+abc123",
+			"last_seen_at":      &now,
+		}).Error; err != nil {
+		t.Fatalf("record agent version: %v", err)
 	}
 
 	// AgentsAtOrBelow returns this token when the version compares

@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -335,11 +334,11 @@ type CronWatch struct {
 	gorm.Model
 	CustomerID uint   `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
 	Name       string `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
-	Schedule   string `gorm:"not null"`        // "*/5 * * * *" or "every 1m"
+	Schedule   string `gorm:"not null"` // "*/5 * * * *" or "every 1m"
 	Pipeline   string `gorm:"type:text;not null"`
 	Enabled    bool   `gorm:"not null;default:true"`
 	LastRunAt  *time.Time
-	LastStatus string                           // "ok", "error", "stderr"
+	LastStatus string  // "ok", "error", "stderr"
 	AlertKey   *string `gorm:"column:alert_key"`
 	AlertTag   *string `gorm:"column:alert_tag"`
 	// AlertCondition + AlertThreshold are the dashboard projection of
@@ -347,7 +346,7 @@ type CronWatch struct {
 	// above/below/eq/neq — conditions without a single absolute
 	// threshold (rising/falling/changed/absent/any) leave both NULL.
 	AlertCondition  *string  `gorm:"column:alert_condition"`
-	AlertThreshold *float64 `gorm:"column:alert_threshold"`
+	AlertThreshold  *float64 `gorm:"column:alert_threshold"`
 	ContentHash     string   `gorm:"column:content_hash"`
 	Message         string   `gorm:"column:message"`
 	CreatedByUserID *string  `gorm:"column:created_by_user_id"`
@@ -421,22 +420,6 @@ func (s *Store) SaveCronWatch(customerID uint, userID, name, schedule, pipeline 
 			"lowered_plan":    loweredPlan,
 		}).Error
 	})
-}
-
-// RefreshWatchLoweredPlan updates only the lowered_plan column. Used
-// by the fire path's lazy-backfill branch: when the lowered_plan is
-// stale (e.g. a referenced /bin/ has been edited) or missing
-// (pre-migration row), the fire computes a fresh one inline and
-// writes it back without touching the pipeline string or content
-// hash.
-func (s *Store) RefreshWatchLoweredPlan(watchID uint, loweredPlan []byte) error {
-	// Fire-path lazy backfill: keyed by watch id on a watch the
-	// scheduler already loaded (via ListEnabledCronWatches). System
-	// actor, not a tenant — crossTenant.
-	return s.crossTenant().Model(&CronWatch{}).
-		Where("id = ?", watchID).
-		Update("lowered_plan", loweredPlan).
-		Error
 }
 
 // CompiledWatch holds the pre-parsed bits of an `alert` stage that we want
@@ -539,14 +522,6 @@ func (s *Store) ListCronWatches(customerID uint) ([]CronWatch, error) {
 	return watches, err
 }
 
-func (s *Store) ListEnabledCronWatches() ([]CronWatch, error) {
-	// The scheduler enumerates every customer's enabled watches — a
-	// deliberately cross-tenant read (the system fires them all).
-	var watches []CronWatch
-	err := s.crossTenant().Where("enabled = ?", true).Find(&watches).Error
-	return watches, err
-}
-
 func (s *Store) DeleteCronWatch(customerID uint, name string) error {
 	return s.scoped(customerID).Where("name = ?", name).Delete(&CronWatch{}).Error
 }
@@ -556,16 +531,6 @@ func (s *Store) CountCronWatches(customerID uint) (int, error) {
 	var count int64
 	err := s.scoped(customerID).Model(&CronWatch{}).Count(&count).Error
 	return int(count), err
-}
-
-func (s *Store) UpdateCronWatchRun(id uint, status string) error {
-	// Fire-path run-status write, keyed by id on an already-loaded
-	// watch. System actor — crossTenant.
-	now := time.Now()
-	return s.crossTenant().Model(&CronWatch{}).Where("id = ?", id).Updates(map[string]any{
-		"last_run_at": &now,
-		"last_status": status,
-	}).Error
 }
 
 // --- Cron Results ---
@@ -586,18 +551,6 @@ type CronResult struct {
 	DurationMs  int64
 	Value       *float64 `gorm:"type:double precision"`
 	Tag         string   `gorm:"type:text;not null;default:''"`
-}
-
-// SaveCronResult persists a single result row. Parses Stdout as a float into
-// Value when Value is unset and Stdout trims cleanly; otherwise leaves Value
-// as nil. Use SaveCronResults for the multi-row case.
-func (s *Store) SaveCronResult(result *CronResult) error {
-	if result.Value == nil {
-		if v, err := strconv.ParseFloat(strings.TrimSpace(result.Stdout), 64); err == nil {
-			result.Value = &v
-		}
-	}
-	return s.db.Create(result).Error
 }
 
 // SaveCronResults persists a batch of rows in one insert. Each row keeps
@@ -633,45 +586,6 @@ type CronAggStats struct {
 	Samples int
 }
 
-// CronAggregate returns avg/min/max/sample-count of cron_results.value for a
-// watch over [since, now), optionally scoped to a single tag. Runs as a
-// single SQL aggregate — alert uses this in place of loading rows and
-// reducing in Go. Pass tag="" for single-row mode (which stores tag='' by
-// default, so the filter still matches) or for cross-tag aggregates.
-//
-// Routes to the coarsest rollup tier whose data covers the requested
-// window — raw (0–7d), hourly (7–14d), 4h (14–35d), daily (>35d). Also
-// clamps `since` up to (now − LogRetention(tier)) so the API never
-// returns data past the caller's plan retention even while it sits on
-// disk. See docs/plans/retention-enforcement.md.
-func (s *Store) CronAggregate(customerID, cronWatchID uint, since time.Time, tag string) (CronAggStats, error) {
-	since = clampRetention(s.TierForCustomer(customerID), since)
-	gran := pickGranularity(time.Since(since))
-
-	var row struct {
-		Avg     *float64
-		Min     *float64
-		Max     *float64
-		Samples int
-	}
-	query := `
-		SELECT SUM(sum) / NULLIF(SUM(count), 0) AS avg,
-		       MIN(min)                         AS min,
-		       MAX(max)                         AS max,
-		       COALESCE(SUM(count), 0)          AS samples
-		FROM cron_results_all
-		WHERE granularity = ?
-		  AND cron_watch_id = ?
-		  AND bucket_start >= ?`
-	args := []any{gran, cronWatchID, since}
-	if tag != "" {
-		query += " AND tag = ?"
-		args = append(args, tag)
-	}
-	err := s.db.Raw(query, args...).Scan(&row).Error
-	return CronAggStats{Avg: row.Avg, Min: row.Min, Max: row.Max, Samples: row.Samples}, err
-}
-
 // CronBucket is one row of a (raw or rolled-up) series. For raw rows
 // Count is always 1 and {Sum, Min, Max} all equal the single Value.
 // For rollup rows they preserve exact avg/min/max/stddev through any
@@ -687,54 +601,6 @@ type CronBucket struct {
 	Max         float64
 }
 
-// QueryCronSeries returns one bucket per (tag, bucket_start) over
-// [since, now) at the coarsest granularity whose retention covers the
-// requested window. Powers the /watch/:name detail page — the chart
-// draws one point per bucket (avg = sum/count), and rollup rows also
-// carry min/max so the UI can shade a band when granularity != raw.
-//
-// `since` is clamped to (now − LogRetention(tier)) for the caller's
-// plan; rows on disk past that cap are invisible to the API.
-func (s *Store) QueryCronSeries(customerID, cronWatchID uint, since time.Time) ([]CronBucket, string, error) {
-	since = clampRetention(s.TierForCustomer(customerID), since)
-	gran := pickGranularity(time.Since(since))
-
-	var rows []CronBucket
-	err := s.db.Raw(`
-		SELECT bucket_start, tag, count, sum, sum_sq, min, max
-		FROM cron_results_all
-		WHERE granularity = ?
-		  AND cron_watch_id = ?
-		  AND bucket_start >= ?
-		ORDER BY bucket_start ASC`,
-		gran, cronWatchID, since,
-	).Scan(&rows).Error
-	return rows, gran, err
-}
-
-// CronNonEmptyCount returns how many rows in [since, now) had non-empty
-// stdout, optionally scoped to a tag. Used by `alert absent --duration
-// <dur>` to tell whether any data arrived in the window.
-//
-// Raw-only: rollups don't carry stdout. Windows past the raw retention
-// (7d) will return 0 regardless of actual history — if you need to ask
-// "was there ever any output in the last 30 days" you're outside what
-// the `absent` alert is designed for.
-func (s *Store) CronNonEmptyCount(customerID, cronWatchID uint, since time.Time, tag string) (int, error) {
-	since = clampRetention(s.TierForCustomer(customerID), since)
-	var n int64
-	query := `
-		SELECT COUNT(*) FROM cron_results
-		WHERE cron_watch_id = ? AND ran_at >= ? AND stdout <> ''`
-	args := []any{cronWatchID, since}
-	if tag != "" {
-		query += " AND tag = ?"
-		args = append(args, tag)
-	}
-	err := s.db.Raw(query, args...).Scan(&n).Error
-	return int(n), err
-}
-
 // QueryCronResults returns results for a named watch within a time range,
 // scoped to a customer. Used by weft.* functions in /bin/ scripts.
 //
@@ -746,17 +612,17 @@ func (s *Store) QueryCronResults(customerID uint, watchName string, since time.T
 	if err := s.scoped(customerID).Where("name = ?", watchName).First(&watch).Error; err != nil {
 		return nil, err
 	}
-	since = clampRetention(s.TierForCustomer(customerID), since)
+	since = ClampRetention(s.TierForCustomer(customerID), since)
 	var results []CronResult
 	err := s.db.Where("cron_watch_id = ? AND ran_at >= ?", watch.ID, since).
 		Order("ran_at DESC").Find(&results).Error
 	return results, err
 }
 
-// pickGranularity returns the coarsest rollup tier whose retention
+// PickGranularity returns the coarsest rollup tier whose retention
 // covers the requested window. Boundaries match the pg_partman
 // retention ceilings in migration 026.
-func pickGranularity(window time.Duration) string {
+func PickGranularity(window time.Duration) string {
 	switch {
 	case window <= 7*24*time.Hour:
 		return "raw"
@@ -769,11 +635,11 @@ func pickGranularity(window time.Duration) string {
 	}
 }
 
-// clampRetention pushes `since` forward to (now - LogRetention(tier))
+// ClampRetention pushes `since` forward to (now - LogRetention(tier))
 // when the requested window exceeds the plan's retention, so callers
 // never read rows older than the plan allows — even though the rows
 // may still exist on disk.
-func clampRetention(tier Tier, since time.Time) time.Time {
+func ClampRetention(tier Tier, since time.Time) time.Time {
 	cap := time.Now().Add(-LogRetention(tier))
 	if since.Before(cap) {
 		return cap
@@ -803,89 +669,6 @@ func (s *Store) TierForCustomer(customerID uint) Tier {
 		return ""
 	}
 	return Tier(tier)
-}
-
-// SeasonalCronStats returns avg/stddev/samples of cron_results.value
-// for the subset of results whose `ran_at` is at the same offset
-// modulo `period` as `now`, within the last `window`. Used by the
-// seasonal alert/predicate: e.g. period=1d window=4w compares the
-// current value against the four readings taken at this same hour
-// across the last four days.
-//
-// Tolerance is min(period/20, 5*time.Minute) — wide enough to catch a
-// natural cron jitter, narrow enough that we don't bleed neighbouring
-// buckets into the comparison set. Reads raw rows only (the rollup
-// tables are time-bucketed in a way that doesn't preserve same-time-
-// of-day grouping).
-func (s *Store) SeasonalCronStats(customerID uint, watchName string, period, window time.Duration) (avg, stddev float64, samples int, err error) {
-	var watch CronWatch
-	if err := s.scoped(customerID).Where("name = ?", watchName).First(&watch).Error; err != nil {
-		return 0, 0, 0, err
-	}
-	now := time.Now()
-	since := clampRetention(s.TierForCustomer(customerID), now.Add(-window))
-	tol := period / 20
-	if tol > 5*time.Minute {
-		tol = 5 * time.Minute
-	}
-	periodSec := period.Seconds()
-	tolSec := tol.Seconds()
-	var row struct {
-		Avg     *float64
-		Samples int
-	}
-	avgQ := `
-		SELECT AVG(value) AS avg, COUNT(*) AS samples
-		FROM cron_results
-		WHERE cron_watch_id = ?
-		  AND ran_at >= ?
-		  AND value IS NOT NULL
-		  AND LEAST(
-		        MOD(EXTRACT(EPOCH FROM (? - ran_at))::numeric, ?::numeric),
-		        ?::numeric - MOD(EXTRACT(EPOCH FROM (? - ran_at))::numeric, ?::numeric)
-		      ) <= ?`
-	if err := s.db.Raw(avgQ, watch.ID, since, now, periodSec, periodSec, now, periodSec, tolSec).Scan(&row).Error; err != nil {
-		return 0, 0, 0, err
-	}
-	samples = row.Samples
-	if samples == 0 || row.Avg == nil {
-		return 0, 0, samples, nil
-	}
-	avg = *row.Avg
-	// Sample stddev from the same row set, with one extra round-trip
-	// rather than complicating the first query.
-	var sd struct{ Stddev *float64 }
-	sdQ := `
-		SELECT STDDEV_SAMP(value) AS stddev
-		FROM cron_results
-		WHERE cron_watch_id = ?
-		  AND ran_at >= ?
-		  AND value IS NOT NULL
-		  AND LEAST(
-		        MOD(EXTRACT(EPOCH FROM (? - ran_at))::numeric, ?::numeric),
-		        ?::numeric - MOD(EXTRACT(EPOCH FROM (? - ran_at))::numeric, ?::numeric)
-		      ) <= ?`
-	if err := s.db.Raw(sdQ, watch.ID, since, now, periodSec, periodSec, now, periodSec, tolSec).Scan(&sd).Error; err != nil {
-		return avg, 0, samples, err
-	}
-	if sd.Stddev != nil {
-		stddev = *sd.Stddev
-	}
-	return avg, stddev, samples, nil
-}
-
-// LatestCronResult returns the most recent result for a named watch.
-func (s *Store) LatestCronResult(customerID uint, watchName string) (*CronResult, error) {
-	var watch CronWatch
-	if err := s.scoped(customerID).Where("name = ?", watchName).First(&watch).Error; err != nil {
-		return nil, err
-	}
-	var result CronResult
-	err := s.db.Where("cron_watch_id = ?", watch.ID).Order("ran_at DESC").First(&result).Error
-	if err != nil {
-		return nil, err
-	}
-	return &result, nil
 }
 
 // --- Notification Config ---
@@ -930,10 +713,6 @@ func (s *Store) GetNotifyConfig(customerID uint) (*NotifyConfig, error) {
 	return &nc, nil
 }
 
-func (s *Store) SaveSlackWebhook(customerID uint, webhook, teamName string) error {
-	return s.SaveSlackConfig(customerID, webhook, "", teamName)
-}
-
 func (s *Store) SaveSlackConfig(customerID uint, webhook, botToken, teamName string) error {
 	now := time.Now()
 	var nc NotifyConfig
@@ -955,13 +734,6 @@ func (s *Store) SaveSlackConfig(customerID uint, webhook, botToken, teamName str
 	}).Error
 }
 
-func (s *Store) DisconnectSlack(customerID uint) error {
-	return s.scoped(customerID).Model(&NotifyConfig{}).Updates(map[string]any{
-		"slack_webhook":   "",
-		"slack_team_name": "",
-	}).Error
-}
-
 // SaveNotifyAliases writes the raw /etc/notify.yaml YAML for a customer.
 // Callers must validate the YAML before invoking this.
 func (s *Store) SaveNotifyAliases(customerID uint, aliasesYAML string) error {
@@ -977,47 +749,6 @@ func (s *Store) SaveNotifyAliases(customerID uint, aliasesYAML string) error {
 }
 
 // ── PagerDuty integrations ─────────────────────────────
-
-// ListPagerDutyIntegrations returns all PD integrations for a customer.
-func (s *Store) ListPagerDutyIntegrations(customerID uint) ([]PagerDutyIntegration, error) {
-	var items []PagerDutyIntegration
-	err := s.scoped(customerID).Order("name").Find(&items).Error
-	return items, err
-}
-
-// GetPagerDutyIntegration returns a single integration by name.
-func (s *Store) GetPagerDutyIntegration(customerID uint, name string) (*PagerDutyIntegration, error) {
-	var item PagerDutyIntegration
-	err := s.scoped(customerID).Where("name = ?", name).First(&item).Error
-	if err != nil {
-		return nil, err
-	}
-	return &item, nil
-}
-
-// SavePagerDutyIntegration inserts or updates a PD integration by (customer, name).
-func (s *Store) SavePagerDutyIntegration(customerID uint, name, key string) error {
-	var item PagerDutyIntegration
-	result := s.scoped(customerID).Where("name = ?", name).First(&item)
-	if result.Error == gorm.ErrRecordNotFound {
-		return s.scoped(customerID).Create(&PagerDutyIntegration{
-			CustomerID:     customerID,
-			Name:           name,
-			IntegrationKey: key,
-		}).Error
-	}
-	return s.scoped(customerID).Model(&item).Update("integration_key", key).Error
-}
-
-// DeletePagerDutyIntegration removes a single integration by name.
-func (s *Store) DeletePagerDutyIntegration(customerID uint, name string) error {
-	return s.scoped(customerID).Where("name = ?", name).Delete(&PagerDutyIntegration{}).Error
-}
-
-// DeleteAllPagerDutyIntegrations clears all integrations for a customer.
-func (s *Store) DeleteAllPagerDutyIntegrations(customerID uint) error {
-	return s.scoped(customerID).Delete(&PagerDutyIntegration{}).Error
-}
 
 // RecordPagerDutySend marks an integration's last_used_at / last_error after
 // a dispatch attempt. sendErr may be empty on success.

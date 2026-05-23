@@ -44,7 +44,7 @@ func TestPrewarm_InsertsNextWindowRow_AndBumpsDesired(t *testing.T) {
 	if err := db.SaveBucket(bucketRec); err != nil {
 		t.Fatalf("SaveBucket: %v", err)
 	}
-	t.Cleanup(func() { _ = db.DeleteBucket(bucketRec.ID) })
+	t.Cleanup(func() { _ = db.DB().Delete(&store.Bucket{}, "id = ?", bucketRec.ID).Error })
 
 	// INGESTING shard close to WindowEnd — 1m away — with
 	// PrewarmLead=5m, this qualifies.

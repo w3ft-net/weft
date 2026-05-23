@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -138,7 +139,20 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 	}
 
 	namespace := r.URL.Query().Get("namespace")
-	sources, err := s.store.ListPendingLogGroups(customer.ID, namespace)
+	var sources []store.LogGroupWithAWSAccount
+	q := s.store.DB().
+		Table("log_groups").
+		Select(`log_groups.*,
+		        customers.name as customer_name,
+		        namespaces.name as namespace_name`).
+		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
+		Joins("JOIN customers ON namespaces.customer_id = customers.id").
+		Where("log_groups.status IN ? AND customers.id = ?",
+			[]store.LogGroupStatus{store.StatusSampling, store.StatusPending}, customer.ID)
+	if namespace != "" {
+		q = q.Where("namespaces.name = ?", namespace)
+	}
+	err = q.Order("namespaces.name, log_groups.app").Find(&sources).Error
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -270,7 +284,26 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	// Flip the pending row to configured. The existing (namespace_id, app)
 	// row is preserved — only status/schema_yaml/sample/detection change —
 	// so there's no window where the source doesn't exist in the table.
-	if err := s.store.ConfigureLogGroup(ns.ID, fullApp, string(schemaYAML)); err != nil {
+	if err := func() error {
+		res := s.store.DB().Model(&store.LogGroup{}).
+			Where("namespace_id = ? AND app = ? AND status IN ?",
+				ns.ID, fullApp, []store.LogGroupStatus{store.StatusPending, store.StatusConfigured}).
+			Updates(map[string]any{
+				"status":                store.StatusConfigured,
+				"schema_yaml":           string(schemaYAML),
+				"sample":                nil,
+				"detection":             nil,
+				"sample_collected":      0,
+				"resample_requested_at": nil,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}(); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			// The pending row disappeared between GetPendingLogGroup and
 			// the UPDATE — either a parallel configure won the race or
@@ -526,7 +559,20 @@ func (s *Server) handleResampleSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fullApp := namespace + "/" + app
-	if err := s.store.RequestResample(ns.ID, fullApp); err != nil {
+	if err := func() error {
+		now := time.Now()
+		res := s.store.DB().Model(&store.LogGroup{}).
+			Where("namespace_id = ? AND app = ? AND status = ?",
+				ns.ID, fullApp, store.StatusConfigured).
+			Update("resample_requested_at", now)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}(); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			http.Error(w, "source is not configured — nothing to resample", http.StatusConflict)
 			return

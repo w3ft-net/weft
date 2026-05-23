@@ -179,7 +179,7 @@ func TestWatchCreate_TierFromDB_NotJWT(t *testing.T) {
 	now := time.Now()
 	verified := now
 	user.EmailVerifiedAt = &verified
-	s.MarkUserVerified(user.ID)
+	markUserVerified(s, user.ID)
 	s.CreateTeamMember(&store.TeamMember{
 		ID: "tm-tdb-" + cust.Name, CustomerID: cust.ID, Email: user.Email,
 		UserID: &user.ID, Role: "owner", Status: "active",
@@ -325,7 +325,7 @@ func TestAuth_MarkVerified_UnlocksTokenCreation(t *testing.T) {
 	s.FindOrCreateNamespace(cust.ID, "default")
 
 	// Flip verified state, then reissue JWT.
-	if err := s.MarkUserVerified(user.ID); err != nil {
+	if err := markUserVerified(s, user.ID); err != nil {
 		t.Fatalf("mark verified: %v", err)
 	}
 	user, _ = s.GetUserByID(user.ID)
@@ -357,7 +357,12 @@ func TestAuth_Sweep_DeletesExpiredUnverifiedOnly(t *testing.T) {
 	// Cutoff one hour in the future sweeps ALL users whose EmailVerifiedAt
 	// is nil regardless of CreatedAt, so we don't have to surgically
 	// backdate rows to prove the delete targets the right set.
-	deleted, err := s.DeleteExpiredUnverifiedUsers(time.Now().Add(1 * time.Hour))
+	deleted, err := func() (int64, error) {
+		result := s.DB().
+			Where("email_verified_at IS NULL AND created_at < ?", time.Now().Add(1*time.Hour)).
+			Delete(&store.User{})
+		return result.RowsAffected, result.Error
+	}()
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -580,4 +585,16 @@ func TestOnboarding_StartTour_KeepsUserLoggedIn(t *testing.T) {
 	if step, _ := meAfter["onboarding_step"].(string); step != "downloads" {
 		t.Errorf("onboarding_step after advance: want downloads, got %q", step)
 	}
+}
+
+// markUserVerified inlines the former store.MarkUserVerified, which was
+// relocated into production callers. Stamps email_verified_at if unset.
+func markUserVerified(s *store.Store, userID string) error {
+	now := time.Now()
+	return s.DB().Model(&store.User{}).
+		Where("id = ? AND email_verified_at IS NULL", userID).
+		Updates(map[string]any{
+			"email_verified_at": &now,
+			"updated_at":        now,
+		}).Error
 }

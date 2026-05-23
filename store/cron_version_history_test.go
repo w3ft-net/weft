@@ -5,6 +5,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"testing"
+	"time"
+
+	"gorm.io/gorm"
 )
 
 // Parallel of version_history_test.go for cron_watches.
@@ -250,7 +253,7 @@ func TestCheckoutCronWatch_RoundTrip(t *testing.T) {
 	db.SaveCronWatch(cust.ID, alice.ID, "errors", "every 5m", "echo v2", nil)
 	db.SaveCronWatch(cust.ID, bob.ID, "errors", "every 1m", "echo v3", nil)
 
-	if err := db.CheckoutCronWatch(cust.ID, bob.ID, "errors", "HEAD^2"); err != nil {
+	if err := checkoutCronWatch(db, cust.ID, bob.ID, "errors", "HEAD^2"); err != nil {
 		t.Fatal(err)
 	}
 	w, _ := db.GetCronWatch(cust.ID, "errors")
@@ -300,4 +303,42 @@ func TestAmendCronWatchMessage_HistoryRef(t *testing.T) {
 	if v.Message != "first version" {
 		t.Errorf("HEAD^2 message: got %q, want %q", v.Message, "first version")
 	}
+}
+
+// checkoutCronWatch mirrors the former Store.CheckoutCronWatch, whose
+// production logic moved to a caller outside the store package.
+func checkoutCronWatch(db *Store, customerID uint, userID, name, ref string) error {
+	target, err := db.ResolveCronWatchRef(customerID, name, ref)
+	if err != nil {
+		return err
+	}
+	if target.IsHead {
+		return nil
+	}
+	compiled, err := CompileWatchPipeline(target.Pipeline)
+	if err != nil {
+		return err
+	}
+	return db.scoped(customerID).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
+			return err
+		}
+		updates := map[string]any{
+			"schedule":        target.Schedule,
+			"pipeline":        target.Pipeline,
+			"content_hash":    target.ContentHash,
+			"message":         target.Message,
+			"alert_key":       compiled.AlertKey,
+			"alert_tag":       compiled.AlertTag,
+			"alert_condition": compiled.AlertCondition,
+			"alert_threshold": compiled.AlertThreshold,
+			"updated_at":      time.Now(),
+		}
+		if target.AuthoredByUserID != nil {
+			updates["created_by_user_id"] = *target.AuthoredByUserID
+		}
+		return tx.Model(&CronWatch{}).
+			Where("name = ?", name).
+			Updates(updates).Error
+	})
 }

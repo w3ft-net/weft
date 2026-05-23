@@ -244,7 +244,7 @@ func TestCronAggregate_PicksTierByWindow(t *testing.T) {
 	}
 
 	// Short window (1d) → raw tier.
-	short, err := db.CronAggregate(cust.ID, watchID, time.Now().Add(-2*24*time.Hour), "")
+	short, err := cronAggregate(db, cust.ID, watchID, time.Now().Add(-2*24*time.Hour), "")
 	if err != nil {
 		t.Fatalf("CronAggregate short: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestCronAggregate_PicksTierByWindow(t *testing.T) {
 	// 12-day window → hourly tier. Raw rows from yesterday are NOT in
 	// hourly (they're still raw), so the only data is the hourly
 	// bucket we seeded — samples = 11 (count field), avg = 7.
-	long, err := db.CronAggregate(cust.ID, watchID, time.Now().Add(-12*24*time.Hour), "")
+	long, err := cronAggregate(db, cust.ID, watchID, time.Now().Add(-12*24*time.Hour), "")
 	if err != nil {
 		t.Fatalf("CronAggregate long: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestQueryCronSeries_PicksTierAndReturnsBuckets(t *testing.T) {
 	}
 
 	// Short window -> raw tier, two buckets with count=1 each.
-	buckets, gran, err := db.QueryCronSeries(cust.ID, watchID, time.Now().Add(-2*24*time.Hour))
+	buckets, gran, err := queryCronSeries(db, cust.ID, watchID, time.Now().Add(-2*24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +332,7 @@ func TestQueryCronSeries_PicksTierAndReturnsBuckets(t *testing.T) {
 	}
 
 	// 12-day window -> hourly tier, hits the seeded rollup row.
-	buckets, gran, err = db.QueryCronSeries(cust.ID, watchID, time.Now().Add(-12*24*time.Hour))
+	buckets, gran, err = queryCronSeries(db, cust.ID, watchID, time.Now().Add(-12*24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,11 +387,65 @@ func TestCronAggregate_ClampsToPlanRetention(t *testing.T) {
 
 	// Request a 60d window — should clamp to 30d, returning only the
 	// 20d-old row (10 samples). The 45d row is hidden by retention.
-	stats, err := db.CronAggregate(cust.ID, watchID, time.Now().Add(-60*24*time.Hour), "")
+	stats, err := cronAggregate(db, cust.ID, watchID, time.Now().Add(-60*24*time.Hour), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stats.Samples != 10 {
 		t.Errorf("swatch 60d → expected 10 samples (30d clamp), got %d", stats.Samples)
 	}
+}
+
+// --- helpers for cron-aggregate store methods relocated out of the store package ---
+//
+// Production logic moved to callers outside the store package. These
+// test-local helpers reproduce the original method bodies verbatim
+// (parameterized on db) so the rollup tests keep exercising the same
+// behaviour.
+
+// cronAggregate mirrors the former Store.CronAggregate.
+func cronAggregate(db *Store, customerID, cronWatchID uint, since time.Time, tag string) (CronAggStats, error) {
+	since = ClampRetention(db.TierForCustomer(customerID), since)
+	gran := PickGranularity(time.Since(since))
+
+	var row struct {
+		Avg     *float64
+		Min     *float64
+		Max     *float64
+		Samples int
+	}
+	query := `
+		SELECT SUM(sum) / NULLIF(SUM(count), 0) AS avg,
+		       MIN(min)                         AS min,
+		       MAX(max)                         AS max,
+		       COALESCE(SUM(count), 0)          AS samples
+		FROM cron_results_all
+		WHERE granularity = ?
+		  AND cron_watch_id = ?
+		  AND bucket_start >= ?`
+	args := []any{gran, cronWatchID, since}
+	if tag != "" {
+		query += " AND tag = ?"
+		args = append(args, tag)
+	}
+	err := db.db.Raw(query, args...).Scan(&row).Error
+	return CronAggStats{Avg: row.Avg, Min: row.Min, Max: row.Max, Samples: row.Samples}, err
+}
+
+// queryCronSeries mirrors the former Store.QueryCronSeries.
+func queryCronSeries(db *Store, customerID, cronWatchID uint, since time.Time) ([]CronBucket, string, error) {
+	since = ClampRetention(db.TierForCustomer(customerID), since)
+	gran := PickGranularity(time.Since(since))
+
+	var rows []CronBucket
+	err := db.db.Raw(`
+		SELECT bucket_start, tag, count, sum, sum_sq, min, max
+		FROM cron_results_all
+		WHERE granularity = ?
+		  AND cron_watch_id = ?
+		  AND bucket_start >= ?
+		ORDER BY bucket_start ASC`,
+		gran, cronWatchID, since,
+	).Scan(&rows).Error
+	return rows, gran, err
 }

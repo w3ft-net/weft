@@ -8,6 +8,41 @@ import (
 	"github.com/kevlarcon/weft/store"
 )
 
+// readTmpFile reconstructs the byte contents of a tmp file via the
+// exported store surface. It mirrors the logic that formerly lived in
+// store.ReadTmpFile, which was relocated into production callers.
+func readTmpFile(db *store.Store, customerID uint, path string) ([]byte, error) {
+	f, err := db.GetTmpFile(customerID, path)
+	if err != nil {
+		return nil, err
+	}
+	if f.IsDir {
+		return nil, store.ErrTmpIsDir
+	}
+	if f.LineCount == 0 {
+		return []byte{}, nil
+	}
+	var lines []store.TmpFileLine
+	if err := db.DB().Where("file_id = ?", f.ID).
+		Order("line_num").Find(&lines).Error; err != nil {
+		return nil, err
+	}
+	var b strings.Builder
+	b.Grow(int(f.ByteSize))
+	for i, ln := range lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(ln.Content)
+	}
+	// If the writer supplied a trailing newline, byte_size > joined
+	// length by exactly one. Restore it so `cat` round-trips cleanly.
+	if int64(b.Len()) < f.ByteSize {
+		b.WriteByte('\n')
+	}
+	return []byte(b.String()), nil
+}
+
 // TestCoordinatorQuery_LogQueryRedirectToTmp covers the second shape
 // the user flagged: a full log-query pipeline whose output is
 // redirected into /tmp. The fix for `cat /etc/...` routes through
@@ -41,7 +76,7 @@ func TestCoordinatorQuery_LogQueryRedirectToTmp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := c.Store.ReadTmpFile(cust.ID, tmpPath)
+	data, err := readTmpFile(c.Store, cust.ID, tmpPath)
 	if err != nil {
 		t.Fatalf("read /tmp/errs back: %v (the redirect was probably dropped)", err)
 	}
@@ -98,7 +133,7 @@ func TestCoordinatorQuery_CatRedirectFromEtcToTmp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read back /tmp/notify.yaml: %v", err)
 	}
-	got, err := db.ReadTmpFile(custID, "/tmp/notify.yaml")
+	got, err := readTmpFile(db, custID, "/tmp/notify.yaml")
 	if err != nil {
 		t.Fatalf("ReadTmpFile: %v", err)
 	}

@@ -105,20 +105,6 @@ func (s *Store) ListShards() ([]ShardRecord, error) {
 	return records, err
 }
 
-// ListShardsByBucket returns shard records for a bucket, newest window first.
-func (s *Store) ListShardsByBucket(bucketID int64) ([]ShardRecord, error) {
-	var records []ShardRecord
-	err := s.db.Where("bucket_id = ?", bucketID).Order("window_start DESC").Find(&records).Error
-	return records, err
-}
-
-// ListShardsByState returns shard records with the given state.
-func (s *Store) ListShardsByState(state string) ([]ShardRecord, error) {
-	var records []ShardRecord
-	err := s.db.Where("state = ?", state).Find(&records).Error
-	return records, err
-}
-
 // ── LAUNCHING lifecycle ──────────────────────────────────────
 
 // ClaimLaunchingForTier atomically claims the oldest LAUNCHING row for

@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"log"
+	"strings"
 
 	"github.com/kevlarcon/weft/store"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
@@ -61,9 +62,14 @@ func (r *IngestionErrorRecorder) Record(shardID, errMsg string, rows []*pb.LogRo
 
 func (r *IngestionErrorRecorder) flush() {
 	for ie := range r.ch {
-		if err := r.store.RecordIngestionError(
-			ie.ShardID, ie.ErrorMsg, ie.RowCount, ie.Apps, ie.Customers, ie.DLQPath,
-		); err != nil {
+		if err := r.store.DB().Exec(`
+			INSERT INTO ingestion_errors (shard_id, error_msg, row_count, apps, customers, dlq_path)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			ie.ShardID, ie.ErrorMsg, ie.RowCount,
+			"{"+strings.Join(ie.Apps, ",")+"}",
+			"{"+strings.Join(ie.Customers, ",")+"}",
+			ie.DLQPath,
+		).Error; err != nil {
 			log.Printf("ingestion-errors: failed to persist: %v", err)
 		}
 	}

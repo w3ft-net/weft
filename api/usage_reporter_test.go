@@ -64,7 +64,10 @@ func seedReporterFixtures(t *testing.T, srv *Server, s *store.Store, customerNam
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateUserStripeCustomer(user.ID, "cus_"+customerName); err != nil {
+	if err := s.DB().Model(&store.User{}).Where("id = ?", user.ID).Updates(map[string]any{
+		"stripe_customer_id": "cus_" + customerName,
+		"updated_at":         time.Now(),
+	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := s.CreateSubscription(&store.Subscription{
@@ -79,10 +82,15 @@ func seedReporterFixtures(t *testing.T, srv *Server, s *store.Store, customerNam
 
 	// Seed usage_daily directly. The reporter reads from here; the
 	// rollup plumbing is out of scope for this test.
-	if err := s.UpsertUsageHourly(customerName, yesterday.Add(12*time.Hour), bytes); err != nil {
+	if err := s.DB().Exec(`
+		INSERT INTO usage_hourly (customer_name, hour, bytes_ingested)
+		VALUES (?, ?, ?)
+		ON CONFLICT (customer_name, hour) DO UPDATE
+		SET bytes_ingested = usage_hourly.bytes_ingested + EXCLUDED.bytes_ingested`,
+		customerName, yesterday.Add(12*time.Hour), bytes).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CallRollupUsageDaily(); err != nil {
+	if err := s.DB().Exec("CALL public.rollup_usage_daily()").Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -153,7 +161,7 @@ func TestUsageReporter_PostsAndAudits(t *testing.T) {
 	}
 
 	// Audit row must exist.
-	has, err := s.HasUsageReportFor("reporter-test-co", yesterday)
+	has, err := hasUsageReportFor(s, "reporter-test-co", yesterday)
 	if err != nil || !has {
 		t.Errorf("audit row missing after success (has=%v, err=%v)", has, err)
 	}
@@ -189,7 +197,7 @@ func TestUsageReporter_StripeFailureLeavesNoAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	has, err := s.HasUsageReportFor("reporter-fail-co", yesterday)
+	has, err := hasUsageReportFor(s, "reporter-fail-co", yesterday)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +213,7 @@ func TestUsageReporter_StripeFailureLeavesNoAudit(t *testing.T) {
 	if len(fake.events) != 1 {
 		t.Errorf("expected 1 retry event after recovery, got %d", len(fake.events))
 	}
-	has, _ = s.HasUsageReportFor("reporter-fail-co", yesterday)
+	has, _ = hasUsageReportFor(s, "reporter-fail-co", yesterday)
 	if !has {
 		t.Errorf("audit row missing after successful retry")
 	}
@@ -236,7 +244,7 @@ func TestUsageReporter_SkipsWhenNoOveragePrice(t *testing.T) {
 	if len(fake.events) != 0 {
 		t.Errorf("flat-only tier posted %d events, want 0", len(fake.events))
 	}
-	has, _ := s.HasUsageReportFor("reporter-flat-only", yesterday)
+	has, _ := hasUsageReportFor(s, "reporter-flat-only", yesterday)
 	if has {
 		t.Errorf("audit row written for flat-only tier — should have been skipped")
 	}
@@ -258,4 +266,17 @@ func TestNextReportTime(t *testing.T) {
 	if !got.Equal(want) {
 		t.Errorf("after 03:00: got %s, want %s", got, want)
 	}
+}
+
+// hasUsageReportFor inlines the former store.HasUsageReportFor, which was
+// relocated into production callers. Reports whether an audit row exists
+// for (customer, day).
+func hasUsageReportFor(s *store.Store, customerName string, day time.Time) (bool, error) {
+	var n int64
+	err := s.DB().Raw(`
+		SELECT COUNT(*) FROM stripe_usage_reports
+		WHERE customer_name = ? AND day = ?::date`,
+		customerName, day,
+	).Scan(&n).Error
+	return n > 0, err
 }

@@ -41,8 +41,8 @@ func TestRemoveAndReAddLogGroup(t *testing.T) {
 	}
 
 	// Remove (user clicks "Remove")
-	if err := db.RemoveLogGroup(ns.ID, app); err != nil {
-		t.Fatalf("RemoveLogGroup: %v", err)
+	if err := db.DB().Unscoped().Where("namespace_id = ? AND app = ?", ns.ID, app).Delete(&LogGroup{}).Error; err != nil {
+		t.Fatalf("remove log group: %v", err)
 	}
 
 	// Re-configure (user picks the source up again from pending)

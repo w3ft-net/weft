@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -129,7 +130,12 @@ func (s *Server) graduateOnboarding(userID string) error {
 		return err
 	}
 
-	if err := s.store.RemoveTeamMemberByUserAndCustomer(userID, cust.ID); err != nil {
+	if err := s.store.DB().WithContext(store.WithCustomer(context.Background(), cust.ID)).Model(&store.TeamMember{}).
+		Where("user_id = ?", userID).
+		Updates(map[string]any{
+			"status":     "removed",
+			"updated_at": time.Now(),
+		}).Error; err != nil {
 		return err
 	}
 
@@ -211,7 +217,10 @@ func (s *Server) handleOnboardingAdvance(w http.ResponseWriter, r *http.Request)
 // switcher) but the welcome modal and tour overlays go quiet.
 func (s *Server) handleOnboardingDismiss(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if err := s.store.DismissOnboarding(session.UserID); err != nil {
+	if err := s.store.DB().Model(&store.User{}).Where("id = ?", session.UserID).Updates(map[string]any{
+		"onboarding_dismissed": true,
+		"updated_at":           time.Now(),
+	}).Error; err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

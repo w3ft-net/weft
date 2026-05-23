@@ -167,27 +167,6 @@ func (ts *tenantScoping) guardCreate(db *gorm.DB) {
 	}
 }
 
-// enrollTenantModels declares which models are tenant-scoped. The list
-// is intentionally empty for now: the enforcement machinery exists but
-// no production model is enrolled yet, so behavior is unchanged.
-// Models are enrolled here as their call sites are migrated to pass
-// the customer through context (see WithCustomer).
-func (s *Store) enrollTenantModels() {
-	s.tenant.enroll(s.db,
-		&Dashboard{},
-		&ShellFunction{},
-		&OrgPermission{},
-		&NotifyConfig{},
-		&PagerDutyIntegration{},
-		&CronWatch{},
-		&TmpFile{},
-		&Subscription{},
-		&TeamMember{},
-		&AgentToken{},
-		&Namespace{},
-	)
-}
-
 // DB exposes the underlying *gorm.DB. Tenant-scoped (enrolled) models
 // must be reached through DB().WithContext(WithCustomer(ctx, id)) so
 // the scoping callbacks can constrain the query — unscoped access to

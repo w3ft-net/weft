@@ -2,7 +2,6 @@ package store
 
 import (
 	"errors"
-	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -67,8 +66,8 @@ const (
 // agent submission.
 type LogGroup struct {
 	gorm.Model
-	NamespaceID  uint               `gorm:"not null;uniqueIndex:idx_ns_app"`
-	Namespace    Namespace          `gorm:"foreignKey:NamespaceID;constraint:OnDelete:CASCADE"`
+	NamespaceID uint      `gorm:"not null;uniqueIndex:idx_ns_app"`
+	Namespace   Namespace `gorm:"foreignKey:NamespaceID;constraint:OnDelete:CASCADE"`
 	// CustomerID is denormalized from the owning namespace (migration
 	// 054) so log_groups can be tenant-scoped directly. Read-only to
 	// GORM (`->`): the BEFORE INSERT trigger fills it from namespace_id,
@@ -101,26 +100,6 @@ type LogGroup struct {
 	// concurrently and the fresh sample lands in Sample/Detection. The
 	// coordinator clears this on the final (non-partial) resample submit.
 	ResampleRequestedAt *time.Time
-}
-
-// FindOrCreateAWSAccount returns the AWS-account registration, creating or
-// updating credentials if needed. accountID is the 12-digit AWS account
-// number; roleARN is the cross-account role the coordinator will assume.
-func (s *Store) FindOrCreateAWSAccount(customerID uint, accountID, roleARN, externalID string) (*AWSAccount, error) {
-	var a AWSAccount
-	result := s.db.Where("customer_id = ? AND account_id = ?", customerID, accountID).First(&a)
-	if result.Error == gorm.ErrRecordNotFound {
-		a = AWSAccount{
-			CustomerID: customerID,
-			AccountID:  accountID,
-			RoleARN:    roleARN,
-			ExternalID: externalID,
-		}
-		result = s.db.Create(&a)
-	} else if result.Error == nil {
-		result = s.db.Model(&a).Updates(AWSAccount{RoleARN: roleARN, ExternalID: externalID})
-	}
-	return &a, result.Error
 }
 
 // AddLogGroup creates or updates a configured log group source. Ownership
@@ -161,52 +140,6 @@ func (s *Store) AddLogGroup(namespaceID uint, awsAccountID *uint, sourceType Log
 	}).Error
 }
 
-// CustomerAppNames returns the distinct app names visible to the
-// customer — the union of every enabled, configured log_groups row
-// in any namespace they own. Used by the glob expander to enumerate
-// pseudofile candidates for `cat /log/<ns>/*.log`-style patterns.
-func (s *Store) CustomerAppNames(customerID uint) ([]string, error) {
-	var names []string
-	err := s.db.Model(&LogGroup{}).
-		Joins("JOIN namespaces ON namespaces.id = log_groups.namespace_id").
-		Where("namespaces.customer_id = ? AND log_groups.enabled = ? AND log_groups.status = ?",
-			customerID, true, StatusConfigured).
-		Distinct().Pluck("log_groups.app", &names).Error
-	return names, err
-}
-
-// CustomerHasSource reports whether the customer owns the namespace
-// referenced by the leading '/'-segment of app. An empty app means
-// "all sources for this customer" (cat warp.log) and is always allowed —
-// the customer WHERE clause already gates the result set.
-func (s *Store) CustomerHasSource(customerID uint, app string) (bool, error) {
-	if app == "" {
-		return true, nil
-	}
-	ns := app
-	if i := strings.IndexByte(app, '/'); i >= 0 {
-		ns = app[:i]
-	}
-	var count int64
-	err := s.scoped(customerID).Model(&Namespace{}).
-		Where("name = ?", ns).
-		Count(&count).Error
-	return count > 0, err
-}
-
-// RemoveLogGroup deletes a log group by (namespace_id, app). Scoped to a
-// namespace so one customer can't delete another customer's source by
-// guessing an app name.
-//
-// Uses Unscoped() to hard-delete rather than GORM's default soft-delete.
-// Without it, the row sits in the table with deleted_at != NULL but
-// still participates in the plain unique index idx_ns_app on
-// (namespace_id, app), so a later re-add of the same source would
-// trip a 23505 unique-constraint violation. "Remove" means gone.
-func (s *Store) RemoveLogGroup(namespaceID uint, app string) error {
-	return s.db.Unscoped().Where("namespace_id = ? AND app = ?", namespaceID, app).Delete(&LogGroup{}).Error
-}
-
 // LogGroupWithAWSAccount is a joined result for the poller and list paths.
 // AWS-account-scoped fields (RoleARN, ExternalID, AccountID) are only
 // populated for cloudwatch sources; weftd sources leave them empty since
@@ -218,29 +151,6 @@ type LogGroupWithAWSAccount struct {
 	RoleARN       string
 	ExternalID    string
 	AccountID     string // 12-digit AWS account number
-}
-
-// EnabledLogGroups returns enabled, configured cloudwatch log groups with
-// customer/account info. Weftd sources are excluded because the poller
-// doesn't drive them; pending rows are excluded because they have no
-// schema to poll against.
-func (s *Store) EnabledLogGroups() ([]LogGroupWithAWSAccount, error) {
-	var results []LogGroupWithAWSAccount
-	err := s.db.
-		Table("log_groups").
-		Select(`log_groups.*,
-		        customers.name as customer_name,
-		        namespaces.name as namespace_name,
-		        aws_accounts.role_arn,
-		        aws_accounts.external_id,
-		        aws_accounts.account_id`).
-		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
-		Joins("JOIN customers ON namespaces.customer_id = customers.id").
-		Joins("JOIN aws_accounts ON log_groups.aws_account_id = aws_accounts.id").
-		Where("log_groups.enabled = ? AND log_groups.source_type = ? AND log_groups.status = ?",
-			true, SourceTypeCloudWatch, StatusConfigured).
-		Find(&results).Error
-	return results, err
 }
 
 // AllLogGroups returns configured log groups with customer/namespace info.
@@ -264,48 +174,6 @@ func (s *Store) AllLogGroups() ([]LogGroupWithAWSAccount, error) {
 		Order("customers.name, namespaces.name, log_groups.app").
 		Find(&results).Error
 	return results, err
-}
-
-// SourceIsConfigured reports whether a configured log_groups row exists
-// for (customerName, namespace, app) and returns its SchemaYAML. Pending
-// rows return (false, "", nil). Used by handleAgentSourceStatus to tell
-// weftd "you may start streaming" vs "wait for human review".
-func (s *Store) SourceIsConfigured(customerName, namespace, app string) (bool, string, error) {
-	fullApp := namespace + "/" + app
-	var lg LogGroup
-	result := s.db.
-		Table("log_groups").
-		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
-		Joins("JOIN customers ON namespaces.customer_id = customers.id").
-		Where("customers.name = ? AND log_groups.app = ? AND log_groups.status = ?",
-			customerName, fullApp, StatusConfigured).
-		First(&lg)
-	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-		return false, "", nil
-	}
-	if result.Error != nil {
-		return false, "", result.Error
-	}
-	return true, lg.SchemaYAML, nil
-}
-
-// UpdatePollState saves the last poll timestamp and pagination token for
-// the given log_groups row id. Keyed by id rather than app since app is
-// only unique within a namespace.
-func (s *Store) UpdatePollState(id uint, lastPollAt, lastToken string) error {
-	return s.db.Model(&LogGroup{}).Where("id = ?", id).
-		Updates(map[string]any{"last_poll_at": lastPollAt, "last_token": lastToken}).Error
-}
-
-// AppNames returns distinct app names from enabled, configured log groups.
-// Pending rows are deliberately excluded — they have no schema and no
-// routable data.
-func (s *Store) AppNames() ([]string, error) {
-	var names []string
-	err := s.db.Model(&LogGroup{}).
-		Where("enabled = ? AND status = ?", true, StatusConfigured).
-		Distinct().Pluck("app", &names).Error
-	return names, err
 }
 
 // ── Pending log groups ─────────────────────────────────────────
@@ -390,98 +258,6 @@ func (s *Store) UpsertPendingLogGroup(namespaceID uint, app, instance, deploymen
 		"detection":        detectionJSON,
 		"sample_collected": collected,
 	}).Error
-}
-
-// GetPendingLogGroup returns the pending row for (namespace_id, app) or
-// nil if none exists (including the case where the row is already
-// configured — callers that want the row regardless should read the
-// table directly).
-func (s *Store) GetPendingLogGroup(namespaceID uint, app string) (*LogGroup, error) {
-	var lg LogGroup
-	err := s.db.Where("namespace_id = ? AND app = ? AND status IN ?",
-		namespaceID, app, []LogGroupStatus{StatusSampling, StatusPending}).First(&lg).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &lg, nil
-}
-
-// ListPendingLogGroups returns all pending rows for the customer,
-// optionally filtered to a single namespace. Uses LogGroupWithAWSAccount
-// for consistency with the configured-list path — AWS fields are always
-// empty for pending rows (weftd-only today).
-func (s *Store) ListPendingLogGroups(customerID uint, namespace string) ([]LogGroupWithAWSAccount, error) {
-	var results []LogGroupWithAWSAccount
-	q := s.db.
-		Table("log_groups").
-		Select(`log_groups.*,
-		        customers.name as customer_name,
-		        namespaces.name as namespace_name`).
-		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
-		Joins("JOIN customers ON namespaces.customer_id = customers.id").
-		Where("log_groups.status IN ? AND customers.id = ?",
-			[]LogGroupStatus{StatusSampling, StatusPending}, customerID)
-	if namespace != "" {
-		q = q.Where("namespaces.name = ?", namespace)
-	}
-	err := q.Order("namespaces.name, log_groups.app").Find(&results).Error
-	return results, err
-}
-
-// ConfigureLogGroup applies a schema to a source and marks it configured.
-// It serves two cases:
-//   - a pending source being configured for the first time, and
-//   - an already-configured source whose schema is being swapped after a
-//     resample (the row stayed configured and kept ingesting; this is the
-//     non-disruptive switchover to the new schema).
-//
-// Sample/detection and any resample flag/progress are cleared; instance
-// and deployment are preserved as provenance. A StatusSampling row is not
-// matched — it has no full sample yet, so there's nothing to configure.
-// Returns gorm.ErrRecordNotFound if no eligible row matches.
-func (s *Store) ConfigureLogGroup(namespaceID uint, app, schemaYAML string) error {
-	res := s.db.Model(&LogGroup{}).
-		Where("namespace_id = ? AND app = ? AND status IN ?",
-			namespaceID, app, []LogGroupStatus{StatusPending, StatusConfigured}).
-		Updates(map[string]any{
-			"status":                StatusConfigured,
-			"schema_yaml":           schemaYAML,
-			"sample":                nil,
-			"detection":             nil,
-			"sample_collected":      0,
-			"resample_requested_at": nil,
-		})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
-}
-
-// RequestResample marks a configured source for a fresh sample. The row
-// stays configured and keeps ingesting on its current schema; the agent
-// picks up the flag on its next status poll, re-samples concurrently with
-// its tailer, and resubmits. Returns gorm.ErrRecordNotFound if no
-// configured row matches (only configured sources can be resampled — a
-// pending/sampling source is already producing a fresh sample).
-func (s *Store) RequestResample(namespaceID uint, app string) error {
-	now := time.Now()
-	res := s.db.Model(&LogGroup{}).
-		Where("namespace_id = ? AND app = ? AND status = ?",
-			namespaceID, app, StatusConfigured).
-		Update("resample_requested_at", now)
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
 }
 
 // FindLogGroup returns the single log_groups row for (customer, namespace,

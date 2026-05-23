@@ -3,11 +3,25 @@ package coordinator
 import (
 	"math"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/kevlarcon/weft/store"
 )
+
+// saveCronResult persists a cron result via the exported store
+// surface. It mirrors the logic that formerly lived in
+// store.SaveCronResult, which was relocated into production callers.
+func saveCronResult(db *store.Store, result *store.CronResult) error {
+	if result.Value == nil {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(result.Stdout), 64); err == nil {
+			result.Value = &v
+		}
+	}
+	return db.DB().Create(result).Error
+}
 
 func testStoreAndCustomer(t *testing.T) (*store.Store, uint) {
 	t.Helper()
@@ -129,7 +143,7 @@ func seedWatch(t *testing.T, db *store.Store, custID uint, name string, values [
 	}
 	now := time.Now()
 	for i, v := range values {
-		err := db.SaveCronResult(&store.CronResult{
+		err := saveCronResult(db, &store.CronResult{
 			CronWatchID: w.ID,
 			RanAt:       now.Add(-time.Duration(len(values)-1-i) * interval),
 			Stdout:      v,
@@ -304,7 +318,7 @@ func TestWeftFuncs_TimeRangeFiltering(t *testing.T) {
 
 	// Old values (2h ago) — should be excluded from 30m query.
 	for _, v := range []string{"100", "200"} {
-		db.SaveCronResult(&store.CronResult{
+		saveCronResult(db, &store.CronResult{
 			CronWatchID: w.ID,
 			RanAt:       now.Add(-2 * time.Hour),
 			Stdout:      v,
@@ -312,7 +326,7 @@ func TestWeftFuncs_TimeRangeFiltering(t *testing.T) {
 	}
 	// Recent values (5m ago) — should be included.
 	for _, v := range []string{"10", "20"} {
-		db.SaveCronResult(&store.CronResult{
+		saveCronResult(db, &store.CronResult{
 			CronWatchID: w.ID,
 			RanAt:       now.Add(-5 * time.Minute),
 			Stdout:      v,

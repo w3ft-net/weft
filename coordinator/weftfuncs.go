@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sort"
@@ -40,7 +41,18 @@ type SeasonalStatsResult struct {
 }
 
 func (w *WeftFuncs) Latest(watchName string) (string, error) {
-	r, err := w.Store.LatestCronResult(w.CustomerID, watchName)
+	r, err := func(customerID uint, watchName string) (*store.CronResult, error) {
+		var watch store.CronWatch
+		if err := w.Store.DB().WithContext(store.WithCustomer(context.Background(), customerID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
+			return nil, err
+		}
+		var result store.CronResult
+		err := w.Store.DB().Where("cron_watch_id = ?", watch.ID).Order("ran_at DESC").First(&result).Error
+		if err != nil {
+			return nil, err
+		}
+		return &result, nil
+	}(w.CustomerID, watchName)
 	if err != nil {
 		return "", fmt.Errorf("weft::latest: watch %q: %w", watchName, err)
 	}
@@ -270,7 +282,60 @@ func (w *WeftFuncs) SeasonalStats(watchName string, period, window time.Duration
 	if period >= window {
 		return SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: window must be larger than period")
 	}
-	avg, stddev, samples, err := w.Store.SeasonalCronStats(w.CustomerID, watchName, period, window)
+	avg, stddev, samples, err := func(customerID uint, watchName string, period, window time.Duration) (avg, stddev float64, samples int, err error) {
+		var watch store.CronWatch
+		if err := w.Store.DB().WithContext(store.WithCustomer(context.Background(), customerID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
+			return 0, 0, 0, err
+		}
+		now := time.Now()
+		since := store.ClampRetention(w.Store.TierForCustomer(customerID), now.Add(-window))
+		tol := period / 20
+		if tol > 5*time.Minute {
+			tol = 5 * time.Minute
+		}
+		periodSec := period.Seconds()
+		tolSec := tol.Seconds()
+		var row struct {
+			Avg     *float64
+			Samples int
+		}
+		avgQ := `
+			SELECT AVG(value) AS avg, COUNT(*) AS samples
+			FROM cron_results
+			WHERE cron_watch_id = ?
+			  AND ran_at >= ?
+			  AND value IS NOT NULL
+			  AND LEAST(
+			        MOD(EXTRACT(EPOCH FROM (? - ran_at))::numeric, ?::numeric),
+			        ?::numeric - MOD(EXTRACT(EPOCH FROM (? - ran_at))::numeric, ?::numeric)
+			      ) <= ?`
+		if err := w.Store.DB().Raw(avgQ, watch.ID, since, now, periodSec, periodSec, now, periodSec, tolSec).Scan(&row).Error; err != nil {
+			return 0, 0, 0, err
+		}
+		samples = row.Samples
+		if samples == 0 || row.Avg == nil {
+			return 0, 0, samples, nil
+		}
+		avg = *row.Avg
+		var sd struct{ Stddev *float64 }
+		sdQ := `
+			SELECT STDDEV_SAMP(value) AS stddev
+			FROM cron_results
+			WHERE cron_watch_id = ?
+			  AND ran_at >= ?
+			  AND value IS NOT NULL
+			  AND LEAST(
+			        MOD(EXTRACT(EPOCH FROM (? - ran_at))::numeric, ?::numeric),
+			        ?::numeric - MOD(EXTRACT(EPOCH FROM (? - ran_at))::numeric, ?::numeric)
+			      ) <= ?`
+		if err := w.Store.DB().Raw(sdQ, watch.ID, since, now, periodSec, periodSec, now, periodSec, tolSec).Scan(&sd).Error; err != nil {
+			return avg, 0, samples, err
+		}
+		if sd.Stddev != nil {
+			stddev = *sd.Stddev
+		}
+		return avg, stddev, samples, nil
+	}(w.CustomerID, watchName, period, window)
 	if err != nil {
 		return SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: watch %q: %w", watchName, err)
 	}
