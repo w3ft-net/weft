@@ -48,7 +48,7 @@ func TestProvisioner_ArchivesExpiredShard(t *testing.T) {
 	}
 
 	prov := NewProvisioner(reg, launcher, config)
-	prov.Buckets = bucketStub(0, time.Hour) // retention 1h; WindowEnd is > 1h past
+	prov.Buckets = bucketStub(t, 0, time.Hour) // retention 1h; WindowEnd is > 1h past
 	prov.check(context.Background())
 
 	// Verify state changed to ARCHIVED.

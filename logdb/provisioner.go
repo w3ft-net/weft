@@ -188,7 +188,7 @@ type Provisioner struct {
 	launcher    ShardLauncher
 	config      ProvisionerConfig
 	stats       *AppStats
-	Buckets     Buckets
+	Buckets     *BucketManager
 	configurer  ShardConfigurer
 	volumes     VolumeManager // optional; used to tag data volumes at christen time
 	heartbeatMu sync.Mutex    // serialises ProcessHeartbeat with the ticker's adoptFromHeartbeats
@@ -209,10 +209,13 @@ func NewProvisioner(registry *ShardRegistry, launcher ShardLauncher, config Prov
 // SetStore provides the store for heartbeat and LAUNCHING-row
 // operations. Called after the store is opened (which may happen
 // after the provisioner starts). *store.Store satisfies both
-// HeartbeatStore and ShardOpsStore, so one call wires both.
+// HeartbeatStore and ShardOpsStore, so one call wires both — and it
+// also (re)builds the BucketManager against the live store, so
+// callers no longer wire buckets in a separate step.
 func (p *Provisioner) SetStore(s *store.Store) {
 	p.config.Store = s
 	p.config.ShardOps = s
+	p.Buckets = NewBucketManager(s)
 }
 
 // SetVolumeManager enables volume-aware christening. When set, the
@@ -340,17 +343,9 @@ func (p *Provisioner) Start(ctx context.Context) {
 //
 // No-op for launchers that don't implement TierScaler (sync
 // launchers); they manage their own lifecycle.
-func (p *Provisioner) syncASGDesiredCapacity(ctx context.Context) {
+func (p *Provisioner) syncASGDesiredCapacity(ctx context.Context, all []*AppBucket) {
 	scaler, ok := p.launcher.(TierScaler)
 	if !ok {
-		return
-	}
-	if p.Buckets == nil {
-		return
-	}
-	all, err := p.Buckets.All()
-	if err != nil {
-		log.Printf("provisioner: sync desired: Buckets.All: %v", err)
 		return
 	}
 
@@ -1131,17 +1126,22 @@ func (p *Provisioner) check(ctx context.Context) {
 		}
 	}
 
-	// Per-bucket reconciliation. Covers app-drift (op 1),
-	// under-capacity scale-up (op 2), window-closed rotation
-	// (op 3), and retention-archive (op 5).
+	// Read the bucket set once and feed both the per-bucket
+	// reconcile and the tier-level desired-capacity sync.
+	var all []*AppBucket
 	if p.Buckets != nil {
-		all, err := p.Buckets.All()
+		var err error
+		all, err = p.Buckets.All()
 		if err != nil {
 			log.Printf("provisioner: reconcile: Buckets.All: %v", err)
 		}
-		for _, bucket := range all {
-			p.ReconcileBucket(ctx, bucket)
-		}
+	}
+
+	// Per-bucket reconciliation. Covers app-drift (op 1),
+	// under-capacity scale-up (op 2), window-closed rotation
+	// (op 3), and retention-archive (op 5).
+	for _, bucket := range all {
+		p.ReconcileBucket(ctx, bucket)
 	}
 
 	// Tier-level ASG sync: set each tier's desired_capacity
@@ -1149,7 +1149,7 @@ func (p *Provisioner) check(ctx context.Context) {
 	// Runs after the per-bucket reconcile so any LAUNCHING rows
 	// minted this tick inform the count. No-op on synchronous
 	// launchers.
-	p.syncASGDesiredCapacity(ctx)
+	p.syncASGDesiredCapacity(ctx, all)
 }
 
 // archive tells the shard to export its data to Parquet and replaces

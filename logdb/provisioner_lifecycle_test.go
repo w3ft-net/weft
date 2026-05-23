@@ -37,9 +37,7 @@ func TestProvisioner_TickerContinuesAfterBootstrapFailure(t *testing.T) {
 	prov := NewProvisioner(reg, launcher, config)
 	// Bucket config is the signal for "how many shards do we want" —
 	// without it the reconciler has nothing to scale toward.
-	fake := newFakeBucketStore()
-	fake.seedBucket("default", nil)
-	prov.Buckets = NewBucketManager(fake)
+	prov.Buckets = bucketStub(t, 2, 168*time.Hour)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -67,11 +65,8 @@ func TestProvisioner_AdoptsFromHeartbeatsOnTick(t *testing.T) {
 	config.PollInterval = 50 * time.Millisecond
 
 	prov := NewProvisioner(reg, launcher, config)
-	// Bootstrap reads the default bucket; give it a fake store with
-	// one seeded.
-	fake := newFakeBucketStore()
-	fake.seedBucket("default", nil)
-	prov.Buckets = NewBucketManager(fake)
+	// Bootstrap reads the default bucket (target 2 to scale toward).
+	prov.Buckets = bucketStub(t, 2, 168*time.Hour)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -164,7 +164,7 @@ func reconcile(snap ReconcilerSnapshot) []ReconcileOp {
 			nextStart, nextEnd := snap.Bucket.NextWindow(snap.Now)
 			for i := 0; i < snap.Bucket.Target; i++ {
 				ops = append(ops, PrewarmNextWindowOp{
-					BucketID:    snap.Bucket.ID,
+					Bucket:      snap.Bucket,
 					WindowStart: nextStart,
 					WindowEnd:   nextEnd,
 				})
@@ -243,27 +243,24 @@ func (o LaunchShardOp) Apply(ctx context.Context, p *Provisioner) error {
 // persisting an intent row the lifecycle hook will claim when the
 // ASG brings up the instance.
 type PrewarmNextWindowOp struct {
-	BucketID    int64
+	Bucket      *AppBucket
 	WindowStart time.Time
 	WindowEnd   time.Time
 }
 
 func (o PrewarmNextWindowOp) Describe() string {
-	return fmt.Sprintf("pre-warm bucket %d window starting %s", o.BucketID, o.WindowStart.Format(time.RFC3339))
+	id := int64(0)
+	if o.Bucket != nil {
+		id = o.Bucket.ID
+	}
+	return fmt.Sprintf("pre-warm bucket %d window starting %s", id, o.WindowStart.Format(time.RFC3339))
 }
 
 func (o PrewarmNextWindowOp) Apply(_ context.Context, p *Provisioner) error {
-	if p.Buckets == nil {
-		return fmt.Errorf("%s: no BucketManager", o.Describe())
+	if o.Bucket == nil {
+		return fmt.Errorf("%s: nil bucket", o.Describe())
 	}
-	bucket, err := p.Buckets.ByID(o.BucketID)
-	if err != nil {
-		return fmt.Errorf("%s: lookup bucket %d: %w", o.Describe(), o.BucketID, err)
-	}
-	if bucket == nil {
-		return fmt.Errorf("%s: bucket %d not found", o.Describe(), o.BucketID)
-	}
-	if _, err := p.mintLaunchingRowForWindow(bucket, o.WindowStart, o.WindowEnd); err != nil {
+	if _, err := p.mintLaunchingRowForWindow(o.Bucket, o.WindowStart, o.WindowEnd); err != nil {
 		return fmt.Errorf("%s: mint LAUNCHING: %w", o.Describe(), err)
 	}
 	return nil

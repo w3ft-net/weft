@@ -1,7 +1,6 @@
 package logdb
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -26,63 +25,28 @@ type AppBucket struct {
 	CreatedAt      string
 }
 
-// BucketStore is the subset of *store.Store that BucketManager needs.
-// Extracted so tests can swap in an in-memory fake.
-type BucketStore interface {
-	ListBuckets() ([]store.Bucket, error)
-	GetBucket(id int64) (store.Bucket, bool, error)
-	GetBucketByLabel(label string) (store.Bucket, bool, error)
-	SaveBucket(b *store.Bucket) error
-}
-
-// Buckets is the interface the provisioner depends on for bucket
-// lookup, sizing, and split decisions. All reads go to the store
-// on every call — no in-memory cache. That keeps callers from
-// working off pointers whose fields have silently diverged from
-// the DB after another code path mutated the row.
-type Buckets interface {
-	Default() (*AppBucket, error)
-	ByID(id int64) (*AppBucket, error)
-	ByLabel(label string) (*AppBucket, error)
-	All() ([]*AppBucket, error)
-	EvaluateSplit(stats map[string]int64) (string, error)
-	Split(app string) (*AppBucket, error)
-	AddAppToBucket(id int64, app string) (*AppBucket, error)
-	// SetStore wires the manager to a live store. Called from the
-	// coordinator boot path once store.Open completes; tests can
-	// pass a fake. Implementations that don't need a store (the
-	// stub in app_buckets_test.go) may no-op.
-	SetStore(s BucketStore)
-}
-
-// BucketManager is a thin store wrapper. It holds no bucket data
-// between calls; every method does a fresh DB read/write. The
-// "manager" name is retained for continuity with the interface —
-// functionally it's a service object.
+// BucketManager is a thin *store.Store wrapper. It holds no bucket
+// data between calls; every method does a fresh DB read/write, so
+// callers never work off a pointer whose fields have silently
+// diverged from the row after another path mutated it. The "manager"
+// name is historical — functionally it's a service object over the
+// buckets table.
 type BucketManager struct {
-	store BucketStore
+	store *store.Store
 	// SplitThreshold: if one app accounts for this fraction of a
 	// shared bucket's rows, split it into a dedicated bucket.
 	// Default 0.6 (60%).
 	SplitThreshold float64
 }
 
-// NewBucketManager returns a manager wired to the given store.
-// Pass nil for a tests-only manager that returns nil from every
-// lookup and errors from every write (provided the test doesn't
-// drive those paths).
-func NewBucketManager(store BucketStore) *BucketManager {
+// NewBucketManager returns a manager wired to the given store. Pass
+// nil only in tests that never drive a bucket path; production wires
+// a real store via Provisioner.SetStore.
+func NewBucketManager(s *store.Store) *BucketManager {
 	return &BucketManager{
-		store:          store,
+		store:          s,
 		SplitThreshold: 0.6,
 	}
-}
-
-// SetStore swaps the backing store. Used by the coordinator boot
-// sequence where the provisioner is constructed before store.Open
-// completes; once store is ready, main.go wires it in.
-func (bm *BucketManager) SetStore(s BucketStore) {
-	bm.store = s
 }
 
 // Default returns the bucket with label "default". No memoization;
@@ -249,14 +213,10 @@ func (bm *BucketManager) AddAppToBucket(id int64, app string) (*AppBucket, error
 // After insert (ID was 0), copies the new surrogate back onto the
 // caller's pointer.
 func (bm *BucketManager) save(b *AppBucket) error {
-	appsJSON, err := json.Marshal(b.Apps)
-	if err != nil {
-		return fmt.Errorf("marshal apps: %w", err)
-	}
 	rec := &store.Bucket{
 		ID:                   b.ID,
 		Label:                b.Label,
-		Apps:                 string(appsJSON),
+		Apps:                 b.Apps,
 		TargetIngestingCount: b.Target,
 		Tier:                 b.Tier,
 		WindowDuration:       b.WindowDuration.String(),
@@ -326,10 +286,6 @@ func (b *AppBucket) ShouldPrewarmNextWindow(now time.Time, ingesting []*ShardEnt
 }
 
 func recordToAppBucket(r store.Bucket) *AppBucket {
-	var apps []string
-	if r.Apps != "" && r.Apps != "null" {
-		_ = json.Unmarshal([]byte(r.Apps), &apps)
-	}
 	var winDur time.Duration
 	if r.WindowDuration != "" {
 		if d, err := time.ParseDuration(r.WindowDuration); err == nil {
@@ -342,7 +298,7 @@ func recordToAppBucket(r store.Bucket) *AppBucket {
 	return &AppBucket{
 		ID:             r.ID,
 		Label:          r.Label,
-		Apps:           apps,
+		Apps:           r.Apps,
 		Target:         r.TargetIngestingCount,
 		Tier:           r.Tier,
 		WindowDuration: winDur,

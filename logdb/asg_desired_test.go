@@ -3,7 +3,6 @@ package logdb
 import (
 	"context"
 	"fmt"
-	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -57,44 +56,9 @@ func (f *fakeTierScaler) callFor(tier string) (int32, bool) {
 	return 0, false
 }
 
-// bucketsWithTargets returns a stubBuckets-equivalent that holds
-// multiple buckets with explicit tiers. Needed by the desired-sync
-// tests that span more than one tier; single-bucket tests can keep
-// using bucketStub.
-type manyBucketsStub struct {
-	byLabel map[string]*AppBucket
-}
-
-func (m *manyBucketsStub) Default() (*AppBucket, error) {
-	return m.byLabel["default"], nil
-}
-func (m *manyBucketsStub) ByID(id int64) (*AppBucket, error) {
-	for _, b := range m.byLabel {
-		if b.ID == id {
-			return b, nil
-		}
-	}
-	return nil, nil
-}
-func (m *manyBucketsStub) ByLabel(label string) (*AppBucket, error) {
-	return m.byLabel[label], nil
-}
-func (m *manyBucketsStub) All() ([]*AppBucket, error) {
-	out := make([]*AppBucket, 0, len(m.byLabel))
-	for _, b := range m.byLabel {
-		out = append(out, b)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, nil
-}
-func (m *manyBucketsStub) EvaluateSplit(_ map[string]int64) (string, error) { return "", nil }
-func (m *manyBucketsStub) Split(_ string) (*AppBucket, error)               { return nil, nil }
-func (m *manyBucketsStub) SetStore(_ BucketStore)                           {}
-func (m *manyBucketsStub) AddAppToBucket(_ int64, _ string) (*AppBucket, error) {
-	return nil, fmt.Errorf("not supported in stub")
-}
-
-// ──────────────────────────────────────────────────────────
+// syncASGDesiredCapacity now takes the bucket set as a value
+// parameter, so these pure-arithmetic tests pass []*AppBucket
+// literals directly — no store, no manager.
 
 // The coordinator must set absolute desired_capacity from the sum
 // of bucket targets (by tier) plus the count of READ_ONLY registry
@@ -107,20 +71,19 @@ func TestSyncASGDesired_SumsTargetsPlusReadOnlyPerTier(t *testing.T) {
 	reg.Add(&ShardEntry{ID: "ro-2", BucketID: 1, Tier: "small", State: StateReadOnly})
 
 	// Buckets: small has two buckets (targets 2 and 3); medium has one (target 1).
-	buckets := &manyBucketsStub{byLabel: map[string]*AppBucket{
-		"default":     {ID: 1, Label: "default", Target: 2, Tier: "small"},
-		"dedicated-a": {ID: 2, Label: "dedicated-a", Target: 3, Tier: "small"},
-		"medium-b":    {ID: 3, Label: "medium-b", Target: 1, Tier: "medium"},
-	}}
+	buckets := []*AppBucket{
+		{ID: 1, Label: "default", Target: 2, Tier: "small"},
+		{ID: 2, Label: "dedicated-a", Target: 3, Tier: "small"},
+		{ID: 3, Label: "medium-b", Target: 1, Tier: "medium"},
+	}
 
 	scaler := &fakeTierScaler{}
 	prov := &Provisioner{
 		registry: reg,
 		launcher: scaler,
-		Buckets:  buckets,
 	}
 
-	prov.syncASGDesiredCapacity(context.Background())
+	prov.syncASGDesiredCapacity(context.Background(), buckets)
 
 	// small: targets 2+3 = 5, plus 2 READ_ONLY = 7.
 	if got, ok := scaler.callFor("small"); !ok {
@@ -145,18 +108,17 @@ func TestSyncASGDesired_IngestingNotDoubleCounted(t *testing.T) {
 	// extra capacity — the target already accounts for it.
 	reg.Add(&ShardEntry{ID: "ing-1", BucketID: 1, Tier: "small", State: StateIngesting})
 
-	buckets := &manyBucketsStub{byLabel: map[string]*AppBucket{
-		"default": {ID: 1, Label: "default", Target: 2, Tier: "small"},
-	}}
+	buckets := []*AppBucket{
+		{ID: 1, Label: "default", Target: 2, Tier: "small"},
+	}
 
 	scaler := &fakeTierScaler{}
 	prov := &Provisioner{
 		registry: reg,
 		launcher: scaler,
-		Buckets:  buckets,
 	}
 
-	prov.syncASGDesiredCapacity(context.Background())
+	prov.syncASGDesiredCapacity(context.Background(), buckets)
 
 	if got, ok := scaler.callFor("small"); !ok {
 		t.Errorf("no SetDesiredCapacity call for small")
@@ -171,18 +133,17 @@ func TestSyncASGDesired_ExcludesArchived(t *testing.T) {
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{ID: "arch-1", BucketID: 1, Tier: "small", State: StateArchived})
 
-	buckets := &manyBucketsStub{byLabel: map[string]*AppBucket{
-		"default": {ID: 1, Label: "default", Target: 1, Tier: "small"},
-	}}
+	buckets := []*AppBucket{
+		{ID: 1, Label: "default", Target: 1, Tier: "small"},
+	}
 
 	scaler := &fakeTierScaler{}
 	prov := &Provisioner{
 		registry: reg,
 		launcher: scaler,
-		Buckets:  buckets,
 	}
 
-	prov.syncASGDesiredCapacity(context.Background())
+	prov.syncASGDesiredCapacity(context.Background(), buckets)
 
 	if got, ok := scaler.callFor("small"); !ok {
 		t.Errorf("no SetDesiredCapacity call for small")
@@ -199,9 +160,9 @@ func TestSyncASGDesired_ClampsToMaxSize(t *testing.T) {
 		reg.Add(&ShardEntry{ID: fmt.Sprintf("ro-%d", i), BucketID: 1, Tier: "small", State: StateReadOnly})
 	}
 
-	buckets := &manyBucketsStub{byLabel: map[string]*AppBucket{
-		"default": {ID: 1, Label: "default", Target: 10, Tier: "small"},
-	}}
+	buckets := []*AppBucket{
+		{ID: 1, Label: "default", Target: 10, Tier: "small"},
+	}
 
 	scaler := &fakeTierScaler{
 		maxByTier: map[string]int32{"small": 8},
@@ -209,10 +170,9 @@ func TestSyncASGDesired_ClampsToMaxSize(t *testing.T) {
 	prov := &Provisioner{
 		registry: reg,
 		launcher: scaler,
-		Buckets:  buckets,
 	}
 
-	prov.syncASGDesiredCapacity(context.Background())
+	prov.syncASGDesiredCapacity(context.Background(), buckets)
 
 	// Computed: target 10 + 3 RO = 13. Max: 8. Expect clamp.
 	if got, ok := scaler.callFor("small"); !ok {
@@ -227,9 +187,9 @@ func TestSyncASGDesired_ClampsToMaxSize(t *testing.T) {
 // call against a nil/unsupported scaler would panic.
 func TestSyncASGDesired_NoOpForSyncLauncher(t *testing.T) {
 	reg := NewShardRegistry()
-	buckets := &manyBucketsStub{byLabel: map[string]*AppBucket{
-		"default": {ID: 1, Label: "default", Target: 2, Tier: "small"},
-	}}
+	buckets := []*AppBucket{
+		{ID: 1, Label: "default", Target: 2, Tier: "small"},
+	}
 
 	// LocalLauncher doesn't implement TierScaler.
 	launcher := NewLocalLauncher()
@@ -238,11 +198,10 @@ func TestSyncASGDesired_NoOpForSyncLauncher(t *testing.T) {
 	prov := &Provisioner{
 		registry: reg,
 		launcher: launcher,
-		Buckets:  buckets,
 	}
 
 	// Must not panic.
-	prov.syncASGDesiredCapacity(context.Background())
+	prov.syncASGDesiredCapacity(context.Background(), buckets)
 }
 
 // Pre-warm LAUNCHING rows (window_start > current) are EXTRA
@@ -253,9 +212,9 @@ func TestSyncASGDesired_IncludesFutureWindowLaunching(t *testing.T) {
 	reg := NewShardRegistry()
 	// No READ_ONLY; pre-warm is the only above-target contribution.
 
-	buckets := &manyBucketsStub{byLabel: map[string]*AppBucket{
-		"default": {ID: 1, Label: "default", Target: 2, Tier: "small", WindowDuration: time.Hour},
-	}}
+	buckets := []*AppBucket{
+		{ID: 1, Label: "default", Target: 2, Tier: "small", WindowDuration: time.Hour},
+	}
 
 	// Fake store reports 2 pre-warmed LAUNCHING rows for bucket 1
 	// (window_start > now-truncated-to-hour).
@@ -278,11 +237,10 @@ func TestSyncASGDesired_IncludesFutureWindowLaunching(t *testing.T) {
 	prov := &Provisioner{
 		registry: reg,
 		launcher: scaler,
-		Buckets:  buckets,
 		config:   ProvisionerConfig{ShardOps: fake},
 	}
 
-	prov.syncASGDesiredCapacity(context.Background())
+	prov.syncASGDesiredCapacity(context.Background(), buckets)
 
 	// Expected: target 2 + 0 READ_ONLY + 2 pre-warm = 4.
 	if got, ok := scaler.callFor("small"); !ok {
@@ -298,19 +256,18 @@ func TestSyncASGDesired_ReadOnlyFiltersByTier(t *testing.T) {
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{ID: "ro-medium", BucketID: 2, Tier: "medium", State: StateReadOnly})
 
-	buckets := &manyBucketsStub{byLabel: map[string]*AppBucket{
-		"small-default":  {ID: 1, Label: "small-default", Target: 2, Tier: "small"},
-		"medium-default": {ID: 2, Label: "medium-default", Target: 1, Tier: "medium"},
-	}}
+	buckets := []*AppBucket{
+		{ID: 1, Label: "small-default", Target: 2, Tier: "small"},
+		{ID: 2, Label: "medium-default", Target: 1, Tier: "medium"},
+	}
 
 	scaler := &fakeTierScaler{}
 	prov := &Provisioner{
 		registry: reg,
 		launcher: scaler,
-		Buckets:  buckets,
 	}
 
-	prov.syncASGDesiredCapacity(context.Background())
+	prov.syncASGDesiredCapacity(context.Background(), buckets)
 
 	if got, ok := scaler.callFor("small"); !ok {
 		t.Errorf("no SetDesiredCapacity call for small")

@@ -121,9 +121,6 @@ func startProd(cfg Config, reg *ShardRegistry, lambdaURL string) (*Provisioner, 
 	}
 
 	prov.SetStore(cfg.DB)
-	// No-cache: SetStore on the bucket manager is all that's needed;
-	// every lookup hits the DB.
-	prov.Buckets.SetStore(cfg.DB)
 
 	prov.Start(cfg.Ctx)
 	log.Printf("provisioner: started with ASG tiers %v", cfg.ShardTiers)
@@ -168,7 +165,6 @@ func startDev(cfg Config, reg *ShardRegistry) (*Provisioner, error) {
 	prov := NewProvisioner(reg, launcher, provConfig)
 
 	prov.SetStore(cfg.DB)
-	prov.Buckets.SetStore(cfg.DB)
 
 	prov.Start(cfg.Ctx)
 	log.Printf("provisioner: started with docker launcher (dev mode), image=%s data=%s",

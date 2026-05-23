@@ -4,17 +4,59 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/kevlarcon/weft/store"
 )
 
-// bucketStub returns a stubBuckets whose default bucket has the
-// given target and retention. Window-rotation and archive tests
-// usually pass target=0 or 1 (no scale-up) with a specific
-// retention; under-capacity tests do the inverse.
-func bucketStub(target int, retention time.Duration) *stubBuckets {
-	return &stubBuckets{bucket: &AppBucket{
-		ID: defaultBucketID, Label: "default", Apps: nil,
-		Target: target, WindowDuration: retention, Tier: "small",
-	}}
+// bucketStub returns a *BucketManager backed by a tx-scoped test
+// store whose schema-seeded "default" bucket (id == defaultBucketID)
+// has the given target and retention. Window-rotation and archive
+// tests usually pass target=0 or 1 (no scale-up) with a specific
+// retention; under-capacity tests do the inverse. Skips when
+// postgres is unavailable (via openSMTestStore).
+//
+// The bucket lives in a real DB so check()/ReconcileBucket — which
+// read p.Buckets — work without the removed Buckets interface; the
+// provisioner's ShardOps/registry can still use an in-memory fake.
+func bucketStub(t *testing.T, target int, retention time.Duration) *BucketManager {
+	t.Helper()
+	db := openSMTestStore(t)
+	seedDefaultBucket(t, db, nil, target, retention)
+	return NewBucketManager(db)
+}
+
+// seedDefaultBucket updates the schema-seeded "default" bucket (the
+// row at defaultBucketID) in place, so tests get a known apps/target/
+// window without colliding on the unique label. Returns nothing — the
+// row keeps id == defaultBucketID, which test ShardEntries reference.
+func seedDefaultBucket(t *testing.T, db *store.Store, apps []string, target int, window time.Duration) {
+	t.Helper()
+	def, ok, err := db.GetBucketByLabel("default")
+	if err != nil || !ok {
+		t.Fatalf("default bucket lookup: ok=%v err=%v", ok, err)
+	}
+	def.Apps = apps
+	def.TargetIngestingCount = target
+	def.Tier = "small"
+	def.WindowDuration = window.String()
+	if err := db.SaveBucket(&def); err != nil {
+		t.Fatalf("seed default bucket: %v", err)
+	}
+}
+
+// seedDedicatedBucket inserts a non-default bucket (auto-assigned id)
+// and returns the persisted row. For tests that need a second bucket
+// (split sources, multi-app fixtures).
+func seedDedicatedBucket(t *testing.T, db *store.Store, label string, apps []string) *store.Bucket {
+	t.Helper()
+	rec := &store.Bucket{
+		Label: label, Apps: apps, TargetIngestingCount: 2, Tier: "small",
+		WindowDuration: "168h", CreatedAt: "2026-04-21T00:00:00Z",
+	}
+	if err := db.SaveBucket(rec); err != nil {
+		t.Fatalf("seed bucket %q: %v", label, err)
+	}
+	return rec
 }
 
 // A shard whose WindowEnd has passed must transition INGESTING →
@@ -60,7 +102,7 @@ func TestCheck_WindowEndPastNow_RotatesToReadOnly(t *testing.T) {
 			ConfigureBackoff: time.Millisecond,
 		},
 		stats:      NewAppStats(),
-		Buckets:    bucketStub(1, 0),
+		Buckets:    bucketStub(t, 1, 0),
 		configurer: &failingConfigurer{}, // no replacement gRPC; we're asserting the transition
 	}
 	prov.check(context.Background())
@@ -101,7 +143,7 @@ func TestCheck_WindowEndInFuture_NoRotation(t *testing.T) {
 			WindowDuration: time.Hour,
 		},
 		stats:      NewAppStats(),
-		Buckets:    bucketStub(1, 0),
+		Buckets:    bucketStub(t, 1, 0),
 		configurer: &failingConfigurer{},
 	}
 	prov.check(context.Background())
@@ -135,7 +177,7 @@ func TestCheck_ReadOnlyPastRetention_TriggersArchive(t *testing.T) {
 			ParquetDir:     t.TempDir(),
 		},
 		stats:   NewAppStats(),
-		Buckets: bucketStub(0, time.Hour), // retention 1h: 2h past WindowEnd → eligible
+		Buckets: bucketStub(t, 0, time.Hour), // retention 1h: 2h past WindowEnd → eligible
 		volumes: vm,
 	}
 	prov.check(context.Background())
@@ -174,7 +216,7 @@ func TestCheck_ReadOnlyWithinRetention_NoArchive(t *testing.T) {
 			ParquetDir:     t.TempDir(),
 		},
 		stats:   NewAppStats(),
-		Buckets: bucketStub(0, 2*time.Hour),
+		Buckets: bucketStub(t, 0, 2*time.Hour),
 		volumes: vm,
 	}
 	prov.check(context.Background())
@@ -215,7 +257,7 @@ func TestCheck_OldCreatedAt_RecentWindowEnd_NoArchive(t *testing.T) {
 			ParquetDir:     t.TempDir(),
 		},
 		stats:   NewAppStats(),
-		Buckets: bucketStub(0, time.Hour),
+		Buckets: bucketStub(t, 0, time.Hour),
 		volumes: vm,
 	}
 	prov.check(context.Background())
@@ -250,7 +292,7 @@ func TestCheck_ZeroWindow_NoRotation(t *testing.T) {
 			WindowDuration: time.Hour,
 		},
 		stats:      NewAppStats(),
-		Buckets:    bucketStub(1, 0),
+		Buckets:    bucketStub(t, 1, 0),
 		configurer: &failingConfigurer{},
 	}
 	prov.check(context.Background())

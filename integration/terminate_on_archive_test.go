@@ -78,43 +78,6 @@ func (r *recordingASGApi) terminates() []recordedTerminate {
 	return out
 }
 
-// stubBucketsFromAppBucket wraps a single bucket into the Buckets
-// interface so ReconcileBucket can drive from it.
-type stubBucketsFromAppBucket struct {
-	bucket *logdb.AppBucket
-}
-
-func (s *stubBucketsFromAppBucket) Default() (*logdb.AppBucket, error) {
-	return s.bucket, nil
-}
-func (s *stubBucketsFromAppBucket) ByID(id int64) (*logdb.AppBucket, error) {
-	if s.bucket != nil && s.bucket.ID == id {
-		return s.bucket, nil
-	}
-	return nil, nil
-}
-func (s *stubBucketsFromAppBucket) ByLabel(label string) (*logdb.AppBucket, error) {
-	if s.bucket != nil && s.bucket.Label == label {
-		return s.bucket, nil
-	}
-	return nil, nil
-}
-func (s *stubBucketsFromAppBucket) All() ([]*logdb.AppBucket, error) {
-	if s.bucket == nil {
-		return nil, nil
-	}
-	return []*logdb.AppBucket{s.bucket}, nil
-}
-func (s *stubBucketsFromAppBucket) EvaluateSplit(_ map[string]int64) (string, error) {
-	return "", nil
-}
-func (s *stubBucketsFromAppBucket) Split(_ string) (*logdb.AppBucket, error) {
-	return nil, nil
-}
-func (s *stubBucketsFromAppBucket) SetStore(_ logdb.BucketStore) {}
-func (s *stubBucketsFromAppBucket) AddAppToBucket(_ int64, _ string) (*logdb.AppBucket, error) {
-	return nil, nil
-}
 
 // ── Tests ────────────────────────────────────────────────────
 
@@ -174,7 +137,8 @@ func TestTerminateOnArchive_CallsASGTerminate(t *testing.T) {
 	)
 
 	prov := logdb.NewProvisioner(reg, launcher, logdb.ProvisionerConfig{})
-	prov.Buckets = &stubBucketsFromAppBucket{bucket: bucket}
+	// ReconcileBucket takes the bucket value directly and doesn't read
+	// p.Buckets, so no BucketManager wiring is needed here.
 
 	ctx := context.Background()
 

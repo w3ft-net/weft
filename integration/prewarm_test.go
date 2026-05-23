@@ -35,7 +35,7 @@ func TestPrewarm_InsertsNextWindowRow_AndBumpsDesired(t *testing.T) {
 	// shard doesn't need to pretend to be a 7-day-old shard.
 	bucketRec := &store.Bucket{
 		Label:                bucketLabel,
-		Apps:                 "[]",
+		Apps:                 []string{},
 		TargetIngestingCount: 1,
 		Tier:                 "small",
 		WindowDuration:       (5 * time.Minute).String(),

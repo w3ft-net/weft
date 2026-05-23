@@ -21,8 +21,8 @@ func TestReconciler_MintsLaunchingRow_AndCountsAgainstTarget(t *testing.T) {
 	fake := newFakeRegistryStore()
 	reg.SetStore(fake)
 
-	bucket := &AppBucket{ID: 1, Label: "default", Apps: nil, Target: 2, Tier: "small", WindowDuration: 24 * time.Hour}
-	buckets := &stubBuckets{bucket: bucket}
+	db := openSMTestStore(t)
+	seedDefaultBucket(t, db, nil, 2, 24*time.Hour)
 
 	launcher := &countingLauncher{addr: "127.0.0.1:1"}
 
@@ -34,7 +34,7 @@ func TestReconciler_MintsLaunchingRow_AndCountsAgainstTarget(t *testing.T) {
 			ShardOps:       fake,
 		},
 		stats:      NewAppStats(),
-		Buckets:    buckets,
+		Buckets:    NewBucketManager(db),
 		configurer: &stubConfigurer{},
 	}
 
@@ -145,8 +145,8 @@ func TestChristen_PromotesLaunchingRow_InsteadOfMinting(t *testing.T) {
 	reg := NewShardRegistry()
 	reg.SetStore(fake)
 
-	bucket := &AppBucket{ID: 1, Label: "default", Apps: []string{"weft"}, Target: 2, Tier: "small"}
-	buckets := &stubBuckets{bucket: bucket}
+	db := openSMTestStore(t)
+	seedDefaultBucket(t, db, []string{"weft"}, 2, 0)
 
 	token := "a-previously-minted-token"
 	windowStart := "2026-04-21T00:00:00Z"
@@ -173,7 +173,7 @@ func TestChristen_PromotesLaunchingRow_InsteadOfMinting(t *testing.T) {
 			ShardOps:       fake,
 		},
 		configurer: configurer,
-		Buckets:    buckets,
+		Buckets:    NewBucketManager(db),
 	}
 
 	prov.ProcessHeartbeat(store.ShardHeartbeat{

@@ -129,7 +129,6 @@ func TestRefreshCascade_EndToEnd(t *testing.T) {
 			ShardOps:     fake,
 			PollInterval: time.Second,
 		},
-		Buckets: &stubBuckets{bucket: bucket},
 	}
 
 	// --- Phase 2: First reap tick ---
@@ -274,6 +273,12 @@ func TestRefreshCascade_SuspendedStateBreaksChain(t *testing.T) {
 		},
 	}
 
+	// This test has a christen phase (below), which reads bucket.Apps
+	// via p.Buckets.ByID — so a real-DB BucketManager is needed, not
+	// just the bucket value used for snapshotForBucket.
+	db := openSMTestStore(t)
+	seedDefaultBucket(t, db, []string{"weft"}, 2, 7*24*time.Hour)
+
 	launcher := &asyncRecordingLauncher{}
 	prov := &Provisioner{
 		registry:   reg,
@@ -286,7 +291,7 @@ func TestRefreshCascade_SuspendedStateBreaksChain(t *testing.T) {
 			PollInterval:   time.Second,
 			WindowDuration: 7 * 24 * time.Hour,
 		},
-		Buckets: &stubBuckets{bucket: bucket},
+		Buckets: NewBucketManager(db),
 	}
 
 	// First reap: wipes entries.

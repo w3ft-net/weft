@@ -396,18 +396,17 @@ func TestSyncASGDesired_LogsPerTierBreakdown(t *testing.T) {
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{ID: "ro-1", BucketID: 1, Tier: "small", State: StateReadOnly})
 
-	buckets := &manyBucketsStub{byLabel: map[string]*AppBucket{
-		"default": {ID: 1, Label: "default", Target: 2, Tier: "small"},
-	}}
+	buckets := []*AppBucket{
+		{ID: 1, Label: "default", Target: 2, Tier: "small"},
+	}
 	scaler := &fakeTierScaler{maxByTier: map[string]int32{"small": 8}}
 	prov := &Provisioner{
 		registry: reg,
 		launcher: scaler,
-		Buckets:  buckets,
 	}
 
 	getLog := captureLog(t)
-	prov.syncASGDesiredCapacity(context.Background())
+	prov.syncASGDesiredCapacity(context.Background(), buckets)
 
 	// One log line per tier covering every input to the formula —
 	// otherwise we can't tell why a particular tier ended up at the
@@ -444,7 +443,6 @@ func TestReconcile_LogsPerBucketSummary(t *testing.T) {
 	for _, e := range entries {
 		reg.Add(e)
 	}
-	stub := &stubBuckets{bucket: bucket}
 	prov := &Provisioner{
 		registry: reg,
 		launcher: &countingLauncher{addr: "127.0.0.1:1"},
@@ -452,7 +450,6 @@ func TestReconcile_LogsPerBucketSummary(t *testing.T) {
 			ShardOps:       newFakeRegistryStore(),
 			WindowDuration: bucket.WindowDuration,
 		},
-		Buckets: stub,
 	}
 
 	getLog := captureLog(t)

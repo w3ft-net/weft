@@ -39,7 +39,6 @@ func TestSteadyState_LifecycleConverges(t *testing.T) {
 		WindowDuration: time.Hour,
 		ParquetDir:     t.TempDir(),
 	})
-	prov.Buckets = &stubBuckets{bucket: bucket}
 
 	// Start at a clean hour boundary so windows are predictable.
 	simNow := time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC)

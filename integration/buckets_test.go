@@ -4,8 +4,8 @@ package integration
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -42,15 +42,10 @@ func TestBuckets_DefaultSeeded(t *testing.T) {
 	if b.Tier != "small" {
 		t.Errorf("default.tier: got %q, want small", b.Tier)
 	}
-	// apps is stored as JSON; "[]" == catch-all day-1.
-	if b.Apps == "" {
-		t.Error("default.apps: empty string, want JSON array")
-	}
-	var apps []string
-	if b.Apps != "[]" && b.Apps != "null" {
-		if err := json.Unmarshal([]byte(b.Apps), &apps); err != nil {
-			t.Errorf("default.apps not parseable JSON: %q (%v)", b.Apps, err)
-		}
+	// apps decodes to []string via the GORM json serializer; the
+	// day-1 "default" bucket is the catch-all (empty list).
+	if len(b.Apps) != 0 {
+		t.Errorf("default.apps: got %v, want empty (catch-all)", b.Apps)
 	}
 	// Compare as parsed durations so "168h" (migration default) and
 	// "168h0m0s" (Go time.Duration.String() format, written on any
@@ -184,7 +179,7 @@ func TestBuckets_OnboardAppPropagates(t *testing.T) {
 		if !ok {
 			t.Fatal("default bucket disappeared")
 		}
-		if strings.Contains(b.Apps, `"`+appName+`"`) {
+		if slices.Contains(b.Apps, appName) {
 			bucket = b
 			break
 		}
@@ -193,7 +188,7 @@ func TestBuckets_OnboardAppPropagates(t *testing.T) {
 	if bucket.ID == 0 {
 		// Final read for the error message.
 		b, _, _ := db.GetBucket(def.ID)
-		t.Fatalf("bucket.apps missing %q after 10s: %s", appName, b.Apps)
+		t.Fatalf("bucket.apps missing %q after 10s: %v", appName, b.Apps)
 	}
 
 	// Now check shards. For each INGESTING shard bound to default,

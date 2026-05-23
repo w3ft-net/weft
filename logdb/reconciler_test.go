@@ -176,8 +176,10 @@ func TestOnboardApp_ReconcilerPropagatesImmediately(t *testing.T) {
 	reg.Add(&ShardEntry{ID: "ingest-1", BucketID: defaultBucketID, State: StateIngesting, Apps: []string{"weft"}, Shard: &failingShard{id: "ingest-1"}})
 	reg.Add(&ShardEntry{ID: "readonly-1", BucketID: defaultBucketID, State: StateReadOnly, Apps: []string{"weft"}, Shard: &failingShard{id: "readonly-1"}})
 
-	stub := &stubBuckets{bucket: &AppBucket{ID: defaultBucketID, Label: "default", Apps: []string{"weft"}, Tier: "small"}}
-	prov := &Provisioner{registry: reg, Buckets: stub}
+	db := openSMTestStore(t)
+	seedDefaultBucket(t, db, []string{"weft"}, 0, 0)
+	bm := NewBucketManager(db)
+	prov := &Provisioner{registry: reg, Buckets: bm}
 
 	if err := prov.OnboardApp("xylem"); err != nil {
 		t.Fatalf("OnboardApp: %v", err)
@@ -192,7 +194,7 @@ func TestOnboardApp_ReconcilerPropagatesImmediately(t *testing.T) {
 		t.Errorf("READ_ONLY shard was mutated: got %v", got)
 	}
 	// Bucket has the app too.
-	def, _ := stub.Default()
+	def, _ := bm.Default()
 	if !containsApp(def.Apps, "xylem") {
 		t.Errorf("bucket missing xylem: got %v", def.Apps)
 	}
@@ -346,10 +348,8 @@ func TestLaunchShardOp_Apply_SyncLauncher_LaunchesOneShard(t *testing.T) {
 
 	reg := NewShardRegistry()
 	bucket := &AppBucket{ID: 1, Label: "default", Apps: []string{"weft"}, Target: 1, Tier: "small"}
-	stub := &stubBuckets{bucket: bucket}
 
 	prov := NewProvisioner(reg, launcher, ProvisionerConfig{})
-	prov.Buckets = stub
 
 	if err := (LaunchShardOp{Bucket: bucket}).Apply(context.Background(), prov); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -668,8 +668,8 @@ func TestReconcile_Prewarm_EmitsWhenBucketSaysYes(t *testing.T) {
 			continue
 		}
 		prewarms++
-		if p.BucketID != 1 {
-			t.Errorf("BucketID: got %d want 1", p.BucketID)
+		if p.Bucket == nil || p.Bucket.ID != 1 {
+			t.Errorf("Bucket.ID: got %v want 1", p.Bucket)
 		}
 		seenStarts = append(seenStarts, p.WindowStart)
 	}
@@ -735,17 +735,15 @@ func TestPrewarmNextWindowOp_Apply_InsertsLaunchingRowForNextWindow(t *testing.T
 	reg.SetStore(fake)
 
 	bucket := &AppBucket{ID: 1, Label: "default", Tier: "small", WindowDuration: time.Hour}
-	stub := &stubBuckets{bucket: bucket}
 
 	prov := &Provisioner{
 		registry: reg,
 		config:   ProvisionerConfig{ShardOps: fake},
-		Buckets:  stub,
 	}
 
 	start := time.Date(2026, 4, 21, 14, 0, 0, 0, time.UTC)
 	end := start.Add(time.Hour)
-	op := PrewarmNextWindowOp{BucketID: bucket.ID, WindowStart: start, WindowEnd: end}
+	op := PrewarmNextWindowOp{Bucket: bucket, WindowStart: start, WindowEnd: end}
 	if err := op.Apply(context.Background(), prov); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
