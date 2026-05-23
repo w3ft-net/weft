@@ -56,6 +56,10 @@ type ShardOpsStore interface {
 	ListStaleLaunching(olderThan time.Duration) ([]store.ShardRecord, error)
 	CountShardsInBucket(bucketID int64, states []string) (int, error)
 	CountShardsInBucketForFutureWindows(bucketID int64, currentWindowStart time.Time) (int, error)
+	// StampShardServices records (at christen) the services the shard's
+	// bucket serves into shard_services — the permanent stamp future
+	// queries resolve through.
+	StampShardServices(shardID string, bucketID int64) error
 }
 
 // staleLaunchingAge is the age beyond which a LAUNCHING row is
@@ -844,6 +848,15 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 		BucketID:        row.BucketID,
 		LastHeartbeatAt: time.Now(),
 	})
+	// Stamp the shard with its bucket's services (shard_services,
+	// migration 058) — the permanent snapshot future queries resolve
+	// through. Best-effort: the routing path still reads
+	// shard_records.apps until cutover, so a stamp failure must not
+	// abort an otherwise-successful christen.
+	if err := p.config.ShardOps.StampShardServices(row.ID, row.BucketID); err != nil {
+		log.Printf("provisioner: christen %s: stamp shard_services: %v", row.ID, err)
+	}
+
 	log.Printf("provisioner: christened %s at %s (bucket=%s(%d) window %s–%s volume=%s)",
 		row.ID, hb.Addr, bucket.Label, bucket.ID, row.WindowStart, row.WindowEnd, volumeID)
 	return nil

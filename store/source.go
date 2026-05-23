@@ -77,6 +77,11 @@ type LogGroup struct {
 	AWSAccountID *uint              // nullable; required for cloudwatch, nil for weftd
 	AWSAccount   *AWSAccount        `gorm:"foreignKey:AWSAccountID"`
 	App          string             `gorm:"not null;uniqueIndex:idx_ns_app"`
+	// BucketID assigns this service to a bucket (migration 057). NULL =
+	// the default bucket; a non-NULL value is a service moved to a
+	// dedicated bucket. A service routes to exactly one bucket — the
+	// unique(namespace_id, app) above makes that automatic.
+	BucketID     *int64             `gorm:"column:bucket_id"`
 	SourceType   LogGroupSourceType `gorm:"type:log_group_source_type;not null"`
 	Status       LogGroupStatus     `gorm:"not null;default:configured"`
 	LogGroupName string             // nullable: pending rows may not yet have a confirmed name

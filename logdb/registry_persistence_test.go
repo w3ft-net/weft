@@ -123,6 +123,13 @@ func (f *fakeRegistryStore) FindLaunchingByInstance(instanceID string) (store.Sh
 	return store.ShardRecord{}, false, nil
 }
 
+// StampShardServices is a no-op in the fake: shard_services lives in
+// the real store, so christen's stamp call is inert here. The store
+// method itself is covered by TestStampShardServices.
+func (f *fakeRegistryStore) StampShardServices(shardID string, bucketID int64) error {
+	return nil
+}
+
 func (f *fakeRegistryStore) ListStaleLaunching(olderThan time.Duration) ([]store.ShardRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
