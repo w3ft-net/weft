@@ -4,8 +4,8 @@
 # run integration tests, then tear it down.
 #
 # For local development, run the same compose-up incantation once and
-# call `go test -tags integration ./integration/` directly — the harness
-# applies migrations and checks readiness itself. `make integration-clean`
+# call `go test -tags 'integration test' ./integration/` directly — the
+# harness applies migrations and checks readiness itself. `make integration-clean`
 # (or `clean_local_state` below) wipes the dev/shard-data subdirs the
 # DockerLauncher leaves behind across `down -v` runs.
 set -euo pipefail
@@ -52,4 +52,7 @@ echo "=== Waiting for shard adoption ==="
 sleep 15
 
 echo "=== Running integration tests ==="
-go test -tags integration ./integration/ -v -count=1 -timeout 120s
+# Tag set must include `test`: some integration files (e.g. lambda_test.go)
+# reference helpers defined in `integration && test`-tagged files (t0 in
+# cold_storage_test.go), so a bare `-tags integration` fails to compile.
+go test -tags 'integration test' ./integration/ -v -count=1 -timeout 120s
