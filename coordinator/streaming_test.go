@@ -120,14 +120,15 @@ func TestExecute_StagedPipelinePopulatesText(t *testing.T) {
 // query failures server-side.
 func TestExecute_ShardErrorReturnsPartialResults(t *testing.T) {
 	c := setupTestCoordinator(t)
-	logdb.SeedShard(c.Provisioner, &logdb.ShardEntry{
+	e := &logdb.ShardEntry{
 		ID:          "shard-1",
-		Apps:        []string{"vimgym", "callbox"},
 		WindowStart: t1, WindowEnd: t2,
 		State:     logdb.StateIngesting,
 		Shard:     &errShard{id: "shard-1"},
 		CreatedAt: time.Now(),
-	})
+	}
+	logdb.SeedShard(c.Provisioner, e)
+	stampShardServicesFromApps(t, c, e, []string{"vimgym", "callbox"})
 
 	res, err := c.Execute(`cat vimgym.log`, fullRange, "kevlar", "")
 	if err != nil {

@@ -26,6 +26,14 @@ type fakeRegistryStore struct {
 	// shard_services, so the permissive default keeps routing tests that
 	// don't care about the stamp from silently filtering to zero.
 	servingFn func(namespaceID uint, service string) (map[string]struct{}, error)
+	// shardServices accumulates rows written via AddShardService /
+	// StampShardServices; ListShardServices returns them so the registry's
+	// load/refresh paths see a shard's membership. bucketServices, when
+	// set per bucketID, backs ServicesForBucket (and what StampShardServices
+	// stamps); christen/reconciler tests set it to model a bucket's
+	// log_groups.
+	shardServices  []store.ShardService
+	bucketServices map[int64][]store.ShardService
 }
 
 func newFakeRegistryStore() *fakeRegistryStore {
@@ -129,11 +137,43 @@ func (f *fakeRegistryStore) FindLaunchingByInstance(instanceID string) (store.Sh
 	return store.ShardRecord{}, false, nil
 }
 
-// StampShardServices is a no-op in the fake: shard_services lives in
-// the real store, so christen's stamp call is inert here. The store
-// method itself is covered by TestStampShardServices.
+// StampShardServices stamps the bucket's services (from bucketServices)
+// onto shardID, modelling the real store's log_groups → shard_services
+// copy so christen/load tests see the right membership.
 func (f *fakeRegistryStore) StampShardServices(shardID string, bucketID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, s := range f.bucketServices[bucketID] {
+		f.shardServices = append(f.shardServices, store.ShardService{
+			ShardID: shardID, NamespaceID: s.NamespaceID, Service: s.Service,
+		})
+	}
 	return nil
+}
+
+// ListShardServices returns every stamped/added row.
+func (f *fakeRegistryStore) ListShardServices() ([]store.ShardService, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]store.ShardService(nil), f.shardServices...), nil
+}
+
+// AddShardService appends a single (shard, namespace, service) row.
+func (f *fakeRegistryStore) AddShardService(shardID string, namespaceID uint, service string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shardServices = append(f.shardServices, store.ShardService{
+		ShardID: shardID, NamespaceID: namespaceID, Service: service,
+	})
+	return nil
+}
+
+// ServicesForBucket returns the bucket's modelled services (the
+// log_groups stand-in tests set via bucketServices).
+func (f *fakeRegistryStore) ServicesForBucket(bucketID int64) ([]store.ShardService, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]store.ShardService(nil), f.bucketServices[bucketID]...), nil
 }
 
 // ShardIDsServingService returns the serving set for read routing. With

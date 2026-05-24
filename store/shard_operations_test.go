@@ -63,8 +63,8 @@ func TestShardOperationsAuditTrigger(t *testing.T) {
 	}
 
 	// INSERT -> (NULL -> LAUNCHING)
-	ins(`INSERT INTO shard_records (id, apps, window_start, window_end, state, created_at, bucket_id)
-	     VALUES (?, 'null', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z', 'LAUNCHING', now()::text, ?)`, sid, bucketID)
+	ins(`INSERT INTO shard_records (id, window_start, window_end, state, created_at, bucket_id)
+	     VALUES (?, '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z', 'LAUNCHING', now()::text, ?)`, sid, bucketID)
 	if count() != 1 {
 		t.Fatalf("after INSERT: count=%d want 1", count())
 	}

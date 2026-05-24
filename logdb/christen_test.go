@@ -71,7 +71,6 @@ func TestChristen_ConcurrentHeartbeats_FromSameAddr_DoNotDoubleConfigure(t *test
 		State:          string(StateLaunching),
 		Tier:           "small",
 		BucketID:       defaultBucketID,
-		Apps:           "null",
 		WindowStart:    "2026-04-21T00:00:00Z",
 		WindowEnd:      "2026-04-22T00:00:00Z",
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
@@ -151,7 +150,6 @@ func TestAdopt_DoesNotClobberPersistedWindowAndToken(t *testing.T) {
 	originalToken := "cf5c60de2f11b5af0a97b8dee2ca7c0705a00bef21c95e35f6cef2ba68bd5cec"
 	fake.records["shard-20260420T0000-1"] = store.ShardRecord{
 		ID:             "shard-20260420T0000-1",
-		Apps:           "null",
 		WindowStart:    originalWindow,
 		WindowEnd:      originalEnd,
 		State:          string(StateIngesting),

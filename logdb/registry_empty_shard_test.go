@@ -21,7 +21,7 @@ func TestMatchingEntries_SkipsEmptyColdShards(t *testing.T) {
 	mk := func(id string, st ShardState, rows int64) *ShardEntry {
 		return &ShardEntry{
 			ID:          id,
-			Apps:        nil,
+			Services:    nil,
 			WindowStart: now.Add(-30 * time.Minute),
 			WindowEnd:   now.Add(-20 * time.Minute),
 			State:       st,

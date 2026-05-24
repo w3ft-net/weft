@@ -154,7 +154,6 @@ func TestHeartbeat_UnknownInRegistry_LoadFromStore(t *testing.T) {
 	}
 	if err := tx.SaveShard(&store.ShardRecord{
 		ID:             shardID,
-		Apps:           "[]",
 		WindowStart:    "2026-04-21T00:00:00Z",
 		WindowEnd:      "2026-04-22T00:00:00Z",
 		State:          string(logdb.StateIngesting),

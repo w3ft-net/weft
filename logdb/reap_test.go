@@ -17,13 +17,13 @@ func TestUnsuspend_OnHeartbeat(t *testing.T) {
 
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
-		ID: "shard-0", Apps: []string{"anything"},
+		ID: "shard-0", Services: []store.ShardService{{NamespaceID: 1, Service: "anything"}},
 		State: StateIngesting, Shard: ds,
 		Addr: "10.0.0.1:9000", Suspended: true, CreatedAt: time.Now(),
 	})
 
 	// Verify it's suspended.
-	if sh := reg.IngestingShard("anything"); sh != nil {
+	if sh := reg.IngestingShard(1, "anything"); sh != nil {
 		t.Fatal("suspended shard should not be returned by IngestingShard")
 	}
 
@@ -46,7 +46,7 @@ func TestUnsuspend_OnHeartbeat(t *testing.T) {
 	}
 
 	// Should be back in rotation.
-	if sh := reg.IngestingShard("anything"); sh == nil {
+	if sh := reg.IngestingShard(1, "anything"); sh == nil {
 		t.Error("unsuspended shard should be returned by IngestingShard")
 	}
 }

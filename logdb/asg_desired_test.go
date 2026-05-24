@@ -226,7 +226,6 @@ func TestSyncASGDesired_IncludesFutureWindowLaunching(t *testing.T) {
 			BucketID:    1,
 			Tier:        "small",
 			State:       string(StateLaunching),
-			Apps:        "null",
 			WindowStart: nextStart.Format(time.RFC3339),
 			WindowEnd:   nextStart.Add(time.Hour).Format(time.RFC3339),
 			CreatedAt:   time.Now().UTC().Format(time.RFC3339),

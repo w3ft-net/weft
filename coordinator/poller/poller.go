@@ -19,7 +19,7 @@ import (
 // the bucket-add reconciles get dropped (the poller path is best-
 // effort; ingest stream's DLQ scanner re-ingests its own).
 type ShardProvider interface {
-	IngestingShard(app string) shard.Shard
+	IngestingShard(namespaceID uint, service string) shard.Shard
 }
 
 // Poller polls CloudWatch log groups and ingests into shards.
@@ -149,13 +149,14 @@ func (p *Poller) poll(ctx context.Context, lg store.LogGroupWithAWSAccount) {
 		return
 	}
 
-	// Route to the INGESTING shard for this app. No cross-app
-	// fallback — see ShardProvider's doc for the tenant-isolation
-	// rationale. If no shard owns this app yet, skip; the next
-	// poll picks up after OnboardApp reconciles.
-	sh := p.provider.IngestingShard(lg.App)
+	// Route to the INGESTING shard serving this (namespace, service).
+	// No cross-tenant fallback — see ShardProvider's doc. lg.App is the
+	// bare service; lg.NamespaceID scopes it to the customer. If no
+	// shard serves it yet, skip; the next poll picks up after the
+	// reconciler stamps it.
+	sh := p.provider.IngestingShard(lg.NamespaceID, lg.App)
 	if sh == nil {
-		log.Printf("poller[%s]: no shard owns this app yet — skipping poll", lg.App)
+		log.Printf("poller[%s]: no shard serves this service yet — skipping poll", lg.App)
 		return
 	}
 

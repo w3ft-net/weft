@@ -46,11 +46,11 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 	}
 
 	addInProcessShard(t, c, &logdb.ShardEntry{
-		ID: "shard-0", Apps: []string{"vimgym", "callbox"},
+		ID:          "shard-0",
 		WindowStart: t0, WindowEnd: t1,
 		State: logdb.StateIngesting, Shard: s0,
 		CreatedAt: time.Now(),
-	})
+	}, "vimgym", "callbox")
 
 	res, err = c.Execute("cat vimgym.log", failoverRange, "kevlar", "")
 	if err != nil {
@@ -78,11 +78,11 @@ func TestFailover_ShardReplacement(t *testing.T) {
 
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
 	addInProcessShard(t, c, &logdb.ShardEntry{
-		ID: "shard-0", Apps: apps,
+		ID:          "shard-0",
 		WindowStart: t0, WindowEnd: t1,
 		State: logdb.StateIngesting, Shard: s0,
 		CreatedAt: time.Now(),
-	})
+	}, apps...)
 
 	res, err := c.Execute("cat vimgym.log", failoverRange, "kevlar", "")
 	if err != nil {
@@ -104,11 +104,11 @@ func TestFailover_ShardReplacement(t *testing.T) {
 	}
 
 	addInProcessShard(t, c, &logdb.ShardEntry{
-		ID: "shard-1", Apps: apps,
+		ID:          "shard-1",
 		WindowStart: t1, WindowEnd: t2,
 		State: logdb.StateIngesting, Shard: s1,
 		CreatedAt: time.Now(),
-	})
+	}, apps...)
 
 	// Querying the wider range must now hit both shards.
 	res2, err := c.Execute("cat vimgym.log", failoverRange, "kevlar", "")
@@ -140,11 +140,11 @@ func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
 	apps := []string{"vimgym", "callbox"}
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStoreReal(t, "kevlar", "vimgym", "callbox")})
 	addInProcessShard(t, c, &logdb.ShardEntry{
-		ID: "shard-0", Apps: apps,
+		ID:          "shard-0",
 		WindowStart: t0, WindowEnd: t1,
 		State: logdb.StateIngesting, Shard: s0,
 		CreatedAt: time.Now(),
-	})
+	}, apps...)
 
 	var wg sync.WaitGroup
 	errors := make(chan error, 40)

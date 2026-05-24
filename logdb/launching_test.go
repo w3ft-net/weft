@@ -74,9 +74,9 @@ func TestLifecycleHook_ClaimsOldestLaunchingRow(t *testing.T) {
 	older := time.Now().UTC().Add(-10 * time.Second).Format(time.RFC3339)
 	newer := time.Now().UTC().Format(time.RFC3339)
 	for _, rec := range []store.ShardRecord{
-		{ID: "shard-A", State: string(StateLaunching), Tier: "small", BucketID: 1, CreatedAt: older, Apps: "null",
+		{ID: "shard-A", State: string(StateLaunching), Tier: "small", BucketID: 1, CreatedAt: older,
 			WindowStart: "2026-04-21T00:00:00Z", WindowEnd: "2026-04-22T00:00:00Z"},
-		{ID: "shard-B", State: string(StateLaunching), Tier: "small", BucketID: 1, CreatedAt: newer, Apps: "null",
+		{ID: "shard-B", State: string(StateLaunching), Tier: "small", BucketID: 1, CreatedAt: newer,
 			WindowStart: "2026-04-21T00:00:00Z", WindowEnd: "2026-04-22T00:00:00Z"},
 	} {
 		r := rec
@@ -156,7 +156,6 @@ func TestChristen_PromotesLaunchingRow_InsteadOfMinting(t *testing.T) {
 		State:          string(StateLaunching),
 		Tier:           "small",
 		BucketID:       1,
-		Apps:           `["weft"]`,
 		WindowStart:    windowStart,
 		WindowEnd:      windowEnd,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
@@ -235,7 +234,6 @@ func TestReaper_DeletesStaleLaunchingWithoutInstance(t *testing.T) {
 		State:    string(StateLaunching),
 		Tier:     "small",
 		BucketID: 1,
-		Apps:     "null",
 		WindowStart: "2026-04-21T00:00:00Z", WindowEnd: "2026-04-22T00:00:00Z",
 		CreatedAt: fresh,
 	})
@@ -247,7 +245,6 @@ func TestReaper_DeletesStaleLaunchingWithoutInstance(t *testing.T) {
 		State:    string(StateLaunching),
 		Tier:     "small",
 		BucketID: 1,
-		Apps:     "null",
 		WindowStart: "2026-04-21T00:00:00Z", WindowEnd: "2026-04-22T00:00:00Z",
 		CreatedAt: stale,
 	})
@@ -284,7 +281,6 @@ func TestReaper_AbandonsStuckInstance(t *testing.T) {
 		State:      string(StateLaunching),
 		Tier:       "small",
 		BucketID:   1,
-		Apps:       "null",
 		InstanceID: "i-never-heartbeated",
 		WindowStart: "2026-04-21T00:00:00Z", WindowEnd: "2026-04-22T00:00:00Z",
 		CreatedAt: stale,

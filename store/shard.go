@@ -14,7 +14,6 @@ import (
 // ShardRecord persists shard registry entries across coordinator restarts.
 type ShardRecord struct {
 	ID          string `gorm:"primaryKey"`
-	Apps        string `gorm:"not null"` // JSON array: ["vimgym","callbox"]
 	WindowStart string `gorm:"not null"` // RFC3339
 	WindowEnd   string `gorm:"not null"` // RFC3339
 	State       string `gorm:"not null"` // INGESTING/READ_ONLY/ARCHIVED

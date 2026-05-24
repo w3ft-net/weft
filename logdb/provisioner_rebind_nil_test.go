@@ -47,7 +47,7 @@ func TestProvisioner_RebindNilOldShardDoesNotPanic(t *testing.T) {
 		Addr:        "172.31.128.70:9000",
 		InstanceID:  "i-old",
 		State:       StateIngesting,
-		Apps:        []string{"weft/coordinator"},
+		Services:    []store.ShardService{{NamespaceID: 1, Service: "weft/coordinator"}},
 		WindowStart: time.Now().Add(-time.Hour),
 		WindowEnd:   time.Now().Add(time.Hour),
 		BucketID:    1,

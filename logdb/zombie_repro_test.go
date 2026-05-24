@@ -1,7 +1,6 @@
 package logdb
 
 import (
-	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -139,7 +138,7 @@ func TestReconcile_DBRegistryAsymmetry_BlocksLaunch(t *testing.T) {
 			ID:          "shard-real",
 			BucketID:    1,
 			State:       StateIngesting,
-			Apps:        []string{"weft"},
+			Services:    []store.ShardService{{NamespaceID: 1, Service: "weft"}},
 			WindowStart: now.Add(-time.Hour),
 			WindowEnd:   now.Add(6 * 24 * time.Hour),
 		},
@@ -190,7 +189,6 @@ func TestLoadFromStore_DropsNonArchivedShards(t *testing.T) {
 	fake := newFakeRegistryStore()
 	reg.SetStore(fake)
 
-	apps, _ := json.Marshal([]string{"weft"})
 	now := time.Now().Format(time.RFC3339)
 
 	// One row in each live state, plus an ARCHIVED control. In the
@@ -199,10 +197,10 @@ func TestLoadFromStore_DropsNonArchivedShards(t *testing.T) {
 	// not sufficient when an instance has died (wipe-and-await-rebind)
 	// or never came up (LAUNCHING).
 	for _, rec := range []store.ShardRecord{
-		{ID: "shard-ingesting", State: string(StateIngesting), Apps: string(apps), WindowStart: now, WindowEnd: now, CreatedAt: now, BucketID: 1},
-		{ID: "shard-readonly", State: string(StateReadOnly), Apps: string(apps), WindowStart: now, WindowEnd: now, CreatedAt: now, BucketID: 1},
-		{ID: "shard-launching", State: "LAUNCHING", Apps: string(apps), WindowStart: now, WindowEnd: now, CreatedAt: now, BucketID: 1},
-		{ID: "shard-archived", State: string(StateArchived), Apps: string(apps), WindowStart: now, WindowEnd: now, CreatedAt: now, BucketID: 1, ParquetPath: "s3://bucket/shard-archived/"},
+		{ID: "shard-ingesting", State: string(StateIngesting), WindowStart: now, WindowEnd: now, CreatedAt: now, BucketID: 1},
+		{ID: "shard-readonly", State: string(StateReadOnly), WindowStart: now, WindowEnd: now, CreatedAt: now, BucketID: 1},
+		{ID: "shard-launching", State: "LAUNCHING", WindowStart: now, WindowEnd: now, CreatedAt: now, BucketID: 1},
+		{ID: "shard-archived", State: string(StateArchived), WindowStart: now, WindowEnd: now, CreatedAt: now, BucketID: 1, ParquetPath: "s3://bucket/shard-archived/"},
 	} {
 		fake.records[rec.ID] = rec
 	}

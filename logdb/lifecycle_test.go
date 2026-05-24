@@ -187,7 +187,6 @@ func seedLaunchingRow(t *testing.T, fake *fakeRegistryStore, id, tier string) {
 		State:          string(StateLaunching),
 		Tier:           tier,
 		BucketID:       defaultBucketID,
-		Apps:           "null",
 		WindowStart:    "2026-04-21T00:00:00Z",
 		WindowEnd:      "2026-04-22T00:00:00Z",
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),

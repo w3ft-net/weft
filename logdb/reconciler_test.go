@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/kevlarcon/weft/store"
 )
 
 // reconcile() is a pure function: given a snapshot (bucket config +
@@ -18,9 +20,9 @@ import (
 func TestReconcile_AppDrift_EmitsOneOpPerMissingApp(t *testing.T) {
 	bucket := &AppBucket{ID: 1, Label: "default", Apps: []string{"weft", "vimgym", "callbox"}, Tier: "small"}
 	entries := []*ShardEntry{
-		{ID: "shard-a", BucketID: 1, State: StateIngesting, Apps: []string{"weft"}},
+		{ID: "shard-a", BucketID: 1, State: StateIngesting, Services: []store.ShardService{{NamespaceID: 1, Service: "weft"}}},
 	}
-	snap := ReconcilerSnapshot{Bucket: bucket, Entries: entries, Now: time.Now()}
+	snap := ReconcilerSnapshot{Bucket: bucket, BucketServices: []store.ShardService{{NamespaceID: 1, Service: "weft"}, {NamespaceID: 1, Service: "vimgym"}, {NamespaceID: 1, Service: "callbox"}}, Entries: entries, Now: time.Now()}
 
 	ops := reconcile(snap)
 	if len(ops) != 2 {
@@ -29,7 +31,7 @@ func TestReconcile_AppDrift_EmitsOneOpPerMissingApp(t *testing.T) {
 
 	wanted := map[string]bool{"vimgym": true, "callbox": true}
 	for _, op := range ops {
-		add, ok := op.(AddAppToShardOp)
+		add, ok := op.(AddServiceToShardOp)
 		if !ok {
 			t.Errorf("unexpected op type %T: %s", op, op.Describe())
 			continue
@@ -37,10 +39,10 @@ func TestReconcile_AppDrift_EmitsOneOpPerMissingApp(t *testing.T) {
 		if add.ShardID != "shard-a" {
 			t.Errorf("op shard: got %q want shard-a", add.ShardID)
 		}
-		if !wanted[add.App] {
-			t.Errorf("unexpected app in op: %q", add.App)
+		if !wanted[add.Service] {
+			t.Errorf("unexpected app in op: %q", add.Service)
 		}
-		delete(wanted, add.App)
+		delete(wanted, add.Service)
 	}
 	if len(wanted) != 0 {
 		t.Errorf("did not emit ops for apps: %v", wanted)
@@ -52,10 +54,10 @@ func TestReconcile_AppDrift_EmitsOneOpPerMissingApp(t *testing.T) {
 func TestReconcile_AppDrift_SkipsNonIngestingStates(t *testing.T) {
 	bucket := &AppBucket{ID: 1, Apps: []string{"weft", "vimgym"}, Tier: "small"}
 	entries := []*ShardEntry{
-		{ID: "shard-ro", BucketID: 1, State: StateReadOnly, Apps: []string{"weft"}},
-		{ID: "shard-arch", BucketID: 1, State: StateArchived, Apps: []string{"weft"}},
+		{ID: "shard-ro", BucketID: 1, State: StateReadOnly, Services: []store.ShardService{{NamespaceID: 1, Service: "weft"}}},
+		{ID: "shard-arch", BucketID: 1, State: StateArchived, Services: []store.ShardService{{NamespaceID: 1, Service: "weft"}}},
 	}
-	snap := ReconcilerSnapshot{Bucket: bucket, Entries: entries, Now: time.Now()}
+	snap := ReconcilerSnapshot{Bucket: bucket, BucketServices: []store.ShardService{{NamespaceID: 1, Service: "weft"}, {NamespaceID: 1, Service: "vimgym"}}, Entries: entries, Now: time.Now()}
 
 	if ops := reconcile(snap); len(ops) != 0 {
 		t.Errorf("want 0 ops (READ_ONLY/ARCHIVED frozen), got %d: %v", len(ops), describeOps(ops))
@@ -67,9 +69,9 @@ func TestReconcile_AppDrift_SkipsNonIngestingStates(t *testing.T) {
 func TestReconcile_AppDrift_NoOpWhenCurrent(t *testing.T) {
 	bucket := &AppBucket{ID: 1, Apps: []string{"weft", "vimgym"}, Tier: "small"}
 	entries := []*ShardEntry{
-		{ID: "shard-a", BucketID: 1, State: StateIngesting, Apps: []string{"weft", "vimgym"}},
+		{ID: "shard-a", BucketID: 1, State: StateIngesting, Services: []store.ShardService{{NamespaceID: 1, Service: "weft"}, {NamespaceID: 1, Service: "vimgym"}}},
 	}
-	snap := ReconcilerSnapshot{Bucket: bucket, Entries: entries, Now: time.Now()}
+	snap := ReconcilerSnapshot{Bucket: bucket, BucketServices: []store.ShardService{{NamespaceID: 1, Service: "weft"}, {NamespaceID: 1, Service: "vimgym"}}, Entries: entries, Now: time.Now()}
 
 	if ops := reconcile(snap); len(ops) != 0 {
 		t.Errorf("want 0 ops, got %d: %v", len(ops), describeOps(ops))
@@ -82,13 +84,13 @@ func TestReconcile_AppDrift_NoOpWhenCurrent(t *testing.T) {
 
 func TestAddAppToShardOp_Apply_Idempotent(t *testing.T) {
 	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{ID: "shard-a", State: StateIngesting, Apps: []string{"weft", "vimgym"}})
+	reg.Add(&ShardEntry{ID: "shard-a", State: StateIngesting, Services: []store.ShardService{{NamespaceID: 1, Service: "weft"}, {NamespaceID: 1, Service: "vimgym"}}})
 	prov := &Provisioner{registry: reg}
 
-	if err := (AddAppToShardOp{ShardID: "shard-a", App: "vimgym"}).Apply(context.Background(), prov); err != nil {
+	if err := (AddServiceToShardOp{ShardID: "shard-a", NamespaceID: 1, Service: "vimgym"}).Apply(context.Background(), prov); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	got := reg.Get("shard-a").Apps
+	got := reg.Get("shard-a").Services
 	if len(got) != 2 {
 		t.Errorf("Apps changed on idempotent re-apply: got %v, want [weft vimgym]", got)
 	}
@@ -103,10 +105,10 @@ func TestAddAppToShard_RaceSafeAgainstReaders(t *testing.T) {
 	reg := NewShardRegistry()
 	for i := 0; i < 4; i++ {
 		reg.Add(&ShardEntry{
-			ID:    fmt.Sprintf("shard-%d", i),
-			State: StateIngesting,
-			Shard: &failingShard{id: fmt.Sprintf("shard-%d", i)},
-			Apps:  []string{"weft"},
+			ID:       fmt.Sprintf("shard-%d", i),
+			State:    StateIngesting,
+			Shard:    &failingShard{id: fmt.Sprintf("shard-%d", i)},
+			Services: []store.ShardService{{NamespaceID: 1, Service: "weft"}},
 		})
 	}
 
@@ -126,7 +128,7 @@ func TestAddAppToShard_RaceSafeAgainstReaders(t *testing.T) {
 					return
 				default:
 				}
-				_ = reg.IngestingShard("weft")
+				_ = reg.IngestingShard(1, "weft")
 				_ = reg.MatchingEntries(TimeRange{}, servingFor(reg, "weft"), "bolt")
 			}
 		}()
@@ -143,7 +145,7 @@ func TestAddAppToShard_RaceSafeAgainstReaders(t *testing.T) {
 			for j := 0; j < 200; j++ {
 				shardID := fmt.Sprintf("shard-%d", j%4)
 				app := apps[j%len(apps)]
-				reg.AddAppToShard(shardID, app)
+				reg.AddServiceToShard(shardID, 1, app)
 			}
 		}(i)
 	}
@@ -155,14 +157,14 @@ func TestAddAppToShard_RaceSafeAgainstReaders(t *testing.T) {
 
 func TestAddAppToShardOp_Apply_SkipsReadOnly(t *testing.T) {
 	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{ID: "shard-ro", State: StateReadOnly, Apps: []string{"weft"}})
+	reg.Add(&ShardEntry{ID: "shard-ro", State: StateReadOnly, Services: []store.ShardService{{NamespaceID: 1, Service: "weft"}}})
 	prov := &Provisioner{registry: reg}
 
-	if err := (AddAppToShardOp{ShardID: "shard-ro", App: "vimgym"}).Apply(context.Background(), prov); err != nil {
+	if err := (AddServiceToShardOp{ShardID: "shard-ro", NamespaceID: 1, Service: "vimgym"}).Apply(context.Background(), prov); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	got := reg.Get("shard-ro").Apps
-	if len(got) != 1 || got[0] != "weft" {
+	got := reg.Get("shard-ro").Services
+	if len(got) != 1 || got[0].Service != "weft" {
 		t.Errorf("READ_ONLY shard was mutated: got %v", got)
 	}
 }
@@ -173,24 +175,30 @@ func TestAddAppToShardOp_Apply_SkipsReadOnly(t *testing.T) {
 func TestOnboardApp_ReconcilerPropagatesImmediately(t *testing.T) {
 	reg := NewShardRegistry()
 
-	reg.Add(&ShardEntry{ID: "ingest-1", BucketID: defaultBucketID, State: StateIngesting, Apps: []string{"weft"}, Shard: &failingShard{id: "ingest-1"}})
-	reg.Add(&ShardEntry{ID: "readonly-1", BucketID: defaultBucketID, State: StateReadOnly, Apps: []string{"weft"}, Shard: &failingShard{id: "readonly-1"}})
-
 	db := openSMTestStore(t)
 	seedDefaultBucket(t, db, []string{"weft"}, 0, 0)
+	// weft + xylem both live in the default bucket's log_groups (the
+	// routing source of truth); the reconciler stamps the one the shard
+	// is missing. nsID threads into the entries.
+	nsID := seedLogGroups(t, db, "onboard-prop-cust", "onboard-prop-ns", "weft", "xylem")
+
+	reg.Add(&ShardEntry{ID: "ingest-1", BucketID: defaultBucketID, State: StateIngesting, Services: []store.ShardService{{NamespaceID: nsID, Service: "weft"}}, Shard: &failingShard{id: "ingest-1"}})
+	reg.Add(&ShardEntry{ID: "readonly-1", BucketID: defaultBucketID, State: StateReadOnly, Services: []store.ShardService{{NamespaceID: nsID, Service: "weft"}}, Shard: &failingShard{id: "readonly-1"}})
+
 	bm := NewBucketManager(db)
 	prov := &Provisioner{registry: reg, Buckets: bm}
+	prov.config.ShardOps = db // ServicesForBucket for the reconciler's drift diff
 
 	if err := prov.OnboardApp("xylem"); err != nil {
 		t.Fatalf("OnboardApp: %v", err)
 	}
 
 	// INGESTING shard picked up xylem.
-	if got := reg.Get("ingest-1").Apps; !containsApp(got, "xylem") {
+	if got := reg.Get("ingest-1").Services; !servicesContain(got, "xylem") {
 		t.Errorf("INGESTING shard missing xylem after OnboardApp: got %v", got)
 	}
 	// READ_ONLY stayed frozen.
-	if got := reg.Get("readonly-1").Apps; containsApp(got, "xylem") {
+	if got := reg.Get("readonly-1").Services; servicesContain(got, "xylem") {
 		t.Errorf("READ_ONLY shard was mutated: got %v", got)
 	}
 	// Bucket has the app too.

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -65,6 +64,11 @@ type ShardOpsStore interface {
 	// resolves before filtering the registry. An empty service narrows to
 	// the namespace only.
 	ShardIDsServingService(namespaceID uint, service string) (map[string]struct{}, error)
+	// ServicesForBucket returns the (namespace_id, service) pairs a
+	// bucket serves (from log_groups). christen uses it to populate a
+	// shard's in-memory service membership; the reconciler diffs it to
+	// find services onboarded after christen.
+	ServicesForBucket(bucketID int64) ([]store.ShardService, error)
 }
 
 // staleLaunchingAge is the age beyond which a LAUNCHING row is
@@ -252,10 +256,11 @@ func (p *Provisioner) Stats() *AppStats {
 // boundary so *ShardEntry never leaks across, and the registry
 // stays free of proto knowledge.
 
-// IngestingShard returns an INGESTING shard for app via round-robin
-// across matching shards, or nil if none qualify.
-func (p *Provisioner) IngestingShard(app string) shard.Shard {
-	return p.registry.IngestingShard(app)
+// IngestingShard returns an INGESTING shard serving (namespaceID,
+// service) via round-robin across matching shards, or nil if none
+// qualify.
+func (p *Provisioner) IngestingShard(namespaceID uint, service string) shard.Shard {
+	return p.registry.IngestingShard(namespaceID, service)
 }
 
 // TotalIngesting returns the count of INGESTING shards regardless
@@ -310,7 +315,7 @@ func (p *Provisioner) ShardDescriptorsFor(tr TimeRange, namespaceID uint, servic
 	entries := p.registry.MatchingEntries(tr, serving, tier)
 	out := make([]*pb.ShardDescriptor, len(entries))
 	for i, e := range entries {
-		d := &pb.ShardDescriptor{ShardId: e.ID, Apps: e.Apps}
+		d := &pb.ShardDescriptor{ShardId: e.ID, Apps: serviceNames(e.Services)}
 		if e.State == StateArchived {
 			d.LambdaUrl = p.config.LambdaFunctionURL
 			d.ParquetPath = e.ParquetPath
@@ -741,9 +746,10 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 			entry.Tier = rec.Tier
 			entry.EBSVolumeID = rec.EBSVolumeID
 			entry.BucketID = rec.BucketID
-			if rec.Apps != "" && rec.Apps != "null" {
-				_ = json.Unmarshal([]byte(rec.Apps), &entry.Apps)
-			}
+			// Services aren't carried on shard_records anymore; they live
+			// in shard_services and are refreshed each tick by
+			// RefreshFromStore, so the adopt path leaves entry.Services
+			// alone.
 			// Preserve READ_ONLY from DB over an INGESTING heartbeat —
 			// the DB is the authoritative state for lifecycle.
 			if ShardState(rec.State) == StateReadOnly {
@@ -814,15 +820,20 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 		return fmt.Errorf("christen %s: bucket %d not found", row.ID, row.BucketID)
 	}
 
-	// Fresh bucket.Apps so a shard that LAUNCHED before an
-	// OnboardApp call still picks up the new app on promotion. The
-	// LAUNCHING row's Apps column is a snapshot for observability;
-	// the bucket read is authoritative.
-	apps := append([]string(nil), bucket.Apps...)
+	// The shard's service membership, read from the bucket's log_groups —
+	// the same source StampShardServices stamps into shard_services
+	// below, so the in-memory set and the persisted stamp agree. A shard
+	// that LAUNCHED before a service was onboarded picks it up here on
+	// promotion (the bucket read is authoritative, not the LAUNCHING-row
+	// snapshot).
+	svcs, err := p.config.ShardOps.ServicesForBucket(row.BucketID)
+	if err != nil {
+		return fmt.Errorf("christen %s: services for bucket %d: %w", row.ID, row.BucketID, err)
+	}
 
 	req := &pb.ConfigureRequest{
 		ShardId:        row.ID,
-		Apps:           apps,
+		Apps:           serviceNames(svcs),
 		WindowStart:    row.WindowStart,
 		WindowEnd:      row.WindowEnd,
 		HeartbeatToken: row.HeartbeatToken,
@@ -856,7 +867,7 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 
 	p.registry.Add(&ShardEntry{
 		ID:              row.ID,
-		Apps:            apps,
+		Services:        svcs,
 		WindowStart:     windowStart,
 		WindowEnd:       windowEnd,
 		State:           StateIngesting,
@@ -1034,7 +1045,7 @@ func (p *Provisioner) bootstrap(ctx context.Context) {
 // connect via gRPC, call Configure RPC, return a registry entry.
 // Goes through the ShardConfigurer so tests can swap the gRPC dial for
 // a stub.
-func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier string, apps []string, windowStart, windowEnd time.Time) (*ShardEntry, error) {
+func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier string, svcs []store.ShardService, windowStart, windowEnd time.Time) (*ShardEntry, error) {
 	log.Printf("provisioner: launching shard %s (tier=%s)", shardID, tier)
 
 	addr, err := p.launcher.LaunchInstance(ctx, tier)
@@ -1060,7 +1071,7 @@ func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier stri
 
 	cfg := &pb.ConfigureRequest{
 		ShardId:        shardID,
-		Apps:           apps,
+		Apps:           serviceNames(svcs),
 		WindowStart:    windowStart.Format(time.RFC3339),
 		WindowEnd:      windowEnd.Format(time.RFC3339),
 		HeartbeatToken: heartbeatToken,
@@ -1096,7 +1107,7 @@ func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier stri
 
 	return &ShardEntry{
 		ID:             shardID,
-		Apps:           apps,
+		Services:       svcs,
 		WindowStart:    windowStart,
 		WindowEnd:      windowEnd,
 		State:          StateIngesting,
@@ -1239,7 +1250,7 @@ func (p *Provisioner) archive(entry *ShardEntry) {
 		return
 	}
 
-	appLabel := joinApps(entry.Apps)
+	appLabel := joinApps(serviceNames(entry.Services))
 	s3Prefix := fmt.Sprintf("%s/%s", p.config.ParquetDir, appLabel)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -1255,7 +1266,7 @@ func (p *Provisioner) archive(entry *ShardEntry) {
 	// runs in compute, which dials its own ColdShard from the
 	// descriptor. We still slot it into entry.Shard so registry
 	// walks see a non-nil pointer for the archived entry.
-	coldShard, err := shard.NewColdShard(entry.ID, entry.Apps, parquetPath, p.config.LambdaFunctionURL, nil)
+	coldShard, err := shard.NewColdShard(entry.ID, serviceNames(entry.Services), parquetPath, p.config.LambdaFunctionURL, nil)
 	if err != nil {
 		log.Printf("provisioner: create cold shard for %s: %v", entry.ID, err)
 		return
@@ -1355,12 +1366,8 @@ func (p *Provisioner) mintLaunchingRowForWindow(bucket *AppBucket, windowStart, 
 		tier = "small"
 	}
 
-	apps := append([]string(nil), bucket.Apps...)
-	appsJSON, _ := json.Marshal(apps)
-
 	rec := &store.ShardRecord{
 		ID:             shardID,
-		Apps:           string(appsJSON),
 		WindowStart:    windowStart.Format(time.RFC3339),
 		WindowEnd:      windowEnd.Format(time.RFC3339),
 		State:          string(StateLaunching),
@@ -1411,7 +1418,16 @@ func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket)
 	seq := p.registry.Count()
 	id := fmt.Sprintf("shard-%s-%s-%d", joinApps(bucket.Apps), windowStart.Format("20060102T1504"), seq)
 
-	entry, err := p.launchAndConfigure(ctx, id, tier, bucket.Apps, windowStart, windowEnd)
+	var svcs []store.ShardService
+	if p.config.ShardOps != nil {
+		var err error
+		if svcs, err = p.config.ShardOps.ServicesForBucket(bucket.ID); err != nil {
+			log.Printf("provisioner: bucket %d: services for bucket: %v", bucket.ID, err)
+			return
+		}
+	}
+
+	entry, err := p.launchAndConfigure(ctx, id, tier, svcs, windowStart, windowEnd)
 	if err != nil {
 		log.Printf("provisioner: failed to launch shard for bucket %d: %v", bucket.ID, err)
 		return
@@ -1420,7 +1436,31 @@ func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket)
 	entry.Tier = tier
 
 	p.registry.Add(entry)
+	// Stamp shard_services so read routing (ShardIDsServingService) finds
+	// this shard — the sync-launcher analogue of christen's stamp.
+	if p.config.ShardOps != nil {
+		if err := p.config.ShardOps.StampShardServices(id, bucket.ID); err != nil {
+			log.Printf("provisioner: shard %s: stamp shard_services: %v", id, err)
+		}
+	}
 	log.Printf("provisioner: shard %s launched for bucket %d", id, bucket.ID)
+}
+
+// serviceNames renders a shard's service membership as bare service
+// strings — for the Configure RPC (informational; the shard only logs
+// it), the cold-shard label, and ShardDescriptor.Apps (dead metadata the
+// cold-query path ignores). Deduplicated: a namespace can repeat a
+// service name only across namespaces, but the same (ns, service) never
+// appears twice, so the values are already distinct per entry.
+func serviceNames(svcs []store.ShardService) []string {
+	if len(svcs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(svcs))
+	for _, s := range svcs {
+		out = append(out, s.Service)
+	}
+	return out
 }
 
 func joinApps(apps []string) string {

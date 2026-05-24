@@ -25,12 +25,12 @@ func TestRegistry_MatchingEntries_SkipsStaleHeartbeat(t *testing.T) {
 
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
-		ID: "fresh", Apps: []string{"vimgym"},
+		ID: "fresh", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: t0, WindowEnd: t2, State: StateIngesting,
 		Shard: freshShard, LastHeartbeatAt: time.Now(),
 	})
 	reg.Add(&ShardEntry{
-		ID: "stale", Apps: []string{"vimgym"},
+		ID: "stale", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: t0, WindowEnd: t2, State: StateIngesting,
 		Shard: staleShard,
 		// Heartbeat absent for 5 minutes — well past the 2-minute threshold.
@@ -63,12 +63,12 @@ func TestRegistry_IngestingShard_SkipsStaleHeartbeat(t *testing.T) {
 
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
-		ID: "fresh", Apps: []string{"vimgym"},
+		ID: "fresh", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: t0, WindowEnd: t2, State: StateIngesting,
 		Shard: freshShard, LastHeartbeatAt: time.Now(),
 	})
 	reg.Add(&ShardEntry{
-		ID: "stale", Apps: []string{"vimgym"},
+		ID: "stale", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: t0, WindowEnd: t2, State: StateIngesting,
 		Shard:           staleShard,
 		LastHeartbeatAt: time.Now().Add(-5 * time.Minute),
@@ -76,7 +76,7 @@ func TestRegistry_IngestingShard_SkipsStaleHeartbeat(t *testing.T) {
 
 	// Multiple round-robin selections must never land on the stale shard.
 	for i := 0; i < 10; i++ {
-		picked := reg.IngestingShard("vimgym")
+		picked := reg.IngestingShard(1, "vimgym")
 		if picked == nil {
 			t.Fatal("expected IngestingShard to return fresh shard")
 		}
@@ -100,7 +100,7 @@ func TestRegistry_ZeroLastHeartbeatAtCountsAsFresh(t *testing.T) {
 
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
-		ID: "legacy", Apps: []string{"vimgym"},
+		ID: "legacy", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: t0, WindowEnd: t2, State: StateIngesting,
 		Shard: s,
 		// LastHeartbeatAt left zero.
@@ -110,7 +110,7 @@ func TestRegistry_ZeroLastHeartbeatAtCountsAsFresh(t *testing.T) {
 	if len(matching) != 1 {
 		t.Fatalf("zero LastHeartbeatAt should count as fresh; got %d matching", len(matching))
 	}
-	if reg.IngestingShard("vimgym") == nil {
+	if reg.IngestingShard(1, "vimgym") == nil {
 		t.Fatal("zero LastHeartbeatAt should be eligible for write routing")
 	}
 }
@@ -148,7 +148,7 @@ func TestRegistry_HasApp_EmptyAppsNoLongerCatchAll(t *testing.T) {
 	}
 	// Write routing: an empty-Apps entry shouldn't be picked for any
 	// specific app either.
-	if reg.IngestingShard("vimgym") != nil {
+	if reg.IngestingShard(1, "vimgym") != nil {
 		t.Error("empty-Apps shard should NOT be picked as the ingest target for vimgym")
 	}
 }
@@ -171,7 +171,7 @@ func TestProcessHeartbeat_RefreshesLastHeartbeatAt(t *testing.T) {
 	priorBeat := time.Now().Add(-3 * time.Minute)
 	reg.Add(&ShardEntry{
 		ID:              "shard-live",
-		Apps:            []string{"weft"},
+		Services:        []store.ShardService{{NamespaceID: 1, Service: "weft"}},
 		State:           StateIngesting,
 		Addr:            "10.0.0.1:9000",
 		Shard:           ds,

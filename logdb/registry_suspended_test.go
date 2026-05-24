@@ -34,7 +34,7 @@ func TestMatchingEntries_SkipsSuspended(t *testing.T) {
 
 	reg.Add(&ShardEntry{
 		ID:          "shard-suspended",
-		Apps:        []string{"vimgym"},
+		Services:    []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: now.Add(-30 * time.Minute),
 		WindowEnd:   now.Add(-20 * time.Minute),
 		State:       StateSuspended,
@@ -43,7 +43,7 @@ func TestMatchingEntries_SkipsSuspended(t *testing.T) {
 	})
 	reg.Add(&ShardEntry{
 		ID:          "shard-live",
-		Apps:        []string{"vimgym"},
+		Services:    []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: now.Add(-30 * time.Minute),
 		WindowEnd:   now.Add(-20 * time.Minute),
 		State:       StateIngesting,
@@ -123,12 +123,12 @@ func TestSuspended_ExcludedFromWrites_IncludedInQueries(t *testing.T) {
 
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
-		ID: "shard-0", Apps: []string{"vimgym"},
+		ID: "shard-0", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		State: StateIngesting, Shard: ds,
 		Suspended: true, WindowStart: t0, WindowEnd: t2, CreatedAt: time.Now(),
 	})
 
-	if sh := reg.IngestingShard("vimgym"); sh != nil {
+	if sh := reg.IngestingShard(1, "vimgym"); sh != nil {
 		t.Error("IngestingShard should skip suspended shard")
 	}
 
@@ -180,7 +180,7 @@ func TestSuspend_LastShardDown_NoRouting(t *testing.T) {
 	reg := NewShardRegistry()
 	shardA := &failingShard{id: "shard-a", failing: true}
 	reg.Add(&ShardEntry{
-		ID: "shard-a", Apps: []string{"weft/coordinator"},
+		ID: "shard-a", Services: []store.ShardService{{NamespaceID: 1, Service: "weft/coordinator"}},
 		State: StateIngesting, Shard: shardA, CreatedAt: time.Now(),
 	})
 
@@ -192,7 +192,7 @@ func TestSuspend_LastShardDown_NoRouting(t *testing.T) {
 	if !reg.Get("shard-a").Suspended {
 		t.Fatalf("shard-a should be Suspended after %d failed Ingest calls", SuspendFailureThreshold)
 	}
-	if sh := reg.IngestingShard("weft/coordinator"); sh != nil {
+	if sh := reg.IngestingShard(1, "weft/coordinator"); sh != nil {
 		t.Errorf("IngestingShard should return nil for an app whose only shard is suspended; got %s", sh.ID())
 	}
 }

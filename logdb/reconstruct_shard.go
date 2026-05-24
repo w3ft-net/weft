@@ -1,7 +1,6 @@
 package logdb
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/kevlarcon/weft/shard"
@@ -56,9 +55,10 @@ func ReconstructShard(rec store.ShardRecord, cfg ReconstructConfig) (shard.Shard
 		if rec.ParquetPath == "" {
 			return nil, fmt.Errorf("ARCHIVED shard %s has no parquet_path (zombie row from rebind-timeout path)", rec.ID)
 		}
-		var apps []string
-		_ = json.Unmarshal([]byte(rec.Apps), &apps)
-		return shard.NewColdShard(rec.ID, apps, rec.ParquetPath, cfg.LambdaFunctionURL, nil)
+		// ColdShard's apps arg is dead metadata (the cold-query path
+		// ignores it); the registry sets the entry's real service
+		// membership from shard_services at LoadFromStore.
+		return shard.NewColdShard(rec.ID, nil, rec.ParquetPath, cfg.LambdaFunctionURL, nil)
 
 	case StateSuspended:
 		// Instance dead, awaiting replacement. No shard to dial; the

@@ -1,9 +1,7 @@
 package logdb
 
 import (
-	"encoding/json"
 	"log"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,7 +25,14 @@ const (
 // ShardEntry is the registry's per-shard metadata.
 type ShardEntry struct {
 	ID             string
-	Apps           []string // apps this shard owns; required (an empty list means the shard is unreachable for any specific-app query)
+	// Services is the shard's in-memory service membership — the
+	// (namespace_id, service) pairs it serves, the write router's
+	// counterpart to the read router's shard_services lookup. Stamped at
+	// christen from the bucket's log_groups and appended on live
+	// service-add; loaded from the shard_services table at boot/refresh.
+	// An empty list means the shard serves nothing (unreachable for any
+	// specific-service query or write).
+	Services       []store.ShardService
 	WindowStart    time.Time
 	WindowEnd      time.Time
 	State          ShardState
@@ -85,25 +90,14 @@ func (e *ShardEntry) isStale() bool {
 	return time.Since(e.LastHeartbeatAt) > heartbeatStaleThreshold
 }
 
-// hasApp returns true if this entry owns the given app. Both exact
-// match and namespace-prefix match (e.g. e.Apps={"weft/coordinator"}
-// matches app="weft" — same namespace) count.
-func (e *ShardEntry) hasApp(app string) bool {
-	// Extract namespace from query: weft/coordinator → weft, weft → weft
-	queryNS := app
-	if idx := strings.Index(queryNS, "/"); idx >= 0 {
-		queryNS = queryNS[:idx]
-	}
-
-	for _, a := range e.Apps {
-		if a == app {
-			return true
-		}
-		entryNS := a
-		if idx := strings.Index(entryNS, "/"); idx >= 0 {
-			entryNS = entryNS[:idx]
-		}
-		if entryNS == queryNS {
+// serves reports whether this entry serves the given (namespaceID,
+// service) — the write router's membership test against the shard's
+// in-memory service set. An empty service matches any service in the
+// namespace (the namespace-wide check), mirroring the read path's
+// ShardIDsServingService("" = namespace-only) semantics.
+func (e *ShardEntry) serves(namespaceID uint, service string) bool {
+	for _, s := range e.Services {
+		if s.NamespaceID == namespaceID && (service == "" || s.Service == service) {
 			return true
 		}
 	}
@@ -118,6 +112,13 @@ type RegistryStore interface {
 	ListShards() ([]store.ShardRecord, error)
 	GetShard(id string) (store.ShardRecord, bool, error)
 	TouchHeartbeat(id string, rowCount int64) error
+	// ListShardServices returns every shard_services row; the registry
+	// groups it by shard_id to populate each entry's in-memory service
+	// membership at boot/refresh.
+	ListShardServices() ([]store.ShardService, error)
+	// AddShardService records that a shard serves (namespaceID, service)
+	// — the live-add persistence behind AddServiceToShard.
+	AddShardService(shardID string, namespaceID uint, service string) error
 }
 
 // ShardRegistry tracks all shard entries. Thread-safe.
@@ -159,10 +160,8 @@ func (r *ShardRegistry) persist(entry *ShardEntry) {
 	if r.store == nil {
 		return
 	}
-	appsJSON, _ := json.Marshal(entry.Apps)
 	if err := r.store.SaveShard(&store.ShardRecord{
 		ID:             entry.ID,
-		Apps:           string(appsJSON),
 		WindowStart:    entry.WindowStart.Format(time.RFC3339),
 		WindowEnd:      entry.WindowEnd.Format(time.RFC3339),
 		State:          string(entry.State),
@@ -216,6 +215,7 @@ func (r *ShardRegistry) RefreshFromStore() {
 		log.Printf("registry: RefreshFromStore: %v", err)
 		return
 	}
+	svcByShard, svcOK := r.servicesByShard()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, rec := range records {
@@ -241,13 +241,34 @@ func (r *ShardRegistry) RefreshFromStore() {
 		entry.EBSVolumeID = rec.EBSVolumeID
 		entry.HeartbeatToken = rec.HeartbeatToken
 		entry.BucketID = rec.BucketID
-		if rec.Apps != "" && rec.Apps != "null" {
-			var apps []string
-			if err := json.Unmarshal([]byte(rec.Apps), &apps); err == nil {
-				entry.Apps = apps
-			}
+		// Only refresh services when the shard_services read succeeded;
+		// on a transient error leave the existing membership rather than
+		// wiping live routing to nil.
+		if svcOK {
+			entry.Services = svcByShard[rec.ID]
 		}
 	}
+}
+
+// servicesByShard loads every shard_services row and groups it by
+// shard_id, the form LoadFromStore/RefreshFromStore use to (re)populate
+// each entry's in-memory service membership. The bool is false on a
+// store error (logged) so callers can leave existing memberships intact
+// rather than clobbering live routing.
+func (r *ShardRegistry) servicesByShard() (map[string][]store.ShardService, bool) {
+	out := map[string][]store.ShardService{}
+	if r.store == nil {
+		return out, true
+	}
+	rows, err := r.store.ListShardServices()
+	if err != nil {
+		log.Printf("registry: ListShardServices: %v", err)
+		return out, false
+	}
+	for _, s := range rows {
+		out[s.ShardID] = append(out[s.ShardID], s)
+	}
+	return out, true
 }
 
 // LoadFromStore loads every shard record from the store into the
@@ -273,13 +294,12 @@ func (r *ShardRegistry) LoadFromStore(reconstruct func(rec store.ShardRecord) (s
 	if err != nil {
 		return err
 	}
+	svcByShard, _ := r.servicesByShard()
 	for _, rec := range records {
 		// reconstruct's error is informational — a non-ARCHIVED row
 		// (or one we can't open data for yet) still belongs in the
 		// registry. Drop the Shard pointer; everything else loads.
 		sh, _ := reconstruct(rec)
-		var apps []string
-		json.Unmarshal([]byte(rec.Apps), &apps)
 		windowStart, _ := time.Parse(time.RFC3339, rec.WindowStart)
 		windowEnd, _ := time.Parse(time.RFC3339, rec.WindowEnd)
 		createdAt, _ := time.Parse(time.RFC3339, rec.CreatedAt)
@@ -287,7 +307,7 @@ func (r *ShardRegistry) LoadFromStore(reconstruct func(rec store.ShardRecord) (s
 		r.mu.Lock()
 		r.entries[rec.ID] = &ShardEntry{
 			ID:             rec.ID,
-			Apps:           apps,
+			Services:       svcByShard[rec.ID],
 			WindowStart:    windowStart,
 			WindowEnd:      windowEnd,
 			State:          ShardState(rec.State),
@@ -323,21 +343,22 @@ func (r *ShardRegistry) Remove(id string) {
 	}
 }
 
-// AddAppToShard appends app to the given shard's Apps list under
-// the registry's write lock. Idempotent (no-op if the app is
-// already present) and state-gated (READ_ONLY/ARCHIVED shards'
-// apps stay frozen — they never accepted writes for the app, so
-// including them in query routing would widen fan-out).
+// AddServiceToShard appends (namespaceID, service) to the given shard's
+// in-memory service set and persists it to shard_services, under the
+// registry's write lock. Idempotent (no-op if already present) and
+// state-gated (only INGESTING shards grow their membership — READ_ONLY/
+// ARCHIVED shards' services stay frozen, since they never accepted
+// writes for a service onboarded after they sealed).
 //
 // Returns (found, added):
 //   - found=false means the shard isn't in the registry
 //   - found=true, added=false means the op was a no-op (already
 //     present or state != INGESTING)
-//   - found=true, added=true means the shard's Apps list grew
+//   - found=true, added=true means the shard's service set grew
 //
-// Callers that mutate entry.Apps directly bypass the lock and
-// race with IngestingShard/MatchingShards readers — don't.
-func (r *ShardRegistry) AddAppToShard(id, app string) (found bool, added bool) {
+// Callers that mutate entry.Services directly bypass the lock and race
+// with IngestingShard/MatchingEntries readers — don't.
+func (r *ShardRegistry) AddServiceToShard(id string, namespaceID uint, service string) (found bool, added bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entry, ok := r.entries[id]
@@ -347,13 +368,17 @@ func (r *ShardRegistry) AddAppToShard(id, app string) (found bool, added bool) {
 	if entry.State != StateIngesting {
 		return true, false
 	}
-	for _, a := range entry.Apps {
-		if a == app {
-			return true, false
+	if entry.serves(namespaceID, service) {
+		return true, false
+	}
+	entry.Services = append(entry.Services, store.ShardService{
+		ShardID: id, NamespaceID: namespaceID, Service: service,
+	})
+	if r.store != nil {
+		if err := r.store.AddShardService(id, namespaceID, service); err != nil {
+			log.Printf("registry: AddServiceToShard persist %s (%d/%s): %v", id, namespaceID, service, err)
 		}
 	}
-	entry.Apps = append(entry.Apps, app)
-	r.persist(entry)
 	return true, true
 }
 
@@ -494,10 +519,11 @@ func (r *ShardRegistry) MatchingEntries(tr TimeRange, serving map[string]struct{
 	return out
 }
 
-// IngestingShard returns an INGESTING shard for the given app, selected
-// via round-robin across all matching INGESTING shards. This distributes
-// writes across N concurrent writable shards for the same app.
-func (r *ShardRegistry) IngestingShard(app string) shard.Shard {
+// IngestingShard returns an INGESTING shard serving (namespaceID,
+// service), selected via round-robin across all matching INGESTING
+// shards. This distributes writes across N concurrent writable shards
+// for the same service.
+func (r *ShardRegistry) IngestingShard(namespaceID uint, service string) shard.Shard {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -506,7 +532,7 @@ func (r *ShardRegistry) IngestingShard(app string) shard.Shard {
 		if e.State != StateIngesting || e.Shard == nil || e.Suspended || e.isStale() {
 			continue
 		}
-		if e.hasApp(app) {
+		if e.serves(namespaceID, service) {
 			candidates = append(candidates, e.Shard)
 		}
 	}
@@ -531,13 +557,14 @@ func (r *ShardRegistry) TotalIngesting() int {
 	return n
 }
 
-// IngestingCount returns the number of INGESTING shards for the given app.
-func (r *ShardRegistry) IngestingCount(app string) int {
+// IngestingCount returns the number of INGESTING shards serving
+// (namespaceID, service).
+func (r *ShardRegistry) IngestingCount(namespaceID uint, service string) int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	n := 0
 	for _, e := range r.entries {
-		if e.State == StateIngesting && e.Shard != nil && e.hasApp(app) {
+		if e.State == StateIngesting && e.Shard != nil && e.serves(namespaceID, service) {
 			n++
 		}
 	}

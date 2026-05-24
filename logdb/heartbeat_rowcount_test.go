@@ -27,7 +27,7 @@ func TestProcessHeartbeat_UpdatesRowCount_SameAddr(t *testing.T) {
 
 	reg.Add(&ShardEntry{
 		ID:              "shard-rc-same",
-		Apps:            []string{"weft"},
+		Services:        []store.ShardService{{NamespaceID: 1, Service: "weft"}},
 		State:           StateIngesting,
 		Addr:            "10.0.0.1:9000",
 		Shard:           ds,
@@ -85,7 +85,7 @@ func TestProcessHeartbeat_UpdatesRowCount_Rebind(t *testing.T) {
 
 	reg.Add(&ShardEntry{
 		ID:              "shard-rc-rebind",
-		Apps:            []string{"weft"},
+		Services:        []store.ShardService{{NamespaceID: 1, Service: "weft"}},
 		State:           StateIngesting,
 		Addr:            "10.0.0.1:9000",
 		InstanceID:      "i-old",
@@ -155,6 +155,10 @@ func (f *rowCountFakeStore) TouchHeartbeat(id string, rowCount int64) error {
 	if rec, ok := f.saved[id]; ok {
 		rec.RowCount = rowCount
 	}
+	return nil
+}
+func (f *rowCountFakeStore) ListShardServices() ([]store.ShardService, error)     { return nil, nil }
+func (f *rowCountFakeStore) AddShardService(shardID string, namespaceID uint, service string) error {
 	return nil
 }
 func (f *rowCountFakeStore) lastSaved(id string) *store.ShardRecord               { return f.saved[id] }

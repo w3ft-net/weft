@@ -51,7 +51,7 @@ func TestMatchingEntries_AfterRestart(t *testing.T) {
 	reg.SetStore(tx)
 	reg.Add(&ShardEntry{
 		ID:          "shard-restart-test",
-		Apps:        []string{"testapp"},
+		Services:    []store.ShardService{{NamespaceID: 1, Service: "testapp"}},
 		WindowStart: now.Add(-time.Hour),
 		WindowEnd:   now.Add(time.Hour),
 		State:       StateIngesting,

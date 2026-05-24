@@ -35,7 +35,6 @@ func TestLifecycle_EmptyRegistry_AbandonsSuspendedShard(t *testing.T) {
 		Tier:        "small",
 		EBSVolumeID: "vol-orphan-01",
 		BucketID:    defaultBucketID,
-		Apps:        `["myapp"]`,
 		WindowStart: "2026-05-09T00:00:00Z",
 		WindowEnd:   "2026-05-10T00:00:00Z",
 		CreatedAt:   time.Now().Add(-6 * time.Hour).UTC().Format(time.RFC3339),

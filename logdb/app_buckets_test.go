@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kevlarcon/weft/shard"
+	"github.com/kevlarcon/weft/store"
 )
 
 // defaultBucketID is the surrogate id of the schema-seeded "default"
@@ -23,6 +24,10 @@ const defaultBucketID int64 = 1
 func TestOnboardApp_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 	db := openSMTestStore(t)
 	seedDefaultBucket(t, db, []string{"weft"}, 0, 0)
+	// Both services live in the default bucket's log_groups (the routing
+	// source of truth); the reconciler stamps the missing one onto the
+	// INGESTING shards. nsID is threaded into every entry below.
+	nsID := seedLogGroups(t, db, "onboard-cust", "onboard-ns", "weft", "xylem")
 	bm := NewBucketManager(db)
 
 	reg := NewShardRegistry()
@@ -32,14 +37,14 @@ func TestOnboardApp_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 		ID:       "ingest-1",
 		BucketID: defaultBucketID,
 		State:    StateIngesting,
-		Apps:     []string{"weft"},
+		Services: []store.ShardService{{NamespaceID: nsID, Service: "weft"}},
 		Shard:    &failingShard{id: "ingest-1"},
 	})
 	reg.Add(&ShardEntry{
 		ID:       "ingest-2",
 		BucketID: defaultBucketID,
 		State:    StateIngesting,
-		Apps:     []string{"weft"},
+		Services: []store.ShardService{{NamespaceID: nsID, Service: "weft"}},
 		Shard:    &failingShard{id: "ingest-2"},
 	})
 	// A READ_ONLY shard in the same bucket — must NOT get the app.
@@ -47,7 +52,7 @@ func TestOnboardApp_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 		ID:       "readonly-1",
 		BucketID: defaultBucketID,
 		State:    StateReadOnly,
-		Apps:     []string{"weft"},
+		Services: []store.ShardService{{NamespaceID: nsID, Service: "weft"}},
 		Shard:    &failingShard{id: "readonly-1"},
 	})
 	// An INGESTING shard in a *different* bucket — also must NOT.
@@ -56,7 +61,7 @@ func TestOnboardApp_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 		ID:       "other-bucket-ingest",
 		BucketID: dedicatedBucketID,
 		State:    StateIngesting,
-		Apps:     []string{"vimgym"},
+		Services: []store.ShardService{{NamespaceID: nsID, Service: "vimgym"}},
 		Shard:    &failingShard{id: "other-bucket-ingest"},
 	})
 
@@ -64,6 +69,7 @@ func TestOnboardApp_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 		registry: reg,
 		Buckets:  bm,
 	}
+	prov.config.ShardOps = db // ServicesForBucket for the reconciler's drift diff
 
 	if err := prov.OnboardApp("xylem"); err != nil {
 		t.Fatalf("OnboardApp: %v", err)
@@ -84,18 +90,18 @@ func TestOnboardApp_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 		if e == nil {
 			t.Fatalf("%s missing from registry", id)
 		}
-		if len(e.Apps) != 2 || !containsApp(e.Apps, "xylem") {
-			t.Errorf("%s apps: got %v, want contains xylem", id, e.Apps)
+		if len(e.Services) != 2 || !servicesContain(e.Services, "xylem") {
+			t.Errorf("%s apps: got %v, want contains xylem", id, e.Services)
 		}
 	}
 
 	// READ_ONLY shard: untouched.
-	if got := reg.Get("readonly-1").Apps; len(got) != 1 || got[0] != "weft" {
+	if got := reg.Get("readonly-1").Services; len(got) != 1 || got[0].Service != "weft" {
 		t.Errorf("readonly-1 apps changed: got %v, want [weft] (READ_ONLY must stay frozen)", got)
 	}
 
 	// Other-bucket shard: untouched.
-	if got := reg.Get("other-bucket-ingest").Apps; len(got) != 1 || got[0] != "vimgym" {
+	if got := reg.Get("other-bucket-ingest").Services; len(got) != 1 || got[0].Service != "vimgym" {
 		t.Errorf("other-bucket-ingest apps changed: got %v, want [vimgym]", got)
 	}
 
@@ -116,6 +122,44 @@ func containsApp(apps []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// servicesContain reports whether any of svcs has Service == want,
+// the ShardEntry.Services counterpart to containsApp.
+func servicesContain(svcs []store.ShardService, want string) bool {
+	for _, s := range svcs {
+		if s.Service == want {
+			return true
+		}
+	}
+	return false
+}
+
+// seedLogGroups creates a customer + namespace and a default-bucket
+// log_groups row per service, returning the namespace id. Routing now
+// reads a bucket's services from log_groups (Store.ServicesForBucket),
+// so christen/reconciler-propagation tests seed the service here — the
+// stand-in for a real AddSource/SubmitSample — not just on the bucket.
+// bucket_id is left NULL, which ServicesForBucket resolves to the
+// default bucket. The returned id must be threaded into the entries'
+// Services and the IngestingShard/IngestingCount calls so the in-memory
+// membership and the DB rows agree.
+func seedLogGroups(t *testing.T, db *store.Store, customer, namespace string, services ...string) uint {
+	t.Helper()
+	cust, err := db.FindOrCreateCustomer(customer)
+	if err != nil {
+		t.Fatalf("customer: %v", err)
+	}
+	ns, err := db.FindOrCreateNamespace(cust.ID, namespace)
+	if err != nil {
+		t.Fatalf("namespace: %v", err)
+	}
+	for _, svc := range services {
+		if err := db.AddLogGroup(ns.ID, nil, store.SourceTypeWeftd, svc, svc, "local", "", "0s"); err != nil {
+			t.Fatalf("log group %s: %v", svc, err)
+		}
+	}
+	return ns.ID
 }
 
 // EvaluateSplit is stubbed to "" while the split policy is redesigned.
@@ -209,18 +253,18 @@ func TestRegistry_RoundRobinIngestion(t *testing.T) {
 
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
-		ID: "s0", Apps: []string{"vimgym"},
+		ID: "s0", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: s0,
 	})
 	reg.Add(&ShardEntry{
-		ID: "s1", Apps: []string{"vimgym"},
+		ID: "s1", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: s1,
 	})
 
 	// Round-robin should alternate between s0 and s1.
 	seen := make(map[string]int)
 	for i := 0; i < 100; i++ {
-		sh := reg.IngestingShard("vimgym")
+		sh := reg.IngestingShard(1, "vimgym")
 		if sh == nil {
 			t.Fatal("nil shard")
 		}
@@ -250,26 +294,41 @@ func TestProvisioner_ScalesUpToConfiguredCount(t *testing.T) {
 
 	db := openSMTestStore(t)
 	seedDefaultBucket(t, db, []string{"vimgym"}, 3, 168*time.Hour)
+	// Routing reads the bucket's services from log_groups, so the
+	// scale-up shards are stamped from here (not bucket.Apps).
+	nsID := seedLogGroups(t, db, "scaleup-cust", "vimgym-ns", "vimgym")
 
 	reg := NewShardRegistry()
+	// Store-backed registry like the production sync launcher: Add
+	// persists a shard_records row so each launched shard's
+	// StampShardServices FK holds, and RefreshFromStore reloads service
+	// membership from shard_services.
+	reg.SetStore(db)
 	reg.Add(&ShardEntry{
 		ID:       "shard-only",
 		BucketID: defaultBucketID, // reconciler filters snapshot.Entries by BucketID
-		Apps:     []string{"vimgym"},
+		Services: []store.ShardService{{NamespaceID: nsID, Service: "vimgym"}},
 		// WindowEnd within bucket duration (168h) but in the future
 		// so wall-clock rotation doesn't preempt the scale-up test.
 		WindowStart: time.Now().UTC(), WindowEnd: time.Now().UTC().Add(24 * time.Hour),
 		State: StateIngesting,
 		Shard: ds, CreatedAt: time.Now(),
 	})
+	// Stamp the pre-existing shard's service so check()'s RefreshFromStore
+	// reloads it from shard_services rather than wiping it to nil.
+	if err := db.StampShardServices("shard-only", defaultBucketID); err != nil {
+		t.Fatalf("stamp shard-only: %v", err)
+	}
 
 	prov := NewProvisioner(reg, launcher, ProvisionerConfig{})
 	prov.Buckets = NewBucketManager(db)
+	prov.config.ShardOps = db // ServicesForBucket / StampShardServices for the launched shards
 
 	prov.check(context.Background())
 
-	// Should have scaled up to 3 ingesting shards.
-	count := reg.IngestingCount("vimgym")
+	// Should have scaled up to 3 ingesting shards, each stamped with
+	// the bucket's vimgym service from log_groups.
+	count := reg.IngestingCount(nsID, "vimgym")
 	if count != 3 {
 		t.Fatalf("expected 3 ingesting shards, got %d", count)
 	}

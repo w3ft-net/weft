@@ -64,11 +64,10 @@ func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, 
 	})
 	addInProcessShard(t, c, &logdb.ShardEntry{
 		ID:        s.ID(),
-		Apps:      []string{"api", "web"},
 		State:     logdb.StateIngesting,
 		Shard:     s,
 		CreatedAt: time.Now(),
-	})
+	}, "api", "web")
 
 	return c, db, cust.Name, custID
 }

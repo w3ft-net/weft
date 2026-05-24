@@ -199,7 +199,7 @@ func TestReconciler_PostReaperWipeEntry_BlocksLaunchOp(t *testing.T) {
 			ID:          "shard-healthy",
 			BucketID:    defaultBucketID,
 			State:       StateIngesting,
-			Apps:        []string{"weft"},
+			Services:    []store.ShardService{{NamespaceID: 1, Service: "weft"}},
 			Addr:        "10.0.0.1:9000",
 			InstanceID:  "i-alive",
 			EBSVolumeID: "vol-healthy",
@@ -211,7 +211,7 @@ func TestReconciler_PostReaperWipeEntry_BlocksLaunchOp(t *testing.T) {
 			ID:              "shard-zombie",
 			BucketID:        defaultBucketID,
 			State:           StateIngesting,
-			Apps:            []string{"weft"},
+			Services:        []store.ShardService{{NamespaceID: 1, Service: "weft"}},
 			Addr:            "",
 			InstanceID:      "",
 			EBSVolumeID:     "vol-zombie",
@@ -434,7 +434,7 @@ func TestReconcile_LogsPerBucketSummary(t *testing.T) {
 	entries := []*ShardEntry{
 		{
 			ID: "shard-A", BucketID: defaultBucketID, State: StateIngesting,
-			Apps: []string{"weft"}, WindowStart: now.Add(-time.Hour),
+			Services: []store.ShardService{{NamespaceID: 1, Service: "weft"}}, WindowStart: now.Add(-time.Hour),
 			WindowEnd: now.Add(6 * 24 * time.Hour), CreatedAt: now.Add(-time.Hour),
 		},
 	}

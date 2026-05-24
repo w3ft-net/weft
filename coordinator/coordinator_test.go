@@ -14,6 +14,7 @@ import (
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
+	"gorm.io/gorm/clause"
 )
 
 // poolFromCoord returns the *compute.LocalComputePool that NewCoordinator
@@ -34,14 +35,14 @@ func poolFromCoord(t testing.TB, c *Coordinator) *compute.LocalComputePool {
 // dialing). This is the unit-test replacement for the old
 // registryPool bypass — compute still owns the dispatch, but the
 // resolver tells it "for this id, use this handle directly."
-func addInProcessShard(t testing.TB, c *Coordinator, e *logdb.ShardEntry) {
+func addInProcessShard(t testing.TB, c *Coordinator, e *logdb.ShardEntry, apps ...string) {
 	t.Helper()
 	if e.Shard == nil {
 		t.Fatal("addInProcessShard: entry must have non-nil Shard")
 	}
 	poolFromCoord(t, c).RegisterResolver(computetest.NewInProcessResolver(e.ID, e.Shard))
 	logdb.SeedShard(c.Provisioner, e)
-	stampShardServicesFromApps(t, c, e)
+	stampShardServicesFromApps(t, c, e, apps)
 }
 
 // stampShardServicesFromApps wires a directly-seeded shard into the
@@ -55,17 +56,16 @@ func addInProcessShard(t testing.TB, c *Coordinator, e *logdb.ShardEntry) {
 // we first upsert the shard_records parent — every production shard has
 // one — then stamp one row per (namespace, service) the shard serves.
 //
-// "What this shard serves" is taken from the entry's Apps list, the same
-// source the fixtures already declare it in; each composite app
-// ("ns/svc/kind", or a bare "ns") splits into (namespace, service) the
-// way the planner's pseudofile parser does. When Apps the field is
-// dropped (a later phase), this reads whatever the fixtures declare
-// services in instead — the shard_services stamping itself is permanent.
+// The services come from the apps list the call site passes (each a
+// composite "ns/svc/kind" or bare "ns"), split into (namespace, service)
+// the way the planner's pseudofile parser does. Each resolved pair is
+// both written to shard_services (read routing) and appended to
+// e.Services (the in-memory write-routing membership christen would set).
 //
 // Apps whose namespace isn't registered under the store's sole test
 // customer are skipped: a query for them resolves namespace_id 0 (no
 // filter) and still reaches every shard, so the shard stays visible.
-func stampShardServicesFromApps(t testing.TB, c *Coordinator, e *logdb.ShardEntry) {
+func stampShardServicesFromApps(t testing.TB, c *Coordinator, e *logdb.ShardEntry, apps []string) {
 	t.Helper()
 	if c.Store == nil {
 		return
@@ -93,10 +93,8 @@ func stampShardServicesFromApps(t testing.TB, c *Coordinator, e *logdb.ShardEntr
 		}
 		bucketID = def.ID
 	}
-	appsJSON, _ := json.Marshal(e.Apps)
 	if err := c.Store.SaveShard(&store.ShardRecord{
 		ID:          e.ID,
-		Apps:        string(appsJSON),
 		WindowStart: e.WindowStart.Format(time.RFC3339),
 		WindowEnd:   e.WindowEnd.Format(time.RFC3339),
 		State:       string(e.State),
@@ -108,7 +106,7 @@ func stampShardServicesFromApps(t testing.TB, c *Coordinator, e *logdb.ShardEntr
 	}
 
 	seen := map[string]struct{}{}
-	for _, app := range e.Apps {
+	for _, app := range apps {
 		ns, svc := app, ""
 		if i := strings.IndexByte(app, '/'); i >= 0 {
 			ns = app[:i]
@@ -127,11 +125,14 @@ func stampShardServicesFromApps(t testing.TB, c *Coordinator, e *logdb.ShardEntr
 			continue
 		}
 		seen[key] = struct{}{}
-		if err := c.Store.DB().Create(&store.ShardService{
+		if err := c.Store.DB().Clauses(clause.OnConflict{DoNothing: true}).Create(&store.ShardService{
 			ShardID: e.ID, NamespaceID: n.ID, Service: svc,
 		}).Error; err != nil {
 			t.Fatalf("stampShardServicesFromApps: stamp %s (%s/%s): %v", e.ID, ns, svc, err)
 		}
+		e.Services = append(e.Services, store.ShardService{
+			ShardID: e.ID, NamespaceID: n.ID, Service: svc,
+		})
 	}
 }
 
@@ -187,17 +188,17 @@ func setupTestCoordinator(t testing.TB) *Coordinator {
 	apps := []string{"vimgym", "callbox"}
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox", "warp")})
 	addInProcessShard(t, c, &logdb.ShardEntry{
-		ID: "shard-0", Apps: apps,
+		ID:          "shard-0",
 		WindowStart: t0, WindowEnd: t1,
 		State: logdb.StateIngesting, Shard: s0,
 		CreatedAt: time.Now(),
-	})
+	}, apps...)
 	addInProcessShard(t, c, &logdb.ShardEntry{
-		ID: "shard-1", Apps: apps,
+		ID:          "shard-1",
 		WindowStart: t1, WindowEnd: t2,
 		State: logdb.StateIngesting, Shard: s1,
 		CreatedAt: time.Now(),
-	})
+	}, apps...)
 	return c
 }
 
@@ -614,18 +615,18 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 	// BEFORE wrapping in spyPool, because addInProcessShard reaches
 	// for the underlying *compute.LocalComputePool through c.Pool.
 	addInProcessShard(t, c, &logdb.ShardEntry{
-		ID: "shard-live", Apps: apps,
+		ID:          "shard-live",
 		WindowStart: now.Add(-2 * time.Hour), WindowEnd: now.Add(-1 * time.Hour),
 		State: logdb.StateIngesting, Shard: s0, Addr: "10.0.0.1:9000",
 		CreatedAt: now,
-	})
+	}, apps...)
 	addInProcessShard(t, c, &logdb.ShardEntry{
-		ID: "shard-archived", Apps: apps,
+		ID:          "shard-archived",
 		WindowStart: now.Add(-1 * time.Hour), WindowEnd: now,
 		State: logdb.StateArchived, Shard: s0, ParquetPath: "s3://bucket/shard-archived.parquet",
 		RowCount:  1,
 		CreatedAt: now,
-	})
+	}, apps...)
 	spy := &spyPool{inner: c.Pool}
 	c.Pool = spy
 

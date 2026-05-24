@@ -56,7 +56,7 @@ func TestMatchingEntries_ClampsToPlanRetention(t *testing.T) {
 	now := time.Now()
 	recent := &ShardEntry{
 		ID:          "recent",
-		Apps:        []string{"ops"},
+		Services:    []store.ShardService{{NamespaceID: 1, Service: "ops"}},
 		WindowStart: now.Add(-10 * 24 * time.Hour),
 		WindowEnd:   now.Add(-5 * 24 * time.Hour),
 		State:       StateReadOnly,
@@ -65,7 +65,7 @@ func TestMatchingEntries_ClampsToPlanRetention(t *testing.T) {
 	}
 	spanning := &ShardEntry{
 		ID:          "spanning",
-		Apps:        []string{"ops"},
+		Services:    []store.ShardService{{NamespaceID: 1, Service: "ops"}},
 		WindowStart: now.Add(-45 * 24 * time.Hour),
 		WindowEnd:   now.Add(-20 * 24 * time.Hour),
 		State:       StateReadOnly,
@@ -74,7 +74,7 @@ func TestMatchingEntries_ClampsToPlanRetention(t *testing.T) {
 	}
 	old := &ShardEntry{
 		ID:          "old",
-		Apps:        []string{"ops"},
+		Services:    []store.ShardService{{NamespaceID: 1, Service: "ops"}},
 		WindowStart: now.Add(-200 * 24 * time.Hour),
 		WindowEnd:   now.Add(-195 * 24 * time.Hour),
 		State:       StateReadOnly,

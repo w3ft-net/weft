@@ -55,14 +55,14 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 	// Build coordinator with both shards.
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym")})
 	addInProcessShard(t, c, &logdb.ShardEntry{
-		ID: "shard-live", Apps: []string{"vimgym"},
+		ID:          "shard-live",
 		WindowStart: t1, WindowEnd: t2, State: logdb.StateIngesting, Shard: live,
-	})
+	}, "vimgym")
 	addInProcessShard(t, c, &logdb.ShardEntry{
-		ID: "shard-cold", Apps: []string{"vimgym"},
+		ID:          "shard-cold",
 		WindowStart: t0, WindowEnd: t1, State: logdb.StateArchived, Shard: cold,
 		RowCount: 3,
-	})
+	}, "vimgym")
 
 	// Query spanning both windows.
 	result, err := c.Execute("cat vimgym.log", TimeRange{Start: t0, End: t2}, "kevlar", "")

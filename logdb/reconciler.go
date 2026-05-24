@@ -6,6 +6,8 @@ import (
 	"log"
 	"sort"
 	"time"
+
+	"github.com/kevlarcon/weft/store"
 )
 
 // PrewarmLead is the interval before a current-window INGESTING
@@ -45,6 +47,12 @@ type ReconcileOp interface {
 // registry (there's no LAUNCHING intermediate state to miss).
 type ReconcilerSnapshot struct {
 	Bucket               *AppBucket
+	// BucketServices is the (namespace_id, service) set the bucket
+	// serves, read from log_groups by the snapshot builder. Op 1
+	// (service-drift) diffs it against each INGESTING shard's membership
+	// to find services onboarded after the shard christened. Pure
+	// reconcile() can't do the DB read itself, so it's prefetched here.
+	BucketServices       []store.ShardService
 	Entries              []*ShardEntry // registry entries with BucketID == Bucket.ID
 	LaunchingCount       int           // shard_records rows in this bucket with state=LAUNCHING
 	IngestingCount       int           // authoritative INGESTING count (DB for async, registry for sync)
@@ -60,21 +68,23 @@ func reconcile(snap ReconcilerSnapshot) []ReconcileOp {
 	}
 	var ops []ReconcileOp
 
-	// Op 1 — app-drift. Every INGESTING shard in the bucket must
-	// own every app in bucket.Apps. READ_ONLY/ARCHIVED shards stay
-	// frozen (they never accepted writes for the new app, so
-	// widening their app set would only widen query fan-out).
+	// Op 1 — service-drift. Every INGESTING shard in the bucket must
+	// serve every (namespace, service) the bucket serves (from
+	// log_groups, prefetched into BucketServices). A service onboarded
+	// after the shard christened is missing from its stamp; this adds
+	// it (registry + shard_services) so writes and reads both reach it.
+	// READ_ONLY/ARCHIVED shards stay frozen (they never accepted writes
+	// for the new service, so widening their set would only widen query
+	// fan-out).
 	for _, e := range snap.Entries {
 		if e.State != StateIngesting {
 			continue
 		}
-		have := make(map[string]bool, len(e.Apps))
-		for _, a := range e.Apps {
-			have[a] = true
-		}
-		for _, a := range snap.Bucket.Apps {
-			if !have[a] {
-				ops = append(ops, AddAppToShardOp{ShardID: e.ID, App: a})
+		for _, s := range snap.BucketServices {
+			if !e.serves(s.NamespaceID, s.Service) {
+				ops = append(ops, AddServiceToShardOp{
+					ShardID: e.ID, NamespaceID: s.NamespaceID, Service: s.Service,
+				})
 			}
 		}
 	}
@@ -360,20 +370,22 @@ func (o RotateToReadOnlyOp) Apply(_ context.Context, p *Provisioner) error {
 	return nil
 }
 
-// AddAppToShardOp appends one app to one INGESTING shard. Idempotent
-// and state-gated: a shard that has since flipped to READ_ONLY
-// between snapshot and apply is left alone.
-type AddAppToShardOp struct {
-	ShardID string
-	App     string
+// AddServiceToShardOp records one (namespace, service) onto one
+// INGESTING shard (registry + shard_services). Idempotent and
+// state-gated: a shard that has since flipped to READ_ONLY between
+// snapshot and apply is left alone.
+type AddServiceToShardOp struct {
+	ShardID     string
+	NamespaceID uint
+	Service     string
 }
 
-func (o AddAppToShardOp) Describe() string {
-	return fmt.Sprintf("add app %q to shard %s", o.App, o.ShardID)
+func (o AddServiceToShardOp) Describe() string {
+	return fmt.Sprintf("add service %d/%q to shard %s", o.NamespaceID, o.Service, o.ShardID)
 }
 
-func (o AddAppToShardOp) Apply(_ context.Context, p *Provisioner) error {
-	found, _ := p.registry.AddAppToShard(o.ShardID, o.App)
+func (o AddServiceToShardOp) Apply(_ context.Context, p *Provisioner) error {
+	found, _ := p.registry.AddServiceToShard(o.ShardID, o.NamespaceID, o.Service)
 	if !found {
 		return fmt.Errorf("%s: entry not in registry", o.Describe())
 	}
@@ -394,6 +406,16 @@ func (p *Provisioner) snapshotForBucket(bucket *AppBucket) ReconcilerSnapshot {
 	for _, e := range p.registry.Entries() {
 		if e.BucketID == bucket.ID {
 			snap.Entries = append(snap.Entries, e)
+		}
+	}
+
+	// Prefetch the bucket's services from log_groups for op 1's
+	// service-drift diff (reconcile() is pure and can't read the DB).
+	if p.config.ShardOps != nil {
+		if svcs, err := p.config.ShardOps.ServicesForBucket(bucket.ID); err != nil {
+			log.Printf("reconciler: bucket %d services: %v", bucket.ID, err)
+		} else {
+			snap.BucketServices = svcs
 		}
 	}
 

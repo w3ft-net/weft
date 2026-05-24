@@ -67,12 +67,12 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 	apps := []string{"vimgym", "callbox"}
 	c := NewCoordinator(CoordinatorConfig{Pool: pool, Store: testQueryStore(t, "kevlar", "vimgym", "callbox", "warp")})
 	e0 := &logdb.ShardEntry{
-		ID: "shard-0", Apps: apps,
+		ID:          "shard-0",
 		WindowStart: DevT0, WindowEnd: DevT1,
 		State: logdb.StateIngesting, Shard: gs0, Addr: shard0Addr,
 	}
 	e1 := &logdb.ShardEntry{
-		ID: "shard-1", Apps: apps,
+		ID:          "shard-1",
 		WindowStart: DevT1, WindowEnd: DevT2,
 		State: logdb.StateIngesting, Shard: gs1, Addr: shard1Addr,
 	}
@@ -81,8 +81,8 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 	// SeedShard skips christen, so stamp shard_services (+ the
 	// shard_records parent) the service-level read router needs — same
 	// stand-in addInProcessShard does for the in-process fixtures.
-	stampShardServicesFromApps(t, c, e0)
-	stampShardServicesFromApps(t, c, e1)
+	stampShardServicesFromApps(t, c, e0, apps)
+	stampShardServicesFromApps(t, c, e1, apps)
 	return c
 }
 

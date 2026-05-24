@@ -71,7 +71,7 @@ func TestBackfillShardServices059(t *testing.T) {
 		t.Helper()
 		if err := db.SaveShard(&ShardRecord{
 			ID: id, State: "READ_ONLY", BucketID: bucketID, Tier: "small",
-			Apps: "[]", WindowStart: "2026-05-01T00:00:00Z",
+			WindowStart: "2026-05-01T00:00:00Z",
 			WindowEnd: "2026-05-08T00:00:00Z", CreatedAt: "2026-05-01T00:00:00Z",
 		}); err != nil {
 			t.Fatalf("shard %s: %v", id, err)
@@ -165,7 +165,7 @@ func TestStampShardServices(t *testing.T) {
 		t.Helper()
 		if err := db.SaveShard(&ShardRecord{
 			ID: id, State: "INGESTING", BucketID: bucketID, Tier: "small",
-			Apps: "[]", WindowStart: "2026-05-01T00:00:00Z",
+			WindowStart: "2026-05-01T00:00:00Z",
 			WindowEnd: "2026-05-08T00:00:00Z", CreatedAt: "2026-05-01T00:00:00Z",
 		}); err != nil {
 			t.Fatalf("shard %s: %v", id, err)

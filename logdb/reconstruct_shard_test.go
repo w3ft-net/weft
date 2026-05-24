@@ -18,7 +18,6 @@ func TestReconstructShard_IngestingDials(t *testing.T) {
 		ID:    "shard-live-ingest",
 		State: string(StateIngesting),
 		Addr:  "10.0.0.1:9000",
-		Apps:  `["weft"]`,
 	}
 	sh, err := ReconstructShard(rec, ReconstructConfig{ShardSecret: "test-secret"})
 	if err != nil {
@@ -40,7 +39,6 @@ func TestReconstructShard_ReadOnlyDials(t *testing.T) {
 		ID:    "shard-readonly",
 		State: string(StateReadOnly),
 		Addr:  "10.0.0.2:9000",
-		Apps:  `["weft"]`,
 	}
 	sh, err := ReconstructShard(rec, ReconstructConfig{ShardSecret: "test-secret"})
 	if err != nil {
@@ -61,7 +59,6 @@ func TestReconstructShard_IngestingNoAddr(t *testing.T) {
 		ID:    "shard-mid-rebind",
 		State: string(StateIngesting),
 		Addr:  "", // wiped, awaiting rebind
-		Apps:  `["weft"]`,
 	}
 	sh, err := ReconstructShard(rec, ReconstructConfig{ShardSecret: "test-secret"})
 	if err == nil {
@@ -81,7 +78,6 @@ func TestReconstructShard_LaunchingNoDial(t *testing.T) {
 		ID:    "shard-launching",
 		State: string(StateLaunching),
 		Addr:  "", // no instance yet
-		Apps:  `["weft"]`,
 	}
 	sh, err := ReconstructShard(rec, ReconstructConfig{ShardSecret: "test-secret"})
 	if err == nil {
@@ -103,7 +99,6 @@ func TestReconstructShard_ArchivedNoParquet(t *testing.T) {
 		ID:          "shard-zombie",
 		State:       string(StateArchived),
 		ParquetPath: "", // zombie path never exported
-		Apps:        `["weft"]`,
 	}
 	sh, err := ReconstructShard(rec, ReconstructConfig{ShardSecret: "test-secret"})
 	if err == nil {
@@ -124,7 +119,6 @@ func TestReconstructShard_ArchivedWithParquet(t *testing.T) {
 		ID:          "shard-cold",
 		State:       string(StateArchived),
 		ParquetPath: "s3://weft-cold/weft/shard-cold.parquet",
-		Apps:        `["weft"]`,
 	}
 	sh, err := ReconstructShard(rec, ReconstructConfig{
 		ShardSecret:       "test-secret",

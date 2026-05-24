@@ -2,7 +2,6 @@ package logdb
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -29,7 +28,7 @@ func TestProvisioner_ArchivesExpiredShard(t *testing.T) {
 
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
-		ID: "shard-old", Apps: []string{"vimgym"}, BucketID: 1,
+		ID: "shard-old", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}}, BucketID: 1,
 		WindowStart: t0, WindowEnd: t1,
 		State:     StateReadOnly,
 		Shard:     ds,
@@ -107,7 +106,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 	}
 
 	reg.Add(&ShardEntry{
-		ID: shardID, Apps: []string{"vimgym"},
+		ID: shardID, Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		BucketID:    defBucket.ID,
 		WindowStart: t0, WindowEnd: t1,
 		State:       StateArchived,
@@ -125,9 +124,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 			return nil, fmt.Errorf("skip unrelated shard %s", rec.ID)
 		}
 		if rec.State == string(StateArchived) && rec.ParquetPath != "" {
-			var apps []string
-			json.Unmarshal([]byte(rec.Apps), &apps)
-			return shard.NewColdShard(rec.ID, apps, rec.ParquetPath, "", nil)
+			return shard.NewColdShard(rec.ID, nil, rec.ParquetPath, "", nil)
 		}
 		return nil, fmt.Errorf("skip live shard %s", rec.ID)
 	})
@@ -171,7 +168,7 @@ func TestRegistry_MatchingEntries_IncludesArchived(t *testing.T) {
 
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
-		ID: "shard-arch", Apps: []string{"vimgym"},
+		ID: "shard-arch", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: t0, WindowEnd: t1,
 		State: StateArchived, Shard: ds, RowCount: 1,
 	})

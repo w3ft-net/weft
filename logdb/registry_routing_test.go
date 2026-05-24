@@ -20,7 +20,7 @@ func servingFor(reg *ShardRegistry, app string) map[string]struct{} {
 	}
 	out := map[string]struct{}{}
 	for _, e := range reg.Entries() {
-		if e.hasApp(app) {
+		if e.serves(1, app) {
 			out[e.ID] = struct{}{}
 		}
 	}
@@ -59,11 +59,11 @@ func TestRegistry_ServingSetQueryRouting(t *testing.T) {
 
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
-		ID: "shard-vimgym", Apps: []string{"vimgym"},
+		ID: "shard-vimgym", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: sVim,
 	})
 	reg.Add(&ShardEntry{
-		ID: "shard-callbox", Apps: []string{"callbox"},
+		ID: "shard-callbox", Services: []store.ShardService{{NamespaceID: 1, Service: "callbox"}},
 		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: sCb,
 	})
 
@@ -113,17 +113,17 @@ func TestRegistry_IngestingShard(t *testing.T) {
 
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{
-		ID: "s0", Apps: []string{"vimgym", "grantcentral"},
+		ID: "s0", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}, {NamespaceID: 1, Service: "grantcentral"}},
 		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: s0,
 	})
 
-	if sh := reg.IngestingShard("vimgym"); sh == nil {
+	if sh := reg.IngestingShard(1, "vimgym"); sh == nil {
 		t.Fatal("expected ingesting shard for vimgym")
 	}
-	if sh := reg.IngestingShard("grantcentral"); sh == nil {
+	if sh := reg.IngestingShard(1, "grantcentral"); sh == nil {
 		t.Fatal("expected ingesting shard for grantcentral")
 	}
-	if sh := reg.IngestingShard("unknown"); sh != nil {
+	if sh := reg.IngestingShard(1, "unknown"); sh != nil {
 		t.Fatal("expected nil for unknown app")
 	}
 }
