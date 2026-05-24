@@ -45,8 +45,9 @@ type QueryPlan struct {
 	// the same transformations as the historical batch.
 	LiveStages []string
 	SourceCmd      string        // source command: "cat", "head", or "tail"
-	SourceApp      string        // composite app name for shard routing ("" = all apps)
-	SourceNamespace string       // namespace for shard routing
+	SourceApp      string        // composite app name (ns/svc/kind) — allowlist + logging only; routing keys on SourceNamespace+SourceService
+	SourceNamespace string       // namespace segment for shard routing ("" = all namespaces)
+	SourceService   string       // service segment for shard routing ("" = all services in the namespace)
 	AlertArgs      []string      // argv for a terminal `alert` stage; nil if absent. Set even for alert-only pipelines (ShardSQL is empty in that case).
 
 	// Direct-to-compute mode (see docs/plans/direct-to-compute.md §3).
@@ -388,6 +389,7 @@ func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 		SourceCmd:      info.source.cmd,
 		SourceApp:      info.source.app(),
 		SourceNamespace: firstOrEmpty(info.source.namespaces),
+		SourceService:   firstOrEmpty(info.source.services),
 		AlertArgs:      alertArgs,
 		ShardOrderBy:   mergeOrderBy,
 		ShardLimit:     shardLimit,

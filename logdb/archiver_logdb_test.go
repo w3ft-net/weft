@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -72,11 +71,7 @@ func TestProvisioner_ArchivesExpiredShard(t *testing.T) {
 
 func TestRegistry_PersistAndRestore(t *testing.T) {
 	// Create a store.
-	dsn := os.Getenv("WEFT_TEST_DSN")
-	if dsn == "" {
-		dsn = "host=localhost port=5433 dbname=weft user=weft password=weft sslmode=disable"
-	}
-	db, err := store.Open(dsn)
+	db, err := store.Open(store.TestDSN(t))
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}
@@ -181,7 +176,7 @@ func TestRegistry_MatchingEntries_IncludesArchived(t *testing.T) {
 		State: StateArchived, Shard: ds, RowCount: 1,
 	})
 
-	matching := reg.MatchingEntries(TimeRange{Start: t0, End: t1}, "vimgym", "bolt")
+	matching := reg.MatchingEntries(TimeRange{Start: t0, End: t1}, servingFor(reg, "vimgym"), "bolt")
 	if len(matching) != 1 {
 		t.Fatalf("expected 1 archived shard in results, got %d", len(matching))
 	}

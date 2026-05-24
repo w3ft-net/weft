@@ -60,6 +60,11 @@ type ShardOpsStore interface {
 	// bucket serves into shard_services — the permanent stamp future
 	// queries resolve through.
 	StampShardServices(shardID string, bucketID int64) error
+	// ShardIDsServingService returns the set of shard IDs serving
+	// (namespaceID, service) — the read-routing lookup ShardDescriptorsFor
+	// resolves before filtering the registry. An empty service narrows to
+	// the namespace only.
+	ShardIDsServingService(namespaceID uint, service string) (map[string]struct{}, error)
 }
 
 // staleLaunchingAge is the age beyond which a LAUNCHING row is
@@ -272,19 +277,37 @@ func (p *Provisioner) ResetIngestFailures(id string) {
 	p.registry.ResetIngestFailures(id)
 }
 
-// ShardDescriptorsFor enumerates shards that intersect tr and serve
-// app, then builds the proto ShardDescriptor each compute worker
-// needs to dial or restore them. tier clamps the time range to the
-// caller's retention window before matching. The provisioner's own
-// LambdaFunctionURL (set from $LAMBDA_FUNCTION_URL in logdb.Start) is
-// stamped onto archived entries for the cold-shard restore path;
-// live entries get the gRPC address instead.
+// ShardDescriptorsFor enumerates shards that intersect tr and serve the
+// queried (namespaceID, service), then builds the proto ShardDescriptor
+// each compute worker needs to dial or restore them. The serving set is
+// resolved from shard_services (the christen-time stamp) here, then
+// handed to the registry's pure MatchingEntries. tier clamps the time
+// range to the caller's retention window before matching. The
+// provisioner's own LambdaFunctionURL (set from $LAMBDA_FUNCTION_URL in
+// logdb.Start) is stamped onto archived entries for the cold-shard
+// restore path; live entries get the gRPC address instead.
+//
+// namespaceID == 0 means "unresolved / no namespace filter" — every
+// shard with an overlapping window matches, preserving the old app==""
+// fan-out (a bare /log/warp.log, or a namespace the customer can't
+// resolve). A non-zero namespaceID with an empty service narrows to the
+// namespace (all its services). A serving lookup error logs and falls
+// back to no filter rather than silently returning zero shards.
 //
 // Returns an empty slice if nothing matches — callers can range over
 // it without nil-checking. This is the only path coordinator-side
 // code uses to read shard state for queries.
-func (p *Provisioner) ShardDescriptorsFor(tr TimeRange, app string, tier store.Tier) []*pb.ShardDescriptor {
-	entries := p.registry.MatchingEntries(tr, app, tier)
+func (p *Provisioner) ShardDescriptorsFor(tr TimeRange, namespaceID uint, service string, tier store.Tier) []*pb.ShardDescriptor {
+	var serving map[string]struct{}
+	if namespaceID != 0 && p.config.ShardOps != nil {
+		s, err := p.config.ShardOps.ShardIDsServingService(namespaceID, service)
+		if err != nil {
+			log.Printf("provisioner: ShardDescriptorsFor: serving lookup ns=%d service=%q: %v — falling back to no filter", namespaceID, service, err)
+		} else {
+			serving = s
+		}
+	}
+	entries := p.registry.MatchingEntries(tr, serving, tier)
 	out := make([]*pb.ShardDescriptor, len(entries))
 	for i, e := range entries {
 		d := &pb.ShardDescriptor{ShardId: e.ID, Apps: e.Apps}
@@ -849,12 +872,15 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 		LastHeartbeatAt: time.Now(),
 	})
 	// Stamp the shard with its bucket's services (shard_services,
-	// migration 058) — the permanent snapshot future queries resolve
-	// through. Best-effort: the routing path still reads
-	// shard_records.apps until cutover, so a stamp failure must not
-	// abort an otherwise-successful christen.
+	// migration 058) — the permanent snapshot the read router resolves
+	// through (ShardDescriptorsFor → ShardIDsServingService). Reliable,
+	// not best-effort: now that query routing reads shard_services
+	// exclusively, an unstamped shard is invisible to every query for
+	// its services, so a stamp failure must fail christen. The shard
+	// stays a LAUNCHING row and gets re-christened on the next heartbeat
+	// rather than silently entering INGESTING as a query black hole.
 	if err := p.config.ShardOps.StampShardServices(row.ID, row.BucketID); err != nil {
-		log.Printf("provisioner: christen %s: stamp shard_services: %v", row.ID, err)
+		return fmt.Errorf("christen %s: stamp shard_services: %w", row.ID, err)
 	}
 
 	log.Printf("provisioner: christened %s at %s (bucket=%s(%d) window %s–%s volume=%s)",

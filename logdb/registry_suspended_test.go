@@ -53,7 +53,7 @@ func TestMatchingEntries_SkipsSuspended(t *testing.T) {
 
 	tr := TimeRange{Start: now.Add(-time.Hour), End: now}
 	got := map[string]bool{}
-	for _, e := range reg.MatchingEntries(tr, "vimgym", store.Tier("")) {
+	for _, e := range reg.MatchingEntries(tr, servingFor(reg, "vimgym"), store.Tier("")) {
 		got[e.ID] = true
 	}
 
@@ -132,7 +132,7 @@ func TestSuspended_ExcludedFromWrites_IncludedInQueries(t *testing.T) {
 		t.Error("IngestingShard should skip suspended shard")
 	}
 
-	matching := reg.MatchingEntries(fullRange, "vimgym", store.Tier("bolt"))
+	matching := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), store.Tier("bolt"))
 	if len(matching) != 1 {
 		t.Errorf("MatchingEntries should include suspended shard, got %d", len(matching))
 	}

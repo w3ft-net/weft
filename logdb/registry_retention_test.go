@@ -94,7 +94,7 @@ func TestMatchingEntries_ClampsToPlanRetention(t *testing.T) {
 		End:   now,
 	}
 
-	matched := registry.MatchingEntries(tr, "ops", tier)
+	matched := registry.MatchingEntries(tr, servingFor(registry, "ops"), tier)
 
 	ids := make(map[string]bool, len(matched))
 	for _, e := range matched {

@@ -127,7 +127,7 @@ func TestAddAppToShard_RaceSafeAgainstReaders(t *testing.T) {
 				default:
 				}
 				_ = reg.IngestingShard("weft")
-				_ = reg.MatchingEntries(TimeRange{}, "weft", "bolt")
+				_ = reg.MatchingEntries(TimeRange{}, servingFor(reg, "weft"), "bolt")
 			}
 		}()
 	}

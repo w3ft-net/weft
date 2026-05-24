@@ -426,9 +426,18 @@ func (r *ShardRegistry) HasAddr(addr string) bool {
 	return false
 }
 
-// MatchingShards returns shards whose time windows overlap the given range
-// AND whose app set includes the given app. If app is "", all shards with
-// overlapping time windows are returned.
+// MatchingEntries returns shards whose time windows overlap the given
+// range AND whose ID is in the serving set. serving is the set of shard
+// IDs that serve the queried (namespace, service), resolved upstream
+// from shard_services (see Store.ShardIDsServingService). A nil serving
+// set means "no service filter" — every shard with an overlapping
+// window matches (the namespace-blind, all-services fan-out a bare
+// /log/warp.log or an unresolved namespace produces). An empty (non-nil)
+// set matches nothing: the query named a service no shard serves.
+//
+// MatchingEntries stays pure — it does no DB I/O. The serving-set lookup
+// is the caller's job (ShardDescriptorsFor), keeping the registry free
+// of store knowledge and the routing tests DB-free.
 //
 // tr.Start is clamped up to now − LogRetention(tier) so a customer
 // never reaches a shard whose data falls entirely outside their
@@ -439,7 +448,7 @@ func (r *ShardRegistry) HasAddr(addr string) bool {
 // within that shard. The clamp here is defense in depth; passing the
 // already-clamped value keeps it idempotent. tier="" yields the
 // trial-tier retention (24h, conservative).
-func (r *ShardRegistry) MatchingEntries(tr TimeRange, app string, tier store.Tier) []*ShardEntry {
+func (r *ShardRegistry) MatchingEntries(tr TimeRange, serving map[string]struct{}, tier store.Tier) []*ShardEntry {
 	if cap := time.Now().Add(-store.LogRetention(tier)); tr.Start.Before(cap) {
 		tr.Start = cap
 	}
@@ -475,8 +484,10 @@ func (r *ShardRegistry) MatchingEntries(tr TimeRange, app string, tier store.Tie
 		if hasWindow && (!e.WindowStart.Before(tr.End) || !e.WindowEnd.After(tr.Start)) {
 			continue
 		}
-		if app != "" && !e.hasApp(app) {
-			continue
+		if serving != nil {
+			if _, ok := serving[e.ID]; !ok {
+				continue
+			}
 		}
 		out = append(out, e)
 	}

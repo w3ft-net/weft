@@ -8,11 +8,32 @@ import (
 	"github.com/kevlarcon/weft/store"
 )
 
-// TestRegistry_AppScopedQueryRouting — MatchingEntries narrows by App,
-// and the empty-app sentinel hits every entry in the window. Two
-// shards, each scoped to a different app; ingest is irrelevant here,
-// the test just checks which entries the matcher returns.
-func TestRegistry_AppScopedQueryRouting(t *testing.T) {
+// servingFor builds the serving set a query for app would resolve to,
+// mirroring the per-entry hasApp match that MatchingEntries used to do
+// internally. Tests whose real subject is staleness / suspension /
+// retention / archived-inclusion (not service routing) use this to keep
+// expressing "a query scoped to app X" now that the serving-set lookup
+// lives upstream of the pure registry filter. "" yields nil (no filter).
+func servingFor(reg *ShardRegistry, app string) map[string]struct{} {
+	if app == "" {
+		return nil
+	}
+	out := map[string]struct{}{}
+	for _, e := range reg.Entries() {
+		if e.hasApp(app) {
+			out[e.ID] = struct{}{}
+		}
+	}
+	return out
+}
+
+// TestRegistry_ServingSetQueryRouting — MatchingEntries narrows to the
+// shard-ID set the caller passes (resolved upstream from shard_services),
+// a nil set hits every entry in the window, and an empty (non-nil) set
+// matches nothing. Two shards in the same window; the test drives the
+// serving filter directly, DB-free — the registry no longer does app
+// matching itself.
+func TestRegistry_ServingSetQueryRouting(t *testing.T) {
 	sVim, err := shard.NewDuckDBShard("shard-vimgym", "")
 	if err != nil {
 		t.Fatal(err)
@@ -46,23 +67,37 @@ func TestRegistry_AppScopedQueryRouting(t *testing.T) {
 		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: sCb,
 	})
 
-	matching := reg.MatchingEntries(fullRange, "vimgym", store.Tier("bolt"))
+	serving := func(ids ...string) map[string]struct{} {
+		s := make(map[string]struct{}, len(ids))
+		for _, id := range ids {
+			s[id] = struct{}{}
+		}
+		return s
+	}
+
+	matching := reg.MatchingEntries(fullRange, serving("shard-vimgym"), store.Tier("bolt"))
 	if len(matching) != 1 {
-		t.Fatalf("expected 1 shard for vimgym, got %d", len(matching))
+		t.Fatalf("expected 1 shard for the vimgym serving set, got %d", len(matching))
 	}
 	if matching[0].ID != "shard-vimgym" {
 		t.Fatalf("expected shard-vimgym, got %s", matching[0].ID)
 	}
 
-	matching = reg.MatchingEntries(fullRange, "callbox", store.Tier("bolt"))
-	if len(matching) != 1 {
-		t.Fatalf("expected 1 shard for callbox, got %d", len(matching))
+	matching = reg.MatchingEntries(fullRange, serving("shard-callbox"), store.Tier("bolt"))
+	if len(matching) != 1 || matching[0].ID != "shard-callbox" {
+		t.Fatalf("expected only shard-callbox, got %v", matching)
 	}
 
-	// Empty app = all apps in the window.
-	matching = reg.MatchingEntries(fullRange, "", store.Tier("bolt"))
+	// Nil serving set = no service filter = all shards in the window.
+	matching = reg.MatchingEntries(fullRange, nil, store.Tier("bolt"))
 	if len(matching) != 2 {
-		t.Fatalf("expected 2 shards for all apps, got %d", len(matching))
+		t.Fatalf("expected 2 shards for the nil (all-services) set, got %d", len(matching))
+	}
+
+	// Empty (non-nil) serving set = a service no shard serves = nothing.
+	matching = reg.MatchingEntries(fullRange, serving(), store.Tier("bolt"))
+	if len(matching) != 0 {
+		t.Fatalf("expected 0 shards for the empty serving set, got %d", len(matching))
 	}
 }
 

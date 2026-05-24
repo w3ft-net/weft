@@ -13,6 +13,31 @@ type ShardService struct {
 
 func (ShardService) TableName() string { return "shard_services" }
 
+// ShardIDsServingService returns the set of shard IDs that serve the
+// given (namespaceID, service), read from the christen-time stamp in
+// shard_services. An empty service narrows to the namespace only (every
+// shard serving any service in that namespace) — the wildcard a
+// namespace-level query (/log/<ns>) needs. The result is a set for O(1)
+// membership tests at the registry filter; callers treat a nil/empty
+// map as "no shard serves this", which routes to zero shards.
+func (s *Store) ShardIDsServingService(namespaceID uint, service string) (map[string]struct{}, error) {
+	q := s.db.Model(&ShardService{}).
+		Distinct("shard_id").
+		Where("namespace_id = ?", namespaceID)
+	if service != "" {
+		q = q.Where("service = ?", service)
+	}
+	var ids []string
+	if err := q.Pluck("shard_id", &ids).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		out[id] = struct{}{}
+	}
+	return out, nil
+}
+
 // StampShardServices snapshots the services of bucketID onto shardID —
 // the permanent christen-time stamp. The services are read from the
 // canonical registry (log_groups), where a NULL bucket_id means the

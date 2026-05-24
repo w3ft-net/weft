@@ -37,7 +37,7 @@ func TestRegistry_MatchingEntries_SkipsStaleHeartbeat(t *testing.T) {
 		LastHeartbeatAt: time.Now().Add(-5 * time.Minute),
 	})
 
-	matching := reg.MatchingEntries(fullRange, "vimgym", "bolt")
+	matching := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), "bolt")
 	if len(matching) != 1 {
 		t.Fatalf("expected 1 matching shard (stale skipped), got %d", len(matching))
 	}
@@ -106,7 +106,7 @@ func TestRegistry_ZeroLastHeartbeatAtCountsAsFresh(t *testing.T) {
 		// LastHeartbeatAt left zero.
 	})
 
-	matching := reg.MatchingEntries(fullRange, "vimgym", "bolt")
+	matching := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), "bolt")
 	if len(matching) != 1 {
 		t.Fatalf("zero LastHeartbeatAt should count as fresh; got %d matching", len(matching))
 	}
@@ -137,13 +137,13 @@ func TestRegistry_HasApp_EmptyAppsNoLongerCatchAll(t *testing.T) {
 	})
 
 	// Specific-app query should miss.
-	if matching := reg.MatchingEntries(fullRange, "vimgym", "bolt"); len(matching) != 0 {
+	if matching := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), "bolt"); len(matching) != 0 {
 		t.Errorf("empty-Apps shard should NOT match specific app query, got %d", len(matching))
 	}
 	// Whole-customer query (app=="") still sees all shards — that's a
 	// different code path (the hasApp filter is skipped when app is
 	// empty), independent of the catch-all rip.
-	if matching := reg.MatchingEntries(fullRange, "", "bolt"); len(matching) != 1 {
+	if matching := reg.MatchingEntries(fullRange, nil, "bolt"); len(matching) != 1 {
 		t.Errorf("whole-customer query should see the shard, got %d", len(matching))
 	}
 	// Write routing: an empty-Apps entry shouldn't be picked for any

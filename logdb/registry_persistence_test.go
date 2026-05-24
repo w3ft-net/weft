@@ -20,6 +20,12 @@ type fakeRegistryStore struct {
 	records map[string]store.ShardRecord
 	saves   int
 	deletes int
+	// servingFn, when set, backs ShardIDsServingService so a test can
+	// drive ShardDescriptorsFor's serving-set filter. Nil falls back to
+	// "every known shard serves it" — the fake doesn't model
+	// shard_services, so the permissive default keeps routing tests that
+	// don't care about the stamp from silently filtering to zero.
+	servingFn func(namespaceID uint, service string) (map[string]struct{}, error)
 }
 
 func newFakeRegistryStore() *fakeRegistryStore {
@@ -128,6 +134,22 @@ func (f *fakeRegistryStore) FindLaunchingByInstance(instanceID string) (store.Sh
 // method itself is covered by TestStampShardServices.
 func (f *fakeRegistryStore) StampShardServices(shardID string, bucketID int64) error {
 	return nil
+}
+
+// ShardIDsServingService returns the serving set for read routing. With
+// no servingFn override it returns every known shard ID — see the field
+// comment for why the fake defaults permissive.
+func (f *fakeRegistryStore) ShardIDsServingService(namespaceID uint, service string) (map[string]struct{}, error) {
+	if f.servingFn != nil {
+		return f.servingFn(namespaceID, service)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]struct{}, len(f.records))
+	for id := range f.records {
+		out[id] = struct{}{}
+	}
+	return out, nil
 }
 
 func (f *fakeRegistryStore) ListStaleLaunching(olderThan time.Duration) ([]store.ShardRecord, error) {

@@ -1,7 +1,6 @@
 package logdb
 
 import (
-	"os"
 	"testing"
 	"time"
 
@@ -22,11 +21,7 @@ import (
 // guard hides every shard after restart, so compute gets zero
 // descriptors and every query returns empty / times out.
 func TestMatchingEntries_AfterRestart(t *testing.T) {
-	dsn := os.Getenv("WEFT_TEST_DSN")
-	if dsn == "" {
-		dsn = "host=localhost port=5433 dbname=weft user=weft password=weft sslmode=disable"
-	}
-	db, err := store.Open(dsn)
+	db, err := store.Open(store.TestDSN(t))
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}
@@ -94,7 +89,7 @@ func TestMatchingEntries_AfterRestart(t *testing.T) {
 	// coordinator builds ShardDescriptors from Addr, not from
 	// Shard — a nil Shard with a valid Addr is queryable.
 	tr := TimeRange{Start: now.Add(-30 * time.Minute), End: now}
-	entries := reg2.MatchingEntries(tr, "", store.TierBolt)
+	entries := reg2.MatchingEntries(tr, nil, store.TierBolt)
 	if len(entries) == 0 {
 		t.Fatal("MatchingEntries returned 0 entries after restart — this is the d477ea2 production bug")
 	}

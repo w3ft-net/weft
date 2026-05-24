@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/kevlarcon/weft/planner"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
+	"github.com/kevlarcon/weft/store"
 )
 
 // poolFromCoord returns the *compute.LocalComputePool that NewCoordinator
@@ -39,6 +41,98 @@ func addInProcessShard(t testing.TB, c *Coordinator, e *logdb.ShardEntry) {
 	}
 	poolFromCoord(t, c).RegisterResolver(computetest.NewInProcessResolver(e.ID, e.Shard))
 	logdb.SeedShard(c.Provisioner, e)
+	stampShardServicesFromApps(t, c, e)
+}
+
+// stampShardServicesFromApps wires a directly-seeded shard into the
+// shard_services table the service-level read router resolves through
+// (ShardDescriptorsFor → ShardIDsServingService). Production populates
+// shard_services at christen (StampShardServices) and on live app-add;
+// SeedShard skips that whole path, so this is the fixture stand-in.
+//
+// shard_services FKs to shard_records, and these in-process fixtures
+// keep the registry store-less (so SeedShard never persists the row), so
+// we first upsert the shard_records parent — every production shard has
+// one — then stamp one row per (namespace, service) the shard serves.
+//
+// "What this shard serves" is taken from the entry's Apps list, the same
+// source the fixtures already declare it in; each composite app
+// ("ns/svc/kind", or a bare "ns") splits into (namespace, service) the
+// way the planner's pseudofile parser does. When Apps the field is
+// dropped (a later phase), this reads whatever the fixtures declare
+// services in instead — the shard_services stamping itself is permanent.
+//
+// Apps whose namespace isn't registered under the store's sole test
+// customer are skipped: a query for them resolves namespace_id 0 (no
+// filter) and still reaches every shard, so the shard stays visible.
+func stampShardServicesFromApps(t testing.TB, c *Coordinator, e *logdb.ShardEntry) {
+	t.Helper()
+	if c.Store == nil {
+		return
+	}
+	// These fixtures create exactly one customer (testQueryStore takes a
+	// single name). Resolve it so namespace lookups are customer-scoped
+	// without threading the name through every call site.
+	var custs []store.Customer
+	if err := c.Store.DB().Find(&custs).Error; err != nil {
+		t.Fatalf("stampShardServicesFromApps: list customers: %v", err)
+	}
+	if len(custs) != 1 {
+		return // ambiguous / no customer — leave routing to the nsID==0 path
+	}
+	custID := custs[0].ID
+
+	// Upsert the shard_records parent so shard_services' FK holds. Mirror
+	// the entry's fields; default a zero BucketID to the default bucket
+	// (NOT NULL FK). RFC3339 windows match the registry's own persist().
+	bucketID := e.BucketID
+	if bucketID == 0 {
+		def, ok, err := c.Store.GetBucketByLabel("default")
+		if err != nil || !ok {
+			t.Fatalf("stampShardServicesFromApps: default bucket: ok=%v err=%v", ok, err)
+		}
+		bucketID = def.ID
+	}
+	appsJSON, _ := json.Marshal(e.Apps)
+	if err := c.Store.SaveShard(&store.ShardRecord{
+		ID:          e.ID,
+		Apps:        string(appsJSON),
+		WindowStart: e.WindowStart.Format(time.RFC3339),
+		WindowEnd:   e.WindowEnd.Format(time.RFC3339),
+		State:       string(e.State),
+		Tier:        e.Tier,
+		BucketID:    bucketID,
+		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("stampShardServicesFromApps: persist shard_records %s: %v", e.ID, err)
+	}
+
+	seen := map[string]struct{}{}
+	for _, app := range e.Apps {
+		ns, svc := app, ""
+		if i := strings.IndexByte(app, '/'); i >= 0 {
+			ns = app[:i]
+			rest := app[i+1:]
+			svc = rest
+			if j := strings.IndexByte(rest, '/'); j >= 0 {
+				svc = rest[:j]
+			}
+		}
+		n, err := c.Store.GetNamespace(custID, ns)
+		if err != nil {
+			continue // namespace not registered in this fixture — skip
+		}
+		key := fmt.Sprintf("%d/%s", n.ID, svc)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		if err := c.Store.DB().Create(&store.ShardService{
+			ShardID: e.ID, NamespaceID: n.ID, Service: svc,
+		}).Error; err != nil {
+			t.Fatalf("stampShardServicesFromApps: stamp %s (%s/%s): %v", e.ID, ns, svc, err)
+		}
+	}
 }
 
 // Base times for test fixtures. Shard 0 covers 10:00–11:00, shard 1 covers 11:00–12:00.

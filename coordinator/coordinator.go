@@ -461,6 +461,33 @@ func (c *Coordinator) IngestingShard(app string) shard.Shard {
 	return c.Provisioner.IngestingShard(app)
 }
 
+// resolveNamespaceID maps a (customer, namespace-name) to namespaces.id
+// for service-level shard routing. Returns 0 — the "no namespace
+// filter" sentinel ShardDescriptorsFor honors — when the namespace is
+// empty (all-namespaces fan-out) or can't be resolved (unknown customer,
+// or a namespace the owner deleted). A 0 widens the shard fan-out but
+// stays correct: the SQL still carries the namespace/service predicates,
+// and the shard's `customer = ?` predicate preserves tenant isolation.
+// custID may be passed pre-resolved (query path); 0 means "look it up
+// from customerName" (lowered/cron path, which only carries the name).
+func (c *Coordinator) resolveNamespaceID(custID uint, customerName, namespace string) uint {
+	if namespace == "" {
+		return 0
+	}
+	if custID == 0 {
+		cust, err := c.Store.GetCustomerByName(customerName)
+		if err != nil {
+			return 0
+		}
+		custID = cust.ID
+	}
+	ns, err := c.Store.GetNamespace(custID, namespace)
+	if err != nil {
+		return 0
+	}
+	return ns.ID
+}
+
 // clampTimeRange floors tr.Start at (now − LogRetention(tier)) so that
 // the SQL ts predicate the planner emits and the shard-set the registry
 // returns share the same lower bound. Without the clamp here, a
@@ -676,7 +703,8 @@ func (c *Coordinator) executeLowered(watch *store.CronWatch, tr TimeRange, alert
 // than wrong), and skips the per-fire TierForCustomer lookup (tier
 // is baked into LoweredPlan at save time).
 func (c *Coordinator) dispatchLoweredWithTier(lp *planner.LoweredPlan, args []any, tr TimeRange, tier store.Tier, alertCtx *AlertContext) (*ExecuteResult, error) {
-	descs := c.Provisioner.ShardDescriptorsFor(tr, lp.FollowApp, tier)
+	nsID := c.resolveNamespaceID(0, lp.Customer, lp.SourceNamespace)
+	descs := c.Provisioner.ShardDescriptorsFor(tr, nsID, lp.SourceService, tier)
 	if len(descs) == 0 {
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
@@ -1024,7 +1052,8 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	if custID != 0 {
 		tier = c.Store.TierForCustomer(custID)
 	}
-	descs := c.Provisioner.ShardDescriptorsFor(tr, plan.FollowApp, tier)
+	nsID := c.resolveNamespaceID(custID, customer, plan.SourceNamespace)
+	descs := c.Provisioner.ShardDescriptorsFor(tr, nsID, plan.SourceService, tier)
 	if len(descs) == 0 {
 		queryLog.Printf("query: no matching shards (app=%s, customer=%s)", plan.SourceApp, customer)
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
