@@ -18,7 +18,7 @@ import (
 // Op 1 — app-drift: an INGESTING shard whose Apps is missing a
 // bucket app yields one AddAppToShardOp per missing app.
 func TestReconcile_AppDrift_EmitsOneOpPerMissingApp(t *testing.T) {
-	bucket := &AppBucket{ID: 1, Label: "default", Apps: []string{"weft", "vimgym", "callbox"}, Tier: "small"}
+	bucket := &Bucket{ID: 1, Label: "default", Services: []string{"weft", "vimgym", "callbox"}, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-a", BucketID: 1, State: StateIngesting, Services: []store.ShardService{{NamespaceID: 1, Service: "weft"}}},
 	}
@@ -52,7 +52,7 @@ func TestReconcile_AppDrift_EmitsOneOpPerMissingApp(t *testing.T) {
 // READ_ONLY and ARCHIVED shards never get app-drift ops — their
 // apps list is frozen (they didn't accept writes for the new app).
 func TestReconcile_AppDrift_SkipsNonIngestingStates(t *testing.T) {
-	bucket := &AppBucket{ID: 1, Apps: []string{"weft", "vimgym"}, Tier: "small"}
+	bucket := &Bucket{ID: 1, Services: []string{"weft", "vimgym"}, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-ro", BucketID: 1, State: StateReadOnly, Services: []store.ShardService{{NamespaceID: 1, Service: "weft"}}},
 		{ID: "shard-arch", BucketID: 1, State: StateArchived, Services: []store.ShardService{{NamespaceID: 1, Service: "weft"}}},
@@ -67,7 +67,7 @@ func TestReconcile_AppDrift_SkipsNonIngestingStates(t *testing.T) {
 // An already-current INGESTING shard produces zero ops — reconcile
 // must be idempotent across ticks.
 func TestReconcile_AppDrift_NoOpWhenCurrent(t *testing.T) {
-	bucket := &AppBucket{ID: 1, Apps: []string{"weft", "vimgym"}, Tier: "small"}
+	bucket := &Bucket{ID: 1, Services: []string{"weft", "vimgym"}, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-a", BucketID: 1, State: StateIngesting, Services: []store.ShardService{{NamespaceID: 1, Service: "weft"}, {NamespaceID: 1, Service: "vimgym"}}},
 	}
@@ -169,10 +169,10 @@ func TestAddAppToShardOp_Apply_SkipsReadOnly(t *testing.T) {
 	}
 }
 
-// End-to-end: OnboardApp persists the app to the bucket and calls
+// End-to-end: OnboardService persists the app to the bucket and calls
 // reconcileBucket synchronously, so INGESTING shards in the bucket
-// pick up the new app before OnboardApp returns.
-func TestOnboardApp_ReconcilerPropagatesImmediately(t *testing.T) {
+// pick up the new app before OnboardService returns.
+func TestOnboardService_ReconcilerPropagatesImmediately(t *testing.T) {
 	reg := NewShardRegistry()
 
 	db := openSMTestStore(t)
@@ -189,13 +189,13 @@ func TestOnboardApp_ReconcilerPropagatesImmediately(t *testing.T) {
 	prov := &Provisioner{registry: reg, Buckets: bm}
 	prov.config.ShardOps = db // ServicesForBucket for the reconciler's drift diff
 
-	if err := prov.OnboardApp("xylem"); err != nil {
-		t.Fatalf("OnboardApp: %v", err)
+	if err := prov.OnboardService("xylem"); err != nil {
+		t.Fatalf("OnboardService: %v", err)
 	}
 
 	// INGESTING shard picked up xylem.
 	if got := reg.Get("ingest-1").Services; !servicesContain(got, "xylem") {
-		t.Errorf("INGESTING shard missing xylem after OnboardApp: got %v", got)
+		t.Errorf("INGESTING shard missing xylem after OnboardService: got %v", got)
 	}
 	// READ_ONLY stayed frozen.
 	if got := reg.Get("readonly-1").Services; servicesContain(got, "xylem") {
@@ -203,8 +203,8 @@ func TestOnboardApp_ReconcilerPropagatesImmediately(t *testing.T) {
 	}
 	// Bucket has the app too.
 	def, _ := bm.Default()
-	if !containsApp(def.Apps, "xylem") {
-		t.Errorf("bucket missing xylem: got %v", def.Apps)
+	if !containsService(def.Services, "xylem") {
+		t.Errorf("bucket missing xylem: got %v", def.Services)
 	}
 }
 
@@ -214,7 +214,7 @@ func TestOnboardApp_ReconcilerPropagatesImmediately(t *testing.T) {
 // committed to the DB.
 
 func TestReconcile_UnderCapacity_EmitsLaunchOps(t *testing.T) {
-	bucket := &AppBucket{ID: 1, Label: "default", Apps: []string{"weft"}, Target: 3, Tier: "small"}
+	bucket := &Bucket{ID: 1, Label: "default", Services: []string{"weft"}, Target: 3, Tier: "small"}
 	snap := ReconcilerSnapshot{Bucket: bucket, Entries: nil, LaunchingCount: 0, IngestingCount: 0, Now: time.Now()}
 
 	ops := reconcile(snap)
@@ -234,7 +234,7 @@ func TestReconcile_UnderCapacity_EmitsLaunchOps(t *testing.T) {
 // already covers the gap, no new launch ops should fire — this is
 // the ratchet guard that §2 exists to prevent.
 func TestReconcile_UnderCapacity_LaunchingCountsTowardTarget(t *testing.T) {
-	bucket := &AppBucket{ID: 1, Apps: nil, Target: 2, Tier: "small"}
+	bucket := &Bucket{ID: 1, Services: nil, Target: 2, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-live", BucketID: 1, State: StateIngesting},
 	}
@@ -257,7 +257,7 @@ func TestReconcile_UnderCapacity_LaunchingCountsTowardTarget(t *testing.T) {
 // snapshot must carry a registry entry per INGESTING shard, which
 // matches what snapshotForBucket produces in production.
 func TestReconcile_UnderCapacity_AboveTargetNoOp(t *testing.T) {
-	bucket := &AppBucket{ID: 1, Target: 2, Tier: "small"}
+	bucket := &Bucket{ID: 1, Target: 2, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-a", BucketID: 1, State: StateIngesting},
 		{ID: "shard-b", BucketID: 1, State: StateIngesting},
@@ -280,7 +280,7 @@ func TestReconcile_UnderCapacity_AboveTargetNoOp(t *testing.T) {
 // INGESTING (capacity-gated — see the Op 3 invariant tests below).
 func TestReconcile_WindowClosed_EmitsRotateOp(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Target: 1, Tier: "small", WindowDuration: time.Hour}
+	bucket := &Bucket{ID: 1, Target: 1, Tier: "small", WindowDuration: time.Hour}
 	entries := []*ShardEntry{
 		{ID: "shard-past", BucketID: 1, State: StateIngesting,
 			WindowStart: now.Add(-2 * time.Hour), WindowEnd: now.Add(-1 * time.Minute)},
@@ -305,7 +305,7 @@ func TestReconcile_WindowClosed_EmitsRotateOp(t *testing.T) {
 
 func TestReconcile_WindowClosed_SkipsZeroWindow(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Target: 1, Tier: "small"}
+	bucket := &Bucket{ID: 1, Target: 1, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-zero", BucketID: 1, State: StateIngesting}, // zero WindowEnd
 	}
@@ -320,7 +320,7 @@ func TestReconcile_WindowClosed_SkipsZeroWindow(t *testing.T) {
 
 func TestReconcile_WindowClosed_SkipsNonIngesting(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Target: 1, Tier: "small"}
+	bucket := &Bucket{ID: 1, Target: 1, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-ro", BucketID: 1, State: StateReadOnly,
 			WindowStart: now.Add(-3 * time.Hour), WindowEnd: now.Add(-2 * time.Hour)},
@@ -355,7 +355,7 @@ func TestLaunchShardOp_Apply_SyncLauncher_LaunchesOneShard(t *testing.T) {
 	t.Cleanup(func() { launcher.Close() })
 
 	reg := NewShardRegistry()
-	bucket := &AppBucket{ID: 1, Label: "default", Apps: []string{"weft"}, Target: 1, Tier: "small"}
+	bucket := &Bucket{ID: 1, Label: "default", Services: []string{"weft"}, Target: 1, Tier: "small"}
 
 	prov := NewProvisioner(reg, launcher, ProvisionerConfig{})
 
@@ -372,7 +372,7 @@ func TestLaunchShardOp_Apply_SyncLauncher_LaunchesOneShard(t *testing.T) {
 
 func TestReconcile_Retention_EmitsArchiveOp(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Target: 0, WindowDuration: time.Hour, Tier: "small"}
+	bucket := &Bucket{ID: 1, Target: 0, WindowDuration: time.Hour, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-ripe", BucketID: 1, State: StateReadOnly,
 			WindowStart: now.Add(-3 * time.Hour), WindowEnd: now.Add(-2 * time.Hour)}, // 2h past, retention 1h
@@ -395,7 +395,7 @@ func TestReconcile_Retention_EmitsArchiveOp(t *testing.T) {
 
 func TestReconcile_Retention_WithinRetentionNoOp(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, WindowDuration: 2 * time.Hour, Tier: "small"}
+	bucket := &Bucket{ID: 1, WindowDuration: 2 * time.Hour, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-warm", BucketID: 1, State: StateReadOnly,
 			WindowStart: now.Add(-90 * time.Minute), WindowEnd: now.Add(-30 * time.Minute)},
@@ -413,7 +413,7 @@ func TestReconcile_Retention_WithinRetentionNoOp(t *testing.T) {
 // no ArchiveShardOp should fire regardless of age.
 func TestReconcile_Retention_ZeroRetentionDisables(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, WindowDuration: 0, Tier: "small"}
+	bucket := &Bucket{ID: 1, WindowDuration: 0, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-ancient", BucketID: 1, State: StateReadOnly,
 			WindowStart: now.Add(-10 * 24 * time.Hour), WindowEnd: now.Add(-9 * 24 * time.Hour)},
@@ -431,7 +431,7 @@ func TestReconcile_Retention_ZeroRetentionDisables(t *testing.T) {
 // how stale they are.
 func TestReconcile_Retention_SkipsZeroWindow(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, WindowDuration: time.Hour, Tier: "small"}
+	bucket := &Bucket{ID: 1, WindowDuration: time.Hour, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-nowindow", BucketID: 1, State: StateReadOnly}, // zero WindowEnd
 	}
@@ -467,7 +467,7 @@ func TestArchiveShardOp_Apply_NoParquetDirNoOp(t *testing.T) {
 // decrements atomically.
 
 func TestReconcile_TerminateArchived_EmitsOpForArchivedWithInstanceID(t *testing.T) {
-	bucket := &AppBucket{ID: 1, Target: 0, Tier: "small"}
+	bucket := &Bucket{ID: 1, Target: 0, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-done", BucketID: 1, State: StateArchived, InstanceID: "i-dead-shard"},
 	}
@@ -493,7 +493,7 @@ func TestReconcile_TerminateArchived_EmitsOpForArchivedWithInstanceID(t *testing
 // An ARCHIVED entry with no InstanceID has already been terminated
 // (or was never on an instance we manage). No op should fire.
 func TestReconcile_TerminateArchived_SkipsArchivedWithoutInstanceID(t *testing.T) {
-	bucket := &AppBucket{ID: 1, Target: 0, Tier: "small"}
+	bucket := &Bucket{ID: 1, Target: 0, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-clean", BucketID: 1, State: StateArchived, InstanceID: ""},
 	}
@@ -509,7 +509,7 @@ func TestReconcile_TerminateArchived_SkipsArchivedWithoutInstanceID(t *testing.T
 // Non-ARCHIVED entries stay alone — terminate is only for shards
 // whose data has already been exported.
 func TestReconcile_TerminateArchived_SkipsLiveStates(t *testing.T) {
-	bucket := &AppBucket{ID: 1, Target: 0, Tier: "small"}
+	bucket := &Bucket{ID: 1, Target: 0, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-live", BucketID: 1, State: StateIngesting, InstanceID: "i-1"},
 		{ID: "shard-ro", BucketID: 1, State: StateReadOnly, InstanceID: "i-2"},
@@ -616,7 +616,7 @@ func withPrewarmLead(t *testing.T, d time.Duration) {
 func TestShouldPrewarmNextWindow_TrueWhenWindowEndWithinLead(t *testing.T) {
 	withPrewarmLead(t, 10*time.Minute)
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Tier: "small", WindowDuration: time.Hour}
+	bucket := &Bucket{ID: 1, Tier: "small", WindowDuration: time.Hour}
 	entries := []*ShardEntry{
 		{ID: "s", State: StateIngesting, WindowEnd: now.Add(5 * time.Minute)}, // 5m away, within 10m lead
 	}
@@ -628,7 +628,7 @@ func TestShouldPrewarmNextWindow_TrueWhenWindowEndWithinLead(t *testing.T) {
 func TestShouldPrewarmNextWindow_FalseWhenWindowEndFar(t *testing.T) {
 	withPrewarmLead(t, 10*time.Minute)
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Tier: "small", WindowDuration: time.Hour}
+	bucket := &Bucket{ID: 1, Tier: "small", WindowDuration: time.Hour}
 	entries := []*ShardEntry{
 		{ID: "s", State: StateIngesting, WindowEnd: now.Add(time.Hour)},
 	}
@@ -640,10 +640,10 @@ func TestShouldPrewarmNextWindow_FalseWhenWindowEndFar(t *testing.T) {
 func TestShouldPrewarmNextWindow_SkipsNonIngestingAndZeroWindow(t *testing.T) {
 	withPrewarmLead(t, time.Hour)
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Tier: "small", WindowDuration: time.Hour}
+	bucket := &Bucket{ID: 1, Tier: "small", WindowDuration: time.Hour}
 	entries := []*ShardEntry{
-		{ID: "ro", State: StateReadOnly, WindowEnd: now},                       // non-INGESTING
-		{ID: "zero", State: StateIngesting, WindowEnd: time.Time{}},            // zero window
+		{ID: "ro", State: StateReadOnly, WindowEnd: now},                          // non-INGESTING
+		{ID: "zero", State: StateIngesting, WindowEnd: time.Time{}},               // zero window
 		{ID: "future", State: StateIngesting, WindowEnd: now.Add(24 * time.Hour)}, // outside lead
 	}
 	if bucket.ShouldPrewarmNextWindow(now, entries) {
@@ -657,7 +657,7 @@ func TestShouldPrewarmNextWindow_SkipsNonIngestingAndZeroWindow(t *testing.T) {
 func TestReconcile_Prewarm_EmitsWhenBucketSaysYes(t *testing.T) {
 	withPrewarmLead(t, 10*time.Minute)
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Target: 2, Tier: "small", WindowDuration: time.Hour}
+	bucket := &Bucket{ID: 1, Target: 2, Tier: "small", WindowDuration: time.Hour}
 	entries := []*ShardEntry{
 		{ID: "ing", BucketID: 1, State: StateIngesting, WindowEnd: now.Add(5 * time.Minute)},
 	}
@@ -696,7 +696,7 @@ func TestReconcile_Prewarm_EmitsWhenBucketSaysYes(t *testing.T) {
 func TestReconcile_Prewarm_SkipsWhenFutureLaunchingExists(t *testing.T) {
 	withPrewarmLead(t, 10*time.Minute)
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Target: 2, Tier: "small", WindowDuration: time.Hour}
+	bucket := &Bucket{ID: 1, Target: 2, Tier: "small", WindowDuration: time.Hour}
 	entries := []*ShardEntry{
 		{ID: "ing", BucketID: 1, State: StateIngesting, WindowEnd: now.Add(5 * time.Minute)},
 	}
@@ -717,7 +717,7 @@ func TestReconcile_Prewarm_SkipsWhenFutureLaunchingExists(t *testing.T) {
 func TestReconcile_Prewarm_SkipsForSyncLauncher(t *testing.T) {
 	withPrewarmLead(t, 10*time.Minute)
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Target: 2, Tier: "small", WindowDuration: time.Hour}
+	bucket := &Bucket{ID: 1, Target: 2, Tier: "small", WindowDuration: time.Hour}
 	entries := []*ShardEntry{
 		{ID: "ing", BucketID: 1, State: StateIngesting, WindowEnd: now.Add(5 * time.Minute)},
 	}
@@ -742,7 +742,7 @@ func TestPrewarmNextWindowOp_Apply_InsertsLaunchingRowForNextWindow(t *testing.T
 	reg := NewShardRegistry()
 	reg.SetStore(fake)
 
-	bucket := &AppBucket{ID: 1, Label: "default", Tier: "small", WindowDuration: time.Hour}
+	bucket := &Bucket{ID: 1, Label: "default", Tier: "small", WindowDuration: time.Hour}
 
 	prov := &Provisioner{
 		registry: reg,
@@ -787,7 +787,7 @@ func TestPrewarmNextWindowOp_Apply_InsertsLaunchingRowForNextWindow(t *testing.T
 // created under a wider window config.
 func TestReconcile_WindowClosed_RotatesStaleWindowSpan(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Target: 1, Tier: "small", WindowDuration: time.Hour}
+	bucket := &Bucket{ID: 1, Target: 1, Tier: "small", WindowDuration: time.Hour}
 	entries := []*ShardEntry{
 		{ID: "shard-7d", BucketID: 1, State: StateIngesting,
 			WindowStart: now.Add(-24 * time.Hour),
@@ -815,7 +815,7 @@ func TestReconcile_WindowClosed_RotatesStaleWindowSpan(t *testing.T) {
 // whose WindowEnd is still in the future must NOT rotate.
 func TestReconcile_WindowClosed_CurrentSpanNoRotation(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Target: 1, Tier: "small", WindowDuration: time.Hour}
+	bucket := &Bucket{ID: 1, Target: 1, Tier: "small", WindowDuration: time.Hour}
 	entries := []*ShardEntry{
 		{ID: "shard-ok", BucketID: 1, State: StateIngesting,
 			WindowStart: now.Add(-30 * time.Minute),
@@ -843,7 +843,7 @@ func TestReconcile_WindowClosed_CurrentSpanNoRotation(t *testing.T) {
 // capacity.
 func TestReconcile_WindowClosed_DoesNotRotateBelowTarget(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Target: 1, Tier: "small"}
+	bucket := &Bucket{ID: 1, Target: 1, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "shard-only", BucketID: 1, State: StateIngesting,
 			WindowStart: now.Add(-2 * time.Hour), WindowEnd: now.Add(-1 * time.Minute)},
@@ -862,7 +862,7 @@ func TestReconcile_WindowClosed_DoesNotRotateBelowTarget(t *testing.T) {
 // new one stays — exactly one rotate, and it must be the old shard.
 func TestReconcile_WindowClosed_RotatesOldOnceReplacementIngesting(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Target: 1, Tier: "small", WindowDuration: time.Hour}
+	bucket := &Bucket{ID: 1, Target: 1, Tier: "small", WindowDuration: time.Hour}
 	entries := []*ShardEntry{
 		{ID: "shard-old", BucketID: 1, State: StateIngesting,
 			WindowStart: now.Add(-90 * time.Minute), WindowEnd: now.Add(-30 * time.Minute)},
@@ -887,7 +887,7 @@ func TestReconcile_WindowClosed_RotatesOldOnceReplacementIngesting(t *testing.T)
 // drops below Target).
 func TestReconcile_WindowClosed_StaleSpanGatedByTarget(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Target: 2, Tier: "small", WindowDuration: time.Hour}
+	bucket := &Bucket{ID: 1, Target: 2, Tier: "small", WindowDuration: time.Hour}
 	entries := []*ShardEntry{
 		{ID: "stale-a", BucketID: 1, State: StateIngesting,
 			WindowStart: now.Add(-24 * time.Hour), WindowEnd: now.Add(6 * 24 * time.Hour)},
@@ -909,7 +909,7 @@ func TestReconcile_WindowClosed_StaleSpanGatedByTarget(t *testing.T) {
 // exactly 2 (the two oldest), leaving the newest INGESTING.
 func TestReconcile_WindowClosed_RotatesOldestFirstDownToTarget(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{ID: 1, Target: 1, Tier: "small"}
+	bucket := &Bucket{ID: 1, Target: 1, Tier: "small"}
 	entries := []*ShardEntry{
 		{ID: "p-newest", BucketID: 1, State: StateIngesting,
 			WindowStart: now.Add(-70 * time.Minute), WindowEnd: now.Add(-1 * time.Minute)},

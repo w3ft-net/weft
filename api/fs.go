@@ -38,13 +38,13 @@ func (s *Server) handleListFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var logApps []string
+	var logServices []string
 	if strings.HasPrefix(path, "/log") {
-		logApps = s.fetchLogApps(r)
+		logServices = s.fetchLogServices(r)
 	}
 
 	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session))}
-	fs := shellfs.New(s.store, session.ActiveCustomerID, logApps, opts...)
+	fs := shellfs.New(s.store, session.ActiveCustomerID, logServices, opts...)
 
 	if r.URL.Query().Get("walk") == "1" {
 		paths, err := fs.Walk(path)
@@ -137,10 +137,10 @@ func (s *Server) handleRemoveFS(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) fetchLogApps(r *http.Request) []string {
+func (s *Server) fetchLogServices(r *http.Request) []string {
 	resp, err := s.coordClient.ListApps(s.coordCtx(r), &pb.ListAppsRequest{})
 	if err != nil {
-		log.Printf("fetchLogApps: coordinator ListApps: %v", err)
+		log.Printf("fetchLogServices: coordinator ListApps: %v", err)
 		return nil
 	}
 	return resp.Apps

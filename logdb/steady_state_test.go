@@ -19,10 +19,10 @@ import (
 // This is the invariant production violated: zero READ_ONLY shards
 // and multiple stuck INGESTING shards across different windows.
 func TestSteadyState_LifecycleConverges(t *testing.T) {
-	bucket := &AppBucket{
+	bucket := &Bucket{
 		ID:             1,
 		Label:          "default",
-		Apps:           []string{"weft"},
+		Services:       []string{"weft"},
 		Target:         2,
 		Tier:           "small",
 		WindowDuration: time.Hour,
@@ -210,7 +210,7 @@ func TestRefreshFromStore_PicksUpExternalDBChanges(t *testing.T) {
 	}
 
 	// The reconciler should now rotate this shard since WindowEnd < now.
-	bucket := &AppBucket{ID: 1, Label: "default", Target: 0, Tier: "small", WindowDuration: time.Hour}
+	bucket := &Bucket{ID: 1, Label: "default", Target: 0, Tier: "small", WindowDuration: time.Hour}
 	snap := ReconcilerSnapshot{
 		Bucket:  bucket,
 		Entries: []*ShardEntry{reg.Get("shard-legacy")},
@@ -274,8 +274,8 @@ func TestSteadyState_LegacyWideWindowShards(t *testing.T) {
 	reg := NewShardRegistry()
 
 	now := time.Now().UTC().Truncate(time.Second)
-	bucket := &AppBucket{
-		ID: 1, Label: "default", Apps: []string{"weft"},
+	bucket := &Bucket{
+		ID: 1, Label: "default", Services: []string{"weft"},
 		Target: 2, Tier: "small", WindowDuration: time.Hour,
 	}
 

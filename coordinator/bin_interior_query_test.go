@@ -34,10 +34,10 @@ func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, 
 
 	// Allowlist entries — without these, executeQuery rejects the
 	// source-app routing with "unknown source".
-	if _, err := db.FindOrCreateApp(custID, "api"); err != nil {
+	if _, err := db.FindOrCreateNamespace(custID, "api"); err != nil {
 		t.Fatalf("create api namespace: %v", err)
 	}
-	if _, err := db.FindOrCreateApp(custID, "web"); err != nil {
+	if _, err := db.FindOrCreateNamespace(custID, "web"); err != nil {
 		t.Fatalf("create web namespace: %v", err)
 	}
 

@@ -53,7 +53,7 @@ func (r *sampleSubmitRecorder) GetSourceStatus(_ context.Context, req *pb.GetSou
 	return &pb.GetSourceStatusResponse{Status: "unknown"}, nil
 }
 
-func (r *sampleSubmitRecorder) sampleApps() []string {
+func (r *sampleSubmitRecorder) sampleServices() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := append([]string(nil), r.samples...)
@@ -86,12 +86,12 @@ func runWatchGlob(t *testing.T, pattern string, expected int) []string {
 
 	deadline := time.Now().Add(2500 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if len(rec.sampleApps()) >= expected {
+		if len(rec.sampleServices()) >= expected {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	return rec.sampleApps()
+	return rec.sampleServices()
 }
 
 // TestGlob_DiscoversAllFilesInFlatDirectory — the happy path. Three log
@@ -237,13 +237,13 @@ func TestGlob_SkipsExplicitlyClaimedFile(t *testing.T) {
 
 	deadline := time.Now().Add(2500 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if len(rec.sampleApps()) >= 1 {
+		if len(rec.sampleServices()) >= 1 {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	got := rec.sampleApps()
+	got := rec.sampleServices()
 	if !equalStrings(got, []string{"coordinator"}) {
 		t.Fatalf("glob should onboard only coordinator (coordinator-queries is explicitly claimed)\n got %v", got)
 	}

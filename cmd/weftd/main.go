@@ -501,17 +501,17 @@ func runSchemaRefresher(ctx context.Context, client pb.WeftCoordinatorClient, to
 		case <-ticker.C:
 		}
 		for _, fullApp := range parserCache.Apps() {
-			bareApp := strings.TrimPrefix(fullApp, namespace+"/")
-			if bareApp == fullApp {
+			bareService := strings.TrimPrefix(fullApp, namespace+"/")
+			if bareService == fullApp {
 				continue
 			}
-			st, err := weftd.CheckSourceStatus(ctx, client, token, bareApp)
+			st, err := weftd.CheckSourceStatus(ctx, client, token, bareService)
 			if err != nil {
 				log.Printf("[%s] schema refresh failed: %v", fullApp, err)
 				continue
 			}
 			if st.Status == "configured" && st.ResampleRequested {
-				startResample(ctx, client, token, bareApp, fullApp)
+				startResample(ctx, client, token, bareService, fullApp)
 			}
 			if st.Status != "configured" || st.SchemaYAML == "" {
 				continue
@@ -536,7 +536,7 @@ func runSchemaRefresher(ctx context.Context, client pb.WeftCoordinatorClient, to
 // still filling its sample (which, by design, can take a while). The
 // coordinator clears the resample flag when the final sample lands, so
 // subsequent ticks stop triggering this.
-func startResample(ctx context.Context, client pb.WeftCoordinatorClient, token, bareApp, fullApp string) {
+func startResample(ctx context.Context, client pb.WeftCoordinatorClient, token, bareService, fullApp string) {
 	resampleMu.Lock()
 	rs, ok := resampleSources[fullApp]
 	if !ok || resampleActive[fullApp] {
@@ -555,9 +555,9 @@ func startResample(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 		}()
 		var err error
 		if rs.unit != "" {
-			err = weftd.SubmitUnitSample(ctx, client, token, bareApp, rs.unit, rs.instance, globalDeployment)
+			err = weftd.SubmitUnitSample(ctx, client, token, bareService, rs.unit, rs.instance, globalDeployment)
 		} else {
-			err = weftd.SubmitSample(ctx, client, token, bareApp, rs.path, rs.instance, globalDeployment)
+			err = weftd.SubmitSample(ctx, client, token, bareService, rs.path, rs.instance, globalDeployment)
 		}
 		if err != nil {
 			log.Printf("[%s] resample failed: %v", fullApp, err)
@@ -1035,11 +1035,11 @@ type streamState struct {
 	stream pb.WeftCoordinator_IngestStreamClient
 }
 
-// versionForApp returns the live version dimension for `app`.
+// versionForService returns the live version dimension for `app`.
 // Resolution order: per-source `version.file` (live), per-source
 // `version.env` (snapshot at startup), then host-wide
 // `dimensions.version`. Lock-free; safe on the hot row-stamping path.
-func versionForApp(app string) string {
+func versionForService(app string) string {
 	if r, ok := versionReaders[app]; ok {
 		return r.Current()
 	}
@@ -1076,7 +1076,7 @@ func stampDimensions(row *pb.LogRow) {
 		row.Node = v
 	}
 	// `version` is folded into the row at construction via
-	// versionForApp, which already consults dimensionValue("version")
+	// versionForService, which already consults dimensionValue("version")
 	// as a fallback. Don't double-stamp here.
 }
 
@@ -1099,7 +1099,7 @@ func buildLogRow(line, customer, instance, app string) *pb.LogRow {
 			msg.Instance = instance
 			msg.Deployment = globalDeployment
 			msg.Region = globalRegion
-			msg.Version = versionForApp(app)
+			msg.Version = versionForService(app)
 			stampDimensions(msg)
 			if slot.HasLevelField() && msg.Level == "" {
 				slot.RecordMissingLevel()
@@ -1116,7 +1116,7 @@ func buildLogRow(line, customer, instance, app string) *pb.LogRow {
 		Instance:   instance,
 		Deployment: globalDeployment,
 		Region:     globalRegion,
-		Version:    versionForApp(app),
+		Version:    versionForService(app),
 		Raw:        line,
 		TsUnixNs:   now.UnixNano(),
 		Fields:     strings.Fields(line),

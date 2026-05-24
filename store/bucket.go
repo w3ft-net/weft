@@ -14,11 +14,11 @@ import (
 type Bucket struct {
 	ID                   int64    `gorm:"primaryKey;column:id"`
 	Label                string   `gorm:"not null;uniqueIndex;column:label"`
-	Apps                 []string `gorm:"not null;column:apps;serializer:json"` // JSON-encoded text column; '[]' = catch-all
-	TargetIngestingCount int    `gorm:"not null;column:target_ingesting_count"`
-	Tier                 string `gorm:"not null;column:tier"`
-	CreatedAt            string `gorm:"not null;column:created_at"`
-	WindowDuration       string `gorm:"not null;column:window_duration"`
+	Services             []string `gorm:"not null;column:apps;serializer:json"` // JSON-encoded text column; '[]' = catch-all
+	TargetIngestingCount int      `gorm:"not null;column:target_ingesting_count"`
+	Tier                 string   `gorm:"not null;column:tier"`
+	CreatedAt            string   `gorm:"not null;column:created_at"`
+	WindowDuration       string   `gorm:"not null;column:window_duration"`
 }
 
 func (Bucket) TableName() string { return "buckets" }

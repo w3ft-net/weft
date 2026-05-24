@@ -4,8 +4,8 @@ import (
 	"log"
 	"strings"
 
-	"github.com/kevlarcon/weft/store"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/store"
 )
 
 // IngestionErrorRecorder asynchronously records ingest failures to postgres.
@@ -15,12 +15,12 @@ type IngestionErrorRecorder struct {
 }
 
 type ingestionError struct {
-	ShardID  string
-	ErrorMsg string
-	RowCount int
-	Apps     []string
+	ShardID   string
+	ErrorMsg  string
+	RowCount  int
+	Apps      []string
 	Customers []string
-	DLQPath  string
+	DLQPath   string
 }
 
 // NewIngestionErrorRecorder creates a recorder with a buffered channel.

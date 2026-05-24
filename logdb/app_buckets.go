@@ -8,17 +8,17 @@ import (
 	"github.com/kevlarcon/weft/store"
 )
 
-// AppBucket groups apps that share a shard fleet. ID is the surrogate
+// Bucket groups apps that share a shard fleet. ID is the surrogate
 // FK target that shard_records.bucket_id points at; Label is the
 // stable human-readable name (unique) code looks up by. Target is
 // the desired number of INGESTING shards; Tier is the instance class.
 // WindowDuration governs both rotation (INGESTING→READ_ONLY at
 // window_end) and archive timing (READ_ONLY→ARCHIVED after the
 // same duration past window_end).
-type AppBucket struct {
+type Bucket struct {
 	ID             int64
 	Label          string
-	Apps           []string
+	Services       []string
 	Target         int
 	Tier           string
 	WindowDuration time.Duration
@@ -53,14 +53,14 @@ func NewBucketManager(s *store.Store) *BucketManager {
 // every call does a ByLabel lookup. Errors propagate; nil result
 // with nil error means "not found" (operator hasn't seeded the
 // default bucket yet).
-func (bm *BucketManager) Default() (*AppBucket, error) {
+func (bm *BucketManager) Default() (*Bucket, error) {
 	return bm.ByLabel("default")
 }
 
 // ByID fetches a bucket by surrogate primary key. Returns (nil, nil)
 // when not found so callers can distinguish "no record" from "DB
 // error."
-func (bm *BucketManager) ByID(id int64) (*AppBucket, error) {
+func (bm *BucketManager) ByID(id int64) (*Bucket, error) {
 	if bm.store == nil {
 		return nil, nil
 	}
@@ -71,11 +71,11 @@ func (bm *BucketManager) ByID(id int64) (*AppBucket, error) {
 	if !ok {
 		return nil, nil
 	}
-	return recordToAppBucket(rec), nil
+	return recordToBucket(rec), nil
 }
 
 // ByLabel fetches a bucket by its unique label.
-func (bm *BucketManager) ByLabel(label string) (*AppBucket, error) {
+func (bm *BucketManager) ByLabel(label string) (*Bucket, error) {
 	if bm.store == nil {
 		return nil, nil
 	}
@@ -86,11 +86,11 @@ func (bm *BucketManager) ByLabel(label string) (*AppBucket, error) {
 	if !ok {
 		return nil, nil
 	}
-	return recordToAppBucket(rec), nil
+	return recordToBucket(rec), nil
 }
 
 // All returns every bucket. Always fresh from store.
-func (bm *BucketManager) All() ([]*AppBucket, error) {
+func (bm *BucketManager) All() ([]*Bucket, error) {
 	if bm.store == nil {
 		return nil, nil
 	}
@@ -98,9 +98,9 @@ func (bm *BucketManager) All() ([]*AppBucket, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*AppBucket, 0, len(recs))
+	out := make([]*Bucket, 0, len(recs))
 	for _, r := range recs {
-		out = append(out, recordToAppBucket(r))
+		out = append(out, recordToBucket(r))
 	}
 	return out, nil
 }
@@ -126,7 +126,7 @@ func (bm *BucketManager) EvaluateSplit(_ map[string]int64) (string, error) {
 // newly-minted dedicated bucket. Inherits target/tier/window/
 // retention from the source bucket. Persists both the source
 // (app removed) and the new dedicated bucket.
-func (bm *BucketManager) Split(app string) (*AppBucket, error) {
+func (bm *BucketManager) Split(app string) (*Bucket, error) {
 	if bm.store == nil {
 		return nil, fmt.Errorf("split %q: no store configured", app)
 	}
@@ -135,12 +135,12 @@ func (bm *BucketManager) Split(app string) (*AppBucket, error) {
 		return nil, err
 	}
 
-	var src *AppBucket
+	var src *Bucket
 	for _, b := range buckets {
-		if len(b.Apps) <= 1 {
+		if len(b.Services) <= 1 {
 			continue
 		}
-		for _, a := range b.Apps {
+		for _, a := range b.Services {
 			if a == app {
 				src = b
 				break
@@ -155,24 +155,24 @@ func (bm *BucketManager) Split(app string) (*AppBucket, error) {
 	}
 
 	// Remove app from source, persist.
-	newSrcApps := make([]string, 0, len(src.Apps)-1)
-	for _, a := range src.Apps {
+	newSrcApps := make([]string, 0, len(src.Services)-1)
+	for _, a := range src.Services {
 		if a != app {
 			newSrcApps = append(newSrcApps, a)
 		}
 	}
-	src.Apps = newSrcApps
+	src.Services = newSrcApps
 	if err := bm.save(src); err != nil {
 		return nil, fmt.Errorf("persist source bucket after split: %w", err)
 	}
 
 	// Create the dedicated bucket — ID auto-assigned on INSERT.
-	dedicated := &AppBucket{
-		Label:           "dedicated-" + app,
-		Apps:            []string{app},
-		Target:          src.Target,
-		Tier:            src.Tier,
-		WindowDuration:  src.WindowDuration,
+	dedicated := &Bucket{
+		Label:          "dedicated-" + app,
+		Services:       []string{app},
+		Target:         src.Target,
+		Tier:           src.Tier,
+		WindowDuration: src.WindowDuration,
 	}
 	if err := bm.save(dedicated); err != nil {
 		return nil, fmt.Errorf("persist dedicated bucket: %w", err)
@@ -182,10 +182,10 @@ func (bm *BucketManager) Split(app string) (*AppBucket, error) {
 	return dedicated, nil
 }
 
-// AddAppToBucket appends an app to the bucket with the given
+// AddServiceToBucket appends an app to the bucket with the given
 // surrogate id and persists. Idempotent — if the app is already in
 // the bucket, no-op, no write.
-func (bm *BucketManager) AddAppToBucket(id int64, app string) (*AppBucket, error) {
+func (bm *BucketManager) AddServiceToBucket(id int64, app string) (*Bucket, error) {
 	if bm.store == nil {
 		return nil, fmt.Errorf("add app %q to bucket %d: no store", app, id)
 	}
@@ -196,12 +196,12 @@ func (bm *BucketManager) AddAppToBucket(id int64, app string) (*AppBucket, error
 	if bucket == nil {
 		return nil, fmt.Errorf("bucket id=%d not found", id)
 	}
-	for _, a := range bucket.Apps {
+	for _, a := range bucket.Services {
 		if a == app {
 			return bucket, nil
 		}
 	}
-	bucket.Apps = append(bucket.Apps, app)
+	bucket.Services = append(bucket.Services, app)
 	if err := bm.save(bucket); err != nil {
 		return nil, err
 	}
@@ -209,14 +209,14 @@ func (bm *BucketManager) AddAppToBucket(id int64, app string) (*AppBucket, error
 }
 
 // save is the internal persistence helper — marshals the in-memory
-// AppBucket back into a store.Bucket record and calls SaveBucket.
+// Bucket back into a store.Bucket record and calls SaveBucket.
 // After insert (ID was 0), copies the new surrogate back onto the
 // caller's pointer.
-func (bm *BucketManager) save(b *AppBucket) error {
+func (bm *BucketManager) save(b *Bucket) error {
 	rec := &store.Bucket{
 		ID:                   b.ID,
 		Label:                b.Label,
-		Apps:                 b.Apps,
+		Services:             b.Services,
 		TargetIngestingCount: b.Target,
 		Tier:                 b.Tier,
 		WindowDuration:       b.WindowDuration.String(),
@@ -229,14 +229,14 @@ func (bm *BucketManager) save(b *AppBucket) error {
 	return nil
 }
 
-// recordToAppBucket converts a store record to the in-memory shape.
+// recordToBucket converts a store record to the in-memory shape.
 // Duration strings default to zero on parse failure; callers that
 // need a non-zero duration should supply a provisioner-config
 // fallback (see provisioner.windowDurationFor).
 // windowDurationOr returns the bucket's WindowDuration or a
 // sensible fallback. Used by CurrentWindow/NextWindow when a
 // bucket hasn't been hydrated with a real duration yet.
-func (b *AppBucket) windowDurationOr(fallback time.Duration) time.Duration {
+func (b *Bucket) windowDurationOr(fallback time.Duration) time.Duration {
 	if b.WindowDuration > 0 {
 		return b.WindowDuration
 	}
@@ -246,7 +246,7 @@ func (b *AppBucket) windowDurationOr(fallback time.Duration) time.Duration {
 // CurrentWindow returns the [start, end) window bounds that the
 // bucket's shards should be writing to at `now`. Aligned to the
 // bucket's WindowDuration via Truncate.
-func (b *AppBucket) CurrentWindow(now time.Time) (start, end time.Time) {
+func (b *Bucket) CurrentWindow(now time.Time) (start, end time.Time) {
 	dur := b.windowDurationOr(7 * 24 * time.Hour)
 	start = now.UTC().Truncate(dur)
 	return start, start.Add(dur)
@@ -254,7 +254,7 @@ func (b *AppBucket) CurrentWindow(now time.Time) (start, end time.Time) {
 
 // NextWindow returns the [start, end) bounds of the window
 // immediately after the current one — the window pre-warm fills.
-func (b *AppBucket) NextWindow(now time.Time) (start, end time.Time) {
+func (b *Bucket) NextWindow(now time.Time) (start, end time.Time) {
 	_, currEnd := b.CurrentWindow(now)
 	dur := b.windowDurationOr(7 * 24 * time.Hour)
 	return currEnd, currEnd.Add(dur)
@@ -263,13 +263,13 @@ func (b *AppBucket) NextWindow(now time.Time) (start, end time.Time) {
 // ShouldPrewarmNextWindow reports whether the reconciler should
 // mint next-window LAUNCHING rows this tick. The current policy is
 // simple date math against a package-scoped PrewarmLead; the
-// method exists on AppBucket so future strategies (ingestion burn
+// method exists on Bucket so future strategies (ingestion burn
 // rate, disk-fill slope, p99 latency tracker) can swap the policy
 // without changing every caller.
 //
 // TODO: extend to consider per-shard ingest rate so bursty
 // workloads pre-warm sooner than steady-state ones.
-func (b *AppBucket) ShouldPrewarmNextWindow(now time.Time, ingesting []*ShardEntry) bool {
+func (b *Bucket) ShouldPrewarmNextWindow(now time.Time, ingesting []*ShardEntry) bool {
 	threshold := now.Add(PrewarmLead)
 	for _, e := range ingesting {
 		if e.State != StateIngesting {
@@ -285,7 +285,7 @@ func (b *AppBucket) ShouldPrewarmNextWindow(now time.Time, ingesting []*ShardEnt
 	return false
 }
 
-func recordToAppBucket(r store.Bucket) *AppBucket {
+func recordToBucket(r store.Bucket) *Bucket {
 	var winDur time.Duration
 	if r.WindowDuration != "" {
 		if d, err := time.ParseDuration(r.WindowDuration); err == nil {
@@ -295,10 +295,10 @@ func recordToAppBucket(r store.Bucket) *AppBucket {
 				r.ID, r.Label, r.WindowDuration, err)
 		}
 	}
-	return &AppBucket{
+	return &Bucket{
 		ID:             r.ID,
 		Label:          r.Label,
-		Apps:           r.Apps,
+		Services:       r.Services,
 		Target:         r.TargetIngestingCount,
 		Tier:           r.Tier,
 		WindowDuration: winDur,

@@ -125,7 +125,7 @@ func TestBuckets_ShardsBoundToValidBuckets(t *testing.T) {
 	}
 }
 
-// TestBuckets_OnboardAppPropagates calls AddSource with a fresh app
+// TestBuckets_OnboardServicePropagates calls AddSource with a fresh app
 // name, then asserts that (1) the default bucket's apps list now
 // contains it, and (2) every INGESTING shard in the default bucket
 // has the new app in its shard_records.apps — which is how query
@@ -135,7 +135,7 @@ func TestBuckets_ShardsBoundToValidBuckets(t *testing.T) {
 // READ_ONLY shards are a separate sub-assertion: if any exist, they
 // must NOT have received the new app (the denormalization invariant
 // — they can't route queries for an app they never saw writes for).
-func TestBuckets_OnboardAppPropagates(t *testing.T) {
+func TestBuckets_OnboardServicePropagates(t *testing.T) {
 	db := openTestStore(t)
 	defer db.Close()
 
@@ -166,7 +166,7 @@ func TestBuckets_OnboardAppPropagates(t *testing.T) {
 	}
 
 	// Give the coordinator a tick to persist bucket + propagate to
-	// shards. OnboardApp is synchronous on the RPC path, but the
+	// shards. OnboardService is synchronous on the RPC path, but the
 	// persist call goes through GORM and a test reading the DB
 	// immediately after is racy in practice; retry briefly.
 	deadline := time.Now().Add(10 * time.Second)

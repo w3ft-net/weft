@@ -211,8 +211,8 @@ func (s *Server) ListApps(ctx context.Context, _ *pb.ListAppsRequest) (*pb.ListA
 	}
 
 	// Return app names observed from ingest for this customer.
-	if s.Coord.SeenApps != nil && customer != "" {
-		if names := s.Coord.SeenApps.Names(customer); len(names) > 0 {
+	if s.Coord.SeenServices != nil && customer != "" {
+		if names := s.Coord.SeenServices.Names(customer); len(names) > 0 {
 			return &pb.ListAppsResponse{Apps: names}, nil
 		}
 	}
@@ -335,11 +335,11 @@ func (s *Server) AddSource(ctx context.Context, req *pb.AddSourceRequest) (*pb.A
 	// shards so queries for this app route correctly from the next
 	// row onward. Best-effort: a failure here leaves the log_group
 	// persisted but the bucket un-updated — the ingest path's
-	// SeenApps trigger (below) will retry on first row. Don't fail
+	// SeenServices trigger (below) will retry on first row. Don't fail
 	// the client's AddSource on bucket trouble.
 	if s.Coord.Provisioner != nil {
-		if err := s.Coord.Provisioner.OnboardApp(req.App); err != nil {
-			log.Printf("AddSource: OnboardApp %q: %v", req.App, err)
+		if err := s.Coord.Provisioner.OnboardService(req.App); err != nil {
+			log.Printf("AddSource: OnboardService %q: %v", req.App, err)
 		}
 	}
 
@@ -354,7 +354,7 @@ func (s *Server) ListSources(_ context.Context, _ *pb.ListSourcesRequest) (*pb.L
 	var infos []*pb.SourceInfo
 	for _, lg := range logGroups {
 		infos = append(infos, &pb.SourceInfo{
-			App:        lg.App,
+			App:        lg.Service,
 			Customer:   lg.CustomerName,
 			Namespace:  lg.NamespaceName,
 			LogGroup:   lg.LogGroupName,
@@ -503,7 +503,7 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 	var mu sync.Mutex
 	var rows []*pb.LogRow
 	var count int64
-	var firstApp string
+	var firstService string
 
 	// Periodic flush for sparse streams.
 	ticker := time.NewTicker(2 * time.Second)
@@ -560,20 +560,20 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 
 		mu.Lock()
 		if count == 0 {
-			firstApp = row.App
+			firstService = row.App
 			log.Printf("ingest-stream: first row from customer=%s app=%s", row.Customer, row.App)
 		}
-		if s.Coord.SeenApps != nil && row.App != "" {
-			if s.Coord.SeenApps.Add(row.Customer, row.App, row.Env) {
+		if s.Coord.SeenServices != nil && row.App != "" {
+			if s.Coord.SeenServices.Add(row.Customer, row.App, row.Env) {
 				log.Printf("ingest-stream: new app discovered: customer=%s app=%s", row.Customer, row.App)
 				// Onboard to the default bucket + propagate to
 				// INGESTING shards so query routing picks up the new
-				// app. Idempotent; SeenApps.Add only returns true the
+				// app. Idempotent; SeenServices.Add only returns true the
 				// first time, so this fires once per (customer, app)
 				// pair over the coordinator's lifetime.
 				if s.Coord.Provisioner != nil {
-					if err := s.Coord.Provisioner.OnboardApp(row.App); err != nil {
-						log.Printf("ingest-stream: OnboardApp %q: %v", row.App, err)
+					if err := s.Coord.Provisioner.OnboardService(row.App); err != nil {
+						log.Printf("ingest-stream: OnboardService %q: %v", row.App, err)
 					}
 				}
 			}
@@ -587,7 +587,7 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 		mu.Unlock()
 	}
 
-	_ = firstApp
+	_ = firstService
 
 	mu.Lock()
 	if len(rows) > 0 {

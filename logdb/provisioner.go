@@ -134,21 +134,21 @@ func DevProvisionerConfig() ProvisionerConfig {
 	}
 }
 
-// AppStats tracks per-app ingestion rates for adaptive bucket splitting.
-type AppStats struct {
+// ServiceStats tracks per-app ingestion rates for adaptive bucket splitting.
+type ServiceStats struct {
 	mu     sync.Mutex
 	counts map[string]*atomic.Int64
 }
 
-// NewAppStats creates a new stats tracker.
-func NewAppStats() *AppStats {
-	return &AppStats{
+// NewServiceStats creates a new stats tracker.
+func NewServiceStats() *ServiceStats {
+	return &ServiceStats{
 		counts: make(map[string]*atomic.Int64),
 	}
 }
 
 // Record increments the row count for an app.
-func (s *AppStats) Record(app string, n int64) {
+func (s *ServiceStats) Record(app string, n int64) {
 	s.mu.Lock()
 	counter, ok := s.counts[app]
 	if !ok {
@@ -160,7 +160,7 @@ func (s *AppStats) Record(app string, n int64) {
 }
 
 // Snapshot returns current counts and resets them.
-func (s *AppStats) Snapshot() map[string]int64 {
+func (s *ServiceStats) Snapshot() map[string]int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make(map[string]int64, len(s.counts))
@@ -200,7 +200,7 @@ type Provisioner struct {
 	registry    *ShardRegistry
 	launcher    ShardLauncher
 	config      ProvisionerConfig
-	stats       *AppStats
+	stats       *ServiceStats
 	Buckets     *BucketManager
 	configurer  ShardConfigurer
 	volumes     VolumeManager // optional; used to tag data volumes at christen time
@@ -213,7 +213,7 @@ func NewProvisioner(registry *ShardRegistry, launcher ShardLauncher, config Prov
 		registry:   registry,
 		launcher:   launcher,
 		config:     config,
-		stats:      NewAppStats(),
+		stats:      NewServiceStats(),
 		Buckets:    NewBucketManager(nil),
 		configurer: grpcConfigurer{shardSecret: config.ShardSecret},
 	}
@@ -240,7 +240,7 @@ func (p *Provisioner) SetVolumeManager(vm VolumeManager) {
 
 // Stats returns the provisioner's app stats tracker. The drain loop
 // should call stats.Record() after each successful ingestion.
-func (p *Provisioner) Stats() *AppStats {
+func (p *Provisioner) Stats() *ServiceStats {
 	return p.stats
 }
 
@@ -375,7 +375,7 @@ func (p *Provisioner) Start(ctx context.Context) {
 //
 // No-op for launchers that don't implement TierScaler (sync
 // launchers); they manage their own lifecycle.
-func (p *Provisioner) syncASGDesiredCapacity(ctx context.Context, all []*AppBucket) {
+func (p *Provisioner) syncASGDesiredCapacity(ctx context.Context, all []*Bucket) {
 	scaler, ok := p.launcher.(TierScaler)
 	if !ok {
 		return
@@ -1003,7 +1003,7 @@ func parseTime(s string) time.Time {
 // provisioner config, then to 7d). Per-bucket durations (migration
 // 021) let different buckets run at different cadences on the same
 // tier.
-func (p *Provisioner) currentWindow(bucket *AppBucket, now time.Time) (time.Time, time.Time) {
+func (p *Provisioner) currentWindow(bucket *Bucket, now time.Time) (time.Time, time.Time) {
 	dur := p.windowDurationFor(bucket)
 	start := now.UTC().Truncate(dur)
 	return start, start.Add(dur)
@@ -1013,7 +1013,7 @@ func (p *Provisioner) currentWindow(bucket *AppBucket, now time.Time) (time.Time
 // with a two-step fallback so tests and boot-before-hydration paths
 // stay working. Production paths always pass a bucket with a set
 // WindowDuration (persisted by migration 021).
-func (p *Provisioner) windowDurationFor(bucket *AppBucket) time.Duration {
+func (p *Provisioner) windowDurationFor(bucket *Bucket) time.Duration {
 	if bucket != nil && bucket.WindowDuration > 0 {
 		return bucket.WindowDuration
 	}
@@ -1118,7 +1118,7 @@ func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier stri
 	}, nil
 }
 
-// OnboardApp records an app as belonging to a bucket and kicks a
+// OnboardService records an app as belonging to a bucket and kicks a
 // reconciler pass so the new app lands on every INGESTING shard in
 // that bucket without waiting for the next ticker. Called from
 // AddSource (operator config) and from IngestStream on first-seen
@@ -1128,21 +1128,21 @@ func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier stri
 //
 // Idempotent: if the app is already on the bucket, no DB write and
 // no reconcile pass. Safe to call on the hot ingest path where
-// SeenApps.Add returns true for every row the coordinator has ever
+// SeenServices.Add returns true for every row the coordinator has ever
 // seen from a given (customer, app) pair.
-func (p *Provisioner) OnboardApp(app string) error {
+func (p *Provisioner) OnboardService(app string) error {
 	if p.Buckets == nil {
 		return nil
 	}
 	bucket, err := p.Buckets.Default()
 	if err != nil {
-		return fmt.Errorf("OnboardApp(%s): lookup default: %w", app, err)
+		return fmt.Errorf("OnboardService(%s): lookup default: %w", app, err)
 	}
 	if bucket == nil {
-		log.Printf("provisioner: OnboardApp(%s): no default bucket — skipping", app)
+		log.Printf("provisioner: OnboardService(%s): no default bucket — skipping", app)
 		return nil
 	}
-	updated, err := p.Buckets.AddAppToBucket(bucket.ID, app)
+	updated, err := p.Buckets.AddServiceToBucket(bucket.ID, app)
 	if err != nil {
 		return fmt.Errorf("add %q to bucket %d: %w", app, bucket.ID, err)
 	}
@@ -1178,7 +1178,7 @@ func (p *Provisioner) check(ctx context.Context) {
 
 	// Read the bucket set once and feed both the per-bucket
 	// reconcile and the tier-level desired-capacity sync.
-	var all []*AppBucket
+	var all []*Bucket
 	if p.Buckets != nil {
 		var err error
 		all, err = p.Buckets.All()
@@ -1250,7 +1250,7 @@ func (p *Provisioner) archive(entry *ShardEntry) {
 		return
 	}
 
-	appLabel := joinApps(serviceNames(entry.Services))
+	appLabel := joinServices(serviceNames(entry.Services))
 	s3Prefix := fmt.Sprintf("%s/%s", p.config.ParquetDir, appLabel)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -1328,7 +1328,7 @@ func (p *Provisioner) retireVolume(entry *ShardEntry) {
 // mintLaunchingRow INSERTs a LAUNCHING row for a bucket's current
 // window. Thin wrapper over mintLaunchingRowForWindow; see that
 // function for the details.
-func (p *Provisioner) mintLaunchingRow(bucket *AppBucket) (*store.ShardRecord, error) {
+func (p *Provisioner) mintLaunchingRow(bucket *Bucket) (*store.ShardRecord, error) {
 	windowStart, windowEnd := p.currentWindow(bucket, time.Now().UTC())
 	return p.mintLaunchingRowForWindow(bucket, windowStart, windowEnd)
 }
@@ -1339,7 +1339,7 @@ func (p *Provisioner) mintLaunchingRow(bucket *AppBucket) (*store.ShardRecord, e
 // from op 4's pre-warm path. The row's shard id and heartbeat
 // token are minted now; instance_id/addr stay empty until the
 // lifecycle hook + christen fill them in.
-func (p *Provisioner) mintLaunchingRowForWindow(bucket *AppBucket, windowStart, windowEnd time.Time) (*store.ShardRecord, error) {
+func (p *Provisioner) mintLaunchingRowForWindow(bucket *Bucket, windowStart, windowEnd time.Time) (*store.ShardRecord, error) {
 	if p.config.ShardOps == nil {
 		return nil, fmt.Errorf("no ShardOps store configured")
 	}
@@ -1388,7 +1388,7 @@ func (p *Provisioner) mintLaunchingRowForWindow(bucket *AppBucket, windowStart, 
 // provisionForBucket launches a new INGESTING shard for a bucket.
 // Tier comes from the bucket record so per-bucket fleet sizing (small
 // catch-all vs. medium dedicated, etc.) is data-driven.
-func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket) {
+func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *Bucket) {
 	tier := bucket.Tier
 	if tier == "" {
 		tier = "small"
@@ -1416,7 +1416,7 @@ func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *AppBucket)
 	now := time.Now().UTC()
 	windowStart, windowEnd := p.currentWindow(bucket, now)
 	seq := p.registry.Count()
-	id := fmt.Sprintf("shard-%s-%s-%d", joinApps(bucket.Apps), windowStart.Format("20060102T1504"), seq)
+	id := fmt.Sprintf("shard-%s-%s-%d", joinServices(bucket.Services), windowStart.Format("20060102T1504"), seq)
 
 	var svcs []store.ShardService
 	if p.config.ShardOps != nil {
@@ -1463,7 +1463,7 @@ func serviceNames(svcs []store.ShardService) []string {
 	return out
 }
 
-func joinApps(apps []string) string {
+func joinServices(apps []string) string {
 	if len(apps) == 0 {
 		return "shared"
 	}

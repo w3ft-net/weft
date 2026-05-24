@@ -34,7 +34,7 @@ type Config struct {
 	CanManageFunctions bool // gates writes to /bin
 	CanManageWatches   bool // gates writes to /cron.d
 	CanManageEtc       bool // gates writes to /etc (except /etc/team.yaml — owner-only)
-	LogApps            []string
+	LogServices        []string
 	NoticeQueue        NoticeSink
 }
 

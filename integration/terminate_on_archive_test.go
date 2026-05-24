@@ -106,7 +106,7 @@ func TestTerminateOnArchive_CallsASGTerminate(t *testing.T) {
 	instanceID := seedInstance(t, cfg, "us-east-2a")
 
 	shardID := "shard-term-" + testSuffix()
-	bucket := &logdb.AppBucket{
+	bucket := &logdb.Bucket{
 		ID:              1,
 		Label:           "default",
 		Apps:            nil,

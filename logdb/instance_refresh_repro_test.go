@@ -181,10 +181,10 @@ func TestInstanceRefresh_StaleHeartbeat_NoRow_Recovers(t *testing.T) {
 func TestReconciler_PostReaperWipeEntry_BlocksLaunchOp(t *testing.T) {
 	now := time.Now().UTC()
 
-	bucket := &AppBucket{
+	bucket := &Bucket{
 		ID:             defaultBucketID,
 		Label:          "default",
-		Apps:           []string{"weft"},
+		Services:       []string{"weft"},
 		Target:         2,
 		Tier:           "small",
 		WindowDuration: 7 * 24 * time.Hour,
@@ -339,8 +339,8 @@ func TestLifecycle_LogStructuredOnAbandon(t *testing.T) {
 		"instance=i-refresh-replacement",
 		"tier=small",
 		"az=us-east-2a",
-		"candidates=1",      // ListAvailableByTier returned vol-orig
-		"recoverable=0",     // recognisedAsDead filtered it out
+		"candidates=1",  // ListAvailableByTier returned vol-orig
+		"recoverable=0", // recognisedAsDead filtered it out
 		"shard=shard-original",
 		"decision=ABANDON",
 	)
@@ -396,7 +396,7 @@ func TestSyncASGDesired_LogsPerTierBreakdown(t *testing.T) {
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{ID: "ro-1", BucketID: 1, Tier: "small", State: StateReadOnly})
 
-	buckets := []*AppBucket{
+	buckets := []*Bucket{
 		{ID: 1, Label: "default", Target: 2, Tier: "small"},
 	}
 	scaler := &fakeTierScaler{maxByTier: map[string]int32{"small": 8}}
@@ -427,8 +427,8 @@ func TestSyncASGDesired_LogsPerTierBreakdown(t *testing.T) {
 // other half of the picture during a refresh-induced incident.
 func TestReconcile_LogsPerBucketSummary(t *testing.T) {
 	now := time.Now().UTC()
-	bucket := &AppBucket{
-		ID: defaultBucketID, Label: "default", Apps: []string{"weft"},
+	bucket := &Bucket{
+		ID: defaultBucketID, Label: "default", Services: []string{"weft"},
 		Target: 2, Tier: "small", WindowDuration: 7 * 24 * time.Hour,
 	}
 	entries := []*ShardEntry{

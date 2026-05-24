@@ -105,7 +105,7 @@ func containsGlobMeta(s string) bool {
 //   - /log/<ns>/<env>/<glob>.log — globs apps within (ns, env).
 //   - /log/<ns>/<glob>.log       — globs apps directly under <ns>.
 //
-// Apps come from coordinator.SeenApps in the encoded form
+// Apps come from coordinator.SeenServices in the encoded form
 // "<ns>/<env>/<deployment>" for env-bearing rows or "<ns>/<deployment>"
 // for env-less rows (see encodeName in coordinator/coordinator.go).
 // The matcher treats the full dir-after-/log/ as a prefix and strips

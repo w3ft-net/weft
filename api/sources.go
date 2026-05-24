@@ -178,7 +178,7 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 	for _, lg := range sources {
 		// Strip the namespace prefix so the response keeps the same
 		// short-form app shape the frontend and weftd agents consume.
-		shortApp := strings.TrimPrefix(lg.App, lg.NamespaceName+"/")
+		shortService := strings.TrimPrefix(lg.Service, lg.NamespaceName+"/")
 		sample := lg.Sample
 		if sample == "" {
 			sample = "[]"
@@ -188,7 +188,7 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 			detection = "null"
 		}
 		resp = append(resp, pendingResp{
-			App:             shortApp,
+			App:             shortService,
 			Namespace:       lg.NamespaceName,
 			Instance:        lg.Instance,
 			Deployment:      lg.Deployment,
@@ -364,7 +364,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, sourceResp{
 			Namespace:    lg.NamespaceName,
-			App:          lg.App,
+			App:          lg.Service,
 			SourceType:   string(lg.SourceType),
 			LogGroup:     lg.LogGroupName,
 			Region:       lg.Region,

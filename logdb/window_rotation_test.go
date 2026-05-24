@@ -35,7 +35,7 @@ func seedDefaultBucket(t *testing.T, db *store.Store, apps []string, target int,
 	if err != nil || !ok {
 		t.Fatalf("default bucket lookup: ok=%v err=%v", ok, err)
 	}
-	def.Apps = apps
+	def.Services = apps
 	def.TargetIngestingCount = target
 	def.Tier = "small"
 	def.WindowDuration = window.String()
@@ -50,7 +50,7 @@ func seedDefaultBucket(t *testing.T, db *store.Store, apps []string, target int,
 func seedDedicatedBucket(t *testing.T, db *store.Store, label string, apps []string) *store.Bucket {
 	t.Helper()
 	rec := &store.Bucket{
-		Label: label, Apps: apps, TargetIngestingCount: 2, Tier: "small",
+		Label: label, Services: apps, TargetIngestingCount: 2, Tier: "small",
 		WindowDuration: "168h", CreatedAt: "2026-04-21T00:00:00Z",
 	}
 	if err := db.SaveBucket(rec); err != nil {
@@ -101,7 +101,7 @@ func TestCheck_WindowEndPastNow_RotatesToReadOnly(t *testing.T) {
 			ConfigureRetries: 1,
 			ConfigureBackoff: time.Millisecond,
 		},
-		stats:      NewAppStats(),
+		stats:      NewServiceStats(),
 		Buckets:    bucketStub(t, 1, 0),
 		configurer: &failingConfigurer{}, // no replacement gRPC; we're asserting the transition
 	}
@@ -142,7 +142,7 @@ func TestCheck_WindowEndInFuture_NoRotation(t *testing.T) {
 		config: ProvisionerConfig{
 			WindowDuration: time.Hour,
 		},
-		stats:      NewAppStats(),
+		stats:      NewServiceStats(),
 		Buckets:    bucketStub(t, 1, 0),
 		configurer: &failingConfigurer{},
 	}
@@ -176,7 +176,7 @@ func TestCheck_ReadOnlyPastRetention_TriggersArchive(t *testing.T) {
 			WindowDuration: time.Hour,
 			ParquetDir:     t.TempDir(),
 		},
-		stats:   NewAppStats(),
+		stats:   NewServiceStats(),
 		Buckets: bucketStub(t, 0, time.Hour), // retention 1h: 2h past WindowEnd → eligible
 		volumes: vm,
 	}
@@ -215,7 +215,7 @@ func TestCheck_ReadOnlyWithinRetention_NoArchive(t *testing.T) {
 			WindowDuration: time.Hour,
 			ParquetDir:     t.TempDir(),
 		},
-		stats:   NewAppStats(),
+		stats:   NewServiceStats(),
 		Buckets: bucketStub(t, 0, 2*time.Hour),
 		volumes: vm,
 	}
@@ -256,7 +256,7 @@ func TestCheck_OldCreatedAt_RecentWindowEnd_NoArchive(t *testing.T) {
 			WindowDuration: time.Hour,
 			ParquetDir:     t.TempDir(),
 		},
-		stats:   NewAppStats(),
+		stats:   NewServiceStats(),
 		Buckets: bucketStub(t, 0, time.Hour),
 		volumes: vm,
 	}
@@ -291,7 +291,7 @@ func TestCheck_ZeroWindow_NoRotation(t *testing.T) {
 		config: ProvisionerConfig{
 			WindowDuration: time.Hour,
 		},
-		stats:      NewAppStats(),
+		stats:      NewServiceStats(),
 		Buckets:    bucketStub(t, 1, 0),
 		configurer: &failingConfigurer{},
 	}

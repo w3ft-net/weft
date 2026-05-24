@@ -6,7 +6,7 @@ import (
 )
 
 func TestExpandSourceGlobs(t *testing.T) {
-	// Apps come from coordinator.SeenApps, where env-bearing entries
+	// Apps come from coordinator.SeenServices, where env-bearing entries
 	// are encoded as "<ns>/<env>/<deployment>" (env-less ones stay
 	// "<ns>/<deployment>") — see encodeName in
 	// coordinator/coordinator.go. Both shapes appear in the same list.

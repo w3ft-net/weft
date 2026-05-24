@@ -235,10 +235,10 @@ func TestNamespaceQuery_FilterAcrossSubApps(t *testing.T) {
 	}
 }
 
-// TestSeenApps_TracksSubApps verifies that SeenApps collects distinct
+// TestSeenServices_TracksSubApps verifies that SeenServices collects distinct
 // sub-app names as data flows through the coordinator.
-func TestSeenApps_TracksSubApps(t *testing.T) {
-	sa := NewSeenApps()
+func TestSeenServices_TracksSubApps(t *testing.T) {
+	sa := NewSeenServices()
 
 	sa.Add("graybeard", "weft/coordinator", "")
 	sa.Add("graybeard", "weft/shard", "")
@@ -270,17 +270,17 @@ func TestSeenApps_TracksSubApps(t *testing.T) {
 	}
 }
 
-// TestSeenApps_EnvEncoding verifies that env-bearing rows produce
+// TestSeenServices_EnvEncoding verifies that env-bearing rows produce
 // the slash-encoded "<ns>/<env>/<app>" name shape that drives the
 // 3-level pseudofile path layout. See docs/plans/ingest-dimensions.md.
-func TestSeenApps_EnvEncoding(t *testing.T) {
-	sa := NewSeenApps()
+func TestSeenServices_EnvEncoding(t *testing.T) {
+	sa := NewSeenServices()
 
 	// Mix of env-less and env-bearing entries in the same namespace.
-	sa.Add("acme", "myco/api", "")          // env-less
-	sa.Add("acme", "myco/api", "prod")      // env-bearing, same app
-	sa.Add("acme", "myco/api", "staging")   // different env, same app
-	sa.Add("acme", "myco/worker", "prod")   // different app under prod
+	sa.Add("acme", "myco/api", "")        // env-less
+	sa.Add("acme", "myco/api", "prod")    // env-bearing, same app
+	sa.Add("acme", "myco/api", "staging") // different env, same app
+	sa.Add("acme", "myco/worker", "prod") // different app under prod
 
 	names := sa.Names("acme")
 	want := []string{

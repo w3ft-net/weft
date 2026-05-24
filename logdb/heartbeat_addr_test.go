@@ -33,7 +33,7 @@ func TestMatchingEntries_AfterRestart(t *testing.T) {
 
 	bucket := &store.Bucket{
 		Label:                "matching-entries-restart-test",
-		Apps:                 []string{"testapp"},
+		Services:             []string{"testapp"},
 		TargetIngestingCount: 1,
 		Tier:                 "small",
 		CreatedAt:            time.Now().UTC().Format(time.RFC3339),

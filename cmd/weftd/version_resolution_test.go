@@ -28,7 +28,7 @@ func withFreshVersionState(t *testing.T) {
 }
 
 // TestVersionForApp_ResolutionOrder asserts the precedence
-// versionForApp documents: per-source `version.file` (live) wins
+// versionForService documents: per-source `version.file` (live) wins
 // over per-source `version.env` (snapshot at startup), which wins
 // over the host-wide `dimensions.version` fallback. Without this
 // ordering the rebuild story for env-var deploys silently shadows
@@ -66,8 +66,8 @@ func TestVersionForApp_ResolutionOrder(t *testing.T) {
 		{"myco/unconfigured-app", ""},
 	}
 	for _, tc := range cases {
-		if got := versionForApp(tc.app); got != tc.want {
-			t.Errorf("versionForApp(%q) = %q, want %q", tc.app, got, tc.want)
+		if got := versionForService(tc.app); got != tc.want {
+			t.Errorf("versionForService(%q) = %q, want %q", tc.app, got, tc.want)
 		}
 	}
 }
@@ -87,14 +87,14 @@ func TestVersionForApp_FileBeatsEnv(t *testing.T) {
 	versionReaders["myco/api"] = weftd.NewVersionReader(context.Background(), vfile)
 	versionEnvs["myco/api"] = "from-env"
 
-	if got := versionForApp("myco/api"); got != "from-file" {
-		t.Errorf("versionForApp = %q, want from-file (file must beat env)", got)
+	if got := versionForService("myco/api"); got != "from-file" {
+		t.Errorf("versionForService = %q, want from-file (file must beat env)", got)
 	}
 }
 
 // TestVersionForApp_EnvCapturedEmptyStaysEmpty: when `version.env:`
 // is configured but the env var is unset at agent startup, weftd
-// captures "". Subsequent `versionForApp` calls must return that
+// captures "". Subsequent `versionForService` calls must return that
 // captured "" — NOT fall through to dimensions.version. This is the
 // behaviour that lets an operator "explicitly disable" the dimension
 // for a source.
@@ -104,8 +104,8 @@ func TestVersionForApp_EnvCapturedEmptyStaysEmpty(t *testing.T) {
 	// Configured (key present) but the env was empty at startup.
 	versionEnvs["myco/api"] = ""
 
-	if got := versionForApp("myco/api"); got != "" {
-		t.Errorf("versionForApp = %q, want empty (configured-but-unset env should not fall through)", got)
+	if got := versionForService("myco/api"); got != "" {
+		t.Errorf("versionForService = %q, want empty (configured-but-unset env should not fall through)", got)
 	}
 }
 

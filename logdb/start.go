@@ -63,7 +63,7 @@ type Config struct {
 //
 // Returns the started Provisioner. Caller assigns it to
 // Coordinator.Provisioner so the rest of the runtime
-// (drain stats, OnboardApp, ProcessHeartbeat, ForceArchive/Delete)
+// (drain stats, OnboardService, ProcessHeartbeat, ForceArchive/Delete)
 // can reach it.
 func Start(cfg Config) (*Provisioner, error) {
 	// Hydrate the shard registry from postgres BEFORE handing it to

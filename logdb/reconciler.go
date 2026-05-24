@@ -16,7 +16,7 @@ import (
 // be INGESTING before the current shard's window closes so the Op 3
 // capacity gate can rotate it without a write-gap. Package-scoped
 // rather than passed through the op signature: future
-// AppBucket.ShouldPrewarmNextWindow implementations might not use a
+// Bucket.ShouldPrewarmNextWindow implementations might not use a
 // lead duration at all (ingestion burn rate, disk-fill slope,
 // etc.), so the policy shouldn't leak into every caller's
 // signature. main.go can override at boot for per-env tuning; the
@@ -46,7 +46,7 @@ type ReconcileOp interface {
 // instance hasn't heartbeated yet), sync launchers count from the
 // registry (there's no LAUNCHING intermediate state to miss).
 type ReconcilerSnapshot struct {
-	Bucket               *AppBucket
+	Bucket *Bucket
 	// BucketServices is the (namespace_id, service) set the bucket
 	// serves, read from log_groups by the snapshot builder. Op 1
 	// (service-drift) diffs it against each INGESTING shard's membership
@@ -227,7 +227,7 @@ func reconcile(snap ReconcilerSnapshot) []ReconcileOp {
 // this op the second launch just overshoots, and the tick after
 // converges by emitting zero.
 type LaunchShardOp struct {
-	Bucket *AppBucket
+	Bucket *Bucket
 }
 
 func (o LaunchShardOp) Describe() string {
@@ -253,7 +253,7 @@ func (o LaunchShardOp) Apply(ctx context.Context, p *Provisioner) error {
 // persisting an intent row the lifecycle hook will claim when the
 // ASG brings up the instance.
 type PrewarmNextWindowOp struct {
-	Bucket      *AppBucket
+	Bucket      *Bucket
 	WindowStart time.Time
 	WindowEnd   time.Time
 }
@@ -397,7 +397,7 @@ func (o AddServiceToShardOp) Apply(_ context.Context, p *Provisioner) error {
 // from shard_records (authoritative while a heartbeat is still in
 // flight); sync launchers count INGESTING from the registry
 // directly because they skip the LAUNCHING state entirely.
-func (p *Provisioner) snapshotForBucket(bucket *AppBucket) ReconcilerSnapshot {
+func (p *Provisioner) snapshotForBucket(bucket *Bucket) ReconcilerSnapshot {
 	snap := ReconcilerSnapshot{
 		Bucket:          bucket,
 		Now:             time.Now().UTC(),
@@ -462,7 +462,7 @@ func (p *Provisioner) snapshotForBucket(bucket *AppBucket) ReconcilerSnapshot {
 
 // ReconcileBucket runs one pass of the reconciler for a single
 // bucket, applying each op in order. Called from the ticker for
-// periodic catchup and from OnboardApp for immediate propagation.
+// periodic catchup and from OnboardService for immediate propagation.
 // Concurrent callers are serialised by per-op idempotency and
 // state re-checks, not a lock here.
 //
@@ -471,7 +471,7 @@ func (p *Provisioner) snapshotForBucket(bucket *AppBucket) ReconcilerSnapshot {
 // future-launching, plus emitted op count) is greppable in prod.
 // During a refresh-induced ABANDON storm this is the line that
 // answers "did the reconciler think anything was wrong yet?"
-func (p *Provisioner) ReconcileBucket(ctx context.Context, bucket *AppBucket) {
+func (p *Provisioner) ReconcileBucket(ctx context.Context, bucket *Bucket) {
 	snap := p.snapshotForBucket(bucket)
 	ops := reconcile(snap)
 	log.Printf("reconciler: bucket=%s id=%d tier=%s target=%d ingesting=%d launching=%d future_launching=%d ops=%d",

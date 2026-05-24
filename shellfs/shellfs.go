@@ -21,10 +21,10 @@ var _ bash.FS = (*ShellFS)(nil)
 // ShellFS implements bash.FS for the weft shell by delegating to a
 // mount-composed filesystem.
 type ShellFS struct {
-	mfs   *shellcore.MountFS
-	store *store.Store
+	mfs    *shellcore.MountFS
+	store  *store.Store
 	custID uint
-	cfg   mounts.Config
+	cfg    mounts.Config
 }
 
 // NoticeSink is the narrow interface ShellFS uses to signal events
@@ -35,12 +35,12 @@ type NoticeSink = mounts.NoticeSink
 const NoticeKeyTmpExpiry = mounts.NoticeKeyTmpExpiry
 
 // New creates a ShellFS for the given customer.
-func New(s *store.Store, customerID uint, logApps []string, opts ...Option) *ShellFS {
+func New(s *store.Store, customerID uint, logServices []string, opts ...Option) *ShellFS {
 	cfg := mounts.Config{
-		Store:      s,
-		CustomerID: customerID,
-		Tier:       store.TierTrial,
-		LogApps:    logApps,
+		Store:       s,
+		CustomerID:  customerID,
+		Tier:        store.TierTrial,
+		LogServices: logServices,
 	}
 	for _, o := range opts {
 		o(&cfg)

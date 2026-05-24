@@ -16,12 +16,12 @@ import (
 type countingLogMount struct {
 	inner     *LogMount
 	rels      []string // every rel passed to ReadDir, in call order
-	scans     int      // full LogApps slice scans implied by ReadDir
+	scans     int      // full LogServices slice scans implied by ReadDir
 	walkCalls int      // Walk invocations
-	walkScans int      // full LogApps slice scans implied by Walk
+	walkScans int      // full LogServices slice scans implied by Walk
 }
 
-func (c *countingLogMount) Prefix() string                    { return c.inner.Prefix() }
+func (c *countingLogMount) Prefix() string                     { return c.inner.Prefix() }
 func (c *countingLogMount) Caps() shellcore.MountCaps          { return c.inner.Caps() }
 func (c *countingLogMount) ReadFile(r string) ([]byte, error)  { return c.inner.ReadFile(r) }
 func (c *countingLogMount) Stat(r string) (fs.FileInfo, error) { return c.inner.Stat(r) }
@@ -43,13 +43,13 @@ func (c *countingLogMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 
 func (c *countingLogMount) Walk(rel string) ([]string, error) {
 	c.walkCalls++
-	c.walkScans++ // LogMount.Walk is a single pass over LogApps
+	c.walkScans++ // LogMount.Walk is a single pass over LogServices
 	return c.inner.Walk(rel)
 }
 
-// buildLogApps fabricates a realistic slash-encoded app universe:
+// buildLogServices fabricates a realistic slash-encoded app universe:
 // nsCount namespaces × envCount envs × appCount apps per (ns,env).
-func buildLogApps(nsCount, envCount, appCount int) []string {
+func buildLogServices(nsCount, envCount, appCount int) []string {
 	var apps []string
 	for n := 0; n < nsCount; n++ {
 		ns := "ns" + itoa(n)
@@ -75,11 +75,11 @@ func itoa(i int) string {
 	return string(b)
 }
 
-func newCountingTreeFS(logApps []string) (*shellcore.MountFS, *countingLogMount) {
+func newCountingTreeFS(logServices []string) (*shellcore.MountFS, *countingLogMount) {
 	cm := &countingLogMount{
 		inner: &LogMount{cfg: Config{
-			LogApps: logApps,
-			IsOwner: true, // short-circuits canReadNamespace (no DB needed here)
+			LogServices: logServices,
+			IsOwner:     true, // short-circuits canReadNamespace (no DB needed here)
 		}},
 	}
 	mfs := shellcore.NewMountFS()
@@ -93,9 +93,9 @@ func newCountingTreeFS(logApps []string) (*shellcore.MountFS, *countingLogMount)
 // GetNamespacePermission (2 queries). ReadDir checks once per
 // namespace at root and once per non-root call; Walk memoises to one
 // check per namespace total.
-func projectedNonOwnerDBQueries(cm *countingLogMount, logApps []string) int {
+func projectedNonOwnerDBQueries(cm *countingLogMount, logServices []string) int {
 	namespaces := map[string]bool{}
-	for _, a := range logApps {
+	for _, a := range logServices {
 		if i := strings.Index(a, "/"); i >= 0 {
 			namespaces[a[:i]] = true
 		}
@@ -117,11 +117,11 @@ func projectedNonOwnerDBQueries(cm *countingLogMount, logApps []string) int {
 
 // TestTreeLogUsesSingleWalk pins the fix contract: `tree /log` must
 // resolve the whole namespace in exactly ONE Walk (one pass over
-// LogApps, one permission check per namespace) and ZERO recursive
+// LogServices, one permission check per namespace) and ZERO recursive
 // ReadDir calls. Before LogMount.Walk existed this failed — the
 // traversal made O(directories) ReadDir calls (301 for 7,500 apps).
 func TestTreeLogUsesSingleWalk(t *testing.T) {
-	apps := buildLogApps(50, 5, 30) // 7,500 apps
+	apps := buildLogServices(50, 5, 30) // 7,500 apps
 	mfs, cm := newCountingTreeFS(apps)
 
 	if _, err := mfs.Tree("/log"); err != nil {
@@ -135,7 +135,7 @@ func TestTreeLogUsesSingleWalk(t *testing.T) {
 		t.Errorf("recursive ReadDir calls = %d, want 0 (Walk should replace them)", len(cm.rels))
 	}
 	if cm.walkScans != 1 {
-		t.Errorf("full-slice scans = %d, want 1 (one pass over LogApps)", cm.walkScans)
+		t.Errorf("full-slice scans = %d, want 1 (one pass over LogServices)", cm.walkScans)
 	}
 	nsCount := 50
 	if db := projectedNonOwnerDBQueries(cm, apps); db != nsCount*2 {
@@ -146,14 +146,14 @@ func TestTreeLogUsesSingleWalk(t *testing.T) {
 // TestTreeWalkOutputParity guards the WalkMount doc promise that the
 // Walk fast-path and the ReadDir fallback render byte-identical trees.
 func TestTreeWalkOutputParity(t *testing.T) {
-	apps := buildLogApps(8, 3, 4)
+	apps := buildLogServices(8, 3, 4)
 	// Include a bare namespace (no apps) and a namespace with apps
 	// directly under it (no env) to exercise both LogMount branches.
 	apps = append(apps, "bare", "direct/svcX", "direct/env9/svcY")
 
 	// Walk path.
 	walkFS := shellcore.NewMountFS()
-	walkFS.Register(&LogMount{cfg: Config{LogApps: apps, IsOwner: true}})
+	walkFS.Register(&LogMount{cfg: Config{LogServices: apps, IsOwner: true}})
 	walkOut, err := walkFS.Tree("/log")
 	if err != nil {
 		t.Fatalf("walk tree: %v", err)
@@ -162,7 +162,7 @@ func TestTreeWalkOutputParity(t *testing.T) {
 	// ReadDir-only path: a wrapper that does NOT expose Walk, forcing
 	// MountFS.Tree's recursive ReadDir fallback.
 	rdFS := shellcore.NewMountFS()
-	rdFS.Register(readDirOnly{&LogMount{cfg: Config{LogApps: apps, IsOwner: true}}})
+	rdFS.Register(readDirOnly{&LogMount{cfg: Config{LogServices: apps, IsOwner: true}}})
 	rdOut, err := rdFS.Tree("/log")
 	if err != nil {
 		t.Fatalf("readdir tree: %v", err)
@@ -177,8 +177,8 @@ func TestTreeWalkOutputParity(t *testing.T) {
 // MountFS.Tree falls back to recursive ReadDir.
 type readDirOnly struct{ lm *LogMount }
 
-func (r readDirOnly) Prefix() string                    { return r.lm.Prefix() }
-func (r readDirOnly) Caps() shellcore.MountCaps          { return r.lm.Caps() }
+func (r readDirOnly) Prefix() string                            { return r.lm.Prefix() }
+func (r readDirOnly) Caps() shellcore.MountCaps                 { return r.lm.Caps() }
 func (r readDirOnly) ReadDir(rel string) ([]fs.DirEntry, error) { return r.lm.ReadDir(rel) }
 func (r readDirOnly) ReadFile(rel string) ([]byte, error)       { return r.lm.ReadFile(rel) }
 func (r readDirOnly) Stat(rel string) (fs.FileInfo, error)      { return r.lm.Stat(rel) }
@@ -195,7 +195,7 @@ func TestProfileTreeLog(t *testing.T) {
 		{50, 5, 30}, // large: 7500 apps
 	}
 	for _, c := range cases {
-		apps := buildLogApps(c.ns, c.env, c.app)
+		apps := buildLogServices(c.ns, c.env, c.app)
 		mfs, cm := newCountingTreeFS(apps)
 		start := time.Now()
 		if _, err := mfs.Tree("/log"); err != nil {
@@ -209,9 +209,9 @@ func TestProfileTreeLog(t *testing.T) {
 }
 
 func BenchmarkTreeLog(b *testing.B) {
-	apps := buildLogApps(50, 5, 30) // 7500 apps
+	apps := buildLogServices(50, 5, 30) // 7500 apps
 	mfs := shellcore.NewMountFS()
-	mfs.Register(&LogMount{cfg: Config{LogApps: apps, IsOwner: true}})
+	mfs.Register(&LogMount{cfg: Config{LogServices: apps, IsOwner: true}})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := mfs.Tree("/log"); err != nil {

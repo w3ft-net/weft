@@ -95,7 +95,7 @@ func TestKindPredicate_TwoSegRejected(t *testing.T) {
 
 // TestEnvBearing_FourSeg pins the env-bearing shape: a 4-seg path
 // /log/<ns>/<env>/<svc>/<kind>.log resolves to env+namespace+service+
-// kind predicates. This is the form SeenApps.encodeName produces for
+// kind predicates. This is the form SeenServices.encodeName produces for
 // env-bearing producer tokens (env spliced at position 1). Segment
 // count alone disambiguates env-less (3) from env-bearing (4) — no
 // caller context needed, which matters because reader JWTs span envs.

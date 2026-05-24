@@ -119,10 +119,10 @@ func TestZombie_WipeAndAwaitRebind_PersistsForever(t *testing.T) {
 func TestReconcile_DBRegistryAsymmetry_BlocksLaunch(t *testing.T) {
 	now := time.Now()
 
-	bucket := &AppBucket{
+	bucket := &Bucket{
 		ID:             1,
 		Label:          "default",
-		Apps:           []string{"weft"},
+		Services:       []string{"weft"},
 		Target:         2,
 		Tier:           "small",
 		WindowDuration: 7 * 24 * time.Hour,

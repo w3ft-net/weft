@@ -77,17 +77,3 @@ func (s *Store) ListNamespaces(customerID uint) ([]Namespace, error) {
 	err := s.scoped(customerID).Order("name").Find(&nss).Error
 	return nss, err
 }
-
-// --- Backward compat aliases ---
-// TODO: remove after all callers are migrated
-
-// FindOrCreateApp is an alias for FindOrCreateNamespace.
-func (s *Store) FindOrCreateApp(customerID uint, name string) (*Namespace, error) {
-	return s.FindOrCreateNamespace(customerID, name)
-}
-
-// ListApps is an alias for ListNamespaces.
-func (s *Store) ListApps(customerID uint) ([]Namespace, error) {
-	return s.ListNamespaces(customerID)
-}
-

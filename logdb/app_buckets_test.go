@@ -16,12 +16,12 @@ import (
 // same row in place (see window_rotation_test.go).
 const defaultBucketID int64 = 1
 
-// OnboardApp must append the app to the default bucket AND to every
+// OnboardService must append the app to the default bucket AND to every
 // INGESTING shard bound to that bucket, while leaving READ_ONLY and
 // ARCHIVED shards alone (their apps list stays frozen — they never
 // accepted writes for the new app). Shards in a different bucket
 // also stay untouched.
-func TestOnboardApp_OnlyIngestingInBucketGetsAppended(t *testing.T) {
+func TestOnboardService_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 	db := openSMTestStore(t)
 	seedDefaultBucket(t, db, []string{"weft"}, 0, 0)
 	// Both services live in the default bucket's log_groups (the routing
@@ -71,8 +71,8 @@ func TestOnboardApp_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 	}
 	prov.config.ShardOps = db // ServicesForBucket for the reconciler's drift diff
 
-	if err := prov.OnboardApp("xylem"); err != nil {
-		t.Fatalf("OnboardApp: %v", err)
+	if err := prov.OnboardService("xylem"); err != nil {
+		t.Fatalf("OnboardService: %v", err)
 	}
 
 	// Bucket now has both apps.
@@ -80,7 +80,7 @@ func TestOnboardApp_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bm.Default: %v", err)
 	}
-	if got := def.Apps; len(got) != 2 || got[0] != "weft" || got[1] != "xylem" {
+	if got := def.Services; len(got) != 2 || got[0] != "weft" || got[1] != "xylem" {
 		t.Errorf("default bucket apps: got %v, want [weft xylem]", got)
 	}
 
@@ -106,16 +106,16 @@ func TestOnboardApp_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 	}
 
 	// Second call is a no-op (idempotent).
-	if err := prov.OnboardApp("xylem"); err != nil {
-		t.Fatalf("OnboardApp (second): %v", err)
+	if err := prov.OnboardService("xylem"); err != nil {
+		t.Fatalf("OnboardService (second): %v", err)
 	}
 	def2, _ := bm.Default()
-	if got := def2.Apps; len(got) != 2 {
-		t.Errorf("second OnboardApp duplicated: %v", got)
+	if got := def2.Services; len(got) != 2 {
+		t.Errorf("second OnboardService duplicated: %v", got)
 	}
 }
 
-func containsApp(apps []string, want string) bool {
+func containsService(apps []string, want string) bool {
 	for _, a := range apps {
 		if a == want {
 			return true
@@ -125,7 +125,7 @@ func containsApp(apps []string, want string) bool {
 }
 
 // servicesContain reports whether any of svcs has Service == want,
-// the ShardEntry.Services counterpart to containsApp.
+// the ShardEntry.Services counterpart to containsService.
 func servicesContain(svcs []store.ShardService, want string) bool {
 	for _, s := range svcs {
 		if s.Service == want {
@@ -193,8 +193,8 @@ func TestBucketManager_Split(t *testing.T) {
 	if bucket == nil {
 		t.Fatal("expected new bucket")
 	}
-	if len(bucket.Apps) != 1 || bucket.Apps[0] != "vimgym" {
-		t.Fatalf("expected [vimgym], got %v", bucket.Apps)
+	if len(bucket.Services) != 1 || bucket.Services[0] != "vimgym" {
+		t.Fatalf("expected [vimgym], got %v", bucket.Services)
 	}
 	if bucket.Label != "dedicated-vimgym" {
 		t.Errorf("expected label dedicated-vimgym, got %q", bucket.Label)
@@ -205,10 +205,10 @@ func TestBucketManager_Split(t *testing.T) {
 	if err != nil || updatedSrc == nil {
 		t.Fatalf("ByLabel(%s): %v / %v", src.Label, updatedSrc, err)
 	}
-	if len(updatedSrc.Apps) != 2 {
-		t.Fatalf("expected 2 apps in source after split, got %v", updatedSrc.Apps)
+	if len(updatedSrc.Services) != 2 {
+		t.Fatalf("expected 2 apps in source after split, got %v", updatedSrc.Services)
 	}
-	for _, a := range updatedSrc.Apps {
+	for _, a := range updatedSrc.Services {
 		if a == "vimgym" {
 			t.Errorf("vimgym still in source after split")
 		}
@@ -295,7 +295,7 @@ func TestProvisioner_ScalesUpToConfiguredCount(t *testing.T) {
 	db := openSMTestStore(t)
 	seedDefaultBucket(t, db, []string{"vimgym"}, 3, 168*time.Hour)
 	// Routing reads the bucket's services from log_groups, so the
-	// scale-up shards are stamped from here (not bucket.Apps).
+	// scale-up shards are stamped from here (not bucket.Services).
 	nsID := seedLogGroups(t, db, "scaleup-cust", "vimgym-ns", "vimgym")
 
 	reg := NewShardRegistry()

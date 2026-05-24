@@ -57,7 +57,7 @@ func (f *fakeTierScaler) callFor(tier string) (int32, bool) {
 }
 
 // syncASGDesiredCapacity now takes the bucket set as a value
-// parameter, so these pure-arithmetic tests pass []*AppBucket
+// parameter, so these pure-arithmetic tests pass []*Bucket
 // literals directly — no store, no manager.
 
 // The coordinator must set absolute desired_capacity from the sum
@@ -71,7 +71,7 @@ func TestSyncASGDesired_SumsTargetsPlusReadOnlyPerTier(t *testing.T) {
 	reg.Add(&ShardEntry{ID: "ro-2", BucketID: 1, Tier: "small", State: StateReadOnly})
 
 	// Buckets: small has two buckets (targets 2 and 3); medium has one (target 1).
-	buckets := []*AppBucket{
+	buckets := []*Bucket{
 		{ID: 1, Label: "default", Target: 2, Tier: "small"},
 		{ID: 2, Label: "dedicated-a", Target: 3, Tier: "small"},
 		{ID: 3, Label: "medium-b", Target: 1, Tier: "medium"},
@@ -108,7 +108,7 @@ func TestSyncASGDesired_IngestingNotDoubleCounted(t *testing.T) {
 	// extra capacity — the target already accounts for it.
 	reg.Add(&ShardEntry{ID: "ing-1", BucketID: 1, Tier: "small", State: StateIngesting})
 
-	buckets := []*AppBucket{
+	buckets := []*Bucket{
 		{ID: 1, Label: "default", Target: 2, Tier: "small"},
 	}
 
@@ -133,7 +133,7 @@ func TestSyncASGDesired_ExcludesArchived(t *testing.T) {
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{ID: "arch-1", BucketID: 1, Tier: "small", State: StateArchived})
 
-	buckets := []*AppBucket{
+	buckets := []*Bucket{
 		{ID: 1, Label: "default", Target: 1, Tier: "small"},
 	}
 
@@ -160,7 +160,7 @@ func TestSyncASGDesired_ClampsToMaxSize(t *testing.T) {
 		reg.Add(&ShardEntry{ID: fmt.Sprintf("ro-%d", i), BucketID: 1, Tier: "small", State: StateReadOnly})
 	}
 
-	buckets := []*AppBucket{
+	buckets := []*Bucket{
 		{ID: 1, Label: "default", Target: 10, Tier: "small"},
 	}
 
@@ -187,7 +187,7 @@ func TestSyncASGDesired_ClampsToMaxSize(t *testing.T) {
 // call against a nil/unsupported scaler would panic.
 func TestSyncASGDesired_NoOpForSyncLauncher(t *testing.T) {
 	reg := NewShardRegistry()
-	buckets := []*AppBucket{
+	buckets := []*Bucket{
 		{ID: 1, Label: "default", Target: 2, Tier: "small"},
 	}
 
@@ -212,7 +212,7 @@ func TestSyncASGDesired_IncludesFutureWindowLaunching(t *testing.T) {
 	reg := NewShardRegistry()
 	// No READ_ONLY; pre-warm is the only above-target contribution.
 
-	buckets := []*AppBucket{
+	buckets := []*Bucket{
 		{ID: 1, Label: "default", Target: 2, Tier: "small", WindowDuration: time.Hour},
 	}
 
@@ -255,7 +255,7 @@ func TestSyncASGDesired_ReadOnlyFiltersByTier(t *testing.T) {
 	reg := NewShardRegistry()
 	reg.Add(&ShardEntry{ID: "ro-medium", BucketID: 2, Tier: "medium", State: StateReadOnly})
 
-	buckets := []*AppBucket{
+	buckets := []*Bucket{
 		{ID: 1, Label: "small-default", Target: 2, Tier: "small"},
 		{ID: 2, Label: "medium-default", Target: 1, Tier: "medium"},
 	}

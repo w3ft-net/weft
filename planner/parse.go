@@ -129,7 +129,7 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 				return nil, errLocalSourcePath
 			}
 		}
-		sf, err := extractAppsEnv(args, "cat")
+		sf, err := extractServicesEnv(args, "cat")
 		if err != nil {
 			return nil, err
 		}
@@ -160,7 +160,7 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 				return nil, errLocalSourcePath
 			}
 		}
-		sf, err := extractAppsEnv(files, "head")
+		sf, err := extractServicesEnv(files, "head")
 		if err != nil {
 			return nil, err
 		}
@@ -194,7 +194,7 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 				return nil, errLocalSourcePath
 			}
 		}
-		sf, err := extractAppsEnv(files, "tail")
+		sf, err := extractServicesEnv(files, "tail")
 		if err != nil {
 			return nil, err
 		}
@@ -205,7 +205,7 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 	}
 }
 
-// extractAppsEnv extracts apps + namespace/service/kind from a list
+// extractServicesEnv extracts apps + namespace/service/kind from a list
 // of pseudofile arguments. Empty app names are dropped — extractApp
 // returns "" for warp.log (the all-apps wildcard), which means no app
 // predicate at all, equivalent to a fan-out across every app the
@@ -226,7 +226,7 @@ type sourceFields struct {
 	env        string
 }
 
-func extractAppsEnv(files []string, cmd string) (sourceFields, error) {
+func extractServicesEnv(files []string, cmd string) (sourceFields, error) {
 	seenApps := map[string]struct{}{}
 	seenNS := map[string]struct{}{}
 	seenSvc := map[string]struct{}{}
@@ -307,12 +307,12 @@ func parseStage(cmd *bash.SimpleCommand) stageInfo {
 // Path layout (segments after /log/, .log suffix stripped):
 //
 //	1 seg → "<ns>"                       namespace wildcard (no svc/kind filter)
-//	2 seg → "<ns>/<svc>"                 rejected by extractAppsEnv — kind is required
+//	2 seg → "<ns>/<svc>"                 rejected by extractServicesEnv — kind is required
 //	3 seg → "<ns>/<svc>/<kind>"          env-less stream
 //	4 seg → "<ns>/<env>/<svc>/<kind>"    env-bearing stream
 //
 // The 3-vs-4 distinction is unambiguous because every stream carries an
-// explicit kind (defaulting to "main") and SeenApps.encodeName splices
+// explicit kind (defaulting to "main") and SeenServices.encodeName splices
 // env at position 1 only for env-bearing producer tokens. Reader JWTs
 // span envs, so the path must self-disambiguate without caller context;
 // segment count does exactly that. 5+ segments are rejected.

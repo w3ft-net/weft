@@ -33,7 +33,7 @@ func TestReconciler_MintsLaunchingRow_AndCountsAgainstTarget(t *testing.T) {
 			WindowDuration: 24 * time.Hour,
 			ShardOps:       fake,
 		},
-		stats:      NewAppStats(),
+		stats:      NewServiceStats(),
 		Buckets:    NewBucketManager(db),
 		configurer: &stubConfigurer{},
 	}
@@ -230,10 +230,10 @@ func TestReaper_DeletesStaleLaunchingWithoutInstance(t *testing.T) {
 	// Fresh LAUNCHING row — must not be reaped.
 	fresh := time.Now().UTC().Format(time.RFC3339)
 	_ = fake.SaveShard(&store.ShardRecord{
-		ID:       "shard-fresh",
-		State:    string(StateLaunching),
-		Tier:     "small",
-		BucketID: 1,
+		ID:          "shard-fresh",
+		State:       string(StateLaunching),
+		Tier:        "small",
+		BucketID:    1,
 		WindowStart: "2026-04-21T00:00:00Z", WindowEnd: "2026-04-22T00:00:00Z",
 		CreatedAt: fresh,
 	})
@@ -241,10 +241,10 @@ func TestReaper_DeletesStaleLaunchingWithoutInstance(t *testing.T) {
 	// Stale LAUNCHING row with empty instance_id — must be deleted.
 	stale := time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339)
 	_ = fake.SaveShard(&store.ShardRecord{
-		ID:       "shard-stale-empty",
-		State:    string(StateLaunching),
-		Tier:     "small",
-		BucketID: 1,
+		ID:          "shard-stale-empty",
+		State:       string(StateLaunching),
+		Tier:        "small",
+		BucketID:    1,
 		WindowStart: "2026-04-21T00:00:00Z", WindowEnd: "2026-04-22T00:00:00Z",
 		CreatedAt: stale,
 	})
@@ -277,11 +277,11 @@ func TestReaper_AbandonsStuckInstance(t *testing.T) {
 
 	stale := time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339)
 	_ = fake.SaveShard(&store.ShardRecord{
-		ID:         "shard-stuck",
-		State:      string(StateLaunching),
-		Tier:       "small",
-		BucketID:   1,
-		InstanceID: "i-never-heartbeated",
+		ID:          "shard-stuck",
+		State:       string(StateLaunching),
+		Tier:        "small",
+		BucketID:    1,
+		InstanceID:  "i-never-heartbeated",
 		WindowStart: "2026-04-21T00:00:00Z", WindowEnd: "2026-04-22T00:00:00Z",
 		CreatedAt: stale,
 	})

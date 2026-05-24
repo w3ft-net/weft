@@ -73,10 +73,10 @@ type LogGroup struct {
 	// GORM (`->`): the BEFORE INSERT trigger fills it from namespace_id,
 	// so GORM must omit it from INSERTs (a written zero-value would
 	// dodge the trigger's NULL check and trip the customers FK).
-	CustomerID   uint               `gorm:"->"`
-	AWSAccountID *uint              // nullable; required for cloudwatch, nil for weftd
-	AWSAccount   *AWSAccount        `gorm:"foreignKey:AWSAccountID"`
-	App          string             `gorm:"not null;uniqueIndex:idx_ns_app"`
+	CustomerID   uint        `gorm:"->"`
+	AWSAccountID *uint       // nullable; required for cloudwatch, nil for weftd
+	AWSAccount   *AWSAccount `gorm:"foreignKey:AWSAccountID"`
+	Service      string      `gorm:"column:app;not null;uniqueIndex:idx_ns_app"`
 	// BucketID assigns this service to a bucket (migration 057). NULL =
 	// the default bucket; a non-NULL value is a service moved to a
 	// dedicated bucket. A service routes to exactly one bucket — the
@@ -114,16 +114,16 @@ type LogGroup struct {
 // pending→configured transition, use ConfigureLogGroup instead; AddLogGroup
 // is the CloudWatch add-source path where the schema is approved in one
 // UI step.
-func (s *Store) AddLogGroup(namespaceID uint, awsAccountID *uint, sourceType LogGroupSourceType, app, logGroupName, region, schemaYAML, pollInterval string) error {
+func (s *Store) AddLogGroup(namespaceID uint, awsAccountID *uint, sourceType LogGroupSourceType, service, logGroupName, region, schemaYAML, pollInterval string) error {
 	var lg LogGroup
-	result := s.db.Where("namespace_id = ? AND app = ?", namespaceID, app).First(&lg)
+	result := s.db.Where("namespace_id = ? AND app = ?", namespaceID, service).First(&lg)
 	if result.Error == gorm.ErrRecordNotFound {
 		lg = LogGroup{
 			NamespaceID:  namespaceID,
 			AWSAccountID: awsAccountID,
 			SourceType:   sourceType,
 			Status:       StatusConfigured,
-			App:          app,
+			Service:      service,
 			LogGroupName: logGroupName,
 			Region:       region,
 			SchemaYAML:   schemaYAML,
@@ -208,20 +208,20 @@ func (s *Store) AllLogGroups() ([]LogGroupWithAWSAccount, error) {
 //   - StatusConfigured row WITHOUT a resample: no-op. The schema is
 //     approved and this sample is stale; preserving this invariant is what
 //     stops a source appearing as both pending and configured.
-func (s *Store) UpsertPendingLogGroup(namespaceID uint, app, instance, deployment, sampleJSON, detectionJSON string, collected int, partial bool) error {
+func (s *Store) UpsertPendingLogGroup(namespaceID uint, service, instance, deployment, sampleJSON, detectionJSON string, collected int, partial bool) error {
 	status := StatusPending
 	if partial {
 		status = StatusSampling
 	}
 	var lg LogGroup
-	err := s.db.Where("namespace_id = ? AND app = ?", namespaceID, app).First(&lg).Error
+	err := s.db.Where("namespace_id = ? AND app = ?", namespaceID, service).First(&lg).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		lg = LogGroup{
 			NamespaceID:     namespaceID,
-			App:             app,
+			Service:         service,
 			Status:          status,
 			SourceType:      SourceTypeWeftd,
-			LogGroupName:    app,
+			LogGroupName:    service,
 			Region:          "local",
 			PollInterval:    "0s",
 			Enabled:         true,

@@ -8,9 +8,10 @@
 // output file.
 //
 // Usage:
-//   weft-demo-seed --db-dsn "host=localhost port=5433 ..." \
-//                  --tokens-out dev/demo/tokens.env
-//   weft-demo-seed --reset    # delete acme + globex (cascades)
+//
+//	weft-demo-seed --db-dsn "host=localhost port=5433 ..." \
+//	               --tokens-out dev/demo/tokens.env
+//	weft-demo-seed --reset    # delete acme + globex (cascades)
 package main
 
 import (
@@ -69,10 +70,10 @@ func main() {
 // --- the spec ---------------------------------------------------------
 
 type teamMember struct {
-	Email           string
-	Name            string
-	ReadOnly        bool
-	CanCreateNS     bool
+	Email       string
+	Name        string
+	ReadOnly    bool
+	CanCreateNS bool
 }
 
 type customerSpec struct {
@@ -466,11 +467,11 @@ func ensureActiveSubscription(s *store.Store, customerName string) error {
 		// Yard tier: allows the 1-minute mem-pressure schedule
 		// the demo's verification checklist depends on. Swatch caps
 		// watches at 5-minute intervals (store.MinWatchInterval).
-		Tier:       "yard",
-		Status:     "active",
-		StartsAt:   now,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		Tier:      "yard",
+		Status:    "active",
+		StartsAt:  now,
+		CreatedAt: now,
+		UpdatedAt: now,
 	})
 }
 
@@ -545,12 +546,12 @@ func preseedScripts(s *store.Store, custID uint, customerName string, members []
 	}
 	user1, user2, user3 := members[0], members[1], members[2]
 
-	primaryApp := map[string]string{
+	primaryService := map[string]string{
 		"acme":   "acme/api",
 		"globex": "globex/orders",
 		"loom":   "loom/api",
 	}[customerName]
-	if primaryApp == "" {
+	if primaryService == "" {
 		return fmt.Errorf("preseedScripts: no primary app configured for customer %q", customerName)
 	}
 	primaryEnv := map[string]string{
@@ -558,11 +559,11 @@ func preseedScripts(s *store.Store, custID uint, customerName string, members []
 		"globex": "prod",
 		"loom":   "prod",
 	}[customerName]
-	// primaryApp is "<ns>/<svc>"; demo tokens are env-bearing, so the
+	// primaryService is "<ns>/<svc>"; demo tokens are env-bearing, so the
 	// canonical pseudofile is the 4-seg form
 	// /log/<ns>/<env>/<svc>/<kind>.log. main = regular logs,
 	// metrics = the system-metrics stream.
-	primaryNS, primarySvc := customerName, lastSegment(primaryApp)
+	primaryNS, primarySvc := customerName, lastSegment(primaryService)
 	primaryLog := fmt.Sprintf("/log/%s/%s/%s/main.log",
 		primaryNS, primaryEnv, primarySvc)
 	metricsLog := fmt.Sprintf("/log/%s/%s/%s/metrics.log",
@@ -832,12 +833,12 @@ func preseedLoomErrorRateHistory(s *store.Store, custID uint) error {
 	}
 
 	const (
-		points       = 70                  // one row per minute
-		tailWindow   = 2000.0              // matches `tail -n 2000` in rateV3
-		ratioBase    = 0.04                // matches sine:0.04,0.10,900
-		ratioAmp     = 0.10                //
-		ratioPeriod  = 900.0               // seconds
-		jitterStddev = 5.0                 // count units; small relative to ~180 mean
+		points       = 70     // one row per minute
+		tailWindow   = 2000.0 // matches `tail -n 2000` in rateV3
+		ratioBase    = 0.04   // matches sine:0.04,0.10,900
+		ratioAmp     = 0.10   //
+		ratioPeriod  = 900.0  // seconds
+		jitterStddev = 5.0    // count units; small relative to ~180 mean
 	)
 	rng := rand.New(rand.NewSource(int64(custID)))
 	now := time.Now()

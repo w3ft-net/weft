@@ -36,7 +36,7 @@ func (a *asyncRecordingLauncher) LaunchInstance(_ context.Context, _ string) (st
 	return "", nil
 }
 func (a *asyncRecordingLauncher) TerminateInstance(_ context.Context, _, _ string) error { return nil }
-func (a *asyncRecordingLauncher) UsesLaunchingRows() bool                               { return true }
+func (a *asyncRecordingLauncher) UsesLaunchingRows() bool                                { return true }
 func (a *asyncRecordingLauncher) TerminateForReplacement(_ context.Context, id string) error {
 	a.terminatedForReplace = append(a.terminatedForReplace, id)
 	return nil
@@ -64,13 +64,13 @@ func TestRefreshCascade_EndToEnd(t *testing.T) {
 	windowStart := now.Add(-2 * 24 * time.Hour)
 	windowEnd := now.Add(5 * 24 * time.Hour)
 
-	bucket := &AppBucket{
-		ID:              1,
-		Label:           "default",
-		Apps:            []string{"weft"},
-		Target:          2,
-		Tier:            "small",
-		WindowDuration:  7 * 24 * time.Hour,
+	bucket := &Bucket{
+		ID:             1,
+		Label:          "default",
+		Services:       []string{"weft"},
+		Target:         2,
+		Tier:           "small",
+		WindowDuration: 7 * 24 * time.Hour,
 	}
 
 	// --- Phase 1: Simulate coordinator restart (LoadFromStore) ---
@@ -224,13 +224,13 @@ func TestRefreshCascade_SuspendedStateBreaksChain(t *testing.T) {
 	windowStart := now.Add(-2 * 24 * time.Hour)
 	windowEnd := now.Add(5 * 24 * time.Hour)
 
-	bucket := &AppBucket{
-		ID:              1,
-		Label:           "default",
-		Apps:            []string{"weft"},
-		Target:          2,
-		Tier:            "small",
-		WindowDuration:  7 * 24 * time.Hour,
+	bucket := &Bucket{
+		ID:             1,
+		Label:          "default",
+		Services:       []string{"weft"},
+		Target:         2,
+		Tier:           "small",
+		WindowDuration: 7 * 24 * time.Hour,
 	}
 
 	reg := NewShardRegistry()
@@ -273,7 +273,7 @@ func TestRefreshCascade_SuspendedStateBreaksChain(t *testing.T) {
 		},
 	}
 
-	// This test has a christen phase (below), which reads bucket.Apps
+	// This test has a christen phase (below), which reads bucket.Services
 	// via p.Buckets.ByID — so a real-DB BucketManager is needed, not
 	// just the bucket value used for snapshotForBucket.
 	db := openSMTestStore(t)

@@ -65,7 +65,7 @@ func (p *Poller) Start(ctx context.Context) {
 			continue
 		}
 		if d, err := time.ParseDuration(lg.PollInterval); err != nil || d <= 0 {
-			log.Printf("poller[%s]: skipping — invalid poll_interval %q", lg.App, lg.PollInterval)
+			log.Printf("poller[%s]: skipping — invalid poll_interval %q", lg.Service, lg.PollInterval)
 			continue
 		}
 		go p.pollLoop(ctx, lg)
@@ -80,7 +80,7 @@ func (p *Poller) pollLoop(ctx context.Context, lg store.LogGroupWithAWSAccount) 
 		interval = 30 * time.Second
 	}
 
-	log.Printf("poller[%s]: polling %s (account %s) every %s", lg.App, lg.LogGroupName, lg.AccountID, interval)
+	log.Printf("poller[%s]: polling %s (account %s) every %s", lg.Service, lg.LogGroupName, lg.AccountID, interval)
 
 	p.poll(ctx, lg)
 
@@ -101,15 +101,15 @@ func (p *Poller) poll(ctx context.Context, lg store.LogGroupWithAWSAccount) {
 	// Parse schema first — no point pulling events we can't parse.
 	var schema ingest.Schema
 	if err := yaml.Unmarshal([]byte(lg.SchemaYAML), &schema); err != nil {
-		log.Printf("poller[%s]: parse schema: %v", lg.App, err)
+		log.Printf("poller[%s]: parse schema: %v", lg.Service, err)
 		return
 	}
-	schema.App = lg.App
+	schema.App = lg.Service
 	schema.Customer = lg.CustomerName
 
 	parser, err := ingest.NewParser(&schema)
 	if err != nil {
-		log.Printf("poller[%s]: create parser: %v", lg.App, err)
+		log.Printf("poller[%s]: create parser: %v", lg.Service, err)
 		return
 	}
 
@@ -129,10 +129,10 @@ func (p *Poller) poll(ctx context.Context, lg store.LogGroupWithAWSAccount) {
 		LogGroup:      lg.LogGroupName,
 		StartTime:     startTime,
 		NextToken:     lg.LastToken,
-		SessionSuffix: "poller-" + lg.App,
+		SessionSuffix: "poller-" + lg.Service,
 	})
 	if err != nil {
-		log.Printf("poller[%s]: fetch: %v", lg.App, err)
+		log.Printf("poller[%s]: fetch: %v", lg.Service, err)
 		return
 	}
 
@@ -150,13 +150,13 @@ func (p *Poller) poll(ctx context.Context, lg store.LogGroupWithAWSAccount) {
 	}
 
 	// Route to the INGESTING shard serving this (namespace, service).
-	// No cross-tenant fallback — see ShardProvider's doc. lg.App is the
+	// No cross-tenant fallback — see ShardProvider's doc. lg.Service is the
 	// bare service; lg.NamespaceID scopes it to the customer. If no
 	// shard serves it yet, skip; the next poll picks up after the
 	// reconciler stamps it.
-	sh := p.provider.IngestingShard(lg.NamespaceID, lg.App)
+	sh := p.provider.IngestingShard(lg.NamespaceID, lg.Service)
 	if sh == nil {
-		log.Printf("poller[%s]: no shard serves this service yet — skipping poll", lg.App)
+		log.Printf("poller[%s]: no shard serves this service yet — skipping poll", lg.Service)
 		return
 	}
 
@@ -169,14 +169,14 @@ func (p *Poller) poll(ctx context.Context, lg store.LogGroupWithAWSAccount) {
 			end = len(allRows)
 		}
 		if err := sh.Ingest(allRows[i:end], nil); err != nil {
-			log.Printf("poller[%s]: ingest batch failed: %v", lg.App, err)
+			log.Printf("poller[%s]: ingest batch failed: %v", lg.Service, err)
 			continue
 		}
 		ingested += end - i
 	}
 
 	if ingested > 0 {
-		log.Printf("poller[%s]: ingested %d rows", lg.App, ingested)
+		log.Printf("poller[%s]: ingested %d rows", lg.Service, ingested)
 		now := time.Now().UTC().Format(time.RFC3339)
 		p.store.DB().Model(&store.LogGroup{}).Where("id = ?", lg.ID).
 			Updates(map[string]any{"last_poll_at": now, "last_token": result.NextToken})

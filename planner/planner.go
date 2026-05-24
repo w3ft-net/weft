@@ -18,22 +18,22 @@ import (
 // path. ComputeStages lists the pipeline stages that must run in the
 // compute layer.
 type QueryPlan struct {
-	ShardSQL       string
-	Args           []any         // positional values for ShardSQL/DirectShardSQL placeholders, in render order
+	ShardSQL string
+	Args     []any // positional values for ShardSQL/DirectShardSQL placeholders, in render order
 	// ArgSources is the same args slice but each entry is tagged with its
 	// Kind (Customer, TimeStart, TimeEnd, Literal). Live dispatch ignores
 	// this; save-time lowering reads it so each fire can re-resolve the
 	// runtime kinds from fresh context. 1:1 with Args.
-	ArgSources     []ArgSource
-	ComputeStages  []string
-	Limit          int           // post-merge limit (from head/tail), 0 = unlimited
+	ArgSources    []ArgSource
+	ComputeStages []string
+	Limit         int // post-merge limit (from head/tail), 0 = unlimited
 	// TailMode is true when the source command is `tail` (or an inline
 	// `tail` stage). Coordinator forwards it to compute as KeepLast,
 	// which switches the merged-stream trim from "stop after N emitted"
 	// (head semantics) to "retain last N, emit at EOF" (tail semantics)
 	// — required because the tail subquery flip lands rows in ts ASC at
 	// compute, so the global last N can't be resolved by stopping early.
-	TailMode bool
+	TailMode       bool
 	Follow         bool          // tail -f: keep stream open for live updates
 	FollowApp      string        // app to subscribe to ("" = all)
 	FollowPatterns []GrepPattern // grep filters applied to live rows
@@ -43,12 +43,12 @@ type QueryPlan struct {
 	// the user's pipeline minus the source. Consumed by
 	// coordinator.BuildLiveFilter so the live broker rows go through
 	// the same transformations as the historical batch.
-	LiveStages []string
-	SourceCmd      string        // source command: "cat", "head", or "tail"
-	SourceApp      string        // composite app name (ns/svc/kind) — allowlist + logging only; routing keys on SourceNamespace+SourceService
-	SourceNamespace string       // namespace segment for shard routing ("" = all namespaces)
-	SourceService   string       // service segment for shard routing ("" = all services in the namespace)
-	AlertArgs      []string      // argv for a terminal `alert` stage; nil if absent. Set even for alert-only pipelines (ShardSQL is empty in that case).
+	LiveStages      []string
+	SourceCmd       string   // source command: "cat", "head", or "tail"
+	SourceApp       string   // composite app name (ns/svc/kind) — allowlist + logging only; routing keys on SourceNamespace+SourceService
+	SourceNamespace string   // namespace segment for shard routing ("" = all namespaces)
+	SourceService   string   // service segment for shard routing ("" = all services in the namespace)
+	AlertArgs       []string // argv for a terminal `alert` stage; nil if absent. Set even for alert-only pipelines (ShardSQL is empty in that case).
 
 	// Direct-to-compute mode (see docs/plans/direct-to-compute.md §3).
 	// Populated from classifyShardMode walking ComputeStages for the
@@ -375,26 +375,26 @@ func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 	}
 
 	return &QueryPlan{
-		ShardSQL:       shardSQL,
-		Args:           shardArgs,
-		ArgSources:     shardArgSources,
-		DirectShardSQL: directShardSQL,
-		ComputeStages:  compute,
-		Limit:          sql.limit,
-		TailMode:       orderDesc,
-		Follow:         info.source.follow,
-		FollowApp:      info.source.app(),
-		FollowPatterns: grepPatterns,
-		LiveStages:     liveStages,
-		SourceCmd:      info.source.cmd,
-		SourceApp:      info.source.app(),
+		ShardSQL:        shardSQL,
+		Args:            shardArgs,
+		ArgSources:      shardArgSources,
+		DirectShardSQL:  directShardSQL,
+		ComputeStages:   compute,
+		Limit:           sql.limit,
+		TailMode:        orderDesc,
+		Follow:          info.source.follow,
+		FollowApp:       info.source.app(),
+		FollowPatterns:  grepPatterns,
+		LiveStages:      liveStages,
+		SourceCmd:       info.source.cmd,
+		SourceApp:       info.source.app(),
 		SourceNamespace: firstOrEmpty(info.source.namespaces),
 		SourceService:   firstOrEmpty(info.source.services),
-		AlertArgs:      alertArgs,
-		ShardOrderBy:   mergeOrderBy,
-		ShardLimit:     shardLimit,
-		RedirectTarget: redirTarget,
-		RedirectAppend: redirAppend,
+		AlertArgs:       alertArgs,
+		ShardOrderBy:    mergeOrderBy,
+		ShardLimit:      shardLimit,
+		RedirectTarget:  redirTarget,
+		RedirectAppend:  redirAppend,
 	}, nil
 }
 
@@ -629,7 +629,7 @@ func joinArgs(args []string) string {
 
 // needsShellQuote reports whether s would be reinterpreted by the
 // bash parser if emitted bare. Empty string requires quoting too —
-// it must round-trip as `''`, not collapse to nothing.
+// it must round-trip as `”`, not collapse to nothing.
 func needsShellQuote(s string) bool {
 	if s == "" {
 		return true
@@ -638,7 +638,7 @@ func needsShellQuote(s string) bool {
 }
 
 // singleQuote wraps s in single quotes, escaping any embedded
-// single-quote with the standard `'\''` close-reopen idiom.
+// single-quote with the standard `'\”` close-reopen idiom.
 func singleQuote(s string) string {
 	if !strings.Contains(s, "'") {
 		return "'" + s + "'"

@@ -41,16 +41,16 @@ func (m *LogMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 		for _, env := range m.logEnvsInNamespace(nsName) {
 			entries = append(entries, &vfsDirEntry{name: env, dir: true})
 		}
-		for _, app := range m.logAppsInNamespace(nsName) {
+		for _, app := range m.logServicesInNamespace(nsName) {
 			entries = append(entries, &vfsDirEntry{name: app + ".log"})
 		}
 		return entries, nil
 	case 2:
 		env := segs[1]
-		subApps := m.logAppsInNamespaceEnv(nsName, env)
-		if len(subApps) > 0 {
-			entries := make([]fs.DirEntry, len(subApps))
-			for i, app := range subApps {
+		subServices := m.logServicesInNamespaceEnv(nsName, env)
+		if len(subServices) > 0 {
+			entries := make([]fs.DirEntry, len(subServices))
+			for i, app := range subServices {
 				entries[i] = &vfsDirEntry{name: app + ".log"}
 			}
 			return entries, nil
@@ -65,7 +65,7 @@ func (m *LogMount) ReadFile(rel string) ([]byte, error) {
 		return nil, fs.ErrNotExist
 	}
 	app := strings.TrimSuffix(rel, ".log")
-	if m.hasLogApp(app) {
+	if m.hasLogService(app) {
 		ns := namespaceFromApp(app)
 		if !m.canReadNamespace(ns) {
 			return nil, fmt.Errorf("/log/%s: permission denied", rel)
@@ -100,7 +100,7 @@ func (m *LogMount) Stat(rel string) (fs.FileInfo, error) {
 		}
 	} else {
 		app := strings.TrimSuffix(rel, ".log")
-		if m.hasLogApp(app) {
+		if m.hasLogService(app) {
 			ns := namespaceFromApp(app)
 			if !m.canReadNamespace(ns) {
 				return nil, fmt.Errorf("/log/%s: permission denied", rel)
@@ -115,7 +115,7 @@ func (m *LogMount) WriteFile(string, []byte) error { return shellcore.ErrReadOnl
 func (m *LogMount) Remove(string) error            { return shellcore.ErrReadOnly }
 
 // Walk satisfies shellcore.WalkMount: it returns the entire subtree
-// rooted at rel in a single pass over LogApps, so MountFS.Tree skips
+// rooted at rel in a single pass over LogServices, so MountFS.Tree skips
 // the per-directory ReadDir recursion (one ReadDir + two full-slice
 // scans + an uncached permission lookup per visited directory). The
 // flat list uses mount-relative paths with "/" separators; files
@@ -149,7 +149,7 @@ func (m *LogMount) Walk(rel string) ([]string, error) {
 
 	var out []string
 	nsSeen := map[string]bool{}
-	for _, a := range m.cfg.LogApps {
+	for _, a := range m.cfg.LogServices {
 		parts := strings.Split(a, "/")
 		ns := parts[0]
 		if nsFilter != "" && ns != nsFilter {
@@ -187,7 +187,7 @@ func (m *LogMount) Walk(rel string) ([]string, error) {
 func (m *LogMount) logNamespaces() []string {
 	seen := map[string]bool{}
 	var nss []string
-	for _, a := range m.cfg.LogApps {
+	for _, a := range m.cfg.LogServices {
 		ns := a
 		if idx := strings.Index(a, "/"); idx >= 0 {
 			ns = a[:idx]
@@ -200,10 +200,10 @@ func (m *LogMount) logNamespaces() []string {
 	return nss
 }
 
-func (m *LogMount) logAppsInNamespace(ns string) []string {
+func (m *LogMount) logServicesInNamespace(ns string) []string {
 	prefix := ns + "/"
 	var apps []string
-	for _, a := range m.cfg.LogApps {
+	for _, a := range m.cfg.LogServices {
 		if !strings.HasPrefix(a, prefix) {
 			continue
 		}
@@ -220,7 +220,7 @@ func (m *LogMount) logEnvsInNamespace(ns string) []string {
 	prefix := ns + "/"
 	seen := map[string]bool{}
 	var envs []string
-	for _, a := range m.cfg.LogApps {
+	for _, a := range m.cfg.LogServices {
 		if !strings.HasPrefix(a, prefix) {
 			continue
 		}
@@ -238,10 +238,10 @@ func (m *LogMount) logEnvsInNamespace(ns string) []string {
 	return envs
 }
 
-func (m *LogMount) logAppsInNamespaceEnv(ns, env string) []string {
+func (m *LogMount) logServicesInNamespaceEnv(ns, env string) []string {
 	prefix := ns + "/" + env + "/"
 	var apps []string
-	for _, a := range m.cfg.LogApps {
+	for _, a := range m.cfg.LogServices {
 		if strings.HasPrefix(a, prefix) {
 			apps = append(apps, strings.TrimPrefix(a, prefix))
 		}
@@ -249,8 +249,8 @@ func (m *LogMount) logAppsInNamespaceEnv(ns, env string) []string {
 	return apps
 }
 
-func (m *LogMount) hasLogApp(app string) bool {
-	for _, a := range m.cfg.LogApps {
+func (m *LogMount) hasLogService(app string) bool {
+	for _, a := range m.cfg.LogServices {
 		if a == app {
 			return true
 		}

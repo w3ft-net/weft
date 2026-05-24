@@ -44,7 +44,7 @@ func TestBackfillShardServices059(t *testing.T) {
 		t.Fatalf("default bucket: ok=%v err=%v", ok, err)
 	}
 	dedicated := &Bucket{
-		Label: "dedicated-backfill", Apps: []string{"worker"}, TargetIngestingCount: 1,
+		Label: "dedicated-backfill", Services: []string{"worker"}, TargetIngestingCount: 1,
 		Tier: "small", WindowDuration: "168h", CreatedAt: "2026-04-21T00:00:00Z",
 	}
 	if err := db.SaveBucket(dedicated); err != nil {
@@ -72,7 +72,7 @@ func TestBackfillShardServices059(t *testing.T) {
 		if err := db.SaveShard(&ShardRecord{
 			ID: id, State: "READ_ONLY", BucketID: bucketID, Tier: "small",
 			WindowStart: "2026-05-01T00:00:00Z",
-			WindowEnd: "2026-05-08T00:00:00Z", CreatedAt: "2026-05-01T00:00:00Z",
+			WindowEnd:   "2026-05-08T00:00:00Z", CreatedAt: "2026-05-01T00:00:00Z",
 		}); err != nil {
 			t.Fatalf("shard %s: %v", id, err)
 		}
@@ -140,7 +140,7 @@ func TestStampShardServices(t *testing.T) {
 		t.Fatalf("default bucket: ok=%v err=%v", ok, err)
 	}
 	dedicated := &Bucket{
-		Label: "dedicated-shardsvc", Apps: []string{"worker"}, TargetIngestingCount: 1,
+		Label: "dedicated-shardsvc", Services: []string{"worker"}, TargetIngestingCount: 1,
 		Tier: "small", WindowDuration: "168h", CreatedAt: "2026-04-21T00:00:00Z",
 	}
 	if err := db.SaveBucket(dedicated); err != nil {
@@ -166,7 +166,7 @@ func TestStampShardServices(t *testing.T) {
 		if err := db.SaveShard(&ShardRecord{
 			ID: id, State: "INGESTING", BucketID: bucketID, Tier: "small",
 			WindowStart: "2026-05-01T00:00:00Z",
-			WindowEnd: "2026-05-08T00:00:00Z", CreatedAt: "2026-05-01T00:00:00Z",
+			WindowEnd:   "2026-05-08T00:00:00Z", CreatedAt: "2026-05-01T00:00:00Z",
 		}); err != nil {
 			t.Fatalf("shard %s: %v", id, err)
 		}

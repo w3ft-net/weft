@@ -139,11 +139,11 @@ func (HerokuAdapter) frameToRows(f rfc5424Frame) (*pb.LogRow, *pb.LogRow) {
 	}
 
 	canonical := &pb.LogRow{
-		App:       canonicalApp,
-		Instance:  instance,
-		Raw:       f.message,
-		TsUnixNs:  f.ts.UnixNano(),
-		Level:     "", // Heroku-emitted lines don't carry a level field; let the schema parser fill it later if applicable
+		App:      canonicalApp,
+		Instance: instance,
+		Raw:      f.message,
+		TsUnixNs: f.ts.UnixNano(),
+		Level:    "", // Heroku-emitted lines don't carry a level field; let the schema parser fill it later if applicable
 	}
 
 	// l2met detection lives in detectL2met which returns nil when the
@@ -357,4 +357,3 @@ func stripTrailingUnit(v string) (num, unit string) {
 	}
 	return v[:cut], v[cut:]
 }
-
