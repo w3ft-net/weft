@@ -13,11 +13,7 @@ import (
 
 func testStore(t *testing.T) *store.Store {
 	t.Helper()
-	dsn := os.Getenv("WEFT_TEST_DSN")
-	if dsn == "" {
-		dsn = "host=localhost port=5433 dbname=weft user=weft password=weft sslmode=disable"
-	}
-	db, err := store.Open(dsn)
+	db, err := store.Open(store.TestDSN(t))
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}

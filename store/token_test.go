@@ -1,7 +1,6 @@
 package store
 
 import (
-	"os"
 	"testing"
 )
 
@@ -20,16 +19,7 @@ import (
 // own database removes the contention class entirely.
 func testOpen(t *testing.T) *Store {
 	t.Helper()
-	dsn := os.Getenv("WEFT_TEST_DSN")
-	if dsn == "" {
-		dsn = "host=localhost port=5433 dbname=weft_test user=weft password=weft sslmode=disable"
-	}
-	if err := ensureTestDatabase(dsn); err != nil {
-		t.Skipf("postgres unavailable: %v", err)
-	}
-	// The test DB might be virgin (first run on a fresh postgres) —
-	// allow Open's bootstrap path to apply schema.sql via psql.
-	t.Setenv(AllowSchemaBootstrapEnv, "1")
+	dsn := TestDSN(t)
 	db, err := Open(dsn)
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)

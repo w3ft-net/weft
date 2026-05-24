@@ -2,7 +2,6 @@ package coordinator
 
 import (
 	"math"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -25,11 +24,7 @@ func saveCronResult(db *store.Store, result *store.CronResult) error {
 
 func testStoreAndCustomer(t *testing.T) (*store.Store, uint) {
 	t.Helper()
-	dsn := os.Getenv("WEFT_TEST_DSN")
-	if dsn == "" {
-		dsn = "host=localhost port=5433 dbname=weft user=weft password=weft sslmode=disable"
-	}
-	db, err := store.Open(dsn)
+	db, err := store.Open(store.TestDSN(t))
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}
@@ -69,11 +64,7 @@ func testQueryStoreReal(t testing.TB, customer string, namespaces ...string) *st
 
 func testQueryStoreOpts(t testing.TB, customer string, realDB bool, namespaces ...string) *store.Store {
 	t.Helper()
-	dsn := os.Getenv("WEFT_TEST_DSN")
-	if dsn == "" {
-		dsn = "host=localhost port=5433 dbname=weft user=weft password=weft sslmode=disable"
-	}
-	db, err := store.Open(dsn)
+	db, err := store.Open(store.TestDSN(t))
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}

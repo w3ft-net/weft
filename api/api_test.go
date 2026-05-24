@@ -16,11 +16,7 @@ import (
 
 func testDSN(t *testing.T) string {
 	t.Helper()
-	dsn := os.Getenv("WEFT_TEST_DSN")
-	if dsn == "" {
-		dsn = "host=localhost port=5433 dbname=weft user=weft password=weft sslmode=disable"
-	}
-	return dsn
+	return store.TestDSN(t)
 }
 
 func testServer(t *testing.T) (*Server, *store.Store) {

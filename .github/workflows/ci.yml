@@ -78,16 +78,17 @@ jobs:
           # weft_test and set this themselves; this env var is the
           # umbrella for everyone else.
           WEFT_ALLOW_SCHEMA_BOOTSTRAP: "1"
-        # -p 1 serializes package execution. Several test packages
-        # (api/, shellfs/, store/team_perms_test, coordinator/) share
-        # the `weft` database and call TruncateTestTables in cleanup;
-        # running their binaries in parallel races. Within a single
-        # package, tests still serialize (no t.Parallel()), so the
-        # only cost of -p 1 is that non-DB packages can't fan out
-        # alongside DB packages. CI cost: ~30s.
+        # Package binaries run in parallel: each DB-touching package
+        # leases its own database from a pool (store.TestDSN → flock on a
+        # per-slot lockfile, one slot held per process for its lifetime),
+        # so they no longer contend on a single shared `weft` DB. That
+        # contention was the reason for the old -p 1; with the pool it's
+        # gone, so the suite fans out across cores. Pool size defaults to
+        # GOMAXPROCS — the same bound `go test -p` uses — so a process
+        # never blocks waiting for a slot.
         run: |
           mkdir -p coverage/unit
-          gotestsum --junitfile unit-report.xml -- -tags test -count=1 -timeout 10m -cover -coverpkg=./... -p 1 ./... -args -test.gocoverdir="$PWD/coverage/unit"
+          gotestsum --junitfile unit-report.xml -- -tags test -count=1 -timeout 10m -cover -coverpkg=./... ./... -args -test.gocoverdir="$PWD/coverage/unit"
       - name: Stop postgres
         if: always()
         working-directory: weft

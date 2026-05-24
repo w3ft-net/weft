@@ -12,10 +12,7 @@ import (
 
 func teamPermsStore(t *testing.T) *Store {
 	t.Helper()
-	dsn := os.Getenv("WEFT_TEST_DSN")
-	if dsn == "" {
-		dsn = "host=localhost port=5433 dbname=weft user=weft password=weft sslmode=disable"
-	}
+	dsn := TestDSN(t)
 	db, err := Open(dsn)
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
