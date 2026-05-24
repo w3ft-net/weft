@@ -964,9 +964,18 @@ func (s *Server) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest) (*
 	if err != nil {
 		return nil, fmt.Errorf("namespace: %w", err)
 	}
-	fullApp := auth.Namespace + "/" + req.App
+	// Store the bare service in log_groups.app — the namespace is already
+	// carried by ns.ID. Routing keys on the bare service (the shard rows'
+	// service column and the planner's WHERE service=?), so the old
+	// namespace-prefixed form ("weft/api") broke service-level shard
+	// routing for weftd sources. weftd sends a bare service on onboard
+	// and "service/kind" on resample; take the first segment for both.
+	service := req.App
+	if i := strings.IndexByte(service, '/'); i >= 0 {
+		service = service[:i]
+	}
 	if err := s.Store.UpsertPendingLogGroup(
-		ns.ID, fullApp,
+		ns.ID, service,
 		req.Instance, req.Deployment,
 		string(sampleJSON), string(detectionJSON),
 		len(req.Lines), req.Partial,
