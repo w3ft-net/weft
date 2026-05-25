@@ -146,7 +146,7 @@ func TestRegistry_ExpiringShardExcluded(t *testing.T) {
 		State: StateExpiring, Shard: s0,
 	})
 
-	matching := reg.MatchingEntries(fullRange, "", store.Tier("bolt"))
+	matching := reg.MatchingEntries(fullRange, nil, store.Tier("bolt"))
 	if len(matching) != 0 {
 		t.Fatalf("expected 0 shards (expiring), got %d", len(matching))
 	}
