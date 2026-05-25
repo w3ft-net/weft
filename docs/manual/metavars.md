@@ -19,7 +19,9 @@ statistics stay useful.
 
 | awk                        | jq                       | Column           | Source                                                    |
 |----------------------------|--------------------------|------------------|-----------------------------------------------------------|
-| `$APP` *(alias `$SERVICE`)* | `._app` *(alias `._service`)* | `app`            | log filename, source declaration, or HTTP ingest payload  |
+| `$NAMESPACE`                | `._namespace`            | `namespace`      | the `<namespace>` path segment / agent token's namespace  |
+| `$SERVICE`                  | `._service`              | `service`        | source declaration, log filename, or HTTP ingest payload  |
+| `$KIND`                     | `._kind`                 | `kind`           | the stream kind (`main`, `heartbeats`, `metrics`, `runtime`) |
 | `$HOST` *(alias `$INSTANCE`)* | `._host` *(alias `._instance`)* | `instance`       | weftd `os.Hostname()`                                     |
 | `$LEVEL`                    | `._level`                | `level`          | schema-extracted from the row                             |
 | `$TS`                       | `._ts`                   | `ts`             | schema-extracted from the row                             |
@@ -40,8 +42,10 @@ they simply don't match the predicate.
 ### Naming convention
 
 awk meta-variables are all-caps short flat names — `$ENV`, `$POD`,
-`$DEPLOYMENT` — matching the pre-existing `$LEVEL` / `$APP` /
-`$INSTANCE` shape.
+`$DEPLOYMENT` — matching the pre-existing `$LEVEL` / `$SERVICE` /
+`$INSTANCE` shape. The source coordinates split into three columns —
+`$NAMESPACE`, `$SERVICE`, `$KIND` — each addressed directly rather
+than rolled into one conflated value.
 
 jq meta-variables use leading-underscore lowercase — `._env`,
 `._pod`. The underscore disambiguates from real JSON payload keys:
@@ -49,10 +53,10 @@ jq meta-variables use leading-underscore lowercase — `._env`,
 the column. Real JSONL sometimes carries `Pod` / `PoD` / `POD` keys,
 so the underscore is more reliable than relying on case alone.
 
-The one verbose name is `k8s_namespace` (`$K8S_NAMESPACE` /
-`._k8s_namespace`). The shorter `namespace` is unavailable because
-weft already uses "namespace" for the customer's logical
-token-grouping in the path (`/log/<namespace>/...`).
+`$NAMESPACE` is weft's own logical token-grouping — the
+`<namespace>` segment in the path (`/log/<namespace>/...`). The
+Kubernetes namespace, a distinct dimension, takes the verbose
+`$K8S_NAMESPACE` (`._k8s_namespace`) so the two never collide.
 
 ## Path layout
 

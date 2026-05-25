@@ -27,7 +27,7 @@ The planner is greedy — it attempts to push down as much as possible. Pushable
 | Expression | SQL |
 |-----------|-----|
 | `$LEVEL == "ERROR"` | `WHERE level = 'ERROR'` |
-| `$APP == "vimgym"` | `WHERE app = 'vimgym'` |
+| `$SERVICE == "coordinator"` | `WHERE service = 'coordinator'` |
 | `$3 > 100` | `WHERE CAST(list_extract(fields, 3) AS DOUBLE) > 100` |
 | `/timeout/` | `WHERE raw LIKE '%timeout%'` |
 | `NR >= 10 && NR <= 50` | `LIMIT/OFFSET` |
@@ -38,7 +38,7 @@ The planner is greedy — it attempts to push down as much as possible. Pushable
 | Expression | SQL |
 |-----------|-----|
 | `select(.status == 500)` | `WHERE CAST(json_extract(payload, '$.status') AS INT) = 500` |
-| `select(._app == "vimgym")` | `WHERE app = 'vimgym'` |
+| `select(._service == "coordinator")` | `WHERE service = 'coordinator'` |
 | `select(._level == "ERROR")` | `WHERE level = 'ERROR'` |
 
 ### grep/sed

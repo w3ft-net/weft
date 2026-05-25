@@ -4,6 +4,7 @@ import SidebarNav from '../components/SidebarNav'
 import {
   getFunctions, deleteFunction, type ShellFunction,
   getWatches, deleteWatch, type CronWatch,
+  listSources,
 } from '../lib/api'
 import { initShellWasm, type ShellBridge, type ChartOpenSpec } from '../wasm/bridge'
 import ShellChartModal from '../components/ShellChartModal'
@@ -45,15 +46,20 @@ export default function Shell() {
     async function init() {
       if (!termContainerRef.current || disposed) return
 
-      // TODO: fetch real app list from API.
-      const apps = ['api', 'web']
+      // The shell seeds tab-completion / pseudofile listing with the
+      // customer's configured services. Pull the live list (deduped,
+      // since a service can have both a CloudWatch and a weftd source);
+      // an empty list is fine — the shell just starts with nothing to
+      // complete and picks up sources as the server reports them.
+      const sources = await listSources().catch(() => [])
+      const services = Array.from(new Set(sources.map(s => s.service))).sort()
 
       const identity = user
         ? { user: user.email.split('@')[0], customer: user.customer }
         : undefined
       bridge = await initShellWasm(
         termContainerRef.current,
-        apps,
+        services,
         undefined, // range display removed; range is shown in PS1 + accessible via `range`
         identity,
         // `dashboard <name>` at the prompt routes to the dashboards

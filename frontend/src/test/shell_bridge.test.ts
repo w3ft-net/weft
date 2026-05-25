@@ -111,7 +111,7 @@ async function bootShell(files: File[]): Promise<{
     saveHistory: () => {},
     getUser: () => 'test',
     getCustomer: () => 'testco',
-    getApps: () => ['myapp'],
+    getServices: () => ['myapp'],
     fsGetWatchResults: () => ({ results: [] }),
     onRangeChange: () => {},
     builtinExecuted: () => {},

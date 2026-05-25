@@ -31,7 +31,7 @@ export interface ChartOpenSpec {
 
 export async function initShellWasm(
   container: HTMLElement,
-  apps: string[],
+  services: string[],
   onRangeChange?: (rangeText: string) => void,
   identity?: ShellIdentity,
   onDashboardNavigate?: (name: string) => void,
@@ -67,7 +67,7 @@ export async function initShellWasm(
     getUser: () => identity?.user ?? '',
 
     getCustomer: () => identity?.customer ?? '',
-    getApps: () => apps,
+    getServices: () => services,
     fsGetWatchResults: (name: string, limit: number) => fsGetWatchResults(name, limit),
     // The Go-side wasm bridge calls onRangeChange(rawSpec, label):
     //   rawSpec  — un-resolved spec ("1d..", "30m..", ISO pair, etc).

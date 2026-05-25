@@ -44,7 +44,9 @@ slower JSON-extract path.
 
 | awk | jq | Column | Source |
 |---|---|---|---|
-| `$APP` (alias `$SERVICE`) | `._app` (alias `._service`) | `app` | the log file's source name (the `<service>` in `/log/<ns>/<service>/<kind>.log`) |
+| `$NAMESPACE` | `._namespace` | `namespace` | the `<namespace>` segment in `/log/<namespace>/<service>/<kind>.log` |
+| `$SERVICE` | `._service` | `service` | the log file's source name (the `<service>` in `/log/<ns>/<service>/<kind>.log`) |
+| `$KIND` | `._kind` | `kind` | the stream kind (`main`, `heartbeats`, `metrics`, `runtime`) |
 | `$HOST` (alias `$INSTANCE`) | `._host` (alias `._instance`) | `instance` | the agent's hostname |
 | `$LEVEL` | `._level` | `level` | parsed from the line per the source's schema |
 | `$TS` | `._ts` | `ts` | row timestamp |
@@ -76,16 +78,18 @@ cat /log/myco/prod/api/main.log | awk '$REGION == "us-east-2"' | grep "timeout"
 
 ### Why two naming styles
 
-awk meta-variables are uppercase short names (`$APP`, `$ENV`); jq
-uses leading-underscore lowercase (`._app`, `._env`). The
+awk meta-variables are uppercase short names (`$SERVICE`, `$ENV`); jq
+uses leading-underscore lowercase (`._service`, `._env`). The
 underscore is the disambiguation convention — jq is case-sensitive
 and real JSONL sometimes carries keys like `Pod` or `pod`, so
 `._pod` always means "the indexed column" and `.pod` always means
 "a key in this row's JSON payload."
 
-`$SERVICE` / `._service` is an alias for `$APP` / `._app`, and
-`$HOST` / `._host` is an alias for `$INSTANCE` / `._instance` — use
-whichever name fits your team's vocabulary.
+The source coordinates address three separate columns —
+`$NAMESPACE`, `$SERVICE`, `$KIND` — mirroring the path layout
+`/log/<namespace>/<service>/<kind>.log`. `$HOST` / `._host` is an
+alias for `$INSTANCE` / `._instance` — use whichever name fits your
+team's vocabulary.
 
 ### Custom fields fall through to JSON-extract
 

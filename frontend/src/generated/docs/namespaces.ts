@@ -31,7 +31,7 @@ that carry one:</p>
 <code>/log/&lt;namespace&gt;.log</code> is a namespace-wide wildcard (every
 service and kind under it).</li>
 <li><strong><code>&lt;service&gt;</code></strong> — the source name a producer reports for itself;
-surfaces as <code>$APP</code> / <code>$SERVICE</code> in queries.</li>
+surfaces as <code>$SERVICE</code> in queries.</li>
 <li><strong><code>&lt;env&gt;</code></strong> — present only for tokens minted with <code>--env</code>. It
 slots in immediately after the namespace, so an env-bearing path
 has four segments and an env-less one has three. Segment count

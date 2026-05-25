@@ -24,7 +24,7 @@
   background: var(--bg-elevated);
 }
 
-.psc-app-name {
+.psc-service-name {
   font-weight: 600;
 }
 
@@ -195,7 +195,7 @@
   min-width: 0;
 }
 
-.csl-app {
+.csl-service {
   font-weight: 600;
   color: var(--text-primary);
 }

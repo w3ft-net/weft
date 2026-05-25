@@ -44,7 +44,9 @@ not in the table below still works in awk/jq, but goes through the
 slower JSON-extract path.</p>
 <p>| awk | jq | Column | Source |
 |---|---|---|---|
-| <code>$APP</code> (alias <code>$SERVICE</code>) | <code>._app</code> (alias <code>._service</code>) | <code>app</code> | the log file's source name (the <code>&lt;service&gt;</code> in <code>/log/&lt;ns&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>) |
+| <code>$NAMESPACE</code> | <code>._namespace</code> | <code>namespace</code> | the <code>&lt;namespace&gt;</code> segment in <code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log</code> |
+| <code>$SERVICE</code> | <code>._service</code> | <code>service</code> | the log file's source name (the <code>&lt;service&gt;</code> in <code>/log/&lt;ns&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>) |
+| <code>$KIND</code> | <code>._kind</code> | <code>kind</code> | the stream kind (<code>main</code>, <code>heartbeats</code>, <code>metrics</code>, <code>runtime</code>) |
 | <code>$HOST</code> (alias <code>$INSTANCE</code>) | <code>._host</code> (alias <code>._instance</code>) | <code>instance</code> | the agent's hostname |
 | <code>$LEVEL</code> | <code>._level</code> | <code>level</code> | parsed from the line per the source's schema |
 | <code>$TS</code> | <code>._ts</code> | <code>ts</code> | row timestamp |
@@ -71,15 +73,17 @@ tail /log/weft/shard/metrics.log | jq 'select(._host == &quot;shard-3&quot; and 
 cat /log/myco/prod/api/main.log | awk '$REGION == &quot;us-east-2&quot;' | grep &quot;timeout&quot;
 </code></pre>
 <h3 id="why-two-naming-styles">Why two naming styles</h3>
-<p>awk meta-variables are uppercase short names (<code>$APP</code>, <code>$ENV</code>); jq
-uses leading-underscore lowercase (<code>._app</code>, <code>._env</code>). The
+<p>awk meta-variables are uppercase short names (<code>$SERVICE</code>, <code>$ENV</code>); jq
+uses leading-underscore lowercase (<code>._service</code>, <code>._env</code>). The
 underscore is the disambiguation convention — jq is case-sensitive
 and real JSONL sometimes carries keys like <code>Pod</code> or <code>pod</code>, so
 <code>._pod</code> always means &quot;the indexed column&quot; and <code>.pod</code> always means
 &quot;a key in this row's JSON payload.&quot;</p>
-<p><code>$SERVICE</code> / <code>._service</code> is an alias for <code>$APP</code> / <code>._app</code>, and
-<code>$HOST</code> / <code>._host</code> is an alias for <code>$INSTANCE</code> / <code>._instance</code> — use
-whichever name fits your team's vocabulary.</p>
+<p>The source coordinates address three separate columns —
+<code>$NAMESPACE</code>, <code>$SERVICE</code>, <code>$KIND</code> — mirroring the path layout
+<code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>. <code>$HOST</code> / <code>._host</code> is an
+alias for <code>$INSTANCE</code> / <code>._instance</code> — use whichever name fits your
+team's vocabulary.</p>
 <h3 id="custom-fields-fall-through-to-json-extract">Custom fields fall through to JSON-extract</h3>
 <p>Anything not in the table above lives in your row's JSON payload
 and is still queryable — just slower:</p>

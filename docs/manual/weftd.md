@@ -44,7 +44,7 @@ dimensions:                   # optional: column values sourced from
   node: /etc/weft/identity.json:.shard_id
 
 sources:
-  - app: myapp
+  - service: myapp
     path: /var/log/myapp/*.log
     schema: prefix_json
     prefix_fields: [ts, level, service]
@@ -55,7 +55,7 @@ sources:
                                        # contents as $VERSION on
                                        # every row from this source
 
-  - app: nginx
+  - service: nginx
     path: /var/log/nginx/access.log
     schema: json
 ```
@@ -126,7 +126,7 @@ token: wft_a1b2c3d4e5f6...
 deployment: api               # optional; tags every row
 
 sources:
-  - app: myapp
+  - service: myapp
     path: /var/log/myapp/*.log
     metrics:
       enabled: true

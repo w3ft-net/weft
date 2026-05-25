@@ -157,7 +157,7 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type pendingResp struct {
-		App        string          `json:"app"`
+		Service    string          `json:"service"`
 		Namespace  string          `json:"namespace"`
 		Instance   string          `json:"instance"`
 		Deployment string          `json:"deployment"`
@@ -186,7 +186,7 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 			detection = "null"
 		}
 		resp = append(resp, pendingResp{
-			App:             shortService,
+			Service:         shortService,
 			Namespace:       lg.NamespaceName,
 			Instance:        lg.Instance,
 			Deployment:      lg.Deployment,
@@ -342,7 +342,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 
 	type sourceResp struct {
 		Namespace    string `json:"namespace"`
-		App          string `json:"app"`
+		Service      string `json:"service"`
 		SourceType   string `json:"source_type"`
 		LogGroup     string `json:"log_group"`
 		Region       string `json:"region"`
@@ -361,7 +361,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, sourceResp{
 			Namespace:    lg.NamespaceName,
-			App:          lg.Service,
+			Service:      lg.Service,
 			SourceType:   string(lg.SourceType),
 			LogGroup:     lg.LogGroupName,
 			Region:       lg.Region,
@@ -380,7 +380,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 // both handlers decode the same JSON shape.
 type cloudWatchFormBase struct {
 	Namespace    string `json:"namespace"`
-	App          string `json:"app"`
+	Service      string `json:"service"`
 	AWSAccountID string `json:"aws_account_id"`
 	RoleARN      string `json:"role_arn"`
 	ExternalID   string `json:"external_id"`
@@ -451,7 +451,7 @@ func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if req.Namespace == "" || req.App == "" || req.LogGroup == "" || req.RoleARN == "" {
+	if req.Namespace == "" || req.Service == "" || req.LogGroup == "" || req.RoleARN == "" {
 		http.Error(w, "namespace, app, log_group, and role_arn are required", http.StatusBadRequest)
 		return
 	}
@@ -462,7 +462,7 @@ func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Reques
 	}
 
 	schema := &ingest.Schema{
-		Service:         req.App,
+		Service:         req.Service,
 		Customer:        session.ActiveCustomerName,
 		Format:          req.Format,
 		TimestampField:  req.TimestampField,
@@ -479,7 +479,7 @@ func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Reques
 
 	if _, err := s.coordClient.AddSource(s.coordCtx(r), &pb.AddSourceRequest{
 		Namespace:    req.Namespace,
-		Service:      req.App,
+		Service:      req.Service,
 		LogGroup:     req.LogGroup,
 		Region:       req.Region,
 		SchemaYaml:   string(schemaYAML),
@@ -493,7 +493,7 @@ func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Reques
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"status": "configured", "app": req.App})
+	json.NewEncoder(w).Encode(map[string]string{"status": "configured", "service": req.Service})
 }
 
 // handleDeleteSource removes a configured log source. Path shape:
@@ -553,12 +553,11 @@ func (s *Server) handleResampleSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fullApp := namespace + "/" + app
 	if err := func() error {
 		now := time.Now()
 		res := s.store.DB().Model(&store.LogGroup{}).
 			Where("namespace_id = ? AND app = ? AND status = ?",
-				ns.ID, fullApp, store.StatusConfigured).
+				ns.ID, app, store.StatusConfigured).
 			Update("resample_requested_at", now)
 		if res.Error != nil {
 			return res.Error

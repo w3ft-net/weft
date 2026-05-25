@@ -57,9 +57,9 @@ Each meta-variable rewrites to a direct `WHERE` clause. The
 planner handles this in `planner/awk.go` — it maps `$LEVEL` to
 the `level` column, `$HOST` to `instance`, etc.
 
-Key meta-variables: `$APP`, `$HOST`, `$LEVEL`, `$TS`,
-`$DEPLOYMENT`, `$ENV`, `$VERSION`, `$REGION`, `$CLUSTER`,
-`$K8S_NAMESPACE`, `$POD`, `$CONTAINER`, `$NODE`.
+Key meta-variables: `$NAMESPACE`, `$SERVICE`, `$KIND`, `$HOST`,
+`$LEVEL`, `$TS`, `$DEPLOYMENT`, `$ENV`, `$VERSION`, `$REGION`,
+`$CLUSTER`, `$K8S_NAMESPACE`, `$POD`, `$CONTAINER`, `$NODE`.
 
 ## Crons
 

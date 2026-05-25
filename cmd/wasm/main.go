@@ -36,13 +36,13 @@ func main() {
 // callbacks: write, startQuery, startFollow, cancelQuery, notifyQuit,
 // fsReadFile, fsWriteFile, fsReadDir, fsRemove, fsGetWatchResults,
 // onRangeChange, builtinExecuted, loadHistory, saveHistory, getUser,
-// getCustomer, getApps.
+// getCustomer, getServices.
 func wasmInit(_ js.Value, args []js.Value) any {
 	width := args[0].Int()
 	height := args[1].Int()
 	jsCallbacks = args[2]
 
-	apps := readApps(jsCallbacks)
+	apps := readServices(jsCallbacks)
 
 	core := wasm.Boot(wasm.BootOpts{
 		Apps:      apps,
@@ -124,17 +124,17 @@ func wasmInit(_ js.Value, args []js.Value) any {
 	return nil
 }
 
-func readApps(cb js.Value) []string {
-	fn := cb.Get("getApps")
+func readServices(cb js.Value) []string {
+	fn := cb.Get("getServices")
 	if fn.IsUndefined() || fn.IsNull() {
 		return nil
 	}
-	val := cb.Call("getApps")
-	apps := make([]string, 0, val.Length())
+	val := cb.Call("getServices")
+	services := make([]string, 0, val.Length())
 	for i := 0; i < val.Length(); i++ {
-		apps = append(apps, val.Index(i).String())
+		services = append(services, val.Index(i).String())
 	}
-	return apps
+	return services
 }
 
 func readCustomer(cb js.Value) string {

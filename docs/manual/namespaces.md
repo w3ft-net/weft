@@ -36,7 +36,7 @@ that carry one:
   `/log/<namespace>.log` is a namespace-wide wildcard (every
   service and kind under it).
 - **`<service>`** — the source name a producer reports for itself;
-  surfaces as `$APP` / `$SERVICE` in queries.
+  surfaces as `$SERVICE` in queries.
 - **`<env>`** — present only for tokens minted with `--env`. It
   slots in immediately after the namespace, so an env-bearing path
   has four segments and an env-less one has three. Segment count

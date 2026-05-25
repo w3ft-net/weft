@@ -19,7 +19,7 @@ schema. Review the sample lines and approve.</p>
 <li><code>$TS</code> — timestamp</li>
 <li><code>$LEVEL</code> — log level (ERROR, WARN, INFO, DEBUG)</li>
 </ul>
-<p>Other indexed fields (<code>$APP</code>, <code>$HOST</code>, <code>$DEPLOYMENT</code>, <code>$ENV</code>, <code>$VERSION</code>,
+<p>Other indexed fields (<code>$SERVICE</code>, <code>$HOST</code>, <code>$DEPLOYMENT</code>, <code>$ENV</code>, <code>$VERSION</code>,
 <code>$REGION</code>, and the four k8s-mode dimensions) are stamped by weftd, the
 agent token, or cloud metadata rather than parsed from the line — see
 the <strong>Meta-variables</strong> section in <strong>Query your logs</strong> for the full

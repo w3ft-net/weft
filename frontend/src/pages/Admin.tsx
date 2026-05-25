@@ -367,9 +367,9 @@ function BucketDetail({ bucket, onClose }: { bucket: AdminBucket; onClose: () =>
     finally { setSaving(false) }
   }
 
-  const apps = (() => {
-    try { return JSON.parse(bucket.Apps) as string[] } catch { return [bucket.Apps] }
-  })()
+  // Empty Services is the catch-all bucket; show a sentinel badge so it
+  // doesn't render as an empty row.
+  const services = bucket.Services.length > 0 ? bucket.Services : ['(catch-all)']
 
   return (
     <div className="dash-card" data-testid="admin-bucket-detail">
@@ -385,7 +385,7 @@ function BucketDetail({ bucket, onClose }: { bucket: AdminBucket; onClose: () =>
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        {apps.map(a => (
+        {services.map(a => (
           <span key={a} className="dash-tier-badge" style={{ fontSize: '0.68rem' }}>{a}</span>
         ))}
       </div>
@@ -487,13 +487,11 @@ function BucketsTab() {
           <div className="dash-table-wrap">
             <table className="dash-table" data-testid="admin-buckets-table">
               <thead>
-                <tr><th>ID</th><th>Apps</th><th>Window</th><th>Target</th><th>Tier</th></tr>
+                <tr><th>ID</th><th>Services</th><th>Window</th><th>Target</th><th>Tier</th></tr>
               </thead>
               <tbody>
                 {buckets.map(b => {
-                  const apps = (() => {
-                    try { return (JSON.parse(b.Apps) as string[]).join(', ') } catch { return b.Apps }
-                  })()
+                  const services = b.Services.length > 0 ? b.Services.join(', ') : '(catch-all)'
                   return (
                     <tr
                       key={b.ID}
@@ -503,7 +501,7 @@ function BucketsTab() {
                       data-testid={`admin-bucket-row-${b.ID}`}
                     >
                       <td className="token-label">{b.ID}</td>
-                      <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}>{apps}</td>
+                      <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}>{services}</td>
                       <td>{b.WindowDuration}</td>
                       <td>{b.TargetIngestingCount}</td>
                       <td><span className="dash-tier-badge" style={{ fontSize: '0.68rem' }}>{b.Tier}</span></td>

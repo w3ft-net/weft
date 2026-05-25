@@ -1348,7 +1348,7 @@ func (s *Server) handleIngestionStatus(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		apps = []string{}
 	}
-	json.NewEncoder(w).Encode(map[string]any{"affected_apps": apps})
+	json.NewEncoder(w).Encode(map[string]any{"affected_services": apps})
 }
 
 // --- Shell functions (/bin/) ---

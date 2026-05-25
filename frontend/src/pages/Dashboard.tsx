@@ -367,7 +367,7 @@ export default function Dashboard() {
   const [watches, setWatches] = useState<WatchWithResults[]>([])
   const [watchMeta, setWatchMeta] = useState<{ count: number; limit: number; min_interval: string }>({ count: 0, limit: 0, min_interval: '' })
   const [functions, setFunctions] = useState<ShellFunction[]>([])
-  const [affectedApps, setAffectedApps] = useState<string[]>([])
+  const [affectedServices, setAffectedServices] = useState<string[]>([])
 
   // Show the welcome modal until the user dismisses it. The server
   // remembers the choice via POST /api/account/welcome-dismiss, so
@@ -400,7 +400,7 @@ export default function Dashboard() {
     getFunctions().then(fns => setFunctions(fns || [])).catch(() => {})
 
     getIngestionStatus()
-      .then(resp => setAffectedApps(resp.affected_apps || []))
+      .then(resp => setAffectedServices(resp.affected_services || []))
       .catch(() => {})
   }, [])
 
@@ -414,9 +414,9 @@ export default function Dashboard() {
             <h1 className="dash-page-title">Dashboard</h1>
           </div>
 
-          {affectedApps.length > 0 && (
+          {affectedServices.length > 0 && (
             <div className="dash-load-error" data-testid="dashboard-ingestion-warning">
-              Ingestion delayed for some records on: {affectedApps.join(', ')}
+              Ingestion delayed for some records on: {affectedServices.join(', ')}
             </div>
           )}
 

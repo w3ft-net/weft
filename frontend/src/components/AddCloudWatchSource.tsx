@@ -22,7 +22,7 @@ export default function AddCloudWatchSource({
   const testidPrefix = `add-cloudwatch-${namespace}`
 
   // Step 1: creds + log group identification.
-  const [app, setApp] = useState('')
+  const [service, setService] = useState('')
   const [awsAccountId, setAwsAccountId] = useState('')
   const [roleArn, setRoleArn] = useState('')
   const [externalId, setExternalId] = useState('')
@@ -38,7 +38,7 @@ export default function AddCloudWatchSource({
   const [error, setError] = useState<string | null>(null)
 
   const credsComplete =
-    app.trim() !== '' &&
+    service.trim() !== '' &&
     logGroup.trim() !== '' &&
     roleArn.trim() !== '' &&
     region.trim() !== ''
@@ -73,7 +73,7 @@ export default function AddCloudWatchSource({
   async function submit(config: ConfigureSourceRequest) {
     await addCloudWatchSource({
       namespace,
-      app: app.trim(),
+      service: service.trim(),
       aws_account_id: awsAccountId.trim(),
       role_arn: roleArn.trim(),
       external_id: externalId.trim(),
@@ -90,14 +90,14 @@ export default function AddCloudWatchSource({
       <div className="psc-body">
         <div className="psc-advanced">
           <label className="psc-field">
-            <span className="psc-label">App name</span>
+            <span className="psc-label">Service name</span>
             <input
               type="text"
-              value={app}
-              onChange={e => setApp(e.target.value)}
+              value={service}
+              onChange={e => setService(e.target.value)}
               placeholder="e.g. webhooks"
               disabled={sample !== null}
-              data-testid={`${testidPrefix}-app-input`}
+              data-testid={`${testidPrefix}-service-input`}
             />
           </label>
 

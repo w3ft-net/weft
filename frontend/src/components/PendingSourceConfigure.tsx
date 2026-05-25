@@ -14,7 +14,7 @@ export default function PendingSourceConfigure({
   source: PendingSource
   onConfigured: () => void
 }) {
-  const key = `${source.namespace}-${source.app}`
+  const key = `${source.namespace}-${source.service}`
   const [expanded, setExpanded] = useState(false)
 
   // A still-sampling source has no full sample yet — it can't be
@@ -24,9 +24,9 @@ export default function PendingSourceConfigure({
     return (
       <div className="psc-row" data-testid={`pending-source-row-${key}`}>
         <div className="psc-header" data-testid={`pending-source-sampling-${key}`}>
-          <span className="psc-app-name">{source.app}</span>
+          <span className="psc-service-name">{source.service}</span>
           <span className="psc-meta">
-            {source.app} hasn’t emitted enough lines to sample yet (
+            {source.service} hasn’t emitted enough lines to sample yet (
             {source.sample_collected}/{source.sample_target})
           </span>
         </div>
@@ -41,7 +41,7 @@ export default function PendingSourceConfigure({
         onClick={() => setExpanded(!expanded)}
         data-testid={`pending-source-toggle-${key}`}
       >
-        <span className="psc-app-name">{source.app}</span>
+        <span className="psc-service-name">{source.service}</span>
         <span className="psc-meta">
           {source.instance || 'unknown host'}
           {source.host_group ? ` · ${source.host_group}` : ''}
@@ -55,7 +55,7 @@ export default function PendingSourceConfigure({
           sample={source.sample ?? []}
           detection={source.detection}
           onSubmit={async (config) => {
-            await configureSource(source.namespace, source.app, config)
+            await configureSource(source.namespace, source.service, config)
             notifyPendingSourcesChanged()
             onConfigured()
           }}

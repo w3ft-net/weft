@@ -196,7 +196,7 @@ export default function Namespaces() {
                               <div className="namespace-subsection-title">Pending sources</div>
                               {nsPending.map(src => (
                                 <PendingSourceConfigure
-                                  key={`${src.namespace}/${src.app}`}
+                                  key={`${src.namespace}/${src.service}`}
                                   source={src}
                                   onConfigured={loadData}
                                 />

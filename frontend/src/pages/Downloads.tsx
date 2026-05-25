@@ -158,12 +158,12 @@ services: [api]
 
 sources:
   # kind defaults to "main"; lands at /log/<ns>/myapp/main.log
-  - app: myapp
+  - service: myapp
     path: /var/log/myapp/*.log
     schema: json
 
   # tail a systemd unit's journal instead of a path
-  - app: worker
+  - service: worker
     unit: worker.service`}
               />
               <p className="dl-install-note">

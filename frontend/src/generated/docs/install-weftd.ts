@@ -24,7 +24,7 @@ sudo dpkg -i weftd_*.deb
 <p>Configure your log sources in <code>/etc/weftd/config.yaml</code>:</p>
 <pre><code># /etc/weftd/config.yaml
 
-endpoint: w3ft.net:443
+endpoint: ingest.w3ft.net:9020
 token: wft_a1b2c3d4e5f6...
 deployment: api               # optional; the fleet/scaling-unit
                               # this agent belongs to (k8s Deployment,
@@ -43,7 +43,7 @@ dimensions:                   # optional: column values sourced from
   node: /etc/weft/identity.json:.shard_id
 
 sources:
-  - app: myapp
+  - service: myapp
     path: /var/log/myapp/*.log
     schema: prefix_json
     prefix_fields: [ts, level, service]
@@ -54,7 +54,7 @@ sources:
                                        # contents as $VERSION on
                                        # every row from this source
 
-  - app: nginx
+  - service: nginx
     path: /var/log/nginx/access.log
     schema: json
 </code></pre>
@@ -107,12 +107,12 @@ attaching a <code>metrics:</code> block to any source in the config — the bloc
 is independent of what that source tails, it just rides along on the
 same agent process.</p>
 <pre><code># /etc/weftd/config.yaml
-endpoint: w3ft.net:443
+endpoint: ingest.w3ft.net:9020
 token: wft_a1b2c3d4e5f6...
 deployment: api               # optional; tags every row
 
 sources:
-  - app: myapp
+  - service: myapp
     path: /var/log/myapp/*.log
     metrics:
       enabled: true

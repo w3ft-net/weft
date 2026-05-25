@@ -63,7 +63,7 @@ tail -100 vimgym.log
 # Live tailing
 tail -f vimgym.log
 tail -f vimgym.log | awk '$LEVEL == "ERROR"' | jq '.user_id'
-tail -f warp.log | awk '$LEVEL == "ERROR" { count[$APP]++ } END { for (a in count) print a, count[a] }'
+tail -f warp.log | awk '$LEVEL == "ERROR" { count[$SERVICE]++ } END { for (a in count) print a, count[a] }'
 
 # Time range override (in-shell)
 range 2h..
@@ -78,7 +78,9 @@ Since weft controls the awk interpreter, metadata is injected as special variabl
 
 | Variable | Source |
 |----------|--------|
-| `$APP` | Application name |
+| `$NAMESPACE` | Namespace |
+| `$SERVICE` | Service name |
+| `$KIND` | Stream kind |
 | `$LEVEL` | Log level |
 | `$TS` | Timestamp |
 | `$INSTANCE` | Instance ID |

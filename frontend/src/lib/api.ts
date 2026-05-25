@@ -110,7 +110,7 @@ export function getUsage(): Promise<Usage> {
 }
 
 // Ingestion status
-export function getIngestionStatus(): Promise<{ affected_apps: string[] }> {
+export function getIngestionStatus(): Promise<{ affected_services: string[] }> {
   return apiFetch('/api/ingestion-status')
 }
 
@@ -567,7 +567,7 @@ export interface SourceDetection {
 }
 
 export interface PendingSource {
-  app: string
+  service: string
   namespace: string
   instance: string
   host_group: string
@@ -600,11 +600,11 @@ export async function getPendingSources(namespace?: string): Promise<PendingSour
 
 export function configureSource(
   namespace: string,
-  app: string,
+  service: string,
   config: ConfigureSourceRequest,
 ): Promise<void> {
   return apiFetch(
-    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(app)}/configure`,
+    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(service)}/configure`,
     { method: 'POST', body: JSON.stringify(config) },
   )
 }
@@ -645,7 +645,7 @@ export function onPendingSourcesChanged(handler: () => void): () => void {
 
 export interface SourceInfo {
   namespace: string
-  app: string
+  service: string
   source_type: 'cloudwatch' | 'weftd'
   log_group: string
   region: string
@@ -663,7 +663,7 @@ export async function listSources(namespace?: string): Promise<SourceInfo[]> {
   return resp || []
 }
 
-// SourceSchema is the GET /api/sources/{ns}/{app}/schema response. For a
+// SourceSchema is the GET /api/sources/{ns}/{service}/schema response. For a
 // configured source, schema_yaml carries the live schema (viewable at any
 // time). For a still-sampling source, sample_collected/sample_target
 // report progress so the UI can say "not enough lines yet (N/target)".
@@ -676,30 +676,27 @@ export interface SourceSchema {
   sample_target?: number
 }
 
-export function getSourceSchema(namespace: string, app: string): Promise<SourceSchema> {
-  const sub = app.startsWith(namespace + '/') ? app.slice(namespace.length + 1) : app
+export function getSourceSchema(namespace: string, service: string): Promise<SourceSchema> {
   return apiFetch<SourceSchema>(
-    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(sub)}/schema`,
+    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(service)}/schema`,
   )
 }
 
 // resampleSource asks the agent for a fresh sample of an already-configured
 // source. Ingestion continues on the current schema; the fresh sample
 // appears for review once the agent finishes accumulating.
-export function resampleSource(namespace: string, app: string): Promise<void> {
-  const sub = app.startsWith(namespace + '/') ? app.slice(namespace.length + 1) : app
+export function resampleSource(namespace: string, service: string): Promise<void> {
   return apiFetch(
-    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(sub)}/resample`,
+    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(service)}/resample`,
     { method: 'POST' },
   )
 }
 
-export function deleteSource(namespace: string, app: string): Promise<void> {
-  // The backend stores the full app as "{namespace}/{app}" but its DELETE
-  // path takes just the sub-app, so strip the prefix if present.
-  const sub = app.startsWith(namespace + '/') ? app.slice(namespace.length + 1) : app
+export function deleteSource(namespace: string, service: string): Promise<void> {
+  // service is the bare service name (e.g. "coordinator"); it maps
+  // directly to the positional path segment the backend expects.
   return apiFetch(
-    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(sub)}`,
+    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(service)}`,
     { method: 'DELETE' },
   )
 }
@@ -708,7 +705,7 @@ export function deleteSource(namespace: string, app: string): Promise<void> {
 
 export interface CloudWatchCreds {
   namespace: string
-  app: string
+  service: string
   aws_account_id: string
   role_arn: string
   external_id: string
@@ -722,7 +719,7 @@ export interface CloudWatchSampleResponse {
 }
 
 export async function sampleCloudWatchSource(
-  creds: Omit<CloudWatchCreds, 'app'>,
+  creds: Omit<CloudWatchCreds, 'service'>,
 ): Promise<CloudWatchSampleResponse> {
   return apiFetch<CloudWatchSampleResponse>('/api/sources/cloudwatch/sample', {
     method: 'POST',
@@ -836,7 +833,10 @@ export interface AdminCustomerDetail {
 
 export interface AdminBucket {
   ID: number
-  Apps: string
+  // Go store.Bucket.Services is a []string with no json tag, so it
+  // serializes as a JSON array under the capitalized key. Empty array
+  // ([]) is the catch-all bucket.
+  Services: string[]
   WindowDuration: string
   TargetIngestingCount: number
   Tier: string
@@ -845,7 +845,6 @@ export interface AdminBucket {
 
 export interface AdminShard {
   ID: string
-  Apps: string
   WindowStart: string
   WindowEnd: string
   State: string

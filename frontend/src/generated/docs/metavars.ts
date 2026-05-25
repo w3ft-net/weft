@@ -25,7 +25,9 @@ statistics stay useful.</p>
 <h2 id="reserved-set">Reserved set</h2>
 <p>| awk                        | jq                       | Column           | Source                                                    |
 |----------------------------|--------------------------|------------------|-----------------------------------------------------------|
-| <code>$APP</code> <em>(alias <code>$SERVICE</code>)</em> | <code>._app</code> <em>(alias <code>._service</code>)</em> | <code>app</code>            | log filename, source declaration, or HTTP ingest payload  |
+| <code>$NAMESPACE</code>                | <code>._namespace</code>            | <code>namespace</code>      | the <code>&lt;namespace&gt;</code> path segment / agent token's namespace  |
+| <code>$SERVICE</code>                  | <code>._service</code>              | <code>service</code>        | source declaration, log filename, or HTTP ingest payload  |
+| <code>$KIND</code>                     | <code>._kind</code>                 | <code>kind</code>           | the stream kind (<code>main</code>, <code>heartbeats</code>, <code>metrics</code>, <code>runtime</code>) |
 | <code>$HOST</code> <em>(alias <code>$INSTANCE</code>)</em> | <code>._host</code> <em>(alias <code>._instance</code>)</em> | <code>instance</code>       | weftd <code>os.Hostname()</code>                                     |
 | <code>$LEVEL</code>                    | <code>._level</code>                | <code>level</code>          | schema-extracted from the row                             |
 | <code>$TS</code>                       | <code>._ts</code>                   | <code>ts</code>             | schema-extracted from the row                             |
@@ -43,17 +45,19 @@ queries on <code>$ENV == &quot;prod&quot;</code> neither include nor exclude suc
 they simply don't match the predicate.</p>
 <h3 id="naming-convention">Naming convention</h3>
 <p>awk meta-variables are all-caps short flat names — <code>$ENV</code>, <code>$POD</code>,
-<code>$DEPLOYMENT</code> — matching the pre-existing <code>$LEVEL</code> / <code>$APP</code> /
-<code>$INSTANCE</code> shape.</p>
+<code>$DEPLOYMENT</code> — matching the pre-existing <code>$LEVEL</code> / <code>$SERVICE</code> /
+<code>$INSTANCE</code> shape. The source coordinates split into three columns —
+<code>$NAMESPACE</code>, <code>$SERVICE</code>, <code>$KIND</code> — each addressed directly rather
+than rolled into one conflated value.</p>
 <p>jq meta-variables use leading-underscore lowercase — <code>._env</code>,
 <code>._pod</code>. The underscore disambiguates from real JSON payload keys:
 <code>.pod</code> is whatever the producer wrote into the row body; <code>._pod</code> is
 the column. Real JSONL sometimes carries <code>Pod</code> / <code>PoD</code> / <code>POD</code> keys,
 so the underscore is more reliable than relying on case alone.</p>
-<p>The one verbose name is <code>k8s_namespace</code> (<code>$K8S_NAMESPACE</code> /
-<code>._k8s_namespace</code>). The shorter <code>namespace</code> is unavailable because
-weft already uses &quot;namespace&quot; for the customer's logical
-token-grouping in the path (<code>/log/&lt;namespace&gt;/...</code>).</p>
+<p><code>$NAMESPACE</code> is weft's own logical token-grouping — the
+<code>&lt;namespace&gt;</code> segment in the path (<code>/log/&lt;namespace&gt;/...</code>). The
+Kubernetes namespace, a distinct dimension, takes the verbose
+<code>$K8S_NAMESPACE</code> (<code>._k8s_namespace</code>) so the two never collide.</p>
 <h2 id="path-layout">Path layout</h2>
 <p>The pseudofile path encodes the namespace, service, and stream
 kind, plus the env when the producing token carries one:</p>
