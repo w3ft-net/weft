@@ -38,11 +38,9 @@ func Explain(pipeline string) string {
 	// Source.
 	fmt.Fprintf(&b, "\nSource:\n")
 	fmt.Fprintf(&b, "  command:  %s\n", plan.SourceCmd)
-	app := plan.SourceApp
-	if app == "" {
-		app = "(all apps)"
-	}
-	fmt.Fprintf(&b, "  app:      %s\n", app)
+	fmt.Fprintf(&b, "  namespace: %s\n", orAll(plan.SourceNamespace))
+	fmt.Fprintf(&b, "  service:  %s\n", orAll(plan.SourceService))
+	fmt.Fprintf(&b, "  kind:     %s\n", orAll(plan.SourceKind))
 	fmt.Fprintf(&b, "  limit:    %d\n", plan.Limit)
 	fmt.Fprintf(&b, "  follow:   %v\n", plan.Follow)
 
@@ -84,4 +82,13 @@ func formatSQL(sql string) []string {
 		result = strings.ReplaceAll(result, kw, "\n"+strings.TrimLeft(kw, " "))
 	}
 	return strings.Split(result, "\n")
+}
+
+// orAll renders an empty source-coordinate as the wildcard label for
+// the human-readable EXPLAIN output.
+func orAll(s string) string {
+	if s == "" {
+		return "(all)"
+	}
+	return s
 }

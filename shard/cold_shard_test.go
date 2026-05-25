@@ -77,7 +77,7 @@ func TestColdShard_FiltersByApp(t *testing.T) {
 	}
 	defer cs.Close()
 
-	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'")
+	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestColdShard_EmptyResult(t *testing.T) {
 	}
 	defer cs.Close()
 
-	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE app = 'nonexistent'")
+	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE namespace = 'nonexistent'")
 	if err != nil {
 		t.Fatal(err)
 	}

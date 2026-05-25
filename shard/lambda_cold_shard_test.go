@@ -93,7 +93,7 @@ func TestColdShard_RemoteQueryToSink(t *testing.T) {
 	defer cs.Close()
 
 	sink := &testSink{}
-	cs.QueryToSink("SELECT raw, ts FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'", nil, sink)
+	cs.QueryToSink("SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer = 'kevlar'", nil, sink)
 
 	if !sink.sentinelReceived {
 		t.Error("expected sentinel")
@@ -128,7 +128,7 @@ func TestColdShard_RemoteFiltersByApp(t *testing.T) {
 	}
 	defer cs.Close()
 
-	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE app = 'callbox' AND customer = 'kevlar'")
+	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE namespace = 'callbox' AND customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}

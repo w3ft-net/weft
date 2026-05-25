@@ -607,7 +607,12 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 		return nil, err
 	}
 
-	matcher := &RowMatcher{App: plan.FollowApp, Patterns: plan.FollowPatterns}
+	matcher := &RowMatcher{
+		Namespace: plan.SourceNamespace,
+		Service:   plan.SourceService,
+		Kind:      plan.SourceKind,
+		Patterns:  plan.FollowPatterns,
+	}
 	filter := BuildLiveFilter(plan)
 
 	next := func() compute.LineStream {
@@ -1041,35 +1046,25 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
 
-	// Allowlist: the pipeline's source app (the part before '/') must
-	// resolve to a namespace this customer owns. Gate here, before the
-	// app name ever reaches SQL interpolation — the planner escapes
-	// string literals, but an allowlist is the correct posture for a
-	// user-controlled identifier.
-	if plan.SourceApp != "" {
+	// Allowlist: the pipeline's source namespace must resolve to a
+	// namespace this customer owns. Gate here, before the name ever
+	// reaches SQL interpolation — the planner escapes string literals,
+	// but an allowlist is the correct posture for a user-controlled
+	// identifier. The planner already split the namespace out of the
+	// pseudofile path, so this checks it directly.
+	if plan.SourceNamespace != "" {
 		cust, err := c.Store.GetCustomerByName(customer)
 		if err != nil {
 			return nil, fmt.Errorf("validate source: resolve customer %q: %w", customer, err)
 		}
-		ok, err := func(customerID uint, app string) (bool, error) {
-			if app == "" {
-				return true, nil
-			}
-			ns := app
-			if i := strings.IndexByte(app, '/'); i >= 0 {
-				ns = app[:i]
-			}
-			var count int64
-			err := c.Store.DB().WithContext(store.WithCustomer(context.Background(), customerID)).Model(&store.Namespace{}).
-				Where("name = ?", ns).
-				Count(&count).Error
-			return count > 0, err
-		}(cust.ID, plan.SourceApp)
-		if err != nil {
+		var count int64
+		if err := c.Store.DB().WithContext(store.WithCustomer(context.Background(), cust.ID)).Model(&store.Namespace{}).
+			Where("name = ?", plan.SourceNamespace).
+			Count(&count).Error; err != nil {
 			return nil, fmt.Errorf("validate source: %w", err)
 		}
-		if !ok {
-			return nil, fmt.Errorf("unknown source: %s", plan.SourceApp)
+		if count == 0 {
+			return nil, fmt.Errorf("unknown source: %s", plan.SourceNamespace)
 		}
 	}
 
@@ -1093,15 +1088,15 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	nsID := c.resolveNamespaceID(custID, customer, plan.SourceNamespace)
 	descs := c.Provisioner.ShardDescriptorsFor(tr, nsID, plan.SourceService, tier)
 	if len(descs) == 0 {
-		queryLog.Printf("query: no matching shards (app=%s, customer=%s)", plan.SourceApp, customer)
+		queryLog.Printf("query: no matching shards (namespace=%s, service=%s, customer=%s)", plan.SourceNamespace, plan.SourceService, customer)
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
 	shardIDs := make([]string, len(descs))
 	for i, d := range descs {
 		shardIDs[i] = d.ShardId
 	}
-	queryLog.Printf("query: app=%s shards=%v compute=%v sql=%s",
-		plan.SourceApp, shardIDs, plan.ComputeStages, directSQL)
+	queryLog.Printf("query: namespace=%s service=%s shards=%v compute=%v sql=%s",
+		plan.SourceNamespace, plan.SourceService, shardIDs, plan.ComputeStages, directSQL)
 
 	argStrs := make([]string, len(plan.Args))
 	for i, a := range plan.Args {

@@ -73,7 +73,6 @@ CREATE TABLE IF NOT EXISTS logs (
     namespace      TEXT,
     service        TEXT,
     kind           TEXT,
-    app            TEXT,
     instance       TEXT,
     customer       TEXT,
     payload        JSON,
@@ -125,6 +124,13 @@ var migrationSteps = []string{
 	// from the second slash onward so existing service='compute/heartbeats'
 	// rows become service='compute' with kind='heartbeats'.
 	`UPDATE logs SET service = substr(service, 1, position('/' in service) - 1) WHERE service IS NOT NULL AND position('/' in service) > 0`,
+	// The composite `app` column is now redundant with the dedicated
+	// namespace/service/kind columns (which the planner queries and which
+	// index cleanly). Drop it once the backfills above have salvaged any
+	// pre-split rows. On fresh shards the backfills no-op (app never
+	// existed; the UPDATE errors are ignored like the other steps) and
+	// this DROP is a no-op too.
+	`ALTER TABLE logs DROP COLUMN IF EXISTS app`,
 }
 
 // NewDuckDBShard opens or creates a DuckDB database at path and initializes the
@@ -179,21 +185,21 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow, rec IngestRecorder) error {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("INSERT INTO logs (raw, fields, ts, level, namespace, service, kind, app, instance, customer, payload, deployment, env, version, region, cluster, k8s_namespace, pod, container, node) VALUES ")
+	sb.WriteString("INSERT INTO logs (raw, fields, ts, level, namespace, service, kind, instance, customer, payload, deployment, env, version, region, cluster, k8s_namespace, pod, container, node) VALUES ")
 
-	args := make([]any, 0, len(rows)*20)
+	args := make([]any, 0, len(rows)*19)
 	for i, r := range rows {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 
 		payloadStr := "{}"
 		if len(r.PayloadJson) > 0 {
 			payloadStr = string(r.PayloadJson)
 		}
 
-		ns, svc, kind := r.Namespace, r.Service, r.Kind
+		kind := r.Kind
 		if kind == "" {
 			kind = "main"
 		}
@@ -202,10 +208,9 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow, rec IngestRecorder) error {
 			r.Fields,
 			time.Unix(0, r.TsUnixNs),
 			r.Level,
-			ns,
-			svc,
+			r.Namespace,
+			r.Service,
 			kind,
-			JoinApp(ns, svc, kind),
 			r.Instance,
 			r.Customer,
 			payloadStr,

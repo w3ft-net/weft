@@ -7,33 +7,30 @@ import (
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
-// RowMatcher filters live rows for a tail subscription.
+// RowMatcher filters live rows for a tail subscription. The source
+// coordinates are matched structurally against the row's columns —
+// an empty Namespace means "match every source" (warp.log follow); a
+// set Namespace with empty Service/Kind widens to the namespace (or
+// namespace+service) level.
 type RowMatcher struct {
-	App      string
-	Patterns []planner.GrepPattern
-}
-
-// rowComposite rebuilds the "namespace/service/kind" path from a row's
-// split coordinates. It mirrors the form the planner extracts from a
-// pseudofile path and the index key the ingest handler feeds
-// SeenServices, so live-tail allowlist matching (which still works in
-// composite terms) lines up. kind is included when present — the
-// ingest path defaults it to "main".
-func rowComposite(r *pb.LogRow) string {
-	if r.Service == "" {
-		return r.Namespace
-	}
-	s := r.Namespace + "/" + r.Service
-	if r.Kind != "" {
-		s += "/" + r.Kind
-	}
-	return s
+	Namespace string
+	Service   string
+	Kind      string
+	Patterns  []planner.GrepPattern
 }
 
 // Match returns true if the row passes all filters.
 func (m *RowMatcher) Match(row *pb.LogRow) bool {
-	if m.App != "" && rowComposite(row) != m.App {
-		return false
+	if m.Namespace != "" {
+		if row.Namespace != m.Namespace {
+			return false
+		}
+		if m.Service != "" && row.Service != m.Service {
+			return false
+		}
+		if m.Kind != "" && row.Kind != m.Kind {
+			return false
+		}
 	}
 	for _, p := range m.Patterns {
 		raw := row.Raw

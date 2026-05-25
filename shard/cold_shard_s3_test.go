@@ -127,7 +127,7 @@ func TestColdShard_S3Integration(t *testing.T) {
 	t.Logf("queried %d rows from S3 Parquet", len(result))
 
 	// Query with filter.
-	result, err = cs.Query("SELECT raw, ts FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'")
+	result, err = cs.Query("SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}

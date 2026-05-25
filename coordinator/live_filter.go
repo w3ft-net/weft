@@ -25,15 +25,21 @@ type LiveFilter func(*pb.LogRow) []string
 // BuildLiveFilter constructs a per-row closure from a parsed QueryPlan.
 // Callers own one per subscription.
 //
-// The app gate runs first and short-circuits wrong-app rows without
-// touching the interpreter. Rows passing the app gate fall through to
-// the per-row pipeline — or, when the plan has no stages (bare
-// `tail -f foo.log`), straight to the caller as the raw line.
+// The source gate runs first and short-circuits non-matching rows
+// without touching the interpreter — a coordinate-only RowMatcher
+// (namespace/service/kind, no grep patterns) mirrors the SQL source
+// predicate. Rows passing the gate fall through to the per-row
+// pipeline — or, when the plan has no stages (bare `tail -f foo.log`),
+// straight to the caller as the raw line.
 func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
-	app := plan.FollowApp
+	gate := &RowMatcher{
+		Namespace: plan.SourceNamespace,
+		Service:   plan.SourceService,
+		Kind:      plan.SourceKind,
+	}
 
 	passthrough := func(row *pb.LogRow) []string {
-		if app != "" && !appMatches(rowComposite(row), app) {
+		if !gate.Match(row) {
 			return nil
 		}
 		return []string{row.Raw}
@@ -56,24 +62,11 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 	}
 
 	return func(row *pb.LogRow) []string {
-		if app != "" && !appMatches(rowComposite(row), app) {
+		if !gate.Match(row) {
 			return nil
 		}
 		return runStages(row.Raw, ast)
 	}
-}
-
-// appMatches mirrors the source predicate the planner emits into SQL:
-// a bare namespace ("acme") matches any sub-app under it ("acme/api"),
-// while a namespaced path ("acme/api") is exact.
-func appMatches(rowApp, want string) bool {
-	if rowApp == want {
-		return true
-	}
-	if !strings.Contains(want, "/") {
-		return strings.HasPrefix(rowApp, want+"/")
-	}
-	return false
 }
 
 // runStages feeds raw to a fresh bash interpreter running the parsed

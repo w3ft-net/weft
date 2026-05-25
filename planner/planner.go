@@ -35,7 +35,6 @@ type QueryPlan struct {
 	// compute, so the global last N can't be resolved by stopping early.
 	TailMode       bool
 	Follow         bool          // tail -f: keep stream open for live updates
-	FollowApp      string        // app to subscribe to ("" = all)
 	FollowPatterns []GrepPattern // grep filters applied to live rows
 	// LiveStages is the post-source stage list to re-run per live row in
 	// follow mode. Same strings as ComputeStages would have been if we
@@ -45,9 +44,9 @@ type QueryPlan struct {
 	// the same transformations as the historical batch.
 	LiveStages      []string
 	SourceCmd       string   // source command: "cat", "head", or "tail"
-	SourceApp       string   // composite app name (ns/svc/kind) — allowlist + logging only; routing keys on SourceNamespace+SourceService
-	SourceNamespace string   // namespace segment for shard routing ("" = all namespaces)
-	SourceService   string   // service segment for shard routing ("" = all services in the namespace)
+	SourceNamespace string   // namespace column value — routing + allowlist ("" = all namespaces)
+	SourceService   string   // service column value — routing ("" = all services in the namespace)
+	SourceKind      string   // kind column value — live-tail matching ("" = all kinds)
 	AlertArgs       []string // argv for a terminal `alert` stage; nil if absent. Set even for alert-only pipelines (ShardSQL is empty in that case).
 
 	// Direct-to-compute mode (see docs/plans/direct-to-compute.md §3).
@@ -383,13 +382,12 @@ func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 		Limit:           sql.limit,
 		TailMode:        orderDesc,
 		Follow:          info.source.follow,
-		FollowApp:       info.source.app(),
 		FollowPatterns:  grepPatterns,
 		LiveStages:      liveStages,
 		SourceCmd:       info.source.cmd,
-		SourceApp:       info.source.app(),
 		SourceNamespace: firstOrEmpty(info.source.namespaces),
 		SourceService:   firstOrEmpty(info.source.services),
+		SourceKind:      firstOrEmpty(info.source.kinds),
 		AlertArgs:       alertArgs,
 		ShardOrderBy:    mergeOrderBy,
 		ShardLimit:      shardLimit,

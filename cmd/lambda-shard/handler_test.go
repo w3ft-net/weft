@@ -63,7 +63,7 @@ func TestLambdaHandler_FiltersByApp(t *testing.T) {
 	var buf bytes.Buffer
 
 	err := HandleQuery(&buf, QueryRequest{
-		SQL:         "SELECT raw, ts FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'",
+		SQL:         "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer = 'kevlar'",
 		ParquetPath: path,
 	}, nil)
 	if err != nil {
@@ -194,7 +194,7 @@ func TestLambdaHandler_EmptyResult(t *testing.T) {
 	var buf bytes.Buffer
 
 	err := HandleQuery(&buf, QueryRequest{
-		SQL:         "SELECT raw, ts FROM logs WHERE app = 'nonexistent'",
+		SQL:         "SELECT raw, ts FROM logs WHERE namespace = 'nonexistent'",
 		ParquetPath: path,
 	}, nil)
 	if err != nil {

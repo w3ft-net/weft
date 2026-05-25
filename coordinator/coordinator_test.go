@@ -634,7 +634,6 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 	plan := &planner.QueryPlan{
 		ShardSQL:       "SELECT raw, ts FROM logs WHERE customer = 'kevlar' ORDER BY ts",
 		DirectShardSQL: "SELECT raw, ts FROM logs WHERE customer = 'kevlar' ORDER BY ts",
-		FollowApp:      "vimgym",
 	}
 
 	_, err = c.executeQuery(plan, tr, "kevlar", 0, "", nil)

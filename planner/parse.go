@@ -11,12 +11,11 @@ import (
 // sourceInfo describes the source command (cat/head/tail) at the start of a pipeline.
 //
 // Multi-arg `cat a.log b.log` (and the post-glob-expansion form of
-// `cat *.log`) populates apps with the union; the planner emits a
-// single `app IN (...)` predicate. apps is empty for warp.log
-// (all apps); a one-element apps means a single-app query and uses
-// `app =`/`LIKE` predicates.
+// `cat *.log`) populates namespaces/services/kinds with the union; the
+// planner emits `namespace IN (...) AND service IN (...) AND kind IN (...)`
+// predicates. Empty slices mean warp.log (the all-sources wildcard) — no
+// predicate at all on that column.
 type sourceInfo struct {
-	apps       []string // composite app names (ns/svc/kind) for shard routing
 	namespaces []string // namespace column values for SQL predicates
 	services   []string // service column values for SQL predicates
 	kinds      []string // kind column values for SQL predicates
@@ -24,14 +23,6 @@ type sourceInfo struct {
 	cmd        string   // "cat", "head", or "tail"
 	limit      int      // for head/tail: line count (0 = unlimited for cat)
 	follow     bool     // tail -f
-}
-
-// app returns the single composite app name for shard routing.
-func (s sourceInfo) app() string {
-	if len(s.apps) == 0 {
-		return ""
-	}
-	return s.apps[0]
 }
 
 // stageInfo describes a single pipeline stage after the source command.
@@ -133,7 +124,7 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &sourceInfo{apps: sf.apps, namespaces: sf.namespaces, services: sf.services, kinds: sf.kinds, env: sf.env, cmd: "cat"}, nil
+		return &sourceInfo{namespaces: sf.namespaces, services: sf.services, kinds: sf.kinds, env: sf.env, cmd: "cat"}, nil
 
 	case "head":
 		limit := 10
@@ -164,7 +155,7 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &sourceInfo{apps: sf.apps, namespaces: sf.namespaces, services: sf.services, kinds: sf.kinds, env: sf.env, cmd: "head", limit: limit}, nil
+		return &sourceInfo{namespaces: sf.namespaces, services: sf.services, kinds: sf.kinds, env: sf.env, cmd: "head", limit: limit}, nil
 
 	case "tail":
 		limit := 10
@@ -198,18 +189,18 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &sourceInfo{apps: sf.apps, namespaces: sf.namespaces, services: sf.services, kinds: sf.kinds, env: sf.env, cmd: "tail", limit: limit, follow: follow}, nil
+		return &sourceInfo{namespaces: sf.namespaces, services: sf.services, kinds: sf.kinds, env: sf.env, cmd: "tail", limit: limit, follow: follow}, nil
 
 	default:
 		return nil, fmt.Errorf("unknown source command: %s", name)
 	}
 }
 
-// extractServicesEnv extracts apps + namespace/service/kind from a list
-// of pseudofile arguments. Empty app names are dropped — extractApp
-// returns "" for warp.log (the all-apps wildcard), which means no app
-// predicate at all, equivalent to a fan-out across every app the
-// customer can read. Apps are deduplicated and sorted for stable SQL.
+// extractServicesEnv extracts namespace/service/kind + env from a list
+// of pseudofile arguments. warp.log (the all-sources wildcard) yields
+// empty slices, which means no predicate on those columns — a fan-out
+// across every source the customer can read. Values are deduplicated
+// and sorted per column for stable SQL.
 //
 // 2-seg paths (/log/<ns>/<svc>.log) are rejected outright: every log
 // stream lives under an explicit kind, so the legacy two-segment form
@@ -219,7 +210,6 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 // env-bearing paths (or two different envs) in a single cat is rejected
 // because the planner emits one env predicate for the whole query.
 type sourceFields struct {
-	apps       []string
 	namespaces []string
 	services   []string
 	kinds      []string
@@ -227,7 +217,6 @@ type sourceFields struct {
 }
 
 func extractServicesEnv(files []string, cmd string) (sourceFields, error) {
-	seenApps := map[string]struct{}{}
 	seenNS := map[string]struct{}{}
 	seenSvc := map[string]struct{}{}
 	seenKind := map[string]struct{}{}
@@ -236,13 +225,6 @@ func extractServicesEnv(files []string, cmd string) (sourceFields, error) {
 		ns, env, svc, kind := parsePseudofilePath(f)
 		if ns != "" && svc != "" && kind == "" {
 			return sourceFields{}, fmt.Errorf("%s: %q is missing a kind segment; the canonical form is /log/%s/%s/<kind>.log (e.g. main, heartbeats, metrics)", cmd, f, ns, svc)
-		}
-		a := extractApp(f)
-		if a != "" {
-			if _, ok := seenApps[a]; !ok {
-				seenApps[a] = struct{}{}
-				sf.apps = append(sf.apps, a)
-			}
 		}
 		if ns != "" {
 			if _, ok := seenNS[ns]; !ok {
@@ -267,9 +249,6 @@ func extractServicesEnv(files []string, cmd string) (sourceFields, error) {
 		} else if env != sf.env {
 			return sourceFields{}, fmt.Errorf("%s: cannot mix env=%q and env=%q in one pipeline", cmd, sf.env, env)
 		}
-	}
-	if len(sf.apps) > 1 {
-		strSliceSort(sf.apps)
 	}
 	if len(sf.namespaces) > 1 {
 		strSliceSort(sf.namespaces)
@@ -347,26 +326,6 @@ func parsePseudofilePath(filename string) (namespace, env, service, kind string)
 		service = strings.Join(parts[1:], "/")
 	}
 	return
-}
-
-// extractApp returns the composite app name for shard routing (hasApp).
-// Reconstructs "<ns>/<svc>/<kind>" from the path. env is intentionally
-// excluded — it is a separate column, and shard routing keys on the
-// namespace prefix. Degenerate shapes (1-seg namespace wildcard,
-// warp.log) yield shorter strings.
-func extractApp(filename string) string {
-	ns, _, svc, kind := parsePseudofilePath(filename)
-	if ns == "" {
-		return ""
-	}
-	out := ns
-	if svc != "" {
-		out += "/" + svc
-	}
-	if kind != "" {
-		out += "/" + kind
-	}
-	return out
 }
 
 // parseLineCount extracts the line count from head/tail arguments.

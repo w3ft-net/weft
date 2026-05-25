@@ -102,7 +102,7 @@ func TestQueryToSink_SuccessIsSilent(t *testing.T) {
 
 	sink := &testSink{}
 	out := captureLog(t, func() {
-		cs.QueryToSink("SELECT raw, ts FROM logs WHERE app = 'vimgym' AND customer = 'kevlar'", nil, sink)
+		cs.QueryToSink("SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer = 'kevlar'", nil, sink)
 	})
 
 	if len(sink.rows) == 0 {

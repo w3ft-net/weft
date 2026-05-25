@@ -16,15 +16,18 @@ import (
 // would alter the SQL shape for a given pipeline (subquery wrap,
 // merge-key flip, predicate pushdown rule). A version mismatch at
 // fire time forces a recompile.
-const PlannerVersion = 1
+//
+// v2: dropped the composite follow_app/source_app fields; the
+// (namespace, service, kind) columns are carried split.
+const PlannerVersion = 2
 
 // LoweredPlan is the persisted shape we store next to a watch's
 // pipeline string. It captures everything the runtime needs to
 // dispatch the query without re-running Plan() — the SQL strings,
 // the arg sources (so customer + time bounds can be re-resolved
 // against fresh fire context), the compute stages, and the
-// metadata that watches/dashboards consume (alert args, source
-// app, follow flags). BinDeps records each /bin/ inlined during
+// metadata that watches/dashboards consume (alert args,
+// source coordinates, follow flags). BinDeps records each /bin/ inlined during
 // lowering with its content hash so a /bin/ edit invalidates the
 // lowered plan on the next fire.
 //
@@ -40,7 +43,7 @@ type LoweredPlan struct {
 	// profile). Customer renames invalidate this field; the fire
 	// path will need to re-lower if it diverges, but renames are
 	// rare enough that the bake-in is worth the saved DB hit.
-	Customer        string      `json:"customer"`
+	Customer string `json:"customer"`
 	// Tier is the customer's tier at save time. Cached here so the
 	// fire path can clamp the time-range retention + select shards
 	// (both tier-dependent) without two DB roundtrips per fire. A
@@ -50,29 +53,28 @@ type LoweredPlan struct {
 	// to pick up extended retention immediately. The fire path
 	// could instead invalidate on tier change via subscription
 	// hooks, but that's wider scope than this commit.
-	Tier            string      `json:"tier"`
-	ShardSQL        string      `json:"shard_sql"`
-	DirectShardSQL  string      `json:"direct_shard_sql"`
-	ArgSources      []ArgSource `json:"args,omitempty"`
-	ComputeStages   []string    `json:"compute_stages,omitempty"`
-	LiveStages      []string    `json:"live_stages,omitempty"`
-	MergeKey        string      `json:"merge_key,omitempty"`
-	Limit           int         `json:"limit,omitempty"`
-	ShardLimit      int         `json:"shard_limit,omitempty"`
-	TailMode        bool        `json:"tail_mode,omitempty"`
-	Follow          bool        `json:"follow,omitempty"`
-	FollowApp       string      `json:"follow_app,omitempty"`
+	Tier            string        `json:"tier"`
+	ShardSQL        string        `json:"shard_sql"`
+	DirectShardSQL  string        `json:"direct_shard_sql"`
+	ArgSources      []ArgSource   `json:"args,omitempty"`
+	ComputeStages   []string      `json:"compute_stages,omitempty"`
+	LiveStages      []string      `json:"live_stages,omitempty"`
+	MergeKey        string        `json:"merge_key,omitempty"`
+	Limit           int           `json:"limit,omitempty"`
+	ShardLimit      int           `json:"shard_limit,omitempty"`
+	TailMode        bool          `json:"tail_mode,omitempty"`
+	Follow          bool          `json:"follow,omitempty"`
 	FollowPatterns  []GrepPattern `json:"follow_patterns,omitempty"`
-	SourceCmd       string      `json:"source_cmd,omitempty"`
-	SourceApp       string      `json:"source_app,omitempty"`
-	SourceNamespace string      `json:"source_namespace,omitempty"`
-	SourceService   string      `json:"source_service,omitempty"`
-	AlertArgs       []string    `json:"alert_args,omitempty"`
-	RedirectTarget  string      `json:"redirect_target,omitempty"`
-	RedirectAppend  bool        `json:"redirect_append,omitempty"`
-	BinDeps         []BinDep    `json:"bin_deps,omitempty"`
-	CompiledAt      time.Time   `json:"compiled_at"`
-	PlannerVersion  int         `json:"planner_version"`
+	SourceCmd       string        `json:"source_cmd,omitempty"`
+	SourceNamespace string        `json:"source_namespace,omitempty"`
+	SourceService   string        `json:"source_service,omitempty"`
+	SourceKind      string        `json:"source_kind,omitempty"`
+	AlertArgs       []string      `json:"alert_args,omitempty"`
+	RedirectTarget  string        `json:"redirect_target,omitempty"`
+	RedirectAppend  bool          `json:"redirect_append,omitempty"`
+	BinDeps         []BinDep      `json:"bin_deps,omitempty"`
+	CompiledAt      time.Time     `json:"compiled_at"`
+	PlannerVersion  int           `json:"planner_version"`
 }
 
 // BinDep is one /bin/ script the lowered pipeline inlines. Hash is
@@ -168,12 +170,11 @@ func Lower(pipeline, customer, tier string, resolveBin BinResolver) (*LoweredPla
 		ShardLimit:      plan.ShardLimit,
 		TailMode:        plan.TailMode,
 		Follow:          plan.Follow,
-		FollowApp:       plan.FollowApp,
 		FollowPatterns:  plan.FollowPatterns,
 		SourceCmd:       plan.SourceCmd,
-		SourceApp:       plan.SourceApp,
 		SourceNamespace: plan.SourceNamespace,
 		SourceService:   plan.SourceService,
+		SourceKind:      plan.SourceKind,
 		AlertArgs:       plan.AlertArgs,
 		RedirectTarget:  plan.RedirectTarget,
 		RedirectAppend:  plan.RedirectAppend,
