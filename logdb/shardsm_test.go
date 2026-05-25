@@ -260,6 +260,99 @@ func TestShardSM_EvaluateActiveNoStaleWhenFresh(t *testing.T) {
 	}
 }
 
+func TestShardSM_EvaluateSuspendedReapsThenRelaunches(t *testing.T) {
+	fl := &fakeLauncher{}
+	vm := &fakeVolumeManager{findResult: map[string]*VolumeInfo{"s-test": {VolumeID: "vol-1", AZ: "us-east-2a"}}}
+	sm, db, entry := makeFixtureShardSM(t, StateSuspended, func(d *ShardSMDeps) {
+		d.Launcher = fl
+		d.Volumes = vm
+	})
+	entry.InstanceID = "i-dead"
+	entry.EBSVolumeID = "vol-1"
+	entry.AZ = "us-east-2a"
+
+	// Tick 1: reap the dead instance, hand off to LAUNCHING.
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate (reap): %v", err)
+	}
+	if len(fl.terminated) != 1 || fl.terminated[0] != "i-dead" {
+		t.Fatalf("dead instance not reaped: terminated=%v", fl.terminated)
+	}
+	if entry.InstanceID != "" {
+		t.Fatalf("InstanceID not cleared in memory: %q", entry.InstanceID)
+	}
+	rec, _, _ := db.GetShard("s-test")
+	if rec.InstanceID != "" {
+		t.Fatalf("InstanceID not cleared in store: %q", rec.InstanceID)
+	}
+	if rec.AZ != "us-east-2a" || rec.EBSVolumeID != "vol-1" {
+		t.Fatalf("reap clobbered az/volume: az=%q vol=%q", rec.AZ, rec.EBSVolumeID)
+	}
+	if st, _ := sm.State(context.Background()); st != StateLaunching {
+		t.Fatalf("after reap: got %q want LAUNCHING", st)
+	}
+
+	// Tick 2: LAUNCHING with the surviving volume → recovery relaunch.
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate (relaunch): %v", err)
+	}
+	waitForLaunch(t, sm)
+	if fl.launchCount() != 1 {
+		t.Fatalf("launch calls: got %d want 1", fl.launchCount())
+	}
+	if fl.calls[0].ExistingVolumeID != "vol-1" {
+		t.Fatalf("recovery launch must reattach vol-1, got %q", fl.calls[0].ExistingVolumeID)
+	}
+	if entry.InstanceID != "i-fake" {
+		t.Fatalf("replacement instance not stamped: %q", entry.InstanceID)
+	}
+}
+
+func TestShardSM_EvaluateSuspendedStrandedWhenVolumeGone(t *testing.T) {
+	fl := &fakeLauncher{}
+	vm := &fakeVolumeManager{} // FindByShard returns nil → volume gone
+	sm, _, entry := makeFixtureShardSM(t, StateSuspended, func(d *ShardSMDeps) {
+		d.Launcher = fl
+		d.Volumes = vm
+	})
+	entry.InstanceID = "i-dead"
+	entry.EBSVolumeID = "vol-gone"
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if st, _ := sm.State(context.Background()); st != StateGone {
+		t.Fatalf("stranded shard: got %q want GONE", st)
+	}
+	if len(fl.terminated) != 0 {
+		t.Fatalf("stranded check must short-circuit before reaping; terminated=%v", fl.terminated)
+	}
+}
+
+func TestShardSM_EvaluateSuspendedRestartAfterReapRelaunches(t *testing.T) {
+	// Crash recovery: we reaped the dead instance and cleared InstanceID,
+	// then crashed before firing Relaunch. Re-Evaluate must not try to
+	// reap nothing — it goes straight to LAUNCHING.
+	fl := &fakeLauncher{}
+	vm := &fakeVolumeManager{findResult: map[string]*VolumeInfo{"s-test": {VolumeID: "vol-1"}}}
+	sm, _, entry := makeFixtureShardSM(t, StateSuspended, func(d *ShardSMDeps) {
+		d.Launcher = fl
+		d.Volumes = vm
+	})
+	entry.InstanceID = "" // already reaped
+	entry.EBSVolumeID = "vol-1"
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(fl.terminated) != 0 {
+		t.Fatalf("nothing to reap; terminated=%v", fl.terminated)
+	}
+	if st, _ := sm.State(context.Background()); st != StateLaunching {
+		t.Fatalf("got %q want LAUNCHING", st)
+	}
+}
+
 func TestShardSM_LaunchingToIngestingOnMatchingHeartbeat(t *testing.T) {
 	sm, _, entry := makeFixtureShardSM(t, StateLaunching)
 	entry.InstanceID = "i-abc" // simulated post-launch tag; the guard reads it off the entry
@@ -354,9 +447,15 @@ func TestShardSM_IngestingToSuspendedOnStaleWithVolume(t *testing.T) {
 	if entry.State != StateSuspended {
 		t.Fatalf("state: got %q want SUSPENDED", entry.State)
 	}
-	if entry.InstanceID != "" || entry.Addr != "" {
-		t.Fatalf("SUSPENDED.OnEntry should have cleared InstanceID/Addr; got %q/%q",
-			entry.InstanceID, entry.Addr)
+	// SUSPENDED.OnEntry tears down the live connection (Addr/Shard) but
+	// KEEPS InstanceID — that's the dead instance evaluateSuspended must
+	// reap before relaunching. (Changed in B1.2; previously it cleared
+	// InstanceID, which lost the corpse's id.)
+	if entry.Addr != "" {
+		t.Fatalf("SUSPENDED.OnEntry should have cleared Addr; got %q", entry.Addr)
+	}
+	if entry.InstanceID != "i-old" {
+		t.Fatalf("SUSPENDED.OnEntry must keep InstanceID for the reap; got %q", entry.InstanceID)
 	}
 }
 

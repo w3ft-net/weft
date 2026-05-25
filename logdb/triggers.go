@@ -50,6 +50,15 @@ const (
 	// (the "reapStrandedSuspended" case in the old reconciler).
 	TriggerStranded Trigger = "stranded"
 
+	// Relaunch is fired by the shard's Evaluate() once SUSPENDED has
+	// reaped the dead instance (Terminate + clear InstanceID). It hands
+	// off to LAUNCHING, which relaunches a replacement reattaching the
+	// surviving volume (EBSVolumeID is still set). Splitting reap
+	// (SUSPENDED) from relaunch (LAUNCHING) keeps InstanceID
+	// unambiguous: in SUSPENDED it's always the dead instance, in
+	// LAUNCHING always empty-or-replacement.
+	TriggerRelaunch Trigger = "relaunch"
+
 	// AdminDelete is fired by operator action on an ARCHIVED shard.
 	// The only edge out of ARCHIVED.
 	TriggerAdminDelete Trigger = "admin-delete"

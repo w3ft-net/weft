@@ -54,6 +54,7 @@ type ShardSMDeps struct {
 	Store    *store.Store
 	Registry *ShardRegistry
 	Launcher ShardLaunchAPI // launches/terminates instances; nil in tests that don't drive launches
+	Volumes  VolumeManager  // resolves a shard's volume for the SUSPENDED stranded check; nil skips it
 	Clock    func() time.Time
 	// StaleThreshold mirrors heartbeatStaleThreshold; carried in deps
 	// so tests can shrink it without touching the package-level const.
@@ -180,6 +181,7 @@ func (s *ShardSM) configure() {
 	s.sm.Configure(StateSuspended).
 		OnEntry(s.onEnterSuspended).
 		PermitDynamic(TriggerHeartbeat, s.heartbeatTargetFromSuspended, s.heartbeatMatchesSuspended).
+		Permit(TriggerRelaunch, StateLaunching).
 		Permit(TriggerStranded, StateGone)
 
 	s.sm.Configure(StateArchived).
@@ -287,6 +289,8 @@ func (s *ShardSM) Evaluate(ctx context.Context) error {
 		return s.evaluateLaunching(ctx)
 	case StateIngesting, StateReadOnly:
 		return s.evaluateActive(ctx)
+	case StateSuspended:
+		return s.evaluateSuspended(ctx)
 	default:
 		return nil
 	}
@@ -374,6 +378,56 @@ func (s *ShardSM) evaluateActive(ctx context.Context) error {
 	return nil
 }
 
+// evaluateSuspended drives recovery's reap phase. SUSPENDED holds the
+// dead instance; its only job is to reap it and hand off to LAUNCHING,
+// which relaunches a replacement reattaching the surviving volume. If
+// the volume itself has vanished there's nothing to recover — fire
+// Stranded → GONE. Reaping (Terminate + clear InstanceID) is one fast,
+// idempotent API call, so unlike the launch it's fine to run inline:
+// a crash before the Relaunch fires just re-reaps next tick.
+func (s *ShardSM) evaluateSuspended(ctx context.Context) error {
+	// Stranded: the volume that made recovery worth attempting is gone.
+	if s.deps.Volumes != nil {
+		info, err := s.deps.Volumes.FindByShard(ctx, s.id)
+		if err != nil {
+			return fmt.Errorf("shardsm %s: stranded check: %w", s.id, err)
+		}
+		if info == nil {
+			return s.Fire(ctx, TriggerStranded) // → GONE
+		}
+	}
+
+	s.mu.Lock()
+	deadID := s.entry.InstanceID
+	az := s.entry.AZ
+	volumeID := s.entry.EBSVolumeID
+	stripeIndex := s.entry.StripeIndex
+	s.mu.Unlock()
+
+	// Reap the dead instance (clears ASG bookkeeping + decrements). An
+	// already-gone instance is a no-op inside Terminate. On failure,
+	// stay put and retry next tick — InstanceID is still set, so we
+	// haven't advanced.
+	if deadID != "" && s.deps.Launcher != nil {
+		if err := s.deps.Launcher.Terminate(ctx, deadID); err != nil {
+			log.Printf("shardsm %s: reap %s failed, retrying next tick: %v", s.id, deadID, err)
+			return nil
+		}
+	}
+
+	// Clear the instance (narrow write, AZ/volume/stripe preserved) so
+	// LAUNCHING is entered with InstanceID empty — the relaunch will
+	// reattach EBSVolumeID and stamp the replacement's id.
+	if err := s.deps.Store.SetShardLaunchResult(s.id, "", az, volumeID, stripeIndex); err != nil {
+		return fmt.Errorf("shardsm %s: clear instance before relaunch: %w", s.id, err)
+	}
+	s.mu.Lock()
+	s.entry.InstanceID = ""
+	s.mu.Unlock()
+
+	return s.Fire(ctx, TriggerRelaunch) // → LAUNCHING (recovery relaunch)
+}
+
 // ── Action stubs — Phase 2 wires the real bodies. ───────────────
 //
 // Each method is callable today (compiles + logs) so the FSM
@@ -404,11 +458,15 @@ func (s *ShardSM) configureOnHeartbeat(ctx context.Context, args ...any) error {
 	return nil
 }
 
+// onEnterSuspended tears down the dead connection but KEEPS InstanceID
+// — that's the dead instance Evaluate must reap before relaunching.
+// (Pure: no AWS side effects here; the reap + relaunch is Evaluate's
+// job, so a restart that lands in SUSPENDED re-drives it.)
 func (s *ShardSM) onEnterSuspended(ctx context.Context, args ...any) error {
-	log.Printf("shardsm %s: enter SUSPENDED (stub — Phase 2 kicks off recovery launch)", s.id)
+	log.Printf("shardsm %s: enter SUSPENDED — connection torn down; Evaluate will reap %s and relaunch",
+		s.id, s.entry.InstanceID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entry.InstanceID = ""
 	s.entry.Addr = ""
 	s.entry.Shard = nil
 	return nil

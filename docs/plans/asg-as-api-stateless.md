@@ -628,10 +628,32 @@ slices on this branch (merged together):
   `provisioner_asg_test.go`. NOTE: reuses `fakeVolumeManager` from
   `lifecycle_test.go` — re-home it to a surviving helper file when
   that file is deleted in slice D.
-- **Slice B — SM action bodies + `Evaluate` (component 6 cont):** B1
-  = ShardSM (`ShardEntry` gains AZ/StripeIndex, deps re-added, launch/
-  recovery/archive bodies, `Evaluate`); B2 = BucketSM cascade bodies +
-  `Evaluate`. IN PROGRESS.
+- **Slice B — SM action bodies + `Evaluate` (component 6 cont):**
+  IN PROGRESS.
+  - **B1.1 — ShardSM fresh launch + stale: SHIPPED** (`87eb643`).
+    Evaluate-only convergence (OnEntry stays pure). LAUNCHING fresh
+    launch (async goroutine + retry budget), INGESTING/READ_ONLY
+    stale→SUSPENDED/GONE. `ShardEntry` gains AZ/StripeIndex/
+    LaunchAttempts; store `SetShardLaunchResult` + `IncrementShard
+    LaunchAttempts`; deps re-add Launcher (`ShardLaunchAPI`) + budget.
+  - **B1.2 — ShardSM recovery (SUSPENDED→LAUNCHING): SHIPPED.**
+    Recovery is split across two states it already had, not a new
+    one: SUSPENDED *reaps* (Terminate dead instance + clear InstanceID,
+    inline since it's one fast idempotent call) then fires `Relaunch`
+    → LAUNCHING, which *relaunches* reattaching the surviving volume
+    (B1.1's recovery launch). This keeps InstanceID unambiguous per
+    state (SUSPENDED=dead, LAUNCHING=empty-or-replacement) — the fix
+    for the disambiguation worry, without a TERMINATING state.
+    `onEnterSuspended` now keeps InstanceID (clears only Addr/Shard);
+    stranded check via `Volumes.FindByShard` → Stranded→GONE; new
+    `TriggerRelaunch`. Restart-safe (reap idempotent; relaunch in
+    LAUNCHING).
+  - **B1.3 — `configureOnHeartbeat` gRPC dial + `onEnterArchived`
+    cleanup: NOT STARTED.** Heavier external surface (pb.ConfigureRequest
+    build via `Configurer`; `shard.Archive`/ColdShard/snapshot). Archive
+    carries its own Evaluate-vs-OnEntry decision (lean Evaluate, for
+    restart-safe retry, consistent with the launch decision).
+  - **B2 — BucketSM cascade bodies + `Evaluate`: NOT STARTED.**
 - **Slice C — provisioner cutover + lifecycle deletion (components 6,
   7):** the atomic switch. NOT STARTED.
 - **Slice D — test rewrites (component 9).** NOT STARTED.
