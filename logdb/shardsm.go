@@ -43,18 +43,12 @@ type ShardSM struct {
 // Kept narrow so test fixtures can mock individual fields rather
 // than constructing a full Provisioner.
 type ShardSMDeps struct {
-	Store      *store.Store
-	Registry   *ShardRegistry
-	Launcher   ShardLauncher
-	Volumes    VolumeManager   // nil in dev/test paths that don't exercise EBS
-	Configurer ShardConfigurer // gRPC dial + Configure
-	Clock      func() time.Time
+	Store    *store.Store
+	Registry *ShardRegistry
+	Clock    func() time.Time
 	// StaleThreshold mirrors heartbeatStaleThreshold; carried in deps
 	// so tests can shrink it without touching the package-level const.
 	StaleThreshold time.Duration
-	// LaunchRetryBudget caps LaunchAttempts before LAUNCHING fires
-	// LaunchFailed and transitions to GONE.
-	LaunchRetryBudget int
 }
 
 // ErrUnknownShard is returned by the state accessor when the
@@ -78,9 +72,6 @@ func NewShardSM(entry *ShardEntry, deps ShardSMDeps) *ShardSM {
 	}
 	if deps.StaleThreshold == 0 {
 		deps.StaleThreshold = heartbeatStaleThreshold
-	}
-	if deps.LaunchRetryBudget == 0 {
-		deps.LaunchRetryBudget = 5
 	}
 	s := &ShardSM{
 		id:    entry.ID,
