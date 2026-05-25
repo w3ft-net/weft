@@ -18,10 +18,7 @@ func makeFixtureBucketSM(t *testing.T, initialState BucketState) (*BucketSM, *st
 	bucket := seedBucket(t, db, initialState)
 	ab := &Bucket{ID: bucket.ID, Label: bucket.Label, Tier: "small", Target: 2, WindowDuration: time.Hour}
 	clock := func() time.Time { return time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC) }
-	sm := NewBucketSM(ab, BucketSMDeps{
-		Store: db,
-		Clock: clock,
-	})
+	sm := NewBucketSM(ab, db.DB(), clock)
 	return sm, db, ab
 }
 

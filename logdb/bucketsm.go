@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/qmuntal/stateless"
+	"gorm.io/gorm"
 
 	"github.com/kevlarcon/weft/store"
 )
@@ -27,33 +28,13 @@ import (
 // Concurrency: stateless's FiringQueued mode serializes triggers
 // per SM. Cross-bucket Evaluates can run in parallel.
 type BucketSM struct {
-	id     int64
-	bucket *Bucket
-	deps   BucketSMDeps
-	sm     *stateless.StateMachine
+	*Bucket // identity + config (ID, Label, Target, Tier, window methods); promoted
+
+	sm    *stateless.StateMachine
+	db    *gorm.DB         // persists the FSM's state column (external storage)
+	clock func() time.Time // test seam; stamps cascade_started_at
 
 	mu sync.Mutex // serialises action-internal mutations
-}
-
-// BucketSMDeps mirrors ShardSMDeps in shape — narrow on purpose so
-// test fixtures can mock individual pieces. The shard-SM factory is
-// passed in so WARMING.OnEntry can mint child SMs without circular
-// imports.
-type BucketSMDeps struct {
-	Store      *store.Store
-	Buckets    *BucketManager // for refreshes (Apps list, target, tier)
-	NewShardSM func(entry *ShardEntry) *ShardSM
-	Clock      func() time.Time
-	// CascadeStallThreshold is how long WARMING can run before
-	// OnTick starts extending outgoing-shard WindowEnds. Zero
-	// defaults to PrewarmLead.
-	CascadeStallThreshold time.Duration
-	// ExtensionStep is the per-extension window-end push when the
-	// cascade stalls. Zero defaults to PrewarmLead/2.
-	ExtensionStep time.Duration
-	// MaxExtensions caps WindowEnd extensions before WARMING gives
-	// up and proceeds with whatever incoming shards are ready.
-	MaxExtensions int
 }
 
 // ErrUnknownBucket is the bucket-FSM counterpart to
@@ -64,23 +45,14 @@ var ErrUnknownBucket = errors.New("bucket record not found")
 // NewBucketSM constructs a fresh SM bound to bucket. Like the shard
 // SM, the initial state is read lazily from the store via the
 // ExternalStorage accessor on the first transition.
-func NewBucketSM(bucket *Bucket, deps BucketSMDeps) *BucketSM {
-	if deps.Clock == nil {
-		deps.Clock = time.Now
-	}
-	if deps.CascadeStallThreshold == 0 {
-		deps.CascadeStallThreshold = PrewarmLead
-	}
-	if deps.ExtensionStep == 0 {
-		deps.ExtensionStep = PrewarmLead / 2
-	}
-	if deps.MaxExtensions == 0 {
-		deps.MaxExtensions = 3
+func NewBucketSM(bucket *Bucket, db *gorm.DB, clock func() time.Time) *BucketSM {
+	if clock == nil {
+		clock = time.Now
 	}
 	b := &BucketSM{
-		id:     bucket.ID,
-		bucket: bucket,
-		deps:   deps,
+		Bucket: bucket,
+		db:     db,
+		clock:  clock,
 	}
 	b.sm = stateless.NewStateMachineWithExternalStorage(
 		b.readState, b.writeState, stateless.FiringQueued,
@@ -88,9 +60,6 @@ func NewBucketSM(bucket *Bucket, deps BucketSMDeps) *BucketSM {
 	b.configure()
 	return b
 }
-
-// ID returns the bucket's surrogate id.
-func (b *BucketSM) ID() int64 { return b.id }
 
 // State reads the current state via the external-storage accessor.
 func (b *BucketSM) State(ctx context.Context) (BucketState, error) {
@@ -112,12 +81,13 @@ func (b *BucketSM) Fire(ctx context.Context, trigger Trigger, args ...any) error
 }
 
 func (b *BucketSM) readState(ctx context.Context) (stateless.State, error) {
-	rec, ok, err := b.deps.Store.GetBucket(b.id)
-	if err != nil {
-		return nil, fmt.Errorf("bucketsm read %d: %w", b.id, err)
-	}
-	if !ok {
+	var rec store.Bucket
+	err := b.db.Select("state").Where("id = ?", b.ID).First(&rec).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrUnknownBucket
+	}
+	if err != nil {
+		return nil, fmt.Errorf("bucketsm read %d: %w", b.ID, err)
 	}
 	if rec.State == "" {
 		// Defensive: should never happen post-migration-056, but if a
@@ -133,9 +103,9 @@ func (b *BucketSM) writeState(ctx context.Context, st stateless.State) error {
 	// Narrow write: only the state column. Lifecycle-owned columns
 	// (apps, target, tier) are written through SaveBucket, so this
 	// can't race a concurrent config writer over them.
-	if err := b.deps.Store.DB().Model(&store.Bucket{}).Where("id = ?", b.id).
+	if err := b.db.Model(&store.Bucket{}).Where("id = ?", b.ID).
 		Update("state", string(newState)).Error; err != nil {
-		return fmt.Errorf("bucketsm write %d=%s: %w", b.id, newState, err)
+		return fmt.Errorf("bucketsm write %d=%s: %w", b.ID, newState, err)
 	}
 	return nil
 }
@@ -171,31 +141,31 @@ func (b *BucketSM) configure() {
 // ── Action stubs — Phase 2 wires the real bodies ────────────────
 
 func (b *BucketSM) onEnterWarming(ctx context.Context, args ...any) error {
-	now := b.deps.Clock().UTC()
-	if err := b.deps.Store.DB().Model(&store.Bucket{}).Where("id = ?", b.id).
+	now := b.clock().UTC()
+	if err := b.db.Model(&store.Bucket{}).Where("id = ?", b.ID).
 		Update("cascade_started_at", &now).Error; err != nil {
-		return fmt.Errorf("bucketsm %d: set cascade_started_at: %w", b.id, err)
+		return fmt.Errorf("bucketsm %d: set cascade_started_at: %w", b.ID, err)
 	}
 	log.Printf("bucketsm %d (%s): enter WARMING (stub — Phase 2 mints incoming shard SMs)",
-		b.id, b.bucket.Label)
+		b.ID, b.Label)
 	return nil
 }
 
 func (b *BucketSM) onEnterRotating(ctx context.Context, args ...any) error {
 	log.Printf("bucketsm %d (%s): enter ROTATING (stub — Phase 2 fires RotateRequested on outgoing shards)",
-		b.id, b.bucket.Label)
+		b.ID, b.Label)
 	return nil
 }
 
 func (b *BucketSM) onEnterArchiving(ctx context.Context, args ...any) error {
 	log.Printf("bucketsm %d (%s): enter ARCHIVING (stub — Phase 2 fires ArchiveRequested on outgoing shards)",
-		b.id, b.bucket.Label)
+		b.ID, b.Label)
 	return nil
 }
 
 func (b *BucketSM) onEnterScalingDown(ctx context.Context, args ...any) error {
 	log.Printf("bucketsm %d (%s): enter SCALING_DOWN (stub — Phase 2 picks excess shards to rotate)",
-		b.id, b.bucket.Label)
+		b.ID, b.Label)
 	return nil
 }
 
@@ -203,9 +173,9 @@ func (b *BucketSM) onEnterStasis(ctx context.Context, args ...any) error {
 	// Clear cascade_started_at (NULL = no cascade in flight). A typed
 	// nil *time.Time binds as SQL NULL, keeping the column nullable
 	// rather than zero-valued.
-	if err := b.deps.Store.DB().Model(&store.Bucket{}).Where("id = ?", b.id).
+	if err := b.db.Model(&store.Bucket{}).Where("id = ?", b.ID).
 		Update("cascade_started_at", (*time.Time)(nil)).Error; err != nil {
-		return fmt.Errorf("bucketsm %d: clear cascade_started_at: %w", b.id, err)
+		return fmt.Errorf("bucketsm %d: clear cascade_started_at: %w", b.ID, err)
 	}
 	return nil
 }
