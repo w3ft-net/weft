@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/qmuntal/stateless"
@@ -37,6 +38,13 @@ type ShardSM struct {
 	sm    *stateless.StateMachine
 
 	mu sync.Mutex // serialises action-internal mutations of entry
+
+	// launchInFlight is set while an async launch goroutine is working,
+	// so successive Evaluate ticks don't kick a second launch for the
+	// same shard. In-memory only: a restart resets it to false and the
+	// next Evaluate re-drives any LAUNCHING row that never got an
+	// InstanceID (the launch is idempotent on retry).
+	launchInFlight atomic.Bool
 }
 
 // ShardSMDeps bundles the collaborators the action methods need.
@@ -45,10 +53,14 @@ type ShardSM struct {
 type ShardSMDeps struct {
 	Store    *store.Store
 	Registry *ShardRegistry
+	Launcher ShardLaunchAPI // launches/terminates instances; nil in tests that don't drive launches
 	Clock    func() time.Time
 	// StaleThreshold mirrors heartbeatStaleThreshold; carried in deps
 	// so tests can shrink it without touching the package-level const.
 	StaleThreshold time.Duration
+	// LaunchRetryBudget caps LaunchAttempts before LAUNCHING fires
+	// LaunchFailed and transitions to GONE. Zero defaults to 5.
+	LaunchRetryBudget int
 }
 
 // ErrUnknownShard is returned by the state accessor when the
@@ -72,6 +84,9 @@ func NewShardSM(entry *ShardEntry, deps ShardSMDeps) *ShardSM {
 	}
 	if deps.StaleThreshold == 0 {
 		deps.StaleThreshold = heartbeatStaleThreshold
+	}
+	if deps.LaunchRetryBudget == 0 {
+		deps.LaunchRetryBudget = 5
 	}
 	s := &ShardSM{
 		id:    entry.ID,
@@ -248,6 +263,115 @@ func (s *ShardSM) staleTargetFromActive(context.Context, ...any) (stateless.Stat
 		return StateSuspended, nil
 	}
 	return StateGone, nil
+}
+
+// ── Evaluate — the convergence driver ───────────────────────────
+//
+// Evaluate runs once per reconciler tick per shard. It reads the
+// persisted state, observes reality (the entry + clock), and fires
+// whatever trigger moves the shard toward where it should be. All
+// side-effectful convergence lives here rather than in OnEntry
+// actions, so a restart that drops straight into Evaluate re-drives
+// any half-finished work — there is no boot-vs-running mode.
+//
+// B1.1 covers the LAUNCHING (fresh launch + retry budget) and active
+// (stale-detection) paths. SUSPENDED recovery and ARCHIVED cleanup
+// land in B1.2.
+func (s *ShardSM) Evaluate(ctx context.Context) error {
+	st, err := s.State(ctx)
+	if err != nil {
+		return err
+	}
+	switch st {
+	case StateLaunching:
+		return s.evaluateLaunching(ctx)
+	case StateIngesting, StateReadOnly:
+		return s.evaluateActive(ctx)
+	default:
+		return nil
+	}
+}
+
+// evaluateLaunching drives a LAUNCHING shard toward INGESTING. With an
+// InstanceID already stamped it just waits for the heartbeat (which
+// promotes it). Otherwise it either gives up (budget exhausted →
+// LaunchFailed → GONE) or kicks an async launch — async because the
+// launch polls AWS for minutes, far too long to block the tick.
+func (s *ShardSM) evaluateLaunching(ctx context.Context) error {
+	s.mu.Lock()
+	instanceID := s.entry.InstanceID
+	attempts := s.entry.LaunchAttempts
+	s.mu.Unlock()
+
+	if instanceID != "" {
+		return nil // launched; waiting for the first heartbeat to promote
+	}
+	if attempts >= s.deps.LaunchRetryBudget {
+		return s.Fire(ctx, TriggerLaunchFailed)
+	}
+	if s.deps.Launcher == nil {
+		return nil // no launcher wired (dev/test path)
+	}
+	if !s.launchInFlight.CompareAndSwap(false, true) {
+		return nil // a launch is already in flight for this shard
+	}
+	go s.runLaunch()
+	return nil
+}
+
+// runLaunch performs the launch and persists the outcome. Detached
+// from the tick context (the launch must outlive the tick), bounded by
+// the launcher's own poll budget. Success stamps instance/AZ/volume;
+// failure bumps launch_attempts so a later Evaluate fires LaunchFailed
+// once the budget is spent.
+func (s *ShardSM) runLaunch() {
+	defer s.launchInFlight.Store(false)
+
+	s.mu.Lock()
+	spec := LaunchSpec{
+		ShardID:          s.id,
+		Tier:             s.entry.Tier,
+		AZ:               s.entry.AZ,
+		ExistingVolumeID: s.entry.EBSVolumeID, // "" for a fresh shard
+		SizeGB:           freshShardVolumeGB,
+	}
+	stripeIndex := s.entry.StripeIndex
+	s.mu.Unlock()
+
+	res, err := s.deps.Launcher.Launch(context.Background(), spec)
+	if err != nil {
+		log.Printf("shardsm %s: launch failed: %v", s.id, err)
+		if e := s.deps.Store.IncrementShardLaunchAttempts(s.id); e != nil {
+			log.Printf("shardsm %s: bump launch_attempts: %v", s.id, e)
+		}
+		s.mu.Lock()
+		s.entry.LaunchAttempts++
+		s.mu.Unlock()
+		return
+	}
+
+	if err := s.deps.Store.SetShardLaunchResult(s.id, res.InstanceID, res.AZ, res.VolumeID, stripeIndex); err != nil {
+		log.Printf("shardsm %s: persist launch result: %v", s.id, err)
+		return // leave InstanceID unstamped; next Evaluate retries
+	}
+	s.mu.Lock()
+	s.entry.InstanceID = res.InstanceID
+	s.entry.AZ = res.AZ
+	s.entry.EBSVolumeID = res.VolumeID
+	s.mu.Unlock()
+	log.Printf("shardsm %s: launched (instance=%s vol=%s az=%s); awaiting heartbeat",
+		s.id, res.InstanceID, res.VolumeID, res.AZ)
+}
+
+// evaluateActive fires HeartbeatStale when an INGESTING/READ_ONLY shard
+// has gone silent past the stale threshold. The PermitDynamic on
+// HeartbeatStale routes it to SUSPENDED (volume intact) or GONE (no
+// volume) — see staleTargetFromActive.
+func (s *ShardSM) evaluateActive(ctx context.Context) error {
+	if s.actuallyStale(ctx) {
+		return s.Fire(ctx, TriggerHeartbeatStale)
+	}
+	return nil
 }
 
 // ── Action stubs — Phase 2 wires the real bodies. ───────────────

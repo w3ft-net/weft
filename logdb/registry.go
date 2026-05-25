@@ -56,6 +56,18 @@ type ShardEntry struct {
 	// them produce repeated errors. Zero (unset) is treated as fresh
 	// so direct-init test fixtures don't get filtered out.
 	LastHeartbeatAt time.Time
+	// AZ and StripeIndex are the shard FSM's striping assignment
+	// (migration 056). AZ pins recovery launches to the volume's
+	// availability zone; StripeIndex is the bucket-assigned position
+	// that survives a cascade so the next window mirrors the current
+	// AZ layout. StripeIndex is a pointer so "unassigned" (nil) is
+	// distinct from index 0.
+	AZ          string
+	StripeIndex *int
+	// LaunchAttempts is the per-shard retry counter the LAUNCHING
+	// Evaluate path bumps on a failed launch; once it reaches the
+	// launch budget, Evaluate fires LaunchFailed → GONE.
+	LaunchAttempts int
 }
 
 // SuspendFailureThreshold is the number of consecutive ingest failures
@@ -312,6 +324,12 @@ func (r *ShardRegistry) LoadFromStore(reconstruct func(rec store.ShardRecord) (s
 			Shard:          sh,
 			HeartbeatToken: rec.HeartbeatToken,
 			BucketID:       rec.BucketID,
+			AZ:             rec.AZ,
+			StripeIndex:    rec.StripeIndex,
+			LaunchAttempts: rec.LaunchAttempts,
+		}
+		if rec.LastHeartbeatAt != nil {
+			r.entries[rec.ID].LastHeartbeatAt = *rec.LastHeartbeatAt
 		}
 		r.mu.Unlock()
 	}

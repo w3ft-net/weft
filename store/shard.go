@@ -113,6 +113,31 @@ func (s *Store) DeleteShard(id string) error {
 	return s.db.Delete(&ShardRecord{}, "id = ?", id).Error
 }
 
+// SetShardLaunchResult persists the identifiers a successful launch
+// produced (instance, AZ, volume, stripe index). Narrow on purpose —
+// Select names the four columns so a zero value (e.g. an empty
+// instance) still writes, but nothing else (state, heartbeat, window)
+// is touched. The FSM owns these columns; this can't race a concurrent
+// state write.
+func (s *Store) SetShardLaunchResult(id, instanceID, az, volumeID string, stripeIndex *int) error {
+	return s.db.Model(&ShardRecord{}).Where("id = ?", id).
+		Select("InstanceID", "AZ", "EBSVolumeID", "StripeIndex").
+		Updates(&ShardRecord{
+			InstanceID:  instanceID,
+			AZ:          az,
+			EBSVolumeID: volumeID,
+			StripeIndex: stripeIndex,
+		}).Error
+}
+
+// IncrementShardLaunchAttempts bumps launch_attempts by one. Used by
+// the FSM after a failed launch so a later Evaluate can fire
+// LaunchFailed once the retry budget is exhausted.
+func (s *Store) IncrementShardLaunchAttempts(id string) error {
+	return s.db.Model(&ShardRecord{}).Where("id = ?", id).
+		UpdateColumn("launch_attempts", gorm.Expr("launch_attempts + 1")).Error
+}
+
 // ListShards returns all shard records.
 func (s *Store) ListShards() ([]ShardRecord, error) {
 	var records []ShardRecord

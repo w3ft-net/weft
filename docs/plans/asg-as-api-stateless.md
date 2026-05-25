@@ -608,6 +608,34 @@ branch `the_big_lift`:
 `go test ./logdb/ ./store/ -tags test` all clean on the new
 commit.
 
+**2026-05-25 — re-homed + Phase 2 started.** The Phase 1 scaffold
+was re-homed off `the_big_lift` onto branch `asg-as-api-phase1`,
+folded atop the app→service rename; the migration shipped as `056`
+(not `030`). Two pre-Phase-2 cleanups to the FSM scaffolding:
+`BucketSMDeps` collapsed into `BucketSM` (embeds `*Bucket`, holds a
+`*gorm.DB` not a `*store.Store`); dead Phase-2 fields dropped from
+`ShardSMDeps` (Launcher/Volumes/Configurer/LaunchRetryBudget) — they
+return in slice B with their consumers.
+
+Phase 2 is being landed as four reviewable, individually-compiling
+slices on this branch (merged together):
+
+- **Slice A — `ASGProvisioner` (component 5): SHIPPED** (`a795232`).
+  Per-AZ launch primitive built *additively* alongside the old
+  `ASGLauncher` (which stays until slice C). `Launch(spec)` (one path,
+  fresh vs recovery keyed on `spec.ExistingVolumeID`), `Terminate`,
+  `AZsForTier`, `StripeAZ`. Full unit coverage in
+  `provisioner_asg_test.go`. NOTE: reuses `fakeVolumeManager` from
+  `lifecycle_test.go` — re-home it to a surviving helper file when
+  that file is deleted in slice D.
+- **Slice B — SM action bodies + `Evaluate` (component 6 cont):** B1
+  = ShardSM (`ShardEntry` gains AZ/StripeIndex, deps re-added, launch/
+  recovery/archive bodies, `Evaluate`); B2 = BucketSM cascade bodies +
+  `Evaluate`. IN PROGRESS.
+- **Slice C — provisioner cutover + lifecycle deletion (components 6,
+  7):** the atomic switch. NOT STARTED.
+- **Slice D — test rewrites (component 9).** NOT STARTED.
+
 ### What's left
 
 **Phase 1 leftovers (none expected, but verify):**

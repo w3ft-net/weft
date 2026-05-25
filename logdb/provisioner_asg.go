@@ -29,6 +29,18 @@ type ASGTaggerAPI interface {
 // its DuckDB data (matches entrypoint.sh's mount of /dev/sdf).
 const shardVolumeDevice = "/dev/sdf"
 
+// freshShardVolumeGB is the size of a newly-created shard data volume.
+// TODO(B2): make this tier-aware — the bucket SM should set SizeGB on
+// the spec from tier config rather than every tier sharing one size.
+const freshShardVolumeGB int32 = 50
+
+// ShardLaunchAPI is the slice of ASGProvisioner the shard FSM depends
+// on. Narrow so test fakes don't have to stand up the whole launcher.
+type ShardLaunchAPI interface {
+	Launch(ctx context.Context, spec LaunchSpec) (LaunchResult, error)
+	Terminate(ctx context.Context, instanceID string) error
+}
+
 // LaunchSpec describes one shard instance to bring up. ExistingVolumeID
 // distinguishes a fresh launch (empty: create a new gp3 volume) from a
 // recovery launch (set: reattach the surviving volume). The (Tier, AZ)
