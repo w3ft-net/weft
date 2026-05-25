@@ -1,0 +1,2 @@
+We now have all of our log shard management functionality -- I think, I hope -- isolated in the package logdb. Please do a thorough analysis of all the code here and picture our shard management as a series of hierarchical state machines -- buckets as state machines and shards as state machiens within them. What states do you see for each? What transitions? Where are there impedance mismatches with this mental model of the system?
+

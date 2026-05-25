@@ -35,6 +35,22 @@ type ShardRecord struct {
 	// christen() resolves the target bucket's surrogate via the
 	// BucketManager and stamps the int here.
 	BucketID int64 `gorm:"not null;column:bucket_id"`
+	// IngestFailures, IngestUnhealthy, LastHeartbeatAt, LaunchAttempts,
+	// AZ, StripeIndex are populated by the shard FSM (migration 056).
+	// IngestFailures and IngestUnhealthy persist the in-memory
+	// `Suspended`/IngestFailures pair that previously lost state on
+	// restart. LastHeartbeatAt likewise — its prior in-memory zero
+	// value made every entry look "fresh" for a tick window post-
+	// boot, masking dead shards. LaunchAttempts is the per-shard
+	// retry counter across reap ticks. AZ + StripeIndex carry the
+	// striping assignment so recovery launches don't have to
+	// re-derive them from volume tags.
+	IngestFailures   int       `gorm:"not null;default:0;column:ingest_failures"`
+	IngestUnhealthy  bool      `gorm:"not null;default:false;column:ingest_unhealthy"`
+	LastHeartbeatAt  *time.Time `gorm:"column:last_heartbeat_at"`
+	LaunchAttempts   int       `gorm:"not null;default:0;column:launch_attempts"`
+	AZ               string    `gorm:"column:az"`
+	StripeIndex      *int      `gorm:"column:stripe_index"`
 }
 
 // GenerateShardHeartbeatToken mints a fresh 256-bit random bearer token
