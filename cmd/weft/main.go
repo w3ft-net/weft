@@ -751,7 +751,7 @@ func runSetup() {
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "--app":
+		case "--service":
 			if i+1 < len(args) {
 				app = args[i+1]
 				i++
@@ -765,7 +765,7 @@ func runSetup() {
 	}
 
 	if app == "" || sampleFile == "" {
-		fmt.Fprintln(os.Stderr, "usage: weft setup --app NAME --sample FILE")
+		fmt.Fprintln(os.Stderr, "usage: weft setup --service NAME --sample FILE")
 		os.Exit(1)
 	}
 
@@ -931,7 +931,7 @@ func runSourceAdd(client *shell.HTTPCoordinator) {
 				namespace = args[i+1]
 				i++
 			}
-		case "--app":
+		case "--service":
 			if i+1 < len(args) {
 				app = args[i+1]
 				i++
@@ -975,12 +975,12 @@ func runSourceAdd(client *shell.HTTPCoordinator) {
 	}
 
 	if namespace == "" || app == "" || logGroup == "" || schemaFile == "" || roleARN == "" {
-		fmt.Fprintln(os.Stderr, `usage: weft source add --namespace NS --app NAME --log-group GROUP --schema FILE --role-arn ARN
+		fmt.Fprintln(os.Stderr, `usage: weft source add --namespace NS --service NAME --log-group GROUP --schema FILE --role-arn ARN
     [--account AWS_ACCOUNT_ID] [--region REGION] [--interval DURATION] [--external-id ID]`)
 		os.Exit(1)
 	}
 	if strings.Contains(app, "/") {
-		fmt.Fprintln(os.Stderr, "--app should be the sub-app name only; pass the namespace via --namespace")
+		fmt.Fprintln(os.Stderr, "--service should be the bare service name only; pass the namespace via --namespace")
 		os.Exit(1)
 	}
 	if region == "" {
@@ -1037,7 +1037,7 @@ func runSourceList(client *shell.HTTPCoordinator) {
 		fmt.Println("No sources configured.")
 		return
 	}
-	fmt.Printf("%-15s %-20s %-10s %-35s %-12s %s\n", "NAMESPACE", "APP", "SOURCE", "LOG GROUP", "REGION", "LAST POLL")
+	fmt.Printf("%-15s %-20s %-10s %-35s %-12s %s\n", "NAMESPACE", "SERVICE", "SOURCE", "LOG GROUP", "REGION", "LAST POLL")
 	for _, s := range sources {
 		lastPoll := s.LastPollAt
 		if lastPoll == "" {
@@ -1049,7 +1049,7 @@ func runSourceList(client *shell.HTTPCoordinator) {
 
 func runSourceRemove(client *shell.HTTPCoordinator) {
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: weft source remove --namespace NS --app NAME")
+		fmt.Fprintln(os.Stderr, "usage: weft source remove --namespace NS --service NAME")
 		os.Exit(1)
 	}
 	args := os.Args[3:]
@@ -1061,7 +1061,7 @@ func runSourceRemove(client *shell.HTTPCoordinator) {
 				namespace = args[i+1]
 				i++
 			}
-		case "--app":
+		case "--service":
 			if i+1 < len(args) {
 				app = args[i+1]
 				i++
@@ -1069,7 +1069,7 @@ func runSourceRemove(client *shell.HTTPCoordinator) {
 		}
 	}
 	if namespace == "" || app == "" {
-		fmt.Fprintln(os.Stderr, "usage: weft source remove --namespace NS --app NAME")
+		fmt.Fprintln(os.Stderr, "usage: weft source remove --namespace NS --service NAME")
 		os.Exit(1)
 	}
 	if err := client.RemoveSource(namespace, app); err != nil {

@@ -47,10 +47,10 @@ x-anchors:
     kind: main
 
 sources:
-  - app: api
+  - service: api
     path: /var/log/api/*.log
     <<: *base
-  - app: worker
+  - service: worker
     path: /var/log/worker/*.log
     <<: *base
     kind: queries
@@ -67,7 +67,7 @@ sources:
 		t.Fatalf("expected 2 sources, got %d", len(cfg.Sources))
 	}
 	// The merge key must have spliced the anchored fields into both.
-	if cfg.Sources[0].App != "api" || cfg.Sources[0].Path != "/var/log/api/*.log" {
+	if cfg.Sources[0].Service != "api" || cfg.Sources[0].Path != "/var/log/api/*.log" {
 		t.Fatalf("source 0 wrong: %+v", cfg.Sources[0])
 	}
 	// Merge spliced the anchored kind into source 0 (a real struct field).

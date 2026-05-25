@@ -36,7 +36,7 @@ x-anchors:
 sources:
   # Ordinary application log. kind defaults to "main" if omitted; shown
   # explicitly here for clarity. Lands at /log/<ns>/api/main.log.
-  - app: api
+  - service: api
     kind: main
     path: /var/log/api/*.log
     <<: [*json_app, *with_metrics]
@@ -46,12 +46,12 @@ sources:
   # folding into api/main.log. If a glob source above also matched this
   # file, weftd's deconfliction lets this explicit source win (no
   # double-ingest).
-  - app: api
+  - service: api
     kind: audit
     path: /var/log/api/audit.log
     <<: *json_app
 
   # systemd journal source (no path:; tails the unit's journal).
-  - app: worker
+  - service: worker
     unit: worker.service
     <<: *with_metrics

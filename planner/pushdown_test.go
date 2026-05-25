@@ -27,7 +27,7 @@ func TestPushdown_SingleStage_Awk(t *testing.T) {
 		},
 		{
 			name:     "app equals string",
-			pipeline: `cat warp.log | awk '$APP == "vimgym"'`,
+			pipeline: `cat warp.log | awk '$NAMESPACE == "vimgym"'`,
 			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym'`,
 		},
 		{
@@ -141,7 +141,7 @@ func TestPushdown_SingleStage_Jq(t *testing.T) {
 		},
 		{
 			name:     "select on meta _app",
-			pipeline: `cat warp.log | jq 'select(._app == "vimgym")'`,
+			pipeline: `cat warp.log | jq 'select(._namespace == "vimgym")'`,
 			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym'`,
 		},
 		{

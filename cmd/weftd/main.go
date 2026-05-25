@@ -125,7 +125,7 @@ type VersionConfig struct {
 }
 
 type SourceConfig struct {
-	App     string        `yaml:"app,omitempty"`     // bare service name within namespace (e.g. "coordinator")
+	Service string        `yaml:"service,omitempty"` // bare service name within namespace (e.g. "coordinator")
 	Kind    string        `yaml:"kind,omitempty"`    // log-stream kind; defaults to "main". Heartbeats/metrics/runtime ship their own kinds.
 	Path    string        `yaml:"path"`              // file path or glob (file tailing)
 	Unit    string        `yaml:"unit,omitempty"`    // systemd unit name (journal tailing)
@@ -338,7 +338,7 @@ func main() {
 		src := src // capture loop var
 
 		// Derive the service name for this source.
-		app := src.App
+		app := src.Service
 		if app == "" && src.Unit != "" {
 			app = strings.TrimSuffix(src.Unit, ".service")
 		}

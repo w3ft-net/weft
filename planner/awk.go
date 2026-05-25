@@ -28,14 +28,17 @@ type awkPushdown struct {
 	limitSafe bool
 }
 
-// metaVars maps weft meta-variable names to SQL column names. The
-// SERVICE/HOST aliases point at the same columns as APP/INSTANCE so
-// users coming from OTel/Datadog vocabulary find what they expect.
+// metaVars maps weft meta-variable names to SQL column names.
+// NAMESPACE/SERVICE/KIND address the three source-coordinate columns
+// directly (the old $APP, which conflated namespace and service, is
+// gone). HOST stays an alias for INSTANCE so users coming from
+// OTel/Datadog vocabulary find what they expect.
 // See docs/plans/ingest-dimensions.md.
 var metaVars = map[string]string{
 	"LEVEL":         "level",
-	"APP":           "namespace",
-	"SERVICE":       "namespace",
+	"NAMESPACE":     "namespace",
+	"SERVICE":       "service",
+	"KIND":          "kind",
 	"INSTANCE":      "instance",
 	"HOST":          "instance",
 	"TS":            "ts",
@@ -388,7 +391,7 @@ func awkExprToSQL(expr awk.Expr) (string, string) {
 	return "", ""
 }
 
-// awkFieldToSQL converts $LEVEL, $APP, $3, etc. to SQL column references.
+// awkFieldToSQL converts $LEVEL, $NAMESPACE, $3, etc. to SQL column references.
 func awkFieldToSQL(e *awk.FieldExpr) (string, string) {
 	switch idx := e.Index.(type) {
 	case *awk.IdentExpr:

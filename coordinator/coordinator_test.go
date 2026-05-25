@@ -414,7 +414,7 @@ func TestQuery_CustomerIsolation(t *testing.T) {
 
 func TestQuery_WarpLogAppFilter(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Execute(`cat warp.log | awk '$APP == "callbox"'`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat warp.log | awk '$NAMESPACE == "callbox"'`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}

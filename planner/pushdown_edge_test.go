@@ -1055,7 +1055,7 @@ func TestEdge_WarpLog(t *testing.T) {
 	}{
 		{
 			name:     "warp.log with awk app filter",
-			pipeline: `cat warp.log | awk '$APP == "vimgym" && $LEVEL == "ERROR"'`,
+			pipeline: `cat warp.log | awk '$NAMESPACE == "vimgym" && $LEVEL == "ERROR"'`,
 			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR'`,
 		},
 		{
@@ -1065,7 +1065,7 @@ func TestEdge_WarpLog(t *testing.T) {
 		},
 		{
 			name:     "warp.log with jq meta app filter",
-			pipeline: `cat warp.log | jq 'select(._app == "callbox")'`,
+			pipeline: `cat warp.log | jq 'select(._namespace == "callbox")'`,
 			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'callbox'`,
 		},
 		{
