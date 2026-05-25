@@ -5,6 +5,7 @@ import (
 	"time"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/shard"
 )
 
 // DevFixtureTime constants for the sample data time windows.
@@ -21,12 +22,15 @@ func devPayload(m map[string]any) []byte {
 }
 
 func devRow(raw string, fields []string, ts time.Time, level, app, instance, customer string, payload []byte) *pb.LogRow {
+	ns, svc, kind := shard.SplitApp(app)
 	return &pb.LogRow{
 		Raw:         raw,
 		Fields:      fields,
 		TsUnixNs:    ts.UnixNano(),
 		Level:       level,
-		App:         app,
+		Namespace:   ns,
+		Service:     svc,
+		Kind:        kind,
 		Instance:    instance,
 		Customer:    customer,
 		PayloadJson: payload,

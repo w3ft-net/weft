@@ -31,9 +31,9 @@ func TestExportToS3_DirectWrite(t *testing.T) {
 	defer ds.Close()
 
 	rows := []*pb.LogRow{
-		{Raw: "direct s3 export row 1", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
-		{Raw: "direct s3 export row 2", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
-		{Raw: "direct s3 export row 3", App: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
+		{Raw: "direct s3 export row 1", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
+		{Raw: "direct s3 export row 2", Namespace: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
+		{Raw: "direct s3 export row 3", Namespace: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
 	}
 	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatal(err)
@@ -80,8 +80,8 @@ func TestExportToS3_AppPartitioned(t *testing.T) {
 		t.Fatal(err)
 	}
 	dsVim.Ingest([]*pb.LogRow{
-		{Raw: "vimgym log", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
-		{Raw: "vimgym error", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
+		{Raw: "vimgym log", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
+		{Raw: "vimgym error", Namespace: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
 	}, nil)
 	vimPath := fmt.Sprintf("s3://%s/kevlar/vimgym/2026/03/shard-vimgym.parquet", ColdBucket)
 	if err := dsVim.ExportToS3Parquet(vimPath, s3cfg); err != nil {
@@ -95,7 +95,7 @@ func TestExportToS3_AppPartitioned(t *testing.T) {
 		t.Fatal(err)
 	}
 	dsCb.Ingest([]*pb.LogRow{
-		{Raw: "callbox log", App: "callbox", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
+		{Raw: "callbox log", Namespace: "callbox", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
 	}, nil)
 	cbPath := fmt.Sprintf("s3://%s/kevlar/callbox/2026/03/shard-callbox.parquet", ColdBucket)
 	if err := dsCb.ExportToS3Parquet(cbPath, s3cfg); err != nil {

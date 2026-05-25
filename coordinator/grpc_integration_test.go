@@ -10,8 +10,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/kevlarcon/weft/compute"
-	"github.com/kevlarcon/weft/logdb"
 	computesvc "github.com/kevlarcon/weft/compute/service"
+	"github.com/kevlarcon/weft/logdb"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 	shardsvc "github.com/kevlarcon/weft/shard/service"

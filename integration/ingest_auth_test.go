@@ -87,7 +87,7 @@ func TestIngestStream_RejectsDeletedCustomer(t *testing.T) {
 		// stream — that's fine, the assertion is on the final
 		// CloseAndRecv.
 		_ = stream.Send(&pb.LogRow{
-			App:      "integration/ghost",
+			Namespace: "integration", Service: "ghost",
 			Customer: custName,
 			Raw:      fmt.Sprintf("ghost row %d — customer no longer exists", i),
 			Instance: "test-host",

@@ -23,7 +23,7 @@ import (
 func TestLiveFilter_CutAppliesToLiveRow(t *testing.T) {
 	t.Helper()
 	runFilterCase(t, `tail -f vimgym.log | cut -d' ' -f3`,
-		&pb.LogRow{App: "vimgym", Raw: "2026-03-28T12:00:00 INFO vimgym i-001 request completed"},
+		&pb.LogRow{Namespace: "vimgym", Raw: "2026-03-28T12:00:00 INFO vimgym i-001 request completed"},
 		[]string{"vimgym"})
 }
 
@@ -32,10 +32,10 @@ func TestLiveFilter_CutAppliesToLiveRow(t *testing.T) {
 func TestLiveFilter_GrepFiltersLiveRow(t *testing.T) {
 	pipeline := `tail -f vimgym.log | grep ERROR`
 	runFilterCase(t, pipeline,
-		&pb.LogRow{App: "vimgym", Raw: "2026-03-28T12:00:00 ERROR boom"},
+		&pb.LogRow{Namespace: "vimgym", Raw: "2026-03-28T12:00:00 ERROR boom"},
 		[]string{"2026-03-28T12:00:00 ERROR boom"})
 	runFilterCase(t, pipeline,
-		&pb.LogRow{App: "vimgym", Raw: "2026-03-28T12:00:00 INFO healthy"},
+		&pb.LogRow{Namespace: "vimgym", Raw: "2026-03-28T12:00:00 INFO healthy"},
 		nil)
 }
 
@@ -44,7 +44,7 @@ func TestLiveFilter_GrepFiltersLiveRow(t *testing.T) {
 // differently for the same query.
 func TestLiveFilter_SedSubstitution(t *testing.T) {
 	runFilterCase(t, `tail -f vimgym.log | sed 's/vimgym/APP/g'`,
-		&pb.LogRow{App: "vimgym", Raw: "2026-03-28T12:00:00 INFO vimgym i-001 request"},
+		&pb.LogRow{Namespace: "vimgym", Raw: "2026-03-28T12:00:00 INFO vimgym i-001 request"},
 		[]string{"2026-03-28T12:00:00 INFO APP i-001 request"})
 }
 
@@ -53,10 +53,10 @@ func TestLiveFilter_SedSubstitution(t *testing.T) {
 func TestLiveFilter_Chain(t *testing.T) {
 	pipeline := `tail -f vimgym.log | grep INFO | sed 's/vimgym/APP/g' | cut -d' ' -f1-3`
 	runFilterCase(t, pipeline,
-		&pb.LogRow{App: "vimgym", Raw: "2026-03-28T12:00:00 INFO vimgym i-001 request"},
+		&pb.LogRow{Namespace: "vimgym", Raw: "2026-03-28T12:00:00 INFO vimgym i-001 request"},
 		[]string{"2026-03-28T12:00:00 INFO APP"})
 	runFilterCase(t, pipeline,
-		&pb.LogRow{App: "vimgym", Raw: "2026-03-28T12:00:00 ERROR vimgym i-001 boom"},
+		&pb.LogRow{Namespace: "vimgym", Raw: "2026-03-28T12:00:00 ERROR vimgym i-001 boom"},
 		nil)
 }
 
@@ -66,10 +66,10 @@ func TestLiveFilter_Chain(t *testing.T) {
 func TestLiveFilter_AppGateNamespaceMatchesSubApp(t *testing.T) {
 	pipeline := `tail -f acme.log | grep ERROR`
 	runFilterCase(t, pipeline,
-		&pb.LogRow{App: "acme/api", Raw: "ERROR from acme/api"},
+		&pb.LogRow{Namespace: "acme", Service: "api", Raw: "ERROR from acme/api"},
 		[]string{"ERROR from acme/api"})
 	runFilterCase(t, pipeline,
-		&pb.LogRow{App: "globex/api", Raw: "ERROR from globex/api"},
+		&pb.LogRow{Namespace: "globex", Service: "api", Raw: "ERROR from globex/api"},
 		nil)
 }
 
@@ -92,4 +92,3 @@ func runFilterCase(t *testing.T, pipeline string, row *pb.LogRow, want []string)
 		}
 	}
 }
-

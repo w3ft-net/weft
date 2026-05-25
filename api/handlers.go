@@ -1329,12 +1329,12 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 // --- Apps ---
 
 func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
-	resp, err := s.coordClient.ListApps(s.coordCtx(r), &pb.ListAppsRequest{})
+	resp, err := s.coordClient.ListServices(s.coordCtx(r), &pb.ListServicesRequest{})
 	if err != nil {
 		http.Error(w, "coordinator error", http.StatusBadGateway)
 		return
 	}
-	json.NewEncoder(w).Encode(resp.Apps)
+	json.NewEncoder(w).Encode(resp.Services)
 }
 
 func (s *Server) handleIngestionStatus(w http.ResponseWriter, r *http.Request) {

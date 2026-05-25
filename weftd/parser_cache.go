@@ -86,7 +86,7 @@ func (c *ParserCache) Install(app, customer, schemaYAML string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("load schema: %w", err)
 	}
-	schema.App = app
+	schema.Service = app
 	schema.Customer = customer
 
 	parser, err := ingest.NewParser(schema)

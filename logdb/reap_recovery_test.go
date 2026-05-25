@@ -156,8 +156,10 @@ func TestReap_LegacyShardWithoutVolume(t *testing.T) {
 // reapDeadShards run in the same tick; without a grace window, reap
 // sees the new entry absent from the live-heartbeat map and kills
 // it immediately. Seen 2026-04-18 in prod as:
-//   provisioner: christened shard-... at ... volume=
-//   provisioner: reaping dead shard shard-... (no heartbeat, no volume)
+//
+//	provisioner: christened shard-... at ... volume=
+//	provisioner: reaping dead shard shard-... (no heartbeat, no volume)
+//
 // happening in the same second.
 func TestReap_GracePeriodOnFreshChristening(t *testing.T) {
 	reg := NewShardRegistry()

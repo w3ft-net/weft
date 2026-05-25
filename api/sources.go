@@ -7,7 +7,6 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -60,9 +59,8 @@ func (s *Server) handleAgentSample(w http.ResponseWriter, r *http.Request) {
 	sampleJSON, _ := json.Marshal(req.Lines)
 	detectionJSON, _ := json.Marshal(detection)
 
-	fullApp := agent.Namespace + "/" + req.App
 	if err := s.store.UpsertPendingLogGroup(
-		ns.ID, fullApp,
+		ns.ID, req.App,
 		req.Instance, req.Deployment,
 		string(sampleJSON), string(detectionJSON),
 		len(req.Lines), req.Partial,
@@ -176,9 +174,9 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]pendingResp, 0, len(sources))
 	for _, lg := range sources {
-		// Strip the namespace prefix so the response keeps the same
-		// short-form app shape the frontend and weftd agents consume.
-		shortService := strings.TrimPrefix(lg.Service, lg.NamespaceName+"/")
+		// lg.Service is the bare service name; the namespace is carried
+		// separately in the response below.
+		shortService := lg.Service
 		sample := lg.Sample
 		if sample == "" {
 			sample = "[]"
@@ -229,7 +227,6 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fullApp := namespace + "/" + app
 	// A source is configurable when it's pending (first-time config) or
 	// already configured (swapping schema after a resample — the row
 	// stayed configured and kept ingesting). A still-sampling source has
@@ -264,7 +261,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 
 	// Build schema.
 	schema := &ingest.Schema{
-		App:             fullApp,
+		Service:         app,
 		Customer:        session.ActiveCustomerName,
 		Format:          req.Format,
 		TimestampField:  req.TimestampField,
@@ -287,7 +284,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	if err := func() error {
 		res := s.store.DB().Model(&store.LogGroup{}).
 			Where("namespace_id = ? AND app = ? AND status IN ?",
-				ns.ID, fullApp, []store.LogGroupStatus{store.StatusPending, store.StatusConfigured}).
+				ns.ID, app, []store.LogGroupStatus{store.StatusPending, store.StatusConfigured}).
 			Updates(map[string]any{
 				"status":                store.StatusConfigured,
 				"schema_yaml":           string(schemaYAML),
@@ -464,9 +461,8 @@ func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	fullApp := req.Namespace + "/" + req.App
 	schema := &ingest.Schema{
-		App:             fullApp,
+		Service:         req.App,
 		Customer:        session.ActiveCustomerName,
 		Format:          req.Format,
 		TimestampField:  req.TimestampField,
@@ -483,7 +479,7 @@ func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Reques
 
 	if _, err := s.coordClient.AddSource(s.coordCtx(r), &pb.AddSourceRequest{
 		Namespace:    req.Namespace,
-		App:          fullApp,
+		Service:      req.App,
 		LogGroup:     req.LogGroup,
 		Region:       req.Region,
 		SchemaYaml:   string(schemaYAML),
@@ -497,7 +493,7 @@ func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Reques
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"status": "configured", "app": fullApp})
+	json.NewEncoder(w).Encode(map[string]string{"status": "configured", "app": req.App})
 }
 
 // handleDeleteSource removes a configured log source. Path shape:
@@ -518,10 +514,9 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fullApp := namespace + "/" + app
 	if _, err := s.coordClient.RemoveSource(s.coordCtx(r), &pb.RemoveSourceRequest{
 		Namespace: namespace,
-		App:       fullApp,
+		Service:   app,
 	}); err != nil {
 		http.Error(w, "remove source: "+err.Error(), http.StatusBadGateway)
 		return

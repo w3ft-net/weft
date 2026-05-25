@@ -79,12 +79,15 @@ func (s *dlqFailingShard) Ingest(_ []*pb.LogRow, _ shard.IngestRecorder) error {
 func dlqTestRows(app string, n int) []*pb.LogRow {
 	rows := make([]*pb.LogRow, n)
 	now := time.Now().UnixNano()
+	ns, svc, kind := shard.SplitApp(app)
 	for i := range rows {
 		rows[i] = &pb.LogRow{
-			App:      app,
-			Customer: "kevlar",
-			Raw:      fmt.Sprintf("row-%d", i),
-			TsUnixNs: now,
+			Namespace: ns,
+			Service:   svc,
+			Kind:      kind,
+			Customer:  "kevlar",
+			Raw:       fmt.Sprintf("row-%d", i),
+			TsUnixNs:  now,
 		}
 	}
 	return rows

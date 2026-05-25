@@ -42,13 +42,13 @@ type sampleSubmitRecorder struct {
 func (r *sampleSubmitRecorder) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest, _ ...grpc.CallOption) (*pb.SubmitSampleResponse, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.samples = append(r.samples, req.App)
+	r.samples = append(r.samples, req.Service)
 	return &pb.SubmitSampleResponse{Status: "pending"}, nil
 }
 
 func (r *sampleSubmitRecorder) GetSourceStatus(_ context.Context, req *pb.GetSourceStatusRequest, _ ...grpc.CallOption) (*pb.GetSourceStatusResponse, error) {
 	r.mu.Lock()
-	r.statuses = append(r.statuses, req.App)
+	r.statuses = append(r.statuses, req.Service)
 	r.mu.Unlock()
 	return &pb.GetSourceStatusResponse{Status: "unknown"}, nil
 }

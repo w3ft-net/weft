@@ -12,6 +12,7 @@ import (
 	"time"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/shard"
 )
 
 // TestDockerStack_JqFieldExtraction reproduces the .pct failure: ingesting
@@ -30,6 +31,7 @@ func TestDockerStack_JqFieldExtraction(t *testing.T) {
 	// Canonical 3-seg app (<ns>/<svc>/<kind>) — the post-d81b562 layout
 	// requires an explicit kind; "main" is the ordinary-log stream.
 	app := fmt.Sprintf("jqtest/r%d-metrics/main", time.Now().UnixNano())
+	_, jqSvc, jqKind := shard.SplitApp(app)
 	logPath := fmt.Sprintf("/log/%s.log", app)
 
 	now := time.Now()
@@ -44,7 +46,8 @@ func TestDockerStack_JqFieldExtraction(t *testing.T) {
 	for i, m := range metrics {
 		payload, _ := json.Marshal(m)
 		stream.Send(&pb.LogRow{
-			App:         app,
+			Service:     jqSvc,
+			Kind:        jqKind,
 			Customer:    "testcust",
 			Raw:         string(payload),
 			PayloadJson: payload,

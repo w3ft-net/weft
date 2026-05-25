@@ -121,7 +121,7 @@ func generateRow(customer, app string) *pb.LogRow {
 
 	return &pb.LogRow{
 		Raw:         raw,
-		App:         app,
+		Service:     app,
 		Level:       level,
 		TsUnixNs:    now.UnixNano(),
 		Instance:    instance,

@@ -104,7 +104,7 @@ func (p *Poller) poll(ctx context.Context, lg store.LogGroupWithAWSAccount) {
 		log.Printf("poller[%s]: parse schema: %v", lg.Service, err)
 		return
 	}
-	schema.App = lg.Service
+	schema.Service = lg.Service
 	schema.Customer = lg.CustomerName
 
 	parser, err := ingest.NewParser(&schema)
@@ -142,6 +142,12 @@ func (p *Poller) poll(ctx context.Context, lg store.LogGroupWithAWSAccount) {
 		if err != nil {
 			continue
 		}
+		// Stamp the routing/storage coordinates the parser can't know.
+		// The parser sets Service from the schema (overridden to the log
+		// group's service); the poller owns namespace and kind.
+		// CloudWatch sources are single-stream, so kind is always "main".
+		row.Namespace = lg.NamespaceName
+		row.Kind = "main"
 		allRows = append(allRows, row)
 	}
 

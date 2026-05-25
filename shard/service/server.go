@@ -151,7 +151,7 @@ func (s *Server) Configure(_ context.Context, req *pb.ConfigureRequest) (*pb.Con
 		}
 		s.shard = ds
 		s.id = req.ShardId
-		s.apps = req.Apps
+		s.apps = req.Services
 		return &pb.ConfigureResponse{}, nil
 	}
 
@@ -165,7 +165,7 @@ func (s *Server) Configure(_ context.Context, req *pb.ConfigureRequest) (*pb.Con
 		ShardID:        req.ShardId,
 		WindowStart:    winStart,
 		WindowEnd:      winEnd,
-		Apps:           req.Apps,
+		Apps:           req.Services,
 		HeartbeatToken: req.HeartbeatToken,
 	}
 	if err := shard.SaveIdentity(s.dataDir, ident); err != nil {
@@ -178,10 +178,10 @@ func (s *Server) Configure(_ context.Context, req *pb.ConfigureRequest) (*pb.Con
 	}
 	s.shard = ds
 	s.id = req.ShardId
-	s.apps = req.Apps
+	s.apps = req.Services
 	s.heartbeatToken = req.HeartbeatToken
 	log.Printf("shard configured: id=%s apps=%v window=[%s, %s]",
-		req.ShardId, req.Apps, req.WindowStart, req.WindowEnd)
+		req.ShardId, req.Services, req.WindowStart, req.WindowEnd)
 
 	return &pb.ConfigureResponse{}, nil
 }

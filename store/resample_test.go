@@ -23,7 +23,10 @@ func setupSource(t *testing.T, name string) (db *Store, nsID, custID uint, nsNam
 		t.Fatal(err)
 	}
 	app = "svc"
-	fullApp = nsName + "/" + app
+	// log_groups.app stores the bare service (migration 060); the
+	// namespace scopes it via namespace_id. fullApp is the bare service
+	// too — kept as a distinct name only to minimise churn in callers.
+	fullApp = app
 	return db, ns.ID, cust.ID, nsName, app, fullApp
 }
 

@@ -25,6 +25,7 @@ import (
 
 	"github.com/kevlarcon/weft/auth"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -55,9 +56,9 @@ func TestDockerStack_ShardAdoption(t *testing.T) {
 	var apps []string
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := client.ListApps(context.Background(), &pb.ListAppsRequest{})
-		if err == nil && len(resp.Apps) > 0 {
-			apps = resp.Apps
+		resp, err := client.ListServices(context.Background(), &pb.ListServicesRequest{})
+		if err == nil && len(resp.Services) > 0 {
+			apps = resp.Services
 			break
 		}
 		time.Sleep(2 * time.Second)
@@ -87,11 +88,17 @@ func TestDockerStack_IngestAndQuery(t *testing.T) {
 	run := time.Now().UnixNano()
 	appA := fmt.Sprintf("integration/r%d-a/main", run)
 	appB := fmt.Sprintf("integration/r%d-b/main", run)
+	// The wire carries split (service, kind); the coordinator stamps
+	// namespace ("integration") from the token. appA/appB stay composite
+	// for the query-path assertions below.
+	_, svcA, kindA := shard.SplitApp(appA)
+	_, svcB, kindB := shard.SplitApp(appB)
 
 	now := time.Now()
 	for i := 0; i < 10; i++ {
 		stream.Send(&pb.LogRow{
-			App:      appA,
+			Service:  svcA,
+			Kind:     kindA,
 			Customer: "testcust",
 			Raw:      fmt.Sprintf("app-a log line %d", i),
 			Level:    "INFO",
@@ -101,7 +108,8 @@ func TestDockerStack_IngestAndQuery(t *testing.T) {
 	}
 	for i := 0; i < 10; i++ {
 		stream.Send(&pb.LogRow{
-			App:      appB,
+			Service:  svcB,
+			Kind:     kindB,
 			Customer: "testcust",
 			Raw:      fmt.Sprintf("app-b log line %d", i),
 			Level:    "ERROR",
@@ -170,7 +178,7 @@ func TestDockerStack_ShardSuspendAndRecovery(t *testing.T) {
 	now := time.Now()
 	for i := 0; i < 5; i++ {
 		stream.Send(&pb.LogRow{
-			App:      "suspend-test/logs",
+			Namespace: "suspend-test", Service: "logs",
 			Customer: "testcust",
 			Raw:      fmt.Sprintf("suspend test line %d", i),
 			Level:    "INFO",
@@ -243,7 +251,7 @@ func TestDockerStack_CustomerIsolation(t *testing.T) {
 	now := time.Now()
 	for i := 0; i < 5; i++ {
 		if err := stream.Send(&pb.LogRow{
-			App:      "isolation/secret",
+			Namespace: "isolation", Service: "secret",
 			Raw:      fmt.Sprintf("alpha secret line %d", i),
 			TsUnixNs: now.Add(time.Duration(i) * time.Second).UnixNano(),
 		}); err != nil {

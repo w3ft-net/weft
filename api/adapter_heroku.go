@@ -133,13 +133,12 @@ func (HerokuAdapter) frameToRows(f rfc5424Frame) (*pb.LogRow, *pb.LogRow) {
 		procBase = "platform"
 	}
 
-	canonicalApp := appname
-	if procBase != "" {
-		canonicalApp = appname + "/" + procBase
-	}
-
+	// appname is the service; the dyno proc becomes the kind (empty
+	// procBase → "main" downstream). The coordinator stamps namespace
+	// from the token.
 	canonical := &pb.LogRow{
-		App:      canonicalApp,
+		Service:  appname,
+		Kind:     procBase,
 		Instance: instance,
 		Raw:      f.message,
 		TsUnixNs: f.ts.UnixNano(),
@@ -149,9 +148,9 @@ func (HerokuAdapter) frameToRows(f rfc5424Frame) (*pb.LogRow, *pb.LogRow) {
 	// l2met detection lives in detectL2met which returns nil when the
 	// line isn't metric-shaped — most Heroku frames take the early-out.
 	if metricsPayload, ok := detectL2met(f.message); ok {
-		metricsApp := appname + "/metrics"
 		metricsRow := &pb.LogRow{
-			App:         metricsApp,
+			Service:     appname,
+			Kind:        "metrics",
 			Instance:    instance,
 			Raw:         f.message,
 			TsUnixNs:    f.ts.UnixNano(),

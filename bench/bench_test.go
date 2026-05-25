@@ -345,7 +345,7 @@ func benchIngest(b *testing.B, rows int) {
 		prebuilt[i] = &pb.LogRow{
 			LineNum:  int64(i),
 			Raw:      fmt.Sprintf("%s INFO bench i-001 test row %d", ts.Format("2006/01/02 15:04:05"), r.Int()),
-			App:      "kevlar/bench",
+			Namespace: "kevlar", Service: "bench",
 			Level:    "INFO",
 			Instance: "i-001",
 			Customer: "kevlar",

@@ -23,9 +23,9 @@ func testParquet(t *testing.T) string {
 	defer ds.Close()
 
 	rows := []*pb.LogRow{
-		{Raw: "error in vimgym", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
-		{Raw: "info in vimgym", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
-		{Raw: "warn in callbox", App: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
+		{Raw: "error in vimgym", Namespace: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
+		{Raw: "info in vimgym", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
+		{Raw: "warn in callbox", Namespace: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
 	}
 	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatal(err)

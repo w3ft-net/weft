@@ -1087,14 +1087,36 @@ func stampDimensions(row *pb.LogRow) {
 // Version) are stamped on top. When no parser is available, falls back
 // to the pre-flag behavior: raw + Fields, ingestion-time timestamp,
 // empty Level.
+// splitFullApp breaks the agent's internal "namespace/service/kind"
+// composite back into its parts for the wire. weftd builds the
+// composite as namespace + "/" + service + "/" + sourceKind, so this is
+// its inverse; it mirrors the coordinator/shard SplitApp defaulting
+// (missing kind → "main"). The composite is still the parser-cache key
+// and log prefix; only the LogRow carries the split fields now.
+func splitFullApp(fullApp string) (namespace, service, kind string) {
+	parts := strings.SplitN(fullApp, "/", 3)
+	switch len(parts) {
+	case 1:
+		return parts[0], "", "main"
+	case 2:
+		return parts[0], parts[1], "main"
+	default:
+		return parts[0], parts[1], parts[2]
+	}
+}
+
 func buildLogRow(line, customer, instance, app string) *pb.LogRow {
 	now := time.Now()
+
+	namespace, service, kind := splitFullApp(app)
 
 	if parseClientSide {
 		slot := parserCache.Slot(app)
 		if parser := slot.Parser(); parser != nil {
 			msg, _ := parser.ParseLine(line, now)
-			msg.App = app
+			msg.Namespace = namespace
+			msg.Service = service
+			msg.Kind = kind
 			msg.Customer = customer
 			msg.Instance = instance
 			msg.Deployment = globalDeployment
@@ -1111,7 +1133,9 @@ func buildLogRow(line, customer, instance, app string) *pb.LogRow {
 	}
 
 	row := &pb.LogRow{
-		App:        app,
+		Namespace:  namespace,
+		Service:    service,
+		Kind:       kind,
 		Customer:   customer,
 		Instance:   instance,
 		Deployment: globalDeployment,

@@ -214,11 +214,10 @@ type errJob struct {
 	err error
 }
 
-func (j *errJob) Send(ComputeMessage)            {}
-func (j *errJob) SendRow(*pb.ResultRow, string)  {}
-func (j *errJob) SendSentinel(string)            {}
-func (j *errJob) Result() (string, error)        { return "", j.err }
+func (j *errJob) Send(ComputeMessage)           {}
+func (j *errJob) SendRow(*pb.ResultRow, string) {}
+func (j *errJob) SendSentinel(string)           {}
+func (j *errJob) Result() (string, error)       { return "", j.err }
 func (j *errJob) Stream() LineStream {
 	return newSliceLineStream(nil, j.err)
 }
-

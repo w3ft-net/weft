@@ -37,11 +37,11 @@ func exportToParquet(t *testing.T, rows []*pb.LogRow) string {
 
 func testRows() []*pb.LogRow {
 	return []*pb.LogRow{
-		{Raw: "error in vimgym", App: "vimgym", Level: "ERROR", Customer: "kevlar", Instance: "i-001", TsUnixNs: coldT0.Add(1 * time.Second).UnixNano()},
-		{Raw: "info in vimgym", App: "vimgym", Level: "INFO", Customer: "kevlar", Instance: "i-001", TsUnixNs: coldT0.Add(2 * time.Second).UnixNano()},
-		{Raw: "error in callbox", App: "callbox", Level: "ERROR", Customer: "kevlar", Instance: "i-002", TsUnixNs: coldT0.Add(3 * time.Second).UnixNano()},
-		{Raw: "info in callbox", App: "callbox", Level: "INFO", Customer: "kevlar", Instance: "i-002", TsUnixNs: coldT0.Add(4 * time.Second).UnixNano()},
-		{Raw: "other customer", App: "vimgym", Level: "INFO", Customer: "acme", Instance: "i-999", TsUnixNs: coldT0.Add(5 * time.Second).UnixNano()},
+		{Raw: "error in vimgym", Namespace: "vimgym", Level: "ERROR", Customer: "kevlar", Instance: "i-001", TsUnixNs: coldT0.Add(1 * time.Second).UnixNano()},
+		{Raw: "info in vimgym", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", Instance: "i-001", TsUnixNs: coldT0.Add(2 * time.Second).UnixNano()},
+		{Raw: "error in callbox", Namespace: "callbox", Level: "ERROR", Customer: "kevlar", Instance: "i-002", TsUnixNs: coldT0.Add(3 * time.Second).UnixNano()},
+		{Raw: "info in callbox", Namespace: "callbox", Level: "INFO", Customer: "kevlar", Instance: "i-002", TsUnixNs: coldT0.Add(4 * time.Second).UnixNano()},
+		{Raw: "other customer", Namespace: "vimgym", Level: "INFO", Customer: "acme", Instance: "i-999", TsUnixNs: coldT0.Add(5 * time.Second).UnixNano()},
 	}
 }
 
@@ -182,12 +182,12 @@ func benchColdQuery(b *testing.B, n int) {
 	base := coldT0
 	for i := range rows {
 		rows[i] = &pb.LogRow{
-			Raw:      "bench log line with some content for realistic sizing",
-			App:      "vimgym",
-			Level:    "INFO",
-			Customer: "kevlar",
-			Instance: "i-001",
-			TsUnixNs: base.Add(time.Duration(i) * time.Millisecond).UnixNano(),
+			Raw:       "bench log line with some content for realistic sizing",
+			Namespace: "vimgym",
+			Level:     "INFO",
+			Customer:  "kevlar",
+			Instance:  "i-001",
+			TsUnixNs:  base.Add(time.Duration(i) * time.Millisecond).UnixNano(),
 		}
 	}
 

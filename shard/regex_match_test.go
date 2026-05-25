@@ -33,9 +33,9 @@ func TestDuckDB_RegexpMatches_PinsPushdownContract(t *testing.T) {
 	defer s.Close()
 
 	rows := []*pb.LogRow{
-		{Raw: "2026-03-28T10:00:01 ERROR vimgym i-001 connection timeout", Customer: "kevlar", App: "vimgym", TsUnixNs: 1},
-		{Raw: "2026-03-28T10:00:05 INFO vimgym i-001 request completed", Customer: "kevlar", App: "vimgym", TsUnixNs: 2},
-		{Raw: "2026-03-28T10:00:09 DEBUG vimgym i-001 cache miss", Customer: "kevlar", App: "vimgym", TsUnixNs: 3},
+		{Raw: "2026-03-28T10:00:01 ERROR vimgym i-001 connection timeout", Customer: "kevlar", Namespace: "vimgym", TsUnixNs: 1},
+		{Raw: "2026-03-28T10:00:05 INFO vimgym i-001 request completed", Customer: "kevlar", Namespace: "vimgym", TsUnixNs: 2},
+		{Raw: "2026-03-28T10:00:09 DEBUG vimgym i-001 cache miss", Customer: "kevlar", Namespace: "vimgym", TsUnixNs: 3},
 	}
 	if err := s.Ingest(rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)

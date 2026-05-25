@@ -35,8 +35,8 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 	// weft/coordinator main logs (kind=main)
 	for i := 0; i < 5; i++ {
 		rows = append(rows, &pb.LogRow{
-			TsUnixNs: base.Add(time.Duration(i) * time.Minute).UnixNano(),
-			App:      "weft/coordinator/main",
+			TsUnixNs:  base.Add(time.Duration(i) * time.Minute).UnixNano(),
+			Namespace: "weft", Service: "coordinator", Kind: "main",
 			Raw:      "coordinator: handling query",
 			Level:    "INFO",
 			Instance: "i-coord-001",
@@ -47,8 +47,8 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 	// weft/shard main logs (kind=main)
 	for i := 0; i < 5; i++ {
 		rows = append(rows, &pb.LogRow{
-			TsUnixNs: base.Add(time.Duration(i) * time.Minute).UnixNano(),
-			App:      "weft/shard/main",
+			TsUnixNs:  base.Add(time.Duration(i) * time.Minute).UnixNano(),
+			Namespace: "weft", Service: "shard", Kind: "main",
 			Raw:      "shard: ingesting batch",
 			Level:    "INFO",
 			Instance: "i-shard-001",
@@ -60,8 +60,8 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 	// the shape weftd's system-metrics collector ships).
 	for i := 0; i < 5; i++ {
 		rows = append(rows, &pb.LogRow{
-			TsUnixNs:    base.Add(time.Duration(i) * time.Minute).UnixNano(),
-			App:         "weft/coordinator/metrics",
+			TsUnixNs:  base.Add(time.Duration(i) * time.Minute).UnixNano(),
+			Namespace: "weft", Service: "coordinator", Kind: "metrics",
 			Raw:         `{"collector":"cpu","value":42}`,
 			Level:       "METRIC",
 			Instance:    "i-coord-001",
@@ -72,12 +72,12 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 
 	// A row from a different namespace to verify isolation.
 	rows = append(rows, &pb.LogRow{
-		TsUnixNs: base.UnixNano(),
-		App:      "grantcentral",
-		Raw:      "grantcentral: should not appear",
-		Level:    "INFO",
-		Instance: "i-gc-001",
-		Customer: "kevlar",
+		TsUnixNs:  base.UnixNano(),
+		Namespace: "grantcentral",
+		Raw:       "grantcentral: should not appear",
+		Level:     "INFO",
+		Instance:  "i-gc-001",
+		Customer:  "kevlar",
 	})
 
 	if err := ds.Ingest(rows, nil); err != nil {

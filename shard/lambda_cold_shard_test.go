@@ -145,7 +145,7 @@ func BenchmarkColdShard_RemoteQuery(b *testing.B) {
 	rows := make([]*pb.LogRow, 10_000)
 	for i := range rows {
 		rows[i] = &pb.LogRow{
-			Raw: "bench log line", App: "vimgym",
+			Raw: "bench log line", Namespace: "vimgym",
 			Level: "INFO", Customer: "kevlar",
 			TsUnixNs: coldT0.Add(time.Duration(i) * time.Millisecond).UnixNano(),
 		}

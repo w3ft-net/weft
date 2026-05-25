@@ -78,7 +78,6 @@ func (r *recordingASGApi) terminates() []recordedTerminate {
 	return out
 }
 
-
 // ── Tests ────────────────────────────────────────────────────
 
 // Integration coverage for the terminate-on-archive path. LocalStack
@@ -107,11 +106,11 @@ func TestTerminateOnArchive_CallsASGTerminate(t *testing.T) {
 
 	shardID := "shard-term-" + testSuffix()
 	bucket := &logdb.Bucket{
-		ID:              1,
-		Label:           "default",
-		Apps:            nil,
-		Target:          0,
-		Tier:            "small",
+		ID:             1,
+		Label:          "default",
+		Services:       nil,
+		Target:         0,
+		Tier:           "small",
 		WindowDuration: time.Hour,
 	}
 

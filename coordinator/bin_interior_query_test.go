@@ -73,14 +73,17 @@ func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, 
 }
 
 func logRow(app, level, customer string, ts time.Time) *pb.LogRow {
+	ns, svc, kind := shard.SplitApp(app)
 	return &pb.LogRow{
-		Raw:      level + " " + app + " line",
-		Fields:   []string{level, app, "line"},
-		TsUnixNs: ts.UnixNano(),
-		Level:    level,
-		App:      app,
-		Instance: "i-1",
-		Customer: customer,
+		Raw:       level + " " + app + " line",
+		Fields:    []string{level, app, "line"},
+		TsUnixNs:  ts.UnixNano(),
+		Level:     level,
+		Namespace: ns,
+		Service:   svc,
+		Kind:      kind,
+		Instance:  "i-1",
+		Customer:  customer,
 	}
 }
 

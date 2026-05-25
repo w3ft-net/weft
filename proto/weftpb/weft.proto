@@ -36,7 +36,7 @@ service ShardQuery {
 
 message ConfigureRequest {
   string shard_id = 1;
-  repeated string apps = 2;
+  repeated string services = 2;
   string window_start = 3; // RFC3339
   string window_end = 4;   // RFC3339
   // heartbeat_token is the per-shard bearer the coordinator minted at
@@ -95,7 +95,10 @@ message ResultRow {
 message LogRow {
   int64 line_num = 1 [deprecated = true];
   string raw = 2;
-  string app = 3;
+  // Bare service name within the sender's namespace (e.g. "coordinator").
+  // The coordinator derives the namespace from the agent/poller token —
+  // this is NOT a "namespace/service" composite.
+  string service = 3;
   string level = 4;
   int64 ts_unix_ns = 5;
   string instance = 6;       // hostname of the emitting machine
@@ -111,6 +114,12 @@ message LogRow {
   string pod = 16;            // k8s pod name (k8s mode only)
   string container = 17;      // k8s container name (k8s mode only)
   string node = 18;           // stable workload identity (file-sourced; see docs/plans/dimensions-from-files.md)
+  // namespace + kind complete the (namespace, service, kind) source
+  // coordinates that used to travel joined inside the old composite app
+  // string. The coordinator authoritatively overwrites namespace from
+  // the sender's token (row-level security); kind defaults to "main".
+  string namespace = 19;
+  string kind = 20;
 }
 
 message IngestRequest {
@@ -214,8 +223,8 @@ message ShardDescriptor {
   string lambda_url = 3;
   // Parquet path in S3 (cold shards only).
   string parquet_path = 4;
-  // Apps this shard covers (cold shards need this for ColdShard construction).
-  repeated string apps = 5;
+  // Services this shard covers (cold shards need this for ColdShard construction).
+  repeated string services = 5;
 }
 
 message ExecuteQueryRequest {
@@ -267,8 +276,8 @@ service WeftCoordinator {
   // queries go to the strict planner; non-log work runs through warp.
   rpc Execute(CoordinatorExecuteRequest) returns (stream CoordinatorExecuteResponse);
 
-  // ListApps returns the available app names (pseudofiles).
-  rpc ListApps(ListAppsRequest) returns (ListAppsResponse);
+  // ListServices returns the available service names (pseudofiles).
+  rpc ListServices(ListServicesRequest) returns (ListServicesResponse);
 
   // SampleCloudWatchSource assumes the customer's cross-account role and
   // pulls a handful of recent events so the dashboard can show a preview
@@ -373,7 +382,7 @@ message TokenInfo {
   string label = 2;
   bool revoked = 3;
   string created_at = 4;
-  string app = 5;
+  string service = 5;
 }
 
 message RevokeTokenRequest {
@@ -446,17 +455,17 @@ message Notice {
   string body  = 4;
 }
 
-message ListAppsRequest {
-  string customer = 1;  // filter apps by customer (from JWT)
+message ListServicesRequest {
+  string customer = 1;  // filter services by customer (from JWT)
 }
 
-message ListAppsResponse {
-  repeated string apps = 1;
+message ListServicesResponse {
+  repeated string services = 1;
 }
 
 // Source management messages
 message AddSourceRequest {
-  string app = 1;
+  string service = 1;
   string customer = 2;
   string log_group = 3;
   string region = 4;
@@ -497,7 +506,7 @@ message ListSourcesResponse {
 }
 
 message SourceInfo {
-  string app = 1;
+  string service = 1;
   string customer = 2;
   string log_group = 3;
   string region = 4;
@@ -507,7 +516,7 @@ message SourceInfo {
 }
 
 message RemoveSourceRequest {
-  string app = 1;
+  string service = 1;
   string customer = 2;
   string namespace = 3;
 }
@@ -621,7 +630,7 @@ message ShardHealth {
 
 message SubmitSampleRequest {
   string token = 1;             // agent token (wft_...) for auth
-  string app = 2;               // bare app name within namespace
+  string service = 2;               // bare service name within namespace
   string instance = 3;          // hostname of agent
   string deployment = 4;        // fleet/scaling-unit (was host_group)
   repeated string lines = 5;    // sample log lines
@@ -638,7 +647,7 @@ message SubmitSampleResponse {
 
 message GetSourceStatusRequest {
   string token = 1; // agent token (wft_...) for auth
-  string app = 2;   // bare app name within namespace
+  string service = 2;   // bare service name within namespace
 }
 
 message GetSourceStatusResponse {

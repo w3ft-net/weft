@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/shard"
 )
 
 // s3PutObjectAPI is the slice of *s3.Client that DLQ actually uses.
@@ -74,14 +75,14 @@ func (d *DLQ) Write(rows []*pb.LogRow) string {
 
 	for _, r := range rows {
 		enc.Encode(map[string]any{
-			"app":       r.App,
-			"customer":  r.Customer,
-			"raw":       r.Raw,
-			"level":     r.Level,
-			"instance":  r.Instance,
-			"ts_ns":     r.TsUnixNs,
-			"fields":    r.Fields,
-			"payload":   string(r.PayloadJson),
+			"app":        shard.JoinApp(r.Namespace, r.Service, r.Kind),
+			"customer":   r.Customer,
+			"raw":        r.Raw,
+			"level":      r.Level,
+			"instance":   r.Instance,
+			"ts_ns":      r.TsUnixNs,
+			"fields":     r.Fields,
+			"payload":    string(r.PayloadJson),
 			"deployment": r.Deployment,
 		})
 	}

@@ -35,7 +35,7 @@ import (
 )
 
 const (
-	shard0HostPort = "localhost:9000"
+	shard0HostPort      = "localhost:9000"
 	computeAddrHostPort = "localhost:9010"
 
 	// Address the shard container uses to reach the compute container
@@ -66,7 +66,7 @@ func TestDirectToCompute_Op1_ShardStreamsDirectlyToCompute(t *testing.T) {
 	testShardID := "test-direct-to-compute-op1"
 	_, err := shardClient.Configure(ctx, &pb.ConfigureRequest{
 		ShardId:        testShardID,
-		Apps:           []string{"directcompute/app"},
+		Services:       []string{"directcompute/app"},
 		WindowStart:    "2026-04-23T00:00:00Z",
 		WindowEnd:      "2026-04-24T00:00:00Z",
 		HeartbeatToken: "dev-test-token",
@@ -87,8 +87,8 @@ func TestDirectToCompute_Op1_ShardStreamsDirectlyToCompute(t *testing.T) {
 	rows := make([]*pb.LogRow, nRows)
 	for i := range rows {
 		rows[i] = &pb.LogRow{
-			Raw:      fmt.Sprintf("%s-row-%d", prefix, i),
-			App:      "directcompute/app",
+			Raw:       fmt.Sprintf("%s-row-%d", prefix, i),
+			Namespace: "directcompute", Service: "app",
 			Level:    "INFO",
 			Customer: "kevlar",
 			TsUnixNs: now.Add(time.Duration(i) * time.Second).UnixNano(),

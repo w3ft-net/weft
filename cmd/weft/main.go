@@ -849,7 +849,7 @@ func runIngest() {
 	maxTs := time.Unix(0, maxNs)
 
 	if dbPath == "" {
-		dbPath = fmt.Sprintf("%s.duckdb", schema.App)
+		dbPath = fmt.Sprintf("%s.duckdb", schema.Service)
 	}
 	ds, err := shard.NewDuckDBShard("ingest", dbPath)
 	if err != nil {

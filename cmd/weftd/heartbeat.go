@@ -163,8 +163,11 @@ func runHeartbeatSnapshots(ctx context.Context, client pb.WeftCoordinatorClient,
 					continue
 				}
 				app := namespace + "/" + s.Service + "/heartbeats"
+				ns, svc, kind := splitFullApp(app)
 				row := &pb.LogRow{
-					App:         app,
+					Namespace:   ns,
+					Service:     svc,
+					Kind:        kind,
 					Customer:    customer,
 					Instance:    instance,
 					Raw:         string(payload),

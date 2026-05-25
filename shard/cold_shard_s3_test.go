@@ -69,9 +69,9 @@ func TestColdShard_S3Integration(t *testing.T) {
 	defer ds.Close()
 
 	rows := []*pb.LogRow{
-		{Raw: "s3 test row 1", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: coldT0.Add(1 * time.Second).UnixNano()},
-		{Raw: "s3 test row 2", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: coldT0.Add(2 * time.Second).UnixNano()},
-		{Raw: "s3 test row 3", App: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: coldT0.Add(3 * time.Second).UnixNano()},
+		{Raw: "s3 test row 1", Namespace: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: coldT0.Add(1 * time.Second).UnixNano()},
+		{Raw: "s3 test row 2", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: coldT0.Add(2 * time.Second).UnixNano()},
+		{Raw: "s3 test row 3", Namespace: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: coldT0.Add(3 * time.Second).UnixNano()},
 	}
 	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatal(err)
@@ -147,4 +147,3 @@ func TestColdShard_S3Integration(t *testing.T) {
 		t.Fatalf("expected 's3 test row 1', got '%s'", result[0].Raw)
 	}
 }
-

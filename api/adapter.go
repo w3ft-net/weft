@@ -1,7 +1,6 @@
 package api
 
 import (
-	"fmt"
 	"io"
 	"net/http"
 
@@ -97,12 +96,9 @@ func (s *Server) IngestHandler(a Adapter) http.Handler {
 			return
 		}
 
-		// Prefix the namespace so coordinator-side scope check passes.
-		// Adapter emits `myapp/web`; coordinator expects rows to live
-		// under the token's namespace, so we ship `<ns>/myapp/web`.
-		for _, r := range rows {
-			r.App = prefixNamespace(namespace, r.App)
-		}
+		// Namespace is no longer set here — the coordinator stamps it
+		// authoritatively from the token on every row. The adapter only
+		// supplies service + kind (parsed from the Heroku frame).
 
 		// Forward to coordinator via the existing gRPC IngestStream.
 		// Same bearer token in metadata so authenticateStream's path
@@ -127,20 +123,4 @@ func (s *Server) IngestHandler(a Adapter) http.Handler {
 
 		w.WriteHeader(http.StatusNoContent)
 	})
-}
-
-// prefixNamespace ensures `app` lives under `ns`. Mirrors the helper
-// weftd uses on the inbound side. An app already prefixed (or already
-// equal to ns) is left alone.
-func prefixNamespace(ns, app string) string {
-	if ns == "" || app == "" {
-		return app
-	}
-	if app == ns {
-		return app
-	}
-	if len(app) > len(ns)+1 && app[:len(ns)] == ns && app[len(ns)] == '/' {
-		return app
-	}
-	return fmt.Sprintf("%s/%s", ns, app)
 }

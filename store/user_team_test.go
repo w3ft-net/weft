@@ -318,7 +318,6 @@ func TestCountTeamMembers(t *testing.T) {
 	}
 }
 
-
 // --- helpers for team-member store methods relocated out of the store package ---
 //
 // Production logic moved to callers outside the store package. These

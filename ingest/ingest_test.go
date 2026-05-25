@@ -21,7 +21,7 @@ func TestIngestRoundTrip_GrantCentralWorker(t *testing.T) {
 
 	// Build schema from detection results (simulating what the wizard would do).
 	schema := &Schema{
-		App:             "grantcentral-worker",
+		Service:         "grantcentral-worker",
 		Customer:        "kevlar",
 		Envelope:        "kevcons",
 		Format:          "text",
@@ -148,7 +148,7 @@ func TestIngestRoundTrip_VimGym(t *testing.T) {
 	lines := readSampleLines(t, "../sample-logs/vimgym_logs.txt")
 
 	schema := &Schema{
-		App:             "vimgym",
+		Service:         "vimgym",
 		Customer:        "kevlar",
 		Envelope:        "kevcons",
 		Format:          "text",

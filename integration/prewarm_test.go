@@ -4,7 +4,6 @@ package integration
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -35,7 +34,7 @@ func TestPrewarm_InsertsNextWindowRow_AndBumpsDesired(t *testing.T) {
 	// shard doesn't need to pretend to be a 7-day-old shard.
 	bucketRec := &store.Bucket{
 		Label:                bucketLabel,
-		Apps:                 []string{},
+		Services:             []string{},
 		TargetIngestingCount: 1,
 		Tier:                 "small",
 		WindowDuration:       (5 * time.Minute).String(),
@@ -51,14 +50,12 @@ func TestPrewarm_InsertsNextWindowRow_AndBumpsDesired(t *testing.T) {
 	now := time.Now().UTC()
 	windowStart := now.Add(-4 * time.Minute)
 	windowEnd := now.Add(1 * time.Minute)
-	apps, _ := json.Marshal([]string{})
 	ingestingID := "shard-ing-" + suffix
 	ingRec := &store.ShardRecord{
 		ID:          ingestingID,
 		BucketID:    bucketRec.ID,
 		Tier:        "small",
 		State:       string(logdb.StateIngesting),
-		Apps:        string(apps),
 		WindowStart: windowStart.Format(time.RFC3339),
 		WindowEnd:   windowEnd.Format(time.RFC3339),
 		CreatedAt:   windowStart.Format(time.RFC3339),

@@ -13,8 +13,8 @@ import (
 
 // Parser applies a schema to raw log lines, producing LogRow structs.
 type Parser struct {
-	schema       *Schema
-	levelRe      *regexp.Regexp
+	schema  *Schema
+	levelRe *regexp.Regexp
 }
 
 // NewParser creates a parser for the given schema.
@@ -35,7 +35,7 @@ func NewParser(s *Schema) (*Parser, error) {
 func (p *Parser) ParseLine(raw string, ingestTime time.Time) (*pb.LogRow, error) {
 	row := &pb.LogRow{
 		Raw:      raw,
-		App:      p.schema.App,
+		Service:  p.schema.Service,
 		Customer: p.schema.Customer,
 		TsUnixNs: ingestTime.UnixNano(),
 	}

@@ -63,7 +63,7 @@ func RunSetupFromLines(app string, lines []string) (*ingest.Schema, error) {
 	fmt.Println()
 
 	schema := &ingest.Schema{
-		App: app,
+		Service: app,
 	}
 
 	// --- Envelope ---
@@ -204,7 +204,7 @@ func RunSetupFromLines(app string, lines []string) (*ingest.Schema, error) {
 	// --- Summary ---
 	fmt.Println()
 	fmt.Println(titleStyle.Render("Schema summary:"))
-	fmt.Printf("  %s %s\n", labelStyle.Render("App:"), schema.App)
+	fmt.Printf("  %s %s\n", labelStyle.Render("Service:"), schema.Service)
 	fmt.Printf("  %s %s\n", labelStyle.Render("Envelope:"), orDefault(schema.Envelope, "none"))
 	fmt.Printf("  %s %s\n", labelStyle.Render("Format:"), schema.Format)
 	if schema.TimestampField != "" && schema.TimestampField != "none" {

@@ -19,8 +19,8 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 	t.Cleanup(func() { live.Close() })
 
 	liveRows := []*pb.LogRow{
-		{Raw: "live row 1", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t1.Add(1 * time.Second).UnixNano()},
-		{Raw: "live row 2", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t1.Add(2 * time.Second).UnixNano()},
+		{Raw: "live row 1", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t1.Add(1 * time.Second).UnixNano()},
+		{Raw: "live row 2", Namespace: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t1.Add(2 * time.Second).UnixNano()},
 	}
 	if err := live.Ingest(liveRows, nil); err != nil {
 		t.Fatal(err)
@@ -32,9 +32,9 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 		t.Fatal(err)
 	}
 	coldRows := []*pb.LogRow{
-		{Raw: "cold row 1", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
-		{Raw: "cold row 2", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
-		{Raw: "cold row 3", App: "vimgym", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
+		{Raw: "cold row 1", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
+		{Raw: "cold row 2", Namespace: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
+		{Raw: "cold row 3", Namespace: "vimgym", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
 	}
 	if err := coldDS.Ingest(coldRows, nil); err != nil {
 		t.Fatal(err)

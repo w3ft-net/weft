@@ -55,8 +55,8 @@ func TestOnboardFlow(t *testing.T) {
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := client.GetSourceStatus(context.Background(), &pb.GetSourceStatusRequest{
-			Token: "wft_dev_0000000000000000",
-			App:   "testapp",
+			Token:     "wft_dev_0000000000000000",
+			Namespace: "testapp",
 		})
 		if err != nil {
 			t.Logf("  GetSourceStatus: %v (retrying)", err)
@@ -124,8 +124,8 @@ func TestOnboardFlow(t *testing.T) {
 
 	t.Log("verifying source is configured via gRPC...")
 	resp, err := client.GetSourceStatus(context.Background(), &pb.GetSourceStatusRequest{
-		Token: "wft_dev_0000000000000000",
-		App:   "testapp",
+		Token:     "wft_dev_0000000000000000",
+		Namespace: "testapp",
 	})
 	if err != nil {
 		t.Fatalf("GetSourceStatus after configure: %v", err)
@@ -269,8 +269,8 @@ func TestGlobOnboardFlow(t *testing.T) {
 				continue
 			}
 			resp, err := client.GetSourceStatus(context.Background(), &pb.GetSourceStatusRequest{
-				Token: "wft_dev_0000000000000000",
-				App:   app,
+				Token:   "wft_dev_0000000000000000",
+				Service: app,
 			})
 			if err != nil {
 				t.Logf("  GetSourceStatus(%s): %v (retrying)", app, err)

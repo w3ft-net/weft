@@ -73,8 +73,8 @@ func TestStartHeartbeat_SnapshotEmitsRow(t *testing.T) {
 	row := stream.sent[0]
 	stream.mu.Unlock()
 
-	if row.App != "myns/test-svc/heartbeats" {
-		t.Errorf("row.App = %q, want %q", row.App, "myns/test-svc/heartbeats")
+	if row.Namespace+"/"+row.Service+"/"+row.Kind != "myns/test-svc/heartbeats" {
+		t.Errorf("heartbeat row path = %q, want %q", row.Namespace+"/"+row.Service+"/"+row.Kind, "myns/test-svc/heartbeats")
 	}
 	if row.Customer != "kevlar" {
 		t.Errorf("row.Customer = %q, want %q", row.Customer, "kevlar")
@@ -228,7 +228,7 @@ func TestStartHeartbeat_FansOutPerService(t *testing.T) {
 	stream.mu.Lock()
 	apps := map[string]bool{}
 	for _, r := range stream.sent {
-		apps[r.App] = true
+		apps[r.Namespace+"/"+r.Service+"/"+r.Kind] = true
 	}
 	stream.mu.Unlock()
 

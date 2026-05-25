@@ -266,11 +266,13 @@ func (s *Store) UpsertPendingLogGroup(namespaceID uint, service, instance, deplo
 }
 
 // FindLogGroup returns the single log_groups row for (customer, namespace,
-// app) regardless of status, or nil if none exists. Used by the
+// service) regardless of status, or nil if none exists. Used by the
 // view-schema and resample endpoints, which need the row (and its
-// namespace id / status / schema) before acting.
-func (s *Store) FindLogGroup(customerID uint, namespace, app string) (*LogGroupWithAWSAccount, error) {
-	fullApp := namespace + "/" + app
+// namespace id / status / schema) before acting. log_groups.app holds
+// the bare service (migration 060), scoped to the namespace by the join
+// — so the match is on the bare service, not a "namespace/service"
+// composite.
+func (s *Store) FindLogGroup(customerID uint, namespace, service string) (*LogGroupWithAWSAccount, error) {
 	var lg LogGroupWithAWSAccount
 	err := s.db.
 		Table("log_groups").
@@ -280,7 +282,7 @@ func (s *Store) FindLogGroup(customerID uint, namespace, app string) (*LogGroupW
 		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
 		Joins("JOIN customers ON namespaces.customer_id = customers.id").
 		Where("customers.id = ? AND namespaces.name = ? AND log_groups.app = ?",
-			customerID, namespace, fullApp).
+			customerID, namespace, service).
 		First(&lg).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil

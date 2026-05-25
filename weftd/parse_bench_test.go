@@ -56,7 +56,7 @@ func newBenchParser(tb testing.TB) *ingest.Parser {
 	if err != nil {
 		tb.Fatalf("load schema: %v", err)
 	}
-	schema.App = "demo/api"
+	schema.Service = "demo/api"
 	schema.Customer = "acme"
 	parser, err := ingest.NewParser(schema)
 	if err != nil {

@@ -17,7 +17,7 @@ type Subscription struct {
 	Tier                 string     `gorm:"not null"`       // trial, swatch, yard, bolt
 	Status               string     `gorm:"not null"`       // active, cancelled
 	StartsAt             time.Time  `gorm:"not null"`
-	ExpiresAt            *time.Time                         // nil = no expiry (paid tiers)
+	ExpiresAt            *time.Time // nil = no expiry (paid tiers)
 	StripeSubscriptionID string
 	// CompReason is the audit string when this subscription is comped
 	// rather than paid (owner / design-partner / etc.). Empty for paid
@@ -136,4 +136,3 @@ func (s *Store) GrantCompSubscription(customerID uint, tier, reason string) erro
 		}).Error
 	})
 }
-

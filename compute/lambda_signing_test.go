@@ -97,7 +97,7 @@ func TestComputeFanoutSignsLambdaWithValidRegion(t *testing.T) {
 			ShardId:     "cold-test",
 			LambdaUrl:   srv.URL,
 			ParquetPath: "s3://weft-cold/shard-x.parquet",
-			Apps:        []string{"vimgym"},
+			Services:    []string{"vimgym"},
 		}},
 	})
 	if err != nil {

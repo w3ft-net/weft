@@ -204,7 +204,7 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 	return flush(true, convertNotices(result.Notices))
 }
 
-func (s *Server) ListApps(ctx context.Context, _ *pb.ListAppsRequest) (*pb.ListAppsResponse, error) {
+func (s *Server) ListServices(ctx context.Context, _ *pb.ListServicesRequest) (*pb.ListServicesResponse, error) {
 	customer, err := callerCustomer(ctx)
 	if err != nil {
 		return nil, err
@@ -213,7 +213,7 @@ func (s *Server) ListApps(ctx context.Context, _ *pb.ListAppsRequest) (*pb.ListA
 	// Return app names observed from ingest for this customer.
 	if s.Coord.SeenServices != nil && customer != "" {
 		if names := s.Coord.SeenServices.Names(customer); len(names) > 0 {
-			return &pb.ListAppsResponse{Apps: names}, nil
+			return &pb.ListServicesResponse{Services: names}, nil
 		}
 	}
 
@@ -231,14 +231,14 @@ func (s *Server) ListApps(ctx context.Context, _ *pb.ListAppsRequest) (*pb.ListA
 		for i, ns := range nss {
 			names[i] = ns.Name
 		}
-		return &pb.ListAppsResponse{Apps: names}, nil
+		return &pb.ListServicesResponse{Services: names}, nil
 	}
 	var names []string
 	if err := s.Store.DB().WithContext(store.WithoutTenantScope(context.Background())).
 		Model(&store.Namespace{}).Distinct().Pluck("name", &names).Error; err != nil {
 		return nil, status.Errorf(codes.Internal, "list apps: %v", err)
 	}
-	return &pb.ListAppsResponse{Apps: names}, nil
+	return &pb.ListServicesResponse{Services: names}, nil
 }
 
 // SampleCloudWatchSource pulls up to 50 recent events from a CloudWatch log
@@ -326,7 +326,7 @@ func (s *Server) AddSource(ctx context.Context, req *pb.AddSourceRequest) (*pb.A
 	}
 	if err := s.Store.AddLogGroup(
 		ns.ID, &account.ID, store.SourceTypeCloudWatch,
-		req.App, req.LogGroup, req.Region, req.SchemaYaml, pollInterval,
+		req.Service, req.LogGroup, req.Region, req.SchemaYaml, pollInterval,
 	); err != nil {
 		return nil, fmt.Errorf("log group: %w", err)
 	}
@@ -338,8 +338,8 @@ func (s *Server) AddSource(ctx context.Context, req *pb.AddSourceRequest) (*pb.A
 	// SeenServices trigger (below) will retry on first row. Don't fail
 	// the client's AddSource on bucket trouble.
 	if s.Coord.Provisioner != nil {
-		if err := s.Coord.Provisioner.OnboardService(req.App); err != nil {
-			log.Printf("AddSource: OnboardService %q: %v", req.App, err)
+		if err := s.Coord.Provisioner.OnboardService(req.Service); err != nil {
+			log.Printf("AddSource: OnboardService %q: %v", req.Service, err)
 		}
 	}
 
@@ -354,7 +354,7 @@ func (s *Server) ListSources(_ context.Context, _ *pb.ListSourcesRequest) (*pb.L
 	var infos []*pb.SourceInfo
 	for _, lg := range logGroups {
 		infos = append(infos, &pb.SourceInfo{
-			App:        lg.Service,
+			Service:    lg.Service,
 			Customer:   lg.CustomerName,
 			Namespace:  lg.NamespaceName,
 			LogGroup:   lg.LogGroupName,
@@ -383,7 +383,7 @@ func (s *Server) RemoveSource(ctx context.Context, req *pb.RemoveSourceRequest) 
 		return nil, status.Errorf(codes.NotFound, "namespace %q not found", req.Namespace)
 	}
 	if err := s.Store.DB().Unscoped().
-		Where("namespace_id = ? AND app = ?", ns.ID, req.App).
+		Where("namespace_id = ? AND app = ?", ns.ID, req.Service).
 		Delete(&store.LogGroup{}).Error; err != nil {
 		return nil, err
 	}
@@ -548,32 +548,45 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 			row.Env = authEnv
 		}
 
-		// Enforce the token's namespace scope on every row. row.App must
-		// either equal the token's namespace or sit beneath it
-		// ("<ns>/<subapp>"). Without this an agent with a token for
-		// namespace A can label rows with namespace B of the same customer
-		// and contaminate B's queries.
-		if row.App != authNamespace && !strings.HasPrefix(row.App, authNamespace+"/") {
-			return status.Errorf(codes.PermissionDenied,
-				"token scoped to namespace %q; cannot ingest app %q", authNamespace, row.App)
+		// The token's namespace is authoritative: stamp it on every row,
+		// overwriting whatever the agent claimed. An agent with a token
+		// for namespace A therefore cannot label rows with namespace B of
+		// the same customer and contaminate B's queries — the wire no
+		// longer carries the namespace as a trusted, agent-supplied field.
+		row.Namespace = authNamespace
+		// kind defaults to "main" (the canonical single-stream source).
+		if row.Kind == "" {
+			row.Kind = "main"
+		}
+
+		// svcPath is the namespace/service[/kind] index key the pseudofile
+		// tree (SeenServices) and bucket onboarding use. Reassembled from
+		// the now-split row fields; routing itself keys on the dedicated
+		// namespace/service columns, not this string.
+		svcPath := row.Namespace
+		if row.Service != "" {
+			svcPath = row.Namespace + "/" + row.Service
+			if row.Kind != "" {
+				svcPath += "/" + row.Kind
+			}
 		}
 
 		mu.Lock()
 		if count == 0 {
-			firstService = row.App
-			log.Printf("ingest-stream: first row from customer=%s app=%s", row.Customer, row.App)
+			firstService = svcPath
+			log.Printf("ingest-stream: first row from customer=%s service=%s", row.Customer, svcPath)
 		}
-		if s.Coord.SeenServices != nil && row.App != "" {
-			if s.Coord.SeenServices.Add(row.Customer, row.App, row.Env) {
-				log.Printf("ingest-stream: new app discovered: customer=%s app=%s", row.Customer, row.App)
+		if s.Coord.SeenServices != nil && row.Service != "" {
+			if s.Coord.SeenServices.Add(row.Customer, svcPath, row.Env) {
+				log.Printf("ingest-stream: new service discovered: customer=%s service=%s", row.Customer, svcPath)
 				// Onboard to the default bucket + propagate to
 				// INGESTING shards so query routing picks up the new
-				// app. Idempotent; SeenServices.Add only returns true the
-				// first time, so this fires once per (customer, app)
-				// pair over the coordinator's lifetime.
+				// service. Idempotent; SeenServices.Add only returns true
+				// the first time, so this fires once per (customer,
+				// service) pair over the coordinator's lifetime.
 				if s.Coord.Provisioner != nil {
-					if err := s.Coord.Provisioner.OnboardService(row.App); err != nil {
-						log.Printf("ingest-stream: OnboardService %q: %v", row.App, err)
+					if err := s.Coord.Provisioner.OnboardService(svcPath); err != nil {
+						log.Printf("ingest-stream: OnboardService %q: %v", svcPath, err)
 					}
 				}
 			}
@@ -949,7 +962,7 @@ func (s *Server) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest) (*
 		return nil, status.Errorf(codes.Unauthenticated, "%v", err)
 	}
 
-	if req.App == "" {
+	if req.Service == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "app required")
 	}
 	if !req.Partial && len(req.Lines) == 0 {
@@ -970,7 +983,7 @@ func (s *Server) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest) (*
 	// namespace-prefixed form ("weft/api") broke service-level shard
 	// routing for weftd sources. weftd sends a bare service on onboard
 	// and "service/kind" on resample; take the first segment for both.
-	service := req.App
+	service := req.Service
 	if i := strings.IndexByte(service, '/'); i >= 0 {
 		service = service[:i]
 	}
@@ -987,7 +1000,7 @@ func (s *Server) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest) (*
 	if req.Partial {
 		respStatus = "sampling"
 	}
-	log.Printf("sample: customer=%s namespace=%s app=%s lines=%d partial=%t", auth.Customer.Name, auth.Namespace, req.App, len(req.Lines), req.Partial)
+	log.Printf("sample: customer=%s namespace=%s app=%s lines=%d partial=%t", auth.Customer.Name, auth.Namespace, req.Service, len(req.Lines), req.Partial)
 	return &pb.SubmitSampleResponse{Status: respStatus}, nil
 }
 
@@ -998,11 +1011,11 @@ func (s *Server) GetSourceStatus(_ context.Context, req *pb.GetSourceStatusReque
 		return nil, status.Errorf(codes.Unauthenticated, "%v", err)
 	}
 
-	if req.App == "" {
+	if req.Service == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "app required")
 	}
 
-	lg, err := s.Store.FindLogGroup(auth.Customer.ID, auth.Namespace, req.App)
+	lg, err := s.Store.FindLogGroup(auth.Customer.ID, auth.Namespace, req.Service)
 	if err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}

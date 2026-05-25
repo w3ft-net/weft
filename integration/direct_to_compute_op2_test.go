@@ -180,7 +180,7 @@ func configureIfNeeded(t *testing.T, ctx context.Context, client pb.ShardQueryCl
 	t.Helper()
 	_, err := client.Configure(ctx, &pb.ConfigureRequest{
 		ShardId:        shardID,
-		Apps:           []string{"directcompute/op2"},
+		Services:       []string{"directcompute/op2"},
 		WindowStart:    "2026-04-23T00:00:00Z",
 		WindowEnd:      "2026-04-24T00:00:00Z",
 		HeartbeatToken: "dev-test-token",
@@ -209,8 +209,8 @@ func ingestInterleaved(
 	for i := range rows {
 		seq := seqFn(i)
 		rows[i] = &pb.LogRow{
-			Raw:      fmt.Sprintf("%s-%d", prefix, seq),
-			App:      "directcompute/op2",
+			Raw:       fmt.Sprintf("%s-%d", prefix, seq),
+			Namespace: "directcompute", Service: "op2",
 			Level:    "INFO",
 			Customer: "kevlar",
 			TsUnixNs: baseTs.Add(time.Duration(seq) * time.Millisecond).UnixNano(),

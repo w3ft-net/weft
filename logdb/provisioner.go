@@ -315,7 +315,7 @@ func (p *Provisioner) ShardDescriptorsFor(tr TimeRange, namespaceID uint, servic
 	entries := p.registry.MatchingEntries(tr, serving, tier)
 	out := make([]*pb.ShardDescriptor, len(entries))
 	for i, e := range entries {
-		d := &pb.ShardDescriptor{ShardId: e.ID, Apps: serviceNames(e.Services)}
+		d := &pb.ShardDescriptor{ShardId: e.ID, Services: serviceNames(e.Services)}
 		if e.State == StateArchived {
 			d.LambdaUrl = p.config.LambdaFunctionURL
 			d.ParquetPath = e.ParquetPath
@@ -833,7 +833,7 @@ func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
 
 	req := &pb.ConfigureRequest{
 		ShardId:        row.ID,
-		Apps:           serviceNames(svcs),
+		Services:       serviceNames(svcs),
 		WindowStart:    row.WindowStart,
 		WindowEnd:      row.WindowEnd,
 		HeartbeatToken: row.HeartbeatToken,
@@ -1071,7 +1071,7 @@ func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier stri
 
 	cfg := &pb.ConfigureRequest{
 		ShardId:        shardID,
-		Apps:           serviceNames(svcs),
+		Services:       serviceNames(svcs),
 		WindowStart:    windowStart.Format(time.RFC3339),
 		WindowEnd:      windowEnd.Format(time.RFC3339),
 		HeartbeatToken: heartbeatToken,

@@ -193,7 +193,10 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow, rec IngestRecorder) error {
 			payloadStr = string(r.PayloadJson)
 		}
 
-		ns, svc, kind := SplitApp(r.App)
+		ns, svc, kind := r.Namespace, r.Service, r.Kind
+		if kind == "" {
+			kind = "main"
+		}
 		args = append(args,
 			r.Raw,
 			r.Fields,
@@ -202,7 +205,7 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow, rec IngestRecorder) error {
 			ns,
 			svc,
 			kind,
-			r.App,
+			JoinApp(ns, svc, kind),
 			r.Instance,
 			r.Customer,
 			payloadStr,
@@ -272,6 +275,28 @@ func SplitApp(app string) (namespace, service, kind string) {
 	}
 }
 
+// JoinApp rebuilds the composite path from its (namespace, service,
+// kind) parts — the inverse of SplitApp. It populates the vestigial
+// `app` column so anything still reading it (cold-shard test queries)
+// keeps working; routing and the planner key on the dedicated
+// namespace/service/kind columns. Empty segments are dropped (so a
+// row with no namespace yet renders "<service>", not "/<service>"),
+// and a "main" kind is elided, so JoinApp(SplitApp(x)) == x for the
+// canonical shapes.
+func JoinApp(namespace, service, kind string) string {
+	parts := make([]string, 0, 3)
+	if namespace != "" {
+		parts = append(parts, namespace)
+	}
+	if service != "" {
+		parts = append(parts, service)
+	}
+	if kind != "" && kind != "main" {
+		parts = append(parts, kind)
+	}
+	return strings.Join(parts, "/")
+}
+
 // RowCount returns the total number of rows ingested into this shard.
 func (s *DuckDBShard) RowCount() int64 {
 	return s.rowCount.Load()
@@ -311,10 +336,10 @@ const targetFileBytes = 150 * 1024 * 1024 // 150 MB
 type partitionGranularity string
 
 const (
-	granDay    partitionGranularity = "date_trunc('day', ts)"
-	granHour   partitionGranularity = "date_trunc('hour', ts)"
-	gran10Min  partitionGranularity = "time_bucket(INTERVAL '10 minutes', ts)"
-	gran1Min   partitionGranularity = "time_bucket(INTERVAL '1 minute', ts)"
+	granDay   partitionGranularity = "date_trunc('day', ts)"
+	granHour  partitionGranularity = "date_trunc('hour', ts)"
+	gran10Min partitionGranularity = "time_bucket(INTERVAL '10 minutes', ts)"
+	gran1Min  partitionGranularity = "time_bucket(INTERVAL '1 minute', ts)"
 )
 
 // pickPartitionGranularity determines how to split the archive export.

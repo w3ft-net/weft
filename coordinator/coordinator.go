@@ -357,26 +357,26 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 					break
 				}
 
-				// Group by (customer, app) for targeted routing; count
-				// bytes per customer. The customer must be part of the key
-				// — two customers can use the same composite app
-				// ("weft/api"), but they resolve to different namespace_ids
-				// and so route to different shards.
+				// Group by (customer, namespace, service) for targeted
+				// routing; count bytes per customer. The customer must be
+				// part of the key — two customers can use the same
+				// (namespace, service), but they resolve to different
+				// namespace_ids and so route to different shards.
 				byKey := make(map[drainKey][]*pb.LogRow)
 				for _, row := range batch {
-					byKey[drainKey{row.Customer, row.App}] = append(byKey[drainKey{row.Customer, row.App}], row)
+					k := drainKey{row.Customer, row.Namespace, row.Service}
+					byKey[k] = append(byKey[k], row)
 					if c.Usage != nil && row.Customer != "" {
 						c.Usage.Record(row.Customer, int64(len(row.Raw)))
 					}
 				}
 
 				for k, rows := range byKey {
-					// Route by (namespace_id, service). The composite app
-					// splits into namespace + service; namespace_id is
+					// Route by (namespace_id, service). namespace_id is
 					// resolved through a (customer, namespace) cache so the
 					// per-batch grouping keeps the DB off the hot path.
-					namespace, service := splitAppRoute(k.app)
-					nsID := c.ingestNamespaceID(k.customer, namespace)
+					service := k.service
+					nsID := c.ingestNamespaceID(k.customer, k.namespace)
 					// Strict service-scoped routing only — no whole-registry
 					// fallback, which would commingle a different tenant's
 					// rows onto the wrong shard. A service onboarded after
@@ -387,8 +387,8 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 					sh := c.Provisioner.IngestingShard(nsID, service)
 					if sh == nil {
 						dlqPath := c.DLQ.Write(rows)
-						c.Errors.Record("none", "no shard serves "+k.app, rows, dlqPath)
-						log.Printf("drain: DLQ'd %d rows for %s (no shard serves this service)", len(rows), k.app)
+						c.Errors.Record("none", "no shard serves "+k.namespace+"/"+k.service, rows, dlqPath)
+						log.Printf("drain: DLQ'd %d rows for %s (no shard serves this service)", len(rows), k.namespace+"/"+k.service)
 						continue
 					}
 					// sh.Ingest reports its own outcome to the provisioner —
@@ -408,7 +408,7 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 						// typically exhaustive.
 						if fallback := c.Provisioner.IngestingShard(nsID, service); fallback != nil {
 							if retryErr := fallback.Ingest(rows, c.Provisioner); retryErr == nil {
-								c.Provisioner.Stats().Record(k.app, int64(len(rows)))
+								c.Provisioner.Stats().Record(k.namespace+"/"+k.service, int64(len(rows)))
 								continue // retry succeeded
 							}
 						}
@@ -416,10 +416,10 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 						// All retries exhausted — DLQ.
 						dlqPath := c.DLQ.Write(rows)
 						c.Errors.Record(sh.ID(), err.Error(), rows, dlqPath)
-						log.Printf("drain: DLQ'd %d rows for %s (shard %s failed, no fallback)", len(rows), k.app, sh.ID())
+						log.Printf("drain: DLQ'd %d rows for %s (shard %s failed, no fallback)", len(rows), k.namespace+"/"+k.service, sh.ID())
 						continue
 					}
-					c.Provisioner.Stats().Record(k.app, int64(len(rows)))
+					c.Provisioner.Stats().Record(k.namespace+"/"+k.service, int64(len(rows)))
 				}
 			}
 		}
@@ -477,23 +477,9 @@ func (c *Coordinator) IngestingShard(namespaceID uint, service string) shard.Sha
 // namespace resolution (two customers can share a composite app), and
 // the app is the composite the row carries.
 type drainKey struct {
-	customer string
-	app      string
-}
-
-// splitAppRoute splits a composite app ("ns", "ns/service", or
-// "ns/service/kind") into its namespace and bare service for routing.
-// kind (if present) is ignored — log_groups and shard_services key on
-// the bare service. A bare "ns" (namespace-scoped ingest) yields an
-// empty service, which IngestingShard treats as "any service in the
-// namespace".
-func splitAppRoute(app string) (namespace, service string) {
-	parts := strings.SplitN(app, "/", 3)
-	namespace = parts[0]
-	if len(parts) >= 2 {
-		service = parts[1]
-	}
-	return
+	customer  string
+	namespace string
+	service   string
 }
 
 // ingestNamespaceID resolves (customer, namespace) to namespaces.id for

@@ -2,8 +2,8 @@ package store
 
 import (
 	"database/sql"
-	_ "embed"
 	"embed"
+	_ "embed"
 	"errors"
 	"fmt"
 	"os"
@@ -81,16 +81,16 @@ func Migrate(dsn string) error {
 //
 // We shell out to psql rather than db.Exec(schemaSQL) for two
 // semantic reasons:
-//   1. schema.sql is pg_dump output. Modern pg_dump (16.x+) emits
-//      psql meta-commands like `\restrict <key>` / `\unrestrict <key>`
-//      that gate the restore behind a one-shot ACL — those are
-//      psql-only and the SQL wire protocol rejects them.
-//   2. pg_dump puts `SELECT set_config('search_path', '', false)` at
-//      the top of its output to force fully-qualified DDL. That
-//      setting is session-scoped, but in the *sql.DB pool path the
-//      poisoned connection goes back to the pool and goose picks it
-//      up — failing to find unqualified `goose_db_version`. psql
-//      runs in its own subprocess; the SET stays contained.
+//  1. schema.sql is pg_dump output. Modern pg_dump (16.x+) emits
+//     psql meta-commands like `\restrict <key>` / `\unrestrict <key>`
+//     that gate the restore behind a one-shot ACL — those are
+//     psql-only and the SQL wire protocol rejects them.
+//  2. pg_dump puts `SELECT set_config('search_path', ”, false)` at
+//     the top of its output to force fully-qualified DDL. That
+//     setting is session-scoped, but in the *sql.DB pool path the
+//     poisoned connection goes back to the pool and goose picks it
+//     up — failing to find unqualified `goose_db_version`. psql
+//     runs in its own subprocess; the SET stays contained.
 //
 // The env-var guard is the safety net: prod should never hit a virgin
 // DB, and if it does, blindly restoring an embedded snapshot is the

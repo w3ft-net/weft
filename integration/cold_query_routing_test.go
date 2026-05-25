@@ -72,14 +72,14 @@ func TestColdShardQueryRouting(t *testing.T) {
 	}
 
 	if err := s0.Ingest([]*pb.LogRow{
-		{Raw: "hot line 1", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(time.Minute).UnixNano()},
-		{Raw: "hot line 2", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Minute).UnixNano()},
+		{Raw: "hot line 1", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(time.Minute).UnixNano()},
+		{Raw: "hot line 2", Namespace: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Minute).UnixNano()},
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := s1.Ingest([]*pb.LogRow{
-		{Raw: "cold line 3", App: "vimgym", Level: "WARN", Customer: "kevlar", TsUnixNs: t1.Add(time.Minute).UnixNano()},
-		{Raw: "cold line 4", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t1.Add(2 * time.Minute).UnixNano()},
+		{Raw: "cold line 3", Namespace: "vimgym", Level: "WARN", Customer: "kevlar", TsUnixNs: t1.Add(time.Minute).UnixNano()},
+		{Raw: "cold line 4", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t1.Add(2 * time.Minute).UnixNano()},
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -115,13 +115,13 @@ func TestColdShardQueryRouting(t *testing.T) {
 		LambdaFunctionURL: lambdaSrv.URL,
 	})
 	logdb.SeedShard(c.Provisioner, &logdb.ShardEntry{
-		ID: "cold-route-0", Apps: apps,
+		ID: "cold-route-0", Services: apps,
 		WindowStart: t0, WindowEnd: t1,
 		State: logdb.StateIngesting, Addr: s0Addr,
 		CreatedAt: time.Now(),
 	})
 	logdb.SeedShard(c.Provisioner, &logdb.ShardEntry{
-		ID: "cold-route-1", Apps: apps,
+		ID: "cold-route-1", Services: apps,
 		WindowStart: t1, WindowEnd: t2,
 		State: logdb.StateArchived, ParquetPath: s3Path,
 		Shard:     cold,

@@ -91,7 +91,7 @@ func ResolverFromDescriptor(d *pb.ShardDescriptor, secret string, creds aws.Cred
 			ID:          d.ShardId,
 			LambdaURL:   d.LambdaUrl,
 			ParquetPath: d.ParquetPath,
-			Apps:        d.Apps,
+			Apps:        d.Services,
 			Creds:       creds,
 			Region:      region,
 		}, nil

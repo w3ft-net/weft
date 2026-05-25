@@ -138,10 +138,10 @@ func (s *Server) handleRemoveFS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) fetchLogServices(r *http.Request) []string {
-	resp, err := s.coordClient.ListApps(s.coordCtx(r), &pb.ListAppsRequest{})
+	resp, err := s.coordClient.ListServices(s.coordCtx(r), &pb.ListServicesRequest{})
 	if err != nil {
 		log.Printf("fetchLogServices: coordinator ListApps: %v", err)
 		return nil
 	}
-	return resp.Apps
+	return resp.Services
 }

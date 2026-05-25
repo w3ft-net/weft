@@ -227,7 +227,6 @@ func ownerLabel(s *store.Store, userID *string) string {
 	return truncate(*userID, 12)
 }
 
-
 // show ------------------------------------------------------------
 
 func (w *WitFuncs) runShow(args []string, stdout, stderr io.Writer) int {

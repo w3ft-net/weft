@@ -142,7 +142,7 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 
 			for _, row := range rows {
 				for _, app := range apps {
-					row.App = app
+					row.Namespace, row.Service, row.Kind = splitFullApp(app)
 					if err := sendRowWithReconnect(ctx, client, ss, row, app); err != nil {
 						return // context cancelled
 					}
@@ -206,7 +206,7 @@ func buildCPURow(app, customer, instance string, now time.Time, prev, cur *cpuSt
 	})
 
 	return &pb.LogRow{
-		App: app, Customer: customer, Instance: instance,
+		Customer: customer, Instance: instance,
 		Raw: string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
 		PayloadJson: payload,
 	}
@@ -272,7 +272,7 @@ func buildMemoryRow(app, customer, instance string, now time.Time) (*pb.LogRow, 
 	})
 
 	return &pb.LogRow{
-		App: app, Customer: customer, Instance: instance,
+		Customer: customer, Instance: instance,
 		Raw: string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
 		PayloadJson: payload,
 	}, nil
@@ -322,12 +322,12 @@ func buildDiskRows(app, customer, instance string, now time.Time) ([]*pb.LogRow,
 		payload, _ := json.Marshal(map[string]any{
 			"type": "disk", "ts": now.UTC().Format(time.RFC3339Nano),
 			"host": instance, "deployment": globalDeployment,
-			"path": mountpoint,
+			"path":     mountpoint,
 			"total_gb": round2(totalGB), "used_gb": round2(usedGB), "pct": round2(pct),
 		})
 
 		rows = append(rows, &pb.LogRow{
-			App: app, Customer: customer, Instance: instance,
+			Customer: customer, Instance: instance,
 			Raw: string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
 			PayloadJson: payload,
 		})
@@ -357,7 +357,7 @@ func buildLoadRow(app, customer, instance string, now time.Time) (*pb.LogRow, er
 	})
 
 	return &pb.LogRow{
-		App: app, Customer: customer, Instance: instance,
+		Customer: customer, Instance: instance,
 		Raw: string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
 		PayloadJson: payload,
 	}, nil
@@ -415,12 +415,12 @@ func buildNetworkRows(app, customer, instance string, now time.Time,
 		payload, _ := json.Marshal(map[string]any{
 			"type": "network", "ts": now.UTC().Format(time.RFC3339Nano),
 			"host": instance, "deployment": globalDeployment,
-			"iface": iface,
+			"iface":        iface,
 			"rx_bytes_sec": int64(rxPerSec), "tx_bytes_sec": int64(txPerSec),
 		})
 
 		rows = append(rows, &pb.LogRow{
-			App: app, Customer: customer, Instance: instance,
+			Customer: customer, Instance: instance,
 			Raw: string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
 			PayloadJson: payload,
 		})

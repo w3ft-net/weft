@@ -18,8 +18,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/kevlarcon/weft/auth"
-	"github.com/kevlarcon/weft/store"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/store"
 )
 
 // fakeCoord stands in for the coordinator's Execute RPC. It records the
@@ -141,10 +141,10 @@ func TestShellExec_ForwardsBearerToCoordinator(t *testing.T) {
 // API server's coordClient, plus a valid bearer token. Returned fields are
 // the http handler, the fakeCoord (read .lastReq), and the auth header.
 type shellExecFixture struct {
-	t       *testing.T
-	srv     *Server
-	fake    *fakeCoord
-	bearer  string
+	t      *testing.T
+	srv    *Server
+	fake   *fakeCoord
+	bearer string
 }
 
 func newShellExecFixture(t *testing.T, tag string) *shellExecFixture {

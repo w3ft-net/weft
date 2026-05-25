@@ -20,7 +20,7 @@ func TestProvisioner_ArchivesExpiredShard(t *testing.T) {
 	t.Cleanup(func() { ds.Close() })
 
 	rows := []*pb.LogRow{
-		{Raw: "test row", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
+		{Raw: "test row", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
 	}
 	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatal(err)
@@ -96,7 +96,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ds.Ingest([]*pb.LogRow{{Raw: "persisted", App: "vimgym", Customer: "kevlar", TsUnixNs: t0.UnixNano()}}, nil)
+	ds.Ingest([]*pb.LogRow{{Raw: "persisted", Namespace: "vimgym", Customer: "kevlar", TsUnixNs: t0.UnixNano()}}, nil)
 	ds.ExportToParquet(parquetPath)
 	ds.Close()
 

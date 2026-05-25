@@ -35,7 +35,7 @@ type SourceStatus struct {
 func CheckSourceStatus(ctx context.Context, client pb.WeftCoordinatorClient, token, app string) (*SourceStatus, error) {
 	resp, err := client.GetSourceStatus(ctx, &pb.GetSourceStatusRequest{
 		Token: token,
-		App:   app,
+		Service:   app,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("get source status: %w", err)
@@ -95,7 +95,7 @@ func SubmitUnitSample(ctx context.Context, client pb.WeftCoordinatorClient, toke
 func submitSampleLines(ctx context.Context, client pb.WeftCoordinatorClient, token, app, instance, deployment string, lines []string, partial bool) error {
 	_, err := client.SubmitSample(ctx, &pb.SubmitSampleRequest{
 		Token:      token,
-		App:        app,
+		Service:        app,
 		Instance:   instance,
 		Deployment: deployment,
 		Lines:      lines,

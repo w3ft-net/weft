@@ -24,7 +24,7 @@ const (
 type ConfigureRequest struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	ShardId     string                 `protobuf:"bytes,1,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
-	Apps        []string               `protobuf:"bytes,2,rep,name=apps,proto3" json:"apps,omitempty"`
+	Services    []string               `protobuf:"bytes,2,rep,name=services,proto3" json:"services,omitempty"`
 	WindowStart string                 `protobuf:"bytes,3,opt,name=window_start,json=windowStart,proto3" json:"window_start,omitempty"` // RFC3339
 	WindowEnd   string                 `protobuf:"bytes,4,opt,name=window_end,json=windowEnd,proto3" json:"window_end,omitempty"`       // RFC3339
 	// heartbeat_token is the per-shard bearer the coordinator minted at
@@ -74,9 +74,9 @@ func (x *ConfigureRequest) GetShardId() string {
 	return ""
 }
 
-func (x *ConfigureRequest) GetApps() []string {
+func (x *ConfigureRequest) GetServices() []string {
 	if x != nil {
-		return x.Apps
+		return x.Services
 	}
 	return nil
 }
@@ -508,24 +508,33 @@ func (x *ResultRow) GetTsUnixNs() int64 {
 type LogRow struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Deprecated: Marked as deprecated in proto/weftpb/weft.proto.
-	LineNum       int64    `protobuf:"varint,1,opt,name=line_num,json=lineNum,proto3" json:"line_num,omitempty"`
-	Raw           string   `protobuf:"bytes,2,opt,name=raw,proto3" json:"raw,omitempty"`
-	App           string   `protobuf:"bytes,3,opt,name=app,proto3" json:"app,omitempty"`
-	Level         string   `protobuf:"bytes,4,opt,name=level,proto3" json:"level,omitempty"`
-	TsUnixNs      int64    `protobuf:"varint,5,opt,name=ts_unix_ns,json=tsUnixNs,proto3" json:"ts_unix_ns,omitempty"`
-	Instance      string   `protobuf:"bytes,6,opt,name=instance,proto3" json:"instance,omitempty"` // hostname of the emitting machine
-	PayloadJson   []byte   `protobuf:"bytes,7,opt,name=payload_json,json=payloadJson,proto3" json:"payload_json,omitempty"`
-	Fields        []string `protobuf:"bytes,8,rep,name=fields,proto3" json:"fields,omitempty"`
-	Customer      string   `protobuf:"bytes,9,opt,name=customer,proto3" json:"customer,omitempty"`
-	Deployment    string   `protobuf:"bytes,10,opt,name=deployment,proto3" json:"deployment,omitempty"`                         // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
-	Env           string   `protobuf:"bytes,11,opt,name=env,proto3" json:"env,omitempty"`                                       // deployment environment (token-derived)
-	Version       string   `protobuf:"bytes,12,opt,name=version,proto3" json:"version,omitempty"`                               // service version (agent version_file)
-	Region        string   `protobuf:"bytes,13,opt,name=region,proto3" json:"region,omitempty"`                                 // cloud region (agent cloud-metadata probe)
-	Cluster       string   `protobuf:"bytes,14,opt,name=cluster,proto3" json:"cluster,omitempty"`                               // k8s cluster name (k8s mode only)
-	K8SNamespace  string   `protobuf:"bytes,15,opt,name=k8s_namespace,json=k8sNamespace,proto3" json:"k8s_namespace,omitempty"` // k8s namespace (k8s mode only)
-	Pod           string   `protobuf:"bytes,16,opt,name=pod,proto3" json:"pod,omitempty"`                                       // k8s pod name (k8s mode only)
-	Container     string   `protobuf:"bytes,17,opt,name=container,proto3" json:"container,omitempty"`                           // k8s container name (k8s mode only)
-	Node          string   `protobuf:"bytes,18,opt,name=node,proto3" json:"node,omitempty"`                                     // stable workload identity (file-sourced; see docs/plans/dimensions-from-files.md)
+	LineNum int64  `protobuf:"varint,1,opt,name=line_num,json=lineNum,proto3" json:"line_num,omitempty"`
+	Raw     string `protobuf:"bytes,2,opt,name=raw,proto3" json:"raw,omitempty"`
+	// Bare service name within the sender's namespace (e.g. "coordinator").
+	// The coordinator derives the namespace from the agent/poller token —
+	// this is NOT a "namespace/service" composite.
+	Service      string   `protobuf:"bytes,3,opt,name=service,proto3" json:"service,omitempty"`
+	Level        string   `protobuf:"bytes,4,opt,name=level,proto3" json:"level,omitempty"`
+	TsUnixNs     int64    `protobuf:"varint,5,opt,name=ts_unix_ns,json=tsUnixNs,proto3" json:"ts_unix_ns,omitempty"`
+	Instance     string   `protobuf:"bytes,6,opt,name=instance,proto3" json:"instance,omitempty"` // hostname of the emitting machine
+	PayloadJson  []byte   `protobuf:"bytes,7,opt,name=payload_json,json=payloadJson,proto3" json:"payload_json,omitempty"`
+	Fields       []string `protobuf:"bytes,8,rep,name=fields,proto3" json:"fields,omitempty"`
+	Customer     string   `protobuf:"bytes,9,opt,name=customer,proto3" json:"customer,omitempty"`
+	Deployment   string   `protobuf:"bytes,10,opt,name=deployment,proto3" json:"deployment,omitempty"`                         // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
+	Env          string   `protobuf:"bytes,11,opt,name=env,proto3" json:"env,omitempty"`                                       // deployment environment (token-derived)
+	Version      string   `protobuf:"bytes,12,opt,name=version,proto3" json:"version,omitempty"`                               // service version (agent version_file)
+	Region       string   `protobuf:"bytes,13,opt,name=region,proto3" json:"region,omitempty"`                                 // cloud region (agent cloud-metadata probe)
+	Cluster      string   `protobuf:"bytes,14,opt,name=cluster,proto3" json:"cluster,omitempty"`                               // k8s cluster name (k8s mode only)
+	K8SNamespace string   `protobuf:"bytes,15,opt,name=k8s_namespace,json=k8sNamespace,proto3" json:"k8s_namespace,omitempty"` // k8s namespace (k8s mode only)
+	Pod          string   `protobuf:"bytes,16,opt,name=pod,proto3" json:"pod,omitempty"`                                       // k8s pod name (k8s mode only)
+	Container    string   `protobuf:"bytes,17,opt,name=container,proto3" json:"container,omitempty"`                           // k8s container name (k8s mode only)
+	Node         string   `protobuf:"bytes,18,opt,name=node,proto3" json:"node,omitempty"`                                     // stable workload identity (file-sourced; see docs/plans/dimensions-from-files.md)
+	// namespace + kind complete the (namespace, service, kind) source
+	// coordinates that used to travel joined inside the old composite app
+	// string. The coordinator authoritatively overwrites namespace from
+	// the sender's token (row-level security); kind defaults to "main".
+	Namespace     string `protobuf:"bytes,19,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Kind          string `protobuf:"bytes,20,opt,name=kind,proto3" json:"kind,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -575,9 +584,9 @@ func (x *LogRow) GetRaw() string {
 	return ""
 }
 
-func (x *LogRow) GetApp() string {
+func (x *LogRow) GetService() string {
 	if x != nil {
-		return x.App
+		return x.Service
 	}
 	return ""
 }
@@ -683,6 +692,20 @@ func (x *LogRow) GetContainer() string {
 func (x *LogRow) GetNode() string {
 	if x != nil {
 		return x.Node
+	}
+	return ""
+}
+
+func (x *LogRow) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *LogRow) GetKind() string {
+	if x != nil {
+		return x.Kind
 	}
 	return ""
 }
@@ -1140,8 +1163,8 @@ type ShardDescriptor struct {
 	LambdaUrl string `protobuf:"bytes,3,opt,name=lambda_url,json=lambdaUrl,proto3" json:"lambda_url,omitempty"`
 	// Parquet path in S3 (cold shards only).
 	ParquetPath string `protobuf:"bytes,4,opt,name=parquet_path,json=parquetPath,proto3" json:"parquet_path,omitempty"`
-	// Apps this shard covers (cold shards need this for ColdShard construction).
-	Apps          []string `protobuf:"bytes,5,rep,name=apps,proto3" json:"apps,omitempty"`
+	// Services this shard covers (cold shards need this for ColdShard construction).
+	Services      []string `protobuf:"bytes,5,rep,name=services,proto3" json:"services,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1204,9 +1227,9 @@ func (x *ShardDescriptor) GetParquetPath() string {
 	return ""
 }
 
-func (x *ShardDescriptor) GetApps() []string {
+func (x *ShardDescriptor) GetServices() []string {
 	if x != nil {
-		return x.Apps
+		return x.Services
 	}
 	return nil
 }
@@ -1858,7 +1881,7 @@ type TokenInfo struct {
 	Label         string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`
 	Revoked       bool                   `protobuf:"varint,3,opt,name=revoked,proto3" json:"revoked,omitempty"`
 	CreatedAt     string                 `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	App           string                 `protobuf:"bytes,5,opt,name=app,proto3" json:"app,omitempty"`
+	Service       string                 `protobuf:"bytes,5,opt,name=service,proto3" json:"service,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1921,9 +1944,9 @@ func (x *TokenInfo) GetCreatedAt() string {
 	return ""
 }
 
-func (x *TokenInfo) GetApp() string {
+func (x *TokenInfo) GetService() string {
 	if x != nil {
-		return x.App
+		return x.Service
 	}
 	return ""
 }
@@ -2455,27 +2478,27 @@ func (x *Notice) GetBody() string {
 	return ""
 }
 
-type ListAppsRequest struct {
+type ListServicesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"` // filter apps by customer (from JWT)
+	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"` // filter services by customer (from JWT)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ListAppsRequest) Reset() {
-	*x = ListAppsRequest{}
+func (x *ListServicesRequest) Reset() {
+	*x = ListServicesRequest{}
 	mi := &file_proto_weftpb_weft_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ListAppsRequest) String() string {
+func (x *ListServicesRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ListAppsRequest) ProtoMessage() {}
+func (*ListServicesRequest) ProtoMessage() {}
 
-func (x *ListAppsRequest) ProtoReflect() protoreflect.Message {
+func (x *ListServicesRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_weftpb_weft_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2487,39 +2510,39 @@ func (x *ListAppsRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ListAppsRequest.ProtoReflect.Descriptor instead.
-func (*ListAppsRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use ListServicesRequest.ProtoReflect.Descriptor instead.
+func (*ListServicesRequest) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{40}
 }
 
-func (x *ListAppsRequest) GetCustomer() string {
+func (x *ListServicesRequest) GetCustomer() string {
 	if x != nil {
 		return x.Customer
 	}
 	return ""
 }
 
-type ListAppsResponse struct {
+type ListServicesResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Apps          []string               `protobuf:"bytes,1,rep,name=apps,proto3" json:"apps,omitempty"`
+	Services      []string               `protobuf:"bytes,1,rep,name=services,proto3" json:"services,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ListAppsResponse) Reset() {
-	*x = ListAppsResponse{}
+func (x *ListServicesResponse) Reset() {
+	*x = ListServicesResponse{}
 	mi := &file_proto_weftpb_weft_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ListAppsResponse) String() string {
+func (x *ListServicesResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ListAppsResponse) ProtoMessage() {}
+func (*ListServicesResponse) ProtoMessage() {}
 
-func (x *ListAppsResponse) ProtoReflect() protoreflect.Message {
+func (x *ListServicesResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_weftpb_weft_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2531,14 +2554,14 @@ func (x *ListAppsResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ListAppsResponse.ProtoReflect.Descriptor instead.
-func (*ListAppsResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use ListServicesResponse.ProtoReflect.Descriptor instead.
+func (*ListServicesResponse) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{41}
 }
 
-func (x *ListAppsResponse) GetApps() []string {
+func (x *ListServicesResponse) GetServices() []string {
 	if x != nil {
-		return x.Apps
+		return x.Services
 	}
 	return nil
 }
@@ -2546,7 +2569,7 @@ func (x *ListAppsResponse) GetApps() []string {
 // Source management messages
 type AddSourceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	App           string                 `protobuf:"bytes,1,opt,name=app,proto3" json:"app,omitempty"`
+	Service       string                 `protobuf:"bytes,1,opt,name=service,proto3" json:"service,omitempty"`
 	Customer      string                 `protobuf:"bytes,2,opt,name=customer,proto3" json:"customer,omitempty"`
 	LogGroup      string                 `protobuf:"bytes,3,opt,name=log_group,json=logGroup,proto3" json:"log_group,omitempty"`
 	Region        string                 `protobuf:"bytes,4,opt,name=region,proto3" json:"region,omitempty"`
@@ -2590,9 +2613,9 @@ func (*AddSourceRequest) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{42}
 }
 
-func (x *AddSourceRequest) GetApp() string {
+func (x *AddSourceRequest) GetService() string {
 	if x != nil {
-		return x.App
+		return x.Service
 	}
 	return ""
 }
@@ -2927,7 +2950,7 @@ func (x *ListSourcesResponse) GetSources() []*SourceInfo {
 
 type SourceInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	App           string                 `protobuf:"bytes,1,opt,name=app,proto3" json:"app,omitempty"`
+	Service       string                 `protobuf:"bytes,1,opt,name=service,proto3" json:"service,omitempty"`
 	Customer      string                 `protobuf:"bytes,2,opt,name=customer,proto3" json:"customer,omitempty"`
 	LogGroup      string                 `protobuf:"bytes,3,opt,name=log_group,json=logGroup,proto3" json:"log_group,omitempty"`
 	Region        string                 `protobuf:"bytes,4,opt,name=region,proto3" json:"region,omitempty"`
@@ -2968,9 +2991,9 @@ func (*SourceInfo) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{48}
 }
 
-func (x *SourceInfo) GetApp() string {
+func (x *SourceInfo) GetService() string {
 	if x != nil {
-		return x.App
+		return x.Service
 	}
 	return ""
 }
@@ -3019,7 +3042,7 @@ func (x *SourceInfo) GetNamespace() string {
 
 type RemoveSourceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	App           string                 `protobuf:"bytes,1,opt,name=app,proto3" json:"app,omitempty"`
+	Service       string                 `protobuf:"bytes,1,opt,name=service,proto3" json:"service,omitempty"`
 	Customer      string                 `protobuf:"bytes,2,opt,name=customer,proto3" json:"customer,omitempty"`
 	Namespace     string                 `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -3056,9 +3079,9 @@ func (*RemoveSourceRequest) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{49}
 }
 
-func (x *RemoveSourceRequest) GetApp() string {
+func (x *RemoveSourceRequest) GetService() string {
 	if x != nil {
-		return x.App
+		return x.Service
 	}
 	return ""
 }
@@ -4160,7 +4183,7 @@ func (x *ShardHealth) GetLastWrite() string {
 type SubmitSampleRequest struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	Token      string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`           // agent token (wft_...) for auth
-	App        string                 `protobuf:"bytes,2,opt,name=app,proto3" json:"app,omitempty"`               // bare app name within namespace
+	Service    string                 `protobuf:"bytes,2,opt,name=service,proto3" json:"service,omitempty"`       // bare service name within namespace
 	Instance   string                 `protobuf:"bytes,3,opt,name=instance,proto3" json:"instance,omitempty"`     // hostname of agent
 	Deployment string                 `protobuf:"bytes,4,opt,name=deployment,proto3" json:"deployment,omitempty"` // fleet/scaling-unit (was host_group)
 	Lines      []string               `protobuf:"bytes,5,rep,name=lines,proto3" json:"lines,omitempty"`           // sample log lines
@@ -4210,9 +4233,9 @@ func (x *SubmitSampleRequest) GetToken() string {
 	return ""
 }
 
-func (x *SubmitSampleRequest) GetApp() string {
+func (x *SubmitSampleRequest) GetService() string {
 	if x != nil {
-		return x.App
+		return x.Service
 	}
 	return ""
 }
@@ -4291,8 +4314,8 @@ func (x *SubmitSampleResponse) GetStatus() string {
 
 type GetSourceStatusRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"` // agent token (wft_...) for auth
-	App           string                 `protobuf:"bytes,2,opt,name=app,proto3" json:"app,omitempty"`     // bare app name within namespace
+	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`     // agent token (wft_...) for auth
+	Service       string                 `protobuf:"bytes,2,opt,name=service,proto3" json:"service,omitempty"` // bare service name within namespace
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4334,9 +4357,9 @@ func (x *GetSourceStatusRequest) GetToken() string {
 	return ""
 }
 
-func (x *GetSourceStatusRequest) GetApp() string {
+func (x *GetSourceStatusRequest) GetService() string {
 	if x != nil {
-		return x.App
+		return x.Service
 	}
 	return ""
 }
@@ -4609,10 +4632,10 @@ var File_proto_weftpb_weft_proto protoreflect.FileDescriptor
 
 const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
-	"\x17proto/weftpb/weft.proto\x12\x04weft\"\xac\x01\n" +
+	"\x17proto/weftpb/weft.proto\x12\x04weft\"\xb4\x01\n" +
 	"\x10ConfigureRequest\x12\x19\n" +
-	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12\x12\n" +
-	"\x04apps\x18\x02 \x03(\tR\x04apps\x12!\n" +
+	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12\x1a\n" +
+	"\bservices\x18\x02 \x03(\tR\bservices\x12!\n" +
 	"\fwindow_start\x18\x03 \x01(\tR\vwindowStart\x12\x1d\n" +
 	"\n" +
 	"window_end\x18\x04 \x01(\tR\twindowEnd\x12'\n" +
@@ -4638,11 +4661,11 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\bline_num\x18\x01 \x01(\x03B\x02\x18\x01R\alineNum\x12\x10\n" +
 	"\x03raw\x18\x02 \x01(\tR\x03raw\x12\x1c\n" +
 	"\n" +
-	"ts_unix_ns\x18\x03 \x01(\x03R\btsUnixNs\"\xd9\x03\n" +
+	"ts_unix_ns\x18\x03 \x01(\x03R\btsUnixNs\"\x93\x04\n" +
 	"\x06LogRow\x12\x1d\n" +
 	"\bline_num\x18\x01 \x01(\x03B\x02\x18\x01R\alineNum\x12\x10\n" +
-	"\x03raw\x18\x02 \x01(\tR\x03raw\x12\x10\n" +
-	"\x03app\x18\x03 \x01(\tR\x03app\x12\x14\n" +
+	"\x03raw\x18\x02 \x01(\tR\x03raw\x12\x18\n" +
+	"\aservice\x18\x03 \x01(\tR\aservice\x12\x14\n" +
 	"\x05level\x18\x04 \x01(\tR\x05level\x12\x1c\n" +
 	"\n" +
 	"ts_unix_ns\x18\x05 \x01(\x03R\btsUnixNs\x12\x1a\n" +
@@ -4661,7 +4684,9 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\rk8s_namespace\x18\x0f \x01(\tR\fk8sNamespace\x12\x10\n" +
 	"\x03pod\x18\x10 \x01(\tR\x03pod\x12\x1c\n" +
 	"\tcontainer\x18\x11 \x01(\tR\tcontainer\x12\x12\n" +
-	"\x04node\x18\x12 \x01(\tR\x04node\"1\n" +
+	"\x04node\x18\x12 \x01(\tR\x04node\x12\x1c\n" +
+	"\tnamespace\x18\x13 \x01(\tR\tnamespace\x12\x12\n" +
+	"\x04kind\x18\x14 \x01(\tR\x04kind\"1\n" +
 	"\rIngestRequest\x12 \n" +
 	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\"5\n" +
 	"\x0eIngestResponse\x12#\n" +
@@ -4686,14 +4711,14 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"=\n" +
 	"\x11GetResultResponse\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\x9f\x01\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\xa7\x01\n" +
 	"\x0fShardDescriptor\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12\x1b\n" +
 	"\tgrpc_addr\x18\x02 \x01(\tR\bgrpcAddr\x12\x1d\n" +
 	"\n" +
 	"lambda_url\x18\x03 \x01(\tR\tlambdaUrl\x12!\n" +
-	"\fparquet_path\x18\x04 \x01(\tR\vparquetPath\x12\x12\n" +
-	"\x04apps\x18\x05 \x03(\tR\x04apps\"\xe6\x01\n" +
+	"\fparquet_path\x18\x04 \x01(\tR\vparquetPath\x12\x1a\n" +
+	"\bservices\x18\x05 \x03(\tR\bservices\"\xe6\x01\n" +
 	"\x13ExecuteQueryRequest\x12\x10\n" +
 	"\x03sql\x18\x01 \x01(\tR\x03sql\x12-\n" +
 	"\x06shards\x18\x02 \x03(\v2\x15.weft.ShardDescriptorR\x06shards\x12\x16\n" +
@@ -4736,14 +4761,14 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x11ListTokensRequest\x12\x1a\n" +
 	"\bcustomer\x18\x01 \x01(\tR\bcustomer\"=\n" +
 	"\x12ListTokensResponse\x12'\n" +
-	"\x06tokens\x18\x01 \x03(\v2\x0f.weft.TokenInfoR\x06tokens\"\x82\x01\n" +
+	"\x06tokens\x18\x01 \x03(\v2\x0f.weft.TokenInfoR\x06tokens\"\x8a\x01\n" +
 	"\tTokenInfo\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12\x18\n" +
 	"\arevoked\x18\x03 \x01(\bR\arevoked\x12\x1d\n" +
 	"\n" +
-	"created_at\x18\x04 \x01(\tR\tcreatedAt\x12\x10\n" +
-	"\x03app\x18\x05 \x01(\tR\x03app\"*\n" +
+	"created_at\x18\x04 \x01(\tR\tcreatedAt\x12\x18\n" +
+	"\aservice\x18\x05 \x01(\tR\aservice\"*\n" +
 	"\x12RevokeTokenRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\"\x15\n" +
 	"\x13RevokeTokenResponse\"g\n" +
@@ -4779,13 +4804,13 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x14\n" +
 	"\x05title\x18\x03 \x01(\tR\x05title\x12\x12\n" +
-	"\x04body\x18\x04 \x01(\tR\x04body\"-\n" +
-	"\x0fListAppsRequest\x12\x1a\n" +
-	"\bcustomer\x18\x01 \x01(\tR\bcustomer\"&\n" +
-	"\x10ListAppsResponse\x12\x12\n" +
-	"\x04apps\x18\x01 \x03(\tR\x04apps\"\xbb\x02\n" +
-	"\x10AddSourceRequest\x12\x10\n" +
-	"\x03app\x18\x01 \x01(\tR\x03app\x12\x1a\n" +
+	"\x04body\x18\x04 \x01(\tR\x04body\"1\n" +
+	"\x13ListServicesRequest\x12\x1a\n" +
+	"\bcustomer\x18\x01 \x01(\tR\bcustomer\"2\n" +
+	"\x14ListServicesResponse\x12\x1a\n" +
+	"\bservices\x18\x01 \x03(\tR\bservices\"\xc3\x02\n" +
+	"\x10AddSourceRequest\x12\x18\n" +
+	"\aservice\x18\x01 \x01(\tR\aservice\x12\x1a\n" +
 	"\bcustomer\x18\x02 \x01(\tR\bcustomer\x12\x1b\n" +
 	"\tlog_group\x18\x03 \x01(\tR\blogGroup\x12\x16\n" +
 	"\x06region\x18\x04 \x01(\tR\x06region\x12\x1f\n" +
@@ -4813,19 +4838,19 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x0edetection_json\x18\x02 \x01(\tR\rdetectionJson\"\x14\n" +
 	"\x12ListSourcesRequest\"A\n" +
 	"\x13ListSourcesResponse\x12*\n" +
-	"\asources\x18\x01 \x03(\v2\x10.weft.SourceInfoR\asources\"\xc9\x01\n" +
+	"\asources\x18\x01 \x03(\v2\x10.weft.SourceInfoR\asources\"\xd1\x01\n" +
 	"\n" +
-	"SourceInfo\x12\x10\n" +
-	"\x03app\x18\x01 \x01(\tR\x03app\x12\x1a\n" +
+	"SourceInfo\x12\x18\n" +
+	"\aservice\x18\x01 \x01(\tR\aservice\x12\x1a\n" +
 	"\bcustomer\x18\x02 \x01(\tR\bcustomer\x12\x1b\n" +
 	"\tlog_group\x18\x03 \x01(\tR\blogGroup\x12\x16\n" +
 	"\x06region\x18\x04 \x01(\tR\x06region\x12\x18\n" +
 	"\aenabled\x18\x05 \x01(\bR\aenabled\x12 \n" +
 	"\flast_poll_at\x18\x06 \x01(\tR\n" +
 	"lastPollAt\x12\x1c\n" +
-	"\tnamespace\x18\a \x01(\tR\tnamespace\"a\n" +
-	"\x13RemoveSourceRequest\x12\x10\n" +
-	"\x03app\x18\x01 \x01(\tR\x03app\x12\x1a\n" +
+	"\tnamespace\x18\a \x01(\tR\tnamespace\"i\n" +
+	"\x13RemoveSourceRequest\x12\x18\n" +
+	"\aservice\x18\x01 \x01(\tR\aservice\x12\x1a\n" +
 	"\bcustomer\x18\x02 \x01(\tR\bcustomer\x12\x1c\n" +
 	"\tnamespace\x18\x03 \x01(\tR\tnamespace\"\x16\n" +
 	"\x14RemoveSourceResponse\"]\n" +
@@ -4892,10 +4917,10 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
 	"disk_bytes\x18\x05 \x01(\x03R\tdiskBytes\x12\x1d\n" +
 	"\n" +
-	"last_write\x18\x06 \x01(\tR\tlastWrite\"\xa9\x01\n" +
+	"last_write\x18\x06 \x01(\tR\tlastWrite\"\xb1\x01\n" +
 	"\x13SubmitSampleRequest\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\x12\x10\n" +
-	"\x03app\x18\x02 \x01(\tR\x03app\x12\x1a\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\x12\x18\n" +
+	"\aservice\x18\x02 \x01(\tR\aservice\x12\x1a\n" +
 	"\binstance\x18\x03 \x01(\tR\binstance\x12\x1e\n" +
 	"\n" +
 	"deployment\x18\x04 \x01(\tR\n" +
@@ -4903,10 +4928,10 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x05lines\x18\x05 \x03(\tR\x05lines\x12\x18\n" +
 	"\apartial\x18\x06 \x01(\bR\apartial\".\n" +
 	"\x14SubmitSampleResponse\x12\x16\n" +
-	"\x06status\x18\x01 \x01(\tR\x06status\"@\n" +
+	"\x06status\x18\x01 \x01(\tR\x06status\"H\n" +
 	"\x16GetSourceStatusRequest\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\x12\x10\n" +
-	"\x03app\x18\x02 \x01(\tR\x03app\"\xf2\x01\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\x12\x18\n" +
+	"\aservice\x18\x02 \x01(\tR\aservice\"\xf2\x01\n" +
 	"\x17GetSourceStatusResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x1f\n" +
 	"\vschema_yaml\x18\x02 \x01(\tR\n" +
@@ -4936,10 +4961,10 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\bSendRows\x12\x14.weft.ComputeMessage\x1a\x16.weft.SendRowsResponse(\x01\x12<\n" +
 	"\tGetResult\x12\x16.weft.GetResultRequest\x1a\x17.weft.GetResultResponse\x12E\n" +
 	"\fExecuteQuery\x12\x19.weft.ExecuteQueryRequest\x1a\x1a.weft.ExecuteQueryResponse\x12S\n" +
-	"\x12ExecuteQueryStream\x12\x19.weft.ExecuteQueryRequest\x1a .weft.ExecuteQueryStreamResponse0\x012\xd0\x0e\n" +
+	"\x12ExecuteQueryStream\x12\x19.weft.ExecuteQueryRequest\x1a .weft.ExecuteQueryStreamResponse0\x012\xdc\x0e\n" +
 	"\x0fWeftCoordinator\x12N\n" +
-	"\aExecute\x12\x1f.weft.CoordinatorExecuteRequest\x1a .weft.CoordinatorExecuteResponse0\x01\x129\n" +
-	"\bListApps\x12\x15.weft.ListAppsRequest\x1a\x16.weft.ListAppsResponse\x12c\n" +
+	"\aExecute\x12\x1f.weft.CoordinatorExecuteRequest\x1a .weft.CoordinatorExecuteResponse0\x01\x12E\n" +
+	"\fListServices\x12\x19.weft.ListServicesRequest\x1a\x1a.weft.ListServicesResponse\x12c\n" +
 	"\x16SampleCloudWatchSource\x12#.weft.SampleCloudWatchSourceRequest\x1a$.weft.SampleCloudWatchSourceResponse\x12<\n" +
 	"\tAddSource\x12\x16.weft.AddSourceRequest\x1a\x17.weft.AddSourceResponse\x12B\n" +
 	"\vListSources\x12\x18.weft.ListSourcesRequest\x1a\x19.weft.ListSourcesResponse\x12E\n" +
@@ -5020,8 +5045,8 @@ var file_proto_weftpb_weft_proto_goTypes = []any{
 	(*CoordinatorExecuteResponse)(nil),     // 37: weft.CoordinatorExecuteResponse
 	(*Line)(nil),                           // 38: weft.Line
 	(*Notice)(nil),                         // 39: weft.Notice
-	(*ListAppsRequest)(nil),                // 40: weft.ListAppsRequest
-	(*ListAppsResponse)(nil),               // 41: weft.ListAppsResponse
+	(*ListServicesRequest)(nil),            // 40: weft.ListServicesRequest
+	(*ListServicesResponse)(nil),           // 41: weft.ListServicesResponse
 	(*AddSourceRequest)(nil),               // 42: weft.AddSourceRequest
 	(*AddSourceResponse)(nil),              // 43: weft.AddSourceResponse
 	(*SampleCloudWatchSourceRequest)(nil),  // 44: weft.SampleCloudWatchSourceRequest
@@ -5082,7 +5107,7 @@ var file_proto_weftpb_weft_proto_depIdxs = []int32{
 	19, // 18: weft.WeftCompute.ExecuteQuery:input_type -> weft.ExecuteQueryRequest
 	19, // 19: weft.WeftCompute.ExecuteQueryStream:input_type -> weft.ExecuteQueryRequest
 	36, // 20: weft.WeftCoordinator.Execute:input_type -> weft.CoordinatorExecuteRequest
-	40, // 21: weft.WeftCoordinator.ListApps:input_type -> weft.ListAppsRequest
+	40, // 21: weft.WeftCoordinator.ListServices:input_type -> weft.ListServicesRequest
 	44, // 22: weft.WeftCoordinator.SampleCloudWatchSource:input_type -> weft.SampleCloudWatchSourceRequest
 	42, // 23: weft.WeftCoordinator.AddSource:input_type -> weft.AddSourceRequest
 	46, // 24: weft.WeftCoordinator.ListSources:input_type -> weft.ListSourcesRequest
@@ -5119,7 +5144,7 @@ var file_proto_weftpb_weft_proto_depIdxs = []int32{
 	20, // 55: weft.WeftCompute.ExecuteQuery:output_type -> weft.ExecuteQueryResponse
 	21, // 56: weft.WeftCompute.ExecuteQueryStream:output_type -> weft.ExecuteQueryStreamResponse
 	37, // 57: weft.WeftCoordinator.Execute:output_type -> weft.CoordinatorExecuteResponse
-	41, // 58: weft.WeftCoordinator.ListApps:output_type -> weft.ListAppsResponse
+	41, // 58: weft.WeftCoordinator.ListServices:output_type -> weft.ListServicesResponse
 	45, // 59: weft.WeftCoordinator.SampleCloudWatchSource:output_type -> weft.SampleCloudWatchSourceResponse
 	43, // 60: weft.WeftCoordinator.AddSource:output_type -> weft.AddSourceResponse
 	47, // 61: weft.WeftCoordinator.ListSources:output_type -> weft.ListSourcesResponse

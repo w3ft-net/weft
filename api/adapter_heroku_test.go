@@ -76,7 +76,7 @@ func TestHerokuAdapter_Parse_AppDynoSplit(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want 1", len(rows))
 	}
-	if got, want := rows[0].App, "myapp/web"; got != want {
+	if got, want := rows[0].Service+"/"+rows[0].Kind, "myapp/web"; got != want {
 		t.Errorf("App = %q, want %q (dyno number must drop from app name)", got, want)
 	}
 	if got, want := rows[0].Instance, "web.1"; got != want {
@@ -102,8 +102,8 @@ func TestHerokuAdapter_Parse_Router(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rows[0].App != "myapp/router" {
-		t.Errorf("App = %q, want myapp/router", rows[0].App)
+	if rows[0].Service+"/"+rows[0].Kind != "myapp/router" {
+		t.Errorf("App = %q, want myapp/router", rows[0].Service+"/"+rows[0].Kind)
 	}
 	if rows[0].Instance != "router" {
 		t.Errorf("Instance = %q, want router (no dyno number)", rows[0].Instance)
@@ -123,8 +123,8 @@ func TestHerokuAdapter_Parse_HerokuPlatformEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rows[0].App != "myapp/platform" {
-		t.Errorf("App = %q, want myapp/platform (heroku-originated event must surface as platform sub-app)", rows[0].App)
+	if rows[0].Service+"/"+rows[0].Kind != "myapp/platform" {
+		t.Errorf("App = %q, want myapp/platform (heroku-originated event must surface as platform sub-app)", rows[0].Service+"/"+rows[0].Kind)
 	}
 }
 
@@ -149,8 +149,8 @@ func TestHerokuAdapter_Parse_MultiFrame(t *testing.T) {
 	if rows[0].Raw != "first" || rows[1].Raw != "second" || rows[2].Raw != "third" {
 		t.Errorf("rows raw = [%q, %q, %q], want [first, second, third]", rows[0].Raw, rows[1].Raw, rows[2].Raw)
 	}
-	if rows[2].App != "myapp/worker" {
-		t.Errorf("rows[2].App = %q, want myapp/worker", rows[2].App)
+	if rows[2].Service+"/"+rows[2].Kind != "myapp/worker" {
+		t.Errorf("rows[2] service/kind = %q, want myapp/worker", rows[2].Service+"/"+rows[2].Kind)
 	}
 }
 
@@ -174,11 +174,11 @@ func TestHerokuAdapter_Parse_L2metMetricLine(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("rows = %d, want 2 (canonical + metrics)", len(rows))
 	}
-	if rows[0].App != "myapp/web" {
-		t.Errorf("rows[0].App = %q, want myapp/web (canonical row)", rows[0].App)
+	if rows[0].Service+"/"+rows[0].Kind != "myapp/web" {
+		t.Errorf("rows[0] service/kind = %q, want myapp/web (canonical row)", rows[0].Service+"/"+rows[0].Kind)
 	}
-	if rows[1].App != "myapp/metrics" {
-		t.Errorf("rows[1].App = %q, want myapp/metrics", rows[1].App)
+	if rows[1].Service+"/"+rows[1].Kind != "myapp/metrics" {
+		t.Errorf("rows[1] service/kind = %q, want myapp/metrics", rows[1].Service+"/"+rows[1].Kind)
 	}
 	if len(rows[1].PayloadJson) == 0 {
 		t.Fatal("metrics row has no PayloadJson")

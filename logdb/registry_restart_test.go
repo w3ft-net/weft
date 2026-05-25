@@ -50,8 +50,8 @@ func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
 	ingestShard := chosen.Shard
 
 	rows := []*pb.LogRow{
-		{Raw: "test log line 1", App: "weft/coordinator", Customer: "testcust", Level: "INFO", TsUnixNs: time.Now().UnixNano()},
-		{Raw: "test log line 2", App: "weft/coordinator", Customer: "testcust", Level: "ERROR", TsUnixNs: time.Now().UnixNano()},
+		{Raw: "test log line 1", Namespace: "weft", Service: "coordinator", Customer: "testcust", Level: "INFO", TsUnixNs: time.Now().UnixNano()},
+		{Raw: "test log line 2", Namespace: "weft", Service: "coordinator", Customer: "testcust", Level: "ERROR", TsUnixNs: time.Now().UnixNano()},
 	}
 	if err := ingestShard.Ingest(rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)

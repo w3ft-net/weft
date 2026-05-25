@@ -54,7 +54,7 @@ func TestDirectToCompute_Op5_CoordinatorComputeStageRoundtrip(t *testing.T) {
 	}
 	for i, v := range values {
 		stream.Send(&pb.LogRow{
-			App:      "op5compute/app",
+			Namespace: "op5compute", Service: "app",
 			Customer: "kevlar",
 			Raw:      v,
 			Level:    "INFO",

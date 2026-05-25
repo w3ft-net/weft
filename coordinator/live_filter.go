@@ -33,7 +33,7 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 	app := plan.FollowApp
 
 	passthrough := func(row *pb.LogRow) []string {
-		if app != "" && !appMatches(row.App, app) {
+		if app != "" && !appMatches(rowComposite(row), app) {
 			return nil
 		}
 		return []string{row.Raw}
@@ -56,7 +56,7 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 	}
 
 	return func(row *pb.LogRow) []string {
-		if app != "" && !appMatches(row.App, app) {
+		if app != "" && !appMatches(rowComposite(row), app) {
 			return nil
 		}
 		return runStages(row.Raw, ast)

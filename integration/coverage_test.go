@@ -57,4 +57,3 @@ func TestParseFuncLine(t *testing.T) {
 		})
 	}
 }
-

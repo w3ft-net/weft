@@ -34,10 +34,10 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	defer ds.Close()
 
 	rows := []*pb.LogRow{
-		{Raw: "lambda integration row 1", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
-		{Raw: "lambda integration row 2", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
-		{Raw: "lambda integration row 3", App: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
-		{Raw: "lambda integration row 4", App: "vimgym", Level: "DEBUG", Customer: "acme", TsUnixNs: t0.Add(4 * time.Second).UnixNano()},
+		{Raw: "lambda integration row 1", Namespace: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
+		{Raw: "lambda integration row 2", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
+		{Raw: "lambda integration row 3", Namespace: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
+		{Raw: "lambda integration row 4", Namespace: "vimgym", Level: "DEBUG", Customer: "acme", TsUnixNs: t0.Add(4 * time.Second).UnixNano()},
 	}
 	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatal(err)
@@ -129,10 +129,10 @@ func TestComputeLifecycle_LambdaColdShardReachable(t *testing.T) {
 	defer ds.Close()
 
 	rows := []*pb.LogRow{
-		{Raw: "compute lifecycle row 1", App: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
-		{Raw: "compute lifecycle row 2", App: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
-		{Raw: "compute lifecycle row 3", App: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
-		{Raw: "compute lifecycle row 4", App: "vimgym", Level: "DEBUG", Customer: "acme", TsUnixNs: t0.Add(4 * time.Second).UnixNano()},
+		{Raw: "compute lifecycle row 1", Namespace: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
+		{Raw: "compute lifecycle row 2", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
+		{Raw: "compute lifecycle row 3", Namespace: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
+		{Raw: "compute lifecycle row 4", Namespace: "vimgym", Level: "DEBUG", Customer: "acme", TsUnixNs: t0.Add(4 * time.Second).UnixNano()},
 	}
 	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatal(err)
@@ -156,7 +156,7 @@ func TestComputeLifecycle_LambdaColdShardReachable(t *testing.T) {
 			ShardId:     "cold-compute-lifecycle",
 			LambdaUrl:   lambdaURL,
 			ParquetPath: s3Path,
-			Apps:        []string{"vimgym", "callbox"},
+			Services:    []string{"vimgym", "callbox"},
 		}},
 	})
 	if err != nil {

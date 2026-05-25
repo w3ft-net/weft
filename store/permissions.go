@@ -87,4 +87,3 @@ func (s *Store) GetOrgPermission(customerID uint, userID string) (*OrgPermission
 	}
 	return &p, nil
 }
-

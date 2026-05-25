@@ -6,9 +6,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Schema describes how to parse raw log lines for an app.
+// Schema describes how to parse raw log lines for a service.
 type Schema struct {
-	App      string `yaml:"app"`
+	// Service is the bare service name. The yaml key stays "app" for
+	// compatibility with schemas already stored in log_groups.schema_yaml;
+	// the poller overrides this with the log group's service before
+	// parsing, so the stored value is advisory.
+	Service  string `yaml:"app"`
 	Customer string `yaml:"customer"`
 
 	// Envelope is the outer wrapper applied by the transport layer.

@@ -600,7 +600,7 @@ var WeftCompute_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	WeftCoordinator_Execute_FullMethodName                = "/weft.WeftCoordinator/Execute"
-	WeftCoordinator_ListApps_FullMethodName               = "/weft.WeftCoordinator/ListApps"
+	WeftCoordinator_ListServices_FullMethodName           = "/weft.WeftCoordinator/ListServices"
 	WeftCoordinator_SampleCloudWatchSource_FullMethodName = "/weft.WeftCoordinator/SampleCloudWatchSource"
 	WeftCoordinator_AddSource_FullMethodName              = "/weft.WeftCoordinator/AddSource"
 	WeftCoordinator_ListSources_FullMethodName            = "/weft.WeftCoordinator/ListSources"
@@ -636,8 +636,8 @@ type WeftCoordinatorClient interface {
 	// coordinator's Execute method classifies and dispatches: log
 	// queries go to the strict planner; non-log work runs through warp.
 	Execute(ctx context.Context, in *CoordinatorExecuteRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CoordinatorExecuteResponse], error)
-	// ListApps returns the available app names (pseudofiles).
-	ListApps(ctx context.Context, in *ListAppsRequest, opts ...grpc.CallOption) (*ListAppsResponse, error)
+	// ListServices returns the available service names (pseudofiles).
+	ListServices(ctx context.Context, in *ListServicesRequest, opts ...grpc.CallOption) (*ListServicesResponse, error)
 	// SampleCloudWatchSource assumes the customer's cross-account role and
 	// pulls a handful of recent events so the dashboard can show a preview
 	// and run schema detection before the user commits to a source.
@@ -709,10 +709,10 @@ func (c *weftCoordinatorClient) Execute(ctx context.Context, in *CoordinatorExec
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WeftCoordinator_ExecuteClient = grpc.ServerStreamingClient[CoordinatorExecuteResponse]
 
-func (c *weftCoordinatorClient) ListApps(ctx context.Context, in *ListAppsRequest, opts ...grpc.CallOption) (*ListAppsResponse, error) {
+func (c *weftCoordinatorClient) ListServices(ctx context.Context, in *ListServicesRequest, opts ...grpc.CallOption) (*ListServicesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListAppsResponse)
-	err := c.cc.Invoke(ctx, WeftCoordinator_ListApps_FullMethodName, in, out, cOpts...)
+	out := new(ListServicesResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_ListServices_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -971,8 +971,8 @@ type WeftCoordinatorServer interface {
 	// coordinator's Execute method classifies and dispatches: log
 	// queries go to the strict planner; non-log work runs through warp.
 	Execute(*CoordinatorExecuteRequest, grpc.ServerStreamingServer[CoordinatorExecuteResponse]) error
-	// ListApps returns the available app names (pseudofiles).
-	ListApps(context.Context, *ListAppsRequest) (*ListAppsResponse, error)
+	// ListServices returns the available service names (pseudofiles).
+	ListServices(context.Context, *ListServicesRequest) (*ListServicesResponse, error)
 	// SampleCloudWatchSource assumes the customer's cross-account role and
 	// pulls a handful of recent events so the dashboard can show a preview
 	// and run schema detection before the user commits to a source.
@@ -1028,8 +1028,8 @@ type UnimplementedWeftCoordinatorServer struct{}
 func (UnimplementedWeftCoordinatorServer) Execute(*CoordinatorExecuteRequest, grpc.ServerStreamingServer[CoordinatorExecuteResponse]) error {
 	return status.Error(codes.Unimplemented, "method Execute not implemented")
 }
-func (UnimplementedWeftCoordinatorServer) ListApps(context.Context, *ListAppsRequest) (*ListAppsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListApps not implemented")
+func (UnimplementedWeftCoordinatorServer) ListServices(context.Context, *ListServicesRequest) (*ListServicesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListServices not implemented")
 }
 func (UnimplementedWeftCoordinatorServer) SampleCloudWatchSource(context.Context, *SampleCloudWatchSourceRequest) (*SampleCloudWatchSourceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SampleCloudWatchSource not implemented")
@@ -1135,20 +1135,20 @@ func _WeftCoordinator_Execute_Handler(srv interface{}, stream grpc.ServerStream)
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WeftCoordinator_ExecuteServer = grpc.ServerStreamingServer[CoordinatorExecuteResponse]
 
-func _WeftCoordinator_ListApps_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListAppsRequest)
+func _WeftCoordinator_ListServices_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListServicesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(WeftCoordinatorServer).ListApps(ctx, in)
+		return srv.(WeftCoordinatorServer).ListServices(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: WeftCoordinator_ListApps_FullMethodName,
+		FullMethod: WeftCoordinator_ListServices_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WeftCoordinatorServer).ListApps(ctx, req.(*ListAppsRequest))
+		return srv.(WeftCoordinatorServer).ListServices(ctx, req.(*ListServicesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1582,8 +1582,8 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*WeftCoordinatorServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "ListApps",
-			Handler:    _WeftCoordinator_ListApps_Handler,
+			MethodName: "ListServices",
+			Handler:    _WeftCoordinator_ListServices_Handler,
 		},
 		{
 			MethodName: "SampleCloudWatchSource",

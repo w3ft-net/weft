@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -43,7 +44,7 @@ func (r *IngestionErrorRecorder) Record(shardID, errMsg string, rows []*pb.LogRo
 		return
 	}
 
-	apps := distinctStrings(rows, func(r *pb.LogRow) string { return r.App })
+	apps := distinctStrings(rows, func(r *pb.LogRow) string { return shard.JoinApp(r.Namespace, r.Service, r.Kind) })
 	customers := distinctStrings(rows, func(r *pb.LogRow) string { return r.Customer })
 
 	select {

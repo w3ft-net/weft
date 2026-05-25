@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -44,8 +43,8 @@ func TestBuckets_DefaultSeeded(t *testing.T) {
 	}
 	// apps decodes to []string via the GORM json serializer; the
 	// day-1 "default" bucket is the catch-all (empty list).
-	if len(b.Apps) != 0 {
-		t.Errorf("default.apps: got %v, want empty (catch-all)", b.Apps)
+	if len(b.Services) != 0 {
+		t.Errorf("default.apps: got %v, want empty (catch-all)", b.Services)
 	}
 	// Compare as parsed durations so "168h" (migration default) and
 	// "168h0m0s" (Go time.Duration.String() format, written on any
@@ -157,7 +156,7 @@ func TestBuckets_OnboardServicePropagates(t *testing.T) {
 		AwsAccountId: "000000000000",
 		RoleArn:      "arn:aws:iam::000000000000:role/integration-test",
 		Region:       "us-east-1",
-		App:          appName,
+		Service:      appName,
 		LogGroup:     "/integration-test/bucket-onboarding",
 		PollInterval: "30s",
 	})
@@ -179,7 +178,7 @@ func TestBuckets_OnboardServicePropagates(t *testing.T) {
 		if !ok {
 			t.Fatal("default bucket disappeared")
 		}
-		if slices.Contains(b.Apps, appName) {
+		if slices.Contains(b.Services, appName) {
 			bucket = b
 			break
 		}
@@ -188,15 +187,26 @@ func TestBuckets_OnboardServicePropagates(t *testing.T) {
 	if bucket.ID == 0 {
 		// Final read for the error message.
 		b, _, _ := db.GetBucket(def.ID)
-		t.Fatalf("bucket.apps missing %q after 10s: %v", appName, b.Apps)
+		t.Fatalf("bucket.apps missing %q after 10s: %v", appName, b.Services)
 	}
 
-	// Now check shards. For each INGESTING shard bound to default,
-	// apps JSON must contain the new app. For each READ_ONLY shard,
-	// apps JSON must NOT contain it.
+	// Now check shards. Routing lives in shard_services now (migration
+	// 058): each INGESTING shard bound to default must have a
+	// shard_services row for the new service; READ_ONLY shards were
+	// frozen at christen and must NOT have been re-stamped with it.
 	shards, err := db.ListShards()
 	if err != nil {
 		t.Fatalf("ListShards: %v", err)
+	}
+	svcRows, err := db.ListShardServices()
+	if err != nil {
+		t.Fatalf("ListShardServices: %v", err)
+	}
+	servesNew := map[string]bool{} // shardID → serves appName
+	for _, ss := range svcRows {
+		if ss.Service == appName {
+			servesNew[ss.ShardID] = true
+		}
 	}
 
 	ingestingChecked := 0
@@ -205,19 +215,18 @@ func TestBuckets_OnboardServicePropagates(t *testing.T) {
 		if s.BucketID != def.ID {
 			continue
 		}
-		appsContainsNew := strings.Contains(s.Apps, `"`+appName+`"`)
 		switch s.State {
 		case "INGESTING":
 			ingestingChecked++
-			if !appsContainsNew {
-				t.Errorf("INGESTING shard %s did not receive app %q: apps=%s",
-					s.ID, appName, s.Apps)
+			if !servesNew[s.ID] {
+				t.Errorf("INGESTING shard %s has no shard_services row for service %q",
+					s.ID, appName)
 			}
 		case "READ_ONLY":
 			readOnlyChecked++
-			if appsContainsNew {
-				t.Errorf("READ_ONLY shard %s was mutated with new app %q: apps=%s (denormalization violated)",
-					s.ID, appName, s.Apps)
+			if servesNew[s.ID] {
+				t.Errorf("READ_ONLY shard %s was re-stamped with service %q (christen stamp must be frozen)",
+					s.ID, appName)
 			}
 		}
 	}
@@ -227,4 +236,3 @@ func TestBuckets_OnboardServicePropagates(t *testing.T) {
 	t.Logf("verified %d INGESTING shards received %q; %d READ_ONLY shards stayed frozen",
 		ingestingChecked, appName, readOnlyChecked)
 }
-
