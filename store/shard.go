@@ -17,13 +17,13 @@ type ShardRecord struct {
 	WindowStart string `gorm:"not null"` // RFC3339
 	WindowEnd   string `gorm:"not null"` // RFC3339
 	State       string `gorm:"not null"` // INGESTING/READ_ONLY/ARCHIVED
-	Addr        string                   // gRPC address for live shards
-	InstanceID  string                   // EC2 instance ID
-	ParquetPath string                   // Parquet file path for archived shards
-	Tier        string                   // instance tier (small/medium/large)
+	Addr        string // gRPC address for live shards
+	InstanceID  string // EC2 instance ID
+	ParquetPath string // Parquet file path for archived shards
+	Tier        string // instance tier (small/medium/large)
 	RowCount    int64  `gorm:"default:0"`
 	CreatedAt   string `gorm:"not null"` // RFC3339
-	EBSVolumeID string                   // EBS volume holding this shard's DuckDB (empty = not on a dedicated volume yet)
+	EBSVolumeID string // EBS volume holding this shard's DuckDB (empty = not on a dedicated volume yet)
 	// HeartbeatToken is a per-shard bearer the shard presents on every
 	// Heartbeat RPC. Minted by the provisioner at christen, returned
 	// to the shard in the Configure response, and persisted in
@@ -45,12 +45,12 @@ type ShardRecord struct {
 	// retry counter across reap ticks. AZ + StripeIndex carry the
 	// striping assignment so recovery launches don't have to
 	// re-derive them from volume tags.
-	IngestFailures   int       `gorm:"not null;default:0;column:ingest_failures"`
-	IngestUnhealthy  bool      `gorm:"not null;default:false;column:ingest_unhealthy"`
-	LastHeartbeatAt  *time.Time `gorm:"column:last_heartbeat_at"`
-	LaunchAttempts   int       `gorm:"not null;default:0;column:launch_attempts"`
-	AZ               string    `gorm:"column:az"`
-	StripeIndex      *int      `gorm:"column:stripe_index"`
+	IngestFailures  int        `gorm:"not null;default:0;column:ingest_failures"`
+	IngestUnhealthy bool       `gorm:"not null;default:false;column:ingest_unhealthy"`
+	LastHeartbeatAt *time.Time `gorm:"column:last_heartbeat_at"`
+	LaunchAttempts  int        `gorm:"not null;default:0;column:launch_attempts"`
+	AZ              string     `gorm:"column:az"`
+	StripeIndex     *int       `gorm:"column:stripe_index"`
 }
 
 // GenerateShardHeartbeatToken mints a fresh 256-bit random bearer token
@@ -136,6 +136,31 @@ func (s *Store) SetShardLaunchResult(id, instanceID, az, volumeID string, stripe
 func (s *Store) IncrementShardLaunchAttempts(id string) error {
 	return s.db.Model(&ShardRecord{}).Where("id = ?", id).
 		UpdateColumn("launch_attempts", gorm.Expr("launch_attempts + 1")).Error
+}
+
+// SetShardParquetPath records where an archived shard's data landed in
+// S3. The FSM's ARCHIVED-cleanup Evaluate sets this once the export
+// succeeds so a later tick (or a restart mid-cleanup) skips re-exporting.
+// Narrow (Select forces the single column) so it can't race a state write.
+func (s *Store) SetShardParquetPath(id, path string) error {
+	return s.db.Model(&ShardRecord{}).Where("id = ?", id).
+		Select("ParquetPath").Updates(&ShardRecord{ParquetPath: path}).Error
+}
+
+// ClearShardVolume blanks ebs_volume_id after an archived shard's data
+// volume is snapshotted and deleted. Select forces the empty string to
+// write (a zero-value struct field is otherwise skipped by gorm). Lets
+// the next Evaluate tick see "volume already retired" and move on.
+func (s *Store) ClearShardVolume(id string) error {
+	return s.db.Model(&ShardRecord{}).Where("id = ?", id).
+		Select("EBSVolumeID").Updates(&ShardRecord{EBSVolumeID: ""}).Error
+}
+
+// ClearShardInstance blanks instance_id after an archived shard's
+// instance is terminated. Same narrow-write rationale as ClearShardVolume.
+func (s *Store) ClearShardInstance(id string) error {
+	return s.db.Model(&ShardRecord{}).Where("id = ?", id).
+		Select("InstanceID").Updates(&ShardRecord{InstanceID: ""}).Error
 }
 
 // ListShards returns all shard records.

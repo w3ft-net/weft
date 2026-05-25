@@ -11,7 +11,19 @@ import (
 
 	"github.com/qmuntal/stateless"
 
+	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
+)
+
+// configureTimeout bounds the gRPC Dial+Configure on the
+// LAUNCHING/SUSPENDED → INGESTING heartbeat path. archiveTimeout bounds
+// the (much longer) ARCHIVED-cleanup work — export to S3, volume
+// snapshot/detach/delete. Both mirror the values the pre-FSM provisioner
+// used (christen and archive respectively).
+const (
+	configureTimeout = 30 * time.Second
+	archiveTimeout   = 10 * time.Minute
 )
 
 // ShardSM is the per-shard finite state machine. Wraps a
@@ -54,8 +66,18 @@ type ShardSMDeps struct {
 	Store    *store.Store
 	Registry *ShardRegistry
 	Launcher ShardLaunchAPI // launches/terminates instances; nil in tests that don't drive launches
-	Volumes  VolumeManager  // resolves a shard's volume for the SUSPENDED stranded check; nil skips it
-	Clock    func() time.Time
+	Volumes  VolumeManager  // resolves a shard's volume for the SUSPENDED stranded check + archive retire; nil skips both
+	// Configurer dials a freshly-heartbeating shard over gRPC and sends
+	// the Configure RPC, returning a live handle. Nil on dev/test paths
+	// that don't drive real gRPC — the SM then records the heartbeat's
+	// addr without attaching a connection.
+	Configurer ShardConfigurer
+	// ParquetDir is the S3 prefix root archive exports write under;
+	// LambdaFunctionURL is threaded into the ColdShard handle the
+	// archive swaps in. Both consumed only by the ARCHIVED-cleanup path.
+	ParquetDir        string
+	LambdaFunctionURL string
+	Clock             func() time.Time
 	// StaleThreshold mirrors heartbeatStaleThreshold; carried in deps
 	// so tests can shrink it without touching the package-level const.
 	StaleThreshold time.Duration
@@ -276,9 +298,12 @@ func (s *ShardSM) staleTargetFromActive(context.Context, ...any) (stateless.Stat
 // actions, so a restart that drops straight into Evaluate re-drives
 // any half-finished work — there is no boot-vs-running mode.
 //
-// B1.1 covers the LAUNCHING (fresh launch + retry budget) and active
-// (stale-detection) paths. SUSPENDED recovery and ARCHIVED cleanup
-// land in B1.2.
+// LAUNCHING drives a fresh launch (+ retry budget); INGESTING/READ_ONLY
+// run stale-detection; SUSPENDED runs recovery's reap-then-relaunch; and
+// ARCHIVED runs the post-archive cleanup (export → volume retire →
+// terminate). The cleanup lives here rather than in ARCHIVED.OnEntry for
+// the same reason the launch does: a crash mid-cleanup re-drives it on
+// the next tick.
 func (s *ShardSM) Evaluate(ctx context.Context) error {
 	st, err := s.State(ctx)
 	if err != nil {
@@ -291,6 +316,8 @@ func (s *ShardSM) Evaluate(ctx context.Context) error {
 		return s.evaluateActive(ctx)
 	case StateSuspended:
 		return s.evaluateSuspended(ctx)
+	case StateArchived:
+		return s.evaluateArchived(ctx)
 	default:
 		return nil
 	}
@@ -428,6 +455,122 @@ func (s *ShardSM) evaluateSuspended(ctx context.Context) error {
 	return s.Fire(ctx, TriggerRelaunch) // → LAUNCHING (recovery relaunch)
 }
 
+// evaluateArchived runs the post-archive cleanup. ARCHIVED is the
+// terminal data state, but entering it only flips the row's state — the
+// actual export-to-S3, volume retire, and instance terminate happen
+// here so a crash mid-cleanup re-drives them next tick (the launch path
+// made the same OnEntry-vs-Evaluate choice). Each step is gated on a
+// persisted fact (ParquetPath set, volume cleared, instance cleared) so
+// a completed step is never repeated, and any step's failure leaves the
+// entry mid-cleanup for the next tick rather than unwinding the archive.
+func (s *ShardSM) evaluateArchived(ctx context.Context) error {
+	s.mu.Lock()
+	parquetPath := s.entry.ParquetPath
+	liveShard := s.entry.Shard
+	volumeID := s.entry.EBSVolumeID
+	instanceID := s.entry.InstanceID
+	services := s.entry.Services
+	s.mu.Unlock()
+
+	// Step 1 — export to S3 (once). A shard with no recorded path and no
+	// live handle has nothing to export (already cold after a restart, or
+	// never ingested); fall through to the volume/instance cleanup.
+	if parquetPath == "" && liveShard != nil {
+		exportCtx, cancel := context.WithTimeout(ctx, archiveTimeout)
+		path, err := liveShard.Archive(exportCtx, s.archiveS3Prefix(services))
+		cancel()
+		if err != nil {
+			log.Printf("shardsm %s: archive export failed, retrying next tick: %v", s.id, err)
+			return nil
+		}
+		// Swap the live handle for a ColdShard so registry walks still see
+		// a non-nil pointer for the archived entry. Build it before the
+		// persist so a ColdShard failure doesn't strand us with a recorded
+		// path but a closed live handle.
+		cold, err := shard.NewColdShard(s.id, serviceNames(services), path, s.deps.LambdaFunctionURL, nil)
+		if err != nil {
+			log.Printf("shardsm %s: build cold shard, retrying next tick: %v", s.id, err)
+			return nil
+		}
+		if err := s.deps.Store.SetShardParquetPath(s.id, path); err != nil {
+			return fmt.Errorf("shardsm %s: persist parquet path: %w", s.id, err)
+		}
+		liveShard.Close()
+		s.mu.Lock()
+		s.entry.Shard = cold
+		s.entry.ParquetPath = path
+		s.entry.LastHeartbeatAt = time.Time{}
+		parquetPath = path
+		s.mu.Unlock()
+		log.Printf("shardsm %s: archived to %s", s.id, path)
+	}
+
+	// Step 2 — retire the data volume (snapshot → detach → delete).
+	if volumeID != "" && s.deps.Volumes != nil {
+		if err := s.retireVolume(ctx, volumeID, parquetPath); err != nil {
+			log.Printf("shardsm %s: retire volume %s, retrying next tick: %v", s.id, volumeID, err)
+			return nil
+		}
+		if err := s.deps.Store.ClearShardVolume(s.id); err != nil {
+			return fmt.Errorf("shardsm %s: clear volume: %w", s.id, err)
+		}
+		s.mu.Lock()
+		s.entry.EBSVolumeID = ""
+		s.mu.Unlock()
+	}
+
+	// Step 3 — terminate the now-idle instance. Terminate is idempotent,
+	// so re-running against an already-gone instance is a no-op; we still
+	// clear the id so a settled ARCHIVED shard reaches a do-nothing tick.
+	if instanceID != "" && s.deps.Launcher != nil {
+		if err := s.deps.Launcher.Terminate(ctx, instanceID); err != nil {
+			log.Printf("shardsm %s: terminate %s, retrying next tick: %v", s.id, instanceID, err)
+			return nil
+		}
+		if err := s.deps.Store.ClearShardInstance(s.id); err != nil {
+			return fmt.Errorf("shardsm %s: clear instance: %w", s.id, err)
+		}
+		s.mu.Lock()
+		s.entry.InstanceID = ""
+		s.mu.Unlock()
+	}
+	return nil
+}
+
+// archiveS3Prefix mirrors the pre-FSM provisioner's layout:
+// <ParquetDir>/<service-label>, where the label collapses multi-service
+// shards to "N-apps" and an empty set to "shared".
+func (s *ShardSM) archiveS3Prefix(services []store.ShardService) string {
+	return fmt.Sprintf("%s/%s", s.deps.ParquetDir, joinServices(serviceNames(services)))
+}
+
+// retireVolume runs snapshot → detach → delete on an archived shard's
+// data volume. Detach is forced: the hosting instance may already be
+// terminated (Step 3 hasn't run, or a prior failure left it dead), and a
+// non-force detach hangs on a gone instance. Any step's error returns so
+// the caller leaves the volume in place for a retry.
+func (s *ShardSM) retireVolume(ctx context.Context, volumeID, parquetPath string) error {
+	ctx, cancel := context.WithTimeout(ctx, archiveTimeout)
+	defer cancel()
+
+	snapID, err := s.deps.Volumes.SnapshotVolume(ctx, SnapshotOpts{
+		VolumeID:    volumeID,
+		ShardID:     s.id,
+		ParquetPath: parquetPath,
+	})
+	if err != nil {
+		return fmt.Errorf("snapshot: %w", err)
+	}
+	log.Printf("shardsm %s: snapshotted %s → %s before delete", s.id, volumeID, snapID)
+	if err := s.deps.Volumes.DetachFromInstance(ctx, volumeID, true); err != nil {
+		return fmt.Errorf("detach: %w", err)
+	}
+	if err := s.deps.Volumes.DeleteVolume(ctx, volumeID); err != nil {
+		return fmt.Errorf("delete: %w", err)
+	}
+	return nil
+}
+
 // ── Action stubs — Phase 2 wires the real bodies. ───────────────
 //
 // Each method is callable today (compiles + logs) so the FSM
@@ -440,13 +583,52 @@ func (s *ShardSM) onEnterLaunching(ctx context.Context, args ...any) error {
 	return nil
 }
 
+// configureOnHeartbeat is INGESTING's OnEntryFrom(Heartbeat): the shard
+// has just reported a live gRPC addr (LAUNCHING after a fresh boot, or
+// SUSPENDED after a replacement attached the surviving volume). It dials
+// the shard and sends Configure, then attaches the live handle.
+//
+// No prior connection to close: LAUNCHING never held one, and
+// SUSPENDED.OnEntry already dropped the dead handle (see the failure
+// walkthrough in docs/plans/asg-as-api-stateless.md — "old entry.Shard
+// was already nil; no deferred close needed").
+//
+// On a Dial failure the transition's state write (→ INGESTING) has
+// already landed — stateless persists the destination before running
+// OnEntry — so the row is INGESTING with a nil handle until a later
+// heartbeat reconnects it (slice C wires that reconnect). Returning the
+// error surfaces the failure to the heartbeat caller for logging
+// meanwhile, and leaves entry.Shard nil rather than half-set.
+//
+// Configurer is nil on dev/test paths; the SM then just records the
+// heartbeat's addr/instance without attaching a connection.
 func (s *ShardSM) configureOnHeartbeat(ctx context.Context, args ...any) error {
 	hb, ok := heartbeatArg(args)
 	if !ok {
 		return fmt.Errorf("shardsm %s: configureOnHeartbeat missing heartbeat arg", s.id)
 	}
-	log.Printf("shardsm %s: enter INGESTING from heartbeat (instance=%s addr=%s) — stub",
-		s.id, hb.InstanceID, hb.Addr)
+
+	var dialed shard.Shard
+	if s.deps.Configurer != nil {
+		s.mu.Lock()
+		req := &pb.ConfigureRequest{
+			ShardId:        s.id,
+			Services:       serviceNames(s.entry.Services),
+			WindowStart:    s.entry.WindowStart.Format(time.RFC3339),
+			WindowEnd:      s.entry.WindowEnd.Format(time.RFC3339),
+			HeartbeatToken: s.entry.HeartbeatToken,
+		}
+		s.mu.Unlock()
+
+		dialCtx, cancel := context.WithTimeout(ctx, configureTimeout)
+		sh, err := s.deps.Configurer.Dial(dialCtx, hb.Addr, req)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("shardsm %s: configure at %s: %w", s.id, hb.Addr, err)
+		}
+		dialed = sh
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entry.Addr = hb.Addr
@@ -454,6 +636,9 @@ func (s *ShardSM) configureOnHeartbeat(ctx context.Context, args ...any) error {
 	s.entry.LastHeartbeatAt = s.deps.Clock()
 	if hb.RowCount > 0 {
 		s.entry.RowCount = hb.RowCount
+	}
+	if dialed != nil {
+		s.entry.Shard = dialed
 	}
 	return nil
 }
@@ -472,8 +657,13 @@ func (s *ShardSM) onEnterSuspended(ctx context.Context, args ...any) error {
 	return nil
 }
 
+// onEnterArchived is intentionally lean: the state write (→ ARCHIVED)
+// has already landed by the time this runs, and the heavy, failure-prone
+// cleanup — export to S3, volume retire, instance terminate — is deferred
+// to evaluateArchived so a crash mid-cleanup re-drives it on the next
+// tick instead of being lost with this one-shot entry action.
 func (s *ShardSM) onEnterArchived(ctx context.Context, args ...any) error {
-	log.Printf("shardsm %s: enter ARCHIVED (stub — Phase 2 wires Archive RPC + volume retire + instance terminate)", s.id)
+	log.Printf("shardsm %s: enter ARCHIVED — cleanup deferred to Evaluate", s.id)
 	return nil
 }
 

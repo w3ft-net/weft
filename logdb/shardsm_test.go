@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -234,7 +236,7 @@ func TestShardSM_EvaluateLaunchFailureBumpsAttempts(t *testing.T) {
 
 func TestShardSM_EvaluateActiveFiresStaleToSuspended(t *testing.T) {
 	sm, _, entry := makeFixtureShardSM(t, StateIngesting)
-	entry.EBSVolumeID = "vol-1" // volume intact → SUSPENDED, not GONE
+	entry.EBSVolumeID = "vol-1"                                            // volume intact → SUSPENDED, not GONE
 	entry.LastHeartbeatAt = time.Date(2026, 5, 21, 11, 50, 0, 0, time.UTC) // 10m < clock(12:00), threshold 2m
 
 	if err := sm.Evaluate(context.Background()); err != nil {
@@ -547,5 +549,209 @@ func TestShardSM_ArchivedRejectsRotateAndArchive(t *testing.T) {
 				t.Fatalf("state: got %q want ARCHIVED unchanged", entry.State)
 			}
 		})
+	}
+}
+
+// ── B1.3: configure-on-heartbeat dial + archive cleanup ─────────
+
+// fakeConfigurer records the Dial it's asked to make and hands back a
+// canned live handle (or error). The returned shard is a failingShard
+// (a no-op shard.Shard) when none is set — the SM only needs a non-nil
+// pointer to attach.
+type fakeConfigurer struct {
+	mu       sync.Mutex
+	dialAddr string
+	dialReq  *pb.ConfigureRequest
+	err      error
+	returned shard.Shard
+}
+
+func (f *fakeConfigurer) Dial(_ context.Context, addr string, req *pb.ConfigureRequest) (shard.Shard, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dialAddr = addr
+	f.dialReq = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.returned == nil {
+		f.returned = &failingShard{id: req.ShardId}
+	}
+	return f.returned, nil
+}
+
+// fakeArchivableShard is a shard.Shard whose Archive returns a canned
+// parquet path (or error) and records that it was archived + closed.
+type fakeArchivableShard struct {
+	id          string
+	archivePath string
+	archiveErr  error
+	archived    bool
+	closed      bool
+}
+
+func (s *fakeArchivableShard) ID() string                                      { return s.id }
+func (s *fakeArchivableShard) Query(string, ...any) ([]*pb.ResultRow, error)   { return nil, nil }
+func (s *fakeArchivableShard) QueryToSink(string, []any, shard.RowSink)        {}
+func (s *fakeArchivableShard) Ingest([]*pb.LogRow, shard.IngestRecorder) error { return nil }
+func (s *fakeArchivableShard) Close() error                                    { s.closed = true; return nil }
+func (s *fakeArchivableShard) Archive(_ context.Context, _ string) (string, error) {
+	s.archived = true
+	if s.archiveErr != nil {
+		return "", s.archiveErr
+	}
+	return s.archivePath, nil
+}
+
+func TestShardSM_ConfigureOnHeartbeatDialsAndAttaches(t *testing.T) {
+	fc := &fakeConfigurer{}
+	sm, _, entry := makeFixtureShardSM(t, StateLaunching, func(d *ShardSMDeps) { d.Configurer = fc })
+	entry.InstanceID = "i-abc"
+	entry.Services = []store.ShardService{{NamespaceID: 1, Service: "warp"}}
+	entry.WindowStart = time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	entry.WindowEnd = time.Date(2026, 5, 21, 13, 0, 0, 0, time.UTC)
+	entry.HeartbeatToken = "tok-xyz"
+
+	hb := store.ShardHeartbeat{ShardID: "s-test", Addr: "10.0.0.1:9000", InstanceID: "i-abc"}
+	if err := sm.Fire(context.Background(), TriggerHeartbeat, hb); err != nil {
+		t.Fatalf("Fire heartbeat: %v", err)
+	}
+	if st, _ := sm.State(context.Background()); st != StateIngesting {
+		t.Fatalf("state: got %q want INGESTING", st)
+	}
+	if fc.dialAddr != "10.0.0.1:9000" {
+		t.Fatalf("dial addr: got %q", fc.dialAddr)
+	}
+	if fc.dialReq.ShardId != "s-test" || fc.dialReq.HeartbeatToken != "tok-xyz" {
+		t.Fatalf("dial req mismatched: %+v", fc.dialReq)
+	}
+	if len(fc.dialReq.Services) != 1 || fc.dialReq.Services[0] != "warp" {
+		t.Fatalf("dial req services: %v", fc.dialReq.Services)
+	}
+	if fc.dialReq.WindowStart != "2026-05-21T12:00:00Z" || fc.dialReq.WindowEnd != "2026-05-21T13:00:00Z" {
+		t.Fatalf("dial req window: start=%q end=%q", fc.dialReq.WindowStart, fc.dialReq.WindowEnd)
+	}
+	if entry.Shard == nil {
+		t.Fatal("entry.Shard not attached after a successful configure")
+	}
+}
+
+func TestShardSM_ConfigureOnHeartbeatDialFailureSurfacesError(t *testing.T) {
+	fc := &fakeConfigurer{err: fmt.Errorf("connection refused")}
+	sm, _, entry := makeFixtureShardSM(t, StateLaunching, func(d *ShardSMDeps) { d.Configurer = fc })
+	entry.InstanceID = "i-abc"
+
+	hb := store.ShardHeartbeat{ShardID: "s-test", Addr: "10.0.0.1:9000", InstanceID: "i-abc"}
+	err := sm.Fire(context.Background(), TriggerHeartbeat, hb)
+	if err == nil {
+		t.Fatal("expected the dial failure to surface from Fire")
+	}
+	if entry.Shard != nil {
+		t.Fatalf("entry.Shard must stay nil on dial failure; got %T", entry.Shard)
+	}
+	// stateless writes the destination before running OnEntry, so the row
+	// is already INGESTING despite the failed dial — a later heartbeat
+	// reconnects it (slice C).
+	if st, _ := sm.State(context.Background()); st != StateIngesting {
+		t.Fatalf("state: got %q want INGESTING (write lands before OnEntry)", st)
+	}
+}
+
+func TestShardSM_EvaluateArchivedExportsRetiresTerminates(t *testing.T) {
+	fl := &fakeLauncher{}
+	vm := &fakeVolumeManager{}
+	live := &fakeArchivableShard{id: "s-test", archivePath: "s3://weft/warp/s-test.parquet"}
+	sm, db, entry := makeFixtureShardSM(t, StateArchived, func(d *ShardSMDeps) {
+		d.Launcher = fl
+		d.Volumes = vm
+		d.ParquetDir = "s3://weft"
+		d.LambdaFunctionURL = "https://fn.example/" // non-empty → ColdShard skips the duckdb open
+	})
+	entry.Shard = live
+	entry.Services = []store.ShardService{{NamespaceID: 1, Service: "warp"}}
+	entry.EBSVolumeID = "vol-1"
+	entry.InstanceID = "i-1"
+	// Seed the persisted row too so the cleared-column assertions prove the
+	// narrow writes ran (the fixture leaves these blank).
+	if err := db.SetShardLaunchResult("s-test", "i-1", "us-east-2a", "vol-1", nil); err != nil {
+		t.Fatalf("seed launch result: %v", err)
+	}
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if !live.archived {
+		t.Fatal("live shard was not exported")
+	}
+	if !live.closed {
+		t.Fatal("live shard not closed after the ColdShard swap")
+	}
+	rec, _, _ := db.GetShard("s-test")
+	if rec.ParquetPath != "s3://weft/warp/s-test.parquet" {
+		t.Fatalf("parquet path not persisted: %q", rec.ParquetPath)
+	}
+	if rec.EBSVolumeID != "" {
+		t.Fatalf("volume not retired/cleared: %q", rec.EBSVolumeID)
+	}
+	if rec.InstanceID != "" {
+		t.Fatalf("instance not cleared: %q", rec.InstanceID)
+	}
+	if len(fl.terminated) != 1 || fl.terminated[0] != "i-1" {
+		t.Fatalf("instance not terminated: %v", fl.terminated)
+	}
+	if _, ok := entry.Shard.(*shard.ColdShard); !ok {
+		t.Fatalf("entry.Shard not swapped to ColdShard: %T", entry.Shard)
+	}
+}
+
+func TestShardSM_EvaluateArchivedNoopWhenSettled(t *testing.T) {
+	fl := &fakeLauncher{}
+	vm := &fakeVolumeManager{}
+	sm, _, entry := makeFixtureShardSM(t, StateArchived, func(d *ShardSMDeps) {
+		d.Launcher = fl
+		d.Volumes = vm
+	})
+	// Already exported, volume retired, instance terminated — a restart
+	// that rehydrates this row must reach a do-nothing tick.
+	entry.ParquetPath = "s3://weft/warp/s-test.parquet"
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(fl.terminated) != 0 {
+		t.Fatalf("a settled ARCHIVED shard should do nothing; terminated=%v", fl.terminated)
+	}
+}
+
+func TestShardSM_EvaluateArchivedRetriesOnExportFailure(t *testing.T) {
+	fl := &fakeLauncher{}
+	vm := &fakeVolumeManager{}
+	live := &fakeArchivableShard{id: "s-test", archiveErr: fmt.Errorf("s3 unreachable")}
+	sm, db, entry := makeFixtureShardSM(t, StateArchived, func(d *ShardSMDeps) {
+		d.Launcher = fl
+		d.Volumes = vm
+		d.ParquetDir = "s3://weft"
+	})
+	entry.Shard = live
+	entry.EBSVolumeID = "vol-1"
+	entry.InstanceID = "i-1"
+	if err := db.SetShardLaunchResult("s-test", "i-1", "us-east-2a", "vol-1", nil); err != nil {
+		t.Fatalf("seed launch result: %v", err)
+	}
+
+	// A failed export is swallowed (logged) so the next tick retries; it
+	// must not advance to volume/instance cleanup with the data unexported.
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate should swallow the export failure for retry, got: %v", err)
+	}
+	rec, _, _ := db.GetShard("s-test")
+	if rec.ParquetPath != "" {
+		t.Fatalf("parquet path should be empty after a failed export: %q", rec.ParquetPath)
+	}
+	if rec.EBSVolumeID != "vol-1" {
+		t.Fatalf("volume retired before the export landed: %q", rec.EBSVolumeID)
+	}
+	if len(fl.terminated) != 0 {
+		t.Fatalf("instance terminated before the export landed: %v", fl.terminated)
 	}
 }

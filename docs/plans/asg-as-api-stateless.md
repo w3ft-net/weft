@@ -648,11 +648,24 @@ slices on this branch (merged together):
     stranded check via `Volumes.FindByShard` → Stranded→GONE; new
     `TriggerRelaunch`. Restart-safe (reap idempotent; relaunch in
     LAUNCHING).
-  - **B1.3 — `configureOnHeartbeat` gRPC dial + `onEnterArchived`
-    cleanup: NOT STARTED.** Heavier external surface (pb.ConfigureRequest
-    build via `Configurer`; `shard.Archive`/ColdShard/snapshot). Archive
-    carries its own Evaluate-vs-OnEntry decision (lean Evaluate, for
-    restart-safe retry, consistent with the launch decision).
+  - **B1.3 — `configureOnHeartbeat` gRPC dial + ARCHIVED cleanup:
+    SHIPPED.** `configureOnHeartbeat` now dials via a new
+    `ShardSMDeps.Configurer` (`ShardConfigurer`) and attaches the live
+    handle on the LAUNCHING/SUSPENDED → INGESTING heartbeat; nil
+    Configurer keeps the dev/test path (records addr, no handle). No
+    deferred close — both entry paths reach it with `entry.Shard` already
+    nil (LAUNCHING never had one; SUSPENDED.OnEntry dropped the dead
+    conn). A failed dial surfaces the error but the row is already
+    INGESTING (stateless writes the destination before OnEntry) — a later
+    heartbeat reconnects (slice C). Archive took the lean-Evaluate route:
+    `onEnterArchived` just logs; `evaluateArchived` runs export → ColdShard
+    swap → volume retire → terminate, each gated on a persisted fact
+    (ParquetPath set, volume cleared, instance cleared) so a crash
+    mid-cleanup re-drives next tick. New deps: `Configurer`, `ParquetDir`,
+    `LambdaFunctionURL`. New store narrow-writes: `SetShardParquetPath`,
+    `ClearShardVolume`, `ClearShardInstance`. Tests cover dial
+    success/failure and the export/retire/terminate + idempotent-settled +
+    export-retry paths.
   - **B2 — BucketSM cascade bodies + `Evaluate`: NOT STARTED.**
 - **Slice C — provisioner cutover + lifecycle deletion (components 6,
   7):** the atomic switch. NOT STARTED.
