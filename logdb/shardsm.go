@@ -197,8 +197,15 @@ func (s *ShardSM) configure() {
 		PermitDynamic(TriggerHeartbeatStale, s.staleTargetFromActive, s.actuallyStale)
 
 	s.sm.Configure(StateReadOnly).
-		Permit(TriggerArchiveRequested, StateArchived).
+		Permit(TriggerArchiveRequested, StateArchiving).
 		PermitDynamic(TriggerHeartbeatStale, s.staleTargetFromActive, s.actuallyStale)
+
+	// ARCHIVING is a deliberate non-substate of READ_ONLY (see
+	// states.go): query-routability is handled in MatchingEntries, and
+	// inheriting READ_ONLY's HeartbeatStale edge here would wrongly
+	// SUSPEND a shard whose instance we're intentionally terminating.
+	s.sm.Configure(StateArchiving).
+		Permit(TriggerArchiveComplete, StateArchived)
 
 	s.sm.Configure(StateSuspended).
 		OnEntry(s.onEnterSuspended).
@@ -300,10 +307,11 @@ func (s *ShardSM) staleTargetFromActive(context.Context, ...any) (stateless.Stat
 //
 // LAUNCHING drives a fresh launch (+ retry budget); INGESTING/READ_ONLY
 // run stale-detection; SUSPENDED runs recovery's reap-then-relaunch; and
-// ARCHIVED runs the post-archive cleanup (export → volume retire →
-// terminate). The cleanup lives here rather than in ARCHIVED.OnEntry for
-// the same reason the launch does: a crash mid-cleanup re-drives it on
-// the next tick.
+// ARCHIVING runs the export → ColdShard swap → volume retire → terminate
+// sequence, firing ArchiveComplete → ARCHIVED once it's all done. That
+// work lives in Evaluate rather than an OnEntry for the same reason the
+// launch does: a crash mid-cleanup re-drives it on the next tick.
+// ARCHIVED is terminal — nothing to converge.
 func (s *ShardSM) Evaluate(ctx context.Context) error {
 	st, err := s.State(ctx)
 	if err != nil {
@@ -316,8 +324,8 @@ func (s *ShardSM) Evaluate(ctx context.Context) error {
 		return s.evaluateActive(ctx)
 	case StateSuspended:
 		return s.evaluateSuspended(ctx)
-	case StateArchived:
-		return s.evaluateArchived(ctx)
+	case StateArchiving:
+		return s.evaluateArchiving(ctx)
 	default:
 		return nil
 	}
@@ -455,15 +463,15 @@ func (s *ShardSM) evaluateSuspended(ctx context.Context) error {
 	return s.Fire(ctx, TriggerRelaunch) // → LAUNCHING (recovery relaunch)
 }
 
-// evaluateArchived runs the post-archive cleanup. ARCHIVED is the
-// terminal data state, but entering it only flips the row's state — the
-// actual export-to-S3, volume retire, and instance terminate happen
-// here so a crash mid-cleanup re-drives them next tick (the launch path
-// made the same OnEntry-vs-Evaluate choice). Each step is gated on a
-// persisted fact (ParquetPath set, volume cleared, instance cleared) so
-// a completed step is never repeated, and any step's failure leaves the
-// entry mid-cleanup for the next tick rather than unwinding the archive.
-func (s *ShardSM) evaluateArchived(ctx context.Context) error {
+// evaluateArchiving runs the export → ColdShard swap → volume retire →
+// terminate sequence, then fires ArchiveComplete → ARCHIVED once all of
+// it has landed. The shard stays query-routable throughout (the live
+// DuckDB serves until the export swaps in the ColdShard). Each step is
+// gated on a persisted fact (ParquetPath set, volume cleared, instance
+// cleared) so a completed step is never repeated, and any step's failure
+// leaves the entry mid-cleanup for the next tick rather than unwinding
+// the archive or advancing to ARCHIVED early.
+func (s *ShardSM) evaluateArchiving(ctx context.Context) error {
 	s.mu.Lock()
 	parquetPath := s.entry.ParquetPath
 	liveShard := s.entry.Shard
@@ -521,7 +529,7 @@ func (s *ShardSM) evaluateArchived(ctx context.Context) error {
 
 	// Step 3 — terminate the now-idle instance. Terminate is idempotent,
 	// so re-running against an already-gone instance is a no-op; we still
-	// clear the id so a settled ARCHIVED shard reaches a do-nothing tick.
+	// clear the id so the completion check below can fire ArchiveComplete.
 	if instanceID != "" && s.deps.Launcher != nil {
 		if err := s.deps.Launcher.Terminate(ctx, instanceID); err != nil {
 			log.Printf("shardsm %s: terminate %s, retrying next tick: %v", s.id, instanceID, err)
@@ -533,6 +541,17 @@ func (s *ShardSM) evaluateArchived(ctx context.Context) error {
 		s.mu.Lock()
 		s.entry.InstanceID = ""
 		s.mu.Unlock()
+	}
+
+	// All three steps have landed (data in S3, volume retired, instance
+	// gone) → the archive is durable and query-ready via the ColdShard.
+	// Flip ARCHIVING → ARCHIVED. This is the one transition the shard
+	// fires itself: only it knows the export finished.
+	s.mu.Lock()
+	done := s.entry.ParquetPath != "" && s.entry.EBSVolumeID == "" && s.entry.InstanceID == ""
+	s.mu.Unlock()
+	if done {
+		return s.Fire(ctx, TriggerArchiveComplete) // → ARCHIVED
 	}
 	return nil
 }
@@ -657,13 +676,12 @@ func (s *ShardSM) onEnterSuspended(ctx context.Context, args ...any) error {
 	return nil
 }
 
-// onEnterArchived is intentionally lean: the state write (→ ARCHIVED)
-// has already landed by the time this runs, and the heavy, failure-prone
-// cleanup — export to S3, volume retire, instance terminate — is deferred
-// to evaluateArchived so a crash mid-cleanup re-drives it on the next
-// tick instead of being lost with this one-shot entry action.
+// onEnterArchived marks the clean terminal: by the time ArchiveComplete
+// fires this, evaluateArchiving has already exported the data, swapped in
+// the ColdShard, retired the volume, and terminated the instance. Nothing
+// to do but record the arrival.
 func (s *ShardSM) onEnterArchived(ctx context.Context, args ...any) error {
-	log.Printf("shardsm %s: enter ARCHIVED — cleanup deferred to Evaluate", s.id)
+	log.Printf("shardsm %s: ARCHIVED — data in S3, instance + volume retired", s.id)
 	return nil
 }
 

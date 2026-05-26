@@ -30,10 +30,19 @@ const (
 	// shard does not own this decision.
 	TriggerRotateRequested Trigger = "rotate-requested"
 
-	// ArchiveRequested is fired by the bucket FSM on
-	// ARCHIVING.OnEntry to push a READ_ONLY shard to ARCHIVED. The
-	// shard does not own this decision.
+	// ArchiveRequested is the bucket FSM's retention-sweep directive:
+	// fired (fire-and-forget) on a READ_ONLY shard whose retention has
+	// expired, moving it to ARCHIVING. The bucket owns the decision but
+	// never waits — the export runs on the shard. The shard does not own
+	// this decision.
 	TriggerArchiveRequested Trigger = "archive-requested"
+
+	// ArchiveComplete is fired by the shard's own Evaluate() once the
+	// ARCHIVING work is fully done (data in S3, ColdShard swapped in,
+	// volume retired, instance terminated). Moves ARCHIVING → ARCHIVED.
+	// Shard-driven, like the heartbeat that completes LAUNCHING →
+	// INGESTING: only the shard knows its export finished.
+	TriggerArchiveComplete Trigger = "archive-complete"
 
 	// HeartbeatStale is fired by the shard's Evaluate() when its
 	// LastHeartbeatAt is older than the staleness threshold. Target

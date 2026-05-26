@@ -666,10 +666,88 @@ slices on this branch (merged together):
     `ClearShardVolume`, `ClearShardInstance`. Tests cover dial
     success/failure and the export/retire/terminate + idempotent-settled +
     export-retry paths.
-  - **B2 — BucketSM cascade bodies + `Evaluate`: NOT STARTED.**
-- **Slice C — provisioner cutover + lifecycle deletion (components 6,
-  7):** the atomic switch. NOT STARTED.
-- **Slice D — test rewrites (component 9).** NOT STARTED.
+  - **B2 — BucketSM cascade bodies + `Evaluate`: MERGED INTO SLICE C**
+    (decision 2026-05-25). Unlike the shard SM, whose collaborators are
+    clean external services (`Launcher`/`Volumes`/`Configurer`), the
+    bucket SM's only collaborator is the provisioner itself — its action
+    bodies mint child shard SMs and fire triggers on them, which needs
+    the provisioner's `shardSMs` map + mint factory that only exist after
+    Slice C's `LoadFromStore`. Splitting B2 out would force an invented
+    seam; landing it with C avoids a throwaway abstraction. B2's
+    gate-only logic (Evaluate's incoming/outgoing `shard_records`
+    queries) needs nothing new — the bucket SM holds a `*gorm.DB` and
+    queries the cascade sets inline where it needs them (no dedicated
+    store methods; gorm's query builder is the tool).
+**FSM redesign — 2026-05-25 (supersedes the State-machine-details
+section above for archival).** Design review reworked where archival
+lives, to protect the hot ingest window:
+
+- **Archival is a shard concern, not a bucket cascade phase.** The shard
+  FSM gains an **ARCHIVING** state between READ_ONLY and ARCHIVED:
+  LAUNCHING → INGESTING → READ_ONLY → ARCHIVING → ARCHIVED. ARCHIVING is
+  the export-in-progress phase; its `Evaluate` runs export → ColdShard
+  swap → volume retire → terminate, then fires `ArchiveComplete` →
+  ARCHIVED itself (the one transition the shard owns, like the heartbeat
+  that completes LAUNCHING → INGESTING). ARCHIVED is now a clean
+  terminal. ARCHIVING is query-routable like READ_ONLY (handled in
+  `MatchingEntries`, *not* via stateless `SubstateOf` — that would
+  wrongly inherit READ_ONLY's `HeartbeatStale → SUSPENDED` edge onto a
+  shard whose instance is being torn down on purpose). Trigger
+  `ArchiveRequested` now targets ARCHIVING; new trigger
+  `ArchiveComplete` for ARCHIVING → ARCHIVED.
+- **Bucket FSM is rotation-only:** STASIS → WARMING → ROTATING → STASIS
+  (+ SCALING_DOWN). No bucket ARCHIVING state — the bucket never *waits*
+  on archival, so there's no gate and thus no state (a bucket ARCHIVING
+  state had no coherent exit). `ArchivalsComplete` / `OldShardsRotated`'s
+  old ARCHIVING target go away; ROTATING returns straight to STASIS.
+- **The bucket still owns *firing* archival**, as a fire-and-forget
+  retention sweep in its `Evaluate` (every tick, any state): fire
+  `ArchiveRequested` on READ_ONLY shards past retention (`now - WindowEnd
+  > retention`, retention = `WindowDuration`). It owns the directive but
+  waits on nothing, so a slow S3 export can never block the next roll.
+- **Safe capacity sequencing (the hot-window guarantee)** is encoded in
+  the rotation gates, overcapacity-before-drain: WARMING → ROTATING only
+  once the incoming replacements are all INGESTING (→ 2·Target hot);
+  ROTATING → STASIS once the outgoing cohort is READ_ONLY. Cohorts are
+  window math off `now`: incoming = `window_start == W+1`, rotate =
+  `window_start == W`, archive = `window_start == W-1` (= W − retention).
+
+The shard-side half of this redesign **shipped** as the first Slice C
+commit (states/triggers/`shardsm.go` ARCHIVING + `MatchingEntries`
+parity + tests; revises the earlier B1.3 archival, which had READ_ONLY →
+ARCHIVED with the work in ARCHIVED). The bucket-side half lands with the
+provisioner mint factory below.
+
+- **Slice C — provisioner cutover + lifecycle deletion + bucket SM
+  bodies (components 6, 7 + B2):** the atomic switch. IN PROGRESS.
+  Planned commit order (each compiles; old reconciler stays live until
+  the switch commit):
+  0. **SHIPPED** — shard FSM ARCHIVING state (the redesign above).
+  1. Provisioner builds `bucketSMs`/`shardSMs` maps in `LoadFromStore`
+     + mint factory / resolver, *additively* — `check()` still runs the
+     old reconciler. BucketSM bodies + Evaluate wired against the
+     factory; the cascade incoming/outgoing sets come from inline gorm
+     queries on the bucket SM's `*gorm.DB`. Unit-tested with fakes.
+  2. The switch: `check()` → Evaluate per bucket/shard; `ProcessHeartbeat`
+     → `sm.Fire`; delete reconciler ops / christen / reap* /
+     mintLaunchingRow* / `Suspended` bool. The obsolete `*_test.go`
+     files (slice D deletions) must land in this same commit — deleting
+     `lifecycle.go` breaks `lifecycle_test.go`'s compile.
+  3. Delete lifecycle plumbing (`lifecycle.go`, `lifecycle_poller.go`,
+     dead store methods, `LIFECYCLE_QUEUE_URL`).
+  4. New SM scenario tests (the surviving half of slice D).
+- **Slice D — test rewrites (component 9).** Deletions fold into the
+  switch commit (2); new scenario tests are step 4 above.
+
+**Correction to the 2026-05-21 log:** it claimed Phase 1 added store
+methods `UpdateShardState`, `UpdateBucketState`, `UpdateCascadeStartedAt`,
+`TouchLastHeartbeatAt`, `ShardsInBucketWithWindow`,
+`ShardsInBucketBeforeWindow`. In fact **none of these exist** — the FSMs
+do their narrow state / cascade_started_at writes *inline* in their
+`writeState` mutators and OnEntry actions (a `gorm` `Update` against the
+row), not via store methods, and the bucket SM reads its cascade sets the
+same way. There is no `ShardsInBucket*` store method and there shouldn't
+be — those queries live in the bucket SM.
 
 ### What's left
 

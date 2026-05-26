@@ -426,13 +426,16 @@ func TestShardSM_IngestingToReadOnlyOnRotate(t *testing.T) {
 	}
 }
 
-func TestShardSM_ReadOnlyToArchived(t *testing.T) {
+func TestShardSM_ReadOnlyToArchivingOnArchiveRequested(t *testing.T) {
+	// The bucket's retention sweep fires ArchiveRequested; the shard
+	// moves to ARCHIVING (not straight to ARCHIVED) — the export work
+	// then runs in evaluateArchiving and completes via ArchiveComplete.
 	sm, _, entry := makeFixtureShardSM(t, StateReadOnly)
 	if err := sm.Fire(context.Background(), TriggerArchiveRequested); err != nil {
-		t.Fatalf("Fire Archive: %v", err)
+		t.Fatalf("Fire ArchiveRequested: %v", err)
 	}
-	if entry.State != StateArchived {
-		t.Fatalf("state: got %q want ARCHIVED", entry.State)
+	if entry.State != StateArchiving {
+		t.Fatalf("state: got %q want ARCHIVING", entry.State)
 	}
 }
 
@@ -657,11 +660,11 @@ func TestShardSM_ConfigureOnHeartbeatDialFailureSurfacesError(t *testing.T) {
 	}
 }
 
-func TestShardSM_EvaluateArchivedExportsRetiresTerminates(t *testing.T) {
+func TestShardSM_EvaluateArchivingExportsRetiresTerminatesThenCompletes(t *testing.T) {
 	fl := &fakeLauncher{}
 	vm := &fakeVolumeManager{}
 	live := &fakeArchivableShard{id: "s-test", archivePath: "s3://weft/warp/s-test.parquet"}
-	sm, db, entry := makeFixtureShardSM(t, StateArchived, func(d *ShardSMDeps) {
+	sm, db, entry := makeFixtureShardSM(t, StateArchiving, func(d *ShardSMDeps) {
 		d.Launcher = fl
 		d.Volumes = vm
 		d.ParquetDir = "s3://weft"
@@ -702,32 +705,39 @@ func TestShardSM_EvaluateArchivedExportsRetiresTerminates(t *testing.T) {
 	if _, ok := entry.Shard.(*shard.ColdShard); !ok {
 		t.Fatalf("entry.Shard not swapped to ColdShard: %T", entry.Shard)
 	}
+	// All three steps landed in one tick → the shard fires ArchiveComplete
+	// itself and reaches the clean terminal.
+	if st, _ := sm.State(context.Background()); st != StateArchived {
+		t.Fatalf("state: got %q want ARCHIVED after a complete archiving pass", st)
+	}
 }
 
-func TestShardSM_EvaluateArchivedNoopWhenSettled(t *testing.T) {
+func TestShardSM_EvaluateArchivedTerminalNoop(t *testing.T) {
 	fl := &fakeLauncher{}
 	vm := &fakeVolumeManager{}
-	sm, _, entry := makeFixtureShardSM(t, StateArchived, func(d *ShardSMDeps) {
+	sm, _, _ := makeFixtureShardSM(t, StateArchived, func(d *ShardSMDeps) {
 		d.Launcher = fl
 		d.Volumes = vm
 	})
-	// Already exported, volume retired, instance terminated — a restart
-	// that rehydrates this row must reach a do-nothing tick.
-	entry.ParquetPath = "s3://weft/warp/s-test.parquet"
 
+	// ARCHIVED is terminal — Evaluate must do nothing (no re-terminate,
+	// no re-export) however the shard got rehydrated.
 	if err := sm.Evaluate(context.Background()); err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
 	if len(fl.terminated) != 0 {
-		t.Fatalf("a settled ARCHIVED shard should do nothing; terminated=%v", fl.terminated)
+		t.Fatalf("a terminal ARCHIVED shard should do nothing; terminated=%v", fl.terminated)
+	}
+	if st, _ := sm.State(context.Background()); st != StateArchived {
+		t.Fatalf("state: got %q want ARCHIVED unchanged", st)
 	}
 }
 
-func TestShardSM_EvaluateArchivedRetriesOnExportFailure(t *testing.T) {
+func TestShardSM_EvaluateArchivingRetriesOnExportFailure(t *testing.T) {
 	fl := &fakeLauncher{}
 	vm := &fakeVolumeManager{}
 	live := &fakeArchivableShard{id: "s-test", archiveErr: fmt.Errorf("s3 unreachable")}
-	sm, db, entry := makeFixtureShardSM(t, StateArchived, func(d *ShardSMDeps) {
+	sm, db, entry := makeFixtureShardSM(t, StateArchiving, func(d *ShardSMDeps) {
 		d.Launcher = fl
 		d.Volumes = vm
 		d.ParquetDir = "s3://weft"
@@ -740,7 +750,8 @@ func TestShardSM_EvaluateArchivedRetriesOnExportFailure(t *testing.T) {
 	}
 
 	// A failed export is swallowed (logged) so the next tick retries; it
-	// must not advance to volume/instance cleanup with the data unexported.
+	// must not advance to volume/instance cleanup with the data unexported,
+	// nor fire ArchiveComplete.
 	if err := sm.Evaluate(context.Background()); err != nil {
 		t.Fatalf("Evaluate should swallow the export failure for retry, got: %v", err)
 	}
@@ -753,5 +764,8 @@ func TestShardSM_EvaluateArchivedRetriesOnExportFailure(t *testing.T) {
 	}
 	if len(fl.terminated) != 0 {
 		t.Fatalf("instance terminated before the export landed: %v", fl.terminated)
+	}
+	if st, _ := sm.State(context.Background()); st != StateArchiving {
+		t.Fatalf("state: got %q want ARCHIVING (incomplete archive must not advance)", st)
 	}
 }

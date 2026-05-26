@@ -15,7 +15,7 @@ import (
 
 // ShardEntry is the registry's per-shard metadata.
 type ShardEntry struct {
-	ID             string
+	ID string
 	// Services is the shard's in-memory service membership — the
 	// (namespace_id, service) pairs it serves, the write router's
 	// counterpart to the read router's shard_services lookup. Stamped at
@@ -507,11 +507,14 @@ func (r *ShardRegistry) MatchingEntries(tr TimeRange, serving map[string]struct{
 		if e.isStale() {
 			continue
 		}
-		// An ARCHIVED (cold-Lambda) or READ_ONLY shard with zero rows
-		// has nothing to return; dialing it is pure waste — a cold dial
-		// is a Lambda round-trip. Live INGESTING shards are exempt: a
-		// transient 0 count there just means it hasn't filled yet.
-		if e.RowCount == 0 && (e.State == StateArchived || e.State == StateReadOnly) {
+		// An ARCHIVED (cold-Lambda) / ARCHIVING / READ_ONLY shard with
+		// zero rows has nothing to return; dialing it is pure waste — a
+		// cold dial is a Lambda round-trip. ARCHIVING is grouped with
+		// READ_ONLY here (its query-routing "substate" relationship):
+		// it stays queryable until the export swaps in the ColdShard.
+		// Live INGESTING shards are exempt: a transient 0 count there
+		// just means it hasn't filled yet.
+		if e.RowCount == 0 && (e.State == StateArchived || e.State == StateArchiving || e.State == StateReadOnly) {
 			continue
 		}
 		hasWindow := !e.WindowStart.IsZero() && !e.WindowEnd.IsZero()
