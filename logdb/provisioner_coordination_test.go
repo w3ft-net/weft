@@ -1,3 +1,15 @@
+// White-box coordination tests for the provisioner package. These drive
+// the unexported tick (check) and the heartbeat path with the real bucket
+// and shard SMs wired together — one level up from the per-transition
+// unit tests in shardsm_test/bucketsm_test, but still white-box: they
+// call unexported methods, set private fields (configurer), and use the
+// single-connection tx-scoped test store with fake collaborators.
+//
+// This is NOT an integration test. It sits below the seam where
+// production wires the connection pool and the launcher, which is why it
+// can (and must) gate the launches around the single tx connection. The
+// real wiring — a pooled store, a real gRPC Configure dial, genuinely
+// concurrent launches — is covered in the integration/ package.
 package logdb
 
 import (
@@ -167,13 +179,13 @@ func simulateHeartbeats(prov *Provisioner) {
 	}
 }
 
-// TestProvisioner_FSM_ScaleUpLaunchPromote drives the real provisioner
-// end-to-end with Target=2 — the case worth exercising: one bucket SM
-// coordinating two shard SMs through the whole flow. An empty STASIS
-// bucket scales up, the two shard SMs launch through the gated in-process
-// launcher, simulated heartbeats promote both to INGESTING, and the
-// bucket cascade settles back to STASIS at Target.
-func TestProvisioner_FSM_ScaleUpLaunchPromote(t *testing.T) {
+// TestProvisioner_Coordination_ScaleUpLaunchPromote drives the provisioner's
+// tick + heartbeat path (white-box) with Target=2 — the case worth
+// exercising: one bucket SM coordinating two shard SMs through the whole
+// flow. An empty STASIS bucket scales up, the two shard SMs launch through
+// the gated in-process launcher, simulated heartbeats promote both to
+// INGESTING, and the bucket cascade settles back to STASIS at Target.
+func TestProvisioner_Coordination_ScaleUpLaunchPromote(t *testing.T) {
 	db := openSMTestStore(t)
 	seedDefaultBucket(t, db, nil, 2, time.Hour)
 	prov, launcher := newFSMTestProvisioner(t, db)
@@ -222,11 +234,11 @@ func TestProvisioner_FSM_ScaleUpLaunchPromote(t *testing.T) {
 	}
 }
 
-// TestProvisioner_FSM_RestartReconnect promotes a shard, then simulates a
+// TestProvisioner_Coordination_RestartReconnect promotes a shard, then simulates a
 // coordinator restart (fresh registry + provisioner over the same store).
 // LoadFromStore rehydrates the INGESTING entry with a nil gRPC handle;
 // the first post-restart heartbeat reattaches it via ObserveHeartbeat.
-func TestProvisioner_FSM_RestartReconnect(t *testing.T) {
+func TestProvisioner_Coordination_RestartReconnect(t *testing.T) {
 	db := openSMTestStore(t)
 	seedDefaultBucket(t, db, nil, 1, time.Hour)
 
