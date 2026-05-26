@@ -27,8 +27,7 @@ type ShardEntry struct {
 	WindowStart    time.Time
 	WindowEnd      time.Time
 	State          ShardState
-	Suspended      bool   // true if ingest failed repeatedly — excluded from write routing, still queryable
-	IngestFailures int    // consecutive ingest failures; resets on success; triggers Suspended at SuspendFailureThreshold
+	IngestFailures int    // consecutive ingest failures; resets on success; surfaced in the ingest error message
 	Addr           string // gRPC address for live shards
 	InstanceID     string // EC2 instance ID
 	ParquetPath    string // Parquet file path for archived shards
@@ -391,22 +390,14 @@ func (r *ShardRegistry) AddServiceToShard(id string, namespaceID uint, service s
 	return true, true
 }
 
-// Suspend marks a shard as suspended (ingest failed). Suspended shards
-// are excluded from write routing but still participate in queries.
-func (r *ShardRegistry) Suspend(id string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if e, ok := r.entries[id]; ok {
-		e.Suspended = true
-	}
-}
-
 // RecordIngestFailure increments the consecutive-failure counter for the
-// given shard and marks it Suspended once it hits SuspendFailureThreshold.
-// Returns (count, threshold) so callers (Shard.Ingest impls) can format
-// an error message that names the resulting state without re-importing
-// the threshold constant. Pair with ResetIngestFailures on successful
-// ingest so transient failures don't accumulate forever.
+// given shard and returns (count, threshold) so Shard.Ingest impls can
+// format an error message naming how persistent the failure is. It no
+// longer latches the shard out of write routing — a truly dead shard is
+// taken out by the FSM (HeartbeatStale → SUSPENDED), and a persistently
+// unhealthy-but-alive shard is future work (a persisted IngestUnhealthy
+// column). Pair with ResetIngestFailures on success so transient blips
+// don't accumulate.
 func (r *ShardRegistry) RecordIngestFailure(id string) (count, threshold int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -415,15 +406,11 @@ func (r *ShardRegistry) RecordIngestFailure(id string) (count, threshold int) {
 		return 0, SuspendFailureThreshold
 	}
 	e.IngestFailures++
-	if e.IngestFailures >= SuspendFailureThreshold {
-		e.Suspended = true
-	}
 	return e.IngestFailures, SuspendFailureThreshold
 }
 
 // ResetIngestFailures clears the consecutive-failure counter for a shard
-// after a successful ingest. Does not alter Suspended — an explicit
-// heartbeat-based unsuspend handles that side.
+// after a successful ingest.
 func (r *ShardRegistry) ResetIngestFailures(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -541,7 +528,7 @@ func (r *ShardRegistry) IngestingShard(namespaceID uint, service string) shard.S
 
 	var candidates []shard.Shard
 	for _, e := range r.entries {
-		if e.State != StateIngesting || e.Shard == nil || e.Suspended || e.isStale() {
+		if e.State != StateIngesting || e.Shard == nil || e.isStale() {
 			continue
 		}
 		if e.serves(namespaceID, service) {

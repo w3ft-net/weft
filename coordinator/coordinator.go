@@ -392,11 +392,11 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 						continue
 					}
 					// sh.Ingest reports its own outcome to the provisioner —
-					// incrementing the consecutive-failure counter (and
-					// flipping to Suspended at threshold) on error, resetting
-					// it on success. The returned error already names the
-					// shard and the resulting state, so one log line covers
-					// both the "still healthy, N/M" and "now suspended" cases.
+					// incrementing the consecutive-failure counter on error,
+					// resetting it on success. The returned error names the
+					// shard and the running failure count (N/M) for the log
+					// line. (Routing exclusion is the FSM's job now, not a
+					// per-failure ingest latch.)
 					if err := sh.Ingest(rows, c.Provisioner); err != nil {
 						log.Printf("drain: %v", err)
 
