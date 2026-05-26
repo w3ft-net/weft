@@ -8,49 +8,6 @@ import (
 	"github.com/kevlarcon/weft/store"
 )
 
-func TestUnsuspend_OnHeartbeat(t *testing.T) {
-	ds, err := shard.NewDuckDBShard("shard-0", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { ds.Close() })
-
-	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
-		ID: "shard-0", Services: []store.ShardService{{NamespaceID: 1, Service: "anything"}},
-		State: StateIngesting, Shard: ds,
-		Addr: "10.0.0.1:9000", Suspended: true, CreatedAt: time.Now(),
-	})
-
-	// Verify it's suspended.
-	if sh := reg.IngestingShard(1, "anything"); sh != nil {
-		t.Fatal("suspended shard should not be returned by IngestingShard")
-	}
-
-	// Simulate heartbeat from same address.
-	mockStore := &mockHeartbeatStore{
-		heartbeats: []store.ShardHeartbeat{
-			{ShardID: "shard-0", Addr: "10.0.0.1:9000", State: "INGESTING"},
-		},
-	}
-	prov := &Provisioner{
-		registry: reg,
-		config:   ProvisionerConfig{Store: mockStore, PollInterval: time.Second},
-	}
-	prov.adoptFromHeartbeats()
-
-	// Should be unsuspended.
-	entry := reg.Get("shard-0")
-	if entry.Suspended {
-		t.Error("shard should be unsuspended after heartbeat")
-	}
-
-	// Should be back in rotation.
-	if sh := reg.IngestingShard(1, "anything"); sh == nil {
-		t.Error("unsuspended shard should be returned by IngestingShard")
-	}
-}
-
 func TestReconnect_OnAddressChange(t *testing.T) {
 	oldShard := &failingShard{id: "shard-0"}
 

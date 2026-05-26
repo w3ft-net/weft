@@ -348,12 +348,14 @@ func (p *Provisioner) ShardDescriptorsFor(tr TimeRange, namespaceID uint, servic
 // It ensures at least one INGESTING shard exists on startup.
 func (p *Provisioner) Start(ctx context.Context) {
 	go func() {
-		// First tick: adopt live shards from heartbeats, then bootstrap if needed.
+		// First pass immediately so shards begin launching without waiting
+		// a full PollInterval: adoptFromHeartbeats catches up any heartbeats
+		// already in the store (driving promotion/liveness through the SMs),
+		// then check() runs one FSM convergence tick — which mints and
+		// launches toward each bucket's target. No separate bootstrap or
+		// reap step: the bucket/shard SMs own capacity and failure handling.
 		p.adoptFromHeartbeats()
-		if p.registry.TotalIngesting() == 0 {
-			log.Printf("provisioner: no ingesting shards after adoption, bootstrapping")
-			p.bootstrap(ctx)
-		}
+		p.check(ctx)
 
 		ticker := time.NewTicker(p.config.PollInterval)
 		defer ticker.Stop()
@@ -364,9 +366,6 @@ func (p *Provisioner) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				p.adoptFromHeartbeats()
-				p.reapDeadShards()
-				p.reapStaleLaunching()
-				p.reapStrandedSuspended()
 				p.check(ctx)
 			}
 		}
@@ -632,155 +631,82 @@ func (p *Provisioner) AuthenticateShard(shardID, presented string) error {
 	return nil
 }
 
-// ProcessHeartbeat handles one heartbeat synchronously:
-//   - empty ShardID        → christen (mint id, Configure, register)
-//   - known id at same addr → unsuspend if needed, no-op otherwise
-//   - known id at new addr  → rebind (reconnect gRPC, update entry)
-//   - known id not in registry → adopt (coordinator restart catchup)
+// ProcessHeartbeat routes one heartbeat to its shard SM. Exported so the
+// Heartbeat RPC handler drives transitions immediately rather than wait a
+// tick; also called from adoptFromHeartbeats as a catch-up pass.
+// Serialised against itself via heartbeatMu so two concurrent heartbeats
+// (the RPC and a tick) for the same shard can't interleave the
+// instance-correlation lookup.
 //
-// Exported so the Heartbeat RPC handler can drive state transitions
-// immediately rather than wait for the provisioner's tick interval.
-// Serialised against itself via heartbeatMu so concurrent heartbeats
-// for the same unclaimed instance can't race into a double christen.
+// Three cases:
+//   - empty ShardID  → a freshly-booted instance that hasn't been
+//     Configured. Correlate to the LAUNCHING shard SM the bucket minted
+//     (by the instance id the launcher stamped) and fire Heartbeat — its
+//     OnEntryFrom dials + Configures, assigning the shard its identity.
+//   - known id, LAUNCHING/SUSPENDED → fire Heartbeat (promote or rebind).
+//   - known id, steady state → ObserveHeartbeat: refresh liveness and
+//     reattach the gRPC handle if it's missing (post-restart) or moved.
 func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 	p.heartbeatMu.Lock()
 	defer p.heartbeatMu.Unlock()
+	ctx := context.Background()
 
 	if hb.ShardID == "" {
-		if err := p.christen(hb); err != nil {
-			log.Printf("provisioner: christen %s: %v", hb.Addr, err)
+		sm := p.shardSMByInstance(hb.InstanceID)
+		if sm == nil {
+			// No LAUNCHING shard is awaiting this instance — a stray
+			// unclaimed heartbeat (orphan instance, or one already
+			// promoted). The stale-LAUNCHING path reaps genuine orphans.
+			return
+		}
+		if err := sm.Fire(ctx, TriggerHeartbeat, hb); err != nil {
+			log.Printf("provisioner: heartbeat promote (instance %s → %s): %v", hb.InstanceID, sm.ID(), err)
 		}
 		return
 	}
 
-	existing := p.registry.Get(hb.ShardID)
-	if existing != nil {
-		existing.LastHeartbeatAt = time.Now()
-		// RowCount comes from the shard's running DuckDBShard.RowCount();
-		// it's the only signal the registry has about ingest-volume
-		// progress on a steady-state instance. Lift it on every
-		// heartbeat (same-addr OR rebind) and persist so dashboards
-		// and shard_records reflect reality. Without this update the
-		// row_count column froze at the value captured the moment the
-		// shard was first christened/adopted.
-		existing.RowCount = hb.RowCount
-		if existing.Addr == hb.Addr {
-			if existing.Suspended {
-				log.Printf("provisioner: unsuspending shard %s (heartbeat received)", hb.ShardID)
-				existing.Suspended = false
-				p.registry.PersistState(existing)
-			} else {
-				p.registry.TouchHeartbeat(existing)
-			}
-			return
-		}
-		// Rebind: same durable id, instance moved.
-		gs, err := shard.NewGRPCShard(hb.ShardID, hb.Addr, p.config.ShardSecret)
-		if err != nil {
-			log.Printf("provisioner: reconnect %s at %s failed: %v", hb.ShardID, hb.Addr, err)
-			return
-		}
-		log.Printf("provisioner: shard %s moved %s → %s", hb.ShardID, existing.Addr, hb.Addr)
-		oldShard := existing.Shard
-		existing.Shard = gs
-		existing.Addr = hb.Addr
-		existing.InstanceID = hb.InstanceID
-		existing.Suspended = false
-		if existing.State == StateSuspended {
-			log.Printf("provisioner: shard %s rebound from SUSPENDED → INGESTING", hb.ShardID)
-			existing.State = StateIngesting
-		}
-		p.registry.PersistState(existing)
-		// Defer the close: queries that grabbed the old shard.Shard via
-		// MatchingShards before the rebind would otherwise see their
-		// gRPC stream cancelled mid-flight. Phase 2's retry softens the
-		// user-visible impact, but giving the old conn a window to drain
-		// is the right primary fix.
-		//
-		// Nil-guard: LoadFromStore leaves Shard=nil for live (non-
-		// archived) entries — the heartbeat-adopt path attaches a
-		// GRPCShard later. If the very first heartbeat after restart
-		// arrives at a new addr (e.g. instance refresh in flight), the
-		// rebind path runs against a nil oldShard. No conn to close.
-		if oldShard != nil {
-			grace := p.config.CloseRebindGrace
-			if grace == 0 {
-				grace = defaultCloseRebindGrace
-			}
-			go func(shardID string, s shard.Shard) {
-				time.Sleep(grace)
-				if err := s.Close(); err != nil {
-					log.Printf("provisioner: deferred close of %s failed: %v", shardID, err)
-				}
-			}(hb.ShardID, oldShard)
-		}
-		return
-	}
-
-	// Known id but not in the registry: coordinator restart / reload
-	// catchup. Adopt the entry so queries reach it — but first pull
-	// the persisted record from the store so fields the heartbeat
-	// doesn't carry (window, heartbeat token, apps, created-at)
-	// survive the round-trip. Without this, registry.Add →
-	// SaveShard (an UPSERT) would write zero-valued window + empty
-	// token back over the correct row.
-	gs, err := shard.NewGRPCShard(hb.ShardID, hb.Addr, p.config.ShardSecret)
-	if err != nil {
-		log.Printf("provisioner: adopt %s at %s failed: %v", hb.ShardID, hb.Addr, err)
+	p.smMu.RLock()
+	sm := p.shardSMs[hb.ShardID]
+	p.smMu.RUnlock()
+	if sm == nil {
+		// Unknown shard id. LoadStateMachines builds an SM per persisted
+		// row at boot, so a miss means a shard we have no record of —
+		// nothing to drive.
 		return
 	}
 
 	state := StateIngesting
-	if hb.State == "READ_ONLY" {
-		state = StateReadOnly
+	if e := p.registry.Get(hb.ShardID); e != nil {
+		state = e.State
 	}
-
-	entry := &ShardEntry{
-		ID:              hb.ShardID,
-		Addr:            hb.Addr,
-		InstanceID:      hb.InstanceID,
-		State:           state,
-		RowCount:        hb.RowCount,
-		Shard:           gs,
-		CreatedAt:       time.Now(),
-		LastHeartbeatAt: time.Now(),
+	switch state {
+	case StateLaunching, StateSuspended:
+		if err := sm.Fire(ctx, TriggerHeartbeat, hb); err != nil {
+			log.Printf("provisioner: heartbeat fire %s: %v", hb.ShardID, err)
+		}
+	default:
+		sm.ObserveHeartbeat(ctx, hb)
 	}
+}
 
-	if p.registry.store != nil {
-		if rec, ok, err := p.registry.store.GetShard(hb.ShardID); err != nil {
-			log.Printf("provisioner: adopt %s — store lookup failed, falling back to defaults: %v", hb.ShardID, err)
-		} else if ok {
-			if ws, err := time.Parse(time.RFC3339, rec.WindowStart); err == nil {
-				entry.WindowStart = ws
-			}
-			if we, err := time.Parse(time.RFC3339, rec.WindowEnd); err == nil {
-				entry.WindowEnd = we
-			}
-			if ca, err := time.Parse(time.RFC3339, rec.CreatedAt); err == nil {
-				entry.CreatedAt = ca
-			}
-			entry.HeartbeatToken = rec.HeartbeatToken
-			entry.Tier = rec.Tier
-			entry.EBSVolumeID = rec.EBSVolumeID
-			entry.BucketID = rec.BucketID
-			// Services aren't carried on shard_records anymore; they live
-			// in shard_services and are refreshed each tick by
-			// RefreshFromStore, so the adopt path leaves entry.Services
-			// alone.
-			// Preserve READ_ONLY from DB over an INGESTING heartbeat —
-			// the DB is the authoritative state for lifecycle.
-			if ShardState(rec.State) == StateReadOnly {
-				entry.State = StateReadOnly
-			}
-		} else {
-			log.Printf("provisioner: adopt %s has no store record — registering with defaults (anomalous)",
-				hb.ShardID)
+// shardSMByInstance finds the LAUNCHING shard SM whose entry carries the
+// given instance id — the correlation an empty-ShardID heartbeat needs to
+// reach the shard the bucket minted for this instance. Only LAUNCHING
+// entries are candidates: a promoted shard heartbeats with its real id and
+// routes by id instead.
+func (p *Provisioner) shardSMByInstance(instanceID string) *ShardSM {
+	if instanceID == "" {
+		return nil
+	}
+	for _, e := range p.registry.Entries() {
+		if e.State == StateLaunching && e.InstanceID == instanceID {
+			p.smMu.RLock()
+			sm := p.shardSMs[e.ID]
+			p.smMu.RUnlock()
+			return sm
 		}
 	}
-
-	p.registry.Add(entry)
-	log.Printf("provisioner: adopted shard %s at %s (state=%s, rows=%d)",
-		hb.ShardID, hb.Addr, hb.State, hb.RowCount)
+	return nil
 }
 
 // christen promotes a LAUNCHING row to INGESTING: finds the row the
@@ -1166,57 +1092,145 @@ func (p *Provisioner) OnboardService(app string) error {
 	if updated == nil {
 		return nil
 	}
-	p.ReconcileBucket(context.Background(), updated)
+	// Immediate propagation: land the new service on the bucket's live
+	// INGESTING shards now rather than waiting for the next tick's sweep.
+	p.syncServicesForBucket(updated)
 	return nil
 }
 
-// check runs one tick of the provisioner's housekeeping: bucket
-// split evaluation, per-bucket reconciliation, then an absolute
-// ASG desired_capacity sync for each tier.
+// check runs one tick of FSM-driven convergence: refresh the registry
+// from the store, evaluate bucket splits, sweep service-drift, then drive
+// every bucket and shard SM toward its target. The SMs own all lifecycle
+// transitions — launch, rotate, archive, recover — so check() no longer
+// emits reconciler ops or syncs ASG desired_capacity (the per-AZ
+// ASGProvisioner moves capacity one instance at a time inside Launch).
 func (p *Provisioner) check(ctx context.Context) {
 	p.registry.RefreshFromStore()
 
-	// Evaluate bucket splits based on ingestion stats.
+	// Bucket-split evaluation stays — it's orthogonal to the lifecycle
+	// cascade (it carves a hot app into its own bucket; the new bucket's
+	// SM then warms shards for it on the next tick).
 	if p.Buckets != nil {
 		snapshot := p.stats.Snapshot()
-		app, err := p.Buckets.EvaluateSplit(snapshot)
-		if err != nil {
+		if app, err := p.Buckets.EvaluateSplit(snapshot); err != nil {
 			log.Printf("provisioner: EvaluateSplit: %v", err)
 		} else if app != "" {
-			bucket, err := p.Buckets.Split(app)
-			if err != nil {
+			if bucket, err := p.Buckets.Split(app); err != nil {
 				log.Printf("provisioner: Split(%s): %v", app, err)
 			} else if bucket != nil {
-				log.Printf("provisioner: splitting %s into dedicated shard", app)
-				p.provisionForBucket(ctx, bucket)
+				log.Printf("provisioner: split %s into dedicated bucket %d", app, bucket.ID)
 			}
 		}
 	}
 
-	// Read the bucket set once and feed both the per-bucket
-	// reconcile and the tier-level desired-capacity sync.
-	var all []*Bucket
-	if p.Buckets != nil {
-		var err error
-		all, err = p.Buckets.All()
-		if err != nil {
-			log.Printf("provisioner: reconcile: Buckets.All: %v", err)
+	// Service-drift: a service onboarded after a shard christened isn't on
+	// its stamp yet. The FSM cascade is deliberately lifecycle-only, so
+	// this membership sweep (the old reconciler's op 1) stays a standalone
+	// pass rather than a bucket-SM concern.
+	p.syncShardServices()
+
+	// FSM convergence — buckets first (cascade directives + minting), then
+	// shards (their own launch/stale/recovery/archive work).
+	p.evaluateStateMachines(ctx)
+}
+
+// evaluateStateMachines drives every bucket SM then every shard SM one
+// tick toward convergence. Buckets run first: a WARMING bucket mints new
+// shard SMs, and re-snapshotting after the bucket pass lets those minted
+// shards Evaluate the same tick (their launch starts now, not next tick).
+func (p *Provisioner) evaluateStateMachines(ctx context.Context) {
+	p.ensureBucketSMs()
+
+	p.smMu.RLock()
+	buckets := make([]*BucketSM, 0, len(p.bucketSMs))
+	for _, b := range p.bucketSMs {
+		buckets = append(buckets, b)
+	}
+	p.smMu.RUnlock()
+	for _, b := range buckets {
+		if err := b.Evaluate(ctx); err != nil {
+			log.Printf("provisioner: bucket %d Evaluate: %v", b.ID, err)
 		}
 	}
 
-	// Per-bucket reconciliation. Covers app-drift (op 1),
-	// under-capacity scale-up (op 2), window-closed rotation
-	// (op 3), and retention-archive (op 5).
-	for _, bucket := range all {
-		p.ReconcileBucket(ctx, bucket)
+	p.smMu.RLock()
+	shards := make([]*ShardSM, 0, len(p.shardSMs))
+	for _, s := range p.shardSMs {
+		shards = append(shards, s)
 	}
+	p.smMu.RUnlock()
+	for _, s := range shards {
+		if err := s.Evaluate(ctx); err != nil {
+			log.Printf("provisioner: shard %s Evaluate: %v", s.ID(), err)
+		}
+	}
+}
 
-	// Tier-level ASG sync: set each tier's desired_capacity
-	// absolutely from bucket config + READ_ONLY registry count.
-	// Runs after the per-bucket reconcile so any LAUNCHING rows
-	// minted this tick inform the count. No-op on synchronous
-	// launchers.
-	p.syncASGDesiredCapacity(ctx, all)
+// ensureBucketSMs keeps the bucketSMs map current with the bucket set:
+// LoadStateMachines seeds it at boot, and a bucket created mid-run (a
+// Split) gets its SM here. Existing SMs have their embedded *Bucket
+// refreshed so a target/window config change is picked up (reconfiguring
+// a bucket mid-cascade is otherwise undefined — see plan non-goals).
+// Runs inside the serial tick, so no Evaluate races the reassignment.
+func (p *Provisioner) ensureBucketSMs() {
+	if p.Buckets == nil || p.store == nil {
+		return
+	}
+	all, err := p.Buckets.All()
+	if err != nil {
+		log.Printf("provisioner: ensureBucketSMs: Buckets.All: %v", err)
+		return
+	}
+	p.smMu.Lock()
+	defer p.smMu.Unlock()
+	for _, bk := range all {
+		if sm, ok := p.bucketSMs[bk.ID]; ok {
+			sm.Bucket = bk
+		} else {
+			p.bucketSMs[bk.ID] = NewBucketSM(bk, p.store.DB(), p, nil)
+		}
+	}
+}
+
+// syncShardServices is the standalone service-drift sweep (old reconciler
+// op 1): every INGESTING shard must serve every (namespace, service) its
+// bucket serves. AddServiceToShard is idempotent and persists to
+// shard_services, so an already-present membership is a cheap no-op.
+func (p *Provisioner) syncShardServices() {
+	if p.Buckets == nil {
+		return
+	}
+	all, err := p.Buckets.All()
+	if err != nil {
+		log.Printf("provisioner: syncShardServices: Buckets.All: %v", err)
+		return
+	}
+	for _, bucket := range all {
+		p.syncServicesForBucket(bucket)
+	}
+}
+
+// syncServicesForBucket applies op-1 service-drift to one bucket's
+// INGESTING shards. Also the immediate-propagation hook OnboardService
+// calls so a freshly-onboarded service reaches live shards without
+// waiting for the next tick.
+func (p *Provisioner) syncServicesForBucket(bucket *Bucket) {
+	if bucket == nil || p.config.ShardOps == nil {
+		return
+	}
+	svcs, err := p.config.ShardOps.ServicesForBucket(bucket.ID)
+	if err != nil {
+		log.Printf("provisioner: services for bucket %d: %v", bucket.ID, err)
+		return
+	}
+	for _, e := range p.registry.Entries() {
+		if e.BucketID != bucket.ID || e.State != StateIngesting {
+			continue
+		}
+		for _, s := range svcs {
+			p.registry.AddServiceToShard(e.ID, s.NamespaceID, s.Service)
+		}
+	}
 }
 
 // archive tells the shard to export its data to Parquet and replaces

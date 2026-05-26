@@ -662,6 +662,80 @@ func (s *ShardSM) configureOnHeartbeat(ctx context.Context, args ...any) error {
 	return nil
 }
 
+// ObserveHeartbeat handles a heartbeat for a shard already past the
+// LAUNCHING/SUSPENDED promotion (INGESTING or READ_ONLY) — the
+// steady-state path ProcessHeartbeat routes here instead of firing a
+// trigger (INGESTING permits no Heartbeat transition). It refreshes
+// liveness (LastHeartbeatAt + RowCount, so evaluateActive's stale check
+// stays clear) and, when the live gRPC handle is missing or the
+// advertised addr has moved, reconnects. The handle is nil after a
+// restart — LoadFromStore rehydrates the entry but can't redial a live
+// shard — so the first post-restart heartbeat is what reattaches it.
+func (s *ShardSM) ObserveHeartbeat(ctx context.Context, hb store.ShardHeartbeat) {
+	s.mu.Lock()
+	needDial := s.deps.Configurer != nil && hb.Addr != "" &&
+		(s.entry.Shard == nil || s.entry.Addr != hb.Addr)
+	s.mu.Unlock()
+	if needDial {
+		if err := s.reconnect(ctx, hb); err != nil {
+			log.Printf("shardsm %s: reconnect on heartbeat at %s: %v", s.id, hb.Addr, err)
+		}
+	}
+
+	s.mu.Lock()
+	s.entry.LastHeartbeatAt = s.deps.Clock()
+	if hb.RowCount > 0 {
+		s.entry.RowCount = hb.RowCount
+	}
+	s.mu.Unlock()
+	if s.deps.Registry != nil {
+		s.deps.Registry.TouchHeartbeat(s.entry)
+	}
+}
+
+// reconnect dials hb.Addr, sends Configure, and swaps the fresh handle
+// into the entry, deferring the old handle's close so in-flight queries
+// drain rather than getting cut mid-stream. Shares the ConfigureRequest
+// shape with configureOnHeartbeat. Caller has already checked that a dial
+// is warranted (handle nil or addr moved) and that a Configurer exists.
+func (s *ShardSM) reconnect(ctx context.Context, hb store.ShardHeartbeat) error {
+	s.mu.Lock()
+	req := &pb.ConfigureRequest{
+		ShardId:        s.id,
+		Services:       serviceNames(s.entry.Services),
+		WindowStart:    s.entry.WindowStart.Format(time.RFC3339),
+		WindowEnd:      s.entry.WindowEnd.Format(time.RFC3339),
+		HeartbeatToken: s.entry.HeartbeatToken,
+	}
+	s.mu.Unlock()
+
+	dialCtx, cancel := context.WithTimeout(ctx, configureTimeout)
+	sh, err := s.deps.Configurer.Dial(dialCtx, hb.Addr, req)
+	cancel()
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	old := s.entry.Shard
+	s.entry.Shard = sh
+	s.entry.Addr = hb.Addr
+	if hb.InstanceID != "" {
+		s.entry.InstanceID = hb.InstanceID
+	}
+	s.mu.Unlock()
+
+	if old != nil {
+		go func() {
+			time.Sleep(defaultCloseRebindGrace)
+			if e := old.Close(); e != nil {
+				log.Printf("shardsm %s: deferred close of old conn: %v", s.id, e)
+			}
+		}()
+	}
+	return nil
+}
+
 // onEnterSuspended tears down the dead connection but KEEPS InstanceID
 // — that's the dead instance Evaluate must reap before relaunching.
 // (Pure: no AWS side effects here; the reap + relaunch is Evaluate's

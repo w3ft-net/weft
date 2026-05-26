@@ -4,11 +4,86 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"testing"
+	"time"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
 )
+
+// stubConfigurer is a ShardConfigurer that records its Dial calls and
+// hands back a fresh in-memory DuckDB shard for each id — the test seam
+// standing in for a real gRPC dial. Re-homed here when christen_test.go
+// was deleted in the Slice C switch.
+type stubConfigurer struct {
+	mu    sync.Mutex
+	calls []struct {
+		Addr string
+		Req  *pb.ConfigureRequest
+	}
+	shardByID map[string]shard.Shard
+}
+
+func (s *stubConfigurer) Dial(_ context.Context, addr string, req *pb.ConfigureRequest) (shard.Shard, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, struct {
+		Addr string
+		Req  *pb.ConfigureRequest
+	}{Addr: addr, Req: req})
+	if s.shardByID == nil {
+		s.shardByID = make(map[string]shard.Shard)
+	}
+	ds, err := shard.NewDuckDBShard(req.ShardId, "")
+	if err != nil {
+		return nil, err
+	}
+	s.shardByID[req.ShardId] = ds
+	return ds, nil
+}
+
+// bucketStub builds a BucketManager backed by a fresh SM test store with
+// the default bucket seeded to the given target/retention. Re-homed from
+// window_rotation_test.go (deleted in the Slice C switch).
+func bucketStub(t *testing.T, target int, retention time.Duration) *BucketManager {
+	t.Helper()
+	db := openSMTestStore(t)
+	seedDefaultBucket(t, db, nil, target, retention)
+	return NewBucketManager(db)
+}
+
+// seedDefaultBucket configures the migration-seeded "default" bucket with
+// the given services, target, tier, and window. Re-homed from
+// window_rotation_test.go.
+func seedDefaultBucket(t *testing.T, db *store.Store, apps []string, target int, window time.Duration) {
+	t.Helper()
+	def, ok, err := db.GetBucketByLabel("default")
+	if err != nil || !ok {
+		t.Fatalf("default bucket lookup: ok=%v err=%v", ok, err)
+	}
+	def.Services = apps
+	def.TargetIngestingCount = target
+	def.Tier = "small"
+	def.WindowDuration = window.String()
+	if err := db.SaveBucket(&def); err != nil {
+		t.Fatalf("seed default bucket: %v", err)
+	}
+}
+
+// seedDedicatedBucket inserts a non-default bucket. Re-homed from
+// window_rotation_test.go.
+func seedDedicatedBucket(t *testing.T, db *store.Store, label string, apps []string) *store.Bucket {
+	t.Helper()
+	rec := &store.Bucket{
+		Label: label, Services: apps, TargetIngestingCount: 2, Tier: "small",
+		WindowDuration: "168h", CreatedAt: "2026-04-21T00:00:00Z",
+	}
+	if err := db.SaveBucket(rec); err != nil {
+		t.Fatalf("seed bucket %q: %v", label, err)
+	}
+	return rec
+}
 
 // Shared test helpers for logdb. Mirrors the same-named helpers in
 // coordinator/liveness_test.go; both packages need them because their

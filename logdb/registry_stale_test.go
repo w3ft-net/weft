@@ -179,10 +179,17 @@ func TestProcessHeartbeat_RefreshesLastHeartbeatAt(t *testing.T) {
 		LastHeartbeatAt: priorBeat,
 	})
 
+	// ProcessHeartbeat routes a steady-state (INGESTING) heartbeat to the
+	// shard SM's ObserveHeartbeat, which refreshes liveness. Build the SM
+	// the way LoadStateMachines would and register it so the lookup finds
+	// it. Same addr + live handle means no reconnect — just the touch.
 	prov := &Provisioner{
 		registry:   reg,
 		config:     ProvisionerConfig{PollInterval: time.Second, WindowDuration: 7 * 24 * time.Hour},
 		configurer: &stubConfigurer{},
+		shardSMs: map[string]*ShardSM{
+			"shard-live": NewShardSM(reg.Get("shard-live"), ShardSMDeps{Registry: reg, Configurer: &stubConfigurer{}}),
+		},
 	}
 
 	prov.ProcessHeartbeat(store.ShardHeartbeat{

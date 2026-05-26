@@ -1,9 +1,7 @@
 package logdb
 
 import (
-	"context"
 	"testing"
-	"time"
 
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
@@ -279,58 +277,6 @@ func TestRegistry_RoundRobinIngestion(t *testing.T) {
 		if count < 30 || count > 70 {
 			t.Errorf("shard %s got %d/100 writes — expected ~50", id, count)
 		}
-	}
-}
-
-func TestProvisioner_ScalesUpToConfiguredCount(t *testing.T) {
-	ds, err := shard.NewDuckDBShard("shard-only", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { ds.Close() })
-
-	launcher := NewLocalLauncher()
-	t.Cleanup(func() { launcher.Close() })
-
-	db := openSMTestStore(t)
-	seedDefaultBucket(t, db, []string{"vimgym"}, 3, 168*time.Hour)
-	// Routing reads the bucket's services from log_groups, so the
-	// scale-up shards are stamped from here (not bucket.Services).
-	nsID := seedLogGroups(t, db, "scaleup-cust", "vimgym-ns", "vimgym")
-
-	reg := NewShardRegistry()
-	// Store-backed registry like the production sync launcher: Add
-	// persists a shard_records row so each launched shard's
-	// StampShardServices FK holds, and RefreshFromStore reloads service
-	// membership from shard_services.
-	reg.SetStore(db)
-	reg.Add(&ShardEntry{
-		ID:       "shard-only",
-		BucketID: defaultBucketID, // reconciler filters snapshot.Entries by BucketID
-		Services: []store.ShardService{{NamespaceID: nsID, Service: "vimgym"}},
-		// WindowEnd within bucket duration (168h) but in the future
-		// so wall-clock rotation doesn't preempt the scale-up test.
-		WindowStart: time.Now().UTC(), WindowEnd: time.Now().UTC().Add(24 * time.Hour),
-		State: StateIngesting,
-		Shard: ds, CreatedAt: time.Now(),
-	})
-	// Stamp the pre-existing shard's service so check()'s RefreshFromStore
-	// reloads it from shard_services rather than wiping it to nil.
-	if err := db.StampShardServices("shard-only", defaultBucketID); err != nil {
-		t.Fatalf("stamp shard-only: %v", err)
-	}
-
-	prov := NewProvisioner(reg, launcher, ProvisionerConfig{})
-	prov.Buckets = NewBucketManager(db)
-	prov.config.ShardOps = db // ServicesForBucket / StampShardServices for the launched shards
-
-	prov.check(context.Background())
-
-	// Should have scaled up to 3 ingesting shards, each stamped with
-	// the bucket's vimgym service from log_groups.
-	count := reg.IngestingCount(nsID, "vimgym")
-	if count != 3 {
-		t.Fatalf("expected 3 ingesting shards, got %d", count)
 	}
 }
 

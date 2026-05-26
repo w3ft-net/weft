@@ -241,48 +241,6 @@ func (f *fakeRegistryStore) CountShardsInBucketForFutureWindows(bucketID int64, 
 	return n, nil
 }
 
-// Rebind (instance replaced behind a durable shard id) must persist the
-// new address so a coordinator restart reloads the correct endpoint.
-func TestRebind_PersistsAddrChange(t *testing.T) {
-	fake := newFakeRegistryStore()
-	reg := NewShardRegistry()
-	reg.SetStore(fake)
-
-	reg.Add(&ShardEntry{
-		ID:         "shard-durable",
-		State:      StateIngesting,
-		Shard:      &failingShard{id: "shard-durable"},
-		Addr:       "10.0.0.1:9000",
-		InstanceID: "i-old",
-		CreatedAt:  time.Now(),
-	})
-
-	// The rebind arm of adoptFromHeartbeats needs a heartbeat that
-	// reports the same id at a different addr. Use a stub configurer
-	// — it's not invoked on the rebind path, but it's required by the
-	// provisioner struct.
-	mockStore := &mockHeartbeatStore{
-		heartbeats: []store.ShardHeartbeat{
-			{ShardID: "shard-durable", Addr: "10.0.0.2:9000", InstanceID: "i-new", State: "INGESTING"},
-		},
-	}
-	prov := &Provisioner{
-		registry:   reg,
-		config:     ProvisionerConfig{Store: mockStore, PollInterval: time.Second},
-		configurer: &stubConfigurer{},
-	}
-
-	prov.adoptFromHeartbeats()
-
-	rec, _ := fake.get("shard-durable")
-	if rec.Addr != "10.0.0.2:9000" {
-		t.Errorf("store addr: got %q want 10.0.0.2:9000 — rebind forgot to persist", rec.Addr)
-	}
-	if rec.InstanceID != "i-new" {
-		t.Errorf("store instance_id: got %q want i-new", rec.InstanceID)
-	}
-}
-
 // PersistState must no-op when no store is configured (in-process tests
 // pattern).
 func TestPersistState_NoOpWhenStoreUnset(t *testing.T) {

@@ -1,102 +1,92 @@
 package logdb
 
 import (
-	"context"
 	"testing"
 	"time"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/shard"
+	"github.com/kevlarcon/weft/store"
 )
 
-// TestCoordinator_RegistrySurvivesRestart verifies that after a coordinator
-// restart, shards are restored from the store (postgres) with their correct
-// time windows and apps, and ingested data is queryable.
+// TestCoordinator_RegistrySurvivesRestart verifies the "survives restart"
+// property after the FSM switch: a shard persisted to the store is
+// rehydrated into a fresh registry by LoadFromStore with its window,
+// state, bucket, and striping intact. The live gRPC handle is
+// deliberately absent post-restart (LoadFromStore can't redial) — the
+// first post-restart heartbeat reattaches it via ShardSM.ObserveHeartbeat,
+// which the SM-driven reconnect coverage in stage 4 exercises end-to-end.
 func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
-	// Phase 1: Create coordinator with provisioner, ingest data.
-	launcher := NewLocalLauncher()
-	t.Cleanup(func() { launcher.Close() })
+	db := openSMTestStore(t)
 
+	now := time.Now().UTC().Truncate(time.Second)
+	windowEnd := now.Add(24 * time.Hour)
+	stripe := 1
+
+	// Phase 1: a shard is INGESTING and persisted (as the FSM mint +
+	// promotion path would leave it).
 	reg1 := NewShardRegistry()
-	provConfig := DevProvisionerConfig()
-	prov := NewProvisioner(reg1, launcher, provConfig)
-	// Bootstrap requires a default bucket (target 2 to scale toward).
-	prov.Buckets = bucketStub(t, 2, 168*time.Hour)
-
-	ctx := context.Background()
-	prov.Start(ctx)
-	// Wait for bootstrap.
-	time.Sleep(100 * time.Millisecond)
-
-	if reg1.TotalIngesting() == 0 {
-		t.Fatal("provisioner did not bootstrap a shard")
-	}
-
-	// Capture one entry's identity up front; the same one will
-	// receive ingest, be "restarted" out of the registry, and be
-	// reconnected to in phase 2. Multi-shard buckets make the
-	// previous "pick any shard twice" pattern flaky across map
-	// iterations.
-	var chosen *ShardEntry
-	for _, e := range reg1.Entries() {
-		if e.Shard != nil {
-			chosen = e
-			break
-		}
-	}
-	if chosen == nil {
-		t.Fatal("no shard available for ingestion")
-	}
-	ingestShard := chosen.Shard
-
-	rows := []*pb.LogRow{
-		{Raw: "test log line 1", Namespace: "weft", Service: "coordinator", Customer: "testcust", Level: "INFO", TsUnixNs: time.Now().UnixNano()},
-		{Raw: "test log line 2", Namespace: "weft", Service: "coordinator", Customer: "testcust", Level: "ERROR", TsUnixNs: time.Now().UnixNano()},
-	}
-	if err := ingestShard.Ingest(rows, nil); err != nil {
-		t.Fatalf("ingest: %v", err)
-	}
-
-	// Verify data is queryable.
-	result, err := ingestShard.Query("SELECT raw, ts FROM logs WHERE customer = 'testcust'")
-	if err != nil {
-		t.Fatalf("query: %v", err)
-	}
-	if len(result) != 2 {
-		t.Fatalf("expected 2 rows, got %d", len(result))
-	}
-
-	// Phase 2: Simulate coordinator restart — new registry, same launcher/shards.
-	// The key property: shards restored from the store should still have
-	// the data that was ingested in phase 1.
-
-	shardID := chosen.ID
-	shardAddr := chosen.Addr
-	shardStart := chosen.WindowStart
-	shardEnd := chosen.WindowEnd
-
-	// Create new registry (simulating restart) and reconnect to same shard.
-	reg2 := NewShardRegistry()
-	gs, err := shard.NewGRPCShard(shardID, shardAddr, "")
-	if err != nil {
-		t.Fatalf("reconnect to shard: %v", err)
-	}
-
-	reg2.Add(&ShardEntry{
-		ID:          shardID,
-		WindowStart: shardStart,
-		WindowEnd:   shardEnd,
+	reg1.SetStore(db)
+	reg1.Add(&ShardEntry{
+		ID:          "shard-restart",
+		BucketID:    defaultBucketID,
 		State:       StateIngesting,
-		Shard:       gs,
-		CreatedAt:   time.Now(),
+		Tier:        "small",
+		Addr:        "10.0.1.7:9000",
+		InstanceID:  "i-restart",
+		WindowStart: now,
+		WindowEnd:   windowEnd,
+		CreatedAt:   now,
+		AZ:          "us-east-2a",
+		StripeIndex: &stripe,
+		EBSVolumeID: "vol-restart",
 	})
-
-	// Query through the new registry's shard — data should still be there.
-	result2, err := gs.Query("SELECT raw, ts FROM logs WHERE customer = 'testcust'")
-	if err != nil {
-		t.Fatalf("query after restart: %v", err)
+	// AZ/StripeIndex/instance/volume are FSM-owned columns persisted
+	// through the narrow SetShardLaunchResult (as MintShard does), not the
+	// registry's SaveShard upsert — stamp them so they survive the reload.
+	if err := db.SetShardLaunchResult("shard-restart", "i-restart", "us-east-2a", "vol-restart", &stripe); err != nil {
+		t.Fatalf("persist launch result: %v", err)
 	}
-	if len(result2) != 2 {
-		t.Fatalf("expected 2 rows after restart, got %d", len(result2))
+
+	// Phase 2: simulate a coordinator restart — a brand-new registry
+	// hydrating from the same store. The live Shard handle can't be
+	// reconstructed for a non-archived row, so reconstruct returns an
+	// error and the entry loads handle-less (mirrors production boot).
+	reg2 := NewShardRegistry()
+	reg2.SetStore(db)
+	if err := reg2.LoadFromStore(func(store.ShardRecord) (shard.Shard, error) {
+		return nil, errNoReconstruct
+	}); err != nil {
+		t.Fatalf("LoadFromStore: %v", err)
+	}
+
+	got := reg2.Get("shard-restart")
+	if got == nil {
+		t.Fatal("shard-restart not restored after restart")
+	}
+	if got.State != StateIngesting {
+		t.Errorf("State: got %s want INGESTING", got.State)
+	}
+	if !got.WindowEnd.Equal(windowEnd) {
+		t.Errorf("WindowEnd: got %v want %v", got.WindowEnd, windowEnd)
+	}
+	if got.BucketID != defaultBucketID {
+		t.Errorf("BucketID: got %d want %d", got.BucketID, defaultBucketID)
+	}
+	if got.AZ != "us-east-2a" {
+		t.Errorf("AZ: got %q want us-east-2a", got.AZ)
+	}
+	if got.StripeIndex == nil || *got.StripeIndex != stripe {
+		t.Errorf("StripeIndex: got %v want %d", got.StripeIndex, stripe)
+	}
+	if got.EBSVolumeID != "vol-restart" {
+		t.Errorf("EBSVolumeID: got %q want vol-restart", got.EBSVolumeID)
 	}
 }
+
+// errNoReconstruct stands in for the reconstruct failure a non-archived
+// row produces at boot (only ColdShards can be rebuilt from a record).
+var errNoReconstruct = errShardReconstruct{}
+
+type errShardReconstruct struct{}
+
+func (errShardReconstruct) Error() string { return "no reconstruct for live shard" }

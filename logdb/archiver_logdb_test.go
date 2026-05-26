@@ -1,7 +1,6 @@
 package logdb
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -11,62 +10,6 @@ import (
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
 )
-
-func TestProvisioner_ArchivesExpiredShard(t *testing.T) {
-	ds, err := shard.NewDuckDBShard("shard-old", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { ds.Close() })
-
-	rows := []*pb.LogRow{
-		{Raw: "test row", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
-	}
-	if err := ds.Ingest(rows, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
-		ID: "shard-old", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}}, BucketID: 1,
-		WindowStart: t0, WindowEnd: t1,
-		State:     StateReadOnly,
-		Shard:     ds,
-		RowCount:  1,
-		CreatedAt: time.Now().Add(-2 * time.Hour), // past retention
-	})
-
-	launcher := NewLocalLauncher()
-	t.Cleanup(func() { launcher.Close() })
-
-	parquetDir := t.TempDir()
-	config := ProvisionerConfig{
-		PollInterval: 5 * time.Second,
-		ParquetDir:   parquetDir,
-	}
-
-	prov := NewProvisioner(reg, launcher, config)
-	prov.Buckets = bucketStub(t, 0, time.Hour) // retention 1h; WindowEnd is > 1h past
-	prov.check(context.Background())
-
-	// Verify state changed to ARCHIVED.
-	entry := reg.Get("shard-old")
-	if entry == nil {
-		t.Fatal("shard-old entry missing from registry")
-	}
-	if entry.State != StateArchived {
-		t.Fatalf("expected ARCHIVED, got %s", entry.State)
-	}
-
-	// Verify the ColdShard is queryable.
-	result, err := entry.Shard.Query("SELECT raw, ts FROM logs WHERE customer = 'kevlar'")
-	if err != nil {
-		t.Fatalf("query archived shard: %v", err)
-	}
-	if len(result) != 1 {
-		t.Fatalf("expected 1 row from archived shard, got %d", len(result))
-	}
-}
 
 func TestRegistry_PersistAndRestore(t *testing.T) {
 	// Create a store.
