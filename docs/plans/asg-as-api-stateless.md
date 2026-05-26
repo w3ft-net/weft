@@ -784,12 +784,42 @@ provisioner mint factory below.
        obsolete funcs from keepers; re-homed shared helpers (stubConfigurer,
        bucketStub, seed*Bucket) into testhelpers; adapted registry_stale +
        registry_restart to the SM model. `go test -tags test ./...` clean.
-  3. Delete lifecycle plumbing (`lifecycle.go`, `lifecycle_poller.go`,
-     dead reconciler/reap/christen funcs, dead store methods,
-     `LIFECYCLE_QUEUE_URL`) + the `Suspended` bool. NEXT.
+  3. **SHIPPED** (`7b0de94`) — deleted the dead plumbing: `reconciler.go`,
+     `lifecycle.go` + `lifecycle_poller.go` + the `LIFECYCLE_QUEUE_URL`
+     wiring, the provisioner reap*/christen/bootstrap/provisionForBucket/
+     launchAndConfigure/mintLaunchingRow*/syncASGDesiredCapacity/
+     currentWindow/windowDurationFor/parseTime funcs + reapGracePeriod/
+     staleLaunchingAge consts, launcher.go's asyncLauncher/TierScaler/
+     RecoveryTerminator/isLaunchingLauncher, and store/shard.go's
+     LAUNCHING-lifecycle methods (+ the dead ShardOpsStore entries).
+     `PrewarmLead`→bucketsm.go, `fakeVolumeManager`→volumes_fake_test.go.
+     Deleted the obsolete tests of all of it (logdb reap*/lifecycle/
+     zombie_repro/boot_order/asg_desired; integration prewarm/
+     terminate_on_archive). ASGLauncher stays (prod launches through it
+     until the Phase-3 ASGProvisioner cutover). Also fixed: startDev was
+     missing LoadStateMachines (restored shards got no SM).
+     - **3b SHIPPED** (`64095f8`) — dropped the `Suspended` ingest latch
+       (the flip had left it a one-way latch: transient ingest failures
+       evicted a shard from write routing forever). Removed the bool +
+       `Suspend` + the IngestingShard exclusion. Routing exclusion is the
+       FSM's job now (HeartbeatStale → SUSPENDED). RecordIngestFailure/
+       ResetIngestFailures stay (IngestRecorder contract) but only count.
+       **Follow-up:** a persisted `IngestUnhealthy` column for the
+       "alive but persistently failing ingest" case (no replacement yet).
   4. New SM scenario tests (the surviving half of slice D) — needs an
      in-process ShardLaunchAPI launcher whose shards heartbeat, to cover
-     the launch→promote→reconnect flow end-to-end.
+     the launch→promote→reconnect flow end-to-end. **NEXT.**
+
+**Slice C remaining loose ends (track for follow-up):**
+- **ForceArchive/DeleteArchived bypass the FSM** — the admin gRPC path
+  still calls the provisioner's synchronous `archive()`/`retireVolume()`
+  (kept, live) instead of firing `ArchiveRequested` on the shard SM.
+  Works (sets state ARCHIVED directly) but skips the ARCHIVING gate;
+  rework to drive the FSM.
+- **Prod launcher cutover (Phase 3)** — startProd still builds the legacy
+  `ASGLauncher` (not `ShardLaunchAPI`), so prod mints-but-doesn't-launch
+  until `SHARD_<TIER>_ASGS` + `ASGProvisioner` land.
+- **`IngestUnhealthy` column** — replacement for the removed Suspended latch.
 - **Slice D — test rewrites (component 9).** Deletions fold into the
   switch commit (2); new scenario tests are step 4 above.
 
