@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -30,11 +31,42 @@ import (
 type BucketSM struct {
 	*Bucket // identity + config (ID, Label, Target, Tier, window methods); promoted
 
-	sm    *stateless.StateMachine
-	db    *gorm.DB         // persists the FSM's state column (external storage)
-	clock func() time.Time // test seam; stamps cascade_started_at
+	sm         *stateless.StateMachine
+	db         *gorm.DB         // persists the FSM's state column + cascade-set queries
+	controller ShardController  // mints/drives child shard SMs; nil on dev/test paths that don't
+	clock      func() time.Time // test seam; stamps cascade_started_at and drives window math
 
 	mu sync.Mutex // serialises action-internal mutations
+}
+
+// ShardController is the bucket SM's handle into the provisioner's
+// child-shard machinery. The bucket SM never touches a *ShardSM
+// directly: WARMING / scale-up mint fresh LAUNCHING shards via
+// MintShard; ROTATING, scale-down, and the retention sweep drive
+// existing shards via FireShard. The provisioner implements it (Slice
+// C); bucket SM unit tests fake it.
+type ShardController interface {
+	// MintShard creates a new LAUNCHING shard for the bucket in the given
+	// window at the given stripe index (the provisioner resolves the AZ
+	// from the stripe index via the striper), registers its registry
+	// entry + ShardSM, and returns the new shard id.
+	MintShard(ctx context.Context, spec MintSpec) (string, error)
+	// FireShard dispatches a trigger to an existing shard's SM, resolving
+	// it by id. A missing SM is an error the caller logs (and otherwise
+	// tolerates — a shard that vanished mid-cascade is self-healed by the
+	// next tick's gate re-check).
+	FireShard(ctx context.Context, shardID string, trigger Trigger, args ...any) error
+}
+
+// MintSpec is the bucket SM's request to bring up one new shard. AZ is
+// deliberately absent — the bucket holds no AZ knowledge beyond the
+// stripe index; the provisioner maps StripeIndex → AZ via the striper.
+type MintSpec struct {
+	BucketID    int64
+	Tier        string
+	WindowStart time.Time
+	WindowEnd   time.Time
+	StripeIndex int
 }
 
 // ErrUnknownBucket is the bucket-FSM counterpart to
@@ -45,14 +77,15 @@ var ErrUnknownBucket = errors.New("bucket record not found")
 // NewBucketSM constructs a fresh SM bound to bucket. Like the shard
 // SM, the initial state is read lazily from the store via the
 // ExternalStorage accessor on the first transition.
-func NewBucketSM(bucket *Bucket, db *gorm.DB, clock func() time.Time) *BucketSM {
+func NewBucketSM(bucket *Bucket, db *gorm.DB, controller ShardController, clock func() time.Time) *BucketSM {
 	if clock == nil {
 		clock = time.Now
 	}
 	b := &BucketSM{
-		Bucket: bucket,
-		db:     db,
-		clock:  clock,
+		Bucket:     bucket,
+		db:         db,
+		controller: controller,
+		clock:      clock,
 	}
 	b.sm = stateless.NewStateMachineWithExternalStorage(
 		b.readState, b.writeState, stateless.FiringQueued,
@@ -137,28 +170,150 @@ func (b *BucketSM) configure() {
 	b.sm.Configure(BucketStasis).OnEntry(b.onEnterStasis)
 }
 
-// ── Action stubs — Phase 2 wires the real bodies ────────────────
+// ── OnEntry actions ─────────────────────────────────────────────
 
+// onEnterWarming stamps cascade_started_at and mints the warming
+// cohort. Two shapes, distinguished by whether the current window
+// already holds Target INGESTING shards:
+//
+//   - Rotation (current window is full): warm the NEXT window, minting
+//     one incoming shard per current-cohort stripe index so the next
+//     window mirrors the current AZ layout.
+//   - Fill / scale-up (current window under Target): warm the CURRENT
+//     window, minting the stripe indices 0..Target-1 not yet covered.
+//
+// Idempotent: a re-entry (or a tick that re-derives the same plan)
+// skips any stripe index already covered by a live shard in the warming
+// window, so a crash between mints doesn't double-launch.
 func (b *BucketSM) onEnterWarming(ctx context.Context, args ...any) error {
 	now := b.clock().UTC()
 	if err := b.db.Model(&store.Bucket{}).Where("id = ?", b.ID).
 		Update("cascade_started_at", &now).Error; err != nil {
 		return fmt.Errorf("bucketsm %d: set cascade_started_at: %w", b.ID, err)
 	}
-	log.Printf("bucketsm %d (%s): enter WARMING (stub — Phase 2 mints incoming shard SMs)",
-		b.ID, b.Label)
+	if b.controller == nil || b.Target <= 0 {
+		log.Printf("bucketsm %d (%s): enter WARMING — no controller or target<=0, nothing to mint", b.ID, b.Label)
+		return nil
+	}
+
+	curStart, curEnd := b.CurrentWindow(now)
+	nextStart, nextEnd := b.NextWindow(now)
+	live, err := b.shardsInStates(StateLaunching, StateIngesting)
+	if err != nil {
+		return fmt.Errorf("bucketsm %d: warming cohort query: %w", b.ID, err)
+	}
+
+	var warmStart, warmEnd time.Time
+	var stripes []int
+	if b.countIn(live, StateIngesting, curStart) >= b.Target {
+		// Rotation — warm the next window, inheriting the current cohort's
+		// stripe indices.
+		warmStart, warmEnd = nextStart, nextEnd
+		covered := stripeSet(live, warmStart)
+		fallback := 0
+		for _, r := range live {
+			if r.State != string(StateIngesting) || !windowStartEq(r, curStart) {
+				continue
+			}
+			si, ok := stripeOf(r)
+			if !ok {
+				si = fallback
+			}
+			fallback++
+			if !covered[si] {
+				covered[si] = true
+				stripes = append(stripes, si)
+			}
+		}
+	} else {
+		// Fill / scale-up — warm the current window up to Target.
+		warmStart, warmEnd = curStart, curEnd
+		covered := stripeSet(live, warmStart)
+		for i := 0; i < b.Target; i++ {
+			if !covered[i] {
+				stripes = append(stripes, i)
+			}
+		}
+	}
+
+	for _, si := range stripes {
+		id, err := b.controller.MintShard(ctx, MintSpec{
+			BucketID:    b.ID,
+			Tier:        b.Tier,
+			WindowStart: warmStart,
+			WindowEnd:   warmEnd,
+			StripeIndex: si,
+		})
+		if err != nil {
+			log.Printf("bucketsm %d (%s): mint stripe %d: %v", b.ID, b.Label, si, err)
+			continue
+		}
+		log.Printf("bucketsm %d (%s): WARMING minted %s (stripe=%d window %s–%s)",
+			b.ID, b.Label, id, si, warmStart.Format(time.RFC3339), warmEnd.Format(time.RFC3339))
+	}
 	return nil
 }
 
+// onEnterRotating fires RotateRequested on every outgoing shard — the
+// INGESTING shards in windows older than the newest (warming) window.
+// The incoming cohort is INGESTING by now (the WARMING→ROTATING gate
+// guaranteed it), so 2·Target shards are hot when this drains the old
+// ones; the bucket never gaps the write path.
 func (b *BucketSM) onEnterRotating(ctx context.Context, args ...any) error {
-	log.Printf("bucketsm %d (%s): enter ROTATING (stub — Phase 2 fires RotateRequested on outgoing shards)",
-		b.ID, b.Label)
+	if b.controller == nil {
+		log.Printf("bucketsm %d (%s): enter ROTATING — no controller, nothing to rotate", b.ID, b.Label)
+		return nil
+	}
+	ing, err := b.shardsInStates(StateIngesting)
+	if err != nil {
+		return fmt.Errorf("bucketsm %d: rotating cohort query: %w", b.ID, err)
+	}
+	warmStart, ok := latestWindowStart(ing)
+	if !ok {
+		return nil
+	}
+	for _, r := range ing {
+		if windowStartBefore(r, warmStart) {
+			if err := b.controller.FireShard(ctx, r.ID, TriggerRotateRequested); err != nil {
+				log.Printf("bucketsm %d (%s): rotate %s: %v", b.ID, b.Label, r.ID, err)
+			}
+		}
+	}
 	return nil
 }
 
+// onEnterScalingDown fires RotateRequested on the N youngest INGESTING
+// shards (N = current − target). They flow through the normal
+// READ_ONLY → ARCHIVING → ARCHIVED path on subsequent ticks; the
+// retention sweep handles their eventual archival. Youngest-first so
+// the oldest shards (closest to their own rotation anyway) stay hot.
 func (b *BucketSM) onEnterScalingDown(ctx context.Context, args ...any) error {
-	log.Printf("bucketsm %d (%s): enter SCALING_DOWN (stub — Phase 2 picks excess shards to rotate)",
-		b.ID, b.Label)
+	if b.controller == nil {
+		log.Printf("bucketsm %d (%s): enter SCALING_DOWN — no controller, nothing to drain", b.ID, b.Label)
+		return nil
+	}
+	ing, err := b.shardsInStates(StateIngesting)
+	if err != nil {
+		return fmt.Errorf("bucketsm %d: scaling-down cohort query: %w", b.ID, err)
+	}
+	excess := len(ing) - b.Target
+	if excess <= 0 {
+		return nil
+	}
+	// Youngest first: latest window_start, then latest created_at.
+	sort.SliceStable(ing, func(i, j int) bool {
+		wi, _ := time.Parse(time.RFC3339, ing[i].WindowStart)
+		wj, _ := time.Parse(time.RFC3339, ing[j].WindowStart)
+		if !wi.Equal(wj) {
+			return wi.After(wj)
+		}
+		return ing[i].CreatedAt > ing[j].CreatedAt
+	})
+	for _, r := range ing[:excess] {
+		if err := b.controller.FireShard(ctx, r.ID, TriggerRotateRequested); err != nil {
+			log.Printf("bucketsm %d (%s): scale-down rotate %s: %v", b.ID, b.Label, r.ID, err)
+		}
+	}
 	return nil
 }
 
@@ -171,4 +326,267 @@ func (b *BucketSM) onEnterStasis(ctx context.Context, args ...any) error {
 		return fmt.Errorf("bucketsm %d: clear cascade_started_at: %w", b.ID, err)
 	}
 	return nil
+}
+
+// ── Evaluate — the convergence driver ───────────────────────────
+//
+// Evaluate runs once per reconciler tick per bucket. It reads the
+// persisted state, observes the bucket's shard cohorts (via inline
+// gorm queries — the cascade context is 3NF, derived from shard_records
+// rather than stored as a list), and fires whichever advancing trigger
+// the gate permits. Like the shard SM, all convergence lives here, so a
+// restart that drops straight into Evaluate re-checks the gate and
+// either advances or waits — there is no boot-vs-running mode.
+//
+// The retention sweep runs first in every state: it fires
+// ArchiveRequested (fire-and-forget) on READ_ONLY shards past retention,
+// so a slow S3 export can never block the rotation cascade.
+func (b *BucketSM) Evaluate(ctx context.Context) error {
+	st, err := b.State(ctx)
+	if err != nil {
+		return err
+	}
+	now := b.clock().UTC()
+
+	if err := b.sweepRetention(ctx, now); err != nil {
+		log.Printf("bucketsm %d (%s): retention sweep: %v", b.ID, b.Label, err)
+	}
+
+	switch st {
+	case BucketStasis:
+		return b.evaluateStasis(ctx, now)
+	case BucketWarming:
+		return b.evaluateWarming(ctx)
+	case BucketRotating:
+		return b.evaluateRotating(ctx)
+	case BucketScalingDown:
+		return b.evaluateScalingDown(ctx)
+	default:
+		return nil
+	}
+}
+
+// evaluateStasis decides whether to start a cascade. Priority:
+// scale-down (target dropped) > rotation (window approaching) >
+// scale-up (under target). Only one trigger fires per tick; the next
+// tick re-evaluates from the new state.
+func (b *BucketSM) evaluateStasis(ctx context.Context, now time.Time) error {
+	if b.Target <= 0 {
+		return nil // no ingest capacity required — nothing to manage
+	}
+	live, err := b.shardsInStates(StateLaunching, StateIngesting)
+	if err != nil {
+		return fmt.Errorf("bucketsm %d: stasis cohort query: %w", b.ID, err)
+	}
+	curStart, _ := b.CurrentWindow(now)
+	nextStart, _ := b.NextWindow(now)
+
+	ingesting := 0
+	launchingCur := 0
+	rotationDue := false
+	hasNextWindow := false
+	for _, r := range live {
+		if windowStartEq(r, nextStart) {
+			hasNextWindow = true
+		}
+		switch ShardState(r.State) {
+		case StateIngesting:
+			ingesting++
+			if end, ok := windowEnd(r); ok && !now.Add(PrewarmLead).Before(end) {
+				rotationDue = true // within PrewarmLead of (or past) WindowEnd
+			}
+		case StateLaunching:
+			if windowStartEq(r, curStart) {
+				launchingCur++
+			}
+		}
+	}
+
+	switch {
+	case ingesting > b.Target:
+		return b.Fire(ctx, TriggerScaleDownRequested)
+	case rotationDue && !hasNextWindow:
+		// Don't re-arm a cascade whose next-window cohort already exists.
+		return b.Fire(ctx, TriggerRotationNeeded)
+	case ingesting < b.Target && launchingCur == 0:
+		return b.Fire(ctx, TriggerScaleUpRequested)
+	}
+	return nil
+}
+
+// evaluateWarming gates WARMING → ROTATING: every incoming shard (the
+// newest window) must be INGESTING and the cohort must be at least
+// Target strong, so rotation runs at 2·Target hot capacity.
+//
+// TODO(window-extension): the plan's WARMING.OnTick policy — extend the
+// outgoing shards' WindowEnd when cascade_started_at is older than a
+// stall threshold and incoming shards are still LAUNCHING, to avoid a
+// write-gap — lands with its config (CascadeStallThreshold /
+// ExtensionStep / MaxExtensions), which doesn't exist yet.
+func (b *BucketSM) evaluateWarming(ctx context.Context) error {
+	live, err := b.shardsInStates(StateLaunching, StateIngesting)
+	if err != nil {
+		return fmt.Errorf("bucketsm %d: warming gate query: %w", b.ID, err)
+	}
+	warmStart, ok := latestWindowStart(live)
+	if !ok {
+		return nil // no live shards yet — onEnterWarming's mint hasn't landed
+	}
+	total, ingesting := 0, 0
+	for _, r := range live {
+		if !windowStartEq(r, warmStart) {
+			continue
+		}
+		total++
+		if ShardState(r.State) == StateIngesting {
+			ingesting++
+		}
+	}
+	if total > 0 && ingesting == total && ingesting >= b.Target {
+		return b.Fire(ctx, TriggerAllReplacementsReady)
+	}
+	return nil
+}
+
+// evaluateRotating gates ROTATING → STASIS: no INGESTING shard remains
+// in a window older than the newest. onEnterRotating fired
+// RotateRequested at entry; this waits for each to land in READ_ONLY.
+func (b *BucketSM) evaluateRotating(ctx context.Context) error {
+	ing, err := b.shardsInStates(StateIngesting)
+	if err != nil {
+		return fmt.Errorf("bucketsm %d: rotating gate query: %w", b.ID, err)
+	}
+	warmStart, ok := latestWindowStart(ing)
+	if !ok {
+		return b.Fire(ctx, TriggerOldShardsRotated) // nothing INGESTING at all
+	}
+	for _, r := range ing {
+		if windowStartBefore(r, warmStart) {
+			return nil // an outgoing shard hasn't rotated yet
+		}
+	}
+	return b.Fire(ctx, TriggerOldShardsRotated)
+}
+
+// evaluateScalingDown gates SCALING_DOWN → STASIS: the INGESTING count
+// is back down to Target. onEnterScalingDown rotated the excess; this
+// waits for those flips to land.
+func (b *BucketSM) evaluateScalingDown(ctx context.Context) error {
+	ing, err := b.shardsInStates(StateIngesting)
+	if err != nil {
+		return fmt.Errorf("bucketsm %d: scaling-down gate query: %w", b.ID, err)
+	}
+	if len(ing) <= b.Target {
+		return b.Fire(ctx, TriggerSettled)
+	}
+	return nil
+}
+
+// sweepRetention fires ArchiveRequested on every READ_ONLY shard whose
+// WindowEnd is older than the bucket's retention (= WindowDuration).
+// Fire-and-forget: the shard's own ARCHIVING Evaluate does the export;
+// the bucket never waits. A zero WindowDuration disables archival.
+func (b *BucketSM) sweepRetention(ctx context.Context, now time.Time) error {
+	if b.controller == nil || b.WindowDuration <= 0 {
+		return nil
+	}
+	ro, err := b.shardsInStates(StateReadOnly)
+	if err != nil {
+		return err
+	}
+	for _, r := range ro {
+		end, ok := windowEnd(r)
+		if !ok || now.Sub(end) <= b.WindowDuration {
+			continue
+		}
+		if err := b.controller.FireShard(ctx, r.ID, TriggerArchiveRequested); err != nil {
+			log.Printf("bucketsm %d (%s): archive %s: %v", b.ID, b.Label, r.ID, err)
+		}
+	}
+	return nil
+}
+
+// ── cohort query + window helpers ───────────────────────────────
+
+// shardsInStates returns the bucket's shard rows in any of the given
+// states. The bucket SM's only data source for cascade context — the
+// incoming/outgoing/retention cohorts are all derived from these rows
+// (the "3NF, not JSONB" decision in the plan).
+func (b *BucketSM) shardsInStates(states ...ShardState) ([]store.ShardRecord, error) {
+	ss := make([]string, len(states))
+	for i, s := range states {
+		ss[i] = string(s)
+	}
+	var recs []store.ShardRecord
+	if err := b.db.Where("bucket_id = ? AND state IN ?", b.ID, ss).Find(&recs).Error; err != nil {
+		return nil, err
+	}
+	return recs, nil
+}
+
+// countIn counts rows in the given state whose window_start equals start.
+func (b *BucketSM) countIn(recs []store.ShardRecord, state ShardState, start time.Time) int {
+	n := 0
+	for _, r := range recs {
+		if r.State == string(state) && windowStartEq(r, start) {
+			n++
+		}
+	}
+	return n
+}
+
+// stripeSet returns the set of stripe indices already covered by live
+// shards in the given window — used to make minting idempotent.
+func stripeSet(recs []store.ShardRecord, window time.Time) map[int]bool {
+	set := map[int]bool{}
+	for _, r := range recs {
+		if !windowStartEq(r, window) {
+			continue
+		}
+		if si, ok := stripeOf(r); ok {
+			set[si] = true
+		}
+	}
+	return set
+}
+
+// latestWindowStart returns the newest window_start across recs.
+func latestWindowStart(recs []store.ShardRecord) (time.Time, bool) {
+	var max time.Time
+	found := false
+	for _, r := range recs {
+		ws, err := time.Parse(time.RFC3339, r.WindowStart)
+		if err != nil {
+			continue
+		}
+		if !found || ws.After(max) {
+			max, found = ws, true
+		}
+	}
+	return max, found
+}
+
+func stripeOf(r store.ShardRecord) (int, bool) {
+	if r.StripeIndex == nil {
+		return 0, false
+	}
+	return *r.StripeIndex, true
+}
+
+func windowStartEq(r store.ShardRecord, t time.Time) bool {
+	ws, err := time.Parse(time.RFC3339, r.WindowStart)
+	return err == nil && ws.Equal(t)
+}
+
+func windowStartBefore(r store.ShardRecord, t time.Time) bool {
+	ws, err := time.Parse(time.RFC3339, r.WindowStart)
+	return err == nil && ws.Before(t)
+}
+
+func windowEnd(r store.ShardRecord) (time.Time, bool) {
+	we, err := time.Parse(time.RFC3339, r.WindowEnd)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return we, true
 }

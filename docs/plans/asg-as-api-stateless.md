@@ -723,11 +723,30 @@ provisioner mint factory below.
   Planned commit order (each compiles; old reconciler stays live until
   the switch commit):
   0. **SHIPPED** — shard FSM ARCHIVING state (the redesign above).
-  1. Provisioner builds `bucketSMs`/`shardSMs` maps in `LoadFromStore`
-     + mint factory / resolver, *additively* — `check()` still runs the
-     old reconciler. BucketSM bodies + Evaluate wired against the
-     factory; the cascade incoming/outgoing sets come from inline gorm
-     queries on the bucket SM's `*gorm.DB`. Unit-tested with fakes.
+  1. **SHIPPED** — Provisioner builds `bucketSMs`/`shardSMs` maps +
+     `ShardController` (mint factory + SM resolver), *additively*: new
+     `logdb/provisioner_sm.go` holds `LoadStateMachines` (wired into
+     `startProd`/`startDev` after `SetStore`), `MintShard`, `FireShard`,
+     `shardSMDeps`; `Provisioner` gains `bucketSMs`/`shardSMs`/`smMu` +
+     a concrete `*store.Store` (the interface fields don't expose
+     `DB()`). `check()` still runs the old reconciler — nothing here is
+     on the live tick. BucketSM bodies are real now: `onEnterWarming`
+     mints next-window (rotation) or current-window (fill/scale-up)
+     cohorts inheriting stripe indices, idempotently; `onEnterRotating`
+     fires `RotateRequested` on the outgoing (older-window) INGESTING
+     shards; `onEnterScalingDown` rotates the N youngest. `Evaluate`
+     dispatches per state: STASIS decides scale-down/rotation/scale-up,
+     WARMING gates on incoming-all-INGESTING, ROTATING gates on
+     outgoing-drained, SCALING_DOWN on back-to-Target; a retention sweep
+     fires `ArchiveRequested` (fire-and-forget) on past-retention
+     READ_ONLY shards every tick. Cohorts derive from inline gorm
+     queries keyed on the *latest live window* (robust to clock drift
+     mid-cascade). Cohort sets are 3NF — no `ShardsInBucket*` store
+     methods. Full unit coverage in `bucketsm_test.go` against a
+     `fakeShardController`. **Deferred:** the `WARMING.OnTick`
+     WindowEnd-extension anti-write-gap policy — it needs
+     `CascadeStallThreshold`/`ExtensionStep`/`MaxExtensions` config that
+     doesn't exist yet (TODO marked in `evaluateWarming`).
   2. The switch: `check()` → Evaluate per bucket/shard; `ProcessHeartbeat`
      → `sm.Fire`; delete reconciler ops / christen / reap* /
      mintLaunchingRow* / `Suspended` bool. The obsolete `*_test.go`

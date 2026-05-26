@@ -122,6 +122,11 @@ func startProd(cfg Config, reg *ShardRegistry, lambdaURL string) (*Provisioner, 
 
 	prov.SetStore(cfg.DB)
 
+	// Build the FSM control plane additively (Slice C). The maps are
+	// populated and ready but not yet driven by the tick — the old
+	// reconciler stays authoritative until the switch commit.
+	prov.LoadStateMachines()
+
 	prov.Start(cfg.Ctx)
 	log.Printf("provisioner: started with ASG tiers %v", cfg.ShardTiers)
 

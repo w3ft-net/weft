@@ -205,6 +205,20 @@ type Provisioner struct {
 	configurer  ShardConfigurer
 	volumes     VolumeManager // optional; used to tag data volumes at christen time
 	heartbeatMu sync.Mutex    // serialises ProcessHeartbeat with the ticker's adoptFromHeartbeats
+
+	// bucketSMs / shardSMs are the FSM control plane built additively in
+	// Slice C (asg-as-api-stateless.md). LoadStateMachines populates them
+	// after the registry hydrates; MintShard adds to shardSMs as the
+	// bucket SMs warm new cohorts. check() does NOT drive them yet — the
+	// old reconciler stays authoritative until the Slice C switch commit.
+	smMu      sync.RWMutex
+	bucketSMs map[int64]*BucketSM
+	shardSMs  map[string]*ShardSM
+	// store is the concrete *store.Store behind config.Store/ShardOps,
+	// stashed by SetStore. The FSM control plane needs the concrete type
+	// (ShardSMDeps.Store, the bucket SM's *gorm.DB) that the HeartbeatStore
+	// / ShardOpsStore interfaces don't expose.
+	store *store.Store
 }
 
 // NewProvisioner creates a provisioner.
@@ -216,6 +230,8 @@ func NewProvisioner(registry *ShardRegistry, launcher ShardLauncher, config Prov
 		stats:      NewServiceStats(),
 		Buckets:    NewBucketManager(nil),
 		configurer: grpcConfigurer{shardSecret: config.ShardSecret},
+		bucketSMs:  map[int64]*BucketSM{},
+		shardSMs:   map[string]*ShardSM{},
 	}
 }
 
@@ -228,6 +244,7 @@ func NewProvisioner(registry *ShardRegistry, launcher ShardLauncher, config Prov
 func (p *Provisioner) SetStore(s *store.Store) {
 	p.config.Store = s
 	p.config.ShardOps = s
+	p.store = s
 	p.Buckets = NewBucketManager(s)
 }
 
