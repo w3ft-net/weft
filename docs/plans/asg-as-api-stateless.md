@@ -747,14 +747,49 @@ provisioner mint factory below.
      WindowEnd-extension anti-write-gap policy — it needs
      `CascadeStallThreshold`/`ExtensionStep`/`MaxExtensions` config that
      doesn't exist yet (TODO marked in `evaluateWarming`).
-  2. The switch: `check()` → Evaluate per bucket/shard; `ProcessHeartbeat`
-     → `sm.Fire`; delete reconciler ops / christen / reap* /
-     mintLaunchingRow* / `Suspended` bool. The obsolete `*_test.go`
-     files (slice D deletions) must land in this same commit — deleting
-     `lifecycle.go` breaks `lifecycle_test.go`'s compile.
+  2. The switch — landed in two build-green sub-commits (decision
+     2026-05-26: stage it, don't do one atomic red commit):
+     - **2a SHIPPED** (`29ef800`) — dev FSM launch primitive. `DockerLauncher`
+       gains `Launch`/`Terminate` (ShardLaunchAPI) + `AZsForTier`/`StripeAZ`
+       (one synthetic `local` AZ), using **forced identity**: container name
+       = `--hostname` = `SHARD_INSTANCE_ID`, so the shard's advertised addr
+       is dialable AND its heartbeat instance id matches what the SM stamps
+       on the LAUNCHING entry. `cmd/shard` `getInstanceID()` reads
+       `SHARD_INSTANCE_ID` first. Additive — old reconciler + `LaunchInstance`
+       untouched.
+     - **2b SHIPPED** (`84bf7c2`) — flipped `check()` → bucket/shard
+       `Evaluate` and `ProcessHeartbeat` → SM routing. **Dev-functional,
+       prod-dormant**: prod's `ASGLauncher` doesn't satisfy `ShardLaunchAPI`,
+       so prod mints LAUNCHING rows but launches nothing until the Phase-3
+       `ASGProvisioner` cutover (gated on `SHARD_<TIER>_ASGS`). The old
+       reconciler/lifecycle **source stays compiled (uncalled)** for step 3.
+       Three sub-designs the plan omitted, now built:
+       (a) heartbeat instance-correlation (empty-ShardID → LAUNCHING SM by
+       instance id; `shardSMByInstance`); steady-state →
+       `ShardSM.ObserveHeartbeat` (liveness + reconnect-when-nil, the
+       post-restart re-dial). (b) service-drift (old op 1) has no FSM home —
+       kept as a standalone `syncShardServices` sweep in `check()` +
+       `OnboardService` rewired to `syncServicesForBucket`. (c) in-process SM
+       launcher missing — the SM-driven launch→heartbeat→INGESTING flow has
+       no in-process harness, so the behavioral tests that exercised it were
+       deleted; integration coverage deferred to step 4. **NOT done in 2b:**
+       `Suspended`-bool removal (deferred — touches `shard.IngestRecorder`);
+       `mintLaunchingRow*`/`christen`/`reap*` still present-but-uncalled
+       (deleted in step 3 with the source).
+       Test reconciliation (forced by the behavior change): deleted
+       wholesale-obsolete files (christen, heartbeat_rowcount, launching,
+       provisioner_lifecycle, provisioner_rebind_nil, rebind_close,
+       refresh_cascade, instance_refresh_repro, window_rotation;
+       reconciler_test superseded by bucketsm_test); surgically removed
+       obsolete funcs from keepers; re-homed shared helpers (stubConfigurer,
+       bucketStub, seed*Bucket) into testhelpers; adapted registry_stale +
+       registry_restart to the SM model. `go test -tags test ./...` clean.
   3. Delete lifecycle plumbing (`lifecycle.go`, `lifecycle_poller.go`,
-     dead store methods, `LIFECYCLE_QUEUE_URL`).
-  4. New SM scenario tests (the surviving half of slice D).
+     dead reconciler/reap/christen funcs, dead store methods,
+     `LIFECYCLE_QUEUE_URL`) + the `Suspended` bool. NEXT.
+  4. New SM scenario tests (the surviving half of slice D) — needs an
+     in-process ShardLaunchAPI launcher whose shards heartbeat, to cover
+     the launch→promote→reconnect flow end-to-end.
 - **Slice D — test rewrites (component 9).** Deletions fold into the
   switch commit (2); new scenario tests are step 4 above.
 
