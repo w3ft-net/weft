@@ -46,6 +46,9 @@ func TestBucketSM_FullCascade(t *testing.T) {
 	sm, db, ab := makeFixtureBucketSM(t, BucketStasis)
 	ctx := context.Background()
 
+	// Rotation-only cascade: STASIS → WARMING → ROTATING → STASIS. No
+	// ARCHIVING phase — archival is a fire-and-forget retention sweep,
+	// not a cascade step.
 	if err := sm.Fire(ctx, TriggerRotationNeeded); err != nil {
 		t.Fatalf("RotationNeeded: %v", err)
 	}
@@ -54,9 +57,6 @@ func TestBucketSM_FullCascade(t *testing.T) {
 	}
 	if err := sm.Fire(ctx, TriggerOldShardsRotated); err != nil {
 		t.Fatalf("OldShardsRotated: %v", err)
-	}
-	if err := sm.Fire(ctx, TriggerArchivalsComplete); err != nil {
-		t.Fatalf("ArchivalsComplete: %v", err)
 	}
 
 	got, err := sm.State(ctx)
@@ -99,7 +99,6 @@ func TestBucketSM_StasisRejectsCascadeAdvanceTriggers(t *testing.T) {
 	for _, trigger := range []Trigger{
 		TriggerAllReplacementsReady,
 		TriggerOldShardsRotated,
-		TriggerArchivalsComplete,
 		TriggerSettled,
 	} {
 		t.Run(string(trigger), func(t *testing.T) {

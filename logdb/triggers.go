@@ -93,15 +93,12 @@ const (
 	// WARMING → ROTATING.
 	TriggerAllReplacementsReady Trigger = "all-replacements-ready"
 
-	// OldShardsRotated is fired when every outgoing shard
-	// (window_start < currentWindowStart) is READ_ONLY. Gates
-	// ROTATING → ARCHIVING.
+	// OldShardsRotated is fired when every outgoing shard (the rotate
+	// cohort) has reached READ_ONLY. Gates ROTATING → STASIS and clears
+	// cascade_started_at. (Archival is not part of the cascade — it's a
+	// fire-and-forget retention sweep, so there's no ARCHIVING bucket
+	// phase to gate into.)
 	TriggerOldShardsRotated Trigger = "old-shards-rotated"
-
-	// ArchivalsComplete is fired when every outgoing shard is
-	// ARCHIVED. Gates ARCHIVING → STASIS and clears
-	// cascade_started_at.
-	TriggerArchivalsComplete Trigger = "archivals-complete"
 
 	// Settled is fired when SCALING_DOWN's excess shards have all
 	// rotated to READ_ONLY. They flow through the normal cascade

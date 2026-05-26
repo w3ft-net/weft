@@ -120,13 +120,12 @@ func (b *BucketSM) configure() {
 		OnEntry(b.onEnterWarming).
 		Permit(TriggerAllReplacementsReady, BucketRotating)
 
+	// ROTATING returns straight to STASIS — there's no ARCHIVING phase.
+	// Archival of the now-expired READ_ONLY cohort is fired as a
+	// fire-and-forget retention sweep from Evaluate, not gated here.
 	b.sm.Configure(BucketRotating).
 		OnEntry(b.onEnterRotating).
-		Permit(TriggerOldShardsRotated, BucketArchiving)
-
-	b.sm.Configure(BucketArchiving).
-		OnEntry(b.onEnterArchiving).
-		Permit(TriggerArchivalsComplete, BucketStasis)
+		Permit(TriggerOldShardsRotated, BucketStasis)
 
 	b.sm.Configure(BucketScalingDown).
 		OnEntry(b.onEnterScalingDown).
@@ -153,12 +152,6 @@ func (b *BucketSM) onEnterWarming(ctx context.Context, args ...any) error {
 
 func (b *BucketSM) onEnterRotating(ctx context.Context, args ...any) error {
 	log.Printf("bucketsm %d (%s): enter ROTATING (stub — Phase 2 fires RotateRequested on outgoing shards)",
-		b.ID, b.Label)
-	return nil
-}
-
-func (b *BucketSM) onEnterArchiving(ctx context.Context, args ...any) error {
-	log.Printf("bucketsm %d (%s): enter ARCHIVING (stub — Phase 2 fires ArchiveRequested on outgoing shards)",
 		b.ID, b.Label)
 	return nil
 }

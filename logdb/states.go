@@ -43,10 +43,15 @@ const (
 // state communicates whether a cascade is in flight and which phase.
 type BucketState string
 
+// No ARCHIVING bucket state: archival is a shard concern (the shard's
+// ARCHIVING state) that the bucket only *fires* via a fire-and-forget
+// retention sweep — it never waits on it, so there's no gate and thus no
+// state. The bucket cascade is purely the rotation that must never gap
+// the hot window. See docs/plans/asg-as-api-stateless.md (FSM redesign
+// 2026-05-25).
 const (
 	BucketStasis      BucketState = "STASIS"
 	BucketWarming     BucketState = "WARMING"
 	BucketRotating    BucketState = "ROTATING"
-	BucketArchiving   BucketState = "ARCHIVING"
 	BucketScalingDown BucketState = "SCALING_DOWN"
 )
