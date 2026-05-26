@@ -69,6 +69,14 @@ type MintSpec struct {
 	StripeIndex int
 }
 
+// PrewarmLead is how long before an INGESTING shard's WindowEnd the
+// bucket SM arms a rotation (evaluateStasis fires RotationNeeded so the
+// next-window cohort is INGESTING before the current window closes,
+// avoiding a write-gap). Package-scoped so main.go can override it at
+// boot for per-env tuning; the default must comfortably exceed instance
+// launch + configure time. Also consulted by Bucket.ShouldPrewarmNextWindow.
+var PrewarmLead = 10 * time.Minute
+
 // ErrUnknownBucket is the bucket-FSM counterpart to
 // ErrUnknownShard. Returned by the state accessor when the
 // underlying buckets row is gone.

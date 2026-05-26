@@ -1,7 +1,7 @@
 // Package logdb is the shard-data-plane control plane. It owns shard
-// lifecycle (launch, christen, archive, reap), the Registry's
-// state-machine transitions, the launchers (ASG in prod, Docker in
-// dev), the lifecycle-hook poller, and the per-app bucket layout.
+// lifecycle (launch, christen, archive, recovery) via per-shard and
+// per-bucket state machines, the Registry, the launchers (ASG in prod,
+// Docker in dev), and the per-app bucket layout.
 //
 // The runtime side of the coordinator (query routing, ingest fan-out,
 // drain) reads from the Registry but does not drive its state machine
@@ -11,10 +11,8 @@ package logdb
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/kevlarcon/weft/shard"
@@ -23,15 +21,13 @@ import (
 
 // Config carries the runtime-derived inputs Start needs from the
 // coordinator process. Everything else (LAMBDA_FUNCTION_URL,
-// PARQUET_DIR, SHARD_VOLUME_DEVICE, LIFECYCLE_QUEUE_URL, per-tier
-// volume sizes, WEFT_* docker launcher vars) is read from this
-// process's environment inside Start — those values are pure
-// deployment policy that the coordinator's main has no reason to
-// know about.
+// PARQUET_DIR, WEFT_* docker launcher vars) is read from this process's
+// environment inside Start — those values are pure deployment policy
+// that the coordinator's main has no reason to know about.
 type Config struct {
-	// Ctx scopes the long-running goroutines Start spawns
-	// (Provisioner reconciler, LifecyclePoller SQS loop). Cancel it
-	// to shut the control plane down.
+	// Ctx scopes the long-running goroutines Start spawns (the
+	// Provisioner's FSM convergence loop). Cancel it to shut the control
+	// plane down.
 	Ctx context.Context
 
 	// DB is the postgres-backed shard store. Used for hydration,
@@ -45,9 +41,8 @@ type Config struct {
 	// lives in compute, not here — see compute.LocalComputePool.
 	ShardSecret string
 
-	// AWSRegion is threaded into NewASGLauncher / NewEC2VolumeManager
-	// / BuildLifecyclePoller. Each loads its own AWS config in that
-	// region.
+	// AWSRegion is threaded into NewASGLauncher / NewEC2VolumeManager.
+	// Each loads its own AWS config in that region.
 	AWSRegion string
 
 	// ShardTiers maps tier name (small/medium/large) to the ASG name
@@ -58,21 +53,16 @@ type Config struct {
 
 // Start hydrates the shard registry, constructs the Provisioner with
 // the right launcher for the deploy mode (ASG when ShardTiers is
-// non-empty, Docker otherwise), starts it, and — in ASG mode — wires
-// up the lifecycle poller when LIFECYCLE_QUEUE_URL is set.
+// non-empty, Docker otherwise), and starts it.
 //
 // Returns the started Provisioner. Caller assigns it to
 // Coordinator.Provisioner so the rest of the runtime
 // (drain stats, OnboardService, ProcessHeartbeat, ForceArchive/Delete)
 // can reach it.
 func Start(cfg Config) (*Provisioner, error) {
-	// Hydrate the shard registry from postgres BEFORE handing it to
-	// the provisioner. The lifecycle handler's recognisedAsDead
-	// checks the registry to decide whether an orphan EBS volume
-	// should be recovered; an empty registry causes every volume to
-	// be abandoned, orphaning data on every deploy. The store-
-	// fallback in recognisedAsDead is defense in depth; populating
-	// the registry first is the primary fix.
+	// Hydrate the shard registry from postgres BEFORE handing it to the
+	// provisioner so LoadStateMachines builds an SM per persisted row and
+	// the first tick converges from real state rather than an empty world.
 	reg := NewShardRegistry()
 	reg.SetStore(cfg.DB)
 	lambdaURL := os.Getenv("LAMBDA_FUNCTION_URL")
@@ -94,8 +84,8 @@ func Start(cfg Config) (*Provisioner, error) {
 	return startDev(cfg, reg)
 }
 
-// startProd wires the ASG launcher, provisioner, volume manager, and
-// (optionally) lifecycle poller for production deploys.
+// startProd wires the ASG launcher, provisioner, and volume manager for
+// production deploys.
 func startProd(cfg Config, reg *ShardRegistry, lambdaURL string) (*Provisioner, error) {
 	asgLauncher, err := NewASGLauncher(cfg.AWSRegion, cfg.ShardTiers, 9000)
 	if err != nil {
@@ -111,9 +101,9 @@ func startProd(cfg Config, reg *ShardRegistry, lambdaURL string) (*Provisioner, 
 	provConfig.LambdaFunctionURL = lambdaURL
 	prov := NewProvisioner(reg, asgLauncher, provConfig)
 
-	// Attach a VolumeManager so christen() can tag EBS volumes with
-	// the minted shard id. Unavailable when the EC2 SDK can't load
-	// (warning only — the rest of the provisioner still functions).
+	// Attach a VolumeManager so the shard SM can create/attach/retire EBS
+	// volumes on launch and archive. Unavailable when the EC2 SDK can't
+	// load (warning only — the rest of the provisioner still functions).
 	if vm, err := NewEC2VolumeManager(cfg.AWSRegion); err != nil {
 		log.Printf("warning: VolumeManager unavailable: %v", err)
 	} else {
@@ -122,40 +112,12 @@ func startProd(cfg Config, reg *ShardRegistry, lambdaURL string) (*Provisioner, 
 
 	prov.SetStore(cfg.DB)
 
-	// Build the FSM control plane additively (Slice C). The maps are
-	// populated and ready but not yet driven by the tick — the old
-	// reconciler stays authoritative until the switch commit.
+	// Build the FSM control plane (one SM per persisted bucket + shard).
+	// The tick drives these — they own all lifecycle convergence.
 	prov.LoadStateMachines()
 
 	prov.Start(cfg.Ctx)
 	log.Printf("provisioner: started with ASG tiers %v", cfg.ShardTiers)
-
-	// Lifecycle poller: consume ASG launch hook events from SQS and
-	// decide christen/recover for each new shard instance.
-	// Controlled by LIFECYCLE_QUEUE_URL so dev/docker coordinators
-	// stay out of this path.
-	if queueURL := os.Getenv("LIFECYCLE_QUEUE_URL"); queueURL != "" {
-		tierByASG := make(map[string]string, len(cfg.ShardTiers))
-		for tier, asgName := range cfg.ShardTiers {
-			tierByASG[asgName] = tier
-		}
-		lcCfg := LifecycleHandlerConfig{
-			Registry:   reg,
-			TierByASG:  tierByASG,
-			SizeByTier: readTierSizes(),
-			DeviceName: os.Getenv("SHARD_VOLUME_DEVICE"),
-			Store:      cfg.DB,
-			ShardOps:   cfg.DB,
-		}
-		poller, err := BuildLifecyclePoller(cfg.Ctx, cfg.AWSRegion, queueURL, lcCfg)
-		if err != nil {
-			log.Printf("warning: lifecycle poller unavailable: %v", err)
-		} else if poller != nil {
-			poller.Start(cfg.Ctx)
-			log.Printf("lifecycle: subscribed to %s", queueURL)
-		}
-	}
-
 	return prov, nil
 }
 
@@ -171,28 +133,14 @@ func startDev(cfg Config, reg *ShardRegistry) (*Provisioner, error) {
 
 	prov.SetStore(cfg.DB)
 
+	// Build the FSM control plane so restored shards get an SM (the tick
+	// and ProcessHeartbeat both resolve shards through the SM maps).
+	prov.LoadStateMachines()
+
 	prov.Start(cfg.Ctx)
 	log.Printf("provisioner: started with docker launcher (dev mode), image=%s data=%s",
 		launcher.Image, launcher.HostDataRoot)
 	return prov, nil
-}
-
-// readTierSizes returns per-tier data volume sizes from env vars
-// populated by load-app-env out of the TF-managed config blob (see
-// stacks/asg-weft-application/main.tf → aws_ssm_parameter.app_config_blob).
-// Falls back to sensible defaults when a var is missing or unparseable.
-func readTierSizes() map[string]int32 {
-	defaults := map[string]int32{"small": 100, "medium": 500, "large": 2000}
-	sizes := map[string]int32{}
-	for tier, def := range defaults {
-		envKey := fmt.Sprintf("SHARD_%s_VOLUME_GB", strings.ToUpper(tier))
-		if val, ok := parsePositiveInt32(os.Getenv(envKey)); ok {
-			sizes[tier] = val
-		} else {
-			sizes[tier] = def
-		}
-	}
-	return sizes
 }
 
 // buildDockerLauncher constructs a DockerLauncher from env vars set
@@ -233,15 +181,4 @@ func buildDockerLauncher(shardSecret string) *DockerLauncher {
 		HeartbeatInterval: 10 * time.Second,
 		ShardSecret:       shardSecret,
 	}
-}
-
-func parsePositiveInt32(s string) (int32, bool) {
-	if s == "" {
-		return 0, false
-	}
-	var v int32
-	if _, err := fmt.Sscanf(s, "%d", &v); err != nil || v <= 0 {
-		return 0, false
-	}
-	return v, true
 }

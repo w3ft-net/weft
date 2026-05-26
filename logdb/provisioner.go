@@ -2,8 +2,6 @@ package logdb
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -23,62 +21,36 @@ import (
 // raw so the caller can map them to Internal.
 var ErrShardAuthFailed = errors.New("shard heartbeat authentication failed")
 
-// reapGracePeriod is how long a newly-added registry entry is
-// protected from reap, measured from its CreatedAt. Must cover one
-// provisioner tick plus a heartbeat round-trip — otherwise a shard
-// that got christened this tick but hasn't yet heartbeated with its
-// minted id gets killed on the same tick. 2 min matches the
-// LiveShardHeartbeats staleness window.
-const reapGracePeriod = 2 * time.Minute
-
 // HeartbeatStore is the interface the provisioner needs for heartbeat operations.
 type HeartbeatStore interface {
 	LiveShardHeartbeats(since string) ([]store.ShardHeartbeat, error)
 	InsertHeartbeat(hb *store.ShardHeartbeat) error
 }
 
-// ShardOpsStore is the shard_records operations the provisioner and
-// lifecycle hook need for the LAUNCHING/INGESTING handoff. The
-// reconciler INSERTs LAUNCHING rows, the lifecycle hook claims them,
-// the christen path promotes them, the reaper cleans up stale ones.
-// Separate from HeartbeatStore so tests that don't exercise this path
-// can keep their minimal mocks.
-//
-// *store.Store satisfies this interface natively; tests that do
-// exercise the LAUNCHING lifecycle supply a fake.
+// ShardOpsStore is the shard_records read/stamp surface the provisioner
+// needs beyond plain persistence — the read-routing service lookups and
+// the bucket-service membership reads. (The old LAUNCHING-row lifecycle
+// methods are gone; the FSM mints + persists rows directly.) Separate
+// from HeartbeatStore so tests that don't exercise this path can keep
+// their minimal mocks. *store.Store satisfies it natively.
 type ShardOpsStore interface {
 	SaveShard(rec *store.ShardRecord) error
 	DeleteShard(id string) error
 	GetShard(id string) (store.ShardRecord, bool, error)
-	ClaimLaunchingForTier(tier, instanceID string) (store.ShardRecord, bool, error)
-	FindLaunchingByInstance(instanceID string) (store.ShardRecord, bool, error)
-	ListStaleLaunching(olderThan time.Duration) ([]store.ShardRecord, error)
-	CountShardsInBucket(bucketID int64, states []string) (int, error)
-	CountShardsInBucketForFutureWindows(bucketID int64, currentWindowStart time.Time) (int, error)
-	// StampShardServices records (at christen) the services the shard's
-	// bucket serves into shard_services — the permanent stamp future
-	// queries resolve through.
+	// StampShardServices records the services the shard's bucket serves
+	// into shard_services — the permanent stamp future queries resolve
+	// through (stamped at mint).
 	StampShardServices(shardID string, bucketID int64) error
 	// ShardIDsServingService returns the set of shard IDs serving
 	// (namespaceID, service) — the read-routing lookup ShardDescriptorsFor
 	// resolves before filtering the registry. An empty service narrows to
 	// the namespace only.
 	ShardIDsServingService(namespaceID uint, service string) (map[string]struct{}, error)
-	// ServicesForBucket returns the (namespace_id, service) pairs a
-	// bucket serves (from log_groups). christen uses it to populate a
-	// shard's in-memory service membership; the reconciler diffs it to
-	// find services onboarded after christen.
+	// ServicesForBucket returns the (namespace_id, service) pairs a bucket
+	// serves (from log_groups). The service-drift sweep diffs it against
+	// each INGESTING shard's stamp to add services onboarded after mint.
 	ServicesForBucket(bucketID int64) ([]store.ShardService, error)
 }
-
-// staleLaunchingAge is the age beyond which a LAUNCHING row is
-// considered stuck. Rows older than this with no instance_id mean the
-// ASG never brought an instance up (capacity exhausted, launch
-// failed); rows with an instance_id mean the instance was claimed by
-// the lifecycle hook but never heartbeated (bad AMI, userdata
-// failure). 10 minutes is well past the ~2 minute instance-boot
-// window plus a coordinator tick.
-const staleLaunchingAge = 10 * time.Minute
 
 // ProvisionerConfig controls shard rotation thresholds.
 type ProvisionerConfig struct {
@@ -203,14 +175,13 @@ type Provisioner struct {
 	stats       *ServiceStats
 	Buckets     *BucketManager
 	configurer  ShardConfigurer
-	volumes     VolumeManager // optional; used to tag data volumes at christen time
+	volumes     VolumeManager // optional; the shard SM creates/attaches/retires EBS volumes through it
 	heartbeatMu sync.Mutex    // serialises ProcessHeartbeat with the ticker's adoptFromHeartbeats
 
-	// bucketSMs / shardSMs are the FSM control plane built additively in
-	// Slice C (asg-as-api-stateless.md). LoadStateMachines populates them
-	// after the registry hydrates; MintShard adds to shardSMs as the
-	// bucket SMs warm new cohorts. check() does NOT drive them yet — the
-	// old reconciler stays authoritative until the Slice C switch commit.
+	// bucketSMs / shardSMs are the FSM control plane (asg-as-api-stateless.md).
+	// LoadStateMachines populates them after the registry hydrates;
+	// MintShard adds to shardSMs as the bucket SMs warm new cohorts.
+	// check() drives them every tick — they own all lifecycle convergence.
 	smMu      sync.RWMutex
 	bucketSMs map[int64]*BucketSM
 	shardSMs  map[string]*ShardSM
@@ -248,9 +219,9 @@ func (p *Provisioner) SetStore(s *store.Store) {
 	p.Buckets = NewBucketManager(s)
 }
 
-// SetVolumeManager enables volume-aware christening. When set, the
-// provisioner stamps the minted shard id onto the pre-attached EBS
-// volume as the final step of christen().
+// SetVolumeManager wires the EBS VolumeManager the shard SM uses to
+// create/attach volumes on launch and snapshot/detach/delete them on
+// archive. Optional — dev mode (no EBS) leaves it nil.
 func (p *Provisioner) SetVolumeManager(vm VolumeManager) {
 	p.volumes = vm
 }
@@ -370,211 +341,6 @@ func (p *Provisioner) Start(ctx context.Context) {
 			}
 		}
 	}()
-}
-
-// syncASGDesiredCapacity, once per tick per tier, sets the ASG's
-// desired_capacity to an absolute value derived from bucket config
-// and registry state — NOT from a COUNT of shard_records. For each
-// tier with buckets:
-//
-//	desired = Σ bucket.target (buckets in this tier)
-//	        + count(READ_ONLY registry entries with entry.Tier == tier)
-//
-// Targets cover LAUNCHING + INGESTING (a LAUNCHING in flight and an
-// already-INGESTING shard both consume one target slot). READ_ONLY
-// adds the count of past-window shards whose instances are still
-// hot until archive.
-//
-// Computed desired is clamped to the ASG's MaxSize with a log
-// tripwire if the clamp kicks in — "someone added a bucket to this
-// tier without bumping TF's max."
-//
-// No-op for launchers that don't implement TierScaler (sync
-// launchers); they manage their own lifecycle.
-func (p *Provisioner) syncASGDesiredCapacity(ctx context.Context, all []*Bucket) {
-	scaler, ok := p.launcher.(TierScaler)
-	if !ok {
-		return
-	}
-
-	// Sum targets per tier. Only tiers that have at least one bucket
-	// are managed here; a tier with zero buckets has nothing the
-	// coordinator wants to say about it.
-	targetByTier := make(map[string]int32)
-	// Aggregate next-window pre-warm LAUNCHING rows by tier. These
-	// are extra capacity beyond target (target covers current-
-	// window LAUNCHING+INGESTING; pre-warm rows are for the NEXT
-	// window and need their own ASG slots).
-	futureLaunchingByTier := make(map[string]int32)
-	now := time.Now().UTC()
-	for _, bucket := range all {
-		if bucket.Tier == "" {
-			continue
-		}
-		if bucket.Target > 0 {
-			targetByTier[bucket.Tier] += int32(bucket.Target)
-		}
-		if p.config.ShardOps != nil {
-			currentStart, _ := bucket.CurrentWindow(now)
-			if n, err := p.config.ShardOps.CountShardsInBucketForFutureWindows(bucket.ID, currentStart); err != nil {
-				log.Printf("provisioner: sync desired: bucket %d future-LAUNCHING count: %v", bucket.ID, err)
-			} else if n > 0 {
-				futureLaunchingByTier[bucket.Tier] += int32(n)
-			}
-		}
-	}
-
-	// Count READ_ONLY entries per tier from the registry. The
-	// registry is the hot-state source for shards past WindowEnd
-	// but still holding an instance; reaping hasn't happened yet
-	// (reaping is §4 for ARCHIVED shards).
-	readOnlyByTier := make(map[string]int32)
-	for _, e := range p.registry.Entries() {
-		if e.State != StateReadOnly {
-			continue
-		}
-		if e.Tier == "" {
-			continue
-		}
-		readOnlyByTier[e.Tier]++
-	}
-
-	// Union of tiers that appear anywhere — target, pre-warm, or
-	// READ_ONLY. A tier with only READ_ONLY shards (no current
-	// bucket) still needs its ASG sized; a pre-warm-only tier
-	// would be unusual but shouldn't be lost either.
-	tiers := make(map[string]struct{})
-	for t := range targetByTier {
-		tiers[t] = struct{}{}
-	}
-	for t := range futureLaunchingByTier {
-		tiers[t] = struct{}{}
-	}
-	for t := range readOnlyByTier {
-		tiers[t] = struct{}{}
-	}
-
-	for tier := range tiers {
-		desired := targetByTier[tier] + readOnlyByTier[tier] + futureLaunchingByTier[tier]
-
-		max, err := scaler.TierMaxSize(ctx, tier)
-		if err != nil {
-			log.Printf("provisioner: sync-desired tier=%s err=%v reason=tier-max-lookup-failed; skipping clamp",
-				tier, err)
-		} else if max > 0 && desired > max {
-			log.Printf("provisioner: sync-desired tier=%s computed=%d max=%d clamped=true",
-				tier, desired, max)
-			desired = max
-		}
-
-		// One canonical line per tier per tick — every input to the
-		// formula, the final desired, and the clamp ceiling. Lets the
-		// on-call diff coordinator-computed desired against ASG
-		// actual to localise refresh-time divergence.
-		log.Printf("provisioner: sync-desired tier=%s target=%d read_only=%d future_launching=%d desired=%d max=%d",
-			tier,
-			targetByTier[tier],
-			readOnlyByTier[tier],
-			futureLaunchingByTier[tier],
-			desired,
-			max,
-		)
-
-		if err := scaler.SetDesiredCapacity(ctx, tier, desired); err != nil {
-			log.Printf("provisioner: sync-desired tier=%s desired=%d err=%v",
-				tier, desired, err)
-		}
-	}
-}
-
-// reapStaleLaunching sweeps LAUNCHING rows older than staleLaunchingAge.
-// Two flavours, distinguished by whether the lifecycle hook has
-// claimed the row:
-//   - Empty instance_id: the ASG never brought an instance up
-//     (capacity exhausted, AMI missing, launch template rejected).
-//     DELETE the row so next tick's under-capacity op sees the gap
-//     and the reconciler re-mints.
-//   - Populated instance_id: the lifecycle hook claimed us but the
-//     instance never heartbeated (bad AMI, userdata failure,
-//     networking). Signal the ASG to terminate this specific
-//     instance (decrements desired_capacity) and DELETE the row.
-func (p *Provisioner) reapStaleLaunching() {
-	if p.config.ShardOps == nil {
-		return
-	}
-	stale, err := p.config.ShardOps.ListStaleLaunching(staleLaunchingAge)
-	if err != nil {
-		log.Printf("provisioner: list stale LAUNCHING: %v", err)
-		return
-	}
-	for _, row := range stale {
-		if row.InstanceID == "" {
-			log.Printf("provisioner: reaping stale LAUNCHING %s (no instance — ASG never launched)", row.ID)
-			if err := p.config.ShardOps.DeleteShard(row.ID); err != nil {
-				log.Printf("provisioner: delete stale LAUNCHING %s: %v", row.ID, err)
-			}
-			continue
-		}
-		log.Printf("provisioner: abandoning stale LAUNCHING %s (instance %s never heartbeated)",
-			row.ID, row.InstanceID)
-		if p.launcher != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			if err := p.launcher.TerminateInstance(ctx, row.InstanceID, ""); err != nil {
-				log.Printf("provisioner: terminate stuck instance %s: %v", row.InstanceID, err)
-			}
-			cancel()
-		}
-		if err := p.config.ShardOps.DeleteShard(row.ID); err != nil {
-			log.Printf("provisioner: delete stale LAUNCHING %s: %v", row.ID, err)
-		}
-	}
-}
-
-// reapStrandedSuspended deletes SUSPENDED shard rows whose rebind
-// never completed, but ONLY when deleting the row cannot lose data
-// that isn't already lost or preserved elsewhere:
-//
-//   - FindByShard(entry.ID) returns nil → the volume is either gone
-//     (data already lost — the row is a tombstone; snapshots are
-//     intentionally out of scope) or its shard_id tag moved to a
-//     different shard (data preserved under that shard). Either way
-//     deleting this row loses nothing → reap it.
-//   - FindByShard returns a volume → it still exists tagged to THIS
-//     shard, i.e. this row is the sole pointer to live data. Leave it
-//     for the rebind path (this is the e.g. 822eab40 / 164k-row case).
-//   - FindByShard errors → unknown; skip and retry next tick (fail
-//     safe — never delete on uncertainty).
-//
-// Non-SUSPENDED states are out of scope (reapDeadShards owns the
-// dead-but-not-yet-suspended transition; this only cleans up the
-// terminal stranded case it leaves behind).
-func (p *Provisioner) reapStrandedSuspended() {
-	if p.volumes == nil || p.config.ShardOps == nil {
-		return
-	}
-	for _, entry := range p.registry.Entries() {
-		if entry.State != StateSuspended {
-			continue
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		vi, err := p.volumes.FindByShard(ctx, entry.ID)
-		cancel()
-		if err != nil {
-			log.Printf("provisioner: reap-suspended %s: volume lookup failed (%v) — skipping", entry.ID, err)
-			continue
-		}
-		if vi != nil {
-			// Volume present and still tagged to this shard — sole
-			// pointer to live data. Leave it for rebind.
-			continue
-		}
-		log.Printf("provisioner: reaping stranded SUSPENDED %s (vol=%q gone or re-homed — data not lost by this deletion)",
-			entry.ID, entry.EBSVolumeID)
-		p.registry.Remove(entry.ID)
-		if err := p.config.ShardOps.DeleteShard(entry.ID); err != nil {
-			log.Printf("provisioner: delete stranded SUSPENDED %s: %v", entry.ID, err)
-		}
-	}
 }
 
 // adoptFromHeartbeats reads recent shard heartbeats from the store
@@ -707,358 +473,6 @@ func (p *Provisioner) shardSMByInstance(instanceID string) *ShardSM {
 		}
 	}
 	return nil
-}
-
-// christen promotes a LAUNCHING row to INGESTING: finds the row the
-// reconciler minted for this instance, sends Configure with the
-// row's shard id / window / heartbeat token, and registers the
-// entry. Only ever called from ProcessHeartbeat when an unclaimed
-// heartbeat arrives — which, since non-async launchers Configure
-// synchronously in provisionForBucket, happens only on the async
-// (ASG) path. A missing row is an invariant break: the reconciler
-// and the hook must agree on which instances are expected, and any
-// orphan instance is the stale-LAUNCHING reaper's job.
-func (p *Provisioner) christen(hb store.ShardHeartbeat) error {
-	// Race guard: two heartbeats from the same unclaimed instance
-	// arrive back-to-back (the Heartbeat RPC dispatches each in its
-	// own goroutine). heartbeatMu serialises them, but the second
-	// goroutine's hb.ShardID is still "" because it was captured at
-	// send time, before the first Configure returned. Without this
-	// check the second goroutine tries to re-Configure the same
-	// addr; the shard rejects with "shard already configured as ...".
-	if p.registry.HasAddr(hb.Addr) {
-		return nil
-	}
-	if p.config.ShardOps == nil {
-		return fmt.Errorf("christen %s: no ShardOps store — async-launcher handoff requires LAUNCHING-row lookup", hb.Addr)
-	}
-	if hb.InstanceID == "" {
-		return fmt.Errorf("christen %s: heartbeat carried empty instance_id — can't match a LAUNCHING row", hb.Addr)
-	}
-
-	row, ok, err := p.config.ShardOps.FindLaunchingByInstance(hb.InstanceID)
-	if err != nil {
-		return fmt.Errorf("christen %s: find LAUNCHING for instance %s: %w", hb.Addr, hb.InstanceID, err)
-	}
-	if !ok {
-		return fmt.Errorf("christen %s: no LAUNCHING row for instance %s — reconciler/ASG out of sync",
-			hb.Addr, hb.InstanceID)
-	}
-
-	windowStart, err1 := time.Parse(time.RFC3339, row.WindowStart)
-	windowEnd, err2 := time.Parse(time.RFC3339, row.WindowEnd)
-	if err1 != nil || err2 != nil || windowStart.IsZero() || windowEnd.IsZero() {
-		return fmt.Errorf("christen %s: unparseable window [%s, %s]: %v / %v",
-			row.ID, row.WindowStart, row.WindowEnd, err1, err2)
-	}
-
-	if p.Buckets == nil {
-		return fmt.Errorf("christen %s: no BucketManager — cannot resolve bucket %d", row.ID, row.BucketID)
-	}
-	bucket, err := p.Buckets.ByID(row.BucketID)
-	if err != nil {
-		return fmt.Errorf("christen %s: lookup bucket %d: %w", row.ID, row.BucketID, err)
-	}
-	if bucket == nil {
-		return fmt.Errorf("christen %s: bucket %d not found", row.ID, row.BucketID)
-	}
-
-	// The shard's service membership, read from the bucket's log_groups —
-	// the same source StampShardServices stamps into shard_services
-	// below, so the in-memory set and the persisted stamp agree. A shard
-	// that LAUNCHED before a service was onboarded picks it up here on
-	// promotion (the bucket read is authoritative, not the LAUNCHING-row
-	// snapshot).
-	svcs, err := p.config.ShardOps.ServicesForBucket(row.BucketID)
-	if err != nil {
-		return fmt.Errorf("christen %s: services for bucket %d: %w", row.ID, row.BucketID, err)
-	}
-
-	req := &pb.ConfigureRequest{
-		ShardId:        row.ID,
-		Services:       serviceNames(svcs),
-		WindowStart:    row.WindowStart,
-		WindowEnd:      row.WindowEnd,
-		HeartbeatToken: row.HeartbeatToken,
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	sh, err := p.configurer.Dial(ctx, hb.Addr, req)
-	if err != nil {
-		return fmt.Errorf("configure %s at %s: %w", row.ID, hb.Addr, err)
-	}
-
-	// The lifecycle hook already tagged the volume with row.ID when
-	// it claimed the LAUNCHING row (see lifecycle.decide()'s CHRISTEN
-	// branch). Look it up so recovery can skip DescribeVolumes; no
-	// re-tag necessary.
-	var volumeID string
-	if p.volumes != nil {
-		if info, err := p.volumes.FindByShard(ctx, row.ID); err != nil {
-			log.Printf("provisioner: find volume for %s: %v", row.ID, err)
-		} else if info != nil {
-			volumeID = info.VolumeID
-		}
-	}
-
-	createdAt, _ := time.Parse(time.RFC3339, row.CreatedAt)
-	if createdAt.IsZero() {
-		createdAt = time.Now()
-	}
-
-	p.registry.Add(&ShardEntry{
-		ID:              row.ID,
-		Services:        svcs,
-		WindowStart:     windowStart,
-		WindowEnd:       windowEnd,
-		State:           StateIngesting,
-		Addr:            hb.Addr,
-		InstanceID:      hb.InstanceID,
-		RowCount:        hb.RowCount,
-		EBSVolumeID:     volumeID,
-		Shard:           sh,
-		CreatedAt:       createdAt,
-		HeartbeatToken:  row.HeartbeatToken,
-		Tier:            row.Tier,
-		BucketID:        row.BucketID,
-		LastHeartbeatAt: time.Now(),
-	})
-	// Stamp the shard with its bucket's services (shard_services,
-	// migration 058) — the permanent snapshot the read router resolves
-	// through (ShardDescriptorsFor → ShardIDsServingService). Reliable,
-	// not best-effort: now that query routing reads shard_services
-	// exclusively, an unstamped shard is invisible to every query for
-	// its services, so a stamp failure must fail christen. The shard
-	// stays a LAUNCHING row and gets re-christened on the next heartbeat
-	// rather than silently entering INGESTING as a query black hole.
-	if err := p.config.ShardOps.StampShardServices(row.ID, row.BucketID); err != nil {
-		return fmt.Errorf("christen %s: stamp shard_services: %w", row.ID, err)
-	}
-
-	log.Printf("provisioner: christened %s at %s (bucket=%s(%d) window %s–%s volume=%s)",
-		row.ID, hb.Addr, bucket.Label, bucket.ID, row.WindowStart, row.WindowEnd, volumeID)
-	return nil
-}
-
-// reapDeadShards removes registry entries for shards that have stopped
-// heartbeating. Skips archived shards (cold storage, no heartbeat expected)
-// and skips if no heartbeats exist at all (startup race protection).
-func (p *Provisioner) reapDeadShards() {
-	if p.config.Store == nil {
-		return
-	}
-	heartbeats, err := p.config.Store.LiveShardHeartbeats("2 minutes")
-	if err != nil || len(heartbeats) == 0 {
-		return // no data or no heartbeats yet — don't reap
-	}
-
-	live := make(map[string]bool, len(heartbeats))
-	for _, hb := range heartbeats {
-		live[hb.ShardID] = true
-	}
-
-	for _, entry := range p.registry.Entries() {
-		if entry.State == StateArchived || entry.State == StateSuspended {
-			continue
-		}
-		if live[entry.ID] {
-			continue
-		}
-
-		// Grace period for freshly-christened shards. adoptFromHeartbeats
-		// and reapDeadShards run in the same tick; a shard christened
-		// during adopt has a brand-new registry id but the heartbeat
-		// that triggered its christening still carried the old
-		// empty-id ping. Without this guard, reap sees the new entry
-		// absent from `live` and kills it on the same tick. The real
-		// heartbeat (carrying the minted id) lands a few seconds
-		// later.
-		if time.Since(entry.CreatedAt) < reapGracePeriod {
-			continue
-		}
-
-		// Failure-recovery branch: if the shard has a bound EBS
-		// volume, its data outlives the instance. Coordinator's
-		// explicit play:
-		//   1. Preserve the registry entry — rebind needs it to
-		//      find the shard post-replacement.
-		//   2. Ask the ASG to terminate the dead instance and
-		//      launch a replacement (ShouldDecrementDesiredCapacity
-		//      = false). The lifecycle hook reattaches the volume
-		//      to the replacement; the replacement heartbeats with
-		//      the same shard id; the rebind arm of
-		//      adoptFromHeartbeats rewires the entry.
-		//   3. Null entry.InstanceID so the terminate doesn't
-		//      re-fire next tick (the 1–3 minute replacement
-		//      window spans multiple ticks). Rebind restores it
-		//      from the replacement's heartbeat.
-		if entry.EBSVolumeID != "" {
-			if entry.InstanceID != "" {
-				if rt, ok := p.launcher.(RecoveryTerminator); ok {
-					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-					err := rt.TerminateForReplacement(ctx, entry.InstanceID)
-					cancel()
-					if err != nil {
-						log.Printf("provisioner: TerminateForReplacement(%s): %v — will retry next tick",
-							entry.InstanceID, err)
-					} else {
-						log.Printf("provisioner: shard %s stale heartbeat — asked ASG to replace instance %s (vol=%s preserved)",
-							entry.ID, entry.InstanceID, entry.EBSVolumeID)
-						entry.InstanceID = ""
-						entry.Addr = ""
-						entry.State = StateSuspended
-						entry.LastHeartbeatAt = time.Now()
-						p.registry.PersistState(entry)
-					}
-				} else {
-					log.Printf("provisioner: shard %s stale heartbeat — launcher has no RecoveryTerminator; falling back to ASG health-check",
-						entry.ID)
-				}
-			}
-			continue
-		}
-
-		// Legacy path: no EBS volume → data is already lost with the
-		// instance. Remove from registry and ask the launcher to
-		// terminate so the ASG doesn't keep a ghost instance.
-		log.Printf("provisioner: reaping dead shard %s (no heartbeat, no volume)", entry.ID)
-		p.registry.Remove(entry.ID)
-
-		if p.launcher != nil && (entry.InstanceID != "" || entry.Addr != "") {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if err := p.launcher.TerminateInstance(ctx, entry.InstanceID, entry.Addr); err != nil {
-				log.Printf("provisioner: terminate %s (%s): %v", entry.ID, entry.Addr, err)
-			}
-			cancel()
-		}
-	}
-}
-
-func parseTime(s string) time.Time {
-	t, _ := time.Parse(time.RFC3339, s)
-	return t
-}
-
-// currentWindow returns the [start, end) window bounds enclosing now,
-// aligned to the bucket's WindowDuration (falling back to the
-// provisioner config, then to 7d). Per-bucket durations (migration
-// 021) let different buckets run at different cadences on the same
-// tier.
-func (p *Provisioner) currentWindow(bucket *Bucket, now time.Time) (time.Time, time.Time) {
-	dur := p.windowDurationFor(bucket)
-	start := now.UTC().Truncate(dur)
-	return start, start.Add(dur)
-}
-
-// windowDurationFor picks the effective WindowDuration for a bucket,
-// with a two-step fallback so tests and boot-before-hydration paths
-// stay working. Production paths always pass a bucket with a set
-// WindowDuration (persisted by migration 021).
-func (p *Provisioner) windowDurationFor(bucket *Bucket) time.Duration {
-	if bucket != nil && bucket.WindowDuration > 0 {
-		return bucket.WindowDuration
-	}
-	if p.config.WindowDuration > 0 {
-		return p.config.WindowDuration
-	}
-	return 7 * 24 * time.Hour
-}
-
-// bootstrap forces an early reconciler pass on startup so the first
-// shards begin launching without waiting a full PollInterval. Just
-// runs reconcileBucket for each bucket — the under-capacity op
-// emits one LaunchShardOp per missing shard.
-func (p *Provisioner) bootstrap(ctx context.Context) {
-	if p.Buckets == nil {
-		return
-	}
-	all, err := p.Buckets.All()
-	if err != nil {
-		log.Printf("provisioner: bootstrap: Buckets.All: %v", err)
-		return
-	}
-	for _, bucket := range all {
-		p.ReconcileBucket(ctx, bucket)
-	}
-}
-
-// launchAndConfigure is the shared lifecycle logic: launch instance,
-// connect via gRPC, call Configure RPC, return a registry entry.
-// Goes through the ShardConfigurer so tests can swap the gRPC dial for
-// a stub.
-func (p *Provisioner) launchAndConfigure(ctx context.Context, shardID, tier string, svcs []store.ShardService, windowStart, windowEnd time.Time) (*ShardEntry, error) {
-	log.Printf("provisioner: launching shard %s (tier=%s)", shardID, tier)
-
-	addr, err := p.launcher.LaunchInstance(ctx, tier)
-	if err != nil {
-		return nil, fmt.Errorf("launch: %w", err)
-	}
-
-	// Mint a heartbeat token and thread it through both the
-	// ConfigureRequest (so the shard sends it on every heartbeat) and
-	// the registered ShardEntry (so authenticateHeartbeat has something
-	// to compare against). The LAUNCHING-row christen path mints its
-	// token at row-insert time; for the synchronous launcher we do it
-	// inline. Pre-2026-04-27, heartbeat auth had a grandfather clause
-	// that accepted any bearer for shards with empty HeartbeatToken,
-	// so this path got away without a token; that grandfather is gone
-	// (c1629b2) and a missing token now fails every heartbeat with
-	// "unknown or untokened shard".
-	heartbeatToken, err := store.GenerateShardHeartbeatToken()
-	if err != nil {
-		p.launcher.TerminateInstance(ctx, "", addr)
-		return nil, fmt.Errorf("mint heartbeat token for %s: %w", shardID, err)
-	}
-
-	cfg := &pb.ConfigureRequest{
-		ShardId:        shardID,
-		Services:       serviceNames(svcs),
-		WindowStart:    windowStart.Format(time.RFC3339),
-		WindowEnd:      windowEnd.Format(time.RFC3339),
-		HeartbeatToken: heartbeatToken,
-	}
-
-	// Retry Configure — instance may still be coming up. The
-	// configurer is responsible for the actual gRPC dial.
-	retries := p.config.ConfigureRetries
-	if retries <= 0 {
-		retries = 12
-	}
-	backoff := p.config.ConfigureBackoff
-	if backoff <= 0 {
-		backoff = 5 * time.Second
-	}
-
-	var sh shard.Shard
-	var configErr error
-	for i := 0; i < retries; i++ {
-		sh, configErr = p.configurer.Dial(ctx, addr, cfg)
-		if configErr == nil {
-			break
-		}
-		log.Printf("provisioner: configure %s attempt %d: %v", shardID, i+1, configErr)
-		time.Sleep(backoff)
-	}
-	if configErr != nil {
-		p.launcher.TerminateInstance(ctx, "", addr)
-		return nil, fmt.Errorf("configure %s: %w", shardID, configErr)
-	}
-
-	log.Printf("provisioner: shard %s ready at %s", shardID, addr)
-
-	return &ShardEntry{
-		ID:             shardID,
-		Services:       svcs,
-		WindowStart:    windowStart,
-		WindowEnd:      windowEnd,
-		State:          StateIngesting,
-		Addr:           addr,
-		Shard:          sh,
-		HeartbeatToken: heartbeatToken,
-		CreatedAt:      time.Now(),
-	}, nil
 }
 
 // OnboardService records an app as belonging to a bucket and kicks a
@@ -1354,127 +768,6 @@ func (p *Provisioner) retireVolume(entry *ShardEntry) {
 
 	entry.EBSVolumeID = ""
 	p.registry.PersistState(entry)
-}
-
-// mintLaunchingRow INSERTs a LAUNCHING row for a bucket's current
-// window. Thin wrapper over mintLaunchingRowForWindow; see that
-// function for the details.
-func (p *Provisioner) mintLaunchingRow(bucket *Bucket) (*store.ShardRecord, error) {
-	windowStart, windowEnd := p.currentWindow(bucket, time.Now().UTC())
-	return p.mintLaunchingRowForWindow(bucket, windowStart, windowEnd)
-}
-
-// mintLaunchingRowForWindow INSERTs a LAUNCHING row for a bucket
-// with caller-supplied window bounds. Called with the current
-// window from op 2's under-capacity path and with the next window
-// from op 4's pre-warm path. The row's shard id and heartbeat
-// token are minted now; instance_id/addr stay empty until the
-// lifecycle hook + christen fill them in.
-func (p *Provisioner) mintLaunchingRowForWindow(bucket *Bucket, windowStart, windowEnd time.Time) (*store.ShardRecord, error) {
-	if p.config.ShardOps == nil {
-		return nil, fmt.Errorf("no ShardOps store configured")
-	}
-
-	now := time.Now().UTC()
-
-	// 32-bit random suffix avoids shard-id collisions across
-	// concurrent ticks and across buckets on the same window. The
-	// old registry-size-based seq (shard-<window>-N) didn't see
-	// LAUNCHING rows and could re-emit an existing id.
-	suf := make([]byte, 4)
-	if _, err := rand.Read(suf); err != nil {
-		return nil, fmt.Errorf("mint shard id suffix: %w", err)
-	}
-	shardID := fmt.Sprintf("shard-%s-%s", windowStart.Format("20060102T1504"), hex.EncodeToString(suf))
-
-	token, err := store.GenerateShardHeartbeatToken()
-	if err != nil {
-		return nil, fmt.Errorf("mint heartbeat token for %s: %w", shardID, err)
-	}
-
-	tier := bucket.Tier
-	if tier == "" {
-		tier = "small"
-	}
-
-	rec := &store.ShardRecord{
-		ID:             shardID,
-		WindowStart:    windowStart.Format(time.RFC3339),
-		WindowEnd:      windowEnd.Format(time.RFC3339),
-		State:          string(StateLaunching),
-		Tier:           tier,
-		CreatedAt:      now.Format(time.RFC3339),
-		BucketID:       bucket.ID,
-		HeartbeatToken: token,
-	}
-	if err := p.config.ShardOps.SaveShard(rec); err != nil {
-		return nil, fmt.Errorf("INSERT LAUNCHING row for bucket %d: %w", bucket.ID, err)
-	}
-	log.Printf("provisioner: minted LAUNCHING row %s for bucket %s(%d) (tier=%s window %s–%s)",
-		shardID, bucket.Label, bucket.ID, tier,
-		windowStart.Format(time.RFC3339), windowEnd.Format(time.RFC3339))
-	return rec, nil
-}
-
-// provisionForBucket launches a new INGESTING shard for a bucket.
-// Tier comes from the bucket record so per-bucket fleet sizing (small
-// catch-all vs. medium dedicated, etc.) is data-driven.
-func (p *Provisioner) provisionForBucket(ctx context.Context, bucket *Bucket) {
-	tier := bucket.Tier
-	if tier == "" {
-		tier = "small"
-	}
-
-	if isLaunchingLauncher(p.launcher) {
-		// INSERT the LAUNCHING row. The ASG scale-up happens out of
-		// band via syncASGDesiredCapacity at the end of this tick,
-		// which reads bucket targets and adjusts desired_capacity
-		// absolutely. No per-launch SetDesiredCapacity bumps.
-		if p.config.ShardOps == nil {
-			log.Printf("provisioner: bucket %d: no ShardOps store — skipping LAUNCHING mint (async handoff requires it)", bucket.ID)
-			return
-		}
-		if _, err := p.mintLaunchingRow(bucket); err != nil {
-			log.Printf("provisioner: bucket %d: mint LAUNCHING: %v", bucket.ID, err)
-		}
-		return
-	}
-
-	// Synchronous launcher: mint a window aligned to the bucket's
-	// WindowDuration boundary, launch + Configure inline, register
-	// the entry straight into INGESTING. No LAUNCHING-row dance —
-	// the launcher returns only after the shard is ready.
-	now := time.Now().UTC()
-	windowStart, windowEnd := p.currentWindow(bucket, now)
-	seq := p.registry.Count()
-	id := fmt.Sprintf("shard-%s-%s-%d", joinServices(bucket.Services), windowStart.Format("20060102T1504"), seq)
-
-	var svcs []store.ShardService
-	if p.config.ShardOps != nil {
-		var err error
-		if svcs, err = p.config.ShardOps.ServicesForBucket(bucket.ID); err != nil {
-			log.Printf("provisioner: bucket %d: services for bucket: %v", bucket.ID, err)
-			return
-		}
-	}
-
-	entry, err := p.launchAndConfigure(ctx, id, tier, svcs, windowStart, windowEnd)
-	if err != nil {
-		log.Printf("provisioner: failed to launch shard for bucket %d: %v", bucket.ID, err)
-		return
-	}
-	entry.BucketID = bucket.ID
-	entry.Tier = tier
-
-	p.registry.Add(entry)
-	// Stamp shard_services so read routing (ShardIDsServingService) finds
-	// this shard — the sync-launcher analogue of christen's stamp.
-	if p.config.ShardOps != nil {
-		if err := p.config.ShardOps.StampShardServices(id, bucket.ID); err != nil {
-			log.Printf("provisioner: shard %s: stamp shard_services: %v", id, err)
-		}
-	}
-	log.Printf("provisioner: shard %s launched for bucket %d", id, bucket.ID)
 }
 
 // serviceNames renders a shard's service membership as bare service
