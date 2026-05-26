@@ -7,6 +7,18 @@ import (
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
 
+// Off-EC2 (dev/docker) the shard has no IMDS, so the DockerLauncher
+// injects a synthetic instance id via SHARD_INSTANCE_ID — the same id it
+// stamps on the LAUNCHING shard SM. getInstanceID must report that env
+// value so the first heartbeat correlates to the right shard. Env wins
+// over IMDS so a stray metadata hit can't shadow the synthetic id.
+func TestGetInstanceID_PrefersEnv(t *testing.T) {
+	t.Setenv("SHARD_INSTANCE_ID", "weft-shard-abc123")
+	if got := getInstanceID(); got != "weft-shard-abc123" {
+		t.Errorf("getInstanceID: got %q want weft-shard-abc123", got)
+	}
+}
+
 // recordingCoord captures the heartbeat request for assertion.
 type recordingCoord struct {
 	pb.UnimplementedWeftCoordinatorServer

@@ -249,10 +249,18 @@ func sendHeartbeat(client pb.WeftCoordinatorClient, addr, instanceID string, srv
 	return true
 }
 
-// getInstanceID fetches the EC2 instance id from IMDSv2. Returns ""
-// off-EC2 (docker, dev), which is fine — only production shards need
-// it for volume lookups.
+// getInstanceID returns the shard's instance id, the key the coordinator
+// correlates a first heartbeat against the LAUNCHING shard SM it minted
+// (heartbeatMatchesLaunching). Production reads it from IMDSv2 (the EC2
+// instance id). Off-EC2 there's no IMDS, so the dev DockerLauncher injects
+// a synthetic id via SHARD_INSTANCE_ID at launch — the same id it stamps
+// on the shard SM — and we report that back. Env wins so the synthetic id
+// can't be shadowed by a stray IMDS hit. Empty only when neither is set
+// (a bare local run), which the coordinator tolerates.
 func getInstanceID() string {
+	if id := os.Getenv("SHARD_INSTANCE_ID"); id != "" {
+		return id
+	}
 	return imdsFetch("instance-id")
 }
 

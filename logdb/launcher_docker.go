@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -87,66 +88,24 @@ func NewDockerLauncher() *DockerLauncher {
 	}
 }
 
+// devAZ is the single synthetic availability zone dev mode stripes every
+// shard into — there's one docker host, so AZ-spreading is a local no-op.
+// Mirrors ASGProvisioner's AZsForTier/StripeAZ so the bucket SM's striper
+// lookups resolve identically in dev and prod.
+const devAZ = "local"
+
 // LaunchInstance starts a fresh shard container, returns its
 // container-internal address. The coordinator will Configure it and
 // then receive heartbeats once it boots.
+//
+// This is the legacy synchronous launcher the old reconciler drives; the
+// FSM control plane uses Launch (below) instead. It stays until the Slice
+// C switch deletes the reconciler.
 func (d *DockerLauncher) LaunchInstance(ctx context.Context, _ string) (string, error) {
-	d.mu.Lock()
-	if d.HostDataRoot == "" || d.LocalDataRoot == "" || d.Image == "" {
-		d.mu.Unlock()
-		return "", fmt.Errorf("docker launcher misconfigured: HostDataRoot/LocalDataRoot/Image required")
-	}
-	d.mu.Unlock()
-
-	// Mint a per-shard subdirectory name. We use a random hex prefix
-	// instead of the eventual shard id because Configure (which mints
-	// the durable id) hasn't been called yet — the dataDir name is
-	// internal to the launcher.
-	suffix := newSubdirSuffix()
-	hostSubdir := filepath.Join(d.HostDataRoot, suffix)
-	localSubdir := filepath.Join(d.LocalDataRoot, suffix)
-	if err := os.MkdirAll(localSubdir, 0o755); err != nil {
-		return "", fmt.Errorf("create local subdir %s: %w", localSubdir, err)
-	}
-
-	containerName := fmt.Sprintf("weft-shard-%s", suffix)
-	args := []string{
-		"run", "-d",
-		"--name", containerName,
-		"--network", d.Network,
-		"-v", hostSubdir + ":/opt/app/data",
-		"-e", "ROLE=shard",
-		"-e", "SHARD_GRPC_PORT=9000",
-		"-e", "SHARD_HTTP_PORT=9001",
-		"-e", "SHARD_DATA_DIR=/opt/app/data",
-		"-e", "COORDINATOR_ADDR=" + d.CoordinatorAddr,
-		"-e", "HEARTBEAT_INTERVAL=" + d.HeartbeatInterval.String(),
-		"-e", "SHARD_SECRET=" + d.ShardSecret,
-		"--entrypoint", "/usr/local/bin/entrypoint.sh",
-		d.Image,
-	}
-
-	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	_, addr, containerID, err := d.spawn(ctx, newSubdirSuffix(), false)
 	if err != nil {
-		return "", fmt.Errorf("docker run: %w\n%s", err, out)
+		return "", err
 	}
-	containerID := strings.TrimSpace(string(out))
-
-	// The coordinator dials the shard by container DNS name on the
-	// shared network (port 9000 is the shard's gRPC). The Heartbeat
-	// RPC the shard sends back will carry the same host:port as Addr,
-	// so the coordinator's adopt-from-heartbeat path can reconcile.
-	addr := containerName + ":9000"
-
-	// Wait for the shard's gRPC port to be reachable from inside the
-	// coordinator container. exec.LookPath returns the docker CLI we
-	// already verified at startup, so this is purely about giving the
-	// inner process time to bind.
-	if err := waitForTCP(ctx, addr, 30*time.Second); err != nil {
-		exec.Command("docker", "rm", "-f", containerID).Run()
-		return "", fmt.Errorf("shard %s did not become reachable: %w", containerName, err)
-	}
-
 	d.mu.Lock()
 	if d.containers == nil {
 		d.containers = make(map[string]string)
@@ -154,6 +113,126 @@ func (d *DockerLauncher) LaunchInstance(ctx context.Context, _ string) (string, 
 	d.containers[addr] = containerID
 	d.mu.Unlock()
 	return addr, nil
+}
+
+// Launch is the FSM control plane's launch primitive (ShardLaunchAPI),
+// the dev counterpart to ASGProvisioner.Launch. It spawns one shard
+// container with a forced identity: the synthetic instance id is the
+// container name, which is also its --hostname, so two things line up at
+// once — the addr the shard advertises (hostname:9000) is dialable on the
+// docker network, and the instance id it heartbeats (SHARD_INSTANCE_ID)
+// matches what the SM stamps onto the LAUNCHING entry from this result.
+// That instance id is the correlation key heartbeatMatchesLaunching
+// checks. No shard id is injected — the shard boots unconfigured and the
+// SM sends Configure on the first heartbeat.
+//
+// Dev has no EBS, so VolumeID stays empty (the host bind-mount holds the
+// data dir); recovery's volume-reattach path is a prod-only concern.
+func (d *DockerLauncher) Launch(ctx context.Context, spec LaunchSpec) (LaunchResult, error) {
+	cname, _, _, err := d.spawn(ctx, newSubdirSuffix(), true)
+	if err != nil {
+		return LaunchResult{}, fmt.Errorf("launch %s: %w", spec.ShardID, err)
+	}
+	az := spec.AZ
+	if az == "" {
+		az = devAZ
+	}
+	log.Printf("docker-launcher: launched %s as container %s (az=%s)", spec.ShardID, cname, az)
+	return LaunchResult{InstanceID: cname, AZ: az}, nil
+}
+
+// Terminate removes the container behind instanceID (which is its name,
+// see Launch) and decrements nothing — there's no ASG in dev. A missing
+// container is success, so the ARCHIVED/GONE cleanup paths are idempotent.
+func (d *DockerLauncher) Terminate(ctx context.Context, instanceID string) error {
+	if instanceID == "" {
+		return fmt.Errorf("Terminate: instance id required")
+	}
+	out, err := exec.CommandContext(ctx, "docker", "rm", "-f", instanceID).CombinedOutput()
+	if err != nil && !strings.Contains(string(out), "No such container") {
+		return fmt.Errorf("docker rm -f %s: %w\n%s", instanceID, err, out)
+	}
+	return nil
+}
+
+// AZsForTier / StripeAZ are the dev striper. One synthetic AZ, so every
+// stripe index lands in the same place — AZ-spreading is meaningless on a
+// single docker host, but the bucket SM consults the striper unaware of
+// the environment.
+func (d *DockerLauncher) AZsForTier(string) []string  { return []string{devAZ} }
+func (d *DockerLauncher) StripeAZ(string, int) string { return devAZ }
+
+// spawn runs one shard container off the given subdir suffix and returns
+// it once its gRPC port is reachable. When forceIdentity is set the
+// container gets --hostname <name> plus -e SHARD_INSTANCE_ID=<name>, so
+// the shard advertises a dialable addr and reports the instance id the SM
+// correlates against (see Launch); the legacy LaunchInstance leaves both
+// off. Shared by both launch paths so the docker-run plumbing lives once.
+func (d *DockerLauncher) spawn(ctx context.Context, suffix string, forceIdentity bool) (containerName, addr, containerID string, err error) {
+	d.mu.Lock()
+	misconfigured := d.HostDataRoot == "" || d.LocalDataRoot == "" || d.Image == ""
+	d.mu.Unlock()
+	if misconfigured {
+		return "", "", "", fmt.Errorf("docker launcher misconfigured: HostDataRoot/LocalDataRoot/Image required")
+	}
+
+	// The per-shard subdir uses a random hex prefix, not the eventual
+	// shard id — for the legacy path Configure (which mints the id) hasn't
+	// run yet, and for Launch the id lives in shard.json once configured.
+	hostSubdir := filepath.Join(d.HostDataRoot, suffix)
+	localSubdir := filepath.Join(d.LocalDataRoot, suffix)
+	if err := os.MkdirAll(localSubdir, 0o755); err != nil {
+		return "", "", "", fmt.Errorf("create local subdir %s: %w", localSubdir, err)
+	}
+
+	containerName = fmt.Sprintf("weft-shard-%s", suffix)
+	args := d.runArgs(containerName, hostSubdir, forceIdentity)
+
+	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	if err != nil {
+		return "", "", "", fmt.Errorf("docker run: %w\n%s", err, out)
+	}
+	containerID = strings.TrimSpace(string(out))
+
+	// The coordinator dials the shard by container DNS name on the shared
+	// network (9000 is the shard's gRPC). The Heartbeat RPC carries the
+	// same host:port as Addr so the heartbeat path can reconcile.
+	addr = containerName + ":9000"
+	if err := waitForTCP(ctx, addr, 30*time.Second); err != nil {
+		exec.Command("docker", "rm", "-f", containerID).Run()
+		return "", "", "", fmt.Errorf("shard %s did not become reachable: %w", containerName, err)
+	}
+	return containerName, addr, containerID, nil
+}
+
+// runArgs builds the `docker run` argv for a shard container. Pulled out
+// as a pure function so the forced-identity wiring is unit-testable
+// without a docker daemon.
+func (d *DockerLauncher) runArgs(containerName, hostSubdir string, forceIdentity bool) []string {
+	args := []string{
+		"run", "-d",
+		"--name", containerName,
+		"--network", d.Network,
+		"-v", hostSubdir + ":/opt/app/data",
+	}
+	if forceIdentity {
+		// --hostname makes the shard's os.Hostname()-derived addr equal
+		// containerName (dialable on the network); SHARD_INSTANCE_ID is
+		// the synthetic id it heartbeats back for SM correlation.
+		args = append(args, "--hostname", containerName, "-e", "SHARD_INSTANCE_ID="+containerName)
+	}
+	args = append(args,
+		"-e", "ROLE=shard",
+		"-e", "SHARD_GRPC_PORT=9000",
+		"-e", "SHARD_HTTP_PORT=9001",
+		"-e", "SHARD_DATA_DIR=/opt/app/data",
+		"-e", "COORDINATOR_ADDR="+d.CoordinatorAddr,
+		"-e", "HEARTBEAT_INTERVAL="+d.HeartbeatInterval.String(),
+		"-e", "SHARD_SECRET="+d.ShardSecret,
+		"--entrypoint", "/usr/local/bin/entrypoint.sh",
+		d.Image,
+	)
+	return args
 }
 
 // TerminateInstance removes the shard container at addr. The data
