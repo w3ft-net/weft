@@ -806,11 +806,33 @@ provisioner mint factory below.
        ResetIngestFailures stay (IngestRecorder contract) but only count.
        **Follow-up:** a persisted `IngestUnhealthy` column for the
        "alive but persistently failing ingest" case (no replacement yet).
-  4. New SM scenario tests (the surviving half of slice D) — needs an
-     in-process ShardLaunchAPI launcher whose shards heartbeat, to cover
-     the launch→promote→reconnect flow end-to-end. **NEXT.**
+  4. **SHIPPED.** SM scenario coverage now has two levels:
+     - **White-box** (`provisioner_coordination_test.go`, `4a2a865`):
+       drives the unexported tick + heartbeat with the real SMs over the
+       tx store + fakes, gating launches around the single connection.
+       (Was mislabeled "integration" in `35d8ffe`; reframed.)
+     - **Genuine integration** (`provisioner_integration_test.go`,
+       `package logdb_test`, `9d0cc94`): public API only, real pooled
+       store on a private throwaway DB, real gRPC Configure dial,
+       genuinely concurrent in-process gRPC shards heartbeating back. A
+       Target=2 bucket drives two real shards to INGESTING.
+     - **It found a real, pre-existing data race** (`9d0cc94`): ShardEntry
+       fields were guarded by the SM's `s.mu` on writes but the registry's
+       `r.mu`/no-lock on reads. Fixed by giving ShardEntry its own RWMutex
+       used by both sides. Whole logdb suite passes under `-race`.
+     - **Not yet built:** the docker-compose end-to-end (real coordinator
+       + real shard containers via DockerLauncher.Launch) — the truest
+       integration, but needs the stack; lives in the `integration/`
+       package as future work.
 
 **Slice C remaining loose ends (track for follow-up):**
+- **Live addr isn't persisted.** `configureOnHeartbeat`/`ObserveHeartbeat`
+  set `entry.Addr` in memory but never write shard_records.addr, so
+  `RefreshFromStore` clobbers it to the stale/empty DB value each tick
+  (the next heartbeat re-dials and re-sets it — churn + a brief empty-addr
+  window for routing). The old rebind path persisted addr; restore that
+  (a narrow addr write on configure/reconnect) or stop RefreshFromStore
+  overwriting addr.
 - **ForceArchive/DeleteArchived bypass the FSM** — the admin gRPC path
   still calls the provisioner's synchronous `archive()`/`retireVolume()`
   (kept, live) instead of firing `ArchiveRequested` on the shard SM.
