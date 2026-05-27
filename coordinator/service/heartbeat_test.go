@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -154,13 +155,13 @@ func TestHeartbeat_UnknownInRegistry_LoadFromStore(t *testing.T) {
 	}
 	if err := tx.SaveShard(&store.ShardRecord{
 		ID:             shardID,
-		WindowStart:    "2026-04-21T00:00:00Z",
-		WindowEnd:      "2026-04-22T00:00:00Z",
+		WindowStart:    time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC),
+		WindowEnd:      time.Date(2026, 4, 22, 0, 0, 0, 0, time.UTC),
 		State:          string(logdb.StateIngesting),
 		HeartbeatToken: token,
 		Tier:           "small",
 		BucketID:       1,
-		CreatedAt:      "2026-04-21T00:00:00Z",
+		CreatedAt:      time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC),
 	}); err != nil {
 		t.Fatalf("seed shard record: %v", err)
 	}

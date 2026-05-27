@@ -178,15 +178,15 @@ func (r *ShardRegistry) persist(entry *ShardEntry) {
 	entry.mu.RLock()
 	rec := store.ShardRecord{
 		ID:             entry.ID,
-		WindowStart:    entry.WindowStart.Format(time.RFC3339),
-		WindowEnd:      entry.WindowEnd.Format(time.RFC3339),
+		WindowStart:    entry.WindowStart,
+		WindowEnd:      entry.WindowEnd,
 		State:          string(entry.State),
 		Addr:           entry.Addr,
 		InstanceID:     entry.InstanceID,
 		ParquetPath:    entry.ParquetPath,
 		Tier:           entry.Tier,
 		RowCount:       entry.RowCount,
-		CreatedAt:      entry.CreatedAt.Format(time.RFC3339),
+		CreatedAt:      entry.CreatedAt,
 		EBSVolumeID:    entry.EBSVolumeID,
 		HeartbeatToken: entry.HeartbeatToken,
 		BucketID:       entry.BucketID,
@@ -246,15 +246,9 @@ func (r *ShardRegistry) RefreshFromStore() {
 		}
 		entry.mu.Lock()
 		entry.State = ShardState(rec.State)
-		if ws, err := time.Parse(time.RFC3339, rec.WindowStart); err == nil {
-			entry.WindowStart = ws
-		}
-		if we, err := time.Parse(time.RFC3339, rec.WindowEnd); err == nil {
-			entry.WindowEnd = we
-		}
-		if ca, err := time.Parse(time.RFC3339, rec.CreatedAt); err == nil {
-			entry.CreatedAt = ca
-		}
+		entry.WindowStart = rec.WindowStart
+		entry.WindowEnd = rec.WindowEnd
+		entry.CreatedAt = rec.CreatedAt
 		entry.Addr = rec.Addr
 		entry.InstanceID = rec.InstanceID
 		entry.ParquetPath = rec.ParquetPath
@@ -323,23 +317,20 @@ func (r *ShardRegistry) LoadFromStore(reconstruct func(rec store.ShardRecord) (s
 		// (or one we can't open data for yet) still belongs in the
 		// registry. Drop the Shard pointer; everything else loads.
 		sh, _ := reconstruct(rec)
-		windowStart, _ := time.Parse(time.RFC3339, rec.WindowStart)
-		windowEnd, _ := time.Parse(time.RFC3339, rec.WindowEnd)
-		createdAt, _ := time.Parse(time.RFC3339, rec.CreatedAt)
 
 		r.mu.Lock()
 		r.entries[rec.ID] = &ShardEntry{
 			ID:             rec.ID,
 			Services:       svcByShard[rec.ID],
-			WindowStart:    windowStart,
-			WindowEnd:      windowEnd,
+			WindowStart:    rec.WindowStart,
+			WindowEnd:      rec.WindowEnd,
 			State:          ShardState(rec.State),
 			Addr:           rec.Addr,
 			InstanceID:     rec.InstanceID,
 			ParquetPath:    rec.ParquetPath,
 			Tier:           rec.Tier,
 			RowCount:       rec.RowCount,
-			CreatedAt:      createdAt,
+			CreatedAt:      rec.CreatedAt,
 			EBSVolumeID:    rec.EBSVolumeID,
 			Shard:          sh,
 			HeartbeatToken: rec.HeartbeatToken,

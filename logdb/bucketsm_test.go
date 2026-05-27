@@ -84,9 +84,9 @@ func seedShardRow(t *testing.T, db *store.Store, bucketID int64, id string, stat
 		State:       string(state),
 		BucketID:    bucketID,
 		Tier:        "small",
-		WindowStart: windowStart.Format(time.RFC3339),
-		WindowEnd:   windowStart.Add(time.Hour).Format(time.RFC3339),
-		CreatedAt:   windowStart.Format(time.RFC3339),
+		WindowStart: windowStart,
+		WindowEnd:   windowStart.Add(time.Hour),
+		CreatedAt:   windowStart,
 		StripeIndex: stripe,
 	}
 	if err := db.SaveShard(rec); err != nil {

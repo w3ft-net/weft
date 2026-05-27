@@ -63,9 +63,9 @@ func makeFixtureShardSM(t *testing.T, initialState ShardState, customize ...func
 		State:       string(initialState),
 		BucketID:    bucket.ID,
 		Tier:        "small",
-		WindowStart: "2026-05-21T12:00:00Z",
-		WindowEnd:   "2026-05-21T13:00:00Z",
-		CreatedAt:   "2026-05-21T12:00:00Z",
+		WindowStart: time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC),
+		WindowEnd:   time.Date(2026, 5, 21, 13, 0, 0, 0, time.UTC),
+		CreatedAt:   time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC),
 	}); err != nil {
 		t.Fatalf("seed shard: %v", err)
 	}

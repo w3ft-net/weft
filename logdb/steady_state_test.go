@@ -38,7 +38,7 @@ func TestRefreshFromStore_PicksUpExternalDBChanges(t *testing.T) {
 	if !ok {
 		t.Fatal("shard-legacy not in store")
 	}
-	rec.WindowEnd = closedEnd.Format(time.RFC3339)
+	rec.WindowEnd = closedEnd
 	fake.mu.Lock()
 	fake.records["shard-legacy"] = rec
 	fake.mu.Unlock()

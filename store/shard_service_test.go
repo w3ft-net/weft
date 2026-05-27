@@ -3,6 +3,7 @@ package store
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // backfillUpSQL extracts the +goose Up body of migration 059 from the
@@ -71,8 +72,9 @@ func TestBackfillShardServices059(t *testing.T) {
 		t.Helper()
 		if err := db.SaveShard(&ShardRecord{
 			ID: id, State: "READ_ONLY", BucketID: bucketID, Tier: "small",
-			WindowStart: "2026-05-01T00:00:00Z",
-			WindowEnd:   "2026-05-08T00:00:00Z", CreatedAt: "2026-05-01T00:00:00Z",
+			WindowStart: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+			WindowEnd:   time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC),
+			CreatedAt:   time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
 		}); err != nil {
 			t.Fatalf("shard %s: %v", id, err)
 		}
@@ -165,8 +167,9 @@ func TestStampShardServices(t *testing.T) {
 		t.Helper()
 		if err := db.SaveShard(&ShardRecord{
 			ID: id, State: "INGESTING", BucketID: bucketID, Tier: "small",
-			WindowStart: "2026-05-01T00:00:00Z",
-			WindowEnd:   "2026-05-08T00:00:00Z", CreatedAt: "2026-05-01T00:00:00Z",
+			WindowStart: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+			WindowEnd:   time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC),
+			CreatedAt:   time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
 		}); err != nil {
 			t.Fatalf("shard %s: %v", id, err)
 		}

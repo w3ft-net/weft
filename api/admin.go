@@ -304,12 +304,11 @@ func (s *Server) handleAdminDeleteShard(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if !req.Force {
-		windowEnd, _ := time.Parse(time.RFC3339, rec.WindowEnd)
 		b, bFound, _ := s.store.GetBucket(rec.BucketID)
 		if bFound {
 			tier := store.Tier(b.Tier)
 			retention := store.LogRetention(tier)
-			if time.Since(windowEnd) < retention {
+			if time.Since(rec.WindowEnd) < retention {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusConflict)
 				json.NewEncoder(w).Encode(map[string]any{

@@ -310,12 +310,10 @@ func (b *BucketSM) onEnterScalingDown(ctx context.Context, args ...any) error {
 	}
 	// Youngest first: latest window_start, then latest created_at.
 	sort.SliceStable(ing, func(i, j int) bool {
-		wi, _ := time.Parse(time.RFC3339, ing[i].WindowStart)
-		wj, _ := time.Parse(time.RFC3339, ing[j].WindowStart)
-		if !wi.Equal(wj) {
-			return wi.After(wj)
+		if !ing[i].WindowStart.Equal(ing[j].WindowStart) {
+			return ing[i].WindowStart.After(ing[j].WindowStart)
 		}
-		return ing[i].CreatedAt > ing[j].CreatedAt
+		return ing[i].CreatedAt.After(ing[j].CreatedAt)
 	})
 	for _, r := range ing[:excess] {
 		if err := b.controller.FireShard(ctx, r.ID, TriggerRotateRequested); err != nil {
@@ -563,12 +561,11 @@ func latestWindowStart(recs []store.ShardRecord) (time.Time, bool) {
 	var max time.Time
 	found := false
 	for _, r := range recs {
-		ws, err := time.Parse(time.RFC3339, r.WindowStart)
-		if err != nil {
+		if r.WindowStart.IsZero() {
 			continue
 		}
-		if !found || ws.After(max) {
-			max, found = ws, true
+		if !found || r.WindowStart.After(max) {
+			max, found = r.WindowStart, true
 		}
 	}
 	return max, found
@@ -582,19 +579,13 @@ func stripeOf(r store.ShardRecord) (int, bool) {
 }
 
 func windowStartEq(r store.ShardRecord, t time.Time) bool {
-	ws, err := time.Parse(time.RFC3339, r.WindowStart)
-	return err == nil && ws.Equal(t)
+	return r.WindowStart.Equal(t)
 }
 
 func windowStartBefore(r store.ShardRecord, t time.Time) bool {
-	ws, err := time.Parse(time.RFC3339, r.WindowStart)
-	return err == nil && ws.Before(t)
+	return r.WindowStart.Before(t)
 }
 
 func windowEnd(r store.ShardRecord) (time.Time, bool) {
-	we, err := time.Parse(time.RFC3339, r.WindowEnd)
-	if err != nil {
-		return time.Time{}, false
-	}
-	return we, true
+	return r.WindowEnd, !r.WindowEnd.IsZero()
 }

@@ -13,17 +13,17 @@ import (
 
 // ShardRecord persists shard registry entries across coordinator restarts.
 type ShardRecord struct {
-	ID          string `gorm:"primaryKey"`
-	WindowStart string `gorm:"not null"` // RFC3339
-	WindowEnd   string `gorm:"not null"` // RFC3339
-	State       string `gorm:"not null"` // INGESTING/READ_ONLY/ARCHIVED
-	Addr        string // gRPC address for live shards
-	InstanceID  string // EC2 instance ID
-	ParquetPath string // Parquet file path for archived shards
-	Tier        string // instance tier (small/medium/large)
-	RowCount    int64  `gorm:"default:0"`
-	CreatedAt   string `gorm:"not null"` // RFC3339
-	EBSVolumeID string // EBS volume holding this shard's DuckDB (empty = not on a dedicated volume yet)
+	ID          string    `gorm:"primaryKey"`
+	WindowStart time.Time `gorm:"not null"` // timestamptz (migration 062)
+	WindowEnd   time.Time `gorm:"not null"` // timestamptz (migration 062)
+	State       string    `gorm:"not null"` // INGESTING/READ_ONLY/ARCHIVED
+	Addr        string    // gRPC address for live shards
+	InstanceID  string    // EC2 instance ID
+	ParquetPath string    // Parquet file path for archived shards
+	Tier        string    // instance tier (small/medium/large)
+	RowCount    int64     `gorm:"default:0"`
+	CreatedAt   time.Time `gorm:"not null"` // timestamptz (migration 062)
+	EBSVolumeID string    // EBS volume holding this shard's DuckDB (empty = not on a dedicated volume yet)
 	// HeartbeatToken is a per-shard bearer the shard presents on every
 	// Heartbeat RPC. Minted by the provisioner at christen, returned
 	// to the shard in the Configure response, and persisted in

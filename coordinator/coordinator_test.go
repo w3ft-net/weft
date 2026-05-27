@@ -95,12 +95,12 @@ func stampShardServicesFromApps(t testing.TB, c *Coordinator, e *logdb.ShardEntr
 	}
 	if err := c.Store.SaveShard(&store.ShardRecord{
 		ID:          e.ID,
-		WindowStart: e.WindowStart.Format(time.RFC3339),
-		WindowEnd:   e.WindowEnd.Format(time.RFC3339),
+		WindowStart: e.WindowStart,
+		WindowEnd:   e.WindowEnd,
 		State:       string(e.State),
 		Tier:        e.Tier,
 		BucketID:    bucketID,
-		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
+		CreatedAt:   e.CreatedAt,
 	}); err != nil {
 		t.Fatalf("stampShardServicesFromApps: persist shard_records %s: %v", e.ID, err)
 	}

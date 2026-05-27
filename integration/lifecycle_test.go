@@ -210,9 +210,9 @@ func TestLifecycle_Integration_ChristenPath(t *testing.T) {
 		State:          string(logdb.StateLaunching),
 		Tier:           "small",
 		BucketID:       1, // default bucket — auto-created at coordinator startup
-		WindowStart:    time.Now().UTC().Format(time.RFC3339),
-		WindowEnd:      time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339),
-		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+		WindowStart:    time.Now().UTC(),
+		WindowEnd:      time.Now().UTC().Add(24 * time.Hour),
+		CreatedAt:      time.Now().UTC(),
 		HeartbeatToken: "lifecycle-test-token",
 	}); err != nil {
 		t.Fatalf("seed LAUNCHING row: %v", err)
