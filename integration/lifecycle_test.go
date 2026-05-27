@@ -4,7 +4,6 @@ package integration
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -16,14 +15,26 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
+	astypes "github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/aws/aws-sdk-go-v2/service/sns"
-	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
 	"github.com/kevlarcon/weft/logdb"
-	"github.com/kevlarcon/weft/store"
 )
+
+// These tests exercise the ASG-as-API launch primitive
+// (logdb.ASGProvisioner.Launch) and the EBS VolumeManager against
+// LocalStack's real EC2 implementation. They replace the old SNS/SQS
+// lifecycle-hook tests, whose subsystem was deleted when the shard FSM
+// took ownership of lifecycle (commit 7b0de94).
+//
+// LocalStack Community doesn't implement Auto Scaling, so the ASG side
+// is faked (fakeASG below) — but everything the integration value lives
+// in is real: RunInstances, CreateTags, CreateVolume, AttachVolume,
+// DescribeVolumes, CreateSnapshot, DeleteVolume all hit LocalStack EC2.
+// Launch is store-free post-7b0de94 (the shard SM persists the
+// LaunchResult; that handoff is unit-tested in logdb/shardsm_test.go),
+// so these tests need no postgres.
 
 // LocalStack endpoint from docker-compose. Set LOCALSTACK_ENDPOINT to
 // override; otherwise defaults to the docker-compose mapping.
@@ -48,248 +59,211 @@ func awsTestConfig(t *testing.T) aws.Config {
 	return cfg
 }
 
-// recordingASG satisfies ASGLifecycleAPI while recording CompleteLifecycleAction
-// calls. LocalStack Community doesn't implement ASG, so we stub just
-// this one call.
-type recordingASG struct {
-	mu    sync.Mutex
-	calls []string // "CONTINUE:i-xxx" / "ABANDON:i-xxx"
+// fakeASG stands in for AWS Auto Scaling, which LocalStack Community
+// doesn't implement. It satisfies logdb.ASGApi. On SetDesiredCapacity
+// it launches real LocalStack EC2 instances in its AZ — so the
+// provisioner's subsequent CreateTags and AttachVolume calls land on a
+// genuine instance — and reports every launched instance as InService
+// immediately, which is all ASGProvisioner.awaitNewInstance needs.
+type fakeASG struct {
+	ec2 *ec2.Client
+	az  string
+
+	mu         sync.Mutex
+	instances  []string
+	desired    int32
+	terminated []string
 }
 
-func (r *recordingASG) CompleteLifecycleAction(_ context.Context, in *autoscaling.CompleteLifecycleActionInput, _ ...func(*autoscaling.Options)) (*autoscaling.CompleteLifecycleActionOutput, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	result := ""
-	if in.LifecycleActionResult != nil {
-		result = *in.LifecycleActionResult
+func (f *fakeASG) SetDesiredCapacity(ctx context.Context, in *autoscaling.SetDesiredCapacityInput, _ ...func(*autoscaling.Options)) (*autoscaling.SetDesiredCapacityOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var want int32
+	if in.DesiredCapacity != nil {
+		want = *in.DesiredCapacity
 	}
-	instance := ""
-	if in.InstanceId != nil {
-		instance = *in.InstanceId
-	}
-	r.calls = append(r.calls, result+":"+instance)
-	return &autoscaling.CompleteLifecycleActionOutput{}, nil
-}
-
-func (r *recordingASG) snapshot() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]string, len(r.calls))
-	copy(out, r.calls)
-	return out
-}
-
-// setupQueue creates an SNS topic, an SQS queue, subscribes the queue
-// to the topic, and returns (topicArn, queueURL).
-func setupQueue(t *testing.T, cfg aws.Config, name string) (string, string) {
-	t.Helper()
-	snsClient := sns.NewFromConfig(cfg)
-	sqsClient := sqs.NewFromConfig(cfg)
-
-	topicOut, err := snsClient.CreateTopic(context.Background(), &sns.CreateTopicInput{
-		Name: aws.String(name),
-	})
-	if err != nil {
-		t.Fatalf("CreateTopic: %v", err)
-	}
-	queueOut, err := sqsClient.CreateQueue(context.Background(), &sqs.CreateQueueInput{
-		QueueName: aws.String(name),
-	})
-	if err != nil {
-		t.Fatalf("CreateQueue: %v", err)
-	}
-	// Subscribe.
-	_, err = snsClient.Subscribe(context.Background(), &sns.SubscribeInput{
-		TopicArn: topicOut.TopicArn,
-		Protocol: aws.String("sqs"),
-		Endpoint: aws.String("arn:aws:sqs:us-east-2:000000000000:" + name),
-	})
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	return *topicOut.TopicArn, *queueOut.QueueUrl
-}
-
-// seedInstance registers a stub instance with LocalStack's EC2 so
-// DescribeInstances returns its AZ. LocalStack's RunInstances accepts
-// any instance type; the instance isn't actually booted.
-func seedInstance(t *testing.T, cfg aws.Config, az string) string {
-	t.Helper()
-	ec2c := ec2.NewFromConfig(cfg)
-	out, err := ec2c.RunInstances(context.Background(), &ec2.RunInstancesInput{
-		MaxCount:     aws.Int32(1),
-		MinCount:     aws.Int32(1),
-		InstanceType: ec2types.InstanceTypeT3Micro,
-		ImageId:      aws.String("ami-test"),
-		Placement:    &ec2types.Placement{AvailabilityZone: aws.String(az)},
-	})
-	if err != nil {
-		t.Fatalf("RunInstances: %v", err)
-	}
-	return *out.Instances[0].InstanceId
-}
-
-// publishLaunchEvent sends a realistic ASG lifecycle notification to
-// the SNS topic. Matches the payload shape AWS emits.
-func publishLaunchEvent(t *testing.T, cfg aws.Config, topicArn, asgName, instanceID string) {
-	t.Helper()
-	event := logdb.LifecycleEvent{
-		ASGName:             asgName,
-		InstanceID:          instanceID,
-		LifecycleHookName:   asgName + "-launch",
-		LifecycleTransition: "autoscaling:EC2_INSTANCE_LAUNCHING",
-		Time:                time.Now().UTC(),
-	}
-	body, err := json.Marshal(event)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snsClient := sns.NewFromConfig(cfg)
-	_, err = snsClient.Publish(context.Background(), &sns.PublishInput{
-		TopicArn: aws.String(topicArn),
-		Message:  aws.String(string(body)),
-	})
-	if err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
-}
-
-// waitForAttached polls EC2 until the given instance has a non-root
-// volume attached, or the deadline expires.
-func waitForAttached(t *testing.T, cfg aws.Config, instanceID string, timeout time.Duration) ec2types.InstanceBlockDeviceMapping {
-	t.Helper()
-	ec2c := ec2.NewFromConfig(cfg)
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		out, err := ec2c.DescribeInstances(context.Background(), &ec2.DescribeInstancesInput{
-			InstanceIds: []string{instanceID},
+	for int32(len(f.instances)) < want {
+		out, err := f.ec2.RunInstances(ctx, &ec2.RunInstancesInput{
+			MaxCount:     aws.Int32(1),
+			MinCount:     aws.Int32(1),
+			InstanceType: ec2types.InstanceTypeT3Micro,
+			ImageId:      aws.String("ami-test"),
+			Placement:    &ec2types.Placement{AvailabilityZone: aws.String(f.az)},
 		})
-		if err == nil {
-			for _, r := range out.Reservations {
-				for _, inst := range r.Instances {
-					for _, m := range inst.BlockDeviceMappings {
-						if m.DeviceName != nil && strings.HasSuffix(*m.DeviceName, "sdf") {
-							return m
-						}
-					}
-				}
-			}
+		if err != nil {
+			return nil, err
 		}
-		time.Sleep(500 * time.Millisecond)
+		f.instances = append(f.instances, *out.Instances[0].InstanceId)
 	}
-	t.Fatalf("instance %s did not get /dev/sdf attached within %s", instanceID, timeout)
-	return ec2types.InstanceBlockDeviceMapping{}
+	f.desired = want
+	return &autoscaling.SetDesiredCapacityOutput{}, nil
+}
+
+func (f *fakeASG) DescribeAutoScalingGroups(_ context.Context, in *autoscaling.DescribeAutoScalingGroupsInput, _ ...func(*autoscaling.Options)) (*autoscaling.DescribeAutoScalingGroupsOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	insts := make([]astypes.Instance, 0, len(f.instances))
+	for _, id := range f.instances {
+		insts = append(insts, astypes.Instance{
+			InstanceId:     aws.String(id),
+			LifecycleState: astypes.LifecycleStateInService,
+		})
+	}
+	name := ""
+	if len(in.AutoScalingGroupNames) > 0 {
+		name = in.AutoScalingGroupNames[0]
+	}
+	return &autoscaling.DescribeAutoScalingGroupsOutput{
+		AutoScalingGroups: []astypes.AutoScalingGroup{{
+			AutoScalingGroupName: aws.String(name),
+			DesiredCapacity:      aws.Int32(f.desired),
+			Instances:            insts,
+		}},
+	}, nil
+}
+
+func (f *fakeASG) TerminateInstanceInAutoScalingGroup(_ context.Context, in *autoscaling.TerminateInstanceInAutoScalingGroupInput, _ ...func(*autoscaling.Options)) (*autoscaling.TerminateInstanceInAutoScalingGroupOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if in.InstanceId != nil {
+		f.terminated = append(f.terminated, *in.InstanceId)
+	}
+	return &autoscaling.TerminateInstanceInAutoScalingGroupOutput{}, nil
+}
+
+// newLaunchProvisioner wires an ASGProvisioner around the fake ASG and a
+// real LocalStack-backed VolumeManager + tagger, configured for one
+// (tier, AZ). Returns the provisioner and the EC2 client for assertions.
+func newLaunchProvisioner(t *testing.T, az string) (*logdb.ASGProvisioner, *ec2.Client) {
+	t.Helper()
+	cfg := awsTestConfig(t)
+	ec2c := ec2.NewFromConfig(cfg)
+	vm := logdb.NewEC2VolumeManagerWithClient(ec2c)
+	asgName := "weft-shard-small-" + testSuffix()
+	asgs := map[string]map[string]string{"small": {az: asgName}}
+	prov := logdb.NewASGProvisionerWithClients(&fakeASG{ec2: ec2c, az: az}, ec2c, vm, asgs)
+	return prov, ec2c
+}
+
+// describeVolume returns the (raw) volume record for assertions.
+func describeVolume(t *testing.T, ec2c *ec2.Client, volumeID string) ec2types.Volume {
+	t.Helper()
+	out, err := ec2c.DescribeVolumes(context.Background(), &ec2.DescribeVolumesInput{
+		VolumeIds: []string{volumeID},
+	})
+	if err != nil {
+		t.Fatalf("DescribeVolumes %s: %v", volumeID, err)
+	}
+	if len(out.Volumes) == 0 {
+		t.Fatalf("volume %s not found", volumeID)
+	}
+	return out.Volumes[0]
+}
+
+func volumeTags(v ec2types.Volume) map[string]string {
+	tags := map[string]string{}
+	for _, tag := range v.Tags {
+		if tag.Key != nil && tag.Value != nil {
+			tags[*tag.Key] = *tag.Value
+		}
+	}
+	return tags
+}
+
+// testSuffix returns a short unique string so concurrently-running
+// tests (or re-runs against the same LocalStack instance) don't
+// collide on resource names/tags.
+func testSuffix() string {
+	return fmt.Sprintf("%d", time.Now().UnixNano()%1_000_000)
 }
 
 // ── Tests ────────────────────────────────────────────────────
 
-// End-to-end christen: pre-seed a reconciler-minted LAUNCHING row,
-// publish a launch event, the poller consumes it, the handler claims
-// the row, creates a volume tagged with the row's shard_id, attaches
-// it, and the ASG stub gets CONTINUE.
+// Christen: a fresh Launch (ExistingVolumeID empty) brings up an
+// instance, creates a new gp3 volume tagged with the shard id/tier, and
+// attaches it at /dev/sdf. The ASG-as-API replacement for the old
+// SNS-event → handler → create+attach path.
 func TestLifecycle_Integration_ChristenPath(t *testing.T) {
-	cfg := awsTestConfig(t)
-	topic, queue := setupQueue(t, cfg, "lifecycle-christen-"+testSuffix())
-
-	instanceID := seedInstance(t, cfg, "us-east-2a")
-	asgName := "weft-shard-small"
-	asgRecorder := &recordingASG{}
-	reg := logdb.NewShardRegistry()
-	vm := logdb.NewEC2VolumeManagerWithClient(ec2.NewFromConfig(cfg))
-
-	// Christen needs a LAUNCHING row to claim — that's the
-	// reconciler's pre-mint (coordinator/lifecycle.go:201-216). Seed
-	// one in the dev postgres instance and pass the store as
-	// ShardOps; without this the handler returns ABANDON.
-	db := openTestStore(t)
-	defer db.Close()
-
+	az := "us-east-2a"
+	prov, ec2c := newLaunchProvisioner(t, az)
 	shardID := "shard-christen-" + testSuffix()
-	if err := db.SaveShard(&store.ShardRecord{
-		ID:             shardID,
-		State:          string(logdb.StateLaunching),
-		Tier:           "small",
-		BucketID:       1, // default bucket — auto-created at coordinator startup
-		WindowStart:    time.Now().UTC(),
-		WindowEnd:      time.Now().UTC().Add(24 * time.Hour),
-		CreatedAt:      time.Now().UTC(),
-		HeartbeatToken: "lifecycle-test-token",
-	}); err != nil {
-		t.Fatalf("seed LAUNCHING row: %v", err)
-	}
-	t.Cleanup(func() { _ = db.DeleteShard(shardID) })
 
-	handler := logdb.NewLifecycleHandler(logdb.LifecycleHandlerConfig{
-		Volumes:      vm,
-		EC2Instances: ec2.NewFromConfig(cfg),
-		ASG:          asgRecorder,
-		Registry:     reg,
-		Store:        db,
-		ShardOps:     db,
-		TierByASG:    map[string]string{asgName: "small"},
-		SizeByTier:   map[string]int32{"small": 10},
-		DeviceName:   "/dev/sdf",
+	result, err := prov.Launch(context.Background(), logdb.LaunchSpec{
+		ShardID: shardID,
+		Tier:    "small",
+		AZ:      az,
+		SizeGB:  10, // fresh launch → create a volume
 	})
-	poller := logdb.NewLifecyclePoller(handler, sqs.NewFromConfig(cfg), queue)
-	poller.WaitTimeSeconds = 2
-	poller.VisibilityTimeout = 30
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	poller.Start(ctx)
-
-	publishLaunchEvent(t, cfg, topic, asgName, instanceID)
-
-	// The handler should create a new volume, attach it, and signal
-	// CompleteLifecycleAction with CONTINUE.
-	mapping := waitForAttached(t, cfg, instanceID, 30*time.Second)
-	if mapping.Ebs == nil || mapping.Ebs.VolumeId == nil {
-		t.Fatal("no volume attached")
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
 	}
-
-	// The volume should be tagged with the seeded shard_id (no
-	// placeholder — the row's id is final at christen time, see
-	// coordinator/lifecycle.go:201-228).
-	tags := describeVolumeTags(t, cfg, *mapping.Ebs.VolumeId)
-	if tags["shard_tier"] != "small" {
-		t.Errorf("shard_tier tag: got %q want small", tags["shard_tier"])
+	if result.InstanceID == "" || result.VolumeID == "" {
+		t.Fatalf("Launch returned empty ids: %+v", result)
 	}
+	if result.AZ != az {
+		t.Errorf("LaunchResult.AZ: got %q want %q", result.AZ, az)
+	}
+	t.Cleanup(func() {
+		_, _ = ec2c.DetachVolume(context.Background(), &ec2.DetachVolumeInput{VolumeId: aws.String(result.VolumeID), Force: aws.Bool(true)})
+		_, _ = ec2c.DeleteVolume(context.Background(), &ec2.DeleteVolumeInput{VolumeId: aws.String(result.VolumeID)})
+	})
+
+	// The created volume carries the shard tags and is attached to the
+	// launched instance at /dev/sdf (Launch blocks until in-use).
+	v := describeVolume(t, ec2c, result.VolumeID)
+	if v.State != ec2types.VolumeStateInUse {
+		t.Errorf("volume state: got %q want in-use", v.State)
+	}
+	tags := volumeTags(v)
 	if tags["shard_id"] != shardID {
-		t.Errorf("shard_id tag: got %q want %q", tags["shard_id"], shardID)
+		t.Errorf("volume shard_id tag: got %q want %q", tags["shard_id"], shardID)
+	}
+	if tags["shard_tier"] != "small" {
+		t.Errorf("volume shard_tier tag: got %q want small", tags["shard_tier"])
+	}
+	if len(v.Attachments) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(v.Attachments))
+	}
+	att := v.Attachments[0]
+	if att.InstanceId == nil || *att.InstanceId != result.InstanceID {
+		t.Errorf("attachment instance: got %v want %s", att.InstanceId, result.InstanceID)
+	}
+	if att.Device == nil || !strings.HasSuffix(*att.Device, "sdf") {
+		t.Errorf("attachment device: got %v want .../sdf", att.Device)
 	}
 
-	// Wait for the CONTINUE call.
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		calls := asgRecorder.snapshot()
-		if len(calls) > 0 {
-			break
+	// The instance was tagged with the shard id.
+	di, err := ec2c.DescribeInstances(context.Background(), &ec2.DescribeInstancesInput{
+		InstanceIds: []string{result.InstanceID},
+	})
+	if err != nil {
+		t.Fatalf("DescribeInstances: %v", err)
+	}
+	instTag := ""
+	for _, r := range di.Reservations {
+		for _, inst := range r.Instances {
+			for _, tag := range inst.Tags {
+				if tag.Key != nil && *tag.Key == "shard_id" && tag.Value != nil {
+					instTag = *tag.Value
+				}
+			}
 		}
-		time.Sleep(200 * time.Millisecond)
 	}
-	calls := asgRecorder.snapshot()
-	if len(calls) != 1 {
-		t.Fatalf("expected 1 CompleteLifecycleAction call, got %d: %v", len(calls), calls)
-	}
-	if !strings.HasPrefix(calls[0], "CONTINUE:") {
-		t.Errorf("expected CONTINUE, got %q", calls[0])
+	if instTag != shardID {
+		t.Errorf("instance shard_id tag: got %q want %q", instTag, shardID)
 	}
 }
 
-// End-to-end recover: pre-seed an orphan volume tagged with a shard_id
-// known to the registry (but not heartbeating), publish a launch
-// event, verify the existing volume gets attached rather than a new
-// one created.
+// Recover: a Launch with ExistingVolumeID set reattaches the surviving
+// volume to a fresh instance instead of creating a new one — the path
+// the shard SM takes after an instance dies (it carries the volume id
+// in shard_records.ebs_volume_id and passes it back to Launch).
 func TestLifecycle_Integration_RecoverPath(t *testing.T) {
-	cfg := awsTestConfig(t)
-	topic, queue := setupQueue(t, cfg, "lifecycle-recover-"+testSuffix())
-
-	asgName := "weft-shard-small"
-	shardID := "shard-ebs-recover-" + testSuffix()
 	az := "us-east-2a"
+	prov, ec2c := newLaunchProvisioner(t, az)
+	shardID := "shard-recover-" + testSuffix()
 
-	// Pre-seed an orphan volume tagged as a dead shard.
-	ec2c := ec2.NewFromConfig(cfg)
+	// Pre-seed the surviving volume, tagged as the shard's data volume.
 	volOut, err := ec2c.CreateVolume(context.Background(), &ec2.CreateVolumeInput{
 		AvailabilityZone: aws.String(az),
 		Size:             aws.Int32(10),
@@ -297,65 +271,35 @@ func TestLifecycle_Integration_RecoverPath(t *testing.T) {
 		TagSpecifications: []ec2types.TagSpecification{{
 			ResourceType: ec2types.ResourceTypeVolume,
 			Tags: []ec2types.Tag{
-				{Key: aws.String("shard_tier"), Value: aws.String("small")},
 				{Key: aws.String("shard_id"), Value: aws.String(shardID)},
+				{Key: aws.String("shard_tier"), Value: aws.String("small")},
 			},
 		}},
 	})
 	if err != nil {
-		t.Fatalf("CreateVolume: %v", err)
+		t.Fatalf("CreateVolume (surviving): %v", err)
 	}
-	orphanID := *volOut.VolumeId
-
-	instanceID := seedInstance(t, cfg, az)
-
-	reg := logdb.NewShardRegistry()
-	reg.Add(&logdb.ShardEntry{
-		ID:    shardID,
-		State: logdb.StateIngesting,
-		Addr:  "10.0.0.1:9000",
+	survivingID := *volOut.VolumeId
+	t.Cleanup(func() {
+		_, _ = ec2c.DetachVolume(context.Background(), &ec2.DetachVolumeInput{VolumeId: aws.String(survivingID), Force: aws.Bool(true)})
+		_, _ = ec2c.DeleteVolume(context.Background(), &ec2.DeleteVolumeInput{VolumeId: aws.String(survivingID)})
 	})
 
-	// Store with no heartbeat seeded for shardID → recognisedAsDead
-	// returns "dead", so the handler recovers the orphan volume.
-	db := openTestStore(t)
-	defer db.Close()
-
-	asgRecorder := &recordingASG{}
-	vm := logdb.NewEC2VolumeManagerWithClient(ec2c)
-	handler := logdb.NewLifecycleHandler(logdb.LifecycleHandlerConfig{
-		Volumes:      vm,
-		EC2Instances: ec2c,
-		ASG:          asgRecorder,
-		Registry:     reg,
-		Store:        db,
-		TierByASG:    map[string]string{asgName: "small"},
-		SizeByTier:   map[string]int32{"small": 10},
-		DeviceName:   "/dev/sdf",
+	result, err := prov.Launch(context.Background(), logdb.LaunchSpec{
+		ShardID:          shardID,
+		Tier:             "small",
+		AZ:               az,
+		ExistingVolumeID: survivingID, // recovery → reattach, don't create
 	})
-	poller := logdb.NewLifecyclePoller(handler, sqs.NewFromConfig(cfg), queue)
-	poller.WaitTimeSeconds = 2
-	poller.VisibilityTimeout = 30
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	poller.Start(ctx)
-
-	publishLaunchEvent(t, cfg, topic, asgName, instanceID)
-
-	mapping := waitForAttached(t, cfg, instanceID, 30*time.Second)
-	if mapping.Ebs == nil || mapping.Ebs.VolumeId == nil {
-		t.Fatal("no volume attached")
+	if err != nil {
+		t.Fatalf("Launch (recovery): %v", err)
 	}
-	if *mapping.Ebs.VolumeId != orphanID {
-		t.Errorf("attached wrong volume: got %s want %s (the orphan)", *mapping.Ebs.VolumeId, orphanID)
+	if result.VolumeID != survivingID {
+		t.Errorf("recovery attached wrong volume: got %s want %s (the survivor)", result.VolumeID, survivingID)
 	}
 
-	// Confirm no *new* volume was created for shardID — there should
-	// be exactly one volume tagged shard_id=<shardID> (the orphan we
-	// pre-seeded). LocalStack state persists across tests, so a
-	// broader "how many small-tier volumes exist" check catches
-	// leftovers from other tests rather than a bug here.
+	// No *new* volume was created for shardID — exactly one volume is
+	// tagged shard_id=<shardID>, the survivor we pre-seeded.
 	volumes, err := ec2c.DescribeVolumes(context.Background(), &ec2.DescribeVolumesInput{
 		Filters: []ec2types.Filter{
 			{Name: aws.String("tag:shard_id"), Values: []string{shardID}},
@@ -367,39 +311,19 @@ func TestLifecycle_Integration_RecoverPath(t *testing.T) {
 	if n := len(volumes.Volumes); n != 1 {
 		t.Errorf("expected exactly 1 volume tagged shard_id=%s, got %d", shardID, n)
 	}
+
+	// The survivor is attached to the recovery instance at /dev/sdf.
+	v := describeVolume(t, ec2c, survivingID)
+	if len(v.Attachments) != 1 || v.Attachments[0].InstanceId == nil || *v.Attachments[0].InstanceId != result.InstanceID {
+		t.Errorf("survivor not attached to recovery instance %s: attachments=%+v", result.InstanceID, v.Attachments)
+	}
 }
 
-func describeVolumeTags(t *testing.T, cfg aws.Config, volumeID string) map[string]string {
-	t.Helper()
-	out, err := ec2.NewFromConfig(cfg).DescribeVolumes(context.Background(), &ec2.DescribeVolumesInput{
-		VolumeIds: []string{volumeID},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(out.Volumes) == 0 {
-		t.Fatalf("volume %s not found", volumeID)
-	}
-	tags := map[string]string{}
-	for _, tag := range out.Volumes[0].Tags {
-		if tag.Key != nil && tag.Value != nil {
-			tags[*tag.Key] = *tag.Value
-		}
-	}
-	return tags
-}
-
-// testSuffix returns a short unique string so concurrently-running
-// tests (or re-runs against the same LocalStack instance) don't
-// collide on SNS/SQS names.
-func testSuffix() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano()%1_000_000)
-}
-
-// End-to-end retirement: pre-seed a volume tagged for an archived
-// shard, run retireVolume via the real VolumeManager against
-// LocalStack, and confirm a snapshot exists with the right tags and
-// the volume is deleted.
+// Retirement: the archive path snapshots a shard's volume (tagged with
+// shard_id + parquet_path for lineage), then deletes it. Exercises the
+// real VolumeManager SnapshotVolume/DeleteVolume calls — unchanged by
+// the ASG-as-API switch (the shard SM's evaluateArchiving drives this
+// same sequence in production).
 func TestLifecycle_Integration_RetirementPath(t *testing.T) {
 	cfg := awsTestConfig(t)
 	ec2c := ec2.NewFromConfig(cfg)
@@ -427,10 +351,10 @@ func TestLifecycle_Integration_RetirementPath(t *testing.T) {
 
 	vm := logdb.NewEC2VolumeManagerWithClient(ec2c)
 
-	// Exercise the production sequence directly — snapshot → detach →
-	// delete — through the real SDK calls. Skips the full archive()
-	// wrapper (which wants a DuckDBShard); this verifies the AWS
-	// side, not the Parquet export.
+	// Exercise the production sequence directly — snapshot → delete —
+	// through the real SDK calls. Skips the full archive() wrapper
+	// (which wants a DuckDBShard); this verifies the AWS side, not the
+	// Parquet export.
 	ctx := context.Background()
 	snapID, err := vm.SnapshotVolume(ctx, logdb.SnapshotOpts{
 		VolumeID:    volumeID,
@@ -468,17 +392,16 @@ func TestLifecycle_Integration_RetirementPath(t *testing.T) {
 		t.Errorf("snapshot parquet_path: got %q want %q", tags["parquet_path"], parquetPath)
 	}
 
-	// Volume isn't attached (we skipped attach above), so a
-	// non-force detach will error — fine, archive() always uses
-	// force=true for exactly this reason. Move straight to delete.
+	// Volume isn't attached (we skipped attach above), so a non-force
+	// detach would error — archive() always uses force=true for exactly
+	// this reason. Move straight to delete.
 	if err := vm.DeleteVolume(ctx, volumeID); err != nil {
 		t.Fatalf("DeleteVolume: %v", err)
 	}
 
-	// Volume should be gone. EC2 often returns an
-	// InvalidVolume.NotFound error for a deleted volume; that's the
-	// cleanest pass signal. If it does return a record, it must be
-	// in `deleted`/`deleting` — any other state is a bug.
+	// Volume should be gone. EC2 often returns an InvalidVolume.NotFound
+	// error for a deleted volume; that's the cleanest pass signal. If it
+	// does return a record, it must be in deleted/deleting.
 	volOut2, err := ec2c.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{
 		VolumeIds: []string{volumeID},
 	})
