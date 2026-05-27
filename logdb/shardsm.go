@@ -637,7 +637,6 @@ func (sh *Shard) configureOnHeartbeat(ctx context.Context, args ...any) error {
 	}
 
 	sh.mu.Lock()
-	defer sh.mu.Unlock()
 	sh.Addr = hb.Addr
 	sh.InstanceID = hb.InstanceID
 	sh.LastHeartbeatAt = sh.deps.Clock()
@@ -646,6 +645,15 @@ func (sh *Shard) configureOnHeartbeat(ctx context.Context, args ...any) error {
 	}
 	if dialed != nil {
 		sh.Live = dialed
+	}
+	sh.mu.Unlock()
+
+	// Persist the live addr (narrow write) so a coordinator restart can
+	// eager-dial this shard via ReconstructShard and RefreshFromStore
+	// stops clobbering it with the stale empty row. The heartbeat path is
+	// the sole owner of shard_records.addr.
+	if err := sh.deps.Store.SetShardAddr(sh.ID, hb.Addr); err != nil {
+		return fmt.Errorf("shardsm %s: persist addr %s: %w", sh.ID, hb.Addr, err)
 	}
 	return nil
 }
@@ -712,6 +720,12 @@ func (sh *Shard) reconnect(ctx context.Context, hb store.ShardHeartbeat) error {
 		sh.InstanceID = hb.InstanceID
 	}
 	sh.mu.Unlock()
+
+	// Persist the (possibly moved) addr so it survives RefreshFromStore and
+	// a later restart's eager-dial — same rationale as configureOnHeartbeat.
+	if err := sh.deps.Store.SetShardAddr(sh.ID, hb.Addr); err != nil {
+		log.Printf("shardsm %s: persist reconnect addr %s: %v", sh.ID, hb.Addr, err)
+	}
 
 	if old != nil {
 		go func() {

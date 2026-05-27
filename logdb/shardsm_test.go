@@ -641,6 +641,33 @@ func TestShardSM_ConfigureOnHeartbeatDialsAndAttaches(t *testing.T) {
 	}
 }
 
+// TestShardSM_HeartbeatPersistsAddr pins the addr-clobber fix: a heartbeat
+// that promotes a shard and sets its gRPC addr must persist that addr to
+// shard_records.addr, not just set it in memory. Without persistence,
+// RefreshFromStore re-reads the stale (empty) DB value and clobbers the
+// live addr each tick, and a coordinator restart can't eager-dial the
+// shard (ReconstructShard keys off shard_records.addr) — it stays invisible
+// to routing until the next heartbeat re-dials.
+func TestShardSM_HeartbeatPersistsAddr(t *testing.T) {
+	sm, db, entry := makeFixtureShardSM(t, StateLaunching)
+	entry.InstanceID = "i-abc" // so the heartbeat matches LAUNCHING
+
+	hb := store.ShardHeartbeat{ShardID: "s-test", Addr: "10.0.0.1:9000", InstanceID: "i-abc"}
+	if err := sm.Fire(context.Background(), TriggerHeartbeat, hb); err != nil {
+		t.Fatalf("Fire heartbeat: %v", err)
+	}
+	if entry.Addr != "10.0.0.1:9000" {
+		t.Fatalf("in-memory addr not set: got %q", entry.Addr)
+	}
+	rec, ok, err := (ShardStore{db}).GetShard("s-test")
+	if err != nil || !ok {
+		t.Fatalf("GetShard: ok=%v err=%v", ok, err)
+	}
+	if rec.Addr != "10.0.0.1:9000" {
+		t.Fatalf("shard_records.addr not persisted: got %q want 10.0.0.1:9000", rec.Addr)
+	}
+}
+
 func TestShardSM_ConfigureOnHeartbeatDialFailureSurfacesError(t *testing.T) {
 	fc := &fakeConfigurer{err: fmt.Errorf("connection refused")}
 	sm, _, entry := makeFixtureShardSM(t, StateLaunching, func(d *ShardDeps) { d.Configurer = fc })

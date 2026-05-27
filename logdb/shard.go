@@ -16,6 +16,7 @@ type shardRowStore interface {
 	GetShard(id string) (*Shard, bool, error)
 	DeleteShard(id string) error
 	SetShardState(id string, state ShardState) error
+	SetShardAddr(id, addr string) error
 	SetShardLaunchResult(id, instanceID, az, volumeID string, stripeIndex *int) error
 	IncrementShardLaunchAttempts(id string) error
 	SetShardParquetPath(id, path string) error
@@ -106,6 +107,17 @@ func (s ShardStore) SetShardLaunchResult(id, instanceID, az, volumeID string, st
 func (s ShardStore) SetShardState(id string, state ShardState) error {
 	return s.db().Model(&Shard{}).Where("id = ?", id).
 		Update("state", string(state)).Error
+}
+
+// SetShardAddr persists the live gRPC address a heartbeat reported.
+// Narrow (Select forces the single column, so an empty string still
+// writes) so the heartbeat path can persist addr without a full SaveShard
+// trampling lifecycle-owned fields. Persisting it is what lets
+// ReconstructShard eager-dial the shard after a coordinator restart and
+// stops RefreshFromStore from clobbering the live addr with a stale row.
+func (s ShardStore) SetShardAddr(id, addr string) error {
+	return s.db().Model(&Shard{}).Where("id = ?", id).
+		Select("Addr").Updates(&Shard{Addr: addr}).Error
 }
 
 // IncrementShardLaunchAttempts bumps launch_attempts by one.
