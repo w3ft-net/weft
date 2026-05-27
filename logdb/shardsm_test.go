@@ -264,6 +264,83 @@ func TestShardSM_EvaluateActiveNoStaleWhenFresh(t *testing.T) {
 	}
 }
 
+// TestShardSM_EvaluateIngestingDegradesOnFailures: an INGESTING shard
+// whose consecutive ingest failures reach SuspendFailureThreshold trips
+// the breaker → DEGRADED.
+func TestShardSM_EvaluateIngestingDegradesOnFailures(t *testing.T) {
+	sm, _, entry := makeFixtureShardSM(t, StateIngesting)
+	entry.IngestFailures = SuspendFailureThreshold // breaker tripped
+	// LastHeartbeatAt zero → fresh (not stale), so the degrade check runs.
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if st, _ := sm.smState(context.Background()); st != StateDegraded {
+		t.Fatalf("state: got %q want DEGRADED", st)
+	}
+}
+
+func TestShardSM_EvaluateIngestingHealthyStaysIngesting(t *testing.T) {
+	sm, _, entry := makeFixtureShardSM(t, StateIngesting)
+	entry.IngestFailures = SuspendFailureThreshold - 1 // below the breaker
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if st, _ := sm.smState(context.Background()); st != StateIngesting {
+		t.Fatalf("a healthy shard should stay INGESTING; got %q", st)
+	}
+}
+
+// TestShardSM_EvaluateDegradedRecoversAfterCooldown: once the cooldown
+// elapses, a DEGRADED shard half-opens back to INGESTING with its failure
+// count reset.
+func TestShardSM_EvaluateDegradedRecoversAfterCooldown(t *testing.T) {
+	sm, _, entry := makeFixtureShardSM(t, StateDegraded)
+	entry.IngestFailures = SuspendFailureThreshold
+	// clock() is 12:00; degraded well past the cooldown.
+	entry.degradedAt = time.Date(2026, 5, 21, 11, 55, 0, 0, time.UTC) // 5m ago > 2m cooldown
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if st, _ := sm.smState(context.Background()); st != StateIngesting {
+		t.Fatalf("state: got %q want INGESTING (half-open)", st)
+	}
+	if entry.IngestFailures != 0 {
+		t.Fatalf("failure count not reset on recovery: got %d", entry.IngestFailures)
+	}
+}
+
+func TestShardSM_EvaluateDegradedStaysDuringCooldown(t *testing.T) {
+	sm, _, entry := makeFixtureShardSM(t, StateDegraded)
+	entry.IngestFailures = SuspendFailureThreshold
+	entry.degradedAt = time.Date(2026, 5, 21, 11, 59, 30, 0, time.UTC) // 30s ago < 2m cooldown
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if st, _ := sm.smState(context.Background()); st != StateDegraded {
+		t.Fatalf("state: got %q want DEGRADED (still cooling down)", st)
+	}
+}
+
+// TestShardSM_DegradedInstanceDeathGoesToSuspended: a DEGRADED shard whose
+// instance also goes silent drops to the recovery branch, same as
+// INGESTING (the inherited HeartbeatStale edge).
+func TestShardSM_DegradedInstanceDeathGoesToSuspended(t *testing.T) {
+	sm, _, entry := makeFixtureShardSM(t, StateDegraded)
+	entry.EBSVolumeID = "vol-1"                                            // volume intact → SUSPENDED
+	entry.LastHeartbeatAt = time.Date(2026, 5, 21, 11, 50, 0, 0, time.UTC) // 10m stale > 2m
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if st, _ := sm.smState(context.Background()); st != StateSuspended {
+		t.Fatalf("state: got %q want SUSPENDED", st)
+	}
+}
+
 func TestShardSM_EvaluateSuspendedReapsThenRelaunches(t *testing.T) {
 	fl := &fakeLauncher{}
 	vm := &fakeVolumeManager{findResult: map[string]*VolumeInfo{"s-test": {VolumeID: "vol-1", AZ: "us-east-2a"}}}

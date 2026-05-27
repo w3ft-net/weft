@@ -87,7 +87,19 @@ type Shard struct {
 	// shard. In-memory only: a restart resets it and the next Evaluate
 	// re-drives any LAUNCHING row that never got an InstanceID.
 	launchInFlight atomic.Bool `gorm:"-" json:"-"`
+	// degradedAt is when this shard entered DEGRADED — the start of the
+	// ingest circuit-breaker cooldown evaluateDegraded measures against.
+	// In-memory only (guarded by mu): a restart loses it, so a DEGRADED
+	// shard re-admits immediately after a restart (optimistic — it retries
+	// writes and re-degrades if still broken).
+	degradedAt time.Time `gorm:"-" json:"-"`
 }
+
+// ingestRecoveryCooldown is how long a shard stays DEGRADED before
+// Evaluate re-admits it to INGESTING (half-open). Matches the heartbeat
+// stale window: long enough that a flapping shard isn't re-admitted every
+// tick, short enough that a transient ingest blip clears quickly.
+const ingestRecoveryCooldown = 2 * time.Minute
 
 // TableName pins the unified Shard type to the existing shard_records
 // table — the DB schema is unchanged by the type collapse.
@@ -426,11 +438,12 @@ func (r *ShardRegistry) AddServiceToShard(id string, namespaceID uint, service s
 
 // RecordIngestFailure increments the consecutive-failure counter for the
 // given shard and returns (count, threshold) so Shard.Ingest impls can
-// format an error message naming how persistent the failure is. It no
-// longer latches the shard out of write routing — a truly dead shard is
-// taken out by the FSM (HeartbeatStale → SUSPENDED), and a persistently
-// unhealthy-but-alive shard is future work (a persisted IngestUnhealthy
-// column). Pair with ResetIngestFailures on success so transient blips
+// format an error message naming how persistent the failure is. It
+// doesn't itself change routing — the next reconciler tick's
+// evaluateIngesting reads this count and, once it crosses
+// SuspendFailureThreshold, fires IngestDegraded (INGESTING → DEGRADED),
+// the FSM-native circuit breaker that replaced the old one-way Suspended
+// latch. Pair with ResetIngestFailures on success so transient blips
 // don't accumulate.
 func (r *ShardRegistry) RecordIngestFailure(id string) (count, threshold int) {
 	r.mu.Lock()

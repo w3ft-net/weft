@@ -35,6 +35,17 @@ const (
 	StateSuspended ShardState = "SUSPENDED"
 	StateArchived  ShardState = "ARCHIVED"
 	StateGone      ShardState = "GONE"
+	// StateDegraded is an alive shard whose ingest is persistently failing
+	// (consecutive failures crossed SuspendFailureThreshold). It's a
+	// circuit-breaker pause on INGESTING: excluded from write routing
+	// (ingestCandidate requires INGESTING) but still read-queryable (its
+	// data is intact on a live instance) and still counted as part of the
+	// bucket's live cohort so the breaker window doesn't churn a
+	// replacement. Evaluate re-admits it to INGESTING after a cooldown
+	// (half-open); a re-failure degrades it again, and a dead instance
+	// drops it to SUSPENDED like any INGESTING shard. Replaces the removed
+	// one-way Suspended ingest latch.
+	StateDegraded ShardState = "DEGRADED"
 )
 
 // BucketState is the persisted state of a bucket, mirroring

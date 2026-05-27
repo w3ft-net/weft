@@ -190,6 +190,18 @@ func (sh *Shard) configureSM() {
 	sh.sm.Configure(StateIngesting).
 		OnEntryFrom(TriggerHeartbeat, sh.configureOnHeartbeat).
 		Permit(TriggerRotateRequested, StateReadOnly).
+		Permit(TriggerIngestDegraded, StateDegraded).
+		PermitDynamic(TriggerHeartbeatStale, sh.staleTargetFromActive, sh.actuallyStale)
+
+	// DEGRADED is INGESTING's circuit-breaker pause: out of write routing,
+	// still read-queryable. It re-admits to INGESTING after a cooldown
+	// (IngestRecovered), rotates out normally (RotateRequested), and — if
+	// its instance also dies — drops to the recovery branch on the same
+	// HeartbeatStale edge INGESTING has.
+	sh.sm.Configure(StateDegraded).
+		OnEntry(sh.onEnterDegraded).
+		Permit(TriggerIngestRecovered, StateIngesting).
+		Permit(TriggerRotateRequested, StateReadOnly).
 		PermitDynamic(TriggerHeartbeatStale, sh.staleTargetFromActive, sh.actuallyStale)
 
 	sh.sm.Configure(StateReadOnly).
@@ -314,8 +326,12 @@ func (sh *Shard) Evaluate(ctx context.Context) error {
 	switch st {
 	case StateLaunching:
 		return sh.evaluateLaunching(ctx)
-	case StateIngesting, StateReadOnly:
+	case StateIngesting:
+		return sh.evaluateIngesting(ctx)
+	case StateReadOnly:
 		return sh.evaluateActive(ctx)
+	case StateDegraded:
+		return sh.evaluateDegraded(ctx)
 	case StateSuspended:
 		return sh.evaluateSuspended(ctx)
 	case StateArchiving:
@@ -405,6 +421,45 @@ func (sh *Shard) evaluateActive(ctx context.Context) error {
 		return sh.Fire(ctx, TriggerHeartbeatStale)
 	}
 	return nil
+}
+
+// evaluateIngesting is evaluateActive plus the ingest circuit breaker: a
+// shard whose consecutive ingest failures crossed SuspendFailureThreshold
+// trips to DEGRADED (out of write routing). Staleness wins — a silent
+// shard goes to the recovery branch regardless of ingest health.
+func (sh *Shard) evaluateIngesting(ctx context.Context) error {
+	if sh.actuallyStale(ctx) {
+		return sh.Fire(ctx, TriggerHeartbeatStale)
+	}
+	sh.mu.RLock()
+	unhealthy := sh.IngestFailures >= SuspendFailureThreshold
+	sh.mu.RUnlock()
+	if unhealthy {
+		return sh.Fire(ctx, TriggerIngestDegraded)
+	}
+	return nil
+}
+
+// evaluateDegraded drives the breaker. A DEGRADED shard whose instance
+// also went silent drops to the recovery branch (same as INGESTING).
+// Otherwise, once the cooldown elapses it half-opens: reset the failure
+// count and re-admit to INGESTING to retry writes. A zero degradedAt
+// (lost across a restart) re-admits immediately — the shard retries and
+// re-degrades on the next tick if still broken.
+func (sh *Shard) evaluateDegraded(ctx context.Context) error {
+	if sh.actuallyStale(ctx) {
+		return sh.Fire(ctx, TriggerHeartbeatStale)
+	}
+	sh.mu.RLock()
+	degradedAt := sh.degradedAt
+	sh.mu.RUnlock()
+	if !degradedAt.IsZero() && sh.deps.Clock().Sub(degradedAt) < ingestRecoveryCooldown {
+		return nil // still cooling down
+	}
+	sh.mu.Lock()
+	sh.IngestFailures = 0
+	sh.mu.Unlock()
+	return sh.Fire(ctx, TriggerIngestRecovered) // → INGESTING (half-open)
 }
 
 // evaluateSuspended drives recovery's reap phase. SUSPENDED holds the
@@ -749,6 +804,20 @@ func (sh *Shard) onEnterSuspended(ctx context.Context, args ...any) error {
 	defer sh.mu.Unlock()
 	sh.Addr = ""
 	sh.Live = nil
+	return nil
+}
+
+// onEnterDegraded stamps the cooldown start. The connection and instance
+// are left intact (unlike SUSPENDED) — the shard keeps serving reads and
+// heartbeating; it's just out of write routing until evaluateDegraded
+// re-admits it. Pure: no AWS side effects.
+func (sh *Shard) onEnterDegraded(ctx context.Context, args ...any) error {
+	sh.mu.Lock()
+	sh.degradedAt = sh.deps.Clock()
+	failures := sh.IngestFailures
+	sh.mu.Unlock()
+	log.Printf("shardsm %s: enter DEGRADED — %d consecutive ingest failures; out of write routing, retrying after %s",
+		sh.ID, failures, ingestRecoveryCooldown)
 	return nil
 }
 

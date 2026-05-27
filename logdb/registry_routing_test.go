@@ -101,6 +101,39 @@ func TestRegistry_ServingSetQueryRouting(t *testing.T) {
 	}
 }
 
+// TestRegistry_DegradedExcludedFromWritesButQueryable pins the
+// circuit-breaker routing contract: a DEGRADED shard is pulled from write
+// routing (IngestingShard skips it) but stays read-queryable
+// (MatchingEntries still returns it — its data is intact on a live
+// instance).
+func TestRegistry_DegradedExcludedFromWritesButQueryable(t *testing.T) {
+	s, err := shard.NewDuckDBShard("shard-degraded", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if err := s.Ingest([]*pb.LogRow{{Namespace: "vimgym", Customer: "kevlar", TsUnixNs: t0.UnixNano()}}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := NewShardRegistry()
+	reg.Add(&Shard{
+		ID: "shard-degraded", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
+		WindowStart: t0, WindowEnd: t2, State: StateDegraded, Live: s, RowCount: 1,
+	})
+
+	// Write routing skips it — no INGESTING candidate for vimgym.
+	if got := reg.IngestingShard(1, "vimgym"); got != nil {
+		t.Fatalf("IngestingShard returned a DEGRADED shard; want nil (excluded from writes)")
+	}
+
+	// Read routing still includes it.
+	matching := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), store.Tier("bolt"))
+	if len(matching) != 1 || matching[0].ID != "shard-degraded" {
+		t.Fatalf("DEGRADED shard not read-queryable: got %v", matching)
+	}
+}
+
 // TestRegistry_IngestingShard — IngestingShard looks up the entry by
 // app, with a per-shard Apps list. An app that no entry owns returns
 // nil; multi-app entries serve all their apps.

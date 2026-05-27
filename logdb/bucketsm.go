@@ -206,21 +206,21 @@ func (b *BucketSM) onEnterWarming(ctx context.Context, args ...any) error {
 
 	curStart, curEnd := b.CurrentWindow(now)
 	nextStart, nextEnd := b.NextWindow(now)
-	live, err := b.shardsInStates(StateLaunching, StateIngesting)
+	live, err := b.shardsInStates(liveCohort...)
 	if err != nil {
 		return fmt.Errorf("bucketsm %d: warming cohort query: %w", b.ID, err)
 	}
 
 	var warmStart, warmEnd time.Time
 	var stripes []int
-	if b.countIn(live, StateIngesting, curStart) >= b.Target {
+	if b.countServingIn(live, curStart) >= b.Target {
 		// Rotation — warm the next window, inheriting the current cohort's
 		// stripe indices.
 		warmStart, warmEnd = nextStart, nextEnd
 		covered := stripeSet(live, warmStart)
 		fallback := 0
 		for _, r := range live {
-			if r.State != StateIngesting || !windowStartEq(r, curStart) {
+			if !ingestingLike(r.State) || !windowStartEq(r, curStart) {
 				continue
 			}
 			si, ok := stripeOf(r)
@@ -272,7 +272,7 @@ func (b *BucketSM) onEnterRotating(ctx context.Context, args ...any) error {
 		log.Printf("bucketsm %d (%s): enter ROTATING — no controller, nothing to rotate", b.ID, b.Label)
 		return nil
 	}
-	ing, err := b.shardsInStates(StateIngesting)
+	ing, err := b.shardsInStates(servingCohort...)
 	if err != nil {
 		return fmt.Errorf("bucketsm %d: rotating cohort query: %w", b.ID, err)
 	}
@@ -300,7 +300,7 @@ func (b *BucketSM) onEnterScalingDown(ctx context.Context, args ...any) error {
 		log.Printf("bucketsm %d (%s): enter SCALING_DOWN — no controller, nothing to drain", b.ID, b.Label)
 		return nil
 	}
-	ing, err := b.shardsInStates(StateIngesting)
+	ing, err := b.shardsInStates(servingCohort...)
 	if err != nil {
 		return fmt.Errorf("bucketsm %d: scaling-down cohort query: %w", b.ID, err)
 	}
@@ -380,7 +380,7 @@ func (b *BucketSM) evaluateStasis(ctx context.Context, now time.Time) error {
 	if b.Target <= 0 {
 		return nil // no ingest capacity required — nothing to manage
 	}
-	live, err := b.shardsInStates(StateLaunching, StateIngesting)
+	live, err := b.shardsInStates(liveCohort...)
 	if err != nil {
 		return fmt.Errorf("bucketsm %d: stasis cohort query: %w", b.ID, err)
 	}
@@ -396,7 +396,7 @@ func (b *BucketSM) evaluateStasis(ctx context.Context, now time.Time) error {
 			hasNextWindow = true
 		}
 		switch r.State {
-		case StateIngesting:
+		case StateIngesting, StateDegraded:
 			ingesting++
 			if end, ok := windowEnd(r); ok && !now.Add(PrewarmLead).Before(end) {
 				rotationDue = true // within PrewarmLead of (or past) WindowEnd
@@ -430,7 +430,7 @@ func (b *BucketSM) evaluateStasis(ctx context.Context, now time.Time) error {
 // write-gap — lands with its config (CascadeStallThreshold /
 // ExtensionStep / MaxExtensions), which doesn't exist yet.
 func (b *BucketSM) evaluateWarming(ctx context.Context) error {
-	live, err := b.shardsInStates(StateLaunching, StateIngesting)
+	live, err := b.shardsInStates(liveCohort...)
 	if err != nil {
 		return fmt.Errorf("bucketsm %d: warming gate query: %w", b.ID, err)
 	}
@@ -444,7 +444,7 @@ func (b *BucketSM) evaluateWarming(ctx context.Context) error {
 			continue
 		}
 		total++
-		if r.State == StateIngesting {
+		if ingestingLike(r.State) {
 			ingesting++
 		}
 	}
@@ -458,7 +458,7 @@ func (b *BucketSM) evaluateWarming(ctx context.Context) error {
 // in a window older than the newest. onEnterRotating fired
 // RotateRequested at entry; this waits for each to land in READ_ONLY.
 func (b *BucketSM) evaluateRotating(ctx context.Context) error {
-	ing, err := b.shardsInStates(StateIngesting)
+	ing, err := b.shardsInStates(servingCohort...)
 	if err != nil {
 		return fmt.Errorf("bucketsm %d: rotating gate query: %w", b.ID, err)
 	}
@@ -478,7 +478,7 @@ func (b *BucketSM) evaluateRotating(ctx context.Context) error {
 // is back down to Target. onEnterScalingDown rotated the excess; this
 // waits for those flips to land.
 func (b *BucketSM) evaluateScalingDown(ctx context.Context) error {
-	ing, err := b.shardsInStates(StateIngesting)
+	ing, err := b.shardsInStates(servingCohort...)
 	if err != nil {
 		return fmt.Errorf("bucketsm %d: scaling-down gate query: %w", b.ID, err)
 	}
@@ -530,11 +530,30 @@ func (b *BucketSM) shardsInStates(states ...ShardState) ([]*Shard, error) {
 	return shards, nil
 }
 
-// countIn counts rows in the given state whose window_start equals start.
-func (b *BucketSM) countIn(shards []*Shard, state ShardState, start time.Time) int {
+// liveCohort / servingCohort name the state sets the bucket gates query
+// for. A shard is a live cohort member while warming up (LAUNCHING) or
+// serving (INGESTING, or its DEGRADED write-pause — still a cohort member,
+// just out of write routing). servingCohort drops LAUNCHING. Counting
+// DEGRADED here is what keeps the ingest circuit breaker from churning a
+// replacement during its cooldown window.
+var (
+	liveCohort    = []ShardState{StateLaunching, StateIngesting, StateDegraded}
+	servingCohort = []ShardState{StateIngesting, StateDegraded}
+)
+
+// ingestingLike reports whether a state is a serving-cohort member —
+// INGESTING or its DEGRADED breaker pause. The per-shard predicate the
+// gates use where they previously compared == StateIngesting.
+func ingestingLike(s ShardState) bool {
+	return s == StateIngesting || s == StateDegraded
+}
+
+// countServingIn counts serving-cohort rows (INGESTING or DEGRADED) whose
+// window_start equals start.
+func (b *BucketSM) countServingIn(shards []*Shard, start time.Time) int {
 	n := 0
 	for _, r := range shards {
-		if r.State == state && windowStartEq(r, start) {
+		if ingestingLike(r.State) && windowStartEq(r, start) {
 			n++
 		}
 	}

@@ -841,7 +841,14 @@ provisioner mint factory below.
 - **Prod launcher cutover (Phase 3)** — startProd still builds the legacy
   `ASGLauncher` (not `ShardLaunchAPI`), so prod mints-but-doesn't-launch
   until `SHARD_<TIER>_ASGS` + `ASGProvisioner` land.
-- **`IngestUnhealthy` column** — replacement for the removed Suspended latch.
+- **Ingest circuit breaker — DONE (FSM-native, no column).** Replaced the
+  removed Suspended latch with a `DEGRADED` shard state rather than a
+  boolean: INGESTING --IngestDegraded(failures≥threshold)--> DEGRADED (out
+  of write routing, still read-queryable), DEGRADED --IngestRecovered
+  (cooldown)--> INGESTING (half-open, reset count), DEGRADED --HeartbeatStale
+  (instance died)--> SUSPENDED. The bucket SM counts DEGRADED as a live
+  cohort member (liveCohort/servingCohort) so the breaker window doesn't
+  churn a replacement. No migration — `state` is unconstrained TEXT.
 - **Slice D — test rewrites (component 9).** Deletions fold into the
   switch commit (2); new scenario tests are step 4 above.
 

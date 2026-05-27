@@ -54,6 +54,18 @@ const (
 	// LAUNCHING phase has exhausted its retry budget.
 	TriggerLaunchFailed Trigger = "launch-failed"
 
+	// IngestDegraded is fired by an INGESTING shard's Evaluate() when its
+	// consecutive ingest-failure count has crossed SuspendFailureThreshold.
+	// Moves INGESTING → DEGRADED, pulling the shard out of write routing
+	// while leaving it read-queryable.
+	TriggerIngestDegraded Trigger = "ingest-degraded"
+
+	// IngestRecovered is fired by a DEGRADED shard's Evaluate() once the
+	// breaker cooldown has elapsed. Moves DEGRADED → INGESTING (half-open),
+	// resetting the failure count so writes get re-admitted; a fresh run of
+	// failures degrades it again.
+	TriggerIngestRecovered Trigger = "ingest-recovered"
+
 	// Stranded is fired by the shard's Evaluate() when SUSPENDED for
 	// long enough AND the volume has gone missing or been re-tagged
 	// (the "reapStrandedSuspended" case in the old reconciler).

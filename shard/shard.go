@@ -247,7 +247,7 @@ func wrapIngestError(shardID string, err error, rec IngestRecorder) error {
 	}
 	count, threshold := rec.RecordIngestFailure(shardID)
 	if count >= threshold {
-		return fmt.Errorf("ingest failed on shard %s (%d/%d consecutive, shard suspended): %w",
+		return fmt.Errorf("ingest failed on shard %s (%d/%d consecutive, shard will degrade out of write routing): %w",
 			shardID, count, threshold, err)
 	}
 	return fmt.Errorf("ingest failed on shard %s (%d/%d consecutive): %w",
