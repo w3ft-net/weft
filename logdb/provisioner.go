@@ -384,7 +384,13 @@ func (p *Provisioner) adoptFromHeartbeats() {
 func (p *Provisioner) AuthenticateShard(shardID, presented string) error {
 	expectedToken := ""
 	if entry := p.registry.Get(shardID); entry != nil {
+		// HeartbeatToken isn't immutable — RefreshFromStore rewrites it
+		// under e.mu every tick — so read it under the entry lock rather
+		// than racing that write (auth runs on the heartbeat RPC goroutine,
+		// the refresh on the reconciler tick).
+		entry.mu.RLock()
 		expectedToken = entry.HeartbeatToken
+		entry.mu.RUnlock()
 	} else if p.config.ShardOps != nil {
 		rec, ok, err := p.config.ShardOps.GetShard(shardID)
 		if err != nil {

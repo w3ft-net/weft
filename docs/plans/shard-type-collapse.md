@@ -156,12 +156,25 @@ table; only the Go representation collapses.
   Evaluate loop drive registry entries directly (binding lazily). Bonus: a
   GONE shard now leaves no leaked SM (it's removed from the registry).
 
-**Phase 3 — cleanup + verify.**
-- Remove the now-dead narrow store writes (they're methods on `*Shard`
-  now), the mapping helpers, and any lingering string-time parsing.
-- The per-`Shard` mutex now guards one type used by one set of methods —
-  re-audit the lock sites (far fewer, since there's no cross-type read).
-- Full suite under `-tags test -race`, plus the integration test.
+**Phase 3 — cleanup + verify. DONE (lock audit).**
+- The "remove now-dead narrow store writes" item was moot: `SetShardState`/
+  `SetShardLaunchResult`/`Clear*` are the live persistence layer on
+  `ShardStore`, not dead. No mapping helpers or string-time parsing of the
+  model remain (1a/1b removed them; the only `RFC3339` left is wire
+  formatting for the Configure RPC's string fields).
+- **Lock audit:** the per-`Shard` mutex (`sh.mu`) is now the single lock
+  guarding a shard's mutable fields — both the FSM methods and the registry
+  take it; the map is guarded by `r.mu`; order is `r.mu→e.mu` and no FSM
+  method holds `sh.mu` across a registry call (`TouchHeartbeat`/`Remove`
+  run lock-free of `sh.mu`). The original two-mutex race is structurally
+  gone. `sm`/`deps` are published under `sh.mu` in `ensureSM`, which
+  precedes every `Fire` (happens-before holds for the `go runLaunch()`
+  goroutine too). The audit found one pre-existing gap — `AuthenticateShard`
+  read `entry.HeartbeatToken` lock-free while `RefreshFromStore` rewrites it
+  under `e.mu` each tick — now read under `e.mu`. Latent (same value
+  written, so `-race` hadn't tripped it).
+- Full suite green under `-tags test -race`; both integration tag variants
+  compile.
 
 ## Risks / trade-offs
 
