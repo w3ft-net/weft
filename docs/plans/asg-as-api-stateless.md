@@ -841,9 +841,33 @@ provisioner mint factory below.
   tests moved to `*Shard.retireVolume` (archive_volumes_test.go). Bonus:
   ForceArchive now also terminates the instance (the old synchronous path
   leaked it).
-- **Prod launcher cutover (Phase 3)** — startProd still builds the legacy
-  `ASGLauncher` (not `ShardLaunchAPI`), so prod mints-but-doesn't-launch
-  until `SHARD_<TIER>_ASGS` + `ASGProvisioner` land.
+- **Prod launcher cutover (Phase 3) — Go side DONE; TF/apply is the
+  operator's.** `startProd` now builds the per-AZ `ASGProvisioner` (a
+  `ShardLaunchAPI`, sharing one `VolumeManager` with the archive path)
+  whenever `SHARD_<TIER>_ASGS` is set, falling back to the legacy
+  `ASGLauncher` (mint-but-don't-launch) otherwise. The change is additive
+  and deploy-safe: absent the new env var, boot is unchanged, so it can
+  ship ahead of the Terraform. `SHARD_<TIER>_ASGS` format:
+  `us-east-2a=weft-shard-small-2a,us-east-2b=weft-shard-small-2b` (parsed
+  by `parseShardASGs`).
+
+  **Rollout runbook (operator — infrastructure-{live,catalog}, prod
+  account 220664822695):**
+  1. Apply per-AZ ASG creation: one ASG per (tier, AZ), `desired=0`,
+     `min=0`, no scaling policies, no lifecycle hooks, EC2 health checks
+     off (the provisioner is the sole authority on desired_capacity). No
+     instances launch yet.
+  2. Set `SHARD_<TIER>_ASGS` in the coordinator's env (app_config_blob /
+     the mechanism the systemd unit reads) to the new per-AZ ASG names.
+     **Before `terraform apply`, check the plan for SSM/Secrets changes
+     per the Terraform-safety rule.** Restart the coordinator — it picks
+     up the env and starts launching into the per-AZ ASGs as the bucket
+     SM mints shards.
+  3. Drain the old single-tier ASGs: let their instances roll off via
+     rotation, or terminate manually to accelerate.
+  4. Once the old ASGs hold zero instances, delete them + the now-unused
+     SNS topic / SQS queue / lifecycle hooks. Then delete the legacy
+     `ASGLauncher` + the `--shard-asg-*` flags in a weft follow-up.
 - **Ingest circuit breaker — DONE (FSM-native, no column).** Replaced the
   removed Suspended latch with a `DEGRADED` shard state rather than a
   boolean: INGESTING --IngestDegraded(failures≥threshold)--> DEGRADED (out

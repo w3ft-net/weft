@@ -11,8 +11,10 @@ package logdb
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/kevlarcon/weft/shard"
@@ -78,35 +80,95 @@ func Start(cfg Config) (*Provisioner, error) {
 		log.Printf("coordinator: restored shards from store")
 	}
 
-	if len(cfg.ShardTiers) > 0 {
-		return startProd(cfg, reg, lambdaURL)
+	asgs := parseShardASGs()
+	if len(asgs) > 0 || len(cfg.ShardTiers) > 0 {
+		return startProd(cfg, reg, lambdaURL, asgs)
 	}
 	return startDev(cfg, reg)
 }
 
-// startProd wires the ASG launcher, provisioner, and volume manager for
-// production deploys.
-func startProd(cfg Config, reg *ShardRegistry, lambdaURL string) (*Provisioner, error) {
-	asgLauncher, err := NewASGLauncher(cfg.AWSRegion, cfg.ShardTiers, 9000)
-	if err != nil {
-		// Non-fatal historically: dev environments without AWS creds
-		// hit this and degrade gracefully. Preserve that.
-		log.Printf("warning: ASG launcher unavailable: %v", err)
-		return nil, nil
+// parseShardASGs reads the per-AZ ASG topology from the environment —
+// SHARD_SMALL_ASGS / SHARD_MEDIUM_ASGS / SHARD_LARGE_ASGS — each a
+// comma-separated list of az=asg-name pairs, e.g.
+//
+//	SHARD_SMALL_ASGS="us-east-2a=weft-shard-small-2a,us-east-2b=weft-shard-small-2b"
+//
+// Returns tier→az→asg. Empty when no tier is configured, in which case
+// startProd falls back to the legacy single-ASG-per-tier ShardLauncher (or
+// Start picks dev mode). Malformed pairs are logged and skipped rather
+// than failing boot.
+func parseShardASGs() map[string]map[string]string {
+	out := map[string]map[string]string{}
+	for tier, env := range map[string]string{
+		"small":  "SHARD_SMALL_ASGS",
+		"medium": "SHARD_MEDIUM_ASGS",
+		"large":  "SHARD_LARGE_ASGS",
+	} {
+		raw := os.Getenv(env)
+		if raw == "" {
+			continue
+		}
+		azMap := map[string]string{}
+		for _, pair := range strings.Split(raw, ",") {
+			az, asg, ok := strings.Cut(strings.TrimSpace(pair), "=")
+			az, asg = strings.TrimSpace(az), strings.TrimSpace(asg)
+			if !ok || az == "" || asg == "" {
+				log.Printf("warning: %s: malformed pair %q (want az=asg), skipping", env, pair)
+				continue
+			}
+			azMap[az] = asg
+		}
+		if len(azMap) > 0 {
+			out[tier] = azMap
+		}
+	}
+	return out
+}
+
+// startProd wires the launcher, provisioner, and volume manager for
+// production deploys. When asgs (SHARD_<TIER>_ASGS) is present it uses the
+// per-AZ ASGProvisioner — the real FSM launch primitive (Launch(spec)
+// creates+attaches the EBS volume and the shard FSM drives it). Otherwise
+// it falls back to the legacy single-ASG-per-tier ASGLauncher, which is
+// NOT a ShardLaunchAPI, so the FSM's launch paths no-op (mint-but-don't-
+// launch) until the per-AZ config lands — the pre-cutover state.
+func startProd(cfg Config, reg *ShardRegistry, lambdaURL string, asgs map[string]map[string]string) (*Provisioner, error) {
+	// One VolumeManager, shared: the ASGProvisioner creates/attaches volumes
+	// on launch, and the provisioner's shard SM retires them on archive.
+	vm, vmErr := NewEC2VolumeManager(cfg.AWSRegion)
+	if vmErr != nil {
+		log.Printf("warning: VolumeManager unavailable: %v", vmErr)
+	}
+
+	var launcher ShardLauncher
+	if len(asgs) > 0 {
+		if vmErr != nil {
+			return nil, fmt.Errorf("ASGProvisioner needs a VolumeManager (per-AZ launch creates/attaches volumes): %w", vmErr)
+		}
+		ap, err := NewASGProvisioner(cfg.AWSRegion, asgs, vm)
+		if err != nil {
+			return nil, fmt.Errorf("ASG provisioner: %w", err)
+		}
+		launcher = ap
+		log.Printf("provisioner: ASGProvisioner (per-AZ) for %d tier(s): %v", len(asgs), asgs)
+	} else {
+		asgLauncher, err := NewASGLauncher(cfg.AWSRegion, cfg.ShardTiers, 9000)
+		if err != nil {
+			// Non-fatal historically: dev environments without AWS creds
+			// hit this and degrade gracefully. Preserve that.
+			log.Printf("warning: ASG launcher unavailable: %v", err)
+			return nil, nil
+		}
+		launcher = asgLauncher
+		log.Printf("provisioner: legacy ASGLauncher for tiers %v — set SHARD_<TIER>_ASGS to enable per-AZ launching", cfg.ShardTiers)
 	}
 
 	provConfig := DefaultProvisionerConfig()
 	provConfig.ShardSecret = cfg.ShardSecret
 	provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
 	provConfig.LambdaFunctionURL = lambdaURL
-	prov := NewProvisioner(reg, asgLauncher, provConfig)
-
-	// Attach a VolumeManager so the shard SM can create/attach/retire EBS
-	// volumes on launch and archive. Unavailable when the EC2 SDK can't
-	// load (warning only — the rest of the provisioner still functions).
-	if vm, err := NewEC2VolumeManager(cfg.AWSRegion); err != nil {
-		log.Printf("warning: VolumeManager unavailable: %v", err)
-	} else {
+	prov := NewProvisioner(reg, launcher, provConfig)
+	if vmErr == nil {
 		prov.SetVolumeManager(vm)
 	}
 
@@ -117,7 +179,6 @@ func startProd(cfg Config, reg *ShardRegistry, lambdaURL string) (*Provisioner, 
 	prov.LoadStateMachines()
 
 	prov.Start(cfg.Ctx)
-	log.Printf("provisioner: started with ASG tiers %v", cfg.ShardTiers)
 	return prov, nil
 }
 

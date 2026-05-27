@@ -90,6 +90,14 @@ type ASGProvisioner struct {
 	launchLocks map[string]*sync.Mutex
 }
 
+// ASGProvisioner is both the FSM launch primitive (ShardLaunchAPI) and a
+// ShardLauncher (so NewProvisioner accepts it); the provisioner drives it
+// through the former.
+var (
+	_ ShardLaunchAPI = (*ASGProvisioner)(nil)
+	_ ShardLauncher  = (*ASGProvisioner)(nil)
+)
+
 // NewASGProvisioner builds a real ASG-backed provisioner. asgs maps
 // tier → az → ASG name (parsed from SHARD_<TIER>_ASGS at boot).
 func NewASGProvisioner(region string, asgs map[string]map[string]string, volumes VolumeManager) (*ASGProvisioner, error) {
@@ -225,6 +233,22 @@ func (p *ASGProvisioner) Terminate(ctx context.Context, instanceID string) error
 		return nil
 	}
 	return err
+}
+
+// LaunchInstance / TerminateInstance satisfy the legacy ShardLauncher
+// interface so NewProvisioner accepts an *ASGProvisioner. The provisioner
+// drives launches through the ShardLaunchAPI surface (Launch/Terminate)
+// via a type assertion; these exist only for the constructor's parameter
+// type. LaunchInstance is never called on the ASG path (launches go
+// through Launch(spec), driven by the shard FSM).
+func (p *ASGProvisioner) LaunchInstance(context.Context, string) (string, error) {
+	return "", fmt.Errorf("ASGProvisioner.LaunchInstance is a no-op; launches go through Launch(spec)")
+}
+
+// TerminateInstance delegates to Terminate using the instance id (addr
+// ignored — the ASG path tracks instances by id, read from shard_records).
+func (p *ASGProvisioner) TerminateInstance(ctx context.Context, id, _ string) error {
+	return p.Terminate(ctx, id)
 }
 
 // groupSnapshot returns the set of InstanceIDs currently in the ASG and
