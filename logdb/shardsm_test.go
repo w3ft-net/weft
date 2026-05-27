@@ -51,10 +51,12 @@ func seedBucket(t *testing.T, db *store.Store, state BucketState) *store.Bucket 
 	return b
 }
 
-// makeFixtureShardSM builds a ShardSM in initialState backed by a real
-// (transaction-scoped) store. Seeds a bucket + shard_records row, then
-// returns the SM, the store, and the in-memory entry the SM mutates.
-func makeFixtureShardSM(t *testing.T, initialState ShardState, customize ...func(*ShardSMDeps)) (*ShardSM, *store.Store, *Shard) {
+// makeFixtureShardSM builds a shard in initialState backed by a real
+// (transaction-scoped) store, with its FSM bound. Seeds a bucket +
+// shard_records row, then returns the shard three ways for call-site
+// convenience: the first and third returns are the SAME *Shard (the type
+// is its own SM now — sm and entry collapsed), the middle is the store.
+func makeFixtureShardSM(t *testing.T, initialState ShardState, customize ...func(*ShardDeps)) (*Shard, *store.Store, *Shard) {
 	t.Helper()
 	db := openSMTestStore(t)
 	bucket := seedBucket(t, db, BucketStasis)
@@ -76,7 +78,7 @@ func makeFixtureShardSM(t *testing.T, initialState ShardState, customize ...func
 		State:    initialState,
 	}
 	clock := func() time.Time { return time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC) }
-	deps := ShardSMDeps{
+	deps := ShardDeps{
 		Store:          ShardStore{db},
 		Clock:          clock,
 		StaleThreshold: 2 * time.Minute,
@@ -84,8 +86,8 @@ func makeFixtureShardSM(t *testing.T, initialState ShardState, customize ...func
 	for _, c := range customize {
 		c(&deps)
 	}
-	sm := NewShardSM(entry, deps)
-	return sm, db, entry
+	entry.ensureSM(newShardDeps(deps))
+	return entry, db, entry
 }
 
 // fakeLauncher is a ShardLaunchAPI that records Launch/Terminate calls
@@ -138,7 +140,7 @@ func (f *fakeLauncher) launchCount() int {
 
 // waitForLaunch blocks until the SM's async launch goroutine finishes
 // (launchInFlight cleared), or fails the test after a short deadline.
-func waitForLaunch(t *testing.T, sm *ShardSM) {
+func waitForLaunch(t *testing.T, sm *Shard) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -152,7 +154,7 @@ func waitForLaunch(t *testing.T, sm *ShardSM) {
 
 func TestShardSM_EvaluateLaunchingKicksFreshLaunch(t *testing.T) {
 	fl := &fakeLauncher{}
-	sm, db, entry := makeFixtureShardSM(t, StateLaunching, func(d *ShardSMDeps) { d.Launcher = fl })
+	sm, db, entry := makeFixtureShardSM(t, StateLaunching, func(d *ShardDeps) { d.Launcher = fl })
 	entry.AZ = "us-east-2a"
 	si := 0
 	entry.StripeIndex = &si
@@ -180,7 +182,7 @@ func TestShardSM_EvaluateLaunchingKicksFreshLaunch(t *testing.T) {
 
 func TestShardSM_EvaluateLaunchingNoopWhenInstanceSet(t *testing.T) {
 	fl := &fakeLauncher{}
-	sm, _, entry := makeFixtureShardSM(t, StateLaunching, func(d *ShardSMDeps) { d.Launcher = fl })
+	sm, _, entry := makeFixtureShardSM(t, StateLaunching, func(d *ShardDeps) { d.Launcher = fl })
 	entry.InstanceID = "i-existing"
 
 	if err := sm.Evaluate(context.Background()); err != nil {
@@ -193,7 +195,7 @@ func TestShardSM_EvaluateLaunchingNoopWhenInstanceSet(t *testing.T) {
 
 func TestShardSM_EvaluateLaunchingBudgetExhaustedGoesGone(t *testing.T) {
 	fl := &fakeLauncher{}
-	sm, _, entry := makeFixtureShardSM(t, StateLaunching, func(d *ShardSMDeps) {
+	sm, _, entry := makeFixtureShardSM(t, StateLaunching, func(d *ShardDeps) {
 		d.Launcher = fl
 		d.LaunchRetryBudget = 3
 	})
@@ -205,7 +207,7 @@ func TestShardSM_EvaluateLaunchingBudgetExhaustedGoesGone(t *testing.T) {
 	if fl.launchCount() != 0 {
 		t.Fatalf("exhausted budget should not launch; got %d calls", fl.launchCount())
 	}
-	st, _ := sm.State(context.Background())
+	st, _ := sm.smState(context.Background())
 	if st != StateGone {
 		t.Fatalf("state: got %q want GONE", st)
 	}
@@ -213,7 +215,7 @@ func TestShardSM_EvaluateLaunchingBudgetExhaustedGoesGone(t *testing.T) {
 
 func TestShardSM_EvaluateLaunchFailureBumpsAttempts(t *testing.T) {
 	fl := &fakeLauncher{err: fmt.Errorf("InsufficientInstanceCapacity")}
-	sm, db, entry := makeFixtureShardSM(t, StateLaunching, func(d *ShardSMDeps) { d.Launcher = fl })
+	sm, db, entry := makeFixtureShardSM(t, StateLaunching, func(d *ShardDeps) { d.Launcher = fl })
 	entry.AZ = "us-east-2a"
 
 	if err := sm.Evaluate(context.Background()); err != nil {
@@ -228,7 +230,7 @@ func TestShardSM_EvaluateLaunchFailureBumpsAttempts(t *testing.T) {
 	if rec.LaunchAttempts != 1 {
 		t.Fatalf("persisted launch_attempts: got %d want 1", rec.LaunchAttempts)
 	}
-	st, _ := sm.State(context.Background())
+	st, _ := sm.smState(context.Background())
 	if st != StateLaunching {
 		t.Fatalf("a retryable failure should stay LAUNCHING; got %q", st)
 	}
@@ -242,7 +244,7 @@ func TestShardSM_EvaluateActiveFiresStaleToSuspended(t *testing.T) {
 	if err := sm.Evaluate(context.Background()); err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
-	st, _ := sm.State(context.Background())
+	st, _ := sm.smState(context.Background())
 	if st != StateSuspended {
 		t.Fatalf("state: got %q want SUSPENDED", st)
 	}
@@ -256,7 +258,7 @@ func TestShardSM_EvaluateActiveNoStaleWhenFresh(t *testing.T) {
 	if err := sm.Evaluate(context.Background()); err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
-	st, _ := sm.State(context.Background())
+	st, _ := sm.smState(context.Background())
 	if st != StateIngesting {
 		t.Fatalf("a fresh shard should stay INGESTING; got %q", st)
 	}
@@ -265,7 +267,7 @@ func TestShardSM_EvaluateActiveNoStaleWhenFresh(t *testing.T) {
 func TestShardSM_EvaluateSuspendedReapsThenRelaunches(t *testing.T) {
 	fl := &fakeLauncher{}
 	vm := &fakeVolumeManager{findResult: map[string]*VolumeInfo{"s-test": {VolumeID: "vol-1", AZ: "us-east-2a"}}}
-	sm, db, entry := makeFixtureShardSM(t, StateSuspended, func(d *ShardSMDeps) {
+	sm, db, entry := makeFixtureShardSM(t, StateSuspended, func(d *ShardDeps) {
 		d.Launcher = fl
 		d.Volumes = vm
 	})
@@ -290,7 +292,7 @@ func TestShardSM_EvaluateSuspendedReapsThenRelaunches(t *testing.T) {
 	if rec.AZ != "us-east-2a" || rec.EBSVolumeID != "vol-1" {
 		t.Fatalf("reap clobbered az/volume: az=%q vol=%q", rec.AZ, rec.EBSVolumeID)
 	}
-	if st, _ := sm.State(context.Background()); st != StateLaunching {
+	if st, _ := sm.smState(context.Background()); st != StateLaunching {
 		t.Fatalf("after reap: got %q want LAUNCHING", st)
 	}
 
@@ -313,7 +315,7 @@ func TestShardSM_EvaluateSuspendedReapsThenRelaunches(t *testing.T) {
 func TestShardSM_EvaluateSuspendedStrandedWhenVolumeGone(t *testing.T) {
 	fl := &fakeLauncher{}
 	vm := &fakeVolumeManager{} // FindByShard returns nil → volume gone
-	sm, _, entry := makeFixtureShardSM(t, StateSuspended, func(d *ShardSMDeps) {
+	sm, _, entry := makeFixtureShardSM(t, StateSuspended, func(d *ShardDeps) {
 		d.Launcher = fl
 		d.Volumes = vm
 	})
@@ -323,7 +325,7 @@ func TestShardSM_EvaluateSuspendedStrandedWhenVolumeGone(t *testing.T) {
 	if err := sm.Evaluate(context.Background()); err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
-	if st, _ := sm.State(context.Background()); st != StateGone {
+	if st, _ := sm.smState(context.Background()); st != StateGone {
 		t.Fatalf("stranded shard: got %q want GONE", st)
 	}
 	if len(fl.terminated) != 0 {
@@ -337,7 +339,7 @@ func TestShardSM_EvaluateSuspendedRestartAfterReapRelaunches(t *testing.T) {
 	// reap nothing — it goes straight to LAUNCHING.
 	fl := &fakeLauncher{}
 	vm := &fakeVolumeManager{findResult: map[string]*VolumeInfo{"s-test": {VolumeID: "vol-1"}}}
-	sm, _, entry := makeFixtureShardSM(t, StateSuspended, func(d *ShardSMDeps) {
+	sm, _, entry := makeFixtureShardSM(t, StateSuspended, func(d *ShardDeps) {
 		d.Launcher = fl
 		d.Volumes = vm
 	})
@@ -350,7 +352,7 @@ func TestShardSM_EvaluateSuspendedRestartAfterReapRelaunches(t *testing.T) {
 	if len(fl.terminated) != 0 {
 		t.Fatalf("nothing to reap; terminated=%v", fl.terminated)
 	}
-	if st, _ := sm.State(context.Background()); st != StateLaunching {
+	if st, _ := sm.smState(context.Background()); st != StateLaunching {
 		t.Fatalf("got %q want LAUNCHING", st)
 	}
 }
@@ -366,7 +368,7 @@ func TestShardSM_LaunchingToIngestingOnMatchingHeartbeat(t *testing.T) {
 		t.Fatalf("Fire heartbeat: %v", err)
 	}
 
-	got, err := sm.State(context.Background())
+	got, err := sm.smState(context.Background())
 	if err != nil {
 		t.Fatalf("State: %v", err)
 	}
@@ -404,7 +406,7 @@ func TestShardSM_LaunchingToGoneOnLaunchFailed(t *testing.T) {
 		t.Fatalf("Fire LaunchFailed: %v", err)
 	}
 	// GONE.OnEntry deletes the row → state read returns GONE
-	got, err := sm.State(context.Background())
+	got, err := sm.smState(context.Background())
 	if err != nil {
 		t.Fatalf("State: %v", err)
 	}
@@ -472,7 +474,7 @@ func TestShardSM_IngestingToGoneOnStaleWithoutVolume(t *testing.T) {
 	if err := sm.Fire(context.Background(), TriggerHeartbeatStale); err != nil {
 		t.Fatalf("Fire stale: %v", err)
 	}
-	got, err := sm.State(context.Background())
+	got, err := sm.smState(context.Background())
 	if err != nil {
 		t.Fatalf("State: %v", err)
 	}
@@ -520,7 +522,7 @@ func TestShardSM_SuspendedToGoneOnStranded(t *testing.T) {
 	if err := sm.Fire(context.Background(), TriggerStranded); err != nil {
 		t.Fatalf("Fire Stranded: %v", err)
 	}
-	got, err := sm.State(context.Background())
+	got, err := sm.smState(context.Background())
 	if err != nil {
 		t.Fatalf("State: %v", err)
 	}
@@ -608,7 +610,7 @@ func (s *fakeArchivableShard) Archive(_ context.Context, _ string) (string, erro
 
 func TestShardSM_ConfigureOnHeartbeatDialsAndAttaches(t *testing.T) {
 	fc := &fakeConfigurer{}
-	sm, _, entry := makeFixtureShardSM(t, StateLaunching, func(d *ShardSMDeps) { d.Configurer = fc })
+	sm, _, entry := makeFixtureShardSM(t, StateLaunching, func(d *ShardDeps) { d.Configurer = fc })
 	entry.InstanceID = "i-abc"
 	entry.Services = []store.ShardService{{NamespaceID: 1, Service: "warp"}}
 	entry.WindowStart = time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
@@ -619,7 +621,7 @@ func TestShardSM_ConfigureOnHeartbeatDialsAndAttaches(t *testing.T) {
 	if err := sm.Fire(context.Background(), TriggerHeartbeat, hb); err != nil {
 		t.Fatalf("Fire heartbeat: %v", err)
 	}
-	if st, _ := sm.State(context.Background()); st != StateIngesting {
+	if st, _ := sm.smState(context.Background()); st != StateIngesting {
 		t.Fatalf("state: got %q want INGESTING", st)
 	}
 	if fc.dialAddr != "10.0.0.1:9000" {
@@ -641,7 +643,7 @@ func TestShardSM_ConfigureOnHeartbeatDialsAndAttaches(t *testing.T) {
 
 func TestShardSM_ConfigureOnHeartbeatDialFailureSurfacesError(t *testing.T) {
 	fc := &fakeConfigurer{err: fmt.Errorf("connection refused")}
-	sm, _, entry := makeFixtureShardSM(t, StateLaunching, func(d *ShardSMDeps) { d.Configurer = fc })
+	sm, _, entry := makeFixtureShardSM(t, StateLaunching, func(d *ShardDeps) { d.Configurer = fc })
 	entry.InstanceID = "i-abc"
 
 	hb := store.ShardHeartbeat{ShardID: "s-test", Addr: "10.0.0.1:9000", InstanceID: "i-abc"}
@@ -655,7 +657,7 @@ func TestShardSM_ConfigureOnHeartbeatDialFailureSurfacesError(t *testing.T) {
 	// stateless writes the destination before running OnEntry, so the row
 	// is already INGESTING despite the failed dial — a later heartbeat
 	// reconnects it (slice C).
-	if st, _ := sm.State(context.Background()); st != StateIngesting {
+	if st, _ := sm.smState(context.Background()); st != StateIngesting {
 		t.Fatalf("state: got %q want INGESTING (write lands before OnEntry)", st)
 	}
 }
@@ -664,7 +666,7 @@ func TestShardSM_EvaluateArchivingExportsRetiresTerminatesThenCompletes(t *testi
 	fl := &fakeLauncher{}
 	vm := &fakeVolumeManager{}
 	live := &fakeArchivableShard{id: "s-test", archivePath: "s3://weft/warp/s-test.parquet"}
-	sm, db, entry := makeFixtureShardSM(t, StateArchiving, func(d *ShardSMDeps) {
+	sm, db, entry := makeFixtureShardSM(t, StateArchiving, func(d *ShardDeps) {
 		d.Launcher = fl
 		d.Volumes = vm
 		d.ParquetDir = "s3://weft"
@@ -707,7 +709,7 @@ func TestShardSM_EvaluateArchivingExportsRetiresTerminatesThenCompletes(t *testi
 	}
 	// All three steps landed in one tick → the shard fires ArchiveComplete
 	// itself and reaches the clean terminal.
-	if st, _ := sm.State(context.Background()); st != StateArchived {
+	if st, _ := sm.smState(context.Background()); st != StateArchived {
 		t.Fatalf("state: got %q want ARCHIVED after a complete archiving pass", st)
 	}
 }
@@ -715,7 +717,7 @@ func TestShardSM_EvaluateArchivingExportsRetiresTerminatesThenCompletes(t *testi
 func TestShardSM_EvaluateArchivedTerminalNoop(t *testing.T) {
 	fl := &fakeLauncher{}
 	vm := &fakeVolumeManager{}
-	sm, _, _ := makeFixtureShardSM(t, StateArchived, func(d *ShardSMDeps) {
+	sm, _, _ := makeFixtureShardSM(t, StateArchived, func(d *ShardDeps) {
 		d.Launcher = fl
 		d.Volumes = vm
 	})
@@ -728,7 +730,7 @@ func TestShardSM_EvaluateArchivedTerminalNoop(t *testing.T) {
 	if len(fl.terminated) != 0 {
 		t.Fatalf("a terminal ARCHIVED shard should do nothing; terminated=%v", fl.terminated)
 	}
-	if st, _ := sm.State(context.Background()); st != StateArchived {
+	if st, _ := sm.smState(context.Background()); st != StateArchived {
 		t.Fatalf("state: got %q want ARCHIVED unchanged", st)
 	}
 }
@@ -737,7 +739,7 @@ func TestShardSM_EvaluateArchivingRetriesOnExportFailure(t *testing.T) {
 	fl := &fakeLauncher{}
 	vm := &fakeVolumeManager{}
 	live := &fakeArchivableShard{id: "s-test", archiveErr: fmt.Errorf("s3 unreachable")}
-	sm, db, entry := makeFixtureShardSM(t, StateArchiving, func(d *ShardSMDeps) {
+	sm, db, entry := makeFixtureShardSM(t, StateArchiving, func(d *ShardDeps) {
 		d.Launcher = fl
 		d.Volumes = vm
 		d.ParquetDir = "s3://weft"
@@ -765,7 +767,7 @@ func TestShardSM_EvaluateArchivingRetriesOnExportFailure(t *testing.T) {
 	if len(fl.terminated) != 0 {
 		t.Fatalf("instance terminated before the export landed: %v", fl.terminated)
 	}
-	if st, _ := sm.State(context.Background()); st != StateArchiving {
+	if st, _ := sm.smState(context.Background()); st != StateArchiving {
 		t.Fatalf("state: got %q want ARCHIVING (incomplete archive must not advance)", st)
 	}
 }

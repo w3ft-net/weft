@@ -127,34 +127,34 @@ table; only the Go representation collapses.
 
 ## Phased migration (each phase compiles + `-race`-green)
 
-**Phase 1 — merge the data (ShardRecord + ShardEntry → Shard).**
-- **1a SHIPPED** (`40506cf`): migration 062 (`timestamptz`) + `ShardRecord`'s
+**Phase 1 — merge the data (ShardRecord + ShardEntry → Shard). SHIPPED.**
+- **1a** (`40506cf`): migration 062 (`timestamptz`) + `ShardRecord`'s
   three time fields → `time.Time` (matching `ShardEntry`). This deleted the
   string↔time mapping at every Record↔Entry boundary (`persist`/
   `LoadFromStore`/`RefreshFromStore` assign directly; the bucket SM compares
-  `time.Time`). Both types still exist — this is the time-handling
-  foundation, not the merge. Full suite green; logdb `-race` clean. **The
-  schema.sql collapse is post-deploy** (run `make collapse` after prod
-  applies 062). NEXT: the type-merge proper (below).
-- Ship the `timestamptz` migration for `window_start/end` + `created_at`
-  (decision 1) so the unified type's times are native `time.Time`. *(done in 1a)*
-- Define `logdb.Shard` with gorm tags + `TableName()`; `gorm:"-"` on
-  runtime fields.
-- Move the shard-row store methods into `logdb` (a `shardStore` helper
-  over `store.DB()`), returning/taking `*Shard`. Delete `store.ShardRecord`.
-- Registry holds `*Shard`; delete `persist`/`LoadFromStore`/
-  `RefreshFromStore` mapping bodies in favour of direct gorm load/save.
-- Point `api/admin.go` at `logdb.Shard` (decision 2).
-- The FSM still uses a separate `ShardSM` wrapping `*Shard` in this phase
-  (behavior unchanged) — only the data types collapse here.
+  `time.Time`). Both types still existed — the time-handling foundation,
+  not the merge. **The schema.sql collapse is post-deploy** (run `make
+  collapse` after prod applies 062).
+- **1b** (`9313d64`): the type-merge proper. `logdb.Shard` is the unified
+  type (gorm tags + `TableName()`, `gorm:"-"` on runtime fields); shard-row
+  methods moved to `logdb.ShardStore`; `store.ShardRecord` deleted; registry
+  holds `*Shard`; `api/admin.go` points at `logdb.Shard`. `ShardSM` still
+  wrapped `*Shard` here — only the data types collapsed.
 
-**Phase 2 — fold the behavior (ShardSM → Shard).**
-- Move the `stateless.StateMachine`, `Fire`, `Evaluate`, and all
-  action/guard methods onto `*Shard`. Collapse `ShardSMDeps` → a single
-  `ShardDeps` the provisioner holds; each `Shard` gets a `deps` pointer at
-  construction. Delete `ShardSM`.
-- `provisioner_sm.go`'s `MintShard`/`FireShard`/`shardSMs` map collapse:
-  the registry's `map[string]*Shard` *is* the SM map.
+**Phase 2 — fold the behavior (ShardSM → Shard). SHIPPED.**
+- The `stateless.StateMachine`, `Fire`, `Evaluate`, and all action/guard
+  methods are now methods on `*Shard` (the `sm`/`deps`/`launchInFlight`
+  fields live on the struct, `gorm:"-"`). `ShardSMDeps` → one shared
+  `*ShardDeps` the provisioner builds once (sync.Once) and every shard
+  references; `bindSM`→`ensureSM` (idempotent, double-checked) binds it.
+  `ShardSM` is deleted; `State(ctx)`→`smState(ctx)` to dodge the `State`
+  field. The `State(ctx)` accessor that read the DB stays (behavior
+  unchanged — Evaluate is still DB-authoritative, not in-memory).
+- The provisioner's `shardSMs` map is gone: the registry's
+  `map[string]*Shard` IS the SM set. `LoadStateMachines`/`MintShard` bind
+  via `ensureSM`; `FireShard`/`ProcessHeartbeat`/`shardByInstance`/the
+  Evaluate loop drive registry entries directly (binding lazily). Bonus: a
+  GONE shard now leaves no leaked SM (it's removed from the registry).
 
 **Phase 3 — cleanup + verify.**
 - Remove the now-dead narrow store writes (they're methods on `*Shard`

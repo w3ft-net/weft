@@ -178,16 +178,20 @@ type Provisioner struct {
 	volumes     VolumeManager // optional; the shard SM creates/attaches/retires EBS volumes through it
 	heartbeatMu sync.Mutex    // serialises ProcessHeartbeat with the ticker's adoptFromHeartbeats
 
-	// bucketSMs / shardSMs are the FSM control plane (asg-as-api-stateless.md).
-	// LoadStateMachines populates them after the registry hydrates;
-	// MintShard adds to shardSMs as the bucket SMs warm new cohorts.
-	// check() drives them every tick — they own all lifecycle convergence.
+	// bucketSMs is the bucket half of the FSM control plane
+	// (asg-as-api-stateless.md). The shard half has no separate map: each
+	// shard IS its own SM (the registry's entries map is the SM set), bound
+	// lazily via ensureSM. check() drives both every tick — they own all
+	// lifecycle convergence. smMu guards bucketSMs.
 	smMu      sync.RWMutex
 	bucketSMs map[int64]*BucketSM
-	shardSMs  map[string]*ShardSM
+	// sharedDeps is the one ShardDeps every shard references by pointer,
+	// built once by shardDeps() under depsOnce.
+	depsOnce   sync.Once
+	sharedDeps *ShardDeps
 	// store is the concrete *store.Store behind config.Store/ShardOps,
 	// stashed by SetStore. The FSM control plane needs the concrete type
-	// (ShardSMDeps.Store, the bucket SM's *gorm.DB) that the HeartbeatStore
+	// (ShardDeps.Store, the bucket SM's *gorm.DB) that the HeartbeatStore
 	// / ShardOpsStore interfaces don't expose.
 	store *store.Store
 }
@@ -202,7 +206,6 @@ func NewProvisioner(registry *ShardRegistry, launcher ShardLauncher, config Prov
 		Buckets:    NewBucketManager(nil),
 		configurer: grpcConfigurer{shardSecret: config.ShardSecret},
 		bucketSMs:  map[int64]*BucketSM{},
-		shardSMs:   map[string]*ShardSM{},
 	}
 }
 
@@ -421,51 +424,45 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 	ctx := context.Background()
 
 	if hb.ShardID == "" {
-		sm := p.shardSMByInstance(hb.InstanceID)
-		if sm == nil {
+		e := p.shardByInstance(hb.InstanceID)
+		if e == nil {
 			// No LAUNCHING shard is awaiting this instance — a stray
 			// unclaimed heartbeat (orphan instance, or one already
 			// promoted). The stale-LAUNCHING path reaps genuine orphans.
 			return
 		}
-		if err := sm.Fire(ctx, TriggerHeartbeat, hb); err != nil {
-			log.Printf("provisioner: heartbeat promote (instance %s → %s): %v", hb.InstanceID, sm.ID(), err)
+		if err := e.Fire(ctx, TriggerHeartbeat, hb); err != nil {
+			log.Printf("provisioner: heartbeat promote (instance %s → %s): %v", hb.InstanceID, e.ID, err)
 		}
 		return
 	}
 
-	p.smMu.RLock()
-	sm := p.shardSMs[hb.ShardID]
-	p.smMu.RUnlock()
-	if sm == nil {
-		// Unknown shard id. LoadStateMachines builds an SM per persisted
-		// row at boot, so a miss means a shard we have no record of —
-		// nothing to drive.
+	e := p.registry.Get(hb.ShardID)
+	if e == nil {
+		// Unknown shard id — a shard we have no record of, nothing to drive.
 		return
 	}
+	e.ensureSM(p.shardDeps())
 
-	state := StateIngesting
-	if e := p.registry.Get(hb.ShardID); e != nil {
-		e.mu.RLock()
-		state = e.State
-		e.mu.RUnlock()
-	}
+	e.mu.RLock()
+	state := e.State
+	e.mu.RUnlock()
 	switch state {
 	case StateLaunching, StateSuspended:
-		if err := sm.Fire(ctx, TriggerHeartbeat, hb); err != nil {
+		if err := e.Fire(ctx, TriggerHeartbeat, hb); err != nil {
 			log.Printf("provisioner: heartbeat fire %s: %v", hb.ShardID, err)
 		}
 	default:
-		sm.ObserveHeartbeat(ctx, hb)
+		e.ObserveHeartbeat(ctx, hb)
 	}
 }
 
-// shardSMByInstance finds the LAUNCHING shard SM whose entry carries the
-// given instance id — the correlation an empty-ShardID heartbeat needs to
-// reach the shard the bucket minted for this instance. Only LAUNCHING
-// entries are candidates: a promoted shard heartbeats with its real id and
-// routes by id instead.
-func (p *Provisioner) shardSMByInstance(instanceID string) *ShardSM {
+// shardByInstance finds the LAUNCHING shard whose entry carries the given
+// instance id — the correlation an empty-ShardID heartbeat needs to reach
+// the shard the bucket minted for this instance. Only LAUNCHING entries
+// are candidates: a promoted shard heartbeats with its real id and routes
+// by id instead. The returned shard has its SM bound, ready to Fire.
+func (p *Provisioner) shardByInstance(instanceID string) *Shard {
 	if instanceID == "" {
 		return nil
 	}
@@ -474,10 +471,8 @@ func (p *Provisioner) shardSMByInstance(instanceID string) *ShardSM {
 		match := e.State == StateLaunching && e.InstanceID == instanceID
 		e.mu.RUnlock()
 		if match {
-			p.smMu.RLock()
-			sm := p.shardSMs[e.ID]
-			p.smMu.RUnlock()
-			return sm
+			e.ensureSM(p.shardDeps())
+			return e
 		}
 	}
 	return nil
@@ -575,15 +570,11 @@ func (p *Provisioner) evaluateStateMachines(ctx context.Context) {
 		}
 	}
 
-	p.smMu.RLock()
-	shards := make([]*ShardSM, 0, len(p.shardSMs))
-	for _, s := range p.shardSMs {
-		shards = append(shards, s)
-	}
-	p.smMu.RUnlock()
-	for _, s := range shards {
-		if err := s.Evaluate(ctx); err != nil {
-			log.Printf("provisioner: shard %s Evaluate: %v", s.ID(), err)
+	deps := p.shardDeps()
+	for _, e := range p.registry.Entries() {
+		e.ensureSM(deps)
+		if err := e.Evaluate(ctx); err != nil {
+			log.Printf("provisioner: shard %s Evaluate: %v", e.ID, err)
 		}
 	}
 }

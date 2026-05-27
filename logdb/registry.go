@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/qmuntal/stateless"
+
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/store"
 )
@@ -69,6 +71,22 @@ type Shard struct {
 	// list-shards handler (which JSON-encodes []Shard) never tries to
 	// marshal a live connection.
 	Live shard.Shard `gorm:"-" json:"-"`
+
+	// ── FSM machinery (gorm:"-", not persisted) ──
+	// The shard IS its own finite state machine: sm is the stateless
+	// engine whose external storage reads/writes shard_records.state (see
+	// readState/writeState in shardsm.go); deps is the shared collaborator
+	// bundle the provisioner owns (one pointer, every shard references it).
+	// Both are bound by bindSM once the entry enters the registry — a
+	// gorm-loaded row has no SM until the provisioner binds it. See
+	// docs/plans/shard-type-collapse.md Phase 2.
+	sm   *stateless.StateMachine `gorm:"-" json:"-"`
+	deps *ShardDeps              `gorm:"-" json:"-"`
+	// launchInFlight is set while an async launch goroutine is working so
+	// successive Evaluate ticks don't kick a second launch for the same
+	// shard. In-memory only: a restart resets it and the next Evaluate
+	// re-drives any LAUNCHING row that never got an InstanceID.
+	launchInFlight atomic.Bool `gorm:"-" json:"-"`
 }
 
 // TableName pins the unified Shard type to the existing shard_records

@@ -40,7 +40,7 @@ type BucketSM struct {
 }
 
 // ShardController is the bucket SM's handle into the provisioner's
-// child-shard machinery. The bucket SM never touches a *ShardSM
+// child-shard machinery. The bucket SM never touches a shard's SM
 // directly: WARMING / scale-up mint fresh LAUNCHING shards via
 // MintShard; ROTATING, scale-down, and the retention sweep drive
 // existing shards via FireShard. The provisioner implements it (Slice
@@ -49,7 +49,7 @@ type ShardController interface {
 	// MintShard creates a new LAUNCHING shard for the bucket in the given
 	// window at the given stripe index (the provisioner resolves the AZ
 	// from the stripe index via the striper), registers its registry
-	// entry + ShardSM, and returns the new shard id.
+	// entry (binding the shard's own SM), and returns the new shard id.
 	MintShard(ctx context.Context, spec MintSpec) (string, error)
 	// FireShard dispatches a trigger to an existing shard's SM, resolving
 	// it by id. A missing SM is an error the caller logs (and otherwise

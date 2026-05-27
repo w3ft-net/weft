@@ -139,11 +139,9 @@ func drainLaunches(t *testing.T, prov *Provisioner, launcher *inProcLauncher, n 
 // Reads only the launchInFlight atomic — safe to poll while a launch
 // writes the store.
 func inFlightLaunches(prov *Provisioner) int {
-	prov.smMu.RLock()
-	defer prov.smMu.RUnlock()
 	n := 0
-	for _, sm := range prov.shardSMs {
-		if sm.launchInFlight.Load() {
+	for _, sh := range prov.registry.Entries() {
+		if sh.launchInFlight.Load() {
 			n++
 		}
 	}

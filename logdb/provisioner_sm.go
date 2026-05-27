@@ -20,20 +20,20 @@ import (
 // bucket SM's Evaluate drives them, which the unit tests do via a fake
 // controller and the switch commit will do for real.
 
-// LoadStateMachines builds one ShardSM per registered shard and one
-// BucketSM per bucket, after the registry has hydrated from the store.
-// Called once at boot (startProd/startDev) so the maps are populated and
-// ready for the Slice C switch; running it has no effect on the live
-// reconciler. Safe to re-run — it rebuilds both maps from scratch.
+// LoadStateMachines binds the FSM machinery onto every registered shard
+// (the registry's entries map IS the shard-SM set now — no separate map)
+// and builds one BucketSM per bucket, after the registry has hydrated
+// from the store. Called once at boot (startProd/startDev). Safe to
+// re-run — ensureSM is idempotent per shard and the bucket map is rebuilt
+// from scratch.
 func (p *Provisioner) LoadStateMachines() {
-	p.smMu.Lock()
-	defer p.smMu.Unlock()
-
-	p.shardSMs = map[string]*ShardSM{}
+	deps := p.shardDeps()
 	for _, e := range p.registry.Entries() {
-		p.shardSMs[e.ID] = NewShardSM(e, p.shardSMDeps())
+		e.ensureSM(deps)
 	}
 
+	p.smMu.Lock()
+	defer p.smMu.Unlock()
 	p.bucketSMs = map[int64]*BucketSM{}
 	if p.Buckets == nil || p.store == nil {
 		return
@@ -46,33 +46,38 @@ func (p *Provisioner) LoadStateMachines() {
 	for _, bk := range all {
 		p.bucketSMs[bk.ID] = NewBucketSM(bk, p.store.DB(), p, nil)
 	}
-	log.Printf("provisioner: built %d bucket SMs + %d shard SMs", len(p.bucketSMs), len(p.shardSMs))
+	log.Printf("provisioner: built %d bucket SMs + %d shard SMs", len(p.bucketSMs), len(p.registry.Entries()))
 }
 
-// shardSMDeps assembles the dependency bundle every ShardSM shares. The
-// launcher is wired only when it satisfies ShardLaunchAPI (the new
-// ASGProvisioner) — the legacy ShardLauncher doesn't, so Launcher stays
-// nil until the launcher cutover, and the shard SM's launch paths no-op
-// meanwhile (evaluateLaunching guards on a nil launcher).
-func (p *Provisioner) shardSMDeps() ShardSMDeps {
-	deps := ShardSMDeps{
-		Store:             ShardStore{p.store},
-		Registry:          p.registry,
-		Volumes:           p.volumes,
-		Configurer:        p.configurer,
-		ParquetDir:        p.config.ParquetDir,
-		LambdaFunctionURL: p.config.LambdaFunctionURL,
-	}
-	if api, ok := p.launcher.(ShardLaunchAPI); ok {
-		deps.Launcher = api
-	}
-	return deps
+// shardDeps returns the one ShardDeps bundle every shard references by
+// pointer. Built lazily and cached (sync.Once): the collaborators
+// (store, volumes, configurer, launcher) are all set at boot before the
+// first shard is minted or driven, so a single shared instance is
+// correct. The launcher is wired only when it satisfies ShardLaunchAPI
+// (the ASGProvisioner) — the legacy ShardLauncher doesn't, so Launcher
+// stays nil and the launch paths no-op (evaluateLaunching guards on it).
+func (p *Provisioner) shardDeps() *ShardDeps {
+	p.depsOnce.Do(func() {
+		d := ShardDeps{
+			Store:             ShardStore{p.store},
+			Registry:          p.registry,
+			Volumes:           p.volumes,
+			Configurer:        p.configurer,
+			ParquetDir:        p.config.ParquetDir,
+			LambdaFunctionURL: p.config.LambdaFunctionURL,
+		}
+		if api, ok := p.launcher.(ShardLaunchAPI); ok {
+			d.Launcher = api
+		}
+		p.sharedDeps = newShardDeps(d)
+	})
+	return p.sharedDeps
 }
 
 // MintShard is the bucket SM's factory hook (ShardController). It INSERTs
 // a LAUNCHING shard_records row, registers the in-memory entry, narrow-
 // writes the FSM-owned AZ + stripe columns, stamps shard_services so read
-// routing finds it, and creates the ShardSM. The new SM hydrates into
+// routing finds it, and binds its SM. The shard hydrates into
 // LAUNCHING from the row it just wrote; the actual EC2 launch is driven
 // by that shard's Evaluate, not fired here (the lean-Evaluate model the
 // shard SM already uses).
@@ -129,10 +134,10 @@ func (p *Provisioner) MintShard(ctx context.Context, spec MintSpec) (string, err
 		log.Printf("provisioner: MintShard %s: stamp shard_services: %v", shardID, err)
 	}
 
-	sm := NewShardSM(entry, p.shardSMDeps())
-	p.smMu.Lock()
-	p.shardSMs[shardID] = sm
-	p.smMu.Unlock()
+	// Bind the FSM onto the entry — the registry map is the SM set, so
+	// there's no separate registration. The shard hydrates into LAUNCHING
+	// from the row just written; its Evaluate drives the EC2 launch.
+	entry.ensureSM(p.shardDeps())
 
 	log.Printf("provisioner: minted LAUNCHING shard %s for bucket %d (tier=%s stripe=%d az=%q window %s–%s)",
 		shardID, spec.BucketID, tier, stripe, az,
@@ -140,16 +145,15 @@ func (p *Provisioner) MintShard(ctx context.Context, spec MintSpec) (string, err
 	return shardID, nil
 }
 
-// FireShard dispatches a trigger to an existing shard's SM, resolving it
-// by id (ShardController). A missing SM is an error the bucket SM logs —
-// a shard that vanished mid-cascade is self-healed by the next tick's
-// gate re-check rather than blocking the cascade.
+// FireShard dispatches a trigger to an existing shard, resolving it by id
+// through the registry (ShardController). A missing entry is an error the
+// bucket SM logs — a shard that vanished mid-cascade is self-healed by the
+// next tick's gate re-check rather than blocking the cascade.
 func (p *Provisioner) FireShard(ctx context.Context, shardID string, trigger Trigger, args ...any) error {
-	p.smMu.RLock()
-	sm, ok := p.shardSMs[shardID]
-	p.smMu.RUnlock()
-	if !ok {
-		return fmt.Errorf("FireShard: no SM for shard %s", shardID)
+	e := p.registry.Get(shardID)
+	if e == nil {
+		return fmt.Errorf("FireShard: no shard %s", shardID)
 	}
-	return sm.Fire(ctx, trigger, args...)
+	e.ensureSM(p.shardDeps())
+	return e.Fire(ctx, trigger, args...)
 }
