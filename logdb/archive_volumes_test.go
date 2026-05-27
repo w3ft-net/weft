@@ -4,14 +4,11 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
-
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
 )
 
-// retiringVolumeManager captures the snapshot→detach→delete sequence
-// that archive() should run when a shard has a cached ebs_volume_id.
+// retiringVolumeManager captures the snapshot→detach→delete sequence the
+// shard FSM's retireVolume runs when an archiving shard has an
+// ebs_volume_id.
 type retiringVolumeManager struct {
 	mu sync.Mutex
 
@@ -68,54 +65,25 @@ func (r *retiringVolumeManager) DeleteVolume(_ context.Context, volumeID string)
 	return r.deleteErr
 }
 
-// testArchiveIngestedShard sets up a DuckDBShard with a handful of
-// rows and returns the entry, ready to be archived. Uses a real
-// in-memory DuckDB so the export path has something to write.
-func testArchiveIngestedShard(t *testing.T, id, volumeID string) *Shard {
-	t.Helper()
-	ds, err := shard.NewDuckDBShard(id, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := ds.Ingest([]*pb.LogRow{
-		{Raw: "row 1", Namespace: "vimgym", Customer: "k", TsUnixNs: time.Now().UnixNano()},
-	}, nil); err != nil {
-		t.Fatal(err)
-	}
-	return &Shard{
-		ID:          id,
-		State:       StateReadOnly,
-		Live:        ds,
-		ParquetPath: "",
-		EBSVolumeID: volumeID,
-		Addr:        "10.0.0.1:9000",
-		InstanceID:  "i-archive",
-		CreatedAt:   time.Now().Add(-time.Hour),
-	}
+// shardWithVolumes builds a *Shard with only the deps retireVolume needs
+// (the VolumeManager) — retireVolume is store-free, so this skips the full
+// FSM fixture. The full archive sequence (export → retire → terminate →
+// ARCHIVED) is covered in shardsm_test.go; these isolate the retire steps.
+func shardWithVolumes(id string, vm VolumeManager) *Shard {
+	sh := &Shard{ID: id}
+	sh.deps = &ShardDeps{Volumes: vm}
+	return sh
 }
 
-// On archive, after the Parquet export succeeds, the volume should
-// be snapshotted (with shard_id + parquet_path tags), detached, and
-// deleted. The registry row's ebs_volume_id should be cleared.
-func TestArchive_SnapshotThenDetachThenDelete(t *testing.T) {
+// retireVolume snapshots (with shard_id + parquet_path tags), force-detaches,
+// then deletes the volume — in that order.
+func TestRetireVolume_SnapshotThenDetachThenDelete(t *testing.T) {
 	vm := &retiringVolumeManager{}
-	fake := newFakeRegistryStore()
-	reg := NewShardRegistry()
-	reg.SetStore(fake)
+	sh := shardWithVolumes("shard-archive", vm)
 
-	entry := testArchiveIngestedShard(t, "shard-archive", "vol-to-retire")
-	reg.Add(entry)
-
-	prov := &Provisioner{
-		registry: reg,
-		launcher: &recordingLauncher{},
-		config: ProvisionerConfig{
-			ParquetDir: t.TempDir(), // local path; no S3
-		},
-		volumes: vm,
+	if err := sh.retireVolume(context.Background(), "vol-to-retire", "s3://weft/warp/shard-archive.parquet"); err != nil {
+		t.Fatalf("retireVolume: %v", err)
 	}
-
-	prov.archive(entry)
 
 	// Snapshot first, with the right tags.
 	if len(vm.snapshotCalls) != 1 {
@@ -128,8 +96,8 @@ func TestArchive_SnapshotThenDetachThenDelete(t *testing.T) {
 	if snap.ShardID != "shard-archive" {
 		t.Errorf("snapshot ShardID: got %q want shard-archive", snap.ShardID)
 	}
-	if snap.ParquetPath == "" {
-		t.Error("snapshot ParquetPath should be set to the export path")
+	if snap.ParquetPath != "s3://weft/warp/shard-archive.parquet" {
+		t.Errorf("snapshot ParquetPath: got %q", snap.ParquetPath)
 	}
 
 	// Detach with force=true so a dead instance doesn't hang the call.
@@ -144,105 +112,24 @@ func TestArchive_SnapshotThenDetachThenDelete(t *testing.T) {
 	if len(vm.deleteCalls) != 1 || vm.deleteCalls[0] != "vol-to-retire" {
 		t.Errorf("expected 1 DeleteVolume for vol-to-retire, got %v", vm.deleteCalls)
 	}
-
-	// Registry-side: entry still in registry (archived), but
-	// ebs_volume_id cleared so nothing else tries to reuse it.
-	got := reg.Get("shard-archive")
-	if got == nil {
-		t.Fatal("archived entry missing from registry")
-	}
-	if got.State != StateArchived {
-		t.Errorf("state: got %s want ARCHIVED", got.State)
-	}
-	if got.EBSVolumeID != "" {
-		t.Errorf("EBSVolumeID should be cleared post-archive, got %q", got.EBSVolumeID)
-	}
-
-	// Store-side: persisted with empty ebs_volume_id.
-	rec, ok := fake.get("shard-archive")
-	if !ok {
-		t.Fatal("store missing shard-archive")
-	}
-	if rec.EBSVolumeID != "" {
-		t.Errorf("store EBSVolumeID: got %q want empty", rec.EBSVolumeID)
-	}
-	if rec.State != StateArchived {
-		t.Errorf("store State: got %q want ARCHIVED", rec.State)
-	}
 }
 
-// A shard whose volume_id is empty (e.g. created under the old model
-// before gap #4 rolled out) should archive cleanly without touching
-// the VolumeManager.
-func TestArchive_NoVolumeID_SkipsRetirement(t *testing.T) {
-	vm := &retiringVolumeManager{}
-	reg := NewShardRegistry()
-
-	entry := testArchiveIngestedShard(t, "shard-novol", "") // no ebs_volume_id
-	reg.Add(entry)
-
-	prov := &Provisioner{
-		registry: reg,
-		launcher: &recordingLauncher{},
-		config: ProvisionerConfig{
-			ParquetDir: t.TempDir(),
-		},
-		volumes: vm,
-	}
-
-	prov.archive(entry)
-
-	if len(vm.snapshotCalls) != 0 {
-		t.Errorf("no volume → no snapshot, got %d", len(vm.snapshotCalls))
-	}
-	if len(vm.detachCalls) != 0 {
-		t.Errorf("no volume → no detach, got %d", len(vm.detachCalls))
-	}
-	if len(vm.deleteCalls) != 0 {
-		t.Errorf("no volume → no delete, got %d", len(vm.deleteCalls))
-	}
-
-	got := reg.Get("shard-novol")
-	if got == nil || got.State != StateArchived {
-		t.Errorf("archive should still swap in ColdShard and transition state, got entry=%+v", got)
-	}
-}
-
-// A snapshot failure must not proceed to delete — that would lose
-// data if the archive turns out to have been incomplete.
-func TestArchive_SnapshotFailureAbortsRetirement(t *testing.T) {
+// A snapshot failure must abort before detach/delete and return an error —
+// evaluateArchiving then leaves the volume in place (mid-cleanup) for the
+// next tick to retry rather than losing data on an incomplete archive.
+func TestRetireVolume_SnapshotFailureAborts(t *testing.T) {
 	vm := &retiringVolumeManager{snapshotErr: errSnapshotBroken()}
-	reg := NewShardRegistry()
+	sh := shardWithVolumes("shard-snapfail", vm)
 
-	entry := testArchiveIngestedShard(t, "shard-snapfail", "vol-keep")
-	reg.Add(entry)
-
-	prov := &Provisioner{
-		registry: reg,
-		launcher: &recordingLauncher{},
-		config: ProvisionerConfig{
-			ParquetDir: t.TempDir(),
-		},
-		volumes: vm,
+	err := sh.retireVolume(context.Background(), "vol-keep", "s3://weft/warp/shard-snapfail.parquet")
+	if err == nil {
+		t.Fatal("expected an error when the snapshot fails")
 	}
-
-	prov.archive(entry)
-
 	if len(vm.detachCalls) != 0 {
 		t.Errorf("snapshot failed → must NOT detach, got %d", len(vm.detachCalls))
 	}
 	if len(vm.deleteCalls) != 0 {
 		t.Errorf("snapshot failed → must NOT delete, got %d", len(vm.deleteCalls))
-	}
-
-	// Entry should still be in the registry with the volume id
-	// intact — operator can retry.
-	got := reg.Get("shard-snapfail")
-	if got == nil {
-		t.Fatal("entry missing")
-	}
-	if got.EBSVolumeID != "vol-keep" {
-		t.Errorf("EBSVolumeID: got %q want vol-keep (preserved for retry)", got.EBSVolumeID)
 	}
 }
 

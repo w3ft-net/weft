@@ -833,11 +833,14 @@ provisioner mint factory below.
   window for routing). The old rebind path persisted addr; restore that
   (a narrow addr write on configure/reconnect) or stop RefreshFromStore
   overwriting addr.
-- **ForceArchive/DeleteArchived bypass the FSM** — the admin gRPC path
-  still calls the provisioner's synchronous `archive()`/`retireVolume()`
-  (kept, live) instead of firing `ArchiveRequested` on the shard SM.
-  Works (sets state ARCHIVED directly) but skips the ARCHIVING gate;
-  rework to drive the FSM.
+- **ForceArchive/DeleteArchived drive the FSM — DONE.** ForceArchive fires
+  `ArchiveRequested` (READ_ONLY → ARCHIVING) then runs one `Evaluate` pass
+  to the ARCHIVED terminal; DeleteArchived fires `AdminDelete` (ARCHIVED →
+  GONE, onEnterGone removes + deletes). The provisioner's parallel
+  synchronous `archive()`/`retireVolume()` are deleted; the retire-sequence
+  tests moved to `*Shard.retireVolume` (archive_volumes_test.go). Bonus:
+  ForceArchive now also terminates the instance (the old synchronous path
+  leaked it).
 - **Prod launcher cutover (Phase 3)** — startProd still builds the legacy
   `ASGLauncher` (not `ShardLaunchAPI`), so prod mints-but-doesn't-launch
   until `SHARD_<TIER>_ASGS` + `ASGProvisioner` land.

@@ -655,151 +655,64 @@ func (p *Provisioner) syncServicesForBucket(bucket *Bucket) {
 	}
 }
 
-// archive tells the shard to export its data to Parquet and replaces
-// the live shard with a ColdShard for subsequent queries.
-// ForceArchive is the admin-facing entry point for archiving a
-// READ_ONLY shard on demand, bypassing the reconciler's retention
-// window check. Returns an error if the shard can't be archived.
+// ForceArchive is the admin-facing entry point for archiving a READ_ONLY
+// shard on demand, bypassing the bucket's retention-window sweep. It drives
+// the shard FSM rather than a parallel synchronous path: READ_ONLY →
+// ARCHIVING (ArchiveRequested), then one Evaluate pass runs the shard's own
+// export → retire-volume → terminate → ArchiveComplete sequence to the
+// ARCHIVED terminal. evaluateArchiving is idempotent and step-gated, so a
+// transient failure leaves the shard ARCHIVING for the reconciler tick to
+// retry — surfaced here as a non-nil error.
 func (p *Provisioner) ForceArchive(shardID string) error {
 	entry := p.registry.Get(shardID)
 	if entry == nil {
 		return fmt.Errorf("shard %s not found in registry", shardID)
 	}
+	entry.ensureSM(p.shardDeps())
 	entry.mu.RLock()
 	st := entry.State
 	entry.mu.RUnlock()
 	if st != StateReadOnly {
 		return fmt.Errorf("shard %s is %s, not READ_ONLY", shardID, st)
 	}
-	p.archive(entry)
+	ctx := context.Background()
+	if err := entry.Fire(ctx, TriggerArchiveRequested); err != nil {
+		return fmt.Errorf("force-archive %s: %w", shardID, err)
+	}
+	if err := entry.Evaluate(ctx); err != nil {
+		return fmt.Errorf("force-archive %s: %w", shardID, err)
+	}
 	entry.mu.RLock()
 	st = entry.State
 	entry.mu.RUnlock()
 	if st != StateArchived {
-		return fmt.Errorf("archive failed for shard %s", shardID)
+		return fmt.Errorf("force-archive %s: did not complete (state %s)", shardID, st)
 	}
 	return nil
 }
 
-// DeleteArchived removes an archived shard from the registry and
-// deletes its DB record. The Parquet data on S3 is left in place
-// (tombstone cleanup is a separate concern).
+// DeleteArchived removes an archived shard by driving the shard FSM's only
+// edge out of ARCHIVED: AdminDelete → GONE. onEnterGone removes the entry
+// from the registry (closing its handle) and deletes the shard_records
+// row. The Parquet data on S3 is left in place (tombstone cleanup is a
+// separate concern).
 func (p *Provisioner) DeleteArchived(shardID string) error {
 	entry := p.registry.Get(shardID)
 	if entry == nil {
 		return fmt.Errorf("shard %s not found in registry", shardID)
 	}
+	entry.ensureSM(p.shardDeps())
 	entry.mu.RLock()
 	st := entry.State
 	entry.mu.RUnlock()
 	if st != StateArchived {
 		return fmt.Errorf("shard %s is %s, not ARCHIVED", shardID, st)
 	}
-	// Remove closes the shard handle (under e.mu) — don't double-close here.
-	p.registry.Remove(shardID)
-	if err := p.config.ShardOps.DeleteShard(shardID); err != nil {
-		return fmt.Errorf("delete shard record: %w", err)
+	if err := entry.Fire(context.Background(), TriggerAdminDelete); err != nil {
+		return fmt.Errorf("delete archived %s: %w", shardID, err)
 	}
 	log.Printf("provisioner: archived shard %s deleted", shardID)
 	return nil
-}
-
-func (p *Provisioner) archive(entry *Shard) {
-	// Snapshot the fields the export needs under a brief read lock; the
-	// 10-minute Archive I/O then runs unlocked so registry reads aren't
-	// blocked. The field swap re-takes the lock at the end.
-	entry.mu.RLock()
-	live := entry.Live
-	services := entry.Services
-	volumeID := entry.EBSVolumeID
-	entry.mu.RUnlock()
-	if live == nil {
-		log.Printf("provisioner: cannot archive shard %s: no Shard attached", entry.ID)
-		return
-	}
-
-	s3Prefix := fmt.Sprintf("%s/%s", p.config.ParquetDir, joinServices(serviceNames(services)))
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	parquetPath, err := live.Archive(ctx, s3Prefix)
-	if err != nil {
-		log.Printf("provisioner: archive %s: %v", entry.ID, err)
-		return
-	}
-
-	// ColdShard built here is dead inventory — the live query path runs in
-	// compute, which dials its own ColdShard from the descriptor. We still
-	// slot it into entry.Live so registry walks see a non-nil pointer.
-	coldShard, err := shard.NewColdShard(entry.ID, serviceNames(services), parquetPath, p.config.LambdaFunctionURL, nil)
-	if err != nil {
-		log.Printf("provisioner: create cold shard for %s: %v", entry.ID, err)
-		return
-	}
-
-	entry.mu.Lock()
-	old := entry.Live
-	entry.Live = coldShard
-	entry.State = StateArchived
-	entry.ParquetPath = parquetPath
-	entry.LastHeartbeatAt = time.Time{}
-	entry.mu.Unlock()
-	if old != nil {
-		old.Close()
-	}
-	p.registry.PersistState(entry)
-
-	log.Printf("provisioner: shard %s archived to %s", entry.ID, parquetPath)
-
-	if p.volumes != nil && volumeID != "" {
-		p.retireVolume(entry)
-	}
-}
-
-// retireVolume runs the snapshot → detach → delete sequence on an
-// archived shard's data volume. Errors are logged rather than
-// returned; the archive state change has already been persisted and
-// we don't want to undo it on a terminal-side failure that an
-// operator can clean up out of band.
-func (p *Provisioner) retireVolume(entry *Shard) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	entry.mu.RLock()
-	volumeID := entry.EBSVolumeID
-	parquetPath := entry.ParquetPath
-	entry.mu.RUnlock()
-
-	snapID, err := p.volumes.SnapshotVolume(ctx, SnapshotOpts{
-		VolumeID:    volumeID,
-		ShardID:     entry.ID,
-		ParquetPath: parquetPath,
-	})
-	if err != nil {
-		log.Printf("provisioner: snapshot %s (%s): %v — leaving volume in place for retry",
-			volumeID, entry.ID, err)
-		return
-	}
-	log.Printf("provisioner: snapshotted %s → %s before archive delete", volumeID, snapID)
-
-	// Detach with force=true: the instance hosting this shard may
-	// already have been terminated via the ASG path, in which case a
-	// non-force detach hangs. Even on a live instance the volume is
-	// now unused.
-	if err := p.volumes.DetachFromInstance(ctx, volumeID, true); err != nil {
-		log.Printf("provisioner: detach %s: %v", volumeID, err)
-		return
-	}
-	if err := p.volumes.DeleteVolume(ctx, volumeID); err != nil {
-		log.Printf("provisioner: delete %s: %v", volumeID, err)
-		return
-	}
-	log.Printf("provisioner: retired volume %s (shard %s)", volumeID, entry.ID)
-
-	entry.mu.Lock()
-	entry.EBSVolumeID = ""
-	entry.mu.Unlock()
-	p.registry.PersistState(entry)
 }
 
 // serviceNames renders a shard's service membership as bare service
