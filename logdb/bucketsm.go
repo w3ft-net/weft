@@ -74,7 +74,7 @@ type MintSpec struct {
 // next-window cohort is INGESTING before the current window closes,
 // avoiding a write-gap). Package-scoped so main.go can override it at
 // boot for per-env tuning; the default must comfortably exceed instance
-// launch + configure time. Also consulted by Bucket.ShouldPrewarmNextWindow.
+// launch + configure time.
 var PrewarmLead = 10 * time.Minute
 
 // ErrUnknownBucket is the bucket-FSM counterpart to

@@ -260,31 +260,6 @@ func (b *Bucket) NextWindow(now time.Time) (start, end time.Time) {
 	return currEnd, currEnd.Add(dur)
 }
 
-// ShouldPrewarmNextWindow reports whether the reconciler should
-// mint next-window LAUNCHING rows this tick. The current policy is
-// simple date math against a package-scoped PrewarmLead; the
-// method exists on Bucket so future strategies (ingestion burn
-// rate, disk-fill slope, p99 latency tracker) can swap the policy
-// without changing every caller.
-//
-// TODO: extend to consider per-shard ingest rate so bursty
-// workloads pre-warm sooner than steady-state ones.
-func (b *Bucket) ShouldPrewarmNextWindow(now time.Time, ingesting []*ShardEntry) bool {
-	threshold := now.Add(PrewarmLead)
-	for _, e := range ingesting {
-		if e.State != StateIngesting {
-			continue
-		}
-		if e.WindowEnd.IsZero() {
-			continue
-		}
-		if !threshold.Before(e.WindowEnd) {
-			return true
-		}
-	}
-	return false
-}
-
 func recordToBucket(r store.Bucket) *Bucket {
 	var winDur time.Duration
 	if r.WindowDuration != "" {

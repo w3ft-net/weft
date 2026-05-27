@@ -303,6 +303,7 @@ func (p *Provisioner) ShardDescriptorsFor(tr TimeRange, namespaceID uint, servic
 	entries := p.registry.MatchingEntries(tr, serving, tier)
 	out := make([]*pb.ShardDescriptor, len(entries))
 	for i, e := range entries {
+		e.mu.RLock()
 		d := &pb.ShardDescriptor{ShardId: e.ID, Services: serviceNames(e.Services)}
 		if e.State == StateArchived {
 			d.LambdaUrl = p.config.LambdaFunctionURL
@@ -310,6 +311,7 @@ func (p *Provisioner) ShardDescriptorsFor(tr TimeRange, namespaceID uint, servic
 		} else {
 			d.GrpcAddr = e.Addr
 		}
+		e.mu.RUnlock()
 		out[i] = d
 	}
 	return out
@@ -443,7 +445,9 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 
 	state := StateIngesting
 	if e := p.registry.Get(hb.ShardID); e != nil {
+		e.mu.RLock()
 		state = e.State
+		e.mu.RUnlock()
 	}
 	switch state {
 	case StateLaunching, StateSuspended:
@@ -465,7 +469,10 @@ func (p *Provisioner) shardSMByInstance(instanceID string) *ShardSM {
 		return nil
 	}
 	for _, e := range p.registry.Entries() {
-		if e.State == StateLaunching && e.InstanceID == instanceID {
+		e.mu.RLock()
+		match := e.State == StateLaunching && e.InstanceID == instanceID
+		e.mu.RUnlock()
+		if match {
 			p.smMu.RLock()
 			sm := p.shardSMs[e.ID]
 			p.smMu.RUnlock()
@@ -638,7 +645,10 @@ func (p *Provisioner) syncServicesForBucket(bucket *Bucket) {
 		return
 	}
 	for _, e := range p.registry.Entries() {
-		if e.BucketID != bucket.ID || e.State != StateIngesting {
+		e.mu.RLock()
+		skip := e.BucketID != bucket.ID || e.State != StateIngesting
+		e.mu.RUnlock()
+		if skip {
 			continue
 		}
 		for _, s := range svcs {
@@ -657,11 +667,17 @@ func (p *Provisioner) ForceArchive(shardID string) error {
 	if entry == nil {
 		return fmt.Errorf("shard %s not found in registry", shardID)
 	}
-	if entry.State != StateReadOnly {
-		return fmt.Errorf("shard %s is %s, not READ_ONLY", shardID, entry.State)
+	entry.mu.RLock()
+	st := entry.State
+	entry.mu.RUnlock()
+	if st != StateReadOnly {
+		return fmt.Errorf("shard %s is %s, not READ_ONLY", shardID, st)
 	}
 	p.archive(entry)
-	if entry.State != StateArchived {
+	entry.mu.RLock()
+	st = entry.State
+	entry.mu.RUnlock()
+	if st != StateArchived {
 		return fmt.Errorf("archive failed for shard %s", shardID)
 	}
 	return nil
@@ -675,12 +691,13 @@ func (p *Provisioner) DeleteArchived(shardID string) error {
 	if entry == nil {
 		return fmt.Errorf("shard %s not found in registry", shardID)
 	}
-	if entry.State != StateArchived {
-		return fmt.Errorf("shard %s is %s, not ARCHIVED", shardID, entry.State)
+	entry.mu.RLock()
+	st := entry.State
+	entry.mu.RUnlock()
+	if st != StateArchived {
+		return fmt.Errorf("shard %s is %s, not ARCHIVED", shardID, st)
 	}
-	if entry.Shard != nil {
-		entry.Shard.Close()
-	}
+	// Remove closes the shard handle (under e.mu) — don't double-close here.
 	p.registry.Remove(shardID)
 	if err := p.config.ShardOps.DeleteShard(shardID); err != nil {
 		return fmt.Errorf("delete shard record: %w", err)
@@ -690,43 +707,53 @@ func (p *Provisioner) DeleteArchived(shardID string) error {
 }
 
 func (p *Provisioner) archive(entry *ShardEntry) {
-	if entry.Shard == nil {
+	// Snapshot the fields the export needs under a brief read lock; the
+	// 10-minute Archive I/O then runs unlocked so registry reads aren't
+	// blocked. The field swap re-takes the lock at the end.
+	entry.mu.RLock()
+	live := entry.Shard
+	services := entry.Services
+	volumeID := entry.EBSVolumeID
+	entry.mu.RUnlock()
+	if live == nil {
 		log.Printf("provisioner: cannot archive shard %s: no Shard attached", entry.ID)
 		return
 	}
 
-	appLabel := joinServices(serviceNames(entry.Services))
-	s3Prefix := fmt.Sprintf("%s/%s", p.config.ParquetDir, appLabel)
-
+	s3Prefix := fmt.Sprintf("%s/%s", p.config.ParquetDir, joinServices(serviceNames(services)))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	parquetPath, err := entry.Shard.Archive(ctx, s3Prefix)
+	parquetPath, err := live.Archive(ctx, s3Prefix)
 	if err != nil {
 		log.Printf("provisioner: archive %s: %v", entry.ID, err)
 		return
 	}
 
-	// ColdShard built here is dead inventory — the live query path
-	// runs in compute, which dials its own ColdShard from the
-	// descriptor. We still slot it into entry.Shard so registry
-	// walks see a non-nil pointer for the archived entry.
-	coldShard, err := shard.NewColdShard(entry.ID, serviceNames(entry.Services), parquetPath, p.config.LambdaFunctionURL, nil)
+	// ColdShard built here is dead inventory — the live query path runs in
+	// compute, which dials its own ColdShard from the descriptor. We still
+	// slot it into entry.Shard so registry walks see a non-nil pointer.
+	coldShard, err := shard.NewColdShard(entry.ID, serviceNames(services), parquetPath, p.config.LambdaFunctionURL, nil)
 	if err != nil {
 		log.Printf("provisioner: create cold shard for %s: %v", entry.ID, err)
 		return
 	}
 
-	entry.Shard.Close()
+	entry.mu.Lock()
+	old := entry.Shard
 	entry.Shard = coldShard
 	entry.State = StateArchived
 	entry.ParquetPath = parquetPath
 	entry.LastHeartbeatAt = time.Time{}
+	entry.mu.Unlock()
+	if old != nil {
+		old.Close()
+	}
 	p.registry.PersistState(entry)
 
 	log.Printf("provisioner: shard %s archived to %s", entry.ID, parquetPath)
 
-	if p.volumes != nil && entry.EBSVolumeID != "" {
+	if p.volumes != nil && volumeID != "" {
 		p.retireVolume(entry)
 	}
 }
@@ -740,33 +767,40 @@ func (p *Provisioner) retireVolume(entry *ShardEntry) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
+	entry.mu.RLock()
+	volumeID := entry.EBSVolumeID
+	parquetPath := entry.ParquetPath
+	entry.mu.RUnlock()
+
 	snapID, err := p.volumes.SnapshotVolume(ctx, SnapshotOpts{
-		VolumeID:    entry.EBSVolumeID,
+		VolumeID:    volumeID,
 		ShardID:     entry.ID,
-		ParquetPath: entry.ParquetPath,
+		ParquetPath: parquetPath,
 	})
 	if err != nil {
 		log.Printf("provisioner: snapshot %s (%s): %v — leaving volume in place for retry",
-			entry.EBSVolumeID, entry.ID, err)
+			volumeID, entry.ID, err)
 		return
 	}
-	log.Printf("provisioner: snapshotted %s → %s before archive delete", entry.EBSVolumeID, snapID)
+	log.Printf("provisioner: snapshotted %s → %s before archive delete", volumeID, snapID)
 
 	// Detach with force=true: the instance hosting this shard may
 	// already have been terminated via the ASG path, in which case a
 	// non-force detach hangs. Even on a live instance the volume is
 	// now unused.
-	if err := p.volumes.DetachFromInstance(ctx, entry.EBSVolumeID, true); err != nil {
-		log.Printf("provisioner: detach %s: %v", entry.EBSVolumeID, err)
+	if err := p.volumes.DetachFromInstance(ctx, volumeID, true); err != nil {
+		log.Printf("provisioner: detach %s: %v", volumeID, err)
 		return
 	}
-	if err := p.volumes.DeleteVolume(ctx, entry.EBSVolumeID); err != nil {
-		log.Printf("provisioner: delete %s: %v", entry.EBSVolumeID, err)
+	if err := p.volumes.DeleteVolume(ctx, volumeID); err != nil {
+		log.Printf("provisioner: delete %s: %v", volumeID, err)
 		return
 	}
-	log.Printf("provisioner: retired volume %s (shard %s)", entry.EBSVolumeID, entry.ID)
+	log.Printf("provisioner: retired volume %s (shard %s)", volumeID, entry.ID)
 
+	entry.mu.Lock()
 	entry.EBSVolumeID = ""
+	entry.mu.Unlock()
 	p.registry.PersistState(entry)
 }
 

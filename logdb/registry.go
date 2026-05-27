@@ -14,7 +14,18 @@ import (
 // see also docs/plans/asg-as-api-stateless.md for the full FSM.
 
 // ShardEntry is the registry's per-shard metadata.
+//
+// Concurrency: an entry is shared between the registry (which reads its
+// fields to route queries/writes) and the shard SM (which mutates them on
+// transitions, launches, and heartbeats). mu guards every MUTABLE field
+// below — both sides take it. The registry's own r.mu guards the entries
+// MAP; mu guards an entry's FIELDS. Lock order when both are held is
+// r.mu → mu; the SM only ever holds mu (and must not call a registry
+// method that takes r.mu while holding it). ID is immutable after
+// construction and safe to read lock-free.
 type ShardEntry struct {
+	mu sync.RWMutex
+
 	ID string
 	// Services is the shard's in-memory service membership — the
 	// (namespace_id, service) pairs it serves, the write router's
@@ -84,7 +95,8 @@ const heartbeatStaleThreshold = 2 * time.Minute
 
 // isStale reports whether this entry's last observed heartbeat is
 // older than heartbeatStaleThreshold. Zero (never set) counts as
-// fresh — see the LastHeartbeatAt field comment.
+// fresh — see the LastHeartbeatAt field comment. Caller must hold
+// e.mu (read).
 func (e *ShardEntry) isStale() bool {
 	if e.LastHeartbeatAt.IsZero() {
 		return false
@@ -96,7 +108,8 @@ func (e *ShardEntry) isStale() bool {
 // service) — the write router's membership test against the shard's
 // in-memory service set. An empty service matches any service in the
 // namespace (the namespace-wide check), mirroring the read path's
-// ShardIDsServingService("" = namespace-only) semantics.
+// ShardIDsServingService("" = namespace-only) semantics. Caller must
+// hold e.mu (read).
 func (e *ShardEntry) serves(namespaceID uint, service string) bool {
 	for _, s := range e.Services {
 		if s.NamespaceID == namespaceID && (service == "" || s.Service == service) {
@@ -162,7 +175,8 @@ func (r *ShardRegistry) persist(entry *ShardEntry) {
 	if r.store == nil {
 		return
 	}
-	if err := r.store.SaveShard(&store.ShardRecord{
+	entry.mu.RLock()
+	rec := store.ShardRecord{
 		ID:             entry.ID,
 		WindowStart:    entry.WindowStart.Format(time.RFC3339),
 		WindowEnd:      entry.WindowEnd.Format(time.RFC3339),
@@ -176,7 +190,9 @@ func (r *ShardRegistry) persist(entry *ShardEntry) {
 		EBSVolumeID:    entry.EBSVolumeID,
 		HeartbeatToken: entry.HeartbeatToken,
 		BucketID:       entry.BucketID,
-	}); err != nil {
+	}
+	entry.mu.RUnlock()
+	if err := r.store.SaveShard(&rec); err != nil {
 		log.Printf("registry: persist shard %s: %v", entry.ID, err)
 	}
 }
@@ -195,7 +211,10 @@ func (r *ShardRegistry) TouchHeartbeat(entry *ShardEntry) {
 	if r.store == nil {
 		return
 	}
-	if err := r.store.TouchHeartbeat(entry.ID, entry.RowCount); err != nil {
+	entry.mu.RLock()
+	rowCount := entry.RowCount
+	entry.mu.RUnlock()
+	if err := r.store.TouchHeartbeat(entry.ID, rowCount); err != nil {
 		log.Printf("registry: touch heartbeat %s: %v", entry.ID, err)
 	}
 }
@@ -225,6 +244,7 @@ func (r *ShardRegistry) RefreshFromStore() {
 		if !ok {
 			continue
 		}
+		entry.mu.Lock()
 		entry.State = ShardState(rec.State)
 		if ws, err := time.Parse(time.RFC3339, rec.WindowStart); err == nil {
 			entry.WindowStart = ws
@@ -249,6 +269,7 @@ func (r *ShardRegistry) RefreshFromStore() {
 		if svcOK {
 			entry.Services = svcByShard[rec.ID]
 		}
+		entry.mu.Unlock()
 	}
 }
 
@@ -339,9 +360,11 @@ func (r *ShardRegistry) LoadFromStore(reconstruct func(rec store.ShardRecord) (s
 func (r *ShardRegistry) Remove(id string) {
 	r.mu.Lock()
 	if e, ok := r.entries[id]; ok {
+		e.mu.Lock()
 		if e.Shard != nil {
 			e.Shard.Close()
 		}
+		e.mu.Unlock()
 		delete(r.entries, id)
 	}
 	r.mu.Unlock()
@@ -373,6 +396,8 @@ func (r *ShardRegistry) AddServiceToShard(id string, namespaceID uint, service s
 	if !ok {
 		return false, false
 	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
 	if entry.State != StateIngesting {
 		return true, false
 	}
@@ -440,7 +465,10 @@ func (r *ShardRegistry) HasAddr(addr string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, e := range r.entries {
-		if e.Addr == addr {
+		e.mu.RLock()
+		match := e.Addr == addr
+		e.mu.RUnlock()
+		if match {
 			return true
 		}
 	}
@@ -479,43 +507,51 @@ func (r *ShardRegistry) MatchingEntries(tr TimeRange, serving map[string]struct{
 
 	var out []*ShardEntry
 	for _, e := range r.entries {
-		if e.Addr == "" && e.Shard == nil {
-			continue
+		if e.queryable(tr, serving) {
+			out = append(out, e)
 		}
-		// SUSPENDED (instance dead, Addr/InstanceID cleared, awaiting
-		// rebind — see provisioner's stale-heartbeat path and
-		// ReconstructShard) is unqueryable: a SUSPENDED entry keeps a
-		// stale non-nil Shard pointer so the Addr==""/Shard==nil guard
-		// below doesn't catch it, and routing it only yields "no
-		// grpc_addr or lambda_url".
-		if e.State == StateSuspended {
-			continue
-		}
-		if e.isStale() {
-			continue
-		}
-		// An ARCHIVED (cold-Lambda) / ARCHIVING / READ_ONLY shard with
-		// zero rows has nothing to return; dialing it is pure waste — a
-		// cold dial is a Lambda round-trip. ARCHIVING is grouped with
-		// READ_ONLY here (its query-routing "substate" relationship):
-		// it stays queryable until the export swaps in the ColdShard.
-		// Live INGESTING shards are exempt: a transient 0 count there
-		// just means it hasn't filled yet.
-		if e.RowCount == 0 && (e.State == StateArchived || e.State == StateArchiving || e.State == StateReadOnly) {
-			continue
-		}
-		hasWindow := !e.WindowStart.IsZero() && !e.WindowEnd.IsZero()
-		if hasWindow && (!e.WindowStart.Before(tr.End) || !e.WindowEnd.After(tr.Start)) {
-			continue
-		}
-		if serving != nil {
-			if _, ok := serving[e.ID]; !ok {
-				continue
-			}
-		}
-		out = append(out, e)
 	}
 	return out
+}
+
+// queryable applies MatchingEntries' per-entry filter under the entry's
+// read lock. Note: the entry pointer it qualifies is still returned to
+// the caller, which must take e.mu before reading its fields (e.g.
+// ShardDescriptorsFor does).
+func (e *ShardEntry) queryable(tr TimeRange, serving map[string]struct{}) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.Addr == "" && e.Shard == nil {
+		return false
+	}
+	// SUSPENDED (instance dead, Addr/InstanceID cleared, awaiting rebind)
+	// is unqueryable: it keeps a stale non-nil Shard pointer so the
+	// Addr==""/Shard==nil guard doesn't catch it, and routing it only
+	// yields "no grpc_addr or lambda_url".
+	if e.State == StateSuspended {
+		return false
+	}
+	if e.isStale() {
+		return false
+	}
+	// An ARCHIVED / ARCHIVING / READ_ONLY shard with zero rows has nothing
+	// to return; dialing it is pure waste. ARCHIVING is grouped with
+	// READ_ONLY (its query-routing "substate" relationship): it stays
+	// queryable until the export swaps in the ColdShard. Live INGESTING
+	// shards are exempt: a transient 0 count just means it hasn't filled.
+	if e.RowCount == 0 && (e.State == StateArchived || e.State == StateArchiving || e.State == StateReadOnly) {
+		return false
+	}
+	hasWindow := !e.WindowStart.IsZero() && !e.WindowEnd.IsZero()
+	if hasWindow && (!e.WindowStart.Before(tr.End) || !e.WindowEnd.After(tr.Start)) {
+		return false
+	}
+	if serving != nil {
+		if _, ok := serving[e.ID]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // IngestingShard returns an INGESTING shard serving (namespaceID,
@@ -528,11 +564,8 @@ func (r *ShardRegistry) IngestingShard(namespaceID uint, service string) shard.S
 
 	var candidates []shard.Shard
 	for _, e := range r.entries {
-		if e.State != StateIngesting || e.Shard == nil || e.isStale() {
-			continue
-		}
-		if e.serves(namespaceID, service) {
-			candidates = append(candidates, e.Shard)
+		if sh := e.ingestCandidate(namespaceID, service); sh != nil {
+			candidates = append(candidates, sh)
 		}
 	}
 
@@ -543,13 +576,30 @@ func (r *ShardRegistry) IngestingShard(namespaceID uint, service string) shard.S
 	return candidates[idx]
 }
 
+// ingestCandidate returns the live shard handle if this entry is an
+// INGESTING, fresh, serving shard, else nil. Takes the entry read lock.
+func (e *ShardEntry) ingestCandidate(namespaceID uint, service string) shard.Shard {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.State != StateIngesting || e.Shard == nil || e.isStale() {
+		return nil
+	}
+	if e.serves(namespaceID, service) {
+		return e.Shard
+	}
+	return nil
+}
+
 // TotalIngesting returns the count of all INGESTING shards regardless of app.
 func (r *ShardRegistry) TotalIngesting() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	n := 0
 	for _, e := range r.entries {
-		if e.State == StateIngesting && e.Shard != nil {
+		e.mu.RLock()
+		ingesting := e.State == StateIngesting && e.Shard != nil
+		e.mu.RUnlock()
+		if ingesting {
 			n++
 		}
 	}
@@ -563,7 +613,10 @@ func (r *ShardRegistry) IngestingCount(namespaceID uint, service string) int {
 	defer r.mu.RUnlock()
 	n := 0
 	for _, e := range r.entries {
-		if e.State == StateIngesting && e.Shard != nil && e.serves(namespaceID, service) {
+		e.mu.RLock()
+		ok := e.State == StateIngesting && e.Shard != nil && e.serves(namespaceID, service)
+		e.mu.RUnlock()
+		if ok {
 			n++
 		}
 	}

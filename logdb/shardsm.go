@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -48,8 +47,6 @@ type ShardSM struct {
 	entry *ShardEntry
 	deps  ShardSMDeps
 	sm    *stateless.StateMachine
-
-	mu sync.Mutex // serialises action-internal mutations of entry
 
 	// launchInFlight is set while an async launch goroutine is working,
 	// so successive Evaluate ticks don't kick a second launch for the
@@ -176,9 +173,9 @@ func (s *ShardSM) writeState(ctx context.Context, st stateless.State) error {
 		Update("state", string(newState)).Error; err != nil {
 		return fmt.Errorf("shardsm write %s=%s: %w", s.id, newState, err)
 	}
-	s.mu.Lock()
+	s.entry.mu.Lock()
 	s.entry.State = newState
-	s.mu.Unlock()
+	s.entry.mu.Unlock()
 	return nil
 }
 
@@ -232,8 +229,8 @@ func (s *ShardSM) heartbeatMatchesLaunching(_ context.Context, args ...any) bool
 	if !ok {
 		return false
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.entry.mu.Lock()
+	defer s.entry.mu.Unlock()
 	if hb.InstanceID == "" || hb.Addr == "" {
 		return false
 	}
@@ -276,8 +273,8 @@ func (s *ShardSM) heartbeatTargetFromSuspended(context.Context, ...any) (statele
 // us to SUSPENDED prematurely. Returns true only if entry's
 // LastHeartbeatAt is older than the staleness threshold.
 func (s *ShardSM) actuallyStale(context.Context, ...any) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.entry.mu.Lock()
+	defer s.entry.mu.Unlock()
 	if s.entry.LastHeartbeatAt.IsZero() {
 		return false // never observed — treat as fresh until a heartbeat or evaluator clears it
 	}
@@ -288,8 +285,8 @@ func (s *ShardSM) actuallyStale(context.Context, ...any) bool {
 // volume (data preservable; replacement coming) and GONE when it
 // doesn't (data already lost with the instance).
 func (s *ShardSM) staleTargetFromActive(context.Context, ...any) (stateless.State, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.entry.mu.Lock()
+	defer s.entry.mu.Unlock()
 	if s.entry.EBSVolumeID != "" {
 		return StateSuspended, nil
 	}
@@ -337,10 +334,10 @@ func (s *ShardSM) Evaluate(ctx context.Context) error {
 // LaunchFailed → GONE) or kicks an async launch — async because the
 // launch polls AWS for minutes, far too long to block the tick.
 func (s *ShardSM) evaluateLaunching(ctx context.Context) error {
-	s.mu.Lock()
+	s.entry.mu.Lock()
 	instanceID := s.entry.InstanceID
 	attempts := s.entry.LaunchAttempts
-	s.mu.Unlock()
+	s.entry.mu.Unlock()
 
 	if instanceID != "" {
 		return nil // launched; waiting for the first heartbeat to promote
@@ -366,7 +363,7 @@ func (s *ShardSM) evaluateLaunching(ctx context.Context) error {
 func (s *ShardSM) runLaunch() {
 	defer s.launchInFlight.Store(false)
 
-	s.mu.Lock()
+	s.entry.mu.Lock()
 	spec := LaunchSpec{
 		ShardID:          s.id,
 		Tier:             s.entry.Tier,
@@ -375,7 +372,7 @@ func (s *ShardSM) runLaunch() {
 		SizeGB:           freshShardVolumeGB,
 	}
 	stripeIndex := s.entry.StripeIndex
-	s.mu.Unlock()
+	s.entry.mu.Unlock()
 
 	res, err := s.deps.Launcher.Launch(context.Background(), spec)
 	if err != nil {
@@ -383,9 +380,9 @@ func (s *ShardSM) runLaunch() {
 		if e := s.deps.Store.IncrementShardLaunchAttempts(s.id); e != nil {
 			log.Printf("shardsm %s: bump launch_attempts: %v", s.id, e)
 		}
-		s.mu.Lock()
+		s.entry.mu.Lock()
 		s.entry.LaunchAttempts++
-		s.mu.Unlock()
+		s.entry.mu.Unlock()
 		return
 	}
 
@@ -393,11 +390,11 @@ func (s *ShardSM) runLaunch() {
 		log.Printf("shardsm %s: persist launch result: %v", s.id, err)
 		return // leave InstanceID unstamped; next Evaluate retries
 	}
-	s.mu.Lock()
+	s.entry.mu.Lock()
 	s.entry.InstanceID = res.InstanceID
 	s.entry.AZ = res.AZ
 	s.entry.EBSVolumeID = res.VolumeID
-	s.mu.Unlock()
+	s.entry.mu.Unlock()
 	log.Printf("shardsm %s: launched (instance=%s vol=%s az=%s); awaiting heartbeat",
 		s.id, res.InstanceID, res.VolumeID, res.AZ)
 }
@@ -432,12 +429,12 @@ func (s *ShardSM) evaluateSuspended(ctx context.Context) error {
 		}
 	}
 
-	s.mu.Lock()
+	s.entry.mu.Lock()
 	deadID := s.entry.InstanceID
 	az := s.entry.AZ
 	volumeID := s.entry.EBSVolumeID
 	stripeIndex := s.entry.StripeIndex
-	s.mu.Unlock()
+	s.entry.mu.Unlock()
 
 	// Reap the dead instance (clears ASG bookkeeping + decrements). An
 	// already-gone instance is a no-op inside Terminate. On failure,
@@ -456,9 +453,9 @@ func (s *ShardSM) evaluateSuspended(ctx context.Context) error {
 	if err := s.deps.Store.SetShardLaunchResult(s.id, "", az, volumeID, stripeIndex); err != nil {
 		return fmt.Errorf("shardsm %s: clear instance before relaunch: %w", s.id, err)
 	}
-	s.mu.Lock()
+	s.entry.mu.Lock()
 	s.entry.InstanceID = ""
-	s.mu.Unlock()
+	s.entry.mu.Unlock()
 
 	return s.Fire(ctx, TriggerRelaunch) // → LAUNCHING (recovery relaunch)
 }
@@ -472,13 +469,13 @@ func (s *ShardSM) evaluateSuspended(ctx context.Context) error {
 // leaves the entry mid-cleanup for the next tick rather than unwinding
 // the archive or advancing to ARCHIVED early.
 func (s *ShardSM) evaluateArchiving(ctx context.Context) error {
-	s.mu.Lock()
+	s.entry.mu.Lock()
 	parquetPath := s.entry.ParquetPath
 	liveShard := s.entry.Shard
 	volumeID := s.entry.EBSVolumeID
 	instanceID := s.entry.InstanceID
 	services := s.entry.Services
-	s.mu.Unlock()
+	s.entry.mu.Unlock()
 
 	// Step 1 — export to S3 (once). A shard with no recorded path and no
 	// live handle has nothing to export (already cold after a restart, or
@@ -504,12 +501,12 @@ func (s *ShardSM) evaluateArchiving(ctx context.Context) error {
 			return fmt.Errorf("shardsm %s: persist parquet path: %w", s.id, err)
 		}
 		liveShard.Close()
-		s.mu.Lock()
+		s.entry.mu.Lock()
 		s.entry.Shard = cold
 		s.entry.ParquetPath = path
 		s.entry.LastHeartbeatAt = time.Time{}
 		parquetPath = path
-		s.mu.Unlock()
+		s.entry.mu.Unlock()
 		log.Printf("shardsm %s: archived to %s", s.id, path)
 	}
 
@@ -522,9 +519,9 @@ func (s *ShardSM) evaluateArchiving(ctx context.Context) error {
 		if err := s.deps.Store.ClearShardVolume(s.id); err != nil {
 			return fmt.Errorf("shardsm %s: clear volume: %w", s.id, err)
 		}
-		s.mu.Lock()
+		s.entry.mu.Lock()
 		s.entry.EBSVolumeID = ""
-		s.mu.Unlock()
+		s.entry.mu.Unlock()
 	}
 
 	// Step 3 — terminate the now-idle instance. Terminate is idempotent,
@@ -538,18 +535,18 @@ func (s *ShardSM) evaluateArchiving(ctx context.Context) error {
 		if err := s.deps.Store.ClearShardInstance(s.id); err != nil {
 			return fmt.Errorf("shardsm %s: clear instance: %w", s.id, err)
 		}
-		s.mu.Lock()
+		s.entry.mu.Lock()
 		s.entry.InstanceID = ""
-		s.mu.Unlock()
+		s.entry.mu.Unlock()
 	}
 
 	// All three steps have landed (data in S3, volume retired, instance
 	// gone) → the archive is durable and query-ready via the ColdShard.
 	// Flip ARCHIVING → ARCHIVED. This is the one transition the shard
 	// fires itself: only it knows the export finished.
-	s.mu.Lock()
+	s.entry.mu.Lock()
 	done := s.entry.ParquetPath != "" && s.entry.EBSVolumeID == "" && s.entry.InstanceID == ""
-	s.mu.Unlock()
+	s.entry.mu.Unlock()
 	if done {
 		return s.Fire(ctx, TriggerArchiveComplete) // → ARCHIVED
 	}
@@ -629,7 +626,7 @@ func (s *ShardSM) configureOnHeartbeat(ctx context.Context, args ...any) error {
 
 	var dialed shard.Shard
 	if s.deps.Configurer != nil {
-		s.mu.Lock()
+		s.entry.mu.Lock()
 		req := &pb.ConfigureRequest{
 			ShardId:        s.id,
 			Services:       serviceNames(s.entry.Services),
@@ -637,7 +634,7 @@ func (s *ShardSM) configureOnHeartbeat(ctx context.Context, args ...any) error {
 			WindowEnd:      s.entry.WindowEnd.Format(time.RFC3339),
 			HeartbeatToken: s.entry.HeartbeatToken,
 		}
-		s.mu.Unlock()
+		s.entry.mu.Unlock()
 
 		dialCtx, cancel := context.WithTimeout(ctx, configureTimeout)
 		sh, err := s.deps.Configurer.Dial(dialCtx, hb.Addr, req)
@@ -648,8 +645,8 @@ func (s *ShardSM) configureOnHeartbeat(ctx context.Context, args ...any) error {
 		dialed = sh
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.entry.mu.Lock()
+	defer s.entry.mu.Unlock()
 	s.entry.Addr = hb.Addr
 	s.entry.InstanceID = hb.InstanceID
 	s.entry.LastHeartbeatAt = s.deps.Clock()
@@ -672,22 +669,22 @@ func (s *ShardSM) configureOnHeartbeat(ctx context.Context, args ...any) error {
 // restart — LoadFromStore rehydrates the entry but can't redial a live
 // shard — so the first post-restart heartbeat is what reattaches it.
 func (s *ShardSM) ObserveHeartbeat(ctx context.Context, hb store.ShardHeartbeat) {
-	s.mu.Lock()
+	s.entry.mu.Lock()
 	needDial := s.deps.Configurer != nil && hb.Addr != "" &&
 		(s.entry.Shard == nil || s.entry.Addr != hb.Addr)
-	s.mu.Unlock()
+	s.entry.mu.Unlock()
 	if needDial {
 		if err := s.reconnect(ctx, hb); err != nil {
 			log.Printf("shardsm %s: reconnect on heartbeat at %s: %v", s.id, hb.Addr, err)
 		}
 	}
 
-	s.mu.Lock()
+	s.entry.mu.Lock()
 	s.entry.LastHeartbeatAt = s.deps.Clock()
 	if hb.RowCount > 0 {
 		s.entry.RowCount = hb.RowCount
 	}
-	s.mu.Unlock()
+	s.entry.mu.Unlock()
 	if s.deps.Registry != nil {
 		s.deps.Registry.TouchHeartbeat(s.entry)
 	}
@@ -699,7 +696,7 @@ func (s *ShardSM) ObserveHeartbeat(ctx context.Context, hb store.ShardHeartbeat)
 // shape with configureOnHeartbeat. Caller has already checked that a dial
 // is warranted (handle nil or addr moved) and that a Configurer exists.
 func (s *ShardSM) reconnect(ctx context.Context, hb store.ShardHeartbeat) error {
-	s.mu.Lock()
+	s.entry.mu.Lock()
 	req := &pb.ConfigureRequest{
 		ShardId:        s.id,
 		Services:       serviceNames(s.entry.Services),
@@ -707,7 +704,7 @@ func (s *ShardSM) reconnect(ctx context.Context, hb store.ShardHeartbeat) error 
 		WindowEnd:      s.entry.WindowEnd.Format(time.RFC3339),
 		HeartbeatToken: s.entry.HeartbeatToken,
 	}
-	s.mu.Unlock()
+	s.entry.mu.Unlock()
 
 	dialCtx, cancel := context.WithTimeout(ctx, configureTimeout)
 	sh, err := s.deps.Configurer.Dial(dialCtx, hb.Addr, req)
@@ -716,14 +713,14 @@ func (s *ShardSM) reconnect(ctx context.Context, hb store.ShardHeartbeat) error 
 		return err
 	}
 
-	s.mu.Lock()
+	s.entry.mu.Lock()
 	old := s.entry.Shard
 	s.entry.Shard = sh
 	s.entry.Addr = hb.Addr
 	if hb.InstanceID != "" {
 		s.entry.InstanceID = hb.InstanceID
 	}
-	s.mu.Unlock()
+	s.entry.mu.Unlock()
 
 	if old != nil {
 		go func() {
@@ -743,8 +740,8 @@ func (s *ShardSM) reconnect(ctx context.Context, hb store.ShardHeartbeat) error 
 func (s *ShardSM) onEnterSuspended(ctx context.Context, args ...any) error {
 	log.Printf("shardsm %s: enter SUSPENDED — connection torn down; Evaluate will reap %s and relaunch",
 		s.id, s.entry.InstanceID)
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.entry.mu.Lock()
+	defer s.entry.mu.Unlock()
 	s.entry.Addr = ""
 	s.entry.Shard = nil
 	return nil
