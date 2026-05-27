@@ -128,8 +128,16 @@ table; only the Go representation collapses.
 ## Phased migration (each phase compiles + `-race`-green)
 
 **Phase 1 — merge the data (ShardRecord + ShardEntry → Shard).**
+- **1a SHIPPED** (`40506cf`): migration 062 (`timestamptz`) + `ShardRecord`'s
+  three time fields → `time.Time` (matching `ShardEntry`). This deleted the
+  string↔time mapping at every Record↔Entry boundary (`persist`/
+  `LoadFromStore`/`RefreshFromStore` assign directly; the bucket SM compares
+  `time.Time`). Both types still exist — this is the time-handling
+  foundation, not the merge. Full suite green; logdb `-race` clean. **The
+  schema.sql collapse is post-deploy** (run `make collapse` after prod
+  applies 062). NEXT: the type-merge proper (below).
 - Ship the `timestamptz` migration for `window_start/end` + `created_at`
-  (decision 1) so the unified type's times are native `time.Time`.
+  (decision 1) so the unified type's times are native `time.Time`. *(done in 1a)*
 - Define `logdb.Shard` with gorm tags + `TableName()`; `gorm:"-"` on
   runtime fields.
 - Move the shard-row store methods into `logdb` (a `shardStore` helper
