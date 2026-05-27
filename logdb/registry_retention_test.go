@@ -54,31 +54,31 @@ func TestMatchingEntries_ClampsToPlanRetention(t *testing.T) {
 	registry := NewShardRegistry()
 
 	now := time.Now()
-	recent := &ShardEntry{
+	recent := &Shard{
 		ID:          "recent",
 		Services:    []store.ShardService{{NamespaceID: 1, Service: "ops"}},
 		WindowStart: now.Add(-10 * 24 * time.Hour),
 		WindowEnd:   now.Add(-5 * 24 * time.Hour),
 		State:       StateReadOnly,
-		Shard:       &failingShard{id: "recent"},
+		Live:        &failingShard{id: "recent"},
 		RowCount:    1,
 	}
-	spanning := &ShardEntry{
+	spanning := &Shard{
 		ID:          "spanning",
 		Services:    []store.ShardService{{NamespaceID: 1, Service: "ops"}},
 		WindowStart: now.Add(-45 * 24 * time.Hour),
 		WindowEnd:   now.Add(-20 * 24 * time.Hour),
 		State:       StateReadOnly,
-		Shard:       &failingShard{id: "spanning"},
+		Live:        &failingShard{id: "spanning"},
 		RowCount:    1,
 	}
-	old := &ShardEntry{
+	old := &Shard{
 		ID:          "old",
 		Services:    []store.ShardService{{NamespaceID: 1, Service: "ops"}},
 		WindowStart: now.Add(-200 * 24 * time.Hour),
 		WindowEnd:   now.Add(-195 * 24 * time.Hour),
 		State:       StateReadOnly,
-		Shard:       &failingShard{id: "old"},
+		Live:        &failingShard{id: "old"},
 		RowCount:    1,
 	}
 	registry.Add(recent)

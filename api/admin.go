@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/kevlarcon/weft/logdb"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/store"
 )
@@ -245,13 +246,13 @@ func (s *Server) handleAdminListShards(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	var records []store.ShardRecord
-	err = s.store.DB().Where("bucket_id = ?", id).Order("window_start DESC").Find(&records).Error
+	var shards []logdb.Shard
+	err = s.store.DB().Where("bucket_id = ?", id).Order("window_start DESC").Find(&shards).Error
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	json.NewEncoder(w).Encode(records)
+	json.NewEncoder(w).Encode(shards)
 }
 
 func (s *Server) handleAdminArchiveShard(w http.ResponseWriter, r *http.Request) {
@@ -260,13 +261,13 @@ func (s *Server) handleAdminArchiveShard(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "id required", http.StatusBadRequest)
 		return
 	}
-	rec, found, err := s.store.GetShard(shardID)
+	rec, found, err := logdb.ShardStore{Store: s.store}.GetShard(shardID)
 	if err != nil || !found {
 		http.Error(w, "shard not found", http.StatusNotFound)
 		return
 	}
-	if rec.State != "READ_ONLY" {
-		http.Error(w, "only READ_ONLY shards can be archived (current: "+rec.State+")", http.StatusConflict)
+	if rec.State != logdb.StateReadOnly {
+		http.Error(w, "only READ_ONLY shards can be archived (current: "+string(rec.State)+")", http.StatusConflict)
 		return
 	}
 	_, err = s.coordClient.ForceArchiveShard(s.coordCtx(r), &pb.ForceArchiveShardRequest{
@@ -293,13 +294,13 @@ func (s *Server) handleAdminDeleteShard(w http.ResponseWriter, r *http.Request) 
 		json.NewDecoder(r.Body).Decode(&req)
 	}
 
-	rec, found, err := s.store.GetShard(shardID)
+	rec, found, err := logdb.ShardStore{Store: s.store}.GetShard(shardID)
 	if err != nil || !found {
 		http.Error(w, "shard not found", http.StatusNotFound)
 		return
 	}
-	if rec.State != "ARCHIVED" {
-		http.Error(w, "only ARCHIVED shards can be deleted (current: "+rec.State+")", http.StatusConflict)
+	if rec.State != logdb.StateArchived {
+		http.Error(w, "only ARCHIVED shards can be deleted (current: "+string(rec.State)+")", http.StatusConflict)
 		return
 	}
 

@@ -27,7 +27,7 @@ const (
 
 // ShardSM is the per-shard finite state machine. Wraps a
 // stateless.StateMachine whose external storage reads/writes
-// shard_records.state via the store, and holds the ShardEntry the
+// shard_records.state via the store, and holds the Shard the
 // FSM's actions mutate. One per registered shard; the registry owns
 // the SM<→entry pairing.
 //
@@ -44,7 +44,7 @@ const (
 // still respect the registry's mutex.
 type ShardSM struct {
 	id    string
-	entry *ShardEntry
+	entry *Shard
 	deps  ShardSMDeps
 	sm    *stateless.StateMachine
 
@@ -60,7 +60,7 @@ type ShardSM struct {
 // Kept narrow so test fixtures can mock individual fields rather
 // than constructing a full Provisioner.
 type ShardSMDeps struct {
-	Store    *store.Store
+	Store    shardRowStore // shard_records persistence (ShardStore in prod; nil on dev/test paths without persistence)
 	Registry *ShardRegistry
 	Launcher ShardLaunchAPI // launches/terminates instances; nil in tests that don't drive launches
 	Volumes  VolumeManager  // resolves a shard's volume for the SUSPENDED stranded check + archive retire; nil skips both
@@ -98,7 +98,7 @@ var ErrUnknownShard = errors.New("shard record not found")
 // initial-state seeding (a newly minted shard) Fire(TriggerLaunch)
 // immediately; callers hydrating from an existing row let the
 // accessor pick up the persisted state on first transition.
-func NewShardSM(entry *ShardEntry, deps ShardSMDeps) *ShardSM {
+func NewShardSM(entry *Shard, deps ShardSMDeps) *ShardSM {
 	if deps.Clock == nil {
 		deps.Clock = time.Now
 	}
@@ -150,14 +150,14 @@ func (s *ShardSM) Fire(ctx context.Context, trigger Trigger, args ...any) error 
 // persisted state column. A missing row returns ErrUnknownShard,
 // which the SM treats as terminal.
 func (s *ShardSM) readState(ctx context.Context) (stateless.State, error) {
-	rec, ok, err := s.deps.Store.GetShard(s.id)
+	sh, ok, err := s.deps.Store.GetShard(s.id)
 	if err != nil {
 		return nil, fmt.Errorf("shardsm read %s: %w", s.id, err)
 	}
 	if !ok {
 		return StateGone, nil // treated as terminal; transitions out are ignored
 	}
-	return ShardState(rec.State), nil
+	return sh.State, nil
 }
 
 // writeState is the stateless ExternalStorage mutator. Writes the
@@ -166,11 +166,10 @@ func (s *ShardSM) readState(ctx context.Context) (stateless.State, error) {
 // see the same value without another round-trip.
 func (s *ShardSM) writeState(ctx context.Context, st stateless.State) error {
 	newState := st.(ShardState)
-	// Narrow write: only the state column. Lifecycle-owned fields
-	// (window bounds, apps, addr) move through SaveShard, so this
-	// transition can't trample a concurrent SaveShard over them.
-	if err := s.deps.Store.DB().Model(&store.ShardRecord{}).Where("id = ?", s.id).
-		Update("state", string(newState)).Error; err != nil {
+	// Narrow write: only the state column (SetShardState). Lifecycle-owned
+	// fields (window bounds, services, addr) move through SaveShard, so
+	// this transition can't trample a concurrent SaveShard over them.
+	if err := s.deps.Store.SetShardState(s.id, newState); err != nil {
 		return fmt.Errorf("shardsm write %s=%s: %w", s.id, newState, err)
 	}
 	s.entry.mu.Lock()
@@ -471,7 +470,7 @@ func (s *ShardSM) evaluateSuspended(ctx context.Context) error {
 func (s *ShardSM) evaluateArchiving(ctx context.Context) error {
 	s.entry.mu.Lock()
 	parquetPath := s.entry.ParquetPath
-	liveShard := s.entry.Shard
+	liveShard := s.entry.Live
 	volumeID := s.entry.EBSVolumeID
 	instanceID := s.entry.InstanceID
 	services := s.entry.Services
@@ -502,7 +501,7 @@ func (s *ShardSM) evaluateArchiving(ctx context.Context) error {
 		}
 		liveShard.Close()
 		s.entry.mu.Lock()
-		s.entry.Shard = cold
+		s.entry.Live = cold
 		s.entry.ParquetPath = path
 		s.entry.LastHeartbeatAt = time.Time{}
 		parquetPath = path
@@ -606,7 +605,7 @@ func (s *ShardSM) onEnterLaunching(ctx context.Context, args ...any) error {
 //
 // No prior connection to close: LAUNCHING never held one, and
 // SUSPENDED.OnEntry already dropped the dead handle (see the failure
-// walkthrough in docs/plans/asg-as-api-stateless.md — "old entry.Shard
+// walkthrough in docs/plans/asg-as-api-stateless.md — "old entry.Live
 // was already nil; no deferred close needed").
 //
 // On a Dial failure the transition's state write (→ INGESTING) has
@@ -614,7 +613,7 @@ func (s *ShardSM) onEnterLaunching(ctx context.Context, args ...any) error {
 // OnEntry — so the row is INGESTING with a nil handle until a later
 // heartbeat reconnects it (slice C wires that reconnect). Returning the
 // error surfaces the failure to the heartbeat caller for logging
-// meanwhile, and leaves entry.Shard nil rather than half-set.
+// meanwhile, and leaves entry.Live nil rather than half-set.
 //
 // Configurer is nil on dev/test paths; the SM then just records the
 // heartbeat's addr/instance without attaching a connection.
@@ -654,7 +653,7 @@ func (s *ShardSM) configureOnHeartbeat(ctx context.Context, args ...any) error {
 		s.entry.RowCount = hb.RowCount
 	}
 	if dialed != nil {
-		s.entry.Shard = dialed
+		s.entry.Live = dialed
 	}
 	return nil
 }
@@ -671,7 +670,7 @@ func (s *ShardSM) configureOnHeartbeat(ctx context.Context, args ...any) error {
 func (s *ShardSM) ObserveHeartbeat(ctx context.Context, hb store.ShardHeartbeat) {
 	s.entry.mu.Lock()
 	needDial := s.deps.Configurer != nil && hb.Addr != "" &&
-		(s.entry.Shard == nil || s.entry.Addr != hb.Addr)
+		(s.entry.Live == nil || s.entry.Addr != hb.Addr)
 	s.entry.mu.Unlock()
 	if needDial {
 		if err := s.reconnect(ctx, hb); err != nil {
@@ -714,8 +713,8 @@ func (s *ShardSM) reconnect(ctx context.Context, hb store.ShardHeartbeat) error 
 	}
 
 	s.entry.mu.Lock()
-	old := s.entry.Shard
-	s.entry.Shard = sh
+	old := s.entry.Live
+	s.entry.Live = sh
 	s.entry.Addr = hb.Addr
 	if hb.InstanceID != "" {
 		s.entry.InstanceID = hb.InstanceID
@@ -743,7 +742,7 @@ func (s *ShardSM) onEnterSuspended(ctx context.Context, args ...any) error {
 	s.entry.mu.Lock()
 	defer s.entry.mu.Unlock()
 	s.entry.Addr = ""
-	s.entry.Shard = nil
+	s.entry.Live = nil
 	return nil
 }
 

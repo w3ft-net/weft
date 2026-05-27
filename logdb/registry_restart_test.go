@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/kevlarcon/weft/shard"
-	"github.com/kevlarcon/weft/store"
 )
 
 // TestCoordinator_RegistrySurvivesRestart verifies the "survives restart"
@@ -25,8 +24,8 @@ func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
 	// Phase 1: a shard is INGESTING and persisted (as the FSM mint +
 	// promotion path would leave it).
 	reg1 := NewShardRegistry()
-	reg1.SetStore(db)
-	reg1.Add(&ShardEntry{
+	reg1.SetStore(ShardStore{db})
+	reg1.Add(&Shard{
 		ID:          "shard-restart",
 		BucketID:    defaultBucketID,
 		State:       StateIngesting,
@@ -43,7 +42,7 @@ func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
 	// AZ/StripeIndex/instance/volume are FSM-owned columns persisted
 	// through the narrow SetShardLaunchResult (as MintShard does), not the
 	// registry's SaveShard upsert — stamp them so they survive the reload.
-	if err := db.SetShardLaunchResult("shard-restart", "i-restart", "us-east-2a", "vol-restart", &stripe); err != nil {
+	if err := (ShardStore{db}).SetShardLaunchResult("shard-restart", "i-restart", "us-east-2a", "vol-restart", &stripe); err != nil {
 		t.Fatalf("persist launch result: %v", err)
 	}
 
@@ -52,8 +51,8 @@ func TestCoordinator_RegistrySurvivesRestart(t *testing.T) {
 	// reconstructed for a non-archived row, so reconstruct returns an
 	// error and the entry loads handle-less (mirrors production boot).
 	reg2 := NewShardRegistry()
-	reg2.SetStore(db)
-	if err := reg2.LoadFromStore(func(store.ShardRecord) (shard.Shard, error) {
+	reg2.SetStore(ShardStore{db})
+	if err := reg2.LoadFromStore(func(*Shard) (shard.Shard, error) {
 		return nil, errNoReconstruct
 	}); err != nil {
 		t.Fatalf("LoadFromStore: %v", err)

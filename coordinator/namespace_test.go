@@ -85,12 +85,12 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 	}
 
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "graybeard", "weft", "grantcentral")})
-	addInProcessShard(t, c, &logdb.ShardEntry{
+	addInProcessShard(t, c, &logdb.Shard{
 		ID:          "ns-shard-0",
 		WindowStart: base,
 		WindowEnd:   base.Add(time.Hour),
 		State:       logdb.StateIngesting,
-		Shard:       ds,
+		Live:        ds,
 		CreatedAt:   time.Now(),
 	}, "weft/coordinator/main", "weft/shard/main", "weft/coordinator/metrics", "grantcentral")
 	return c

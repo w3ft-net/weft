@@ -58,13 +58,13 @@ func TestRegistry_ServingSetQueryRouting(t *testing.T) {
 	}
 
 	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID: "shard-vimgym", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
-		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: sVim,
+		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Live: sVim,
 	})
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID: "shard-callbox", Services: []store.ShardService{{NamespaceID: 1, Service: "callbox"}},
-		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: sCb,
+		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Live: sCb,
 	})
 
 	serving := func(ids ...string) map[string]struct{} {
@@ -112,9 +112,9 @@ func TestRegistry_IngestingShard(t *testing.T) {
 	t.Cleanup(func() { s0.Close() })
 
 	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID: "s0", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}, {NamespaceID: 1, Service: "grantcentral"}},
-		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: s0,
+		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Live: s0,
 	})
 
 	if sh := reg.IngestingShard(1, "vimgym"); sh == nil {

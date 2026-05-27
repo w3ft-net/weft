@@ -120,11 +120,11 @@ func TestExecute_StagedPipelinePopulatesText(t *testing.T) {
 // query failures server-side.
 func TestExecute_ShardErrorReturnsPartialResults(t *testing.T) {
 	c := setupTestCoordinator(t)
-	e := &logdb.ShardEntry{
+	e := &logdb.Shard{
 		ID:          "shard-1",
 		WindowStart: t1, WindowEnd: t2,
 		State:     logdb.StateIngesting,
-		Shard:     &errShard{id: "shard-1"},
+		Live:      &errShard{id: "shard-1"},
 		CreatedAt: time.Now(),
 	}
 	logdb.SeedShard(c.Provisioner, e)

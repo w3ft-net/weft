@@ -18,8 +18,8 @@ func TestMatchingEntries_SkipsEmptyColdShards(t *testing.T) {
 	now := time.Now()
 	reg := NewShardRegistry()
 
-	mk := func(id string, st ShardState, rows int64) *ShardEntry {
-		return &ShardEntry{
+	mk := func(id string, st ShardState, rows int64) *Shard {
+		return &Shard{
 			ID:          id,
 			Services:    nil,
 			WindowStart: now.Add(-30 * time.Minute),

@@ -54,13 +54,13 @@ func seedBucket(t *testing.T, db *store.Store, state BucketState) *store.Bucket 
 // makeFixtureShardSM builds a ShardSM in initialState backed by a real
 // (transaction-scoped) store. Seeds a bucket + shard_records row, then
 // returns the SM, the store, and the in-memory entry the SM mutates.
-func makeFixtureShardSM(t *testing.T, initialState ShardState, customize ...func(*ShardSMDeps)) (*ShardSM, *store.Store, *ShardEntry) {
+func makeFixtureShardSM(t *testing.T, initialState ShardState, customize ...func(*ShardSMDeps)) (*ShardSM, *store.Store, *Shard) {
 	t.Helper()
 	db := openSMTestStore(t)
 	bucket := seedBucket(t, db, BucketStasis)
-	if err := db.SaveShard(&store.ShardRecord{
+	if err := (ShardStore{db}).SaveShard(&Shard{
 		ID:          "s-test",
-		State:       string(initialState),
+		State:       initialState,
 		BucketID:    bucket.ID,
 		Tier:        "small",
 		WindowStart: time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC),
@@ -69,7 +69,7 @@ func makeFixtureShardSM(t *testing.T, initialState ShardState, customize ...func
 	}); err != nil {
 		t.Fatalf("seed shard: %v", err)
 	}
-	entry := &ShardEntry{
+	entry := &Shard{
 		ID:       "s-test",
 		BucketID: bucket.ID,
 		Tier:     "small",
@@ -77,7 +77,7 @@ func makeFixtureShardSM(t *testing.T, initialState ShardState, customize ...func
 	}
 	clock := func() time.Time { return time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC) }
 	deps := ShardSMDeps{
-		Store:          db,
+		Store:          ShardStore{db},
 		Clock:          clock,
 		StaleThreshold: 2 * time.Minute,
 	}
@@ -172,7 +172,7 @@ func TestShardSM_EvaluateLaunchingKicksFreshLaunch(t *testing.T) {
 		t.Fatalf("entry.InstanceID: got %q", entry.InstanceID)
 	}
 	// launch result persisted narrowly
-	rec, _, _ := db.GetShard("s-test")
+	rec, _, _ := ShardStore{db}.GetShard("s-test")
 	if rec.InstanceID != "i-fake" || rec.AZ != "us-east-2a" || rec.EBSVolumeID != "vol-fake" {
 		t.Fatalf("persisted launch result wrong: instance=%q az=%q vol=%q", rec.InstanceID, rec.AZ, rec.EBSVolumeID)
 	}
@@ -224,7 +224,7 @@ func TestShardSM_EvaluateLaunchFailureBumpsAttempts(t *testing.T) {
 	if entry.LaunchAttempts != 1 {
 		t.Fatalf("entry.LaunchAttempts: got %d want 1", entry.LaunchAttempts)
 	}
-	rec, _, _ := db.GetShard("s-test")
+	rec, _, _ := ShardStore{db}.GetShard("s-test")
 	if rec.LaunchAttempts != 1 {
 		t.Fatalf("persisted launch_attempts: got %d want 1", rec.LaunchAttempts)
 	}
@@ -283,7 +283,7 @@ func TestShardSM_EvaluateSuspendedReapsThenRelaunches(t *testing.T) {
 	if entry.InstanceID != "" {
 		t.Fatalf("InstanceID not cleared in memory: %q", entry.InstanceID)
 	}
-	rec, _, _ := db.GetShard("s-test")
+	rec, _, _ := ShardStore{db}.GetShard("s-test")
 	if rec.InstanceID != "" {
 		t.Fatalf("InstanceID not cleared in store: %q", rec.InstanceID)
 	}
@@ -411,7 +411,7 @@ func TestShardSM_LaunchingToGoneOnLaunchFailed(t *testing.T) {
 	if got != StateGone {
 		t.Fatalf("state: got %q want GONE", got)
 	}
-	if _, ok, err := db.GetShard("s-test"); err != nil || ok {
+	if _, ok, err := (ShardStore{db}).GetShard("s-test"); err != nil || ok {
 		t.Fatalf("expected shard row deleted on GONE; ok=%v err=%v", ok, err)
 	}
 }
@@ -534,7 +534,7 @@ func TestShardSM_ArchivedToGoneOnAdminDelete(t *testing.T) {
 	if err := sm.Fire(context.Background(), TriggerAdminDelete); err != nil {
 		t.Fatalf("Fire AdminDelete: %v", err)
 	}
-	if _, ok, err := db.GetShard("s-test"); err != nil || ok {
+	if _, ok, err := (ShardStore{db}).GetShard("s-test"); err != nil || ok {
 		t.Fatalf("expected shard row deleted on AdminDelete; ok=%v err=%v", ok, err)
 	}
 }
@@ -634,8 +634,8 @@ func TestShardSM_ConfigureOnHeartbeatDialsAndAttaches(t *testing.T) {
 	if fc.dialReq.WindowStart != "2026-05-21T12:00:00Z" || fc.dialReq.WindowEnd != "2026-05-21T13:00:00Z" {
 		t.Fatalf("dial req window: start=%q end=%q", fc.dialReq.WindowStart, fc.dialReq.WindowEnd)
 	}
-	if entry.Shard == nil {
-		t.Fatal("entry.Shard not attached after a successful configure")
+	if entry.Live == nil {
+		t.Fatal("entry.Live not attached after a successful configure")
 	}
 }
 
@@ -649,8 +649,8 @@ func TestShardSM_ConfigureOnHeartbeatDialFailureSurfacesError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected the dial failure to surface from Fire")
 	}
-	if entry.Shard != nil {
-		t.Fatalf("entry.Shard must stay nil on dial failure; got %T", entry.Shard)
+	if entry.Live != nil {
+		t.Fatalf("entry.Live must stay nil on dial failure; got %T", entry.Live)
 	}
 	// stateless writes the destination before running OnEntry, so the row
 	// is already INGESTING despite the failed dial — a later heartbeat
@@ -670,13 +670,13 @@ func TestShardSM_EvaluateArchivingExportsRetiresTerminatesThenCompletes(t *testi
 		d.ParquetDir = "s3://weft"
 		d.LambdaFunctionURL = "https://fn.example/" // non-empty → ColdShard skips the duckdb open
 	})
-	entry.Shard = live
+	entry.Live = live
 	entry.Services = []store.ShardService{{NamespaceID: 1, Service: "warp"}}
 	entry.EBSVolumeID = "vol-1"
 	entry.InstanceID = "i-1"
 	// Seed the persisted row too so the cleared-column assertions prove the
 	// narrow writes ran (the fixture leaves these blank).
-	if err := db.SetShardLaunchResult("s-test", "i-1", "us-east-2a", "vol-1", nil); err != nil {
+	if err := (ShardStore{db}).SetShardLaunchResult("s-test", "i-1", "us-east-2a", "vol-1", nil); err != nil {
 		t.Fatalf("seed launch result: %v", err)
 	}
 
@@ -689,7 +689,7 @@ func TestShardSM_EvaluateArchivingExportsRetiresTerminatesThenCompletes(t *testi
 	if !live.closed {
 		t.Fatal("live shard not closed after the ColdShard swap")
 	}
-	rec, _, _ := db.GetShard("s-test")
+	rec, _, _ := ShardStore{db}.GetShard("s-test")
 	if rec.ParquetPath != "s3://weft/warp/s-test.parquet" {
 		t.Fatalf("parquet path not persisted: %q", rec.ParquetPath)
 	}
@@ -702,8 +702,8 @@ func TestShardSM_EvaluateArchivingExportsRetiresTerminatesThenCompletes(t *testi
 	if len(fl.terminated) != 1 || fl.terminated[0] != "i-1" {
 		t.Fatalf("instance not terminated: %v", fl.terminated)
 	}
-	if _, ok := entry.Shard.(*shard.ColdShard); !ok {
-		t.Fatalf("entry.Shard not swapped to ColdShard: %T", entry.Shard)
+	if _, ok := entry.Live.(*shard.ColdShard); !ok {
+		t.Fatalf("entry.Live not swapped to ColdShard: %T", entry.Live)
 	}
 	// All three steps landed in one tick → the shard fires ArchiveComplete
 	// itself and reaches the clean terminal.
@@ -742,10 +742,10 @@ func TestShardSM_EvaluateArchivingRetriesOnExportFailure(t *testing.T) {
 		d.Volumes = vm
 		d.ParquetDir = "s3://weft"
 	})
-	entry.Shard = live
+	entry.Live = live
 	entry.EBSVolumeID = "vol-1"
 	entry.InstanceID = "i-1"
-	if err := db.SetShardLaunchResult("s-test", "i-1", "us-east-2a", "vol-1", nil); err != nil {
+	if err := (ShardStore{db}).SetShardLaunchResult("s-test", "i-1", "us-east-2a", "vol-1", nil); err != nil {
 		t.Fatalf("seed launch result: %v", err)
 	}
 
@@ -755,7 +755,7 @@ func TestShardSM_EvaluateArchivingRetriesOnExportFailure(t *testing.T) {
 	if err := sm.Evaluate(context.Background()); err != nil {
 		t.Fatalf("Evaluate should swallow the export failure for retry, got: %v", err)
 	}
-	rec, _, _ := db.GetShard("s-test")
+	rec, _, _ := ShardStore{db}.GetShard("s-test")
 	if rec.ParquetPath != "" {
 		t.Fatalf("parquet path should be empty after a failed export: %q", rec.ParquetPath)
 	}

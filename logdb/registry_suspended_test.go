@@ -12,7 +12,7 @@ import (
 //
 // When a shard's instance goes stale, the provisioner sets
 // State=SUSPENDED, Addr="", InstanceID="" — but does NOT clear the
-// (now stale) e.Shard pointer. So MatchingEntries' "Addr=="" &&
+// (now stale) e.Live pointer. So MatchingEntries' "Addr=="" &&
 // Shard==nil" guard doesn't skip it, and SUSPENDED wasn't in the
 // state-exclusion list (only EXPIRING was). The entry was therefore
 // routed, the descriptor builder took the non-archived branch
@@ -30,7 +30,7 @@ func TestMatchingEntries_SkipsSuspended(t *testing.T) {
 	now := time.Now()
 	reg := NewShardRegistry()
 
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID:          "shard-suspended",
 		Services:    []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: now.Add(-30 * time.Minute),
@@ -39,7 +39,7 @@ func TestMatchingEntries_SkipsSuspended(t *testing.T) {
 		Addr:        "10.0.0.9:9000", // non-empty: must still be excluded
 		RowCount:    500,
 	})
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID:          "shard-live",
 		Services:    []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: now.Add(-30 * time.Minute),

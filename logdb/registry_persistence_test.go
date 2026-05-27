@@ -17,7 +17,7 @@ import (
 // postgres.
 type fakeRegistryStore struct {
 	mu      sync.Mutex
-	records map[string]store.ShardRecord
+	records map[string]*Shard
 	saves   int
 	deletes int
 	// servingFn, when set, backs ShardIDsServingService so a test can
@@ -37,13 +37,16 @@ type fakeRegistryStore struct {
 }
 
 func newFakeRegistryStore() *fakeRegistryStore {
-	return &fakeRegistryStore{records: make(map[string]store.ShardRecord)}
+	return &fakeRegistryStore{records: make(map[string]*Shard)}
 }
 
-func (f *fakeRegistryStore) SaveShard(rec *store.ShardRecord) error {
+// SaveShard stores a persistedCopy so the fake's record is isolated from
+// the caller's live entry (modelling the DB round-trip), matching how the
+// real ShardRegistry hands the store a snapshot.
+func (f *fakeRegistryStore) SaveShard(sh *Shard) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.records[rec.ID] = *rec
+	f.records[sh.ID] = sh.persistedCopy()
 	f.saves++
 	return nil
 }
@@ -56,24 +59,26 @@ func (f *fakeRegistryStore) DeleteShard(id string) error {
 	return nil
 }
 
-func (f *fakeRegistryStore) ListShards() ([]store.ShardRecord, error) {
+// ListShards returns fresh copies so the registry's load path gets new
+// objects rather than aliasing the fake's stored records (as gorm would).
+func (f *fakeRegistryStore) ListShards() ([]*Shard, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]store.ShardRecord, 0, len(f.records))
+	out := make([]*Shard, 0, len(f.records))
 	for _, r := range f.records {
-		out = append(out, r)
+		out = append(out, r.persistedCopy())
 	}
 	return out, nil
 }
 
-func (f *fakeRegistryStore) GetShard(id string) (store.ShardRecord, bool, error) {
+func (f *fakeRegistryStore) GetShard(id string) (*Shard, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	r, ok := f.records[id]
 	if !ok {
-		return store.ShardRecord{}, false, nil
+		return nil, false, nil
 	}
-	return r, true, nil
+	return r.persistedCopy(), true, nil
 }
 
 func (f *fakeRegistryStore) TouchHeartbeat(id string, rowCount int64) error {
@@ -81,12 +86,12 @@ func (f *fakeRegistryStore) TouchHeartbeat(id string, rowCount int64) error {
 	defer f.mu.Unlock()
 	if rec, ok := f.records[id]; ok {
 		rec.RowCount = rowCount
-		f.records[id] = rec
 	}
 	return nil
 }
 
-func (f *fakeRegistryStore) get(id string) (store.ShardRecord, bool) {
+// get returns the stored record for test inspection.
+func (f *fakeRegistryStore) get(id string) (*Shard, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	r, ok := f.records[id]
@@ -154,7 +159,7 @@ func (f *fakeRegistryStore) ShardIDsServingService(namespaceID uint, service str
 // pattern).
 func TestPersistState_NoOpWhenStoreUnset(t *testing.T) {
 	reg := NewShardRegistry()
-	entry := &ShardEntry{ID: "x", State: StateIngesting, CreatedAt: time.Now()}
+	entry := &Shard{ID: "x", State: StateIngesting, CreatedAt: time.Now()}
 	reg.Add(entry)
 
 	entry.State = StateReadOnly
@@ -167,7 +172,7 @@ func TestRemove_DeletesFromStore(t *testing.T) {
 	reg := NewShardRegistry()
 	reg.SetStore(fake)
 
-	reg.Add(&ShardEntry{ID: "shard-bye", State: StateIngesting, CreatedAt: time.Now()})
+	reg.Add(&Shard{ID: "shard-bye", State: StateIngesting, CreatedAt: time.Now()})
 	if _, ok := fake.get("shard-bye"); !ok {
 		t.Fatal("shard-bye missing after Add")
 	}

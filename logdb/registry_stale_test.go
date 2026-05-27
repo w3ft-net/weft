@@ -24,15 +24,15 @@ func TestRegistry_MatchingEntries_SkipsStaleHeartbeat(t *testing.T) {
 	t.Cleanup(func() { staleShard.Close() })
 
 	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID: "fresh", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: t0, WindowEnd: t2, State: StateIngesting,
-		Shard: freshShard, LastHeartbeatAt: time.Now(),
+		Live: freshShard, LastHeartbeatAt: time.Now(),
 	})
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID: "stale", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: t0, WindowEnd: t2, State: StateIngesting,
-		Shard: staleShard,
+		Live: staleShard,
 		// Heartbeat absent for 5 minutes — well past the 2-minute threshold.
 		LastHeartbeatAt: time.Now().Add(-5 * time.Minute),
 	})
@@ -62,15 +62,15 @@ func TestRegistry_IngestingShard_SkipsStaleHeartbeat(t *testing.T) {
 	t.Cleanup(func() { staleShard.Close() })
 
 	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID: "fresh", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: t0, WindowEnd: t2, State: StateIngesting,
-		Shard: freshShard, LastHeartbeatAt: time.Now(),
+		Live: freshShard, LastHeartbeatAt: time.Now(),
 	})
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID: "stale", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: t0, WindowEnd: t2, State: StateIngesting,
-		Shard:           staleShard,
+		Live:            staleShard,
 		LastHeartbeatAt: time.Now().Add(-5 * time.Minute),
 	})
 
@@ -87,7 +87,7 @@ func TestRegistry_IngestingShard_SkipsStaleHeartbeat(t *testing.T) {
 }
 
 // TestRegistry_ZeroLastHeartbeatAtCountsAsFresh preserves backward
-// compatibility for tests that construct ShardEntry literals without
+// compatibility for tests that construct Shard literals without
 // the heartbeat field — e.g., archiver_test, coordinator_test. The
 // zero value should NOT be treated as "infinitely stale"; only an
 // explicitly aged timestamp triggers the filter.
@@ -99,10 +99,10 @@ func TestRegistry_ZeroLastHeartbeatAtCountsAsFresh(t *testing.T) {
 	t.Cleanup(func() { s.Close() })
 
 	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID: "legacy", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: t0, WindowEnd: t2, State: StateIngesting,
-		Shard: s,
+		Live: s,
 		// LastHeartbeatAt left zero.
 	})
 
@@ -116,7 +116,7 @@ func TestRegistry_ZeroLastHeartbeatAtCountsAsFresh(t *testing.T) {
 }
 
 // TestRegistry_HasApp_EmptyAppsNoLongerCatchAll pins the post-§8-#6
-// behavior: a ShardEntry with no explicit Apps no longer "matches all
+// behavior: a Shard with no explicit Apps no longer "matches all
 // apps." Pre-launch the legacy catch-all was a convenience for direct-
 // init tests; in production every shard has Apps populated by christen
 // or adopt, so the empty-Apps branch was dead in prod and a confusing
@@ -129,10 +129,10 @@ func TestRegistry_HasApp_EmptyAppsNoLongerCatchAll(t *testing.T) {
 	t.Cleanup(func() { s.Close() })
 
 	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID: "noapps", State: StateIngesting,
 		WindowStart: t0, WindowEnd: t2,
-		Shard: s,
+		Live: s,
 		// Apps intentionally left nil.
 	})
 
@@ -169,12 +169,12 @@ func TestProcessHeartbeat_RefreshesLastHeartbeatAt(t *testing.T) {
 	// Pre-populate the entry with an aged heartbeat so we can detect
 	// the refresh.
 	priorBeat := time.Now().Add(-3 * time.Minute)
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID:              "shard-live",
 		Services:        []store.ShardService{{NamespaceID: 1, Service: "weft"}},
 		State:           StateIngesting,
 		Addr:            "10.0.0.1:9000",
-		Shard:           ds,
+		Live:            ds,
 		CreatedAt:       time.Now(),
 		LastHeartbeatAt: priorBeat,
 	})

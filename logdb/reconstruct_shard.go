@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/kevlarcon/weft/shard"
-	"github.com/kevlarcon/weft/store"
 )
 
 // ReconstructConfig wires up the dependencies ReconstructShard needs
@@ -49,33 +48,33 @@ type ReconstructConfig struct {
 // no parquet) return an error. LoadFromStore ignores it and leaves
 // Shard=nil; the heartbeat path's christen / rebind branches fill
 // those entries when the live shard reappears.
-func ReconstructShard(rec store.ShardRecord, cfg ReconstructConfig) (shard.Shard, error) {
-	switch ShardState(rec.State) {
+func ReconstructShard(sh *Shard, cfg ReconstructConfig) (shard.Shard, error) {
+	switch sh.State {
 	case StateArchived:
-		if rec.ParquetPath == "" {
-			return nil, fmt.Errorf("ARCHIVED shard %s has no parquet_path (zombie row from rebind-timeout path)", rec.ID)
+		if sh.ParquetPath == "" {
+			return nil, fmt.Errorf("ARCHIVED shard %s has no parquet_path (zombie row from rebind-timeout path)", sh.ID)
 		}
 		// ColdShard's apps arg is dead metadata (the cold-query path
 		// ignores it); the registry sets the entry's real service
 		// membership from shard_services at LoadFromStore.
-		return shard.NewColdShard(rec.ID, nil, rec.ParquetPath, cfg.LambdaFunctionURL, nil)
+		return shard.NewColdShard(sh.ID, nil, sh.ParquetPath, cfg.LambdaFunctionURL, nil)
 
 	case StateSuspended:
 		// Instance dead, awaiting replacement. No shard to dial; the
 		// rebind path attaches a GRPCShard when the replacement heartbeats.
-		return nil, fmt.Errorf("SUSPENDED shard %s awaiting rebind", rec.ID)
+		return nil, fmt.Errorf("SUSPENDED shard %s awaiting rebind", sh.ID)
 
 	case StateIngesting, StateReadOnly:
-		if rec.Addr == "" {
-			return nil, fmt.Errorf("%s shard %s has no addr (post-wipe-await-rebind)", rec.State, rec.ID)
+		if sh.Addr == "" {
+			return nil, fmt.Errorf("%s shard %s has no addr (post-wipe-await-rebind)", sh.State, sh.ID)
 		}
-		return shard.NewGRPCShard(rec.ID, rec.Addr, cfg.ShardSecret)
+		return shard.NewGRPCShard(sh.ID, sh.Addr, cfg.ShardSecret)
 
 	default:
 		// LAUNCHING (no instance), EXPIRING (mid-rotation; volume
 		// retiring), or any future state without a clear reconstruct
 		// path. Caller falls through; the lifecycle path that owns
 		// the state transition reattaches when ready.
-		return nil, fmt.Errorf("no reconstruct path for shard %s in state %s", rec.ID, rec.State)
+		return nil, fmt.Errorf("no reconstruct path for shard %s in state %s", sh.ID, sh.State)
 	}
 }

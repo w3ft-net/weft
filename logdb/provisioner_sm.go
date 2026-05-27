@@ -56,7 +56,7 @@ func (p *Provisioner) LoadStateMachines() {
 // meanwhile (evaluateLaunching guards on a nil launcher).
 func (p *Provisioner) shardSMDeps() ShardSMDeps {
 	deps := ShardSMDeps{
-		Store:             p.store,
+		Store:             ShardStore{p.store},
 		Registry:          p.registry,
 		Volumes:           p.volumes,
 		Configurer:        p.configurer,
@@ -108,7 +108,7 @@ func (p *Provisioner) MintShard(ctx context.Context, spec MintSpec) (string, err
 
 	stripe := spec.StripeIndex
 	now := time.Now().UTC()
-	entry := &ShardEntry{
+	entry := &Shard{
 		ID:             shardID,
 		WindowStart:    spec.WindowStart,
 		WindowEnd:      spec.WindowEnd,
@@ -120,13 +120,11 @@ func (p *Provisioner) MintShard(ctx context.Context, spec MintSpec) (string, err
 		AZ:             az,
 		StripeIndex:    &stripe,
 	}
-	// Add persists the FK-required lifecycle columns (state, window, tier,
-	// token, bucket); the AZ + stripe are FSM-owned and written through the
-	// narrow SetShardLaunchResult so the in-memory entry and row agree.
+	// Add persists the whole entry via a full Save — including AZ + stripe
+	// — so unlike the pre-collapse path there's no separate narrow
+	// SetShardLaunchResult needed to restore the columns the old field-
+	// omitting persist would have wiped.
 	p.registry.Add(entry)
-	if err := p.store.SetShardLaunchResult(shardID, "", az, "", &stripe); err != nil {
-		return "", fmt.Errorf("MintShard %s: persist az/stripe: %w", shardID, err)
-	}
 	if err := p.store.StampShardServices(shardID, spec.BucketID); err != nil {
 		log.Printf("provisioner: MintShard %s: stamp shard_services: %v", shardID, err)
 	}

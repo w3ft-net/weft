@@ -3,8 +3,6 @@ package logdb
 import (
 	"strings"
 	"testing"
-
-	"github.com/kevlarcon/weft/store"
 )
 
 // TestReconstructShard_IngestingDials covers the post-restart bootstrap
@@ -14,12 +12,12 @@ import (
 // the entry and queries return zero rows until a heartbeat arrives —
 // the symptom that motivated this work.
 func TestReconstructShard_IngestingDials(t *testing.T) {
-	rec := store.ShardRecord{
+	rec := Shard{
 		ID:    "shard-live-ingest",
-		State: string(StateIngesting),
+		State: StateIngesting,
 		Addr:  "10.0.0.1:9000",
 	}
-	sh, err := ReconstructShard(rec, ReconstructConfig{ShardSecret: "test-secret"})
+	sh, err := ReconstructShard(&rec, ReconstructConfig{ShardSecret: "test-secret"})
 	if err != nil {
 		t.Fatalf("ReconstructShard: %v", err)
 	}
@@ -35,12 +33,12 @@ func TestReconstructShard_IngestingDials(t *testing.T) {
 // window's predecessor, still queryable but no new writes) carry an
 // addr and must also dial.
 func TestReconstructShard_ReadOnlyDials(t *testing.T) {
-	rec := store.ShardRecord{
+	rec := Shard{
 		ID:    "shard-readonly",
-		State: string(StateReadOnly),
+		State: StateReadOnly,
 		Addr:  "10.0.0.2:9000",
 	}
-	sh, err := ReconstructShard(rec, ReconstructConfig{ShardSecret: "test-secret"})
+	sh, err := ReconstructShard(&rec, ReconstructConfig{ShardSecret: "test-secret"})
 	if err != nil {
 		t.Fatalf("ReconstructShard: %v", err)
 	}
@@ -55,12 +53,12 @@ func TestReconstructShard_ReadOnlyDials(t *testing.T) {
 // registry entry's Shard pointer nil. The heartbeat-adopt path's
 // rebind branch fills it in when the replacement instance heartbeats.
 func TestReconstructShard_IngestingNoAddr(t *testing.T) {
-	rec := store.ShardRecord{
+	rec := Shard{
 		ID:    "shard-mid-rebind",
-		State: string(StateIngesting),
+		State: StateIngesting,
 		Addr:  "", // wiped, awaiting rebind
 	}
-	sh, err := ReconstructShard(rec, ReconstructConfig{ShardSecret: "test-secret"})
+	sh, err := ReconstructShard(&rec, ReconstructConfig{ShardSecret: "test-secret"})
 	if err == nil {
 		t.Fatal("expected error for ingesting row with empty addr; got nil")
 	}
@@ -74,12 +72,12 @@ func TestReconstructShard_IngestingNoAddr(t *testing.T) {
 // would be premature; the christen path attaches the Shard once the
 // instance heartbeats with the minted id.
 func TestReconstructShard_LaunchingNoDial(t *testing.T) {
-	rec := store.ShardRecord{
+	rec := Shard{
 		ID:    "shard-launching",
-		State: string(StateLaunching),
+		State: StateLaunching,
 		Addr:  "", // no instance yet
 	}
-	sh, err := ReconstructShard(rec, ReconstructConfig{ShardSecret: "test-secret"})
+	sh, err := ReconstructShard(&rec, ReconstructConfig{ShardSecret: "test-secret"})
 	if err == nil {
 		t.Fatal("expected error for LAUNCHING row; got nil")
 	}
@@ -95,12 +93,12 @@ func TestReconstructShard_LaunchingNoDial(t *testing.T) {
 // already skips ARCHIVED entries in MatchingEntries' state check
 // regardless, so the nil pointer is harmless in the query path.
 func TestReconstructShard_ArchivedNoParquet(t *testing.T) {
-	rec := store.ShardRecord{
+	rec := Shard{
 		ID:          "shard-zombie",
-		State:       string(StateArchived),
+		State:       StateArchived,
 		ParquetPath: "", // zombie path never exported
 	}
-	sh, err := ReconstructShard(rec, ReconstructConfig{ShardSecret: "test-secret"})
+	sh, err := ReconstructShard(&rec, ReconstructConfig{ShardSecret: "test-secret"})
 	if err == nil {
 		t.Fatal("expected error for ARCHIVED row with no parquet path; got nil")
 	}
@@ -115,12 +113,12 @@ func TestReconstructShard_ArchivedNoParquet(t *testing.T) {
 // TestReconstructShard_ArchivedWithParquet: the canonical cold-shard
 // reconstruct, the only path that worked before this change.
 func TestReconstructShard_ArchivedWithParquet(t *testing.T) {
-	rec := store.ShardRecord{
+	rec := Shard{
 		ID:          "shard-cold",
-		State:       string(StateArchived),
+		State:       StateArchived,
 		ParquetPath: "s3://weft-cold/weft/shard-cold.parquet",
 	}
-	sh, err := ReconstructShard(rec, ReconstructConfig{
+	sh, err := ReconstructShard(&rec, ReconstructConfig{
 		ShardSecret:       "test-secret",
 		LambdaFunctionURL: "https://lambda.example/invoke",
 	})

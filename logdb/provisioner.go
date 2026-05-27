@@ -34,9 +34,9 @@ type HeartbeatStore interface {
 // from HeartbeatStore so tests that don't exercise this path can keep
 // their minimal mocks. *store.Store satisfies it natively.
 type ShardOpsStore interface {
-	SaveShard(rec *store.ShardRecord) error
+	SaveShard(sh *Shard) error
 	DeleteShard(id string) error
-	GetShard(id string) (store.ShardRecord, bool, error)
+	GetShard(id string) (*Shard, bool, error)
 	// StampShardServices records the services the shard's bucket serves
 	// into shard_services — the permanent stamp future queries resolve
 	// through (stamped at mint).
@@ -206,15 +206,16 @@ func NewProvisioner(registry *ShardRegistry, launcher ShardLauncher, config Prov
 	}
 }
 
-// SetStore provides the store for heartbeat and LAUNCHING-row
-// operations. Called after the store is opened (which may happen
-// after the provisioner starts). *store.Store satisfies both
-// HeartbeatStore and ShardOpsStore, so one call wires both — and it
-// also (re)builds the BucketManager against the live store, so
-// callers no longer wire buckets in a separate step.
+// SetStore provides the store for heartbeat and shard-row operations.
+// Called after the store is opened (which may happen after the
+// provisioner starts). *store.Store satisfies HeartbeatStore directly;
+// shard-row ops go through ShardStore (the gorm-over-logdb.Shard
+// persister), which embeds *store.Store. This also (re)builds the
+// BucketManager against the live store, so callers no longer wire
+// buckets in a separate step.
 func (p *Provisioner) SetStore(s *store.Store) {
 	p.config.Store = s
-	p.config.ShardOps = s
+	p.config.ShardOps = ShardStore{s}
 	p.store = s
 	p.Buckets = NewBucketManager(s)
 }
@@ -241,7 +242,7 @@ func (p *Provisioner) Stats() *ServiceStats {
 // satisfy shard.IngestRecorder so drain can pass *Provisioner
 // straight into sh.Ingest). ShardDescriptorsFor is the one
 // exception — it folds the entry→descriptor transform into the
-// boundary so *ShardEntry never leaks across, and the registry
+// boundary so *Shard never leaks across, and the registry
 // stays free of proto knowledge.
 
 // IngestingShard returns an INGESTING shard serving (namespaceID,
@@ -706,12 +707,12 @@ func (p *Provisioner) DeleteArchived(shardID string) error {
 	return nil
 }
 
-func (p *Provisioner) archive(entry *ShardEntry) {
+func (p *Provisioner) archive(entry *Shard) {
 	// Snapshot the fields the export needs under a brief read lock; the
 	// 10-minute Archive I/O then runs unlocked so registry reads aren't
 	// blocked. The field swap re-takes the lock at the end.
 	entry.mu.RLock()
-	live := entry.Shard
+	live := entry.Live
 	services := entry.Services
 	volumeID := entry.EBSVolumeID
 	entry.mu.RUnlock()
@@ -732,7 +733,7 @@ func (p *Provisioner) archive(entry *ShardEntry) {
 
 	// ColdShard built here is dead inventory — the live query path runs in
 	// compute, which dials its own ColdShard from the descriptor. We still
-	// slot it into entry.Shard so registry walks see a non-nil pointer.
+	// slot it into entry.Live so registry walks see a non-nil pointer.
 	coldShard, err := shard.NewColdShard(entry.ID, serviceNames(services), parquetPath, p.config.LambdaFunctionURL, nil)
 	if err != nil {
 		log.Printf("provisioner: create cold shard for %s: %v", entry.ID, err)
@@ -740,8 +741,8 @@ func (p *Provisioner) archive(entry *ShardEntry) {
 	}
 
 	entry.mu.Lock()
-	old := entry.Shard
-	entry.Shard = coldShard
+	old := entry.Live
+	entry.Live = coldShard
 	entry.State = StateArchived
 	entry.ParquetPath = parquetPath
 	entry.LastHeartbeatAt = time.Time{}
@@ -763,7 +764,7 @@ func (p *Provisioner) archive(entry *ShardEntry) {
 // returned; the archive state change has already been persisted and
 // we don't want to undo it on a terminal-side failure that an
 // operator can clean up out of band.
-func (p *Provisioner) retireVolume(entry *ShardEntry) {
+func (p *Provisioner) retireVolume(entry *Shard) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 

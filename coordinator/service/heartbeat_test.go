@@ -20,7 +20,7 @@ import (
 func newRegisteredShard(t *testing.T, shardID, token string) *Server {
 	t.Helper()
 	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
-	logdb.SeedShard(coord.Provisioner, &logdb.ShardEntry{
+	logdb.SeedShard(coord.Provisioner, &logdb.Shard{
 		ID:             shardID,
 		State:          logdb.StateIngesting,
 		Addr:           "10.0.0.1:9000",
@@ -153,11 +153,11 @@ func TestHeartbeat_UnknownInRegistry_LoadFromStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := tx.SaveShard(&store.ShardRecord{
+	if err := (logdb.ShardStore{Store: tx}).SaveShard(&logdb.Shard{
 		ID:             shardID,
 		WindowStart:    time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC),
 		WindowEnd:      time.Date(2026, 4, 22, 0, 0, 0, 0, time.UTC),
-		State:          string(logdb.StateIngesting),
+		State:          logdb.StateIngesting,
 		HeartbeatToken: token,
 		Tier:           "small",
 		BucketID:       1,

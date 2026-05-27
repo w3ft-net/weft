@@ -64,14 +64,14 @@ func Start(cfg Config) (*Provisioner, error) {
 	// provisioner so LoadStateMachines builds an SM per persisted row and
 	// the first tick converges from real state rather than an empty world.
 	reg := NewShardRegistry()
-	reg.SetStore(cfg.DB)
+	reg.SetStore(ShardStore{cfg.DB})
 	lambdaURL := os.Getenv("LAMBDA_FUNCTION_URL")
 	reconstructCfg := ReconstructConfig{
 		ShardSecret:       cfg.ShardSecret,
 		LambdaFunctionURL: lambdaURL,
 	}
-	if err := reg.LoadFromStore(func(rec store.ShardRecord) (shard.Shard, error) {
-		return ReconstructShard(rec, reconstructCfg)
+	if err := reg.LoadFromStore(func(sh *Shard) (shard.Shard, error) {
+		return ReconstructShard(sh, reconstructCfg)
 	}); err != nil {
 		log.Printf("warning: load shards from store: %v", err)
 	} else {

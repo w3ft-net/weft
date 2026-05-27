@@ -22,7 +22,7 @@ package logdb
 // The registry field is unexported, so callers outside logdb can't
 // reach it directly; this function is the seam that lets coordinator-
 // side tests pre-populate the registry with synthetic entries.
-func SeedShard(p *Provisioner, entry *ShardEntry) {
+func SeedShard(p *Provisioner, entry *Shard) {
 	p.registry.Add(entry)
 }
 
@@ -31,6 +31,6 @@ func SeedShard(p *Provisioner, entry *ShardEntry) {
 // entry after planting it (e.g. flipping LastHeartbeatAt to drive
 // stale-handling branches). Returns nil if no entry with that id
 // is registered.
-func GetEntry(p *Provisioner, id string) *ShardEntry {
+func GetEntry(p *Provisioner, id string) *Shard {
 	return p.registry.Get(id)
 }

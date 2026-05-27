@@ -179,7 +179,7 @@ func TestIntegration_BucketScaleUpLaunchPromote(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	launcher := newRealShardLauncher()
 	reg := logdb.NewShardRegistry()
-	reg.SetStore(db)
+	reg.SetStore(logdb.ShardStore{Store: db})
 	prov := logdb.NewProvisioner(reg, launcher, logdb.ProvisionerConfig{
 		PollInterval:   100 * time.Millisecond,
 		WindowDuration: 24 * time.Hour,
@@ -210,13 +210,13 @@ func TestIntegration_BucketScaleUpLaunchPromote(t *testing.T) {
 
 	// Confirm against the store, scoped to our bucket: exactly two
 	// INGESTING shard rows.
-	recs, err := db.ListShards()
+	recs, err := (logdb.ShardStore{Store: db}).ListShards()
 	if err != nil {
 		t.Fatalf("ListShards: %v", err)
 	}
 	ingesting := 0
 	for _, r := range recs {
-		if r.BucketID == bucket.ID && r.State == string(logdb.StateIngesting) {
+		if r.BucketID == bucket.ID && r.State == logdb.StateIngesting {
 			ingesting++
 		}
 	}

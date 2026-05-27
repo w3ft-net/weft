@@ -14,7 +14,7 @@ import (
 // the first heartbeat re-dials the gRPC connection).
 //
 // This is the production bug from d477ea2: MatchingEntries inherited
-// the `e.Shard == nil → skip` guard from the old MatchingShards. That
+// the `e.Live == nil → skip` guard from the old MatchingShards. That
 // guard was correct when the coordinator dialed shards itself (it
 // needed a live Shard). After d477ea2, the coordinator only needs
 // e.Addr to build a ShardDescriptor for compute — but the nil-Shard
@@ -48,8 +48,8 @@ func TestMatchingEntries_AfterRestart(t *testing.T) {
 
 	// Phase 1: christen — save a shard with Addr and a live Shard pointer.
 	reg := NewShardRegistry()
-	reg.SetStore(tx)
-	reg.Add(&ShardEntry{
+	reg.SetStore(ShardStore{tx})
+	reg.Add(&Shard{
 		ID:          "shard-restart-test",
 		Services:    []store.ShardService{{NamespaceID: 1, Service: "testapp"}},
 		WindowStart: now.Add(-time.Hour),
@@ -67,8 +67,8 @@ func TestMatchingEntries_AfterRestart(t *testing.T) {
 	// handles ARCHIVED shards; live shards get Shard=nil until a
 	// heartbeat arrives and the provisioner dials them).
 	reg2 := NewShardRegistry()
-	reg2.SetStore(tx)
-	if err := reg2.LoadFromStore(func(r store.ShardRecord) (shard.Shard, error) {
+	reg2.SetStore(ShardStore{tx})
+	if err := reg2.LoadFromStore(func(r *Shard) (shard.Shard, error) {
 		return nil, nil
 	}); err != nil {
 		t.Fatalf("LoadFromStore: %v", err)
@@ -81,7 +81,7 @@ func TestMatchingEntries_AfterRestart(t *testing.T) {
 	if reloaded.Addr != shardAddr {
 		t.Fatalf("Addr after LoadFromStore: got %q, want %q", reloaded.Addr, shardAddr)
 	}
-	if reloaded.Shard != nil {
+	if reloaded.Live != nil {
 		t.Fatal("expected Shard==nil after LoadFromStore (no reconstruct for live shards)")
 	}
 

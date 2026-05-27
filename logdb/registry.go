@@ -13,7 +13,15 @@ import (
 // ShardState and the State* constants live in states.go now —
 // see also docs/plans/asg-as-api-stateless.md for the full FSM.
 
-// ShardEntry is the registry's per-shard metadata.
+// Shard is the unified shard type: it IS the persisted row (gorm-tagged,
+// table shard_records), the in-memory runtime object the registry routes
+// against, and the thing the shard FSM mutates. Collapsing the old
+// store.ShardRecord + logdb.ShardEntry pair into one type deletes the
+// hand-written Record↔Entry mapping that drift bugs lived in (see
+// docs/plans/shard-type-collapse.md).
+//
+// Field groups: persisted columns carry gorm tags; runtime-only fields
+// carry `gorm:"-"`. The unexported mu is ignored by gorm automatically.
 //
 // Concurrency: an entry is shared between the registry (which reads its
 // fields to route queries/writes) and the shard SM (which mutates them on
@@ -23,10 +31,30 @@ import (
 // r.mu → mu; the SM only ever holds mu (and must not call a registry
 // method that takes r.mu while holding it). ID is immutable after
 // construction and safe to read lock-free.
-type ShardEntry struct {
-	mu sync.RWMutex
+type Shard struct {
+	mu sync.RWMutex `gorm:"-"`
 
-	ID string
+	// ── persisted (maps to table shard_records) ──
+	ID              string     `gorm:"primaryKey"`
+	WindowStart     time.Time  `gorm:"not null"` // timestamptz (migration 062)
+	WindowEnd       time.Time  `gorm:"not null"` // timestamptz (migration 062)
+	State           ShardState `gorm:"not null"`
+	IngestFailures  int        `gorm:"not null;default:0;column:ingest_failures"` // consecutive ingest failures; resets on success
+	Addr            string     // gRPC address for live shards
+	InstanceID      string     // EC2 instance ID
+	ParquetPath     string     // Parquet file path for archived shards
+	Tier            string     // instance tier (small/medium/large)
+	RowCount        int64      `gorm:"default:0"`
+	CreatedAt       time.Time  `gorm:"not null"` // timestamptz (migration 062)
+	EBSVolumeID     string     // EBS volume id for this shard's DuckDB; empty until volume is attached
+	HeartbeatToken  string     // per-shard bearer the Heartbeat handler validates against
+	BucketID        int64      `gorm:"not null;column:bucket_id"`                 // surrogate FK to buckets.id (migration 022)
+	LastHeartbeatAt time.Time  `gorm:"column:last_heartbeat_at"`                  // wall-clock of the most recent observed heartbeat; zero = never (treated as fresh)
+	AZ              string     `gorm:"column:az"`                                 // FSM striping: pins recovery launches to the volume's AZ
+	StripeIndex     *int       `gorm:"column:stripe_index"`                       // bucket-assigned stripe position; nil = unassigned (distinct from 0)
+	LaunchAttempts  int        `gorm:"not null;default:0;column:launch_attempts"` // per-shard launch retry counter
+
+	// ── runtime only (gorm:"-") ──
 	// Services is the shard's in-memory service membership — the
 	// (namespace_id, service) pairs it serves, the write router's
 	// counterpart to the read router's shard_services lookup. Stamped at
@@ -34,51 +62,18 @@ type ShardEntry struct {
 	// service-add; loaded from the shard_services table at boot/refresh.
 	// An empty list means the shard serves nothing (unreachable for any
 	// specific-service query or write).
-	Services       []store.ShardService
-	WindowStart    time.Time
-	WindowEnd      time.Time
-	State          ShardState
-	IngestFailures int    // consecutive ingest failures; resets on success; surfaced in the ingest error message
-	Addr           string // gRPC address for live shards
-	InstanceID     string // EC2 instance ID
-	ParquetPath    string // Parquet file path for archived shards
-	Tier           string // instance tier (small/medium/large)
-	RowCount       int64
-	CreatedAt      time.Time
-	EBSVolumeID    string      // EBS volume id for this shard's DuckDB; empty until volume is attached
-	Shard          shard.Shard // live connection (not persisted)
-	// HeartbeatToken is the per-shard bearer the Heartbeat handler
-	// validates against. Minted at christen and persisted via store
-	// so the coordinator can validate heartbeats after restart.
-	HeartbeatToken string
-	// BucketID is the surrogate FK to buckets.id (bigint since
-	// migration 022). Zero means "unassigned" — christen() always
-	// sets a real id before Add; tests that construct ShardEntry
-	// literals without a bucket need to supply one explicitly, since
-	// persist() no longer papers over the zero case.
-	BucketID int64
-	// LastHeartbeatAt is the wall-clock time of the most recent
-	// heartbeat the provisioner observed for this shard. Updated by
-	// ProcessHeartbeat (and christen on first registration). Read by
-	// MatchingShards / IngestingShard to skip entries whose underlying
-	// container has died and gone silent — without that filter, the
-	// registry holds stale Addrs forever and Phase 2 retries against
-	// them produce repeated errors. Zero (unset) is treated as fresh
-	// so direct-init test fixtures don't get filtered out.
-	LastHeartbeatAt time.Time
-	// AZ and StripeIndex are the shard FSM's striping assignment
-	// (migration 056). AZ pins recovery launches to the volume's
-	// availability zone; StripeIndex is the bucket-assigned position
-	// that survives a cascade so the next window mirrors the current
-	// AZ layout. StripeIndex is a pointer so "unassigned" (nil) is
-	// distinct from index 0.
-	AZ          string
-	StripeIndex *int
-	// LaunchAttempts is the per-shard retry counter the LAUNCHING
-	// Evaluate path bumps on a failed launch; once it reaches the
-	// launch budget, Evaluate fires LaunchFailed → GONE.
-	LaunchAttempts int
+	Services []store.ShardService `gorm:"-" json:"-"`
+	// Live is the live connection handle (gRPC for hot shards, ColdShard
+	// for archived). Not persisted; rehydrated lazily by ReconstructShard
+	// at boot and by the heartbeat-reconnect path. json:"-" so the admin
+	// list-shards handler (which JSON-encodes []Shard) never tries to
+	// marshal a live connection.
+	Live shard.Shard `gorm:"-" json:"-"`
 }
+
+// TableName pins the unified Shard type to the existing shard_records
+// table — the DB schema is unchanged by the type collapse.
+func (*Shard) TableName() string { return "shard_records" }
 
 // SuspendFailureThreshold is the number of consecutive ingest failures
 // that marks a shard as suspended. One flaky RPC shouldn't take a shard
@@ -97,7 +92,7 @@ const heartbeatStaleThreshold = 2 * time.Minute
 // older than heartbeatStaleThreshold. Zero (never set) counts as
 // fresh — see the LastHeartbeatAt field comment. Caller must hold
 // e.mu (read).
-func (e *ShardEntry) isStale() bool {
+func (e *Shard) isStale() bool {
 	if e.LastHeartbeatAt.IsZero() {
 		return false
 	}
@@ -110,7 +105,7 @@ func (e *ShardEntry) isStale() bool {
 // namespace (the namespace-wide check), mirroring the read path's
 // ShardIDsServingService("" = namespace-only) semantics. Caller must
 // hold e.mu (read).
-func (e *ShardEntry) serves(namespaceID uint, service string) bool {
+func (e *Shard) serves(namespaceID uint, service string) bool {
 	for _, s := range e.Services {
 		if s.NamespaceID == namespaceID && (service == "" || s.Service == service) {
 			return true
@@ -119,13 +114,15 @@ func (e *ShardEntry) serves(namespaceID uint, service string) bool {
 	return false
 }
 
-// RegistryStore is the subset of *store.Store that ShardRegistry needs.
-// Extracted so tests can swap in an in-memory fake instead of postgres.
+// RegistryStore is the persistence surface ShardRegistry needs. The
+// shard-row methods take/return the unified *Shard (no Record↔Entry
+// mapping); production satisfies it with ShardStore (gorm over
+// shard_records), tests with an in-memory fake.
 type RegistryStore interface {
-	SaveShard(rec *store.ShardRecord) error
+	SaveShard(sh *Shard) error
 	DeleteShard(id string) error
-	ListShards() ([]store.ShardRecord, error)
-	GetShard(id string) (store.ShardRecord, bool, error)
+	ListShards() ([]*Shard, error)
+	GetShard(id string) (*Shard, bool, error)
 	TouchHeartbeat(id string, rowCount int64) error
 	// ListShardServices returns every shard_services row; the registry
 	// groups it by shard_id to populate each entry's in-memory service
@@ -140,7 +137,7 @@ type RegistryStore interface {
 // If a Store is set, mutations are persisted.
 type ShardRegistry struct {
 	mu      sync.RWMutex
-	entries map[string]*ShardEntry
+	entries map[string]*Shard
 	robin   atomic.Uint64 // round-robin counter for write distribution
 	store   RegistryStore // optional persistence (nil in tests)
 }
@@ -148,7 +145,7 @@ type ShardRegistry struct {
 // NewShardRegistry creates an empty registry.
 func NewShardRegistry() *ShardRegistry {
 	return &ShardRegistry{
-		entries: make(map[string]*ShardEntry),
+		entries: make(map[string]*Shard),
 	}
 }
 
@@ -159,7 +156,7 @@ func (r *ShardRegistry) SetStore(s RegistryStore) {
 }
 
 // Add registers a shard entry and persists it.
-func (r *ShardRegistry) Add(entry *ShardEntry) {
+func (r *ShardRegistry) Add(entry *Shard) {
 	r.mu.Lock()
 	r.entries[entry.ID] = entry
 	r.mu.Unlock()
@@ -171,35 +168,52 @@ func (r *ShardRegistry) Add(entry *ShardEntry) {
 // must set it explicitly before Add/PersistState; a zero value
 // surfaces as a DB constraint error, which we log so silent
 // persistence failures don't slip past tests or prod.
-func (r *ShardRegistry) persist(entry *ShardEntry) {
+func (r *ShardRegistry) persist(entry *Shard) {
 	if r.store == nil {
 		return
 	}
-	entry.mu.RLock()
-	rec := store.ShardRecord{
-		ID:             entry.ID,
-		WindowStart:    entry.WindowStart,
-		WindowEnd:      entry.WindowEnd,
-		State:          string(entry.State),
-		Addr:           entry.Addr,
-		InstanceID:     entry.InstanceID,
-		ParquetPath:    entry.ParquetPath,
-		Tier:           entry.Tier,
-		RowCount:       entry.RowCount,
-		CreatedAt:      entry.CreatedAt,
-		EBSVolumeID:    entry.EBSVolumeID,
-		HeartbeatToken: entry.HeartbeatToken,
-		BucketID:       entry.BucketID,
-	}
-	entry.mu.RUnlock()
-	if err := r.store.SaveShard(&rec); err != nil {
+	if err := r.store.SaveShard(entry.persistedCopy()); err != nil {
 		log.Printf("registry: persist shard %s: %v", entry.ID, err)
+	}
+}
+
+// persistedCopy returns a fresh *Shard holding a snapshot of e's
+// persisted columns, taken under e.mu. The registry hands this copy to
+// the store rather than the live entry the SM concurrently mutates, so
+// gorm's reflection over the struct can't race a field write. The copy's
+// runtime fields (Services/Live) and mutex are left zero — gorm ignores
+// them (gorm:"-" / unexported). Unlike the old persist this snapshots
+// every persisted column (AZ, stripe, launch_attempts, last_heartbeat_at,
+// ingest_failures included), so a full Save no longer wipes the columns
+// the narrow writes used to have to restore.
+func (e *Shard) persistedCopy() *Shard {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return &Shard{
+		ID:              e.ID,
+		WindowStart:     e.WindowStart,
+		WindowEnd:       e.WindowEnd,
+		State:           e.State,
+		IngestFailures:  e.IngestFailures,
+		Addr:            e.Addr,
+		InstanceID:      e.InstanceID,
+		ParquetPath:     e.ParquetPath,
+		Tier:            e.Tier,
+		RowCount:        e.RowCount,
+		CreatedAt:       e.CreatedAt,
+		EBSVolumeID:     e.EBSVolumeID,
+		HeartbeatToken:  e.HeartbeatToken,
+		BucketID:        e.BucketID,
+		LastHeartbeatAt: e.LastHeartbeatAt,
+		AZ:              e.AZ,
+		StripeIndex:     e.StripeIndex,
+		LaunchAttempts:  e.LaunchAttempts,
 	}
 }
 
 // PersistState saves the current state of an entry to the store.
 // Call after modifying State, ParquetPath, RowCount, etc.
-func (r *ShardRegistry) PersistState(entry *ShardEntry) {
+func (r *ShardRegistry) PersistState(entry *Shard) {
 	r.persist(entry)
 }
 
@@ -207,7 +221,7 @@ func (r *ShardRegistry) PersistState(entry *ShardEntry) {
 // without overwriting lifecycle-owned fields like window bounds,
 // state, or apps. Prevents the heartbeat path from clobbering
 // manual DB edits or reconciler-driven state changes.
-func (r *ShardRegistry) TouchHeartbeat(entry *ShardEntry) {
+func (r *ShardRegistry) TouchHeartbeat(entry *Shard) {
 	if r.store == nil {
 		return
 	}
@@ -231,7 +245,7 @@ func (r *ShardRegistry) RefreshFromStore() {
 	if r.store == nil {
 		return
 	}
-	records, err := r.store.ListShards()
+	fresh, err := r.store.ListShards()
 	if err != nil {
 		log.Printf("registry: RefreshFromStore: %v", err)
 		return
@@ -239,29 +253,33 @@ func (r *ShardRegistry) RefreshFromStore() {
 	svcByShard, svcOK := r.servicesByShard()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, rec := range records {
-		entry, ok := r.entries[rec.ID]
+	for _, f := range fresh {
+		entry, ok := r.entries[f.ID]
 		if !ok {
 			continue
 		}
 		entry.mu.Lock()
-		entry.State = ShardState(rec.State)
-		entry.WindowStart = rec.WindowStart
-		entry.WindowEnd = rec.WindowEnd
-		entry.CreatedAt = rec.CreatedAt
-		entry.Addr = rec.Addr
-		entry.InstanceID = rec.InstanceID
-		entry.ParquetPath = rec.ParquetPath
-		entry.Tier = rec.Tier
-		entry.RowCount = rec.RowCount
-		entry.EBSVolumeID = rec.EBSVolumeID
-		entry.HeartbeatToken = rec.HeartbeatToken
-		entry.BucketID = rec.BucketID
+		entry.State = f.State
+		entry.WindowStart = f.WindowStart
+		entry.WindowEnd = f.WindowEnd
+		entry.CreatedAt = f.CreatedAt
+		entry.Addr = f.Addr
+		entry.InstanceID = f.InstanceID
+		entry.ParquetPath = f.ParquetPath
+		entry.Tier = f.Tier
+		entry.RowCount = f.RowCount
+		entry.EBSVolumeID = f.EBSVolumeID
+		entry.HeartbeatToken = f.HeartbeatToken
+		entry.BucketID = f.BucketID
+		// Liveness fields the in-memory entry owns more freshly than the
+		// row (LastHeartbeatAt, IngestFailures) and FSM-launch bookkeeping
+		// (AZ, StripeIndex, LaunchAttempts) are deliberately NOT refreshed
+		// here — matching the pre-collapse RefreshFromStore.
 		// Only refresh services when the shard_services read succeeded;
 		// on a transient error leave the existing membership rather than
 		// wiping live routing to nil.
 		if svcOK {
-			entry.Services = svcByShard[rec.ID]
+			entry.Services = svcByShard[f.ID]
 		}
 		entry.mu.Unlock()
 	}
@@ -303,45 +321,27 @@ func (r *ShardRegistry) servicesByShard() (map[string][]store.ShardService, bool
 // every code path that walked Entries (the reconciler's Op 3
 // rotate-at-WindowEnd in particular). See
 // coordinator/zombie_repro_test.go for the cascade.
-func (r *ShardRegistry) LoadFromStore(reconstruct func(rec store.ShardRecord) (shard.Shard, error)) error {
+func (r *ShardRegistry) LoadFromStore(reconstruct func(sh *Shard) (shard.Shard, error)) error {
 	if r.store == nil {
 		return nil
 	}
-	records, err := r.store.ListShards()
+	shards, err := r.store.ListShards()
 	if err != nil {
 		return err
 	}
 	svcByShard, _ := r.servicesByShard()
-	for _, rec := range records {
-		// reconstruct's error is informational — a non-ARCHIVED row
-		// (or one we can't open data for yet) still belongs in the
-		// registry. Drop the Shard pointer; everything else loads.
-		sh, _ := reconstruct(rec)
+	for _, sh := range shards {
+		// The loaded *Shard IS the registry entry — no Record↔Entry
+		// mapping. reconstruct's error is informational: a non-ARCHIVED
+		// row (or one we can't open data for yet) still belongs in the
+		// registry, just with a nil Live handle the heartbeat path
+		// reattaches later.
+		live, _ := reconstruct(sh)
+		sh.Services = svcByShard[sh.ID]
+		sh.Live = live
 
 		r.mu.Lock()
-		r.entries[rec.ID] = &ShardEntry{
-			ID:             rec.ID,
-			Services:       svcByShard[rec.ID],
-			WindowStart:    rec.WindowStart,
-			WindowEnd:      rec.WindowEnd,
-			State:          ShardState(rec.State),
-			Addr:           rec.Addr,
-			InstanceID:     rec.InstanceID,
-			ParquetPath:    rec.ParquetPath,
-			Tier:           rec.Tier,
-			RowCount:       rec.RowCount,
-			CreatedAt:      rec.CreatedAt,
-			EBSVolumeID:    rec.EBSVolumeID,
-			Shard:          sh,
-			HeartbeatToken: rec.HeartbeatToken,
-			BucketID:       rec.BucketID,
-			AZ:             rec.AZ,
-			StripeIndex:    rec.StripeIndex,
-			LaunchAttempts: rec.LaunchAttempts,
-		}
-		if rec.LastHeartbeatAt != nil {
-			r.entries[rec.ID].LastHeartbeatAt = *rec.LastHeartbeatAt
-		}
+		r.entries[sh.ID] = sh
 		r.mu.Unlock()
 	}
 	return nil
@@ -352,8 +352,8 @@ func (r *ShardRegistry) Remove(id string) {
 	r.mu.Lock()
 	if e, ok := r.entries[id]; ok {
 		e.mu.Lock()
-		if e.Shard != nil {
-			e.Shard.Close()
+		if e.Live != nil {
+			e.Live.Close()
 		}
 		e.mu.Unlock()
 		delete(r.entries, id)
@@ -436,7 +436,7 @@ func (r *ShardRegistry) ResetIngestFailures(id string) {
 }
 
 // Get returns a shard entry by ID, or nil.
-func (r *ShardRegistry) Get(id string) *ShardEntry {
+func (r *ShardRegistry) Get(id string) *Shard {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.entries[id]
@@ -488,7 +488,7 @@ func (r *ShardRegistry) HasAddr(addr string) bool {
 // within that shard. The clamp here is defense in depth; passing the
 // already-clamped value keeps it idempotent. tier="" yields the
 // trial-tier retention (24h, conservative).
-func (r *ShardRegistry) MatchingEntries(tr TimeRange, serving map[string]struct{}, tier store.Tier) []*ShardEntry {
+func (r *ShardRegistry) MatchingEntries(tr TimeRange, serving map[string]struct{}, tier store.Tier) []*Shard {
 	if cap := time.Now().Add(-store.LogRetention(tier)); tr.Start.Before(cap) {
 		tr.Start = cap
 	}
@@ -496,7 +496,7 @@ func (r *ShardRegistry) MatchingEntries(tr TimeRange, serving map[string]struct{
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var out []*ShardEntry
+	var out []*Shard
 	for _, e := range r.entries {
 		if e.queryable(tr, serving) {
 			out = append(out, e)
@@ -509,10 +509,10 @@ func (r *ShardRegistry) MatchingEntries(tr TimeRange, serving map[string]struct{
 // read lock. Note: the entry pointer it qualifies is still returned to
 // the caller, which must take e.mu before reading its fields (e.g.
 // ShardDescriptorsFor does).
-func (e *ShardEntry) queryable(tr TimeRange, serving map[string]struct{}) bool {
+func (e *Shard) queryable(tr TimeRange, serving map[string]struct{}) bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	if e.Addr == "" && e.Shard == nil {
+	if e.Addr == "" && e.Live == nil {
 		return false
 	}
 	// SUSPENDED (instance dead, Addr/InstanceID cleared, awaiting rebind)
@@ -569,14 +569,14 @@ func (r *ShardRegistry) IngestingShard(namespaceID uint, service string) shard.S
 
 // ingestCandidate returns the live shard handle if this entry is an
 // INGESTING, fresh, serving shard, else nil. Takes the entry read lock.
-func (e *ShardEntry) ingestCandidate(namespaceID uint, service string) shard.Shard {
+func (e *Shard) ingestCandidate(namespaceID uint, service string) shard.Shard {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	if e.State != StateIngesting || e.Shard == nil || e.isStale() {
+	if e.State != StateIngesting || e.Live == nil || e.isStale() {
 		return nil
 	}
 	if e.serves(namespaceID, service) {
-		return e.Shard
+		return e.Live
 	}
 	return nil
 }
@@ -588,7 +588,7 @@ func (r *ShardRegistry) TotalIngesting() int {
 	n := 0
 	for _, e := range r.entries {
 		e.mu.RLock()
-		ingesting := e.State == StateIngesting && e.Shard != nil
+		ingesting := e.State == StateIngesting && e.Live != nil
 		e.mu.RUnlock()
 		if ingesting {
 			n++
@@ -605,7 +605,7 @@ func (r *ShardRegistry) IngestingCount(namespaceID uint, service string) int {
 	n := 0
 	for _, e := range r.entries {
 		e.mu.RLock()
-		ok := e.State == StateIngesting && e.Shard != nil && e.serves(namespaceID, service)
+		ok := e.State == StateIngesting && e.Live != nil && e.serves(namespaceID, service)
 		e.mu.RUnlock()
 		if ok {
 			n++
@@ -615,11 +615,11 @@ func (r *ShardRegistry) IngestingCount(namespaceID uint, service string) int {
 }
 
 // Entries returns a snapshot of all entries (for health/status reporting).
-func (r *ShardRegistry) Entries() []*ShardEntry {
+func (r *ShardRegistry) Entries() []*Shard {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	out := make([]*ShardEntry, 0, len(r.entries))
+	out := make([]*Shard, 0, len(r.entries))
 	for _, e := range r.entries {
 		out = append(out, e)
 	}

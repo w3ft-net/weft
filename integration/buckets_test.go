@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kevlarcon/weft/logdb"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/store"
 )
@@ -81,9 +82,9 @@ func TestBuckets_ShardsBoundToValidBuckets(t *testing.T) {
 	// Give the coordinator a window to christen the docker-compose
 	// shard containers' first heartbeats.
 	deadline := time.Now().Add(30 * time.Second)
-	var shards []store.ShardRecord
+	var shards []*logdb.Shard
 	for time.Now().Before(deadline) {
-		shards, err = db.ListShards()
+		shards, err = (logdb.ShardStore{Store: db}).ListShards()
 		if err != nil {
 			t.Fatalf("ListShards: %v", err)
 		}
@@ -105,7 +106,7 @@ func TestBuckets_ShardsBoundToValidBuckets(t *testing.T) {
 	checked := 0
 	byBucket := make(map[int64]int)
 	for _, s := range shards {
-		if !liveStates[s.State] {
+		if !liveStates[string(s.State)] {
 			continue
 		}
 		checked++
@@ -194,7 +195,7 @@ func TestBuckets_OnboardServicePropagates(t *testing.T) {
 	// 058): each INGESTING shard bound to default must have a
 	// shard_services row for the new service; READ_ONLY shards were
 	// frozen at christen and must NOT have been re-stamped with it.
-	shards, err := db.ListShards()
+	shards, err := (logdb.ShardStore{Store: db}).ListShards()
 	if err != nil {
 		t.Fatalf("ListShards: %v", err)
 	}

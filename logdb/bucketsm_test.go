@@ -79,9 +79,9 @@ func makeFixtureBucketSM(t *testing.T, initialState BucketState) (*BucketSM, *st
 // tests. stripe is optional (nil for legacy/unstriped rows).
 func seedShardRow(t *testing.T, db *store.Store, bucketID int64, id string, state ShardState, windowStart time.Time, stripe *int) {
 	t.Helper()
-	rec := &store.ShardRecord{
+	rec := &Shard{
 		ID:          id,
-		State:       string(state),
+		State:       state,
 		BucketID:    bucketID,
 		Tier:        "small",
 		WindowStart: windowStart,
@@ -89,7 +89,7 @@ func seedShardRow(t *testing.T, db *store.Store, bucketID int64, id string, stat
 		CreatedAt:   windowStart,
 		StripeIndex: stripe,
 	}
-	if err := db.SaveShard(rec); err != nil {
+	if err := (ShardStore{db}).SaveShard(rec); err != nil {
 		t.Fatalf("seed shard row %s: %v", id, err)
 	}
 }

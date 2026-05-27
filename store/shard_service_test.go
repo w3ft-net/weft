@@ -70,12 +70,15 @@ func TestBackfillShardServices059(t *testing.T) {
 	// join fans out across all shards, not just one.
 	mkShard := func(id string, bucketID int64) {
 		t.Helper()
-		if err := db.SaveShard(&ShardRecord{
-			ID: id, State: "READ_ONLY", BucketID: bucketID, Tier: "small",
-			WindowStart: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
-			WindowEnd:   time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC),
-			CreatedAt:   time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
-		}); err != nil {
+		// The shard row model lives in logdb now (logdb.Shard); store
+		// can't import logdb (cycle), so insert directly into the
+		// shard_records table without a model.
+		if err := db.DB().Table("shard_records").Create(map[string]any{
+			"id": id, "state": "READ_ONLY", "bucket_id": bucketID, "tier": "small",
+			"window_start": time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+			"window_end":   time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC),
+			"created_at":   time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		}).Error; err != nil {
 			t.Fatalf("shard %s: %v", id, err)
 		}
 	}
@@ -165,12 +168,14 @@ func TestStampShardServices(t *testing.T) {
 	// Two shard_records rows (the FK target) — one per bucket.
 	mkShard := func(id string, bucketID int64) {
 		t.Helper()
-		if err := db.SaveShard(&ShardRecord{
-			ID: id, State: "INGESTING", BucketID: bucketID, Tier: "small",
-			WindowStart: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
-			WindowEnd:   time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC),
-			CreatedAt:   time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
-		}); err != nil {
+		// Shard row model lives in logdb now; insert without a model
+		// (store can't import logdb).
+		if err := db.DB().Table("shard_records").Create(map[string]any{
+			"id": id, "state": "INGESTING", "bucket_id": bucketID, "tier": "small",
+			"window_start": time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+			"window_end":   time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC),
+			"created_at":   time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		}).Error; err != nil {
 			t.Fatalf("shard %s: %v", id, err)
 		}
 	}

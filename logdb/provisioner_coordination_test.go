@@ -90,12 +90,12 @@ func (l *inProcLauncher) TerminateInstance(context.Context, string, string) erro
 func newFSMTestProvisioner(t *testing.T, db *store.Store) (*Provisioner, *inProcLauncher) {
 	t.Helper()
 	reg := NewShardRegistry()
-	reg.SetStore(db)
+	reg.SetStore(ShardStore{db})
 	// Hydrate from the store the way Start() does, so a "restart"
 	// provisioner over the same store sees persisted shards. reconstruct
 	// fails for live (non-archived) rows — they load handle-less and
 	// reconnect on the next heartbeat (ObserveHeartbeat).
-	if err := reg.LoadFromStore(func(store.ShardRecord) (shard.Shard, error) {
+	if err := reg.LoadFromStore(func(*Shard) (shard.Shard, error) {
 		return nil, errNoReconstruct
 	}); err != nil {
 		t.Fatalf("LoadFromStore: %v", err)
@@ -266,7 +266,7 @@ func TestProvisioner_Coordination_RestartReconnect(t *testing.T) {
 	if got.State != StateIngesting {
 		t.Fatalf("restored state: got %s want INGESTING", got.State)
 	}
-	if got.Shard != nil {
+	if got.Live != nil {
 		t.Fatal("restored entry should have a nil gRPC handle (LoadFromStore can't redial)")
 	}
 
@@ -277,7 +277,7 @@ func TestProvisioner_Coordination_RestartReconnect(t *testing.T) {
 		Addr:       instanceID + ":9000",
 		State:      "INGESTING",
 	})
-	if prov2.registry.Get(shardID).Shard == nil {
+	if prov2.registry.Get(shardID).Live == nil {
 		t.Fatal("handle should be reattached after the post-restart heartbeat")
 	}
 	if prov2.registry.TotalIngesting() != 1 {

@@ -17,13 +17,13 @@ func TestRefreshFromStore_PicksUpExternalDBChanges(t *testing.T) {
 	now := time.Now().UTC()
 	futureEnd := now.Add(7 * 24 * time.Hour) // 7-day window
 
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID:          "shard-legacy",
 		BucketID:    1,
 		State:       StateIngesting,
 		WindowStart: now.Add(-time.Hour),
 		WindowEnd:   futureEnd,
-		Shard:       &failingShard{id: "shard-legacy"},
+		Live:        &failingShard{id: "shard-legacy"},
 	})
 
 	// Verify the in-memory entry has the 7-day window.
@@ -67,11 +67,11 @@ func TestRefreshFromStore_PreservesShardPointer(t *testing.T) {
 	reg.SetStore(fake)
 
 	sh := &failingShard{id: "shard-x"}
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID:       "shard-x",
 		BucketID: 1,
 		State:    StateIngesting,
-		Shard:    sh,
+		Live:     sh,
 	})
 
 	// Mutate a metadata field in the DB.
@@ -87,7 +87,7 @@ func TestRefreshFromStore_PreservesShardPointer(t *testing.T) {
 	if entry.Tier != "large" {
 		t.Errorf("Tier not refreshed: got %q want large", entry.Tier)
 	}
-	if entry.Shard != sh {
+	if entry.Live != sh {
 		t.Error("Shard pointer was clobbered by RefreshFromStore")
 	}
 }

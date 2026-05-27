@@ -45,10 +45,10 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	addInProcessShard(t, c, &logdb.ShardEntry{
+	addInProcessShard(t, c, &logdb.Shard{
 		ID:          "shard-0",
 		WindowStart: t0, WindowEnd: t1,
-		State: logdb.StateIngesting, Shard: s0,
+		State: logdb.StateIngesting, Live: s0,
 		CreatedAt: time.Now(),
 	}, "vimgym", "callbox")
 
@@ -77,10 +77,10 @@ func TestFailover_ShardReplacement(t *testing.T) {
 	}
 
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
-	addInProcessShard(t, c, &logdb.ShardEntry{
+	addInProcessShard(t, c, &logdb.Shard{
 		ID:          "shard-0",
 		WindowStart: t0, WindowEnd: t1,
-		State: logdb.StateIngesting, Shard: s0,
+		State: logdb.StateIngesting, Live: s0,
 		CreatedAt: time.Now(),
 	}, apps...)
 
@@ -103,10 +103,10 @@ func TestFailover_ShardReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	addInProcessShard(t, c, &logdb.ShardEntry{
+	addInProcessShard(t, c, &logdb.Shard{
 		ID:          "shard-1",
 		WindowStart: t1, WindowEnd: t2,
-		State: logdb.StateIngesting, Shard: s1,
+		State: logdb.StateIngesting, Live: s1,
 		CreatedAt: time.Now(),
 	}, apps...)
 
@@ -139,10 +139,10 @@ func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
 
 	apps := []string{"vimgym", "callbox"}
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStoreReal(t, "kevlar", "vimgym", "callbox")})
-	addInProcessShard(t, c, &logdb.ShardEntry{
+	addInProcessShard(t, c, &logdb.Shard{
 		ID:          "shard-0",
 		WindowStart: t0, WindowEnd: t1,
-		State: logdb.StateIngesting, Shard: s0,
+		State: logdb.StateIngesting, Live: s0,
 		CreatedAt: time.Now(),
 	}, apps...)
 

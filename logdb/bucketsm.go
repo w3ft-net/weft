@@ -220,7 +220,7 @@ func (b *BucketSM) onEnterWarming(ctx context.Context, args ...any) error {
 		covered := stripeSet(live, warmStart)
 		fallback := 0
 		for _, r := range live {
-			if r.State != string(StateIngesting) || !windowStartEq(r, curStart) {
+			if r.State != StateIngesting || !windowStartEq(r, curStart) {
 				continue
 			}
 			si, ok := stripeOf(r)
@@ -395,7 +395,7 @@ func (b *BucketSM) evaluateStasis(ctx context.Context, now time.Time) error {
 		if windowStartEq(r, nextStart) {
 			hasNextWindow = true
 		}
-		switch ShardState(r.State) {
+		switch r.State {
 		case StateIngesting:
 			ingesting++
 			if end, ok := windowEnd(r); ok && !now.Add(PrewarmLead).Before(end) {
@@ -444,7 +444,7 @@ func (b *BucketSM) evaluateWarming(ctx context.Context) error {
 			continue
 		}
 		total++
-		if ShardState(r.State) == StateIngesting {
+		if r.State == StateIngesting {
 			ingesting++
 		}
 	}
@@ -518,23 +518,23 @@ func (b *BucketSM) sweepRetention(ctx context.Context, now time.Time) error {
 // states. The bucket SM's only data source for cascade context — the
 // incoming/outgoing/retention cohorts are all derived from these rows
 // (the "3NF, not JSONB" decision in the plan).
-func (b *BucketSM) shardsInStates(states ...ShardState) ([]store.ShardRecord, error) {
+func (b *BucketSM) shardsInStates(states ...ShardState) ([]*Shard, error) {
 	ss := make([]string, len(states))
 	for i, s := range states {
 		ss[i] = string(s)
 	}
-	var recs []store.ShardRecord
-	if err := b.db.Where("bucket_id = ? AND state IN ?", b.ID, ss).Find(&recs).Error; err != nil {
+	var shards []*Shard
+	if err := b.db.Where("bucket_id = ? AND state IN ?", b.ID, ss).Find(&shards).Error; err != nil {
 		return nil, err
 	}
-	return recs, nil
+	return shards, nil
 }
 
 // countIn counts rows in the given state whose window_start equals start.
-func (b *BucketSM) countIn(recs []store.ShardRecord, state ShardState, start time.Time) int {
+func (b *BucketSM) countIn(shards []*Shard, state ShardState, start time.Time) int {
 	n := 0
-	for _, r := range recs {
-		if r.State == string(state) && windowStartEq(r, start) {
+	for _, r := range shards {
+		if r.State == state && windowStartEq(r, start) {
 			n++
 		}
 	}
@@ -543,9 +543,9 @@ func (b *BucketSM) countIn(recs []store.ShardRecord, state ShardState, start tim
 
 // stripeSet returns the set of stripe indices already covered by live
 // shards in the given window — used to make minting idempotent.
-func stripeSet(recs []store.ShardRecord, window time.Time) map[int]bool {
+func stripeSet(shards []*Shard, window time.Time) map[int]bool {
 	set := map[int]bool{}
-	for _, r := range recs {
+	for _, r := range shards {
 		if !windowStartEq(r, window) {
 			continue
 		}
@@ -556,11 +556,11 @@ func stripeSet(recs []store.ShardRecord, window time.Time) map[int]bool {
 	return set
 }
 
-// latestWindowStart returns the newest window_start across recs.
-func latestWindowStart(recs []store.ShardRecord) (time.Time, bool) {
+// latestWindowStart returns the newest window_start across shards.
+func latestWindowStart(shards []*Shard) (time.Time, bool) {
 	var max time.Time
 	found := false
-	for _, r := range recs {
+	for _, r := range shards {
 		if r.WindowStart.IsZero() {
 			continue
 		}
@@ -571,21 +571,21 @@ func latestWindowStart(recs []store.ShardRecord) (time.Time, bool) {
 	return max, found
 }
 
-func stripeOf(r store.ShardRecord) (int, bool) {
+func stripeOf(r *Shard) (int, bool) {
 	if r.StripeIndex == nil {
 		return 0, false
 	}
 	return *r.StripeIndex, true
 }
 
-func windowStartEq(r store.ShardRecord, t time.Time) bool {
+func windowStartEq(r *Shard, t time.Time) bool {
 	return r.WindowStart.Equal(t)
 }
 
-func windowStartBefore(r store.ShardRecord, t time.Time) bool {
+func windowStartBefore(r *Shard, t time.Time) bool {
 	return r.WindowStart.Before(t)
 }
 
-func windowEnd(r store.ShardRecord) (time.Time, bool) {
+func windowEnd(r *Shard) (time.Time, bool) {
 	return r.WindowEnd, !r.WindowEnd.IsZero()
 }

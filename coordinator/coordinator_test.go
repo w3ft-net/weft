@@ -29,18 +29,18 @@ func poolFromCoord(t testing.TB, c *Coordinator) *compute.LocalComputePool {
 	return pool
 }
 
-// addInProcessShard wires e.Shard into both c.Provisioner (so query
+// addInProcessShard wires e.Live into both c.Provisioner (so query
 // planning sees the entry) and c.Pool's resolver overrides (so
 // compute can run QueryToSink against the in-process handle without
 // dialing). This is the unit-test replacement for the old
 // registryPool bypass — compute still owns the dispatch, but the
 // resolver tells it "for this id, use this handle directly."
-func addInProcessShard(t testing.TB, c *Coordinator, e *logdb.ShardEntry, apps ...string) {
+func addInProcessShard(t testing.TB, c *Coordinator, e *logdb.Shard, apps ...string) {
 	t.Helper()
-	if e.Shard == nil {
+	if e.Live == nil {
 		t.Fatal("addInProcessShard: entry must have non-nil Shard")
 	}
-	poolFromCoord(t, c).RegisterResolver(computetest.NewInProcessResolver(e.ID, e.Shard))
+	poolFromCoord(t, c).RegisterResolver(computetest.NewInProcessResolver(e.ID, e.Live))
 	logdb.SeedShard(c.Provisioner, e)
 	stampShardServicesFromApps(t, c, e, apps)
 }
@@ -65,7 +65,7 @@ func addInProcessShard(t testing.TB, c *Coordinator, e *logdb.ShardEntry, apps .
 // Apps whose namespace isn't registered under the store's sole test
 // customer are skipped: a query for them resolves namespace_id 0 (no
 // filter) and still reaches every shard, so the shard stays visible.
-func stampShardServicesFromApps(t testing.TB, c *Coordinator, e *logdb.ShardEntry, apps []string) {
+func stampShardServicesFromApps(t testing.TB, c *Coordinator, e *logdb.Shard, apps []string) {
 	t.Helper()
 	if c.Store == nil {
 		return
@@ -93,11 +93,11 @@ func stampShardServicesFromApps(t testing.TB, c *Coordinator, e *logdb.ShardEntr
 		}
 		bucketID = def.ID
 	}
-	if err := c.Store.SaveShard(&store.ShardRecord{
+	if err := (logdb.ShardStore{Store: c.Store}).SaveShard(&logdb.Shard{
 		ID:          e.ID,
 		WindowStart: e.WindowStart,
 		WindowEnd:   e.WindowEnd,
-		State:       string(e.State),
+		State:       e.State,
 		Tier:        e.Tier,
 		BucketID:    bucketID,
 		CreatedAt:   e.CreatedAt,
@@ -187,16 +187,16 @@ func setupTestCoordinator(t testing.TB) *Coordinator {
 
 	apps := []string{"vimgym", "callbox"}
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox", "warp")})
-	addInProcessShard(t, c, &logdb.ShardEntry{
+	addInProcessShard(t, c, &logdb.Shard{
 		ID:          "shard-0",
 		WindowStart: t0, WindowEnd: t1,
-		State: logdb.StateIngesting, Shard: s0,
+		State: logdb.StateIngesting, Live: s0,
 		CreatedAt: time.Now(),
 	}, apps...)
-	addInProcessShard(t, c, &logdb.ShardEntry{
+	addInProcessShard(t, c, &logdb.Shard{
 		ID:          "shard-1",
 		WindowStart: t1, WindowEnd: t2,
-		State: logdb.StateIngesting, Shard: s1,
+		State: logdb.StateIngesting, Live: s1,
 		CreatedAt: time.Now(),
 	}, apps...)
 	return c
@@ -614,16 +614,16 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 	// Register in-process resolvers on the default LocalComputePool
 	// BEFORE wrapping in spyPool, because addInProcessShard reaches
 	// for the underlying *compute.LocalComputePool through c.Pool.
-	addInProcessShard(t, c, &logdb.ShardEntry{
+	addInProcessShard(t, c, &logdb.Shard{
 		ID:          "shard-live",
 		WindowStart: now.Add(-2 * time.Hour), WindowEnd: now.Add(-1 * time.Hour),
-		State: logdb.StateIngesting, Shard: s0, Addr: "10.0.0.1:9000",
+		State: logdb.StateIngesting, Live: s0, Addr: "10.0.0.1:9000",
 		CreatedAt: now,
 	}, apps...)
-	addInProcessShard(t, c, &logdb.ShardEntry{
+	addInProcessShard(t, c, &logdb.Shard{
 		ID:          "shard-archived",
 		WindowStart: now.Add(-1 * time.Hour), WindowEnd: now,
-		State: logdb.StateArchived, Shard: s0, ParquetPath: "s3://bucket/shard-archived.parquet",
+		State: logdb.StateArchived, Live: s0, ParquetPath: "s3://bucket/shard-archived.parquet",
 		RowCount:  1,
 		CreatedAt: now,
 	}, apps...)

@@ -9,7 +9,7 @@ import (
 
 // defaultBucketID is the surrogate id of the schema-seeded "default"
 // bucket (schema.sql sets it to 1). Tests stamp it onto
-// ShardEntry.BucketID so the reconciler's per-bucket snapshot walk
+// Shard.BucketID so the reconciler's per-bucket snapshot walk
 // matches those entries to the bucket. seedDefaultBucket updates that
 // same row in place (see window_rotation_test.go).
 const defaultBucketID int64 = 1
@@ -31,43 +31,43 @@ func TestOnboardService_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 	reg := NewShardRegistry()
 
 	// Two INGESTING shards in the default bucket.
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID:       "ingest-1",
 		BucketID: defaultBucketID,
 		State:    StateIngesting,
 		Services: []store.ShardService{{NamespaceID: nsID, Service: "weft"}},
-		Shard:    &failingShard{id: "ingest-1"},
+		Live:     &failingShard{id: "ingest-1"},
 	})
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID:       "ingest-2",
 		BucketID: defaultBucketID,
 		State:    StateIngesting,
 		Services: []store.ShardService{{NamespaceID: nsID, Service: "weft"}},
-		Shard:    &failingShard{id: "ingest-2"},
+		Live:     &failingShard{id: "ingest-2"},
 	})
 	// A READ_ONLY shard in the same bucket — must NOT get the app.
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID:       "readonly-1",
 		BucketID: defaultBucketID,
 		State:    StateReadOnly,
 		Services: []store.ShardService{{NamespaceID: nsID, Service: "weft"}},
-		Shard:    &failingShard{id: "readonly-1"},
+		Live:     &failingShard{id: "readonly-1"},
 	})
 	// An INGESTING shard in a *different* bucket — also must NOT.
 	const dedicatedBucketID int64 = 2
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID:       "other-bucket-ingest",
 		BucketID: dedicatedBucketID,
 		State:    StateIngesting,
 		Services: []store.ShardService{{NamespaceID: nsID, Service: "vimgym"}},
-		Shard:    &failingShard{id: "other-bucket-ingest"},
+		Live:     &failingShard{id: "other-bucket-ingest"},
 	})
 
 	prov := &Provisioner{
 		registry: reg,
 		Buckets:  bm,
 	}
-	prov.config.ShardOps = db // ServicesForBucket for the reconciler's drift diff
+	prov.config.ShardOps = ShardStore{db} // ServicesForBucket for the reconciler's drift diff
 
 	if err := prov.OnboardService("xylem"); err != nil {
 		t.Fatalf("OnboardService: %v", err)
@@ -123,7 +123,7 @@ func containsService(apps []string, want string) bool {
 }
 
 // servicesContain reports whether any of svcs has Service == want,
-// the ShardEntry.Services counterpart to containsService.
+// the Shard.Services counterpart to containsService.
 func servicesContain(svcs []store.ShardService, want string) bool {
 	for _, s := range svcs {
 		if s.Service == want {
@@ -250,13 +250,13 @@ func TestRegistry_RoundRobinIngestion(t *testing.T) {
 	t.Cleanup(func() { s1.Close() })
 
 	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID: "s0", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
-		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: s0,
+		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Live: s0,
 	})
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID: "s1", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
-		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Shard: s1,
+		WindowStart: t0, WindowEnd: t2, State: StateIngesting, Live: s1,
 	})
 
 	// Round-robin should alternate between s0 and s1.

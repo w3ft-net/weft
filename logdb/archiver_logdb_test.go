@@ -27,11 +27,11 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 		t.Fatalf("default bucket lookup: ok=%v err=%v", ok, err)
 	}
 	shardID := "shard-archived-" + fmt.Sprintf("%d", time.Now().UnixNano())
-	t.Cleanup(func() { _ = db.DeleteShard(shardID) })
+	t.Cleanup(func() { _ = ShardStore{db}.DeleteShard(shardID) })
 
 	// Create registry with store, add an archived shard.
 	reg := NewShardRegistry()
-	reg.SetStore(db)
+	reg.SetStore(ShardStore{db})
 
 	parquetPath := filepath.Join(t.TempDir(), "test.parquet")
 	// Create a Parquet file so ColdShard can open it.
@@ -48,25 +48,25 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID: shardID, Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		BucketID:    defBucket.ID,
 		WindowStart: t0, WindowEnd: t1,
 		State:       StateArchived,
 		ParquetPath: parquetPath,
-		Shard:       cold,
+		Live:        cold,
 		RowCount:    1,
 		CreatedAt:   time.Now(),
 	})
 
 	// Create a NEW registry, load from the same store.
 	reg2 := NewShardRegistry()
-	reg2.SetStore(db)
-	err = reg2.LoadFromStore(func(rec store.ShardRecord) (shard.Shard, error) {
+	reg2.SetStore(ShardStore{db})
+	err = reg2.LoadFromStore(func(rec *Shard) (shard.Shard, error) {
 		if rec.ID != shardID {
 			return nil, fmt.Errorf("skip unrelated shard %s", rec.ID)
 		}
-		if rec.State == string(StateArchived) && rec.ParquetPath != "" {
+		if rec.State == StateArchived && rec.ParquetPath != "" {
 			return shard.NewColdShard(rec.ID, nil, rec.ParquetPath, "", nil)
 		}
 		return nil, fmt.Errorf("skip live shard %s", rec.ID)
@@ -88,12 +88,12 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 	if entry.State != StateArchived {
 		t.Fatalf("expected ARCHIVED, got %s", entry.State)
 	}
-	if entry.Shard == nil {
+	if entry.Live == nil {
 		t.Fatalf("%s loaded without a Shard pointer; reconstruct should attach for ARCHIVED rows", shardID)
 	}
 
 	// Query should work on the restored ColdShard.
-	rows, err := entry.Shard.Query("SELECT raw, ts FROM logs WHERE customer = 'kevlar'")
+	rows, err := entry.Live.Query("SELECT raw, ts FROM logs WHERE customer = 'kevlar'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,10 +110,10 @@ func TestRegistry_MatchingEntries_IncludesArchived(t *testing.T) {
 	t.Cleanup(func() { ds.Close() })
 
 	reg := NewShardRegistry()
-	reg.Add(&ShardEntry{
+	reg.Add(&Shard{
 		ID: "shard-arch", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: t0, WindowEnd: t1,
-		State: StateArchived, Shard: ds, RowCount: 1,
+		State: StateArchived, Live: ds, RowCount: 1,
 	})
 
 	matching := reg.MatchingEntries(TimeRange{Start: t0, End: t1}, servingFor(reg, "vimgym"), "bolt")

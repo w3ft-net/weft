@@ -71,7 +71,7 @@ func (r *retiringVolumeManager) DeleteVolume(_ context.Context, volumeID string)
 // testArchiveIngestedShard sets up a DuckDBShard with a handful of
 // rows and returns the entry, ready to be archived. Uses a real
 // in-memory DuckDB so the export path has something to write.
-func testArchiveIngestedShard(t *testing.T, id, volumeID string) *ShardEntry {
+func testArchiveIngestedShard(t *testing.T, id, volumeID string) *Shard {
 	t.Helper()
 	ds, err := shard.NewDuckDBShard(id, "")
 	if err != nil {
@@ -82,10 +82,10 @@ func testArchiveIngestedShard(t *testing.T, id, volumeID string) *ShardEntry {
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
-	return &ShardEntry{
+	return &Shard{
 		ID:          id,
 		State:       StateReadOnly,
-		Shard:       ds,
+		Live:        ds,
 		ParquetPath: "",
 		EBSVolumeID: volumeID,
 		Addr:        "10.0.0.1:9000",
@@ -166,7 +166,7 @@ func TestArchive_SnapshotThenDetachThenDelete(t *testing.T) {
 	if rec.EBSVolumeID != "" {
 		t.Errorf("store EBSVolumeID: got %q want empty", rec.EBSVolumeID)
 	}
-	if rec.State != string(StateArchived) {
+	if rec.State != StateArchived {
 		t.Errorf("store State: got %q want ARCHIVED", rec.State)
 	}
 }

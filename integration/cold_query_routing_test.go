@@ -42,7 +42,8 @@ func TestColdShardQueryRouting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.FindOrCreateNamespace(cust.ID, "vimgym"); err != nil {
+	ns, err := tx.FindOrCreateNamespace(cust.ID, "vimgym")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.CreateSubscription(&store.Subscription{
@@ -100,7 +101,7 @@ func TestColdShardQueryRouting(t *testing.T) {
 
 	// The registry filter requires Shard != nil for entries without an
 	// Addr (line 450 of registry.go). In production the provisioner sets
-	// entry.Shard to a ColdShard; replicate that here. The compute pool
+	// entry.Live to a ColdShard; replicate that here. The compute pool
 	// dials its own shard via DialShard, so this ColdShard is only used
 	// to pass the filter.
 	cold, err := shard.NewColdShard("cold-route-1", []string{"vimgym"}, s3Path, lambdaSrv.URL, nil)
@@ -109,22 +110,22 @@ func TestColdShardQueryRouting(t *testing.T) {
 	}
 	t.Cleanup(func() { cold.Close() })
 
-	apps := []string{"vimgym"}
+	svcs := []store.ShardService{{NamespaceID: ns.ID, Service: "vimgym"}}
 	c := coordinator.NewCoordinator(coordinator.CoordinatorConfig{
 		Store:             tx,
 		LambdaFunctionURL: lambdaSrv.URL,
 	})
-	logdb.SeedShard(c.Provisioner, &logdb.ShardEntry{
-		ID: "cold-route-0", Services: apps,
+	logdb.SeedShard(c.Provisioner, &logdb.Shard{
+		ID: "cold-route-0", Services: svcs,
 		WindowStart: t0, WindowEnd: t1,
 		State: logdb.StateIngesting, Addr: s0Addr,
 		CreatedAt: time.Now(),
 	})
-	logdb.SeedShard(c.Provisioner, &logdb.ShardEntry{
-		ID: "cold-route-1", Services: apps,
+	logdb.SeedShard(c.Provisioner, &logdb.Shard{
+		ID: "cold-route-1", Services: svcs,
 		WindowStart: t1, WindowEnd: t2,
 		State: logdb.StateArchived, ParquetPath: s3Path,
-		Shard:     cold,
+		Live:      cold,
 		RowCount:  4, // archived shard holds data; MatchingEntries now skips 0-row cold/RO shards
 		CreatedAt: time.Now(),
 	})
