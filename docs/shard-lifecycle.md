@@ -38,78 +38,85 @@ identity.
 This is the critical distinction: **instance lifecycle ≠ shard
 lifecycle**. A shard can outlive many instances.
 
+> **FSM rewrite (current).** A shard is now its own finite state
+> machine — one `logdb.Shard` that is the persisted row, the runtime
+> object, and the `qmuntal/stateless` state machine. Each shard's own
+> `Evaluate()` (run once per reconciler tick) drives its convergence;
+> there is no separate reconciler with numbered "ops", and the SNS/SQS
+> lifecycle hook is gone (deleted in `7b0de94`). The transition table
+> lives in `logdb/states.go` + `logdb/triggers.go`; the design is in
+> `docs/plans/asg-as-api-stateless.md` and `docs/plans/shard-type-collapse.md`.
+> The "LAUNCHING handoff", "Rotation", and reconciler-op narrative
+> further down this doc predates that rewrite — read it as history.
+
 ## Shard states
 
 ```
-                ┌─────────────┐
-                │  LAUNCHING  │  (row in shard_records;
-                └─────────────┘   no instance yet, or
-                       │          instance not yet heart-
-                       │ instance beating)
-                       │ heartbeats
-                       ▼
-                ┌─────────────┐
-                │  INGESTING  │◀─┐
-                └─────────────┘  │ rebind
-                       │         │ (known id
-                       │ window  │  at new addr,
-                       │ closes  │  preserves state)
-                       ▼         │
-                ┌─────────────┐  │
-                │  READ_ONLY  │◀─┘
-                └─────────────┘
-                       │
-                       │ retention boundary
-                       │ (op 5 archive)
-                       ▼
-                ┌─────────────┐
-                │  ARCHIVED   │  (ColdShard; Parquet on S3,
-                └─────────────┘   EBS volume retired. Still
-                       │          holds instance_id until op 6
-                       │          terminates it.)
-                       │ op 6 terminate
-                       │ (ShouldDecrementDesiredCapacity=true)
-                       ▼
-                  instance_id=""
-                  (ColdShard stays queryable
-                  forever via Lambda)
+   ┌─────────────┐  launch (Evaluate)        ┌─────────────┐
+   │  LAUNCHING  │ ── ASGProvisioner.Launch ▶│  INGESTING  │◀─┐ heartbeat
+   └─────────────┘    + first heartbeat      └─────────────┘  │ (rebind /
+        │ retry budget                        │   │   ▲       │  promote)
+        │ spent                     ingest    │   │   │ cooldown
+        ▼                       failures ≥ N  │   │   │ (half-open)
+     ┌──────┐                                 │   ▼   │
+     │ GONE │◀── stranded / admin-delete      │ ┌──────────┐
+     └──────┘     ▲          ▲                │ │ DEGRADED │ (no writes,
+        ▲         │          │  window closes │ └──────────┘  still reads)
+        │  hb     │          ▼                │      │
+        │ stale   │   ┌─────────────┐         │      │ window closes
+   ┌───────────┐ └───│  SUSPENDED  │◀────hb───┘      ▼
+   │ (volume?) │     └─────────────┘  stale    ┌─────────────┐
+   └───────────┘   reap instance,             │  READ_ONLY  │
+                   relaunch ▶ LAUNCHING        └─────────────┘
+                                                      │ retention sweep
+                                                      ▼
+                                               ┌─────────────┐
+                                               │  ARCHIVING  │ export → cold
+                                               └─────────────┘  → retire vol
+                                                      │          → terminate
+                                                      ▼
+                                               ┌─────────────┐
+                                               │  ARCHIVED   │ ColdShard on S3,
+                                               └─────────────┘  queryable forever
 ```
 
-- **LAUNCHING** — a persistent row in `shard_records` that
-  represents the reconciler's intent to bring up a new shard. Has a
-  minted `shard_id`, heartbeat token, bucket, window, and tier, but
-  (at first) no `instance_id` and no `addr`. The lifecycle hook
-  stamps `instance_id` onto the oldest unmatched row for the tier
-  when AWS brings up an instance; the instance's first heartbeat
-  promotes the row to INGESTING. Synchronous launchers (LocalLauncher
-  for dev/test) skip this state — they Configure the shard inline
-  before it ever heartbeats.
-- **INGESTING** — Configure RPC has been sent; shard is registered
-  and serving writes + queries for its `(window, apps)`. Writes for
-  rows whose timestamp falls in the window and whose app is in the
-  set route here. Queries overlapping the window route here.
-- **READ_ONLY** — wall-clock time has passed the window's end. No
-  new writes arrive. Queries still route here until the retention
-  boundary.
-- **ARCHIVED** — Parquet export complete, EBS volume retired, shard
-  handle swapped to a ColdShard that serves queries from S3 via
-  Lambda. The row persists in `shard_records` forever (ColdShards
-  stay queryable as long as the Parquet file is on S3). `instance_id`
-  may still be set momentarily until op 6 terminates the compute.
-  ARCHIVED is terminal for the shard's identity — there is no
-  TERMINATED state; "done" means "`instance_id` is nulled and the
-  ColdShard keeps serving."
+- **LAUNCHING** — a persisted row with a minted `shard_id`, token,
+  bucket, window, tier, AZ + stripe index, but no `instance_id` yet.
+  The shard's `Evaluate` calls `ASGProvisioner.Launch` (async),
+  which bumps the tier/AZ ASG's desired capacity, creates+attaches an
+  EBS volume, and stamps the instance; the instance's first heartbeat
+  promotes it to INGESTING. Exhausting the launch retry budget fires
+  LaunchFailed → GONE.
+- **INGESTING** — serving writes + queries for its `(window,
+  services)`. A bucket holds `Target` INGESTING shards at once; writes
+  round-robin across them.
+- **DEGRADED** — the ingest circuit breaker: consecutive ingest
+  failures crossed `SuspendFailureThreshold`. Out of write routing
+  (not INGESTING) but still read-queryable; `Evaluate` re-admits it to
+  INGESTING after a cooldown (half-open). Replaces the removed Suspended
+  ingest latch.
+- **READ_ONLY** — past the window's end; no new writes, still queried
+  until the retention sweep archives it.
+- **ARCHIVING** — the shard's `Evaluate` runs export-to-Parquet →
+  swap live handle for a ColdShard → snapshot+detach+delete the volume
+  → terminate the instance, each step gated on a persisted fact so a
+  crash mid-cleanup re-drives it. Query-routable throughout (serves
+  from the live DuckDB until the ColdShard swaps in). Fires
+  ArchiveComplete → ARCHIVED itself once all steps land.
+- **ARCHIVED** — data on S3, instance + volume gone, ColdShard serves
+  queries via Lambda. Terminal for the shard's identity; AdminDelete is
+  the only edge out (→ GONE).
+- **SUSPENDED** — recoverable instance death: a stale heartbeat on an
+  INGESTING/READ_ONLY/DEGRADED shard with a surviving EBS volume lands
+  here. `Evaluate` reaps the dead instance and relaunches (→ LAUNCHING,
+  reattaching the volume). If the volume is gone → Stranded → GONE.
+- **GONE** — the cleanup sink (launch-budget exhaustion, data-already-
+  lost, admin delete). `onEnterGone` removes the entry from the registry
+  and deletes the row.
 
-No ARCHIVING intermediate state today — archive is synchronous
-inside op 5's Apply (export → ColdShard swap → volume retire → state
-transition, all in one call). If archive ever becomes async (large
-shards, background export), an ARCHIVING state would slot in
-between READ_ONLY and ARCHIVED; for now the transition is atomic
-from the reconciler's perspective.
-
-Exactly one state transition per boundary — the coordinator is the
-only actor that moves a shard from one state to the next. Instances
-don't self-transition.
+Transitions are fired only from a shard's own `Evaluate`/`Fire`
+(no instance self-transitions); `stateless`'s FiringQueued mode
+serializes triggers per shard.
 
 ### LAUNCHING handoff
 
