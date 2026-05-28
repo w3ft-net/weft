@@ -21,6 +21,15 @@ import (
 // raw so the caller can map them to Internal.
 var ErrShardAuthFailed = errors.New("shard heartbeat authentication failed")
 
+// Admin shard-op preconditions, wrapped by ForceArchive/DeleteArchived so
+// the coordinator's gRPC handlers can map them to status codes
+// (NotFound / FailedPrecondition) instead of a blanket Internal.
+var (
+	ErrShardNotInRegistry   = errors.New("shard not found in registry")
+	ErrShardWrongState      = errors.New("shard is not in the required state")
+	ErrShardWithinRetention = errors.New("shard data is within the retention window")
+)
+
 // HeartbeatStore is the interface the provisioner needs for heartbeat operations.
 type HeartbeatStore interface {
 	LiveShardHeartbeats(since string) ([]store.ShardHeartbeat, error)
@@ -658,14 +667,14 @@ func (p *Provisioner) syncServicesForBucket(bucket *Bucket) {
 func (p *Provisioner) ForceArchive(shardID string) error {
 	entry := p.registry.Get(shardID)
 	if entry == nil {
-		return fmt.Errorf("shard %s not found in registry", shardID)
+		return fmt.Errorf("shard %s: %w", shardID, ErrShardNotInRegistry)
 	}
 	entry.ensureSM(p.shardDeps())
 	entry.mu.RLock()
 	st := entry.State
 	entry.mu.RUnlock()
 	if st != StateReadOnly {
-		return fmt.Errorf("shard %s is %s, not READ_ONLY", shardID, st)
+		return fmt.Errorf("shard %s is %s, not READ_ONLY: %w", shardID, st, ErrShardWrongState)
 	}
 	ctx := context.Background()
 	if err := entry.Fire(ctx, TriggerArchiveRequested); err != nil {
@@ -688,17 +697,31 @@ func (p *Provisioner) ForceArchive(shardID string) error {
 // from the registry (closing its handle) and deletes the shard_records
 // row. The Parquet data on S3 is left in place (tombstone cleanup is a
 // separate concern).
-func (p *Provisioner) DeleteArchived(shardID string) error {
+//
+// Unless force is set, a shard whose window still falls within its tier's
+// retention is refused with ErrShardWithinRetention — the gate that used
+// to live in the API admin handler.
+func (p *Provisioner) DeleteArchived(shardID string, force bool) error {
 	entry := p.registry.Get(shardID)
 	if entry == nil {
-		return fmt.Errorf("shard %s not found in registry", shardID)
+		return fmt.Errorf("shard %s: %w", shardID, ErrShardNotInRegistry)
 	}
 	entry.ensureSM(p.shardDeps())
 	entry.mu.RLock()
 	st := entry.State
+	windowEnd := entry.WindowEnd
+	bucketID := entry.BucketID
 	entry.mu.RUnlock()
 	if st != StateArchived {
-		return fmt.Errorf("shard %s is %s, not ARCHIVED", shardID, st)
+		return fmt.Errorf("shard %s is %s, not ARCHIVED: %w", shardID, st, ErrShardWrongState)
+	}
+	if !force && p.store != nil {
+		if b, found, _ := p.store.GetBucket(bucketID); found {
+			retention := store.LogRetention(store.Tier(b.Tier))
+			if time.Since(windowEnd) < retention {
+				return fmt.Errorf("shard %s is within the %s retention window: %w", shardID, retention, ErrShardWithinRetention)
+			}
+		}
 	}
 	if err := entry.Fire(context.Background(), TriggerAdminDelete); err != nil {
 		return fmt.Errorf("delete archived %s: %w", shardID, err)

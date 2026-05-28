@@ -329,6 +329,9 @@ service WeftCoordinator {
   // Shard heartbeat — shards push their state to the coordinator every 60s.
   rpc Heartbeat(ShardHeartbeatRequest) returns (HeartbeatResponse);
 
+  // Admin: list a bucket's shards (metadata only, read from shard_records).
+  rpc ListShards(ListShardsRequest) returns (ListShardsResponse);
+
   // Admin: force-archive a READ_ONLY shard.
   rpc ForceArchiveShard(ForceArchiveShardRequest) returns (ForceArchiveShardResponse);
 
@@ -672,6 +675,31 @@ message GetSourceStatusResponse {
 }
 
 // ── Admin RPCs ──────────────────────────────────────────────────────
+
+message ListShardsRequest {
+  int64 bucket_id = 1;
+}
+
+// ShardInfo mirrors the persisted shard_records columns the admin UI
+// shows. Timestamps are RFC3339 strings so the API can pass them through
+// to the existing AdminShard JSON contract without reformatting.
+message ShardInfo {
+  string id = 1;
+  string window_start = 2;
+  string window_end = 3;
+  string state = 4;
+  string addr = 5;
+  string instance_id = 6;
+  string parquet_path = 7;
+  string tier = 8;
+  int64 row_count = 9;
+  string created_at = 10;
+  int64 bucket_id = 11;
+}
+
+message ListShardsResponse {
+  repeated ShardInfo shards = 1;
+}
 
 message ForceArchiveShardRequest {
   string shard_id = 1;

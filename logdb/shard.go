@@ -72,6 +72,15 @@ func (s ShardStore) ListShards() ([]*Shard, error) {
 	return shards, err
 }
 
+// ListShardsByBucket returns a bucket's shard rows, newest window first —
+// the read behind the admin shards listing. Reads straight from
+// shard_records (not the registry) so archived shards still appear.
+func (s ShardStore) ListShardsByBucket(bucketID int64) ([]*Shard, error) {
+	var shards []*Shard
+	err := s.db().Where("bucket_id = ?", bucketID).Order("window_start DESC").Find(&shards).Error
+	return shards, err
+}
+
 // DeleteShard removes a shard row.
 func (s ShardStore) DeleteShard(id string) error {
 	return s.db().Delete(&Shard{}, "id = ?", id).Error

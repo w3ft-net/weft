@@ -1053,12 +1053,53 @@ func (s *Server) GetSourceStatus(_ context.Context, req *pb.GetSourceStatusReque
 	}
 }
 
+// shardOpStatus maps a provisioner admin-op error to a gRPC status the
+// API server can turn into a meaningful HTTP code (404/409) instead of a
+// blanket 500.
+func shardOpStatus(err error) error {
+	switch {
+	case errors.Is(err, logdb.ErrShardNotInRegistry):
+		return status.Error(codes.NotFound, err.Error())
+	case errors.Is(err, logdb.ErrShardWrongState), errors.Is(err, logdb.ErrShardWithinRetention):
+		return status.Error(codes.FailedPrecondition, err.Error())
+	default:
+		return status.Errorf(codes.Internal, "%v", err)
+	}
+}
+
+func (s *Server) ListShards(_ context.Context, req *pb.ListShardsRequest) (*pb.ListShardsResponse, error) {
+	if s.Store == nil {
+		return nil, status.Errorf(codes.Unavailable, "store not configured")
+	}
+	rows, err := (logdb.ShardStore{Store: s.Store}).ListShardsByBucket(req.BucketId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list shards: %v", err)
+	}
+	out := make([]*pb.ShardInfo, 0, len(rows))
+	for _, sh := range rows {
+		out = append(out, &pb.ShardInfo{
+			Id:          sh.ID,
+			WindowStart: sh.WindowStart.Format(time.RFC3339Nano),
+			WindowEnd:   sh.WindowEnd.Format(time.RFC3339Nano),
+			State:       string(sh.State),
+			Addr:        sh.Addr,
+			InstanceId:  sh.InstanceID,
+			ParquetPath: sh.ParquetPath,
+			Tier:        sh.Tier,
+			RowCount:    sh.RowCount,
+			CreatedAt:   sh.CreatedAt.Format(time.RFC3339Nano),
+			BucketId:    sh.BucketID,
+		})
+	}
+	return &pb.ListShardsResponse{Shards: out}, nil
+}
+
 func (s *Server) ForceArchiveShard(_ context.Context, req *pb.ForceArchiveShardRequest) (*pb.ForceArchiveShardResponse, error) {
 	if s.Coord.Provisioner == nil {
 		return nil, status.Errorf(codes.Unavailable, "provisioner not running")
 	}
 	if err := s.Coord.Provisioner.ForceArchive(req.ShardId); err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, shardOpStatus(err)
 	}
 	return &pb.ForceArchiveShardResponse{}, nil
 }
@@ -1067,8 +1108,8 @@ func (s *Server) DeleteArchivedShard(_ context.Context, req *pb.DeleteArchivedSh
 	if s.Coord.Provisioner == nil {
 		return nil, status.Errorf(codes.Unavailable, "provisioner not running")
 	}
-	if err := s.Coord.Provisioner.DeleteArchived(req.ShardId); err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+	if err := s.Coord.Provisioner.DeleteArchived(req.ShardId, req.Force); err != nil {
+		return nil, shardOpStatus(err)
 	}
 	return &pb.DeleteArchivedShardResponse{}, nil
 }

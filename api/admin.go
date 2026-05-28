@@ -8,7 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/kevlarcon/weft/logdb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/store"
 )
@@ -239,6 +241,47 @@ func (s *Server) handleAdminUpdateBucket(w http.ResponseWriter, r *http.Request)
 }
 
 // ── Shard handlers ──────────────────────────────────────────────────
+//
+// The API server is a thin forwarder for shard lifecycle: it never reads
+// shard state or validates transitions itself (that would drag the
+// duckdb-linked logdb package into this cgo-free binary). The coordinator
+// hosts the shard FSMs, owns the shard_records table, and enforces the
+// state/retention preconditions; here we just relay the call and translate
+// its gRPC status into an HTTP code.
+
+// adminShardView is the JSON shape the admin UI's AdminShard type consumes.
+// Built from pb.ShardInfo so the response carries only display metadata —
+// notably not the per-shard HeartbeatToken the full row used to leak.
+type adminShardView struct {
+	ID          string
+	WindowStart string
+	WindowEnd   string
+	State       string
+	Addr        string
+	InstanceID  string
+	ParquetPath string
+	Tier        string
+	RowCount    int64
+	CreatedAt   string
+	BucketID    int64
+}
+
+// writeShardOpError maps the coordinator's gRPC status to an HTTP response:
+// NotFound→404, FailedPrecondition→409 (wrong state or within retention),
+// everything else→500. The status message is forwarded verbatim so the
+// admin UI's substring checks (e.g. "retention") keep working.
+func writeShardOpError(w http.ResponseWriter, action, shardID string, err error) {
+	st, _ := status.FromError(err)
+	switch st.Code() {
+	case codes.NotFound:
+		http.Error(w, st.Message(), http.StatusNotFound)
+	case codes.FailedPrecondition:
+		http.Error(w, st.Message(), http.StatusConflict)
+	default:
+		log.Printf("admin: %s shard %s: %v", action, shardID, err)
+		http.Error(w, action+" failed: "+st.Message(), http.StatusInternalServerError)
+	}
+}
 
 func (s *Server) handleAdminListShards(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -246,13 +289,29 @@ func (s *Server) handleAdminListShards(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	var shards []logdb.Shard
-	err = s.store.DB().Where("bucket_id = ?", id).Order("window_start DESC").Find(&shards).Error
+	resp, err := s.coordClient.ListShards(s.coordCtx(r), &pb.ListShardsRequest{BucketId: id})
 	if err != nil {
+		log.Printf("admin: list shards for bucket %d: %v", id, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	json.NewEncoder(w).Encode(shards)
+	out := make([]adminShardView, 0, len(resp.Shards))
+	for _, sh := range resp.Shards {
+		out = append(out, adminShardView{
+			ID:          sh.Id,
+			WindowStart: sh.WindowStart,
+			WindowEnd:   sh.WindowEnd,
+			State:       sh.State,
+			Addr:        sh.Addr,
+			InstanceID:  sh.InstanceId,
+			ParquetPath: sh.ParquetPath,
+			Tier:        sh.Tier,
+			RowCount:    sh.RowCount,
+			CreatedAt:   sh.CreatedAt,
+			BucketID:    sh.BucketId,
+		})
+	}
+	json.NewEncoder(w).Encode(out)
 }
 
 func (s *Server) handleAdminArchiveShard(w http.ResponseWriter, r *http.Request) {
@@ -261,21 +320,11 @@ func (s *Server) handleAdminArchiveShard(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "id required", http.StatusBadRequest)
 		return
 	}
-	rec, found, err := logdb.ShardStore{Store: s.store}.GetShard(shardID)
-	if err != nil || !found {
-		http.Error(w, "shard not found", http.StatusNotFound)
-		return
-	}
-	if rec.State != logdb.StateReadOnly {
-		http.Error(w, "only READ_ONLY shards can be archived (current: "+string(rec.State)+")", http.StatusConflict)
-		return
-	}
-	_, err = s.coordClient.ForceArchiveShard(s.coordCtx(r), &pb.ForceArchiveShardRequest{
+	_, err := s.coordClient.ForceArchiveShard(s.coordCtx(r), &pb.ForceArchiveShardRequest{
 		ShardId: shardID,
 	})
 	if err != nil {
-		log.Printf("admin: force archive %s: %v", shardID, err)
-		http.Error(w, "archive failed: "+err.Error(), http.StatusInternalServerError)
+		writeShardOpError(w, "archive", shardID, err)
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]string{"status": "archived"})
@@ -293,44 +342,12 @@ func (s *Server) handleAdminDeleteShard(w http.ResponseWriter, r *http.Request) 
 	if r.Body != nil {
 		json.NewDecoder(r.Body).Decode(&req)
 	}
-
-	rec, found, err := logdb.ShardStore{Store: s.store}.GetShard(shardID)
-	if err != nil || !found {
-		http.Error(w, "shard not found", http.StatusNotFound)
-		return
-	}
-	if rec.State != logdb.StateArchived {
-		http.Error(w, "only ARCHIVED shards can be deleted (current: "+string(rec.State)+")", http.StatusConflict)
-		return
-	}
-
-	if !req.Force {
-		b, bFound, _ := s.store.GetBucket(rec.BucketID)
-		if bFound {
-			tier := store.Tier(b.Tier)
-			retention := store.LogRetention(tier)
-			if time.Since(rec.WindowEnd) < retention {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(map[string]any{
-					"error":          "shard data is within retention window",
-					"tier":           string(tier),
-					"retention":      retention.String(),
-					"window_end":     rec.WindowEnd,
-					"requires_force": true,
-				})
-				return
-			}
-		}
-	}
-
-	_, err = s.coordClient.DeleteArchivedShard(s.coordCtx(r), &pb.DeleteArchivedShardRequest{
+	_, err := s.coordClient.DeleteArchivedShard(s.coordCtx(r), &pb.DeleteArchivedShardRequest{
 		ShardId: shardID,
 		Force:   req.Force,
 	})
 	if err != nil {
-		log.Printf("admin: delete shard %s: %v", shardID, err)
-		http.Error(w, "delete failed: "+err.Error(), http.StatusInternalServerError)
+		writeShardOpError(w, "delete", shardID, err)
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
