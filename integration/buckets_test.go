@@ -5,13 +5,11 @@ package integration
 import (
 	"context"
 	"fmt"
-	"slices"
 	"testing"
 	"time"
 
 	"github.com/kevlarcon/weft/logdb"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/store"
 )
 
 // TestBuckets_DefaultSeeded asserts migrations 020/021/022 left
@@ -42,11 +40,10 @@ func TestBuckets_DefaultSeeded(t *testing.T) {
 	if b.Tier != "small" {
 		t.Errorf("default.tier: got %q, want small", b.Tier)
 	}
-	// apps decodes to []string via the GORM json serializer; the
-	// day-1 "default" bucket is the catch-all (empty list).
-	if len(b.Services) != 0 {
-		t.Errorf("default.apps: got %v, want empty (catch-all)", b.Services)
-	}
+	// Buckets no longer carry a service list (migration 064) — services
+	// belong to shards (shard_services). The default bucket is the
+	// catch-all by being the bucket every un-dedicated service's log_group
+	// resolves to (log_groups.bucket_id NULL), not by an apps column.
 	// Compare as parsed durations so "168h" (migration default) and
 	// "168h0m0s" (Go time.Duration.String() format, written on any
 	// SaveBucket) both pass. The invariant is "7 days," not the
@@ -165,75 +162,57 @@ func TestBuckets_OnboardServicePropagates(t *testing.T) {
 		t.Fatalf("AddSource: %v", err)
 	}
 
-	// Give the coordinator a tick to persist bucket + propagate to
-	// shards. OnboardService is synchronous on the RPC path, but the
-	// persist call goes through GORM and a test reading the DB
-	// immediately after is racy in practice; retry briefly.
+	// AddSource → OnboardService stamps every INGESTING shard in the
+	// default bucket with a shard_services row for the new service, and
+	// leaves READ_ONLY shards frozen (their christen stamp never grows).
+	// Buckets carry no service list anymore — routing reads shard_services
+	// (migration 058). Poll until the stamp lands (the GORM writes race a
+	// test reading the DB immediately after).
+	var ingestingChecked, readOnlyChecked int
 	deadline := time.Now().Add(10 * time.Second)
-	var bucket store.Bucket
 	for time.Now().Before(deadline) {
-		b, ok, err := db.GetBucket(def.ID)
+		shards, err := (logdb.ShardStore{Store: db}).ListShards()
 		if err != nil {
-			t.Fatalf("GetBucket(%d): %v", def.ID, err)
+			t.Fatalf("ListShards: %v", err)
 		}
-		if !ok {
-			t.Fatal("default bucket disappeared")
+		svcRows, err := db.ListShardServices()
+		if err != nil {
+			t.Fatalf("ListShardServices: %v", err)
 		}
-		if slices.Contains(b.Services, appName) {
-			bucket = b
-			break
+		servesNew := map[string]bool{} // shardID → serves appName
+		for _, ss := range svcRows {
+			if ss.Service == appName {
+				servesNew[ss.ShardID] = true
+			}
+		}
+
+		ingestingChecked, readOnlyChecked = 0, 0
+		allStamped := true
+		for _, s := range shards {
+			if s.BucketID != def.ID {
+				continue
+			}
+			switch s.State {
+			case logdb.StateIngesting:
+				ingestingChecked++
+				if !servesNew[s.ID] {
+					allStamped = false
+				}
+			case logdb.StateReadOnly:
+				readOnlyChecked++
+				if servesNew[s.ID] {
+					t.Errorf("READ_ONLY shard %s was re-stamped with service %q (christen stamp must be frozen)",
+						s.ID, appName)
+				}
+			}
+		}
+		if ingestingChecked > 0 && allStamped {
+			t.Logf("verified %d INGESTING shards received %q; %d READ_ONLY shards stayed frozen",
+				ingestingChecked, appName, readOnlyChecked)
+			return
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	if bucket.ID == 0 {
-		// Final read for the error message.
-		b, _, _ := db.GetBucket(def.ID)
-		t.Fatalf("bucket.apps missing %q after 10s: %v", appName, b.Services)
-	}
-
-	// Now check shards. Routing lives in shard_services now (migration
-	// 058): each INGESTING shard bound to default must have a
-	// shard_services row for the new service; READ_ONLY shards were
-	// frozen at christen and must NOT have been re-stamped with it.
-	shards, err := (logdb.ShardStore{Store: db}).ListShards()
-	if err != nil {
-		t.Fatalf("ListShards: %v", err)
-	}
-	svcRows, err := db.ListShardServices()
-	if err != nil {
-		t.Fatalf("ListShardServices: %v", err)
-	}
-	servesNew := map[string]bool{} // shardID → serves appName
-	for _, ss := range svcRows {
-		if ss.Service == appName {
-			servesNew[ss.ShardID] = true
-		}
-	}
-
-	ingestingChecked := 0
-	readOnlyChecked := 0
-	for _, s := range shards {
-		if s.BucketID != def.ID {
-			continue
-		}
-		switch s.State {
-		case "INGESTING":
-			ingestingChecked++
-			if !servesNew[s.ID] {
-				t.Errorf("INGESTING shard %s has no shard_services row for service %q",
-					s.ID, appName)
-			}
-		case "READ_ONLY":
-			readOnlyChecked++
-			if servesNew[s.ID] {
-				t.Errorf("READ_ONLY shard %s was re-stamped with service %q (christen stamp must be frozen)",
-					s.ID, appName)
-			}
-		}
-	}
-	if ingestingChecked == 0 {
-		t.Fatal("no INGESTING shards found in default bucket — can't verify propagation")
-	}
-	t.Logf("verified %d INGESTING shards received %q; %d READ_ONLY shards stayed frozen",
-		ingestingChecked, appName, readOnlyChecked)
+	t.Fatalf("after 10s: %d INGESTING shards in default bucket not all stamped with %q (or none found)",
+		ingestingChecked, appName)
 }

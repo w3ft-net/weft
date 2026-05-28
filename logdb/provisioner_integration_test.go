@@ -166,7 +166,6 @@ func TestIntegration_BucketScaleUpLaunchPromote(t *testing.T) {
 	}
 	bucket := &store.Bucket{
 		Label:                "fsmint",
-		Services:             []string{},
 		TargetIngestingCount: 2,
 		Tier:                 "small",
 		WindowDuration:       (24 * time.Hour).String(),

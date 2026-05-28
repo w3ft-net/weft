@@ -14,14 +14,15 @@ import (
 // same row in place (see window_rotation_test.go).
 const defaultBucketID int64 = 1
 
-// OnboardService must append the app to the default bucket AND to every
-// INGESTING shard bound to that bucket, while leaving READ_ONLY and
-// ARCHIVED shards alone (their apps list stays frozen — they never
-// accepted writes for the new app). Shards in a different bucket
-// also stay untouched.
+// OnboardService stamps the service onto every INGESTING shard bound to
+// the default bucket (via shard_services), while leaving READ_ONLY and
+// ARCHIVED shards alone (their stamp stays frozen — they never accepted
+// writes for the new service) and shards in a different bucket untouched.
+// Buckets don't serve services; shards do — the bucket just scopes which
+// shards get stamped.
 func TestOnboardService_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 	db := openSMTestStore(t)
-	seedDefaultBucket(t, db, []string{"weft"}, 0, 0)
+	seedDefaultBucket(t, db, 0, 0)
 	// Both services live in the default bucket's log_groups (the routing
 	// source of truth); the reconciler stamps the missing one onto the
 	// INGESTING shards. nsID is threaded into every entry below.
@@ -69,17 +70,8 @@ func TestOnboardService_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 	}
 	prov.config.ShardOps = ShardStore{db} // ServicesForBucket for the reconciler's drift diff
 
-	if err := prov.OnboardService("xylem"); err != nil {
+	if err := prov.OnboardService(nsID, "xylem"); err != nil {
 		t.Fatalf("OnboardService: %v", err)
-	}
-
-	// Bucket now has both apps.
-	def, err := bm.Default()
-	if err != nil {
-		t.Fatalf("bm.Default: %v", err)
-	}
-	if got := def.Services; len(got) != 2 || got[0] != "weft" || got[1] != "xylem" {
-		t.Errorf("default bucket apps: got %v, want [weft xylem]", got)
 	}
 
 	// INGESTING shards in default bucket: updated.
@@ -103,13 +95,12 @@ func TestOnboardService_OnlyIngestingInBucketGetsAppended(t *testing.T) {
 		t.Errorf("other-bucket-ingest apps changed: got %v, want [vimgym]", got)
 	}
 
-	// Second call is a no-op (idempotent).
-	if err := prov.OnboardService("xylem"); err != nil {
+	// Second call is a no-op (idempotent): the shards aren't double-stamped.
+	if err := prov.OnboardService(nsID, "xylem"); err != nil {
 		t.Fatalf("OnboardService (second): %v", err)
 	}
-	def2, _ := bm.Default()
-	if got := def2.Services; len(got) != 2 {
-		t.Errorf("second OnboardService duplicated: %v", got)
+	if got := reg.Get("ingest-1").Services; len(got) != 2 {
+		t.Errorf("second OnboardService double-stamped ingest-1: %v", got)
 	}
 }
 
@@ -158,82 +149,6 @@ func seedLogGroups(t *testing.T, db *store.Store, customer, namespace string, se
 		}
 	}
 	return ns.ID
-}
-
-// EvaluateSplit is stubbed to "" while the split policy is redesigned.
-// See docs/plans/bucket-split-policy.md. The disabled path doesn't
-// touch the store, so this stays a DB-free unit test.
-func TestBucketManager_EvaluateSplit_Disabled(t *testing.T) {
-	bm := NewBucketManager(nil)
-
-	// Even with a clearly dominant app, EvaluateSplit must return ""
-	// until the policy is re-enabled. If this test fails, the stub
-	// has been removed — update the regression tests in the plan doc.
-	stats := map[string]int64{"vimgym": 700, "callbox": 150, "grantcentral": 150}
-	app, err := bm.EvaluateSplit(stats)
-	if err != nil {
-		t.Fatalf("EvaluateSplit: %v", err)
-	}
-	if app != "" {
-		t.Fatalf("EvaluateSplit must be disabled; got %q", app)
-	}
-}
-
-func TestBucketManager_Split(t *testing.T) {
-	db := openSMTestStore(t)
-	src := seedDedicatedBucket(t, db, "split-src", []string{"vimgym", "callbox", "grantcentral"})
-	bm := NewBucketManager(db)
-
-	bucket, err := bm.Split("vimgym")
-	if err != nil {
-		t.Fatalf("Split: %v", err)
-	}
-	if bucket == nil {
-		t.Fatal("expected new bucket")
-	}
-	if len(bucket.Services) != 1 || bucket.Services[0] != "vimgym" {
-		t.Fatalf("expected [vimgym], got %v", bucket.Services)
-	}
-	if bucket.Label != "dedicated-vimgym" {
-		t.Errorf("expected label dedicated-vimgym, got %q", bucket.Label)
-	}
-
-	// Original bucket now has 2 apps.
-	updatedSrc, err := bm.ByLabel(src.Label)
-	if err != nil || updatedSrc == nil {
-		t.Fatalf("ByLabel(%s): %v / %v", src.Label, updatedSrc, err)
-	}
-	if len(updatedSrc.Services) != 2 {
-		t.Fatalf("expected 2 apps in source after split, got %v", updatedSrc.Services)
-	}
-	for _, a := range updatedSrc.Services {
-		if a == "vimgym" {
-			t.Errorf("vimgym still in source after split")
-		}
-	}
-
-	// The dedicated bucket is queryable by its label.
-	dedicated, err := bm.ByLabel("dedicated-vimgym")
-	if err != nil || dedicated == nil {
-		t.Fatalf("ByLabel(dedicated-vimgym): %v / %v", dedicated, err)
-	}
-	if dedicated.ID != bucket.ID {
-		t.Errorf("dedicated bucket id mismatch: %d vs %d", dedicated.ID, bucket.ID)
-	}
-}
-
-func TestBucketManager_NoDuplicateSplit(t *testing.T) {
-	// EvaluateSplit is disabled, so a single-app bucket (or any) yields
-	// no split. DB-free: the disabled path never reads the store.
-	bm := NewBucketManager(nil)
-
-	app, err := bm.EvaluateSplit(map[string]int64{"vimgym": 1000})
-	if err != nil {
-		t.Fatalf("EvaluateSplit: %v", err)
-	}
-	if app != "" {
-		t.Fatalf("expected no split for single-app bucket, got %s", app)
-	}
 }
 
 func TestRegistry_RoundRobinIngestion(t *testing.T) {

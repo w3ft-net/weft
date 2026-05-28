@@ -45,7 +45,7 @@ func TestBackfillShardServices059(t *testing.T) {
 		t.Fatalf("default bucket: ok=%v err=%v", ok, err)
 	}
 	dedicated := &Bucket{
-		Label: "dedicated-backfill", Services: []string{"worker"}, TargetIngestingCount: 1,
+		Label: "dedicated-backfill", TargetIngestingCount: 1,
 		Tier: "small", WindowDuration: "168h", CreatedAt: "2026-04-21T00:00:00Z",
 	}
 	if err := db.SaveBucket(dedicated); err != nil {
@@ -145,7 +145,7 @@ func TestStampShardServices(t *testing.T) {
 		t.Fatalf("default bucket: ok=%v err=%v", ok, err)
 	}
 	dedicated := &Bucket{
-		Label: "dedicated-shardsvc", Services: []string{"worker"}, TargetIngestingCount: 1,
+		Label: "dedicated-shardsvc", TargetIngestingCount: 1,
 		Tier: "small", WindowDuration: "168h", CreatedAt: "2026-04-21T00:00:00Z",
 	}
 	if err := db.SaveBucket(dedicated); err != nil {

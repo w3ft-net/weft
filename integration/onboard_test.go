@@ -88,9 +88,9 @@ func TestOnboardFlow(t *testing.T) {
 		sources := listPendingSources(t, jwt)
 		found := false
 		for _, s := range sources {
-			if s.App == "testapp" && s.Namespace == "kevlar" {
+			if s.Service == "testapp" && s.Namespace == "kevlar" {
 				found = true
-				t.Logf("  found pending source: app=%s namespace=%s instance=%s", s.App, s.Namespace, s.Instance)
+				t.Logf("  found pending source: service=%s namespace=%s instance=%s", s.Service, s.Namespace, s.Instance)
 
 				// Verify the sample contains actual log lines.
 				var lines []string
@@ -304,7 +304,7 @@ func TestGlobOnboardFlow(t *testing.T) {
 	for _, app := range expectedApps {
 		var match *pendingSourceResp
 		for i := range sources {
-			if sources[i].App == app && sources[i].Namespace == "kevlar" {
+			if sources[i].Service == app && sources[i].Namespace == "kevlar" {
 				match = &sources[i]
 				break
 			}
@@ -327,8 +327,8 @@ func TestGlobOnboardFlow(t *testing.T) {
 	// which is what the current glob-handling bug would produce if the
 	// SubmitSample call were ever to succeed.
 	for _, s := range sources {
-		if s.App == "*" {
-			t.Errorf("found pending source with literal wildcard app name: %+v", s)
+		if s.Service == "*" {
+			t.Errorf("found pending source with literal wildcard service name: %+v", s)
 		}
 	}
 }
@@ -363,13 +363,13 @@ func generateDevJWT(t *testing.T) string {
 }
 
 type pendingSourceResp struct {
-	App       string          `json:"app"`
-	Namespace string          `json:"namespace"`
-	Instance  string          `json:"instance"`
-	HostGroup string          `json:"host_group"`
-	Sample    json.RawMessage `json:"sample"`
-	Detection json.RawMessage `json:"detection"`
-	CreatedAt string          `json:"created_at"`
+	Service    string          `json:"service"`
+	Namespace  string          `json:"namespace"`
+	Instance   string          `json:"instance"`
+	Deployment string          `json:"deployment"`
+	Sample     json.RawMessage `json:"sample"`
+	Detection  json.RawMessage `json:"detection"`
+	CreatedAt  string          `json:"created_at"`
 }
 
 func listPendingSources(t *testing.T, jwt string) []pendingSourceResp {

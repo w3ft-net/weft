@@ -115,20 +115,44 @@ func TestColdShardQueryRouting(t *testing.T) {
 		Store:             tx,
 		LambdaFunctionURL: lambdaSrv.URL,
 	})
-	logdb.SeedShard(c.Provisioner, &logdb.Shard{
-		ID: "cold-route-0", Services: svcs,
-		WindowStart: t0, WindowEnd: t1,
-		State: logdb.StateIngesting, Addr: s0Addr,
-		CreatedAt: time.Now(),
-	})
-	logdb.SeedShard(c.Provisioner, &logdb.Shard{
-		ID: "cold-route-1", Services: svcs,
-		WindowStart: t1, WindowEnd: t2,
-		State: logdb.StateArchived, ParquetPath: s3Path,
-		Live:      cold,
-		RowCount:  4, // archived shard holds data; MatchingEntries now skips 0-row cold/RO shards
-		CreatedAt: time.Now(),
-	})
+
+	// The real MintShard path persists three things: the shard_records row,
+	// the in-memory registry entry, and the shard_services rows that query
+	// routing resolves against (ShardIDsServingService reads the table, not
+	// the in-memory Services field — migration 058). SeedShard only does the
+	// registry, so mirror the other two here: persist the row (shard_services
+	// has an FK to shard_records, which has a NOT NULL FK to a bucket) and
+	// stamp the service.
+	def, ok, err := tx.GetBucketByLabel("default")
+	if err != nil || !ok {
+		t.Fatalf("default bucket: ok=%v err=%v", ok, err)
+	}
+	shards := []*logdb.Shard{
+		{
+			ID: "cold-route-0", BucketID: def.ID, Services: svcs,
+			WindowStart: t0, WindowEnd: t1,
+			State: logdb.StateIngesting, Addr: s0Addr,
+			CreatedAt: time.Now(),
+		},
+		{
+			ID: "cold-route-1", BucketID: def.ID, Services: svcs,
+			WindowStart: t1, WindowEnd: t2,
+			State: logdb.StateArchived, ParquetPath: s3Path,
+			Live:      cold,
+			RowCount:  4, // archived shard holds data; MatchingEntries now skips 0-row cold/RO shards
+			CreatedAt: time.Now(),
+		},
+	}
+	shardStore := logdb.ShardStore{Store: tx}
+	for _, sh := range shards {
+		if err := shardStore.SaveShard(sh); err != nil {
+			t.Fatalf("persist shard %s: %v", sh.ID, err)
+		}
+		logdb.SeedShard(c.Provisioner, sh)
+		if err := tx.AddShardService(sh.ID, ns.ID, "vimgym"); err != nil {
+			t.Fatalf("stamp shard_services for %s: %v", sh.ID, err)
+		}
+	}
 
 	// --- Query each window independently, then combined ---
 

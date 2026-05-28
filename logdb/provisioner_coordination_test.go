@@ -185,7 +185,7 @@ func simulateHeartbeats(prov *Provisioner) {
 // INGESTING, and the bucket cascade settles back to STASIS at Target.
 func TestProvisioner_Coordination_ScaleUpLaunchPromote(t *testing.T) {
 	db := openSMTestStore(t)
-	seedDefaultBucket(t, db, nil, 2, time.Hour)
+	seedDefaultBucket(t, db, 2, time.Hour)
 	prov, launcher := newFSMTestProvisioner(t, db)
 	ctx := context.Background()
 
@@ -238,7 +238,7 @@ func TestProvisioner_Coordination_ScaleUpLaunchPromote(t *testing.T) {
 // the first post-restart heartbeat reattaches it via ObserveHeartbeat.
 func TestProvisioner_Coordination_RestartReconnect(t *testing.T) {
 	db := openSMTestStore(t)
-	seedDefaultBucket(t, db, nil, 1, time.Hour)
+	seedDefaultBucket(t, db, 1, time.Hour)
 
 	prov1, launcher1 := newFSMTestProvisioner(t, db)
 	ctx := context.Background()

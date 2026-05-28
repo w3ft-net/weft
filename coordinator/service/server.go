@@ -338,8 +338,8 @@ func (s *Server) AddSource(ctx context.Context, req *pb.AddSourceRequest) (*pb.A
 	// SeenServices trigger (below) will retry on first row. Don't fail
 	// the client's AddSource on bucket trouble.
 	if s.Coord.Provisioner != nil {
-		if err := s.Coord.Provisioner.OnboardService(req.Service); err != nil {
-			log.Printf("AddSource: OnboardService %q: %v", req.Service, err)
+		if err := s.Coord.Provisioner.OnboardService(ns.ID, req.Service); err != nil {
+			log.Printf("AddSource: OnboardService %d/%q: %v", ns.ID, req.Service, err)
 		}
 	}
 
@@ -579,14 +579,18 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 		if s.Coord.SeenServices != nil && row.Service != "" {
 			if s.Coord.SeenServices.Add(row.Customer, svcPath, row.Env) {
 				log.Printf("ingest-stream: new service discovered: customer=%s service=%s", row.Customer, svcPath)
-				// Onboard to the default bucket + propagate to
-				// INGESTING shards so query routing picks up the new
-				// service. Idempotent; SeenServices.Add only returns true
-				// the first time, so this fires once per (customer,
-				// service) pair over the coordinator's lifetime.
+				// Auto-onboard: raw producers (Heroku, custom POSTs, bare
+				// IngestStream) never sample, so there's no log_group until
+				// we make one here. OnboardService records the canonical
+				// (namespace, service) mapping and stamps the INGESTING
+				// shards so routing picks it up from the next row. Idempotent;
+				// SeenServices.Add returns true only once per (customer,
+				// service) over the coordinator's lifetime.
 				if s.Coord.Provisioner != nil {
-					if err := s.Coord.Provisioner.OnboardService(svcPath); err != nil {
-						log.Printf("ingest-stream: OnboardService %q: %v", svcPath, err)
+					if ns, err := s.Store.GetNamespace(auth.Customer.ID, auth.Namespace); err != nil {
+						log.Printf("ingest-stream: onboard %q: namespace %s/%s: %v", row.Service, auth.Customer.Name, auth.Namespace, err)
+					} else if err := s.Coord.Provisioner.OnboardService(ns.ID, row.Service); err != nil {
+						log.Printf("ingest-stream: OnboardService %d/%q: %v", ns.ID, row.Service, err)
 					}
 				}
 			}

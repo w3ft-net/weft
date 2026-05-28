@@ -30,6 +30,11 @@ type LogGroupSourceType string
 const (
 	SourceTypeCloudWatch LogGroupSourceType = "cloudwatch"
 	SourceTypeWeftd      LogGroupSourceType = "weftd"
+	// SourceTypeDirect is a raw-push producer with no sampling handshake:
+	// Heroku log drains, custom POSTs to /api/ingest, bare IngestStream
+	// clients. The coordinator auto-creates these on first-seen ingest
+	// (EnsureServiceLogGroup) rather than via GetSourceStatus/SubmitSample.
+	SourceTypeDirect LogGroupSourceType = "direct"
 )
 
 // LogGroupStatus tracks whether a human has approved the schema.
@@ -208,6 +213,37 @@ func (s *Store) AllLogGroups() ([]LogGroupWithAWSAccount, error) {
 //   - StatusConfigured row WITHOUT a resample: no-op. The schema is
 //     approved and this sample is stale; preserving this invariant is what
 //     stops a source appearing as both pending and configured.
+//
+// EnsureServiceLogGroup idempotently records that (namespaceID, service)
+// exists as a directly-pushed source in the default bucket (bucket_id
+// NULL → default via ServicesForBucket's COALESCE). It's the auto-onboard
+// path for raw producers that never sample: the row is the canonical
+// (namespace, service) mapping shards inherit at christen, created
+// already-configured (no parsing handshake — raw lines are queryable as
+// is). No-op if a log_group for (namespaceID, service) already exists, so
+// a weftd/cloudwatch source that later also pushes directly isn't
+// clobbered.
+func (s *Store) EnsureServiceLogGroup(namespaceID uint, service string) error {
+	var lg LogGroup
+	err := s.db.Where("namespace_id = ? AND app = ?", namespaceID, service).First(&lg).Error
+	if err == nil {
+		return nil // already mapped (any source type) — leave it
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	return s.db.Create(&LogGroup{
+		NamespaceID:  namespaceID,
+		Service:      service,
+		Status:       StatusConfigured,
+		SourceType:   SourceTypeDirect,
+		LogGroupName: service,
+		Region:       "local",
+		PollInterval: "0s",
+		Enabled:      true,
+	}).Error
+}
+
 func (s *Store) UpsertPendingLogGroup(namespaceID uint, service, instance, deployment, sampleJSON, detectionJSON string, collected int, partial bool) error {
 	status := StatusPending
 	if partial {

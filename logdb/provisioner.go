@@ -496,55 +496,47 @@ func (p *Provisioner) shardByInstance(instanceID string) *Shard {
 // no reconcile pass. Safe to call on the hot ingest path where
 // SeenServices.Add returns true for every row the coordinator has ever
 // seen from a given (customer, app) pair.
-func (p *Provisioner) OnboardService(app string) error {
+func (p *Provisioner) OnboardService(namespaceID uint, service string) error {
+	if namespaceID == 0 || service == "" {
+		return nil
+	}
+	// Canonical mapping: record (namespace, service) as a log_group in the
+	// default bucket so shards minted at the next christen inherit it
+	// (StampShardServices reads log_groups). Idempotent — a service already
+	// onboarded via weftd/cloudwatch keeps its source type.
+	if p.store != nil {
+		if err := p.store.EnsureServiceLogGroup(namespaceID, service); err != nil {
+			return fmt.Errorf("OnboardService(%d/%s): ensure log_group: %w", namespaceID, service, err)
+		}
+	}
+	// Immediate: stamp the default bucket's INGESTING shards from its
+	// log_groups (now including this service) so ingest + query routing
+	// pick it up from the next row rather than waiting for the next drift
+	// sweep. A service lands in the default bucket (EnsureServiceLogGroup
+	// leaves bucket_id NULL); its shards are that bucket's shards.
 	if p.Buckets == nil {
 		return nil
 	}
 	bucket, err := p.Buckets.Default()
 	if err != nil {
-		return fmt.Errorf("OnboardService(%s): lookup default: %w", app, err)
+		return fmt.Errorf("OnboardService(%d/%s): lookup default bucket: %w", namespaceID, service, err)
 	}
-	if bucket == nil {
-		log.Printf("provisioner: OnboardService(%s): no default bucket — skipping", app)
-		return nil
+	if bucket != nil {
+		p.syncServicesForBucket(bucket)
 	}
-	updated, err := p.Buckets.AddServiceToBucket(bucket.ID, app)
-	if err != nil {
-		return fmt.Errorf("add %q to bucket %d: %w", app, bucket.ID, err)
-	}
-	if updated == nil {
-		return nil
-	}
-	// Immediate propagation: land the new service on the bucket's live
-	// INGESTING shards now rather than waiting for the next tick's sweep.
-	p.syncServicesForBucket(updated)
 	return nil
 }
 
 // check runs one tick of FSM-driven convergence: refresh the registry
-// from the store, evaluate bucket splits, sweep service-drift, then drive
-// every bucket and shard SM toward its target. The SMs own all lifecycle
-// transitions — launch, rotate, archive, recover — so check() no longer
-// emits reconciler ops or syncs ASG desired_capacity (the per-AZ
-// ASGProvisioner moves capacity one instance at a time inside Launch).
+// from the store, sweep service-drift, then drive every bucket and shard
+// SM toward its target. The SMs own all lifecycle transitions — launch,
+// rotate, archive, recover — so check() no longer emits reconciler ops or
+// syncs ASG desired_capacity (the per-AZ ASGProvisioner moves capacity one
+// instance at a time inside Launch). Bucket-split (carving a hot service
+// into its own bucket) is disabled pending the redesign in
+// docs/plans/bucket-split-policy.md.
 func (p *Provisioner) check(ctx context.Context) {
 	p.registry.RefreshFromStore()
-
-	// Bucket-split evaluation stays — it's orthogonal to the lifecycle
-	// cascade (it carves a hot app into its own bucket; the new bucket's
-	// SM then warms shards for it on the next tick).
-	if p.Buckets != nil {
-		snapshot := p.stats.Snapshot()
-		if app, err := p.Buckets.EvaluateSplit(snapshot); err != nil {
-			log.Printf("provisioner: EvaluateSplit: %v", err)
-		} else if app != "" {
-			if bucket, err := p.Buckets.Split(app); err != nil {
-				log.Printf("provisioner: Split(%s): %v", app, err)
-			} else if bucket != nil {
-				log.Printf("provisioner: split %s into dedicated bucket %d", app, bucket.ID)
-			}
-		}
-	}
 
 	// Service-drift: a service onboarded after a shard christened isn't on
 	// its stamp yet. The FSM cascade is deliberately lifecycle-only, so

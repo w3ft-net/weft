@@ -49,40 +49,24 @@ func (s *stubConfigurer) Dial(_ context.Context, addr string, req *pb.ConfigureR
 func bucketStub(t *testing.T, target int, retention time.Duration) *BucketManager {
 	t.Helper()
 	db := openSMTestStore(t)
-	seedDefaultBucket(t, db, nil, target, retention)
+	seedDefaultBucket(t, db, target, retention)
 	return NewBucketManager(db)
 }
 
 // seedDefaultBucket configures the migration-seeded "default" bucket with
-// the given services, target, tier, and window. Re-homed from
-// window_rotation_test.go.
-func seedDefaultBucket(t *testing.T, db *store.Store, apps []string, target int, window time.Duration) {
+// the given target, tier, and window. Re-homed from window_rotation_test.go.
+func seedDefaultBucket(t *testing.T, db *store.Store, target int, window time.Duration) {
 	t.Helper()
 	def, ok, err := db.GetBucketByLabel("default")
 	if err != nil || !ok {
 		t.Fatalf("default bucket lookup: ok=%v err=%v", ok, err)
 	}
-	def.Services = apps
 	def.TargetIngestingCount = target
 	def.Tier = "small"
 	def.WindowDuration = window.String()
 	if err := db.SaveBucket(&def); err != nil {
 		t.Fatalf("seed default bucket: %v", err)
 	}
-}
-
-// seedDedicatedBucket inserts a non-default bucket. Re-homed from
-// window_rotation_test.go.
-func seedDedicatedBucket(t *testing.T, db *store.Store, label string, apps []string) *store.Bucket {
-	t.Helper()
-	rec := &store.Bucket{
-		Label: label, Services: apps, TargetIngestingCount: 2, Tier: "small",
-		WindowDuration: "168h", CreatedAt: "2026-04-21T00:00:00Z",
-	}
-	if err := db.SaveBucket(rec); err != nil {
-		t.Fatalf("seed bucket %q: %v", label, err)
-	}
-	return rec
 }
 
 // Shared test helpers for logdb. Mirrors the same-named helpers in

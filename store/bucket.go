@@ -13,13 +13,15 @@ import (
 // "the default bucket" or "the dedicated-vimgym bucket" without
 // caring about the numeric key.
 type Bucket struct {
-	ID                   int64    `gorm:"primaryKey;column:id"`
-	Label                string   `gorm:"not null;uniqueIndex;column:label"`
-	Services             []string `gorm:"not null;column:apps;serializer:json"` // JSON-encoded text column; '[]' = catch-all
-	TargetIngestingCount int      `gorm:"not null;column:target_ingesting_count"`
-	Tier                 string   `gorm:"not null;column:tier"`
-	CreatedAt            string   `gorm:"not null;column:created_at"`
-	WindowDuration       string   `gorm:"not null;column:window_duration"`
+	ID    int64  `gorm:"primaryKey;column:id"`
+	Label string `gorm:"not null;uniqueIndex;column:label"`
+	// Buckets don't serve services — shards do (shard_services). The
+	// service→bucket assignment lives in log_groups.bucket_id; the old
+	// namespace-less buckets.apps list is gone (migration 064).
+	TargetIngestingCount int    `gorm:"not null;column:target_ingesting_count"`
+	Tier                 string `gorm:"not null;column:tier"`
+	CreatedAt            string `gorm:"not null;column:created_at"`
+	WindowDuration       string `gorm:"not null;column:window_duration"`
 	// State persists the bucket FSM state (STASIS/WARMING/ROTATING/
 	// ARCHIVING/SCALING_DOWN) — migration 056. Default STASIS so
 	// existing rows hydrate cleanly.

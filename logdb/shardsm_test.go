@@ -38,7 +38,6 @@ func seedBucket(t *testing.T, db *store.Store, state BucketState) *store.Bucket 
 	t.Helper()
 	b := &store.Bucket{
 		Label:                fmt.Sprintf("sm-test-%d", time.Now().UnixNano()),
-		Services:             []string{},
 		Tier:                 "small",
 		TargetIngestingCount: 2,
 		CreatedAt:            "2026-05-21T12:00:00Z",
