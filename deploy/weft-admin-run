@@ -1,0 +1,22 @@
+#!/bin/bash
+# weft-admin-run: source the same env file the coordinator systemd unit
+# uses, then exec /opt/app/bin/weft-admin. This is what kevcons calls via
+# `kevcons ssh --command 'sudo /opt/app/bin/weft-admin-run roll-all
+# --target-sha <sha>'` during a deploy — the ssh-spawned shell doesn't
+# inherit systemd's env, so without this wrapper weft-admin's
+# WEFT_ADMIN_TOKEN lookup (cmd/weft-admin/main.go) would fail with
+# "WEFT_ADMIN_TOKEN is not set" and the deploy would abort.
+#
+# /opt/app/.env is populated at boot by load-app-env (provided by the
+# base AMI) using load-app-env-extra.sh as the per-app hook. The systemd
+# unit weft-coordinator.service loads the same file via EnvironmentFile.
+# We use `set -a` so every variable in .env is exported into our shell,
+# then exec into weft-admin so signals propagate cleanly.
+set -eu
+if [ -f /opt/app/.env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source /opt/app/.env
+  set +a
+fi
+exec /opt/app/bin/weft-admin "$@"

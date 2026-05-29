@@ -249,11 +249,24 @@ build {
     destination = "/tmp/load-app-env-extra"
   }
 
+  # weft-admin-run sources /opt/app/.env (where load-app-env writes
+  # WEFT_ADMIN_TOKEN and friends) then execs /opt/app/bin/weft-admin, so
+  # `kevcons ssh --command 'sudo /opt/app/bin/weft-admin-run …'` sees the
+  # same env the coordinator systemd unit gets. Lives in /opt/app/bin/ so
+  # it sits next to the admin binary it wraps.
+  provisioner "file" {
+    source      = "deploy/weft-admin-run"
+    destination = "/tmp/weft-admin-run"
+  }
+
   provisioner "shell" {
     inline = [
       "sudo mv /tmp/startup.sh /tmp/fetch-config.sh /tmp/start-role.sh /opt/app/scripts/",
       "sudo mv /tmp/load-app-env-extra /opt/app/scripts/load-app-env-extra",
       "sudo chmod +x /opt/app/scripts/startup.sh /opt/app/scripts/fetch-config.sh /opt/app/scripts/start-role.sh /opt/app/scripts/load-app-env-extra",
+      "sudo mv /tmp/weft-admin-run /opt/app/bin/weft-admin-run",
+      "sudo chmod +x /opt/app/bin/weft-admin-run",
+      "sudo chown app:app /opt/app/bin/weft-admin-run",
     ]
   }
 
