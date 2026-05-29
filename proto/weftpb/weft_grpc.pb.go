@@ -626,7 +626,6 @@ const (
 	WeftCoordinator_ListShards_FullMethodName             = "/weft.WeftCoordinator/ListShards"
 	WeftCoordinator_ForceArchiveShard_FullMethodName      = "/weft.WeftCoordinator/ForceArchiveShard"
 	WeftCoordinator_DeleteArchivedShard_FullMethodName    = "/weft.WeftCoordinator/DeleteArchivedShard"
-	WeftCoordinator_RelaunchShard_FullMethodName          = "/weft.WeftCoordinator/RelaunchShard"
 )
 
 // WeftCoordinatorClient is the client API for WeftCoordinator service.
@@ -684,11 +683,6 @@ type WeftCoordinatorClient interface {
 	ForceArchiveShard(ctx context.Context, in *ForceArchiveShardRequest, opts ...grpc.CallOption) (*ForceArchiveShardResponse, error)
 	// Admin: delete an ARCHIVED shard and its data.
 	DeleteArchivedShard(ctx context.Context, in *DeleteArchivedShardRequest, opts ...grpc.CallOption) (*DeleteArchivedShardResponse, error)
-	// Admin: relaunch a shard in place (binary upgrade). Drives the FSM
-	// through SUSPENDED → reap → LAUNCHING; the surviving EBS volume is
-	// reattached to a fresh instance on the current launch template, so the
-	// shard comes back with the same id/window/data on the new binary.
-	RelaunchShard(ctx context.Context, in *RelaunchShardRequest, opts ...grpc.CallOption) (*RelaunchShardResponse, error)
 }
 
 type weftCoordinatorClient struct {
@@ -981,16 +975,6 @@ func (c *weftCoordinatorClient) DeleteArchivedShard(ctx context.Context, in *Del
 	return out, nil
 }
 
-func (c *weftCoordinatorClient) RelaunchShard(ctx context.Context, in *RelaunchShardRequest, opts ...grpc.CallOption) (*RelaunchShardResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RelaunchShardResponse)
-	err := c.cc.Invoke(ctx, WeftCoordinator_RelaunchShard_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // WeftCoordinatorServer is the server API for WeftCoordinator service.
 // All implementations must embed UnimplementedWeftCoordinatorServer
 // for forward compatibility.
@@ -1046,11 +1030,6 @@ type WeftCoordinatorServer interface {
 	ForceArchiveShard(context.Context, *ForceArchiveShardRequest) (*ForceArchiveShardResponse, error)
 	// Admin: delete an ARCHIVED shard and its data.
 	DeleteArchivedShard(context.Context, *DeleteArchivedShardRequest) (*DeleteArchivedShardResponse, error)
-	// Admin: relaunch a shard in place (binary upgrade). Drives the FSM
-	// through SUSPENDED → reap → LAUNCHING; the surviving EBS volume is
-	// reattached to a fresh instance on the current launch template, so the
-	// shard comes back with the same id/window/data on the new binary.
-	RelaunchShard(context.Context, *RelaunchShardRequest) (*RelaunchShardResponse, error)
 	mustEmbedUnimplementedWeftCoordinatorServer()
 }
 
@@ -1141,9 +1120,6 @@ func (UnimplementedWeftCoordinatorServer) ForceArchiveShard(context.Context, *Fo
 }
 func (UnimplementedWeftCoordinatorServer) DeleteArchivedShard(context.Context, *DeleteArchivedShardRequest) (*DeleteArchivedShardResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteArchivedShard not implemented")
-}
-func (UnimplementedWeftCoordinatorServer) RelaunchShard(context.Context, *RelaunchShardRequest) (*RelaunchShardResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method RelaunchShard not implemented")
 }
 func (UnimplementedWeftCoordinatorServer) mustEmbedUnimplementedWeftCoordinatorServer() {}
 func (UnimplementedWeftCoordinatorServer) testEmbeddedByValue()                         {}
@@ -1634,24 +1610,6 @@ func _WeftCoordinator_DeleteArchivedShard_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
-func _WeftCoordinator_RelaunchShard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RelaunchShardRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WeftCoordinatorServer).RelaunchShard(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WeftCoordinator_RelaunchShard_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WeftCoordinatorServer).RelaunchShard(ctx, req.(*RelaunchShardRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // WeftCoordinator_ServiceDesc is the grpc.ServiceDesc for WeftCoordinator service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1759,10 +1717,6 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "DeleteArchivedShard",
 			Handler:    _WeftCoordinator_DeleteArchivedShard_Handler,
 		},
-		{
-			MethodName: "RelaunchShard",
-			Handler:    _WeftCoordinator_RelaunchShard_Handler,
-		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -1776,5 +1730,275 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
+	Metadata: "proto/weftpb/weft.proto",
+}
+
+const (
+	WeftAdmin_RelaunchShard_FullMethodName = "/weft.WeftAdmin/RelaunchShard"
+	WeftAdmin_GetShard_FullMethodName      = "/weft.WeftAdmin/GetShard"
+	WeftAdmin_ListShards_FullMethodName    = "/weft.WeftAdmin/ListShards"
+	WeftAdmin_ListBuckets_FullMethodName   = "/weft.WeftAdmin/ListBuckets"
+)
+
+// WeftAdminClient is the client API for WeftAdmin service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// WeftAdmin is the coordinator-resident admin surface called by the
+// weft-admin CLI (via `kevcons ssh --command 'weft-admin …'`). It lives on
+// a separate gRPC listener bound to 127.0.0.1, gated by a SharedToken
+// (WEFT_ADMIN_TOKEN env), so it is reachable ONLY from inside the
+// coordinator instance with the right token — JWT-holders of WeftCoordinator
+// (e.g. a logged-in web admin user) cannot reach these methods, and a
+// weftd-style bearer-token connection cannot forge the admin token.
+//
+// Methods that the api server also needs (e.g. ListShards) intentionally
+// exist on BOTH services: api calls WeftCoordinator with its forwarded
+// user JWT, weft-admin calls WeftAdmin with the shared token. The Go
+// handlers are shared on the Server struct so the implementations stay
+// in one place.
+type WeftAdminClient interface {
+	// RelaunchShard drives a shard through SUSPENDED → reap → LAUNCHING;
+	// the surviving EBS volume is reattached to a fresh instance on the
+	// current launch template, so the shard comes back with the same
+	// id/window/data on the new binary. The in-place binary-upgrade
+	// primitive for `weft-admin roll-*`.
+	RelaunchShard(ctx context.Context, in *RelaunchShardRequest, opts ...grpc.CallOption) (*RelaunchShardResponse, error)
+	// GetShard returns one shard's current row (state + last_heartbeat_at)
+	// — what weft-admin's wait-and-verify loop polls after firing a
+	// relaunch.
+	GetShard(ctx context.Context, in *GetShardRequest, opts ...grpc.CallOption) (*GetShardResponse, error)
+	// ListShards returns a bucket's shard rows for `weft-admin roll-cohort`
+	// iteration. Sibling of WeftCoordinator.ListShards (same handler shape;
+	// different auth surface).
+	ListShards(ctx context.Context, in *ListShardsRequest, opts ...grpc.CallOption) (*ListShardsResponse, error)
+	// ListBuckets returns every bucket (id/label/tier/target/state) for
+	// `weft-admin roll-all` iteration.
+	ListBuckets(ctx context.Context, in *ListBucketsRequest, opts ...grpc.CallOption) (*ListBucketsResponse, error)
+}
+
+type weftAdminClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewWeftAdminClient(cc grpc.ClientConnInterface) WeftAdminClient {
+	return &weftAdminClient{cc}
+}
+
+func (c *weftAdminClient) RelaunchShard(ctx context.Context, in *RelaunchShardRequest, opts ...grpc.CallOption) (*RelaunchShardResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RelaunchShardResponse)
+	err := c.cc.Invoke(ctx, WeftAdmin_RelaunchShard_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftAdminClient) GetShard(ctx context.Context, in *GetShardRequest, opts ...grpc.CallOption) (*GetShardResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetShardResponse)
+	err := c.cc.Invoke(ctx, WeftAdmin_GetShard_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftAdminClient) ListShards(ctx context.Context, in *ListShardsRequest, opts ...grpc.CallOption) (*ListShardsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListShardsResponse)
+	err := c.cc.Invoke(ctx, WeftAdmin_ListShards_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftAdminClient) ListBuckets(ctx context.Context, in *ListBucketsRequest, opts ...grpc.CallOption) (*ListBucketsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListBucketsResponse)
+	err := c.cc.Invoke(ctx, WeftAdmin_ListBuckets_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// WeftAdminServer is the server API for WeftAdmin service.
+// All implementations must embed UnimplementedWeftAdminServer
+// for forward compatibility.
+//
+// WeftAdmin is the coordinator-resident admin surface called by the
+// weft-admin CLI (via `kevcons ssh --command 'weft-admin …'`). It lives on
+// a separate gRPC listener bound to 127.0.0.1, gated by a SharedToken
+// (WEFT_ADMIN_TOKEN env), so it is reachable ONLY from inside the
+// coordinator instance with the right token — JWT-holders of WeftCoordinator
+// (e.g. a logged-in web admin user) cannot reach these methods, and a
+// weftd-style bearer-token connection cannot forge the admin token.
+//
+// Methods that the api server also needs (e.g. ListShards) intentionally
+// exist on BOTH services: api calls WeftCoordinator with its forwarded
+// user JWT, weft-admin calls WeftAdmin with the shared token. The Go
+// handlers are shared on the Server struct so the implementations stay
+// in one place.
+type WeftAdminServer interface {
+	// RelaunchShard drives a shard through SUSPENDED → reap → LAUNCHING;
+	// the surviving EBS volume is reattached to a fresh instance on the
+	// current launch template, so the shard comes back with the same
+	// id/window/data on the new binary. The in-place binary-upgrade
+	// primitive for `weft-admin roll-*`.
+	RelaunchShard(context.Context, *RelaunchShardRequest) (*RelaunchShardResponse, error)
+	// GetShard returns one shard's current row (state + last_heartbeat_at)
+	// — what weft-admin's wait-and-verify loop polls after firing a
+	// relaunch.
+	GetShard(context.Context, *GetShardRequest) (*GetShardResponse, error)
+	// ListShards returns a bucket's shard rows for `weft-admin roll-cohort`
+	// iteration. Sibling of WeftCoordinator.ListShards (same handler shape;
+	// different auth surface).
+	ListShards(context.Context, *ListShardsRequest) (*ListShardsResponse, error)
+	// ListBuckets returns every bucket (id/label/tier/target/state) for
+	// `weft-admin roll-all` iteration.
+	ListBuckets(context.Context, *ListBucketsRequest) (*ListBucketsResponse, error)
+	mustEmbedUnimplementedWeftAdminServer()
+}
+
+// UnimplementedWeftAdminServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedWeftAdminServer struct{}
+
+func (UnimplementedWeftAdminServer) RelaunchShard(context.Context, *RelaunchShardRequest) (*RelaunchShardResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RelaunchShard not implemented")
+}
+func (UnimplementedWeftAdminServer) GetShard(context.Context, *GetShardRequest) (*GetShardResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetShard not implemented")
+}
+func (UnimplementedWeftAdminServer) ListShards(context.Context, *ListShardsRequest) (*ListShardsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListShards not implemented")
+}
+func (UnimplementedWeftAdminServer) ListBuckets(context.Context, *ListBucketsRequest) (*ListBucketsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListBuckets not implemented")
+}
+func (UnimplementedWeftAdminServer) mustEmbedUnimplementedWeftAdminServer() {}
+func (UnimplementedWeftAdminServer) testEmbeddedByValue()                   {}
+
+// UnsafeWeftAdminServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to WeftAdminServer will
+// result in compilation errors.
+type UnsafeWeftAdminServer interface {
+	mustEmbedUnimplementedWeftAdminServer()
+}
+
+func RegisterWeftAdminServer(s grpc.ServiceRegistrar, srv WeftAdminServer) {
+	// If the following call panics, it indicates UnimplementedWeftAdminServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&WeftAdmin_ServiceDesc, srv)
+}
+
+func _WeftAdmin_RelaunchShard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RelaunchShardRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftAdminServer).RelaunchShard(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftAdmin_RelaunchShard_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftAdminServer).RelaunchShard(ctx, req.(*RelaunchShardRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftAdmin_GetShard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetShardRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftAdminServer).GetShard(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftAdmin_GetShard_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftAdminServer).GetShard(ctx, req.(*GetShardRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftAdmin_ListShards_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListShardsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftAdminServer).ListShards(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftAdmin_ListShards_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftAdminServer).ListShards(ctx, req.(*ListShardsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftAdmin_ListBuckets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListBucketsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftAdminServer).ListBuckets(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftAdmin_ListBuckets_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftAdminServer).ListBuckets(ctx, req.(*ListBucketsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// WeftAdmin_ServiceDesc is the grpc.ServiceDesc for WeftAdmin service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var WeftAdmin_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "weft.WeftAdmin",
+	HandlerType: (*WeftAdminServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "RelaunchShard",
+			Handler:    _WeftAdmin_RelaunchShard_Handler,
+		},
+		{
+			MethodName: "GetShard",
+			Handler:    _WeftAdmin_GetShard_Handler,
+		},
+		{
+			MethodName: "ListShards",
+			Handler:    _WeftAdmin_ListShards_Handler,
+		},
+		{
+			MethodName: "ListBuckets",
+			Handler:    _WeftAdmin_ListBuckets_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
 	Metadata: "proto/weftpb/weft.proto",
 }

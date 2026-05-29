@@ -4508,20 +4508,26 @@ func (x *ListShardsRequest) GetBucketId() int64 {
 // shows. Timestamps are RFC3339 strings so the API can pass them through
 // to the existing AdminShard JSON contract without reformatting.
 type ShardInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	WindowStart   string                 `protobuf:"bytes,2,opt,name=window_start,json=windowStart,proto3" json:"window_start,omitempty"`
-	WindowEnd     string                 `protobuf:"bytes,3,opt,name=window_end,json=windowEnd,proto3" json:"window_end,omitempty"`
-	State         string                 `protobuf:"bytes,4,opt,name=state,proto3" json:"state,omitempty"`
-	Addr          string                 `protobuf:"bytes,5,opt,name=addr,proto3" json:"addr,omitempty"`
-	InstanceId    string                 `protobuf:"bytes,6,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
-	ParquetPath   string                 `protobuf:"bytes,7,opt,name=parquet_path,json=parquetPath,proto3" json:"parquet_path,omitempty"`
-	Tier          string                 `protobuf:"bytes,8,opt,name=tier,proto3" json:"tier,omitempty"`
-	RowCount      int64                  `protobuf:"varint,9,opt,name=row_count,json=rowCount,proto3" json:"row_count,omitempty"`
-	CreatedAt     string                 `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	BucketId      int64                  `protobuf:"varint,11,opt,name=bucket_id,json=bucketId,proto3" json:"bucket_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	WindowStart string                 `protobuf:"bytes,2,opt,name=window_start,json=windowStart,proto3" json:"window_start,omitempty"`
+	WindowEnd   string                 `protobuf:"bytes,3,opt,name=window_end,json=windowEnd,proto3" json:"window_end,omitempty"`
+	State       string                 `protobuf:"bytes,4,opt,name=state,proto3" json:"state,omitempty"`
+	Addr        string                 `protobuf:"bytes,5,opt,name=addr,proto3" json:"addr,omitempty"`
+	InstanceId  string                 `protobuf:"bytes,6,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	ParquetPath string                 `protobuf:"bytes,7,opt,name=parquet_path,json=parquetPath,proto3" json:"parquet_path,omitempty"`
+	Tier        string                 `protobuf:"bytes,8,opt,name=tier,proto3" json:"tier,omitempty"`
+	RowCount    int64                  `protobuf:"varint,9,opt,name=row_count,json=rowCount,proto3" json:"row_count,omitempty"`
+	CreatedAt   string                 `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	BucketId    int64                  `protobuf:"varint,11,opt,name=bucket_id,json=bucketId,proto3" json:"bucket_id,omitempty"`
+	// last_heartbeat_at is what weft-admin's wait-and-verify polls after a
+	// RelaunchShard: the row briefly reads INGESTING mid-transition (with
+	// the pre-relaunch heartbeat), so the freshness check tells the poll
+	// whether we're looking at the POST-relaunch shard or the old row.
+	// RFC3339Nano, empty when never observed.
+	LastHeartbeatAt string `protobuf:"bytes,12,opt,name=last_heartbeat_at,json=lastHeartbeatAt,proto3" json:"last_heartbeat_at,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ShardInfo) Reset() {
@@ -4629,6 +4635,13 @@ func (x *ShardInfo) GetBucketId() int64 {
 		return x.BucketId
 	}
 	return 0
+}
+
+func (x *ShardInfo) GetLastHeartbeatAt() string {
+	if x != nil {
+		return x.LastHeartbeatAt
+	}
+	return ""
 }
 
 type ListShardsResponse struct {
@@ -4921,6 +4934,250 @@ func (x *RelaunchShardResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use RelaunchShardResponse.ProtoReflect.Descriptor instead.
 func (*RelaunchShardResponse) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{83}
+}
+
+type GetShardRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ShardId       string                 `protobuf:"bytes,1,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetShardRequest) Reset() {
+	*x = GetShardRequest{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[84]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetShardRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetShardRequest) ProtoMessage() {}
+
+func (x *GetShardRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[84]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetShardRequest.ProtoReflect.Descriptor instead.
+func (*GetShardRequest) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{84}
+}
+
+func (x *GetShardRequest) GetShardId() string {
+	if x != nil {
+		return x.ShardId
+	}
+	return ""
+}
+
+type GetShardResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Shard         *ShardInfo             `protobuf:"bytes,1,opt,name=shard,proto3" json:"shard,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetShardResponse) Reset() {
+	*x = GetShardResponse{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[85]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetShardResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetShardResponse) ProtoMessage() {}
+
+func (x *GetShardResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[85]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetShardResponse.ProtoReflect.Descriptor instead.
+func (*GetShardResponse) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{85}
+}
+
+func (x *GetShardResponse) GetShard() *ShardInfo {
+	if x != nil {
+		return x.Shard
+	}
+	return nil
+}
+
+type ListBucketsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListBucketsRequest) Reset() {
+	*x = ListBucketsRequest{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[86]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListBucketsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListBucketsRequest) ProtoMessage() {}
+
+func (x *ListBucketsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[86]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListBucketsRequest.ProtoReflect.Descriptor instead.
+func (*ListBucketsRequest) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{86}
+}
+
+type BucketInfo struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	Id                   int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Label                string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`
+	TargetIngestingCount int32                  `protobuf:"varint,3,opt,name=target_ingesting_count,json=targetIngestingCount,proto3" json:"target_ingesting_count,omitempty"`
+	Tier                 string                 `protobuf:"bytes,4,opt,name=tier,proto3" json:"tier,omitempty"`
+	State                string                 `protobuf:"bytes,5,opt,name=state,proto3" json:"state,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *BucketInfo) Reset() {
+	*x = BucketInfo{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[87]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BucketInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BucketInfo) ProtoMessage() {}
+
+func (x *BucketInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[87]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BucketInfo.ProtoReflect.Descriptor instead.
+func (*BucketInfo) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{87}
+}
+
+func (x *BucketInfo) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *BucketInfo) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+func (x *BucketInfo) GetTargetIngestingCount() int32 {
+	if x != nil {
+		return x.TargetIngestingCount
+	}
+	return 0
+}
+
+func (x *BucketInfo) GetTier() string {
+	if x != nil {
+		return x.Tier
+	}
+	return ""
+}
+
+func (x *BucketInfo) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+type ListBucketsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Buckets       []*BucketInfo          `protobuf:"bytes,1,rep,name=buckets,proto3" json:"buckets,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListBucketsResponse) Reset() {
+	*x = ListBucketsResponse{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[88]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListBucketsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListBucketsResponse) ProtoMessage() {}
+
+func (x *ListBucketsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[88]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListBucketsResponse.ProtoReflect.Descriptor instead.
+func (*ListBucketsResponse) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{88}
+}
+
+func (x *ListBucketsResponse) GetBuckets() []*BucketInfo {
+	if x != nil {
+		return x.Buckets
+	}
+	return nil
 }
 
 var File_proto_weftpb_weft_proto protoreflect.FileDescriptor
@@ -5237,7 +5494,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x10sample_collected\x18\x05 \x01(\x05R\x0fsampleCollected\x12#\n" +
 	"\rsample_target\x18\x06 \x01(\x05R\fsampleTarget\"0\n" +
 	"\x11ListShardsRequest\x12\x1b\n" +
-	"\tbucket_id\x18\x01 \x01(\x03R\bbucketId\"\xb8\x02\n" +
+	"\tbucket_id\x18\x01 \x01(\x03R\bbucketId\"\xe4\x02\n" +
 	"\tShardInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12!\n" +
 	"\fwindow_start\x18\x02 \x01(\tR\vwindowStart\x12\x1d\n" +
@@ -5253,7 +5510,8 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\n" +
 	" \x01(\tR\tcreatedAt\x12\x1b\n" +
-	"\tbucket_id\x18\v \x01(\x03R\bbucketId\"=\n" +
+	"\tbucket_id\x18\v \x01(\x03R\bbucketId\x12*\n" +
+	"\x11last_heartbeat_at\x18\f \x01(\tR\x0flastHeartbeatAt\"=\n" +
 	"\x12ListShardsResponse\x12'\n" +
 	"\x06shards\x18\x01 \x03(\v2\x0f.weft.ShardInfoR\x06shards\"5\n" +
 	"\x18ForceArchiveShardRequest\x12\x19\n" +
@@ -5265,7 +5523,21 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x1bDeleteArchivedShardResponse\"1\n" +
 	"\x14RelaunchShardRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\"\x17\n" +
-	"\x15RelaunchShardResponse2\xf0\x02\n" +
+	"\x15RelaunchShardResponse\",\n" +
+	"\x0fGetShardRequest\x12\x19\n" +
+	"\bshard_id\x18\x01 \x01(\tR\ashardId\"9\n" +
+	"\x10GetShardResponse\x12%\n" +
+	"\x05shard\x18\x01 \x01(\v2\x0f.weft.ShardInfoR\x05shard\"\x14\n" +
+	"\x12ListBucketsRequest\"\x92\x01\n" +
+	"\n" +
+	"BucketInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x14\n" +
+	"\x05label\x18\x02 \x01(\tR\x05label\x124\n" +
+	"\x16target_ingesting_count\x18\x03 \x01(\x05R\x14targetIngestingCount\x12\x12\n" +
+	"\x04tier\x18\x04 \x01(\tR\x04tier\x12\x14\n" +
+	"\x05state\x18\x05 \x01(\tR\x05state\"A\n" +
+	"\x13ListBucketsResponse\x12*\n" +
+	"\abuckets\x18\x01 \x03(\v2\x10.weft.BucketInfoR\abuckets2\xf0\x02\n" +
 	"\n" +
 	"ShardQuery\x12.\n" +
 	"\x05Query\x12\x12.weft.QueryRequest\x1a\x0f.weft.ResultRow0\x01\x12K\n" +
@@ -5279,7 +5551,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\bSendRows\x12\x14.weft.ComputeMessage\x1a\x16.weft.SendRowsResponse(\x01\x12<\n" +
 	"\tGetResult\x12\x16.weft.GetResultRequest\x1a\x17.weft.GetResultResponse\x12E\n" +
 	"\fExecuteQuery\x12\x19.weft.ExecuteQueryRequest\x1a\x1a.weft.ExecuteQueryResponse\x12S\n" +
-	"\x12ExecuteQueryStream\x12\x19.weft.ExecuteQueryRequest\x1a .weft.ExecuteQueryStreamResponse0\x012\xe7\x0f\n" +
+	"\x12ExecuteQueryStream\x12\x19.weft.ExecuteQueryRequest\x1a .weft.ExecuteQueryStreamResponse0\x012\x9d\x0f\n" +
 	"\x0fWeftCoordinator\x12N\n" +
 	"\aExecute\x12\x1f.weft.CoordinatorExecuteRequest\x1a .weft.CoordinatorExecuteResponse0\x01\x12E\n" +
 	"\fListServices\x12\x19.weft.ListServicesRequest\x1a\x1a.weft.ListServicesResponse\x12c\n" +
@@ -5309,8 +5581,13 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
 	"ListShards\x12\x17.weft.ListShardsRequest\x1a\x18.weft.ListShardsResponse\x12T\n" +
 	"\x11ForceArchiveShard\x12\x1e.weft.ForceArchiveShardRequest\x1a\x1f.weft.ForceArchiveShardResponse\x12Z\n" +
-	"\x13DeleteArchivedShard\x12 .weft.DeleteArchivedShardRequest\x1a!.weft.DeleteArchivedShardResponse\x12H\n" +
-	"\rRelaunchShard\x12\x1a.weft.RelaunchShardRequest\x1a\x1b.weft.RelaunchShardResponseB(Z&github.com/kevlarcon/weft/proto/weftpbb\x06proto3"
+	"\x13DeleteArchivedShard\x12 .weft.DeleteArchivedShardRequest\x1a!.weft.DeleteArchivedShardResponse2\x95\x02\n" +
+	"\tWeftAdmin\x12H\n" +
+	"\rRelaunchShard\x12\x1a.weft.RelaunchShardRequest\x1a\x1b.weft.RelaunchShardResponse\x129\n" +
+	"\bGetShard\x12\x15.weft.GetShardRequest\x1a\x16.weft.GetShardResponse\x12?\n" +
+	"\n" +
+	"ListShards\x12\x17.weft.ListShardsRequest\x1a\x18.weft.ListShardsResponse\x12B\n" +
+	"\vListBuckets\x12\x18.weft.ListBucketsRequest\x1a\x19.weft.ListBucketsResponseB(Z&github.com/kevlarcon/weft/proto/weftpbb\x06proto3"
 
 var (
 	file_proto_weftpb_weft_proto_rawDescOnce sync.Once
@@ -5324,7 +5601,7 @@ func file_proto_weftpb_weft_proto_rawDescGZIP() []byte {
 	return file_proto_weftpb_weft_proto_rawDescData
 }
 
-var file_proto_weftpb_weft_proto_msgTypes = make([]protoimpl.MessageInfo, 84)
+var file_proto_weftpb_weft_proto_msgTypes = make([]protoimpl.MessageInfo, 89)
 var file_proto_weftpb_weft_proto_goTypes = []any{
 	(*ConfigureRequest)(nil),               // 0: weft.ConfigureRequest
 	(*ConfigureResponse)(nil),              // 1: weft.ConfigureResponse
@@ -5410,6 +5687,11 @@ var file_proto_weftpb_weft_proto_goTypes = []any{
 	(*DeleteArchivedShardResponse)(nil),    // 81: weft.DeleteArchivedShardResponse
 	(*RelaunchShardRequest)(nil),           // 82: weft.RelaunchShardRequest
 	(*RelaunchShardResponse)(nil),          // 83: weft.RelaunchShardResponse
+	(*GetShardRequest)(nil),                // 84: weft.GetShardRequest
+	(*GetShardResponse)(nil),               // 85: weft.GetShardResponse
+	(*ListBucketsRequest)(nil),             // 86: weft.ListBucketsRequest
+	(*BucketInfo)(nil),                     // 87: weft.BucketInfo
+	(*ListBucketsResponse)(nil),            // 88: weft.ListBucketsResponse
 }
 var file_proto_weftpb_weft_proto_depIdxs = []int32{
 	9,  // 0: weft.IngestRequest.rows:type_name -> weft.LogRow
@@ -5422,89 +5704,97 @@ var file_proto_weftpb_weft_proto_depIdxs = []int32{
 	48, // 7: weft.ListSourcesResponse.sources:type_name -> weft.SourceInfo
 	69, // 8: weft.GetWatchResultsResponse.results:type_name -> weft.WatchResult
 	76, // 9: weft.ListShardsResponse.shards:type_name -> weft.ShardInfo
-	5,  // 10: weft.ShardQuery.Query:input_type -> weft.QueryRequest
-	6,  // 11: weft.ShardQuery.QueryToCompute:input_type -> weft.QueryToComputeRequest
-	10, // 12: weft.ShardQuery.Ingest:input_type -> weft.IngestRequest
-	9,  // 13: weft.ShardQuery.IngestStream:input_type -> weft.LogRow
-	0,  // 14: weft.ShardQuery.Configure:input_type -> weft.ConfigureRequest
-	2,  // 15: weft.ShardQuery.Archive:input_type -> weft.ArchiveRequest
-	12, // 16: weft.WeftCompute.CreateJob:input_type -> weft.CreateJobRequest
-	14, // 17: weft.WeftCompute.SendRows:input_type -> weft.ComputeMessage
-	16, // 18: weft.WeftCompute.GetResult:input_type -> weft.GetResultRequest
-	19, // 19: weft.WeftCompute.ExecuteQuery:input_type -> weft.ExecuteQueryRequest
-	19, // 20: weft.WeftCompute.ExecuteQueryStream:input_type -> weft.ExecuteQueryRequest
-	36, // 21: weft.WeftCoordinator.Execute:input_type -> weft.CoordinatorExecuteRequest
-	40, // 22: weft.WeftCoordinator.ListServices:input_type -> weft.ListServicesRequest
-	44, // 23: weft.WeftCoordinator.SampleCloudWatchSource:input_type -> weft.SampleCloudWatchSourceRequest
-	42, // 24: weft.WeftCoordinator.AddSource:input_type -> weft.AddSourceRequest
-	46, // 25: weft.WeftCoordinator.ListSources:input_type -> weft.ListSourcesRequest
-	49, // 26: weft.WeftCoordinator.RemoveSource:input_type -> weft.RemoveSourceRequest
-	33, // 27: weft.WeftCoordinator.Authenticate:input_type -> weft.AuthenticateRequest
-	9,  // 28: weft.WeftCoordinator.IngestStream:input_type -> weft.LogRow
-	26, // 29: weft.WeftCoordinator.CreateToken:input_type -> weft.CreateTokenRequest
-	28, // 30: weft.WeftCoordinator.ListTokens:input_type -> weft.ListTokensRequest
-	31, // 31: weft.WeftCoordinator.RevokeToken:input_type -> weft.RevokeTokenRequest
-	24, // 32: weft.WeftCoordinator.GetUsage:input_type -> weft.GetUsageRequest
-	51, // 33: weft.WeftCoordinator.SaveFunction:input_type -> weft.SaveFunctionRequest
-	53, // 34: weft.WeftCoordinator.GetFunction:input_type -> weft.GetFunctionRequest
-	55, // 35: weft.WeftCoordinator.ListFunctions:input_type -> weft.ListFunctionsRequest
-	57, // 36: weft.WeftCoordinator.DeleteFunction:input_type -> weft.DeleteFunctionRequest
-	59, // 37: weft.WeftCoordinator.SaveWatch:input_type -> weft.SaveWatchRequest
-	61, // 38: weft.WeftCoordinator.GetWatch:input_type -> weft.GetWatchRequest
-	63, // 39: weft.WeftCoordinator.ListWatches:input_type -> weft.ListWatchesRequest
-	65, // 40: weft.WeftCoordinator.DeleteWatch:input_type -> weft.DeleteWatchRequest
-	67, // 41: weft.WeftCoordinator.GetWatchResults:input_type -> weft.GetWatchResultsRequest
-	71, // 42: weft.WeftCoordinator.SubmitSample:input_type -> weft.SubmitSampleRequest
-	73, // 43: weft.WeftCoordinator.GetSourceStatus:input_type -> weft.GetSourceStatusRequest
-	22, // 44: weft.WeftCoordinator.Heartbeat:input_type -> weft.ShardHeartbeatRequest
-	75, // 45: weft.WeftCoordinator.ListShards:input_type -> weft.ListShardsRequest
-	78, // 46: weft.WeftCoordinator.ForceArchiveShard:input_type -> weft.ForceArchiveShardRequest
-	80, // 47: weft.WeftCoordinator.DeleteArchivedShard:input_type -> weft.DeleteArchivedShardRequest
-	82, // 48: weft.WeftCoordinator.RelaunchShard:input_type -> weft.RelaunchShardRequest
-	8,  // 49: weft.ShardQuery.Query:output_type -> weft.ResultRow
-	7,  // 50: weft.ShardQuery.QueryToCompute:output_type -> weft.QueryToComputeResponse
-	11, // 51: weft.ShardQuery.Ingest:output_type -> weft.IngestResponse
-	4,  // 52: weft.ShardQuery.IngestStream:output_type -> weft.IngestStreamResponse
-	1,  // 53: weft.ShardQuery.Configure:output_type -> weft.ConfigureResponse
-	3,  // 54: weft.ShardQuery.Archive:output_type -> weft.ArchiveResponse
-	13, // 55: weft.WeftCompute.CreateJob:output_type -> weft.CreateJobResponse
-	15, // 56: weft.WeftCompute.SendRows:output_type -> weft.SendRowsResponse
-	17, // 57: weft.WeftCompute.GetResult:output_type -> weft.GetResultResponse
-	20, // 58: weft.WeftCompute.ExecuteQuery:output_type -> weft.ExecuteQueryResponse
-	21, // 59: weft.WeftCompute.ExecuteQueryStream:output_type -> weft.ExecuteQueryStreamResponse
-	37, // 60: weft.WeftCoordinator.Execute:output_type -> weft.CoordinatorExecuteResponse
-	41, // 61: weft.WeftCoordinator.ListServices:output_type -> weft.ListServicesResponse
-	45, // 62: weft.WeftCoordinator.SampleCloudWatchSource:output_type -> weft.SampleCloudWatchSourceResponse
-	43, // 63: weft.WeftCoordinator.AddSource:output_type -> weft.AddSourceResponse
-	47, // 64: weft.WeftCoordinator.ListSources:output_type -> weft.ListSourcesResponse
-	50, // 65: weft.WeftCoordinator.RemoveSource:output_type -> weft.RemoveSourceResponse
-	35, // 66: weft.WeftCoordinator.Authenticate:output_type -> weft.AuthenticateResponse
-	4,  // 67: weft.WeftCoordinator.IngestStream:output_type -> weft.IngestStreamResponse
-	27, // 68: weft.WeftCoordinator.CreateToken:output_type -> weft.CreateTokenResponse
-	29, // 69: weft.WeftCoordinator.ListTokens:output_type -> weft.ListTokensResponse
-	32, // 70: weft.WeftCoordinator.RevokeToken:output_type -> weft.RevokeTokenResponse
-	25, // 71: weft.WeftCoordinator.GetUsage:output_type -> weft.GetUsageResponse
-	52, // 72: weft.WeftCoordinator.SaveFunction:output_type -> weft.SaveFunctionResponse
-	54, // 73: weft.WeftCoordinator.GetFunction:output_type -> weft.GetFunctionResponse
-	56, // 74: weft.WeftCoordinator.ListFunctions:output_type -> weft.ListFunctionsResponse
-	58, // 75: weft.WeftCoordinator.DeleteFunction:output_type -> weft.DeleteFunctionResponse
-	60, // 76: weft.WeftCoordinator.SaveWatch:output_type -> weft.SaveWatchResponse
-	62, // 77: weft.WeftCoordinator.GetWatch:output_type -> weft.GetWatchResponse
-	64, // 78: weft.WeftCoordinator.ListWatches:output_type -> weft.ListWatchesResponse
-	66, // 79: weft.WeftCoordinator.DeleteWatch:output_type -> weft.DeleteWatchResponse
-	68, // 80: weft.WeftCoordinator.GetWatchResults:output_type -> weft.GetWatchResultsResponse
-	72, // 81: weft.WeftCoordinator.SubmitSample:output_type -> weft.SubmitSampleResponse
-	74, // 82: weft.WeftCoordinator.GetSourceStatus:output_type -> weft.GetSourceStatusResponse
-	23, // 83: weft.WeftCoordinator.Heartbeat:output_type -> weft.HeartbeatResponse
-	77, // 84: weft.WeftCoordinator.ListShards:output_type -> weft.ListShardsResponse
-	79, // 85: weft.WeftCoordinator.ForceArchiveShard:output_type -> weft.ForceArchiveShardResponse
-	81, // 86: weft.WeftCoordinator.DeleteArchivedShard:output_type -> weft.DeleteArchivedShardResponse
-	83, // 87: weft.WeftCoordinator.RelaunchShard:output_type -> weft.RelaunchShardResponse
-	49, // [49:88] is the sub-list for method output_type
-	10, // [10:49] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	76, // 10: weft.GetShardResponse.shard:type_name -> weft.ShardInfo
+	87, // 11: weft.ListBucketsResponse.buckets:type_name -> weft.BucketInfo
+	5,  // 12: weft.ShardQuery.Query:input_type -> weft.QueryRequest
+	6,  // 13: weft.ShardQuery.QueryToCompute:input_type -> weft.QueryToComputeRequest
+	10, // 14: weft.ShardQuery.Ingest:input_type -> weft.IngestRequest
+	9,  // 15: weft.ShardQuery.IngestStream:input_type -> weft.LogRow
+	0,  // 16: weft.ShardQuery.Configure:input_type -> weft.ConfigureRequest
+	2,  // 17: weft.ShardQuery.Archive:input_type -> weft.ArchiveRequest
+	12, // 18: weft.WeftCompute.CreateJob:input_type -> weft.CreateJobRequest
+	14, // 19: weft.WeftCompute.SendRows:input_type -> weft.ComputeMessage
+	16, // 20: weft.WeftCompute.GetResult:input_type -> weft.GetResultRequest
+	19, // 21: weft.WeftCompute.ExecuteQuery:input_type -> weft.ExecuteQueryRequest
+	19, // 22: weft.WeftCompute.ExecuteQueryStream:input_type -> weft.ExecuteQueryRequest
+	36, // 23: weft.WeftCoordinator.Execute:input_type -> weft.CoordinatorExecuteRequest
+	40, // 24: weft.WeftCoordinator.ListServices:input_type -> weft.ListServicesRequest
+	44, // 25: weft.WeftCoordinator.SampleCloudWatchSource:input_type -> weft.SampleCloudWatchSourceRequest
+	42, // 26: weft.WeftCoordinator.AddSource:input_type -> weft.AddSourceRequest
+	46, // 27: weft.WeftCoordinator.ListSources:input_type -> weft.ListSourcesRequest
+	49, // 28: weft.WeftCoordinator.RemoveSource:input_type -> weft.RemoveSourceRequest
+	33, // 29: weft.WeftCoordinator.Authenticate:input_type -> weft.AuthenticateRequest
+	9,  // 30: weft.WeftCoordinator.IngestStream:input_type -> weft.LogRow
+	26, // 31: weft.WeftCoordinator.CreateToken:input_type -> weft.CreateTokenRequest
+	28, // 32: weft.WeftCoordinator.ListTokens:input_type -> weft.ListTokensRequest
+	31, // 33: weft.WeftCoordinator.RevokeToken:input_type -> weft.RevokeTokenRequest
+	24, // 34: weft.WeftCoordinator.GetUsage:input_type -> weft.GetUsageRequest
+	51, // 35: weft.WeftCoordinator.SaveFunction:input_type -> weft.SaveFunctionRequest
+	53, // 36: weft.WeftCoordinator.GetFunction:input_type -> weft.GetFunctionRequest
+	55, // 37: weft.WeftCoordinator.ListFunctions:input_type -> weft.ListFunctionsRequest
+	57, // 38: weft.WeftCoordinator.DeleteFunction:input_type -> weft.DeleteFunctionRequest
+	59, // 39: weft.WeftCoordinator.SaveWatch:input_type -> weft.SaveWatchRequest
+	61, // 40: weft.WeftCoordinator.GetWatch:input_type -> weft.GetWatchRequest
+	63, // 41: weft.WeftCoordinator.ListWatches:input_type -> weft.ListWatchesRequest
+	65, // 42: weft.WeftCoordinator.DeleteWatch:input_type -> weft.DeleteWatchRequest
+	67, // 43: weft.WeftCoordinator.GetWatchResults:input_type -> weft.GetWatchResultsRequest
+	71, // 44: weft.WeftCoordinator.SubmitSample:input_type -> weft.SubmitSampleRequest
+	73, // 45: weft.WeftCoordinator.GetSourceStatus:input_type -> weft.GetSourceStatusRequest
+	22, // 46: weft.WeftCoordinator.Heartbeat:input_type -> weft.ShardHeartbeatRequest
+	75, // 47: weft.WeftCoordinator.ListShards:input_type -> weft.ListShardsRequest
+	78, // 48: weft.WeftCoordinator.ForceArchiveShard:input_type -> weft.ForceArchiveShardRequest
+	80, // 49: weft.WeftCoordinator.DeleteArchivedShard:input_type -> weft.DeleteArchivedShardRequest
+	82, // 50: weft.WeftAdmin.RelaunchShard:input_type -> weft.RelaunchShardRequest
+	84, // 51: weft.WeftAdmin.GetShard:input_type -> weft.GetShardRequest
+	75, // 52: weft.WeftAdmin.ListShards:input_type -> weft.ListShardsRequest
+	86, // 53: weft.WeftAdmin.ListBuckets:input_type -> weft.ListBucketsRequest
+	8,  // 54: weft.ShardQuery.Query:output_type -> weft.ResultRow
+	7,  // 55: weft.ShardQuery.QueryToCompute:output_type -> weft.QueryToComputeResponse
+	11, // 56: weft.ShardQuery.Ingest:output_type -> weft.IngestResponse
+	4,  // 57: weft.ShardQuery.IngestStream:output_type -> weft.IngestStreamResponse
+	1,  // 58: weft.ShardQuery.Configure:output_type -> weft.ConfigureResponse
+	3,  // 59: weft.ShardQuery.Archive:output_type -> weft.ArchiveResponse
+	13, // 60: weft.WeftCompute.CreateJob:output_type -> weft.CreateJobResponse
+	15, // 61: weft.WeftCompute.SendRows:output_type -> weft.SendRowsResponse
+	17, // 62: weft.WeftCompute.GetResult:output_type -> weft.GetResultResponse
+	20, // 63: weft.WeftCompute.ExecuteQuery:output_type -> weft.ExecuteQueryResponse
+	21, // 64: weft.WeftCompute.ExecuteQueryStream:output_type -> weft.ExecuteQueryStreamResponse
+	37, // 65: weft.WeftCoordinator.Execute:output_type -> weft.CoordinatorExecuteResponse
+	41, // 66: weft.WeftCoordinator.ListServices:output_type -> weft.ListServicesResponse
+	45, // 67: weft.WeftCoordinator.SampleCloudWatchSource:output_type -> weft.SampleCloudWatchSourceResponse
+	43, // 68: weft.WeftCoordinator.AddSource:output_type -> weft.AddSourceResponse
+	47, // 69: weft.WeftCoordinator.ListSources:output_type -> weft.ListSourcesResponse
+	50, // 70: weft.WeftCoordinator.RemoveSource:output_type -> weft.RemoveSourceResponse
+	35, // 71: weft.WeftCoordinator.Authenticate:output_type -> weft.AuthenticateResponse
+	4,  // 72: weft.WeftCoordinator.IngestStream:output_type -> weft.IngestStreamResponse
+	27, // 73: weft.WeftCoordinator.CreateToken:output_type -> weft.CreateTokenResponse
+	29, // 74: weft.WeftCoordinator.ListTokens:output_type -> weft.ListTokensResponse
+	32, // 75: weft.WeftCoordinator.RevokeToken:output_type -> weft.RevokeTokenResponse
+	25, // 76: weft.WeftCoordinator.GetUsage:output_type -> weft.GetUsageResponse
+	52, // 77: weft.WeftCoordinator.SaveFunction:output_type -> weft.SaveFunctionResponse
+	54, // 78: weft.WeftCoordinator.GetFunction:output_type -> weft.GetFunctionResponse
+	56, // 79: weft.WeftCoordinator.ListFunctions:output_type -> weft.ListFunctionsResponse
+	58, // 80: weft.WeftCoordinator.DeleteFunction:output_type -> weft.DeleteFunctionResponse
+	60, // 81: weft.WeftCoordinator.SaveWatch:output_type -> weft.SaveWatchResponse
+	62, // 82: weft.WeftCoordinator.GetWatch:output_type -> weft.GetWatchResponse
+	64, // 83: weft.WeftCoordinator.ListWatches:output_type -> weft.ListWatchesResponse
+	66, // 84: weft.WeftCoordinator.DeleteWatch:output_type -> weft.DeleteWatchResponse
+	68, // 85: weft.WeftCoordinator.GetWatchResults:output_type -> weft.GetWatchResultsResponse
+	72, // 86: weft.WeftCoordinator.SubmitSample:output_type -> weft.SubmitSampleResponse
+	74, // 87: weft.WeftCoordinator.GetSourceStatus:output_type -> weft.GetSourceStatusResponse
+	23, // 88: weft.WeftCoordinator.Heartbeat:output_type -> weft.HeartbeatResponse
+	77, // 89: weft.WeftCoordinator.ListShards:output_type -> weft.ListShardsResponse
+	79, // 90: weft.WeftCoordinator.ForceArchiveShard:output_type -> weft.ForceArchiveShardResponse
+	81, // 91: weft.WeftCoordinator.DeleteArchivedShard:output_type -> weft.DeleteArchivedShardResponse
+	83, // 92: weft.WeftAdmin.RelaunchShard:output_type -> weft.RelaunchShardResponse
+	85, // 93: weft.WeftAdmin.GetShard:output_type -> weft.GetShardResponse
+	77, // 94: weft.WeftAdmin.ListShards:output_type -> weft.ListShardsResponse
+	88, // 95: weft.WeftAdmin.ListBuckets:output_type -> weft.ListBucketsResponse
+	54, // [54:96] is the sub-list for method output_type
+	12, // [12:54] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_proto_weftpb_weft_proto_init() }
@@ -5518,9 +5808,9 @@ func file_proto_weftpb_weft_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_weftpb_weft_proto_rawDesc), len(file_proto_weftpb_weft_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   84,
+			NumMessages:   89,
 			NumExtensions: 0,
-			NumServices:   3,
+			NumServices:   4,
 		},
 		GoTypes:           file_proto_weftpb_weft_proto_goTypes,
 		DependencyIndexes: file_proto_weftpb_weft_proto_depIdxs,

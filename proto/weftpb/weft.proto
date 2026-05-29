@@ -338,11 +338,42 @@ service WeftCoordinator {
   // Admin: delete an ARCHIVED shard and its data.
   rpc DeleteArchivedShard(DeleteArchivedShardRequest) returns (DeleteArchivedShardResponse);
 
-  // Admin: relaunch a shard in place (binary upgrade). Drives the FSM
-  // through SUSPENDED → reap → LAUNCHING; the surviving EBS volume is
-  // reattached to a fresh instance on the current launch template, so the
-  // shard comes back with the same id/window/data on the new binary.
+}
+
+// WeftAdmin is the coordinator-resident admin surface called by the
+// weft-admin CLI (via `kevcons ssh --command 'weft-admin …'`). It lives on
+// a separate gRPC listener bound to 127.0.0.1, gated by a SharedToken
+// (WEFT_ADMIN_TOKEN env), so it is reachable ONLY from inside the
+// coordinator instance with the right token — JWT-holders of WeftCoordinator
+// (e.g. a logged-in web admin user) cannot reach these methods, and a
+// weftd-style bearer-token connection cannot forge the admin token.
+//
+// Methods that the api server also needs (e.g. ListShards) intentionally
+// exist on BOTH services: api calls WeftCoordinator with its forwarded
+// user JWT, weft-admin calls WeftAdmin with the shared token. The Go
+// handlers are shared on the Server struct so the implementations stay
+// in one place.
+service WeftAdmin {
+  // RelaunchShard drives a shard through SUSPENDED → reap → LAUNCHING;
+  // the surviving EBS volume is reattached to a fresh instance on the
+  // current launch template, so the shard comes back with the same
+  // id/window/data on the new binary. The in-place binary-upgrade
+  // primitive for `weft-admin roll-*`.
   rpc RelaunchShard(RelaunchShardRequest) returns (RelaunchShardResponse);
+
+  // GetShard returns one shard's current row (state + last_heartbeat_at)
+  // — what weft-admin's wait-and-verify loop polls after firing a
+  // relaunch.
+  rpc GetShard(GetShardRequest) returns (GetShardResponse);
+
+  // ListShards returns a bucket's shard rows for `weft-admin roll-cohort`
+  // iteration. Sibling of WeftCoordinator.ListShards (same handler shape;
+  // different auth surface).
+  rpc ListShards(ListShardsRequest) returns (ListShardsResponse);
+
+  // ListBuckets returns every bucket (id/label/tier/target/state) for
+  // `weft-admin roll-all` iteration.
+  rpc ListBuckets(ListBucketsRequest) returns (ListBucketsResponse);
 }
 
 message ShardHeartbeatRequest {
@@ -701,6 +732,12 @@ message ShardInfo {
   int64 row_count = 9;
   string created_at = 10;
   int64 bucket_id = 11;
+  // last_heartbeat_at is what weft-admin's wait-and-verify polls after a
+  // RelaunchShard: the row briefly reads INGESTING mid-transition (with
+  // the pre-relaunch heartbeat), so the freshness check tells the poll
+  // whether we're looking at the POST-relaunch shard or the old row.
+  // RFC3339Nano, empty when never observed.
+  string last_heartbeat_at = 12;
 }
 
 message ListShardsResponse {
@@ -725,3 +762,25 @@ message RelaunchShardRequest {
 }
 
 message RelaunchShardResponse {}
+
+message GetShardRequest {
+  string shard_id = 1;
+}
+
+message GetShardResponse {
+  ShardInfo shard = 1;
+}
+
+message ListBucketsRequest {}
+
+message BucketInfo {
+  int64 id = 1;
+  string label = 2;
+  int32 target_ingesting_count = 3;
+  string tier = 4;
+  string state = 5;
+}
+
+message ListBucketsResponse {
+  repeated BucketInfo buckets = 1;
+}

@@ -1,16 +1,22 @@
 // weft-admin is the coordinator-resident CLI for operator/deploy actions
-// that drive the shard FSM out-of-band of normal cluster operation. It dials
-// the local coordinator's gRPC and calls one of the admin RPCs.
+// that drive the shard FSM out-of-band of normal cluster operation. It
+// dials the local coordinator's gRPC and calls the admin RPCs.
 //
 // The intended invocation is `kevcons ssh --command "sudo /opt/app/bin/weft-admin …"`
 // against the coordinator instance during a deploy or an ad-hoc operator
 // action. Localhost trust boundary; no auth.
 //
-// Phase 1 (this commit): roll-shard <id> only — fires RelaunchShard and
-// exits. The FSM drives SUSPENDED → LAUNCHING → INGESTING on its own ticks;
-// the operator confirms via shard_records.
+// Phase 1 shipped `roll-shard` (fire-and-exit). Phase 2 (this commit) adds:
+//   - roll-cohort <bucket-id>   — sequentially roll every live shard in a
+//                                 bucket, waiting for each to return to
+//                                 INGESTING before moving on.
+//   - roll-all                  — same, across every bucket.
+//   - wait-and-verify           — pollShardReady (cmd/weft-admin/wait.go)
+//                                 polls GetShard until state=INGESTING
+//                                 with a post-relaunch heartbeat.
+//   - --per-shard-timeout       — bound the wait per shard (default 10m).
+//   - --continue-on-failure     — keep going past a failed shard.
 //
-// Phase 2 will add roll-cohort/roll-all + a wait-and-verify poll loop.
 // Phase 3 adds skip-if-current via --target-sha against shard_records.binary_sha.
 package main
 
@@ -20,13 +26,34 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 )
+
+// adminTokenEnv is the env var that carries the shared bearer token used
+// to authenticate against the coordinator's WeftAdmin gRPC listener. Both
+// the coordinator (server side) and this CLI (client side) read it from
+// the same env loader on the coordinator instance, so the token is
+// available out of band rather than configured per-invocation.
+const adminTokenEnv = "WEFT_ADMIN_TOKEN"
+
+// adminCtx returns a context with the admin bearer attached as outgoing
+// gRPC metadata. The coordinator's SharedToken interceptor rejects calls
+// without it (Unauthenticated), so we fail fast here with a clear error
+// when the env isn't wired.
+func adminCtx(ctx context.Context) context.Context {
+	tok := os.Getenv(adminTokenEnv)
+	if tok == "" {
+		log.Fatalf("%s is not set; weft-admin requires the shared admin bearer (load it from the same env source the coordinator uses)", adminTokenEnv)
+	}
+	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+tok)
+}
 
 func main() {
 	log.SetFlags(0) // operator-facing; timestamps just noise
@@ -35,7 +62,11 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "roll-shard":
-		rollShard(os.Args[2:])
+		rollShardCmd(os.Args[2:])
+	case "roll-cohort":
+		rollCohortCmd(os.Args[2:])
+	case "roll-all":
+		rollAllCmd(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -48,18 +79,89 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage: weft-admin <subcommand> [flags]
 
 Subcommands:
-  roll-shard <shard-id>   relaunch a single shard in place (binary upgrade)
+  roll-shard  <shard-id>   relaunch a single shard in place
+  roll-cohort <bucket-id>  roll every live shard in a bucket, one at a time
+  roll-all                 roll every live shard across every bucket
 
-Flags (apply to subcommands that take them):
-  -coord     coordinator gRPC address (default "localhost:9020")
-  -timeout   RPC deadline (default 30s)`)
+Common flags:
+  -coord                coordinator gRPC address (default "localhost:9020")
+  -per-shard-timeout    deadline for each shard's relaunch + return to INGESTING (default 10m)
+  -continue-on-failure  keep going past a failed shard (roll-cohort / roll-all)`)
 	os.Exit(2)
 }
 
-func rollShard(args []string) {
+// liveStates are the shard states that have data and a binary worth
+// upgrading. LAUNCHING is skipped (already coming up on the current AMI);
+// ARCHIVING/ARCHIVED/GONE/SUSPENDED have nothing to upgrade.
+var liveStates = map[string]bool{
+	"INGESTING": true,
+	"READ_ONLY": true,
+	"DEGRADED":  true,
+}
+
+type commonFlags struct {
+	coord            string
+	perShardTimeout  time.Duration
+	pollInterval     time.Duration
+	continueOnFail   bool
+}
+
+func registerCommon(fs *flag.FlagSet, includeContinue bool) *commonFlags {
+	c := &commonFlags{}
+	fs.StringVar(&c.coord, "coord", "127.0.0.1:9022", "coordinator WeftAdmin gRPC address (localhost-only; SharedToken auth)")
+	fs.DurationVar(&c.perShardTimeout, "per-shard-timeout", 10*time.Minute, "deadline for each shard's relaunch + return to INGESTING")
+	fs.DurationVar(&c.pollInterval, "poll-interval", 5*time.Second, "interval between GetShard polls during wait-and-verify")
+	if includeContinue {
+		fs.BoolVar(&c.continueOnFail, "continue-on-failure", false, "keep going past a failed shard")
+	}
+	return c
+}
+
+func newAdminClient(coord string) (pb.WeftAdminClient, func(), error) {
+	conn, err := grpc.NewClient(coord, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, nil, fmt.Errorf("dial coordinator at %s: %w", coord, err)
+	}
+	return pb.NewWeftAdminClient(conn), func() { conn.Close() }, nil
+}
+
+// rollOne fires RelaunchShard for shardID and then waits via pollShardReady
+// for the shard to be back in INGESTING with a heartbeat stamped after the
+// pre-fire cutoff. Returns nil on success; errors include both RPC and
+// wait-timeout cases.
+func rollOne(ctx context.Context, client pb.WeftAdminClient, shardID string, perShardTimeout, pollInterval time.Duration) error {
+	rollCtx, cancel := context.WithTimeout(adminCtx(ctx), perShardTimeout)
+	defer cancel()
+
+	cutoff := time.Now()
+	if _, err := client.RelaunchShard(rollCtx, &pb.RelaunchShardRequest{ShardId: shardID}); err != nil {
+		return fmt.Errorf("relaunch %s: %w", shardID, err)
+	}
+	fmt.Printf("  relaunch fired for %s; waiting for return to INGESTING...\n", shardID)
+
+	get := func(id string) (string, time.Time, error) {
+		resp, err := client.GetShard(rollCtx, &pb.GetShardRequest{ShardId: id})
+		if err != nil {
+			return "", time.Time{}, err
+		}
+		hb := time.Time{}
+		if s := resp.Shard.LastHeartbeatAt; s != "" {
+			if parsed, perr := time.Parse(time.RFC3339Nano, s); perr == nil {
+				hb = parsed
+			}
+		}
+		return resp.Shard.State, hb, nil
+	}
+	if err := pollShardReady(rollCtx, get, shardID, cutoff, pollInterval); err != nil {
+		return err
+	}
+	fmt.Printf("  %s is back in INGESTING\n", shardID)
+	return nil
+}
+
+func rollShardCmd(args []string) {
 	fs := flag.NewFlagSet("roll-shard", flag.ExitOnError)
-	coord := fs.String("coord", "localhost:9020", "coordinator gRPC address")
-	timeout := fs.Duration("timeout", 30*time.Second, "RPC deadline")
+	c := registerCommon(fs, false)
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -69,19 +171,117 @@ func rollShard(args []string) {
 	}
 	shardID := fs.Arg(0)
 
-	conn, err := grpc.NewClient(*coord, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	client, closeConn, err := newAdminClient(c.coord)
 	if err != nil {
-		log.Fatalf("dial coordinator at %s: %v", *coord, err)
+		log.Fatal(err)
 	}
-	defer conn.Close()
-	client := pb.NewWeftCoordinatorClient(conn)
+	defer closeConn()
 
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
-	defer cancel()
-
-	if _, err := client.RelaunchShard(ctx, &pb.RelaunchShardRequest{ShardId: shardID}); err != nil {
-		log.Fatalf("relaunch %s: %v", shardID, err)
+	if err := rollOne(context.Background(), client, shardID, c.perShardTimeout, c.pollInterval); err != nil {
+		log.Fatal(err)
 	}
-	fmt.Printf("relaunch fired for %s — the FSM will drive SUSPENDED → reap → LAUNCHING → INGESTING on subsequent ticks.\n", shardID)
-	fmt.Println("Watch shard_records.state (and coordinator.log) to confirm the cycle completes.")
+}
+
+// liveShardIDs filters a ShardInfo slice to the states worth rolling, in
+// deterministic id order.
+func liveShardIDs(shards []*pb.ShardInfo) []string {
+	ids := make([]string, 0, len(shards))
+	for _, sh := range shards {
+		if liveStates[sh.State] {
+			ids = append(ids, sh.Id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func rollCohort(ctx context.Context, client pb.WeftAdminClient, bucketID int64, c *commonFlags) error {
+	resp, err := client.ListShards(adminCtx(ctx), &pb.ListShardsRequest{BucketId: bucketID})
+	if err != nil {
+		return fmt.Errorf("list shards for bucket %d: %w", bucketID, err)
+	}
+	ids := liveShardIDs(resp.Shards)
+	fmt.Printf("bucket %d: %d live shard(s) to roll\n", bucketID, len(ids))
+
+	var failed []string
+	for _, id := range ids {
+		fmt.Printf("rolling %s (bucket %d)...\n", id, bucketID)
+		if err := rollOne(ctx, client, id, c.perShardTimeout, c.pollInterval); err != nil {
+			if !c.continueOnFail {
+				return fmt.Errorf("roll %s: %w", id, err)
+			}
+			fmt.Fprintf(os.Stderr, "  FAILED %s: %v (continuing)\n", id, err)
+			failed = append(failed, id)
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("bucket %d: %d shard(s) failed: %v", bucketID, len(failed), failed)
+	}
+	return nil
+}
+
+func rollCohortCmd(args []string) {
+	fs := flag.NewFlagSet("roll-cohort", flag.ExitOnError)
+	c := registerCommon(fs, true)
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "roll-cohort requires exactly one positional argument: <bucket-id>")
+		os.Exit(2)
+	}
+	var bucketID int64
+	if _, err := fmt.Sscanf(fs.Arg(0), "%d", &bucketID); err != nil {
+		log.Fatalf("invalid bucket id %q: %v", fs.Arg(0), err)
+	}
+
+	client, closeConn, err := newAdminClient(c.coord)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer closeConn()
+
+	if err := rollCohort(context.Background(), client, bucketID, c); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func rollAllCmd(args []string) {
+	fs := flag.NewFlagSet("roll-all", flag.ExitOnError)
+	c := registerCommon(fs, true)
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "roll-all takes no positional arguments")
+		os.Exit(2)
+	}
+
+	client, closeConn, err := newAdminClient(c.coord)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer closeConn()
+
+	ctx := context.Background()
+	buckets, err := client.ListBuckets(adminCtx(ctx), &pb.ListBucketsRequest{})
+	if err != nil {
+		log.Fatalf("list buckets: %v", err)
+	}
+	fmt.Printf("rolling %d bucket(s)\n", len(buckets.Buckets))
+
+	var anyFailed bool
+	for _, b := range buckets.Buckets {
+		fmt.Printf("\n==> bucket %d (%s, tier=%s, target=%d)\n", b.Id, b.Label, b.Tier, b.TargetIngestingCount)
+		if err := rollCohort(ctx, client, b.Id, c); err != nil {
+			if !c.continueOnFail {
+				log.Fatal(err)
+			}
+			fmt.Fprintf(os.Stderr, "bucket %d failed: %v (continuing)\n", b.Id, err)
+			anyFailed = true
+		}
+	}
+	if anyFailed {
+		log.Fatal("roll-all completed with failures (see above)")
+	}
 }

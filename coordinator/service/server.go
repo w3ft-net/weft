@@ -80,9 +80,14 @@ func callerUserID(ctx context.Context) string {
 	return c.UserID
 }
 
-// Server implements the WeftCoordinator gRPC service.
+// Server implements both the WeftCoordinator (external, JWT-auth) and
+// WeftAdmin (localhost-only, shared-token-auth) gRPC services. The same Go
+// struct backs both because Go satisfies interfaces structurally; gRPC
+// routes calls by service descriptor, so registering Server on each server
+// only exposes that service's methods on that listener.
 type Server struct {
 	pb.UnimplementedWeftCoordinatorServer
+	pb.UnimplementedWeftAdminServer
 	Coord *coordinator.Coordinator
 	Store *store.Store
 
@@ -1077,21 +1082,66 @@ func (s *Server) ListShards(_ context.Context, req *pb.ListShardsRequest) (*pb.L
 	}
 	out := make([]*pb.ShardInfo, 0, len(rows))
 	for _, sh := range rows {
-		out = append(out, &pb.ShardInfo{
-			Id:          sh.ID,
-			WindowStart: sh.WindowStart.Format(time.RFC3339Nano),
-			WindowEnd:   sh.WindowEnd.Format(time.RFC3339Nano),
-			State:       string(sh.State),
-			Addr:        sh.Addr,
-			InstanceId:  sh.InstanceID,
-			ParquetPath: sh.ParquetPath,
-			Tier:        sh.Tier,
-			RowCount:    sh.RowCount,
-			CreatedAt:   sh.CreatedAt.Format(time.RFC3339Nano),
-			BucketId:    sh.BucketID,
-		})
+		out = append(out, shardInfoFrom(sh))
 	}
 	return &pb.ListShardsResponse{Shards: out}, nil
+}
+
+// shardInfoFrom marshals a persisted shard row into the ShardInfo wire
+// shape — shared between ListShards and GetShard.
+func shardInfoFrom(sh *logdb.Shard) *pb.ShardInfo {
+	info := &pb.ShardInfo{
+		Id:          sh.ID,
+		WindowStart: sh.WindowStart.Format(time.RFC3339Nano),
+		WindowEnd:   sh.WindowEnd.Format(time.RFC3339Nano),
+		State:       string(sh.State),
+		Addr:        sh.Addr,
+		InstanceId:  sh.InstanceID,
+		ParquetPath: sh.ParquetPath,
+		Tier:        sh.Tier,
+		RowCount:    sh.RowCount,
+		CreatedAt:   sh.CreatedAt.Format(time.RFC3339Nano),
+		BucketId:    sh.BucketID,
+	}
+	if !sh.LastHeartbeatAt.IsZero() {
+		info.LastHeartbeatAt = sh.LastHeartbeatAt.Format(time.RFC3339Nano)
+	}
+	return info
+}
+
+func (s *Server) GetShard(_ context.Context, req *pb.GetShardRequest) (*pb.GetShardResponse, error) {
+	if s.Store == nil {
+		return nil, status.Errorf(codes.Unavailable, "store not configured")
+	}
+	rec, found, err := (logdb.ShardStore{Store: s.Store}).GetShard(req.ShardId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get shard: %v", err)
+	}
+	if !found {
+		return nil, status.Errorf(codes.NotFound, "shard %s not found", req.ShardId)
+	}
+	return &pb.GetShardResponse{Shard: shardInfoFrom(rec)}, nil
+}
+
+func (s *Server) ListBuckets(_ context.Context, _ *pb.ListBucketsRequest) (*pb.ListBucketsResponse, error) {
+	if s.Store == nil {
+		return nil, status.Errorf(codes.Unavailable, "store not configured")
+	}
+	rows, err := s.Store.ListBuckets()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list buckets: %v", err)
+	}
+	out := make([]*pb.BucketInfo, 0, len(rows))
+	for _, b := range rows {
+		out = append(out, &pb.BucketInfo{
+			Id:                   b.ID,
+			Label:                b.Label,
+			TargetIngestingCount: int32(b.TargetIngestingCount),
+			Tier:                 b.Tier,
+			State:                b.State,
+		})
+	}
+	return &pb.ListBucketsResponse{Buckets: out}, nil
 }
 
 func (s *Server) ForceArchiveShard(_ context.Context, req *pb.ForceArchiveShardRequest) (*pb.ForceArchiveShardResponse, error) {

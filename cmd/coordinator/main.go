@@ -32,6 +32,7 @@ import (
 func main() {
 	port := flag.Int("port", 9020, "gRPC listen port")
 	healthPort := flag.Int("health-port", 9021, "HTTP liveness listen port")
+	adminPort := flag.Int("admin-port", 9022, "gRPC listen port for the localhost-only WeftAdmin surface (weft-admin CLI)")
 	shardASGSmall := flag.String("shard-asg-small", "", "small tier shard ASG name")
 	shardASGMedium := flag.String("shard-asg-medium", "", "medium tier shard ASG name")
 	shardASGLarge := flag.String("shard-asg-large", "", "large tier shard ASG name")
@@ -249,11 +250,40 @@ func main() {
 			func(uid, org string) (*auth.Session, error) { return auth.BuildSession(db, uid, org) },
 			jwtSecret, skip)),
 	)
-	pb.RegisterWeftCoordinatorServer(srv, &coordsvc.Server{
+	coordSvc := &coordsvc.Server{
 		Coord:  coord,
 		Store:  db,
 		CfgPtr: cfgPtr,
-	})
+	}
+	pb.RegisterWeftCoordinatorServer(srv, coordSvc)
+
+	// WeftAdmin lives on a separate 127.0.0.1:<admin-port> listener gated
+	// by SharedToken auth (WEFT_ADMIN_TOKEN). It exists so the coordinator-
+	// resident `weft-admin` CLI can drive operator/deploy actions
+	// (RelaunchShard, etc.) without a JWT, while making those methods
+	// unreachable from the public gRPC port — JWT-holders of
+	// WeftCoordinator can't call them and a weftd-style bearer can't forge
+	// the admin token. Skipped when WEFT_ADMIN_TOKEN is unset: the
+	// SharedToken interceptor refuses to start with an empty expected token
+	// (no silent any-caller mode), so admin RPCs are simply unavailable
+	// until the operator wires the env. The external 9020 listener is
+	// unaffected either way.
+	if adminToken := os.Getenv("WEFT_ADMIN_TOKEN"); adminToken != "" {
+		adminLis, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *adminPort))
+		if err != nil {
+			log.Fatalf("admin listen on 127.0.0.1:%d: %v", *adminPort, err)
+		}
+		adminSrv := coordsvc.NewAdminGRPCServer(coordSvc, adminToken)
+		log.Printf("coordinator: WeftAdmin gRPC listening on 127.0.0.1:%d (SharedToken auth)", *adminPort)
+		go func() {
+			if err := adminSrv.Serve(adminLis); err != nil {
+				log.Printf("admin serve error: %v", err)
+			}
+		}()
+		defer adminSrv.GracefulStop()
+	} else {
+		log.Printf("coordinator: WEFT_ADMIN_TOKEN unset — WeftAdmin gRPC listener disabled; weft-admin CLI calls will not be served")
+	}
 
 	wc, _ := weftsdk.New()
 	defer wc.Close()
