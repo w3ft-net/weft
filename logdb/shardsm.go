@@ -67,6 +67,13 @@ type ShardDeps struct {
 	// StaleThreshold mirrors heartbeatStaleThreshold; carried in deps so
 	// tests can shrink it without touching the package-level const.
 	StaleThreshold time.Duration
+	// BootedAt is when this coordinator process started observing shards.
+	// actuallyStale anchors its reference point at BootedAt so a shard
+	// loaded after a restart — whose persisted last_heartbeat_at predates
+	// the new process — gets a full StaleThreshold to re-report before it's
+	// judged dead, instead of being suspended on the first post-restart tick.
+	// Defaults to Clock() at construction (see newShardDeps).
+	BootedAt time.Time
 	// LaunchRetryBudget caps LaunchAttempts before LAUNCHING fires
 	// LaunchFailed and transitions to GONE. Zero defaults to 5.
 	LaunchRetryBudget int
@@ -87,6 +94,9 @@ func newShardDeps(d ShardDeps) *ShardDeps {
 	}
 	if d.StaleThreshold == 0 {
 		d.StaleThreshold = heartbeatStaleThreshold
+	}
+	if d.BootedAt.IsZero() {
+		d.BootedAt = d.Clock()
 	}
 	if d.LaunchRetryBudget == 0 {
 		d.LaunchRetryBudget = 5
@@ -287,7 +297,17 @@ func (sh *Shard) actuallyStale(context.Context, ...any) bool {
 	if sh.LastHeartbeatAt.IsZero() {
 		return false // never observed — treat as fresh until a heartbeat or evaluator clears it
 	}
-	return sh.deps.Clock().Sub(sh.LastHeartbeatAt) > sh.deps.StaleThreshold
+	// Anchor at boot: a heartbeat from before this coordinator started (a
+	// shard loaded after a restart, its persisted last_heartbeat_at predating
+	// the new process) can't prove current liveness, but it must not read as
+	// instantly stale either — that suspended+relaunched every healthy shard
+	// on the first post-restart tick. The shard gets a full StaleThreshold to
+	// re-report; if it never does, it's correctly staled after the window.
+	ref := sh.LastHeartbeatAt
+	if ref.Before(sh.deps.BootedAt) {
+		ref = sh.deps.BootedAt
+	}
+	return sh.deps.Clock().Sub(ref) > sh.deps.StaleThreshold
 }
 
 // staleTargetFromActive picks SUSPENDED when the shard has an EBS volume

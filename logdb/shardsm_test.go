@@ -81,6 +81,10 @@ func makeFixtureShardSM(t *testing.T, initialState ShardState, customize ...func
 		Store:          ShardStore{db},
 		Clock:          clock,
 		StaleThreshold: 2 * time.Minute,
+		// Default to "booted a while ago" so a shard's own LastHeartbeatAt
+		// (not the boot anchor) drives staleness in the common-case tests.
+		// Restart-grace tests override this to simulate a fresh boot.
+		BootedAt: clock().Add(-2 * time.Hour),
 	}
 	for _, c := range customize {
 		c(&deps)
@@ -260,6 +264,46 @@ func TestShardSM_EvaluateActiveNoStaleWhenFresh(t *testing.T) {
 	st, _ := sm.smState(context.Background())
 	if st != StateIngesting {
 		t.Fatalf("a fresh shard should stay INGESTING; got %q", st)
+	}
+}
+
+// TestShardSM_RestartGraceDoesNotSuspendOnPreBootHeartbeat pins the deploy
+// regression: a shard loaded after a coordinator restart carries a persisted
+// last_heartbeat_at from BEFORE the new process booted. Measured absolutely
+// that timestamp is stale, but the shard must get a grace window to
+// re-report rather than being suspended+relaunched on the first tick (which
+// is exactly what hit a healthy 13.5h-INGESTING shard in prod). BootedAt ==
+// clock here models "the coordinator just came up".
+func TestShardSM_RestartGraceDoesNotSuspendOnPreBootHeartbeat(t *testing.T) {
+	bootAt := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC) // == fixture clock: fresh boot
+	sm, _, entry := makeFixtureShardSM(t, StateIngesting, func(d *ShardDeps) { d.BootedAt = bootAt })
+	entry.EBSVolumeID = "vol-1"
+	entry.LastHeartbeatAt = time.Date(2026, 5, 21, 11, 30, 0, 0, time.UTC) // 30m pre-boot — stale absolutely
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if st, _ := sm.smState(context.Background()); st != StateIngesting {
+		t.Fatalf("a shard loaded after a restart must get a grace window, not be suspended on a pre-boot heartbeat; got %q", st)
+	}
+}
+
+// TestShardSM_StaleAfterRestartGraceSuspends is the other half: once the
+// post-boot grace window elapses with no fresh heartbeat, a shard IS stale
+// and suspends — a genuinely dead shard is still caught (what the blunt
+// "zero on load" approach would have missed). BootedAt is 3m < clock, past
+// the 2m threshold, and the shard never re-reported since boot.
+func TestShardSM_StaleAfterRestartGraceSuspends(t *testing.T) {
+	bootAt := time.Date(2026, 5, 21, 11, 57, 0, 0, time.UTC) // 3m before the fixture clock
+	sm, _, entry := makeFixtureShardSM(t, StateIngesting, func(d *ShardDeps) { d.BootedAt = bootAt })
+	entry.EBSVolumeID = "vol-1" // volume intact → SUSPENDED, not GONE
+	entry.LastHeartbeatAt = time.Date(2026, 5, 21, 11, 30, 0, 0, time.UTC) // pre-boot, never re-reported
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if st, _ := sm.smState(context.Background()); st != StateSuspended {
+		t.Fatalf("a shard that never re-reported within the post-boot grace must suspend; got %q", st)
 	}
 }
 
