@@ -93,6 +93,15 @@ type Shard struct {
 	// shard re-admits immediately after a restart (optimistic — it retries
 	// writes and re-degrades if still broken).
 	degradedAt time.Time `gorm:"-" json:"-"`
+	// reconnectFailures counts consecutive coordinator→shard dial failures
+	// on the heartbeat reconnect path (ObserveHeartbeat). A shard that
+	// heartbeats fine but the coordinator can't dial back (a new-AZ
+	// security-group gap, a partition) would otherwise sit INGESTING with a
+	// nil Live handle forever — fresh, but silently skipped by the ingest
+	// router. Crossing SuspendFailureThreshold trips it to DEGRADED via the
+	// same breaker IngestFailures uses. Reset on a successful reconnect and
+	// on DEGRADED re-admit. In-memory (guarded by mu).
+	reconnectFailures int `gorm:"-" json:"-"`
 }
 
 // ingestRecoveryCooldown is how long a shard stays DEGRADED before
@@ -153,7 +162,7 @@ type RegistryStore interface {
 	DeleteShard(id string) error
 	ListShards() ([]*Shard, error)
 	GetShard(id string) (*Shard, bool, error)
-	TouchHeartbeat(id string, rowCount int64) error
+	TouchHeartbeat(id string, rowCount int64, at time.Time) error
 	// ListShardServices returns every shard_services row; the registry
 	// groups it by shard_id to populate each entry's in-memory service
 	// membership at boot/refresh.
@@ -247,18 +256,19 @@ func (r *ShardRegistry) PersistState(entry *Shard) {
 	r.persist(entry)
 }
 
-// TouchHeartbeat persists only heartbeat-owned fields (row_count)
-// without overwriting lifecycle-owned fields like window bounds,
-// state, or apps. Prevents the heartbeat path from clobbering
-// manual DB edits or reconciler-driven state changes.
+// TouchHeartbeat persists only the heartbeat-owned fields (row_count and
+// last_heartbeat_at) without overwriting lifecycle-owned fields like
+// window bounds, state, or apps. Prevents the heartbeat path from
+// clobbering manual DB edits or reconciler-driven state changes.
 func (r *ShardRegistry) TouchHeartbeat(entry *Shard) {
 	if r.store == nil {
 		return
 	}
 	entry.mu.RLock()
 	rowCount := entry.RowCount
+	at := entry.LastHeartbeatAt
 	entry.mu.RUnlock()
-	if err := r.store.TouchHeartbeat(entry.ID, rowCount); err != nil {
+	if err := r.store.TouchHeartbeat(entry.ID, rowCount, at); err != nil {
 		log.Printf("registry: touch heartbeat %s: %v", entry.ID, err)
 	}
 }

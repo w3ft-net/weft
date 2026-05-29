@@ -315,3 +315,67 @@ func bucketState(t *testing.T, prov *Provisioner) BucketState {
 	t.Fatal("no bucket SM")
 	return ""
 }
+
+// TestProcessHeartbeat_UndialableShardDoesNotPromote reproduces the
+// new-AZ security-group incident: a freshly launched shard heartbeats fine
+// (shard → coordinator works) but the coordinator can't dial it back on
+// 9000 (coordinator → shard times out). The heartbeat promote path runs
+// Configure as INGESTING's OnEntry, *after* stateless has already written
+// the destination state — so a dial failure leaves the shard INGESTING
+// with a nil Live handle. It then heartbeats forever (never isStale), the
+// ingest router silently skips it (Live == nil), and it strands a Target
+// slot doing nothing. An undialable shard must NOT be promoted: it should
+// stay LAUNCHING and retry once the coordinator can reach it.
+func TestProcessHeartbeat_UndialableShardDoesNotPromote(t *testing.T) {
+	db := openSMTestStore(t)
+	bucket := seedBucket(t, db, BucketStasis)
+
+	const shardID, instanceID = "s-undialable", "i-abc"
+	if err := (ShardStore{db}).SaveShard(&Shard{
+		ID:          shardID,
+		State:       StateLaunching,
+		InstanceID:  instanceID,
+		BucketID:    bucket.ID,
+		Tier:        "small",
+		WindowStart: time.Date(2026, 5, 25, 0, 0, 0, 0, time.UTC),
+		WindowEnd:   time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		CreatedAt:   time.Date(2026, 5, 25, 0, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("seed shard: %v", err)
+	}
+
+	reg := NewShardRegistry()
+	reg.SetStore(ShardStore{db})
+	if err := reg.LoadFromStore(func(*Shard) (shard.Shard, error) {
+		return nil, errNoReconstruct
+	}); err != nil {
+		t.Fatalf("LoadFromStore: %v", err)
+	}
+
+	prov := NewProvisioner(reg, &recordingLauncher{}, ProvisionerConfig{PollInterval: time.Second})
+	prov.configurer = failingConfigurer{} // coordinator → shard:9000 always times out
+	prov.SetStore(db)
+	prov.LoadStateMachines()
+
+	// The shard reports in (shard → coordinator path is fine).
+	prov.ProcessHeartbeat(store.ShardHeartbeat{
+		ShardID:    shardID,
+		InstanceID: instanceID,
+		Addr:       "172.31.129.96:9000",
+	})
+
+	entry := reg.Get(shardID)
+	if entry == nil {
+		t.Fatal("shard vanished from registry")
+	}
+	entry.mu.RLock()
+	state, live := entry.State, entry.Live
+	entry.mu.RUnlock()
+
+	if live != nil {
+		t.Fatalf("undialable shard has a live handle %v despite the dial failing", live)
+	}
+	if state == StateIngesting {
+		t.Fatalf("undialable shard promoted to INGESTING with Live==nil — zombie cohort member that strands a Target slot; want it to stay %s until reachable", StateLaunching)
+	}
+}

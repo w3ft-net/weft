@@ -446,9 +446,7 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 			// promoted). The stale-LAUNCHING path reaps genuine orphans.
 			return
 		}
-		if err := e.Fire(ctx, TriggerHeartbeat, hb); err != nil {
-			log.Printf("provisioner: heartbeat promote (instance %s → %s): %v", hb.InstanceID, e.ID, err)
-		}
+		p.promoteOnHeartbeat(ctx, e, hb)
 		return
 	}
 
@@ -464,11 +462,43 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 	e.mu.RUnlock()
 	switch state {
 	case StateLaunching, StateSuspended:
-		if err := e.Fire(ctx, TriggerHeartbeat, hb); err != nil {
-			log.Printf("provisioner: heartbeat fire %s: %v", hb.ShardID, err)
-		}
+		p.promoteOnHeartbeat(ctx, e, hb)
 	default:
 		e.ObserveHeartbeat(ctx, hb)
+	}
+}
+
+// promoteOnHeartbeat gates a LAUNCHING/SUSPENDED shard's promotion on a
+// successful Configure dial: the coordinator must be able to reach the shard
+// (coordinator → shard:9000) before it joins the ingest cohort. Otherwise an
+// instance that heartbeats fine but is unreachable — e.g. a new-AZ
+// security-group gap — would promote to INGESTING with a nil Live handle,
+// get silently skipped by the ingest router (which requires Live != nil),
+// and strand a Target slot doing nothing while heartbeats keep it "fresh".
+//
+// On a dial failure we log and leave the shard where it is; the next
+// heartbeat retries, so it self-heals once the network is fixed without any
+// relaunch churn (a LAUNCHING shard counts as in-flight, so the bucket SM
+// holds rather than minting a replacement into the same wall).
+func (p *Provisioner) promoteOnHeartbeat(ctx context.Context, e *Shard, hb store.ShardHeartbeat) {
+	dialed, err := e.dialConfigure(ctx, hb)
+	if err != nil {
+		log.Printf("provisioner: heartbeat %s (instance %s): not promoting — coordinator can't reach %s: %v", e.ID, hb.InstanceID, hb.Addr, err)
+		return
+	}
+	if err := e.Fire(ctx, TriggerHeartbeat, hb, dialed); err != nil {
+		log.Printf("provisioner: heartbeat promote %s: %v", e.ID, err)
+	}
+	// If the guard rejected the promotion (e.g. a stray-instance heartbeat),
+	// configureOnHeartbeat never ran and the handle wasn't attached — close
+	// it so we don't leak a connection.
+	if dialed != nil {
+		e.mu.RLock()
+		attached := e.Live == dialed
+		e.mu.RUnlock()
+		if !attached {
+			dialed.Close()
+		}
 	}
 }
 

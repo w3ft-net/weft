@@ -424,15 +424,20 @@ func (sh *Shard) evaluateActive(ctx context.Context) error {
 }
 
 // evaluateIngesting is evaluateActive plus the ingest circuit breaker: a
-// shard whose consecutive ingest failures crossed SuspendFailureThreshold
-// trips to DEGRADED (out of write routing). Staleness wins — a silent
-// shard goes to the recovery branch regardless of ingest health.
+// shard trips to DEGRADED (out of write routing) when its consecutive
+// ingest failures OR its consecutive coordinator→shard reconnect failures
+// cross SuspendFailureThreshold. The reconnect arm catches the shard that
+// heartbeats fine but the coordinator can't dial back (a new-AZ
+// security-group gap), which would otherwise sit INGESTING with a nil
+// handle, fresh-but-unroutable. Staleness wins — a silent shard goes to the
+// recovery branch regardless of either count.
 func (sh *Shard) evaluateIngesting(ctx context.Context) error {
 	if sh.actuallyStale(ctx) {
 		return sh.Fire(ctx, TriggerHeartbeatStale)
 	}
 	sh.mu.RLock()
-	unhealthy := sh.IngestFailures >= SuspendFailureThreshold
+	unhealthy := sh.IngestFailures >= SuspendFailureThreshold ||
+		sh.reconnectFailures >= SuspendFailureThreshold
 	sh.mu.RUnlock()
 	if unhealthy {
 		return sh.Fire(ctx, TriggerIngestDegraded)
@@ -458,6 +463,7 @@ func (sh *Shard) evaluateDegraded(ctx context.Context) error {
 	}
 	sh.mu.Lock()
 	sh.IngestFailures = 0
+	sh.reconnectFailures = 0
 	sh.mu.Unlock()
 	return sh.Fire(ctx, TriggerIngestRecovered) // → INGESTING (half-open)
 }
@@ -646,50 +652,25 @@ func (sh *Shard) onEnterLaunching(ctx context.Context, args ...any) error {
 	return nil
 }
 
-// configureOnHeartbeat is INGESTING's OnEntryFrom(Heartbeat): the shard
-// has just reported a live gRPC addr (LAUNCHING after a fresh boot, or
-// SUSPENDED after a replacement attached the surviving volume). It dials
-// the shard and sends Configure, then attaches the live handle.
+// configureOnHeartbeat is INGESTING's OnEntryFrom(Heartbeat): it records
+// the heartbeat's addr/instance and attaches the live handle the promote
+// path already dialed. The Configure dial happens BEFORE this transition
+// (Provisioner.promoteOnHeartbeat → Shard.dialConfigure), so by the time
+// OnEntry runs the coordinator already has a working connection — an
+// unreachable shard never reaches INGESTING. The dialed handle rides in
+// through the Fire args; it's nil on dev/test paths with no Configurer
+// (and on direct sm.Fire callers), which then just record addr/instance
+// without attaching a connection.
 //
-// No prior connection to close: LAUNCHING never held one, and SUSPENDED
-// .OnEntry already dropped the dead handle (see the failure walkthrough in
-// docs/plans/asg-as-api-stateless.md — "old Live was already nil; no
-// deferred close needed").
-//
-// On a Dial failure the transition's state write (→ INGESTING) has already
-// landed — stateless persists the destination before running OnEntry — so
-// the row is INGESTING with a nil handle until a later heartbeat reconnects
-// it. Returning the error surfaces the failure to the heartbeat caller for
-// logging meanwhile, and leaves Live nil rather than half-set.
-//
-// Configurer is nil on dev/test paths; the shard then just records the
-// heartbeat's addr/instance without attaching a connection.
-func (sh *Shard) configureOnHeartbeat(ctx context.Context, args ...any) error {
+// SUSPENDED .OnEntry already dropped any dead handle before this runs, so
+// there's no prior connection to close (see docs/plans/asg-as-api-
+// stateless.md — "old Live was already nil; no deferred close needed").
+func (sh *Shard) configureOnHeartbeat(_ context.Context, args ...any) error {
 	hb, ok := heartbeatArg(args)
 	if !ok {
 		return fmt.Errorf("shardsm %s: configureOnHeartbeat missing heartbeat arg", sh.ID)
 	}
-
-	var dialed shard.Shard
-	if sh.deps.Configurer != nil {
-		sh.mu.Lock()
-		req := &pb.ConfigureRequest{
-			ShardId:        sh.ID,
-			Services:       serviceNames(sh.Services),
-			WindowStart:    sh.WindowStart.Format(time.RFC3339),
-			WindowEnd:      sh.WindowEnd.Format(time.RFC3339),
-			HeartbeatToken: sh.HeartbeatToken,
-		}
-		sh.mu.Unlock()
-
-		dialCtx, cancel := context.WithTimeout(ctx, configureTimeout)
-		s, err := sh.deps.Configurer.Dial(dialCtx, hb.Addr, req)
-		cancel()
-		if err != nil {
-			return fmt.Errorf("shardsm %s: configure at %s: %w", sh.ID, hb.Addr, err)
-		}
-		dialed = s
-	}
+	dialed := dialedArg(args)
 
 	sh.mu.Lock()
 	sh.Addr = hb.Addr
@@ -713,6 +694,40 @@ func (sh *Shard) configureOnHeartbeat(ctx context.Context, args ...any) error {
 	return nil
 }
 
+// dialConfigure dials the shard's advertised gRPC addr and sends Configure,
+// returning the live handle. It's the reachability gate the heartbeat
+// promote path runs BEFORE firing TriggerHeartbeat: a shard the coordinator
+// can't reach (e.g. a new-AZ security-group gap that blocks coordinator →
+// shard:9000 while the shard's own heartbeats still get through) must not be
+// promoted into the ingest cohort, where a nil handle would silently exclude
+// it from write routing while it strands a Target slot.
+//
+// Returns (nil, nil) when no Configurer is wired (dev/test) — those promote
+// without a live handle, as before. No state mutation: the caller threads
+// the returned handle into Fire so configureOnHeartbeat attaches it.
+func (sh *Shard) dialConfigure(ctx context.Context, hb store.ShardHeartbeat) (shard.Shard, error) {
+	if sh.deps.Configurer == nil {
+		return nil, nil
+	}
+	sh.mu.RLock()
+	req := &pb.ConfigureRequest{
+		ShardId:        sh.ID,
+		Services:       serviceNames(sh.Services),
+		WindowStart:    sh.WindowStart.Format(time.RFC3339),
+		WindowEnd:      sh.WindowEnd.Format(time.RFC3339),
+		HeartbeatToken: sh.HeartbeatToken,
+	}
+	sh.mu.RUnlock()
+
+	dialCtx, cancel := context.WithTimeout(ctx, configureTimeout)
+	defer cancel()
+	s, err := sh.deps.Configurer.Dial(dialCtx, hb.Addr, req)
+	if err != nil {
+		return nil, fmt.Errorf("shardsm %s: configure at %s: %w", sh.ID, hb.Addr, err)
+	}
+	return s, nil
+}
+
 // ObserveHeartbeat handles a heartbeat for a shard already past the
 // LAUNCHING/SUSPENDED promotion (INGESTING or READ_ONLY) — the
 // steady-state path ProcessHeartbeat routes here instead of firing a
@@ -730,6 +745,13 @@ func (sh *Shard) ObserveHeartbeat(ctx context.Context, hb store.ShardHeartbeat) 
 	if needDial {
 		if err := sh.reconnect(ctx, hb); err != nil {
 			log.Printf("shardsm %s: reconnect on heartbeat at %s: %v", sh.ID, hb.Addr, err)
+			sh.mu.Lock()
+			sh.reconnectFailures++
+			sh.mu.Unlock()
+		} else {
+			sh.mu.Lock()
+			sh.reconnectFailures = 0
+			sh.mu.Unlock()
 		}
 	}
 
@@ -858,4 +880,17 @@ func heartbeatArg(args []any) (store.ShardHeartbeat, bool) {
 		}
 	}
 	return store.ShardHeartbeat{}, false
+}
+
+// dialedArg extracts the pre-dialed live handle the promote path threads
+// through Fire(TriggerHeartbeat, hb, dialed) for configureOnHeartbeat to
+// attach. Returns nil when absent — dev/test paths and direct sm.Fire
+// callers pass only the heartbeat.
+func dialedArg(args []any) shard.Shard {
+	for _, a := range args {
+		if s, ok := a.(shard.Shard); ok {
+			return s
+		}
+	}
+	return nil
 }

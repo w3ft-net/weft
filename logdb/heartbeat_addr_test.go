@@ -106,3 +106,78 @@ func TestMatchingEntries_AfterRestart(t *testing.T) {
 		t.Fatal("shard-restart-test not in MatchingEntries result")
 	}
 }
+
+// TestTouchHeartbeat_PersistsLastHeartbeatAt proves the heartbeat path now
+// writes last_heartbeat_at through to shard_records — the column was zero
+// at insert and stayed zero forever because TouchHeartbeat only persisted
+// row_count, so shard liveness couldn't be observed via SQL.
+func TestTouchHeartbeat_PersistsLastHeartbeatAt(t *testing.T) {
+	db, err := store.Open(store.TestDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable: %v", err)
+	}
+	tx, rollback := db.BeginTest()
+	t.Cleanup(func() {
+		rollback()
+		db.Close()
+	})
+
+	bucket := &store.Bucket{
+		Label:                "touch-hb-test",
+		TargetIngestingCount: 1,
+		Tier:                 "small",
+		CreatedAt:            time.Now().UTC().Format(time.RFC3339),
+		WindowDuration:       "1h",
+	}
+	if err := tx.SaveBucket(bucket); err != nil {
+		t.Fatalf("seed bucket: %v", err)
+	}
+
+	now := time.Now().UTC()
+	reg := NewShardRegistry()
+	reg.SetStore(ShardStore{tx})
+	reg.Add(&Shard{
+		ID:          "shard-hb-test",
+		WindowStart: now.Add(-time.Hour),
+		WindowEnd:   now.Add(time.Hour),
+		State:       StateIngesting,
+		Tier:        "small",
+		CreatedAt:   now,
+		BucketID:    bucket.ID,
+	})
+
+	// At insert the column is the zero sentinel (no heartbeat yet) — the
+	// value isStale() reads as "fresh".
+	rec, found, err := (ShardStore{tx}).GetShard("shard-hb-test")
+	if err != nil || !found {
+		t.Fatalf("GetShard after Add: found=%v err=%v", found, err)
+	}
+	if !rec.LastHeartbeatAt.IsZero() {
+		t.Fatalf("last_heartbeat_at should be zero at insert, got %v", rec.LastHeartbeatAt)
+	}
+
+	// Simulate a heartbeat: the SM stamps the in-memory entry, then the
+	// registry flushes the heartbeat-owned fields.
+	entry := reg.Get("shard-hb-test")
+	hbAt := now.Add(5 * time.Minute)
+	entry.mu.Lock()
+	entry.LastHeartbeatAt = hbAt
+	entry.RowCount = 42
+	entry.mu.Unlock()
+	reg.TouchHeartbeat(entry)
+
+	rec, found, err = (ShardStore{tx}).GetShard("shard-hb-test")
+	if err != nil || !found {
+		t.Fatalf("GetShard after TouchHeartbeat: found=%v err=%v", found, err)
+	}
+	if rec.LastHeartbeatAt.IsZero() {
+		t.Fatal("last_heartbeat_at still zero after TouchHeartbeat — not persisted")
+	}
+	// Tolerance covers Postgres timestamptz microsecond rounding vs Go ns.
+	if d := rec.LastHeartbeatAt.Sub(hbAt); d > time.Millisecond || d < -time.Millisecond {
+		t.Fatalf("last_heartbeat_at: got %v, want ~%v (diff %v)", rec.LastHeartbeatAt, hbAt, d)
+	}
+	if rec.RowCount != 42 {
+		t.Fatalf("row_count: got %d, want 42", rec.RowCount)
+	}
+}

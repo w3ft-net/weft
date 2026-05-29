@@ -291,6 +291,38 @@ func TestShardSM_EvaluateIngestingHealthyStaysIngesting(t *testing.T) {
 	}
 }
 
+// TestShardSM_EvaluateIngestingDegradesOnReconnectFailures pins case #2 of
+// the undialable-shard fix: a shard that's ALREADY INGESTING (e.g. loaded
+// handle-less after a coordinator restart, or one that goes unreachable
+// mid-life) but which the coordinator can no longer dial — the SG-gap /
+// partition case — must not sit as a healthy-looking INGESTING zombie.
+// Repeated reconnect failures on the heartbeat path trip the same circuit
+// breaker the ingest path uses, dropping it to DEGRADED (out of write
+// routing, visible) until it's reachable again.
+func TestShardSM_EvaluateIngestingDegradesOnReconnectFailures(t *testing.T) {
+	fc := &fakeConfigurer{err: fmt.Errorf("dial tcp 172.31.129.96:9000: i/o timeout")}
+	sm, _, entry := makeFixtureShardSM(t, StateIngesting, func(d *ShardDeps) { d.Configurer = fc })
+	entry.InstanceID = "i-abc"
+	// Live==nil + a non-empty heartbeat Addr makes ObserveHeartbeat attempt a
+	// reconnect every beat (the post-restart shape); the failing configurer
+	// makes every attempt time out.
+
+	hb := store.ShardHeartbeat{ShardID: "s-test", Addr: "172.31.129.96:9000", InstanceID: "i-abc"}
+	for i := 0; i < SuspendFailureThreshold; i++ {
+		entry.ObserveHeartbeat(context.Background(), hb)
+	}
+	if entry.Live != nil {
+		t.Fatal("reconnect must not attach a handle when the dial fails")
+	}
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if st, _ := sm.smState(context.Background()); st != StateDegraded {
+		t.Fatalf("an undialable INGESTING shard should degrade after %d reconnect failures; got %q", SuspendFailureThreshold, st)
+	}
+}
+
 // TestShardSM_EvaluateDegradedRecoversAfterCooldown: once the cooldown
 // elapses, a DEGRADED shard half-opens back to INGESTING with its failure
 // count reset.
@@ -684,7 +716,12 @@ func (s *fakeArchivableShard) Archive(_ context.Context, _ string) (string, erro
 	return s.archivePath, nil
 }
 
-func TestShardSM_ConfigureOnHeartbeatDialsAndAttaches(t *testing.T) {
+// dialConfigure builds the Configure request from the entry's metadata and
+// returns a live handle; the promote path then threads that handle through
+// Fire so configureOnHeartbeat attaches it. (The dial moved out of the SM
+// OnEntry so an undialable shard never reaches INGESTING — see
+// promoteOnHeartbeat.)
+func TestShardSM_DialConfigureBuildsRequestThenFireAttaches(t *testing.T) {
 	fc := &fakeConfigurer{}
 	sm, _, entry := makeFixtureShardSM(t, StateLaunching, func(d *ShardDeps) { d.Configurer = fc })
 	entry.InstanceID = "i-abc"
@@ -694,11 +731,14 @@ func TestShardSM_ConfigureOnHeartbeatDialsAndAttaches(t *testing.T) {
 	entry.HeartbeatToken = "tok-xyz"
 
 	hb := store.ShardHeartbeat{ShardID: "s-test", Addr: "10.0.0.1:9000", InstanceID: "i-abc"}
-	if err := sm.Fire(context.Background(), TriggerHeartbeat, hb); err != nil {
-		t.Fatalf("Fire heartbeat: %v", err)
+
+	// Promote-gate step 1: dial + Configure, before any state change.
+	dialed, err := entry.dialConfigure(context.Background(), hb)
+	if err != nil {
+		t.Fatalf("dialConfigure: %v", err)
 	}
-	if st, _ := sm.smState(context.Background()); st != StateIngesting {
-		t.Fatalf("state: got %q want INGESTING", st)
+	if dialed == nil {
+		t.Fatal("dialConfigure returned no handle on success")
 	}
 	if fc.dialAddr != "10.0.0.1:9000" {
 		t.Fatalf("dial addr: got %q", fc.dialAddr)
@@ -712,8 +752,16 @@ func TestShardSM_ConfigureOnHeartbeatDialsAndAttaches(t *testing.T) {
 	if fc.dialReq.WindowStart != "2026-05-21T12:00:00Z" || fc.dialReq.WindowEnd != "2026-05-21T13:00:00Z" {
 		t.Fatalf("dial req window: start=%q end=%q", fc.dialReq.WindowStart, fc.dialReq.WindowEnd)
 	}
-	if entry.Live == nil {
-		t.Fatal("entry.Live not attached after a successful configure")
+
+	// Promote-gate step 2: fire with the dialed handle; OnEntry attaches it.
+	if err := sm.Fire(context.Background(), TriggerHeartbeat, hb, dialed); err != nil {
+		t.Fatalf("Fire heartbeat: %v", err)
+	}
+	if st, _ := sm.smState(context.Background()); st != StateIngesting {
+		t.Fatalf("state: got %q want INGESTING", st)
+	}
+	if entry.Live != dialed {
+		t.Fatal("configureOnHeartbeat did not attach the dialed handle")
 	}
 }
 
@@ -744,24 +792,27 @@ func TestShardSM_HeartbeatPersistsAddr(t *testing.T) {
 	}
 }
 
-func TestShardSM_ConfigureOnHeartbeatDialFailureSurfacesError(t *testing.T) {
+// A dial failure surfaces from dialConfigure (the promote gate) so the
+// caller can decline to fire — leaving the shard LAUNCHING with no handle
+// rather than a half-promoted INGESTING zombie. The provisioner-level
+// coverage is TestProcessHeartbeat_UndialableShardDoesNotPromote.
+func TestShardSM_DialConfigureSurfacesDialFailure(t *testing.T) {
 	fc := &fakeConfigurer{err: fmt.Errorf("connection refused")}
 	sm, _, entry := makeFixtureShardSM(t, StateLaunching, func(d *ShardDeps) { d.Configurer = fc })
 	entry.InstanceID = "i-abc"
 
 	hb := store.ShardHeartbeat{ShardID: "s-test", Addr: "10.0.0.1:9000", InstanceID: "i-abc"}
-	err := sm.Fire(context.Background(), TriggerHeartbeat, hb)
+	dialed, err := entry.dialConfigure(context.Background(), hb)
 	if err == nil {
-		t.Fatal("expected the dial failure to surface from Fire")
+		t.Fatal("expected the dial failure to surface from dialConfigure")
 	}
-	if entry.Live != nil {
-		t.Fatalf("entry.Live must stay nil on dial failure; got %T", entry.Live)
+	if dialed != nil {
+		t.Fatalf("no handle should be returned on dial failure; got %T", dialed)
 	}
-	// stateless writes the destination before running OnEntry, so the row
-	// is already INGESTING despite the failed dial — a later heartbeat
-	// reconnects it (slice C).
-	if st, _ := sm.smState(context.Background()); st != StateIngesting {
-		t.Fatalf("state: got %q want INGESTING (write lands before OnEntry)", st)
+	// We never fired the promote trigger, so the shard stays LAUNCHING and
+	// retries on the next heartbeat once reachable.
+	if st, _ := sm.smState(context.Background()); st != StateLaunching {
+		t.Fatalf("state: got %q want LAUNCHING (no promotion on dial failure)", st)
 	}
 }
 
