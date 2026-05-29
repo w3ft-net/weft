@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -170,10 +171,27 @@ func (c grpcConfigurer) Dial(ctx context.Context, addr string, req *pb.Configure
 		return nil, err
 	}
 	if err := gs.Configure(ctx, req); err != nil {
+		// A shard already configured as exactly this id is in the desired
+		// state — a returning shard after a coordinator restart, not a
+		// failure. Keep the handle so the promote gate admits it. Tolerance
+		// for shards predating the idempotent-Configure fix
+		// (shard/service/server.go), which now returns success for a same-id
+		// re-Configure. REMOVE-WHEN no shard older than that fix is in service.
+		if alreadyConfiguredAs(err, req.ShardId) {
+			return gs, nil
+		}
 		gs.Close()
 		return nil, err
 	}
 	return gs, nil
+}
+
+// alreadyConfiguredAs reports whether err is the shard's "already configured
+// as <id>" rejection for this exact shard id — a benign re-Configure of a
+// shard that's already in the right identity, which the promote path should
+// treat as success rather than an unreachable failure.
+func alreadyConfiguredAs(err error, shardID string) bool {
+	return err != nil && strings.Contains(err.Error(), "already configured as "+shardID)
 }
 
 // Provisioner monitors shard fill rates and handles rotation.

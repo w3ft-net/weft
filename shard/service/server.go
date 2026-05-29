@@ -140,7 +140,15 @@ func (s *Server) Configure(_ context.Context, req *pb.ConfigureRequest) (*pb.Con
 	defer s.mu.Unlock()
 
 	if s.shard != nil {
-		return nil, fmt.Errorf("shard already configured as %s", s.id)
+		// Idempotent for the same id: the coordinator re-dials and
+		// re-Configures on every promote/reconnect (e.g. a shard still
+		// configured from before a coordinator restart). Returning an error
+		// there wedges the shard out of promotion. A DIFFERENT id is still
+		// refused — a shard's identity is for life.
+		if s.id == req.ShardId {
+			return &pb.ConfigureResponse{}, nil
+		}
+		return nil, fmt.Errorf("shard already configured as %s, refusing to reconfigure as %s", s.id, req.ShardId)
 	}
 
 	if s.dataDir == "" {

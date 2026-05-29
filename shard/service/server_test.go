@@ -79,3 +79,36 @@ func TestConfigure_RejectsReconfigureWhenAlreadyIdentified(t *testing.T) {
 		t.Fatal("expected Configure to reject reconfigure, got nil error")
 	}
 }
+
+// A re-Configure with the SAME id must be an idempotent no-op success. The
+// coordinator re-dials + re-Configures on every promote/reconnect (e.g. a
+// shard that's still configured from before a coordinator restart); if that
+// returns an error the promote gate treats the shard as unreachable and it
+// wedges out of rotation forever.
+func TestConfigure_IdempotentForSameID(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "shard.duckdb")
+
+	id := &shard.Identity{
+		ShardID:     "shard-same",
+		WindowStart: time.Unix(1000, 0).UTC(),
+		WindowEnd:   time.Unix(2000, 0).UTC(),
+		Apps:        []string{"weft"},
+	}
+	if err := shard.SaveIdentity(dir, id); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := NewServerFromIdentity(dir, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := &pb.ConfigureRequest{
+		ShardId:     "shard-same",
+		WindowStart: time.Unix(1000, 0).UTC().Format(time.RFC3339),
+		WindowEnd:   time.Unix(2000, 0).UTC().Format(time.RFC3339),
+	}
+	if _, err := srv.Configure(context.Background(), req); err != nil {
+		t.Fatalf("re-Configure with the same id must succeed (idempotent); got %v", err)
+	}
+}

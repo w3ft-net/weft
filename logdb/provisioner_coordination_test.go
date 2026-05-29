@@ -379,3 +379,26 @@ func TestProcessHeartbeat_UndialableShardDoesNotPromote(t *testing.T) {
 		t.Fatalf("undialable shard promoted to INGESTING with Live==nil — zombie cohort member that strands a Target slot; want it to stay %s until reachable", StateLaunching)
 	}
 }
+
+// TestAlreadyConfiguredAs covers the promote-gate tolerance: a shard that's
+// already configured as exactly the requested id is reachable and in the
+// right state, so the dial path must treat it as success — but a different
+// id or a genuine network error must not.
+func TestAlreadyConfiguredAs(t *testing.T) {
+	const id = "shard-20260525T0000-94563133"
+	// The gRPC-wrapped error a pre-idempotent shard returns.
+	grpcErr := fmt.Errorf("rpc error: code = Unknown desc = shard already configured as %s", id)
+
+	if !alreadyConfiguredAs(grpcErr, id) {
+		t.Fatal("same-id already-configured error must be tolerated")
+	}
+	if alreadyConfiguredAs(grpcErr, "shard-other") {
+		t.Fatal("must not tolerate an already-configured error for a different shard id")
+	}
+	if alreadyConfiguredAs(fmt.Errorf(`dial tcp 172.31.128.129:9000: i/o timeout`), id) {
+		t.Fatal("a real network error must not be tolerated")
+	}
+	if alreadyConfiguredAs(nil, id) {
+		t.Fatal("nil error must not match")
+	}
+}
