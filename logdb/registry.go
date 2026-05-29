@@ -55,6 +55,7 @@ type Shard struct {
 	AZ              string     `gorm:"column:az"`                                 // FSM striping: pins recovery launches to the volume's AZ
 	StripeIndex     *int       `gorm:"column:stripe_index"`                       // bucket-assigned stripe position; nil = unassigned (distinct from 0)
 	LaunchAttempts  int        `gorm:"not null;default:0;column:launch_attempts"` // per-shard launch retry counter
+	BinarySHA       string     `gorm:"not null;default:'';column:binary_sha"`     // shard's compile-time GitSHA from its heartbeat; weft-admin skips a shard whose SHA already matches the target binary
 
 	// ── runtime only (gorm:"-") ──
 	// Services is the shard's in-memory service membership — the
@@ -162,7 +163,7 @@ type RegistryStore interface {
 	DeleteShard(id string) error
 	ListShards() ([]*Shard, error)
 	GetShard(id string) (*Shard, bool, error)
-	TouchHeartbeat(id string, rowCount int64, at time.Time) error
+	TouchHeartbeat(id string, rowCount int64, at time.Time, binarySHA string) error
 	// ListShardServices returns every shard_services row; the registry
 	// groups it by shard_id to populate each entry's in-memory service
 	// membership at boot/refresh.
@@ -247,6 +248,7 @@ func (e *Shard) persistedCopy() *Shard {
 		AZ:              e.AZ,
 		StripeIndex:     e.StripeIndex,
 		LaunchAttempts:  e.LaunchAttempts,
+		BinarySHA:       e.BinarySHA,
 	}
 }
 
@@ -256,10 +258,10 @@ func (r *ShardRegistry) PersistState(entry *Shard) {
 	r.persist(entry)
 }
 
-// TouchHeartbeat persists only the heartbeat-owned fields (row_count and
-// last_heartbeat_at) without overwriting lifecycle-owned fields like
-// window bounds, state, or apps. Prevents the heartbeat path from
-// clobbering manual DB edits or reconciler-driven state changes.
+// TouchHeartbeat persists only the heartbeat-owned fields (row_count,
+// last_heartbeat_at, and binary_sha) without overwriting lifecycle-owned
+// fields like window bounds, state, or apps. Prevents the heartbeat path
+// from clobbering manual DB edits or reconciler-driven state changes.
 func (r *ShardRegistry) TouchHeartbeat(entry *Shard) {
 	if r.store == nil {
 		return
@@ -267,8 +269,9 @@ func (r *ShardRegistry) TouchHeartbeat(entry *Shard) {
 	entry.mu.RLock()
 	rowCount := entry.RowCount
 	at := entry.LastHeartbeatAt
+	sha := entry.BinarySHA
 	entry.mu.RUnlock()
-	if err := r.store.TouchHeartbeat(entry.ID, rowCount, at); err != nil {
+	if err := r.store.TouchHeartbeat(entry.ID, rowCount, at, sha); err != nil {
 		log.Printf("registry: touch heartbeat %s: %v", entry.ID, err)
 	}
 }

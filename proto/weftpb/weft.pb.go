@@ -1444,13 +1444,19 @@ func (x *ExecuteQueryStreamResponse) GetError() string {
 }
 
 type ShardHeartbeatRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ShardId       string                 `protobuf:"bytes,1,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
-	Addr          string                 `protobuf:"bytes,2,opt,name=addr,proto3" json:"addr,omitempty"`                               // gRPC address (ip:port)
-	InstanceId    string                 `protobuf:"bytes,3,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"` // EC2 instance ID
-	State         string                 `protobuf:"bytes,7,opt,name=state,proto3" json:"state,omitempty"`                             // INGESTING, READ_ONLY
-	RowCount      int64                  `protobuf:"varint,8,opt,name=row_count,json=rowCount,proto3" json:"row_count,omitempty"`
-	DiskBytes     int64                  `protobuf:"varint,9,opt,name=disk_bytes,json=diskBytes,proto3" json:"disk_bytes,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ShardId    string                 `protobuf:"bytes,1,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
+	Addr       string                 `protobuf:"bytes,2,opt,name=addr,proto3" json:"addr,omitempty"`                               // gRPC address (ip:port)
+	InstanceId string                 `protobuf:"bytes,3,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"` // EC2 instance ID
+	State      string                 `protobuf:"bytes,7,opt,name=state,proto3" json:"state,omitempty"`                             // INGESTING, READ_ONLY
+	RowCount   int64                  `protobuf:"varint,8,opt,name=row_count,json=rowCount,proto3" json:"row_count,omitempty"`
+	DiskBytes  int64                  `protobuf:"varint,9,opt,name=disk_bytes,json=diskBytes,proto3" json:"disk_bytes,omitempty"`
+	// binary_sha is the shard binary's compile-time GitSHA (set via -ldflags
+	// by the AMI build). The coordinator persists it on shard_records so
+	// weft-admin can skip rolling a shard that's already on the target SHA.
+	// Empty when an older shard binary is in service — weft-admin treats
+	// empty as "unknown" and rolls it.
+	BinarySha     string `protobuf:"bytes,10,opt,name=binary_sha,json=binarySha,proto3" json:"binary_sha,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1525,6 +1531,13 @@ func (x *ShardHeartbeatRequest) GetDiskBytes() int64 {
 		return x.DiskBytes
 	}
 	return 0
+}
+
+func (x *ShardHeartbeatRequest) GetBinarySha() string {
+	if x != nil {
+		return x.BinarySha
+	}
+	return ""
 }
 
 type HeartbeatResponse struct {
@@ -4526,8 +4539,13 @@ type ShardInfo struct {
 	// whether we're looking at the POST-relaunch shard or the old row.
 	// RFC3339Nano, empty when never observed.
 	LastHeartbeatAt string `protobuf:"bytes,12,opt,name=last_heartbeat_at,json=lastHeartbeatAt,proto3" json:"last_heartbeat_at,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// binary_sha is the shard binary's compile-time GitSHA reported on its
+	// heartbeat. weft-admin uses it to skip rolling shards already on the
+	// target binary; the post-roll wait-and-verify also confirms the new
+	// shard reports the expected SHA before marking the roll successful.
+	BinarySha     string `protobuf:"bytes,13,opt,name=binary_sha,json=binarySha,proto3" json:"binary_sha,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ShardInfo) Reset() {
@@ -4640,6 +4658,13 @@ func (x *ShardInfo) GetBucketId() int64 {
 func (x *ShardInfo) GetLastHeartbeatAt() string {
 	if x != nil {
 		return x.LastHeartbeatAt
+	}
+	return ""
+}
+
+func (x *ShardInfo) GetBinarySha() string {
+	if x != nil {
+		return x.BinarySha
 	}
 	return ""
 }
@@ -5284,7 +5309,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"H\n" +
 	"\x1aExecuteQueryStreamResponse\x12\x14\n" +
 	"\x05lines\x18\x01 \x03(\tR\x05lines\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\xb9\x01\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\xd8\x01\n" +
 	"\x15ShardHeartbeatRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12\x12\n" +
 	"\x04addr\x18\x02 \x01(\tR\x04addr\x12\x1f\n" +
@@ -5293,7 +5318,10 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x05state\x18\a \x01(\tR\x05state\x12\x1b\n" +
 	"\trow_count\x18\b \x01(\x03R\browCount\x12\x1d\n" +
 	"\n" +
-	"disk_bytes\x18\t \x01(\x03R\tdiskBytes\"\x13\n" +
+	"disk_bytes\x18\t \x01(\x03R\tdiskBytes\x12\x1d\n" +
+	"\n" +
+	"binary_sha\x18\n" +
+	" \x01(\tR\tbinarySha\"\x13\n" +
 	"\x11HeartbeatResponse\"E\n" +
 	"\x0fGetUsageRequest\x12\x1a\n" +
 	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x16\n" +
@@ -5494,7 +5522,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x10sample_collected\x18\x05 \x01(\x05R\x0fsampleCollected\x12#\n" +
 	"\rsample_target\x18\x06 \x01(\x05R\fsampleTarget\"0\n" +
 	"\x11ListShardsRequest\x12\x1b\n" +
-	"\tbucket_id\x18\x01 \x01(\x03R\bbucketId\"\xe4\x02\n" +
+	"\tbucket_id\x18\x01 \x01(\x03R\bbucketId\"\x83\x03\n" +
 	"\tShardInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12!\n" +
 	"\fwindow_start\x18\x02 \x01(\tR\vwindowStart\x12\x1d\n" +
@@ -5511,7 +5539,9 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"created_at\x18\n" +
 	" \x01(\tR\tcreatedAt\x12\x1b\n" +
 	"\tbucket_id\x18\v \x01(\x03R\bbucketId\x12*\n" +
-	"\x11last_heartbeat_at\x18\f \x01(\tR\x0flastHeartbeatAt\"=\n" +
+	"\x11last_heartbeat_at\x18\f \x01(\tR\x0flastHeartbeatAt\x12\x1d\n" +
+	"\n" +
+	"binary_sha\x18\r \x01(\tR\tbinarySha\"=\n" +
 	"\x12ListShardsResponse\x12'\n" +
 	"\x06shards\x18\x01 \x03(\v2\x0f.weft.ShardInfoR\x06shards\"5\n" +
 	"\x18ForceArchiveShardRequest\x12\x19\n" +

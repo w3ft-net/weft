@@ -39,3 +39,34 @@ func TestLiveShardIDs_EmptyWhenNoneLive(t *testing.T) {
 		t.Fatalf("expected no live shards, got %v", got)
 	}
 }
+
+// shardsToRoll layers the --target-sha skip on top of liveShardIDs:
+// when target != "", any shard whose binary_sha already matches is skipped
+// (the deploy is a no-op for it). target == "" rolls every live shard.
+func TestShardsToRoll_SkipsMatchingSHA(t *testing.T) {
+	in := []*pb.ShardInfo{
+		{Id: "a", State: "INGESTING", BinarySha: "newsha"}, // skip
+		{Id: "b", State: "INGESTING", BinarySha: "oldsha"}, // roll
+		{Id: "c", State: "INGESTING", BinarySha: ""},       // roll (unknown → can't trust)
+		{Id: "d", State: "READ_ONLY", BinarySha: "newsha"}, // skip
+		{Id: "e", State: "DEGRADED", BinarySha: "oldsha"},  // roll
+		{Id: "f", State: "LAUNCHING", BinarySha: "oldsha"}, // skip: not live-with-data
+	}
+	got := shardsToRoll(in, "newsha")
+	want := []string{"b", "c", "e"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("shardsToRoll = %v, want %v", got, want)
+	}
+}
+
+func TestShardsToRoll_EmptyTargetRollsEveryLiveShard(t *testing.T) {
+	in := []*pb.ShardInfo{
+		{Id: "a", State: "INGESTING", BinarySha: "x"},
+		{Id: "b", State: "READ_ONLY", BinarySha: "x"},
+	}
+	got := shardsToRoll(in, "")
+	want := []string{"a", "b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("shardsToRoll(target=\"\") = %v, want %v", got, want)
+	}
+}

@@ -157,12 +157,16 @@ func TestTouchHeartbeat_PersistsLastHeartbeatAt(t *testing.T) {
 	}
 
 	// Simulate a heartbeat: the SM stamps the in-memory entry, then the
-	// registry flushes the heartbeat-owned fields.
+	// registry flushes the heartbeat-owned fields (row_count,
+	// last_heartbeat_at, and the shard's compile-time binary_sha — Phase 3
+	// of shard-roll uses the persisted SHA to skip rolling a shard that's
+	// already on the target binary).
 	entry := reg.Get("shard-hb-test")
 	hbAt := now.Add(5 * time.Minute)
 	entry.mu.Lock()
 	entry.LastHeartbeatAt = hbAt
 	entry.RowCount = 42
+	entry.BinarySHA = "deadbeefcafe1234"
 	entry.mu.Unlock()
 	reg.TouchHeartbeat(entry)
 
@@ -179,5 +183,8 @@ func TestTouchHeartbeat_PersistsLastHeartbeatAt(t *testing.T) {
 	}
 	if rec.RowCount != 42 {
 		t.Fatalf("row_count: got %d, want 42", rec.RowCount)
+	}
+	if rec.BinarySHA != "deadbeefcafe1234" {
+		t.Fatalf("binary_sha: got %q, want %q (TouchHeartbeat must persist the build SHA so weft-admin can skip shards already on the target)", rec.BinarySHA, "deadbeefcafe1234")
 	}
 }

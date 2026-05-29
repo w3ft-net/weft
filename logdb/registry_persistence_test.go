@@ -81,12 +81,13 @@ func (f *fakeRegistryStore) GetShard(id string) (*Shard, bool, error) {
 	return r.persistedCopy(), true, nil
 }
 
-func (f *fakeRegistryStore) TouchHeartbeat(id string, rowCount int64, at time.Time) error {
+func (f *fakeRegistryStore) TouchHeartbeat(id string, rowCount int64, at time.Time, binarySHA string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if rec, ok := f.records[id]; ok {
 		rec.RowCount = rowCount
 		rec.LastHeartbeatAt = at
+		rec.BinarySHA = binarySHA
 	}
 	return nil
 }

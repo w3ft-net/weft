@@ -100,10 +100,11 @@ var liveStates = map[string]bool{
 }
 
 type commonFlags struct {
-	coord            string
-	perShardTimeout  time.Duration
-	pollInterval     time.Duration
-	continueOnFail   bool
+	coord           string
+	perShardTimeout time.Duration
+	pollInterval    time.Duration
+	continueOnFail  bool
+	targetSHA       string
 }
 
 func registerCommon(fs *flag.FlagSet, includeContinue bool) *commonFlags {
@@ -111,6 +112,7 @@ func registerCommon(fs *flag.FlagSet, includeContinue bool) *commonFlags {
 	fs.StringVar(&c.coord, "coord", "127.0.0.1:9022", "coordinator WeftAdmin gRPC address (localhost-only; SharedToken auth)")
 	fs.DurationVar(&c.perShardTimeout, "per-shard-timeout", 10*time.Minute, "deadline for each shard's relaunch + return to INGESTING")
 	fs.DurationVar(&c.pollInterval, "poll-interval", 5*time.Second, "interval between GetShard polls during wait-and-verify")
+	fs.StringVar(&c.targetSHA, "target-sha", "", "skip shards whose binary_sha already matches and require the post-relaunch shard to report this SHA (empty = roll unconditionally, no SHA verification)")
 	if includeContinue {
 		fs.BoolVar(&c.continueOnFail, "continue-on-failure", false, "keep going past a failed shard")
 	}
@@ -129,7 +131,7 @@ func newAdminClient(coord string) (pb.WeftAdminClient, func(), error) {
 // for the shard to be back in INGESTING with a heartbeat stamped after the
 // pre-fire cutoff. Returns nil on success; errors include both RPC and
 // wait-timeout cases.
-func rollOne(ctx context.Context, client pb.WeftAdminClient, shardID string, perShardTimeout, pollInterval time.Duration) error {
+func rollOne(ctx context.Context, client pb.WeftAdminClient, shardID string, perShardTimeout, pollInterval time.Duration, wantSHA string) error {
 	rollCtx, cancel := context.WithTimeout(adminCtx(ctx), perShardTimeout)
 	defer cancel()
 
@@ -139,10 +141,10 @@ func rollOne(ctx context.Context, client pb.WeftAdminClient, shardID string, per
 	}
 	fmt.Printf("  relaunch fired for %s; waiting for return to INGESTING...\n", shardID)
 
-	get := func(id string) (string, time.Time, error) {
+	get := func(id string) (string, time.Time, string, error) {
 		resp, err := client.GetShard(rollCtx, &pb.GetShardRequest{ShardId: id})
 		if err != nil {
-			return "", time.Time{}, err
+			return "", time.Time{}, "", err
 		}
 		hb := time.Time{}
 		if s := resp.Shard.LastHeartbeatAt; s != "" {
@@ -150,9 +152,9 @@ func rollOne(ctx context.Context, client pb.WeftAdminClient, shardID string, per
 				hb = parsed
 			}
 		}
-		return resp.Shard.State, hb, nil
+		return resp.Shard.State, hb, resp.Shard.BinarySha, nil
 	}
-	if err := pollShardReady(rollCtx, get, shardID, cutoff, pollInterval); err != nil {
+	if err := pollShardReady(rollCtx, get, shardID, cutoff, wantSHA, pollInterval); err != nil {
 		return err
 	}
 	fmt.Printf("  %s is back in INGESTING\n", shardID)
@@ -177,13 +179,13 @@ func rollShardCmd(args []string) {
 	}
 	defer closeConn()
 
-	if err := rollOne(context.Background(), client, shardID, c.perShardTimeout, c.pollInterval); err != nil {
+	if err := rollOne(context.Background(), client, shardID, c.perShardTimeout, c.pollInterval, c.targetSHA); err != nil {
 		log.Fatal(err)
 	}
 }
 
 // liveShardIDs filters a ShardInfo slice to the states worth rolling, in
-// deterministic id order.
+// deterministic id order. Used as the input to shardsToRoll.
 func liveShardIDs(shards []*pb.ShardInfo) []string {
 	ids := make([]string, 0, len(shards))
 	for _, sh := range shards {
@@ -195,18 +197,49 @@ func liveShardIDs(shards []*pb.ShardInfo) []string {
 	return ids
 }
 
+// shardsToRoll layers --target-sha skip-if-current on top of liveShardIDs.
+// When target is non-empty, any live shard whose binary_sha already matches
+// is skipped — the deploy is a no-op for it (the win Phase 3 unlocks for
+// shard-stable deploys). Empty target rolls every live shard.
+//
+// An empty binary_sha on the row means "unknown" — typically a shard from
+// before this column existed, or one that hasn't heartbeated since boot.
+// We can't trust an unknown SHA, so we ROLL it: better one unnecessary
+// rotation than silently skipping a shard that's actually on old code.
+func shardsToRoll(shards []*pb.ShardInfo, target string) []string {
+	ids := make([]string, 0, len(shards))
+	for _, sh := range shards {
+		if !liveStates[sh.State] {
+			continue
+		}
+		if target != "" && sh.BinarySha == target {
+			continue
+		}
+		ids = append(ids, sh.Id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 func rollCohort(ctx context.Context, client pb.WeftAdminClient, bucketID int64, c *commonFlags) error {
 	resp, err := client.ListShards(adminCtx(ctx), &pb.ListShardsRequest{BucketId: bucketID})
 	if err != nil {
 		return fmt.Errorf("list shards for bucket %d: %w", bucketID, err)
 	}
-	ids := liveShardIDs(resp.Shards)
-	fmt.Printf("bucket %d: %d live shard(s) to roll\n", bucketID, len(ids))
+	ids := shardsToRoll(resp.Shards, c.targetSHA)
+	live := liveShardIDs(resp.Shards) // total live count, for the skip message
+	skipped := len(live) - len(ids)
+	switch {
+	case c.targetSHA != "" && skipped > 0:
+		fmt.Printf("bucket %d: %d live shard(s), %d on target SHA (skipped), %d to roll\n", bucketID, len(live), skipped, len(ids))
+	default:
+		fmt.Printf("bucket %d: %d live shard(s) to roll\n", bucketID, len(ids))
+	}
 
 	var failed []string
 	for _, id := range ids {
 		fmt.Printf("rolling %s (bucket %d)...\n", id, bucketID)
-		if err := rollOne(ctx, client, id, c.perShardTimeout, c.pollInterval); err != nil {
+		if err := rollOne(ctx, client, id, c.perShardTimeout, c.pollInterval, c.targetSHA); err != nil {
 			if !c.continueOnFail {
 				return fmt.Errorf("roll %s: %w", id, err)
 			}

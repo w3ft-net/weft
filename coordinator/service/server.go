@@ -910,6 +910,7 @@ func (s *Server) Heartbeat(ctx context.Context, req *pb.ShardHeartbeatRequest) (
 		State:      req.State,
 		RowCount:   req.RowCount,
 		DiskBytes:  req.DiskBytes,
+		BinarySHA:  req.BinarySha,
 	}
 	// Persistence is opt-in: a Store-less Server still validates and
 	// dispatches, it just doesn't keep a row.
@@ -1106,6 +1107,7 @@ func shardInfoFrom(sh *logdb.Shard) *pb.ShardInfo {
 	if !sh.LastHeartbeatAt.IsZero() {
 		info.LastHeartbeatAt = sh.LastHeartbeatAt.Format(time.RFC3339Nano)
 	}
+	info.BinarySha = sh.BinarySHA
 	return info
 }
 

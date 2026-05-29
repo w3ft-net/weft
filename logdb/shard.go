@@ -87,15 +87,21 @@ func (s ShardStore) DeleteShard(id string) error {
 	return s.db().Delete(&Shard{}, "id = ?", id).Error
 }
 
-// TouchHeartbeat updates the heartbeat-owned fields (row_count and
-// last_heartbeat_at) and nothing else — window bounds, state, and services
-// are left untouched so manual DB edits or reconciler-driven changes aren't
-// clobbered. Written via a map (not a struct) so a zero row_count still
-// persists. at is the value the SM stamped from deps.Clock(), so the column
-// matches the in-memory LastHeartbeatAt that isStale() consults at runtime.
-func (s ShardStore) TouchHeartbeat(id string, rowCount int64, at time.Time) error {
+// TouchHeartbeat updates the heartbeat-owned fields (row_count,
+// last_heartbeat_at, binary_sha) and nothing else — window bounds, state,
+// and services are left untouched so manual DB edits or reconciler-driven
+// changes aren't clobbered. Written via a map (not a struct) so a zero
+// row_count still persists. at is the value the SM stamped from deps.Clock(),
+// so the column matches the in-memory LastHeartbeatAt that isStale()
+// consults at runtime. binarySHA is the shard's compile-time GitSHA — what
+// weft-admin reads to skip rolling a shard already on the target binary.
+func (s ShardStore) TouchHeartbeat(id string, rowCount int64, at time.Time, binarySHA string) error {
 	return s.db().Model(&Shard{}).Where("id = ?", id).
-		Updates(map[string]any{"row_count": rowCount, "last_heartbeat_at": at}).Error
+		Updates(map[string]any{
+			"row_count":         rowCount,
+			"last_heartbeat_at": at,
+			"binary_sha":        binarySHA,
+		}).Error
 }
 
 // SetShardLaunchResult persists the identifiers a successful launch

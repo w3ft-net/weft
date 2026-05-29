@@ -214,6 +214,7 @@ func buildHeartbeatRequest(shardID, addr, instanceID, state string, rowCount int
 		InstanceId: instanceID,
 		State:      state,
 		RowCount:   rowCount,
+		BinarySha:  GitSHA, // compile-time injected by Packer's -ldflags; empty on local builds
 	}
 }
 

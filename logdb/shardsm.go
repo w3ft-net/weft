@@ -702,6 +702,9 @@ func (sh *Shard) configureOnHeartbeat(_ context.Context, args ...any) error {
 	if hb.RowCount > 0 {
 		sh.RowCount = hb.RowCount
 	}
+	if hb.BinarySHA != "" {
+		sh.BinarySHA = hb.BinarySHA
+	}
 	if dialed != nil {
 		sh.Live = dialed
 	}
@@ -782,6 +785,9 @@ func (sh *Shard) ObserveHeartbeat(ctx context.Context, hb store.ShardHeartbeat) 
 	sh.LastHeartbeatAt = sh.deps.Clock()
 	if hb.RowCount > 0 {
 		sh.RowCount = hb.RowCount
+	}
+	if hb.BinarySHA != "" {
+		sh.BinarySHA = hb.BinarySHA
 	}
 	sh.mu.Unlock()
 	if sh.deps.Registry != nil {

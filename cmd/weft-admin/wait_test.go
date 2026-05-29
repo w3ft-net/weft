@@ -18,20 +18,25 @@ type fakeGetter struct {
 	calls  int
 	states []string    // returned in order; last value sticks if calls exceeds len
 	hb     []time.Time // parallel slice
+	shas   []string    // parallel slice; empty when the test doesn't care
 	err    error       // returned every call when non-nil
 }
 
-func (f *fakeGetter) get(_ string) (string, time.Time, error) {
+func (f *fakeGetter) get(_ string) (string, time.Time, string, error) {
 	if f.err != nil {
 		f.calls++
-		return "", time.Time{}, f.err
+		return "", time.Time{}, "", f.err
 	}
 	i := f.calls
 	if i >= len(f.states) {
 		i = len(f.states) - 1
 	}
 	f.calls++
-	return f.states[i], f.hb[i], nil
+	sha := ""
+	if i < len(f.shas) {
+		sha = f.shas[i]
+	}
+	return f.states[i], f.hb[i], sha, nil
 }
 
 func TestPollShardReady_SucceedsImmediately(t *testing.T) {
@@ -42,7 +47,7 @@ func TestPollShardReady_SucceedsImmediately(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := pollShardReady(ctx, f.get, "s-1", cutoff, 5*time.Millisecond); err != nil {
+	if err := pollShardReady(ctx, f.get, "s-1", cutoff, "", 5*time.Millisecond); err != nil {
 		t.Fatalf("expected nil (INGESTING + post-cutoff heartbeat), got %v", err)
 	}
 	if f.calls != 1 {
@@ -58,7 +63,7 @@ func TestPollShardReady_SucceedsAfterCycle(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := pollShardReady(ctx, f.get, "s-1", cutoff, time.Millisecond); err != nil {
+	if err := pollShardReady(ctx, f.get, "s-1", cutoff, "", time.Millisecond); err != nil {
 		t.Fatalf("expected nil after the shard cycled back, got %v", err)
 	}
 	if f.calls != 4 {
@@ -79,7 +84,7 @@ func TestPollShardReady_RejectsPreCutoffHeartbeat(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := pollShardReady(ctx, f.get, "s-1", cutoff, time.Millisecond); err != nil {
+	if err := pollShardReady(ctx, f.get, "s-1", cutoff, "", time.Millisecond); err != nil {
 		t.Fatalf("expected success on the post-cycle fresh INGESTING, got %v", err)
 	}
 	if f.calls != 4 {
@@ -95,7 +100,7 @@ func TestPollShardReady_TimesOut(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	err := pollShardReady(ctx, f.get, "s-1", cutoff, 5*time.Millisecond)
+	err := pollShardReady(ctx, f.get, "s-1", cutoff, "", 5*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
 	}
@@ -105,8 +110,50 @@ func TestPollShardReady_GetterError(t *testing.T) {
 	f := &fakeGetter{err: fmt.Errorf("rpc unavailable")}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	err := pollShardReady(ctx, f.get, "s-1", time.Now(), 5*time.Millisecond)
+	err := pollShardReady(ctx, f.get, "s-1", time.Now(), "", 5*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected getter error to surface, got nil")
+	}
+}
+
+// When wantSHA is set, the post-relaunch shard must report that exact SHA
+// before the poll succeeds — otherwise a shard that came up on the OLD
+// binary (e.g. the new instance failed to fetch the new AMI) would silently
+// pass.
+func TestPollShardReady_WantSHARequiresMatch(t *testing.T) {
+	cutoff := time.Now()
+	f := &fakeGetter{
+		// Cycle: SUSPENDED → LAUNCHING → INGESTING(old SHA — must NOT match)
+		// → INGESTING(target SHA — succeeds).
+		states: []string{"SUSPENDED", "LAUNCHING", "INGESTING", "INGESTING"},
+		hb: []time.Time{
+			cutoff.Add(-time.Hour),
+			{},
+			cutoff.Add(time.Second),
+			cutoff.Add(2 * time.Second),
+		},
+		shas: []string{"", "", "oldsha", "newsha"},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := pollShardReady(ctx, f.get, "s-1", cutoff, "newsha", time.Millisecond); err != nil {
+		t.Fatalf("expected success on the post-cycle matching-SHA INGESTING, got %v", err)
+	}
+	if f.calls != 4 {
+		t.Fatalf("must reject INGESTING with the old SHA and only succeed when the SHA matches; got %d polls", f.calls)
+	}
+}
+
+func TestPollShardReady_EmptyWantSHASkipsCheck(t *testing.T) {
+	cutoff := time.Now()
+	f := &fakeGetter{
+		states: []string{"INGESTING"},
+		hb:     []time.Time{cutoff.Add(time.Second)},
+		shas:   []string{"anything"},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := pollShardReady(ctx, f.get, "s-1", cutoff, "", time.Millisecond); err != nil {
+		t.Fatalf("empty wantSHA must skip the SHA check, got %v", err)
 	}
 }

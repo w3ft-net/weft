@@ -49,6 +49,7 @@ type ShardHeartbeat struct {
 	State      string
 	RowCount   int64
 	DiskBytes  int64
+	BinarySHA  string // shard binary's compile-time GitSHA; weft-admin reads it for skip-if-current. Not persisted to the heartbeat log table.
 	BeatAt     string // RFC3339
 }
 

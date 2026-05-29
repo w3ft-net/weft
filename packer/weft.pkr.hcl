@@ -146,7 +146,14 @@ build {
       "cd /tmp && tar xzf /tmp/app-source.tar.gz",
       "sed -i 's|=> ../warp|=> /tmp/warp|' /tmp/weft/go.mod",
       "cd /tmp/weft && CGO_ENABLED=1 go build -o /tmp/weft-coordinator ./cmd/coordinator",
-      "cd /tmp/weft && CGO_ENABLED=1 go build -o /tmp/weft-shard ./cmd/shard",
+      # -ldflags injects the build's GitSHA into cmd/shard. The shard
+      # reports this on every heartbeat; the coordinator persists it on
+      # shard_records.binary_sha, and weft-admin reads it to skip rolling
+      # shards already on the target binary. (Phase 4 of the shard-roll
+      # plan will narrow this to the shard-subtree SHA so the skip is
+      # actually effective; Phase 3 wires the mechanism end-to-end with
+      # the full build SHA.)
+      "cd /tmp/weft && CGO_ENABLED=1 go build -ldflags \"-X main.GitSHA=${var.git_sha}\" -o /tmp/weft-shard ./cmd/shard",
       "cd /tmp/weft && CGO_ENABLED=1 go build -o /tmp/weft-compute ./cmd/compute",
       "cd /tmp/weft && CGO_ENABLED=0 go build -o /tmp/weft-api ./cmd/api",
       "cd /tmp/weft && CGO_ENABLED=0 go build -o /tmp/weftd ./cmd/weftd",
