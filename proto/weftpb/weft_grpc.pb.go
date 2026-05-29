@@ -626,6 +626,7 @@ const (
 	WeftCoordinator_ListShards_FullMethodName             = "/weft.WeftCoordinator/ListShards"
 	WeftCoordinator_ForceArchiveShard_FullMethodName      = "/weft.WeftCoordinator/ForceArchiveShard"
 	WeftCoordinator_DeleteArchivedShard_FullMethodName    = "/weft.WeftCoordinator/DeleteArchivedShard"
+	WeftCoordinator_RelaunchShard_FullMethodName          = "/weft.WeftCoordinator/RelaunchShard"
 )
 
 // WeftCoordinatorClient is the client API for WeftCoordinator service.
@@ -683,6 +684,11 @@ type WeftCoordinatorClient interface {
 	ForceArchiveShard(ctx context.Context, in *ForceArchiveShardRequest, opts ...grpc.CallOption) (*ForceArchiveShardResponse, error)
 	// Admin: delete an ARCHIVED shard and its data.
 	DeleteArchivedShard(ctx context.Context, in *DeleteArchivedShardRequest, opts ...grpc.CallOption) (*DeleteArchivedShardResponse, error)
+	// Admin: relaunch a shard in place (binary upgrade). Drives the FSM
+	// through SUSPENDED → reap → LAUNCHING; the surviving EBS volume is
+	// reattached to a fresh instance on the current launch template, so the
+	// shard comes back with the same id/window/data on the new binary.
+	RelaunchShard(ctx context.Context, in *RelaunchShardRequest, opts ...grpc.CallOption) (*RelaunchShardResponse, error)
 }
 
 type weftCoordinatorClient struct {
@@ -975,6 +981,16 @@ func (c *weftCoordinatorClient) DeleteArchivedShard(ctx context.Context, in *Del
 	return out, nil
 }
 
+func (c *weftCoordinatorClient) RelaunchShard(ctx context.Context, in *RelaunchShardRequest, opts ...grpc.CallOption) (*RelaunchShardResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RelaunchShardResponse)
+	err := c.cc.Invoke(ctx, WeftCoordinator_RelaunchShard_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WeftCoordinatorServer is the server API for WeftCoordinator service.
 // All implementations must embed UnimplementedWeftCoordinatorServer
 // for forward compatibility.
@@ -1030,6 +1046,11 @@ type WeftCoordinatorServer interface {
 	ForceArchiveShard(context.Context, *ForceArchiveShardRequest) (*ForceArchiveShardResponse, error)
 	// Admin: delete an ARCHIVED shard and its data.
 	DeleteArchivedShard(context.Context, *DeleteArchivedShardRequest) (*DeleteArchivedShardResponse, error)
+	// Admin: relaunch a shard in place (binary upgrade). Drives the FSM
+	// through SUSPENDED → reap → LAUNCHING; the surviving EBS volume is
+	// reattached to a fresh instance on the current launch template, so the
+	// shard comes back with the same id/window/data on the new binary.
+	RelaunchShard(context.Context, *RelaunchShardRequest) (*RelaunchShardResponse, error)
 	mustEmbedUnimplementedWeftCoordinatorServer()
 }
 
@@ -1120,6 +1141,9 @@ func (UnimplementedWeftCoordinatorServer) ForceArchiveShard(context.Context, *Fo
 }
 func (UnimplementedWeftCoordinatorServer) DeleteArchivedShard(context.Context, *DeleteArchivedShardRequest) (*DeleteArchivedShardResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteArchivedShard not implemented")
+}
+func (UnimplementedWeftCoordinatorServer) RelaunchShard(context.Context, *RelaunchShardRequest) (*RelaunchShardResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RelaunchShard not implemented")
 }
 func (UnimplementedWeftCoordinatorServer) mustEmbedUnimplementedWeftCoordinatorServer() {}
 func (UnimplementedWeftCoordinatorServer) testEmbeddedByValue()                         {}
@@ -1610,6 +1634,24 @@ func _WeftCoordinator_DeleteArchivedShard_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WeftCoordinator_RelaunchShard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RelaunchShardRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftCoordinatorServer).RelaunchShard(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftCoordinator_RelaunchShard_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftCoordinatorServer).RelaunchShard(ctx, req.(*RelaunchShardRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WeftCoordinator_ServiceDesc is the grpc.ServiceDesc for WeftCoordinator service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1716,6 +1758,10 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteArchivedShard",
 			Handler:    _WeftCoordinator_DeleteArchivedShard_Handler,
+		},
+		{
+			MethodName: "RelaunchShard",
+			Handler:    _WeftCoordinator_RelaunchShard_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

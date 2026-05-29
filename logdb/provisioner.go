@@ -778,6 +778,39 @@ func (p *Provisioner) DeleteArchived(shardID string, force bool) error {
 	return nil
 }
 
+// RelaunchShard is the admin-facing entry point for an in-place binary
+// upgrade. Drives the shard FSM through TriggerRelaunchRequested →
+// SUSPENDED, where the existing reap-and-relaunch recovery branch takes
+// over: the dead instance is terminated, a fresh instance is launched from
+// the ASG's current launch template (= current AMI), and the surviving EBS
+// volume is reattached in the same AZ. The shard reconstructs its identity
+// from shard.json on the reattached volume, heartbeats, and the promote
+// path lifts it back to INGESTING — same shard id, same window, same data,
+// new binary.
+//
+// Only "live with data" states are valid (INGESTING / READ_ONLY /
+// DEGRADED). LAUNCHING is already coming up; ARCHIVING/ARCHIVED/GONE/
+// SUSPENDED have nothing to upgrade and are rejected with
+// ErrShardWrongState so the caller can map it to FailedPrecondition.
+func (p *Provisioner) RelaunchShard(shardID string) error {
+	entry := p.registry.Get(shardID)
+	if entry == nil {
+		return fmt.Errorf("shard %s: %w", shardID, ErrShardNotInRegistry)
+	}
+	entry.ensureSM(p.shardDeps())
+	entry.mu.RLock()
+	st := entry.State
+	entry.mu.RUnlock()
+	if st != StateIngesting && st != StateReadOnly && st != StateDegraded {
+		return fmt.Errorf("shard %s is %s, cannot relaunch (only INGESTING/READ_ONLY/DEGRADED): %w", shardID, st, ErrShardWrongState)
+	}
+	if err := entry.Fire(context.Background(), TriggerRelaunchRequested); err != nil {
+		return fmt.Errorf("relaunch %s: %w", shardID, err)
+	}
+	log.Printf("provisioner: relaunch requested for %s (was %s); driving via SUSPENDED → LAUNCHING", shardID, st)
+	return nil
+}
+
 // serviceNames renders a shard's service membership as bare service
 // strings — for the Configure RPC (informational; the shard only logs
 // it), the cold-shard label, and ShardDescriptor.Apps (dead metadata the

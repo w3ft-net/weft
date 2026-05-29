@@ -969,3 +969,62 @@ func TestShardSM_EvaluateArchivingRetriesOnExportFailure(t *testing.T) {
 		t.Fatalf("state: got %q want ARCHIVING (incomplete archive must not advance)", st)
 	}
 }
+
+// TriggerRelaunchRequested is the admin-driven edge for in-place binary
+// upgrades: an operator (or the kevcons deploy) asks for a shard to be
+// relaunched onto the current AMI without archiving its data. It must be
+// permitted from any "live with data" state (INGESTING, READ_ONLY,
+// DEGRADED) and land on SUSPENDED, where the existing reap-and-relaunch
+// recovery branch takes over (preserving the volume + identity).
+
+func TestShardSM_RelaunchRequested_FromIngesting_GoesSuspended(t *testing.T) {
+	sm, _, entry := makeFixtureShardSM(t, StateIngesting)
+	entry.EBSVolumeID = "vol-1"
+	if err := sm.Fire(context.Background(), TriggerRelaunchRequested); err != nil {
+		t.Fatalf("Fire RelaunchRequested from INGESTING: %v", err)
+	}
+	if entry.State != StateSuspended {
+		t.Fatalf("state: got %q want SUSPENDED", entry.State)
+	}
+}
+
+func TestShardSM_RelaunchRequested_FromReadOnly_GoesSuspended(t *testing.T) {
+	sm, _, entry := makeFixtureShardSM(t, StateReadOnly)
+	entry.EBSVolumeID = "vol-1"
+	if err := sm.Fire(context.Background(), TriggerRelaunchRequested); err != nil {
+		t.Fatalf("Fire RelaunchRequested from READ_ONLY: %v", err)
+	}
+	if entry.State != StateSuspended {
+		t.Fatalf("state: got %q want SUSPENDED", entry.State)
+	}
+}
+
+func TestShardSM_RelaunchRequested_FromDegraded_GoesSuspended(t *testing.T) {
+	sm, _, entry := makeFixtureShardSM(t, StateDegraded)
+	entry.EBSVolumeID = "vol-1"
+	if err := sm.Fire(context.Background(), TriggerRelaunchRequested); err != nil {
+		t.Fatalf("Fire RelaunchRequested from DEGRADED: %v", err)
+	}
+	if entry.State != StateSuspended {
+		t.Fatalf("state: got %q want SUSPENDED", entry.State)
+	}
+}
+
+// States with no useful relaunch semantics must refuse the trigger so the
+// caller (Provisioner.RelaunchShard) can map the rejection to a
+// FailedPrecondition gRPC code. LAUNCHING is already coming up on the
+// current AMI; ARCHIVING/ARCHIVED/GONE/SUSPENDED have nothing to upgrade.
+func TestShardSM_RelaunchRequested_RejectedFromUnsupportedStates(t *testing.T) {
+	for _, st := range []ShardState{StateLaunching, StateArchiving, StateArchived, StateGone, StateSuspended} {
+		t.Run(string(st), func(t *testing.T) {
+			sm, _, entry := makeFixtureShardSM(t, st)
+			if err := sm.Fire(context.Background(), TriggerRelaunchRequested); err == nil {
+				t.Fatalf("Fire from %s must be rejected; entry.State=%q", st, entry.State)
+			}
+			// stateless leaves the state unchanged when no permit fires.
+			if entry.State != st {
+				t.Fatalf("state must stay %s after rejected trigger; got %q", st, entry.State)
+			}
+		})
+	}
+}

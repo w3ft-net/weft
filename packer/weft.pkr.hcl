@@ -151,12 +151,17 @@ build {
       "cd /tmp/weft && CGO_ENABLED=0 go build -o /tmp/weft-api ./cmd/api",
       "cd /tmp/weft && CGO_ENABLED=0 go build -o /tmp/weftd ./cmd/weftd",
       "cd /tmp/weft && CGO_ENABLED=0 go build -o /tmp/weft-migrate ./cmd/weft-migrate",
+      # weft-admin: the coordinator-resident CLI for operator/deploy actions
+      # (e.g. `kevcons ssh --command 'sudo /opt/app/bin/weft-admin roll-shard
+      # <id>'`). Cgo-free thin gRPC client, shipped on every AMI but only
+      # meaningful when run on the coordinator instance.
+      "cd /tmp/weft && CGO_ENABLED=0 go build -o /tmp/weft-admin ./cmd/weft-admin",
       # loom-producer is only invoked on the dedicated weft-loom-producer
       # host (a separate TF stack); coordinator/shard/compute hosts ship
       # the binary but never start the unit. Built static so the t4g.nano
       # producer can run it without dragging in cgo deps.
       "cd /tmp/weft && CGO_ENABLED=0 go build -o /tmp/loom-producer ./cmd/loom-producer",
-      "sudo mv /tmp/weft-coordinator /tmp/weft-shard /tmp/weft-compute /tmp/weft-api /tmp/loom-producer /opt/app/bin/",
+      "sudo mv /tmp/weft-coordinator /tmp/weft-shard /tmp/weft-compute /tmp/weft-api /tmp/weft-admin /tmp/loom-producer /opt/app/bin/",
       "sudo mv /tmp/weftd /usr/local/bin/weftd",
       "sudo mv /tmp/weft-migrate /usr/local/bin/weft-migrate",
       "sudo chmod +x /usr/local/bin/weft-migrate",

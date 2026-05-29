@@ -58,3 +58,20 @@ func TestDeleteArchivedShard_WrongState_FailedPrecondition(t *testing.T) {
 	_, err := srv.DeleteArchivedShard(context.Background(), &pb.DeleteArchivedShardRequest{ShardId: "shard-a"})
 	wantCode(t, err, codes.FailedPrecondition)
 }
+
+// RelaunchShard is the in-place binary-upgrade admin op; same error-mapping
+// contract as ForceArchive (NotFound + FailedPrecondition).
+func TestRelaunchShard_UnknownShard_NotFound(t *testing.T) {
+	srv := shardAdminServer(t, "shard-a", logdb.StateIngesting)
+	_, err := srv.RelaunchShard(context.Background(), &pb.RelaunchShardRequest{ShardId: "missing"})
+	wantCode(t, err, codes.NotFound)
+}
+
+func TestRelaunchShard_WrongState_FailedPrecondition(t *testing.T) {
+	// LAUNCHING is one of the rejected states (already coming up on the
+	// current AMI; nothing to relaunch).
+	srv := shardAdminServer(t, "shard-a", logdb.StateLaunching)
+	_, err := srv.RelaunchShard(context.Background(), &pb.RelaunchShardRequest{ShardId: "shard-a"})
+	wantCode(t, err, codes.FailedPrecondition)
+}
+

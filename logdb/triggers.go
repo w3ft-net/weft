@@ -83,6 +83,17 @@ const (
 	// AdminDelete is fired by operator action on an ARCHIVED shard.
 	// The only edge out of ARCHIVED.
 	TriggerAdminDelete Trigger = "admin-delete"
+
+	// RelaunchRequested is the admin-driven edge for in-place binary
+	// upgrades (kevcons deploy → weft-admin roll-*). Permitted on the
+	// "live with data" states (INGESTING, READ_ONLY, DEGRADED) and lands
+	// on SUSPENDED, where the existing reap-and-relaunch recovery branch
+	// takes over — preserving the EBS volume + identity while the new
+	// instance comes up on the current launch template (= current AMI).
+	// Unlike HeartbeatStale this is unconditional (no PermitDynamic): if
+	// the volume is genuinely gone the SUSPENDED evaluator catches that
+	// case via its existing stranded check.
+	TriggerRelaunchRequested Trigger = "relaunch-requested"
 )
 
 // Bucket FSM triggers. Each names a cascade-advancing edge in the

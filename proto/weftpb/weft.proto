@@ -337,6 +337,12 @@ service WeftCoordinator {
 
   // Admin: delete an ARCHIVED shard and its data.
   rpc DeleteArchivedShard(DeleteArchivedShardRequest) returns (DeleteArchivedShardResponse);
+
+  // Admin: relaunch a shard in place (binary upgrade). Drives the FSM
+  // through SUSPENDED → reap → LAUNCHING; the surviving EBS volume is
+  // reattached to a fresh instance on the current launch template, so the
+  // shard comes back with the same id/window/data on the new binary.
+  rpc RelaunchShard(RelaunchShardRequest) returns (RelaunchShardResponse);
 }
 
 message ShardHeartbeatRequest {
@@ -713,3 +719,9 @@ message DeleteArchivedShardRequest {
 }
 
 message DeleteArchivedShardResponse {}
+
+message RelaunchShardRequest {
+  string shard_id = 1;
+}
+
+message RelaunchShardResponse {}

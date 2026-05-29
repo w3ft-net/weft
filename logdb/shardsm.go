@@ -201,6 +201,7 @@ func (sh *Shard) configureSM() {
 		OnEntryFrom(TriggerHeartbeat, sh.configureOnHeartbeat).
 		Permit(TriggerRotateRequested, StateReadOnly).
 		Permit(TriggerIngestDegraded, StateDegraded).
+		Permit(TriggerRelaunchRequested, StateSuspended).
 		PermitDynamic(TriggerHeartbeatStale, sh.staleTargetFromActive, sh.actuallyStale)
 
 	// DEGRADED is INGESTING's circuit-breaker pause: out of write routing,
@@ -212,10 +213,12 @@ func (sh *Shard) configureSM() {
 		OnEntry(sh.onEnterDegraded).
 		Permit(TriggerIngestRecovered, StateIngesting).
 		Permit(TriggerRotateRequested, StateReadOnly).
+		Permit(TriggerRelaunchRequested, StateSuspended).
 		PermitDynamic(TriggerHeartbeatStale, sh.staleTargetFromActive, sh.actuallyStale)
 
 	sh.sm.Configure(StateReadOnly).
 		Permit(TriggerArchiveRequested, StateArchiving).
+		Permit(TriggerRelaunchRequested, StateSuspended).
 		PermitDynamic(TriggerHeartbeatStale, sh.staleTargetFromActive, sh.actuallyStale)
 
 	// ARCHIVING is a deliberate non-substate of READ_ONLY (see states.go):

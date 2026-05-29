@@ -1113,3 +1113,13 @@ func (s *Server) DeleteArchivedShard(_ context.Context, req *pb.DeleteArchivedSh
 	}
 	return &pb.DeleteArchivedShardResponse{}, nil
 }
+
+func (s *Server) RelaunchShard(_ context.Context, req *pb.RelaunchShardRequest) (*pb.RelaunchShardResponse, error) {
+	if s.Coord.Provisioner == nil {
+		return nil, status.Errorf(codes.Unavailable, "provisioner not running")
+	}
+	if err := s.Coord.Provisioner.RelaunchShard(req.ShardId); err != nil {
+		return nil, shardOpStatus(err)
+	}
+	return &pb.RelaunchShardResponse{}, nil
+}
