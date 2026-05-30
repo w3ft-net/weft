@@ -31,7 +31,7 @@ func main() {
 	httpPort := flag.Int("http-port", 9001, "HTTP health listen port")
 	dataDir := flag.String("data-dir", "/opt/app/data", "directory holding shard.json and shard.duckdb")
 	coordAddr := flag.String("coordinator-addr", "", "coordinator gRPC address for heartbeats")
-	hbInterval := flag.Duration("heartbeat-interval", 60*time.Second, "heartbeat interval")
+	hbInterval := flag.Duration("heartbeat-interval", 10*time.Second, "heartbeat interval")
 	flag.Parse()
 
 	if err := os.MkdirAll(*dataDir, 0755); err != nil {

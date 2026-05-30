@@ -33,7 +33,7 @@ func TestRegistry_MatchingEntries_SkipsStaleHeartbeat(t *testing.T) {
 		ID: "stale", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
 		WindowStart: t0, WindowEnd: t2, State: StateIngesting,
 		Live: staleShard,
-		// Heartbeat absent for 5 minutes — well past the 2-minute threshold.
+		// Heartbeat absent for 5 minutes — well past the 1-minute threshold.
 		LastHeartbeatAt: time.Now().Add(-5 * time.Minute),
 	})
 

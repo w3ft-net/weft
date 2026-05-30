@@ -395,7 +395,7 @@ func (p *Provisioner) adoptFromHeartbeats() {
 		return
 	}
 
-	heartbeats, err := p.config.Store.LiveShardHeartbeats("2 minutes")
+	heartbeats, err := p.config.Store.LiveShardHeartbeats("1 minute")
 	if err != nil {
 		log.Printf("provisioner: heartbeat query failed: %v", err)
 		return

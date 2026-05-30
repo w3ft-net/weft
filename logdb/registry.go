@@ -122,11 +122,16 @@ const SuspendFailureThreshold = 3
 
 // heartbeatStaleThreshold is how long since the last heartbeat before
 // MatchingShards/IngestingShard treat an entry as dead and skip it.
-// Aligns with adoptFromHeartbeats's "2 minutes" lookback window: a
+// Aligns with adoptFromHeartbeats's "1 minute" lookback window: a
 // shard that hasn't heartbeat'd in that window won't be re-adopted
 // after a coordinator restart either, so the registry shouldn't keep
 // routing traffic to it.
-const heartbeatStaleThreshold = 2 * time.Minute
+//
+// At a 10s shard→coordinator heartbeat cadence, 1 minute = 6 missed
+// beats — high confidence the shard is gone, with low false-positive
+// risk from transient network blips (SUSPENDED's heartbeat-rescue
+// permit still resurrects healthy shards whose beats hiccup briefly).
+const heartbeatStaleThreshold = 1 * time.Minute
 
 // isStale reports whether this entry's last observed heartbeat is
 // older than heartbeatStaleThreshold. Zero (never set) counts as
