@@ -14,7 +14,7 @@
 //   - wait-and-verify           — pollShardReady (cmd/weft-admin/wait.go)
 //                                 polls GetShard until state=INGESTING
 //                                 with a post-relaunch heartbeat.
-//   - --per-shard-timeout       — bound the wait per shard (default 10m).
+//   - --per-shard-timeout       — bound the wait per shard (default 15m).
 //   - --continue-on-failure     — keep going past a failed shard.
 //
 // Phase 3 adds skip-if-current via --target-sha against shard_records.binary_sha.
@@ -85,7 +85,7 @@ Subcommands:
 
 Common flags:
   -coord                coordinator gRPC address (default "localhost:9020")
-  -per-shard-timeout    deadline for each shard's relaunch + return to INGESTING (default 10m)
+  -per-shard-timeout    deadline for each shard's relaunch + return to a live serving state (default 15m)
   -continue-on-failure  keep going past a failed shard (roll-cohort / roll-all)`)
 	os.Exit(2)
 }
@@ -110,7 +110,7 @@ type commonFlags struct {
 func registerCommon(fs *flag.FlagSet, includeContinue bool) *commonFlags {
 	c := &commonFlags{}
 	fs.StringVar(&c.coord, "coord", "127.0.0.1:9022", "coordinator WeftAdmin gRPC address (localhost-only; SharedToken auth)")
-	fs.DurationVar(&c.perShardTimeout, "per-shard-timeout", 10*time.Minute, "deadline for each shard's relaunch + return to INGESTING")
+	fs.DurationVar(&c.perShardTimeout, "per-shard-timeout", 15*time.Minute, "deadline for each shard's relaunch + return to a live serving state")
 	fs.DurationVar(&c.pollInterval, "poll-interval", 5*time.Second, "interval between GetShard polls during wait-and-verify")
 	fs.StringVar(&c.targetSHA, "target-sha", "", "skip shards whose binary_sha already matches and require the post-relaunch shard to report this SHA (empty = roll unconditionally, no SHA verification)")
 	if includeContinue {
@@ -128,9 +128,11 @@ func newAdminClient(coord string) (pb.WeftAdminClient, func(), error) {
 }
 
 // rollOne fires RelaunchShard for shardID and then waits via pollShardReady
-// for the shard to be back in INGESTING with a heartbeat stamped after the
-// pre-fire cutoff. Returns nil on success; errors include both RPC and
-// wait-timeout cases.
+// for the shard to land in a live serving state (INGESTING / READ_ONLY /
+// DEGRADED — the FSM restores the shard's pre-recovery state, so a
+// rolled READ_ONLY shard correctly stays READ_ONLY) with a heartbeat
+// stamped after the pre-fire cutoff. Returns nil on success; errors
+// include both RPC and wait-timeout cases.
 func rollOne(ctx context.Context, client pb.WeftAdminClient, shardID string, perShardTimeout, pollInterval time.Duration, wantSHA string) error {
 	rollCtx, cancel := context.WithTimeout(adminCtx(ctx), perShardTimeout)
 	defer cancel()
@@ -139,7 +141,7 @@ func rollOne(ctx context.Context, client pb.WeftAdminClient, shardID string, per
 	if _, err := client.RelaunchShard(rollCtx, &pb.RelaunchShardRequest{ShardId: shardID}); err != nil {
 		return fmt.Errorf("relaunch %s: %w", shardID, err)
 	}
-	fmt.Printf("  relaunch fired for %s; waiting for return to INGESTING...\n", shardID)
+	fmt.Printf("  relaunch fired for %s; waiting for return to a live serving state...\n", shardID)
 
 	get := func(id string) (string, time.Time, string, error) {
 		resp, err := client.GetShard(rollCtx, &pb.GetShardRequest{ShardId: id})
@@ -157,7 +159,7 @@ func rollOne(ctx context.Context, client pb.WeftAdminClient, shardID string, per
 	if err := pollShardReady(rollCtx, get, shardID, cutoff, wantSHA, pollInterval); err != nil {
 		return err
 	}
-	fmt.Printf("  %s is back in INGESTING\n", shardID)
+	fmt.Printf("  %s is back serving\n", shardID)
 	return nil
 }
 

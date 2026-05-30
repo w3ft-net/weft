@@ -55,6 +55,61 @@ func TestPollShardReady_SucceedsImmediately(t *testing.T) {
 	}
 }
 
+// TestPollShardReady_AcceptsReadOnly is the postRecoveryTarget-compat
+// regression: a rolled READ_ONLY shard correctly stays READ_ONLY after
+// the recovery cascade (rather than bouncing through INGESTING), so the
+// wait must treat READ_ONLY as success.
+func TestPollShardReady_AcceptsReadOnly(t *testing.T) {
+	cutoff := time.Now()
+	f := &fakeGetter{
+		states: []string{"READ_ONLY"},
+		hb:     []time.Time{cutoff.Add(time.Second)},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := pollShardReady(ctx, f.get, "s-1", cutoff, "", 5*time.Millisecond); err != nil {
+		t.Fatalf("expected nil (READ_ONLY is a live serving state), got %v", err)
+	}
+}
+
+// TestPollShardReady_AcceptsDegraded covers the analogous case for the
+// circuit-breaker pause state. DEGRADED-rolled shards return to
+// DEGRADED via postRecoveryTarget; the wait should consider that done.
+func TestPollShardReady_AcceptsDegraded(t *testing.T) {
+	cutoff := time.Now()
+	f := &fakeGetter{
+		states: []string{"DEGRADED"},
+		hb:     []time.Time{cutoff.Add(time.Second)},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := pollShardReady(ctx, f.get, "s-1", cutoff, "", 5*time.Millisecond); err != nil {
+		t.Fatalf("expected nil (DEGRADED is a live serving state), got %v", err)
+	}
+}
+
+// TestPollShardReady_RejectsTransientStates confirms the gate still
+// rejects non-serving states even when the heartbeat is fresh — a shard
+// mid-recovery (SUSPENDED / UPGRADING / LAUNCHING / ARCHIVING) is not
+// "done rolling" no matter what its heartbeat says.
+func TestPollShardReady_RejectsTransientStates(t *testing.T) {
+	for _, st := range []string{"SUSPENDED", "UPGRADING", "LAUNCHING", "ARCHIVING", "GONE"} {
+		t.Run(st, func(t *testing.T) {
+			cutoff := time.Now()
+			f := &fakeGetter{
+				states: []string{st},
+				hb:     []time.Time{cutoff.Add(time.Second)},
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			err := pollShardReady(ctx, f.get, "s-1", cutoff, "", 5*time.Millisecond)
+			if err == nil {
+				t.Fatalf("expected timeout for transient state %s, got nil", st)
+			}
+		})
+	}
+}
+
 func TestPollShardReady_SucceedsAfterCycle(t *testing.T) {
 	cutoff := time.Now()
 	f := &fakeGetter{
