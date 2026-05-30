@@ -535,6 +535,111 @@ func TestShardSM_LaunchingToIngestingOnMatchingHeartbeat(t *testing.T) {
 	}
 }
 
+// seedShardOperation inserts a row into shard_operations directly,
+// bypassing the FSM. Used by tests that need a specific recovery
+// history without driving the full state-machine cascade.
+func seedShardOperation(t *testing.T, db *store.Store, shardID string, from, to ShardState) {
+	t.Helper()
+	if err := db.DB().Exec(
+		"INSERT INTO shard_operations (shard_id, from_state, to_state) VALUES (?, ?, ?)",
+		shardID, string(from), string(to),
+	).Error; err != nil {
+		t.Fatalf("seed shard_operations %s %s→%s: %v", shardID, from, to, err)
+	}
+}
+
+// TestShardSM_LaunchingFromUpgradingPreservesReadOnly asserts the post-
+// recovery state lookup: a READ_ONLY shard that was rolled (UPGRADING)
+// must return to READ_ONLY on the post-launch heartbeat, not bounce
+// through INGESTING. The transition log in shard_operations is the
+// source of truth.
+func TestShardSM_LaunchingFromUpgradingPreservesReadOnly(t *testing.T) {
+	sm, db, entry := makeFixtureShardSM(t, StateLaunching)
+	entry.InstanceID = "i-abc"
+	// Synthesize the recovery history: at some point the shard was
+	// READ_ONLY, then operator-rolled (UPGRADING), then evaluateRecovery
+	// reaped and transitioned to LAUNCHING. The fixture only writes
+	// (NULL, LAUNCHING) automatically, so we add the prior transitions.
+	seedShardOperation(t, db, "s-test", StateReadOnly, StateUpgrading)
+	seedShardOperation(t, db, "s-test", StateUpgrading, StateLaunching)
+
+	hb := store.ShardHeartbeat{
+		ShardID: "s-test", Addr: "10.0.0.1:9000", InstanceID: "i-abc",
+	}
+	if err := sm.Fire(context.Background(), TriggerHeartbeat, hb); err != nil {
+		t.Fatalf("Fire heartbeat: %v", err)
+	}
+	got, _ := sm.smState(context.Background())
+	if got != StateReadOnly {
+		t.Fatalf("state: got %q want READ_ONLY (preserved across roll)", got)
+	}
+}
+
+// TestShardSM_LaunchingFromSuspendedPreservesReadOnly mirrors the
+// previous test for the HeartbeatStale → SUSPENDED organic-recovery
+// path: same lookup, same result.
+func TestShardSM_LaunchingFromSuspendedPreservesReadOnly(t *testing.T) {
+	sm, db, entry := makeFixtureShardSM(t, StateLaunching)
+	entry.InstanceID = "i-abc"
+	seedShardOperation(t, db, "s-test", StateReadOnly, StateSuspended)
+	seedShardOperation(t, db, "s-test", StateSuspended, StateLaunching)
+
+	hb := store.ShardHeartbeat{
+		ShardID: "s-test", Addr: "10.0.0.1:9000", InstanceID: "i-abc",
+	}
+	if err := sm.Fire(context.Background(), TriggerHeartbeat, hb); err != nil {
+		t.Fatalf("Fire heartbeat: %v", err)
+	}
+	got, _ := sm.smState(context.Background())
+	if got != StateReadOnly {
+		t.Fatalf("state: got %q want READ_ONLY (preserved across SUSPENDED recovery)", got)
+	}
+}
+
+// TestShardSM_LaunchingFromUpgradingFromIngestingGoesIngesting is the
+// "common case" sanity check: when the prior state IS INGESTING
+// (the normal write-routable rolls that operator triggers cover), the
+// post-recovery target is still INGESTING. No regression on the
+// dominant path.
+func TestShardSM_LaunchingFromUpgradingFromIngestingGoesIngesting(t *testing.T) {
+	sm, db, entry := makeFixtureShardSM(t, StateLaunching)
+	entry.InstanceID = "i-abc"
+	seedShardOperation(t, db, "s-test", StateIngesting, StateUpgrading)
+	seedShardOperation(t, db, "s-test", StateUpgrading, StateLaunching)
+
+	hb := store.ShardHeartbeat{
+		ShardID: "s-test", Addr: "10.0.0.1:9000", InstanceID: "i-abc",
+	}
+	if err := sm.Fire(context.Background(), TriggerHeartbeat, hb); err != nil {
+		t.Fatalf("Fire heartbeat: %v", err)
+	}
+	got, _ := sm.smState(context.Background())
+	if got != StateIngesting {
+		t.Fatalf("state: got %q want INGESTING", got)
+	}
+}
+
+// TestShardSM_SuspendedRescueFromReadOnlyReturnsToReadOnly tests
+// SUSPENDED's blip-rescue path: a READ_ONLY shard whose heartbeats
+// stalled briefly (network blip → HeartbeatStale → SUSPENDED) should
+// return to READ_ONLY on rescue, not be silently promoted to INGESTING.
+func TestShardSM_SuspendedRescueFromReadOnlyReturnsToReadOnly(t *testing.T) {
+	sm, db, entry := makeFixtureShardSM(t, StateSuspended)
+	entry.EBSVolumeID = "vol-abc"
+	entry.InstanceID = "i-alive"
+	seedShardOperation(t, db, "s-test", StateReadOnly, StateSuspended)
+
+	hb := store.ShardHeartbeat{
+		ShardID: "s-test", Addr: "10.0.0.7:9000", InstanceID: "i-alive",
+	}
+	if err := sm.Fire(context.Background(), TriggerHeartbeat, hb); err != nil {
+		t.Fatalf("Fire heartbeat: %v", err)
+	}
+	if entry.State != StateReadOnly {
+		t.Fatalf("state: got %q want READ_ONLY (rescue preserves prior state)", entry.State)
+	}
+}
+
 func TestShardSM_LaunchingRejectsStrayInstanceHeartbeat(t *testing.T) {
 	sm, _, entry := makeFixtureShardSM(t, StateLaunching)
 	entry.InstanceID = "i-abc"

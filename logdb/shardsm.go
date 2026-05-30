@@ -279,11 +279,21 @@ func (sh *Shard) heartbeatMatchesLaunching(_ context.Context, args ...any) bool 
 	return true
 }
 
-// heartbeatTargetFromLaunching always returns INGESTING — the only
-// permitted target. Declared as a PermitDynamic only because we share the
-// trigger name with SUSPENDED→INGESTING (rebind).
-func (sh *Shard) heartbeatTargetFromLaunching(context.Context, ...any) (stateless.State, error) {
-	return StateIngesting, nil
+// heartbeatTargetFromLaunching returns the state the shard should land
+// in once its first post-launch heartbeat lands. For a fresh shard this
+// is INGESTING. For a shard that was rolled (UPGRADING) or recovered
+// (SUSPENDED) from READ_ONLY or DEGRADED, the post-launch destination
+// must mirror the pre-recovery state — otherwise a READ_ONLY shard's
+// roll briefly becomes write-routable (no data damage in practice but
+// it triggers a redundant SCALING_DOWN cascade as the bucket scrambles
+// to return the shard to READ_ONLY).
+//
+// We look up the prior state from shard_operations via
+// Store.LatestPreRecoveryState (the canonical transition log). On any
+// lookup error, or when there's no recovery history, default to
+// INGESTING — the fresh-launch path.
+func (sh *Shard) heartbeatTargetFromLaunching(_ context.Context, _ ...any) (stateless.State, error) {
+	return sh.postRecoveryTarget()
 }
 
 // heartbeatMatchesSuspended gates SUSPENDED → INGESTING. The heartbeat
@@ -299,8 +309,35 @@ func (sh *Shard) heartbeatMatchesSuspended(_ context.Context, args ...any) bool 
 	return hb.ShardID == sh.ID && hb.Addr != ""
 }
 
-func (sh *Shard) heartbeatTargetFromSuspended(context.Context, ...any) (stateless.State, error) {
-	return StateIngesting, nil
+// heartbeatTargetFromSuspended mirrors heartbeatTargetFromLaunching's
+// pre-recovery-state lookup: SUSPENDED's blip-rescue heartbeat-promote
+// edge must return the shard to its pre-stale state, not unconditionally
+// INGESTING.
+func (sh *Shard) heartbeatTargetFromSuspended(_ context.Context, _ ...any) (stateless.State, error) {
+	return sh.postRecoveryTarget()
+}
+
+// postRecoveryTarget is the shared lookup behind both
+// heartbeatTargetFromLaunching and heartbeatTargetFromSuspended.
+// Returns READ_ONLY or DEGRADED when shard_operations shows the shard
+// transitioned into UPGRADING/SUSPENDED from one of those states;
+// returns INGESTING otherwise (including when the lookup fails or
+// when deps.Store is nil — the dev/test path).
+func (sh *Shard) postRecoveryTarget() (stateless.State, error) {
+	if sh.deps.Store == nil {
+		return StateIngesting, nil
+	}
+	prior, err := sh.deps.Store.LatestPreRecoveryState(sh.ID)
+	if err != nil {
+		log.Printf("shardsm %s: LatestPreRecoveryState lookup failed, defaulting to INGESTING: %v", sh.ID, err)
+		return StateIngesting, nil
+	}
+	switch prior {
+	case StateReadOnly, StateDegraded:
+		return prior, nil
+	default:
+		return StateIngesting, nil
+	}
 }
 
 // actuallyStale guards the HeartbeatStale trigger so a tick that fires

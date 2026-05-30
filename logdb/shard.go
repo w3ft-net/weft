@@ -23,6 +23,7 @@ type shardRowStore interface {
 	SetShardParquetPath(id, path string) error
 	ClearShardVolume(id string) error
 	ClearShardInstance(id string) error
+	LatestPreRecoveryState(id string) (ShardState, error)
 }
 
 // ShardStore is the gorm-backed persistence for the unified Shard type.
@@ -165,4 +166,32 @@ func (s ShardStore) ClearShardVolume(id string) error {
 func (s ShardStore) ClearShardInstance(id string) error {
 	return s.db().Model(&Shard{}).Where("id = ?", id).
 		Select("InstanceID").Updates(&Shard{InstanceID: ""}).Error
+}
+
+// LatestPreRecoveryState returns the state the shard was in immediately
+// before its most recent transition into a recovery state (UPGRADING or
+// SUSPENDED). The shard SM uses this to route LAUNCHING → INGESTING /
+// READ_ONLY / DEGRADED based on where the shard came from, so a roll of
+// a READ_ONLY shard returns to READ_ONLY rather than bouncing through
+// INGESTING and getting scale-down-rotated back. Returns empty ("") if
+// the shard has no recovery history — the caller defaults to
+// INGESTING (the fresh-launch path).
+//
+// Reads from shard_operations, which the row trigger writes on every
+// state transition (see store/schema.sql). The (shard_id, ts) index
+// makes this a fast bounded lookup.
+func (s ShardStore) LatestPreRecoveryState(id string) (ShardState, error) {
+	var result struct {
+		FromState string
+	}
+	err := s.db().Raw(`
+		SELECT from_state FROM shard_operations
+		WHERE shard_id = ? AND to_state IN ('UPGRADING', 'SUSPENDED')
+		ORDER BY ts DESC
+		LIMIT 1
+	`, id).Scan(&result).Error
+	if err != nil {
+		return "", err
+	}
+	return ShardState(result.FromState), nil
 }
