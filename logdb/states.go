@@ -23,6 +23,15 @@ package logdb
 // layer instead — MatchingEntries treats ARCHIVING exactly like
 // READ_ONLY.
 //
+// UPGRADING is the operator-driven sibling of SUSPENDED: same
+// reap-then-relaunch recovery logic, but no heartbeat-promotion edge.
+// RelaunchShard fires TriggerRelaunchRequested against a HEALTHY shard
+// whose process keeps heartbeating — landing in SUSPENDED would race
+// the reap and silently no-op the roll. UPGRADING has no heartbeat
+// permit at all, so the only exit is TriggerRelaunch (post-reap) →
+// LAUNCHING or TriggerStranded → GONE. HeartbeatStale still routes to
+// SUSPENDED, preserving its transient-blip rescue behavior.
+//
 // See docs/plans/asg-as-api-stateless.md for the full transition
 // table.
 type ShardState string
@@ -33,6 +42,7 @@ const (
 	StateReadOnly  ShardState = "READ_ONLY"
 	StateArchiving ShardState = "ARCHIVING"
 	StateSuspended ShardState = "SUSPENDED"
+	StateUpgrading ShardState = "UPGRADING"
 	StateArchived  ShardState = "ARCHIVED"
 	StateGone      ShardState = "GONE"
 	// StateDegraded is an alive shard whose ingest is persistently failing

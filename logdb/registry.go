@@ -559,11 +559,12 @@ func (e *Shard) queryable(tr TimeRange, serving map[string]struct{}) bool {
 	if e.Addr == "" && e.Live == nil {
 		return false
 	}
-	// SUSPENDED (instance dead, Addr/InstanceID cleared, awaiting rebind)
-	// is unqueryable: it keeps a stale non-nil Shard pointer so the
-	// Addr==""/Shard==nil guard doesn't catch it, and routing it only
+	// SUSPENDED (instance dead, awaiting rebind) and UPGRADING (operator-
+	// driven roll, instance about to be terminated by evaluateRecovery)
+	// are both unqueryable: they keep a stale non-nil Shard pointer so the
+	// Addr==""/Shard==nil guard doesn't catch them, and routing them only
 	// yields "no grpc_addr or lambda_url".
-	if e.State == StateSuspended {
+	if e.State == StateSuspended || e.State == StateUpgrading {
 		return false
 	}
 	if e.isStale() {

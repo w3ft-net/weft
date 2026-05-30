@@ -59,10 +59,11 @@ func ReconstructShard(sh *Shard, cfg ReconstructConfig) (shard.Shard, error) {
 		// membership from shard_services at LoadFromStore.
 		return shard.NewColdShard(sh.ID, nil, sh.ParquetPath, cfg.LambdaFunctionURL, nil)
 
-	case StateSuspended:
-		// Instance dead, awaiting replacement. No shard to dial; the
-		// rebind path attaches a GRPCShard when the replacement heartbeats.
-		return nil, fmt.Errorf("SUSPENDED shard %s awaiting rebind", sh.ID)
+	case StateSuspended, StateUpgrading:
+		// Instance dead (SUSPENDED) or being intentionally rolled
+		// (UPGRADING); either way no shard to dial. The rebind path
+		// attaches a GRPCShard when the replacement heartbeats.
+		return nil, fmt.Errorf("%s shard %s awaiting rebind", sh.State, sh.ID)
 
 	case StateIngesting, StateReadOnly:
 		if sh.Addr == "" {

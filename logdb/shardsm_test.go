@@ -683,6 +683,111 @@ func TestShardSM_SuspendedToGoneOnStranded(t *testing.T) {
 	}
 }
 
+// TestShardSM_RelaunchRequestedFromIngestingEntersUpgrading asserts the
+// FSM table change: operator-driven RelaunchShard lands in UPGRADING
+// (no heartbeat permit), not SUSPENDED (whose heartbeat-rescue permit
+// would silently no-op the roll against a still-heartbeating process).
+func TestShardSM_RelaunchRequestedFromIngestingEntersUpgrading(t *testing.T) {
+	for _, src := range []ShardState{StateIngesting, StateReadOnly, StateDegraded} {
+		t.Run(string(src), func(t *testing.T) {
+			sm, _, _ := makeFixtureShardSM(t, src)
+			if err := sm.Fire(context.Background(), TriggerRelaunchRequested); err != nil {
+				t.Fatalf("Fire RelaunchRequested from %s: %v", src, err)
+			}
+			got, err := sm.smState(context.Background())
+			if err != nil {
+				t.Fatalf("State: %v", err)
+			}
+			if got != StateUpgrading {
+				t.Fatalf("from %s: got %q want UPGRADING", src, got)
+			}
+		})
+	}
+}
+
+// TestShardSM_UpgradingRejectsHeartbeatFromAliveInstance is the
+// regression test for the Bug 1 silent-no-op: UPGRADING must reject
+// heartbeats from the still-running shard process so the FSM commits
+// to reap-and-relaunch instead of being lured back to INGESTING.
+func TestShardSM_UpgradingRejectsHeartbeatFromAliveInstance(t *testing.T) {
+	sm, _, entry := makeFixtureShardSM(t, StateUpgrading)
+	entry.InstanceID = "i-alive" // shard process still up, still heartbeating
+
+	hb := store.ShardHeartbeat{
+		ShardID: "s-test", Addr: "10.0.0.7:9000", InstanceID: "i-alive",
+	}
+	err := sm.Fire(context.Background(), TriggerHeartbeat, hb)
+	if err == nil {
+		t.Fatalf("UPGRADING must reject TriggerHeartbeat: no error returned")
+	}
+	if entry.State != StateUpgrading {
+		t.Fatalf("state: got %q want UPGRADING (rejected heartbeat)", entry.State)
+	}
+}
+
+// TestShardSM_EvaluateUpgradingReapsThenRelaunches asserts UPGRADING
+// shares evaluateRecovery with SUSPENDED — same reap-then-relaunch
+// mechanics, just reached via a different trigger.
+func TestShardSM_EvaluateUpgradingReapsThenRelaunches(t *testing.T) {
+	fl := &fakeLauncher{}
+	vm := &fakeVolumeManager{findResult: map[string]*VolumeInfo{"s-test": {VolumeID: "vol-1", AZ: "us-east-2a"}}}
+	sm, _, entry := makeFixtureShardSM(t, StateUpgrading, func(d *ShardDeps) {
+		d.Launcher = fl
+		d.Volumes = vm
+	})
+	entry.InstanceID = "i-alive"
+	entry.EBSVolumeID = "vol-1"
+	entry.AZ = "us-east-2a"
+
+	// Tick 1: reap the running instance, hand off to LAUNCHING.
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate (reap): %v", err)
+	}
+	if len(fl.terminated) != 1 || fl.terminated[0] != "i-alive" {
+		t.Fatalf("instance not reaped: terminated=%v", fl.terminated)
+	}
+	if entry.InstanceID != "" {
+		t.Fatalf("InstanceID not cleared: %q", entry.InstanceID)
+	}
+	if st, _ := sm.smState(context.Background()); st != StateLaunching {
+		t.Fatalf("after reap: got %q want LAUNCHING", st)
+	}
+
+	// Tick 2: LAUNCHING with the surviving volume → recovery relaunch
+	// reattaches it.
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate (relaunch): %v", err)
+	}
+	waitForLaunch(t, sm)
+	if fl.launchCount() != 1 {
+		t.Fatalf("launch calls: got %d want 1", fl.launchCount())
+	}
+	if fl.calls[0].ExistingVolumeID != "vol-1" {
+		t.Fatalf("upgrade relaunch must reattach vol-1, got %q", fl.calls[0].ExistingVolumeID)
+	}
+}
+
+// TestShardSM_SuspendedStillPermitsRescueHeartbeat is the
+// "don't regress the feature" companion to the UPGRADING change:
+// SUSPENDED's blip-rescue path stays intact, so a healthy shard whose
+// heartbeats stalled briefly (network blip → HeartbeatStale →
+// SUSPENDED) can resurrect without an instance churn.
+func TestShardSM_SuspendedStillPermitsRescueHeartbeat(t *testing.T) {
+	sm, _, entry := makeFixtureShardSM(t, StateSuspended)
+	entry.EBSVolumeID = "vol-abc"
+	entry.InstanceID = "i-alive"
+
+	hb := store.ShardHeartbeat{
+		ShardID: "s-test", Addr: "10.0.0.7:9000", InstanceID: "i-alive",
+	}
+	if err := sm.Fire(context.Background(), TriggerHeartbeat, hb); err != nil {
+		t.Fatalf("Fire heartbeat: %v", err)
+	}
+	if entry.State != StateIngesting {
+		t.Fatalf("state: got %q want INGESTING (blip rescue)", entry.State)
+	}
+}
+
 func TestShardSM_ArchivedToGoneOnAdminDelete(t *testing.T) {
 	sm, db, _ := makeFixtureShardSM(t, StateArchived)
 	if err := sm.Fire(context.Background(), TriggerAdminDelete); err != nil {
@@ -977,45 +1082,18 @@ func TestShardSM_EvaluateArchivingRetriesOnExportFailure(t *testing.T) {
 // DEGRADED) and land on SUSPENDED, where the existing reap-and-relaunch
 // recovery branch takes over (preserving the volume + identity).
 
-func TestShardSM_RelaunchRequested_FromIngesting_GoesSuspended(t *testing.T) {
-	sm, _, entry := makeFixtureShardSM(t, StateIngesting)
-	entry.EBSVolumeID = "vol-1"
-	if err := sm.Fire(context.Background(), TriggerRelaunchRequested); err != nil {
-		t.Fatalf("Fire RelaunchRequested from INGESTING: %v", err)
-	}
-	if entry.State != StateSuspended {
-		t.Fatalf("state: got %q want SUSPENDED", entry.State)
-	}
-}
-
-func TestShardSM_RelaunchRequested_FromReadOnly_GoesSuspended(t *testing.T) {
-	sm, _, entry := makeFixtureShardSM(t, StateReadOnly)
-	entry.EBSVolumeID = "vol-1"
-	if err := sm.Fire(context.Background(), TriggerRelaunchRequested); err != nil {
-		t.Fatalf("Fire RelaunchRequested from READ_ONLY: %v", err)
-	}
-	if entry.State != StateSuspended {
-		t.Fatalf("state: got %q want SUSPENDED", entry.State)
-	}
-}
-
-func TestShardSM_RelaunchRequested_FromDegraded_GoesSuspended(t *testing.T) {
-	sm, _, entry := makeFixtureShardSM(t, StateDegraded)
-	entry.EBSVolumeID = "vol-1"
-	if err := sm.Fire(context.Background(), TriggerRelaunchRequested); err != nil {
-		t.Fatalf("Fire RelaunchRequested from DEGRADED: %v", err)
-	}
-	if entry.State != StateSuspended {
-		t.Fatalf("state: got %q want SUSPENDED", entry.State)
-	}
-}
+// RelaunchRequested routing from INGESTING/READ_ONLY/DEGRADED is
+// covered by TestShardSM_RelaunchRequestedFromIngestingEntersUpgrading
+// above (the destination is UPGRADING, not SUSPENDED, after the Bug 1
+// fix).
 
 // States with no useful relaunch semantics must refuse the trigger so the
 // caller (Provisioner.RelaunchShard) can map the rejection to a
 // FailedPrecondition gRPC code. LAUNCHING is already coming up on the
-// current AMI; ARCHIVING/ARCHIVED/GONE/SUSPENDED have nothing to upgrade.
+// current AMI; ARCHIVING/ARCHIVED/GONE/SUSPENDED/UPGRADING have nothing
+// to upgrade (UPGRADING is already mid-roll; SUSPENDED is mid-recovery).
 func TestShardSM_RelaunchRequested_RejectedFromUnsupportedStates(t *testing.T) {
-	for _, st := range []ShardState{StateLaunching, StateArchiving, StateArchived, StateGone, StateSuspended} {
+	for _, st := range []ShardState{StateLaunching, StateArchiving, StateArchived, StateGone, StateSuspended, StateUpgrading} {
 		t.Run(string(st), func(t *testing.T) {
 			sm, _, entry := makeFixtureShardSM(t, st)
 			if err := sm.Fire(context.Background(), TriggerRelaunchRequested); err == nil {

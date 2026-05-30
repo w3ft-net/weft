@@ -201,7 +201,7 @@ func (sh *Shard) configureSM() {
 		OnEntryFrom(TriggerHeartbeat, sh.configureOnHeartbeat).
 		Permit(TriggerRotateRequested, StateReadOnly).
 		Permit(TriggerIngestDegraded, StateDegraded).
-		Permit(TriggerRelaunchRequested, StateSuspended).
+		Permit(TriggerRelaunchRequested, StateUpgrading).
 		PermitDynamic(TriggerHeartbeatStale, sh.staleTargetFromActive, sh.actuallyStale)
 
 	// DEGRADED is INGESTING's circuit-breaker pause: out of write routing,
@@ -213,12 +213,12 @@ func (sh *Shard) configureSM() {
 		OnEntry(sh.onEnterDegraded).
 		Permit(TriggerIngestRecovered, StateIngesting).
 		Permit(TriggerRotateRequested, StateReadOnly).
-		Permit(TriggerRelaunchRequested, StateSuspended).
+		Permit(TriggerRelaunchRequested, StateUpgrading).
 		PermitDynamic(TriggerHeartbeatStale, sh.staleTargetFromActive, sh.actuallyStale)
 
 	sh.sm.Configure(StateReadOnly).
 		Permit(TriggerArchiveRequested, StateArchiving).
-		Permit(TriggerRelaunchRequested, StateSuspended).
+		Permit(TriggerRelaunchRequested, StateUpgrading).
 		PermitDynamic(TriggerHeartbeatStale, sh.staleTargetFromActive, sh.actuallyStale)
 
 	// ARCHIVING is a deliberate non-substate of READ_ONLY (see states.go):
@@ -231,6 +231,19 @@ func (sh *Shard) configureSM() {
 	sh.sm.Configure(StateSuspended).
 		OnEntry(sh.onEnterSuspended).
 		PermitDynamic(TriggerHeartbeat, sh.heartbeatTargetFromSuspended, sh.heartbeatMatchesSuspended).
+		Permit(TriggerRelaunch, StateLaunching).
+		Permit(TriggerStranded, StateGone)
+
+	// UPGRADING is SUSPENDED's operator-driven sibling: same Evaluate
+	// (reap-then-relaunch via evaluateRecovery), same teardown
+	// (onEnterUpgrading mirrors onEnterSuspended), but NO heartbeat-
+	// promotion edge. RelaunchShard fires TriggerRelaunchRequested
+	// against a HEALTHY shard whose process keeps heartbeating, and
+	// SUSPENDED's blip-rescue permit would race the reap and silently
+	// no-op the roll. Without the heartbeat permit, the only exits are
+	// TriggerRelaunch (post-reap) → LAUNCHING or TriggerStranded → GONE.
+	sh.sm.Configure(StateUpgrading).
+		OnEntry(sh.onEnterUpgrading).
 		Permit(TriggerRelaunch, StateLaunching).
 		Permit(TriggerStranded, StateGone)
 
@@ -355,8 +368,8 @@ func (sh *Shard) Evaluate(ctx context.Context) error {
 		return sh.evaluateActive(ctx)
 	case StateDegraded:
 		return sh.evaluateDegraded(ctx)
-	case StateSuspended:
-		return sh.evaluateSuspended(ctx)
+	case StateSuspended, StateUpgrading:
+		return sh.evaluateRecovery(ctx)
 	case StateArchiving:
 		return sh.evaluateArchiving(ctx)
 	default:
@@ -491,14 +504,16 @@ func (sh *Shard) evaluateDegraded(ctx context.Context) error {
 	return sh.Fire(ctx, TriggerIngestRecovered) // → INGESTING (half-open)
 }
 
-// evaluateSuspended drives recovery's reap phase. SUSPENDED holds the
-// dead instance; its only job is to reap it and hand off to LAUNCHING,
-// which relaunches a replacement reattaching the surviving volume. If the
-// volume itself has vanished there's nothing to recover — fire Stranded →
-// GONE. Reaping (Terminate + clear InstanceID) is one fast, idempotent
-// API call, so unlike the launch it's fine to run inline: a crash before
+// evaluateRecovery drives the reap phase shared by SUSPENDED (organic
+// failure via HeartbeatStale) and UPGRADING (operator-driven roll via
+// RelaunchShard). Both states hold the dead-or-stale instance; their
+// only job is to reap it and hand off to LAUNCHING, which relaunches a
+// replacement reattaching the surviving volume. If the volume itself
+// has vanished there's nothing to recover — fire Stranded → GONE.
+// Reaping (Terminate + clear InstanceID) is one fast, idempotent API
+// call, so unlike the launch it's fine to run inline: a crash before
 // the Relaunch fires just re-reaps next tick.
-func (sh *Shard) evaluateSuspended(ctx context.Context) error {
+func (sh *Shard) evaluateRecovery(ctx context.Context) error {
 	// Stranded: the volume that made recovery worth attempting is gone.
 	if sh.deps.Volumes != nil {
 		info, err := sh.deps.Volumes.FindByShard(ctx, sh.ID)
@@ -846,10 +861,25 @@ func (sh *Shard) reconnect(ctx context.Context, hb store.ShardHeartbeat) error {
 
 // onEnterSuspended tears down the dead connection but KEEPS InstanceID —
 // that's the dead instance Evaluate must reap before relaunching. (Pure:
-// no AWS side effects here; the reap + relaunch is Evaluate's job, so a
-// restart that lands in SUSPENDED re-drives it.)
+// no AWS side effects here; the reap + relaunch is evaluateRecovery's
+// job, so a restart that lands in SUSPENDED re-drives it.)
 func (sh *Shard) onEnterSuspended(ctx context.Context, args ...any) error {
 	log.Printf("shardsm %s: enter SUSPENDED — connection torn down; Evaluate will reap %s and relaunch",
+		sh.ID, sh.InstanceID)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	sh.Addr = ""
+	sh.Live = nil
+	return nil
+}
+
+// onEnterUpgrading mirrors onEnterSuspended for the operator-driven
+// roll path: same teardown, same expectation that evaluateRecovery
+// will reap the still-running instance and hand off to LAUNCHING. The
+// state differs from SUSPENDED only in lacking a heartbeat-promotion
+// edge, so the still-alive shard process can't race the reap.
+func (sh *Shard) onEnterUpgrading(ctx context.Context, args ...any) error {
+	log.Printf("shardsm %s: enter UPGRADING — connection torn down; Evaluate will reap %s and relaunch for binary upgrade",
 		sh.ID, sh.InstanceID)
 	sh.mu.Lock()
 	defer sh.mu.Unlock()

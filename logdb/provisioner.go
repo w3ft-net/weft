@@ -481,6 +481,13 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 	switch state {
 	case StateLaunching, StateSuspended:
 		p.promoteOnHeartbeat(ctx, e, hb)
+	case StateUpgrading:
+		// Operator-driven roll: the FSM has decided to reap this instance.
+		// Heartbeats from the still-running process must NOT promote
+		// (UPGRADING has no Heartbeat permit by design — see configureSM)
+		// and must NOT ObserveHeartbeat (its reconnect path would undo
+		// onEnterUpgrading's teardown and race the planned reap). Drop
+		// silently; evaluateRecovery will reap on the next tick.
 	default:
 		e.ObserveHeartbeat(ctx, hb)
 	}
@@ -780,17 +787,22 @@ func (p *Provisioner) DeleteArchived(shardID string, force bool) error {
 
 // RelaunchShard is the admin-facing entry point for an in-place binary
 // upgrade. Drives the shard FSM through TriggerRelaunchRequested →
-// SUSPENDED, where the existing reap-and-relaunch recovery branch takes
-// over: the dead instance is terminated, a fresh instance is launched from
-// the ASG's current launch template (= current AMI), and the surviving EBS
-// volume is reattached in the same AZ. The shard reconstructs its identity
-// from shard.json on the reattached volume, heartbeats, and the promote
-// path lifts it back to INGESTING — same shard id, same window, same data,
-// new binary.
+// UPGRADING, where the shared reap-and-relaunch recovery branch takes
+// over (evaluateRecovery): the still-running instance is terminated, a
+// fresh instance is launched from the ASG's current launch template (=
+// current AMI), and the surviving EBS volume is reattached in the same
+// AZ. The shard reconstructs its identity from shard.json on the
+// reattached volume, heartbeats, and the promote path lifts it back to
+// INGESTING — same shard id, same window, same data, new binary.
+//
+// UPGRADING is a distinct state from SUSPENDED (which HeartbeatStale
+// uses) because the operator-roll target is a HEALTHY shard whose
+// process keeps heartbeating; SUSPENDED's transient-blip heartbeat
+// permit would silently no-op the roll. UPGRADING omits that permit.
 //
 // Only "live with data" states are valid (INGESTING / READ_ONLY /
 // DEGRADED). LAUNCHING is already coming up; ARCHIVING/ARCHIVED/GONE/
-// SUSPENDED have nothing to upgrade and are rejected with
+// SUSPENDED/UPGRADING have nothing to upgrade and are rejected with
 // ErrShardWrongState so the caller can map it to FailedPrecondition.
 func (p *Provisioner) RelaunchShard(shardID string) error {
 	entry := p.registry.Get(shardID)
@@ -807,7 +819,7 @@ func (p *Provisioner) RelaunchShard(shardID string) error {
 	if err := entry.Fire(context.Background(), TriggerRelaunchRequested); err != nil {
 		return fmt.Errorf("relaunch %s: %w", shardID, err)
 	}
-	log.Printf("provisioner: relaunch requested for %s (was %s); driving via SUSPENDED → LAUNCHING", shardID, st)
+	log.Printf("provisioner: relaunch requested for %s (was %s); driving via UPGRADING → LAUNCHING", shardID, st)
 	return nil
 }
 
