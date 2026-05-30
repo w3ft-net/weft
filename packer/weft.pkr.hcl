@@ -37,6 +37,11 @@ variable "git_sha" {
   default = "dev"
 }
 
+variable "shard_git_sha" {
+  type    = string
+  default = "dev"
+}
+
 variable "source_path" {
   type    = string
   default = ""
@@ -153,7 +158,7 @@ build {
       # plan will narrow this to the shard-subtree SHA so the skip is
       # actually effective; Phase 3 wires the mechanism end-to-end with
       # the full build SHA.)
-      "cd /tmp/weft && CGO_ENABLED=1 go build -ldflags \"-X main.GitSHA=${var.git_sha}\" -o /tmp/weft-shard ./cmd/shard",
+      "cd /tmp/weft && CGO_ENABLED=1 go build -ldflags \"-X main.GitSHA=${var.shard_git_sha}\" -o /tmp/weft-shard ./cmd/shard",
       "cd /tmp/weft && CGO_ENABLED=1 go build -o /tmp/weft-compute ./cmd/compute",
       "cd /tmp/weft && CGO_ENABLED=0 go build -o /tmp/weft-api ./cmd/api",
       "cd /tmp/weft && CGO_ENABLED=0 go build -o /tmp/weftd ./cmd/weftd",
