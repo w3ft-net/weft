@@ -386,6 +386,102 @@ func TestBucketSM_StasisFiresScaleUp(t *testing.T) {
 	}
 }
 
+// TestBucketSM_StasisDoesNotScaleUpWhileRecovering is the Bug 2
+// regression: a SUSPENDED (HeartbeatStale path) or UPGRADING (operator-
+// roll path) shard occupies a stripe slot via evaluateRecovery's
+// reap-then-relaunch. STASIS must wait for that recovery to land in
+// INGESTING (or escalate to GONE) before minting a replacement, or the
+// resulting duplicate-stripe shard parks an EC2+EBS for a full
+// retention window after scale-down rotates it back out.
+func TestBucketSM_StasisDoesNotScaleUpWhileRecovering(t *testing.T) {
+	for _, recState := range []ShardState{StateSuspended, StateUpgrading} {
+		t.Run(string(recState), func(t *testing.T) {
+			sm, db, ab, ctrl := makeFixtureBucketSM(t, BucketStasis) // Target 2
+			seedShardRow(t, db, ab.ID, "s-ingest", StateIngesting, curWin, ip(0))
+			seedShardRow(t, db, ab.ID, "s-recovery", recState, curWin, ip(1))
+
+			if err := sm.Evaluate(context.Background()); err != nil {
+				t.Fatalf("Evaluate: %v", err)
+			}
+			if got, _ := sm.State(context.Background()); got != BucketStasis {
+				t.Fatalf("state: got %q want STASIS (recovery in flight)", got)
+			}
+			if len(ctrl.fired) != 0 {
+				t.Fatalf("triggers fired: got %v want []", ctrl.fired)
+			}
+			if len(ctrl.minted) != 0 {
+				t.Fatalf("mints: got %d want 0 (no replacement while recovering)", len(ctrl.minted))
+			}
+		})
+	}
+}
+
+// TestBucketSM_WarmingDoesNotMintDuplicateStripeForRecoveringShard
+// asserts the Bug 2 fix at the stripe-set layer: a SUSPENDED/UPGRADING
+// shard's stripe must count as covered by onEnterWarming, otherwise the
+// fill branch mints a duplicate at the same stripe in the same window.
+// We force WARMING entry via TriggerScaleUpRequested directly (bypassing
+// the evaluateStasis gate that the previous test covers) so we can
+// observe what onEnterWarming does given the cohort.
+func TestBucketSM_WarmingDoesNotMintDuplicateStripeForRecoveringShard(t *testing.T) {
+	for _, recState := range []ShardState{StateSuspended, StateUpgrading} {
+		t.Run(string(recState), func(t *testing.T) {
+			sm, db, ab, ctrl := makeFixtureBucketSM(t, BucketStasis) // Target 2
+			seedShardRow(t, db, ab.ID, "s-ingest", StateIngesting, curWin, ip(0))
+			seedShardRow(t, db, ab.ID, "s-recovery", recState, curWin, ip(1))
+
+			if err := sm.Fire(context.Background(), TriggerScaleUpRequested); err != nil {
+				t.Fatalf("ScaleUpRequested: %v", err)
+			}
+			if len(ctrl.minted) != 0 {
+				t.Fatalf("minted: got %d want 0 (stripe 1 already covered by %s shard)", len(ctrl.minted), recState)
+			}
+		})
+	}
+}
+
+// TestBucketSM_WarmingGateWaitsForRecoveryToResolve asserts the gate
+// change in evaluateWarming: the WARMING→ROTATING transition waits for
+// every in-flight recovery in the warming window to either resolve to
+// INGESTING or escalate to GONE before firing TriggerAllReplacementsReady.
+// The original gate compared `ingesting == total`, which broke as soon
+// as SUSPENDED/UPGRADING joined the cohort (total counts them but
+// ingesting doesn't, so the gate stuck forever).
+func TestBucketSM_WarmingGateWaitsForRecoveryToResolve(t *testing.T) {
+	for _, recState := range []ShardState{StateSuspended, StateUpgrading} {
+		t.Run(string(recState), func(t *testing.T) {
+			sm, db, ab, _ := makeFixtureBucketSM(t, BucketWarming) // Target 2
+			// Warming cohort: 2 INGESTING (meeting Target) + 1 recovering
+			// (the duplicate-stripe from a pre-fix-era mint, mid-rebind).
+			seedShardRow(t, db, ab.ID, "s-warm-0", StateIngesting, nextWin, ip(0))
+			seedShardRow(t, db, ab.ID, "s-warm-1", StateIngesting, nextWin, ip(1))
+			seedShardRow(t, db, ab.ID, "s-recovering", recState, nextWin, ip(0))
+
+			if err := sm.Evaluate(context.Background()); err != nil {
+				t.Fatalf("Evaluate (recovering): %v", err)
+			}
+			if got, _ := sm.State(context.Background()); got != BucketWarming {
+				t.Fatalf("state: got %q want WARMING (recovery in flight)", got)
+			}
+
+			// Resolve the recovery: flip the recovering shard to INGESTING.
+			// Now the gate should fire on the next Evaluate.
+			rec, _, _ := (ShardStore{db}).GetShard("s-recovering")
+			rec.State = StateIngesting
+			if err := (ShardStore{db}).SaveShard(rec); err != nil {
+				t.Fatalf("flip recovery to INGESTING: %v", err)
+			}
+
+			if err := sm.Evaluate(context.Background()); err != nil {
+				t.Fatalf("Evaluate (resolved): %v", err)
+			}
+			if got, _ := sm.State(context.Background()); got != BucketRotating {
+				t.Fatalf("state after resolve: got %q want ROTATING", got)
+			}
+		})
+	}
+}
+
 // Evaluate in SCALING_DOWN settles back to STASIS once INGESTING is at
 // Target.
 func TestBucketSM_ScalingDownGateSettles(t *testing.T) {

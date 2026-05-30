@@ -389,6 +389,7 @@ func (b *BucketSM) evaluateStasis(ctx context.Context, now time.Time) error {
 
 	ingesting := 0
 	launchingCur := 0
+	recoveringCur := 0
 	rotationDue := false
 	hasNextWindow := false
 	for _, r := range live {
@@ -405,6 +406,15 @@ func (b *BucketSM) evaluateStasis(ctx context.Context, now time.Time) error {
 			if windowStartEq(r, curStart) {
 				launchingCur++
 			}
+		case StateSuspended, StateUpgrading:
+			// In-flight recovery (reap-then-relaunch via evaluateRecovery).
+			// Holds a stripe slot; the bucket must wait for it to either
+			// land back in INGESTING or escalate to GONE before scaling up,
+			// otherwise we mint a duplicate-stripe replacement that becomes
+			// orphaned READ_ONLY when the original recovers.
+			if windowStartEq(r, curStart) {
+				recoveringCur++
+			}
 		}
 	}
 
@@ -414,7 +424,7 @@ func (b *BucketSM) evaluateStasis(ctx context.Context, now time.Time) error {
 	case rotationDue && !hasNextWindow:
 		// Don't re-arm a cascade whose next-window cohort already exists.
 		return b.Fire(ctx, TriggerRotationNeeded)
-	case ingesting < b.Target && launchingCur == 0:
+	case ingesting < b.Target && launchingCur == 0 && recoveringCur == 0:
 		return b.Fire(ctx, TriggerScaleUpRequested)
 	}
 	return nil
@@ -438,17 +448,27 @@ func (b *BucketSM) evaluateWarming(ctx context.Context) error {
 	if !ok {
 		return nil // no live shards yet — onEnterWarming's mint hasn't landed
 	}
-	total, ingesting := 0, 0
+	total, ingesting, recovering, launching := 0, 0, 0, 0
 	for _, r := range live {
 		if !windowStartEq(r, warmStart) {
 			continue
 		}
 		total++
-		if ingestingLike(r.State) {
+		switch {
+		case ingestingLike(r.State):
 			ingesting++
+		case recoveringLike(r.State):
+			recovering++
+		case r.State == StateLaunching:
+			launching++
 		}
 	}
-	if total > 0 && ingesting == total && ingesting >= b.Target {
+	// Gate the WARMING→ROTATING transition on: the warming cohort has
+	// reached Target serving capacity AND no in-flight launches or
+	// recoveries remain. The original equality check (ingesting==total)
+	// broke as soon as a SUSPENDED/UPGRADING shard joined the cohort:
+	// total counts it but ingesting doesn't, so the gate would stick.
+	if total > 0 && ingesting >= b.Target && recovering == 0 && launching == 0 {
 		return b.Fire(ctx, TriggerAllReplacementsReady)
 	}
 	return nil
@@ -531,15 +551,28 @@ func (b *BucketSM) shardsInStates(states ...ShardState) ([]*Shard, error) {
 }
 
 // liveCohort / servingCohort name the state sets the bucket gates query
-// for. A shard is a live cohort member while warming up (LAUNCHING) or
-// serving (INGESTING, or its DEGRADED write-pause — still a cohort member,
-// just out of write routing). servingCohort drops LAUNCHING. Counting
+// for. A shard is a live cohort member while warming up (LAUNCHING),
+// serving (INGESTING, or its DEGRADED write-pause — still a cohort
+// member, just out of write routing), or recovering (SUSPENDED via
+// HeartbeatStale / UPGRADING via operator roll — neither is serving but
+// both are recovering to INGESTING via evaluateRecovery, so they hold a
+// stripe slot and must be counted so the bucket doesn't mint a
+// duplicate-stripe replacement during the in-flight reap-and-relaunch).
+// servingCohort drops LAUNCHING and the recovery states. Counting
 // DEGRADED here is what keeps the ingest circuit breaker from churning a
 // replacement during its cooldown window.
 var (
-	liveCohort    = []ShardState{StateLaunching, StateIngesting, StateDegraded}
+	liveCohort    = []ShardState{StateLaunching, StateIngesting, StateDegraded, StateSuspended, StateUpgrading}
 	servingCohort = []ShardState{StateIngesting, StateDegraded}
 )
+
+// recoveringLike reports whether a state is mid-recovery — SUSPENDED
+// (HeartbeatStale path) or UPGRADING (operator-roll path). Both go
+// through evaluateRecovery's reap-then-relaunch and should be counted
+// by bucket gates as in-flight cohort members.
+func recoveringLike(s ShardState) bool {
+	return s == StateSuspended || s == StateUpgrading
+}
 
 // ingestingLike reports whether a state is a serving-cohort member —
 // INGESTING or its DEGRADED breaker pause. The per-shard predicate the
