@@ -150,7 +150,19 @@ func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
 	for _, step := range migrationSteps {
 		_, _ = db.Exec(step)
 	}
-	return &DuckDBShard{id: id, dbPath: path, db: db}, nil
+	ds := &DuckDBShard{id: id, dbPath: path, db: db}
+	// Seed rowCount from the on-disk table so a shard recovering off a
+	// reattached volume reports its real size in heartbeats. Without this
+	// seed, the in-memory counter starts at zero and only increments on
+	// post-boot Ingest, so the coordinator believes the recovered shard is
+	// empty.
+	var existing int64
+	if err := db.QueryRow("SELECT COUNT(*) FROM logs").Scan(&existing); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("seed rowCount from logs: %w", err)
+	}
+	ds.rowCount.Store(existing)
+	return ds, nil
 }
 
 func (s *DuckDBShard) ID() string { return s.id }
@@ -302,7 +314,10 @@ func JoinApp(namespace, service, kind string) string {
 	return strings.Join(parts, "/")
 }
 
-// RowCount returns the total number of rows ingested into this shard.
+// RowCount returns the total rows currently in the shard's logs table.
+// Seeded from SELECT COUNT(*) at boot (so a shard recovering off a
+// reattached volume reports its real size, not zero) and incremented on
+// every successful Ingest.
 func (s *DuckDBShard) RowCount() int64 {
 	return s.rowCount.Load()
 }
