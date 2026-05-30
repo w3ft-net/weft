@@ -101,9 +101,19 @@ const defaultCloseRebindGrace = 5 * time.Second
 // DefaultProvisionerConfig returns sensible production defaults.
 // IngestingPerBucket isn't here — it lives on each bucket row in
 // the DB (migration 020).
+//
+// PollInterval governs the cadence at which both bucket SM and shard
+// SM Evaluate runs. Each Evaluate is cheap (a few indexed SELECTs) and
+// AWS side-effects only fire on transitions, not every tick — so this
+// can run a lot faster than the original 5-minute value without
+// meaningful load. At 1 minute, a kill-and-recover cascade (3 ticks
+// + ~2 min staleness window + ~30-60s boot) lands in ~4-7 min
+// end-to-end rather than the ~10-17 min the 5-minute interval
+// produced. Aligns with the 60-second shard→coordinator heartbeat
+// cadence: a missed beat is detectable within a couple of ticks.
 func DefaultProvisionerConfig() ProvisionerConfig {
 	return ProvisionerConfig{
-		PollInterval:   5 * time.Minute,
+		PollInterval:   1 * time.Minute,
 		WindowDuration: 7 * 24 * time.Hour,
 	}
 }
