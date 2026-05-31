@@ -55,11 +55,11 @@ func (m *EtcMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 		notifySize = int64(len(nc.AliasesYAML))
 		notifyMtime = nc.UpdatedAt
 	}
-	teamSize, teamMtime := m.teamFileInfo()
+	passwdSize, passwdMtime := m.passwdFileInfo()
 	return []fs.DirEntry{
 		&vfsDirEntry{name: "dashboards", dir: true},
 		&vfsDirEntry{name: "notify.yaml", size: notifySize, mtime: notifyMtime},
-		&vfsDirEntry{name: "team.yaml", size: teamSize, mtime: teamMtime},
+		&vfsDirEntry{name: "passwd", size: passwdSize, mtime: passwdMtime},
 		&vfsDirEntry{name: "usage", mtime: time.Now()},
 	}, nil
 }
@@ -72,8 +72,12 @@ func (m *EtcMount) ReadFile(rel string) ([]byte, error) {
 			return []byte(""), nil
 		}
 		return []byte(nc.AliasesYAML), nil
-	case rel == "team.yaml":
-		return m.renderTeamYAML()
+	case rel == "passwd":
+		out, err := m.cfg.Store.RenderPasswd(m.cfg.CustomerID)
+		if err != nil {
+			return nil, err
+		}
+		return []byte(out), nil
 	case rel == "usage":
 		return []byte(m.buildUsageReport()), nil
 	default:
@@ -98,9 +102,9 @@ func (m *EtcMount) Stat(rel string) (fs.FileInfo, error) {
 			return &vfsFileInfo{name: "notify.yaml", size: int64(len(nc.AliasesYAML)), mtime: nc.UpdatedAt}, nil
 		}
 		return &vfsFileInfo{name: "notify.yaml"}, nil
-	case rel == "team.yaml":
-		size, mtime := m.teamFileInfo()
-		return &vfsFileInfo{name: "team.yaml", size: size, mtime: mtime}, nil
+	case rel == "passwd":
+		size, mtime := m.passwdFileInfo()
+		return &vfsFileInfo{name: "passwd", size: size, mtime: mtime}, nil
 	case rel == "usage":
 		return &vfsFileInfo{name: "usage", mtime: time.Now()}, nil
 	case rel == "dashboards":
@@ -118,20 +122,10 @@ func (m *EtcMount) Stat(rel string) (fs.FileInfo, error) {
 }
 
 func (m *EtcMount) WriteFile(rel string, data []byte) error {
-	// /etc/team.yaml is the perms file itself; only owners can grant
-	// or revoke. Every other /etc file gates on CanManageEtc.
-	if rel == "team.yaml" {
-		if !m.cfg.IsOwner {
-			return denyWrite("/etc/team.yaml")
-		}
-		doc, err := store.ParseTeamPerms(string(data))
-		if err != nil {
-			return fmt.Errorf("/etc/team.yaml: %w", err)
-		}
-		if err := m.cfg.Store.ApplyTeamPerms(m.cfg.CustomerID, doc); err != nil {
-			return fmt.Errorf("/etc/team.yaml: %w", err)
-		}
-		return nil
+	// /etc/passwd is the read-only team roster; the team is mutated
+	// with the adduser/deluser commands, not by editing the file.
+	if rel == "passwd" {
+		return fmt.Errorf("/etc/passwd is read-only — manage the team with adduser/deluser")
 	}
 	if !m.cfg.IsOwner && !m.cfg.CanManageEtc {
 		return denyWrite("/etc")
@@ -160,10 +154,8 @@ func (m *EtcMount) WriteFile(rel string, data []byte) error {
 }
 
 func (m *EtcMount) Remove(rel string) error {
-	if rel == "team.yaml" {
-		// Deleting team.yaml would wipe perms; not allowed even for
-		// owners — they edit the file instead.
-		return fmt.Errorf("/etc/team.yaml: operation not permitted")
+	if rel == "passwd" {
+		return fmt.Errorf("/etc/passwd: operation not permitted")
 	}
 	if !m.cfg.IsOwner && !m.cfg.CanManageEtc {
 		return denyWrite("/etc")
@@ -174,28 +166,17 @@ func (m *EtcMount) Remove(rel string) error {
 	return fmt.Errorf("/etc/%s: operation not permitted", rel)
 }
 
-// --- team.yaml ---
+// --- passwd ---
 
-// renderTeamYAML synthesizes /etc/team.yaml from store state. Returns
-// empty (not an error) when there are no non-owner members, so the
-// file always exists and can be edited from scratch.
-func (m *EtcMount) renderTeamYAML() ([]byte, error) {
-	doc, err := m.cfg.Store.BuildTeamPerms(m.cfg.CustomerID)
-	if err != nil {
-		return nil, err
-	}
-	return doc.Marshal()
-}
-
-// teamFileInfo returns size + mtime for /etc/team.yaml. The doc is
-// computed; we cheat on mtime by using "now" since the perms tables
+// passwdFileInfo returns size + mtime for /etc/passwd. The table is
+// computed from store state; mtime is "now" since the perms tables
 // don't carry a single canonical mtime.
-func (m *EtcMount) teamFileInfo() (int64, time.Time) {
-	data, err := m.renderTeamYAML()
+func (m *EtcMount) passwdFileInfo() (int64, time.Time) {
+	out, err := m.cfg.Store.RenderPasswd(m.cfg.CustomerID)
 	if err != nil {
 		return 0, time.Time{}
 	}
-	return int64(len(data)), time.Now()
+	return int64(len(out)), time.Now()
 }
 
 // --- usage report ---

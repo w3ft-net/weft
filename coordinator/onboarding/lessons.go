@@ -91,9 +91,11 @@ var lessons = []*Lesson{
 		Prompt: "Without a shebang, weft assumes your extensionless scripts are bash. You don't need the shebang for lua if you add the extension.\n\nNow that we're in vim, make a few edits to the file and try to save. You'll see that you haven't been granted full permissions in the Loom org so your write access is restricted. Then you can `:q!` to quit.",
 	},
 	{
+		// Step ID is historical ("team-yaml"); the lesson now teaches the
+		// read-only /etc/passwd roster + group model that replaced it.
 		Step:   "shell-team-yaml",
-		Action: "cat /etc/team.yaml",
-		Prompt: "The reason that save failed: /etc/team.yaml is the org's permissions file. Owners list each non-owner member here with `edit` or `read-only` against /bin, /cron.d, and /etc, plus a per-namespace block. Owners don't appear — they have implicit full access. The file is editable like any other (`vi /etc/team.yaml`), but writes are owner-only no matter what permissions the editor has elsewhere. The Members tab in the dashboard reads and writes the same data through a checkbox grid.",
+		Action: "cat /etc/passwd",
+		Prompt: "The reason that save failed: permissions are group membership, and you're not in the right group. /etc/passwd is the org's read-only roster — one row per member with their groups. Owners show `(all — implicit)`. The groups are `binmgr`/`cronmgr`/`configmgr` (edit /bin, /cron.d, /etc), a namespace name (read its logs), and `<ns>+tokens` (mint producer tokens for it). Owners manage membership with `adduser <email> <group>` and `deluser <email> <group>` — and `adduser <email>` on its own invites someone new. The Members tab in the dashboard manages the same groups through a checkbox grid.",
 	},
 	{
 		Step:   "shell-clipboard",

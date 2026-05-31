@@ -25,5 +25,6 @@ shell:
 - `man dashboard` — dashboard YAML grammar and tile kinds
 - `man range` — set the query time window
 - `man less` — the in-shell pager
+- `man passwd` — team roster, groups, and adduser/deluser
 
 > Tip: long output is paged automatically — press q to return.

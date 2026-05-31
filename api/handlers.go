@@ -1837,54 +1837,15 @@ func (s *Server) handleInviteTeamMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Check seat limit.
-	tier := store.TierTrial
-	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerID); sub != nil {
-		tier = store.Tier(sub.Tier)
-	}
-	count, _ := s.store.CountTeamMembers(session.ActiveCustomerID)
-	limit := store.SeatLimit(tier)
-	if count >= limit {
-		http.Error(w, fmt.Sprintf("seat limit reached (%d/%d)", count, limit), http.StatusForbidden)
-		return
-	}
-
-	// Check for duplicate.
-	if existing, _ := s.store.GetTeamMemberByEmail(session.ActiveCustomerID, req.Email); existing != nil {
-		http.Error(w, "already a team member", http.StatusConflict)
-		return
-	}
-
-	// Create pending member.
-	member := &store.TeamMember{
-		ID:         uuid.New().String(),
-		CustomerID: session.ActiveCustomerID,
-		Email:      req.Email,
-		Role:       "member",
-		Status:     "pending",
-		InvitedBy:  session.UserID,
-		InvitedAt:  time.Now(),
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-	}
-	if err := s.store.CreateTeamMember(member); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	// Send invite email.
-	token, err := s.store.CreateMagicLink(req.Email)
+	member, err := s.inviteMember(session, req.Email)
 	if err != nil {
+		if ie, ok := err.(*inviteErr); ok {
+			http.Error(w, ie.msg, ie.status)
+			return
+		}
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	verifyURL := fmt.Sprintf("%s/verify?token=%s&invite=1", s.baseURL, token)
-	// Use display name for the email if available.
-	orgName := session.ActiveCustomerName
-	if cust, err := s.store.GetCustomerByName(session.ActiveCustomerName); err == nil && cust.DisplayName != "" {
-		orgName = cust.DisplayName
-	}
-	SendInviteEmail(s.email, req.Email, session.Email, orgName, verifyURL)
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(member)
@@ -2243,8 +2204,9 @@ func (s *Server) handleSetNamespacePermission(w http.ResponseWriter, r *http.Req
 
 // handleGetPermissions returns the active org's TeamPermsDoc — what
 // every non-owner member can do across /bin /cron.d /etc and per-
-// namespace. Readable by every authenticated org member (transparency
-// matches how /etc/team.yaml itself is readable).
+// namespace. Readable by every authenticated org member (the same
+// transparency as `cat /etc/passwd` in the shell). Backs the
+// dashboard's Members grid.
 func (s *Server) handleGetPermissions(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 	doc, err := s.store.BuildTeamPerms(session.ActiveCustomerID)
@@ -2256,9 +2218,10 @@ func (s *Server) handleGetPermissions(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(doc)
 }
 
-// handleSetPermissions is the JSON twin of writing /etc/team.yaml.
-// Owner-only; same validate-then-upsert path. Validation errors come
-// back as 400 with a readable message so the UI can surface them.
+// handleSetPermissions backs the dashboard's Members grid — the JSON
+// twin of the shell's adduser/deluser, but whole-doc rather than one
+// grant at a time. Owner-only; validate-then-upsert. Validation errors
+// come back as 400 with a readable message so the UI can surface them.
 func (s *Server) handleSetPermissions(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 	if !session.IsOwner {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc/status"
@@ -84,6 +85,23 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	// Team-management commands (adduser/deluser/groups/id) are handled
+	// in-process — they need the email sender, seat limits, and owner
+	// session that live here, not on the coordinator. Everything else
+	// forwards to the coordinator below.
+	if handled, out, cmdErr := s.maybeHandleTeamCommand(session, req.Pipeline); handled {
+		if cmdErr != nil {
+			writeSSEEvent(w, map[string]any{"type": "stderr", "text": cmdErr.Error() + "\n"})
+		} else if out != "" {
+			for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+				writeSSEEvent(w, map[string]any{"type": "line", "data": map[string]any{"raw": line}})
+			}
+		}
+		writeSSEEvent(w, map[string]any{"type": "done"})
+		flusher.Flush()
 		return
 	}
 

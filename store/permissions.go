@@ -63,10 +63,10 @@ func (s *Store) GrantFullNamespaceAccess(userID string, namespaceID uint) error 
 }
 
 // OrgPermission grants a user write access to one or more of the
-// org-scoped directories (/bin, /cron.d, /etc). Owners bypass this
-// entirely. Members with no row default to read-only across all
-// three. /etc/team.yaml writes require the owner role regardless of
-// CanManageEtc — only owners can grant or revoke perms.
+// org-scoped directories (/bin, /cron.d, /etc) — the binmgr / cronmgr /
+// configmgr groups. Owners bypass this entirely. Members with no row
+// default to read-only across all three. Granting these (via
+// adduser/deluser or the dashboard Members grid) is owner-only.
 type OrgPermission struct {
 	gorm.Model
 	CustomerID         uint   `gorm:"not null;uniqueIndex:idx_orgperm_customer_user"`

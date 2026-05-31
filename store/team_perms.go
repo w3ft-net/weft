@@ -3,31 +3,30 @@ package store
 import (
 	"errors"
 	"fmt"
-	"sort"
-	"strings"
 
-	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
 )
 
-// TeamPermsDoc is the parsed form of /etc/team.yaml — one entry per
-// non-owner team member, listing their org-scoped flags and per-
-// namespace permissions. Owners are not represented: they have
-// implicit full access, and including them would invite the YAML
-// reader into thinking they could revoke their own access.
+// TeamPermsDoc is the JSON shape of the permissions API
+// (GET/PUT /api/permissions) — one entry per non-owner team member,
+// listing their org-scoped flags and per-namespace permissions. Owners
+// are not represented: they have implicit full access, and including
+// them would invite the reader into thinking they could revoke their
+// own access.
 //
-// The map is keyed by email so members can be reordered without
-// changing the canonical serialization order.
+// The map is keyed by email. The browser's Permissions grid is the
+// only writer; the terminal mutates the same underlying rows one
+// membership at a time via adduser/deluser (see team_groups.go).
 type TeamPermsDoc map[string]MemberPerms
 
-// MemberPerms is one row in the YAML — the per-directory access for
+// MemberPerms is one member's record — per-directory access for
 // /bin /cron.d /etc plus per-namespace permissions. Each *Access is
-// "edit" or "read-only"; YAML omits the namespaces map when empty.
+// "edit" or "read-only"; the namespaces map is omitted when empty.
 type MemberPerms struct {
-	Bin        AccessLevel             `yaml:"bin" json:"bin"`
-	Cron       AccessLevel             `yaml:"cron" json:"cron"`
-	Etc        AccessLevel             `yaml:"etc" json:"etc"`
-	Namespaces map[string]NamespaceAcl `yaml:"namespaces,omitempty" json:"namespaces,omitempty"`
+	Bin        AccessLevel             `json:"bin"`
+	Cron       AccessLevel             `json:"cron"`
+	Etc        AccessLevel             `json:"etc"`
+	Namespaces map[string]NamespaceAcl `json:"namespaces,omitempty"`
 }
 
 // AccessLevel is a typed string with two valid values, "edit" and
@@ -42,89 +41,11 @@ const (
 // CanManage reports whether this level allows mutation.
 func (a AccessLevel) CanManage() bool { return a == AccessEdit }
 
-// UnmarshalYAML accepts only the two canonical strings and rejects
-// anything else — typos like "readonly" or "write" should fail loudly.
-func (a *AccessLevel) UnmarshalYAML(node *yaml.Node) error {
-	if node.Kind != yaml.ScalarNode {
-		return fmt.Errorf("access level must be a string")
-	}
-	switch v := AccessLevel(node.Value); v {
-	case AccessEdit, AccessReadOnly:
-		*a = v
-		return nil
-	default:
-		return fmt.Errorf("invalid access level %q (want %q or %q)", node.Value, AccessEdit, AccessReadOnly)
-	}
-}
-
 // NamespaceAcl is the per-namespace permission row. Both fields are
 // boolean; missing == false.
 type NamespaceAcl struct {
-	Read         bool `yaml:"read" json:"read"`
-	CreateTokens bool `yaml:"create_tokens,omitempty" json:"create_tokens,omitempty"`
-}
-
-// ParseTeamPerms decodes /etc/team.yaml content. Returns a non-nil
-// (possibly empty) doc on success. Empty input is valid — it means
-// "no members have any perms".
-func ParseTeamPerms(content string) (TeamPermsDoc, error) {
-	doc := TeamPermsDoc{}
-	trimmed := strings.TrimSpace(content)
-	if trimmed == "" {
-		return doc, nil
-	}
-	if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
-		return nil, fmt.Errorf("parse: %w", err)
-	}
-	return doc, nil
-}
-
-// Marshal renders the doc as canonical YAML — members sorted by
-// email, namespaces sorted by name. Round-trip stable.
-func (d TeamPermsDoc) Marshal() ([]byte, error) {
-	emails := make([]string, 0, len(d))
-	for k := range d {
-		emails = append(emails, k)
-	}
-	sort.Strings(emails)
-
-	var b strings.Builder
-	for i, email := range emails {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
-		m := d[email]
-		fmt.Fprintf(&b, "%s:\n", email)
-		fmt.Fprintf(&b, "  bin: %s\n", levelOrDefault(m.Bin))
-		fmt.Fprintf(&b, "  cron: %s\n", levelOrDefault(m.Cron))
-		fmt.Fprintf(&b, "  etc: %s\n", levelOrDefault(m.Etc))
-		if len(m.Namespaces) == 0 {
-			b.WriteString("  namespaces: {}\n")
-			continue
-		}
-		b.WriteString("  namespaces:\n")
-		nsNames := make([]string, 0, len(m.Namespaces))
-		for k := range m.Namespaces {
-			nsNames = append(nsNames, k)
-		}
-		sort.Strings(nsNames)
-		for _, name := range nsNames {
-			acl := m.Namespaces[name]
-			fmt.Fprintf(&b, "    %s:\n", name)
-			fmt.Fprintf(&b, "      read: %t\n", acl.Read)
-			if acl.CreateTokens {
-				b.WriteString("      create_tokens: true\n")
-			}
-		}
-	}
-	return []byte(b.String()), nil
-}
-
-func levelOrDefault(a AccessLevel) AccessLevel {
-	if a == "" {
-		return AccessReadOnly
-	}
-	return a
+	Read         bool `json:"read"`
+	CreateTokens bool `json:"create_tokens,omitempty"`
 }
 
 // BuildTeamPerms synthesizes the doc from store state — for every
@@ -198,9 +119,9 @@ func (s *Store) BuildTeamPerms(customerID uint) (TeamPermsDoc, error) {
 
 // ApplyTeamPerms validates the doc against the customer's team
 // membership + namespace list, then upserts both org and namespace
-// permissions in a single transaction. Missing-from-YAML is taken to
+// permissions in a single transaction. Missing-from-doc is taken to
 // mean "default-deny" — perms not in the doc are deleted from the
-// store. Two-way authoritative: what's in the YAML is what the user
+// store. Two-way authoritative: what's in the doc is what the user
 // gets, full stop.
 func (s *Store) ApplyTeamPerms(customerID uint, doc TeamPermsDoc) error {
 	members, err := s.ListTeamMembers(customerID)

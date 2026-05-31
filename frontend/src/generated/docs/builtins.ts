@@ -13,6 +13,7 @@ const builtins = {
     { level: 2, id: "working-on-saved-results", text: "Working on saved results" },
     { level: 2, id: "version-history-wit", text: "Version history (wit)" },
     { level: 2, id: "sharing", text: "Sharing" },
+    { level: 2, id: "team-owners", text: "Team (owners)" },
     { level: 2, id: "alerting", text: "Alerting" },
     { level: 2, id: "shell", text: "Shell" },
   ],
@@ -73,6 +74,18 @@ Tracked under <code>/bin</code> and <code>/cron.d</code> only; last 5 versions r
 <ul>
 <li><code>clipboard /bin/&lt;name&gt;</code> — copy a deep link to the script (current range + args) to the system clipboard; teammates open it in their shell pre-filled (<code>man clipboard</code>)</li>
 </ul>
+<h2 id="team-owners">Team (owners)</h2>
+<ul>
+<li><code>cat /etc/passwd</code> — the team roster: each member's role, status, and groups (read-only)</li>
+<li><code>adduser &lt;email&gt;</code> — invite someone to the org (sends an invite email)</li>
+<li><code>adduser &lt;email&gt; &lt;group&gt;</code> — add a member to a group; <code>deluser</code> to remove</li>
+<li><code>deluser &lt;email&gt;</code> — remove a member from the org</li>
+<li><code>groups &lt;email&gt;</code> / <code>id &lt;email&gt;</code> — show a member's groups</li>
+</ul>
+<p>Groups are the permission model: <code>binmgr</code> / <code>cronmgr</code> / <code>configmgr</code>
+(edit <code>/bin</code>, <code>/cron.d</code>, <code>/etc</code>), a namespace name (read its logs), or
+<code>&lt;ns&gt;+tokens</code> (mint producer tokens for it). Owners have implicit full
+access. See <code>man passwd</code>.</p>
 <h2 id="alerting">Alerting</h2>
 <ul>
 <li><code>&lt;pipeline&gt; | alert &lt;condition&gt;</code> — see <code>help alerts</code> or <code>man alert</code></li>

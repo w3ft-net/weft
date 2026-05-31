@@ -634,11 +634,11 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
 // ── Permissions Card ───────────────────────────────────────────────────────
 
 // PermissionsCard is the owner-administered grid that grants each
-// non-owner member edit access to /bin, /cron.d, /etc. Namespace
-// permissions are intentionally left out of the UI — owners who need
-// per-namespace tweaks use `vi /etc/team.yaml` (same data model,
-// fuller surface). The card still renders the namespace summary so
-// owners can see whether the YAML and the UI agree.
+// non-owner member edit access to /bin, /cron.d, /etc (the binmgr /
+// cronmgr / configmgr groups). Namespace permissions are not in this
+// UI yet — owners who need per-namespace grants use the shell's
+// `adduser <email> <namespace>` command. The card still renders the
+// namespace summary so owners can see the current state.
 function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse | null; isOwner: boolean; currentEmail: string }) {
   const [doc, setDoc] = useState<PermissionsDoc | null>(null)
   const [dirty, setDirty] = useState(false)
@@ -729,7 +729,7 @@ function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse |
         </table>
       </div>
       <div className="dash-empty" style={{ marginTop: 10, fontSize: '0.78rem' }}>
-        Per-namespace permissions are managed via <code>vi /etc/team.yaml</code>.
+        Per-namespace permissions are managed from the shell: <code>adduser &lt;email&gt; &lt;namespace&gt;</code>. See <code>man passwd</code>.
       </div>
     </div>
   )

@@ -69,6 +69,19 @@ Tracked under `/bin` and `/cron.d` only; last 5 versions retained.
 
 - `clipboard /bin/<name>` — copy a deep link to the script (current range + args) to the system clipboard; teammates open it in their shell pre-filled (`man clipboard`)
 
+## Team (owners)
+
+- `cat /etc/passwd` — the team roster: each member's role, status, and groups (read-only)
+- `adduser <email>` — invite someone to the org (sends an invite email)
+- `adduser <email> <group>` — add a member to a group; `deluser` to remove
+- `deluser <email>` — remove a member from the org
+- `groups <email>` / `id <email>` — show a member's groups
+
+Groups are the permission model: `binmgr` / `cronmgr` / `configmgr`
+(edit `/bin`, `/cron.d`, `/etc`), a namespace name (read its logs), or
+`<ns>+tokens` (mint producer tokens for it). Owners have implicit full
+access. See `man passwd`.
+
 ## Alerting
 
 - `<pipeline> | alert <condition>` — see `help alerts` or `man alert`

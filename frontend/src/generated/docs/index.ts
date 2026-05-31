@@ -2,6 +2,7 @@
 
 import namespaces from './namespaces';
 import tokens from './tokens';
+import team from './team';
 import installWeftd from './install-weftd';
 import connectHeroku from './connect-heroku';
 import connectCloudwatch from './connect-cloudwatch';
@@ -53,6 +54,7 @@ export const manualCategories: readonly ManualCategory[] = [
 export const manualSections: readonly ManualSection[] = [
   namespaces,
   tokens,
+  team,
   installWeftd,
   connectHeroku,
   connectCloudwatch,
