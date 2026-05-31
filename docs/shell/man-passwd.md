@@ -59,14 +59,18 @@ namespace name, so it can never collide with a real namespace.
 
 - **`adduser <email>`** — invite someone to the org. Sends an invite
   email; they join when they accept (or next sign in).
-- **`adduser <email> <group>`** — add an existing member to a group.
+- **`adduser <email> <group>`** — add a member to a group. If the email
+  isn't on the team yet, they're invited now (the email goes out) and
+  the grant doesn't apply until they accept — re-run the command once
+  they've joined. If they were invited but haven't accepted, you get a
+  clear error rather than a silent no-op.
 - **`deluser <email> <group>`** — revoke a group membership.
 - **`deluser <email>`** — remove a member from the org entirely.
 - **`groups [<email>]`** — list a member's groups (yours if omitted).
 - **`id [<email>]`** — show a member's role and groups.
 
-`adduser`/`deluser` are owner-only. A member must have accepted their
-invite before they can be added to groups.
+`adduser`/`deluser` are owner-only. Group grants apply only once the
+member has accepted their invite; there is no staging.
 
 ## EXAMPLES
 

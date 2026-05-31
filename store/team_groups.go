@@ -83,9 +83,22 @@ func (s *Store) resolveGrantableMember(customerID uint, email string) (string, e
 		return "", fmt.Errorf("%s is an owner — owners have implicit full access", email)
 	}
 	if m.UserID == nil {
-		return "", fmt.Errorf("%s hasn't accepted the invite yet — grant groups after they sign in", email)
+		return "", fmt.Errorf("%s has been invited but hasn't accepted yet — grant groups after they accept", email)
 	}
 	return *m.UserID, nil
+}
+
+// ValidateGroup reports whether group names a real manager group or an
+// existing namespace (with optional +tokens facet). It touches no
+// member, so callers can reject a bad group before any side effect —
+// e.g. before inviting someone on what turns out to be a typo.
+func (s *Store) ValidateGroup(customerID uint, group string) error {
+	if _, ok := managerGroupColumn[group]; ok {
+		return nil
+	}
+	nsName := strings.TrimSuffix(group, tokensSuffix)
+	_, err := s.findNamespace(customerID, nsName)
+	return err
 }
 
 // findNamespace resolves a namespace by name within a customer without

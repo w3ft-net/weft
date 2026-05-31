@@ -113,6 +113,7 @@ func (s *Server) teamAddUser(session *auth.Session, args []string) (string, erro
 		return "", fmt.Errorf("usage: adduser <email> [<group>]")
 	}
 	email := args[0]
+	custID := session.ActiveCustomerID
 	if len(args) == 1 {
 		if _, err := s.inviteMember(session, email); err != nil {
 			return "", err
@@ -120,8 +121,31 @@ func (s *Server) teamAddUser(session *auth.Session, args []string) (string, erro
 		return fmt.Sprintf("Invited %s — an invite email is on its way. They'll join %s when they accept.\n",
 			email, session.ActiveCustomerName), nil
 	}
+
 	group := args[1]
-	if err := s.store.AddUserToGroup(session.ActiveCustomerID, email, group); err != nil {
+	// Reject a bad group up front, before any side effect — otherwise a
+	// typo'd group would invite someone we didn't mean to.
+	if err := s.store.ValidateGroup(custID, group); err != nil {
+		return "", err
+	}
+
+	// We don't stage grants against unaccepted invites. Instead, make the
+	// state explicit: a brand-new email gets invited now (the email goes
+	// out) and the owner re-runs once they've joined; an already-invited
+	// member who hasn't accepted gets a clear error rather than silence.
+	member, _ := s.store.GetTeamMemberByEmail(custID, email)
+	switch {
+	case member == nil:
+		if _, err := s.inviteMember(session, email); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Invited %s — an invite email is on its way. They must accept before joining %s; re-run `adduser %s %s` once they have.\n",
+			email, group, email, group), nil
+	case member.UserID == nil:
+		return "", fmt.Errorf("%s has been invited but hasn't accepted yet — re-run `adduser %s %s` after they accept", email, email, group)
+	}
+
+	if err := s.store.AddUserToGroup(custID, email, group); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("Added %s to %s.\n", email, group), nil

@@ -57,9 +57,13 @@ deluser dana@acme.com payments         # revoke read
 groups dana@acme.com                   # what dana can do
 id dana@acme.com                       # role + groups
 </code></pre>
-<p>A member must have accepted their invite before you can add them to
-groups. <code>adduser</code>/<code>deluser</code> are owner-only; <code>groups</code> and <code>id</code> are
-readable by any member.</p>
+<p>Group grants apply only once a member has accepted their invite — there
+is no staging. If you <code>adduser</code> someone to a group before they're on the
+team, they get invited then and there (the email goes out), and you
+re-run the command after they accept. An already-invited member who
+hasn't accepted yet gets a clear error, not a silent no-op.</p>
+<p><code>adduser</code>/<code>deluser</code> are owner-only; <code>groups</code> and <code>id</code> are readable by
+any member.</p>
 <p>See <code>man passwd</code> in the shell for the quick reference.</p>
 `,
 } as const;
