@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/stripe/stripe-go/v82"
-	"github.com/stripe/stripe-go/v82/billing/meterevent"
+	"github.com/stripe/stripe-go/v84"
+	"github.com/stripe/stripe-go/v84/billing/meterevent"
 	"gorm.io/gorm/clause"
 
 	"github.com/kevlarcon/weft/store"

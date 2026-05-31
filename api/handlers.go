@@ -16,10 +16,10 @@ import (
 	"github.com/kevlarcon/weft/config"
 
 	"github.com/google/uuid"
-	"github.com/stripe/stripe-go/v82"
-	"github.com/stripe/stripe-go/v82/customer"
-	"github.com/stripe/stripe-go/v82/subscription"
-	"github.com/stripe/stripe-go/v82/webhook"
+	"github.com/stripe/stripe-go/v84"
+	"github.com/stripe/stripe-go/v84/customer"
+	"github.com/stripe/stripe-go/v84/subscription"
+	"github.com/stripe/stripe-go/v84/webhook"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -1054,8 +1054,76 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"status": "active"})
 }
 
+// maxStripeWebhookBytes caps the webhook body we'll read. The old 64KB
+// limit silently truncated large events (a subscription with several items
+// plus expanded price objects), and the HMAC over truncated bytes then fails
+// as a *genuine* "invalid signature" with no hint why. 1 MiB is comfortably
+// above any real Stripe event while still bounding the read.
+const maxStripeWebhookBytes = 1 << 20
+
+// classifyWebhookError turns a webhook.ConstructEvent failure into a short,
+// human-pointed label. An API-version train mismatch (the event is authentic
+// but stripe-go is pinned to a different release train) is reported distinctly
+// from a true signature failure — the former is fixed by upgrading stripe-go,
+// not by re-checking the signing secret.
+func classifyWebhookError(err error) string {
+	if err != nil && strings.Contains(err.Error(), "API version") {
+		return "API version train mismatch — upgrade stripe-go to the account's release train"
+	}
+	return "signature verification failed"
+}
+
+// ourPriceIDs returns the set of Stripe price IDs that belong to weft, drawn
+// from the configured per-tier flat + overage prices. The webhook endpoint
+// shares a Stripe account with sibling products (e.g. vimgym), so every
+// product's events fan out to it; an event is ours only if it references one
+// of these prices.
+func (s *Server) ourPriceIDs() map[string]bool {
+	ids := make(map[string]bool, len(s.StripePrices)*2)
+	for _, p := range s.StripePrices {
+		if p.Flat != "" {
+			ids[p.Flat] = true
+		}
+		if p.Overage != "" {
+			ids[p.Overage] = true
+		}
+	}
+	return ids
+}
+
+// subscriptionHasOurPrice reports whether any item on the subscription
+// references a weft price. Subscription items are included in the payload.
+func (s *Server) subscriptionHasOurPrice(sub *stripe.Subscription) bool {
+	if sub == nil || sub.Items == nil {
+		return false
+	}
+	ours := s.ourPriceIDs()
+	for _, item := range sub.Items.Data {
+		if item != nil && item.Price != nil && ours[item.Price.ID] {
+			return true
+		}
+	}
+	return false
+}
+
+// invoiceHasOurPrice reports whether any line item on the invoice references a
+// weft price. Invoice line items are included in the webhook payload.
+func (s *Server) invoiceHasOurPrice(inv *stripe.Invoice) bool {
+	if inv == nil || inv.Lines == nil {
+		return false
+	}
+	ours := s.ourPriceIDs()
+	for _, line := range inv.Lines.Data {
+		if line != nil && line.Pricing != nil && line.Pricing.PriceDetails != nil &&
+			ours[line.Pricing.PriceDetails.Price] {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxStripeWebhookBytes))
 	if err != nil {
 		http.Error(w, "read error", http.StatusBadRequest)
 		return
@@ -1063,7 +1131,11 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 
 	event, err := webhook.ConstructEvent(body, r.Header.Get("Stripe-Signature"), s.StripeWebhookSecret)
 	if err != nil {
-		log.Printf("Stripe webhook signature verification failed: %v", err)
+		// ConstructEvent fails for two unrelated reasons — a genuine bad
+		// signature, or an authentic event whose API-version release train
+		// doesn't match the pinned stripe-go. Name which one, so the log
+		// points at the real fix instead of a phantom signing-secret problem.
+		log.Printf("Stripe webhook rejected: %s: %v", classifyWebhookError(err), err)
 		http.Error(w, "invalid signature", http.StatusBadRequest)
 		return
 	}
@@ -1075,6 +1147,10 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		var sub stripe.Subscription
 		if err := json.Unmarshal(event.Data.Raw, &sub); err != nil {
 			log.Printf("Stripe webhook unmarshal error: %v", err)
+			break
+		}
+		// Shared Stripe account: ignore sibling products' subscriptions.
+		if !s.subscriptionHasOurPrice(&sub) {
 			break
 		}
 		tier := sub.Metadata["tier"]
@@ -1102,6 +1178,10 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Stripe webhook unmarshal error: %v", err)
 			break
 		}
+		// Shared Stripe account: ignore sibling products' invoices.
+		if !s.invoiceHasOurPrice(&inv) {
+			break
+		}
 		if inv.Parent == nil || inv.Parent.SubscriptionDetails == nil {
 			break
 		}
@@ -1120,6 +1200,10 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		var sub stripe.Subscription
 		if err := json.Unmarshal(event.Data.Raw, &sub); err != nil {
 			log.Printf("Stripe webhook unmarshal error: %v", err)
+			break
+		}
+		// Shared Stripe account: ignore sibling products' subscriptions.
+		if !s.subscriptionHasOurPrice(&sub) {
 			break
 		}
 		if err := s.store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.Subscription{}).
