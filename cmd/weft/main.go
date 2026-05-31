@@ -118,6 +118,9 @@ func main() {
 		case "token":
 			runToken()
 			return
+		case "integration", "integrations":
+			runIntegration()
+			return
 		case "mcp":
 			runMCP()
 			return
@@ -383,11 +386,7 @@ func runLogin() {
 	fmt.Printf("Open this URL to authorize the CLI:\n\n  %s\n\n", authURL)
 	fmt.Printf("Verify code: %s\n\n", device.UserCode)
 
-	// Try to open the browser.
-	if err := exec.Command("open", authURL).Start(); err != nil {
-		// Try xdg-open on Linux.
-		exec.Command("xdg-open", authURL).Start()
-	}
+	openBrowser(authURL)
 
 	fmt.Printf("Waiting for authorization...")
 
@@ -1194,6 +1193,184 @@ func runTokenRevoke(client *shell.HTTPCoordinator) {
 		os.Exit(1)
 	}
 	fmt.Printf("Revoked token id %d\n", id)
+}
+
+// --- Integration subcommand ---
+
+func runIntegration() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: weft integration {list|slack|pagerduty}")
+		os.Exit(1)
+	}
+
+	cfg, err := shell.LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "no .weft.yaml: %v\n", err)
+		os.Exit(1)
+	}
+	client, err := httpClient(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+
+	switch os.Args[2] {
+	case "list", "ls":
+		runIntegrationList(client)
+	case "slack":
+		runIntegrationSlack(client)
+	case "pagerduty", "pd":
+		runIntegrationPagerDuty(client)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown integration command: %s\n", os.Args[2])
+		fmt.Fprintln(os.Stderr, "usage: weft integration {list|slack|pagerduty}")
+		os.Exit(1)
+	}
+}
+
+func runIntegrationList(client *shell.HTTPCoordinator) {
+	status, err := client.ListIntegrations()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "list integrations: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Slack")
+	if status.Slack.Connected {
+		name := status.Slack.TeamName
+		if name == "" {
+			name = "connected"
+		}
+		fmt.Printf("  connected: %s\n", name)
+	} else {
+		fmt.Println("  not connected — `weft integration slack connect`")
+	}
+
+	fmt.Println("\nPagerDuty")
+	if len(status.PagerDuty.Integrations) == 0 {
+		fmt.Println("  no integrations — `weft integration pagerduty add <name> --key <key>`")
+		return
+	}
+	fmt.Printf("  %-20s %-16s %s\n", "NAME", "KEY", "LAST ERROR")
+	for _, it := range status.PagerDuty.Integrations {
+		fmt.Printf("  %-20s %-16s %s\n", it.Name, status.PagerDuty.Keys[it.Name], it.LastError)
+	}
+	fmt.Println("\nReference these names from /etc/notify.yaml under `pagerduty:`.")
+}
+
+func runIntegrationSlack(client *shell.HTTPCoordinator) {
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "usage: weft integration slack {connect|rm}")
+		os.Exit(1)
+	}
+	switch os.Args[3] {
+	case "connect":
+		runSlackConnect(client)
+	case "rm", "disconnect":
+		if err := client.SlackDisconnect(); err != nil {
+			fmt.Fprintf(os.Stderr, "disconnect slack: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Slack disconnected.")
+	default:
+		fmt.Fprintf(os.Stderr, "unknown slack command: %s\n", os.Args[3])
+		os.Exit(1)
+	}
+}
+
+// runSlackConnect brokers the Slack OAuth flow terminal-side: it asks
+// the server for an authorization URL, opens it, and polls the
+// integrations status until the workspace shows connected. Slack OAuth
+// fundamentally requires a browser redirect, but — like `weft login`'s
+// device approval — the flow is initiated and confirmed from the shell.
+func runSlackConnect(client *shell.HTTPCoordinator) {
+	authURL, err := client.SlackConnectURL()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "start slack connect: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Open this URL to authorize Slack for your workspace:\n\n  %s\n\n", authURL)
+	openBrowser(authURL)
+	fmt.Print("Waiting for authorization...")
+
+	deadline := time.Now().Add(3 * time.Minute)
+	for time.Now().Before(deadline) {
+		time.Sleep(2 * time.Second)
+		fmt.Print(".")
+		status, err := client.ListIntegrations()
+		if err != nil {
+			continue
+		}
+		if status.Slack.Connected {
+			name := status.Slack.TeamName
+			if name == "" {
+				name = "your workspace"
+			}
+			fmt.Printf("\n\nSlack connected to %s.\n", name)
+			fmt.Println("Route alerts to it from /etc/notify.yaml under `slack:`.")
+			return
+		}
+	}
+	fmt.Fprintf(os.Stderr, "\nTimed out waiting for Slack authorization.\n")
+	os.Exit(1)
+}
+
+func runIntegrationPagerDuty(client *shell.HTTPCoordinator) {
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "usage: weft integration pagerduty {add|rm} ...")
+		os.Exit(1)
+	}
+	switch os.Args[3] {
+	case "add":
+		args := os.Args[4:]
+		var name, key string
+		for i := 0; i < len(args); i++ {
+			switch args[i] {
+			case "--key":
+				if i+1 < len(args) {
+					key = args[i+1]
+					i++
+				}
+			default:
+				if !strings.HasPrefix(args[i], "-") && name == "" {
+					name = args[i]
+				}
+			}
+		}
+		if name == "" || key == "" {
+			fmt.Fprintln(os.Stderr, "usage: weft integration pagerduty add <name> --key <integration-key>")
+			os.Exit(1)
+		}
+		if err := client.SavePagerDuty(name, key); err != nil {
+			fmt.Fprintf(os.Stderr, "save pagerduty: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("PagerDuty integration %q saved. Reference it from /etc/notify.yaml under `pagerduty:`.\n", name)
+	case "rm", "delete":
+		if len(os.Args) < 5 {
+			fmt.Fprintln(os.Stderr, "usage: weft integration pagerduty rm <name>")
+			os.Exit(1)
+		}
+		name := os.Args[4]
+		if err := client.DeletePagerDuty(name); err != nil {
+			fmt.Fprintf(os.Stderr, "delete pagerduty: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("PagerDuty integration %q removed.\n", name)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown pagerduty command: %s\n", os.Args[3])
+		os.Exit(1)
+	}
+}
+
+// openBrowser best-effort opens a URL in the user's default browser,
+// trying macOS `open` then Linux `xdg-open`. Failure is silent — the
+// URL is always printed for the user to open manually.
+func openBrowser(url string) {
+	if err := exec.Command("open", url).Start(); err != nil {
+		exec.Command("xdg-open", url).Start()
+	}
 }
 
 // --- Org subcommand ---

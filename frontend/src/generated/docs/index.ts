@@ -12,6 +12,7 @@ import builtins from './builtins';
 import metavars from './metavars';
 import crons from './crons';
 import alertingStrategies from './alerting-strategies';
+import notify from './notify';
 import dashboards from './dashboards';
 import alerting from './alerting';
 import weftFuncs from './weft-funcs';
@@ -62,6 +63,7 @@ export const manualSections: readonly ManualSection[] = [
   metavars,
   crons,
   alertingStrategies,
+  notify,
   dashboards,
   alerting,
   weftFuncs,

@@ -98,10 +98,15 @@ or <code>{name: &quot;...&quot;, severity: &quot;...&quot;}</code> (<code>critic
 POSTs a JSON payload with <code>v</code>, <code>watch</code>, <code>alias</code>, <code>ts_unix</code>, <code>body</code>.
 <strong>Email</strong> — bare addresses, or <code>{address: &quot;...&quot;}</code>. Sends a plain-text
 email with the cron name as subject (requires SMTP configuration).</p>
-<p>Slack and PagerDuty credentials are configured under Account →
-Integrations; notify.yaml only names destinations. The PagerDuty
-integration name must match one you've registered there. Webhook
-and email destinations need no account-level credentials — URLs
+<p>Slack and PagerDuty credentials are configured with <code>weft integration</code>
+(or under Account → Integrations in the browser); notify.yaml only
+names destinations:</p>
+<pre><code>weft integration slack connect
+weft integration pagerduty add ops --key &lt;integration-key&gt;
+weft integration list
+</code></pre>
+<p>The PagerDuty integration name must match one you've registered there.
+Webhook and email destinations need no account-level credentials — URLs
 and addresses are per-alias.</p>
 <h2 id="testing-an-alias">Testing an alias</h2>
 <pre><code>echo &quot;test fire&quot; | alert --notify=ops

@@ -117,10 +117,18 @@ POSTs a JSON payload with `v`, `watch`, `alias`, `ts_unix`, `body`.
 **Email** — bare addresses, or `{address: "..."}`. Sends a plain-text
 email with the cron name as subject (requires SMTP configuration).
 
-Slack and PagerDuty credentials are configured under Account →
-Integrations; notify.yaml only names destinations. The PagerDuty
-integration name must match one you've registered there. Webhook
-and email destinations need no account-level credentials — URLs
+Slack and PagerDuty credentials are configured with `weft integration`
+(or under Account → Integrations in the browser); notify.yaml only
+names destinations:
+
+```
+weft integration slack connect
+weft integration pagerduty add ops --key <integration-key>
+weft integration list
+```
+
+The PagerDuty integration name must match one you've registered there.
+Webhook and email destinations need no account-level credentials — URLs
 and addresses are per-alias.
 
 ## Testing an alias

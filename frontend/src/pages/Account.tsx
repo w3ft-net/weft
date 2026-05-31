@@ -418,6 +418,10 @@ function IntegrationsCard({ integrations, onRefresh }: { integrations: Integrati
       <div className="dash-empty" style={{ paddingTop: 12 }}>
         Configure notification routing in <code>/etc/notify.yaml</code> or per-cron with <code># notify: slack:#channel</code>
       </div>
+      <div className="dash-empty" data-testid="account-integrations-cli-hint">
+        Setup via CLI: <code>weft integration slack connect</code>,{' '}
+        <code>weft integration pagerduty add &lt;name&gt; --key &lt;key&gt;</code>, <code>weft integration list</code>.
+      </div>
     </div>
   )
 }

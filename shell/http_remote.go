@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -356,6 +357,121 @@ func (h *HTTPCoordinator) RevokeToken(id uint) error {
 	req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/api/tokens/%d", h.baseURL, id), nil)
 	h.setAuthHeaders(req)
 
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// IntegrationsStatus mirrors GET /api/integrations — the connection
+// state for each notification backend. PagerDuty keys are masked by
+// the server (first/last four chars), so this struct only ever holds
+// display-safe values.
+type IntegrationsStatus struct {
+	Slack struct {
+		Connected bool   `json:"connected"`
+		TeamName  string `json:"team_name"`
+	} `json:"slack"`
+	PagerDuty struct {
+		Connected    bool                   `json:"connected"`
+		Keys         map[string]string      `json:"keys"` // name → masked key
+		Integrations []PagerDutyIntegration `json:"integrations"`
+	} `json:"pagerduty"`
+}
+
+// PagerDutyIntegration is one named PagerDuty target as returned in
+// the integrations status. LastUsedAt is a nullable RFC3339 string.
+type PagerDutyIntegration struct {
+	Name       string  `json:"name"`
+	LastUsedAt *string `json:"last_used_at"`
+	LastError  string  `json:"last_error"`
+}
+
+// ListIntegrations fetches the current Slack + PagerDuty status.
+func (h *HTTPCoordinator) ListIntegrations() (*IntegrationsStatus, error) {
+	req, _ := http.NewRequest("GET", h.baseURL+"/api/integrations", nil)
+	h.setAuthHeaders(req)
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		msg, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var status IntegrationsStatus
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return nil, err
+	}
+	return &status, nil
+}
+
+// SlackConnectURL starts the Slack OAuth flow and returns the
+// authorization URL the user must open to grant the workspace. The
+// handshake completes server-side via the OAuth callback; the CLI
+// confirms by polling ListIntegrations.
+func (h *HTTPCoordinator) SlackConnectURL() (string, error) {
+	req, _ := http.NewRequest("POST", h.baseURL+"/api/integrations/slack/connect", nil)
+	h.setAuthHeaders(req)
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		msg, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var result struct {
+		URL string `json:"url"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	return result.URL, nil
+}
+
+// SlackDisconnect removes the Slack integration.
+func (h *HTTPCoordinator) SlackDisconnect() error {
+	req, _ := http.NewRequest("DELETE", h.baseURL+"/api/integrations/slack", nil)
+	h.setAuthHeaders(req)
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// SavePagerDuty creates or updates a named PagerDuty integration key.
+func (h *HTTPCoordinator) SavePagerDuty(name, key string) error {
+	body, _ := json.Marshal(map[string]string{"name": name, "key": key})
+	req, _ := http.NewRequest("PUT", h.baseURL+"/api/integrations/pagerduty", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	h.setAuthHeaders(req)
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		msg, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
+
+// DeletePagerDuty removes a single PagerDuty integration by name.
+func (h *HTTPCoordinator) DeletePagerDuty(name string) error {
+	req, _ := http.NewRequest("DELETE", h.baseURL+"/api/integrations/pagerduty/"+url.PathEscape(name), nil)
+	h.setAuthHeaders(req)
 	resp, err := h.client.Do(req)
 	if err != nil {
 		return err
