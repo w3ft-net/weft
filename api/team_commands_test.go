@@ -124,3 +124,56 @@ func TestTeamAddUser_GroupGrantInvitesAndReportsPending(t *testing.T) {
 		t.Errorf("typo'd group should not have invited %s", other)
 	}
 }
+
+// TestTeamCommands_NonOwnerDenied pins that team mutation (adduser /
+// deluser) is owner-only. This is where the "who can manage the team"
+// permission test lives now: team membership used to be edited as the
+// virtual /etc/team.yaml file (gated in shellfs), but that file was
+// removed — the team is mutated through these commands instead, so the
+// gate moved to the api layer.
+//
+// The nuance carried over from the old /etc/team.yaml test: a non-owner
+// is denied even with CanManageEtc set. CanManageEtc gates /etc *file*
+// writes (notify.yaml, dashboards), never team membership — that's
+// strictly the owner's. The owner check is the first statement in each
+// handler, so a denial needs no store.
+func TestTeamCommands_NonOwnerDenied(t *testing.T) {
+	s := &Server{}
+
+	nonOwners := []struct {
+		name    string
+		session *auth.Session
+	}{
+		{"member-no-flags", &auth.Session{Email: "m@x.test", IsOwner: false}},
+		{"member-with-can-manage-etc", &auth.Session{Email: "m@x.test", IsOwner: false, CanManageEtc: true}},
+	}
+	for _, sc := range nonOwners {
+		for _, cmd := range []string{"adduser bob@x.test", "deluser bob@x.test"} {
+			t.Run(sc.name+"/"+strings.Fields(cmd)[0], func(t *testing.T) {
+				handled, _, err := s.maybeHandleTeamCommand(sc.session, cmd)
+				if !handled {
+					t.Fatalf("%q should be claimed as a team command", cmd)
+				}
+				if err == nil || !strings.Contains(err.Error(), "only the owner") {
+					t.Errorf("non-owner (%s) was not denied; err=%v", sc.name, err)
+				}
+			})
+		}
+	}
+}
+
+// TestTeamCommands_OwnerPassesGate confirms the owner clears the
+// owner-only gate (the positive half of the transferred /etc/team.yaml
+// test). Uses deluser of a non-member: an owner gets past the IsOwner
+// check and reaches RemoveMember, which reports the missing member —
+// proving the gate let the owner through (a denied caller would never
+// reach the store and would say "only the owner" instead).
+func TestTeamCommands_OwnerPassesGate(t *testing.T) {
+	srv, s := testServer(t)
+	sess, _ := ownerSession(t, s, fmt.Sprintf("tc-owner-%d", os.Getpid()))
+
+	_, err := srv.teamDelUser(sess, []string{fmt.Sprintf("ghost-%d@x.test", os.Getpid())})
+	if err != nil && strings.Contains(err.Error(), "only the owner") {
+		t.Fatalf("owner was blocked by the owner-only gate: %v", err)
+	}
+}
