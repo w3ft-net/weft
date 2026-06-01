@@ -21,6 +21,7 @@ import (
 	"github.com/kevlarcon/weft/shard"
 	"github.com/kevlarcon/weft/shellfs"
 	"github.com/kevlarcon/weft/store"
+	"github.com/kevlarcon/weft/theme"
 )
 
 // TimeRange aliases logdb.TimeRange so callers inside the coordinator
@@ -1198,6 +1199,17 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 
 	interp := bash.NewInterpreter()
 	interp.SetStdin(strings.NewReader(""))
+	// Highlight server-side `cat` in weft's branded palette so a
+	// delegated client that ships `cat /bin/x` to the exec backend gets
+	// back the same weave it paints for a locally-read file. /bin and
+	// /cron.d entries self-identify their language via shellfs's LangFS
+	// hook, so the palette alone is enough — we deliberately do NOT set
+	// SyntaxFallback (the client does, for typed-prompt context): forcing
+	// a bash fallback here would highlight extensionless /tmp files too,
+	// breaking the raw-content contract (TestCoordinatorQuery_CatTmpReturnsContent).
+	// The palette definition is shared via weft/theme so client and
+	// server can't drift.
+	interp.SetPalette(theme.Palette())
 
 	stdoutR, stdoutW := io.Pipe()
 	stderrR, stderrW := io.Pipe()

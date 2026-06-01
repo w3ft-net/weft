@@ -105,6 +105,10 @@ type Shell struct {
 // JS-callback-backed store before this runs.
 func (s *Shell) ConfigureCore(core *shellcore.ShellCore) {
 	core.SetSyntaxFallback(syntax.LangBash)
+	// Theme syntax highlighting off the startup logo's thread colors
+	// (see weftPalette). Without this the shell renders warp's
+	// DefaultPalette, which doesn't share weft's blue/gold weave.
+	core.SetPalette(weftPalette())
 	if s.FS != nil {
 		core.SetFS(s.FS)
 	}
