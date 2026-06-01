@@ -94,7 +94,7 @@ func WithNoticeQueue(q NoticeSink) Option {
 }
 
 // MountFS returns the underlying MountFS for callers that need
-// direct access (e.g., to call ClassifyPath or ReadDir as []string).
+// direct access (e.g., to call ReadDir or Tree).
 func (f *ShellFS) MountFS() *shellcore.MountFS { return f.mfs }
 
 // --- bash.FS implementation ---

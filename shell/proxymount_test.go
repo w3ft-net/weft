@@ -23,7 +23,7 @@ func newTestProxyMount(t *testing.T, prefix string, handler http.HandlerFunc) *P
 	t.Cleanup(srv.Close)
 	return &ProxyMount{
 		prefix:  prefix,
-		caps:    shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true},
+		caps:    shellcore.MountCaps{Writable: true},
 		client:  srv.Client(),
 		baseURL: srv.URL,
 		token:   "tok",
@@ -32,11 +32,11 @@ func newTestProxyMount(t *testing.T, prefix string, handler http.HandlerFunc) *P
 }
 
 func TestProxyMount_PrefixAndCaps(t *testing.T) {
-	p := &ProxyMount{prefix: "/bin", caps: shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true}}
+	p := &ProxyMount{prefix: "/bin", caps: shellcore.MountCaps{Writable: true}}
 	if p.Prefix() != "/bin" {
 		t.Errorf("Prefix = %q", p.Prefix())
 	}
-	if !p.Caps().Writable || p.Caps().Kind != shellcore.MountLocal {
+	if !p.Caps().Writable {
 		t.Errorf("Caps = %+v", p.Caps())
 	}
 }

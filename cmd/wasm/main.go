@@ -52,14 +52,13 @@ func wasmInit(_ js.Value, args []js.Value) any {
 		OnAction:  handleWeftAction,
 	})
 
-	// Build the JS-backed MountFS. SetFS in ConfigureCore picks this
-	// up and auto-derives the PathClassifier from it.
+	// Build the JS-backed MountFS. SetFS in ConfigureCore wires it in.
 	mfs := shellcore.NewMountFS()
-	mfs.Register(wasm.NewJSMount("/bin", shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true}, jsCallbacks, "bash"))
-	mfs.Register(wasm.NewJSMount("/cron.d", shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true}, jsCallbacks, "bash"))
-	mfs.Register(wasm.NewJSMount("/etc", shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true}, jsCallbacks, "yaml"))
-	mfs.Register(wasm.NewJSMount("/log", shellcore.MountCaps{Kind: shellcore.MountQuery, Writable: false}, jsCallbacks, ""))
-	mfs.Register(wasm.NewJSMount("/tmp", shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true}, jsCallbacks, ""))
+	mfs.Register(wasm.NewJSMount("/bin", shellcore.MountCaps{Writable: true}, jsCallbacks, "bash"))
+	mfs.Register(wasm.NewJSMount("/cron.d", shellcore.MountCaps{Writable: true}, jsCallbacks, "bash"))
+	mfs.Register(wasm.NewJSMount("/etc", shellcore.MountCaps{Writable: true}, jsCallbacks, "yaml"))
+	mfs.Register(wasm.NewJSMount("/log", shellcore.MountCaps{Writable: false}, jsCallbacks, ""))
+	mfs.Register(wasm.NewJSMount("/tmp", shellcore.MountCaps{Writable: true}, jsCallbacks, ""))
 
 	// Default time range: last 24h. Resolution happens server-side on each
 	// request — the client just ships the spec verbatim, so a tab left

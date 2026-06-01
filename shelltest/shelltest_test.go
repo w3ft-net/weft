@@ -15,21 +15,9 @@ func TestShellBehavior(t *testing.T) {
 		t.Run(fix.Name, func(t *testing.T) {
 			for _, tc := range fix.Cases {
 				t.Run(tc.Name, func(t *testing.T) {
-					got, gotErr := execCase(fix.Files, tc.Command)
-					if tc.WantErr != "" {
-						if gotErr == "" {
-							t.Fatalf("expected error containing %q, got output: %q", tc.WantErr, got)
-						}
-						if !strings.Contains(strings.ToLower(gotErr), strings.ToLower(tc.WantErr)) {
-							t.Fatalf("error = %q, want substring %q", gotErr, tc.WantErr)
-						}
-						return
-					}
-					if gotErr != "" {
-						t.Fatalf("unexpected error: %s", gotErr)
-					}
-					if got != tc.Want {
-						t.Fatalf("output mismatch:\n  got:  %q\n  want: %q", got, tc.Want)
+					got := dispatchCase(fix.Files, tc.Command)
+					if got != tc.WantDispatch {
+						t.Fatalf("dispatch mismatch:\n  got:  %q\n  want: %q (pure-terminal client must ship the line verbatim)", got, tc.WantDispatch)
 					}
 				})
 			}
@@ -37,91 +25,61 @@ func TestShellBehavior(t *testing.T) {
 	}
 }
 
-// execCase builds a MountFS from the fixture files, wires it into a
-// shellcore, executes the command, and returns the output or error.
-func execCase(files []File, command string) (output, errMsg string) {
+// dispatchCase builds a MountFS from the fixture files, wires it into a
+// shellcore, types the command, and returns the pipeline the client
+// shipped to the executor via ActionExec (empty if nothing dispatched —
+// e.g. a client-only builtin). The FS is wired so tab-completion and
+// bare-cd validation have something to read, but the pure-terminal
+// client renders no output itself; it ships the line.
+func dispatchCase(files []File, command string) string {
 	mfs := buildMountFS(files)
 
-	var buf strings.Builder
-	var queryDispatched bool
-
+	var dispatched string
 	core := shellcore.NewShellCore(
 		[]string{"myapp"}, 80, 24,
-		func(b []byte) { buf.Write(b) },
+		func(b []byte) {},
 		func(a shellcore.Action) {
-			if _, ok := a.(shellcore.ActionExec); ok {
-				queryDispatched = true
+			if q, ok := a.(shellcore.ActionExec); ok {
+				dispatched = q.Pipeline
 			}
 		},
 	)
 	core.SetFS(mfs)
 	core.Redraw()
-	buf.Reset()
 
 	for _, r := range command {
 		core.HandleEvent(shellcore.KeyEvent{Rune: r})
 	}
 	core.HandleEvent(shellcore.KeyEvent{Key: shellcore.KeyEnter})
 
-	if queryDispatched {
-		return "__QUERY_DISPATCHED__", ""
-	}
-
-	raw := buf.String()
-	// Strip ANSI and normalize terminal line endings.
-	stripped := shellcore.StripANSI(raw)
-	stripped = strings.ReplaceAll(stripped, "\r\n", "\n")
-	stripped = strings.ReplaceAll(stripped, "\r", "")
-	// The scrollback includes the prompt + typed command + output + next prompt.
-	// Find the first newline (end of the echoed command), then take everything
-	// up to the final prompt line.
-	lines := strings.Split(stripped, "\n")
-	// Skip the first line (command echo) and the last line (next prompt).
-	if len(lines) > 2 {
-		outputLines := lines[1 : len(lines)-1]
-		// Remove trailing empty line if present.
-		if len(outputLines) > 0 && outputLines[len(outputLines)-1] == "" {
-			outputLines = outputLines[:len(outputLines)-1]
-		}
-		result := strings.Join(outputLines, "\n")
-		if result != "" {
-			result += "\n"
-		}
-		// Check if the output contains an error indicator.
-		lower := strings.ToLower(result)
-		if strings.Contains(lower, "not found") || strings.Contains(lower, "no such") ||
-			strings.Contains(lower, "read-only") || strings.Contains(lower, "permission denied") {
-			return "", strings.TrimSpace(result)
-		}
-		return result, ""
-	}
-	return "", ""
+	return dispatched
 }
 
 func buildMountFS(files []File) *shellcore.MountFS {
 	mfs := shellcore.NewMountFS()
-	mfs.Register(&testMount{prefix: "/bin", files: files})
-	mfs.Register(&testMount{prefix: "/cron.d", files: files})
-	mfs.Register(&testMount{prefix: "/etc", files: files})
-	mfs.Register(&testMount{prefix: "/log", kind: shellcore.MountQuery, files: files, apps: []string{"myapp"}})
-	mfs.Register(&testMount{prefix: "/tmp", files: files})
+	mfs.Register(&testMount{prefix: "/bin", writable: true, files: files})
+	mfs.Register(&testMount{prefix: "/cron.d", writable: true, files: files})
+	mfs.Register(&testMount{prefix: "/etc", writable: true, files: files})
+	mfs.Register(&testMount{prefix: "/log", files: files, apps: []string{"myapp"}}) // read-only query namespace
+	mfs.Register(&testMount{prefix: "/tmp", writable: true, files: files})
 	return mfs
 }
 
-// testMount is an in-memory Mount for test fixtures.
+// testMount is an in-memory Mount for test fixtures. The /log mount is
+// read-only and carries an apps list it synthesizes a directory listing
+// from (mimicking the query namespace); the rest are writable local
+// trees. (Mounts no longer have a "kind" — the server owns query-vs-local
+// routing; the fixture keys the synthesized listing off apps.)
 type testMount struct {
-	prefix string
-	kind   shellcore.MountKind
-	files  []File
-	apps   []string
+	prefix   string
+	writable bool
+	files    []File
+	apps     []string
 }
 
 func (m *testMount) Prefix() string { return m.prefix }
 func (m *testMount) Caps() shellcore.MountCaps {
-	return shellcore.MountCaps{
-		Kind:     m.kind,
-		Writable: m.kind == shellcore.MountLocal,
-	}
+	return shellcore.MountCaps{Writable: m.writable}
 }
 
 func (m *testMount) ReadFile(rel string) ([]byte, error) {
@@ -152,8 +110,8 @@ func (m *testMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 		p += "/"
 	}
 
-	// For log mount, synthesize from apps list.
-	if m.kind == shellcore.MountQuery && rel == "" {
+	// For the log mount, synthesize the listing from the apps list.
+	if len(m.apps) > 0 && rel == "" {
 		var entries []fs.DirEntry
 		for _, app := range m.apps {
 			entries = append(entries, &testDirEntry{name: app + ".log"})
@@ -220,7 +178,6 @@ func (m *testMount) Remove(rel string) error {
 	return fs.ErrNotExist
 }
 
-
 func (m *testMount) abs(rel string) string {
 	if rel == "" {
 		return m.prefix
@@ -241,19 +198,31 @@ type testFileInfo struct {
 	dir  bool
 }
 
-func (fi *testFileInfo) Name() string      { return fi.name }
-func (fi *testFileInfo) Size() int64       { return fi.size }
-func (fi *testFileInfo) Mode() fs.FileMode { if fi.dir { return fs.ModeDir | 0755 }; return 0644 }
+func (fi *testFileInfo) Name() string { return fi.name }
+func (fi *testFileInfo) Size() int64  { return fi.size }
+func (fi *testFileInfo) Mode() fs.FileMode {
+	if fi.dir {
+		return fs.ModeDir | 0755
+	}
+	return 0644
+}
 func (fi *testFileInfo) ModTime() time.Time { return time.Time{} }
-func (fi *testFileInfo) IsDir() bool       { return fi.dir }
-func (fi *testFileInfo) Sys() any          { return nil }
+func (fi *testFileInfo) IsDir() bool        { return fi.dir }
+func (fi *testFileInfo) Sys() any           { return nil }
 
 type testDirEntry struct {
 	name string
 	dir  bool
 }
 
-func (e *testDirEntry) Name() string               { return e.name }
-func (e *testDirEntry) IsDir() bool                { return e.dir }
-func (e *testDirEntry) Type() fs.FileMode          { if e.dir { return fs.ModeDir }; return 0 }
-func (e *testDirEntry) Info() (fs.FileInfo, error) { return &testFileInfo{name: e.name, dir: e.dir}, nil }
+func (e *testDirEntry) Name() string { return e.name }
+func (e *testDirEntry) IsDir() bool  { return e.dir }
+func (e *testDirEntry) Type() fs.FileMode {
+	if e.dir {
+		return fs.ModeDir
+	}
+	return 0
+}
+func (e *testDirEntry) Info() (fs.FileInfo, error) {
+	return &testFileInfo{name: e.name, dir: e.dir}, nil
+}

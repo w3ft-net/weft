@@ -13,9 +13,9 @@
     ],
     "cases": [
       {
-        "name": "ls / shows mount prefixes",
+        "name": "ls / ships",
         "command": "ls /",
-        "want": "bin/\ncron.d/\netc/\nlog/\ntmp/\n"
+        "want_dispatch": "ls /"
       }
     ]
   },
@@ -33,25 +33,24 @@
     ],
     "cases": [
       {
-        "name": "ls /bin lists functions",
+        "name": "ls /bin ships",
         "command": "ls /bin",
-        "want": "check\nhello\n"
+        "want_dispatch": "ls /bin"
       },
       {
-        "name": "cat /bin/hello returns content",
+        "name": "cat /bin/hello ships",
         "command": "cat /bin/hello",
-        "want": "echo hi\n"
+        "want_dispatch": "cat /bin/hello"
       },
       {
-        "name": "cat nonexistent file errors",
+        "name": "cat nonexistent ships (server reports the error)",
         "command": "cat /bin/nope",
-        "want": "",
-        "want_err": "no such file"
+        "want_dispatch": "cat /bin/nope"
       }
     ]
   },
   {
-    "name": "log path classification",
+    "name": "log queries",
     "files": [
       {
         "path": "/bin/hello",
@@ -60,14 +59,14 @@
     ],
     "cases": [
       {
-        "name": "cat /log path dispatches query",
+        "name": "cat /log/\u003capp\u003e ships",
         "command": "cat /log/myapp.log",
-        "want": "__QUERY_DISPATCHED__"
+        "want_dispatch": "cat /log/myapp.log"
       },
       {
-        "name": "ls /log lists apps",
+        "name": "ls /log ships",
         "command": "ls /log",
-        "want": "myapp.log\n"
+        "want_dispatch": "ls /log"
       }
     ]
   },
@@ -81,14 +80,14 @@
     ],
     "cases": [
       {
-        "name": "cat /tmp/notes.txt",
+        "name": "cat /tmp/notes.txt ships",
         "command": "cat /tmp/notes.txt",
-        "want": "remember this\n"
+        "want_dispatch": "cat /tmp/notes.txt"
       },
       {
-        "name": "ls /tmp",
+        "name": "ls /tmp ships",
         "command": "ls /tmp",
-        "want": "notes.txt\n"
+        "want_dispatch": "ls /tmp"
       }
     ]
   },
@@ -102,14 +101,14 @@
     ],
     "cases": [
       {
-        "name": "ls /cron.d",
+        "name": "ls /cron.d ships",
         "command": "ls /cron.d",
-        "want": "heartbeat\n"
+        "want_dispatch": "ls /cron.d"
       },
       {
-        "name": "cat /cron.d/heartbeat",
+        "name": "cat /cron.d/heartbeat ships",
         "command": "cat /cron.d/heartbeat",
-        "want": "# schedule: */5 * * * *\ncurl localhost/health\n"
+        "want_dispatch": "cat /cron.d/heartbeat"
       }
     ]
   },
@@ -123,10 +122,9 @@
     ],
     "cases": [
       {
-        "name": "rm /log/x fails read-only",
+        "name": "rm /log/x ships",
         "command": "rm /log/myapp.log",
-        "want": "",
-        "want_err": "read-only"
+        "want_dispatch": "rm /log/myapp.log"
       }
     ]
   },
@@ -144,14 +142,14 @@
     ],
     "cases": [
       {
-        "name": "ls /etc shows subdirs and files",
+        "name": "ls /etc ships",
         "command": "ls /etc",
-        "want": "dashboards/\nnotify.yaml\n"
+        "want_dispatch": "ls /etc"
       },
       {
-        "name": "cat /etc/notify.yaml",
+        "name": "cat /etc/notify.yaml ships",
         "command": "cat /etc/notify.yaml",
-        "want": "aliases: {}\n"
+        "want_dispatch": "cat /etc/notify.yaml"
       }
     ]
   }

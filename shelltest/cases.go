@@ -3,19 +3,30 @@
 // and the browser WASM path. A go:generate step exports the cases as
 // JSON for the frontend vitest harness to consume.
 //
+// Pure-terminal contract: weft's shell (CLI and browser) is a delegated
+// client — it owns no shell semantics. Every command line is shipped to
+// the exec backend verbatim via ActionExec; the server (a real pkg/bash
+// interpreter over shellfs) lists directories, reads files, and enforces
+// read-only mounts. So these cases assert the *dispatch* — that a typed
+// line reaches the executor unmangled — not client-rendered output. The
+// listing/read/permission semantics are covered server-side in the
+// coordinator tests (coordinator/*_test.go) and the live integration
+// suite (integration/dirstack_courier_*_test.go).
+//
 //go:generate go test -run TestExportFixtures -count=1
 package shelltest
 
-// Case is a single shell behavior assertion. The Go test and the TS
-// test both exercise the same cases: given Files as the FS state,
-// feed Command through shellcore, and check the output matches Want.
+// Case is a single shell-dispatch assertion. The Go test and the TS
+// test both exercise the same cases: given Files as the FS state, feed
+// Command through shellcore and check it dispatches WantDispatch (the
+// pipeline shipped to the executor) verbatim.
 type Case struct {
 	Name    string `json:"name"`
 	Command string `json:"command"`
-	Want    string `json:"want"`
-	// WantErr, when non-empty, means the command should produce this
-	// error message instead of Want output.
-	WantErr string `json:"want_err,omitempty"`
+	// WantDispatch is the pipeline the client must ship to the executor.
+	// For the pure-terminal client this equals Command — nothing is
+	// rewritten or intercepted client-side.
+	WantDispatch string `json:"want_dispatch"`
 }
 
 // File is a virtual file present in the test mount before the command
@@ -33,7 +44,8 @@ type Fixture struct {
 	Cases []Case `json:"cases"`
 }
 
-// Fixtures is the complete exported test set.
+// Fixtures is the complete exported test set. Every command ships
+// verbatim — the client is a pure terminal.
 var Fixtures = []Fixture{
 	{
 		Name: "root listing",
@@ -42,11 +54,7 @@ var Fixtures = []Fixture{
 			{Path: "/tmp/scratch", Content: "temp"},
 		},
 		Cases: []Case{
-			{
-				Name:    "ls / shows mount prefixes",
-				Command: "ls /",
-				Want:    "bin/\ncron.d/\netc/\nlog/\ntmp/\n",
-			},
+			{Name: "ls / ships", Command: "ls /", WantDispatch: "ls /"},
 		},
 	},
 	{
@@ -56,39 +64,19 @@ var Fixtures = []Fixture{
 			{Path: "/bin/check", Content: "#!/usr/bin/env lua\nprint('ok')"},
 		},
 		Cases: []Case{
-			{
-				Name:    "ls /bin lists functions",
-				Command: "ls /bin",
-				Want:    "check\nhello\n",
-			},
-			{
-				Name:    "cat /bin/hello returns content",
-				Command: "cat /bin/hello",
-				Want:    "echo hi\n",
-			},
-			{
-				Name:    "cat nonexistent file errors",
-				Command: "cat /bin/nope",
-				WantErr: "no such file",
-			},
+			{Name: "ls /bin ships", Command: "ls /bin", WantDispatch: "ls /bin"},
+			{Name: "cat /bin/hello ships", Command: "cat /bin/hello", WantDispatch: "cat /bin/hello"},
+			{Name: "cat nonexistent ships (server reports the error)", Command: "cat /bin/nope", WantDispatch: "cat /bin/nope"},
 		},
 	},
 	{
-		Name: "log path classification",
+		Name: "log queries",
 		Files: []File{
 			{Path: "/bin/hello", Content: "echo hi"},
 		},
 		Cases: []Case{
-			{
-				Name:    "cat /log path dispatches query",
-				Command: "cat /log/myapp.log",
-				Want:    "__QUERY_DISPATCHED__",
-			},
-			{
-				Name:    "ls /log lists apps",
-				Command: "ls /log",
-				Want:    "myapp.log\n",
-			},
+			{Name: "cat /log/<app> ships", Command: "cat /log/myapp.log", WantDispatch: "cat /log/myapp.log"},
+			{Name: "ls /log ships", Command: "ls /log", WantDispatch: "ls /log"},
 		},
 	},
 	{
@@ -97,16 +85,8 @@ var Fixtures = []Fixture{
 			{Path: "/tmp/notes.txt", Content: "remember this"},
 		},
 		Cases: []Case{
-			{
-				Name:    "cat /tmp/notes.txt",
-				Command: "cat /tmp/notes.txt",
-				Want:    "remember this\n",
-			},
-			{
-				Name:    "ls /tmp",
-				Command: "ls /tmp",
-				Want:    "notes.txt\n",
-			},
+			{Name: "cat /tmp/notes.txt ships", Command: "cat /tmp/notes.txt", WantDispatch: "cat /tmp/notes.txt"},
+			{Name: "ls /tmp ships", Command: "ls /tmp", WantDispatch: "ls /tmp"},
 		},
 	},
 	{
@@ -115,16 +95,8 @@ var Fixtures = []Fixture{
 			{Path: "/cron.d/heartbeat", Content: "# schedule: */5 * * * *\ncurl localhost/health\n"},
 		},
 		Cases: []Case{
-			{
-				Name:    "ls /cron.d",
-				Command: "ls /cron.d",
-				Want:    "heartbeat\n",
-			},
-			{
-				Name:    "cat /cron.d/heartbeat",
-				Command: "cat /cron.d/heartbeat",
-				Want:    "# schedule: */5 * * * *\ncurl localhost/health\n",
-			},
+			{Name: "ls /cron.d ships", Command: "ls /cron.d", WantDispatch: "ls /cron.d"},
+			{Name: "cat /cron.d/heartbeat ships", Command: "cat /cron.d/heartbeat", WantDispatch: "cat /cron.d/heartbeat"},
 		},
 	},
 	{
@@ -133,11 +105,9 @@ var Fixtures = []Fixture{
 			{Path: "/bin/hello", Content: "echo hi"},
 		},
 		Cases: []Case{
-			{
-				Name:    "rm /log/x fails read-only",
-				Command: "rm /log/myapp.log",
-				WantErr: "read-only",
-			},
+			// rm ships too — the server enforces the read-only mount and
+			// reports the error; the client no longer pre-checks.
+			{Name: "rm /log/x ships", Command: "rm /log/myapp.log", WantDispatch: "rm /log/myapp.log"},
 		},
 	},
 	{
@@ -147,16 +117,8 @@ var Fixtures = []Fixture{
 			{Path: "/etc/notify.yaml", Content: "aliases: {}"},
 		},
 		Cases: []Case{
-			{
-				Name:    "ls /etc shows subdirs and files",
-				Command: "ls /etc",
-				Want:    "dashboards/\nnotify.yaml\n",
-			},
-			{
-				Name:    "cat /etc/notify.yaml",
-				Command: "cat /etc/notify.yaml",
-				Want:    "aliases: {}\n",
-			},
+			{Name: "ls /etc ships", Command: "ls /etc", WantDispatch: "ls /etc"},
+			{Name: "cat /etc/notify.yaml ships", Command: "cat /etc/notify.yaml", WantDispatch: "cat /etc/notify.yaml"},
 		},
 	},
 }

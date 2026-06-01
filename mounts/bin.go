@@ -15,7 +15,7 @@ type BinMount struct{ cfg Config }
 func (m *BinMount) Prefix() string { return "/bin" }
 
 func (m *BinMount) Caps() shellcore.MountCaps {
-	return shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true}
+	return shellcore.MountCaps{Writable: true}
 }
 
 func (m *BinMount) ReadDir(rel string) ([]fs.DirEntry, error) {
@@ -161,12 +161,17 @@ type vfsFileInfo struct {
 	owner string
 }
 
-func (fi *vfsFileInfo) Name() string      { return fi.name }
-func (fi *vfsFileInfo) Size() int64       { return fi.size }
-func (fi *vfsFileInfo) Mode() fs.FileMode { if fi.dir { return fs.ModeDir | 0755 }; return 0644 }
+func (fi *vfsFileInfo) Name() string { return fi.name }
+func (fi *vfsFileInfo) Size() int64  { return fi.size }
+func (fi *vfsFileInfo) Mode() fs.FileMode {
+	if fi.dir {
+		return fs.ModeDir | 0755
+	}
+	return 0644
+}
 func (fi *vfsFileInfo) ModTime() time.Time { return fi.mtime }
-func (fi *vfsFileInfo) IsDir() bool       { return fi.dir }
-func (fi *vfsFileInfo) Sys() any          { return ownerOnly{fi.owner} }
+func (fi *vfsFileInfo) IsDir() bool        { return fi.dir }
+func (fi *vfsFileInfo) Sys() any           { return ownerOnly{fi.owner} }
 
 type ownerOnly struct{ name string }
 
@@ -180,9 +185,14 @@ type vfsDirEntry struct {
 	owner string
 }
 
-func (de *vfsDirEntry) Name() string      { return de.name }
-func (de *vfsDirEntry) IsDir() bool       { return de.dir }
-func (de *vfsDirEntry) Type() fs.FileMode { if de.dir { return fs.ModeDir }; return 0 }
+func (de *vfsDirEntry) Name() string { return de.name }
+func (de *vfsDirEntry) IsDir() bool  { return de.dir }
+func (de *vfsDirEntry) Type() fs.FileMode {
+	if de.dir {
+		return fs.ModeDir
+	}
+	return 0
+}
 func (de *vfsDirEntry) Info() (fs.FileInfo, error) {
 	return &vfsFileInfo{name: de.name, dir: de.dir, size: de.size, mtime: de.mtime, owner: de.owner}, nil
 }

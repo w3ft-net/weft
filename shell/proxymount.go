@@ -28,7 +28,7 @@ type ProxyMount struct {
 }
 
 func (p *ProxyMount) Prefix() string            { return p.prefix }
-func (p *ProxyMount) Caps() shellcore.MountCaps  { return p.caps }
+func (p *ProxyMount) Caps() shellcore.MountCaps { return p.caps }
 
 func (p *ProxyMount) fullPath(rel string) string {
 	if rel == "" {
@@ -197,20 +197,23 @@ func NewProxyMountFS(baseURL, token, org string) *shellcore.MountFS {
 
 	type mountDef struct {
 		prefix   string
-		kind     shellcore.MountKind
 		writable bool
 	}
+	// /log is the read-only query namespace; the rest are writable
+	// local trees. (Mounts no longer carry a "kind" — the server owns
+	// query-vs-local routing now; writability is the only capability the
+	// client still tracks, for the FS write/remove gates.)
 	defs := []mountDef{
-		{"/bin", shellcore.MountLocal, true},
-		{"/cron.d", shellcore.MountLocal, true},
-		{"/etc", shellcore.MountLocal, true},
-		{"/log", shellcore.MountQuery, false},
-		{"/tmp", shellcore.MountLocal, true},
+		{"/bin", true},
+		{"/cron.d", true},
+		{"/etc", true},
+		{"/log", false},
+		{"/tmp", true},
 	}
 	for _, d := range defs {
 		mfs.Register(&ProxyMount{
 			prefix:  d.prefix,
-			caps:    shellcore.MountCaps{Kind: d.kind, Writable: d.writable},
+			caps:    shellcore.MountCaps{Writable: d.writable},
 			client:  client,
 			baseURL: baseURL,
 			token:   token,
@@ -236,19 +239,31 @@ type proxyFileInfo struct {
 	mtime time.Time
 }
 
-func (fi *proxyFileInfo) Name() string      { return fi.name }
-func (fi *proxyFileInfo) Size() int64       { return fi.size }
-func (fi *proxyFileInfo) Mode() fs.FileMode { if fi.dir { return fs.ModeDir | 0755 }; return 0644 }
+func (fi *proxyFileInfo) Name() string { return fi.name }
+func (fi *proxyFileInfo) Size() int64  { return fi.size }
+func (fi *proxyFileInfo) Mode() fs.FileMode {
+	if fi.dir {
+		return fs.ModeDir | 0755
+	}
+	return 0644
+}
 func (fi *proxyFileInfo) ModTime() time.Time { return fi.mtime }
-func (fi *proxyFileInfo) IsDir() bool       { return fi.dir }
-func (fi *proxyFileInfo) Sys() any          { return nil }
+func (fi *proxyFileInfo) IsDir() bool        { return fi.dir }
+func (fi *proxyFileInfo) Sys() any           { return nil }
 
 type proxyDirEntry struct {
 	name string
 	dir  bool
 }
 
-func (de *proxyDirEntry) Name() string              { return de.name }
-func (de *proxyDirEntry) IsDir() bool               { return de.dir }
-func (de *proxyDirEntry) Type() fs.FileMode         { if de.dir { return fs.ModeDir }; return 0 }
-func (de *proxyDirEntry) Info() (fs.FileInfo, error) { return &proxyFileInfo{name: de.name, dir: de.dir}, nil }
+func (de *proxyDirEntry) Name() string { return de.name }
+func (de *proxyDirEntry) IsDir() bool  { return de.dir }
+func (de *proxyDirEntry) Type() fs.FileMode {
+	if de.dir {
+		return fs.ModeDir
+	}
+	return 0
+}
+func (de *proxyDirEntry) Info() (fs.FileInfo, error) {
+	return &proxyFileInfo{name: de.name, dir: de.dir}, nil
+}

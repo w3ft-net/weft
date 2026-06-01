@@ -30,8 +30,11 @@ interface File {
 interface Case {
   name: string
   command: string
-  want: string
-  want_err?: string
+  // Pure-terminal contract: the client ships the line verbatim to the
+  // executor. want_dispatch is the pipeline the WASM shell must dispatch
+  // (via the startQuery callback) — it equals command, since nothing is
+  // rendered or rewritten client-side.
+  want_dispatch: string
 }
 
 interface Fixture {
@@ -40,16 +43,11 @@ interface Fixture {
   cases: Case[]
 }
 
-// Strip ANSI escape sequences.
-function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '')
-}
-
 // Boot the WASM binary with given files as FS state. Returns a
 // function to execute commands and read output.
 async function bootShell(files: File[]): Promise<{
   exec: (command: string) => string
-  queryDispatched: () => boolean
+  dispatchedPipeline: () => string
 }> {
   const wasmPath = resolve(__dirname, '../../public/shell.wasm')
   const wasmBuffer = readFileSync(wasmPath)
@@ -59,11 +57,13 @@ async function bootShell(files: File[]): Promise<{
   void go.run(instance)
 
   let output = ''
-  let dispatched = false
+  let dispatched = ''
 
   const callbacks = {
     write: (data: string) => { output += data },
-    startQuery: () => { dispatched = true },
+    // Pure-terminal: warp ships every command line here via ActionExec;
+    // capture the pipeline so the test can assert ship-verbatim.
+    startQuery: (pipeline: string) => { dispatched = pipeline },
     startFollow: () => {},
     cancelQuery: () => {},
     notifyQuit: () => {},
@@ -131,59 +131,27 @@ async function bootShell(files: File[]): Promise<{
   return {
     exec: (command: string) => {
       output = ''
-      dispatched = false
+      dispatched = ''
       // Feed each character then press Enter (\r).
       wasmHandleInput(command + '\r')
       return output
     },
-    queryDispatched: () => dispatched,
+    dispatchedPipeline: () => dispatched,
   }
 }
 
+// Pure-terminal parity: the WASM shell, like the native CLI, ships every
+// command line verbatim to the executor (it renders no FS output itself).
+// Each case asserts the pipeline the shell dispatched equals want_dispatch.
+// Listing/read/permission semantics are the server's job, covered by the
+// coordinator + integration suites.
 for (const fixture of fixtures as Fixture[]) {
   describe(fixture.name, () => {
     for (const tc of fixture.cases) {
       it(tc.name, async () => {
         const shell = await bootShell(fixture.files)
-        const raw = shell.exec(tc.command)
-
-        if (tc.want === '__QUERY_DISPATCHED__') {
-          expect(shell.queryDispatched()).toBe(true)
-          return
-        }
-
-        // Normalize: strip ANSI, convert \r\n to \n.
-        let stripped = stripAnsi(raw)
-        stripped = stripped.replace(/\r\n/g, '\n').replace(/\r/g, '')
-
-        // The output contains: echoed command, output lines, next prompt.
-        // Use the prompt pattern to find boundaries.
-        const promptPat = /test@testco.*\$ /
-        const lines = stripped.split('\n')
-
-        // Find first line after the command echo and before the trailing prompt.
-        let startIdx = 1 // skip command echo line
-        let endIdx = lines.length
-        for (let i = lines.length - 1; i >= 0; i--) {
-          if (promptPat.test(lines[i])) {
-            endIdx = i
-            break
-          }
-        }
-
-        const outputLines = lines.slice(startIdx, endIdx)
-        // Remove trailing empty lines.
-        while (outputLines.length > 0 && outputLines[outputLines.length - 1] === '') {
-          outputLines.pop()
-        }
-        let result = outputLines.join('\n')
-        if (result) result += '\n'
-
-        if (tc.want_err) {
-          expect(result.toLowerCase()).toContain(tc.want_err.toLowerCase())
-        } else {
-          expect(result).toBe(tc.want)
-        }
+        shell.exec(tc.command)
+        expect(shell.dispatchedPipeline()).toBe(tc.want_dispatch)
       })
     }
   })

@@ -155,10 +155,10 @@ func (s *Shell) ConfigureCore(core *shellcore.ShellCore) {
 		core.SetLeadSegment(seg)
 	}
 	core.SetHelp(weftHelp{tiers: defaultTierLimits{}})
-	// Subcommand grammar matches the one ExecNonInteractive passes:
-	// `wit log <path>` must preserve the keyword instead of
-	// resolving `log` against `/` to the /log namespace.
-	core.RegisterRewriteGrammar("wit", "log", "show", "diff", "checkout", "amend")
+	// No client-side path rewriter anymore: the shell ships every line
+	// verbatim and the server (a real pkg/bash interpreter) resolves
+	// paths, so `wit log <path>` reaches it with the `log` subcommand
+	// keyword intact — no grammar registration needed.
 	// Reserve weft's natively-implemented command names so a saved
 	// /bin/<name> function can't shadow them. These run through the
 	// bash interpreter's RegisterCommand path (see

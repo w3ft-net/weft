@@ -125,23 +125,23 @@ func min(a, b int) int {
 // virtual layout, suitable for tests that exercise shellcore integration.
 func testMountFS(apps []string) *shellcore.MountFS {
 	mfs := shellcore.NewMountFS()
-	mfs.Register(&stubMount{prefix: "/bin", kind: shellcore.MountLocal})
-	mfs.Register(&stubMount{prefix: "/cron.d", kind: shellcore.MountLocal})
-	mfs.Register(&stubMount{prefix: "/etc", kind: shellcore.MountLocal})
-	mfs.Register(&stubMount{prefix: "/log", kind: shellcore.MountQuery, apps: apps})
-	mfs.Register(&stubMount{prefix: "/tmp", kind: shellcore.MountLocal})
+	mfs.Register(&stubMount{prefix: "/bin", writable: true})
+	mfs.Register(&stubMount{prefix: "/cron.d", writable: true})
+	mfs.Register(&stubMount{prefix: "/etc", writable: true})
+	mfs.Register(&stubMount{prefix: "/log", apps: apps}) // read-only query namespace
+	mfs.Register(&stubMount{prefix: "/tmp", writable: true})
 	return mfs
 }
 
 type stubMount struct {
-	prefix string
-	kind   shellcore.MountKind
-	apps   []string
+	prefix   string
+	writable bool
+	apps     []string
 }
 
 func (m *stubMount) Prefix() string { return m.prefix }
 func (m *stubMount) Caps() shellcore.MountCaps {
-	return shellcore.MountCaps{Kind: m.kind, Writable: m.kind == shellcore.MountLocal}
+	return shellcore.MountCaps{Writable: m.writable}
 }
 func (m *stubMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	if m.prefix == "/log" && rel == "" {

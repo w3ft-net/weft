@@ -20,7 +20,7 @@ type TmpMount struct{ cfg Config }
 func (m *TmpMount) Prefix() string { return "/tmp" }
 
 func (m *TmpMount) Caps() shellcore.MountCaps {
-	return shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true}
+	return shellcore.MountCaps{Writable: true}
 }
 
 func (m *TmpMount) ReadDir(rel string) ([]fs.DirEntry, error) {

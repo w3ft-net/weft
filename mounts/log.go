@@ -13,7 +13,7 @@ type LogMount struct{ cfg Config }
 func (m *LogMount) Prefix() string { return "/log" }
 
 func (m *LogMount) Caps() shellcore.MountCaps {
-	return shellcore.MountCaps{Kind: shellcore.MountQuery, Writable: false}
+	return shellcore.MountCaps{Writable: false}
 }
 
 func (m *LogMount) ReadDir(rel string) ([]fs.DirEntry, error) {

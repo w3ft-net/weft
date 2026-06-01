@@ -15,7 +15,7 @@ type CronMount struct{ cfg Config }
 func (m *CronMount) Prefix() string { return "/cron.d" }
 
 func (m *CronMount) Caps() shellcore.MountCaps {
-	return shellcore.MountCaps{Kind: shellcore.MountLocal, Writable: true}
+	return shellcore.MountCaps{Writable: true}
 }
 
 func (m *CronMount) ReadDir(rel string) ([]fs.DirEntry, error) {
