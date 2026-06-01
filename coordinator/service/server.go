@@ -125,11 +125,20 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 	// classifies and routes; ExecuteFollow is the variant that splices
 	// a live broker subscription onto the end of the historical batch.
 	ctx := stream.Context()
+	// Dirstack courier (in): the delegated client ferries its cached
+	// cwd/pushd stack as repeated `weft-dirstack` metadata (index 0 ==
+	// cwd) so the server resolves cd/relative paths against the client's
+	// live directory. Absent on the follow path and for non-shell callers
+	// — ExecuteWithDir treats an empty stack exactly like Execute.
+	var dirStack []string
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		dirStack = md.Get("weft-dirstack")
+	}
 	var result *coordinator.ExecuteResult
 	if req.Follow && s.Coord.Tail != nil {
 		result, err = s.Coord.ExecuteFollow(ctx, req.Pipeline, tr, customer, req.UserId)
 	} else {
-		result, err = s.Coord.Execute(req.Pipeline, tr, customer, req.UserId)
+		result, err = s.Coord.ExecuteWithDir(req.Pipeline, tr, customer, req.UserId, dirStack)
 	}
 	if err != nil {
 		log.Printf("query rpc: error for customer=%s pipeline=%q: %v", customer, req.Pipeline, err)
@@ -204,8 +213,23 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 			}
 		}
 	}
-	// Stream done — Notices is now populated by the runLocal
-	// goroutine. Send on the final flush.
+	// Stream done — Notices and FinalDirStack are now populated by the
+	// runLocal goroutine (same happens-before edge as the stream EOF we
+	// just observed). Dirstack courier (out): return the post-run stack
+	// as a trailer so the client can cache the cwd the pipeline left
+	// behind. Echo the seeded stack when the pipeline left it untouched
+	// so every response carries cwd (the cache must never drift).
+	finalDir := result.FinalDirStack
+	if len(finalDir) == 0 {
+		finalDir = dirStack
+	}
+	if len(finalDir) > 0 {
+		md := metadata.MD{}
+		for _, d := range finalDir {
+			md.Append("weft-final-dirstack", d)
+		}
+		stream.SetTrailer(md)
+	}
 	return flush(true, convertNotices(result.Notices))
 }
 
