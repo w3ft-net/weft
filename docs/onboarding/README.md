@@ -26,6 +26,12 @@ the previous ones.
    alerts, charts, meta-variables, and MCP tools; how each is
    implemented end-to-end.
 
+Once you've worked through the sections, the
+**[graded task ladder](tasks.md)** is a sequence of starter
+features (easy → hard), each a complete shippable slice carved out
+of a real design plan. Start there when you want to build something
+that lands, not just a one-file challenge.
+
 ## Prerequisites
 
 - Go toolchain (the project builds with `go build`)
