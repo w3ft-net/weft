@@ -36,7 +36,7 @@ func TestRunLocal_InfiniteLoopHitsTimeout(t *testing.T) {
 	})
 
 	start := time.Now()
-	res, err := c.runLocal("runaway", TimeRange{}, cust.Name, custID, "", nil)
+	res, err := c.runLocal("runaway", TimeRange{}, cust.Name, custID, "", nil, nil)
 	if err != nil {
 		t.Fatalf("runLocal returned synchronous error before stream drain: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestRunLocal_QuickScriptCompletesNormally(t *testing.T) {
 		ScriptExecutionTimeout: 5 * time.Second,
 	})
 
-	result, err := c.runLocal("quick", TimeRange{}, cust.Name, custID, "", nil)
+	result, err := c.runLocal("quick", TimeRange{}, cust.Name, custID, "", nil, nil)
 	if err != nil {
 		t.Fatalf("runLocal: %v", err)
 	}

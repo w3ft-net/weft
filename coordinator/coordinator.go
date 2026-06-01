@@ -55,6 +55,14 @@ type QueryResult struct {
 type ExecuteResult struct {
 	Stream  compute.LineStream
 	Notices []Notice
+	// FinalDirStack is the interpreter's dirstack (index 0 == cwd) after
+	// the pipeline ran — the "ferry back" half of the dirstack courier.
+	// Populated by the runLocal goroutine right before it closes the pipe
+	// writers, on the same happens-before edge as Notices, so a caller
+	// that reads it AFTER the stream exhausts sees the final value. Nil
+	// when the pipeline was seeded with no dirstack (the non-courier
+	// callers), in which case the cwd never left "/".
+	FinalDirStack []string
 }
 
 // queryResultToExecuteResult wraps an internal buffered QueryResult
@@ -573,7 +581,17 @@ func (c *Coordinator) clampTimeRange(tr TimeRange, custID uint) TimeRange {
 // processors) drain the stream into a buffered DrainedResult via
 // res.Drain(ctx).
 func (c *Coordinator) Execute(pipeline string, tr TimeRange, customer, userID string) (*ExecuteResult, error) {
-	return c.execute(pipeline, tr, customer, userID, nil)
+	return c.execute(pipeline, tr, customer, userID, nil, nil)
+}
+
+// ExecuteWithDir is Execute plus the dirstack courier: dirStack (index
+// 0 == cwd) seeds the interpreter's cwd/pushd state before the pipeline
+// runs, so a `cd`-bearing line resolves relative paths against the
+// caller's current directory. The post-run dirstack is returned on the
+// result's FinalDirStack (read after the stream exhausts) for the caller
+// to cache. dirStack nil/empty behaves exactly like Execute (cwd "/").
+func (c *Coordinator) ExecuteWithDir(pipeline string, tr TimeRange, customer, userID string, dirStack []string) (*ExecuteResult, error) {
+	return c.execute(pipeline, tr, customer, userID, nil, dirStack)
 }
 
 // ExecuteFollow runs pipeline with live-tail semantics. The returned
@@ -603,7 +621,7 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 		return nil, err
 	}
 
-	historical, err := c.execute(pipeline, tr, customer, userID, nil)
+	historical, err := c.execute(pipeline, tr, customer, userID, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -674,7 +692,7 @@ func (c *Coordinator) ExecuteForWatch(pipeline string, tr TimeRange, watch *stor
 	// write doesn't move user-perceived latency. The next fire
 	// takes the hot path either way.
 	c.refreshLoweredSync(watch, cust.Name)
-	return c.execute(pipeline, tr, cust.Name, "", alertCtx)
+	return c.execute(pipeline, tr, cust.Name, "", alertCtx, nil)
 }
 
 // executeLowered tries the hot-path dispatch using watch.LoweredPlan.
@@ -877,7 +895,7 @@ func (r watchBinResolver) Source(name string) (string, string, bool) {
 // terminal-aggregate, the whole body is needed before the alert can
 // fire), runAlertStage post-processes, and a buffered ExecuteResult
 // is returned.
-func (c *Coordinator) execute(pipeline string, tr TimeRange, customer, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
+func (c *Coordinator) execute(pipeline string, tr TimeRange, customer, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
 	custID, expanded, err := c.preflight(pipeline, customer)
 	if err != nil {
 		return nil, err
@@ -885,7 +903,7 @@ func (c *Coordinator) execute(pipeline string, tr TimeRange, customer, userID st
 
 	queryPart, alertArgs := planner.SplitAlertStage(expanded)
 
-	res, err := c.runLocal(queryPart, tr, customer, custID, userID, alertCtx)
+	res, err := c.runLocal(queryPart, tr, customer, custID, userID, alertCtx, dirStack)
 	if err != nil {
 		return nil, err
 	}
@@ -1191,7 +1209,7 @@ const scriptExecutionTimeout = 30 * time.Second
 // Notices are populated on the returned ExecuteResult AFTER warp
 // finishes, BEFORE the pipe writers close — so consumers reading
 // Notices past stream EOF see the populated value.
-func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
+func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
 	ast, err := bash.Parse(pipeline)
 	if err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
@@ -1199,6 +1217,11 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 
 	interp := bash.NewInterpreter()
 	interp.SetStdin(strings.NewReader(""))
+	// Dirstack courier (in): seed the interpreter's cwd/pushd state from
+	// the caller's cached dirstack so a `cd`-bearing line resolves
+	// relative paths against the client's current directory. Empty means
+	// "fresh shell" — the interpreter's own default (cwd "/") stands.
+	seedDirStack(interp.DirStack(), dirStack)
 	// Highlight server-side `cat` in weft's branded palette so a
 	// delegated client that ships `cat /bin/x` to the exec backend gets
 	// back the same weave it paints for a locally-read file. /bin and
@@ -1285,6 +1308,11 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 		close(watchDone)
 
 		res.Notices = noticeQueue.Flush()
+		// Dirstack courier (out): publish the post-run dirstack on the
+		// same happens-before edge as Notices (write → pipe close →
+		// consumer's post-EOF read), so the caller can cache the cwd the
+		// pipeline left behind.
+		res.FinalDirStack = interp.DirStack().Stack()
 		if ctx.Err() == context.DeadlineExceeded {
 			stream.setRunErr(fmt.Errorf("script exceeded %s execution time limit", timeout))
 		}
@@ -1293,4 +1321,20 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 	}()
 
 	return res, nil
+}
+
+// seedDirStack rewrites ds to match stack (index 0 == cwd) using only the
+// public DirStack interface, so it works against any embedder impl. A nil
+// or empty stack is a no-op — the interpreter keeps its default cwd "/".
+// Mirrors warp's own dirstackReplace: clear to a single entry, set the
+// bottom, then push the rest in reverse so stack[0] ends up current.
+func seedDirStack(ds bash.DirStack, stack []string) {
+	if len(stack) == 0 {
+		return
+	}
+	ds.Clear()
+	_ = ds.Chdir(stack[len(stack)-1])
+	for i := len(stack) - 2; i >= 0; i-- {
+		_ = ds.Push(stack[i])
+	}
 }

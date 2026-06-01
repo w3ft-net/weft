@@ -22,7 +22,7 @@ func TestRunLocal_CatHighlightsWithWeftPalette(t *testing.T) {
 	}
 
 	c := NewCoordinator(CoordinatorConfig{Store: db})
-	result, err := c.runLocal("cat /bin/greet", TimeRange{}, "", custID, "", nil)
+	result, err := c.runLocal("cat /bin/greet", TimeRange{}, "", custID, "", nil, nil)
 	if err != nil {
 		t.Fatalf("runLocal: %v", err)
 	}
