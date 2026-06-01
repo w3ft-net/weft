@@ -44,7 +44,7 @@ func (p *Provisioner) LoadStateMachines() {
 		return
 	}
 	for _, bk := range all {
-		p.bucketSMs[bk.ID] = NewBucketSM(bk, p.store.DB(), p, nil)
+		p.bucketSMs[bk.ID] = NewBucketSM(bk, p.store.DB(), p, p.clock)
 	}
 	log.Printf("provisioner: built %d bucket SMs + %d shard SMs", len(p.bucketSMs), len(p.registry.Entries()))
 }
@@ -65,6 +65,7 @@ func (p *Provisioner) shardDeps() *ShardDeps {
 			Configurer:        p.configurer,
 			ParquetDir:        p.config.ParquetDir,
 			LambdaFunctionURL: p.config.LambdaFunctionURL,
+			Clock:             p.clock,
 		}
 		if api, ok := p.launcher.(ShardLaunchAPI); ok {
 			d.Launcher = api
@@ -112,7 +113,7 @@ func (p *Provisioner) MintShard(ctx context.Context, spec MintSpec) (string, err
 	}
 
 	stripe := spec.StripeIndex
-	now := time.Now().UTC()
+	now := p.nowUTC()
 	entry := &Shard{
 		ID:             shardID,
 		WindowStart:    spec.WindowStart,

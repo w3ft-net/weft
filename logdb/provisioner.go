@@ -231,6 +231,13 @@ type Provisioner struct {
 	// (ShardDeps.Store, the bucket SM's *gorm.DB) that the HeartbeatStore
 	// / ShardOpsStore interfaces don't expose.
 	store *store.Store
+
+	// clock is the time source threaded into every bucket/shard SM so
+	// window alignment (CurrentWindow/NextWindow) is deterministic. Real
+	// runs use time.Now; tests pin it to a fixed mid-window instant so a
+	// multi-tick convergence can't straddle a real window boundary and
+	// spuriously mint a next-window shard. Never nil after NewProvisioner.
+	clock func() time.Time
 }
 
 // NewProvisioner creates a provisioner.
@@ -243,8 +250,14 @@ func NewProvisioner(registry *ShardRegistry, launcher ShardLauncher, config Prov
 		Buckets:    NewBucketManager(nil),
 		configurer: grpcConfigurer{shardSecret: config.ShardSecret},
 		bucketSMs:  map[int64]*BucketSM{},
+		clock:      time.Now,
 	}
 }
+
+// nowUTC is the provisioner's clock, normalised to UTC. All window
+// arithmetic and CreatedAt stamping flows through here so a test can pin
+// time by setting p.clock.
+func (p *Provisioner) nowUTC() time.Time { return p.clock().UTC() }
 
 // SetStore provides the store for heartbeat and shard-row operations.
 // Called after the store is opened (which may happen after the
@@ -672,7 +685,7 @@ func (p *Provisioner) ensureBucketSMs() {
 		if sm, ok := p.bucketSMs[bk.ID]; ok {
 			sm.Bucket = bk
 		} else {
-			p.bucketSMs[bk.ID] = NewBucketSM(bk, p.store.DB(), p, nil)
+			p.bucketSMs[bk.ID] = NewBucketSM(bk, p.store.DB(), p, p.clock)
 		}
 	}
 }

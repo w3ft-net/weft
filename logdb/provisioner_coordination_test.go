@@ -102,6 +102,14 @@ func newFSMTestProvisioner(t *testing.T, db *store.Store) (*Provisioner, *inProc
 	}
 	launcher := &inProcLauncher{gate: make(chan struct{})}
 	prov := NewProvisioner(reg, launcher, ProvisionerConfig{PollInterval: time.Second})
+	// Pin the clock to a fixed mid-window instant so window alignment
+	// (CurrentWindow Truncate's to the hour for a 1h bucket) is
+	// deterministic across a multi-tick convergence. Without this, a test
+	// whose ticks straddle a real :00 boundary sees CurrentWindow advance
+	// mid-run and mints a spurious next-window shard. 12:30 sits 30m from
+	// either edge of the hour window. Set BEFORE LoadStateMachines so the
+	// bucket SMs and shardDeps capture it (the clock is read at SM build).
+	prov.clock = func() time.Time { return time.Date(2026, 6, 1, 12, 30, 0, 0, time.UTC) }
 	// stubConfigurer stands in for the gRPC dial so configureOnHeartbeat
 	// attaches an in-memory DuckDB shard. Set before LoadStateMachines so
 	// shardSMDeps picks it up.
