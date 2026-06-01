@@ -72,103 +72,56 @@ func (testFS) ReadDir(path string) ([]fs.DirEntry, error) {
 func (testFS) Stat(path string) (fs.FileInfo, error) { return nil, fmt.Errorf("not found") }
 func (testFS) Remove(path string) error              { return nil }
 
-func TestLsIsNotAQuery(t *testing.T) {
-	queryDispatched := false
-	var buf strings.Builder
-
+// lsDispatch types `line` at the prompt and returns the pipeline the
+// core shipped via ActionExec (empty if none). In pure-terminal mode ls
+// is not intercepted client-side — it ships to the server, which lists
+// the FS through runLocal+shellfs. (The listing-content coverage lives
+// server-side; these tests guard the client ships ls unmangled.)
+func lsDispatch(t *testing.T, fs shellcore.FS, line string) string {
+	t.Helper()
+	var dispatched string
 	core := shellcore.NewShellCore(
 		[]string{"vimgym"}, 80, 24,
-		func(b []byte) { buf.Write(b) },
+		func(b []byte) {},
 		func(a shellcore.Action) {
-			if _, ok := a.(shellcore.ActionExec); ok {
-				queryDispatched = true
+			if q, ok := a.(shellcore.ActionExec); ok {
+				dispatched = q.Pipeline
 			}
 		},
 	)
-	core.SetFS(testFS{})
+	if fs != nil {
+		core.SetFS(fs)
+	}
 	core.Redraw()
-	buf.Reset()
-
-	for _, r := range "ls" {
+	for _, r := range line {
 		core.HandleEvent(shellcore.KeyEvent{Rune: r})
 	}
 	core.HandleEvent(shellcore.KeyEvent{Key: shellcore.KeyEnter})
+	return dispatched
+}
 
-	if queryDispatched {
-		t.Error("'ls' dispatched a query")
-	}
-	if !strings.Contains(buf.String(), "bin/") {
-		t.Errorf("'ls' missing 'bin/': %q", buf.String()[:min(len(buf.String()), 300)])
+func TestLsShipsToServer(t *testing.T) {
+	if got := lsDispatch(t, testFS{}, "ls"); got != "ls" {
+		t.Errorf("ls dispatched %q, want it shipped verbatim as %q", got, "ls")
 	}
 }
 
-func TestLsLogShowsFiles(t *testing.T) {
-	var buf strings.Builder
-
-	core := shellcore.NewShellCore(
-		[]string{"vimgym"}, 80, 24,
-		func(b []byte) { buf.Write(b) },
-		func(a shellcore.Action) {},
-	)
-	core.SetFS(testFS{})
-	core.Redraw()
-	buf.Reset()
-
-	for _, r := range "ls /log" {
-		core.HandleEvent(shellcore.KeyEvent{Rune: r})
-	}
-	core.HandleEvent(shellcore.KeyEvent{Key: shellcore.KeyEnter})
-
-	if !strings.Contains(buf.String(), "vimgym.log") {
-		t.Errorf("'ls /log' missing 'vimgym.log': %q", buf.String()[:min(len(buf.String()), 300)])
+func TestLsPathShipsToServer(t *testing.T) {
+	if got := lsDispatch(t, testFS{}, "ls /log"); got != "ls /log" {
+		t.Errorf("ls /log dispatched %q, want %q", got, "ls /log")
 	}
 }
 
-func TestLsWithoutFS(t *testing.T) {
-	queryDispatched := false
-	var buf strings.Builder
-
-	core := shellcore.NewShellCore(
-		[]string{"vimgym"}, 80, 24,
-		func(b []byte) { buf.Write(b) },
-		func(a shellcore.Action) {
-			if _, ok := a.(shellcore.ActionExec); ok {
-				queryDispatched = true
-			}
-		},
-	)
-	// No FS set.
-	core.Redraw()
-	buf.Reset()
-
-	for _, r := range "ls" {
-		core.HandleEvent(shellcore.KeyEvent{Rune: r})
-	}
-	core.HandleEvent(shellcore.KeyEvent{Key: shellcore.KeyEnter})
-
-	if queryDispatched {
-		t.Error("'ls' dispatched a query")
+func TestLsWithoutFSStillShips(t *testing.T) {
+	// Even with no client FS, ls ships — the server owns the listing.
+	if got := lsDispatch(t, nil, "ls"); got != "ls" {
+		t.Errorf("ls (no FS) dispatched %q, want %q", got, "ls")
 	}
 }
 
-func TestLsRelativePath(t *testing.T) {
-	var buf strings.Builder
-
-	core := shellcore.NewShellCore(
-		[]string{"vimgym"}, 80, 24,
-		func(b []byte) { buf.Write(b) },
-		func(a shellcore.Action) {},
-	)
-	core.SetFS(testFS{})
-	core.Redraw()
-	buf.Reset()
-
-	for _, r := range "ls log" {
-		core.HandleEvent(shellcore.KeyEvent{Rune: r})
-	}
-	core.HandleEvent(shellcore.KeyEvent{Key: shellcore.KeyEnter})
-
-	if !strings.Contains(buf.String(), "vimgym.log") {
-		t.Errorf("'ls log' missing 'vimgym.log': %q", buf.String()[:min(len(buf.String()), 300)])
+func TestLsRelativePathShipsUnrewritten(t *testing.T) {
+	// Relative path ships as typed; the server resolves it against cwd.
+	if got := lsDispatch(t, testFS{}, "ls log"); got != "ls log" {
+		t.Errorf("ls log dispatched %q, want %q shipped unrewritten", got, "ls log")
 	}
 }

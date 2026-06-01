@@ -35,31 +35,32 @@ func TestShellCoreDirect(t *testing.T) {
 	}
 }
 
-func TestShellCoreWithFS(t *testing.T) {
-	var buf strings.Builder
+// TestShellCoreShipsLs: with an FS wired in, `ls` still ships to the
+// server in pure-terminal mode (the server lists via runLocal+shellfs).
+// The client does not render the listing itself anymore; directory-
+// listing content is covered server-side.
+func TestShellCoreShipsLs(t *testing.T) {
 	mfs := testMountFS([]string{"api", "web"})
-
+	var dispatched string
 	core := shellcore.NewShellCore(
 		[]string{"api", "web"}, 80, 24,
-		func(b []byte) { buf.Write(b) },
-		func(a shellcore.Action) {},
+		func(b []byte) {},
+		func(a shellcore.Action) {
+			if q, ok := a.(shellcore.ActionExec); ok {
+				dispatched = q.Pipeline
+			}
+		},
 	)
 	core.SetFS(mfs)
 	core.Redraw()
-	buf.Reset()
 
-	// Type "ls" and press Enter.
 	for _, r := range "ls" {
 		core.HandleEvent(shellcore.KeyEvent{Rune: r})
 	}
 	core.HandleEvent(shellcore.KeyEvent{Key: shellcore.KeyEnter})
 
-	output := buf.String()
-	if !strings.Contains(output, "bin/") {
-		t.Errorf("ls missing 'bin/': %q", output[:min(len(output), 300)])
-	}
-	if !strings.Contains(output, "log/") {
-		t.Errorf("ls missing 'log/': %q", output[:min(len(output), 300)])
+	if dispatched != "ls" {
+		t.Errorf("ls dispatched %q, want it shipped verbatim as %q", dispatched, "ls")
 	}
 }
 

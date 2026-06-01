@@ -172,7 +172,16 @@ func (r *runner) runQuery(pipeline string) {
 	// The shell core already stripped `| less` before dispatching this
 	// pipeline — whatever comes back goes straight to the core, which
 	// routes into ModeLess when the user typed the pager suffix.
-	result, err := r.shell.Query(pipeline, r.shell.Range)
+	//
+	// Dirstack courier: ship the core's cached dirstack so the server
+	// resolves cd/relative paths against the client's cwd, and cache the
+	// post-run stack the server returns so the prompt + next request
+	// track a shipped `cd`/`pushd`. Applied before HandleEvent so the
+	// redrawn prompt shows the new cwd.
+	result, err := r.shell.Query(pipeline, r.shell.Range, r.core.DirStack())
+	if err == nil && result != nil && len(result.FinalDirStack) > 0 {
+		r.core.SetDirStack(result.FinalDirStack)
+	}
 
 	ev := shellcore.ExecResultEvent{Err: err}
 	if err == nil {

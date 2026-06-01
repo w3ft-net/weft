@@ -28,6 +28,13 @@ type QueryResult struct {
 	Rows    []Row
 	Text    string
 	Notices []QueryResultNotice
+	// FinalDirStack is the directory stack (index 0 == cwd) the server
+	// reports after running the pipeline — the "ferry back" half of the
+	// dirstack courier. The interactive runner caches it via
+	// core.SetDirStack so the prompt and the next request track the cwd a
+	// shipped `cd`/`pushd` established. Nil when the server returned no
+	// dirstack (e.g. the in-process dev shell, or a follow stream).
+	FinalDirStack []string
 }
 
 // QueryResultNotice is the shell-package mirror of the wire Notice.
@@ -46,7 +53,12 @@ type QueryResultNotice struct {
 // pair). The API server resolves it on every request against server-side
 // time.Now() — clients deliberately do NOT pre-resolve, so a long-lived
 // shell pane never queries against a stale window.
-type QueryFunc func(pipeline, rangeSpec string) (*QueryResult, error)
+//
+// dirStack is the client's cached directory stack (index 0 == cwd) shipped
+// with the pipeline so the server resolves cd/relative paths against the
+// caller's live directory; the post-run stack returns on
+// QueryResult.FinalDirStack. Pass nil for a fresh shell rooted at "/".
+type QueryFunc func(pipeline, rangeSpec string, dirStack []string) (*QueryResult, error)
 
 // FollowFunc is the function signature for tail -f streaming.
 type FollowFunc func(ctx context.Context, pipeline, rangeSpec string, onRow func(Row)) error
@@ -369,29 +381,13 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 		weftPipeline, _ = shellcore.SplitTerminalStage(line)
 	}
 
-	// Resolve cd / pushd / popd against a transient dirstack so a
-	// chained pipeline like `cd /log/acme && cat api.log` is rewritten
-	// to `cd /log/acme && cat /log/acme/api.log` before reaching the
-	// planner. Without this the planner sees the bare `api.log` and
-	// rejects it as an unknown namespace.
-	//
-	// `wit` has a fixed subcommand grammar; declare it so the rewriter
-	// preserves the keyword in `wit log /bin/scan` instead of joining
-	// `log` against `/` and resolving it to the `/log` namespace root.
-	var rewriteOpts []shellcore.RewriteOption
-	rewriteOpts = append(rewriteOpts, shellcore.WithSubcommandBuiltin("wit", "log", "show", "diff", "checkout", "amend"))
-	if pc, ok := s.FS.(interface {
-		ClassifyPath(string) shellcore.PathKind
-	}); ok {
-		rewriteOpts = append(rewriteOpts, shellcore.WithPathClassifier(pc.ClassifyPath))
-	}
-	if rewritten, err := shellcore.RewritePaths(weftPipeline, shellcore.NewTransientDirStack(),
-		rewriteOpts...,
-	); err == nil {
-		weftPipeline = rewritten
-	}
-
-	result, err := s.Query(weftPipeline, s.Range)
+	// The server (a real pkg/bash interpreter) owns cd/chain/relative-path
+	// resolution now, so the pipeline ships verbatim — no client-side
+	// RewritePaths/classifier pass. One-shot mode has no persistent cwd to
+	// ferry; an absolute `cd` inside a chain (`cd /log/acme && cat
+	// api.log`) still resolves correctly server-side. nil dirstack ==
+	// fresh shell rooted at "/".
+	result, err := s.Query(weftPipeline, s.Range, nil)
 	if err != nil {
 		return err
 	}

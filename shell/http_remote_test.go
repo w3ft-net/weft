@@ -30,7 +30,7 @@ func TestHTTPCoordinator_QuerySendsRange(t *testing.T) {
 	defer srv.Close()
 
 	c := NewHTTPCoordinator(srv.URL, "tok", "org")
-	if _, err := c.Query("cat /log/foo", "1d.."); err != nil {
+	if _, err := c.Query("cat api.log", "1d..", []string{"/log/acme", "/tmp"}); err != nil {
 		t.Fatalf("Query: %v", err)
 	}
 
@@ -42,6 +42,12 @@ func TestHTTPCoordinator_QuerySendsRange(t *testing.T) {
 	}
 	if _, ok := gotBody["time_end_ns"]; ok {
 		t.Errorf("time_end_ns must not be in body anymore: %v", gotBody)
+	}
+	// Dirstack courier: the cached stack must ride in the request body
+	// (index 0 == cwd) so the server resolves relative paths against it.
+	ds, ok := gotBody["dirstack"].([]any)
+	if !ok || len(ds) != 2 || ds[0] != "/log/acme" || ds[1] != "/tmp" {
+		t.Errorf("body[dirstack] = %v, want [/log/acme /tmp]", gotBody["dirstack"])
 	}
 }
 
@@ -58,7 +64,7 @@ func TestHTTPCoordinator_Query426(t *testing.T) {
 
 	c := NewHTTPCoordinator(srv.URL, "tok", "org")
 	c.SetClientID("weft/0.2.5")
-	_, err := c.Query("cat /log/foo", "1d..")
+	_, err := c.Query("cat /log/foo", "1d..", nil)
 	if err == nil {
 		t.Fatal("expected error for 426 response")
 	}
@@ -83,7 +89,7 @@ func TestHTTPCoordinator_SendsClientHeader(t *testing.T) {
 
 	c := NewHTTPCoordinator(srv.URL, "tok", "org")
 	c.SetClientID("weft/0.4.2+abc123")
-	if _, err := c.Query("cat /log/foo", "1d.."); err != nil {
+	if _, err := c.Query("cat /log/foo", "1d..", nil); err != nil {
 		t.Fatalf("Query: %v", err)
 	}
 

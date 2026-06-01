@@ -22,6 +22,10 @@ type RemoteQueryResult struct {
 	Rows    []*pb.ResultRow
 	Text    string
 	Notices []RemoteNotice
+	// FinalDirStack is the post-run directory stack (index 0 == cwd) the
+	// server reports via the SSE "cwd" event — the ferry-back half of the
+	// dirstack courier. Nil when the stream carried no cwd event.
+	FinalDirStack []string
 }
 
 // RemoteNotice mirrors the proto Notice message decoded from SSE.
@@ -127,11 +131,12 @@ func (h *HTTPCoordinator) Close() error { return nil }
 // "2026-04-01..2026-04-12"); the API server resolves it against its own clock
 // per request. See [[feedback_no_legacy_support]] for why we don't pass
 // pre-resolved nanos.
-func (h *HTTPCoordinator) Query(pipeline, rangeSpec string) (*RemoteQueryResult, error) {
+func (h *HTTPCoordinator) Query(pipeline, rangeSpec string, dirStack []string) (*RemoteQueryResult, error) {
 	body, _ := json.Marshal(map[string]any{
 		"pipeline": pipeline,
 		"follow":   false,
 		"range":    rangeSpec,
+		"dirstack": dirStack,
 	})
 
 	req, err := http.NewRequest("POST", h.baseURL+"/api/shell/exec", bytes.NewReader(body))
@@ -549,6 +554,17 @@ func parseSSEResponse(r io.Reader) (*RemoteQueryResult, error) {
 				Title: stringOf(event["title"]),
 				Body:  stringOf(event["body"]),
 			})
+		case "cwd":
+			// Dirstack courier (ferry back): the server reports the
+			// post-run stack so the client can cache the cwd a shipped
+			// cd/pushd established. index 0 is cwd.
+			if raw, ok := event["stack"].([]any); ok {
+				stack := make([]string, 0, len(raw))
+				for _, v := range raw {
+					stack = append(stack, stringOf(v))
+				}
+				result.FinalDirStack = stack
+			}
 		case "error":
 			if msg, ok := event["message"].(string); ok {
 				return nil, fmt.Errorf("%s", msg)

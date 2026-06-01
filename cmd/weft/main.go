@@ -527,8 +527,8 @@ func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 	}
 
 	s := &shell.Shell{
-		Query: func(pipeline, rangeSpec string) (*shell.QueryResult, error) {
-			r, err := remote.Query(pipeline, rangeSpec)
+		Query: func(pipeline, rangeSpec string, dirStack []string) (*shell.QueryResult, error) {
+			r, err := remote.Query(pipeline, rangeSpec, dirStack)
 			if err != nil {
 				return nil, err
 			}
@@ -545,7 +545,7 @@ func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 			for i, row := range r.Rows {
 				rows[i] = shell.Row{Raw: row.Raw}
 			}
-			return &shell.QueryResult{Rows: rows, Text: r.Text, Notices: notices}, nil
+			return &shell.QueryResult{Rows: rows, Text: r.Text, Notices: notices, FinalDirStack: r.FinalDirStack}, nil
 		},
 		Follow: func(ctx context.Context, pipeline, rangeSpec string, onRow func(shell.Row)) error {
 			return remote.Follow(ctx, pipeline, rangeSpec, func(row *pb.ResultRow) {

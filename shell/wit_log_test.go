@@ -5,18 +5,17 @@ import (
 	"testing"
 )
 
-// TestExecNonInteractiveWitLogPreservesSubcommand is the round-trip
-// for the wit-log-rewriter plan. Before the grammar registration
-// landed in shell.go, `weft sh -c 'wit log /bin/scan'` got mangled
-// to `wit /log /bin/scan` by RewritePaths because `log` joined to
-// `/` resolves to the `/log` namespace root (PathQuery). The test
-// asserts the rewriter now preserves `log` as wit's subcommand
-// keyword by checking what pipeline reaches the Query callback.
-func TestExecNonInteractiveWitLogPreservesSubcommand(t *testing.T) {
+// TestExecNonInteractiveWitLogShipsVerbatim guards that `wit log
+// /bin/scan` reaches the server unmangled. Historically the client's
+// RewritePaths could mangle `wit log ...` into `wit /log ...` (joining
+// `log` to the `/log` namespace root); now ExecNonInteractive ships the
+// line verbatim and the server owns all path resolution, so the wit
+// subcommand keyword is preserved by construction.
+func TestExecNonInteractiveWitLogShipsVerbatim(t *testing.T) {
 	var captured string
 	s := &Shell{
 		Range: "1d..",
-		Query: func(pipeline, _ string) (*QueryResult, error) {
+		Query: func(pipeline, _ string, _ []string) (*QueryResult, error) {
 			captured = pipeline
 			return &QueryResult{Text: ""}, nil
 		},
@@ -26,6 +25,6 @@ func TestExecNonInteractiveWitLogPreservesSubcommand(t *testing.T) {
 		t.Fatalf("ExecNonInteractive: %v", err)
 	}
 	if captured != "wit log /bin/scan" {
-		t.Errorf("Query received %q, want %q — rewriter mangled the wit subcommand keyword", captured, "wit log /bin/scan")
+		t.Errorf("Query received %q, want %q shipped verbatim", captured, "wit log /bin/scan")
 	}
 }
