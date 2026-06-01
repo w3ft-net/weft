@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/kevlarcon/weft/internal/timerange"
@@ -38,6 +40,8 @@ var sseKeepaliveInterval = 20 * time.Second
 //
 //	{"type":"line","data":{"raw":"..."}}   — a log line
 //	{"type":"error","message":"..."}       — terminal error
+//	{"type":"cwd","cwd":"...","stack":[...]} — post-run dirstack (non-follow);
+//	                                          sent just before "done"
 //	{"type":"done"}                        — stream complete (non-follow mode)
 //
 // Between events, the handler writes SSE comment lines (`: keepalive`)
@@ -60,6 +64,13 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 		// long-lived shell pane never queries against a stale window. An
 		// empty Range is rejected — defaults are the client's job.
 		Range string `json:"range"`
+		// DirStack is the delegated client's cached directory stack
+		// (index 0 == cwd, the rest are pushd entries). Ferried to the
+		// coordinator as weft-dirstack metadata so the server resolves
+		// cd/relative paths against the client's live cwd; the post-run
+		// stack returns on the "cwd" SSE event for the client to cache.
+		// Empty/omitted behaves like a fresh shell rooted at "/".
+		DirStack []string `json:"dirstack"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pipeline == "" {
 		http.Error(w, "pipeline required", http.StatusBadRequest)
@@ -110,6 +121,16 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(s.coordCtx(r))
 	defer cancel()
 
+	// Dirstack courier (out to coordinator): ferry the client's cached
+	// stack as repeated weft-dirstack metadata, matching what the Execute
+	// RPC reads. Each entry is one metadata value; index 0 is cwd.
+	for _, d := range req.DirStack {
+		ctx = metadata.AppendToOutgoingContext(ctx, "weft-dirstack", d)
+	}
+
+	// Capture the response trailer so the post-run dirstack (weft-final-
+	// dirstack) can be surfaced to the client after the stream ends.
+	var trailer metadata.MD
 	stream, err := s.coordClient.Execute(ctx, &pb.CoordinatorExecuteRequest{
 		Pipeline:    req.Pipeline,
 		Follow:      req.Follow,
@@ -117,7 +138,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 		UserId:      session.UserID,
 		TimeStartNs: start.UnixNano(),
 		TimeEndNs:   end.UnixNano(),
-	})
+	}, grpc.Trailer(&trailer))
 	if err != nil {
 		writeSSEEvent(w, map[string]any{"type": "error", "message": err.Error()})
 		flusher.Flush()
@@ -178,6 +199,18 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 					})
 				}
 				if !req.Follow {
+					// Dirstack courier (back to client): the coordinator
+					// returns the post-run stack as a weft-final-dirstack
+					// trailer (valid to read now that Recv hit io.EOF).
+					// Surface it so the client caches the cwd the pipeline
+					// left behind. index 0 is cwd.
+					if stack := trailer.Get("weft-final-dirstack"); len(stack) > 0 {
+						writeSSEEvent(w, map[string]any{
+							"type":  "cwd",
+							"cwd":   stack[0],
+							"stack": stack,
+						})
+					}
 					writeSSEEvent(w, map[string]any{"type": "done"})
 					flusher.Flush()
 				}
