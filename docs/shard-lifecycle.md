@@ -1,5 +1,22 @@
 # Shard Lifecycle
 
+> **Launch mechanism updated (2026-06) — see
+> [`plans/shard-ec2-direct.md`](plans/shard-ec2-direct.md).** The state machine,
+> windows, rotation, recovery, archival, and EBS-volume handling below are
+> current. What changed: there is no Auto Scaling Group. Wherever this doc
+> describes the launch handoff via the ASG — `ASGProvisioner.Launch`,
+> `SetDesiredCapacity`, `EC2_INSTANCE_LAUNCHING` lifecycle hooks, SNS/SQS claim,
+> `Pending:Wait`, ABANDON/CONTINUE, `syncASGDesiredCapacity`, the
+> `autoscaling:*` IAM, "the ASG replaces the instance" — the coordinator now
+> does it directly: `EC2Provisioner.Launch` runs one instance via
+> `ec2:RunInstances` (tier launch template + striped AZ's subnet), tags
+> `shard_id` at birth, waits for `running`, attaches the volume; recovery reaps
+> with `ec2:TerminateInstances` and relaunches. The coordinator is the sole
+> capacity authority — no ASG to relaunch instances behind its back — so the
+> "ghost instance" failure mode is gone. The IAM is `ec2:RunInstances` /
+> `ec2:TerminateInstances` / `ec2:CreateTags` / scoped `iam:PassRole` instead of
+> the `autoscaling:*` actions.
+
 This doc is the target architecture. It's broadly implemented as of
 2026-04 but not complete — see [`cleanup.md`](cleanup.md) for the
 live inventory of remaining work. Anywhere this doc and the code

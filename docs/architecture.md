@@ -41,9 +41,10 @@ Each shard owns a configurable time window (`WindowDuration`) of log
 data for all customers. Data lives in DuckDB on a **dedicated gp3 EBS
 volume** tagged with the shard's id — the volume outlives any single
 EC2 instance. When an instance dies, the volume reattaches to a
-replacement launched by the ASG (via an `EC2_INSTANCE_LAUNCHING`
-lifecycle hook that the coordinator handles) and the shard continues
-under the same identity. See [shard-lifecycle.md](shard-lifecycle.md)
+replacement the coordinator launches directly via `ec2:RunInstances`
+(the `EC2Provisioner`; no Auto Scaling Group — see
+[plans/shard-ec2-direct.md](plans/shard-ec2-direct.md)) and the shard
+continues under the same identity. See [shard-lifecycle.md](shard-lifecycle.md)
 and [plans/ebs-shard-volumes.md](plans/ebs-shard-volumes.md).
 
 ### Compute pool
@@ -56,10 +57,12 @@ Docker Compose with containerized DuckDB shard nodes. This lets us test multi-no
 
 ## Production deployment
 
-- Shard nodes in tiered ASGs (small / medium / large). Each ASG has
-  a launching lifecycle hook that fans out to SNS → SQS; the
-  coordinator consumes and attaches EBS volumes during
-  `Pending:Wait` before instances finish booting.
+- Shard nodes (tiers small / medium / large) launched directly by the
+  coordinator via `ec2:RunInstances` into a per-tier launch template +
+  the striped AZ's subnet — no Auto Scaling Group. The coordinator is
+  the sole capacity authority; it tags each instance `shard_id` at
+  birth, waits for `running`, then attaches the shard's EBS volume.
+  See [plans/shard-ec2-direct.md](plans/shard-ec2-direct.md).
 - Windows rotate on wall-clock time, not row count. `WindowEnd` in
   the past → INGESTING → READ_ONLY; past retention → ARCHIVING
   (Parquet export + EBS snapshot + volume delete).
@@ -90,7 +93,7 @@ User-facing meta-variables (`$NAMESPACE`, `$SERVICE`, `$KIND`, `$LEVEL`, `$TS`, 
 
 - [github.com/kevlarcon/warp](https://github.com/kevlarcon/warp) — awk, sed, jq, bash interpreters + gpipe
 - DuckDB (via CGo or shell exec)
-- AWS SDK — CloudWatch Logs, EC2/ASG for shard lifecycle, EBS volumes + snapshots for shard data, SNS/SQS for ASG lifecycle hook fan-out
+- AWS SDK — CloudWatch Logs, EC2 RunInstances/TerminateInstances for shard lifecycle (no ASG), EBS volumes + snapshots for shard data
 
 ## Design documents
 

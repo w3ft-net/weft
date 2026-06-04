@@ -1,5 +1,19 @@
 # ASG-as-API + stateless shard/bucket FSMs
 
+> **Superseded (2026-06) by [`shard-ec2-direct.md`](shard-ec2-direct.md) for the
+> launch primitive.** The stateless shard/bucket FSM design below is current and
+> correct; what changed is that the ASG layer was removed. Treating the ASG as a
+> launch API meant two capacity authorities — the coordinator's
+> `SetDesiredCapacity` and the ASG's own "maintain desired" — and the ASG silently
+> relaunched bare, untagged "ghost" instances the FSM neither claimed nor reaped.
+> The coordinator now launches/terminates instances directly via
+> `ec2:RunInstances` / `ec2:TerminateInstances` (the `EC2Provisioner`), so it is
+> the sole capacity authority. Wherever this doc says `ASGProvisioner.Launch` /
+> `SetDesiredCapacity` / `awaitNewInstance` / per-AZ ASG, read
+> `EC2Provisioner.Launch` (RunInstances into the tier's launch template + the AZ's
+> subnet; idempotent find-or-create by `shard_id` tag). The FSM, `MintShard`, AZ
+> striping, volume lifecycle, and heartbeat/bootstrap are unchanged.
+
 Replace the current ASG autoscaling + SNS/SQS lifecycle plumbing with a
 provisioner that drives instance launches directly through the ASG
 APIs, with shard and bucket lifecycles modeled as `qmuntal/stateless`

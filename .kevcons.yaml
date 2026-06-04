@@ -5,13 +5,15 @@ app:
   entrypoint_role: coordinator
   additional_roles:
     shard-small: shard-small
-    shard-small-us-east-2b: shard-small-us-east-2b
     compute: compute
     loom-producer: loom-producer
-  # shard_roles: roles whose ASGs are FSM-managed. kevcons deploy never calls
-  # StartInstanceRefresh on these; the shard fleet is upgraded via
+  # shard_roles: the EC2-direct shard tiers (one role per tier; AZ is just
+  # where the coordinator strips each instance, not a separate role). These
+  # are NOT ASG-backed — the coordinator launches them via ec2:RunInstances —
+  # so kevcons resolves them by EC2 tag (Role=shard-<tier>), never calls
+  # StartInstanceRefresh on them, and the fleet is upgraded via
   # weft-admin-run roll-all after the coordinator refresh completes.
-  shard_roles: [shard-small, shard-small-us-east-2b]
+  shard_roles: [shard-small]
   account_id: "220664822695"
   infrastructure_live_dir: /Users/paul/dev/infrastructure-live
 
