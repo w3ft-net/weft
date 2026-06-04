@@ -618,8 +618,9 @@ func (p *Provisioner) OnboardService(namespaceID uint, service string) error {
 // from the store, sweep service-drift, then drive every bucket and shard
 // SM toward its target. The SMs own all lifecycle transitions — launch,
 // rotate, archive, recover — so check() no longer emits reconciler ops or
-// syncs ASG desired_capacity (the per-AZ ASGProvisioner moves capacity one
-// instance at a time inside Launch). Bucket-split (carving a hot service
+// syncs ASG desired_capacity (the EC2Provisioner runs/terminates one
+// instance at a time inside Launch/Terminate). Bucket-split (carving a hot
+// service
 // into its own bucket) is disabled pending the redesign in
 // docs/plans/bucket-split-policy.md.
 func (p *Provisioner) check(ctx context.Context) {

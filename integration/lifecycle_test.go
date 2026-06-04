@@ -7,37 +7,28 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
-	astypes "github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
 	"github.com/kevlarcon/weft/logdb"
 )
 
-// These tests exercise the ASG-as-API launch primitive
-// (logdb.ASGProvisioner.Launch) and the EBS VolumeManager against
-// LocalStack's real EC2 implementation. They replace the old SNS/SQS
-// lifecycle-hook tests, whose subsystem was deleted when the shard FSM
-// took ownership of lifecycle (commit 7b0de94).
-//
-// LocalStack Community doesn't implement Auto Scaling, so the ASG side
-// is faked (fakeASG below) — but everything the integration value lives
-// in is real: RunInstances, CreateTags, CreateVolume, AttachVolume,
+// These tests exercise the EC2-direct launch primitive
+// (logdb.EC2Provisioner.Launch) and the EBS VolumeManager against
+// LocalStack's real EC2 implementation. Since the coordinator now launches
+// instances itself via RunInstances/TerminateInstances — no Auto Scaling
+// Group — there is nothing to fake: RunInstances, DescribeInstances (the
+// idempotency find-by-tag + wait-for-running), CreateVolume, AttachVolume,
 // DescribeVolumes, CreateSnapshot, DeleteVolume all hit LocalStack EC2.
-// Launch is store-free post-7b0de94 (the shard SM persists the
-// LaunchResult; that handoff is unit-tested in logdb/shardsm_test.go),
-// so these tests need no postgres.
+// Launch is store-free (the shard SM persists the LaunchResult), so these
+// tests need no postgres.
 
-// LocalStack endpoint from docker-compose. Set LOCALSTACK_ENDPOINT to
-// override; otherwise defaults to the docker-compose mapping.
 const localStackEndpoint = "http://localhost:4566"
 
 // awsTestConfig returns an aws.Config wired to LocalStack with throwaway
@@ -59,89 +50,51 @@ func awsTestConfig(t *testing.T) aws.Config {
 	return cfg
 }
 
-// fakeASG stands in for AWS Auto Scaling, which LocalStack Community
-// doesn't implement. It satisfies logdb.ASGApi. On SetDesiredCapacity
-// it launches real LocalStack EC2 instances in its AZ — so the
-// provisioner's subsequent CreateTags and AttachVolume calls land on a
-// genuine instance — and reports every launched instance as InService
-// immediately, which is all ASGProvisioner.awaitNewInstance needs.
-type fakeASG struct {
-	ec2 *ec2.Client
-	az  string
-
-	mu         sync.Mutex
-	instances  []string
-	desired    int32
-	terminated []string
+// subnetInAZ returns a subnet id in the given AZ (LocalStack seeds default
+// subnets per AZ in the default VPC).
+func subnetInAZ(t *testing.T, ec2c *ec2.Client, az string) string {
+	t.Helper()
+	out, err := ec2c.DescribeSubnets(context.Background(), &ec2.DescribeSubnetsInput{
+		Filters: []ec2types.Filter{{Name: aws.String("availability-zone"), Values: []string{az}}},
+	})
+	if err != nil {
+		t.Fatalf("DescribeSubnets %s: %v", az, err)
+	}
+	if len(out.Subnets) == 0 || out.Subnets[0].SubnetId == nil {
+		t.Fatalf("no subnet found in %s", az)
+	}
+	return *out.Subnets[0].SubnetId
 }
 
-func (f *fakeASG) SetDesiredCapacity(ctx context.Context, in *autoscaling.SetDesiredCapacityInput, _ ...func(*autoscaling.Options)) (*autoscaling.SetDesiredCapacityOutput, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var want int32
-	if in.DesiredCapacity != nil {
-		want = *in.DesiredCapacity
-	}
-	for int32(len(f.instances)) < want {
-		out, err := f.ec2.RunInstances(ctx, &ec2.RunInstancesInput{
-			MaxCount:     aws.Int32(1),
-			MinCount:     aws.Int32(1),
-			InstanceType: ec2types.InstanceTypeT3Micro,
+// createLaunchTemplate makes a minimal launch template the provisioner runs
+// shard instances from (the prod template's AMI/IAM/SG aren't needed to
+// verify the launch+attach+tag wiring).
+func createLaunchTemplate(t *testing.T, ec2c *ec2.Client) string {
+	t.Helper()
+	out, err := ec2c.CreateLaunchTemplate(context.Background(), &ec2.CreateLaunchTemplateInput{
+		LaunchTemplateName: aws.String("weft-shard-small-" + testSuffix()),
+		LaunchTemplateData: &ec2types.RequestLaunchTemplateData{
 			ImageId:      aws.String("ami-test"),
-			Placement:    &ec2types.Placement{AvailabilityZone: aws.String(f.az)},
-		})
-		if err != nil {
-			return nil, err
-		}
-		f.instances = append(f.instances, *out.Instances[0].InstanceId)
+			InstanceType: ec2types.InstanceTypeT3Micro,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateLaunchTemplate: %v", err)
 	}
-	f.desired = want
-	return &autoscaling.SetDesiredCapacityOutput{}, nil
+	return *out.LaunchTemplate.LaunchTemplateId
 }
 
-func (f *fakeASG) DescribeAutoScalingGroups(_ context.Context, in *autoscaling.DescribeAutoScalingGroupsInput, _ ...func(*autoscaling.Options)) (*autoscaling.DescribeAutoScalingGroupsOutput, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	insts := make([]astypes.Instance, 0, len(f.instances))
-	for _, id := range f.instances {
-		insts = append(insts, astypes.Instance{
-			InstanceId:     aws.String(id),
-			LifecycleState: astypes.LifecycleStateInService,
-		})
-	}
-	name := ""
-	if len(in.AutoScalingGroupNames) > 0 {
-		name = in.AutoScalingGroupNames[0]
-	}
-	return &autoscaling.DescribeAutoScalingGroupsOutput{
-		AutoScalingGroups: []astypes.AutoScalingGroup{{
-			AutoScalingGroupName: aws.String(name),
-			DesiredCapacity:      aws.Int32(f.desired),
-			Instances:            insts,
-		}},
-	}, nil
-}
-
-func (f *fakeASG) TerminateInstanceInAutoScalingGroup(_ context.Context, in *autoscaling.TerminateInstanceInAutoScalingGroupInput, _ ...func(*autoscaling.Options)) (*autoscaling.TerminateInstanceInAutoScalingGroupOutput, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if in.InstanceId != nil {
-		f.terminated = append(f.terminated, *in.InstanceId)
-	}
-	return &autoscaling.TerminateInstanceInAutoScalingGroupOutput{}, nil
-}
-
-// newLaunchProvisioner wires an ASGProvisioner around the fake ASG and a
-// real LocalStack-backed VolumeManager + tagger, configured for one
-// (tier, AZ). Returns the provisioner and the EC2 client for assertions.
-func newLaunchProvisioner(t *testing.T, az string) (*logdb.ASGProvisioner, *ec2.Client) {
+// newLaunchProvisioner wires an EC2Provisioner against LocalStack EC2 + a
+// real LocalStack-backed VolumeManager, configured for one (tier, AZ).
+func newLaunchProvisioner(t *testing.T, az string) (*logdb.EC2Provisioner, *ec2.Client) {
 	t.Helper()
 	cfg := awsTestConfig(t)
 	ec2c := ec2.NewFromConfig(cfg)
 	vm := logdb.NewEC2VolumeManagerWithClient(ec2c)
-	asgName := "weft-shard-small-" + testSuffix()
-	asgs := map[string]map[string]string{"small": {az: asgName}}
-	prov := logdb.NewASGProvisionerWithClients(&fakeASG{ec2: ec2c, az: az}, ec2c, vm, asgs)
+	prov := logdb.NewEC2ProvisionerWithClient(ec2c, vm,
+		map[string]map[string]string{"small": {az: subnetInAZ(t, ec2c, az)}},
+		map[string]string{"small": createLaunchTemplate(t, ec2c)},
+	)
 	return prov, ec2c
 }
 
@@ -170,19 +123,18 @@ func volumeTags(v ec2types.Volume) map[string]string {
 	return tags
 }
 
-// testSuffix returns a short unique string so concurrently-running
-// tests (or re-runs against the same LocalStack instance) don't
-// collide on resource names/tags.
+// testSuffix returns a short unique string so concurrently-running tests (or
+// re-runs against the same LocalStack instance) don't collide on resource
+// names/tags.
 func testSuffix() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano()%1_000_000)
 }
 
 // ── Tests ────────────────────────────────────────────────────
 
-// Christen: a fresh Launch (ExistingVolumeID empty) brings up an
-// instance, creates a new gp3 volume tagged with the shard id/tier, and
-// attaches it at /dev/sdf. The ASG-as-API replacement for the old
-// SNS-event → handler → create+attach path.
+// Christen: a fresh Launch (ExistingVolumeID empty) runs an instance tagged
+// with the shard id at birth, creates a new gp3 volume tagged shard_id/tier,
+// and attaches it at /dev/sdf.
 func TestLifecycle_Integration_ChristenPath(t *testing.T) {
 	az := "us-east-2a"
 	prov, ec2c := newLaunchProvisioner(t, az)
@@ -206,6 +158,7 @@ func TestLifecycle_Integration_ChristenPath(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = ec2c.DetachVolume(context.Background(), &ec2.DetachVolumeInput{VolumeId: aws.String(result.VolumeID), Force: aws.Bool(true)})
 		_, _ = ec2c.DeleteVolume(context.Background(), &ec2.DeleteVolumeInput{VolumeId: aws.String(result.VolumeID)})
+		_, _ = ec2c.TerminateInstances(context.Background(), &ec2.TerminateInstancesInput{InstanceIds: []string{result.InstanceID}})
 	})
 
 	// The created volume carries the shard tags and is attached to the
@@ -232,7 +185,8 @@ func TestLifecycle_Integration_ChristenPath(t *testing.T) {
 		t.Errorf("attachment device: got %v want .../sdf", att.Device)
 	}
 
-	// The instance was tagged with the shard id.
+	// The instance was tagged shard_id at birth (RunInstances
+	// TagSpecifications) — never momentarily untagged.
 	di, err := ec2c.DescribeInstances(context.Background(), &ec2.DescribeInstancesInput{
 		InstanceIds: []string{result.InstanceID},
 	})
@@ -254,10 +208,10 @@ func TestLifecycle_Integration_ChristenPath(t *testing.T) {
 	}
 }
 
-// Recover: a Launch with ExistingVolumeID set reattaches the surviving
-// volume to a fresh instance instead of creating a new one — the path
-// the shard SM takes after an instance dies (it carries the volume id
-// in shard_records.ebs_volume_id and passes it back to Launch).
+// Recover: a Launch with ExistingVolumeID set reattaches the surviving volume
+// to a fresh instance instead of creating a new one — the path the shard SM
+// takes after an instance dies (it carries the volume id in
+// shard_records.ebs_volume_id and passes it back to Launch).
 func TestLifecycle_Integration_RecoverPath(t *testing.T) {
 	az := "us-east-2a"
 	prov, ec2c := newLaunchProvisioner(t, az)
@@ -294,12 +248,15 @@ func TestLifecycle_Integration_RecoverPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Launch (recovery): %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = ec2c.TerminateInstances(context.Background(), &ec2.TerminateInstancesInput{InstanceIds: []string{result.InstanceID}})
+	})
 	if result.VolumeID != survivingID {
 		t.Errorf("recovery attached wrong volume: got %s want %s (the survivor)", result.VolumeID, survivingID)
 	}
 
-	// No *new* volume was created for shardID — exactly one volume is
-	// tagged shard_id=<shardID>, the survivor we pre-seeded.
+	// No *new* volume was created for shardID — exactly one volume is tagged
+	// shard_id=<shardID>, the survivor we pre-seeded.
 	volumes, err := ec2c.DescribeVolumes(context.Background(), &ec2.DescribeVolumesInput{
 		Filters: []ec2types.Filter{
 			{Name: aws.String("tag:shard_id"), Values: []string{shardID}},
@@ -320,10 +277,10 @@ func TestLifecycle_Integration_RecoverPath(t *testing.T) {
 }
 
 // Retirement: the archive path snapshots a shard's volume (tagged with
-// shard_id + parquet_path for lineage), then deletes it. Exercises the
-// real VolumeManager SnapshotVolume/DeleteVolume calls — unchanged by
-// the ASG-as-API switch (the shard SM's evaluateArchiving drives this
-// same sequence in production).
+// shard_id + parquet_path for lineage), then deletes it. Exercises the real
+// VolumeManager SnapshotVolume/DeleteVolume calls — unchanged by the
+// EC2-direct switch (the shard SM's evaluateArchiving drives this same
+// sequence in production).
 func TestLifecycle_Integration_RetirementPath(t *testing.T) {
 	cfg := awsTestConfig(t)
 	ec2c := ec2.NewFromConfig(cfg)
@@ -351,10 +308,6 @@ func TestLifecycle_Integration_RetirementPath(t *testing.T) {
 
 	vm := logdb.NewEC2VolumeManagerWithClient(ec2c)
 
-	// Exercise the production sequence directly — snapshot → delete —
-	// through the real SDK calls. Skips the full archive() wrapper
-	// (which wants a DuckDBShard); this verifies the AWS side, not the
-	// Parquet export.
 	ctx := context.Background()
 	snapID, err := vm.SnapshotVolume(ctx, logdb.SnapshotOpts{
 		VolumeID:    volumeID,
@@ -368,8 +321,8 @@ func TestLifecycle_Integration_RetirementPath(t *testing.T) {
 		t.Fatal("empty snapshot id")
 	}
 
-	// Snapshot should carry shard_id + parquet_path tags so operators
-	// can reconstruct the lineage later.
+	// Snapshot should carry shard_id + parquet_path tags so operators can
+	// reconstruct the lineage later.
 	snapOut, err := ec2c.DescribeSnapshots(ctx, &ec2.DescribeSnapshotsInput{
 		SnapshotIds: []string{snapID},
 	})
@@ -392,16 +345,13 @@ func TestLifecycle_Integration_RetirementPath(t *testing.T) {
 		t.Errorf("snapshot parquet_path: got %q want %q", tags["parquet_path"], parquetPath)
 	}
 
-	// Volume isn't attached (we skipped attach above), so a non-force
-	// detach would error — archive() always uses force=true for exactly
-	// this reason. Move straight to delete.
 	if err := vm.DeleteVolume(ctx, volumeID); err != nil {
 		t.Fatalf("DeleteVolume: %v", err)
 	}
 
-	// Volume should be gone. EC2 often returns an InvalidVolume.NotFound
-	// error for a deleted volume; that's the cleanest pass signal. If it
-	// does return a record, it must be in deleted/deleting.
+	// Volume should be gone. EC2 often returns InvalidVolume.NotFound for a
+	// deleted volume; that's the cleanest pass signal. If it does return a
+	// record, it must be in deleted/deleting.
 	volOut2, err := ec2c.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{
 		VolumeIds: []string{volumeID},
 	})

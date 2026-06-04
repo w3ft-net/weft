@@ -43,19 +43,14 @@ type Config struct {
 	// lives in compute, not here — see compute.LocalComputePool.
 	ShardSecret string
 
-	// AWSRegion is threaded into NewASGLauncher / NewEC2VolumeManager.
+	// AWSRegion is threaded into NewEC2Provisioner / NewEC2VolumeManager.
 	// Each loads its own AWS config in that region.
 	AWSRegion string
-
-	// ShardTiers maps tier name (small/medium/large) to the ASG name
-	// that launches shards of that tier. Empty selects dev mode
-	// (DockerLauncher) instead of production ASG mode.
-	ShardTiers map[string]string
 }
 
 // Start hydrates the shard registry, constructs the Provisioner with
-// the right launcher for the deploy mode (ASG when ShardTiers is
-// non-empty, Docker otherwise), and starts it.
+// the right launcher for the deploy mode (EC2-direct when
+// SHARD_<TIER>_SUBNETS is configured, Docker otherwise), and starts it.
 //
 // Returns the started Provisioner. Caller assigns it to
 // Coordinator.Provisioner so the rest of the runtime
@@ -80,29 +75,29 @@ func Start(cfg Config) (*Provisioner, error) {
 		log.Printf("coordinator: restored shards from store")
 	}
 
-	asgs := parseShardASGs()
-	if len(asgs) > 0 || len(cfg.ShardTiers) > 0 {
-		return startProd(cfg, reg, lambdaURL, asgs)
+	subnets := parseShardSubnets()
+	if len(subnets) > 0 {
+		return startProd(cfg, reg, lambdaURL, subnets, parseShardTemplates())
 	}
 	return startDev(cfg, reg)
 }
 
-// parseShardASGs reads the per-AZ ASG topology from the environment —
-// SHARD_SMALL_ASGS / SHARD_MEDIUM_ASGS / SHARD_LARGE_ASGS — each a
-// comma-separated list of az=asg-name pairs, e.g.
+// parseShardSubnets reads the per-AZ subnet topology from the environment —
+// SHARD_SMALL_SUBNETS / SHARD_MEDIUM_SUBNETS / SHARD_LARGE_SUBNETS — each a
+// comma-separated list of az=subnet-id pairs, e.g.
 //
-//	SHARD_SMALL_ASGS="us-east-2a=weft-shard-small-2a,us-east-2b=weft-shard-small-2b"
+//	SHARD_SMALL_SUBNETS="us-east-2a=subnet-0aa,us-east-2b=subnet-0bb"
 //
-// Returns tier→az→asg. Empty when no tier is configured, in which case
-// startProd falls back to the legacy single-ASG-per-tier ShardLauncher (or
-// Start picks dev mode). Malformed pairs are logged and skipped rather
-// than failing boot.
-func parseShardASGs() map[string]map[string]string {
+// Returns tier→az→subnet. Empty when no tier is configured, in which case
+// Start picks dev mode. Malformed pairs are logged and skipped rather than
+// failing boot. (Replaces the old SHARD_<TIER>_ASGS — the coordinator now
+// launches instances directly, not via an Auto Scaling Group.)
+func parseShardSubnets() map[string]map[string]string {
 	out := map[string]map[string]string{}
 	for tier, env := range map[string]string{
-		"small":  "SHARD_SMALL_ASGS",
-		"medium": "SHARD_MEDIUM_ASGS",
-		"large":  "SHARD_LARGE_ASGS",
+		"small":  "SHARD_SMALL_SUBNETS",
+		"medium": "SHARD_MEDIUM_SUBNETS",
+		"large":  "SHARD_LARGE_SUBNETS",
 	} {
 		raw := os.Getenv(env)
 		if raw == "" {
@@ -110,13 +105,13 @@ func parseShardASGs() map[string]map[string]string {
 		}
 		azMap := map[string]string{}
 		for _, pair := range strings.Split(raw, ",") {
-			az, asg, ok := strings.Cut(strings.TrimSpace(pair), "=")
-			az, asg = strings.TrimSpace(az), strings.TrimSpace(asg)
-			if !ok || az == "" || asg == "" {
-				log.Printf("warning: %s: malformed pair %q (want az=asg), skipping", env, pair)
+			az, subnet, ok := strings.Cut(strings.TrimSpace(pair), "=")
+			az, subnet = strings.TrimSpace(az), strings.TrimSpace(subnet)
+			if !ok || az == "" || subnet == "" {
+				log.Printf("warning: %s: malformed pair %q (want az=subnet), skipping", env, pair)
 				continue
 			}
-			azMap[az] = asg
+			azMap[az] = subnet
 		}
 		if len(azMap) > 0 {
 			out[tier] = azMap
@@ -125,52 +120,56 @@ func parseShardASGs() map[string]map[string]string {
 	return out
 }
 
-// startProd wires the launcher, provisioner, and volume manager for
-// production deploys. When asgs (SHARD_<TIER>_ASGS) is present it uses the
-// per-AZ ASGProvisioner — the real FSM launch primitive (Launch(spec)
-// creates+attaches the EBS volume and the shard FSM drives it). Otherwise
-// it falls back to the legacy single-ASG-per-tier ASGLauncher, which is
-// NOT a ShardLaunchAPI, so the FSM's launch paths no-op (mint-but-don't-
-// launch) until the per-AZ config lands — the pre-cutover state.
-func startProd(cfg Config, reg *ShardRegistry, lambdaURL string, asgs map[string]map[string]string) (*Provisioner, error) {
-	// One VolumeManager, shared: the ASGProvisioner creates/attaches volumes
+// parseShardTemplates reads the per-tier EC2 launch template ids from the
+// environment — SHARD_SMALL_LAUNCH_TEMPLATE / SHARD_MEDIUM_LAUNCH_TEMPLATE /
+// SHARD_LARGE_LAUNCH_TEMPLATE — each a single launch-template id, e.g.
+//
+//	SHARD_SMALL_LAUNCH_TEMPLATE="lt-0abc123"
+//
+// Returns tier→template-id for the tiers that set one. A tier present in
+// SHARD_<TIER>_SUBNETS but missing a template here will fail its first
+// launch with a clear "no launch template configured" error.
+func parseShardTemplates() map[string]string {
+	out := map[string]string{}
+	for tier, env := range map[string]string{
+		"small":  "SHARD_SMALL_LAUNCH_TEMPLATE",
+		"medium": "SHARD_MEDIUM_LAUNCH_TEMPLATE",
+		"large":  "SHARD_LARGE_LAUNCH_TEMPLATE",
+	} {
+		if id := strings.TrimSpace(os.Getenv(env)); id != "" {
+			out[tier] = id
+		}
+	}
+	return out
+}
+
+// startProd wires the EC2Provisioner, provisioner, and volume manager for
+// production deploys. The coordinator launches shard instances directly via
+// RunInstances/TerminateInstances (no Auto Scaling Group) — it is the sole
+// capacity authority, so a shard is backed by exactly one instance and there
+// is no "ghost" failure mode. subnets is tier→az→subnet; templates is
+// tier→launch-template-id.
+func startProd(cfg Config, reg *ShardRegistry, lambdaURL string, subnets map[string]map[string]string, templates map[string]string) (*Provisioner, error) {
+	// One VolumeManager, shared: the EC2Provisioner creates/attaches volumes
 	// on launch, and the provisioner's shard SM retires them on archive.
 	vm, vmErr := NewEC2VolumeManager(cfg.AWSRegion)
 	if vmErr != nil {
-		log.Printf("warning: VolumeManager unavailable: %v", vmErr)
+		return nil, fmt.Errorf("EC2Provisioner needs a VolumeManager (launch creates/attaches volumes): %w", vmErr)
 	}
 
-	var launcher ShardLauncher
-	if len(asgs) > 0 {
-		if vmErr != nil {
-			return nil, fmt.Errorf("ASGProvisioner needs a VolumeManager (per-AZ launch creates/attaches volumes): %w", vmErr)
-		}
-		ap, err := NewASGProvisioner(cfg.AWSRegion, asgs, vm)
-		if err != nil {
-			return nil, fmt.Errorf("ASG provisioner: %w", err)
-		}
-		launcher = ap
-		log.Printf("provisioner: ASGProvisioner (per-AZ) for %d tier(s): %v", len(asgs), asgs)
-	} else {
-		asgLauncher, err := NewASGLauncher(cfg.AWSRegion, cfg.ShardTiers, 9000)
-		if err != nil {
-			// Non-fatal historically: dev environments without AWS creds
-			// hit this and degrade gracefully. Preserve that.
-			log.Printf("warning: ASG launcher unavailable: %v", err)
-			return nil, nil
-		}
-		launcher = asgLauncher
-		log.Printf("provisioner: legacy ASGLauncher for tiers %v — set SHARD_<TIER>_ASGS to enable per-AZ launching", cfg.ShardTiers)
+	ep, err := NewEC2Provisioner(cfg.AWSRegion, subnets, templates, vm)
+	if err != nil {
+		return nil, fmt.Errorf("EC2 provisioner: %w", err)
 	}
+	var launcher ShardLauncher = ep
+	log.Printf("provisioner: EC2Provisioner (direct, per-AZ) for %d tier(s): subnets=%v templates=%v", len(subnets), subnets, templates)
 
 	provConfig := DefaultProvisionerConfig()
 	provConfig.ShardSecret = cfg.ShardSecret
 	provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
 	provConfig.LambdaFunctionURL = lambdaURL
 	prov := NewProvisioner(reg, launcher, provConfig)
-	if vmErr == nil {
-		prov.SetVolumeManager(vm)
-	}
+	prov.SetVolumeManager(vm)
 
 	prov.SetStore(cfg.DB)
 

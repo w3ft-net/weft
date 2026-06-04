@@ -54,8 +54,9 @@ func (p *Provisioner) LoadStateMachines() {
 // (store, volumes, configurer, launcher) are all set at boot before the
 // first shard is minted or driven, so a single shared instance is
 // correct. The launcher is wired only when it satisfies ShardLaunchAPI
-// (the ASGProvisioner) — the legacy ShardLauncher doesn't, so Launcher
-// stays nil and the launch paths no-op (evaluateLaunching guards on it).
+// (the EC2Provisioner) — a bare ShardLauncher (e.g. the dev DockerLauncher
+// also satisfies it; a future stub might not) leaves Launcher nil and the
+// launch paths no-op (evaluateLaunching guards on it).
 func (p *Provisioner) shardDeps() *ShardDeps {
 	p.depsOnce.Do(func() {
 		d := ShardDeps{

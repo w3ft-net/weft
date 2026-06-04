@@ -90,7 +90,7 @@ func NewDockerLauncher() *DockerLauncher {
 
 // devAZ is the single synthetic availability zone dev mode stripes every
 // shard into — there's one docker host, so AZ-spreading is a local no-op.
-// Mirrors ASGProvisioner's AZsForTier/StripeAZ so the bucket SM's striper
+// Mirrors EC2Provisioner's AZsForTier/StripeAZ so the bucket SM's striper
 // lookups resolve identically in dev and prod.
 const devAZ = "local"
 
@@ -116,7 +116,7 @@ func (d *DockerLauncher) LaunchInstance(ctx context.Context, _ string) (string, 
 }
 
 // Launch is the FSM control plane's launch primitive (ShardLaunchAPI),
-// the dev counterpart to ASGProvisioner.Launch. It spawns one shard
+// the dev counterpart to EC2Provisioner.Launch. It spawns one shard
 // container with a forced identity: the synthetic instance id is the
 // container name, which is also its --hostname, so two things line up at
 // once — the addr the shard advertises (hostname:9000) is dialable on the

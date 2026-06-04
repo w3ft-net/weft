@@ -33,11 +33,8 @@ func main() {
 	port := flag.Int("port", 9020, "gRPC listen port")
 	healthPort := flag.Int("health-port", 9021, "HTTP liveness listen port")
 	adminPort := flag.Int("admin-port", 9022, "gRPC listen port for the localhost-only WeftAdmin surface (weft-admin CLI)")
-	shardASGSmall := flag.String("shard-asg-small", "", "small tier shard ASG name")
-	shardASGMedium := flag.String("shard-asg-medium", "", "medium tier shard ASG name")
-	shardASGLarge := flag.String("shard-asg-large", "", "large tier shard ASG name")
 	computeAddr := flag.String("compute", "", "compute worker address (host:port)")
-	awsRegion := flag.String("region", "us-east-2", "AWS region for ASG discovery")
+	awsRegion := flag.String("region", "us-east-2", "AWS region for shard EC2 launches + volume management")
 	customer := flag.String("customer", "", "fallback customer for dev/docker (queries pass customer per-request)")
 	dbDSN := flag.String("db-dsn", "", "PostgreSQL DSN (e.g., host=localhost dbname=weft user=weft password=...)")
 	queryLogPath := flag.String("query-log", "/var/log/weft/queries.log", "path for the query-audit log; falls back to stderr if unwritable")
@@ -115,17 +112,6 @@ func main() {
 	defer drainCancel()
 	coord.StartDrain(drainCtx)
 
-	shardTiers := make(map[string]string)
-	if *shardASGSmall != "" {
-		shardTiers["small"] = *shardASGSmall
-	}
-	if *shardASGMedium != "" {
-		shardTiers["medium"] = *shardASGMedium
-	}
-	if *shardASGLarge != "" {
-		shardTiers["large"] = *shardASGLarge
-	}
-
 	// Provisioner manages shard lifecycle — no separate discovery loop.
 	// Shards are persisted to postgres and restored on restart via LoadFromStore.
 	provCtx, provCancel := context.WithCancel(context.Background())
@@ -133,15 +119,15 @@ func main() {
 
 	// Shard-data control plane: registry hydration, provisioner +
 	// launcher, lifecycle poller. All policy from env lives inside
-	// logdb; only the runtime-derived inputs (db, secret, region,
-	// tiers) cross the boundary. logdb.Start owns the registry and
+	// logdb (SHARD_<TIER>_SUBNETS / SHARD_<TIER>_LAUNCH_TEMPLATE select
+	// EC2-direct launching); only the runtime-derived inputs (db, secret,
+	// region) cross the boundary. logdb.Start owns the registry and
 	// returns it inside the provisioner.
 	prov, err := logdb.Start(logdb.Config{
 		Ctx:         provCtx,
 		DB:          db,
 		ShardSecret: shardSecret,
 		AWSRegion:   *awsRegion,
-		ShardTiers:  shardTiers,
 	})
 	if err != nil {
 		log.Fatalf("logdb.Start: %v", err)
@@ -306,4 +292,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-

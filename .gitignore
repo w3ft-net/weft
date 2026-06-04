@@ -54,3 +54,7 @@ coverage-baseline.html
 coverage-baseline.out
 /node_modules/
 /wasm
+
+# local worktree go.work (gitignored)
+go.work
+go.work.sum

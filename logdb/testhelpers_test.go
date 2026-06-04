@@ -122,13 +122,10 @@ func (s *failingShard) ingestCount() int {
 	return len(s.ingested)
 }
 
-// recordingLauncher captures TerminateInstance / TerminateForReplacement
-// calls for assertions. Satisfies ShardLauncher and RecoveryTerminator;
-// LaunchInstance is a no-op.
+// recordingLauncher captures TerminateInstance calls for assertions.
+// Satisfies the bare ShardLauncher interface; LaunchInstance is a no-op.
 type recordingLauncher struct {
-	terminated           []string // addr passed to TerminateInstance (ASG decrement semantics)
-	terminatedForReplace []string // instance id passed to TerminateForReplacement (ASG replace semantics)
-	replacementErr       error
+	terminated []string // addr passed to TerminateInstance
 }
 
 func (r *recordingLauncher) LaunchInstance(_ context.Context, _ string) (string, error) {
@@ -138,11 +135,6 @@ func (r *recordingLauncher) LaunchInstance(_ context.Context, _ string) (string,
 func (r *recordingLauncher) TerminateInstance(_ context.Context, _, addr string) error {
 	r.terminated = append(r.terminated, addr)
 	return nil
-}
-
-func (r *recordingLauncher) TerminateForReplacement(_ context.Context, instanceID string) error {
-	r.terminatedForReplace = append(r.terminatedForReplace, instanceID)
-	return r.replacementErr
 }
 
 // mockHeartbeatStore implements the subset of store.Store used by the
@@ -159,3 +151,8 @@ func (m *mockHeartbeatStore) LiveShardHeartbeats(since string) ([]store.ShardHea
 func (m *mockHeartbeatStore) InsertHeartbeat(hb *store.ShardHeartbeat) error {
 	return nil
 }
+
+// strPtr is a tiny helper for string-pointer literals the AWS SDK is heavy
+// on. Re-homed here from launcher_asg.go when the ASG launcher was deleted in
+// the EC2-direct migration; volume tests still use it for mocked EC2 output.
+func strPtr(s string) *string { return &s }

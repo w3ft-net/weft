@@ -13,10 +13,9 @@ type ShardLauncher interface {
 
 	// TerminateInstance removes a shard instance. Both id (cloud
 	// instance id) and addr (host:port) are passed so each launcher can
-	// pick whichever identifier it tracks: ASGLauncher prefers id (works
-	// for shards adopted from heartbeats that were never seen by
-	// LaunchInstance), LocalLauncher uses addr. Either may be empty if
-	// the caller doesn't have it.
+	// pick whichever identifier it tracks: the EC2Provisioner uses id
+	// (read from shard_records), the dev DockerLauncher uses addr. Either
+	// may be empty if the caller doesn't have it.
 	TerminateInstance(ctx context.Context, id, addr string) error
 }
 
