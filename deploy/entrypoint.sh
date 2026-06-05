@@ -17,10 +17,6 @@ case "$ROLE" in
 
     [ -n "${DB_DSN:-}" ]                  && ARGS+=(--db-dsn="$DB_DSN")
     [ -n "${WEFT_REGION:-}" ]             && ARGS+=(--region="$WEFT_REGION")
-    [ -n "${WEFT_SHARD_ASG_SMALL:-}" ]    && ARGS+=(--shard-asg-small="$WEFT_SHARD_ASG_SMALL")
-    [ -n "${WEFT_SHARD_ASG_MEDIUM:-}" ]   && ARGS+=(--shard-asg-medium="$WEFT_SHARD_ASG_MEDIUM")
-    [ -n "${WEFT_SHARD_ASG_LARGE:-}" ]    && ARGS+=(--shard-asg-large="$WEFT_SHARD_ASG_LARGE")
-    [ -n "${WEFT_COMPUTE_ASG:-}" ]        && ARGS+=(--compute-asg="$WEFT_COMPUTE_ASG")
     [ -n "${COMPUTE_ADDR:-}" ]            && ARGS+=(--compute="$COMPUTE_ADDR")
     [ -n "${WEFT_CUSTOMER:-}" ]           && ARGS+=(--customer="$WEFT_CUSTOMER")
 
