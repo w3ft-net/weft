@@ -42,14 +42,20 @@ set -a
 . /opt/app/.env
 set +a
 
-# Safety belt for coordinator: if the blob didn't populate ASG names,
-# bail loudly. An operator can fix the config much faster than they
-# can notice a dev-mode coordinator running in prod — a regression we
-# actually hit on 2026-04-20. Shard + compute have no such sanity
-# invariant at startup.
+# Safety belt for coordinator: if the blob didn't populate the shard
+# launch config, bail loudly. An operator can fix the config much
+# faster than they can notice a dev-mode coordinator running in prod —
+# a regression we actually hit on 2026-04-20. Shard + compute have no
+# such sanity invariant at startup.
+#
+# This used to key off SHARD_ASG_SMALL, but the 2026-06-05 shard-ASG
+# drop removed that var (shards now launch via ec2:RunInstances against
+# SHARD_SMALL_LAUNCH_TEMPLATE). The stale guard then aborted every
+# coordinator launch and took prod down on 2026-06-06; repointed at the
+# launch-template key, which is the current "blob populated" signal.
 if [ "$ROLE" = "coordinator" ]; then
-  if [ -z "${SHARD_ASG_SMALL:-}" ]; then
-    echo "startup: FATAL — SHARD_ASG_SMALL missing from env after fetch-config"
+  if [ -z "${SHARD_SMALL_LAUNCH_TEMPLATE:-}" ]; then
+    echo "startup: FATAL — SHARD_SMALL_LAUNCH_TEMPLATE missing from env after fetch-config"
     echo "startup: check 'kevcons config list' or /weft/config/app SSM blob"
     exit 1
   fi
