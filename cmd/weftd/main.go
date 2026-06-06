@@ -418,7 +418,7 @@ func main() {
 	}
 
 	if parseClientSide {
-		go runSchemaRefresher(ctx, coordClient, cfg.Token, customer, namespace)
+		go runSchemaRefresher(ctx, coordClient, cfg.Token, customer)
 		go runParseStatsReporter(ctx)
 	}
 
@@ -498,7 +498,7 @@ func installParser(fullApp, customer, schemaYAML string) {
 // A misconfigured source whose status drops back to "pending" stops
 // receiving fresh parsers, but the previously installed one keeps
 // running until process restart — same posture as today's onboarding.
-func runSchemaRefresher(ctx context.Context, client pb.WeftCoordinatorClient, token, customer, namespace string) {
+func runSchemaRefresher(ctx context.Context, client pb.WeftCoordinatorClient, token, customer string) {
 	if !parseClientSide {
 		return
 	}
@@ -512,32 +512,47 @@ func runSchemaRefresher(ctx context.Context, client pb.WeftCoordinatorClient, to
 		case <-ticker.C:
 		}
 		for _, fullApp := range parserCache.Apps() {
-			bareService := strings.TrimPrefix(fullApp, namespace+"/")
-			if bareService == fullApp {
-				continue
-			}
-			st, err := weftd.CheckSourceStatus(ctx, client, token, bareService)
-			if err != nil {
-				log.Printf("[%s] schema refresh failed: %v", fullApp, err)
-				continue
-			}
-			if st.Status == "configured" && st.ResampleRequested {
-				startResample(ctx, client, token, bareService, fullApp)
-			}
-			if st.Status != "configured" || st.SchemaYAML == "" {
-				continue
-			}
-			cached := parserCache.Slot(fullApp).Hash()
-			if cached == st.SchemaHash {
-				continue
-			}
-			if _, err := parserCache.Install(fullApp, customer, st.SchemaYAML); err != nil {
-				log.Printf("[%s] schema reinstall failed (keeping previous parser): %v", fullApp, err)
-				continue
-			}
-			log.Printf("[%s] schema updated (hash %s → %s)", fullApp, shortHash(cached), shortHash(st.SchemaHash))
+			refreshSource(ctx, client, token, customer, fullApp)
 		}
 	}
+}
+
+// refreshSource checks one source's status and, if the user asked for a
+// resample, kicks it off; otherwise it reinstalls the parser when the
+// server's schema hash has moved. The source is looked up by the key the
+// coordinator stores it under.
+func refreshSource(ctx context.Context, client pb.WeftCoordinatorClient, token, customer, fullApp string) {
+	// The coordinator keys log sources on the BARE service —
+	// GetSourceStatus → FindLogGroup matches the service column alone and
+	// does not strip the kind (unlike SubmitSample). fullApp is the
+	// agent's "namespace/service/kind" composite, so pull the service out
+	// with splitFullApp; stripping only the namespace prefix would leave
+	// "service/kind" and the lookup would never match (every resample and
+	// schema refresh silently stranded at "unknown").
+	_, service, _ := splitFullApp(fullApp)
+	if service == "" {
+		return
+	}
+	st, err := weftd.CheckSourceStatus(ctx, client, token, service)
+	if err != nil {
+		log.Printf("[%s] schema refresh failed: %v", fullApp, err)
+		return
+	}
+	if st.Status == "configured" && st.ResampleRequested {
+		startResample(ctx, client, token, service, fullApp)
+	}
+	if st.Status != "configured" || st.SchemaYAML == "" {
+		return
+	}
+	cached := parserCache.Slot(fullApp).Hash()
+	if cached == st.SchemaHash {
+		return
+	}
+	if _, err := parserCache.Install(fullApp, customer, st.SchemaYAML); err != nil {
+		log.Printf("[%s] schema reinstall failed (keeping previous parser): %v", fullApp, err)
+		return
+	}
+	log.Printf("[%s] schema updated (hash %s → %s)", fullApp, shortHash(cached), shortHash(st.SchemaHash))
 }
 
 // startResample re-runs the sampler for an already-configured source
