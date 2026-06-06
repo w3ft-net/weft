@@ -114,16 +114,20 @@ source "amazon-ebs" "weft" {
     }
   }
 
-  ssh_username         = "admin"
-  ssh_timeout          = "30m"
+  ssh_username           = "admin"
+  ssh_timeout            = "30m"
   ssh_read_write_timeout = "30m"
 
   tags = {
-    Name      = local.ami_name
-    App       = var.app_name
-    GitSHA    = var.git_sha
-    Created   = local.ts
-    ManagedBy = "packer"
+    Name   = local.ami_name
+    App    = var.app_name
+    GitSHA = var.git_sha
+    # Shard-subtree SHA the baked shard binary reports as its binary_sha.
+    # bump-shard-templates points the shard launch templates at this AMI, and
+    # roll-all reads this tag back to skip shards already on the target SHA.
+    ShardGitSHA = var.shard_git_sha
+    Created     = local.ts
+    ManagedBy   = "packer"
   }
 }
 

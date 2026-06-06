@@ -67,6 +67,8 @@ func main() {
 		rollCohortCmd(os.Args[2:])
 	case "roll-all":
 		rollAllCmd(os.Args[2:])
+	case "bump-shard-templates":
+		bumpShardTemplatesCmd(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -82,6 +84,7 @@ Subcommands:
   roll-shard  <shard-id>   relaunch a single shard in place
   roll-cohort <bucket-id>  roll every live shard in a bucket, one at a time
   roll-all                 roll every live shard across every bucket
+  bump-shard-templates     point shard launch templates at /<app>/ami/latest
 
 Common flags:
   -coord                coordinator gRPC address (default "localhost:9020")
@@ -299,6 +302,24 @@ func rollAllCmd(args []string) {
 	defer closeConn()
 
 	ctx := context.Background()
+
+	// Default the skip-if-current target to the SHA the shard launch template's
+	// AMI advertises (its ShardGitSHA tag): only shards whose binary_sha differs
+	// get rolled, so a coordinator-only deploy is a fleet no-op. An explicit
+	// --target-sha overrides; an untagged AMI ("") rolls every live shard.
+	if c.targetSHA == "" {
+		sha, err := resolveShardTargetSHA(ctx)
+		if err != nil {
+			log.Fatalf("resolve target SHA from shard launch template: %v", err)
+		}
+		if sha != "" {
+			c.targetSHA = sha
+			fmt.Printf("target SHA (from shard launch template AMI): %s\n", sha)
+		} else {
+			fmt.Println("no ShardGitSHA tag on the launch template AMI; rolling all live shards")
+		}
+	}
+
 	buckets, err := client.ListBuckets(adminCtx(ctx), &pb.ListBucketsRequest{})
 	if err != nil {
 		log.Fatalf("list buckets: %v", err)
