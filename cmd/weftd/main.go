@@ -102,6 +102,15 @@ type Config struct {
 	Dimensions map[string]string `yaml:"dimensions"` // file-sourced dimension values; see docs/plans/dimensions-from-files.md
 	Heartbeat  HeartbeatConfig   `yaml:"heartbeat"`  // local app-heartbeat listener
 	Sources    []SourceConfig    `yaml:"sources"`
+	AutoUpdate *bool             `yaml:"auto_update"` // self-replace on a newer release; nil = on (set false to opt out)
+}
+
+// autoUpdateEnabled resolves the auto_update gate. Unset (nil) means on:
+// the fleet self-heals onto new releases by default; an operator opts a
+// host out with `auto_update: false` (e.g. to pin a version under
+// investigation).
+func autoUpdateEnabled(cfg Config) bool {
+	return cfg.AutoUpdate == nil || *cfg.AutoUpdate
 }
 
 // allowedDimensionColumns lists the columns that can be populated
@@ -197,13 +206,15 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Background self-update nag: once a day, fetch the release manifest
-	// and log a warning when a newer weftd is available. No auto-pull
-	// yet — see [[feedback_no_legacy_support]] (the post-launch version):
-	// breaking changes to weftd carry a soft-tolerance window on the
-	// server, so the operator gets time to act on the nag without losing
-	// ingest.
-	go (&weftd.SelfUpdateChecker{CurrentVersion: Version}).Run(ctx)
+	// Background self-update: once a day, fetch the release manifest and,
+	// when a newer weftd is published, download + verify + swap the binary
+	// and restart into it (systemd Restart=always relaunches). Defaults on
+	// so the fleet self-heals onto fixes without an operator touching each
+	// host; `auto_update: false` opts a host out and reverts to nag-only.
+	go (&weftd.SelfUpdateChecker{
+		CurrentVersion: Version,
+		AutoApply:      autoUpdateEnabled(cfg),
+	}).Run(ctx)
 
 	// Connect to coordinator. The bearer token is attached to every RPC
 	// via PerRPCCredentials — IngestStream reads it from metadata.

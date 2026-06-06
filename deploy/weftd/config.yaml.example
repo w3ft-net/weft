@@ -20,6 +20,11 @@ region: us-east-2               # optional; auto-detected from cloud metadata
 services: [api]                 # logical services co-located here; metrics
                                 # and heartbeats fan out one stream per name
 
+# Self-update: when a newer weftd is published, the agent downloads,
+# verifies, swaps its own binary and restarts into it. On by default;
+# set false to pin this host (e.g. while investigating an issue).
+# auto_update: true
+
 # --- Anchor holder ---------------------------------------------------
 # weftd ignores unknown top-level keys, so this block only exists to
 # declare reusable fragments. Merge them into sources with `<<: *name`

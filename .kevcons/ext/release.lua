@@ -7,7 +7,7 @@ local targets = {
     weftd = {
         pkg         = "./cmd/weftd/",
         version_file = "cmd/weftd/version.go",
-        test_pkgs   = "./cmd/weftd/ ./weftd/",
+        test_pkgs   = "./cmd/weftd/ ./weftd/ ./internal/release/",
         deb         = true,
         platforms   = {
             { goos = "linux", goarch = "amd64", suffix = "linux-amd64", deb_arch = "amd64" },
@@ -17,7 +17,7 @@ local targets = {
     weft = {
         pkg         = "./cmd/weft/",
         version_file = "cmd/weft/version.go",
-        test_pkgs   = "./cmd/weft/ ./shell/ ./planner/",
+        test_pkgs   = "./cmd/weft/ ./shell/ ./planner/ ./internal/release/",
         cgo         = true,
         platforms   = {
             { goos = "darwin", goarch = "arm64", suffix = "darwin-arm64" },
@@ -159,6 +159,18 @@ function run(args)
             local s3_latest = "s3://" .. bucket .. "/" .. name .. "/latest/" .. deb_name
             kevcons.log("uploading " .. s3_latest)
             kevcons.aws_exec("s3", "cp", deb_tmp, s3_latest)
+
+            -- Also upload the raw binary. The manifest's per-platform url
+            -- points at this raw artifact (sha256-matched, computed above
+            -- before deb wrapping) — `weft update` and the weftd
+            -- self-updater download it directly, not the .deb. Without
+            -- this the manifest url 404s for deb targets.
+            local s3_versioned_bin = "s3://" .. bucket .. "/" .. name .. "/v" .. version .. "/" .. binary_name
+            kevcons.log("uploading " .. s3_versioned_bin)
+            kevcons.aws_exec("s3", "cp", tmp, s3_versioned_bin)
+            local s3_latest_bin = "s3://" .. bucket .. "/" .. name .. "/latest/" .. binary_name
+            kevcons.log("uploading " .. s3_latest_bin)
+            kevcons.aws_exec("s3", "cp", tmp, s3_latest_bin)
 
             -- Clean up deb artifacts
             kevcons.exec("rm", {"-rf", pkg_root})
