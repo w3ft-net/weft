@@ -199,8 +199,20 @@ func (b *BucketSM) onEnterWarming(ctx context.Context, args ...any) error {
 		Update("cascade_started_at", &now).Error; err != nil {
 		return fmt.Errorf("bucketsm %d: set cascade_started_at: %w", b.ID, err)
 	}
+	return b.mintWarmingCohort(ctx, now)
+}
+
+// mintWarmingCohort brings the warming window up to Target by minting the
+// stripe indices not already covered by a live shard. It is the WARMING
+// cascade's capacity primitive: run once on state entry (onEnterWarming)
+// and again from evaluateWarming whenever the cohort is deficient with no
+// launch in flight — so a cohort that died wholesale (e.g. every launch
+// failed on a deregistered AMI and went GONE) is re-minted rather than
+// deadlocking the bucket. Idempotent: covered stripes are skipped, so
+// repeated calls converge to exactly Target shards.
+func (b *BucketSM) mintWarmingCohort(ctx context.Context, now time.Time) error {
 	if b.controller == nil || b.Target <= 0 {
-		log.Printf("bucketsm %d (%s): enter WARMING — no controller or target<=0, nothing to mint", b.ID, b.Label)
+		log.Printf("bucketsm %d (%s): WARMING — no controller or target<=0, nothing to mint", b.ID, b.Label)
 		return nil
 	}
 
@@ -440,13 +452,18 @@ func (b *BucketSM) evaluateStasis(ctx context.Context, now time.Time) error {
 // write-gap — lands with its config (CascadeStallThreshold /
 // ExtensionStep / MaxExtensions), which doesn't exist yet.
 func (b *BucketSM) evaluateWarming(ctx context.Context) error {
+	now := b.clock().UTC()
 	live, err := b.shardsInStates(liveCohort...)
 	if err != nil {
 		return fmt.Errorf("bucketsm %d: warming gate query: %w", b.ID, err)
 	}
+	// The warming window is the newest window the mint targeted. With no
+	// live shards at all — the entire mint died (GONE) before any shard
+	// reached a live state — fall back to the current window so the
+	// re-mint guard below refills it instead of waiting forever.
 	warmStart, ok := latestWindowStart(live)
 	if !ok {
-		return nil // no live shards yet — onEnterWarming's mint hasn't landed
+		warmStart, _ = b.CurrentWindow(now)
 	}
 	total, ingesting, recovering, launching := 0, 0, 0, 0
 	for _, r := range live {
@@ -470,6 +487,16 @@ func (b *BucketSM) evaluateWarming(ctx context.Context) error {
 	// total counts it but ingesting doesn't, so the gate would stick.
 	if total > 0 && ingesting >= b.Target && recovering == 0 && launching == 0 {
 		return b.Fire(ctx, TriggerAllReplacementsReady)
+	}
+	// Re-mint guard: nothing is in flight (no LAUNCHING/recovering) yet the
+	// cohort is still under Target — the previous mint died (e.g. every
+	// launch failed on a deregistered AMI and the shards went GONE).
+	// onEnterWarming only mints on state entry, so without this the bucket
+	// waits forever for a cohort that will never arrive and ingest stalls.
+	// mintWarmingCohort is idempotent (skips covered stripes), so this
+	// safely re-arms the mint without double-launching live stripes.
+	if ingesting < b.Target && launching == 0 && recovering == 0 {
+		return b.mintWarmingCohort(ctx, now)
 	}
 	return nil
 }

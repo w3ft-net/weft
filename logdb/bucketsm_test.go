@@ -323,6 +323,70 @@ func TestBucketSM_WarmingGateWaitsForLaunching(t *testing.T) {
 	}
 }
 
+// Regression (2026-06-06 ingest outage): a bucket stuck in WARMING whose
+// entire minted cohort went GONE — e.g. every launch failed on a
+// deregistered shard AMI — must re-mint on the next Evaluate. onEnterWarming
+// only mints on state entry, so without a re-mint in evaluateWarming the
+// bucket waits forever for a cohort that already died, and ingest stalls.
+func TestBucketSM_WarmingRemintsWhenCohortAllGone(t *testing.T) {
+	sm, db, ab, ctrl := makeFixtureBucketSM(t, BucketWarming)
+	// No live shards: the WARMING mint died (GONE). An ARCHIVED shard from a
+	// past window is present but must be ignored by the live-cohort check.
+	seedShardRow(t, db, ab.ID, "s-old-0", StateArchived, oldWin, ip(0))
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(ctrl.minted) != 2 {
+		t.Fatalf("re-mint: got %d want 2 (WARMING must re-mint a dead cohort)", len(ctrl.minted))
+	}
+	for _, spec := range ctrl.minted {
+		if !spec.WindowStart.Equal(curWin) {
+			t.Errorf("re-mint window: got %s want %s (current)", spec.WindowStart, curWin)
+		}
+	}
+	if got := sortedSpecStripes(ctrl.minted); got[0] != 0 || got[1] != 1 {
+		t.Errorf("re-mint stripes: got %v want [0 1]", got)
+	}
+	if got, _ := sm.State(context.Background()); got != BucketWarming {
+		t.Fatalf("state: got %q want WARMING (cohort not yet INGESTING)", got)
+	}
+}
+
+// A WARMING cohort that's partially dead (one stripe INGESTING, the other
+// GONE with nothing in flight) must re-mint only the missing stripe — it
+// can never reach the AllReplacementsReady gate otherwise.
+func TestBucketSM_WarmingRemintsMissingStripe(t *testing.T) {
+	sm, db, ab, ctrl := makeFixtureBucketSM(t, BucketWarming)
+	// Stripe 0 came up; stripe 1's launch died (GONE → absent from cohort).
+	seedShardRow(t, db, ab.ID, "s-cur-0", StateIngesting, curWin, ip(0))
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(ctrl.minted) != 1 {
+		t.Fatalf("re-mint: got %d want 1 (only the dead stripe)", len(ctrl.minted))
+	}
+	if ctrl.minted[0].StripeIndex != 1 {
+		t.Errorf("re-mint stripe: got %d want 1", ctrl.minted[0].StripeIndex)
+	}
+}
+
+// A WARMING cohort with a launch still in flight must NOT re-mint — the
+// re-mint guard only fires once nothing is launching or recovering.
+func TestBucketSM_WarmingDoesNotRemintWhileLaunching(t *testing.T) {
+	sm, db, ab, ctrl := makeFixtureBucketSM(t, BucketWarming)
+	seedShardRow(t, db, ab.ID, "s-cur-0", StateIngesting, curWin, ip(0))
+	seedShardRow(t, db, ab.ID, "s-cur-1", StateLaunching, curWin, ip(1))
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(ctrl.minted) != 0 {
+		t.Fatalf("re-mint: got %d want 0 (stripe 1 still launching)", len(ctrl.minted))
+	}
+}
+
 // Evaluate in ROTATING returns to STASIS once the outgoing cohort has all
 // left INGESTING.
 func TestBucketSM_RotatingGateReturnsToStasisWhenDrained(t *testing.T) {
