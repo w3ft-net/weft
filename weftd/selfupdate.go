@@ -5,32 +5,44 @@ package weftd
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime"
+	"syscall"
 	"time"
+
+	"github.com/kevlarcon/weft/internal/release"
 )
 
-// SelfUpdateChecker logs a warning once a day when a newer weftd is
-// available at releases.w3ft.net. Auto-pulling the update is gated
-// behind a future config flag; the initial rollout only nags the
-// operator so we can watch the signal in real customer accounts before
-// trusting an unattended replace. The mechanic mirrors `weft update`
-// on the CLI side — same manifest, same sha256 verification path.
+// SelfUpdateChecker checks releases.w3ft.net for a newer weftd. When
+// AutoApply is set (the default — see cmd/weftd autoUpdateEnabled), a
+// newer build is downloaded, sha256-verified, swapped over the running
+// binary, and the process restarts into it (systemd Restart=always
+// relaunches). When AutoApply is off it only nags once a day so the
+// operator can act on their own schedule. The download/verify/replace
+// mechanics live in internal/release, shared with `weft update`.
 type SelfUpdateChecker struct {
 	CurrentVersion string        // the running binary's Version
+	AutoApply      bool          // download+replace+restart vs. nag-only
 	ManifestURL    string        // default https://releases.w3ft.net/weftd/latest/manifest.json
 	CheckInterval  time.Duration // default 24h
 	HTTP           *http.Client  // default 30s timeout
+
+	// Test seams. ExecPath resolves the binary to overwrite (default
+	// os.Executable); Restart hands control back to the supervisor after a
+	// successful swap (default: SIGTERM self → the existing graceful
+	// shutdown in cmd/weftd/main → systemd relaunch).
+	ExecPath func() (string, error)
+	Restart  func()
 }
 
-// Run blocks until ctx is cancelled, firing one check immediately on
-// start and one every CheckInterval thereafter. Errors are logged and
-// the loop keeps going — a transient network blip shouldn't kill the
-// nag.
-func (c *SelfUpdateChecker) Run(ctx context.Context) {
+// init fills unset fields with their defaults. Idempotent and called
+// from both Run and checkOnce, so a test can drive checkOnce directly
+// (overriding only the seams it cares about) without tripping a nil
+// client or nil hook.
+func (c *SelfUpdateChecker) init() {
 	if c.ManifestURL == "" {
 		c.ManifestURL = "https://releases.w3ft.net/weftd/latest/manifest.json"
 	}
@@ -40,8 +52,22 @@ func (c *SelfUpdateChecker) Run(ctx context.Context) {
 	if c.HTTP == nil {
 		c.HTTP = &http.Client{Timeout: 30 * time.Second}
 	}
+	if c.ExecPath == nil {
+		c.ExecPath = os.Executable
+	}
+	if c.Restart == nil {
+		c.Restart = func() { _ = syscall.Kill(os.Getpid(), syscall.SIGTERM) }
+	}
+}
 
-	c.checkOnce(ctx)
+// Run blocks until ctx is cancelled, firing one check immediately on
+// start and one every CheckInterval thereafter. Errors are logged and
+// the loop keeps going — a transient network blip or a bad release
+// shouldn't kill the nag (or, with AutoApply, ingest).
+func (c *SelfUpdateChecker) Run(ctx context.Context) {
+	c.init()
+
+	c.checkOnce()
 	t := time.NewTicker(c.CheckInterval)
 	defer t.Stop()
 	for {
@@ -49,61 +75,69 @@ func (c *SelfUpdateChecker) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			c.checkOnce(ctx)
+			c.checkOnce()
 		}
 	}
 }
 
-func (c *SelfUpdateChecker) checkOnce(ctx context.Context) {
-	req, err := http.NewRequestWithContext(ctx, "GET", c.ManifestURL, nil)
+func (c *SelfUpdateChecker) checkOnce() {
+	c.init()
+	m, err := release.FetchManifestWith(c.HTTP, c.ManifestURL)
 	if err != nil {
-		log.Printf("selfupdate: build request: %v", err)
+		log.Printf("selfupdate: %v", err)
 		return
 	}
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		log.Printf("selfupdate: fetch %s: %v", c.ManifestURL, err)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		log.Printf("selfupdate: HTTP %d from %s", resp.StatusCode, c.ManifestURL)
-		return
-	}
-	var m struct {
-		Version   string `json:"version"`
-		Platforms []struct {
-			GOOS   string `json:"goos"`
-			GOARCH string `json:"goarch"`
-			URL    string `json:"url"`
-			SHA256 string `json:"sha256"`
-		} `json:"platforms"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
-		log.Printf("selfupdate: parse manifest: %v", err)
-		return
-	}
-	if m.Version == "" || m.Version == c.CurrentVersion {
+	if m.Version == "" || !release.VersionNewer(m.Version, c.CurrentVersion) {
 		return
 	}
 	// Find the platform line that matches us; without one there's
-	// nothing actionable to suggest.
-	var matching string
-	for _, p := range m.Platforms {
-		if p.GOOS == runtime.GOOS && p.GOARCH == runtime.GOARCH {
-			matching = p.URL
-			break
-		}
-	}
-	if matching == "" {
+	// nothing actionable to suggest or pull.
+	plat := release.FindPlatform(m, runtime.GOOS, runtime.GOARCH)
+	if plat == nil {
 		log.Printf("selfupdate: weftd %s available but no %s/%s build in manifest",
 			m.Version, runtime.GOOS, runtime.GOARCH)
 		return
 	}
-	log.Printf("selfupdate: weftd %s available (current %s) — see %s",
-		m.Version, c.CurrentVersion, matching)
+
+	if !c.AutoApply {
+		log.Printf("selfupdate: weftd %s available (current %s) — see %s",
+			m.Version, c.CurrentVersion, plat.URL)
+		return
+	}
+
+	c.apply(m, plat)
 }
 
-// Compile-time guard against accidental drift between the JSON shape
-// here and the one .kevcons/ext/release.lua writes.
-var _ = fmt.Sprint
+// apply downloads the new binary, verifies it, swaps it over the running
+// executable, and restarts. Any failure is logged and returns — the
+// caller's loop retries on the next tick, so a flaky download or a
+// momentarily-missing artifact never costs us ingest.
+func (c *SelfUpdateChecker) apply(m *release.Manifest, plat *release.Platform) {
+	dst, err := c.ExecPath()
+	if err != nil {
+		log.Printf("selfupdate: resolve running binary: %v", err)
+		return
+	}
+	// Replace the real binary, not a symlink to it.
+	if real, err := filepath.EvalSymlinks(dst); err == nil {
+		dst = real
+	}
+
+	log.Printf("selfupdate: downloading weftd %s for %s/%s", m.Version, runtime.GOOS, runtime.GOARCH)
+	// Own client with a generous timeout — the manifest client's 30s is
+	// fine for a few-KB JSON but tight for a multi-MB binary on a slow link.
+	tmp, err := release.DownloadAndVerify(plat.URL, plat.SHA256)
+	if err != nil {
+		log.Printf("selfupdate: download weftd %s: %v", m.Version, err)
+		return
+	}
+	defer os.Remove(tmp)
+
+	if err := release.ReplaceBinary(tmp, dst); err != nil {
+		log.Printf("selfupdate: install weftd %s: %v", m.Version, err)
+		return
+	}
+
+	log.Printf("selfupdate: applied weftd %s → %s, restarting", c.CurrentVersion, m.Version)
+	c.Restart()
+}
