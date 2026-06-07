@@ -30,7 +30,7 @@ import (
 // CoverageEntry is one line of `go tool cover -func` output, already
 // parsed. Percent is 0..100.
 type CoverageEntry struct {
-	File     string  // e.g. github.com/kevlarcon/weft/shard/service/server.go
+	File     string  // e.g. github.com/graybeardcorp/weft/shard/service/server.go
 	Line     int     // declaration line
 	Function string  // e.g. QueryToCompute
 	Percent  float64 // 0..100

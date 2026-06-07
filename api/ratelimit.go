@@ -13,7 +13,7 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/kevlarcon/weft/config"
+	"github.com/graybeardcorp/weft/config"
 )
 
 // RouteLimit picks which budget from the runtime config applies to a

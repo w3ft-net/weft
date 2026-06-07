@@ -20,11 +20,11 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
-	"github.com/kevlarcon/warp/pkg/shellcore/wasm"
-	"github.com/kevlarcon/weft/chart"
-	"github.com/kevlarcon/weft/dashboard"
-	"github.com/kevlarcon/weft/shell"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/warp/pkg/shellcore/wasm"
+	"github.com/graybeardcorp/weft/chart"
+	"github.com/graybeardcorp/weft/dashboard"
+	"github.com/graybeardcorp/weft/shell"
 )
 
 // Run drives the interactive CLI shell. The caller wires up s.Query,

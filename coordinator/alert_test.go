@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/weft/alert"
+	"github.com/graybeardcorp/weft/alert"
 )
 
 func runAlert(args string, stdin string) (stdout, stderr string, exitCode int) {

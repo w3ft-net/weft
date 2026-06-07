@@ -8,10 +8,10 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/kevlarcon/weft/internal/timerange"
-	"github.com/kevlarcon/weft/cmd/weft/mcp"
-	"github.com/kevlarcon/weft/cmd/weft/mcp/proposals"
-	"github.com/kevlarcon/weft/shell"
+	"github.com/graybeardcorp/weft/cmd/weft/mcp"
+	"github.com/graybeardcorp/weft/cmd/weft/mcp/proposals"
+	"github.com/graybeardcorp/weft/internal/timerange"
+	"github.com/graybeardcorp/weft/shell"
 )
 
 // runMCP starts the weft MCP server on stdio. It reuses the same

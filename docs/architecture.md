@@ -91,7 +91,7 @@ User-facing meta-variables (`$NAMESPACE`, `$SERVICE`, `$KIND`, `$LEVEL`, `$TS`, 
 
 ## Key dependencies
 
-- [github.com/kevlarcon/warp](https://github.com/kevlarcon/warp) — awk, sed, jq, bash interpreters + gpipe
+- [github.com/graybeardcorp/warp](https://github.com/graybeardcorp/warp) — awk, sed, jq, bash interpreters + gpipe
 - DuckDB (via CGo or shell exec)
 - AWS SDK — CloudWatch Logs, EC2 RunInstances/TerminateInstances for shard lifecycle (no ASG), EBS volumes + snapshots for shard data
 

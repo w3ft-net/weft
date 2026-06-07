@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/compute"
-	"github.com/kevlarcon/weft/logdb"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
+	"github.com/graybeardcorp/weft/compute"
+	"github.com/graybeardcorp/weft/logdb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // TestExecute_LogQueryFlowsThroughRewriter pins the unified-dispatch

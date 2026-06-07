@@ -3,7 +3,7 @@ package policy
 import (
 	"strings"
 
-	"github.com/kevlarcon/warp/pkg/bash"
+	"github.com/graybeardcorp/warp/pkg/bash"
 )
 
 // Validate parses src through warp's bash parser and walks the AST,

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // Off-EC2 (dev/docker) the shard has no IMDS, so the DockerLauncher

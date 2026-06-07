@@ -1,10 +1,10 @@
-module github.com/kevlarcon/weft
+module github.com/graybeardcorp/weft
 
 go 1.25.0
 
-replace github.com/kevlarcon/warp => ../warp
+replace github.com/graybeardcorp/warp => ../warp
 
-replace github.com/kevlarcon/saaskit => ../saaskit
+replace github.com/graybeardcorp/saaskit => ../saaskit
 
 require (
 	github.com/aws/aws-lambda-go v1.54.0
@@ -23,8 +23,8 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.8.0
-	github.com/kevlarcon/saaskit v0.0.0
-	github.com/kevlarcon/warp v0.1.0
+	github.com/graybeardcorp/saaskit v0.0.0
+	github.com/graybeardcorp/warp v0.1.0
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/pressly/goose/v3 v3.27.0

@@ -16,7 +16,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/kevlarcon/weft/cmd/weft/mcp/proposals"
+	"github.com/graybeardcorp/weft/cmd/weft/mcp/proposals"
 )
 
 // RunFunc executes a pipeline that the validator has already

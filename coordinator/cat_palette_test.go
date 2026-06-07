@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/weft/theme"
+	"github.com/graybeardcorp/weft/theme"
 )
 
 // TestRunLocal_CatHighlightsWithWeftPalette verifies that a bare `cat`

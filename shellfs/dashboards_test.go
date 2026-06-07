@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/weft/mounts"
+	"github.com/graybeardcorp/weft/mounts"
 )
 
 const sampleDashboardYAML = `title: Test

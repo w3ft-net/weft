@@ -18,7 +18,7 @@ import (
 	v4signer "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	_ "github.com/duckdb/duckdb-go/v2"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // ColdShard implements the Shard interface for archived data in Parquet.

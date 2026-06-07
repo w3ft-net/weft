@@ -7,10 +7,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
-	"github.com/kevlarcon/warp/pkg/syntax"
-	"github.com/kevlarcon/weft/chart"
-	"github.com/kevlarcon/weft/internal/timerange"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/warp/pkg/syntax"
+	"github.com/graybeardcorp/weft/chart"
+	"github.com/graybeardcorp/weft/internal/timerange"
 )
 
 // Row is a single result row consumed by the shell. Carries only

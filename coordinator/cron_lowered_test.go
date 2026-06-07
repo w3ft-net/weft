@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/weft/planner"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/planner"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // TestExecuteForWatch_LoweredHotPath fires a watch whose LoweredPlan

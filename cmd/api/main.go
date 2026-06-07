@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	weftapi "github.com/kevlarcon/weft/api"
-	"github.com/kevlarcon/weft/config"
-	"github.com/kevlarcon/weft/store"
+	weftapi "github.com/graybeardcorp/weft/api"
+	"github.com/graybeardcorp/weft/config"
+	"github.com/graybeardcorp/weft/store"
 )
 
 func main() {

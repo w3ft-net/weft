@@ -20,14 +20,14 @@ func TestParseFuncLine(t *testing.T) {
 	}{
 		{
 			name: "real line with tabs",
-			in:   "github.com/kevlarcon/weft/auth/grpc.go:21:\t\t\tExtractJWT\t\t\t\t\t76.9%",
-			want: CoverageEntry{File: "github.com/kevlarcon/weft/auth/grpc.go", Line: 21, Function: "ExtractJWT", Percent: 76.9},
+			in:   "github.com/graybeardcorp/weft/auth/grpc.go:21:\t\t\tExtractJWT\t\t\t\t\t76.9%",
+			want: CoverageEntry{File: "github.com/graybeardcorp/weft/auth/grpc.go", Line: 21, Function: "ExtractJWT", Percent: 76.9},
 			ok:   true,
 		},
 		{
 			name: "zero coverage",
-			in:   "github.com/kevlarcon/weft/shard/service/server.go:221:\tQueryToCompute\t0.0%",
-			want: CoverageEntry{File: "github.com/kevlarcon/weft/shard/service/server.go", Line: 221, Function: "QueryToCompute", Percent: 0.0},
+			in:   "github.com/graybeardcorp/weft/shard/service/server.go:221:\tQueryToCompute\t0.0%",
+			want: CoverageEntry{File: "github.com/graybeardcorp/weft/shard/service/server.go", Line: 221, Function: "QueryToCompute", Percent: 0.0},
 			ok:   true,
 		},
 		{

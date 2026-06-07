@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/weft/internal/clientwire"
+	"github.com/graybeardcorp/weft/internal/clientwire"
 )
 
 // TestAccessLog_PreservesFlusher pins the regression introduced when

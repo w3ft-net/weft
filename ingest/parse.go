@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // Parser applies a schema to raw log lines, producing LogRow structs.

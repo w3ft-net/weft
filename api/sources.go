@@ -11,10 +11,10 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/kevlarcon/weft/auth"
-	"github.com/kevlarcon/weft/ingest"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/ingest"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // ── Agent-facing endpoints (token-authenticated) ───────────

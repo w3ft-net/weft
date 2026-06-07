@@ -17,16 +17,16 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
-	"github.com/kevlarcon/weft/auth"
-	"github.com/kevlarcon/weft/compute"
-	weftcfg "github.com/kevlarcon/weft/config"
-	"github.com/kevlarcon/weft/coordinator"
-	"github.com/kevlarcon/weft/coordinator/poller"
-	coordsvc "github.com/kevlarcon/weft/coordinator/service"
-	"github.com/kevlarcon/saaskit/email"
-	"github.com/kevlarcon/weft/logdb"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/saaskit/email"
+	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/compute"
+	weftcfg "github.com/graybeardcorp/weft/config"
+	"github.com/graybeardcorp/weft/coordinator"
+	"github.com/graybeardcorp/weft/coordinator/poller"
+	coordsvc "github.com/graybeardcorp/weft/coordinator/service"
+	"github.com/graybeardcorp/weft/logdb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/store"
 )
 
 func main() {

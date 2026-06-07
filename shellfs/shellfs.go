@@ -9,10 +9,10 @@ import (
 	"io/fs"
 	"strings"
 
-	"github.com/kevlarcon/warp/pkg/bash"
-	"github.com/kevlarcon/warp/pkg/shellcore"
-	"github.com/kevlarcon/weft/mounts"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/warp/pkg/bash"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/weft/mounts"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // Compile-time interface checks.

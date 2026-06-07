@@ -3,7 +3,7 @@ package coordinator
 import (
 	"context"
 
-	"github.com/kevlarcon/weft/compute"
+	"github.com/graybeardcorp/weft/compute"
 )
 
 // concatStream exhausts primary first, then transitions to the stream

@@ -16,9 +16,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/kevlarcon/weft/auth"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/auth"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // benchJWTSecret matches the dev coordinator's JWT_SECRET default so tests
@@ -343,8 +343,8 @@ func benchIngest(b *testing.B, rows int) {
 	for i := range prebuilt {
 		ts := baseTime.Add(time.Duration(i) * time.Millisecond)
 		prebuilt[i] = &pb.LogRow{
-			LineNum:  int64(i),
-			Raw:      fmt.Sprintf("%s INFO bench i-001 test row %d", ts.Format("2006/01/02 15:04:05"), r.Int()),
+			LineNum:   int64(i),
+			Raw:       fmt.Sprintf("%s INFO bench i-001 test row %d", ts.Format("2006/01/02 15:04:05"), r.Int()),
 			Namespace: "kevlar", Service: "bench",
 			Level:    "INFO",
 			Instance: "i-001",
@@ -382,7 +382,7 @@ var tailPipelines = []string{
 	"tail -f vimgym.log",
 	"tail -f grantcentral.log",
 	"tail -f callbox.log",
-	"tail -f warp.log",                          // all apps
+	"tail -f warp.log", // all apps
 	"tail -f vimgym.log | grep ERROR",
 	"tail -f warp.log | grep timeout",
 	"tail -f grantcentral.log | grep -v health",

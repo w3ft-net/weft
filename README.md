@@ -145,7 +145,7 @@ weft> cat myapp-web.log | cut -d' ' -f5- | sort | uniq -c
 
 ### Pipeline tools
 
-Standard Unix tools work because weft uses the [warp](https://github.com/kevlarcon/warp) interpreter:
+Standard Unix tools work because weft uses the [warp](https://github.com/graybeardcorp/warp) interpreter:
 
 - **awk** — filter and transform: `awk '$LEVEL == "ERROR"'`, `awk '{ print $3 }'`
 - **jq** — JSON queries: `jq 'select(.status == 500)'`, `jq '{user: .user_id}'`

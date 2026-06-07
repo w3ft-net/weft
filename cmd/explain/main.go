@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/kevlarcon/weft/planner"
+	"github.com/graybeardcorp/weft/planner"
 )
 
 func main() {

@@ -7,7 +7,7 @@ import (
 	"io"
 	"testing"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // TestReadResultRow_RejectsOversizeFrame pins the compute-OOM fix.

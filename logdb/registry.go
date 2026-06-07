@@ -8,8 +8,8 @@ import (
 
 	"github.com/qmuntal/stateless"
 
-	"github.com/kevlarcon/weft/shard"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/shard"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // ShardState and the State* constants live in states.go now —

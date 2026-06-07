@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/store"
 )
 
 func mustParse(t *testing.T, body string) *store.DashboardSpec {

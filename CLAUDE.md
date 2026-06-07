@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is weft?
 
-A centralized, multi-tenant log analysis service. Customers connect AWS accounts; weft ingests logs from CloudWatch (or via the weftd agent) into time-sharded DuckDB+Parquet nodes. Users query logs through a custom shell (`weft`) that presents log sources as pseudofiles and uses Unix pipeline idioms (awk/sed/jq/grep) powered by the [warp](https://github.com/kevlarcon/warp) interpreter. The query planner pushes predicates down into shard-level SQL and runs the rest as gpipe compute stages.
+A centralized, multi-tenant log analysis service. Customers connect AWS accounts; weft ingests logs from CloudWatch (or via the weftd agent) into time-sharded DuckDB+Parquet nodes. Users query logs through a custom shell (`weft`) that presents log sources as pseudofiles and uses Unix pipeline idioms (awk/sed/jq/grep) powered by the [warp](https://github.com/graybeardcorp/warp) interpreter. The query planner pushes predicates down into shard-level SQL and runs the rest as gpipe compute stages.
 
 ## Build & run
 
@@ -18,7 +18,7 @@ go build -o server ./cmd/server
 PORT=9090 ./server
 ```
 
-The project depends on `github.com/kevlarcon/warp` via a local replace directive (`../warp`), so that repo must be checked out as a sibling.
+The project depends on `github.com/graybeardcorp/warp` via a local replace directive (`../warp`), so that repo must be checked out as a sibling.
 
 ## Architecture
 

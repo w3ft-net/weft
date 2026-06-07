@@ -10,8 +10,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/credentials"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // TestResolveRegion documents the contract the compute worker needs:

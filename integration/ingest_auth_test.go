@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // TestIngestStream_RejectsDeletedCustomer guards the stream-auth fix that

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/saaskit/email"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/saaskit/email"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // pdEventsURL is the PagerDuty Events v2 endpoint. Overridable in tests.
@@ -167,12 +167,12 @@ func (n *Notifier) postSlackWebhook(webhook, channel, text, watchName string) er
 // pagerDutyEvent is the Events v2 payload shape. See
 // https://developer.pagerduty.com/docs/events-api-v2/trigger-events/
 type pagerDutyEvent struct {
-	RoutingKey  string             `json:"routing_key"`
-	EventAction string             `json:"event_action"` // "trigger" | "acknowledge" | "resolve"
-	DedupKey    string             `json:"dedup_key,omitempty"`
-	Payload     pagerDutyPayload   `json:"payload"`
-	Client      string             `json:"client,omitempty"`
-	ClientURL   string             `json:"client_url,omitempty"`
+	RoutingKey  string           `json:"routing_key"`
+	EventAction string           `json:"event_action"` // "trigger" | "acknowledge" | "resolve"
+	DedupKey    string           `json:"dedup_key,omitempty"`
+	Payload     pagerDutyPayload `json:"payload"`
+	Client      string           `json:"client,omitempty"`
+	ClientURL   string           `json:"client_url,omitempty"`
 }
 
 type pagerDutyPayload struct {
@@ -249,11 +249,11 @@ func (n *Notifier) sendPagerDuty(customerID uint, watchName string, target store
 
 // webhookPayload is the versioned JSON shape sent to generic webhook targets.
 type webhookPayload struct {
-	V     int    `json:"v"`
-	Watch string `json:"watch"`
-	Alias string `json:"alias"`
+	V      int    `json:"v"`
+	Watch  string `json:"watch"`
+	Alias  string `json:"alias"`
 	TsUnix int64  `json:"ts_unix"`
-	Body  string `json:"body"`
+	Body   string `json:"body"`
 }
 
 func (n *Notifier) sendWebhook(aliasName, watchName string, target store.WebhookTarget, body string) error {

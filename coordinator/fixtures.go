@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"time"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // DevFixtureTime constants for the sample data time windows.

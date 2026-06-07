@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // TestMatchingEntries_SkipsSuspended pins Issue 2: a SUSPENDED shard

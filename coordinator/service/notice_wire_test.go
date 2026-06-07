@@ -8,9 +8,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/kevlarcon/weft/auth"
-	"github.com/kevlarcon/weft/coordinator"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/coordinator"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // captureStream is a minimal grpc.ServerStreamingServer stub that
@@ -26,14 +26,14 @@ func newCaptureStream(ctx context.Context) *captureStream {
 	return &captureStream{ctx: ctx}
 }
 
-func (s *captureStream) Context() context.Context              { return s.ctx }
+func (s *captureStream) Context() context.Context { return s.ctx }
 func (s *captureStream) Send(r *pb.CoordinatorExecuteResponse) error {
 	s.responses = append(s.responses, r)
 	return nil
 }
 func (s *captureStream) SetHeader(metadata.MD) error  { return nil }
 func (s *captureStream) SendHeader(metadata.MD) error { return nil }
-func (s *captureStream) SetTrailer(metadata.MD)      {}
+func (s *captureStream) SetTrailer(metadata.MD)       {}
 func (s *captureStream) SendMsg(m any) error          { return nil }
 func (s *captureStream) RecvMsg(m any) error          { return nil }
 

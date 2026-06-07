@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // RemoteQueryResult is what the shell gets back from a Query RPC.

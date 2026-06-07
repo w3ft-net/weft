@@ -19,7 +19,7 @@ RUN go mod download
 
 # BUILD_FLAGS is empty in prod builds (empty string is a no-op to
 # `go build`). Integration runs that want per-container coverage
-# pass BUILD_FLAGS="-cover -coverpkg=github.com/kevlarcon/weft/..."
+# pass BUILD_FLAGS="-cover -coverpkg=github.com/graybeardcorp/weft/..."
 # so every server binary writes its own counter file to GOCOVERDIR
 # on clean shutdown. See docker-compose.cover.yml.
 ARG BUILD_FLAGS=""

@@ -143,9 +143,9 @@ build {
       "GOMODCACHE=/opt/app/gomodcache",
       "HOME=/home/admin",
       "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-      "GOPRIVATE=github.com/kevlarcon/*",
-      "GONOSUMCHECK=github.com/kevlarcon/*",
-      "GONOSUMDB=github.com/kevlarcon/*",
+      "GOPRIVATE=github.com/graybeardcorp/*",
+      "GONOSUMCHECK=github.com/graybeardcorp/*",
+      "GONOSUMDB=github.com/graybeardcorp/*",
     ]
     inline = [
       "cd /tmp && tar xzf /tmp/app-source.tar.gz",

@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // liveShardIDs is what roll-cohort uses to decide which shards to roll and
@@ -17,7 +17,7 @@ func TestLiveShardIDs_FiltersAndSorts(t *testing.T) {
 		{Id: "shard-1", State: "READ_ONLY"},
 		{Id: "shard-launching", State: "LAUNCHING"}, // skip: already on current AMI
 		{Id: "shard-2", State: "DEGRADED"},
-		{Id: "shard-archived", State: "ARCHIVED"}, // skip: nothing to upgrade
+		{Id: "shard-archived", State: "ARCHIVED"},   // skip: nothing to upgrade
 		{Id: "shard-suspended", State: "SUSPENDED"}, // skip: nothing to upgrade
 		{Id: "shard-archiving", State: "ARCHIVING"}, // skip
 		{Id: "shard-gone", State: "GONE"},           // skip

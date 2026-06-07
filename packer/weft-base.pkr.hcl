@@ -141,16 +141,16 @@ build {
       "GOPATH=/tmp/go",
       "GOMODCACHE=/opt/app/gomodcache",
       "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-      "GOPRIVATE=github.com/kevlarcon/*",
-      "GONOSUMCHECK=github.com/kevlarcon/*",
-      "GONOSUMDB=github.com/kevlarcon/*",
+      "GOPRIVATE=github.com/graybeardcorp/*",
+      "GONOSUMCHECK=github.com/graybeardcorp/*",
+      "GONOSUMDB=github.com/graybeardcorp/*",
     ]
     inline = [
       "sudo mkdir -p /opt/app/gomodcache",
       "sudo chown -R admin:admin /opt/app/gomodcache",
       "mkdir -p /tmp/modcache-seed && cp /tmp/go.mod /tmp/go.sum /tmp/modcache-seed/",
       # Strip warp entirely (local replace + require) so go mod download caches everything else
-      "sed -i '/kevlarcon\\/warp/d' /tmp/modcache-seed/go.mod",
+      "sed -i '/graybeardcorp\\/warp/d' /tmp/modcache-seed/go.mod",
       "cd /tmp/modcache-seed && go mod download -x 2>&1 | tail -5 || true",
       # Cache stays admin-owned — the app build step runs as admin too
       "rm -rf /tmp/modcache-seed /tmp/go.mod /tmp/go.sum",

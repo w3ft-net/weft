@@ -3,7 +3,7 @@ package coordinator
 import (
 	"sync"
 
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // NoticeKind classifies a notice for frontend rendering. The

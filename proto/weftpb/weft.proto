@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package weft;
 
-option go_package = "github.com/kevlarcon/weft/proto/weftpb";
+option go_package = "github.com/graybeardcorp/weft/proto/weftpb";
 
 // ---------------------------------------------------------------------------
 // Shard service — runs on each shard node

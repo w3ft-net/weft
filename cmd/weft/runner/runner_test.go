@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/weft/shell"
+	"github.com/graybeardcorp/weft/shell"
 )
 
 // TestRenderNotice_KindToColor pins the ANSI color picked per Kind so

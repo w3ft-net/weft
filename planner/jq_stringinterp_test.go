@@ -3,7 +3,7 @@ package planner
 import (
 	"testing"
 
-	"github.com/kevlarcon/warp/pkg/jq"
+	"github.com/graybeardcorp/warp/pkg/jq"
 )
 
 // TestTryJqStagePushdown_StringInterp pins partial pushdown for jq pipelines

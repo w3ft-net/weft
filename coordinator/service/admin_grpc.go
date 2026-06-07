@@ -3,8 +3,8 @@ package service
 import (
 	"google.golang.org/grpc"
 
-	"github.com/kevlarcon/weft/auth"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/auth"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // NewAdminGRPCServer builds a gRPC server that hosts WeftAdmin and ONLY

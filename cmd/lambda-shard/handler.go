@@ -12,8 +12,8 @@ import (
 
 	_ "github.com/duckdb/duckdb-go/v2"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // QueryRequest is the JSON request body for a cold shard query.

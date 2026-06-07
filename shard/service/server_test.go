@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // Configure should persist identity to <dataDir>/shard.json so that an

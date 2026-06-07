@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/weft/cmd/weft/mcp/proposals"
+	"github.com/graybeardcorp/weft/cmd/weft/mcp/proposals"
 )
 
 // proposeBackend is the stub used across propose-tool tests.

@@ -15,7 +15,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/kevlarcon/weft/ingest"
+	"github.com/graybeardcorp/weft/ingest"
 )
 
 var dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Inline(true)

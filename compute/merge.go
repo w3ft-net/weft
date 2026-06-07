@@ -4,7 +4,7 @@ import (
 	"container/heap"
 	"strings"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // mergeRows k-way merges a pre-sorted set of per-shard row slices into
@@ -101,8 +101,8 @@ func (h *rowHeap) Len() int { return len(h.cursors) }
 func (h *rowHeap) Less(i, j int) bool {
 	return h.less(h.cursors[i].rows[h.cursors[i].idx], h.cursors[j].rows[h.cursors[j].idx])
 }
-func (h *rowHeap) Swap(i, j int)       { h.cursors[i], h.cursors[j] = h.cursors[j], h.cursors[i] }
-func (h *rowHeap) Push(x any)          { h.cursors = append(h.cursors, x.(*shardCursor)) }
+func (h *rowHeap) Swap(i, j int) { h.cursors[i], h.cursors[j] = h.cursors[j], h.cursors[i] }
+func (h *rowHeap) Push(x any)    { h.cursors = append(h.cursors, x.(*shardCursor)) }
 func (h *rowHeap) Pop() any {
 	n := len(h.cursors)
 	c := h.cursors[n-1]

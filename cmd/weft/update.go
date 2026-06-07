@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/kevlarcon/weft/internal/release"
+	"github.com/graybeardcorp/weft/internal/release"
 )
 
 // runUpdate implements `weft update`. Fetches the latest manifest from

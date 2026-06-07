@@ -52,7 +52,7 @@ Three drivers for a Go SDK on top of the generic HTTP intake:
             ┌──────────────────────────────────────────┐
             │  customer / weft Go process              │
             │                                          │
-            │   import "github.com/kevlarcon/weft-go"  │
+            │   import "github.com/graybeardcorp/weft-go"  │
             │                                          │
             │     │                                    │
             │     ▼                                    │

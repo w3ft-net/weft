@@ -9,12 +9,12 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/kevlarcon/weft/compute"
-	computesvc "github.com/kevlarcon/weft/compute/service"
-	"github.com/kevlarcon/weft/logdb"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
-	shardsvc "github.com/kevlarcon/weft/shard/service"
+	"github.com/graybeardcorp/weft/compute"
+	computesvc "github.com/graybeardcorp/weft/compute/service"
+	"github.com/graybeardcorp/weft/logdb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
+	shardsvc "github.com/graybeardcorp/weft/shard/service"
 )
 
 // setupGRPCCoordinator starts two shard gRPC servers and one compute gRPC

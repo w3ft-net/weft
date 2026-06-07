@@ -56,7 +56,7 @@ Adding a new test that needs LocalStack: tag the file
 at compile time.
 
 All jobs need the `warp` repo checked out as a sibling (local replace
-directive in go.mod: `replace github.com/kevlarcon/warp => ../warp`).
+directive in go.mod: `replace github.com/graybeardcorp/warp => ../warp`).
 The workflow uses `actions/checkout@v4` with `path: weft` and a second
 `path: warp` to lay them out next to each other. `graybeardcorp/warp`
 is private, so the second checkout authenticates via a read-only deploy

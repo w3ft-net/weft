@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kevlarcon/weft/cmd/weft/mcp/proposals"
-	"github.com/kevlarcon/weft/shell"
+	"github.com/graybeardcorp/weft/cmd/weft/mcp/proposals"
+	"github.com/graybeardcorp/weft/shell"
 )
 
 // runPropose dispatches `weft propose <subcommand>`. The CLI is the

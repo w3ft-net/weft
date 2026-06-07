@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 func TestZeroStageJob_LineNumIsSequential(t *testing.T) {

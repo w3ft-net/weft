@@ -16,7 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
-	"github.com/kevlarcon/weft/logdb"
+	"github.com/graybeardcorp/weft/logdb"
 )
 
 // These tests exercise the EC2-direct launch primitive

@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kevlarcon/weft/auth"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // TestMaybeHandleTeamCommand_Routing covers the interception boundary —

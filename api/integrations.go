@@ -16,7 +16,7 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // handleListIntegrations returns the current integration status.
@@ -278,10 +278,10 @@ func (s *Server) handlePagerDutyDisconnect(w http.ResponseWriter, r *http.Reques
 // ── Slack OAuth helpers ────────────────────────────────────
 
 type slackOAuthResponse struct {
-	OK              bool   `json:"ok"`
-	Error           string `json:"error"`
-	AccessToken     string `json:"access_token"`
-	Team            struct {
+	OK          bool   `json:"ok"`
+	Error       string `json:"error"`
+	AccessToken string `json:"access_token"`
+	Team        struct {
 		Name string `json:"name"`
 		ID   string `json:"id"`
 	} `json:"team"`

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/weft/planner"
+	"github.com/graybeardcorp/weft/planner"
 	"time"
 )
 

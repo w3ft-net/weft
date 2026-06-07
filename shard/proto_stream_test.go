@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 func TestProtoStream_RoundTrip(t *testing.T) {

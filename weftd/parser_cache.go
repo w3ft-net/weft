@@ -7,7 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/kevlarcon/weft/ingest"
+	"github.com/graybeardcorp/weft/ingest"
 )
 
 // ParserCache holds per-app parsers built from schema YAML returned by

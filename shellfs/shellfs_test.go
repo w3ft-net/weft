@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/weft/mounts"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/mounts"
+	"github.com/graybeardcorp/weft/store"
 )
 
 func testStore(t *testing.T) *store.Store {

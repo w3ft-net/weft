@@ -15,8 +15,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/kevlarcon/saaskit/jwtauth"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/saaskit/jwtauth"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // Claims are the payload of a weft JWT — strictly the user ID and timing

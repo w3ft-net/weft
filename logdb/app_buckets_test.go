@@ -3,8 +3,8 @@ package logdb
 import (
 	"testing"
 
-	"github.com/kevlarcon/weft/shard"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/shard"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // defaultBucketID is the surrogate id of the schema-seeded "default"

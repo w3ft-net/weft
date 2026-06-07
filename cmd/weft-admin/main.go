@@ -8,12 +8,12 @@
 //
 // Phase 1 shipped `roll-shard` (fire-and-exit). Phase 2 (this commit) adds:
 //   - roll-cohort <bucket-id>   — sequentially roll every live shard in a
-//                                 bucket, waiting for each to return to
-//                                 INGESTING before moving on.
+//     bucket, waiting for each to return to
+//     INGESTING before moving on.
 //   - roll-all                  — same, across every bucket.
 //   - wait-and-verify           — pollShardReady (cmd/weft-admin/wait.go)
-//                                 polls GetShard until state=INGESTING
-//                                 with a post-relaunch heartbeat.
+//     polls GetShard until state=INGESTING
+//     with a post-relaunch heartbeat.
 //   - --per-shard-timeout       — bound the wait per shard (default 15m).
 //   - --continue-on-failure     — keep going past a failed shard.
 //
@@ -33,7 +33,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // adminTokenEnv is the env var that carries the shared bearer token used

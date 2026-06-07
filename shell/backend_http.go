@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/weft/chart"
+	"github.com/graybeardcorp/weft/chart"
 )
 
 // WatchData holds the deserialized fields of a cron watch.

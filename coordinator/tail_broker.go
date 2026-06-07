@@ -5,7 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // TailBroker fans out ingested rows to active tail -f subscriptions.

@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/weft/shard"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/shard"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // Config carries the runtime-derived inputs Start needs from the

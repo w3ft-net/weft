@@ -19,7 +19,7 @@ services:
   compute:
     build:
       args:
-        BUILD_FLAGS: "-cover -coverpkg=github.com/kevlarcon/weft/..."
+        BUILD_FLAGS: "-cover -coverpkg=github.com/graybeardcorp/weft/..."
     environment:
       GOCOVERDIR: /coverage
     volumes:
@@ -30,7 +30,7 @@ services:
       context: ..
       dockerfile: weft/Dockerfile
       args:
-        BUILD_FLAGS: "-cover -coverpkg=github.com/kevlarcon/weft/..."
+        BUILD_FLAGS: "-cover -coverpkg=github.com/graybeardcorp/weft/..."
     environment:
       GOCOVERDIR: /coverage
     volumes:
@@ -49,7 +49,7 @@ services:
       context: ..
       dockerfile: weft/Dockerfile
       args:
-        BUILD_FLAGS: "-cover -coverpkg=github.com/kevlarcon/weft/..."
+        BUILD_FLAGS: "-cover -coverpkg=github.com/graybeardcorp/weft/..."
     entrypoint: ["/usr/local/bin/entrypoint.sh"]
     environment:
       ROLE: shard
@@ -72,7 +72,7 @@ services:
       context: ..
       dockerfile: weft/Dockerfile
       args:
-        BUILD_FLAGS: "-cover -coverpkg=github.com/kevlarcon/weft/..."
+        BUILD_FLAGS: "-cover -coverpkg=github.com/graybeardcorp/weft/..."
     entrypoint: ["/usr/local/bin/entrypoint.sh"]
     environment:
       ROLE: shard
@@ -92,7 +92,7 @@ services:
       context: ..
       dockerfile: weft/Dockerfile
       args:
-        BUILD_FLAGS: "-cover -coverpkg=github.com/kevlarcon/weft/..."
+        BUILD_FLAGS: "-cover -coverpkg=github.com/graybeardcorp/weft/..."
     environment:
       GOCOVERDIR: /coverage
     volumes:

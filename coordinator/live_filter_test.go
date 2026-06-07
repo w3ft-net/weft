@@ -3,8 +3,8 @@ package coordinator
 import (
 	"testing"
 
-	"github.com/kevlarcon/weft/planner"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/planner"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"time"
 )
 

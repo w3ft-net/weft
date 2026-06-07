@@ -1,7 +1,7 @@
 package compute
 
 import (
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // onlineCursor holds the per-shard FIFO of unemitted rows. A cursor is

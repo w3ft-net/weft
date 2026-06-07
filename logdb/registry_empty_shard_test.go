@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // TestMatchingEntries_SkipsEmptyColdShards pins the fix for pointless

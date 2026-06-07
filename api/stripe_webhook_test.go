@@ -14,8 +14,8 @@ import (
 	stripe "github.com/stripe/stripe-go/v84"
 	"github.com/stripe/stripe-go/v84/webhook"
 
-	"github.com/kevlarcon/saaskit/stripekit"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/saaskit/stripekit"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // signStripePayload builds a valid Stripe-Signature header for body using

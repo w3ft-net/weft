@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/logdb"
-	"github.com/kevlarcon/weft/shard"
+	"github.com/graybeardcorp/weft/logdb"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // These tests verify the coordinator handles shard list changes gracefully,

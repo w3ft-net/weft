@@ -16,10 +16,10 @@ package main
 import (
 	"syscall/js"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
-	"github.com/kevlarcon/warp/pkg/shellcore/wasm"
-	"github.com/kevlarcon/weft/internal/timerange"
-	"github.com/kevlarcon/weft/shell"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/warp/pkg/shellcore/wasm"
+	"github.com/graybeardcorp/weft/internal/timerange"
+	"github.com/graybeardcorp/weft/shell"
 )
 
 var jsCallbacks js.Value

@@ -3,18 +3,18 @@ package coordinator
 import (
 	"sync"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // RingBuffer is a fixed-size circular buffer for log rows. Writes never block;
 // if the buffer is full, the oldest rows are silently overwritten. Readers
 // drain batches for shard ingestion.
 type RingBuffer struct {
-	mu    sync.Mutex
-	buf   []*pb.LogRow
-	size  int
-	head  int // next write position
-	count int // number of unread rows (for drain)
+	mu     sync.Mutex
+	buf    []*pb.LogRow
+	size   int
+	head   int           // next write position
+	count  int           // number of unread rows (for drain)
 	notify chan struct{} // signaled on write
 }
 

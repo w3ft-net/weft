@@ -22,7 +22,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 COVDIR="coverage"
-MOD="github.com/kevlarcon/weft"
+MOD="github.com/graybeardcorp/weft"
 # Regex of paths excluded from the core profile. Matched against
 # textfmt block lines (which are prefixed with the full import path).
 EXCLUDE_RE="^${MOD//\//\\/}/(proto/weftpb|frontend/node_modules|cmd)/|_gen\.go:"

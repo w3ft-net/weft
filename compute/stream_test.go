@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 func TestLocalComputeJob_Stream(t *testing.T) {
