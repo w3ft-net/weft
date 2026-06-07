@@ -24,7 +24,9 @@ esac
 
 # Bash indirect expansion: VAR holds the literal name "LOOM_PROD_TOKEN"
 # or "LOOM_SAND_TOKEN", and ${!VAR} dereferences to the env value.
-VAR="LOOM_${ENV^^}_TOKEN"
+# (tr rather than ${ENV^^} so this runs under bash 3.2 too — macOS dev hosts.)
+ENV_UC=$(printf '%s' "$ENV" | tr '[:lower:]' '[:upper:]')
+VAR="LOOM_${ENV_UC}_TOKEN"
 TOKEN="${!VAR:-}"
 
 if [ -z "$TOKEN" ]; then
@@ -34,21 +36,40 @@ if [ -z "$TOKEN" ]; then
   exit 1
 fi
 
-OUT_DIR="/etc/weftd-loom-${ENV}"
+# OUT_DIR is overridable so tests can render into a temp dir; production
+# leaves it unset and writes to the fixed /etc path the units read.
+OUT_DIR="${WEFTD_LOOM_CONFDIR:-/etc/weftd-loom-${ENV}}"
 mkdir -p "$OUT_DIR"
 
+# 0.20.0 config schema: sources use `service:` (was `app:`) and the
+# fleet/scaling-unit field is `deployment:` (was `host_group:`). An
+# unknown key is silently ignored by weftd's lenient YAML, so a stale
+# `app:` would leave the service blank and weftd would fall back to
+# basename(path) → "api-prod" instead of "api".
 cat > "${OUT_DIR}/config.yaml" <<EOF
 endpoint: ingest.w3ft.net:9020
 token: ${TOKEN}
-host_group: loom-producer
+deployment: loom-producer
 sources:
-  - app: api
+  - service: api
     path: /var/log/loom/api-${ENV}.log
-  - app: worker
+  - service: worker
     path: /var/log/loom/worker-${ENV}.log
-  - app: edge
+  - service: edge
     path: /var/log/loom/edge-${ENV}.log
 EOF
-
 chmod 600 "${OUT_DIR}/config.yaml"
-echo "render-weftd-config: wrote ${OUT_DIR}/config.yaml"
+
+# token.env carries the loom token as WEFTD_TOKEN. The weftd-loom@ unit
+# loads this *after* /opt/app/.env, so it overrides the fleet WEFTD_TOKEN
+# that load-app-env drops on every host. weftd's token chain prefers the
+# env value over config.yaml's token: (main.go tokenFromChain), so
+# without this the forwarder would authenticate as the ops fleet and
+# loom's logs would land in graybeard/weft instead of loom/. The
+# config.yaml token: stays as a matching belt-and-suspenders fallback.
+cat > "${OUT_DIR}/token.env" <<EOF
+WEFTD_TOKEN=${TOKEN}
+EOF
+chmod 600 "${OUT_DIR}/token.env"
+
+echo "render-weftd-config: wrote ${OUT_DIR}/config.yaml and ${OUT_DIR}/token.env"

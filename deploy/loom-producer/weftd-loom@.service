@@ -3,19 +3,27 @@ Description=weftd-loom forwarder (env=%i)
 # Started via weft-loom-producer.service's Wants= so it gets activated
 # in the same `systemctl start weft-loom-producer` call. After= is
 # ordering only - we still need network up before weftd dials home.
-After=network.target
+#
+# weftd-loom-config@%i renders config.yaml + token.env first; Requires=
+# fails this unit closed if that render fails (so we never silently fall
+# back to the fleet WEFTD_TOKEN), and After= guarantees token.env exists
+# before we read it via EnvironmentFile below.
+After=network.target weftd-loom-config@%i.service
 Wants=network.target
+Requires=weftd-loom-config@%i.service
 PartOf=weft-loom-producer.service
 
 [Service]
 Type=simple
 User=root
-# /opt/app/.env is populated by the AMI's weft-startup.service via
-# load-app-env (which pulls every /weft/* secret through kevcons). It
-# carries LOOM_PROD_TOKEN / LOOM_SAND_TOKEN; render-weftd-config.sh
-# below picks the one matching this instance's %i and writes config.yaml.
+# /opt/app/.env (written by weft-startup via load-app-env) carries every
+# /weft/* secret, including the fleet WEFTD_TOKEN — which would otherwise
+# win weftd's env-over-file token chain and route loom's logs to the ops
+# namespace. token.env, rendered by weftd-loom-config@%i with this env's
+# loom token, is loaded AFTER /opt/app/.env so its WEFTD_TOKEN wins. No
+# '-' prefix: a missing token.env must fail the unit, not fall back.
 EnvironmentFile=/opt/app/.env
-ExecStartPre=/opt/app/scripts/loom-producer/render-weftd-config.sh %i
+EnvironmentFile=/etc/weftd-loom-%i/token.env
 ExecStart=/usr/local/bin/weftd --config /etc/weftd-loom-%i/config.yaml
 Restart=always
 RestartSec=5
