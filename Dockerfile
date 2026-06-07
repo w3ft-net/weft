@@ -16,7 +16,7 @@ WORKDIR /src/weft
 # go.mod now requires versioned graybeardcorp modules; a workspace points them
 # at the copied sibling sources (replaces the old replace-directive sed hack)
 # so the container build needs no module-fetch credentials.
-RUN go work init . ../warp ../saaskit
+RUN [ -f go.work ] || go work init . ../warp ../saaskit
 
 RUN go mod download
 

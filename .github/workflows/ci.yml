@@ -44,15 +44,32 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: weft
-      - name: Mint GitHub App token (private module fetch)
+      - name: Mint GitHub App token (private sibling checkouts)
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ vars.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           owner: graybeardcorp
-      - name: Configure git for private Go modules
-        run: git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+      # warp+saaskit are versioned modules, but the integration jobs build the
+      # weft Docker image (which COPYs their source) and the unit job's go
+      # commands resolve them via the workspace — so check out both and wire
+      # go.work, rather than fetching the tags over the network.
+      - name: Checkout warp
+        uses: actions/checkout@v4
+        with:
+          repository: graybeardcorp/warp
+          path: warp
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Checkout saaskit
+        uses: actions/checkout@v4
+        with:
+          repository: graybeardcorp/saaskit
+          path: saaskit
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Wire go workspace
+        working-directory: weft
+        run: go work init . ../warp ../saaskit
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -129,15 +146,32 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: weft
-      - name: Mint GitHub App token (private module fetch)
+      - name: Mint GitHub App token (private sibling checkouts)
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ vars.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           owner: graybeardcorp
-      - name: Configure git for private Go modules
-        run: git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+      # warp+saaskit are versioned modules, but the integration jobs build the
+      # weft Docker image (which COPYs their source) and the unit job's go
+      # commands resolve them via the workspace — so check out both and wire
+      # go.work, rather than fetching the tags over the network.
+      - name: Checkout warp
+        uses: actions/checkout@v4
+        with:
+          repository: graybeardcorp/warp
+          path: warp
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Checkout saaskit
+        uses: actions/checkout@v4
+        with:
+          repository: graybeardcorp/saaskit
+          path: saaskit
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Wire go workspace
+        working-directory: weft
+        run: go work init . ../warp ../saaskit
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -185,15 +219,32 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: weft
-      - name: Mint GitHub App token (private module fetch)
+      - name: Mint GitHub App token (private sibling checkouts)
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ vars.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           owner: graybeardcorp
-      - name: Configure git for private Go modules
-        run: git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+      # warp+saaskit are versioned modules, but the integration jobs build the
+      # weft Docker image (which COPYs their source) and the unit job's go
+      # commands resolve them via the workspace — so check out both and wire
+      # go.work, rather than fetching the tags over the network.
+      - name: Checkout warp
+        uses: actions/checkout@v4
+        with:
+          repository: graybeardcorp/warp
+          path: warp
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Checkout saaskit
+        uses: actions/checkout@v4
+        with:
+          repository: graybeardcorp/saaskit
+          path: saaskit
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Wire go workspace
+        working-directory: weft
+        run: go work init . ../warp ../saaskit
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -241,15 +292,32 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: weft
-      - name: Mint GitHub App token (private module fetch)
+      - name: Mint GitHub App token (private sibling checkouts)
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ vars.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           owner: graybeardcorp
-      - name: Configure git for private Go modules
-        run: git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+      # warp+saaskit are versioned modules, but the integration jobs build the
+      # weft Docker image (which COPYs their source) and the unit job's go
+      # commands resolve them via the workspace — so check out both and wire
+      # go.work, rather than fetching the tags over the network.
+      - name: Checkout warp
+        uses: actions/checkout@v4
+        with:
+          repository: graybeardcorp/warp
+          path: warp
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Checkout saaskit
+        uses: actions/checkout@v4
+        with:
+          repository: graybeardcorp/saaskit
+          path: saaskit
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Wire go workspace
+        working-directory: weft
+        run: go work init . ../warp ../saaskit
       - name: Set up Go
         uses: actions/setup-go@v5
         with:

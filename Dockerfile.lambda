@@ -22,7 +22,7 @@ COPY saaskit /src/saaskit
 COPY weft /src/weft
 WORKDIR /src/weft
 
-RUN go work init . ../warp ../saaskit
+RUN [ -f go.work ] || go work init . ../warp ../saaskit
 RUN go mod download
 # duckdb is C++ and the minimal provided.al2023 runtime ships no
 # libstdc++/libgcc, so static-link them; glibc stays dynamic and is

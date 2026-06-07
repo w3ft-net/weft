@@ -12,7 +12,7 @@ COPY warp /src/warp
 COPY saaskit /src/saaskit
 COPY weft /src/weft
 WORKDIR /src/weft
-RUN go work init . ../warp ../saaskit
+RUN [ -f go.work ] || go work init . ../warp ../saaskit
 RUN go mod download
 RUN CGO_ENABLED=0 go build -o /out/weftd ./cmd/weftd
 
