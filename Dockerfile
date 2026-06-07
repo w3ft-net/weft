@@ -13,10 +13,13 @@ COPY saaskit /src/saaskit
 COPY weft /src/weft
 WORKDIR /src/weft
 
-# go.mod now requires versioned graybeardcorp modules; a workspace points them
-# at the copied sibling sources (replaces the old replace-directive sed hack)
-# so the container build needs no module-fetch credentials.
-RUN [ -f go.work ] || go work init . ../warp ../saaskit
+# go.mod requires versioned graybeardcorp modules; an ephemeral build-time
+# replace points them at the copied sibling sources, so the container build
+# needs no module-fetch credentials. (rm any go.work copied from the build
+# context first, else workspace mode would override the replace.)
+RUN rm -f go.work go.work.sum \
+ && go mod edit -replace github.com/graybeardcorp/warp=/src/warp \
+                -replace github.com/graybeardcorp/saaskit=/src/saaskit
 
 RUN go mod download
 

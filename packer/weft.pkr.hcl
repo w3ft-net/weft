@@ -149,9 +149,10 @@ build {
     ]
     inline = [
       "cd /tmp && tar xzf /tmp/app-source.tar.gz",
-      # go.mod requires versioned graybeardcorp modules; a workspace points them
-      # at the tarred sibling sources so the instance build needs no creds.
-      "cd /tmp/weft && go work init . ../warp ../saaskit",
+      # go.mod requires versioned graybeardcorp modules; an ephemeral build-time
+      # replace points them at the tarred sibling sources so the instance build
+      # needs no module-fetch credentials.
+      "cd /tmp/weft && go mod edit -replace github.com/graybeardcorp/warp=/tmp/warp -replace github.com/graybeardcorp/saaskit=/tmp/saaskit",
       "cd /tmp/weft && CGO_ENABLED=1 go build -o /tmp/weft-coordinator ./cmd/coordinator",
       # -ldflags injects the build's GitSHA into cmd/shard. The shard
       # reports this on every heartbeat; the coordinator persists it on

@@ -67,9 +67,9 @@ jobs:
           repository: graybeardcorp/saaskit
           path: saaskit
           token: ${{ steps.app-token.outputs.token }}
-      - name: Wire go workspace
+      - name: Point warp/saaskit at sibling source (ephemeral build-time replace)
         working-directory: weft
-        run: go work init . ../warp ../saaskit
+        run: go mod edit -replace github.com/graybeardcorp/warp=../warp -replace github.com/graybeardcorp/saaskit=../saaskit
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -169,9 +169,9 @@ jobs:
           repository: graybeardcorp/saaskit
           path: saaskit
           token: ${{ steps.app-token.outputs.token }}
-      - name: Wire go workspace
+      - name: Point warp/saaskit at sibling source (ephemeral build-time replace)
         working-directory: weft
-        run: go work init . ../warp ../saaskit
+        run: go mod edit -replace github.com/graybeardcorp/warp=../warp -replace github.com/graybeardcorp/saaskit=../saaskit
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -242,9 +242,9 @@ jobs:
           repository: graybeardcorp/saaskit
           path: saaskit
           token: ${{ steps.app-token.outputs.token }}
-      - name: Wire go workspace
+      - name: Point warp/saaskit at sibling source (ephemeral build-time replace)
         working-directory: weft
-        run: go work init . ../warp ../saaskit
+        run: go mod edit -replace github.com/graybeardcorp/warp=../warp -replace github.com/graybeardcorp/saaskit=../saaskit
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -315,9 +315,9 @@ jobs:
           repository: graybeardcorp/saaskit
           path: saaskit
           token: ${{ steps.app-token.outputs.token }}
-      - name: Wire go workspace
+      - name: Point warp/saaskit at sibling source (ephemeral build-time replace)
         working-directory: weft
-        run: go work init . ../warp ../saaskit
+        run: go mod edit -replace github.com/graybeardcorp/warp=../warp -replace github.com/graybeardcorp/saaskit=../saaskit
       - name: Set up Go
         uses: actions/setup-go@v5
         with:

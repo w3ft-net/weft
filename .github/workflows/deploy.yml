@@ -77,12 +77,12 @@ jobs:
         go-version-file: weft/go.mod
         cache-dependency-path: weft/go.sum
 
-    # Build warp/saaskit from the checked-out sibling source via a workspace
-    # (the runner's shell.wasm build imports warp). Excluded from the AMI
-    # tarball so the instance creates its own (see .kevcons.yaml).
-    - name: Wire go workspace
+    # Build warp/saaskit from the checked-out sibling source (the runner's
+    # shell.wasm build imports warp) via an ephemeral build-time replace. The
+    # relative paths stay valid when the source is tarred into the AMI build.
+    - name: Point warp/saaskit at sibling source
       working-directory: weft
-      run: go work init . ../warp ../saaskit
+      run: go mod edit -replace github.com/graybeardcorp/warp=../warp -replace github.com/graybeardcorp/saaskit=../saaskit
 
     - name: Set up Node.js
       uses: actions/setup-node@v4

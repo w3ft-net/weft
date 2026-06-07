@@ -12,7 +12,9 @@ COPY warp /src/warp
 COPY saaskit /src/saaskit
 COPY weft /src/weft
 WORKDIR /src/weft
-RUN [ -f go.work ] || go work init . ../warp ../saaskit
+RUN rm -f go.work go.work.sum \
+ && go mod edit -replace github.com/graybeardcorp/warp=/src/warp \
+                -replace github.com/graybeardcorp/saaskit=/src/saaskit
 RUN go mod download
 RUN CGO_ENABLED=0 go build -o /out/weftd ./cmd/weftd
 
