@@ -534,17 +534,29 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 	var count int64
 	var firstService string
 
-	// Periodic flush for sparse streams.
+	// Periodic flush for sparse streams. The flush goroutine must exit
+	// when the stream ends: ticker.Stop() halts the ticker but does NOT
+	// close ticker.C, so a bare `for range ticker.C` blocks forever and
+	// leaks one goroutine (plus the closure state it pins) per stream —
+	// the coordinator's linear memory growth under agent reconnect churn.
+	// The done channel, closed on return, releases it deterministically.
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		for range ticker.C {
-			mu.Lock()
-			if len(rows) > 0 {
-				s.ingestBatch(rows)
-				rows = rows[:0]
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				mu.Lock()
+				if len(rows) > 0 {
+					s.ingestBatch(rows)
+					rows = rows[:0]
+				}
+				mu.Unlock()
 			}
-			mu.Unlock()
 		}
 	}()
 
