@@ -9,9 +9,10 @@
 FROM golang:1.26 AS weftd-builder
 WORKDIR /src
 COPY warp /src/warp
+COPY saaskit /src/saaskit
 COPY weft /src/weft
 WORKDIR /src/weft
-RUN sed -i 's|=> ../warp|=> /src/warp|' go.mod
+RUN go work init . ../warp ../saaskit
 RUN go mod download
 RUN CGO_ENABLED=0 go build -o /out/weftd ./cmd/weftd
 

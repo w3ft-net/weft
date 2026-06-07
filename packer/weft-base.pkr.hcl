@@ -149,8 +149,11 @@ build {
       "sudo mkdir -p /opt/app/gomodcache",
       "sudo chown -R admin:admin /opt/app/gomodcache",
       "mkdir -p /tmp/modcache-seed && cp /tmp/go.mod /tmp/go.sum /tmp/modcache-seed/",
-      # Strip warp entirely (local replace + require) so go mod download caches everything else
-      "sed -i '/graybeardcorp\\/warp/d' /tmp/modcache-seed/go.mod",
+      # Strip the sibling modules (warp, saaskit) from the seed go.mod so
+      # go mod download pre-caches only the external deps. warp/saaskit are
+      # provided from tarred source via a go workspace at app-build time
+      # (see weft.pkr.hcl), so they don't belong in the module cache.
+      "sed -i -E '/graybeardcorp\\/(warp|saaskit)/d' /tmp/modcache-seed/go.mod",
       "cd /tmp/modcache-seed && go mod download -x 2>&1 | tail -5 || true",
       # Cache stays admin-owned — the app build step runs as admin too
       "rm -rf /tmp/modcache-seed /tmp/go.mod /tmp/go.sum",

@@ -1,19 +1,22 @@
-# Build context must be the parent directory (~/dev) so we can access both weft and warp.
+# Build context must be the parent directory (~/dev) so we can access weft, warp, and saaskit.
 # docker compose -f weft/docker-compose.yml up --build
 
 FROM golang:1.26 AS builder
 
 WORKDIR /src
 
-# Copy warp first (local dependency).
+# Copy local sibling modules (resolved via the go workspace below).
 COPY warp /src/warp
+COPY saaskit /src/saaskit
 
 # Copy weft.
 COPY weft /src/weft
 WORKDIR /src/weft
 
-# Fix the replace directive for the container layout.
-RUN sed -i 's|=> ../warp|=> /src/warp|' go.mod
+# go.mod now requires versioned graybeardcorp modules; a workspace points them
+# at the copied sibling sources (replaces the old replace-directive sed hack)
+# so the container build needs no module-fetch credentials.
+RUN go work init . ../warp ../saaskit
 
 RUN go mod download
 
