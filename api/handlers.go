@@ -16,10 +16,10 @@ import (
 	"github.com/kevlarcon/weft/config"
 
 	"github.com/google/uuid"
+	"github.com/kevlarcon/saaskit/stripekit"
 	"github.com/stripe/stripe-go/v84"
 	"github.com/stripe/stripe-go/v84/customer"
 	"github.com/stripe/stripe-go/v84/subscription"
-	"github.com/stripe/stripe-go/v84/webhook"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -1054,25 +1054,6 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"status": "active"})
 }
 
-// maxStripeWebhookBytes caps the webhook body we'll read. The old 64KB
-// limit silently truncated large events (a subscription with several items
-// plus expanded price objects), and the HMAC over truncated bytes then fails
-// as a *genuine* "invalid signature" with no hint why. 1 MiB is comfortably
-// above any real Stripe event while still bounding the read.
-const maxStripeWebhookBytes = 1 << 20
-
-// classifyWebhookError turns a webhook.ConstructEvent failure into a short,
-// human-pointed label. An API-version train mismatch (the event is authentic
-// but stripe-go is pinned to a different release train) is reported distinctly
-// from a true signature failure — the former is fixed by upgrading stripe-go,
-// not by re-checking the signing secret.
-func classifyWebhookError(err error) string {
-	if err != nil && strings.Contains(err.Error(), "API version") {
-		return "API version train mismatch — upgrade stripe-go to the account's release train"
-	}
-	return "signature verification failed"
-}
-
 // ourPriceIDs returns the set of Stripe price IDs that belong to weft, drawn
 // from the configured per-tier flat + overage prices. The webhook endpoint
 // shares a Stripe account with sibling products (e.g. vimgym), so every
@@ -1094,48 +1075,29 @@ func (s *Server) ourPriceIDs() map[string]bool {
 // subscriptionHasOurPrice reports whether any item on the subscription
 // references a weft price. Subscription items are included in the payload.
 func (s *Server) subscriptionHasOurPrice(sub *stripe.Subscription) bool {
-	if sub == nil || sub.Items == nil {
-		return false
-	}
-	ours := s.ourPriceIDs()
-	for _, item := range sub.Items.Data {
-		if item != nil && item.Price != nil && ours[item.Price.ID] {
-			return true
-		}
-	}
-	return false
+	return stripekit.SubscriptionHasOurPrice(sub, s.ourPriceIDs())
 }
 
 // invoiceHasOurPrice reports whether any line item on the invoice references a
 // weft price. Invoice line items are included in the webhook payload.
 func (s *Server) invoiceHasOurPrice(inv *stripe.Invoice) bool {
-	if inv == nil || inv.Lines == nil {
-		return false
-	}
-	ours := s.ourPriceIDs()
-	for _, line := range inv.Lines.Data {
-		if line != nil && line.Pricing != nil && line.Pricing.PriceDetails != nil &&
-			ours[line.Pricing.PriceDetails.Price] {
-			return true
-		}
-	}
-	return false
+	return stripekit.InvoiceHasOurPrice(inv, s.ourPriceIDs())
 }
 
 func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxStripeWebhookBytes))
+	body, err := io.ReadAll(io.LimitReader(r.Body, stripekit.MaxWebhookBytes))
 	if err != nil {
 		http.Error(w, "read error", http.StatusBadRequest)
 		return
 	}
 
-	event, err := webhook.ConstructEvent(body, r.Header.Get("Stripe-Signature"), s.StripeWebhookSecret)
+	event, err := stripekit.VerifyWebhook(body, r.Header.Get("Stripe-Signature"), s.StripeWebhookSecret)
 	if err != nil {
-		// ConstructEvent fails for two unrelated reasons — a genuine bad
+		// VerifyWebhook fails for two unrelated reasons — a genuine bad
 		// signature, or an authentic event whose API-version release train
 		// doesn't match the pinned stripe-go. Name which one, so the log
 		// points at the real fix instead of a phantom signing-secret problem.
-		log.Printf("Stripe webhook rejected: %s: %v", classifyWebhookError(err), err)
+		log.Printf("Stripe webhook rejected: %s: %v", stripekit.ClassifyWebhookError(err), err)
 		http.Error(w, "invalid signature", http.StatusBadRequest)
 		return
 	}

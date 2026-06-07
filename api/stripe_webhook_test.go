@@ -14,6 +14,7 @@ import (
 	stripe "github.com/stripe/stripe-go/v84"
 	"github.com/stripe/stripe-go/v84/webhook"
 
+	"github.com/kevlarcon/saaskit/stripekit"
 	"github.com/kevlarcon/weft/store"
 )
 
@@ -166,13 +167,13 @@ func TestStripeWebhookAcceptsLargeBody(t *testing.T) {
 func TestClassifyWebhookError(t *testing.T) {
 	versionErr := fmt.Errorf("Received event with API version 2026-02-25.clover, " +
 		"but stripe-go v82.5.1 expects API version 2025-08-27.basil. We recommend...")
-	if got := classifyWebhookError(versionErr); !strings.Contains(got, "API version") {
+	if got := stripekit.ClassifyWebhookError(versionErr); !strings.Contains(got, "API version") {
 		t.Errorf("version mismatch should be classified as such, got %q", got)
 	}
-	if got := classifyWebhookError(versionErr); strings.Contains(got, "signature") {
+	if got := stripekit.ClassifyWebhookError(versionErr); strings.Contains(got, "signature") {
 		t.Errorf("version mismatch must NOT read as a signature failure, got %q", got)
 	}
-	if got := classifyWebhookError(fmt.Errorf("webhook had no valid signature")); !strings.Contains(got, "signature") {
+	if got := stripekit.ClassifyWebhookError(fmt.Errorf("webhook had no valid signature")); !strings.Contains(got, "signature") {
 		t.Errorf("signature failure should mention signature, got %q", got)
 	}
 }
