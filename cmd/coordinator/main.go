@@ -23,7 +23,7 @@ import (
 	"github.com/kevlarcon/weft/coordinator"
 	"github.com/kevlarcon/weft/coordinator/poller"
 	coordsvc "github.com/kevlarcon/weft/coordinator/service"
-	"github.com/kevlarcon/weft/internal/email"
+	"github.com/kevlarcon/saaskit/email"
 	"github.com/kevlarcon/weft/logdb"
 	pb "github.com/kevlarcon/weft/proto/weftpb"
 	"github.com/kevlarcon/weft/store"

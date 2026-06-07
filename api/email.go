@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/kevlarcon/weft/internal/email"
+	"github.com/kevlarcon/saaskit/email"
 )
 
 // EmailConfig is an alias for the shared email.Config, re-exported for

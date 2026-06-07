@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/weft/internal/email"
+	"github.com/kevlarcon/saaskit/email"
 	"github.com/kevlarcon/weft/store"
 )
 
