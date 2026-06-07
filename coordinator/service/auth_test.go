@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/kevlarcon/weft/coordinator"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/coordinator"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // TestAuthenticate_NoShardAddr verifies that the Authenticate response

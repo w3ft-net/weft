@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/logdb"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/logdb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // TestBuckets_DefaultSeeded asserts migrations 020/021/022 left

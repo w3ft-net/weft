@@ -6,7 +6,7 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // shardRowStore is the shard_records persistence surface the shard SM

@@ -8,8 +8,8 @@ import (
 
 	"google.golang.org/grpc"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	shardsvc "github.com/kevlarcon/weft/shard/service"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	shardsvc "github.com/graybeardcorp/weft/shard/service"
 )
 
 // LocalLauncher starts in-process gRPC shard servers on random ports.

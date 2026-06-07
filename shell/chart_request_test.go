@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
-	"github.com/kevlarcon/weft/chart"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/weft/chart"
 )
 
 // TestConfigureCore_ChartBuiltin_EmitsWatchRequest verifies that

@@ -11,9 +11,9 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/kevlarcon/weft/auth"
-	"github.com/kevlarcon/weft/coordinator/onboarding"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/coordinator/onboarding"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // LoomCustomerSlug is the slug of the populated demo org every signup

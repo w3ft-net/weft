@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/ingest"
+	"github.com/graybeardcorp/weft/ingest"
 )
 
 // benchSchemaYAML matches the schema the multi-customer demo (dev/demo)

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/warp/pkg/bash"
-	"github.com/kevlarcon/weft/alert"
+	"github.com/graybeardcorp/warp/pkg/bash"
+	"github.com/graybeardcorp/weft/alert"
 	luaparse "github.com/yuin/gopher-lua/parse"
 	"gorm.io/gorm"
 )

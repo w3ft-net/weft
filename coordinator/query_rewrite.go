@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/kevlarcon/warp/pkg/bash"
-	"github.com/kevlarcon/weft/planner"
+	"github.com/graybeardcorp/warp/pkg/bash"
+	"github.com/graybeardcorp/weft/planner"
 )
 
 // rewriteQueryPipelines walks a parsed /bin script body and replaces

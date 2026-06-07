@@ -9,10 +9,10 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/kevlarcon/weft/coordinator"
-	"github.com/kevlarcon/weft/logdb"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/coordinator"
+	"github.com/graybeardcorp/weft/logdb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // newRegisteredShard builds a Server with one registry entry that has a

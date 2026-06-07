@@ -7,7 +7,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/kevlarcon/weft/cmd/weft/mcp/policy"
+	"github.com/graybeardcorp/weft/cmd/weft/mcp/policy"
 )
 
 // RunArgs is the argument schema for weft.run. The SDK derives a

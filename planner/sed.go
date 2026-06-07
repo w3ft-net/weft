@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/kevlarcon/warp/pkg/sed"
+	"github.com/graybeardcorp/warp/pkg/sed"
 )
 
 // trySedPushdown attempts to extract a pushable predicate from sed arguments.

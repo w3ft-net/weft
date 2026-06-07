@@ -3,9 +3,9 @@ package logdb
 import (
 	"testing"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
-	"github.com/kevlarcon/weft/store"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // servingFor builds the serving set a query for app would resolve to,

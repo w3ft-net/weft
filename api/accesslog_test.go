@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/weft/auth"
+	"github.com/graybeardcorp/weft/auth"
 )
 
 // TestAccessLogAttributesUser pins the AccessLog identity fix.

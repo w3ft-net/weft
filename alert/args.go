@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
 )
 
 // Condition enumerates the recognized alert condition keywords.
@@ -65,14 +65,14 @@ func (c Condition) String() string {
 // (store) can share one parser — the alternative is drifting grammars.
 type Args struct {
 	Condition Condition
-	Threshold float64       // value for above/below/eq/neq
-	PctChange float64       // rising/falling, as a fraction (1.0 = 100%)
-	Duration  time.Duration // --duration window; 0 means no window
-	Average   bool          // --average flag (above/below with duration)
-	Msg       string        // --msg override
-	Notify    string        // --notify=<alias> → notify.yaml lookup
-	Key       shellcore.FieldSpec     // -k: 1-indexed column or .json.path; zero = "whole line"
-	Tag       shellcore.FieldSpec     // -t/--tag: same shape; zero = no tag
+	Threshold float64             // value for above/below/eq/neq
+	PctChange float64             // rising/falling, as a fraction (1.0 = 100%)
+	Duration  time.Duration       // --duration window; 0 means no window
+	Average   bool                // --average flag (above/below with duration)
+	Msg       string              // --msg override
+	Notify    string              // --notify=<alias> → notify.yaml lookup
+	Key       shellcore.FieldSpec // -k: 1-indexed column or .json.path; zero = "whole line"
+	Tag       shellcore.FieldSpec // -t/--tag: same shape; zero = no tag
 	// IfMode/IfValue support `alert --if-zero "$?"` and
 	// `alert --if-nonzero "$?"` — a cron composes predicates with
 	// bash &&/||, then passes the resulting exit code to alert

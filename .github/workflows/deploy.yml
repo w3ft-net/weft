@@ -29,12 +29,31 @@ jobs:
       with:
         path: weft
 
+    - name: Mint GitHub App token (private sibling checkouts)
+      id: app-token
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ vars.GH_APP_ID }}
+        private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+        owner: graybeardcorp
+
+    # warp + saaskit are versioned Go modules, but the deploy builds them from
+    # source via a go workspace: warp's frontend/shellcore-wasm npm package is
+    # needed for the frontend, and the AMI/lambda builds use the tarred sibling
+    # sources. Check both out (token-authed) and wire go.work below.
     - name: Checkout warp
       uses: actions/checkout@v4
       with:
         repository: graybeardcorp/warp
         path: warp
-        ssh-key: ${{ secrets.WARP_DEPLOY_KEY }}
+        token: ${{ steps.app-token.outputs.token }}
+
+    - name: Checkout saaskit
+      uses: actions/checkout@v4
+      with:
+        repository: graybeardcorp/saaskit
+        path: saaskit
+        token: ${{ steps.app-token.outputs.token }}
 
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
@@ -57,6 +76,13 @@ jobs:
       with:
         go-version-file: weft/go.mod
         cache-dependency-path: weft/go.sum
+
+    # Build warp/saaskit from the checked-out sibling source (the runner's
+    # shell.wasm build imports warp) via an ephemeral build-time replace. The
+    # relative paths stay valid when the source is tarred into the AMI build.
+    - name: Point warp/saaskit at sibling source
+      working-directory: weft
+      run: go mod edit -replace github.com/graybeardcorp/warp=../warp -replace github.com/graybeardcorp/saaskit=../saaskit
 
     - name: Set up Node.js
       uses: actions/setup-node@v4

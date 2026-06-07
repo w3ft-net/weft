@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // saveCronResult persists a cron result via the exported store
@@ -380,10 +380,10 @@ func TestParseAggDuration(t *testing.T) {
 		{"1h", time.Hour, false},
 		{"6h", 6 * time.Hour, false},
 		{"24h", 24 * time.Hour, false},
-		{"25h", 0, true},  // exceeds cap
-		{"-1h", 0, true},  // negative
-		{"abc", 0, true},  // invalid
-		{"0s", 0, true},   // zero
+		{"25h", 0, true}, // exceeds cap
+		{"-1h", 0, true}, // negative
+		{"abc", 0, true}, // invalid
+		{"0s", 0, true},  // zero
 	}
 	for _, tt := range tests {
 		d, err := ParseAggDuration(tt.input)

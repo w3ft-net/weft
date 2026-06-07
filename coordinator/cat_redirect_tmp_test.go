@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // readTmpFile reconstructs the byte contents of a tmp file via the

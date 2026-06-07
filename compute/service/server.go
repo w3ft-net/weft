@@ -9,9 +9,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kevlarcon/weft/compute"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
+	"github.com/graybeardcorp/weft/compute"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // Server implements the WeftCompute gRPC service.

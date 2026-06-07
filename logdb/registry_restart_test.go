@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/shard"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // TestCoordinator_RegistrySurvivesRestart verifies the "survives restart"

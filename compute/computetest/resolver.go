@@ -11,8 +11,8 @@
 package computetest
 
 import (
-	"github.com/kevlarcon/weft/compute"
-	"github.com/kevlarcon/weft/shard"
+	"github.com/graybeardcorp/weft/compute"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // InProcessResolver wraps a shard.Shard handle that already exists

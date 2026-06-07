@@ -7,9 +7,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/kevlarcon/weft/coordinator"
-	"github.com/kevlarcon/weft/logdb"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/coordinator"
+	"github.com/graybeardcorp/weft/logdb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // shardAdminServer builds a Server whose registry holds one shard in the
@@ -74,4 +74,3 @@ func TestRelaunchShard_WrongState_FailedPrecondition(t *testing.T) {
 	_, err := srv.RelaunchShard(context.Background(), &pb.RelaunchShardRequest{ShardId: "shard-a"})
 	wantCode(t, err, codes.FailedPrecondition)
 }
-

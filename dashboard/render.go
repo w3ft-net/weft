@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kevlarcon/warp/pkg/shellcore/chart"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/warp/pkg/shellcore/chart"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // WatchSeries is the data a tile needs to render: the latest sample

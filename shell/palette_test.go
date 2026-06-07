@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/warp/pkg/syntax"
+	"github.com/graybeardcorp/warp/pkg/syntax"
 )
 
 // TestWeftPalette_DerivesFromLogo asserts the theme actually paints the

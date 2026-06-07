@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // ScanResultRows reads all rows from a SQL result set and converts

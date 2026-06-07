@@ -8,7 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/kevlarcon/weft/weftd"
+	"github.com/graybeardcorp/weft/weftd"
 )
 
 // withFreshVersionState clears the package-level version maps for the

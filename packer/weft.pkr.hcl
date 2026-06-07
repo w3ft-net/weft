@@ -147,13 +147,16 @@ build {
       "GOMODCACHE=/opt/app/gomodcache",
       "HOME=/home/admin",
       "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-      "GOPRIVATE=github.com/kevlarcon/*",
-      "GONOSUMCHECK=github.com/kevlarcon/*",
-      "GONOSUMDB=github.com/kevlarcon/*",
+      "GOPRIVATE=github.com/graybeardcorp/*",
+      "GONOSUMCHECK=github.com/graybeardcorp/*",
+      "GONOSUMDB=github.com/graybeardcorp/*",
     ]
     inline = [
       "cd /tmp && tar xzf /tmp/app-source.tar.gz",
-      "sed -i 's|=> ../warp|=> /tmp/warp|' /tmp/weft/go.mod",
+      # go.mod requires versioned graybeardcorp modules; an ephemeral build-time
+      # replace points them at the tarred sibling sources so the instance build
+      # needs no module-fetch credentials.
+      "cd /tmp/weft && go mod edit -replace github.com/graybeardcorp/warp=/tmp/warp -replace github.com/graybeardcorp/saaskit=/tmp/saaskit",
       "cd /tmp/weft && CGO_ENABLED=1 go build -o /tmp/weft-coordinator ./cmd/coordinator",
       # -ldflags injects the build's GitSHA into cmd/shard. The shard
       # reports this on every heartbeat; the coordinator persists it on
@@ -184,7 +187,7 @@ build {
       "sudo chmod +x /opt/app/bin/weft-* /opt/app/bin/loom-producer",
       "sudo chown app:app /opt/app/bin/weft-* /opt/app/bin/loom-producer",
       # Clean up source and build artifacts (keep Go + gcc for future rebuilds if needed)
-      "sudo rm -rf /tmp/weft /tmp/warp /tmp/app-source.tar.gz /tmp/go",
+      "sudo rm -rf /tmp/weft /tmp/warp /tmp/saaskit /tmp/app-source.tar.gz /tmp/go",
     ]
   }
 

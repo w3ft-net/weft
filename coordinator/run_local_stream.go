@@ -7,7 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/kevlarcon/weft/compute"
+	"github.com/graybeardcorp/weft/compute"
 )
 
 // liveScriptStream is the LineStream returned by streaming runLocal.

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/weft/store"
 	"gorm.io/gorm"
 )
 

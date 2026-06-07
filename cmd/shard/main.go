@@ -20,10 +20,10 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
-	"github.com/kevlarcon/weft/auth"
-	weftcfg "github.com/kevlarcon/weft/config"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	shardsvc "github.com/kevlarcon/weft/shard/service"
+	"github.com/graybeardcorp/weft/auth"
+	weftcfg "github.com/graybeardcorp/weft/config"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	shardsvc "github.com/graybeardcorp/weft/shard/service"
 )
 
 func main() {

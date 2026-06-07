@@ -5617,7 +5617,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\bGetShard\x12\x15.weft.GetShardRequest\x1a\x16.weft.GetShardResponse\x12?\n" +
 	"\n" +
 	"ListShards\x12\x17.weft.ListShardsRequest\x1a\x18.weft.ListShardsResponse\x12B\n" +
-	"\vListBuckets\x12\x18.weft.ListBucketsRequest\x1a\x19.weft.ListBucketsResponseB(Z&github.com/kevlarcon/weft/proto/weftpbb\x06proto3"
+	"\vListBuckets\x12\x18.weft.ListBucketsRequest\x1a\x19.weft.ListBucketsResponseB,Z*github.com/graybeardcorp/weft/proto/weftpbb\x06proto3"
 
 var (
 	file_proto_weftpb_weft_proto_rawDescOnce sync.Once

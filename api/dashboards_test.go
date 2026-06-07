@@ -7,8 +7,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/kevlarcon/weft/auth"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // dashTeamMember registers `user` as an owner of `cust` so the

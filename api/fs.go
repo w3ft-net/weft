@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/kevlarcon/weft/auth"
-	"github.com/kevlarcon/weft/mounts"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shellfs"
+	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/mounts"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shellfs"
 )
 
 // sessionPerms projects a Session's role + org-permission flags into

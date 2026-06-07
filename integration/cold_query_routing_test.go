@@ -17,12 +17,12 @@ import (
 	_ "github.com/duckdb/duckdb-go/v2"
 	"google.golang.org/grpc"
 
-	"github.com/kevlarcon/weft/coordinator"
-	"github.com/kevlarcon/weft/logdb"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
-	shardservice "github.com/kevlarcon/weft/shard/service"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/coordinator"
+	"github.com/graybeardcorp/weft/logdb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
+	shardservice "github.com/graybeardcorp/weft/shard/service"
+	"github.com/graybeardcorp/weft/store"
 )
 
 func TestColdShardQueryRouting(t *testing.T) {

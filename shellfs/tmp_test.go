@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/warp/pkg/bash"
+	"github.com/graybeardcorp/warp/pkg/bash"
 
-	"github.com/kevlarcon/weft/mounts"
+	"github.com/graybeardcorp/weft/mounts"
 )
 
 // runShell executes a bash script against a ShellFS-backed interpreter
@@ -344,6 +344,7 @@ func TestTmp_WcOverPostgres(t *testing.T) {
 //  2. It does NOT show up on the next write within the same session.
 //  3. It does NOT show up on a fresh ShellFS for the same customer
 //     (the persistent flag survives session boundaries).
+//
 // TestTmp_WriteRecordsCreatorViaShell exercises the userID path
 // from ShellFS construction (WithUser) → shell write → store row.
 // If anything in that chain drops the userID, the row's

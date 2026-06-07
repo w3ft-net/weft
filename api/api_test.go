@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/auth"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/store"
 )
 
 func testDSN(t *testing.T) string {

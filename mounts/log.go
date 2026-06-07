@@ -5,7 +5,7 @@ import (
 	"io/fs"
 	"strings"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
 )
 
 type LogMount struct{ cfg Config }

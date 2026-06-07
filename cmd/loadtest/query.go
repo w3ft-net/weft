@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 var lightQueries = []string{

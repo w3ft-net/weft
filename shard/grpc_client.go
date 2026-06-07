@@ -12,8 +12,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
-	"github.com/kevlarcon/weft/auth"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/auth"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // Retry budget for transient shard-side failures. See

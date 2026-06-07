@@ -24,7 +24,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/store"
 )
 
 func main() {

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
-	"github.com/kevlarcon/warp/pkg/shellcore/chart"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/warp/pkg/shellcore/chart"
 )
 
 // View is the live-chart takeover screen. It implements

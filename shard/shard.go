@@ -13,7 +13,7 @@ import (
 
 	_ "github.com/duckdb/duckdb-go/v2"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // RowSink receives result rows streamed from a shard query. ComputeJob satisfies this.

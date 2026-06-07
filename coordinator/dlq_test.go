@@ -14,9 +14,9 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
-	"github.com/kevlarcon/weft/logdb"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
+	"github.com/graybeardcorp/weft/logdb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // recordingPutter is an in-memory s3PutObjectAPI that captures each

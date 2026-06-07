@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
-	"github.com/kevlarcon/warp/pkg/shellcore/chart"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/warp/pkg/shellcore/chart"
 )
 
 // RenderFromStream renders a pipe-stage chart from the upstream

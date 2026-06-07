@@ -11,9 +11,9 @@ import (
 	"github.com/pmezard/go-difflib/difflib"
 	"gorm.io/gorm"
 
-	"github.com/kevlarcon/warp/pkg/bash"
-	"github.com/kevlarcon/warp/pkg/syntax"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/warp/pkg/bash"
+	"github.com/graybeardcorp/warp/pkg/syntax"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // WitFuncs holds the request-scoped state the `wit` builtin needs:

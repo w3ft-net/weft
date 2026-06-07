@@ -5,7 +5,7 @@
 Adding `--x-label` / `--y-label` is **feasible and small**, but it is
 a **two-repo change**, not a single in-repo edit. The chart rendering
 engine lives in the **warp sibling repo** (`warp/pkg/shellcore/chart/`,
-imported here as `github.com/kevlarcon/warp/pkg/shellcore/chart`); the
+imported here as `github.com/graybeardcorp/warp/pkg/shellcore/chart`); the
 weft repo only has a thin pipe-stage wrapper (`chart/parse.go`,
 `chart/render.go`). So the work splits into a warp PR (the layout +
 draw + golden work) and a weft PR (parse the flags, thread them

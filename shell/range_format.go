@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
-	"github.com/kevlarcon/weft/internal/timerange"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/weft/internal/timerange"
 )
 
 // rangeLeadSegment renders the prompt's time-window bracket (e.g.

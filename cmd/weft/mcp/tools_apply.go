@@ -7,7 +7,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/kevlarcon/weft/cmd/weft/mcp/proposals"
+	"github.com/graybeardcorp/weft/cmd/weft/mcp/proposals"
 )
 
 // ProposalsListArgs / DiffArgs / ApplyArgs are the wire schemas

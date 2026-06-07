@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/warp/pkg/bash"
+	"github.com/graybeardcorp/warp/pkg/bash"
 )
 
 // RegisterWeftPredicates registers boolean predicates over watches as

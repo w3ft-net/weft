@@ -12,9 +12,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	weftcfg "github.com/kevlarcon/weft/config"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
+	weftcfg "github.com/graybeardcorp/weft/config"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // Server implements the ShardQuery gRPC service backed by a DuckDBShard.

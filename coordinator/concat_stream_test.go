@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/kevlarcon/weft/compute"
+	"github.com/graybeardcorp/weft/compute"
 )
 
 // TestConcatStream_PrimaryThenNext walks the basic shape: primary

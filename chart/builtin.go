@@ -1,7 +1,7 @@
 package chart
 
 import (
-	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
 )
 
 // Builtin returns a shellcore.BuiltinFunc that handles `chart …`

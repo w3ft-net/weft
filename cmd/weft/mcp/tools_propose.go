@@ -8,9 +8,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/kevlarcon/weft/cmd/weft/mcp/policy"
-	"github.com/kevlarcon/weft/cmd/weft/mcp/proposals"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/cmd/weft/mcp/policy"
+	"github.com/graybeardcorp/weft/cmd/weft/mcp/proposals"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // ScriptProposeArgs / CronProposeArgs / WatchProposeArgs /

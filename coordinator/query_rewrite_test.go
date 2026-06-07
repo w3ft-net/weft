@@ -3,7 +3,7 @@ package coordinator
 import (
 	"testing"
 
-	"github.com/kevlarcon/warp/pkg/bash"
+	"github.com/graybeardcorp/warp/pkg/bash"
 )
 
 // TestRewriteQueryPipelines_PreservesStdoutRedirect pins that when

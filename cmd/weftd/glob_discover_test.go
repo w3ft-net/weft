@@ -11,7 +11,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // These tests reproduce a suspected bug: weftd fails to onboard all log

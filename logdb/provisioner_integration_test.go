@@ -37,10 +37,10 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"google.golang.org/grpc"
 
-	"github.com/kevlarcon/weft/logdb"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	shardsvc "github.com/kevlarcon/weft/shard/service"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/logdb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	shardsvc "github.com/graybeardcorp/weft/shard/service"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // realShardLauncher satisfies logdb.ShardLauncher (constructor) and

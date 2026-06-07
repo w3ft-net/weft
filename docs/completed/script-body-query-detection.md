@@ -22,7 +22,7 @@ invoked as `scan api.log` should dispatch one shard query for the middle pipelin
 
 ## Hard constraint: warp stays weft-agnostic
 
-Warp (github.com/kevlarcon/warp) is a shared library — weft and vimgym both link it, and any other kevlarcon tool might later. Warp's API carries zero weft vocabulary: no "query," no "planner," no "pseudofile," no "source command." The extension points it grows for this work — `CallbackCommand` and `BinScriptTransform` — are generic, usable for anything an embedder wants to do with /bin script bodies.
+Warp (github.com/graybeardcorp/warp) is a shared library — weft and vimgym both link it, and any other kevlarcon tool might later. Warp's API carries zero weft vocabulary: no "query," no "planner," no "pseudofile," no "source command." The extension points it grows for this work — `CallbackCommand` and `BinScriptTransform` — are generic, usable for anything an embedder wants to do with /bin script bodies.
 
 ## Design
 

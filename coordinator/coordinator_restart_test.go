@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/logdb"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
+	"github.com/graybeardcorp/weft/logdb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // TestCoordinator_RediscoveryDoesNotLoseData verifies that the old

@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/logdb"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/logdb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // interiorQueryFixture spins up a coordinator with:

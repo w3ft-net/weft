@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // HerokuAdapter parses Heroku's HTTPS log-drain protocol: octet-counted

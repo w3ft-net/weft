@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kevlarcon/warp/pkg/awk"
-	"github.com/kevlarcon/warp/pkg/jq"
+	"github.com/graybeardcorp/warp/pkg/awk"
+	"github.com/graybeardcorp/warp/pkg/jq"
 )
 
 // extractRawExpr examines a compute stage and tries to fold its projection
@@ -358,6 +358,7 @@ func extractJqRawExpr(args []string) (string, *stageInfo, bool) {
 //   - duckdb-go returns json_object / json_array as map/slice — scan fails.
 //   - duckdb-go strips quotes from string scalars, breaking jq compatibility
 //     (`"u1"` → `u1`) for anything piped into a further jq stage.
+//
 // For metavar-mapped columns (e.g., ts is TIMESTAMP) the cast also gives a
 // consistent string form instead of driver-native types.
 func wrapJqProjection(sql string) string {

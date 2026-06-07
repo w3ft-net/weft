@@ -3,8 +3,8 @@ package coordinator
 import (
 	"strings"
 
-	"github.com/kevlarcon/weft/planner"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/planner"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // RowMatcher filters live rows for a tail subscription. The source

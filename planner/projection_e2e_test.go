@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/shard"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // TestProjection_E2E runs the planner's projection-folded SQL through a
@@ -35,7 +35,7 @@ func TestProjection_E2E(t *testing.T) {
 			Raw:         `{"status":500,"user_id":"u1","action":"click","foo":{"bar":42},"items":[10,20,30],"users":[{"name":"b"},{"name":"a"}]}`,
 			TsUnixNs:    now.UnixNano(),
 			Level:       "ERROR",
-			Namespace: "vimgym",
+			Namespace:   "vimgym",
 			Customer:    "kevlar",
 			PayloadJson: []byte(`{"status":500,"user_id":"u1","action":"click","foo":{"bar":42},"items":[10,20,30],"users":[{"name":"b"},{"name":"a"}]}`),
 		},
@@ -44,7 +44,7 @@ func TestProjection_E2E(t *testing.T) {
 			Raw:         `{"status":200,"user_id":"u2","action":"view","foo":{"bar":7},"items":[1],"users":[{"name":"z"}]}`,
 			TsUnixNs:    now.Add(time.Second).UnixNano(),
 			Level:       "INFO",
-			Namespace: "vimgym",
+			Namespace:   "vimgym",
 			Customer:    "kevlar",
 			PayloadJson: []byte(`{"status":200,"user_id":"u2","action":"view","foo":{"bar":7},"items":[1],"users":[{"name":"z"}]}`),
 		},
@@ -98,7 +98,7 @@ func TestProjection_E2E(t *testing.T) {
 			wantRaws: []string{`{"who":"u1","lvl":"ERROR"}`},
 		},
 		{
-			name:     "internal pipe: project prefix, residual ships to compute",
+			name: "internal pipe: project prefix, residual ships to compute",
 			// .users projects; sort_by stays in compute. We only verify that
 			// the SQL emits the array (the compute step isn't part of this test).
 			pipeline: `cat vimgym.log | jq 'select(.status == 500) | .users | sort_by(.name)'`,

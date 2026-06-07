@@ -11,7 +11,7 @@ import (
 	"github.com/stripe/stripe-go/v84/billing/meterevent"
 	"gorm.io/gorm/clause"
 
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // meterEventName matches the event_name configured on the Stripe

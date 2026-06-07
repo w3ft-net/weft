@@ -3,7 +3,7 @@ package shard
 import (
 	"testing"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // TestDuckDB_RegexpMatches_PinsPushdownContract guards the SQL the

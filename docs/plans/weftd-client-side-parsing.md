@@ -138,7 +138,7 @@ streaming notification RPC); the cache shape doesn't change.
 `ingest.Parser` already does the work. weftd imports it directly:
 
 ```go
-import "github.com/kevlarcon/weft/ingest"
+import "github.com/graybeardcorp/weft/ingest"
 
 parser := ingest.NewParser(schema)            // compile regexes once
 row, _ := parser.ParseLine(line, time.Now())   // hot path

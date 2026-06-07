@@ -9,7 +9,7 @@ import (
 
 	"github.com/stripe/stripe-go/v84"
 
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // fakeMeter records every Stripe meter event the reporter would have
@@ -50,7 +50,7 @@ func seedReporterFixtures(t *testing.T, srv *Server, s *store.Store, customerNam
 	if err != nil {
 		t.Fatal(err)
 	}
-	user, err := s.CreateUser(customerName+"@example.test")
+	user, err := s.CreateUser(customerName + "@example.test")
 	if err != nil {
 		t.Fatal(err)
 	}

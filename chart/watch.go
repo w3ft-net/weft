@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/warp/pkg/shellcore/chart"
+	"github.com/graybeardcorp/warp/pkg/shellcore/chart"
 )
 
 // RenderOneShot fetches the latest results for the named watch and

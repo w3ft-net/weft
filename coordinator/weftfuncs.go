@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	luapkg "github.com/kevlarcon/warp/pkg/lua"
-	"github.com/kevlarcon/weft/store"
+	luapkg "github.com/graybeardcorp/warp/pkg/lua"
+	"github.com/graybeardcorp/weft/store"
 	lua "github.com/yuin/gopher-lua"
 )
 

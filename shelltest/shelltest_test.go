@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
 )
 
 func TestShellBehavior(t *testing.T) {

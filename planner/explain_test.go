@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/warp/pkg/bash"
-	"github.com/kevlarcon/warp/pkg/jq"
+	"github.com/graybeardcorp/warp/pkg/bash"
+	"github.com/graybeardcorp/warp/pkg/jq"
 	"time"
 )
 

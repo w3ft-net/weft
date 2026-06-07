@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/kevlarcon/weft/config"
+	"github.com/graybeardcorp/weft/config"
 )
 
 func newTestLimiter(cfg *config.Runtime) *limiter {

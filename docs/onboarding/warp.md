@@ -11,7 +11,7 @@ weft wires into it.
 
 ## Warp's structure
 
-Warp lives at `github.com/kevlarcon/warp`. The `go.mod` replace
+Warp lives at `github.com/graybeardcorp/warp`. The `go.mod` replace
 directive points it at `../warp` so changes to both repos can be
 developed in lockstep.
 

@@ -1,0 +1,22 @@
+[Unit]
+Description=Render weftd-loom config + token env (env=%i)
+# Renders /etc/weftd-loom-%i/{config.yaml,token.env} before the matching
+# weftd-loom@%i forwarder starts. Split out of the forwarder's
+# ExecStartPre so the rendered token.env reliably exists before systemd
+# assembles the forwarder's environment (a file written in ExecStartPre
+# is not re-read by the same activation's EnvironmentFile).
+After=network.target
+Wants=network.target
+PartOf=weft-loom-producer.service
+
+[Service]
+# oneshot, no RemainAfterExit: goes inactive on success, so each
+# (re)start of weftd-loom@%i re-runs this and re-renders with the
+# current secrets.
+Type=oneshot
+User=root
+# /opt/app/.env carries LOOM_PROD_TOKEN / LOOM_SAND_TOKEN (and the fleet
+# WEFTD_TOKEN). render-weftd-config.sh picks the %i-matching loom token
+# and writes config.yaml + token.env (the latter as WEFTD_TOKEN=<loom>).
+EnvironmentFile=/opt/app/.env
+ExecStart=/opt/app/scripts/loom-producer/render-weftd-config.sh %i

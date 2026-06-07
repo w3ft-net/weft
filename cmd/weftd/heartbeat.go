@@ -10,8 +10,8 @@ import (
 	"os"
 	"time"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/weftd/heartbeat"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/weftd/heartbeat"
 )
 
 // HeartbeatConfig is the YAML config for the local heartbeat

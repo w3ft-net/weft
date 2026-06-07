@@ -4,8 +4,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/kevlarcon/weft/compute"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/compute"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // spyPool wraps a real compute pool and records every ExecuteQuery

@@ -6,8 +6,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
-	"github.com/kevlarcon/weft/internal/timerange"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/weft/internal/timerange"
 )
 
 // clipboardBuiltin handles `clipboard /bin/<name> [--range=<spec>] [-- args...]`.

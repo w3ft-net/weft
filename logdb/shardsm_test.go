@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
-	"github.com/kevlarcon/weft/store"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // openSMTestStore opens the test postgres (WEFT_TEST_DSN, default the
@@ -296,7 +296,7 @@ func TestShardSM_RestartGraceDoesNotSuspendOnPreBootHeartbeat(t *testing.T) {
 func TestShardSM_StaleAfterRestartGraceSuspends(t *testing.T) {
 	bootAt := time.Date(2026, 5, 21, 11, 57, 0, 0, time.UTC) // 3m before the fixture clock
 	sm, _, entry := makeFixtureShardSM(t, StateIngesting, func(d *ShardDeps) { d.BootedAt = bootAt })
-	entry.EBSVolumeID = "vol-1" // volume intact → SUSPENDED, not GONE
+	entry.EBSVolumeID = "vol-1"                                            // volume intact → SUSPENDED, not GONE
 	entry.LastHeartbeatAt = time.Date(2026, 5, 21, 11, 30, 0, 0, time.UTC) // pre-boot, never re-reported
 
 	if err := sm.Evaluate(context.Background()); err != nil {

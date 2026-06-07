@@ -6,7 +6,7 @@ import (
 
 	"google.golang.org/grpc/metadata"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // Adapter is the wire-format-specific half of an HTTP ingest endpoint.

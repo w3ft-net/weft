@@ -3,7 +3,7 @@ package logdb
 import (
 	"fmt"
 
-	"github.com/kevlarcon/weft/shard"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // ReconstructConfig wires up the dependencies ReconstructShard needs

@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/kevlarcon/weft/mounts"
+	"github.com/graybeardcorp/weft/mounts"
 )
 
 // orgPermCases drives the three identically-shaped gating tests for

@@ -1,25 +1,31 @@
-# Build context must be the parent directory (~/dev) so we can access both weft and warp.
+# Build context must be the parent directory (~/dev) so we can access weft, warp, and saaskit.
 # docker compose -f weft/docker-compose.yml up --build
 
 FROM golang:1.26 AS builder
 
 WORKDIR /src
 
-# Copy warp first (local dependency).
+# Copy local sibling modules (resolved via the go workspace below).
 COPY warp /src/warp
+COPY saaskit /src/saaskit
 
 # Copy weft.
 COPY weft /src/weft
 WORKDIR /src/weft
 
-# Fix the replace directive for the container layout.
-RUN sed -i 's|=> ../warp|=> /src/warp|' go.mod
+# go.mod requires versioned graybeardcorp modules; an ephemeral build-time
+# replace points them at the copied sibling sources, so the container build
+# needs no module-fetch credentials. (rm any go.work copied from the build
+# context first, else workspace mode would override the replace.)
+RUN rm -f go.work go.work.sum \
+ && go mod edit -replace github.com/graybeardcorp/warp=/src/warp \
+                -replace github.com/graybeardcorp/saaskit=/src/saaskit
 
 RUN go mod download
 
 # BUILD_FLAGS is empty in prod builds (empty string is a no-op to
 # `go build`). Integration runs that want per-container coverage
-# pass BUILD_FLAGS="-cover -coverpkg=github.com/kevlarcon/weft/..."
+# pass BUILD_FLAGS="-cover -coverpkg=github.com/graybeardcorp/weft/..."
 # so every server binary writes its own counter file to GOCOVERDIR
 # on clean shutdown. See docker-compose.cover.yml.
 ARG BUILD_FLAGS=""

@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // retryServer is a controllable ShardQueryServer for retry tests. It
@@ -198,5 +198,5 @@ type captureSink struct {
 	sawSentinel bool
 }
 
-func (s *captureSink) SendRow(r *pb.ResultRow, _ string)  { s.rows = append(s.rows, r) }
-func (s *captureSink) SendSentinel(_ string)              { s.sawSentinel = true }
+func (s *captureSink) SendRow(r *pb.ResultRow, _ string) { s.rows = append(s.rows, r) }
+func (s *captureSink) SendSentinel(_ string)             { s.sawSentinel = true }

@@ -3,7 +3,7 @@ package coordinator
 import (
 	"fmt"
 
-	"github.com/kevlarcon/warp/pkg/bash"
+	"github.com/graybeardcorp/warp/pkg/bash"
 )
 
 // rejectBinInFollow returns an error if pipeline is a `tail -f` pipeline

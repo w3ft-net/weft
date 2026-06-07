@@ -7,7 +7,7 @@ import (
 	"math/rand"
 	"sync"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 func runTails(ctx context.Context, cfg *Config, report *Report) {

@@ -15,9 +15,9 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
-	"github.com/kevlarcon/weft/compute"
-	computesvc "github.com/kevlarcon/weft/compute/service"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/compute"
+	computesvc "github.com/graybeardcorp/weft/compute/service"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 func main() {

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
 )
 
 // stripANSI strips ANSI escape sequences for assertions on visible

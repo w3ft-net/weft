@@ -25,13 +25,14 @@ build:
   instance_type: t4g.xlarge            # DuckDB CGO compilation needs more RAM
   skip_local_build: true
   prebuild:
-    - name: Create build tarball with warp dependency
+    - name: Create build tarball with warp + saaskit sibling sources
       run: |
         cd ..
         tar czf /tmp/app-source.tar.gz \
           --exclude='.git' --exclude='node_modules' --exclude='*.duckdb' \
           --exclude='weft/weft' --exclude='weft/server' --exclude='weft/bin' \
-          weft warp
+          --exclude='weft/go.work' --exclude='weft/go.work.sum' \
+          weft warp saaskit
 
 # Runs on the just-refreshed coordinator (run_remote, via SSM) and then locally.
 # Order matters: point the shard launch templates at the new AMI BEFORE the

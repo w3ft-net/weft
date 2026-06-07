@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/warp/pkg/shellcore"
-	"github.com/kevlarcon/warp/pkg/shellcore/chart"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/warp/pkg/shellcore/chart"
+	"github.com/graybeardcorp/weft/store"
 )
 
 const viewName = "dashboard"
@@ -304,7 +304,6 @@ func (v *DashboardView) renderGrid(buf *strings.Builder, w, h int) {
 	buf.WriteString(padRight(status, w))
 	buf.WriteString("\x1b[0m")
 }
-
 
 // renderRowLines returns the rendered lines for one grid row of tiles.
 func (v *DashboardView) renderRowLines(row []packedTile, startIdx int, w int) []string {

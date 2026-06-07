@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/kevlarcon/weft/compute"
-	"github.com/kevlarcon/weft/planner"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/compute"
+	"github.com/graybeardcorp/weft/planner"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // noopPool returns an empty stream immediately. Used by the cron-fire
@@ -51,7 +51,7 @@ func (r benchBinResolver) Source(name string) (string, string, bool) {
 // Two sub-benches:
 //   - bare        : pipeline with no /bin reference (just preflight + Plan)
 //   - with_bin    : pipeline that calls /bin/loom-error-rate (also exercises
-//                   expandBinPipeline's bash parse + splice)
+//     expandBinPipeline's bash parse + splice)
 //
 // Run with:
 //

@@ -4,8 +4,8 @@ import (
 	"log"
 	"sync"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // ComputeMessage is sent from shards to a compute job. Either Row is set

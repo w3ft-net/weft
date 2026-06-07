@@ -7,7 +7,7 @@
 // renders in the exact weave the client shows for a locally-read file.
 package theme
 
-import "github.com/kevlarcon/warp/pkg/syntax"
+import "github.com/graybeardcorp/warp/pkg/syntax"
 
 // Palette is weft's syntax-highlighting theme, derived from the startup
 // logo (warp's pkg/shellcore/logo.go). The logo interlaces two thread

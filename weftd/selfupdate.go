@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kevlarcon/weft/internal/release"
+	"github.com/graybeardcorp/weft/internal/release"
 )
 
 // SelfUpdateChecker checks releases.w3ft.net for a newer weftd. When

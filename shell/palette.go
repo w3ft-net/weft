@@ -1,6 +1,6 @@
 package shell
 
-import "github.com/kevlarcon/warp/pkg/syntax"
+import "github.com/graybeardcorp/warp/pkg/syntax"
 
 // weftPalette is weft's syntax-highlighting theme, derived from the
 // startup logo (warp's pkg/shellcore/logo.go). The logo interlaces two

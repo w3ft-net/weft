@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/shard"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // TestIngestRoundTrip_GrantCentralWorker tests the full pipeline:

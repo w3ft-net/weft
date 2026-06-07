@@ -14,8 +14,8 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/kevlarcon/weft/internal/timerange"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/internal/timerange"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // sseKeepaliveInterval is how often handleShellExec writes a heartbeat

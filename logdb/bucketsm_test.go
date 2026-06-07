@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // fakeShardController records the bucket SM's child-shard directives

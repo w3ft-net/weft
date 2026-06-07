@@ -3,8 +3,8 @@ package coordinator
 import (
 	"context"
 
-	"github.com/kevlarcon/weft/compute"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/compute"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // brokerStream wraps a TailBroker subscription as a LineStream. Each

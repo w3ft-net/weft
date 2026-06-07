@@ -12,7 +12,7 @@ import (
 	"github.com/qmuntal/stateless"
 	"gorm.io/gorm"
 
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // BucketSM is the per-bucket finite state machine. Owns the

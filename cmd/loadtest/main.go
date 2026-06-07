@@ -23,9 +23,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/kevlarcon/weft/auth"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/auth"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/store"
 )
 
 func main() {
@@ -76,15 +76,15 @@ func main() {
 	}
 
 	cfg := &Config{
-		Client:      client,
-		HealthURL:   *healthURL,
-		Customers:   *customers,
-		IngestRate:  *ingestRate,
-		QueryRate:   *queryRate,
-		HeavyPct:    *heavyPct,
-		Watches:     *watches,
-		Tails:       *tails,
-		Duration:    *duration,
+		Client:     client,
+		HealthURL:  *healthURL,
+		Customers:  *customers,
+		IngestRate: *ingestRate,
+		QueryRate:  *queryRate,
+		HeavyPct:   *heavyPct,
+		Watches:    *watches,
+		Tails:      *tails,
+		Duration:   *duration,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *duration+10*time.Second)
@@ -126,33 +126,33 @@ type Config struct {
 
 // Report holds the load test results.
 type Report struct {
-	Duration     time.Duration          `json:"duration"`
-	Ingest       IngestReport           `json:"ingest"`
-	Query        QueryReport            `json:"query"`
-	Health       []HealthSnapshot       `json:"health"`
-	Errors       []string               `json:"errors,omitempty"`
+	Duration time.Duration    `json:"duration"`
+	Ingest   IngestReport     `json:"ingest"`
+	Query    QueryReport      `json:"query"`
+	Health   []HealthSnapshot `json:"health"`
+	Errors   []string         `json:"errors,omitempty"`
 }
 
 type IngestReport struct {
-	RowsSent     int64         `json:"rows_sent"`
-	RowsAcked    int64         `json:"rows_acked"`
-	AvgRate      float64       `json:"avg_rate_rows_per_sec"`
-	Errors       int64         `json:"errors"`
+	RowsSent  int64   `json:"rows_sent"`
+	RowsAcked int64   `json:"rows_acked"`
+	AvgRate   float64 `json:"avg_rate_rows_per_sec"`
+	Errors    int64   `json:"errors"`
 }
 
 type QueryReport struct {
-	Total        int64         `json:"total"`
-	Errors       int64         `json:"errors"`
-	LatencyP50ms float64       `json:"latency_p50_ms"`
-	LatencyP95ms float64       `json:"latency_p95_ms"`
-	LatencyP99ms float64       `json:"latency_p99_ms"`
+	Total        int64   `json:"total"`
+	Errors       int64   `json:"errors"`
+	LatencyP50ms float64 `json:"latency_p50_ms"`
+	LatencyP95ms float64 `json:"latency_p95_ms"`
+	LatencyP99ms float64 `json:"latency_p99_ms"`
 }
 
 type HealthSnapshot struct {
-	Timestamp  time.Time      `json:"timestamp"`
-	Goroutines int            `json:"goroutines"`
-	HeapMB     int            `json:"heap_mb"`
-	Shards     int            `json:"shards"`
+	Timestamp  time.Time `json:"timestamp"`
+	Goroutines int       `json:"goroutines"`
+	HeapMB     int       `json:"heap_mb"`
+	Shards     int       `json:"shards"`
 }
 
 func run(ctx context.Context, cfg *Config) *Report {

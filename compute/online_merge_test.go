@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // drainOnlineMerge feeds the script as ComputeMessages into onlineMerge

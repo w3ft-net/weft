@@ -153,7 +153,7 @@ if [ "$ROLE" != "loom-producer" ] && [ -n "${WEFTD_TOKEN:-}" ] && command -v wef
   QUERIES_SOURCE=""
   if [ "$ROLE" = "coordinator" ]; then
     QUERIES_SOURCE="  - path: /opt/app/logs/coordinator-queries.log
-    app: coordinator
+    service: coordinator
     kind: queries"
   fi
 

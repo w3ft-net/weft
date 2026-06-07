@@ -9,7 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
-	"github.com/kevlarcon/weft/shard"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // ASGDiscovery discovers shard or compute instances from an AWS Auto Scaling Group.

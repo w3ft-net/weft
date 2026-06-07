@@ -5,9 +5,9 @@ import (
 	"io"
 	"strings"
 
-	"github.com/kevlarcon/warp/pkg/bash"
-	"github.com/kevlarcon/weft/planner"
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	"github.com/graybeardcorp/warp/pkg/bash"
+	"github.com/graybeardcorp/weft/planner"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // LiveFilter applies a follow-mode pipeline's per-row stages to a single

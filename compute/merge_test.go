@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 func row(ts int64, raw string) *pb.ResultRow {

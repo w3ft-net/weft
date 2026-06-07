@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevlarcon/weft/auth"
-	"github.com/kevlarcon/weft/internal/clientwire"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/internal/clientwire"
+	"github.com/graybeardcorp/weft/store"
 )
 
 type contextKey string

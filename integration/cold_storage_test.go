@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
-	"github.com/kevlarcon/weft/shard"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 func TestMain(m *testing.M) {

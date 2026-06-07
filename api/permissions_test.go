@@ -8,8 +8,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/kevlarcon/weft/auth"
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // permsSeed mirrors dashTeamMember: it just adds (user, role) as a

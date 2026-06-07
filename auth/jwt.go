@@ -13,26 +13,19 @@ package auth
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
-	"strings"
 	"time"
 
-	"github.com/kevlarcon/weft/store"
+	"github.com/graybeardcorp/saaskit/jwtauth"
+	"github.com/graybeardcorp/weft/store"
 )
 
-// Claims are the payload of a weft JWT — strictly the user ID and
-// timing fields. Anything else lives on Session, looked up per request,
-// so state changes (tier, email verification, owner promotion, customer
-// rename) propagate without forcing a re-login.
-type Claims struct {
-	UserID    string `json:"sub"`
-	IssuedAt  int64  `json:"iat"`
-	ExpiresAt int64  `json:"exp"`
-}
+// Claims are the payload of a weft JWT — strictly the user ID and timing
+// fields. Anything else lives on Session, looked up per request, so state
+// changes (tier, email verification, owner promotion, customer rename)
+// propagate without forcing a re-login. Aliased to the shared jwtauth claims;
+// weft never sets the optional email field, so the on-wire payload stays
+// {sub,iat,exp} — byte-compatible with tokens minted before this migration.
+type Claims = jwtauth.Claims
 
 // UnverifiedGracePeriod is the window a user has to click their verify
 // link before the cleanup sweep deletes the account.
@@ -42,56 +35,13 @@ const UnverifiedGracePeriod = 24 * time.Hour
 // days and carry only the user ID; all other identity attributes are
 // resolved per-request from the DB.
 func Generate(user *store.User, secret string) (string, error) {
-	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
-
-	claims := Claims{
-		UserID:    user.ID,
-		IssuedAt:  time.Now().Unix(),
-		ExpiresAt: time.Now().Add(30 * 24 * time.Hour).Unix(),
-	}
-	claimsJSON, err := json.Marshal(claims)
-	if err != nil {
-		return "", err
-	}
-	payload := base64.RawURLEncoding.EncodeToString(claimsJSON)
-
-	unsigned := header + "." + payload
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(unsigned))
-	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-
-	return unsigned + "." + sig, nil
+	return jwtauth.Generate(user.ID, "", []byte(secret), 30*24*time.Hour)
 }
 
 // Validate verifies a JWT signature and decodes the claims. Returns an
 // error on bad shape, bad signature, or expired token.
 func Validate(tokenStr, secret string) (*Claims, error) {
-	parts := strings.Split(tokenStr, ".")
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("invalid token format")
-	}
-
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(parts[0] + "." + parts[1]))
-	expectedSig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-	if !hmac.Equal([]byte(parts[2]), []byte(expectedSig)) {
-		return nil, fmt.Errorf("invalid signature")
-	}
-
-	claimsJSON, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, fmt.Errorf("decode claims: %w", err)
-	}
-	var claims Claims
-	if err := json.Unmarshal(claimsJSON, &claims); err != nil {
-		return nil, fmt.Errorf("unmarshal claims: %w", err)
-	}
-
-	if time.Now().Unix() > claims.ExpiresAt {
-		return nil, fmt.Errorf("token expired")
-	}
-
-	return &claims, nil
+	return jwtauth.Validate(tokenStr, []byte(secret))
 }
 
 // contextKey is a private type so only this package can produce the

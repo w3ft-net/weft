@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	pb "github.com/kevlarcon/weft/proto/weftpb"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // MetricsConfig is the per-source metrics configuration.
