@@ -7,8 +7,10 @@ import (
 	"log"
 	"net"
 	"net/http"
+	_ "net/http/pprof" // registers /debug/pprof/* on DefaultServeMux; served on the localhost-only debug listener below
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"time"
@@ -29,10 +31,35 @@ import (
 	"github.com/graybeardcorp/weft/store"
 )
 
+// dumpGoroutines writes a full all-goroutine stack trace to
+// /tmp/weft-coordinator-goroutines.txt on receipt of SIGUSR1. Used to
+// diagnose goroutine leaks in prod without bouncing the process: an
+// operator `kevcons ssh`es in, `kill -USR1`s the coordinator, and cats
+// the file. The buffer is grown until the whole dump fits (runtime.Stack
+// truncates rather than reallocating).
+func dumpGoroutines() {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	const path = "/tmp/weft-coordinator-goroutines.txt"
+	if err := os.WriteFile(path, buf, 0o644); err != nil {
+		log.Printf("coordinator: SIGUSR1 goroutine dump failed: %v", err)
+		return
+	}
+	log.Printf("coordinator: SIGUSR1 — wrote %d goroutines (%d bytes) to %s", runtime.NumGoroutine(), len(buf), path)
+}
+
 func main() {
 	port := flag.Int("port", 9020, "gRPC listen port")
 	healthPort := flag.Int("health-port", 9021, "HTTP liveness listen port")
 	adminPort := flag.Int("admin-port", 9022, "gRPC listen port for the localhost-only WeftAdmin surface (weft-admin CLI)")
+	debugPort := flag.Int("debug-port", 6060, "localhost-only HTTP port for net/http/pprof (goroutine/heap profiling); 0 disables")
 	computeAddr := flag.String("compute", "", "compute worker address (host:port)")
 	awsRegion := flag.String("region", "us-east-2", "AWS region for shard EC2 launches + volume management")
 	customer := flag.String("customer", "", "fallback customer for dev/docker (queries pass customer per-request)")
@@ -223,6 +250,22 @@ func main() {
 		}
 	}()
 
+	// Localhost-only pprof. Bound to 127.0.0.1 so the profiling surface
+	// is reachable only over an SSM session (kevcons ssh), never from the
+	// public network — same trust model as the WeftAdmin listener below.
+	// `/debug/pprof/goroutine?debug=1` gives the aggregated stack→count
+	// view that makes a goroutine leak obvious (the leaking call site is
+	// whichever stack carries the outlier count).
+	if *debugPort != 0 {
+		go func() {
+			addr := fmt.Sprintf("127.0.0.1:%d", *debugPort)
+			log.Printf("coordinator pprof on %s (localhost only)", addr)
+			if err := http.ListenAndServe(addr, nil); err != nil { // nil → DefaultServeMux, where net/http/pprof registered
+				log.Printf("pprof listener exited: %v", err)
+			}
+		}()
+	}
+
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
 		log.Fatalf("listen: %v", err)
@@ -280,11 +323,20 @@ func main() {
 	// coverage counters on `docker compose down` — SIGKILL skips the
 	// flush; a SIGTERM→GracefulStop→main-return sequence does not.
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1)
 	go func() {
-		s := <-sigs
-		log.Printf("coordinator: received %s, gracefully stopping", s)
-		srv.GracefulStop()
+		for s := range sigs {
+			if s == syscall.SIGUSR1 {
+				// Non-destructive full goroutine dump to a file (the
+				// process keeps running). Grows the buffer until the whole
+				// dump fits, then writes it where `kevcons ssh` can cat it.
+				dumpGoroutines()
+				continue
+			}
+			log.Printf("coordinator: received %s, gracefully stopping", s)
+			srv.GracefulStop()
+			return
+		}
 	}()
 
 	if err := srv.Serve(lis); err != nil {
