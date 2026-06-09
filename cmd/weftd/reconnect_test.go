@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -160,5 +162,33 @@ func TestReconnect_OpenStreamCancellation(t *testing.T) {
 	_, err := openStream(ctx, client, "test")
 	if err == nil {
 		t.Fatal("expected error from cancelled context, got nil")
+	}
+}
+
+// TestStreamScannedLines_ReusesOneStream pins the weftd half of the
+// coordinator leak: runJournalTailer used to pass a fresh &streamState{}
+// per line, so a journald-sourced app opened one ingest stream per log
+// line and abandoned each — churning streams and stranding a coordinator
+// handler goroutine in Recv() per line. The journal path must reuse a
+// single stream across all lines (like runFileTailer) and half-close it
+// once at the end.
+func TestStreamScannedLines_ReusesOneStream(t *testing.T) {
+	client := &mockCoordClient{}
+	const n = 50
+	var sb strings.Builder
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&sb, "line %d\n", i)
+	}
+
+	streamScannedLines(context.Background(), client,
+		bufio.NewScanner(strings.NewReader(sb.String())),
+		"kevlar", "i-001", "xylem/django")
+
+	if got := client.streamCount(); got != 1 {
+		t.Fatalf("journal tailer opened %d streams for %d lines; want exactly 1 reused stream "+
+			"(a fresh stream per line is the leak)", got, n)
+	}
+	if got := client.streams[0].sentCount(); got != n {
+		t.Fatalf("reused stream carried %d rows; want all %d", got, n)
 	}
 }

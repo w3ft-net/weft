@@ -695,18 +695,38 @@ func runJournalTailer(ctx context.Context, client pb.WeftCoordinatorClient, cust
 		return
 	}
 
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		line := scanner.Text()
+	streamScannedLines(ctx, client, bufio.NewScanner(stdout), customer, instance, app)
+
+	cmd.Wait()
+}
+
+// streamScannedLines pumps every non-blank line from sc over a SINGLE
+// reused IngestStream (reconnecting only when a send breaks), then
+// half-closes it on exit. Hoisting the streamState out of the loop is
+// the whole point: the previous code passed a fresh &streamState{} per
+// line, so each journal line opened its own ingest stream, sent one row,
+// and abandoned it — pinning a coordinator handler goroutine in
+// stream.Recv() per line (the server-side leak) and churning ~one stream
+// per log line. runFileTailer already reused one stream; this brings the
+// journal path in line.
+func streamScannedLines(ctx context.Context, client pb.WeftCoordinatorClient, sc *bufio.Scanner, customer, instance, app string) {
+	ss := &streamState{}
+	defer func() {
+		if ss.stream != nil {
+			// Half-close so the coordinator's handler sees EOF and returns
+			// cleanly instead of waiting out the idle reaper.
+			ss.stream.CloseAndRecv()
+		}
+	}()
+	for sc.Scan() {
+		line := sc.Text()
 		if line == "" {
 			continue
 		}
-		if err := sendLineWithReconnect(ctx, client, &streamState{}, line, customer, instance, app); err != nil {
+		if err := sendLineWithReconnect(ctx, client, ss, line, customer, instance, app); err != nil {
 			return // context cancelled
 		}
 	}
-
-	cmd.Wait()
 }
 
 func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, customer, instance, app, path string) {
