@@ -4,11 +4,15 @@ import (
 	"context"
 	"io"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
+	weftcfg "github.com/graybeardcorp/weft/config"
 	"github.com/graybeardcorp/weft/coordinator"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
@@ -119,5 +123,98 @@ func TestIngestStream_NoGoroutineLeak(t *testing.T) {
 			"the per-stream flush goroutine never exits because the deferred "+
 			"ticker.Stop() does not close ticker.C, so `for range ticker.C` blocks forever",
 			leaked, n)
+	}
+}
+
+// abandonedStream models the dominant prod leak: a client opens an
+// ingest stream, ships a batch, then goes silent WITHOUT half-closing
+// (process gone, NAT/idle drop, or a client that opens a fresh stream
+// per batch and forgets the old one). Recv() returns the seeded rows
+// and then blocks until block is closed — which, in real gRPC, is what
+// happens when the handler returns and the transport tears the stream
+// down. Until then the server-side Recv() never unblocks on its own.
+type abandonedStream struct {
+	ctx   context.Context
+	rows  []*pb.LogRow
+	idx   int
+	block chan struct{}
+}
+
+func (f *abandonedStream) Recv() (*pb.LogRow, error) {
+	if f.idx < len(f.rows) {
+		r := f.rows[f.idx]
+		f.idx++
+		return r, nil
+	}
+	<-f.block
+	return nil, status.Error(codes.Canceled, "stream closed")
+}
+
+func (f *abandonedStream) SendAndClose(*pb.IngestStreamResponse) error { return nil }
+func (f *abandonedStream) Context() context.Context                    { return f.ctx }
+func (f *abandonedStream) SetHeader(metadata.MD) error                 { return nil }
+func (f *abandonedStream) SendHeader(metadata.MD) error                { return nil }
+func (f *abandonedStream) SetTrailer(metadata.MD)                      {}
+func (f *abandonedStream) SendMsg(any) error                           { return nil }
+func (f *abandonedStream) RecvMsg(any) error                           { return nil }
+
+// TestIngestStream_AbandonedStreamReaped pins the dominant coordinator
+// leak found in the prod goroutine dump: 259 IngestStream handlers
+// parked in stream.Recv() for up to 81 minutes because abandoned streams
+// were never reaped. With no idle timeout the handler blocks forever; the
+// idle reaper must close the stream and return DeadlineExceeded, after
+// which both the handler and its reader/flush goroutines unwind.
+func TestIngestStream_AbandonedStreamReaped(t *testing.T) {
+	tx, cleanup := testStore(t)
+	defer cleanup()
+
+	cust, err := tx.FindOrCreateCustomer("kevlar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx.SeedDevSubscription(cust.ID)
+	ns, _ := tx.FindOrCreateNamespace(cust.ID, "leaktest")
+	rawTok, _, err := tx.CreateAgentToken(cust.ID, ns.ID, "abandon-agent", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1s idle timeout so the test reaps quickly.
+	cfg := weftcfg.Defaults()
+	cfg.IngestStreamIdleTimeoutSeconds = 1
+	var cfgPtr atomic.Pointer[weftcfg.Runtime]
+	cfgPtr.Store(cfg)
+
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Store: tx})
+	srv := &Server{Coord: coord, Store: tx, CfgPtr: &cfgPtr}
+
+	ctx := metadata.NewIncomingContext(context.Background(),
+		metadata.Pairs("authorization", "Bearer "+rawTok))
+
+	baseline := runtime.NumGoroutine()
+
+	st := &abandonedStream{
+		ctx:   ctx,
+		rows:  []*pb.LogRow{{Raw: "one batch then silence"}},
+		block: make(chan struct{}),
+	}
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.IngestStream(st) }()
+
+	select {
+	case err := <-errCh:
+		if status.Code(err) != codes.DeadlineExceeded {
+			t.Fatalf("expected DeadlineExceeded from idle reaper, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("IngestStream never returned on an abandoned stream — handler is leaked in stream.Recv()")
+	}
+
+	// Real gRPC closes the stream when the handler returns, which unblocks
+	// the server-side Recv(); model that so the reader goroutine can exit.
+	close(st.block)
+
+	if leaked := settleGoroutines(baseline); leaked > 5 {
+		t.Fatalf("abandoned stream leaked ~%d goroutines after reaping (want ~0)", leaked)
 	}
 }

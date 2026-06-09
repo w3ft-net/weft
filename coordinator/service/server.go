@@ -560,13 +560,73 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 		}
 	}()
 
-	for {
-		row, err := stream.Recv()
-		if err == io.EOF {
-			break
+	// Run stream.Recv() in its own goroutine so the main loop can also
+	// wake on an idle deadline. An abandoned stream (client shipped a
+	// batch then went silent without half-closing) would otherwise block
+	// the handler in Recv() forever — pinning this goroutine and the
+	// flush goroutine above, the dominant coordinator leak. The
+	// done-guarded send guarantees this reader exits when the handler
+	// returns (close(done) above) even if it's mid-send on an
+	// unread row.
+	type recvResult struct {
+		row *pb.LogRow
+		err error
+	}
+	recvCh := make(chan recvResult, 1)
+	go func() {
+		for {
+			row, err := stream.Recv()
+			select {
+			case recvCh <- recvResult{row, err}:
+			case <-done:
+				return
+			}
+			if err != nil {
+				return
+			}
 		}
-		if err != nil {
-			return err
+	}()
+
+	// Idle reaper: if no row arrives within the window, close the stream.
+	// Zero disables (pre-fix behavior). nil channel blocks forever, so the
+	// select's idle case is inert when disabled.
+	idleTimeout := time.Duration(s.runtimeCfg().IngestStreamIdleTimeoutSeconds) * time.Second
+	var idleC <-chan time.Time
+	var idle *time.Timer
+	if idleTimeout > 0 {
+		idle = time.NewTimer(idleTimeout)
+		defer idle.Stop()
+		idleC = idle.C
+	}
+
+recvLoop:
+	for {
+		var row *pb.LogRow
+		select {
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		case <-idleC:
+			log.Printf("ingest-stream: customer=%s idle for %s, closing stream (agent should reconnect)",
+				authCustomer, idleTimeout)
+			return status.Errorf(codes.DeadlineExceeded,
+				"ingest stream idle for %s; reconnect", idleTimeout)
+		case r := <-recvCh:
+			if r.err == io.EOF {
+				break recvLoop
+			}
+			if r.err != nil {
+				return r.err
+			}
+			if idle != nil {
+				if !idle.Stop() {
+					select {
+					case <-idle.C:
+					default:
+					}
+				}
+				idle.Reset(idleTimeout)
+			}
+			row = r.row
 		}
 
 		if budget > 0 {

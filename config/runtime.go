@@ -57,6 +57,16 @@ type Runtime struct {
 	GRPCMaxRecvBytes         int
 	IngestStreamBudgetBytes  int64
 
+	// IngestStreamIdleTimeoutSeconds reaps abandoned ingest streams: if
+	// no row arrives within this window the handler closes the stream and
+	// returns, releasing its goroutine (and the paired flush goroutine).
+	// Without it, a client that opens a stream, ships a batch, and then
+	// goes silent without half-closing pins the handler in stream.Recv()
+	// forever — the dominant coordinator goroutine/memory leak. Read on
+	// each new stream, so changes take effect as agents reconnect. 0
+	// disables the reaper (pre-fix behavior).
+	IngestStreamIdleTimeoutSeconds int
+
 	// Shard query deadline. Read per-query, so changes take effect
 	// on the next incoming Query RPC.
 	ShardQueryTimeoutSeconds int
@@ -101,7 +111,10 @@ func Defaults() *Runtime {
 		WatchBodyMax:             64 * 1024,
 		GRPCMaxRecvBytes:         32 * 1024 * 1024,
 		IngestStreamBudgetBytes:  64 * 1024 * 1024,
-		ShardQueryTimeoutSeconds: 30,
+		// 5 min: long enough not to disturb a live-but-sparse agent, short
+		// enough to reap abandoned/half-open streams before they pile up.
+		IngestStreamIdleTimeoutSeconds: 300,
+		ShardQueryTimeoutSeconds:       30,
 	}
 }
 
@@ -122,6 +135,7 @@ const (
 	keyWatchBodyMax         = "BODYCAP_WATCH_BYTES"
 	keyGRPCMaxRecvBytes     = "GRPC_MAX_RECV_BYTES"
 	keyIngestStreamBudget   = "GRPC_INGEST_STREAM_BUDGET_BYTES"
+	keyIngestStreamIdleSec  = "GRPC_INGEST_STREAM_IDLE_TIMEOUT_SECONDS"
 	keyShardQueryTimeoutSec = "SHARD_QUERY_TIMEOUT_SECONDS"
 	keyMinWeftCliVersion    = "MIN_WEFT_CLI_VERSION"
 	keyMinWeftdVersion      = "MIN_WEFTD_VERSION"
@@ -153,6 +167,7 @@ func (r *Runtime) Overlay(blob map[string]string) {
 	overlayInt64(blob, keyWatchBodyMax, &r.WatchBodyMax)
 	overlayInt(blob, keyGRPCMaxRecvBytes, &r.GRPCMaxRecvBytes)
 	overlayInt64(blob, keyIngestStreamBudget, &r.IngestStreamBudgetBytes)
+	overlayInt(blob, keyIngestStreamIdleSec, &r.IngestStreamIdleTimeoutSeconds)
 	overlayInt(blob, keyShardQueryTimeoutSec, &r.ShardQueryTimeoutSeconds)
 	overlayString(blob, keyMinWeftCliVersion, &r.MinWeftCliVersion)
 	overlayString(blob, keyMinWeftdVersion, &r.MinWeftdVersion)
