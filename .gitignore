@@ -1,7 +1,11 @@
-# Binaries (in repo root only)
+# Compiled binaries — build artifacts, never committed. Real
+# releases are built by the release process with ldflags, not from
+# a checked-in blob.
 /server
 /weft
 /wef
+/weft-admin
+weftd/weftd
 *.exe
 
 # Local config (contains endpoint/credentials)
