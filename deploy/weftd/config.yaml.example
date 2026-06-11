@@ -18,7 +18,7 @@ token: wft_REPLACE_ME
 deployment: api                 # fleet / scaling-unit (k8s Deployment, ASG)
 region: us-east-2               # optional; auto-detected from cloud metadata
 services: [api]                 # logical services co-located here; metrics
-                                # and heartbeats fan out one stream per name
+                                # fan out one stream per name
 
 # Self-update: when a newer weftd is published, the agent downloads,
 # verifies, swaps its own binary and restarts into it. On by default;

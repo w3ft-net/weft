@@ -6,9 +6,12 @@ either through the local weftd Unix socket (default) or directly to
 v1 features:
 
 1. **Generic event emission** (`weft.Send`) for application events.
-2. **Heartbeats** (`weft.Heartbeat`, `weft.HeartbeatLoop`) for
-   liveness signaling, fronting the wire protocol defined in
-   [`app-heartbeats.md`](app-heartbeats.md).
+2. **Heartbeats** (`weft.Heartbeat`) for liveness signaling.
+   (Superseded 2026-06: heartbeats are now records on the records
+   transport, `Heartbeat(ctx, service, interval)` → app
+   `<service>/heartbeats`, not a `POST /h/<service>` to a separate
+   socket. The signature/method names below describe the original
+   design — see the weft-go README for current usage.)
 3. **Runtime stats collector** (`weft.runtime.Start`) that
    periodically emits `runtime.MemStats`, goroutine count, FD count,
    and GC pause data — the highest-leverage thing the SDK enables

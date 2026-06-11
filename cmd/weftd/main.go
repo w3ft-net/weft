@@ -98,9 +98,8 @@ type Config struct {
 	Deployment string            `yaml:"deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
 	Region     string            `yaml:"region"`     // optional override; otherwise probed from cloud metadata
 	Socket     string            `yaml:"socket"`
-	Services   []string          `yaml:"services"`   // logical services co-located on this host; metrics + heartbeats fan out one stream per name
+	Services   []string          `yaml:"services"`   // logical services co-located on this host; metrics fan out one stream per name
 	Dimensions map[string]string `yaml:"dimensions"` // file-sourced dimension values; see docs/plans/dimensions-from-files.md
-	Heartbeat  HeartbeatConfig   `yaml:"heartbeat"`  // local app-heartbeat listener
 	Sources    []SourceConfig    `yaml:"sources"`
 	AutoUpdate *bool             `yaml:"auto_update"` // self-replace on a newer release; nil = on (set false to opt out)
 }
@@ -409,12 +408,6 @@ func main() {
 		defer sock.Close()
 		go runSocketIngester(ctx, coordClient, customer, hostname, namespace, sock)
 		log.Printf("listening on socket %s", cfg.Socket)
-	}
-
-	// Start the app-heartbeat listener and snapshot ticker. Always
-	// on by default with a Unix socket; opt-in for the TCP listener.
-	if _, err := startHeartbeat(ctx, cfg.Heartbeat, coordClient, customer, hostname, namespace); err != nil {
-		log.Printf("heartbeat: disabled (%v)", err)
 	}
 
 	if parseClientSide {

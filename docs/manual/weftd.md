@@ -33,9 +33,9 @@ deployment: api               # optional; the fleet/scaling-unit
 region: us-east-2             # optional override; auto-detected from
                               # cloud metadata at startup if omitted
 services: [api]               # logical services co-located on this
-                              # host; metrics and heartbeat snapshots
-                              # fan out one stream per service —
-                              # /log/<ns>/<service>/{metrics,heartbeats}.log
+                              # host; metrics fan out one stream per
+                              # service — /log/<ns>/<service>/metrics.log
+                              # (heartbeats come from the app via the SDK)
 dimensions:                   # optional: column values sourced from
                               # files on disk and watched live via
                               # fsnotify, so a deploy that touches
@@ -183,12 +183,13 @@ Metrics only run on Linux (the collectors read `/proc/stat`,
 
 ### App API: emit events and heartbeats from your services
 
-Beyond tailing files, weftd exposes two local endpoints that
-running applications can talk to directly. Both bind to Unix
-sockets by default, so process-local apps can ship to weft without
-a token, network call, or extra dependency. There is a typed Go
+Beyond tailing files, weftd exposes a local records socket that
+running applications can write to directly. It binds to a Unix
+socket by default, so process-local apps can ship to weft without
+a token, network call, or extra dependency — events, heartbeats,
+and runtime stats all ride this one channel. There is a typed Go
 SDK at <https://github.com/w3ft-net/weft-go> for callers that
-prefer not to wire up sockets by hand.
+prefer not to wire up the socket by hand.
 
 #### Records socket
 
@@ -217,69 +218,48 @@ c.Send("billing", map[string]any{"event": "signup", "id": 42})
 The SDK looks for the socket at `/var/run/weftd.sock` by default;
 override with `WEFT_SOCKET` or `weft.WithSocket(...)`.
 
-#### Heartbeat endpoint
+#### Heartbeats
 
-weftd also runs a tiny heartbeat listener that records "this
-service is alive" pings and emits the table as a periodic
-snapshot to a pseudofile at `/log/<namespace>/heartbeats.log` —
-absence-of-heartbeat becomes a regular weft query. Anything that
-speaks HTTP can hit it; the SDK wraps the wire shape in one line.
+A heartbeat is just a record. The Go SDK's `Heartbeat` loop emits one
+to app `<service>/heartbeats` every interval over the **records socket
+above** — there is no separate heartbeat socket or weftd listener.
+Each beat lands at `/log/<namespace>/<service>/heartbeats.log`:
 
-```
-# /etc/weftd/config.yaml
-heartbeat:
-  socket: /var/run/weftd-heartbeat.sock   # default; "" disables
-  port: 14001                              # optional; 0 disables (default)
-  snapshot_interval: 5s                    # default
-  stale_after: 60s                         # drop services silent past this
+```json
+{"type":"heartbeat","service":"my-service","ts":"2026-06-11T14:55:36.4Z"}
 ```
 
-Every POST to `/h/<service>` registers a heartbeat for that
-service. Empty body, 204 on success.
-
 ```
-# From cron, shell scripts, k8s liveness probes
-curl -X POST --unix-socket /var/run/weftd-heartbeat.sock \
-  http://localhost/h/my-service
-
-# Or over the optional TCP listener
-curl -X POST http://127.0.0.1:14001/h/my-service
-
 # From Go via the SDK — one line in main()
-go c.HeartbeatLoop(ctx, "my-service", 30*time.Second)
+go c.Heartbeat(ctx, "my-service", weft.DefaultHeartbeatInterval)
+
+# Without the SDK, write the same record over the records socket
+echo 'my-service/heartbeats:{"type":"heartbeat","service":"my-service"}' \
+  | nc -U /var/run/weftd.sock
 ```
 
 Service names are restricted to `[a-zA-Z0-9._-]`, 1–128 chars.
 
-Each tick of the snapshot ticker (default 5s) emits one row per
-known service to its own `/log/<namespace>/<service>/heartbeats.log`
-stream — the per-service path makes "is X alive right now?" a
-direct `tail`, no filtering required:
+Liveness is judged by **recency**: a service that's alive keeps
+emitting rows; one that stops is *absent*. Since each beat is emitted
+at the source when the process is healthy, there's no server-computed
+`age_s` — you ask "have we seen a beat lately?" instead, which a watch
+expresses directly:
 
 ```
-{"type":"heartbeat","ts":"2026-04-29T14:55:36Z",
- "service":"my-service","last_seen":"2026-04-29T14:55:35.4Z","age_s":0.6}
-```
+# Alert when billing hasn't beaten in the last 90s (cron runs each minute)
+weft::is_absent billing-beat 90s && alert ...
 
-A service silent past `stale_after` is dropped from subsequent
-snapshots, so the live set is always self-cleaning. The `age_s`
-field grows from 0 toward `stale_after` as a service goes quiet —
-catch a stalling service before it disappears with a normal
-alert pipeline:
-
-```
-# Alert when billing hasn't checked in for 30s+
-tail -n 1 /log/myns/billing/heartbeats.log \
-  | jq 'select(.age_s > 30)' \
-  | alert above 0 -t 1 --notify=ops
+# ...where billing-beat is a watch like:
+cat /log/myns/billing/heartbeats.log | tail -1
 ```
 
 #### Go SDK
 
-`github.com/w3ft-net/weft-go` is the typed front door for both
-endpoints above plus a runtime-stats collector that periodically
-emits Go heap, GC pause, goroutine, and FD-count telemetry.
-Three-line setup in `main()`:
+`github.com/w3ft-net/weft-go` is the typed front door for the
+records socket above — events, heartbeats, and a runtime-stats
+collector that periodically emits Go heap, GC pause, goroutine, and
+FD-count telemetry. Three-line setup in `main()`:
 
 ```
 import "github.com/w3ft-net/weft-go"

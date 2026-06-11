@@ -1,5 +1,22 @@
 # Plan: App heartbeats — wire protocol
 
+> **Superseded (2026-06).** The dedicated heartbeat channel described
+> below — a weftd HTTP listener on `/var/run/weftd-heartbeat.sock`,
+> an in-memory last-seen table, and a 5s `age_s` snapshot ticker — has
+> been **removed**. Heartbeats are now ordinary records: the Go SDK
+> (`weft.Client.Heartbeat`) emits `{"type":"heartbeat","service",…,"ts"}`
+> to app `<service>/heartbeats` over the **same records transport** as
+> every other event, landing at the same `/log/<ns>/<service>/heartbeats.log`
+> pseudofile. There is no second socket and no server-side `age_s`
+> densification; liveness is judged by **recency/absence** of heartbeat
+> rows (e.g. the `weft::is_absent` watch predicate, or a windowed
+> `count`). This collapses the capture hop onto the one data channel —
+> the mainstream design (Datadog DogStatsD service checks, OTLP,
+> Fluentd all multiplex liveness over their data channel; Prometheus
+> infers `up` from scrape recency). The historical plan is kept below
+> for the record. See `docs/manual/weftd.md` and the weft-go README for
+> current usage.
+
 A small HTTP listener inside weftd that accepts empty POSTs at
 `http://127.0.0.1:<port>/h/<service>` (and the same handler bound
 to a Unix socket for shared-netns environments). weftd remembers
