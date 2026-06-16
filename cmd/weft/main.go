@@ -21,7 +21,6 @@ import (
 	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/internal/timerange"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
-	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/shell"
 )
 
@@ -109,9 +108,6 @@ func main() {
 		case "setup":
 			runSetup()
 			return
-		case "ingest":
-			runIngest()
-			return
 		case "source":
 			runSource()
 			return
@@ -164,7 +160,6 @@ func printUsage() {
 	fmt.Println("  token           Manage agent tokens (create, list, revoke)")
 	fmt.Println("  source          Manage log sources (add, list, remove, pending, configure)")
 	fmt.Println("  setup           Interactive schema setup from a sample file")
-	fmt.Println("  ingest          Ingest a log file into a local DuckDB shard")
 	fmt.Println("  mcp             Start an MCP server on stdio for LLM clients")
 	fmt.Println("  propose         Review or apply MCP-staged mutations (review|apply|clear)")
 	fmt.Println("  update          Replace this binary with the latest released weft")
@@ -773,99 +768,6 @@ func runSetup() {
 		fmt.Fprintf(os.Stderr, "setup failed: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-func runIngest() {
-	args := os.Args[2:]
-	var schemaFile, logFile, dbPath string
-
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--schema":
-			if i+1 < len(args) {
-				schemaFile = args[i+1]
-				i++
-			}
-		case "--file":
-			if i+1 < len(args) {
-				logFile = args[i+1]
-				i++
-			}
-		case "--db":
-			if i+1 < len(args) {
-				dbPath = args[i+1]
-				i++
-			}
-		}
-	}
-
-	if schemaFile == "" || logFile == "" {
-		fmt.Fprintln(os.Stderr, "usage: weft ingest --schema FILE --file LOGFILE [--db PATH]")
-		os.Exit(1)
-	}
-
-	schema, err := ingest.LoadSchema(schemaFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "load schema: %v\n", err)
-		os.Exit(1)
-	}
-
-	data, err := os.ReadFile(logFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "read log file: %v\n", err)
-		os.Exit(1)
-	}
-	lines := strings.Split(string(data), "\n")
-
-	parser, err := ingest.NewParser(schema)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "create parser: %v\n", err)
-		os.Exit(1)
-	}
-
-	now := time.Now().UTC()
-	rows, err := parser.ParseLines(lines, now)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "parse lines: %v\n", err)
-		os.Exit(1)
-	}
-
-	if len(rows) == 0 {
-		fmt.Fprintln(os.Stderr, "no rows parsed from log file")
-		os.Exit(1)
-	}
-
-	minNs, maxNs := rows[0].TsUnixNs, rows[0].TsUnixNs
-	for _, r := range rows[1:] {
-		if r.TsUnixNs < minNs {
-			minNs = r.TsUnixNs
-		}
-		if r.TsUnixNs > maxNs {
-			maxNs = r.TsUnixNs
-		}
-	}
-	minTs := time.Unix(0, minNs)
-	maxTs := time.Unix(0, maxNs)
-
-	if dbPath == "" {
-		dbPath = fmt.Sprintf("%s.duckdb", schema.Service)
-	}
-	ds, err := shard.NewDuckDBShard("ingest", dbPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "open shard: %v\n", err)
-		os.Exit(1)
-	}
-	defer ds.Close()
-
-	if err := ds.Ingest(rows, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "ingest: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Ingested %d rows into %s (time range: %s to %s)\n",
-		len(rows), dbPath,
-		minTs.Format("2006-01-02 15:04:05"),
-		maxTs.Format("2006-01-02 15:04:05"))
 }
 
 func runSource() {
