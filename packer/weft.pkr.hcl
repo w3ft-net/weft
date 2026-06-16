@@ -80,6 +80,22 @@ variable "assume_role_name" {
   default = "TerragruntCrossAccountRole"
 }
 
+# frontend_builder_profile is the IAM instance profile name to attach to the
+# Packer builder instance when the app has a frontend build step. See the
+# django-app.pkr.hcl for full documentation. Weft does not currently have a
+# frontend.command, so this defaults to "" and the provisioner is a no-op.
+variable "frontend_builder_profile" {
+  type        = string
+  description = "IAM instance profile name for on-builder frontend builds (empty = no profile)"
+  default     = ""
+}
+
+variable "frontend_build_script" {
+  type        = string
+  description = "Path inside extracted source to the frontend build script (relative, e.g. scripts/frontend-build.sh)"
+  default     = ""
+}
+
 locals {
   ts       = var.timestamp != "" ? var.timestamp : formatdate("YYYYMMDDhhmmss", timestamp())
   ami_name = "${var.app_name}-coordinator-${var.git_sha}-${local.ts}"
@@ -117,6 +133,10 @@ source "amazon-ebs" "weft" {
   ssh_username           = "admin"
   ssh_timeout            = "30m"
   ssh_read_write_timeout = "30m"
+
+  # Attach the frontend-builder IAM profile when a frontend build is configured.
+  # Weft does not currently have a frontend.command so this is null (no profile).
+  iam_instance_profile = var.frontend_builder_profile != "" ? var.frontend_builder_profile : null
 
   tags = {
     Name   = local.ami_name
@@ -186,8 +206,11 @@ build {
       "sudo chmod +x /usr/local/bin/weft-migrate",
       "sudo chmod +x /opt/app/bin/weft-* /opt/app/bin/loom-producer",
       "sudo chown app:app /opt/app/bin/weft-* /opt/app/bin/loom-producer",
-      # Clean up source and build artifacts (keep Go + gcc for future rebuilds if needed)
-      "sudo rm -rf /tmp/weft /tmp/warp /tmp/saaskit /tmp/app-source.tar.gz /tmp/go",
+      # Remove only the tarball here. Keep /tmp/weft, /tmp/warp, /tmp/saaskit and
+      # /tmp/go for the on-builder frontend build that runs later (the Go WASM
+      # build needs the source + go.mod replace + module cache; the Vite build
+      # needs the warp sibling). A final provisioner cleans them up afterwards.
+      "sudo rm -f /tmp/app-source.tar.gz",
     ]
   }
 
@@ -362,6 +385,52 @@ build {
     inline = [
       "sudo mv /tmp/cloudwatch-agent.json /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json",
       "sudo systemctl enable amazon-cloudwatch-agent",
+    ]
+  }
+
+  # ── Frontend build (on-builder) ────────────────────────────────────────────
+  # Runs when kevcons passes a non-empty frontend_builder_profile (i.e.
+  # .kevcons.yaml has a frontend.command). The builder is already running under
+  # the <app>-frontend-builder IAM profile, so the script's aws calls (S3 sync,
+  # CloudFront invalidation, SSM get-parameter) authenticate via IMDS with no
+  # local credentials.
+  #
+  # kevcons injects the script at the tarball ROOT (scripts/frontend-build.sh),
+  # so with weft's nested tarball (weft/ warp/ saaskit/) it extracts to
+  # /tmp/scripts/ — a sibling of /tmp/weft, NOT /tmp/weft/scripts. Hence cwd is
+  # /tmp/weft and the script path is /tmp/<frontend_build_script>.
+  #
+  # The Go WASM build (cmd/wasm) needs Go (baked in the base AMI), the
+  # warp/saaskit go.mod replace the Go-build provisioner left in place, and the
+  # module cache — hence the Go environment_vars (mirroring that provisioner).
+  # awscli is in the base AMI; Node is installed here because Debian's apt nodejs
+  # is too old for current Vite. Runs as the admin user (source is admin-owned).
+  provisioner "shell" {
+    environment_vars = [
+      "GOPATH=/tmp/go",
+      "GOMODCACHE=/opt/app/gomodcache",
+      "HOME=/home/admin",
+      "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "GOPRIVATE=github.com/graybeardcorp/*",
+    ]
+    inline = [
+      "if [ -z '${var.frontend_builder_profile}' ]; then echo 'No frontend build configured, skipping.'; exit 0; fi",
+      "echo '=== Frontend build starting on Packer instance ==='",
+      "curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -",
+      "sudo apt-get install -y nodejs",
+      "node --version && npm --version && aws --version",
+      "echo 'Running frontend build script...'",
+      "cd /tmp/weft && bash /tmp/${var.frontend_build_script}",
+      "echo '=== Frontend build completed ==='"
+    ]
+  }
+
+  # Final cleanup: drop the extracted source + Go workdir now that both the
+  # binary build and the on-builder frontend build are done, so they don't ship
+  # in the AMI. Unconditional (idempotent if a step left nothing behind).
+  provisioner "shell" {
+    inline = [
+      "sudo rm -rf /tmp/weft /tmp/warp /tmp/saaskit /tmp/scripts /tmp/go",
     ]
   }
 

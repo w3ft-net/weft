@@ -34,6 +34,67 @@ build:
           --exclude='weft/go.work' --exclude='weft/go.work.sum' \
           weft warp saaskit
 
+# Frontend (WASM SPA at w3ft.net) build + deploy. Ported from the old
+# .kevcons/ext/release-frontend.lua. Runs on the Packer builder instance during
+# `kevcons build` (under the <app>-frontend-builder IAM profile), BEFORE the AMI
+# is finalized — so fresh assets are in S3 before the ASG roll boots new
+# instances. kevcons injects this as scripts/frontend-build.sh; with weft's
+# nested tarball it extracts to /tmp/scripts/ and the packer template runs it
+# with cwd at the weft source root (/tmp/weft). warp is the sibling /tmp/warp
+# (its frontend/shellcore-wasm npm package is a build dep) and the Go WASM build
+# resolves warp/saaskit via the go.mod replace the Go-build provisioner leaves.
+frontend:
+  build_env:
+    VITE_API_URL: https://api.w3ft.net
+  command: |
+    set -euo pipefail
+    APP_ROOT="$(pwd)"                          # /tmp/weft on the builder
+    WARP_DIR="$(cd "$APP_ROOT/../warp" && pwd)" # sibling /tmp/warp
+    BUCKET="weft-frontend-220664822695"
+
+    # 1. npm deps — warp's shellcore-wasm package first, then the weft frontend
+    ( cd "$WARP_DIR/frontend/shellcore-wasm" && npm ci )
+    ( cd "$APP_ROOT/frontend" && npm ci )
+
+    # 2. Go WASM shell (warp/saaskit resolved via the in-place go.mod replace)
+    ( cd "$APP_ROOT" && GOOS=js GOARCH=wasm go build -ldflags="-s -w" \
+        -o frontend/public/shell.wasm ./cmd/wasm/ )
+
+    # 3. Vite build (VITE_API_URL comes from build_env)
+    ( cd "$APP_ROOT/frontend" && npm run build )
+
+    # 4. Sync dist/ to S3 with correct MIME types + cache headers
+    DIST="$APP_ROOT/frontend/dist"
+    aws s3 sync "$DIST/" "s3://$BUCKET/" --delete \
+      --exclude "*" --include "*.html" \
+      --content-type text/html --cache-control "public,max-age=60"
+    aws s3 sync "$DIST/" "s3://$BUCKET/" \
+      --exclude "*" --include "*.js" \
+      --content-type application/javascript --cache-control "public,max-age=31536000,immutable"
+    aws s3 sync "$DIST/" "s3://$BUCKET/" \
+      --exclude "*" --include "*.css" \
+      --content-type text/css --cache-control "public,max-age=31536000,immutable"
+    aws s3 sync "$DIST/" "s3://$BUCKET/" \
+      --exclude "*" --include "*.svg" \
+      --content-type image/svg+xml --cache-control "public,max-age=3600"
+    aws s3 sync "$DIST/" "s3://$BUCKET/" \
+      --exclude "*" --include "*.wasm" \
+      --content-type application/wasm --cache-control "public,max-age=60"
+    aws s3 sync "$DIST/" "s3://$BUCKET/" \
+      --exclude "*.html" --exclude "*.js" --exclude "*.css" \
+      --exclude "*.svg" --exclude "*.wasm" \
+      --cache-control "public,max-age=3600"
+
+    # 5. Invalidate CloudFront (distribution id from SSM)
+    DIST_ID="$(aws ssm get-parameter \
+      --name /weft/config/cloudfront-distribution-id \
+      --query Parameter.Value --output text)"
+    if [ -n "$DIST_ID" ] && [ "$DIST_ID" != "None" ]; then
+      aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*"
+    else
+      echo "warning: no CloudFront distribution ID in SSM" >&2
+    fi
+
 # Runs on the just-refreshed coordinator (run_remote, via SSM) and then locally.
 # Order matters: point the shard launch templates at the new AMI BEFORE the
 # roll, so relaunched shards come up on a live image rather than the stale one
