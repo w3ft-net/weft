@@ -18,8 +18,15 @@ local targets = {
         pkg         = "./cmd/weft/",
         version_file = "cmd/weft/version.go",
         test_pkgs   = "./cmd/weft/ ./shell/ ./planner/ ./internal/release/",
-        cgo         = true,
+        -- The CLI is pure Go (the local-ingest command that pulled in the
+        -- shard/duckdb CGO edge was removed), so every target cross-compiles
+        -- CGO_ENABLED=0 from a single (linux/amd64) runner — no Mac, no
+        -- per-arch native builders.
+        cgo         = false,
         platforms   = {
+            { goos = "linux",  goarch = "amd64", suffix = "linux-amd64"  },
+            { goos = "linux",  goarch = "arm64", suffix = "linux-arm64"  },
+            { goos = "darwin", goarch = "amd64", suffix = "darwin-amd64" },
             { goos = "darwin", goarch = "arm64", suffix = "darwin-arm64" },
         },
     },

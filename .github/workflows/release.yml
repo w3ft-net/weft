@@ -1,0 +1,111 @@
+name: Release
+
+# Triggered by the status server via workflow_dispatch after a healthy deploy,
+# at the just-deployed SHA (status owns the deploy; this owns the release
+# artifacts). Builds + publishes, from a single linux/amd64 runner:
+#   - weftd agent .deb (linux amd64+arm64)            → releases.w3ft.net
+#   - weft CLI (linux+darwin × amd64+arm64, pure Go)  → releases.w3ft.net
+#   - cold-shard Lambda (x86_64, native Docker build) → weft-cold-shard-query
+#
+# weftd and the weft CLI self-skip unless their cmd/*/version.go is bumped
+# (release.lua checks the remote tag), so re-running on an unchanged release is
+# a no-op for them. The Lambda is rebuilt + redeployed on every release, as the
+# old deploy.yml did (it has no version gate).
+#
+# This is the old deploy.yml's release half — the build/AMI/roll half now lives
+# in the status server. The setup steps mirror that workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit SHA to release (the just-deployed commit)"
+        required: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-2
+  KEVCONS_NO_ASSUME_ROLE: "1"
+  GOPRIVATE: github.com/graybeardcorp/*
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC → AWS_DEPLOY_ROLE
+      contents: write   # release.lua tags + pushes weftd/v* and weft/v*
+
+    steps:
+    - name: Checkout weft @ deployed SHA
+      uses: actions/checkout@v4
+      with:
+        path: weft
+        ref: ${{ inputs.sha }}
+
+    - name: Mint GitHub App token (private sibling checkouts + module fetch)
+      id: app-token
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ vars.GH_APP_ID }}
+        private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+        owner: graybeardcorp
+
+    # warp + saaskit sibling sources: warp/frontend/shellcore-wasm is unused
+    # here, but Dockerfile.lambda's build context is the parent dir and COPYs
+    # warp + saaskit + weft, so the cold-shard Lambda build needs them present.
+    - name: Checkout warp
+      uses: actions/checkout@v4
+      with:
+        repository: graybeardcorp/warp
+        path: warp
+        token: ${{ steps.app-token.outputs.token }}
+
+    - name: Checkout saaskit
+      uses: actions/checkout@v4
+      with:
+        repository: graybeardcorp/saaskit
+        path: saaskit
+        token: ${{ steps.app-token.outputs.token }}
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-region: ${{ env.AWS_REGION }}
+        role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE }}
+        role-session-name: weft-release
+
+    - name: Install kevcons
+      run: |
+        VERSION=$(aws s3 cp s3://kevlar-releases-289202785125/kevcons/LATEST -)
+        aws s3 cp --no-progress \
+          "s3://kevlar-releases-289202785125/kevcons/${VERSION}/kevcons-linux-amd64" \
+          /tmp/kevcons
+        sudo install -m 0755 /tmp/kevcons /usr/local/bin/kevcons
+        kevcons --version
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: weft/go.mod
+        cache-dependency-path: weft/go.sum
+
+    # The weftd/weft builds fetch warp+saaskit as versioned private modules via
+    # the App token, keeping the working tree clean (release.lua refuses to run
+    # with uncommitted changes).
+    - name: Configure git for private Go modules
+      run: git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+
+    - name: Release weftd agent (skips unless cmd/weftd/version.go bumped)
+      working-directory: weft
+      run: kevcons ext release weftd
+
+    - name: Release weft CLI (skips unless cmd/weft/version.go bumped)
+      working-directory: weft
+      run: kevcons ext release weft
+
+    - name: Deploy cold-shard Lambda
+      working-directory: weft
+      run: kevcons ext release-lambda
