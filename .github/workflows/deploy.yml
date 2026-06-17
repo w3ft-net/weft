@@ -1,5 +1,14 @@
 name: Deploy
 
+# CI success on main (or a manual run) notifies the status server
+# (status.graybeardcorp.com), which owns the deploy: frontend on the Packer
+# builder, AMI build, coordinator ASG roll, shard-fleet roll, health check —
+# and, on success, triggers release.yml for the release artifacts.
+#
+# This workflow does nothing but POST the commit to status, authenticated by a
+# GitHub Actions OIDC token (audience = the status host). No AWS creds, no
+# kevcons, no build — all of that moved to status / release.yml.
+
 on:
   workflow_run:
     workflows: ["CI"]
@@ -11,147 +20,38 @@ concurrency:
   group: deploy
   cancel-in-progress: false
 
-env:
-  AWS_REGION: us-east-2
-  KEVCONS_NO_ASSUME_ROLE: "1"
-  GOPRIVATE: github.com/graybeardcorp/*
-
 jobs:
-  deploy:
+  notify-status:
+    # Only after a green CI run (workflow_run) or an explicit manual dispatch.
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
-      contents: write
-
+      id-token: write   # mint the OIDC token the status webhook validates
     steps:
-    - name: Checkout weft
-      uses: actions/checkout@v4
-      with:
-        path: weft
-
-    - name: Mint GitHub App token (private sibling checkouts)
-      id: app-token
-      uses: actions/create-github-app-token@v1
-      with:
-        app-id: ${{ vars.GH_APP_ID }}
-        private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-        owner: graybeardcorp
-
-    # warp + saaskit are versioned Go modules, but the deploy builds them from
-    # source via a go workspace: warp's frontend/shellcore-wasm npm package is
-    # needed for the frontend, and the AMI/lambda builds use the tarred sibling
-    # sources. Check both out (token-authed) and wire go.work below.
-    - name: Checkout warp
-      uses: actions/checkout@v4
-      with:
-        repository: graybeardcorp/warp
-        path: warp
-        token: ${{ steps.app-token.outputs.token }}
-
-    - name: Checkout saaskit
-      uses: actions/checkout@v4
-      with:
-        repository: graybeardcorp/saaskit
-        path: saaskit
-        token: ${{ steps.app-token.outputs.token }}
-
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-region: ${{ env.AWS_REGION }}
-        role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE }}
-        role-session-name: weft-deploy
-
-    - name: Install kevcons
+    - name: Notify status server
+      env:
+        STATUS_URL: https://status.graybeardcorp.com/webhook
+        AUDIENCE: status.graybeardcorp.com
+        # workflow_run carries the triggering commit; a manual dispatch uses the
+        # ref it ran on.
+        SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
       run: |
-        VERSION=$(aws s3 cp s3://kevlar-releases-289202785125/kevcons/LATEST -)
-        aws s3 cp --no-progress \
-          "s3://kevlar-releases-289202785125/kevcons/${VERSION}/kevcons-linux-amd64" \
-          /tmp/kevcons
-        sudo install -m 0755 /tmp/kevcons /usr/local/bin/kevcons
-        kevcons --version
-
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version-file: weft/go.mod
-        cache-dependency-path: weft/go.sum
-
-    # The runner's go builds (shell.wasm, weftd) fetch warp+saaskit as versioned
-    # private modules via the App token — keeping the working tree CLEAN, which
-    # `kevcons build`'s dirty-check requires (go.work proved unreliable here and
-    # `go mod edit -replace` dirties go.mod). The warp *source* checkout above is
-    # only for the shellcore-wasm npm package; the AMI instance builds offline
-    # from the tarred source via its own build-time replace.
-    - name: Configure git for private Go modules
-      run: git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
-
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '22'
-        cache: npm
-        cache-dependency-path: weft/frontend/package-lock.json
-
-    - name: Install warp shellcore-wasm dependencies
-      working-directory: warp/frontend/shellcore-wasm
-      run: npm ci
-
-    - name: Install frontend dependencies
-      working-directory: weft/frontend
-      run: npm ci
-
-    - name: Build shell.wasm
-      working-directory: weft
-      # -ldflags="-s -w" strips Go's symbol table and DWARF debug
-      # sections from the wasm binary, saving ~5% raw and ~10%
-      # compressed without losing any runtime functionality.
-      run: GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o frontend/public/shell.wasm ./cmd/wasm/
-
-    - name: Build frontend
-      working-directory: weft/frontend
-      run: VITE_API_URL=https://api.w3ft.net npm run build
-
-    - name: Deploy frontend
-      working-directory: weft
-      run: kevcons ext release-frontend
-
-    - name: Release weftd binaries
-      working-directory: weft
-      run: kevcons ext release weftd
-
-    - name: Deploy cold shard Lambda
-      working-directory: weft
-      run: kevcons ext release-lambda
-
-    - name: Install Packer
-      run: |
-        curl -fsSL https://releases.hashicorp.com/packer/1.12.0/packer_1.12.0_linux_amd64.zip -o /tmp/packer.zip
-        unzip -o /tmp/packer.zip -d /tmp
-        sudo install -m 0755 /tmp/packer /usr/local/bin/packer
-
-    - name: Init Packer plugins
-      working-directory: weft
-      run: packer init packer/weft.pkr.hcl
-
-    - name: Build AMI
-      working-directory: weft
-      run: kevcons build -y
-
-    - name: Deploy to ASG
-      working-directory: weft
-      run: kevcons deploy --yes
-
-    - name: Smoke test
-      run: |
-        sleep 30
-        for i in $(seq 1 12); do
-          if curl -sf https://api.w3ft.net/health > /dev/null; then
-            echo "Health check passed after $((i * 30 + 30))s"
-            exit 0
-          fi
-          sleep 30
-        done
-        echo "Health check failed after 6.5 minutes"
-        exit 1
+        set -euo pipefail
+        # Mint a GitHub Actions OIDC token scoped to the status audience. The
+        # request URL + token are injected automatically with id-token: write.
+        OIDC=$(curl -sS \
+          -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$AUDIENCE" | jq -r '.value')
+        if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then
+          echo "failed to obtain OIDC token" >&2; exit 1
+        fi
+        echo "Triggering status deploy of weft @ $SHA"
+        code=$(curl -sS -o /tmp/resp.json -w '%{http_code}' -X POST "$STATUS_URL" \
+          -H "Authorization: Bearer $OIDC" \
+          -H "Content-Type: application/json" \
+          -d "{\"app\":\"weft\",\"sha\":\"$SHA\"}")
+        cat /tmp/resp.json || true; echo
+        if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+          echo "status webhook returned HTTP $code" >&2; exit 1
+        fi
+        echo "status accepted the deploy (HTTP $code)"
