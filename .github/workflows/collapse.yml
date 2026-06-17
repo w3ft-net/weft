@@ -1,0 +1,64 @@
+name: Collapse migrations
+
+# Triggered by the status server (workflow_dispatch) after a healthy deploy,
+# alongside release.yml. Folds the migrations the just-deployed AMI applied into
+# store/schema.sql via scripts/collapse-migrations.sh (a transient postgres +
+# weft-migrate — deterministic, no AWS, no remote DB) and commits the result to
+# main. Pure housekeeping: a failure here never touches prod or the deploy.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Deployed commit (informational; collapse runs on main HEAD)"
+        required: false
+
+concurrency:
+  group: collapse
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # commit + push the collapsed store/schema.sql
+
+jobs:
+  collapse:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout main
+      uses: actions/checkout@v4
+      with:
+        ref: main
+
+    - name: Mint GitHub App token (weft-migrate fetches warp as a private module)
+      id: app-token
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ vars.GH_APP_ID }}
+        private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+        owner: graybeardcorp
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+
+    - name: Configure git for private Go modules
+      run: git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+
+    - name: Collapse migrations (transient postgres + weft-migrate)
+      run: make collapse
+
+    - name: Commit collapsed schema if changed
+      run: |
+        set -euo pipefail
+        if git diff --quiet -- store/schema.sql store/migrations; then
+          echo "no migration changes to collapse"
+          exit 0
+        fi
+        git config user.name "graybeardcorp-status[bot]"
+        git config user.email "status@graybeardcorp.com"
+        git add store/schema.sql store/migrations
+        git commit -m "store: collapse migrations through the just-deployed AMI
+
+        Triggered by status after deploy ${{ inputs.sha }}."
+        git push origin HEAD:main

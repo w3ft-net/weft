@@ -95,19 +95,20 @@ frontend:
       echo "warning: no CloudFront distribution ID in SSM" >&2
     fi
 
-# Runs on the just-refreshed coordinator (run_remote, via SSM) and then locally.
-# Order matters: point the shard launch templates at the new AMI BEFORE the
-# roll, so relaunched shards come up on a live image rather than the stale one
-# Terraform stamped (the shard LTs carry lifecycle ignore_changes = image_id).
+# Runs on the just-refreshed coordinator (run_remote, via SSM). Order matters:
+# point the shard launch templates at the new AMI BEFORE the roll, so relaunched
+# shards come up on a live image rather than the stale one Terraform stamped
+# (the shard LTs carry lifecycle ignore_changes = image_id).
 #
 #   1. bump-shard-templates — CreateLaunchTemplateVersion per tier → new AMI.
 #   2. roll-all — relaunch each stale shard; it reads the AMI's ShardGitSHA tag
 #      to skip shards already on the target SHA (coordinator-only deploys are a
 #      fleet no-op). on_error: fail — a half-rolled fleet must stop the deploy.
-#   3. make collapse (run_local) — fold the now-applied migrations into
-#      store/schema.sql so a virgin DB matches prod by construction. See
-#      docs/plans/migration-collapse.md. on_error: warn — the deploy already
-#      succeeded; a collapse/commit hiccup is housekeeping, not a rollback.
+#
+# Migration collapse used to be a third run_local step here, but it commits to
+# the repo and the status box has no repo-write credentials. It now runs as the
+# collapse.yml CI workflow, which status fires (workflow_dispatch) after a
+# healthy deploy alongside release.yml.
 post_deploy:
   - name: Point shard launch templates at the just-deployed AMI
     run_remote: sudo /opt/app/bin/weft-admin-run bump-shard-templates
@@ -115,10 +116,3 @@ post_deploy:
   - name: Roll the shard fleet onto the new AMI
     run_remote: sudo /opt/app/bin/weft-admin-run roll-all
     on_error: fail
-  - name: Collapse migrations through the just-deployed AMI
-    run_local: make collapse
-    on_error: warn
-    commit:
-      paths: [store/schema.sql, store/migrations/]
-      message: "store: collapse migrations through the just-deployed AMI"
-      on_error: warn
