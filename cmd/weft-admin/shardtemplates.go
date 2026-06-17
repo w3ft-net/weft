@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 )
 
@@ -76,46 +79,51 @@ func sortedTiers(templates map[string]string) []string {
 }
 
 // resolveShardTargetSHA loads AWS config and resolves the shard SHA the fleet
-// should be on from the launch template's AMI tag. Convenience wrapper for
+// should be on from the coordinator's *own* AMI tag. Convenience wrapper for
 // callers (roll-all) that don't otherwise hold an EC2 client.
 func resolveShardTargetSHA(ctx context.Context) (string, error) {
+	amiID, err := ownImageID(ctx)
+	if err != nil {
+		return "", fmt.Errorf("resolve own AMI from IMDS: %w", err)
+	}
 	cfg, err := loadAWSConfig(ctx)
 	if err != nil {
 		return "", err
 	}
-	return shardTargetSHAFromLaunchTemplate(ctx, ec2.NewFromConfig(cfg))
+	return shardTargetSHAFromAMI(ctx, ec2.NewFromConfig(cfg), amiID)
 }
 
-// shardTargetSHAFromLaunchTemplate resolves the shard SHA the fleet *should* be
-// on: it reads any shard tier's launch template $Latest version, follows it to
-// the AMI, and returns that AMI's ShardGitSHA tag. All tiers share the same
-// AMI, so the first tier (sorted) is authoritative.
+// ownImageID reads the running instance's AMI id from IMDS
+// (/latest/meta-data/ami-id). weft-admin runs on the coordinator, which shares a
+// single weft AMI with the shards — so its own image is the source of truth for
+// "what SHA the fleet should be on", and it's guaranteed live (the box booted
+// from it), unlike the launch template's possibly stale/deleted AMI.
+func ownImageID(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := imds.New(imds.Options{}).GetMetadata(ctx, &imds.GetMetadataInput{Path: "ami-id"})
+	if err != nil {
+		return "", err
+	}
+	defer out.Content.Close()
+	b, err := io.ReadAll(out.Content)
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(string(b))
+	if id == "" {
+		return "", fmt.Errorf("IMDS returned empty ami-id")
+	}
+	return id, nil
+}
+
+// shardTargetSHAFromAMI follows an AMI id to its ShardGitSHA tag — the shard
+// SHA the fleet *should* be on.
 //
 // Returns "" (meaning "roll everything", per shardsToRoll's empty-target
-// semantics) when no launch template is configured or the AMI carries no
-// ShardGitSHA tag — the bootstrap case for AMIs built before tagging existed.
-func shardTargetSHAFromLaunchTemplate(ctx context.Context, ec2c *ec2.Client) (string, error) {
-	templates := shardLaunchTemplateIDs()
-	if len(templates) == 0 {
-		return "", nil
-	}
-	ltID := templates[sortedTiers(templates)[0]]
-
-	ltv, err := ec2c.DescribeLaunchTemplateVersions(ctx, &ec2.DescribeLaunchTemplateVersionsInput{
-		LaunchTemplateId: aws.String(ltID),
-		Versions:         []string{"$Latest"},
-	})
-	if err != nil {
-		return "", fmt.Errorf("describe launch template %s: %w", ltID, err)
-	}
-	if len(ltv.LaunchTemplateVersions) == 0 || ltv.LaunchTemplateVersions[0].LaunchTemplateData == nil {
-		return "", fmt.Errorf("launch template %s has no $Latest version data", ltID)
-	}
-	amiID := aws.ToString(ltv.LaunchTemplateVersions[0].LaunchTemplateData.ImageId)
-	if amiID == "" {
-		return "", fmt.Errorf("launch template %s $Latest has no ImageId", ltID)
-	}
-
+// semantics) when the AMI carries no ShardGitSHA tag — the bootstrap case for
+// AMIs built before tagging existed.
+func shardTargetSHAFromAMI(ctx context.Context, ec2c *ec2.Client, amiID string) (string, error) {
 	imgs, err := ec2c.DescribeImages(ctx, &ec2.DescribeImagesInput{ImageIds: []string{amiID}})
 	if err != nil {
 		return "", fmt.Errorf("describe image %s: %w", amiID, err)

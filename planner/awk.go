@@ -97,13 +97,13 @@ func tryAwkPushdown(program string) *awkPushdown {
 	case *awk.ExprPattern:
 		pd = extractAwkExpr(pat.Expr)
 	case *awk.RegexPattern:
-		// awk '/pat/' is a positive regex match against the whole row.
-		// Use DuckDB's regexp_matches (substring/find) so anchors /
-		// character classes / quantifiers actually work. The previous
-		// `raw ~` encoding looked right but `~` in DuckDB is whole-
-		// string regex (SIMILAR TO semantics); regexp_matches is the
-		// PostgreSQL-`~` equivalent the user actually wants from awk
-		// regex matching.
+		// Defensive: current warp parsers represent a bare-regex pattern
+		// (awk '/pat/') as an ExprPattern wrapping a RegexLit, which the
+		// ExprPattern case above handles via extractAwkRegexLit. This branch
+		// stays for any warp version/path that still emits a dedicated
+		// RegexPattern. awk '/pat/' is a positive regex match against the whole
+		// row; DuckDB's regexp_matches (substring/find) is the PostgreSQL-`~`
+		// equivalent (DuckDB's own `~` is whole-string SIMILAR TO semantics).
 		pd = &awkPushdown{
 			predicate: fmt.Sprintf("regexp_matches(raw, '%s')", escapeSQLString(pat.Pattern)),
 			limitSafe: true,
@@ -228,8 +228,25 @@ func extractAwkExpr(expr awk.Expr) *awkPushdown {
 		return extractAwkBinary(e)
 	case *awk.MatchExpr:
 		return extractAwkMatch(e)
+	case *awk.RegexLit:
+		return extractAwkRegexLit(e)
 	}
 	return nil
+}
+
+// extractAwkRegexLit handles a bare /re/ used as a truthy expression, which awk
+// treats as `$0 ~ /re/` — a positive whole-row regex match. warp's parser
+// represents a bare-regex *pattern* (e.g. `awk '/timeout/'`) as an ExprPattern
+// wrapping a RegexLit rather than a dedicated RegexPattern, so this is the path
+// that fires for the common bare-filter case (and for a /re/ sub-expression
+// inside an && / || chain). It mirrors the positive `$0 ~ /re/` MatchExpr case:
+// regexp_matches(raw, 'pat') is DuckDB's substring/find form, and a positive
+// match narrows the result set so it is limit-safe.
+func extractAwkRegexLit(e *awk.RegexLit) *awkPushdown {
+	return &awkPushdown{
+		predicate: fmt.Sprintf("regexp_matches(raw, '%s')", escapeSQLString(e.Pattern)),
+		limitSafe: true,
+	}
 }
 
 func extractAwkBinary(e *awk.BinaryExpr) *awkPushdown {

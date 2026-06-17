@@ -94,6 +94,7 @@ func newLaunchProvisioner(t *testing.T, az string) (*logdb.EC2Provisioner, *ec2.
 	prov := logdb.NewEC2ProvisionerWithClient(ec2c, vm,
 		map[string]map[string]string{"small": {az: subnetInAZ(t, ec2c, az)}},
 		map[string]string{"small": createLaunchTemplate(t, ec2c)},
+		"", // no AMI override under LocalStack: use the launch template's image
 	)
 	return prov, ec2c
 }

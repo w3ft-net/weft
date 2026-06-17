@@ -1,0 +1,48 @@
+digraph {
+	compound=true;
+	node [shape=box, style=rounded];
+	rankdir="LR";
+
+	init [label="", shape=point];
+	init -> LAUNCHING;
+
+	ARCHIVED [label="ARCHIVED\n----------\nentry / onEnterArchived-fm\l"];
+	ARCHIVING [label="ARCHIVING"];
+	DEGRADED [label="DEGRADED\n----------\nentry / onEnterDegraded-fm\l"];
+	GONE [label="GONE\n----------\nentry / onEnterGone-fm\l"];
+	INGESTING [label="INGESTING"];
+	LAUNCHING [label="LAUNCHING\n----------\nentry / onEnterLaunching-fm\l"];
+	READ_ONLY [label="READ_ONLY"];
+	SUSPENDED [label="SUSPENDED\n----------\nentry / onEnterSuspended-fm\l"];
+	UPGRADING [label="UPGRADING\n----------\nentry / onEnterUpgrading-fm\l"];
+	ARCHIVED -> GONE [label="admin-delete"];
+	ARCHIVING -> ARCHIVED [label="archive-complete"];
+	DEGRADED -> INGESTING [label="ingest-recovered"];
+	DEGRADED -> UPGRADING [label="relaunch-requested"];
+	DEGRADED -> READ_ONLY [label="rotate-requested"];
+	INGESTING -> DEGRADED [label="ingest-degraded"];
+	INGESTING -> UPGRADING [label="relaunch-requested"];
+	INGESTING -> READ_ONLY [label="rotate-requested"];
+	LAUNCHING -> GONE [label="launch-failed"];
+	READ_ONLY -> ARCHIVING [label="archive-requested"];
+	READ_ONLY -> UPGRADING [label="relaunch-requested"];
+	SUSPENDED -> LAUNCHING [label="relaunch"];
+	SUSPENDED -> GONE [label="stranded"];
+	UPGRADING -> LAUNCHING [label="relaunch"];
+	UPGRADING -> GONE [label="stranded"];
+
+	// dynamic (PermitDynamic) transitions — destination chosen by a guard at fire time
+	edge [style=dashed];
+	LAUNCHING -> INGESTING [label="heartbeat", color="#1a7f37", fontcolor="#1a7f37"];
+	LAUNCHING -> READ_ONLY [label="heartbeat (post-recovery)", color="#1a7f37", fontcolor="#1a7f37"];
+	LAUNCHING -> DEGRADED [label="heartbeat (post-recovery)", color="#1a7f37", fontcolor="#1a7f37"];
+	SUSPENDED -> INGESTING [label="heartbeat", color="#1a7f37", fontcolor="#1a7f37"];
+	SUSPENDED -> READ_ONLY [label="heartbeat (post-recovery)", color="#1a7f37", fontcolor="#1a7f37"];
+	SUSPENDED -> DEGRADED [label="heartbeat (post-recovery)", color="#1a7f37", fontcolor="#1a7f37"];
+	INGESTING -> SUSPENDED [label="heartbeat-stale (EBS survives)", color="#cf222e", fontcolor="#cf222e"];
+	INGESTING -> GONE [label="heartbeat-stale (no volume)", color="#cf222e", fontcolor="#cf222e"];
+	DEGRADED -> SUSPENDED [label="heartbeat-stale (EBS survives)", color="#cf222e", fontcolor="#cf222e"];
+	DEGRADED -> GONE [label="heartbeat-stale (no volume)", color="#cf222e", fontcolor="#cf222e"];
+	READ_ONLY -> SUSPENDED [label="heartbeat-stale (EBS survives)", color="#cf222e", fontcolor="#cf222e"];
+	READ_ONLY -> GONE [label="heartbeat-stale (no volume)", color="#cf222e", fontcolor="#cf222e"];
+}

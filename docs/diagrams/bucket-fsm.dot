@@ -1,0 +1,18 @@
+digraph {
+	compound=true;
+	node [shape=box, style=rounded];
+	rankdir="LR";
+
+	init [label="", shape=point];
+	init -> STASIS;
+
+	ROTATING [label="ROTATING\n----------\nentry / onEnterRotating-fm\l"];
+	SCALING_DOWN [label="SCALING_DOWN\n----------\nentry / onEnterScalingDown-fm\l"];
+	STASIS [label="STASIS\n----------\nentry / onEnterStasis-fm\l"];
+	WARMING [label="WARMING\n----------\nentry / onEnterWarming-fm\l"];
+	ROTATING -> STASIS [label="old-shards-rotated"];
+	SCALING_DOWN -> STASIS [label="settled"];
+	STASIS -> WARMING [label="rotation-needed\lscale-up-requested\l"];
+	STASIS -> SCALING_DOWN [label="scale-down-requested"];
+	WARMING -> ROTATING [label="all-replacements-ready"];
+}

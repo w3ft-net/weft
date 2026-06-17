@@ -3,6 +3,7 @@ package logdb
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"sort"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
@@ -82,6 +84,17 @@ type EC2Provisioner struct {
 	subnets   map[string]map[string]string
 	templates map[string]string
 
+	// imageID is the AMI new shards launch from, overriding the one baked into
+	// the launch template. It is the coordinator's *own* running AMI (resolved
+	// from IMDS at boot): coordinator and shards share a single weft AMI, so the
+	// image the coordinator is running is — by construction — live, the deployed
+	// build, and the exact code shards should run. This makes launches immune to
+	// a stale/dead launch-template AMI (Terraform's frozen stamp, a missed
+	// post-deploy bump, or an AMI the build's retention sweep deleted). Empty
+	// when IMDS is unavailable (off-EC2 tests, metadata hiccup) → no override,
+	// falling back to the launch template's AMI.
+	imageID string
+
 	pollInterval time.Duration
 	pollAttempts int
 }
@@ -99,19 +112,56 @@ func NewEC2Provisioner(region string, subnets map[string]map[string]string, temp
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
-	return NewEC2ProvisionerWithClient(ec2.NewFromConfig(cfg), volumes, subnets, templates), nil
+	// Resolve the coordinator's own AMI so shards launch from it rather than the
+	// launch template's (possibly stale/dead) baked image. A failure here is not
+	// fatal: we log and fall back to the template AMI, preserving prior behavior.
+	imageID, err := resolveOwnImageID(context.Background())
+	if err != nil {
+		log.Printf("ec2-provisioner: could not resolve own AMI from IMDS (%v); shard launches will fall back to the launch template AMI", err)
+		imageID = ""
+	} else {
+		log.Printf("ec2-provisioner: shards will launch from the coordinator's own AMI %s", imageID)
+	}
+	return NewEC2ProvisionerWithClient(ec2.NewFromConfig(cfg), volumes, subnets, templates, imageID), nil
 }
 
-// NewEC2ProvisionerWithClient injects collaborators (for tests).
-func NewEC2ProvisionerWithClient(client EC2RunAPI, volumes VolumeManager, subnets map[string]map[string]string, templates map[string]string) *EC2Provisioner {
+// NewEC2ProvisionerWithClient injects collaborators (for tests). imageID is the
+// AMI to launch shards from (overriding the launch template); "" disables the
+// override and uses the template's baked AMI.
+func NewEC2ProvisionerWithClient(client EC2RunAPI, volumes VolumeManager, subnets map[string]map[string]string, templates map[string]string, imageID string) *EC2Provisioner {
 	return &EC2Provisioner{
 		ec2:          client,
 		volumes:      volumes,
 		subnets:      subnets,
 		templates:    templates,
+		imageID:      imageID,
 		pollInterval: 5 * time.Second,
 		pollAttempts: 36, // ~3 min ceiling on reaching `running`
 	}
+}
+
+// resolveOwnImageID reads the running instance's AMI id from IMDS
+// (/latest/meta-data/ami-id). Coordinator and shards share one weft AMI, so the
+// coordinator's own image is the live, deployed, shard-correct AMI to launch
+// from. A short timeout keeps a non-EC2 environment (or metadata outage) from
+// stalling boot — the caller treats any error as "no override".
+func resolveOwnImageID(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := imds.New(imds.Options{}).GetMetadata(ctx, &imds.GetMetadataInput{Path: "ami-id"})
+	if err != nil {
+		return "", err
+	}
+	defer out.Content.Close()
+	b, err := io.ReadAll(out.Content)
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(string(b))
+	if id == "" {
+		return "", fmt.Errorf("IMDS returned empty ami-id")
+	}
+	return id, nil
 }
 
 // AZsForTier returns the tier's configured AZs, sorted so stripe-index
@@ -260,7 +310,7 @@ func (p *EC2Provisioner) findLiveByShard(ctx context.Context, shardID string) (s
 // from findLiveByShard (a stable token would, across recovery generations,
 // return the prior — terminated — instance instead of launching a new one).
 func (p *EC2Provisioner) runInstance(ctx context.Context, spec LaunchSpec, subnet, templateID string) (string, error) {
-	out, err := p.ec2.RunInstances(ctx, &ec2.RunInstancesInput{
+	in := &ec2.RunInstancesInput{
 		LaunchTemplate: &ec2types.LaunchTemplateSpecification{
 			LaunchTemplateId: aws.String(templateID),
 			Version:          aws.String("$Latest"),
@@ -275,9 +325,15 @@ func (p *EC2Provisioner) runInstance(ctx context.Context, spec LaunchSpec, subne
 				{Key: aws.String("Name"), Value: aws.String(spec.ShardID)},
 			},
 		}},
-	})
+	}
+	// Override the template's baked AMI with the coordinator's own (live,
+	// deployed) image. Skipped when unresolved, leaving the template AMI in play.
+	if p.imageID != "" {
+		in.ImageId = aws.String(p.imageID)
+	}
+	out, err := p.ec2.RunInstances(ctx, in)
 	if err != nil {
-		return "", fmt.Errorf("RunInstances(template=%s subnet=%s): %w", templateID, subnet, err)
+		return "", fmt.Errorf("RunInstances(template=%s subnet=%s image=%s): %w", templateID, subnet, p.imageID, err)
 	}
 	if len(out.Instances) == 0 || out.Instances[0].InstanceId == nil {
 		return "", fmt.Errorf("RunInstances(template=%s subnet=%s): no instance returned", templateID, subnet)

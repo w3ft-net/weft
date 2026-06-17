@@ -25,6 +25,7 @@ import (
 type fakeEC2Instance struct {
 	id           string
 	tags         map[string]string
+	imageID      string // ImageId from the RunInstances request ("" if none)
 	state        string // pending | running | terminated
 	pendingPolls int
 }
@@ -58,6 +59,7 @@ func (f *fakeEC2) RunInstances(_ context.Context, in *ec2.RunInstancesInput, _ .
 	inst := &fakeEC2Instance{
 		id:           fmt.Sprintf("i-%d", f.nextID),
 		tags:         tags,
+		imageID:      aws.ToString(in.ImageId),
 		state:        "pending",
 		pendingPolls: f.launchDelay,
 	}
@@ -166,6 +168,7 @@ func newTestEC2Provisioner(client EC2RunAPI, vm VolumeManager) *EC2Provisioner {
 	p := NewEC2ProvisionerWithClient(client, vm,
 		map[string]map[string]string{"small": {"us-east-2a": "subnet-a", "us-east-2b": "subnet-b"}},
 		map[string]string{"small": "lt-small"},
+		"", // no AMI override: exercise the launch-template fallback path
 	)
 	p.pollInterval = time.Millisecond
 	return p
@@ -208,6 +211,35 @@ func TestEC2Provisioner_LaunchFresh(t *testing.T) {
 	}
 	if got := ec2InstanceCount(f); got != 1 {
 		t.Fatalf("want 1 live instance, got %d", got)
+	}
+	// No AMI override configured → RunInstances carries no ImageId and the
+	// launch template's baked image stands (the off-EC2/IMDS-failure fallback).
+	if f.insts[0].imageID != "" {
+		t.Fatalf("expected no ImageId override, got %q", f.insts[0].imageID)
+	}
+}
+
+// TestEC2Provisioner_LaunchOverridesAMI is the dead-launch-template guard: when
+// the provisioner knows the coordinator's own AMI, every shard launch overrides
+// the template's baked image with it, so a stale/deleted template AMI can't wedge
+// the fleet.
+func TestEC2Provisioner_LaunchOverridesAMI(t *testing.T) {
+	f := newFakeEC2()
+	vm := &fakeVolumeManager{}
+	p := NewEC2ProvisionerWithClient(f, vm,
+		map[string]map[string]string{"small": {"us-east-2a": "subnet-a"}},
+		map[string]string{"small": "lt-small"},
+		"ami-own123", // coordinator's own (live) image
+	)
+	p.pollInterval = time.Millisecond
+
+	if _, err := p.Launch(context.Background(), LaunchSpec{
+		ShardID: "s-1", Tier: "small", AZ: "us-east-2a", SizeGB: 20,
+	}); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if f.insts[0].imageID != "ami-own123" {
+		t.Fatalf("RunInstances ImageId: want ami-own123, got %q", f.insts[0].imageID)
 	}
 }
 

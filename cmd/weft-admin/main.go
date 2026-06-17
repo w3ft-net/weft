@@ -303,20 +303,23 @@ func rollAllCmd(args []string) {
 
 	ctx := context.Background()
 
-	// Default the skip-if-current target to the SHA the shard launch template's
-	// AMI advertises (its ShardGitSHA tag): only shards whose binary_sha differs
-	// get rolled, so a coordinator-only deploy is a fleet no-op. An explicit
-	// --target-sha overrides; an untagged AMI ("") rolls every live shard.
+	// Default the skip-if-current target to the SHA the coordinator's own AMI
+	// advertises (its ShardGitSHA tag): only shards whose binary_sha differs get
+	// rolled, so a coordinator-only deploy is a fleet no-op. The coordinator's
+	// own image is the live, deployed AMI shards launch from — so the fleet rolls
+	// toward what the coordinator is actually running, not whatever a stale
+	// launch template happens to point at. An explicit --target-sha overrides; an
+	// untagged AMI ("") rolls every live shard.
 	if c.targetSHA == "" {
 		sha, err := resolveShardTargetSHA(ctx)
 		if err != nil {
-			log.Fatalf("resolve target SHA from shard launch template: %v", err)
+			log.Fatalf("resolve target SHA from coordinator AMI: %v", err)
 		}
 		if sha != "" {
 			c.targetSHA = sha
-			fmt.Printf("target SHA (from shard launch template AMI): %s\n", sha)
+			fmt.Printf("target SHA (from coordinator's own AMI): %s\n", sha)
 		} else {
-			fmt.Println("no ShardGitSHA tag on the launch template AMI; rolling all live shards")
+			fmt.Println("no ShardGitSHA tag on the coordinator AMI; rolling all live shards")
 		}
 	}
 

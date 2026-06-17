@@ -81,6 +81,15 @@ func TestPushdown_SingleStage_Awk(t *testing.T) {
 			pipeline: `cat vimgym.log | awk '$0 !~ /timeout/'`,
 			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND NOT regexp_matches(raw, 'timeout')`,
 		},
+		{
+			// A bare /re/ as a sub-expression of an && chain. warp parses the
+			// bare regex into a RegexLit inside the ExprPattern, so this guards
+			// extractAwkExpr's RegexLit recursion (the same node that broke the
+			// top-level bare-filter pushdown when warp's pattern AST changed).
+			name:     "bare regex AND meta-var",
+			pipeline: `cat vimgym.log | awk '/timeout/ && $LEVEL == "ERROR"'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'timeout') AND level = 'ERROR'`,
+		},
 
 		// Compound conditions
 		{
