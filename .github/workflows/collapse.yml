@@ -57,8 +57,12 @@ jobs:
         fi
         git config user.name "graybeardcorp-status[bot]"
         git config user.email "status@graybeardcorp.com"
+        # [skip ci] belt-and-suspenders: this push uses GITHUB_TOKEN, whose
+        # pushes already don't trigger workflows — but if that auth ever changes
+        # (e.g. an App token), [skip ci] still keeps the collapse commit from
+        # re-triggering CI → deploy.yml → another deploy → collapse (a loop).
         git add store/schema.sql store/migrations
-        git commit -m "store: collapse migrations through the just-deployed AMI
+        git commit -m "store: collapse migrations through the just-deployed AMI [skip ci]
 
         Triggered by status after deploy ${{ inputs.sha }}."
         git push origin HEAD:main
