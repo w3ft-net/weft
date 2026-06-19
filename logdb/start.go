@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -120,6 +121,39 @@ func parseShardSubnets() map[string]map[string]string {
 	return out
 }
 
+// parseShardVolumeSizes reads the per-tier fresh data-volume sizes (in GiB)
+// from the environment — SHARD_SMALL_VOLUME_GB / SHARD_MEDIUM_VOLUME_GB /
+// SHARD_LARGE_VOLUME_GB, each a single integer, e.g.
+//
+//	SHARD_SMALL_VOLUME_GB="25"
+//
+// These come from Terraform (the asg-weft-application stack's
+// shard_<tier>_volume_gb vars). Returns tier→GiB for the tiers that set a
+// positive value; a tier missing or malformed here falls back to
+// defaultShardVolumeGB at launch (see ShardDeps.volumeSizeGB). Empty when no
+// tier is configured (dev mode), which is fine — the docker launcher ignores
+// volume size.
+func parseShardVolumeSizes() map[string]int32 {
+	out := map[string]int32{}
+	for tier, env := range map[string]string{
+		"small":  "SHARD_SMALL_VOLUME_GB",
+		"medium": "SHARD_MEDIUM_VOLUME_GB",
+		"large":  "SHARD_LARGE_VOLUME_GB",
+	} {
+		raw := strings.TrimSpace(os.Getenv(env))
+		if raw == "" {
+			continue
+		}
+		gb, err := strconv.Atoi(raw)
+		if err != nil || gb <= 0 {
+			log.Printf("warning: %s=%q is not a positive integer, ignoring (tier %s falls back to %d GiB)", env, raw, tier, defaultShardVolumeGB)
+			continue
+		}
+		out[tier] = int32(gb)
+	}
+	return out
+}
+
 // parseShardTemplates reads the per-tier EC2 launch template ids from the
 // environment — SHARD_SMALL_LAUNCH_TEMPLATE / SHARD_MEDIUM_LAUNCH_TEMPLATE /
 // SHARD_LARGE_LAUNCH_TEMPLATE — each a single launch-template id, e.g.
@@ -168,6 +202,8 @@ func startProd(cfg Config, reg *ShardRegistry, lambdaURL string, subnets map[str
 	provConfig.ShardSecret = cfg.ShardSecret
 	provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
 	provConfig.LambdaFunctionURL = lambdaURL
+	provConfig.VolumeSizesGB = parseShardVolumeSizes()
+	log.Printf("provisioner: per-tier volume sizes (GiB) from env: %v (tiers absent fall back to %d)", provConfig.VolumeSizesGB, defaultShardVolumeGB)
 	prov := NewProvisioner(reg, launcher, provConfig)
 	prov.SetVolumeManager(vm)
 

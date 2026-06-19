@@ -20,8 +20,15 @@ import (
 // DuckDB data (matches entrypoint.sh's mount of /dev/sdf).
 const shardVolumeDevice = "/dev/sdf"
 
-// freshShardVolumeGB is the size of a newly-created shard data volume.
-const freshShardVolumeGB int32 = 50
+// defaultShardVolumeGB is the fallback size for a newly-created shard data
+// volume when the tier has no SHARD_<TIER>_VOLUME_GB override wired through
+// (dev mode, or a misconfigured prod env). Production sizes come per-tier from
+// Terraform via ProvisionerConfig.VolumeSizesGB — see logdb.parseShardVolumeSizes.
+// Sized to the small tier's realistic floor so a missing override never
+// over-provisions: on a t4g.micro the binding disk constraint is co-located
+// DuckDB spill headroom, not data, and ~25 GiB holds a ~12 GiB .duckdb plus an
+// equal spill arena (see duck-db-tuning.md).
+const defaultShardVolumeGB int32 = 25
 
 // ShardLaunchAPI is the launch primitive the shard FSM depends on. Narrow
 // so test fakes don't have to stand up a whole EC2 client.

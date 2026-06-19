@@ -3,15 +3,19 @@ package shard
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
-	_ "github.com/duckdb/duckdb-go/v2"
+	duckdb "github.com/duckdb/duckdb-go/v2"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
@@ -62,7 +66,62 @@ type DuckDBShard struct {
 	dbPath   string
 	db       *sql.DB
 	rowCount atomic.Int64
+	qstats   queryStats
 }
+
+// queryStats accumulates per-query execution timings between telemetry samples;
+// snapshot() reads and resets it each interval. The slow tail (MaxMs) is the
+// signal that matters: when a shard's table outgrows memory_limit and queries
+// start spilling to disk, it's the worst-case latency that jumps — exactly the
+// quantity we want to correlate against the volume's fill level (see
+// runShardStats in cmd/shard).
+type queryStats struct {
+	mu    sync.Mutex
+	count int64
+	errs  int64
+	rows  int64
+	sumMs float64
+	maxMs float64
+}
+
+func (q *queryStats) record(d time.Duration, rows int, err error) {
+	ms := float64(d.Microseconds()) / 1000
+	q.mu.Lock()
+	q.count++
+	q.sumMs += ms
+	if ms > q.maxMs {
+		q.maxMs = ms
+	}
+	q.rows += int64(rows)
+	if err != nil {
+		q.errs++
+	}
+	q.mu.Unlock()
+}
+
+// QueryStatsSnapshot is one telemetry interval's query-latency aggregate.
+type QueryStatsSnapshot struct {
+	Count  int64   // queries executed in the interval
+	Errors int64   // of which failed
+	Rows   int64   // total rows returned
+	MeanMs float64 // mean execution time (ms)
+	MaxMs  float64 // slowest single query (ms) — the spill-sensitive tail
+}
+
+func (q *queryStats) snapshot() QueryStatsSnapshot {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	s := QueryStatsSnapshot{Count: q.count, Errors: q.errs, Rows: q.rows, MaxMs: q.maxMs}
+	if q.count > 0 {
+		s.MeanMs = q.sumMs / float64(q.count)
+	}
+	q.count, q.errs, q.rows, q.sumMs, q.maxMs = 0, 0, 0, 0, 0
+	return s
+}
+
+// QueryStatsSnapshot reads and resets the shard's query-latency accumulator.
+// Called once per telemetry interval by the stats emitter.
+func (s *DuckDBShard) QueryStatsSnapshot() QueryStatsSnapshot { return s.qstats.snapshot() }
 
 const createTableSQL = `
 CREATE TABLE IF NOT EXISTS logs (
@@ -187,58 +246,81 @@ func (s *DuckDBShard) QueryToSink(query string, args []any, sink RowSink) {
 	}
 }
 
-// Ingest batch-inserts rows into the logs table. On error, reports
-// the failure to rec (if non-nil) and returns an error message that
-// names the shard and the resulting consecutive-failure count so
-// callers only need a single log line.
+// logColumns is the explicit column order the Appender binds to. Naming the
+// columns (rather than relying on physical table order) keeps ingest correct on
+// migrated shards, whose on-disk column order diverges from createTableSQL once
+// ALTER TABLE ADD/DROP has run. The AppendRow argument order below must match
+// this list exactly.
+var logColumns = []string{
+	"raw", "fields", "ts", "level", "namespace", "service", "kind",
+	"instance", "customer", "payload", "deployment", "env", "version",
+	"region", "cluster", "k8s_namespace", "pod", "container", "node",
+}
+
+// Ingest bulk-loads rows into the logs table via DuckDB's Appender — the
+// driver's fastest write path: it streams values straight into columnar chunks,
+// skipping the SQL parse/bind a multi-row INSERT pays per batch. On error it
+// reports the failure to rec (if non-nil) and returns an error naming the shard
+// and the resulting consecutive-failure count so callers need a single log line.
 func (s *DuckDBShard) Ingest(rows []*pb.LogRow, rec IngestRecorder) error {
 	if len(rows) == 0 {
 		return nil
 	}
 
-	var sb strings.Builder
-	sb.WriteString("INSERT INTO logs (raw, fields, ts, level, namespace, service, kind, instance, customer, payload, deployment, env, version, region, cluster, k8s_namespace, pod, container, node) VALUES ")
-
-	args := make([]any, 0, len(rows)*19)
-	for i, r := range rows {
-		if i > 0 {
-			sb.WriteString(", ")
-		}
-		sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-
-		payloadStr := "{}"
-		if len(r.PayloadJson) > 0 {
-			payloadStr = string(r.PayloadJson)
-		}
-
-		kind := r.Kind
-		if kind == "" {
-			kind = "main"
-		}
-		args = append(args,
-			r.Raw,
-			r.Fields,
-			time.Unix(0, r.TsUnixNs),
-			r.Level,
-			r.Namespace,
-			r.Service,
-			kind,
-			r.Instance,
-			r.Customer,
-			payloadStr,
-			r.Deployment,
-			r.Env,
-			r.Version,
-			r.Region,
-			r.Cluster,
-			r.K8SNamespace,
-			r.Pod,
-			r.Container,
-			r.Node,
-		)
+	// The Appender works against a single driver connection, so borrow one from
+	// the pool for the batch and hand it back on return.
+	conn, err := s.db.Conn(context.Background())
+	if err != nil {
+		return wrapIngestError(s.id, fmt.Errorf("acquire conn: %w", err), rec)
 	}
+	defer conn.Close()
 
-	_, err := s.db.Exec(sb.String(), args...)
+	err = conn.Raw(func(dc any) error {
+		appender, aerr := duckdb.NewAppenderWithColumns(dc.(driver.Conn), "", "", "logs", logColumns)
+		if aerr != nil {
+			return fmt.Errorf("new appender: %w", aerr)
+		}
+		for _, r := range rows {
+			// payload is a JSON column; setJSON marshals whatever we pass, so a
+			// json.RawMessage round-trips the bytes verbatim (a bare string would
+			// be double-encoded into a quoted JSON string).
+			payload := json.RawMessage("{}")
+			if len(r.PayloadJson) > 0 {
+				payload = json.RawMessage(r.PayloadJson)
+			}
+			kind := r.Kind
+			if kind == "" {
+				kind = "main"
+			}
+			if rerr := appender.AppendRow(
+				r.Raw,
+				r.Fields,
+				time.Unix(0, r.TsUnixNs),
+				r.Level,
+				r.Namespace,
+				r.Service,
+				kind,
+				r.Instance,
+				r.Customer,
+				payload,
+				r.Deployment,
+				r.Env,
+				r.Version,
+				r.Region,
+				r.Cluster,
+				r.K8SNamespace,
+				r.Pod,
+				r.Container,
+				r.Node,
+			); rerr != nil {
+				appender.Close()
+				return fmt.Errorf("append row: %w", rerr)
+			}
+		}
+		// Close flushes the buffered chunks to the table and releases the
+		// appender; its error is the batch's commit error.
+		return appender.Close()
+	})
 	if err != nil {
 		return wrapIngestError(s.id, err, rec)
 	}
@@ -320,6 +402,60 @@ func JoinApp(namespace, service, kind string) string {
 // every successful Ingest.
 func (s *DuckDBShard) RowCount() int64 {
 	return s.rowCount.Load()
+}
+
+// DiskUsage reports the shard's on-disk footprint on its data volume: the
+// .duckdb database file and its co-located spill directory (`<db>.tmp`), which
+// DuckDB writes larger-than-memory sorts/aggregations/joins/DISTINCTs to. Both
+// share the shard's single EBS volume, so together they are what consumes it —
+// and on a small (1 GiB) instance spill, not the data file, is the binding
+// disk constraint (see duck-db-tuning.md). Best-effort and never errors so a
+// disk metric can't fail a heartbeat; returns zeroes for an in-memory shard.
+func (s *DuckDBShard) DiskUsage() DiskUsage {
+	var u DiskUsage
+	if s.dbPath == "" || s.dbPath == ":memory:" {
+		return u
+	}
+	if fi, err := os.Stat(s.dbPath); err == nil {
+		u.DuckDBBytes = fi.Size()
+	}
+	// Writes land in the WAL first and only fold into the .duckdb file at
+	// checkpoint, so between checkpoints the WAL holds real, un-reflected bytes
+	// on the same volume — counting only the main file would underreport.
+	if fi, err := os.Stat(s.dbPath + ".wal"); err == nil {
+		u.WALBytes = fi.Size()
+	}
+	u.SpillTmpBytes = dirSize(s.dbPath + ".tmp")
+	return u
+}
+
+// DiskUsage is a shard's data-volume footprint. TotalBytes() is what to compare
+// against the volume size for the ≤50%-co-located-spill rule.
+type DiskUsage struct {
+	DuckDBBytes   int64 // size of the .duckdb file (checkpointed data)
+	WALBytes      int64 // size of <db>.wal (writes not yet folded into the main file)
+	SpillTmpBytes int64 // total bytes under <db>.tmp (DuckDB's spill directory)
+}
+
+// TotalBytes is the combined .duckdb + WAL + spill footprint on the data volume.
+func (u DiskUsage) TotalBytes() int64 { return u.DuckDBBytes + u.WALBytes + u.SpillTmpBytes }
+
+// dirSize sums the sizes of all regular files under root, returning 0 when root
+// is absent — the common case, since DuckDB only materializes `<db>.tmp` once a
+// query actually spills. Best-effort: transient walk errors are skipped rather
+// than propagated, so a disk reading never blocks the caller.
+func dirSize(root string) int64 {
+	var total int64
+	_ = filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, ierr := d.Info(); ierr == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
 }
 
 func (s *DuckDBShard) Archive(_ context.Context, s3Prefix string) (string, error) {
@@ -463,10 +599,16 @@ func (s *DuckDBShard) Query(query string, args ...any) ([]*pb.ResultRow, error) 
 // pathological long-running queries (the main motivation for the
 // SHARD_QUERY_TIMEOUT_SECONDS runtime config).
 func (s *DuckDBShard) QueryContext(ctx context.Context, query string, args ...any) ([]*pb.ResultRow, error) {
+	start := time.Now()
 	sqlRows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
+		s.qstats.record(time.Since(start), 0, err)
 		return nil, fmt.Errorf("query shard %s: %w", s.id, err)
 	}
 	defer sqlRows.Close()
-	return ScanResultRows(sqlRows)
+	// Time through row materialization, not just statement prep — scanning a
+	// large result set is itself disk/CPU work that grows as the shard does.
+	rows, scanErr := ScanResultRows(sqlRows)
+	s.qstats.record(time.Since(start), len(rows), scanErr)
+	return rows, scanErr
 }

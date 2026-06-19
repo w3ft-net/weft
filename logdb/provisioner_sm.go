@@ -67,6 +67,7 @@ func (p *Provisioner) shardDeps() *ShardDeps {
 			ParquetDir:        p.config.ParquetDir,
 			LambdaFunctionURL: p.config.LambdaFunctionURL,
 			Clock:             p.clock,
+			VolumeSizesGB:     p.config.VolumeSizesGB,
 		}
 		if api, ok := p.launcher.(ShardLaunchAPI); ok {
 			d.Launcher = api

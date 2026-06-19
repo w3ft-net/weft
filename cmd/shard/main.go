@@ -115,6 +115,7 @@ func main() {
 	defer wc.Close()
 	go wc.Heartbeat(cfgCtx, "shard", weftsdk.DefaultHeartbeatInterval)
 	go wc.RuntimeStats(cfgCtx, "shard", weftsdk.DefaultRuntimeStatsInterval)
+	go runShardStats(cfgCtx, wc, srv, *dataDir, weftsdk.DefaultRuntimeStatsInterval)
 
 	// HTTP health endpoint.
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -170,6 +171,88 @@ func shardIdentityHint(dataDir string) (string, error) {
 	return m.ShardID, nil
 }
 
+// runShardStats emits a combined disk-footprint + query-latency sample every
+// interval until ctx is cancelled, mirroring the SDK's RuntimeStats cadence.
+// Records go through the weft-go SDK (wc.Send) — the same client and transport
+// as the Heartbeat/RuntimeStats emitters above; this code never touches the
+// records socket itself. The SDK frames each record onto the local weftd
+// records socket, weftd relays it over gRPC to the coordinator's ingest, and it
+// lands as log rows (namespace=weft, service=shard, kind=stats) — there is no
+// stats.log file on the shard. At query time those rows are addressed via the
+// pseudofile /log/weft/shard/stats.log, which a cron watch reads and a dashboard
+// tile charts. Disk and
+// query metrics ride one record on purpose: a dashboard tile reads a single
+// source, so carrying volume fill (volume_used_pct, total_bytes) and query
+// latency (q_max_ms, q_mean_ms) on the same timestamped row makes the
+// correlation we care about — does performance degrade as the disk fills? — a
+// trivial two-column read rather than a join across two streams. Disk fields are
+// an instantaneous snapshot; query fields aggregate the interval just elapsed.
+// The schema lives here, not in the shared weft-go SDK, because it's
+// shard-specific.
+func runShardStats(ctx context.Context, wc *weftsdk.Client, srv *shardsvc.Server, dataDir string, interval time.Duration) {
+	if interval <= 0 {
+		interval = weftsdk.DefaultRuntimeStatsInterval
+	}
+	emit := func() {
+		ds := srv.Shard()
+		if ds == nil {
+			return // blank shard, awaiting Configure — nothing to report yet
+		}
+		u := ds.DiskUsage()
+		q := ds.QueryStatsSnapshot()
+		rec := map[string]any{
+			"type":     "shard_stats",
+			"ts":       time.Now().UTC().Format(time.RFC3339Nano),
+			"shard_id": srv.Identity(),
+			// disk footprint (instantaneous)
+			"duckdb_bytes":    u.DuckDBBytes,
+			"wal_bytes":       u.WALBytes,
+			"spill_tmp_bytes": u.SpillTmpBytes,
+			"total_bytes":     u.TotalBytes(),
+			// query latency (aggregate over the interval just elapsed)
+			"q_count":   q.Count,
+			"q_errors":  q.Errors,
+			"q_rows":    q.Rows,
+			"q_mean_ms": q.MeanMs,
+			"q_max_ms":  q.MaxMs,
+		}
+		// Volume capacity/headroom: the spill ceiling is 90% of FREE disk, so
+		// available space — not file size — is what large queries OOM against.
+		if total, avail, err := volumeUsage(dataDir); err == nil {
+			rec["volume_total_bytes"] = total
+			rec["volume_free_bytes"] = avail
+			rec["volume_used_bytes"] = total - avail
+			if total > 0 {
+				rec["volume_used_pct"] = float64(total-avail) / float64(total) * 100
+			}
+		}
+		_ = wc.Send("shard/stats", rec) // best-effort; transport logs its own errors
+	}
+	emit() // immediate first sample so a dashboard has a value before the first tick
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			emit()
+		}
+	}
+}
+
+// volumeUsage returns the total and available bytes of the filesystem holding
+// path, via statfs. Available (not free) blocks — the space usable by the shard
+// process, excluding the root reserve — is the honest headroom figure.
+func volumeUsage(path string) (total, available uint64, err error) {
+	var st syscall.Statfs_t
+	if err = syscall.Statfs(path, &st); err != nil {
+		return 0, 0, err
+	}
+	bs := uint64(st.Bsize)
+	return st.Blocks * bs, st.Bavail * bs, nil
+}
+
 // runHeartbeat connects to the coordinator and sends a heartbeat every
 // hbInterval. Pulls the shard id on each tick so post-Configure the
 // heartbeat stream starts carrying the real identity rather than the
@@ -207,14 +290,15 @@ func runHeartbeat(coordAddr string, grpcPort int, hbInterval time.Duration, srv 
 // live gRPC client. The coordinator's christen path needs InstanceId
 // to find the pre-attached EBS volume (tag:shard_id=pending-<id>) —
 // an empty InstanceId silently drops that lookup.
-func buildHeartbeatRequest(shardID, addr, instanceID, state string, rowCount int64) *pb.ShardHeartbeatRequest {
+func buildHeartbeatRequest(shardID, addr, instanceID, state string, rowCount, diskBytes int64) *pb.ShardHeartbeatRequest {
 	return &pb.ShardHeartbeatRequest{
 		ShardId:    shardID,
 		Addr:       addr,
 		InstanceId: instanceID,
 		State:      state,
 		RowCount:   rowCount,
-		BinarySha:  GitSHA, // compile-time injected by Packer's -ldflags; empty on local builds
+		DiskBytes:  diskBytes, // .duckdb + spill footprint; control-plane view of volume pressure
+		BinarySha:  GitSHA,    // compile-time injected by Packer's -ldflags; empty on local builds
 	}
 }
 
@@ -225,12 +309,13 @@ func sendHeartbeat(client pb.WeftCoordinatorClient, addr, instanceID string, srv
 		state = "ADOPTED"
 	}
 
-	var rowCount int64
+	var rowCount, diskBytes int64
 	if ds := srv.Shard(); ds != nil {
 		rowCount = ds.RowCount()
+		diskBytes = ds.DiskUsage().TotalBytes()
 	}
 
-	req := buildHeartbeatRequest(shardID, addr, instanceID, state, rowCount)
+	req := buildHeartbeatRequest(shardID, addr, instanceID, state, rowCount, diskBytes)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

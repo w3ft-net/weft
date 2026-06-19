@@ -77,6 +77,21 @@ type ShardDeps struct {
 	// LaunchRetryBudget caps LaunchAttempts before LAUNCHING fires
 	// LaunchFailed and transitions to GONE. Zero defaults to 5.
 	LaunchRetryBudget int
+	// VolumeSizesGB maps tier → fresh data-volume size in GiB, sourced from
+	// Terraform (SHARD_<TIER>_VOLUME_GB) at boot. A tier absent here — or in
+	// dev/test, where it's nil — falls back to defaultShardVolumeGB. Ignored
+	// on recovery launches, which reattach the surviving volume.
+	VolumeSizesGB map[string]int32
+}
+
+// volumeSizeGB returns the fresh-launch data-volume size for tier, falling
+// back to defaultShardVolumeGB when no per-tier override is wired (dev/test, or
+// a tier missing from the env). Never returns 0 — CreateForShard rejects that.
+func (d *ShardDeps) volumeSizeGB(tier string) int32 {
+	if sz, ok := d.VolumeSizesGB[tier]; ok && sz > 0 {
+		return sz
+	}
+	return defaultShardVolumeGB
 }
 
 // ErrUnknownShard is returned by the state accessor when the underlying
@@ -455,7 +470,7 @@ func (sh *Shard) runLaunch() {
 		Tier:             sh.Tier,
 		AZ:               sh.AZ,
 		ExistingVolumeID: sh.EBSVolumeID, // "" for a fresh shard
-		SizeGB:           freshShardVolumeGB,
+		SizeGB:           sh.deps.volumeSizeGB(sh.Tier),
 	}
 	stripeIndex := sh.StripeIndex
 	sh.mu.Unlock()

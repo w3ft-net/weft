@@ -37,7 +37,7 @@ func (r *recordingCoord) Heartbeat(_ context.Context, req *pb.ShardHeartbeatRequ
 // from pending-... to the real shard id. Observed 2026-04-18 in prod
 // as a `volume=` empty string on the christening log line.
 func TestHeartbeat_IncludesInstanceID(t *testing.T) {
-	req := buildHeartbeatRequest("shard-x", "10.0.0.1:9000", "i-abc123", "INGESTING", 0)
+	req := buildHeartbeatRequest("shard-x", "10.0.0.1:9000", "i-abc123", "INGESTING", 0, 4096)
 
 	if req.InstanceId != "i-abc123" {
 		t.Errorf("InstanceId: got %q want i-abc123", req.InstanceId)
@@ -45,13 +45,16 @@ func TestHeartbeat_IncludesInstanceID(t *testing.T) {
 	if req.ShardId != "shard-x" {
 		t.Errorf("ShardId: got %q want shard-x", req.ShardId)
 	}
+	if req.DiskBytes != 4096 {
+		t.Errorf("DiskBytes: got %d want 4096", req.DiskBytes)
+	}
 }
 
 // Unclaimed shards (no shard.json yet) still heartbeat — they carry
 // empty ShardId but MUST carry their instance id so the coordinator
 // can find the pre-attached volume at christen time.
 func TestHeartbeat_UnclaimedStillCarriesInstanceID(t *testing.T) {
-	req := buildHeartbeatRequest("", "10.0.0.1:9000", "i-fresh", "ADOPTED", 0)
+	req := buildHeartbeatRequest("", "10.0.0.1:9000", "i-fresh", "ADOPTED", 0, 0)
 
 	if req.InstanceId != "i-fresh" {
 		t.Errorf("InstanceId: got %q want i-fresh", req.InstanceId)

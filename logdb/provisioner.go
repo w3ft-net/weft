@@ -90,6 +90,11 @@ type ProvisionerConfig struct {
 	// with code=Canceled mid-stream. Zero falls back to
 	// defaultCloseRebindGrace.
 	CloseRebindGrace time.Duration
+	// VolumeSizesGB maps tier → fresh data-volume size in GiB, parsed from
+	// SHARD_<TIER>_VOLUME_GB at boot (logdb.parseShardVolumeSizes). Threaded
+	// onto ShardDeps so a fresh launch sizes its EBS volume per tier. Nil in
+	// dev/test, where the docker launcher ignores volume size anyway.
+	VolumeSizesGB map[string]int32
 }
 
 // defaultCloseRebindGrace is the production default for the rebind
