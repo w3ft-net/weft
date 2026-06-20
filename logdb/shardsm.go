@@ -630,7 +630,7 @@ func (sh *Shard) evaluateArchiving(ctx context.Context) error {
 	// never ingested); fall through to the volume/instance cleanup.
 	if parquetPath == "" && liveShard != nil {
 		exportCtx, cancel := context.WithTimeout(ctx, archiveTimeout)
-		path, err := liveShard.Archive(exportCtx, sh.archiveS3Prefix(services))
+		path, stats, err := liveShard.Archive(exportCtx, sh.archiveS3Prefix(services))
 		cancel()
 		if err != nil {
 			log.Printf("shardsm %s: archive export failed, retrying next tick: %v", sh.ID, err)
@@ -647,6 +647,14 @@ func (sh *Shard) evaluateArchiving(ctx context.Context) error {
 		}
 		if err := sh.deps.Store.SetShardParquetPath(sh.ID, path); err != nil {
 			return fmt.Errorf("shardsm %s: persist parquet path: %w", sh.ID, err)
+		}
+		// Best-effort: archive stats drive the retention janitor but aren't
+		// load-bearing for the archive itself. A failure here (or a crash
+		// before this line on a retry where liveShard is already closed)
+		// just leaves the shard without stats; the janitor falls back to
+		// scanning that file. Don't fail the whole archive over metadata.
+		if err := sh.deps.Store.RecordArchiveStats(sh.ID, stats); err != nil {
+			log.Printf("shardsm %s: record archive stats: %v", sh.ID, err)
 		}
 		liveShard.Close()
 		sh.mu.Lock()

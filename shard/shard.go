@@ -38,8 +38,60 @@ type Shard interface {
 	Query(sql string, args ...any) ([]*pb.ResultRow, error)
 	QueryToSink(sql string, args []any, sink RowSink)
 	Ingest(rows []*pb.LogRow, rec IngestRecorder) error
-	Archive(ctx context.Context, s3Prefix string) (string, error)
+	// Archive exports the shard's data to Parquet and returns the path
+	// written plus per-customer stats (row counts and ts spans) captured
+	// during export. The coordinator persists the stats to
+	// shard_archive_stats for the retention janitor. See
+	// docs/plans/retention-janitor.md.
+	Archive(ctx context.Context, s3Prefix string) (string, []CustomerStat, error)
 	Close() error
+}
+
+// CustomerStat summarizes one customer's rows within an archived shard:
+// the timestamp span and row count. Captured during Archive (while the
+// DuckDB handle is local on the shard node) and persisted to
+// shard_archive_stats so the retention janitor can classify archived
+// parquet (delete / keep / rewrite) without re-scanning S3.
+type CustomerStat struct {
+	Customer string    `json:"customer"`
+	MinTs    time.Time `json:"min_ts"`
+	MaxTs    time.Time `json:"max_ts"`
+	RowCount int64     `json:"row_count"`
+}
+
+// CustomerStatsToProto / CustomerStatsFromProto bridge the Go struct and
+// the ArchiveResponse wire form. Both return nil for an empty slice so
+// the proto field stays absent rather than an empty list.
+func CustomerStatsToProto(cs []CustomerStat) []*pb.CustomerArchiveStat {
+	if len(cs) == 0 {
+		return nil
+	}
+	out := make([]*pb.CustomerArchiveStat, len(cs))
+	for i, c := range cs {
+		out[i] = &pb.CustomerArchiveStat{
+			Customer:    c.Customer,
+			MinTsUnixNs: c.MinTs.UnixNano(),
+			MaxTsUnixNs: c.MaxTs.UnixNano(),
+			RowCount:    c.RowCount,
+		}
+	}
+	return out
+}
+
+func CustomerStatsFromProto(ps []*pb.CustomerArchiveStat) []CustomerStat {
+	if len(ps) == 0 {
+		return nil
+	}
+	out := make([]CustomerStat, len(ps))
+	for i, p := range ps {
+		out[i] = CustomerStat{
+			Customer: p.Customer,
+			MinTs:    time.Unix(0, p.MinTsUnixNs).UTC(),
+			MaxTs:    time.Unix(0, p.MaxTsUnixNs).UTC(),
+			RowCount: p.RowCount,
+		}
+	}
+	return out
 }
 
 // IngestRecorder is the surface a Shard.Ingest implementation uses
@@ -458,7 +510,55 @@ func dirSize(root string) int64 {
 	return total
 }
 
-func (s *DuckDBShard) Archive(_ context.Context, s3Prefix string) (string, error) {
+func (s *DuckDBShard) Archive(_ context.Context, s3Prefix string) (string, []CustomerStat, error) {
+	// Capture per-customer stats first, off the same local handle that's
+	// about to be exported. Cheaper here (one GROUP BY over local DuckDB)
+	// than a re-scan of the written parquet over S3/Lambda later.
+	stats, err := s.customerStats()
+	if err != nil {
+		return "", nil, fmt.Errorf("customer stats: %w", err)
+	}
+	path, err := s.exportArchive(s3Prefix)
+	if err != nil {
+		return "", nil, err
+	}
+	return path, stats, nil
+}
+
+// customerStats summarizes each customer's row count and ts span in the
+// logs table. Drives the retention janitor's classify-without-scanning
+// pass (see docs/plans/retention-janitor.md).
+func (s *DuckDBShard) customerStats() ([]CustomerStat, error) {
+	return scanCustomerStats(s.db, `
+		SELECT COALESCE(customer, ''), MIN(ts), MAX(ts), COUNT(*)
+		FROM logs GROUP BY 1`)
+}
+
+// scanCustomerStats runs a (customer, min_ts, max_ts, count) aggregation
+// and scans it into CustomerStat rows. The query must project exactly
+// those four columns in that order; COALESCE the customer so the scan
+// target is always a plain string (the column is nullable).
+func scanCustomerStats(db *sql.DB, query string) ([]CustomerStat, error) {
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CustomerStat
+	for rows.Next() {
+		var c CustomerStat
+		if err := rows.Scan(&c.Customer, &c.MinTs, &c.MaxTs, &c.RowCount); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// exportArchive writes the logs table to Parquet (single file or
+// time-partitioned, sized by pickPartitionGranularity) and returns the
+// path. S3 when S3ConfigFromEnv is set, otherwise a local directory.
+func (s *DuckDBShard) exportArchive(s3Prefix string) (string, error) {
 	gran, err := s.pickPartitionGranularity()
 	if err != nil {
 		return "", fmt.Errorf("partition sizing: %w", err)

@@ -202,12 +202,15 @@ func (s *Server) Archive(ctx context.Context, req *pb.ArchiveRequest) (*pb.Archi
 	if err != nil {
 		return nil, err
 	}
-	path, err := ds.Archive(ctx, req.S3Prefix)
+	path, stats, err := ds.Archive(ctx, req.S3Prefix)
 	if err != nil {
 		return nil, fmt.Errorf("archive shard %s: %w", s.id, err)
 	}
 	log.Printf("shard %s: archived to %s", s.id, path)
-	return &pb.ArchiveResponse{ParquetPath: path}, nil
+	return &pb.ArchiveResponse{
+		ParquetPath:   path,
+		CustomerStats: shard.CustomerStatsToProto(stats),
+	}, nil
 }
 
 // Query executes SQL and streams result rows (raw, ts) to the client.

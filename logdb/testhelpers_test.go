@@ -91,7 +91,9 @@ func (s *failingShard) Query(sql string, args ...any) ([]*pb.ResultRow, error) {
 }
 func (s *failingShard) QueryToSink(sql string, args []any, sink shard.RowSink) {}
 func (s *failingShard) Close() error                                           { return nil }
-func (s *failingShard) Archive(_ context.Context, _ string) (string, error)    { return "", nil }
+func (s *failingShard) Archive(_ context.Context, _ string) (string, []shard.CustomerStat, error) {
+	return "", nil, nil
+}
 
 func (s *failingShard) Ingest(rows []*pb.LogRow, rec shard.IngestRecorder) error {
 	s.mu.Lock()
