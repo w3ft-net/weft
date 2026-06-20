@@ -17,7 +17,7 @@ func TestLogRetention_Tiers(t *testing.T) {
 		{TierTrial, 24 * time.Hour},
 		{TierSwatch, 30 * 24 * time.Hour},
 		{TierYard, 90 * 24 * time.Hour},
-		{TierBolt, 365 * 24 * time.Hour},
+		{TierBolt, 180 * 24 * time.Hour},
 		// Unknown tiers fall back to trial — safer to under-retain
 		// an unknown plan than to silently give it Bolt-level access.
 		{"", 24 * time.Hour},
@@ -54,7 +54,7 @@ func TestVolumeAllowance(t *testing.T) {
 		{TierTrial, 1_000_000_000},
 		{TierSwatch, 10_000_000_000},
 		{TierYard, 100_000_000_000},
-		{TierBolt, 1_000_000_000_000},
+		{TierBolt, 500_000_000_000},
 		{"", 1_000_000_000},
 	}
 	for _, c := range cases {
@@ -76,7 +76,7 @@ func TestOverageRatePerGB(t *testing.T) {
 		{TierTrial, 0},
 		{TierSwatch, 200},
 		{TierYard, 100},
-		{TierBolt, 50},
+		{TierBolt, 75},
 		{"", 0},
 	}
 	for _, c := range cases {

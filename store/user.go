@@ -67,7 +67,7 @@ func LogRetention(tier Tier) time.Duration {
 	case TierYard:
 		return 90 * 24 * time.Hour
 	case TierBolt:
-		return 365 * 24 * time.Hour
+		return 180 * 24 * time.Hour
 	default:
 		return 24 * time.Hour // trial
 	}
@@ -84,7 +84,7 @@ func MetricRetention(tier Tier) time.Duration { return LogRetention(tier) }
 // bytes. Uses decimal GB (10⁹) to align with the KB unit used by the
 // Stripe metered overage price — so the "% used" bar in the dashboard
 // matches what Stripe will bill. The landing page's "10 GB / 100 GB
-// / 1 TB" has always been decimal in customer-speak; the internal
+// / 500 GB" has always been decimal in customer-speak; the internal
 // constant was 1024³-based (GiB) before this, disagreeing by 7.4%.
 // See docs/plans/stripe.md for the alignment rationale.
 func VolumeAllowance(tier Tier) int64 {
@@ -94,7 +94,7 @@ func VolumeAllowance(tier Tier) int64 {
 	case TierYard:
 		return 100 * 1_000_000_000
 	case TierBolt:
-		return 1_000_000_000_000
+		return 500 * 1_000_000_000
 	default:
 		return 1 * 1_000_000_000 // trial
 	}
@@ -142,7 +142,7 @@ func OverageRatePerGB(tier Tier) int {
 	case TierYard:
 		return 100 // $1.00
 	case TierBolt:
-		return 50 // $0.50
+		return 75 // $0.75
 	default:
 		return 0
 	}
