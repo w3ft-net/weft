@@ -109,3 +109,7 @@ jobs:
     - name: Deploy cold-shard Lambda
       working-directory: weft
       run: kevcons ext release-lambda
+
+    - name: Deploy compactor Lambda
+      working-directory: weft
+      run: kevcons ext release-lambda compactor
