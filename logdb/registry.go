@@ -57,6 +57,14 @@ type Shard struct {
 	LaunchAttempts  int        `gorm:"not null;default:0;column:launch_attempts"` // per-shard launch retry counter
 	BinarySHA       string     `gorm:"not null;default:'';column:binary_sha"`     // shard's compile-time GitSHA from its heartbeat; weft-admin skips a shard whose SHA already matches the target binary
 
+	// ── retention janitor (migration 066) ──
+	// LastPurgedAt is when the janitor last rewrote (or revisited) this
+	// archived shard. The prior parquet from a rewrite is tombstoned in the
+	// separate parquet_tombstones table — not here — so it outlives the
+	// shard row when a fully-expired shard is retired to GONE (onEnterGone
+	// deletes the row). See docs/plans/retention-janitor.md.
+	LastPurgedAt *time.Time `gorm:"column:last_purged_at"`
+
 	// ── runtime only (gorm:"-") ──
 	// Services is the shard's in-memory service membership — the
 	// (namespace_id, service) pairs it serves, the write router's
@@ -411,6 +419,41 @@ func (r *ShardRegistry) Remove(id string) {
 	if r.store != nil {
 		r.store.DeleteShard(id)
 	}
+}
+
+// RefreshArchivedPath repoints an archived entry at a rewritten parquet
+// after the janitor swapped its file in Postgres. Query descriptors read
+// the entry's in-memory ParquetPath, so without this new queries would
+// keep hitting the old object — which the GC sweep deletes after the
+// grace window, turning later reads into 404s. Builds the replacement
+// ColdShard before taking the lock (NewColdShard may open an in-memory
+// DuckDB in the no-Lambda path), then swaps ParquetPath + Live under the
+// entry lock. No-op if the entry is gone (already retired).
+func (r *ShardRegistry) RefreshArchivedPath(id, newPath, lambdaURL string) {
+	cold, err := shard.NewColdShard(id, nil, newPath, lambdaURL, nil)
+	if err != nil {
+		log.Printf("registry: refresh %s cold shard: %v", id, err)
+	}
+	r.mu.RLock()
+	e := r.entries[id]
+	r.mu.RUnlock()
+	if e == nil {
+		if cold != nil {
+			cold.Close()
+		}
+		return
+	}
+	e.mu.Lock()
+	e.ParquetPath = newPath
+	if e.Live != nil {
+		e.Live.Close()
+	}
+	if cold != nil {
+		e.Live = cold
+	} else {
+		e.Live = nil
+	}
+	e.mu.Unlock()
 }
 
 // AddServiceToShard appends (namespaceID, service) to the given shard's

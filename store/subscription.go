@@ -64,6 +64,41 @@ func (s *Store) ActiveSubscription(customerID uint) (*Subscription, error) {
 	return &sub, nil
 }
 
+// ActiveCustomerTiers returns customer name → active subscription tier
+// for every live customer that has one, keyed by the name as it appears
+// in logs.customer (so the retention janitor can resolve a shard's
+// per-customer stats directly). When a customer has several active
+// subscriptions the most recent wins, matching TierForCustomer.
+//
+// System-wide and unscoped on purpose — the janitor reasons across all
+// tenants. A customer with no active subscription is simply absent from
+// the map; the janitor reads that absence as "do not delete" rather than
+// defaulting to trial, so a Stripe lag or provisioning race can't erase a
+// paying customer's archived data.
+func (s *Store) ActiveCustomerTiers() (map[string]Tier, error) {
+	type row struct {
+		Name string
+		Tier string
+	}
+	var rows []row
+	err := s.db.Raw(`
+		SELECT DISTINCT ON (c.id) c.name AS name, sub.tier AS tier
+		FROM customers c
+		JOIN subscriptions sub ON sub.customer_id = c.id
+		WHERE sub.status = 'active'
+		  AND (sub.expires_at IS NULL OR sub.expires_at > now())
+		  AND c.deleted_at IS NULL
+		ORDER BY c.id, sub.created_at DESC`).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]Tier, len(rows))
+	for _, r := range rows {
+		out[r.Name] = Tier(r.Tier)
+	}
+	return out, nil
+}
+
 // CreateSubscription inserts a new subscription record.
 func (s *Store) CreateSubscription(sub *Subscription) error {
 	return s.scoped(sub.CustomerID).Create(sub).Error

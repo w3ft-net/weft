@@ -6,6 +6,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -21,10 +22,27 @@ type shardRowStore interface {
 	SetShardLaunchResult(id, instanceID, az, volumeID string, stripeIndex *int) error
 	IncrementShardLaunchAttempts(id string) error
 	SetShardParquetPath(id, path string) error
+	RecordArchiveStats(id string, stats []shard.CustomerStat) error
 	ClearShardVolume(id string) error
 	ClearShardInstance(id string) error
 	LatestPreRecoveryState(id string) (ShardState, error)
 }
+
+// ShardArchiveStat is one (shard, customer) row of archive metadata: the
+// customer's row count and ts span within an archived shard's parquet.
+// Captured at archive time (from the Archive RPC's customer_stats) and
+// consulted by the retention janitor to classify archived files
+// (delete / keep / rewrite) without scanning S3. See
+// docs/plans/retention-janitor.md.
+type ShardArchiveStat struct {
+	ShardID  string    `gorm:"primaryKey;column:shard_id"`
+	Customer string    `gorm:"primaryKey;column:customer"`
+	MinTs    time.Time `gorm:"not null;column:min_ts"`
+	MaxTs    time.Time `gorm:"not null;column:max_ts"`
+	RowCount int64     `gorm:"not null;column:row_count"`
+}
+
+func (*ShardArchiveStat) TableName() string { return "shard_archive_stats" }
 
 // ShardStore is the gorm-backed persistence for the unified Shard type.
 // It embeds *store.Store — so it inherits the shared DB connection,
@@ -151,6 +169,35 @@ func (s ShardStore) IncrementShardLaunchAttempts(id string) error {
 func (s ShardStore) SetShardParquetPath(id, path string) error {
 	return s.db().Model(&Shard{}).Where("id = ?", id).
 		Select("ParquetPath").Updates(&Shard{ParquetPath: path}).Error
+}
+
+// RecordArchiveStats replaces the shard_archive_stats rows for a shard
+// with a freshly-captured set. Replace-not-merge so a re-archival (a
+// retry, or a future janitor rewrite that drops a customer's rows
+// entirely) leaves no stale per-customer rows behind. A nil/empty set
+// (a shard that archived with zero rows) clears any prior rows and adds
+// none. The whole swap runs in one transaction so a concurrent janitor
+// read never sees the shard mid-delete.
+func (s ShardStore) RecordArchiveStats(id string, stats []shard.CustomerStat) error {
+	return s.db().Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("shard_id = ?", id).Delete(&ShardArchiveStat{}).Error; err != nil {
+			return err
+		}
+		if len(stats) == 0 {
+			return nil
+		}
+		rows := make([]ShardArchiveStat, len(stats))
+		for i, st := range stats {
+			rows[i] = ShardArchiveStat{
+				ShardID:  id,
+				Customer: st.Customer,
+				MinTs:    st.MinTs,
+				MaxTs:    st.MaxTs,
+				RowCount: st.RowCount,
+			}
+		}
+		return tx.Create(&rows).Error
+	})
 }
 
 // ClearShardVolume blanks ebs_volume_id after an archived shard's data

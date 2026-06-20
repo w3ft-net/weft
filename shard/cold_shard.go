@@ -114,15 +114,21 @@ func (s *ColdShard) WithAWSAuth(creds aws.CredentialsProvider, region string) *C
 
 func (s *ColdShard) ID() string { return s.id }
 
-func (s *ColdShard) Archive(_ context.Context, _ string) (string, error) {
-	return "", fmt.Errorf("cold shard %s is already archived", s.id)
+func (s *ColdShard) Archive(_ context.Context, _ string) (string, []CustomerStat, error) {
+	return "", nil, fmt.Errorf("cold shard %s is already archived", s.id)
 }
 
-func (s *ColdShard) readParquetExpr() string {
-	if strings.Contains(s.parquetPath, "*") {
-		return fmt.Sprintf("read_parquet('%s', hive_partitioning=true)", s.parquetPath)
+func (s *ColdShard) readParquetExpr() string { return parquetReadExpr(s.parquetPath) }
+
+// parquetReadExpr builds the DuckDB read_parquet(...) source for a stored
+// path. A glob (the hive-partitioned layout from a large shard's archive)
+// enables hive_partitioning so the partition columns are read back; a
+// plain path reads a single file.
+func parquetReadExpr(path string) string {
+	if strings.Contains(path, "*") {
+		return fmt.Sprintf("read_parquet('%s', hive_partitioning=true)", path)
 	}
-	return fmt.Sprintf("read_parquet('%s')", s.parquetPath)
+	return fmt.Sprintf("read_parquet('%s')", path)
 }
 
 // Query executes a SQL query against the archived Parquet data.
@@ -254,17 +260,24 @@ func (s *ColdShard) Ingest(rows []*pb.LogRow, _ IngestRecorder) error {
 }
 
 func (s *ColdShard) signRequest(req *http.Request, body []byte) error {
-	if s.creds == nil {
+	return signLambdaV4(req, body, s.creds, s.region)
+}
+
+// signLambdaV4 SigV4-signs a Lambda Function URL request when creds are
+// present (the URL uses AWS_IAM auth); a nil provider is a no-op for the
+// unsigned test/localstack path. Shared by the cold-shard query client
+// and the compactor client.
+func signLambdaV4(req *http.Request, body []byte, creds aws.CredentialsProvider, region string) error {
+	if creds == nil {
 		return nil
 	}
 	hash := sha256.Sum256(body)
 	payloadHash := hex.EncodeToString(hash[:])
-	creds, err := s.creds.Retrieve(req.Context())
+	c, err := creds.Retrieve(req.Context())
 	if err != nil {
 		return fmt.Errorf("retrieve credentials: %w", err)
 	}
-	signer := v4signer.NewSigner()
-	return signer.SignHTTP(req.Context(), creds, req, payloadHash, "lambda", s.region, time.Now())
+	return v4signer.NewSigner().SignHTTP(req.Context(), c, req, payloadHash, "lambda", region, time.Now())
 }
 
 // Close releases the in-memory DuckDB connection (no-op in remote mode).

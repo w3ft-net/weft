@@ -1,5 +1,8 @@
-# Build the Lambda cold shard binary.
+# Build a weft Lambda binary — the cold-shard query handler by default, or
+# the compactor via --build-arg CMD_PATH=./cmd/lambda-compactor/.
 # docker build -f weft/Dockerfile.lambda -t weft-lambda-shard ..
+# docker build -f weft/Dockerfile.lambda \
+#   --build-arg CMD_PATH=./cmd/lambda-compactor/ -t weft-lambda-compactor ..
 
 # Build on Amazon Linux 2023 — the same distro as the provided.al2023
 # Lambda runtime — so the CGO_ENABLED=1 (duckdb) binary links against the
@@ -26,12 +29,15 @@ RUN rm -f go.work go.work.sum \
  && go mod edit -replace github.com/graybeardcorp/warp=/src/warp \
                 -replace github.com/graybeardcorp/saaskit=/src/saaskit
 RUN go mod download
+# Which Lambda entrypoint to build. Default keeps the cold-shard build
+# unchanged; the compactor passes ./cmd/lambda-compactor/.
+ARG CMD_PATH=./cmd/lambda-shard/
 # duckdb is C++ and the minimal provided.al2023 runtime ships no
 # libstdc++/libgcc, so static-link them; glibc stays dynamic and is
 # satisfied by the AL2023 runtime.
 RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
     go build -ldflags '-linkmode external -extldflags "-static-libstdc++ -static-libgcc"' \
-    -o /bin/bootstrap ./cmd/lambda-shard/
+    -o /bin/bootstrap ${CMD_PATH}
 
 # Use AWS Lambda x86_64 base image (matches Terraform architectures).
 FROM public.ecr.aws/lambda/provided:al2023-x86_64

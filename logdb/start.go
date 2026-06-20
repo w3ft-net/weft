@@ -18,6 +18,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -214,7 +217,53 @@ func startProd(cfg Config, reg *ShardRegistry, lambdaURL string, subnets map[str
 	prov.LoadStateMachines()
 
 	prov.Start(cfg.Ctx)
+	startRetentionJanitor(cfg.Ctx, prov, cfg.AWSRegion)
 	return prov, nil
+}
+
+// startRetentionJanitor wires and starts the daily archive retention
+// janitor when JANITOR_ENABLED=1. Off by default: it permanently deletes
+// customer data, so each environment opts in explicitly — after the
+// compactor Lambda is deployed and COMPACTOR_FUNCTION_URL is set. With no
+// compactor URL it falls back to an in-process compactor (dev / pre-Lambda).
+func startRetentionJanitor(ctx context.Context, prov *Provisioner, region string) {
+	if prov == nil || os.Getenv("JANITOR_ENABLED") != "1" {
+		return
+	}
+
+	var compactor shard.Compactor
+	if url := os.Getenv("COMPACTOR_FUNCTION_URL"); url != "" {
+		compactor = shard.NewLambdaCompactor(url, lambdaSigningCreds(ctx, region), region)
+		log.Printf("janitor: compactor Lambda at %s", url)
+	} else {
+		compactor = shard.LocalCompactor{S3: shard.S3ConfigFromEnv()}
+		log.Printf("janitor: in-process compactor (COMPACTOR_FUNCTION_URL unset)")
+	}
+
+	var deleter ObjectDeleter = LocalFileDeleter{}
+	if strings.HasPrefix(prov.config.ParquetDir, "s3://") {
+		d, err := NewS3ObjectDeleter(ctx, region)
+		if err != nil {
+			log.Printf("janitor: S3 deleter unavailable, not starting: %v", err)
+			return
+		}
+		deleter = d
+	}
+
+	NewProvisionerJanitor(prov, compactor, deleter, 24*time.Hour).Start(ctx)
+	log.Printf("coordinator: retention janitor enabled (daily)")
+}
+
+// lambdaSigningCreds loads the credential provider used to SigV4-sign
+// compactor Function URL calls. Returns nil (unsigned) on failure — the
+// invoke then fails loudly at call time rather than here at boot.
+func lambdaSigningCreds(ctx context.Context, region string) aws.CredentialsProvider {
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
+	if err != nil {
+		log.Printf("janitor: aws creds for compactor signing: %v", err)
+		return nil
+	}
+	return cfg.Credentials
 }
 
 // startDev wires the docker-based dev launcher and provisioner. Fatal

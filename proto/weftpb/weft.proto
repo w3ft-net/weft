@@ -55,6 +55,20 @@ message ArchiveRequest {
 
 message ArchiveResponse {
   string parquet_path = 1; // full S3 path written
+  // customer_stats reports, per customer, the row count and ts span of
+  // that customer's data in the archived parquet. Captured during export
+  // while the DuckDB handle is local on the shard node. The coordinator
+  // persists these to shard_archive_stats so the retention janitor can
+  // classify archived files (delete / keep / rewrite) without re-scanning
+  // S3. See docs/plans/retention-janitor.md.
+  repeated CustomerArchiveStat customer_stats = 2;
+}
+
+message CustomerArchiveStat {
+  string customer = 1;
+  int64 min_ts_unix_ns = 2;
+  int64 max_ts_unix_ns = 3;
+  int64 row_count = 4;
 }
 
 message IngestStreamResponse {
