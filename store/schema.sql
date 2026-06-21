@@ -11,7 +11,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict 7RNXhoFvKnMji8suOiuBZnPcvmvCGoC2kwFVq0CkYlff8BDO3kI7ULuhMe5X5Fg
+\restrict Fb5XwG3MBj2s7YRmgWdLdkb5GIKWb1SfHuFn2xYMt6Yu7Jco2A5fl6zkaR1uZjT
 
 -- Dumped from database version 16.14 (Debian 16.14-1.pgdg13+1)
 -- Dumped by pg_dump version 16.14 (Debian 16.14-1.pgdg13+1)
@@ -1333,6 +1333,52 @@ ALTER SEQUENCE public.pagerduty_integrations_id_seq OWNED BY public.pagerduty_in
 
 
 --
+-- Name: parquet_tombstones; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.parquet_tombstones (
+    id bigint NOT NULL,
+    path text NOT NULL,
+    shard_id text NOT NULL,
+    reason text NOT NULL,
+    delete_after timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: parquet_tombstones_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.parquet_tombstones_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: parquet_tombstones_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.parquet_tombstones_id_seq OWNED BY public.parquet_tombstones.id;
+
+
+--
+-- Name: shard_archive_stats; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.shard_archive_stats (
+    shard_id text NOT NULL,
+    customer text NOT NULL,
+    min_ts timestamp with time zone NOT NULL,
+    max_ts timestamp with time zone NOT NULL,
+    row_count bigint NOT NULL
+);
+
+
+--
 -- Name: shard_heartbeats; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1399,7 +1445,8 @@ CREATE TABLE public.shard_records (
     launch_attempts integer DEFAULT 0 NOT NULL,
     az text,
     stripe_index integer,
-    binary_sha text DEFAULT ''::text NOT NULL
+    binary_sha text DEFAULT ''::text NOT NULL,
+    last_purged_at timestamp with time zone
 );
 
 
@@ -1910,6 +1957,13 @@ ALTER TABLE ONLY public.pagerduty_integrations ALTER COLUMN id SET DEFAULT nextv
 
 
 --
+-- Name: parquet_tombstones id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.parquet_tombstones ALTER COLUMN id SET DEFAULT nextval('public.parquet_tombstones_id_seq'::regclass);
+
+
+--
 -- Name: shell_function_history id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -2143,6 +2197,22 @@ ALTER TABLE ONLY public.org_permissions
 
 ALTER TABLE ONLY public.pagerduty_integrations
     ADD CONSTRAINT pagerduty_integrations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: parquet_tombstones parquet_tombstones_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.parquet_tombstones
+    ADD CONSTRAINT parquet_tombstones_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: shard_archive_stats shard_archive_stats_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shard_archive_stats
+    ADD CONSTRAINT shard_archive_stats_pkey PRIMARY KEY (shard_id, customer);
 
 
 --
@@ -2720,6 +2790,20 @@ CREATE UNIQUE INDEX idx_users_email ON public.users USING btree (email);
 
 
 --
+-- Name: parquet_tombstones_delete_after_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX parquet_tombstones_delete_after_idx ON public.parquet_tombstones USING btree (delete_after);
+
+
+--
+-- Name: shard_archive_stats_customer_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX shard_archive_stats_customer_idx ON public.shard_archive_stats USING btree (customer);
+
+
+--
 -- Name: tmp_file_lines_default_file_id_line_num_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2970,6 +3054,14 @@ ALTER TABLE ONLY public.pagerduty_integrations
 
 
 --
+-- Name: shard_archive_stats shard_archive_stats_shard_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shard_archive_stats
+    ADD CONSTRAINT shard_archive_stats_shard_id_fkey FOREIGN KEY (shard_id) REFERENCES public.shard_records(id) ON DELETE CASCADE;
+
+
+--
 -- Name: shard_records shard_records_bucket_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3021,13 +3113,13 @@ ALTER TABLE ONLY public.users
 -- PostgreSQL database dump complete
 --
 
-\unrestrict 7RNXhoFvKnMji8suOiuBZnPcvmvCGoC2kwFVq0CkYlff8BDO3kI7ULuhMe5X5Fg
+\unrestrict Fb5XwG3MBj2s7YRmgWdLdkb5GIKWb1SfHuFn2xYMt6Yu7Jco2A5fl6zkaR1uZjT
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict nBP4UboucYAzyUcMEFmt47Rzf1pGf8rTpB26l6Azffro0c2P2r8hXybXoZdEb7v
+\restrict 9qAQcK8raHj3MThP1MAQgiB9BsKpybMM2yygJJZjZD7XtR9vo50L4NfMU5i0Y2E
 
 -- Dumped from database version 16.14 (Debian 16.14-1.pgdg13+1)
 -- Dumped by pg_dump version 16.14 (Debian 16.14-1.pgdg13+1)
@@ -3061,13 +3153,13 @@ SELECT pg_catalog.setval('public.buckets_new_id_seq', 1, true);
 -- PostgreSQL database dump complete
 --
 
-\unrestrict nBP4UboucYAzyUcMEFmt47Rzf1pGf8rTpB26l6Azffro0c2P2r8hXybXoZdEb7v
+\unrestrict 9qAQcK8raHj3MThP1MAQgiB9BsKpybMM2yygJJZjZD7XtR9vo50L4NfMU5i0Y2E
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict rDOrs99CtVqd0x78gMWVtHEWNJBUC7txBbgqh3elSOCc2BdHbYyNd4LL5QiWatu
+\restrict 2p671VoB5OBqbe3bScYYEb57rM08REKuzgbWngy3b2LvsNjgclQCeuPCuwB87yq
 
 -- Dumped from database version 16.14 (Debian 16.14-1.pgdg13+1)
 -- Dumped by pg_dump version 16.14 (Debian 16.14-1.pgdg13+1)
@@ -3151,20 +3243,22 @@ INSERT INTO public.goose_db_version VALUES (61, 62, true, '2026-05-29 19:21:45.2
 INSERT INTO public.goose_db_version VALUES (62, 63, true, '2026-05-29 19:21:45.241991');
 INSERT INTO public.goose_db_version VALUES (63, 64, true, '2026-05-29 19:21:45.244325');
 INSERT INTO public.goose_db_version VALUES (64, 65, true, '2026-06-18 03:31:33.127421');
+INSERT INTO public.goose_db_version VALUES (65, 66, true, '2026-06-21 21:22:04.543401');
+INSERT INTO public.goose_db_version VALUES (66, 67, true, '2026-06-21 21:22:04.551891');
 
 
 --
 -- Name: goose_db_version_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
-SELECT pg_catalog.setval('public.goose_db_version_id_seq', 64, true);
+SELECT pg_catalog.setval('public.goose_db_version_id_seq', 66, true);
 
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict rDOrs99CtVqd0x78gMWVtHEWNJBUC7txBbgqh3elSOCc2BdHbYyNd4LL5QiWatu
+\unrestrict 2p671VoB5OBqbe3bScYYEb57rM08REKuzgbWngy3b2LvsNjgclQCeuPCuwB87yq
 
 
 -- +weft partman/cron reconstruction (generated by scripts/collapse-migrations.sh; do not hand-edit)
