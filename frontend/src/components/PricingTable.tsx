@@ -23,9 +23,9 @@ const TIERS = [
   {
     name: 'Bolt',
     price: 299,
-    retention: '1 year',
-    volume: '1 TB/month',
-    overage: '$0.50/GB',
+    retention: '180 days',
+    volume: '500 GB/month',
+    overage: '$0.75/GB',
     features: ['50 users', 'CLI + browser shell', '500 crons', '1GB tmp storage'],
     accent: false,
   },

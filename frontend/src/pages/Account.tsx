@@ -44,7 +44,7 @@ function formatDate(iso: string): string {
 const PLANS = [
   { tier: 'swatch', name: 'Swatch', price: 19, volume: '10 GB/mo', retention: '30 days', overage: '$2/GB' },
   { tier: 'yard', name: 'Yard', price: 79, volume: '100 GB/mo', retention: '90 days', overage: '$1/GB' },
-  { tier: 'bolt', name: 'Bolt', price: 299, volume: '1 TB/mo', retention: '1 year', overage: '$0.50/GB' },
+  { tier: 'bolt', name: 'Bolt', price: 299, volume: '500 GB/mo', retention: '180 days', overage: '$0.75/GB' },
 ]
 
 // ── Upgrade confirmation (Stripe Elements) ─────────────────────────────────
