@@ -354,6 +354,15 @@ build {
     destination = "/tmp/weftd-loom@.service"
   }
 
+  # The oneshot renderer unit weftd-loom@ Requires= + After=. Without it
+  # installed, the forwarder fails closed (Requires= a missing unit) and
+  # loom's logs never ship under the loom token — the whole reason the
+  # service:/token.env fix never took hold on the host.
+  provisioner "file" {
+    source      = "deploy/loom-producer/weftd-loom-config@.service"
+    destination = "/tmp/weftd-loom-config@.service"
+  }
+
   provisioner "file" {
     source      = "deploy/loom-producer/render-weftd-config.sh"
     destination = "/tmp/render-weftd-config.sh"
@@ -367,7 +376,7 @@ build {
   provisioner "shell" {
     inline = [
       "sudo install -d -m 0755 /opt/app/scripts/loom-producer /etc/loom-producer",
-      "sudo mv /tmp/weft-loom-producer.service /tmp/weftd-loom@.service /etc/systemd/system/",
+      "sudo mv /tmp/weft-loom-producer.service /tmp/weftd-loom@.service /tmp/weftd-loom-config@.service /etc/systemd/system/",
       "sudo mv /tmp/render-weftd-config.sh /opt/app/scripts/loom-producer/render-weftd-config.sh",
       "sudo mv /tmp/streams.yaml /etc/loom-producer/streams.yaml",
       "sudo chmod +x /opt/app/scripts/loom-producer/render-weftd-config.sh",

@@ -152,6 +152,45 @@ func TestLoomUnitWiring(t *testing.T) {
 	}
 }
 
+// TestLoomUnitsInstalledByPacker pins that the AMI build installs every
+// loom-producer systemd unit. The tests above verify unit *content* in the
+// repo, but the service:/token.env fix never took hold because the packer
+// template omitted weftd-loom-config@.service — so the forwarder failed
+// closed on its Requires= and the host kept shipping under the fleet token.
+// A correct repo unit that isn't baked onto the image is worthless; guard it.
+func TestLoomUnitsInstalledByPacker(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	root := filepath.Join(filepath.Dir(thisFile), "..", "..")
+
+	entries, err := os.ReadDir(filepath.Join(root, "deploy", "loom-producer"))
+	if err != nil {
+		t.Fatalf("read loom-producer dir: %v", err)
+	}
+	pkr := readFile(t, filepath.Join(root, "packer", "weft.pkr.hcl"))
+
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".service") {
+			continue
+		}
+		if !strings.Contains(pkr, "deploy/loom-producer/"+name) {
+			t.Errorf("packer template never provisions %s — it won't exist on the AMI", name)
+		}
+		// The unit must be moved into /etc/systemd/system. Find an install
+		// line that names this unit's staged /tmp path.
+		installed := false
+		for _, line := range strings.Split(pkr, "\n") {
+			if strings.Contains(line, "/etc/systemd/system") && strings.Contains(line, "/tmp/"+name) {
+				installed = true
+				break
+			}
+		}
+		if !installed {
+			t.Errorf("packer template never installs %s into /etc/systemd/system", name)
+		}
+	}
+}
+
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)
