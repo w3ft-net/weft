@@ -61,49 +61,30 @@ Scope `Resource` to a single log group (recommended) or a prefix
 (`.../log-group:/aws/lambda/*`) to share a whole tier at once. Note the
 trailing `:*` — CloudWatch Logs ARNs require it.
 
-### 2. Write a schema file
+### 2. Register the source
 
-Weft needs to know how to parse each log line. The schema file is a
-short YAML document that names the app and tells weft where to find the
-timestamp. For a typical CloudWatch-flavored line
-(`2026-04-18 14:32:01 INFO {"user":"alice"}`):
-
-```
-# my-app.schema.yaml
-app: my-app
-format: text
-timestamp_field: "1"            # 1-indexed field number
-timestamp_fields: 2             # how many fields make up the timestamp
-timestamp_format: "2006-01-02 15:04:05"  # Go time layout
-```
-
-If your lines are pure JSON (Lambda's structured logs, for example),
-use `format: json` and point `timestamp_field` at the JSON key instead:
-
-```
-app: my-lambda
-format: json
-timestamp_field: time         # the JSON key holding the timestamp
-timestamp_format: "2006-01-02T15:04:05.000Z"
-```
-
-### 3. Register the source
-
-Use the `weft` CLI to tell weft about the account and log group.
-Run this from any machine with the `weft` binary installed and a
-valid login.
+Use the `weft` CLI to tell weft about the account and log group. Run this
+from any machine with the `weft` binary installed and a valid login.
 
 ```
 weft source add \
-  --app my-app \
+  --namespace myco \
+  --service my-app \
   --log-group /aws/lambda/my-fn \
   --account 123456789012 \
   --role-arn arn:aws:iam::123456789012:role/weft-ingest \
   --external-id REPLACE-WITH-YOUR-EXTERNAL-ID \
   --region us-east-2 \
-  --interval 30s \
-  --schema ./my-app.schema.yaml
+  --interval 30s
 ```
+
+`source add` pulls a live sample from the log group (the coordinator assumes
+the role for you) and runs an interactive schema wizard: it shows real lines
+and asks where the timestamp is, which field holds the log level, and whether
+the tail is a JSON payload. It detects the common shapes automatically —
+CloudWatch-flavored text (`2026-04-18 14:32:01 INFO {"user":"alice"}`) or
+pure-JSON Lambda logs — so you usually just confirm its suggestions. The
+schema it produces is stored server-side; there's no local file to manage.
 
 Within one poll interval weft will assume the role, page through
 recent log events, and start writing rows. Confirm the source is live:

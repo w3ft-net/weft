@@ -1,5 +1,6 @@
-// Package setup hosts the interactive schema-detection wizard the
-// `weft setup` CLI subcommand drives. Lives under cmd/weft because
+// Package setup hosts the interactive schema-detection wizard that the
+// `weft source add` and `weft source configure` subcommands drive against a
+// live sample fetched server-side. Lives under cmd/weft because
 // it depends on huh + lipgloss (TUI form library + ANSI styling)
 // and is meaningless outside a CLI tty — keeping it out of the
 // shell/ package is what lets shell/ build under GOOS=js/GOARCH=wasm
@@ -9,7 +10,6 @@ package setup
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -27,21 +27,13 @@ var (
 	labelStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
 )
 
-// RunSetup runs the interactive schema setup wizard from a sample file.
-func RunSetup(app, sampleFile string) (*ingest.Schema, error) {
-	data, err := os.ReadFile(sampleFile)
-	if err != nil {
-		return nil, fmt.Errorf("read sample file: %w", err)
-	}
-	lines := strings.Split(string(data), "\n")
-	return RunSetupFromLines(app, lines)
-}
-
-// RunSetupFromLines runs the interactive schema setup wizard from pre-loaded lines.
-// Customer is not captured on the resulting schema — the api server derives
-// it from the caller's JWT at upload time, so it's redundant on disk.
+// RunSetupFromLines runs the interactive schema setup wizard from pre-loaded
+// lines (a live sample fetched server-side). The resulting schema is returned
+// to the caller, which posts it to the coordinator — it's never written to
+// disk. Customer is not captured on the schema either; the api server derives
+// it from the caller's JWT at upload time.
 func RunSetupFromLines(app string, lines []string) (*ingest.Schema, error) {
-	fmt.Println(titleStyle.Render("weft setup — schema detection for " + app))
+	fmt.Println(titleStyle.Render("schema detection for " + app))
 	fmt.Println()
 
 	// Run detection.
@@ -219,23 +211,6 @@ func RunSetupFromLines(app string, lines []string) (*ingest.Schema, error) {
 	}
 	if schema.Format == "prefix_json" {
 		fmt.Printf("  %s field %d+\n", labelStyle.Render("JSON payload:"), schema.JSONStartField)
-	}
-
-	// --- Save ---
-	outPath := fmt.Sprintf("%s.schema.yaml", app)
-	var save bool
-	huh.NewConfirm().
-		Title(fmt.Sprintf("Save schema to %s?", outPath)).
-		Value(&save).
-		Affirmative("Yes").
-		Negative("No").
-		Run()
-
-	if save {
-		if err := schema.Save(outPath); err != nil {
-			return nil, fmt.Errorf("save schema: %w", err)
-		}
-		fmt.Println(successStyle.Render(fmt.Sprintf("✓ Saved to %s", outPath)))
 	}
 
 	return schema, nil

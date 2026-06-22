@@ -72,38 +72,20 @@ Example:
 | `/aws/myapp/worker` | myapp-worker | us-east-1 |
 | `/ecs/api-prod` | api | us-west-2 |
 
-### 3. Detect your log schema
+### 3. Register your log sources
 
-Weft needs to understand your log format to extract timestamps, levels, and structured fields. Grab a sample of your logs and run the schema detector:
-
-```bash
-# Fetch a sample (any method — CloudWatch console export, aws cli, etc.)
-aws logs filter-log-events \
-  --log-group-name /aws/myapp/web \
-  --limit 100 \
-  --query 'events[].message' \
-  --output text > myapp-web-sample.txt
-
-# Run the interactive schema detector
-weft setup --app myapp-web --customer mycompany --sample myapp-web-sample.txt
-```
-
-The wizard will:
-1. Show you sample log lines
-2. Ask if there's a timestamp field (and which one)
-3. Ask if there's a log level field
-4. Detect JSON payloads in your logs
-5. Save a schema YAML file
-
-### 4. Register your log sources
-
-Once we've configured your account on our side, register each log group:
+Once we've configured your account on our side, register each log group with
+`weft source add`. Weft pulls a live sample from the log group (assuming the
+role above) and walks you through an interactive schema wizard — it shows you
+real lines and asks about the timestamp field, the log level, and any JSON
+payloads. The resulting schema is stored server-side; there's no local schema
+file to manage.
 
 ```bash
 weft source add \
-  --app myapp-web \
+  --namespace myapp \
+  --service web \
   --log-group /aws/myapp/web \
-  --schema myapp-web.schema.yaml \
   --account <your-aws-account-id> \
   --role-arn arn:aws:iam::<your-account>:role/WeftLogReader \
   --external-id <your-external-id> \
@@ -114,7 +96,7 @@ weft source list
 
 Weft begins polling your CloudWatch logs immediately (default: every 30 seconds).
 
-### 5. Query your logs
+### 4. Query your logs
 
 ```bash
 # Connect to weft

@@ -63,7 +63,7 @@ The ingest consumer runs on the coordinator (Phase 1) or as a separate process (
 
 ## Schema detection
 
-One-time setup per app. Run during onboarding or manually via `weft schema detect --app vimgym`.
+One-time setup per source, done during onboarding: `weft source add` (CloudWatch) and `weft source configure` (weftd) both pull a live sample and run the interactive detection wizard.
 
 Samples ~500 lines from the app's log group and auto-detects:
 
@@ -72,7 +72,7 @@ Samples ~500 lines from the app's log group and auto-detects:
 3. **Prefix pattern** — positional structure before JSON payload (timestamp, level, service)
 4. **Field separator** — whitespace, comma, tab
 
-User confirms the detected schema. Stored as a flat YAML file on the coordinator's EBS volume, transmitted to shard nodes on creation.
+User confirms the detected schema. Stored server-side as `log_groups.schema_yaml`; the CloudWatch poller reads it in-process and weftd agents pull it via `/api/agent/source-status`.
 
 ```yaml
 customer: kevlar

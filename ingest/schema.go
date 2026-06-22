@@ -1,8 +1,6 @@
 package ingest
 
 import (
-	"os"
-
 	"gopkg.in/yaml.v3"
 )
 
@@ -69,33 +67,14 @@ type ExpandKey struct {
 	Type string `yaml:"type"` // TEXT, INTEGER, DOUBLE, BOOLEAN
 }
 
-// LoadSchema reads a schema YAML file.
-func LoadSchema(path string) (*Schema, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	return LoadSchemaFromBytes(data)
-}
-
-// LoadSchemaFromBytes parses a schema from raw YAML bytes. Same shape as
-// LoadSchema but for callers that already have the YAML in memory (e.g.
-// CLI subcommands that read the file themselves before posting fields).
+// LoadSchemaFromBytes parses a schema from raw YAML bytes. Used by weftd's
+// parser cache and any caller that already has the schema YAML in memory.
 func LoadSchemaFromBytes(data []byte) (*Schema, error) {
 	var s Schema
 	if err := yaml.Unmarshal(data, &s); err != nil {
 		return nil, err
 	}
 	return &s, nil
-}
-
-// Save writes the schema to a YAML file.
-func (s *Schema) Save(path string) error {
-	data, err := yaml.Marshal(s)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
 }
 
 // ToYAML returns the schema as a YAML string.

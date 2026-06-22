@@ -582,7 +582,7 @@ func parseSSEResponse(r io.Reader) (*RemoteQueryResult, error) {
 
 // PendingSource represents a source awaiting schema configuration.
 type PendingSource struct {
-	App        string          `json:"app"`
+	Service    string          `json:"service"`
 	Namespace  string          `json:"namespace"`
 	Instance   string          `json:"instance"`
 	Deployment string          `json:"deployment"`
@@ -619,9 +619,9 @@ func (h *HTTPCoordinator) ListPendingSources(namespace string) ([]PendingSource,
 }
 
 // ConfigureSource confirms the schema for a pending source.
-func (h *HTTPCoordinator) ConfigureSource(namespace, app string, config map[string]any) error {
+func (h *HTTPCoordinator) ConfigureSource(namespace, service string, config map[string]any) error {
 	body, _ := json.Marshal(config)
-	url := fmt.Sprintf("%s/api/sources/%s/%s/configure", h.baseURL, namespace, app)
+	url := fmt.Sprintf("%s/api/sources/%s/%s/configure", h.baseURL, namespace, service)
 	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	h.setAuthHeaders(req)
@@ -649,11 +649,52 @@ func mapToResultRow(m map[string]any) *pb.ResultRow {
 
 // ── Sources (CloudWatch + weftd) ───────────────────────────────
 
+// SampleCloudWatchSourceRequest mirrors the JSON body accepted by
+// POST /api/sources/cloudwatch/sample. It carries only the creds/log-group
+// identification — the server assumes the role and reads recent events.
+type SampleCloudWatchSourceRequest struct {
+	Namespace    string `json:"namespace"`
+	Service      string `json:"service"`
+	AWSAccountID string `json:"aws_account_id,omitempty"`
+	RoleARN      string `json:"role_arn"`
+	ExternalID   string `json:"external_id,omitempty"`
+	LogGroup     string `json:"log_group"`
+	Region       string `json:"region"`
+}
+
+// SampleCloudWatchSource pulls a live sample from the customer's CloudWatch
+// log group so the caller can run schema detection before committing the
+// source. The coordinator assumes the cross-account role server-side; the
+// returned lines feed the same setup wizard the weftd onboarding flow uses.
+func (h *HTTPCoordinator) SampleCloudWatchSource(req SampleCloudWatchSourceRequest) ([]string, error) {
+	body, _ := json.Marshal(req)
+	r, _ := http.NewRequest("POST", h.baseURL+"/api/sources/cloudwatch/sample", bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	h.setAuthHeaders(r)
+
+	resp, err := h.client.Do(r)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		msg, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var out struct {
+		Lines []string `json:"lines"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Lines, nil
+}
+
 // AddCloudWatchSourceRequest mirrors the JSON body accepted by
 // POST /api/sources/cloudwatch.
 type AddCloudWatchSourceRequest struct {
 	Namespace    string `json:"namespace"`
-	App          string `json:"app"`
+	Service      string `json:"service"`
 	AWSAccountID string `json:"aws_account_id,omitempty"`
 	RoleARN      string `json:"role_arn"`
 	ExternalID   string `json:"external_id,omitempty"`
@@ -735,17 +776,21 @@ func (h *HTTPCoordinator) RemoveSource(namespace, app string) error {
 // SchemaYAML; "sampling" (and an in-flight resample) carries the
 // SampleCollected/SampleTarget progress.
 type SourceSchema struct {
-	Status            string `json:"status"`
-	SchemaYAML        string `json:"schema_yaml"`
-	SchemaHash        string `json:"schema_hash"`
-	ResampleRequested bool   `json:"resample_requested"`
-	SampleCollected   int    `json:"sample_collected"`
-	SampleTarget      int    `json:"sample_target"`
+	Status            string          `json:"status"`
+	SchemaYAML        string          `json:"schema_yaml"`
+	SchemaHash        string          `json:"schema_hash"`
+	ResampleRequested bool            `json:"resample_requested"`
+	SampleCollected   int             `json:"sample_collected"`
+	SampleTarget      int             `json:"sample_target"`
+	// Sample carries the sample lines (a JSON array of strings) when the
+	// source is ready to (re)configure: a pending first-time sample, or a
+	// fresh sample left by a completed resample. Empty otherwise.
+	Sample json.RawMessage `json:"sample"`
 }
 
 // GetSourceSchema fetches the current schema / sampling state for a source.
-func (h *HTTPCoordinator) GetSourceSchema(namespace, app string) (*SourceSchema, error) {
-	url := fmt.Sprintf("%s/api/sources/%s/%s/schema", h.baseURL, namespace, app)
+func (h *HTTPCoordinator) GetSourceSchema(namespace, service string) (*SourceSchema, error) {
+	url := fmt.Sprintf("%s/api/sources/%s/%s/schema", h.baseURL, namespace, service)
 	req, _ := http.NewRequest("GET", url, nil)
 	h.setAuthHeaders(req)
 
@@ -768,8 +813,8 @@ func (h *HTTPCoordinator) GetSourceSchema(namespace, app string) (*SourceSchema,
 // ResampleSource asks the agent for a fresh sample of an already-configured
 // source. Ingestion is not interrupted; the fresh sample becomes available
 // for review once the agent finishes accumulating.
-func (h *HTTPCoordinator) ResampleSource(namespace, app string) error {
-	url := fmt.Sprintf("%s/api/sources/%s/%s/resample", h.baseURL, namespace, app)
+func (h *HTTPCoordinator) ResampleSource(namespace, service string) error {
+	url := fmt.Sprintf("%s/api/sources/%s/%s/resample", h.baseURL, namespace, service)
 	req, _ := http.NewRequest("POST", url, nil)
 	h.setAuthHeaders(req)
 

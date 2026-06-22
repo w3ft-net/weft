@@ -617,6 +617,13 @@ func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
 			"schema_hash":        hex.EncodeToString(sum[:]),
 			"resample_requested": lg.ResampleRequestedAt != nil,
 		}
+		// A completed resample leaves a fresh sample on the row (the flag
+		// is cleared once the full sample lands). Surfacing it lets a
+		// client re-run the wizard and swap the schema — the configure
+		// endpoint accepts an already-configured source.
+		if lg.Sample != "" && lg.Sample != "[]" {
+			resp["sample"] = json.RawMessage(lg.Sample)
+		}
 		// While a resample is in flight the source keeps ingesting on
 		// its current schema; surface accumulation progress so the UI
 		// can show "resample in progress (N/target)".
@@ -632,10 +639,15 @@ func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
 			"sample_target":    store.SampleTarget,
 		})
 	default: // pending
+		sample := lg.Sample
+		if sample == "" {
+			sample = "[]"
+		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"status":           "pending",
 			"sample_collected": lg.SampleCollected,
 			"sample_target":    store.SampleTarget,
+			"sample":           json.RawMessage(sample),
 			"detection":        json.RawMessage(lg.Detection),
 		})
 	}

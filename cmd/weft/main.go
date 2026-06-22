@@ -18,7 +18,6 @@ import (
 
 	"github.com/graybeardcorp/weft/cmd/weft/runner"
 	"github.com/graybeardcorp/weft/cmd/weft/setup"
-	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/internal/timerange"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shell"
@@ -105,9 +104,6 @@ func main() {
 		case "org":
 			runOrg()
 			return
-		case "setup":
-			runSetup()
-			return
 		case "source":
 			runSource()
 			return
@@ -159,7 +155,6 @@ func printUsage() {
 	fmt.Println("  namespace       Manage namespaces (list, create)")
 	fmt.Println("  token           Manage agent tokens (create, list, revoke)")
 	fmt.Println("  source          Manage log sources (add, list, remove, pending, configure)")
-	fmt.Println("  setup           Interactive schema setup from a sample file")
 	fmt.Println("  mcp             Start an MCP server on stdio for LLM clients")
 	fmt.Println("  propose         Review or apply MCP-staged mutations (review|apply|clear)")
 	fmt.Println("  update          Replace this binary with the latest released weft")
@@ -583,15 +578,15 @@ func runSourcePending(cfg *shell.Config) {
 		return
 	}
 
-	fmt.Printf("%-20s %-15s %-20s %-15s %s\n", "APP", "NAMESPACE", "INSTANCE", "DEPLOYMENT", "AGE")
+	fmt.Printf("%-20s %-15s %-20s %-15s %s\n", "SERVICE", "NAMESPACE", "INSTANCE", "DEPLOYMENT", "AGE")
 	for _, s := range sources {
-		fmt.Printf("%-20s %-15s %-20s %-15s %s\n", s.App, s.Namespace, s.Instance, s.Deployment, s.CreatedAt)
+		fmt.Printf("%-20s %-15s %-20s %-15s %s\n", s.Service, s.Namespace, s.Instance, s.Deployment, s.CreatedAt)
 	}
 }
 
 func runSourceConfigure(cfg *shell.Config) {
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: weft source configure <namespace>/<app>")
+		fmt.Fprintln(os.Stderr, "usage: weft source configure <namespace>/<service>")
 		os.Exit(1)
 	}
 	endpoint := cfg.Endpoint
@@ -604,39 +599,56 @@ func runSourceConfigure(cfg *shell.Config) {
 	target := os.Args[3]
 	parts := strings.SplitN(target, "/", 2)
 	if len(parts) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: weft source configure <namespace>/<app>")
+		fmt.Fprintln(os.Stderr, "usage: weft source configure <namespace>/<service>")
 		os.Exit(1)
 	}
-	namespace, app := parts[0], parts[1]
+	namespace, service := parts[0], parts[1]
 
-	// Fetch the pending source to get sample + detection.
-	sources, err := remote.ListPendingSources(namespace)
+	// A source is configurable when it has a sample to drive the wizard:
+	// a pending first-time sample, or — for an already-configured source —
+	// a fresh sample left by a completed resample. Both arrive on the
+	// schema endpoint; the configure endpoint itself accepts either status.
+	sch, err := remote.GetSourceSchema(namespace, service)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "list pending: %v\n", err)
+		fmt.Fprintf(os.Stderr, "schema: %v\n", err)
 		os.Exit(1)
 	}
-
-	var found *shell.PendingSource
-	for i := range sources {
-		if sources[i].Namespace == namespace && sources[i].App == app {
-			found = &sources[i]
-			break
+	switch sch.Status {
+	case "sampling":
+		fmt.Fprintf(os.Stderr, "%s/%s hasn't collected a full sample yet (%d/%d lines). Try again once it has.\n",
+			namespace, service, sch.SampleCollected, sch.SampleTarget)
+		os.Exit(1)
+	case "configured":
+		if sch.ResampleRequested {
+			fmt.Fprintf(os.Stderr, "resample of %s/%s in progress (%d/%d lines) — re-run configure once it completes.\n",
+				namespace, service, sch.SampleCollected, sch.SampleTarget)
+			os.Exit(1)
 		}
-	}
-	if found == nil {
-		fmt.Fprintf(os.Stderr, "no pending source: %s/%s\n", namespace, app)
+		if len(sch.Sample) == 0 || string(sch.Sample) == "[]" {
+			fmt.Fprintf(os.Stderr, "%s/%s is already configured. To change its schema, collect a fresh sample first:\n    weft source resample %s/%s\nthen re-run configure once it lands.\n",
+				namespace, service, namespace, service)
+			os.Exit(1)
+		}
+	case "pending":
+		// First-time configure; the sample is on the response.
+	default:
+		fmt.Fprintf(os.Stderr, "%s/%s: unexpected status %q\n", namespace, service, sch.Status)
 		os.Exit(1)
 	}
 
 	// Parse sample lines from JSON.
 	var lines []string
-	if err := json.Unmarshal(found.Sample, &lines); err != nil {
+	if err := json.Unmarshal(sch.Sample, &lines); err != nil {
 		fmt.Fprintf(os.Stderr, "parse sample: %v\n", err)
+		os.Exit(1)
+	}
+	if len(lines) == 0 {
+		fmt.Fprintf(os.Stderr, "no sample lines available for %s/%s\n", namespace, service)
 		os.Exit(1)
 	}
 
 	// Run the interactive setup wizard with the remote sample.
-	schema, err := setup.RunSetupFromLines(namespace+"/"+app, lines)
+	schema, err := setup.RunSetupFromLines(namespace+"/"+service, lines)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "setup: %v\n", err)
 		os.Exit(1)
@@ -651,12 +663,12 @@ func runSourceConfigure(cfg *shell.Config) {
 		"level_pattern":    schema.LevelPattern,
 		"expand_keys":      schema.ExpandKeys,
 	}
-	if err := remote.ConfigureSource(namespace, app, config); err != nil {
+	if err := remote.ConfigureSource(namespace, service, config); err != nil {
 		fmt.Fprintf(os.Stderr, "configure: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Source %s/%s configured.\n", namespace, app)
+	fmt.Printf("Source %s/%s configured.\n", namespace, service)
 }
 
 // runSourceResample asks the agent for a fresh sample of an
@@ -665,7 +677,7 @@ func runSourceConfigure(cfg *shell.Config) {
 // accumulated a full one.
 func runSourceResample(cfg *shell.Config) {
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: weft source resample <namespace>/<app>")
+		fmt.Fprintln(os.Stderr, "usage: weft source resample <namespace>/<service>")
 		os.Exit(1)
 	}
 	endpoint := cfg.Endpoint
@@ -677,24 +689,24 @@ func runSourceResample(cfg *shell.Config) {
 
 	parts := strings.SplitN(os.Args[3], "/", 2)
 	if len(parts) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: weft source resample <namespace>/<app>")
+		fmt.Fprintln(os.Stderr, "usage: weft source resample <namespace>/<service>")
 		os.Exit(1)
 	}
-	namespace, app := parts[0], parts[1]
+	namespace, service := parts[0], parts[1]
 
-	if err := remote.ResampleSource(namespace, app); err != nil {
+	if err := remote.ResampleSource(namespace, service); err != nil {
 		fmt.Fprintf(os.Stderr, "resample: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Resample requested for %s/%s. The agent will collect a fresh sample; ingestion continues on the current schema meanwhile.\n", namespace, app)
-	fmt.Printf("Track progress with: weft source schema %s/%s\n", namespace, app)
+	fmt.Printf("Resample requested for %s/%s. The agent will collect a fresh sample; ingestion continues on the current schema meanwhile.\n", namespace, service)
+	fmt.Printf("Track progress with: weft source schema %s/%s\n", namespace, service)
 }
 
 // runSourceSchema prints the live schema for a configured source, or — if
 // the source is still accumulating — how far along the sample is.
 func runSourceSchema(cfg *shell.Config) {
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: weft source schema <namespace>/<app>")
+		fmt.Fprintln(os.Stderr, "usage: weft source schema <namespace>/<service>")
 		os.Exit(1)
 	}
 	endpoint := cfg.Endpoint
@@ -706,12 +718,12 @@ func runSourceSchema(cfg *shell.Config) {
 
 	parts := strings.SplitN(os.Args[3], "/", 2)
 	if len(parts) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: weft source schema <namespace>/<app>")
+		fmt.Fprintln(os.Stderr, "usage: weft source schema <namespace>/<service>")
 		os.Exit(1)
 	}
-	namespace, app := parts[0], parts[1]
+	namespace, service := parts[0], parts[1]
 
-	sch, err := remote.GetSourceSchema(namespace, app)
+	sch, err := remote.GetSourceSchema(namespace, service)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "schema: %v\n", err)
 		os.Exit(1)
@@ -728,46 +740,15 @@ func runSourceSchema(cfg *shell.Config) {
 		}
 	case "sampling":
 		fmt.Printf("%s/%s hasn't emitted enough lines to sample yet (%d/%d).\n",
-			namespace, app, sch.SampleCollected, sch.SampleTarget)
+			namespace, service, sch.SampleCollected, sch.SampleTarget)
 	default: // pending
 		fmt.Printf("%s/%s has a sample awaiting configuration (%d/%d lines). Configure it with: weft source configure %s/%s\n",
-			namespace, app, sch.SampleCollected, sch.SampleTarget, namespace, app)
+			namespace, service, sch.SampleCollected, sch.SampleTarget, namespace, service)
 	}
 }
 
 func dimText(s string) string {
 	return "\033[90m" + s + "\033[0m"
-}
-
-func runSetup() {
-	args := os.Args[2:]
-	var app, sampleFile string
-
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--service":
-			if i+1 < len(args) {
-				app = args[i+1]
-				i++
-			}
-		case "--sample":
-			if i+1 < len(args) {
-				sampleFile = args[i+1]
-				i++
-			}
-		}
-	}
-
-	if app == "" || sampleFile == "" {
-		fmt.Fprintln(os.Stderr, "usage: weft setup --service NAME --sample FILE")
-		os.Exit(1)
-	}
-
-	_, err := setup.RunSetup(app, sampleFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "setup failed: %v\n", err)
-		os.Exit(1)
-	}
 }
 
 func runSource() {
@@ -823,7 +804,7 @@ func httpClient(cfg *shell.Config) (*shell.HTTPCoordinator, error) {
 
 func runSourceAdd(client *shell.HTTPCoordinator) {
 	args := os.Args[3:]
-	var namespace, app, logGroup, schemaFile, region, pollInterval, awsAccountID, roleARN, externalID string
+	var namespace, service, logGroup, region, pollInterval, awsAccountID, roleARN, externalID string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -834,17 +815,12 @@ func runSourceAdd(client *shell.HTTPCoordinator) {
 			}
 		case "--service":
 			if i+1 < len(args) {
-				app = args[i+1]
+				service = args[i+1]
 				i++
 			}
 		case "--log-group":
 			if i+1 < len(args) {
 				logGroup = args[i+1]
-				i++
-			}
-		case "--schema":
-			if i+1 < len(args) {
-				schemaFile = args[i+1]
 				i++
 			}
 		case "--region":
@@ -875,12 +851,12 @@ func runSourceAdd(client *shell.HTTPCoordinator) {
 		}
 	}
 
-	if namespace == "" || app == "" || logGroup == "" || schemaFile == "" || roleARN == "" {
-		fmt.Fprintln(os.Stderr, `usage: weft source add --namespace NS --service NAME --log-group GROUP --schema FILE --role-arn ARN
+	if namespace == "" || service == "" || logGroup == "" || roleARN == "" {
+		fmt.Fprintln(os.Stderr, `usage: weft source add --namespace NS --service NAME --log-group GROUP --role-arn ARN
     [--account AWS_ACCOUNT_ID] [--region REGION] [--interval DURATION] [--external-id ID]`)
 		os.Exit(1)
 	}
-	if strings.Contains(app, "/") {
+	if strings.Contains(service, "/") {
 		fmt.Fprintln(os.Stderr, "--service should be the bare service name only; pass the namespace via --namespace")
 		os.Exit(1)
 	}
@@ -891,41 +867,54 @@ func runSourceAdd(client *shell.HTTPCoordinator) {
 		pollInterval = "30s"
 	}
 
-	schemaYAML, err := os.ReadFile(schemaFile)
+	// Pull a live sample from the log group (the coordinator assumes the
+	// cross-account role) and run the interactive schema wizard against it,
+	// then commit. Same sample→detect→configure flow as weftd onboarding;
+	// the schema lives server-side, no local file.
+	fmt.Fprintf(os.Stderr, "Sampling recent events from %s…\n", logGroup)
+	lines, err := client.SampleCloudWatchSource(shell.SampleCloudWatchSourceRequest{
+		Namespace:    namespace,
+		Service:      service,
+		AWSAccountID: awsAccountID,
+		RoleARN:      roleARN,
+		ExternalID:   externalID,
+		LogGroup:     logGroup,
+		Region:       region,
+	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "read schema: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sample: %v\n", err)
+		os.Exit(1)
+	}
+	if len(lines) == 0 {
+		fmt.Fprintln(os.Stderr, "no events returned from the log group — nothing to sample")
 		os.Exit(1)
 	}
 
-	// The api server builds the Schema YAML from the individual fields in
-	// AddCloudWatchSourceRequest rather than accepting a YAML blob. Parse
-	// the user-supplied file locally and pass the fields through.
-	parsedSchema, err := ingest.LoadSchemaFromBytes(schemaYAML)
+	schema, err := setup.RunSetupFromLines(namespace+"/"+service, lines)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "parse schema %s: %v\n", schemaFile, err)
+		fmt.Fprintf(os.Stderr, "setup: %v\n", err)
 		os.Exit(1)
 	}
 
 	if err := client.AddCloudWatchSource(shell.AddCloudWatchSourceRequest{
 		Namespace:       namespace,
-		App:             app,
+		Service:         service,
 		AWSAccountID:    awsAccountID,
 		RoleARN:         roleARN,
 		ExternalID:      externalID,
 		LogGroup:        logGroup,
 		Region:          region,
 		PollInterval:    pollInterval,
-		Format:          parsedSchema.Format,
-		TimestampField:  parsedSchema.TimestampField,
-		TimestampFormat: parsedSchema.TimestampFormat,
-		LevelField:      parsedSchema.LevelField,
-		LevelPattern:    parsedSchema.LevelPattern,
+		Format:          schema.Format,
+		TimestampField:  schema.TimestampField,
+		TimestampFormat: schema.TimestampFormat,
+		LevelField:      schema.LevelField,
+		LevelPattern:    schema.LevelPattern,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "add source: %v\n", err)
 		os.Exit(1)
 	}
-	fullApp := namespace + "/" + app
-	fmt.Printf("Added source: %s → %s (account %s, poll every %s)\n", fullApp, logGroup, awsAccountID, pollInterval)
+	fmt.Printf("Added source: %s/%s → %s (account %s, poll every %s)\n", namespace, service, logGroup, awsAccountID, pollInterval)
 }
 
 func runSourceList(client *shell.HTTPCoordinator) {
