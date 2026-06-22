@@ -1,8 +1,12 @@
 import { Link } from 'react-router-dom'
 import AsciiLogo from '../components/AsciiLogo'
 import ScrollDiagram from '../components/ScrollDiagram'
-import PricingTable from '../components/PricingTable'
 import './Landing.css'
+
+// Self-serve pricing/signup is hidden during private beta — the homepage funnels
+// visitors to book a demo instead. Same booking link as graybeardcorp.com.
+// Restore <PricingTable> + the /signup CTAs to bring self-serve back.
+const DEMO_URL = 'https://calendar.app.google/6q35MfR67skswfsk7'
 
 export default function Landing() {
   return (
@@ -15,7 +19,7 @@ export default function Landing() {
           </Link>
           <div className="nav-links">
             <a href="#compare" data-testid="nav-compare-link">Why weft</a>
-            <a href="#pricing" data-testid="nav-pricing-link">Pricing</a>
+            <a href={DEMO_URL} target="_blank" rel="noopener noreferrer" data-testid="nav-demo-link">Schedule a demo</a>
             <Link to="/login" className="nav-cta" data-testid="nav-login-button">Log in</Link>
           </div>
         </div>
@@ -41,9 +45,9 @@ export default function Landing() {
           </div>
 
           <div className="cta-center" style={{ marginTop: 28, marginBottom: 16 }}>
-            <Link to="/signup" className="cta-cmd" data-testid="hero-cta-button">
-              start free trial &rarr;
-            </Link>
+            <a href={DEMO_URL} className="cta-cmd" data-testid="hero-cta-button" target="_blank" rel="noopener noreferrer">
+              schedule a demo &rarr;
+            </a>
           </div>
 
           <p style={{
@@ -53,7 +57,7 @@ export default function Landing() {
             color: '#555577',
             marginTop: 8,
           }}>
-            14 days free. No credit card required.
+            Private beta — book a live walkthrough with the team.
           </p>
         </div>
         <div className="narrative">
@@ -69,15 +73,19 @@ export default function Landing() {
         <ScrollDiagram />
       </div>
 
-      {/* ── Pricing ───────────────────────────────────────────── */}
+      {/* ── Schedule a demo ───────────────────────────────────── */}
 
-      <section className="pricing-section" id="pricing">
+      <section className="pricing-section" id="demo">
         <div className="container">
           <p className="section-sub">
-            14-day free trial on any tier.
-            Usage-based overage — pay only for what you use beyond your plan.
+            weft is in private beta. Book a live walkthrough and we'll get
+            you set up — no credit card, no commitment.
           </p>
-          <PricingTable />
+          <div className="cta-center" style={{ marginTop: 24 }}>
+            <a href={DEMO_URL} className="cta-cmd" data-testid="demo-cta-button" target="_blank" rel="noopener noreferrer">
+              schedule a demo &rarr;
+            </a>
+          </div>
         </div>
       </section>
 
