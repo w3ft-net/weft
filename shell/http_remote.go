@@ -43,7 +43,8 @@ type RemoteNotice struct {
 // encoding/json decodes cleanly into it.
 type SourceInfo struct {
 	Namespace    string `json:"namespace"`
-	App          string `json:"app"`
+	Service      string `json:"service"`
+	Status       string `json:"status"`
 	SourceType   string `json:"source_type"`
 	LogGroup     string `json:"log_group"`
 	Region       string `json:"region"`

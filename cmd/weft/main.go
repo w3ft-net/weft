@@ -924,16 +924,16 @@ func runSourceList(client *shell.HTTPCoordinator) {
 		os.Exit(1)
 	}
 	if len(sources) == 0 {
-		fmt.Println("No sources configured.")
+		fmt.Println("No sources.")
 		return
 	}
-	fmt.Printf("%-15s %-20s %-10s %-35s %-12s %s\n", "NAMESPACE", "SERVICE", "SOURCE", "LOG GROUP", "REGION", "LAST POLL")
+	// SOURCE is the underlying origin: the CloudWatch log group for cloudwatch
+	// sources, or the agent-reported path for weftd. Region/last-poll are
+	// CloudWatch-poller concepts and meaningless for pushed weftd sources, so
+	// they're not shown here — `source schema <ns/svc>` has the per-source detail.
+	fmt.Printf("%-15s %-20s %-12s %-10s %s\n", "NAMESPACE", "SERVICE", "STATUS", "TYPE", "SOURCE")
 	for _, s := range sources {
-		lastPoll := s.LastPollAt
-		if lastPoll == "" {
-			lastPoll = "(never)"
-		}
-		fmt.Printf("%-15s %-20s %-10s %-35s %-12s %s\n", s.Namespace, s.App, s.SourceType, s.LogGroup, s.Region, lastPoll)
+		fmt.Printf("%-15s %-20s %-12s %-10s %s\n", s.Namespace, s.Service, s.Status, s.SourceType, s.LogGroup)
 	}
 }
 

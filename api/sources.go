@@ -332,7 +332,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	all, err := s.store.AllLogGroups()
+	all, err := s.store.AllLogGroupsAnyStatus()
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -343,6 +343,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 	type sourceResp struct {
 		Namespace    string `json:"namespace"`
 		Service      string `json:"service"`
+		Status       string `json:"status"`
 		SourceType   string `json:"source_type"`
 		LogGroup     string `json:"log_group"`
 		Region       string `json:"region"`
@@ -362,6 +363,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 		out = append(out, sourceResp{
 			Namespace:    lg.NamespaceName,
 			Service:      lg.Service,
+			Status:       string(lg.Status),
 			SourceType:   string(lg.SourceType),
 			LogGroup:     lg.LogGroupName,
 			Region:       lg.Region,

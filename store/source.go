@@ -168,8 +168,21 @@ type LogGroupWithAWSAccount struct {
 // ListPendingLogGroups. AWS-account fields are populated for cloudwatch
 // rows and left empty for weftd rows via the LEFT JOIN.
 func (s *Store) AllLogGroups() ([]LogGroupWithAWSAccount, error) {
+	return s.allLogGroups(StatusConfigured)
+}
+
+// AllLogGroupsAnyStatus returns every source regardless of status — including
+// pending and still-sampling rows. Backs the source-list view so it surfaces
+// (and can remove) sources that haven't been configured yet.
+func (s *Store) AllLogGroupsAnyStatus() ([]LogGroupWithAWSAccount, error) {
+	return s.allLogGroups()
+}
+
+// allLogGroups runs the shared join. With no statuses it returns every row;
+// otherwise it filters to the given ones.
+func (s *Store) allLogGroups(statuses ...LogGroupStatus) ([]LogGroupWithAWSAccount, error) {
 	var results []LogGroupWithAWSAccount
-	err := s.db.
+	q := s.db.
 		Table("log_groups").
 		Select(`log_groups.*,
 		        customers.name as customer_name,
@@ -179,10 +192,11 @@ func (s *Store) AllLogGroups() ([]LogGroupWithAWSAccount, error) {
 		        aws_accounts.account_id`).
 		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
 		Joins("JOIN customers ON namespaces.customer_id = customers.id").
-		Joins("LEFT JOIN aws_accounts ON log_groups.aws_account_id = aws_accounts.id").
-		Where("log_groups.status = ?", StatusConfigured).
-		Order("customers.name, namespaces.name, log_groups.app").
-		Find(&results).Error
+		Joins("LEFT JOIN aws_accounts ON log_groups.aws_account_id = aws_accounts.id")
+	if len(statuses) > 0 {
+		q = q.Where("log_groups.status IN ?", statuses)
+	}
+	err := q.Order("customers.name, namespaces.name, log_groups.app").Find(&results).Error
 	return results, err
 }
 
