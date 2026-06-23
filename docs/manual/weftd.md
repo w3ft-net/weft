@@ -25,7 +25,8 @@ Configure your log sources in `/etc/weftd/config.yaml`:
 ```
 # /etc/weftd/config.yaml
 
-endpoint: ingest.w3ft.net:9020
+endpoint: ingest.w3ft.net:9020 # optional; defaults to this. Override
+                              # only for local/dockerized testing
 token: wft_a1b2c3d4e5f6...
 deployment: api               # optional; the fleet/scaling-unit
                               # this agent belongs to (k8s Deployment,

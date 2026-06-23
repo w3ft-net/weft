@@ -11,6 +11,9 @@
 # (AWS-shaped credential chain) — use that if a secret injector supplies
 # the token out of band; otherwise just set token: here.
 
+# endpoint is optional: it defaults to the production coordinator
+# (ingest.w3ft.net:9020), the only endpoint a real agent ships to. Set it
+# only to override for local/dockerized testing (e.g. "coordinator:9020").
 endpoint: ingest.w3ft.net:9020
 token: wft_REPLACE_ME
 

@@ -91,8 +91,14 @@ func registerResampleSource(fullApp string, rs resampleSource) {
 // Fields only (pre-plan behavior) as a rollback lever.
 var parseClientSide = os.Getenv("WEFTD_PARSE_CLIENT_SIDE") != "0"
 
+// defaultEndpoint is the production coordinator ingest address. It is the
+// only endpoint a real agent ever ships to, so config omits it and weftd
+// falls back here. Dockerized/dev setups override by setting endpoint:
+// explicitly (e.g. "coordinator:9020").
+const defaultEndpoint = "ingest.w3ft.net:9020"
+
 type Config struct {
-	Endpoint   string            `yaml:"endpoint"`   // coordinator address
+	Endpoint   string            `yaml:"endpoint"`   // coordinator address; defaults to defaultEndpoint when omitted
 	Token      string            `yaml:"token"`      // agent auth token (wft_...)
 	Customer   string            `yaml:"customer"`   // fallback if not returned by auth
 	Deployment string            `yaml:"deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
@@ -196,7 +202,7 @@ func main() {
 	cfg.Token = tokenFromChain(os.Getenv("WEFTD_TOKEN"), cfg.Token)
 
 	if cfg.Endpoint == "" {
-		log.Fatal("endpoint is required")
+		cfg.Endpoint = defaultEndpoint
 	}
 	if cfg.Token == "" {
 		log.Fatal("token is required: set token: in the config file or WEFTD_TOKEN in the environment")
