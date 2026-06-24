@@ -437,9 +437,17 @@ build {
   # Final cleanup: drop the extracted source + Go workdir now that both the
   # binary build and the on-builder frontend build are done, so they don't ship
   # in the AMI. Unconditional (idempotent if a step left nothing behind).
+  #
+  # Also purge the Go module cache (GOMODCACHE=/opt/app/gomodcache) and build
+  # cache (HOME=/home/admin → ~/.cache/go-build). The build env points both at
+  # persistent paths, so without this they ride into every runtime AMI (~2.2G of
+  # dead weight on a 7.7G disk — the coordinator/shard never compile). Safe: the
+  # base AMI keeps its pre-baked module cache, so the next build still starts
+  # warm; this only strips the cache from the finalized runtime image.
   provisioner "shell" {
     inline = [
       "sudo rm -rf /tmp/weft /tmp/warp /tmp/saaskit /tmp/scripts /tmp/go",
+      "sudo rm -rf /opt/app/gomodcache /home/admin/.cache/go-build",
     ]
   }
 
