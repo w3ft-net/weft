@@ -1258,7 +1258,27 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 			// endpoint with their session, where it'll succeed.
 			opts = append(opts, shellfs.WithUser(userID, mounts.OrgPerms{}))
 		}
-		interp.SetFS(shellfs.New(c.Store, custID, nil, opts...))
+		// LogServices feeds LogMount's directory listing. Source it from
+		// the same per-customer ingest discovery the /api/fs path uses
+		// (SeenServices, ferried out via ListServices), so `ls`/`tree`
+		// over /log enumerate the same services the client sees while
+		// navigating — without this the slice is empty and /log lists
+		// nothing. Guarded for tests that build a Coordinator directly.
+		var logServices []string
+		if c.SeenServices != nil {
+			logServices = c.SeenServices.Names(customer)
+		}
+		// Wrap the mount in a cwd resolver keyed to the (already seeded)
+		// dirstack. pkg/bash's file builtins (ls, cat, grep FILE, …) hand
+		// their raw argument straight to the FS — they don't normalise
+		// relative paths; that's the embedder's job, exactly as warp's own
+		// local-exec seam does. Without the wrapper a bare `ls` (arg ".")
+		// or any relative path cleans to "/" and returns the root mount
+		// set instead of the cwd's contents. Absolute paths pass through
+		// untouched, so the nil-seed callers (cron/watch, cwd "/") are
+		// unaffected. interp.DirStack().Cwd is read lazily, so an in-line
+		// `cd` within the same pipeline is tracked too.
+		interp.SetFS(bash.NewCwdFS(shellfs.New(c.Store, custID, logServices, opts...), interp.DirStack().Cwd, ""))
 
 		wf := &WeftFuncs{Store: c.Store, CustomerID: custID}
 		RegisterWeftCommands(interp, wf)
