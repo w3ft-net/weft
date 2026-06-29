@@ -60,7 +60,7 @@ func TestExpandSourceGlobs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ExpandSourceGlobs(tt.pipeline, apps)
+			got, err := ExpandSourceGlobs(tt.pipeline, "", apps)
 			if err != nil {
 				t.Fatalf("ExpandSourceGlobs: %v", err)
 			}
@@ -73,7 +73,7 @@ func TestExpandSourceGlobs(t *testing.T) {
 
 func TestExpandSourceGlobs_NoMatchIsAnError(t *testing.T) {
 	apps := []string{"acme/prod/api"}
-	_, err := ExpandSourceGlobs(`cat /log/acme/prod/*_metrics.log`, apps)
+	_, err := ExpandSourceGlobs(`cat /log/acme/prod/*_metrics.log`, "", apps)
 	if err == nil {
 		t.Fatal("expected error when glob matches nothing")
 	}

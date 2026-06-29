@@ -25,7 +25,11 @@ import (
 // behavior — silently dropping it would surface as an empty result
 // the user couldn't distinguish from "no rows" and is the wrong
 // failure mode for an analyst's interactive shell).
-func ExpandSourceGlobs(pipeline string, apps []string) (string, error) {
+// cwd resolves relative glob patterns (`cat *.log` from /log/vimgym/api
+// → /log/vimgym/api/*.log) before matching, the same rule parseSource
+// applies to concrete source args. cwd "" / "/" (home) leaves the
+// pattern lexical, so an absolute `/log/<ns>/<env>/*.log` is unaffected.
+func ExpandSourceGlobs(pipeline, cwd string, apps []string) (string, error) {
 	if !containsGlobMeta(pipeline) {
 		return pipeline, nil
 	}
@@ -62,7 +66,7 @@ func ExpandSourceGlobs(pipeline string, apps []string) (string, error) {
 			rewrittenArgs = append(rewrittenArgs, arg)
 			continue
 		}
-		matches, err := matchPseudofileGlob(arg, apps)
+		matches, err := matchPseudofileGlob(resolveSourcePath(arg, cwd), apps)
 		if err != nil {
 			return "", err
 		}

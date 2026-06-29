@@ -607,7 +607,7 @@ func (c *Coordinator) ExecuteWithDir(pipeline string, tr TimeRange, customer, us
 // notice trigger (/tmp writes) doesn't fire on follow's read-only
 // historical pass; if that changes, plumb Notices through the concat
 // transition.
-func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr TimeRange, customer, userID string) (*ExecuteResult, error) {
+func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr TimeRange, customer, userID string, dirStack []string) (*ExecuteResult, error) {
 	if c.Tail == nil {
 		return nil, fmt.Errorf("ExecuteFollow: coordinator has no tail broker")
 	}
@@ -615,13 +615,21 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 	// (FollowApp/FollowPatterns/LiveStages). The historical batch
 	// re-plans inside the rewriter callback, so customer + bounds
 	// don't need to match exactly — pass empty/zero so this Plan
-	// call never produces SQL we'd care about.
-	plan, err := planner.Plan(pipeline, "", time.Time{}, time.Time{})
+	// call never produces SQL we'd care about. cwd (index 0 of the
+	// courier's stack) resolves a relative source path so the live
+	// RowMatcher filters on the right namespace/service/kind — e.g.
+	// `tail -f gamestate.log` from /log/vimgym/api tails vimgym/api,
+	// not the bogus namespace "gamestate".
+	cwd := ""
+	if len(dirStack) > 0 {
+		cwd = dirStack[0]
+	}
+	plan, err := planner.PlanInDir(pipeline, "", cwd, time.Time{}, time.Time{})
 	if err != nil {
 		return nil, err
 	}
 
-	historical, err := c.execute(pipeline, tr, customer, userID, nil, nil)
+	historical, err := c.execute(pipeline, tr, customer, userID, nil, dirStack)
 	if err != nil {
 		return nil, err
 	}
@@ -896,7 +904,13 @@ func (r watchBinResolver) Source(name string) (string, string, bool) {
 // fire), runAlertStage post-processes, and a buffered ExecuteResult
 // is returned.
 func (c *Coordinator) execute(pipeline string, tr TimeRange, customer, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
-	custID, expanded, err := c.preflight(pipeline, customer)
+	// cwd (index 0 of the courier's stack) lets preflight resolve relative
+	// glob patterns against the client's directory before fan-out.
+	cwd := ""
+	if len(dirStack) > 0 {
+		cwd = dirStack[0]
+	}
+	custID, expanded, err := c.preflight(pipeline, customer, cwd)
 	if err != nil {
 		return nil, err
 	}
@@ -953,7 +967,7 @@ func (c *Coordinator) execute(pipeline string, tr TimeRange, customer, userID st
 // here — the rewriter strips redirects from the snapshot before
 // re-rendering, lifting them onto the CallbackCommand so warp's
 // own redirect machinery handles the FS write.
-func (c *Coordinator) runQuery(pipeline string, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
+func (c *Coordinator) runQuery(pipeline, cwd string, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
 	// Clamp tr to the customer's tier retention BEFORE planning so the
 	// SQL's ts predicates and the shard-selection in MatchingEntries
 	// agree on the same start. Without the clamp here, a boundary-
@@ -961,7 +975,7 @@ func (c *Coordinator) runQuery(pipeline string, tr TimeRange, customer string, c
 	// retention because the SQL would have no lower-bound predicate.
 	tr = c.clampTimeRange(tr, custID)
 
-	plan, err := planner.Plan(pipeline, customer, tr.Start, tr.End)
+	plan, err := planner.PlanInDir(pipeline, customer, cwd, tr.Start, tr.End)
 	if err != nil {
 		// The rewriter only substitutes pipelines whose first command
 		// is on /log/..., which the planner accepts. ErrNotPlannable
@@ -1005,7 +1019,7 @@ func (c *Coordinator) runQuery(pipeline string, tr TimeRange, customer string, c
 // the expansion cost twice — acceptable since the steps are
 // idempotent and the DB hits are cache-friendly. ExecuteForWatch
 // hits preflight once via runQuery on the happy path.
-func (c *Coordinator) preflight(pipeline string, customer string) (uint, string, error) {
+func (c *Coordinator) preflight(pipeline, customer, cwd string) (uint, string, error) {
 	var custID uint
 	if customer != "" {
 		cust, err := c.Store.GetCustomerByName(customer)
@@ -1043,7 +1057,7 @@ func (c *Coordinator) preflight(pipeline string, customer string) (uint, string,
 		// without going through NewCoordinator.
 		if c.SeenServices != nil {
 			if apps := c.SeenServices.Names(customer); len(apps) > 0 {
-				expanded, err := planner.ExpandSourceGlobs(pipeline, apps)
+				expanded, err := planner.ExpandSourceGlobs(pipeline, cwd, apps)
 				if err != nil {
 					return 0, "", fmt.Errorf("expand glob: %w", err)
 				}

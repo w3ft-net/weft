@@ -2,6 +2,7 @@ package planner
 
 import (
 	"fmt"
+	"path"
 	"strconv"
 	"strings"
 
@@ -38,7 +39,7 @@ type pipelineInfo struct {
 }
 
 // parsePipeline parses a weft shell pipeline string into structured form.
-func parsePipeline(pipeline string) (*pipelineInfo, error) {
+func parsePipeline(pipeline, cwd string) (*pipelineInfo, error) {
 	script, err := bash.Parse(pipeline)
 	if err != nil {
 		return nil, fmt.Errorf("parse pipeline: %w", err)
@@ -64,7 +65,7 @@ func parsePipeline(pipeline string) (*pipelineInfo, error) {
 		return nil, fmt.Errorf("expected simple command as pipeline source")
 	}
 
-	src, err := parseSource(srcCmd)
+	src, err := parseSource(srcCmd, cwd)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +103,7 @@ func IsLocalFSPath(p string) bool {
 }
 
 // parseSource extracts the source command info from the first pipeline command.
-func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
+func parseSource(cmd *bash.SimpleCommand, cwd string) (*sourceInfo, error) {
 	if len(cmd.Words) == 0 {
 		return nil, fmt.Errorf("empty source command")
 	}
@@ -114,6 +115,9 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 	case "cat":
 		if len(args) == 0 {
 			return nil, fmt.Errorf("cat: missing pseudofile argument")
+		}
+		for i := range args {
+			args[i] = resolveSourcePath(args[i], cwd)
 		}
 		for _, a := range args {
 			if IsLocalFSPath(a) {
@@ -145,6 +149,9 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 		}
 		if len(files) == 0 {
 			return nil, fmt.Errorf("head: missing pseudofile argument")
+		}
+		for i := range files {
+			files[i] = resolveSourcePath(files[i], cwd)
 		}
 		for _, f := range files {
 			if IsLocalFSPath(f) {
@@ -179,6 +186,9 @@ func parseSource(cmd *bash.SimpleCommand) (*sourceInfo, error) {
 		}
 		if len(files) == 0 {
 			return nil, fmt.Errorf("tail: missing pseudofile argument")
+		}
+		for i := range files {
+			files[i] = resolveSourcePath(files[i], cwd)
 		}
 		for _, f := range files {
 			if IsLocalFSPath(f) {
@@ -278,6 +288,26 @@ func parseStage(cmd *bash.SimpleCommand) stageInfo {
 	name := cmd.Words[0].Literal()
 	args := literalArgs(cmd.Words[1:])
 	return stageInfo{cmd: name, args: args}
+}
+
+// resolveSourcePath turns a relative source argument into an absolute
+// path against cwd, so `tail gamestate.log` typed from /log/vimgym/api
+// reads /log/vimgym/api/gamestate.log instead of being mis-parsed as the
+// namespace "gamestate". Absolute args are returned untouched.
+//
+// cwd "" or "/" means "no directory context" — a fresh shell sits at
+// home ("/") and addresses logs lexically (`tail log/<ns>/<svc>/<kind>.log`,
+// or the bare `warp.log` wildcard). Leaving the arg untouched in that case
+// preserves those legacy forms exactly; resolution only kicks in once the
+// client has cd'd into a real /log subdirectory.
+func resolveSourcePath(arg, cwd string) string {
+	if arg == "" || strings.HasPrefix(arg, "/") {
+		return arg
+	}
+	if cwd == "" || cwd == "/" {
+		return arg
+	}
+	return path.Join(cwd, arg)
 }
 
 // parsePseudofilePath extracts namespace, env, service, and kind from a

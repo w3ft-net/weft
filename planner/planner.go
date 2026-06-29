@@ -123,6 +123,17 @@ var ErrNotPlannable = errors.New("not a plannable log query")
 // responsible for clamping start to the customer's tier retention; the
 // coordinator does this via a clampTimeRange helper before dispatch.
 func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
+	return PlanInDir(pipeline, customer, "", start, end)
+}
+
+// PlanInDir is Plan with a working directory: a relative source argument
+// (e.g. `tail gamestate.log`) is resolved against cwd before parsing, so
+// a delegated client sitting in /log/vimgym/api reads the right source.
+// cwd "" or "/" means "no directory context" and preserves the legacy
+// lexical parsing (bare `log/...` paths, the `warp.log` wildcard). Plan
+// is the cwd-less shim over this for the many callers that have no shell
+// cwd (watch lowering, explain, the follow-arg probe).
+func PlanInDir(pipeline, customer, cwd string, start, end time.Time) (*QueryPlan, error) {
 	queryPart, alertArgs := SplitAlertStage(pipeline)
 
 	// Alert-only pipeline (`alert ...` with nothing in front). Return
@@ -142,7 +153,7 @@ func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
 		return nil, fmt.Errorf("plan: %w", err)
 	}
 
-	info, err := parsePipeline(queryPart)
+	info, err := parsePipeline(queryPart, cwd)
 	if err != nil {
 		// Not a log query — non-/log/ source path or an unknown
 		// source command. Caller (Coordinator.Execute) routes these

@@ -136,7 +136,7 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 	}
 	var result *coordinator.ExecuteResult
 	if req.Follow && s.Coord.Tail != nil {
-		result, err = s.Coord.ExecuteFollow(ctx, req.Pipeline, tr, customer, req.UserId)
+		result, err = s.Coord.ExecuteFollow(ctx, req.Pipeline, tr, customer, req.UserId, dirStack)
 	} else {
 		result, err = s.Coord.ExecuteWithDir(req.Pipeline, tr, customer, req.UserId, dirStack)
 	}

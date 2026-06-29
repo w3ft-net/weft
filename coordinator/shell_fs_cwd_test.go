@@ -65,6 +65,31 @@ func TestShellLs_ResolvesCwdAndListsNamespace(t *testing.T) {
 	}
 }
 
+// TestShellTail_RelativeSourceResolvesAgainstCwd reproduces the prod
+// report: from /log/vimgym/api, `tail gamestate.log` was mis-parsed as
+// the namespace "gamestate" and rejected with "unknown source:
+// gamestate" because the planner never resolved the relative source arg
+// against the seeded cwd. With the fix it resolves to
+// /log/vimgym/api/gamestate.log (namespace vimgym, which the customer
+// owns) and runs cleanly — no shards here, so the result is just empty.
+func TestShellTail_RelativeSourceResolvesAgainstCwd(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+	const customer = "weftfuncs-test"
+	if _, err := db.FindOrCreateNamespace(custID, "vimgym"); err != nil {
+		t.Fatalf("FindOrCreateNamespace: %v", err)
+	}
+	c := NewCoordinator(CoordinatorConfig{Store: db})
+
+	res, err := c.ExecuteWithDir("tail gamestate.log", TimeRange{}, customer, "", []string{"/log/vimgym/api"})
+	if err != nil {
+		t.Fatalf("ExecuteWithDir: %v", err)
+	}
+	d := drainExec(t, res)
+	if strings.Contains(d.Stderr, "unknown source") {
+		t.Fatalf("tail gamestate.log from /log/vimgym/api was not resolved against cwd: %s", d.Stderr)
+	}
+}
+
 // TestShellTree_ListsNamespaceFromSeededCwd: `tree` with no args inside
 // /log/acme renders acme's subtree. tree (unlike ls) normalises its
 // target against cwd itself, so it never tripped the cwd bug — but it

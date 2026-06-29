@@ -106,7 +106,11 @@ func rewriteQueryPipelines(script *bash.Script, c *Coordinator, tr TimeRange, cu
 					// the pipeline to warp+rewriter, and the rewriter
 					// re-enters runQuery for each substituted log
 					// pipeline.
-					result, err := c.runQuery(src, tr, customer, custID, userID, alertCtx)
+					// Resolve relative source paths (`tail gamestate.log`)
+					// against the live cwd — read here, not at rewrite time,
+					// so an in-line `cd /log/x && tail y.log` sees the post-cd
+					// directory. The dirstack was seeded from the courier.
+					result, err := c.runQuery(src, interp.DirStack().Cwd(), tr, customer, custID, userID, alertCtx)
 					if err != nil {
 						fmt.Fprintf(stderr, "query: %v\n", err)
 						return 1

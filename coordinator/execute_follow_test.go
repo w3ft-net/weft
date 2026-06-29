@@ -25,7 +25,7 @@ func TestExecuteFollow_HistoricalThenBroker(t *testing.T) {
 	// `tail vimgym.log` (no -f in the pipeline — ExecuteFollow's own
 	// follow flag drives live tailing) to keep the historical batch
 	// small and predictable.
-	res, err := c.ExecuteFollow(ctx, "tail vimgym.log", fullRange, "kevlar", "")
+	res, err := c.ExecuteFollow(ctx, "tail vimgym.log", fullRange, "kevlar", "", nil)
 	if err != nil {
 		t.Fatalf("ExecuteFollow: %v", err)
 	}
@@ -63,6 +63,48 @@ func TestExecuteFollow_HistoricalThenBroker(t *testing.T) {
 	}
 }
 
+// TestExecuteFollow_RelativeSourceResolvesAgainstCwd: a follow whose
+// source is a relative path resolves against the courier's cwd, so the
+// live RowMatcher filters on the right namespace/service/kind. From
+// /log/vimgym/api, `tail gamestate.log` follows vimgym/api/gamestate —
+// pre-fix the matcher used the bogus namespace "gamestate" and dropped
+// every real row, so the broadcast below never arrived.
+func TestExecuteFollow_RelativeSourceResolvesAgainstCwd(t *testing.T) {
+	c := setupTestCoordinator(t)
+	c.Tail = NewTailBroker()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	res, err := c.ExecuteFollow(ctx, "tail gamestate.log", fullRange, "kevlar", "", []string{"/log/vimgym/api"})
+	if err != nil {
+		t.Fatalf("ExecuteFollow: %v", err)
+	}
+	// Drain the (empty) historical phase; the broker takes over after.
+	drainHistorical(t, res.Stream, 500*time.Millisecond)
+
+	c.Tail.Broadcast([]*pb.LogRow{{
+		Raw:       "live gamestate row",
+		Namespace: "vimgym",
+		Service:   "api",
+		Kind:      "gamestate",
+		Customer:  "kevlar",
+	}})
+
+	readCtx, readCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer readCancel()
+	line, ok, err := res.Stream.Next(readCtx)
+	if err != nil {
+		t.Fatalf("Next after broadcast: %v (matcher likely filtered on the wrong namespace)", err)
+	}
+	if !ok {
+		t.Fatal("stream EOF before broadcast row arrived")
+	}
+	if line.Raw != "live gamestate row" {
+		t.Errorf("broker row Raw = %q, want the broadcast we sent", line.Raw)
+	}
+}
+
 // TestExecuteFollow_NoBroker_Errors guards the precondition: if the
 // coordinator has no Tail broker configured, ExecuteFollow must
 // reject the call rather than return a stream that silently drops
@@ -71,7 +113,7 @@ func TestExecuteFollow_NoBroker_Errors(t *testing.T) {
 	c := setupTestCoordinator(t)
 	c.Tail = nil
 
-	_, err := c.ExecuteFollow(context.Background(), "tail vimgym.log", fullRange, "kevlar", "")
+	_, err := c.ExecuteFollow(context.Background(), "tail vimgym.log", fullRange, "kevlar", "", nil)
 	if err == nil {
 		t.Fatal("expected error when Tail is nil")
 	}
@@ -86,7 +128,7 @@ func TestExecuteFollow_NonLogPipeline_Rejected(t *testing.T) {
 	c := setupTestCoordinator(t)
 	c.Tail = NewTailBroker()
 
-	_, err := c.ExecuteFollow(context.Background(), "echo hi", fullRange, "kevlar", "")
+	_, err := c.ExecuteFollow(context.Background(), "echo hi", fullRange, "kevlar", "", nil)
 	if !errors.Is(err, planner.ErrNotPlannable) {
 		t.Fatalf("err = %v, want ErrNotPlannable", err)
 	}
