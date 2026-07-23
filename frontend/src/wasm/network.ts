@@ -12,6 +12,16 @@ declare global {
     wasmHandleQueryResult: (text: string, errMsg: string) => void
     wasmHandleFollowRow: (raw: string) => void
     wasmHandleFollowDone: (errMsg: string) => void
+
+    // Instanced (browser-tmux) result delivery. Present only in
+    // multi-pane WASM builds (weft's cmd/wasm registers them via
+    // warp's bridge). They address the pane that started the query by
+    // id so its result lands in that pane's core — the singleton
+    // wasm* exports above route to reg.active() (the most-recently
+    // booted pane), which crosses output between panes.
+    wasmPaneQueryResult?: (instance: string, text: string, errMsg: string) => void
+    wasmPaneFollowRow?: (instance: string, raw: string) => void
+    wasmPaneFollowDone?: (instance: string, errMsg: string) => void
   }
   // __WEFT_WEB_SHA__ is injected by Vite at build time (see vite.config.ts).
   // The string is the short git SHA the bundle was built from, or "dev"
@@ -43,7 +53,40 @@ export function authHeaders(): Record<string, string> {
   return headers
 }
 
-let abortController: AbortController | null = null
+// A query/follow is keyed by the pane instance that started it (or ""
+// for the single-pane shell). Each pane runs an independent request, so
+// its in-flight AbortController is tracked per key — otherwise starting
+// a query in one pane would cancel a query still streaming in another.
+const controllers = new Map<string, AbortController>()
+
+function keyFor(instance?: string): string {
+  return instance ?? ''
+}
+
+// deliver returns the result callbacks for a given pane. With an
+// instance, results route through the instanced wasmPane* exports so
+// they reach the pane that started the query; without one, the legacy
+// singleton exports (single-pane shell) are used unchanged.
+interface Deliver {
+  queryResult: (text: string, errMsg: string) => void
+  followRow: (raw: string) => void
+  followDone: (errMsg: string) => void
+}
+
+function deliver(instance?: string): Deliver {
+  if (instance) {
+    return {
+      queryResult: (t, e) => window.wasmPaneQueryResult?.(instance, t, e),
+      followRow: (r) => window.wasmPaneFollowRow?.(instance, r),
+      followDone: (e) => window.wasmPaneFollowDone?.(instance, e),
+    }
+  }
+  return {
+    queryResult: (t, e) => window.wasmHandleQueryResult(t, e),
+    followRow: (r) => window.wasmHandleFollowRow(r),
+    followDone: (e) => window.wasmHandleFollowDone(e),
+  }
+}
 
 // currentRangeSpec holds the un-resolved range spec ("1d..", "30m..10m",
 // "2026-04-01..2026-04-12"). The Go-side `range` builtin pushes updates via
@@ -76,19 +119,22 @@ export function notifyBuiltinExecuted(pipeline: string) {
   }).catch(() => {})
 }
 
-export function cancelQuery() {
-  abortController?.abort()
-  abortController = null
+export function cancelQuery(instance?: string) {
+  const k = keyFor(instance)
+  controllers.get(k)?.abort()
+  controllers.delete(k)
 }
 
-export async function execQuery(pipeline: string) {
-  cancelQuery()
-  abortController = new AbortController()
+export async function execQuery(pipeline: string, instance?: string) {
+  cancelQuery(instance)
+  const abortController = new AbortController()
+  controllers.set(keyFor(instance), abortController)
+  const out = deliver(instance)
   let timedOut = false
 
   const timeout = setTimeout(() => {
     timedOut = true
-    abortController?.abort()
+    abortController.abort()
   }, 10000)
 
   try {
@@ -102,19 +148,19 @@ export async function execQuery(pipeline: string) {
 
     if (!res.ok) {
       const msg = await res.text().catch(() => `HTTP ${res.status}`)
-      window.wasmHandleQueryResult('', msg || `HTTP ${res.status}`)
+      out.queryResult('', msg || `HTTP ${res.status}`)
       return
     }
 
     const contentType = res.headers.get('content-type') || ''
     if (!contentType.includes('text/event-stream')) {
-      window.wasmHandleQueryResult('', `unexpected response (content-type: ${contentType || 'none'})`)
+      out.queryResult('', `unexpected response (content-type: ${contentType || 'none'})`)
       return
     }
 
     const reader = res.body?.getReader()
     if (!reader) {
-      window.wasmHandleQueryResult('', 'No response body')
+      out.queryResult('', 'No response body')
       return
     }
 
@@ -149,7 +195,7 @@ export async function execQuery(pipeline: string) {
           } else if (evt.type === 'tour_advance') {
             window.dispatchEvent(new CustomEvent('tour-advance', { detail: { step: evt.step } }))
           } else if (evt.type === 'error') {
-            window.wasmHandleQueryResult('', evt.text || evt.message || 'unknown error')
+            out.queryResult('', evt.text || evt.message || 'unknown error')
             return
           }
         } catch {
@@ -158,28 +204,36 @@ export async function execQuery(pipeline: string) {
       }
     }
 
-    window.wasmHandleQueryResult(outputChunks.join('\n') + (outputChunks.length ? '\n' : ''), '')
+    out.queryResult(outputChunks.join('\n') + (outputChunks.length ? '\n' : ''), '')
   } catch (err) {
     clearTimeout(timeout)
     if ((err as Error).name === 'AbortError') {
       if (timedOut) {
-        window.wasmHandleQueryResult('', 'request timed out')
+        out.queryResult('', 'request timed out')
       }
       // User-initiated cancel (Ctrl+C): no message needed.
     } else {
       const msg = (err as Error).message
       if (msg === 'Failed to fetch' || msg.includes('NetworkError')) {
-        window.wasmHandleQueryResult('', 'cannot reach API server')
+        out.queryResult('', 'cannot reach API server')
       } else {
-        window.wasmHandleQueryResult('', msg)
+        out.queryResult('', msg)
       }
+    }
+  } finally {
+    // Drop this request's controller unless a newer one has already
+    // replaced it (a rapid re-run for the same pane).
+    if (controllers.get(keyFor(instance)) === abortController) {
+      controllers.delete(keyFor(instance))
     }
   }
 }
 
-export async function execFollow(pipeline: string) {
-  cancelQuery()
-  abortController = new AbortController()
+export async function execFollow(pipeline: string, instance?: string) {
+  cancelQuery(instance)
+  const abortController = new AbortController()
+  controllers.set(keyFor(instance), abortController)
+  const out = deliver(instance)
 
   try {
     const res = await fetch(`${API_BASE}/api/shell/exec`, {
@@ -191,13 +245,13 @@ export async function execFollow(pipeline: string) {
 
     if (!res.ok) {
       const msg = await res.text().catch(() => `HTTP ${res.status}`)
-      window.wasmHandleFollowDone(msg)
+      out.followDone(msg)
       return
     }
 
     const reader = res.body?.getReader()
     if (!reader) {
-      window.wasmHandleFollowDone('No response body')
+      out.followDone('No response body')
       return
     }
 
@@ -220,9 +274,9 @@ export async function execFollow(pipeline: string) {
         try {
           const evt = JSON.parse(raw) as { type: string; text?: string; data?: { raw?: string } }
           if (evt.type === 'line' && evt.data?.raw != null) {
-            window.wasmHandleFollowRow(evt.data.raw)
+            out.followRow(evt.data.raw)
           } else if (evt.type === 'error' && evt.text != null) {
-            window.wasmHandleFollowDone(evt.text)
+            out.followDone(evt.text)
             return
           }
         } catch {
@@ -231,17 +285,21 @@ export async function execFollow(pipeline: string) {
       }
     }
 
-    window.wasmHandleFollowDone('')
+    out.followDone('')
   } catch (err) {
     if ((err as Error).name !== 'AbortError') {
       const msg = (err as Error).message
       if (msg === 'Failed to fetch' || msg.includes('NetworkError')) {
-        window.wasmHandleFollowDone('cannot reach API server')
+        out.followDone('cannot reach API server')
       } else {
-        window.wasmHandleFollowDone(msg)
+        out.followDone(msg)
       }
     } else {
-      window.wasmHandleFollowDone('')
+      out.followDone('')
+    }
+  } finally {
+    if (controllers.get(keyFor(instance)) === abortController) {
+      controllers.delete(keyFor(instance))
     }
   }
 }

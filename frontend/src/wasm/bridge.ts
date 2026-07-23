@@ -153,9 +153,11 @@ export async function initShellPane(
       if (terminalRef) terminalRef.write(data)
       else earlyWrites.push(data)
     },
-    startQuery: (pipeline: string) => { execQuery(pipeline) },
-    startFollow: (pipeline: string) => { execFollow(pipeline) },
-    cancelQuery: () => cancelQuery(),
+    // Scope query/follow to this pane so results return to the core
+    // that started them (not reg.active() — the last-booted pane).
+    startQuery: (pipeline: string) => { execQuery(pipeline, instance) },
+    startFollow: (pipeline: string) => { execFollow(pipeline, instance) },
+    cancelQuery: () => cancelQuery(instance),
     notifyQuit: () => {},
 
     fsReadFile: (path) => fsRead(path),
