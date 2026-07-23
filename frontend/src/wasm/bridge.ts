@@ -131,6 +131,86 @@ export async function initShellWasm(
   return bridge
 }
 
+// initShellPane boots one pane of a browser tmux. Unlike initShellWasm
+// it registers the core under `instance` (so multiple panes coexist on
+// the one Go runtime, all sharing the server-side FS) and installs an
+// `interceptData` hook that the pane grid uses for the Ctrl-B prefix
+// FSM. The FS / network / history callbacks are identical to the
+// single-pane shell — they're stateless XHRs against /api, so every
+// pane reading them sees the same tenant filesystem.
+export async function initShellPane(
+  container: HTMLElement,
+  instance: string,
+  services: string[],
+  identity: ShellIdentity | undefined,
+  interceptData: (data: string, forward: (d: string) => void) => void,
+): Promise<ShellBridge> {
+  let terminalRef: BaseShellBridge['terminal'] | null = null
+  const earlyWrites: string[] = []
+
+  const callbacks: WasmCallbacks = {
+    write: (data) => {
+      if (terminalRef) terminalRef.write(data)
+      else earlyWrites.push(data)
+    },
+    startQuery: (pipeline: string) => { execQuery(pipeline) },
+    startFollow: (pipeline: string) => { execFollow(pipeline) },
+    cancelQuery: () => cancelQuery(),
+    notifyQuit: () => {},
+
+    fsReadFile: (path) => fsRead(path),
+    fsWriteFile: (path, content) => fsWrite(path, content),
+    fsReadDir: (path) => fsList(path),
+    fsRemove: (path) => fsRemove(path),
+
+    loadHistory: () => localStorage.getItem('weft_history') || '',
+    saveHistory: (lines) => localStorage.setItem('weft_history', lines),
+
+    getUser: () => identity?.user ?? '',
+    getCustomer: () => identity?.customer ?? '',
+    getServices: () => services,
+    fsGetWatchResults: (name: string, limit: number) => fsGetWatchResults(name, limit),
+
+    // Panes don't own the header range chip; still record the spec so
+    // the network layer ships a sane window on each fetch.
+    onRangeChange: (rawSpec: string) => { setCurrentRangeSpec(rawSpec) },
+    // Dashboard/chart navigation is a whole-page concern; no-op inside a pane.
+    dashboardNavigate: () => {},
+    chartOpen: () => {},
+    builtinExecuted: (pipeline: string) => notifyBuiltinExecuted(pipeline),
+  } as WasmCallbacks
+
+  const bridge = await loadShellWasm(container, {
+    wasmUrl: '/shell.wasm',
+    callbacks,
+    instance,
+    interceptData,
+  })
+
+  terminalRef = bridge.terminal
+  for (const data of earlyWrites) {
+    bridge.terminal.write(data)
+  }
+
+  bridge.terminal.parser.registerOscHandler(52, (data) => {
+    const semi = data.indexOf(';')
+    if (semi < 0) return false
+    const b64 = data.slice(semi + 1)
+    let text: string
+    try {
+      text = atob(b64)
+    } catch {
+      return false
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {})
+    }
+    return true
+  })
+
+  return bridge
+}
+
 // ── Synchronous FS proxy ───────────────────────────────────────
 // All FS callbacks use synchronous XHR because Go WASM's
 // js.Value.Call() blocks until the JS function returns.

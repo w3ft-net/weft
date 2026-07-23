@@ -1,0 +1,108 @@
+.panes-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #0f1117;
+  color: #c8ccd4;
+  font-family: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+}
+
+.panes-loading {
+  display: grid;
+  place-items: center;
+  height: 100vh;
+  background: #0f1117;
+  color: #5c6370;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.panes-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 12px;
+  background: #151824;
+  border-bottom: 1px solid #232838;
+  flex: 0 0 auto;
+}
+
+.panes-bar-status {
+  border-bottom: none;
+  border-top: 1px solid #232838;
+  color: #8a90a0;
+}
+
+.panes-title { font-weight: 600; color: #e5c07b; }
+.panes-hint { color: #6b7080; margin-left: auto; }
+.panes-hint kbd {
+  background: #232838;
+  border-radius: 3px;
+  padding: 0 4px;
+  color: #c8ccd4;
+}
+
+.panes-focus { color: #61afef; }
+.panes-prefix { color: #0f1117; background: #98c379; padding: 0 6px; border-radius: 3px; font-weight: 700; }
+.panes-zoom { color: #0f1117; background: #e5c07b; padding: 0 6px; border-radius: 3px; font-weight: 700; }
+
+.panes-grid {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: #232838; /* shows through the pane borders as dividers */
+}
+
+/* Panes are absolutely positioned from the split tree's layout rects so
+   splitting/closing never remounts a living terminal. */
+.pane {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: #0f1117;
+  box-sizing: border-box;
+  border: 1px solid #232838;
+  overflow: hidden;
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: #6b7080;
+  background: #12151f;
+  border-bottom: 1px solid #1c2130;
+}
+
+.pane.is-focused .pane-head {
+  color: #0f1117;
+  background: #61afef;
+}
+
+.pane-name { font-weight: 600; }
+
+.pane-close {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.pane-close:hover { background: rgba(224, 108, 117, 0.3); color: #fff; }
+
+.pane-term {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 2px 4px;
+}
+
+/* A subtle focus ring on the active pane's terminal area. */
+.pane.is-focused { box-shadow: inset 0 0 0 1px #61afef; }

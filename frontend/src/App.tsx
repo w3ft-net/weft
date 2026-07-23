@@ -5,6 +5,7 @@ import Signup from './pages/Signup'
 import PaymentSetup from './pages/PaymentSetup'
 import Verify from './pages/Verify'
 import Shell from './pages/Shell'
+import Panes from './pages/Panes'
 import Downloads from './pages/Downloads'
 import Account from './pages/Account'
 import Device from './pages/Device'
@@ -30,6 +31,9 @@ export default function App() {
       } />
       <Route path="/shell" element={
         <ProtectedRoute><Shell /></ProtectedRoute>
+      } />
+      <Route path="/panes" element={
+        <ProtectedRoute><Panes /></ProtectedRoute>
       } />
       <Route path="/downloads" element={
         <ProtectedRoute><Downloads /></ProtectedRoute>
