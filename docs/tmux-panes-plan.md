@@ -91,11 +91,14 @@ internally, so the host `replace` is fine), then visit
 `Ctrl-B` then: `%`/`"` split · `o` next · `1`-`9` jump · `x` close · `z` zoom.
 Prove shared FS: `echo hi > /tmp/f` in pane A, `cat /tmp/f` in pane B.
 
-**Ship gate (before merge):** remove the dev `replace
-github.com/graybeardcorp/warp => ../warp` from `weft/go.mod`, tag warp, bump
-weft's pin. Until then, rebuilding `shell.wasm` requires the replace (pinned
-v0.2.9 lacks the `wasmInitPane`/`wasmPane*` exports). The warp side lives on
-branch `tmux-multicore-bridge`.
+**Ship gate:** ✅ *done.* warp `tmux-multicore-bridge` fast-forwarded onto
+`main` and tagged **v0.2.35**; `weft/go.mod` bumped `v0.2.9 → v0.2.35` and the
+dev `replace github.com/graybeardcorp/warp => ../warp` removed. Also fixed a
+pane result-routing bug found in browser testing: query/follow results went
+through the singleton `wasmHandle*` exports (→ `reg.active()`, the last-booted
+pane), so output crossed panes and the initiating pane spun forever — now
+threaded per-instance through `wasmPane*` (weft `frontend/src/wasm/network.ts`
++ `bridge.ts`, test `network_routing.test.ts`).
 
 ### Progress notes
 
@@ -110,9 +113,10 @@ branch `tmux-multicore-bridge`.
   green; weft host + wasm build green against a temporary local `replace` (reverted
   — ship via tag + pin bump).
 
-## vimgym later
+## vimgym later — now unblocked
 
-Same frontend component reused, but vimgym's adventure is a *guided single
-shell*; tiling fights it as a default. The fit there is **teaching tmux as
-curriculum** (a room/course), which needs the same multi-core-shared-FS
-enablement. Deferred until the browser feature lands in weft.
+The browser feature has landed in weft (ship gate done above), so this is the
+next phase. Same frontend component reused, but vimgym's adventure is a *guided
+single shell*; tiling fights it as a default. The fit there is **teaching tmux
+as curriculum** (a room/course), which needs the same multi-core-shared-FS
+enablement warp v0.2.35 now provides.
