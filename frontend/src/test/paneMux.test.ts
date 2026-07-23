@@ -3,7 +3,7 @@ import {
   PrefixFsm, applyCommand, leaf, leaves, layoutRects, directionalNeighbor, closeLeaf, splitLeaf,
   CTRL_B, ARROW_LEFT, ARROW_RIGHT, ARROW_UP, ARROW_DOWN,
   type MuxState, type PaneNode,
-} from '../wasm/paneMux'
+} from '@warp/shellcore-wasm'
 
 describe('PrefixFsm', () => {
   it('forwards ordinary keystrokes untouched', () => {

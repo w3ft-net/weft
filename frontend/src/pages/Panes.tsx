@@ -23,7 +23,7 @@ import { initShellPane, type ShellBridge, type ShellIdentity } from '../wasm/bri
 import {
   PrefixFsm, applyCommand, leaf, leaves, layoutRects, ESC,
   type MuxState, type PaneNode, type Rect,
-} from '../wasm/paneMux'
+} from '@warp/shellcore-wasm'
 import { useAuth } from '../lib/AuthContext'
 import '@xterm/xterm/css/xterm.css'
 import './Panes.css'
