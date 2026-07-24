@@ -3,11 +3,14 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -16,6 +19,137 @@ import (
 )
 
 // ── Customer handlers ───────────────────────────────────────────────
+
+// compTiers are the paid tiers a comp account may be granted. Trial is
+// excluded on purpose — a comp is an out-of-band grant of a real plan,
+// not a self-serve trial (which the signup flow, now retired, used to
+// mint). Keep in sync with the tier <select> in the admin UI.
+var compTiers = map[string]bool{
+	string(store.TierSwatch): true,
+	string(store.TierYard):   true,
+	string(store.TierBolt):   true,
+}
+
+// handleAdminCreateCustomer provisions a fresh comp account: a customer
+// (org), a verified owner user, the owner's team membership, and a comp
+// subscription at the requested tier. This is the operator replacement
+// for public signup (retired) — the owner is created email-verified so
+// they aren't blocked by RequireEmailVerified, and gets a magic link
+// (emailed best-effort; also returned so the operator can hand it off).
+//
+// Mirrors handleSignup's guards: 409 on an existing user email or a
+// taken org name.
+func (s *Server) handleAdminCreateCustomer(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email   string `json:"email"`
+		OrgName string `json:"org_name"`
+		Tier    string `json:"tier"`
+		Reason  string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	customerName := strings.ToLower(strings.TrimSpace(req.OrgName))
+	if email == "" || customerName == "" {
+		http.Error(w, "email and org_name are required", http.StatusBadRequest)
+		return
+	}
+	if req.Tier == "" {
+		req.Tier = string(store.TierBolt)
+	}
+	if !compTiers[req.Tier] {
+		http.Error(w, "invalid tier (must be swatch, yard, or bolt)", http.StatusBadRequest)
+		return
+	}
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = "comp-account"
+	}
+
+	if existing, _ := s.store.GetUserByEmail(email); existing != nil {
+		http.Error(w, "account already exists", http.StatusConflict)
+		return
+	}
+	if existing, _ := s.store.GetCustomerByName(customerName); existing != nil {
+		http.Error(w, "organization name already taken", http.StatusConflict)
+		return
+	}
+
+	cust, err := s.store.FindOrCreateCustomer(customerName)
+	if err != nil {
+		log.Printf("admin: create customer %q: %v", customerName, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	// Verified owner: an operator vouches for the address, and gating a
+	// comp account behind an email round-trip is pure friction.
+	user, err := s.store.CreateVerifiedUser(email)
+	if err != nil {
+		log.Printf("admin: create owner %q: %v", email, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	now := time.Now()
+	if err := s.store.CreateTeamMember(&store.TeamMember{
+		ID:         uuid.New().String(),
+		CustomerID: cust.ID,
+		Email:      email,
+		UserID:     &user.ID,
+		Role:       "owner",
+		Status:     "active",
+		InvitedAt:  now,
+		AcceptedAt: &now,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}); err != nil {
+		log.Printf("admin: create owner membership for %q: %v", email, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := s.store.GrantCompSubscription(cust.ID, req.Tier, reason); err != nil {
+		log.Printf("admin: grant comp for %q: %v", customerName, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Read-only seat in the Loom demo org, same as the retired signup
+	// path did. The welcome/tour modal keys off this membership — without
+	// it the comp owner lands on an empty dashboard and "Start the tour"
+	// is disabled. Soft-fails if Loom isn't seeded (see grantLoomMembership).
+	if err := s.grantLoomMembership(user.ID, email); err != nil {
+		log.Printf("admin: grant Loom membership for %q: %v", email, err)
+	}
+
+	// Land the owner in their new org on next request.
+	_ = s.store.UpdateUserLastActiveCustomer(user.ID, cust.ID)
+
+	// Magic link so the owner can log in. Best-effort email (dev mode has
+	// no EmailConfig); the URL is returned regardless so the operator can
+	// deliver it out of band.
+	loginURL := ""
+	if token, err := s.store.CreateMagicLink(email); err != nil {
+		log.Printf("admin: create magic link for %q: %v", email, err)
+	} else {
+		loginURL = fmt.Sprintf("%s/verify?token=%s", s.baseURL, token)
+		if err := SendMagicLinkEmail(s.email, email, loginURL); err != nil {
+			log.Printf("admin: send login link to %q: %v", email, err)
+		}
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]any{
+		"name":        cust.Name,
+		"tier":        req.Tier,
+		"comp_reason": reason,
+		"owner_email": email,
+		"login_url":   loginURL,
+	})
+}
 
 func (s *Server) handleAdminListCustomers(w http.ResponseWriter, r *http.Request) {
 	var customers []store.Customer

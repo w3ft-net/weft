@@ -857,6 +857,25 @@ export interface AdminShard {
   BucketID: number
 }
 
+export interface AdminCreatedCustomer {
+  name: string
+  tier: string
+  comp_reason: string
+  owner_email: string
+  // Magic link for the owner's first login. Emailed best-effort by the
+  // server; returned here so the operator can deliver it directly.
+  login_url: string
+}
+
+export function adminCreateCustomer(
+  email: string, orgName: string, tier: string, reason?: string,
+): Promise<AdminCreatedCustomer> {
+  return apiFetch('/api/admin/customers', {
+    method: 'POST',
+    body: JSON.stringify({ email, org_name: orgName, tier, reason }),
+  })
+}
+
 export function adminListCustomers(): Promise<AdminCustomer[]> {
   return apiFetch('/api/admin/customers')
 }

@@ -72,6 +72,12 @@ func AuthMiddleware(st *store.Store, secret string, next http.Handler) http.Hand
 // so the user-facing latency doesn't pay for the write; failures log
 // but never block the request (the next request will retry).
 func persistLastActive(st *store.Store, session *auth.Session) {
+	// An org-less session (a superadmin with no membership) has no active
+	// customer to pin. Writing 0 trips the last_active_customer_id foreign
+	// key, so there's nothing to persist.
+	if session.ActiveCustomerID == 0 {
+		return
+	}
 	if err := st.UpdateUserLastActiveCustomer(session.UserID, session.ActiveCustomerID); err != nil {
 		log.Printf("update last_active_customer_id for %s: %v", session.UserID, err)
 	}

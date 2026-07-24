@@ -4,9 +4,10 @@ import { Navigate } from 'react-router-dom'
 import SidebarNav from '../components/SidebarNav'
 import {
   adminListCustomers, adminGetCustomer, adminSetComp, adminSetTier,
+  adminCreateCustomer,
   adminListBuckets, adminUpdateBucket, adminListShards,
   adminArchiveShard, adminDeleteShard,
-  type AdminCustomer, type AdminCustomerDetail,
+  type AdminCustomer, type AdminCustomerDetail, type AdminCreatedCustomer,
   type AdminBucket, type AdminShard,
 } from '../lib/api'
 import './Dashboard.css'
@@ -184,19 +185,125 @@ function CustomerDetail({ name, onClose }: { name: string; onClose: () => void }
   )
 }
 
+// NewCustomerForm provisions a comp account (org + verified owner + comp
+// subscription) — the operator replacement for public signup. Collapsed
+// by default; on success it surfaces the owner's login link (also emailed
+// by the server) and refreshes the customer list.
+function NewCustomerForm({ onCreated }: { onCreated: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [email, setEmail] = useState('')
+  const [orgName, setOrgName] = useState('')
+  const [tier, setTier] = useState('bolt')
+  const [reason, setReason] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [created, setCreated] = useState<AdminCreatedCustomer | null>(null)
+
+  function reset() {
+    setEmail(''); setOrgName(''); setTier('bolt'); setReason(''); setError('')
+  }
+
+  async function handleCreate() {
+    if (!email.trim() || !orgName.trim()) {
+      setError('Email and org name are required.')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      const res = await adminCreateCustomer(email.trim(), orgName.trim(), tier, reason.trim() || undefined)
+      setCreated(res)
+      reset()
+      onCreated()
+    } catch (e: any) { setError(e.message) }
+    finally { setSaving(false) }
+  }
+
+  if (!open) {
+    return (
+      <div className="dash-card" data-testid="admin-new-customer-card">
+        <div className="dash-card-header">
+          <h2 className="dash-card-title">New comp account</h2>
+          <button className="btn-action btn-action-primary" onClick={() => { setOpen(true); setCreated(null) }}
+            data-testid="admin-new-customer-open-button">New account</button>
+        </div>
+        {created && (
+          <div className="dash-empty" style={{ padding: '0 0 4px' }} data-testid="admin-new-customer-result">
+            Created <strong>{created.name}</strong> ({created.comp_reason} / {created.tier}) for {created.owner_email}.
+            {created.login_url && (
+              <div style={{ marginTop: 6 }}>
+                Login link: <a href={created.login_url} data-testid="admin-new-customer-login-link">{created.login_url}</a>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="dash-card" data-testid="admin-new-customer-card">
+      <div className="dash-card-header">
+        <h2 className="dash-card-title">New comp account</h2>
+        <button className="btn-action" onClick={() => { setOpen(false); reset() }}
+          data-testid="admin-new-customer-cancel-button">Cancel</button>
+      </div>
+      <div className="create-token-form" data-testid="admin-new-customer-form">
+        <div className="form-row">
+          <div className="form-field">
+            <label className="form-label">Owner email</label>
+            <input className="form-input" type="email" placeholder="owner@acme.com" value={email}
+              onChange={e => setEmail(e.target.value)} data-testid="admin-new-customer-email-input" />
+          </div>
+          <div className="form-field">
+            <label className="form-label">Org name</label>
+            <input className="form-input" placeholder="acme" value={orgName}
+              onChange={e => setOrgName(e.target.value)} data-testid="admin-new-customer-org-input" />
+          </div>
+        </div>
+        <div className="form-row">
+          <div className="form-field">
+            <label className="form-label">Tier</label>
+            <select className="form-input" value={tier} onChange={e => setTier(e.target.value)}
+              data-testid="admin-new-customer-tier-select">
+              <option value="swatch">swatch</option>
+              <option value="yard">yard</option>
+              <option value="bolt">bolt</option>
+            </select>
+          </div>
+          <div className="form-field">
+            <label className="form-label">Reason</label>
+            <input className="form-input" placeholder="e.g. design-partner" value={reason}
+              onChange={e => setReason(e.target.value)} data-testid="admin-new-customer-reason-input" />
+          </div>
+        </div>
+        <div className="form-actions">
+          <button className="btn-action btn-action-primary" onClick={handleCreate} disabled={saving}
+            data-testid="admin-new-customer-create-button">
+            {saving ? 'Creating...' : 'Create comp account'}
+          </button>
+        </div>
+        {error && <div className="form-error" style={{ marginTop: 8 }}>{error}</div>}
+      </div>
+    </div>
+  )
+}
+
 function CustomersTab() {
   const [customers, setCustomers] = useState<AdminCustomer[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [error, setError] = useState('')
 
-  useEffect(() => {
+  function load() {
     adminListCustomers().then(setCustomers).catch(e => setError(e.message))
-  }, [])
+  }
+  useEffect(() => { load() }, [])
 
   if (error) return <div className="dash-load-error">{error}</div>
 
   return (
     <>
+      <NewCustomerForm onCreated={load} />
       <div className="dash-card" data-testid="admin-customers-card">
         <div className="dash-card-header">
           <h2 className="dash-card-title">Customers</h2>

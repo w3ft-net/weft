@@ -89,6 +89,23 @@ func BuildSession(st *store.Store, userID string, orgSelector string) (*Session,
 		return nil, fmt.Errorf("load memberships: %w", err)
 	}
 	if len(memberships) == 0 {
+		// A superadmin is a platform operator who may legitimately belong
+		// to no customer org. Hand back an org-less session (no active
+		// customer, tier "none") rather than ErrNoMembership — otherwise
+		// AuthMiddleware 403s every authed request including /api/auth/me,
+		// and the SPA wipes the token on the first hard navigation, booting
+		// the operator to the login screen. Org-scoped endpoints they can't
+		// use without an org resolve to customer_id=0 (empty results), and
+		// they reach the admin surface via RequireSuperadmin regardless.
+		if user.IsSuperadmin {
+			return &Session{
+				UserID:        user.ID,
+				Email:         user.Email,
+				Tier:          store.Tier("none"),
+				EmailVerified: user.EmailVerifiedAt != nil,
+				IsSuperadmin:  true,
+			}, nil
+		}
 		return nil, ErrNoMembership
 	}
 

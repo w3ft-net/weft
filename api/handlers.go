@@ -314,6 +314,7 @@ func (s *Server) Handler() http.Handler {
 
 	// Admin routes (superadmin only).
 	adminMux := http.NewServeMux()
+	adminMux.HandleFunc("POST /api/admin/customers", s.handleAdminCreateCustomer)
 	adminMux.HandleFunc("GET /api/admin/customers", s.handleAdminListCustomers)
 	adminMux.HandleFunc("GET /api/admin/customers/{name}", s.handleAdminGetCustomer)
 	adminMux.HandleFunc("POST /api/admin/customers/{name}/comp", s.handleAdminSetComp)
@@ -621,7 +622,6 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var user *store.User
-	tier := store.TierTrial
 
 	// Check for pending team invite first.
 	if invite, err := s.store.GetPendingTeamMemberByEmail(email); err == nil {
@@ -641,12 +641,6 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		}
 		s.store.AcceptTeamMember(invite.ID, user.ID)
 		_ = s.store.UpdateUserLastActiveCustomer(user.ID, invite.CustomerID)
-
-		if cust, err := s.store.GetCustomerByID(invite.CustomerID); err == nil && cust != nil {
-			if sub, _ := s.store.ActiveSubscription(cust.ID); sub != nil {
-				tier = store.Tier(sub.Tier)
-			}
-		}
 	} else {
 		// No invite — find existing user or create new user + customer.
 		user, _ = s.store.GetUserByEmail(email)
@@ -705,11 +699,6 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 				now := time.Now()
 				user.EmailVerifiedAt = &now
 			}
-			if memberships, _ := s.store.ListUserMemberships(user.ID); len(memberships) > 0 {
-				if sub, _ := s.store.ActiveSubscription(memberships[0].Customer.ID); sub != nil {
-					tier = store.Tier(sub.Tier)
-				}
-			}
 		}
 	}
 
@@ -719,14 +708,17 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reload so the response reflects the writes above (verified flag,
+	// membership), then return the same shape /me does — AuthContext
+	// seeds its user object straight from this payload, and the welcome
+	// modal keys off onboarding_step + the orgs list it carries.
+	if fresh, err := s.store.GetUserByID(user.ID); err == nil {
+		user = fresh
+	}
+	activeID, activeName := s.resolveActiveCustomer(user)
 	json.NewEncoder(w).Encode(map[string]any{
 		"token": jwt,
-		"user": map[string]any{
-			"id":             user.ID,
-			"email":          user.Email,
-			"tier":           tier,
-			"email_verified": true,
-		},
+		"user":  s.userResponse(user, activeID, activeName),
 	})
 }
 
@@ -739,11 +731,28 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	json.NewEncoder(w).Encode(s.userResponse(user, session.ActiveCustomerID, session.ActiveCustomerName))
+}
+
+// userResponse builds the canonical user object the SPA consumes. Both
+// /api/auth/me (on reload) and /api/auth/verify (at login) return it, so
+// AuthContext gets the same shape whichever it hits first. Keeping it in
+// one place is the fix for a class of bug where the two disagreed: /verify
+// used to return a 4-field subset with no onboarding_step, so the welcome
+// modal — which gates on that field off the object AuthContext seeds from
+// /verify — never rendered on a fresh comp account's first session.
+//
+// activeCustomerID/Name are the org the response is scoped to: the
+// middleware-resolved session org for /me, or the user's landing org for
+// /verify. Tier and the orgs "active" flag are computed against it.
+func (s *Server) userResponse(user *store.User, activeCustomerID uint, activeCustomerName string) map[string]any {
 	// Tier and customer come from the resolved active org, not from a
 	// user.CustomerName field that no longer exists.
 	tier := store.Tier("none")
-	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerID); sub != nil {
-		tier = store.Tier(sub.Tier)
+	if activeCustomerID != 0 {
+		if sub, _ := s.store.ActiveSubscription(activeCustomerID); sub != nil {
+			tier = store.Tier(sub.Tier)
+		}
 	}
 
 	// Memberships drive the org switcher in the UI — return them so the
@@ -755,7 +764,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 			"id":     m.CustomerID,
 			"name":   m.Customer.Name,
 			"role":   m.Role,
-			"active": m.CustomerID == session.ActiveCustomerID,
+			"active": m.CustomerID == activeCustomerID,
 		})
 	}
 
@@ -775,7 +784,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"email":                user.Email,
 		"name":                 user.Name,
 		"tier":                 tier,
-		"customer":             session.ActiveCustomerName,
+		"customer":             activeCustomerName,
 		"orgs":                 orgs,
 		"email_verified":       user.EmailVerifiedAt != nil,
 		"has_seen_welcome":     user.HasSeenWelcome,
@@ -796,7 +805,23 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	if user.EmailVerifiedAt == nil {
 		resp["verification_deadline"] = user.CreatedAt.Add(auth.UnverifiedGracePeriod).Unix()
 	}
-	json.NewEncoder(w).Encode(resp)
+	return resp
+}
+
+// resolveActiveCustomer picks the org a just-verified user lands in.
+// Verify runs before AuthMiddleware establishes a session, so there's no
+// resolved active org yet — fall back to the user's last_active_customer
+// (set by every account-creation path), then to their oldest membership.
+func (s *Server) resolveActiveCustomer(user *store.User) (uint, string) {
+	if user.LastActiveCustomerID != nil {
+		if c, err := s.store.GetCustomerByID(*user.LastActiveCustomerID); err == nil && c != nil {
+			return c.ID, c.Name
+		}
+	}
+	if mems, _ := s.store.ListUserMemberships(user.ID); len(mems) > 0 {
+		return mems[0].CustomerID, mems[0].Customer.Name
+	}
+	return 0, ""
 }
 
 // --- Billing handlers ---
