@@ -74,7 +74,7 @@ func grpcClientAs(t *testing.T, customer string) (*grpc.ClientConn, pb.WeftCoord
 // namespaceID). The user ID matches what customerJWT embeds
 // ("test-user-<customer>") so BuildSession can resolve the JWT into a
 // session with the correct customer.
-func seedCustomerWithNamespace(t *testing.T, customer, namespace string) (int64, int64) {
+func seedCustomerWithNamespace(t *testing.T, customer, namespace string) (string, int64) {
 	t.Helper()
 	conn, err := sql.Open("pgx", postgresURL)
 	if err != nil {
@@ -82,7 +82,7 @@ func seedCustomerWithNamespace(t *testing.T, customer, namespace string) (int64,
 	}
 	defer conn.Close()
 
-	var custID int64
+	var custID string
 	if err := conn.QueryRow(`
 		INSERT INTO organizations (name, created_at, updated_at)
 		VALUES ($1, now(), now())
@@ -112,11 +112,11 @@ func seedCustomerWithNamespace(t *testing.T, customer, namespace string) (int64,
 		t.Fatalf("seed user for %s: %v", customer, err)
 	}
 	if _, err := conn.Exec(`
-		INSERT INTO memberships (id, org_id, email, user_id, role, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, 'owner', 'active', now(), now())
+		INSERT INTO memberships (org_id, email, user_id, role, status, created_at, updated_at)
+		VALUES ($1, $2, $3, 'admin', 'active', now(), now())
 		ON CONFLICT DO NOTHING
-	`, fmt.Sprintf("tm-%s", customer), custID, email, userID); err != nil {
-		t.Fatalf("seed team_member for %s: %v", customer, err)
+	`, custID, email, userID); err != nil {
+		t.Fatalf("seed membership for %s: %v", customer, err)
 	}
 
 	return custID, nsID
@@ -132,7 +132,7 @@ func seedCustomerWithNamespace(t *testing.T, customer, namespace string) (int64,
 // JWT-derived customer constraint, which is what makes the
 // ghost-customer test possible: we inject a token whose customer is
 // then deleted out from under it.
-func seedAgentToken(t *testing.T, custID, nsID int64, label string) string {
+func seedAgentToken(t *testing.T, custID string, nsID int64, label string) string {
 	t.Helper()
 	raw, err := generateRawAgentToken()
 	if err != nil {
