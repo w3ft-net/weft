@@ -19,7 +19,7 @@ func TestQuery_InteractiveAlertUsesCoordinatorNotifier(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	_ = custID
 
-	cust, err := db.GetCustomerByID(custID)
+	cust, err := db.GetOrgByID(custID)
 	if err != nil {
 		t.Fatalf("get customer: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestQuery_InteractiveAlertUsesCoordinatorNotifier(t *testing.T) {
 func TestQuery_InteractiveAlertFallbackWhenNoNotifier(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	cust, err := db.GetCustomerByID(custID)
+	cust, err := db.GetOrgByID(custID)
 	if err != nil {
 		t.Fatalf("get customer: %v", err)
 	}

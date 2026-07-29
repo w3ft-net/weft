@@ -7,12 +7,12 @@ import (
 )
 
 // TestQuery_InteractiveAlertResolvesCallerCustomer is a RED test for a
-// production-only bug. Coordinator.CustomerID is a struct field that's
+// production-only bug. Coordinator.OrgID is a struct field that's
 // never set in cmd/coordinator/main.go — so in real deployments it's
 // always zero. Requests authenticate through a per-call customer NAME
 // (plumbed via Coordinator.Query's customerOverride), but the
 // interactive AlertContext built in Coordinator.query grabs
-// c.CustomerID instead of resolving the passed-in name.
+// c.OrgID instead of resolving the passed-in name.
 //
 // Result: Notifier.Send(0, "foo", ...) → Store.GetNotifyConfig(0)
 // finds nothing → "no notify.yaml configured" — even when the calling
@@ -27,7 +27,7 @@ import (
 func TestQuery_InteractiveAlertResolvesCallerCustomer(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	cust, err := db.GetCustomerByID(custID)
+	cust, err := db.GetOrgByID(custID)
 	if err != nil {
 		t.Fatalf("get customer: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestQuery_InteractiveAlertResolvesCallerCustomer(t *testing.T) {
 		t.Fatalf("save notify aliases: %v", err)
 	}
 
-	// Prod-shaped Coordinator: Store + Notifier are set, but CustomerID
+	// Prod-shaped Coordinator: Store + Notifier are set, but OrgID
 	// is zero (it's never set by cmd/coordinator/main.go either).
 	c := NewCoordinator(CoordinatorConfig{
 		Store:    db,
@@ -53,7 +53,7 @@ func TestQuery_InteractiveAlertResolvesCallerCustomer(t *testing.T) {
 
 	// Red assertion: today this fails because stderr is
 	// 'alert: dispatch to "foo" failed: no notify.yaml configured'
-	// — the notifier used customerID=0 instead of resolving cust.Name.
+	// — the notifier used orgID=0 instead of resolving cust.Name.
 	if strings.Contains(resultD.Stderr, "no notify.yaml configured") {
 		t.Errorf("notifier used wrong customer (got config-not-found):\n  stderr=%q", resultD.Stderr)
 	}
@@ -67,7 +67,7 @@ func TestQuery_InteractiveAlertResolvesCallerCustomer(t *testing.T) {
 
 // TestQuery_InteractiveBinExpandResolvesCallerCustomer is the same
 // class of bug for the /bin pre-expand pass we added in the positional-
-// args work. The expand is gated on c.CustomerID != 0, so in prod it
+// args work. The expand is gated on c.OrgID != 0, so in prod it
 // never runs — a user typing `myscript arg` at the web shell gets
 // no expansion and the planner punts to runLocal, which at least now
 // has the ShellFS wired at line 507. But the pre-expand is what lets
@@ -76,7 +76,7 @@ func TestQuery_InteractiveAlertResolvesCallerCustomer(t *testing.T) {
 func TestQuery_InteractiveBinExpandResolvesCallerCustomer(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	cust, err := db.GetCustomerByID(custID)
+	cust, err := db.GetOrgByID(custID)
 	if err != nil {
 		t.Fatalf("get customer: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestQuery_InteractiveBinExpandResolvesCallerCustomer(t *testing.T) {
 	c := NewCoordinator(CoordinatorConfig{
 		Store:    db,
 		Notifier: NewNotifier(db, nil),
-		// CustomerID intentionally zero.
+		// OrgID intentionally zero.
 	})
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}

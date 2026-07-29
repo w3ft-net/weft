@@ -17,7 +17,7 @@ import (
 func TestExecuteForWatch_LoweredHotPath(t *testing.T) {
 	c := setupTestCoordinator(t)
 
-	cust, err := c.Store.GetCustomerByName("kevlar")
+	cust, err := c.Store.GetOrgByName("kevlar")
 	if err != nil {
 		t.Fatalf("resolve test customer: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestExecuteForWatch_LoweredHotPath(t *testing.T) {
 	}
 
 	w := &store.CronWatch{
-		CustomerID:  cust.ID,
+		OrgID:       cust.ID,
 		Name:        "lowered-smoke",
 		Schedule:    "every 1m",
 		Pipeline:    pipeline,
@@ -90,7 +90,7 @@ func TestExecuteForWatch_LoweredHotPath(t *testing.T) {
 func TestExecuteForWatch_LoweredVersionMismatch(t *testing.T) {
 	c := setupTestCoordinator(t)
 
-	cust, _ := c.Store.GetCustomerByName("kevlar")
+	cust, _ := c.Store.GetOrgByName("kevlar")
 
 	pipeline := `cat /log/vimgym.log | grep ERROR`
 	lp, err := planner.Lower(pipeline, "kevlar", "bolt", noBinResolver{})
@@ -102,7 +102,7 @@ func TestExecuteForWatch_LoweredVersionMismatch(t *testing.T) {
 	loweredJSON, _ := json.Marshal(lp)
 
 	w := &store.CronWatch{
-		CustomerID:  cust.ID,
+		OrgID:       cust.ID,
 		Name:        "version-mismatch",
 		Schedule:    "every 1m",
 		Pipeline:    pipeline,

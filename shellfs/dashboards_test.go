@@ -29,7 +29,7 @@ func seedDashboardWatch(t *testing.T, fs *ShellFS, name string) {
 
 func TestDashboards_WriteReadStat(t *testing.T) {
 	db := testStore(t)
-	cust, err := db.FindOrCreateCustomer("dash-fs-test")
+	cust, err := db.FindOrCreateOrg("dash-fs-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestDashboards_WriteReadStat(t *testing.T) {
 
 func TestDashboards_ReadDir(t *testing.T) {
 	db := testStore(t)
-	cust, err := db.FindOrCreateCustomer("dash-readdir-test")
+	cust, err := db.FindOrCreateOrg("dash-readdir-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestDashboards_ReadDir(t *testing.T) {
 
 func TestDashboards_WriteRejectsBadYAML(t *testing.T) {
 	db := testStore(t)
-	cust, err := db.FindOrCreateCustomer("dash-bad-yaml")
+	cust, err := db.FindOrCreateOrg("dash-bad-yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestDashboards_WriteRejectsBadYAML(t *testing.T) {
 
 func TestDashboards_WriteRejectsMissingWatch(t *testing.T) {
 	db := testStore(t)
-	cust, err := db.FindOrCreateCustomer("dash-missing-watch")
+	cust, err := db.FindOrCreateOrg("dash-missing-watch")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestDashboards_WriteRejectsMissingWatch(t *testing.T) {
 
 func TestDashboards_Remove(t *testing.T) {
 	db := testStore(t)
-	cust, err := db.FindOrCreateCustomer("dash-rm-test")
+	cust, err := db.FindOrCreateOrg("dash-rm-test")
 	if err != nil {
 		t.Fatal(err)
 	}

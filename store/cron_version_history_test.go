@@ -12,14 +12,14 @@ import (
 
 // Parallel of version_history_test.go for cron_watches.
 
-func cronHistoryCount(t *testing.T, db *Store, customerID uint, name string) int {
+func cronHistoryCount(t *testing.T, db *Store, orgID string, name string) int {
 	t.Helper()
 	var n int64
 	err := db.db.Raw(`
 		SELECT COUNT(*) FROM cron_watch_history h
 		JOIN cron_watches w ON w.id = h.watch_id
-		WHERE w.customer_id = ? AND w.name = ?
-	`, customerID, name).Scan(&n).Error
+		WHERE w.org_id = ? AND w.name = ?
+	`, orgID, name).Scan(&n).Error
 	if err != nil {
 		t.Fatalf("cronHistoryCount: %v", err)
 	}
@@ -33,7 +33,7 @@ func cronHashOf(schedule, pipeline string) string {
 
 func TestCronWatch_FirstSaveCreatesNoHistory(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("cvh-first")
+	cust, _ := db.FindOrCreateOrg("cvh-first")
 	user, _ := db.CreateUser("alice-cron-first@example.test")
 
 	if err := db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo 1", nil); err != nil {
@@ -46,7 +46,7 @@ func TestCronWatch_FirstSaveCreatesNoHistory(t *testing.T) {
 
 func TestCronWatch_IdenticalResaveDoesNotCapture(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("cvh-noop")
+	cust, _ := db.FindOrCreateOrg("cvh-noop")
 	user, _ := db.CreateUser("alice-cron-noop@example.test")
 
 	if err := db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo 1", nil); err != nil {
@@ -71,7 +71,7 @@ func TestCronWatch_IdenticalResaveDoesNotCapture(t *testing.T) {
 
 func TestCronWatch_UpdateCapturesPriorVersion(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("cvh-update")
+	cust, _ := db.FindOrCreateOrg("cvh-update")
 	alice, _ := db.CreateUser("alice-cron-up@example.test")
 	bob, _ := db.CreateUser("bob-cron-up@example.test")
 
@@ -98,7 +98,7 @@ func TestCronWatch_UpdateCapturesPriorVersion(t *testing.T) {
 		SELECT h.schedule, h.pipeline, h.content_hash, h.authored_by_user_id, h.captured_by_user_id
 		FROM cron_watch_history h
 		JOIN cron_watches w ON w.id = h.watch_id
-		WHERE w.customer_id = ? AND w.name = ?
+		WHERE w.org_id = ? AND w.name = ?
 	`, cust.ID, "errors").Scan(&r).Error
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +121,7 @@ func TestCronWatch_UpdateCapturesPriorVersion(t *testing.T) {
 
 func TestCronWatch_FiveCapDropsOldest(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("cvh-cap")
+	cust, _ := db.FindOrCreateOrg("cvh-cap")
 	user, _ := db.CreateUser("alice-cron-cap@example.test")
 
 	for i := 1; i <= 7; i++ {
@@ -141,7 +141,7 @@ func TestCronWatch_ScheduleOnlyChangeCapturesHistory(t *testing.T) {
 	// trigger's UPDATE OF clause, so changing only the schedule
 	// (without touching pipeline) still captures the prior version.
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("cvh-schedchange")
+	cust, _ := db.FindOrCreateOrg("cvh-schedchange")
 	user, _ := db.CreateUser("alice-cron-sched@example.test")
 
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 5m", "echo 1", nil)
@@ -154,7 +154,7 @@ func TestCronWatch_ScheduleOnlyChangeCapturesHistory(t *testing.T) {
 
 func TestLogCronWatch_OrderAndShape(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("cvh-log")
+	cust, _ := db.FindOrCreateOrg("cvh-log")
 	user, _ := db.CreateUser("alice-cron-log@example.test")
 
 	saves := []struct{ s, p string }{
@@ -186,7 +186,7 @@ func TestLogCronWatch_OrderAndShape(t *testing.T) {
 
 func TestResolveCronWatchRef_HEAD(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("cvh-resolve-head")
+	cust, _ := db.FindOrCreateOrg("cvh-resolve-head")
 	user, _ := db.CreateUser("alice@example.test")
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo current", nil)
 
@@ -201,7 +201,7 @@ func TestResolveCronWatchRef_HEAD(t *testing.T) {
 
 func TestResolveCronWatchRef_HEADCaret(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("cvh-resolve-caret")
+	cust, _ := db.FindOrCreateOrg("cvh-resolve-caret")
 	user, _ := db.CreateUser("alice@example.test")
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo old", nil)
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo new", nil)
@@ -217,7 +217,7 @@ func TestResolveCronWatchRef_HEADCaret(t *testing.T) {
 
 func TestResolveCronWatchRef_HashPrefix(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("cvh-resolve-hash")
+	cust, _ := db.FindOrCreateOrg("cvh-resolve-hash")
 	user, _ := db.CreateUser("alice@example.test")
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo target", nil)
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo other", nil)
@@ -234,7 +234,7 @@ func TestResolveCronWatchRef_HashPrefix(t *testing.T) {
 
 func TestResolveCronWatchRef_UnknownHash(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("cvh-resolve-unknown")
+	cust, _ := db.FindOrCreateOrg("cvh-resolve-unknown")
 	user, _ := db.CreateUser("alice@example.test")
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo here", nil)
 
@@ -245,7 +245,7 @@ func TestResolveCronWatchRef_UnknownHash(t *testing.T) {
 
 func TestCheckoutCronWatch_RoundTrip(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("cvh-checkout")
+	cust, _ := db.FindOrCreateOrg("cvh-checkout")
 	alice, _ := db.CreateUser("alice@example.test")
 	bob, _ := db.CreateUser("bob@example.test")
 
@@ -268,7 +268,7 @@ func TestCheckoutCronWatch_RoundTrip(t *testing.T) {
 
 func TestAmendCronWatchMessage_HEAD_DoesNotCapture(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("cvh-amend-head")
+	cust, _ := db.FindOrCreateOrg("cvh-amend-head")
 	user, _ := db.CreateUser("alice@example.test")
 
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo v1", nil)
@@ -289,7 +289,7 @@ func TestAmendCronWatchMessage_HEAD_DoesNotCapture(t *testing.T) {
 
 func TestAmendCronWatchMessage_HistoryRef(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("cvh-amend-history")
+	cust, _ := db.FindOrCreateOrg("cvh-amend-history")
 	user, _ := db.CreateUser("alice@example.test")
 
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "v1", nil)
@@ -307,8 +307,8 @@ func TestAmendCronWatchMessage_HistoryRef(t *testing.T) {
 
 // checkoutCronWatch mirrors the former Store.CheckoutCronWatch, whose
 // production logic moved to a caller outside the store package.
-func checkoutCronWatch(db *Store, customerID uint, userID, name, ref string) error {
-	target, err := db.ResolveCronWatchRef(customerID, name, ref)
+func checkoutCronWatch(db *Store, orgID string, userID, name, ref string) error {
+	target, err := db.ResolveCronWatchRef(orgID, name, ref)
 	if err != nil {
 		return err
 	}
@@ -319,7 +319,7 @@ func checkoutCronWatch(db *Store, customerID uint, userID, name, ref string) err
 	if err != nil {
 		return err
 	}
-	return db.scoped(customerID).Transaction(func(tx *gorm.DB) error {
+	return db.scoped(orgID).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
 			return err
 		}

@@ -23,7 +23,7 @@ import (
 func TestDirstackCourier_GRPC(t *testing.T) {
 	const customer = "courier-grpc"
 	seedCustomerWithNamespace(t, customer, "app")
-	t.Cleanup(func() { deleteCustomer(t, customer) })
+	t.Cleanup(func() { deleteOrg(t, customer) })
 
 	conn, client := grpcClientAs(t, customer)
 	defer conn.Close()

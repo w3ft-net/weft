@@ -119,8 +119,8 @@ func (s *Server) reportOneCustomer(customerName string, day time.Time, bytes int
 	if err := s.store.DB().Raw(`
 		SELECT u.stripe_customer_id
 		FROM users u
-		JOIN team_members tm ON tm.user_id = u.id
-		JOIN customers c ON tm.customer_id = c.id
+		JOIN memberships tm ON tm.user_id = u.id
+		JOIN organizations c ON tm.org_id = c.id
 		WHERE c.name = ? AND u.stripe_customer_id <> ''
 		ORDER BY u.created_at ASC
 		LIMIT 1`, customerName,
@@ -131,7 +131,7 @@ func (s *Server) reportOneCustomer(customerName string, day time.Time, bytes int
 		return nil
 	}
 
-	cust, err := s.store.GetCustomerByName(customerName)
+	cust, err := s.store.GetOrgByName(customerName)
 	if err != nil || cust == nil {
 		return nil
 	}

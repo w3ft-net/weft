@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/graybeardcorp/weft/store"
+
+	"github.com/graybeardcorp/saaskit/orgs"
 )
 
 func testStore(t *testing.T) *store.Store {
@@ -24,26 +24,15 @@ func testStore(t *testing.T) *store.Store {
 	return db
 }
 
-// addMember inserts (or updates) a team_members row with the given
+// addMember inserts (or updates) a memberships row with the given
 // role, returning the user.
-func addMember(t *testing.T, db *store.Store, custID uint, role string) *store.User {
+func addMember(t *testing.T, db *store.Store, custID string, role string) *store.User {
 	t.Helper()
 	user, err := db.CreateUser(fmt.Sprintf("user-%s-%d@example.com", role, time.Now().UnixNano()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now()
-	err = db.CreateTeamMember(&store.TeamMember{
-		ID:         uuid.New().String(),
-		CustomerID: custID,
-		Email:      user.Email,
-		UserID:     &user.ID,
-		Role:       role,
-		Status:     "active",
-		InvitedAt:  now,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-	})
+	err = db.AddTeamMemberWithEmail(custID, user.ID, user.Email, testRole(role))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +41,7 @@ func addMember(t *testing.T, db *store.Store, custID uint, role string) *store.U
 
 func TestBuildSession_OwnerGetsAllFlags(t *testing.T) {
 	db := testStore(t)
-	cust, _ := db.FindOrCreateCustomer(fmt.Sprintf("sess-owner-%d", os.Getpid()))
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("sess-owner-%d", os.Getpid()))
 	user := addMember(t, db, cust.ID, "owner")
 
 	sess, err := BuildSession(db, user.ID, "")
@@ -70,7 +59,7 @@ func TestBuildSession_OwnerGetsAllFlags(t *testing.T) {
 
 func TestBuildSession_MemberWithoutPermissionRowIsReadOnly(t *testing.T) {
 	db := testStore(t)
-	cust, _ := db.FindOrCreateCustomer(fmt.Sprintf("sess-member-%d", os.Getpid()))
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("sess-member-%d", os.Getpid()))
 	user := addMember(t, db, cust.ID, "member")
 
 	sess, err := BuildSession(db, user.ID, "")
@@ -88,11 +77,11 @@ func TestBuildSession_MemberWithoutPermissionRowIsReadOnly(t *testing.T) {
 
 func TestBuildSession_MemberWithFlagsHasThem(t *testing.T) {
 	db := testStore(t)
-	cust, _ := db.FindOrCreateCustomer(fmt.Sprintf("sess-flags-%d", os.Getpid()))
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("sess-flags-%d", os.Getpid()))
 	user := addMember(t, db, cust.ID, "member")
 
 	err := db.ExecForTest(
-		`INSERT INTO org_permissions (customer_id, user_id, can_manage_functions, can_manage_watches, can_manage_etc) VALUES (?, ?, true, false, true)`,
+		`INSERT INTO org_permissions (org_id, user_id, can_manage_functions, can_manage_watches, can_manage_etc) VALUES (?, ?, true, false, true)`,
 		cust.ID, user.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -111,4 +100,14 @@ func TestBuildSession_MemberWithFlagsHasThem(t *testing.T) {
 	if sess.CanManageWatches {
 		t.Error("expected CanManageWatches to remain false")
 	}
+}
+
+// testRole maps the fixtures' historical "owner"/"member" words onto the
+// shared orgs vocabulary weft adopted, so the table-driven cases keep reading
+// the way the product talks about roles.
+func testRole(role string) orgs.Role {
+	if role == "owner" {
+		return store.RoleOwner
+	}
+	return orgs.RoleMember
 }

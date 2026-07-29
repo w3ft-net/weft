@@ -5,9 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/google/uuid"
+	"github.com/graybeardcorp/saaskit/orgs"
 )
 
 func teamPermsStore(t *testing.T) *Store {
@@ -24,24 +23,17 @@ func teamPermsStore(t *testing.T) *Store {
 	return db
 }
 
-func addTeamUser(t *testing.T, db *Store, custID uint, email, role string) *User {
+func addTeamUser(t *testing.T, db *Store, custID string, email, role string) *User {
 	t.Helper()
 	u, err := db.CreateUser(email)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now()
-	err = db.CreateTeamMember(&TeamMember{
-		ID:         uuid.New().String(),
-		CustomerID: custID,
-		Email:      u.Email,
-		UserID:     &u.ID,
-		Role:       role,
-		Status:     "active",
-		InvitedAt:  now,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-	})
+	r := orgs.RoleMember
+	if role == "owner" {
+		r = RoleOwner
+	}
+	err = db.AddTeamMemberWithEmail(custID, u.ID, u.Email, r)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +42,7 @@ func addTeamUser(t *testing.T, db *Store, custID uint, email, role string) *User
 
 func TestTeamPerms_BuildAndApply_RoundTrip(t *testing.T) {
 	db := teamPermsStore(t)
-	cust, _ := db.FindOrCreateCustomer(fmt.Sprintf("tp-rt-%d", os.Getpid()))
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("tp-rt-%d", os.Getpid()))
 	_ = addTeamUser(t, db, cust.ID, fmt.Sprintf("owner-%d@x.test", os.Getpid()), "owner")
 	alice := addTeamUser(t, db, cust.ID, fmt.Sprintf("alice-%d@x.test", os.Getpid()), "member")
 	bob := addTeamUser(t, db, cust.ID, fmt.Sprintf("bob-%d@x.test", os.Getpid()), "member")
@@ -109,7 +101,7 @@ func TestTeamPerms_BuildAndApply_RoundTrip(t *testing.T) {
 
 func TestTeamPerms_Apply_DefaultDenyWhenAbsent(t *testing.T) {
 	db := teamPermsStore(t)
-	cust, _ := db.FindOrCreateCustomer(fmt.Sprintf("tp-dd-%d", os.Getpid()))
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("tp-dd-%d", os.Getpid()))
 	alice := addTeamUser(t, db, cust.ID, fmt.Sprintf("a-%d@x.test", os.Getpid()), "member")
 	apiNs, _ := db.FindOrCreateNamespace(cust.ID, "api")
 
@@ -141,7 +133,7 @@ func TestTeamPerms_Apply_DefaultDenyWhenAbsent(t *testing.T) {
 
 func TestTeamPerms_Apply_RejectsUnknownMember(t *testing.T) {
 	db := teamPermsStore(t)
-	cust, _ := db.FindOrCreateCustomer(fmt.Sprintf("tp-bad-%d", os.Getpid()))
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("tp-bad-%d", os.Getpid()))
 	doc := TeamPermsDoc{
 		"ghost@example.com": {Bin: AccessEdit},
 	}
@@ -153,7 +145,7 @@ func TestTeamPerms_Apply_RejectsUnknownMember(t *testing.T) {
 
 func TestTeamPerms_Apply_RejectsOwner(t *testing.T) {
 	db := teamPermsStore(t)
-	cust, _ := db.FindOrCreateCustomer(fmt.Sprintf("tp-own-%d", os.Getpid()))
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("tp-own-%d", os.Getpid()))
 	owner := addTeamUser(t, db, cust.ID, fmt.Sprintf("o-%d@x.test", os.Getpid()), "owner")
 	doc := TeamPermsDoc{
 		owner.Email: {Bin: AccessReadOnly},
@@ -166,7 +158,7 @@ func TestTeamPerms_Apply_RejectsOwner(t *testing.T) {
 
 func TestTeamPerms_Apply_RejectsUnknownNamespace(t *testing.T) {
 	db := teamPermsStore(t)
-	cust, _ := db.FindOrCreateCustomer(fmt.Sprintf("tp-ns-%d", os.Getpid()))
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("tp-ns-%d", os.Getpid()))
 	alice := addTeamUser(t, db, cust.ID, fmt.Sprintf("a-%d@x.test", os.Getpid()), "member")
 	doc := TeamPermsDoc{
 		alice.Email: {

@@ -123,7 +123,7 @@ func (ce *CronExecutor) runWatch(ctx context.Context, watch store.CronWatch) {
 			return
 		case <-ticker.C:
 			// Reload watch from DB in case pipeline/schedule changed.
-			updated, err := ce.Store.GetCronWatch(watch.CustomerID, watch.Name)
+			updated, err := ce.Store.GetCronWatch(watch.OrgID, watch.Name)
 			if err != nil {
 				log.Printf("cron[%s]: failed to reload: %v", watch.Name, err)
 				continue
@@ -295,7 +295,7 @@ func (ce *CronExecutor) persistResults(watch store.CronWatch, ranAt time.Time, s
 
 // tierForWatch looks up the subscription tier for the customer that owns the watch.
 func (ce *CronExecutor) tierForWatch(watch store.CronWatch) store.Tier {
-	cust, err := ce.Store.GetCustomerByID(watch.CustomerID)
+	cust, err := ce.Store.GetOrgByID(watch.OrgID)
 	if err != nil {
 		return ""
 	}

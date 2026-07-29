@@ -38,7 +38,7 @@ func TestColdShardQueryRouting(t *testing.T) {
 		db.Close()
 	})
 
-	cust, err := tx.FindOrCreateCustomer("kevlar")
+	cust, err := tx.FindOrCreateOrg("kevlar")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,11 +47,11 @@ func TestColdShardQueryRouting(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := tx.CreateSubscription(&store.Subscription{
-		ID:         "cold-query-bolt",
-		CustomerID: cust.ID,
-		Tier:       string(store.TierBolt),
-		Status:     "active",
-		StartsAt:   time.Now().Add(-time.Hour),
+		ID:       "cold-query-bolt",
+		OrgID:    cust.ID,
+		Tier:     string(store.TierBolt),
+		Status:   "active",
+		StartsAt: time.Now().Add(-time.Hour),
 	}); err != nil {
 		t.Fatal(err)
 	}

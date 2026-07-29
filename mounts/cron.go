@@ -22,7 +22,7 @@ func (m *CronMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	if rel != "" {
 		return nil, fs.ErrNotExist
 	}
-	watches, err := m.cfg.Store.ListCronWatches(m.cfg.CustomerID)
+	watches, err := m.cfg.Store.ListCronWatches(m.cfg.OrgID)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +50,7 @@ func (m *CronMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 }
 
 func (m *CronMount) ReadFile(rel string) ([]byte, error) {
-	w, err := m.cfg.Store.GetCronWatch(m.cfg.CustomerID, rel)
+	w, err := m.cfg.Store.GetCronWatch(m.cfg.OrgID, rel)
 	if err != nil {
 		return nil, fmt.Errorf("/cron.d/%s: no such file", rel)
 	}
@@ -61,7 +61,7 @@ func (m *CronMount) Stat(rel string) (fs.FileInfo, error) {
 	if rel == "" {
 		return &vfsFileInfo{name: "cron.d", dir: true}, nil
 	}
-	w, err := m.cfg.Store.GetCronWatch(m.cfg.CustomerID, rel)
+	w, err := m.cfg.Store.GetCronWatch(m.cfg.OrgID, rel)
 	if err != nil {
 		return nil, fs.ErrNotExist
 	}
@@ -82,8 +82,8 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 		return fmt.Errorf("watches are not available on the trial plan")
 	}
 
-	if _, err := m.cfg.Store.GetCronWatch(m.cfg.CustomerID, rel); err != nil {
-		count, err := m.cfg.Store.CountCronWatches(m.cfg.CustomerID)
+	if _, err := m.cfg.Store.GetCronWatch(m.cfg.OrgID, rel); err != nil {
+		count, err := m.cfg.Store.CountCronWatches(m.cfg.OrgID)
 		if err != nil {
 			return fmt.Errorf("failed to check watch count: %w", err)
 		}
@@ -102,10 +102,10 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 	// LowerForStorage returns nil on any failure (e.g. unsupported
 	// /bin/ pipeline) — the save still succeeds, and the fire path
 	// falls back to inline Plan() for those.
-	resolver := cronBinResolver{store: m.cfg.Store, customerID: m.cfg.CustomerID}
+	resolver := cronBinResolver{store: m.cfg.Store, orgID: m.cfg.OrgID}
 	loweredJSON := planner.LowerForStorage(pipeline, m.cfg.CustomerName, string(m.cfg.Tier), resolver)
 
-	return m.cfg.Store.SaveCronWatch(m.cfg.CustomerID, m.cfg.UserID, rel, schedule, pipeline, loweredJSON)
+	return m.cfg.Store.SaveCronWatch(m.cfg.OrgID, m.cfg.UserID, rel, schedule, pipeline, loweredJSON)
 }
 
 // cronBinResolver adapts the shell mount's store + customer scope to
@@ -114,12 +114,12 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 // because the type is tiny and pulling a helper package together for
 // three identical 10-line adapters is unjustified.
 type cronBinResolver struct {
-	store      *store.Store
-	customerID uint
+	store *store.Store
+	orgID string
 }
 
 func (r cronBinResolver) Source(name string) (string, string, bool) {
-	fn, err := r.store.GetShellFunction(r.customerID, name)
+	fn, err := r.store.GetShellFunction(r.orgID, name)
 	if err != nil || fn == nil {
 		return "", "", false
 	}
@@ -130,7 +130,7 @@ func (m *CronMount) Remove(rel string) error {
 	if !m.cfg.IsOwner && !m.cfg.CanManageWatches {
 		return denyWrite("/cron.d")
 	}
-	return m.cfg.Store.DeleteCronWatch(m.cfg.CustomerID, rel)
+	return m.cfg.Store.DeleteCronWatch(m.cfg.OrgID, rel)
 }
 
 // AmendVersionMessage allows recording a commit message for cron entries.
@@ -138,7 +138,7 @@ func (m *CronMount) AmendVersionMessage(rel, message string) error {
 	if !m.cfg.IsOwner && !m.cfg.CanManageWatches {
 		return denyWrite("/cron.d")
 	}
-	return m.cfg.Store.AmendCronWatchMessage(m.cfg.CustomerID, rel, "HEAD", message)
+	return m.cfg.Store.AmendCronWatchMessage(m.cfg.OrgID, rel, "HEAD", message)
 }
 
 // --- Cron serialization (canonical, single source of truth) ---

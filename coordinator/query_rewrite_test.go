@@ -25,7 +25,7 @@ func TestRewriteQueryPipelines_PreservesStdoutRedirect(t *testing.T) {
 	// log-shaped pipelines with CallbackCommands. Pass nil for the
 	// coordinator-bound parameters — we only inspect the resulting AST
 	// shape here, the callback's body is irrelevant to this test.
-	rewriteQueryPipelines(script, nil, TimeRange{}, "kevlar", 0, "", nil)
+	rewriteQueryPipelines(script, nil, TimeRange{}, "kevlar", "", "", nil)
 
 	cb := singleCallbackInScript(t, script)
 	if got := len(cb.Redirects); got != 1 {
@@ -49,7 +49,7 @@ func TestRewriteQueryPipelines_PreservesAppendRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	rewriteQueryPipelines(script, nil, TimeRange{}, "kevlar", 0, "", nil)
+	rewriteQueryPipelines(script, nil, TimeRange{}, "kevlar", "", "", nil)
 
 	cb := singleCallbackInScript(t, script)
 	if got := len(cb.Redirects); got != 1 {
@@ -71,7 +71,7 @@ func TestRewriteQueryPipelines_RedirectOnLastStage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	rewriteQueryPipelines(script, nil, TimeRange{}, "kevlar", 0, "", nil)
+	rewriteQueryPipelines(script, nil, TimeRange{}, "kevlar", "", "", nil)
 
 	cb := singleCallbackInScript(t, script)
 	if got := len(cb.Redirects); got != 1 {
@@ -93,7 +93,7 @@ func TestRewriteQueryPipelines_NoRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	rewriteQueryPipelines(script, nil, TimeRange{}, "kevlar", 0, "", nil)
+	rewriteQueryPipelines(script, nil, TimeRange{}, "kevlar", "", "", nil)
 
 	cb := singleCallbackInScript(t, script)
 	if len(cb.Redirects) != 0 {

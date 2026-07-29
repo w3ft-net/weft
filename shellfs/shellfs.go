@@ -23,7 +23,7 @@ var _ bash.FS = (*ShellFS)(nil)
 type ShellFS struct {
 	mfs    *shellcore.MountFS
 	store  *store.Store
-	custID uint
+	custID string
 	cfg    mounts.Config
 }
 
@@ -35,10 +35,10 @@ type NoticeSink = mounts.NoticeSink
 const NoticeKeyTmpExpiry = mounts.NoticeKeyTmpExpiry
 
 // New creates a ShellFS for the given customer.
-func New(s *store.Store, customerID uint, logServices []string, opts ...Option) *ShellFS {
+func New(s *store.Store, orgID string, logServices []string, opts ...Option) *ShellFS {
 	cfg := mounts.Config{
 		Store:       s,
-		CustomerID:  customerID,
+		OrgID:       orgID,
 		Tier:        store.TierTrial,
 		LogServices: logServices,
 	}
@@ -48,7 +48,7 @@ func New(s *store.Store, customerID uint, logServices []string, opts ...Option) 
 	return &ShellFS{
 		mfs:    mounts.New(cfg),
 		store:  s,
-		custID: customerID,
+		custID: orgID,
 		cfg:    cfg,
 	}
 }

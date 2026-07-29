@@ -56,7 +56,7 @@ func TestIngestStream_RejectsDeletedCustomer(t *testing.T) {
 	// happened in prod when kevlar was removed. The FK cascade
 	// migration is applied by the harness, so a single DELETE on the
 	// parent row drops the agent token alongside it.
-	deleteCustomer(t, custName)
+	deleteOrg(t, custName)
 
 	// Verify the customer row really is gone (paranoia, but cheap).
 	dbConn, err := sql.Open("pgx", postgresURL)
@@ -66,7 +66,7 @@ func TestIngestStream_RejectsDeletedCustomer(t *testing.T) {
 	defer dbConn.Close()
 	var remaining int
 	if err := dbConn.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM customers WHERE name = $1`, custName,
+		`SELECT COUNT(*) FROM organizations WHERE name = $1`, custName,
 	).Scan(&remaining); err != nil {
 		t.Fatalf("count customers: %v", err)
 	}

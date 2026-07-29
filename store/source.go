@@ -14,12 +14,12 @@ import (
 // have one (their log_groups.aws_account_id is NULL).
 type AWSAccount struct {
 	gorm.Model
-	CustomerID uint     `gorm:"not null"`
-	Customer   Customer `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
-	AccountID  string   `gorm:"not null"` // 12-digit AWS account number
-	RoleARN    string   `gorm:"not null"`
-	ExternalID string
-	LogGroups  []LogGroup `gorm:"foreignKey:AWSAccountID;constraint:OnDelete:CASCADE"`
+	OrgID        string       `gorm:"not null"`
+	Organization Organization `gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+	AccountID    string       `gorm:"not null"` // 12-digit AWS account number
+	RoleARN      string       `gorm:"not null"`
+	ExternalID   string
+	LogGroups    []LogGroup `gorm:"foreignKey:AWSAccountID;constraint:OnDelete:CASCADE"`
 }
 
 // LogGroupSourceType identifies where a log_groups row's rows come from.
@@ -73,12 +73,12 @@ type LogGroup struct {
 	gorm.Model
 	NamespaceID uint      `gorm:"not null;uniqueIndex:idx_ns_app"`
 	Namespace   Namespace `gorm:"foreignKey:NamespaceID;constraint:OnDelete:CASCADE"`
-	// CustomerID is denormalized from the owning namespace (migration
+	// OrgID is denormalized from the owning namespace (migration
 	// 054) so log_groups can be tenant-scoped directly. Read-only to
 	// GORM (`->`): the BEFORE INSERT trigger fills it from namespace_id,
 	// so GORM must omit it from INSERTs (a written zero-value would
 	// dodge the trigger's NULL check and trip the customers FK).
-	CustomerID   uint        `gorm:"->"`
+	OrgID        string      `gorm:"->"`
 	AWSAccountID *uint       // nullable; required for cloudwatch, nil for weftd
 	AWSAccount   *AWSAccount `gorm:"foreignKey:AWSAccountID"`
 	Service      string      `gorm:"column:app;not null;uniqueIndex:idx_ns_app"`
@@ -185,18 +185,18 @@ func (s *Store) allLogGroups(statuses ...LogGroupStatus) ([]LogGroupWithAWSAccou
 	q := s.db.
 		Table("log_groups").
 		Select(`log_groups.*,
-		        customers.name as customer_name,
+		        organizations.name as customer_name,
 		        namespaces.name as namespace_name,
 		        aws_accounts.role_arn,
 		        aws_accounts.external_id,
 		        aws_accounts.account_id`).
 		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
-		Joins("JOIN customers ON namespaces.customer_id = customers.id").
+		Joins("JOIN organizations ON namespaces.org_id = organizations.id").
 		Joins("LEFT JOIN aws_accounts ON log_groups.aws_account_id = aws_accounts.id")
 	if len(statuses) > 0 {
 		q = q.Where("log_groups.status IN ?", statuses)
 	}
-	err := q.Order("customers.name, namespaces.name, log_groups.app").Find(&results).Error
+	err := q.Order("organizations.name, namespaces.name, log_groups.app").Find(&results).Error
 	return results, err
 }
 
@@ -322,17 +322,17 @@ func (s *Store) UpsertPendingLogGroup(namespaceID uint, service, instance, deplo
 // the bare service (migration 060), scoped to the namespace by the join
 // — so the match is on the bare service, not a "namespace/service"
 // composite.
-func (s *Store) FindLogGroup(customerID uint, namespace, service string) (*LogGroupWithAWSAccount, error) {
+func (s *Store) FindLogGroup(orgID string, namespace, service string) (*LogGroupWithAWSAccount, error) {
 	var lg LogGroupWithAWSAccount
 	err := s.db.
 		Table("log_groups").
 		Select(`log_groups.*,
-		        customers.name as customer_name,
+		        organizations.name as customer_name,
 		        namespaces.name as namespace_name`).
 		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
-		Joins("JOIN customers ON namespaces.customer_id = customers.id").
-		Where("customers.id = ? AND namespaces.name = ? AND log_groups.app = ?",
-			customerID, namespace, service).
+		Joins("JOIN organizations ON namespaces.org_id = organizations.id").
+		Where("organizations.id = ? AND namespaces.name = ? AND log_groups.app = ?",
+			orgID, namespace, service).
 		First(&lg).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil

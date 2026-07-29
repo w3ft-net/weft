@@ -54,14 +54,14 @@ func TestMaybeHandleTeamCommand_Routing(t *testing.T) {
 
 // ownerSession sets up a paid org (trial caps at 1 seat, which blocks
 // invites) with an active owner and returns an owner session.
-func ownerSession(t *testing.T, s *store.Store, orgName string) (*auth.Session, *store.Customer) {
+func ownerSession(t *testing.T, s *store.Store, orgName string) (*auth.Session, *store.Organization) {
 	t.Helper()
-	cust, err := s.FindOrCreateCustomer(orgName)
+	cust, err := s.FindOrCreateOrg(orgName)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := s.CreateSubscription(&store.Subscription{
-		ID: uuid.New().String(), CustomerID: cust.ID,
+		ID: uuid.New().String(), OrgID: cust.ID,
 		Tier: string(store.TierSwatch), Status: "active", StartsAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
@@ -70,16 +70,12 @@ func ownerSession(t *testing.T, s *store.Store, orgName string) (*auth.Session, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateTeamMember(&store.TeamMember{
-		ID: uuid.New().String(), CustomerID: cust.ID, Email: owner.Email,
-		UserID: &owner.ID, Role: "owner", Status: "active",
-		InvitedAt: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
-	}); err != nil {
+	if err := s.AddTeamMemberWithEmail(cust.ID, owner.ID, owner.Email, store.RoleOwner); err != nil {
 		t.Fatal(err)
 	}
 	return &auth.Session{
 		UserID: owner.ID, Email: owner.Email, IsOwner: true,
-		ActiveCustomerID: cust.ID, ActiveCustomerName: cust.Name,
+		ActiveOrgID: cust.ID, ActiveCustomerName: cust.Name,
 	}, cust
 }
 
@@ -104,7 +100,7 @@ func TestTeamAddUser_GroupGrantInvitesAndReportsPending(t *testing.T) {
 		t.Errorf("expected invite+accept message, got %q", out)
 	}
 	m, err := s.GetTeamMemberByEmail(cust.ID, newbie)
-	if err != nil || m == nil || m.UserID != nil || m.Status != "pending" {
+	if err != nil || m == nil || m.UserID != "" || m.Status != "pending" {
 		t.Fatalf("expected pending member, got %+v err=%v", m, err)
 	}
 

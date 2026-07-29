@@ -20,7 +20,7 @@ func TestAuthenticate_NoShardAddr(t *testing.T) {
 	srv := &Server{Coord: coord, Store: store}
 
 	// Create a token.
-	cust, err := store.FindOrCreateCustomer("kevlar")
+	cust, err := store.FindOrCreateOrg("kevlar")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestAuthenticate_MetricsConfigSync(t *testing.T) {
 	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
 	srv := &Server{Coord: coord, Store: store}
 
-	cust, err := store.FindOrCreateCustomer("kevlar")
+	cust, err := store.FindOrCreateOrg("kevlar")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -46,7 +46,7 @@ func derefStr(p *string) string {
 func seedReporterFixtures(t *testing.T, srv *Server, s *store.Store, customerName string, bytes int64, yesterday time.Time) {
 	t.Helper()
 
-	cust, err := s.FindOrCreateCustomer(customerName)
+	cust, err := s.FindOrCreateOrg(customerName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,14 +54,7 @@ func seedReporterFixtures(t *testing.T, srv *Server, s *store.Store, customerNam
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateTeamMember(&store.TeamMember{
-		ID:         "tm-" + customerName,
-		CustomerID: cust.ID,
-		Email:      user.Email,
-		UserID:     &user.ID,
-		Role:       "owner",
-		Status:     "active",
-	}); err != nil {
+	if err := s.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, store.RoleOwner); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DB().Model(&store.User{}).Where("id = ?", user.ID).Updates(map[string]any{
@@ -71,11 +64,11 @@ func seedReporterFixtures(t *testing.T, srv *Server, s *store.Store, customerNam
 		t.Fatal(err)
 	}
 	if err := s.CreateSubscription(&store.Subscription{
-		ID:         "sub-" + customerName,
-		CustomerID: cust.ID,
-		Tier:       "swatch",
-		Status:     "active",
-		StartsAt:   time.Now().AddDate(0, -1, 0),
+		ID:       "sub-" + customerName,
+		OrgID:    cust.ID,
+		Tier:     "swatch",
+		Status:   "active",
+		StartsAt: time.Now().AddDate(0, -1, 0),
 	}); err != nil {
 		t.Fatal(err)
 	}

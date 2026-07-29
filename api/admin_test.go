@@ -31,18 +31,11 @@ func superadminJWT(t *testing.T, s *store.Store) string {
 
 	// BuildSession (via AuthMiddleware) needs the caller to belong to at
 	// least one org — a superadmin is still a real user somewhere.
-	cust, err := s.FindOrCreateCustomer(fmt.Sprintf("super-org-%d", os.Getpid()))
+	cust, err := s.FindOrCreateOrg(fmt.Sprintf("super-org-%d", os.Getpid()))
 	if err != nil {
 		t.Fatalf("superadmin org: %v", err)
 	}
-	if err := s.CreateTeamMember(&store.TeamMember{
-		ID:         fmt.Sprintf("super-mem-%d", os.Getpid()),
-		CustomerID: cust.ID,
-		Email:      email,
-		UserID:     &user.ID,
-		Role:       "owner",
-		Status:     "active",
-	}); err != nil {
+	if err := s.AddTeamMemberWithEmail(cust.ID, user.ID, email, store.RoleOwner); err != nil {
 		t.Fatalf("superadmin membership: %v", err)
 	}
 
@@ -67,7 +60,7 @@ func TestMe_SuperadminWithoutMembership(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
 
-	// Superadmin with NO team membership and no last_active_customer_id —
+	// Superadmin with NO team membership and no last_active_org_id —
 	// exactly the production operator's shape.
 	email := fmt.Sprintf("super-nomem-%d@example.com", os.Getpid())
 	user, err := s.CreateVerifiedUser(email)
@@ -145,7 +138,7 @@ func TestAdminCreateCustomer(t *testing.T) {
 	}
 
 	// Customer exists.
-	cust, err := s.GetCustomerByName("acmeco")
+	cust, err := s.GetOrgByName("acmeco")
 	if err != nil {
 		t.Fatalf("customer not created: %v", err)
 	}
@@ -164,7 +157,7 @@ func TestAdminCreateCustomer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list members: %v", err)
 	}
-	if len(members) != 1 || members[0].Role != "owner" || members[0].Status != "active" {
+	if len(members) != 1 || members[0].Role != store.RoleOwner || members[0].Status != "active" {
 		t.Fatalf("expected one active owner membership, got %+v", members)
 	}
 
@@ -193,7 +186,7 @@ func TestAdminCreateCustomer_GrantsLoomMembership(t *testing.T) {
 
 	// Seed Loom (customer + namespace) so grantLoomMembership has
 	// somewhere to land. In prod this is weft-demo-seed's job.
-	loomCust, err := s.FindOrCreateCustomer(LoomCustomerSlug)
+	loomCust, err := s.FindOrCreateOrg(LoomCustomerSlug)
 	if err != nil {
 		t.Fatalf("seed loom customer: %v", err)
 	}
@@ -224,18 +217,20 @@ func TestAdminCreateCustomer_GrantsLoomMembership(t *testing.T) {
 
 	// The comp owner must hold an active membership in Loom — otherwise
 	// the welcome modal's "Start the tour" button is disabled forever.
-	memberships, err := s.ListUserMemberships(owner.ID)
+	// ListUserOrgs returns only active memberships, so appearing at all is
+	// the assertion.
+	userOrgs, err := s.ListUserOrgs(owner.ID)
 	if err != nil {
 		t.Fatalf("list memberships: %v", err)
 	}
 	var inLoom bool
-	for _, m := range memberships {
-		if m.Customer.Name == LoomCustomerSlug && m.Status == "active" {
+	for _, o := range userOrgs {
+		if o.Name == LoomCustomerSlug {
 			inLoom = true
 		}
 	}
 	if !inLoom {
-		t.Fatalf("comp owner has no active Loom membership (welcome modal's Start button would be disabled); memberships=%+v", memberships)
+		t.Fatalf("comp owner has no active Loom membership (welcome modal's Start button would be disabled); orgs=%+v", userOrgs)
 	}
 
 	// And read access to the Loom demo namespace so the tour has data.
@@ -270,7 +265,7 @@ func TestCompAccountVerify_ShowsWelcomeModal(t *testing.T) {
 	handler := srv.Handler()
 	jwt := superadminJWT(t, s)
 
-	loomCust, err := s.FindOrCreateCustomer(LoomCustomerSlug)
+	loomCust, err := s.FindOrCreateOrg(LoomCustomerSlug)
 	if err != nil {
 		t.Fatalf("seed loom customer: %v", err)
 	}
@@ -351,7 +346,7 @@ func TestAdminCreateCustomer_DuplicateOrg(t *testing.T) {
 	handler := srv.Handler()
 	jwt := superadminJWT(t, s)
 
-	if _, err := s.FindOrCreateCustomer("taken"); err != nil {
+	if _, err := s.FindOrCreateOrg("taken"); err != nil {
 		t.Fatalf("seed customer: %v", err)
 	}
 
@@ -394,7 +389,7 @@ func TestAdminCreateCustomer_RequiresSuperadmin(t *testing.T) {
 	if w.Code != 403 {
 		t.Fatalf("non-superadmin: expected 403, got %d: %s", w.Code, w.Body.String())
 	}
-	if _, err := s.GetCustomerByName("shouldnotexist"); err == nil {
+	if _, err := s.GetOrgByName("shouldnotexist"); err == nil {
 		t.Error("customer should not have been created by a non-superadmin")
 	}
 }

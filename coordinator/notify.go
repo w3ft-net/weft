@@ -41,13 +41,13 @@ func NewNotifier(s *store.Store, emailCfg *email.Config) *Notifier {
 // ad-hoc shell invocations should pass a fresh synthetic name (see
 // AlertContext.dispatchIdentity). body is the alert text; individual
 // channels may truncate further to satisfy per-service limits.
-func (n *Notifier) Send(customerID uint, aliasName, watchName, body string) error {
+func (n *Notifier) Send(orgID string, aliasName, watchName, body string) error {
 	aliasName = strings.TrimSpace(aliasName)
 	if aliasName == "" {
 		return nil
 	}
 
-	nc, err := n.Store.GetNotifyConfig(customerID)
+	nc, err := n.Store.GetNotifyConfig(orgID)
 	if err != nil {
 		return fmt.Errorf("no notify.yaml configured")
 	}
@@ -70,7 +70,7 @@ func (n *Notifier) Send(customerID uint, aliasName, watchName, body string) erro
 		}
 	}
 	for _, t := range alias.PagerDuty {
-		if err := n.sendPagerDuty(customerID, watchName, t, body); err != nil {
+		if err := n.sendPagerDuty(orgID, watchName, t, body); err != nil {
 			log.Printf("notify[%s]: pagerduty %s: %v", watchName, t.Name, err)
 			if firstErr == nil {
 				firstErr = err
@@ -185,10 +185,10 @@ type pagerDutyPayload struct {
 	Details   map[string]any `json:"custom_details,omitempty"`
 }
 
-func (n *Notifier) sendPagerDuty(customerID uint, watchName string, target store.PDTarget, stderr string) error {
+func (n *Notifier) sendPagerDuty(orgID string, watchName string, target store.PDTarget, stderr string) error {
 	integ, err := func() (*store.PagerDutyIntegration, error) {
 		var item store.PagerDutyIntegration
-		err := n.Store.DB().WithContext(store.WithCustomer(context.Background(), customerID)).Where("name = ?", target.Name).First(&item).Error
+		err := n.Store.DB().WithContext(store.WithOrg(context.Background(), orgID)).Where("name = ?", target.Name).First(&item).Error
 		if err != nil {
 			return nil, err
 		}
@@ -213,7 +213,7 @@ func (n *Notifier) sendPagerDuty(customerID uint, watchName string, target store
 	evt := pagerDutyEvent{
 		RoutingKey:  integ.IntegrationKey,
 		EventAction: "trigger",
-		DedupKey:    fmt.Sprintf("weft:%d:%s", customerID, watchName),
+		DedupKey:    fmt.Sprintf("weft:%s:%s", orgID, watchName),
 		Client:      "weft",
 		Payload: pagerDutyPayload{
 			Summary:  summary,
@@ -230,16 +230,16 @@ func (n *Notifier) sendPagerDuty(customerID uint, watchName string, target store
 	body, _ := json.Marshal(evt)
 	resp, err := n.client.Post(pdEventsURL, "application/json", bytes.NewReader(body))
 	if err != nil {
-		n.Store.RecordPagerDutySend(customerID, target.Name, err.Error())
+		n.Store.RecordPagerDutySend(orgID, target.Name, err.Error())
 		return fmt.Errorf("pagerduty POST: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 300 {
-		n.Store.RecordPagerDutySend(customerID, target.Name, fmt.Sprintf("http %d", resp.StatusCode))
+		n.Store.RecordPagerDutySend(orgID, target.Name, fmt.Sprintf("http %d", resp.StatusCode))
 		return fmt.Errorf("pagerduty returned %d", resp.StatusCode)
 	}
-	n.Store.RecordPagerDutySend(customerID, target.Name, "")
+	n.Store.RecordPagerDutySend(orgID, target.Name, "")
 	log.Printf("notify: sent PagerDuty alert for watch %s to integration %s (severity %s)",
 		watchName, target.Name, target.Severity)
 	return nil

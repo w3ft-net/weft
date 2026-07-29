@@ -23,11 +23,11 @@ import (
 // The shard has:
 //   - 2 ERROR rows for app=api, 1 INFO row for app=api
 //   - 1 ERROR row for app=web, 1 WARN row for app=web
-func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, uint) {
+func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, string) {
 	t.Helper()
 	db, custID := testStoreAndCustomer(t)
 
-	cust, err := db.GetCustomerByID(custID)
+	cust, err := db.GetOrgByID(custID)
 	if err != nil {
 		t.Fatalf("get customer: %v", err)
 	}

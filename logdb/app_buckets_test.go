@@ -135,7 +135,7 @@ func servicesContain(svcs []store.ShardService, want string) bool {
 // membership and the DB rows agree.
 func seedLogGroups(t *testing.T, db *store.Store, customer, namespace string, services ...string) uint {
 	t.Helper()
-	cust, err := db.FindOrCreateCustomer(customer)
+	cust, err := db.FindOrCreateOrg(customer)
 	if err != nil {
 		t.Fatalf("customer: %v", err)
 	}

@@ -16,7 +16,7 @@ import (
 func TestRunLocal_InfiniteLoopHitsTimeout(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	cust, err := db.GetCustomerByID(custID)
+	cust, err := db.GetOrgByID(custID)
 	if err != nil {
 		t.Fatalf("get customer: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestRunLocal_InfiniteLoopHitsTimeout(t *testing.T) {
 func TestRunLocal_QuickScriptCompletesNormally(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	cust, err := db.GetCustomerByID(custID)
+	cust, err := db.GetOrgByID(custID)
 	if err != nil {
 		t.Fatalf("get customer: %v", err)
 	}

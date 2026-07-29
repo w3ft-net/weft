@@ -32,7 +32,7 @@ func testOpen(t *testing.T) *Store {
 	return tx
 }
 
-func createTestToken(db *Store, custID uint, label string) (string, *AgentToken, error) {
+func createTestToken(db *Store, custID string, label string) (string, *AgentToken, error) {
 	ns, _ := db.FindOrCreateNamespace(custID, "test")
 	return db.CreateAgentToken(custID, ns.ID, label, "")
 }
@@ -40,7 +40,7 @@ func createTestToken(db *Store, custID uint, label string) (string, *AgentToken,
 func TestUpdateAgentMetricsConfig(t *testing.T) {
 	db := testOpen(t)
 
-	cust, err := db.FindOrCreateCustomer("metrics-test")
+	cust, err := db.FindOrCreateOrg("metrics-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestUpdateAgentMetricsConfig(t *testing.T) {
 func TestForecastMetricsUsage(t *testing.T) {
 	db := testOpen(t)
 
-	cust, err := db.FindOrCreateCustomer("forecast-test")
+	cust, err := db.FindOrCreateOrg("forecast-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestForecastMetricsUsage(t *testing.T) {
 func TestAgentToken_HashedAtRest(t *testing.T) {
 	db := testOpen(t)
 
-	cust, err := db.FindOrCreateCustomer("agent-hash-test")
+	cust, err := db.FindOrCreateOrg("agent-hash-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestAgentToken_HashedAtRest(t *testing.T) {
 func TestAgentToken_RevokeByID(t *testing.T) {
 	db := testOpen(t)
 
-	cust, err := db.FindOrCreateCustomer("agent-revoke-test")
+	cust, err := db.FindOrCreateOrg("agent-revoke-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func stringsHasPrefix(s, prefix string) bool {
 func TestForecastMetricsUsage_NoMetrics(t *testing.T) {
 	db := testOpen(t)
 
-	cust, err := db.FindOrCreateCustomer("no-metrics-test")
+	cust, err := db.FindOrCreateOrg("no-metrics-test")
 	if err != nil {
 		t.Fatal(err)
 	}

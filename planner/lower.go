@@ -127,7 +127,7 @@ func (a ArgSource) Resolve(ctx ResolveCtx) string {
 // Lower compiles a pipeline at save time. customer fixes the row-
 // level-security boundary for the duration of this lowering call;
 // the resulting LoweredPlan carries the customer as ArgCustomer
-// (re-resolved at each fire from the watch's stored CustomerID).
+// (re-resolved at each fire from the watch's stored OrgID).
 // tier is captured so the fire path can clamp retention + select
 // shards without a DB lookup; pass "" if the caller doesn't have
 // it (the fire path falls back to looking it up).

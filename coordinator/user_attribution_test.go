@@ -22,7 +22,7 @@ func TestCoordinatorQuery_RecordsCreatorOnTmpWrite(t *testing.T) {
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
 	// Use the customer's name (not its ID) — Query takes a name.
-	cust, err := db.GetCustomerByID(custID)
+	cust, err := db.GetOrgByID(custID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestCoordinatorQuery_EmptyUserStoresNullCreator(t *testing.T) {
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
-	cust, _ := db.GetCustomerByID(custID)
+	cust, _ := db.GetOrgByID(custID)
 	res, err := c.Execute(`echo system > /tmp/auto`, tr, cust.Name, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
@@ -80,7 +80,7 @@ func TestCoordinatorQuery_AttachesTmpExpiryNoticeOnFirstWrite(t *testing.T) {
 
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	cust, _ := db.GetCustomerByID(custID)
+	cust, _ := db.GetOrgByID(custID)
 
 	// Alice's first /tmp write — should get the notice.
 	r1, err := c.Execute(`echo first > /tmp/a`, tr, cust.Name, alice.ID)

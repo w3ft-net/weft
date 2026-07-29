@@ -69,7 +69,7 @@ func (s *Store) GrantFullNamespaceAccess(userID string, namespaceID uint) error 
 // adduser/deluser or the dashboard Members grid) is owner-only.
 type OrgPermission struct {
 	gorm.Model
-	CustomerID         uint   `gorm:"not null;uniqueIndex:idx_orgperm_customer_user"`
+	OrgID              string `gorm:"not null;uniqueIndex:idx_orgperm_customer_user"`
 	UserID             string `gorm:"not null;uniqueIndex:idx_orgperm_customer_user"`
 	CanManageFunctions bool   `gorm:"not null;default:false"`
 	CanManageWatches   bool   `gorm:"not null;default:false"`
@@ -79,9 +79,9 @@ type OrgPermission struct {
 // GetOrgPermission returns the org-scope permissions for a user in a
 // customer. Returns gorm.ErrRecordNotFound when no row exists; callers
 // translate "not found" into the default-deny (all-false) state.
-func (s *Store) GetOrgPermission(customerID uint, userID string) (*OrgPermission, error) {
+func (s *Store) GetOrgPermission(orgID string, userID string) (*OrgPermission, error) {
 	var p OrgPermission
-	err := s.scoped(customerID).Where("user_id = ?", userID).First(&p).Error
+	err := s.scoped(orgID).Where("user_id = ?", userID).First(&p).Error
 	if err != nil {
 		return nil, err
 	}

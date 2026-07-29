@@ -501,7 +501,7 @@ func (c *Coordinator) ingestNamespaceID(customer, namespace string) uint {
 	if v, ok := c.nsIDCache.Load(key); ok {
 		return v.(uint)
 	}
-	id := c.resolveNamespaceID(0, customer, namespace)
+	id := c.resolveNamespaceID("", customer, namespace)
 	if id != 0 {
 		c.nsIDCache.Store(key, id)
 	}
@@ -517,12 +517,12 @@ func (c *Coordinator) ingestNamespaceID(customer, namespace string) uint {
 // and the shard's `customer = ?` predicate preserves tenant isolation.
 // custID may be passed pre-resolved (query path); 0 means "look it up
 // from customerName" (lowered/cron path, which only carries the name).
-func (c *Coordinator) resolveNamespaceID(custID uint, customerName, namespace string) uint {
+func (c *Coordinator) resolveNamespaceID(custID string, customerName, namespace string) uint {
 	if namespace == "" || c.Store == nil {
 		return 0
 	}
-	if custID == 0 {
-		cust, err := c.Store.GetCustomerByName(customerName)
+	if custID == "" {
+		cust, err := c.Store.GetOrgByName(customerName)
 		if err != nil {
 			return 0
 		}
@@ -540,14 +540,14 @@ func (c *Coordinator) resolveNamespaceID(custID uint, customerName, namespace st
 // returns share the same lower bound. Without the clamp here, a
 // boundary-spanning shard could return rows older than the customer's
 // retention because the planner's ts predicate would carry the user's
-// raw start time. custID == 0 falls back to the trial retention.
+// raw start time. custID == "" falls back to the trial retention.
 //
 // The registry's MatchingEntries re-applies this clamp as defense in
 // depth — idempotent because we pass the already-clamped value.
-func (c *Coordinator) clampTimeRange(tr TimeRange, custID uint) TimeRange {
+func (c *Coordinator) clampTimeRange(tr TimeRange, custID string) TimeRange {
 	var tier store.Tier
-	if custID != 0 && c.Store != nil {
-		tier = c.Store.TierForCustomer(custID)
+	if custID != "" && c.Store != nil {
+		tier = c.Store.TierForOrg(custID)
 	}
 	cap := time.Now().Add(-store.LogRetention(tier))
 	if !tr.Start.IsZero() && tr.Start.Before(cap) {
@@ -669,10 +669,10 @@ func (c *Coordinator) ExecuteForWatch(pipeline string, tr TimeRange, watch *stor
 	// coordinator threads true-nil into AlertContext (no typed-nil-
 	// via-concrete-pointer trap).
 	alertCtx := &AlertContext{
-		Store:      c.Store,
-		Watch:      watch,
-		CustomerID: watch.CustomerID,
-		Notifier:   c.Notifier,
+		Store:    c.Store,
+		Watch:    watch,
+		OrgID:    watch.OrgID,
+		Notifier: c.Notifier,
 	}
 
 	// Fast path: the watch was lowered at save time and the lowered
@@ -688,9 +688,9 @@ func (c *Coordinator) ExecuteForWatch(pipeline string, tr TimeRange, watch *stor
 	// Fall-through: lowered form is missing, stale (version bump or
 	// /bin invalidation), or unrenderable. Run the original path and
 	// opportunistically re-lower + write back so the next fire is hot.
-	cust, err := c.Store.GetCustomerByID(watch.CustomerID)
+	cust, err := c.Store.GetOrgByID(watch.OrgID)
 	if err != nil {
-		return nil, fmt.Errorf("watch %d: resolve customer %d: %w", watch.ID, watch.CustomerID, err)
+		return nil, fmt.Errorf("watch %d: resolve org %s: %w", watch.ID, watch.OrgID, err)
 	}
 	// Refresh runs synchronously rather than via a goroutine. Two
 	// reasons: (1) it shares the same DB connection as the rest of
@@ -728,7 +728,7 @@ func (c *Coordinator) executeLowered(watch *store.CronWatch, tr TimeRange, alert
 	// A drift (someone edited /bin/foo) invalidates the lowered plan
 	// for every watch that referenced it. The slow path re-lowers.
 	for _, dep := range lp.BinDeps {
-		fn, err := c.Store.GetShellFunction(watch.CustomerID, dep.Name)
+		fn, err := c.Store.GetShellFunction(watch.OrgID, dep.Name)
 		if err != nil || fn == nil {
 			return nil, false
 		}
@@ -745,7 +745,7 @@ func (c *Coordinator) executeLowered(watch *store.CronWatch, tr TimeRange, alert
 		return nil, false
 	}
 	// Clamp time range using lp.Tier — baked at save time so we skip
-	// the TierForCustomer DB hit. A tier upgrade between save and
+	// the TierForOrg DB hit. A tier upgrade between save and
 	// fire stays on the old retention until the watch is re-saved
 	// (or another path triggers re-lowering). Acceptable tradeoff
 	// for the perf win on the hot path; documented on LoweredPlan.Tier.
@@ -770,10 +770,10 @@ func (c *Coordinator) executeLowered(watch *store.CronWatch, tr TimeRange, alert
 // row-level security at the shard's `customer = ?` predicate still
 // holds for cross-tenant safety — the only thing that can change is
 // "namespace deleted by owner", which renders the query empty rather
-// than wrong), and skips the per-fire TierForCustomer lookup (tier
+// than wrong), and skips the per-fire TierForOrg lookup (tier
 // is baked into LoweredPlan at save time).
 func (c *Coordinator) dispatchLoweredWithTier(lp *planner.LoweredPlan, args []any, tr TimeRange, tier store.Tier, alertCtx *AlertContext) (*ExecuteResult, error) {
-	nsID := c.resolveNamespaceID(0, lp.Customer, lp.SourceNamespace)
+	nsID := c.resolveNamespaceID("", lp.Customer, lp.SourceNamespace)
 	descs := c.Provisioner.ShardDescriptorsFor(tr, nsID, lp.SourceService, tier)
 	if len(descs) == 0 {
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
@@ -849,8 +849,8 @@ func (c *Coordinator) refreshLoweredSync(watch *store.CronWatch, customerName st
 	if watch.ID == 0 {
 		return
 	}
-	resolver := watchBinResolver{store: c.Store, customerID: watch.CustomerID}
-	tier := string(c.Store.TierForCustomer(watch.CustomerID))
+	resolver := watchBinResolver{store: c.Store, orgID: watch.OrgID}
+	tier := string(c.Store.TierForOrg(watch.OrgID))
 	loweredJSON := planner.LowerForStorage(watch.Pipeline, customerName, tier, resolver)
 	if loweredJSON == nil {
 		return
@@ -873,12 +873,12 @@ func (c *Coordinator) refreshLoweredSync(watch *store.CronWatch, customerName st
 // async refresh path. Mirrors the adapter in api/handlers.go and
 // mounts/cron.go — kept duplicated rather than shared (10-line type).
 type watchBinResolver struct {
-	store      *store.Store
-	customerID uint
+	store *store.Store
+	orgID string
 }
 
 func (r watchBinResolver) Source(name string) (string, string, bool) {
-	fn, err := r.store.GetShellFunction(r.customerID, name)
+	fn, err := r.store.GetShellFunction(r.orgID, name)
 	if err != nil || fn == nil {
 		return "", "", false
 	}
@@ -936,7 +936,7 @@ func (c *Coordinator) execute(pipeline string, tr TimeRange, customer, userID st
 	if alertCtx == nil {
 		alertCtx = &AlertContext{
 			Store:       c.Store,
-			CustomerID:  custID,
+			OrgID:       custID,
 			Interactive: true,
 			Notifier:    c.Notifier,
 		}
@@ -967,7 +967,7 @@ func (c *Coordinator) execute(pipeline string, tr TimeRange, customer, userID st
 // here — the rewriter strips redirects from the snapshot before
 // re-rendering, lifting them onto the CallbackCommand so warp's
 // own redirect machinery handles the FS write.
-func (c *Coordinator) runQuery(pipeline, cwd string, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
+func (c *Coordinator) runQuery(pipeline, cwd string, tr TimeRange, customer string, custID string, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
 	// Clamp tr to the customer's tier retention BEFORE planning so the
 	// SQL's ts predicates and the shard-selection in MatchingEntries
 	// agree on the same start. Without the clamp here, a boundary-
@@ -1003,7 +1003,7 @@ func (c *Coordinator) runQuery(pipeline, cwd string, tr TimeRange, customer stri
 	if alertCtx == nil {
 		alertCtx = &AlertContext{
 			Store:       c.Store,
-			CustomerID:  custID,
+			OrgID:       custID,
 			Interactive: true,
 			Notifier:    c.Notifier,
 		}
@@ -1019,17 +1019,17 @@ func (c *Coordinator) runQuery(pipeline, cwd string, tr TimeRange, customer stri
 // the expansion cost twice — acceptable since the steps are
 // idempotent and the DB hits are cache-friendly. ExecuteForWatch
 // hits preflight once via runQuery on the happy path.
-func (c *Coordinator) preflight(pipeline, customer, cwd string) (uint, string, error) {
-	var custID uint
+func (c *Coordinator) preflight(pipeline, customer, cwd string) (string, string, error) {
+	var custID string
 	if customer != "" {
-		cust, err := c.Store.GetCustomerByName(customer)
+		cust, err := c.Store.GetOrgByName(customer)
 		if err != nil {
-			return 0, "", fmt.Errorf("resolve customer %q: %w", customer, err)
+			return "", "", fmt.Errorf("resolve customer %q: %w", customer, err)
 		}
 		custID = cust.ID
 	}
 
-	if custID != 0 {
+	if custID != "" {
 		fs := shellfs.New(c.Store, custID, nil)
 		// Reject `tail -f ... | <bin-script>` before inlining. Bash
 		// bodies get spliced by expandBinPipeline below, so if we
@@ -1039,11 +1039,11 @@ func (c *Coordinator) preflight(pipeline, customer, cwd string) (uint, string, e
 		// they're opaque). Failing here keeps the rule uniform and
 		// the error pointed at the right stage name.
 		if err := rejectBinInFollow(pipeline, fs); err != nil {
-			return 0, "", err
+			return "", "", err
 		}
 		expanded, err := expandBinPipeline(pipeline, fs)
 		if err != nil {
-			return 0, "", fmt.Errorf("expand /bin: %w", err)
+			return "", "", fmt.Errorf("expand /bin: %w", err)
 		}
 		pipeline = expanded
 
@@ -1059,7 +1059,7 @@ func (c *Coordinator) preflight(pipeline, customer, cwd string) (uint, string, e
 			if apps := c.SeenServices.Names(customer); len(apps) > 0 {
 				expanded, err := planner.ExpandSourceGlobs(pipeline, cwd, apps)
 				if err != nil {
-					return 0, "", fmt.Errorf("expand glob: %w", err)
+					return "", "", fmt.Errorf("expand glob: %w", err)
 				}
 				pipeline = expanded
 			}
@@ -1074,7 +1074,7 @@ func (c *Coordinator) preflight(pipeline, customer, cwd string) (uint, string, e
 // scopes tenant-backed features (ShellFS, weft.*). alertCtx is forwarded
 // to runLocal so interior queries dispatched by the interceptor inherit
 // the caller's alert identity; may be nil.
-func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
+func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, customer string, custID string, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
 	if plan.ShardSQL == "" {
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
@@ -1086,12 +1086,12 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	// identifier. The planner already split the namespace out of the
 	// pseudofile path, so this checks it directly.
 	if plan.SourceNamespace != "" {
-		cust, err := c.Store.GetCustomerByName(customer)
+		cust, err := c.Store.GetOrgByName(customer)
 		if err != nil {
 			return nil, fmt.Errorf("validate source: resolve customer %q: %w", customer, err)
 		}
 		var count int64
-		if err := c.Store.DB().WithContext(store.WithCustomer(context.Background(), cust.ID)).Model(&store.Namespace{}).
+		if err := c.Store.DB().WithContext(store.WithOrg(context.Background(), cust.ID)).Model(&store.Namespace{}).
 			Where("name = ?", plan.SourceNamespace).
 			Count(&count).Error; err != nil {
 			return nil, fmt.Errorf("validate source: %w", err)
@@ -1115,8 +1115,8 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	// before invoking Plan so the SQL's ts predicate is consistent with
 	// the shard set.
 	var tier store.Tier
-	if custID != 0 {
-		tier = c.Store.TierForCustomer(custID)
+	if custID != "" {
+		tier = c.Store.TierForOrg(custID)
 	}
 	nsID := c.resolveNamespaceID(custID, customer, plan.SourceNamespace)
 	descs := c.Provisioner.ShardDescriptorsFor(tr, nsID, plan.SourceService, tier)
@@ -1223,7 +1223,7 @@ const scriptExecutionTimeout = 30 * time.Second
 // Notices are populated on the returned ExecuteResult AFTER warp
 // finishes, BEFORE the pipe writers close — so consumers reading
 // Notices past stream EOF see the populated value.
-func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
+func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, custID string, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
 	ast, err := bash.Parse(pipeline)
 	if err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
@@ -1256,8 +1256,8 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 	bash.RegisterToolCommands(interp)
 
 	noticeQueue := NewNoticeQueue(c.Store, userID)
-	if custID != 0 {
-		tier := c.Store.TierForCustomer(custID)
+	if custID != "" {
+		tier := c.Store.TierForOrg(custID)
 		opts := []shellfs.Option{
 			shellfs.WithTier(tier),
 			shellfs.WithCustomerName(customer),
@@ -1294,7 +1294,7 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 		// `cd` within the same pipeline is tracked too.
 		interp.SetFS(bash.NewCwdFS(shellfs.New(c.Store, custID, logServices, opts...), interp.DirStack().Cwd, ""))
 
-		wf := &WeftFuncs{Store: c.Store, CustomerID: custID}
+		wf := &WeftFuncs{Store: c.Store, OrgID: custID}
 		RegisterWeftCommands(interp, wf)
 		RegisterWeftPredicates(interp, wf)
 		interp.LuaExtensions = []luapkg.Extension{wf.LuaExtension()}
@@ -1302,7 +1302,7 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 		// `wit` version-history surface — log/show/diff/checkout/amend
 		// for /bin and /cron.d entities. Same scope as the weft.*
 		// helpers; one WitFuncs per request carries the acting user.
-		witFn := &WitFuncs{Store: c.Store, CustomerID: custID, UserID: userID}
+		witFn := &WitFuncs{Store: c.Store, OrgID: custID, UserID: userID}
 		RegisterWitCommands(interp, witFn)
 
 		rewriteQueryPipelines(ast, c, tr, customer, custID, userID, alertCtx)

@@ -40,28 +40,28 @@ const tokensSuffix = "+tokens"
 // AddUserToGroup grants (email, group) membership. group is a manager
 // group, a namespace, or "<ns>+tokens". Owner-only; the api layer gates
 // the caller before reaching here.
-func (s *Store) AddUserToGroup(customerID uint, email, group string) error {
-	return s.setGroupMembership(customerID, email, group, true)
+func (s *Store) AddUserToGroup(orgID string, email, group string) error {
+	return s.setGroupMembership(orgID, email, group, true)
 }
 
 // RemoveUserFromGroup revokes (email, group) membership.
-func (s *Store) RemoveUserFromGroup(customerID uint, email, group string) error {
-	return s.setGroupMembership(customerID, email, group, false)
+func (s *Store) RemoveUserFromGroup(orgID string, email, group string) error {
+	return s.setGroupMembership(orgID, email, group, false)
 }
 
-func (s *Store) setGroupMembership(customerID uint, email, group string, grant bool) error {
-	uid, err := s.resolveGrantableMember(customerID, email)
+func (s *Store) setGroupMembership(orgID string, email, group string, grant bool) error {
+	uid, err := s.resolveGrantableMember(orgID, email)
 	if err != nil {
 		return err
 	}
 
 	if col, ok := managerGroupColumn[group]; ok {
-		return s.setOrgBit(customerID, uid, col, grant)
+		return s.setOrgBit(orgID, uid, col, grant)
 	}
 
 	tokens := strings.HasSuffix(group, tokensSuffix)
 	nsName := strings.TrimSuffix(group, tokensSuffix)
-	ns, err := s.findNamespace(customerID, nsName)
+	ns, err := s.findNamespace(orgID, nsName)
 	if err != nil {
 		return err
 	}
@@ -71,40 +71,40 @@ func (s *Store) setGroupMembership(customerID uint, email, group string, grant b
 // resolveGrantableMember validates that email names an active member
 // who can hold permissions, returning their user ID. Owners and
 // not-yet-accepted invitees are rejected with actionable errors.
-func (s *Store) resolveGrantableMember(customerID uint, email string) (string, error) {
-	m, err := s.GetTeamMemberByEmail(customerID, email)
+func (s *Store) resolveGrantableMember(orgID string, email string) (string, error) {
+	m, err := s.GetTeamMemberByEmail(orgID, email)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return "", fmt.Errorf("no such member: %s (invite them first: adduser %s)", email, email)
 	}
 	if err != nil {
 		return "", err
 	}
-	if m.Role == "owner" {
+	if m.Role == RoleOwner {
 		return "", fmt.Errorf("%s is an owner — owners have implicit full access", email)
 	}
-	if m.UserID == nil {
+	if m.Pending() {
 		return "", fmt.Errorf("%s has been invited but hasn't accepted yet — grant groups after they accept", email)
 	}
-	return *m.UserID, nil
+	return m.UserID, nil
 }
 
 // ValidateGroup reports whether group names a real manager group or an
 // existing namespace (with optional +tokens facet). It touches no
 // member, so callers can reject a bad group before any side effect —
 // e.g. before inviting someone on what turns out to be a typo.
-func (s *Store) ValidateGroup(customerID uint, group string) error {
+func (s *Store) ValidateGroup(orgID string, group string) error {
 	if _, ok := managerGroupColumn[group]; ok {
 		return nil
 	}
 	nsName := strings.TrimSuffix(group, tokensSuffix)
-	_, err := s.findNamespace(customerID, nsName)
+	_, err := s.findNamespace(orgID, nsName)
 	return err
 }
 
 // findNamespace resolves a namespace by name within a customer without
 // creating it — an unknown name is a user error, not a new namespace.
-func (s *Store) findNamespace(customerID uint, name string) (*Namespace, error) {
-	namespaces, err := s.ListNamespaces(customerID)
+func (s *Store) findNamespace(orgID string, name string) (*Namespace, error) {
+	namespaces, err := s.ListNamespaces(orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -118,20 +118,20 @@ func (s *Store) findNamespace(customerID uint, name string) (*Namespace, error) 
 
 // setOrgBit sets a single OrgPermission column for a user, preserving
 // the other two. Creates the row if absent.
-func (s *Store) setOrgBit(customerID uint, userID, column string, val bool) error {
+func (s *Store) setOrgBit(orgID string, userID, column string, val bool) error {
 	var existing OrgPermission
-	err := s.scoped(customerID).Where("user_id = ?", userID).First(&existing).Error
+	err := s.scoped(orgID).Where("user_id = ?", userID).First(&existing).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return s.scoped(customerID).Model(&OrgPermission{}).Create(map[string]any{
-			"customer_id": customerID,
-			"user_id":     userID,
-			column:        val,
+		return s.scoped(orgID).Model(&OrgPermission{}).Create(map[string]any{
+			"org_id":  orgID,
+			"user_id": userID,
+			column:    val,
 		}).Error
 	}
 	if err != nil {
 		return err
 	}
-	return s.scoped(customerID).Model(&existing).Update(column, val).Error
+	return s.scoped(orgID).Model(&existing).Update(column, val).Error
 }
 
 // setNamespaceBit sets one facet (read or create-tokens) of a user's
@@ -162,45 +162,45 @@ func (s *Store) setNamespaceBit(userID string, nsID uint, tokens bool, val bool)
 	})
 }
 
-// IsOwner reports whether userID is an owner of customerID. A
+// IsOwner reports whether userID is an owner of orgID. A
 // non-member (no row) is not an owner, not an error.
-func (s *Store) IsOwner(customerID uint, userID string) (bool, error) {
-	m, err := s.GetTeamMemberByUserID(customerID, userID)
+func (s *Store) IsOwner(orgID string, userID string) (bool, error) {
+	m, err := s.GetTeamMemberByUserID(orgID, userID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return m.Role == "owner", nil
+	return m.Role == RoleOwner, nil
 }
 
 // RemoveMember removes a member from the org entirely: their membership
 // is marked removed and their org + namespace permissions are dropped.
 // Owners cannot be removed this way. Returns an error if email names no
 // member or an owner.
-func (s *Store) RemoveMember(customerID uint, email string) error {
-	m, err := s.GetTeamMemberByEmail(customerID, email)
+func (s *Store) RemoveMember(orgID string, email string) error {
+	m, err := s.GetTeamMemberByEmail(orgID, email)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return fmt.Errorf("no such member: %s", email)
 	}
 	if err != nil {
 		return err
 	}
-	if m.Role == "owner" {
+	if m.Role == RoleOwner {
 		return fmt.Errorf("%s is an owner and cannot be removed", email)
 	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		txStore := &Store{db: tx}
-		if err := txStore.scoped(customerID).Model(&TeamMember{}).Where("id = ?", m.ID).
+		if err := txStore.scoped(orgID).Model(&TeamMember{}).Where("id = ?", m.ID).
 			Update("status", "removed").Error; err != nil {
 			return err
 		}
-		if m.UserID == nil {
+		if m.Pending() {
 			return nil
 		}
-		uid := *m.UserID
-		if err := txStore.scoped(customerID).Where("user_id = ?", uid).
+		uid := m.UserID
+		if err := txStore.scoped(orgID).Where("user_id = ?", uid).
 			Delete(&OrgPermission{}).Error; err != nil {
 			return err
 		}
@@ -213,14 +213,14 @@ func (s *Store) RemoveMember(customerID uint, email string) error {
 // namespace groups alphabetically with "+tokens" following its base.
 // Owners and pending invitees return nil — they hold no explicit
 // groups.
-func (s *Store) memberGroups(customerID uint, m TeamMember, nsByID map[uint]string) ([]string, error) {
-	if m.Role == "owner" || m.UserID == nil {
+func (s *Store) memberGroups(orgID string, m TeamMember, nsByID map[uint]string) ([]string, error) {
+	if m.Role == RoleOwner || m.Pending() {
 		return nil, nil
 	}
-	uid := *m.UserID
+	uid := m.UserID
 
 	var groups []string
-	op, err := s.GetOrgPermission(customerID, uid)
+	op, err := s.GetOrgPermission(orgID, uid)
 	if err == nil && op != nil {
 		if op.CanManageFunctions {
 			groups = append(groups, "binmgr")
@@ -275,31 +275,31 @@ func (s *Store) memberGroups(customerID uint, m TeamMember, nsByID map[uint]stri
 // MemberGroups returns the group tokens for a single member by email,
 // along with their role and status — the backing query for `groups`
 // and `id`.
-func (s *Store) MemberGroups(customerID uint, email string) (role, status string, groups []string, err error) {
-	m, err := s.GetTeamMemberByEmail(customerID, email)
+func (s *Store) MemberGroups(orgID string, email string) (role, status string, groups []string, err error) {
+	m, err := s.GetTeamMemberByEmail(orgID, email)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return "", "", nil, fmt.Errorf("no such member: %s", email)
 	}
 	if err != nil {
 		return "", "", nil, err
 	}
-	nsByID, err := s.namespacesByID(customerID)
+	nsByID, err := s.namespacesByID(orgID)
 	if err != nil {
 		return "", "", nil, err
 	}
-	groups, err = s.memberGroups(customerID, *m, nsByID)
-	return m.Role, m.Status, groups, err
+	groups, err = s.memberGroups(orgID, *m, nsByID)
+	return string(m.Role), string(m.Status), groups, err
 }
 
 // RenderPasswd renders the read-only /etc/passwd roster table: one row
 // per member with role, status, and group membership. Owners show
 // "(all — implicit)"; members with no groups show "—".
-func (s *Store) RenderPasswd(customerID uint) (string, error) {
-	members, err := s.ListTeamMembers(customerID)
+func (s *Store) RenderPasswd(orgID string) (string, error) {
+	members, err := s.ListTeamMembers(orgID)
 	if err != nil {
 		return "", err
 	}
-	nsByID, err := s.namespacesByID(customerID)
+	nsByID, err := s.namespacesByID(orgID)
 	if err != nil {
 		return "", err
 	}
@@ -310,10 +310,10 @@ func (s *Store) RenderPasswd(customerID uint) (string, error) {
 	for _, m := range members {
 		groupsCol := "—"
 		switch {
-		case m.Role == "owner":
+		case m.Role == RoleOwner:
 			groupsCol = "(all — implicit)"
 		default:
-			g, err := s.memberGroups(customerID, m, nsByID)
+			g, err := s.memberGroups(orgID, m, nsByID)
 			if err != nil {
 				return "", err
 			}
@@ -321,11 +321,11 @@ func (s *Store) RenderPasswd(customerID uint) (string, error) {
 				groupsCol = strings.Join(g, "  ")
 			}
 		}
-		status := m.Status
-		if status == "pending" {
+		status := string(m.Status)
+		if m.Pending() {
 			status = "invited"
 		}
-		rows = append(rows, row{m.Email, m.Role, status, groupsCol})
+		rows = append(rows, row{m.Email, string(m.Role), status, groupsCol})
 		if len(m.Email) > userW {
 			userW = len(m.Email)
 		}
@@ -341,8 +341,8 @@ func (s *Store) RenderPasswd(customerID uint) (string, error) {
 
 // namespacesByID returns a customer's namespaces keyed by ID, for
 // resolving permission rows back to namespace names.
-func (s *Store) namespacesByID(customerID uint) (map[uint]string, error) {
-	namespaces, err := s.ListNamespaces(customerID)
+func (s *Store) namespacesByID(orgID string) (map[uint]string, error) {
+	namespaces, err := s.ListNamespaces(orgID)
 	if err != nil {
 		return nil, err
 	}

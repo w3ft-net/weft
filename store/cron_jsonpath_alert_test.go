@@ -12,7 +12,7 @@ import "testing"
 // Reproduces with the literal pipeline shape used by mem-pressure.
 func TestGetCronWatch_JSONPathAlertSelectors(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("cron-jsonpath")
+	cust, _ := db.FindOrCreateOrg("cron-jsonpath")
 	user, _ := db.CreateUser("alice-jp@example.test")
 
 	pipeline := `tail -n 12 /log/x/y_metrics.log | jq 'select(.type == "memory")' | alert above 70 -k .pct -t .host`

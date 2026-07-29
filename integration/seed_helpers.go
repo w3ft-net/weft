@@ -70,7 +70,7 @@ func grpcClientAs(t *testing.T, customer string) (*grpc.ClientConn, pb.WeftCoord
 }
 
 // seedCustomerWithNamespace upserts a customer row, a namespace, a user,
-// and a team_members row directly via postgres. Returns (customerID,
+// and a memberships row directly via postgres. Returns (orgID,
 // namespaceID). The user ID matches what customerJWT embeds
 // ("test-user-<customer>") so BuildSession can resolve the JWT into a
 // session with the correct customer.
@@ -84,7 +84,7 @@ func seedCustomerWithNamespace(t *testing.T, customer, namespace string) (int64,
 
 	var custID int64
 	if err := conn.QueryRow(`
-		INSERT INTO customers (name, created_at, updated_at)
+		INSERT INTO organizations (name, created_at, updated_at)
 		VALUES ($1, now(), now())
 		ON CONFLICT (name) DO UPDATE SET updated_at = now()
 		RETURNING id
@@ -94,9 +94,9 @@ func seedCustomerWithNamespace(t *testing.T, customer, namespace string) (int64,
 
 	var nsID int64
 	if err := conn.QueryRow(`
-		INSERT INTO namespaces (customer_id, name, created_at, updated_at)
+		INSERT INTO namespaces (org_id, name, created_at, updated_at)
 		VALUES ($1, $2, now(), now())
-		ON CONFLICT (customer_id, name) DO UPDATE SET updated_at = now()
+		ON CONFLICT (org_id, name) DO UPDATE SET updated_at = now()
 		RETURNING id
 	`, custID, namespace).Scan(&nsID); err != nil {
 		t.Fatalf("seed namespace %s/%s: %v", customer, namespace, err)
@@ -112,7 +112,7 @@ func seedCustomerWithNamespace(t *testing.T, customer, namespace string) (int64,
 		t.Fatalf("seed user for %s: %v", customer, err)
 	}
 	if _, err := conn.Exec(`
-		INSERT INTO team_members (id, customer_id, email, user_id, role, status, created_at, updated_at)
+		INSERT INTO memberships (id, org_id, email, user_id, role, status, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, 'owner', 'active', now(), now())
 		ON CONFLICT DO NOTHING
 	`, fmt.Sprintf("tm-%s", customer), custID, email, userID); err != nil {
@@ -149,7 +149,7 @@ func seedAgentToken(t *testing.T, custID, nsID int64, label string) string {
 	defer conn.Close()
 	if _, err := conn.Exec(`
 		INSERT INTO agent_tokens (
-			customer_id, namespace_id, token_hash, prefix, label,
+			org_id, namespace_id, token_hash, prefix, label,
 			revoked, created_at, updated_at
 		)
 		VALUES ($1, $2, $3, $4, $5, false, now(), now())
@@ -171,10 +171,10 @@ func generateRawAgentToken() (string, error) {
 	return fmt.Sprintf("wft_%x", b[:]), nil
 }
 
-// deleteCustomer DROPs the customer row by name. The cascade migration
+// deleteOrg DROPs the customer row by name. The cascade migration
 // (006) takes care of children — agent tokens, namespaces, log groups,
 // and so on. Used to set up the deleted-customer ingest-stream test.
-func deleteCustomer(t *testing.T, name string) {
+func deleteOrg(t *testing.T, name string) {
 	t.Helper()
 	conn, err := sql.Open("pgx", postgresURL)
 	if err != nil {
@@ -182,7 +182,7 @@ func deleteCustomer(t *testing.T, name string) {
 	}
 	defer conn.Close()
 	if _, err := conn.ExecContext(context.Background(),
-		`DELETE FROM customers WHERE name = $1`, name); err != nil {
+		`DELETE FROM organizations WHERE name = $1`, name); err != nil {
 		t.Fatalf("delete customer %s: %v", name, err)
 	}
 }

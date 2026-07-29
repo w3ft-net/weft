@@ -21,9 +21,9 @@ import (
 // the request. One per request — wired by the coordinator the same
 // way WeftFuncs is.
 type WitFuncs struct {
-	Store      *store.Store
-	CustomerID uint
-	UserID     string // user invoking; empty = system call (still works for read-only paths)
+	Store  *store.Store
+	OrgID  string
+	UserID string // user invoking; empty = system call (still works for read-only paths)
 }
 
 // Run is the dispatcher. Subcommands look up by name and route to
@@ -120,7 +120,7 @@ func (w *WitFuncs) runLog(args []string, stdout, stderr io.Writer) int {
 }
 
 func (w *WitFuncs) logBin(name string, patch bool, stdout, stderr io.Writer) int {
-	versions, err := w.Store.LogShellFunction(w.CustomerID, name)
+	versions, err := w.Store.LogShellFunction(w.OrgID, name)
 	if err != nil {
 		fmt.Fprintf(stderr, "wit log: %v\n", err)
 		return 1
@@ -143,7 +143,7 @@ func (w *WitFuncs) logBin(name string, patch bool, stdout, stderr io.Writer) int
 }
 
 func (w *WitFuncs) logCron(name string, patch bool, stdout, stderr io.Writer) int {
-	versions, err := w.Store.LogCronWatch(w.CustomerID, name)
+	versions, err := w.Store.LogCronWatch(w.OrgID, name)
 	if err != nil {
 		fmt.Fprintf(stderr, "wit log: %v\n", err)
 		return 1
@@ -241,7 +241,7 @@ func (w *WitFuncs) runShow(args []string, stdout, stderr io.Writer) int {
 	ref := args[1]
 	switch kind {
 	case "bin":
-		v, err := w.Store.ResolveShellFunctionRef(w.CustomerID, name, ref)
+		v, err := w.Store.ResolveShellFunctionRef(w.OrgID, name, ref)
 		if err != nil {
 			fmt.Fprintf(stderr, "wit show: %v\n", err)
 			return 1
@@ -252,7 +252,7 @@ func (w *WitFuncs) runShow(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout)
 		}
 	case "cron.d":
-		cv, err := w.Store.ResolveCronWatchRef(w.CustomerID, name, ref)
+		cv, err := w.Store.ResolveCronWatchRef(w.OrgID, name, ref)
 		if err != nil {
 			fmt.Fprintf(stderr, "wit show: %v\n", err)
 			return 1
@@ -287,12 +287,12 @@ func (w *WitFuncs) runDiff(args []string, stdout, stderr io.Writer) int {
 
 	switch kind {
 	case "bin":
-		va, err := w.Store.ResolveShellFunctionRef(w.CustomerID, name, aRef)
+		va, err := w.Store.ResolveShellFunctionRef(w.OrgID, name, aRef)
 		if err != nil {
 			fmt.Fprintf(stderr, "wit diff: %v\n", err)
 			return 1
 		}
-		vb, err := w.Store.ResolveShellFunctionRef(w.CustomerID, name, bRef)
+		vb, err := w.Store.ResolveShellFunctionRef(w.OrgID, name, bRef)
 		if err != nil {
 			fmt.Fprintf(stderr, "wit diff: %v\n", err)
 			return 1
@@ -302,12 +302,12 @@ func (w *WitFuncs) runDiff(args []string, stdout, stderr io.Writer) int {
 			diffLabel(va.ContentHash, ownerLabel(w.Store, va.AuthoredByUserID)),
 			diffLabel(vb.ContentHash, ownerLabel(w.Store, vb.AuthoredByUserID)))))
 	case "cron.d":
-		va, err := w.Store.ResolveCronWatchRef(w.CustomerID, name, aRef)
+		va, err := w.Store.ResolveCronWatchRef(w.OrgID, name, aRef)
 		if err != nil {
 			fmt.Fprintf(stderr, "wit diff: %v\n", err)
 			return 1
 		}
-		vb, err := w.Store.ResolveCronWatchRef(w.CustomerID, name, bRef)
+		vb, err := w.Store.ResolveCronWatchRef(w.OrgID, name, bRef)
 		if err != nil {
 			fmt.Fprintf(stderr, "wit diff: %v\n", err)
 			return 1
@@ -398,20 +398,20 @@ func (w *WitFuncs) runCheckout(args []string, stdout, stderr io.Writer) int {
 	var hash string
 	switch kind {
 	case "bin":
-		v, err := w.Store.ResolveShellFunctionRef(w.CustomerID, name, ref)
+		v, err := w.Store.ResolveShellFunctionRef(w.OrgID, name, ref)
 		if err != nil {
 			fmt.Fprintf(stderr, "wit checkout: %v\n", err)
 			return 1
 		}
 		if err := func() error {
-			target, err := w.Store.ResolveShellFunctionRef(w.CustomerID, name, ref)
+			target, err := w.Store.ResolveShellFunctionRef(w.OrgID, name, ref)
 			if err != nil {
 				return err
 			}
 			if target.IsHead {
 				return nil
 			}
-			return w.Store.DB().WithContext(store.WithCustomer(context.Background(), w.CustomerID)).Transaction(func(tx *gorm.DB) error {
+			return w.Store.DB().WithContext(store.WithOrg(context.Background(), w.OrgID)).Transaction(func(tx *gorm.DB) error {
 				if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", w.UserID).Error; err != nil {
 					return err
 				}
@@ -435,13 +435,13 @@ func (w *WitFuncs) runCheckout(args []string, stdout, stderr io.Writer) int {
 		}
 		hash = v.ContentHash
 	case "cron.d":
-		v, err := w.Store.ResolveCronWatchRef(w.CustomerID, name, ref)
+		v, err := w.Store.ResolveCronWatchRef(w.OrgID, name, ref)
 		if err != nil {
 			fmt.Fprintf(stderr, "wit checkout: %v\n", err)
 			return 1
 		}
 		if err := func() error {
-			target, err := w.Store.ResolveCronWatchRef(w.CustomerID, name, ref)
+			target, err := w.Store.ResolveCronWatchRef(w.OrgID, name, ref)
 			if err != nil {
 				return err
 			}
@@ -452,7 +452,7 @@ func (w *WitFuncs) runCheckout(args []string, stdout, stderr io.Writer) int {
 			if err != nil {
 				return err
 			}
-			return w.Store.DB().WithContext(store.WithCustomer(context.Background(), w.CustomerID)).Transaction(func(tx *gorm.DB) error {
+			return w.Store.DB().WithContext(store.WithOrg(context.Background(), w.OrgID)).Transaction(func(tx *gorm.DB) error {
 				if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", w.UserID).Error; err != nil {
 					return err
 				}
@@ -532,7 +532,7 @@ func (w *WitFuncs) runAmend(args []string, stdout, stderr io.Writer) int {
 	}
 	switch kind {
 	case "bin":
-		if err := w.Store.AmendShellFunctionMessage(w.CustomerID, name, ref, message); err != nil {
+		if err := w.Store.AmendShellFunctionMessage(w.OrgID, name, ref, message); err != nil {
 			if errors.Is(err, store.ErrRefNotFound) || errors.Is(err, store.ErrInvalidRef) ||
 				errors.Is(err, store.ErrAmbiguousHash) {
 				fmt.Fprintf(stderr, "wit amend: %v\n", err)
@@ -542,7 +542,7 @@ func (w *WitFuncs) runAmend(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	case "cron.d":
-		if err := w.Store.AmendCronWatchMessage(w.CustomerID, name, ref, message); err != nil {
+		if err := w.Store.AmendCronWatchMessage(w.OrgID, name, ref, message); err != nil {
 			fmt.Fprintf(stderr, "wit amend: %v\n", err)
 			return 1
 		}

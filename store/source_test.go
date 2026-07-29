@@ -8,8 +8,8 @@ import (
 // clicks "remove" on a configured source, then later re-configures the
 // same source and gets back:
 //
-//     store error: ERROR: duplicate key value violates unique
-//     constraint "idx_ns_app" (SQLSTATE 23505)
+//	store error: ERROR: duplicate key value violates unique
+//	constraint "idx_ns_app" (SQLSTATE 23505)
 //
 // Root cause: LogGroup embeds gorm.Model, which adds a DeletedAt
 // column. GORM's default Delete is a soft-delete — it sets
@@ -24,7 +24,7 @@ import (
 func TestRemoveAndReAddLogGroup(t *testing.T) {
 	db := testOpen(t)
 
-	cust, err := db.FindOrCreateCustomer("remove-readd-test")
+	cust, err := db.FindOrCreateOrg("remove-readd-test")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,18 +15,15 @@ import (
 // auth middleware's BuildSession finds a membership and resolves
 // the active org. Without this the dashboards-handler chain hits
 // ErrNoMembership and returns 403.
-func dashTeamMember(s *store.Store, cust *store.Customer, user *store.User, idSuffix string) {
-	_ = s.CreateTeamMember(&store.TeamMember{
-		ID: "tm-dash-" + idSuffix, CustomerID: cust.ID, Email: user.Email,
-		UserID: &user.ID, Role: "owner", Status: "active",
-	})
+func dashTeamMember(s *store.Store, cust *store.Organization, user *store.User, idSuffix string) {
+	_ = s.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, store.RoleOwner)
 }
 
 func TestDashboards_ListAndGet(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
 
-	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("dashapi-%d", os.Getpid()))
+	cust, _ := s.FindOrCreateOrg(fmt.Sprintf("dashapi-%d", os.Getpid()))
 	user, _ := s.CreateUser(fmt.Sprintf("dash-%d@example.com", os.Getpid()))
 	dashTeamMember(s, cust, user, fmt.Sprintf("la-%d", os.Getpid()))
 	jwt, _ := auth.Generate(user, "test-secret")
@@ -102,7 +99,7 @@ func TestDashboards_Get_NotFound(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
 
-	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("dashapi-nf-%d", os.Getpid()))
+	cust, _ := s.FindOrCreateOrg(fmt.Sprintf("dashapi-nf-%d", os.Getpid()))
 	user, _ := s.CreateUser(fmt.Sprintf("dash-nf-%d@example.com", os.Getpid()))
 	dashTeamMember(s, cust, user, fmt.Sprintf("nf-%d", os.Getpid()))
 	jwt, _ := auth.Generate(user, "test-secret")
@@ -120,7 +117,7 @@ func TestDashboards_List_Empty(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
 
-	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("dashapi-empty-%d", os.Getpid()))
+	cust, _ := s.FindOrCreateOrg(fmt.Sprintf("dashapi-empty-%d", os.Getpid()))
 	user, _ := s.CreateUser(fmt.Sprintf("dash-empty-%d@example.com", os.Getpid()))
 	dashTeamMember(s, cust, user, fmt.Sprintf("e-%d", os.Getpid()))
 	jwt, _ := auth.Generate(user, "test-secret")

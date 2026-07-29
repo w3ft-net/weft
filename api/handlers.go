@@ -440,7 +440,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 
 	// Check for existing org name.
 	customerName := strings.ToLower(strings.TrimSpace(req.OrgName))
-	if existing, _ := s.store.GetCustomerByName(customerName); existing != nil {
+	if existing, _ := s.store.GetOrgByName(customerName); existing != nil {
 		http.Error(w, "organization name already taken", http.StatusConflict)
 		return
 	}
@@ -450,7 +450,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	// middleware blocks token creation, watches, integrations, and source
 	// config until they click the magic link we send below. If they never
 	// click, the cleanup sweep deletes the account after 24h.
-	cust, _ := s.store.FindOrCreateCustomer(customerName)
+	cust, _ := s.store.FindOrCreateOrg(customerName)
 	user, err := s.store.CreateUser(req.Email)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -460,30 +460,20 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	// Create trial subscription.
 	trialEnd := time.Now().Add(14 * 24 * time.Hour)
 	s.store.CreateSubscription(&store.Subscription{
-		ID:         uuid.New().String(),
-		CustomerID: cust.ID,
-		Tier:       "trial",
-		Status:     "active",
-		StartsAt:   time.Now(),
-		ExpiresAt:  &trialEnd,
+		ID:        uuid.New().String(),
+		OrgID:     cust.ID,
+		Tier:      "trial",
+		Status:    "active",
+		StartsAt:  time.Now(),
+		ExpiresAt: &trialEnd,
 	})
 
 	// Create owner team membership — this is what binds user → customer
-	// now that User.CustomerID is gone.
-	s.store.CreateTeamMember(&store.TeamMember{
-		ID:         uuid.New().String(),
-		CustomerID: cust.ID,
-		Email:      req.Email,
-		UserID:     &user.ID,
-		Role:       "owner",
-		Status:     "active",
-		InvitedAt:  time.Now(),
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-	})
+	// now that User.OrgID is gone.
+	s.store.AddTeamMemberWithEmail(cust.ID, user.ID, req.Email, store.RoleOwner)
 
 	// Land the user in their fresh org by default on next request.
-	_ = s.store.UpdateUserLastActiveCustomer(user.ID, cust.ID)
+	_ = s.store.UpdateUserLastActiveOrg(user.ID, cust.ID)
 
 	// Grant read-only membership in Loom Inc so the welcome modal has
 	// somewhere to point. Soft-fails when Loom isn't seeded — see
@@ -640,13 +630,13 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		s.store.AcceptTeamMember(invite.ID, user.ID)
-		_ = s.store.UpdateUserLastActiveCustomer(user.ID, invite.CustomerID)
+		_ = s.store.UpdateUserLastActiveOrg(user.ID, invite.OrgID)
 	} else {
 		// No invite — find existing user or create new user + customer.
 		user, _ = s.store.GetUserByEmail(email)
 		if user == nil {
 			customerName := strings.ToLower(strings.TrimSpace(req.OrgName))
-			cust, _ := s.store.FindOrCreateCustomer(customerName)
+			cust, _ := s.store.FindOrCreateOrg(customerName)
 			user, err = s.store.CreateVerifiedUser(email)
 			if err != nil {
 				http.Error(w, "internal error", http.StatusInternalServerError)
@@ -656,27 +646,17 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			// Create trial subscription.
 			trialEnd := time.Now().Add(14 * 24 * time.Hour)
 			s.store.CreateSubscription(&store.Subscription{
-				ID:         uuid.New().String(),
-				CustomerID: cust.ID,
-				Tier:       "trial",
-				Status:     "active",
-				StartsAt:   time.Now(),
-				ExpiresAt:  &trialEnd,
+				ID:        uuid.New().String(),
+				OrgID:     cust.ID,
+				Tier:      "trial",
+				Status:    "active",
+				StartsAt:  time.Now(),
+				ExpiresAt: &trialEnd,
 			})
 
 			// Create owner team membership — the FK that binds user→org.
-			s.store.CreateTeamMember(&store.TeamMember{
-				ID:         uuid.New().String(),
-				CustomerID: cust.ID,
-				Email:      email,
-				UserID:     &user.ID,
-				Role:       "owner",
-				Status:     "active",
-				InvitedAt:  time.Now(),
-				CreatedAt:  time.Now(),
-				UpdatedAt:  time.Now(),
-			})
-			_ = s.store.UpdateUserLastActiveCustomer(user.ID, cust.ID)
+			s.store.AddTeamMemberWithEmail(cust.ID, user.ID, email, store.RoleOwner)
+			_ = s.store.UpdateUserLastActiveOrg(user.ID, cust.ID)
 
 			if err := s.grantLoomMembership(user.ID, email); err != nil {
 				log.Printf("verify: grant Loom membership for %s: %v", email, err)
@@ -715,7 +695,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	if fresh, err := s.store.GetUserByID(user.ID); err == nil {
 		user = fresh
 	}
-	activeID, activeName := s.resolveActiveCustomer(user)
+	activeID, activeName := s.resolveActiveOrg(user)
 	json.NewEncoder(w).Encode(map[string]any{
 		"token": jwt,
 		"user":  s.userResponse(user, activeID, activeName),
@@ -731,7 +711,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(s.userResponse(user, session.ActiveCustomerID, session.ActiveCustomerName))
+	json.NewEncoder(w).Encode(s.userResponse(user, session.ActiveOrgID, session.ActiveCustomerName))
 }
 
 // userResponse builds the canonical user object the SPA consumes. Both
@@ -742,29 +722,29 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 // modal — which gates on that field off the object AuthContext seeds from
 // /verify — never rendered on a fresh comp account's first session.
 //
-// activeCustomerID/Name are the org the response is scoped to: the
+// activeOrgID/Name are the org the response is scoped to: the
 // middleware-resolved session org for /me, or the user's landing org for
 // /verify. Tier and the orgs "active" flag are computed against it.
-func (s *Server) userResponse(user *store.User, activeCustomerID uint, activeCustomerName string) map[string]any {
+func (s *Server) userResponse(user *store.User, activeOrgID string, activeCustomerName string) map[string]any {
 	// Tier and customer come from the resolved active org, not from a
 	// user.CustomerName field that no longer exists.
 	tier := store.Tier("none")
-	if activeCustomerID != 0 {
-		if sub, _ := s.store.ActiveSubscription(activeCustomerID); sub != nil {
+	if activeOrgID != "" {
+		if sub, _ := s.store.ActiveSubscription(activeOrgID); sub != nil {
 			tier = store.Tier(sub.Tier)
 		}
 	}
 
 	// Memberships drive the org switcher in the UI — return them so the
 	// frontend can render a list without a second round-trip.
-	memberships, _ := s.store.ListUserMemberships(user.ID)
-	orgs := make([]map[string]any, 0, len(memberships))
-	for _, m := range memberships {
+	userOrgs, _ := s.store.ListUserOrgs(user.ID)
+	orgs := make([]map[string]any, 0, len(userOrgs))
+	for _, m := range userOrgs {
 		orgs = append(orgs, map[string]any{
-			"id":     m.CustomerID,
-			"name":   m.Customer.Name,
+			"id":     m.ID,
+			"name":   m.Name,
 			"role":   m.Role,
-			"active": m.CustomerID == activeCustomerID,
+			"active": m.ID == activeOrgID,
 		})
 	}
 
@@ -808,20 +788,20 @@ func (s *Server) userResponse(user *store.User, activeCustomerID uint, activeCus
 	return resp
 }
 
-// resolveActiveCustomer picks the org a just-verified user lands in.
+// resolveActiveOrg picks the org a just-verified user lands in.
 // Verify runs before AuthMiddleware establishes a session, so there's no
 // resolved active org yet — fall back to the user's last_active_customer
 // (set by every account-creation path), then to their oldest membership.
-func (s *Server) resolveActiveCustomer(user *store.User) (uint, string) {
-	if user.LastActiveCustomerID != nil {
-		if c, err := s.store.GetCustomerByID(*user.LastActiveCustomerID); err == nil && c != nil {
+func (s *Server) resolveActiveOrg(user *store.User) (string, string) {
+	if user.LastActiveOrgID != nil {
+		if c, err := s.store.GetOrgByID(*user.LastActiveOrgID); err == nil && c != nil {
 			return c.ID, c.Name
 		}
 	}
-	if mems, _ := s.store.ListUserMemberships(user.ID); len(mems) > 0 {
-		return mems[0].CustomerID, mems[0].Customer.Name
+	if mems, _ := s.store.ListUserOrgs(user.ID); len(mems) > 0 {
+		return mems[0].ID, mems[0].Name
 	}
-	return 0, ""
+	return "", ""
 }
 
 // --- Billing handlers ---
@@ -888,7 +868,7 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 
 	// Reuse an existing trialing Stripe subscription if the trial row already
 	// has one attached (handles page refresh / retries idempotently).
-	if trial, _ := s.store.ActiveSubscription(session.ActiveCustomerID); trial != nil && trial.StripeSubscriptionID != "" {
+	if trial, _ := s.store.ActiveSubscription(session.ActiveOrgID); trial != nil && trial.StripeSubscriptionID != "" {
 		getParams := &stripe.SubscriptionParams{}
 		getParams.AddExpand("pending_setup_intent")
 		sub, err := subscription.Get(trial.StripeSubscriptionID, getParams)
@@ -947,7 +927,7 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 
 	// Attach the Stripe subscription ID to our local trial row so refresh
 	// reuses the same subscription and the webhook can promote it on confirm.
-	if trial, _ := s.store.ActiveSubscription(session.ActiveCustomerID); trial != nil {
+	if trial, _ := s.store.ActiveSubscription(session.ActiveOrgID); trial != nil {
 		_ = s.store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.Subscription{}).
 			Where("id = ?", trial.ID).
 			Updates(map[string]any{
@@ -984,7 +964,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 
 	stripe.Key = s.StripeSecretKey
 
-	currentSub, _ := s.store.ActiveSubscription(session.ActiveCustomerID)
+	currentSub, _ := s.store.ActiveSubscription(session.ActiveOrgID)
 	if currentSub == nil || currentSub.StripeSubscriptionID == "" {
 		http.Error(w, "no active stripe subscription; complete signup first", http.StatusBadRequest)
 		return
@@ -1228,7 +1208,7 @@ func projectedOverageCents(bytes int64, tier store.Tier) int {
 
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerID); sub == nil {
+	if sub, _ := s.store.ActiveSubscription(session.ActiveOrgID); sub == nil {
 		http.Error(w, "no active subscription", http.StatusPaymentRequired)
 		return
 	}
@@ -1241,10 +1221,10 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Tier from the resolved Session (which BuildSession looks up
-	// via TierForCustomer); fall through to the active subscription
+	// via TierForOrg); fall through to the active subscription
 	// in case display tier evolves separately.
 	tier := session.Tier
-	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerID); sub != nil {
+	if sub, _ := s.store.ActiveSubscription(session.ActiveOrgID); sub != nil {
 		tier = store.Tier(sub.Tier)
 	}
 
@@ -1258,7 +1238,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add metrics forecast if available.
-	if cust, err := s.store.GetCustomerByName(session.ActiveCustomerName); err == nil {
+	if cust, err := s.store.GetOrgByName(session.ActiveCustomerName); err == nil {
 		if forecast, err := s.store.ForecastMetricsUsage(cust.ID); err == nil && forecast.AgentsWithMetrics > 0 {
 			result["metrics_forecast"] = map[string]any{
 				"agents_with_metrics":   forecast.AgentsWithMetrics,
@@ -1276,7 +1256,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1321,7 +1301,7 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1424,17 +1404,17 @@ func (s *Server) handleIngestionStatus(w http.ResponseWriter, r *http.Request) {
 
 // --- Shell functions (/bin/) ---
 
-func (s *Server) resolveCustomerID(customerName string) (uint, error) {
-	cust, err := s.store.FindOrCreateCustomer(customerName)
+func (s *Server) resolveOrgID(customerName string) (string, error) {
+	cust, err := s.store.FindOrCreateOrg(customerName)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 	return cust.ID, nil
 }
 
 func (s *Server) handleListFunctions(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1456,7 +1436,7 @@ func (s *Server) handleGetFunction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1484,7 +1464,7 @@ func (s *Server) handleSaveFunction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "source required", http.StatusBadRequest)
 		return
 	}
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1504,7 +1484,7 @@ func (s *Server) handleDeleteFunction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1520,7 +1500,7 @@ func (s *Server) handleDeleteFunction(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListWatches(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1531,7 +1511,7 @@ func (s *Server) handleListWatches(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tier := store.TierTrial
-	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerID); sub != nil {
+	if sub, _ := s.store.ActiveSubscription(session.ActiveOrgID); sub != nil {
 		tier = store.Tier(sub.Tier)
 	}
 	count, _ := s.store.CountCronWatches(custID)
@@ -1550,7 +1530,7 @@ func (s *Server) handleGetWatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1578,7 +1558,7 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "schedule and pipeline required", http.StatusBadRequest)
 		return
 	}
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1619,7 +1599,7 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 	// inlining stub) saves with NULL lowered_plan — the fire path falls
 	// back to inline Plan(). This is the canonical save-time entry
 	// point; the gRPC and shell save paths use the same helper.
-	resolver := storeBinResolver{store: s.store, customerID: custID}
+	resolver := storeBinResolver{store: s.store, orgID: custID}
 	loweredJSON := planner.LowerForStorage(req.Pipeline, session.ActiveCustomerName, string(tier), resolver)
 
 	if err := s.store.SaveCronWatch(custID, session.UserID, name, req.Schedule, req.Pipeline, loweredJSON); err != nil {
@@ -1637,12 +1617,12 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 // resulting unplannable shape as a Lower error, in which case
 // LowerForStorage logs and returns nil.
 type storeBinResolver struct {
-	store      *store.Store
-	customerID uint
+	store *store.Store
+	orgID string
 }
 
 func (r storeBinResolver) Source(name string) (string, string, bool) {
-	fn, err := r.store.GetShellFunction(r.customerID, name)
+	fn, err := r.store.GetShellFunction(r.orgID, name)
 	if err != nil || fn == nil {
 		return "", "", false
 	}
@@ -1656,7 +1636,7 @@ func (s *Server) handleDeleteWatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1675,7 +1655,7 @@ func (s *Server) handleWatchResults(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1728,7 +1708,7 @@ func (s *Server) handleWatchChart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown range", http.StatusBadRequest)
 		return
 	}
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1738,7 +1718,7 @@ func (s *Server) handleWatchChart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	since := store.ClampRetention(s.store.TierForCustomer(custID), time.Now().Add(-dur))
+	since := store.ClampRetention(s.store.TierForOrg(custID), time.Now().Add(-dur))
 	gran := store.PickGranularity(time.Since(since))
 	var buckets []store.CronBucket
 	err = s.store.DB().Raw(`
@@ -1791,18 +1771,18 @@ func (s *Server) handleWatchChart(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListTeam(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	members, err := s.store.ListTeamMembers(session.ActiveCustomerID)
+	members, err := s.store.ListTeamMembers(session.ActiveOrgID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	count, _ := s.store.CountTeamMembers(session.ActiveCustomerID)
+	count, _ := s.store.CountTeamMembers(session.ActiveOrgID)
 	tier := store.TierTrial
-	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerID); sub != nil {
+	if sub, _ := s.store.ActiveSubscription(session.ActiveOrgID); sub != nil {
 		tier = store.Tier(sub.Tier)
 	}
 	orgName := session.ActiveCustomerName
-	if cust, err := s.store.GetCustomerByName(session.ActiveCustomerName); err == nil && cust.DisplayName != "" {
+	if cust, err := s.store.GetOrgByName(session.ActiveCustomerName); err == nil && cust.DisplayName != "" {
 		orgName = cust.DisplayName
 	}
 	json.NewEncoder(w).Encode(map[string]any{
@@ -1864,7 +1844,7 @@ func (s *Server) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 
 	// Find or create the user; the team_member row binds them to the
 	// invite's customer.
-	cust, err := s.store.GetCustomerByID(member.CustomerID)
+	cust, err := s.store.GetOrgByID(member.OrgID)
 	if err != nil || cust == nil {
 		http.Error(w, "customer not found", http.StatusInternalServerError)
 		return
@@ -1874,7 +1854,7 @@ func (s *Server) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		user, _ = s.store.CreateUser(email)
 	}
 	s.store.AcceptTeamMember(member.ID, user.ID)
-	_ = s.store.UpdateUserLastActiveCustomer(user.ID, member.CustomerID)
+	_ = s.store.UpdateUserLastActiveOrg(user.ID, member.OrgID)
 
 	tier := store.TierTrial
 	if sub, _ := s.store.ActiveSubscription(cust.ID); sub != nil {
@@ -1906,8 +1886,8 @@ func (s *Server) handleRemoveTeamMember(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Verify caller is owner.
-	callerMember, err := s.store.GetTeamMemberByEmail(session.ActiveCustomerID, session.Email)
-	if err != nil || callerMember.Role != "owner" {
+	callerMember, err := s.store.GetTeamMemberByEmail(session.ActiveOrgID, session.Email)
+	if err != nil || callerMember.Role != store.RoleOwner {
 		http.Error(w, "only the owner can remove members", http.StatusForbidden)
 		return
 	}
@@ -1938,7 +1918,7 @@ func (s *Server) handleUpdateTeamName(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 
 	// Only the owner can rename.
-	if callerMember, err := s.store.GetTeamMemberByEmail(session.ActiveCustomerID, session.Email); err != nil || callerMember.Role != "owner" {
+	if callerMember, err := s.store.GetTeamMemberByEmail(session.ActiveOrgID, session.Email); err != nil || callerMember.Role != store.RoleOwner {
 		http.Error(w, "only the owner can rename the team", http.StatusForbidden)
 		return
 	}
@@ -1951,7 +1931,7 @@ func (s *Server) handleUpdateTeamName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.UpdateCustomerDisplayName(session.ActiveCustomerName, req.Name); err != nil {
+	if err := s.store.UpdateOrgDisplayName(session.ActiveCustomerName, req.Name); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -2033,14 +2013,14 @@ func (s *Server) handleDevicePoll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The CLI persists this so subsequent calls send X-Active-Org. Resolve
-	// from last_active_customer_id, falling back to the oldest membership.
+	// from last_active_org_id, falling back to the oldest membership.
 	defaultOrg := ""
-	if memberships, _ := s.store.ListUserMemberships(user.ID); len(memberships) > 0 {
-		defaultOrg = memberships[0].Customer.Name
-		if user.LastActiveCustomerID != nil {
-			for _, m := range memberships {
-				if m.CustomerID == *user.LastActiveCustomerID {
-					defaultOrg = m.Customer.Name
+	if userOrgs, _ := s.store.ListUserOrgs(user.ID); len(userOrgs) > 0 {
+		defaultOrg = userOrgs[0].Name
+		if user.LastActiveOrgID != nil {
+			for _, m := range userOrgs {
+				if m.ID == *user.LastActiveOrgID {
+					defaultOrg = m.Name
 					break
 				}
 			}
@@ -2087,7 +2067,7 @@ func (s *Server) handleDeviceApprove(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListNamespaces(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -2112,7 +2092,7 @@ func (s *Server) handleListNamespaces(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateNamespace(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -2165,7 +2145,7 @@ func (s *Server) handleSetNamespacePermission(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	custID, _ := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, _ := s.resolveOrgID(session.ActiveCustomerName)
 	ns, err := s.store.FindOrCreateNamespace(custID, nsName)
 	if err != nil {
 		http.Error(w, "namespace not found", http.StatusNotFound)
@@ -2196,7 +2176,7 @@ func (s *Server) handleSetNamespacePermission(w http.ResponseWriter, r *http.Req
 // dashboard's Members grid.
 func (s *Server) handleGetPermissions(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	doc, err := s.store.BuildTeamPerms(session.ActiveCustomerID)
+	doc, err := s.store.BuildTeamPerms(session.ActiveOrgID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -2220,7 +2200,7 @@ func (s *Server) handleSetPermissions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if err := s.store.ApplyTeamPerms(session.ActiveCustomerID, doc); err != nil {
+	if err := s.store.ApplyTeamPerms(session.ActiveOrgID, doc); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

@@ -10,12 +10,12 @@ import (
 // TestSaveSlackConfig_CreatesAndUpdates pins both branches of the
 // upsert: a customer with no NotifyConfig row gets one inserted; a
 // subsequent call updates in place rather than inserting a duplicate.
-// The unique index on customer_id would catch a regression, but
+// The unique index on org_id would catch a regression, but
 // asserting on a fresh GetNotifyConfig after each call keeps the
 // failure mode legible.
 func TestSaveSlackConfig_CreatesAndUpdates(t *testing.T) {
 	db := testOpen(t)
-	cust, err := db.FindOrCreateCustomer("slack-cfg-test")
+	cust, err := db.FindOrCreateOrg("slack-cfg-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestSaveSlackConfig_CreatesAndUpdates(t *testing.T) {
 // pre-OAuth flow where customers paste a webhook URL directly.
 func TestSaveSlackWebhook_LegacyPath(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("slack-webhook-test")
+	cust, _ := db.FindOrCreateOrg("slack-webhook-test")
 
 	if err := db.SaveSlackConfig(cust.ID, "https://hooks.slack/legacy", "", "Legacy WS"); err != nil {
 		t.Fatalf("save slack webhook: %v", err)
@@ -69,11 +69,11 @@ func TestSaveSlackWebhook_LegacyPath(t *testing.T) {
 }
 
 // TestDisconnectSlack clears webhook + team name while leaving the
-// row in place — `nc` is keyed (uniquely) by customer_id and also
+// row in place — `nc` is keyed (uniquely) by org_id and also
 // holds notify-aliases yaml, so we don't tear down the whole row.
 func TestDisconnectSlack(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("slack-disconnect-test")
+	cust, _ := db.FindOrCreateOrg("slack-disconnect-test")
 
 	db.SaveSlackConfig(cust.ID, "https://hooks.slack/X", "xoxb-x", "X Team")
 	db.SaveNotifyAliases(cust.ID, "page: oncall\n")
@@ -99,7 +99,7 @@ func TestDisconnectSlack(t *testing.T) {
 // a real error.
 func TestGetNotifyConfig_NotFound(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("no-notify-test")
+	cust, _ := db.FindOrCreateOrg("no-notify-test")
 
 	_, err := db.GetNotifyConfig(cust.ID)
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -111,7 +111,7 @@ func TestGetNotifyConfig_NotFound(t *testing.T) {
 
 func TestPagerDuty_CRUD(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("pd-crud-test")
+	cust, _ := db.FindOrCreateOrg("pd-crud-test")
 
 	// Empty list.
 	items, err := listPagerDuty(db, cust.ID)
@@ -160,7 +160,7 @@ func TestPagerDuty_CRUD(t *testing.T) {
 // output stay stable.
 func TestPagerDuty_ListOrdersByName(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("pd-order-test")
+	cust, _ := db.FindOrCreateOrg("pd-order-test")
 
 	// Insert in non-alphabetic order.
 	for _, n := range []string{"zulu", "alpha", "mike"} {
@@ -184,7 +184,7 @@ func TestPagerDuty_ListOrdersByName(t *testing.T) {
 // affecting siblings. Soft-delete via gorm.Model.DeletedAt.
 func TestPagerDuty_DeleteOne(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("pd-delete-test")
+	cust, _ := db.FindOrCreateOrg("pd-delete-test")
 
 	savePagerDuty(db, cust.ID, "a", "k-a")
 	savePagerDuty(db, cust.ID, "b", "k-b")
@@ -202,7 +202,7 @@ func TestPagerDuty_DeleteOne(t *testing.T) {
 // one shot. Used by the disconnect-all path in `weft pd disconnect`.
 func TestPagerDuty_DeleteAll(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("pd-deleteall-test")
+	cust, _ := db.FindOrCreateOrg("pd-deleteall-test")
 
 	for _, n := range []string{"a", "b", "c"} {
 		savePagerDuty(db, cust.ID, n, "k-"+n)
@@ -221,8 +221,8 @@ func TestPagerDuty_DeleteAll(t *testing.T) {
 // the api layer relies on for cross-customer safety.
 func TestPagerDuty_DeleteAll_OtherCustomerUnaffected(t *testing.T) {
 	db := testOpen(t)
-	a, _ := db.FindOrCreateCustomer("pd-iso-a")
-	b, _ := db.FindOrCreateCustomer("pd-iso-b")
+	a, _ := db.FindOrCreateOrg("pd-iso-a")
+	b, _ := db.FindOrCreateOrg("pd-iso-b")
 
 	savePagerDuty(db, a.ID, "primary", "k-a")
 	savePagerDuty(db, b.ID, "primary", "k-b")
@@ -240,7 +240,7 @@ func TestPagerDuty_DeleteAll_OtherCustomerUnaffected(t *testing.T) {
 // state in the UI without storing every send.
 func TestPagerDuty_RecordSend(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("pd-record-test")
+	cust, _ := db.FindOrCreateOrg("pd-record-test")
 	savePagerDuty(db, cust.ID, "main", "k-main")
 
 	// Success path: empty error string.
@@ -270,7 +270,7 @@ func TestPagerDuty_RecordSend(t *testing.T) {
 // this to a 404.
 func TestPagerDuty_GetNotFound(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("pd-notfound-test")
+	cust, _ := db.FindOrCreateOrg("pd-notfound-test")
 
 	_, err := getPagerDuty(db, cust.ID, "missing")
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -296,23 +296,23 @@ func TestPagerDutyIntegration_TableName(t *testing.T) {
 // same behaviour.
 
 // savePagerDuty mirrors the former Store.SavePagerDutyIntegration.
-func savePagerDuty(db *Store, customerID uint, name, key string) error {
+func savePagerDuty(db *Store, orgID string, name, key string) error {
 	var item PagerDutyIntegration
-	result := db.scoped(customerID).Where("name = ?", name).First(&item)
+	result := db.scoped(orgID).Where("name = ?", name).First(&item)
 	if result.Error == gorm.ErrRecordNotFound {
-		return db.scoped(customerID).Create(&PagerDutyIntegration{
-			CustomerID:     customerID,
+		return db.scoped(orgID).Create(&PagerDutyIntegration{
+			OrgID:          orgID,
 			Name:           name,
 			IntegrationKey: key,
 		}).Error
 	}
-	return db.scoped(customerID).Model(&item).Update("integration_key", key).Error
+	return db.scoped(orgID).Model(&item).Update("integration_key", key).Error
 }
 
 // getPagerDuty mirrors the former Store.GetPagerDutyIntegration.
-func getPagerDuty(db *Store, customerID uint, name string) (*PagerDutyIntegration, error) {
+func getPagerDuty(db *Store, orgID string, name string) (*PagerDutyIntegration, error) {
 	var item PagerDutyIntegration
-	err := db.scoped(customerID).Where("name = ?", name).First(&item).Error
+	err := db.scoped(orgID).Where("name = ?", name).First(&item).Error
 	if err != nil {
 		return nil, err
 	}
@@ -320,13 +320,13 @@ func getPagerDuty(db *Store, customerID uint, name string) (*PagerDutyIntegratio
 }
 
 // listPagerDuty mirrors the former Store.ListPagerDutyIntegrations.
-func listPagerDuty(db *Store, customerID uint) ([]PagerDutyIntegration, error) {
+func listPagerDuty(db *Store, orgID string) ([]PagerDutyIntegration, error) {
 	var items []PagerDutyIntegration
-	err := db.scoped(customerID).Order("name").Find(&items).Error
+	err := db.scoped(orgID).Order("name").Find(&items).Error
 	return items, err
 }
 
 // deleteAllPagerDuty mirrors the former Store.DeleteAllPagerDutyIntegrations.
-func deleteAllPagerDuty(db *Store, customerID uint) error {
-	return db.scoped(customerID).Delete(&PagerDutyIntegration{}).Error
+func deleteAllPagerDuty(db *Store, orgID string) error {
+	return db.scoped(orgID).Delete(&PagerDutyIntegration{}).Error
 }

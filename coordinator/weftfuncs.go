@@ -28,8 +28,8 @@ const maxEndpointDuration = 14 * 24 * time.Hour
 // WeftFuncs provides cron result query functions for /bin/ scripts.
 // Both bash (ExternalCmdFunc) and Lua (weft.* table) use this.
 type WeftFuncs struct {
-	Store      *store.Store
-	CustomerID uint
+	Store *store.Store
+	OrgID string
 }
 
 // SeasonalStatsResult is the {avg, stddev, samples} triple over the
@@ -41,9 +41,9 @@ type SeasonalStatsResult struct {
 }
 
 func (w *WeftFuncs) Latest(watchName string) (string, error) {
-	r, err := func(customerID uint, watchName string) (*store.CronResult, error) {
+	r, err := func(orgID string, watchName string) (*store.CronResult, error) {
 		var watch store.CronWatch
-		if err := w.Store.DB().WithContext(store.WithCustomer(context.Background(), customerID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
+		if err := w.Store.DB().WithContext(store.WithOrg(context.Background(), orgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
 			return nil, err
 		}
 		var result store.CronResult
@@ -52,7 +52,7 @@ func (w *WeftFuncs) Latest(watchName string) (string, error) {
 			return nil, err
 		}
 		return &result, nil
-	}(w.CustomerID, watchName)
+	}(w.OrgID, watchName)
 	if err != nil {
 		return "", fmt.Errorf("weft::latest: watch %q: %w", watchName, err)
 	}
@@ -64,7 +64,7 @@ func (w *WeftFuncs) Latest(watchName string) (string, error) {
 // changed/rising/falling predicates for prev-tick semantics.
 // Returns "" with no error when fewer than 2 results exist.
 func (w *WeftFuncs) Previous(watchName string) (string, error) {
-	cw, err := w.Store.GetCronWatch(w.CustomerID, watchName)
+	cw, err := w.Store.GetCronWatch(w.OrgID, watchName)
 	if err != nil {
 		return "", fmt.Errorf("weft::previous: watch %q: %w", watchName, err)
 	}
@@ -191,7 +191,7 @@ func (w *WeftFuncs) Count(watchName string, dur time.Duration) (float64, error) 
 		return 0, fmt.Errorf("duration must be positive")
 	}
 	since := time.Now().Add(-dur)
-	results, err := w.Store.QueryCronResults(w.CustomerID, watchName, since)
+	results, err := w.Store.QueryCronResults(w.OrgID, watchName, since)
 	if err != nil {
 		return 0, fmt.Errorf("weft::count: watch %q: %w", watchName, err)
 	}
@@ -282,13 +282,13 @@ func (w *WeftFuncs) SeasonalStats(watchName string, period, window time.Duration
 	if period >= window {
 		return SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: window must be larger than period")
 	}
-	avg, stddev, samples, err := func(customerID uint, watchName string, period, window time.Duration) (avg, stddev float64, samples int, err error) {
+	avg, stddev, samples, err := func(orgID string, watchName string, period, window time.Duration) (avg, stddev float64, samples int, err error) {
 		var watch store.CronWatch
-		if err := w.Store.DB().WithContext(store.WithCustomer(context.Background(), customerID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
+		if err := w.Store.DB().WithContext(store.WithOrg(context.Background(), orgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
 			return 0, 0, 0, err
 		}
 		now := time.Now()
-		since := store.ClampRetention(w.Store.TierForCustomer(customerID), now.Add(-window))
+		since := store.ClampRetention(w.Store.TierForOrg(orgID), now.Add(-window))
 		tol := period / 20
 		if tol > 5*time.Minute {
 			tol = 5 * time.Minute
@@ -335,7 +335,7 @@ func (w *WeftFuncs) SeasonalStats(watchName string, period, window time.Duration
 			stddev = *sd.Stddev
 		}
 		return avg, stddev, samples, nil
-	}(w.CustomerID, watchName, period, window)
+	}(w.OrgID, watchName, period, window)
 	if err != nil {
 		return SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: watch %q: %w", watchName, err)
 	}
@@ -357,7 +357,7 @@ func (w *WeftFuncs) numericResultsCap(watchName string, dur time.Duration, maxDu
 		return nil, fmt.Errorf("duration must be positive")
 	}
 	since := time.Now().Add(-dur)
-	results, err := w.Store.QueryCronResults(w.CustomerID, watchName, since)
+	results, err := w.Store.QueryCronResults(w.OrgID, watchName, since)
 	if err != nil {
 		return nil, fmt.Errorf("watch %q: %w", watchName, err)
 	}

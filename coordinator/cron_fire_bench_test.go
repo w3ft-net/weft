@@ -61,7 +61,7 @@ func BenchmarkExecuteForWatch(b *testing.B) {
 	c.Pool = noopPool{}
 
 	// Resolve the customer ID the test fixture seeded.
-	cust, err := c.Store.GetCustomerByName("kevlar")
+	cust, err := c.Store.GetOrgByName("kevlar")
 	if err != nil {
 		b.Fatalf("resolve test customer: %v", err)
 	}
@@ -86,7 +86,7 @@ func BenchmarkExecuteForWatch(b *testing.B) {
 		pipeline string
 		// lowered: when true, the bench seeds watch.LoweredPlan so the
 		// fire path takes the save-time-lowered shortcut (no Plan,
-		// no preflight, no GetCustomerByID DB hit). When false, the
+		// no preflight, no GetOrgByID DB hit). When false, the
 		// fire path takes the inline-Plan fallback. Comparing the two
 		// per-op numbers IS the Phase B win.
 		lowered bool
@@ -109,11 +109,11 @@ func BenchmarkExecuteForWatch(b *testing.B) {
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
 			w := &store.CronWatch{
-				CustomerID: cust.ID,
-				Name:       "bench-" + tc.name,
-				Schedule:   "* * * * *",
-				Pipeline:   tc.pipeline,
-				Enabled:    true,
+				OrgID:    cust.ID,
+				Name:     "bench-" + tc.name,
+				Schedule: "* * * * *",
+				Pipeline: tc.pipeline,
+				Enabled:  true,
 			}
 
 			if tc.lowered {

@@ -68,7 +68,7 @@ func (s *Server) IngestHandler(a Adapter) http.Handler {
 			http.Error(w, "validate token: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if auth == nil || auth.Customer == nil || auth.Customer.ID == 0 || auth.Customer.Name == "" {
+		if auth == nil || auth.Organization == nil || auth.Organization.ID == "" || auth.Organization.Name == "" {
 			http.Error(w, "invalid or revoked token", http.StatusUnauthorized)
 			return
 		}

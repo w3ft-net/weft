@@ -15,14 +15,14 @@ import (
 // historyCount returns the number of history rows for a function.
 // Used by trigger-behaviour tests that need to assert on raw counts
 // rather than going through the Log API.
-func historyCount(t *testing.T, db *Store, customerID uint, name string) int {
+func historyCount(t *testing.T, db *Store, orgID string, name string) int {
 	t.Helper()
 	var n int64
 	err := db.db.Raw(`
 		SELECT COUNT(*) FROM shell_function_history h
 		JOIN shell_functions f ON f.id = h.function_id
-		WHERE f.customer_id = ? AND f.name = ?
-	`, customerID, name).Scan(&n).Error
+		WHERE f.org_id = ? AND f.name = ?
+	`, orgID, name).Scan(&n).Error
 	if err != nil {
 		t.Fatalf("historyCount: %v", err)
 	}
@@ -41,7 +41,7 @@ func hashOf(source string) string {
 
 func TestShellFunction_FirstSaveCreatesNoHistory(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("vh-first")
+	cust, _ := db.FindOrCreateOrg("vh-first")
 	user, _ := db.CreateUser("alice-first@example.test")
 
 	if err := db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v1", "bash"); err != nil {
@@ -54,7 +54,7 @@ func TestShellFunction_FirstSaveCreatesNoHistory(t *testing.T) {
 
 func TestShellFunction_IdenticalResaveDoesNotCapture(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("vh-noop")
+	cust, _ := db.FindOrCreateOrg("vh-noop")
 	user, _ := db.CreateUser("alice-noop@example.test")
 
 	// First save creates HEAD, no history (covered above).
@@ -85,7 +85,7 @@ func TestShellFunction_IdenticalResaveDoesNotCapture(t *testing.T) {
 
 func TestShellFunction_UpdateCapturesPriorVersion(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("vh-update")
+	cust, _ := db.FindOrCreateOrg("vh-update")
 	alice, _ := db.CreateUser("alice-up@example.test")
 	bob, _ := db.CreateUser("bob-up@example.test")
 
@@ -103,17 +103,17 @@ func TestShellFunction_UpdateCapturesPriorVersion(t *testing.T) {
 	}
 
 	type row struct {
-		Source              string
-		ContentHash         string
-		AuthoredByUserID    *string
-		CapturedByUserID    *string
+		Source           string
+		ContentHash      string
+		AuthoredByUserID *string
+		CapturedByUserID *string
 	}
 	var r row
 	err := db.db.Raw(`
 		SELECT h.source, h.content_hash, h.authored_by_user_id, h.captured_by_user_id
 		FROM shell_function_history h
 		JOIN shell_functions f ON f.id = h.function_id
-		WHERE f.customer_id = ? AND f.name = ?
+		WHERE f.org_id = ? AND f.name = ?
 	`, cust.ID, "scan").Scan(&r).Error
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func TestShellFunction_UpdateCapturesPriorVersion(t *testing.T) {
 
 func TestShellFunction_PredecessorChain(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("vh-chain")
+	cust, _ := db.FindOrCreateOrg("vh-chain")
 	user, _ := db.CreateUser("alice-chain@example.test")
 
 	for _, src := range []string{"echo v1", "echo v2", "echo v3", "echo v4"} {
@@ -155,7 +155,7 @@ func TestShellFunction_PredecessorChain(t *testing.T) {
 		SELECT h.id, h.source, h.predecessor_id
 		FROM shell_function_history h
 		JOIN shell_functions f ON f.id = h.function_id
-		WHERE f.customer_id = ? AND f.name = ?
+		WHERE f.org_id = ? AND f.name = ?
 		ORDER BY h.captured_at ASC, h.id ASC
 	`, cust.ID, "scan").Scan(&rows).Error
 	if err != nil {
@@ -181,7 +181,7 @@ func TestShellFunction_PredecessorChain(t *testing.T) {
 
 func TestShellFunction_FiveCapDropsOldest(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("vh-cap")
+	cust, _ := db.FindOrCreateOrg("vh-cap")
 	user, _ := db.CreateUser("alice-cap@example.test")
 
 	// 7 saves: 1 initial + 6 updates. After update 6, history has
@@ -203,7 +203,7 @@ func TestShellFunction_FiveCapDropsOldest(t *testing.T) {
 	err := db.db.Raw(`
 		SELECT h.source FROM shell_function_history h
 		JOIN shell_functions f ON f.id = h.function_id
-		WHERE f.customer_id = ? AND f.name = ?
+		WHERE f.org_id = ? AND f.name = ?
 		ORDER BY h.captured_at ASC, h.id ASC LIMIT 1
 	`, cust.ID, "scan").Scan(&oldest).Error
 	if err != nil {
@@ -217,7 +217,7 @@ func TestShellFunction_FiveCapDropsOldest(t *testing.T) {
 
 func TestShellFunction_NoActingUserStoresNullCapturedBy(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("vh-noacting")
+	cust, _ := db.FindOrCreateOrg("vh-noacting")
 	alice, _ := db.CreateUser("alice-noact@example.test")
 
 	if err := db.SaveShellFunction(cust.ID, alice.ID, "scan", "echo v1", "bash"); err != nil {
@@ -232,7 +232,7 @@ func TestShellFunction_NoActingUserStoresNullCapturedBy(t *testing.T) {
 	err := db.db.Raw(`
 		SELECT h.captured_by_user_id FROM shell_function_history h
 		JOIN shell_functions f ON f.id = h.function_id
-		WHERE f.customer_id = ? AND f.name = ?
+		WHERE f.org_id = ? AND f.name = ?
 	`, cust.ID, "scan").Row().Scan(&capturedBy)
 	if err != nil {
 		t.Fatal(err)
@@ -246,8 +246,8 @@ func TestShellFunction_NoActingUserStoresNullCapturedBy(t *testing.T) {
 
 func TestShellFunction_ContentHashIsDeterministic(t *testing.T) {
 	db := testOpen(t)
-	a, _ := db.FindOrCreateCustomer("vh-hash-a")
-	b, _ := db.FindOrCreateCustomer("vh-hash-b")
+	a, _ := db.FindOrCreateOrg("vh-hash-a")
+	b, _ := db.FindOrCreateOrg("vh-hash-b")
 
 	if err := db.SaveShellFunction(a.ID, "", "scan", "echo same", "bash"); err != nil {
 		t.Fatal(err)
@@ -257,9 +257,9 @@ func TestShellFunction_ContentHashIsDeterministic(t *testing.T) {
 	}
 
 	var hashA, hashB string
-	db.db.Raw(`SELECT content_hash FROM shell_functions WHERE customer_id = ? AND name = ?`,
+	db.db.Raw(`SELECT content_hash FROM shell_functions WHERE org_id = ? AND name = ?`,
 		a.ID, "scan").Row().Scan(&hashA)
-	db.db.Raw(`SELECT content_hash FROM shell_functions WHERE customer_id = ? AND name = ?`,
+	db.db.Raw(`SELECT content_hash FROM shell_functions WHERE org_id = ? AND name = ?`,
 		b.ID, "scan").Row().Scan(&hashB)
 
 	if hashA == "" {
@@ -277,7 +277,7 @@ func TestShellFunction_ContentHashIsDeterministic(t *testing.T) {
 
 func TestLogShellFunction_OrderAndShape(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("vh-log")
+	cust, _ := db.FindOrCreateOrg("vh-log")
 	user, _ := db.CreateUser("alice-log@example.test")
 
 	saves := []string{"echo v1", "echo v2", "echo v3"}
@@ -313,7 +313,7 @@ func TestLogShellFunction_OrderAndShape(t *testing.T) {
 
 func TestResolveShellFunctionRef_HEAD(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("vh-resolve-head")
+	cust, _ := db.FindOrCreateOrg("vh-resolve-head")
 	user, _ := db.CreateUser("alice@example.test")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo current", "bash")
 
@@ -328,7 +328,7 @@ func TestResolveShellFunctionRef_HEAD(t *testing.T) {
 
 func TestResolveShellFunctionRef_HEADCaret(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("vh-resolve-caret")
+	cust, _ := db.FindOrCreateOrg("vh-resolve-caret")
 	user, _ := db.CreateUser("alice@example.test")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo old", "bash")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo new", "bash")
@@ -347,7 +347,7 @@ func TestResolveShellFunctionRef_HEADCaret(t *testing.T) {
 
 func TestResolveShellFunctionRef_HEADCaretN(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("vh-resolve-caretn")
+	cust, _ := db.FindOrCreateOrg("vh-resolve-caretn")
 	user, _ := db.CreateUser("alice@example.test")
 	for _, s := range []string{"v1", "v2", "v3", "v4"} {
 		db.SaveShellFunction(cust.ID, user.ID, "scan", s, "bash")
@@ -364,7 +364,7 @@ func TestResolveShellFunctionRef_HEADCaretN(t *testing.T) {
 
 func TestResolveShellFunctionRef_HashPrefix(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("vh-resolve-hash")
+	cust, _ := db.FindOrCreateOrg("vh-resolve-hash")
 	user, _ := db.CreateUser("alice@example.test")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo target", "bash")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo other", "bash")
@@ -386,7 +386,7 @@ func TestResolveShellFunctionRef_HashPrefix(t *testing.T) {
 
 func TestResolveShellFunctionRef_ShortPrefixRejected(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("vh-resolve-short")
+	cust, _ := db.FindOrCreateOrg("vh-resolve-short")
 	user, _ := db.CreateUser("alice@example.test")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo target", "bash")
 
@@ -399,7 +399,7 @@ func TestResolveShellFunctionRef_ShortPrefixRejected(t *testing.T) {
 
 func TestResolveShellFunctionRef_UnknownHash(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("vh-resolve-unknown")
+	cust, _ := db.FindOrCreateOrg("vh-resolve-unknown")
 	user, _ := db.CreateUser("alice@example.test")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo here", "bash")
 
@@ -410,7 +410,7 @@ func TestResolveShellFunctionRef_UnknownHash(t *testing.T) {
 
 func TestResolveShellFunctionRef_BeyondCap(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("vh-resolve-beyond")
+	cust, _ := db.FindOrCreateOrg("vh-resolve-beyond")
 	user, _ := db.CreateUser("alice@example.test")
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "v1", "bash")
 
@@ -428,7 +428,7 @@ func TestResolveShellFunctionRef_BeyondCap(t *testing.T) {
 
 func TestCheckoutShellFunction_RoundTrip(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("vh-checkout")
+	cust, _ := db.FindOrCreateOrg("vh-checkout")
 	alice, _ := db.CreateUser("alice@example.test")
 	bob, _ := db.CreateUser("bob@example.test")
 
@@ -461,7 +461,7 @@ func TestCheckoutShellFunction_RoundTrip(t *testing.T) {
 
 func TestAmendShellFunctionMessage_HEAD_DoesNotCapture(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("vh-amend-head")
+	cust, _ := db.FindOrCreateOrg("vh-amend-head")
 	user, _ := db.CreateUser("alice@example.test")
 
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v1", "bash")
@@ -485,7 +485,7 @@ func TestAmendShellFunctionMessage_HEAD_DoesNotCapture(t *testing.T) {
 
 func TestAmendShellFunctionMessage_HistoryRef(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("vh-amend-history")
+	cust, _ := db.FindOrCreateOrg("vh-amend-history")
 	user, _ := db.CreateUser("alice@example.test")
 
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "v1", "bash")
@@ -509,15 +509,15 @@ func TestAmendShellFunctionMessage_HistoryRef(t *testing.T) {
 
 // checkoutShellFunction mirrors the former Store.CheckoutShellFunction,
 // whose production logic moved to a caller outside the store package.
-func checkoutShellFunction(db *Store, customerID uint, userID, name, ref string) error {
-	target, err := db.ResolveShellFunctionRef(customerID, name, ref)
+func checkoutShellFunction(db *Store, orgID string, userID, name, ref string) error {
+	target, err := db.ResolveShellFunctionRef(orgID, name, ref)
 	if err != nil {
 		return err
 	}
 	if target.IsHead {
 		return nil
 	}
-	return db.scoped(customerID).Transaction(func(tx *gorm.DB) error {
+	return db.scoped(orgID).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
 			return err
 		}

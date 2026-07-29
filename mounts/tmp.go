@@ -28,7 +28,7 @@ func (m *TmpMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	if rel != "" {
 		path = "/tmp/" + rel
 	}
-	rows, err := m.cfg.Store.ListTmpFiles(m.cfg.CustomerID, path)
+	rows, err := m.cfg.Store.ListTmpFiles(m.cfg.OrgID, path)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +54,7 @@ func (m *TmpMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 func (m *TmpMount) ReadFile(rel string) ([]byte, error) {
 	path := "/tmp/" + rel
 	data, err := func() ([]byte, error) {
-		f, err := m.cfg.Store.GetTmpFile(m.cfg.CustomerID, path)
+		f, err := m.cfg.Store.GetTmpFile(m.cfg.OrgID, path)
 		if err != nil {
 			return nil, err
 		}
@@ -95,7 +95,7 @@ func (m *TmpMount) Stat(rel string) (fs.FileInfo, error) {
 		return &vfsFileInfo{name: "tmp", dir: true}, nil
 	}
 	path := "/tmp/" + rel
-	tf, err := m.cfg.Store.GetTmpFile(m.cfg.CustomerID, path)
+	tf, err := m.cfg.Store.GetTmpFile(m.cfg.OrgID, path)
 	if err != nil {
 		return nil, fs.ErrNotExist
 	}
@@ -109,7 +109,7 @@ func (m *TmpMount) Stat(rel string) (fs.FileInfo, error) {
 
 func (m *TmpMount) WriteFile(rel string, data []byte) error {
 	path := "/tmp/" + rel
-	if err := m.cfg.Store.WriteTmpFile(m.cfg.CustomerID, m.cfg.Tier, m.cfg.UserID, path, data); err != nil {
+	if err := m.cfg.Store.WriteTmpFile(m.cfg.OrgID, m.cfg.Tier, m.cfg.UserID, path, data); err != nil {
 		return err
 	}
 	m.noteFirstWrite()
@@ -119,13 +119,13 @@ func (m *TmpMount) WriteFile(rel string, data []byte) error {
 func (m *TmpMount) Remove(rel string) error {
 	path := "/tmp/" + rel
 	return func() error {
-		f, err := m.cfg.Store.GetTmpFile(m.cfg.CustomerID, path)
+		f, err := m.cfg.Store.GetTmpFile(m.cfg.OrgID, path)
 		if err != nil {
 			return err
 		}
 		if f.IsDir {
 			// Reject if children exist.
-			children, err := m.cfg.Store.ListTmpFiles(m.cfg.CustomerID, f.Path)
+			children, err := m.cfg.Store.ListTmpFiles(m.cfg.OrgID, f.Path)
 			if err != nil {
 				return err
 			}
@@ -133,7 +133,7 @@ func (m *TmpMount) Remove(rel string) error {
 				return fmt.Errorf("tmp: %s: directory not empty", f.Path)
 			}
 		}
-		return m.cfg.Store.DB().WithContext(store.WithCustomer(context.Background(), m.cfg.CustomerID)).Transaction(func(tx *gorm.DB) error {
+		return m.cfg.Store.DB().WithContext(store.WithOrg(context.Background(), m.cfg.OrgID)).Transaction(func(tx *gorm.DB) error {
 			if err := tx.Where("file_id = ?", f.ID).Delete(&store.TmpFileLine{}).Error; err != nil {
 				return err
 			}
@@ -152,11 +152,11 @@ func (m *TmpMount) AppendFile(rel string, data []byte) error {
 		if err != nil {
 			return err
 		}
-		if err := m.cfg.Store.EnsureParentDirs(m.cfg.CustomerID, m.cfg.UserID, p, false); err != nil {
+		if err := m.cfg.Store.EnsureParentDirs(m.cfg.OrgID, m.cfg.UserID, p, false); err != nil {
 			return err
 		}
 
-		existing, err := m.cfg.Store.GetTmpFile(m.cfg.CustomerID, p)
+		existing, err := m.cfg.Store.GetTmpFile(m.cfg.OrgID, p)
 		if err != nil && !errors.Is(err, store.ErrTmpNotFound) {
 			return err
 		}
@@ -176,7 +176,7 @@ func (m *TmpMount) AppendFile(rel string, data []byte) error {
 		}
 
 		allowance := store.TmpStorageAllowance(m.cfg.Tier)
-		used, err := m.cfg.Store.TmpUsageBytes(m.cfg.CustomerID)
+		used, err := m.cfg.Store.TmpUsageBytes(m.cfg.OrgID)
 		if err != nil {
 			return err
 		}
@@ -185,7 +185,7 @@ func (m *TmpMount) AppendFile(rel string, data []byte) error {
 		}
 
 		lines := store.SplitLines(data)
-		return m.cfg.Store.DB().WithContext(store.WithCustomer(context.Background(), m.cfg.CustomerID)).Transaction(func(tx *gorm.DB) error {
+		return m.cfg.Store.DB().WithContext(store.WithOrg(context.Background(), m.cfg.OrgID)).Transaction(func(tx *gorm.DB) error {
 			now := time.Now()
 			var fileID uint64
 			if existing != nil {
@@ -212,13 +212,13 @@ func (m *TmpMount) AppendFile(rel string, data []byte) error {
 				}
 			} else {
 				f := store.TmpFile{
-					CustomerID: m.cfg.CustomerID,
-					Path:       p,
-					IsDir:      false,
-					ByteSize:   newSize,
-					LineCount:  int64(len(lines)),
-					CreatedAt:  now,
-					UpdatedAt:  now,
+					OrgID:     m.cfg.OrgID,
+					Path:      p,
+					IsDir:     false,
+					ByteSize:  newSize,
+					LineCount: int64(len(lines)),
+					CreatedAt: now,
+					UpdatedAt: now,
 				}
 				if m.cfg.UserID != "" {
 					uid := m.cfg.UserID
@@ -252,7 +252,7 @@ func (m *TmpMount) AppendFile(rel string, data []byte) error {
 
 func (m *TmpMount) Mkdir(rel string) error {
 	path := "/tmp/" + rel
-	if err := m.cfg.Store.Mkdir(m.cfg.CustomerID, m.cfg.UserID, path); err != nil {
+	if err := m.cfg.Store.Mkdir(m.cfg.OrgID, m.cfg.UserID, path); err != nil {
 		return err
 	}
 	m.noteFirstWrite()
@@ -266,7 +266,7 @@ func (m *TmpMount) RemoveAll(rel string) error {
 		if err != nil {
 			return err
 		}
-		return m.cfg.Store.DB().WithContext(store.WithCustomer(context.Background(), m.cfg.CustomerID)).Transaction(func(tx *gorm.DB) error {
+		return m.cfg.Store.DB().WithContext(store.WithOrg(context.Background(), m.cfg.OrgID)).Transaction(func(tx *gorm.DB) error {
 			// Collect every row under this subtree so we can delete their
 			// line contents, then the rows themselves.
 			var files []store.TmpFile
@@ -294,7 +294,7 @@ func (m *TmpMount) CopyFile(srcRel, dstRel string) error {
 	src := "/tmp/" + srcRel
 	dst := "/tmp/" + dstRel
 	if err := func() error {
-		src, err := m.cfg.Store.GetTmpFile(m.cfg.CustomerID, src)
+		src, err := m.cfg.Store.GetTmpFile(m.cfg.OrgID, src)
 		if err != nil {
 			return err
 		}
@@ -305,10 +305,10 @@ func (m *TmpMount) CopyFile(srcRel, dstRel string) error {
 		if err != nil {
 			return err
 		}
-		if existing, _ := m.cfg.Store.GetTmpFile(m.cfg.CustomerID, dstNorm); existing != nil {
+		if existing, _ := m.cfg.Store.GetTmpFile(m.cfg.OrgID, dstNorm); existing != nil {
 			return store.ErrTmpExists
 		}
-		if err := m.cfg.Store.EnsureParentDirs(m.cfg.CustomerID, m.cfg.UserID, dstNorm, false); err != nil {
+		if err := m.cfg.Store.EnsureParentDirs(m.cfg.OrgID, m.cfg.UserID, dstNorm, false); err != nil {
 			return err
 		}
 
@@ -319,7 +319,7 @@ func (m *TmpMount) CopyFile(srcRel, dstRel string) error {
 			return fmt.Errorf("%w (source %d > %d)", store.ErrTmpFileTooLarge, src.ByteSize, store.TmpMaxFileBytes)
 		}
 		allowance := store.TmpStorageAllowance(m.cfg.Tier)
-		used, err := m.cfg.Store.TmpUsageBytes(m.cfg.CustomerID)
+		used, err := m.cfg.Store.TmpUsageBytes(m.cfg.OrgID)
 		if err != nil {
 			return err
 		}
@@ -327,16 +327,16 @@ func (m *TmpMount) CopyFile(srcRel, dstRel string) error {
 			return fmt.Errorf("%w (%d + %d > %d)", store.ErrTmpQuotaExceeded, used, src.ByteSize, allowance)
 		}
 
-		return m.cfg.Store.DB().WithContext(store.WithCustomer(context.Background(), m.cfg.CustomerID)).Transaction(func(tx *gorm.DB) error {
+		return m.cfg.Store.DB().WithContext(store.WithOrg(context.Background(), m.cfg.OrgID)).Transaction(func(tx *gorm.DB) error {
 			now := time.Now()
 			dstRow := store.TmpFile{
-				CustomerID: m.cfg.CustomerID,
-				Path:       dstNorm,
-				IsDir:      false,
-				ByteSize:   src.ByteSize,
-				LineCount:  src.LineCount,
-				CreatedAt:  now,
-				UpdatedAt:  now,
+				OrgID:     m.cfg.OrgID,
+				Path:      dstNorm,
+				IsDir:     false,
+				ByteSize:  src.ByteSize,
+				LineCount: src.LineCount,
+				CreatedAt: now,
+				UpdatedAt: now,
 			}
 			if m.cfg.UserID != "" {
 				uid := m.cfg.UserID
@@ -364,7 +364,7 @@ func (m *TmpMount) Rename(oldRel, newRel string) error {
 	oldPath := "/tmp/" + oldRel
 	newPath := "/tmp/" + newRel
 	if err := func() error {
-		src, err := m.cfg.Store.GetTmpFile(m.cfg.CustomerID, oldPath)
+		src, err := m.cfg.Store.GetTmpFile(m.cfg.OrgID, oldPath)
 		if err != nil {
 			return err
 		}
@@ -372,16 +372,16 @@ func (m *TmpMount) Rename(oldRel, newRel string) error {
 		if err != nil {
 			return err
 		}
-		if existing, _ := m.cfg.Store.GetTmpFile(m.cfg.CustomerID, dstNorm); existing != nil {
+		if existing, _ := m.cfg.Store.GetTmpFile(m.cfg.OrgID, dstNorm); existing != nil {
 			return store.ErrTmpExists
 		}
 		// Rename never auto-creates parents (createMissing=false), so the
 		// userID arg is unused here — pass empty.
-		if err := m.cfg.Store.EnsureParentDirs(m.cfg.CustomerID, "", dstNorm, false); err != nil {
+		if err := m.cfg.Store.EnsureParentDirs(m.cfg.OrgID, "", dstNorm, false); err != nil {
 			return err
 		}
 		now := time.Now()
-		return m.cfg.Store.DB().WithContext(store.WithCustomer(context.Background(), m.cfg.CustomerID)).Model(&store.TmpFile{}).
+		return m.cfg.Store.DB().WithContext(store.WithOrg(context.Background(), m.cfg.OrgID)).Model(&store.TmpFile{}).
 			Where("id = ? AND updated_at = ?", src.ID, src.UpdatedAt).
 			Updates(map[string]any{
 				"path":       dstNorm,
@@ -401,15 +401,15 @@ func (m *TmpMount) Touch(rel string) error {
 		if err != nil {
 			return err
 		}
-		existing, err := m.cfg.Store.GetTmpFile(m.cfg.CustomerID, p)
+		existing, err := m.cfg.Store.GetTmpFile(m.cfg.OrgID, p)
 		if errors.Is(err, store.ErrTmpNotFound) {
-			return m.cfg.Store.WriteTmpFile(m.cfg.CustomerID, m.cfg.Tier, m.cfg.UserID, p, nil)
+			return m.cfg.Store.WriteTmpFile(m.cfg.OrgID, m.cfg.Tier, m.cfg.UserID, p, nil)
 		}
 		if err != nil {
 			return err
 		}
 		now := time.Now()
-		return m.cfg.Store.DB().WithContext(store.WithCustomer(context.Background(), m.cfg.CustomerID)).Transaction(func(tx *gorm.DB) error {
+		return m.cfg.Store.DB().WithContext(store.WithOrg(context.Background(), m.cfg.OrgID)).Transaction(func(tx *gorm.DB) error {
 			if err := tx.Model(&store.TmpFile{}).
 				Where("id = ? AND updated_at = ?", existing.ID, existing.UpdatedAt).
 				Update("updated_at", now).Error; err != nil {

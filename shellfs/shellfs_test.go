@@ -10,6 +10,9 @@ import (
 	"github.com/graybeardcorp/weft/store"
 )
 
+// testOrgID is a fixed org UUID for fixtures that never touch the database.
+const testOrgID = "00000000-0000-0000-0000-0000000000a1"
+
 func testStore(t *testing.T) *store.Store {
 	t.Helper()
 	db, err := store.Open(store.TestDSN(t))
@@ -26,7 +29,7 @@ func testStore(t *testing.T) *store.Store {
 func TestReadFile_EtcUsage(t *testing.T) {
 	db := testStore(t)
 
-	cust, err := db.FindOrCreateCustomer("usage-fs-test")
+	cust, err := db.FindOrCreateOrg("usage-fs-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +59,7 @@ func TestReadFile_EtcUsage(t *testing.T) {
 func TestReadFile_EtcUsage_WithMetricsForecast(t *testing.T) {
 	db := testStore(t)
 
-	cust, err := db.FindOrCreateCustomer("usage-forecast-fs-test")
+	cust, err := db.FindOrCreateOrg("usage-forecast-fs-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +99,7 @@ func TestReadFile_EtcUsage_WithMetricsForecast(t *testing.T) {
 func TestReadDir_CronD_ShowsSavedWatches(t *testing.T) {
 	db := testStore(t)
 
-	cust, err := db.FindOrCreateCustomer("crond-test")
+	cust, err := db.FindOrCreateOrg("crond-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +149,7 @@ func TestReadDir_CronD_ShowsSavedWatches(t *testing.T) {
 func TestReadDir_Etc_IncludesUsage(t *testing.T) {
 	db := testStore(t)
 
-	cust, err := db.FindOrCreateCustomer("etc-dir-test")
+	cust, err := db.FindOrCreateOrg("etc-dir-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +180,7 @@ func TestReadDir_Etc_IncludesUsage(t *testing.T) {
 func TestReadFile_LogNamespace_PermissionDenied(t *testing.T) {
 	db := testStore(t)
 
-	cust, err := db.FindOrCreateCustomer("nsperm-test")
+	cust, err := db.FindOrCreateOrg("nsperm-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +219,7 @@ func TestReadFile_LogNamespace_PermissionDenied(t *testing.T) {
 func TestReadDir_Log_FiltersNamespaces(t *testing.T) {
 	db := testStore(t)
 
-	cust, err := db.FindOrCreateCustomer("nsfilter-test")
+	cust, err := db.FindOrCreateOrg("nsfilter-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +262,7 @@ func TestReadDir_Log_FiltersNamespaces(t *testing.T) {
 func TestReadFile_LogNamespace_OwnerBypass(t *testing.T) {
 	db := testStore(t)
 
-	cust, err := db.FindOrCreateCustomer("nsowner-test")
+	cust, err := db.FindOrCreateOrg("nsowner-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +288,7 @@ func TestReadFile_LogNamespace_OwnerBypass(t *testing.T) {
 func TestStat_EtcUsage(t *testing.T) {
 	db := testStore(t)
 
-	cust, err := db.FindOrCreateCustomer("etc-stat-test")
+	cust, err := db.FindOrCreateOrg("etc-stat-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +310,7 @@ func TestStat_EtcUsage(t *testing.T) {
 func TestReadDir_LogNamespaceNoSenders(t *testing.T) {
 	// A namespace with no log senders (bare name, no slash) should
 	// appear as an empty directory, not a .log file.
-	sfs := New(nil, 1, []string{"loom"})
+	sfs := New(nil, testOrgID, []string{"loom"})
 
 	entries, err := sfs.ReadDir("/log")
 	if err != nil {
@@ -327,7 +330,7 @@ func TestReadDir_LogNamespaceNoSenders(t *testing.T) {
 func TestReadDir_LogNamespaceNoSendersEmpty(t *testing.T) {
 	// Drilling into a namespace with no senders should return an
 	// empty directory, not an error.
-	sfs := New(nil, 1, []string{"loom"})
+	sfs := New(nil, testOrgID, []string{"loom"})
 
 	entries, err := sfs.ReadDir("/log/loom")
 	if err != nil {
@@ -339,7 +342,7 @@ func TestReadDir_LogNamespaceNoSendersEmpty(t *testing.T) {
 }
 
 func TestReadDir_LogNamespaceWithApps(t *testing.T) {
-	sfs := New(nil, 1, []string{"loom/api", "loom/worker", "loom/edge"})
+	sfs := New(nil, testOrgID, []string{"loom/api", "loom/worker", "loom/edge"})
 
 	entries, err := sfs.ReadDir("/log")
 	if err != nil {
@@ -383,7 +386,7 @@ func TestReadDir_LogNamespaceWithApps(t *testing.T) {
 
 func TestReadDir_LogMixedNamespaces(t *testing.T) {
 	// Mix of bare namespace and namespaced apps — both should be directories.
-	sfs := New(nil, 1, []string{"loom", "loom/api", "acme/orders"})
+	sfs := New(nil, testOrgID, []string{"loom", "loom/api", "acme/orders"})
 
 	entries, err := sfs.ReadDir("/log")
 	if err != nil {

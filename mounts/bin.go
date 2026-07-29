@@ -22,7 +22,7 @@ func (m *BinMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	if rel != "" {
 		return nil, fs.ErrNotExist
 	}
-	fns, err := m.cfg.Store.ListShellFunctions(m.cfg.CustomerID)
+	fns, err := m.cfg.Store.ListShellFunctions(m.cfg.OrgID)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +50,7 @@ func (m *BinMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 }
 
 func (m *BinMount) ReadFile(rel string) ([]byte, error) {
-	fn, err := m.cfg.Store.GetShellFunction(m.cfg.CustomerID, rel)
+	fn, err := m.cfg.Store.GetShellFunction(m.cfg.OrgID, rel)
 	if err != nil {
 		return nil, fmt.Errorf("/bin/%s: no such file", rel)
 	}
@@ -64,7 +64,7 @@ func (m *BinMount) Stat(rel string) (fs.FileInfo, error) {
 	if rel == "" {
 		return &vfsFileInfo{name: "bin", dir: true}, nil
 	}
-	fn, err := m.cfg.Store.GetShellFunction(m.cfg.CustomerID, rel)
+	fn, err := m.cfg.Store.GetShellFunction(m.cfg.OrgID, rel)
 	if err != nil {
 		return nil, fs.ErrNotExist
 	}
@@ -76,19 +76,19 @@ func (m *BinMount) WriteFile(rel string, data []byte) error {
 		return denyWrite("/bin")
 	}
 	lang, cleanSource := ClassifyBinScript(rel, string(data))
-	return m.cfg.Store.SaveShellFunction(m.cfg.CustomerID, m.cfg.UserID, rel, cleanSource, lang)
+	return m.cfg.Store.SaveShellFunction(m.cfg.OrgID, m.cfg.UserID, rel, cleanSource, lang)
 }
 
 func (m *BinMount) Remove(rel string) error {
 	if !m.cfg.IsOwner && !m.cfg.CanManageFunctions {
 		return denyWrite("/bin")
 	}
-	return m.cfg.Store.DeleteShellFunction(m.cfg.CustomerID, rel)
+	return m.cfg.Store.DeleteShellFunction(m.cfg.OrgID, rel)
 }
 
 // FileLanguage implements shellcore.LangMount.
 func (m *BinMount) FileLanguage(rel string) string {
-	fn, err := m.cfg.Store.GetShellFunction(m.cfg.CustomerID, rel)
+	fn, err := m.cfg.Store.GetShellFunction(m.cfg.OrgID, rel)
 	if err != nil {
 		return ""
 	}
@@ -100,7 +100,7 @@ func (m *BinMount) AmendVersionMessage(rel, message string) error {
 	if !m.cfg.IsOwner && !m.cfg.CanManageFunctions {
 		return denyWrite("/bin")
 	}
-	return m.cfg.Store.AmendShellFunctionMessage(m.cfg.CustomerID, rel, "HEAD", message)
+	return m.cfg.Store.AmendShellFunctionMessage(m.cfg.OrgID, rel, "HEAD", message)
 }
 
 // --- helpers ---

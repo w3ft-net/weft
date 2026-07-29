@@ -22,18 +22,18 @@ import (
 // docs/plans/ingest-dimensions.md.
 type AgentToken struct {
 	gorm.Model
-	CustomerID        uint      `gorm:"not null"`
-	Customer          Customer  `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
-	NamespaceID       uint      `gorm:"not null"`
-	Namespace         Namespace `gorm:"foreignKey:NamespaceID;constraint:OnDelete:CASCADE"`
-	TokenHash         string    `gorm:"column:token_hash;uniqueIndex;not null"`
-	Prefix            string    `gorm:"not null"` // e.g. "wft_a1b2" — safe to display
-	Label             string    // human-readable label (e.g., "prod-coordinator")
-	Env               string    // optional deployment-environment dimension stamped on every row
-	Revoked           bool      `gorm:"not null;default:false"`
-	MetricsEnabled    bool      `gorm:"not null;default:false"`
-	MetricsInterval   string    // e.g., "30s"
-	MetricsCollectors string    // JSON array, e.g., `["cpu","memory","disk"]`
+	OrgID             string       `gorm:"not null"`
+	Organization      Organization `gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+	NamespaceID       uint         `gorm:"not null"`
+	Namespace         Namespace    `gorm:"foreignKey:NamespaceID;constraint:OnDelete:CASCADE"`
+	TokenHash         string       `gorm:"column:token_hash;uniqueIndex;not null"`
+	Prefix            string       `gorm:"not null"` // e.g. "wft_a1b2" — safe to display
+	Label             string       // human-readable label (e.g., "prod-coordinator")
+	Env               string       // optional deployment-environment dimension stamped on every row
+	Revoked           bool         `gorm:"not null;default:false"`
+	MetricsEnabled    bool         `gorm:"not null;default:false"`
+	MetricsInterval   string       // e.g., "30s"
+	MetricsCollectors string       // JSON array, e.g., `["cpu","memory","disk"]`
 	// LastSeenVersion is the weft-client identifier the coordinator
 	// read off the most recent gRPC connection from this token. Used
 	// to decide when an old wire-shape parser branch can be deleted
@@ -72,20 +72,20 @@ func agentTokenPrefix(raw string) string {
 // `env` is optional; pass "" for tokens that don't carry an env
 // dimension. When set, the coordinator's IngestStream handler stamps
 // it on every row from this token (the agent can't override).
-func (s *Store) CreateAgentToken(customerID, namespaceID uint, label, env string) (string, *AgentToken, error) {
+func (s *Store) CreateAgentToken(orgID string, namespaceID uint, label, env string) (string, *AgentToken, error) {
 	raw, err := generateToken()
 	if err != nil {
 		return "", nil, err
 	}
 	t := AgentToken{
-		CustomerID:  customerID,
+		OrgID:       orgID,
 		NamespaceID: namespaceID,
 		TokenHash:   hashAgentToken(raw),
 		Prefix:      agentTokenPrefix(raw),
 		Label:       label,
 		Env:         env,
 	}
-	if err := s.scoped(customerID).Create(&t).Error; err != nil {
+	if err := s.scoped(orgID).Create(&t).Error; err != nil {
 		return "", nil, err
 	}
 	return raw, &t, nil
@@ -93,10 +93,10 @@ func (s *Store) CreateAgentToken(customerID, namespaceID uint, label, env string
 
 // AgentAuthResult holds the result of agent token validation.
 type AgentAuthResult struct {
-	TokenID   uint // primary key of the agent_tokens row; used by RecordAgentVersion
-	Customer  *Customer
-	Namespace string // namespace name from the token
-	Env       string // optional env dimension to stamp on every row from this token
+	TokenID      uint // primary key of the agent_tokens row; used by RecordAgentVersion
+	Organization *Organization
+	Namespace    string // namespace name from the token
+	Env          string // optional env dimension to stamp on every row from this token
 }
 
 // ValidateAgentToken checks a presented raw token and returns the
@@ -107,7 +107,7 @@ func (s *Store) ValidateAgentToken(token string) (*AgentAuthResult, error) {
 	var t AgentToken
 	// The auth path: the customer is the *result* of this lookup, not an
 	// input, so it must run unscoped (keyed by the secret token hash).
-	result := s.crossTenant().Preload("Customer").Preload("Namespace").
+	result := s.crossTenant().Preload("Organization").Preload("Namespace").
 		Where("token_hash = ? AND revoked = ?", hashAgentToken(token), false).
 		First(&t)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -117,17 +117,17 @@ func (s *Store) ValidateAgentToken(token string) (*AgentAuthResult, error) {
 		return nil, result.Error
 	}
 	return &AgentAuthResult{
-		TokenID:   t.ID,
-		Customer:  &t.Customer,
-		Namespace: t.Namespace.Name,
-		Env:       t.Env,
+		TokenID:      t.ID,
+		Organization: &t.Organization,
+		Namespace:    t.Namespace.Name,
+		Env:          t.Env,
 	}, nil
 }
 
 // ListAgentTokens returns all tokens for a customer, with namespace preloaded.
-func (s *Store) ListAgentTokens(customerID uint) ([]AgentToken, error) {
+func (s *Store) ListAgentTokens(orgID string) ([]AgentToken, error) {
 	var tokens []AgentToken
-	err := s.scoped(customerID).Preload("Namespace").Find(&tokens).Error
+	err := s.scoped(orgID).Preload("Namespace").Find(&tokens).Error
 	return tokens, err
 }
 
@@ -149,14 +149,14 @@ func (s *Store) UpdateAgentMetricsConfig(token string, enabled bool, interval st
 
 // MetricsForecast holds projected metric ingest for a customer.
 type MetricsForecast struct {
-	AgentsWithMetrics int
+	AgentsWithMetrics   int
 	ProjectedBytesMonth int64
 }
 
 // ForecastMetricsUsage computes projected monthly metric bytes from active agent configs.
-func (s *Store) ForecastMetricsUsage(customerID uint) (*MetricsForecast, error) {
+func (s *Store) ForecastMetricsUsage(orgID string) (*MetricsForecast, error) {
 	var tokens []AgentToken
-	err := s.scoped(customerID).Where("revoked = ? AND metrics_enabled = ?",
+	err := s.scoped(orgID).Where("revoked = ? AND metrics_enabled = ?",
 		false, true).Find(&tokens).Error
 	if err != nil {
 		return nil, err
@@ -192,19 +192,19 @@ func (s *Store) ForecastMetricsUsage(customerID uint) (*MetricsForecast, error) 
 // SeedDevAgentToken ensures a deterministic dev token exists. Idempotent.
 // The raw token is still the known string; only its sha256 lives in the
 // DB, same as production tokens.
-func (s *Store) SeedDevAgentToken(customerID uint, label, nsName string) {
+func (s *Store) SeedDevAgentToken(orgID string, label, nsName string) {
 	const devToken = "wft_dev_0000000000000000"
 	hash := hashAgentToken(devToken)
 	var existing AgentToken
 	if s.crossTenant().Where("token_hash = ?", hash).First(&existing).Error == nil {
 		return // already exists
 	}
-	ns, _ := s.FindOrCreateNamespace(customerID, nsName)
+	ns, _ := s.FindOrCreateNamespace(orgID, nsName)
 	if ns == nil {
 		return
 	}
-	s.scoped(customerID).Create(&AgentToken{
-		CustomerID:  customerID,
+	s.scoped(orgID).Create(&AgentToken{
+		OrgID:       orgID,
 		NamespaceID: ns.ID,
 		TokenHash:   hash,
 		Prefix:      agentTokenPrefix(devToken),
@@ -226,7 +226,7 @@ func generateToken() (string, error) {
 type AgentVersionSighting struct {
 	TokenID         uint
 	Prefix          string
-	CustomerID      uint
+	OrgID           string
 	NamespaceID     uint
 	LastSeenVersion string
 	LastSeenAt      *time.Time
@@ -261,7 +261,7 @@ func (s *Store) AgentsAtOrBelow(version string, lookback time.Duration) ([]Agent
 		out[i] = AgentVersionSighting{
 			TokenID:         r.ID,
 			Prefix:          r.Prefix,
-			CustomerID:      r.CustomerID,
+			OrgID:           r.OrgID,
 			NamespaceID:     r.NamespaceID,
 			LastSeenVersion: r.LastSeenVersion,
 			LastSeenAt:      r.LastSeenAt,

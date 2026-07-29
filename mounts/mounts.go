@@ -26,7 +26,7 @@ type NoticeSink interface {
 // Config holds the shared state that mount implementations need.
 type Config struct {
 	Store              *store.Store
-	CustomerID         uint
+	OrgID              string
 	CustomerName       string
 	Tier               store.Tier
 	UserID             string

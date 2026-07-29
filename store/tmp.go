@@ -16,15 +16,15 @@ import (
 // (touch/overwrite/append) bumps updated_at, which routes the row
 // into a fresh partition and resets the 48h clock.
 //
-// Uniqueness of (CustomerID, Path) is enforced at the store layer,
+// Uniqueness of (OrgID, Path) is enforced at the store layer,
 // not by a unique index — Postgres requires partition-key columns in
 // any unique index on a partitioned table, so an index on
-// (customer_id, path, updated_at) would allow the same path to exist
+// (org_id, path, updated_at) would allow the same path to exist
 // in different partitions. The Get/Save paths below look up the
 // single live row via ORDER BY updated_at DESC LIMIT 1.
 type TmpFile struct {
 	ID              uint64    `gorm:"primaryKey;column:id"`
-	CustomerID      uint      `gorm:"column:customer_id;not null"`
+	OrgID           string    `gorm:"column:org_id;not null"`
 	Path            string    `gorm:"column:path;not null"`
 	IsDir           bool      `gorm:"column:is_dir;not null;default:false"`
 	ByteSize        int64     `gorm:"column:byte_size;not null;default:0"`
@@ -92,16 +92,16 @@ func NormalizeTmpPath(p string) (string, error) {
 	return p, nil
 }
 
-// GetTmpFile returns the single live row for (customerID, path), or
+// GetTmpFile returns the single live row for (orgID, path), or
 // ErrTmpNotFound. "Live" = the row with the most recent UpdatedAt —
 // a stale row in a soon-to-be-dropped partition loses to a fresh one.
-func (s *Store) GetTmpFile(customerID uint, path string) (*TmpFile, error) {
+func (s *Store) GetTmpFile(orgID string, path string) (*TmpFile, error) {
 	p, err := NormalizeTmpPath(path)
 	if err != nil {
 		return nil, err
 	}
 	var f TmpFile
-	err = s.scoped(customerID).Where("path = ?", p).
+	err = s.scoped(orgID).Where("path = ?", p).
 		Order("updated_at DESC").First(&f).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrTmpNotFound
@@ -117,7 +117,7 @@ func (s *Store) GetTmpFile(customerID uint, path string) (*TmpFile, error) {
 // Children that appear in multiple partitions (extremely rare —
 // possible if updated_at crosses a partition boundary during edit)
 // are deduplicated, keeping the most recent row.
-func (s *Store) ListTmpFiles(customerID uint, dirPath string) ([]TmpFile, error) {
+func (s *Store) ListTmpFiles(orgID string, dirPath string) ([]TmpFile, error) {
 	dirPath = strings.TrimPrefix(dirPath, "/")
 	dirPath = strings.TrimSuffix(dirPath, "/")
 	dirPath = strings.TrimPrefix(dirPath, "tmp/")
@@ -130,7 +130,7 @@ func (s *Store) ListTmpFiles(customerID uint, dirPath string) ([]TmpFile, error)
 	}
 
 	var rows []TmpFile
-	q := s.scoped(customerID)
+	q := s.scoped(orgID)
 	if prefix == "" {
 		q = q.Where("path NOT LIKE ?", "%/%")
 	} else {
@@ -156,10 +156,10 @@ func (s *Store) ListTmpFiles(customerID uint, dirPath string) ([]TmpFile, error)
 
 // TmpUsageBytes returns the current total byte footprint of a
 // customer's /tmp contents (files only — directory rows contribute 0).
-func (s *Store) TmpUsageBytes(customerID uint) (int64, error) {
+func (s *Store) TmpUsageBytes(orgID string) (int64, error) {
 	var total int64
 	err := s.db.Table("tmp_files").
-		Where("customer_id = ? AND is_dir = FALSE", customerID).
+		Where("org_id = ? AND is_dir = FALSE", orgID).
 		Select("COALESCE(SUM(byte_size), 0)").Row().Scan(&total)
 	return total, err
 }
@@ -167,29 +167,29 @@ func (s *Store) TmpUsageBytes(customerID uint) (int64, error) {
 // Mkdir creates a directory row. Errors if the path already exists
 // (as file or dir) or if a parent component is missing or is a file.
 // userID is recorded as the creator; empty userID stores NULL.
-func (s *Store) Mkdir(customerID uint, userID, path string) error {
+func (s *Store) Mkdir(orgID string, userID, path string) error {
 	p, err := NormalizeTmpPath(path)
 	if err != nil {
 		return err
 	}
-	if err := s.EnsureParentDirs(customerID, userID, p, false); err != nil {
+	if err := s.EnsureParentDirs(orgID, userID, p, false); err != nil {
 		return err
 	}
-	if _, err := s.GetTmpFile(customerID, p); err == nil {
+	if _, err := s.GetTmpFile(orgID, p); err == nil {
 		return ErrTmpExists
 	}
 	now := time.Now()
 	row := &TmpFile{
-		CustomerID: customerID,
-		Path:       p,
-		IsDir:      true,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		OrgID:     orgID,
+		Path:      p,
+		IsDir:     true,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	if userID != "" {
 		row.CreatedByUserID = &userID
 	}
-	return s.scoped(customerID).Create(row).Error
+	return s.scoped(orgID).Create(row).Error
 }
 
 // EnsureParentDirs verifies that every parent component of path exists
@@ -197,7 +197,7 @@ func (s *Store) Mkdir(customerID uint, userID, path string) error {
 // created on the fly (mkdir -p semantics); callers that want strict
 // "parent must exist" behaviour pass false. Auto-created parents
 // inherit the same userID as the leaf write that triggered them.
-func (s *Store) EnsureParentDirs(customerID uint, userID, path string, createMissing bool) error {
+func (s *Store) EnsureParentDirs(orgID string, userID, path string, createMissing bool) error {
 	parts := strings.Split(path, "/")
 	if len(parts) <= 1 {
 		return nil // top-level; no parent to check
@@ -209,23 +209,23 @@ func (s *Store) EnsureParentDirs(customerID uint, userID, path string, createMis
 		} else {
 			cur += "/" + p
 		}
-		existing, err := s.GetTmpFile(customerID, cur)
+		existing, err := s.GetTmpFile(orgID, cur)
 		if errors.Is(err, ErrTmpNotFound) {
 			if !createMissing {
 				return fmt.Errorf("%w: parent %q does not exist", ErrTmpNotFound, cur)
 			}
 			now := time.Now()
 			row := &TmpFile{
-				CustomerID: customerID,
-				Path:       cur,
-				IsDir:      true,
-				CreatedAt:  now,
-				UpdatedAt:  now,
+				OrgID:     orgID,
+				Path:      cur,
+				IsDir:     true,
+				CreatedAt: now,
+				UpdatedAt: now,
 			}
 			if userID != "" {
 				row.CreatedByUserID = &userID
 			}
-			if err := s.scoped(customerID).Create(row).Error; err != nil {
+			if err := s.scoped(orgID).Create(row).Error; err != nil {
 				return err
 			}
 			continue
@@ -248,7 +248,7 @@ func (s *Store) EnsureParentDirs(customerID uint, userID, path string, createMis
 //
 // Caller supplies tier so this layer doesn't need to know about
 // subscription lookup. shellfs resolves tier once per request.
-func (s *Store) WriteTmpFile(customerID uint, tier Tier, userID, path string, data []byte) error {
+func (s *Store) WriteTmpFile(orgID string, tier Tier, userID, path string, data []byte) error {
 	p, err := NormalizeTmpPath(path)
 	if err != nil {
 		return err
@@ -256,11 +256,11 @@ func (s *Store) WriteTmpFile(customerID uint, tier Tier, userID, path string, da
 	if int64(len(data)) > TmpMaxFileBytes {
 		return fmt.Errorf("%w (%d bytes > %d bytes)", ErrTmpFileTooLarge, len(data), TmpMaxFileBytes)
 	}
-	if err := s.EnsureParentDirs(customerID, userID, p, false); err != nil {
+	if err := s.EnsureParentDirs(orgID, userID, p, false); err != nil {
 		return err
 	}
 
-	existing, err := s.GetTmpFile(customerID, p)
+	existing, err := s.GetTmpFile(orgID, p)
 	var existingSize int64
 	if err == nil {
 		if existing.IsDir {
@@ -274,7 +274,7 @@ func (s *Store) WriteTmpFile(customerID uint, tier Tier, userID, path string, da
 	// Quota: the write replaces the existing file, so the delta is
 	// (new - old), clamped at zero (a shrink doesn't count against quota).
 	allowance := TmpStorageAllowance(tier)
-	used, err := s.TmpUsageBytes(customerID)
+	used, err := s.TmpUsageBytes(orgID)
 	if err != nil {
 		return err
 	}
@@ -284,7 +284,7 @@ func (s *Store) WriteTmpFile(customerID uint, tier Tier, userID, path string, da
 	}
 
 	lines := SplitLines(data)
-	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
+	return s.scoped(orgID).Transaction(func(tx *gorm.DB) error {
 		var fileID uint64
 		now := time.Now()
 		if existing != nil {
@@ -304,13 +304,13 @@ func (s *Store) WriteTmpFile(customerID uint, tier Tier, userID, path string, da
 			}
 		} else {
 			f := TmpFile{
-				CustomerID: customerID,
-				Path:       p,
-				IsDir:      false,
-				ByteSize:   int64(len(data)),
-				LineCount:  int64(len(lines)),
-				CreatedAt:  now,
-				UpdatedAt:  now,
+				OrgID:     orgID,
+				Path:      p,
+				IsDir:     false,
+				ByteSize:  int64(len(data)),
+				LineCount: int64(len(lines)),
+				CreatedAt: now,
+				UpdatedAt: now,
 			}
 			if userID != "" {
 				f.CreatedByUserID = &userID

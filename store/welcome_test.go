@@ -22,7 +22,7 @@ func markWelcomeSeen(db *Store, userID string) error {
 func TestMarkWelcomeSeen(t *testing.T) {
 	db := testOpen(t)
 
-	if _, err := db.FindOrCreateCustomer("welcome-test"); err != nil {
+	if _, err := db.FindOrCreateOrg("welcome-test"); err != nil {
 		t.Fatal(err)
 	}
 	user, err := db.CreateUser("welcome@example.test")

@@ -44,7 +44,7 @@ func (s *Server) handleListFS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session))}
-	fs := shellfs.New(s.store, session.ActiveCustomerID, logServices, opts...)
+	fs := shellfs.New(s.store, session.ActiveOrgID, logServices, opts...)
 
 	if r.URL.Query().Get("walk") == "1" {
 		paths, err := fs.Walk(path)
@@ -80,7 +80,7 @@ func (s *Server) handleReadFS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session))}
-	fs := shellfs.New(s.store, session.ActiveCustomerID, nil, opts...)
+	fs := shellfs.New(s.store, session.ActiveOrgID, nil, opts...)
 	data, err := fs.ReadFile(path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -112,7 +112,7 @@ func (s *Server) handleWriteFS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session))}
-	fs := shellfs.New(s.store, session.ActiveCustomerID, nil, opts...)
+	fs := shellfs.New(s.store, session.ActiveOrgID, nil, opts...)
 	if err := fs.WriteFile(req.Path, []byte(req.Content)); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -129,7 +129,7 @@ func (s *Server) handleRemoveFS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session))}
-	fs := shellfs.New(s.store, session.ActiveCustomerID, nil, opts...)
+	fs := shellfs.New(s.store, session.ActiveOrgID, nil, opts...)
 	if err := fs.Remove(path); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

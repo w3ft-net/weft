@@ -38,12 +38,12 @@ func purgeFixture(t *testing.T, shardID, path string, stats []shard.CustomerStat
 	ss := ShardStore{db}
 	bucket := seedBucket(t, db, BucketStasis)
 
-	cust, err := db.FindOrCreateCustomer("paying-co")
+	cust, err := db.FindOrCreateOrg("paying-co")
 	if err != nil {
 		t.Fatalf("customer: %v", err)
 	}
 	if err := db.CreateSubscription(&store.Subscription{
-		ID: "sub-" + shardID, CustomerID: cust.ID, Tier: "swatch",
+		ID: "sub-" + shardID, OrgID: cust.ID, Tier: "swatch",
 		Status: "active", StartsAt: janitorNow.Add(-days(90)), CreatedAt: janitorNow.Add(-days(90)),
 	}); err != nil {
 		t.Fatalf("subscription: %v", err)

@@ -8,7 +8,7 @@ import "testing"
 func TestAgentToken_EnvRoundTrip(t *testing.T) {
 	db := testOpen(t)
 
-	cust, err := db.FindOrCreateCustomer("env-test")
+	cust, err := db.FindOrCreateOrg("env-test")
 	if err != nil {
 		t.Fatal(err)
 	}

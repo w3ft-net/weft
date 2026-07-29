@@ -442,7 +442,7 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
   const seatsUsed = team?.seats_used ?? 0
   const seatsLimit = team?.seats_limit ?? 1
   const atLimit = seatsUsed >= seatsLimit
-  const isOwner = members.some(m => m.Email === currentEmail && m.Role === 'owner')
+  const isOwner = members.some(m => m.Email === currentEmail && m.Role === 'admin')
 
   async function handleInvite(e: React.FormEvent) {
     e.preventDefault()
@@ -579,7 +579,7 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
                 <tr key={m.ID} data-testid={`account-team-row-${m.ID}`}>
                   <td className="token-label">{m.Email}</td>
                   <td>
-                    <span className={`token-status ${m.Role === 'owner' ? 'token-status-active' : ''}`}>
+                    <span className={`token-status ${m.Role === 'admin' ? 'token-status-active' : ''}`}>
                       {m.Role}
                     </span>
                   </td>
@@ -592,7 +592,7 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
                     {m.AcceptedAt ? formatDate(m.AcceptedAt) : m.Status === 'pending' ? formatDate(m.InvitedAt) : '—'}
                   </td>
                   <td>
-                    {isOwner && m.Role !== 'owner' && (
+                    {isOwner && m.Role !== 'admin' && (
                       confirmRemove === m.ID ? (
                         <div style={{ display: 'flex', gap: 6 }}>
                           <button
@@ -653,7 +653,7 @@ function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse |
   }, [])
 
   if (!team || !doc) return null
-  const nonOwners = (team.members ?? []).filter(m => m.Role !== 'owner' && m.Status === 'active' && m.UserID)
+  const nonOwners = (team.members ?? []).filter(m => m.Role !== 'admin' && m.Status === 'active' && m.UserID)
   if (nonOwners.length === 0) return null
 
   function permsFor(email: string): MemberPerms {
@@ -878,7 +878,7 @@ export default function Account() {
           <TeamCard team={team} onRefresh={loadData} currentEmail={user?.email ?? ''} />
           <PermissionsCard
             team={team}
-            isOwner={(team?.members ?? []).some(m => m.Email === user?.email && m.Role === 'owner')}
+            isOwner={(team?.members ?? []).some(m => m.Email === user?.email && m.Role === 'admin')}
             currentEmail={user?.email ?? ''}
           />
         </div>

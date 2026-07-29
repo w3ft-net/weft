@@ -1,10 +1,12 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"sync"
 
+	"github.com/graybeardcorp/saaskit/orgs"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -19,6 +21,12 @@ type Store struct {
 	// Store and the transaction-Stores BeginTest derives from it, so
 	// model enrollment and the scoping callbacks read the same set.
 	tenant *tenantScoping
+
+	// Orgs owns organizations + memberships, shared with vimgym via
+	// saaskit/orgs. It runs on the same *sql.DB gorm does, beneath the
+	// tenant-scoping callbacks — so its queries carry org_id explicitly
+	// rather than picking it up from context.
+	Orgs *orgs.Store
 
 	// Test-only: raw magic-link tokens indexed by email. Populated by
 	// CreateMagicLink; read by GetLastMagicLinkToken. The tokens
@@ -44,7 +52,11 @@ func Open(dsn string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{db: db, tenant: newTenantScoping()}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("store: unwrap *sql.DB for orgs: %w", err)
+	}
+	s := &Store{db: db, tenant: newTenantScoping(), Orgs: orgs.New(sqlDB)}
 	s.tenant.install(db)
 	// Declare which models are tenant-scoped. Enforcement runs through
 	// the scoping callbacks installed just above; models are enrolled
@@ -58,7 +70,6 @@ func Open(dsn string) (*Store, error) {
 		&CronWatch{},
 		&TmpFile{},
 		&Subscription{},
-		&TeamMember{},
 		&AgentToken{},
 		&Namespace{},
 	)
@@ -116,14 +127,29 @@ func Open(dsn string) (*Store, error) {
 
 // BeginTest starts a transaction and returns a Store that uses it.
 // Call the returned rollback function in t.Cleanup to undo all changes.
+//
+// The org store is rebound to the same transaction rather than the pool it
+// normally holds. orgs runs on database/sql beneath gorm, so a Store that kept
+// the pool here would write memberships outside the transaction and survive
+// the rollback — the rows would then leak into whatever test ran next.
 func (s *Store) BeginTest() (*Store, func()) {
 	tx := s.db.Begin()
-	return &Store{db: tx, tenant: s.tenant}, func() { tx.Rollback() }
+	orgStore := s.Orgs
+	if sqlTx, ok := tx.Statement.ConnPool.(*sql.Tx); ok {
+		orgStore = orgs.New(sqlTx)
+	}
+	return &Store{db: tx, tenant: s.tenant, Orgs: orgStore}, func() { tx.Rollback() }
 }
 
 // TruncateTestTables removes all data from GORM-managed tables. For tests only.
 func (s *Store) TruncateTestTables() {
-	s.db.Exec("TRUNCATE TABLE cron_results, cron_watches, shell_functions, agent_tokens, notify_configs, namespace_permissions, org_permissions, namespaces, alert_incidents, device_codes, magic_links, team_members, shard_records, subscriptions, users, customers CASCADE")
+	// Discarding this error once cost a debugging cycle: when the statement
+	// named a table that no longer existed the truncate silently did nothing,
+	// and the damage surfaced as unrelated duplicate-key failures in whichever
+	// test happened to run next. A broken fixture should say so.
+	if err := s.db.Exec("TRUNCATE TABLE cron_results, cron_watches, shell_functions, agent_tokens, notify_configs, namespace_permissions, org_permissions, namespaces, alert_incidents, device_codes, magic_links, memberships, shard_records, subscriptions, users, organizations CASCADE").Error; err != nil {
+		panic(fmt.Sprintf("store: TruncateTestTables: %v", err))
+	}
 }
 
 // ExecForTest runs raw SQL on the store's connection. Test-only:

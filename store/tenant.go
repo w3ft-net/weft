@@ -11,10 +11,10 @@ import (
 
 // Enforced multi-tenancy.
 //
-// Most tables in this store are owned by a customer and carry a
-// customer_id column. Historically the only thing stopping a query
+// Most tables in this store are owned by an org and carry an
+// org_id column. Historically the only thing stopping a query
 // from reading across tenants was the discipline of every store
-// method threading a customerID into its WHERE clause. That's an
+// method threading an orgID into its WHERE clause. That's an
 // *enforced* boundary only as long as nobody forgets — and "nobody
 // forgets" is not a security model for a multi-tenant log service.
 //
@@ -22,7 +22,7 @@ import (
 // tenant-scoped; thereafter every Query/Row/Update/Delete against it
 // issued through db.WithContext(ctx) is automatically constrained to
 // the customer named by ctx, and a query whose ctx names no customer
-// fails closed (ErrNoCustomerInContext) rather than scanning the
+// fails closed (ErrNoOrgInContext) rather than scanning the
 // whole table. The deliberate cross-tenant cases (admin fleet views,
 // billing sweeps, migrations) opt out explicitly via
 // WithoutTenantScope.
@@ -35,24 +35,24 @@ import (
 // tenantColumn is the column every enrolled model scopes on. Migration
 // 053 (subscriptions → customer surrogate) made this uniform across
 // all tenant tables.
-const tenantColumn = "customer_id"
+const tenantColumn = "org_id"
 
-// ErrNoCustomerInContext is returned (fail-closed) when a query
+// ErrNoOrgInContext is returned (fail-closed) when a query
 // against an enrolled tenant model carries neither a customer
-// (WithCustomer) nor an explicit exemption (WithoutTenantScope). It
+// (WithOrg) nor an explicit exemption (WithoutTenantScope). It
 // means a code path tried to touch tenant-owned rows without
 // declaring whose — surfaced as an error instead of a silent
 // full-table read.
-var ErrNoCustomerInContext = errors.New("store: tenant-scoped query without a customer in context (use WithCustomer or WithoutTenantScope)")
+var ErrNoOrgInContext = errors.New("store: tenant-scoped query without a customer in context (use WithOrg or WithoutTenantScope)")
 
-type customerCtxKey struct{}
+type orgCtxKey struct{}
 type skipScopeCtxKey struct{}
 
-// WithCustomer returns a context that scopes any enrolled-model query
-// issued through db.WithContext(ctx) to customerID. This is the only
+// WithOrg returns a context that scopes any enrolled-model query
+// issued through db.WithContext(ctx) to orgID. This is the only
 // sanctioned way to read or write an enrolled model's rows.
-func WithCustomer(ctx context.Context, customerID uint) context.Context {
-	return context.WithValue(ctx, customerCtxKey{}, customerID)
+func WithOrg(ctx context.Context, orgID string) context.Context {
+	return context.WithValue(ctx, orgCtxKey{}, orgID)
 }
 
 // WithoutTenantScope marks a context exempt from automatic scoping —
@@ -63,12 +63,19 @@ func WithoutTenantScope(ctx context.Context) context.Context {
 	return context.WithValue(ctx, skipScopeCtxKey{}, true)
 }
 
-func customerFromContext(ctx context.Context) (uint, bool) {
+// orgFromContext reports the org a query is scoped to. An empty id is treated
+// as *absent*, not as an org whose id happens to be "" — a zero-value string
+// threaded in by mistake must fail closed like any other missing scope, rather
+// than emitting `WHERE org_id = ''` and quietly matching nothing.
+func orgFromContext(ctx context.Context) (string, bool) {
 	if ctx == nil {
-		return 0, false
+		return "", false
 	}
-	id, ok := ctx.Value(customerCtxKey{}).(uint)
-	return id, ok
+	id, ok := ctx.Value(orgCtxKey{}).(string)
+	if !ok || id == "" {
+		return "", false
+	}
+	return id, true
 }
 
 func tenantScopeSkipped(ctx context.Context) bool {
@@ -129,7 +136,7 @@ func (ts *tenantScoping) scoped(stmt *gorm.Statement) bool {
 	return stmt != nil && stmt.Schema != nil && ts.tables[stmt.Schema.Table]
 }
 
-// scope injects WHERE customer_id = <ctx customer> for reads, updates,
+// scope injects WHERE org_id = <ctx org> for reads, updates,
 // and deletes against enrolled models, or fails closed if the context
 // names no customer.
 func (ts *tenantScoping) scope(db *gorm.DB) {
@@ -140,9 +147,9 @@ func (ts *tenantScoping) scope(db *gorm.DB) {
 	if tenantScopeSkipped(ctx) {
 		return
 	}
-	cid, ok := customerFromContext(ctx)
+	cid, ok := orgFromContext(ctx)
 	if !ok {
-		_ = db.AddError(ErrNoCustomerInContext)
+		_ = db.AddError(ErrNoOrgInContext)
 		return
 	}
 	db.Statement.AddClause(clause.Where{Exprs: []clause.Expression{
@@ -152,7 +159,7 @@ func (ts *tenantScoping) scope(db *gorm.DB) {
 
 // guardCreate fails an INSERT against an enrolled model closed if the
 // context names no customer. It does not rewrite the row's
-// customer_id — callers set that from their own scope — but it
+// org_id — callers set that from their own scope — but it
 // refuses a blind, tenant-less create.
 func (ts *tenantScoping) guardCreate(db *gorm.DB) {
 	if db.Error != nil || !ts.scoped(db.Statement) {
@@ -162,25 +169,25 @@ func (ts *tenantScoping) guardCreate(db *gorm.DB) {
 	if tenantScopeSkipped(ctx) {
 		return
 	}
-	if _, ok := customerFromContext(ctx); !ok {
-		_ = db.AddError(ErrNoCustomerInContext)
+	if _, ok := orgFromContext(ctx); !ok {
+		_ = db.AddError(ErrNoOrgInContext)
 	}
 }
 
 // DB exposes the underlying *gorm.DB. Tenant-scoped (enrolled) models
-// must be reached through DB().WithContext(WithCustomer(ctx, id)) so
+// must be reached through DB().WithContext(WithOrg(ctx, id)) so
 // the scoping callbacks can constrain the query — unscoped access to
-// an enrolled model fails closed with ErrNoCustomerInContext.
+// an enrolled model fails closed with ErrNoOrgInContext.
 func (s *Store) DB() *gorm.DB { return s.db }
 
-// scoped returns a session bound to customerID for enrolled-model
+// scoped returns a session bound to orgID for enrolled-model
 // access: the scoping callback constrains every query on it to that
-// customer's rows. Shorthand for DB().WithContext(WithCustomer(ctx,
+// customer's rows. Shorthand for DB().WithContext(WithOrg(ctx,
 // id)). Store methods use a background context for now — they don't
 // yet thread a request context (a separate change); the customer is
 // what the boundary needs.
-func (s *Store) scoped(customerID uint) *gorm.DB {
-	return s.db.WithContext(WithCustomer(context.Background(), customerID))
+func (s *Store) scoped(orgID string) *gorm.DB {
+	return s.db.WithContext(WithOrg(context.Background(), orgID))
 }
 
 // crossTenant returns a session exempt from tenant scoping, for the

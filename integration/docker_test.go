@@ -225,8 +225,8 @@ func TestDockerStack_CustomerIsolation(t *testing.T) {
 	alphaCustID, _ := seedCustomerWithNamespace(t, alphaName, "isolation")
 	_, _ = seedCustomerWithNamespace(t, betaName, "isolation")
 	t.Cleanup(func() {
-		deleteCustomer(t, alphaName)
-		deleteCustomer(t, betaName)
+		deleteOrg(t, alphaName)
+		deleteOrg(t, betaName)
 	})
 	_ = alphaCustID
 

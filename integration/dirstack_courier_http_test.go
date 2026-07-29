@@ -24,7 +24,7 @@ func TestDirstackCourier_HTTP(t *testing.T) {
 	// one here (idempotent) and use the dev JWT the harness's membership
 	// row is wired to.
 	db := openTestStore(t)
-	cust, err := db.GetCustomerByName("kevlar")
+	cust, err := db.GetOrgByName("kevlar")
 	if err != nil {
 		t.Fatalf("resolve kevlar customer: %v", err)
 	}

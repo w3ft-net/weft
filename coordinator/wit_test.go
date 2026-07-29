@@ -12,9 +12,9 @@ import (
 func witHelper(t *testing.T, slug string, n int) (*WitFuncs, string) {
 	t.Helper()
 	db, custID := testStoreAndCustomer(t)
-	cust, _ := db.GetCustomerByID(custID)
+	cust, _ := db.GetOrgByID(custID)
 	_ = cust
-	user, err := db.CreateUser("alice-"+slug+"@example.test")
+	user, err := db.CreateUser("alice-" + slug + "@example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func witHelper(t *testing.T, slug string, n int) (*WitFuncs, string) {
 			t.Fatal(err)
 		}
 	}
-	return &WitFuncs{Store: db, CustomerID: custID, UserID: user.ID}, user.ID
+	return &WitFuncs{Store: db, OrgID: custID, UserID: user.ID}, user.ID
 }
 
 // runWit invokes wf.Run with the given args and returns (stdout,
@@ -75,7 +75,7 @@ func witMultiActorHelper(t *testing.T) *WitFuncs {
 			t.Fatal(err)
 		}
 	}
-	return &WitFuncs{Store: db, CustomerID: custID, UserID: alice.ID}
+	return &WitFuncs{Store: db, OrgID: custID, UserID: alice.ID}
 }
 
 func TestWit_Log_PerVersionAuthor(t *testing.T) {
@@ -177,7 +177,7 @@ func TestWit_Show_HEADCarat(t *testing.T) {
 func TestWit_Show_HashPrefix(t *testing.T) {
 	wf, _ := witHelper(t, "show-hash", 2)
 	// Resolve current HEAD's short hash.
-	versions, _ := wf.Store.LogShellFunction(wf.CustomerID, "scan")
+	versions, _ := wf.Store.LogShellFunction(wf.OrgID, "scan")
 	short := versions[0].ContentHash[:7]
 
 	out, errb, code := runWit(t, wf, "show", "/bin/scan", short)
@@ -218,7 +218,7 @@ func TestWit_Checkout_AdvancesHEAD(t *testing.T) {
 	if _, _, code := runWit(t, wf, "checkout", "/bin/scan", "HEAD^2"); code != 0 {
 		t.Fatalf("checkout: code=%d", code)
 	}
-	fn, _ := wf.Store.GetShellFunction(wf.CustomerID, "scan")
+	fn, _ := wf.Store.GetShellFunction(wf.OrgID, "scan")
 	if fn.Source != "echo v1" {
 		t.Errorf("after checkout: live source = %q, want echo v1", fn.Source)
 	}
@@ -231,7 +231,7 @@ func TestWit_Amend_HEAD_M_Flag(t *testing.T) {
 	if _, _, code := runWit(t, wf, "amend", "-m", "fix the awk filter", "/bin/scan"); code != 0 {
 		t.Fatalf("amend: code=%d", code)
 	}
-	v, _ := wf.Store.ResolveShellFunctionRef(wf.CustomerID, "scan", "HEAD")
+	v, _ := wf.Store.ResolveShellFunctionRef(wf.OrgID, "scan", "HEAD")
 	if v.Message != "fix the awk filter" {
 		t.Errorf("HEAD message after amend: got %q, want %q", v.Message, "fix the awk filter")
 	}
@@ -243,12 +243,12 @@ func TestWit_Amend_HistoryRef(t *testing.T) {
 	if _, _, code := runWit(t, wf, "amend", "-m", "first version", "/bin/scan", "HEAD^2"); code != 0 {
 		t.Fatalf("amend HEAD^2: code=%d", code)
 	}
-	v, _ := wf.Store.ResolveShellFunctionRef(wf.CustomerID, "scan", "HEAD^2")
+	v, _ := wf.Store.ResolveShellFunctionRef(wf.OrgID, "scan", "HEAD^2")
 	if v.Message != "first version" {
 		t.Errorf("HEAD^2 message: got %q, want first version", v.Message)
 	}
 	// HEAD message unchanged.
-	head, _ := wf.Store.ResolveShellFunctionRef(wf.CustomerID, "scan", "HEAD")
+	head, _ := wf.Store.ResolveShellFunctionRef(wf.OrgID, "scan", "HEAD")
 	if head.Message != "" {
 		t.Errorf("HEAD message changed unexpectedly: %q", head.Message)
 	}

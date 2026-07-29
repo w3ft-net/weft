@@ -10,9 +10,9 @@ import (
 // the scoping callbacks against a real table without enrolling (and
 // thereby constraining) a production model.
 type tenantProbe struct {
-	ID         uint `gorm:"primaryKey"`
-	CustomerID uint `gorm:"not null"`
-	Val        string
+	ID    uint   `gorm:"primaryKey"`
+	OrgID string `gorm:"not null"`
+	Val   string
 }
 
 func (tenantProbe) TableName() string { return "tenant_probe" }
@@ -26,7 +26,7 @@ func TestTenantScoping_Enforced(t *testing.T) {
 
 	// A TEMP table lives on the tx's connection and is gone at rollback.
 	if err := db.DB().Exec(
-		`CREATE TEMP TABLE tenant_probe (id BIGSERIAL PRIMARY KEY, customer_id BIGINT NOT NULL, val TEXT)`,
+		`CREATE TEMP TABLE tenant_probe (id BIGSERIAL PRIMARY KEY, org_id UUID NOT NULL, val TEXT)`,
 	).Error; err != nil {
 		t.Fatalf("create probe table: %v", err)
 	}
@@ -34,10 +34,16 @@ func TestTenantScoping_Enforced(t *testing.T) {
 
 	bg := context.Background()
 
+	// Two org UUIDs standing in for two tenants.
+	const (
+		orgA = "00000000-0000-0000-0000-00000000000a"
+		orgB = "00000000-0000-0000-0000-00000000000b"
+	)
+
 	// Seed two customers' rows through the exemption.
 	seed := db.DB().WithContext(WithoutTenantScope(bg))
 	for _, p := range []tenantProbe{
-		{CustomerID: 1, Val: "a1"}, {CustomerID: 1, Val: "a2"}, {CustomerID: 2, Val: "b1"},
+		{OrgID: orgA, Val: "a1"}, {OrgID: orgA, Val: "a2"}, {OrgID: orgB, Val: "b1"},
 	} {
 		if err := seed.Create(&p).Error; err != nil {
 			t.Fatalf("seed %+v: %v", p, err)
@@ -46,17 +52,17 @@ func TestTenantScoping_Enforced(t *testing.T) {
 
 	// (1) A scoped read sees only that customer's rows.
 	var mine []tenantProbe
-	if err := db.DB().WithContext(WithCustomer(bg, 1)).Find(&mine).Error; err != nil {
+	if err := db.DB().WithContext(WithOrg(bg, orgA)).Find(&mine).Error; err != nil {
 		t.Fatalf("scoped find: %v", err)
 	}
 	if len(mine) != 2 {
-		t.Errorf("customer 1 saw %d rows, want 2", len(mine))
+		t.Errorf("org A saw %d rows, want 2", len(mine))
 	}
 
 	// (2) An unscoped read of an enrolled model fails closed.
 	var leak []tenantProbe
-	if err := db.DB().WithContext(bg).Find(&leak).Error; !errors.Is(err, ErrNoCustomerInContext) {
-		t.Errorf("unscoped find: err=%v (%d rows), want ErrNoCustomerInContext", err, len(leak))
+	if err := db.DB().WithContext(bg).Find(&leak).Error; !errors.Is(err, ErrNoOrgInContext) {
+		t.Errorf("unscoped find: err=%v (%d rows), want ErrNoOrgInContext", err, len(leak))
 	}
 
 	// (3) The explicit exemption sees everything.
@@ -69,22 +75,31 @@ func TestTenantScoping_Enforced(t *testing.T) {
 	}
 
 	// (4) A scoped update cannot reach across the tenant boundary.
-	if err := db.DB().WithContext(WithCustomer(bg, 1)).
+	if err := db.DB().WithContext(WithOrg(bg, orgA)).
 		Model(&tenantProbe{}).Where("val = ?", "b1").
 		Update("val", "hacked").Error; err != nil {
 		t.Fatalf("scoped update: %v", err)
 	}
 	var b1 tenantProbe
 	if err := db.DB().WithContext(WithoutTenantScope(bg)).
-		Where("customer_id = ?", 2).First(&b1).Error; err != nil {
+		Where("org_id = ?", orgB).First(&b1).Error; err != nil {
 		t.Fatalf("reread b1: %v", err)
 	}
 	if b1.Val != "b1" {
-		t.Errorf("customer 2's row was modified across the boundary: val=%q", b1.Val)
+		t.Errorf("org B's row was modified across the boundary: val=%q", b1.Val)
 	}
 
 	// (5) A create with no customer in context fails closed.
-	if err := db.DB().WithContext(bg).Create(&tenantProbe{CustomerID: 1, Val: "x"}).Error; !errors.Is(err, ErrNoCustomerInContext) {
-		t.Errorf("unscoped create: err=%v, want ErrNoCustomerInContext", err)
+	if err := db.DB().WithContext(bg).Create(&tenantProbe{OrgID: orgA, Val: "x"}).Error; !errors.Is(err, ErrNoOrgInContext) {
+		t.Errorf("unscoped create: err=%v, want ErrNoOrgInContext", err)
+	}
+
+	// (6) An *empty* org id is absent, not an org whose id is "". Under the
+	// old uint key the zero value was 0 and equally meaningless; now that the
+	// id is a string, a zero-value variable threaded in by mistake must still
+	// fail closed rather than emit `WHERE org_id = ''`.
+	var empty []tenantProbe
+	if err := db.DB().WithContext(WithOrg(bg, "")).Find(&empty).Error; !errors.Is(err, ErrNoOrgInContext) {
+		t.Errorf("empty-org find: err=%v (%d rows), want ErrNoOrgInContext", err, len(empty))
 	}
 }

@@ -22,7 +22,7 @@ import (
 // handleListIntegrations returns the current integration status.
 func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -44,7 +44,7 @@ func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var pdItems []store.PagerDutyIntegration
-	_ = s.store.DB().WithContext(store.WithCustomer(context.Background(), custID)).Order("name").Find(&pdItems).Error
+	_ = s.store.DB().WithContext(store.WithOrg(context.Background(), custID)).Order("name").Find(&pdItems).Error
 	pdKeys := make(map[string]string, len(pdItems))
 	pdMeta := make([]map[string]any, 0, len(pdItems))
 	for _, it := range pdItems {
@@ -119,7 +119,7 @@ func (s *Server) handleSlackCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	custID, err := s.resolveCustomerID(customerName)
+	custID, err := s.resolveOrgID(customerName)
 	if err != nil {
 		http.Redirect(w, r, s.baseURL+"/account?integration=slack&status=error", http.StatusFound)
 		return
@@ -145,12 +145,12 @@ func (s *Server) handleSlackCallback(w http.ResponseWriter, r *http.Request) {
 // handleSlackDisconnect removes the Slack integration.
 func (s *Server) handleSlackDisconnect(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.store.DB().WithContext(store.WithCustomer(context.Background(), custID)).Model(&store.NotifyConfig{}).Updates(map[string]any{
+	s.store.DB().WithContext(store.WithOrg(context.Background(), custID)).Model(&store.NotifyConfig{}).Updates(map[string]any{
 		"slack_webhook":   "",
 		"slack_team_name": "",
 	})
@@ -161,7 +161,7 @@ func (s *Server) handleSlackDisconnect(w http.ResponseWriter, r *http.Request) {
 // Body: {"name": "ops", "key": "<routing-key>", "description": "optional"}.
 func (s *Server) handlePagerDutySave(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -176,16 +176,16 @@ func (s *Server) handlePagerDutySave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var item store.PagerDutyIntegration
-	result := s.store.DB().WithContext(store.WithCustomer(context.Background(), custID)).Where("name = ?", req.Name).First(&item)
+	result := s.store.DB().WithContext(store.WithOrg(context.Background(), custID)).Where("name = ?", req.Name).First(&item)
 	var saveErr error
 	if result.Error == gorm.ErrRecordNotFound {
-		saveErr = s.store.DB().WithContext(store.WithCustomer(context.Background(), custID)).Create(&store.PagerDutyIntegration{
-			CustomerID:     custID,
+		saveErr = s.store.DB().WithContext(store.WithOrg(context.Background(), custID)).Create(&store.PagerDutyIntegration{
+			OrgID:          custID,
 			Name:           req.Name,
 			IntegrationKey: req.Key,
 		}).Error
 	} else {
-		saveErr = s.store.DB().WithContext(store.WithCustomer(context.Background(), custID)).Model(&item).Update("integration_key", req.Key).Error
+		saveErr = s.store.DB().WithContext(store.WithOrg(context.Background(), custID)).Model(&item).Update("integration_key", req.Key).Error
 	}
 	if saveErr != nil {
 		http.Error(w, "store error: "+saveErr.Error(), http.StatusInternalServerError)
@@ -198,7 +198,7 @@ func (s *Server) handlePagerDutySave(w http.ResponseWriter, r *http.Request) {
 // Path: DELETE /api/integrations/pagerduty/{name}
 func (s *Server) handlePagerDutyDelete(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -209,7 +209,7 @@ func (s *Server) handlePagerDutyDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = s.store.DB().
-		WithContext(store.WithCustomer(context.Background(), custID)).
+		WithContext(store.WithOrg(context.Background(), custID)).
 		Where("name = ?", name).Delete(&store.PagerDutyIntegration{}).Error
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
@@ -222,7 +222,7 @@ func (s *Server) handlePagerDutyDelete(w http.ResponseWriter, r *http.Request) {
 // An absent row yields an empty string — the shell treats that as a blank file.
 func (s *Server) handleGetNotifyConfig(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -240,7 +240,7 @@ func (s *Server) handleGetNotifyConfig(w http.ResponseWriter, r *http.Request) {
 // errors back (missing targets, bad PD severity, malformed YAML).
 func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -266,12 +266,12 @@ func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) 
 // handlePagerDutyDisconnect removes all PagerDuty integrations for the customer.
 func (s *Server) handlePagerDutyDisconnect(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.store.DB().WithContext(store.WithCustomer(context.Background(), custID)).Delete(&store.PagerDutyIntegration{})
+	s.store.DB().WithContext(store.WithOrg(context.Background(), custID)).Delete(&store.PagerDutyIntegration{})
 	w.WriteHeader(http.StatusNoContent)
 }
 

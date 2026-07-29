@@ -27,7 +27,7 @@ import (
 // conditionals, functions — anywhere warp.Walk reaches — so query
 // pipelines anywhere in the tree are substituted regardless of
 // nesting depth.
-func rewriteQueryPipelines(script *bash.Script, c *Coordinator, tr TimeRange, customer string, custID uint, userID string, alertCtx *AlertContext) {
+func rewriteQueryPipelines(script *bash.Script, c *Coordinator, tr TimeRange, customer string, custID string, userID string, alertCtx *AlertContext) {
 	if script == nil {
 		return
 	}

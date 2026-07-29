@@ -67,13 +67,13 @@ func subDeletedEvent(subID, priceID string, extraMetadata string) []byte {
 // returns its Stripe subscription id.
 func seedActiveSub(t *testing.T, s *store.Store, name, stripeSubID string) {
 	t.Helper()
-	cust, err := s.FindOrCreateCustomer(name)
+	cust, err := s.FindOrCreateOrg(name)
 	if err != nil {
 		t.Fatalf("create customer: %v", err)
 	}
 	if err := s.CreateSubscription(&store.Subscription{
 		ID:                   "sub-" + name,
-		CustomerID:           cust.ID,
+		OrgID:                cust.ID,
 		Tier:                 "swatch",
 		Status:               "active",
 		StartsAt:             time.Now().AddDate(0, -1, 0),

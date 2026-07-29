@@ -67,7 +67,7 @@ func TestShellExec_ForwardsBearerToCoordinator(t *testing.T) {
 	srv, s := testServer(t)
 
 	custName := fmt.Sprintf("shellauth-%d", os.Getpid())
-	cust, err := s.FindOrCreateCustomer(custName)
+	cust, err := s.FindOrCreateOrg(custName)
 	if err != nil {
 		t.Fatalf("create customer: %v", err)
 	}
@@ -82,10 +82,7 @@ func TestShellExec_ForwardsBearerToCoordinator(t *testing.T) {
 	// The user needs an active membership in the customer for
 	// BuildSession (and the active-subscription gate in handleShellExec)
 	// to resolve to the seeded subscription.
-	s.CreateTeamMember(&store.TeamMember{
-		ID: "tm-shellauth", CustomerID: cust.ID, Email: user.Email,
-		UserID: &user.ID, Role: "owner", Status: "active",
-	})
+	s.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, store.RoleOwner)
 	jwt, err := auth.Generate(user, "test-secret")
 	if err != nil {
 		t.Fatalf("generate jwt: %v", err)
@@ -152,7 +149,7 @@ func newShellExecFixture(t *testing.T, tag string) *shellExecFixture {
 	srv, s := testServer(t)
 
 	custName := fmt.Sprintf("%s-%d", tag, os.Getpid())
-	cust, err := s.FindOrCreateCustomer(custName)
+	cust, err := s.FindOrCreateOrg(custName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,10 +159,7 @@ func newShellExecFixture(t *testing.T, tag string) *shellExecFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.CreateTeamMember(&store.TeamMember{
-		ID: "tm-" + tag, CustomerID: cust.ID, Email: user.Email,
-		UserID: &user.ID, Role: "owner", Status: "active",
-	})
+	s.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, store.RoleOwner)
 	jwt, err := auth.Generate(user, "test-secret")
 	if err != nil {
 		t.Fatal(err)

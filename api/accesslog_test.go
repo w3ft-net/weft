@@ -26,7 +26,7 @@ func TestAccessLogAttributesUser(t *testing.T) {
 	srv, s := testServer(t)
 	h := srv.Handler()
 
-	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("acclog-%d", os.Getpid()))
+	cust, _ := s.FindOrCreateOrg(fmt.Sprintf("acclog-%d", os.Getpid()))
 	user, _ := s.CreateUser(fmt.Sprintf("acclog-%d@example.com", os.Getpid()))
 	dashTeamMember(s, cust, user, fmt.Sprintf("acclog-%d", os.Getpid()))
 	jwt, _ := auth.Generate(user, "test-secret")

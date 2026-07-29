@@ -12,7 +12,7 @@ import (
 func TestStampShardServices(t *testing.T) {
 	db := testOpen(t)
 
-	cust, err := db.FindOrCreateCustomer("shardsvc-test")
+	cust, err := db.FindOrCreateOrg("shardsvc-test")
 	if err != nil {
 		t.Fatalf("customer: %v", err)
 	}

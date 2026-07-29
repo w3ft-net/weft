@@ -13,7 +13,7 @@ import (
 func TestRollupHourly_AggregatesRawCorrectly(t *testing.T) {
 	db := testOpen(t)
 
-	cust, err := db.FindOrCreateCustomer("rollup-test")
+	cust, err := db.FindOrCreateOrg("rollup-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +22,7 @@ func TestRollupHourly_AggregatesRawCorrectly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var watchID uint
-	if err := db.db.Raw("SELECT id FROM cron_watches WHERE customer_id = ? AND name = 'rollup-w'", cust.ID).Scan(&watchID).Error; err != nil {
+	if err := db.db.Raw("SELECT id FROM cron_watches WHERE org_id = ? AND name = 'rollup-w'", cust.ID).Scan(&watchID).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -57,12 +57,12 @@ func TestRollupHourly_AggregatesRawCorrectly(t *testing.T) {
 	}
 
 	type row struct {
-		Tag    string
-		Count  int64
-		Sum    float64
-		SumSq  float64 `gorm:"column:sum_sq"`
-		Min    float64
-		Max    float64
+		Tag   string
+		Count int64
+		Sum   float64
+		SumSq float64 `gorm:"column:sum_sq"`
+		Min   float64
+		Max   float64
 	}
 	var rows []row
 	if err := db.db.Raw(`
@@ -119,7 +119,7 @@ func TestRollupHourly_AggregatesRawCorrectly(t *testing.T) {
 func TestRollup_4hCombinesHourly(t *testing.T) {
 	db := testOpen(t)
 
-	cust, err := db.FindOrCreateCustomer("rollup-4h-test")
+	cust, err := db.FindOrCreateOrg("rollup-4h-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestRollup_4hCombinesHourly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var watchID uint
-	if err := db.db.Raw("SELECT id FROM cron_watches WHERE customer_id = ? AND name = 'w'", cust.ID).Scan(&watchID).Error; err != nil {
+	if err := db.db.Raw("SELECT id FROM cron_watches WHERE org_id = ? AND name = 'w'", cust.ID).Scan(&watchID).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -205,13 +205,13 @@ func nearly(a, b float64) bool {
 func TestCronAggregate_PicksTierByWindow(t *testing.T) {
 	db := testOpen(t)
 
-	cust, err := db.FindOrCreateCustomer("tier-pick-test")
+	cust, err := db.FindOrCreateOrg("tier-pick-test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Give them a bolt subscription so LogRetention doesn't clamp.
 	if err := db.db.Exec(`
-		INSERT INTO subscriptions (id, customer_id, tier, status, starts_at, created_at, updated_at)
+		INSERT INTO subscriptions (id, org_id, tier, status, starts_at, created_at, updated_at)
 		VALUES (?, ?, 'bolt', 'active', now(), now(), now())`, "sub-"+cust.Name, cust.ID).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestCronAggregate_PicksTierByWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	var watchID uint
-	if err := db.db.Raw("SELECT id FROM cron_watches WHERE customer_id = ? AND name = 'w'", cust.ID).Scan(&watchID).Error; err != nil {
+	if err := db.db.Raw("SELECT id FROM cron_watches WHERE org_id = ? AND name = 'w'", cust.ID).Scan(&watchID).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -278,12 +278,12 @@ func TestCronAggregate_PicksTierByWindow(t *testing.T) {
 func TestQueryCronSeries_PicksTierAndReturnsBuckets(t *testing.T) {
 	db := testOpen(t)
 
-	cust, err := db.FindOrCreateCustomer("series-test")
+	cust, err := db.FindOrCreateOrg("series-test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := db.db.Exec(`
-		INSERT INTO subscriptions (id, customer_id, tier, status, starts_at, created_at, updated_at)
+		INSERT INTO subscriptions (id, org_id, tier, status, starts_at, created_at, updated_at)
 		VALUES (?, ?, 'bolt', 'active', now(), now(), now())`,
 		"sub-"+cust.Name, cust.ID).Error; err != nil {
 		t.Fatal(err)
@@ -292,7 +292,7 @@ func TestQueryCronSeries_PicksTierAndReturnsBuckets(t *testing.T) {
 		t.Fatal(err)
 	}
 	var watchID uint
-	if err := db.db.Raw("SELECT id FROM cron_watches WHERE customer_id = ? AND name = 'w'", cust.ID).Scan(&watchID).Error; err != nil {
+	if err := db.db.Raw("SELECT id FROM cron_watches WHERE org_id = ? AND name = 'w'", cust.ID).Scan(&watchID).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -356,12 +356,12 @@ func TestQueryCronSeries_PicksTierAndReturnsBuckets(t *testing.T) {
 func TestCronAggregate_ClampsToPlanRetention(t *testing.T) {
 	db := testOpen(t)
 
-	cust, err := db.FindOrCreateCustomer("clamp-test")
+	cust, err := db.FindOrCreateOrg("clamp-test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := db.db.Exec(`
-		INSERT INTO subscriptions (id, customer_id, tier, status, starts_at, created_at, updated_at)
+		INSERT INTO subscriptions (id, org_id, tier, status, starts_at, created_at, updated_at)
 		VALUES (?, ?, 'swatch', 'active', now(), now(), now())`, "sub-"+cust.Name, cust.ID).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +369,7 @@ func TestCronAggregate_ClampsToPlanRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	var watchID uint
-	if err := db.db.Raw("SELECT id FROM cron_watches WHERE customer_id = ? AND name = 'w'", cust.ID).Scan(&watchID).Error; err != nil {
+	if err := db.db.Raw("SELECT id FROM cron_watches WHERE org_id = ? AND name = 'w'", cust.ID).Scan(&watchID).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -404,8 +404,8 @@ func TestCronAggregate_ClampsToPlanRetention(t *testing.T) {
 // behaviour.
 
 // cronAggregate mirrors the former Store.CronAggregate.
-func cronAggregate(db *Store, customerID, cronWatchID uint, since time.Time, tag string) (CronAggStats, error) {
-	since = ClampRetention(db.TierForCustomer(customerID), since)
+func cronAggregate(db *Store, orgID string, cronWatchID uint, since time.Time, tag string) (CronAggStats, error) {
+	since = ClampRetention(db.TierForOrg(orgID), since)
 	gran := PickGranularity(time.Since(since))
 
 	var row struct {
@@ -433,8 +433,8 @@ func cronAggregate(db *Store, customerID, cronWatchID uint, since time.Time, tag
 }
 
 // queryCronSeries mirrors the former Store.QueryCronSeries.
-func queryCronSeries(db *Store, customerID, cronWatchID uint, since time.Time) ([]CronBucket, string, error) {
-	since = ClampRetention(db.TierForCustomer(customerID), since)
+func queryCronSeries(db *Store, orgID string, cronWatchID uint, since time.Time) ([]CronBucket, string, error) {
+	since = ClampRetention(db.TierForOrg(orgID), since)
 	gran := PickGranularity(time.Since(since))
 
 	var rows []CronBucket

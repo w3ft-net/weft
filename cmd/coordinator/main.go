@@ -172,7 +172,7 @@ func main() {
 
 		// Seed dev data when running with a customer flag (dev/docker mode).
 		if *customer != "" {
-			cust, _ := db.FindOrCreateCustomer(*customer)
+			cust, _ := db.FindOrCreateOrg(*customer)
 			if cust != nil {
 				db.SeedDevSubscription(cust.ID)
 				db.SeedDevAgentToken(cust.ID, "dev-agent", *customer)

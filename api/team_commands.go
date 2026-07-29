@@ -4,10 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
-	"github.com/google/uuid"
-
+	"github.com/graybeardcorp/saaskit/orgs"
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -70,7 +68,7 @@ func (s *Server) teamID(session *auth.Session, args []string) (string, error) {
 	if len(args) > 0 {
 		email = args[0]
 	}
-	role, _, groups, err := s.store.MemberGroups(session.ActiveCustomerID, email)
+	role, _, groups, err := s.store.MemberGroups(session.ActiveOrgID, email)
 	if err != nil {
 		return "", err
 	}
@@ -83,7 +81,7 @@ func (s *Server) teamGroupsCmd(session *auth.Session, args []string) (string, er
 	if len(args) > 0 {
 		email = args[0]
 	}
-	role, _, groups, err := s.store.MemberGroups(session.ActiveCustomerID, email)
+	role, _, groups, err := s.store.MemberGroups(session.ActiveOrgID, email)
 	if err != nil {
 		return "", err
 	}
@@ -113,7 +111,7 @@ func (s *Server) teamAddUser(session *auth.Session, args []string) (string, erro
 		return "", fmt.Errorf("usage: adduser <email> [<group>]")
 	}
 	email := args[0]
-	custID := session.ActiveCustomerID
+	custID := session.ActiveOrgID
 	if len(args) == 1 {
 		if _, err := s.inviteMember(session, email); err != nil {
 			return "", err
@@ -141,7 +139,7 @@ func (s *Server) teamAddUser(session *auth.Session, args []string) (string, erro
 		}
 		return fmt.Sprintf("Invited %s — an invite email is on its way. They must accept before joining %s; re-run `adduser %s %s` once they have.\n",
 			email, group, email, group), nil
-	case member.UserID == nil:
+	case member.Pending():
 		return "", fmt.Errorf("%s has been invited but hasn't accepted yet — re-run `adduser %s %s` after they accept", email, email, group)
 	}
 
@@ -166,13 +164,13 @@ func (s *Server) teamDelUser(session *auth.Session, args []string) (string, erro
 		if email == session.Email {
 			return "", fmt.Errorf("you can't remove yourself")
 		}
-		if err := s.store.RemoveMember(session.ActiveCustomerID, email); err != nil {
+		if err := s.store.RemoveMember(session.ActiveOrgID, email); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("Removed %s from %s.\n", email, session.ActiveCustomerName), nil
 	}
 	group := args[1]
-	if err := s.store.RemoveUserFromGroup(session.ActiveCustomerID, email, group); err != nil {
+	if err := s.store.RemoveUserFromGroup(session.ActiveOrgID, email, group); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("Removed %s from %s.\n", email, group), nil
@@ -193,29 +191,19 @@ func (e *inviteErr) Error() string { return e.msg }
 // rejection cases (seat limit, duplicate).
 func (s *Server) inviteMember(session *auth.Session, email string) (*store.TeamMember, error) {
 	tier := store.TierTrial
-	if sub, _ := s.store.ActiveSubscription(session.ActiveCustomerID); sub != nil {
+	if sub, _ := s.store.ActiveSubscription(session.ActiveOrgID); sub != nil {
 		tier = store.Tier(sub.Tier)
 	}
-	count, _ := s.store.CountTeamMembers(session.ActiveCustomerID)
+	count, _ := s.store.CountTeamMembers(session.ActiveOrgID)
 	if limit := store.SeatLimit(tier); count >= limit {
 		return nil, &inviteErr{http.StatusForbidden, fmt.Sprintf("seat limit reached (%d/%d)", count, limit)}
 	}
-	if existing, _ := s.store.GetTeamMemberByEmail(session.ActiveCustomerID, email); existing != nil {
+	if existing, _ := s.store.GetTeamMemberByEmail(session.ActiveOrgID, email); existing != nil {
 		return nil, &inviteErr{http.StatusConflict, "already a team member"}
 	}
 
-	member := &store.TeamMember{
-		ID:         uuid.New().String(),
-		CustomerID: session.ActiveCustomerID,
-		Email:      email,
-		Role:       "member",
-		Status:     "pending",
-		InvitedBy:  session.UserID,
-		InvitedAt:  time.Now(),
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-	}
-	if err := s.store.CreateTeamMember(member); err != nil {
+	member, err := s.store.InviteTeamMember(session.ActiveOrgID, email, orgs.RoleMember, session.UserID)
+	if err != nil {
 		return nil, &inviteErr{http.StatusInternalServerError, "internal error"}
 	}
 
@@ -225,7 +213,7 @@ func (s *Server) inviteMember(session *auth.Session, email string) (*store.TeamM
 	}
 	verifyURL := fmt.Sprintf("%s/verify?token=%s&invite=1", s.baseURL, token)
 	orgName := session.ActiveCustomerName
-	if cust, err := s.store.GetCustomerByName(session.ActiveCustomerName); err == nil && cust.DisplayName != "" {
+	if cust, err := s.store.GetOrgByName(session.ActiveCustomerName); err == nil && cust.DisplayName != "" {
 		orgName = cust.DisplayName
 	}
 	SendInviteEmail(s.email, email, session.Email, orgName, verifyURL)

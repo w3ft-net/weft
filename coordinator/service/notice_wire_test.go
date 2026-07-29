@@ -46,7 +46,7 @@ func TestQueryRPC_EmitsNoticesOnFirstTmpWrite(t *testing.T) {
 	st, cleanup := testStore(t)
 	defer cleanup()
 
-	cust, _ := st.FindOrCreateCustomer("notice-wire")
+	cust, _ := st.FindOrCreateOrg("notice-wire")
 	st.SeedDevSubscription(cust.ID)
 	user, err := st.CreateUser("alice-wire@example.test")
 	if err != nil {
@@ -66,7 +66,7 @@ func TestQueryRPC_EmitsNoticesOnFirstTmpWrite(t *testing.T) {
 	ctx = auth.WithSession(ctx, &auth.Session{
 		UserID:             user.ID,
 		Email:              user.Email,
-		ActiveCustomerID:   cust.ID,
+		ActiveOrgID:        cust.ID,
 		ActiveCustomerName: cust.Name,
 		EmailVerified:      true,
 	})

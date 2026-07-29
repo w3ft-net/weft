@@ -70,7 +70,7 @@ const (
 	// fire time — it IS the pipeline.
 	ArgLiteral ArgKind = iota
 	// ArgCustomer is the row-level-security boundary. Resolved from
-	// the watch's stored CustomerID at fire time (or the active
+	// the watch's stored OrgID at fire time (or the active
 	// session's customer for interactive queries).
 	ArgCustomer
 	// ArgTimeStart / ArgTimeEnd are the time window. Resolved from
@@ -118,7 +118,7 @@ func (q *Query) addPredicate(pred string, literals ...string) {
 // addCustomer attaches the row-level security predicate. Empty
 // customer is a no-op (no production caller passes empty; tests do).
 // Tagged ArgCustomer so a save-time-lowered form resolves this from
-// the watch's stored CustomerID at fire time, not from whatever
+// the watch's stored OrgID at fire time, not from whatever
 // customer was active during Plan().
 func (q *Query) addCustomer(customer string) {
 	if customer == "" {

@@ -49,7 +49,7 @@ func ParseScheduleInterval(schedule string) time.Duration {
 // Language is detected from shebang at write time: "bash" (default) or "lua".
 type ShellFunction struct {
 	gorm.Model
-	CustomerID      uint    `gorm:"not null;uniqueIndex:idx_func_customer_name"`
+	OrgID           string  `gorm:"not null;uniqueIndex:idx_func_customer_name"`
 	Name            string  `gorm:"not null;uniqueIndex:idx_func_customer_name"`
 	Source          string  `gorm:"type:text;not null"`
 	Language        string  `gorm:"not null;default:bash"` // "bash" or "lua"
@@ -66,13 +66,13 @@ type ShellFunction struct {
 // mounts.ClassifyBinScript; the store stays oblivious to the
 // .lua-extension convention so name only matters here as the row
 // key, never as a language signal.
-func (s *Store) SaveShellFunction(customerID uint, userID, name, source, language string) error {
+func (s *Store) SaveShellFunction(orgID string, userID, name, source, language string) error {
 	if err := validateSource(language, source); err != nil {
 		return err
 	}
 	hash := computeShellFunctionHash(source)
 
-	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
+	return s.scoped(orgID).Transaction(func(tx *gorm.DB) error {
 		// Set the per-transaction GUC the version-history trigger
 		// reads to populate captured_by_user_id. Empty userID is
 		// stored as '' — the trigger collapses '' to NULL. We
@@ -89,7 +89,7 @@ func (s *Store) SaveShellFunction(customerID uint, userID, name, source, languag
 		result := tx.Where("name = ?", name).First(&fn)
 		if result.Error == gorm.ErrRecordNotFound {
 			row := &ShellFunction{
-				CustomerID: customerID, Name: name,
+				OrgID: orgID, Name: name,
 				Source: source, Language: language,
 				ContentHash: hash,
 			}
@@ -303,23 +303,23 @@ func terminalAlertOf(list *bash.List) *bash.SimpleCommand {
 	return sc
 }
 
-func (s *Store) GetShellFunction(customerID uint, name string) (*ShellFunction, error) {
+func (s *Store) GetShellFunction(orgID string, name string) (*ShellFunction, error) {
 	var fn ShellFunction
-	err := s.scoped(customerID).Where("name = ?", name).First(&fn).Error
+	err := s.scoped(orgID).Where("name = ?", name).First(&fn).Error
 	if err != nil {
 		return nil, err
 	}
 	return &fn, nil
 }
 
-func (s *Store) ListShellFunctions(customerID uint) ([]ShellFunction, error) {
+func (s *Store) ListShellFunctions(orgID string) ([]ShellFunction, error) {
 	var fns []ShellFunction
-	err := s.scoped(customerID).Order("name").Find(&fns).Error
+	err := s.scoped(orgID).Order("name").Find(&fns).Error
 	return fns, err
 }
 
-func (s *Store) DeleteShellFunction(customerID uint, name string) error {
-	return s.scoped(customerID).Where("name = ?", name).Delete(&ShellFunction{}).Error
+func (s *Store) DeleteShellFunction(orgID string, name string) error {
+	return s.scoped(orgID).Where("name = ?", name).Delete(&ShellFunction{}).Error
 }
 
 // --- Cron Watches (/cron.d/) ---
@@ -332,7 +332,7 @@ func (s *Store) DeleteShellFunction(customerID uint, name string) error {
 // dot-prefixed JSON path (".foo.bar"); see shellcore.FieldSpec.
 type CronWatch struct {
 	gorm.Model
-	CustomerID uint   `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
+	OrgID      string `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
 	Name       string `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
 	Schedule   string `gorm:"not null"` // "*/5 * * * *" or "every 1m"
 	Pipeline   string `gorm:"type:text;not null"`
@@ -371,14 +371,14 @@ func computeCronWatchHash(schedule, pipeline string) string {
 // planner.LoweredPlan from a save-time Lower() call; pass nil when
 // the pipeline didn't lower (e.g. /bin/ inlining isn't implemented
 // for this shape yet) — the fire path falls back to inline Plan().
-func (s *Store) SaveCronWatch(customerID uint, userID, name, schedule, pipeline string, loweredPlan []byte) error {
+func (s *Store) SaveCronWatch(orgID string, userID, name, schedule, pipeline string, loweredPlan []byte) error {
 	compiled, err := CompileWatchPipeline(pipeline)
 	if err != nil {
 		return err
 	}
 	hash := computeCronWatchHash(schedule, pipeline)
 
-	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
+	return s.scoped(orgID).Transaction(func(tx *gorm.DB) error {
 		// See SaveShellFunction for why we always set, even for empty.
 		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
 			return err
@@ -387,7 +387,7 @@ func (s *Store) SaveCronWatch(customerID uint, userID, name, schedule, pipeline 
 		result := tx.Where("name = ?", name).First(&w)
 		if result.Error == gorm.ErrRecordNotFound {
 			row := &CronWatch{
-				CustomerID:     customerID,
+				OrgID:          orgID,
 				Name:           name,
 				Schedule:       schedule,
 				Pipeline:       pipeline,
@@ -507,29 +507,29 @@ func ValidateWatchPipeline(pipeline string) error {
 	return err
 }
 
-func (s *Store) GetCronWatch(customerID uint, name string) (*CronWatch, error) {
+func (s *Store) GetCronWatch(orgID string, name string) (*CronWatch, error) {
 	var w CronWatch
-	err := s.scoped(customerID).Where("name = ?", name).First(&w).Error
+	err := s.scoped(orgID).Where("name = ?", name).First(&w).Error
 	if err != nil {
 		return nil, err
 	}
 	return &w, nil
 }
 
-func (s *Store) ListCronWatches(customerID uint) ([]CronWatch, error) {
+func (s *Store) ListCronWatches(orgID string) ([]CronWatch, error) {
 	var watches []CronWatch
-	err := s.scoped(customerID).Order("name").Find(&watches).Error
+	err := s.scoped(orgID).Order("name").Find(&watches).Error
 	return watches, err
 }
 
-func (s *Store) DeleteCronWatch(customerID uint, name string) error {
-	return s.scoped(customerID).Where("name = ?", name).Delete(&CronWatch{}).Error
+func (s *Store) DeleteCronWatch(orgID string, name string) error {
+	return s.scoped(orgID).Where("name = ?", name).Delete(&CronWatch{}).Error
 }
 
 // CountCronWatches returns the number of cron watches for a customer.
-func (s *Store) CountCronWatches(customerID uint) (int, error) {
+func (s *Store) CountCronWatches(orgID string) (int, error) {
 	var count int64
-	err := s.scoped(customerID).Model(&CronWatch{}).Count(&count).Error
+	err := s.scoped(orgID).Model(&CronWatch{}).Count(&count).Error
 	return int(count), err
 }
 
@@ -607,12 +607,12 @@ type CronBucket struct {
 // Raw-only — the full CronResult row (with stdout/stderr/exit_code)
 // only exists in the unrolled raw table. `since` is clamped to the
 // caller's plan retention before the query runs.
-func (s *Store) QueryCronResults(customerID uint, watchName string, since time.Time) ([]CronResult, error) {
+func (s *Store) QueryCronResults(orgID string, watchName string, since time.Time) ([]CronResult, error) {
 	var watch CronWatch
-	if err := s.scoped(customerID).Where("name = ?", watchName).First(&watch).Error; err != nil {
+	if err := s.scoped(orgID).Where("name = ?", watchName).First(&watch).Error; err != nil {
 		return nil, err
 	}
-	since = ClampRetention(s.TierForCustomer(customerID), since)
+	since = ClampRetention(s.TierForOrg(orgID), since)
 	var results []CronResult
 	err := s.db.Where("cron_watch_id = ? AND ran_at >= ?", watch.ID, since).
 		Order("ran_at DESC").Find(&results).Error
@@ -647,24 +647,24 @@ func ClampRetention(tier Tier, since time.Time) time.Time {
 	return since
 }
 
-// TierForCustomer returns the active subscription tier for a customer.
+// TierForOrg returns the active subscription tier for a customer.
 // Empty Tier ("" → trial retention in LogRetention) when no active
 // sub is found — conservatively treat unknown customers as trial so
 // we never over-serve data.
 //
-// NOTE: subscriptions.customer_id is a TEXT column that stores the
+// NOTE: subscriptions.org_id is a TEXT column that stores the
 // customer *name*, not the numeric id (see store/subscription.go).
 // That's historical — we'd rename it if we were starting over.
-func (s *Store) TierForCustomer(customerID uint) Tier {
+func (s *Store) TierForOrg(orgID string) Tier {
 	var tier string
 	err := s.db.Raw(`
 		SELECT s.tier
 		FROM subscriptions s
-		WHERE s.customer_id = ?
+		WHERE s.org_id = ?
 		  AND s.status = 'active'
 		  AND (s.expires_at IS NULL OR s.expires_at > now())
 		ORDER BY s.created_at DESC
-		LIMIT 1`, customerID).Scan(&tier).Error
+		LIMIT 1`, orgID).Scan(&tier).Error
 	if err != nil {
 		return ""
 	}
@@ -676,12 +676,12 @@ func (s *Store) TierForCustomer(customerID uint) Tier {
 // NotifyConfig stores per-customer notification channel state.
 // Slack credentials live here (OAuth bot token; webhook kept only for
 // tenants that never re-authed). PagerDuty integration keys live in
-// their own pagerduty_integrations table keyed by (customer_id, name).
+// their own pagerduty_integrations table keyed by (org_id, name).
 // AliasesYAML is the raw /etc/notify.yaml document — a map of alias →
 // per-service entries consumed by the Notifier.
 type NotifyConfig struct {
 	gorm.Model
-	CustomerID    uint   `gorm:"not null;uniqueIndex"`
+	OrgID         string `gorm:"not null;uniqueIndex"`
 	SlackWebhook  string // incoming webhook URL (optional)
 	SlackBotToken string // bot OAuth token for chat.postMessage
 	SlackTeamName string // workspace name (for display)
@@ -693,7 +693,7 @@ type NotifyConfig struct {
 // customer. notify.yaml aliases reference rows here by Name.
 type PagerDutyIntegration struct {
 	gorm.Model
-	CustomerID     uint   `gorm:"not null;index:idx_pd_integrations_customer_name,unique,where:deleted_at IS NULL"`
+	OrgID          string `gorm:"not null;index:idx_pd_integrations_customer_name,unique,where:deleted_at IS NULL"`
 	Name           string `gorm:"not null;index:idx_pd_integrations_customer_name,unique,where:deleted_at IS NULL"`
 	IntegrationKey string `gorm:"not null"`
 	LastUsedAt     *time.Time
@@ -704,29 +704,29 @@ type PagerDutyIntegration struct {
 // pluralize naturally through gorm's NamingStrategy.
 func (PagerDutyIntegration) TableName() string { return "pagerduty_integrations" }
 
-func (s *Store) GetNotifyConfig(customerID uint) (*NotifyConfig, error) {
+func (s *Store) GetNotifyConfig(orgID string) (*NotifyConfig, error) {
 	var nc NotifyConfig
-	err := s.scoped(customerID).First(&nc).Error
+	err := s.scoped(orgID).First(&nc).Error
 	if err != nil {
 		return nil, err
 	}
 	return &nc, nil
 }
 
-func (s *Store) SaveSlackConfig(customerID uint, webhook, botToken, teamName string) error {
+func (s *Store) SaveSlackConfig(orgID string, webhook, botToken, teamName string) error {
 	now := time.Now()
 	var nc NotifyConfig
-	result := s.scoped(customerID).First(&nc)
+	result := s.scoped(orgID).First(&nc)
 	if result.Error == gorm.ErrRecordNotFound {
-		return s.scoped(customerID).Create(&NotifyConfig{
-			CustomerID:    customerID,
+		return s.scoped(orgID).Create(&NotifyConfig{
+			OrgID:         orgID,
 			SlackWebhook:  webhook,
 			SlackBotToken: botToken,
 			SlackTeamName: teamName,
 			ConfiguredAt:  &now,
 		}).Error
 	}
-	return s.scoped(customerID).Model(&nc).Updates(map[string]any{
+	return s.scoped(orgID).Model(&nc).Updates(map[string]any{
 		"slack_webhook":   webhook,
 		"slack_bot_token": botToken,
 		"slack_team_name": teamName,
@@ -736,25 +736,25 @@ func (s *Store) SaveSlackConfig(customerID uint, webhook, botToken, teamName str
 
 // SaveNotifyAliases writes the raw /etc/notify.yaml YAML for a customer.
 // Callers must validate the YAML before invoking this.
-func (s *Store) SaveNotifyAliases(customerID uint, aliasesYAML string) error {
+func (s *Store) SaveNotifyAliases(orgID string, aliasesYAML string) error {
 	var nc NotifyConfig
-	result := s.scoped(customerID).First(&nc)
+	result := s.scoped(orgID).First(&nc)
 	if result.Error == gorm.ErrRecordNotFound {
-		return s.scoped(customerID).Create(&NotifyConfig{
-			CustomerID:  customerID,
+		return s.scoped(orgID).Create(&NotifyConfig{
+			OrgID:       orgID,
 			AliasesYAML: aliasesYAML,
 		}).Error
 	}
-	return s.scoped(customerID).Model(&nc).Update("aliases_yaml", aliasesYAML).Error
+	return s.scoped(orgID).Model(&nc).Update("aliases_yaml", aliasesYAML).Error
 }
 
 // ── PagerDuty integrations ─────────────────────────────
 
 // RecordPagerDutySend marks an integration's last_used_at / last_error after
 // a dispatch attempt. sendErr may be empty on success.
-func (s *Store) RecordPagerDutySend(customerID uint, name, sendErr string) error {
+func (s *Store) RecordPagerDutySend(orgID string, name, sendErr string) error {
 	now := time.Now()
-	return s.scoped(customerID).Model(&PagerDutyIntegration{}).
+	return s.scoped(orgID).Model(&PagerDutyIntegration{}).
 		Where("name = ?", name).
 		Updates(map[string]any{
 			"last_used_at": &now,

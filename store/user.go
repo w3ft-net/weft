@@ -1,13 +1,17 @@
 package store
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/graybeardcorp/saaskit/orgs"
+	"gorm.io/gorm"
 )
 
 // Tier is a plan name. Use the constants below (TierSwatch,
@@ -149,8 +153,8 @@ func OverageRatePerGB(tier Tier) int {
 }
 
 // User represents a weft account. A single user can be a member of
-// multiple customers (orgs) via team_members rows; the User row itself
-// no longer carries a customer pointer. LastActiveCustomerID records
+// multiple customers (orgs) via memberships rows; the User row itself
+// no longer carries a customer pointer. LastActiveOrgID records
 // where the user last operated so reconnects land in the same place.
 type User struct {
 	ID                 string `gorm:"primaryKey"`
@@ -169,11 +173,11 @@ type User struct {
 	// this being non-nil; the cleanup sweep deletes users where this is
 	// still nil more than 24h after CreatedAt.
 	EmailVerifiedAt *time.Time
-	// LastActiveCustomerID is the customer the user was most recently
+	// LastActiveOrgID is the customer the user was most recently
 	// scoped to. The middleware uses it as the default active org when
 	// the request omits the X-Active-Org header. Nullable because new
 	// users haven't picked one yet.
-	LastActiveCustomerID *uint
+	LastActiveOrgID *string
 	// OnboardingStep tracks where the user is in the Loom-Inc tour
 	// state machine. 'welcome' is the default for new signups; 'done'
 	// marks a graduate. The middleware reads this to decide whether
@@ -194,23 +198,24 @@ type MagicLink struct {
 	Used      bool `gorm:"not null;default:false"`
 }
 
-// TeamMember tracks membership of a user (or pending invite) in a
-// customer. CustomerID is the FK boundary; queries that need to scope
-// by customer should join on it rather than on a name string.
-type TeamMember struct {
-	ID         string   `gorm:"primaryKey"`
-	CustomerID uint     `gorm:"not null;index;uniqueIndex:idx_team_members_customer_user"`
-	Customer   Customer `gorm:"foreignKey:CustomerID;constraint:OnDelete:CASCADE"`
-	Email      string   `gorm:"not null"`
-	UserID     *string  `gorm:"index;uniqueIndex:idx_team_members_customer_user"`
-	Role       string   `gorm:"not null;default:member"`  // "owner" or "member"
-	Status     string   `gorm:"not null;default:pending"` // "pending", "active", "removed"
-	InvitedBy  string
-	InvitedAt  time.Time
-	AcceptedAt *time.Time
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-}
+// TeamMember is an org membership — an alias for the shared
+// saaskit/orgs.Membership rather than a weft type that mirrors it, so weft's
+// call sites and orgs' return values are literally the same value with no
+// conversion layer between them.
+//
+// Two things changed when weft adopted the shared shape:
+//   - UserID is a plain string; the empty string (not a nil pointer) marks an
+//     invite nobody has accepted yet. Membership.Pending() reads better than
+//     testing it directly.
+//   - Role uses orgs' vocabulary: an org's owner is orgs.RoleAdmin ("admin").
+//     weft's "owner" meant exactly that, and keeping a second word for it
+//     would have made orgs.IsAdmin() disagree with weft about who is in charge.
+type TeamMember = orgs.Membership
+
+// RoleOwner is the role granting implicit full access to an org. It is
+// orgs.RoleAdmin under weft's name for it; use this constant so the two never
+// drift apart.
+const RoleOwner = orgs.RoleAdmin
 
 // SeatLimit returns the max number of team members for a tier.
 func SeatLimit(tier Tier) int {
@@ -279,13 +284,13 @@ func (s *Store) GetUserByID(id string) (*User, error) {
 	return &user, nil
 }
 
-// UpdateUserLastActiveCustomer flips users.last_active_customer_id so a
+// UpdateUserLastActiveOrg flips users.last_active_org_id so a
 // reconnect lands the user back in the org they were last operating
-// in. No-op when customerID matches the existing value.
-func (s *Store) UpdateUserLastActiveCustomer(userID string, customerID uint) error {
+// in. No-op when orgID matches the existing value.
+func (s *Store) UpdateUserLastActiveOrg(userID string, orgID string) error {
 	return s.db.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
-		"last_active_customer_id": customerID,
-		"updated_at":              time.Now(),
+		"last_active_org_id": orgID,
+		"updated_at":         time.Now(),
 	}).Error
 }
 
@@ -393,89 +398,104 @@ func (s *Store) GetLastMagicLinkToken(email string) (string, error) {
 }
 
 // --- Team Members ---
+//
+// Membership itself is owned by saaskit/orgs: who belongs to an org, at what
+// role, and where they are in the invite lifecycle. The methods below are the
+// weft-facing names for that, delegating to s.Orgs.
+//
+// The tenant-scoping callbacks in tenant.go do not cover these — orgs runs on
+// database/sql, beneath gorm, so it never sees them. Each method therefore
+// passes org_id explicitly, which is what orgs' API requires anyway; there is
+// no unscoped form to reach for by accident.
+//
+// What stays weft's: OrgPermission (the binmgr/cronmgr/configmgr bits) and
+// NamespacePermission. orgs decides whether you are a member; weft decides
+// what a member may touch.
 
-// ListTeamMembers returns active and pending members (not removed).
-func (s *Store) ListTeamMembers(customerID uint) ([]TeamMember, error) {
-	var members []TeamMember
-	err := s.scoped(customerID).Where("status != ?", "removed").
-		Order("role ASC, created_at ASC").Find(&members).Error
-	return members, err
+// ListTeamMembers returns active and pending members (not removed), oldest
+// first.
+func (s *Store) ListTeamMembers(orgID string) ([]TeamMember, error) {
+	return s.Orgs.Members(context.Background(), orgID)
 }
 
-// CreateTeamMember inserts a new team member record.
-func (s *Store) CreateTeamMember(m *TeamMember) error {
-	return s.scoped(m.CustomerID).Create(m).Error
+// InviteTeamMember records a pending membership for an address that may not
+// have an account yet. invitedBy is the inviting user's id.
+func (s *Store) InviteTeamMember(orgID, email string, role orgs.Role, invitedBy string) (*TeamMember, error) {
+	return s.Orgs.Invite(context.Background(), orgID, email, role, invitedBy)
+}
+
+// AddTeamMemberWithEmail attaches an account weft already knows to the org,
+// active immediately — the signup and admin-provision paths, where there is
+// nothing to invite because the account exists.
+//
+// The address is always passed: weft renders /etc/passwd from it and keys
+// adduser/deluser by it, so a membership without one would be invisible to
+// half the team surface.
+func (s *Store) AddTeamMemberWithEmail(orgID, userID, email string, role orgs.Role) error {
+	return s.Orgs.AddMemberWithEmail(context.Background(), orgID, userID, email, role)
 }
 
 // GetTeamMemberByEmail finds a non-removed member by email.
-func (s *Store) GetTeamMemberByEmail(customerID uint, email string) (*TeamMember, error) {
-	var m TeamMember
-	err := s.scoped(customerID).Where("email = ? AND status != ?", email, "removed").
-		First(&m).Error
-	if err != nil {
-		return nil, err
-	}
-	return &m, nil
+func (s *Store) GetTeamMemberByEmail(orgID string, email string) (*TeamMember, error) {
+	m, err := s.Orgs.MemberByEmail(context.Background(), orgID, email)
+	return m, asRecordNotFound(err)
 }
 
-// GetTeamMemberByUserID finds a non-removed member by (user, customer).
+// GetTeamMemberByUserID finds a non-removed member by (user, org).
 // This is the canonical "is this user a member of this org" lookup; the
 // auth middleware uses it to validate X-Active-Org against the user's
 // memberships.
-func (s *Store) GetTeamMemberByUserID(customerID uint, userID string) (*TeamMember, error) {
-	var m TeamMember
-	err := s.scoped(customerID).Where("user_id = ? AND status != ?", userID, "removed").
-		First(&m).Error
-	if err != nil {
-		return nil, err
-	}
-	return &m, nil
+func (s *Store) GetTeamMemberByUserID(orgID string, userID string) (*TeamMember, error) {
+	m, err := s.Orgs.Member(context.Background(), orgID, userID)
+	return m, asRecordNotFound(err)
 }
 
-// ListUserMemberships returns every active membership for a user, with
-// the Customer eagerly loaded so callers can render org names without
-// a second round-trip. Used by the org-switcher and by login flows that
-// need to pick a default active customer.
-func (s *Store) ListUserMemberships(userID string) ([]TeamMember, error) {
-	var members []TeamMember
-	// A user's memberships span every org they belong to — inherently
-	// cross-tenant, so it bypasses the per-customer scope.
-	err := s.crossTenant().Preload("Customer").
-		Where("user_id = ? AND status = ?", userID, "active").
-		Order("created_at ASC").Find(&members).Error
-	return members, err
+// ListUserOrgs returns every org a user actively belongs to, oldest first —
+// the org switcher's backing query and the login flow's default-org pick.
+//
+// This replaces the old ListUserMemberships + Preload("Organization"): callers
+// wanted the org's name, and orgs answers that directly rather than handing
+// back memberships to walk associations through.
+func (s *Store) ListUserOrgs(userID string) ([]orgs.OrgMembership, error) {
+	return s.Orgs.OrgsFor(context.Background(), userID)
 }
 
-// GetPendingTeamMemberByEmail finds a pending invite by email (across all customers).
+// GetPendingTeamMemberByEmail finds a pending invite by email across all orgs.
+// The invitee isn't in any org context yet — the invite is what says which org
+// they're joining.
 func (s *Store) GetPendingTeamMemberByEmail(email string) (*TeamMember, error) {
-	var m TeamMember
-	// Invite-acceptance flow: the invitee isn't in any org context yet,
-	// so the pending lookup spans customers.
-	err := s.crossTenant().Where("email = ? AND status = ?", email, "pending").First(&m).Error
-	if err != nil {
-		return nil, err
+	m, err := s.Orgs.PendingInviteByEmail(context.Background(), email)
+	return m, asRecordNotFound(err)
+}
+
+// asRecordNotFound maps orgs' absence sentinel onto gorm's. Every caller in
+// this store — and every `errors.Is(err, gorm.ErrRecordNotFound)` written
+// against it — already means one thing by "no such row", and adopting orgs
+// should not make that phrase ambiguous depending on which table you asked
+// about.
+func asRecordNotFound(err error) error {
+	if errors.Is(err, orgs.ErrNotFound) {
+		return gorm.ErrRecordNotFound
 	}
-	return &m, nil
+	return err
 }
 
-// AcceptTeamMember marks a pending member as active.
+// AcceptTeamMember binds a pending membership to a user and activates it.
 func (s *Store) AcceptTeamMember(id string, userID string) error {
-	now := time.Now()
-	return s.crossTenant().Model(&TeamMember{}).Where("id = ?", id).Updates(map[string]any{
-		"user_id":     userID,
-		"status":      "active",
-		"accepted_at": &now,
-		"updated_at":  now,
-	}).Error
+	_, err := s.Orgs.AcceptByID(context.Background(), id, userID)
+	return err
 }
 
-// CountTeamMembers returns the count of active + pending members.
-func (s *Store) CountTeamMembers(customerID uint) (int, error) {
-	var count int64
-	err := s.scoped(customerID).Model(&TeamMember{}).
-		Where("status != ?", "removed").
-		Count(&count).Error
-	return int(count), err
+// RemoveTeamMemberByEmail revokes a membership by address, which is the only
+// way to withdraw an invite nobody has accepted.
+func (s *Store) RemoveTeamMemberByEmail(orgID, email string) error {
+	return s.Orgs.RemoveInvite(context.Background(), orgID, email)
+}
+
+// CountTeamMembers returns the count of active + pending members — the number
+// a seat limit is checked against, so an outstanding invite holds its seat.
+func (s *Store) CountTeamMembers(orgID string) (int, error) {
+	return s.Orgs.CountMembers(context.Background(), orgID)
 }
 
 // SetUserName updates a user's free-text display name. Used for

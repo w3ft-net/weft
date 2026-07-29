@@ -11,8 +11,8 @@ import (
 // readTmpFile reconstructs the byte contents of a tmp file via the
 // exported store surface. It mirrors the logic that formerly lived in
 // store.ReadTmpFile, which was relocated into production callers.
-func readTmpFile(db *store.Store, customerID uint, path string) ([]byte, error) {
-	f, err := db.GetTmpFile(customerID, path)
+func readTmpFile(db *store.Store, orgID string, path string) ([]byte, error) {
+	f, err := db.GetTmpFile(orgID, path)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +72,7 @@ func TestCoordinatorQuery_LogQueryRedirectToTmp(t *testing.T) {
 			resD.Text, len(resD.Rows))
 	}
 
-	cust, err := c.Store.GetCustomerByName("kevlar")
+	cust, err := c.Store.GetOrgByName("kevlar")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestCoordinatorQuery_CatRedirectFromEtcToTmp(t *testing.T) {
 
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	cust, _ := db.GetCustomerByID(custID)
+	cust, _ := db.GetOrgByID(custID)
 
 	res, err := c.Execute(`cat /etc/notify.yaml > /tmp/notify.yaml`, tr, cust.Name, "")
 	if err != nil {
@@ -159,7 +159,7 @@ func TestCoordinatorQuery_CatTmpReturnsContent(t *testing.T) {
 
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	cust, _ := db.GetCustomerByID(custID)
+	cust, _ := db.GetOrgByID(custID)
 
 	res, err := c.Execute(`cat /tmp/note`, tr, cust.Name, "")
 	if err != nil {

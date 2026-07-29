@@ -5,24 +5,27 @@ import (
 	"testing"
 )
 
+// testOrgID is a fixed org UUID for fixtures that never touch the database.
+const testOrgID = "00000000-0000-0000-0000-0000000000a1"
+
 // recordingNotifier captures the body handed to Send so tests can assert
 // on exactly what would be shipped to Slack/PagerDuty.
 type recordingNotifier struct {
 	sent []struct {
-		customerID uint
-		alias      string
-		watch      string
-		body       string
+		orgID string
+		alias string
+		watch string
+		body  string
 	}
 }
 
-func (r *recordingNotifier) Send(customerID uint, alias, watch, body string) error {
+func (r *recordingNotifier) Send(orgID string, alias, watch, body string) error {
 	r.sent = append(r.sent, struct {
-		customerID uint
-		alias      string
-		watch      string
-		body       string
-	}{customerID, alias, watch, body})
+		orgID string
+		alias string
+		watch string
+		body  string
+	}{orgID, alias, watch, body})
 	return nil
 }
 
@@ -36,7 +39,7 @@ func TestAlertDispatch_BodyIsFormattedMessageNotRawRow(t *testing.T) {
 	rec := &recordingNotifier{}
 	ctx := &AlertContext{
 		Notifier:    rec,
-		CustomerID:  1,
+		OrgID:       testOrgID,
 		Interactive: true,
 	}
 
@@ -66,7 +69,7 @@ func TestAlertDispatch_BodyIncludesTagInMultiRowMode(t *testing.T) {
 	rec := &recordingNotifier{}
 	ctx := &AlertContext{
 		Notifier:    rec,
-		CustomerID:  1,
+		OrgID:       testOrgID,
 		Interactive: true,
 	}
 

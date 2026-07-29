@@ -79,7 +79,7 @@ func TestIngestStream_NoGoroutineLeak(t *testing.T) {
 	tx, cleanup := testStore(t)
 	defer cleanup()
 
-	cust, err := tx.FindOrCreateCustomer("kevlar")
+	cust, err := tx.FindOrCreateOrg("kevlar")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestIngestStream_AbandonedStreamReaped(t *testing.T) {
 	tx, cleanup := testStore(t)
 	defer cleanup()
 
-	cust, err := tx.FindOrCreateCustomer("kevlar")
+	cust, err := tx.FindOrCreateOrg("kevlar")
 	if err != nil {
 		t.Fatal(err)
 	}

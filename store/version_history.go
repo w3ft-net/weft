@@ -16,9 +16,9 @@ import (
 // Errors returned by ref-resolution paths. Callers (the wit
 // builtin, mostly) surface these as user-facing messages.
 var (
-	ErrInvalidRef     = errors.New("wit: invalid ref")
-	ErrRefNotFound    = errors.New("wit: ref not found")
-	ErrAmbiguousHash  = errors.New("wit: ambiguous hash prefix")
+	ErrInvalidRef    = errors.New("wit: invalid ref")
+	ErrRefNotFound   = errors.New("wit: ref not found")
+	ErrAmbiguousHash = errors.New("wit: ambiguous hash prefix")
 )
 
 // ShellFunctionVersion is one entry in a /bin script's history,
@@ -44,18 +44,18 @@ type ShellFunctionVersion struct {
 // shellFunctionHistoryRow is the on-disk shape of a history row;
 // not exported because callers only see the unified Version type.
 type shellFunctionHistoryRow struct {
-	ID                 uint64    `gorm:"column:id"`
-	FunctionID         uint64    `gorm:"column:function_id"`
-	CustomerID         uint      `gorm:"column:customer_id"`
-	Name               string    `gorm:"column:name"`
-	Source             string    `gorm:"column:source"`
-	Language           string    `gorm:"column:language"`
-	ContentHash        string    `gorm:"column:content_hash"`
-	Message            string    `gorm:"column:message"`
-	CapturedAt         time.Time `gorm:"column:captured_at"`
-	CapturedByUserID   *string   `gorm:"column:captured_by_user_id"`
-	AuthoredByUserID   *string   `gorm:"column:authored_by_user_id"`
-	PredecessorID      *uint64   `gorm:"column:predecessor_id"`
+	ID               uint64    `gorm:"column:id"`
+	FunctionID       uint64    `gorm:"column:function_id"`
+	OrgID            string    `gorm:"column:org_id"`
+	Name             string    `gorm:"column:name"`
+	Source           string    `gorm:"column:source"`
+	Language         string    `gorm:"column:language"`
+	ContentHash      string    `gorm:"column:content_hash"`
+	Message          string    `gorm:"column:message"`
+	CapturedAt       time.Time `gorm:"column:captured_at"`
+	CapturedByUserID *string   `gorm:"column:captured_by_user_id"`
+	AuthoredByUserID *string   `gorm:"column:authored_by_user_id"`
+	PredecessorID    *uint64   `gorm:"column:predecessor_id"`
 }
 
 func (shellFunctionHistoryRow) TableName() string { return "shell_function_history" }
@@ -64,14 +64,14 @@ func (shellFunctionHistoryRow) TableName() string { return "shell_function_histo
 // columns plus a SQL-resolved per-version author derived from the
 // trigger's captured_by trail (see LogShellFunction for the rule).
 type shellFunctionHistoryView struct {
-	ID                 uint64
-	Source             string
-	Language           string
-	ContentHash        string
-	Message            string
-	CapturedAt         time.Time
-	CapturedByUserID   *string
-	ResolvedAuthorID   *string
+	ID               uint64
+	Source           string
+	Language         string
+	ContentHash      string
+	Message          string
+	CapturedAt       time.Time
+	CapturedByUserID *string
+	ResolvedAuthorID *string
 }
 
 // computeShellFunctionHash returns the canonical content hash for a
@@ -87,8 +87,8 @@ func computeShellFunctionHash(source string) string {
 // named function, including the live row as the first entry.
 // Returns up to 6 entries (5 history + HEAD) when the cap is full.
 // Empty result when the named function doesn't exist.
-func (s *Store) LogShellFunction(customerID uint, name string) ([]ShellFunctionVersion, error) {
-	fn, err := s.GetShellFunction(customerID, name)
+func (s *Store) LogShellFunction(orgID string, name string) ([]ShellFunctionVersion, error) {
+	fn, err := s.GetShellFunction(orgID, name)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
@@ -160,7 +160,7 @@ var headCaretRefRe = regexp.MustCompile(`^HEAD(\^(\d*))?$`)
 
 // ResolveShellFunctionRef parses a ref ("HEAD", "HEAD^", "HEAD^N",
 // or a hash prefix ≥ 4 chars) and returns the matching version.
-func (s *Store) ResolveShellFunctionRef(customerID uint, name, ref string) (*ShellFunctionVersion, error) {
+func (s *Store) ResolveShellFunctionRef(orgID string, name, ref string) (*ShellFunctionVersion, error) {
 	if m := headCaretRefRe.FindStringSubmatch(ref); m != nil {
 		// HEAD or HEAD^N. Convert to a 0-indexed offset where 0 = HEAD.
 		offset := 0
@@ -175,7 +175,7 @@ func (s *Store) ResolveShellFunctionRef(customerID uint, name, ref string) (*She
 				offset = n
 			}
 		}
-		versions, err := s.LogShellFunction(customerID, name)
+		versions, err := s.LogShellFunction(orgID, name)
 		if err != nil {
 			return nil, err
 		}
@@ -193,7 +193,7 @@ func (s *Store) ResolveShellFunctionRef(customerID uint, name, ref string) (*She
 	if !isHexString(ref) {
 		return nil, fmt.Errorf("%w: %q", ErrInvalidRef, ref)
 	}
-	versions, err := s.LogShellFunction(customerID, name)
+	versions, err := s.LogShellFunction(orgID, name)
 	if err != nil {
 		return nil, err
 	}
@@ -223,19 +223,19 @@ func (s *Store) ResolveShellFunctionRef(customerID uint, name, ref string) (*She
 // edit doesn't capture a new history row. For history refs (HEAD^N
 // or hashes), it UPDATEs the matching shell_function_history row
 // directly.
-func (s *Store) AmendShellFunctionMessage(customerID uint, name, ref, message string) error {
-	v, err := s.ResolveShellFunctionRef(customerID, name, ref)
+func (s *Store) AmendShellFunctionMessage(orgID string, name, ref, message string) error {
+	v, err := s.ResolveShellFunctionRef(orgID, name, ref)
 	if err != nil {
 		return err
 	}
 	if v.IsHead {
-		return s.scoped(customerID).Model(&ShellFunction{}).
+		return s.scoped(orgID).Model(&ShellFunction{}).
 			Where("name = ?", name).
 			Update("message", message).Error
 	}
 	// History row — find by (function_id, content_hash, captured_at)
 	// to disambiguate when two rows share content.
-	fn, err := s.GetShellFunction(customerID, name)
+	fn, err := s.GetShellFunction(orgID, name)
 	if err != nil {
 		return err
 	}

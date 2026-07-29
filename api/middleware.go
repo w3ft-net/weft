@@ -19,7 +19,7 @@ type contextKey string
 // ActiveOrgHeader is the request header that selects which org
 // (customer) the user is acting as for this call. CLI sends it from
 // the --org flag; the web UI from a navbar selector. When absent, the
-// middleware falls back to the user's last_active_customer_id, then to
+// middleware falls back to the user's last_active_org_id, then to
 // their oldest membership.
 const ActiveOrgHeader = "X-Active-Org"
 
@@ -30,7 +30,7 @@ const ActiveOrgHeader = "X-Active-Org"
 // GetSession (REST) or auth.SessionFromContext (any protocol).
 //
 // When the resolved active org differs from the user's stored
-// last_active_customer_id, the middleware writes the new value back
+// last_active_org_id, the middleware writes the new value back
 // async — that way reconnecting later (without an explicit X-Active-Org
 // header) lands the user in the org they last operated in.
 func AuthMiddleware(st *store.Store, secret string, next http.Handler) http.Handler {
@@ -67,19 +67,19 @@ func AuthMiddleware(st *store.Store, secret string, next http.Handler) http.Hand
 	})
 }
 
-// persistLastActive flips users.last_active_customer_id when the
+// persistLastActive flips users.last_active_org_id when the
 // resolved active org doesn't match what's stored. Runs in a goroutine
 // so the user-facing latency doesn't pay for the write; failures log
 // but never block the request (the next request will retry).
 func persistLastActive(st *store.Store, session *auth.Session) {
 	// An org-less session (a superadmin with no membership) has no active
-	// customer to pin. Writing 0 trips the last_active_customer_id foreign
+	// customer to pin. Writing 0 trips the last_active_org_id foreign
 	// key, so there's nothing to persist.
-	if session.ActiveCustomerID == 0 {
+	if session.ActiveOrgID == "" {
 		return
 	}
-	if err := st.UpdateUserLastActiveCustomer(session.UserID, session.ActiveCustomerID); err != nil {
-		log.Printf("update last_active_customer_id for %s: %v", session.UserID, err)
+	if err := st.UpdateUserLastActiveOrg(session.UserID, session.ActiveOrgID); err != nil {
+		log.Printf("update last_active_org_id for %s: %v", session.UserID, err)
 	}
 }
 
@@ -148,7 +148,7 @@ const agentAuthKey contextKey = "agentAuth"
 
 // AgentAuthResult is the identity derived from a validated agent token.
 type AgentAuthResult struct {
-	CustomerID   uint
+	OrgID        string
 	CustomerName string
 	Namespace    string
 }
@@ -169,8 +169,8 @@ func AgentTokenMiddleware(s *store.Store, next http.Handler) http.Handler {
 			return
 		}
 		result := &AgentAuthResult{
-			CustomerID:   storeResult.Customer.ID,
-			CustomerName: storeResult.Customer.Name,
+			OrgID:        storeResult.Organization.ID,
+			CustomerName: storeResult.Organization.Name,
 			Namespace:    storeResult.Namespace,
 		}
 		recordAccessIdentity(r, "agent:"+result.CustomerName+"/"+result.Namespace)

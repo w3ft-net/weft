@@ -10,21 +10,20 @@ import (
 
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/store"
+
+	"github.com/graybeardcorp/saaskit/orgs"
 )
 
 // permsSeed mirrors dashTeamMember: it just adds (user, role) as a
 // team_members row so BuildSession resolves an active org. Returns
 // the user's signed JWT.
-func permsSeed(t *testing.T, s *store.Store, cust *store.Customer, role, emailSuffix string) (*store.User, string) {
+func permsSeed(t *testing.T, s *store.Store, cust *store.Organization, role, emailSuffix string) (*store.User, string) {
 	t.Helper()
 	user, err := s.CreateVerifiedUser(fmt.Sprintf("%s-%d@example.com", emailSuffix, os.Getpid()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = s.CreateTeamMember(&store.TeamMember{
-		ID: "tm-perm-" + emailSuffix, CustomerID: cust.ID, Email: user.Email,
-		UserID: &user.ID, Role: role, Status: "active",
-	})
+	err = s.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, orgs.RoleMember)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +35,7 @@ func TestPermissions_GetAndPut(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
 
-	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("perms-api-%d", os.Getpid()))
+	cust, _ := s.FindOrCreateOrg(fmt.Sprintf("perms-api-%d", os.Getpid()))
 	_, ownerJWT := permsSeed(t, s, cust, "owner", "owner")
 	member, _ := permsSeed(t, s, cust, "member", "member")
 	_, _ = s.FindOrCreateNamespace(cust.ID, "api")
@@ -83,7 +82,7 @@ func TestPermissions_Put_NonOwnerForbidden(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
 
-	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("perms-noown-%d", os.Getpid()))
+	cust, _ := s.FindOrCreateOrg(fmt.Sprintf("perms-noown-%d", os.Getpid()))
 	_, memberJWT := permsSeed(t, s, cust, "member", "lurker")
 
 	req := httptest.NewRequest("PUT", "/api/permissions", bytes.NewReader([]byte("{}")))
@@ -99,7 +98,7 @@ func TestPermissions_Put_RejectsUnknownMember(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
 
-	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("perms-badmem-%d", os.Getpid()))
+	cust, _ := s.FindOrCreateOrg(fmt.Sprintf("perms-badmem-%d", os.Getpid()))
 	_, ownerJWT := permsSeed(t, s, cust, "owner", "lonely-owner")
 
 	put := store.TeamPermsDoc{

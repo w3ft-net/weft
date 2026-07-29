@@ -55,10 +55,10 @@ func TestValidateSource_LuaSyntaxError(t *testing.T) {
 	}
 }
 
-func saveTestSetup(t *testing.T) (*Store, uint) {
+func saveTestSetup(t *testing.T) (*Store, string) {
 	t.Helper()
 	db := testOpen(t)
-	cust, err := db.FindOrCreateCustomer("save-validate-test")
+	cust, err := db.FindOrCreateOrg("save-validate-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,14 +164,14 @@ echo finished`
 // The ban catches all common spellings.
 func TestValidateSource_RejectsTailFollow(t *testing.T) {
 	cases := map[string]string{
-		"tail -f":                  `tail -f /log/api.log`,
-		"tail -f with grep":        `tail -f /log/api.log | grep ERROR`,
-		"tail --follow long form":  `tail --follow /log/api.log`,
-		"tail -fn 100 (joined)":    `tail -fn 100 /log/api.log`,
-		"tail -f in for loop":      `for a in api web; do tail -f /log/$a.log; done`,
-		"tail -f inside cmdsub":    "x=$(tail -f /log/api.log); echo $x",
-		"tail -f inside function":  "watch() { tail -f /log/$1.log; }\nwatch api",
-		"tail -f after echo":       "echo starting\ntail -f /log/api.log",
+		"tail -f":                 `tail -f /log/api.log`,
+		"tail -f with grep":       `tail -f /log/api.log | grep ERROR`,
+		"tail --follow long form": `tail --follow /log/api.log`,
+		"tail -fn 100 (joined)":   `tail -fn 100 /log/api.log`,
+		"tail -f in for loop":     `for a in api web; do tail -f /log/$a.log; done`,
+		"tail -f inside cmdsub":   "x=$(tail -f /log/api.log); echo $x",
+		"tail -f inside function": "watch() { tail -f /log/$1.log; }\nwatch api",
+		"tail -f after echo":      "echo starting\ntail -f /log/api.log",
 	}
 	for name, src := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"math"
 	"math/rand"
@@ -26,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/graybeardcorp/saaskit/orgs"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -172,11 +174,11 @@ func seed(s *store.Store, tokensOut string) error {
 
 	for _, c := range spec {
 		log.Printf("customer %s …", c.Name)
-		cust, err := s.FindOrCreateCustomer(c.Name)
+		cust, err := s.FindOrCreateOrg(c.Name)
 		if err != nil {
 			return fmt.Errorf("customer %s: %w", c.Name, err)
 		}
-		if err := s.UpdateCustomerDisplayName(c.Name, c.DisplayName); err != nil {
+		if err := s.UpdateOrgDisplayName(c.Name, c.DisplayName); err != nil {
 			return fmt.Errorf("customer %s display name: %w", c.Name, err)
 		}
 
@@ -236,7 +238,7 @@ func seed(s *store.Store, tokensOut string) error {
 			for _, env := range c.Envs {
 				varName := tokenEnvVar(c.Name, app, env)
 				label := fmt.Sprintf("%s-%s-%s", c.Name, app, env)
-				_ = s.DB().WithContext(store.WithCustomer(context.Background(), cust.ID)).
+				_ = s.DB().WithContext(store.WithOrg(context.Background(), cust.ID)).
 					Model(&store.AgentToken{}).
 					Where("label = ? AND revoked = ?", label, false).
 					Update("revoked", true)
@@ -307,11 +309,11 @@ func seedProdLoom(s *store.Store, tokensOut string) error {
 	}
 
 	log.Printf("seeding loom into prod DB (idempotent)…")
-	cust, err := s.FindOrCreateCustomer(loomSpec.Name)
+	cust, err := s.FindOrCreateOrg(loomSpec.Name)
 	if err != nil {
 		return fmt.Errorf("customer: %w", err)
 	}
-	if err := s.UpdateCustomerDisplayName(loomSpec.Name, loomSpec.DisplayName); err != nil {
+	if err := s.UpdateOrgDisplayName(loomSpec.Name, loomSpec.DisplayName); err != nil {
 		return fmt.Errorf("display name: %w", err)
 	}
 	if err := ensureActiveSubscription(s, loomSpec.Name); err != nil {
@@ -453,7 +455,7 @@ func writeTokensFile(path string, lines []mintedToken) error {
 }
 
 func ensureActiveSubscription(s *store.Store, customerName string) error {
-	cust, err := s.GetCustomerByName(customerName)
+	cust, err := s.GetOrgByName(customerName)
 	if err != nil {
 		return fmt.Errorf("resolve customer %s: %w", customerName, err)
 	}
@@ -462,8 +464,8 @@ func ensureActiveSubscription(s *store.Store, customerName string) error {
 	}
 	now := time.Now()
 	return s.CreateSubscription(&store.Subscription{
-		ID:         "demo-sub-" + customerName,
-		CustomerID: cust.ID,
+		ID:    "demo-sub-" + customerName,
+		OrgID: cust.ID,
 		// Yard tier: allows the 1-minute mem-pressure schedule
 		// the demo's verification checklist depends on. Swatch caps
 		// watches at 5-minute intervals (store.MinWatchInterval).
@@ -475,25 +477,13 @@ func ensureActiveSubscription(s *store.Store, customerName string) error {
 	})
 }
 
-func upsertVerifiedUser(s *store.Store, email string, customerID uint) (*store.User, error) {
+func upsertVerifiedUser(s *store.Store, email string, orgID string) (*store.User, error) {
 	if u, err := s.GetUserByEmail(email); err == nil && u != nil {
-		// Ensure the user has a team_member row in this customer so the
-		// demo seed treats them as an org member (the seed reruns
-		// idempotently; CreateTeamMember below upserts on the unique
-		// (customer_id, user_id) constraint).
-		if _, err := s.GetTeamMemberByUserID(customerID, u.ID); err != nil {
-			now := time.Now()
-			_ = s.CreateTeamMember(&store.TeamMember{
-				ID:         "demo-tm-" + u.ID + "-" + fmt.Sprint(customerID),
-				CustomerID: customerID,
-				Email:      u.Email,
-				UserID:     &u.ID,
-				Role:       "member",
-				Status:     "active",
-				InvitedAt:  now,
-				CreatedAt:  now,
-				UpdatedAt:  now,
-			})
+		// Ensure the user has a membership in this org. AddMemberWithEmail
+		// upserts on (org_id, user_id), so the seed stays idempotent across
+		// reruns without the existence check the old insert needed.
+		if err := s.AddTeamMemberWithEmail(orgID, u.ID, u.Email, orgs.RoleMember); err != nil {
+			return nil, fmt.Errorf("membership: %w", err)
 		}
 		return u, nil
 	}
@@ -501,19 +491,8 @@ func upsertVerifiedUser(s *store.Store, email string, customerID uint) (*store.U
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now()
-	if err := s.CreateTeamMember(&store.TeamMember{
-		ID:         "demo-tm-" + u.ID + "-" + fmt.Sprint(customerID),
-		CustomerID: customerID,
-		Email:      u.Email,
-		UserID:     &u.ID,
-		Role:       "owner",
-		Status:     "active",
-		InvitedAt:  now,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-	}); err != nil {
-		return nil, fmt.Errorf("team_member: %w", err)
+	if err := s.AddTeamMemberWithEmail(orgID, u.ID, u.Email, store.RoleOwner); err != nil {
+		return nil, fmt.Errorf("membership: %w", err)
 	}
 	return u, nil
 }
@@ -540,7 +519,7 @@ app: %s
 
 // --- pre-seeded /bin and /cron.d --------------------------------------
 
-func preseedScripts(s *store.Store, custID uint, customerName string, members []*store.User) error {
+func preseedScripts(s *store.Store, custID string, customerName string, members []*store.User) error {
 	if len(members) < 3 {
 		return nil
 	}
@@ -819,7 +798,7 @@ oncall:
 // Idempotent: any existing result for the watch short-circuits — we
 // never want re-runs of the seed to stack a second synthetic hour on
 // top of real ticks.
-func preseedLoomErrorRateHistory(s *store.Store, custID uint) error {
+func preseedLoomErrorRateHistory(s *store.Store, custID string) error {
 	watch, err := s.GetCronWatch(custID, "error-rate")
 	if err != nil {
 		return fmt.Errorf("lookup: %w", err)
@@ -840,7 +819,12 @@ func preseedLoomErrorRateHistory(s *store.Store, custID uint) error {
 		ratioPeriod  = 900.0  // seconds
 		jitterStddev = 5.0    // count units; small relative to ~180 mean
 	)
-	rng := rand.New(rand.NewSource(int64(custID)))
+	// Seed from the org id so a given org always reseeds to the same
+	// synthetic series. The id is a UUID now, so hash it down to an int64
+	// rather than converting — the point is determinism, not the value.
+	seed := fnv.New64a()
+	_, _ = seed.Write([]byte(custID))
+	rng := rand.New(rand.NewSource(int64(seed.Sum64())))
 	now := time.Now()
 	rows := make([]store.CronResult, 0, points)
 	for i := 0; i < points; i++ {
@@ -890,7 +874,7 @@ type nonLoomUser struct {
 }
 
 func grantLoomMemberships(s *store.Store, users []nonLoomUser) error {
-	cust, err := s.GetCustomerByName("loom")
+	cust, err := s.GetOrgByName("loom")
 	if err != nil {
 		return fmt.Errorf("loom customer: %w", err)
 	}
@@ -902,19 +886,8 @@ func grantLoomMemberships(s *store.Store, users []nonLoomUser) error {
 		if _, err := s.GetTeamMemberByUserID(cust.ID, u.user.ID); err == nil {
 			continue
 		}
-		now := time.Now()
-		if err := s.CreateTeamMember(&store.TeamMember{
-			ID:         "demo-loom-" + u.user.ID,
-			CustomerID: cust.ID,
-			Email:      u.email,
-			UserID:     &u.user.ID,
-			Role:       "member",
-			Status:     "active",
-			InvitedAt:  now,
-			CreatedAt:  now,
-			UpdatedAt:  now,
-		}); err != nil {
-			return fmt.Errorf("loom team_member %s: %w", u.email, err)
+		if err := s.AddTeamMemberWithEmail(cust.ID, u.user.ID, u.email, orgs.RoleMember); err != nil {
+			return fmt.Errorf("loom membership %s: %w", u.email, err)
 		}
 		if err := s.UpsertNamespacePermission(&store.NamespacePermission{
 			UserID:      u.user.ID,
@@ -932,7 +905,7 @@ func grantLoomMemberships(s *store.Store, users []nonLoomUser) error {
 
 func resetDemo(s *store.Store) error {
 	for _, c := range spec {
-		if err := s.DB().Unscoped().Where("name = ?", c.Name).Delete(&store.Customer{}).Error; err != nil {
+		if err := s.DB().Unscoped().Where("name = ?", c.Name).Delete(&store.Organization{}).Error; err != nil {
 			return fmt.Errorf("delete customer %s: %w", c.Name, err)
 		}
 		log.Printf("deleted customer %s (cascade)", c.Name)

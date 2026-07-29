@@ -43,7 +43,7 @@ type dashboardListItem struct {
 
 func (s *Server) handleListDashboards(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -78,7 +78,7 @@ func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -151,7 +151,7 @@ func (s *Server) handleSaveDashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "yaml_body required", http.StatusBadRequest)
 		return
 	}
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -179,7 +179,7 @@ func (s *Server) handleDeleteDashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	custID, err := s.resolveCustomerID(session.ActiveCustomerName)
+	custID, err := s.resolveOrgID(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

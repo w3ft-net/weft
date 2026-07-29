@@ -14,7 +14,7 @@ import (
 // size and line count accurate.
 func TestTmpRoundTrip(t *testing.T) {
 	db := testOpen(t)
-	cust, err := db.FindOrCreateCustomer("tmp-rt")
+	cust, err := db.FindOrCreateOrg("tmp-rt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestTmpRoundTrip(t *testing.T) {
 // TestTmpOverwrite: a second write replaces, doesn't append.
 func TestTmpOverwrite(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("tmp-ow")
+	cust, _ := db.FindOrCreateOrg("tmp-ow")
 
 	if err := db.WriteTmpFile(cust.ID, TierSwatch, "", "/tmp/x", []byte("v1\n")); err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestTmpOverwrite(t *testing.T) {
 // TestTmpAppend: >> keeps existing lines and numbers new ones after.
 func TestTmpAppend(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("tmp-ap")
+	cust, _ := db.FindOrCreateOrg("tmp-ap")
 
 	if err := db.WriteTmpFile(cust.ID, TierSwatch, "", "/tmp/log", []byte("one\ntwo\n")); err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestTmpAppend(t *testing.T) {
 // TestTmpMkdir: create a directory, write a file under it, ls that dir.
 func TestTmpMkdir(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("tmp-mk")
+	cust, _ := db.FindOrCreateOrg("tmp-mk")
 
 	if err := db.Mkdir(cust.ID, "", "/tmp/incidents"); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -115,7 +115,7 @@ func TestTmpMkdir(t *testing.T) {
 // TestTmpPerFileCap: writing > TmpMaxFileBytes fails.
 func TestTmpPerFileCap(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("tmp-cap")
+	cust, _ := db.FindOrCreateOrg("tmp-cap")
 
 	big := make([]byte, TmpMaxFileBytes+1)
 	for i := range big {
@@ -130,7 +130,7 @@ func TestTmpPerFileCap(t *testing.T) {
 // TestTmpQuota: trial tier caps at 500 KB total.
 func TestTmpQuota(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("tmp-quota")
+	cust, _ := db.FindOrCreateOrg("tmp-quota")
 
 	chunk := make([]byte, 200*1024)
 	for i := range chunk {
@@ -152,7 +152,7 @@ func TestTmpQuota(t *testing.T) {
 // TestTmpDeleteSubtree: rm -rf a directory removes everything under it.
 func TestTmpDeleteSubtree(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("tmp-rm")
+	cust, _ := db.FindOrCreateOrg("tmp-rm")
 
 	if err := db.Mkdir(cust.ID, "", "/tmp/inc"); err != nil {
 		t.Fatal(err)
@@ -177,8 +177,8 @@ func TestTmpDeleteSubtree(t *testing.T) {
 // TestTmpMultiTenancy: customer A cannot see customer B's tmp files.
 func TestTmpMultiTenancy(t *testing.T) {
 	db := testOpen(t)
-	a, _ := db.FindOrCreateCustomer("tmp-a")
-	b, _ := db.FindOrCreateCustomer("tmp-b")
+	a, _ := db.FindOrCreateOrg("tmp-a")
+	b, _ := db.FindOrCreateOrg("tmp-b")
 
 	if err := db.WriteTmpFile(a.ID, TierSwatch, "", "/tmp/secret", []byte("top secret\n")); err != nil {
 		t.Fatal(err)
@@ -197,7 +197,7 @@ func TestTmpMultiTenancy(t *testing.T) {
 // TestTmpInvalidPaths rejects path traversal and other garbage.
 func TestTmpInvalidPaths(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("tmp-bad")
+	cust, _ := db.FindOrCreateOrg("tmp-bad")
 
 	for _, bad := range []string{"", "/", "/tmp/../etc/passwd", "/tmp//x", "/tmp/a/./b"} {
 		err := db.WriteTmpFile(cust.ID, TierSwatch, "", bad, []byte("x"))
@@ -211,7 +211,7 @@ func TestTmpInvalidPaths(t *testing.T) {
 // appending one byte past fails.
 func TestTmpAppendExactCap(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("tmp-cap-edge")
+	cust, _ := db.FindOrCreateOrg("tmp-cap-edge")
 
 	half := make([]byte, TmpMaxFileBytes-1)
 	for i := range half {
@@ -235,7 +235,7 @@ func TestTmpAppendExactCap(t *testing.T) {
 // independently readable; quota counts the copy.
 func TestTmpCopy(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("tmp-cp")
+	cust, _ := db.FindOrCreateOrg("tmp-cp")
 
 	if err := db.WriteTmpFile(cust.ID, TierSwatch, "", "/tmp/src", []byte("alpha\nbeta\ngamma\n")); err != nil {
 		t.Fatal(err)
@@ -265,7 +265,7 @@ func TestTmpCopy(t *testing.T) {
 // TestTmpCopy_RejectsExisting: cp to an existing path errors.
 func TestTmpCopy_RejectsExisting(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("tmp-cp-exist")
+	cust, _ := db.FindOrCreateOrg("tmp-cp-exist")
 	db.WriteTmpFile(cust.ID, TierSwatch, "", "/tmp/a", []byte("a"))
 	db.WriteTmpFile(cust.ID, TierSwatch, "", "/tmp/b", []byte("b"))
 	if err := copyTmpFile(db, cust.ID, TierSwatch, "", "/tmp/a", "/tmp/b"); !errors.Is(err, ErrTmpExists) {
@@ -277,7 +277,7 @@ func TestTmpCopy_RejectsExisting(t *testing.T) {
 // allowance is rejected before any rows land.
 func TestTmpCopy_QuotaEnforced(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("tmp-cp-quota")
+	cust, _ := db.FindOrCreateOrg("tmp-cp-quota")
 	chunk := make([]byte, 200*1024)
 	for i := range chunk {
 		chunk[i] = 'q'
@@ -298,7 +298,7 @@ func TestTmpCopy_QuotaEnforced(t *testing.T) {
 // TestTmpRename: mv changes path; lines untouched (file_id stable).
 func TestTmpRename(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("tmp-mv")
+	cust, _ := db.FindOrCreateOrg("tmp-mv")
 
 	db.WriteTmpFile(cust.ID, TierSwatch, "", "/tmp/old", []byte("hello\n"))
 	old, _ := db.GetTmpFile(cust.ID, "/tmp/old")
@@ -326,7 +326,7 @@ func TestTmpRename(t *testing.T) {
 // All lines slide forward into the same fresh partition as the file.
 func TestTmpTouch_Existing(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("tmp-touch")
+	cust, _ := db.FindOrCreateOrg("tmp-touch")
 
 	db.WriteTmpFile(cust.ID, TierSwatch, "", "/tmp/x", []byte("a\nb\nc\n"))
 	before, _ := db.GetTmpFile(cust.ID, "/tmp/x")
@@ -352,7 +352,7 @@ func TestTmpTouch_Existing(t *testing.T) {
 // TestTmpTouch_Missing: touch on a missing file creates it empty.
 func TestTmpTouch_Missing(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("tmp-touch-new")
+	cust, _ := db.FindOrCreateOrg("tmp-touch-new")
 
 	if err := touchTmpFile(db, cust.ID, TierSwatch, "", "/tmp/fresh"); err != nil {
 		t.Fatalf("touch: %v", err)
@@ -370,7 +370,7 @@ func TestTmpTouch_Missing(t *testing.T) {
 // TestTmpUsageBytes sums only files, not directory rows.
 func TestTmpUsageBytes(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("tmp-usage")
+	cust, _ := db.FindOrCreateOrg("tmp-usage")
 
 	if err := db.Mkdir(cust.ID, "", "/tmp/d"); err != nil {
 		t.Fatal(err)
@@ -395,8 +395,8 @@ func TestTmpUsageBytes(t *testing.T) {
 // store tests keep exercising the same behaviour against the schema.
 
 // readTmpFile mirrors the former Store.ReadTmpFile.
-func readTmpFile(db *Store, customerID uint, path string) ([]byte, error) {
-	f, err := db.GetTmpFile(customerID, path)
+func readTmpFile(db *Store, orgID string, path string) ([]byte, error) {
+	f, err := db.GetTmpFile(orgID, path)
 	if err != nil {
 		return nil, err
 	}
@@ -426,16 +426,16 @@ func readTmpFile(db *Store, customerID uint, path string) ([]byte, error) {
 }
 
 // appendTmpFile mirrors the former Store.AppendTmpFile.
-func appendTmpFile(db *Store, customerID uint, tier Tier, userID, path string, data []byte) error {
+func appendTmpFile(db *Store, orgID string, tier Tier, userID, path string, data []byte) error {
 	p, err := NormalizeTmpPath(path)
 	if err != nil {
 		return err
 	}
-	if err := db.EnsureParentDirs(customerID, userID, p, false); err != nil {
+	if err := db.EnsureParentDirs(orgID, userID, p, false); err != nil {
 		return err
 	}
 
-	existing, err := db.GetTmpFile(customerID, p)
+	existing, err := db.GetTmpFile(orgID, p)
 	if err != nil && !errors.Is(err, ErrTmpNotFound) {
 		return err
 	}
@@ -455,7 +455,7 @@ func appendTmpFile(db *Store, customerID uint, tier Tier, userID, path string, d
 	}
 
 	allowance := TmpStorageAllowance(tier)
-	used, err := db.TmpUsageBytes(customerID)
+	used, err := db.TmpUsageBytes(orgID)
 	if err != nil {
 		return err
 	}
@@ -464,7 +464,7 @@ func appendTmpFile(db *Store, customerID uint, tier Tier, userID, path string, d
 	}
 
 	lines := SplitLines(data)
-	return db.scoped(customerID).Transaction(func(tx *gorm.DB) error {
+	return db.scoped(orgID).Transaction(func(tx *gorm.DB) error {
 		now := time.Now()
 		var fileID uint64
 		if existing != nil {
@@ -486,13 +486,13 @@ func appendTmpFile(db *Store, customerID uint, tier Tier, userID, path string, d
 			}
 		} else {
 			f := TmpFile{
-				CustomerID: customerID,
-				Path:       p,
-				IsDir:      false,
-				ByteSize:   newSize,
-				LineCount:  int64(len(lines)),
-				CreatedAt:  now,
-				UpdatedAt:  now,
+				OrgID:     orgID,
+				Path:      p,
+				IsDir:     false,
+				ByteSize:  newSize,
+				LineCount: int64(len(lines)),
+				CreatedAt: now,
+				UpdatedAt: now,
 			}
 			if userID != "" {
 				f.CreatedByUserID = &userID
@@ -519,8 +519,8 @@ func appendTmpFile(db *Store, customerID uint, tier Tier, userID, path string, d
 }
 
 // copyTmpFile mirrors the former Store.CopyTmpFile.
-func copyTmpFile(db *Store, customerID uint, tier Tier, userID, srcPath, dstPath string) error {
-	src, err := db.GetTmpFile(customerID, srcPath)
+func copyTmpFile(db *Store, orgID string, tier Tier, userID, srcPath, dstPath string) error {
+	src, err := db.GetTmpFile(orgID, srcPath)
 	if err != nil {
 		return err
 	}
@@ -531,10 +531,10 @@ func copyTmpFile(db *Store, customerID uint, tier Tier, userID, srcPath, dstPath
 	if err != nil {
 		return err
 	}
-	if existing, _ := db.GetTmpFile(customerID, dstNorm); existing != nil {
+	if existing, _ := db.GetTmpFile(orgID, dstNorm); existing != nil {
 		return ErrTmpExists
 	}
-	if err := db.EnsureParentDirs(customerID, userID, dstNorm, false); err != nil {
+	if err := db.EnsureParentDirs(orgID, userID, dstNorm, false); err != nil {
 		return err
 	}
 
@@ -542,7 +542,7 @@ func copyTmpFile(db *Store, customerID uint, tier Tier, userID, srcPath, dstPath
 		return fmt.Errorf("%w (source %d > %d)", ErrTmpFileTooLarge, src.ByteSize, TmpMaxFileBytes)
 	}
 	allowance := TmpStorageAllowance(tier)
-	used, err := db.TmpUsageBytes(customerID)
+	used, err := db.TmpUsageBytes(orgID)
 	if err != nil {
 		return err
 	}
@@ -550,16 +550,16 @@ func copyTmpFile(db *Store, customerID uint, tier Tier, userID, srcPath, dstPath
 		return fmt.Errorf("%w (%d + %d > %d)", ErrTmpQuotaExceeded, used, src.ByteSize, allowance)
 	}
 
-	return db.scoped(customerID).Transaction(func(tx *gorm.DB) error {
+	return db.scoped(orgID).Transaction(func(tx *gorm.DB) error {
 		now := time.Now()
 		dst := TmpFile{
-			CustomerID: customerID,
-			Path:       dstNorm,
-			IsDir:      false,
-			ByteSize:   src.ByteSize,
-			LineCount:  src.LineCount,
-			CreatedAt:  now,
-			UpdatedAt:  now,
+			OrgID:     orgID,
+			Path:      dstNorm,
+			IsDir:     false,
+			ByteSize:  src.ByteSize,
+			LineCount: src.LineCount,
+			CreatedAt: now,
+			UpdatedAt: now,
 		}
 		if userID != "" {
 			dst.CreatedByUserID = &userID
@@ -577,8 +577,8 @@ func copyTmpFile(db *Store, customerID uint, tier Tier, userID, srcPath, dstPath
 }
 
 // renameTmpFile mirrors the former Store.RenameTmpFile.
-func renameTmpFile(db *Store, customerID uint, srcPath, dstPath string) error {
-	src, err := db.GetTmpFile(customerID, srcPath)
+func renameTmpFile(db *Store, orgID string, srcPath, dstPath string) error {
+	src, err := db.GetTmpFile(orgID, srcPath)
 	if err != nil {
 		return err
 	}
@@ -586,14 +586,14 @@ func renameTmpFile(db *Store, customerID uint, srcPath, dstPath string) error {
 	if err != nil {
 		return err
 	}
-	if existing, _ := db.GetTmpFile(customerID, dstNorm); existing != nil {
+	if existing, _ := db.GetTmpFile(orgID, dstNorm); existing != nil {
 		return ErrTmpExists
 	}
-	if err := db.EnsureParentDirs(customerID, "", dstNorm, false); err != nil {
+	if err := db.EnsureParentDirs(orgID, "", dstNorm, false); err != nil {
 		return err
 	}
 	now := time.Now()
-	return db.scoped(customerID).Model(&TmpFile{}).
+	return db.scoped(orgID).Model(&TmpFile{}).
 		Where("id = ? AND updated_at = ?", src.ID, src.UpdatedAt).
 		Updates(map[string]any{
 			"path":       dstNorm,
@@ -602,20 +602,20 @@ func renameTmpFile(db *Store, customerID uint, srcPath, dstPath string) error {
 }
 
 // touchTmpFile mirrors the former Store.TouchTmpFile.
-func touchTmpFile(db *Store, customerID uint, tier Tier, userID, path string) error {
+func touchTmpFile(db *Store, orgID string, tier Tier, userID, path string) error {
 	p, err := NormalizeTmpPath(path)
 	if err != nil {
 		return err
 	}
-	existing, err := db.GetTmpFile(customerID, p)
+	existing, err := db.GetTmpFile(orgID, p)
 	if errors.Is(err, ErrTmpNotFound) {
-		return db.WriteTmpFile(customerID, tier, userID, p, nil)
+		return db.WriteTmpFile(orgID, tier, userID, p, nil)
 	}
 	if err != nil {
 		return err
 	}
 	now := time.Now()
-	return db.scoped(customerID).Transaction(func(tx *gorm.DB) error {
+	return db.scoped(orgID).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&TmpFile{}).
 			Where("id = ? AND updated_at = ?", existing.ID, existing.UpdatedAt).
 			Update("updated_at", now).Error; err != nil {
@@ -632,12 +632,12 @@ func touchTmpFile(db *Store, customerID uint, tier Tier, userID, path string) er
 }
 
 // deleteTmpSubtree mirrors the former Store.DeleteTmpSubtree.
-func deleteTmpSubtree(db *Store, customerID uint, path string) error {
+func deleteTmpSubtree(db *Store, orgID string, path string) error {
 	p, err := NormalizeTmpPath(path)
 	if err != nil {
 		return err
 	}
-	return db.scoped(customerID).Transaction(func(tx *gorm.DB) error {
+	return db.scoped(orgID).Transaction(func(tx *gorm.DB) error {
 		var files []TmpFile
 		err := tx.Where("path = ? OR path LIKE ?",
 			p, p+"/%").Find(&files).Error

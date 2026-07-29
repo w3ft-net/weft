@@ -1,11 +1,12 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/graybeardcorp/saaskit/orgs"
 	"gorm.io/gorm"
 )
 
@@ -119,9 +120,9 @@ func TestSetCanCreateNamespace(t *testing.T) {
 // makeTeamMember creates a customer + user + active membership row
 // and returns the membership. Used by tests that need an existing
 // team_member row to operate on.
-func makeTeamMember(t *testing.T, db *Store, customerName, email string) (*Customer, *User, *TeamMember) {
+func makeTeamMember(t *testing.T, db *Store, customerName, email string) (*Organization, *User, *TeamMember) {
 	t.Helper()
-	cust, err := db.FindOrCreateCustomer(customerName)
+	cust, err := db.FindOrCreateOrg(customerName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,20 +130,11 @@ func makeTeamMember(t *testing.T, db *Store, customerName, email string) (*Custo
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now()
-	uid := user.ID
-	m := &TeamMember{
-		ID:         uuid.New().String(),
-		CustomerID: cust.ID,
-		UserID:     &uid,
-		Email:      email,
-		Status:     "active",
-		Role:       "member",
-		AcceptedAt: &now,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+	if err := db.AddTeamMemberWithEmail(cust.ID, user.ID, email, orgs.RoleMember); err != nil {
+		t.Fatal(err)
 	}
-	if err := db.CreateTeamMember(m); err != nil {
+	m, err := db.GetTeamMemberByUserID(cust.ID, user.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
 	return cust, user, m
@@ -192,7 +184,7 @@ func TestGetTeamMemberByID(t *testing.T) {
 	}
 
 	// Not found
-	if _, err := getTeamMemberByID(db, "does-not-exist"); !errors.Is(err, gorm.ErrRecordNotFound) {
+	if _, err := getTeamMemberByID(db, "00000000-0000-0000-0000-0000000000ff"); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Errorf("expected ErrRecordNotFound, got %v", err)
 	}
 }
@@ -201,17 +193,11 @@ func TestGetTeamMemberByID(t *testing.T) {
 // linked to a user_id. AcceptedAt is set.
 func TestAcceptTeamMember(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("accept-test")
+	cust, _ := db.FindOrCreateOrg("accept-test")
 
 	// Create a pending invite (no user_id yet).
-	pending := &TeamMember{
-		ID:         uuid.New().String(),
-		CustomerID: cust.ID,
-		Email:      "invitee@example.com",
-		Status:     "pending",
-		Role:       "member",
-	}
-	if err := db.CreateTeamMember(pending); err != nil {
+	pending, err := db.InviteTeamMember(cust.ID, "invitee@example.com", orgs.RoleMember, "")
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -225,7 +211,7 @@ func TestAcceptTeamMember(t *testing.T) {
 	if got.Status != "active" {
 		t.Errorf("Status = %q", got.Status)
 	}
-	if got.UserID == nil || *got.UserID != user.ID {
+	if got.UserID != user.ID {
 		t.Errorf("UserID = %v, want %q", got.UserID, user.ID)
 	}
 	if got.AcceptedAt == nil {
@@ -240,8 +226,8 @@ func TestRemoveTeamMember(t *testing.T) {
 	db := testOpen(t)
 	cust, _, m := makeTeamMember(t, db, "remove-test", "to-remove@example.com")
 
-	if err := removeTeamMember(db, m.ID); err != nil {
-		t.Fatalf("RemoveTeamMember: %v", err)
+	if err := db.RemoveTeamMemberByEmail(cust.ID, m.Email); err != nil {
+		t.Fatalf("RemoveTeamMemberByEmail: %v", err)
 	}
 
 	// Direct fetch still returns the row.
@@ -284,35 +270,39 @@ func TestRemoveTeamMemberByUserAndCustomer(t *testing.T) {
 // rows. Used by the seat-cap check before sending invites.
 func TestCountTeamMembers(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("count-test")
+	cust, _ := db.FindOrCreateOrg("count-test")
 
 	// Fresh customer: 0.
 	if n, _ := db.CountTeamMembers(cust.ID); n != 0 {
 		t.Errorf("initial count = %d", n)
 	}
 
-	// Add 3 members of varied status.
+	// Add 3 members of varied status: an outstanding invite holds a seat
+	// just as an accepted member does, so all three count.
 	for i, status := range []string{"active", "pending", "active"} {
-		now := time.Now()
-		m := &TeamMember{
-			ID:         uuid.New().String(),
-			CustomerID: cust.ID,
-			Email:      "count" + string(rune('a'+i)) + "@example.com",
-			Status:     status,
-			Role:       "member",
-			CreatedAt:  now,
-			UpdatedAt:  now,
+		email := "count" + string(rune('a'+i)) + "@example.com"
+		if status == "pending" {
+			if _, err := db.InviteTeamMember(cust.ID, email, orgs.RoleMember, ""); err != nil {
+				t.Fatal(err)
+			}
+			continue
 		}
-		db.CreateTeamMember(m)
+		u, err := db.CreateUser(email)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.AddTeamMemberWithEmail(cust.ID, u.ID, email, orgs.RoleMember); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if n, _ := db.CountTeamMembers(cust.ID); n != 3 {
 		t.Errorf("after 3 inserts, count = %d", n)
 	}
 
 	// Remove one — should drop to 2.
-	var m TeamMember
-	db.scoped(cust.ID).First(&m)
-	removeTeamMember(db, m.ID)
+	if err := db.RemoveTeamMemberByEmail(cust.ID, "counta@example.com"); err != nil {
+		t.Fatal(err)
+	}
 	if n, _ := db.CountTeamMembers(cust.ID); n != 2 {
 		t.Errorf("after remove, count = %d", n)
 	}
@@ -325,19 +315,30 @@ func TestCountTeamMembers(t *testing.T) {
 // (parameterized on db) so the team tests keep exercising the same
 // behaviour.
 
-// getTeamMemberByID mirrors the former Store.GetTeamMemberByID.
+// getTeamMemberByID fetches a membership by its own id, including removed
+// ones — the tests assert on post-removal state, which every orgs read
+// deliberately filters out. Raw SQL because that visibility is exactly what
+// the library declines to expose.
 func getTeamMemberByID(db *Store, id string) (*TeamMember, error) {
 	var m TeamMember
-	if err := db.crossTenant().First(&m, "id = ?", id).Error; err != nil {
+	var email, userID, invitedBy *string
+	row := db.DB().Raw(
+		`SELECT id, org_id, email, user_id, role, status, invited_by, accepted_at
+		   FROM memberships WHERE id = ?`, id).Row()
+	if err := row.Scan(&m.ID, &m.OrgID, &email, &userID, &m.Role, &m.Status, &invitedBy, &m.AcceptedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, gorm.ErrRecordNotFound
+		}
 		return nil, err
 	}
+	if email != nil {
+		m.Email = *email
+	}
+	if userID != nil {
+		m.UserID = *userID
+	}
+	if invitedBy != nil {
+		m.InvitedBy = *invitedBy
+	}
 	return &m, nil
-}
-
-// removeTeamMember mirrors the former Store.RemoveTeamMember.
-func removeTeamMember(db *Store, id string) error {
-	return db.crossTenant().Model(&TeamMember{}).Where("id = ?", id).Updates(map[string]any{
-		"status":     "removed",
-		"updated_at": time.Now(),
-	}).Error
 }

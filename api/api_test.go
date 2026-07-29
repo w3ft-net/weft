@@ -135,12 +135,9 @@ func TestAuth_Me(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
 
-	cust, _ := s.FindOrCreateCustomer("kevlar")
+	cust, _ := s.FindOrCreateOrg("kevlar")
 	user, _ := s.CreateUser(fmt.Sprintf("me-%d@example.com", os.Getpid()))
-	s.CreateTeamMember(&store.TeamMember{
-		ID: "tm-me", CustomerID: cust.ID, Email: user.Email,
-		UserID: &user.ID, Role: "owner", Status: "active",
-	})
+	s.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, store.RoleOwner)
 	jwt, _ := auth.Generate(user, "test-secret")
 
 	req := httptest.NewRequest("GET", "/api/auth/me", nil)
@@ -169,27 +166,24 @@ func TestWatchCreate_TierFromDB_NotJWT(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
 
-	cust, _ := s.FindOrCreateCustomer("tier-from-db")
+	cust, _ := s.FindOrCreateOrg("tier-from-db")
 	email := fmt.Sprintf("tdb-%d@example.com", os.Getpid())
 	user, _ := s.CreateUser(email)
 	now := time.Now()
 	verified := now
 	user.EmailVerifiedAt = &verified
 	markUserVerified(s, user.ID)
-	s.CreateTeamMember(&store.TeamMember{
-		ID: "tm-tdb-" + cust.Name, CustomerID: cust.ID, Email: user.Email,
-		UserID: &user.ID, Role: "owner", Status: "active",
-	})
+	s.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, store.RoleOwner)
 
 	// Subscription minted while the customer is on trial.
 	trialEnd := now.Add(14 * 24 * time.Hour)
 	s.CreateSubscription(&store.Subscription{
-		ID:         "trial-" + cust.Name,
-		CustomerID: cust.ID,
-		Tier:       string(store.TierTrial),
-		Status:     "active",
-		StartsAt:   now,
-		ExpiresAt:  &trialEnd,
+		ID:        "trial-" + cust.Name,
+		OrgID:     cust.ID,
+		Tier:      string(store.TierTrial),
+		Status:    "active",
+		StartsAt:  now,
+		ExpiresAt: &trialEnd,
 	})
 	jwt, err := auth.Generate(user, "test-secret")
 	if err != nil {
@@ -280,15 +274,12 @@ func TestAuth_UnverifiedUser_CannotCreateToken(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
 
-	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("unverified-%d", os.Getpid()))
+	cust, _ := s.FindOrCreateOrg(fmt.Sprintf("unverified-%d", os.Getpid()))
 	user, _ := s.CreateUser(fmt.Sprintf("unverified-%d@example.com", os.Getpid()))
 	// Owner membership so the isOwner check in handleCreateToken would
 	// otherwise pass — we want to be sure the 403 comes from the
 	// verification gate, not from permission.
-	s.CreateTeamMember(&store.TeamMember{
-		ID: "tm-unverified", CustomerID: cust.ID, Email: user.Email,
-		UserID: &user.ID, Role: "owner", Status: "active",
-	})
+	s.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, store.RoleOwner)
 	s.FindOrCreateNamespace(cust.ID, "default")
 	jwt, _ := auth.Generate(user, "test-secret")
 
@@ -312,12 +303,9 @@ func TestAuth_MarkVerified_UnlocksTokenCreation(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
 
-	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("verify-unlock-%d", os.Getpid()))
+	cust, _ := s.FindOrCreateOrg(fmt.Sprintf("verify-unlock-%d", os.Getpid()))
 	user, _ := s.CreateUser(fmt.Sprintf("verify-unlock-%d@example.com", os.Getpid()))
-	s.CreateTeamMember(&store.TeamMember{
-		ID: "tm-verify-unlock", CustomerID: cust.ID, Email: user.Email,
-		UserID: &user.ID, Role: "owner", Status: "active",
-	})
+	s.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, store.RoleOwner)
 	s.FindOrCreateNamespace(cust.ID, "default")
 
 	// Flip verified state, then reissue JWT.
@@ -341,7 +329,7 @@ func TestAuth_MarkVerified_UnlocksTokenCreation(t *testing.T) {
 func TestAuth_Sweep_DeletesExpiredUnverifiedOnly(t *testing.T) {
 	_, s := testServer(t)
 
-	if _, err := s.FindOrCreateCustomer(fmt.Sprintf("sweep-%d", os.Getpid())); err != nil {
+	if _, err := s.FindOrCreateOrg(fmt.Sprintf("sweep-%d", os.Getpid())); err != nil {
 		t.Fatal(err)
 	}
 	unverifiedEmail := fmt.Sprintf("sweep-unverified-%d@example.com", os.Getpid())
@@ -379,12 +367,9 @@ func TestGetFunction_ReturnsPlainSource(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
 
-	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("getfn-%d", os.Getpid()))
+	cust, _ := s.FindOrCreateOrg(fmt.Sprintf("getfn-%d", os.Getpid()))
 	user, _ := s.CreateVerifiedUser(fmt.Sprintf("getfn-%d@example.com", os.Getpid()))
-	s.CreateTeamMember(&store.TeamMember{
-		ID: fmt.Sprintf("tm-getfn-%d", os.Getpid()), CustomerID: cust.ID, Email: user.Email,
-		UserID: &user.ID, Role: "owner", Status: "active",
-	})
+	s.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, store.RoleOwner)
 	// GetByID hydrates user.CustomerName via the Customer join — auth.Generate
 	// reads it directly into the JWT's customer claim.
 	user, _ = s.GetUserByID(user.ID)
@@ -419,12 +404,9 @@ func TestNotifyConfig_PutAndGet(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
 
-	cust, _ := s.FindOrCreateCustomer(fmt.Sprintf("notify-%d", os.Getpid()))
+	cust, _ := s.FindOrCreateOrg(fmt.Sprintf("notify-%d", os.Getpid()))
 	user, _ := s.CreateVerifiedUser(fmt.Sprintf("notify-%d@example.com", os.Getpid()))
-	s.CreateTeamMember(&store.TeamMember{
-		ID: fmt.Sprintf("tm-notify-%d", os.Getpid()), CustomerID: cust.ID, Email: user.Email,
-		UserID: &user.ID, Role: "owner", Status: "active",
-	})
+	s.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, store.RoleOwner)
 	jwt, _ := auth.Generate(user, "test-secret")
 
 	// GET on an untouched customer returns empty yaml, not 404.
@@ -499,7 +481,7 @@ func TestOnboarding_StartTour_KeepsUserLoggedIn(t *testing.T) {
 	// Seed Loom (customer + namespace) so grantLoomMembership at signup
 	// has somewhere to land. In prod this is weft-demo-seed's job; here
 	// we set up just what the onboarding code reads.
-	loomCust, err := s.FindOrCreateCustomer(LoomCustomerSlug)
+	loomCust, err := s.FindOrCreateOrg(LoomCustomerSlug)
 	if err != nil {
 		t.Fatalf("seed loom customer: %v", err)
 	}

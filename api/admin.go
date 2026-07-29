@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -73,12 +72,12 @@ func (s *Server) handleAdminCreateCustomer(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "account already exists", http.StatusConflict)
 		return
 	}
-	if existing, _ := s.store.GetCustomerByName(customerName); existing != nil {
+	if existing, _ := s.store.GetOrgByName(customerName); existing != nil {
 		http.Error(w, "organization name already taken", http.StatusConflict)
 		return
 	}
 
-	cust, err := s.store.FindOrCreateCustomer(customerName)
+	cust, err := s.store.FindOrCreateOrg(customerName)
 	if err != nil {
 		log.Printf("admin: create customer %q: %v", customerName, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -93,19 +92,7 @@ func (s *Server) handleAdminCreateCustomer(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	now := time.Now()
-	if err := s.store.CreateTeamMember(&store.TeamMember{
-		ID:         uuid.New().String(),
-		CustomerID: cust.ID,
-		Email:      email,
-		UserID:     &user.ID,
-		Role:       "owner",
-		Status:     "active",
-		InvitedAt:  now,
-		AcceptedAt: &now,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-	}); err != nil {
+	if err := s.store.AddTeamMemberWithEmail(cust.ID, user.ID, email, store.RoleOwner); err != nil {
 		log.Printf("admin: create owner membership for %q: %v", email, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -126,7 +113,7 @@ func (s *Server) handleAdminCreateCustomer(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Land the owner in their new org on next request.
-	_ = s.store.UpdateUserLastActiveCustomer(user.ID, cust.ID)
+	_ = s.store.UpdateUserLastActiveOrg(user.ID, cust.ID)
 
 	// Magic link so the owner can log in. Best-effort email (dev mode has
 	// no EmailConfig); the URL is returned regardless so the operator can
@@ -152,7 +139,7 @@ func (s *Server) handleAdminCreateCustomer(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleAdminListCustomers(w http.ResponseWriter, r *http.Request) {
-	var customers []store.Customer
+	var customers []store.Organization
 	err := s.store.DB().Order("name").Find(&customers).Error
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -160,7 +147,7 @@ func (s *Server) handleAdminListCustomers(w http.ResponseWriter, r *http.Request
 	}
 
 	type result struct {
-		ID          uint   `json:"id"`
+		ID          string `json:"id"`
 		Name        string `json:"name"`
 		DisplayName string `json:"display_name"`
 		Tier        string `json:"tier"`
@@ -193,7 +180,7 @@ func (s *Server) handleAdminListCustomers(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleAdminGetCustomer(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	cust, err := s.store.GetCustomerByName(name)
+	cust, err := s.store.GetOrgByName(name)
 	if err != nil {
 		http.Error(w, "customer not found", http.StatusNotFound)
 		return
@@ -220,7 +207,7 @@ func (s *Server) handleAdminGetCustomer(w http.ResponseWriter, r *http.Request) 
 	}
 	team := make([]memberInfo, 0, len(members))
 	for _, m := range members {
-		team = append(team, memberInfo{Email: m.Email, Role: m.Role, Status: m.Status})
+		team = append(team, memberInfo{Email: m.Email, Role: string(m.Role), Status: string(m.Status)})
 	}
 
 	resp := map[string]any{
@@ -255,7 +242,7 @@ func (s *Server) handleAdminSetComp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	cust, err := s.store.GetCustomerByName(name)
+	cust, err := s.store.GetOrgByName(name)
 	if err != nil {
 		http.Error(w, "customer not found", http.StatusNotFound)
 		return
@@ -273,7 +260,7 @@ func (s *Server) handleAdminSetComp(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		if err := s.store.DB().WithContext(store.WithCustomer(context.Background(), cust.ID)).Model(&store.Subscription{}).
+		if err := s.store.DB().WithContext(store.WithOrg(context.Background(), cust.ID)).Model(&store.Subscription{}).
 			Where("status = 'active' AND comp_reason != ''").
 			Updates(map[string]any{
 				"status":     "cancelled",
@@ -296,7 +283,7 @@ func (s *Server) handleAdminSetTier(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tier required", http.StatusBadRequest)
 		return
 	}
-	cust, err := s.store.GetCustomerByName(name)
+	cust, err := s.store.GetOrgByName(name)
 	if err != nil {
 		http.Error(w, "customer not found", http.StatusNotFound)
 		return

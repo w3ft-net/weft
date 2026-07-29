@@ -129,17 +129,17 @@ func TestPlanRetention_EndToEnd(t *testing.T) {
 	ss := ShardStore{db}
 
 	// A paying swatch customer (30d) and a customer with NO subscription.
-	paying, err := db.FindOrCreateCustomer("paying-co")
+	paying, err := db.FindOrCreateOrg("paying-co")
 	if err != nil {
 		t.Fatalf("customer: %v", err)
 	}
 	if err := db.CreateSubscription(&store.Subscription{
-		ID: "sub-paying", CustomerID: paying.ID, Tier: "swatch",
+		ID: "sub-paying", OrgID: paying.ID, Tier: "swatch",
 		Status: "active", StartsAt: janitorNow.Add(-days(60)), CreatedAt: janitorNow.Add(-days(60)),
 	}); err != nil {
 		t.Fatalf("subscription: %v", err)
 	}
-	if _, err := db.FindOrCreateCustomer("unmapped-co"); err != nil {
+	if _, err := db.FindOrCreateOrg("unmapped-co"); err != nil {
 		t.Fatalf("customer: %v", err)
 	}
 

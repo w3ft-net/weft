@@ -49,7 +49,7 @@ func (s *Server) handleAgentSample(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ns, err := s.store.GetNamespace(agent.CustomerID, agent.Namespace)
+	ns, err := s.store.GetNamespace(agent.OrgID, agent.Namespace)
 	if err != nil {
 		http.Error(w, "namespace not found", http.StatusNotFound)
 		return
@@ -88,7 +88,7 @@ func (s *Server) handleAgentSourceStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	lg, err := s.store.FindLogGroup(agent.CustomerID, agent.Namespace, app)
+	lg, err := s.store.FindLogGroup(agent.OrgID, agent.Namespace, app)
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -130,7 +130,7 @@ func (s *Server) handleAgentSourceStatus(w http.ResponseWriter, r *http.Request)
 func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 
-	customer, err := s.store.GetCustomerByName(session.ActiveCustomerName)
+	customer, err := s.store.GetOrgByName(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "customer not found", http.StatusNotFound)
 		return
@@ -141,11 +141,11 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 	q := s.store.DB().
 		Table("log_groups").
 		Select(`log_groups.*,
-		        customers.name as customer_name,
+		        organizations.name as customer_name,
 		        namespaces.name as namespace_name`).
 		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
-		Joins("JOIN customers ON namespaces.customer_id = customers.id").
-		Where("log_groups.status IN ? AND customers.id = ?",
+		Joins("JOIN organizations ON namespaces.org_id = organizations.id").
+		Where("log_groups.status IN ? AND organizations.id = ?",
 			[]store.LogGroupStatus{store.StatusSampling, store.StatusPending}, customer.ID)
 	if namespace != "" {
 		q = q.Where("namespaces.name = ?", namespace)
@@ -215,7 +215,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	customer, err := s.store.GetCustomerByName(session.ActiveCustomerName)
+	customer, err := s.store.GetOrgByName(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "customer not found", http.StatusNotFound)
 		return
@@ -326,7 +326,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 // level is trivial.
 func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	customer, err := s.store.GetCustomerByName(session.ActiveCustomerName)
+	customer, err := s.store.GetOrgByName(session.ActiveCustomerName)
 	if err != nil {
 		http.Error(w, "customer not found", http.StatusNotFound)
 		return
@@ -549,7 +549,7 @@ func (s *Server) handleResampleSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ns, err := s.store.GetNamespace(session.ActiveCustomerID, namespace)
+	ns, err := s.store.GetNamespace(session.ActiveOrgID, namespace)
 	if err != nil {
 		http.Error(w, "namespace not found", http.StatusNotFound)
 		return
@@ -598,7 +598,7 @@ func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lg, err := s.store.FindLogGroup(session.ActiveCustomerID, namespace, app)
+	lg, err := s.store.FindLogGroup(session.ActiveOrgID, namespace, app)
 	if err != nil {
 		log.Printf("source schema %s/%s: FindLogGroup: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -664,7 +664,7 @@ func (s *Server) authorizeSourceEdit(session *auth.Session, namespace string) er
 	if session.IsOwner {
 		return nil
 	}
-	ns, err := s.store.GetNamespace(session.ActiveCustomerID, namespace)
+	ns, err := s.store.GetNamespace(session.ActiveOrgID, namespace)
 	if err != nil {
 		return errForbidden("namespace not found")
 	}

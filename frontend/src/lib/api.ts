@@ -225,9 +225,9 @@ export function resendVerification(): Promise<{ status: string }> {
 
 // Types
 export interface OrgMembership {
-  id: number
+  id: string    // org UUID
   name: string
-  role: string  // "owner" or "member"
+  role: string  // "admin" (the org's owner) or "member"
   active: boolean
 }
 
@@ -383,7 +383,7 @@ export interface TeamMember {
   CustomerName: string
   Email: string
   UserID: string | null
-  Role: 'owner' | 'member'
+  Role: 'admin' | 'member'   // 'admin' is the org's owner
   Status: 'pending' | 'active' | 'removed'
   InvitedAt: string
   AcceptedAt: string | null
@@ -804,7 +804,7 @@ export function getDashboard(name: string): Promise<DashboardResponse> {
 // ── Admin API ─────────────────────────────────────────────────────────────
 
 export interface AdminCustomer {
-  id: number
+  id: string    // org UUID
   name: string
   display_name: string
   tier: string
@@ -815,7 +815,7 @@ export interface AdminCustomer {
 }
 
 export interface AdminCustomerDetail {
-  id: number
+  id: string    // org UUID
   name: string
   display_name: string
   namespaces: { id: number; name: string }[]

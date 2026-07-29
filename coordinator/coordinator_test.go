@@ -73,12 +73,19 @@ func stampShardServicesFromApps(t testing.TB, c *Coordinator, e *logdb.Shard, ap
 	// These fixtures create exactly one customer (testQueryStore takes a
 	// single name). Resolve it so namespace lookups are customer-scoped
 	// without threading the name through every call site.
-	var custs []store.Customer
+	var custs []store.Organization
 	if err := c.Store.DB().Find(&custs).Error; err != nil {
 		t.Fatalf("stampShardServicesFromApps: list customers: %v", err)
 	}
 	if len(custs) != 1 {
-		return // ambiguous / no customer — leave routing to the nsID==0 path
+		// Silently returning here routes every later assertion into "no
+		// matching shards", which reads like a routing bug rather than a
+		// fixture that never got a customer. Say which it is.
+		names := make([]string, len(custs))
+		for i, c := range custs {
+			names[i] = c.Name
+		}
+		t.Fatalf("stampShardServicesFromApps: want exactly 1 org in the fixture DB, got %d %v", len(custs), names)
 	}
 	custID := custs[0].ID
 
@@ -636,7 +643,7 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 		DirectShardSQL: "SELECT raw, ts FROM logs WHERE customer = 'kevlar' ORDER BY ts",
 	}
 
-	_, err = c.executeQuery(plan, tr, "kevlar", 0, "", nil)
+	_, err = c.executeQuery(plan, tr, "kevlar", "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

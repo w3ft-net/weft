@@ -13,7 +13,7 @@ import (
 // Only the most recent active one matters for access control.
 type Subscription struct {
 	ID                   string     `gorm:"primaryKey"`
-	CustomerID           uint       `gorm:"not null;index"` // FK → customers.id
+	OrgID                string     `gorm:"not null;index"` // FK → organizations.id
 	Tier                 string     `gorm:"not null"`       // trial, swatch, yard, bolt
 	Status               string     `gorm:"not null"`       // active, cancelled
 	StartsAt             time.Time  `gorm:"not null"`
@@ -51,9 +51,9 @@ func (sub *Subscription) IsActive() bool {
 
 // ActiveSubscription returns the most recent active subscription for a
 // customer, or nil if none exists or the subscription has expired.
-func (s *Store) ActiveSubscription(customerID uint) (*Subscription, error) {
+func (s *Store) ActiveSubscription(orgID string) (*Subscription, error) {
 	var sub Subscription
-	err := s.scoped(customerID).Where("status = 'active'").
+	err := s.scoped(orgID).Where("status = 'active'").
 		Order("created_at DESC").First(&sub).Error
 	if err != nil {
 		return nil, err
@@ -68,7 +68,7 @@ func (s *Store) ActiveSubscription(customerID uint) (*Subscription, error) {
 // for every live customer that has one, keyed by the name as it appears
 // in logs.customer (so the retention janitor can resolve a shard's
 // per-customer stats directly). When a customer has several active
-// subscriptions the most recent wins, matching TierForCustomer.
+// subscriptions the most recent wins, matching TierForOrg.
 //
 // System-wide and unscoped on purpose — the janitor reasons across all
 // tenants. A customer with no active subscription is simply absent from
@@ -83,8 +83,8 @@ func (s *Store) ActiveCustomerTiers() (map[string]Tier, error) {
 	var rows []row
 	err := s.db.Raw(`
 		SELECT DISTINCT ON (c.id) c.name AS name, sub.tier AS tier
-		FROM customers c
-		JOIN subscriptions sub ON sub.customer_id = c.id
+		FROM organizations c
+		JOIN subscriptions sub ON sub.org_id = c.id
 		WHERE sub.status = 'active'
 		  AND (sub.expires_at IS NULL OR sub.expires_at > now())
 		  AND c.deleted_at IS NULL
@@ -101,28 +101,28 @@ func (s *Store) ActiveCustomerTiers() (map[string]Tier, error) {
 
 // CreateSubscription inserts a new subscription record.
 func (s *Store) CreateSubscription(sub *Subscription) error {
-	return s.scoped(sub.CustomerID).Create(sub).Error
+	return s.scoped(sub.OrgID).Create(sub).Error
 }
 
 // SeedDevSubscription ensures an active dev subscription exists. Idempotent.
 // The row id is namespaced per customer so seeding multiple customers in
 // the same DB doesn't collide on the subscriptions primary key.
-func (s *Store) SeedDevSubscription(customerID uint) {
-	sub, _ := s.ActiveSubscription(customerID)
+func (s *Store) SeedDevSubscription(orgID string) {
+	sub, _ := s.ActiveSubscription(orgID)
 	if sub != nil {
 		return
 	}
 	now := time.Now()
-	if err := s.scoped(customerID).Create(&Subscription{
-		ID:         fmt.Sprintf("dev-sub-%d", customerID),
-		CustomerID: customerID,
-		Tier:       "swatch",
-		Status:     "active",
-		StartsAt:   now,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+	if err := s.scoped(orgID).Create(&Subscription{
+		ID:        fmt.Sprintf("dev-sub-%s", orgID),
+		OrgID:     orgID,
+		Tier:      "swatch",
+		Status:    "active",
+		StartsAt:  now,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}).Error; err != nil {
-		log.Printf("store: SeedDevSubscription(%d): %v", customerID, err)
+		log.Printf("store: SeedDevSubscription(%s): %v", orgID, err)
 	}
 }
 
@@ -131,15 +131,15 @@ func (s *Store) SeedDevSubscription(customerID uint) {
 // re-granting the same (customer, tier, reason) is a no-op when the
 // active sub already matches; otherwise it cancels-and-replaces.
 //
-// Customer is the surrogate id (FK → customers.id). Reason must be
+// Organization is the surrogate id (FK → organizations.id). Reason must be
 // non-empty so it can be distinguished from a paid sub.
-func (s *Store) GrantCompSubscription(customerID uint, tier, reason string) error {
+func (s *Store) GrantCompSubscription(orgID string, tier, reason string) error {
 	if reason == "" {
 		return fmt.Errorf("comp grant requires a non-empty reason")
 	}
 
 	now := time.Now()
-	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
+	return s.scoped(orgID).Transaction(func(tx *gorm.DB) error {
 		// Idempotent: if the most recent active sub already matches,
 		// skip the cancel+insert.
 		var current Subscription
@@ -160,8 +160,8 @@ func (s *Store) GrantCompSubscription(customerID uint, tier, reason string) erro
 		}
 
 		return tx.Create(&Subscription{
-			ID:         fmt.Sprintf("comp-%d-%s", customerID, now.Format("20060102150405")),
-			CustomerID: customerID,
+			ID:         fmt.Sprintf("comp-%s-%s", orgID, now.Format("20060102150405")),
+			OrgID:      orgID,
 			Tier:       tier,
 			Status:     "active",
 			StartsAt:   now,

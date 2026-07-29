@@ -25,7 +25,7 @@ func cronYAML() string {
 
 func TestOrgPerms_BinMount_WriteFile(t *testing.T) {
 	db := testStore(t)
-	cust, _ := db.FindOrCreateCustomer(fmt.Sprintf("perm-bin-%d", os.Getpid()))
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("perm-bin-%d", os.Getpid()))
 
 	cases := []orgPermCase{
 		{"member-no-flag", mounts.OrgPerms{}, true},
@@ -45,7 +45,7 @@ func TestOrgPerms_BinMount_WriteFile(t *testing.T) {
 
 func TestOrgPerms_CronMount_WriteFile(t *testing.T) {
 	db := testStore(t)
-	cust, _ := db.FindOrCreateCustomer(fmt.Sprintf("perm-cron-%d", os.Getpid()))
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("perm-cron-%d", os.Getpid()))
 
 	cases := []orgPermCase{
 		{"member-no-flag", mounts.OrgPerms{}, true},
@@ -65,7 +65,7 @@ func TestOrgPerms_CronMount_WriteFile(t *testing.T) {
 
 func TestOrgPerms_EtcMount_WriteFile(t *testing.T) {
 	db := testStore(t)
-	cust, _ := db.FindOrCreateCustomer(fmt.Sprintf("perm-etc-%d", os.Getpid()))
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("perm-etc-%d", os.Getpid()))
 
 	cases := []orgPermCase{
 		{"member-no-flag", mounts.OrgPerms{}, true},

@@ -13,6 +13,9 @@ import (
 	"github.com/graybeardcorp/weft/store"
 )
 
+// testOrgID is a fixed org UUID for fixtures that never touch the database.
+const testOrgID = "00000000-0000-0000-0000-0000000000a1"
+
 const testSecret = "unit-test-secret"
 
 func signUserJWT(t *testing.T, _ string) string {
@@ -38,7 +41,7 @@ func fakeBuilder(customer string) SessionBuilder {
 			UserID:             userID,
 			Email:              userID + "@example.com",
 			ActiveCustomerName: customer,
-			ActiveCustomerID:   1,
+			ActiveOrgID:        testOrgID,
 		}, nil
 	}
 }

@@ -20,7 +20,7 @@ import (
 // Narrowed to an interface so tests can intercept Send without a live
 // HTTP endpoint. The concrete *Notifier satisfies it.
 type NotifyDispatcher interface {
-	Send(customerID uint, aliasName, watchName, body string) error
+	Send(orgID string, aliasName, watchName, body string) error
 }
 
 // AlertContext provides the alert command with access to result history,
@@ -31,7 +31,7 @@ type AlertContext struct {
 	Store       *store.Store
 	Watch       *store.CronWatch
 	Notifier    NotifyDispatcher
-	CustomerID  uint
+	OrgID       string
 	Interactive bool
 }
 
@@ -146,8 +146,8 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 	// Window aggregates (per-tag when we have one).
 	var stats store.CronAggStats
 	if parsed.Duration > 0 && ctx.Store != nil && ctx.Watch != nil {
-		stats, _ = func(customerID, cronWatchID uint, since time.Time, tag string) (store.CronAggStats, error) {
-			since = store.ClampRetention(ctx.Store.TierForCustomer(customerID), since)
+		stats, _ = func(orgID string, cronWatchID uint, since time.Time, tag string) (store.CronAggStats, error) {
+			since = store.ClampRetention(ctx.Store.TierForOrg(orgID), since)
 			gran := store.PickGranularity(time.Since(since))
 
 			var row struct {
@@ -172,7 +172,7 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 			}
 			err := ctx.Store.DB().Raw(query, args...).Scan(&row).Error
 			return store.CronAggStats{Avg: row.Avg, Min: row.Min, Max: row.Max, Samples: row.Samples}, err
-		}(ctx.CustomerID, ctx.Watch.ID, time.Now().Add(-parsed.Duration), r.tag)
+		}(ctx.OrgID, ctx.Watch.ID, time.Now().Add(-parsed.Duration), r.tag)
 	}
 
 	// Previous tick's value for this same tag (changed/rising/falling).
@@ -269,8 +269,8 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 		if parsed.Duration == 0 {
 			triggered = r.value == ""
 		} else if ctx.Store != nil && ctx.Watch != nil {
-			n, _ := func(customerID, cronWatchID uint, since time.Time, tag string) (int, error) {
-				since = store.ClampRetention(ctx.Store.TierForCustomer(customerID), since)
+			n, _ := func(orgID string, cronWatchID uint, since time.Time, tag string) (int, error) {
+				since = store.ClampRetention(ctx.Store.TierForOrg(orgID), since)
 				var n int64
 				query := `
 					SELECT COUNT(*) FROM cron_results
@@ -282,7 +282,7 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 				}
 				err := ctx.Store.DB().Raw(query, args...).Scan(&n).Error
 				return int(n), err
-			}(ctx.CustomerID, ctx.Watch.ID, time.Now().Add(-parsed.Duration), r.tag)
+			}(ctx.OrgID, ctx.Watch.ID, time.Now().Add(-parsed.Duration), r.tag)
 			triggered = n == 0
 		} else {
 			triggered = r.value == ""
@@ -363,8 +363,8 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 		// stderr), not the raw triggering row — Slack/PagerDuty users
 		// want "watchname[tag]: 5.12 > 5.00", not "5.12 disk" on its own.
 		body := truncateAlertBody(msg)
-		watchName, customerID := ctx.dispatchIdentity(r.tag)
-		if err := ctx.Notifier.Send(customerID, parsed.Notify, watchName, body); err != nil {
+		watchName, orgID := ctx.dispatchIdentity(r.tag)
+		if err := ctx.Notifier.Send(orgID, parsed.Notify, watchName, body); err != nil {
 			fmt.Fprintf(stderr, "alert: dispatch to %q failed: %v\n", parsed.Notify, err)
 			return 1
 		}
@@ -374,20 +374,20 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 	return 0
 }
 
-// dispatchIdentity returns the (watchName, customerID) used by the Notifier
+// dispatchIdentity returns the (watchName, orgID) used by the Notifier
 // for dedup-key construction. For ad-hoc shell runs a unique synthetic name
 // ensures every invocation creates its own PagerDuty incident. When a tag
 // is set, it's appended to the watch name so PagerDuty sees per-tag
 // incidents collapse into per-tag dedup keys, not one watch-wide key.
-func (ctx *AlertContext) dispatchIdentity(tag string) (string, uint) {
+func (ctx *AlertContext) dispatchIdentity(tag string) (string, string) {
 	if ctx.Watch != nil {
 		name := ctx.Watch.Name
 		if tag != "" {
 			name = name + "[" + tag + "]"
 		}
-		return name, ctx.Watch.CustomerID
+		return name, ctx.Watch.OrgID
 	}
-	return fmt.Sprintf("adhoc-%d", time.Now().UnixNano()), ctx.CustomerID
+	return fmt.Sprintf("adhoc-%d", time.Now().UnixNano()), ctx.OrgID
 }
 
 func truncateAlertBody(s string) string {
@@ -434,8 +434,8 @@ func evaluateIfMode(triggered bool, parsed *alert.Args, condStr string, ctx *Ale
 
 	if shouldDispatch && parsed.Notify != "" && ctx.Notifier != nil {
 		body := truncateAlertBody(msg)
-		watchName, customerID := ctx.dispatchIdentity("")
-		if err := ctx.Notifier.Send(customerID, parsed.Notify, watchName, body); err != nil {
+		watchName, orgID := ctx.dispatchIdentity("")
+		if err := ctx.Notifier.Send(orgID, parsed.Notify, watchName, body); err != nil {
 			fmt.Fprintf(stderr, "alert: dispatch to %q failed: %v\n", parsed.Notify, err)
 			return 1
 		}

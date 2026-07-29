@@ -248,7 +248,7 @@ func (s *Server) ListServices(ctx context.Context, _ *pb.ListServicesRequest) (*
 
 	// Fall back to DB namespaces for this customer.
 	if customer != "" {
-		cust, err := s.Store.GetCustomerByName(customer)
+		cust, err := s.Store.GetOrgByName(customer)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "resolve customer %q: %v", customer, err)
 		}
@@ -285,7 +285,7 @@ func (s *Server) SampleCloudWatchSource(ctx context.Context, req *pb.SampleCloud
 	if req.Namespace == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "namespace required")
 	}
-	customer, err := s.Store.GetCustomerByName(callerCust)
+	customer, err := s.Store.GetOrgByName(callerCust)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "customer %q not found", callerCust)
 	}
@@ -331,7 +331,7 @@ func (s *Server) AddSource(ctx context.Context, req *pb.AddSourceRequest) (*pb.A
 	if err != nil {
 		return nil, err
 	}
-	customer, err := s.Store.GetCustomerByName(callerCust)
+	customer, err := s.Store.GetOrgByName(callerCust)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "customer %q not found", callerCust)
 	}
@@ -341,7 +341,7 @@ func (s *Server) AddSource(ctx context.Context, req *pb.AddSourceRequest) (*pb.A
 		return nil, status.Errorf(codes.NotFound, "namespace %q not found — create it first", req.Namespace)
 	}
 
-	account := store.AWSAccount{CustomerID: customer.ID, AccountID: req.AwsAccountId}
+	account := store.AWSAccount{OrgID: customer.ID, AccountID: req.AwsAccountId}
 	if err := s.Store.DB().
 		Where(&account).
 		Assign(store.AWSAccount{RoleARN: req.RoleArn, ExternalID: req.ExternalId}).
@@ -403,7 +403,7 @@ func (s *Server) RemoveSource(ctx context.Context, req *pb.RemoveSourceRequest) 
 	if err != nil {
 		return nil, err
 	}
-	customer, err := s.Store.GetCustomerByName(callerCust)
+	customer, err := s.Store.GetOrgByName(callerCust)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "customer %q not found", callerCust)
 	}
@@ -431,24 +431,24 @@ func (s *Server) Authenticate(_ context.Context, req *pb.AuthenticateRequest) (*
 	}
 
 	// Check for an active subscription.
-	sub, err := s.Store.ActiveSubscription(auth.Customer.ID)
+	sub, err := s.Store.ActiveSubscription(auth.Organization.ID)
 	if err != nil || sub == nil {
-		log.Printf("auth: customer=%s denied (no active subscription)", auth.Customer.Name)
+		log.Printf("auth: customer=%s denied (no active subscription)", auth.Organization.Name)
 		return nil, status.Errorf(codes.PermissionDenied,
 			"no active subscription — upgrade at w3ft.net/dashboard")
 	}
 
-	log.Printf("auth: customer=%s namespace=%s tier=%s", auth.Customer.Name, auth.Namespace, sub.Tier)
+	log.Printf("auth: customer=%s namespace=%s tier=%s", auth.Organization.Name, auth.Namespace, sub.Tier)
 
 	// If the agent reported a metrics config, persist it.
 	if mc := req.MetricsConfig; mc != nil {
 		if err := s.Store.UpdateAgentMetricsConfig(req.Token, mc.Enabled, mc.Interval, mc.Collectors); err != nil {
-			log.Printf("auth: failed to save metrics config for %s: %v", auth.Customer.Name, err)
+			log.Printf("auth: failed to save metrics config for %s: %v", auth.Organization.Name, err)
 		}
 	}
 
 	return &pb.AuthenticateResponse{
-		Customer:  auth.Customer.Name,
+		Customer:  auth.Organization.Name,
 		Namespace: auth.Namespace,
 	}, nil
 }
@@ -458,7 +458,7 @@ func (s *Server) CreateToken(ctx context.Context, req *pb.CreateTokenRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	customer, err := s.Store.GetCustomerByName(callerCust)
+	customer, err := s.Store.GetOrgByName(callerCust)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "customer %q not found", callerCust)
 	}
@@ -487,7 +487,7 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 	if err != nil {
 		return err
 	}
-	authCustomer := auth.Customer.Name
+	authCustomer := auth.Organization.Name
 	authNamespace := auth.Namespace
 	authEnv := auth.Env
 
@@ -688,8 +688,8 @@ recvLoop:
 				// SeenServices.Add returns true only once per (customer,
 				// service) over the coordinator's lifetime.
 				if s.Coord.Provisioner != nil {
-					if ns, err := s.Store.GetNamespace(auth.Customer.ID, auth.Namespace); err != nil {
-						log.Printf("ingest-stream: onboard %q: namespace %s/%s: %v", row.Service, auth.Customer.Name, auth.Namespace, err)
+					if ns, err := s.Store.GetNamespace(auth.Organization.ID, auth.Namespace); err != nil {
+						log.Printf("ingest-stream: onboard %q: namespace %s/%s: %v", row.Service, auth.Organization.Name, auth.Namespace, err)
 					} else if err := s.Coord.Provisioner.OnboardService(ns.ID, row.Service); err != nil {
 						log.Printf("ingest-stream: OnboardService %d/%q: %v", ns.ID, row.Service, err)
 					}
@@ -737,7 +737,7 @@ func (s *Server) authenticateStream(ctx context.Context) (*store.AgentAuthResult
 	// auth is nil when the token doesn't exist (e.g. after customer
 	// deletion cascaded the token away). Customer.ID == 0 guards against
 	// any lingering orphan rows from pre-cascade deletions.
-	if auth == nil || auth.Customer == nil || auth.Customer.ID == 0 || auth.Customer.Name == "" {
+	if auth == nil || auth.Organization == nil || auth.Organization.ID == "" || auth.Organization.Name == "" {
 		return nil, status.Errorf(codes.Unauthenticated, "invalid or revoked token")
 	}
 	return auth, nil
@@ -800,24 +800,24 @@ func (s *Server) GetUsage(ctx context.Context, req *pb.GetUsageRequest) (*pb.Get
 
 // ── Shell functions (/bin/) ─────────────────────────────────
 
-// resolveCallerCustomerID returns the DB id of the customer the
+// resolveCallerOrgID returns the DB id of the customer the
 // authenticated caller belongs to. Ignores any customer field on the
 // request — the verified principal from the JWT interceptor is the sole
 // source of truth for identity.
-func (s *Server) resolveCallerCustomerID(ctx context.Context) (uint, error) {
+func (s *Server) resolveCallerOrgID(ctx context.Context) (string, error) {
 	name, err := callerCustomer(ctx)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
-	c, err := s.Store.GetCustomerByName(name)
+	c, err := s.Store.GetOrgByName(name)
 	if err != nil {
-		return 0, status.Errorf(codes.NotFound, "customer %q not found", name)
+		return "", status.Errorf(codes.NotFound, "customer %q not found", name)
 	}
 	return c.ID, nil
 }
 
 func (s *Server) SaveFunction(ctx context.Context, req *pb.SaveFunctionRequest) (*pb.SaveFunctionResponse, error) {
-	custID, err := s.resolveCallerCustomerID(ctx)
+	custID, err := s.resolveCallerOrgID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -829,7 +829,7 @@ func (s *Server) SaveFunction(ctx context.Context, req *pb.SaveFunctionRequest) 
 }
 
 func (s *Server) GetFunction(ctx context.Context, req *pb.GetFunctionRequest) (*pb.GetFunctionResponse, error) {
-	custID, err := s.resolveCallerCustomerID(ctx)
+	custID, err := s.resolveCallerOrgID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -841,7 +841,7 @@ func (s *Server) GetFunction(ctx context.Context, req *pb.GetFunctionRequest) (*
 }
 
 func (s *Server) ListFunctions(ctx context.Context, req *pb.ListFunctionsRequest) (*pb.ListFunctionsResponse, error) {
-	custID, err := s.resolveCallerCustomerID(ctx)
+	custID, err := s.resolveCallerOrgID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -857,7 +857,7 @@ func (s *Server) ListFunctions(ctx context.Context, req *pb.ListFunctionsRequest
 }
 
 func (s *Server) DeleteFunction(ctx context.Context, req *pb.DeleteFunctionRequest) (*pb.DeleteFunctionResponse, error) {
-	custID, err := s.resolveCallerCustomerID(ctx)
+	custID, err := s.resolveCallerOrgID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -870,7 +870,7 @@ func (s *Server) DeleteFunction(ctx context.Context, req *pb.DeleteFunctionReque
 // ── Cron watches (/cron.d/) ─────────────────────────────────
 
 func (s *Server) SaveWatch(ctx context.Context, req *pb.SaveWatchRequest) (*pb.SaveWatchResponse, error) {
-	custID, err := s.resolveCallerCustomerID(ctx)
+	custID, err := s.resolveCallerOrgID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -878,9 +878,9 @@ func (s *Server) SaveWatch(ctx context.Context, req *pb.SaveWatchRequest) (*pb.S
 	// On a save-time race where the customer was deleted between auth
 	// and here, skip lowering rather than fail the save.
 	var loweredJSON []byte
-	if cust, err := s.Store.GetCustomerByID(custID); err == nil && cust != nil {
-		resolver := storeBinResolver{store: s.Store, customerID: custID}
-		tier := string(s.Store.TierForCustomer(custID))
+	if cust, err := s.Store.GetOrgByID(custID); err == nil && cust != nil {
+		resolver := storeBinResolver{store: s.Store, orgID: custID}
+		tier := string(s.Store.TierForOrg(custID))
 		loweredJSON = planner.LowerForStorage(req.Pipeline, cust.Name, tier, resolver)
 	}
 	if err := s.Store.SaveCronWatch(custID, callerUserID(ctx), req.Name, req.Schedule, req.Pipeline, loweredJSON); err != nil {
@@ -895,12 +895,12 @@ func (s *Server) SaveWatch(ctx context.Context, req *pb.SaveWatchRequest) (*pb.S
 // because the two save paths sit in different packages and the type
 // is genuinely tiny.
 type storeBinResolver struct {
-	store      *store.Store
-	customerID uint
+	store *store.Store
+	orgID string
 }
 
 func (r storeBinResolver) Source(name string) (string, string, bool) {
-	fn, err := r.store.GetShellFunction(r.customerID, name)
+	fn, err := r.store.GetShellFunction(r.orgID, name)
 	if err != nil || fn == nil {
 		return "", "", false
 	}
@@ -908,7 +908,7 @@ func (r storeBinResolver) Source(name string) (string, string, bool) {
 }
 
 func (s *Server) GetWatch(ctx context.Context, req *pb.GetWatchRequest) (*pb.GetWatchResponse, error) {
-	custID, err := s.resolveCallerCustomerID(ctx)
+	custID, err := s.resolveCallerOrgID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -925,7 +925,7 @@ func (s *Server) GetWatch(ctx context.Context, req *pb.GetWatchRequest) (*pb.Get
 }
 
 func (s *Server) ListWatches(ctx context.Context, req *pb.ListWatchesRequest) (*pb.ListWatchesResponse, error) {
-	custID, err := s.resolveCallerCustomerID(ctx)
+	custID, err := s.resolveCallerOrgID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -941,7 +941,7 @@ func (s *Server) ListWatches(ctx context.Context, req *pb.ListWatchesRequest) (*
 }
 
 func (s *Server) GetWatchResults(ctx context.Context, req *pb.GetWatchResultsRequest) (*pb.GetWatchResultsResponse, error) {
-	custID, err := s.resolveCallerCustomerID(ctx)
+	custID, err := s.resolveCallerOrgID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -971,7 +971,7 @@ func (s *Server) GetWatchResults(ctx context.Context, req *pb.GetWatchResultsReq
 }
 
 func (s *Server) DeleteWatch(ctx context.Context, req *pb.DeleteWatchRequest) (*pb.DeleteWatchResponse, error) {
-	custID, err := s.resolveCallerCustomerID(ctx)
+	custID, err := s.resolveCallerOrgID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1079,7 +1079,7 @@ func (s *Server) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest) (*
 	sampleJSON, _ := json.Marshal(req.Lines)
 	detectionJSON, _ := json.Marshal(detection)
 
-	ns, err := s.Store.GetNamespace(auth.Customer.ID, auth.Namespace)
+	ns, err := s.Store.GetNamespace(auth.Organization.ID, auth.Namespace)
 	if err != nil {
 		return nil, fmt.Errorf("namespace: %w", err)
 	}
@@ -1106,7 +1106,7 @@ func (s *Server) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest) (*
 	if req.Partial {
 		respStatus = "sampling"
 	}
-	log.Printf("sample: customer=%s namespace=%s app=%s lines=%d partial=%t", auth.Customer.Name, auth.Namespace, req.Service, len(req.Lines), req.Partial)
+	log.Printf("sample: customer=%s namespace=%s app=%s lines=%d partial=%t", auth.Organization.Name, auth.Namespace, req.Service, len(req.Lines), req.Partial)
 	return &pb.SubmitSampleResponse{Status: respStatus}, nil
 }
 
@@ -1121,7 +1121,7 @@ func (s *Server) GetSourceStatus(_ context.Context, req *pb.GetSourceStatusReque
 		return nil, status.Errorf(codes.InvalidArgument, "app required")
 	}
 
-	lg, err := s.Store.FindLogGroup(auth.Customer.ID, auth.Namespace, req.Service)
+	lg, err := s.Store.FindLogGroup(auth.Organization.ID, auth.Namespace, req.Service)
 	if err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}

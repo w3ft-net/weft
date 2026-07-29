@@ -13,7 +13,7 @@ import (
 func TestRecordAgentVersion(t *testing.T) {
 	db := testOpen(t)
 
-	cust, err := db.FindOrCreateCustomer("agent-version-test")
+	cust, err := db.FindOrCreateOrg("agent-version-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestRecordAgentVersion(t *testing.T) {
 // stale row sat in the table.
 func TestAgentsAtOrBelow_LookbackWindow(t *testing.T) {
 	db := testOpen(t)
-	cust, err := db.FindOrCreateCustomer("lookback-test")
+	cust, err := db.FindOrCreateOrg("lookback-test")
 	if err != nil {
 		t.Fatal(err)
 	}

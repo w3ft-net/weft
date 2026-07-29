@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/graybeardcorp/saaskit/orgs"
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/coordinator/onboarding"
 	"github.com/graybeardcorp/weft/store"
@@ -70,7 +70,7 @@ func nextOnboardingStep(current string) string {
 // modal will just point at an org they can't switch into. Better
 // than failing the signup outright.
 func (s *Server) grantLoomMembership(userID, email string) error {
-	cust, err := s.store.GetCustomerByName(LoomCustomerSlug)
+	cust, err := s.store.GetOrgByName(LoomCustomerSlug)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			log.Printf("onboarding: Loom customer not seeded; skipping membership grant for %s", email)
@@ -90,18 +90,7 @@ func (s *Server) grantLoomMembership(userID, email string) error {
 		}
 	}
 
-	now := time.Now()
-	if err := s.store.CreateTeamMember(&store.TeamMember{
-		ID:         uuid.New().String(),
-		CustomerID: cust.ID,
-		Email:      email,
-		UserID:     &userID,
-		Role:       "member",
-		Status:     "active",
-		InvitedAt:  now,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-	}); err != nil {
+	if err := s.store.AddTeamMemberWithEmail(cust.ID, userID, email, orgs.RoleMember); err != nil {
 		return err
 	}
 	if ns != nil {
@@ -122,7 +111,7 @@ func (s *Server) grantLoomMembership(userID, email string) error {
 // transitions to 'done'. Idempotent — re-running on an already-
 // graduated user is a no-op.
 func (s *Server) graduateOnboarding(userID string) error {
-	cust, err := s.store.GetCustomerByName(LoomCustomerSlug)
+	cust, err := s.store.GetOrgByName(LoomCustomerSlug)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil // Loom wasn't seeded; nothing to revoke
@@ -130,7 +119,7 @@ func (s *Server) graduateOnboarding(userID string) error {
 		return err
 	}
 
-	if err := s.store.DB().WithContext(store.WithCustomer(context.Background(), cust.ID)).Model(&store.TeamMember{}).
+	if err := s.store.DB().WithContext(store.WithOrg(context.Background(), cust.ID)).Model(&store.TeamMember{}).
 		Where("user_id = ?", userID).
 		Updates(map[string]any{
 			"status":     "removed",
@@ -142,9 +131,9 @@ func (s *Server) graduateOnboarding(userID string) error {
 	// Find the user's home org (oldest remaining active membership)
 	// and pin it as last_active so the next request lands them
 	// somewhere coherent rather than 403'ing.
-	memberships, err := s.store.ListUserMemberships(userID)
-	if err == nil && len(memberships) > 0 {
-		_ = s.store.UpdateUserLastActiveCustomer(userID, memberships[0].CustomerID)
+	userOrgs, err := s.store.ListUserOrgs(userID)
+	if err == nil && len(userOrgs) > 0 {
+		_ = s.store.UpdateUserLastActiveOrg(userID, userOrgs[0].ID)
 	}
 
 	// Graduation banner is gated on (step==done && !HasSeenNotice).

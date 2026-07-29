@@ -262,7 +262,7 @@ func (m *LogMount) canReadNamespace(ns string) bool {
 	if m.cfg.IsOwner || m.cfg.UserID == "" {
 		return true
 	}
-	nsObj, err := m.cfg.Store.FindOrCreateNamespace(m.cfg.CustomerID, ns)
+	nsObj, err := m.cfg.Store.FindOrCreateNamespace(m.cfg.OrgID, ns)
 	if err != nil {
 		return false
 	}

@@ -26,7 +26,7 @@ type CronWatchVersion struct {
 type cronWatchHistoryRow struct {
 	ID               uint64    `gorm:"column:id"`
 	WatchID          uint64    `gorm:"column:watch_id"`
-	CustomerID       uint      `gorm:"column:customer_id"`
+	OrgID            string    `gorm:"column:org_id"`
 	Name             string    `gorm:"column:name"`
 	Schedule         string    `gorm:"column:schedule"`
 	Pipeline         string    `gorm:"column:pipeline"`
@@ -56,8 +56,8 @@ type cronWatchHistoryView struct {
 
 // LogCronWatch returns the version chain newest-first for the named
 // watch, including the live row as the first entry.
-func (s *Store) LogCronWatch(customerID uint, name string) ([]CronWatchVersion, error) {
-	w, err := s.GetCronWatch(customerID, name)
+func (s *Store) LogCronWatch(orgID string, name string) ([]CronWatchVersion, error) {
+	w, err := s.GetCronWatch(orgID, name)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
@@ -116,7 +116,7 @@ func (s *Store) LogCronWatch(customerID uint, name string) ([]CronWatchVersion, 
 
 // ResolveCronWatchRef parses a ref ("HEAD", "HEAD^N", or hash
 // prefix) and returns the matching version.
-func (s *Store) ResolveCronWatchRef(customerID uint, name, ref string) (*CronWatchVersion, error) {
+func (s *Store) ResolveCronWatchRef(orgID string, name, ref string) (*CronWatchVersion, error) {
 	if m := headCaretRefRe.FindStringSubmatch(ref); m != nil {
 		offset := 0
 		if m[1] != "" {
@@ -130,7 +130,7 @@ func (s *Store) ResolveCronWatchRef(customerID uint, name, ref string) (*CronWat
 				offset = n
 			}
 		}
-		versions, err := s.LogCronWatch(customerID, name)
+		versions, err := s.LogCronWatch(orgID, name)
 		if err != nil {
 			return nil, err
 		}
@@ -147,7 +147,7 @@ func (s *Store) ResolveCronWatchRef(customerID uint, name, ref string) (*CronWat
 	if !isHexString(ref) {
 		return nil, fmt.Errorf("%w: %q", ErrInvalidRef, ref)
 	}
-	versions, err := s.LogCronWatch(customerID, name)
+	versions, err := s.LogCronWatch(orgID, name)
 	if err != nil {
 		return nil, err
 	}
@@ -176,17 +176,17 @@ func (s *Store) ResolveCronWatchRef(customerID uint, name, ref string) (*CronWat
 // is scoped to UPDATE OF schedule, pipeline so a message-only edit
 // doesn't capture a new history row. For history refs, it UPDATEs
 // the matching cron_watch_history row directly.
-func (s *Store) AmendCronWatchMessage(customerID uint, name, ref, message string) error {
-	v, err := s.ResolveCronWatchRef(customerID, name, ref)
+func (s *Store) AmendCronWatchMessage(orgID string, name, ref, message string) error {
+	v, err := s.ResolveCronWatchRef(orgID, name, ref)
 	if err != nil {
 		return err
 	}
 	if v.IsHead {
-		return s.scoped(customerID).Model(&CronWatch{}).
+		return s.scoped(orgID).Model(&CronWatch{}).
 			Where("name = ?", name).
 			Update("message", message).Error
 	}
-	w, err := s.GetCronWatch(customerID, name)
+	w, err := s.GetCronWatch(orgID, name)
 	if err != nil {
 		return err
 	}

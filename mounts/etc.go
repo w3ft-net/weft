@@ -20,7 +20,7 @@ func (m *EtcMount) Caps() shellcore.MountCaps {
 
 func (m *EtcMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	if rel == "dashboards" {
-		dashboards, err := m.cfg.Store.ListDashboards(m.cfg.CustomerID)
+		dashboards, err := m.cfg.Store.ListDashboards(m.cfg.OrgID)
 		if err != nil {
 			return nil, err
 		}
@@ -51,7 +51,7 @@ func (m *EtcMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	}
 	var notifySize int64
 	var notifyMtime time.Time
-	if nc, err := m.cfg.Store.GetNotifyConfig(m.cfg.CustomerID); err == nil {
+	if nc, err := m.cfg.Store.GetNotifyConfig(m.cfg.OrgID); err == nil {
 		notifySize = int64(len(nc.AliasesYAML))
 		notifyMtime = nc.UpdatedAt
 	}
@@ -67,13 +67,13 @@ func (m *EtcMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 func (m *EtcMount) ReadFile(rel string) ([]byte, error) {
 	switch {
 	case rel == "notify.yaml":
-		nc, err := m.cfg.Store.GetNotifyConfig(m.cfg.CustomerID)
+		nc, err := m.cfg.Store.GetNotifyConfig(m.cfg.OrgID)
 		if err != nil {
 			return []byte(""), nil
 		}
 		return []byte(nc.AliasesYAML), nil
 	case rel == "passwd":
-		out, err := m.cfg.Store.RenderPasswd(m.cfg.CustomerID)
+		out, err := m.cfg.Store.RenderPasswd(m.cfg.OrgID)
 		if err != nil {
 			return nil, err
 		}
@@ -82,7 +82,7 @@ func (m *EtcMount) ReadFile(rel string) ([]byte, error) {
 		return []byte(m.buildUsageReport()), nil
 	default:
 		if dashName, ok := dashboardName(rel); ok {
-			d, err := m.cfg.Store.GetDashboard(m.cfg.CustomerID, dashName)
+			d, err := m.cfg.Store.GetDashboard(m.cfg.OrgID, dashName)
 			if err != nil {
 				return nil, fmt.Errorf("/etc/%s: no such file", rel)
 			}
@@ -98,7 +98,7 @@ func (m *EtcMount) Stat(rel string) (fs.FileInfo, error) {
 	}
 	switch {
 	case rel == "notify.yaml":
-		if nc, err := m.cfg.Store.GetNotifyConfig(m.cfg.CustomerID); err == nil {
+		if nc, err := m.cfg.Store.GetNotifyConfig(m.cfg.OrgID); err == nil {
 			return &vfsFileInfo{name: "notify.yaml", size: int64(len(nc.AliasesYAML)), mtime: nc.UpdatedAt}, nil
 		}
 		return &vfsFileInfo{name: "notify.yaml"}, nil
@@ -111,7 +111,7 @@ func (m *EtcMount) Stat(rel string) (fs.FileInfo, error) {
 		return &vfsFileInfo{name: "dashboards", dir: true}, nil
 	default:
 		if dashName, ok := dashboardName(rel); ok {
-			d, err := m.cfg.Store.GetDashboard(m.cfg.CustomerID, dashName)
+			d, err := m.cfg.Store.GetDashboard(m.cfg.OrgID, dashName)
 			if err != nil {
 				return nil, fs.ErrNotExist
 			}
@@ -136,7 +136,7 @@ func (m *EtcMount) WriteFile(rel string, data []byte) error {
 		if _, err := store.ParseNotifyAliases(content); err != nil {
 			return fmt.Errorf("/etc/notify.yaml: %w", err)
 		}
-		return m.cfg.Store.SaveNotifyAliases(m.cfg.CustomerID, content)
+		return m.cfg.Store.SaveNotifyAliases(m.cfg.OrgID, content)
 	default:
 		if dashName, ok := dashboardName(rel); ok {
 			body := string(data)
@@ -144,10 +144,10 @@ func (m *EtcMount) WriteFile(rel string, data []byte) error {
 			if err != nil {
 				return fmt.Errorf("/etc/%s: %w", rel, err)
 			}
-			if err := m.cfg.Store.ValidateDashboardWatchRefs(m.cfg.CustomerID, spec); err != nil {
+			if err := m.cfg.Store.ValidateDashboardWatchRefs(m.cfg.OrgID, spec); err != nil {
 				return fmt.Errorf("/etc/%s: %w", rel, err)
 			}
-			return m.cfg.Store.SaveDashboard(m.cfg.CustomerID, m.cfg.UserID, dashName, body)
+			return m.cfg.Store.SaveDashboard(m.cfg.OrgID, m.cfg.UserID, dashName, body)
 		}
 	}
 	return fmt.Errorf("/etc/%s: read-only", rel)
@@ -161,7 +161,7 @@ func (m *EtcMount) Remove(rel string) error {
 		return denyWrite("/etc")
 	}
 	if dashName, ok := dashboardName(rel); ok {
-		return m.cfg.Store.DeleteDashboard(m.cfg.CustomerID, dashName)
+		return m.cfg.Store.DeleteDashboard(m.cfg.OrgID, dashName)
 	}
 	return fmt.Errorf("/etc/%s: operation not permitted", rel)
 }
@@ -172,7 +172,7 @@ func (m *EtcMount) Remove(rel string) error {
 // computed from store state; mtime is "now" since the perms tables
 // don't carry a single canonical mtime.
 func (m *EtcMount) passwdFileInfo() (int64, time.Time) {
-	out, err := m.cfg.Store.RenderPasswd(m.cfg.CustomerID)
+	out, err := m.cfg.Store.RenderPasswd(m.cfg.OrgID)
 	if err != nil {
 		return 0, time.Time{}
 	}
@@ -207,7 +207,7 @@ func (m *EtcMount) buildUsageReport() string {
 	fmt.Fprintf(&b, "ingested:  %s / %s (%.1f%%)\n",
 		humanBytes(bytesIngested), humanBytes(tierLimitBytes), pct)
 
-	forecast, err := m.cfg.Store.ForecastMetricsUsage(m.cfg.CustomerID)
+	forecast, err := m.cfg.Store.ForecastMetricsUsage(m.cfg.OrgID)
 	if err == nil && forecast.AgentsWithMetrics > 0 {
 		fmt.Fprintf(&b, "metrics:   ~%s/mo projected (%d agent%s)\n",
 			humanBytes(forecast.ProjectedBytesMonth),

@@ -91,14 +91,14 @@ func seedFixtures() error {
 	defer conn.Close()
 
 	// customer id for kevlar. The coordinator container's own
-	// FindOrCreateCustomer flow normally creates this row at startup
+	// FindOrCreateOrg flow normally creates this row at startup
 	// via WEFT_CUSTOMER, but the demo seed's --reset path can clobber
 	// the dev DB out from under a long-running coordinator. Upsert
 	// here so the integration suite owns its preconditions instead of
 	// inheriting them from the operator's compose-stack lifecycle.
 	var kevID int64
 	if err := conn.QueryRow(`
-		INSERT INTO customers (name, created_at, updated_at)
+		INSERT INTO organizations (name, created_at, updated_at)
 		VALUES ('kevlar', now(), now())
 		ON CONFLICT (name) DO UPDATE SET updated_at = now()
 		RETURNING id
@@ -120,9 +120,9 @@ func seedFixtures() error {
 	}
 	for _, ns := range fixtures {
 		_, err := conn.Exec(`
-			INSERT INTO namespaces (customer_id, name, created_at, updated_at)
+			INSERT INTO namespaces (org_id, name, created_at, updated_at)
 			VALUES ($1, $2, now(), now())
-			ON CONFLICT (customer_id, name) DO NOTHING`,
+			ON CONFLICT (org_id, name) DO NOTHING`,
 			kevID, ns,
 		)
 		if err != nil {
@@ -135,36 +135,36 @@ func seedFixtures() error {
 	// user up to confirm. Seed a verified user for that ID so the
 	// middleware lets the request through.
 	_, err = conn.Exec(`
-		INSERT INTO users (id, email, name, email_verified_at, last_active_customer_id, created_at, updated_at)
+		INSERT INTO users (id, email, name, email_verified_at, last_active_org_id, created_at, updated_at)
 		VALUES ('dev-user', 'dev@test.local', 'Dev User', now(), $1, now(), now())
-		ON CONFLICT (email) DO UPDATE SET email_verified_at = now(), last_active_customer_id = $1`,
+		ON CONFLICT (email) DO UPDATE SET email_verified_at = now(), last_active_org_id = $1`,
 		kevID,
 	)
 	if err != nil {
 		return fmt.Errorf("seed dev user: %w", err)
 	}
 	_, err = conn.Exec(`
-		INSERT INTO team_members (id, email, user_id, role, status, customer_id, accepted_at, created_at, updated_at)
+		INSERT INTO memberships (id, email, user_id, role, status, org_id, accepted_at, created_at, updated_at)
 		VALUES ('tm-dev-kevlar', 'dev@test.local', 'dev-user', 'owner', 'active', $1, now(), now(), now())
-		ON CONFLICT (id) DO UPDATE SET customer_id = $1`,
+		ON CONFLICT (id) DO UPDATE SET org_id = $1`,
 		kevID,
 	)
 	if err != nil {
 		return fmt.Errorf("seed dev team member: %w", err)
 	}
 	_, err = conn.Exec(`
-		INSERT INTO users (id, email, name, email_verified_at, last_active_customer_id, created_at, updated_at)
+		INSERT INTO users (id, email, name, email_verified_at, last_active_org_id, created_at, updated_at)
 		VALUES ('integration-user', 'it@example.com', 'Integration User', now(), $1, now(), now())
-		ON CONFLICT (email) DO UPDATE SET email_verified_at = now(), last_active_customer_id = $1`,
+		ON CONFLICT (email) DO UPDATE SET email_verified_at = now(), last_active_org_id = $1`,
 		kevID,
 	)
 	if err != nil {
 		return fmt.Errorf("seed integration user: %w", err)
 	}
 	_, err = conn.Exec(`
-		INSERT INTO team_members (id, email, user_id, role, status, customer_id, accepted_at, created_at, updated_at)
+		INSERT INTO memberships (id, email, user_id, role, status, org_id, accepted_at, created_at, updated_at)
 		VALUES ('tm-integ-kevlar', 'it@example.com', 'integration-user', 'owner', 'active', $1, now(), now(), now())
-		ON CONFLICT (id) DO UPDATE SET customer_id = $1`,
+		ON CONFLICT (id) DO UPDATE SET org_id = $1`,
 		kevID,
 	)
 	if err != nil {
@@ -183,9 +183,9 @@ func seedFixtures() error {
 
 	var devNSID int64
 	if err := conn.QueryRow(`
-		INSERT INTO namespaces (customer_id, name, created_at, updated_at)
+		INSERT INTO namespaces (org_id, name, created_at, updated_at)
 		VALUES ($1, 'kevlar', now(), now())
-		ON CONFLICT (customer_id, name) DO UPDATE SET updated_at = now()
+		ON CONFLICT (org_id, name) DO UPDATE SET updated_at = now()
 		RETURNING id
 	`, kevID).Scan(&devNSID); err != nil {
 		return fmt.Errorf("ensure kevlar namespace: %w", err)
@@ -193,12 +193,12 @@ func seedFixtures() error {
 
 	if _, err := conn.Exec(`
 		INSERT INTO agent_tokens (
-			customer_id, namespace_id, token_hash, prefix, label,
+			org_id, namespace_id, token_hash, prefix, label,
 			revoked, created_at, updated_at
 		)
 		VALUES ($1, $2, $3, $4, 'dev-agent', false, now(), now())
 		ON CONFLICT (token_hash) DO UPDATE SET
-			customer_id = EXCLUDED.customer_id,
+			org_id = EXCLUDED.org_id,
 			namespace_id = EXCLUDED.namespace_id,
 			revoked = false,
 			updated_at = now()

@@ -7,12 +7,12 @@ import (
 
 // TestSubscription_KeyedByCustomerSurrogate pins migration 053: a
 // subscription is keyed by the customer's surrogate id (FK →
-// customers.id), not the name string. Looking up by id round-trips,
+// organizations.id), not the name string. Looking up by id round-trips,
 // the persisted column holds the id, and an unrelated id does not
 // resolve to this customer's subscription.
 func TestSubscription_KeyedByCustomerSurrogate(t *testing.T) {
 	db := testOpen(t)
-	cust, err := db.FindOrCreateCustomer("surrogate-key-cust")
+	cust, err := db.FindOrCreateOrg("surrogate-key-cust")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,15 +20,15 @@ func TestSubscription_KeyedByCustomerSurrogate(t *testing.T) {
 
 	sub, err := db.ActiveSubscription(cust.ID)
 	if err != nil || sub == nil {
-		t.Fatalf("ActiveSubscription(%d): sub=%+v err=%v", cust.ID, sub, err)
+		t.Fatalf("ActiveSubscription(%s): sub=%+v err=%v", cust.ID, sub, err)
 	}
-	if sub.CustomerID != cust.ID {
-		t.Errorf("sub.CustomerID = %d, want surrogate id %d", sub.CustomerID, cust.ID)
+	if sub.OrgID != cust.ID {
+		t.Errorf("sub.OrgID = %s, want surrogate id %s", sub.OrgID, cust.ID)
 	}
 
 	// An unrelated id must not resolve to this customer's subscription
 	// (proves the lookup keys on the surrogate, not a stringly-typed name).
-	if other, _ := db.ActiveSubscription(cust.ID + 99999); other != nil {
+	if other, _ := db.ActiveSubscription("00000000-0000-0000-0000-00000000dead"); other != nil {
 		t.Errorf("ActiveSubscription(unrelated id) resolved to %+v", other)
 	}
 }
@@ -49,11 +49,11 @@ func TestSubscription_KeyedByCustomerSurrogate(t *testing.T) {
 func TestSeedDevSubscription_MultipleCustomers(t *testing.T) {
 	db := testOpen(t)
 
-	alpha, err := db.FindOrCreateCustomer("seed-mc-alpha")
+	alpha, err := db.FindOrCreateOrg("seed-mc-alpha")
 	if err != nil {
 		t.Fatal(err)
 	}
-	beta, err := db.FindOrCreateCustomer("seed-mc-beta")
+	beta, err := db.FindOrCreateOrg("seed-mc-beta")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestSeedDevSubscription_MultipleCustomers(t *testing.T) {
 // paid" → "comp swatch" without going through Stripe.
 func TestGrantCompSubscription_OverridesActive(t *testing.T) {
 	db := testOpen(t)
-	cust, err := db.FindOrCreateCustomer("comp-grant-overrides")
+	cust, err := db.FindOrCreateOrg("comp-grant-overrides")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestGrantCompSubscription_OverridesActive(t *testing.T) {
 
 	// Exactly one active sub should remain.
 	var count int64
-	db.crossTenant().Model(&Subscription{}).Where("customer_id = ? AND status = 'active'", cust.ID).Count(&count)
+	db.crossTenant().Model(&Subscription{}).Where("org_id = ? AND status = 'active'", cust.ID).Count(&count)
 	if count != 1 {
 		t.Errorf("active sub count = %d, want 1", count)
 	}
@@ -127,7 +127,7 @@ func TestGrantCompSubscription_OverridesActive(t *testing.T) {
 // silent error.
 func TestGrantCompSubscription_Idempotent(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("comp-grant-idem")
+	cust, _ := db.FindOrCreateOrg("comp-grant-idem")
 
 	if err := db.GrantCompSubscription(cust.ID, string(TierSwatch), "alpha"); err != nil {
 		t.Fatal(err)
@@ -137,7 +137,7 @@ func TestGrantCompSubscription_Idempotent(t *testing.T) {
 	}
 
 	var total int64
-	db.crossTenant().Model(&Subscription{}).Where("customer_id = ?", cust.ID).Count(&total)
+	db.crossTenant().Model(&Subscription{}).Where("org_id = ?", cust.ID).Count(&total)
 	if total != 1 {
 		t.Errorf("total sub rows = %d, want 1 (re-grant should be a no-op)", total)
 	}
@@ -148,7 +148,7 @@ func TestGrantCompSubscription_Idempotent(t *testing.T) {
 // signal that a sub was granted out of band.
 func TestGrantCompSubscription_RequiresReason(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("comp-grant-no-reason")
+	cust, _ := db.FindOrCreateOrg("comp-grant-no-reason")
 	if err := db.GrantCompSubscription(cust.ID, string(TierSwatch), ""); err == nil {
 		t.Error("expected error on empty reason")
 	}
@@ -159,7 +159,7 @@ func TestGrantCompSubscription_RequiresReason(t *testing.T) {
 // nothing changes.
 func TestRevokeCompSubscription(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("comp-revoke")
+	cust, _ := db.FindOrCreateOrg("comp-revoke")
 
 	// Grant then revoke.
 	if err := db.GrantCompSubscription(cust.ID, string(TierBolt), "alpha"); err != nil {
@@ -191,7 +191,7 @@ func TestRevokeCompSubscription(t *testing.T) {
 // collision and webhook-misroute scenarios.
 func TestWebhookGuard_SkipsCompSub(t *testing.T) {
 	db := testOpen(t)
-	cust, _ := db.FindOrCreateCustomer("comp-guard")
+	cust, _ := db.FindOrCreateOrg("comp-guard")
 	if err := db.GrantCompSubscription(cust.ID, string(TierBolt), "owner"); err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestWebhookGuard_SkipsCompSub(t *testing.T) {
 	// Force a Stripe sub ID onto the comp row to simulate the misroute.
 	const fakeStripeID = "sub_fake_misroute"
 	if err := db.crossTenant().Model(&Subscription{}).
-		Where("customer_id = ?", cust.ID).
+		Where("org_id = ?", cust.ID).
 		Update("stripe_subscription_id", fakeStripeID).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestWebhookGuard_SkipsCompSub(t *testing.T) {
 func TestSeedDevSubscription_Idempotent(t *testing.T) {
 	db := testOpen(t)
 
-	cust, err := db.FindOrCreateCustomer("seed-idem")
+	cust, err := db.FindOrCreateOrg("seed-idem")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,12 +251,12 @@ func TestSeedDevSubscription_Idempotent(t *testing.T) {
 	// regardless of seed-call count.
 	var count int64
 	if err := db.crossTenant().Model(&Subscription{}).
-		Where("customer_id = ? AND status = 'active'", cust.ID).
+		Where("org_id = ? AND status = 'active'", cust.ID).
 		Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
-		t.Fatalf("expected 1 active subscription for customer %d, got %d", cust.ID, count)
+		t.Fatalf("expected 1 active subscription for customer %s, got %d", cust.ID, count)
 	}
 }
 
@@ -300,8 +300,8 @@ func promoteSubscriptionTier(db *Store, stripeSubID, tier string) error {
 }
 
 // revokeCompSubscription mirrors the former Store.RevokeCompSubscription.
-func revokeCompSubscription(db *Store, customerID uint) error {
-	return db.scoped(customerID).Model(&Subscription{}).
+func revokeCompSubscription(db *Store, orgID string) error {
+	return db.scoped(orgID).Model(&Subscription{}).
 		Where("status = 'active' AND comp_reason != ''").
 		Updates(map[string]any{
 			"status":     "cancelled",

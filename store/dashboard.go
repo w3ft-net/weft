@@ -16,7 +16,7 @@ import (
 // spec to the frontend.
 type Dashboard struct {
 	gorm.Model
-	CustomerID      uint    `gorm:"not null;uniqueIndex:idx_dashboards_customer_name"`
+	OrgID           string  `gorm:"not null;uniqueIndex:idx_dashboards_customer_name"`
 	Name            string  `gorm:"not null;uniqueIndex:idx_dashboards_customer_name"`
 	YAMLBody        string  `gorm:"column:yaml_body;type:text;not null"`
 	CreatedByUserID *string `gorm:"column:created_by_user_id"`
@@ -40,13 +40,13 @@ type DashboardSection struct {
 // from. Size is one of "sm", "md", "lg" (default "md"). Kind-specific
 // fields (Format, Threshold, Columns) are optional.
 type DashboardTile struct {
-	Kind      string             `yaml:"kind" json:"kind"`
-	Watch     string             `yaml:"watch" json:"watch"`
-	Title     string             `yaml:"title,omitempty" json:"title,omitempty"`
-	Size      string             `yaml:"size,omitempty" json:"size,omitempty"`
-	Format    string             `yaml:"format,omitempty" json:"format,omitempty"`
-	Threshold *DashboardThresh   `yaml:"threshold,omitempty" json:"threshold,omitempty"`
-	Columns   []string           `yaml:"columns,omitempty" json:"columns,omitempty"`
+	Kind      string           `yaml:"kind" json:"kind"`
+	Watch     string           `yaml:"watch" json:"watch"`
+	Title     string           `yaml:"title,omitempty" json:"title,omitempty"`
+	Size      string           `yaml:"size,omitempty" json:"size,omitempty"`
+	Format    string           `yaml:"format,omitempty" json:"format,omitempty"`
+	Threshold *DashboardThresh `yaml:"threshold,omitempty" json:"threshold,omitempty"`
+	Columns   []string         `yaml:"columns,omitempty" json:"columns,omitempty"`
 }
 
 // DashboardThresh is the optional warn/crit cutoff for counter and gauge tiles.
@@ -189,7 +189,7 @@ func validateSpec(spec *DashboardSpec) error {
 // ValidateDashboardWatchRefs returns an error if any tile references a
 // watch that doesn't exist for this customer. Run this after
 // ParseDashboardYAML in any save path.
-func (s *Store) ValidateDashboardWatchRefs(customerID uint, spec *DashboardSpec) error {
+func (s *Store) ValidateDashboardWatchRefs(orgID string, spec *DashboardSpec) error {
 	seen := map[string]bool{}
 	for _, sec := range spec.Sections {
 		for _, tile := range sec.Tiles {
@@ -197,7 +197,7 @@ func (s *Store) ValidateDashboardWatchRefs(customerID uint, spec *DashboardSpec)
 				continue
 			}
 			seen[tile.Watch] = true
-			if _, err := s.GetCronWatch(customerID, tile.Watch); err != nil {
+			if _, err := s.GetCronWatch(orgID, tile.Watch); err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
 					return fmt.Errorf("watch %q does not exist", tile.Watch)
 				}
@@ -211,8 +211,8 @@ func (s *Store) ValidateDashboardWatchRefs(customerID uint, spec *DashboardSpec)
 // SaveDashboard upserts a dashboard. Callers must have already run
 // ParseDashboardYAML and ValidateDashboardWatchRefs against the body.
 // userID is recorded as the creator on first write; ignored on update.
-func (s *Store) SaveDashboard(customerID uint, userID, name, yamlBody string) error {
-	return s.scoped(customerID).Transaction(func(tx *gorm.DB) error {
+func (s *Store) SaveDashboard(orgID string, userID, name, yamlBody string) error {
+	return s.scoped(orgID).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
 			return err
 		}
@@ -220,9 +220,9 @@ func (s *Store) SaveDashboard(customerID uint, userID, name, yamlBody string) er
 		result := tx.Where("name = ?", name).First(&d)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			row := &Dashboard{
-				CustomerID: customerID,
-				Name:       name,
-				YAMLBody:   yamlBody,
+				OrgID:    orgID,
+				Name:     name,
+				YAMLBody: yamlBody,
 			}
 			if userID != "" {
 				row.CreatedByUserID = &userID
@@ -234,9 +234,9 @@ func (s *Store) SaveDashboard(customerID uint, userID, name, yamlBody string) er
 }
 
 // GetDashboard returns one dashboard by name.
-func (s *Store) GetDashboard(customerID uint, name string) (*Dashboard, error) {
+func (s *Store) GetDashboard(orgID string, name string) (*Dashboard, error) {
 	var d Dashboard
-	err := s.scoped(customerID).Where("name = ?", name).First(&d).Error
+	err := s.scoped(orgID).Where("name = ?", name).First(&d).Error
 	if err != nil {
 		return nil, err
 	}
@@ -244,13 +244,13 @@ func (s *Store) GetDashboard(customerID uint, name string) (*Dashboard, error) {
 }
 
 // ListDashboards returns dashboards for a customer ordered by name.
-func (s *Store) ListDashboards(customerID uint) ([]Dashboard, error) {
+func (s *Store) ListDashboards(orgID string) ([]Dashboard, error) {
 	var list []Dashboard
-	err := s.scoped(customerID).Order("name").Find(&list).Error
+	err := s.scoped(orgID).Order("name").Find(&list).Error
 	return list, err
 }
 
 // DeleteDashboard removes a dashboard (soft-delete via gorm).
-func (s *Store) DeleteDashboard(customerID uint, name string) error {
-	return s.scoped(customerID).Where("name = ?", name).Delete(&Dashboard{}).Error
+func (s *Store) DeleteDashboard(orgID string, name string) error {
+	return s.scoped(orgID).Where("name = ?", name).Delete(&Dashboard{}).Error
 }

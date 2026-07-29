@@ -116,7 +116,7 @@ function CustomerDetail({ name, onClose }: { name: string; onClose: () => void }
                 {detail.team.map(m => (
                   <tr key={m.email}>
                     <td className="token-label">{m.email}</td>
-                    <td><span className={`token-status ${m.role === 'owner' ? 'token-status-active' : ''}`}>{m.role}</span></td>
+                    <td><span className={`token-status ${m.role === 'admin' ? 'token-status-active' : ''}`}>{m.role}</span></td>
                     <td><span className={`token-status ${m.status === 'active' ? 'token-status-active' : 'token-status-revoked'}`}>{m.status}</span></td>
                   </tr>
                 ))}

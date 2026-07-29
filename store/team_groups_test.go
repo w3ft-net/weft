@@ -8,7 +8,7 @@ import (
 )
 
 // groupsFor is a test helper: the sorted group tokens for a member.
-func groupsFor(t *testing.T, db *Store, custID uint, email string) []string {
+func groupsFor(t *testing.T, db *Store, custID string, email string) []string {
 	t.Helper()
 	_, _, groups, err := db.MemberGroups(custID, email)
 	if err != nil {
@@ -20,7 +20,7 @@ func groupsFor(t *testing.T, db *Store, custID uint, email string) []string {
 func TestTeamGroups_GrantRevoke(t *testing.T) {
 	db := teamPermsStore(t)
 	pid := os.Getpid()
-	cust, _ := db.FindOrCreateCustomer(fmt.Sprintf("tg-%d", pid))
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("tg-%d", pid))
 	owner := fmt.Sprintf("owner-%d@x.test", pid)
 	alice := fmt.Sprintf("alice-%d@x.test", pid)
 	_ = addTeamUser(t, db, cust.ID, owner, "owner")
@@ -61,7 +61,7 @@ func TestTeamGroups_GrantRevoke(t *testing.T) {
 	if err := db.RemoveUserFromGroup(cust.ID, alice, "payments+tokens"); err != nil {
 		t.Fatalf("remove payments+tokens: %v", err)
 	}
-	if perms, _ := db.ListUserNamespacePermissions(*mustMember(t, db, cust.ID, alice).UserID); len(perms) != 0 {
+	if perms, _ := db.ListUserNamespacePermissions(mustMember(t, db, cust.ID, alice).UserID); len(perms) != 0 {
 		t.Fatalf("expected no namespace perm rows, got %d", len(perms))
 	}
 
@@ -77,7 +77,7 @@ func TestTeamGroups_GrantRevoke(t *testing.T) {
 func TestTeamGroups_Errors(t *testing.T) {
 	db := teamPermsStore(t)
 	pid := os.Getpid()
-	cust, _ := db.FindOrCreateCustomer(fmt.Sprintf("tge-%d", pid))
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("tge-%d", pid))
 	owner := fmt.Sprintf("owner-%d@x.test", pid)
 	alice := fmt.Sprintf("alice-%d@x.test", pid)
 	_ = addTeamUser(t, db, cust.ID, owner, "owner")
@@ -100,7 +100,7 @@ func TestTeamGroups_Errors(t *testing.T) {
 func TestTeamGroups_IsOwnerAndRemoveMember(t *testing.T) {
 	db := teamPermsStore(t)
 	pid := os.Getpid()
-	cust, _ := db.FindOrCreateCustomer(fmt.Sprintf("tgo-%d", pid))
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("tgo-%d", pid))
 	ownerU := addTeamUser(t, db, cust.ID, fmt.Sprintf("owner-%d@x.test", pid), "owner")
 	aliceU := addTeamUser(t, db, cust.ID, fmt.Sprintf("alice-%d@x.test", pid), "member")
 
@@ -126,7 +126,7 @@ func TestTeamGroups_IsOwnerAndRemoveMember(t *testing.T) {
 func TestTeamGroups_RenderPasswd(t *testing.T) {
 	db := teamPermsStore(t)
 	pid := os.Getpid()
-	cust, _ := db.FindOrCreateCustomer(fmt.Sprintf("tgp-%d", pid))
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("tgp-%d", pid))
 	owner := fmt.Sprintf("owner-%d@x.test", pid)
 	alice := fmt.Sprintf("alice-%d@x.test", pid)
 	_ = addTeamUser(t, db, cust.ID, owner, "owner")
@@ -149,7 +149,7 @@ func TestTeamGroups_RenderPasswd(t *testing.T) {
 	}
 }
 
-func mustMember(t *testing.T, db *Store, custID uint, email string) *TeamMember {
+func mustMember(t *testing.T, db *Store, custID string, email string) *TeamMember {
 	t.Helper()
 	m, err := db.GetTeamMemberByEmail(custID, email)
 	if err != nil {

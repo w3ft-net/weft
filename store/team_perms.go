@@ -52,13 +52,13 @@ type NamespaceAcl struct {
 // non-owner active team member of the customer, it joins their
 // OrgPermission row (defaults to all read-only) and their
 // NamespacePermission rows. Owners are deliberately omitted.
-func (s *Store) BuildTeamPerms(customerID uint) (TeamPermsDoc, error) {
-	members, err := s.ListTeamMembers(customerID)
+func (s *Store) BuildTeamPerms(orgID string) (TeamPermsDoc, error) {
+	members, err := s.ListTeamMembers(orgID)
 	if err != nil {
 		return nil, fmt.Errorf("list members: %w", err)
 	}
 
-	namespaces, err := s.ListNamespaces(customerID)
+	namespaces, err := s.ListNamespaces(orgID)
 	if err != nil {
 		return nil, fmt.Errorf("list namespaces: %w", err)
 	}
@@ -69,16 +69,16 @@ func (s *Store) BuildTeamPerms(customerID uint) (TeamPermsDoc, error) {
 
 	doc := TeamPermsDoc{}
 	for _, m := range members {
-		if m.Role == "owner" || m.UserID == nil {
+		if m.Role == RoleOwner || m.Pending() {
 			continue
 		}
-		uid := *m.UserID
+		uid := m.UserID
 		mp := MemberPerms{
 			Bin:  AccessReadOnly,
 			Cron: AccessReadOnly,
 			Etc:  AccessReadOnly,
 		}
-		if op, err := s.GetOrgPermission(customerID, uid); err == nil && op != nil {
+		if op, err := s.GetOrgPermission(orgID, uid); err == nil && op != nil {
 			if op.CanManageFunctions {
 				mp.Bin = AccessEdit
 			}
@@ -123,8 +123,8 @@ func (s *Store) BuildTeamPerms(customerID uint) (TeamPermsDoc, error) {
 // mean "default-deny" — perms not in the doc are deleted from the
 // store. Two-way authoritative: what's in the doc is what the user
 // gets, full stop.
-func (s *Store) ApplyTeamPerms(customerID uint, doc TeamPermsDoc) error {
-	members, err := s.ListTeamMembers(customerID)
+func (s *Store) ApplyTeamPerms(orgID string, doc TeamPermsDoc) error {
+	members, err := s.ListTeamMembers(orgID)
 	if err != nil {
 		return fmt.Errorf("list members: %w", err)
 	}
@@ -133,7 +133,7 @@ func (s *Store) ApplyTeamPerms(customerID uint, doc TeamPermsDoc) error {
 		memberByEmail[m.Email] = m
 	}
 
-	namespaces, err := s.ListNamespaces(customerID)
+	namespaces, err := s.ListNamespaces(orgID)
 	if err != nil {
 		return fmt.Errorf("list namespaces: %w", err)
 	}
@@ -148,10 +148,10 @@ func (s *Store) ApplyTeamPerms(customerID uint, doc TeamPermsDoc) error {
 		if !ok {
 			return fmt.Errorf("unknown team member: %s", email)
 		}
-		if m.Role == "owner" {
+		if m.Role == RoleOwner {
 			return fmt.Errorf("%s is an owner — owners have implicit full access and cannot be listed here", email)
 		}
-		if m.UserID == nil {
+		if m.Pending() {
 			return fmt.Errorf("%s has not accepted the invite yet — permissions can be set after they sign up", email)
 		}
 		for nsName := range mp.Namespaces {
@@ -167,20 +167,20 @@ func (s *Store) ApplyTeamPerms(customerID uint, doc TeamPermsDoc) error {
 		// NamespacePermission rows (upsert listed, delete unlisted).
 		for email, mp := range doc {
 			m := memberByEmail[email]
-			uid := *m.UserID
+			uid := m.UserID
 			var existing OrgPermission
 			vals := map[string]any{
-				"customer_id":          customerID,
+				"org_id":               orgID,
 				"user_id":              uid,
 				"can_manage_functions": mp.Bin.CanManage(),
 				"can_manage_watches":   mp.Cron.CanManage(),
 				"can_manage_etc":       mp.Etc.CanManage(),
 			}
 			var err error
-			if txStore.scoped(customerID).Where("user_id = ?", uid).First(&existing).Error == gorm.ErrRecordNotFound {
-				err = txStore.scoped(customerID).Model(&OrgPermission{}).Create(vals).Error
+			if txStore.scoped(orgID).Where("user_id = ?", uid).First(&existing).Error == gorm.ErrRecordNotFound {
+				err = txStore.scoped(orgID).Model(&OrgPermission{}).Create(vals).Error
 			} else {
-				err = txStore.scoped(customerID).Model(&existing).Updates(vals).Error
+				err = txStore.scoped(orgID).Model(&existing).Updates(vals).Error
 			}
 			if err != nil {
 				return err
@@ -192,14 +192,14 @@ func (s *Store) ApplyTeamPerms(customerID uint, doc TeamPermsDoc) error {
 		// Members in the team but absent from the doc → default-deny:
 		// drop their existing OrgPermission + NamespacePermission rows.
 		for _, m := range members {
-			if m.Role == "owner" || m.UserID == nil {
+			if m.Role == RoleOwner || m.Pending() {
 				continue
 			}
 			if _, listed := doc[m.Email]; listed {
 				continue
 			}
-			uid := *m.UserID
-			if err := txStore.scoped(customerID).Where("user_id = ?", uid).Delete(&OrgPermission{}).Error; err != nil {
+			uid := m.UserID
+			if err := txStore.scoped(orgID).Where("user_id = ?", uid).Delete(&OrgPermission{}).Error; err != nil {
 				return err
 			}
 			if err := reconcileNsPerms(txStore, uid, nil, nsByName); err != nil {

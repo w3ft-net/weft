@@ -29,7 +29,7 @@ import (
 //
 // Within a single process tests still share one DB, exactly as before, so
 // the store package's tx-rollback isolation (BeginTest) and the
-// real-DB deleteCustomerData scoping both keep working unchanged. The win
+// real-DB deleteOrgData scoping both keep working unchanged. The win
 // is purely cross-package.
 
 // testDSNBase is the connection target every pooled DB shares; only the

@@ -39,13 +39,13 @@ func (p *Poller) Start(ctx context.Context) {
 	err := p.store.DB().
 		Table("log_groups").
 		Select(`log_groups.*,
-		        customers.name as customer_name,
+		        organizations.name as customer_name,
 		        namespaces.name as namespace_name,
 		        aws_accounts.role_arn,
 		        aws_accounts.external_id,
 		        aws_accounts.account_id`).
 		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
-		Joins("JOIN customers ON namespaces.customer_id = customers.id").
+		Joins("JOIN organizations ON namespaces.org_id = organizations.id").
 		Joins("JOIN aws_accounts ON log_groups.aws_account_id = aws_accounts.id").
 		Where("log_groups.enabled = ? AND log_groups.source_type = ? AND log_groups.status = ?",
 			true, store.SourceTypeCloudWatch, store.StatusConfigured).
