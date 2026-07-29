@@ -96,7 +96,7 @@ func seedFixtures() error {
 	// the dev DB out from under a long-running coordinator. Upsert
 	// here so the integration suite owns its preconditions instead of
 	// inheriting them from the operator's compose-stack lifecycle.
-	var kevID int64
+	var kevID string
 	if err := conn.QueryRow(`
 		INSERT INTO organizations (name, created_at, updated_at)
 		VALUES ('kevlar', now(), now())
@@ -143,10 +143,14 @@ func seedFixtures() error {
 	if err != nil {
 		return fmt.Errorf("seed dev user: %w", err)
 	}
+	// memberships.id is a UUID with a default (migration 069), so the row
+	// is keyed by (org_id, user_id) — the partial unique index orgs' own
+	// ON CONFLICT clauses infer — rather than a synthetic text id.
 	_, err = conn.Exec(`
-		INSERT INTO memberships (id, email, user_id, role, status, org_id, accepted_at, created_at, updated_at)
-		VALUES ('tm-dev-kevlar', 'dev@test.local', 'dev-user', 'owner', 'active', $1, now(), now(), now())
-		ON CONFLICT (id) DO UPDATE SET org_id = $1`,
+		INSERT INTO memberships (email, user_id, role, status, org_id, accepted_at, created_at, updated_at)
+		VALUES ('dev@test.local', 'dev-user', 'admin', 'active', $1, now(), now(), now())
+		ON CONFLICT (org_id, user_id) WHERE user_id IS NOT NULL
+		DO UPDATE SET role = 'admin', status = 'active'`,
 		kevID,
 	)
 	if err != nil {
@@ -162,9 +166,10 @@ func seedFixtures() error {
 		return fmt.Errorf("seed integration user: %w", err)
 	}
 	_, err = conn.Exec(`
-		INSERT INTO memberships (id, email, user_id, role, status, org_id, accepted_at, created_at, updated_at)
-		VALUES ('tm-integ-kevlar', 'it@example.com', 'integration-user', 'owner', 'active', $1, now(), now(), now())
-		ON CONFLICT (id) DO UPDATE SET org_id = $1`,
+		INSERT INTO memberships (email, user_id, role, status, org_id, accepted_at, created_at, updated_at)
+		VALUES ('it@example.com', 'integration-user', 'admin', 'active', $1, now(), now(), now())
+		ON CONFLICT (org_id, user_id) WHERE user_id IS NOT NULL
+		DO UPDATE SET role = 'admin', status = 'active'`,
 		kevID,
 	)
 	if err != nil {

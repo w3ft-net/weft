@@ -17,13 +17,13 @@ import (
 // permsSeed mirrors dashTeamMember: it just adds (user, role) as a
 // team_members row so BuildSession resolves an active org. Returns
 // the user's signed JWT.
-func permsSeed(t *testing.T, s *store.Store, cust *store.Organization, role, emailSuffix string) (*store.User, string) {
+func permsSeed(t *testing.T, s *store.Store, cust *store.Organization, role orgs.Role, emailSuffix string) (*store.User, string) {
 	t.Helper()
 	user, err := s.CreateVerifiedUser(fmt.Sprintf("%s-%d@example.com", emailSuffix, os.Getpid()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = s.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, orgs.RoleMember)
+	err = s.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, role)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,8 +36,8 @@ func TestPermissions_GetAndPut(t *testing.T) {
 	handler := srv.Handler()
 
 	cust, _ := s.FindOrCreateOrg(fmt.Sprintf("perms-api-%d", os.Getpid()))
-	_, ownerJWT := permsSeed(t, s, cust, "owner", "owner")
-	member, _ := permsSeed(t, s, cust, "member", "member")
+	_, ownerJWT := permsSeed(t, s, cust, store.RoleOwner, "owner")
+	member, _ := permsSeed(t, s, cust, orgs.RoleMember, "member")
 	_, _ = s.FindOrCreateNamespace(cust.ID, "api")
 
 	// PUT: owner grants member edit on /bin + read on /log/api.
@@ -83,7 +83,7 @@ func TestPermissions_Put_NonOwnerForbidden(t *testing.T) {
 	handler := srv.Handler()
 
 	cust, _ := s.FindOrCreateOrg(fmt.Sprintf("perms-noown-%d", os.Getpid()))
-	_, memberJWT := permsSeed(t, s, cust, "member", "lurker")
+	_, memberJWT := permsSeed(t, s, cust, orgs.RoleMember, "lurker")
 
 	req := httptest.NewRequest("PUT", "/api/permissions", bytes.NewReader([]byte("{}")))
 	req.Header.Set("Authorization", "Bearer "+memberJWT)
@@ -99,7 +99,7 @@ func TestPermissions_Put_RejectsUnknownMember(t *testing.T) {
 	handler := srv.Handler()
 
 	cust, _ := s.FindOrCreateOrg(fmt.Sprintf("perms-badmem-%d", os.Getpid()))
-	_, ownerJWT := permsSeed(t, s, cust, "owner", "lonely-owner")
+	_, ownerJWT := permsSeed(t, s, cust, store.RoleOwner, "lonely-owner")
 
 	put := store.TeamPermsDoc{
 		"ghost@example.com": {Bin: store.AccessEdit, Cron: store.AccessReadOnly, Etc: store.AccessReadOnly},
