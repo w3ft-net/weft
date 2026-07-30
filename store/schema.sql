@@ -11,7 +11,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict q94TTknBn6GMwTR0f5LXtyTJ2VKNo61hleZmKSqsIs2mhOI6BNASdZ2lOIW1hmZ
+\restrict Bof5pwO0thSq2aCA0itkDP8VY6eN37inWzm7oN30SwdAJT6IsraKktu4GANhc6F
 
 -- Dumped from database version 16.14 (Debian 16.14-1.pgdg13+1)
 -- Dumped by pg_dump version 16.14 (Debian 16.14-1.pgdg13+1)
@@ -105,10 +105,10 @@ BEGIN
     LIMIT 1;
 
     INSERT INTO cron_watch_history (
-        watch_id, customer_id, name, schedule, pipeline, content_hash,
+        watch_id, org_id, name, schedule, pipeline, content_hash,
         message, captured_by_user_id, authored_by_user_id, predecessor_id
     ) VALUES (
-        OLD.id, OLD.customer_id, OLD.name, OLD.schedule, OLD.pipeline,
+        OLD.id, OLD.org_id, OLD.name, OLD.schedule, OLD.pipeline,
         OLD.content_hash, OLD.message, captured_by,
         OLD.created_by_user_id, last_history_id
     );
@@ -162,10 +162,10 @@ BEGIN
     LIMIT 1;
 
     INSERT INTO shell_function_history (
-        function_id, customer_id, name, source, language, content_hash,
+        function_id, org_id, name, source, language, content_hash,
         message, captured_by_user_id, authored_by_user_id, predecessor_id
     ) VALUES (
-        OLD.id, OLD.customer_id, OLD.name, OLD.source, OLD.language,
+        OLD.id, OLD.org_id, OLD.name, OLD.source, OLD.language,
         OLD.content_hash, OLD.message, captured_by,
         OLD.created_by_user_id, last_history_id
     );
@@ -190,15 +190,15 @@ $$;
 
 
 --
--- Name: log_groups_fill_customer_id(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: log_groups_fill_org_id(); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.log_groups_fill_customer_id() RETURNS trigger
+CREATE FUNCTION public.log_groups_fill_org_id() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
 BEGIN
-  IF NEW.customer_id IS NULL THEN
-    SELECT customer_id INTO NEW.customer_id FROM namespaces WHERE id = NEW.namespace_id;
+  IF NEW.org_id IS NULL THEN
+    SELECT org_id INTO NEW.org_id FROM namespaces WHERE id = NEW.namespace_id;
   END IF;
   RETURN NEW;
 END;
@@ -454,13 +454,13 @@ CREATE TABLE partman.template_public_tmp_file_lines (
 
 CREATE TABLE partman.template_public_tmp_files (
     id bigint NOT NULL,
-    customer_id bigint NOT NULL,
     path text NOT NULL,
     is_dir boolean NOT NULL,
     byte_size bigint NOT NULL,
     line_count bigint NOT NULL,
     created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL
+    updated_at timestamp with time zone NOT NULL,
+    org_id uuid
 );
 
 
@@ -495,10 +495,10 @@ CREATE TABLE public.aws_accounts (
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
     deleted_at timestamp with time zone,
-    customer_id bigint NOT NULL,
     account_id text NOT NULL,
     role_arn text NOT NULL,
-    external_id text
+    external_id text,
+    org_id uuid NOT NULL
 );
 
 
@@ -530,7 +530,6 @@ CREATE TABLE public.agent_tokens (
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
     deleted_at timestamp with time zone,
-    customer_id bigint NOT NULL,
     namespace_id bigint NOT NULL,
     token_hash text NOT NULL,
     label text,
@@ -541,7 +540,8 @@ CREATE TABLE public.agent_tokens (
     prefix text NOT NULL,
     env text DEFAULT ''::text NOT NULL,
     last_seen_version text DEFAULT ''::text NOT NULL,
-    last_seen_at timestamp with time zone
+    last_seen_at timestamp with time zone,
+    org_id uuid NOT NULL
 );
 
 
@@ -829,7 +829,6 @@ CREATE TABLE public.cron_results_hourly_default (
 CREATE TABLE public.cron_watch_history (
     id bigint NOT NULL,
     watch_id bigint NOT NULL,
-    customer_id bigint NOT NULL,
     name text NOT NULL,
     schedule text NOT NULL,
     pipeline text NOT NULL,
@@ -838,7 +837,8 @@ CREATE TABLE public.cron_watch_history (
     captured_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
     captured_by_user_id text,
     authored_by_user_id text,
-    predecessor_id bigint
+    predecessor_id bigint,
+    org_id uuid NOT NULL
 );
 
 
@@ -870,7 +870,6 @@ CREATE TABLE public.cron_watches (
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
     deleted_at timestamp with time zone,
-    customer_id bigint NOT NULL,
     name text NOT NULL,
     schedule text NOT NULL,
     pipeline text NOT NULL,
@@ -884,7 +883,8 @@ CREATE TABLE public.cron_watches (
     created_by_user_id text,
     content_hash text DEFAULT ''::text NOT NULL,
     message text DEFAULT ''::text NOT NULL,
-    lowered_plan jsonb
+    lowered_plan jsonb,
+    org_id uuid NOT NULL
 );
 
 
@@ -908,39 +908,6 @@ ALTER SEQUENCE public.cron_watches_id_seq OWNED BY public.cron_watches.id;
 
 
 --
--- Name: customers; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.customers (
-    id bigint NOT NULL,
-    created_at timestamp with time zone,
-    updated_at timestamp with time zone,
-    deleted_at timestamp with time zone,
-    name text NOT NULL,
-    display_name text
-);
-
-
---
--- Name: customers_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.customers_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: customers_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.customers_id_seq OWNED BY public.customers.id;
-
-
---
 -- Name: dashboards; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -949,10 +916,10 @@ CREATE TABLE public.dashboards (
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
     deleted_at timestamp with time zone,
-    customer_id bigint NOT NULL,
     name text NOT NULL,
     yaml_body text NOT NULL,
-    created_by_user_id text
+    created_by_user_id text,
+    org_id uuid NOT NULL
 );
 
 
@@ -1098,8 +1065,8 @@ CREATE TABLE public.log_groups (
     detection text,
     resample_requested_at timestamp with time zone,
     sample_collected integer,
-    customer_id bigint NOT NULL,
     bucket_id bigint,
+    org_id uuid NOT NULL,
     CONSTRAINT log_groups_status_check CHECK ((status = ANY (ARRAY['sampling'::text, 'pending'::text, 'configured'::text])))
 );
 
@@ -1156,6 +1123,26 @@ ALTER SEQUENCE public.magic_links_id_seq OWNED BY public.magic_links.id;
 
 
 --
+-- Name: memberships; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.memberships (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    email text,
+    user_id text,
+    role text DEFAULT 'member'::text NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    invited_by text,
+    invited_at timestamp with time zone,
+    accepted_at timestamp with time zone,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    org_id uuid NOT NULL,
+    CONSTRAINT memberships_identified CHECK (((user_id IS NOT NULL) OR (email IS NOT NULL)))
+);
+
+
+--
 -- Name: namespace_permissions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1199,8 +1186,8 @@ CREATE TABLE public.namespaces (
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
     deleted_at timestamp with time zone,
-    customer_id bigint NOT NULL,
-    name text NOT NULL
+    name text NOT NULL,
+    org_id uuid NOT NULL
 );
 
 
@@ -1232,12 +1219,12 @@ CREATE TABLE public.notify_configs (
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
     deleted_at timestamp with time zone,
-    customer_id bigint NOT NULL,
     slack_webhook text,
     slack_bot_token text,
     slack_team_name text,
     configured_at timestamp with time zone,
-    aliases_yaml text DEFAULT ''::text NOT NULL
+    aliases_yaml text DEFAULT ''::text NOT NULL,
+    org_id uuid NOT NULL
 );
 
 
@@ -1269,11 +1256,11 @@ CREATE TABLE public.org_permissions (
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
     deleted_at timestamp with time zone,
-    customer_id bigint NOT NULL,
     user_id text NOT NULL,
     can_manage_functions boolean DEFAULT false NOT NULL,
     can_manage_watches boolean DEFAULT false NOT NULL,
-    can_manage_etc boolean DEFAULT false NOT NULL
+    can_manage_etc boolean DEFAULT false NOT NULL,
+    org_id uuid NOT NULL
 );
 
 
@@ -1297,6 +1284,23 @@ ALTER SEQUENCE public.org_permissions_id_seq OWNED BY public.org_permissions.id;
 
 
 --
+-- Name: organizations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.organizations (
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    deleted_at timestamp with time zone,
+    name text NOT NULL,
+    display_name text,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    stripe_customer_id text,
+    stripe_subscription_id text,
+    seat_count integer DEFAULT 0 NOT NULL
+);
+
+
+--
 -- Name: pagerduty_integrations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1305,11 +1309,11 @@ CREATE TABLE public.pagerduty_integrations (
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
     deleted_at timestamp with time zone,
-    customer_id bigint NOT NULL,
     name text NOT NULL,
     integration_key text NOT NULL,
     last_used_at timestamp with time zone,
-    last_error text
+    last_error text,
+    org_id uuid NOT NULL
 );
 
 
@@ -1483,7 +1487,6 @@ ALTER TABLE public.shard_services ALTER COLUMN id ADD GENERATED BY DEFAULT AS ID
 CREATE TABLE public.shell_function_history (
     id bigint NOT NULL,
     function_id bigint NOT NULL,
-    customer_id bigint NOT NULL,
     name text NOT NULL,
     source text NOT NULL,
     language text NOT NULL,
@@ -1492,7 +1495,8 @@ CREATE TABLE public.shell_function_history (
     captured_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
     captured_by_user_id text,
     authored_by_user_id text,
-    predecessor_id bigint
+    predecessor_id bigint,
+    org_id uuid NOT NULL
 );
 
 
@@ -1524,13 +1528,13 @@ CREATE TABLE public.shell_functions (
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
     deleted_at timestamp with time zone,
-    customer_id bigint NOT NULL,
     name text NOT NULL,
     source text NOT NULL,
     language text DEFAULT 'bash'::text NOT NULL,
     created_by_user_id text,
     content_hash text DEFAULT ''::text NOT NULL,
-    message text DEFAULT ''::text NOT NULL
+    message text DEFAULT ''::text NOT NULL,
+    org_id uuid NOT NULL
 );
 
 
@@ -1600,26 +1604,7 @@ CREATE TABLE public.subscriptions (
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
     comp_reason text DEFAULT ''::text NOT NULL,
-    customer_id bigint NOT NULL
-);
-
-
---
--- Name: team_members; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.team_members (
-    id text NOT NULL,
-    email text NOT NULL,
-    user_id text,
-    role text DEFAULT 'member'::text NOT NULL,
-    status text DEFAULT 'pending'::text NOT NULL,
-    invited_by text,
-    invited_at timestamp with time zone,
-    accepted_at timestamp with time zone,
-    created_at timestamp with time zone,
-    updated_at timestamp with time zone,
-    customer_id bigint NOT NULL
+    org_id uuid NOT NULL
 );
 
 
@@ -1654,14 +1639,14 @@ CREATE TABLE public.tmp_file_lines_default (
 
 CREATE TABLE public.tmp_files (
     id bigint NOT NULL,
-    customer_id bigint NOT NULL,
     path text NOT NULL,
     is_dir boolean DEFAULT false NOT NULL,
     byte_size bigint DEFAULT 0 NOT NULL,
     line_count bigint DEFAULT 0 NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    created_by_user_id text
+    created_by_user_id text,
+    org_id uuid NOT NULL
 )
 PARTITION BY RANGE (updated_at);
 
@@ -1691,14 +1676,14 @@ ALTER SEQUENCE public.tmp_files_id_seq OWNED BY public.tmp_files.id;
 
 CREATE TABLE public.tmp_files_default (
     id bigint DEFAULT nextval('public.tmp_files_id_seq'::regclass) NOT NULL,
-    customer_id bigint NOT NULL,
     path text NOT NULL,
     is_dir boolean DEFAULT false NOT NULL,
     byte_size bigint DEFAULT 0 NOT NULL,
     line_count bigint DEFAULT 0 NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    created_by_user_id text
+    created_by_user_id text,
+    org_id uuid NOT NULL
 );
 
 
@@ -1774,10 +1759,10 @@ CREATE TABLE public.users (
     updated_at timestamp with time zone,
     email_verified_at timestamp with time zone,
     has_seen_welcome boolean DEFAULT false NOT NULL,
-    last_active_customer_id bigint,
     onboarding_step text DEFAULT 'welcome'::text NOT NULL,
     onboarding_dismissed boolean DEFAULT false NOT NULL,
-    is_superadmin boolean DEFAULT false NOT NULL
+    is_superadmin boolean DEFAULT false NOT NULL,
+    last_active_org_id uuid
 );
 
 
@@ -1877,13 +1862,6 @@ ALTER TABLE ONLY public.cron_watch_history ALTER COLUMN id SET DEFAULT nextval('
 --
 
 ALTER TABLE ONLY public.cron_watches ALTER COLUMN id SET DEFAULT nextval('public.cron_watches_id_seq'::regclass);
-
-
---
--- Name: customers id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.customers ALTER COLUMN id SET DEFAULT nextval('public.customers_id_seq'::regclass);
 
 
 --
@@ -2104,10 +2082,10 @@ ALTER TABLE ONLY public.cron_watches
 
 
 --
--- Name: customers customers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: organizations customers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.customers
+ALTER TABLE ONLY public.organizations
     ADD CONSTRAINT customers_pkey PRIMARY KEY (id);
 
 
@@ -2296,10 +2274,10 @@ ALTER TABLE ONLY public.subscriptions
 
 
 --
--- Name: team_members team_members_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: memberships team_members_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.team_members
+ALTER TABLE ONLY public.memberships
     ADD CONSTRAINT team_members_pkey PRIMARY KEY (id);
 
 
@@ -2489,10 +2467,10 @@ CREATE INDEX idx_agent_tokens_version_seen ON public.agent_tokens USING btree (l
 
 
 --
--- Name: idx_cron_customer_name; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_cron_org_name; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX idx_cron_customer_name ON public.cron_watches USING btree (customer_id, name);
+CREATE UNIQUE INDEX idx_cron_org_name ON public.cron_watches USING btree (org_id, name);
 
 
 --
@@ -2506,14 +2484,14 @@ CREATE INDEX idx_cron_watches_deleted_at ON public.cron_watches USING btree (del
 -- Name: idx_customers_deleted_at; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_customers_deleted_at ON public.customers USING btree (deleted_at);
+CREATE INDEX idx_customers_deleted_at ON public.organizations USING btree (deleted_at);
 
 
 --
 -- Name: idx_customers_name; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX idx_customers_name ON public.customers USING btree (name);
+CREATE UNIQUE INDEX idx_customers_name ON public.organizations USING btree (name);
 
 
 --
@@ -2524,10 +2502,10 @@ CREATE INDEX idx_cwh_content_hash ON public.cron_watch_history USING btree (watc
 
 
 --
--- Name: idx_cwh_customer_name; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_cwh_org_name; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_cwh_customer_name ON public.cron_watch_history USING btree (customer_id, name, captured_at DESC);
+CREATE INDEX idx_cwh_org_name ON public.cron_watch_history USING btree (org_id, name, captured_at DESC);
 
 
 --
@@ -2538,17 +2516,17 @@ CREATE INDEX idx_cwh_watch_id ON public.cron_watch_history USING btree (watch_id
 
 
 --
--- Name: idx_dashboards_customer_name; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX idx_dashboards_customer_name ON public.dashboards USING btree (customer_id, name) WHERE (deleted_at IS NULL);
-
-
---
 -- Name: idx_dashboards_deleted_at; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_dashboards_deleted_at ON public.dashboards USING btree (deleted_at);
+
+
+--
+-- Name: idx_dashboards_org_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_dashboards_org_name ON public.dashboards USING btree (org_id, name) WHERE (deleted_at IS NULL);
 
 
 --
@@ -2566,10 +2544,10 @@ CREATE UNIQUE INDEX idx_device_codes_user_code ON public.device_codes USING btre
 
 
 --
--- Name: idx_func_customer_name; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_func_org_name; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX idx_func_customer_name ON public.shell_functions USING btree (customer_id, name);
+CREATE UNIQUE INDEX idx_func_org_name ON public.shell_functions USING btree (org_id, name);
 
 
 --
@@ -2587,13 +2565,6 @@ CREATE INDEX idx_ingestion_errors_unresolved ON public.ingestion_errors USING bt
 
 
 --
--- Name: idx_log_groups_customer; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_log_groups_customer ON public.log_groups USING btree (customer_id);
-
-
---
 -- Name: idx_log_groups_deleted_at; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2601,10 +2572,45 @@ CREATE INDEX idx_log_groups_deleted_at ON public.log_groups USING btree (deleted
 
 
 --
+-- Name: idx_log_groups_org; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_log_groups_org ON public.log_groups USING btree (org_id);
+
+
+--
 -- Name: idx_magic_links_token; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE UNIQUE INDEX idx_magic_links_token ON public.magic_links USING btree (token);
+
+
+--
+-- Name: idx_memberships_org; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_memberships_org ON public.memberships USING btree (org_id);
+
+
+--
+-- Name: idx_memberships_org_email; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_memberships_org_email ON public.memberships USING btree (org_id, lower(email)) WHERE (email IS NOT NULL);
+
+
+--
+-- Name: idx_memberships_org_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_memberships_org_user ON public.memberships USING btree (org_id, user_id) WHERE (user_id IS NOT NULL);
+
+
+--
+-- Name: idx_memberships_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_memberships_user ON public.memberships USING btree (user_id);
 
 
 --
@@ -2622,17 +2628,17 @@ CREATE INDEX idx_namespaces_deleted_at ON public.namespaces USING btree (deleted
 
 
 --
--- Name: idx_notify_configs_customer_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX idx_notify_configs_customer_id ON public.notify_configs USING btree (customer_id);
-
-
---
 -- Name: idx_notify_configs_deleted_at; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_notify_configs_deleted_at ON public.notify_configs USING btree (deleted_at);
+
+
+--
+-- Name: idx_notify_configs_org_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_notify_configs_org_id ON public.notify_configs USING btree (org_id);
 
 
 --
@@ -2643,10 +2649,10 @@ CREATE UNIQUE INDEX idx_ns_app ON public.log_groups USING btree (namespace_id, a
 
 
 --
--- Name: idx_ns_customer_name; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_ns_org_name; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX idx_ns_customer_name ON public.namespaces USING btree (customer_id, name);
+CREATE UNIQUE INDEX idx_ns_org_name ON public.namespaces USING btree (org_id, name);
 
 
 --
@@ -2664,17 +2670,10 @@ CREATE INDEX idx_org_permissions_deleted_at ON public.org_permissions USING btre
 
 
 --
--- Name: idx_orgperm_customer_user; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_orgperm_org_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX idx_orgperm_customer_user ON public.org_permissions USING btree (customer_id, user_id);
-
-
---
--- Name: idx_pd_integrations_customer_name; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX idx_pd_integrations_customer_name ON public.pagerduty_integrations USING btree (customer_id, name) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX idx_orgperm_org_user ON public.org_permissions USING btree (org_id, user_id);
 
 
 --
@@ -2685,6 +2684,13 @@ CREATE INDEX idx_pd_integrations_deleted_at ON public.pagerduty_integrations USI
 
 
 --
+-- Name: idx_pd_integrations_org_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_pd_integrations_org_name ON public.pagerduty_integrations USING btree (org_id, name) WHERE (deleted_at IS NULL);
+
+
+--
 -- Name: idx_sfh_content_hash; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2692,17 +2698,17 @@ CREATE INDEX idx_sfh_content_hash ON public.shell_function_history USING btree (
 
 
 --
--- Name: idx_sfh_customer_name; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_sfh_customer_name ON public.shell_function_history USING btree (customer_id, name, captured_at DESC);
-
-
---
 -- Name: idx_sfh_function_id; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_sfh_function_id ON public.shell_function_history USING btree (function_id, captured_at DESC);
+
+
+--
+-- Name: idx_sfh_org_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_sfh_org_name ON public.shell_function_history USING btree (org_id, name, captured_at DESC);
 
 
 --
@@ -2748,24 +2754,10 @@ CREATE INDEX idx_stripe_usage_reports_day ON public.stripe_usage_reports USING b
 
 
 --
--- Name: idx_subscriptions_customer; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_subscriptions_org; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_subscriptions_customer ON public.subscriptions USING btree (customer_id);
-
-
---
--- Name: idx_team_members_customer; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_team_members_customer ON public.team_members USING btree (customer_id);
-
-
---
--- Name: idx_team_members_user_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_team_members_user_id ON public.team_members USING btree (user_id);
+CREATE INDEX idx_subscriptions_org ON public.subscriptions USING btree (org_id);
 
 
 --
@@ -2776,10 +2768,10 @@ CREATE INDEX idx_tmp_file_lines_file_line ON ONLY public.tmp_file_lines USING bt
 
 
 --
--- Name: idx_tmp_files_customer_path; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_tmp_files_org_path; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_tmp_files_customer_path ON ONLY public.tmp_files USING btree (customer_id, path);
+CREATE INDEX idx_tmp_files_org_path ON ONLY public.tmp_files USING btree (org_id, path);
 
 
 --
@@ -2811,10 +2803,10 @@ CREATE INDEX tmp_file_lines_default_file_id_line_num_idx ON public.tmp_file_line
 
 
 --
--- Name: tmp_files_default_customer_id_path_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: tmp_files_default_org_id_path_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX tmp_files_default_customer_id_path_idx ON public.tmp_files_default USING btree (customer_id, path);
+CREATE INDEX tmp_files_default_org_id_path_idx ON public.tmp_files_default USING btree (org_id, path);
 
 
 --
@@ -2902,10 +2894,10 @@ ALTER INDEX public.tmp_file_lines_pkey ATTACH PARTITION public.tmp_file_lines_de
 
 
 --
--- Name: tmp_files_default_customer_id_path_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+-- Name: tmp_files_default_org_id_path_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
-ALTER INDEX public.idx_tmp_files_customer_path ATTACH PARTITION public.tmp_files_default_customer_id_path_idx;
+ALTER INDEX public.idx_tmp_files_org_path ATTACH PARTITION public.tmp_files_default_org_id_path_idx;
 
 
 --
@@ -2944,10 +2936,10 @@ CREATE TRIGGER capture_shell_function_history_trg BEFORE UPDATE OF source, langu
 
 
 --
--- Name: log_groups log_groups_fill_customer_id_bi; Type: TRIGGER; Schema: public; Owner: -
+-- Name: log_groups log_groups_fill_org_id_bi; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER log_groups_fill_customer_id_bi BEFORE INSERT ON public.log_groups FOR EACH ROW EXECUTE FUNCTION public.log_groups_fill_customer_id();
+CREATE TRIGGER log_groups_fill_org_id_bi BEFORE INSERT OR UPDATE ON public.log_groups FOR EACH ROW EXECUTE FUNCTION public.log_groups_fill_org_id();
 
 
 --
@@ -2982,51 +2974,59 @@ ALTER TABLE ONLY public.agent_tokens
 
 
 --
--- Name: aws_accounts fk_customers_accounts; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.aws_accounts
-    ADD CONSTRAINT fk_customers_accounts FOREIGN KEY (customer_id) REFERENCES public.customers(id) ON DELETE CASCADE;
-
-
---
--- Name: agent_tokens fk_customers_agent_tokens; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.agent_tokens
-    ADD CONSTRAINT fk_customers_agent_tokens FOREIGN KEY (customer_id) REFERENCES public.customers(id) ON DELETE CASCADE;
-
-
---
--- Name: namespaces fk_customers_namespaces; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.namespaces
-    ADD CONSTRAINT fk_customers_namespaces FOREIGN KEY (customer_id) REFERENCES public.customers(id) ON DELETE CASCADE;
-
-
---
--- Name: log_groups fk_log_groups_customer; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: log_groups fk_log_groups_org; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.log_groups
-    ADD CONSTRAINT fk_log_groups_customer FOREIGN KEY (customer_id) REFERENCES public.customers(id) ON DELETE CASCADE;
+    ADD CONSTRAINT fk_log_groups_org FOREIGN KEY (org_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
 
 
 --
--- Name: subscriptions fk_subscriptions_customer; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: aws_accounts fk_organizations_accounts; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.aws_accounts
+    ADD CONSTRAINT fk_organizations_accounts FOREIGN KEY (org_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: agent_tokens fk_organizations_agent_tokens; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_tokens
+    ADD CONSTRAINT fk_organizations_agent_tokens FOREIGN KEY (org_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: namespaces fk_organizations_namespaces; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.namespaces
+    ADD CONSTRAINT fk_organizations_namespaces FOREIGN KEY (org_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: pagerduty_integrations fk_pd_integrations_org; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pagerduty_integrations
+    ADD CONSTRAINT fk_pd_integrations_org FOREIGN KEY (org_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: subscriptions fk_subscriptions_org; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.subscriptions
-    ADD CONSTRAINT fk_subscriptions_customer FOREIGN KEY (customer_id) REFERENCES public.customers(id) ON DELETE CASCADE;
+    ADD CONSTRAINT fk_subscriptions_org FOREIGN KEY (org_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
 
 
 --
--- Name: team_members fk_team_members_customer; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: memberships fk_team_members_org; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.team_members
-    ADD CONSTRAINT fk_team_members_customer FOREIGN KEY (customer_id) REFERENCES public.customers(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.memberships
+    ADD CONSTRAINT fk_team_members_org FOREIGN KEY (org_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
 
 
 --
@@ -3043,14 +3043,6 @@ ALTER TABLE ONLY public.log_groups
 
 ALTER TABLE ONLY public.log_groups
     ADD CONSTRAINT log_groups_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES public.namespaces(id) ON DELETE CASCADE;
-
-
---
--- Name: pagerduty_integrations pagerduty_integrations_customer_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pagerduty_integrations
-    ADD CONSTRAINT pagerduty_integrations_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES public.customers(id) ON DELETE CASCADE;
 
 
 --
@@ -3102,24 +3094,24 @@ ALTER TABLE ONLY public.user_notices
 
 
 --
--- Name: users users_last_active_customer_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: users users_last_active_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.users
-    ADD CONSTRAINT users_last_active_customer_id_fkey FOREIGN KEY (last_active_customer_id) REFERENCES public.customers(id) ON DELETE SET NULL;
+    ADD CONSTRAINT users_last_active_org_id_fkey FOREIGN KEY (last_active_org_id) REFERENCES public.organizations(id) ON DELETE SET NULL;
 
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict q94TTknBn6GMwTR0f5LXtyTJ2VKNo61hleZmKSqsIs2mhOI6BNASdZ2lOIW1hmZ
+\unrestrict Bof5pwO0thSq2aCA0itkDP8VY6eN37inWzm7oN30SwdAJT6IsraKktu4GANhc6F
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict kaLPYk0PN7YeH4UlRF5YrsFWHyQdqCn0O8eCM1UWaOPaevEndi9OlZM8EbauZCc
+\restrict SBBnEzQwCmCXKEcIDBcWnzvpEXplidTCfzDIa8idYXw6Ep4lSQRTWKYz9WIDAxu
 
 -- Dumped from database version 16.14 (Debian 16.14-1.pgdg13+1)
 -- Dumped by pg_dump version 16.14 (Debian 16.14-1.pgdg13+1)
@@ -3153,13 +3145,13 @@ SELECT pg_catalog.setval('public.buckets_new_id_seq', 1, true);
 -- PostgreSQL database dump complete
 --
 
-\unrestrict kaLPYk0PN7YeH4UlRF5YrsFWHyQdqCn0O8eCM1UWaOPaevEndi9OlZM8EbauZCc
+\unrestrict SBBnEzQwCmCXKEcIDBcWnzvpEXplidTCfzDIa8idYXw6Ep4lSQRTWKYz9WIDAxu
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict cmMLAAiY1MlddBdVYnrivOeCciUbeubpzHs0csI70UY3avqrnvt3Yx0a2usuAKq
+\restrict 1mZcyhmuqr24vYCnPfVIAtSxqiCu8LYVggIIL0imG90CMW6BRMccmthdVf4FZvG
 
 -- Dumped from database version 16.14 (Debian 16.14-1.pgdg13+1)
 -- Dumped by pg_dump version 16.14 (Debian 16.14-1.pgdg13+1)
@@ -3245,20 +3237,22 @@ INSERT INTO public.goose_db_version VALUES (63, 64, true, '2026-05-29 19:21:45.2
 INSERT INTO public.goose_db_version VALUES (64, 65, true, '2026-06-18 03:31:33.127421');
 INSERT INTO public.goose_db_version VALUES (65, 66, true, '2026-06-21 21:22:04.543401');
 INSERT INTO public.goose_db_version VALUES (66, 67, true, '2026-06-21 21:22:04.551891');
+INSERT INTO public.goose_db_version VALUES (67, 68, true, '2026-07-30 02:29:40.134255');
+INSERT INTO public.goose_db_version VALUES (68, 69, true, '2026-07-30 02:29:40.184405');
 
 
 --
 -- Name: goose_db_version_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
-SELECT pg_catalog.setval('public.goose_db_version_id_seq', 66, true);
+SELECT pg_catalog.setval('public.goose_db_version_id_seq', 68, true);
 
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict cmMLAAiY1MlddBdVYnrivOeCciUbeubpzHs0csI70UY3avqrnvt3Yx0a2usuAKq
+\unrestrict 1mZcyhmuqr24vYCnPfVIAtSxqiCu8LYVggIIL0imG90CMW6BRMccmthdVf4FZvG
 
 
 -- +weft partman/cron reconstruction (generated by scripts/collapse-migrations.sh; do not hand-edit)
