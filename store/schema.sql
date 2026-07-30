@@ -11,7 +11,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict Bof5pwO0thSq2aCA0itkDP8VY6eN37inWzm7oN30SwdAJT6IsraKktu4GANhc6F
+\restrict Q89as3UdSwAMcp0Kmb3fg64dU4nXeXdVfPxdTpGHVdUXvtCoAx3SrHYorQWHv0i
 
 -- Dumped from database version 16.14 (Debian 16.14-1.pgdg13+1)
 -- Dumped by pg_dump version 16.14 (Debian 16.14-1.pgdg13+1)
@@ -347,6 +347,121 @@ CREATE PROCEDURE public.rollup_usage_daily()
     GROUP BY customer_name, date_trunc('day', hour)::date
     ON CONFLICT (customer_name, day) DO UPDATE SET
         bytes_ingested = EXCLUDED.bytes_ingested;
+$$;
+
+
+--
+-- Name: sync_membership_org_permissions(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.sync_membership_org_permissions() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    perm     public.org_permissions%ROWTYPE;
+    retained text[];
+    actor    text;
+    subject  text;
+    org_name text;
+BEGIN
+    -- A pending invite has no user to grant anything to.
+    IF NEW.user_id IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    -- Removal tombstones the row. Re-adding the member restores the
+    -- membership but not the grants; they are re-granted explicitly.
+    IF NEW.status = 'removed' THEN
+        UPDATE public.org_permissions
+           SET deleted_at = now(),
+               updated_at = now()
+         WHERE org_id = NEW.org_id
+           AND user_id = NEW.user_id
+           AND deleted_at IS NULL;
+        RETURN NEW;
+    END IF;
+
+    -- Promotion, or an admin becoming active: all four bits, explicitly.
+    -- Idempotent, so it is safe on any UPDATE that merely touches role or
+    -- status without changing them.
+    IF NEW.role = 'admin' AND NEW.status = 'active' THEN
+        INSERT INTO public.org_permissions
+                (org_id, user_id, can_manage_functions, can_manage_watches,
+                 can_manage_etc, can_create_namespaces, created_at, updated_at)
+        VALUES (NEW.org_id, NEW.user_id, true, true, true, true, now(), now())
+        ON CONFLICT (org_id, user_id) DO UPDATE
+            SET can_manage_functions  = true,
+                can_manage_watches    = true,
+                can_manage_etc        = true,
+                can_create_namespaces = true,
+                deleted_at            = NULL,
+                updated_at            = now();
+        RETURN NEW;
+    END IF;
+
+    -- Demotion. The bits stay; the operator is told what stayed.
+    IF TG_OP <> 'UPDATE' OR OLD.role <> 'admin' OR NEW.role = 'admin' THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT * INTO perm
+      FROM public.org_permissions
+     WHERE org_id = NEW.org_id
+       AND user_id = NEW.user_id
+       AND deleted_at IS NULL;
+    IF NOT FOUND THEN
+        RETURN NEW;
+    END IF;
+
+    retained := ARRAY(
+        SELECT g FROM (VALUES
+            ('binmgr',    perm.can_manage_functions),
+            ('cronmgr',   perm.can_manage_watches),
+            ('configmgr', perm.can_manage_etc),
+            ('nsmgr',     perm.can_create_namespaces)
+        ) AS t(g, held) WHERE held
+    );
+    IF cardinality(retained) = 0 THEN
+        RETURN NEW;
+    END IF;
+
+    -- Who to tell. set_config(..., true) is transaction-local, so this is
+    -- only non-empty when the caller set it on this very connection. An
+    -- out-of-band change (psql, a script) has no operator to inform, and
+    -- silence is the correct outcome there — not an error.
+    actor := coalesce(current_setting('weft.acting_user_id', true), '');
+    IF actor = '' THEN
+        RETURN NEW;
+    END IF;
+    -- user_notices.user_id is FK'd to users. A stale or bogus GUC must not
+    -- take down a membership update, so check before inserting.
+    IF NOT EXISTS (SELECT 1 FROM public.users WHERE id = actor) THEN
+        RETURN NEW;
+    END IF;
+
+    subject := coalesce(
+        NEW.email,
+        (SELECT email FROM public.users WHERE id = NEW.user_id),
+        NEW.user_id);
+
+    -- Name the org. Notices are addressed to a user, not to a (user, org)
+    -- pair, and the operator can be reading with any of their memberships
+    -- selected in the switcher — so an org-scoped fact that doesn't say
+    -- which org is a riddle. The renderer leads with it.
+    SELECT name INTO org_name FROM public.organizations WHERE id = NEW.org_id;
+
+    INSERT INTO public.user_notices (user_id, notice_key, kind, params, created_at)
+    VALUES (actor,
+            'member_retained_grants',
+            'warning'::public.notice_kind,
+            jsonb_build_object(
+                'org',    coalesce(org_name, NEW.org_id::text),
+                'member', subject,
+                'groups', to_jsonb(retained)),
+            now());
+
+    RETURN NEW;
+END;
 $$;
 
 
@@ -1260,7 +1375,8 @@ CREATE TABLE public.org_permissions (
     can_manage_functions boolean DEFAULT false NOT NULL,
     can_manage_watches boolean DEFAULT false NOT NULL,
     can_manage_etc boolean DEFAULT false NOT NULL,
-    org_id uuid NOT NULL
+    org_id uuid NOT NULL,
+    can_create_namespaces boolean DEFAULT false NOT NULL
 );
 
 
@@ -1741,8 +1857,30 @@ CREATE TABLE public.user_notices (
     user_id text NOT NULL,
     notice_key text NOT NULL,
     kind public.notice_kind NOT NULL,
-    seen_at timestamp with time zone DEFAULT now() NOT NULL
+    seen_at timestamp with time zone,
+    id bigint NOT NULL,
+    params jsonb,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
+
+
+--
+-- Name: user_notices_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.user_notices_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: user_notices_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.user_notices_id_seq OWNED BY public.user_notices.id;
 
 
 --
@@ -1754,7 +1892,6 @@ CREATE TABLE public.users (
     email text NOT NULL,
     name text,
     stripe_customer_id text,
-    can_create_namespace boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
     email_verified_at timestamp with time zone,
@@ -1967,6 +2104,13 @@ ALTER TABLE ONLY public.stripe_usage_reports ALTER COLUMN id SET DEFAULT nextval
 --
 
 ALTER TABLE ONLY public.tmp_files ALTER COLUMN id SET DEFAULT nextval('public.tmp_files_id_seq'::regclass);
+
+
+--
+-- Name: user_notices id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_notices ALTER COLUMN id SET DEFAULT nextval('public.user_notices_id_seq'::regclass);
 
 
 --
@@ -2350,7 +2494,7 @@ ALTER TABLE ONLY public.usage_hourly_default
 --
 
 ALTER TABLE ONLY public.user_notices
-    ADD CONSTRAINT user_notices_pkey PRIMARY KEY (user_id, notice_key);
+    ADD CONSTRAINT user_notices_pkey PRIMARY KEY (id);
 
 
 --
@@ -2775,6 +2919,13 @@ CREATE INDEX idx_tmp_files_org_path ON ONLY public.tmp_files USING btree (org_id
 
 
 --
+-- Name: idx_user_notices_pending; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_notices_pending ON public.user_notices USING btree (user_id) WHERE (seen_at IS NULL);
+
+
+--
 -- Name: idx_users_email; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2950,6 +3101,13 @@ CREATE TRIGGER shard_records_audit AFTER INSERT OR DELETE OR UPDATE ON public.sh
 
 
 --
+-- Name: memberships sync_membership_org_permissions; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER sync_membership_org_permissions AFTER INSERT OR UPDATE OF role, status ON public.memberships FOR EACH ROW EXECUTE FUNCTION public.sync_membership_org_permissions();
+
+
+--
 -- Name: cron_watch_history cron_watch_history_predecessor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3105,13 +3263,13 @@ ALTER TABLE ONLY public.users
 -- PostgreSQL database dump complete
 --
 
-\unrestrict Bof5pwO0thSq2aCA0itkDP8VY6eN37inWzm7oN30SwdAJT6IsraKktu4GANhc6F
+\unrestrict Q89as3UdSwAMcp0Kmb3fg64dU4nXeXdVfPxdTpGHVdUXvtCoAx3SrHYorQWHv0i
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict SBBnEzQwCmCXKEcIDBcWnzvpEXplidTCfzDIa8idYXw6Ep4lSQRTWKYz9WIDAxu
+\restrict y7nJfU5QDr7jiUQBxsYuu0LPN23MmDoiSfWx1E9K2tXh2YQnvaMNw8nWgluxqo7
 
 -- Dumped from database version 16.14 (Debian 16.14-1.pgdg13+1)
 -- Dumped by pg_dump version 16.14 (Debian 16.14-1.pgdg13+1)
@@ -3145,13 +3303,13 @@ SELECT pg_catalog.setval('public.buckets_new_id_seq', 1, true);
 -- PostgreSQL database dump complete
 --
 
-\unrestrict SBBnEzQwCmCXKEcIDBcWnzvpEXplidTCfzDIa8idYXw6Ep4lSQRTWKYz9WIDAxu
+\unrestrict y7nJfU5QDr7jiUQBxsYuu0LPN23MmDoiSfWx1E9K2tXh2YQnvaMNw8nWgluxqo7
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict 1mZcyhmuqr24vYCnPfVIAtSxqiCu8LYVggIIL0imG90CMW6BRMccmthdVf4FZvG
+\restrict h9LddXXLLBYHlrbWaunE6KOcq9LHeKGggUsi4CiJ0q1z7kU0er9eMK4pqo9ZqpS
 
 -- Dumped from database version 16.14 (Debian 16.14-1.pgdg13+1)
 -- Dumped by pg_dump version 16.14 (Debian 16.14-1.pgdg13+1)
@@ -3239,20 +3397,23 @@ INSERT INTO public.goose_db_version VALUES (65, 66, true, '2026-06-21 21:22:04.5
 INSERT INTO public.goose_db_version VALUES (66, 67, true, '2026-06-21 21:22:04.551891');
 INSERT INTO public.goose_db_version VALUES (67, 68, true, '2026-07-30 02:29:40.134255');
 INSERT INTO public.goose_db_version VALUES (68, 69, true, '2026-07-30 02:29:40.184405');
+INSERT INTO public.goose_db_version VALUES (69, 70, true, '2026-07-30 21:45:01.970755');
+INSERT INTO public.goose_db_version VALUES (70, 71, true, '2026-07-30 21:45:01.974013');
+INSERT INTO public.goose_db_version VALUES (71, 72, true, '2026-07-30 21:45:01.982593');
 
 
 --
 -- Name: goose_db_version_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
-SELECT pg_catalog.setval('public.goose_db_version_id_seq', 68, true);
+SELECT pg_catalog.setval('public.goose_db_version_id_seq', 71, true);
 
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict 1mZcyhmuqr24vYCnPfVIAtSxqiCu8LYVggIIL0imG90CMW6BRMccmthdVf4FZvG
+\unrestrict h9LddXXLLBYHlrbWaunE6KOcq9LHeKGggUsi4CiJ0q1z7kU0er9eMK4pqo9ZqpS
 
 
 -- +weft partman/cron reconstruction (generated by scripts/collapse-migrations.sh; do not hand-edit)
