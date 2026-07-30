@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/graybeardcorp/saaskit/orgs"
 	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/coordinator"
 	"github.com/graybeardcorp/weft/coordinator/onboarding"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -136,24 +138,49 @@ func (s *Server) graduateOnboarding(userID string) error {
 		_ = s.store.UpdateUserLastActiveOrg(userID, userOrgs[0].ID)
 	}
 
-	// Graduation banner is gated on (step==done && !HasSeenNotice).
-	// Marking happens when the user dismisses the banner via
-	// handleGraduationNoticeSeen — not here.
+	// Queue the graduation notice. This is the emitter, and it fires
+	// exactly once because the step→done transition is a compare-and-
+	// swap: both call sites reach here only on the CAS that won.
+	//
+	// Delivery is whichever surface the user hits first — the browser
+	// banner (/me + the dismiss endpoint below) or the shell, which
+	// drains it like any other notice. Emitting is not delivering, so
+	// this is safe to do here rather than at render time.
+	if err := s.store.EmitNotice(userID, GraduationNoticeKey, "success", nil); err != nil {
+		return fmt.Errorf("emit graduation notice: %w", err)
+	}
 	return nil
 }
 
-// GraduationNoticeKey is the user_notices key for the one-shot
-// "you've graduated, go set up your own org" banner that shows on
-// the home org after a user finishes the Loom tour. Exported so the
-// /me handler and the dismiss endpoint stay aligned.
-const GraduationNoticeKey = "onboarding_graduated"
+// GraduationNoticeKey is the user_notices key for the "you've graduated,
+// go set up your own org" notice a user gets on finishing the Loom tour.
+// The registry entry (and therefore the copy) lives in coordinator.
+const GraduationNoticeKey = coordinator.NoticeKeyOnboardingGraduated
 
-// handleGraduationNoticeSeen flips the user_notices row for the
-// graduation banner so it doesn't render on subsequent loads. One-
-// shot; idempotent.
+// pendingGraduationIDs returns the user's undelivered graduation notice
+// rows. Empty means the banner has nothing to show — either it was never
+// emitted or it has already been delivered, here or in the shell.
+func (s *Server) pendingGraduationIDs(userID string) []int64 {
+	pending, err := s.store.PendingNotices(userID)
+	if err != nil {
+		log.Printf("notices: pending for %s: %v", userID, err)
+		return nil
+	}
+	var ids []int64
+	for _, p := range pending {
+		if p.Key == GraduationNoticeKey {
+			ids = append(ids, p.ID)
+		}
+	}
+	return ids
+}
+
+// handleGraduationNoticeSeen marks the graduation notice delivered so it
+// doesn't render on subsequent loads. Idempotent: with nothing pending
+// it marks nothing and still reports success.
 func (s *Server) handleGraduationNoticeSeen(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if err := s.store.MarkNoticeSeen(session.UserID, GraduationNoticeKey, "success"); err != nil {
+	if err := s.store.MarkNoticesSeen(s.pendingGraduationIDs(session.UserID)); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

@@ -11,11 +11,15 @@ import (
 	"github.com/graybeardcorp/weft/store"
 )
 
-// denyWrite is the error mounts return when a non-owner without the
-// corresponding OrgPermission flag attempts to mutate a directory.
+// denyWrite is the error mounts return when a caller without the
+// corresponding OrgPermission flag attempts to mutate a directory. The
+// message names the group to ask for, not a role: since migration 072
+// the flag is the only authority, so "owner only" would have pointed
+// the user at the wrong remedy.
 // Wrapping fs.ErrPermission lets callers test with errors.Is.
-func denyWrite(dir string) error {
-	return fmt.Errorf("%s: %w (owner only)", dir, fs.ErrPermission)
+func denyWrite(dir, group string) error {
+	return fmt.Errorf("%s: %w (need the %s group — ask an owner for `adduser <you> %s`)",
+		dir, fs.ErrPermission, group, group)
 }
 
 // NoticeSink is the narrow interface mounts use to signal one-time notices.
@@ -29,23 +33,30 @@ type Config struct {
 	OrgID              string
 	CustomerName       string
 	Tier               store.Tier
-	UserID             string
+	UserID string
+	// IsOwner gates namespace *read* visibility in LogMount. It is not
+	// an authority over the four org-scoped bits below — those come from
+	// the member's org_permissions row and nowhere else (migration 072),
+	// and an owner holds them because their promotion materialized them.
 	IsOwner            bool
 	CanManageFunctions bool // gates writes to /bin
 	CanManageWatches   bool // gates writes to /cron.d
 	CanManageEtc       bool // gates writes to /etc (/etc/passwd is read-only — managed via adduser/deluser)
-	LogServices        []string
-	NoticeQueue        NoticeSink
+	// CanCreateNamespaces gates namespace creation in the active org.
+	CanCreateNamespaces bool
+	LogServices         []string
+	NoticeQueue         NoticeSink
 }
 
 // OrgPerms is the org-scoped permission bundle a session carries. The
 // values mirror auth.Session's CanManage* flags but the type lives
 // here so embedders can build a Config without an auth dependency.
 type OrgPerms struct {
-	IsOwner            bool
-	CanManageFunctions bool
-	CanManageWatches   bool
-	CanManageEtc       bool
+	IsOwner             bool
+	CanManageFunctions  bool
+	CanManageWatches    bool
+	CanManageEtc        bool
+	CanCreateNamespaces bool
 }
 
 // New constructs a MountFS with all weft virtual directories registered.

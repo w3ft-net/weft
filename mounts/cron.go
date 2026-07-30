@@ -69,8 +69,8 @@ func (m *CronMount) Stat(rel string) (fs.FileInfo, error) {
 }
 
 func (m *CronMount) WriteFile(rel string, data []byte) error {
-	if !m.cfg.IsOwner && !m.cfg.CanManageWatches {
-		return denyWrite("/cron.d")
+	if !m.cfg.CanManageWatches {
+		return denyWrite("/cron.d", "cronmgr")
 	}
 	schedule, pipeline, err := ParseCron(string(data))
 	if err != nil {
@@ -127,16 +127,16 @@ func (r cronBinResolver) Source(name string) (string, string, bool) {
 }
 
 func (m *CronMount) Remove(rel string) error {
-	if !m.cfg.IsOwner && !m.cfg.CanManageWatches {
-		return denyWrite("/cron.d")
+	if !m.cfg.CanManageWatches {
+		return denyWrite("/cron.d", "cronmgr")
 	}
 	return m.cfg.Store.DeleteCronWatch(m.cfg.OrgID, rel)
 }
 
 // AmendVersionMessage allows recording a commit message for cron entries.
 func (m *CronMount) AmendVersionMessage(rel, message string) error {
-	if !m.cfg.IsOwner && !m.cfg.CanManageWatches {
-		return denyWrite("/cron.d")
+	if !m.cfg.CanManageWatches {
+		return denyWrite("/cron.d", "cronmgr")
 	}
 	return m.cfg.Store.AmendCronWatchMessage(m.cfg.OrgID, rel, "HEAD", message)
 }

@@ -12,8 +12,9 @@ import (
 // Team management is modeled as Unix-style group membership. A group is
 // one of three things:
 //
-//   - a manager group (binmgr / cronmgr / configmgr) — edit access to
-//     /bin, /cron.d, /etc, backed by the OrgPermission bits.
+//   - a manager group (binmgr / cronmgr / configmgr / nsmgr) — edit access
+//     to /bin, /cron.d, /etc and the right to create namespaces, backed by
+//     the OrgPermission bits.
 //   - a namespace name — read access to /log/<ns>, backed by
 //     NamespacePermission.CanRead.
 //   - "<ns>+tokens" — permission to mint producer tokens for <ns>,
@@ -29,6 +30,7 @@ var managerGroupColumn = map[string]string{
 	"binmgr":    "can_manage_functions",
 	"cronmgr":   "can_manage_watches",
 	"configmgr": "can_manage_etc",
+	"nsmgr":     "can_create_namespaces",
 }
 
 // tokensSuffix marks the produce/token facet of a namespace group. It
@@ -69,8 +71,14 @@ func (s *Store) setGroupMembership(orgID string, email, group string, grant bool
 }
 
 // resolveGrantableMember validates that email names an active member
-// who can hold permissions, returning their user ID. Owners and
-// not-yet-accepted invitees are rejected with actionable errors.
+// who can hold permissions, returning their user ID. Not-yet-accepted
+// invitees are rejected with an actionable error.
+//
+// Owners are grantable. They used to be refused — there was nothing to
+// grant to, since their access was derived from the role — which also
+// meant `deluser <owner> binmgr` had no way to do anything. Since
+// migration 072 an owner holds the same four bits as anyone else, so
+// both directions work.
 func (s *Store) resolveGrantableMember(orgID string, email string) (string, error) {
 	m, err := s.GetTeamMemberByEmail(orgID, email)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -78,9 +86,6 @@ func (s *Store) resolveGrantableMember(orgID string, email string) (string, erro
 	}
 	if err != nil {
 		return "", err
-	}
-	if m.Role == RoleOwner {
-		return "", fmt.Errorf("%s is an owner — owners have implicit full access", email)
 	}
 	if m.Pending() {
 		return "", fmt.Errorf("%s has been invited but hasn't accepted yet — grant groups after they accept", email)
@@ -117,10 +122,21 @@ func (s *Store) findNamespace(orgID string, name string) (*Namespace, error) {
 }
 
 // setOrgBit sets a single OrgPermission column for a user, preserving
-// the other two. Creates the row if absent.
+// the others. Creates the row if absent, and revives it if tombstoned.
+//
+// The tombstone case is the whole reason this isn't a plain upsert. A
+// removed member's row is soft-deleted, but idx_orgperm_org_user has no
+// deleted_at predicate, so the row still occupies (org_id, user_id): a
+// soft-delete-scoped lookup misses it, and the Create that follows
+// collides. Migration 072 moved removal into a trigger, which makes
+// tombstones the normal state for anyone who has ever been removed.
+//
+// Reviving clears the other bits rather than restoring them. Re-adding a
+// member restores the membership, not the grants — the tombstone is a
+// record of what they used to hold, not an entitlement.
 func (s *Store) setOrgBit(orgID string, userID, column string, val bool) error {
 	var existing OrgPermission
-	err := s.scoped(orgID).Where("user_id = ?", userID).First(&existing).Error
+	err := s.scoped(orgID).Unscoped().Where("user_id = ?", userID).First(&existing).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return s.scoped(orgID).Model(&OrgPermission{}).Create(map[string]any{
 			"org_id":  orgID,
@@ -130,6 +146,16 @@ func (s *Store) setOrgBit(orgID string, userID, column string, val bool) error {
 	}
 	if err != nil {
 		return err
+	}
+	if existing.DeletedAt.Valid {
+		return s.scoped(orgID).Unscoped().Model(&existing).Updates(map[string]any{
+			"can_manage_functions":  false,
+			"can_manage_watches":    false,
+			"can_manage_etc":        false,
+			"can_create_namespaces": false,
+			column:                  val,
+			"deleted_at":            nil,
+		}).Error
 	}
 	return s.scoped(orgID).Model(&existing).Update(column, val).Error
 }
@@ -176,9 +202,14 @@ func (s *Store) IsOwner(orgID string, userID string) (bool, error) {
 }
 
 // RemoveMember removes a member from the org entirely: their membership
-// is marked removed and their org + namespace permissions are dropped.
-// Owners cannot be removed this way. Returns an error if email names no
-// member or an owner.
+// is marked removed and their namespace permissions are dropped. Owners
+// cannot be removed this way. Returns an error if email names no member
+// or an owner.
+//
+// The org_permissions tombstone is not written here — migration 072's
+// trigger does it, on the same status update, inside the same
+// transaction. Two writers for one row is how the tombstone bug in
+// setOrgBit stayed hidden; the trigger is now the only one.
 func (s *Store) RemoveMember(orgID string, email string) error {
 	m, err := s.GetTeamMemberByEmail(orgID, email)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -199,22 +230,20 @@ func (s *Store) RemoveMember(orgID string, email string) error {
 		if m.Pending() {
 			return nil
 		}
-		uid := m.UserID
-		if err := txStore.scoped(orgID).Where("user_id = ?", uid).
-			Delete(&OrgPermission{}).Error; err != nil {
-			return err
-		}
-		return tx.Where("user_id = ?", uid).Delete(&NamespacePermission{}).Error
+		return tx.Where("user_id = ?", m.UserID).Delete(&NamespacePermission{}).Error
 	})
 }
 
 // memberGroups returns the sorted group tokens a member belongs to:
-// manager groups first (binmgr/cronmgr/configmgr in that order), then
-// namespace groups alphabetically with "+tokens" following its base.
-// Owners and pending invitees return nil — they hold no explicit
-// groups.
+// manager groups first (binmgr/cronmgr/configmgr/nsmgr in that order),
+// then namespace groups alphabetically with "+tokens" following its
+// base. Pending invitees return nil — they hold no grants yet.
+//
+// Owners go through the same path as everyone else. Their groups are
+// real rows now, so there is no owner fork here and none at the
+// rendering sites either.
 func (s *Store) memberGroups(orgID string, m TeamMember, nsByID map[uint]string) ([]string, error) {
-	if m.Role == RoleOwner || m.Pending() {
+	if m.Pending() {
 		return nil, nil
 	}
 	uid := m.UserID
@@ -230,6 +259,9 @@ func (s *Store) memberGroups(orgID string, m TeamMember, nsByID map[uint]string)
 		}
 		if op.CanManageEtc {
 			groups = append(groups, "configmgr")
+		}
+		if op.CanCreateNamespaces {
+			groups = append(groups, "nsmgr")
 		}
 	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
@@ -292,8 +324,10 @@ func (s *Store) MemberGroups(orgID string, email string) (role, status string, g
 }
 
 // RenderPasswd renders the read-only /etc/passwd roster table: one row
-// per member with role, status, and group membership. Owners show
-// "(all — implicit)"; members with no groups show "—".
+// per member with role, status, and group membership. Members with no
+// groups show "—", owners included — an owner's groups are rows like
+// anyone else's since migration 072, so the "(all — implicit)" special
+// case is gone.
 func (s *Store) RenderPasswd(orgID string) (string, error) {
 	members, err := s.ListTeamMembers(orgID)
 	if err != nil {
@@ -309,17 +343,12 @@ func (s *Store) RenderPasswd(orgID string) (string, error) {
 	userW := len("USER")
 	for _, m := range members {
 		groupsCol := "—"
-		switch {
-		case m.Role == RoleOwner:
-			groupsCol = "(all — implicit)"
-		default:
-			g, err := s.memberGroups(orgID, m, nsByID)
-			if err != nil {
-				return "", err
-			}
-			if len(g) > 0 {
-				groupsCol = strings.Join(g, "  ")
-			}
+		g, err := s.memberGroups(orgID, m, nsByID)
+		if err != nil {
+			return "", err
+		}
+		if len(g) > 0 {
+			groupsCol = strings.Join(g, "  ")
 		}
 		status := string(m.Status)
 		if m.Pending() {

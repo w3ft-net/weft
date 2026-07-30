@@ -157,12 +157,11 @@ func OverageRatePerGB(tier Tier) int {
 // no longer carries a customer pointer. LastActiveOrgID records
 // where the user last operated so reconnects land in the same place.
 type User struct {
-	ID                 string `gorm:"primaryKey"`
-	Email              string `gorm:"not null;uniqueIndex:idx_users_email"`
-	Name               string
-	StripeCustomerID   string
-	CanCreateNamespace bool `gorm:"not null;default:false"`
-	IsSuperadmin       bool `gorm:"not null;default:false"`
+	ID               string `gorm:"primaryKey"`
+	Email            string `gorm:"not null;uniqueIndex:idx_users_email"`
+	Name             string
+	StripeCustomerID string
+	IsSuperadmin     bool `gorm:"not null;default:false"`
 	// HasSeenWelcome flips true when the user dismisses the first-time
 	// welcome modal. The modal re-shows on every login until the flip
 	// happens — new users get one chance per session to read the tour.
@@ -505,16 +504,6 @@ func (s *Store) SetUserName(userID, name string) error {
 	return s.db.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
 		"name":       name,
 		"updated_at": time.Now(),
-	}).Error
-}
-
-// SetCanCreateNamespace flips the namespace-creation flag for a user.
-// Used by the demo seed and the (eventual) admin UI for promoting
-// teammates beyond default permissions.
-func (s *Store) SetCanCreateNamespace(userID string, allowed bool) error {
-	return s.db.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
-		"can_create_namespace": allowed,
-		"updated_at":           time.Now(),
 	}).Error
 }
 

@@ -3,8 +3,11 @@ package store
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/graybeardcorp/saaskit/orgs"
 )
 
 // groupsFor is a test helper: the sorted group tokens for a member.
@@ -87,9 +90,21 @@ func TestTeamGroups_Errors(t *testing.T) {
 	if err := db.AddUserToGroup(cust.ID, alice, "nope"); err == nil || !strings.Contains(err.Error(), "no such group or namespace") {
 		t.Fatalf("expected unknown-group error, got %v", err)
 	}
-	// Owners can't be granted explicit groups.
-	if err := db.AddUserToGroup(cust.ID, owner, "cronmgr"); err == nil || !strings.Contains(err.Error(), "implicit full access") {
-		t.Fatalf("expected owner error, got %v", err)
+	// Owners are grantable and revokable like anyone else. This used to
+	// be an error ("owners have implicit full access") because there was
+	// nothing to grant to; since migration 072 an owner holds the same
+	// four bits, so `deluser <owner> binmgr` has something to do.
+	if err := db.RemoveUserFromGroup(cust.ID, owner, "binmgr"); err != nil {
+		t.Fatalf("deluser owner binmgr: %v", err)
+	}
+	if got := groupsFor(t, db, cust.ID, owner); slices.Contains(got, "binmgr") {
+		t.Errorf("binmgr should be revoked from the owner; groups = %v", got)
+	}
+	if err := db.AddUserToGroup(cust.ID, owner, "binmgr"); err != nil {
+		t.Fatalf("adduser owner binmgr: %v", err)
+	}
+	if got := groupsFor(t, db, cust.ID, owner); !slices.Contains(got, "binmgr") {
+		t.Errorf("binmgr should be restored to the owner; groups = %v", got)
 	}
 	// Non-member.
 	if err := db.AddUserToGroup(cust.ID, "ghost@x.test", "cronmgr"); err == nil || !strings.Contains(err.Error(), "no such member") {
@@ -142,10 +157,57 @@ func TestTeamGroups_RenderPasswd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"USER", "ROLE", "GROUPS", owner, "(all — implicit)", alice, "payments"} {
+	// The owner's groups render as real tokens. There is no
+	// "(all — implicit)" special case any more: an owner's access is
+	// four rows like everyone else's, so every rendering site reads it
+	// the same way.
+	for _, want := range []string{"USER", "ROLE", "GROUPS", owner, "binmgr", "cronmgr", "configmgr", "nsmgr", alice, "payments"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("passwd table missing %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "implicit") {
+		t.Errorf("passwd table should have no implicit-access special case:\n%s", out)
+	}
+}
+
+// TestTeamGroups_GrantAfterRemoveAndReadd: granting a group to a member
+// who was removed and re-added must work.
+//
+// It didn't. Removal soft-deletes the org_permissions row, the lookup in
+// setOrgBit is soft-delete-scoped so it misses the tombstone, and the
+// fallthrough Create then collides with idx_orgperm_org_user — which has
+// no deleted_at predicate and so still sees the tombstone. Migration 072
+// hands removal to a trigger, which makes tombstones the normal case
+// rather than an edge one.
+//
+// Reviving the tombstone must not restore the bits it carried: re-adding
+// a member restores the membership, not the grants.
+func TestTeamGroups_GrantAfterRemoveAndReadd(t *testing.T) {
+	db := teamPermsStore(t)
+	pid := os.Getpid()
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("tg-readd-%d", pid))
+	alice := fmt.Sprintf("alice-readd-%d@x.test", pid)
+	u := addTeamUser(t, db, cust.ID, alice, "member")
+
+	if err := db.AddUserToGroup(cust.ID, alice, "binmgr"); err != nil {
+		t.Fatalf("initial grant: %v", err)
+	}
+	if err := db.RemoveMember(cust.ID, alice); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if err := db.AddTeamMemberWithEmail(cust.ID, u.ID, alice, orgs.RoleMember); err != nil {
+		t.Fatalf("re-add: %v", err)
+	}
+
+	if err := db.AddUserToGroup(cust.ID, alice, "cronmgr"); err != nil {
+		t.Fatalf("grant after re-add: %v", err)
+	}
+
+	got := groupsFor(t, db, cust.ID, alice)
+	want := []string{"cronmgr"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("groups after re-add: got %v want %v (the tombstone's old binmgr must not come back)", got, want)
 	}
 }
 

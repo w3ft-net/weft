@@ -242,6 +242,8 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/onboarding/advance", s.handleOnboardingAdvance)
 	auth.HandleFunc("POST /api/onboarding/dismiss", s.handleOnboardingDismiss)
 	auth.HandleFunc("POST /api/onboarding/graduation-seen", s.handleGraduationNoticeSeen)
+	auth.HandleFunc("GET /api/notices", s.handleListNotices)
+	auth.HandleFunc("POST /api/notices/{id}/seen", s.handleNoticeSeen)
 	auth.HandleFunc("GET /api/fs/list", s.handleListFS)
 	auth.HandleFunc("GET /api/fs/read", s.handleReadFS)
 	auth.HandleFunc("PUT /api/fs/write", s.handleWriteFS)
@@ -370,6 +372,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/team", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/team/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/onboarding/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
+	mux.Handle("/api/notices", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
+	mux.Handle("/api/notices/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/fs/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/account/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/ingestion-status", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
@@ -748,16 +752,11 @@ func (s *Server) userResponse(user *store.User, activeOrgID string, activeCustom
 		})
 	}
 
-	// pending_graduation_notice is the one-shot success banner the
-	// home org shows after a Loom tour completion. True only when the
-	// user reached 'done' AND hasn't dismissed the banner yet.
-	pendingGraduation := false
-	if user.OnboardingStep == "done" {
-		seen, err := s.store.HasSeenNotice(user.ID, GraduationNoticeKey)
-		if err == nil && !seen {
-			pendingGraduation = true
-		}
-	}
+	// pending_graduation_notice is the success banner the home org shows
+	// after a Loom tour completion. It tracks the queued notice, so it
+	// goes false once the notice has been delivered anywhere — including
+	// in the shell, which drains the same row.
+	pendingGraduation := len(s.pendingGraduationIDs(user.ID)) > 0
 
 	resp := map[string]any{
 		"id":                   user.ID,
@@ -2098,14 +2097,7 @@ func (s *Server) handleCreateNamespace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check permission: owner or CanCreateNamespace.
-	user, err := s.store.GetUserByID(session.UserID)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	isOwner := session.IsOwner
-	if !isOwner && !user.CanCreateNamespace {
+	if !session.CanCreateNamespaces {
 		http.Error(w, "forbidden: cannot create namespaces", http.StatusForbidden)
 		return
 	}

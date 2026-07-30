@@ -79,6 +79,8 @@ func TestEndpointsRequireAuth(t *testing.T) {
 		{"POST", "/api/onboarding/advance", session},
 		{"POST", "/api/onboarding/dismiss", session},
 		{"POST", "/api/onboarding/graduation-seen", session},
+		{"GET", "/api/notices", session},
+		{"POST", "/api/notices/1/seen", session},
 		{"GET", "/api/fs/list", session},
 		{"GET", "/api/fs/read", session},
 		{"PUT", "/api/fs/write", session},

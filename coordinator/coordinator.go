@@ -134,7 +134,7 @@ func (r *ExecuteResult) Drain(ctx context.Context) (*DrainedResult, error) {
 	out.Text = textSb.String()
 	out.Stderr = stderrSb.String()
 	// After stream EOF, the runLocal goroutine has populated Notices
-	// (its program order: ExecScript → Notices = noticeQueue.Flush() →
+	// (its program order: ExecScript → Notices = noticeQueue.Drain() →
 	// pipes close → scanners EOF → channel close → consumer Next).
 	out.Notices = r.Notices
 	return out, nil
@@ -1341,7 +1341,7 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 		interp.ExecScript(ast)
 		close(watchDone)
 
-		res.Notices = noticeQueue.Flush()
+		res.Notices = noticeQueue.Drain()
 		// Dirstack courier (out): publish the post-run dirstack on the
 		// same happens-before edge as Notices (write → pipe close →
 		// consumer's post-EOF read), so the caller can cache the cwd the

@@ -94,8 +94,21 @@ func TestTeamPerms_BuildAndApply_RoundTrip(t *testing.T) {
 	if got := roundtrip[bob.Email].Namespaces["api"].Read; !got {
 		t.Errorf("bob/api.Read should be true")
 	}
-	if _, owner := roundtrip[fmt.Sprintf("owner-%d@x.test", os.Getpid())]; owner {
-		t.Error("owner should not appear in synthesized doc")
+	// The owner appears in the synthesized doc. They used to be omitted,
+	// because their access was implicit and there was nothing to show;
+	// since migration 072 they hold real rows, and omitting them would
+	// make the doc a partial view of the state it claims to be
+	// authoritative over.
+	//
+	// Their bits here are read-only, not the all-edit their promotion
+	// materialized, and that is the point: the `apply` above didn't list
+	// them, and missing-from-doc means default-deny for owners too.
+	ownerPerms, ok := roundtrip[fmt.Sprintf("owner-%d@x.test", os.Getpid())]
+	if !ok {
+		t.Fatalf("owner missing from synthesized doc: %+v", roundtrip)
+	}
+	if ownerPerms.Bin != AccessReadOnly || ownerPerms.Cron != AccessReadOnly || ownerPerms.Etc != AccessReadOnly {
+		t.Errorf("owner omitted from the applied doc should be default-denied; got %+v", ownerPerms)
 	}
 }
 
@@ -143,16 +156,34 @@ func TestTeamPerms_Apply_RejectsUnknownMember(t *testing.T) {
 	}
 }
 
-func TestTeamPerms_Apply_RejectsOwner(t *testing.T) {
+// TestTeamPerms_Apply_AcceptsOwner: the doc governs an owner's bits like
+// anyone else's, downgrades included. Listing an owner used to be
+// rejected outright ("owners have implicit full access"); that fork is
+// gone along with the implicit access it described.
+//
+// Note what this means and doesn't: stripping an owner's bits does not
+// strip their role, so they keep the right to edit the doc and can grant
+// themselves back.
+func TestTeamPerms_Apply_AcceptsOwner(t *testing.T) {
 	db := teamPermsStore(t)
 	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("tp-own-%d", os.Getpid()))
 	owner := addTeamUser(t, db, cust.ID, fmt.Sprintf("o-%d@x.test", os.Getpid()), "owner")
 	doc := TeamPermsDoc{
-		owner.Email: {Bin: AccessReadOnly},
+		owner.Email: {Bin: AccessReadOnly, Cron: AccessEdit, Etc: AccessReadOnly},
 	}
-	err := db.ApplyTeamPerms(cust.ID, doc)
-	if err == nil || !strings.Contains(err.Error(), "implicit full access") {
-		t.Fatalf("expected owner-rejection error, got: %v", err)
+	if err := db.ApplyTeamPerms(cust.ID, doc); err != nil {
+		t.Fatalf("ApplyTeamPerms with an owner listed: %v", err)
+	}
+
+	perm, err := db.GetOrgPermission(cust.ID, owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm.CanManageFunctions || perm.CanManageEtc {
+		t.Errorf("owner's bin/etc should be downgraded to read-only; got %+v", perm)
+	}
+	if !perm.CanManageWatches {
+		t.Errorf("owner's cron should stay edit; got %+v", perm)
 	}
 }
 

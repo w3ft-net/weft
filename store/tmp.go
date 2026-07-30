@@ -164,6 +164,21 @@ func (s *Store) TmpUsageBytes(orgID string) (int64, error) {
 	return total, err
 }
 
+// CountTmpFilesByUser returns how many /tmp files a user has created in
+// an org. Directory rows don't count — a directory holds nothing that
+// can expire, so it isn't what the 48h warning is about.
+//
+// The one caller is the expiry notice: it fires on the write that takes
+// a user from zero files to one, which is the only moment the warning is
+// new information.
+func (s *Store) CountTmpFilesByUser(orgID, userID string) (int64, error) {
+	var n int64
+	err := s.db.Table("tmp_files").
+		Where("org_id = ? AND created_by_user_id = ? AND is_dir = FALSE", orgID, userID).
+		Count(&n).Error
+	return n, err
+}
+
 // Mkdir creates a directory row. Errors if the path already exists
 // (as file or dir) or if a parent component is missing or is a file.
 // userID is recorded as the creator; empty userID stores NULL.

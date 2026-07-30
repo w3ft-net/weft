@@ -49,9 +49,14 @@ type NamespaceAcl struct {
 }
 
 // BuildTeamPerms synthesizes the doc from store state — for every
-// non-owner active team member of the customer, it joins their
-// OrgPermission row (defaults to all read-only) and their
-// NamespacePermission rows. Owners are deliberately omitted.
+// active team member of the customer, it joins their OrgPermission row
+// (defaults to all read-only) and their NamespacePermission rows.
+//
+// Owners are included. They used to be omitted because their access was
+// implicit and there was nothing to show; since migration 072 an admin
+// holds real grants like everyone else, so leaving them out would hide
+// rows that exist and make the doc a partial view of the truth it
+// claims to be authoritative over.
 func (s *Store) BuildTeamPerms(orgID string) (TeamPermsDoc, error) {
 	members, err := s.ListTeamMembers(orgID)
 	if err != nil {
@@ -69,7 +74,7 @@ func (s *Store) BuildTeamPerms(orgID string) (TeamPermsDoc, error) {
 
 	doc := TeamPermsDoc{}
 	for _, m := range members {
-		if m.Role == RoleOwner || m.Pending() {
+		if m.Pending() {
 			continue
 		}
 		uid := m.UserID
@@ -148,9 +153,6 @@ func (s *Store) ApplyTeamPerms(orgID string, doc TeamPermsDoc) error {
 		if !ok {
 			return fmt.Errorf("unknown team member: %s", email)
 		}
-		if m.Role == RoleOwner {
-			return fmt.Errorf("%s is an owner — owners have implicit full access and cannot be listed here", email)
-		}
 		if m.Pending() {
 			return fmt.Errorf("%s has not accepted the invite yet — permissions can be set after they sign up", email)
 		}
@@ -191,8 +193,12 @@ func (s *Store) ApplyTeamPerms(orgID string, doc TeamPermsDoc) error {
 		}
 		// Members in the team but absent from the doc → default-deny:
 		// drop their existing OrgPermission + NamespacePermission rows.
+		// This reaches admins too. Stripping an admin's grants doesn't
+		// strip their role, so they can always grant themselves back —
+		// the doc governs the four bits, the role governs who may edit
+		// the doc.
 		for _, m := range members {
-			if m.Role == RoleOwner || m.Pending() {
+			if m.Pending() {
 				continue
 			}
 			if _, listed := doc[m.Email]; listed {

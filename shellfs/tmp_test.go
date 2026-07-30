@@ -227,7 +227,7 @@ func TestTmp_CpCrossMount(t *testing.T) {
 	// on org perms — give the test an owner so the gate doesn't get
 	// in the way of what we're actually verifying.
 	fs := New(db, cust.ID, nil, WithTier("swatch"),
-		WithUser("test-owner", mounts.OrgPerms{IsOwner: true}))
+		WithUser("test-owner", ownerPerms()))
 
 	runShell(t, fs, `echo notascript > /tmp/x`)
 	runShell(t, fs, `cp /tmp/x /bin/y`)
@@ -381,27 +381,34 @@ func (s *stubNoticeSink) Maybe(key string) {
 	s.signaled = append(s.signaled, key)
 }
 
-// TestTmp_WriteSignalsTmpExpiryNotice: writes to /tmp signal the
-// notice key. The queue's once-per-user dedup logic is tested at
-// the coordinator level (NoticeQueue tests); here we just confirm
-// shellfs emits the right signal at the right time.
-func TestTmp_WriteSignalsTmpExpiryNotice(t *testing.T) {
+// TestTmp_FirstFileSignalsTmpExpiryNotice: the write that gives a user
+// their first /tmp file signals the expiry notice; later writes don't.
+//
+// The gate lives here, in the emitter, on purpose. Migration 071 turned
+// user_notices into a per-instance queue with no suppression, so the
+// old arrangement — signal on every mutation and let the store swallow
+// the repeats — would now warn the user on every command that touches
+// /tmp.
+func TestTmp_FirstFileSignalsTmpExpiryNotice(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-warn")
+	user, _ := db.CreateUser("alice-warn@example.test")
 
 	sink := &stubNoticeSink{}
-	fs := New(db, cust.ID, nil, WithTier("swatch"), WithNoticeQueue(sink))
+	fs := New(db, cust.ID, nil, WithTier("swatch"),
+		WithUser(user.ID, mounts.OrgPerms{}), WithNoticeQueue(sink))
 	runShell(t, fs, `echo hello > /tmp/x`)
 
 	if len(sink.signaled) != 1 || sink.signaled[0] != NoticeKeyTmpExpiry {
-		t.Errorf("first write: signaled %v, want [%q]", sink.signaled, NoticeKeyTmpExpiry)
+		t.Fatalf("first file: signaled %v, want [%q]", sink.signaled, NoticeKeyTmpExpiry)
 	}
 
-	// Second write also signals — dedup is the queue's job, not
-	// shellfs's. shellfs is a notification edge.
+	// Appending to it, and creating a second file, are both writes the
+	// user has already been warned about.
 	runShell(t, fs, `echo again >> /tmp/x`)
-	if len(sink.signaled) != 2 {
-		t.Errorf("second write: signaled %v, want 2 entries", sink.signaled)
+	runShell(t, fs, `echo other > /tmp/y`)
+	if len(sink.signaled) != 1 {
+		t.Errorf("subsequent writes: signaled %v, want just the first", sink.signaled)
 	}
 }
 
@@ -410,9 +417,11 @@ func TestTmp_WriteSignalsTmpExpiryNotice(t *testing.T) {
 func TestTmp_NoSignalWhenWriteFails(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-warn-fail")
+	user, _ := db.CreateUser("alice-warn-fail@example.test")
 
 	sink := &stubNoticeSink{}
-	fs := New(db, cust.ID, nil, WithTier("trial"), WithNoticeQueue(sink))
+	fs := New(db, cust.ID, nil, WithTier("trial"),
+		WithUser(user.ID, mounts.OrgPerms{}), WithNoticeQueue(sink))
 
 	// Trial cap is 500 KB. Writing 600 KB fails.
 	huge := strings.Repeat("z", 600*1024)
@@ -422,17 +431,26 @@ func TestTmp_NoSignalWhenWriteFails(t *testing.T) {
 	}
 }
 
-// TestTmp_MkdirSignals: write isn't the only path that triggers a
-// notice signal — mkdir is also a /tmp mutation.
-func TestTmp_MkdirSignals(t *testing.T) {
+// TestTmp_MkdirDoesNotSignal: a directory holds nothing that can
+// expire, so mkdir isn't what the 48h warning is about — and a user
+// whose first act is mkdir shouldn't burn the notice on it.
+func TestTmp_MkdirDoesNotSignal(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-warn-mk")
+	user, _ := db.CreateUser("alice-warn-mk@example.test")
 
 	sink := &stubNoticeSink{}
-	fs := New(db, cust.ID, nil, WithTier("swatch"), WithNoticeQueue(sink))
+	fs := New(db, cust.ID, nil, WithTier("swatch"),
+		WithUser(user.ID, mounts.OrgPerms{}), WithNoticeQueue(sink))
 	runShell(t, fs, `mkdir /tmp/scratch`)
+	if len(sink.signaled) != 0 {
+		t.Errorf("mkdir: signaled %v, want []", sink.signaled)
+	}
+
+	// The first real file still warns, mkdir notwithstanding.
+	runShell(t, fs, `echo hi > /tmp/scratch/note`)
 	if len(sink.signaled) != 1 || sink.signaled[0] != NoticeKeyTmpExpiry {
-		t.Errorf("mkdir: signaled %v, want [%q]", sink.signaled, NoticeKeyTmpExpiry)
+		t.Errorf("first file after mkdir: signaled %v, want [%q]", sink.signaled, NoticeKeyTmpExpiry)
 	}
 }
 

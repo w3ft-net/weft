@@ -276,7 +276,7 @@ func TestReadFile_LogNamespace_OwnerBypass(t *testing.T) {
 	fs := New(db, cust.ID, []string{"private/app"},
 		WithTier("swatch"),
 		WithCustomerName("nsowner-test"),
-		WithUser(user.ID, mounts.OrgPerms{IsOwner: true}))
+		WithUser(user.ID, ownerPerms()))
 
 	// Owner should have access despite no permission row.
 	_, err = fs.ReadFile("/log/private/app.log")

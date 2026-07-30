@@ -10,9 +10,17 @@ import (
 	"github.com/graybeardcorp/weft/mounts"
 )
 
-// orgPermCases drives the three identically-shaped gating tests for
-// /bin, /cron.d, and /etc: non-owner without the flag is denied; the
-// flag (or owner) lets the write through.
+// orgPermCase drives the three identically-shaped gating tests for
+// /bin, /cron.d, and /etc: the corresponding flag is what lets a write
+// through, and nothing else does.
+//
+// The owner-no-flag case is the one that changed in migration 072. Role
+// used to be a second permission authority — IsOwner bypassed the flag
+// entirely — so an owner wrote /bin whether or not they held binmgr.
+// Now the flag is the only answer. In practice an owner does hold it,
+// because becoming an admin materializes all four bits; what this case
+// pins is that the bypass is gone, so clearing an owner's row actually
+// takes their access away.
 type orgPermCase struct {
 	name     string
 	perms    mounts.OrgPerms
@@ -23,6 +31,21 @@ func cronYAML() string {
 	return "# schedule: every 1h\necho ok\n"
 }
 
+// ownerPerms is the permission bundle BuildSession hands an owner: the
+// role flag plus the four org bits, which migration 072 materializes on
+// promotion. Fixtures that just want "a user who can write everything"
+// use this rather than OrgPerms{IsOwner: true} — since the owner bypass
+// was removed, that literal denies every write.
+func ownerPerms() mounts.OrgPerms {
+	return mounts.OrgPerms{
+		IsOwner:             true,
+		CanManageFunctions:  true,
+		CanManageWatches:    true,
+		CanManageEtc:        true,
+		CanCreateNamespaces: true,
+	}
+}
+
 func TestOrgPerms_BinMount_WriteFile(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("perm-bin-%d", os.Getpid()))
@@ -30,7 +53,7 @@ func TestOrgPerms_BinMount_WriteFile(t *testing.T) {
 	cases := []orgPermCase{
 		{"member-no-flag", mounts.OrgPerms{}, true},
 		{"member-with-flag", mounts.OrgPerms{CanManageFunctions: true}, false},
-		{"owner-no-flag", mounts.OrgPerms{IsOwner: true}, false},
+		{"owner-no-flag", mounts.OrgPerms{IsOwner: true}, true},
 		{"member-other-flag", mounts.OrgPerms{CanManageWatches: true, CanManageEtc: true}, true},
 	}
 	for _, tc := range cases {
@@ -50,7 +73,7 @@ func TestOrgPerms_CronMount_WriteFile(t *testing.T) {
 	cases := []orgPermCase{
 		{"member-no-flag", mounts.OrgPerms{}, true},
 		{"member-with-flag", mounts.OrgPerms{CanManageWatches: true}, false},
-		{"owner-no-flag", mounts.OrgPerms{IsOwner: true}, false},
+		{"owner-no-flag", mounts.OrgPerms{IsOwner: true}, true},
 		{"member-other-flag", mounts.OrgPerms{CanManageFunctions: true, CanManageEtc: true}, true},
 	}
 	for _, tc := range cases {
@@ -70,7 +93,7 @@ func TestOrgPerms_EtcMount_WriteFile(t *testing.T) {
 	cases := []orgPermCase{
 		{"member-no-flag", mounts.OrgPerms{}, true},
 		{"member-with-flag", mounts.OrgPerms{CanManageEtc: true}, false},
-		{"owner-no-flag", mounts.OrgPerms{IsOwner: true}, false},
+		{"owner-no-flag", mounts.OrgPerms{IsOwner: true}, true},
 		{"member-other-flag", mounts.OrgPerms{CanManageFunctions: true, CanManageWatches: true}, true},
 	}
 	for _, tc := range cases {

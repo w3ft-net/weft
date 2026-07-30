@@ -201,8 +201,10 @@ func seed(s *store.Store, tokensOut string) error {
 			if err := s.SetUserName(u.ID, m.Name); err != nil {
 				return fmt.Errorf("user %s name: %w", m.Email, err)
 			}
-			if err := s.SetCanCreateNamespace(u.ID, m.CanCreateNS); err != nil {
-				return fmt.Errorf("user %s can_create_namespace: %w", m.Email, err)
+			if m.CanCreateNS {
+				if err := s.AddUserToGroup(cust.ID, m.Email, "nsmgr"); err != nil {
+					return fmt.Errorf("user %s nsmgr: %w", m.Email, err)
+				}
 			}
 			if m.ReadOnly {
 				if err := s.UpsertNamespacePermission(&store.NamespacePermission{
@@ -337,8 +339,10 @@ func seedProdLoom(s *store.Store, tokensOut string) error {
 		if err := s.SetUserName(u.ID, m.Name); err != nil {
 			return fmt.Errorf("user %s name: %w", m.Email, err)
 		}
-		if err := s.SetCanCreateNamespace(u.ID, m.CanCreateNS); err != nil {
-			return fmt.Errorf("user %s can_create_namespace: %w", m.Email, err)
+		if m.CanCreateNS {
+			if err := s.AddUserToGroup(cust.ID, m.Email, "nsmgr"); err != nil {
+				return fmt.Errorf("user %s nsmgr: %w", m.Email, err)
+			}
 		}
 		if m.ReadOnly {
 			if err := s.UpsertNamespacePermission(&store.NamespacePermission{

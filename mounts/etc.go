@@ -127,8 +127,8 @@ func (m *EtcMount) WriteFile(rel string, data []byte) error {
 	if rel == "passwd" {
 		return fmt.Errorf("/etc/passwd is read-only — manage the team with adduser/deluser")
 	}
-	if !m.cfg.IsOwner && !m.cfg.CanManageEtc {
-		return denyWrite("/etc")
+	if !m.cfg.CanManageEtc {
+		return denyWrite("/etc", "configmgr")
 	}
 	switch {
 	case rel == "notify.yaml":
@@ -157,8 +157,8 @@ func (m *EtcMount) Remove(rel string) error {
 	if rel == "passwd" {
 		return fmt.Errorf("/etc/passwd: operation not permitted")
 	}
-	if !m.cfg.IsOwner && !m.cfg.CanManageEtc {
-		return denyWrite("/etc")
+	if !m.cfg.CanManageEtc {
+		return denyWrite("/etc", "configmgr")
 	}
 	if dashName, ok := dashboardName(rel); ok {
 		return m.cfg.Store.DeleteDashboard(m.cfg.OrgID, dashName)

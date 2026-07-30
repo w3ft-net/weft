@@ -74,10 +74,10 @@ func WithCustomerName(name string) Option {
 }
 
 // WithUser sets the user ID and org-scoped permission flags for
-// permission checks. Owners pass IsOwner=true and the three CanManage*
-// flags are ignored (owners bypass). Members pass IsOwner=false and
-// the three flags reflect their OrgPermission row, defaulting to all
-// false (read-only).
+// permission checks. The flags reflect the member's OrgPermission row
+// and are authoritative for every caller including owners, defaulting
+// to all false (read-only) when there is no row. IsOwner rides along
+// for namespace read visibility, not for these flags.
 func WithUser(userID string, perms mounts.OrgPerms) Option {
 	return func(c *mounts.Config) {
 		c.UserID = userID
@@ -85,6 +85,7 @@ func WithUser(userID string, perms mounts.OrgPerms) Option {
 		c.CanManageFunctions = perms.CanManageFunctions
 		c.CanManageWatches = perms.CanManageWatches
 		c.CanManageEtc = perms.CanManageEtc
+		c.CanCreateNamespaces = perms.CanCreateNamespaces
 	}
 }
 

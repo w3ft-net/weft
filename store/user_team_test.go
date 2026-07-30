@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -92,27 +94,48 @@ func TestDismissOnboarding(t *testing.T) {
 	}
 }
 
-// TestSetCanCreateNamespace toggles the namespace-creation grant
-// (used by the demo seed and the admin UI).
-func TestSetCanCreateNamespace(t *testing.T) {
-	db := testOpen(t)
-	user, _ := db.CreateUser("ns-perm-test@example.com")
+// TestNsmgrGroup toggles the namespace-creation grant, which lives on
+// org_permissions as the nsmgr group rather than a global user flag —
+// the grant authorizes an org-scoped action, so it has to be per-org
+// (migration 070).
+func TestNsmgrGroup(t *testing.T) {
+	db := teamPermsStore(t)
+	pid := os.Getpid()
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("nsmgr-%d", pid))
+	alice := fmt.Sprintf("alice-nsmgr-%d@x.test", pid)
+	_ = addTeamUser(t, db, cust.ID, alice, "member")
 
-	if err := db.SetCanCreateNamespace(user.ID, true); err != nil {
-		t.Fatalf("SetCanCreateNamespace(true): %v", err)
+	if err := db.AddUserToGroup(cust.ID, alice, "nsmgr"); err != nil {
+		t.Fatalf("add nsmgr: %v", err)
 	}
-	got, _ := db.GetUserByID(user.ID)
-	if !got.CanCreateNamespace {
-		t.Error("CanCreateNamespace should be true")
+	perm, err := db.GetOrgPermission(cust.ID, userIDForEmail(t, db, cust.ID, alice))
+	if err != nil {
+		t.Fatalf("GetOrgPermission after grant: %v", err)
+	}
+	if !perm.CanCreateNamespaces {
+		t.Error("CanCreateNamespaces should be true after nsmgr grant")
 	}
 
-	if err := db.SetCanCreateNamespace(user.ID, false); err != nil {
-		t.Fatalf("SetCanCreateNamespace(false): %v", err)
+	if err := db.RemoveUserFromGroup(cust.ID, alice, "nsmgr"); err != nil {
+		t.Fatalf("remove nsmgr: %v", err)
 	}
-	got, _ = db.GetUserByID(user.ID)
-	if got.CanCreateNamespace {
-		t.Error("CanCreateNamespace should be false")
+	perm, err = db.GetOrgPermission(cust.ID, userIDForEmail(t, db, cust.ID, alice))
+	if err != nil {
+		t.Fatalf("GetOrgPermission after revoke: %v", err)
 	}
+	if perm.CanCreateNamespaces {
+		t.Error("CanCreateNamespaces should be false after nsmgr revoke")
+	}
+}
+
+// userIDForEmail resolves a member's user ID within an org.
+func userIDForEmail(t *testing.T, db *Store, orgID, email string) string {
+	t.Helper()
+	m, err := db.GetTeamMemberByEmail(orgID, email)
+	if err != nil {
+		t.Fatalf("GetTeamMemberByEmail(%s): %v", email, err)
+	}
+	return m.UserID
 }
 
 // ── TeamMember helpers ─────────────────────────────────────────

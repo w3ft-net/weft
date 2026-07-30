@@ -109,10 +109,14 @@ func (m *TmpMount) Stat(rel string) (fs.FileInfo, error) {
 
 func (m *TmpMount) WriteFile(rel string, data []byte) error {
 	path := "/tmp/" + rel
+	// WriteTmpFile creates or overwrites, and doesn't say which. The
+	// expiry notice only cares about creation, so ask first.
+	_, err := m.cfg.Store.GetTmpFile(m.cfg.OrgID, path)
+	created := errors.Is(err, store.ErrTmpNotFound)
 	if err := m.cfg.Store.WriteTmpFile(m.cfg.OrgID, m.cfg.Tier, m.cfg.UserID, path, data); err != nil {
 		return err
 	}
-	m.noteFirstWrite()
+	m.noteFileCreated(created)
 	return nil
 }
 
@@ -147,6 +151,7 @@ func (m *TmpMount) Remove(rel string) error {
 
 func (m *TmpMount) AppendFile(rel string, data []byte) error {
 	path := "/tmp/" + rel
+	created := false
 	if err := func() error {
 		p, err := store.NormalizeTmpPath(path)
 		if err != nil {
@@ -163,6 +168,7 @@ func (m *TmpMount) AppendFile(rel string, data []byte) error {
 		if existing != nil && existing.IsDir {
 			return store.ErrTmpIsDir
 		}
+		created = existing == nil
 
 		var existingSize int64
 		var startLine int64
@@ -246,17 +252,15 @@ func (m *TmpMount) AppendFile(rel string, data []byte) error {
 	}(); err != nil {
 		return err
 	}
-	m.noteFirstWrite()
+	m.noteFileCreated(created)
 	return nil
 }
 
 func (m *TmpMount) Mkdir(rel string) error {
 	path := "/tmp/" + rel
-	if err := m.cfg.Store.Mkdir(m.cfg.OrgID, m.cfg.UserID, path); err != nil {
-		return err
-	}
-	m.noteFirstWrite()
-	return nil
+	// No expiry notice here: a directory holds nothing that can be lost,
+	// and noteFileCreated counts files only.
+	return m.cfg.Store.Mkdir(m.cfg.OrgID, m.cfg.UserID, path)
 }
 
 func (m *TmpMount) RemoveAll(rel string) error {
@@ -356,7 +360,8 @@ func (m *TmpMount) CopyFile(srcRel, dstRel string) error {
 	}(); err != nil {
 		return err
 	}
-	m.noteFirstWrite()
+	// A copy always creates: an existing destination is rejected above.
+	m.noteFileCreated(true)
 	return nil
 }
 
@@ -390,12 +395,14 @@ func (m *TmpMount) Rename(oldRel, newRel string) error {
 	}(); err != nil {
 		return err
 	}
-	m.noteFirstWrite()
+	// A rename creates no file, so no expiry notice: the path moved,
+	// the retention clock it was already on didn't.
 	return nil
 }
 
 func (m *TmpMount) Touch(rel string) error {
 	path := "/tmp/" + rel
+	created := false
 	if err := func() error {
 		p, err := store.NormalizeTmpPath(path)
 		if err != nil {
@@ -403,6 +410,7 @@ func (m *TmpMount) Touch(rel string) error {
 		}
 		existing, err := m.cfg.Store.GetTmpFile(m.cfg.OrgID, p)
 		if errors.Is(err, store.ErrTmpNotFound) {
+			created = true
 			return m.cfg.Store.WriteTmpFile(m.cfg.OrgID, m.cfg.Tier, m.cfg.UserID, p, nil)
 		}
 		if err != nil {
@@ -428,12 +436,32 @@ func (m *TmpMount) Touch(rel string) error {
 	}(); err != nil {
 		return err
 	}
-	m.noteFirstWrite()
+	// Touching an existing file resets its clock but teaches nothing new;
+	// only the branch that created a file is a creation.
+	m.noteFileCreated(created)
 	return nil
 }
 
-func (m *TmpMount) noteFirstWrite() {
-	if m.cfg.NoticeQueue == nil {
+// noteFileCreated signals the 48h expiry warning on the write that gives
+// a user their first /tmp file, and only then. Callers pass whether the
+// call actually created a file; overwrites, appends, touches of existing
+// files and renames all pass false (or don't call at all).
+//
+// The gate used to be absent: every mutation signaled, and the notice
+// store swallowed the repeats by suppressing per (user, key) forever.
+// Migration 071 removed that suppression on purpose — the queue holds
+// one row per instance and has no opinion about repeats — so without
+// this the user would see the warning on every command touching /tmp.
+//
+// Both conditions are needed. `created` alone fires again on the second
+// and third file; the count alone fires on every write made while the
+// user happens to own exactly one file.
+func (m *TmpMount) noteFileCreated(created bool) {
+	if !created || m.cfg.NoticeQueue == nil || m.cfg.UserID == "" {
+		return
+	}
+	n, err := m.cfg.Store.CountTmpFilesByUser(m.cfg.OrgID, m.cfg.UserID)
+	if err != nil || n != 1 {
 		return
 	}
 	m.cfg.NoticeQueue.Maybe(NoticeKeyTmpExpiry)

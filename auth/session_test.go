@@ -39,6 +39,10 @@ func addMember(t *testing.T, db *store.Store, custID string, role string) *store
 	return user
 }
 
+// TestBuildSession_OwnerGetsAllFlags: an owner has every flag. Note the
+// mechanism, which changed in migration 072: the flags are true because
+// becoming an active admin materializes an all-bits-true org_permissions
+// row, not because BuildSession bypasses the row for owners.
 func TestBuildSession_OwnerGetsAllFlags(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("sess-owner-%d", os.Getpid()))
@@ -51,9 +55,63 @@ func TestBuildSession_OwnerGetsAllFlags(t *testing.T) {
 	if !sess.IsOwner {
 		t.Error("expected IsOwner=true")
 	}
-	if !sess.CanManageFunctions || !sess.CanManageWatches || !sess.CanManageEtc {
-		t.Errorf("owner should bypass to all flags; got bin=%v cron=%v etc=%v",
-			sess.CanManageFunctions, sess.CanManageWatches, sess.CanManageEtc)
+	if !sess.CanManageFunctions || !sess.CanManageWatches || !sess.CanManageEtc || !sess.CanCreateNamespaces {
+		t.Errorf("owner should hold all four bits; got bin=%v cron=%v etc=%v ns=%v",
+			sess.CanManageFunctions, sess.CanManageWatches, sess.CanManageEtc, sess.CanCreateNamespaces)
+	}
+}
+
+// TestBuildSession_OwnerReadsBitsFromRow: role is no longer a permission
+// authority. An owner whose org_permissions row has been cleared reads
+// as having none of the four bits — proof that BuildSession consults the
+// row and nothing else.
+//
+// This is what "org_permissions is authoritative" means in practice, and
+// it is the case that used to be impossible to express: before migration
+// 072 an owner's bits were recomputed from the role on every request, so
+// clearing the row changed nothing.
+func TestBuildSession_OwnerReadsBitsFromRow(t *testing.T) {
+	db := testStore(t)
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("sess-owner-cleared-%d", os.Getpid()))
+	user := addMember(t, db, cust.ID, "owner")
+
+	err := db.ExecForTest(
+		`UPDATE org_permissions
+		    SET can_manage_functions = false, can_manage_watches = false,
+		        can_manage_etc = false, can_create_namespaces = false
+		  WHERE org_id = ? AND user_id = ?`,
+		cust.ID, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sess, err := BuildSession(db, user.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sess.IsOwner {
+		t.Error("role is unchanged, so IsOwner should still be true")
+	}
+	if sess.CanManageFunctions || sess.CanManageWatches || sess.CanManageEtc || sess.CanCreateNamespaces {
+		t.Errorf("cleared row should read as no bits; got bin=%v cron=%v etc=%v ns=%v",
+			sess.CanManageFunctions, sess.CanManageWatches, sess.CanManageEtc, sess.CanCreateNamespaces)
+	}
+}
+
+// TestBuildSession_AdminMembershipMaterializesRow: the trigger, seen
+// from the Go side. Adding an admin membership creates the row that
+// BuildSession will read.
+func TestBuildSession_AdminMembershipMaterializesRow(t *testing.T) {
+	db := testStore(t)
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("sess-materialize-%d", os.Getpid()))
+	user := addMember(t, db, cust.ID, "owner")
+
+	perm, err := db.GetOrgPermission(cust.ID, user.ID)
+	if err != nil {
+		t.Fatalf("admin should have an org_permissions row: %v", err)
+	}
+	if !perm.CanManageFunctions || !perm.CanManageWatches || !perm.CanManageEtc || !perm.CanCreateNamespaces {
+		t.Errorf("materialized row should hold all four bits; got %+v", perm)
 	}
 }
 

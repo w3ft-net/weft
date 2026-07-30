@@ -17,10 +17,11 @@ import (
 // the shape shellfs.WithUser expects. One helper, four call sites.
 func sessionPerms(s *auth.Session) mounts.OrgPerms {
 	return mounts.OrgPerms{
-		IsOwner:            s.IsOwner,
-		CanManageFunctions: s.CanManageFunctions,
-		CanManageWatches:   s.CanManageWatches,
-		CanManageEtc:       s.CanManageEtc,
+		IsOwner:             s.IsOwner,
+		CanManageFunctions:  s.CanManageFunctions,
+		CanManageWatches:    s.CanManageWatches,
+		CanManageEtc:        s.CanManageEtc,
+		CanCreateNamespaces: s.CanCreateNamespaces,
 	}
 }
 
