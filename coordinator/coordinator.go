@@ -16,6 +16,7 @@ import (
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/logdb"
 	"github.com/graybeardcorp/weft/mounts"
+	"github.com/graybeardcorp/weft/notices"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
@@ -41,8 +42,8 @@ type TimeRange = logdb.TimeRange
 // way out via queryResultToExecuteResult.
 type QueryResult struct {
 	Text    string
-	Stderr  string   // alert/error output — rendered in red by the shell
-	Notices []Notice // one-time per-user notices to surface in the response
+	Stderr  string           // alert/error output — rendered in red by the shell
+	Notices []notices.Notice // one-time per-user notices to surface in the response
 }
 
 // ExecuteResult is the public shape returned by Coordinator.Execute,
@@ -54,7 +55,7 @@ type QueryResult struct {
 // callers read it after the stream exhausts (Drain handles this).
 type ExecuteResult struct {
 	Stream  compute.LineStream
-	Notices []Notice
+	Notices []notices.Notice
 	// FinalDirStack is the interpreter's dirstack (index 0 == cwd) after
 	// the pipeline ran — the "ferry back" half of the dirstack courier.
 	// Populated by the runLocal goroutine right before it closes the pipe
@@ -94,7 +95,7 @@ type DrainedResult struct {
 	Rows    []*pb.ResultRow
 	Text    string
 	Stderr  string
-	Notices []Notice
+	Notices []notices.Notice
 }
 
 // Drain reads ExecuteResult.Stream to exhaustion and returns the
@@ -1255,7 +1256,7 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 
 	bash.RegisterToolCommands(interp)
 
-	noticeQueue := NewNoticeQueue(c.Store, userID)
+	noticeQueue := notices.NewQueue(c.Store, userID)
 	if custID != "" {
 		tier := c.Store.TierForOrg(custID)
 		opts := []shellfs.Option{

@@ -42,8 +42,8 @@ func TestStripClientIDVersion(t *testing.T) {
 		{"weftd/0.14.0", "0.14.0"},
 		{"weftd/0.14.0+abc123", "0.14.0"},
 		{"weft/0.3.0+def456", "0.3.0"},
-		{"0.14.0", "0.14.0"},        // no prefix
-		{"0.14.0+abc", "0.14.0"},     // no binary prefix but sha present
+		{"0.14.0", "0.14.0"},     // no prefix
+		{"0.14.0+abc", "0.14.0"}, // no binary prefix but sha present
 		{"", ""},
 	}
 	for _, c := range cases {

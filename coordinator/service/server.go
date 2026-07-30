@@ -25,6 +25,7 @@ import (
 	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/logdb"
 	"github.com/graybeardcorp/weft/mounts"
+	"github.com/graybeardcorp/weft/notices"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
@@ -34,7 +35,7 @@ import (
 // protobuf wire shape. The two types carry the same fields; the
 // indirection exists so coordinator/notices.go doesn't need to
 // import the proto package.
-func convertNotices(in []coordinator.Notice) []*pb.Notice {
+func convertNotices(in []notices.Notice) []*pb.Notice {
 	if len(in) == 0 {
 		return nil
 	}

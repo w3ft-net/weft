@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/graybeardcorp/saaskit/orgs"
-	"github.com/graybeardcorp/weft/coordinator"
+	"github.com/graybeardcorp/weft/notices"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -49,7 +49,7 @@ func TestNoticesAPI_ListAndDismiss(t *testing.T) {
 	cust, _ := s.FindOrCreateOrg(fmt.Sprintf("notices-api-%d", os.Getpid()))
 	user, jwt := permsSeed(t, s, cust, orgs.RoleMember, "notices")
 
-	err := s.EmitNotice(user.ID, coordinator.NoticeKeyMemberRetainedGrants, "warning",
+	err := s.EmitNotice(user.ID, notices.KeyMemberRetainedGrants, "warning",
 		map[string]any{"member": "dana@x.test", "groups": []string{"binmgr"}})
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func TestNoticesAPI_ListAndDismiss(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("want 1 notice, got %d: %+v", len(got), got)
 	}
-	if got[0].Key != coordinator.NoticeKeyMemberRetainedGrants {
+	if got[0].Key != notices.KeyMemberRetainedGrants {
 		t.Errorf("key = %q", got[0].Key)
 	}
 	if got[0].Title == "" || got[0].Body == "" {
@@ -157,7 +157,7 @@ func TestGraduationNotice_DeliveredInShellClearsBanner(t *testing.T) {
 	}
 
 	// The shell drains it.
-	drained := coordinator.NewNoticeQueue(s, user.ID).Drain()
+	drained := notices.NewQueue(s, user.ID).Drain()
 	if len(drained) != 1 || drained[0].Key != GraduationNoticeKey {
 		t.Fatalf("shell drain: got %+v", drained)
 	}

@@ -13,8 +13,8 @@ import (
 
 	"github.com/graybeardcorp/saaskit/orgs"
 	"github.com/graybeardcorp/weft/auth"
-	"github.com/graybeardcorp/weft/coordinator"
 	"github.com/graybeardcorp/weft/coordinator/onboarding"
+	"github.com/graybeardcorp/weft/notices"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -155,7 +155,7 @@ func (s *Server) graduateOnboarding(userID string) error {
 // GraduationNoticeKey is the user_notices key for the "you've graduated,
 // go set up your own org" notice a user gets on finishing the Loom tour.
 // The registry entry (and therefore the copy) lives in coordinator.
-const GraduationNoticeKey = coordinator.NoticeKeyOnboardingGraduated
+const GraduationNoticeKey = notices.KeyOnboardingGraduated
 
 // pendingGraduationIDs returns the user's undelivered graduation notice
 // rows. Empty means the banner has nothing to show — either it was never

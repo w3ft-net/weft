@@ -1,4 +1,17 @@
-package coordinator
+// Package notices is the registry and delivery queue for one-time
+// user notices. Emitters are spread across the system — mounts signals
+// /tmp expiry, migration 072's membership trigger writes rows straight
+// from Postgres, api emits the onboarding graduation — and three
+// surfaces render them: the HTTP API, the gRPC query response, and the
+// shell.
+//
+// The package is deliberately a leaf: it imports store and nothing
+// else of ours. This unit used to live in package coordinator, which
+// pulls in compute → shard → duckdb-go, so when api grew an import of
+// it for Render, cmd/api (built CGO_ENABLED=0) stopped loading at all
+// and two AMI builds died four minutes in. Keep it leaf-shaped —
+// TestCGOFreeBinariesLoadWithoutCgo is what notices when it isn't.
+package notices
 
 import (
 	"fmt"
@@ -9,69 +22,69 @@ import (
 	"github.com/graybeardcorp/weft/store"
 )
 
-// NoticeKind classifies a notice for frontend rendering. The
+// Kind classifies a notice for frontend rendering. The
 // frontend decides whether each kind shows as toast / banner /
 // modal — backend just emits the hint.
-type NoticeKind string
+type Kind string
 
 const (
-	NoticeKindSuccess NoticeKind = "success"
-	NoticeKindWarning NoticeKind = "warning"
-	NoticeKindError   NoticeKind = "error"
+	KindSuccess Kind = "success"
+	KindWarning Kind = "warning"
+	KindError   Kind = "error"
 )
 
 // Notice is the payload shape returned to the API server in the
 // query response. The wire shape (protobuf) mirrors this exactly.
 type Notice struct {
-	Key   string     `json:"key"`
-	Kind  NoticeKind `json:"kind"`
-	Title string     `json:"title"`
-	Body  string     `json:"body"`
+	Key   string `json:"key"`
+	Kind  Kind   `json:"kind"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
 }
 
-// NoticeKeyMemberRetainedGrants is emitted by migration 072's membership
+// KeyMemberRetainedGrants is emitted by migration 072's membership
 // trigger when an admin is demoted to member: the four org_permissions
 // bits their promotion materialized stay put, and the operator who
 // demoted them is told exactly what was kept.
-const NoticeKeyMemberRetainedGrants = "member_retained_grants"
+const KeyMemberRetainedGrants = "member_retained_grants"
 
-// NoticeKeyOnboardingGraduated is emitted when a user finishes the Loom
+// KeyOnboardingGraduated is emitted when a user finishes the Loom
 // tour. The browser renders it as the graduation banner; the shell
 // renders it as a notice like any other. Whichever surface the user
 // reaches first delivers it — it is one notice with two renderers, not
 // a browser feature that happens to live in this table.
-const NoticeKeyOnboardingGraduated = "onboarding_graduated"
+const KeyOnboardingGraduated = "onboarding_graduated"
 
-// noticeTemplate is a registry entry: the presentation half of a notice.
+// template is a registry entry: the presentation half of a notice.
 // The database row carries only params — the facts — because the browser
 // and the TUI render differently and a trigger has no business writing
 // either one's copy. render turns one into the other.
-type noticeTemplate struct {
-	kind   NoticeKind
+type template struct {
+	kind   Kind
 	render func(params map[string]any) (title, body string)
 }
 
-// noticeRegistry maps notice keys (defined in the package that
+// registry maps notice keys (defined in the package that
 // triggers the notice — mounts.NoticeKeyTmpExpiry, the trigger keys
 // here, future ones elsewhere) to display content. Adding a notice =
 // one entry here plus a call site that signals it. No DB migration.
-var noticeRegistry = map[string]noticeTemplate{
+var registry = map[string]template{
 	"tmp_48h_expiry": {
-		kind: NoticeKindWarning,
+		kind: KindWarning,
 		render: func(map[string]any) (string, string) {
 			return "/tmp files expire after 48 hours",
 				"Files in /tmp are deleted 48 hours after their last edit. Touching a file (or writing to it) resets the clock. Save anything you want to keep as a cron entry under /cron.d."
 		},
 	},
-	NoticeKeyOnboardingGraduated: {
-		kind: NoticeKindSuccess,
+	KeyOnboardingGraduated: {
+		kind: KindSuccess,
 		render: func(map[string]any) (string, string) {
 			return "You've finished the tour",
 				"You've seen the whole shell against Loom Inc's data. Your own org is ready when you are — connect a log source and the same pipelines work on your logs."
 		},
 	},
-	NoticeKeyMemberRetainedGrants: {
-		kind: NoticeKindWarning,
+	KeyMemberRetainedGrants: {
+		kind: KindWarning,
 		render: func(p map[string]any) (string, string) {
 			org := paramString(p, "org")
 			member := paramString(p, "member")
@@ -115,12 +128,12 @@ func paramStrings(p map[string]any, key string) []string {
 	return out
 }
 
-// RenderNotice turns a queued row into its display form. Reports false
+// Render turns a queued row into its display form. Reports false
 // when the key has no registry entry — registry/DB drift shouldn't put
 // a blank card in front of a user, and the row stays pending so the
 // notice survives a deploy that adds the entry.
-func RenderNotice(p store.PendingNotice) (Notice, bool) {
-	tmpl, ok := noticeRegistry[p.Key]
+func Render(p store.PendingNotice) (Notice, bool) {
+	tmpl, ok := registry[p.Key]
 	if !ok {
 		return Notice{}, false
 	}
@@ -128,7 +141,7 @@ func RenderNotice(p store.PendingNotice) (Notice, bool) {
 	return Notice{Key: p.Key, Kind: tmpl.kind, Title: title, Body: body}, true
 }
 
-// NoticeQueue is the request-scoped half of notice delivery: Maybe()
+// Queue is the request-scoped half of notice delivery: Maybe()
 // enqueues, Drain() delivers. One queue per request; the coordinator
 // builds it at the top of runLocal and Drain()s it before returning.
 //
@@ -139,7 +152,7 @@ func RenderNotice(p store.PendingNotice) (Notice, bool) {
 //
 // Thread-safe: pipelines fork goroutines for stages, any of which
 // might signal a notice.
-type NoticeQueue struct {
+type Queue struct {
 	store  *store.Store
 	userID string
 	mu     sync.Mutex
@@ -150,11 +163,11 @@ type NoticeQueue struct {
 	signaled map[string]bool
 }
 
-// NewNoticeQueue returns a queue scoped to one request. userID
+// NewQueue returns a queue scoped to one request. userID
 // empty = no notices delivered (system invocation, automated path);
 // Maybe and Drain are no-ops in that mode.
-func NewNoticeQueue(s *store.Store, userID string) *NoticeQueue {
-	return &NoticeQueue{
+func NewQueue(s *store.Store, userID string) *Queue {
+	return &Queue{
 		store:    s,
 		userID:   userID,
 		signaled: map[string]bool{},
@@ -167,7 +180,7 @@ func NewNoticeQueue(s *store.Store, userID string) *NoticeQueue {
 // call now produces a notice on every request. That is the intended
 // trade: over-firing is a visible bug in the emitter rather than
 // something the storage layer silently absorbs.
-func (q *NoticeQueue) Maybe(key string) {
+func (q *Queue) Maybe(key string) {
 	if q == nil || q.userID == "" || q.store == nil {
 		return
 	}
@@ -176,7 +189,7 @@ func (q *NoticeQueue) Maybe(key string) {
 	if q.signaled[key] {
 		return
 	}
-	tmpl, ok := noticeRegistry[key]
+	tmpl, ok := registry[key]
 	if !ok {
 		return
 	}
@@ -195,7 +208,7 @@ func (q *NoticeQueue) Maybe(key string) {
 // a bounded one now: the row is per-instance, so a connection that drops
 // before the notice renders costs one missed render, not the only copy
 // the user was ever going to get.
-func (q *NoticeQueue) Drain() []Notice {
+func (q *Queue) Drain() []Notice {
 	if q == nil || q.userID == "" || q.store == nil {
 		return nil
 	}
@@ -211,7 +224,7 @@ func (q *NoticeQueue) Drain() []Notice {
 	out := make([]Notice, 0, len(pending))
 	ids := make([]int64, 0, len(pending))
 	for _, p := range pending {
-		n, ok := RenderNotice(p)
+		n, ok := Render(p)
 		if !ok {
 			continue // unknown key: leave it pending, don't burn it
 		}

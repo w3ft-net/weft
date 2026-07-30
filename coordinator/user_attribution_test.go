@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"github.com/graybeardcorp/weft/notices"
 	"testing"
 	"time"
 )
@@ -94,7 +95,7 @@ func TestCoordinatorQuery_AttachesTmpExpiryNoticeOnFirstWrite(t *testing.T) {
 	if r1D.Notices[0].Key != "tmp_48h_expiry" {
 		t.Errorf("notice key: got %q, want tmp_48h_expiry", r1D.Notices[0].Key)
 	}
-	if r1D.Notices[0].Kind != NoticeKindWarning {
+	if r1D.Notices[0].Kind != notices.KindWarning {
 		t.Errorf("notice kind: got %q, want warning", r1D.Notices[0].Kind)
 	}
 

@@ -6,11 +6,11 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/graybeardcorp/weft/coordinator"
+	"github.com/graybeardcorp/weft/notices"
 )
 
 // Notices reach the TUI for free: they ride out on the query response
-// that the shell was already making (coordinator.NoticeQueue.Drain).
+// that the shell was already making (notices.Queue.Drain).
 // The browser has no guaranteed shell request, so it polls here.
 //
 // The two surfaces differ in when they mark: the shell marks on the way
@@ -43,7 +43,7 @@ func (s *Server) handleListNotices(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]noticeResponse, 0, len(pending))
 	for _, p := range pending {
-		n, ok := coordinator.RenderNotice(p)
+		n, ok := notices.Render(p)
 		if !ok {
 			// A key this build doesn't know. Leave it pending rather
 			// than shipping a blank card; a deploy that adds the

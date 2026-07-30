@@ -64,8 +64,8 @@ func TestEndpointsRequireAuth(t *testing.T) {
 		{"POST", "/api/auth/verify", public},
 		{"POST", "/api/auth/device", public},
 		{"POST", "/api/auth/device/poll", public},
-		{"POST", "/api/billing/webhook", public},           // Stripe: own signature auth
-		{"POST", "/api/team/accept", public},               // invite token in body
+		{"POST", "/api/billing/webhook", public},            // Stripe: own signature auth
+		{"POST", "/api/team/accept", public},                // invite token in body
 		{"GET", "/api/integrations/slack/callback", public}, // OAuth state token
 
 		// ── Path-token authed: bogus token MUST be rejected ──────
