@@ -80,15 +80,36 @@ func (c *SelfUpdateChecker) Run(ctx context.Context) {
 	}
 }
 
-func (c *SelfUpdateChecker) checkOnce() {
+// TryUpdateNow runs one check synchronously and reports whether the
+// running binary was actually replaced. It exists for the startup
+// rescue in cmd/weftd: when the authored config names something this
+// binary is too old to understand, the agent climbs to the newest
+// release and restarts into it rather than fataling on a config its
+// successor would accept.
+//
+// The caller owns the exit here — it is aborting startup, not shutting
+// down a running agent — so the Restart hook is neutralized for the
+// duration and the swap is reported through the return value instead.
+func (c *SelfUpdateChecker) TryUpdateNow() bool {
+	c.init()
+	saved := c.Restart
+	c.Restart = func() {}
+	defer func() { c.Restart = saved }()
+	return c.checkOnce()
+}
+
+// checkOnce reports whether it replaced the running binary. Run ignores
+// the result (its restart arrives via the Restart hook); TryUpdateNow
+// needs it to decide between exiting for a restart and fataling.
+func (c *SelfUpdateChecker) checkOnce() bool {
 	c.init()
 	m, err := release.FetchManifestWith(c.HTTP, c.ManifestURL)
 	if err != nil {
 		log.Printf("selfupdate: %v", err)
-		return
+		return false
 	}
 	if m.Version == "" || !release.VersionNewer(m.Version, c.CurrentVersion) {
-		return
+		return false
 	}
 	// Find the platform line that matches us; without one there's
 	// nothing actionable to suggest or pull.
@@ -96,27 +117,28 @@ func (c *SelfUpdateChecker) checkOnce() {
 	if plat == nil {
 		log.Printf("selfupdate: weftd %s available but no %s/%s build in manifest",
 			m.Version, runtime.GOOS, runtime.GOARCH)
-		return
+		return false
 	}
 
 	if !c.AutoApply {
 		log.Printf("selfupdate: weftd %s available (current %s) — see %s",
 			m.Version, c.CurrentVersion, plat.URL)
-		return
+		return false
 	}
 
-	c.apply(m, plat)
+	return c.apply(m, plat)
 }
 
 // apply downloads the new binary, verifies it, swaps it over the running
-// executable, and restarts. Any failure is logged and returns — the
-// caller's loop retries on the next tick, so a flaky download or a
-// momentarily-missing artifact never costs us ingest.
-func (c *SelfUpdateChecker) apply(m *release.Manifest, plat *release.Platform) {
+// executable, and restarts. Any failure is logged and returns false —
+// the caller's loop retries on the next tick, so a flaky download or a
+// momentarily-missing artifact never costs us ingest. Returns true only
+// when the binary on disk is now the new build.
+func (c *SelfUpdateChecker) apply(m *release.Manifest, plat *release.Platform) bool {
 	dst, err := c.ExecPath()
 	if err != nil {
 		log.Printf("selfupdate: resolve running binary: %v", err)
-		return
+		return false
 	}
 	// Replace the real binary, not a symlink to it.
 	if real, err := filepath.EvalSymlinks(dst); err == nil {
@@ -129,15 +151,16 @@ func (c *SelfUpdateChecker) apply(m *release.Manifest, plat *release.Platform) {
 	tmp, err := release.DownloadAndVerify(plat.URL, plat.SHA256)
 	if err != nil {
 		log.Printf("selfupdate: download weftd %s: %v", m.Version, err)
-		return
+		return false
 	}
 	defer os.Remove(tmp)
 
 	if err := release.ReplaceBinary(tmp, dst); err != nil {
 		log.Printf("selfupdate: install weftd %s: %v", m.Version, err)
-		return
+		return false
 	}
 
 	log.Printf("selfupdate: applied weftd %s → %s, restarting", c.CurrentVersion, m.Version)
 	c.Restart()
+	return true
 }

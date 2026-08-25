@@ -164,3 +164,37 @@ func TestSelfUpdateNoMatchingPlatform(t *testing.T) {
 		t.Fatal("Restart called with no matching platform")
 	}
 }
+
+// TryUpdateNow is the synchronous rescue entry point used by cmd/weftd
+// when the authored config cannot be run by this binary. Unlike the
+// background loop it reports whether a swap actually happened, so the
+// caller can exit for a restart instead of fataling on a config its
+// successor would accept.
+func TestTryUpdateNowReportsApplied(t *testing.T) {
+	srv := updateServer(t, "0.23.0", false)
+	c, bin, restarted := checkerFor(t, srv, "0.20.0", true)
+
+	if !c.TryUpdateNow() {
+		t.Fatal("TryUpdateNow() = false after a successful swap, want true")
+	}
+	if got := binContent(t, bin); got != string(newBinary) {
+		t.Fatalf("binary not replaced: got %q, want %q", got, newBinary)
+	}
+	// The rescue path exits the process itself; it must not also fire the
+	// SIGTERM restart hook, or a config-fataling binary races its own
+	// shutdown.
+	if *restarted {
+		t.Fatal("Restart hook fired; the rescue caller owns the exit")
+	}
+}
+
+// No newer release means no rescue: the caller must fatal with the real
+// config error rather than restart into the same binary forever.
+func TestTryUpdateNowReportsNotApplied(t *testing.T) {
+	srv := updateServer(t, "0.20.0", false) // == current
+	c, _, _ := checkerFor(t, srv, "0.20.0", true)
+
+	if c.TryUpdateNow() {
+		t.Fatal("TryUpdateNow() = true with no newer release, want false")
+	}
+}

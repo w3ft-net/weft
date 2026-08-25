@@ -118,6 +118,55 @@ func autoUpdateEnabled(cfg Config) bool {
 	return cfg.AutoUpdate == nil || *cfg.AutoUpdate
 }
 
+// configError names the reason cfg cannot be run by this binary, or ""
+// when it is usable. Kept separate from main so the startup decision
+// below is testable without driving os.Exit.
+func configError(cfg Config) string {
+	if cfg.Endpoint == "" {
+		return "endpoint is required"
+	}
+	if cfg.Token == "" {
+		return "token is required: set token: in the config file or WEFTD_TOKEN in the environment"
+	}
+	return ""
+}
+
+// startupDecision is what main does once the config has been parsed and
+// the credential chain resolved.
+type startupDecision int
+
+const (
+	startupRun     startupDecision = iota // config is usable; start the agent
+	startupRescued                        // config unusable, but a newer weftd was installed; exit for the restart
+	startupFatal                          // config unusable and no newer weftd to rescue us
+)
+
+// decideStartup validates cfg and, when this binary cannot run it, gives
+// self-update a chance to replace us with one that can.
+//
+// The ordering matters and is the whole point: an unusable config is
+// frequently not a broken config but an *older binary*. Config keys gain
+// defaults and get renamed across releases, so a config authored for the
+// current weftd can be rejected outright by a stale one — that is how a
+// fleet ends up with an agent permanently unable to parse its own
+// config. Fataling first made config validation the gate on the very
+// mechanism that fixes version skew, turning a solved problem into a
+// crash-loop that ships no logs until a human intervenes.
+//
+// An operator who pinned the host with `auto_update: false` gets the
+// fatal they asked for; pinning is usually how someone investigates a
+// bad release, so we never climb versions behind their back.
+func decideStartup(cfg Config, rescue func() bool) (startupDecision, string) {
+	reason := configError(cfg)
+	if reason == "" {
+		return startupRun, ""
+	}
+	if autoUpdateEnabled(cfg) && rescue != nil && rescue() {
+		return startupRescued, reason
+	}
+	return startupFatal, reason
+}
+
 // allowedDimensionColumns lists the columns that can be populated
 // from the `dimensions:` config map. `env`, `app`, `instance`,
 // `level`, `ts`, and the k8s-derived columns are intentionally
@@ -204,8 +253,25 @@ func main() {
 	if cfg.Endpoint == "" {
 		cfg.Endpoint = defaultEndpoint
 	}
-	if cfg.Token == "" {
-		log.Fatal("token is required: set token: in the config file or WEFTD_TOKEN in the environment")
+
+	// Validate what we need to run — and if we cannot run it, try to
+	// climb to a weftd that can before giving up. See decideStartup: a
+	// config this binary rejects is often a config written for our
+	// successor, and self-update must not sit behind the check that
+	// rejects it.
+	switch decision, reason := decideStartup(cfg, func() bool {
+		return (&weftd.SelfUpdateChecker{
+			CurrentVersion: Version,
+			AutoApply:      true,
+		}).TryUpdateNow()
+	}); decision {
+	case startupRescued:
+		// Restart=always brings the freshly-swapped binary up; it gets a
+		// clean parse of the same config.
+		log.Printf("config rejected by weftd %s (%s) — updated to a newer build, restarting into it", Version, reason)
+		os.Exit(0)
+	case startupFatal:
+		log.Fatal(reason)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
