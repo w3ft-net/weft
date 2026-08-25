@@ -64,7 +64,7 @@ Framing per line: length-prefixed protobuf-serialized `pb.LogRow` (varint length
 
 ## Open questions
 
-- **Offset persistence.** This plan fixes "in-flight rows during outage"; it does *not* fix "rows written to the source file while weftd was down." Separate concern with separate tradeoffs (the stat-based offset check has to cope with logrotate, copytruncate, file recreation). If we want end-to-end durability we need both — flag it as a v2 follow-up.
+- **Offset persistence.** This plan fixes "in-flight rows during outage"; it does *not* fix "rows written to the source file while weftd was down." Separate concern with separate tradeoffs (the stat-based offset check has to cope with logrotate, copytruncate, file recreation). If we want end-to-end durability we need both — see `docs/plans/weftd-offset-checkpointing.md`, the v2 follow-up this points to.
 - **Per-source vs. global spool.** Current draft is per-app under `/var/lib/weftd/spool/<app>/`. Alternative is one global spool with `app` in the framed row, which is slightly less code but mixes per-app replay pacing. Per-app is simpler to reason about at the cost of more files.
 
 ## Estimated effort
@@ -80,6 +80,6 @@ Framing per line: length-prefixed protobuf-serialized `pb.LogRow` (varint length
 ## Non-goals
 
 - **No end-to-end exactly-once.** At-least-once on replay; duplicates are possible if we re-sent a row whose ack was lost. Today's coordinator ingest is idempotent-enough (dedup via `(app, line_num)` on the shard side if/when that becomes a real problem); we don't need a transactional protocol for this.
-- **No file-offset persistence.** Separate plan; see Open Questions.
+- **No file-offset persistence.** See `docs/plans/weftd-offset-checkpointing.md`.
 - **No cross-process shared spool.** One weftd process, one spool directory. We don't run multiple weftd processes on the same host.
 - **No encryption at rest.** Spool files contain raw log bytes for a brief window; full-disk encryption is the expected answer for customers who care. Not revisiting unless a customer names it.
