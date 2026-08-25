@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stripe/stripe-go/v84"
+	"github.com/stripe/stripe-go/v85"
 
 	"github.com/graybeardcorp/weft/store"
 )

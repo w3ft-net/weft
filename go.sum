@@ -149,8 +149,8 @@ github.com/google/jsonschema-go v0.4.2 h1:tmrUohrwoLZZS/P3x7ex0WAVknEkBZM46iALbc
 github.com/google/jsonschema-go v0.4.2/go.mod h1:r5quNTdLOYEz95Ru18zA0ydNbBuYoo9tgaYcxEYhJVE=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/graybeardcorp/saaskit v0.3.0 h1:1cjOenytFm3QGbjyayTF+IkkG4vmROu7wZtkcD9gmBI=
-github.com/graybeardcorp/saaskit v0.3.0/go.mod h1:OhLO4nKQMvGuhhsWd4fpvq1tXGwdLLVCJlyiva7geoE=
+github.com/graybeardcorp/saaskit v0.3.1 h1:898rnO4xZXXocjlbTJq314zSzsuVcsllbs5A23lWykw=
+github.com/graybeardcorp/saaskit v0.3.1/go.mod h1:aJaO8a3RJ7X2OwGYvLji43T0SFtgr5d3nxAlmwzcHk0=
 github.com/graybeardcorp/warp v0.2.35 h1:LPBynV501Xsh1AKHpNVu6mhfLAvkGvbLRF8cm6C7oHk=
 github.com/graybeardcorp/warp v0.2.35/go.mod h1:eUF5gbY1k+hAF07OtsLtfqQMxhSDedAuu93H9CekJzc=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
@@ -240,8 +240,8 @@ github.com/stretchr/testify v1.4.0/go.mod h1:j7eGeouHqKxXV5pUuKE4zz7dFj8WfuZ+81P
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/stripe/stripe-go/v84 v84.4.1 h1:ixq1fG3y0k4OORVaN+LFAMBFaWiMrvKIcR9dSqT6gD8=
-github.com/stripe/stripe-go/v84 v84.4.1/go.mod h1:Z4gcKw1zl4geDG2+cjpSaJES9jaohGX6n7FP8/kHIqw=
+github.com/stripe/stripe-go/v85 v85.2.0 h1:LomL8ulv13+y+nIKtFP48Cn/pCIZmi4IBz5qjdDn+FY=
+github.com/stripe/stripe-go/v85 v85.2.0/go.mod h1:5P+HGFenpWgak27T5Is6JMsmDfUC1yJnjhhmquz7kXw=
 github.com/tidwall/gjson v1.18.0 h1:FIDeeyB800efLX89e5a8Y0BNH+LOngJyGrIWxG2FKQY=
 github.com/tidwall/gjson v1.18.0/go.mod h1:/wbyibRr2FHMks5tjHJ5F8dMZh3AcwJEMf5vlfC0lxk=
 github.com/tidwall/match v1.1.1 h1:+Ho715JplO36QYgwN9PGYNhgZvoUSc9X2c80KVTi+GA=

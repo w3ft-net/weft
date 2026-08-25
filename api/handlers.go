@@ -17,9 +17,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/graybeardcorp/saaskit/stripekit"
-	"github.com/stripe/stripe-go/v84"
-	"github.com/stripe/stripe-go/v84/customer"
-	"github.com/stripe/stripe-go/v84/subscription"
+	"github.com/stripe/stripe-go/v85"
+	"github.com/stripe/stripe-go/v85/customer"
+	"github.com/stripe/stripe-go/v85/subscription"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"

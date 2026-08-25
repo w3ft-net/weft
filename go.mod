@@ -19,14 +19,14 @@ require (
 	github.com/duckdb/duckdb-go/v2 v2.10501.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
-	github.com/graybeardcorp/saaskit v0.3.0
+	github.com/graybeardcorp/saaskit v0.3.1
 	github.com/graybeardcorp/warp v0.2.35
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/pressly/goose/v3 v3.27.0
 	github.com/qmuntal/stateless v1.8.0
-	github.com/stripe/stripe-go/v84 v84.4.1
+	github.com/stripe/stripe-go/v85 v85.2.0
 	github.com/w3ft-net/weft-go v0.1.0
 	github.com/yuin/goldmark v1.8.2
 	github.com/yuin/gopher-lua v1.1.2

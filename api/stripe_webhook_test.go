@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	stripe "github.com/stripe/stripe-go/v84"
-	"github.com/stripe/stripe-go/v84/webhook"
+	stripe "github.com/stripe/stripe-go/v85"
+	"github.com/stripe/stripe-go/v85/webhook"
 
 	"github.com/graybeardcorp/saaskit/stripekit"
 	"github.com/graybeardcorp/weft/store"
@@ -200,7 +200,7 @@ func TestOurPriceFilters(t *testing.T) {
 
 	mkInv := func(price string) *stripe.Invoice {
 		return &stripe.Invoice{Lines: &stripe.InvoiceLineItemList{Data: []*stripe.InvoiceLineItem{
-			{Pricing: &stripe.InvoiceLineItemPricing{PriceDetails: &stripe.InvoiceLineItemPricingPriceDetails{Price: price}}},
+			{Pricing: &stripe.InvoiceLineItemPricing{PriceDetails: &stripe.InvoiceLineItemPricingPriceDetails{Price: &stripe.Price{ID: price}}}},
 		}}}
 	}
 	if !srv.invoiceHasOurPrice(mkInv("price_weft_flat")) {
