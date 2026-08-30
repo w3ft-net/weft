@@ -19,7 +19,7 @@ require (
 	github.com/duckdb/duckdb-go/v2 v2.10501.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
-	github.com/graybeardcorp/saaskit v0.3.1
+	github.com/graybeardcorp/saaskit v0.3.2
 	github.com/graybeardcorp/warp v0.2.35
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/modelcontextprotocol/go-sdk v1.5.0

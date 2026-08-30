@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/graybeardcorp/saaskit/orgs"
 	_ "github.com/jackc/pgx/v5/stdlib" // register "pgx" driver with database/sql
 	"github.com/pressly/goose/v3"
 )
@@ -70,6 +71,27 @@ func Migrate(dsn string) error {
 	// high-water mark and there's nothing further to apply.
 	if err := goose.Up(db, "migrations"); err != nil && !errors.Is(err, goose.ErrNoMigrationFiles) {
 		return fmt.Errorf("goose up: %w", err)
+	}
+
+	// saaskit owns the schema its own queries read. We embed its orgs
+	// package (Store.Orgs) but own the database, so the tables it needs
+	// have to be applied here — and re-applied on every migrate, because
+	// a saaskit upgrade can introduce a column that its queries assume.
+	//
+	// orgs.SchemaSQL is written for exactly this: every statement is
+	// CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS / CREATE
+	// INDEX IF NOT EXISTS, so running it against an already-current
+	// database is a no-op. It runs last so it can add columns to tables
+	// the collapsed schema and the goose deltas have already created.
+	//
+	// Before this, the orgs tables were hand-copied into schema.sql at
+	// collapse time and then frozen: saaskit added memberships.seated
+	// for per-seat billing, weft's table never grew it, and every
+	// request through `resolve org role` 401'd on `column "seated" does
+	// not exist`. Applying the source of truth removes that whole class
+	// of drift rather than chasing it one column at a time.
+	if _, err := db.Exec(orgs.SchemaSQL); err != nil {
+		return fmt.Errorf("apply orgs schema: %w", err)
 	}
 	return nil
 }
