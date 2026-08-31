@@ -182,6 +182,11 @@ jobs:
       - name: Compose up (base)
         working-directory: weft
         run: |
+          # Build first, as its own command: five services borrow the
+          # weft-server image compute builds, so a build that does not
+          # happen surfaces later as "pull access denied" on those five
+          # rather than as a build error here.
+          docker compose build
           docker compose up -d --build
           # Restart any service that crashed on the cold-start migration
           # race (api can lose to coordinator on goose up). Idempotent
@@ -255,6 +260,9 @@ jobs:
       - name: Compose up (base + localstack)
         working-directory: weft
         run: |
+          # See "Compose up (base)" — build as its own command so a
+          # failed build reads as a build failure, not a registry pull.
+          docker compose -f docker-compose.yml -f docker-compose.localstack.yml build
           docker compose -f docker-compose.yml -f docker-compose.localstack.yml up -d --build
           sleep 5
           docker compose -f docker-compose.yml -f docker-compose.localstack.yml up -d
@@ -336,6 +344,9 @@ jobs:
       - name: Compose up (base + localstack + cover)
         working-directory: weft
         run: |
+          # See "Compose up (base)" — build as its own command so a
+          # failed build reads as a build failure, not a registry pull.
+          docker compose -f docker-compose.yml -f docker-compose.localstack.yml -f docker-compose.cover.yml build
           docker compose -f docker-compose.yml -f docker-compose.localstack.yml -f docker-compose.cover.yml up -d --build
           sleep 5
           docker compose -f docker-compose.yml -f docker-compose.localstack.yml -f docker-compose.cover.yml up -d

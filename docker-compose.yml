@@ -49,6 +49,11 @@ services:
 
   coordinator:
     image: weft-server
+    # Borrowed from compute's build above, not a registry image.
+    # Without this a missing weft-server makes compose attempt a pull
+    # and report it as an auth failure, which reads like a credentials
+    # problem instead of "the image was never built".
+    pull_policy: never
     entrypoint: ["/usr/local/bin/entrypoint.sh"]
     environment:
       ROLE: coordinator
@@ -84,6 +89,11 @@ services:
 
   api:
     image: weft-server
+    # Borrowed from compute's build above, not a registry image.
+    # Without this a missing weft-server makes compose attempt a pull
+    # and report it as an auth failure, which reads like a credentials
+    # problem instead of "the image was never built".
+    pull_policy: never
     entrypoint: ["/usr/local/bin/entrypoint.sh"]
     environment:
       ROLE: api
@@ -116,6 +126,11 @@ services:
 
   weftd:
     image: weft-server
+    # Borrowed from compute's build above, not a registry image.
+    # Without this a missing weft-server makes compose attempt a pull
+    # and report it as an auth failure, which reads like a credentials
+    # problem instead of "the image was never built".
+    pull_policy: never
     command:
       - weftd
       - --config=/etc/weftd/config.yaml
@@ -131,6 +146,11 @@ services:
   # and exercises the multi-file onboarding flow.
   weftd-glob:
     image: weft-server
+    # Borrowed from compute's build above, not a registry image.
+    # Without this a missing weft-server makes compose attempt a pull
+    # and report it as an auth failure, which reads like a credentials
+    # problem instead of "the image was never built".
+    pull_policy: never
     command:
       - weftd
       - --config=/etc/weftd/config.yaml
@@ -150,6 +170,11 @@ services:
   # unit-tested.
   lambda-shard:
     image: weft-server
+    # Borrowed from compute's build above, not a registry image.
+    # Without this a missing weft-server makes compose attempt a pull
+    # and report it as an auth failure, which reads like a credentials
+    # problem instead of "the image was never built".
+    pull_policy: never
     command:
       - /usr/local/bin/lambda-shard
     environment:
