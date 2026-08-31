@@ -18,6 +18,22 @@ import (
 	"github.com/graybeardcorp/weft/store"
 )
 
+// stripeAPITrain is the Stripe API version this build is compiled for. It
+// has to agree with three things at once: the version stripe-go pins (v85
+// → 2026-05-27.dahlia), the version configured on the live webhook
+// endpoint, and this constant. stripe-go rejects any event whose
+// api_version differs from its own, so a disagreement on any leg is a 400
+// on every real event, not a degraded mode.
+//
+// Moving trains is therefore a coordinated change: bump stripe-go, update
+// this constant, and re-version the Stripe endpoint. History so far:
+// 2025-08-27.basil → 2026-02-25.clover (v84) → 2026-05-27.dahlia (v85).
+const stripeAPITrain = "2026-05-27.dahlia"
+
+// staleAPITrain is a train we are no longer on, for the guard test that
+// pins rejection of off-train events.
+const staleAPITrain = "2026-02-25.clover"
+
 // signStripePayload builds a valid Stripe-Signature header for body using
 // secret, exactly the way Stripe signs webhooks: "t=<unix>,v1=<hex(hmac)>".
 func signStripePayload(body []byte, secret string, ts time.Time) string {
@@ -40,10 +56,16 @@ func postWebhook(t *testing.T, srv *Server, body []byte, sig string) int {
 // API version Stripe actually delivers today and a single subscription item at
 // priceID — the shape webhook.ConstructEvent + the handler parse.
 func subDeletedEvent(subID, priceID string, extraMetadata string) []byte {
+	return subDeletedEventOnTrain(stripeAPITrain, subID, priceID, extraMetadata)
+}
+
+// subDeletedEventOnTrain is subDeletedEvent with the API version spelled
+// out, so a test can build an event from a train we are not on.
+func subDeletedEventOnTrain(apiVersion, subID, priceID string, extraMetadata string) []byte {
 	ev := map[string]any{
 		"id":          "evt_test",
 		"object":      "event",
-		"api_version": "2026-02-25.clover",
+		"api_version": apiVersion,
 		"type":        "customer.subscription.deleted",
 		"data": map[string]any{
 			"object": map[string]any{
@@ -93,22 +115,26 @@ func subStatus(t *testing.T, s *store.Store, stripeSubID string) string {
 	return got.Status
 }
 
-// TestStripeWebhookAcceptsCloverAndCancelsOwnSub reproduces the production
-// incident: Stripe delivers 2026-02-25.clover events, the old stripe-go was
-// pinned to 2025-08-27.basil, so webhook.ConstructEvent rejected every event
-// with a 400 the handler logged as "signature verification failed". After the
-// v84 (clover) upgrade a correctly-signed weft event must be accepted AND
-// processed (the cancelled subscription row flips to "cancelled").
-func TestStripeWebhookAcceptsCloverAndCancelsOwnSub(t *testing.T) {
+// TestStripeWebhookAcceptsCurrentTrainAndCancelsOwnSub reproduces the
+// original production incident: Stripe delivered 2026-02-25.clover events
+// while stripe-go was pinned to 2025-08-27.basil, so webhook.ConstructEvent
+// rejected every event with a 400 the handler logged as "signature
+// verification failed". The same shape recurred moving clover → dahlia.
+//
+// A correctly-signed weft event on the current train must be accepted AND
+// processed (the cancelled subscription row flips to "cancelled"). Named
+// for the property rather than the train, since the train has now moved
+// twice and the assertion never changed.
+func TestStripeWebhookAcceptsCurrentTrainAndCancelsOwnSub(t *testing.T) {
 	srv, s := testServer(t)
-	srv.StripeWebhookSecret = "whsec_test_clover"
+	srv.StripeWebhookSecret = "whsec_test_secret"
 	srv.StripePrices[store.TierSwatch] = TierPrices{Flat: "price_weft_flat", Overage: "price_weft_overage"}
 
 	seedActiveSub(t, s, "acme", "sub_weft_1")
 
 	body := subDeletedEvent("sub_weft_1", "price_weft_flat", "")
 	if code := postWebhook(t, srv, body, signStripePayload(body, srv.StripeWebhookSecret, time.Now())); code != http.StatusOK {
-		t.Fatalf("clover weft event: got %d, want 200", code)
+		t.Fatalf("weft event on the current train: got %d, want 200", code)
 	}
 	if got := subStatus(t, s, "sub_weft_1"); got != "cancelled" {
 		t.Fatalf("weft subscription should be cancelled, got %q", got)
@@ -128,7 +154,7 @@ func TestStripeWebhookAcceptsCloverAndCancelsOwnSub(t *testing.T) {
 // subscription. Before the price filter this FAILS (the row gets cancelled).
 func TestStripeWebhookIgnoresForeignProduct(t *testing.T) {
 	srv, s := testServer(t)
-	srv.StripeWebhookSecret = "whsec_test_clover"
+	srv.StripeWebhookSecret = "whsec_test_secret"
 	srv.StripePrices[store.TierSwatch] = TierPrices{Flat: "price_weft_flat", Overage: "price_weft_overage"}
 
 	// A weft row whose Stripe id happens to match the incoming (foreign) event.
@@ -149,7 +175,7 @@ func TestStripeWebhookIgnoresForeignProduct(t *testing.T) {
 // truncating read would fail verification and 400.
 func TestStripeWebhookAcceptsLargeBody(t *testing.T) {
 	srv, s := testServer(t)
-	srv.StripeWebhookSecret = "whsec_test_clover"
+	srv.StripeWebhookSecret = "whsec_test_secret"
 	srv.StripePrices[store.TierSwatch] = TierPrices{Flat: "price_weft_flat"}
 
 	seedActiveSub(t, s, "bigco", "sub_big")
@@ -161,6 +187,36 @@ func TestStripeWebhookAcceptsLargeBody(t *testing.T) {
 	}
 	if code := postWebhook(t, srv, body, signStripePayload(body, srv.StripeWebhookSecret, time.Now())); code != http.StatusOK {
 		t.Fatalf("large valid event: got %d, want 200 (body must not be truncated)", code)
+	}
+}
+
+// TestStripeWebhookRejectsOffTrainEvent pins the other half of the train
+// contract. A correctly-signed event from a train we are not on must be
+// rejected — stripe-go would otherwise deserialize fields that moved or
+// changed meaning between versions, which is silently wrong rather than
+// loudly broken.
+//
+// This is the failure that has now bitten twice (basil holding while
+// Stripe sent clover; clover fixtures against a dahlia stripe-go). It is
+// invisible until real events arrive, so it is worth a test that fails
+// the moment stripeAPITrain and stripe-go disagree.
+func TestStripeWebhookRejectsOffTrainEvent(t *testing.T) {
+	srv, s := testServer(t)
+	srv.StripeWebhookSecret = "whsec_test_secret"
+	srv.StripePrices[store.TierSwatch] = TierPrices{Flat: "price_weft_flat"}
+
+	seedActiveSub(t, s, "stale", "sub_stale")
+
+	body := subDeletedEventOnTrain(staleAPITrain, "sub_stale", "price_weft_flat", "")
+	code := postWebhook(t, srv, body, signStripePayload(body, srv.StripeWebhookSecret, time.Now()))
+	if code != http.StatusBadRequest {
+		t.Fatalf("event on %s must be rejected while we are on %s: got %d, want 400",
+			staleAPITrain, stripeAPITrain, code)
+	}
+	// And the subscription must be untouched — a rejected event must not
+	// have been half-processed on its way to the 400.
+	if got := subStatus(t, s, "sub_stale"); got != "active" {
+		t.Fatalf("off-train event must not mutate state, got %q", got)
 	}
 }
 
