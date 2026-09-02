@@ -29,18 +29,21 @@ forward SNI; see *Wire capture results*). See *Shared components*.
 **Infra (Component 5) is live in prod and healthy**: `*.syslog.w3ft.net` TLS
 listener on `weft-nlb` → `weft-syslog` target group → coordinator :9023, no
 new instance (colocated with gRPC and the api server on the same coordinator
-ASG). **Components 1-6 have all shipped**, CLI and dashboard both: the
+ASG). **All 7 components have shipped**, CLI and dashboard both: the
 `Producer` interface + `RenderProducer`, the `AgentToken.Producer` schema
 change, `SyslogServer` itself (wired into `cmd/api/main.go`, listening on
 9023), `weft token create --for render`, the web dashboard's Namespaces
-page producer selector + endpoint display, and a per-token bytes/sec rate
-limit on `IngestStream` — see *Components to build* below for what landed
-in each. **The end-to-end path is live and mintable today**, from either
-the CLI or the browser: a real Render customer could be onboarded right
-now by running `weft token create --for render` (or minting a
-`render`-scoped token from the dashboard), pasting the token + printed
-endpoint into Render's log-stream config, and rows would flow all the way
-to storage — nothing blocks that. Only Component 7 (docs) remains.
+page producer selector + endpoint display, a per-token bytes/sec rate
+limit on `IngestStream`, and the customer-facing setup doc — see
+*Components to build* below for what landed in each. **The end-to-end
+path is live and mintable today**, from either the CLI or the browser: a
+real Render customer could be onboarded right now by running `weft token
+create --for render` (or minting a `render`-scoped token from the
+dashboard), pasting the token + printed endpoint into Render's
+log-stream config, and rows would flow all the way to storage — nothing
+blocks that. This plan is **complete**; Approach B (the Vector relay)
+stays documented as an opt-in alternative for security-sensitive
+customers, not a blocker.
 
 ## Why
 
@@ -464,17 +467,29 @@ Let's Encrypt cert at `render-capture.w3ft.net`, torn down after). Answers:
    `ingest_ratelimit_test.go` (end-to-end `IngestStream` proving
    throttled rows are delayed but never dropped, and that disabling
    the limit is instant). Race-clean.
-7. **`docs/manual/render.md`** — dashboard setup (Integrations → Observability),
-   the endpoint string, the service-type → pseudofile mapping, and the Approach
-   B / Vector alternative. **~0.5 day.**
+7. ~~**`docs/manual/render.md`** — dashboard setup, the endpoint string, the
+   service-type → pseudofile mapping, and the Approach B / Vector
+   alternative.~~ **Done.** Follows the existing `docs/manual/heroku.md`
+   shape (mint token → configure the platform → confirm rows landing →
+   mapping table → troubleshooting), reflecting the dashboard flow that
+   actually shipped in Component 4 (Namespaces page **For** selector) —
+   the plan's original "Integrations → Observability" phrasing predated
+   that and never matched a real dashboard route. Covers minting a
+   `render`-scoped token from either surface, configuring Render's
+   **Settings → Log Streams** with the endpoint + token, the
+   HOSTNAME/APP-NAME → service/kind/instance mapping table, the
+   per-token rate limit from Component 6, and Approach B (Vector) as
+   the opt-out for a customer unwilling to paste a bearer token into
+   Render's UI. Wired into the generated web manual via `cmd/docgen`
+   (`frontend/src/generated/docs/connect-render.ts`); no shell topic
+   (`web:` only, matching Heroku/CloudWatch).
 
 Schema bootstrap / `SeenServices` onboarding is unchanged — it happens
 coordinator-side on the `IngestStream` path this forwards into.
 
 ## Effort
 
-**~5 days** for Approach A end to end. Components 1-6 (~5 days combined) are
-**done**; only Component 7 (docs) remains, **~0.5 day**. Approach B is ~1 day
+**~5 days** for Approach A end to end, **all done**. Approach B is ~1 day
 on top (Vector config doc + verifying the `JSONAdapter` accepts Vector's
 shape) and can ship first as the unblock-the-prospect stopgap while A is
 built.

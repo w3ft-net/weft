@@ -5,6 +5,7 @@ import tokens from './tokens';
 import team from './team';
 import installWeftd from './install-weftd';
 import connectHeroku from './connect-heroku';
+import connectRender from './connect-render';
 import connectCloudwatch from './connect-cloudwatch';
 import schemaSetup from './schema-setup';
 import queryLogs from './query-logs';
@@ -57,6 +58,7 @@ export const manualSections: readonly ManualSection[] = [
   team,
   installWeftd,
   connectHeroku,
+  connectRender,
   connectCloudwatch,
   schemaSetup,
   queryLogs,
