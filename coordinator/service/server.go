@@ -102,7 +102,7 @@ type Server struct {
 	// constructed so callers building Server{} literals (every test in
 	// this package) don't need a constructor, and shared across every
 	// IngestStream call on this process so a token's rate-limit bucket
-	// persists across reconnects — see docs/plans/render.md Component 6.
+	// persists across reconnects — see docs/ingestion-syslog.md, "Rate limiting".
 	ingestLimiterOnce sync.Once
 	ingestLimiterPtr  *ingestLimiter
 }

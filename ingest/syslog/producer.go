@@ -6,8 +6,8 @@ package syslog
 // and knows nothing platform-specific. Each SyslogServer instance is
 // constructed with exactly one Producer; it owns one NLB listener/port,
 // so it never needs to guess which platform a connection is from (see
-// docs/plans/render.md, "Approach A" — producer identity comes from the
-// listener, never from content). Tokens are validated scoped to the same
+// docs/ingestion-syslog.md, "Producer identity comes from the listener,
+// never from content"). Tokens are validated scoped to the same
 // Name(), so a token minted for a different producer can't be replayed
 // against this listener even if it leaked.
 //

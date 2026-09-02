@@ -3,8 +3,8 @@ package store
 import "testing"
 
 // TestValidateAgentTokenForProducer pins the scoping invariant
-// SyslogServer relies on (docs/plans/render.md, Component 3): a token
-// only validates for the exact producer it was minted for, and a
+// SyslogServer relies on (see docs/ingestion-syslog.md, "Auth model"):
+// a token only validates for the exact producer it was minted for, and a
 // plain (unscoped) token never validates for any producer at all.
 func TestValidateAgentTokenForProducer(t *testing.T) {
 	db := testOpen(t)

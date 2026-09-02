@@ -27,7 +27,7 @@ const syslogIdleTimeout = 5 * time.Minute
 
 // SyslogServer is a TCP syslog listener for exactly one
 // ingest/syslog.Producer. TLS terminates upstream at the NLB (see
-// docs/plans/render.md, "No new NLB"), so this only ever sees
+// docs/ingestion-syslog.md), so this only ever sees
 // plaintext TCP. Producer identity comes from which port a connection
 // lands on, decided by the NLB listener before any bytes arrive — this
 // server never guesses. Auth, LF framing, and RFC5424 parsing are all
@@ -82,11 +82,11 @@ func (ss *SyslogServer) Start(ctx context.Context) error {
 }
 
 // Close stops accepting new connections and closes every connection
-// currently in flight — the graceful-drain step docs/plans/render.md
-// calls for. A connection mid-frame simply loses its next read; the
-// rows already parsed from it were already sent to the coordinator one
-// frame at a time, so nothing beyond the in-flight frame is lost.
-// Blocks until every connection goroutine has returned.
+// currently in flight — a graceful-drain step. A connection mid-frame
+// simply loses its next read; the rows already parsed from it were
+// already sent to the coordinator one frame at a time, so nothing
+// beyond the in-flight frame is lost. Blocks until every connection
+// goroutine has returned.
 func (ss *SyslogServer) Close() {
 	ss.mu.Lock()
 	if ss.ln != nil {
@@ -130,7 +130,7 @@ func (ss *SyslogServer) trackConn(conn net.Conn, add bool) {
 // end: read the token off the first line, validate it scoped to this
 // server's producer, open one coordinator IngestStream for the life of
 // the connection, and forward every frame that Producer.MapFields
-// accepts. See docs/plans/render.md, "Auth (confirmed)" for the
+// accepts. See docs/ingestion-syslog.md, "Auth model", for the
 // leading-"TOKEN SP" wire shape this decodes.
 func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
@@ -225,8 +225,8 @@ func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
 // framing into plain "<frame>\n" framing so the shared
 // ingest/syslog.ParseStream (NonTransparent/LF mode) can be reused
 // unmodified. Render's wire capture confirmed the token repeats on
-// every line, not just the first — see docs/plans/render.md,
-// "Auth (confirmed)".
+// every line, not just the first — see docs/ingestion-syslog.md,
+// "Wire-capture first, always".
 type syslogConnReader struct {
 	br      *bufio.Reader
 	prefix  []byte // "TOKEN ", including the trailing space

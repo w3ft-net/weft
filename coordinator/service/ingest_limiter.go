@@ -22,7 +22,7 @@ type ingestTokenBucket struct {
 }
 
 // ingestLimiter enforces a sustained bytes/sec budget per AgentToken —
-// docs/plans/render.md Component 6. Unlike IngestStreamBudgetBytes (a
+// see docs/ingestion-syslog.md, "Rate limiting". Unlike IngestStreamBudgetBytes (a
 // per-connection lifetime cap enforced for coordinator memory safety;
 // see IngestStream), this bucket is keyed on the token and persists in
 // memory across reconnects for the life of the process, so a customer

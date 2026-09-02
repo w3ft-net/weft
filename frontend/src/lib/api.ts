@@ -132,8 +132,7 @@ export function revokeToken(id: number): Promise<void> {
 
 // Registered ingest/syslog.Producer platforms (e.g. Render) a token can
 // be minted `--for`. Drives the producer selector on the token-create
-// form instead of hardcoding platform names — see docs/plans/render.md
-// Component 4.
+// form instead of hardcoding platform names — see docs/ingestion-syslog.md.
 export interface SyslogProducer {
   name: string
   endpoint: string

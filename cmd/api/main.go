@@ -20,7 +20,7 @@ func main() {
 	dbDSN := flag.String("db-dsn", "", "PostgreSQL DSN")
 	coordAddr := flag.String("coordinator", "localhost:9020", "coordinator gRPC address")
 	baseURL := flag.String("base-url", "https://w3ft.net", "base URL for magic links")
-	renderSyslogPort := flag.Int("render-syslog-port", 9023, "TCP port for the Render TLS syslog listener (see docs/plans/render.md); the NLB terminates TLS and forwards plaintext here")
+	renderSyslogPort := flag.Int("render-syslog-port", 9023, "TCP port for the Render TLS syslog listener (see docs/ingestion-syslog.md); the NLB terminates TLS and forwards plaintext here")
 	flag.Parse()
 
 	jwtSecret := os.Getenv("JWT_SECRET")
@@ -77,8 +77,8 @@ func main() {
 	defer cancel()
 	srv.StartUnverifiedSweep(ctx)
 
-	// Render TLS syslog listener — see docs/plans/render.md, "No new
-	// NLB". weft-nlb terminates TLS against the render.syslog.w3ft.net
+	// Render TLS syslog listener — see docs/ingestion-syslog.md.
+	// weft-nlb terminates TLS against the render.syslog.w3ft.net
 	// ACM cert and forwards plaintext TCP here; port 9023 IS the
 	// producer identity, so this coordinator process never needs to
 	// sniff a connection to know it's Render. A second syslog-speaking

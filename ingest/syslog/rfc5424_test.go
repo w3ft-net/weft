@@ -87,7 +87,7 @@ func TestFrame_StructuredDataEscapes(t *testing.T) {
 }
 
 func TestFrame_RenderExampleShape(t *testing.T) {
-	// docs/plans/render.md — Render's own doc example line. The <0> PRI
+	// Render's own doc example line (see docs/ingestion-syslog.md). The <0> PRI
 	// is almost certainly a doc placeholder but must still parse.
 	f := one(t, `<0>1 2021-03-31T16:00:00-08:00 test-service cron-12345 74440 cron-12345 - hello this is a test`)
 	if f.Hostname != "test-service" || f.AppName != "cron-12345" || f.ProcID != "74440" {

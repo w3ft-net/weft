@@ -1324,7 +1324,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		// Producer scopes the token to one registered
 		// ingest/syslog.Producer (e.g. "render"), minted via
 		// `weft token create --for render`. Empty for every other
-		// token. See docs/plans/render.md, Component 4.
+		// token. See docs/ingestion-syslog.md.
 		Producer string `json:"producer"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Label == "" {
@@ -1385,7 +1385,8 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 // to validate `weft token create --for <name>` and to derive the
 // endpoint hostname shown after minting. A second syslog-speaking
 // platform (Fly.io, Railway, ...) adds itself here alongside its own
-// SyslogServer instance in cmd/api/main.go — see docs/plans/render.md.
+// SyslogServer instance in cmd/api/main.go — see docs/ingestion-syslog.md,
+// "Adding a new syslog-speaking platform".
 var syslogProducers = []ingsyslog.Producer{
 	ingsyslog.RenderProducer{},
 }

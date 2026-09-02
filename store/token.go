@@ -45,7 +45,7 @@ type AgentToken struct {
 	// "render"), minted via `weft token create --for render`. Empty for
 	// every non-syslog token (weftd, JSON, Heroku) — those never go
 	// through ValidateAgentTokenForProducer. See
-	// docs/plans/render.md, Component 3/4.
+	// docs/ingestion-syslog.md.
 	Producer string `gorm:"not null;default:''"`
 }
 
@@ -84,7 +84,7 @@ func agentTokenPrefix(raw string) string {
 // ValidateAgentTokenForProducer for that same producer name — it is
 // otherwise unusable, so a leaked syslog token can't be replayed as a
 // weftd/JSON/Heroku credential and vice versa. See
-// docs/plans/render.md, Component 4.
+// docs/ingestion-syslog.md.
 func (s *Store) CreateAgentToken(orgID string, namespaceID uint, label, env, producer string) (string, *AgentToken, error) {
 	raw, err := generateToken()
 	if err != nil {
@@ -152,7 +152,7 @@ func (s *Store) ValidateAgentToken(token string) (*AgentAuthResult, error) {
 // token" and "token scoped to a different producer", so a probe can't
 // use the response to enumerate valid-but-wrong-producer tokens.
 //
-// SyslogServer (docs/plans/render.md, Component 3) is the only caller;
+// SyslogServer (docs/ingestion-syslog.md) is the only caller;
 // every other ingest path (weftd, JSON, Heroku) keeps using the
 // producer-agnostic ValidateAgentToken.
 func (s *Store) ValidateAgentTokenForProducer(token, producer string) (*AgentAuthResult, error) {

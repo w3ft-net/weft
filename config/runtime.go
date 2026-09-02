@@ -58,14 +58,15 @@ type Runtime struct {
 	IngestStreamBudgetBytes int64
 
 	// IngestTokenBytesPerSec and IngestTokenBurstBytes bound sustained
-	// ingest throughput per AgentToken — docs/plans/render.md Component
-	// 6. Unlike IngestStreamBudgetBytes (a per-connection lifetime cap
-	// enforced for coordinator memory safety), this bucket is keyed on
-	// the token and persists in memory across reconnects, so a customer
-	// can't dodge it by cycling connections. A row that would exceed the
-	// budget is delayed until the bucket refills rather than dropped or
-	// disconnected. Read live on every row, so changes take effect
-	// immediately for in-flight streams. Either <= 0 disables the check.
+	// ingest throughput per AgentToken — see docs/ingestion-syslog.md,
+	// "Rate limiting". Unlike IngestStreamBudgetBytes (a per-connection
+	// lifetime cap enforced for coordinator memory safety), this bucket
+	// is keyed on the token and persists in memory across reconnects, so
+	// a customer can't dodge it by cycling connections. A row that would
+	// exceed the budget is delayed until the bucket refills rather than
+	// dropped or disconnected. Read live on every row, so changes take
+	// effect immediately for in-flight streams. Either <= 0 disables the
+	// check.
 	IngestTokenBytesPerSec int64
 	IngestTokenBurstBytes  int64
 

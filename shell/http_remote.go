@@ -325,7 +325,7 @@ func (h *HTTPCoordinator) CreateNamespace(name string) (*NamespaceInfo, error) {
 // ingest/syslog.Producer name (e.g. "render") scopes the token to that
 // producer and the response's endpoint carries the hostname:port the
 // customer pastes into that platform's log-stream config. See
-// docs/plans/render.md, Component 4.
+// docs/ingestion-syslog.md.
 func (h *HTTPCoordinator) CreateToken(customer, label, namespace, env, producer string) (token, endpoint string, err error) {
 	body, _ := json.Marshal(map[string]string{"label": label, "namespace": namespace, "env": env, "producer": producer})
 	req, _ := http.NewRequest("POST", h.baseURL+"/api/tokens", bytes.NewReader(body))

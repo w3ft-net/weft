@@ -3,8 +3,8 @@ package syslog
 import "strings"
 
 // RenderProducer implements Producer for render.com's TLS syslog log
-// streams (docs/plans/render.md). Field mapping confirmed against a live
-// wire capture 2026-09-02, not from Render's docs alone.
+// streams (docs/ingestion-syslog.md). Field mapping confirmed against a
+// live wire capture 2026-09-02, not from Render's docs alone.
 type RenderProducer struct{}
 
 func (RenderProducer) Name() string { return "render" }

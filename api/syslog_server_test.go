@@ -135,10 +135,10 @@ func waitForRows(t *testing.T, fake *fakeIngestCoord, n int) []*pb.LogRow {
 // TestSyslogServer_ValidatesAndForwards is the golden path: a
 // producer-scoped token, three RFC5424 frames each carrying the
 // leading "TOKEN SP" prefix the wire capture confirmed (see
-// docs/plans/render.md, "Auth (confirmed)"). Two are real service
-// output and should be forwarded field-mapped; the third is Render's
-// own connectivity-test ping (HOSTNAME "render") and RenderProducer
-// must drop it.
+// docs/ingestion-syslog.md, "Wire-capture first, always"). Two are
+// real service output and should be forwarded field-mapped; the third
+// is Render's own connectivity-test ping (HOSTNAME "render") and
+// RenderProducer must drop it.
 func TestSyslogServer_ValidatesAndForwards(t *testing.T) {
 	srv, s := testServer(t)
 	fake, coordClient := startFakeCoord(t)
@@ -252,8 +252,8 @@ func TestSyslogServer_RejectsWrongProducerToken(t *testing.T) {
 
 // TestSyslogServer_RejectsMissingTokenPrefix covers the "no Token
 // configured in Render" case: frames arrive bare, starting directly
-// with '<'. docs/plans/render.md leans toward rejecting rather than
-// guessing a namespace, matching every other ingest adapter.
+// with '<'. SyslogServer rejects rather than guessing a namespace,
+// matching every other ingest adapter.
 func TestSyslogServer_RejectsMissingTokenPrefix(t *testing.T) {
 	srv, s := testServer(t)
 	fake, coordClient := startFakeCoord(t)

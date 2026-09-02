@@ -36,10 +36,10 @@ func setUpTokenCreator(t *testing.T, s *store.Store, orgPrefix string) string {
 	return jwt
 }
 
-// TestCreateToken_ForProducer_ReturnsEndpoint pins the Component 4
-// contract: `weft token create --for render` mints a producer-scoped
-// token and the response carries the endpoint string the command
-// prints (docs/plans/render.md, "Auth (confirmed)").
+// TestCreateToken_ForProducer_ReturnsEndpoint pins the contract:
+// `weft token create --for render` mints a producer-scoped token and
+// the response carries the endpoint string the command prints. See
+// docs/ingestion-syslog.md for the producer/auth model.
 func TestCreateToken_ForProducer_ReturnsEndpoint(t *testing.T) {
 	srv, s := testServer(t)
 	jwt := setUpTokenCreator(t, s, "token-producer")

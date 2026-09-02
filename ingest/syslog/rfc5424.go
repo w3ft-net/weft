@@ -1,7 +1,7 @@
 // Package syslog adapts github.com/leodido/go-syslog to the narrow
 // shape weft's platform-log ingest paths need. The Heroku HTTPS drain
 // adapter (api.HerokuAdapter) is the first consumer; the Render TLS
-// syslog listener (docs/plans/render.md) is the second. Frame is a flat
+// syslog listener (docs/ingestion-syslog.md) is the second. Frame is a flat
 // value with weft-friendly zero values ("" for an absent header, a
 // best-effort now for an absent timestamp); the RFC 5424 grammar and
 // RFC 6587 framing are the library's problem, not ours.

@@ -3,7 +3,7 @@
 -- (e.g. "render") so store.ValidateAgentTokenForProducer can reject a
 -- token minted for a different producer -- or a plain weftd/JSON/Heroku
 -- token, which has no producer at all -- from being replayed against a
--- SyslogServer listener. See docs/plans/render.md, Component 3.
+-- SyslogServer listener. See docs/ingestion-syslog.md.
 --
 -- Empty string means "not producer-scoped" -- every existing token, and
 -- every token minted by the non-syslog ingest paths, keeps working

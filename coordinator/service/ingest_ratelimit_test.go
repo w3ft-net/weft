@@ -16,10 +16,11 @@ import (
 )
 
 // TestIngestStream_PerTokenRateLimit_ThrottlesButDeliversAll pins the
-// end-to-end wiring for docs/plans/render.md Component 6: a token
-// pushing rows faster than its configured budget is slowed down, not
-// disconnected or dropped, and the auth.TokenID → runtime-config
-// plumbing actually reaches the limiter.
+// end-to-end wiring for the per-token rate limit (see
+// docs/ingestion-syslog.md, "Rate limiting"): a token pushing rows
+// faster than its configured budget is slowed down, not disconnected or
+// dropped, and the auth.TokenID → runtime-config plumbing actually
+// reaches the limiter.
 func TestIngestStream_PerTokenRateLimit_ThrottlesButDeliversAll(t *testing.T) {
 	tx, cleanup := testStore(t)
 	defer cleanup()
