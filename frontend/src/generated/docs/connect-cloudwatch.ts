@@ -8,8 +8,7 @@ const connectCloudwatch = {
   order: 40,
   headings: [
     { level: 3, id: "1-create-the-cross-account-iam-role", text: "1. Create the cross-account IAM role" },
-    { level: 3, id: "2-write-a-schema-file", text: "2. Write a schema file" },
-    { level: 3, id: "3-register-the-source", text: "3. Register the source" },
+    { level: 3, id: "2-register-the-source", text: "2. Register the source" },
     { level: 3, id: "troubleshooting", text: "Troubleshooting" },
   ],
   html: `<p>If your logs already land in AWS CloudWatch Logs — Lambda, ECS/Fargate,
@@ -57,39 +56,26 @@ you'll paste it into weft in step 3.</p>
 <p>Scope <code>Resource</code> to a single log group (recommended) or a prefix
 (<code>.../log-group:/aws/lambda/*</code>) to share a whole tier at once. Note the
 trailing <code>:*</code> — CloudWatch Logs ARNs require it.</p>
-<h3 id="2-write-a-schema-file">2. Write a schema file</h3>
-<p>Weft needs to know how to parse each log line. The schema file is a
-short YAML document that names the app and tells weft where to find the
-timestamp. For a typical CloudWatch-flavored line
-(<code>2026-04-18 14:32:01 INFO {&quot;user&quot;:&quot;alice&quot;}</code>):</p>
-<pre><code># my-app.schema.yaml
-app: my-app
-format: text
-timestamp_field: &quot;1&quot;            # 1-indexed field number
-timestamp_fields: 2             # how many fields make up the timestamp
-timestamp_format: &quot;2006-01-02 15:04:05&quot;  # Go time layout
-</code></pre>
-<p>If your lines are pure JSON (Lambda's structured logs, for example),
-use <code>format: json</code> and point <code>timestamp_field</code> at the JSON key instead:</p>
-<pre><code>app: my-lambda
-format: json
-timestamp_field: time         # the JSON key holding the timestamp
-timestamp_format: &quot;2006-01-02T15:04:05.000Z&quot;
-</code></pre>
-<h3 id="3-register-the-source">3. Register the source</h3>
-<p>Use the <code>weft</code> CLI to tell weft about the account and log group.
-Run this from any machine with the <code>weft</code> binary installed and a
-valid login.</p>
+<h3 id="2-register-the-source">2. Register the source</h3>
+<p>Use the <code>weft</code> CLI to tell weft about the account and log group. Run this
+from any machine with the <code>weft</code> binary installed and a valid login.</p>
 <pre><code>weft source add \\
-  --app my-app \\
+  --namespace myco \\
+  --service my-app \\
   --log-group /aws/lambda/my-fn \\
   --account 123456789012 \\
   --role-arn arn:aws:iam::123456789012:role/weft-ingest \\
   --external-id REPLACE-WITH-YOUR-EXTERNAL-ID \\
   --region us-east-2 \\
-  --interval 30s \\
-  --schema ./my-app.schema.yaml
+  --interval 30s
 </code></pre>
+<p><code>source add</code> pulls a live sample from the log group (the coordinator assumes
+the role for you) and runs an interactive schema wizard: it shows real lines
+and asks where the timestamp is, which field holds the log level, and whether
+the tail is a JSON payload. It detects the common shapes automatically —
+CloudWatch-flavored text (<code>2026-04-18 14:32:01 INFO {&quot;user&quot;:&quot;alice&quot;}</code>) or
+pure-JSON Lambda logs — so you usually just confirm its suggestions. The
+schema it produces is stored server-side; there's no local file to manage.</p>
 <p>Within one poll interval weft will assume the role, page through
 recent log events, and start writing rows. Confirm the source is live:</p>
 <pre><code>weft source list
