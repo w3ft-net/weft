@@ -97,6 +97,19 @@ type Server struct {
 	// tests and non-production callers — handlers fall through to
 	// compile-time defaults via runtimeCfg().
 	CfgPtr *atomic.Pointer[weftcfg.Runtime]
+
+	// ingestLimiterOnce/ingestLimiterPtr back tokenLimiter(): lazily
+	// constructed so callers building Server{} literals (every test in
+	// this package) don't need a constructor, and shared across every
+	// IngestStream call on this process so a token's rate-limit bucket
+	// persists across reconnects — see docs/plans/render.md Component 6.
+	ingestLimiterOnce sync.Once
+	ingestLimiterPtr  *ingestLimiter
+}
+
+func (s *Server) tokenLimiter() *ingestLimiter {
+	s.ingestLimiterOnce.Do(func() { s.ingestLimiterPtr = newIngestLimiter() })
+	return s.ingestLimiterPtr
 }
 
 func (s *Server) runtimeCfg() *weftcfg.Runtime {
@@ -630,14 +643,25 @@ recvLoop:
 			row = r.row
 		}
 
+		rowSize := int64(proto.Size(row))
+
 		if budget > 0 {
-			bytesThisStream += int64(proto.Size(row))
+			bytesThisStream += rowSize
 			if bytesThisStream > budget {
 				log.Printf("ingest-stream: customer=%s exceeded %d-byte budget, closing stream (agent should reconnect)",
 					authCustomer, budget)
 				return status.Errorf(codes.ResourceExhausted,
 					"ingest stream budget of %d bytes exceeded; reconnect", budget)
 			}
+		}
+
+		// Per-token sustained rate limit (render.md Component 6). Read
+		// live so an operator's config edit applies to in-flight
+		// streams immediately, unlike the accept-time budget above.
+		liveCfg := s.runtimeCfg()
+		if err := s.tokenLimiter().wait(stream.Context(), auth.TokenID, rowSize,
+			liveCfg.IngestTokenBytesPerSec, liveCfg.IngestTokenBurstBytes); err != nil {
+			return err
 		}
 
 		// Force the authoritative customer on every row.

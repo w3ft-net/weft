@@ -29,18 +29,18 @@ forward SNI; see *Wire capture results*). See *Shared components*.
 **Infra (Component 5) is live in prod and healthy**: `*.syslog.w3ft.net` TLS
 listener on `weft-nlb` → `weft-syslog` target group → coordinator :9023, no
 new instance (colocated with gRPC and the api server on the same coordinator
-ASG). **Components 1-5 have all shipped**, CLI and dashboard both: the
+ASG). **Components 1-6 have all shipped**, CLI and dashboard both: the
 `Producer` interface + `RenderProducer`, the `AgentToken.Producer` schema
 change, `SyslogServer` itself (wired into `cmd/api/main.go`, listening on
-9023), `weft token create --for render`, and the web dashboard's
-Namespaces page producer selector + endpoint display — see *Components to
-build* below for what landed in each. **The end-to-end path is live and
-mintable today**, from either the CLI or the browser: a real Render
-customer could be onboarded right now by running `weft token create --for
-render` (or minting a `render`-scoped token from the dashboard), pasting
-the token + printed endpoint into Render's log-stream config, and rows
-would flow all the way to storage — nothing blocks that. Only Component 6
-(rate limiting) and Component 7 (docs) remain.
+9023), `weft token create --for render`, the web dashboard's Namespaces
+page producer selector + endpoint display, and a per-token bytes/sec rate
+limit on `IngestStream` — see *Components to build* below for what landed
+in each. **The end-to-end path is live and mintable today**, from either
+the CLI or the browser: a real Render customer could be onboarded right
+now by running `weft token create --for render` (or minting a
+`render`-scoped token from the dashboard), pasting the token + printed
+endpoint into Render's log-stream config, and rows would flow all the way
+to storage — nothing blocks that. Only Component 7 (docs) remains.
 
 ## Why
 
@@ -438,9 +438,32 @@ Let's Encrypt cert at `render-capture.w3ft.net`, torn down after). Answers:
    Render: `TLS` listener + TG + ACM cert on port 9023, Route 53 record, SG
    rule.~~ **Done, live in prod** (2026-09-02). See *No new NLB* above for
    what shipped and the ASG instance-refresh side effect.
-6. **Rate limit + bytes-in metering** — reuse the `usage_hourly` path the gRPC
-   stream already updates; per-token token-bucket keyed on the token. **~0.5
-   day.**
+6. ~~**Rate limit + bytes-in metering** — reuse the `usage_hourly` path the
+   gRPC stream already updates; per-token token-bucket keyed on the
+   token.~~ **Done.** Bytes-in metering needed no new code: syslog rows
+   already flow through the same `IngestStream` → ring buffer → drain
+   path weftd uses, so `c.Usage.Record` (and `usage_hourly`) already
+   covered them. What was missing was the rate limit itself. Added
+   `config.Runtime.IngestTokenBytesPerSec` /
+   `IngestTokenBurstBytes` (defaults 4 MiB/s sustained, 16 MiB burst;
+   either `<= 0` disables) and a new `ingestLimiter` in
+   `coordinator/service/ingest_limiter.go`: an `x/time/rate`-backed
+   token bucket keyed on `AgentToken.ID`, mirroring
+   `api/ratelimit.go`'s per-IP limiter but persisting across
+   reconnects (a customer can't dodge it by cycling connections the
+   way the pre-existing `IngestStreamBudgetBytes` per-stream cap can
+   be). Deliberately throttles (delays the offending row until the
+   bucket refills) rather than rejecting or closing the stream —
+   `IngestStreamBudgetBytes` already exists as the hard
+   memory-safety valve; this is the customer-fairness layer and
+   shouldn't drop data or thrash reconnects. Wired into `IngestStream`
+   for both weftd and the syslog path (same RPC). 9 new tests:
+   `config`'s overlay test plus `ingest_limiter_test.go` (bucket unit
+   tests: disabled, within-burst, throttles, oversized row passes
+   through, context-cancellation, per-token independence) and
+   `ingest_ratelimit_test.go` (end-to-end `IngestStream` proving
+   throttled rows are delayed but never dropped, and that disabling
+   the limit is instant). Race-clean.
 7. **`docs/manual/render.md`** — dashboard setup (Integrations → Observability),
    the endpoint string, the service-type → pseudofile mapping, and the Approach
    B / Vector alternative. **~0.5 day.**
@@ -450,12 +473,11 @@ coordinator-side on the `IngestStream` path this forwards into.
 
 ## Effort
 
-**~5 days** for Approach A end to end. Components 1-5 (~4.5-5 days combined,
-CLI and dashboard both) are **done** for a real customer to onboard today,
-from either surface; leaving ~0.5: rate limiting and docs. Approach B is
-~1 day on top (Vector config doc + verifying the `JSONAdapter` accepts
-Vector's shape) and can ship first as the unblock-the-prospect stopgap
-while A is built.
+**~5 days** for Approach A end to end. Components 1-6 (~5 days combined) are
+**done**; only Component 7 (docs) remains, **~0.5 day**. Approach B is ~1 day
+on top (Vector config doc + verifying the `JSONAdapter` accepts Vector's
+shape) and can ship first as the unblock-the-prospect stopgap while A is
+built.
 
 ## Non-goals
 

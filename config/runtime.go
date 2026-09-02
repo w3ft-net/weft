@@ -45,17 +45,29 @@ type Runtime struct {
 	TrustedProxyCIDRs string
 
 	// HTTP body caps (api process). Bytes.
-	AuthBodyMax     int64
+	AuthBodyMax      int64
 	ShellExecBodyMax int64
-	FunctionBodyMax int64
-	WatchBodyMax    int64
+	FunctionBodyMax  int64
+	WatchBodyMax     int64
 
 	// gRPC caps. GRPCMaxRecvBytes is read once at server creation
 	// (grpc.MaxRecvMsgSize is not runtime-mutable) — tuning this
 	// requires a process restart. IngestStreamBudgetBytes is read on
 	// each new stream, so changes take effect as agents reconnect.
-	GRPCMaxRecvBytes         int
-	IngestStreamBudgetBytes  int64
+	GRPCMaxRecvBytes        int
+	IngestStreamBudgetBytes int64
+
+	// IngestTokenBytesPerSec and IngestTokenBurstBytes bound sustained
+	// ingest throughput per AgentToken — docs/plans/render.md Component
+	// 6. Unlike IngestStreamBudgetBytes (a per-connection lifetime cap
+	// enforced for coordinator memory safety), this bucket is keyed on
+	// the token and persists in memory across reconnects, so a customer
+	// can't dodge it by cycling connections. A row that would exceed the
+	// budget is delayed until the bucket refills rather than dropped or
+	// disconnected. Read live on every row, so changes take effect
+	// immediately for in-flight streams. Either <= 0 disables the check.
+	IngestTokenBytesPerSec int64
+	IngestTokenBurstBytes  int64
 
 	// IngestStreamIdleTimeoutSeconds reaps abandoned ingest streams: if
 	// no row arrives within this window the handler closes the stream and
@@ -96,21 +108,26 @@ type Runtime struct {
 // — see docs/security-audit-pre-launch.md for the rationale.
 func Defaults() *Runtime {
 	return &Runtime{
-		LoginRPM:                 5,
-		LoginBurst:               5,
-		DevicePollRPM:            30,
-		DevicePollBurst:          10,
-		AnonAuthRPM:              20,
-		AnonAuthBurst:            5,
-		StripeWebhookRPM:         120,
-		StripeWebhookBurst:       30,
-		TrustedProxyCIDRs:        "10.0.0.0/8",
-		AuthBodyMax:              4 * 1024,
-		ShellExecBodyMax:         1024 * 1024,
-		FunctionBodyMax:          64 * 1024,
-		WatchBodyMax:             64 * 1024,
-		GRPCMaxRecvBytes:         32 * 1024 * 1024,
-		IngestStreamBudgetBytes:  64 * 1024 * 1024,
+		LoginRPM:                5,
+		LoginBurst:              5,
+		DevicePollRPM:           30,
+		DevicePollBurst:         10,
+		AnonAuthRPM:             20,
+		AnonAuthBurst:           5,
+		StripeWebhookRPM:        120,
+		StripeWebhookBurst:      30,
+		TrustedProxyCIDRs:       "10.0.0.0/8",
+		AuthBodyMax:             4 * 1024,
+		ShellExecBodyMax:        1024 * 1024,
+		FunctionBodyMax:         64 * 1024,
+		WatchBodyMax:            64 * 1024,
+		GRPCMaxRecvBytes:        32 * 1024 * 1024,
+		IngestStreamBudgetBytes: 64 * 1024 * 1024,
+		// 4 MiB/s sustained, 16 MiB burst per token: comfortably above
+		// any real customer's log volume (Render services included) while
+		// still bounding a runaway or misconfigured firehose.
+		IngestTokenBytesPerSec: 4 * 1024 * 1024,
+		IngestTokenBurstBytes:  16 * 1024 * 1024,
 		// 5 min: long enough not to disturb a live-but-sparse agent, short
 		// enough to reap abandoned/half-open streams before they pile up.
 		IngestStreamIdleTimeoutSeconds: 300,
@@ -120,26 +137,28 @@ func Defaults() *Runtime {
 
 // Keys matches the kevcons "app" blob convention: flat, UPPER_SNAKE.
 const (
-	keyLoginRPM             = "RATELIMIT_LOGIN_RPM"
-	keyLoginBurst           = "RATELIMIT_LOGIN_BURST"
-	keyDevicePollRPM        = "RATELIMIT_DEVICE_POLL_RPM"
-	keyDevicePollBurst      = "RATELIMIT_DEVICE_POLL_BURST"
-	keyAnonAuthRPM          = "RATELIMIT_ANON_AUTH_RPM"
-	keyAnonAuthBurst        = "RATELIMIT_ANON_AUTH_BURST"
-	keyStripeWebhookRPM     = "RATELIMIT_STRIPE_WEBHOOK_RPM"
-	keyStripeWebhookBurst   = "RATELIMIT_STRIPE_WEBHOOK_BURST"
-	keyTrustedProxyCIDRs    = "RATELIMIT_TRUSTED_PROXY_CIDRS"
-	keyAuthBodyMax          = "BODYCAP_AUTH_BYTES"
-	keyShellExecBodyMax     = "BODYCAP_SHELL_EXEC_BYTES"
-	keyFunctionBodyMax      = "BODYCAP_FUNCTION_BYTES"
-	keyWatchBodyMax         = "BODYCAP_WATCH_BYTES"
-	keyGRPCMaxRecvBytes     = "GRPC_MAX_RECV_BYTES"
-	keyIngestStreamBudget   = "GRPC_INGEST_STREAM_BUDGET_BYTES"
-	keyIngestStreamIdleSec  = "GRPC_INGEST_STREAM_IDLE_TIMEOUT_SECONDS"
-	keyShardQueryTimeoutSec = "SHARD_QUERY_TIMEOUT_SECONDS"
-	keyMinWeftCliVersion    = "MIN_WEFT_CLI_VERSION"
-	keyMinWeftdVersion      = "MIN_WEFTD_VERSION"
-	keyWeftdHardFloor       = "WEFTD_HARD_FLOOR"
+	keyLoginRPM               = "RATELIMIT_LOGIN_RPM"
+	keyLoginBurst             = "RATELIMIT_LOGIN_BURST"
+	keyDevicePollRPM          = "RATELIMIT_DEVICE_POLL_RPM"
+	keyDevicePollBurst        = "RATELIMIT_DEVICE_POLL_BURST"
+	keyAnonAuthRPM            = "RATELIMIT_ANON_AUTH_RPM"
+	keyAnonAuthBurst          = "RATELIMIT_ANON_AUTH_BURST"
+	keyStripeWebhookRPM       = "RATELIMIT_STRIPE_WEBHOOK_RPM"
+	keyStripeWebhookBurst     = "RATELIMIT_STRIPE_WEBHOOK_BURST"
+	keyTrustedProxyCIDRs      = "RATELIMIT_TRUSTED_PROXY_CIDRS"
+	keyAuthBodyMax            = "BODYCAP_AUTH_BYTES"
+	keyShellExecBodyMax       = "BODYCAP_SHELL_EXEC_BYTES"
+	keyFunctionBodyMax        = "BODYCAP_FUNCTION_BYTES"
+	keyWatchBodyMax           = "BODYCAP_WATCH_BYTES"
+	keyGRPCMaxRecvBytes       = "GRPC_MAX_RECV_BYTES"
+	keyIngestStreamBudget     = "GRPC_INGEST_STREAM_BUDGET_BYTES"
+	keyIngestTokenBytesPerSec = "GRPC_INGEST_TOKEN_BYTES_PER_SEC"
+	keyIngestTokenBurstBytes  = "GRPC_INGEST_TOKEN_BURST_BYTES"
+	keyIngestStreamIdleSec    = "GRPC_INGEST_STREAM_IDLE_TIMEOUT_SECONDS"
+	keyShardQueryTimeoutSec   = "SHARD_QUERY_TIMEOUT_SECONDS"
+	keyMinWeftCliVersion      = "MIN_WEFT_CLI_VERSION"
+	keyMinWeftdVersion        = "MIN_WEFTD_VERSION"
+	keyWeftdHardFloor         = "WEFTD_HARD_FLOOR"
 )
 
 // paramPath returns the SSM path the kevcons config-set command writes
@@ -167,6 +186,8 @@ func (r *Runtime) Overlay(blob map[string]string) {
 	overlayInt64(blob, keyWatchBodyMax, &r.WatchBodyMax)
 	overlayInt(blob, keyGRPCMaxRecvBytes, &r.GRPCMaxRecvBytes)
 	overlayInt64(blob, keyIngestStreamBudget, &r.IngestStreamBudgetBytes)
+	overlayInt64(blob, keyIngestTokenBytesPerSec, &r.IngestTokenBytesPerSec)
+	overlayInt64(blob, keyIngestTokenBurstBytes, &r.IngestTokenBurstBytes)
 	overlayInt(blob, keyIngestStreamIdleSec, &r.IngestStreamIdleTimeoutSeconds)
 	overlayInt(blob, keyShardQueryTimeoutSec, &r.ShardQueryTimeoutSeconds)
 	overlayString(blob, keyMinWeftCliVersion, &r.MinWeftCliVersion)
