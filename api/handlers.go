@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/coordinator/onboarding"
+	ingsyslog "github.com/graybeardcorp/weft/ingest/syslog"
 	"github.com/graybeardcorp/weft/mounts"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -1310,6 +1312,11 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		Label     string `json:"label"`
 		Namespace string `json:"namespace"`
 		Env       string `json:"env"`
+		// Producer scopes the token to one registered
+		// ingest/syslog.Producer (e.g. "render"), minted via
+		// `weft token create --for render`. Empty for every other
+		// token. See docs/plans/render.md, Component 4.
+		Producer string `json:"producer"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Label == "" {
 		http.Error(w, "label required", http.StatusBadRequest)
@@ -1317,6 +1324,10 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Namespace == "" {
 		http.Error(w, "namespace required", http.StatusBadRequest)
+		return
+	}
+	if req.Producer != "" && !validSyslogProducer(req.Producer) {
+		http.Error(w, fmt.Sprintf("unknown producer %q", req.Producer), http.StatusBadRequest)
 		return
 	}
 
@@ -1336,7 +1347,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	raw, tok, err := s.store.CreateAgentToken(custID, nsObj.ID, req.Label, req.Env, "")
+	raw, tok, err := s.store.CreateAgentToken(custID, nsObj.ID, req.Label, req.Env, req.Producer)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1344,8 +1355,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 
 	// Raw token is returned here and nowhere else — the UI must
 	// capture it in this response or the user creates a new one.
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]any{
+	resp := map[string]any{
 		"token":      raw,
 		"id":         tok.ID,
 		"prefix":     tok.Prefix,
@@ -1353,7 +1363,44 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		"namespace":  nsObj.Name,
 		"status":     "active",
 		"created_at": tok.CreatedAt.Format(time.RFC3339),
-	})
+	}
+	if tok.Producer != "" {
+		resp["producer"] = tok.Producer
+		resp["endpoint"] = s.syslogEndpoint(tok.Producer)
+	}
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(resp)
+}
+
+// syslogProducers lists every registered ingest/syslog.Producer. Used
+// to validate `weft token create --for <name>` and to derive the
+// endpoint hostname shown after minting. A second syslog-speaking
+// platform (Fly.io, Railway, ...) adds itself here alongside its own
+// SyslogServer instance in cmd/api/main.go — see docs/plans/render.md.
+var syslogProducers = []ingsyslog.Producer{
+	ingsyslog.RenderProducer{},
+}
+
+func validSyslogProducer(name string) bool {
+	for _, p := range syslogProducers {
+		if p.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
+// syslogEndpoint returns the customer-facing hostname:port for a
+// producer's TLS syslog listener. Derived from the same baseURL every
+// other public link on this server is built from (apiBaseURL, magic
+// links, ...) rather than a hardcoded domain, so a dev/staging
+// deployment prints its own host instead of production's.
+func (s *Server) syslogEndpoint(producer string) string {
+	host := s.baseURL
+	if u, err := url.Parse(s.baseURL); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	return fmt.Sprintf("%s.syslog.%s:6514", producer, host)
 }
 
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {

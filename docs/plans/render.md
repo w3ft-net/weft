@@ -29,10 +29,11 @@ forward SNI; see *Wire capture results*). See *Shared components*.
 **Infra (Component 5) is live in prod and healthy**: `*.syslog.w3ft.net` TLS
 listener on `weft-nlb` → `weft-syslog` target group → coordinator :9023, no
 new instance (colocated with gRPC and the api server on the same coordinator
-ASG). **Component 2 (`Producer` interface + `RenderProducer`) has shipped**
-— see *Components to build* below. Components 3, 4, 6, 7 are ready to build;
-Component 3 (`SyslogServer`) needs a token-scoping field (`AgentToken.Producer`,
-a new migration) that isn't built yet — see the note there.
+ASG). **Components 1-3 and 5 have all shipped**: the `Producer` interface +
+`RenderProducer`, the `AgentToken.Producer` schema change, and `SyslogServer`
+itself (wired into `cmd/api/main.go`, listening on 9023) — see *Components to
+build* below for what landed in each. Only Components 4 (generalized token
+creation), 6 (rate limiting), and 7 (docs) remain; nothing is blocked.
 
 ## Why
 
@@ -378,29 +379,38 @@ Let's Encrypt cert at `render-capture.w3ft.net`, torn down after). Answers:
    APP-NAME (falling back to MSGID) split on the last `-` → Kind/Instance,
    and drops the `HOSTNAME == "render"` connectivity ping. 7 new tests in
    `ingest/syslog/producer_render_test.go`.
-3. **`api/syslog_server.go`** — `SyslogServer`: TCP accept loop on a
-   configured port, strip the leading `TOKEN SP`, `store.ValidateAgentToken`
-   scoped to its configured producer name, LF-framed
-   `ingest/syslog.ParseStream`, run each frame through its `Producer`,
-   forward via `coordClient.IngestStream()`, idle-timeout / graceful-drain /
-   reconnect handling. Fully platform-agnostic code — constructed with
-   `(producer Producer, port int)`; `cmd/api/main.go` instantiates one per
-   registered producer next to `StartUnverifiedSweep` (today: one, on 9023,
-   `RenderProducer`). **Needs a schema change first**:
-   `store.AgentToken` has no producer-scoping field today — `ValidateAgentToken`
-   takes only the raw token, with no way to reject a token minted for a
-   different producer. Add an `AgentToken.Producer` column (migration,
-   default `""` = unscoped/legacy tokens, matching how `Env` was added) and an
-   `ExpectedProducer` param on `ValidateAgentToken` (or a
-   `ValidateAgentTokenForProducer` wrapper) before this component can be
-   built for real — folded into Component 4's estimate below since token
-   creation is the other half of the same schema change. **~1.5 days.**
+1. ~~**Schema prereq**: `store.AgentToken.Producer` column~~ **Done.** Migration
+   073 adds `agent_tokens.producer TEXT NOT NULL DEFAULT ''`;
+   `CreateAgentToken` takes a `producer` arg (every existing caller passes
+   `""`); `ValidateAgentTokenForProducer(token, producer)` is a new
+   one-query check alongside the untouched producer-agnostic
+   `ValidateAgentToken`. 1 new test (`store/token_producer_test.go`) pins:
+   scoped token validates only for its own producer; unscoped token
+   validates on `ValidateAgentToken` but never on the scoped check.
+1. ~~**`api/syslog_server.go`** — `SyslogServer`: TCP accept loop on a
+   configured port, strip the leading `TOKEN SP`, validate scoped to its
+   configured producer, LF-framed `ingest/syslog.ParseStream`, run each
+   frame through its `Producer`, forward via `coordClient.IngestStream()`,
+   idle-timeout / graceful-drain handling.~~ **Done.** Constructed via
+   `(*Server).NewSyslogServer(producer, port)`, reusing the `Server`'s
+   store + coordinator client; `Start(ctx)` binds synchronously (fails
+   fast on a port conflict) then accepts in the background; `Close()`
+   (or `ctx` cancellation) closes the listener and every in-flight
+   connection for graceful drain. A small `syslogConnReader` strips the
+   repeating `"TOKEN SP"` prefix per line so `ingest/syslog.ParseStream`
+   is reused unmodified for framing + RFC5424 parsing — no forked parser.
+   Wired into `cmd/api/main.go` next to `StartUnverifiedSweep`: one
+   instance, `RenderProducer`, port 9023 (`--render-syslog-port`),
+   matching the NLB target group already live in prod. 4 new tests in
+   `api/syslog_server_test.go` (golden path incl. the connectivity-ping
+   drop, plus unscoped/wrong-producer/no-prefix rejection), race-clean.
+   **Reconnect handling** is Render's responsibility, not this server's —
+   it just accepts a new TCP connection the same way each time; nothing
+   here needed building.
 4. **`weft token create --for render`** — `--for` takes any registered
-   producer name, not just `render`; sets the new `AgentToken.Producer`
-   column from Component 3's schema change. Endpoint string in the command
-   output and dashboard. **~0.5 day** (the schema/migration work itself is
-   costed under Component 3, since `SyslogServer` can't validate a
-   producer-scoped token until the column exists).
+   producer name, not just `render`; sets `AgentToken.Producer` (the
+   schema half above is already done). Endpoint string in the command
+   output and dashboard. **~0.5 day.**
 5. ~~**Infra** (`asg-weft-application/main.tf`) — the *No new NLB* recipe for
    Render: `TLS` listener + TG + ACM cert on port 9023, Route 53 record, SG
    rule.~~ **Done, live in prod** (2026-09-02). See *No new NLB* above for
@@ -417,9 +427,8 @@ coordinator-side on the `IngestStream` path this forwards into.
 
 ## Effort
 
-**~5 days** for Approach A end to end. Components 1, 2 (~1.5 days combined)
-and 5 (infra, ~0.5-1 day) are **done**, leaving ~2-2.5: `SyslogServer` +
-the `AgentToken.Producer` schema change, generalized token creation, rate
+**~5 days** for Approach A end to end. Components 1-3 and 5 (~3.5-4 days
+combined) are **done**, leaving ~1-1.5: generalized token creation, rate
 limiting, docs. Approach B is ~1 day on top (Vector config doc + verifying
 the `JSONAdapter` accepts Vector's shape) and can ship first as the
 unblock-the-prospect stopgap while A is built.

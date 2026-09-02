@@ -1001,7 +1001,7 @@ func runToken() {
 
 func runTokenCreate(client *shell.HTTPCoordinator) {
 	args := os.Args[3:]
-	var label, namespace, env string
+	var label, namespace, env, producer string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -1020,15 +1020,20 @@ func runTokenCreate(client *shell.HTTPCoordinator) {
 				env = args[i+1]
 				i++
 			}
+		case "--for":
+			if i+1 < len(args) {
+				producer = args[i+1]
+				i++
+			}
 		}
 	}
 
 	if namespace == "" {
-		fmt.Fprintln(os.Stderr, "usage: weft token create --namespace NAME [--label LABEL] [--env ENV]")
+		fmt.Fprintln(os.Stderr, "usage: weft token create --namespace NAME [--label LABEL] [--env ENV] [--for PRODUCER]")
 		os.Exit(1)
 	}
 
-	token, err := client.CreateToken("", label, namespace, env)
+	token, endpoint, err := client.CreateToken("", label, namespace, env, producer)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create token: %v\n", err)
 		os.Exit(1)
@@ -1040,7 +1045,13 @@ func runTokenCreate(client *shell.HTTPCoordinator) {
 	if env != "" {
 		fmt.Printf("Env:   %s (stamped on every row from this token)\n", env)
 	}
-	fmt.Println("Store this token in your weftd config. It cannot be retrieved again.")
+	if producer != "" {
+		fmt.Printf("For:   %s\n", producer)
+		fmt.Printf("Endpoint: %s\n", endpoint)
+		fmt.Println("Paste this token and endpoint into that platform's log-stream config.")
+	} else {
+		fmt.Println("Store this token in your weftd config. It cannot be retrieved again.")
+	}
 }
 
 func runTokenList(client *shell.HTTPCoordinator) {

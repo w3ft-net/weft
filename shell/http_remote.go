@@ -320,26 +320,33 @@ func (h *HTTPCoordinator) CreateNamespace(name string) (*NamespaceInfo, error) {
 	return &ns, nil
 }
 
-func (h *HTTPCoordinator) CreateToken(customer, label, namespace, env string) (string, error) {
-	body, _ := json.Marshal(map[string]string{"label": label, "namespace": namespace, "env": env})
+// CreateToken mints an agent token. producer is optional — pass "" for
+// every non-syslog token (the common case); a registered
+// ingest/syslog.Producer name (e.g. "render") scopes the token to that
+// producer and the response's endpoint carries the hostname:port the
+// customer pastes into that platform's log-stream config. See
+// docs/plans/render.md, Component 4.
+func (h *HTTPCoordinator) CreateToken(customer, label, namespace, env, producer string) (token, endpoint string, err error) {
+	body, _ := json.Marshal(map[string]string{"label": label, "namespace": namespace, "env": env, "producer": producer})
 	req, _ := http.NewRequest("POST", h.baseURL+"/api/tokens", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	h.setAuthHeaders(req)
 
 	resp, err := h.client.Do(req)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		msg, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return "", "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	var result struct {
-		Token string `json:"token"`
+		Token    string `json:"token"`
+		Endpoint string `json:"endpoint"`
 	}
 	json.NewDecoder(resp.Body).Decode(&result)
-	return result.Token, nil
+	return result.Token, result.Endpoint, nil
 }
 
 func (h *HTTPCoordinator) ListTokens(customer string) ([]TokenInfo, error) {
