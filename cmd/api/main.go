@@ -11,6 +11,7 @@ import (
 
 	weftapi "github.com/graybeardcorp/weft/api"
 	"github.com/graybeardcorp/weft/config"
+	ingsyslog "github.com/graybeardcorp/weft/ingest/syslog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -19,6 +20,7 @@ func main() {
 	dbDSN := flag.String("db-dsn", "", "PostgreSQL DSN")
 	coordAddr := flag.String("coordinator", "localhost:9020", "coordinator gRPC address")
 	baseURL := flag.String("base-url", "https://w3ft.net", "base URL for magic links")
+	renderSyslogPort := flag.Int("render-syslog-port", 9023, "TCP port for the Render TLS syslog listener (see docs/ingestion-syslog.md); the NLB terminates TLS and forwards plaintext here")
 	flag.Parse()
 
 	jwtSecret := os.Getenv("JWT_SECRET")
@@ -74,6 +76,18 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	srv.StartUnverifiedSweep(ctx)
+
+	// Render TLS syslog listener — see docs/ingestion-syslog.md.
+	// weft-nlb terminates TLS against the render.syslog.w3ft.net
+	// ACM cert and forwards plaintext TCP here; port 9023 IS the
+	// producer identity, so this coordinator process never needs to
+	// sniff a connection to know it's Render. A second syslog-speaking
+	// platform gets its own SyslogServer on its own port, next to this
+	// one, not new code.
+	renderSyslog := srv.NewSyslogServer(ingsyslog.RenderProducer{}, *renderSyslogPort)
+	if err := renderSyslog.Start(ctx); err != nil {
+		log.Fatalf("start render syslog listener: %v", err)
+	}
 
 	// Start the daily Stripe usage reporter. Fires at 03:00 UTC and
 	// posts yesterday's ingestion to the metered overage prices for

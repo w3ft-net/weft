@@ -85,7 +85,7 @@ func TestIngestStream_NoGoroutineLeak(t *testing.T) {
 	}
 	tx.SeedDevSubscription(cust.ID)
 	ns, _ := tx.FindOrCreateNamespace(cust.ID, "leaktest")
-	rawTok, _, err := tx.CreateAgentToken(cust.ID, ns.ID, "leak-agent", "")
+	rawTok, _, err := tx.CreateAgentToken(cust.ID, ns.ID, "leak-agent", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestIngestStream_AbandonedStreamReaped(t *testing.T) {
 	}
 	tx.SeedDevSubscription(cust.ID)
 	ns, _ := tx.FindOrCreateNamespace(cust.ID, "leaktest")
-	rawTok, _, err := tx.CreateAgentToken(cust.ID, ns.ID, "abandon-agent", "")
+	rawTok, _, err := tx.CreateAgentToken(cust.ID, ns.ID, "abandon-agent", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

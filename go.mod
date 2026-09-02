@@ -22,6 +22,7 @@ require (
 	github.com/graybeardcorp/saaskit v0.3.2
 	github.com/graybeardcorp/warp v0.2.35
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/leodido/go-syslog/v4 v4.6.0
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/pressly/goose/v3 v3.27.0

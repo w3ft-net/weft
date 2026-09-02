@@ -43,10 +43,12 @@ func TestOverlay_IgnoresUnknownAndBadValues(t *testing.T) {
 func TestOverlay_AppliesRecognizedValues(t *testing.T) {
 	r := Defaults()
 	r.Overlay(map[string]string{
-		keyLoginRPM:             "100",
-		keyShellExecBodyMax:     "4194304",
-		keyTrustedProxyCIDRs:    "172.16.0.0/12,10.0.0.0/8",
-		keyShardQueryTimeoutSec: "45",
+		keyLoginRPM:               "100",
+		keyShellExecBodyMax:       "4194304",
+		keyTrustedProxyCIDRs:      "172.16.0.0/12,10.0.0.0/8",
+		keyShardQueryTimeoutSec:   "45",
+		keyIngestTokenBytesPerSec: "1048576",
+		keyIngestTokenBurstBytes:  "4194304",
 	})
 	if r.LoginRPM != 100 {
 		t.Errorf("LoginRPM: got %d, want 100", r.LoginRPM)
@@ -59,6 +61,12 @@ func TestOverlay_AppliesRecognizedValues(t *testing.T) {
 	}
 	if r.ShardQueryTimeoutSeconds != 45 {
 		t.Errorf("ShardQueryTimeoutSeconds: got %d, want 45", r.ShardQueryTimeoutSeconds)
+	}
+	if r.IngestTokenBytesPerSec != 1048576 {
+		t.Errorf("IngestTokenBytesPerSec: got %d, want 1048576", r.IngestTokenBytesPerSec)
+	}
+	if r.IngestTokenBurstBytes != 4194304 {
+		t.Errorf("IngestTokenBurstBytes: got %d, want 4194304", r.IngestTokenBurstBytes)
 	}
 }
 
