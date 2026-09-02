@@ -29,7 +29,10 @@ forward SNI; see *Wire capture results*). See *Shared components*.
 **Infra (Component 5) is live in prod and healthy**: `*.syslog.w3ft.net` TLS
 listener on `weft-nlb` → `weft-syslog` target group → coordinator :9023, no
 new instance (colocated with gRPC and the api server on the same coordinator
-ASG). Components 2, 3, 4, 6, 7 are ready to build.
+ASG). **Component 2 (`Producer` interface + `RenderProducer`) has shipped**
+— see *Components to build* below. Components 3, 4, 6, 7 are ready to build;
+Component 3 (`SyslogServer`) needs a token-scoping field (`AgentToken.Producer`,
+a new migration) that isn't built yet — see the note there.
 
 ## Why
 
@@ -367,8 +370,14 @@ Let's Encrypt cert at `render-capture.w3ft.net`, torn down after). Answers:
    from `HerokuAdapter`. Repoint Heroku at it.~~ **Done.** Landed as a
    `leodido/go-syslog`-backed `Frame` + `ParseStream` + `SplitProcID`; Heroku
    repointed, 11 tests green, 14 new tests in `ingest/syslog/`.
-2. **`ingest/syslog/producer.go` + `producer_render.go`** — the `Producer`
-   interface and Render's implementation. See *Shared components*. **~0.5 day.**
+1. ~~**`ingest/syslog/producer.go` + `producer_render.go`** — the `Producer`
+   interface and Render's implementation. See *Shared components*.~~ **Done.**
+   `Producer` has `Name() string` (token-scoping/`--for` key) and
+   `MapFields(Frame) (service, kind, instance string, ok bool)`.
+   `RenderProducer.Name()` = `"render"`; `MapFields` maps HOSTNAME → Service,
+   APP-NAME (falling back to MSGID) split on the last `-` → Kind/Instance,
+   and drops the `HOSTNAME == "render"` connectivity ping. 7 new tests in
+   `ingest/syslog/producer_render_test.go`.
 3. **`api/syslog_server.go`** — `SyslogServer`: TCP accept loop on a
    configured port, strip the leading `TOKEN SP`, `store.ValidateAgentToken`
    scoped to its configured producer name, LF-framed
@@ -377,11 +386,21 @@ Let's Encrypt cert at `render-capture.w3ft.net`, torn down after). Answers:
    reconnect handling. Fully platform-agnostic code — constructed with
    `(producer Producer, port int)`; `cmd/api/main.go` instantiates one per
    registered producer next to `StartUnverifiedSweep` (today: one, on 9023,
-   `RenderProducer`). **~1.5 days.**
+   `RenderProducer`). **Needs a schema change first**:
+   `store.AgentToken` has no producer-scoping field today — `ValidateAgentToken`
+   takes only the raw token, with no way to reject a token minted for a
+   different producer. Add an `AgentToken.Producer` column (migration,
+   default `""` = unscoped/legacy tokens, matching how `Env` was added) and an
+   `ExpectedProducer` param on `ValidateAgentToken` (or a
+   `ValidateAgentTokenForProducer` wrapper) before this component can be
+   built for real — folded into Component 4's estimate below since token
+   creation is the other half of the same schema change. **~1.5 days.**
 4. **`weft token create --for render`** — `--for` takes any registered
-   producer name, not just `render`; stores it on the token row so
-   validation can scope to it. Endpoint string in the command output and
-   dashboard. **~0.5 day.**
+   producer name, not just `render`; sets the new `AgentToken.Producer`
+   column from Component 3's schema change. Endpoint string in the command
+   output and dashboard. **~0.5 day** (the schema/migration work itself is
+   costed under Component 3, since `SyslogServer` can't validate a
+   producer-scoped token until the column exists).
 5. ~~**Infra** (`asg-weft-application/main.tf`) — the *No new NLB* recipe for
    Render: `TLS` listener + TG + ACM cert on port 9023, Route 53 record, SG
    rule.~~ **Done, live in prod** (2026-09-02). See *No new NLB* above for
@@ -398,9 +417,9 @@ coordinator-side on the `IngestStream` path this forwards into.
 
 ## Effort
 
-**~5 days** for Approach A end to end. Component 1 (~1 day) and Component 5
-(infra, ~0.5-1 day) are **done**, leaving ~2.5-3: `Producer` interface +
-Render implementation, `SyslogServer`, generalized token creation, rate
+**~5 days** for Approach A end to end. Components 1, 2 (~1.5 days combined)
+and 5 (infra, ~0.5-1 day) are **done**, leaving ~2-2.5: `SyslogServer` +
+the `AgentToken.Producer` schema change, generalized token creation, rate
 limiting, docs. Approach B is ~1 day on top (Vector config doc + verifying
 the `JSONAdapter` accepts Vector's shape) and can ship first as the
 unblock-the-prospect stopgap while A is built.
