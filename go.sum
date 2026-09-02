@@ -149,8 +149,6 @@ github.com/google/jsonschema-go v0.4.2 h1:tmrUohrwoLZZS/P3x7ex0WAVknEkBZM46iALbc
 github.com/google/jsonschema-go v0.4.2/go.mod h1:r5quNTdLOYEz95Ru18zA0ydNbBuYoo9tgaYcxEYhJVE=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/graybeardcorp/saaskit v0.3.1 h1:898rnO4xZXXocjlbTJq314zSzsuVcsllbs5A23lWykw=
-github.com/graybeardcorp/saaskit v0.3.1/go.mod h1:aJaO8a3RJ7X2OwGYvLji43T0SFtgr5d3nxAlmwzcHk0=
 github.com/graybeardcorp/saaskit v0.3.2 h1:dQdgdpO3TbZIRLfYA3r+eVD+tHQDGvRsQ5gPqTkHnnw=
 github.com/graybeardcorp/saaskit v0.3.2/go.mod h1:aJaO8a3RJ7X2OwGYvLji43T0SFtgr5d3nxAlmwzcHk0=
 github.com/graybeardcorp/warp v0.2.35 h1:LPBynV501Xsh1AKHpNVu6mhfLAvkGvbLRF8cm6C7oHk=
@@ -182,6 +180,8 @@ github.com/kr/pty v1.1.1/go.mod h1:pFQYn66WHrOpPYNljwOMqo10TkYh1fy3cYio2l3bCsQ=
 github.com/kr/text v0.1.0/go.mod h1:4Jbv+DJW3UT/LiOwJeYQe1efqtUx/iVham/4vfdArNI=
 github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
 github.com/kr/text v0.2.0/go.mod h1:eLer722TekiGuMkidMxC/pM04lWEeraHUUmBw8l2grE=
+github.com/leodido/go-syslog/v4 v4.6.0 h1:3o9H6K0cj9ITrNt7MG6CJ/Ae+vXmZcEPhI/N30/20Ig=
+github.com/leodido/go-syslog/v4 v4.6.0/go.mod h1:BOEXCJSgy32THF4eZWwtZ11w6LrrFVBj+nMtv06ge4w=
 github.com/lucasb-eyer/go-colorful v1.3.0 h1:2/yBRLdWBZKrf7gB40FoiKfAWYQ0lqNcbuQwVHXptag=
 github.com/lucasb-eyer/go-colorful v1.3.0/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=

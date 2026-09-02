@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,8 +8,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/graybeardcorp/weft/ingest/syslog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -53,10 +52,10 @@ func (HerokuAdapter) Auth(req *http.Request) (string, error) {
 	return tok, nil
 }
 
-// Parse walks the octet-counted multi-frame body Heroku posts.
-// Each frame is `<length> <RFC5424 syslog message>`; the length is the
-// byte count of the message exactly. After parsing we may emit one OR
-// two LogRows per frame:
+// Parse walks the multi-frame body Heroku posts, delegating framing and
+// RFC5424 parsing to the shared ingest/syslog package (Heroku uses
+// octet-counting: `<length> <RFC5424 syslog message>`). After parsing we
+// may emit one OR two LogRows per frame:
 //   - the canonical row for the (app, procid) sub-app
 //   - if the message is l2met-shaped, an additional metrics row
 //     redirected to <app>/metrics (the original line still flows
@@ -70,41 +69,21 @@ func (HerokuAdapter) Auth(req *http.Request) (string, error) {
 // line per skipped frame.
 func (a HerokuAdapter) Parse(body io.Reader, _ http.Header) ([]*pb.LogRow, error) {
 	var rows []*pb.LogRow
-	br := bufio.NewReader(body)
-	for {
-		// Octet-counted framing: ASCII length, then a single space,
-		// then `length` bytes of RFC5424.
-		lengthBytes, err := br.ReadBytes(' ')
-		if err == io.EOF {
-			return rows, nil
-		}
-		if err != nil {
-			return rows, fmt.Errorf("read frame length: %w", err)
-		}
-		length, err := strconv.Atoi(strings.TrimSpace(string(lengthBytes)))
-		if err != nil || length <= 0 || length > 64<<10 {
-			// Bogus length → bail. A malicious-or-buggy client could
-			// slow us down with a stream of invalid lengths; cap at
-			// 64 KB per frame (well beyond Heroku's actual ~10 KB).
-			return rows, fmt.Errorf("invalid frame length %q", lengthBytes)
-		}
-		buf := make([]byte, length)
-		if _, err := io.ReadFull(br, buf); err != nil {
-			return rows, fmt.Errorf("read frame body: %w", err)
-		}
-		frame, err := parseRFC5424(string(buf))
+	// Heroku's drain is always octet-counted (RFC 6587 §3.4.1).
+	syslog.ParseStream(body, syslog.OctetCounting, syslog.DefaultMaxFrame, func(f syslog.Frame, err error) {
 		if err != nil {
 			// Skip this frame, keep going — see Parse comment.
-			continue
+			return
 		}
-		canonical, metrics := a.frameToRows(frame)
+		canonical, metrics := a.frameToRows(f)
 		if canonical != nil {
 			rows = append(rows, canonical)
 		}
 		if metrics != nil {
 			rows = append(rows, metrics)
 		}
-	}
+	})
+	return rows, nil
 }
 
 // frameToRows converts one parsed syslog frame into the LogRow(s) we
@@ -113,9 +92,9 @@ func (a HerokuAdapter) Parse(body io.Reader, _ http.Header) ([]*pb.LogRow, error
 // metrics is non-nil only when the message body matches the l2met
 // metric-line shape, in which case it carries the parsed key/value
 // pairs to <appname>/metrics.
-func (HerokuAdapter) frameToRows(f rfc5424Frame) (*pb.LogRow, *pb.LogRow) {
-	procBase, instance := splitProcID(f.procid)
-	appname := f.appname
+func (HerokuAdapter) frameToRows(f syslog.Frame) (*pb.LogRow, *pb.LogRow) {
+	procBase, instance := syslog.SplitProcID(f.ProcID)
+	appname := f.AppName
 
 	// Heroku reuses appname=heroku for platform events emitted by the
 	// platform itself (deploys, scale, restart). Map those to a
@@ -124,8 +103,8 @@ func (HerokuAdapter) frameToRows(f rfc5424Frame) (*pb.LogRow, *pb.LogRow) {
 	// name in those frames; if it's missing or set to a placeholder,
 	// fall back to the procid as a last resort.
 	if appname == "heroku" {
-		if f.host != "" && f.host != "host" {
-			appname = f.host
+		if f.Hostname != "" && f.Hostname != "host" {
+			appname = f.Hostname
 		}
 		// Override the procid sub-app to "platform" — every "heroku"-
 		// originated line is platform-y regardless of which dyno emits
@@ -140,146 +119,26 @@ func (HerokuAdapter) frameToRows(f rfc5424Frame) (*pb.LogRow, *pb.LogRow) {
 		Service:  appname,
 		Kind:     procBase,
 		Instance: instance,
-		Raw:      f.message,
-		TsUnixNs: f.ts.UnixNano(),
+		Raw:      f.Message,
+		TsUnixNs: f.Timestamp.UnixNano(),
 		Level:    "", // Heroku-emitted lines don't carry a level field; let the schema parser fill it later if applicable
 	}
 
 	// l2met detection lives in detectL2met which returns nil when the
 	// line isn't metric-shaped — most Heroku frames take the early-out.
-	if metricsPayload, ok := detectL2met(f.message); ok {
+	if metricsPayload, ok := detectL2met(f.Message); ok {
 		metricsRow := &pb.LogRow{
 			Service:     appname,
 			Kind:        "metrics",
 			Instance:    instance,
-			Raw:         f.message,
-			TsUnixNs:    f.ts.UnixNano(),
+			Raw:         f.Message,
+			TsUnixNs:    f.Timestamp.UnixNano(),
 			PayloadJson: metricsPayload,
 		}
 		return canonical, metricsRow
 	}
 
 	return canonical, nil
-}
-
-// splitProcID separates a Heroku procid into the sub-app name and the
-// instance label. `web.1` → ("web", "web.1"); `router` → ("router",
-// "router"); `heroku-postgres` → ("heroku-postgres", "heroku-postgres").
-// The instance label keeps the dyno number intact so cross-dyno
-// rollups still work, but the app name strips it so all dynos of one
-// type land in the same pseudofile.
-func splitProcID(procid string) (base, instance string) {
-	if procid == "" || procid == "-" {
-		return "", ""
-	}
-	if i := strings.LastIndexByte(procid, '.'); i > 0 {
-		// Treat trailing-numeric suffix as a dyno number; otherwise
-		// keep the procid intact (some Heroku add-ons carry a dot,
-		// e.g. "scheduler.1234abcd" — that's still per-instance).
-		if _, err := strconv.Atoi(procid[i+1:]); err == nil {
-			return procid[:i], procid
-		}
-	}
-	return procid, procid
-}
-
-// rfc5424Frame is the subset of RFC5424 fields the adapter extracts.
-type rfc5424Frame struct {
-	priority int
-	ts       time.Time
-	host     string
-	appname  string
-	procid   string
-	msgid    string
-	message  string
-}
-
-// parseRFC5424 parses one RFC5424 syslog message. Heroku emits a
-// strict subset:
-//
-//	<priority>1 timestamp host appname procid msgid - message
-//
-// (no structured-data; Heroku always writes "-" in that slot). We
-// accept the structured-data segment when present (`[...]`) but skip
-// it — the relevant fields for weft are the message body and the
-// header tuple.
-func parseRFC5424(s string) (rfc5424Frame, error) {
-	var f rfc5424Frame
-
-	// <priority>VERSION
-	if len(s) < 4 || s[0] != '<' {
-		return f, fmt.Errorf("not RFC5424")
-	}
-	end := strings.IndexByte(s, '>')
-	if end < 0 {
-		return f, fmt.Errorf("missing > in priority")
-	}
-	pri, err := strconv.Atoi(s[1:end])
-	if err != nil {
-		return f, fmt.Errorf("priority: %w", err)
-	}
-	f.priority = pri
-	rest := s[end+1:]
-	// Skip VERSION (typically "1") and the following space.
-	sp := strings.IndexByte(rest, ' ')
-	if sp < 0 {
-		return f, fmt.Errorf("no space after VERSION")
-	}
-	rest = rest[sp+1:]
-
-	// timestamp host appname procid msgid (5 space-separated fields)
-	fields := strings.SplitN(rest, " ", 6)
-	if len(fields) < 6 {
-		return f, fmt.Errorf("expected at least 6 fields after VERSION, got %d", len(fields))
-	}
-	tsStr := fields[0]
-	f.host = fields[1]
-	f.appname = fields[2]
-	f.procid = fields[3]
-	f.msgid = fields[4]
-	tail := fields[5]
-
-	// Structured-data: either "-" or one or more "[id key=value ...]"
-	// segments. Skip past it.
-	if strings.HasPrefix(tail, "-") {
-		// "- " or just "-" at end.
-		if len(tail) >= 2 && tail[1] == ' ' {
-			f.message = tail[2:]
-		} else {
-			f.message = ""
-		}
-	} else if strings.HasPrefix(tail, "[") {
-		// Walk balanced brackets. Heroku doesn't emit structured-data
-		// in practice, but accept it for forward compatibility.
-		depth := 0
-		idx := -1
-		for i := 0; i < len(tail); i++ {
-			switch tail[i] {
-			case '[':
-				depth++
-			case ']':
-				depth--
-				if depth == 0 {
-					idx = i + 1
-				}
-			}
-		}
-		if idx < 0 {
-			return f, fmt.Errorf("unterminated structured-data")
-		}
-		msg := tail[idx:]
-		f.message = strings.TrimPrefix(msg, " ")
-	} else {
-		f.message = tail
-	}
-
-	if t, err := time.Parse(time.RFC3339Nano, tsStr); err == nil {
-		f.ts = t
-	} else {
-		f.ts = time.Now().UTC()
-	}
-
-	return f, nil
 }
 
 // l2metKVPattern matches Heroku's l2met metric grammar:
