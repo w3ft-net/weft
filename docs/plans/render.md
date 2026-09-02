@@ -10,11 +10,26 @@ customers.
 
 ## Status
 
-🟡 In progress. Triggered by a live prospect on Render. **Component 1
-(`ingest/syslog/`) has shipped** — see *Shared components* below. The rest is
-blocked on a one-time **wire capture** (see *Pre-implementation* below) to
-decide A1 vs A2 and confirm framing / field layout against a real Render
-service.
+🟢 Unblocked. Triggered by a live prospect on Render. **Component 1
+(`ingest/syslog/`) has shipped** — see *Shared components* below. The
+**wire capture is done** (against a throwaway `web` service, `cron` job, and
+their build logs) — see *Wire capture results* below. It resolved auth in
+favor of neither A1 nor A2: Render prepends the token as a **literal
+cleartext prefix** on every line, which is simpler than either. Framing is
+**always LF-delimited**, never octet-counted, contrary to the RFC5425
+assumption below. The listener is designed as a **generic TLS syslog
+server**, not a Render-specific one — Render is the first registered
+`ingest/syslog.Producer`, differentiated by field-mapping rules **and by
+which NLB listener/port it owns** (a connection's producer is never guessed
+from its content — see *Approach A*). A second syslog-speaking platform
+(Fly.io, Railway, …) is a new `Producer` implementation plus a new
+listener/cert/port for it, not new server code — confirmed necessary, not
+just preferred, by a real PPv2 test against the live NLB (AWS doesn't
+forward SNI; see *Wire capture results*). See *Shared components*.
+**Infra (Component 5) is live in prod and healthy**: `*.syslog.w3ft.net` TLS
+listener on `weft-nlb` → `weft-syslog` target group → coordinator :9023, no
+new instance (colocated with gRPC and the api server on the same coordinator
+ASG). Components 2, 3, 4, 6, 7 are ready to build.
 
 ## Why
 
@@ -56,125 +71,164 @@ Render's own example line:
 <0>1 2021-03-31T16:00:00-08:00 test-service cron-12345 74440 cron-12345 - hello this is a test
 ```
 
-Render annotates each line with the **service slug**, the **service type**
-(`web`, `cron`, `worker`, `pserv`, …), and a **stable instance id**. Exact
-mapping onto `HOSTNAME` / `APP-NAME` / `PROCID` / `MSGID` is not documented and
-varies — the `<0>` priority above is almost certainly a doc placeholder (facility
-0 / severity 0 is nonsensical for an app log). The capture resolves this.
-Render maps a `level` field to syslog severity only when the app emits `logfmt`
-or `json`. Datastore logs (Render Postgres, Key Value) are included.
+**Confirmed by the wire capture** (see below) — `HOSTNAME` = the service slug;
+`APP-NAME` and `MSGID` are both `{kind}-{instance-id}` (split on the *last*
+`-`, since instance ids never contain one — `web-9nk6q`, `cron-stqq5`).
+`PROCID` is always the literal `1`, not useful. Kinds seen: `web`, `cron`, and
+— undocumented anywhere — `bld` for **build-step output**, delivered on the
+same stream. Real `<PRI>` values arrive (not the doc's `<0>` placeholder);
+severity reflects a `level` field only when the app emits `logfmt` or JSON, as
+documented. Datastore logs (Render Postgres, Key Value) are presumably
+included the same way, not yet captured — no datastore in the throwaway test.
 
-### Auth — the hard part
+### Auth — resolved by the capture
 
 Render carries the "Token" field into the stream **per named provider**, in that
 provider's own shape: Better Stack gets `[logtail@11993 source_token="…"]` in
 STRUCTURED-DATA, Coralogix `[coralogix@… private_key="…"]`, New Relic prepends
 the raw key *before* `<PRI>`. There is no universal format and **no provider
-selector** — just endpoint-hostname matching. For an endpoint Render does not
-recognize, the evidence is that it sends **plain RFC5424 with `-` in the SD
-slot and the token nowhere**.
+selector** — just endpoint-hostname matching.
 
-This is a known dead end. Axiom — a serious observability vendor with the
-identical problem — resolves it by making the **endpoint hostname itself the
-credential**: `https://opbizplsf8klnw.ingress.axiom.co`, wildcard cert, and
-*"Consider this URL as secret information because syslog doesn't support
-additional authentication such as API tokens."* That is the model Approach A
-adopts. It is not security-by-obscurity: a high-entropy random label is a bearer
-credential, the same trust model as an S3 presigned URL or the Heroku drain URL
-weft already ships (`drain.w3ft.net/api/ingest/heroku/wft_<token>`).
+For a **generic/unrecognized endpoint**, the capture shows Render falls back
+to the New Relic shape, not the Better-Stack/Coralogix one: the token is
+prepended as a **literal cleartext string, space-separated, before every
+line** —
+
+```
+xpoopx <6>1 2026-09-02T14:08:25.185717Z render-capture-testsvc web-9nk6q 1 web-9nk6q - heartbeat #163 hit a deliberate exception
+```
+
+— present on *every* frame for the life of the connection, not just once.
+`STRUCTURED-DATA` is always `-`; with no token configured the same frame
+arrives with no prefix at all. This is neither of the two shapes anticipated
+below (A1's SD token, A2's per-tenant hostname) — it needs neither a wildcard
+cert nor PPv2/SNI parsing. `SyslogServer` just splits the leading
+`TOKEN SP` off each line before framing/parsing and looks the token up
+directly. Still a bearer credential (same trust model as an S3 presigned URL
+or the Heroku drain URL weft already ships,
+`drain.w3ft.net/api/ingest/heroku/wft_<token>`) — but it travels inside the
+TLS session instead of in the SNI/DNS label, so it isn't visible to on-path
+observers or resolver logs the way A2's hostname-credential model would have
+been.
 
 ## Approach A — direct TLS syslog listener (recommended)
 
 ```
-Render service  ──TLS 6514──►  weft-nlb :6514  (TLS listener, ACM cert — ACM renews)
-                                      │  terminates TLS, PPv2 header → target
+Render service  ──TLS 6514──►  weft-nlb  render.syslog.w3ft.net:6514
+                                      │  (TLS listener, ACM cert for this
+                                      │   hostname — ACM renews) terminates
+                                      │   TLS → plaintext TCP to :9023
                                       ▼
-                        api instance :9023  (RenderSyslogServer)
-                          - reads tenant identity (see "Auth" — capture decides)
-                          - label/token → customer/namespace/env
-                          - octet-counted RFC5424 frames → []*pb.LogRow
+                        api instance :9023  (SyslogServer, built with RenderProducer)
+                          - port 9023 IS the producer identity — no
+                            content-sniffing needed to know it's Render
+                          - strips leading "TOKEN SP" off each line
+                          - store.ValidateAgentToken(token, producer="render")
+                          - LF-delimited RFC5424 frames → RenderProducer.MapFields → []*pb.LogRow
                                       │
                                       ▼
                         coordClient.IngestStream()   ← same path weftd + Heroku take
 ```
 
+**Producer identity comes from the listener, never from content.** Each
+registered `Producer` gets its **own NLB TLS listener, own ACM cert, own
+hostname, own backend port** — not one shared listener disambiguated by
+peeking at the token or the frame. This matters even with only one producer:
+without it, `SyslogServer` would have to guess *both* the auth shape and the
+field-mapping rules from content before it's validated anything, which is
+exactly the SD-vs-prefix-vs-hostname ambiguity the capture was run to avoid.
+A second platform (Fly.io, Railway, …) repeats the recipe — new hostname,
+cert, port, `Producer` — rather than teaching one listener to guess.
+Cardinality here is hosting *platforms*, not tenants (a handful, growing
+slowly), so this doesn't run into the 50-listener NLB cap that ruled out a
+dedicated listener per *tenant* under the old A2 idea.
+
 **No app-side cert management.** TLS terminates at the NLB against an **ACM
 cert**, which AWS renews automatically — the api process never sees a private
-key. This is the deciding constraint: the app-side-TLS variant (app reads
-`ClientHelloInfo.ServerName` directly, no PPv2) is cleaner in code but puts a
-`*.render.w3ft.net` cert-renewal chore on the fleet, which we are not doing.
+key.
 
-### No new NLB
+**No PPv2, no SNI parsing.** The capture settled auth: the token arrives
+in-band, prepended in cleartext to every line, never in the SNI or a DNS
+label. Producer identity is resolved by the NLB listener/port before a byte
+of syslog is read, so nothing needs SNI passthrough either. NLB preserves the
+real client source IP at the TCP layer on its own.
 
-The public **`weft-nlb`** already exists (`infrastructure-catalog/stacks/asg-weft-application/main.tf`,
+### No new NLB — **done, live in prod** (2026-09-02)
+
+The public **`weft-nlb`** already existed (`infrastructure-catalog/stacks/asg-weft-application/main.tf`,
 the `aws_lb.coordinator` resource — despite the name it is the shared public
-NLB, and it **already carries a TLS listener**: gravitty's `:443`). Add,
-mirroring that:
+NLB, and it **already carried a TLS listener**: gravitty's `:443`). Applied,
+per producer (Render is the first):
 
-1. `aws_lb_target_group.render_syslog` — protocol `TCP`, port 9023, target =
-   coordinator ASG (which also runs the api server), health check on the api
-   health port. `proxy_protocol_v2 = true`.
-2. `aws_lb_listener.render_syslog` — port 6514, protocol **`TLS`**,
-   `certificate_arn` = a new ACM cert (see Auth for whether it is a wildcard),
-   `ssl_policy = ELBSecurityPolicy-TLS13-1-2-2021-06`, forward to the TG.
+1. `aws_lb_target_group.syslog` (`weft-syslog`) — protocol `TCP`, port 9023,
+   target = coordinator ASG (which also runs gRPC :9020 and the api server
+   behind its own ALB), health check on the api health port. **No new
+   instance, ASG, or process** — `SyslogServer` is one more listener inside
+   the same coordinator binary, colocated exactly like gRPC and the api
+   server already are, and scales/fails over with it.
+   `proxy_protocol_v2` was tried and removed: besides not carrying SNI (see
+   *Wire capture results*), it prefixes every connection through the TG —
+   including health checks, even though the health check port (9021)
+   differs from the traffic port (9023) — and the coordinator's plain HTTP
+   `/health` handler can't parse that prefix, so it 400s and the target
+   reads `Target.FailedHealthChecks`. Confirmed live via a packet capture
+   before switching it off. Target is healthy now.
+2. `aws_lb_listener.syslog` — port 6514, protocol **`TLS`**,
+   `certificate_arn` = ACM cert, `ssl_policy = ELBSecurityPolicy-TLS13-1-2-2021-06`,
+   forward to the TG.
 3. ACM cert + DNS-validation records, in the weft account (220664822695).
-4. `module.coordinator_asg.target_group_arns` — append the new TG arn.
-5. Route 53: the endpoint hostname → `weft-nlb`.
+   Scoped `*.syslog.w3ft.net` (wildcard) — a leftover from briefly
+   considering the shared-listener/SNI design mid-build (see the PPv2 result
+   above); harmless since Render's own endpoint matches it fine, but could
+   be narrowed to `render.syslog.w3ft.net` only as cleanup, not urgent.
+4. `module.coordinator_asg.target_group_arns` — appended the new TG arn.
+   This changed the ASG resource, which has an `instance_refresh` block
+   (`min_healthy_percentage = 100`) — applying it triggered a real, graceful
+   rolling replacement of the coordinator instance. Zero-downtime by design
+   (new instance healthy before the old one drains), but worth knowing this
+   ASG resource carries that side effect on any future targeted change too.
+5. Route 53: `*.syslog.w3ft.net` (wildcard, same leftover-but-harmless
+   reasoning as the cert) → `weft-nlb`.
 6. Instance SG: allow 9023 from the NLB subnet (same rule as 9020).
+
+A later producer repeats 1-6 on a new port (9024, …) and its own dedicated
+hostname/cert (non-wildcard, learning from the point above) — this is the
+reusable template, not a one-off.
 
 > ⚠️ `weft-nlb` is **shared with gravitty** (their `:443` and `:2222` listeners
 > live in a separate state). weft owns the LB and its own listeners, so adding a
 > weft listener is in-bounds, but a botched apply on this LB takes gravitty
 > down. Apply deliberately; see the header comment in `main.tf`.
 
-### Auth — one of two shapes, decided by the capture
+### Auth (confirmed)
 
-Render sends the "Token" field only in a recognized provider's format; for an
-unrecognized endpoint the working assumption is it sends nothing tenant-
-identifying. The capture confirms which case we're in:
+One token per namespace+env, like Heroku, scoped to the producer it was
+minted for. `weft token create --for render` mints a token; the customer
+pastes it into Render's Token field, which they find via the
+`render.syslog.w3ft.net:6514` endpoint string the command prints. Because
+`SyslogServer` already knows it's talking to Render (it's the instance bound
+to port 9023), it reads the token as the literal text before the first space
+on each line — no SD parsing, no per-tenant hostname, no PPv2 — and validates
+it scoped to `producer="render"` via `store.ValidateAgentToken`, so a token
+minted for a different producer can't be replayed here even if it leaked.
+Unknown/malformed token → drop the connection before forwarding anything.
+With no token configured, lines arrive with no prefix at all — decide whether
+an unauthenticated stream is rejected outright or accepted into some default
+quarantine namespace; leaning reject, matching the other adapters.
 
-**A1 — Render *does* put something tenant-identifying in STRUCTURED-DATA.**
-Then it's clean: one shared hostname `render.w3ft.net:6514`, one non-wildcard
-ACM cert, no PPv2 needed. `weft token create --for render` mints a token; the
-customer pastes it into Render's Token field; `RenderSyslogServer` reads it out
-of the SD element on each frame → `store.ValidateAgentToken`. This is the
-Better-Stack/Sumo model and the one to hope for.
+### Security posture
 
-**A2 — Render sends `-` for SD (likely).** Per-tenant hostname carries the
-identity, exactly as [Axiom does for Render](https://axiom.co/docs/send-data/render):
-- `weft token create --for render` mints a token and a stable opaque label
-  (`k3n8x2p9` — base32 of 64 random bits, never the customer name). Endpoint:
-  `k3n8x2p9.render.w3ft.net:6514`. Needs a `*.render.w3ft.net` **wildcard** ACM
-  cert on the listener.
-- The NLB terminates TLS and, with `proxy_protocol_v2` on the TG, prepends a
-  PPv2 header. `RenderSyslogServer` parses it, reads the SNI from the
-  `PP2_TYPE_AUTHORITY` (0x02) TLV, strips `.render.w3ft.net`, looks the label
-  up. Unknown/malformed → drop the connection before a byte of syslog.
-- **Verify first (15-min scratch test, no Render needed):** stand up a throwaway
-  NLB TLS listener + PPv2 TG in front of a netcat target and confirm the SNI
-  actually arrives in the AUTHORITY TLV. If AWS does not forward it, fall back
-  to a per-tenant **listener** (`render.w3ft.net:6514` + SNI cert selection is
-  out; a dedicated port per tenant hits the 50-listener NLB cap fast) — at
-  which point Approach B becomes the real answer.
-- One token = one namespace+env; many Render services behind one endpoint is
-  the customer's grouping choice, like Heroku.
+The token travels inside the TLS session on every line — never in the SNI, a
+DNS label, or anywhere else visible to an on-path observer or resolver logs.
+Bearer-credential model, same as the Heroku drain URL:
 
-### Security posture (A2 only)
-
-The label rides in the TLS ClientHello SNI (cleartext) and as a DNS label, so it
-is visible to on-path observers and lands in resolver / passive-DNS logs.
-Bounded:
-
-- Label is high-entropy and opaque — not tied to tenant identity.
-- Leaked-endpoint blast radius = forged log lines into **one** namespace. No
-  read access, no account access. Revoke by rotating the label.
-- Endpoint is ingest-only, single namespace/env, rate-limited per token.
-- Optional source-IP allowlist against Render's published egress ranges
-  (defence-in-depth; not tenant auth on its own).
-- Alert on a label's source IP changing.
-
-A1 has none of this exposure — another reason to check the capture before
-building.
+- Leaked-token blast radius = forged log lines into **one** namespace. No
+  read access, no account access. Revoke by rotating the token.
+- Endpoint is ingest-only, rate-limited per token.
+- Optional source-IP allowlist against Render's egress ranges (defence-in-depth,
+  not tenant auth on its own) — no published CIDR list found; the capture saw
+  `74.220.48.0/24`-ish and `35.227.x.x`/`35.230.x.x` GCP addresses, not stable
+  enough to allowlist without Render publishing ranges.
 
 ## Approach B — customer-run relay (fallback, zero new infra)
 
@@ -223,12 +277,44 @@ and one "platform proc → weft sub-app" splitter. **Shipped** as `ingest/syslog
   byte) feeding each frame to the reused `rfc5424.Machine`. Hand-rolled because
   we need lenient per-frame skip semantics — leodido's own `octetcounting`
   parser aborts the whole stream on a frame whose payload isn't `<`-prefixed,
-  which would drop the tail of a Heroku batch. Push API (`fn` per frame) so the
-  Render listener drives it incrementally over a long-lived connection.
+  which would drop the tail of a Heroku batch. Push API (`fn` per frame) so
+  `SyslogServer` drives it incrementally over a long-lived connection.
 - `proc.go` — `SplitProcID`, lifted verbatim from `api/adapter_heroku.go`.
-- Render field mapping (still to build): `HOSTNAME`(slug) → `Service`,
-  service-type token → `Kind` (`web`/`cron`/`worker`/`pserv`; datastore →
-  `postgres`/`keyvalue`), instance id → `Instance`. Mirrors `SplitProcID`.
+- `producer.go` (still to build) — the seam the concern above lands on:
+
+  ```go
+  // Producer differentiates one syslog-speaking platform's frame shape from
+  // another. SyslogServer is otherwise fully generic — TLS termination,
+  // token auth, LF framing, RFC5424 parsing — and knows nothing
+  // platform-specific. Each SyslogServer instance is constructed with
+  // exactly one Producer (it owns one NLB listener/port, so it never needs
+  // to guess which platform a connection is from — see Approach A); tokens
+  // are validated scoped to that same producer name, so a token minted for
+  // a different producer can't be replayed against this listener.
+  type Producer interface {
+      // MapFields turns one parsed Frame's HOSTNAME/APP-NAME/MSGID into
+      // weft's Service/Kind/Instance triple. ok=false drops the frame
+      // (e.g. Render's own connectivity-test ping) without forwarding it.
+      MapFields(f Frame) (service, kind, instance string, ok bool)
+  }
+  ```
+
+  `producer_render.go` is the first (only) implementation: `HOSTNAME` →
+  `Service`; `APP-NAME`/`MSGID` split on the *last* `-` → `Kind`/`Instance`
+  (`web-9nk6q` → `web`, `9nk6q`); `HOSTNAME == "render"` (the connectivity
+  ping) → `ok=false`. `bld` (build-step output, undiscoverable in Render's
+  docs — confirmed live in the capture) is kept as its own `Kind`, not
+  folded into `web`/`cron` or dropped — customers can reasonably want to
+  query build failures the same way they query anything else.
+
+  A second producer (Fly.io, Railway, …) is a new file implementing this
+  interface, a new `weft token create --for <name>` producer name, and a new
+  NLB listener/cert/port per *No new NLB* above — not new `SyslogServer`
+  code. **Not built now**: a second auth-extraction *shape* (this only
+  implements the one confirmed token-prefix form) — if a future platform
+  needs SD-embedded auth instead, that new `Producer`'s `SyslogServer`
+  instance parses it differently; still no shared guessing logic, since each
+  instance already knows which platform it's serving.
 
 `HerokuAdapter` is repointed at `syslog.ParseStream` with its 11 tests green.
 One deliberate behaviour change: a genuinely corrupt frame *length* (not just
@@ -236,33 +322,44 @@ bad contents) now ends parsing of that POST rather than being skipped — the
 next frame's offset is unknowable — and a NILVALUE (`-`) header now flattens to
 `""` instead of the literal `"-"`.
 
-## Pre-implementation: wire capture
+## Wire capture results
 
-Run **before** writing the parser. Harness already built:
-`scripts/capture-render-syslog.py` (TLS sink, records every recv chunk,
-prints a framing + RFC5424 + SD-ID analysis).
+Done 2026-09-02 against a throwaway `web` service, a `cron` job, and their
+build logs (harness: `scripts/capture-render-syslog.py`, throwaway host +
+Let's Encrypt cert at `render-capture.w3ft.net`, torn down after). Answers:
 
-1. Stand up the harness on a throwaway public host with a **real** cert
-   (`render-capture.w3ft.net`, Let's Encrypt DNS-01 via Route 53 — self-signed
-   will be rejected).
-2. Deploy a throwaway Render service (one `web`, one `cron`, one `worker`, plus
-   a Render Postgres) and point a log stream at it — once **with** a token,
-   once **without**.
-3. `python3 scripts/capture-render-syslog.py --analyze capture-*.jsonl`.
-
-Answers we need locked before coding:
-
-- [ ] **Does an unrecognized endpoint get any tenant-identifying
-      STRUCTURED-DATA?** This picks **A1** (SD token — clean, no wildcard, no
-      PPv2, no SNI exposure) vs **A2** (per-tenant hostname). Run both the
-      with-token and without-token stream configs.
-- [ ] Framing: octet-counted (expected) vs LF.
-- [ ] Exact `HOSTNAME`/`APP-NAME`/`PROCID`/`MSGID` per service type + datastore.
-- [ ] Real `<PRI>` values, or does Render send `<0>`?
-- [ ] One connection or many; one frame per write or batched.
-- [ ] Multi-line (stack trace) — split or joined.
-- [ ] (A2 only, no Render needed) scratch NLB TLS listener + PPv2 TG → confirm
-      the SNI arrives in the `PP2_TYPE_AUTHORITY` TLV.
+- [x] **Auth**: neither A1 nor A2. Token is prepended as a literal cleartext
+      string before every line — see *Auth (confirmed)* above.
+- [x] **Framing**: always LF-delimited. Never saw octet-counting.
+- [x] **`HOSTNAME`/`APP-NAME`/`PROCID`/`MSGID`**: `HOSTNAME`=service slug;
+      `APP-NAME`=`MSGID`=`{kind}-{instance-id}` split on the last `-`;
+      `PROCID` always `1`. Kinds seen: `web`, `cron`, `bld` (build logs —
+      undocumented, real traffic). Datastore not captured (no throwaway
+      Postgres stood up) — still a documented gap, not blocking.
+- [x] **`<PRI>`**: real values, severity reflects `logfmt`/JSON `level` as
+      documented.
+- [x] **Connections / batching**: one frame per write, no batching. A
+      finished cron run's output arrives as a single burst (Render buffers
+      it until process exit) — all lines share one receive timestamp
+      regardless of the app's own real-time spacing.
+- [x] **Multi-line**: split, not joined — one full RFC5424 frame per source
+      line, even mid-traceback.
+- [x] **PPv2/SNI scratch test**: run for real (2026-09-02) against the
+      actual deployed `weft-nlb` TLS listener, not a throwaway stand-in —
+      **AWS does not forward SNI through PPv2**. The real PPv2 header
+      received at the target contained only a `PP2_TYPE_CRC32C` TLV and 62
+      bytes of `PP2_TYPE_NOOP` padding; no `PP2_TYPE_AUTHORITY` (0x02) TLV,
+      no SNI anywhere. (Source IP preservation does work — the real client
+      IP arrived correctly in the PPv2 address block.) This ruled out a
+      single shared listener disambiguating producers by SNI — a design
+      briefly considered mid-build — and confirmed *one listener/cert/port
+      per producer* (below) as the only viable mechanism, not just the
+      simplest one. Second, unrelated finding from the same investigation:
+      `proxy_protocol_v2` on a target group prefixes *every* connection
+      through it, including health checks, even on a different port than
+      traffic — broke the coordinator's plain HTTP `/health` handler until
+      removed (see *No new NLB*). Left off entirely; not needed for source
+      IP either, which NLB preserves natively.
 
 ## Components to build
 
@@ -270,21 +367,29 @@ Answers we need locked before coding:
    from `HerokuAdapter`. Repoint Heroku at it.~~ **Done.** Landed as a
    `leodido/go-syslog`-backed `Frame` + `ParseStream` + `SplitProcID`; Heroku
    repointed, 11 tests green, 14 new tests in `ingest/syslog/`.
-2. **`api/render_syslog.go`** — `RenderSyslogServer`: TCP accept loop on :9023,
-   PPv2 header parse (A2) or SD-token read (A1), token auth, octet-counted frame
-   reader, row mapping, forward via `coordClient.IngestStream()`, idle-timeout /
-   graceful-drain / reconnect handling. Started from `cmd/api/main.go` next to
-   `StartUnverifiedSweep`. **~2 days.**
-3. **`weft token create --for render`** — token (+ label for A2) derivation and
-   storage, endpoint string in the command output and dashboard. **~0.5 day.**
-4. **Infra** (`asg-weft-application/main.tf`) — `TLS` listener + PPv2 TG on
-   `weft-nlb`, ACM cert (`render.w3ft.net` for A1, `*.render.w3ft.net` for A2),
-   Route 53 record, SG rule. **~0.5–1 day** + a careful apply on the
-   gravitty-shared LB.
-5. **Rate limit + bytes-in metering** — reuse the `usage_hourly` path the gRPC
-   stream already updates; per-token token-bucket keyed on the label. **~0.5
+2. **`ingest/syslog/producer.go` + `producer_render.go`** — the `Producer`
+   interface and Render's implementation. See *Shared components*. **~0.5 day.**
+3. **`api/syslog_server.go`** — `SyslogServer`: TCP accept loop on a
+   configured port, strip the leading `TOKEN SP`, `store.ValidateAgentToken`
+   scoped to its configured producer name, LF-framed
+   `ingest/syslog.ParseStream`, run each frame through its `Producer`,
+   forward via `coordClient.IngestStream()`, idle-timeout / graceful-drain /
+   reconnect handling. Fully platform-agnostic code — constructed with
+   `(producer Producer, port int)`; `cmd/api/main.go` instantiates one per
+   registered producer next to `StartUnverifiedSweep` (today: one, on 9023,
+   `RenderProducer`). **~1.5 days.**
+4. **`weft token create --for render`** — `--for` takes any registered
+   producer name, not just `render`; stores it on the token row so
+   validation can scope to it. Endpoint string in the command output and
+   dashboard. **~0.5 day.**
+5. ~~**Infra** (`asg-weft-application/main.tf`) — the *No new NLB* recipe for
+   Render: `TLS` listener + TG + ACM cert on port 9023, Route 53 record, SG
+   rule.~~ **Done, live in prod** (2026-09-02). See *No new NLB* above for
+   what shipped and the ASG instance-refresh side effect.
+6. **Rate limit + bytes-in metering** — reuse the `usage_hourly` path the gRPC
+   stream already updates; per-token token-bucket keyed on the token. **~0.5
    day.**
-6. **`docs/manual/render.md`** — dashboard setup (Integrations → Observability),
+7. **`docs/manual/render.md`** — dashboard setup (Integrations → Observability),
    the endpoint string, the service-type → pseudofile mapping, and the Approach
    B / Vector alternative. **~0.5 day.**
 
@@ -293,11 +398,12 @@ coordinator-side on the `IngestStream` path this forwards into.
 
 ## Effort
 
-**~5 days** for Approach A end to end, + the capture (a few hours once a Render
-trial and cert are in place). Component 1 (~1 day) is **done**, leaving ~4.
-Approach B is ~1 day on top (Vector config doc + verifying the `JSONAdapter`
-accepts Vector's shape) and can ship first as the unblock-the-prospect stopgap
-while A is built.
+**~5 days** for Approach A end to end. Component 1 (~1 day) and Component 5
+(infra, ~0.5-1 day) are **done**, leaving ~2.5-3: `Producer` interface +
+Render implementation, `SyslogServer`, generalized token creation, rate
+limiting, docs. Approach B is ~1 day on top (Vector config doc + verifying
+the `JSONAdapter` accepts Vector's shape) and can ship first as the
+unblock-the-prospect stopgap while A is built.
 
 ## Non-goals
 
@@ -307,27 +413,28 @@ while A is built.
 - **Not a second public NLB.** A listener on `weft-nlb`, or Approach B over the
   existing ALB.
 - **Not per-service tokens.** One token per namespace+env, like Heroku.
-- **Not multi-line reassembly here.** If Render splits stack traces, that is the
-  same problem as [`weftd-multiline`](weftd-multiline.md) and shares its
-  solution — do not special-case it in the syslog server.
+- **Not multi-line reassembly here.** Confirmed moot by the capture — Render
+  already splits stack traces line-by-line with a full header repeated on
+  each. Nothing to reassemble.
 - **Not l2met/metrics auto-routing.** Render has no l2met equivalent; its
   datastore metric lines route by service type via the normal mapping.
+- **Not a multi-shape auth abstraction.** `SyslogServer` implements the one
+  confirmed auth shape (leading `TOKEN SP`). A second syslog-speaking
+  platform needing a different shape (SD-embedded, …) parses it in that
+  producer's own `SyslogServer` instance — not built preemptively now.
+- **Not one shared listener guessing the producer from content.** Producer
+  identity comes from which NLB listener/port a connection lands on, decided
+  by DNS before any bytes arrive — never sniffed from the token shape or the
+  frame. This was a real design mistake caught during review of the first
+  draft of this plan, not a hypothetical to guard against.
 
 ## Open questions
 
-- **A1 vs A2** — the capture decides. A1 (Render puts a token in SD) removes the
-  wildcard cert, the PPv2 parser, and the SNI exposure. Build nothing until we
-  know.
-- **PPv2 SNI TLV** (A2 only). Not documented cleanly by AWS for NLB TLS
-  listeners; verify with the scratch test before committing. If the NLB does not
-  forward the SNI, A2 is not viable and Approach B is the answer.
-- **PPv2 parser** (A2 only). Hand-roll the ~40-line AUTHORITY-TLV parse, or take
-  `github.com/pires/go-proxyproto`? Not a hot path (once per connection) — lean
-  to the library for correctness.
-- **Cert scope.** `*.render.w3ft.net` is one wildcard. If we later add Fly.io /
-  Railway on the same mechanism, is it `*.render.w3ft.net` +
-  `*.fly.w3ft.net`, or a shared `*.logs.w3ft.net`? A shared parent means one
-  cert but a label collision surface across platforms. Lean per-platform.
-- **Egress allowlist.** Does Render publish stable egress IP ranges for log
-  streams? If so, wire the optional source-IP check in v1; if not, note it as
-  unavailable.
+- **Datastore field mapping.** No throwaway Render Postgres/Key Value was
+  captured, so `HOSTNAME`/`APP-NAME` for datastore logs is still the plan's
+  original guess (`postgres`/`keyvalue` kind), not empirically confirmed.
+  Low risk — same shape as `web`/`cron`, just a different kind token — but
+  worth a quick capture if a real customer flags it wrong.
+- **Egress allowlist.** Render's log-stream egress IPs seen in the capture
+  (`74.220.48.0/24`-ish, `35.227.x.x`, `35.230.x.x` — GCP) don't look like a
+  documented, stable range. No allowlist in v1 unless Render publishes one.
