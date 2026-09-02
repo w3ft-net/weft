@@ -36,7 +36,6 @@ build order; this table is for picking opportunistic wins.
 | [log-to-metric](log-to-metric.md) | 1.5d | 4 | 4 | Cheap rider on ingest-governance |
 | [perf-hints](perf-hints.md) | 1.5d | 4 | 3 | Polish |
 | [http-ingest](http-ingest.md) | ~2d left | 4 | 5 | Heroku shipped; JSON/CloudWatch adapters remain |
-| [render](render.md) | ~5d (+1d relay) | 3 | 4 | Prospect-driven; TLS syslog listener on the existing NLB. Relay fallback ships first as the unblock |
 | [shard-archive-test](shard-archive-test.md) | ~2–3d | 4 | 3 | Operational validation only |
 | [weftd-multiline](weftd-multiline.md) | 3d | 4 | 4 | Easiest high-ROI win |
 | [cloudwatch-lambda-forwarder](cloudwatch-lambda-forwarder.md) | ~3d | 4 | 4 | |
