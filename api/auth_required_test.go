@@ -91,6 +91,7 @@ func TestEndpointsRequireAuth(t *testing.T) {
 		{"GET", "/api/tokens", session},
 		{"POST", "/api/tokens", session},
 		{"DELETE", "/api/tokens/1", session},
+		{"GET", "/api/syslog-producers", session},
 		{"GET", "/api/apps", session},
 		{"GET", "/api/ingestion-status", session},
 		{"POST", "/api/shell/exec", session},

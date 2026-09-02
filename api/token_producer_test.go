@@ -131,3 +131,80 @@ func TestCreateToken_NoProducer_OmitsEndpoint(t *testing.T) {
 		t.Errorf("unexpected endpoint field in response: %v", resp["endpoint"])
 	}
 }
+
+// TestListSyslogProducers pins the dashboard's producer-selector
+// contract: GET /api/syslog-producers exposes the same registry
+// handleCreateToken validates `--for` against, so the web token-create
+// form doesn't hardcode platform names.
+func TestListSyslogProducers(t *testing.T) {
+	srv, s := testServer(t)
+	jwt := setUpTokenCreator(t, s, "list-producers")
+
+	req := httptest.NewRequest("GET", "/api/syslog-producers", nil)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp []struct {
+		Name     string `json:"name"`
+		Endpoint string `json:"endpoint"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp) != 1 || resp[0].Name != "render" {
+		t.Fatalf("producers = %+v, want exactly [render]", resp)
+	}
+	if resp[0].Endpoint != srv.syslogEndpoint("render") {
+		t.Errorf("endpoint = %q, want %q", resp[0].Endpoint, srv.syslogEndpoint("render"))
+	}
+}
+
+// TestListTokens_IncludesProducerAndEndpoint confirms a previously
+// minted producer-scoped token still carries its endpoint on the list
+// view, not just the one-time create response — a customer revisiting
+// the dashboard needs to find the endpoint string again without
+// re-minting.
+func TestListTokens_IncludesProducerAndEndpoint(t *testing.T) {
+	srv, s := testServer(t)
+	jwt := setUpTokenCreator(t, s, "list-tokens-producer")
+
+	createBody, _ := json.Marshal(map[string]string{
+		"label": "render-prod", "namespace": "default", "producer": "render",
+	})
+	createReq := httptest.NewRequest("POST", "/api/tokens", bytes.NewReader(createBody))
+	createReq.Header.Set("Authorization", "Bearer "+jwt)
+	createW := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(createW, createReq)
+	if createW.Code != 201 {
+		t.Fatalf("create: expected 201, got %d: %s", createW.Code, createW.Body.String())
+	}
+
+	listReq := httptest.NewRequest("GET", "/api/tokens", nil)
+	listReq.Header.Set("Authorization", "Bearer "+jwt)
+	listW := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(listW, listReq)
+	if listW.Code != 200 {
+		t.Fatalf("list: expected 200, got %d: %s", listW.Code, listW.Body.String())
+	}
+	var tokens []struct {
+		Label    string `json:"label"`
+		Producer string `json:"producer"`
+		Endpoint string `json:"endpoint"`
+	}
+	if err := json.Unmarshal(listW.Body.Bytes(), &tokens); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(tokens) != 1 {
+		t.Fatalf("tokens = %+v, want exactly 1", tokens)
+	}
+	if tokens[0].Producer != "render" {
+		t.Errorf("producer = %q, want %q", tokens[0].Producer, "render")
+	}
+	if tokens[0].Endpoint != srv.syslogEndpoint("render") {
+		t.Errorf("endpoint = %q, want %q", tokens[0].Endpoint, srv.syslogEndpoint("render"))
+	}
+}

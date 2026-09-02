@@ -256,6 +256,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/tokens", s.handleListTokens)
 	auth.Handle("POST /api/tokens", protected(s.handleCreateToken))
 	auth.Handle("DELETE /api/tokens/{id}", protected(s.handleRevokeToken))
+	auth.HandleFunc("GET /api/syslog-producers", s.handleListSyslogProducers)
 	auth.HandleFunc("GET /api/apps", s.handleListApps)
 	auth.HandleFunc("GET /api/ingestion-status", s.handleIngestionStatus)
 	auth.Handle("POST /api/shell/exec", BodyCapFunc(cfg.ShellExecBodyMax, s.handleShellExec))
@@ -356,6 +357,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/billing/usage", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/tokens", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/tokens/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
+	mux.Handle("/api/syslog-producers", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/apps", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/shell/exec", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/shell/builtin", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
@@ -1280,6 +1282,8 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 		Env       string `json:"env"`
 		Status    string `json:"status"`
 		CreatedAt string `json:"created_at"`
+		Producer  string `json:"producer,omitempty"`
+		Endpoint  string `json:"endpoint,omitempty"`
 	}
 	out := make([]tokenResult, 0, len(tokens))
 	for _, t := range tokens {
@@ -1287,7 +1291,7 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 		if t.Revoked {
 			status = "revoked"
 		}
-		out = append(out, tokenResult{
+		tr := tokenResult{
 			ID:        t.ID,
 			Prefix:    t.Prefix,
 			Label:     t.Label,
@@ -1295,7 +1299,12 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 			Env:       t.Env,
 			Status:    status,
 			CreatedAt: t.CreatedAt.Format(time.RFC3339),
-		})
+		}
+		if t.Producer != "" {
+			tr.Producer = t.Producer
+			tr.Endpoint = s.syslogEndpoint(t.Producer)
+		}
+		out = append(out, tr)
 	}
 	json.NewEncoder(w).Encode(out)
 }
@@ -1388,6 +1397,22 @@ func validSyslogProducer(name string) bool {
 		}
 	}
 	return false
+}
+
+// handleListSyslogProducers lists every registered ingest/syslog.Producer
+// with its endpoint, so the dashboard's token-create form can offer a
+// producer selector without hardcoding platform names — the same
+// registry the CLI's `--for` flag and handleCreateToken validate against.
+func (s *Server) handleListSyslogProducers(w http.ResponseWriter, r *http.Request) {
+	type producerResult struct {
+		Name     string `json:"name"`
+		Endpoint string `json:"endpoint"`
+	}
+	out := make([]producerResult, 0, len(syslogProducers))
+	for _, p := range syslogProducers {
+		out = append(out, producerResult{Name: p.Name(), Endpoint: s.syslogEndpoint(p.Name())})
+	}
+	json.NewEncoder(w).Encode(out)
 }
 
 // syslogEndpoint returns the customer-facing hostname:port for a
