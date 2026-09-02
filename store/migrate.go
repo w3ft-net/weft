@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	_ "embed"
@@ -117,13 +118,53 @@ func Migrate(dsn string) error {
 // The env-var guard is the safety net: prod should never hit a virgin
 // DB, and if it does, blindly restoring an embedded snapshot is the
 // wrong move. Dev/CI explicitly opt in.
+// schemaBootstrapLockKey is the advisory-lock key guarding the
+// bootstrap below. Arbitrary but stable — every process bootstrapping
+// this database must agree on it, so it must never change.
+const schemaBootstrapLockKey int64 = 0x7746540B0057
+
 func applyCollapsedSchema(db *sql.DB, dsn string) error {
 	if len(schemaSQL) == 0 {
 		return nil // pre-collapse repos have an empty placeholder schema.sql
 	}
 
+	// Serialize bootstrap across processes before probing anything.
+	//
+	// The "already bootstrapped" sentinel below is goose_db_version, but
+	// schema.sql creates that table itself, partway through the file. So
+	// two processes starting against a virgin database (in the compose
+	// stack, api and coordinator boot together) both probe, both see no
+	// sentinel, and both shell out to psql. One wins; the other aborts
+	// mid-file under ON_ERROR_STOP.
+	//
+	// The damage outlives the crash: the sentinel now exists, so every
+	// later run short-circuits and the half-applied schema is never
+	// repaired. It resurfaces much later as a missing constraint —
+	// "no unique or exclusion constraint matching the ON CONFLICT
+	// specification" — with nothing left to point at the real cause.
+	//
+	// Holding the lock across probe-and-apply makes the loser re-probe
+	// only after the winner has committed, so it correctly short-circuits
+	// instead of racing. The lock is session-scoped, so it must be taken
+	// and released on one pinned connection, not the pool.
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("bootstrap lock connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx,
+		`SELECT pg_advisory_lock($1)`, schemaBootstrapLockKey); err != nil {
+		return fmt.Errorf("acquire bootstrap lock: %w", err)
+	}
+	defer func() {
+		// Best effort: closing the connection drops the lock anyway.
+		_, _ = conn.ExecContext(ctx,
+			`SELECT pg_advisory_unlock($1)`, schemaBootstrapLockKey)
+	}()
+
 	var hasVersionTable bool
-	err := db.QueryRow(`
+	err = db.QueryRow(`
 		SELECT EXISTS (
 			SELECT 1 FROM information_schema.tables
 			 WHERE table_schema = 'public' AND table_name = 'goose_db_version'
