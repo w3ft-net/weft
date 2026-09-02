@@ -41,6 +41,12 @@ type AgentToken struct {
 	// the agent reconnects after migration 048.
 	LastSeenVersion string     `gorm:"column:last_seen_version;not null;default:''"`
 	LastSeenAt      *time.Time `gorm:"column:last_seen_at"`
+	// Producer scopes this token to one ingest/syslog.Producer (e.g.
+	// "render"), minted via `weft token create --for render`. Empty for
+	// every non-syslog token (weftd, JSON, Heroku) — those never go
+	// through ValidateAgentTokenForProducer. See
+	// docs/plans/render.md, Component 3/4.
+	Producer string `gorm:"not null;default:''"`
 }
 
 // hashAgentToken returns the sha256 hex digest used for lookup in
@@ -72,7 +78,14 @@ func agentTokenPrefix(raw string) string {
 // `env` is optional; pass "" for tokens that don't carry an env
 // dimension. When set, the coordinator's IngestStream handler stamps
 // it on every row from this token (the agent can't override).
-func (s *Store) CreateAgentToken(orgID string, namespaceID uint, label, env string) (string, *AgentToken, error) {
+//
+// `producer` is optional; pass "" for every non-syslog token. When
+// set (e.g. "render"), the token only validates through
+// ValidateAgentTokenForProducer for that same producer name — it is
+// otherwise unusable, so a leaked syslog token can't be replayed as a
+// weftd/JSON/Heroku credential and vice versa. See
+// docs/plans/render.md, Component 4.
+func (s *Store) CreateAgentToken(orgID string, namespaceID uint, label, env, producer string) (string, *AgentToken, error) {
 	raw, err := generateToken()
 	if err != nil {
 		return "", nil, err
@@ -84,6 +97,7 @@ func (s *Store) CreateAgentToken(orgID string, namespaceID uint, label, env stri
 		Prefix:      agentTokenPrefix(raw),
 		Label:       label,
 		Env:         env,
+		Producer:    producer,
 	}
 	if err := s.scoped(orgID).Create(&t).Error; err != nil {
 		return "", nil, err
@@ -97,12 +111,18 @@ type AgentAuthResult struct {
 	Organization *Organization
 	Namespace    string // namespace name from the token
 	Env          string // optional env dimension to stamp on every row from this token
+	Producer     string // optional syslog Producer this token is scoped to ("" = unscoped)
 }
 
 // ValidateAgentToken checks a presented raw token and returns the
 // associated customer + namespace. Hashes the input and looks up by
 // token_hash — the DB never sees the plaintext. Returns nil if the
 // token is invalid or revoked.
+//
+// This does not check Producer — a producer-scoped token (minted via
+// `weft token create --for render`) validates here exactly like any
+// other token. Callers that must reject a token from the wrong ingest
+// path (SyslogServer) use ValidateAgentTokenForProducer instead.
 func (s *Store) ValidateAgentToken(token string) (*AgentAuthResult, error) {
 	var t AgentToken
 	// The auth path: the customer is the *result* of this lookup, not an
@@ -121,6 +141,37 @@ func (s *Store) ValidateAgentToken(token string) (*AgentAuthResult, error) {
 		Organization: &t.Organization,
 		Namespace:    t.Namespace.Name,
 		Env:          t.Env,
+		Producer:     t.Producer,
+	}, nil
+}
+
+// ValidateAgentTokenForProducer is ValidateAgentToken plus a producer
+// scope check, in one query: the token must be minted for exactly this
+// producer (e.g. "render") or it's treated as invalid, same as an
+// unrecognized token — no distinction is surfaced between "no such
+// token" and "token scoped to a different producer", so a probe can't
+// use the response to enumerate valid-but-wrong-producer tokens.
+//
+// SyslogServer (docs/plans/render.md, Component 3) is the only caller;
+// every other ingest path (weftd, JSON, Heroku) keeps using the
+// producer-agnostic ValidateAgentToken.
+func (s *Store) ValidateAgentTokenForProducer(token, producer string) (*AgentAuthResult, error) {
+	var t AgentToken
+	result := s.crossTenant().Preload("Organization").Preload("Namespace").
+		Where("token_hash = ? AND revoked = ? AND producer = ?", hashAgentToken(token), false, producer).
+		First(&t)
+	if result.Error == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return &AgentAuthResult{
+		TokenID:      t.ID,
+		Organization: &t.Organization,
+		Namespace:    t.Namespace.Name,
+		Env:          t.Env,
+		Producer:     t.Producer,
 	}, nil
 }
 

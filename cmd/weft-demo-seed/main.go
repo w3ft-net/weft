@@ -244,7 +244,7 @@ func seed(s *store.Store, tokensOut string) error {
 					Model(&store.AgentToken{}).
 					Where("label = ? AND revoked = ?", label, false).
 					Update("revoked", true)
-				raw, _, err := s.CreateAgentToken(cust.ID, ns.ID, label, env)
+				raw, _, err := s.CreateAgentToken(cust.ID, ns.ID, label, env, "")
 				if err != nil {
 					return fmt.Errorf("token %s: %w", label, err)
 				}
@@ -390,7 +390,7 @@ func seedProdLoom(s *store.Store, tokensOut string) error {
 			log.Printf("  token %s already live — skipping mint", label)
 			continue
 		}
-		raw, _, err := s.CreateAgentToken(cust.ID, ns.ID, label, env)
+		raw, _, err := s.CreateAgentToken(cust.ID, ns.ID, label, env, "")
 		if err != nil {
 			return fmt.Errorf("token %s: %w", label, err)
 		}

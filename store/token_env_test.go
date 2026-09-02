@@ -27,7 +27,7 @@ func TestAgentToken_EnvRoundTrip(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			raw, _, err := db.CreateAgentToken(cust.ID, ns.ID, "label-"+tc.name, tc.env)
+			raw, _, err := db.CreateAgentToken(cust.ID, ns.ID, "label-"+tc.name, tc.env, "")
 			if err != nil {
 				t.Fatalf("CreateAgentToken: %v", err)
 			}

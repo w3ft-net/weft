@@ -467,7 +467,7 @@ func (s *Server) CreateToken(ctx context.Context, req *pb.CreateTokenRequest) (*
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "namespace %q not found — create it first", req.Namespace)
 	}
-	raw, _, err := s.Store.CreateAgentToken(customer.ID, ns.ID, req.Label, req.Env)
+	raw, _, err := s.Store.CreateAgentToken(customer.ID, ns.ID, req.Label, req.Env, "")
 	if err != nil {
 		return nil, fmt.Errorf("create token: %w", err)
 	}

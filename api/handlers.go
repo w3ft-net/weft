@@ -1336,7 +1336,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	raw, tok, err := s.store.CreateAgentToken(custID, nsObj.ID, req.Label, req.Env)
+	raw, tok, err := s.store.CreateAgentToken(custID, nsObj.ID, req.Label, req.Env, "")
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
