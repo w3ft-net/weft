@@ -29,11 +29,17 @@ forward SNI; see *Wire capture results*). See *Shared components*.
 **Infra (Component 5) is live in prod and healthy**: `*.syslog.w3ft.net` TLS
 listener on `weft-nlb` → `weft-syslog` target group → coordinator :9023, no
 new instance (colocated with gRPC and the api server on the same coordinator
-ASG). **Components 1-3 and 5 have all shipped**: the `Producer` interface +
-`RenderProducer`, the `AgentToken.Producer` schema change, and `SyslogServer`
-itself (wired into `cmd/api/main.go`, listening on 9023) — see *Components to
-build* below for what landed in each. Only Components 4 (generalized token
-creation), 6 (rate limiting), and 7 (docs) remain; nothing is blocked.
+ASG). **Components 1-5 have all shipped** (Component 4's CLI half only —
+see its entry below for the dashboard gap): the `Producer` interface +
+`RenderProducer`, the `AgentToken.Producer` schema change, `SyslogServer`
+itself (wired into `cmd/api/main.go`, listening on 9023), and
+`weft token create --for render` — see *Components to build* below for
+what landed in each. **The end-to-end path is live and mintable today**:
+a real Render customer could be onboarded right now by running
+`weft token create --for render`, pasting the token + printed endpoint
+into Render's log-stream config, and rows would flow all the way to
+storage — nothing blocks that. Only Component 6 (rate limiting), the
+dashboard half of Component 4, and Component 7 (docs) remain.
 
 ## Why
 
@@ -407,10 +413,17 @@ Let's Encrypt cert at `render-capture.w3ft.net`, torn down after). Answers:
    **Reconnect handling** is Render's responsibility, not this server's —
    it just accepts a new TCP connection the same way each time; nothing
    here needed building.
-4. **`weft token create --for render`** — `--for` takes any registered
-   producer name, not just `render`; sets `AgentToken.Producer` (the
-   schema half above is already done). Endpoint string in the command
-   output and dashboard. **~0.5 day.**
+4. ~~**`weft token create --for render`** — `--for` takes any registered
+   producer name, not just `render`; sets `AgentToken.Producer`. Endpoint
+   string in the command output and dashboard.~~ **CLI done, dashboard
+   not done.** `POST /api/tokens` takes an optional `producer` field,
+   validated against a new `syslogProducers` registry (`api/handlers.go`);
+   `(*Server).syslogEndpoint` derives the `<producer>.syslog.<host>:6514`
+   string from `baseURL` rather than a hardcoded domain; `weft token
+   create --for render` prints both. 3 new tests in
+   `api/token_producer_test.go`. **Not done**: the web dashboard's
+   Account→Tokens create form has no producer selector or endpoint
+   display — `--for` is CLI-only for now.
 5. ~~**Infra** (`asg-weft-application/main.tf`) — the *No new NLB* recipe for
    Render: `TLS` listener + TG + ACM cert on port 9023, Route 53 record, SG
    rule.~~ **Done, live in prod** (2026-09-02). See *No new NLB* above for
@@ -427,11 +440,12 @@ coordinator-side on the `IngestStream` path this forwards into.
 
 ## Effort
 
-**~5 days** for Approach A end to end. Components 1-3 and 5 (~3.5-4 days
-combined) are **done**, leaving ~1-1.5: generalized token creation, rate
-limiting, docs. Approach B is ~1 day on top (Vector config doc + verifying
-the `JSONAdapter` accepts Vector's shape) and can ship first as the
-unblock-the-prospect stopgap while A is built.
+**~5 days** for Approach A end to end. Components 1-5 (~4-4.5 days combined)
+are **done** for a real customer to onboard today; leaving ~0.5-1: rate
+limiting, the dashboard producer selector, and docs. Approach B is ~1 day
+on top (Vector config doc + verifying the `JSONAdapter` accepts Vector's
+shape) and can ship first as the unblock-the-prospect stopgap while A is
+built.
 
 ## Non-goals
 
