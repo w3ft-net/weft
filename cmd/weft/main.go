@@ -369,12 +369,17 @@ func runLogin() {
 	}
 	json.Unmarshal(body, &device)
 
-	// Build the browser URL.
+	// Build the browser URL. Deliberately does NOT carry the code as a query
+	// param: if a link could complete the approval by itself, an attacker
+	// could request their own device code and phish a logged-in user into
+	// clicking "Authorize" on a legitimate-looking, correctly-domained page.
+	// Requiring the user to type the code themselves means completing the
+	// flow requires them to actually be looking at this CLI's output.
 	webBase := strings.Replace(baseURL, "api.", "", 1) // https://api.w3ft.net → https://w3ft.net
-	authURL := fmt.Sprintf("%s/device?code=%s", webBase, device.UserCode)
+	authURL := webBase + "/device"
 
 	fmt.Printf("Open this URL to authorize the CLI:\n\n  %s\n\n", authURL)
-	fmt.Printf("Verify code: %s\n\n", device.UserCode)
+	fmt.Printf("Enter this code when prompted: %s\n\n", device.UserCode)
 
 	openBrowser(authURL)
 

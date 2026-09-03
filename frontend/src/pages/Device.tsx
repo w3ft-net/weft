@@ -1,13 +1,11 @@
 import { useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext'
 import { apiFetch } from '../lib/api'
 import './Dashboard.css'
 
 export default function Device() {
-  const [searchParams] = useSearchParams()
   const { user } = useAuth()
-  const code = searchParams.get('code') || ''
+  const [code, setCode] = useState('')
   const [status, setStatus] = useState<'ready' | 'approving' | 'done' | 'error'>('ready')
   const [error, setError] = useState('')
 
@@ -16,30 +14,13 @@ export default function Device() {
     try {
       await apiFetch('/api/auth/device/approve', {
         method: 'POST',
-        body: JSON.stringify({ user_code: code }),
+        body: JSON.stringify({ user_code: code.trim() }),
       })
       setStatus('done')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to approve')
       setStatus('error')
     }
-  }
-
-  if (!code) {
-    return (
-      <div className="app-layout">
-        <main className="app-main" data-testid="device-main">
-          <div className="dash-content" style={{ maxWidth: 480, paddingTop: 80 }}>
-            <div className="dash-card">
-              <div className="dash-card-header">
-                <h2 className="dash-card-title">CLI Authorization</h2>
-              </div>
-              <div className="dash-empty">No device code provided.</div>
-            </div>
-          </div>
-        </main>
-      </div>
-    )
   }
 
   return (
@@ -58,19 +39,28 @@ export default function Device() {
                   {user ? ` (${user.email})` : ''}.
                 </p>
                 <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--text-dim)', marginBottom: 20 }}>
-                  Verify this code matches what the CLI is showing:
+                  Enter the code shown in your terminal. Only authorize a code you can see printed
+                  by a `weft login` you ran yourself — never one from a link someone sent you.
                 </p>
-                <div style={{
-                  fontFamily: 'var(--font-mono)', fontSize: '2rem', fontWeight: 700,
-                  color: 'var(--accent)', textAlign: 'center', padding: '16px 0', marginBottom: 20,
-                  letterSpacing: '0.1em',
-                }} data-testid="device-user-code">
-                  {code}
-                </div>
+                <input
+                  type="text"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.toUpperCase())}
+                  placeholder="XXXX-XX"
+                  autoFocus
+                  style={{
+                    fontFamily: 'var(--font-mono)', fontSize: '2rem', fontWeight: 700,
+                    color: 'var(--accent)', textAlign: 'center', padding: '16px 0', marginBottom: 20,
+                    letterSpacing: '0.1em', width: '100%', background: 'transparent',
+                    border: '1px solid var(--border)', borderRadius: 6,
+                  }}
+                  data-testid="device-user-code-input"
+                />
                 <button
                   className="btn-action btn-action-primary"
                   style={{ width: '100%', padding: '12px' }}
                   onClick={handleApprove}
+                  disabled={!code.trim()}
                   data-testid="device-approve-button"
                 >
                   Authorize
