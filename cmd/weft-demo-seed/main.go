@@ -716,7 +716,7 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 		"tail -n 12 %s | jq 'select(.type == \"memory\") | .pct' | alert above 80",
 		metricsLog)
 	memPressureV2 := fmt.Sprintf(
-		"tail -n 12 %s | jq 'select(.type == \"memory\")' "+
+		"tail -n 12 %s | jq -c 'select(.type == \"memory\")' "+
 			"| alert above 70 -k .pct -t .host",
 		metricsLog)
 	if existing, _ := s.GetCronWatch(custID, "mem-pressure"); existing == nil || existing.Pipeline != memPressureV2 {
