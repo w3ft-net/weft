@@ -50,9 +50,18 @@ cat > "${OUT_DIR}/config.yaml" <<EOF
 endpoint: ingest.w3ft.net:9020
 token: ${TOKEN}
 deployment: loom-producer
+services:
+  - api
+  - worker
+  - edge
 sources:
   - service: api
     path: /var/log/loom/api-${ENV}.log
+    metrics:
+      enabled: true
+      interval: 30s
+      collectors:
+        - memory
   - service: worker
     path: /var/log/loom/worker-${ENV}.log
   - service: edge
