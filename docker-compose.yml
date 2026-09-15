@@ -190,7 +190,10 @@ services:
       - minio
 
   minio:
-    image: minio/minio:latest
+    # minio/minio was removed from Docker Hub (2026) -- MinIO now
+    # publishes to quay.io. Pinned rather than :latest to match the
+    # localstack image below.
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     command: server /data --console-address ":9091"
     environment:
       MINIO_ROOT_USER: minioadmin
