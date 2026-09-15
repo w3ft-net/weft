@@ -65,7 +65,7 @@ Docker Compose with containerized DuckDB shard nodes. This lets us test multi-no
   See [plans/shard-ec2-direct.md](plans/shard-ec2-direct.md).
 - Windows rotate on wall-clock time, not row count. `WindowEnd` in
   the past → INGESTING → READ_ONLY; past retention → ARCHIVING
-  (Parquet export + EBS snapshot + volume delete).
+  (Parquet export + volume delete — no snapshot).
 - Coordinator behind ALB (1-2 instances)
 - Compute pool deferred to Phase 3 — coordinator runs gpipe inline initially
 
@@ -93,7 +93,7 @@ User-facing meta-variables (`$NAMESPACE`, `$SERVICE`, `$KIND`, `$LEVEL`, `$TS`, 
 
 - [github.com/graybeardcorp/warp](https://github.com/graybeardcorp/warp) — awk, sed, jq, bash interpreters + gpipe
 - DuckDB (via CGo or shell exec)
-- AWS SDK — CloudWatch Logs, EC2 RunInstances/TerminateInstances for shard lifecycle (no ASG), EBS volumes + snapshots for shard data
+- AWS SDK — CloudWatch Logs, EC2 RunInstances/TerminateInstances for shard lifecycle (no ASG), EBS volumes for shard data
 
 ## Design documents
 

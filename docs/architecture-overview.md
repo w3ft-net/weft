@@ -102,7 +102,6 @@ christen│     └─────────────┘   │  │
                  (known id)              ┌─────────────┐
                                          │  ARCHIVING  │
                                          └─────────────┘
-                                                │ snapshot +
                                                 │ detach +
                                                 ▼ delete
                                          ┌─────────────┐
@@ -150,10 +149,10 @@ christen│     └─────────────┘   │  │
   to READ_ONLY and is persisted. Writes stop routing there;
   queries still work.
 - **READ_ONLY → ARCHIVING**: when `now - WindowEnd > RetentionPeriod`,
-  coordinator exports DuckDB to Parquet, snapshots the EBS volume
-  (tagged `shard_id` + `parquet_path` for lineage), detaches and
-  deletes the volume, terminates the instance. Queries transparently
-  route to the ColdShard / LambdaColdShard reader from then on.
+  coordinator exports DuckDB to Parquet, detaches and deletes the EBS
+  volume (no snapshot — the parquet export already covers durability),
+  terminates the instance. Queries transparently route to the ColdShard
+  / LambdaColdShard reader from then on.
 
 ### Config knobs (`ProvisionerConfig`)
 
@@ -314,7 +313,7 @@ API client in `frontend/src/lib/api.ts` covers all REST endpoints. Auth state in
 - **Coordinator**: behind ALB, 1-2 instances
 - **Shards**: tiered ASGs — small (t4g.micro, 2 running), medium (t4g.small, 0), large (t4g.medium, 0). Each running shard has a dedicated gp3 EBS volume attached at `/dev/sdf`; volumes are tagged `shard_id` + `shard_tier` and outlive the instance (see Shard Lifecycle above).
 - **Shard lifecycle hook**: `EC2_INSTANCE_LAUNCHING` per tier → SNS (`weft-shard-lifecycle`) → SQS. Coordinator long-polls the queue, creates/attaches volumes, signals `CompleteLifecycleAction`. Failed attaches ABANDON the pending instance; ASG retries.
-- **Archive storage**: Parquet on `weft-cold-*` S3 bucket; hot volumes get EBS snapshots (tagged `shard_id` + `parquet_path`) on archive for data-recovery insurance.
+- **Archive storage**: Parquet on `weft-cold-*` S3 bucket is the sole durable copy; hot volumes are detached and deleted on archive with no EBS snapshot (removed 2026-09-15 — the parquet export already covers durability, and the ongoing per-archival snapshot was an unbounded, un-cleaned-up cost leak).
 - **Build**: kevcons + Packer AMIs
 - **Dev**: Docker Compose (postgres, 2 shards with named volumes, coordinator, api, weftd, minio for S3, localstack for EC2/SNS/SQS integration tests)
 

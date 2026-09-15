@@ -115,11 +115,13 @@ lifecycle**. A shard can outlive many instances.
 - **READ_ONLY** — past the window's end; no new writes, still queried
   until the retention sweep archives it.
 - **ARCHIVING** — the shard's `Evaluate` runs export-to-Parquet →
-  swap live handle for a ColdShard → snapshot+detach+delete the volume
-  → terminate the instance, each step gated on a persisted fact so a
+  swap live handle for a ColdShard → detach+delete the volume →
+  terminate the instance, each step gated on a persisted fact so a
   crash mid-cleanup re-drives it. Query-routable throughout (serves
   from the live DuckDB until the ColdShard swaps in). Fires
-  ArchiveComplete → ARCHIVED itself once all steps land.
+  ArchiveComplete → ARCHIVED itself once all steps land. No volume
+  snapshot is taken — the parquet export already makes the data
+  durable in S3, so the volume is disposable.
 - **ARCHIVED** — data on S3, instance + volume gone, ColdShard serves
   queries via Lambda. Terminal for the shard's identity; AdminDelete is
   the only edge out (→ GONE).
@@ -380,8 +382,8 @@ the export sequence synchronously:
    Queries continue uninterrupted; they just read from Parquet now.
 3. Record the Parquet path in `shard_records.parquet_path` and
    flip state READ_ONLY → ARCHIVED.
-4. Retire the EBS volume: snapshot (tagged with shard_id +
-   parquet_path for lineage), force-detach, delete.
+4. Retire the EBS volume: force-detach, delete. No snapshot — the
+   parquet export already covers durability.
 
 Op 6 (terminate-on-archive) then fires on the NEXT tick: the
 snapshot sees state=ARCHIVED + non-empty `instance_id`, Apply

@@ -84,7 +84,3 @@ func (f *fakeVolumeManager) DetachFromInstance(_ context.Context, _ string, _ bo
 }
 
 func (f *fakeVolumeManager) DeleteVolume(_ context.Context, _ string) error { return nil }
-
-func (f *fakeVolumeManager) SnapshotVolume(_ context.Context, _ SnapshotOpts) (string, error) {
-	return "snap-stub", nil
-}

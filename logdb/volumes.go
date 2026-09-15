@@ -20,8 +20,6 @@ type EC2VolumesAPI interface {
 	DetachVolume(ctx context.Context, in *ec2.DetachVolumeInput, opts ...func(*ec2.Options)) (*ec2.DetachVolumeOutput, error)
 	DeleteVolume(ctx context.Context, in *ec2.DeleteVolumeInput, opts ...func(*ec2.Options)) (*ec2.DeleteVolumeOutput, error)
 	CreateTags(ctx context.Context, in *ec2.CreateTagsInput, opts ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error)
-	CreateSnapshot(ctx context.Context, in *ec2.CreateSnapshotInput, opts ...func(*ec2.Options)) (*ec2.CreateSnapshotOutput, error)
-	DescribeSnapshots(ctx context.Context, in *ec2.DescribeSnapshotsInput, opts ...func(*ec2.Options)) (*ec2.DescribeSnapshotsOutput, error)
 }
 
 // VolumeInfo is a flattened view of an EBS volume relevant to shard
@@ -42,16 +40,7 @@ type CreateVolumeOpts struct {
 	SizeGB  int32
 }
 
-// SnapshotOpts parameterises a SnapshotVolume call. The resulting
-// snapshot is tagged with shard_id + parquet_path so it's
-// self-describing in the console and searchable.
-type SnapshotOpts struct {
-	VolumeID    string
-	ShardID     string
-	ParquetPath string
-}
-
-// VolumeManager wraps the EC2 volume/snapshot APIs with a narrow
+// VolumeManager wraps the EC2 volume APIs with a narrow
 // interface the coordinator can use without dragging the full SDK
 // into every call site. Pure wrappers — decisions about which call
 // to make (christen vs recover, archive vs retain) live in the
@@ -64,7 +53,6 @@ type VolumeManager interface {
 	AttachToInstance(ctx context.Context, volumeID, instanceID, device string) error
 	DetachFromInstance(ctx context.Context, volumeID string, force bool) error
 	DeleteVolume(ctx context.Context, volumeID string) error
-	SnapshotVolume(ctx context.Context, opts SnapshotOpts) (snapshotID string, err error)
 }
 
 // EC2VolumeManager is the production VolumeManager over aws-sdk-go-v2.
@@ -273,41 +261,6 @@ func (m *EC2VolumeManager) DeleteVolume(ctx context.Context, volumeID string) er
 	return nil
 }
 
-// SnapshotVolume creates a snapshot tagged with shard_id and the
-// parquet path for that shard's archive. Waits for the snapshot to
-// reach `completed` before returning so callers know the data is
-// durable before deleting the source volume.
-func (m *EC2VolumeManager) SnapshotVolume(ctx context.Context, opts SnapshotOpts) (string, error) {
-	if opts.VolumeID == "" || opts.ShardID == "" {
-		return "", fmt.Errorf("SnapshotVolume: VolumeID and ShardID required")
-	}
-	tagSpec := ec2types.TagSpecification{
-		ResourceType: ec2types.ResourceTypeSnapshot,
-		Tags: []ec2types.Tag{
-			{Key: aws.String("Name"), Value: aws.String(opts.ShardID + "-archive")},
-			{Key: aws.String("shard_id"), Value: aws.String(opts.ShardID)},
-			{Key: aws.String("parquet_path"), Value: aws.String(opts.ParquetPath)},
-			{Key: aws.String("archived_at"), Value: aws.String(time.Now().UTC().Format(time.RFC3339))},
-		},
-	}
-	out, err := m.client.CreateSnapshot(ctx, &ec2.CreateSnapshotInput{
-		VolumeId:          aws.String(opts.VolumeID),
-		Description:       aws.String("weft shard archive: " + opts.ShardID),
-		TagSpecifications: []ec2types.TagSpecification{tagSpec},
-	})
-	if err != nil {
-		return "", fmt.Errorf("CreateSnapshot %s: %w", opts.VolumeID, err)
-	}
-	if out.SnapshotId == nil {
-		return "", fmt.Errorf("CreateSnapshot %s: no id returned", opts.VolumeID)
-	}
-
-	if err := m.waitForSnapshotState(ctx, *out.SnapshotId, ec2types.SnapshotStateCompleted); err != nil {
-		return "", err
-	}
-	return *out.SnapshotId, nil
-}
-
 // ── helpers ─────────────────────────────────────────────────
 
 func (m *EC2VolumeManager) waitForVolumeState(ctx context.Context, volumeID string, want ec2types.VolumeState) error {
@@ -327,19 +280,3 @@ func (m *EC2VolumeManager) waitForVolumeState(ctx context.Context, volumeID stri
 	return fmt.Errorf("volume %s did not reach state %s", volumeID, want)
 }
 
-func (m *EC2VolumeManager) waitForSnapshotState(ctx context.Context, snapshotID string, want ec2types.SnapshotState) error {
-	for i := 0; i < m.pollAttempts; i++ {
-		out, err := m.client.DescribeSnapshots(ctx, &ec2.DescribeSnapshotsInput{
-			SnapshotIds: []string{snapshotID},
-		})
-		if err == nil && len(out.Snapshots) > 0 && out.Snapshots[0].State == want {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(m.pollInterval):
-		}
-	}
-	return fmt.Errorf("snapshot %s did not reach state %s", snapshotID, want)
-}

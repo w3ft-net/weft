@@ -25,7 +25,7 @@ import (
 // instances itself via RunInstances/TerminateInstances — no Auto Scaling
 // Group — there is nothing to fake: RunInstances, DescribeInstances (the
 // idempotency find-by-tag + wait-for-running), CreateVolume, AttachVolume,
-// DescribeVolumes, CreateSnapshot, DeleteVolume all hit LocalStack EC2.
+// DescribeVolumes, DeleteVolume all hit LocalStack EC2.
 // Launch is store-free (the shard SM persists the LaunchResult), so these
 // tests need no postgres.
 
@@ -277,17 +277,16 @@ func TestLifecycle_Integration_RecoverPath(t *testing.T) {
 	}
 }
 
-// Retirement: the archive path snapshots a shard's volume (tagged with
-// shard_id + parquet_path for lineage), then deletes it. Exercises the real
-// VolumeManager SnapshotVolume/DeleteVolume calls — unchanged by the
-// EC2-direct switch (the shard SM's evaluateArchiving drives this same
-// sequence in production).
+// Retirement: the archive path deletes a shard's volume once its data is
+// durable in S3 — no snapshot is taken (the parquet export already covers
+// durability). Exercises the real VolumeManager DeleteVolume call —
+// unchanged by the EC2-direct switch (the shard SM's evaluateArchiving
+// drives this same sequence in production).
 func TestLifecycle_Integration_RetirementPath(t *testing.T) {
 	cfg := awsTestConfig(t)
 	ec2c := ec2.NewFromConfig(cfg)
 
 	shardID := "shard-retire-" + testSuffix()
-	parquetPath := "s3://weft-cold/" + shardID + ".parquet"
 	az := "us-east-2a"
 
 	volOut, err := ec2c.CreateVolume(context.Background(), &ec2.CreateVolumeInput{
@@ -310,42 +309,6 @@ func TestLifecycle_Integration_RetirementPath(t *testing.T) {
 	vm := logdb.NewEC2VolumeManagerWithClient(ec2c)
 
 	ctx := context.Background()
-	snapID, err := vm.SnapshotVolume(ctx, logdb.SnapshotOpts{
-		VolumeID:    volumeID,
-		ShardID:     shardID,
-		ParquetPath: parquetPath,
-	})
-	if err != nil {
-		t.Fatalf("SnapshotVolume: %v", err)
-	}
-	if snapID == "" {
-		t.Fatal("empty snapshot id")
-	}
-
-	// Snapshot should carry shard_id + parquet_path tags so operators can
-	// reconstruct the lineage later.
-	snapOut, err := ec2c.DescribeSnapshots(ctx, &ec2.DescribeSnapshotsInput{
-		SnapshotIds: []string{snapID},
-	})
-	if err != nil {
-		t.Fatalf("DescribeSnapshots: %v", err)
-	}
-	if len(snapOut.Snapshots) != 1 {
-		t.Fatalf("expected 1 snapshot, got %d", len(snapOut.Snapshots))
-	}
-	tags := map[string]string{}
-	for _, tag := range snapOut.Snapshots[0].Tags {
-		if tag.Key != nil && tag.Value != nil {
-			tags[*tag.Key] = *tag.Value
-		}
-	}
-	if tags["shard_id"] != shardID {
-		t.Errorf("snapshot shard_id: got %q want %q", tags["shard_id"], shardID)
-	}
-	if tags["parquet_path"] != parquetPath {
-		t.Errorf("snapshot parquet_path: got %q want %q", tags["parquet_path"], parquetPath)
-	}
-
 	if err := vm.DeleteVolume(ctx, volumeID); err != nil {
 		t.Fatalf("DeleteVolume: %v", err)
 	}

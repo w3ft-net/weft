@@ -38,10 +38,6 @@ type mockEC2Volumes struct {
 
 	createTagCalls  []*ec2.CreateTagsInput
 	createTagErr    error
-
-	createSnapCalls []*ec2.CreateSnapshotInput
-	createSnapID    string
-	createSnapErr   error
 }
 
 func (m *mockEC2Volumes) CreateVolume(_ context.Context, in *ec2.CreateVolumeInput, _ ...func(*ec2.Options)) (*ec2.CreateVolumeOutput, error) {
@@ -197,32 +193,6 @@ func (m *mockEC2Volumes) CreateTags(_ context.Context, in *ec2.CreateTagsInput, 
 	defer m.mu.Unlock()
 	m.createTagCalls = append(m.createTagCalls, in)
 	return &ec2.CreateTagsOutput{}, m.createTagErr
-}
-
-func (m *mockEC2Volumes) CreateSnapshot(_ context.Context, in *ec2.CreateSnapshotInput, _ ...func(*ec2.Options)) (*ec2.CreateSnapshotOutput, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.createSnapCalls = append(m.createSnapCalls, in)
-	if m.createSnapErr != nil {
-		return nil, m.createSnapErr
-	}
-	id := m.createSnapID
-	if id == "" {
-		id = fmt.Sprintf("snap-auto-%d", len(m.createSnapCalls))
-	}
-	return &ec2.CreateSnapshotOutput{SnapshotId: &id, State: ec2types.SnapshotStateCompleted}, nil
-}
-
-func (m *mockEC2Volumes) DescribeSnapshots(_ context.Context, in *ec2.DescribeSnapshotsInput, _ ...func(*ec2.Options)) (*ec2.DescribeSnapshotsOutput, error) {
-	// Completed is our default; individual tests can override by
-	// using a canned response. For now, "any snapshot the test knows
-	// about" is assumed completed.
-	var out []ec2types.Snapshot
-	for _, id := range in.SnapshotIds {
-		id := id
-		out = append(out, ec2types.Snapshot{SnapshotId: &id, State: ec2types.SnapshotStateCompleted})
-	}
-	return &ec2.DescribeSnapshotsOutput{Snapshots: out}, nil
 }
 
 // ── Tests ───────────────────────────────────────────────────
@@ -393,43 +363,15 @@ func TestVolumeManager_AttachToInstance(t *testing.T) {
 	}
 }
 
-func TestVolumeManager_SnapshotThenDelete(t *testing.T) {
+func TestVolumeManager_DeleteVolume(t *testing.T) {
 	mock := &mockEC2Volumes{}
-	mock.volumesByID = map[string]ec2types.Volume{
-		"vol-archived": {VolumeId: strPtr("vol-archived"), State: ec2types.VolumeStateAvailable},
-	}
 	vm := NewEC2VolumeManagerWithClient(mock)
-	vm.pollInterval = time.Millisecond
-	vm.pollAttempts = 3
-
-	snap, err := vm.SnapshotVolume(context.Background(), SnapshotOpts{
-		VolumeID:    "vol-archived",
-		ShardID:     "shard-archived",
-		ParquetPath: "s3://weft-cold/shard-archived.parquet",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snap == "" {
-		t.Fatal("expected snapshot id")
-	}
-	if len(mock.createSnapCalls) != 1 {
-		t.Fatalf("expected 1 CreateSnapshot call, got %d", len(mock.createSnapCalls))
-	}
-	// Tags must include shard_id + parquet_path.
-	tags := collectTags(mock.createSnapCalls[0].TagSpecifications)
-	if tags["shard_id"] != "shard-archived" {
-		t.Errorf("snapshot tag shard_id: got %q", tags["shard_id"])
-	}
-	if tags["parquet_path"] != "s3://weft-cold/shard-archived.parquet" {
-		t.Errorf("snapshot tag parquet_path: got %q", tags["parquet_path"])
-	}
 
 	if err := vm.DeleteVolume(context.Background(), "vol-archived"); err != nil {
 		t.Fatal(err)
 	}
-	if len(mock.deleteCalls) != 1 {
-		t.Fatalf("expected 1 DeleteVolume call, got %d", len(mock.deleteCalls))
+	if len(mock.deleteCalls) != 1 || *mock.deleteCalls[0].VolumeId != "vol-archived" {
+		t.Fatalf("expected 1 DeleteVolume call for vol-archived, got %v", mock.deleteCalls)
 	}
 }
 

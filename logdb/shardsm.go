@@ -666,9 +666,9 @@ func (sh *Shard) evaluateArchiving(ctx context.Context) error {
 		log.Printf("shardsm %s: archived to %s", sh.ID, path)
 	}
 
-	// Step 2 — retire the data volume (snapshot → detach → delete).
+	// Step 2 — retire the data volume (detach → delete).
 	if volumeID != "" && sh.deps.Volumes != nil {
-		if err := sh.retireVolume(ctx, volumeID, parquetPath); err != nil {
+		if err := sh.retireVolume(ctx, volumeID); err != nil {
 			log.Printf("shardsm %s: retire volume %s, retrying next tick: %v", sh.ID, volumeID, err)
 			return nil
 		}
@@ -716,24 +716,16 @@ func (sh *Shard) archiveS3Prefix(services []store.ShardService) string {
 	return fmt.Sprintf("%s/%s", sh.deps.ParquetDir, joinServices(serviceNames(services)))
 }
 
-// retireVolume runs snapshot → detach → delete on an archived shard's
-// data volume. Detach is forced: the hosting instance may already be
-// terminated (Step 3 hasn't run, or a prior failure left it dead), and a
-// non-force detach hangs on a gone instance. Any step's error returns so
-// the caller leaves the volume in place for a retry.
-func (sh *Shard) retireVolume(ctx context.Context, volumeID, parquetPath string) error {
+// retireVolume runs detach → delete on an archived shard's data volume.
+// The parquet export already landed the data in S3 (Step 1), so the
+// volume itself is disposable. Detach is forced: the hosting instance
+// may already be terminated (Step 3 hasn't run, or a prior failure left
+// it dead), and a non-force detach hangs on a gone instance. Any step's
+// error returns so the caller leaves the volume in place for a retry.
+func (sh *Shard) retireVolume(ctx context.Context, volumeID string) error {
 	ctx, cancel := context.WithTimeout(ctx, archiveTimeout)
 	defer cancel()
 
-	snapID, err := sh.deps.Volumes.SnapshotVolume(ctx, SnapshotOpts{
-		VolumeID:    volumeID,
-		ShardID:     sh.ID,
-		ParquetPath: parquetPath,
-	})
-	if err != nil {
-		return fmt.Errorf("snapshot: %w", err)
-	}
-	log.Printf("shardsm %s: snapshotted %s → %s before delete", sh.ID, volumeID, snapID)
 	if err := sh.deps.Volumes.DetachFromInstance(ctx, volumeID, true); err != nil {
 		return fmt.Errorf("detach: %w", err)
 	}

@@ -118,5 +118,7 @@ and deletion lags the advertised retention by a 7-day grace buffer.
 ## Disable / roll back
 
 Set `janitor_enabled = false`, apply, restart the coordinator. The Lambda
-and IAM can stay (idle). Already-deleted data is **not recoverable** — only
-EBS snapshots from the original archive (if still retained) would help.
+and IAM can stay (idle). Already-deleted data is **not recoverable** — the
+janitor only ever touches S3 parquet, and shard archival no longer keeps
+an EBS snapshot backstop (removed 2026-09-15; parquet in S3 is the sole
+durable copy).
