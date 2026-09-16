@@ -74,12 +74,13 @@ func seedReporterFixtures(t *testing.T, srv *Server, s *store.Store, customerNam
 	}
 
 	// Seed usage_daily directly. The reporter reads from here; the
-	// rollup plumbing is out of scope for this test.
+	// rollup plumbing is out of scope for this test. usage_hourly is
+	// append-only (migration 074 dropped its (customer_name, hour)
+	// primary key so concurrent coordinators can each insert their own
+	// delta) — plain INSERT, no ON CONFLICT upsert.
 	if err := s.DB().Exec(`
 		INSERT INTO usage_hourly (customer_name, hour, bytes_ingested)
-		VALUES (?, ?, ?)
-		ON CONFLICT (customer_name, hour) DO UPDATE
-		SET bytes_ingested = usage_hourly.bytes_ingested + EXCLUDED.bytes_ingested`,
+		VALUES (?, ?, ?)`,
 		customerName, yesterday.Add(12*time.Hour), bytes).Error; err != nil {
 		t.Fatal(err)
 	}
