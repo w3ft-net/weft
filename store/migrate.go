@@ -46,6 +46,22 @@ var schemaSQL string
 // (test fixtures, dev/demo/up.sh) set the flag explicitly.
 const AllowSchemaBootstrapEnv = "WEFT_ALLOW_SCHEMA_BOOTSTRAP"
 
+// migrateLockKey serializes the whole Migrate sequence (schema.sql
+// bootstrap + goose deltas) across processes racing to migrate the same
+// database on cold start (the compose stack, or several coordinator
+// instances booting together). Arbitrary but stable — every process
+// migrating this database must agree on it, so it must never change.
+//
+// Originally only guarded the schema.sql restore (see
+// applyCollapsedSchema's history); widened to also cover goose.Up after
+// TestConcurrentMigrateBootstrapsCompleteSchema caught concurrent
+// processes racing to apply the same pending goose migration once
+// store/migrations/ held real post-collapse deltas again (074, 075) —
+// goose.Up has no locking of its own in this codebase, so two callers
+// both past the schema.sql probe would both see the same migration as
+// pending and both try to CREATE the same object.
+const migrateLockKey int64 = 0x7746540B0057
+
 // Migrate applies the collapsed schema (if the DB is virgin and
 // AllowSchemaBootstrapEnv is set) and then runs any pending migration
 // deltas. Idempotent: re-running on a fully-migrated DB is a no-op.
@@ -55,6 +71,24 @@ func Migrate(dsn string) error {
 		return fmt.Errorf("open for migrate: %w", err)
 	}
 	defer db.Close()
+
+	// Session-scoped lock, so it must be taken and released on one
+	// pinned connection, not the pool — held for the whole function so
+	// applyCollapsedSchema's psql restore and goose.Up serialize as one
+	// unit, not two separately-racy steps.
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("migrate lock connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, migrateLockKey); err != nil {
+		return fmt.Errorf("acquire migrate lock: %w", err)
+	}
+	defer func() {
+		// Best effort: closing the connection drops the lock anyway.
+		_, _ = conn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, migrateLockKey)
+	}()
 
 	if err := applyCollapsedSchema(db, dsn); err != nil {
 		return fmt.Errorf("apply schema.sql: %w", err)
@@ -118,53 +152,20 @@ func Migrate(dsn string) error {
 // The env-var guard is the safety net: prod should never hit a virgin
 // DB, and if it does, blindly restoring an embedded snapshot is the
 // wrong move. Dev/CI explicitly opt in.
-// schemaBootstrapLockKey is the advisory-lock key guarding the
-// bootstrap below. Arbitrary but stable — every process bootstrapping
-// this database must agree on it, so it must never change.
-const schemaBootstrapLockKey int64 = 0x7746540B0057
-
+//
+// Callers must already hold migrateLockKey (Migrate does) — this
+// function used to take its own lock here, but the "already
+// bootstrapped" sentinel below is goose_db_version, which schema.sql
+// creates itself partway through the file, so two processes racing
+// this specific probe-and-apply had the same failure mode goose.Up
+// turned out to have too; one lock spanning both fixes both.
 func applyCollapsedSchema(db *sql.DB, dsn string) error {
 	if len(schemaSQL) == 0 {
 		return nil // pre-collapse repos have an empty placeholder schema.sql
 	}
 
-	// Serialize bootstrap across processes before probing anything.
-	//
-	// The "already bootstrapped" sentinel below is goose_db_version, but
-	// schema.sql creates that table itself, partway through the file. So
-	// two processes starting against a virgin database (in the compose
-	// stack, api and coordinator boot together) both probe, both see no
-	// sentinel, and both shell out to psql. One wins; the other aborts
-	// mid-file under ON_ERROR_STOP.
-	//
-	// The damage outlives the crash: the sentinel now exists, so every
-	// later run short-circuits and the half-applied schema is never
-	// repaired. It resurfaces much later as a missing constraint —
-	// "no unique or exclusion constraint matching the ON CONFLICT
-	// specification" — with nothing left to point at the real cause.
-	//
-	// Holding the lock across probe-and-apply makes the loser re-probe
-	// only after the winner has committed, so it correctly short-circuits
-	// instead of racing. The lock is session-scoped, so it must be taken
-	// and released on one pinned connection, not the pool.
-	ctx := context.Background()
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return fmt.Errorf("bootstrap lock connection: %w", err)
-	}
-	defer conn.Close()
-	if _, err := conn.ExecContext(ctx,
-		`SELECT pg_advisory_lock($1)`, schemaBootstrapLockKey); err != nil {
-		return fmt.Errorf("acquire bootstrap lock: %w", err)
-	}
-	defer func() {
-		// Best effort: closing the connection drops the lock anyway.
-		_, _ = conn.ExecContext(ctx,
-			`SELECT pg_advisory_unlock($1)`, schemaBootstrapLockKey)
-	}()
-
 	var hasVersionTable bool
-	err = db.QueryRow(`
+	err := db.QueryRow(`
 		SELECT EXISTS (
 			SELECT 1 FROM information_schema.tables
 			 WHERE table_schema = 'public' AND table_name = 'goose_db_version'
