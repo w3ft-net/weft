@@ -2,6 +2,7 @@ package poller
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -26,11 +27,17 @@ type ShardProvider interface {
 type Poller struct {
 	store    *store.Store
 	provider ShardProvider
+	// holder identifies this coordinator process for the per-log-group
+	// lease that guards polling once the coordinator ASG scales past 1
+	// instance — see docs/plans/coordinator-horizontal-scaling.md.
+	holder string
 }
 
-// New creates a new CloudWatch poller.
-func New(store *store.Store, provider ShardProvider) *Poller {
-	return &Poller{store: store, provider: provider}
+// New creates a new CloudWatch poller. holder identifies this process
+// for lease ownership; it only needs to be unique per running
+// coordinator, not stable across restarts.
+func New(store *store.Store, provider ShardProvider, holder string) *Poller {
+	return &Poller{store: store, provider: provider, holder: holder}
 }
 
 // Start begins polling all enabled log groups in background goroutines.
@@ -75,6 +82,19 @@ func (p *Poller) Start(ctx context.Context) {
 }
 
 func (p *Poller) pollLoop(ctx context.Context, lg store.LogGroupWithAWSAccount) {
+	// Only one coordinator instance may poll a given log group at a
+	// time — two instances both fetching from the same CloudWatch
+	// starting token would double-ingest every event. If we can't get
+	// the lease, some other instance already owns this log group;
+	// nothing to reconcile later since Start() only runs once at boot
+	// (matches its existing no-reconcile-loop limitation).
+	leaseName := fmt.Sprintf("poller:%d", lg.ID)
+	leaseCtx, ok := store.AcquireAndHold(ctx, p.store, leaseName, p.holder)
+	if !ok {
+		log.Printf("poller[%s]: lease held by another coordinator instance, not polling", lg.Service)
+		return
+	}
+
 	interval, err := time.ParseDuration(lg.PollInterval)
 	if err != nil {
 		interval = 30 * time.Second
@@ -82,17 +102,17 @@ func (p *Poller) pollLoop(ctx context.Context, lg store.LogGroupWithAWSAccount) 
 
 	log.Printf("poller[%s]: polling %s (account %s) every %s", lg.Service, lg.LogGroupName, lg.AccountID, interval)
 
-	p.poll(ctx, lg)
+	p.poll(leaseCtx, lg)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-leaseCtx.Done():
 			return
 		case <-ticker.C:
-			p.poll(ctx, lg)
+			p.poll(leaseCtx, lg)
 		}
 	}
 }

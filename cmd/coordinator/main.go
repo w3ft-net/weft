@@ -17,6 +17,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/google/uuid"
 	weftsdk "github.com/w3ft-net/weft-go"
 
 	"github.com/graybeardcorp/saaskit/email"
@@ -53,6 +54,53 @@ func dumpGoroutines() {
 		return
 	}
 	log.Printf("coordinator: SIGUSR1 — wrote %d goroutines (%d bytes) to %s", runtime.NumGoroutine(), len(buf), path)
+}
+
+// coordinatorHolder identifies this process for lease ownership (see
+// store.AcquireLease) — it only needs to be unique per running
+// coordinator, not stable across restarts. Prefers the EC2 instance-id
+// (recognizable in `SELECT * FROM leases` without a lookup); falls back
+// to hostname+random for local/docker dev, where there's no IMDS.
+func coordinatorHolder() string {
+	if id := imdsInstanceID(); id != "" {
+		return id
+	}
+	hostname, _ := os.Hostname()
+	return fmt.Sprintf("%s-%s", hostname, uuid.NewString()[:8])
+}
+
+// imdsInstanceID fetches the EC2 instance-id via IMDSv2. Returns "" on
+// any failure (no token, no route, bad response) so callers can handle
+// off-EC2 gracefully — mirrors cmd/shard/main.go's imdsFetch.
+func imdsInstanceID() string {
+	client := &http.Client{Timeout: 2 * time.Second}
+	tokenReq, _ := http.NewRequest("PUT", "http://169.254.169.254/latest/api/token", nil)
+	tokenReq.Header.Set("X-aws-ec2-metadata-token-ttl-seconds", "60")
+	tokenResp, err := client.Do(tokenReq)
+	if err != nil {
+		return ""
+	}
+	defer tokenResp.Body.Close()
+	tokenBuf := make([]byte, 256)
+	n, _ := tokenResp.Body.Read(tokenBuf)
+	if n == 0 {
+		return ""
+	}
+	token := string(tokenBuf[:n])
+
+	req, _ := http.NewRequest("GET", "http://169.254.169.254/latest/meta-data/instance-id", nil)
+	req.Header.Set("X-aws-ec2-metadata-token", token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	buf := make([]byte, 128)
+	n, _ = resp.Body.Read(buf)
+	if n == 0 {
+		return ""
+	}
+	return string(buf[:n])
 }
 
 func main() {
@@ -167,6 +215,10 @@ func main() {
 	// hydration; this block covers the pieces that run for the life
 	// of the process or depend on live buckets.
 	{
+		// Identifies this process for the lease table (poller/cron
+		// mutual exclusion once the coordinator ASG scales past 1).
+		holder := coordinatorHolder()
+
 		// Start usage metering flush (every 5 minutes).
 		coord.StartUsageFlush(drainCtx, db)
 
@@ -180,7 +232,7 @@ func main() {
 		}
 
 		// Start CloudWatch poller for configured sources.
-		p := poller.New(db, coord)
+		p := poller.New(db, coord, holder)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		p.Start(ctx)
