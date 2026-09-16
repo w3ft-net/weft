@@ -784,7 +784,15 @@ func (s *Server) ingestBatch(rows []*pb.LogRow) {
 }
 
 // GetUsage returns bytes ingested for a customer in a billing period.
-// Combines persisted data from PostgreSQL with the current in-memory hour.
+// Combines PostgreSQL (everything flushed as of the last ~30s tick,
+// including partial current-hour rows now that flushUsage appends every
+// tick rather than only on hour rollover) with memBytes, the delta
+// accumulated on *this* instance since its own last flush. On a
+// multi-coordinator fleet a customer's traffic can be split across
+// instances, so the number this RPC returns can lag the true total by up
+// to one flush interval — bounded staleness, not bounded correctness;
+// nothing enforcement-critical reads this path (see
+// docs/plans/coordinator-horizontal-scaling.md).
 func (s *Server) GetUsage(ctx context.Context, req *pb.GetUsageRequest) (*pb.GetUsageResponse, error) {
 	customer, err := callerCustomer(ctx)
 	if err != nil {

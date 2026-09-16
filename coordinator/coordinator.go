@@ -436,15 +436,19 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 	}()
 }
 
-// StartUsageFlush runs a background goroutine that periodically drains
-// completed hourly usage counters to PostgreSQL. Flushes every 5 minutes
-// so at most 5 minutes of data is lost on restart.
+// StartUsageFlush runs a background goroutine that periodically appends
+// accumulated usage deltas to PostgreSQL. Flushes every 30 seconds so at
+// most 30 seconds of data is lost on restart, and so a customer's
+// displayed usage (GetUsage combines this with the not-yet-flushed
+// remainder) converges quickly even when their traffic is split across
+// multiple coordinator instances — see
+// docs/plans/coordinator-horizontal-scaling.md.
 func (c *Coordinator) StartUsageFlush(ctx context.Context, store *store.Store) {
 	if c.Usage == nil {
 		return
 	}
 	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
+		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -459,14 +463,18 @@ func (c *Coordinator) StartUsageFlush(ctx context.Context, store *store.Store) {
 	}()
 }
 
+// flushUsage appends each drained delta as its own row. Append-only,
+// not upsert: usage_hourly has no uniqueness constraint on
+// (customer_name, hour) (migration 074) precisely so concurrent
+// coordinators can each insert their own delta without racing on a
+// shared row. Readers (QueryUsage, rollup_usage_daily) already
+// SUM(bytes_ingested) across however many rows land for an hour.
 func (c *Coordinator) flushUsage(store *store.Store) {
-	entries := c.Usage.DrainCompleted()
+	entries := c.Usage.Drain()
 	for _, e := range entries {
 		if err := store.DB().Exec(`
 			INSERT INTO usage_hourly (customer_name, hour, bytes_ingested)
-			VALUES (?, ?, ?)
-			ON CONFLICT (customer_name, hour) DO UPDATE
-			SET bytes_ingested = usage_hourly.bytes_ingested + EXCLUDED.bytes_ingested`,
+			VALUES (?, ?, ?)`,
 			e.Customer, e.Hour, e.Bytes).Error; err != nil {
 			log.Printf("usage flush error: customer=%s hour=%s: %v", e.Customer, e.Hour, err)
 		}

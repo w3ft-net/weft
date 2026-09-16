@@ -219,7 +219,7 @@ func main() {
 		// mutual exclusion once the coordinator ASG scales past 1).
 		holder := coordinatorHolder()
 
-		// Start usage metering flush (every 5 minutes).
+		// Start usage metering flush (every 30 seconds).
 		coord.StartUsageFlush(drainCtx, db)
 
 		// Seed dev data when running with a customer flag (dev/docker mode).

@@ -9,7 +9,9 @@ import (
 
 // CustomerUsageStats tracks per-customer bytes ingested, bucketed by hour.
 // The drain loop calls Record for every row; a background goroutine
-// periodically calls DrainCompleted to flush finished hours to PostgreSQL.
+// periodically calls Drain to flush accumulated deltas to PostgreSQL —
+// completed hours are removed entirely, the current hour is reset to
+// zero but kept, since it's still accumulating.
 type CustomerUsageStats struct {
 	mu     sync.Mutex
 	counts map[string]*atomic.Int64 // key: "customer\x00YYYY-MM-DDTHH"
@@ -50,16 +52,22 @@ func (u *CustomerUsageStats) Record(customer string, bytes int64) {
 	counter.Add(bytes)
 }
 
-// UsageEntry is a completed hour's usage data ready for DB flush.
+// UsageEntry is one flush's worth of usage data: bytes accumulated for a
+// customer/hour since the last Drain, ready to append to PostgreSQL.
 type UsageEntry struct {
 	Customer string
 	Hour     time.Time
 	Bytes    int64
 }
 
-// DrainCompleted returns and removes all buckets for hours before the current
-// hour. The current hour is kept in memory (still accumulating).
-func (u *CustomerUsageStats) DrainCompleted() []UsageEntry {
+// Drain returns every bucket's delta since the last call and resets each
+// counter to zero. Buckets for hours before the current one are removed
+// entirely (that hour will never accumulate more); the current hour's
+// bucket is reset but kept, since Record may still be adding to it.
+// Safe to call frequently — each call only ever returns the delta since
+// it was last drained, so the caller can append it straight to
+// usage_hourly without double-counting on the next tick.
+func (u *CustomerUsageStats) Drain() []UsageEntry {
 	currentHour := time.Now().UTC().Truncate(time.Hour).Format("2006-01-02T15")
 
 	u.mu.Lock()
@@ -67,16 +75,12 @@ func (u *CustomerUsageStats) DrainCompleted() []UsageEntry {
 
 	var entries []UsageEntry
 	for key, counter := range u.counts {
-		_, hourStr := parseUsageKey(key)
-		if hourStr == currentHour {
-			continue // still accumulating
-		}
-		customer, _ := parseUsageKey(key)
+		customer, hourStr := parseUsageKey(key)
 		hour, err := time.Parse("2006-01-02T15", hourStr)
 		if err != nil {
 			continue
 		}
-		bytes := counter.Load()
+		bytes := counter.Swap(0)
 		if bytes > 0 {
 			entries = append(entries, UsageEntry{
 				Customer: customer,
@@ -84,7 +88,9 @@ func (u *CustomerUsageStats) DrainCompleted() []UsageEntry {
 				Bytes:    bytes,
 			})
 		}
-		delete(u.counts, key)
+		if hourStr != currentHour {
+			delete(u.counts, key)
+		}
 	}
 	return entries
 }

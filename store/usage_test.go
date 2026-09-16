@@ -130,13 +130,16 @@ func TestQueryUsage_SplitsOnTodayBoundary(t *testing.T) {
 	}
 }
 
-// upsertUsageHourly mirrors the former Store.UpsertUsageHourly, whose
-// production logic moved to a caller outside the store package.
+// upsertUsageHourly mirrors production's append-only flush (coordinator.go
+// flushUsage, migration 074): usage_hourly has no uniqueness constraint on
+// (customer_name, hour), so every call inserts its own row rather than
+// accumulating into one. Readers SUM across rows, so repeated calls for
+// the same customer/hour behave identically to the old upsert-based
+// helper as far as every assertion in this file is concerned. Name kept
+// for now since callers still think of it as "record this hour's usage".
 func upsertUsageHourly(db *Store, customerName string, hour time.Time, bytes int64) error {
 	return db.db.Exec(`
 		INSERT INTO usage_hourly (customer_name, hour, bytes_ingested)
-		VALUES (?, ?, ?)
-		ON CONFLICT (customer_name, hour) DO UPDATE
-		SET bytes_ingested = usage_hourly.bytes_ingested + EXCLUDED.bytes_ingested`,
+		VALUES (?, ?, ?)`,
 		customerName, hour, bytes).Error
 }
