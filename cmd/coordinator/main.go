@@ -17,6 +17,8 @@ import (
 
 	"google.golang.org/grpc"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/google/uuid"
 	weftsdk "github.com/w3ft-net/weft-go"
 
@@ -245,6 +247,33 @@ func main() {
 			Holder:   holder,
 		}
 		cronExec.Start(ctx)
+
+		// NAT self-election: exactly one coordinator instance points the
+		// private subnet's 0.0.0.0/0 route at itself, via the same lease
+		// primitive as poller/cron above. Replaces the old boot-time-only
+		// claim in infrastructure-catalog's shared user-data script,
+		// which raced on boot order — see
+		// docs/plans/coordinator-horizontal-scaling.md #1. No-ops
+		// (leaving NAT to that removed boot claim's absence, i.e. doing
+		// nothing) off-EC2 or when NAT_ROUTE_TABLE_ID isn't set — the
+		// expected shape in dev/docker.
+		if instanceID := imdsInstanceID(); instanceID != "" {
+			if routeTableID := os.Getenv("NAT_ROUTE_TABLE_ID"); routeTableID != "" {
+				awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(*awsRegion))
+				if err != nil {
+					log.Printf("nat: aws config load failed, not running NAT election: %v", err)
+				} else {
+					ec2Client := ec2.NewFromConfig(awsCfg)
+					eniID, err := coordinator.ResolveOwnENI(context.Background(), ec2Client, instanceID)
+					if err != nil {
+						log.Printf("nat: resolve own ENI failed, not running NAT election: %v", err)
+					} else {
+						elector := coordinator.NewNATElector(db, ec2Client, routeTableID, eniID, holder)
+						elector.Start(ctx)
+					}
+				}
+			}
+		}
 	}
 
 	// gRPC server with auth interceptors.
