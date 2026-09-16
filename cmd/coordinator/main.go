@@ -242,6 +242,7 @@ func main() {
 			Store:    db,
 			Coord:    coord,
 			Notifier: notifier,
+			Holder:   holder,
 		}
 		cronExec.Start(ctx)
 	}

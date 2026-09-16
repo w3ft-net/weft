@@ -20,6 +20,10 @@ type CronExecutor struct {
 	Store    *store.Store
 	Coord    *Coordinator
 	Notifier *Notifier
+	// Holder identifies this coordinator process for the per-watch
+	// lease that guards execution once the coordinator ASG scales past
+	// 1 instance — see docs/plans/coordinator-horizontal-scaling.md.
+	Holder string
 
 	mu      sync.Mutex
 	cancels map[uint]context.CancelFunc // watchID → cancel
@@ -93,12 +97,26 @@ func (ce *CronExecutor) stopAll() {
 	}
 }
 
+// forgetWatch removes a watch's cancel-tracking entry so the next
+// reconcile tick retries it. Needed because reconcile stores the cancel
+// func and spawns runWatch before knowing whether it'll actually start —
+// if runWatch bails immediately (lease held elsewhere), reconcile would
+// otherwise believe the watch is running forever and never retry, even
+// after the other holder dies and the lease frees up.
+func (ce *CronExecutor) forgetWatch(id uint) {
+	ce.mu.Lock()
+	defer ce.mu.Unlock()
+	delete(ce.cancels, id)
+}
+
 // runWatch executes a single cron watch on its schedule.
 func (ce *CronExecutor) runWatch(ctx context.Context, watch store.CronWatch) {
 	interval := parseSchedule(watch.Schedule)
 
 	// Defensive: skip watches that violate the minimum interval for their tier.
 	// This shouldn't happen if saves are validated, but belt-and-suspenders.
+	// Checked before acquiring the lease below — no point squatting on it
+	// for a watch that's never going to run.
 	if tier := ce.tierForWatch(watch); tier != "" {
 		minInterval := store.MinWatchInterval(tier)
 		if minInterval > 0 && interval < minInterval {
@@ -107,6 +125,18 @@ func (ce *CronExecutor) runWatch(ctx context.Context, watch store.CronWatch) {
 			return
 		}
 	}
+
+	// Only one coordinator instance may run a given watch at a time —
+	// two instances both firing it on schedule would double-send every
+	// alert/notification and double-apply every side effect.
+	leaseName := fmt.Sprintf("cron:%d", watch.ID)
+	leaseCtx, ok := store.AcquireAndHold(ctx, ce.Store, leaseName, ce.Holder)
+	if !ok {
+		log.Printf("cron[%s]: lease held by another coordinator instance, not running", watch.Name)
+		ce.forgetWatch(watch.ID)
+		return
+	}
+	ctx = leaseCtx
 
 	log.Printf("cron[%s]: started (every %s)", watch.Name, interval)
 
