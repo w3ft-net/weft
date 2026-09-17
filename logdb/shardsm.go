@@ -17,8 +17,13 @@ import (
 // configureTimeout bounds the gRPC Dial+Configure on the
 // LAUNCHING/SUSPENDED → INGESTING heartbeat path. archiveTimeout bounds
 // the (much longer) ARCHIVED-cleanup work — export to S3, volume
-// snapshot/detach/delete. Both mirror the values the pre-FSM provisioner
-// used (christen and archive respectively).
+// snapshot/detach/delete, and instance termination (both the archive-time
+// and recovery-reap Terminate calls) — mirroring the values the pre-FSM
+// provisioner used (christen and archive respectively). Every one of
+// these is reachable from evaluateStateMachines, which #5's shard-fsm-
+// leader lease assumes converges within a bounded time; an unbounded
+// blocking call here would defeat that bound. See
+// docs/plans/coordinator-horizontal-scaling.md #5 "Real gap #3".
 const (
 	configureTimeout = 30 * time.Second
 	archiveTimeout   = 10 * time.Minute
@@ -589,7 +594,10 @@ func (sh *Shard) evaluateRecovery(ctx context.Context) error {
 	// put and retry next tick — InstanceID is still set, so we haven't
 	// advanced.
 	if deadID != "" && sh.deps.Launcher != nil {
-		if err := sh.deps.Launcher.Terminate(ctx, deadID); err != nil {
+		termCtx, cancel := context.WithTimeout(ctx, archiveTimeout)
+		err := sh.deps.Launcher.Terminate(termCtx, deadID)
+		cancel()
+		if err != nil {
 			log.Printf("shardsm %s: reap %s failed, retrying next tick: %v", sh.ID, deadID, err)
 			return nil
 		}
@@ -684,7 +692,10 @@ func (sh *Shard) evaluateArchiving(ctx context.Context) error {
 	// re-running against an already-gone instance is a no-op; we still clear
 	// the id so the completion check below can fire ArchiveComplete.
 	if instanceID != "" && sh.deps.Launcher != nil {
-		if err := sh.deps.Launcher.Terminate(ctx, instanceID); err != nil {
+		termCtx, cancel := context.WithTimeout(ctx, archiveTimeout)
+		err := sh.deps.Launcher.Terminate(termCtx, instanceID)
+		cancel()
+		if err != nil {
 			log.Printf("shardsm %s: terminate %s, retrying next tick: %v", sh.ID, instanceID, err)
 			return nil
 		}
