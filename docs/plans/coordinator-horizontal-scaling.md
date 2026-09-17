@@ -605,12 +605,42 @@ item-1a procedure, that's a scoped `terraform plan`, confirm exact
 `N to add, 0 to change, 0 to destroy`, then a human runs
 `terraform apply` manually (protected IaC apply).
 
-**Not yet done**: the actual `terraform apply`; a real two-coordinator
-cross-fan-out smoke test (needs a second `coordinator2` compose service —
-the existing one has fixed host port bindings, so `--scale coordinator=2`
-doesn't work); and, once Redis is live in prod, revisiting whether
-`coordinator_desired` can finally move past `1` (this plan's actual
-goal) now that both item 4 and item 5 are addressed.
+**Cross-coordinator smoke test done 2026-09-17** — and it surfaced a real,
+pre-existing, unrelated bug it's worth recording here since it would have
+made the whole feature look broken otherwise. Added `coordinator2`
+(`docker-compose.yml`, fixed host ports `9023`/`9024` since `--scale
+coordinator=2` can't work against the existing service's fixed bindings).
+First attempt hung indefinitely: `coordinator/service/server.go`'s
+`Execute` RPC handler batches response lines into a local slice and only
+flushes via `stream.Send` at 500 lines or stream-end — fine for a bulk
+historical query, but a live follow session rarely produces 500 rows and
+never naturally ends, so a single live row could sit unflushed forever.
+Confirmed via debug tracing that the row correctly flowed ingest → Redis
+publish → the other coordinator's subscriber → `TailBroker.Broadcast`;
+the hang was purely in the gRPC response-batching layer, reproducible
+with a single coordinator and zero Redis involvement — pre-existing,
+unrelated to this plan's own code.
+
+**Fixed 2026-09-17**, phase-aware: `concatStream` (`coordinator/concat_stream.go`)
+gained `InLivePhase() bool` (`return s.advanced`) and a small optional
+`LiveStream` interface; `Execute` type-asserts `result.Stream` once and,
+when in the live phase, flushes every line immediately instead of
+waiting for the 500-line cap — while still batching normally during
+historical replay (relevant for an explicit `tail -n <huge> -f`; a bare
+`tail -f` defaults to 10 lines of history, so the common case was never
+throughput-sensitive here anyway). New regression test
+`coordinator/service/execute_follow_flush_test.go`
+(`TestExecuteRPC_FollowFlushesSingleLineImmediately`) — confirmed it
+fails against the pre-fix code (stashed the fix, re-ran, watched it time
+out) before confirming it passes with the fix restored. With this fixed,
+the smoke test passes cleanly: ingest via `coordinator` (9020) delivered
+promptly to a `tail -f` session against `coordinator2` (9023), crossing
+only via Redis.
+
+**Not yet done**: the actual `terraform apply`; and, once Redis is live
+in prod, revisiting whether `coordinator_desired` can finally move past
+`1` (this plan's actual goal) now that both item 4 and item 5 are
+addressed.
 
 ### Usage stats — DONE, fixed 2026-09-15
 

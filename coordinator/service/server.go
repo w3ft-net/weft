@@ -176,10 +176,23 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 	// channel closes. Notices from follow's historical phase are not
 	// surfaced today (no /tmp writes happen during a read-only
 	// historical batch).
+	//
+	// Once the historical phase gives way to live broker rows, batching
+	// up to batchSize would sit on a single live row indefinitely — a
+	// follow session rarely produces 500 rows in a reasonable window and
+	// the stream itself never naturally ends. inLivePhase (nil for a
+	// non-follow/non-concat stream) lets that phase flush every row
+	// immediately instead, while the historical phase — however large,
+	// e.g. an explicit `tail -n <big> -f` — still batches normally.
 	const batchSize = 500
 	var batch []*pb.Line
 	var stderrAcc strings.Builder
 	firstBatchSent := false
+
+	var inLivePhase func() bool
+	if ls, ok := result.Stream.(coordinator.LiveStream); ok {
+		inLivePhase = ls.InLivePhase
+	}
 
 	flush := func(final bool, notices []*pb.Notice) error {
 		if !final && len(batch) == 0 {
@@ -221,7 +234,7 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 			continue
 		}
 		batch = append(batch, &pb.Line{Raw: line.Raw})
-		if len(batch) >= batchSize {
+		if len(batch) >= batchSize || (inLivePhase != nil && inLivePhase()) {
 			if err := flush(false, nil); err != nil {
 				return err
 			}
