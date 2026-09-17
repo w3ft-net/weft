@@ -16,8 +16,8 @@ they were each written as if `len(coordinators) == 1` were an invariant.
 | 1b | Found: live prod config drift in `app_config_blob` (shard volume sizes, Stripe price IDs) | **Done** — applied, `app_config_blob` no longer drifts |
 | 2 | CloudWatch poller double-ingest | **Done** — per-log-group lease, see below |
 | 3 | Cron/watch executor double-fire | **Done** — per-watch lease, see below |
-| 4 | In-memory per-process state (tail/ingest/usage) | **Usage stats done** (append-only flush, see below); tail/ingest buffers still open |
-| 5 | Shard FSM/registry convergence race | Not started — needs the same lease primitive, as a single global "shard-fsm-leader" lease |
+| 4 | In-memory per-process state (tail/ingest/usage) | **Usage stats done** (append-only flush, see below). `RingBuffer` scoped out — no fix needed (see below). `TailBroker`: designed 2026-09-17, two candidates pending a benchmark — not yet implemented |
+| 5 | Shard FSM/registry convergence race | **Done** 2026-09-17 — `shard-fsm-leader` lease, see below |
 | — | Generic lease primitive (`store.AcquireLease`/`AcquireAndHold`) | **Done** — see below; also fixed a latent concurrent-migration bug this uncovered |
 
 ---
@@ -343,16 +343,160 @@ the bottom of this doc for the primitive itself and a bug it uncovered in
 **Where:** `cmd/coordinator/main.go:127-134`
 
 `TailBroker`, `RingBuffer(Ingest)`, and `CustomerUsageStats` are wired up as
-pure in-memory, per-process state with no cross-instance sync. Behind an
-ALB/NLB round-robining connections across N coordinators, live tail and
-"recent ingest" views only reflect whatever slice of traffic happened to
-land on the instance a given client is connected to. **Still open** — no
-design work done yet. Unlike usage stats below, this isn't a leader/lease
-problem (nothing needs mutual exclusion); it's fragmented read-side state,
-which needs either centralizing the data (shared buffer/pub-sub) or sticky
-routing so a customer's tail/query connections consistently land on the
-instance actually ingesting their data. Separate design question from the
-lease work in #1/#2/#3/#5.
+pure in-memory, per-process state with no cross-instance sync. Unlike usage
+stats (done, below) this isn't a leader/lease problem — nothing needs
+mutual exclusion, it's fragmented read-side state.
+
+### Scoping correction 2026-09-17: `RingBuffer` doesn't actually belong in this item
+
+Original framing lumped `RingBuffer(Ingest)` in with `TailBroker` as
+"fragmented read-side state." It isn't. `RingBuffer` is pure write-side
+buffering — `ingestBatch` (`coordinator/service/server.go:770`) writes rows
+into it and `StartDrain`'s background loop (`coordinator.go:352`) drains
+and routes them to shards; "the write path always goes through it — there's
+no scenario where a caller benefits from skipping it"
+(`coordinator.go:307`). Nothing reads it cross-process — the only
+consumers are that same process's own drain loop and a local `UsagePct()`
+metrics gauge, which is legitimately per-instance-meaningful (you want to
+know *that coordinator's* buffer pressure, not a merged fiction). Each row
+only ever arrives at one coordinator to begin with, so there's no
+duplication risk (unlike poller/cron) and no fragmented-*view* risk (unlike
+tail) — every coordinator just independently drains what it received into
+the right shard, which needs zero cross-instance work. The one real
+property worth naming, not new and not multi-coordinator-specific: rows
+sitting in `RingBuffer` when a coordinator crashes are lost from memory —
+whether that matters depends on whether the sender (weftd, the CloudWatch
+poller) redelivers on a dropped connection, untraced. Out of scope for this
+item; `RingBuffer` needs no design work.
+
+So this item is really just **`TailBroker`.**
+
+### The actual problem
+
+`ingestBatch` calls `Tail.Broadcast(rows)` (`server.go:782`) purely
+locally, same call site as the `RingBuffer.Write` above. A live `tail -f`
+subscriber only sees rows ingested by the exact same coordinator process
+they're gRPC-connected to — not stale, just silently empty if their data
+arrives elsewhere.
+
+**Sticky routing (route a customer's tail connection to whichever
+coordinator is ingesting their data) doesn't actually resolve cleanly.** A
+single customer's ingest isn't reliably single-homed to one coordinator
+today: CloudWatch-sourced ingest is pinned to one coordinator, but only as
+a side effect of #2's per-log-group lease, not by design for this purpose.
+A customer's weftd agents (one per monitored instance, potentially several)
+connect independently via the public NLB with no cross-agent affinity, so
+they can land on different coordinators from each other and from wherever
+the CloudWatch lease landed. There's often no single "the coordinator
+receiving this customer's data" to stick a tail connection to.
+
+### Direction: centralize via fan-out, not sticky routing — two candidates, benchmark before choosing
+
+Two candidates, Postgres `LISTEN`/`NOTIFY` ruled out (payload-size cap and
+throughput-on-a-shared-instance concerns weren't worth it once the other
+two were on the table):
+
+1. **Coordinator-to-coordinator gRPC mesh.** Zero new infra dependency —
+   but there is currently **zero existing coordinator-to-coordinator
+   communication anywhere in this codebase** (checked; coordinators only
+   ever talk to shards/compute), so this is new plumbing, not a small
+   extension of something already there. Naive version (broadcast every
+   ingested row to every peer) has the memory-pressure problem below;
+   avoiding it means building our own subscription-interest-propagation
+   protocol between peers (announce what a coordinator's local subscribers
+   currently care about, maintain a peer interest registry, route only
+   matching rows to only interested peers) — real, nontrivial engineering
+   this candidate doesn't get for free.
+2. **Redis Pub/Sub relay.** New operational dependency — confirmed zero
+   existing Redis/ElastiCache footprint anywhere in this repo or
+   `infrastructure-catalog`'s weft stack, in code or Terraform, so this
+   would be the first place the "stay in Postgres, no new infra"
+   posture established by NAT/the leases breaks. Also reintroduces a
+   fleet-wide single point of failure for tail specifically (a Redis
+   outage breaks tail everywhere, vs. today where a coordinator's own
+   local subscribers work regardless of what else fails) — probably an
+   acceptable trade given tail is already explicitly best-effort
+   (`Broadcast`'s non-blocking-drop semantics, `tail_broker.go:60`,
+   mirror Redis Pub/Sub's own fire-and-forget contract exactly), but a
+   real one to name. In exchange: topic-scoped delivery (below) comes
+   essentially free via native `SUBSCRIBE`/`PSUBSCRIBE`, no
+   interest-propagation protocol to build ourselves.
+
+### Memory pressure / broadcast amplification — the reason naive fan-out fails at the one goal that matters
+
+Flagged 2026-09-17: a naive version of *either* candidate (broadcast every
+row to every peer / every coordinator subscribes to one global channel)
+loses exactly the property this whole plan exists to gain. Per-coordinator
+memory/CPU for tail fan-out would scale with **total cluster ingest
+volume**, not with how much that coordinator's own clients actually care
+about — adding a coordinator to handle more ingest throughput wouldn't
+shrink the tail-fanout burden on any existing one, and total fan-out
+network traffic would grow linearly with coordinator count even though
+tail *demand* (active sessions) hasn't grown at all.
+
+**Fix: topic-scoped delivery, not broadcast-to-everyone.** `RowMatcher`
+(`row_matcher.go:15`) already splits cleanly into a structural filter
+(`Namespace`/`Service`/`Kind`, set once per subscription) and content
+patterns (`Patterns`, grep-style matching on raw row text, can't be mapped
+to a routing key). The structural half is exactly a topic key, at the same
+granularity `IngestingShard` already routes writes by
+(`namespaceID, service`) — nothing new to invent. A coordinator subscribes
+only to the (namespace, service[, kind]) topics its own currently-active
+local subscribers care about, adding/dropping as clients connect/
+disconnect; content-pattern matching stays exactly where it is today,
+applied locally by `Match()` after a row lands on an already-interested
+coordinator.
+
+This is also what tips the mesh-vs-Redis balance further toward Redis:
+`SUBSCRIBE`/`PSUBSCRIBE` gives topic-scoped delivery for free, whereas the
+mesh needs the interest-propagation protocol mentioned above specifically
+to get this property — that protocol *is* the mesh's price of admission
+for not losing the scaling win, not an optional refinement.
+
+**Degenerate case, resolved 2026-09-17: ordinary tail is already naturally
+scoped, `warp.log` is the one accepted exception.** `ExecuteFollow`
+(`coordinator.go:616`, what powers `tail -f`) only runs for a pipeline
+`planner.PlanInDir` can resolve to a real source (`ErrNotPlannable`
+otherwise); the `RowMatcher` it builds (`coordinator.go:646`) always
+carries `plan.SourceNamespace`/`SourceService`/`SourceKind` — so ordinary
+`tail -f /log/<namespace>/<service>` is already topic-scoped today, no
+enforcement work needed. The one exception is `warp.log`, a real designed
+feature ("the all-sources wildcard," `planner/parse.go:17`), which
+deliberately resolves to an empty `Namespace` — "requires a source
+argument" is already true and doesn't close this gap, since `warp.log` *is*
+a source argument, just the intentionally unscoped one. A coordinator
+hosting a `warp.log` tail necessarily subscribes to everything for its
+duration; accepted as the cost of an explicit "show me everything" request
+(presumably rare, operator-driven), not a gap to design around further.
+
+### Benchmark plan before choosing 1 vs. 2
+
+Build two minimal harnesses (not full integrations) — N simulated
+coordinators, each with a real `TailBroker`, wired either via direct
+gRPC/channel fan-out or a real `redis-server` (not `miniredis` — the point
+is measuring actual hop cost). Both must implement topic-scoped delivery
+per above, not naive broadcast, since that's the property actually being
+compared.
+
+- **Latency** — stamp synthetic rows with an origin timestamp on the
+  publishing coordinator, measure arrival in a subscriber's channel on a
+  *different* coordinator. Report p50/p95/p99, not just mean — felt
+  "live-ness" of a tail session is dominated by the occasional slow
+  delivery. Isolate from same-process `Broadcast` cost (unchanged by either
+  design either way).
+- **Throughput ceiling** — sustained rows/sec before queueing grows
+  unbounded or drop rate crosses a threshold, at a few coordinator counts
+  (N=2, 3, maybe 5) — mesh cost is O(N) sends per row from the publisher,
+  Redis publish cost is O(1) with fan-out absorbed inside Redis; worth
+  seeing where that difference starts to matter in practice, if it does at
+  the coordinator counts actually expected here.
+- **Backpressure behavior** — weighted heaviest: what each does when it
+  can't keep up. If either design's backpressure propagates onto the
+  *ingest* hot path (not just tail lagging), that's disqualifying
+  regardless of latency/throughput numbers — it'd turn a best-effort
+  feature into a risk to the durable write path.
+
+Not yet built. Not yet decided.
 
 ### Usage stats — DONE, fixed 2026-09-15
 
@@ -427,13 +571,319 @@ of the ghost-instance problem that was already fixed specifically for the
 calls and conflicting state writes racing on the same shard rows, just at
 the coordinator layer instead of the ASG layer this time.
 
-Needs its own investigation pass — this is the deepest of the five and
-probably wants a design doc of its own once scoped. Now that the lease
-primitive exists (below), the likely shape is a single global
-`"shard-fsm-leader"` lease guarding only the *write*/convergence side
-(`Evaluate` calls that launch/terminate/transition shards) — non-leader
-coordinators would still hydrate and read the registry for query routing,
-just not drive convergence. Not yet designed or implemented.
+**Design 2026-09-16.** A single global `"shard-fsm-leader"` lease, same
+primitive as NAT/poller/cron, guarding only the *write*/convergence side.
+Needs NAT's continuous-retry election loop, not poller/cron's
+try-once-at-boot `AcquireAndHold` — a non-leader has to keep retrying
+every tick in case the leader dies, same reason NAT couldn't use the
+one-shot pattern.
+
+### What gets gated vs. what stays unconditional
+
+`Provisioner.check()` (`provisioner.go:632`) today runs
+`RefreshFromStore()` → `syncShardServices()` → `evaluateStateMachines()`
+every `PollInterval` (1 min prod, `provisioner.go:121`); `Start()`'s loop
+also calls `adoptFromHeartbeats()` before each `check()`. Going through
+each:
+
+- **`RefreshFromStore()`** — pure read, writes only local memory. Stays
+  unconditional on every coordinator, every tick. This is the whole
+  mechanism that makes a separate "leader bounces followers" push
+  unnecessary: a follower already re-syncs to whatever the leader last
+  wrote within one tick, by polling, not by being pushed to.
+- **`syncShardServices()`** (`provisioner.go:703`) — looks like a write
+  (stamps `shard_services`) but the code comment says `AddServiceToShard`
+  is idempotent, "an already-present membership is a cheap no-op."
+  Unconditional — no gating needed.
+- **`adoptFromHeartbeats()` / `ProcessHeartbeat`** (`provisioner.go:482`)
+  — mixed. For a shard already in steady state it calls `ObserveHeartbeat`,
+  which dials-if-missing (an in-process gRPC handle, inherently
+  per-coordinator — can't be shared across processes anyway), bumps
+  `LastHeartbeatAt`, and persists via `TouchHeartbeat`. Not exclusive,
+  stays unconditional — every coordinator needs its own live connections
+  and its own accurate local staleness view for query/ingest routing
+  regardless of leadership. But for `LAUNCHING`/`SUSPENDED` shards (or an
+  unclaimed instance heartbeat) it calls `promoteOnHeartbeat`, which dials
+  the shard and **fires an FSM transition** — exclusive, gate this behind
+  `isLeader()`.
+- **`evaluateStateMachines()`** (bucket + shard `Evaluate`) — launches,
+  terminates, EBS attach/detach, persisted state transitions. Fully
+  exclusive, leader-only.
+
+So the gating surface is narrow: `evaluateStateMachines()` wholesale, plus
+just the `promoteOnHeartbeat` branch inside `ProcessHeartbeat` — not the
+whole heartbeat path.
+
+### Why that split avoids a trap: `LastHeartbeatAt` doesn't need a fix
+
+First instinct was that `RefreshFromStore` would need to start pulling
+`LastHeartbeatAt` from the DB, since it currently skips that field
+deliberately (`registry.go:329`, "the in-memory entry owns more freshly
+than the row" — true only when this process is the one processing
+heartbeats). Gating *all* of `adoptFromHeartbeats` behind the leader lease
+would make that assumption false and freeze every follower's
+`LastHeartbeatAt` at boot forever — and `isStale()` (which both
+`MatchingEntries` and `IngestingShard`, i.e. read *and* write query
+routing, depend on — `registry.go:148`) would eventually reject every
+shard on that follower. Scoping the gate to just `promoteOnHeartbeat`
+avoids this: every coordinator keeps bumping its own `LastHeartbeatAt`
+independently off the same `shard_heartbeats` rows, every tick, leader or
+not. `RefreshFromStore` doesn't need to change for this field.
+
+### Real gap #1: `AZ` / `LaunchAttempts` / `StripeIndex` need to leave the skip-list
+
+These three *are* in `RefreshFromStore`'s current skip-list ("FSM-launch
+bookkeeping... deliberately NOT refreshed," `registry.go:331`) — but
+unlike `LastHeartbeatAt`, nothing keeps them fresh on a process that never
+personally wrote them, and the DB is already authoritative for two of the
+three:
+
+- `LaunchAttempts` — `IncrementShardLaunchAttempts` (`shard.go:162`) is a
+  real atomic DB increment, called *before* the local `sh.LaunchAttempts++`
+  (`shardsm.go:481-485`). A new leader that never personally launched this
+  shard has a stale/zero local count. Impact is bounded: the retry budget
+  (`LaunchRetryBudget`, default 5) becomes "per leader generation" instead
+  of lifetime — a flapping leader means a doomed shard takes longer to
+  reach `GONE`, nothing worse.
+- `AZ` — `SetShardLaunchResult` persists it to DB in the same call that
+  sets `sh.AZ = res.AZ` locally (`shardsm.go:496`). Higher severity if
+  left unfixed: `AZ` pins a *recovery* relaunch to the surviving EBS
+  volume's AZ (EBS volumes are AZ-locked). A new leader driving a
+  `SUSPENDED` shard's recovery relaunch with a stale/blank `AZ` risks
+  picking the wrong AZ and failing to reattach the existing volume.
+- `StripeIndex` — same category, lower-traced risk (bucket-assigned
+  stripe position, used for launch-target selection); include it in the
+  same fix for consistency since the mechanism is identical.
+
+Fix: pull all three into `RefreshFromStore`. No tradeoff the way there
+might be for `LastHeartbeatAt` — DB is never behind memory for any of
+these.
+
+### Real gap #2: `IngestFailures` — the ingest-side circuit breaker can go inert
+
+`RecordIngestFailure`/`ResetIngestFailures` (`registry.go:509,522`) are
+pure in-memory bumps — no dedicated persist call, unlike the other two
+(the DB column only gets written incidentally, whenever some *other*
+transition happens to trigger a full-row `Save`). And it's incremented by
+*whichever coordinator happens to be routing that shard's ingest writes*
+(`shard/shard.go:394`, the write path) — today that's the same process as
+the one evaluating `evaluateIngesting`'s circuit breaker
+(`sh.IngestFailures >= SuspendFailureThreshold`, `shardsm.go:527`) purely
+because there's only one coordinator. Once `evaluateIngesting` is
+leader-only, the leader is very likely reading a counter some *other*
+coordinator is the one actually incrementing — the `DEGRADED` circuit
+breaker could go effectively inert, a silent loss of a safety mechanism
+rather than a crash.
+
+This isn't really a #5 bug — it's a #4-shaped gap (per-process ingest-side
+state, same category as the still-open tail/ingest buffers) that #5's
+leader-gating is what makes consequential. Fix mirrors `TouchHeartbeat`:
+persist synchronously on increment/reset, then let the leader's
+`RefreshFromStore` pull it. Scope as its own small piece of work alongside
+#5, not folded into the same commit. `reconnectFailures` (the other half
+of the same `unhealthy` check) is fine to leave local/unsynced — it's
+inherently "can *this* process reach the shard," and it's the leader's own
+reachability that should matter for the leader's own decision.
+
+### Launch-race and leadership-handoff safety already built in
+
+- **Double-launch is already defused, independent of the lease.**
+  `EC2Provisioner.Launch` (`provisioner_ec2.go:207`) checks
+  `findLiveByShard` (`DescribeInstances` filtered on `tag:shard_id` +
+  `pending|running`) before calling `RunInstances`, adopting an in-flight
+  instance instead of minting a twin — "No ClientToken: idempotency comes
+  from findLiveByShard." Even a stalled leader (GC pause / frozen VM) that
+  resumes after its lease expired and a new leader has started launching
+  can't produce two real EC2 instances for the same shard. Narrow TOCTOU
+  sliver between the `DescribeInstances` check and the `RunInstances`
+  call remains, but that's the same residual risk any lease system has —
+  not specific to #5.
+- **A freshly-elected leader's SM bootstraps correctly.** `ensureSM`
+  builds each `stateless.StateMachine` with
+  `NewStateMachineWithExternalStorage(sh.readState, sh.writeState, ...)`
+  — it never caches "current state" at construction, it re-reads on every
+  `Fire`/`Evaluate` call. Combined with `check()` always running
+  `RefreshFromStore()` first, a new leader has already pulled the latest
+  DB state in the same tick before touching `evaluateStateMachines()`. Per
+  the `Evaluate` doc comment: "a restart... re-drives any half-finished
+  work — there is no boot-vs-running mode." A leadership handoff is
+  structurally the same event as a restart from the SM's point of view.
+- **Archiving's checkpoint fields are already synced.**
+  `evaluateArchiving` (`shardsm.go:619`) gates each of its three steps
+  (export → S3, retire volume, terminate instance) on a persisted field —
+  `ParquetPath`, `EBSVolumeID`, `InstanceID` — and all three (unlike
+  `AZ`/`LaunchAttempts`) are already in `RefreshFromStore`'s synced list.
+  A leader handoff mid-archive is exactly equivalent to a process restart
+  mid-archive, which this code already survives by design. No fix needed.
+  Per-step behavior if a zombie leader resumes mid-step: export's S3 key
+  is deterministic (`s3Prefix/shard-id`, `shard.go:573`, no timestamp), so
+  a redundant concurrent export overwrites rather than orphans an object
+  — though whether the shard's own gRPC `Archive` handler tolerates two
+  concurrent export calls against the same DuckDB file is untraced, worth
+  a quick check before implementing; volume delete and instance terminate
+  are both already idempotent/error-tolerant.
+- **Buckets have no equivalent gap.** `BucketManager` deliberately caches
+  nothing between calls (`app_buckets.go:26`) — every method does a fresh
+  DB read/write. No skip-list-style staleness risk on the bucket side.
+
+### Real gap #3 — the one that matters most: liveness ≠ progress
+
+The lease's renewal loop runs on its own independent goroutine/ticker,
+decoupled from `check()`'s tick loop — deliberate, and correct for
+NAT/poller/cron. But it means a coordinator that's alive enough to make a
+cheap `AcquireLease` call, yet genuinely stuck or deadlocked inside one
+`Evaluate()` call, keeps renewing `"shard-fsm-leader"` forever — no other
+coordinator can ever take over, even though zero convergence work is
+happening. The lease only proves "this process can still reach Postgres,"
+not "this process is making progress." Known failure mode of lease-based
+single-leader systems generally, not a bug specific to this design — but
+worth naming rather than discovering in an incident.
+
+Mitigation isn't in the lease — it's making sure nothing reachable from
+`evaluateStateMachines()` can block unboundedly. `Archive`'s export and
+`retireVolume` are already bounded (`archiveTimeout = 10 * time.Minute`,
+`shardsm.go:24`, via `context.WithTimeout`). `Terminate` (archiving's step
+3) is called with the bare `ctx` passed down from the tick, tracing back
+to the provisioner's long-lived top-level context — no per-call deadline
+found, meaning it currently relies entirely on the AWS SDK's own default
+HTTP timeout, if any. **Audit every blocking call reachable from
+`evaluateStateMachines()` for a bounded context as a named prerequisite
+for implementing #5** — without it, the lease can't actually deliver the
+failover-time bound it's supposed to.
+
+**Concrete mitigation: progress-gated renewal (a deadman's switch), not
+just a bounded-context audit.** Lease-based leader-election systems
+generally solve liveness-≠-progress one of three ways:
+
+1. **Tie renewal to proof of progress, not just DB reachability** — the
+   pattern to adopt here. Kubernetes' `client-go` leader-election package
+   is the widely-used reference: it requires a controller to actually stop
+   its reconcile loops the instant it observes the context passed to
+   `OnStartedLeading` get canceled, and the standard convention layered on
+   top is to also call `os.Exit(1)` inside `OnStoppedLeading` — a
+   deliberate "if you're still running after being told to stop, just
+   die," precisely because a goroutine that ignores cancellation and keeps
+   running is this exact failure mode. For us: the tick loop stamps a
+   `lastProgressAt` (an `atomic.Value`/`atomic.Int64` unix-nanos) after
+   *each* shard's `Evaluate()` call, not just once per full tick — so one
+   stuck shard doesn't mask the others still completing — and the
+   elector's renewal goroutine refuses to renew (or actively calls
+   `ReleaseLease` and stops) once `time.Since(lastProgressAt)` exceeds
+   something like 2× `PollInterval`. This is the recommended fix, layered
+   on top of (not instead of) the bounded-context audit above — the audit
+   shrinks how often this would ever need to trigger; the deadman's switch
+   is the backstop for whatever the audit misses (a genuine deadlock has
+   no context to time out).
+2. **Fencing tokens** — Chubby, ZooKeeper (`zxid`), etcd (revision
+   numbers), and Consul (`ModifyIndex`) attach a monotonically increasing
+   token to each lease acquisition and have the guarded resource reject
+   any write carrying an older token than the newest it's seen, so a
+   resumed zombie leader's writes are no-ops by construction rather than
+   by the operation happening to be idempotent. We're already getting an
+   informal version of this for free: `findLiveByShard`'s AWS-tag lookup
+   and `Terminate`'s "already gone is success" both make the *specific*
+   AWS operation safe against a duplicate actor, with AWS's own state as
+   the source of truth. Not worth building a formal token layer unless
+   implementation turns up a write path that isn't naturally idempotent
+   the way the launch/terminate paths are (a plain `PersistState` full-row
+   `Save` doesn't need one — two writers racing it is just last-write-wins
+   against Postgres, which is already the single source of truth being
+   overwritten, not a separate uncoordinated system).
+3. **Externalize the health signal** — Consul's session-plus-health-check
+   model invalidates a session (and anything locked under it) when an
+   attached health check fails, independent of whether the process itself
+   ever calls renew again — useful specifically because a truly deadlocked
+   process can't run its own watchdog code either. Heavier than (1) for
+   what's likely a rare failure mode; treat as the fallback if (1) proves
+   insufficient in practice, not a day-one requirement. (Our coordinator
+   already exposes `--health-port 9021`, so the plumbing would be "an
+   external prober empowered to `DELETE FROM leases`," not a new health
+   endpoint.)
+
+Separately, but related: `evaluateStateMachines` runs shard `Evaluate`
+calls in a single sequential loop (`provisioner.go:664`), not
+per-shard goroutines, so one shard's slow archive already blocks every
+other shard's convergence for that tick today, with one coordinator.
+#5 doesn't worsen this (a design where multiple coordinators raced to
+cover for a "stuck" one would just reintroduce the double-launch/
+double-transition hazard #5 exists to prevent) — but it does mean the
+bounded-context audit above isn't optional polish, it's what keeps a
+single slow shard from becoming a cluster-wide convergence stall.
+
+### Implemented 2026-09-17
+
+Built as designed above, in this order:
+
+- **Real gap #1** (`logdb/registry.go` `RefreshFromStore`) — `AZ`,
+  `StripeIndex`, `LaunchAttempts` moved out of the permanent skip-list; the
+  DB is never behind memory for these (both writers persist before
+  mutating locally), so there's no `LastHeartbeatAt`-style tradeoff.
+  `LastHeartbeatAt` itself stays excluded, unchanged, per the "why that
+  split avoids a trap" reasoning above. Covered by
+  `TestRefreshFromStore_SyncsLaunchBookkeeping`
+  (`logdb/leader_gaps_test.go`), which simulates a leadership handoff:
+  one write path persists launch bookkeeping the way `runLaunch` does,
+  a second independent registry (never touched the shard before) picks
+  it up via `RefreshFromStore`.
+- **Real gap #2** (`logdb/registry.go` `RecordIngestFailure`/
+  `ResetIngestFailures`, `logdb/shard.go` `SetShardIngestFailures`) — both
+  now persist synchronously, mirroring `TouchHeartbeat`, and
+  `IngestFailures` was pulled into `RefreshFromStore` alongside gap #1's
+  fields. `ResetIngestFailures` only writes through when the counter
+  actually had something to clear (it runs on every successful ingest
+  batch — the hot path — so persisting an already-zero counter on every
+  call would be pure write amplification). Covered by
+  `TestRecordIngestFailure_PersistsAcrossCoordinators` and
+  `TestResetIngestFailures_SkipsWriteWhenAlreadyZero`
+  (`logdb/leader_gaps_test.go`).
+- **Real gap #3, bounded-context half** (`logdb/shardsm.go`
+  `evaluateArchiving`, `evaluateRecovery`) — both `Launcher.Terminate`
+  calls (archive-time and recovery-reap) now run under
+  `context.WithTimeout(ctx, archiveTimeout)`, matching `retireVolume`'s
+  existing pattern, instead of the bare tick `ctx` that had no deadline of
+  its own. Scoped to the two calls the design doc actually traced as
+  unbounded (`Store`/gorm calls elsewhere in the sync path weren't
+  audited — a DB-level `statement_timeout` is a separate, broader gap not
+  raised by this design).
+- **Real gap #3, deadman's switch half** (`logdb/leader_election.go`
+  `leaderTick`/`progressStale`) — `Provisioner.lastProgress` is stamped
+  once per `evaluateStateMachines` tick (via `defer`, so an idle tick with
+  nothing to converge still counts) and again after each individual
+  bucket/shard `Evaluate` call. The election loop refuses to renew — and
+  proactively releases — the lease once `time.Since(lastProgress) >
+  progressStaleFactor(2) * PollInterval`. Covered by
+  `TestLeaderTick_ProgressStaleReleasesLease`
+  (`logdb/leader_election_test.go`), which also confirms a challenger can
+  win the lease immediately after (the DB row is actually released, not
+  just the local flag).
+- **The lease + gating itself** (`logdb/leader_election.go`,
+  `logdb/provisioner.go` `check`/`promoteOnHeartbeat`) —
+  `shard-fsm-leader`, continuous-retry election loop matching
+  `coordinator/nat.go`'s `NATElector` shape (not poller/cron's
+  try-once-at-boot `AcquireAndHold`). Gates exactly the surface identified
+  above: `evaluateStateMachines()` wholesale (from `check`) and the
+  `promoteOnHeartbeat` branch inside `ProcessHeartbeat` — `RefreshFromStore`,
+  `syncShardServices`, and `ObserveHeartbeat` stay unconditional on every
+  coordinator, every tick, as designed. `Provisioner.leading` defaults to
+  `true` in `NewProvisioner` and `startLeaderElection` no-ops when
+  `Holder`/`Store` aren't configured, so every existing test that drives
+  `check()`/`evaluateStateMachines()` directly (never through `Start`)
+  keeps behaving exactly as before — single-process, always leader.
+  `cmd/coordinator/main.go` threads the same `coordinatorHolder()` id
+  already used for the NAT/poller/cron leases into `logdb.Config.Holder`.
+  Covered by `logdb/leader_election_test.go` (lease acquire/renew/failover,
+  mirroring `coordinator/nat_test.go`'s pattern) and
+  `TestCheck_EvaluateStateMachinesGatedBehindLeader`/
+  `TestProcessHeartbeat_PromoteGatedBehindLeader`
+  (`logdb/leader_election_test.go`).
+
+Not covered by this pass: a full audit of every `Store`/gorm call
+reachable from `evaluateStateMachines` for a bounded context (only the
+`Launcher.Terminate` calls the design doc actually traced were fixed), and
+option 3 (externalized health-check-based lease invalidation) from the
+liveness-≠-progress discussion above — the deadman's switch (option 1) is
+what shipped; fall back to (3) only if (1) proves insufficient in
+practice.
 
 ## Generic lease primitive — DONE, built 2026-09-15
 

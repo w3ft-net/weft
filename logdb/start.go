@@ -50,6 +50,14 @@ type Config struct {
 	// AWSRegion is threaded into NewEC2Provisioner / NewEC2VolumeManager.
 	// Each loads its own AWS config in that region.
 	AWSRegion string
+
+	// Holder identifies this process for the "shard-fsm-leader" lease
+	// (ProvisionerConfig.Holder) — the same holder id main.go's
+	// coordinatorHolder() mints for the NAT/poller/cron leases. Empty
+	// disables the election: the Provisioner stays leader unconditionally,
+	// the pre-#5 single-process behavior. See
+	// docs/plans/coordinator-horizontal-scaling.md #5.
+	Holder string
 }
 
 // Start hydrates the shard registry, constructs the Provisioner with
@@ -206,6 +214,7 @@ func startProd(cfg Config, reg *ShardRegistry, lambdaURL string, subnets map[str
 	provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
 	provConfig.LambdaFunctionURL = lambdaURL
 	provConfig.VolumeSizesGB = parseShardVolumeSizes()
+	provConfig.Holder = cfg.Holder
 	log.Printf("provisioner: per-tier volume sizes (GiB) from env: %v (tiers absent fall back to %d)", provConfig.VolumeSizesGB, defaultShardVolumeGB)
 	prov := NewProvisioner(reg, launcher, provConfig)
 	prov.SetVolumeManager(vm)
@@ -274,6 +283,7 @@ func startDev(cfg Config, reg *ShardRegistry) (*Provisioner, error) {
 	provConfig := DevProvisionerConfig()
 	provConfig.ShardSecret = cfg.ShardSecret
 	provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
+	provConfig.Holder = cfg.Holder
 	prov := NewProvisioner(reg, launcher, provConfig)
 
 	prov.SetStore(cfg.DB)

@@ -95,6 +95,15 @@ type ProvisionerConfig struct {
 	// onto ShardDeps so a fresh launch sizes its EBS volume per tier. Nil in
 	// dev/test, where the docker launcher ignores volume size anyway.
 	VolumeSizesGB map[string]int32
+	// Holder identifies this process for the "shard-fsm-leader" lease (see
+	// docs/plans/coordinator-horizontal-scaling.md #5) — the same holder
+	// id main.go's coordinatorHolder() mints for the NAT/poller/cron
+	// leases. Start no-ops the election when Holder is empty (or Store is
+	// nil): NewProvisioner defaults isLeader() to true, so this process
+	// just stays leader unconditionally — the pre-#5 behavior, and the
+	// expected shape for every test that constructs a Provisioner directly
+	// without going through Start.
+	Holder string
 }
 
 // defaultCloseRebindGrace is the production default for the rebind
@@ -243,11 +252,31 @@ type Provisioner struct {
 	// multi-tick convergence can't straddle a real window boundary and
 	// spuriously mint a next-window shard. Never nil after NewProvisioner.
 	clock func() time.Time
+
+	// leading is whether this process currently holds the
+	// "shard-fsm-leader" lease — the gate around evaluateStateMachines and
+	// promoteOnHeartbeat (see isLeader, docs/plans/
+	// coordinator-horizontal-scaling.md #5). Defaults to true: a
+	// Provisioner nobody ever calls startLeaderElection on (every test
+	// that builds one directly, plus any Start call with no Holder/Store
+	// configured) behaves exactly as it did before #5 existed — single
+	// process, always convergence-driving. Only startLeaderElection ever
+	// flips it based on real lease ownership.
+	leading atomic.Bool
+	// lastProgress is the unix-nanos timestamp of the last observed
+	// convergence progress — stamped inside evaluateStateMachines, once
+	// per tick and again after each individual bucket/shard Evaluate call
+	// (not just once per tick, so one stuck shard doesn't mask the others
+	// still completing). The election loop's deadman's switch reads this:
+	// a process that can still renew the lease in Postgres but is stuck
+	// inside one Evaluate call must not keep the lease forever. See
+	// docs/plans/coordinator-horizontal-scaling.md #5 "Real gap #3".
+	lastProgress atomic.Int64
 }
 
 // NewProvisioner creates a provisioner.
 func NewProvisioner(registry *ShardRegistry, launcher ShardLauncher, config ProvisionerConfig) *Provisioner {
-	return &Provisioner{
+	p := &Provisioner{
 		registry:   registry,
 		launcher:   launcher,
 		config:     config,
@@ -257,6 +286,8 @@ func NewProvisioner(registry *ShardRegistry, launcher ShardLauncher, config Prov
 		bucketSMs:  map[int64]*BucketSM{},
 		clock:      time.Now,
 	}
+	p.leading.Store(true)
+	return p
 }
 
 // nowUTC is the provisioner's clock, normalised to UTC. All window
@@ -379,6 +410,7 @@ func (p *Provisioner) ShardDescriptorsFor(tr TimeRange, namespaceID uint, servic
 // Start runs the provisioner loop until the context is cancelled.
 // It ensures at least one INGESTING shard exists on startup.
 func (p *Provisioner) Start(ctx context.Context) {
+	p.startLeaderElection(ctx)
 	go func() {
 		// First pass immediately so shards begin launching without waiting
 		// a full PollInterval: adoptFromHeartbeats catches up any heartbeats
@@ -533,7 +565,18 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 // heartbeat retries, so it self-heals once the network is fixed without any
 // relaunch churn (a LAUNCHING shard counts as in-flight, so the bucket SM
 // holds rather than minting a replacement into the same wall).
+//
+// Gated behind isLeader(): firing an FSM transition is exclusive, same as
+// evaluateStateMachines. A non-leader coordinator that happens to receive
+// this heartbeat's RPC (heartbeats aren't sticky-routed to the leader)
+// silently drops it here — the persisted row from Server.Heartbeat's
+// InsertHeartbeat is unaffected, so the leader's own adoptFromHeartbeats
+// catch-up sweep (unconditional, every tick) picks it up within one
+// PollInterval. See docs/plans/coordinator-horizontal-scaling.md #5.
 func (p *Provisioner) promoteOnHeartbeat(ctx context.Context, e *Shard, hb store.ShardHeartbeat) {
+	if !p.isLeader() {
+		return
+	}
 	dialed, err := e.dialConfigure(ctx, hb)
 	if err != nil {
 		log.Printf("provisioner: heartbeat %s (instance %s): not promoting — coordinator can't reach %s: %v", e.ID, hb.InstanceID, hb.Addr, err)
@@ -634,19 +677,45 @@ func (p *Provisioner) check(ctx context.Context) {
 	// Service-drift: a service onboarded after a shard christened isn't on
 	// its stamp yet. The FSM cascade is deliberately lifecycle-only, so
 	// this membership sweep (the old reconciler's op 1) stays a standalone
-	// pass rather than a bucket-SM concern.
+	// pass rather than a bucket-SM concern. Unconditional — AddServiceToShard
+	// is idempotent, so an already-present membership is a cheap no-op even
+	// run by a coordinator that isn't the shard-fsm-leader. See
+	// docs/plans/coordinator-horizontal-scaling.md #5.
 	p.syncShardServices()
 
 	// FSM convergence — buckets first (cascade directives + minting), then
-	// shards (their own launch/stale/recovery/archive work).
-	p.evaluateStateMachines(ctx)
+	// shards (their own launch/stale/recovery/archive work). Exclusive:
+	// launches, terminates, and persisted state transitions must only ever
+	// be driven by one coordinator at a time, so this is gated behind the
+	// shard-fsm-leader lease. See docs/plans/coordinator-horizontal-scaling.md
+	// #5.
+	if p.isLeader() {
+		p.evaluateStateMachines(ctx)
+	}
 }
+
+// isLeader reports whether this process currently holds the
+// "shard-fsm-leader" lease. See the leading field comment and
+// docs/plans/coordinator-horizontal-scaling.md #5.
+func (p *Provisioner) isLeader() bool { return p.leading.Load() }
+
+// markProgress stamps lastProgress with the current time — called once per
+// evaluateStateMachines tick (via defer, so an idle tick with nothing to
+// converge still counts as progress) and again after each individual
+// bucket/shard Evaluate call, so a single stuck shard doesn't mask the
+// others still completing. See the lastProgress field comment.
+func (p *Provisioner) markProgress() { p.lastProgress.Store(time.Now().UnixNano()) }
 
 // evaluateStateMachines drives every bucket SM then every shard SM one
 // tick toward convergence. Buckets run first: a WARMING bucket mints new
 // shard SMs, and re-snapshotting after the bucket pass lets those minted
 // shards Evaluate the same tick (their launch starts now, not next tick).
+//
+// Only ever called while holding the shard-fsm-leader lease (see check) —
+// callers driving this directly in tests are implicitly leader via
+// NewProvisioner's leading default.
 func (p *Provisioner) evaluateStateMachines(ctx context.Context) {
+	defer p.markProgress()
 	p.ensureBucketSMs()
 
 	p.smMu.RLock()
@@ -659,6 +728,7 @@ func (p *Provisioner) evaluateStateMachines(ctx context.Context) {
 		if err := b.Evaluate(ctx); err != nil {
 			log.Printf("provisioner: bucket %d Evaluate: %v", b.ID, err)
 		}
+		p.markProgress()
 	}
 
 	deps := p.shardDeps()
@@ -667,6 +737,7 @@ func (p *Provisioner) evaluateStateMachines(ctx context.Context) {
 		if err := e.Evaluate(ctx); err != nil {
 			log.Printf("provisioner: shard %s Evaluate: %v", e.ID, err)
 		}
+		p.markProgress()
 	}
 }
 

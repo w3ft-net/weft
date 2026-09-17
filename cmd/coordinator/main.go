@@ -194,17 +194,24 @@ func main() {
 	provCtx, provCancel := context.WithCancel(context.Background())
 	defer provCancel()
 
+	// Identifies this process for the lease table (poller/cron/NAT mutual
+	// exclusion, and now the shard-fsm-leader lease — see
+	// docs/plans/coordinator-horizontal-scaling.md #5). Computed before
+	// logdb.Start so the provisioner's own election loop can use it too.
+	holder := coordinatorHolder()
+
 	// Shard-data control plane: registry hydration, provisioner +
 	// launcher, lifecycle poller. All policy from env lives inside
 	// logdb (SHARD_<TIER>_SUBNETS / SHARD_<TIER>_LAUNCH_TEMPLATE select
 	// EC2-direct launching); only the runtime-derived inputs (db, secret,
-	// region) cross the boundary. logdb.Start owns the registry and
-	// returns it inside the provisioner.
+	// region, holder) cross the boundary. logdb.Start owns the registry
+	// and returns it inside the provisioner.
 	prov, err := logdb.Start(logdb.Config{
 		Ctx:         provCtx,
 		DB:          db,
 		ShardSecret: shardSecret,
 		AWSRegion:   *awsRegion,
+		Holder:      holder,
 	})
 	if err != nil {
 		log.Fatalf("logdb.Start: %v", err)
@@ -217,10 +224,6 @@ func main() {
 	// hydration; this block covers the pieces that run for the life
 	// of the process or depend on live buckets.
 	{
-		// Identifies this process for the lease table (poller/cron
-		// mutual exclusion once the coordinator ASG scales past 1).
-		holder := coordinatorHolder()
-
 		// Start usage metering flush (every 30 seconds).
 		coord.StartUsageFlush(drainCtx, db)
 
