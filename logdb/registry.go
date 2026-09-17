@@ -177,6 +177,10 @@ type RegistryStore interface {
 	ListShards() ([]*Shard, error)
 	GetShard(id string) (*Shard, bool, error)
 	TouchHeartbeat(id string, rowCount int64, at time.Time, binarySHA string) error
+	// SetShardIngestFailures persists the consecutive-ingest-failure
+	// counter. Narrow write, mirroring TouchHeartbeat — see
+	// RecordIngestFailure/ResetIngestFailures.
+	SetShardIngestFailures(id string, n int) error
 	// ListShardServices returns every shard_services row; the registry
 	// groups it by shard_id to populate each entry's in-memory service
 	// membership at boot/refresh.
@@ -327,10 +331,23 @@ func (r *ShardRegistry) RefreshFromStore() {
 		entry.EBSVolumeID = f.EBSVolumeID
 		entry.HeartbeatToken = f.HeartbeatToken
 		entry.BucketID = f.BucketID
-		// Liveness fields the in-memory entry owns more freshly than the
-		// row (LastHeartbeatAt, IngestFailures) and FSM-launch bookkeeping
-		// (AZ, StripeIndex, LaunchAttempts) are deliberately NOT refreshed
-		// here — matching the pre-collapse RefreshFromStore.
+		// FSM-launch bookkeeping (AZ, StripeIndex, LaunchAttempts) and
+		// IngestFailures are refreshed from the DB like everything else
+		// above — see docs/plans/coordinator-horizontal-scaling.md #5
+		// "Real gap #1"/"Real gap #2". The DB is never behind memory for
+		// AZ/StripeIndex/LaunchAttempts (both writers persist before
+		// mutating locally, shardsm.go:481-498); IngestFailures now
+		// persists synchronously in RecordIngestFailure/ResetIngestFailures
+		// below, so it's the same shape. Only LastHeartbeatAt keeps the old
+		// "in-memory owns it more freshly" exception — every coordinator
+		// bumps its own copy off the same shard_heartbeats rows regardless
+		// of leadership (see the plan doc for why gating that would be a
+		// trap), so refreshing it here would make a coordinator that isn't
+		// currently processing this shard's heartbeats fight itself.
+		entry.AZ = f.AZ
+		entry.StripeIndex = f.StripeIndex
+		entry.LaunchAttempts = f.LaunchAttempts
+		entry.IngestFailures = f.IngestFailures
 		// Only refresh services when the shard_services read succeeded;
 		// on a transient error leave the existing membership rather than
 		// wiping live routing to nil.
@@ -508,22 +525,50 @@ func (r *ShardRegistry) AddServiceToShard(id string, namespaceID uint, service s
 // don't accumulate.
 func (r *ShardRegistry) RecordIngestFailure(id string) (count, threshold int) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	e, ok := r.entries[id]
 	if !ok {
+		r.mu.Unlock()
 		return 0, SuspendFailureThreshold
 	}
 	e.IngestFailures++
-	return e.IngestFailures, SuspendFailureThreshold
+	count = e.IngestFailures
+	r.mu.Unlock()
+	// Persisted synchronously (mirrors TouchHeartbeat) so a leader gated
+	// behind #5's shard-fsm-leader lease reads a counter this process — or
+	// whichever coordinator is actually routing this shard's ingest writes
+	// — is actually incrementing, rather than the leader's own local (and
+	// possibly always-zero) copy. See
+	// docs/plans/coordinator-horizontal-scaling.md #5 "Real gap #2". The
+	// failure path is not the hot path, so an unconditional write here
+	// isn't a throughput concern the way it would be on every reset below.
+	if r.store != nil {
+		if err := r.store.SetShardIngestFailures(id, count); err != nil {
+			log.Printf("registry: persist ingest failures %s: %v", id, err)
+		}
+	}
+	return count, SuspendFailureThreshold
 }
 
 // ResetIngestFailures clears the consecutive-failure counter for a shard
-// after a successful ingest.
+// after a successful ingest. Only writes through to the store when the
+// counter actually had something to clear — Ingest.Ingest calls this on
+// every successful batch (the hot path), so persisting an already-zero
+// counter on every single call would be pure write amplification under
+// load. See docs/plans/coordinator-horizontal-scaling.md #5 "Real gap #2".
 func (r *ShardRegistry) ResetIngestFailures(id string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if e, ok := r.entries[id]; ok {
-		e.IngestFailures = 0
+	e, ok := r.entries[id]
+	if !ok {
+		r.mu.Unlock()
+		return
+	}
+	hadFailures := e.IngestFailures != 0
+	e.IngestFailures = 0
+	r.mu.Unlock()
+	if hadFailures && r.store != nil {
+		if err := r.store.SetShardIngestFailures(id, 0); err != nil {
+			log.Printf("registry: persist ingest failures reset %s: %v", id, err)
+		}
 	}
 }
 

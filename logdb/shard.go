@@ -158,6 +158,19 @@ func (s ShardStore) SetShardAddr(id, addr string) error {
 		Select("Addr").Updates(&Shard{Addr: addr}).Error
 }
 
+// SetShardIngestFailures persists the consecutive-ingest-failure counter.
+// Narrow (Select forces a zero value to write, e.g. a reset to 0) so it
+// can't race a state write. Mirrors TouchHeartbeat: called synchronously
+// from ShardRegistry.RecordIngestFailure/ResetIngestFailures so the
+// ingest-side circuit breaker (evaluateIngesting's threshold check) stays
+// meaningful once evaluateStateMachines is gated to a single leader that
+// may not be the coordinator actually routing this shard's ingest writes.
+// See docs/plans/coordinator-horizontal-scaling.md #5 "Real gap #2".
+func (s ShardStore) SetShardIngestFailures(id string, n int) error {
+	return s.db().Model(&Shard{}).Where("id = ?", id).
+		Select("IngestFailures").Updates(&Shard{IngestFailures: n}).Error
+}
+
 // IncrementShardLaunchAttempts bumps launch_attempts by one.
 func (s ShardStore) IncrementShardLaunchAttempts(id string) error {
 	return s.db().Model(&Shard{}).Where("id = ?", id).

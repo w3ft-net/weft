@@ -34,6 +34,10 @@ type fakeRegistryStore struct {
 	// log_groups.
 	shardServices  []store.ShardService
 	bucketServices map[int64][]store.ShardService
+	// ingestFailureWrites counts SetShardIngestFailures calls — separate
+	// from saves (SaveShard) since RecordIngestFailure/ResetIngestFailures
+	// persist via the narrow write, not a full SaveShard.
+	ingestFailureWrites int
 }
 
 func newFakeRegistryStore() *fakeRegistryStore {
@@ -88,6 +92,16 @@ func (f *fakeRegistryStore) TouchHeartbeat(id string, rowCount int64, at time.Ti
 		rec.RowCount = rowCount
 		rec.LastHeartbeatAt = at
 		rec.BinarySHA = binarySHA
+	}
+	return nil
+}
+
+func (f *fakeRegistryStore) SetShardIngestFailures(id string, n int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ingestFailureWrites++
+	if rec, ok := f.records[id]; ok {
+		rec.IngestFailures = n
 	}
 	return nil
 }
