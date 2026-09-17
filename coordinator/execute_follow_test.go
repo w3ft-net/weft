@@ -18,6 +18,7 @@ import (
 func TestExecuteFollow_HistoricalThenBroker(t *testing.T) {
 	c := setupTestCoordinator(t)
 	c.Tail = NewTailBroker()
+	c.TailFanout = NewTailFanout(c.Tail, "", false)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -72,6 +73,7 @@ func TestExecuteFollow_HistoricalThenBroker(t *testing.T) {
 func TestExecuteFollow_RelativeSourceResolvesAgainstCwd(t *testing.T) {
 	c := setupTestCoordinator(t)
 	c.Tail = NewTailBroker()
+	c.TailFanout = NewTailFanout(c.Tail, "", false)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -112,6 +114,7 @@ func TestExecuteFollow_RelativeSourceResolvesAgainstCwd(t *testing.T) {
 func TestExecuteFollow_NoBroker_Errors(t *testing.T) {
 	c := setupTestCoordinator(t)
 	c.Tail = nil
+	c.TailFanout = nil
 
 	_, err := c.ExecuteFollow(context.Background(), "tail vimgym.log", fullRange, "kevlar", "", nil)
 	if err == nil {
@@ -127,6 +130,7 @@ func TestExecuteFollow_NoBroker_Errors(t *testing.T) {
 func TestExecuteFollow_NonLogPipeline_Rejected(t *testing.T) {
 	c := setupTestCoordinator(t)
 	c.Tail = NewTailBroker()
+	c.TailFanout = NewTailFanout(c.Tail, "", false)
 
 	_, err := c.ExecuteFollow(context.Background(), "echo hi", fullRange, "kevlar", "", nil)
 	if !errors.Is(err, planner.ErrNotPlannable) {

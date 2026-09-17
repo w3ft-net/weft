@@ -65,6 +65,10 @@ services:
       # Use the real gRPC compute pool instead of in-process so the
       # coordinator→compute boundary is on the wire.
       COMPUTE_ADDR: compute:9010
+      # Cross-coordinator tail -f fan-out (docs/plans/coordinator-horizontal-scaling.md
+      # item 4). Internal Docker-network port — 6380 (below) is only the
+      # host-exposed mapping the bench harness reaches from outside Compose.
+      REDIS_ADDR: redis:6379
       # DockerLauncher config — coordinator spawns sibling shard
       # containers via the bind-mounted docker socket. Each shard's
       # DuckDB + shard.json lives in a host subdir under
@@ -83,6 +87,54 @@ services:
       - "9021:9021"
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      compute:
+        condition: service_started
+
+  # Second coordinator instance, for manually exercising cross-coordinator
+  # tail -f fan-out (docs/plans/coordinator-horizontal-scaling.md item 4):
+  # ingest via `coordinator` (9020), tail -f against this one (9023) for
+  # the same namespace/service, and confirm the row still arrives — it
+  # only ever crosses via Redis, since this coordinator never receives it
+  # locally. Identical to `coordinator` above except its host port
+  # bindings (a plain `--scale coordinator=2` can't work: the `coordinator`
+  # service above has fixed host ports). Not part of the default `docker
+  # compose up` critical path — start explicitly when running that smoke
+  # test: `docker compose up -d coordinator2`.
+  coordinator2:
+    image: weft-server
+    pull_policy: never
+    entrypoint: ["/usr/local/bin/entrypoint.sh"]
+    environment:
+      ROLE: coordinator
+      DB_DSN: host=postgres dbname=weft user=weft password=weft sslmode=disable
+      WEFT_ALLOW_SCHEMA_BOOTSTRAP: "1"
+      WEFT_CUSTOMER: kevlar
+      SHARD_SECRET: dev-shard-secret
+      JWT_SECRET: dev-secret-change-in-production
+      COMPUTE_ADDR: compute:9010
+      REDIS_ADDR: redis:6379
+      WEFT_LAUNCHER: docker
+      WEFT_SHARD_IMAGE: weft-server
+      WEFT_DOCKER_NETWORK: weft_default
+      WEFT_HOST_DATA_ROOT: ${WEFT_HOST_DATA_ROOT:-${PWD}/dev/shard-data}
+      WEFT_LOCAL_DATA_ROOT: /opt/app/shard-data
+      # Shards this coordinator ever launches (only if it wins the
+      # shard-fsm-leader lease) still report to `coordinator`, not
+      # itself — this dev topology's fixed shard-heartbeat address.
+      WEFT_COORDINATOR_ADDR: coordinator:9020
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${WEFT_HOST_DATA_ROOT:-${PWD}/dev/shard-data}:/opt/app/shard-data
+    ports:
+      - "9023:9020"
+      - "9024:9021"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       compute:
         condition: service_started
@@ -203,6 +255,23 @@ services:
       - "9091:9091"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Real Pub/Sub server for the Redis-candidate half of the tail-fanout
+  # benchmark (docs/plans/coordinator-horizontal-scaling.md item 4,
+  # bench/tailfanout/redis.go). Valkey, not Redis Inc.'s image, to avoid
+  # its post-2024 source-available licensing question entirely — same
+  # wire protocol, same go-redis client. Remapped external port mirrors
+  # postgres's 5433:5432 (avoid colliding with a developer's own local
+  # redis-server on 6379).
+  redis:
+    image: valkey/valkey:8-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5

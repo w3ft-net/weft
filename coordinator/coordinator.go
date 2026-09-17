@@ -155,6 +155,7 @@ func (r *ExecuteResult) Drain(ctx context.Context) (*DrainedResult, error) {
 type Coordinator struct {
 	Pool         compute.ComputePool     // nil = no compute support
 	Tail         *TailBroker             // nil = no live-tail subscriptions
+	TailFanout   *TailFanout             // nil exactly when Tail is nil; wraps Tail, with or without Redis configured
 	Ingest       *RingBuffer             // write path: IngestStream → buffer → shards. NewCoordinator always installs one; StartDrain still has to be called explicitly.
 	Provisioner  *logdb.Provisioner      // shard lifecycle + registry. Never nil after NewCoordinator; main.go swaps in the real one once logdb.Start completes.
 	Usage        *CustomerUsageStats     // nil = no per-customer byte metering
@@ -212,6 +213,13 @@ type CoordinatorConfig struct {
 	Usage    *CustomerUsageStats
 	DLQ      *DLQ
 	Errors   *IngestionErrorRecorder
+
+	// RedisAddr/RedisTLS configure TailFanout's cross-coordinator
+	// delivery (docs/plans/coordinator-horizontal-scaling.md item 4).
+	// RedisAddr == "" leaves tail -f local-only, same as before this
+	// field existed.
+	RedisAddr string
+	RedisTLS  bool
 
 	// LambdaFunctionURL is the Lambda endpoint for cold shard queries.
 	// Passed to compute workers for archived shard descriptors.
@@ -332,7 +340,7 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 	if cfg.Store != nil {
 		prov.SetStore(cfg.Store)
 	}
-	return &Coordinator{
+	c := &Coordinator{
 		Pool:                   pool,
 		Provisioner:            prov,
 		Tail:                   cfg.Tail,
@@ -345,6 +353,10 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		Notifier:               cfg.Notifier,
 		ScriptExecutionTimeout: cfg.ScriptExecutionTimeout,
 	}
+	if cfg.Tail != nil {
+		c.TailFanout = NewTailFanout(cfg.Tail, cfg.RedisAddr, cfg.RedisTLS)
+	}
+	return c
 }
 
 // StartDrain runs a background goroutine that drains the ring buffer
@@ -617,7 +629,7 @@ func (c *Coordinator) ExecuteWithDir(pipeline string, tr TimeRange, customer, us
 // historical pass; if that changes, plumb Notices through the concat
 // transition.
 func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr TimeRange, customer, userID string, dirStack []string) (*ExecuteResult, error) {
-	if c.Tail == nil {
+	if c.TailFanout == nil {
 		return nil, fmt.Errorf("ExecuteFollow: coordinator has no tail broker")
 	}
 	// Plan again here just to extract the live-filter args
@@ -652,11 +664,11 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 	filter := BuildLiveFilter(plan)
 
 	next := func() compute.LineStream {
-		id, ch := c.Tail.Subscribe(ctx, matcher)
+		id, ch := c.TailFanout.Subscribe(ctx, matcher)
 		return &brokerStream{
 			ch:     ch,
 			filter: filter,
-			unsub:  func() { c.Tail.Unsubscribe(id) },
+			unsub:  func() { c.TailFanout.Unsubscribe(id, matcher) },
 		}
 	}
 

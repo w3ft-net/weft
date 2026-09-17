@@ -151,6 +151,7 @@ func ensureData(tb testing.TB, _ pb.WeftCoordinatorClient, n int) {
 
 	for i := 0; i < n; i++ {
 		app := apps[r.Intn(len(apps))]
+		ns, svc, _ := strings.Cut(app, "/")
 		level := levels[r.Intn(len(levels))]
 		inst := instances[r.Intn(len(instances))]
 		action := actions[r.Intn(len(actions))]
@@ -161,14 +162,15 @@ func ensureData(tb testing.TB, _ pb.WeftCoordinatorClient, n int) {
 			ts.Format("2006/01/02 15:04:05"), level, app, inst, action, status)
 
 		row := &pb.LogRow{
-			LineNum:  int64(i + 1),
-			Raw:      raw,
-			App:      app,
-			Level:    level,
-			Instance: inst,
-			Customer: "kevlar",
-			TsUnixNs: ts.UnixNano(),
-			Fields:   strings.Fields(raw),
+			LineNum:   int64(i + 1),
+			Raw:       raw,
+			Namespace: ns,
+			Service:   svc,
+			Level:     level,
+			Instance:  inst,
+			Customer:  "kevlar",
+			TsUnixNs:  ts.UnixNano(),
+			Fields:    strings.Fields(raw),
 		}
 
 		if err := stream.Send(row); err != nil {
@@ -445,17 +447,19 @@ func benchTailFanout(b *testing.B, numSubscribers int) {
 		r := rand.New(rand.NewSource(int64(i)))
 		for j := 0; j < ingestCount; j++ {
 			app := apps[r.Intn(len(apps))]
+			ns, svc, _ := strings.Cut(app, "/")
 			level := levels[r.Intn(len(levels))]
 			action := actions[r.Intn(len(actions))]
 			ts := baseTime.Add(time.Duration(j) * time.Millisecond)
 			ingestStream.Send(&pb.LogRow{
-				LineNum:  int64(j),
-				Raw:      fmt.Sprintf("%s %s %s i-001 %s", ts.Format("2006/01/02 15:04:05"), level, app, action),
-				App:      app,
-				Level:    level,
-				Instance: "i-001",
-				Customer: "kevlar",
-				TsUnixNs: ts.UnixNano(),
+				LineNum:   int64(j),
+				Raw:       fmt.Sprintf("%s %s %s i-001 %s", ts.Format("2006/01/02 15:04:05"), level, app, action),
+				Namespace: ns,
+				Service:   svc,
+				Level:     level,
+				Instance:  "i-001",
+				Customer:  "kevlar",
+				TsUnixNs:  ts.UnixNano(),
 			})
 		}
 		ingestStream.CloseAndRecv()

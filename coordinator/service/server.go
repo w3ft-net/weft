@@ -777,9 +777,10 @@ func (s *Server) ingestBatch(rows []*pb.LogRow) {
 		log.Printf("CRITICAL: ring buffer at %d%% with no ingesting shards — data will be lost", pct)
 	}
 
-	// Fan out to tail -f subscribers.
-	if s.Coord.Tail != nil {
-		s.Coord.Tail.Broadcast(rows)
+	// Fan out to tail -f subscribers (local, plus any other coordinators
+	// with interested subscribers if Redis fan-out is configured).
+	if s.Coord.TailFanout != nil {
+		s.Coord.TailFanout.Publish(rows)
 	}
 }
 

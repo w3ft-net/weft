@@ -16,7 +16,7 @@ they were each written as if `len(coordinators) == 1` were an invariant.
 | 1b | Found: live prod config drift in `app_config_blob` (shard volume sizes, Stripe price IDs) | **Done** — applied, `app_config_blob` no longer drifts |
 | 2 | CloudWatch poller double-ingest | **Done** — per-log-group lease, see below |
 | 3 | Cron/watch executor double-fire | **Done** — per-watch lease, see below |
-| 4 | In-memory per-process state (tail/ingest/usage) | **Usage stats done** (append-only flush, see below). `RingBuffer` scoped out — no fix needed (see below). `TailBroker`: designed 2026-09-17, two candidates pending a benchmark — not yet implemented |
+| 4 | In-memory per-process state (tail/ingest/usage) | **Usage stats done** (append-only flush, see below). `RingBuffer` scoped out — no fix needed (see below). `TailBroker`: benchmarked 2026-09-17, Redis Pub/Sub won, **production wiring done** 2026-09-17 (`coordinator.TailFanout`, see below) — Terraform for the ElastiCache instance is written but **not yet applied** (protected IaC apply, left for a human) |
 | 5 | Shard FSM/registry convergence race | **Done** 2026-09-17 — `shard-fsm-leader` lease, see below |
 | — | Generic lease primitive (`store.AcquireLease`/`AcquireAndHold`) | **Done** — see below; also fixed a latent concurrent-migration bug this uncovered |
 
@@ -496,7 +496,121 @@ compared.
   regardless of latency/throughput numbers — it'd turn a best-effort
   feature into a risk to the durable write path.
 
-Not yet built. Not yet decided.
+**Built and decided 2026-09-17.** Harness lives under `bench/tailfanout/`:
+`node.go` wraps a real, unmodified `coordinator.TailBroker` per simulated
+node behind a small `Transport` interface (`AnnounceInterest`/`Publish`/
+`SetDeliverFunc`/`Close`), so a row delivered from a peer goes through the
+exact same `RowMatcher.Match` (including content-pattern filtering) as a
+locally-ingested one, for both candidates, for free. `mesh.go` implements
+the gRPC-mesh candidate: a new benchmark-only peer protocol
+(`bench/tailfanout/meshpb/mesh.proto`, deliberately kept out of
+`proto/weftpb` so it doesn't trip `scripts/check-wire-bump.sh`'s CLI/agent
+wire-version gate) with a self-built interest-propagation protocol over a
+real full mesh of localhost TCP connections (not `bufconn` — the point was
+actual hop cost). `redis.go` implements the Redis candidate against a real
+`valkey/valkey:8-alpine` (new `docker-compose.yml` service, port 6380;
+same wire protocol as Redis, side-steps Redis Inc.'s licensing question)
+using `PSUBSCRIBE` patterns built from the same `(Namespace, Service,
+Kind)` topic key. `bench/tailfanout/node_test.go` proved topic-scoping
+actually works end-to-end for both — a row for a topic a peer has no
+interest in never crosses the wire — before trusting any numbers built on
+top of them. `bench/tailfanout_bench_test.go` runs the full `{mesh,
+redis} × {N: 2, 3, 5}` matrix (gated behind `WEFT_BENCH_TAILFANOUT=1` on
+top of `-tags integration`, since it's much slower than the rest of
+`bench/`) and prints a results table. (Prerequisite fix along the way:
+`bench/bench_test.go` referenced a stale `LogRow.App` field that no longer
+exists on the proto — `go vet -tags integration ./bench/...` didn't even
+build before this pass; fixed by splitting the existing `"kevlar/vimgym"`-
+shaped composite into `Namespace`/`Service`.)
+
+Results (in-process/single-machine, loopback network — absolute latency
+won't transfer directly to a real multi-instance deployment, but the
+relative comparison and the backpressure-vs-N trend are the point):
+
+```
+transport N   p50       p95       p99       throughput_ceil  ingest_base    ingest_loaded   delta
+mesh      2   2.525ms   3.877ms   4.003ms   50000 rows/s     500ns          1.709µs         +242%
+mesh      3   2.002ms   3.78ms    4.106ms   50000 rows/s     500ns          2.958µs         +492%
+mesh      5   1.802ms   4.887ms   5.334ms   50000 rows/s     459ns          7.25µs          +1480%
+redis     2   114µs     254µs     700µs     50000 rows/s     103.541µs      138.375µs       +34%
+redis     3   127µs     275µs     918µs     50000 rows/s     96µs           197.333µs       +106%
+redis     5   128µs     168µs     284µs     50000 rows/s     123.833µs      168.375µs       +36%
+```
+
+**Verdict: Redis Pub/Sub.** Two independent signals point the same way:
+
+- **Latency** — Redis is roughly an order of magnitude faster end-to-end
+  (p50 ~100-130µs vs. mesh's ~2-2.5ms) at every N tested. Consistent with
+  the doc's own framing: Redis's native `PUBLISH`/`PSUBSCRIBE` is a single
+  lightweight round trip, where the mesh candidate pays full gRPC/HTTP2
+  stream overhead per hop.
+- **Backpressure-onto-ingest (weighted heaviest, per this section's own
+  rule)** — this is the deciding factor, not throughput. Redis's ingest-
+  path delta stays flat and small across N (+34% / +106% / +36%, all
+  within noise at the sub-200µs absolute scale). Mesh's delta grows
+  monotonically and sharply with N (+242% / +492% / +1480%) — exactly the
+  O(N)-sends-per-publish cost this doc predicted, made visible even at
+  N=5. Absolute mesh numbers are still tiny here (single-digit
+  microseconds) because this harness measures only the in-memory
+  `Node.Publish` call, not a real network hop to shards — but the *trend*
+  is the signal: mesh backpressure cost scales with coordinator count,
+  Redis's doesn't, and the doc explicitly weighted this property over raw
+  latency/throughput.
+- **Throughput ceiling wasn't actually a discriminator this pass** — both
+  candidates sustained the full ramp up to the harness's 50k rows/s safety
+  bound with drop rate never crossing 1%, so neither hit a real ceiling in
+  this range. Not a meaningful data point either way; a higher safety
+  bound and/or a genuine production ingest-rate target (still absent — see
+  this doc's earlier note that only one customer has signed up so far)
+  would be needed to find where either candidate actually breaks.
+- Qualitatively, Redis also needed far less new engineering to get
+  topic-scoped delivery correct — native `PSUBSCRIBE` vs. hand-building an
+  interest-propagation protocol from scratch (there was zero prior
+  coordinator-to-coordinator communication in this codebase to extend) —
+  matching what this section anticipated before any numbers existed.
+
+**Production wiring done 2026-09-17.** `coordinator.TailFanout`
+(`coordinator/tail_fanout.go`, `coordinator/tail_fanout_redis.go`) wraps
+`*TailBroker` — a pure passthrough with no Redis configured, otherwise the
+same topic-scoped `PSUBSCRIBE`/pipelined-publish scheme validated above,
+ported (not imported — `coordinator/` doesn't depend on `bench/`) from the
+winning candidate. `ingestBatch` (`coordinator/service/server.go`) and
+`ExecuteFollow` (`coordinator/coordinator.go`) now go through
+`Coordinator.TailFanout` instead of `Tail` directly; `Tail` itself is
+unchanged and still what `TailFanout` wraps. New `--redis-addr`/
+`--redis-tls` coordinator flags (`cmd/coordinator/main.go`), threaded
+through `docker-compose.yml` (dev, plain Valkey) and
+`deploy/entrypoint.sh`/`deploy/weft-coordinator.service` (prod). Redis
+connection failures never crash-loop the coordinator — no eager `Ping` at
+construction, every failure path logs and continues — since tail is
+best-effort but ingest/query are not. Per the scope decision made
+alongside the original benchmark, the losing mesh candidate's code
+(`bench/tailfanout/mesh.go`, `bench/tailfanout/meshpb/`, and the
+mesh-only test/subtree) was deleted in this same pass; the Redis
+candidate's bench code stays as an ongoing perf-regression harness.
+
+**Infra written, not yet applied.** Single-node AWS ElastiCache
+(Valkey 8.1, TLS in transit, no AUTH — network-isolation-only via a new
+`allowed_security_group_ids` variable on the shared
+`modules/elasticache-redis` module, mirroring the RDS module's SG-rule
+convention) added to the weft stack
+(`infrastructure-catalog/stacks/asg-weft-application/main.tf`), with its
+endpoint flowing into `app_config_blob` as `REDIS_ADDR`/`REDIS_TLS`.
+Structurally verified (`terraform validate`/`fmt` on both the module and
+the stack) and the Valkey engine version (`8.1`) and parameter group
+family (`default.valkey8`) confirmed against the live AWS API via
+`kevcons aws elasticache describe-cache-engine-versions`/
+`describe-cache-parameter-groups`. **Not applied** — per this doc's own
+item-1a procedure, that's a scoped `terraform plan`, confirm exact
+`N to add, 0 to change, 0 to destroy`, then a human runs
+`terraform apply` manually (protected IaC apply).
+
+**Not yet done**: the actual `terraform apply`; a real two-coordinator
+cross-fan-out smoke test (needs a second `coordinator2` compose service —
+the existing one has fixed host port bindings, so `--scale coordinator=2`
+doesn't work); and, once Redis is live in prod, revisiting whether
+`coordinator_desired` can finally move past `1` (this plan's actual
+goal) now that both item 4 and item 5 are addressed.
 
 ### Usage stats — DONE, fixed 2026-09-15
 

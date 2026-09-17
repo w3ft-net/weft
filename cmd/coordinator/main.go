@@ -111,6 +111,8 @@ func main() {
 	adminPort := flag.Int("admin-port", 9022, "gRPC listen port for the localhost-only WeftAdmin surface (weft-admin CLI)")
 	debugPort := flag.Int("debug-port", 6060, "localhost-only HTTP port for net/http/pprof (goroutine/heap profiling); 0 disables")
 	computeAddr := flag.String("compute", "", "compute worker address (host:port)")
+	redisAddr := flag.String("redis-addr", "", "Redis address for cross-coordinator tail -f fan-out (host:port); empty disables cross-coordinator fan-out, tail stays local to this process")
+	redisTLS := flag.Bool("redis-tls", false, "use TLS for the Redis connection (required for ElastiCache in-transit encryption)")
 	awsRegion := flag.String("region", "us-east-2", "AWS region for shard EC2 launches + volume management")
 	customer := flag.String("customer", "", "fallback customer for dev/docker (queries pass customer per-request)")
 	dbDSN := flag.String("db-dsn", "", "PostgreSQL DSN (e.g., host=localhost dbname=weft user=weft password=...)")
@@ -183,6 +185,8 @@ func main() {
 		Ingest:            coordinator.NewRingBuffer(1_000_000),
 		Usage:             coordinator.NewCustomerUsageStats(),
 		LambdaFunctionURL: os.Getenv("LAMBDA_FUNCTION_URL"),
+		RedisAddr:         *redisAddr,
+		RedisTLS:          *redisTLS,
 	})
 
 	drainCtx, drainCancel := context.WithCancel(context.Background())

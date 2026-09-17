@@ -19,6 +19,8 @@ case "$ROLE" in
     [ -n "${WEFT_REGION:-}" ]             && ARGS+=(--region="$WEFT_REGION")
     [ -n "${COMPUTE_ADDR:-}" ]            && ARGS+=(--compute="$COMPUTE_ADDR")
     [ -n "${WEFT_CUSTOMER:-}" ]           && ARGS+=(--customer="$WEFT_CUSTOMER")
+    [ -n "${REDIS_ADDR:-}" ]              && ARGS+=(--redis-addr="$REDIS_ADDR")
+    [ "${REDIS_TLS:-}" = "true" ]         && ARGS+=(--redis-tls=true)
 
     exec weft-coordinator "${ARGS[@]}"
     ;;
