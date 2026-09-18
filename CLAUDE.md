@@ -49,6 +49,7 @@ All in `docs/`:
 - `ingestion-syslog.md` — TLS syslog listener (Render and future platforms), the Producer interface, how to add a new syslog-speaking platform
 - `materialized-views.md` — saved pipelines as continuously-updated view tables
 - `cli.md` — shell design, pseudofiles, meta-variables, commands
+- `known-issues.md` — verified, unfixed gaps worth remembering (root cause, impact, why it's not fixed yet)
 
 ## Local development
 
