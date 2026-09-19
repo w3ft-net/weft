@@ -17,7 +17,7 @@ chart — render a chart in the terminal, from a cron or a pipeline
 
 ```
 chart <cron> [-t TYPE] [-n LIMIT] [-i INTERVAL] [-f|--follow]
-<pipeline> | chart [-x <field>] [-y <field>] [-a <fn>]
+<pipeline> | chart [-x <field>] [-y <field>] [-a <fn>] [--tag <field>]
                    [--bucket <dur>] [-t TYPE] [--title <text>]
 ```
 
@@ -72,11 +72,17 @@ and y is the last whitespace field of each line.
 - `-a`, `--aggregate` `<fn>` — y reduction within an x-group.
   One of `count`, `sum`, `avg`, `min`, `max`, `p50`, `p95`,
   `identity`. Default `identity`, or `count` when `--bucket` is set.
+- `--tag <field>` — split output into one line per distinct value of
+  `<field>` instead of a single line — e.g. one line per host, one per
+  coordinator instance. Same field grammar as `-x`/`-y`; all three
+  must agree on positional vs JSON-path. Only valid with `-t line`
+  (the default when `--tag` is set). Each line gets its own color and
+  a legend row.
 - `--bucket <DURATION>` — group rows into time buckets on x.
   Requires x to parse as a timestamp (RFC3339 or epoch seconds).
   Switches the default chart kind to `line`.
 - `-t`, `--type` `<line|sparkline|bar>` — chart kind. Default `bar`,
-  or `line` when `--bucket` is set.
+  or `line` when `--bucket` or `--tag` is set.
 - `--title <text>` — chart title.
 
 ## EXAMPLES
@@ -98,6 +104,11 @@ cat /log/myco/api/main.log \
 
 # Pipe form: just plot a stream of numbers from jq
 cat /log/myco/api/main.log | jq '.cpu_pct' | chart
+
+# Pipe form: one line per instance
+cat /log/myco/coordinator/runtime_stats.log \
+  | jq 'select(.metric=="mem_pct")' \
+  | chart -x .ts -y .value --tag .coordinator_id --bucket 1m -a avg
 ```
 
 ## RELATED

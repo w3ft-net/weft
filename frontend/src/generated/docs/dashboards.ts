@@ -10,6 +10,7 @@ const dashboards = {
     { level: 2, id: "what-dashboards-are", text: "What dashboards are" },
     { level: 2, id: "yaml-grammar", text: "YAML grammar" },
     { level: 2, id: "tile-kinds", text: "Tile kinds" },
+    { level: 3, id: "multi-line-sparklines-tag", text: "Multi-line sparklines (tag:)" },
     { level: 2, id: "threshold-colors", text: "Threshold colors" },
     { level: 2, id: "sections", text: "Sections" },
     { level: 2, id: "layout", text: "Layout" },
@@ -78,7 +79,25 @@ sections:
 | <code>size</code>       | all                       | <code>sm</code>, <code>md</code>, or <code>lg</code>. Default <code>md</code>. Hint, not pixel size.     |
 | <code>format</code>     | counter                   | Optional <code>%d</code> / <code>%.2f</code> format applied to the value.          |
 | <code>threshold</code>  | counter, gauge, sparkline | <code>warn</code>, <code>crit</code>, <code>max</code> numeric cutoffs.                       |
-| <code>columns</code>    | table                     | Header labels; columns parse as whitespace-split fields.     |</p>
+| <code>columns</code>    | table                     | Header labels; columns parse as whitespace-split fields.     |
+| <code>tag</code>, <code>y</code>   | sparkline                 | Multi-line mode — see below. Must be set together.           |</p>
+<h3 id="multi-line-sparklines-tag">Multi-line sparklines (<code>tag:</code>)</h3>
+<p>A sparkline normally plots one scalar per cron run (the watch's last
+whitespace field). When a watch's stdout is instead multiple JSON rows
+per run — one per tagged entity, e.g. one row per instance — set <code>tag:</code>
+(which field identifies the row) and <code>y:</code> (which field to plot) to draw
+one line per distinct tag value instead of collapsing the run into a
+single number:</p>
+<pre><code class="language-yaml">- kind: sparkline
+  watch: coordinator-mem-pct
+  tag: .coordinator_id
+  y: .mem_pct
+  size: lg
+</code></pre>
+<p>Each row's x value is its run's timestamp (cron run history, not a
+live pipeline — there's no per-row timestamp to bucket against). Lines
+get a legend and a distinct color per tag; <code>tag:</code>/<code>y:</code> are rejected on
+any kind other than <code>sparkline</code>.</p>
 <p>The <code>size:</code> field is a hint, not a pixel measurement. Each renderer
 (browser / terminal) maps the hint onto its own viewport. On a wide
 browser an <code>lg</code> tile spans the full row; on a narrow terminal it falls

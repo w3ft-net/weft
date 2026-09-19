@@ -86,6 +86,9 @@ func TestParseDashboardYAML_Errors(t *testing.T) {
 		{"unknown field at top", "title: x\nfoo: bar\ntiles:\n  - kind: counter\n    watch: a\n", "not a valid key"},
 		{"unknown field in section", "sections:\n  - heading: Ops\n    tiles:\n      - kind: counter\n        watch: a\n", "'heading' is not a valid key"},
 		{"unknown field in tile", "tiles:\n  - kind: counter\n    watch: a\n    color: red\n", "'color' is not a valid key"},
+		{"tag on non-sparkline", "tiles:\n  - kind: counter\n    watch: a\n    tag: .host\n    y: .v\n", "only supported on sparkline"},
+		{"tag without y", "tiles:\n  - kind: sparkline\n    watch: a\n    tag: .host\n", "must be set together"},
+		{"y without tag", "tiles:\n  - kind: sparkline\n    watch: a\n    y: .v\n", "must be set together"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -97,6 +100,28 @@ func TestParseDashboardYAML_Errors(t *testing.T) {
 				t.Errorf("error %q does not contain %q", err.Error(), c.want)
 			}
 		})
+	}
+}
+
+func TestParseDashboardYAML_TaggedSparkline(t *testing.T) {
+	body := `
+tiles:
+  - kind: sparkline
+    watch: coordinator-mem-pct
+    tag: .coordinator_id
+    y: .mem_pct
+    size: lg
+`
+	spec, err := ParseDashboardYAML(body)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	tile := spec.Sections[0].Tiles[0]
+	if tile.Tag != ".coordinator_id" {
+		t.Errorf("tag: got %q", tile.Tag)
+	}
+	if tile.Y != ".mem_pct" {
+		t.Errorf("y: got %q", tile.Y)
 	}
 }
 

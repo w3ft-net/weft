@@ -130,6 +130,56 @@ tiles:
 	}
 }
 
+func TestRender_SparklineTagged(t *testing.T) {
+	spec := mustParse(t, `
+tiles:
+  - kind: sparkline
+    watch: coordinator-mem-pct
+    tag: .coordinator_id
+    y: .mem_pct
+    size: lg
+`)
+	results := map[string]WatchSeries{
+		"coordinator-mem-pct": {
+			Tags: map[string]WatchSeries{
+				"i-aaa": {Values: []float64{48, 44, 40}, Times: []float64{300, 200, 100}},
+				"i-bbb": {Values: []float64{68, 64, 60}, Times: []float64{300, 200, 100}},
+			},
+		},
+	}
+	out := Render(spec, results, 80)
+	plain := stripANSI(out)
+	for _, want := range []string{"i-aaa", "i-bbb"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("missing tag legend %q in output:\n%s", want, plain)
+		}
+	}
+	hasBraille := false
+	for _, r := range plain {
+		if r >= 0x2800 && r <= 0x28FF {
+			hasBraille = true
+			break
+		}
+	}
+	if !hasBraille {
+		t.Errorf("no braille characters in tagged sparkline output:\n%s", plain)
+	}
+}
+
+func TestRender_SparklineTaggedMissingData(t *testing.T) {
+	spec := mustParse(t, `
+tiles:
+  - kind: sparkline
+    watch: ghost
+    tag: .coordinator_id
+    y: .mem_pct
+`)
+	out := Render(spec, map[string]WatchSeries{}, 80)
+	if !strings.Contains(out, "<no data>") {
+		t.Errorf("missing placeholder for absent tagged watch:\n%s", out)
+	}
+}
+
 func TestRender_Table(t *testing.T) {
 	spec := mustParse(t, `
 tiles:

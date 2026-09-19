@@ -67,6 +67,14 @@ func Register(c *shellcore.ShellCore, p Provider) {
 // fetchAllSeries pulls per-watch series for every distinct watch named
 // in the spec. Missing watches end up absent from the map; the
 // renderer treats those as <no data>.
+//
+// A tagged tile (tile.Tag set) and an untagged tile can't share the
+// same watch's cached WatchSeries — one wants Values/Times, the other
+// wants Tags — but the dashboard-builder grammar already restricts
+// tag:/y: to sparkline tiles and requires them together, so in
+// practice a given watch is either always-tagged or never-tagged
+// across a spec. Keyed by watch name like the untagged path, using
+// whichever tile referencing it is seen first.
 func fetchAllSeries(p Provider, spec *store.DashboardSpec) map[string]WatchSeries {
 	out := map[string]WatchSeries{}
 	for _, sec := range spec.Sections {
@@ -78,7 +86,11 @@ func fetchAllSeries(p Provider, spec *store.DashboardSpec) map[string]WatchSerie
 			if err != nil {
 				continue
 			}
-			out[tile.Watch] = toWatchSeries(results)
+			if tile.Tag != "" {
+				out[tile.Watch] = toTaggedWatchSeries(results, tile.Tag, tile.Y)
+			} else {
+				out[tile.Watch] = toWatchSeries(results)
+			}
 		}
 	}
 	return out
@@ -115,4 +127,66 @@ func toWatchSeries(results []chart.WatchResultValue) WatchSeries {
 		ws.Times = append(ws.Times, float64(t.Unix()))
 	}
 	return ws
+}
+
+// toTaggedWatchSeries is toWatchSeries' --tag counterpart: instead of
+// one scalar per run (the last whitespace field of the whole stdout),
+// a tagged watch's stdout is one JSON row per tagged entity per run
+// (e.g. one row per coordinator instance). Every row is walked
+// independently and assigned to its tag's own WatchSeries, sharing
+// that run's RanAt as the x value for every row in it — a dashboard
+// tile's history comes from cron run history, not a live pipeline, so
+// there's no per-row timestamp to bucket against the way chart.PipeArgs
+// does for `... | chart --tag`.
+func toTaggedWatchSeries(results []chart.WatchResultValue, tagPath, yPath string) WatchSeries {
+	tagSpec, err := shellcore.ParseFieldSpec(tagPath)
+	if err != nil {
+		return WatchSeries{}
+	}
+	ySpec, err := shellcore.ParseFieldSpec(yPath)
+	if err != nil {
+		return WatchSeries{}
+	}
+
+	tags := map[string]*WatchSeries{}
+	for _, r := range results {
+		t, err := time.Parse(time.RFC3339, r.RanAt)
+		if err != nil {
+			continue
+		}
+		x := float64(t.Unix())
+		for _, line := range strings.Split(r.Value, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			tagVal, err := shellcore.ResolveField(tagSpec, line)
+			if err != nil || tagVal == "" {
+				continue
+			}
+			yStr, err := shellcore.ResolveField(ySpec, line)
+			if err != nil || yStr == "" {
+				continue
+			}
+			y, err := strconv.ParseFloat(yStr, 64)
+			if err != nil {
+				continue
+			}
+			ts, ok := tags[tagVal]
+			if !ok {
+				ts = &WatchSeries{}
+				tags[tagVal] = ts
+			}
+			ts.Values = append(ts.Values, y)
+			ts.Times = append(ts.Times, x)
+		}
+	}
+	if len(tags) == 0 {
+		return WatchSeries{}
+	}
+	out := WatchSeries{Tags: make(map[string]WatchSeries, len(tags))}
+	for tag, ts := range tags {
+		out.Tags[tag] = *ts
+	}
+	return out
 }

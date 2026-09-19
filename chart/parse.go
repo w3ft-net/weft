@@ -80,6 +80,7 @@ func ParseWatchCmd(args []string) (WatchArgs, string) {
 type PipeArgs struct {
 	XSpec     shellcore.FieldSpec
 	YSpec     shellcore.FieldSpec
+	TagSpec   shellcore.FieldSpec // splits output into one line per tag value; line/sparkline only
 	Aggregate string        // count | sum | avg | min | max | p50 | p95 | identity
 	Bucket    time.Duration // 0 = no bucketing
 	Kind      string        // line | bar | sparkline
@@ -87,9 +88,9 @@ type PipeArgs struct {
 }
 
 // usesJSONLines reports whether stdin should be parsed as one JSON
-// document per line. True when either x or y is a JSON-path spec.
+// document per line. True when x, y, or tag is a JSON-path spec.
 func (a PipeArgs) usesJSONLines() bool {
-	return a.XSpec.IsJSON() || a.YSpec.IsJSON()
+	return a.XSpec.IsJSON() || a.YSpec.IsJSON() || a.TagSpec.IsJSON()
 }
 
 // ParsePipeArgs parses flag tokens passed to chart in pipe mode.
@@ -98,11 +99,12 @@ func (a PipeArgs) usesJSONLines() bool {
 // Defaults:
 //   - aggregate: "count" when --bucket is set OR -y is absent;
 //     "identity" otherwise (one row in, one point out).
-//   - kind: "line" when --bucket is set, "bar" otherwise.
+//   - kind: "line" when --bucket or --tag is set, "bar" otherwise.
 //
 // Validation:
-//   - -x and -y may not mix positional and JSON-path forms.
+//   - -x, -y, and --tag may not mix positional and JSON-path forms.
 //   - aggregate must be a known reduction.
+//   - --tag is only supported for -t line (rejected with bar/sparkline).
 //
 // Signature matches shellcore.PipeStageParseFunc — this function
 // is registered directly via core.RegisterPipeStage("chart", ...).
@@ -130,6 +132,16 @@ func ParsePipeArgs(args []string) (any, string) {
 				return out, "chart: -y: " + err.Error()
 			}
 			out.YSpec = s
+			i++
+		case a == "--tag":
+			if i+1 >= len(args) {
+				return out, "chart: --tag requires a column index or .json.path"
+			}
+			s, err := shellcore.ParseFieldSpec(args[i+1])
+			if err != nil {
+				return out, "chart: --tag: " + err.Error()
+			}
+			out.TagSpec = s
 			i++
 		case a == "-a" || a == "--aggregate":
 			if i+1 >= len(args) {
@@ -168,13 +180,23 @@ func ParsePipeArgs(args []string) (any, string) {
 
 	// Mixing positional and JSON-path is rejected — the line parser
 	// can't be in two modes at once.
-	if !out.XSpec.IsZero() && !out.YSpec.IsZero() && out.XSpec.IsJSON() != out.YSpec.IsJSON() {
-		return out, "chart: -x and -y must both be positional or both .json.path"
+	specs := []shellcore.FieldSpec{}
+	for _, s := range []shellcore.FieldSpec{out.XSpec, out.YSpec, out.TagSpec} {
+		if !s.IsZero() {
+			specs = append(specs, s)
+		}
+	}
+	if len(specs) > 1 {
+		for _, s := range specs[1:] {
+			if s.IsJSON() != specs[0].IsJSON() {
+				return out, "chart: -x, -y, and --tag must all be positional or all .json.path"
+			}
+		}
 	}
 
-	// Default kind: line when bucketing time, bar otherwise.
+	// Default kind: line when bucketing time or tagging, bar otherwise.
 	if out.Kind == "" {
-		if out.Bucket > 0 {
+		if out.Bucket > 0 || !out.TagSpec.IsZero() {
 			out.Kind = "line"
 		} else {
 			out.Kind = "bar"
@@ -184,6 +206,12 @@ func ParsePipeArgs(args []string) (any, string) {
 	case "line", "bar", "sparkline":
 	default:
 		return out, fmt.Sprintf("chart: unknown type %q (want line|bar|sparkline)", out.Kind)
+	}
+	// --tag draws one line per tag value, so it only makes sense for a
+	// line chart — bar's X-axis is already categorical (use -x for
+	// that), and there's no multi-series sparkline primitive.
+	if !out.TagSpec.IsZero() && out.Kind != "line" {
+		return out, "chart: --tag is only supported for line charts (use -x <tag field> for a grouped bar chart)"
 	}
 
 	// Default aggregate. With --bucket on, count is the most useful

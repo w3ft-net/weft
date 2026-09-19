@@ -6,6 +6,7 @@ package dashboard
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -17,10 +18,15 @@ import (
 // (for counter/gauge), the chronological series (for sparkline), and
 // the most recent stdout (for table). Newest sample is index 0; the
 // renderer reverses for left-to-right time when needed.
+//
+// Tags is populated instead of Values/Times/LatestText for a tagged
+// sparkline tile (tile.Tag set) — one sub-series per distinct tag
+// value found across the watch's run history. See toTaggedSeries.
 type WatchSeries struct {
 	Values     []float64 // numeric values, newest-first
 	Times      []float64 // epoch seconds, parallel to Values, newest-first
 	LatestText string    // raw stdout of the most recent run (for table)
+	Tags       map[string]WatchSeries
 }
 
 // Render lays out the spec into a single string sized to (w, h).
@@ -380,20 +386,13 @@ func renderGauge(t store.DashboardTile, series WatchSeries, w int) string {
 const sparklineHeight = 4
 
 func renderSparkline(series WatchSeries, w int) []string {
+	if len(series.Tags) > 0 {
+		return renderSparklineTagged(series, w)
+	}
 	if len(series.Values) == 0 {
 		return renderMissing(store.DashboardTile{Kind: "sparkline"}, w)
 	}
-	n := len(series.Values)
-	hasTimes := len(series.Times) == n
-	pts := make([]chart.Point, n)
-	for i := range series.Values {
-		ri := n - 1 - i // oldest-first
-		x := float64(i)
-		if hasTimes {
-			x = series.Times[ri]
-		}
-		pts[i] = chart.Point{X: x, Y: series.Values[ri]}
-	}
+	pts, hasTimes := seriesToPoints(series)
 	b := chart.Line(w, sparklineHeight).Points(pts)
 	if hasTimes {
 		b = b.XAxisTime()
@@ -408,6 +407,64 @@ func renderSparkline(series WatchSeries, w int) []string {
 		out[i] = padRight(colorize(clrCyan, line), w)
 	}
 	return out
+}
+
+// renderSparklineTagged is renderSparkline's --tag counterpart: one
+// warp chart.NamedSeries per distinct tag value, sharing one x/y scale
+// (warp's Builder.Series already handles per-series color + legend).
+// Unlike the single-series path, lines are NOT force-colorized here —
+// the builder already emits an explicit per-series color, and wrapping
+// the whole rendered block in one outer color would fight that.
+func renderSparklineTagged(series WatchSeries, w int) []string {
+	if len(series.Tags) == 0 {
+		return renderMissing(store.DashboardTile{Kind: "sparkline"}, w)
+	}
+	tags := make([]string, 0, len(series.Tags))
+	for tag := range series.Tags {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+
+	named := make([]chart.NamedSeries, 0, len(tags))
+	hasTimes := false
+	for _, tag := range tags {
+		pts, tagHasTimes := seriesToPoints(series.Tags[tag])
+		hasTimes = hasTimes || tagHasTimes
+		named = append(named, chart.NamedSeries{Label: tag, Points: pts})
+	}
+
+	b := chart.Line(w, sparklineHeight).Series(named)
+	if hasTimes {
+		b = b.XAxisTime()
+	}
+	rendered, err := b.Render()
+	if err != nil {
+		return []string{padRight("  "+colorize(clrGray, "<render error>"), w)}
+	}
+	raw := strings.Split(strings.TrimRight(rendered, "\n"), "\n")
+	out := make([]string, len(raw))
+	for i, line := range raw {
+		out[i] = padRight(line, w)
+	}
+	return out
+}
+
+// seriesToPoints converts a WatchSeries' newest-first Values/Times into
+// oldest-first chart.Points, the shape both the single- and tagged-
+// sparkline renderers need.
+func seriesToPoints(series WatchSeries) (pts []chart.Point, hasTimes bool) {
+	n := len(series.Values)
+	hasTimes = len(series.Times) == n && n > 0
+	pts = make([]chart.Point, n)
+	for i := range series.Values {
+		ri := n - 1 - i // oldest-first
+		x := float64(i)
+		if hasTimes {
+			x = series.Times[ri]
+		}
+		pts[i] = chart.Point{X: x, Y: series.Values[ri]}
+	}
+	return pts, hasTimes
 }
 
 func renderTable(t store.DashboardTile, series WatchSeries, w int) []string {

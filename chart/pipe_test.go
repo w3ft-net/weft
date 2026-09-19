@@ -50,7 +50,7 @@ func TestParsePipeArgs_RejectsMixedAddressing(t *testing.T) {
 	if msg == "" {
 		t.Fatal("expected error for mixed positional + JSON-path")
 	}
-	if !strings.Contains(msg, "must both be positional or both") {
+	if !strings.Contains(msg, "must all be positional or all") {
 		t.Errorf("error message: got %q", msg)
 	}
 }
@@ -186,6 +186,122 @@ func TestReduce(t *testing.T) {
 		if got := reduce(c.name, v); got != c.want {
 			t.Errorf("reduce(%q): got %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestParsePipeArgs_TagDefaultsToLine(t *testing.T) {
+	got, msg := parsePipeArgs([]string{"-x", ".ts", "-y", ".v", "--tag", ".host"})
+	if msg != "" {
+		t.Fatalf("unexpected error: %s", msg)
+	}
+	if got.Kind != "line" {
+		t.Errorf("--tag should default kind to line, got %q", got.Kind)
+	}
+}
+
+func TestParsePipeArgs_TagRejectsBar(t *testing.T) {
+	_, msg := parsePipeArgs([]string{"--tag", ".host", "-t", "bar"})
+	if msg == "" || !strings.Contains(msg, "only supported for line") {
+		t.Errorf("expected --tag+bar rejection, got %q", msg)
+	}
+}
+
+func TestParsePipeArgs_TagRejectsSparkline(t *testing.T) {
+	_, msg := parsePipeArgs([]string{"--tag", ".host", "-t", "sparkline"})
+	if msg == "" || !strings.Contains(msg, "only supported for line") {
+		t.Errorf("expected --tag+sparkline rejection, got %q", msg)
+	}
+}
+
+func TestParsePipeArgs_TagJoinsAddressingCheck(t *testing.T) {
+	_, msg := parsePipeArgs([]string{"-x", "1", "--tag", ".host"})
+	if msg == "" || !strings.Contains(msg, "must all be positional or all") {
+		t.Errorf("expected mixed-addressing rejection for -x positional + --tag JSON, got %q", msg)
+	}
+}
+
+func TestGroupRowsByTag_SplitsIntoSeriesSharingXBuckets(t *testing.T) {
+	args, msg := parsePipeArgs([]string{"-x", ".ts", "-y", ".mem_pct", "--tag", ".coordinator_id", "--bucket", "1m", "-a", "avg"})
+	if msg != "" {
+		t.Fatalf("parse: %s", msg)
+	}
+	lines := []string{
+		`{"ts":"2026-01-01T00:00:10Z","coordinator_id":"i-aaa","mem_pct":40}`,
+		`{"ts":"2026-01-01T00:00:10Z","coordinator_id":"i-bbb","mem_pct":60}`,
+		`{"ts":"2026-01-01T00:01:10Z","coordinator_id":"i-aaa","mem_pct":44}`,
+		`{"ts":"2026-01-01T00:01:10Z","coordinator_id":"i-bbb","mem_pct":64}`,
+	}
+	tagGroups, isTimeX, errMsg := groupRowsByTag(lines, args)
+	if errMsg != "" {
+		t.Fatalf("groupRowsByTag: %s", errMsg)
+	}
+	if !isTimeX {
+		t.Error("expected isTimeX=true with --bucket")
+	}
+	if len(tagGroups) != 2 {
+		t.Fatalf("expected 2 tag groups, got %d", len(tagGroups))
+	}
+	// Alphabetical tag order.
+	if tagGroups[0].tag != "i-aaa" || tagGroups[1].tag != "i-bbb" {
+		t.Fatalf("expected [i-aaa, i-bbb] order, got [%s, %s]", tagGroups[0].tag, tagGroups[1].tag)
+	}
+	for _, tg := range tagGroups {
+		if len(tg.ordered) != 2 {
+			t.Errorf("tag %s: expected 2 time buckets, got %d", tg.tag, len(tg.ordered))
+		}
+	}
+	if got := reduce("avg", tagGroups[0].groups[tagGroups[0].ordered[0]]); got != 40 {
+		t.Errorf("i-aaa bucket 0: got %v, want 40", got)
+	}
+	if got := reduce("avg", tagGroups[1].groups[tagGroups[1].ordered[0]]); got != 60 {
+		t.Errorf("i-bbb bucket 0: got %v, want 60", got)
+	}
+}
+
+func TestGroupRowsByTag_DropsRowsMissingTag(t *testing.T) {
+	args, _ := parsePipeArgs([]string{"-x", ".ts", "-y", ".v", "--tag", ".host", "--bucket", "1m"})
+	lines := []string{
+		`{"ts":"2026-01-01T00:00:10Z","v":1}`, // no "host" field — dropped
+		`{"ts":"2026-01-01T00:00:10Z","host":"a","v":2}`,
+	}
+	tagGroups, _, errMsg := groupRowsByTag(lines, args)
+	if errMsg != "" {
+		t.Fatalf("groupRowsByTag: %s", errMsg)
+	}
+	if len(tagGroups) != 1 || tagGroups[0].tag != "a" {
+		t.Fatalf("expected exactly one tag group %q, got %+v", "a", tagGroups)
+	}
+}
+
+func TestRenderFromStream_Tagged(t *testing.T) {
+	args, msg := parsePipeArgs([]string{"-x", ".ts", "-y", ".mem_pct", "--tag", ".coordinator_id", "--bucket", "1m", "-a", "avg"})
+	if msg != "" {
+		t.Fatalf("parse: %s", msg)
+	}
+	lines := []string{
+		`{"ts":"2026-01-01T00:00:10Z","coordinator_id":"i-aaa","mem_pct":40}`,
+		`{"ts":"2026-01-01T00:01:10Z","coordinator_id":"i-aaa","mem_pct":44}`,
+		`{"ts":"2026-01-01T00:02:10Z","coordinator_id":"i-aaa","mem_pct":48}`,
+		`{"ts":"2026-01-01T00:00:10Z","coordinator_id":"i-bbb","mem_pct":60}`,
+		`{"ts":"2026-01-01T00:01:10Z","coordinator_id":"i-bbb","mem_pct":64}`,
+		`{"ts":"2026-01-01T00:02:10Z","coordinator_id":"i-bbb","mem_pct":68}`,
+	}
+	out, errMsg := RenderFromStream(lines, args, 80, 20)
+	if errMsg != "" {
+		t.Fatalf("render: %s", errMsg)
+	}
+	for _, want := range []string{"i-aaa", "i-bbb"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing tag label %q in rendered output", want)
+		}
+	}
+}
+
+func TestRenderFromStream_TaggedNoData(t *testing.T) {
+	args, _ := parsePipeArgs([]string{"-x", ".ts", "-y", ".v", "--tag", ".host"})
+	_, errMsg := RenderFromStream([]string{`{"ts":"2026-01-01T00:00:00Z","v":1}`}, args, 80, 20)
+	if errMsg == "" {
+		t.Fatal("expected 'no data points' error for rows with no host field")
 	}
 }
 

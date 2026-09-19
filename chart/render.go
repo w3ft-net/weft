@@ -21,6 +21,10 @@ import (
 // call it directly without going through shellcore's pipe-stage
 // dispatch.
 func RenderFromStream(lines []string, args PipeArgs, w, h int) (string, string) {
+	if !args.TagSpec.IsZero() {
+		return renderTagged(lines, args, w, h)
+	}
+
 	groups, ordered, isTimeX, errMsg := groupRows(lines, args)
 	if errMsg != "" {
 		return "", errMsg
@@ -73,6 +77,46 @@ func RenderFromStream(lines []string, args PipeArgs, w, h int) (string, string) 
 	}
 }
 
+// renderTagged is RenderFromStream's --tag path: each row is first
+// split by its tag value, then bucketed by x independently within that
+// tag (via groupRowsByTag, which otherwise applies the exact same x/y
+// rules as the untagged path). One warp chart.NamedSeries comes out
+// per distinct tag value, feeding a single multi-series line chart.
+//
+// ParsePipeArgs already rejects --tag combined with anything but
+// -t line, so this never needs to branch on args.Kind.
+func renderTagged(lines []string, args PipeArgs, w, h int) (string, string) {
+	tagGroups, isTimeX, errMsg := groupRowsByTag(lines, args)
+	if errMsg != "" {
+		return "", errMsg
+	}
+	if len(tagGroups) == 0 {
+		return "", "no data points to chart"
+	}
+
+	series := make([]chart.NamedSeries, 0, len(tagGroups))
+	for _, tg := range tagGroups {
+		pts := make([]chart.Point, 0, len(tg.ordered))
+		for _, key := range tg.ordered {
+			pts = append(pts, chart.Point{X: key.x, Y: reduce(args.Aggregate, tg.groups[key])})
+		}
+		series = append(series, chart.NamedSeries{Label: tg.tag, Points: pts})
+	}
+
+	b := chart.Line(w, h).Series(series)
+	if args.Title != "" {
+		b = b.Title(args.Title)
+	}
+	if isTimeX {
+		b = b.XAxisTime()
+	}
+	out, err := b.Render()
+	if err != nil {
+		return "", err.Error()
+	}
+	return out, ""
+}
+
 // groupKey is the per-group identity used to bucket rows. label is
 // the rendered string form (used for bar X labels and as a stable
 // map key); x is the numeric form fed to line charts. Both fields
@@ -80,6 +124,115 @@ func RenderFromStream(lines []string, args PipeArgs, w, h int) (string, string) 
 type groupKey struct {
 	label string
 	x     float64
+}
+
+// rowStatus is resolveXY's per-row outcome: rowOK means xLabel/xNum/yNum
+// are populated and the row contributes to a group; rowSkip means the
+// row is silently dropped (e.g. missing/non-numeric field — normal for
+// noisy log data); rowError means the row indicates a hard problem
+// (malformed field-path resolution, an unparseable timestamp) that
+// should abort the whole render rather than silently produce a
+// misleading partial chart.
+type rowStatus int
+
+const (
+	rowOK rowStatus = iota
+	rowSkip
+	rowError
+)
+
+// resolveXY applies the shared x/y extraction rules — used by both the
+// untagged (groupRows) and tagged (groupRowsByTag) grouping paths, so
+// a row is bucketed identically either way; only the tag adds a second
+// dimension around this.
+func resolveXY(line string, args PipeArgs, isTimeX bool, seq int) (xLabel string, xNum, yNum float64, status rowStatus, errMsg string) {
+	// X resolution. With no -x, x is the row sequence.
+	if args.XSpec.IsZero() {
+		xLabel = strconv.Itoa(seq)
+		xNum = float64(seq)
+	} else {
+		raw, err := shellcore.ResolveField(args.XSpec, line)
+		if err != nil {
+			return "", 0, 0, rowError, "x: " + err.Error()
+		}
+		if raw == "" {
+			return "", 0, 0, rowSkip, ""
+		}
+		if isTimeX {
+			t, ok := parseTime(raw)
+			if !ok {
+				return "", 0, 0, rowError, fmt.Sprintf("x: cannot parse %q as a timestamp", raw)
+			}
+			if args.Bucket > 0 {
+				t = t.Truncate(args.Bucket)
+			}
+			xLabel = formatBucketLabel(t, args.Bucket)
+			xNum = float64(t.Unix())
+		} else if n, err := strconv.ParseFloat(raw, 64); err == nil {
+			xLabel = raw
+			xNum = n
+		} else {
+			xLabel = raw
+			xNum = float64(seq) // categorical x → ordinal position
+		}
+	}
+
+	// Y resolution. With no -y, y is the last whitespace field.
+	yStr := ""
+	if args.YSpec.IsZero() {
+		fields := strings.Fields(line)
+		if len(fields) > 0 {
+			yStr = fields[len(fields)-1]
+		}
+	} else {
+		raw, err := shellcore.ResolveField(args.YSpec, line)
+		if err != nil {
+			return "", 0, 0, rowError, "y: " + err.Error()
+		}
+		yStr = raw
+	}
+
+	// "count" doesn't need a numeric y — every non-skipped row
+	// contributes 1. Other reductions require numeric y.
+	if args.Aggregate == "count" {
+		yNum = 1
+	} else {
+		if yStr == "" {
+			return "", 0, 0, rowSkip, ""
+		}
+		n, err := strconv.ParseFloat(yStr, 64)
+		if err != nil {
+			return "", 0, 0, rowSkip, ""
+		}
+		yNum = n
+	}
+	return xLabel, xNum, yNum, rowOK, ""
+}
+
+// detectTimeX decides whether the x axis is a timestamp: always true
+// with --bucket set; otherwise sniffed from the first row that
+// resolves a non-empty -x value. Heterogeneous x columns are a user
+// error this doesn't try to reason about.
+func detectTimeX(lines []string, args PipeArgs) bool {
+	if args.Bucket > 0 {
+		return true
+	}
+	if args.XSpec.IsZero() {
+		return false
+	}
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		xv, err := shellcore.ResolveField(args.XSpec, line)
+		if err != nil || xv == "" {
+			continue
+		}
+		_, ok := parseTime(xv)
+		return ok
+	}
+	return false
 }
 
 // groupRows walks the input lines, applies x/y extraction, and
@@ -90,27 +243,7 @@ func groupRows(lines []string, args PipeArgs) (map[groupKey][]float64, []groupKe
 	groups := map[groupKey][]float64{}
 	var ordered []groupKey
 	seen := map[string]groupKey{}
-
-	isTimeX := args.Bucket > 0
-	// First pass to detect a time-shaped x when --bucket isn't set
-	// but values look like timestamps. Sniff from the first row only —
-	// heterogeneous x columns are a user error we don't reason about.
-	if !isTimeX && !args.XSpec.IsZero() {
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			xv, err := shellcore.ResolveField(args.XSpec, line)
-			if err != nil || xv == "" {
-				continue
-			}
-			if _, ok := parseTime(xv); ok {
-				isTimeX = true
-			}
-			break
-		}
-	}
+	isTimeX := detectTimeX(lines, args)
 
 	seq := 0
 	for _, line := range lines {
@@ -119,68 +252,12 @@ func groupRows(lines []string, args PipeArgs) (map[groupKey][]float64, []groupKe
 			continue
 		}
 
-		// X resolution. With no -x, x is the row sequence.
-		var xLabel string
-		var xNum float64
-		if args.XSpec.IsZero() {
-			xLabel = strconv.Itoa(seq)
-			xNum = float64(seq)
-		} else {
-			raw, err := shellcore.ResolveField(args.XSpec, line)
-			if err != nil {
-				return nil, nil, false, "x: " + err.Error()
-			}
-			if raw == "" {
-				continue
-			}
-			if isTimeX {
-				t, ok := parseTime(raw)
-				if !ok {
-					return nil, nil, false, fmt.Sprintf("x: cannot parse %q as a timestamp", raw)
-				}
-				if args.Bucket > 0 {
-					t = t.Truncate(args.Bucket)
-				}
-				xLabel = formatBucketLabel(t, args.Bucket)
-				xNum = float64(t.Unix())
-			} else if n, err := strconv.ParseFloat(raw, 64); err == nil {
-				xLabel = raw
-				xNum = n
-			} else {
-				xLabel = raw
-				xNum = float64(seq) // categorical x → ordinal position
-			}
+		xLabel, xNum, yNum, status, errMsg := resolveXY(line, args, isTimeX, seq)
+		if status == rowError {
+			return nil, nil, false, errMsg
 		}
-
-		// Y resolution. With no -y, y is the last whitespace field.
-		yStr := ""
-		if args.YSpec.IsZero() {
-			fields := strings.Fields(line)
-			if len(fields) > 0 {
-				yStr = fields[len(fields)-1]
-			}
-		} else {
-			raw, err := shellcore.ResolveField(args.YSpec, line)
-			if err != nil {
-				return nil, nil, false, "y: " + err.Error()
-			}
-			yStr = raw
-		}
-
-		// "count" doesn't need a numeric y — every non-skipped row
-		// contributes 1. Other reductions require numeric y.
-		var yNum float64
-		if args.Aggregate == "count" {
-			yNum = 1
-		} else {
-			if yStr == "" {
-				continue
-			}
-			n, err := strconv.ParseFloat(yStr, 64)
-			if err != nil {
-				continue
-			}
-			yNum = n
+		if status == rowSkip {
+			continue
 		}
 
 		key, ok := seen[xLabel]
@@ -203,6 +280,92 @@ func groupRows(lines []string, args PipeArgs) (map[groupKey][]float64, []groupKe
 		})
 	}
 	return groups, ordered, isTimeX, ""
+}
+
+// tagGroup is one tag value's grouped rows — the same shape groupRows
+// produces for the whole (untagged) input, scoped to rows matching one
+// tag value.
+type tagGroup struct {
+	tag     string
+	groups  map[groupKey][]float64
+	ordered []groupKey
+}
+
+// groupRowsByTag is groupRows with an added split dimension: each row
+// is first assigned to a tag via args.TagSpec (rows with a missing or
+// unresolvable tag are dropped, same as a missing x/y field), then
+// bucketed by x independently within that tag using the identical
+// resolveXY rules groupRows uses. Returns one tagGroup per distinct tag
+// value, ordered alphabetically by tag (a stable, predictable legend
+// and color order — not input order, which would depend on which tag's
+// rows happened to come first in a given query result).
+func groupRowsByTag(lines []string, args PipeArgs) ([]tagGroup, bool, string) {
+	isTimeX := detectTimeX(lines, args)
+
+	// seq is per-tag, not global: two coordinators' rows are typically
+	// interleaved in a query result, and a shared counter would scatter
+	// each series' ordinal x-fallback across the interleaving order
+	// instead of giving each series its own clean 0,1,2,....
+	type tagState struct {
+		groups  map[groupKey][]float64
+		ordered []groupKey
+		seen    map[string]groupKey
+		seq     int
+	}
+	states := map[string]*tagState{}
+	var tagOrder []string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		tagVal, err := shellcore.ResolveField(args.TagSpec, line)
+		if err != nil {
+			return nil, false, "tag: " + err.Error()
+		}
+		if tagVal == "" {
+			continue
+		}
+
+		st, exists := states[tagVal]
+		if !exists {
+			st = &tagState{groups: map[groupKey][]float64{}, seen: map[string]groupKey{}}
+			states[tagVal] = st
+			tagOrder = append(tagOrder, tagVal)
+		}
+
+		xLabel, xNum, yNum, status, errMsg := resolveXY(line, args, isTimeX, st.seq)
+		if status == rowError {
+			return nil, false, errMsg
+		}
+		if status == rowSkip {
+			continue
+		}
+
+		key, ok := st.seen[xLabel]
+		if !ok {
+			key = groupKey{label: xLabel, x: xNum}
+			st.seen[xLabel] = key
+			st.ordered = append(st.ordered, key)
+		}
+		st.groups[key] = append(st.groups[key], yNum)
+		st.seq++
+	}
+
+	sort.Strings(tagOrder)
+	out := make([]tagGroup, 0, len(tagOrder))
+	for _, tag := range tagOrder {
+		st := states[tag]
+		if isTimeX {
+			sort.SliceStable(st.ordered, func(i, j int) bool {
+				return st.ordered[i].x < st.ordered[j].x
+			})
+		}
+		out = append(out, tagGroup{tag: tag, groups: st.groups, ordered: st.ordered})
+	}
+	return out, isTimeX, ""
 }
 
 // reduce applies the named aggregate to a slice of values.

@@ -83,6 +83,29 @@ Tile fields:
 | `format`     | counter                   | Optional `%d` / `%.2f` format applied to the value.          |
 | `threshold`  | counter, gauge, sparkline | `warn`, `crit`, `max` numeric cutoffs.                       |
 | `columns`    | table                     | Header labels; columns parse as whitespace-split fields.     |
+| `tag`, `y`   | sparkline                 | Multi-line mode — see below. Must be set together.           |
+
+### Multi-line sparklines (`tag:`)
+
+A sparkline normally plots one scalar per cron run (the watch's last
+whitespace field). When a watch's stdout is instead multiple JSON rows
+per run — one per tagged entity, e.g. one row per instance — set `tag:`
+(which field identifies the row) and `y:` (which field to plot) to draw
+one line per distinct tag value instead of collapsing the run into a
+single number:
+
+```yaml
+- kind: sparkline
+  watch: coordinator-mem-pct
+  tag: .coordinator_id
+  y: .mem_pct
+  size: lg
+```
+
+Each row's x value is its run's timestamp (cron run history, not a
+live pipeline — there's no per-row timestamp to bucket against). Lines
+get a legend and a distinct color per tag; `tag:`/`y:` are rejected on
+any kind other than `sparkline`.
 
 The `size:` field is a hint, not a pixel measurement. Each renderer
 (browser / terminal) maps the hint onto its own viewport. On a wide

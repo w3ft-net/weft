@@ -39,6 +39,15 @@ type DashboardSection struct {
 // DashboardTile is one tile entry. Watch is the cron watch name to read
 // from. Size is one of "sm", "md", "lg" (default "md"). Kind-specific
 // fields (Format, Threshold, Columns) are optional.
+//
+// Tag and Y are sparkline-only: when Tag is set, the watch's stdout is
+// treated as multiple JSON rows per run (e.g. one per coordinator
+// instance) instead of a single scalar. Tag is the JSON path that
+// identifies which entity a row belongs to; Y is the JSON path to the
+// value to plot. Each row's run timestamp (not a per-row field) is the
+// x value, since a dashboard tile's history comes from the watch's
+// cron run history, not a live pipeline. The tile then renders one
+// line per distinct Tag value instead of one line for the whole watch.
 type DashboardTile struct {
 	Kind      string           `yaml:"kind" json:"kind"`
 	Watch     string           `yaml:"watch" json:"watch"`
@@ -47,6 +56,8 @@ type DashboardTile struct {
 	Format    string           `yaml:"format,omitempty" json:"format,omitempty"`
 	Threshold *DashboardThresh `yaml:"threshold,omitempty" json:"threshold,omitempty"`
 	Columns   []string         `yaml:"columns,omitempty" json:"columns,omitempty"`
+	Tag       string           `yaml:"tag,omitempty" json:"tag,omitempty"`
+	Y         string           `yaml:"y,omitempty" json:"y,omitempty"`
 }
 
 // DashboardThresh is the optional warn/crit cutoff for counter and gauge tiles.
@@ -83,7 +94,7 @@ var (
 var knownKeys = map[string][]string{
 	"dashboardYAMLRaw": {"title", "sections", "tiles"},
 	"DashboardSection": {"title", "tiles"},
-	"DashboardTile":    {"kind", "watch", "title", "size", "format", "threshold", "columns"},
+	"DashboardTile":    {"kind", "watch", "title", "size", "format", "threshold", "columns", "tag", "y"},
 	"DashboardThresh":  {"warn", "crit", "max"},
 }
 
@@ -176,6 +187,14 @@ func validateSpec(spec *DashboardSpec) error {
 			}
 			if tile.Kind == "table" && len(tile.Columns) == 0 {
 				return fmt.Errorf("%s: table tile requires `columns:`", where)
+			}
+			if tile.Tag != "" || tile.Y != "" {
+				if tile.Kind != "sparkline" {
+					return fmt.Errorf("%s: `tag:`/`y:` are only supported on sparkline tiles", where)
+				}
+				if tile.Tag == "" || tile.Y == "" {
+					return fmt.Errorf("%s: `tag:` and `y:` must be set together (tag identifies which line a row belongs to, y is the field to plot)", where)
+				}
 			}
 			tileCount++
 		}
