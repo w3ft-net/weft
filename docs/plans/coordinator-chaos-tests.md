@@ -225,7 +225,21 @@ to repeat it separately unless testing a mid-tick kill specifically
 
 ## Test 2 — Poller double-ingest
 
-**Baseline**:
+**Skipped 2026-09-19 — no live workload to test against.** Checked
+`log_groups`: 30 rows, all `source_type IN ('weftd', 'direct')`, zero
+`cloudwatch`. `Poller.Start()` currently enumerates nothing and never
+spawns a `pollLoop`, and the `leases` table correspondingly has zero
+`poller:*` rows. Nothing to kill. Revisit if a CloudWatch-sourced log
+group is ever added; until then this scenario is blocked, not failed.
+Skipped deliberately rather than fabricating a throwaway CloudWatch log
+group just to exercise the path — the outcome is already predictable
+from the code (no reconcile loop, see Gotcha B) with high confidence, and
+Test 7 (scale down) is expected to surface the same underlying gap
+incidentally if it ever does apply. Fix the `Poller` reconcile-loop gap
+directly rather than manufacturing a workload to re-prove what reading
+`coordinator/poller/poller.go` already shows.
+
+**Baseline** (for whenever this becomes runnable):
 ```sql
 SELECT lg.id, lg.app, lg.log_group_name, l.holder, l.expires_at
 FROM log_groups lg LEFT JOIN leases l ON l.name = 'poller:' || lg.id
