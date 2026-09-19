@@ -71,29 +71,44 @@ cron set rather than looking for it here.
 - Not yet shipped to prod — needs a coordinator AMI rollout (like Phase 1)
   before Phase 4's chaos scenarios can rely on these log lines.
 
-**Phase 4 — chaos harness: not started.** Test matrix (one scenario per
-hazard + known gap), modeled on `docs/plans/fsm-chaos-tests.md`'s existing
-format (baseline state, action, expected FSM behavior, pass/fail criteria):
+**Phase 4 — chaos harness: doc written 2026-09-19, not yet executed.** Full
+8-scenario runnable test matrix in `docs/plans/coordinator-chaos-tests.md`
+(exact `kevcons`/SQL commands, PASS/FAIL criteria per scenario), modeled on
+`docs/plans/fsm-chaos-tests.md`'s format. Summary:
 
-1. NAT re-election — stop the current `nat-holder` mid-traffic.
-2. Poller double-ingest — force a `poller:<id>` lease flap, confirm no
+1. NAT re-election — hard-kill the current `nat-holder`.
+2. Poller double-ingest — hard-kill a `poller:<id>` holder, confirm no
    duplicate ingested rows.
-3. Cron/watch double-fire — force a `cron:<id>` lease flap, confirm a
+3. Cron/watch double-fire — hard-kill a `cron:<id>` holder, confirm a
    watch runs once, not twice.
 4. `TailFanout` under Redis disruption — restart/partition Valkey with
-   active `tail -f` subscribers on both coordinators.
-5. shard-fsm-leader flap under load — kill the current leader mid-tick;
-   confirm the deadman's switch or a clean release fires, the other
-   coordinator picks up convergence, and no shard gets double-launched.
-6. Slow-shard convergence stall — confirm (via Phase 3 logging) whether a
-   slow `Evaluate` call blocks the whole tick, as `docs/known-issues.md`
-   predicts but doesn't yet confirm under N=2.
-7. Scale event — `coordinator_desired` 2→3→2, confirm clean join/leave, no
-   orphaned lease rows.
-8. Steady-state load check — confirm no latency regression vs. the
-   single-coordinator baseline, watching per-instance panels from Phase 2
-   for a routing imbalance (one coordinator running hot while the other
-   idles).
+   active `tail -f` subscribers pinned to each coordinator via SSM
+   port-forward + `WEFT_ENDPOINT`.
+5. shard-fsm-leader flap under load — hard-kill the current leader;
+   confirm re-election and no shard double-launch.
+6. Slow-shard convergence stall — purely observational, reads Phase 3's
+   `evaluate_event`/`evaluate_tick` lines to confirm or disprove the
+   known sequential-evaluation gap from
+   `docs/plans/coordinator-horizontal-scaling.md`.
+7. Scale event — `coordinator_desired` 2→3→2 (needs a `max_capacity` bump
+   too, currently hardcoded to 2), check for orphaned lease rows.
+8. Steady-state load check — dashboard-only, no fault injection.
+
+Two things the write-up surfaced that change how Phase 5 should read the
+results, not just how to run the tests:
+- **`systemctl stop`/SIGTERM is a clean shutdown**, not a crash — every
+  lease loop releases on `ctx.Done()`. Tests 1 and 5 need
+  `pkill -9 -f weft-coordinator` to actually exercise the 30s-TTL
+  deadman's-switch path instead of the clean-handoff path.
+- **Poller leases have no reconcile loop; cron leases do.**
+  `Poller.Start()` enumerates `log_groups` once at boot and never retries
+  a lost lease; `CronExecutor.reconcile()` retries forever on a 30s
+  ticker. Tests 2 and 7 are expected to actually surface a stuck
+  `poller:<id>` lease after its holder dies — flagged in advance as a
+  likely real gap (missing `Poller` reconcile loop), not a test-harness
+  artifact. Test 4 additionally needs `weft-redis` (ElastiCache) confirmed
+  actually applied first — it may still be Terraform-only per
+  `coordinator-horizontal-scaling.md`'s last update.
 
 Run against prod directly — no isolated test environment, per an explicit
 call made when starting this work (full blast radius accepted; there is no
