@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // redisFanout is TailFanout's optional Redis Pub/Sub piece. Topic-scoped
@@ -41,6 +42,14 @@ func newRedisFanout(addr string, tlsEnabled bool, deliver func(rows []*pb.LogRow
 	if tlsEnabled {
 		opts.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
+	// OnConnect fires every time go-redis (re-)establishes the underlying
+	// connection — the first call is the initial connect, every call after
+	// that is a reconnect following a drop. There's no separate reconnect
+	// callback in the client, so this is the only hook into that signal.
+	opts.OnConnect = func(ctx context.Context, cn *redis.Conn) error {
+		store.LogTailFanoutEvent("connect", nil)
+		return nil
+	}
 	client := redis.NewClient(opts)
 	ps := client.PSubscribe(context.Background()) // patterns added via announceInterest
 	r := &redisFanout{client: client, ps: ps, patterns: make(map[tailTopic]string)}
@@ -53,6 +62,7 @@ func (r *redisFanout) recvLoop(deliver func(rows []*pb.LogRow)) {
 		row := &pb.LogRow{}
 		if err := proto.Unmarshal([]byte(msg.Payload), row); err != nil {
 			log.Printf("tailfanout: redis unmarshal row: %v", err)
+			store.LogTailFanoutEvent("unmarshal", err)
 			continue
 		}
 		deliver([]*pb.LogRow{row})
@@ -95,6 +105,7 @@ func (r *redisFanout) announceInterest(t tailTopic, add bool) {
 		r.mu.Unlock()
 		if err := r.ps.PSubscribe(ctx, p); err != nil {
 			log.Printf("tailfanout: redis psubscribe %s: %v", p, err)
+			store.LogTailFanoutEvent("psubscribe", err)
 		}
 		return
 	}
@@ -103,6 +114,7 @@ func (r *redisFanout) announceInterest(t tailTopic, add bool) {
 	r.mu.Unlock()
 	if err := r.ps.PUnsubscribe(ctx, p); err != nil {
 		log.Printf("tailfanout: redis punsubscribe %s: %v", p, err)
+		store.LogTailFanoutEvent("punsubscribe", err)
 	}
 }
 
@@ -118,11 +130,13 @@ func (r *redisFanout) publish(rows []*pb.LogRow) {
 		data, err := proto.Marshal(row)
 		if err != nil {
 			log.Printf("tailfanout: redis marshal row: %v", err)
+			store.LogTailFanoutEvent("marshal", err)
 			continue
 		}
 		pipe.Publish(ctx, channelFor(row), data)
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
 		log.Printf("tailfanout: redis publish: %v", err)
+		store.LogTailFanoutEvent("publish", err)
 	}
 }

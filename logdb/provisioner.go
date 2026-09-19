@@ -716,6 +716,7 @@ func (p *Provisioner) markProgress() { p.lastProgress.Store(time.Now().UnixNano(
 // NewProvisioner's leading default.
 func (p *Provisioner) evaluateStateMachines(ctx context.Context) {
 	defer p.markProgress()
+	tickStart := time.Now()
 	p.ensureBucketSMs()
 
 	p.smMu.RLock()
@@ -725,20 +726,28 @@ func (p *Provisioner) evaluateStateMachines(ctx context.Context) {
 	}
 	p.smMu.RUnlock()
 	for _, b := range buckets {
-		if err := b.Evaluate(ctx); err != nil {
+		start := time.Now()
+		err := b.Evaluate(ctx)
+		store.LogEvaluateEvent("bucket", fmt.Sprint(b.ID), time.Since(start), err)
+		if err != nil {
 			log.Printf("provisioner: bucket %d Evaluate: %v", b.ID, err)
 		}
 		p.markProgress()
 	}
 
 	deps := p.shardDeps()
-	for _, e := range p.registry.Entries() {
+	shards := p.registry.Entries()
+	for _, e := range shards {
 		e.ensureSM(deps)
-		if err := e.Evaluate(ctx); err != nil {
+		start := time.Now()
+		err := e.Evaluate(ctx)
+		store.LogEvaluateEvent("shard", e.ID, time.Since(start), err)
+		if err != nil {
 			log.Printf("provisioner: shard %s Evaluate: %v", e.ID, err)
 		}
 		p.markProgress()
 	}
+	store.LogEvaluateTick(len(buckets), len(shards), time.Since(tickStart))
 }
 
 // ensureBucketSMs keeps the bucketSMs map current with the bucket set:

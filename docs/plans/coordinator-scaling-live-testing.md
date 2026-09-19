@@ -48,17 +48,28 @@ in this repo. See `docs/manual/dashboards.md` and `docs/manual/crons.md` for
 the mechanism; ask the weft MCP server (`weft.crons_list`) for the current
 cron set rather than looking for it here.
 
-**Phase 3 — additional machine-checkable logging: not started.**
+**Phase 3 — additional machine-checkable logging: done, not yet deployed.**
 
-- Shard-FSM tick timing (per-tick and per-shard `Evaluate` duration) from
-  `evaluateStateMachines()` — needed to confirm or disprove the known
-  sequential-evaluation gap (one slow shard blocking convergence
-  fleet-wide) under real load.
-- Redis `TailFanout` health (subscribe/publish errors, reconnects) — needed
-  for the Redis-disruption chaos scenario below.
+- `store.LogEvaluateEvent(kind, id, dur, err)` (`store/telemetry_events.go`)
+  emits one `evaluate_event` line per bucket/shard `Evaluate` call inside
+  `evaluateStateMachines()` (`logdb/provisioner.go`), timed individually.
+  `store.LogEvaluateTick(buckets, shards, dur)` emits one `evaluate_tick`
+  line per tick with the total duration — the line that will confirm or
+  disprove the known sequential-evaluation gap (one slow shard blocking
+  convergence fleet-wide) once read under real N=2 load (chaos scenario 6
+  below).
+- `store.LogTailFanoutEvent(op, err)` (same file) is called from all 4
+  existing error sites in `coordinator/tail_fanout_redis.go` (unmarshal,
+  psubscribe, punsubscribe, marshal/publish) plus a new `OnConnect` hook on
+  the redis.Options — the only signal go-redis exposes for its own
+  auto-reconnect, so every post-initial `connect` event there is a
+  reconnect after a drop. Needed for the Redis-disruption chaos scenario
+  below.
 - The shard-fsm-leader deadman's-switch trigger already gets a
   `lease_event` line (`deadman_released`) as of Phase 1; no further work
   needed there.
+- Not yet shipped to prod — needs a coordinator AMI rollout (like Phase 1)
+  before Phase 4's chaos scenarios can rely on these log lines.
 
 **Phase 4 — chaos harness: not started.** Test matrix (one scenario per
 hazard + known gap), modeled on `docs/plans/fsm-chaos-tests.md`'s existing
