@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/graybeardcorp/weft/store"
 )
 
 // recordedReq captures the relevant bits of an inbound request so a
@@ -214,6 +216,45 @@ func TestHTTPBackend_SaveWatch(t *testing.T) {
 	}
 	if !strings.Contains(rec.body, `"schedule":"@hourly"`) {
 		t.Errorf("body missing schedule: %q", rec.body)
+	}
+}
+
+// TestHTTPBackend_SaveWatch_RelaysWarnings: a 200 response carrying a
+// "warnings" field is not a failure — SaveWatch must still return an
+// error (so the generic store.Split-based callers can display it),
+// but store.Split on that error must show zero blocking errors.
+func TestHTTPBackend_SaveWatch_RelaysWarnings(t *testing.T) {
+	b, _ := newTestBackend(t, func(_ *recordedReq, w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"warnings": []string{"tail -n 1000 caps this cron at 1000 rows per run"},
+		})
+	})
+	wd := &WatchData{Schedule: "*/5 * * * *", Pipeline: "tail -n 1000 x | grep -c y"}
+	err := b.SaveWatch("risky", wd)
+	if err == nil {
+		t.Fatal("SaveWatch: want a non-nil error carrying the warning, got nil")
+	}
+	blocking, warnings := store.Split(err)
+	if len(blocking) != 0 {
+		t.Fatalf("SaveWatch: got blocking error %v, want the save to have succeeded", blocking)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "tail -n 1000") {
+		t.Errorf("warnings: got %v, want one message naming the cap", warnings)
+	}
+}
+
+// TestHTTPBackend_SaveWatch_NoWarningsFieldIsClean: a plain 200 with
+// no "warnings" field (or an empty one) must not synthesize a
+// warning out of nothing.
+func TestHTTPBackend_SaveWatch_NoWarningsFieldIsClean(t *testing.T) {
+	b, _ := newTestBackend(t, func(_ *recordedReq, w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{}`))
+	})
+	wd := &WatchData{Schedule: "@hourly", Pipeline: "cat /log/x | wc -l"}
+	if err := b.SaveWatch("clean", wd); err != nil {
+		t.Fatalf("SaveWatch: got %v, want nil", err)
 	}
 }
 

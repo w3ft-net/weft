@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -1674,11 +1675,22 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 	resolver := storeBinResolver{store: s.store, orgID: custID}
 	loweredJSON := planner.LowerForStorage(req.Pipeline, session.ActiveCustomerName, string(tier), resolver)
 
-	if err := s.store.SaveCronWatch(custID, session.UserID, name, req.Schedule, req.Pipeline, loweredJSON); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	// SaveCronWatch's error may be a non-blocking store.Warning (or an
+	// errors.Join of several) — the save already happened, but
+	// there's something to tell the user (e.g. the /cron.d
+	// truncation lint). store.Split separates that from an actual
+	// rejection, and — unlike before — a real rejection now carries
+	// its own message (bash syntax error, tier limit, ...) instead of
+	// a generic "internal error" that discarded it.
+	blocking, warnings := store.Split(s.store.SaveCronWatch(custID, session.UserID, name, req.Schedule, req.Pipeline, loweredJSON))
+	if len(blocking) > 0 {
+		http.Error(w, errors.Join(blocking...).Error(), http.StatusBadRequest)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Warnings []string `json:"warnings,omitempty"`
+	}{Warnings: warnings})
 }
 
 // storeBinResolver adapts a *store.Store + customer scope to the

@@ -1,11 +1,13 @@
 package shell
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/warp/pkg/vim"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // MessageAmender is implemented by FS adapters that track a per-file
@@ -33,24 +35,41 @@ type MessageAmender interface {
 //     MessageAmender if the FS implements it; empty messages no-op.
 //   - :q! in the popup skips the recording.
 //   - :wq on any other path returns to the prompt as usual.
+//
+// WriteFile's error may be a non-blocking store.Warning (or an
+// errors.Join of several) — the save already happened, but there's
+// something to tell the user (e.g. the /cron.d truncation lint).
+// store.Split separates that from an actual rejection: only a real
+// blocking error becomes vim's StatusMsg and skips the popup: a
+// Warning-only result still opens the popup as normal, with the
+// warning text folded into its header (see openMessagePopup) since
+// that's the one place guaranteed to render after a successful :wq —
+// plain :w has no equivalent surface today (see cron-truncation-lint
+// plan doc's "known limitation").
 func installVimPopupHooks(core *shellcore.ShellCore) shellcore.VimHooks {
-	// queuedPath, when non-empty, signals that the next OnQuit on
-	// the originating editor should open the popup instead of
-	// exiting. Lives as a closure variable shared between OnSave
-	// and OnQuit — no shellcore state needed.
+	// queuedPath/queuedWarnings, when queuedPath is non-empty, signal
+	// that the next OnQuit on the originating editor should open the
+	// popup (with these warnings folded in) instead of exiting. Lives
+	// as closure variables shared between OnSave and OnQuit — no
+	// shellcore state needed.
 	var queuedPath string
+	var queuedWarnings []string
 
 	return shellcore.VimHooks{
 		OnSave: func(path, content string) error {
 			fs := core.GetFS()
+			var writeErr error
 			if fs != nil {
-				if err := fs.WriteFile(path, []byte(content)); err != nil {
-					return err
-				}
+				writeErr = fs.WriteFile(path, []byte(content))
+			}
+			blocking, warnings := store.Split(writeErr)
+			if len(blocking) > 0 {
+				return errors.Join(blocking...)
 			}
 			core.Dispatch(shellcore.ActionVimSave{Path: path, Content: content})
 			if isVersionedPath(path) {
 				queuedPath = path
+				queuedWarnings = warnings
 			}
 			return nil
 		},
@@ -61,8 +80,10 @@ func installVimPopupHooks(core *shellcore.ShellCore) shellcore.VimHooks {
 				return nil
 			}
 			path := queuedPath
+			warnings := queuedWarnings
 			queuedPath = ""
-			openMessagePopup(core, path)
+			queuedWarnings = nil
+			openMessagePopup(core, path, warnings)
 			return nil
 		},
 	}
@@ -87,15 +108,23 @@ func isVersionedPath(path string) bool {
 // stripped.
 const messagePopupHeader = `# Commit message for %s.
 # One or more lines; the first line is the subject shown in ` + "`wit log`." + `
-# Save & exit (:wq) to record. Quit without saving (:q!) to skip.
-
-`
+# Save & exit (:wq) to record. Quit without saving (:q!) to skip.`
 
 // openMessagePopup swaps the active vim editor for a follow-up
 // commit-message buffer scoped to `path`. Save records the message
-// via MessageAmender (when available); quit-force skips.
-func openMessagePopup(core *shellcore.ShellCore, path string) {
-	header := fmt.Sprintf(messagePopupHeader, path)
+// via MessageAmender (when available); quit-force skips. warnings, if
+// any, are folded in as `# WARNING: ...` comment lines ahead of the
+// blank line the user types into — generic rendering, the same for
+// any check that produced them.
+func openMessagePopup(core *shellcore.ShellCore, path string, warnings []string) {
+	var b strings.Builder
+	fmt.Fprintf(&b, messagePopupHeader, path)
+	b.WriteByte('\n')
+	for _, w := range warnings {
+		fmt.Fprintf(&b, "# WARNING: %s\n", w)
+	}
+	b.WriteString("\n")
+	header := b.String()
 	hooks := vim.EditorHooks{
 		OnSave: func(text string) error {
 			msg := stripCommentLines(text)

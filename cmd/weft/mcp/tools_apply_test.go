@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/graybeardcorp/weft/cmd/weft/mcp/proposals"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // applyBackend captures every Save / Delete call so tests can
@@ -161,6 +162,44 @@ func TestProposalsApply_PartialFailure_KeepsRest(t *testing.T) {
 	}
 	if !stillStaged["0002"] || !stillStaged["0003"] {
 		t.Errorf("0002 and 0003 should remain staged; got %+v", stillStaged)
+	}
+}
+
+// TestProposalsApply_WarningDoesNotBlockBatch: a SaveCron that
+// returns a non-blocking store.Warning (e.g. the /cron.d truncation
+// lint, surfaced end-to-end through SaveWatch → the HTTP response's
+// "warnings" field) must still count as applied — not as a failure —
+// with the message folded into the result text. Generic by
+// construction: this doesn't special-case what produced the warning.
+func TestProposalsApply_WarningDoesNotBlockBatch(t *testing.T) {
+	store_, _ := proposals.New(t.TempDir())
+	be := newApplyBackend()
+	cfg := Config{Run: neverRunFn(t), Proposals: store_}
+	be.wire(&cfg)
+	cfg.SaveCron = func(name, body string) error {
+		be.saved["cron:"+name] = body
+		return store.NewWarning("tail -n 1000 caps this cron at 1000 rows per run")
+	}
+	s := testSession(t, cfg)
+
+	_, _ = store_.Add(proposals.Proposal{Kind: "cron", Name: "risky", Proposed: "schedule: */5 * * * *\npipeline: tail -n 1000 x | grep -c y\n"})
+
+	res := callTool(t, s, "weft.proposals_apply", map[string]any{"ids": []string{"0001"}})
+	if res.IsError {
+		t.Fatalf("unexpected IsError for a warning-only save; %q", textContent(res))
+	}
+	if _, ok := be.saved["cron:risky"]; !ok {
+		t.Errorf("SaveCron risky should have been called")
+	}
+	if ps, _ := store_.List(); len(ps) != 0 {
+		t.Errorf("applied proposal should be removed from staging; got %d remaining", len(ps))
+	}
+	got := textContent(res)
+	if !strings.Contains(got, "applied 1 proposal(s)") {
+		t.Errorf("result should report the successful apply; got %q", got)
+	}
+	if !strings.Contains(got, "0001") || !strings.Contains(got, "tail -n 1000 caps this cron") {
+		t.Errorf("result should fold in the warning text keyed by proposal id; got %q", got)
 	}
 }
 

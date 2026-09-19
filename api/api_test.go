@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -207,6 +208,145 @@ func TestWatchCreate_TierFromDB_NotJWT(t *testing.T) {
 	if w.Code != 200 && w.Code != 201 {
 		t.Errorf("watch create with stale-trial JWT but live-bolt DB: got %d %s",
 			w.Code, w.Body.String())
+	}
+}
+
+// setupWatchOwner creates a verified, bolt-tier user + org and
+// returns a JWT for saving watches — the shared boilerplate for the
+// SaveWatch error/warning tests below.
+func setupWatchOwner(t *testing.T, s *store.Store, orgName string) string {
+	t.Helper()
+	cust, _ := s.FindOrCreateOrg(orgName)
+	user, err := s.CreateUser(fmt.Sprintf("%s-%d@example.com", orgName, os.Getpid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	markUserVerified(s, user.ID)
+	s.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, store.RoleOwner)
+	now := time.Now()
+	expires := now.Add(365 * 24 * time.Hour)
+	if err := s.CreateSubscription(&store.Subscription{
+		ID:        "bolt-" + cust.Name,
+		OrgID:     cust.ID,
+		Tier:      string(store.TierBolt),
+		Status:    "active",
+		StartsAt:  now,
+		ExpiresAt: &expires,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	jwt, err := auth.Generate(user, "test-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return jwt
+}
+
+// TestSaveWatch_SyntaxErrorSurfacesRealMessage pins the fix for a
+// standing bug: handleSaveWatch used to discard SaveCronWatch's error
+// entirely and return a generic "internal error" 500, so a bash
+// syntax error typed into a cron pipeline via the web UI or MCP
+// (which both go through this endpoint) was reported as a mystery
+// server failure instead of the real, actionable message. See
+// docs/plans/cron-truncation-lint.md, "Generic warning mechanism".
+func TestSaveWatch_SyntaxErrorSurfacesRealMessage(t *testing.T) {
+	srv, s := testServer(t)
+	handler := srv.Handler()
+	jwt := setupWatchOwner(t, s, "syntax-err-watch")
+
+	body := []byte(`{"schedule":"*/5 * * * *","pipeline":"cat |"}`)
+	req := httptest.NewRequest("PUT", "/api/watches/broken", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("bad pipeline: got %d, want 400 (bad request): %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "no following command") {
+		t.Errorf("response body should carry the real parse-error message, got: %q", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "internal error") {
+		t.Errorf("response body should not be the old generic message, got: %q", w.Body.String())
+	}
+}
+
+// TestSaveWatch_TruncationWarning: a pipeline shaped like a real
+// truncation risk (log-pattern-count's raw expansion) still saves
+// (200), and the response body carries the warning under a generic
+// "warnings" field — the same shape any future save-time check would
+// use, not something specific to this one.
+func TestSaveWatch_TruncationWarning(t *testing.T) {
+	srv, s := testServer(t)
+	handler := srv.Handler()
+	jwt := setupWatchOwner(t, s, "truncation-warn-watch")
+
+	body := []byte(`{"schedule":"*/5 * * * *","pipeline":"tail -n 1000 /log/x/y/main.log | grep -c \"boom\""}`)
+	req := httptest.NewRequest("PUT", "/api/watches/risky", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("truncation-risk pipeline: got %d, want 200 (warn, don't block): %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v (body: %s)", err, w.Body.String())
+	}
+	if len(resp.Warnings) != 1 {
+		t.Fatalf("got %d warnings, want 1: %v (body: %s)", len(resp.Warnings), resp.Warnings, w.Body.String())
+	}
+	if !strings.Contains(resp.Warnings[0], "tail -n 1000") {
+		t.Errorf("warning text should name the cap, got: %q", resp.Warnings[0])
+	}
+
+	saved, err := s.GetCronWatch(func() string {
+		cust, _ := s.FindOrCreateOrg("truncation-warn-watch")
+		return cust.ID
+	}(), "risky")
+	if err != nil {
+		t.Fatalf("GetCronWatch: %v (want the watch to have actually saved)", err)
+	}
+	if saved.Name != "risky" {
+		t.Errorf("saved watch name: got %q, want risky", saved.Name)
+	}
+}
+
+// TestWriteFS_CronPathWithWarning_StillSucceeds: the generic
+// multi-path file editor (PUT /api/fs/write) also routes /cron.d/
+// writes through SaveCronWatch. Before store.Split, any non-nil
+// error there — including a non-blocking store.Warning — was
+// reported as a 400. A truncation-risk cron written through this
+// endpoint must still succeed (204), even though this generic
+// surface has nowhere to display the warning text itself.
+func TestWriteFS_CronPathWithWarning_StillSucceeds(t *testing.T) {
+	srv, s := testServer(t)
+	handler := srv.Handler()
+	jwt := setupWatchOwner(t, s, "writefs-cron-warn")
+
+	body := []byte(`{"path":"/cron.d/risky","content":"# schedule: */5 * * * *\ntail -n 1000 /log/x/y/main.log | grep -c \"boom\"\n"}`)
+	req := httptest.NewRequest("PUT", "/api/fs/write", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("cron write with a truncation-risk pipeline: got %d, want 204: %s", w.Code, w.Body.String())
+	}
+
+	cust, _ := s.FindOrCreateOrg("writefs-cron-warn")
+	saved, err := s.GetCronWatch(cust.ID, "risky")
+	if err != nil {
+		t.Fatalf("GetCronWatch: %v (want the watch to have actually saved)", err)
+	}
+	if saved.Name != "risky" {
+		t.Errorf("saved watch name: got %q, want risky", saved.Name)
 	}
 }
 

@@ -5,6 +5,7 @@ package shell
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/weft/chart"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // WatchData holds the deserialized fields of a cron watch.
@@ -98,11 +100,34 @@ func (b *HTTPBackend) GetWatch(name string) (*WatchData, error) {
 	}, nil
 }
 
+// SaveWatch's error may be a non-blocking store.Warning (or an
+// errors.Join of several) — the save already happened, but the
+// backend has something to tell the user (e.g. the /cron.d
+// truncation lint). store.Split separates that from an actual
+// rejection. Generic: this relays whatever the "warnings" field of
+// the PUT response carries, without knowing what produced it.
 func (b *HTTPBackend) SaveWatch(name string, w *WatchData) error {
-	return b.apiPut("/api/watches/"+name, map[string]string{
+	body, err := b.apiPutBody("/api/watches/"+name, map[string]string{
 		"schedule": w.Schedule,
 		"pipeline": w.Pipeline,
 	})
+	if err != nil {
+		return err
+	}
+	var resp struct {
+		Warnings []string `json:"warnings"`
+	}
+	if len(body) > 0 {
+		_ = json.Unmarshal(body, &resp) // best-effort: a malformed/empty body just means no warnings to relay
+	}
+	if len(resp.Warnings) == 0 {
+		return nil
+	}
+	warnings := make([]error, len(resp.Warnings))
+	for i, m := range resp.Warnings {
+		warnings[i] = store.NewWarning("%s", m)
+	}
+	return errors.Join(warnings...)
 }
 
 func (b *HTTPBackend) DeleteWatch(name string) error {
@@ -256,6 +281,14 @@ func (b *HTTPBackend) apiGet(endpoint string) ([]byte, error) {
 }
 
 func (b *HTTPBackend) apiPut(endpoint string, payload any) error {
+	_, err := b.apiPutBody(endpoint, payload)
+	return err
+}
+
+// apiPutBody is apiPut plus the response body on success, for callers
+// that need to parse a JSON reply (e.g. SaveWatch's "warnings" field)
+// rather than just success/failure.
+func (b *HTTPBackend) apiPutBody(endpoint string, payload any) ([]byte, error) {
 	body, _ := json.Marshal(payload)
 	req, _ := http.NewRequest("PUT", b.baseURL+endpoint, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -263,15 +296,15 @@ func (b *HTTPBackend) apiPut(endpoint string, payload any) error {
 
 	resp, err := b.client.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
+	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		msg, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("%s", strings.TrimSpace(string(msg)))
+		return nil, fmt.Errorf("%s", strings.TrimSpace(string(respBody)))
 	}
-	return nil
+	return respBody, nil
 }
 
 func (b *HTTPBackend) apiDelete(endpoint string) error {

@@ -930,8 +930,15 @@ func (s *Server) SaveWatch(ctx context.Context, req *pb.SaveWatchRequest) (*pb.S
 		tier := string(s.Store.TierForOrg(custID))
 		loweredJSON = planner.LowerForStorage(req.Pipeline, cust.Name, tier, resolver)
 	}
-	if err := s.Store.SaveCronWatch(custID, callerUserID(ctx), req.Name, req.Schedule, req.Pipeline, loweredJSON); err != nil {
-		return nil, err
+	// SaveCronWatch's error may be a non-blocking store.Warning (the
+	// save already happened) — see store.Split's doc. SaveWatchResponse
+	// has no field to carry warning text today, so this surface drops
+	// it rather than misreporting a successful save as an RPC failure;
+	// the CLI/HTTP/MCP surfaces are where warnings actually reach a
+	// user today.
+	blocking, _ := store.Split(s.Store.SaveCronWatch(custID, callerUserID(ctx), req.Name, req.Schedule, req.Pipeline, loweredJSON))
+	if len(blocking) > 0 {
+		return nil, errors.Join(blocking...)
 	}
 	return &pb.SaveWatchResponse{}, nil
 }

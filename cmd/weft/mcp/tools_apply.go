@@ -2,12 +2,14 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/graybeardcorp/weft/cmd/weft/mcp/proposals"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // ProposalsListArgs / DiffArgs / ApplyArgs are the wire schemas
@@ -110,21 +112,32 @@ func proposalsApplyHandler(cfg Config, a ProposalsApplyArgs) *mcp.CallToolResult
 		props = append(props, p)
 	}
 
-	var applied, failed, skipped []string
+	// applyOne's error may be a non-blocking store.Warning (or an
+	// errors.Join of several) — e.g. the /cron.d truncation lint.
+	// store.Split separates that from an actual rejection: a
+	// Warning-only result still counts as applied, with its message
+	// collected for display; only a real blocking error stops the
+	// batch. Generic — this doesn't know or care which check (if any)
+	// produced a given warning.
+	var applied, failed, skipped, warningLines []string
 	var firstErr error
 	for i, p := range props {
 		if firstErr != nil {
 			skipped = append(skipped, p.ID)
 			continue
 		}
-		if err := applyOne(cfg, p); err != nil {
-			firstErr = err
+		blocking, warnings := store.Split(applyOne(cfg, p))
+		if len(blocking) > 0 {
+			firstErr = errors.Join(blocking...)
 			failed = append(failed, p.ID)
 			// Subsequent ids are skipped (i+1..end).
 			for _, rest := range props[i+1:] {
 				skipped = append(skipped, rest.ID)
 			}
 			break
+		}
+		for _, w := range warnings {
+			warningLines = append(warningLines, fmt.Sprintf("%s: %s", p.ID, w))
 		}
 		applied = append(applied, p.ID)
 		// Drop the staged file once the backend mutation succeeded.
@@ -139,9 +152,11 @@ func proposalsApplyHandler(cfg Config, a ProposalsApplyArgs) *mcp.CallToolResult
 			failed[0], firstErr, applied, failed, skipped)
 		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: body}}}
 	}
-	return &mcp.CallToolResult{Content: []mcp.Content{
-		&mcp.TextContent{Text: fmt.Sprintf("applied %d proposal(s): %v", len(applied), applied)},
-	}}
+	text := fmt.Sprintf("applied %d proposal(s): %v", len(applied), applied)
+	if len(warningLines) > 0 {
+		text += "\n\nwarnings:\n" + strings.Join(warningLines, "\n")
+	}
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}
 }
 
 // applyOne dispatches to the correct backend function based on

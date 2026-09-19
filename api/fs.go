@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"github.com/graybeardcorp/weft/mounts"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shellfs"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // sessionPerms projects a Session's role + org-permission flags into
@@ -114,8 +116,16 @@ func (s *Server) handleWriteFS(w http.ResponseWriter, r *http.Request) {
 
 	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session))}
 	fs := shellfs.New(s.store, session.ActiveOrgID, nil, opts...)
-	if err := fs.WriteFile(req.Path, []byte(req.Content)); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	// WriteFile's error may be a non-blocking store.Warning (e.g. a
+	// /cron.d save tripping the truncation lint) — the write already
+	// happened. This generic multi-path editor endpoint has no field
+	// to carry warning text today (204 has no body), so it drops the
+	// message rather than reporting a successful write as a failed
+	// one; the dedicated /api/watches endpoint is where a cron save's
+	// warnings actually reach the user.
+	blocking, _ := store.Split(fs.WriteFile(req.Path, []byte(req.Content)))
+	if len(blocking) > 0 {
+		http.Error(w, errors.Join(blocking...).Error(), http.StatusBadRequest)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

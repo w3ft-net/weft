@@ -171,7 +171,16 @@ export function getWatches(): Promise<WatchesResponse> {
   return apiFetch('/api/watches')
 }
 
-export function saveWatch(name: string, schedule: string, pipeline: string): Promise<void> {
+// SaveWatchResult.warnings carries non-blocking, save-time messages
+// (e.g. a cron whose tail/head cap risks silently truncating data) —
+// the save always succeeds; warnings is empty/absent when there's
+// nothing to say. Generic by design: any future save-time check uses
+// the same field, so callers don't need to know which check fired.
+export interface SaveWatchResult {
+  warnings?: string[]
+}
+
+export function saveWatch(name: string, schedule: string, pipeline: string): Promise<SaveWatchResult> {
   return apiFetch(`/api/watches/${encodeURIComponent(name)}`, {
     method: 'PUT',
     body: JSON.stringify({ schedule, pipeline }),

@@ -1,11 +1,13 @@
 package shell
 
 import (
+	"errors"
 	"io/fs"
 	"strings"
 	"testing"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // stubPopupFS is a minimal in-memory FS that satisfies shellcore.FS
@@ -14,6 +16,10 @@ import (
 type stubPopupFS struct {
 	files      map[string]string
 	amendCalls []amendCall
+	// writeErr, when set, is returned by the next WriteFile call
+	// instead of nil — tests use this to simulate a real save
+	// surface's store.Warning (or a genuine blocking error).
+	writeErr error
 }
 
 type amendCall struct{ path, message string }
@@ -31,7 +37,7 @@ func (f *stubPopupFS) ReadFile(p string) ([]byte, error) {
 
 func (f *stubPopupFS) WriteFile(p string, d []byte) error {
 	f.files[p] = string(d)
-	return nil
+	return f.writeErr
 }
 
 func (f *stubPopupFS) ReadDir(p string) ([]fs.DirEntry, error) { return nil, nil }
@@ -215,5 +221,75 @@ func TestVimPopup_EmptyMessageNoRecord(t *testing.T) {
 
 	if len(fs.amendCalls) != 0 {
 		t.Errorf("comment-only buffer: expected 0 AmendVersionMessage calls, got %d", len(fs.amendCalls))
+	}
+}
+
+// TestVimPopup_WarningStillOpensPopup: a WriteFile that returns a
+// non-blocking store.Warning (e.g. the /cron.d truncation lint) must
+// still open the commit-message popup as usual — the save succeeded
+// — with the warning folded into the popup header. This is the
+// generic mechanism from docs/plans/cron-truncation-lint.md: the
+// popup doesn't know or care which check produced the warning.
+func TestVimPopup_WarningStillOpensPopup(t *testing.T) {
+	fs := newStubPopupFS()
+	fs.writeErr = store.NewWarning("tail -n 1000 caps this cron at 1000 rows per run")
+	c := newConfiguredCore(t, fs)
+
+	c.StartVim("/cron.d/risky")
+	ed := c.VimEditor()
+	if err := ed.Hooks.OnSave("# schedule: */5 * * * *\ntail -n 1000 x | grep -c y"); err != nil {
+		t.Fatalf("OnSave: got error %v, want nil (a Warning must not block the save)", err)
+	}
+	ed.Hooks.OnQuit(false)
+
+	if c.Mode() != shellcore.ModeVim {
+		t.Fatalf("after :wq with a warning: expected ModeVim (popup), got %v", c.Mode())
+	}
+	popup := c.VimEditor()
+	if popup == nil {
+		t.Fatal("popup editor not active")
+	}
+	body := popup.Buffer.String()
+	if !strings.Contains(body, "# Commit message for /cron.d/risky") {
+		t.Errorf("popup buffer should still mention the saved path; got:\n%s", body)
+	}
+	if !strings.Contains(body, "# WARNING: tail -n 1000 caps this cron at 1000 rows per run") {
+		t.Errorf("popup buffer should fold in the warning; got:\n%s", body)
+	}
+}
+
+// TestVimPopup_BlockingErrorSkipsPopup: a real (non-Warning) error
+// from WriteFile must behave exactly as before this change — it
+// propagates as the blocking error, so vim's `:wq` handling shows it
+// as the status-bar message and never calls OnQuit/opens the popup.
+func TestVimPopup_BlockingErrorSkipsPopup(t *testing.T) {
+	fs := newStubPopupFS()
+	fs.writeErr = errors.New("bash syntax error: unexpected EOF")
+	c := newConfiguredCore(t, fs)
+
+	c.StartVim("/cron.d/broken")
+	ed := c.VimEditor()
+	err := ed.Hooks.OnSave("# schedule: */5 * * * *\ncat |")
+	if err == nil {
+		t.Fatal("OnSave: want the blocking error to propagate, got nil")
+	}
+	if err.Error() != "bash syntax error: unexpected EOF" {
+		t.Errorf("OnSave error: got %q, want the real message unwrapped, not a generic one", err.Error())
+	}
+}
+
+// TestVimPopup_MixedBlockingAndWarning_StillBlocks: if WriteFile ever
+// returns a joined error containing both a real error and a Warning,
+// the real error must still win — a Warning is never allowed to mask
+// an actual rejection.
+func TestVimPopup_MixedBlockingAndWarning_StillBlocks(t *testing.T) {
+	fs := newStubPopupFS()
+	fs.writeErr = errors.Join(errors.New("watch limit reached"), store.NewWarning("also this"))
+	c := newConfiguredCore(t, fs)
+
+	c.StartVim("/cron.d/over-limit")
+	ed := c.VimEditor()
+	if err := ed.Hooks.OnSave("# schedule: */5 * * * *\ncat /log/x/y/main.log"); err == nil {
+		t.Fatal("OnSave: want a blocking error, got nil")
 	}
 }
