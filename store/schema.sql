@@ -11,7 +11,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict X0P9SlZvfgzMPPvjG1NnvAfTKr4KOYETcKWBctNhyaW6c7L6X3Su2d6h0v6jWmw
+\restrict 4oZZOpd3W2mzzBmaLtNloqHMucap9WUa7nYzd5cjnnLSzZvxSkqa7kfWpxRzAek
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg13+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg13+2)
@@ -1155,6 +1155,18 @@ ALTER SEQUENCE public.ingestion_errors_id_seq OWNED BY public.ingestion_errors.i
 
 
 --
+-- Name: leases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.leases (
+    name text NOT NULL,
+    holder text NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    acquired_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: log_groups; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2268,6 +2280,14 @@ ALTER TABLE ONLY public.ingestion_errors
 
 
 --
+-- Name: leases leases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.leases
+    ADD CONSTRAINT leases_pkey PRIMARY KEY (name);
+
+
+--
 -- Name: log_groups log_groups_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2473,22 +2493,6 @@ ALTER TABLE ONLY public.usage_daily
 
 ALTER TABLE ONLY public.usage_daily_default
     ADD CONSTRAINT usage_daily_default_pkey PRIMARY KEY (customer_name, day);
-
-
---
--- Name: usage_hourly usage_hourly_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_hourly
-    ADD CONSTRAINT usage_hourly_pkey PRIMARY KEY (customer_name, hour);
-
-
---
--- Name: usage_hourly_default usage_hourly_default_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.usage_hourly_default
-    ADD CONSTRAINT usage_hourly_default_pkey PRIMARY KEY (customer_name, hour);
 
 
 --
@@ -2921,6 +2925,13 @@ CREATE INDEX idx_tmp_files_org_path ON ONLY public.tmp_files USING btree (org_id
 
 
 --
+-- Name: idx_usage_hourly_customer_hour; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_usage_hourly_customer_hour ON ONLY public.usage_hourly USING btree (customer_name, hour);
+
+
+--
 -- Name: idx_user_notices_pending; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2960,6 +2971,13 @@ CREATE INDEX tmp_file_lines_default_file_id_line_num_idx ON public.tmp_file_line
 --
 
 CREATE INDEX tmp_files_default_org_id_path_idx ON public.tmp_files_default USING btree (org_id, path);
+
+
+--
+-- Name: usage_hourly_default_customer_name_hour_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX usage_hourly_default_customer_name_hour_idx ON public.usage_hourly_default USING btree (customer_name, hour);
 
 
 --
@@ -3068,10 +3086,10 @@ ALTER INDEX public.usage_daily_pkey ATTACH PARTITION public.usage_daily_default_
 
 
 --
--- Name: usage_hourly_default_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
+-- Name: usage_hourly_default_customer_name_hour_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
-ALTER INDEX public.usage_hourly_pkey ATTACH PARTITION public.usage_hourly_default_pkey;
+ALTER INDEX public.idx_usage_hourly_customer_hour ATTACH PARTITION public.usage_hourly_default_customer_name_hour_idx;
 
 
 --
@@ -3265,13 +3283,13 @@ ALTER TABLE ONLY public.users
 -- PostgreSQL database dump complete
 --
 
-\unrestrict X0P9SlZvfgzMPPvjG1NnvAfTKr4KOYETcKWBctNhyaW6c7L6X3Su2d6h0v6jWmw
+\unrestrict 4oZZOpd3W2mzzBmaLtNloqHMucap9WUa7nYzd5cjnnLSzZvxSkqa7kfWpxRzAek
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict 8eGc8DhAu9v1giNFC3BYbAGmJPkpFcv1KdTZaKF9aEYaX9dYphOnP9MBky3CsIQ
+\restrict btWyuiqR7Ta45WoxmTGm0Frera7P48MRulTCz2OraSuNfQhRf0ocfJcH8c3KnFT
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg13+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg13+2)
@@ -3305,13 +3323,13 @@ SELECT pg_catalog.setval('public.buckets_new_id_seq', 1, true);
 -- PostgreSQL database dump complete
 --
 
-\unrestrict 8eGc8DhAu9v1giNFC3BYbAGmJPkpFcv1KdTZaKF9aEYaX9dYphOnP9MBky3CsIQ
+\unrestrict btWyuiqR7Ta45WoxmTGm0Frera7P48MRulTCz2OraSuNfQhRf0ocfJcH8c3KnFT
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict eukg0uV4SLf0MIFOzsXEW5XSUEKaE3rKx0hJeVHBVO3gN2I7c2S433MOgiXpKRH
+\restrict INSajNAMuujFPvvgyHuH81q2iV8FrcLHh7EhTEIgbylNaiXYxXh3QoolU2TQBlP
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg13+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg13+2)
@@ -3403,20 +3421,22 @@ INSERT INTO public.goose_db_version VALUES (69, 70, true, '2026-07-30 21:45:01.9
 INSERT INTO public.goose_db_version VALUES (70, 71, true, '2026-07-30 21:45:01.974013');
 INSERT INTO public.goose_db_version VALUES (71, 72, true, '2026-07-30 21:45:01.982593');
 INSERT INTO public.goose_db_version VALUES (72, 73, true, '2026-09-02 21:54:40.900486');
+INSERT INTO public.goose_db_version VALUES (73, 74, true, '2026-09-19 02:18:28.296681');
+INSERT INTO public.goose_db_version VALUES (74, 75, true, '2026-09-19 02:18:28.317272');
 
 
 --
 -- Name: goose_db_version_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
-SELECT pg_catalog.setval('public.goose_db_version_id_seq', 72, true);
+SELECT pg_catalog.setval('public.goose_db_version_id_seq', 74, true);
 
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict eukg0uV4SLf0MIFOzsXEW5XSUEKaE3rKx0hJeVHBVO3gN2I7c2S433MOgiXpKRH
+\unrestrict INSajNAMuujFPvvgyHuH81q2iV8FrcLHh7EhTEIgbylNaiXYxXh3QoolU2TQBlP
 
 
 -- +weft partman/cron reconstruction (generated by scripts/collapse-migrations.sh; do not hand-edit)
