@@ -1,11 +1,12 @@
 # Coordinator horizontal scaling hazards
 
-The coordinator AMI/design assumes exactly one coordinator instance is ever
-running. `coordinator_desired` is pinned to `1` today
-(`infrastructure-live/prod/weft/terraform.tfvars:13`). This doc catalogs what
-breaks if that's bumped, so we can work through each one independently. None
-of the items below are behind a leader election or work-partitioning scheme —
-they were each written as if `len(coordinators) == 1` were an invariant.
+The coordinator AMI/design originally assumed exactly one coordinator
+instance is ever running. This doc catalogs what breaks if that's bumped, so
+each hazard could be worked through independently. All 5 are now fixed and
+`coordinator_desired` moved from `1` to `2` in prod on 2026-09-19 — see
+`docs/plans/coordinator-scaling-live-testing.md` for the follow-up work
+proving these fixes hold under real N=2 concurrency (observability +
+a chaos-test harness).
 
 ## Status
 
@@ -16,7 +17,7 @@ they were each written as if `len(coordinators) == 1` were an invariant.
 | 1b | Found: live prod config drift in `app_config_blob` (shard volume sizes, Stripe price IDs) | **Done** — applied, `app_config_blob` no longer drifts |
 | 2 | CloudWatch poller double-ingest | **Done** — per-log-group lease, see below |
 | 3 | Cron/watch executor double-fire | **Done** — per-watch lease, see below |
-| 4 | In-memory per-process state (tail/ingest/usage) | **Usage stats done** (append-only flush, see below). `RingBuffer` scoped out — no fix needed (see below). `TailBroker`: benchmarked 2026-09-17, Redis Pub/Sub won, **production wiring done** 2026-09-17 (`coordinator.TailFanout`, see below) — Terraform for the ElastiCache instance is written but **not yet applied** (protected IaC apply, left for a human) |
+| 4 | In-memory per-process state (tail/ingest/usage) | **Done** — usage stats (append-only flush, see below); `RingBuffer` scoped out (no fix needed, see below); `TailBroker` benchmarked 2026-09-17 (Redis Pub/Sub won), production wiring done 2026-09-17 (`coordinator.TailFanout`, see below), ElastiCache Terraform applied |
 | 5 | Shard FSM/registry convergence race | **Done** 2026-09-17 — `shard-fsm-leader` lease, see below |
 | — | Generic lease primitive (`store.AcquireLease`/`AcquireAndHold`) | **Done** — see below; also fixed a latent concurrent-migration bug this uncovered |
 
