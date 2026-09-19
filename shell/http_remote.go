@@ -127,6 +127,21 @@ func (h *HTTPCoordinator) setAuthHeaders(req *http.Request) {
 
 func (h *HTTPCoordinator) Close() error { return nil }
 
+// httpError turns a non-2xx response into a CLI-friendly error. 401 always
+// means the same thing to a human at the terminal, regardless of which
+// endpoint said it, so every caller gets the same "run weft login" hint
+// instead of a raw status code — weft sh's first call (ListApps, via
+// connectRemote in cmd/weft/main.go) used to leak "HTTP 401" straight to
+// the terminal on an expired/invalid token.
+func httpError(resp *http.Response) error {
+	if resp.StatusCode == http.StatusUnauthorized {
+		io.Copy(io.Discard, resp.Body)
+		return fmt.Errorf("unauthorized — run `weft login` or check WEFT_TOKEN")
+	}
+	msg, _ := io.ReadAll(resp.Body)
+	return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+}
+
 // Query runs a one-shot pipeline against the given range spec. rangeSpec is
 // the un-resolved string the user typed ("1d..", "30m..10m",
 // "2026-04-01..2026-04-12"); the API server resolves it against its own clock
@@ -153,15 +168,11 @@ func (h *HTTPCoordinator) Query(pipeline, rangeSpec string, dirStack []string) (
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("unauthorized — run `weft login` or check WEFT_TOKEN")
-	}
 	if resp.StatusCode == http.StatusUpgradeRequired {
 		return nil, formatUpgradeRequired(resp.Body)
 	}
 	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return nil, httpError(resp)
 	}
 
 	return parseSSEResponse(resp.Body)
@@ -216,8 +227,7 @@ func (h *HTTPCoordinator) Follow(ctx context.Context, pipeline, rangeSpec string
 		return formatUpgradeRequired(resp.Body)
 	}
 	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return httpError(resp)
 	}
 
 	// bufio.NewScanner's default MaxScanTokenSize is 64KB. Real log lines
@@ -263,7 +273,7 @@ func (h *HTTPCoordinator) ListApps() ([]string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("list apps: HTTP %d", resp.StatusCode)
+		return nil, httpError(resp)
 	}
 
 	var apps []string
@@ -290,8 +300,7 @@ func (h *HTTPCoordinator) ListNamespaces() ([]NamespaceInfo, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		msg, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return nil, httpError(resp)
 	}
 	var result struct {
 		Namespaces []NamespaceInfo `json:"namespaces"`
@@ -312,8 +321,7 @@ func (h *HTTPCoordinator) CreateNamespace(name string) (*NamespaceInfo, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		msg, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return nil, httpError(resp)
 	}
 	var ns NamespaceInfo
 	json.NewDecoder(resp.Body).Decode(&ns)
@@ -338,8 +346,7 @@ func (h *HTTPCoordinator) CreateToken(customer, label, namespace, env, producer 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		msg, _ := io.ReadAll(resp.Body)
-		return "", "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return "", "", httpError(resp)
 	}
 	var result struct {
 		Token    string `json:"token"`
@@ -359,7 +366,7 @@ func (h *HTTPCoordinator) ListTokens(customer string) ([]TokenInfo, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, httpError(resp)
 	}
 	var tokens []TokenInfo
 	json.NewDecoder(resp.Body).Decode(&tokens)
@@ -374,9 +381,9 @@ func (h *HTTPCoordinator) RevokeToken(id uint) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
+		return httpError(resp)
 	}
 	return nil
 }
@@ -415,8 +422,7 @@ func (h *HTTPCoordinator) ListIntegrations() (*IntegrationsStatus, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		msg, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return nil, httpError(resp)
 	}
 	var status IntegrationsStatus
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
@@ -438,8 +444,7 @@ func (h *HTTPCoordinator) SlackConnectURL() (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		msg, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return "", httpError(resp)
 	}
 	var result struct {
 		URL string `json:"url"`
@@ -456,9 +461,9 @@ func (h *HTTPCoordinator) SlackDisconnect() error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
+		return httpError(resp)
 	}
 	return nil
 }
@@ -475,8 +480,7 @@ func (h *HTTPCoordinator) SavePagerDuty(name, key string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		msg, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return httpError(resp)
 	}
 	return nil
 }
@@ -489,9 +493,9 @@ func (h *HTTPCoordinator) DeletePagerDuty(name string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
+		return httpError(resp)
 	}
 	return nil
 }
@@ -615,8 +619,7 @@ func (h *HTTPCoordinator) ListPendingSources(namespace string) ([]PendingSource,
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, httpError(resp)
 	}
 
 	var sources []PendingSource
@@ -641,8 +644,7 @@ func (h *HTTPCoordinator) ConfigureSource(namespace, service string, config map[
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return httpError(resp)
 	}
 	return nil
 }
@@ -686,8 +688,7 @@ func (h *HTTPCoordinator) SampleCloudWatchSource(req SampleCloudWatchSourceReque
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		msg, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return nil, httpError(resp)
 	}
 	var out struct {
 		Lines []string `json:"lines"`
@@ -733,8 +734,7 @@ func (h *HTTPCoordinator) AddCloudWatchSource(req AddCloudWatchSourceRequest) er
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		msg, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return httpError(resp)
 	}
 	return nil
 }
@@ -750,8 +750,7 @@ func (h *HTTPCoordinator) ListSources() ([]SourceInfo, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		msg, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return nil, httpError(resp)
 	}
 	var sources []SourceInfo
 	if err := json.NewDecoder(resp.Body).Decode(&sources); err != nil {
@@ -773,8 +772,7 @@ func (h *HTTPCoordinator) RemoveSource(namespace, app string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		msg, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return httpError(resp)
 	}
 	return nil
 }
@@ -808,8 +806,7 @@ func (h *HTTPCoordinator) GetSourceSchema(namespace, service string) (*SourceSch
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		msg, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return nil, httpError(resp)
 	}
 	var sch SourceSchema
 	if err := json.NewDecoder(resp.Body).Decode(&sch); err != nil {
@@ -832,8 +829,7 @@ func (h *HTTPCoordinator) ResampleSource(namespace, service string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		msg, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return httpError(resp)
 	}
 	return nil
 }
