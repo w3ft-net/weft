@@ -3,6 +3,8 @@ package store
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/graybeardcorp/warp/pkg/bash"
 	"github.com/graybeardcorp/weft/alert"
+	"github.com/graybeardcorp/weft/planner"
 	luaparse "github.com/yuin/gopher-lua/parse"
 	"gorm.io/gorm"
 )
@@ -409,6 +412,13 @@ func computeCronWatchHash(schedule, pipeline string) string {
 // planner.LoweredPlan from a save-time Lower() call; pass nil when
 // the pipeline didn't lower (e.g. /bin/ inlining isn't implemented
 // for this shape yet) — the fire path falls back to inline Plan().
+//
+// The returned error may be a non-blocking store.Warning (or an
+// errors.Join of several) — the save already happened; callers use
+// store.Split to separate an actual rejection from a heads-up to
+// show the user. Today the only producer is the truncation lint
+// below, but this is a generic channel: any future save-time check
+// that wants to warn without blocking uses the same mechanism.
 func (s *Store) SaveCronWatch(orgID string, userID, name, schedule, pipeline string, loweredPlan []byte) error {
 	compiled, err := CompileWatchPipeline(pipeline)
 	if err != nil {
@@ -416,7 +426,7 @@ func (s *Store) SaveCronWatch(orgID string, userID, name, schedule, pipeline str
 	}
 	hash := computeCronWatchHash(schedule, pipeline)
 
-	return s.scoped(orgID).Transaction(func(tx *gorm.DB) error {
+	if err := s.scoped(orgID).Transaction(func(tx *gorm.DB) error {
 		// See SaveShellFunction for why we always set, even for empty.
 		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
 			return err
@@ -457,7 +467,36 @@ func (s *Store) SaveCronWatch(orgID string, userID, name, schedule, pipeline str
 			"alert_threshold": compiled.AlertThreshold,
 			"lowered_plan":    loweredPlan,
 		}).Error
-	})
+	}); err != nil {
+		return err
+	}
+
+	return lintSavedWatch(loweredPlan)
+}
+
+// lintSavedWatch runs every save-time, non-blocking check against a
+// watch that just saved successfully, and joins their messages into
+// one Warning-only error (nil if there's nothing to say). loweredPlan
+// may be nil (Lower() failed at save time, e.g. an unsupported
+// pipeline shape) — the checks that depend on it just no-op then;
+// this never blocks a save that already succeeded.
+func lintSavedWatch(loweredPlan []byte) error {
+	if len(loweredPlan) == 0 {
+		return nil
+	}
+	var lp planner.LoweredPlan
+	if err := json.Unmarshal(loweredPlan, &lp); err != nil {
+		return nil
+	}
+	msgs := planner.LintTruncationRisk(&lp)
+	if len(msgs) == 0 {
+		return nil
+	}
+	warnings := make([]error, len(msgs))
+	for i, m := range msgs {
+		warnings[i] = NewWarning("%s", m)
+	}
+	return errors.Join(warnings...)
 }
 
 // CompiledWatch holds the pre-parsed bits of an `alert` stage that we want
