@@ -53,6 +53,110 @@ compute-stage evaluator the same synthetic-column bindings the SQL
 pushdown path has, so a bare `._host` read resolves for any row that
 carries that dimension, matching the doc's documented behavior.
 
+## `pkill -9`-ing a coordinator process doesn't test cross-instance lease failover
+
+**Where:** `store/leases.go`'s `AcquireLease` — `WHERE leases.holder = ?
+OR leases.expires_at < ?` — plus `deploy/weft-coordinator.service`'s
+`Restart=always` / `RestartSec=5`, and every lease loop's holder value
+being the EC2 instance-id itself (`cmd/coordinator/main.go`'s
+`coordinatorHolder()`), stable across process restarts.
+
+**Symptom:** found running Test 1 (NAT re-election) of
+`docs/plans/coordinator-chaos-tests.md` on 2026-09-19. Hard-killing the
+`nat-holder`/`shard-fsm-leader` coordinator process
+(`pkill -9 -f weft-coordinator`) was expected to force failover to the
+surviving coordinator. Instead systemd restarted the process on the
+*same* instance ~6s later, and that restarted process immediately
+reclaimed essentially all of its own previously-held leases (`nat-holder`,
+`shard-fsm-leader`, ~33 of ~36 `cron:*` leases) — confirmed via
+`lease_event ... event=acquired` lines all timestamped at the restart
+moment. The surviving coordinator's own reconcile attempts for those same
+leases, ticking ~9-40s later, were denied because the "victim" had
+already won them back. No failover to the other coordinator was ever
+exercised.
+
+**Root cause:** `AcquireLease`'s SQL lets a caller reclaim a lease by
+matching on `holder = self` alone, with no TTL check in that branch —
+correct and intentional for routine same-holder renewal, but it also
+means a *freshly restarted* process on the same instance can reclaim a
+lease regardless of how long it was actually down, as long as it asks
+before any other coordinator's slower retry/election tick fires.
+Combined with `Restart=always`/`RestartSec=5` (process back in ~6s) being
+far faster than a challenger's own next attempt (NAT/shard-fsm-leader:
+next 10s tick; cron: next 30s `reconcile()` tick), the original holder
+almost always wins the race back to itself.
+
+**Why it matters:** a `pkill -9` on a healthy instance is not a valid
+stand-in for "this coordinator died" in a chaos test — it only exercises
+"this coordinator's process crashed and came back," which is a much
+weaker and less interesting case. `docs/plans/coordinator-chaos-tests.md`
+Tests 1, 3, and 5 all instruct a bare process kill; as written, none of
+them can actually observe real cross-instance failover unless the killed
+instance is prevented from restarting (e.g. `systemctl stop` +
+`systemctl mask` on the unit before the kill, or a real EC2 stop/
+terminate) or is otherwise unable to win the self-reclaim race (e.g. the
+instance itself is unreachable).
+
+**Status:** open, doc fix scheduled — `coordinator-chaos-tests.md` should
+be updated to mask/stop the unit (or stop/terminate the instance) rather
+than bare-`pkill`, for any scenario that means to test true failover. Not
+a product bug: the lease self-reclaim behavior is correct and desirable
+for the ordinary crash-and-restart case, it's just not the failure mode
+these chaos tests intended to simulate.
+
+## `GracefulStop()` doesn't drain within systemd's 90s `TimeoutStopSec`
+
+**Where:** `cmd/coordinator/main.go`'s SIGTERM handler (calls
+`srv.GracefulStop()` then relies on deferred `drainCancel()`/
+`provCancel()` on return) and `deploy/weft-coordinator.service` (no
+explicit `TimeoutStopSec`, so systemd's 90s default applies).
+
+**Symptom:** found running Test 1 of
+`docs/plans/coordinator-chaos-tests.md` on 2026-09-19. `sudo systemctl
+stop weft-coordinator` on a live, otherwise-healthy coordinator
+(`i-0d4b0c33ab6b07d29`) never returned on its own — `journalctl` shows
+`Stopping weft-coordinator.service...` at `15:49:59`, then `State
+'stop-sigterm' timed out. Killing.` and a forced `SIGKILL` at `15:51:29`,
+exactly 90s later. The unit ended in `failed`, not the clean `inactive`
+a graceful stop should produce.
+
+**Root cause:** not yet diagnosed — the SSM agent on the affected
+instance was gone by the time this was noticed (the ASG had already
+replaced it, see "Why it matters"), so its logs couldn't be inspected
+post-mortem. Leading hypothesis, not yet confirmed: every lease-holding
+loop's clean-release path (`ctx.Done()` → `ReleaseLease` +
+`lease_event ... event=released`) is wired to a context that's only
+canceled by `main()`'s deferred `drainCancel()`/`provCancel()` calls —
+which run on `main()`'s *return*, i.e. only *after* `GracefulStop()`
+itself has returned. If `GracefulStop()` blocks (on a slow-draining
+ingest stream, a `tail -f` subscriber that never half-closes, etc.), the
+lease-release path can never fire either — the process is then entirely
+dependent on systemd's forced `SIGKILL` after `TimeoutStopSec`, with no
+clean release logged at all. If confirmed, this ties the two problems
+together: not just "graceful stop is slow" but "a stuck `GracefulStop`
+also silently disables the clean lease-release path that's supposed to
+make shutdown fast for everyone else." Worth checking whether the
+underlying stall is the same class of issue as the previously-fixed
+ingest-stream-leak (abandoned streams pinning `Recv()` handlers, fixed
+via a weftd journal-tailer churn fix plus a server-side idle reaper) or a
+distinct gap in the tail/gRPC server's own shutdown path.
+
+**Why it matters:** every coordinator redeploy that stops the old
+process before replacing it inherits this ~90s-worst-case stall per
+instance (times however many instances roll), and the unit ending in
+`failed` rather than `inactive` could interact badly with automation
+that checks exit cleanliness. It also means "systemctl stop" is not the
+fast, low-drama shutdown Gotcha A (in
+`docs/plans/coordinator-chaos-tests.md`) assumed — it can take just as
+long as a hard kill in practice, just via a different path (forced
+`SIGKILL` after `TimeoutStopSec` instead of an immediate one).
+
+**Status:** open, not yet root-caused. Needs a repro with active ingest/
+tail traffic and a look at what `GracefulStop()` is actually waiting on
+when it stalls — the coordinator's pprof endpoint + SIGUSR1 goroutine
+dump over SSM (`docs/operations.md`, already used for prior leak hunts)
+is the natural tool if it happens again.
+
 ## A pipeline whose first stage isn't `cat`/`head`/`tail` silently returns nothing
 
 **Where:** `planner/planner.go` — `QueryPlan.SourceCmd` (comment at

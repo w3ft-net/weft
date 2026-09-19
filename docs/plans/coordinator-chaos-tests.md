@@ -14,14 +14,25 @@ it.
 
 ## Read this before running anything
 
-**Gotcha A — `systemctl stop` / SIGTERM is a clean shutdown, not a
-crash.** `cmd/coordinator/main.go`'s SIGINT/SIGTERM handler calls
-`GracefulStop()`, and every lease-holding loop's `ctx.Done()` branch
-releases its lease and logs `lease_event ... event=released` before
-exiting (`coordinator/nat.go`, `logdb/leader_election.go`). That exercises
-the clean-handoff path, not the 30s-TTL deadman's-switch path. Tests 1 and
-5 need an **ungraceful kill** to actually test failure-of-the-holder:
+**Gotcha A — `systemctl stop` / SIGTERM is *supposed to be* a clean
+shutdown, not a crash — in practice it may not complete at all.**
+`cmd/coordinator/main.go`'s SIGINT/SIGTERM handler calls
+`GracefulStop()`, and every lease-holding loop's `ctx.Done()` branch is
+*meant* to release its lease and log `lease_event ... event=released`
+before exiting (`coordinator/nat.go`, `logdb/leader_election.go`) — but
+those `ctx.Done()` branches only fire once `main()` returns and its
+deferred cancels run, which can't happen until `GracefulStop()` itself
+returns. Confirmed on 2026-09-19 (Test 1, attempt 2, see below and
+`docs/known-issues.md`'s "`GracefulStop()` doesn't drain within 90s"):
+`GracefulStop()` didn't return within systemd's 90s `TimeoutStopSec`, so
+the unit was force-`SIGKILL`ed instead — meaning a "clean" stop can, in
+practice, degrade into the same forced-kill path as `pkill -9`, just
+much slower and via a `failed` unit state instead of a `released` lease
+event. Don't assume `systemctl stop` is fast or clean; check
+`journalctl` for how it actually ended.
 
+An ungraceful kill remains the reliable way to test failure-of-the-holder
+without waiting on `TimeoutStopSec`:
 ```
 kevcons ssh --instance-id <id> --command 'sudo pkill -9 -f weft-coordinator'
 ```
@@ -29,7 +40,8 @@ kevcons ssh --instance-id <id> --command 'sudo pkill -9 -f weft-coordinator'
 `Restart=always` / `RestartSec=5` means systemd relaunches the same
 process ~5s later as the *same* holder (holder = EC2 instance-id, stable
 across process restarts) — that's a feature here, not a confound: it also
-lets you watch the restarted process cleanly rejoin.
+lets you watch the restarted process cleanly rejoin. **But** see Gotcha C
+— on its own this doesn't test cross-instance failover at all.
 
 **Gotcha B — poller leases have no reconcile loop; cron leases do.**
 `Poller.Start()` enumerates `log_groups` once at boot and never retries a
@@ -38,6 +50,43 @@ and re-attempts anything not currently tracked. This means a poller
 lease's holder dying is **not** automatically healed by the survivor —
 see Test 7, which is likely to actually surface this as a fail, not a
 pass.
+
+**Gotcha C — a bare `pkill -9` doesn't test failover; it tests same-instance
+crash recovery.** Confirmed running Test 1, attempt 1, on 2026-09-19 (see
+results below and `docs/known-issues.md`): `Restart=always`/`RestartSec=5`
+brings the process back in ~6s, and because lease holder identity is the
+EC2 instance-id (not the process), the restarted process immediately
+reclaims its own former leases via `AcquireLease`'s `holder = self`
+branch — regardless of how long it was actually down — almost always
+beating a genuinely healthy peer's own slower retry tick (10s for NAT/
+shard-fsm-leader, 30s for cron).
+
+**What actually works** (confirmed, attempt 2): plain
+`sudo systemctl stop weft-coordinator` — no `mask` needed. Per Gotcha A,
+`stop` doesn't reliably complete gracefully within 90s, and when it
+doesn't, systemd force-kills it *without* triggering a restart (an
+explicit stop's forced kill is still treated as "stop was requested,"
+which suppresses `Restart=always` — unlike an out-of-the-blue `pkill -9`
+on a process systemd didn't ask to stop, which does trigger a restart).
+So a real holder outage happens, just ~90s slower than a bare kill would
+give you. `mask` is only needed if you want to prevent this specific
+mechanism from mattering — i.e. if `GracefulStop()` ever gets fixed to
+return quickly, `stop` alone would then cleanly release+restart, and
+you'd need `mask` again to hold the instance down. Belt-and-suspenders
+version:
+```
+kevcons ssh --instance-id <id> --command 'sudo systemctl stop weft-coordinator && sudo systemctl mask weft-coordinator'
+# ...run the test, observe failover...
+kevcons ssh --instance-id <id> --command 'sudo systemctl unmask weft-coordinator && sudo systemctl start weft-coordinator'
+```
+Also worth knowing before you restore the instance: an outage long
+enough to matter here (~90s+) is also long enough for the coordinator
+ASG's own health check to mark the instance unhealthy and replace it
+independently — confirmed in attempt 2, a fresh instance was already
+`InService` before the old one finished terminating. Manually restarting
+the old instance's service still works, but may be moot if the ASG has
+already decided to replace it; check `describe-auto-scaling-groups`
+before assuming your manual recovery is what's keeping the fleet at 2.
 
 **No `kevcons` command mutates leases directly.** The only levers are (1)
 kill/stop the holding process, or (2) `kevcons db query` against `leases`
@@ -120,6 +169,59 @@ this rollout).
 instances lose egress for non-S3 AWS API calls (SSM, CloudWatch Logs,
 Secrets Manager — S3 itself is unaffected via the gateway endpoint from
 item 1a).
+
+**Result, attempt 1 (2026-09-19, bare `pkill -9`)**: ran against
+`i-0d4b0c33ab6b07d29` (holder of `nat-holder`, `shard-fsm-leader`, and
+33/36 cron leases at baseline). `pkill -9` confirmed via `journalctl`
+(`code=killed, status=9/KILL`), systemd restarted the process 6s later.
+Per Gotcha C, the restarted process reclaimed all of its own former
+leases before the survivor (`i-03658aa89a13db588`) ever got a chance —
+`nat-holder` and `shard-fsm-leader` never changed hands, no re-election
+was actually exercised. No split-brain or double-fire occurred either
+(mutual exclusion held correctly throughout). Route-table verification
+was skipped since the holder never changed. Logged as a known issue in
+`docs/known-issues.md`.
+
+**Result, attempt 2 (2026-09-19, `systemctl stop`) — PASS.** Re-ran using
+Gotcha C's procedure, but `sudo systemctl stop weft-coordinator` alone
+was enough — the `&& systemctl mask` never even ran (see below) and
+turned out not to be needed. Full timeline:
+- `15:49:59` — stop requested.
+- `15:51:29` — systemd's `TimeoutStopSec` (90s default) expired before
+  `GracefulStop()` returned; systemd force-`SIGKILL`ed the process itself
+  and marked the unit `failed`. **This is itself a new finding, not the
+  intended one** — see `docs/known-issues.md`'s "GracefulStop doesn't
+  drain within 90s" entry. It happened to still produce a real holder
+  outage, which is what this test needed, so the run continued.
+- `15:52:05`/`:06` — survivor logs `provisioner: acquired
+  shard-fsm-leader lease` and `nat: acquired nat-holder lease, claiming
+  route table rtb-08515c241db4539ec → eni-02687e33ab73e44cc`.
+- Confirmed independently: `leases` table shows both on
+  `i-03658aa89a13db588`; `describe-route-tables` confirms the live
+  `0.0.0.0/0` route now targets that instance's ENI, state `active`;
+  `evaluate_tick` lines resumed flowing from the new leader every minute
+  from `15:52:42` onward with no gap or anomaly.
+- Total failover time: ~2m6s from stop-request to lease acquisition —
+  dominated entirely by the 90s forced-kill wait, not by the ~30-40s
+  TTL/re-election mechanism itself, which behaved exactly as designed
+  once the holder was actually gone.
+- **Unplanned but relevant**: the coordinator ASG's own health check
+  independently marked `i-0d4b0c33ab6b07d29` unhealthy during the outage
+  and began replacing it (new instance `i-0408530e395c754a8` was already
+  `InService` before the old one finished terminating) — a second,
+  independent layer of self-healing on top of the lease-based failover
+  this test targets. Manually `systemctl start`-ing the old instance's
+  service (which did work, came back `active`) turned out to be moot:
+  the ASG replaced it regardless. **For future runs targeting the
+  coordinator ASG specifically: don't bother manually restarting the
+  killed instance's service if the outage runs long — just let the ASG
+  replace it, and verify the replacement joins cleanly as a non-leader.**
+
+**Net verdict**: NAT re-election (this test) and shard-fsm-leader
+re-election (Test 5) are both confirmed working correctly under a real
+holder outage. Test 5 can be considered done by this same run — no need
+to repeat it separately unless testing a mid-tick kill specifically
+(this outage started between ticks, not mid-`Evaluate`).
 
 ## Test 2 — Poller double-ingest
 
