@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,10 +14,25 @@ import (
 	"gorm.io/gorm"
 )
 
-// ParseScheduleInterval parses a schedule string into a duration.
-// Supports "every <duration>" (e.g., "every 1m") and basic cron
-// shorthand "*/N * * * *" (every N minutes). Returns 5m for
-// unrecognized formats.
+// ParseScheduleInterval parses a schedule string into the fixed cadence
+// at which the cron fires. Every schedule in this system expresses a
+// uniform interval, never a wall-clock-specific firing time, so only the
+// minute and hour fields matter (day-of-month/month/day-of-week are
+// always "*"):
+//
+//   - "every <duration>" (e.g. "every 90s")
+//   - minute field "*"          -> 1 minute
+//   - minute field "*/N"        -> N minutes
+//   - minute field a fixed value, paired with:
+//   - hour field "*"          -> 1 hour
+//   - hour field "*/H"        -> H hours
+//
+// Returns 5m for unrecognized formats. Previously only "*/N * * * *" was
+// handled and everything else — including the common "* * * * *" and
+// "0 * * * *" shapes — silently fell through to that 5m default, which
+// meant crons saved with a 1-minute schedule (a subscription-tier
+// feature; see MinWatchInterval) or an hourly schedule actually fired
+// every 5 minutes instead. See TestParseScheduleInterval_BareStar.
 func ParseScheduleInterval(schedule string) time.Duration {
 	if strings.HasPrefix(schedule, "every ") {
 		if d, err := time.ParseDuration(strings.TrimPrefix(schedule, "every ")); err == nil {
@@ -24,25 +40,47 @@ func ParseScheduleInterval(schedule string) time.Duration {
 		}
 	}
 
-	if strings.HasPrefix(schedule, "*/") {
-		parts := strings.Fields(schedule)
-		if len(parts) >= 1 {
-			nStr := strings.TrimPrefix(parts[0], "*/")
-			n := 0
-			for _, ch := range nStr {
-				if ch >= '0' && ch <= '9' {
-					n = n*10 + int(ch-'0')
-				} else {
-					break
-				}
+	fields := strings.Fields(schedule)
+	if len(fields) == 5 {
+		minute, hour := fields[0], fields[1]
+		if minute == "*" {
+			return time.Minute
+		}
+		if n, ok := cronStep(minute); ok {
+			return time.Duration(n) * time.Minute
+		}
+		if isFixedField(minute, 59) {
+			if hour == "*" {
+				return time.Hour
 			}
-			if n > 0 {
-				return time.Duration(n) * time.Minute
+			if n, ok := cronStep(hour); ok {
+				return time.Duration(n) * time.Hour
 			}
 		}
 	}
 
 	return 5 * time.Minute
+}
+
+// cronStep parses a "*/N" cron field, returning (N, true) if it's a
+// valid positive step, or (0, false) otherwise.
+func cronStep(field string) (int, bool) {
+	nStr, ok := strings.CutPrefix(field, "*/")
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.Atoi(nStr)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// isFixedField reports whether field is a literal integer in [0, max] —
+// i.e. a specific minute/hour rather than "*" or a "*/N" step.
+func isFixedField(field string, max int) bool {
+	n, err := strconv.Atoi(field)
+	return err == nil && n >= 0 && n <= max
 }
 
 // ShellFunction is a user-defined function stored in the virtual filesystem.

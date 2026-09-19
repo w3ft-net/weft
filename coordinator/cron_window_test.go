@@ -26,8 +26,8 @@ func TestWatchQueryRange(t *testing.T) {
 		{"*/5 * * * *", 5 * time.Minute},
 		{"*/15 * * * *", 15 * time.Minute},
 		{"every 2h", 2 * time.Hour},
-		{"* * * * *", 5 * time.Minute}, // coarse parser default == real cadence
-		{"0 * * * *", 5 * time.Minute}, // ditto: ticker fires every 5m here
+		{"* * * * *", time.Minute}, // bare "*" minute field: every minute
+		{"0 * * * *", time.Hour},   // fixed minute + "*" hour: hourly
 		{"garbage-not-a-schedule", 5 * time.Minute},
 	}
 
