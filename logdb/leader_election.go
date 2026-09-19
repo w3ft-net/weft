@@ -64,6 +64,8 @@ func (p *Provisioner) runLeaderElection(ctx context.Context) {
 				// correctness problem, only a slower handoff.
 				if err := p.store.ReleaseLease(shardFSMLeaseName, p.config.Holder); err != nil {
 					log.Printf("provisioner: release shard-fsm-leader lease on shutdown: %v", err)
+				} else {
+					store.LogLeaseEvent(shardFSMLeaseName, p.config.Holder, "released")
 				}
 			}
 			return
@@ -84,6 +86,8 @@ func (p *Provisioner) leaderTick() {
 		log.Printf("provisioner: shard-fsm-leader progress stale (no convergence in %s) — releasing lease rather than renewing", time.Since(p.lastProgressTime()))
 		if err := p.store.ReleaseLease(shardFSMLeaseName, p.config.Holder); err != nil {
 			log.Printf("provisioner: release stale shard-fsm-leader lease: %v", err)
+		} else {
+			store.LogLeaseEvent(shardFSMLeaseName, p.config.Holder, "deadman_released")
 		}
 		p.leading.Store(false)
 		return
@@ -97,6 +101,7 @@ func (p *Provisioner) leaderTick() {
 	switch {
 	case ok && !p.isLeader():
 		log.Printf("provisioner: acquired shard-fsm-leader lease")
+		store.LogLeaseEvent(shardFSMLeaseName, p.config.Holder, "acquired")
 		// Reset the progress window on a fresh acquire so a just-elected
 		// leader isn't immediately judged stale before its first tick has
 		// had a chance to run.
@@ -104,6 +109,7 @@ func (p *Provisioner) leaderTick() {
 		p.leading.Store(true)
 	case !ok && p.isLeader():
 		log.Printf("provisioner: lost shard-fsm-leader lease")
+		store.LogLeaseEvent(shardFSMLeaseName, p.config.Holder, "lost")
 		p.leading.Store(false)
 	}
 }

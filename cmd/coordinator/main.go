@@ -405,8 +405,13 @@ func main() {
 
 	wc, _ := weftsdk.New()
 	defer wc.Close()
-	go wc.Heartbeat(cfgCtx, "coordinator", weftsdk.DefaultHeartbeatInterval)
-	go wc.RuntimeStats(cfgCtx, "coordinator", weftsdk.DefaultRuntimeStatsInterval)
+	// coordinator_id lets dashboards/crons group heartbeats and runtime
+	// stats per coordinator instance instead of blending every process's
+	// data into one stream — see docs/plans/coordinator-horizontal-scaling.md
+	// and the live-testing follow-up plan.
+	telemetryFields := map[string]any{"coordinator_id": holder}
+	go wc.HeartbeatWithFields(cfgCtx, "coordinator", weftsdk.DefaultHeartbeatInterval, telemetryFields)
+	go wc.RuntimeStatsWithFields(cfgCtx, "coordinator", weftsdk.DefaultRuntimeStatsInterval, telemetryFields)
 
 	// Signal handling. Needed so `go build -cover` binaries flush
 	// coverage counters on `docker compose down` — SIGKILL skips the

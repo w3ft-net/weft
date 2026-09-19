@@ -91,6 +91,8 @@ func (e *NATElector) run(ctx context.Context) {
 				// never a correctness problem, only a slower handoff.
 				if err := e.store.ReleaseLease(natLeaseName, e.holder); err != nil {
 					log.Printf("nat: release lease on shutdown: %v", err)
+				} else {
+					store.LogLeaseEvent(natLeaseName, e.holder, "released")
 				}
 			}
 			return
@@ -116,6 +118,7 @@ func (e *NATElector) tick(ctx context.Context, amHolder *bool) {
 	switch {
 	case ok && !*amHolder:
 		log.Printf("nat: acquired nat-holder lease, claiming route table %s → %s", e.routeTableID, e.eniID)
+		store.LogLeaseEvent(natLeaseName, e.holder, "acquired")
 		if err := e.claimRoute(ctx); err != nil {
 			log.Printf("nat: claim route failed, will retry next tick: %v", err)
 			return
@@ -123,6 +126,7 @@ func (e *NATElector) tick(ctx context.Context, amHolder *bool) {
 		*amHolder = true
 	case !ok && *amHolder:
 		log.Printf("nat: lost nat-holder lease")
+		store.LogLeaseEvent(natLeaseName, e.holder, "lost")
 		*amHolder = false
 	}
 }

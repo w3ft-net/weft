@@ -53,6 +53,19 @@ func (s *Store) ReleaseLease(name, holder string) error {
 	return s.db.Exec(`DELETE FROM leases WHERE name = ? AND holder = ?`, name, holder).Error
 }
 
+// LogLeaseEvent emits one structured line per lease-state transition
+// (acquired, denied, lost, released, deadman_released) so a coordinator
+// dashboard/cron can see "who's leading what" over time without querying
+// Postgres directly. All 5 uses of the lease primitive (NAT,
+// shard-fsm-leader, per-poller, per-cron — see
+// docs/plans/coordinator-horizontal-scaling.md) route through this so the
+// log shape stays consistent. Deliberately excludes routine renewals:
+// those are the expected steady state and would dwarf the interesting
+// transitions in log volume.
+func LogLeaseEvent(name, holder, event string) {
+	log.Printf("lease_event lease=%s holder=%s event=%s", name, holder, event)
+}
+
 // AcquireAndHold tries once to acquire the named lease for holder. On
 // success it starts a background goroutine that renews the lease every
 // LeaseRenewInterval and returns a context derived from ctx that is
@@ -71,8 +84,10 @@ func AcquireAndHold(ctx context.Context, s *Store, name, holder string) (leaseCt
 		return nil, false
 	}
 	if !acquired {
+		LogLeaseEvent(name, holder, "denied")
 		return nil, false
 	}
+	LogLeaseEvent(name, holder, "acquired")
 
 	leaseCtx, cancel := context.WithCancel(ctx)
 	go func() {
@@ -87,10 +102,12 @@ func AcquireAndHold(ctx context.Context, s *Store, name, holder string) (leaseCt
 				renewed, err := s.AcquireLease(name, holder, LeaseTTL)
 				if err != nil {
 					log.Printf("lease[%s]: renew error, giving it up: %v", name, err)
+					LogLeaseEvent(name, holder, "lost")
 					return
 				}
 				if !renewed {
 					log.Printf("lease[%s]: lost to another holder", name)
+					LogLeaseEvent(name, holder, "lost")
 					return
 				}
 			}
