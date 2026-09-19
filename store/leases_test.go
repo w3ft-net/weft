@@ -6,8 +6,24 @@ import (
 	"time"
 )
 
+// resetLease clears any row left behind for name by an earlier test.
+// testOpen wraps each test in its own rolled-back transaction, which
+// isolates tests in *this* file from each other — but not from other
+// packages' tests (coordinator/nat_test.go, logdb/leader_election_test.go)
+// that exercise these same production lease names against a real,
+// committed row in the shared per-process pooled test DB (store.TestDSN's
+// doc comment). Those files already defend against exactly this with
+// their own resetNATLease/resetShardFSMLease; this file needs the same.
+func resetLease(t *testing.T, db *Store, name string) {
+	t.Helper()
+	if err := db.db.Exec("DELETE FROM leases WHERE name = ?", name).Error; err != nil {
+		t.Fatalf("reset %s lease: %v", name, err)
+	}
+}
+
 func TestAcquireLease_FreshAcquireThenRenewBySameHolder(t *testing.T) {
 	db := testOpen(t)
+	resetLease(t, db, "nat-holder")
 
 	ok, err := db.AcquireLease("nat-holder", "coord-a", time.Minute)
 	if err != nil {
@@ -29,6 +45,7 @@ func TestAcquireLease_FreshAcquireThenRenewBySameHolder(t *testing.T) {
 
 func TestAcquireLease_BlockedByOtherNonExpiredHolder(t *testing.T) {
 	db := testOpen(t)
+	resetLease(t, db, "nat-holder")
 
 	if ok, err := db.AcquireLease("nat-holder", "coord-a", time.Minute); err != nil || !ok {
 		t.Fatalf("setup acquire failed: ok=%v err=%v", ok, err)
@@ -45,6 +62,7 @@ func TestAcquireLease_BlockedByOtherNonExpiredHolder(t *testing.T) {
 
 func TestAcquireLease_TakeoverAfterExpiry(t *testing.T) {
 	db := testOpen(t)
+	resetLease(t, db, "nat-holder")
 
 	// Acquire with a TTL that's already in the past — simulates a lease
 	// left behind by a holder that's since died.
@@ -72,6 +90,7 @@ func TestAcquireLease_TakeoverAfterExpiry(t *testing.T) {
 
 func TestReleaseLease_OnlyByCurrentHolder(t *testing.T) {
 	db := testOpen(t)
+	resetLease(t, db, "nat-holder")
 
 	if ok, err := db.AcquireLease("nat-holder", "coord-a", time.Minute); err != nil || !ok {
 		t.Fatalf("setup acquire failed: ok=%v err=%v", ok, err)
@@ -100,6 +119,7 @@ func TestReleaseLease_OnlyByCurrentHolder(t *testing.T) {
 // expire) once it's canceled.
 func TestAcquireAndHold_RenewsUntilContextCanceled(t *testing.T) {
 	db := testOpen(t)
+	resetLease(t, db, "poller:acme")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -130,6 +150,7 @@ func TestAcquireAndHold_RenewsUntilContextCanceled(t *testing.T) {
 // nothing (no goroutine, no side effects) when the initial acquire fails.
 func TestAcquireAndHold_FailsWhenAlreadyHeld(t *testing.T) {
 	db := testOpen(t)
+	resetLease(t, db, "cron:watch-1")
 	if ok, err := db.AcquireLease("cron:watch-1", "coord-a", time.Minute); err != nil || !ok {
 		t.Fatalf("setup acquire failed: ok=%v err=%v", ok, err)
 	}
