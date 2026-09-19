@@ -103,7 +103,17 @@ services:
   # service above has fixed host ports). Not part of the default `docker
   # compose up` critical path — start explicitly when running that smoke
   # test: `docker compose up -d coordinator2`.
+  #
+  # profiles gates this out of a bare `up`/`up -d` (which lists no
+  # service names, so Compose skips anything with a non-active
+  # profile) while still letting `up -d coordinator2` start it — naming
+  # a service explicitly starts it regardless of profiles. Without this,
+  # CI's blanket `up -d --build` was starting a second live coordinator
+  # contending for the docker socket, shard launches, and the
+  # shard-fsm-leader lease alongside the primary — timing out every
+  # integration test that depends on a shard actually getting launched.
   coordinator2:
+    profiles: ["bench"]
     image: weft-server
     pull_policy: never
     entrypoint: ["/usr/local/bin/entrypoint.sh"]
