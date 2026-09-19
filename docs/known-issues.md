@@ -112,13 +112,19 @@ these chaos tests intended to simulate.
 explicit `TimeoutStopSec`, so systemd's 90s default applies).
 
 **Symptom:** found running Test 1 of
-`docs/plans/coordinator-chaos-tests.md` on 2026-09-19. `sudo systemctl
-stop weft-coordinator` on a live, otherwise-healthy coordinator
-(`i-0d4b0c33ab6b07d29`) never returned on its own — `journalctl` shows
-`Stopping weft-coordinator.service...` at `15:49:59`, then `State
-'stop-sigterm' timed out. Killing.` and a forced `SIGKILL` at `15:51:29`,
-exactly 90s later. The unit ended in `failed`, not the clean `inactive`
-a graceful stop should produce.
+`docs/plans/coordinator-chaos-tests.md` on 2026-09-19, and **reproduced
+independently in Test 3 the same day** — not a one-off. Attempt 1
+(`i-0d4b0c33ab6b07d29`, Test 1): `Stopping weft-coordinator.service...`
+at `15:49:59`, forced `SIGKILL` at `15:51:29` — exactly 90s later.
+Attempt 2 (`i-0408530e395c754a8`, Test 3): stop requested `16:09:24`,
+forced `SIGKILL` at `16:10:55` — 91s later, same pattern, different
+instance, unrelated cron/traffic load. Both ended in `failed`, not the
+clean `inactive` a graceful stop should produce. Also observed in
+attempt 2: background goroutines (the cron ticker, specifically) kept
+running and completed a scheduled watch execution 13s before the forced
+kill, so whatever `GracefulStop()` is blocked on, it isn't blocking the
+whole process — just its own return, and by extension the deferred
+lease-release path (see Root cause).
 
 **Root cause:** not yet diagnosed — the SSM agent on the affected
 instance was gone by the time this was noticed (the ASG had already

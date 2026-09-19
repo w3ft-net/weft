@@ -268,12 +268,23 @@ FROM cron_watches cw LEFT JOIN leases l ON l.name = 'cron:' || cw.id
 WHERE cw.enabled;
 ```
 
-**Action**: hard-kill the coordinator holding a chosen `cron:<id>` lease.
+**Action**: per Gotcha C (learned in Test 1), use `sudo systemctl stop
+weft-coordinator` on the holder, not a bare `pkill -9` — a raw kill just
+lets the same instance's `Restart=always` reclaim its own cron leases in
+~6s, well inside the 30s reconcile ticker's window, so it never actually
+tests failover. `stop` reliably produces a real outage instead (it
+doesn't drain cleanly — see `docs/known-issues.md`'s `GracefulStop`
+entry — so expect it to take ~90s to actually die, not fast).
 
 **Expected**: unlike poller, `CronExecutor.reconcile()` runs on a 30s
-ticker forever. The killed holder's `runWatch` goroutine dies with it;
-within ≤30s the *other* coordinator's `reconcile` retries `runWatch` for
-that watch and wins the now-expired lease.
+ticker forever. The stopped holder's `runWatch` goroutines die with it;
+within ≤30s some other coordinator's `reconcile` retries `runWatch` for
+that watch and wins the now-expired lease. "Some other coordinator" may
+not be the pre-existing survivor: if the outage is long enough for the
+coordinator ASG's own health check to replace the instance (see Test 1),
+the *replacement* instance's first-boot `reconcile()` call (immediate,
+not waiting for its own 30s ticker) can win the race before the
+already-running survivor's next ticker fires.
 
 **PASS if**: exactly one `cron_results` row for the watch's scheduled
 fire time during the outage window:
@@ -286,6 +297,30 @@ ORDER BY ran_at;
 
 **FAIL signals**: two `cron_results` rows for the same scheduled fire
 (or two alert notifications) from two different coordinators' logs.
+
+**Result (2026-09-19) — PASS.** Targeted `i-0408530e395c754a8`, holder of
+`cron:31` (`coord-mem-by-host`, `*/2 * * * *`) and `cron:34`
+(`lease-holders`, `*/2 * * * *`) — picked because they were the only two
+crons *not* on the busy `nat-holder`/`shard-fsm-leader` instance, keeping
+this test isolated from Test 1's. `systemctl stop` issued at `16:09:24`;
+forced `SIGKILL` at `16:10:55` (91s — a second, near-identical
+reproduction of the `GracefulStop` stall). Notably, the cron ticker kept
+firing right up to the kill: the `16:10:42` scheduled run completed
+normally (single row each, `exit_code=0`) 13s before the process died,
+confirming `GracefulStop()` blocks new inbound work but doesn't halt
+already-running background goroutines. The ASG replaced the instance
+(`i-04fdbfb16e007e33f`, boot-started `16:12:24`); its first-boot
+`reconcile()` won both leases one second later (`16:12:25`,
+`lease_event ... event=acquired` for both) — beating `i-03658aa89a13db588`
+(the long-running survivor, whose own 30s ticker hadn't fired yet) to
+the acquisition. Only one `cron_results` row exists per watch for this window, timestamped
+`16:12:25` — i.e. `runWatch` appears to execute once immediately on
+winning a lease rather than waiting for the schedule's next natural
+boundary (the prior steady-state fires were all at `:XX:42`; this one
+broke that pattern). Not independently confirmed against `coordinator/
+cron.go`'s source, but observationally: no duplicate rows at any point,
+mutual exclusion held correctly through two consecutive coordinator
+replacements.
 
 ## Test 4 — TailFanout under Redis disruption
 
