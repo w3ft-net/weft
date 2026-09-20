@@ -46,6 +46,26 @@ func TestEdge_Source(t *testing.T) {
 		}
 	})
 
+	// A leading command that isn't cat/head/tail but is still handed a
+	// /log/ path (real-Unix habit: `grep pattern file` instead of piping
+	// through a source stage first) must fail loudly, not get silently
+	// reclassified as ErrNotPlannable and routed to plain warp execution
+	// against shellfs's LogMount, where it returns zero rows with no
+	// error at all. See docs/known-issues.md, "A pipeline whose first
+	// stage isn't cat/head/tail silently returns nothing".
+	t.Run("non-source leading command against a /log/ path", func(t *testing.T) {
+		_, err := Plan(`grep ERROR /log/weft/coordinator/main.log`, "", time.Time{}, time.Time{})
+		if err == nil {
+			t.Fatal("Plan(grep ERROR /log/...): expected error, got nil")
+		}
+		if errors.Is(err, ErrNotPlannable) {
+			t.Fatalf("Plan(grep ERROR /log/...) err = %v, want a clear rejection, not ErrNotPlannable (that silently routes to warp)", err)
+		}
+		if !strings.Contains(err.Error(), "cat") || !strings.Contains(err.Error(), "head") || !strings.Contains(err.Error(), "tail") {
+			t.Fatalf("Plan(grep ERROR /log/...) err = %v, want it to name cat/head/tail as the fix", err)
+		}
+	})
+
 	t.Run("different app names", func(t *testing.T) {
 		tests := []struct {
 			name     string

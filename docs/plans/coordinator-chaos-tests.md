@@ -140,9 +140,16 @@ done
 **Baseline**: `SELECT * FROM leases WHERE name = 'nat-holder';` — note the
 current `holder`.
 
-**Action**: hard-kill the current `nat-holder`:
+**Action**: take down the current `nat-holder` in a way that actually
+tests cross-instance failover — per Gotcha C, a bare `pkill -9` doesn't:
+`Restart=always`/`RestartSec=5` lets the same instance reclaim its own
+leases via `AcquireLease`'s `holder = self` branch before a genuinely
+healthy peer's slower retry tick ever gets a chance. Use the corrected
+procedure instead ("What actually works" above):
 ```
-kevcons ssh --instance-id <nat-holder-id> --command 'sudo pkill -9 -f weft-coordinator'
+kevcons ssh --instance-id <nat-holder-id> --command 'sudo systemctl stop weft-coordinator && sudo systemctl mask weft-coordinator'
+# ...run the test, observe failover...
+kevcons ssh --instance-id <nat-holder-id> --command 'sudo systemctl unmask weft-coordinator && sudo systemctl start weft-coordinator'
 ```
 
 **Expected**:
@@ -155,8 +162,13 @@ kevcons ssh --instance-id <nat-holder-id> --command 'sudo pkill -9 -f weft-coord
    route table...` and `lease_event lease=nat-holder holder=<new>
    event=acquired`, then calls `ReplaceRoute` (falling back to
    `CreateRoute`) against the NAT route table.
-4. systemd relaunches the killed process ~5s later as the same holder; it
-   rejoins as a non-leader challenger.
+4. The stopped+masked instance stays down for the rest of the test
+   (masking is what prevents `Restart=always` from relaunching it and
+   reclaiming its own leases — see Gotcha C). Expect the coordinator
+   ASG's own health check to notice the outage and start replacing the
+   instance independently before you get to the unmask/restart step —
+   that's a second, unrelated self-healing layer, not a test failure;
+   just confirm the replacement rejoins as a non-leader challenger.
 
 **PASS if**: `event=acquired` appears on the survivor within ~40s of the
 kill, and the private-subnet route table's default route now points at
@@ -247,7 +259,13 @@ WHERE lg.enabled AND lg.source_type = 'cloudwatch';
 ```
 Pick a log group and note its current `poller:<id>` holder.
 
-**Action**: hard-kill that holder (same command as Test 1).
+**Action**: hard-kill that holder — a bare process kill, deliberately,
+since this test wants the systemd auto-restart (unlike Test 1, this
+isn't testing cross-instance failover; it's testing whether a restart's
+`Start()` re-race recovers the lease at all, on either instance):
+```
+kevcons ssh --instance-id <id> --command 'sudo pkill -9 -f weft-coordinator'
+```
 
 **Expected**: per Gotcha B, `Poller.Start()` never retries — the *other*
 coordinator's own `pollLoop` goroutine for this log group was already
@@ -397,11 +415,78 @@ the outage; ingest measurably degrades (would mean tail's best-effort
 backpressure leaked onto the durable path); no `op=connect` ever refires
 after Redis recovers.
 
+**Result (2026-09-19) — PASS, reduced scope.** Prerequisite confirmed:
+`weft-redis` (`weft-redis-001`, Valkey 8.1.0) was `available`. Skipped the
+pinned-tail-session setup entirely: it depends on `WEFT_ENDPOINT`, which
+is undocumented client-side plumbing (now flagged as a TODO in
+`shell/config.go` to compile out of release builds — not a public API),
+and separately this session's sandbox classified opening the
+`AWS-StartPortForwardingSession` tunnels as sensitive remote exec and
+blocked it. Relied instead on `redisFanout.publish()`'s unconditional
+per-batch call (`coordinator/tail_fanout_redis.go`) — it fires on every
+ingest batch regardless of whether any client is tailing, and only logs
+`tailfanout_event op=publish err=...` on failure — so ordinary background
+ingest traffic (`/log/vimgym/api/heartbeats.log`, ~30s cadence) was
+enough to exercise the path with no client of any kind attached.
+
+**Unplanned finding**: the first action attempted — revoking the
+coordinator→Redis security-group ingress rule (the plan's "safer,
+reversible" option) — produced **zero** `tailfanout_event` lines over 4
+minutes. Security groups are stateful and only block *new* connection
+attempts; the coordinators' existing pooled Redis connections kept
+working because traffic (`publish()` calls) kept flowing on them,
+resetting whatever connection tracking exists at the flow level. A
+pure SG-based partition does not actually disrupt an already-open,
+actively-used connection — only a fresh connection attempt would see it.
+Worth remembering for any future network-partition test against a
+long-lived pooled connection: revoke-and-wait is not sufficient on its
+own.
+
+Switched to the plan's other listed action — `reboot-cache-cluster`
+(`weft-redis-001`, node `0001`) — with the ingress rule still revoked, so
+the reboot forced existing sockets closed server-side and the SG kept
+reconnects from succeeding. Timeline:
+- `17:18:10` — ingress revoked (no effect observed through `17:22`, per
+  the finding above).
+- `17:23:57` — `reboot-cache-cluster` issued.
+- `17:24:08` — first `tailfanout_event op=publish err="EOF"` on
+  `i-03658aa89a13db588` (the stale pooled connection finally broke).
+- `17:25:26` — ingress re-authorized (description restored via
+  `modify-security-group-rules` since the shorthand `authorize` form
+  drops it — final SG state verified identical to baseline).
+- `17:25:25`–`17:25:29` — burst of `op=publish err="dial tcp
+  172.31.129.14:6379: i/o timeout"` on **both** coordinators (reconnect
+  attempts racing the still-just-restored ingress).
+- `17:25:28`–`17:25:43` — `op=connect` fires repeatedly on both
+  coordinators (multiple internal connections — publish client and
+  PSubscribe client — reconnecting independently); no further errors
+  after.
+- `/log/vimgym/api/heartbeats.log` shows zero gaps across the entire
+  window (`17:23:22` through `17:25:52` at the usual 30s cadence) —
+  durable ingest was completely unaffected by the Redis outage, as
+  designed.
+- Neither coordinator's `MainPID`/`ActiveEnterTimestamp` changed
+  (`i-03658aa89a13db588` stayed at `663`/`13:34:28`,
+  `i-04fdbfb16e007e33f` at `666`/`16:12:24`) — no crash or crash-loop.
+
+**Net verdict**: every criterion in the PASS list is satisfied except
+the one requiring pinned live tail sessions — publish errors appeared
+during the outage on both coordinators, ingest never blocked or
+degraded, no crash occurred, and `op=connect` refired on both after
+recovery. What's *not* independently proven here: that a client actively
+tailing via coordinator A actually received a row ingested via
+coordinator B (the strongest form of the cross-coordinator fanout
+claim). Re-run with pinned sessions (via the port-forward tunnels, once
+someone outside this sandbox's remote-exec restriction runs them) if
+that specific proof is ever needed.
+
 ## Test 5 — shard-fsm-leader flap under load
 
 **Baseline**: `SELECT * FROM leases WHERE name = 'shard-fsm-leader';`
 
-**Action**: hard-kill the current leader (same command as Test 1) —
+**Action**: take down the current leader (same procedure as Test 1 —
+`systemctl stop` + `mask`, since this tests cross-instance failover just
+like Test 1, not restart recovery like Test 2) —
 `evaluateStateMachines()` runs all shard `Evaluate` calls sequentially in
 one loop (not per-shard goroutines), so killing at any moment has a real
 chance of landing mid-tick; no special timing needed.
@@ -466,6 +551,30 @@ Query once enough natural samples have accumulated:
 ```
 weft sh -c 'cat /log/weft/coordinator/main.log | grep evaluate_ | tail -n 500'
 ```
+
+**Result (2026-09-19) — PASS, confirms the gap.** No shard was actually
+mid-`ARCHIVING` during the observation window (checked `main.log` for
+`archiv` over the last 7 days — the only archive events were 2026-09-14,
+long settled), so this confirms the mechanism via ordinary DuckDB-query
+jitter rather than a real 10-minute archive stall. That's sufficient: the
+hypothesis is about the sequential loop's structure, not about archiving
+specifically. Two natural samples, both from the same coordinator
+(`i-0b340ce3672315ed2`) in a 15:50–16:10 window with elevated tick
+durations (80–417ms vs. a ~35–90ms baseline):
+- `15:57:42`: `evaluate_tick duration_ms=357`, dominated by one shard at
+  `duration_ms=71` plus several others at 22–29ms; sum of that tick's 34
+  `evaluate_event` lines = 325ms (91% of the tick total, remainder is
+  fixed per-tick overhead).
+- `16:05:42`: `evaluate_tick duration_ms=417`, dominated by a `kind=bucket`
+  event at `duration_ms=96` and one shard at `duration_ms=55`; sum of
+  that tick's events = 364ms (87% of the tick total).
+
+Both ticks: elevated event durations correspond directly to an elevated
+tick total, with the gap between sum-of-events and tick-total staying in
+the same ~30–55ms range regardless of how slow the events were — i.e.
+the slow work is additive, not overlapped, exactly as the sequential-loop
+code predicts. Logged as a confirmed (not just theoretical) gap in
+`docs/known-issues.md`.
 
 ## Test 7 — Scale event (`coordinator_desired` 2→3→2)
 
@@ -540,6 +649,38 @@ numbers cited under Test 4 exist). A true before/after comparison isn't
 retroactively capturable — this test is limited to checking for
 imbalance *within* the N=2 steady state, not regression against a
 single-coordinator baseline that was never measured.
+
+**Result (2026-09-19) — PASS, with two findings.** Used `runtime.log`/
+`metrics.log`/`main.log` directly rather than the dashboard UI (same
+underlying data). Over a 2h window (n=240 samples/coordinator,
+`i-0681c50b964d1a611` and `i-0b340ce3672315ed2`):
+
+- **goroutines/heap are lopsided but fully explained by lease-holding,
+  and CPU stays symmetric.** `i-0b340ce3672315ed2` averaged 192
+  goroutines / 65MB heap vs. `i-0681c50b964d1a611`'s 94 goroutines /
+  29MB — roughly 2x. Cross-checking `lease_event` lines explains it
+  completely: `i-0b340ce3672315ed2` holds **all** ~36 cron leases plus
+  `nat-holder` and `shard-fsm-leader` (a full sweep at `20:24`–`20:39`
+  today, apparently following a lease transfer — `i-0681c50b964d1a611`
+  lost `shard-fsm-leader` at `20:23:17`), while `i-0681c50b964d1a611` has
+  held nothing since and is denied every cron lease on every ~30s
+  reconcile tick. Despite that, host-level CPU stayed symmetric and
+  nearly idle on both (`ip-172-31-12-217` 99.21% idle,
+  `ip-172-31-8-67` 99.38% idle) — at current dogfood traffic levels the
+  background-work concentration doesn't translate into a visible hot/cold
+  split. This matches the test's own PASS bar (imbalance has a
+  corresponding difference in responsibility), but it's worth noting the
+  concentration is *total*, not partial: one coordinator currently does
+  100% of the fleet's singleton background work by design (leases are
+  sticky-until-failure, never rebalanced for fairness), which is a
+  sharper version of the "consistently elevated" scenario the test
+  anticipated than actually finding a 60/40 split would have been.
+- **Could not independently verify request-volume symmetry.**
+  `queries.log` carries no `coordinator_id` field (unlike
+  `heartbeats.log`/`runtime.log`, tagged in Phase 1), so there's no way
+  to attribute customer query load to a specific instance from logs
+  alone. Filed as a new gap in `docs/known-issues.md` — this is distinct
+  from the already-fixed heartbeat/runtime-stats tagging gap.
 
 ---
 
