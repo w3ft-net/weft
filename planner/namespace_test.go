@@ -58,7 +58,7 @@ func TestNamespacePredicate(t *testing.T) {
 		},
 		{
 			name:     "awk filter with namespace-only",
-			pipeline: `cat /log/weft.log | awk '$LEVEL == "ERROR"'`,
+			pipeline: `cat /log/weft.log | awk 'LEVEL == "ERROR"'`,
 			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 		},
 		{

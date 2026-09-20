@@ -21,7 +21,7 @@ pseudofiles — use standard Unix pipeline idioms:</p>
 tail -f myapp.log
 
 # Search for errors in the last hour
-cat myapp.log | awk '$LEVEL == &quot;ERROR&quot;'
+cat myapp.log | awk 'LEVEL == &quot;ERROR&quot;'
 
 # Count requests by status code
 cat nginx.log | jq '.status' | sort | uniq -c | sort -rn
@@ -44,24 +44,24 @@ not in the table below still works in awk/jq, but goes through the
 slower JSON-extract path.</p>
 <p>| awk | jq | Column | Source |
 |---|---|---|---|
-| <code>$NAMESPACE</code> | <code>._namespace</code> | <code>namespace</code> | the <code>&lt;namespace&gt;</code> segment in <code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log</code> |
-| <code>$SERVICE</code> | <code>._service</code> | <code>service</code> | the log file's source name (the <code>&lt;service&gt;</code> in <code>/log/&lt;ns&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>) |
-| <code>$KIND</code> | <code>._kind</code> | <code>kind</code> | the stream kind (<code>main</code>, <code>heartbeats</code>, <code>metrics</code>, <code>runtime</code>) |
-| <code>$HOST</code> (alias <code>$INSTANCE</code>) | <code>._host</code> (alias <code>._instance</code>) | <code>instance</code> | the agent's hostname |
-| <code>$LEVEL</code> | <code>._level</code> | <code>level</code> | parsed from the line per the source's schema |
-| <code>$TS</code> | <code>._ts</code> | <code>ts</code> | row timestamp |
-| <code>$DEPLOYMENT</code> | <code>._deployment</code> | <code>deployment</code> | weftd config <code>deployment:</code> value (k8s Deployment, AWS ASG, etc.) |
-| <code>$ENV</code> | <code>._env</code> | <code>env</code> | bound to the agent token at mint time (<code>weft token create --env prod</code>) |
-| <code>$VERSION</code> | <code>._version</code> | <code>version</code> | per-source <code>version_file</code> watched by the agent |
-| <code>$REGION</code> | <code>._region</code> | <code>region</code> | detected from cloud metadata at agent startup |
-| <code>$CLUSTER</code> | <code>._cluster</code> | <code>cluster</code> | k8s mode only: cluster name from the DaemonSet config |
-| <code>$K8S_NAMESPACE</code> | <code>._k8s_namespace</code> | <code>k8s_namespace</code> | k8s mode only: pod's k8s namespace |
-| <code>$POD</code> | <code>._pod</code> | <code>pod</code> | k8s mode only: pod name |
-| <code>$CONTAINER</code> | <code>._container</code> | <code>container</code> | k8s mode only: container name |
-| <code>$NODE</code> | <code>._node</code> | <code>node</code> | stable workload identity (e.g. shard ID) — file-sourced via the agent's <code>dimensions:</code> config; never auto-derived |</p>
+| <code>NAMESPACE</code> | <code>._namespace</code> | <code>namespace</code> | the <code>&lt;namespace&gt;</code> segment in <code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log</code> |
+| <code>SERVICE</code> | <code>._service</code> | <code>service</code> | the log file's source name (the <code>&lt;service&gt;</code> in <code>/log/&lt;ns&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>) |
+| <code>KIND</code> | <code>._kind</code> | <code>kind</code> | the stream kind (<code>main</code>, <code>heartbeats</code>, <code>metrics</code>, <code>runtime</code>) |
+| <code>HOST</code> (alias <code>INSTANCE</code>) | <code>._host</code> (alias <code>._instance</code>) | <code>instance</code> | the agent's hostname |
+| <code>LEVEL</code> | <code>._level</code> | <code>level</code> | parsed from the line per the source's schema |
+| <code>TS</code> | <code>._ts</code> | <code>ts</code> | row timestamp |
+| <code>DEPLOYMENT</code> | <code>._deployment</code> | <code>deployment</code> | weftd config <code>deployment:</code> value (k8s Deployment, AWS ASG, etc.) |
+| <code>ENV</code> | <code>._env</code> | <code>env</code> | bound to the agent token at mint time (<code>weft token create --env prod</code>) |
+| <code>VERSION</code> | <code>._version</code> | <code>version</code> | per-source <code>version_file</code> watched by the agent |
+| <code>REGION</code> | <code>._region</code> | <code>region</code> | detected from cloud metadata at agent startup |
+| <code>CLUSTER</code> | <code>._cluster</code> | <code>cluster</code> | k8s mode only: cluster name from the DaemonSet config |
+| <code>K8S_NAMESPACE</code> | <code>._k8s_namespace</code> | <code>k8s_namespace</code> | k8s mode only: pod's k8s namespace |
+| <code>POD</code> | <code>._pod</code> | <code>pod</code> | k8s mode only: pod name |
+| <code>CONTAINER</code> | <code>._container</code> | <code>container</code> | k8s mode only: container name |
+| <code>NODE</code> | <code>._node</code> | <code>node</code> | stable workload identity (e.g. shard ID) — file-sourced via the agent's <code>dimensions:</code> config; never auto-derived |</p>
 <p>A few examples:</p>
 <pre><code># Errors in production for one specific deployment
-cat /log/myco/prod/api/main.log | awk '$LEVEL == &quot;ERROR&quot; &amp;&amp; $DEPLOYMENT == &quot;api-east&quot;'
+cat /log/myco/prod/api/main.log | awk 'LEVEL == &quot;ERROR&quot; &amp;&amp; DEPLOYMENT == &quot;api-east&quot;'
 
 # Same query in jq form against a JSON source
 cat /log/myco/prod/api/main.log | jq 'select(._level == &quot;ERROR&quot; and ._deployment == &quot;api-east&quot;)'
@@ -70,19 +70,19 @@ cat /log/myco/prod/api/main.log | jq 'select(._level == &quot;ERROR&quot; and ._
 tail /log/weft/shard/metrics.log | jq 'select(._host == &quot;shard-3&quot; and .type == &quot;memory&quot;) | .pct'
 
 # Region-scoped grep
-cat /log/myco/prod/api/main.log | awk '$REGION == &quot;us-east-2&quot;' | grep &quot;timeout&quot;
+cat /log/myco/prod/api/main.log | awk 'REGION == &quot;us-east-2&quot;' | grep &quot;timeout&quot;
 </code></pre>
 <h3 id="why-two-naming-styles">Why two naming styles</h3>
-<p>awk meta-variables are uppercase short names (<code>$SERVICE</code>, <code>$ENV</code>); jq
+<p>awk meta-variables are uppercase short names (<code>SERVICE</code>, <code>ENV</code>); jq
 uses leading-underscore lowercase (<code>._service</code>, <code>._env</code>). The
 underscore is the disambiguation convention — jq is case-sensitive
 and real JSONL sometimes carries keys like <code>Pod</code> or <code>pod</code>, so
 <code>._pod</code> always means &quot;the indexed column&quot; and <code>.pod</code> always means
 &quot;a key in this row's JSON payload.&quot;</p>
 <p>The source coordinates address three separate columns —
-<code>$NAMESPACE</code>, <code>$SERVICE</code>, <code>$KIND</code> — mirroring the path layout
-<code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>. <code>$HOST</code> / <code>._host</code> is an
-alias for <code>$INSTANCE</code> / <code>._instance</code> — use whichever name fits your
+<code>NAMESPACE</code>, <code>SERVICE</code>, <code>KIND</code> — mirroring the path layout
+<code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>. <code>HOST</code> / <code>._host</code> is an
+alias for <code>INSTANCE</code> / <code>._instance</code> — use whichever name fits your
 team's vocabulary.</p>
 <h3 id="custom-fields-fall-through-to-json-extract">Custom fields fall through to JSON-extract</h3>
 <p>Anything not in the table above lives in your row's JSON payload
@@ -134,7 +134,7 @@ bucketing, chart kind, title).</p>
 <h2 id="saving-a-result-set">Saving a result set</h2>
 <p>Redirect a pipeline into <code>/tmp</code> to hold onto the output and slice it
 a few different ways without re-running the whole query:</p>
-<pre><code>cat api.log | awk '$LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
+<pre><code>cat api.log | awk 'LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
 grep timeout /tmp/errs | sort | uniq -c | sort -rn
 </code></pre>
 <p>Files in <code>/tmp</code> live for 48 hours. See the <strong>Saving results to /tmp</strong>

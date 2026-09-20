@@ -53,7 +53,7 @@ func readTmpFile(db *store.Store, orgID string, path string) ([]byte, error) {
 // /tmp and that the result is "consumed" by the redirect (so the
 // shell doesn't double-print the data).
 //
-// The pipeline uses awk's $LEVEL field-equality (a stable pushdown
+// The pipeline uses awk's LEVEL field-equality (a stable pushdown
 // path in this codebase — see TestQuery_AwkLevelFilter) rather than
 // `grep ERROR`, which depends on DuckDB regex behaviour that varies
 // across builds and is unrelated to the redirect logic under test.
@@ -61,7 +61,7 @@ func TestCoordinatorQuery_LogQueryRedirectToTmp(t *testing.T) {
 	c := setupTestCoordinator(t)
 	const tmpPath = "/tmp/errs"
 
-	res, err := c.Execute(`cat /log/vimgym.log | awk '$LEVEL == "ERROR"' > `+tmpPath,
+	res, err := c.Execute(`cat /log/vimgym.log | awk 'LEVEL == "ERROR"' > `+tmpPath,
 		fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)

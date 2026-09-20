@@ -150,7 +150,7 @@ func TestDockerStack_IngestAndQuery(t *testing.T) {
 	}
 
 	// awk filter across both this-run apps — ERROR rows belong to app-b only.
-	filteredResp := queryPipeline(t, client, bothApps+` | awk '$LEVEL == "ERROR"'`, "testcust")
+	filteredResp := queryPipeline(t, client, bothApps+` | awk 'LEVEL == "ERROR"'`, "testcust")
 	if len(filteredResp) != 10 {
 		t.Errorf("filtered query: expected 10 ERROR rows, got %d", len(filteredResp))
 	}

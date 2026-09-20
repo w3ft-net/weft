@@ -82,7 +82,7 @@ versions:</p>
 * a4fb0c2  HEAD     ...  alice    &quot;fix the awk filter&quot;
 diff a4fb0c2 ← 3d2e91f:
 - cat /log/myco/api/main.log | grep ERROR | wc -l
-+ cat /log/myco/api/main.log | awk '$LEVEL == &quot;ERROR&quot;' | head -100 | wc -l
++ cat /log/myco/api/main.log | awk 'LEVEL == &quot;ERROR&quot;' | head -100 | wc -l
 
   3d2e91f  HEAD^    ...  alice    &quot;tighten error pattern&quot;
 diff 3d2e91f ← c01b745:
@@ -100,7 +100,7 @@ cat /log/myco/api/main.log | grep ERROR | wc -l
 
 weft&gt; wit show /cron.d/errors HEAD^
 # schedule: every 5m
-cat /log/myco/api/main.log | awk '$LEVEL == &quot;ERROR&quot;' | wc -l | alert above 0 --notify=ops
+cat /log/myco/api/main.log | awk 'LEVEL == &quot;ERROR&quot;' | wc -l | alert above 0 --notify=ops
 </code></pre>
 <p>Crons show their <code># schedule:</code> directive on the first line so
 you can read the version as a complete cron file.</p>
@@ -111,7 +111,7 @@ author of each side:</p>
 --- a/scan (c01b745, bob)
 +++ b/scan (a4fb0c2, alice)
 - cat /log/myco/api/main.log | grep ERROR | wc -l
-+ cat /log/myco/api/main.log | awk '$LEVEL == &quot;ERROR&quot;' | head -100 | wc -l
++ cat /log/myco/api/main.log | awk 'LEVEL == &quot;ERROR&quot;' | head -100 | wc -l
 </code></pre>
 <p>The range syntax is one rigid form: <code>&lt;a&gt;..&lt;b&gt;</code>. Both endpoints
 must resolve to a real version; either side can use any ref form.</p>

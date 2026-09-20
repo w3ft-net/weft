@@ -241,17 +241,15 @@ func awkPrintToSQL(ps *awk.PrintStmt) (string, []int, bool) {
 func awkPrintArgToSQL(expr awk.Expr) (string, []int, bool) {
 	switch e := expr.(type) {
 	case *awk.FieldExpr:
-		switch idx := e.Index.(type) {
-		case *awk.NumberLit:
+		// $NAME is real field-by-variable-index, not meta-variable
+		// syntax — see awkFieldToSQL's doc comment. Only $N (a literal
+		// index) is pushable here.
+		if idx, ok := e.Index.(*awk.NumberLit); ok {
 			n := int(idx.Value)
 			if n == 0 {
 				return "raw", nil, true
 			}
 			return fmt.Sprintf("list_extract(fields, %d)", n), []int{n}, true
-		case *awk.IdentExpr:
-			if col, ok := metaVars[idx.Name]; ok {
-				return col, nil, true
-			}
 		}
 		return "", nil, false
 
@@ -274,7 +272,7 @@ func awkPrintArgToSQL(expr awk.Expr) (string, []int, bool) {
 		return fmt.Sprintf("concat(%s, %s)", leftSQL, rightSQL), fields, true
 
 	case *awk.IdentExpr:
-		if col, ok := metaVars[e.Name]; ok {
+		if col, ok := AwkMetaVars[e.Name]; ok {
 			return col, nil, true
 		}
 		return "", nil, false
@@ -371,7 +369,7 @@ func wrapJqProjection(sql string) string {
 func jqValueToSQL(expr jq.Expr) (string, bool) {
 	switch e := expr.(type) {
 	case jq.FieldExpr:
-		if col, isMeta := jqMetaVars[e.Name]; isMeta {
+		if col, isMeta := JQMetaVars[e.Name]; isMeta {
 			return col, true
 		}
 		return fmt.Sprintf("json_extract(payload, '$.%s')", e.Name), true
@@ -426,7 +424,7 @@ func jqValueToSQL(expr jq.Expr) (string, bool) {
 func jqPathParts(expr jq.Expr) ([]string, bool) {
 	switch e := expr.(type) {
 	case jq.FieldExpr:
-		if _, isMeta := jqMetaVars[e.Name]; isMeta {
+		if _, isMeta := JQMetaVars[e.Name]; isMeta {
 			return nil, false
 		}
 		return []string{"." + e.Name}, true

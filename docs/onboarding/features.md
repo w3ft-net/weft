@@ -44,7 +44,7 @@ enabling fast predicate pushdown. Documented in
 In awk, meta-variables are all-caps flat names:
 
 ```
-awk '$LEVEL == "ERROR" && $HOST ~ "api-"'
+awk 'LEVEL == "ERROR" && HOST ~ "api-"'
 ```
 
 In jq, they use leading-underscore lowercase:
@@ -54,12 +54,12 @@ jq 'select(._level == "ERROR") | ._host'
 ```
 
 Each meta-variable rewrites to a direct `WHERE` clause. The
-planner handles this in `planner/awk.go` — it maps `$LEVEL` to
-the `level` column, `$HOST` to `instance`, etc.
+planner handles this in `planner/awk.go` — it maps `LEVEL` to
+the `level` column, `HOST` to `instance`, etc.
 
-Key meta-variables: `$NAMESPACE`, `$SERVICE`, `$KIND`, `$HOST`,
-`$LEVEL`, `$TS`, `$DEPLOYMENT`, `$ENV`, `$VERSION`, `$REGION`,
-`$CLUSTER`, `$K8S_NAMESPACE`, `$POD`, `$CONTAINER`, `$NODE`.
+Key meta-variables: `NAMESPACE`, `SERVICE`, `KIND`, `HOST`,
+`LEVEL`, `TS`, `DEPLOYMENT`, `ENV`, `VERSION`, `REGION`,
+`CLUSTER`, `K8S_NAMESPACE`, `POD`, `CONTAINER`, `NODE`.
 
 ## Crons
 
@@ -75,7 +75,7 @@ Cron file format:
 ```
 # schedule: */5 * * * *
 # notify: ops
-tail -n 500 /log/myco/api/main.log | awk '$LEVEL == "ERROR"' | wc -l
+tail -n 500 /log/myco/api/main.log | awk 'LEVEL == "ERROR"' | wc -l
 ```
 
 **Implementation:**

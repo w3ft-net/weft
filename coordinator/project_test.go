@@ -134,7 +134,7 @@ func TestProjectCoord_AwkPrintField(t *testing.T) {
 func TestProjectCoord_JqObjectConstruction(t *testing.T) {
 	c := setupProjectCoordinator(t)
 	// jq object construction should work and only needs specific JSON keys.
-	res, err := c.Execute(`cat vimgym.log | awk '$LEVEL == "ERROR"' | jq '{action: .action}'`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | awk 'LEVEL == "ERROR"' | jq '{action: .action}'`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestProjectCoord_NoProjectionRegression(t *testing.T) {
 	c := setupProjectCoordinator(t)
 
 	// Pure filter — no projection.
-	res, err := c.Execute(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, fullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | awk 'LEVEL == "ERROR"'`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}

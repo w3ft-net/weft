@@ -248,7 +248,7 @@ Once a stage fails to push down, all subsequent stages become compute stages (no
 
 **Phase 3 — Projection** (`planner/project.go`): The first compute stage is examined for field/key references. If it only reads specific fields (`cut -f1,3`, `awk '{print $2}'`) or pushable jq shapes (a single key `jq '.pct'`, a nested path `jq '.foo.bar'`, an array index `jq '.items[0]'`, object construction `jq '{a: .x}'`, array construction `jq '[.x, .y]'`), the access is folded directly into the SELECT and the stage drops out of compute. When a jq pipe has a pure-path prefix but a non-pushable suffix (`jq '.foo | length'`, `jq 'select(.x==1) | .users | sort_by(.name)'`), the prefix folds in and only the suffix ships to compute. jq projections are always wrapped `CAST(... AS VARCHAR)` so JSON objects/arrays come back as strings (otherwise the duckdb-go driver can't scan them, and it strips quotes from string scalars — breaking downstream jq stages).
 
-**Partial pushdown**: A single jq expression like `select(.x == 1) | .y` is split — the select becomes a SQL predicate, `.y` becomes a compute stage. The awk equivalent: `$LEVEL == "ERROR" { print $3 }` splits into a WHERE clause and a compute `awk '{ print $3 }'`.
+**Partial pushdown**: A single jq expression like `select(.x == 1) | .y` is split — the select becomes a SQL predicate, `.y` becomes a compute stage. The awk equivalent: `LEVEL == "ERROR" { print $3 }` splits into a WHERE clause and a compute `awk '{ print $3 }'`.
 
 ### Example trace: `tail log/weft/metrics.log | jq 'select(.type == "memory") | .pct'`
 

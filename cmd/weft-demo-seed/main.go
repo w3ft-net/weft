@@ -370,7 +370,7 @@ func seedProdLoom(s *store.Store, tokensOut string) error {
 	// Tokens — one per env (not per (app, env) like dev). Each token
 	// is bound to the env value; the producer host's weftd-loom@ENV
 	// units carry three sources (one per app) sharing that token, and
-	// the coordinator stamps $ENV on every row from the token's
+	// the coordinator stamps ENV on every row from the token's
 	// binding. Skip mint when a live token with the label already
 	// exists so re-runs don't invalidate the host's stored secret.
 	existing, err := s.ListAgentTokens(cust.ID)
@@ -506,7 +506,7 @@ func minimalSchemaYAML(app string) string {
 	// `<ts> <LEVEL> <action> key=value …` — same shape across api,
 	// worker, edge, orders, billing, notifier. Extracting the
 	// timestamp + level into real columns is what makes
-	// `awk '$LEVEL == "ERROR"'` push down to a SQL `level = 'ERROR'`
+	// `awk 'LEVEL == "ERROR"'` push down to a SQL `level = 'ERROR'`
 	// predicate (otherwise it filters on a column that doesn't
 	// exist and silently returns 0). The metrics streams emitted
 	// by weftd are JSONL with no level field; their schema is
@@ -559,7 +559,7 @@ func preseedScripts(s *store.Store, custID string, customerName string, members 
 	// "live row already at final version" check.
 	scanV1 := fmt.Sprintf("cat %s | grep -i error | wc -l", primaryLog)
 	scanV2 := fmt.Sprintf("cat %s | grep ERROR | wc -l", primaryLog)
-	scanV3 := fmt.Sprintf("cat %s | awk '$LEVEL == \"ERROR\"' | head -100 | wc -l", primaryLog)
+	scanV3 := fmt.Sprintf("cat %s | awk 'LEVEL == \"ERROR\"' | head -100 | wc -l", primaryLog)
 	if existing, _ := s.GetShellFunction(custID, "scan"); existing == nil || existing.Source != scanV3 {
 		versions := []struct {
 			userID, source, message string
@@ -580,7 +580,7 @@ func preseedScripts(s *store.Store, custID string, customerName string, members 
 
 	// --- /bin/count_errors: two versions ----------------------------------
 	countV1 := "cat /log/$1 | grep ERROR | wc -l"
-	countV2 := "cat /log/$1 | awk '$LEVEL == \"ERROR\"' | wc -l"
+	countV2 := "cat /log/$1 | awk 'LEVEL == \"ERROR\"' | wc -l"
 	if existing, _ := s.GetShellFunction(custID, "count_errors"); existing == nil || existing.Source != countV2 {
 		versions := []struct {
 			userID, source, message string
@@ -676,7 +676,7 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 	// --- /cron.d/error-rate: three versions -------------------------------
 	rateV1 := fmt.Sprintf("tail -n 500 %s | grep ERROR | wc -l | alert above 50", primaryLog)
 	rateV2 := fmt.Sprintf("tail -n 2000 %s | grep ERROR | wc -l | alert above 200", primaryLog)
-	rateV3 := fmt.Sprintf("tail -n 2000 %s | awk '$LEVEL == \"ERROR\"' | wc -l | alert above 200", primaryLog)
+	rateV3 := fmt.Sprintf("tail -n 2000 %s | awk 'LEVEL == \"ERROR\"' | wc -l | alert above 200", primaryLog)
 	// 1-minute cadence gives the tour 60 datapoints per `weft::avg
 	// error-rate 1h` window and a chartable sparkline; yard tier (the
 	// demo subscription) allows it.

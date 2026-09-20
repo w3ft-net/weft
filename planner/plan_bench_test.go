@@ -19,7 +19,7 @@ var benchFixtures = []struct {
 	{"bare_cat", `cat /log/loom/api/prod.log`},
 	{"cat_grep", `cat /log/loom/api/prod.log | grep ERROR`},
 	{"tail_subquery", `tail -n 100 /log/loom/api/prod.log`},
-	{"multi_stage_limit_safe", `cat /log/loom/api/prod.log | grep ERROR | awk '$LEVEL == "ERROR"' | wc -l`},
+	{"multi_stage_limit_safe", `cat /log/loom/api/prod.log | grep ERROR | awk 'LEVEL == "ERROR"' | wc -l`},
 	{"alert_pipeline", `cat /log/loom/api/prod.log | grep ERROR | alert above 5`},
 	{"jq_select", `cat /log/loom/api/prod.log | jq 'select(.level == "error")'`},
 }

@@ -319,6 +319,21 @@ func (j *LocalComputeJob) consume() {
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
 
+	// awkVarsCh carries each row's meta-var values, in the exact order
+	// rows are written to stdinW, to an AwkPerRecordVars hook the
+	// Runner goroutine installs — awk has no per-row side channel like
+	// jq's JSON-body splice (a bare reserved name is just an ordinary
+	// awk global, unrelated to the record's own text), so this queue is
+	// the correlation mechanism instead: one send per row written, one
+	// receive per record the awk stage reads, both in the same order.
+	// Only allocated when a stage is actually awk — the common case (no
+	// awk stage) skips it entirely, since nothing would ever drain it
+	// (a full buffer would then wedge the writer goroutine).
+	var awkVarsCh chan map[string]string
+	if stagesHaveAwk(j.stages) {
+		awkVarsCh = make(chan map[string]string, 1024)
+	}
+
 	// Writer: pump merged rows into warp's stdin. Closing stdinW
 	// signals EOF to the pipeline, which lets sort/wc/etc. flush.
 	//
@@ -331,13 +346,19 @@ func (j *LocalComputeJob) consume() {
 	// has seen everything).
 	go func() {
 		defer stdinW.Close()
+		if awkVarsCh != nil {
+			defer close(awkVarsCh)
+		}
 		if j.keepLast && j.limit > 0 {
 			for _, r := range j.retainLast() {
-				if _, err := io.WriteString(stdinW, r.Raw); err != nil {
+				if _, err := io.WriteString(stdinW, mergeMetaVars(r.Raw, r.MetaVars)); err != nil {
 					return
 				}
 				if _, err := stdinW.Write([]byte{'\n'}); err != nil {
 					return
+				}
+				if awkVarsCh != nil {
+					awkVarsCh <- awkVarsFromMeta(r.MetaVars)
 				}
 			}
 			return
@@ -347,11 +368,14 @@ func (j *LocalComputeJob) consume() {
 			if j.limit > 0 && emitted >= j.limit {
 				return false
 			}
-			if _, err := io.WriteString(stdinW, row.Raw); err != nil {
+			if _, err := io.WriteString(stdinW, mergeMetaVars(row.Raw, row.MetaVars)); err != nil {
 				return false
 			}
 			if _, err := stdinW.Write([]byte{'\n'}); err != nil {
 				return false
+			}
+			if awkVarsCh != nil {
+				awkVarsCh <- awkVarsFromMeta(row.MetaVars)
 			}
 			emitted++
 			return true
@@ -365,7 +389,15 @@ func (j *LocalComputeJob) consume() {
 	runErrCh := make(chan error, 1)
 	go func() {
 		defer stdoutW.Close()
-		exitCode, err := bash.RunStreaming(pipeline, stdinR, stdoutW, &stderrBuf)
+		var exitCode int
+		var err error
+		if awkVarsCh != nil {
+			exitCode, err = bash.RunStreamingWithAwkHook(pipeline, stdinR, stdoutW, &stderrBuf, func(string) map[string]string {
+				return <-awkVarsCh
+			})
+		} else {
+			exitCode, err = bash.RunStreaming(pipeline, stdinR, stdoutW, &stderrBuf)
+		}
 		if err != nil {
 			runErrCh <- fmt.Errorf("compute: %w", err)
 			return

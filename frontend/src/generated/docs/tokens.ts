@@ -35,7 +35,7 @@ the kind segment swapped (<code>/log/myco/api/metrics.log</code>,
 <code>/log/myco/api/heartbeats.log</code>, <code>/log/myco/api/runtime.log</code>); a
 token spanning multiple envs disambiguates with the four-segment
 form (<code>/log/myco/&lt;env&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>). The <code>&lt;kind&gt;</code> segment
-is always present and defaults to <code>main</code>. See <strong>Query your logs</strong> for how <code>$ENV</code>
+is always present and defaults to <code>main</code>. See <strong>Query your logs</strong> for how <code>ENV</code>
 surfaces in awk and jq.</p>
 `,
 } as const;

@@ -87,7 +87,7 @@ weft> wit log -p /bin/scan
 * a4fb0c2  HEAD     ...  alice    "fix the awk filter"
 diff a4fb0c2 ← 3d2e91f:
 - cat /log/myco/api/main.log | grep ERROR | wc -l
-+ cat /log/myco/api/main.log | awk '$LEVEL == "ERROR"' | head -100 | wc -l
++ cat /log/myco/api/main.log | awk 'LEVEL == "ERROR"' | head -100 | wc -l
 
   3d2e91f  HEAD^    ...  alice    "tighten error pattern"
 diff 3d2e91f ← c01b745:
@@ -109,7 +109,7 @@ cat /log/myco/api/main.log | grep ERROR | wc -l
 
 weft> wit show /cron.d/errors HEAD^
 # schedule: every 5m
-cat /log/myco/api/main.log | awk '$LEVEL == "ERROR"' | wc -l | alert above 0 --notify=ops
+cat /log/myco/api/main.log | awk 'LEVEL == "ERROR"' | wc -l | alert above 0 --notify=ops
 ```
 
 Crons show their `# schedule:` directive on the first line so
@@ -125,7 +125,7 @@ weft> wit diff /bin/scan HEAD^2..HEAD
 --- a/scan (c01b745, bob)
 +++ b/scan (a4fb0c2, alice)
 - cat /log/myco/api/main.log | grep ERROR | wc -l
-+ cat /log/myco/api/main.log | awk '$LEVEL == "ERROR"' | head -100 | wc -l
++ cat /log/myco/api/main.log | awk 'LEVEL == "ERROR"' | head -100 | wc -l
 ```
 
 The range syntax is one rigid form: `<a>..<b>`. Both endpoints

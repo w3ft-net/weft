@@ -2,6 +2,7 @@ package planner
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/awk"
@@ -28,13 +29,17 @@ type awkPushdown struct {
 	limitSafe bool
 }
 
-// metaVars maps weft meta-variable names to SQL column names.
-// NAMESPACE/SERVICE/KIND address the three source-coordinate columns
-// directly (the old $APP, which conflated namespace and service, is
-// gone). HOST stays an alias for INSTANCE so users coming from
-// OTel/Datadog vocabulary find what they expect.
-// See docs/plans/ingest-dimensions.md.
-var metaVars = map[string]string{
+// AwkMetaVars maps weft meta-variable names to SQL column names. These
+// are bare identifiers (LEVEL, NAMESPACE, HOST, ...), NOT $-prefixed —
+// $NAME is real awk field-by-variable-index syntax and can't carry a
+// string value (see docs/known-issues.md's now-fixed "awk's reserved
+// meta-variables ... $NAME syntax can't be fixed" entry for why a
+// $-prefixed convention was abandoned). NAMESPACE/SERVICE/KIND address
+// the three source-coordinate columns directly (the old $APP, which
+// conflated namespace and service, is gone). HOST stays an alias for
+// INSTANCE so users coming from OTel/Datadog vocabulary find what they
+// expect. See docs/plans/ingest-dimensions.md.
+var AwkMetaVars = map[string]string{
 	"LEVEL":         "level",
 	"NAMESPACE":     "namespace",
 	"SERVICE":       "service",
@@ -51,6 +56,22 @@ var metaVars = map[string]string{
 	"POD":           "pod",
 	"CONTAINER":     "container",
 	"NODE":          "node",
+}
+
+// awkMetaVarPattern matches any AwkMetaVars key used as a whole
+// identifier (word-bounded, so "MYHOST" doesn't match "HOST") anywhere
+// in an awk program's source text. Built once from AwkMetaVars' keys.
+// Used by Plan's includeMetaVars detection (planner.go) to decide
+// whether a remaining awk stage might read a meta-variable for output
+// — see docs/known-issues.md's now-fixed awk meta-variable entry.
+var awkMetaVarPattern = regexp.MustCompile(awkMetaVarPatternSource())
+
+func awkMetaVarPatternSource() string {
+	names := make([]string, 0, len(AwkMetaVars))
+	for name := range AwkMetaVars {
+		names = append(names, name)
+	}
+	return `\b(` + strings.Join(names, "|") + `)\b`
 }
 
 // tryAwkPushdown attempts to extract a pushable predicate from an awk program string.
@@ -396,6 +417,15 @@ func awkExprToSQL(expr awk.Expr) (string, string) {
 	switch e := expr.(type) {
 	case *awk.FieldExpr:
 		return awkFieldToSQL(e)
+	case *awk.IdentExpr:
+		// A bare reserved-name identifier (LEVEL, NAMESPACE, HOST, ...)
+		// is a meta-variable read — see AwkMetaVars. Any other bare
+		// identifier is an ordinary awk variable (a real one, or an
+		// uninitialized one), which isn't pushable; fall through to the
+		// unhandled return below.
+		if col, ok := AwkMetaVars[e.Name]; ok {
+			return col, "meta"
+		}
 	case *awk.NumberLit:
 		// Format as integer if it's a whole number.
 		if e.Value == float64(int(e.Value)) {
@@ -408,13 +438,15 @@ func awkExprToSQL(expr awk.Expr) (string, string) {
 	return "", ""
 }
 
-// awkFieldToSQL converts $LEVEL, $NAMESPACE, $3, etc. to SQL column references.
+// awkFieldToSQL converts $3, $NF, etc. — real positional field access —
+// to SQL column references. $NAME is NOT meta-variable syntax (see
+// awkExprToSQL's *awk.IdentExpr case for that, docs/known-issues.md's
+// "awk's reserved meta-variables ... $NAME syntax can't be fixed" for
+// why): $NAME is ordinary awk field-by-variable-index applied to
+// whatever real value that variable holds, ordinarily $0 (the whole
+// record) for a never-assigned name.
 func awkFieldToSQL(e *awk.FieldExpr) (string, string) {
 	switch idx := e.Index.(type) {
-	case *awk.IdentExpr:
-		if col, ok := metaVars[idx.Name]; ok {
-			return col, "meta"
-		}
 	case *awk.NumberLit:
 		n := int(idx.Value)
 		if n == 0 {

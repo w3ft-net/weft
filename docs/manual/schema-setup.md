@@ -19,11 +19,11 @@ schema. Review the sample lines and approve.
 
 Two fields come from parsing each log line per the source's schema:
 
-- `$TS` — timestamp
-- `$LEVEL` — log level (ERROR, WARN, INFO, DEBUG)
+- `TS` — timestamp
+- `LEVEL` — log level (ERROR, WARN, INFO, DEBUG)
 
-Other indexed fields (`$SERVICE`, `$HOST`, `$DEPLOYMENT`, `$ENV`, `$VERSION`,
-`$REGION`, and the four k8s-mode dimensions) are stamped by weftd, the
+Other indexed fields (`SERVICE`, `HOST`, `DEPLOYMENT`, `ENV`, `VERSION`,
+`REGION`, and the four k8s-mode dimensions) are stamped by weftd, the
 agent token, or cloud metadata rather than parsed from the line — see
 the **Meta-variables** section in **Query your logs** for the full
 table and how each is sourced.

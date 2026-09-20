@@ -52,8 +52,8 @@ var lessons = []*Lesson{
 	},
 	{
 		Step:   "shell-grep-awk",
-		Action: "tail /log/loom/prod/api/main.log | grep ERROR | awk '{print $HOST, $1, $4}'",
-		Prompt: "So obviously we have support for awk and grep, but the more material point is `$HOST` in the awk program. Weft augments normal field variables in awk and jq with a number of meta-variables to help you isolate exactly where those log lines were produced. More info in the manual.",
+		Action: "tail /log/loom/prod/api/main.log | grep ERROR | awk '{print HOST, $1, $4}'",
+		Prompt: "So obviously we have support for awk and grep, but the more material point is `HOST` in the awk program. Weft augments normal field variables in awk and jq with a number of meta-variables to help you isolate exactly where those log lines were produced. More info in the manual.",
 	},
 	{
 		Step:   "shell-alert",

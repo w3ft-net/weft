@@ -38,7 +38,7 @@ Inside the shell, log sources appear as files:
 
 The list of available pseudofiles is determined at connect time from the user's account. New apps appear automatically.
 
-Pseudofiles are not a filesystem abstraction — they are source declarations consumed by the query planner. `cat`, `head`, `tail`, and `tail -f` are custom implementations injected into the weft bash interpreter. When the interpreter encounters `cat vimgym.log | awk '$LEVEL == "ERROR"'`, it does not produce text and pipe it — the query planner analyzes the full pipeline as one unit, folds the awk predicate into a SQL WHERE clause, and sends a single query to the appropriate shards:
+Pseudofiles are not a filesystem abstraction — they are source declarations consumed by the query planner. `cat`, `head`, `tail`, and `tail -f` are custom implementations injected into the weft bash interpreter. When the interpreter encounters `cat vimgym.log | awk 'LEVEL == "ERROR"'`, it does not produce text and pipe it — the query planner analyzes the full pipeline as one unit, folds the awk predicate into a SQL WHERE clause, and sends a single query to the appropriate shards:
 
 ```sql
 SELECT ... FROM logs
@@ -54,7 +54,7 @@ Standard Unix idioms work because the warp bash interpreter handles pipes, awk, 
 
 ```bash
 # Historical queries
-cat vimgym.log | awk '$LEVEL == "ERROR"'
+cat vimgym.log | awk 'LEVEL == "ERROR"'
 cat warp.log | jq 'select(.status == 500)' | head -20
 cat callbox.log | grep timeout | wc -l
 head -50 vimgym.log
@@ -62,14 +62,14 @@ tail -100 vimgym.log
 
 # Live tailing
 tail -f vimgym.log
-tail -f vimgym.log | awk '$LEVEL == "ERROR"' | jq '.user_id'
-tail -f warp.log | awk '$LEVEL == "ERROR" { count[$SERVICE]++ } END { for (a in count) print a, count[a] }'
+tail -f vimgym.log | awk 'LEVEL == "ERROR"' | jq '.user_id'
+tail -f warp.log | awk 'LEVEL == "ERROR" { count[SERVICE]++ } END { for (a in count) print a, count[a] }'
 
 # Time range override (in-shell)
 range 2h..
 range yesterday..today
 range 2026-03-28T00:00:00..2026-03-28T06:00:00
-cat vimgym.log | awk '$LEVEL == "ERROR"'
+cat vimgym.log | awk 'LEVEL == "ERROR"'
 ```
 
 ## Meta-variables
@@ -78,12 +78,12 @@ Since weft controls the awk interpreter, metadata is injected as special variabl
 
 | Variable | Source |
 |----------|--------|
-| `$NAMESPACE` | Namespace |
-| `$SERVICE` | Service name |
-| `$KIND` | Stream kind |
-| `$LEVEL` | Log level |
-| `$TS` | Timestamp |
-| `$INSTANCE` | Instance ID |
+| `NAMESPACE` | Namespace |
+| `SERVICE` | Service name |
+| `KIND` | Stream kind |
+| `LEVEL` | Log level |
+| `TS` | Timestamp |
+| `INSTANCE` | Instance ID |
 
 For jq, metadata is injected as top-level keys prefixed with `_`:
 

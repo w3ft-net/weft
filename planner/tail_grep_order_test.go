@@ -39,10 +39,13 @@ func TestPushdown_LimitBeforeFilter_DoesNotMerge(t *testing.T) {
 			wantCompute: []string{"grep -v ERROR", "wc -l"},
 		},
 		{
-			name:        "head then awk inequality (not limit-safe)",
-			pipeline:    `cat vimgym.log | head -n 100 | awk '$LEVEL != "ERROR"'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? ORDER BY ts ASC LIMIT 100`,
-			wantCompute: []string{`awk '$LEVEL != "ERROR"'`},
+			name:     "head then awk inequality (not limit-safe)",
+			pipeline: `cat vimgym.log | head -n 100 | awk 'LEVEL != "ERROR"'`,
+			// The inequality isn't limit-safe, so the whole filter runs
+			// in compute and needs LEVEL's real per-row value — see
+			// docs/known-issues.md's (fixed) awk meta-variable entry.
+			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node FROM logs WHERE namespace = ? ORDER BY ts ASC LIMIT 100`,
+			wantCompute: []string{`awk 'LEVEL != "ERROR"'`},
 		},
 		{
 			name:        "tail then awk negated regex (not limit-safe)",
@@ -112,7 +115,7 @@ func TestPushdown_LimitSafePushdown(t *testing.T) {
 	}{
 		{
 			name:        "tail then awk meta-var equality",
-			pipeline:    `cat vimgym.log | tail -n 100 | awk '$LEVEL == "ERROR"'`,
+			pipeline:    `cat vimgym.log | tail -n 100 | awk 'LEVEL == "ERROR"'`,
 			wantSQL:     `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' ORDER BY ts DESC LIMIT 100) AS t ORDER BY ts ASC`,
 			wantCompute: nil,
 		},

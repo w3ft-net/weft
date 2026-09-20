@@ -292,7 +292,7 @@ func TestEdge_Awk_Pushable(t *testing.T) {
 		// Deeply nested boolean logic
 		{
 			name:     "nested AND inside OR",
-			pipeline: `cat vimgym.log | awk '($LEVEL == "ERROR" && $3 > 100) || $LEVEL == "FATAL"'`,
+			pipeline: `cat vimgym.log | awk '(LEVEL == "ERROR" && $3 > 100) || LEVEL == "FATAL"'`,
 			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND ((level = 'ERROR' AND CAST(list_extract(fields, 3) AS DOUBLE) > 100) OR level = 'FATAL')`,
 		},
 		// Large positional field number
@@ -322,7 +322,7 @@ func TestEdge_Awk_Pushable(t *testing.T) {
 		// Meta-var less-than (non-standard but expressible)
 		{
 			name:     "meta-var less than string",
-			pipeline: `cat vimgym.log | awk '$LEVEL < "WARN"'`,
+			pipeline: `cat vimgym.log | awk 'LEVEL < "WARN"'`,
 			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level < 'WARN'`,
 		},
 	}
@@ -357,7 +357,7 @@ func TestEdge_Awk_PartialPushdown(t *testing.T) {
 		// Pattern + printf (not print)
 		{
 			name:        "filter with printf action",
-			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR" { printf "%s %s\n", $1, $2 }'`,
+			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR" { printf "%s %s\n", $1, $2 }'`,
 			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: []string{`awk '{ printf "%s %s\n", $1, $2 }'`},
 		},
@@ -402,6 +402,141 @@ func TestEdge_Awk_PartialPushdown(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Jq edge cases
 // ---------------------------------------------------------------------------
+
+// TestEdge_Jq_MetaVarOutputRead pins the fix for the known-issues.md
+// entry "jq's reserved meta-variables ... resolve to null when read as
+// output": a bare "._host"-shaped read (not inside a pushable select())
+// falls through to the jq compute-stage evaluator, which only sees the
+// row's raw JSON body — so the planner must project the backing
+// MetaVarColumns alongside raw whenever such a read is present, for
+// compute (compute/metavars.go) to splice into each row before the jq
+// stage runs.
+func TestEdge_Jq_MetaVarOutputRead(t *testing.T) {
+	tests := []struct {
+		name        string
+		pipeline    string
+		wantCompute []string
+	}{
+		{
+			name:        "bare host read with -r",
+			pipeline:    `cat vimgym.log | jq -r '._host'`,
+			wantCompute: []string{`jq -r '._host'`},
+		},
+		{
+			name:        "host read inside string interpolation",
+			pipeline:    `cat vimgym.log | jq -r 'select(._level == "INFO") | "\(._host) \(.pct)"'`,
+			wantCompute: []string{`jq -r '"\(._host) \(.pct)"'`},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
+			if err != nil {
+				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
+			}
+			for _, col := range MetaVarColumns {
+				if !strings.Contains(plan.ShardSQL, col) {
+					t.Errorf("ShardSQL missing meta-var column %q: %s", col, plan.ShardSQL)
+				}
+			}
+			if len(plan.ComputeStages) != len(tt.wantCompute) {
+				t.Fatalf("ComputeStages count: got %d, want %d\n got: %v\nwant: %v",
+					len(plan.ComputeStages), len(tt.wantCompute), plan.ComputeStages, tt.wantCompute)
+			}
+			for i, want := range tt.wantCompute {
+				if plan.ComputeStages[i] != want {
+					t.Errorf("ComputeStages[%d]\n got: %s\nwant: %s", i, plan.ComputeStages[i], want)
+				}
+			}
+		})
+	}
+}
+
+// TestEdge_Jq_NoMetaVarColumnsWithoutMetaVarRead guards the other
+// direction: a jq stage that reads no meta-variable at all must NOT
+// pay for the extra columns — TestEdge_Jq_NonPushable already pins the
+// exact SQL for several such cases; this just states the invariant
+// explicitly for a stage sharing the "jq" prefix that could tempt a
+// cruder (name-only) detection heuristic into a false positive.
+func TestEdge_Jq_NoMetaVarColumnsWithoutMetaVarRead(t *testing.T) {
+	plan, err := Plan(`cat vimgym.log | jq -r '.pct'`, "", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	for _, col := range MetaVarColumns {
+		if strings.Contains(plan.ShardSQL, ", "+col) {
+			t.Errorf("ShardSQL unexpectedly carries meta-var column %q: %s", col, plan.ShardSQL)
+		}
+	}
+}
+
+// TestEdge_Awk_MetaVarInUnpushedStage pins the fix for the known-issues.md
+// entry "awk's reserved meta-variables ... silently print the whole raw
+// line when read as output": a bare meta-variable name (no longer
+// $-prefixed — see planner/awk.go's metaVars doc comment for why)
+// referenced anywhere in a compute stage that doesn't fully push down
+// — filter or output — needs the real per-row value once it reaches
+// warp's awk evaluator, which otherwise has no idea what "HOST" means.
+func TestEdge_Awk_MetaVarInUnpushedStage(t *testing.T) {
+	tests := []struct {
+		name        string
+		pipeline    string
+		wantCompute []string
+	}{
+		{
+			// An `if` inside the action defeats the single-print-
+			// statement raw-expr fold (extractAwkRawExpr), so the
+			// whole stage stays in compute and needs HOST's real value
+			// for both the if-condition and the print.
+			name:        "output read via print inside an if",
+			pipeline:    `cat vimgym.log | awk '{ if (HOST == "web-1") print $1 }'`,
+			wantCompute: []string{`awk '{ if (HOST == "web-1") print $1 }'`},
+		},
+		{
+			name:        "filter re-evaluated after NR mixing blocks pushdown",
+			pipeline:    `cat vimgym.log | awk 'NR >= 10 && HOST == "web-1"'`,
+			wantCompute: []string{`awk 'NR >= 10 && HOST == "web-1"'`},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
+			if err != nil {
+				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
+			}
+			for _, col := range MetaVarColumns {
+				if !strings.Contains(plan.ShardSQL, col) {
+					t.Errorf("ShardSQL missing meta-var column %q: %s", col, plan.ShardSQL)
+				}
+			}
+			if len(plan.ComputeStages) != len(tt.wantCompute) {
+				t.Fatalf("ComputeStages count: got %d, want %d\n got: %v\nwant: %v",
+					len(plan.ComputeStages), len(tt.wantCompute), plan.ComputeStages, tt.wantCompute)
+			}
+			for i, want := range tt.wantCompute {
+				if plan.ComputeStages[i] != want {
+					t.Errorf("ComputeStages[%d]\n got: %s\nwant: %s", i, plan.ComputeStages[i], want)
+				}
+			}
+		})
+	}
+}
+
+// A bare identifier that ISN'T a reserved meta-variable name must not
+// trigger the extra columns — only the exact reserved ALL-CAPS set
+// (metaVars in planner/awk.go) does.
+func TestEdge_Awk_NoMetaVarColumnsForOrdinaryVariable(t *testing.T) {
+	plan, err := Plan(`cat vimgym.log | awk '{ x = $1; print x }'`, "", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	for _, col := range MetaVarColumns {
+		if strings.Contains(plan.ShardSQL, ", "+col) {
+			t.Errorf("ShardSQL unexpectedly carries meta-var column %q: %s", col, plan.ShardSQL)
+		}
+	}
+}
 
 func TestEdge_Jq_NonPushable(t *testing.T) {
 	// jq expressions that cannot be pushed down at all.
@@ -770,7 +905,7 @@ func TestEdge_SQLEscaping(t *testing.T) {
 		// Single quote in string literal
 		{
 			name:     "awk string with single quote",
-			pipeline: `cat vimgym.log | awk '$LEVEL == "can'"'"'t"'`,
+			pipeline: `cat vimgym.log | awk 'LEVEL == "can'"'"'t"'`,
 			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'can''t'`,
 		},
 		// SQL specials previously escaped by the LIKE-substring path
@@ -844,7 +979,7 @@ func TestEdge_PipelineOrdering(t *testing.T) {
 		// the hazard cases that still go to compute.
 		{
 			name:        "head source then awk filter",
-			pipeline:    `head -50 vimgym.log | awk '$LEVEL == "ERROR"'`,
+			pipeline:    `head -50 vimgym.log | awk 'LEVEL == "ERROR"'`,
 			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' ORDER BY ts ASC LIMIT 50`,
 			wantCompute: nil,
 		},
@@ -865,14 +1000,14 @@ func TestEdge_PipelineOrdering(t *testing.T) {
 		// Five-stage mixed pipeline
 		{
 			name:        "five stage mixed",
-			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR"' | grep timeout | sort | uniq -c | head -10`,
+			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | grep timeout | sort | uniq -c | head -10`,
 			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND regexp_matches(raw, 'timeout')`,
 			wantCompute: []string{"sort", "uniq -c", "head -10"},
 		},
 		// Partial awk pushdown followed by more compute
 		{
 			name:        "partial awk then sort",
-			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR" { print $3 }' | sort`,
+			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR" { print $3 }' | sort`,
 			wantSQL:     `SELECT list_extract(fields, 3) as raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: []string{"sort"}, // simple $N print pushed down, sort remains
 		},
@@ -957,7 +1092,7 @@ func TestEdge_CrossTool(t *testing.T) {
 		// awk filter then jq select — both push
 		{
 			name:        "awk filter then jq select",
-			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR"' | jq 'select(.status == 500)'`,
+			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | jq 'select(.status == 500)'`,
 			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
 			wantCompute: nil,
 		},
@@ -971,7 +1106,7 @@ func TestEdge_CrossTool(t *testing.T) {
 		// Four different tools all pushing
 		{
 			name:        "four tools all pushable",
-			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR"' | grep timeout | jq 'select(.status == 500)' | sed -n '/fatal/p'`,
+			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | grep timeout | jq 'select(.status == 500)' | sed -n '/fatal/p'`,
 			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND regexp_matches(raw, 'timeout') AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND regexp_matches(raw, 'fatal')`,
 			wantCompute: nil,
 		},
@@ -1033,10 +1168,14 @@ func TestEdge_NR(t *testing.T) {
 		},
 		// NR mixed with regular predicate — can't combine
 		{
-			name:        "NR mixed with filter",
-			pipeline:    `cat vimgym.log | awk 'NR >= 10 && $LEVEL == "ERROR"'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
-			wantCompute: []string{`awk 'NR >= 10 && $LEVEL == "ERROR"'`},
+			name:     "NR mixed with filter",
+			pipeline: `cat vimgym.log | awk 'NR >= 10 && LEVEL == "ERROR"'`,
+			// LEVEL remains in the compute-stage-evaluated filter (NR
+			// mixing blocks full pushdown), so it needs the real
+			// per-row value the same way an output read would — see
+			// docs/known-issues.md's (fixed) awk meta-variable entry.
+			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node FROM logs WHERE namespace = ?`,
+			wantCompute: []string{`awk 'NR >= 10 && LEVEL == "ERROR"'`},
 		},
 	}
 
@@ -1075,7 +1214,7 @@ func TestEdge_WarpLog(t *testing.T) {
 	}{
 		{
 			name:     "warp.log with awk app filter",
-			pipeline: `cat warp.log | awk '$NAMESPACE == "vimgym" && $LEVEL == "ERROR"'`,
+			pipeline: `cat warp.log | awk 'NAMESPACE == "vimgym" && LEVEL == "ERROR"'`,
 			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR'`,
 		},
 		{
@@ -1157,7 +1296,7 @@ func TestEdge_ProjectionSafety(t *testing.T) {
 		// so the following awk must stay in compute.
 		{
 			name:        "partial printf then awk print",
-			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR" { printf "%s=%s\n", $1, $2 }' | awk '{print $1}'`,
+			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR" { printf "%s=%s\n", $1, $2 }' | awk '{print $1}'`,
 			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: []string{`awk '{ printf "%s=%s\n", $1, $2 }'`, `awk '{print $1}'`},
 		},
@@ -1180,7 +1319,7 @@ func TestEdge_ProjectionSafety(t *testing.T) {
 		// This IS safe because the print is the first compute operation.
 		{
 			name:        "partial print then sort is safe",
-			pipeline:    `cat vimgym.log | awk '$LEVEL == "ERROR" { print $3 }' | sort`,
+			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR" { print $3 }' | sort`,
 			wantSQL:     `SELECT list_extract(fields, 3) as raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: []string{"sort"},
 		},

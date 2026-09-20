@@ -115,7 +115,7 @@ See `docs/manual/alerting-strategies.md` for the full pattern catalogue
 ## EXAMPLES
 
 ```
-tail -n 500 myapp.log | awk '$LEVEL == "ERROR"' | alert --notify=ops
+tail -n 500 myapp.log | awk 'LEVEL == "ERROR"' | alert --notify=ops
 check_errors | alert above 50 --notify=critical
 check_errors | alert above 50 --duration 5m --average --notify=ops
 check_errors | alert rising 100% --notify=critical

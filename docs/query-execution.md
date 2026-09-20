@@ -7,7 +7,7 @@ When the user types a pipeline in the weft shell, the query planner analyzes the
 ## Pipeline lifecycle
 
 ```
-cat vimgym.log | awk '$LEVEL == "ERROR" && $3 > 100' | jq '.payload' | sort | uniq -c
+cat vimgym.log | awk 'LEVEL == "ERROR" && $3 > 100' | jq '.payload' | sort | uniq -c
 ```
 
 1. **Source resolution** — `cat vimgym.log` identifies the source app and time range
@@ -26,8 +26,8 @@ The planner is greedy — it attempts to push down as much as possible. Pushable
 
 | Expression | SQL |
 |-----------|-----|
-| `$LEVEL == "ERROR"` | `WHERE level = 'ERROR'` |
-| `$SERVICE == "coordinator"` | `WHERE service = 'coordinator'` |
+| `LEVEL == "ERROR"` | `WHERE level = 'ERROR'` |
+| `SERVICE == "coordinator"` | `WHERE service = 'coordinator'` |
 | `$3 > 100` | `WHERE CAST(list_extract(fields, 3) AS DOUBLE) > 100` |
 | `/timeout/` | `WHERE raw LIKE '%timeout%'` |
 | `NR >= 10 && NR <= 50` | `LIMIT/OFFSET` |
@@ -69,7 +69,7 @@ The planner walks the pipeline left to right. The source command (`cat`, `head`,
 
 Example:
 ```
-cat vimgym.log | awk '$LEVEL == "ERROR"' | sed 's/foo/bar/' | sort
+cat vimgym.log | awk 'LEVEL == "ERROR"' | sed 's/foo/bar/' | sort
                   ^^^^^^^^^^^^^^^^^^^       ^^^^^^^^^^^^^^^^^^^^^^^
                   pushed down to SQL        gpipe compute stages
 ```
@@ -124,7 +124,7 @@ message LogRow {
 
 `tail -f` uses a push model, not polling:
 
-1. Client sends `tail -f vimgym.log | awk '$LEVEL == "ERROR"'`
+1. Client sends `tail -f vimgym.log | awk 'LEVEL == "ERROR"'`
 2. Coordinator extracts predicates, identifies the active shard
 3. Opens a `Tail` gRPC stream to the active shard with pushdown predicates
 4. Active shard's ingest path notifies subscribers on each batch write

@@ -102,6 +102,17 @@ message ResultRow {
   int64 line_num = 1 [deprecated = true];
   string raw = 2;
   int64 ts_unix_ns = 3;
+  // meta_vars carries weft's reserved dimension columns (namespace,
+  // service, kind, level, instance, deployment, env, version, region,
+  // cluster, k8s_namespace, pod, container — see
+  // planner.JQMetaVars/MetaVarColumns), keyed by column name. Only
+  // populated when the planner projected them because a remaining jq
+  // compute stage might read a bare "._"-prefixed meta-variable for
+  // output (not just inside a pushed-down select()) — the common case
+  // (no such stage) selects and carries nothing extra. See
+  // compute.mergeMetaVars, which splices these into each row's JSON
+  // body before it reaches the jq stage.
+  map<string, string> meta_vars = 4;
 }
 
 // LogRow is the ingestion type — weftd agents and CloudWatch poller send

@@ -3,7 +3,7 @@ package weftd
 import "context"
 
 // VersionReader is a thin wrapper around FileValueReader for the
-// per-source `$VERSION` dimension: read the whole file, watch for
+// per-source VERSION dimension: read the whole file, watch for
 // changes, return the trimmed contents on each Current() call.
 //
 // Retained as a named type so call sites that pass *VersionReader

@@ -31,7 +31,7 @@ that carry one:</p>
 <code>/log/&lt;namespace&gt;.log</code> is a namespace-wide wildcard (every
 service and kind under it).</li>
 <li><strong><code>&lt;service&gt;</code></strong> — the source name a producer reports for itself;
-surfaces as <code>$SERVICE</code> in queries.</li>
+surfaces as <code>SERVICE</code> in queries.</li>
 <li><strong><code>&lt;env&gt;</code></strong> — present only for tokens minted with <code>--env</code>. It
 slots in immediately after the namespace, so an env-bearing path
 has four segments and an env-less one has three. Segment count
@@ -44,7 +44,7 @@ telemetry. It is always present.</li>
 </ul>
 <p>A namespace can hold env-less and env-bearing streams side by side
 as different tokens reauth over time. Env, region, deployment,
-host, and pod are query-time dimensions (<code>awk '$ENV == &quot;prod&quot;'</code>),
+host, and pod are query-time dimensions (<code>awk 'ENV == &quot;prod&quot;'</code>),
 not extra path segments — see <strong>Meta-variables</strong> for the full set.</p>
 `,
 } as const;

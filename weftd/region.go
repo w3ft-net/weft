@@ -12,7 +12,7 @@ import (
 // DetectRegion probes the standard cloud-metadata endpoints in order
 // (AWS IMDSv2 → GCP metadata server → Azure IMDS) and returns the
 // first region it gets. Returns "" if none are reachable; queries
-// on $REGION simply don't filter for that agent.
+// on REGION simply don't filter for that agent.
 //
 // Honors `override` if non-empty — for bare-metal / lab hosts that
 // have no metadata service but still want a region label.

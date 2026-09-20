@@ -345,6 +345,46 @@ func PlanInDir(pipeline, customer, cwd string, start, end time.Time) (*QueryPlan
 		}
 	}
 
+	// A remaining jq stage might read a bare "._"-prefixed meta-variable
+	// for output (e.g. `jq -r '._host'`) rather than only inside a
+	// pushed-down select() predicate — the case jqComparisonToSQL/
+	// jqValueToSQL already handle. Project every MetaVarColumns column
+	// alongside raw so compute (compute/metavars.go) can splice the
+	// values into each row's JSON body before the jq stage runs.
+	//
+	// Textual substring check on the jq stage's own source, not an AST
+	// walk: a meta-variable reference can only ever appear in a jq
+	// program as the literal token "._name" (there's no aliasing or
+	// indirection in this expression language), so this has no false
+	// negatives — and a false positive (e.g. the sequence happening to
+	// appear inside a string literal) only costs a few extra, often-NULL
+	// columns per row, not a correctness bug. Deliberately not a full
+	// AST-recognizer layer for what's still a bounded-size feature.
+	// A remaining awk stage might read a bare reserved meta-variable
+	// (e.g. `HOST`) for output the same way — see docs/known-issues.md's
+	// now-fixed awk entry. Unlike jq's "._name" token, a bare
+	// identifier has no distinguishing prefix, so this uses a
+	// word-bounded regex (awkMetaVarPattern) rather than a plain
+	// substring check, to avoid matching inside an unrelated longer
+	// identifier (e.g. "MYHOST"). Same bounded-feature tradeoff as the
+	// jq check: a false positive (the reserved name happening to be the
+	// user's own unrelated awk variable) only costs a few extra columns.
+	for _, s := range compute {
+		if strings.HasPrefix(s, "jq") {
+			for metaVar := range JQMetaVars {
+				if strings.Contains(s, "."+metaVar) {
+					sql.includeMetaVars = true
+					break
+				}
+			}
+		} else if strings.HasPrefix(s, "awk") && awkMetaVarPattern.MatchString(s) {
+			sql.includeMetaVars = true
+		}
+		if sql.includeMetaVars {
+			break
+		}
+	}
+
 	sql.setSelect(rawExpr)
 
 	orderDesc := sql.orderBy == "ts DESC"

@@ -124,7 +124,7 @@ var grpcFullRange = TimeRange{Start: DevT0, End: DevT2}
 
 func TestGRPC_AwkLevelFilter(t *testing.T) {
 	c := setupGRPCCoordinator(t)
-	res, err := c.Execute(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, grpcFullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | awk 'LEVEL == "ERROR"'`, grpcFullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestGRPC_CustomerIsolation(t *testing.T) {
 
 func TestGRPC_ComputeSort(t *testing.T) {
 	c := setupGRPCCoordinator(t)
-	res, err := c.Execute(`cat vimgym.log | awk '$LEVEL == "ERROR"' | sort`, grpcFullRange, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | awk 'LEVEL == "ERROR"' | sort`, grpcFullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestGRPC_ComputeWcCount(t *testing.T) {
 func TestGRPC_TimeRangeScoping(t *testing.T) {
 	c := setupGRPCCoordinator(t)
 	tr := TimeRange{Start: DevT0, End: DevT1}
-	res, err := c.Execute(`cat vimgym.log | awk '$LEVEL == "ERROR"'`, tr, "kevlar", "")
+	res, err := c.Execute(`cat vimgym.log | awk 'LEVEL == "ERROR"'`, tr, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}

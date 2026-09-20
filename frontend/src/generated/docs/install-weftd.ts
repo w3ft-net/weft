@@ -52,7 +52,7 @@ sources:
     json_field: payload
     version_file: /opt/myapp/VERSION   # optional; weftd watches the
                                        # file and stamps the latest
-                                       # contents as $VERSION on
+                                       # contents as VERSION on
                                        # every row from this source
 
   - service: nginx

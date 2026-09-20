@@ -263,7 +263,7 @@ func BenchmarkQuery_AwkLevelFilter(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		query(b, client, `cat kevlar/vimgym.log | awk '$LEVEL == "ERROR"'`)
+		query(b, client, `cat kevlar/vimgym.log | awk 'LEVEL == "ERROR"'`)
 	}
 }
 
@@ -303,7 +303,7 @@ func BenchmarkQuery_ComputeSort(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		query(b, client, `cat kevlar/vimgym.log | awk '$LEVEL == "ERROR"' | sort`)
+		query(b, client, `cat kevlar/vimgym.log | awk 'LEVEL == "ERROR"' | sort`)
 	}
 }
 
@@ -323,7 +323,7 @@ func BenchmarkQuery_ComputeSortUniqCount(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		query(b, client, `cat kevlar/warp.log | awk '$LEVEL == "ERROR"' | sort | uniq -c`)
+		query(b, client, `cat kevlar/warp.log | awk 'LEVEL == "ERROR"' | sort | uniq -c`)
 	}
 }
 

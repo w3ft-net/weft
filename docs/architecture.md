@@ -82,7 +82,7 @@ Customer (tenant — Kevlar, Acme Corp, ...)
 
 `$CUSTOMER` is a system-level field applied automatically by the coordinator based on the authenticated user's token. It is never exposed as a user-facing meta-variable — it is a row-level security boundary. Every query the coordinator sends to shards includes a `WHERE customer = '...'` predicate, injected unconditionally.
 
-User-facing meta-variables (`$NAMESPACE`, `$SERVICE`, `$KIND`, `$LEVEL`, `$TS`, `$INSTANCE`) are documented in [cli.md](cli.md).
+User-facing meta-variables (`NAMESPACE`, `SERVICE`, `KIND`, `LEVEL`, `TS`, `INSTANCE`) are documented in [cli.md](cli.md).
 
 ## Interfaces
 

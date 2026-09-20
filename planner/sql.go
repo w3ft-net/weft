@@ -36,6 +36,12 @@ type Query struct {
 	limit       int
 	offset      int
 	limitFrozen bool
+	// includeMetaVars appends MetaVarColumns to the SELECT list — set by
+	// Plan when a remaining jq compute stage might read a bare
+	// "._"-prefixed meta-variable for output. See planner.go's
+	// includeMetaVars detection and docs/known-issues.md's (fixed) jq
+	// meta-variable entry.
+	includeMetaVars bool
 }
 
 // From identifies the SELECT's source — either a base table ("logs")
@@ -179,9 +185,10 @@ func (q *Query) setLimitOffset(limit, offset int) {
 // and arbitrary.
 func (q *Query) Wrap(orderBy string) *Query {
 	return &Query{
-		rawExpr: "raw",
-		from:    From{Subquery: q, Alias: "t"},
-		orderBy: orderBy,
+		rawExpr:         "raw",
+		from:            From{Subquery: q, Alias: "t"},
+		orderBy:         orderBy,
+		includeMetaVars: q.includeMetaVars,
 	}
 }
 
@@ -264,6 +271,12 @@ func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 		b.WriteString("raw, ts")
 	} else {
 		fmt.Fprintf(b, "%s as raw, ts", q.rawExpr)
+	}
+	if q.includeMetaVars {
+		for _, col := range MetaVarColumns {
+			b.WriteString(", ")
+			b.WriteString(col)
+		}
 	}
 	b.WriteString(" FROM ")
 	if q.from.Subquery != nil {

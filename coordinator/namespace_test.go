@@ -225,7 +225,7 @@ func TestNamespaceQuery_FilterAcrossSubApps(t *testing.T) {
 	}
 
 	// awk filter on instance — should match only shard rows
-	result, err = c.Execute(`cat /log/weft.log | awk '$INSTANCE == "i-shard-001"'`, nsRange, "graybeard", "")
+	result, err = c.Execute(`cat /log/weft.log | awk 'INSTANCE == "i-shard-001"'`, nsRange, "graybeard", "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}

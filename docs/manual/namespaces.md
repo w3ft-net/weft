@@ -36,7 +36,7 @@ that carry one:
   `/log/<namespace>.log` is a namespace-wide wildcard (every
   service and kind under it).
 - **`<service>`** — the source name a producer reports for itself;
-  surfaces as `$SERVICE` in queries.
+  surfaces as `SERVICE` in queries.
 - **`<env>`** — present only for tokens minted with `--env`. It
   slots in immediately after the namespace, so an env-bearing path
   has four segments and an env-less one has three. Segment count
@@ -49,5 +49,5 @@ that carry one:
 
 A namespace can hold env-less and env-bearing streams side by side
 as different tokens reauth over time. Env, region, deployment,
-host, and pod are query-time dimensions (`awk '$ENV == "prod"'`),
+host, and pod are query-time dimensions (`awk 'ENV == "prod"'`),
 not extra path segments — see **Meta-variables** for the full set.

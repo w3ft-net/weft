@@ -11,7 +11,7 @@ func TestCheckPipeline(t *testing.T) {
 		// Exact match advances.
 		{"shell-ls", "ls /log", true},
 		{"shell-tail", "tail /log/loom/prod/api/main.log", true},
-		{"shell-grep-awk", "tail /log/loom/prod/api/main.log | grep ERROR | awk '{print $HOST, $1, $4}'", true},
+		{"shell-grep-awk", "tail /log/loom/prod/api/main.log | grep ERROR | awk '{print HOST, $1, $4}'", true},
 		{"shell-alert", "tail /log/loom/prod/api/main.log | grep ERROR | wc -l | alert above 0", true},
 		{"shell-notify", "cat /etc/notify.yaml", true},
 		{"shell-cron", "ls /cron.d/", true},

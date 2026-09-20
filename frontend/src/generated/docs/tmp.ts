@@ -19,7 +19,7 @@ set long enough to slice it a few different ways. It behaves the way a
 Unix <code>/tmp</code> does: write with <code>&gt;</code>, append with <code>&gt;&gt;</code>, edit with <code>vi</code>, list
 with <code>ls</code>, remove with <code>rm</code>.</p>
 <pre><code># Save a filtered result set
-cat api.log | awk '$LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
+cat api.log | awk 'LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
 
 # Take a look
 wc -l /tmp/errs
@@ -36,7 +36,7 @@ ls -l /tmp/incident-2026-04-22
 
 # Compare two result sets
 cp /tmp/errs /tmp/errs.bak
-tail -n 1000 api.log | awk '$LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
+tail -n 1000 api.log | awk 'LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
 diff /tmp/errs.bak /tmp/errs           # what's new in the most recent slice
 comm /tmp/errs.bak /tmp/errs           # three-column shared/unique view
 join orders.csv prices.csv             # relate two result sets by key

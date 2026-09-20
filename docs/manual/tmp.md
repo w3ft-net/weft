@@ -17,7 +17,7 @@ with `ls`, remove with `rm`.
 
 ```
 # Save a filtered result set
-cat api.log | awk '$LEVEL == "ERROR"' > /tmp/errs
+cat api.log | awk 'LEVEL == "ERROR"' > /tmp/errs
 
 # Take a look
 wc -l /tmp/errs
@@ -34,7 +34,7 @@ ls -l /tmp/incident-2026-04-22
 
 # Compare two result sets
 cp /tmp/errs /tmp/errs.bak
-tail -n 1000 api.log | awk '$LEVEL == "ERROR"' > /tmp/errs
+tail -n 1000 api.log | awk 'LEVEL == "ERROR"' > /tmp/errs
 diff /tmp/errs.bak /tmp/errs           # what's new in the most recent slice
 comm /tmp/errs.bak /tmp/errs           # three-column shared/unique view
 join orders.csv prices.csv             # relate two result sets by key

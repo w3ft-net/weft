@@ -157,8 +157,8 @@ github.com/graybeardcorp/saaskit v0.3.2 h1:dQdgdpO3TbZIRLfYA3r+eVD+tHQDGvRsQ5gPq
 github.com/graybeardcorp/saaskit v0.3.2/go.mod h1:aJaO8a3RJ7X2OwGYvLji43T0SFtgr5d3nxAlmwzcHk0=
 github.com/graybeardcorp/warp v0.2.35 h1:LPBynV501Xsh1AKHpNVu6mhfLAvkGvbLRF8cm6C7oHk=
 github.com/graybeardcorp/warp v0.2.35/go.mod h1:eUF5gbY1k+hAF07OtsLtfqQMxhSDedAuu93H9CekJzc=
-github.com/graybeardcorp/warp v0.2.40 h1:Daha4IgkeIZK/Ztet+Yrr0mr8kEcJAvuDnNncXFcU90=
-github.com/graybeardcorp/warp v0.2.40/go.mod h1:eUF5gbY1k+hAF07OtsLtfqQMxhSDedAuu93H9CekJzc=
+github.com/graybeardcorp/warp v0.2.41 h1:jlpJ5cebwZtvPZfXL9GTJVkMyLFHykDY8YB9sEM+sAg=
+github.com/graybeardcorp/warp v0.2.41/go.mod h1:eUF5gbY1k+hAF07OtsLtfqQMxhSDedAuu93H9CekJzc=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
 github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=
 github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 h1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=

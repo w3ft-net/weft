@@ -8,12 +8,14 @@ import (
 	"github.com/graybeardcorp/warp/pkg/jq"
 )
 
-// jqMetaVars maps jq underscore-prefixed field names to SQL column names.
+// JQMetaVars maps jq underscore-prefixed field names to SQL column names.
 // The leading underscore is the disambiguation convention — jq is
 // case-sensitive, but real JSONL sometimes carries Pod/.Pod-style keys
 // so the underscore is more reliable than casing. See
-// docs/plans/ingest-dimensions.md.
-var jqMetaVars = map[string]string{
+// docs/plans/ingest-dimensions.md. Exported so compute (compute/
+// metavars.go) can expand a row's projected MetaVarColumns back out to
+// every alias a jq expression might read.
+var JQMetaVars = map[string]string{
 	"_namespace":     "namespace",
 	"_service":       "service",
 	"_kind":          "kind",
@@ -30,6 +32,20 @@ var jqMetaVars = map[string]string{
 	"_pod":           "pod",
 	"_container":     "container",
 	"_node":          "node",
+}
+
+// MetaVarColumns is the distinct, deterministically-ordered set of real
+// shard columns backing JQMetaVars (excluding "ts", which every query
+// already selects). Appended to the SELECT list whenever a remaining
+// jq compute stage might read a bare "._"-prefixed meta-variable for
+// output — see Plan's includeMetaVars detection and
+// docs/known-issues.md's (fixed) jq meta-variable entry. Order is
+// fixed, not map-iteration order, so generated SQL stays stable across
+// runs (planner tests pin exact SQL strings).
+var MetaVarColumns = []string{
+	"namespace", "service", "kind", "level", "instance", "deployment",
+	"env", "version", "region", "cluster", "k8s_namespace", "pod",
+	"container", "node",
 }
 
 // tryJqPushdown attempts to extract a pushable predicate from a jq expression string.
@@ -98,7 +114,7 @@ func jqComparisonToSQL(left, right jq.Expr, op string) string {
 	}
 
 	// Check for meta-variable.
-	if col, isMeta := jqMetaVars[field.Name]; isMeta {
+	if col, isMeta := JQMetaVars[field.Name]; isMeta {
 		return fmt.Sprintf("%s %s '%s'", col, op, lit.Value.Str)
 	}
 

@@ -25,39 +25,44 @@ statistics stay useful.</p>
 <h2 id="reserved-set">Reserved set</h2>
 <p>| awk                        | jq                       | Column           | Source                                                    |
 |----------------------------|--------------------------|------------------|-----------------------------------------------------------|
-| <code>$NAMESPACE</code>                | <code>._namespace</code>            | <code>namespace</code>      | the <code>&lt;namespace&gt;</code> path segment / agent token's namespace  |
-| <code>$SERVICE</code>                  | <code>._service</code>              | <code>service</code>        | source declaration, log filename, or HTTP ingest payload  |
-| <code>$KIND</code>                     | <code>._kind</code>                 | <code>kind</code>           | the stream kind (<code>main</code>, <code>heartbeats</code>, <code>metrics</code>, <code>runtime</code>) |
-| <code>$HOST</code> <em>(alias <code>$INSTANCE</code>)</em> | <code>._host</code> <em>(alias <code>._instance</code>)</em> | <code>instance</code>       | weftd <code>os.Hostname()</code>                                     |
-| <code>$LEVEL</code>                    | <code>._level</code>                | <code>level</code>          | schema-extracted from the row                             |
-| <code>$TS</code>                       | <code>._ts</code>                   | <code>ts</code>             | schema-extracted from the row                             |
-| <code>$DEPLOYMENT</code>               | <code>._deployment</code>           | <code>deployment</code>     | weftd <code>deployment:</code> config (or k8s/ASG)                   |
-| <code>$ENV</code>                      | <code>._env</code>                  | <code>env</code>            | bound to the agent token at mint time                     |
-| <code>$VERSION</code>                  | <code>._version</code>              | <code>version</code>        | weftd <code>version.file:</code> (live) or <code>version.env:</code> (snapshot) |
-| <code>$REGION</code>                   | <code>._region</code>               | <code>region</code>         | cloud metadata probe at agent startup                     |
-| <code>$CLUSTER</code>                  | <code>._cluster</code>              | <code>cluster</code>        | weftd k8s mode                                            |
-| <code>$K8S_NAMESPACE</code>            | <code>._k8s_namespace</code>        | <code>k8s_namespace</code>  | weftd k8s mode (parsed from <code>/var/log/pods/…</code>)            |
-| <code>$POD</code>                      | <code>._pod</code>                  | <code>pod</code>            | weftd k8s mode                                            |
-| <code>$CONTAINER</code>                | <code>._container</code>            | <code>container</code>      | weftd k8s mode                                            |
-| <code>$NODE</code>                     | <code>._node</code>                 | <code>node</code>           | weftd <code>dimensions.node:</code> (file-sourced)                   |</p>
+| <code>NAMESPACE</code>                | <code>._namespace</code>            | <code>namespace</code>      | the <code>&lt;namespace&gt;</code> path segment / agent token's namespace  |
+| <code>SERVICE</code>                  | <code>._service</code>              | <code>service</code>        | source declaration, log filename, or HTTP ingest payload  |
+| <code>KIND</code>                     | <code>._kind</code>                 | <code>kind</code>           | the stream kind (<code>main</code>, <code>heartbeats</code>, <code>metrics</code>, <code>runtime</code>) |
+| <code>HOST</code> <em>(alias <code>INSTANCE</code>)</em> | <code>._host</code> <em>(alias <code>._instance</code>)</em> | <code>instance</code>       | weftd <code>os.Hostname()</code>                                     |
+| <code>LEVEL</code>                    | <code>._level</code>                | <code>level</code>          | schema-extracted from the row                             |
+| <code>TS</code>                       | <code>._ts</code>                   | <code>ts</code>             | schema-extracted from the row                             |
+| <code>DEPLOYMENT</code>               | <code>._deployment</code>           | <code>deployment</code>     | weftd <code>deployment:</code> config (or k8s/ASG)                   |
+| <code>ENV</code>                      | <code>._env</code>                  | <code>env</code>            | bound to the agent token at mint time                     |
+| <code>VERSION</code>                  | <code>._version</code>              | <code>version</code>        | weftd <code>version.file:</code> (live) or <code>version.env:</code> (snapshot) |
+| <code>REGION</code>                   | <code>._region</code>               | <code>region</code>         | cloud metadata probe at agent startup                     |
+| <code>CLUSTER</code>                  | <code>._cluster</code>              | <code>cluster</code>        | weftd k8s mode                                            |
+| <code>K8S_NAMESPACE</code>            | <code>._k8s_namespace</code>        | <code>k8s_namespace</code>  | weftd k8s mode (parsed from <code>/var/log/pods/…</code>)            |
+| <code>POD</code>                      | <code>._pod</code>                  | <code>pod</code>            | weftd k8s mode                                            |
+| <code>CONTAINER</code>                | <code>._container</code>            | <code>container</code>      | weftd k8s mode                                            |
+| <code>NODE</code>                     | <code>._node</code>                 | <code>node</code>           | weftd <code>dimensions.node:</code> (file-sourced)                   |</p>
 <p>A row that wasn't tagged with a given dimension stamps <code>NULL</code> —
-queries on <code>$ENV == &quot;prod&quot;</code> neither include nor exclude such rows;
+queries on <code>ENV == &quot;prod&quot;</code> neither include nor exclude such rows;
 they simply don't match the predicate.</p>
 <h3 id="naming-convention">Naming convention</h3>
-<p>awk meta-variables are all-caps short flat names — <code>$ENV</code>, <code>$POD</code>,
-<code>$DEPLOYMENT</code> — matching the pre-existing <code>$LEVEL</code> / <code>$SERVICE</code> /
-<code>$INSTANCE</code> shape. The source coordinates split into three columns —
-<code>$NAMESPACE</code>, <code>$SERVICE</code>, <code>$KIND</code> — each addressed directly rather
+<p>awk meta-variables are all-caps short flat names — <code>ENV</code>, <code>POD</code>,
+<code>DEPLOYMENT</code> — matching the pre-existing <code>LEVEL</code> / <code>SERVICE</code> /
+<code>INSTANCE</code> shape. The source coordinates split into three columns —
+<code>NAMESPACE</code>, <code>SERVICE</code>, <code>KIND</code> — each addressed directly rather
 than rolled into one conflated value.</p>
+<p>Bare, not <code>$</code>-prefixed: <code>$NAME</code> in real awk is field-by-variable-index
+syntax (<code>$n</code> where <code>n</code> is <code>NAME</code>'s value), unrelated to a named
+variable's own value — it can't carry a string like <code>&quot;web-1&quot;</code>. A bare
+<code>HOST</code> is an ordinary awk global, exactly like awk's own built-in
+<code>NR</code>/<code>NF</code>/<code>FILENAME</code>.</p>
 <p>jq meta-variables use leading-underscore lowercase — <code>._env</code>,
 <code>._pod</code>. The underscore disambiguates from real JSON payload keys:
 <code>.pod</code> is whatever the producer wrote into the row body; <code>._pod</code> is
 the column. Real JSONL sometimes carries <code>Pod</code> / <code>PoD</code> / <code>POD</code> keys,
 so the underscore is more reliable than relying on case alone.</p>
-<p><code>$NAMESPACE</code> is weft's own logical token-grouping — the
+<p><code>NAMESPACE</code> is weft's own logical token-grouping — the
 <code>&lt;namespace&gt;</code> segment in the path (<code>/log/&lt;namespace&gt;/...</code>). The
 Kubernetes namespace, a distinct dimension, takes the verbose
-<code>$K8S_NAMESPACE</code> (<code>._k8s_namespace</code>) so the two never collide.</p>
+<code>K8S_NAMESPACE</code> (<code>._k8s_namespace</code>) so the two never collide.</p>
 <h2 id="path-layout">Path layout</h2>
 <p>The pseudofile path encodes the namespace, service, and stream
 kind, plus the env when the producing token carries one:</p>
@@ -83,14 +88,14 @@ api/                   ← env-less token
 <p><code>cat /log/myco/api/main.log</code> reads the env-less stream; <code>cat /log/myco/prod/api/main.log</code> reads the env-prod stream; <code>cat /log/myco/*/api/main.log</code> matches across every env that has one. No
 backfill, no synthetic placeholder env.</p>
 <p>Region is intentionally <strong>not</strong> part of the path layout — it's a
-query-time filter (<code>awk '$REGION == &quot;us-east-2&quot;'</code>) only. Same for
+query-time filter (<code>awk 'REGION == &quot;us-east-2&quot;'</code>) only. Same for
 deployment, host, cluster, pod: those are query-time dimensions, not
 filesystem axes.</p>
 <h2 id="pushdown">Pushdown</h2>
 <p>Each reserved meta-variable rewrites to a direct column predicate:</p>
-<pre><code>awk '$ENV == &quot;prod&quot;'                  → WHERE env = 'prod'
+<pre><code>awk 'ENV == &quot;prod&quot;'                  → WHERE env = 'prod'
 jq 'select(._env == &quot;prod&quot;)'          → WHERE env = 'prod'
-awk '$POD ~ &quot;api-7f9b&quot;'               → WHERE pod LIKE 'api-7f9b%'
+awk 'POD ~ &quot;api-7f9b&quot;'               → WHERE pod LIKE 'api-7f9b%'
 jq 'select(._level == &quot;ERROR&quot;)'       → WHERE level = 'ERROR'
 </code></pre>
 <p>For non-reserved fields, the existing JSON-extract pushdown still
@@ -103,14 +108,14 @@ predicate (fast) AND the JSON-extract predicate (slower); DuckDB
 plans it as one stage.</p>
 <h2 id="recipes">Recipes</h2>
 <h3 id="per-host-average-over-a-window">Per-host average over a window</h3>
-<p>A cron in <code>/cron.d</code> with <code>$HOST</code> carrying the dimension makes
+<p>A cron in <code>/cron.d</code> with <code>HOST</code> carrying the dimension makes
 &quot;avg memory pct by host over 1h&quot; a one-liner:</p>
 <pre><code># /cron.d/memory-per-host
 # schedule: every 1m
 tail -n 200 /log/myco/api/metrics.log \\
   | jq -r 'select(._level == &quot;INFO&quot; and .type == &quot;memory&quot;) | &quot;\\(._host) \\(.pct)&quot;'
 </code></pre>
-<p>Each tick emits one row per host. Multi-row alerts (<code>alert above 80 -k 2 -t 1</code>) page per host independently because <code>$HOST</code> is a real
+<p>Each tick emits one row per host. Multi-row alerts (<code>alert above 80 -k 2 -t 1</code>) page per host independently because <code>HOST</code> is a real
 column the alert grouping understands.</p>
 <h3 id="filter-by-env-across-deployments">Filter by env across deployments</h3>
 <pre><code>cat /log/myco/prod/*/main.log \\
@@ -126,7 +131,7 @@ clauses, no JSON parsing.</p>
   | jq -r '&quot;\\(._region) \\(._level)&quot;' \\
   | sort | uniq -c
 </code></pre>
-<p><code>$REGION</code> is populated from cloud metadata at agent startup; the
+<p><code>REGION</code> is populated from cloud metadata at agent startup; the
 rollup gives a level-by-region histogram for the deployment.</p>
 `,
 } as const;

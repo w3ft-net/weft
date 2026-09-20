@@ -9,8 +9,8 @@ import (
 // TestPushdown_NewDimensions verifies the seven new dimension meta-vars
 // (DEPLOYMENT, ENV, VERSION, REGION, CLUSTER, K8S_NAMESPACE, POD,
 // CONTAINER) plus the SERVICE/HOST aliases push down to direct column
-// predicates — the same shape today's $LEVEL / $APP / $INSTANCE produce.
-// See docs/plans/ingest-dimensions.md.
+// predicates — the same shape LEVEL/INSTANCE produce. See
+// docs/plans/ingest-dimensions.md.
 func TestPushdown_NewDimensions(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -21,20 +21,20 @@ func TestPushdown_NewDimensions(t *testing.T) {
 		wantWHERE string
 	}{
 		// ── awk meta-vars ────────────────────────────────────────────
-		{"awk deployment", `cat vimgym.log | awk '$DEPLOYMENT == "shard"'`, "deployment = 'shard'"},
-		{"awk env", `cat vimgym.log | awk '$ENV == "prod"'`, "env = 'prod'"},
-		{"awk version", `cat vimgym.log | awk '$VERSION == "v1.2.3"'`, "version = 'v1.2.3'"},
-		{"awk region", `cat vimgym.log | awk '$REGION == "us-east-2"'`, "region = 'us-east-2'"},
-		{"awk cluster", `cat vimgym.log | awk '$CLUSTER == "prod-cluster"'`, "cluster = 'prod-cluster'"},
-		{"awk k8s_namespace", `cat vimgym.log | awk '$K8S_NAMESPACE == "default"'`, "k8s_namespace = 'default'"},
-		{"awk pod", `cat vimgym.log | awk '$POD == "api-7f9b"'`, "pod = 'api-7f9b'"},
-		{"awk container", `cat vimgym.log | awk '$CONTAINER == "main"'`, "container = 'main'"},
-		{"awk node", `cat vimgym.log | awk '$NODE == "shard-abc"'`, "node = 'shard-abc'"},
+		{"awk deployment", `cat vimgym.log | awk 'DEPLOYMENT == "shard"'`, "deployment = 'shard'"},
+		{"awk env", `cat vimgym.log | awk 'ENV == "prod"'`, "env = 'prod'"},
+		{"awk version", `cat vimgym.log | awk 'VERSION == "v1.2.3"'`, "version = 'v1.2.3'"},
+		{"awk region", `cat vimgym.log | awk 'REGION == "us-east-2"'`, "region = 'us-east-2'"},
+		{"awk cluster", `cat vimgym.log | awk 'CLUSTER == "prod-cluster"'`, "cluster = 'prod-cluster'"},
+		{"awk k8s_namespace", `cat vimgym.log | awk 'K8S_NAMESPACE == "default"'`, "k8s_namespace = 'default'"},
+		{"awk pod", `cat vimgym.log | awk 'POD == "api-7f9b"'`, "pod = 'api-7f9b'"},
+		{"awk container", `cat vimgym.log | awk 'CONTAINER == "main"'`, "container = 'main'"},
+		{"awk node", `cat vimgym.log | awk 'NODE == "shard-abc"'`, "node = 'shard-abc'"},
 
 		// SERVICE alias for app — should rewrite to the same column.
-		{"awk service alias", `cat vimgym.log | awk '$SERVICE == "api"'`, "namespace = ?"},
+		{"awk service alias", `cat vimgym.log | awk 'SERVICE == "api"'`, "namespace = ?"},
 		// HOST alias for instance.
-		{"awk host alias", `cat vimgym.log | awk '$HOST == "i-abc"'`, "instance = 'i-abc'"},
+		{"awk host alias", `cat vimgym.log | awk 'HOST == "i-abc"'`, "instance = 'i-abc'"},
 
 		// ── jq meta-vars ─────────────────────────────────────────────
 		{"jq deployment", `cat vimgym.log | jq 'select(._deployment == "shard")'`, "deployment = 'shard'"},
