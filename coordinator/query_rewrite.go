@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
 	"github.com/graybeardcorp/weft/planner"
@@ -187,6 +188,22 @@ func isQueryShape(pipe *bash.Pipeline) bool {
 			}
 		}
 		return true
+	}
+	// A leading command other than cat/head/tail that's still handed an
+	// absolute /log/ path directly (real-Unix habit: `grep pattern
+	// file` instead of piping through a source stage first) can't
+	// itself be a source — grep/awk/jq/etc. are pushdown/compute
+	// stages. Route it into the query callback anyway so planner.Plan's
+	// parseSource rejects it with a clear "must start with cat/head/
+	// tail" error, rather than leaving it untouched here and falling
+	// through to plain warp execution, where it reads the literal path
+	// off shellfs's LogMount and silently returns zero rows with no
+	// error at all. See docs/known-issues.md, "A pipeline whose first
+	// stage isn't cat/head/tail silently returns nothing".
+	for _, w := range sc.Words[1:] {
+		if strings.HasPrefix(w.Literal(), "/log/") {
+			return true
+		}
 	}
 	return false
 }

@@ -101,6 +101,28 @@ func TestRewriteQueryPipelines_NoRedirect(t *testing.T) {
 	}
 }
 
+// TestRewriteQueryPipelines_LeadingNonSourceCommandWithLogPath pins the
+// fix for the "pipeline whose first stage isn't cat/head/tail silently
+// returns nothing" gap (docs/known-issues.md): `grep ERROR /log/foo.log`
+// — grep given the path directly, as real Unix grep would accept,
+// instead of being piped a stream — must still get substituted into the
+// query callback so planner.Plan rejects it with a clear error. Before
+// the fix, isQueryShape returned false for any leading command other
+// than cat/head/tail, so this pipeline was left untouched and fell
+// through to plain warp execution against shellfs's LogMount, which
+// silently returned zero rows with no error at all.
+func TestRewriteQueryPipelines_LeadingNonSourceCommandWithLogPath(t *testing.T) {
+	script, err := bash.Parse(`grep ERROR /log/weft/coordinator/main.log`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	rewriteQueryPipelines(script, nil, TimeRange{}, "kevlar", "", "", nil)
+
+	// singleCallbackInScript fatals if the rewrite didn't substitute a
+	// callback at all — exactly the pre-fix behavior for this shape.
+	singleCallbackInScript(t, script)
+}
+
 // singleCallbackInScript walks the rewritten script, asserts that
 // exactly one CallbackCommand was substituted (which is what the
 // rewriter does for a single-pipeline log query), and returns it.

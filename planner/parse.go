@@ -202,6 +202,23 @@ func parseSource(cmd *bash.SimpleCommand, cwd string) (*sourceInfo, error) {
 		return &sourceInfo{namespaces: sf.namespaces, services: sf.services, kinds: sf.kinds, env: sf.env, cmd: "tail", limit: limit, follow: follow}, nil
 
 	default:
+		// A leading command other than cat/head/tail can never
+		// establish a source path/kind — grep, awk, jq, sed, etc. are
+		// pushdown/compute stages, not sources. If it was still handed
+		// a /log/ path directly (real-Unix habit: `grep pattern file`
+		// instead of piping through a source stage first), say so
+		// explicitly rather than falling back to the generic "unknown
+		// source command" message, which callers key off of to silently
+		// reclassify the whole pipeline as ErrNotPlannable and hand it
+		// to plain warp execution — where it reads shellfs's LogMount
+		// directly and returns zero rows with no error at all. See
+		// docs/known-issues.md, "A pipeline whose first stage isn't
+		// cat/head/tail silently returns nothing".
+		for _, a := range args {
+			if resolved := resolveSourcePath(a, cwd); strings.HasPrefix(resolved, "/log/") {
+				return nil, fmt.Errorf("pipeline must start with cat, head, or tail to read a /log/ path — %q can't be the first stage; try: tail %s | %s ...", name, resolved, name)
+			}
+		}
 		return nil, fmt.Errorf("unknown source command: %s", name)
 	}
 }
