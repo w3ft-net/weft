@@ -23,6 +23,10 @@ local targets = {
         -- CGO_ENABLED=0 from a single (linux/amd64) runner — no Mac, no
         -- per-arch native builders.
         cgo         = false,
+        -- `release` compiles out internal-only escape hatches (currently
+        -- just WEFT_ENDPOINT — see shell/config_endpoint_release.go) that
+        -- have no legitimate use once a binary ships to customers.
+        tags        = "release",
         platforms   = {
             { goos = "linux",  goarch = "amd64", suffix = "linux-amd64"  },
             { goos = "linux",  goarch = "arm64", suffix = "linux-arm64"  },
@@ -98,7 +102,15 @@ function run(args)
         local tmp = "/tmp/" .. binary_name
 
         kevcons.log("building " .. binary_name .. "...")
-        kevcons.exec("go", {"build", "-ldflags", ldflags, "-o", tmp, target.pkg}, {
+        local build_args = {"build", "-ldflags", ldflags}
+        if target.tags then
+            table.insert(build_args, "-tags")
+            table.insert(build_args, target.tags)
+        end
+        table.insert(build_args, "-o")
+        table.insert(build_args, tmp)
+        table.insert(build_args, target.pkg)
+        kevcons.exec("go", build_args, {
             env = {
                 GOOS = plat.goos,
                 GOARCH = plat.goarch,

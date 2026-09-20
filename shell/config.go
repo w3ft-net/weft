@@ -64,7 +64,8 @@ type Config struct {
 }
 
 // LoadConfig resolves configuration from the following chain (first wins):
-//  1. Environment variables: WEFT_ENDPOINT, WEFT_TOKEN
+//  1. Environment variables: WEFT_TOKEN, WEFT_ORG, and (non-release builds
+//     only — see config_endpoint_dev.go/config_endpoint_release.go) WEFT_ENDPOINT
 //  2. .weft.yaml in the current working directory
 //  3. .weft.yaml in the user's home directory
 //
@@ -78,7 +79,7 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// Env var overrides.
-	if v := os.Getenv("WEFT_ENDPOINT"); v != "" {
+	if v := EndpointOverride(); v != "" {
 		cfg.Endpoint = v
 	}
 	if v := os.Getenv("WEFT_TOKEN"); v != "" {
@@ -89,7 +90,7 @@ func LoadConfig() (*Config, error) {
 	}
 
 	if cfg.Endpoint == "" {
-		return nil, fmt.Errorf("no endpoint configured — run `weft login` or set WEFT_ENDPOINT")
+		return nil, fmt.Errorf("no endpoint configured — run `weft login`")
 	}
 
 	return cfg, nil

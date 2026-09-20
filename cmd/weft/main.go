@@ -344,7 +344,7 @@ func runOneShot(pipeline, rangeSpec string) {
 }
 
 func runLogin() {
-	baseURL := os.Getenv("WEFT_ENDPOINT")
+	baseURL := shell.EndpointOverride()
 	if baseURL == "" {
 		baseURL = "https://api.w3ft.net"
 	}
