@@ -104,6 +104,12 @@ type ProvisionerConfig struct {
 	// expected shape for every test that constructs a Provisioner directly
 	// without going through Start.
 	Holder string
+	// MaxConcurrentEvaluate bounds how many bucket/shard Evaluate calls
+	// evaluateStateMachines runs at once per tick. Zero (the production
+	// default) uses maxConcurrentEvaluate. Set to 1 for a test wired to a
+	// single-connection store (openSMTestStore's tx-scoped fixture panics
+	// under concurrent access) to force sequential evaluation.
+	MaxConcurrentEvaluate int
 }
 
 // defaultCloseRebindGrace is the production default for the rebind
@@ -706,10 +712,49 @@ func (p *Provisioner) isLeader() bool { return p.leading.Load() }
 // others still completing. See the lastProgress field comment.
 func (p *Provisioner) markProgress() { p.lastProgress.Store(time.Now().UnixNano()) }
 
+// maxConcurrentEvaluate bounds how many bucket/shard Evaluate calls run at
+// once per evaluateStateMachines tick. Sequential evaluation made one slow
+// shard's Evaluate (e.g. a stuck AWS call during archive or recovery) block
+// every other shard's convergence for that whole tick — confirmed under
+// real prod load in docs/known-issues.md "evaluateStateMachines runs
+// shards sequentially". Bounded (not unbounded) so a large fleet doesn't
+// fan out into hundreds of simultaneous DB/AWS calls from one tick.
+const maxConcurrentEvaluate = 8
+
+// evaluateConcurrently runs eval(item) for every item in items, with at
+// most limit running at once, and blocks until all have finished. Pulled
+// out of evaluateStateMachines so the bounded-fan-out behavior — not tied
+// to Shard or BucketSM — is directly unit-testable
+// (TestEvaluateStateMachines_ShardsConvergeConcurrently exercises it
+// through the real tick; the property itself needs no shard machinery).
+func evaluateConcurrently[T any](items []T, limit int, eval func(T)) {
+	if limit <= 0 || limit > len(items) {
+		limit = len(items)
+	}
+	if limit == 0 {
+		return
+	}
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for _, item := range items {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(item T) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			eval(item)
+		}(item)
+	}
+	wg.Wait()
+}
+
 // evaluateStateMachines drives every bucket SM then every shard SM one
 // tick toward convergence. Buckets run first: a WARMING bucket mints new
 // shard SMs, and re-snapshotting after the bucket pass lets those minted
 // shards Evaluate the same tick (their launch starts now, not next tick).
+// Within each pass, items converge concurrently (bounded by
+// maxConcurrentEvaluate) rather than one at a time, so one slow bucket or
+// shard no longer stalls every other one's convergence for the tick.
 //
 // Only ever called while holding the shard-fsm-leader lease (see check) —
 // callers driving this directly in tests are implicitly leader via
@@ -725,7 +770,11 @@ func (p *Provisioner) evaluateStateMachines(ctx context.Context) {
 		buckets = append(buckets, b)
 	}
 	p.smMu.RUnlock()
-	for _, b := range buckets {
+	limit := p.config.MaxConcurrentEvaluate
+	if limit <= 0 {
+		limit = maxConcurrentEvaluate
+	}
+	evaluateConcurrently(buckets, limit, func(b *BucketSM) {
 		start := time.Now()
 		err := b.Evaluate(ctx)
 		store.LogEvaluateEvent("bucket", fmt.Sprint(b.ID), time.Since(start), err)
@@ -733,11 +782,11 @@ func (p *Provisioner) evaluateStateMachines(ctx context.Context) {
 			log.Printf("provisioner: bucket %d Evaluate: %v", b.ID, err)
 		}
 		p.markProgress()
-	}
+	})
 
 	deps := p.shardDeps()
 	shards := p.registry.Entries()
-	for _, e := range shards {
+	evaluateConcurrently(shards, limit, func(e *Shard) {
 		e.ensureSM(deps)
 		start := time.Now()
 		err := e.Evaluate(ctx)
@@ -746,7 +795,7 @@ func (p *Provisioner) evaluateStateMachines(ctx context.Context) {
 			log.Printf("provisioner: shard %s Evaluate: %v", e.ID, err)
 		}
 		p.markProgress()
-	}
+	})
 	store.LogEvaluateTick(len(buckets), len(shards), time.Since(tickStart))
 }
 

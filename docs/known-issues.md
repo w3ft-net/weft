@@ -152,42 +152,33 @@ No general fix designed (candidate: a `make dev-reset` that recreates the
 postgres volume from current `schema.sql`, or a doc note in the collapse
 runbook to recreate dev volumes after every collapse).
 
-## `evaluateStateMachines` runs shards sequentially, so one slow shard's latency is additive to the whole tick
+## `evaluateStateMachines` has no per-shard/per-bucket timeout on `Evaluate`
 
-**Where:** `logdb/provisioner.go`'s `evaluateStateMachines` — a plain
-`for` loop over every bucket/shard calling `Evaluate()` in series, with no
-per-shard timeout or concurrency.
+**Where:** `logdb/provisioner.go`'s `evaluateStateMachines`.
 
-**Symptom:** confirmed running Test 6 of
-`docs/plans/coordinator-chaos-tests.md` on 2026-09-19 against live prod
-traffic (no fault injection needed — ordinary DuckDB-query jitter was
-enough to demonstrate it). Two sample ticks from `i-0b340ce3672315ed2`:
-at `15:57:42`, `evaluate_tick duration_ms=357` with one shard event at
-`duration_ms=71` and several others at 22–29ms — the tick's 34
-`evaluate_event` durations summed to 325ms, 91% of the tick total; at
-`16:05:42`, `evaluate_tick duration_ms=417` with a `kind=bucket` event at
-`duration_ms=96` and a shard event at `duration_ms=55` — events summed to
-364ms, 87% of the total. In both cases the gap between sum-of-events and
-tick-total stayed in the same ~30–55ms band regardless of how slow the
-events were, i.e. slow work adds directly to the tick rather than being
-absorbed by overlap.
+**Fixed (2026-09-20):** the sequential `for` loop that made one slow
+shard's `Evaluate` latency additive to the whole tick — confirmed live
+under ordinary query jitter via Test 6 of
+`docs/plans/coordinator-chaos-tests.md` on 2026-09-19 — is gone. Bucket
+and shard `Evaluate` calls now run through `evaluateConcurrently`, a
+bounded worker pool (`maxConcurrentEvaluate` = 8 slots by default,
+`ProvisionerConfig.MaxConcurrentEvaluate` to override). Pinned by
+`TestEvaluateStateMachines_ShardsConvergeConcurrently`
+(`logdb/provisioner_evaluate_concurrency_test.go`), which fails against
+the old sequential code (~N × per-shard delay) and passes bounded by the
+concurrency limit instead.
 
-**Root cause:** no concurrency in the evaluate loop. This was already
-flagged as a design gap in `docs/plans/coordinator-horizontal-scaling.md`
-("one shard's slow archive already blocks every other shard's convergence
-for that tick") but had not been observed under real load until now — the
-observed 300–400ms ticks were caused by ordinary query latency, not an
-actual `ARCHIVING` shard (checked: no archive events in the 7 days prior),
-meaning the real-world impact of an actual 10-minute archive stall
-blocking all 34 shards' convergence for that entire window is still
-worse than anything measured here.
+**What's left:** no individual `Evaluate()` call has its own timeout, so
+a genuinely *stuck* (not just slow) shard still occupies one of the 8
+concurrent slots indefinitely rather than erroring out and freeing it for
+the next tick.
 
-**Why it matters:** fleet-wide convergence latency for every shard is
-bounded below by the single slowest shard's `Evaluate` call, every tick —
-this gets worse as shard count grows and is worst-case during an active
-archive.
+**Why it matters less now:** before the fix, one slow/stuck shard blocked
+100% of that tick's fleet-wide convergence. Now it costs at most 1/8 of
+concurrent capacity — real degradation only shows up if 8+ shards are
+stuck at once, which has never been observed (no real `ARCHIVING` stall
+has happened yet either).
 
-**Status:** open, not fixed. Candidate fix: bound each shard's `Evaluate`
-call with a per-shard timeout and/or run shards concurrently (bounded
-parallelism) in `evaluateStateMachines`.
+**Status:** open, low priority. Candidate fix: wrap each shard/bucket
+`Evaluate` call in a per-call `context.WithTimeout`.
 

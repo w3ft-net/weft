@@ -101,7 +101,11 @@ func newFSMTestProvisioner(t *testing.T, db *store.Store) (*Provisioner, *inProc
 		t.Fatalf("LoadFromStore: %v", err)
 	}
 	launcher := &inProcLauncher{gate: make(chan struct{})}
-	prov := NewProvisioner(reg, launcher, ProvisionerConfig{PollInterval: time.Second})
+	// MaxConcurrentEvaluate: 1 — db is openSMTestStore's tx-scoped single
+	// connection, which panics under concurrent use (see its doc comment);
+	// evaluateStateMachines otherwise fans out bucket/shard Evaluate calls
+	// concurrently in production.
+	prov := NewProvisioner(reg, launcher, ProvisionerConfig{PollInterval: time.Second, MaxConcurrentEvaluate: 1})
 	// Pin the clock to a fixed mid-window instant so window alignment
 	// (CurrentWindow Truncate's to the hour for a 1h bucket) is
 	// deterministic across a multi-tick convergence. Without this, a test
