@@ -204,6 +204,13 @@ func main() {
 	// logdb.Start so the provisioner's own election loop can use it too.
 	holder := coordinatorHolder()
 
+	// Tag every query-audit line with the same identity, so a query-
+	// routing imbalance across coordinator_desired>1 instances is
+	// visible from queries.log alone, matching heartbeats/runtime-stats
+	// below. See docs/known-issues.md, "queries.log isn't tagged with
+	// coordinator_id".
+	coordinator.SetQueryLogCoordinatorID(holder)
+
 	// Shard-data control plane: registry hydration, provisioner +
 	// launcher, lifecycle poller. All policy from env lives inside
 	// logdb (SHARD_<TIER>_SUBNETS / SHARD_<TIER>_LAUNCH_TEMPLATE select

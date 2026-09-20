@@ -1142,14 +1142,14 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	nsID := c.resolveNamespaceID(custID, customer, plan.SourceNamespace)
 	descs := c.Provisioner.ShardDescriptorsFor(tr, nsID, plan.SourceService, tier)
 	if len(descs) == 0 {
-		queryLog.Printf("query: no matching shards (namespace=%s, service=%s, customer=%s)", plan.SourceNamespace, plan.SourceService, customer)
+		logQuery("query: no matching shards (namespace=%s, service=%s, customer=%s)", plan.SourceNamespace, plan.SourceService, customer)
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
 	shardIDs := make([]string, len(descs))
 	for i, d := range descs {
 		shardIDs[i] = d.ShardId
 	}
-	queryLog.Printf("query: namespace=%s service=%s shards=%v compute=%v sql=%s",
+	logQuery("query: namespace=%s service=%s shards=%v compute=%v sql=%s",
 		plan.SourceNamespace, plan.SourceService, shardIDs, plan.ComputeStages, directSQL)
 
 	argStrs := make([]string, len(plan.Args))
@@ -1162,7 +1162,7 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 			// as %v rendering — surface it as a typed bug if it ever
 			// happens rather than silent data loss.
 			argStrs[i] = fmt.Sprintf("%v", a)
-			queryLog.Printf("query: non-string arg at position %d (%T %v) — bound via fmt", i, a, a)
+			logQuery("query: non-string arg at position %d (%T %v) — bound via fmt", i, a, a)
 		}
 	}
 	stream, err := c.Pool.ExecuteQuery(&pb.ExecuteQueryRequest{
@@ -1177,7 +1177,7 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 		KeepLast: plan.TailMode,
 	})
 	if err != nil {
-		queryLog.Printf("query: compute error: %v", err)
+		logQuery("query: compute error: %v", err)
 		return nil, err
 	}
 	return &ExecuteResult{Stream: stream}, nil

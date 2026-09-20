@@ -33,3 +33,32 @@ func SetQueryLog(path string) error {
 	queryLog.SetOutput(f)
 	return nil
 }
+
+// queryLogCoordinatorID tags every query-audit line via logQuery below.
+// Empty (the zero value, e.g. in tests that never call
+// SetQueryLogCoordinatorID) omits the field entirely rather than
+// printing "coordinator_id=".
+var queryLogCoordinatorID string
+
+// SetQueryLogCoordinatorID tags every subsequent query-audit line with
+// this coordinator's identity — the same value used for lease-holder
+// identity (coordinatorHolder in cmd/coordinator/main.go). Without
+// this, a query-routing imbalance across coordinator_desired>1
+// instances is invisible from logs alone: heartbeats and runtime-stats
+// already carry coordinator_id (HeartbeatWithFields/
+// RuntimeStatsWithFields), but queries.log didn't. See
+// docs/known-issues.md.
+func SetQueryLogCoordinatorID(id string) {
+	queryLogCoordinatorID = id
+}
+
+// logQuery writes a query-audit line, appending coordinator_id when
+// set. The sole entry point for queryLog.Printf so every audit line
+// picks up the tag uniformly — see SetQueryLogCoordinatorID.
+func logQuery(format string, args ...any) {
+	if queryLogCoordinatorID == "" {
+		queryLog.Printf(format, args...)
+		return
+	}
+	queryLog.Printf(format+" coordinator_id=%s", append(args, queryLogCoordinatorID)...)
+}

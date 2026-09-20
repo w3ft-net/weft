@@ -34,6 +34,38 @@ func TestSetQueryLogRoutesToFileWithTimestamp(t *testing.T) {
 	}
 }
 
+// Every query-audit line must carry coordinator_id once set, mirroring
+// the field heartbeats/runtime-stats already carry (cmd/coordinator/
+// main.go's HeartbeatWithFields/RuntimeStatsWithFields) — see
+// docs/known-issues.md, "queries.log isn't tagged with coordinator_id".
+// Without this, a query-routing imbalance across coordinator_desired=2
+// instances is invisible from logs alone.
+func TestQueryLogIncludesCoordinatorID(t *testing.T) {
+	t.Cleanup(func() {
+		queryLog.SetOutput(os.Stderr)
+		SetQueryLogCoordinatorID("")
+	})
+
+	path := filepath.Join(t.TempDir(), "queries.log")
+	if err := SetQueryLog(path); err != nil {
+		t.Fatalf("SetQueryLog: %v", err)
+	}
+	SetQueryLogCoordinatorID("i-0b340ce3672315ed2")
+
+	logQuery("query: namespace=%s service=%s shards=%v", "weft", "coordinator", []string{"s1"})
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	got := string(data)
+
+	re := regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} query: namespace=weft service=coordinator shards=\[s1\] coordinator_id=i-0b340ce3672315ed2\n$`)
+	if !re.MatchString(got) {
+		t.Fatalf("audit line shape mismatch: %q", got)
+	}
+}
+
 // A failed redirect leaves the logger on stderr and surfaces the error
 // rather than crashing — the coordinator must never fail to start over
 // log routing.
