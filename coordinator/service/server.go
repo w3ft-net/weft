@@ -501,7 +501,9 @@ func (s *Server) CreateToken(ctx context.Context, req *pb.CreateTokenRequest) (*
 }
 
 // IngestStream accepts a stream of LogRows from weftd agents and forwards
-// them to the active shard in batches. Flushes every 2 seconds or 100 rows.
+// them to the active shard in batches. Flushes every 2 seconds, at 100
+// rows, or immediately when a row matches an active local tail -f
+// subscriber.
 //
 // The stream requires an `authorization: Bearer <token>` gRPC metadata
 // header. The token's customer is authoritative — row.Customer is
@@ -736,7 +738,15 @@ recvLoop:
 		}
 		rows = append(rows, row)
 		count++
-		if len(rows) >= 100 {
+		// Flush early, ahead of the 100-row/2s batch, when a local tail -f
+		// subscriber is interested in this row — otherwise a sparse
+		// producer's rows sit buffered for up to the ticker interval
+		// before a live tail session sees them (docs/known-issues.md).
+		flushNow := len(rows) >= 100
+		if !flushNow && s.Coord.TailFanout != nil {
+			flushNow = s.Coord.TailFanout.HasSubscriber(row)
+		}
+		if flushNow {
 			s.ingestBatch(rows)
 			rows = rows[:0]
 		}

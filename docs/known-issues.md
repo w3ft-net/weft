@@ -109,14 +109,29 @@ fine — this doc's numbers are what confirm that. But a post-launch report
 of "tail -f feels laggy" would naturally get pinned on the new Redis
 feature, when the real cause is upstream in `IngestStream` and predates it.
 
-**Status:** open, no fix scheduled. Candidate directions, not evaluated
-in depth: flush immediately once a topic has at least one active `tail -f`
-subscriber (costs some batching efficiency only during active tail
-sessions); shorten the ticker; a dedicated low-buffer path for low-volume
-producers.
+**Status:** partially fixed. `IngestStream` now flushes immediately (ahead
+of the 100-row/2s batch) when an incoming row matches an active **local**
+`tail -f` subscriber — `TailBroker.HasSubscriber` /
+`TailFanout.HasSubscriber`, wired into the per-row flush check in
+`coordinator/service/server.go`'s `IngestStream`. This closes the gap for
+the common case: dev/single-coordinator, and prod when the ingest stream
+and the tail session happen to land on the same coordinator.
+
+**Remaining gap:** the fast path is local-only. `TailFanout.Publish`
+still has no way to know that a *different* coordinator has a matching
+subscriber — Redis pub/sub doesn't tell a publisher who's subscribed, and
+there's no reverse interest-announcement protocol today (`TailFanout.refs`
+tracks *this* coordinator's own subscribers, used only to `PSUBSCRIBE` on
+their behalf, not to learn about peers'). So when the ingest stream lands
+on one N=2 coordinator and the tail session on the other, the row still
+waits for the 2s ticker/100-row threshold before `Publish` (and therefore
+the Redis hop to the peer) fires. Building a cross-coordinator interest
+signal (e.g. peers announce topic interest to each other, or `PUBSUB
+NUMSUB`-style querying) is the follow-up, not attempted here.
 
 **Related:** `docs/plans/coordinator-horizontal-scaling.md` item 4,
-`integration/tailfanout_live_bench_test.go`.
+`integration/tailfanout_live_bench_test.go`,
+`coordinator/service/ingest_tailflush_test.go`.
 
 ## Stale dev postgres volumes can permanently miss schema.sql-only columns
 

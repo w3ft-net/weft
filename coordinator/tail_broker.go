@@ -56,6 +56,25 @@ func (b *TailBroker) Unsubscribe(id uint64) {
 	b.mu.Unlock()
 }
 
+// HasSubscriber reports whether any active subscription's matcher would
+// accept row, without delivering it. Used to decide whether an ingest
+// batch containing row is worth flushing early instead of waiting for
+// the periodic ticker.
+func (b *TailBroker) HasSubscriber(row *pb.LogRow) bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for _, sub := range b.subscribers {
+		if sub.ctx.Err() != nil {
+			continue // subscriber disconnected, skip
+		}
+		if sub.matcher.Match(row) {
+			return true
+		}
+	}
+	return false
+}
+
 // Broadcast sends rows to all matching subscribers. Non-blocking:
 // if a subscriber's channel is full, rows are dropped (tail -f
 // semantics — the terminal can scroll past things).

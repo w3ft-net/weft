@@ -85,6 +85,14 @@ func (f *TailFanout) Unsubscribe(id uint64, matcher *RowMatcher) {
 	}
 }
 
+// HasSubscriber reports whether row matches a local tail -f subscriber.
+// Cross-coordinator subscribers (reachable only via Redis) aren't
+// visible here — this is a local-only fast-path signal, not a
+// fleet-wide one.
+func (f *TailFanout) HasSubscriber(row *pb.LogRow) bool {
+	return f.broker.HasSubscriber(row)
+}
+
 // Publish delivers rows to this process's own local subscribers (mirroring
 // ingestBatch's prior direct Tail.Broadcast call) and, if Redis is
 // configured, fans them out to interested peer coordinators.
