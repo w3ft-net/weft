@@ -610,6 +610,7 @@ export interface ConfigureSourceRequest {
   timestamp_format: string
   level_field: string
   level_pattern: string
+  trace_id_field: string
   expand_keys?: { key: string; type: string }[]
 }
 
@@ -632,9 +633,9 @@ export function configureSource(
   )
 }
 
-// Best-guess defaults from the server's Detection. Level fields are left
-// blank on purpose — we don't surface level extraction in the UI since
-// most real logs don't carry a level on every line.
+// Best-guess defaults from the server's Detection. Level and trace-id
+// fields are left blank on purpose — we don't detect them automatically
+// since most real logs don't carry either on every line.
 export function suggestFromDetection(d: SourceDetection): ConfigureSourceRequest {
   const format =
     d.JSONCoverage > 0.8 ? 'json'
@@ -647,6 +648,7 @@ export function suggestFromDetection(d: SourceDetection): ConfigureSourceRequest
     timestamp_format: ts?.Format ?? '',
     level_field: '',
     level_pattern: '',
+    trace_id_field: '',
   }
 }
 
@@ -757,6 +759,7 @@ export interface AddCloudWatchSourceRequest extends CloudWatchCreds {
   timestamp_format: string
   level_field: string
   level_pattern: string
+  trace_id_field: string
   expand_keys?: { key: string; type: string }[]
 }
 

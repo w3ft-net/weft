@@ -175,6 +175,17 @@ export default function SchemaEditor({
               data-testid={`${testidPrefix}-level-pattern-input`}
             />
           </label>
+
+          <label className="psc-field">
+            <span className="psc-label">Trace ID field (optional)</span>
+            <input
+              type="text"
+              value={form.trace_id_field}
+              onChange={e => update('trace_id_field', e.target.value)}
+              placeholder="field index, or .path for JSON"
+              data-testid={`${testidPrefix}-trace-id-field-input`}
+            />
+          </label>
         </div>
       )}
 
