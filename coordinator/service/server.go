@@ -1226,7 +1226,7 @@ func shardOpStatus(err error) error {
 	switch {
 	case errors.Is(err, logdb.ErrShardNotInRegistry):
 		return status.Error(codes.NotFound, err.Error())
-	case errors.Is(err, logdb.ErrShardWrongState), errors.Is(err, logdb.ErrShardWithinRetention):
+	case errors.Is(err, logdb.ErrShardWrongState), errors.Is(err, logdb.ErrShardWithinRetention), errors.Is(err, logdb.ErrShardHasResources):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	default:
 		return status.Errorf(codes.Internal, "%v", err)
@@ -1324,6 +1324,18 @@ func (s *Server) DeleteArchivedShard(_ context.Context, req *pb.DeleteArchivedSh
 		return nil, shardOpStatus(err)
 	}
 	return &pb.DeleteArchivedShardResponse{}, nil
+}
+
+// ForceRemoveShard is the WeftAdmin escape hatch for a shard stuck in
+// ARCHIVING whose archive can never complete. See Provisioner.ForceRemove.
+func (s *Server) ForceRemoveShard(_ context.Context, req *pb.ForceRemoveShardRequest) (*pb.ForceRemoveShardResponse, error) {
+	if s.Coord.Provisioner == nil {
+		return nil, status.Errorf(codes.Unavailable, "provisioner not running")
+	}
+	if err := s.Coord.Provisioner.ForceRemove(req.ShardId, req.Force); err != nil {
+		return nil, shardOpStatus(err)
+	}
+	return &pb.ForceRemoveShardResponse{}, nil
 }
 
 func (s *Server) RelaunchShard(_ context.Context, req *pb.RelaunchShardRequest) (*pb.RelaunchShardResponse, error) {

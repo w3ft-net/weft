@@ -2,6 +2,7 @@ package logdb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -903,6 +904,33 @@ func TestShardSM_ArchivedToGoneOnAdminDelete(t *testing.T) {
 	}
 }
 
+// A shard whose archive can never complete (host + volume long gone, no
+// export ever recorded) is stuck in ARCHIVING forever: ArchiveComplete needs
+// a parquet path. AdminDelete must be a valid edge out so an operator can
+// discard the dead row. Regression: shard-20260629T0000-d1c1b361.
+func TestShardSM_ArchivingToGoneOnAdminDelete(t *testing.T) {
+	sm, db, _ := makeFixtureShardSM(t, StateArchiving)
+	if err := sm.Fire(context.Background(), TriggerAdminDelete); err != nil {
+		t.Fatalf("Fire AdminDelete from ARCHIVING: %v", err)
+	}
+	if _, ok, err := (ShardStore{db}).GetShard("s-test"); err != nil || ok {
+		t.Fatalf("expected shard row deleted on AdminDelete; ok=%v err=%v", ok, err)
+	}
+}
+
+// The bug itself: no live handle, no parquet path, no volume, no instance.
+// Evaluate can never advance it — pin that it stays ARCHIVING (not silently
+// ARCHIVED, which would claim durable data that does not exist).
+func TestShardSM_EvaluateArchivingOrphanStaysArchiving(t *testing.T) {
+	sm, _, entry := makeFixtureShardSM(t, StateArchiving)
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if entry.State != StateArchiving {
+		t.Fatalf("state: got %q want ARCHIVING (no data to claim archived)", entry.State)
+	}
+}
+
 func TestShardSM_ArchivedRejectsRotateAndArchive(t *testing.T) {
 	// ARCHIVED is terminal-for-data; only AdminDelete leaves it.
 	for _, trigger := range []Trigger{TriggerRotateRequested, TriggerArchiveRequested, TriggerHeartbeatStale, TriggerLaunchFailed} {
@@ -1234,5 +1262,76 @@ func TestShardSM_RelaunchRequested_RejectedFromUnsupportedStates(t *testing.T) {
 				t.Fatalf("state must stay %s after rejected trigger; got %q", st, entry.State)
 			}
 		})
+	}
+}
+
+// forceRemoveProvisioner plants an ARCHIVING shard in both the registry and
+// a real test DB, so ForceRemove's row delete is observable.
+func forceRemoveProvisioner(t *testing.T, instanceID, volumeID string) (*Provisioner, *store.Store) {
+	t.Helper()
+	db := openSMTestStore(t)
+	bucket := seedBucket(t, db, BucketStasis)
+	rec := &Shard{
+		ID:          "s-test",
+		State:       StateArchiving,
+		BucketID:    bucket.ID,
+		Tier:        "small",
+		WindowStart: time.Date(2026, 6, 29, 0, 0, 0, 0, time.UTC),
+		WindowEnd:   time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC),
+		CreatedAt:   time.Date(2026, 6, 28, 23, 50, 0, 0, time.UTC),
+	}
+	if err := (ShardStore{db}).SaveShard(rec); err != nil {
+		t.Fatalf("seed shard: %v", err)
+	}
+	p := NewProvisioner(NewShardRegistry(), nil, ProvisionerConfig{PollInterval: time.Second})
+	p.SetStore(db)
+	p.registry.Add(&Shard{
+		ID: "s-test", State: StateArchiving, BucketID: bucket.ID, Tier: "small",
+		InstanceID: instanceID, EBSVolumeID: volumeID,
+	})
+	return p, db
+}
+
+func TestProvisioner_ForceRemove_OrphanRemovedFromRegistryAndStore(t *testing.T) {
+	p, db := forceRemoveProvisioner(t, "", "")
+	if err := p.ForceRemove("s-test", false); err != nil {
+		t.Fatalf("ForceRemove: %v", err)
+	}
+	if p.registry.Get("s-test") != nil {
+		t.Fatal("shard still in registry")
+	}
+	if _, ok, err := (ShardStore{db}).GetShard("s-test"); err != nil || ok {
+		t.Fatalf("expected row deleted; ok=%v err=%v", ok, err)
+	}
+}
+
+func TestProvisioner_ForceRemove_RefusesLiveResourcesUnlessForced(t *testing.T) {
+	p, db := forceRemoveProvisioner(t, "i-1", "vol-1")
+	err := p.ForceRemove("s-test", false)
+	if !errors.Is(err, ErrShardHasResources) {
+		t.Fatalf("got %v, want ErrShardHasResources", err)
+	}
+	if p.registry.Get("s-test") == nil {
+		t.Fatal("refused removal dropped the registry entry")
+	}
+	if _, ok, _ := (ShardStore{db}).GetShard("s-test"); !ok {
+		t.Fatal("refused removal deleted the row")
+	}
+	if err := p.ForceRemove("s-test", true); err != nil {
+		t.Fatalf("ForceRemove(force): %v", err)
+	}
+	if p.registry.Get("s-test") != nil {
+		t.Fatal("forced removal left the registry entry")
+	}
+}
+
+func TestProvisioner_ForceRemove_WrongStateAndUnknown(t *testing.T) {
+	p, _ := forceRemoveProvisioner(t, "", "")
+	if err := p.ForceRemove("missing", false); !errors.Is(err, ErrShardNotInRegistry) {
+		t.Fatalf("unknown: got %v", err)
+	}
+	p.registry.Get("s-test").State = StateReadOnly
+	if err := p.ForceRemove("s-test", false); !errors.Is(err, ErrShardWrongState) {
+		t.Fatalf("READ_ONLY: got %v", err)
 	}
 }

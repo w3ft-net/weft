@@ -69,6 +69,8 @@ func main() {
 		rollAllCmd(os.Args[2:])
 	case "bump-shard-templates":
 		bumpShardTemplatesCmd(os.Args[2:])
+	case "force-remove":
+		forceRemoveCmd(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -85,6 +87,7 @@ Subcommands:
   roll-cohort <bucket-id>  roll every live shard in a bucket, one at a time
   roll-all                 roll every live shard across every bucket
   bump-shard-templates     point shard launch templates at /<app>/ami/latest
+  force-remove <shard-id>  discard a shard stuck in ARCHIVING (dry run unless --yes)
 
 Common flags:
   -coord                coordinator gRPC address (default "localhost:9020")
@@ -187,6 +190,50 @@ func rollShardCmd(args []string) {
 	if err := rollOne(context.Background(), client, shardID, c.perShardTimeout, c.pollInterval, c.targetSHA); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// forceRemoveCmd discards a shard stuck in ARCHIVING whose archive can never
+// complete (host + volume gone, no export recorded). It prints the row first
+// and does nothing unless --yes is passed. The coordinator refuses a shard
+// that still owns an instance or volume unless --force is also set.
+func forceRemoveCmd(args []string) {
+	fs := flag.NewFlagSet("force-remove", flag.ExitOnError)
+	coord := fs.String("coord", "127.0.0.1:9022", "coordinator WeftAdmin gRPC address (localhost-only; SharedToken auth)")
+	yes := fs.Bool("yes", false, "actually remove the shard (default: print the row and exit)")
+	force := fs.Bool("force", false, "remove even if the shard still records an instance or volume (they will be orphaned)")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "force-remove requires exactly one positional argument: <shard-id>")
+		os.Exit(2)
+	}
+	shardID := fs.Arg(0)
+
+	client, closeConn, err := newAdminClient(*coord)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer closeConn()
+
+	ctx, cancel := context.WithTimeout(adminCtx(context.Background()), time.Minute)
+	defer cancel()
+
+	resp, err := client.GetShard(ctx, &pb.GetShardRequest{ShardId: shardID})
+	if err != nil {
+		log.Fatalf("get shard %s: %v", shardID, err)
+	}
+	sh := resp.GetShard()
+	fmt.Printf("shard %s: state=%s instance=%q parquet=%q rows=%d\n",
+		shardID, sh.GetState(), sh.GetInstanceId(), sh.GetParquetPath(), sh.GetRowCount())
+	if !*yes {
+		fmt.Println("dry run: re-run with --yes to remove this shard's registry entry and shard_records row (S3 data is not touched)")
+		return
+	}
+	if _, err := client.ForceRemoveShard(ctx, &pb.ForceRemoveShardRequest{ShardId: shardID, Force: *force}); err != nil {
+		log.Fatalf("force-remove %s: %v", shardID, err)
+	}
+	fmt.Printf("shard %s removed\n", shardID)
 }
 
 // liveShardIDs filters a ShardInfo slice to the states worth rolling, in

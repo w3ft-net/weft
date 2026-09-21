@@ -29,6 +29,7 @@ var (
 	ErrShardNotInRegistry   = errors.New("shard not found in registry")
 	ErrShardWrongState      = errors.New("shard is not in the required state")
 	ErrShardWithinRetention = errors.New("shard data is within the retention window")
+	ErrShardHasResources    = errors.New("shard still owns an instance or volume")
 )
 
 // HeartbeatStore is the interface the provisioner needs for heartbeat operations.
@@ -940,6 +941,39 @@ func (p *Provisioner) DeleteArchived(shardID string, force bool) error {
 		return fmt.Errorf("delete archived %s: %w", shardID, err)
 	}
 	log.Printf("provisioner: archived shard %s deleted", shardID)
+	return nil
+}
+
+// ForceRemove discards a shard stuck in ARCHIVING by firing AdminDelete
+// (ARCHIVING → GONE); onEnterGone drops the registry entry and deletes the
+// shard_records row. It exists for archives that can never complete: the
+// host and volume are gone and no export was recorded, so evaluateArchiving
+// loops forever (ArchiveComplete needs a parquet path).
+//
+// Unless force is set, a shard that still records an instance or volume is
+// refused with ErrShardHasResources — removing the row would orphan them
+// (no FSM would ever retire them). Any S3 data is left in place.
+func (p *Provisioner) ForceRemove(shardID string, force bool) error {
+	entry := p.registry.Get(shardID)
+	if entry == nil {
+		return fmt.Errorf("shard %s: %w", shardID, ErrShardNotInRegistry)
+	}
+	entry.ensureSM(p.shardDeps())
+	entry.mu.RLock()
+	st := entry.State
+	instanceID := entry.InstanceID
+	volumeID := entry.EBSVolumeID
+	entry.mu.RUnlock()
+	if st != StateArchiving {
+		return fmt.Errorf("shard %s is %s, not ARCHIVING: %w", shardID, st, ErrShardWrongState)
+	}
+	if !force && (instanceID != "" || volumeID != "") {
+		return fmt.Errorf("shard %s (instance %q, volume %q): %w", shardID, instanceID, volumeID, ErrShardHasResources)
+	}
+	if err := entry.Fire(context.Background(), TriggerAdminDelete); err != nil {
+		return fmt.Errorf("force-remove %s: %w", shardID, err)
+	}
+	log.Printf("provisioner: stuck ARCHIVING shard %s force-removed (instance=%q volume=%q force=%v)", shardID, instanceID, volumeID, force)
 	return nil
 }
 
