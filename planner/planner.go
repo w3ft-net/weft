@@ -43,7 +43,7 @@ type QueryPlan struct {
 	// coordinator.BuildLiveFilter so the live broker rows go through
 	// the same transformations as the historical batch.
 	LiveStages      []string
-	SourceCmd       string   // source command: "cat", "head", or "tail"
+	SourceCmd       string   // source command: "cat", "head", "tail", or "trace"
 	SourceNamespace string   // namespace column value — routing + allowlist ("" = all namespaces)
 	SourceService   string   // service column value — routing ("" = all services in the namespace)
 	SourceKind      string   // kind column value — live-tail matching ("" = all kinds)
@@ -214,6 +214,10 @@ func PlanInDir(pipeline, customer, cwd string, start, end time.Time) (*QueryPlan
 	default:
 		placeholders := strings.Repeat("?, ", len(info.source.kinds)-1) + "?"
 		sql.addPredicate("kind IN ("+placeholders+")", info.source.kinds...)
+	}
+
+	if info.source.cmd == "trace" && info.source.traceID != "" {
+		sql.addPredicate("trace_id = ?", info.source.traceID)
 	}
 
 	switch info.source.cmd {

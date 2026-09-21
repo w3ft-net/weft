@@ -195,7 +195,8 @@ CREATE TABLE IF NOT EXISTS logs (
     k8s_namespace  TEXT,
     pod            TEXT,
     container      TEXT,
-    node           TEXT
+    node           TEXT,
+    trace_id       TEXT
 );
 `
 
@@ -242,6 +243,9 @@ var migrationSteps = []string{
 	// existed; the UPDATE errors are ignored like the other steps) and
 	// this DROP is a no-op too.
 	`ALTER TABLE logs DROP COLUMN IF EXISTS app`,
+	// No backfill: unlike namespace/service/kind, there's no prior
+	// composite encoding to recover a trace_id from. Existing rows get NULL.
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS trace_id TEXT`,
 }
 
 // NewDuckDBShard opens or creates a DuckDB database at path and initializes the
@@ -307,6 +311,7 @@ var logColumns = []string{
 	"raw", "fields", "ts", "level", "namespace", "service", "kind",
 	"instance", "customer", "payload", "deployment", "env", "version",
 	"region", "cluster", "k8s_namespace", "pod", "container", "node",
+	"trace_id",
 }
 
 // Ingest bulk-loads rows into the logs table via DuckDB's Appender — the
@@ -364,6 +369,7 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow, rec IngestRecorder) error {
 				r.Pod,
 				r.Container,
 				r.Node,
+				r.TraceId,
 			); rerr != nil {
 				appender.Close()
 				return fmt.Errorf("append row: %w", rerr)

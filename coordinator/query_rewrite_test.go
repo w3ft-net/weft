@@ -123,6 +123,20 @@ func TestRewriteQueryPipelines_LeadingNonSourceCommandWithLogPath(t *testing.T) 
 	singleCallbackInScript(t, script)
 }
 
+// TestRewriteQueryPipelines_TraceRecognized pins that `trace <id>` is
+// recognized as a query shape even though its argument isn't a
+// filesystem path — isQueryShape's "trace" case must stay in sync with
+// planner/parse.go's parseSource "trace" case.
+func TestRewriteQueryPipelines_TraceRecognized(t *testing.T) {
+	script, err := bash.Parse(`trace abc-123`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	rewriteQueryPipelines(script, nil, TimeRange{}, "kevlar", "", "", nil)
+
+	singleCallbackInScript(t, script)
+}
+
 // singleCallbackInScript walks the rewritten script, asserts that
 // exactly one CallbackCommand was substituted (which is what the
 // rewriter does for a single-pipeline log query), and returns it.

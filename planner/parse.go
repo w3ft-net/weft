@@ -21,9 +21,10 @@ type sourceInfo struct {
 	services   []string // service column values for SQL predicates
 	kinds      []string // kind column values for SQL predicates
 	env        string   // env column value; shared across all args in one pipeline
-	cmd        string   // "cat", "head", or "tail"
+	cmd        string   // "cat", "head", "tail", or "trace"
 	limit      int      // for head/tail: line count (0 = unlimited for cat)
 	follow     bool     // tail -f
+	traceID    string   // trace_id predicate value; only set when cmd == "trace"
 }
 
 // stageInfo describes a single pipeline stage after the source command.
@@ -200,6 +201,16 @@ func parseSource(cmd *bash.SimpleCommand, cwd string) (*sourceInfo, error) {
 			return nil, err
 		}
 		return &sourceInfo{namespaces: sf.namespaces, services: sf.services, kinds: sf.kinds, env: sf.env, cmd: "tail", limit: limit, follow: follow}, nil
+
+	case "trace":
+		// No path argument — a trace isn't scoped to one app, it fans out
+		// across every source the customer can read. The argument is an
+		// opaque correlation ID, not a pseudofile path, so it skips
+		// resolveSourcePath/IsLocalFSPath entirely.
+		if len(args) != 1 {
+			return nil, fmt.Errorf("trace: expected exactly one trace id argument")
+		}
+		return &sourceInfo{cmd: "trace", traceID: args[0]}, nil
 
 	default:
 		// A leading command other than cat/head/tail can never

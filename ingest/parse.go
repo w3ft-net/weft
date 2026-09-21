@@ -56,6 +56,9 @@ func (p *Parser) ParseLine(raw string, ingestTime time.Time) (*pb.LogRow, error)
 	// Extract level.
 	row.Level = p.extractLevel(fields, body)
 
+	// Extract trace ID.
+	row.TraceId = p.extractTraceID(fields, body)
+
 	// Extract JSON payload.
 	row.PayloadJson = p.extractPayload(fields, body)
 
@@ -215,6 +218,47 @@ func (p *Parser) extractJSONLevel(body, path string) string {
 		return ""
 	}
 	return strings.ToUpper(str)
+}
+
+func (p *Parser) extractTraceID(fields []string, body string) string {
+	traceField := p.schema.TraceIDField
+	if traceField == "" || traceField == "none" {
+		return ""
+	}
+
+	// JSON path.
+	if strings.HasPrefix(traceField, ".") {
+		return p.extractJSONTraceID(body, traceField)
+	}
+
+	idx, err := strconv.Atoi(traceField)
+	if err != nil || idx < 1 || idx > len(fields) {
+		return ""
+	}
+
+	val := fields[idx-1]
+	return strings.Trim(val, "[]():")
+}
+
+func (p *Parser) extractJSONTraceID(body, path string) string {
+	idx := strings.Index(body, "{")
+	if idx < 0 {
+		return ""
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(body[idx:]), &obj); err != nil {
+		return ""
+	}
+	key := strings.TrimPrefix(path, ".")
+	val, ok := obj[key]
+	if !ok {
+		return ""
+	}
+	str, ok := val.(string)
+	if !ok {
+		return ""
+	}
+	return str
 }
 
 func (p *Parser) extractPayload(fields []string, body string) json.RawMessage {

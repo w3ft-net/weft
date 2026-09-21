@@ -14,7 +14,16 @@ import (
 //
 //	app:raw log line
 //
-// If no "app:" prefix is present, the default app name is used.
+// If no "app:" prefix is present, the default app name is used. An SDK with
+// an ambient trace ID (request-scoped context, not necessarily present in
+// the log text itself) may additionally wrap the raw line in a \x1e
+// (ASCII Record Separator) envelope to pass it structurally:
+//
+//	app:\x1eTRACE_ID\x1eraw log line
+//
+// \x1e never appears in ordinary log text, so this is unambiguous and fully
+// backward compatible — lines with no envelope parse exactly as before. See
+// docs/plans/request-tracing.md.
 type SocketListener struct {
 	path       string
 	defaultApp string
@@ -23,10 +32,13 @@ type SocketListener struct {
 	done       chan struct{}
 }
 
-// SocketLine is a parsed line from the socket with its app name.
+// SocketLine is a parsed line from the socket with its app name and,
+// optionally, a structurally-carried trace ID (see SocketListener's doc
+// comment on the \x1e envelope).
 type SocketLine struct {
-	App  string
-	Line string
+	App     string
+	TraceID string
+	Line    string
 }
 
 // NewSocketListener creates and starts a Unix socket listener.
@@ -104,8 +116,20 @@ func (s *SocketListener) handleConn(conn net.Conn) {
 			line = line[idx+1:]
 		}
 
+		// Parse optional \x1eTRACE_ID\x1e envelope. A second blind
+		// colon-scan here would be unsafe — ordinary log lines routinely
+		// start with a level word and colon ("info: connection reset"),
+		// which would false-positive as a trace-id field.
+		traceID := ""
+		if strings.HasPrefix(line, "\x1e") {
+			if end := strings.IndexByte(line[1:], '\x1e'); end >= 0 {
+				traceID = line[1 : 1+end]
+				line = line[1+end+1:]
+			}
+		}
+
 		select {
-		case s.lines <- SocketLine{App: app, Line: line}:
+		case s.lines <- SocketLine{App: app, TraceID: traceID, Line: line}:
 		default:
 			// Channel full — drop line.
 		}

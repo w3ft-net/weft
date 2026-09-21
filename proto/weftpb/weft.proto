@@ -145,6 +145,12 @@ message LogRow {
   // the sender's token (row-level security); kind defaults to "main".
   string namespace = 19;
   string kind = 20;
+  // trace_id correlates this row with other log lines across services
+  // belonging to the same logical request. Populated either by
+  // ingest.Parser's trace_id_field schema extraction, or structurally by
+  // an SDK via weftd's socket envelope. Empty means uncorrelated — not
+  // every row will have one. See docs/plans/request-tracing.md.
+  string trace_id = 21;
 }
 
 message IngestRequest {

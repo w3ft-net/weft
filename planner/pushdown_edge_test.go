@@ -1174,7 +1174,7 @@ func TestEdge_NR(t *testing.T) {
 			// mixing blocks full pushdown), so it needs the real
 			// per-row value the same way an output read would — see
 			// docs/known-issues.md's (fixed) awk meta-variable entry.
-			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node FROM logs WHERE namespace = ?`,
+			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id FROM logs WHERE namespace = ?`,
 			wantCompute: []string{`awk 'NR >= 10 && LEVEL == "ERROR"'`},
 		},
 	}

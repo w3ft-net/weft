@@ -188,6 +188,10 @@ func isQueryShape(pipe *bash.Pipeline) bool {
 			}
 		}
 		return true
+	case "trace":
+		// trace's argument is an opaque correlation ID, not a filesystem
+		// path — skip the IsLocalFSPath check entirely.
+		return true
 	}
 	// A leading command other than cat/head/tail that's still handed an
 	// absolute /log/ path directly (real-Unix habit: `grep pattern

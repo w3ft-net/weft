@@ -32,6 +32,7 @@ var JQMetaVars = map[string]string{
 	"_pod":           "pod",
 	"_container":     "container",
 	"_node":          "node",
+	"_trace_id":      "trace_id",
 }
 
 // MetaVarColumns is the distinct, deterministically-ordered set of real
@@ -45,7 +46,7 @@ var JQMetaVars = map[string]string{
 var MetaVarColumns = []string{
 	"namespace", "service", "kind", "level", "instance", "deployment",
 	"env", "version", "region", "cluster", "k8s_namespace", "pod",
-	"container", "node",
+	"container", "node", "trace_id",
 }
 
 // tryJqPushdown attempts to extract a pushable predicate from a jq expression string.
@@ -115,7 +116,7 @@ func jqComparisonToSQL(left, right jq.Expr, op string) string {
 
 	// Check for meta-variable.
 	if col, isMeta := JQMetaVars[field.Name]; isMeta {
-		return fmt.Sprintf("%s %s '%s'", col, op, lit.Value.Str)
+		return fmt.Sprintf("%s %s '%s'", col, op, escapeSQLString(lit.Value.Str))
 	}
 
 	// Regular JSON field.

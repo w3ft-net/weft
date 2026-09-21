@@ -633,8 +633,14 @@ type LogRow struct {
 	// coordinates that used to travel joined inside the old composite app
 	// string. The coordinator authoritatively overwrites namespace from
 	// the sender's token (row-level security); kind defaults to "main".
-	Namespace     string `protobuf:"bytes,19,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	Kind          string `protobuf:"bytes,20,opt,name=kind,proto3" json:"kind,omitempty"`
+	Namespace string `protobuf:"bytes,19,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Kind      string `protobuf:"bytes,20,opt,name=kind,proto3" json:"kind,omitempty"`
+	// trace_id correlates this row with other log lines across services
+	// belonging to the same logical request. Populated either by
+	// ingest.Parser's trace_id_field schema extraction, or structurally by
+	// an SDK via weftd's socket envelope. Empty means uncorrelated — not
+	// every row will have one. See docs/plans/request-tracing.md.
+	TraceId       string `protobuf:"bytes,21,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -806,6 +812,13 @@ func (x *LogRow) GetNamespace() string {
 func (x *LogRow) GetKind() string {
 	if x != nil {
 		return x.Kind
+	}
+	return ""
+}
+
+func (x *LogRow) GetTraceId() string {
+	if x != nil {
+		return x.TraceId
 	}
 	return ""
 }
@@ -5436,7 +5449,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\tmeta_vars\x18\x04 \x03(\v2\x1d.weft.ResultRow.MetaVarsEntryR\bmetaVars\x1a;\n" +
 	"\rMetaVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x93\x04\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xae\x04\n" +
 	"\x06LogRow\x12\x1d\n" +
 	"\bline_num\x18\x01 \x01(\x03B\x02\x18\x01R\alineNum\x12\x10\n" +
 	"\x03raw\x18\x02 \x01(\tR\x03raw\x12\x18\n" +
@@ -5461,7 +5474,8 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\tcontainer\x18\x11 \x01(\tR\tcontainer\x12\x12\n" +
 	"\x04node\x18\x12 \x01(\tR\x04node\x12\x1c\n" +
 	"\tnamespace\x18\x13 \x01(\tR\tnamespace\x12\x12\n" +
-	"\x04kind\x18\x14 \x01(\tR\x04kind\"1\n" +
+	"\x04kind\x18\x14 \x01(\tR\x04kind\x12\x19\n" +
+	"\btrace_id\x18\x15 \x01(\tR\atraceId\"1\n" +
 	"\rIngestRequest\x12 \n" +
 	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\"5\n" +
 	"\x0eIngestResponse\x12#\n" +
