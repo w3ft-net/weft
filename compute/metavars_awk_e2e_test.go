@@ -15,7 +15,7 @@ import (
 // resolves to the row's actual instance column.
 func TestLocalComputeJob_AwkMetaVarOutputRead(t *testing.T) {
 	pool := &LocalComputePool{}
-	job := pool.NewJob([]string{`awk '{ print HOST }'`}, 1, "ts", 0, false)
+	job := pool.NewJob([]string{`awk '{ print HOST }'`}, 1, "ts", 0, false, false)
 	job.SendRow(&pb.ResultRow{
 		TsUnixNs: 1000,
 		Raw:      "some log line",
@@ -42,7 +42,7 @@ func TestLocalComputeJob_AwkMetaVarOutputRead(t *testing.T) {
 // just the meta-var-set case.
 func TestLocalComputeJob_AwkMetaVarOutputRead_NoMetaVarsIsEmpty(t *testing.T) {
 	pool := &LocalComputePool{}
-	job := pool.NewJob([]string{`awk '{ print HOST }'`}, 1, "ts", 0, false)
+	job := pool.NewJob([]string{`awk '{ print HOST }'`}, 1, "ts", 0, false, false)
 	job.SendRow(&pb.ResultRow{TsUnixNs: 1000, Raw: "some log line"}, "a")
 	job.SendSentinel("a")
 
@@ -60,7 +60,7 @@ func TestLocalComputeJob_AwkMetaVarOutputRead_NoMetaVarsIsEmpty(t *testing.T) {
 // doesn't change ordinary awk behavior.
 func TestLocalComputeJob_AwkOrdinaryStageUnaffected(t *testing.T) {
 	pool := &LocalComputePool{}
-	job := pool.NewJob([]string{`awk '{ print $1 }'`}, 1, "ts", 0, false)
+	job := pool.NewJob([]string{`awk '{ print $1 }'`}, 1, "ts", 0, false, false)
 	job.SendRow(&pb.ResultRow{TsUnixNs: 1000, Raw: "one two three"}, "a")
 	job.SendSentinel("a")
 

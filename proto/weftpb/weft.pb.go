@@ -1368,7 +1368,14 @@ type ExecuteQueryRequest struct {
 	// path ever turns out unreliable in practice we promote to typed
 	// args via a `repeated google.protobuf.Value`. See
 	// planner/sql.go::Query.ToSQL for the source of args.
-	Args          []string `protobuf:"bytes,8,rep,name=args,proto3" json:"args,omitempty"`
+	Args []string `protobuf:"bytes,8,rep,name=args,proto3" json:"args,omitempty"`
+	// trace_tag is set by the coordinator when planner.QueryPlan.SourceCmd ==
+	// "trace", there are no downstream compute stages, and the dispatch is
+	// interactive (not a cron/watch/dashboard fire — see AlertContext gating
+	// in coordinator.go). Tells compute/local.go::consume to buffer the
+	// merged stream, emit a synthetic summary line, and prefix each row with
+	// a colored [namespace/service] badge. See docs/plans/request-tracing.md.
+	TraceTag      bool `protobuf:"varint,9,opt,name=trace_tag,json=traceTag,proto3" json:"trace_tag,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1450,6 +1457,13 @@ func (x *ExecuteQueryRequest) GetArgs() []string {
 		return x.Args
 	}
 	return nil
+}
+
+func (x *ExecuteQueryRequest) GetTraceTag() bool {
+	if x != nil {
+		return x.TraceTag
+	}
+	return false
 }
 
 type ExecuteQueryResponse struct {
@@ -5507,7 +5521,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
 	"lambda_url\x18\x03 \x01(\tR\tlambdaUrl\x12!\n" +
 	"\fparquet_path\x18\x04 \x01(\tR\vparquetPath\x12\x1a\n" +
-	"\bservices\x18\x05 \x03(\tR\bservices\"\xe6\x01\n" +
+	"\bservices\x18\x05 \x03(\tR\bservices\"\x83\x02\n" +
 	"\x13ExecuteQueryRequest\x12\x10\n" +
 	"\x03sql\x18\x01 \x01(\tR\x03sql\x12-\n" +
 	"\x06shards\x18\x02 \x03(\v2\x15.weft.ShardDescriptorR\x06shards\x12\x16\n" +
@@ -5515,7 +5529,8 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\tmerge_key\x18\x04 \x01(\tR\bmergeKey\x12\x14\n" +
 	"\x05limit\x18\x05 \x01(\x05R\x05limit\x12\x1b\n" +
 	"\tkeep_last\x18\a \x01(\bR\bkeepLast\x12\x12\n" +
-	"\x04args\x18\b \x03(\tR\x04argsJ\x04\b\x06\x10\aR\fshard_secret\"@\n" +
+	"\x04args\x18\b \x03(\tR\x04args\x12\x1b\n" +
+	"\ttrace_tag\x18\t \x01(\bR\btraceTagJ\x04\b\x06\x10\aR\fshard_secret\"@\n" +
 	"\x14ExecuteQueryResponse\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"H\n" +

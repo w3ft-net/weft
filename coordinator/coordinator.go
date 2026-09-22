@@ -817,6 +817,15 @@ func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.L
 		MergeKey: lp.MergeKey,
 		Limit:    int32(lp.Limit),
 		KeepLast: lp.TailMode,
+		// TraceTag is never set here: this path only ever serves a
+		// cron/watch/dashboard fire (dispatchLoweredWithTier is only
+		// reachable via ExecuteForWatch's lowered-plan hot path), never
+		// an interactive shell query. Splicing a synthetic summary row
+		// and ANSI codes into a saved trace watch's output would corrupt
+		// AlertCommand's stdin-line evaluation and pollute dashboard
+		// tiles — see docs/plans/request-tracing.md's "interactively-
+		// triggered queries only" note.
+		TraceTag: false,
 	})
 	if err != nil {
 		return nil, err
@@ -1182,6 +1191,14 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 		// tail-mode: shard SQL wraps to ASC; compute must retain
 		// last-N instead of stopping after first-N emitted.
 		KeepLast: plan.TailMode,
+		// Summary line + colored [namespace/service] badges only for a
+		// bare, interactively-typed `trace <id>` — never for a saved
+		// cron/watch/dashboard fire (alertCtx != nil) reached through
+		// this same shared path, and never once the user has piped into
+		// their own awk/jq/grep stage (they already have $SERVICE/
+		// $NAMESPACE available there — see planner.go's includeMetaVars
+		// forcing for trace).
+		TraceTag: alertCtx == nil && plan.SourceCmd == "trace" && len(plan.ComputeStages) == 0,
 	})
 	if err != nil {
 		logQuery("query: compute error: %v", err)

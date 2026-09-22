@@ -36,7 +36,11 @@ func NewServer(pool compute.ComputePool) *Server {
 
 func (s *Server) CreateJob(_ context.Context, req *pb.CreateJobRequest) (*pb.CreateJobResponse, error) {
 	jobID := uuid.New().String()
-	job := s.pool.NewJob(req.Stages, int(req.ShardCount), req.MergeKey, int(req.Limit), req.KeepLast)
+	// CreateJobRequest has no trace_tag field — the manual create-job/
+	// send-rows lifecycle this RPC drives is never used by the trace
+	// display path (that goes through ExecuteQuery/ExecuteQueryStream,
+	// which do carry TraceTag). Always false here.
+	job := s.pool.NewJob(req.Stages, int(req.ShardCount), req.MergeKey, int(req.Limit), req.KeepLast, false)
 
 	s.mu.Lock()
 	s.jobs[jobID] = job

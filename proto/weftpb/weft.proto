@@ -284,6 +284,13 @@ message ExecuteQueryRequest {
   // args via a `repeated google.protobuf.Value`. See
   // planner/sql.go::Query.ToSQL for the source of args.
   repeated string args = 8;
+  // trace_tag is set by the coordinator when planner.QueryPlan.SourceCmd ==
+  // "trace", there are no downstream compute stages, and the dispatch is
+  // interactive (not a cron/watch/dashboard fire — see AlertContext gating
+  // in coordinator.go). Tells compute/local.go::consume to buffer the
+  // merged stream, emit a synthetic summary line, and prefix each row with
+  // a colored [namespace/service] badge. See docs/plans/request-tracing.md.
+  bool trace_tag = 9;
 }
 
 message ExecuteQueryResponse {

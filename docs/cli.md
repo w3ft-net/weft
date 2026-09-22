@@ -99,6 +99,7 @@ cat vimgym.log | jq 'select(._level == "ERROR") | {ts: ._ts, msg: .message}'
 - `head [-N] <file>` — first N lines (default 10)
 - `tail [-N] <file>` — last N lines (default 10)
 - `tail -f <file>` — live tail with push from active shard
+- `trace <id>` — every log line carrying this `trace_id`, across every app/service (no `<file>` argument — a trace isn't scoped to one app). Historical only, no `-f`. A bare `trace <id>` prints a one-line summary (line/service count) followed by each row prefixed with a colored `[namespace/service]` badge; `NAMESPACE`/`SERVICE` are always available as real, filterable meta-variables even without the badge (e.g. `trace <id> | awk 'SERVICE == "api"'`).
 
 All of these can be piped through awk/sed/jq/grep/sort/uniq/wc. The query planner pushes down as much of the pipeline as possible into the shard query.
 

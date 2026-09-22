@@ -4,7 +4,7 @@ package main
 // release ext refuses to publish if its ldflags value disagrees with
 // the file. Built as var (not const) so -ldflags "-X main.Version=…"
 // can override at link time.
-var Version = "0.6.0"
+var Version = "0.7.0"
 
 // GitSHA is the short HEAD SHA the binary was built from. Set by
 // the release ext via -ldflags "-X main.GitSHA=…"; empty in

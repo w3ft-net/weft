@@ -23,7 +23,7 @@ func (noopPool) ExecuteQuery(_ context.Context, _ *pb.ExecuteQueryRequest) (comp
 	return compute.NewSliceLineStream(nil, nil), nil
 }
 
-func (noopPool) NewJob(_ []string, _ int, _ string, _ int, _ bool) compute.ComputeJob {
+func (noopPool) NewJob(_ []string, _ int, _ string, _ int, _ bool, _ bool) compute.ComputeJob {
 	return nil
 }
 

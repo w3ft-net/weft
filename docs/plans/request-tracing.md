@@ -2,7 +2,14 @@
 
 ## Status
 
-🟡 Designed, not started. Emerged from a design discussion following
+🟢 Data model, ingest extraction, the `trace <id>` query mechanism, its
+display layer, and internal dogfood propagation have landed (see commits
+af20640, 03377f2, c3cea58, and the trace-display follow-up). Not started:
+the `weft-go`/`weft-py` SDK surface (context propagation, `Send`/`send`
+auto-tagging, logging integration, `net/http` middleware, `TraceHeaders`/
+`trace_headers` helpers) and customer-facing docs (component 7 below).
+
+Emerged from a design discussion following
 `docs/plans/tail-latency-regression.md` (2026-09-21) — that investigation
 exposed a real observability gap (a slow request left no trace of where it
 stalled; diagnosing it took ~1.5 hours of live SSM archaeology across the
@@ -128,6 +135,29 @@ new caller of existing shard resolution, not new plumbing. Should
 respect the shell's normal default range rather than defaulting to
 unbounded — a direct lesson from how `docs/plans/tail-latency-
 regression.md`'s incident played out.
+
+**Display (landed):** a bare `trace <id>` — no downstream awk/sed/jq/grep
+stage — forces the planner's `includeMetaVars` projection (normally only
+triggered by an explicit meta-var reference) so `NAMESPACE`/`SERVICE`/etc.
+are always real, pipeline-filterable fields for trace specifically
+(`planner/planner.go`). The coordinator buffers the full merged result
+(`compute/local.go`'s `emitTraceTagged`), emits a one-line summary
+("N line(s) across M service(s), \<first ts\> to \<last ts\>"), then each row
+prefixed with a colored `[namespace/service]` badge (`theme.TraceTag`,
+deterministic per-service color, disjoint from `theme.Palette()`'s
+semantic colors). Once piped into a compute stage, automatic
+tagging/summary stops — namespace/service metadata doesn't survive past a
+bash pipeline stage, and the user already has explicit `$SERVICE`/
+`$NAMESPACE` access at that point instead.
+
+This tagging/summary is gated to interactive dispatch only
+(`alertCtx == nil` in `coordinator.go`'s `executeQuery`) — it must never
+reach a saved cron/watch/dashboard fire, which is the direct consequence
+of the "Cron/alert-triggered queries carry no real trace ID... `trace
+<id>` will only ever surface interactively-triggered queries" limitation
+below: a fabricated summary row and ANSI codes in a watch's output would
+corrupt `AlertCommand`'s stdin-line evaluation and pollute dashboard
+tiles, not just look wrong.
 
 ### SDK surface, per language, per integration point
 

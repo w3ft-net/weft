@@ -10,7 +10,7 @@ import (
 
 func TestLocalComputeJob_Stream(t *testing.T) {
 	pool := &LocalComputePool{}
-	job := pool.NewJob(nil, 2, "ts", 0, false)
+	job := pool.NewJob(nil, 2, "ts", 0, false, false)
 
 	go func() {
 		job.SendRow(&pb.ResultRow{TsUnixNs: 1000, Raw: "one"}, "a")

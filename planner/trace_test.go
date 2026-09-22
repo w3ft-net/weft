@@ -71,6 +71,24 @@ func TestPlanTrace_TimeBoundsApplied(t *testing.T) {
 	}
 }
 
+// TestPlanTrace_IncludeMetaVars: a bare trace forces the same
+// MetaVarColumns projection normally reserved for an explicit awk/jq
+// meta-variable reference, so NAMESPACE/SERVICE/etc. are always real,
+// pipeline-filterable fields for trace (and so compute/local.go's
+// display layer has namespace/service available on every row) even
+// with no downstream compute stage.
+func TestPlanTrace_IncludeMetaVars(t *testing.T) {
+	plan, err := Plan(`trace abc-123`, "kevlar", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	for _, col := range MetaVarColumns {
+		if !strings.Contains(plan.ShardSQL, ", "+col) {
+			t.Errorf("ShardSQL missing MetaVarColumns projection %q: %s", col, plan.ShardSQL)
+		}
+	}
+}
+
 // TestPlanTrace_ArityErrors: trace requires exactly one trace id argument.
 func TestPlanTrace_ArityErrors(t *testing.T) {
 	for _, pipeline := range []string{"trace", "trace id1 id2"} {

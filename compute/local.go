@@ -8,12 +8,14 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/graybeardcorp/warp/pkg/bash"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
+	"github.com/graybeardcorp/weft/theme"
 )
 
 // LocalComputePool executes compute stages in-process using warp's
@@ -116,18 +118,19 @@ func (p *LocalComputePool) resolveShard(d *pb.ShardDescriptor) (shard.Shard, err
 }
 
 func (p *LocalComputePool) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) (LineStream, error) {
-	job := p.NewJob(req.Stages, len(req.Shards), req.MergeKey, int(req.Limit), req.KeepLast)
+	job := p.NewJob(req.Stages, len(req.Shards), req.MergeKey, int(req.Limit), req.KeepLast, req.TraceTag)
 	go FanOutToShards(ctx, req, job, p.resolveShard)
 	return job.Stream(), nil
 }
 
-func (p *LocalComputePool) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool) ComputeJob {
+func (p *LocalComputePool) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool, traceTag bool) ComputeJob {
 	return &LocalComputeJob{
 		stages:     stages,
 		shardCount: shardCount,
 		mergeKey:   mergeKey,
 		limit:      limit,
 		keepLast:   keepLast,
+		traceTag:   traceTag,
 		ch:         make(chan ComputeMessage, 1024),
 		streamCh:   make(chan Line, 1024),
 	}
@@ -147,6 +150,7 @@ type LocalComputeJob struct {
 	mergeKey   string // see ComputePool.NewJob; empty = concat, otherwise k-way merge
 	limit      int    // see ComputePool.NewJob; 0 = no cap
 	keepLast   bool   // tail-mode: retain last N from the merged stream and emit at EOF
+	traceTag   bool   // bare interactive `trace <id>`: buffer, summarize, badge each row — see ComputePool.NewJob
 
 	ch        chan ComputeMessage // shards push rows + sentinels here
 	streamCh  chan Line           // consume() pushes output here
@@ -291,12 +295,60 @@ func (j *LocalComputeJob) retainLast() []*pb.ResultRow {
 	return out
 }
 
+// emitTraceTagged buffers the entire merged stream for a bare
+// interactive `trace <id>` (no downstream compute stages), then emits
+// a synthetic summary line followed by every row prefixed with a
+// colored [namespace/service] badge. Buffering (rather than streaming
+// as rows arrive) is required to know the final line/service counts
+// for the summary before emitting it first — accepted as a v1
+// tradeoff because a trace ID scopes to one bounded request's log
+// lines, unlike a general cat/tail over an app's full volume. j.limit
+// still caps the buffer when set (0 is the common case: trace sets no
+// default limit).
+func (j *LocalComputeJob) emitTraceTagged() {
+	var rows []*pb.ResultRow
+	onlineMerge(j.ch, j.shardCount, j.mergeKey, func(row *pb.ResultRow) bool {
+		if j.limit > 0 && len(rows) >= j.limit {
+			return false
+		}
+		rows = append(rows, row)
+		return true
+	})
+
+	if len(rows) == 0 {
+		j.streamCh <- Line{Raw: theme.Palette().Comment + "# no lines found" + theme.Palette().Reset}
+		return
+	}
+
+	services := map[string]bool{}
+	for _, r := range rows {
+		ns, svc := r.MetaVars["namespace"], r.MetaVars["service"]
+		if ns == "" && svc == "" {
+			continue
+		}
+		services[ns+"/"+svc] = true
+	}
+	firstTs := time.Unix(0, rows[0].TsUnixNs).UTC().Format(time.RFC3339)
+	lastTs := time.Unix(0, rows[len(rows)-1].TsUnixNs).UTC().Format(time.RFC3339)
+	line := fmt.Sprintf("# %d line(s) across %d service(s), %s to %s", len(rows), len(services), firstTs, lastTs)
+	j.streamCh <- Line{Raw: theme.Palette().Comment + line + theme.Palette().Reset}
+
+	for i, row := range rows {
+		badge := theme.TraceTag(row.MetaVars["namespace"], row.MetaVars["service"])
+		j.streamCh <- Line{Raw: badge + row.Raw, LineNum: int64(i + 1)}
+	}
+}
+
 // streamErr is set BEFORE the channel is closed so consumers see the
 // error after the channel signals exhaustion.
 func (j *LocalComputeJob) consume() {
 	defer close(j.streamCh)
 
 	if len(j.stages) == 0 {
+		if j.traceTag {
+			j.emitTraceTagged()
+			return
+		}
 		if j.keepLast && j.limit > 0 {
 			buf := j.retainLast()
 			for i, r := range buf {

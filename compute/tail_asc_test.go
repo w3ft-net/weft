@@ -22,7 +22,7 @@ import (
 // global last 3 rows in ts ASC order.
 func TestLocalComputeJob_TailMergeReturnsAscOrder(t *testing.T) {
 	pool := &LocalComputePool{}
-	jobIface := pool.NewJob(nil, 2, "ts", 3, true)
+	jobIface := pool.NewJob(nil, 2, "ts", 3, true, false)
 	job := jobIface.(*LocalComputeJob)
 
 	// Shard A — its last 3 in ASC after the outer-flip subquery.
@@ -69,7 +69,7 @@ func TestLocalComputeJob_TailMergeReturnsAscOrder(t *testing.T) {
 // because consume() takes a different code path through warp's bash.
 func TestLocalComputeJob_TailMergeAscThroughStages(t *testing.T) {
 	pool := &LocalComputePool{}
-	job := pool.NewJob([]string{"grep e"}, 2, "ts", 3, true)
+	job := pool.NewJob([]string{"grep e"}, 2, "ts", 3, true, false)
 
 	for _, r := range []*pb.ResultRow{
 		{TsUnixNs: 5000, Raw: "five"},
@@ -108,7 +108,7 @@ func TestLocalComputeJob_TailMergeAscThroughStages(t *testing.T) {
 // in once len(buf) hits j.limit).
 func TestLocalComputeJob_TailUnderLimit(t *testing.T) {
 	pool := &LocalComputePool{}
-	jobIface := pool.NewJob(nil, 2, "ts", 10, true)
+	jobIface := pool.NewJob(nil, 2, "ts", 10, true, false)
 	job := jobIface.(*LocalComputeJob)
 
 	for _, r := range []*pb.ResultRow{

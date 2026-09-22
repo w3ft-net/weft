@@ -87,7 +87,11 @@ func (s *grpcLineStream) Next(_ context.Context) (Line, bool, error) {
 
 func (s *grpcLineStream) Close() error { return nil }
 
-func (p *GRPCComputePool) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool) ComputeJob {
+func (p *GRPCComputePool) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool, _ bool) ComputeJob {
+	// CreateJobRequest carries no trace_tag — this manual job-lifecycle
+	// RPC isn't used by the trace display path (see ExecuteQuery, which
+	// forwards the whole request, TraceTag included, to
+	// ExecuteQueryStream instead).
 	resp, err := p.client.CreateJob(context.Background(), &pb.CreateJobRequest{
 		Stages:     stages,
 		ShardCount: int32(shardCount),
