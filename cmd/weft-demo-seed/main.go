@@ -223,9 +223,19 @@ func seed(s *store.Store, tokensOut string) error {
 		}
 
 		// Log groups (one per app, weftd source, no AWS account). The
-		// `app` column stores the full namespace/app form for weftd
-		// sources — that's what the coordinator's configured-source
-		// lookup matches against (store.SourceIsConfigured).
+		// `app` column stores the BARE service name — the namespace is
+		// already carried by ns.ID. Routing keys on the bare service
+		// (the shard rows' service column, the planner's WHERE
+		// service=?, and store.FindLogGroup's namespace-scoped lookup
+		// used by GetSourceStatus/SubmitSample) — a namespace-prefixed
+		// form here ("loom/api") creates an orphaned row nothing ever
+		// matches, leaving weftd's onboarding handshake stuck polling
+		// "pending" forever since the real bare-keyed row it's actually
+		// looking for was never created. (Confirmed by direct
+		// reproduction: a fresh local seed left every Loom stream
+		// permanently unconfigured until this was fixed.) fullApp is
+		// still used as the human-readable LogGroupName label — that
+		// field isn't part of any routing lookup.
 		for _, app := range c.Apps {
 			fullApp := c.Name + "/" + app
 			// withTraceID is always false here: every dev-seeded
@@ -234,7 +244,7 @@ func seed(s *store.Store, tokensOut string) error {
 			// emit a trace ID field yet (see minimalSchemaYAML's doc
 			// comment). Only seedProdLoom's real Go loom-producer does.
 			if err := s.AddLogGroup(ns.ID, nil, store.SourceTypeWeftd,
-				fullApp, fullApp, "us-east-2", minimalSchemaYAML(app, false), "30s"); err != nil {
+				app, fullApp, "us-east-2", minimalSchemaYAML(app, false), "30s"); err != nil {
 				return fmt.Errorf("log_group %s: %w", fullApp, err)
 			}
 		}
@@ -363,11 +373,16 @@ func seedProdLoom(s *store.Store, tokensOut string) error {
 		members = append(members, u)
 	}
 
-	// Log groups — same three apps as the dev seed.
+	// Log groups — same three apps as the dev seed. app (not fullApp)
+	// is the bare service name the `app` column must hold — see the
+	// dev seed loop's comment above for why (confirmed by direct
+	// reproduction: prod already had this exact bug, leaving the real
+	// bare-keyed rows never updated by earlier --prod-loom runs, only
+	// an orphaned namespace-prefixed duplicate).
 	for _, app := range loomSpec.Apps {
 		fullApp := loomSpec.Name + "/" + app
 		if err := s.AddLogGroup(ns.ID, nil, store.SourceTypeWeftd,
-			fullApp, fullApp, "us-east-2", minimalSchemaYAML(app, true), "30s"); err != nil {
+			app, fullApp, "us-east-2", minimalSchemaYAML(app, true), "30s"); err != nil {
 			return fmt.Errorf("log_group %s: %w", fullApp, err)
 		}
 	}
