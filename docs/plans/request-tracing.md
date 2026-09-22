@@ -193,6 +193,35 @@ calls) get correlated at all.
   logs regardless). Revisit once Go/Python SDK support has shipped and
   there's a concrete customer asking for it, rather than building three
   languages simultaneously.
+- **Weft's own self-monitoring isn't trace_id-aware yet.** The internal
+  dogfooding pass (weft's own api→coordinator→compute→shard/cold-shard
+  request path, instrumented with the same weft-go SDK mechanism
+  customers get) makes weft's own logs carry `trace_id`, but nothing
+  wires that into `trace <id>` queryability — that requires first
+  understanding how weft's existing self-monitoring log ingestion is
+  configured (referenced in `docs/plans/tail-latency-regression.md`),
+  which wasn't scoped as part of landing the propagation mechanism
+  itself. Until that lands, the trace ID is visible in raw logs
+  (CloudWatch, SSM) but not queryable through weft itself.
+- **Cron/alert-triggered queries carry no real trace ID.** `Coordinator.
+  ExecuteForWatch` takes a `context.Context` for signature consistency
+  with the rest of the internally-traced call chain, but its one call
+  site (`coordinator/cron.go`) passes `context.Background()` — a watch
+  firing has no inbound request to propagate from, and minting a
+  synthetic trace ID per firing (to make alert-triggered activity
+  traceable too) is a design decision on its own, not a byproduct of
+  this plan. `trace <id>` will only ever surface interactively-triggered
+  queries until that's revisited.
+- **Live-shard query logging stays trace-gated; cold-shard logging
+  doesn't.** A cold-shard (Lambda) query always logs its completion
+  (shard id, duration, row count), `trace_id` appended only when
+  present — archived-data queries are the rarer, costlier path most
+  likely to explain hidden latency, so unconditional logging there
+  doesn't reintroduce log spam. A live-shard query logs only when a
+  trace ID is actually ambient, since nearly every query touches a live
+  shard and unconditional per-query logging there would be real spam.
+  This asymmetry is deliberate, not an oversight — revisit only if real
+  usage data argues for it.
 
 ## Cross-links
 

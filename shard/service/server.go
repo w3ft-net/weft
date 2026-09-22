@@ -11,6 +11,9 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+
+	weftsdk "github.com/w3ft-net/weft-go"
 
 	weftcfg "github.com/graybeardcorp/weft/config"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -225,10 +228,30 @@ func (s *Server) Query(req *pb.QueryRequest, stream pb.ShardQuery_QueryServer) e
 
 	timeoutSec := s.runtimeCfg().ShardQueryTimeoutSeconds
 	ctx := stream.Context()
+	// Trace courier (in): a delegated caller (compute) ferries the
+	// ambient trace ID as `weft-trace-id` metadata — mirrors the
+	// api→coordinator and coordinator→compute reads. context.WithTimeout
+	// below preserves ctx.Value lookups from its parent, so this can
+	// happen before or after the wrap; done here for locality with the
+	// dirstack-equivalent reads elsewhere in this codebase.
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if ids := md.Get("weft-trace-id"); len(ids) > 0 {
+			ctx = weftsdk.ContextWithTraceID(ctx, ids[0])
+		}
+	}
 	if timeoutSec > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 		defer cancel()
+	}
+
+	// Unlike cold-shard queries (always logged — see shard/cold_shard.go),
+	// live-shard queries stay silent unless actively traced: this is the
+	// hot, frequent path (nearly every query touches a live shard), so
+	// unconditional per-query logging here would be real log spam in a
+	// way cold-shard logging isn't.
+	if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
+		log.Printf("shard %s: query trace_id=%s (sql=%s)", s.id, traceID, req.Sql)
 	}
 
 	rows, err := ds.QueryContext(ctx, req.Sql, stringArgsToAny(req.Args)...)

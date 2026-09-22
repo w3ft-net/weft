@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
+
+	weftsdk "github.com/w3ft-net/weft-go"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
@@ -93,13 +96,50 @@ func TestColdShard_RemoteQueryToSink(t *testing.T) {
 	defer cs.Close()
 
 	sink := &testSink{}
-	cs.QueryToSink("SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer = 'kevlar'", nil, sink)
+	cs.QueryToSink(context.Background(), "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer = 'kevlar'", nil, sink)
 
 	if !sink.sentinelReceived {
 		t.Error("expected sentinel")
 	}
 	if len(sink.rows) != 2 {
 		t.Fatalf("expected 2 vimgym/kevlar rows via sink, got %d", len(sink.rows))
+	}
+}
+
+// TestColdShard_RemoteQueryToSink_CarriesTraceID proves the mechanism
+// this whole dogfooding plan depends on: an ambient trace ID set via
+// weftsdk.ContextWithTraceID survives all the way into the JSON body
+// of the request sent to a cold-shard Lambda — the Lambda is a
+// separate AWS-managed process that can't read Go context values at
+// all, so the body field is the only channel.
+func TestColdShard_RemoteQueryToSink_CarriesTraceID(t *testing.T) {
+	parquetPath := exportToParquet(t, testRows())
+
+	var gotTraceID string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req LambdaQueryRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		gotTraceID = req.TraceId
+		w.Header().Set("Content-Type", "application/x-protobuf-stream")
+		WriteStreamEnd(w)
+	}))
+	defer srv.Close()
+
+	cs, err := NewColdShard("remote-trace-test", []string{"vimgym"}, parquetPath, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+
+	ctx := weftsdk.ContextWithTraceID(context.Background(), "test-trace-123")
+	sink := &testSink{}
+	cs.QueryToSink(ctx, "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer = 'kevlar'", nil, sink)
+
+	if gotTraceID != "test-trace-123" {
+		t.Fatalf("expected lambda request body to carry trace_id=test-trace-123, got %q", gotTraceID)
 	}
 }
 

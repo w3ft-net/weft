@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -40,7 +41,7 @@ func TestCoordinator_RediscoveryDoesNotLoseData(t *testing.T) {
 
 	// Verify queryable.
 	tr := TimeRange{Start: DevT0, End: DevT1}
-	result, err := coord.Execute("cat /log/myapp.log", tr, "testcust", "")
+	result, err := coord.Execute(context.Background(), "cat /log/myapp.log", tr, "testcust", "")
 	if err != nil {
 		t.Fatalf("query before: %v", err)
 	}
@@ -62,7 +63,7 @@ func TestCoordinator_RediscoveryDoesNotLoseData(t *testing.T) {
 	// remote side but the coordinator's registry forgets the metadata.
 
 	// After rediscovery, the shard should still have data.
-	result2, err := coord.Execute("cat /log/myapp.log", tr, "testcust", "")
+	result2, err := coord.Execute(context.Background(), "cat /log/myapp.log", tr, "testcust", "")
 	if err != nil {
 		t.Fatalf("query after: %v", err)
 	}

@@ -26,7 +26,7 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 	// when no shard instances are InService yet.
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
 
-	res, err := c.Execute("cat vimgym.log", failoverRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), "cat vimgym.log", failoverRange, "kevlar", "")
 	if err != nil {
 		t.Fatalf("query with no shards should not error, got: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 		CreatedAt: time.Now(),
 	}, "vimgym", "callbox")
 
-	res, err = c.Execute("cat vimgym.log", failoverRange, "kevlar", "")
+	res, err = c.Execute(context.Background(), "cat vimgym.log", failoverRange, "kevlar", "")
 	if err != nil {
 		t.Fatalf("query after adding shard: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestFailover_ShardReplacement(t *testing.T) {
 		CreatedAt: time.Now(),
 	}, apps...)
 
-	res, err := c.Execute("cat vimgym.log", failoverRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), "cat vimgym.log", failoverRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestFailover_ShardReplacement(t *testing.T) {
 	}, apps...)
 
 	// Querying the wider range must now hit both shards.
-	res2, err := c.Execute("cat vimgym.log", failoverRange, "kevlar", "")
+	res2, err := c.Execute(context.Background(), "cat vimgym.log", failoverRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 10; j++ {
-				res, err := c.Execute("cat vimgym.log", failoverRange, "kevlar", "")
+				res, err := c.Execute(context.Background(), "cat vimgym.log", failoverRange, "kevlar", "")
 				if err != nil {
 					errors <- err
 					continue

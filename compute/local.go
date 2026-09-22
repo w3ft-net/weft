@@ -2,6 +2,7 @@ package compute
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -114,9 +115,9 @@ func (p *LocalComputePool) resolveShard(d *pb.ShardDescriptor) (shard.Shard, err
 	return sh, nil
 }
 
-func (p *LocalComputePool) ExecuteQuery(req *pb.ExecuteQueryRequest) (LineStream, error) {
+func (p *LocalComputePool) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) (LineStream, error) {
 	job := p.NewJob(req.Stages, len(req.Shards), req.MergeKey, int(req.Limit), req.KeepLast)
-	go FanOutToShards(req, job, p.resolveShard)
+	go FanOutToShards(ctx, req, job, p.resolveShard)
 	return job.Stream(), nil
 }
 

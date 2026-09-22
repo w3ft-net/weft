@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -36,7 +37,7 @@ func TestCronShareScriptAcrossWatches(t *testing.T) {
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
-	diskResult, err := c.ExecuteForWatch(strings.TrimSpace(diskW.Pipeline), tr, diskW)
+	diskResult, err := c.ExecuteForWatch(context.Background(), strings.TrimSpace(diskW.Pipeline), tr, diskW)
 	if err != nil {
 		t.Fatalf("disk: %v", err)
 	}
@@ -45,7 +46,7 @@ func TestCronShareScriptAcrossWatches(t *testing.T) {
 		t.Errorf("disk: got %q, want source=disk.log (stderr=%q)", got, diskResultD.Stderr)
 	}
 
-	cpuResult, err := c.ExecuteForWatch(strings.TrimSpace(cpuW.Pipeline), tr, cpuW)
+	cpuResult, err := c.ExecuteForWatch(context.Background(), strings.TrimSpace(cpuW.Pipeline), tr, cpuW)
 	if err != nil {
 		t.Fatalf("cpu: %v", err)
 	}
@@ -74,7 +75,7 @@ func TestCronBareNameStillWorks(t *testing.T) {
 
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	result, err := c.ExecuteForWatch(strings.TrimSpace(w.Pipeline), tr, w)
+	result, err := c.ExecuteForWatch(context.Background(), strings.TrimSpace(w.Pipeline), tr, w)
 	if err != nil {
 		t.Fatalf("ExecuteForWatch: %v", err)
 	}

@@ -18,6 +18,8 @@ import (
 	v4signer "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	_ "github.com/duckdb/duckdb-go/v2"
 
+	weftsdk "github.com/w3ft-net/weft-go"
+
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -50,6 +52,11 @@ type LambdaQueryRequest struct {
 	SQL         string   `json:"sql"`
 	ParquetPath string   `json:"parquet_path"`
 	Args        []string `json:"args,omitempty"`
+	// TraceId carries the ambient trace ID (if any) explicitly — the
+	// Lambda is a separate AWS-managed process that can't read a Go
+	// context.Context, so this is the only channel. Keep in sync with
+	// cmd/lambda-shard/handler.go's QueryRequest.
+	TraceId string `json:"trace_id,omitempty"`
 }
 
 // anyArgsToStrings narrows planner-supplied []any to []string for the
@@ -184,11 +191,11 @@ func (s *ColdShard) queryRemote(query string, args []any) ([]*pb.ResultRow, erro
 }
 
 // QueryToSink streams query results to a RowSink.
-func (s *ColdShard) QueryToSink(query string, args []any, sink RowSink) {
+func (s *ColdShard) QueryToSink(ctx context.Context, query string, args []any, sink RowSink) {
 	defer sink.SendSentinel(s.id)
 
 	if s.functionURL != "" {
-		s.queryToSinkRemote(query, args, sink)
+		s.queryToSinkRemote(ctx, query, args, sink)
 		return
 	}
 
@@ -201,18 +208,22 @@ func (s *ColdShard) QueryToSink(query string, args []any, sink RowSink) {
 	}
 }
 
-func (s *ColdShard) queryToSinkRemote(query string, args []any, sink RowSink) {
+func (s *ColdShard) queryToSinkRemote(ctx context.Context, query string, args []any, sink RowSink) {
+	start := time.Now()
+	traceID, traced := weftsdk.TraceIDFromContext(ctx)
+
 	body, err := json.Marshal(LambdaQueryRequest{
 		SQL:         query,
 		ParquetPath: s.parquetPath,
 		Args:        anyArgsToStrings(args),
+		TraceId:     traceID,
 	})
 	if err != nil {
 		log.Printf("cold shard %s: marshal request: %v", s.id, err)
 		return
 	}
 
-	req, err := http.NewRequest(http.MethodPost, s.functionURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.functionURL, bytes.NewReader(body))
 	if err != nil {
 		log.Printf("cold shard %s: build request: %v", s.id, err)
 		return
@@ -240,6 +251,18 @@ func (s *ColdShard) queryToSinkRemote(query string, args []any, sink RowSink) {
 	for {
 		row, err := ReadResultRow(resp.Body)
 		if err == io.EOF {
+			// Unlike a live shard (which stays silent unless actively
+			// traced), a cold-shard query always logs completion —
+			// archived-data queries are the rarer, costlier path (the
+			// one most likely to explain hidden latency, per the
+			// incident that originated this feature), so unconditional
+			// logging here doesn't reintroduce the log-spam problem a
+			// hot live-shard path would have.
+			if traced {
+				log.Printf("cold shard %s: query completed in %s (%d rows) trace_id=%s", s.id, time.Since(start), rowsSeen, traceID)
+			} else {
+				log.Printf("cold shard %s: query completed in %s (%d rows)", s.id, time.Since(start), rowsSeen)
+			}
 			return
 		}
 		if err != nil {

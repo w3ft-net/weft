@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -45,7 +46,7 @@ func TestShellLs_ResolvesCwdAndListsNamespace(t *testing.T) {
 	const customer = "weftfuncs-test"
 	seedAcmeServices(c, customer)
 
-	res, err := c.ExecuteWithDir("ls", TimeRange{}, customer, "", []string{"/log/acme"})
+	res, err := c.ExecuteWithDir(context.Background(), "ls", TimeRange{}, customer, "", []string{"/log/acme"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -80,7 +81,7 @@ func TestShellTail_RelativeSourceResolvesAgainstCwd(t *testing.T) {
 	}
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 
-	res, err := c.ExecuteWithDir("tail gamestate.log", TimeRange{}, customer, "", []string{"/log/vimgym/api"})
+	res, err := c.ExecuteWithDir(context.Background(), "tail gamestate.log", TimeRange{}, customer, "", []string{"/log/vimgym/api"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -101,7 +102,7 @@ func TestShellTree_ListsNamespaceFromSeededCwd(t *testing.T) {
 	const customer = "weftfuncs-test"
 	seedAcmeServices(c, customer)
 
-	res, err := c.ExecuteWithDir("tree", TimeRange{}, customer, "", []string{"/log/acme"})
+	res, err := c.ExecuteWithDir(context.Background(), "tree", TimeRange{}, customer, "", []string{"/log/acme"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}

@@ -19,6 +19,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	weftsdk "github.com/w3ft-net/weft-go"
+
 	"github.com/graybeardcorp/weft/auth"
 	weftcfg "github.com/graybeardcorp/weft/config"
 	"github.com/graybeardcorp/weft/coordinator"
@@ -148,13 +150,28 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		dirStack = md.Get("weft-dirstack")
 	}
+	// Trace courier (in): a delegated caller (weft's own api server)
+	// ferries the ambient trace ID as `weft-trace-id` metadata, mirroring
+	// the dirstack courier above. context.Value doesn't cross a gRPC call
+	// on its own — this re-establishes it as an ambient value on ctx so
+	// everything downstream (which now threads ctx) sees it via
+	// weftsdk.TraceIDFromContext.
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if ids := md.Get("weft-trace-id"); len(ids) > 0 {
+			ctx = weftsdk.ContextWithTraceID(ctx, ids[0])
+		}
+	}
 	var result *coordinator.ExecuteResult
 	if req.Follow && s.Coord.Tail != nil {
 		result, err = s.Coord.ExecuteFollow(ctx, req.Pipeline, tr, customer, req.UserId, dirStack)
 	} else {
-		result, err = s.Coord.ExecuteWithDir(req.Pipeline, tr, customer, req.UserId, dirStack)
+		result, err = s.Coord.ExecuteWithDir(ctx, req.Pipeline, tr, customer, req.UserId, dirStack)
 	}
 	if err != nil {
+		if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
+			log.Printf("query rpc: error for customer=%s pipeline=%q trace_id=%s: %v", customer, req.Pipeline, traceID, err)
+			return err
+		}
 		log.Printf("query rpc: error for customer=%s pipeline=%q: %v", customer, req.Pipeline, err)
 		return err
 	}

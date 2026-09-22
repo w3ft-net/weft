@@ -10,6 +10,9 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+
+	weftsdk "github.com/w3ft-net/weft-go"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
@@ -40,8 +43,15 @@ func (p *GRPCComputePool) Close() error {
 	return p.conn.Close()
 }
 
-func (p *GRPCComputePool) ExecuteQuery(req *pb.ExecuteQueryRequest) (LineStream, error) {
-	stream, err := p.client.ExecuteQueryStream(context.Background(), req)
+func (p *GRPCComputePool) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) (LineStream, error) {
+	// Trace courier (out to compute): context.Value doesn't cross a gRPC
+	// call on its own — ferry the ambient trace ID as `weft-trace-id`
+	// metadata, mirroring the api→coordinator boundary (coordCtx in
+	// api/handlers.go) and the pre-existing weft-dirstack pattern.
+	if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
+		ctx = metadata.AppendToOutgoingContext(ctx, "weft-trace-id", traceID)
+	}
+	stream, err := p.client.ExecuteQueryStream(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("execute query stream: %w", err)
 	}

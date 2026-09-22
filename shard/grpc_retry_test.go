@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"context"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -182,7 +183,7 @@ func TestGRPCShard_QueryToSink_RetriesInitialSetup(t *testing.T) {
 	defer gs.Close()
 
 	sink := &captureSink{}
-	gs.QueryToSink("SELECT 1", nil, sink)
+	gs.QueryToSink(context.Background(), "SELECT 1", nil, sink)
 
 	if !sink.sawSentinel {
 		t.Error("sink never saw sentinel")

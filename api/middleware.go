@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	weftsdk "github.com/w3ft-net/weft-go"
+
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/internal/clientwire"
 	"github.com/graybeardcorp/weft/store"
@@ -221,6 +223,13 @@ func AccessLog(next http.Handler) http.Handler {
 		user := id.label
 		if user == "" {
 			user = "anon"
+		}
+		// trace_id is only present once TraceMiddleware (which wraps this
+		// handler) has established one — omit the field entirely rather
+		// than print "trace_id=" for every untraced request.
+		if traceID, ok := weftsdk.TraceIDFromContext(r.Context()); ok {
+			log.Printf("access %s %s %d %s user=%s trace_id=%s", r.Method, r.URL.Path, rw.status, time.Since(start), user, traceID)
+			return
 		}
 		log.Printf("access %s %s %d %s user=%s", r.Method, r.URL.Path, rw.status, time.Since(start), user)
 	})

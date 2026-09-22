@@ -986,11 +986,11 @@ type fakeArchivableShard struct {
 	closed       bool
 }
 
-func (s *fakeArchivableShard) ID() string                                      { return s.id }
-func (s *fakeArchivableShard) Query(string, ...any) ([]*pb.ResultRow, error)   { return nil, nil }
-func (s *fakeArchivableShard) QueryToSink(string, []any, shard.RowSink)        {}
-func (s *fakeArchivableShard) Ingest([]*pb.LogRow, shard.IngestRecorder) error { return nil }
-func (s *fakeArchivableShard) Close() error                                    { s.closed = true; return nil }
+func (s *fakeArchivableShard) ID() string                                                { return s.id }
+func (s *fakeArchivableShard) Query(string, ...any) ([]*pb.ResultRow, error)             { return nil, nil }
+func (s *fakeArchivableShard) QueryToSink(context.Context, string, []any, shard.RowSink) {}
+func (s *fakeArchivableShard) Ingest([]*pb.LogRow, shard.IngestRecorder) error           { return nil }
+func (s *fakeArchivableShard) Close() error                                              { s.closed = true; return nil }
 func (s *fakeArchivableShard) Archive(_ context.Context, _ string) (string, []shard.CustomerStat, error) {
 	s.archived = true
 	if s.archiveErr != nil {

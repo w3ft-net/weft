@@ -36,7 +36,12 @@ type RowSink interface {
 type Shard interface {
 	ID() string
 	Query(sql string, args ...any) ([]*pb.ResultRow, error)
-	QueryToSink(sql string, args []any, sink RowSink)
+	// QueryToSink streams matching rows to sink. ctx carries the
+	// ambient trace ID (if any) — see weftsdk.ContextWithTraceID —
+	// down to whichever wire boundary this implementation crosses
+	// (gRPC metadata for a live shard, a JSON body field for a
+	// cold-shard Lambda invocation).
+	QueryToSink(ctx context.Context, sql string, args []any, sink RowSink)
 	Ingest(rows []*pb.LogRow, rec IngestRecorder) error
 	// Archive exports the shard's data to Parquet and returns the path
 	// written plus per-customer stats (row counts and ts spans) captured
@@ -289,10 +294,10 @@ func (s *DuckDBShard) Close() error {
 // QueryToSink executes SQL and streams matching rows to the sink, then
 // sends a sentinel. If the query fails, the sentinel is still sent so the
 // compute job doesn't hang.
-func (s *DuckDBShard) QueryToSink(query string, args []any, sink RowSink) {
+func (s *DuckDBShard) QueryToSink(ctx context.Context, query string, args []any, sink RowSink) {
 	defer sink.SendSentinel(s.id)
 
-	rows, err := s.Query(query, args...)
+	rows, err := s.QueryContext(ctx, query, args...)
 	if err != nil {
 		log.Printf("shard %s: QueryToSink error: %v (sql=%s args=%v)", s.id, err, query, args)
 		return // sentinel still sent via defer

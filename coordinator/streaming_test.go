@@ -20,7 +20,7 @@ import (
 func TestExecute_LogQueryFlowsThroughRewriter(t *testing.T) {
 	c := setupTestCoordinator(t)
 
-	res, err := c.Execute(`cat vimgym.log`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestExecute_LogQueryFlowsThroughRewriter(t *testing.T) {
 func TestExecute_StreamsLiveThroughRunLocal(t *testing.T) {
 	c := setupTestCoordinator(t)
 
-	res, err := c.Execute(`cat vimgym.log`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestExecute_StreamsLiveThroughRunLocal(t *testing.T) {
 func TestExecute_AlertPathPostProcesses(t *testing.T) {
 	c := setupTestCoordinator(t)
 
-	res, err := c.Execute(`cat vimgym.log | alert above 100`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | alert above 100`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestExecute_AlertPathPostProcesses(t *testing.T) {
 func TestExecute_StagedPipelinePopulatesText(t *testing.T) {
 	c := setupTestCoordinator(t)
 
-	res, err := c.Execute(`cat vimgym.log | sort | wc -l`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | sort | wc -l`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestExecute_ShardErrorReturnsPartialResults(t *testing.T) {
 	logdb.SeedShard(c.Provisioner, e)
 	stampShardServicesFromApps(t, c, e, []string{"vimgym", "callbox"})
 
-	res, err := c.Execute(`cat vimgym.log`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -153,10 +153,12 @@ type errShard struct {
 	id string
 }
 
-func (s *errShard) ID() string                                        { return s.id }
-func (s *errShard) Query(string, ...any) ([]*pb.ResultRow, error)     { return nil, errSynthetic }
-func (s *errShard) QueryToSink(_ string, _ []any, sink shard.RowSink) { sink.SendSentinel(s.id) }
-func (s *errShard) Ingest([]*pb.LogRow, shard.IngestRecorder) error   { return nil }
+func (s *errShard) ID() string                                    { return s.id }
+func (s *errShard) Query(string, ...any) ([]*pb.ResultRow, error) { return nil, errSynthetic }
+func (s *errShard) QueryToSink(_ context.Context, _ string, _ []any, sink shard.RowSink) {
+	sink.SendSentinel(s.id)
+}
+func (s *errShard) Ingest([]*pb.LogRow, shard.IngestRecorder) error { return nil }
 func (s *errShard) Archive(_ context.Context, _ string) (string, []shard.CustomerStat, error) {
 	return "", nil, nil
 }
