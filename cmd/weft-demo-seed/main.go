@@ -228,8 +228,13 @@ func seed(s *store.Store, tokensOut string) error {
 		// lookup matches against (store.SourceIsConfigured).
 		for _, app := range c.Apps {
 			fullApp := c.Name + "/" + app
+			// withTraceID is always false here: every dev-seeded
+			// customer — Loom included — runs the unmodified Python
+			// dev/demo/generator.py via docker-compose, which doesn't
+			// emit a trace ID field yet (see minimalSchemaYAML's doc
+			// comment). Only seedProdLoom's real Go loom-producer does.
 			if err := s.AddLogGroup(ns.ID, nil, store.SourceTypeWeftd,
-				fullApp, fullApp, "us-east-2", minimalSchemaYAML(app), "30s"); err != nil {
+				fullApp, fullApp, "us-east-2", minimalSchemaYAML(app, false), "30s"); err != nil {
 				return fmt.Errorf("log_group %s: %w", fullApp, err)
 			}
 		}
@@ -362,7 +367,7 @@ func seedProdLoom(s *store.Store, tokensOut string) error {
 	for _, app := range loomSpec.Apps {
 		fullApp := loomSpec.Name + "/" + app
 		if err := s.AddLogGroup(ns.ID, nil, store.SourceTypeWeftd,
-			fullApp, fullApp, "us-east-2", minimalSchemaYAML(app), "30s"); err != nil {
+			fullApp, fullApp, "us-east-2", minimalSchemaYAML(app, true), "30s"); err != nil {
 			return fmt.Errorf("log_group %s: %w", fullApp, err)
 		}
 	}
@@ -501,24 +506,40 @@ func upsertVerifiedUser(s *store.Store, email string, orgID string) (*store.User
 	return u, nil
 }
 
-func minimalSchemaYAML(app string) string {
-	// The generator emits one line per request/job/order/etc. as
-	// `<ts> <LEVEL> <action> key=value …` — same shape across api,
-	// worker, edge, orders, billing, notifier. Extracting the
-	// timestamp + level into real columns is what makes
-	// `awk 'LEVEL == "ERROR"'` push down to a SQL `level = 'ERROR'`
-	// predicate (otherwise it filters on a column that doesn't
-	// exist and silently returns 0). The metrics streams emitted
-	// by weftd are JSONL with no level field; their schema is
-	// auto-discovered on first ingest, not seeded here.
+// minimalSchemaYAML builds the ingest schema shared by every demo
+// customer's plain-text stream. The generator emits one line per
+// request/job/order/etc. as `<ts> <LEVEL> <action> key=value …` — same
+// shape across api, worker, edge, orders, billing, notifier.
+// Extracting the timestamp + level into real columns is what makes
+// `awk 'LEVEL == "ERROR"'` push down to a SQL `level = 'ERROR'`
+// predicate (otherwise it filters on a column that doesn't exist and
+// silently returns 0). The metrics streams emitted by weftd are JSONL
+// with no level field; their schema is auto-discovered on first
+// ingest, not seeded here.
+//
+// withTraceID adds trace_id_field: "3" — only correct for producers
+// that actually emit a bare trace ID as their line's 3rd field
+// (cmd/loom-producer's Go binary, since its checkout chain was added;
+// see cmd/loom-producer/line.go's formatLine). Every other demo
+// customer (acme, globex) and Loom's own dev-compose containers still
+// run the unmodified Python dev/demo/generator.py, whose field 3 is
+// the event name, not a trace ID — pointing trace_id_field at it there
+// would silently populate the reserved trace_id column with garbage
+// (e.g. the literal string "request"), so this only ever passes true
+// for Loom's prod seed.
+func minimalSchemaYAML(app string, withTraceID bool) string {
+	traceIDLine := ""
+	if withTraceID {
+		traceIDLine = "trace_id_field: \"3\"\n"
+	}
 	return fmt.Sprintf(`fields:
   - name: line
     type: string
 timestamp_field: "1"
 timestamp_format: "2006-01-02T15:04:05.000Z"
 level_field: "2"
-app: %s
-`, app)
+%sapp: %s
+`, traceIDLine, app)
 }
 
 // --- pre-seeded /bin and /cron.d --------------------------------------

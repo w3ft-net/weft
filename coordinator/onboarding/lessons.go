@@ -12,7 +12,10 @@
 // affordance for users who wandered off.
 package onboarding
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // Lesson is one step of the shell-* onboarding stage. The frontend
 // (and CLI) renders Prompt before the user attempts the lesson, and
@@ -22,7 +25,21 @@ type Lesson struct {
 	Step   string
 	Action string
 	Prompt string
+	// ActionPattern, when set, makes CheckPipeline accept any pipeline
+	// matching this compiled regex instead of requiring an exact match
+	// against Action. For a lesson whose command embeds a value the
+	// user must discover from their own prior output (e.g. a real
+	// trace_id) rather than a fixed literal every user shares. Action
+	// still holds an illustrative example, shown as the reference/
+	// re-paste text — it will not itself match ActionPattern, which is
+	// intentional: re-pasting it unedited should not silently "succeed"
+	// without the user substituting a real discovered value.
+	ActionPattern *regexp.Regexp
 }
+
+// traceIDPipelinePattern matches `trace <id>` where <id> is exactly
+// the shape weft-go's NewTraceID() produces: 32 lowercase hex chars.
+var traceIDPipelinePattern = regexp.MustCompile(`^trace [0-9a-f]{32}$`)
 
 // lessons is the canonical, ordered list. The first 4 entries ship
 // with the initial onboarding cut; the rest are placeholders the
@@ -51,9 +68,30 @@ var lessons = []*Lesson{
 		Prompt: "Now tail some logs to see live API request lines flowing in. (Loom Inc might be a fake company but they have real servers.)",
 	},
 	{
+		Step:   "shell-tail-f",
+		Action: "tail -f /log/loom/prod/api/main.log",
+		Prompt: "`tail` on its own is a snapshot. Add `-f` and it keeps streaming as new lines arrive, same as any Unix tail. Watch a few lines come in, then stop whenever you're ready to move on.",
+	},
+	{
+		Step:   "shell-cd",
+		Action: "cd /log/loom/prod/api",
+		Prompt: "This is a virtual filesystem, and it has a working directory like any shell. `cd` into a service's directory and you can drop the long prefix — `tail main.log` instead of the full `/log/loom/prod/api/main.log` path.",
+	},
+	{
 		Step:   "shell-grep-awk",
-		Action: "tail /log/loom/prod/api/main.log | grep ERROR | awk '{print HOST, $1, $4}'",
+		Action: "tail /log/loom/prod/api/main.log | grep ERROR | awk '{print HOST, $1, $5}'",
 		Prompt: "So obviously we have support for awk and grep, but the more material point is `HOST` in the awk program. Weft augments normal field variables in awk and jq with a number of meta-variables to help you isolate exactly where those log lines were produced. More info in the manual.",
+	},
+	{
+		Step:   "shell-trace-find",
+		Action: "tail /log/loom/prod/api/main.log | grep checkout | awk '{print TRACE_ID}'",
+		Prompt: "Loom's checkout flow hops from the API to an edge payment gateway to a background fulfillment worker — one user-facing request, three separate services. Each hop is tagged with the same trace_id. Copy one of the IDs printed above; you'll use it in the next step.",
+	},
+	{
+		Step:          "shell-trace",
+		Action:        "trace <paste the id you copied>",
+		ActionPattern: traceIDPipelinePattern,
+		Prompt:        "Now run `trace` on the ID you copied — but edit it in first, don't just re-run the line above verbatim. You'll get every line from every service that touched that one request, ordered by time, each tagged with which service produced it.",
 	},
 	{
 		Step:   "shell-alert",
@@ -67,8 +105,8 @@ var lessons = []*Lesson{
 	},
 	{
 		Step:   "shell-cron",
-		Action: "ls /cron.d/",
-		Prompt: "When you want to monitor the output of a one-liner, you just stick a file in /cron.d/. `cat` one of the examples here. Each cron maintains timeseries data that can be aggregated and charted.",
+		Action: "ls -l /cron.d/",
+		Prompt: "When you want to monitor the output of a one-liner, you just stick a file in /cron.d/. `cat` one of the examples here. Each cron maintains timeseries data that can be aggregated and charted — `ls -l` shows a sparkline of each cron's recent values right in the listing.",
 	},
 	{
 		Step:   "shell-schedule",
@@ -82,8 +120,8 @@ var lessons = []*Lesson{
 	},
 	{
 		Step:   "shell-wit",
-		Action: "wit log /bin/scan",
-		Prompt: "The weft shell includes a lightweight version history tool for bin scripts and cron entries called `wit`. The name might not be clever, but you'll remember exactly what it's for!  History tracking is automatic and users are prompted for commit messages in vim whenever they create or modify a file.",
+		Action: "wit log /bin/scan -p",
+		Prompt: "The weft shell includes a lightweight version history tool for bin scripts and cron entries called `wit`. The name might not be clever, but you'll remember exactly what it's for! History tracking is automatic and users are prompted for commit messages in vim whenever they create or modify a file — `-p` shows the diff inline for each version.",
 	},
 	{
 		Step:   "shell-bin-lua",
@@ -108,6 +146,11 @@ var lessons = []*Lesson{
 		Prompt: "Once you have some scripts running in cron.d, there are some convenience functions for aggregations namespaced under `weft::<fn>` in bash (or `weft.<fn>(...)` in lua). Most take a duration (`weft::latest` does not); there's also a parallel family of predicates like `weft::is_above` and `weft::is_outlier`. These compose naturally into alerts, e.g. `weft::avg error-rate 1m | alert above 100`. Full reference: `man weft`.",
 	},
 	{
+		Step:   "shell-history",
+		Action: "history",
+		Prompt: "Everything you've typed this session is right here — handy for re-finding a query or copying one into a cron later.",
+	},
+	{
 		Step:   "shell-tmp",
 		Action: "echo hello > /tmp/note",
 		Prompt: "If you are working through an issue where it's easier to stage output from some one-liners and run `comm` or `join` on those files, dump them to /tmp. Because scratch files tend to abide by gas laws and fill the size of the container, we automatically delete files that haven't been written to for 48 hrs.",
@@ -116,6 +159,11 @@ var lessons = []*Lesson{
 		Step:   "chart",
 		Action: "chart error-rate",
 		Prompt: "`chart` is another weft-specific builtin. It'll open a modal in the browser. The CLI will render right in the terminal with as much fidelity as it can.",
+	},
+	{
+		Step:   "shell-chart-pipe",
+		Action: "tail /log/loom/prod/api/main.log | grep ERROR | chart -x 1 --bucket 5m",
+		Prompt: "`chart` doesn't need a saved cron behind it — pipe any pipeline straight into it and chart it directly, bucketed however you want. `-x 1` tells it to bucket by the timestamp in column 1; with no `-y`, it counts rows per bucket.",
 	},
 	{
 		Step:   "shell-dashboard-yaml",
@@ -163,16 +211,27 @@ func Lookup(step string) *Lesson {
 	return nil
 }
 
-// CheckPipeline returns true when the given pipeline is the lesson's
-// Action verbatim (after trimming surrounding whitespace). The web
-// shell injects Action into the input buffer, so a user who just
-// hits enter advances; any edit they make breaks the match.
+// CheckPipeline returns true when the given pipeline matches the
+// current lesson. Most lessons match the Action string verbatim
+// (after trimming surrounding whitespace) — the web shell injects
+// Action into the input buffer, so a user who just hits enter
+// advances; any edit they make breaks the match. A lesson with
+// ActionPattern set instead accepts any pipeline matching that regex,
+// for commands that embed a value the user must discover themselves
+// (e.g. a real trace_id) rather than share one fixed literal.
 func CheckPipeline(currentStep, pipeline string) bool {
 	lesson := Lookup(currentStep)
-	if lesson == nil || lesson.Action == "" {
+	if lesson == nil {
 		return false
 	}
-	return strings.TrimSpace(pipeline) == strings.TrimSpace(lesson.Action)
+	trimmed := strings.TrimSpace(pipeline)
+	if lesson.ActionPattern != nil {
+		return lesson.ActionPattern.MatchString(trimmed)
+	}
+	if lesson.Action == "" {
+		return false
+	}
+	return trimmed == strings.TrimSpace(lesson.Action)
 }
 
 // PromptFor returns the rendered prompt copy for a step, or "" if

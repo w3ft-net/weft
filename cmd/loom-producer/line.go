@@ -33,16 +33,18 @@ func idPool(format string, n int) []string {
 }
 
 // LineFor returns one log line for `service` at the current wall
-// clock with the requested level. Output shape matches the Python
-// generator exactly: ISO8601-with-ms timestamp, padded level, then
-// service-specific key=value content.
-func LineFor(rng *rand.Rand, service, level string) string {
-	ts := tsNow()
+// clock with the requested level and trace ID. Output shape matches
+// the Python generator's content exactly (ISO8601-with-ms timestamp,
+// padded level, service-specific key=value content) with one
+// addition: a trace ID as field 3, right after level. Every line gets
+// one, ambient or chained (see chain.go) — a solo, never-reused ID
+// for ambient traffic, a shared one across a chain's hops — because
+// ingest.Schema's trace_id_field only supports a positive, fixed
+// 1-based field index (no negative/from-end form), so the ID has to
+// sit at the same position regardless of which service/event
+// produced the line, not at the end where field counts vary.
+func LineFor(rng *rand.Rand, service, level, traceID string) string {
 	var b strings.Builder
-	b.WriteString(ts)
-	b.WriteByte(' ')
-	b.WriteString(padLevel(level))
-	b.WriteByte(' ')
 
 	switch service {
 	case "api", "edge":
@@ -105,6 +107,23 @@ func LineFor(rng *rand.Rand, service, level string) string {
 	default:
 		fmt.Fprintf(&b, "event service=%s value=%d", service, rng.IntN(1001))
 	}
+	return formatLine(level, traceID, b.String())
+}
+
+// formatLine assembles the shared "<ts> <LEVEL> <traceID> <content>"
+// prefix every loom-producer line carries — ambient (LineFor) and
+// chain-triggered (chain.go's checkout/checkout_processed/fulfillment)
+// lines alike — so a fixed field index resolves the trace ID
+// identically no matter which service or event produced the line.
+func formatLine(level, traceID, content string) string {
+	var b strings.Builder
+	b.WriteString(tsNow())
+	b.WriteByte(' ')
+	b.WriteString(padLevel(level))
+	b.WriteByte(' ')
+	b.WriteString(traceID)
+	b.WriteByte(' ')
+	b.WriteString(content)
 	return b.String()
 }
 
