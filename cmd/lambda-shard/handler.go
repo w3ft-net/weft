@@ -24,6 +24,10 @@ type QueryRequest struct {
 	SQL         string   `json:"sql"`
 	ParquetPath string   `json:"parquet_path"`
 	Args        []string `json:"args,omitempty"`
+	// TraceId is the ambient trace ID (if any) ferried explicitly in the
+	// body — this process can't read a caller's Go context.Context.
+	// Keep in sync with shard.LambdaQueryRequest.
+	TraceId string `json:"trace_id,omitempty"`
 }
 
 // runQuery opens an in-memory DuckDB, configures S3, and executes the
@@ -73,27 +77,29 @@ func runQuery(req QueryRequest, s3cfg *shard.S3Config) (*sql.DB, *sql.Rows, erro
 // stream is truncated (no end sentinel): callers past the HTTP header
 // can only log it — the coordinator's stream-read-error path then
 // surfaces the truncation on its side.
-func streamRows(w io.Writer, rows *sql.Rows) error {
+func streamRows(w io.Writer, rows *sql.Rows) (int, error) {
 	flush := func() {}
 	if f, ok := w.(http.Flusher); ok {
 		flush = f.Flush
 	}
 
+	count := 0
 	for rows.Next() {
 		var raw string
 		var ts time.Time
 		if err := rows.Scan(&raw, &ts); err != nil {
-			return fmt.Errorf("scan row: %w", err)
+			return count, fmt.Errorf("scan row: %w", err)
 		}
 		if err := shard.WriteResultRow(w, &pb.ResultRow{Raw: raw, TsUnixNs: ts.UnixNano()}); err != nil {
-			return fmt.Errorf("write row: %w", err)
+			return count, fmt.Errorf("write row: %w", err)
 		}
+		count++
 		flush()
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("rows: %w", err)
+		return count, fmt.Errorf("rows: %w", err)
 	}
-	return shard.WriteStreamEnd(w)
+	return count, shard.WriteStreamEnd(w)
 }
 
 // HandleQuery executes a SQL query against a Parquet file and streams
@@ -106,7 +112,8 @@ func HandleQuery(w io.Writer, req QueryRequest, s3cfg *shard.S3Config) error {
 	}
 	defer db.Close()
 	defer rows.Close()
-	return streamRows(w, rows)
+	_, err = streamRows(w, rows)
+	return err
 }
 
 // ServeHTTP is the HTTP handler for the query endpoint.
@@ -129,6 +136,7 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s3cfg := shard.S3ConfigFromEnv()
+	start := time.Now()
 
 	// Execute before writing the status. A failed query (missing
 	// parquet, bad SQL) surfaces from db.Query() with no bytes written,
@@ -155,7 +163,18 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// interrupted after the parquet opened) can't change the status.
 	// We stop without the end sentinel; the coordinator's
 	// queryToSinkRemote logs the truncated stream on its side.
-	if err := streamRows(w, rows); err != nil {
+	count, err := streamRows(w, rows)
+	if err != nil {
 		log.Printf("lambda-shard: mid-stream failure after header sent: %v", err)
+		return
+	}
+	// Unconditional completion log, matching the caller-side
+	// (shard.ColdShard.queryToSinkRemote) contract — no shard id is
+	// available on this side of the wire, so parquet path identifies
+	// which archive was read.
+	if req.TraceId != "" {
+		log.Printf("lambda-shard: query completed in %s parquet=%s (%d rows) trace_id=%s", time.Since(start), req.ParquetPath, count, req.TraceId)
+	} else {
+		log.Printf("lambda-shard: query completed in %s parquet=%s (%d rows)", time.Since(start), req.ParquetPath, count)
 	}
 }

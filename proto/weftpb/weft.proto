@@ -145,6 +145,12 @@ message LogRow {
   // the sender's token (row-level security); kind defaults to "main".
   string namespace = 19;
   string kind = 20;
+  // trace_id correlates this row with other log lines across services
+  // belonging to the same logical request. Populated either by
+  // ingest.Parser's trace_id_field schema extraction, or structurally by
+  // an SDK via weftd's socket envelope. Empty means uncorrelated — not
+  // every row will have one. See docs/plans/request-tracing.md.
+  string trace_id = 21;
 }
 
 message IngestRequest {
@@ -278,6 +284,13 @@ message ExecuteQueryRequest {
   // args via a `repeated google.protobuf.Value`. See
   // planner/sql.go::Query.ToSQL for the source of args.
   repeated string args = 8;
+  // trace_tag is set by the coordinator when planner.QueryPlan.SourceCmd ==
+  // "trace", there are no downstream compute stages, and the dispatch is
+  // interactive (not a cron/watch/dashboard fire — see AlertContext gating
+  // in coordinator.go). Tells compute/local.go::consume to buffer the
+  // merged stream, emit a synthetic summary line, and prefix each row with
+  // a colored [namespace/service] badge. See docs/plans/request-tracing.md.
+  bool trace_tag = 9;
 }
 
 message ExecuteQueryResponse {
@@ -385,6 +398,13 @@ service WeftAdmin {
   // id/window/data on the new binary. The in-place binary-upgrade
   // primitive for `weft-admin roll-*`.
   rpc RelaunchShard(RelaunchShardRequest) returns (RelaunchShardResponse);
+
+  // ForceRemoveShard discards a shard stuck in ARCHIVING whose archive can
+  // never complete (host + volume gone, no export recorded): fires
+  // AdminDelete → GONE, dropping the registry entry and the shard_records
+  // row. Refused if the shard still owns an instance or volume unless
+  // force is set. S3 data is left untouched.
+  rpc ForceRemoveShard(ForceRemoveShardRequest) returns (ForceRemoveShardResponse);
 
   // GetShard returns one shard's current row (state + last_heartbeat_at)
   // — what weft-admin's wait-and-verify loop polls after firing a
@@ -798,6 +818,13 @@ message RelaunchShardRequest {
 }
 
 message RelaunchShardResponse {}
+
+message ForceRemoveShardRequest {
+  string shard_id = 1;
+  bool force = 2;
+}
+
+message ForceRemoveShardResponse {}
 
 message GetShardRequest {
   string shard_id = 1;

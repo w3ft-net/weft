@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 
@@ -16,14 +17,14 @@ type spyPool struct {
 	inner     compute.ComputePool
 }
 
-func (p *spyPool) ExecuteQuery(req *pb.ExecuteQueryRequest) (compute.LineStream, error) {
+func (p *spyPool) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) (compute.LineStream, error) {
 	p.execCount.Add(1)
 	p.lastReq = req
-	return p.inner.ExecuteQuery(req)
+	return p.inner.ExecuteQuery(ctx, req)
 }
 
-func (p *spyPool) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool) compute.ComputeJob {
-	return p.inner.NewJob(stages, shardCount, mergeKey, limit, keepLast)
+func (p *spyPool) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool, traceTag bool) compute.ComputeJob {
+	return p.inner.NewJob(stages, shardCount, mergeKey, limit, keepLast, traceTag)
 }
 
 // TestQuery_NoStages_RoutesThroughComputePool pins the behavior that
@@ -37,7 +38,7 @@ func TestQuery_NoStages_RoutesThroughComputePool(t *testing.T) {
 	pool := &spyPool{inner: c.Pool}
 	c.Pool = pool
 
-	res, err := c.Execute(`cat vimgym.log`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}

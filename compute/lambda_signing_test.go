@@ -91,7 +91,7 @@ func TestComputeFanoutSignsLambdaWithValidRegion(t *testing.T) {
 		AWSRegion: ResolveRegion(),
 	}
 
-	stream, err := pool.ExecuteQuery(&pb.ExecuteQueryRequest{
+	stream, err := pool.ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{
 		Sql: "SELECT raw, ts FROM logs WHERE customer = 'kevlar'",
 		Shards: []*pb.ShardDescriptor{{
 			ShardId:     "cold-test",

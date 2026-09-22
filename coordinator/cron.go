@@ -185,7 +185,10 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch) {
 	// evaluates the alert in the watch's AlertContext — incident dedup and
 	// notifier dispatch both key off the watch identity instead of an
 	// interactive-mode synthetic one.
-	result, err := ce.Coord.ExecuteForWatch(pipeline, tr, &watch)
+	// No inbound request to propagate a trace ID from — cron/alert
+	// firings aren't traced in this pass (see docs/plans/
+	// request-tracing.md's "Deferred, not precluded").
+	result, err := ce.Coord.ExecuteForWatch(context.Background(), pipeline, tr, &watch)
 
 	duration := time.Since(start)
 	status := "ok"

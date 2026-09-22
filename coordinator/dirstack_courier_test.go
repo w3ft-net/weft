@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -27,7 +28,7 @@ func TestCourier_SeedReadback(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 
-	res, err := c.ExecuteWithDir("pwd", TimeRange{}, "", "", []string{"/log/acme"})
+	res, err := c.ExecuteWithDir(context.Background(), "pwd", TimeRange{}, "", "", []string{"/log/acme"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -46,7 +47,7 @@ func TestCourier_CdMovesCwd(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 
-	res, err := c.ExecuteWithDir("cd /bin && pwd", TimeRange{}, "", "", []string{"/tmp"})
+	res, err := c.ExecuteWithDir(context.Background(), "cd /bin && pwd", TimeRange{}, "", "", []string{"/tmp"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -66,7 +67,7 @@ func TestCourier_RelativeCdResolvesAgainstSeed(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 
-	res, err := c.ExecuteWithDir("cd sub && pwd", TimeRange{}, "", "", []string{"/log/acme"})
+	res, err := c.ExecuteWithDir(context.Background(), "cd sub && pwd", TimeRange{}, "", "", []string{"/log/acme"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -85,7 +86,7 @@ func TestCourier_PushdReturnsFullStack(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 
-	res, err := c.ExecuteWithDir("pushd /bin", TimeRange{}, "", "", []string{"/tmp"})
+	res, err := c.ExecuteWithDir(context.Background(), "pushd /bin", TimeRange{}, "", "", []string{"/tmp"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -102,7 +103,7 @@ func TestCourier_NilSeedDefaultsToRoot(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 
-	res, err := c.Execute("pwd", TimeRange{}, "", "")
+	res, err := c.Execute(context.Background(), "pwd", TimeRange{}, "", "")
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

@@ -788,7 +788,7 @@ func streamScannedLines(ctx context.Context, client pb.WeftCoordinatorClient, sc
 		if line == "" {
 			continue
 		}
-		if err := sendLineWithReconnect(ctx, client, ss, line, customer, instance, app); err != nil {
+		if err := sendLineWithReconnect(ctx, client, ss, line, customer, instance, app, ""); err != nil {
 			return // context cancelled
 		}
 	}
@@ -1101,7 +1101,7 @@ func runSocketIngester(ctx context.Context, client pb.WeftCoordinatorClient, cus
 
 	ss := &streamState{}
 
-	type appLine struct{ app, line string }
+	type appLine struct{ app, line, traceID string }
 	var buf []appLine
 
 	prefix := func(app string) string { return prefixNamespace(namespace, app) }
@@ -1110,7 +1110,7 @@ func runSocketIngester(ctx context.Context, client pb.WeftCoordinatorClient, cus
 		select {
 		case <-ctx.Done():
 			for _, al := range buf {
-				sendLineWithReconnect(ctx, client, ss, al.line, customer, instance, al.app)
+				sendLineWithReconnect(ctx, client, ss, al.line, customer, instance, al.app, al.traceID)
 			}
 			if ss.stream != nil {
 				ss.stream.CloseAndRecv()
@@ -1123,17 +1123,17 @@ func runSocketIngester(ctx context.Context, client pb.WeftCoordinatorClient, cus
 				}
 				return
 			}
-			buf = append(buf, appLine{app: prefix(sl.App), line: sl.Line})
+			buf = append(buf, appLine{app: prefix(sl.App), line: sl.Line, traceID: sl.TraceID})
 			if len(buf) >= 100 {
 				for _, al := range buf {
-					sendLineWithReconnect(ctx, client, ss, al.line, customer, instance, al.app)
+					sendLineWithReconnect(ctx, client, ss, al.line, customer, instance, al.app, al.traceID)
 				}
 				buf = buf[:0]
 			}
 		case <-ticker.C:
 			if len(buf) > 0 {
 				for _, al := range buf {
-					sendLineWithReconnect(ctx, client, ss, al.line, customer, instance, al.app)
+					sendLineWithReconnect(ctx, client, ss, al.line, customer, instance, al.app, al.traceID)
 				}
 				buf = buf[:0]
 			}
@@ -1216,7 +1216,7 @@ func splitFullApp(fullApp string) (namespace, service, kind string) {
 	}
 }
 
-func buildLogRow(line, customer, instance, app string) *pb.LogRow {
+func buildLogRow(line, customer, instance, app, traceID string) *pb.LogRow {
 	now := time.Now()
 
 	namespace, service, kind := splitFullApp(app)
@@ -1239,6 +1239,11 @@ func buildLogRow(line, customer, instance, app string) *pb.LogRow {
 			} else {
 				slot.RecordOK()
 			}
+			// A structural (socket-envelope) trace ID is higher-fidelity
+			// than schema-based extraction and wins when both are present.
+			if traceID != "" {
+				msg.TraceId = traceID
+			}
 			return msg
 		}
 	}
@@ -1255,19 +1260,20 @@ func buildLogRow(line, customer, instance, app string) *pb.LogRow {
 		Raw:        line,
 		TsUnixNs:   now.UnixNano(),
 		Fields:     strings.Fields(line),
+		TraceId:    traceID,
 	}
 	stampDimensions(row)
 	return row
 }
 
 // sendLineWithReconnect sends a line, opening or reconnecting the stream as needed.
-func sendLineWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient, ss *streamState, line, customer, instance, app string) error {
+func sendLineWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient, ss *streamState, line, customer, instance, app, traceID string) error {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return nil
 	}
 
-	msg := buildLogRow(line, customer, instance, app)
+	msg := buildLogRow(line, customer, instance, app, traceID)
 
 	// Try sending on existing stream.
 	if ss.stream != nil {
@@ -1296,7 +1302,7 @@ func sendLineWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient,
 
 func flushWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient, ss *streamState, lines []string, customer, instance, app string) {
 	for _, line := range lines {
-		if err := sendLineWithReconnect(ctx, client, ss, line, customer, instance, app); err != nil {
+		if err := sendLineWithReconnect(ctx, client, ss, line, customer, instance, app, ""); err != nil {
 			return
 		}
 	}

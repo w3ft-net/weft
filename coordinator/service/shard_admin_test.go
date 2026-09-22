@@ -74,3 +74,40 @@ func TestRelaunchShard_WrongState_FailedPrecondition(t *testing.T) {
 	_, err := srv.RelaunchShard(context.Background(), &pb.RelaunchShardRequest{ShardId: "shard-a"})
 	wantCode(t, err, codes.FailedPrecondition)
 }
+
+// ForceRemoveShard discards a shard stuck in ARCHIVING whose archive can never
+// complete. It refuses if the shard still owns an instance or volume (those
+// would be orphaned) unless force is set.
+func TestForceRemoveShard_UnknownShard_NotFound(t *testing.T) {
+	srv := shardAdminServer(t, "shard-a", logdb.StateArchiving)
+	_, err := srv.ForceRemoveShard(context.Background(), &pb.ForceRemoveShardRequest{ShardId: "missing"})
+	wantCode(t, err, codes.NotFound)
+}
+
+func TestForceRemoveShard_WrongState_FailedPrecondition(t *testing.T) {
+	// Only ARCHIVING is removable here; live shards must go through the
+	// normal rotate/archive path, ARCHIVED through DeleteArchivedShard.
+	for _, st := range []logdb.ShardState{logdb.StateIngesting, logdb.StateReadOnly, logdb.StateArchived} {
+		srv := shardAdminServer(t, "shard-a", st)
+		_, err := srv.ForceRemoveShard(context.Background(), &pb.ForceRemoveShardRequest{ShardId: "shard-a"})
+		wantCode(t, err, codes.FailedPrecondition)
+	}
+}
+
+func TestForceRemoveShard_HasInstanceOrVolume_RefusedWithoutForce(t *testing.T) {
+	for name, sh := range map[string]*logdb.Shard{
+		"instance": {ID: "shard-a", State: logdb.StateArchiving, InstanceID: "i-123"},
+		"volume":   {ID: "shard-a", State: logdb.StateArchiving, EBSVolumeID: "vol-123"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
+			logdb.SeedShard(coord.Provisioner, sh)
+			srv := &Server{Coord: coord}
+			_, err := srv.ForceRemoveShard(context.Background(), &pb.ForceRemoveShardRequest{ShardId: "shard-a"})
+			wantCode(t, err, codes.FailedPrecondition)
+			if logdb.GetEntry(coord.Provisioner, "shard-a") == nil {
+				t.Fatal("refused removal must leave the shard in the registry")
+			}
+		})
+	}
+}

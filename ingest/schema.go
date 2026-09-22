@@ -51,6 +51,14 @@ type Schema struct {
 	// extracts "INFO". If empty, the entire field value is the level.
 	LevelPattern string `yaml:"level_pattern,omitempty"`
 
+	// TraceIDField identifies which field carries a request-correlation
+	// ID (e.g. an API gateway request ID, framework-generated UUID, or
+	// any existing correlation token already present in the log line).
+	// Same format as LevelField: 1-based field index (text/prefix_json)
+	// or a JSON dot-path (json). Empty or "none" means no extraction.
+	// See docs/plans/request-tracing.md.
+	TraceIDField string `yaml:"trace_id_field,omitempty"`
+
 	// JSONStartField is the 1-based field index where JSON begins (for
 	// prefix_json format). Fields before this are positional text fields.
 	// Fields from this position onward are parsed as a single JSON object.

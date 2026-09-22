@@ -28,6 +28,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	weft "github.com/w3ft-net/weft-go"
 )
 
 type streamSpec struct {
@@ -57,6 +59,31 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// Files are opened once up front into a shared map, rather than
+	// each stream's own goroutine privately owning and defer-closing
+	// its handle — the checkout-chain goroutines below need write
+	// access to api/edge/worker's files for the same env, not just
+	// their own ambient stream's file. os.File.Write under O_APPEND is
+	// atomic per call for lines well under the filesystem write limit,
+	// so concurrent ambient + chain writers to the same file need no
+	// extra mutex.
+	files := make(map[string]*os.File, len(cfg.Streams))
+	for _, s := range cfg.Streams {
+		if err := os.MkdirAll(filepath.Dir(s.Log), 0o755); err != nil {
+			log.Fatalf("loom-producer: mkdir for %s: %v", s.Log, err)
+		}
+		f, err := os.OpenFile(s.Log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			log.Fatalf("loom-producer: open %s: %v", s.Log, err)
+		}
+		files[s.App+"@"+s.Env] = f
+	}
+	defer func() {
+		for _, f := range files {
+			f.Close()
+		}
+	}()
+
 	var wg sync.WaitGroup
 	for _, s := range cfg.Streams {
 		shape, err := ParseShape(s.Shape)
@@ -67,26 +94,49 @@ func main() {
 		if err != nil {
 			log.Fatalf("loom-producer: %s/%s bad ERROR_RATIO %q: %v", s.App, s.Env, s.ErrorRatio, err)
 		}
-		if err := os.MkdirAll(filepath.Dir(s.Log), 0o755); err != nil {
-			log.Fatalf("loom-producer: mkdir for %s: %v", s.Log, err)
-		}
-		f, err := os.OpenFile(s.Log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if err != nil {
-			log.Fatalf("loom-producer: open %s: %v", s.Log, err)
-		}
 		log.Printf("loom-producer: %s/%s shape=%s error_ratio=%s log=%s",
 			s.App, s.Env, s.Shape, s.ErrorRatio, s.Log)
 
 		wg.Add(1)
 		go func(spec streamSpec, file *os.File, shape, errShape RateShape) {
 			defer wg.Done()
-			defer file.Close()
 			runStream(ctx, spec.App, file, shape, errShape)
-		}(s, f, shape, errShape)
+		}(s, files[s.App+"@"+s.Env], shape, errShape)
+	}
+
+	// Checkout chain: one goroutine per env that has api/edge/worker
+	// all present, simulating a request that genuinely hops all three
+	// services with a shared trace ID. See chain.go.
+	for _, env := range distinctEnvs(cfg.Streams) {
+		api, aok := files["api@"+env]
+		edge, eok := files["edge@"+env]
+		worker, wok := files["worker@"+env]
+		if !aok || !eok || !wok {
+			continue
+		}
+		wg.Add(1)
+		go func(env string, api, edge, worker *os.File) {
+			defer wg.Done()
+			runChains(ctx, env, api, edge, worker)
+		}(env, api, edge, worker)
 	}
 
 	wg.Wait()
 	log.Print("loom-producer: shutdown complete")
+}
+
+// distinctEnvs returns the unique, order-stable set of envs present
+// across the configured streams.
+func distinctEnvs(streams []streamSpec) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, s := range streams {
+		if !seen[s.Env] {
+			seen[s.Env] = true
+			out = append(out, s.Env)
+		}
+	}
+	return out
 }
 
 func loadConfig(path string) (*config, error) {
@@ -141,7 +191,7 @@ func runStream(ctx context.Context, app string, out *os.File, shape, errShape Ra
 
 			for accumulator >= 1.0 {
 				level := pickLevel(rng, ratio)
-				if _, err := fmt.Fprintln(out, LineFor(rng, app, level)); err != nil {
+				if _, err := fmt.Fprintln(out, LineFor(rng, app, level, weft.NewTraceID())); err != nil {
 					log.Printf("loom-producer: write %s: %v", out.Name(), err)
 					return
 				}

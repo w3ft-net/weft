@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	weftsdk "github.com/w3ft-net/weft-go"
+
 	"github.com/graybeardcorp/warp/pkg/bash"
 	luapkg "github.com/graybeardcorp/warp/pkg/lua"
 	"github.com/graybeardcorp/weft/compute"
@@ -601,8 +603,8 @@ func (c *Coordinator) clampTimeRange(tr TimeRange, custID string) TimeRange {
 // Callers that don't pump bytes themselves (tests, alert post-
 // processors) drain the stream into a buffered DrainedResult via
 // res.Drain(ctx).
-func (c *Coordinator) Execute(pipeline string, tr TimeRange, customer, userID string) (*ExecuteResult, error) {
-	return c.execute(pipeline, tr, customer, userID, nil, nil)
+func (c *Coordinator) Execute(ctx context.Context, pipeline string, tr TimeRange, customer, userID string) (*ExecuteResult, error) {
+	return c.execute(ctx, pipeline, tr, customer, userID, nil, nil)
 }
 
 // ExecuteWithDir is Execute plus the dirstack courier: dirStack (index
@@ -611,8 +613,8 @@ func (c *Coordinator) Execute(pipeline string, tr TimeRange, customer, userID st
 // caller's current directory. The post-run dirstack is returned on the
 // result's FinalDirStack (read after the stream exhausts) for the caller
 // to cache. dirStack nil/empty behaves exactly like Execute (cwd "/").
-func (c *Coordinator) ExecuteWithDir(pipeline string, tr TimeRange, customer, userID string, dirStack []string) (*ExecuteResult, error) {
-	return c.execute(pipeline, tr, customer, userID, nil, dirStack)
+func (c *Coordinator) ExecuteWithDir(ctx context.Context, pipeline string, tr TimeRange, customer, userID string, dirStack []string) (*ExecuteResult, error) {
+	return c.execute(ctx, pipeline, tr, customer, userID, nil, dirStack)
 }
 
 // ExecuteFollow runs pipeline with live-tail semantics. The returned
@@ -650,7 +652,7 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 		return nil, err
 	}
 
-	historical, err := c.execute(pipeline, tr, customer, userID, nil, dirStack)
+	historical, err := c.execute(ctx, pipeline, tr, customer, userID, nil, dirStack)
 	if err != nil {
 		return nil, err
 	}
@@ -685,7 +687,7 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 //
 // Same dispatch surface as Execute; the only difference is the
 // AlertContext binding.
-func (c *Coordinator) ExecuteForWatch(pipeline string, tr TimeRange, watch *store.CronWatch) (*ExecuteResult, error) {
+func (c *Coordinator) ExecuteForWatch(ctx context.Context, pipeline string, tr TimeRange, watch *store.CronWatch) (*ExecuteResult, error) {
 	// c.Notifier is the NotifyDispatcher interface, so a nil-Notifier
 	// coordinator threads true-nil into AlertContext (no typed-nil-
 	// via-concrete-pointer trap).
@@ -702,7 +704,7 @@ func (c *Coordinator) ExecuteForWatch(pipeline string, tr TimeRange, watch *stor
 	// Plan (which re-parses + re-walks the pipeline). Phase A profiling
 	// pinned customer-resolve + Plan + expandBin at ~15-25% of the
 	// per-fire coordinator cost; this is where that saves cleanly.
-	if res, ok := c.executeLowered(watch, tr, alertCtx); ok {
+	if res, ok := c.executeLowered(ctx, watch, tr, alertCtx); ok {
 		return res, nil
 	}
 
@@ -721,7 +723,7 @@ func (c *Coordinator) ExecuteForWatch(pipeline string, tr TimeRange, watch *stor
 	// write doesn't move user-perceived latency. The next fire
 	// takes the hot path either way.
 	c.refreshLoweredSync(watch, cust.Name)
-	return c.execute(pipeline, tr, cust.Name, "", alertCtx, nil)
+	return c.execute(ctx, pipeline, tr, cust.Name, "", alertCtx, nil)
 }
 
 // executeLowered tries the hot-path dispatch using watch.LoweredPlan.
@@ -730,7 +732,7 @@ func (c *Coordinator) ExecuteForWatch(pipeline string, tr TimeRange, watch *stor
 // drift, marshalling error, or follow/alert features the lowered
 // path doesn't handle yet. The caller surfaces those as a slow-path
 // re-plan + opportunistic re-lowering.
-func (c *Coordinator) executeLowered(watch *store.CronWatch, tr TimeRange, alertCtx *AlertContext) (*ExecuteResult, bool) {
+func (c *Coordinator) executeLowered(ctx context.Context, watch *store.CronWatch, tr TimeRange, alertCtx *AlertContext) (*ExecuteResult, bool) {
 	if len(watch.LoweredPlan) == 0 {
 		return nil, false
 	}
@@ -775,9 +777,9 @@ func (c *Coordinator) executeLowered(watch *store.CronWatch, tr TimeRange, alert
 	if !tr.Start.IsZero() && tr.Start.Before(cap) {
 		tr.Start = cap
 	}
-	ctx := planner.ResolveCtx{Customer: lp.Customer, Start: tr.Start, End: tr.End}
-	args := lp.Hydrate(ctx)
-	res, err := c.dispatchLoweredWithTier(lp, args, tr, tier, alertCtx)
+	resolveCtx := planner.ResolveCtx{Customer: lp.Customer, Start: tr.Start, End: tr.End}
+	args := lp.Hydrate(resolveCtx)
+	res, err := c.dispatchLoweredWithTier(ctx, lp, args, tr, tier, alertCtx)
 	if err != nil {
 		log.Printf("watch %d: lowered dispatch failed: %v — falling back to inline Plan", watch.ID, err)
 		return nil, false
@@ -793,7 +795,7 @@ func (c *Coordinator) executeLowered(watch *store.CronWatch, tr TimeRange, alert
 // "namespace deleted by owner", which renders the query empty rather
 // than wrong), and skips the per-fire TierForOrg lookup (tier
 // is baked into LoweredPlan at save time).
-func (c *Coordinator) dispatchLoweredWithTier(lp *planner.LoweredPlan, args []any, tr TimeRange, tier store.Tier, alertCtx *AlertContext) (*ExecuteResult, error) {
+func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.LoweredPlan, args []any, tr TimeRange, tier store.Tier, alertCtx *AlertContext) (*ExecuteResult, error) {
 	nsID := c.resolveNamespaceID("", lp.Customer, lp.SourceNamespace)
 	descs := c.Provisioner.ShardDescriptorsFor(tr, nsID, lp.SourceService, tier)
 	if len(descs) == 0 {
@@ -807,7 +809,7 @@ func (c *Coordinator) dispatchLoweredWithTier(lp *planner.LoweredPlan, args []an
 			argStrs[i] = fmt.Sprintf("%v", a)
 		}
 	}
-	stream, err := c.Pool.ExecuteQuery(&pb.ExecuteQueryRequest{
+	stream, err := c.Pool.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
 		Sql:      lp.DirectShardSQL,
 		Args:     argStrs,
 		Shards:   descs,
@@ -815,6 +817,15 @@ func (c *Coordinator) dispatchLoweredWithTier(lp *planner.LoweredPlan, args []an
 		MergeKey: lp.MergeKey,
 		Limit:    int32(lp.Limit),
 		KeepLast: lp.TailMode,
+		// TraceTag is never set here: this path only ever serves a
+		// cron/watch/dashboard fire (dispatchLoweredWithTier is only
+		// reachable via ExecuteForWatch's lowered-plan hot path), never
+		// an interactive shell query. Splicing a synthetic summary row
+		// and ANSI codes into a saved trace watch's output would corrupt
+		// AlertCommand's stdin-line evaluation and pollute dashboard
+		// tiles — see docs/plans/request-tracing.md's "interactively-
+		// triggered queries only" note.
+		TraceTag: false,
 	})
 	if err != nil {
 		return nil, err
@@ -924,7 +935,7 @@ func (r watchBinResolver) Source(name string) (string, string, bool) {
 // terminal-aggregate, the whole body is needed before the alert can
 // fire), runAlertStage post-processes, and a buffered ExecuteResult
 // is returned.
-func (c *Coordinator) execute(pipeline string, tr TimeRange, customer, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
+func (c *Coordinator) execute(ctx context.Context, pipeline string, tr TimeRange, customer, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
 	// cwd (index 0 of the courier's stack) lets preflight resolve relative
 	// glob patterns against the client's directory before fan-out.
 	cwd := ""
@@ -938,7 +949,7 @@ func (c *Coordinator) execute(pipeline string, tr TimeRange, customer, userID st
 
 	queryPart, alertArgs := planner.SplitAlertStage(expanded)
 
-	res, err := c.runLocal(queryPart, tr, customer, custID, userID, alertCtx, dirStack)
+	res, err := c.runLocal(ctx, queryPart, tr, customer, custID, userID, alertCtx, dirStack)
 	if err != nil {
 		return nil, err
 	}
@@ -988,7 +999,7 @@ func (c *Coordinator) execute(pipeline string, tr TimeRange, customer, userID st
 // here — the rewriter strips redirects from the snapshot before
 // re-rendering, lifting them onto the CallbackCommand so warp's
 // own redirect machinery handles the FS write.
-func (c *Coordinator) runQuery(pipeline, cwd string, tr TimeRange, customer string, custID string, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
+func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr TimeRange, customer string, custID string, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
 	// Clamp tr to the customer's tier retention BEFORE planning so the
 	// SQL's ts predicates and the shard-selection in MatchingEntries
 	// agree on the same start. Without the clamp here, a boundary-
@@ -1006,7 +1017,7 @@ func (c *Coordinator) runQuery(pipeline, cwd string, tr TimeRange, customer stri
 		return nil, fmt.Errorf("plan: %w", err)
 	}
 
-	execResult, err := c.executeQuery(plan, tr, customer, custID, userID, alertCtx)
+	execResult, err := c.executeQuery(ctx, plan, tr, customer, custID, userID, alertCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -1095,7 +1106,7 @@ func (c *Coordinator) preflight(pipeline, customer, cwd string) (string, string,
 // scopes tenant-backed features (ShellFS, weft.*). alertCtx is forwarded
 // to runLocal so interior queries dispatched by the interceptor inherit
 // the caller's alert identity; may be nil.
-func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, customer string, custID string, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
+func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan, tr TimeRange, customer string, custID string, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
 	if plan.ShardSQL == "" {
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
@@ -1149,8 +1160,13 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 	for i, d := range descs {
 		shardIDs[i] = d.ShardId
 	}
-	logQuery("query: namespace=%s service=%s shards=%v compute=%v sql=%s",
-		plan.SourceNamespace, plan.SourceService, shardIDs, plan.ComputeStages, directSQL)
+	if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
+		logQuery("query: namespace=%s service=%s shards=%v compute=%v sql=%s trace_id=%s",
+			plan.SourceNamespace, plan.SourceService, shardIDs, plan.ComputeStages, directSQL, traceID)
+	} else {
+		logQuery("query: namespace=%s service=%s shards=%v compute=%v sql=%s",
+			plan.SourceNamespace, plan.SourceService, shardIDs, plan.ComputeStages, directSQL)
+	}
 
 	argStrs := make([]string, len(plan.Args))
 	for i, a := range plan.Args {
@@ -1165,7 +1181,7 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 			logQuery("query: non-string arg at position %d (%T %v) — bound via fmt", i, a, a)
 		}
 	}
-	stream, err := c.Pool.ExecuteQuery(&pb.ExecuteQueryRequest{
+	stream, err := c.Pool.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
 		Sql:      directSQL,
 		Args:     argStrs,
 		Shards:   descs,
@@ -1175,6 +1191,14 @@ func (c *Coordinator) executeQuery(plan *planner.QueryPlan, tr TimeRange, custom
 		// tail-mode: shard SQL wraps to ASC; compute must retain
 		// last-N instead of stopping after first-N emitted.
 		KeepLast: plan.TailMode,
+		// Summary line + colored [namespace/service] badges only for a
+		// bare, interactively-typed `trace <id>` — never for a saved
+		// cron/watch/dashboard fire (alertCtx != nil) reached through
+		// this same shared path, and never once the user has piped into
+		// their own awk/jq/grep stage (they already have $SERVICE/
+		// $NAMESPACE available there — see planner.go's includeMetaVars
+		// forcing for trace).
+		TraceTag: alertCtx == nil && plan.SourceCmd == "trace" && len(plan.ComputeStages) == 0,
 	})
 	if err != nil {
 		logQuery("query: compute error: %v", err)
@@ -1244,7 +1268,7 @@ const scriptExecutionTimeout = 30 * time.Second
 // Notices are populated on the returned ExecuteResult AFTER warp
 // finishes, BEFORE the pipe writers close — so consumers reading
 // Notices past stream EOF see the populated value.
-func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, custID string, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
+func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRange, customer string, custID string, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
 	ast, err := bash.Parse(pipeline)
 	if err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
@@ -1326,9 +1350,9 @@ func (c *Coordinator) runLocal(pipeline string, tr TimeRange, customer string, c
 		witFn := &WitFuncs{Store: c.Store, OrgID: custID, UserID: userID}
 		RegisterWitCommands(interp, witFn)
 
-		rewriteQueryPipelines(ast, c, tr, customer, custID, userID, alertCtx)
+		rewriteQueryPipelines(ctx, ast, c, tr, customer, custID, userID, alertCtx)
 		interp.BinScriptTransform = func(_ string, script *bash.Script) {
-			rewriteQueryPipelines(script, c, tr, customer, custID, userID, alertCtx)
+			rewriteQueryPipelines(ctx, script, c, tr, customer, custID, userID, alertCtx)
 		}
 	}
 

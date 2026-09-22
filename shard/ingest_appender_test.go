@@ -83,6 +83,42 @@ func TestIngest_AppenderRoundTrip(t *testing.T) {
 	}
 }
 
+// TestIngest_TraceIDRoundTrip exercises all three trace_id write points
+// together (createTableSQL, migrationSteps, logColumns/AppendRow) — a row
+// carrying TraceId must be both queryable by exact match and absent (NULL,
+// not erroring) when unset.
+func TestIngest_TraceIDRoundTrip(t *testing.T) {
+	ds, err := NewDuckDBShard("trace", "")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer ds.Close()
+
+	rows := []*pb.LogRow{
+		{Raw: "with trace", Customer: "kevlar", TsUnixNs: 1, TraceId: "trace-abc-123"},
+		{Raw: "without trace", Customer: "kevlar", TsUnixNs: 2},
+	}
+	if err := ds.Ingest(rows, nil); err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+
+	var raw string
+	if err := ds.db.QueryRow(`SELECT raw FROM logs WHERE trace_id = ?`, "trace-abc-123").Scan(&raw); err != nil {
+		t.Fatalf("query by trace_id: %v", err)
+	}
+	if raw != "with trace" {
+		t.Fatalf("trace_id lookup: want %q, got %q", "with trace", raw)
+	}
+
+	var untraced string
+	if err := ds.db.QueryRow(`SELECT trace_id FROM logs WHERE raw = 'without trace'`).Scan(&untraced); err != nil {
+		t.Fatalf("query untraced row: %v", err)
+	}
+	if untraced != "" {
+		t.Fatalf("untraced row: want empty trace_id, got %q", untraced)
+	}
+}
+
 // TestIngest_EmptyPayloadDefaults asserts a row with no PayloadJson lands as an
 // empty JSON object (parity with the old INSERT path's "{}" default), so
 // downstream JSON extracts don't fault on NULL.

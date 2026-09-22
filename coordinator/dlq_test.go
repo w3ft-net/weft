@@ -67,9 +67,9 @@ func testDLQ() (*DLQ, *recordingPutter) {
 // coverage below.
 type dlqFailingShard struct{ id string }
 
-func (s *dlqFailingShard) ID() string                                    { return s.id }
-func (s *dlqFailingShard) Query(string, ...any) ([]*pb.ResultRow, error) { return nil, nil }
-func (s *dlqFailingShard) QueryToSink(string, []any, shard.RowSink)      {}
+func (s *dlqFailingShard) ID() string                                                { return s.id }
+func (s *dlqFailingShard) Query(string, ...any) ([]*pb.ResultRow, error)             { return nil, nil }
+func (s *dlqFailingShard) QueryToSink(context.Context, string, []any, shard.RowSink) {}
 func (s *dlqFailingShard) Archive(_ context.Context, _ string) (string, []shard.CustomerStat, error) {
 	return "", nil, nil
 }

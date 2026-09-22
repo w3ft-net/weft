@@ -26,6 +26,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
+	weftsdk "github.com/w3ft-net/weft-go"
+
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/coordinator/onboarding"
 	ingsyslog "github.com/graybeardcorp/weft/ingest/syslog"
@@ -157,6 +159,9 @@ func (s *Server) coordCtx(r *http.Request) context.Context {
 	}
 	if org := r.Header.Get("X-Active-Org"); org != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, "x-active-org", org)
+	}
+	if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
+		ctx = metadata.AppendToOutgoingContext(ctx, "weft-trace-id", traceID)
 	}
 	return ctx
 }
@@ -383,7 +388,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/account/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/ingestion-status", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 
-	return AccessLog(CORSMiddleware(s.baseURL, mux))
+	return weftsdk.TraceMiddleware(AccessLog(CORSMiddleware(s.baseURL, mux)))
 }
 
 // --- Auth handlers ---

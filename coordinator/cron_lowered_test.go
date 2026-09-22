@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -44,7 +45,7 @@ func TestExecuteForWatch_LoweredHotPath(t *testing.T) {
 	}
 
 	// Run with lowered.
-	loweredRes, err := c.ExecuteForWatch(pipeline, fullRange, w)
+	loweredRes, err := c.ExecuteForWatch(context.Background(), pipeline, fullRange, w)
 	if err != nil {
 		t.Fatalf("ExecuteForWatch (lowered): %v", err)
 	}
@@ -52,7 +53,7 @@ func TestExecuteForWatch_LoweredHotPath(t *testing.T) {
 
 	// Run again with LoweredPlan removed — forces the fallback path.
 	w.LoweredPlan = nil
-	freshRes, err := c.ExecuteForWatch(pipeline, fullRange, w)
+	freshRes, err := c.ExecuteForWatch(context.Background(), pipeline, fullRange, w)
 	if err != nil {
 		t.Fatalf("ExecuteForWatch (fresh): %v", err)
 	}
@@ -114,7 +115,7 @@ func TestExecuteForWatch_LoweredVersionMismatch(t *testing.T) {
 	// stale plan, the SQL would still work (version doesn't affect SQL
 	// shape today) but the test exists to fail loudly if anyone
 	// removes the version check.
-	res, err := c.ExecuteForWatch(pipeline, fullRange, w)
+	res, err := c.ExecuteForWatch(context.Background(), pipeline, fullRange, w)
 	if err != nil {
 		t.Fatalf("ExecuteForWatch: %v", err)
 	}

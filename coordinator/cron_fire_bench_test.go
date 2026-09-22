@@ -19,11 +19,11 @@ import (
 // dispatch.
 type noopPool struct{}
 
-func (noopPool) ExecuteQuery(_ *pb.ExecuteQueryRequest) (compute.LineStream, error) {
+func (noopPool) ExecuteQuery(_ context.Context, _ *pb.ExecuteQueryRequest) (compute.LineStream, error) {
 	return compute.NewSliceLineStream(nil, nil), nil
 }
 
-func (noopPool) NewJob(_ []string, _ int, _ string, _ int, _ bool) compute.ComputeJob {
+func (noopPool) NewJob(_ []string, _ int, _ string, _ int, _ bool, _ bool) compute.ComputeJob {
 	return nil
 }
 
@@ -136,7 +136,7 @@ func BenchmarkExecuteForWatch(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				res, err := c.ExecuteForWatch(tc.pipeline, tr, w)
+				res, err := c.ExecuteForWatch(context.Background(), tc.pipeline, tr, w)
 				if err != nil {
 					b.Fatalf("ExecuteForWatch: %v", err)
 				}

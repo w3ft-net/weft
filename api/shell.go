@@ -171,6 +171,20 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ctx.Done():
+			// A tail -f stream is designed to stay open indefinitely —
+			// it only ever ends via client cancellation (this branch),
+			// never a server-side io.EOF. Without this, a follow-mode
+			// lesson (e.g. the tour's shell-tail-f) could never advance:
+			// the client is already gone, so there's no SSE event to
+			// write, but the server-side session state still updates,
+			// and the next action/`/me` poll picks up the advanced
+			// step — same fallback path every other lesson already
+			// relies on. Treats "the user stopped a live tail" as
+			// completion, same permissive bar (syntactic match + clean
+			// execution) every other lesson already uses; there's no
+			// way to distinguish a deliberate stop from an accidental
+			// disconnect, which is an accepted tradeoff here.
+			s.maybeAdvanceShellLesson(session, req.Pipeline)
 			return
 
 		case <-ticker.C:

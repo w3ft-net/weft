@@ -252,6 +252,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 		TimestampFormat string             `json:"timestamp_format"`
 		LevelField      string             `json:"level_field"`
 		LevelPattern    string             `json:"level_pattern"`
+		TraceIDField    string             `json:"trace_id_field"`
 		ExpandKeys      []ingest.ExpandKey `json:"expand_keys"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -268,6 +269,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 		TimestampFormat: req.TimestampFormat,
 		LevelField:      req.LevelField,
 		LevelPattern:    req.LevelPattern,
+		TraceIDField:    req.TraceIDField,
 		ExpandKeys:      req.ExpandKeys,
 	}
 
@@ -447,6 +449,7 @@ func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Reques
 		TimestampFormat string             `json:"timestamp_format"`
 		LevelField      string             `json:"level_field"`
 		LevelPattern    string             `json:"level_pattern"`
+		TraceIDField    string             `json:"trace_id_field"`
 		ExpandKeys      []ingest.ExpandKey `json:"expand_keys"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -471,6 +474,7 @@ func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Reques
 		TimestampFormat: req.TimestampFormat,
 		LevelField:      req.LevelField,
 		LevelPattern:    req.LevelPattern,
+		TraceIDField:    req.TraceIDField,
 		ExpandKeys:      req.ExpandKeys,
 	}
 	schemaYAML, err := schema.ToYAML()

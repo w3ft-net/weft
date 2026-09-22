@@ -245,8 +245,14 @@ func (sh *Shard) configureSM() {
 	// query-routability is handled in MatchingEntries, and inheriting
 	// READ_ONLY's HeartbeatStale edge here would wrongly SUSPEND a shard
 	// whose instance we're intentionally terminating.
+	//
+	// AdminDelete is the operator escape hatch for an archive that can never
+	// complete — the host and volume are gone and no export was recorded, so
+	// ArchiveComplete (which needs a parquet path) is unreachable. See
+	// Provisioner.ForceRemove for the guard against orphaning live resources.
 	sh.sm.Configure(StateArchiving).
-		Permit(TriggerArchiveComplete, StateArchived)
+		Permit(TriggerArchiveComplete, StateArchived).
+		Permit(TriggerAdminDelete, StateGone)
 
 	sh.sm.Configure(StateSuspended).
 		OnEntry(sh.onEnterSuspended).

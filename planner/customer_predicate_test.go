@@ -53,6 +53,23 @@ func TestPlanCustomer_Injection(t *testing.T) {
 	}
 }
 
+// TestPlanJQMetaVar_Escaping is the regression guard for a pre-existing
+// bug in jqComparisonToSQL's meta-variable branch: unlike the adjacent
+// regular-JSON-field branch three lines below it, the meta-var branch
+// interpolated its literal directly with no escapeSQLString call. A
+// literal containing a single quote (e.g. a customer-supplied trace ID
+// copy-pasted from an upstream system) would land in the SQL unescaped.
+// This test would fail before the jq.go:118 fix and pass after.
+func TestPlanJQMetaVar_Escaping(t *testing.T) {
+	plan, err := Plan(`cat vimgym.log | jq 'select(._trace_id == "trace-o'"'"'brien-123")'`, "kevlar", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if !strings.Contains(plan.ShardSQL, "trace_id = 'trace-o''brien-123'") {
+		t.Errorf("expected escaped (doubled) quote in meta-var SQL, got: %s", plan.ShardSQL)
+	}
+}
+
 // TestPlanTimeBounds_BothSet emits ts >= and ts <= predicates with
 // CAST(? AS TIMESTAMP) placeholders when both bounds are non-zero. The
 // timestamp value is shipped as a string arg over the wire so we don't

@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func TestCoordinator_PlannerInjectsTimeRange(t *testing.T) {
 	}, "vimgym")
 
 	// Query spanning both windows.
-	result, err := c.Execute("cat vimgym.log", TimeRange{Start: t0, End: t2}, "kevlar", "")
+	result, err := c.Execute(context.Background(), "cat vimgym.log", TimeRange{Start: t0, End: t2}, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}

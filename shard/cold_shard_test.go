@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -130,7 +131,7 @@ func TestColdShard_QueryToSink(t *testing.T) {
 	defer cs.Close()
 
 	sink := &testSink{}
-	cs.QueryToSink("SELECT raw, ts FROM logs WHERE customer = 'kevlar'", nil, sink)
+	cs.QueryToSink(context.Background(), "SELECT raw, ts FROM logs WHERE customer = 'kevlar'", nil, sink)
 
 	if !sink.sentinelReceived {
 		t.Error("expected sentinel")

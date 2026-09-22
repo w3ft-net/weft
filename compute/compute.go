@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"context"
 	"log"
 	"sync"
 
@@ -24,12 +25,20 @@ type ComputeMessage struct {
 // "stop after N emitted"; true switches to tail-style "retain last N,
 // emit at EOF" — required when shards return ASC after the tail
 // subquery flip (see planner/sql.go::Query.Wrap).
+//
+// traceTag, when true, switches the job's zero-stage output from plain
+// streaming to buffer-then-summarize-then-tag: every row is prefixed
+// with a colored [namespace/service] badge and a synthetic summary line
+// precedes the batch. Only ever set true for a bare, interactive
+// `trace <id>` — see coordinator.go's executeQuery.
 type ComputePool interface {
-	NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool) ComputeJob
+	NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool, traceTag bool) ComputeJob
 
 	// ExecuteQuery fans out SQL to the given shards, merges results,
-	// applies pipeline stages, and streams output lines back.
-	ExecuteQuery(req *pb.ExecuteQueryRequest) (LineStream, error)
+	// applies pipeline stages, and streams output lines back. ctx
+	// carries the ambient trace ID (if any) across the gRPC boundary
+	// to a remote compute worker/shard — see weftsdk.ContextWithTraceID.
+	ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) (LineStream, error)
 }
 
 // ResolveShardFunc materializes a shard.Shard handle for a descriptor.
@@ -44,7 +53,7 @@ type ResolveShardFunc func(d *pb.ShardDescriptor) (shard.Shard, error)
 // connection caching and rebind invalidation; FanOut is intentionally
 // dumb about lifecycle — it does not Close the handle on return,
 // because the pool's cache may keep it for the next query.
-func FanOutToShards(req *pb.ExecuteQueryRequest, job ComputeJob, resolve ResolveShardFunc) {
+func FanOutToShards(ctx context.Context, req *pb.ExecuteQueryRequest, job ComputeJob, resolve ResolveShardFunc) {
 	args := make([]any, len(req.Args))
 	for i, a := range req.Args {
 		args[i] = a
@@ -60,7 +69,7 @@ func FanOutToShards(req *pb.ExecuteQueryRequest, job ComputeJob, resolve Resolve
 				job.SendSentinel(d.ShardId)
 				return
 			}
-			sh.QueryToSink(req.Sql, args, job)
+			sh.QueryToSink(ctx, req.Sql, args, job)
 		}(desc)
 	}
 	wg.Wait()

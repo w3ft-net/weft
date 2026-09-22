@@ -15,7 +15,7 @@ import (
 // column instead of null.
 func TestLocalComputeJob_JqMetaVarOutputRead(t *testing.T) {
 	pool := &LocalComputePool{}
-	job := pool.NewJob([]string{`jq -r '._host'`}, 1, "ts", 0, false)
+	job := pool.NewJob([]string{`jq -r '._host'`}, 1, "ts", 0, false, false)
 	job.SendRow(&pb.ResultRow{
 		TsUnixNs: 1000,
 		Raw:      `{"pct":42}`,
@@ -39,7 +39,7 @@ func TestLocalComputeJob_JqMetaVarOutputRead(t *testing.T) {
 // standalone jq.
 func TestLocalComputeJob_JqMetaVarOutputRead_NoMetaVarsIsNull(t *testing.T) {
 	pool := &LocalComputePool{}
-	job := pool.NewJob([]string{`jq -r '._host'`}, 1, "ts", 0, false)
+	job := pool.NewJob([]string{`jq -r '._host'`}, 1, "ts", 0, false, false)
 	job.SendRow(&pb.ResultRow{TsUnixNs: 1000, Raw: `{"pct":42}`}, "a")
 	job.SendSentinel("a")
 

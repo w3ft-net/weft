@@ -10,6 +10,9 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+
+	weftsdk "github.com/w3ft-net/weft-go"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
@@ -40,8 +43,15 @@ func (p *GRPCComputePool) Close() error {
 	return p.conn.Close()
 }
 
-func (p *GRPCComputePool) ExecuteQuery(req *pb.ExecuteQueryRequest) (LineStream, error) {
-	stream, err := p.client.ExecuteQueryStream(context.Background(), req)
+func (p *GRPCComputePool) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) (LineStream, error) {
+	// Trace courier (out to compute): context.Value doesn't cross a gRPC
+	// call on its own — ferry the ambient trace ID as `weft-trace-id`
+	// metadata, mirroring the api→coordinator boundary (coordCtx in
+	// api/handlers.go) and the pre-existing weft-dirstack pattern.
+	if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
+		ctx = metadata.AppendToOutgoingContext(ctx, "weft-trace-id", traceID)
+	}
+	stream, err := p.client.ExecuteQueryStream(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("execute query stream: %w", err)
 	}
@@ -77,7 +87,11 @@ func (s *grpcLineStream) Next(_ context.Context) (Line, bool, error) {
 
 func (s *grpcLineStream) Close() error { return nil }
 
-func (p *GRPCComputePool) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool) ComputeJob {
+func (p *GRPCComputePool) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool, _ bool) ComputeJob {
+	// CreateJobRequest carries no trace_tag — this manual job-lifecycle
+	// RPC isn't used by the trace display path (see ExecuteQuery, which
+	// forwards the whole request, TraceTag included, to
+	// ExecuteQueryStream instead).
 	resp, err := p.client.CreateJob(context.Background(), &pb.CreateJobRequest{
 		Stages:     stages,
 		ShardCount: int32(shardCount),

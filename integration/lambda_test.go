@@ -96,7 +96,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 
 	// QueryToSink.
 	sink := &testSink{}
-	cs.QueryToSink("SELECT raw, ts FROM logs WHERE customer = 'kevlar'", nil, sink)
+	cs.QueryToSink(context.Background(), "SELECT raw, ts FROM logs WHERE customer = 'kevlar'", nil, sink)
 	if !sink.sentinelReceived {
 		t.Error("expected sentinel")
 	}
@@ -150,7 +150,7 @@ func TestComputeLifecycle_LambdaColdShardReachable(t *testing.T) {
 	// Configure the pool exactly as cmd/compute/main.go does.
 	pool := &compute.LocalComputePool{AWSRegion: compute.ResolveRegion()}
 
-	stream, err := pool.ExecuteQuery(&pb.ExecuteQueryRequest{
+	stream, err := pool.ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{
 		Sql: "SELECT raw, ts FROM logs WHERE customer = 'kevlar'",
 		Shards: []*pb.ShardDescriptor{{
 			ShardId:     "cold-compute-lifecycle",

@@ -28,7 +28,7 @@ import (
 // conditionals, functions — anywhere warp.Walk reaches — so query
 // pipelines anywhere in the tree are substituted regardless of
 // nesting depth.
-func rewriteQueryPipelines(script *bash.Script, c *Coordinator, tr TimeRange, customer string, custID string, userID string, alertCtx *AlertContext) {
+func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordinator, tr TimeRange, customer string, custID string, userID string, alertCtx *AlertContext) {
 	if script == nil {
 		return
 	}
@@ -111,14 +111,17 @@ func rewriteQueryPipelines(script *bash.Script, c *Coordinator, tr TimeRange, cu
 					// against the live cwd — read here, not at rewrite time,
 					// so an in-line `cd /log/x && tail y.log` sees the post-cd
 					// directory. The dirstack was seeded from the courier.
-					result, err := c.runQuery(src, interp.DirStack().Cwd(), tr, customer, custID, userID, alertCtx)
+					result, err := c.runQuery(ctx, src, interp.DirStack().Cwd(), tr, customer, custID, userID, alertCtx)
 					if err != nil {
 						fmt.Fprintf(stderr, "query: %v\n", err)
 						return 1
 					}
-					ctx := context.Background()
+					// Draining an already-produced in-memory stream, not a
+					// network call — deliberately not the propagated ctx
+					// above (renamed to avoid the two meanings colliding).
+					drainCtx := context.Background()
 					for {
-						line, ok, err := result.Stream.Next(ctx)
+						line, ok, err := result.Stream.Next(drainCtx)
 						if err != nil {
 							fmt.Fprintf(stderr, "query: %v\n", err)
 							return 1
@@ -187,6 +190,10 @@ func isQueryShape(pipe *bash.Pipeline) bool {
 				return false
 			}
 		}
+		return true
+	case "trace":
+		// trace's argument is an opaque correlation ID, not a filesystem
+		// path — skip the IsLocalFSPath check entirely.
 		return true
 	}
 	// A leading command other than cat/head/tail that's still handed an

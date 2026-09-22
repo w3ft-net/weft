@@ -9,7 +9,7 @@ import (
 
 func TestZeroStageJob_LineNumIsSequential(t *testing.T) {
 	pool := &LocalComputePool{}
-	job := pool.NewJob(nil, 2, "ts", 0, false)
+	job := pool.NewJob(nil, 2, "ts", 0, false, false)
 
 	go func() {
 		job.SendRow(&pb.ResultRow{LineNum: 100, Raw: "first", TsUnixNs: 1000}, "a")

@@ -10,7 +10,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+
+	weftsdk "github.com/w3ft-net/weft-go"
 
 	"github.com/graybeardcorp/weft/auth"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -161,12 +164,12 @@ func (s *GRPCShard) queryOnce(sql string, args []any) ([]*pb.ResultRow, error) {
 // and a first-Recv-with-no-rows-yet are safe to retry because the
 // sink hasn't been written to. Once any row reaches the sink, a
 // retry would double-send, so a mid-stream failure logs and bails.
-func (s *GRPCShard) QueryToSink(sql string, args []any, sink RowSink) {
+func (s *GRPCShard) QueryToSink(ctx context.Context, sql string, args []any, sink RowSink) {
 	defer sink.SendSentinel(s.id)
 
 	var lastErr error
 	for attempt := 0; attempt < maxRetryAttempts; attempt++ {
-		rowsSent, err := s.queryToSinkOnce(sql, args, sink)
+		rowsSent, err := s.queryToSinkOnce(ctx, sql, args, sink)
 		if err == nil {
 			return
 		}
@@ -192,8 +195,14 @@ func (s *GRPCShard) QueryToSink(sql string, args []any, sink RowSink) {
 // Returns (rowsSent, err); err==nil means EOF after streaming
 // completed. A non-nil err with rowsSent==0 is safe to retry; with
 // rowsSent>0 it isn't.
-func (s *GRPCShard) queryToSinkOnce(sql string, args []any, sink RowSink) (int, error) {
-	stream, err := s.client.Query(context.Background(), &pb.QueryRequest{Sql: sql, Args: anyArgsToStrings(args)})
+func (s *GRPCShard) queryToSinkOnce(ctx context.Context, sql string, args []any, sink RowSink) (int, error) {
+	// Trace courier (out to shard): mirrors the api→coordinator and
+	// coordinator→compute boundaries — context.Value doesn't cross a
+	// gRPC call on its own.
+	if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
+		ctx = metadata.AppendToOutgoingContext(ctx, "weft-trace-id", traceID)
+	}
+	stream, err := s.client.Query(ctx, &pb.QueryRequest{Sql: sql, Args: anyArgsToStrings(args)})
 	if err != nil {
 		return 0, err
 	}

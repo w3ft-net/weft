@@ -9,7 +9,7 @@ import (
 
 func TestLocalComputeJob_LimitTruncatesMergedStream(t *testing.T) {
 	pool := &LocalComputePool{}
-	job := pool.NewJob([]string{"wc -l"}, 2, "ts", 3, false)
+	job := pool.NewJob([]string{"wc -l"}, 2, "ts", 3, false, false)
 	for _, r := range []*pb.ResultRow{
 		{TsUnixNs: 1000, Raw: "one"},
 		{TsUnixNs: 3000, Raw: "three"},
@@ -43,7 +43,7 @@ func TestLocalComputeJob_LimitTruncatesMergedStream(t *testing.T) {
 
 func TestLocalComputeJob_LimitZeroIsUnlimited(t *testing.T) {
 	pool := &LocalComputePool{}
-	job := pool.NewJob([]string{"wc -l"}, 2, "ts", 0, false)
+	job := pool.NewJob([]string{"wc -l"}, 2, "ts", 0, false, false)
 	for _, r := range []*pb.ResultRow{
 		{TsUnixNs: 1000, Raw: "one"},
 		{TsUnixNs: 3000, Raw: "three"},

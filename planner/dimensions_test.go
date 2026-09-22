@@ -30,6 +30,7 @@ func TestPushdown_NewDimensions(t *testing.T) {
 		{"awk pod", `cat vimgym.log | awk 'POD == "api-7f9b"'`, "pod = 'api-7f9b'"},
 		{"awk container", `cat vimgym.log | awk 'CONTAINER == "main"'`, "container = 'main'"},
 		{"awk node", `cat vimgym.log | awk 'NODE == "shard-abc"'`, "node = 'shard-abc'"},
+		{"awk trace_id", `cat vimgym.log | awk 'TRACE_ID == "trace-abc-123"'`, "trace_id = 'trace-abc-123'"},
 
 		// SERVICE alias for app — should rewrite to the same column.
 		{"awk service alias", `cat vimgym.log | awk 'SERVICE == "api"'`, "namespace = ?"},
@@ -46,6 +47,7 @@ func TestPushdown_NewDimensions(t *testing.T) {
 		{"jq pod", `cat vimgym.log | jq 'select(._pod == "api-7f9b")'`, "pod = 'api-7f9b'"},
 		{"jq container", `cat vimgym.log | jq 'select(._container == "main")'`, "container = 'main'"},
 		{"jq node", `cat vimgym.log | jq 'select(._node == "shard-abc")'`, "node = 'shard-abc'"},
+		{"jq trace_id", `cat vimgym.log | jq 'select(._trace_id == "trace-abc-123")'`, "trace_id = 'trace-abc-123'"},
 
 		// jq aliases.
 		{"jq service alias", `cat vimgym.log | jq 'select(._service == "api")'`, "namespace = ?"},

@@ -8,6 +8,9 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc/metadata"
+
+	weftsdk "github.com/w3ft-net/weft-go"
 
 	"github.com/graybeardcorp/weft/compute"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -33,7 +36,11 @@ func NewServer(pool compute.ComputePool) *Server {
 
 func (s *Server) CreateJob(_ context.Context, req *pb.CreateJobRequest) (*pb.CreateJobResponse, error) {
 	jobID := uuid.New().String()
-	job := s.pool.NewJob(req.Stages, int(req.ShardCount), req.MergeKey, int(req.Limit), req.KeepLast)
+	// CreateJobRequest has no trace_tag field — the manual create-job/
+	// send-rows lifecycle this RPC drives is never used by the trace
+	// display path (that goes through ExecuteQuery/ExecuteQueryStream,
+	// which do carry TraceTag). Always false here.
+	job := s.pool.NewJob(req.Stages, int(req.ShardCount), req.MergeKey, int(req.Limit), req.KeepLast, false)
 
 	s.mu.Lock()
 	s.jobs[jobID] = job
@@ -117,8 +124,25 @@ func (s *Server) GetResult(_ context.Context, req *pb.GetResultRequest) (*pb.Get
 	return &pb.GetResultResponse{Text: text}, nil
 }
 
+// ctxWithTraceIDFromMetadata reads the `weft-trace-id` gRPC metadata a
+// delegated caller (the coordinator) ferried across this boundary —
+// context.Value doesn't cross a gRPC call on its own, so this
+// re-establishes it as an ambient ctx value for everything downstream
+// (FanOutToShards, shard.QueryToSink) that reads it via
+// weftsdk.TraceIDFromContext. Mirrors coordinator/service/server.go's
+// identical read for the api→coordinator boundary.
+func ctxWithTraceIDFromMetadata(ctx context.Context) context.Context {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if ids := md.Get("weft-trace-id"); len(ids) > 0 {
+			return weftsdk.ContextWithTraceID(ctx, ids[0])
+		}
+	}
+	return ctx
+}
+
 func (s *Server) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) (*pb.ExecuteQueryResponse, error) {
-	stream, err := s.pool.ExecuteQuery(req)
+	ctx = ctxWithTraceIDFromMetadata(ctx)
+	stream, err := s.pool.ExecuteQuery(ctx, req)
 	if err != nil {
 		return &pb.ExecuteQueryResponse{Error: err.Error()}, nil
 	}
@@ -130,14 +154,15 @@ func (s *Server) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) 
 }
 
 func (s *Server) ExecuteQueryStream(req *pb.ExecuteQueryRequest, out pb.WeftCompute_ExecuteQueryStreamServer) error {
-	stream, err := s.pool.ExecuteQuery(req)
+	ctx := ctxWithTraceIDFromMetadata(out.Context())
+	stream, err := s.pool.ExecuteQuery(ctx, req)
 	if err != nil {
 		return out.Send(&pb.ExecuteQueryStreamResponse{Error: err.Error()})
 	}
 	const batchSize = 500
 	var batch []string
 	for {
-		line, ok, err := stream.Next(out.Context())
+		line, ok, err := stream.Next(ctx)
 		if err != nil {
 			return out.Send(&pb.ExecuteQueryStreamResponse{Error: err.Error()})
 		}

@@ -226,7 +226,7 @@ func runShardStats(ctx context.Context, wc *weftsdk.Client, srv *shardsvc.Server
 				rec["volume_used_pct"] = float64(total-avail) / float64(total) * 100
 			}
 		}
-		_ = wc.Send("shard/stats", rec) // best-effort; transport logs its own errors
+		_ = wc.Send(ctx, "shard/stats", rec) // best-effort; transport logs its own errors
 	}
 	emit() // immediate first sample so a dashboard has a value before the first tick
 	t := time.NewTicker(interval)

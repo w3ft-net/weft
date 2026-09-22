@@ -1,12 +1,14 @@
 package coordinator
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 
-	"github.com/graybeardcorp/weft/planner"
 	"time"
+
+	"github.com/graybeardcorp/weft/planner"
 )
 
 // TestPlan_StrictRejectsNonLogPipeline drives the planner-side
@@ -38,7 +40,7 @@ func TestPlan_StrictRejectsNonLogPipeline(t *testing.T) {
 func TestExecute_PlainBashPipelineRunsLocally(t *testing.T) {
 	c := setupTestCoordinator(t)
 
-	res, err := c.Execute("echo 42", fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), "echo 42", fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
