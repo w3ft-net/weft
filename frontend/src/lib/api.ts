@@ -666,18 +666,15 @@ export function onPendingSourcesChanged(handler: () => void): () => void {
   return () => pendingSourcesBus.removeEventListener('change', handler)
 }
 
-// ─── Configured sources (CloudWatch + weftd) ─────────────────────
+// ─── Configured sources (CloudWatch push + weftd) ────────────────
 
 export interface SourceInfo {
   namespace: string
   service: string
-  source_type: 'cloudwatch' | 'weftd'
+  source_type: 'weftd' | 'kinesis' | 'direct'
   log_group: string
   region: string
-  poll_interval: string
   enabled: boolean
-  last_poll_at: string
-  aws_account_id?: string
 }
 
 export async function listSources(namespace?: string): Promise<SourceInfo[]> {
@@ -726,45 +723,24 @@ export function deleteSource(namespace: string, service: string): Promise<void> 
   )
 }
 
-// ─── CloudWatch source add flow ──────────────────────────────────
+// ─── Kinesis (Firehose push) source add flow ─────────────────────
+//
+// Unlike CloudWatch poll mode, there's no "pull sample" step: the source
+// is created pending, and CloudWatchAdapter accumulates a real sample
+// from the customer's own Firehose deliveries once their CloudFormation
+// stack is live. It then shows up in getPendingSources() like any other
+// pending source, and finishes through the existing
+// <PendingSourceConfigure> flow.
 
-export interface CloudWatchCreds {
+export interface AddKinesisSourceRequest {
   namespace: string
   service: string
-  aws_account_id: string
-  role_arn: string
-  external_id: string
   log_group: string
   region: string
 }
 
-export interface CloudWatchSampleResponse {
-  lines: string[]
-  detection: SourceDetection
-}
-
-export async function sampleCloudWatchSource(
-  creds: Omit<CloudWatchCreds, 'service'>,
-): Promise<CloudWatchSampleResponse> {
-  return apiFetch<CloudWatchSampleResponse>('/api/sources/cloudwatch/sample', {
-    method: 'POST',
-    body: JSON.stringify(creds),
-  })
-}
-
-export interface AddCloudWatchSourceRequest extends CloudWatchCreds {
-  poll_interval: string
-  format: string
-  timestamp_field: string
-  timestamp_format: string
-  level_field: string
-  level_pattern: string
-  trace_id_field: string
-  expand_keys?: { key: string; type: string }[]
-}
-
-export function addCloudWatchSource(req: AddCloudWatchSourceRequest): Promise<void> {
-  return apiFetch('/api/sources/cloudwatch', {
+export function addKinesisSource(req: AddKinesisSourceRequest): Promise<void> {
+  return apiFetch('/api/sources/kinesis', {
     method: 'POST',
     body: JSON.stringify(req),
   })

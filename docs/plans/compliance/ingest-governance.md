@@ -16,7 +16,7 @@ Both problems are standard "ingest pipeline" territory in every mature log SaaS 
 A per-customer, ordered list of rules evaluated inside the drain goroutine immediately before the row is handed to an INGESTING shard's `Ingest` RPC. First matching rule wins; `drop` short-circuits subsequent evaluation on that row.
 
 ```
-Ingest entry point (weftd gRPC / CloudWatch poller / HTTP ingest)
+Ingest entry point (weftd gRPC / HTTP-pushed adapters — CloudWatch, Heroku, syslog)
   → RingBuffer
     → StartDrain goroutine
       → for each row:

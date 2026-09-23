@@ -1,10 +1,10 @@
 # Plan: HTTP ingest — generic JSON + vendor adapters
 
-A single coordinator-side ingest pipeline (auth → schema bootstrap → drain → shard) shared by an adapter-pluggable family of HTTP endpoints. Three adapters at v1: a generic JSON/ndjson endpoint for SDKs and `curl`, a Heroku log-drain endpoint for customers running on the Heroku platform, and (already specified in [`cloudwatch-lambda-forwarder.md`](cloudwatch-lambda-forwarder.md)) a CloudWatch subscription-filter endpoint.
+A single coordinator-side ingest pipeline (auth → schema bootstrap → drain → shard) shared by an adapter-pluggable family of HTTP endpoints. Three adapters at v1: a generic JSON/ndjson endpoint for SDKs and `curl`, a Heroku log-drain endpoint for customers running on the Heroku platform, and (already specified in [`cloudwatch-kinesis-subscription.md`](cloudwatch-kinesis-subscription.md)) a CloudWatch subscription-filter endpoint.
 
 ## Why
 
-Today the write path has two shapes — weftd's gRPC `IngestStream` for hosts the customer controls, and the CloudWatch poller for AWS-resident logs. Anything else has no supported route in: a Django app on Heroku, a Cloudflare Worker, a Raspberry Pi, an OpenTelemetry collector, a webhook source. A Heroku-hosted customer in particular *cannot* run weftd (dynos are ephemeral and can't sidecar) and isn't on AWS, so neither existing path applies.
+Today the write path has two shapes — weftd's gRPC `IngestStream` for hosts the customer controls, and HTTP-pushed adapters (Heroku log drains, CloudWatch via a customer-owned Kinesis Firehose stream — `cloudwatch-kinesis-subscription.md`) for everything else that can make an outbound HTTPS call. A Heroku-hosted customer in particular *cannot* run weftd (dynos are ephemeral and can't sidecar), so this plan's generic JSON/ndjson adapter fills the remaining gap: a Cloudflare Worker, a Raspberry Pi, an OpenTelemetry collector, a webhook source — anything that isn't already Heroku or CloudWatch-shaped.
 
 A generic `POST /api/ingest` covers the curl/SDK/collector cases. A Heroku-specific endpoint at the same plumbing covers the Heroku case. The plumbing is identical; only the wire-format parser and the auth shape differ. Building both simultaneously costs little extra over building either alone, because the shared 80% is what matters.
 
@@ -171,16 +171,16 @@ The HerokuAdapter detects lines matching `\bsource=\S+\b.*?\b(sample|measure|cou
 
 Heroku Postgres / Redis / etc. add-ons emit similarly-structured metric lines and route to their own `<app>/<addon>` sub-paths, which the procid-based split already produces.
 
-## CloudWatchAdapter — see [`cloudwatch-lambda-forwarder.md`](cloudwatch-lambda-forwarder.md)
+## CloudWatchAdapter — see [`cloudwatch-kinesis-subscription.md`](cloudwatch-kinesis-subscription.md)
 
-That plan defines the wire format (CloudWatch Logs subscription event JSON), the customer-deployed Lambda, and the Bearer-token auth shape. Once this plan lands, the existing CloudWatch handler is recast as `CloudWatchAdapter` with no behaviour change — it slots into the same `Adapter` interface and shares the same auth/rate-limit/metering plumbing the other two adapters use.
+That plan defines the wire format (Firehose's HTTP endpoint delivery envelope), the customer-deployed Firehose delivery stream (CloudFormation, no custom compute), and the access-key auth shape. Once this plan lands, the existing CloudWatch handler is recast as `CloudWatchAdapter` with no behaviour change — it slots into the same `Adapter` interface and shares the same auth/rate-limit/metering plumbing the other two adapters use.
 
 ## Components to build
 
 1. **`api/adapter.go`** — Adapter interface + shared `Server.IngestHandler` factory. Token lookup, namespace prefixing, gRPC `IngestStream` forwarding. Thin glue.
 2. **`api/adapter_json.go`** — JSONAdapter: ndjson + JSON shapes, gzip/deflate, Bearer header auth.
 3. **`api/adapter_heroku.go`** — HerokuAdapter: RFC5424 octet-counted framing parser, per-frame extraction, l2met line detection, procid sub-app split, URL-path token auth. **Landed.**
-4. **`api/adapter_cloudwatch.go`** — recast of the existing CloudWatch path (currently in coordinator) into the Adapter interface. The existing CloudWatch poller stays where it is; this is the push-based forwarder shape from `cloudwatch-lambda-forwarder.md`.
+4. **`api/adapter_cloudwatch.go`** — the push-based Firehose shape from `cloudwatch-kinesis-subscription.md`. **Landed** (envelope decode, `logGroup → service` resolution via `store.FindLogGroupByAWSName`, Firehose's `{requestId, timestamp}` response envelope via the new `Adapter`/`ResponseWriter` shape below). Remaining: the CloudFormation template, rate-limit rule, and docs/UI — see the plan's "Components to build" for the rest.
 5. **Schema bootstrap reuse** — happens coordinator-side, on the gRPC `IngestStream` path the api forwards into. No api-side work; `SeenApps.Add` already triggers `Provisioner.OnboardApp` on first sight per (customer, app).
 6. **Rate limit + bytes-in metering** — `api.RouteLimit` already supports per-route token-bucket limiting; add a `LimitIngest` rule keyed on the URL-path token. Bytes-in count feeds `usage_hourly` on the existing path the gRPC stream already updates — same row, same code, doesn't matter which adapter delivered the bytes. Over-limit returns 429 with `Retry-After`.
 7. **`docs/manual/http-ingest.md`** — generic curl recipe, gzip/ndjson examples, per-tier QPS caps.

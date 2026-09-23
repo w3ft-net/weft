@@ -138,8 +138,6 @@ single-digit % despite being in core:
   instance-to-shard mapping) into testable helpers.
 - `internal/email` — SES wrapper. Mostly untestable; mark for the
   exclusion list rather than chase coverage we'll never get.
-- `coordinator/poller` — 8.1% currently. Small package; should be
-  easy if we make the polling loop testable via dependency injection.
 
 ### 6. API package surgical work (~3d)
 
@@ -185,8 +183,7 @@ they get moved to the integration suite or have their setup fixed.
 4. **`scripts/cleanup-truncate-tests.md`** — checklist of files to
    touch when migrating off `TruncateTestTables`. Not a script — a
    tracker for the multi-PR cleanup. Closes with removing `-p 1`.
-5. **Test additions** for `api/*`, `coordinator/poller`,
-   `coordinator/discovery` — see §5/6.
+5. **Test additions** for `api/*`, `coordinator/discovery` — see §5/6.
 6. **`internal/email`** — add to `EXCLUDE_PREFIXES` in
    `scripts/coverage-report.sh` (alongside `proto/weftpb`). Document
    why in the script comment.

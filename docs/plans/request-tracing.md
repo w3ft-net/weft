@@ -67,9 +67,11 @@ single query.
    (`timestamp_field`, `level_field`, `field_separator`,
    `json_start_field` — see `docs/plans/weftd-client-side-parsing.md`).
    This plan adds a fifth: `trace_id_field`. Because `ingest.Parser` is
-   already shared across all three ingest paths that use it — weftd, the
-   CloudWatch poller, and the offline `weft ingest` CLI — all three gain
-   trace correlation simultaneously, with no path-specific work. Zero
+   already shared across every ingest path that uses it — weftd
+   (client-side), the offline `weft ingest` CLI, and every HTTP-pushed
+   adapter (CloudWatch, Heroku, Render) via the shared `enrichRows`/
+   `enrichRow` step (`api/adapter.go`) — all of them gain trace
+   correlation simultaneously, with no path-specific work. Zero
    code change for any customer who already embeds *some* correlation ID
    in their logs by any existing means (an API gateway request ID, a
    framework-generated request UUID, anything).

@@ -99,17 +99,12 @@ export default function ConfiguredSourcesList({
           >
             <div className="csl-row-main">
               <span className="csl-service">{s.service}</span>
-              <span className="csl-badge csl-badge-{s.source_type}">{s.source_type}</span>
-              {s.source_type === 'cloudwatch' && (
+              <span className={`csl-badge csl-badge-${s.source_type}`}>{s.source_type}</span>
+              {s.source_type === 'kinesis' && (
                 <span className="csl-meta">
-                  {s.log_group} · {s.region} · every {s.poll_interval}
+                  {s.log_group} · {s.region} · pushed via Firehose
                 </span>
               )}
-              <span className="csl-meta csl-meta-dim">
-                {s.last_poll_at
-                  ? `last poll ${new Date(s.last_poll_at).toLocaleString()}`
-                  : s.source_type === 'cloudwatch' ? 'never polled' : ''}
-              </span>
             </div>
             <div className="csl-row-actions">
               <button

@@ -599,33 +599,32 @@ var WeftCompute_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	WeftCoordinator_Execute_FullMethodName                = "/weft.WeftCoordinator/Execute"
-	WeftCoordinator_ListServices_FullMethodName           = "/weft.WeftCoordinator/ListServices"
-	WeftCoordinator_SampleCloudWatchSource_FullMethodName = "/weft.WeftCoordinator/SampleCloudWatchSource"
-	WeftCoordinator_AddSource_FullMethodName              = "/weft.WeftCoordinator/AddSource"
-	WeftCoordinator_ListSources_FullMethodName            = "/weft.WeftCoordinator/ListSources"
-	WeftCoordinator_RemoveSource_FullMethodName           = "/weft.WeftCoordinator/RemoveSource"
-	WeftCoordinator_Authenticate_FullMethodName           = "/weft.WeftCoordinator/Authenticate"
-	WeftCoordinator_IngestStream_FullMethodName           = "/weft.WeftCoordinator/IngestStream"
-	WeftCoordinator_CreateToken_FullMethodName            = "/weft.WeftCoordinator/CreateToken"
-	WeftCoordinator_ListTokens_FullMethodName             = "/weft.WeftCoordinator/ListTokens"
-	WeftCoordinator_RevokeToken_FullMethodName            = "/weft.WeftCoordinator/RevokeToken"
-	WeftCoordinator_GetUsage_FullMethodName               = "/weft.WeftCoordinator/GetUsage"
-	WeftCoordinator_SaveFunction_FullMethodName           = "/weft.WeftCoordinator/SaveFunction"
-	WeftCoordinator_GetFunction_FullMethodName            = "/weft.WeftCoordinator/GetFunction"
-	WeftCoordinator_ListFunctions_FullMethodName          = "/weft.WeftCoordinator/ListFunctions"
-	WeftCoordinator_DeleteFunction_FullMethodName         = "/weft.WeftCoordinator/DeleteFunction"
-	WeftCoordinator_SaveWatch_FullMethodName              = "/weft.WeftCoordinator/SaveWatch"
-	WeftCoordinator_GetWatch_FullMethodName               = "/weft.WeftCoordinator/GetWatch"
-	WeftCoordinator_ListWatches_FullMethodName            = "/weft.WeftCoordinator/ListWatches"
-	WeftCoordinator_DeleteWatch_FullMethodName            = "/weft.WeftCoordinator/DeleteWatch"
-	WeftCoordinator_GetWatchResults_FullMethodName        = "/weft.WeftCoordinator/GetWatchResults"
-	WeftCoordinator_SubmitSample_FullMethodName           = "/weft.WeftCoordinator/SubmitSample"
-	WeftCoordinator_GetSourceStatus_FullMethodName        = "/weft.WeftCoordinator/GetSourceStatus"
-	WeftCoordinator_Heartbeat_FullMethodName              = "/weft.WeftCoordinator/Heartbeat"
-	WeftCoordinator_ListShards_FullMethodName             = "/weft.WeftCoordinator/ListShards"
-	WeftCoordinator_ForceArchiveShard_FullMethodName      = "/weft.WeftCoordinator/ForceArchiveShard"
-	WeftCoordinator_DeleteArchivedShard_FullMethodName    = "/weft.WeftCoordinator/DeleteArchivedShard"
+	WeftCoordinator_Execute_FullMethodName             = "/weft.WeftCoordinator/Execute"
+	WeftCoordinator_ListServices_FullMethodName        = "/weft.WeftCoordinator/ListServices"
+	WeftCoordinator_AddSource_FullMethodName           = "/weft.WeftCoordinator/AddSource"
+	WeftCoordinator_ListSources_FullMethodName         = "/weft.WeftCoordinator/ListSources"
+	WeftCoordinator_RemoveSource_FullMethodName        = "/weft.WeftCoordinator/RemoveSource"
+	WeftCoordinator_Authenticate_FullMethodName        = "/weft.WeftCoordinator/Authenticate"
+	WeftCoordinator_IngestStream_FullMethodName        = "/weft.WeftCoordinator/IngestStream"
+	WeftCoordinator_CreateToken_FullMethodName         = "/weft.WeftCoordinator/CreateToken"
+	WeftCoordinator_ListTokens_FullMethodName          = "/weft.WeftCoordinator/ListTokens"
+	WeftCoordinator_RevokeToken_FullMethodName         = "/weft.WeftCoordinator/RevokeToken"
+	WeftCoordinator_GetUsage_FullMethodName            = "/weft.WeftCoordinator/GetUsage"
+	WeftCoordinator_SaveFunction_FullMethodName        = "/weft.WeftCoordinator/SaveFunction"
+	WeftCoordinator_GetFunction_FullMethodName         = "/weft.WeftCoordinator/GetFunction"
+	WeftCoordinator_ListFunctions_FullMethodName       = "/weft.WeftCoordinator/ListFunctions"
+	WeftCoordinator_DeleteFunction_FullMethodName      = "/weft.WeftCoordinator/DeleteFunction"
+	WeftCoordinator_SaveWatch_FullMethodName           = "/weft.WeftCoordinator/SaveWatch"
+	WeftCoordinator_GetWatch_FullMethodName            = "/weft.WeftCoordinator/GetWatch"
+	WeftCoordinator_ListWatches_FullMethodName         = "/weft.WeftCoordinator/ListWatches"
+	WeftCoordinator_DeleteWatch_FullMethodName         = "/weft.WeftCoordinator/DeleteWatch"
+	WeftCoordinator_GetWatchResults_FullMethodName     = "/weft.WeftCoordinator/GetWatchResults"
+	WeftCoordinator_SubmitSample_FullMethodName        = "/weft.WeftCoordinator/SubmitSample"
+	WeftCoordinator_GetSourceStatus_FullMethodName     = "/weft.WeftCoordinator/GetSourceStatus"
+	WeftCoordinator_Heartbeat_FullMethodName           = "/weft.WeftCoordinator/Heartbeat"
+	WeftCoordinator_ListShards_FullMethodName          = "/weft.WeftCoordinator/ListShards"
+	WeftCoordinator_ForceArchiveShard_FullMethodName   = "/weft.WeftCoordinator/ForceArchiveShard"
+	WeftCoordinator_DeleteArchivedShard_FullMethodName = "/weft.WeftCoordinator/DeleteArchivedShard"
 )
 
 // WeftCoordinatorClient is the client API for WeftCoordinator service.
@@ -639,11 +638,14 @@ type WeftCoordinatorClient interface {
 	Execute(ctx context.Context, in *CoordinatorExecuteRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CoordinatorExecuteResponse], error)
 	// ListServices returns the available service names (pseudofiles).
 	ListServices(ctx context.Context, in *ListServicesRequest, opts ...grpc.CallOption) (*ListServicesResponse, error)
-	// SampleCloudWatchSource assumes the customer's cross-account role and
-	// pulls a handful of recent events so the dashboard can show a preview
-	// and run schema detection before the user commits to a source.
-	SampleCloudWatchSource(ctx context.Context, in *SampleCloudWatchSourceRequest, opts ...grpc.CallOption) (*SampleCloudWatchSourceResponse, error)
-	// AddSource registers a CloudWatch log source for ingestion.
+	// AddSource registers a push-based CloudWatch log source (customer's
+	// own Kinesis Data Firehose stream posting to
+	// POST /api/ingest/cloudwatch — see
+	// docs/plans/cloudwatch-kinesis-subscription.md). No cross-account
+	// role and no schema up front: it registers the AWS-log-group→service
+	// mapping CloudWatchAdapter routes against, StatusPending, finished
+	// later via `weft source configure` once a sample has accumulated
+	// from real traffic.
 	AddSource(ctx context.Context, in *AddSourceRequest, opts ...grpc.CallOption) (*AddSourceResponse, error)
 	// ListSources returns all configured log sources.
 	ListSources(ctx context.Context, in *ListSourcesRequest, opts ...grpc.CallOption) (*ListSourcesResponse, error)
@@ -716,16 +718,6 @@ func (c *weftCoordinatorClient) ListServices(ctx context.Context, in *ListServic
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListServicesResponse)
 	err := c.cc.Invoke(ctx, WeftCoordinator_ListServices_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *weftCoordinatorClient) SampleCloudWatchSource(ctx context.Context, in *SampleCloudWatchSourceRequest, opts ...grpc.CallOption) (*SampleCloudWatchSourceResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SampleCloudWatchSourceResponse)
-	err := c.cc.Invoke(ctx, WeftCoordinator_SampleCloudWatchSource_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -986,11 +978,14 @@ type WeftCoordinatorServer interface {
 	Execute(*CoordinatorExecuteRequest, grpc.ServerStreamingServer[CoordinatorExecuteResponse]) error
 	// ListServices returns the available service names (pseudofiles).
 	ListServices(context.Context, *ListServicesRequest) (*ListServicesResponse, error)
-	// SampleCloudWatchSource assumes the customer's cross-account role and
-	// pulls a handful of recent events so the dashboard can show a preview
-	// and run schema detection before the user commits to a source.
-	SampleCloudWatchSource(context.Context, *SampleCloudWatchSourceRequest) (*SampleCloudWatchSourceResponse, error)
-	// AddSource registers a CloudWatch log source for ingestion.
+	// AddSource registers a push-based CloudWatch log source (customer's
+	// own Kinesis Data Firehose stream posting to
+	// POST /api/ingest/cloudwatch — see
+	// docs/plans/cloudwatch-kinesis-subscription.md). No cross-account
+	// role and no schema up front: it registers the AWS-log-group→service
+	// mapping CloudWatchAdapter routes against, StatusPending, finished
+	// later via `weft source configure` once a sample has accumulated
+	// from real traffic.
 	AddSource(context.Context, *AddSourceRequest) (*AddSourceResponse, error)
 	// ListSources returns all configured log sources.
 	ListSources(context.Context, *ListSourcesRequest) (*ListSourcesResponse, error)
@@ -1045,9 +1040,6 @@ func (UnimplementedWeftCoordinatorServer) Execute(*CoordinatorExecuteRequest, gr
 }
 func (UnimplementedWeftCoordinatorServer) ListServices(context.Context, *ListServicesRequest) (*ListServicesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListServices not implemented")
-}
-func (UnimplementedWeftCoordinatorServer) SampleCloudWatchSource(context.Context, *SampleCloudWatchSourceRequest) (*SampleCloudWatchSourceResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method SampleCloudWatchSource not implemented")
 }
 func (UnimplementedWeftCoordinatorServer) AddSource(context.Context, *AddSourceRequest) (*AddSourceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AddSource not implemented")
@@ -1167,24 +1159,6 @@ func _WeftCoordinator_ListServices_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WeftCoordinatorServer).ListServices(ctx, req.(*ListServicesRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _WeftCoordinator_SampleCloudWatchSource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SampleCloudWatchSourceRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WeftCoordinatorServer).SampleCloudWatchSource(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WeftCoordinator_SampleCloudWatchSource_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WeftCoordinatorServer).SampleCloudWatchSource(ctx, req.(*SampleCloudWatchSourceRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1620,10 +1594,6 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListServices",
 			Handler:    _WeftCoordinator_ListServices_Handler,
-		},
-		{
-			MethodName: "SampleCloudWatchSource",
-			Handler:    _WeftCoordinator_SampleCloudWatchSource_Handler,
 		},
 		{
 			MethodName: "AddSource",

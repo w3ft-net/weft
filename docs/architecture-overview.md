@@ -22,18 +22,25 @@ Plus **lambda-shard** for cold-storage Parquet queries via Lambda.
 ### Write path
 
 ```
-weftd (file/journal tail) ──gRPC IngestStream──▶ Coordinator RingBuffer (1M rows)
-                                                       │
-CloudWatch ──Kinesis──▶ Coordinator Poller ────────────┘
-                                                       │
-                                                  StartDrain() goroutine
-                                                  groups by app, routes to
-                                                  INGESTING shard
-                                                       │
-                                                       ▼
-                                                 Shard (DuckDB)
-                                                 INSERT INTO logs
+weftd (file/journal tail) ─────────────gRPC IngestStream──▶ Coordinator RingBuffer (1M rows)
+                                                                  │
+CloudWatch ──subscription filter──▶ customer's Firehose          │
+  ──HTTP──▶ api's CloudWatchAdapter ──gRPC IngestStream──────────┤
+Heroku/syslog ──HTTP/TCP──▶ api's adapters ──gRPC IngestStream───┘
+                                                                  │
+                                                             StartDrain() goroutine
+                                                             groups by app, routes to
+                                                             INGESTING shard
+                                                                  │
+                                                                  ▼
+                                                            Shard (DuckDB)
+                                                            INSERT INTO logs
 ```
+
+CloudWatch, Heroku, and syslog sources all push over HTTP to the `api`
+process, which shares one `enrichRows`/`IngestHandler` pipeline before
+forwarding to the coordinator over the same `IngestStream` gRPC weftd uses
+— see [ingestion-cloudwatch.md](ingestion-cloudwatch.md).
 
 ### Read path
 
@@ -189,7 +196,7 @@ is driven exclusively by the wall-clock `WindowEnd` check in
 
 ## Source Schemas
 
-Every log source has a schema (`ingest.Schema`) that tells the parser how to interpret raw lines. Schemas are stored as YAML in the `log_groups` table (`SchemaYAML` column) for CloudWatch sources and applied inline by `weftd` for agent-ingested sources.
+Every log source has a schema (`ingest.Schema`) that tells the parser how to interpret raw lines, stored as YAML in the `log_groups` table (`SchemaYAML` column). `weftd` applies it client-side before sending rows; every HTTP/syslog-pushed source (CloudWatch, Heroku, Render) is parsed server-side by a shared `enrichRows`/`enrichRow` step (`api/adapter.go`) that looks the schema up cache-aside.
 
 ### Schema fields
 

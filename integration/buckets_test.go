@@ -150,13 +150,10 @@ func TestBuckets_OnboardServicePropagates(t *testing.T) {
 	defer conn.Close()
 
 	_, err = client.AddSource(context.Background(), &pb.AddSourceRequest{
-		Namespace:    "kevlar",
-		AwsAccountId: "000000000000",
-		RoleArn:      "arn:aws:iam::000000000000:role/integration-test",
-		Region:       "us-east-1",
-		Service:      appName,
-		LogGroup:     "/integration-test/bucket-onboarding",
-		PollInterval: "30s",
+		Namespace: "kevlar",
+		Region:    "us-east-1",
+		Service:   appName,
+		LogGroup:  "/integration-test/bucket-onboarding",
 	})
 	if err != nil {
 		t.Fatalf("AddSource: %v", err)

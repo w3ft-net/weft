@@ -305,10 +305,9 @@ func (s *Server) Handler() http.Handler {
 	auth.Handle("POST /api/sources/{namespace}/{app}/resample", protected(s.handleResampleSource))
 	auth.HandleFunc("GET /api/sources/{namespace}/{app}/schema", s.handleSourceSchema)
 
-	// CloudWatch source management (dashboard-authenticated).
+	// Source management (dashboard-authenticated).
 	auth.HandleFunc("GET /api/sources", s.handleListSources)
-	auth.Handle("POST /api/sources/cloudwatch/sample", protected(s.handleSampleCloudWatchSource))
-	auth.Handle("POST /api/sources/cloudwatch", protected(s.handleAddCloudWatchSource))
+	auth.Handle("POST /api/sources/kinesis", protected(s.handleAddKinesisSource))
 	auth.Handle("DELETE /api/sources/{namespace}/{app}", protected(s.handleDeleteSource))
 
 	// Public routes (no auth).
@@ -322,6 +321,15 @@ func (s *Server) Handler() http.Handler {
 	// the RFC5424 octet-counted body, and forwards to the coordinator
 	// via the existing IngestStream gRPC. See docs/plans/http-ingest.md.
 	mux.Handle("POST /api/ingest/heroku/{token}", s.IngestHandler(HerokuAdapter{}))
+
+	// CloudWatch push ingestion: a customer-owned Kinesis Data Firehose
+	// delivery stream (CloudFormation-deployed, see the plan) posts
+	// here after a CloudWatch Logs subscription filter feeds it. Auth
+	// is the X-Amz-Firehose-Access-Key header (the existing wft_...
+	// namespace token); response shape is Firehose-specific (200 +
+	// {requestId, timestamp}), handled by CloudWatchAdapter.WriteSuccess.
+	// See docs/plans/cloudwatch-kinesis-subscription.md.
+	mux.Handle("POST /api/ingest/cloudwatch", s.IngestHandler(CloudWatchAdapter{}))
 
 	// Admin routes (superadmin only).
 	adminMux := http.NewServeMux()

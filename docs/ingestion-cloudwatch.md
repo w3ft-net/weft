@@ -2,101 +2,133 @@
 
 ## Overview
 
-CloudWatch is the default, zero-install ingestion path. Customers connect their AWS accounts by granting IAM roles, and weft ingests logs via CloudWatch subscription filters. This is the higher-latency option (seconds to low minutes depending on CloudWatch batching); sub-second tailing requires [weftd](ingestion-weftd.md).
+CloudWatch logs are ingested by push, not by polling: the customer deploys a
+small CloudFormation stack in their own AWS account that forwards a
+CloudWatch Logs subscription filter through a Kinesis Data Firehose
+delivery stream to an HTTPS endpoint we host. No agent, no Lambda binary of
+ours to build or release, and no cross-account IAM role into weft's
+account — everything that runs lives in the customer's account, fully
+AWS-managed. Sub-second tailing for hosts you control still goes through
+[weftd](ingestion-weftd.md); this path is for CloudWatch-only sources
+(Lambda, ECS, anything already writing to CloudWatch Logs).
+
+An earlier design polled `FilterLogEvents` on an interval from a
+coordinator-assumed cross-account role. That path has been fully retired —
+see "Design history" below — except for one narrow reuse: `FilterLogEvents`
+still backs one-time shard-failure backfill (below), which is a bounded
+historical pull rather than live ingestion.
+
+## Architecture
+
+```
+Customer's CloudWatch Log Group (per app, any region)
+   │  put-subscription-filter (destination = Firehose delivery stream ARN,
+   │  role = IAM role in the customer's account granting CW Logs firehose:PutRecord)
+   ▼
+Kinesis Data Firehose delivery stream (customer's account — AWS-managed, no code)
+   │  destination: generic HTTP endpoint → https://api.w3ft.net/api/ingest/cloudwatch
+   │  auth: X-Amz-Firehose-Access-Key header = the customer's wft_... namespace token
+   │  on repeated failure: S3 backup bucket (customer's account, 30-day expiry)
+   ▼
+api process: POST /api/ingest/cloudwatch → CloudWatchAdapter (api/adapter_cloudwatch.go)
+   — decodes Firehose's request envelope, resolves each event's AWS log
+     group name to a weft service, builds a raw LogRow per event
+   ▼
+Shared ingest pipeline (api/adapter.go's IngestHandler — the same path
+Heroku log drains use):
+   enrichRows() — cache-aside schema lookup fills Level/Fields/TraceId/
+     PayloadJson per row once the source has a configured schema
+   → gRPC IngestStream to the coordinator → shard.Ingest
+```
+
+Everything above the `api process` line is a CloudFormation stack the
+customer deploys once per AWS account/region they want to connect — see
+"Customer onboarding" below.
 
 ## Data model
 
-```
-Customer (tenant — Kevlar, Acme Corp, ...)
-  └── AWS Account (one IAM role per account)
-       └── App (vimgym, callbox, ...)
-            └── Log Group (/aws/vimgym/web, ...)
-```
+A `log_groups` row (`store.LogGroup`) is the unit of configuration: one row
+per (namespace, service), scoped to a customer via its namespace.
+`source_type = kinesis` identifies a CloudWatch-push source (as opposed to
+`weftd` or `direct`). The row starts `StatusPending` (no schema yet) and
+becomes `StatusConfigured` once a human approves a schema — see "Onboarding
+a source" below.
 
-`$CUSTOMER` is never exposed as a user-facing meta-variable. The coordinator applies it automatically to every query based on the authenticated user's token. It is a row-level security boundary.
+`$CUSTOMER` is never exposed as a user-facing meta-variable. The coordinator
+applies it automatically to every query based on the authenticated user's
+token — a row-level security boundary, not something the ingestion path
+needs to think about.
 
 ## Customer onboarding
 
-Per AWS account the customer wants to connect:
+Per AWS account/region the customer wants to connect:
 
-1. Customer creates an IAM role in their account with:
-   - Trust policy allowing our ingestion account to assume it (with external ID)
-   - Permission: `logs:CreateSubscriptionFilter`, `logs:DeleteSubscriptionFilter`, `logs:DescribeLogGroups`, `logs:DescribeSubscriptionFilters`
-2. Customer provides us with:
-   - Role ARN
-   - Log group → app name mapping (e.g., `/aws/vimgym/web` → `vimgym`)
-3. We provide a CloudFormation template / Terraform module to automate steps 1-2
+1. Register the source: `weft source add --namespace NS --service NAME --log-group /aws/lambda/my-function` (or the dashboard's "+ Add Kinesis source"). This only records the AWS log-group→service mapping — `StatusPending`, no schema yet.
+2. Deploy the CloudFormation template (`deploy/weft-cloudwatch-firehose/template.yaml`) against the account/region owning that log group, passing the namespace's agent token and the log group name(s). This provisions:
+   - The Firehose delivery stream, pointed at `https://api.w3ft.net/api/ingest/cloudwatch`
+   - The IAM role CloudWatch Logs assumes to call `firehose:PutRecord`/`PutRecordBatch`
+   - The subscription filter linking the log group to the stream
+   - A required S3 bucket for failed-delivery backup (30-day expiry)
+3. Once real events start flowing, `CloudWatchAdapter` accumulates a sample from live traffic (there's nothing to poll on demand — the first sample comes from whatever the log group actually emits).
+4. `weft source configure <namespace>/<service>` (or the dashboard's pending-source panel) reviews the accumulated sample and approves a schema, same wizard weftd onboarding uses. The source is now `StatusConfigured` and ingesting.
 
-Multiple AWS accounts per customer are expected (landing zone pattern). Each account has its own role. A single customer may have accounts in different regions.
+Multiple AWS accounts/regions per customer are expected — one CloudFormation stack per account/region, each with its own subscription filters.
 
-## Subscription filter setup
+## Wire format
 
-Once a customer grants access, weft assumes their role and creates a CloudWatch subscription filter on each configured log group. The subscription filter ships logs to our Kinesis stream (one stream per customer, or a shared stream with customer ID tagging — TBD).
+Firehose's HTTP endpoint delivery POSTs `{requestId, timestamp, records:
+[{data: "<base64>"}]}`, up to 10,000 records or 64 MiB per request. Each
+record's decoded `data` is the standard CloudWatch Logs subscription
+envelope — `CONTROL_MESSAGE` records (Firehose's periodic connectivity
+check) are skipped; `DATA_MESSAGE` records carry `logEvents[]`, one row per
+event. Records arrive gzip-compressed by default (matching a classic
+subscription filter's Kinesis/Lambda destination) — `CloudWatchAdapter`
+tries gunzip first, falling back to raw bytes if the magic header doesn't
+match. The handler responds `200` with `{requestId, timestamp}` echoing the
+request; any other status is treated as retriable and Firehose retries with
+backoff, same `requestId` across attempts.
 
-Flow:
-```
-Customer's CloudWatch Log Group
-    → Subscription Filter
-    → Kinesis Data Stream (in our account)
-    → Weft ingest consumer
-    → Active shard (DuckDB INSERT)
-```
+## Schema detection and enrichment
 
-### Why subscription filters over polling
+A source's schema (`ingest.Schema`, stored as `log_groups.schema_yaml`) is
+approved once, during onboarding, via the same interactive detection wizard
+weftd sources use — see [ingestion-weftd.md](ingestion-weftd.md) for the
+detection heuristics (JSON coverage, key analysis, prefix pattern, field
+separator).
 
-- Lower friction for the customer — set up once, logs flow automatically
-- Lower latency than polling (CloudWatch batches and pushes vs. us pulling on an interval)
-- No rate limit management or pagination logic on our side
-- CloudWatch handles retry/backpressure to Kinesis natively
-
-## Ingest consumer
-
-A consumer process reads from the Kinesis stream and writes to the active shard:
-
-1. Read batch of records from Kinesis
-2. For each record: decompress (CloudWatch subscription data is gzipped), parse the CloudWatch Logs envelope
-3. Apply schema detection rules to extract structured fields
-4. Write batch to the active shard's gRPC ingest endpoint
-5. Checkpoint the Kinesis shard iterator
-
-The ingest consumer runs on the coordinator (Phase 1) or as a separate process (later).
-
-## Schema detection
-
-One-time setup per source, done during onboarding: `weft source add` (CloudWatch) and `weft source configure` (weftd) both pull a live sample and run the interactive detection wizard.
-
-Samples ~500 lines from the app's log group and auto-detects:
-
-1. **JSON coverage** — what % of lines are valid JSON? Mixed prefix+JSON?
-2. **Key analysis** — consistent keys across lines → proposed as columns
-3. **Prefix pattern** — positional structure before JSON payload (timestamp, level, service)
-4. **Field separator** — whitespace, comma, tab
-
-User confirms the detected schema. Stored server-side as `log_groups.schema_yaml`; the CloudWatch poller reads it in-process and weftd agents pull it via `/api/agent/source-status`.
-
-```yaml
-customer: kevlar
-app: vimgym
-format: prefix_json
-prefix_fields: [ts, level, service]
-prefix_separator: " "
-json_field: payload
-expand_keys:
-  - user_id: TEXT
-  - action: TEXT
-  - duration_ms: INTEGER
-  - success: BOOLEAN
-```
-
-Shard nodes use this schema to parse incoming log lines into the DuckDB table structure (see [shard-lifecycle.md](shard-lifecycle.md) for the table schema).
+Once configured, `CloudWatchAdapter` doesn't parse rows itself — a shared
+`enrichRows` step (`api/adapter.go`) sits between "adapter built a raw
+`LogRow`" and "row goes out over `IngestStream`," doing a cache-aside
+lookup (Valkey, falling back to Postgres) of the service's configured
+schema and filling `Level`/`Fields`/`TraceId`/`PayloadJson`. The same
+enrichment step backs Heroku log drains and Render/syslog ingestion — one
+parsing path for every push-based ingest source, not something specific to
+CloudWatch.
 
 ## Re-ingestion on shard failure
 
-When a shard fails and a replacement launches (see [shard-lifecycle.md](shard-lifecycle.md)), the replacement re-ingests its time window from CloudWatch. This uses `FilterLogEvents` with the shard's start/end timestamps — polling is fine here since it's a one-time backfill, not live ingest.
+When a shard fails and a replacement launches (see
+[shard-lifecycle.md](shard-lifecycle.md)), the replacement re-ingests its
+time window using `FilterLogEvents` against the source's configured AWS
+credentials for that window — a one-time bounded historical pull, not live
+ingestion, so polling is the right tool here even though it isn't used for
+live tailing.
+
+## Design history
+
+An earlier design (`docs/plans/cloudwatch-lambda-forwarder.md`, retired)
+proposed a customer-deployed Lambda function we'd build and version. Before
+that shipped, a poll-based path (`coordinator/poller`, since removed)
+assumed a cross-account IAM role and called `FilterLogEvents` on an
+interval — the only CloudWatch ingestion actually running in production for
+a while. Both were retired in favor of the Firehose push design above once
+research confirmed it matches how other log SaaS vendors (New Relic, Sumo
+Logic, Splunk) handle third-party CloudWatch ingestion: subscription filter
+→ Firehose → generic HTTP endpoint, with zero custom compute on either
+side. Full design rationale and vendor research: `docs/plans/cloudwatch-kinesis-subscription.md`.
 
 ## Open questions
 
-- **Kinesis topology:** one stream per customer, or shared stream with customer ID tagging? Per-customer is simpler isolation but more streams to manage. Shared is cheaper but needs careful partitioning.
-- **Cross-region:** if a customer has log groups in us-east-1 and eu-west-1, do we run ingest consumers in each region, or ship cross-region to a central Kinesis stream? Latency vs. cost tradeoff.
-- **Subscription filter limits:** CloudWatch allows max 2 subscription filters per log group. If the customer already uses one (e.g., for their own Datadog/Splunk), we're competing for the second slot. Should we document this limitation, or explore alternatives (CloudWatch Logs Insights API as a fallback)?
-- **Schema versioning:** when an app's log format changes (new fields, different prefix), how do we handle schema migration? Re-detect and update, or version schemas so old data is still queryable with the old schema?
+- **Cross-region:** if a customer has log groups in multiple regions, they deploy one CloudFormation stack per region — there's no cross-region ingest path today.
+- **Subscription filter limits:** CloudWatch allows max 2 subscription filters per log group. If the customer already uses one (e.g., for their own Datadog/Splunk), they're competing for the second slot.
+- **Schema versioning:** when an app's log format changes (new fields, different prefix), how do we handle schema migration? Today: `weft source resample` pulls a fresh sample and re-runs the wizard; the schema swaps in place with no versioning of old data.

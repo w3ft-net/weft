@@ -36,7 +36,7 @@ func TestRemoveAndReAddLogGroup(t *testing.T) {
 	const app = "apinamespace/api"
 
 	// First configure
-	if err := db.AddLogGroup(ns.ID, nil, SourceTypeWeftd, app, app, "local", "schema-v1", "0s"); err != nil {
+	if err := db.AddLogGroup(ns.ID, SourceTypeWeftd, app, app, "local", "schema-v1"); err != nil {
 		t.Fatalf("first AddLogGroup: %v", err)
 	}
 
@@ -46,7 +46,71 @@ func TestRemoveAndReAddLogGroup(t *testing.T) {
 	}
 
 	// Re-configure (user picks the source up again from pending)
-	if err := db.AddLogGroup(ns.ID, nil, SourceTypeWeftd, app, app, "local", "schema-v2", "0s"); err != nil {
+	if err := db.AddLogGroup(ns.ID, SourceTypeWeftd, app, app, "local", "schema-v2"); err != nil {
 		t.Fatalf("second AddLogGroup (after remove) should succeed; got: %v", err)
+	}
+}
+
+// TestCreatePendingKinesisSource_PendingThenConfigure covers the kinesis
+// (Firehose push) onboarding path end to end: `weft source add --type
+// kinesis` creates a bare, schema-less pending row, and the existing
+// (source-type-agnostic) ConfigureLogGroup finishes it — no kinesis-
+// specific configure logic needed.
+func TestCreatePendingKinesisSource_PendingThenConfigure(t *testing.T) {
+	db := testOpen(t)
+
+	cust, err := db.FindOrCreateOrg("kinesis-pending-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns, err := db.FindOrCreateNamespace(cust.ID, "ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.CreatePendingKinesisSource(ns.ID, "cold-shard", "/aws/lambda/weft-cold-shard-query", "us-east-2"); err != nil {
+		t.Fatalf("CreatePendingKinesisSource: %v", err)
+	}
+
+	lg, err := db.FindLogGroup(cust.ID, "ops", "cold-shard")
+	if err != nil {
+		t.Fatalf("FindLogGroup: %v", err)
+	}
+	if lg == nil {
+		t.Fatal("expected a pending log group row, got nil")
+	}
+	if lg.SourceType != SourceTypeKinesis {
+		t.Errorf("SourceType = %q, want %q", lg.SourceType, SourceTypeKinesis)
+	}
+	if lg.Status != StatusPending {
+		t.Errorf("Status = %q, want %q", lg.Status, StatusPending)
+	}
+	if lg.LogGroupName != "/aws/lambda/weft-cold-shard-query" {
+		t.Errorf("LogGroupName = %q, want the AWS log group name", lg.LogGroupName)
+	}
+	if lg.SchemaYAML != "" {
+		t.Errorf("SchemaYAML = %q, want empty — no schema at creation time", lg.SchemaYAML)
+	}
+
+	// Idempotent: a second call (re-running `weft source add`) must not
+	// error or clobber the existing row.
+	if err := db.CreatePendingKinesisSource(ns.ID, "cold-shard", "/aws/lambda/weft-cold-shard-query", "us-east-2"); err != nil {
+		t.Fatalf("second CreatePendingKinesisSource should be a no-op, got: %v", err)
+	}
+
+	// ConfigureLogGroup is unmodified and source-type-agnostic — it must
+	// finish a kinesis pending row exactly like a weftd one.
+	if err := db.ConfigureLogGroup(ns.ID, "cold-shard", "app: cold-shard\nformat: text\n"); err != nil {
+		t.Fatalf("ConfigureLogGroup: %v", err)
+	}
+	lg, err = db.FindLogGroup(cust.ID, "ops", "cold-shard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lg.Status != StatusConfigured {
+		t.Errorf("Status after configure = %q, want %q", lg.Status, StatusConfigured)
+	}
+	if lg.SourceType != SourceTypeKinesis {
+		t.Errorf("SourceType after configure = %q, want it to stay %q", lg.SourceType, SourceTypeKinesis)
 	}
 }

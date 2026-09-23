@@ -341,7 +341,7 @@ handler.
 - Docs + the ~50-line reference Python snippet from the plan.
 
 **Deferred:** the CloudWatch adapter recast (that's the
-[cloudwatch-lambda-forwarder](../plans/cloudwatch-lambda-forwarder.md)
+[cloudwatch-kinesis-subscription](../plans/cloudwatch-kinesis-subscription.md)
 plan's territory) and any non-JSON shapes.
 
 **Start from:**
@@ -397,7 +397,7 @@ entries. Order the engine so actions are pluggable.
 **Start from:**
 - The ingest drain (where parsed rows are routed to shards — see
   [features.md](features.md) → Log querying for the ingest path, and
-  `coordinator/poller/poller.go` for the existing route logic).
+  `coordinator/coordinator.go`'s `StartDrain` for the existing route logic).
 - `store/` for the rule model, patterned on existing per-customer
   config.
 

@@ -100,14 +100,13 @@ results, not just how to run the tests:
   lease loop releases on `ctx.Done()`. Tests 1 and 5 need
   `pkill -9 -f weft-coordinator` to actually exercise the 30s-TTL
   deadman's-switch path instead of the clean-handoff path.
-- **Poller leases have no reconcile loop; cron leases do.**
-  `Poller.Start()` enumerates `log_groups` once at boot and never retries
-  a lost lease; `CronExecutor.reconcile()` retries forever on a 30s
-  ticker. Tests 2 and 7 are expected to actually surface a stuck
-  `poller:<id>` lease after its holder dies — flagged in advance as a
-  likely real gap (missing `Poller` reconcile loop), not a test-harness
-  artifact. Test 4 additionally needs `weft-redis` (ElastiCache) confirmed
-  actually applied first — it may still be Terraform-only per
+- **Poller leases have no reconcile loop; cron leases do** *(historical —
+  `coordinator/poller` was deleted in the push-based CloudWatch cutover;
+  `poller:*` leases can no longer occur, so Tests 2 and 7 no longer have
+  this gap to surface)*. `CronExecutor.reconcile()` retries forever on a
+  30s ticker, which the poller never did. Test 4 additionally needs
+  `weft-redis` (ElastiCache) confirmed actually applied first — it may
+  still be Terraform-only per
   `coordinator-horizontal-scaling.md`'s last update.
 
 Run against prod directly — no isolated test environment, per an explicit

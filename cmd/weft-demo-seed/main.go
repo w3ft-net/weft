@@ -243,8 +243,8 @@ func seed(s *store.Store, tokensOut string) error {
 			// dev/demo/generator.py via docker-compose, which doesn't
 			// emit a trace ID field yet (see minimalSchemaYAML's doc
 			// comment). Only seedProdLoom's real Go loom-producer does.
-			if err := s.AddLogGroup(ns.ID, nil, store.SourceTypeWeftd,
-				app, fullApp, "us-east-2", minimalSchemaYAML(app, false), "30s"); err != nil {
+			if err := s.AddLogGroup(ns.ID, store.SourceTypeWeftd,
+				app, fullApp, "us-east-2", minimalSchemaYAML(app, false)); err != nil {
 				return fmt.Errorf("log_group %s: %w", fullApp, err)
 			}
 		}
@@ -381,8 +381,8 @@ func seedProdLoom(s *store.Store, tokensOut string) error {
 	// an orphaned namespace-prefixed duplicate).
 	for _, app := range loomSpec.Apps {
 		fullApp := loomSpec.Name + "/" + app
-		if err := s.AddLogGroup(ns.ID, nil, store.SourceTypeWeftd,
-			app, fullApp, "us-east-2", minimalSchemaYAML(app, true), "30s"); err != nil {
+		if err := s.AddLogGroup(ns.ID, store.SourceTypeWeftd,
+			app, fullApp, "us-east-2", minimalSchemaYAML(app, true)); err != nil {
 			return fmt.Errorf("log_group %s: %w", fullApp, err)
 		}
 	}

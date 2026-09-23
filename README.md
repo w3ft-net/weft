@@ -4,97 +4,51 @@ A centralized log analysis service. Connect your AWS accounts, query logs using 
 
 ## Quick Start (for customers)
 
-### 1. Create an IAM role in your AWS account
+### 1. Register your log source
 
-Weft needs read-only access to your CloudWatch Logs. Create a role in each AWS account that has log groups you want to query:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "AWS": "arn:aws:iam::220664822695:root"
-      },
-      "Action": "sts:AssumeRole",
-      "Condition": {
-        "StringEquals": {
-          "sts:ExternalId": "<your-external-id>"
-        }
-      }
-    }
-  ]
-}
-```
-
-Attach this policy to the role:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "logs:FilterLogEvents",
-        "logs:DescribeLogGroups",
-        "logs:DescribeLogStreams",
-        "logs:GetLogEvents"
-      ],
-      "Resource": "arn:aws:logs:*:<your-account-id>:*"
-    }
-  ]
-}
-```
-
-Or use the provided CloudFormation template:
+For each CloudWatch log group you want to connect:
 
 ```bash
-aws cloudformation create-stack \
-  --stack-name weft-log-reader \
-  --template-url https://weft-public.s3.amazonaws.com/cfn/weft-log-reader.yaml \
-  --parameters ParameterKey=ExternalId,ParameterValue=<your-external-id> \
-  --capabilities CAPABILITY_NAMED_IAM
-```
-
-### 2. Provide us with
-
-- **Role ARN**: `arn:aws:iam::<your-account>:role/WeftLogReader`
-- **External ID**: the value you chose above
-- **Log group mapping**: which CloudWatch log groups map to which app names
-
-Example:
-
-| Log Group | App Name | Region |
-|-----------|----------|--------|
-| `/aws/myapp/web` | myapp-web | us-east-1 |
-| `/aws/myapp/worker` | myapp-worker | us-east-1 |
-| `/ecs/api-prod` | api | us-west-2 |
-
-### 3. Register your log sources
-
-Once we've configured your account on our side, register each log group with
-`weft source add`. Weft pulls a live sample from the log group (assuming the
-role above) and walks you through an interactive schema wizard — it shows you
-real lines and asks about the timestamp field, the log level, and any JSON
-payloads. The resulting schema is stored server-side; there's no local schema
-file to manage.
-
-```bash
-weft source add \
-  --namespace myapp \
-  --service web \
-  --log-group /aws/myapp/web \
-  --account <your-aws-account-id> \
-  --role-arn arn:aws:iam::<your-account>:role/WeftLogReader \
-  --external-id <your-external-id> \
-  --region us-east-1
+weft source add --namespace myapp --service web --log-group /aws/myapp/web --region us-east-1
 
 weft source list
 ```
 
-Weft begins polling your CloudWatch logs immediately (default: every 30 seconds).
+This just registers the log-group→service mapping — nothing is ingesting yet.
+
+### 2. Deploy the CloudFormation stack
+
+Weft ingests CloudWatch logs by push, not by assuming a role into your
+account: you deploy a small CloudFormation stack in your own AWS account
+that forwards a subscription filter through a Kinesis Data Firehose
+delivery stream to our HTTPS ingest endpoint. Nothing of ours runs in your
+account — Firehose is fully AWS-managed.
+
+```bash
+aws cloudformation create-stack \
+  --stack-name weft-cloudwatch-firehose \
+  --template-url https://weft-public.s3.amazonaws.com/cfn/weft-cloudwatch-firehose.yaml \
+  --parameters ParameterKey=WeftToken,ParameterValue=<your-weft-namespace-token> \
+               ParameterKey=LogGroupNames,ParameterValue="/aws/myapp/web,/aws/myapp/worker" \
+  --capabilities CAPABILITY_IAM
+```
+
+Deploy one stack per AWS account/region that owns log groups you want to connect.
+
+### 3. Configure the schema
+
+Once real events start flowing through the stack, weft accumulates a sample
+from live traffic — there's nothing to pull on demand, so this happens
+naturally as your app logs. Once a sample is ready:
+
+```bash
+weft source configure myapp/web
+```
+
+This walks you through an interactive schema wizard — it shows you real
+lines and asks about the timestamp field, the log level, and any JSON
+payloads. The resulting schema is stored server-side; there's no local
+schema file to manage. The source starts ingesting as soon as you approve it.
 
 ### 4. Query your logs
 
@@ -127,7 +81,7 @@ weft> cat myapp-web.log | cut -d' ' -f5- | sort | uniq -c
 
 ### Pipeline tools
 
-Standard Unix tools work because weft uses the [warp](https://github.com/graybeardcorp/warp) interpreter:
+Standard Unix tools work natively in the shell:
 
 - **awk** — filter and transform: `awk '$LEVEL == "ERROR"'`, `awk '{ print $3 }'`
 - **jq** — JSON queries: `jq 'select(.status == 500)'`, `jq '{user: .user_id}'`
@@ -202,11 +156,11 @@ The schema detector handles most formats automatically. For unusual formats, edi
 ```
 weft shell → NLB → Coordinator
                        ├── Shard nodes (DuckDB, time-partitioned)
-                       ├── Compute pool (warp/gpipe workers)
-                       └── CloudWatch poller (cross-account)
+                       ├── Compute pool (gpipe workers)
+                       └── Ingest (weftd agents, CloudWatch push via Firehose, Heroku/syslog drains)
 ```
 
-- **Coordinator**: routes queries, manages shard discovery, polls CloudWatch
+- **Coordinator**: routes queries, manages shard discovery, ingest fan-in
 - **Shards**: time-partitioned DuckDB instances on EBS
 - **Compute**: stateless gpipe workers for sort/uniq/awk-print/jq-transform
-- **Poller**: assumes cross-account IAM roles, calls FilterLogEvents, ingests into shards
+- **Ingest**: weftd agents push via gRPC; CloudWatch, Heroku, and syslog sources push via HTTP — see [ingestion-cloudwatch.md](docs/ingestion-cloudwatch.md) and [ingestion-weftd.md](docs/ingestion-weftd.md)

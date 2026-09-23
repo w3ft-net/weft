@@ -69,7 +69,7 @@ func TestHerokuAdapter_Parse_AppDynoSplit(t *testing.T) {
 	body := hbody(herokuFrame(msg))
 
 	a := HerokuAdapter{}
-	rows, err := a.Parse(strings.NewReader(body), nil)
+	rows, _, err := a.Parse(strings.NewReader(body), nil, AdapterContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestHerokuAdapter_Parse_Router(t *testing.T) {
 	body := hbody(herokuFrame(msg))
 
 	a := HerokuAdapter{}
-	rows, err := a.Parse(strings.NewReader(body), nil)
+	rows, _, err := a.Parse(strings.NewReader(body), nil, AdapterContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestHerokuAdapter_Parse_HerokuPlatformEvents(t *testing.T) {
 	body := hbody(herokuFrame(msg))
 
 	a := HerokuAdapter{}
-	rows, err := a.Parse(strings.NewReader(body), nil)
+	rows, _, err := a.Parse(strings.NewReader(body), nil, AdapterContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestHerokuAdapter_Parse_MultiFrame(t *testing.T) {
 	)
 
 	a := HerokuAdapter{}
-	rows, err := a.Parse(strings.NewReader(body), nil)
+	rows, _, err := a.Parse(strings.NewReader(body), nil, AdapterContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestHerokuAdapter_Parse_L2metMetricLine(t *testing.T) {
 	body := hbody(herokuFrame(msg))
 
 	a := HerokuAdapter{}
-	rows, err := a.Parse(strings.NewReader(body), nil)
+	rows, _, err := a.Parse(strings.NewReader(body), nil, AdapterContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestHerokuAdapter_Parse_NotL2met(t *testing.T) {
 	body := hbody(herokuFrame(msg))
 
 	a := HerokuAdapter{}
-	rows, err := a.Parse(strings.NewReader(body), nil)
+	rows, _, err := a.Parse(strings.NewReader(body), nil, AdapterContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestHerokuAdapter_Parse_MalformedFrameSkipped(t *testing.T) {
 	)
 
 	a := HerokuAdapter{}
-	rows, err := a.Parse(strings.NewReader(body), nil)
+	rows, _, err := a.Parse(strings.NewReader(body), nil, AdapterContext{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestHerokuAdapter_Parse_StructuredDataSkipped(t *testing.T) {
 	body := hbody(herokuFrame(msg))
 
 	a := HerokuAdapter{}
-	rows, err := a.Parse(strings.NewReader(body), nil)
+	rows, _, err := a.Parse(strings.NewReader(body), nil, AdapterContext{})
 	if err != nil {
 		t.Fatal(err)
 	}

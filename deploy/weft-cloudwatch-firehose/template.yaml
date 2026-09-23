@@ -1,0 +1,333 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  weft CloudWatch push ingestion: a Kinesis Data Firehose delivery stream
+  that forwards CloudWatch Logs subscription-filter events to weft's
+  ingest API over HTTPS. Fully AWS-managed on your side — no Lambda
+  forwarder, no compute of ours running in your account, no binary to
+  upgrade. See https://github.com/graybeardcorp/weft docs/plans/
+  cloudwatch-kinesis-subscription.md for the design. One stack per AWS
+  account/region combination you want to connect; add or remove log
+  groups later by updating the LogGroupNames parameter and re-deploying
+  this stack — it doesn't touch the Firehose stream or IAM roles.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: weft
+        Parameters:
+          - WeftToken
+      - Label:
+          default: CloudWatch Logs
+        Parameters:
+          - LogGroupNames
+    ParameterLabels:
+      WeftToken:
+        default: weft ingest token
+      LogGroupNames:
+        default: Log group names to subscribe
+
+Parameters:
+  WeftToken:
+    Type: String
+    NoEcho: true
+    MinLength: 1
+    Description: >-
+      The wft_... namespace-scoped ingest token from your weft dashboard
+      (Sources → CloudWatch → Connect via Firehose). Sent as the
+      X-Amz-Firehose-Access-Key header on every delivery — treat it like
+      a password.
+  LogGroupNames:
+    Type: CommaDelimitedList
+    Description: >-
+      CloudWatch Logs group names to subscribe, comma-separated (e.g.
+      /aws/lambda/myapp,/ecs/myapp/web). Each gets its own subscription
+      filter pointed at the Firehose stream this stack creates. To add
+      or remove a log group later, edit this parameter and update the
+      stack — the Firehose stream and IAM roles are untouched.
+
+Resources:
+  # Firehose's own delivery-error/debug logs — separate from your
+  # application's log groups above. Lets you see in the console whether
+  # Firehose is successfully reaching api.w3ft.net.
+  FirehoseLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/kinesisfirehose/weft-${AWS::StackName}
+      RetentionInDays: 14
+
+  FirehoseLogStream:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref FirehoseLogGroup
+      LogStreamName: HttpEndpointDelivery
+
+  # Firehose requires an S3 backup destination for HTTP-endpoint
+  # destinations (S3Configuration is a required property of
+  # HttpEndpointDestinationConfiguration, not optional the way it is
+  # for e.g. an S3-native destination) — S3BackupMode below is set to
+  # FailedDataOnly so this bucket only ever holds records weft's
+  # endpoint couldn't accept, not a full copy of everything shipped.
+  # Lifecycle rule bounds growth since nothing else in this stack ever
+  # cleans it out.
+  FailedDeliveryBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireFailedDeliveries
+            Status: Enabled
+            ExpirationInDays: 30
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # The role Firehose itself assumes to write its own CloudWatch logs
+  # and to back up failed deliveries to S3. Distinct from
+  # SubscriptionFilterRole below, which is what CloudWatch Logs assumes
+  # to call firehose:PutRecord — two different AWS services calling two
+  # different roles.
+  FirehoseDeliveryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: firehose.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WeftFirehoseDelivery
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: WriteOwnLogs
+                Effect: Allow
+                Action: logs:PutLogEvents
+                Resource: !Sub ${FirehoseLogGroup.Arn}:*
+              - Sid: FailedDeliveryBackup
+                Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:GetBucketLocation
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                  - s3:PutObject
+                Resource:
+                  - !GetAtt FailedDeliveryBucket.Arn
+                  - !Sub ${FailedDeliveryBucket.Arn}/*
+
+  DeliveryStream:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamType: DirectPut
+      HttpEndpointDestinationConfiguration:
+        EndpointConfiguration:
+          Url: https://api.w3ft.net/api/ingest/cloudwatch
+          Name: weft
+          AccessKey: !Ref WeftToken
+        RequestConfiguration:
+          # Explicitly NONE: this is the outer HTTP POST body's own
+          # Content-Encoding, a separate knob from whether each
+          # record's base64 `data` field is itself gzipped (CloudWatch
+          # Logs subscription-filter records always are — weft's
+          # adapter handles that independently). Leave unset unless a
+          # specific reason to enable it comes up; see the plan's
+          # "Gzip-or-not on the wire" note.
+          ContentEncoding: NONE
+        BufferingHints:
+          # AWS's minimums for an HTTP endpoint destination — lowest
+          # latency Firehose allows.
+          SizeInMBs: 1
+          IntervalInSeconds: 60
+        RetryOptions:
+          DurationInSeconds: 300
+        CloudWatchLoggingOptions:
+          Enabled: true
+          LogGroupName: !Ref FirehoseLogGroup
+          LogStreamName: !Ref FirehoseLogStream
+        RoleARN: !GetAtt FirehoseDeliveryRole.Arn
+        S3BackupMode: FailedDataOnly
+        S3Configuration:
+          BucketARN: !GetAtt FailedDeliveryBucket.Arn
+          RoleARN: !GetAtt FirehoseDeliveryRole.Arn
+          Prefix: failed/
+          ErrorOutputPrefix: errors/
+          CompressionFormat: GZIP
+
+  # CloudWatch Logs assumes this role to call firehose:PutRecord/
+  # PutRecordBatch when delivering subscription-filter events. Principal
+  # and the ArnLike condition match AWS's documented example exactly
+  # (CloudWatch Logs docs, "Subscription filters with Amazon Data
+  # Firehose") — the aws:SourceArn condition is the confused-deputy
+  # mitigation for this exact pattern (a log group in any account could
+  # otherwise name this role in its own subscription filter), scoped to
+  # log groups in this account/region only.
+  SubscriptionFilterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: logs.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*
+      Policies:
+        - PolicyName: WeftSubscriptionFilterDelivery
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - firehose:PutRecord
+                  - firehose:PutRecordBatch
+                Resource: !GetAtt DeliveryStream.Arn
+
+  # CloudFormation has no native resource that creates one
+  # AWS::Logs::SubscriptionFilter per entry in a variable-length list
+  # parameter (Fn::ForEach's logical-ID substitution requires
+  # alphanumeric-only values, which AWS log group names routinely
+  # violate via their leading "/" and internal "/"s), so a small
+  # custom resource does the loop instead. Deploy-time only — it runs
+  # on stack create/update/delete, never touches a log line, and ships
+  # inline with this template (no separate release/versioning burden,
+  # unlike the retired Lambda-forwarder design this plan superseded).
+  SubscriptionFilterFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: WeftManageSubscriptionFilters
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:PutSubscriptionFilter
+                  - logs:DeleteSubscriptionFilter
+                  - logs:DescribeSubscriptionFilters
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt SubscriptionFilterRole.Arn
+
+  SubscriptionFilterFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 60
+      Role: !GetAtt SubscriptionFilterFunctionRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import urllib.request
+
+          import boto3
+
+          logs = boto3.client("logs")
+          FILTER_NAME = "weft"
+
+
+          def handler(event, context):
+              try:
+                  props = event["ResourceProperties"]
+                  log_groups = props["LogGroupNames"]
+                  destination_arn = props["DestinationArn"]
+                  role_arn = props["RoleArn"]
+
+                  if event["RequestType"] in ("Create", "Update"):
+                      for log_group in log_groups:
+                          logs.put_subscription_filter(
+                              logGroupName=log_group,
+                              filterName=FILTER_NAME,
+                              filterPattern="",
+                              destinationArn=destination_arn,
+                              roleArn=role_arn,
+                          )
+                      if event["RequestType"] == "Update":
+                          old_groups = event.get("OldResourceProperties", {}).get(
+                              "LogGroupNames", []
+                          )
+                          for log_group in old_groups:
+                              if log_group not in log_groups:
+                                  _delete_filter(log_group)
+                  elif event["RequestType"] == "Delete":
+                      for log_group in log_groups:
+                          _delete_filter(log_group)
+
+                  _respond(event, context, "SUCCESS")
+              except Exception as exc:  # noqa: BLE001 - must always respond
+                  _respond(event, context, "FAILED", reason=str(exc))
+
+
+          def _delete_filter(log_group):
+              try:
+                  logs.delete_subscription_filter(
+                      logGroupName=log_group, filterName=FILTER_NAME
+                  )
+              except logs.exceptions.ResourceNotFoundException:
+                  pass  # log group or filter already gone — nothing to do
+
+
+          def _respond(event, context, status, reason=None):
+              body = json.dumps(
+                  {
+                      "Status": status,
+                      "Reason": reason
+                      or f"See CloudWatch Logs: {context.log_stream_name}",
+                      "PhysicalResourceId": event.get(
+                          "PhysicalResourceId", context.log_stream_name
+                      ),
+                      "StackId": event["StackId"],
+                      "RequestId": event["RequestId"],
+                      "LogicalResourceId": event["LogicalResourceId"],
+                      "Data": {},
+                  }
+              ).encode("utf-8")
+              req = urllib.request.Request(
+                  event["ResponseURL"],
+                  data=body,
+                  method="PUT",
+                  headers={"Content-Type": "", "Content-Length": str(len(body))},
+              )
+              urllib.request.urlopen(req)
+
+  SubscriptionFilters:
+    Type: Custom::WeftSubscriptionFilters
+    Properties:
+      ServiceToken: !GetAtt SubscriptionFilterFunction.Arn
+      LogGroupNames: !Ref LogGroupNames
+      DestinationArn: !GetAtt DeliveryStream.Arn
+      RoleArn: !GetAtt SubscriptionFilterRole.Arn
+
+Outputs:
+  DeliveryStreamArn:
+    Description: The Firehose delivery stream's ARN.
+    Value: !GetAtt DeliveryStream.Arn
+  FailedDeliveryBucketName:
+    Description: >-
+      S3 bucket holding records weft's endpoint couldn't accept
+      (S3BackupMode: FailedDataOnly). Empty in normal operation.
+    Value: !Ref FailedDeliveryBucket
+  FirehoseLogGroupName:
+    Description: >-
+      Where to look if deliveries seem to be failing — Firehose's own
+      delivery-attempt logs.
+    Value: !Ref FirehoseLogGroup

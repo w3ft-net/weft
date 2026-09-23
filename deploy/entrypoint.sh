@@ -50,6 +50,8 @@ case "$ROLE" in
     [ -n "${COORDINATOR_ADDR:-}" ]  && ARGS+=(--coordinator="$COORDINATOR_ADDR")
     [ -n "${DB_DSN:-}" ]            && ARGS+=(--db-dsn="$DB_DSN")
     [ -n "${BASE_URL:-}" ]          && ARGS+=(--base-url="$BASE_URL")
+    [ -n "${REDIS_ADDR:-}" ]        && ARGS+=(--redis-addr="$REDIS_ADDR")
+    [ "${REDIS_TLS:-}" = "true" ]   && ARGS+=(--redis-tls=true)
 
     exec weft-api "${ARGS[@]}"
     ;;

@@ -112,13 +112,21 @@ All of these can be piped through awk/sed/jq/grep/sort/uniq/wc. The query planne
 
 ### Source onboarding (`weft source …`)
 
-Top-level subcommands (not in-shell) for managing weftd/CloudWatch sources. See `docs/ingestion-weftd.md` for the sampling → pending → configured lifecycle.
+Top-level subcommands (not in-shell) for managing weftd/CloudWatch sources.
+Every command below is source-type-agnostic except `add`, which only
+creates CloudWatch push sources (weftd sources register themselves the
+first time the agent connects; there is no `weft source add` equivalent
+for them). See `docs/ingestion-weftd.md` for the sampling → pending →
+configured lifecycle both source types share, and
+`docs/ingestion-cloudwatch.md` for the CloudWatch push design.
 
+- `weft source add --namespace N --service NAME --log-group GROUP [--region REGION]` — register a CloudWatch log group→service mapping, `StatusPending`. This only records the mapping; it does not deploy anything in your AWS account — see `docs/manual/cloudwatch.md` for the CloudFormation stack that actually forwards events. `--region` defaults to `us-east-2`.
+- `weft source list` — list every configured and pending source for the caller's customer, with type (`weftd`/`kinesis`/`direct`), status, and the underlying log group / agent path.
+- `weft source remove --namespace N --service NAME` — delete a source. Already-ingested rows stay in the shards; only future ingestion stops.
 - `weft source pending [--namespace N]` — list sources awaiting configuration. A source still accumulating its sample shows as `sampling` with an `N/target` count.
 - `weft source configure <ns/service>` — review the sample and approve a schema (interactive). Also used to swap the schema after a resample — the source keeps ingesting until the new schema is approved.
 - `weft source schema <ns/service>` — print the live schema for a configured source. For a source still sampling, prints `<source> hasn't emitted enough lines to sample yet (N/target)` instead.
 - `weft source resample <ns/service>` — request a fresh sample of an already-configured source. Ingestion continues on the current schema while the agent re-samples; the new sample appears for review when it's ready.
-- `weft source {add|list|remove}` — CloudWatch source management.
 
 ## Open questions
 

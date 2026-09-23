@@ -67,7 +67,7 @@ func (HerokuAdapter) Auth(req *http.Request) (string, error) {
 // hard-fail would make the customer's `heroku drains` view show
 // permanent delivery failures. Operator visibility comes from a log
 // line per skipped frame.
-func (a HerokuAdapter) Parse(body io.Reader, _ http.Header) ([]*pb.LogRow, error) {
+func (a HerokuAdapter) Parse(body io.Reader, _ http.Header, _ AdapterContext) ([]*pb.LogRow, any, error) {
 	var rows []*pb.LogRow
 	// Heroku's drain is always octet-counted (RFC 6587 §3.4.1).
 	syslog.ParseStream(body, syslog.OctetCounting, syslog.DefaultMaxFrame, func(f syslog.Frame, err error) {
@@ -83,7 +83,7 @@ func (a HerokuAdapter) Parse(body io.Reader, _ http.Header) ([]*pb.LogRow, error
 			rows = append(rows, metrics)
 		}
 	})
-	return rows, nil
+	return rows, nil, nil
 }
 
 // frameToRows converts one parsed syslog frame into the LogRow(s) we

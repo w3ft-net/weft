@@ -37,6 +37,23 @@ type Store struct {
 	// consumption / expiry.
 	rawMagicLinkMu     sync.Mutex
 	rawMagicLinkTokens map[string]string
+
+	// schemaCache is the optional Valkey-backed cache-aside layer in
+	// front of log_groups.schema_yaml lookups (schema_cache.go). Nil
+	// unless SetSchemaCache is called — every SchemaCache method is
+	// nil-receiver-safe, so callers that never wire one (tests,
+	// weft-admin, weft-migrate) transparently always fall through to
+	// Postgres.
+	schemaCache *SchemaCache
+}
+
+// SetSchemaCache attaches (or, passed nil, detaches) the shared Valkey
+// schema cache. Separate from Open because only api and coordinator
+// processes have a Redis address to offer; every other Store consumer
+// (tests, weft-admin, weft-migrate, weft-demo-seed) just never calls
+// this and gets Postgres-only behavior.
+func (s *Store) SetSchemaCache(c *SchemaCache) {
+	s.schemaCache = c
 }
 
 // Open connects to the database and ensures all goose migrations have been

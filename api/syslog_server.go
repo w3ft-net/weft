@@ -207,6 +207,13 @@ func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
 			Raw:      f.Message,
 			TsUnixNs: f.Timestamp.UnixNano(),
 		}
+		// Same schema-based enrichment HTTP adapters get via
+		// IngestHandler (adapter.go's enrichRow/enrichRows) — without
+		// it, syslog-sourced rows would be Raw-only forever, the same
+		// gap Heroku had before that fix. Cache-aside against Valkey
+		// (store.FindLogGroupSchema) is what keeps this affordable per
+		// frame across a connection that can live for hours.
+		enrichRow(ss.store, auth.Organization.ID, auth.Namespace, row)
 		if err := stream.Send(row); err != nil {
 			log.Printf("syslog[%s]: send row for %s: %v", name, auth.Namespace, err)
 			streamBroken = true

@@ -76,8 +76,8 @@ func (c *ParserCache) Apps() []string {
 
 // Install parses schemaYAML, builds a parser, and atomically swaps it
 // into the slot for app. The schema's app/customer fields are forced
-// to the agent-supplied values, matching what the CloudWatch poller
-// does (coordinator/poller/poller.go:90-91).
+// to the agent-supplied values, since the schema itself doesn't know
+// which app/customer it's being installed for.
 //
 // Returns the computed hash so the caller can cache it. If the YAML
 // fails to parse, returns the error and leaves the slot unchanged.

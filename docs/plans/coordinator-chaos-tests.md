@@ -44,6 +44,8 @@ lets you watch the restarted process cleanly rejoin. **But** see Gotcha C
 — on its own this doesn't test cross-instance failover at all.
 
 **Gotcha B — poller leases have no reconcile loop; cron leases do.**
+*(Historical — `coordinator/poller` no longer exists; poller leases can't
+occur post-cutover. Left for context on Test 7's original findings.)*
 `Poller.Start()` enumerates `log_groups` once at boot and never retries a
 denied/lost lease. `CronExecutor` runs a 30s `reconcile()` ticker forever
 and re-attempts anything not currently tracked. This means a poller
@@ -236,6 +238,8 @@ to repeat it separately unless testing a mid-tick kill specifically
 (this outage started between ticks, not mid-`Evaluate`).
 
 ## Test 2 — Poller double-ingest
+
+**Moot as of the CloudWatch push cutover (`docs/plans/cloudwatch-kinesis-subscription.md`) — `coordinator/poller` was deleted entirely, so this scenario no longer applies to any current or future log group.** Left below as historical record of why it was skipped rather than run.
 
 **Skipped 2026-09-19 — no live workload to test against.** Checked
 `log_groups`: 30 rows, all `source_type IN ('weftd', 'direct')`, zero
@@ -607,7 +611,9 @@ raising `max_capacity` for the up-leg. Both are protected IaC applies —
   within one tick — these three run continuous-retry election/reconcile
   loops.
 
-**Expected likely FAIL, called out in advance**: any `poller:<id>` lease
+**Expected likely FAIL, called out in advance** *(moot post-cutover — no
+`poller:*` leases can exist now that `coordinator/poller` is deleted;
+left for historical context)*: any `poller:<id>` lease
 the terminated instance held will **not** be reclaimed — `Poller.Start()`
 has no reconcile loop (Gotcha B). Check explicitly:
 ```sql

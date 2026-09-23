@@ -42,16 +42,13 @@ type RemoteNotice struct {
 // GET /api/sources. Tags match the api server's JSON response so
 // encoding/json decodes cleanly into it.
 type SourceInfo struct {
-	Namespace    string `json:"namespace"`
-	Service      string `json:"service"`
-	Status       string `json:"status"`
-	SourceType   string `json:"source_type"`
-	LogGroup     string `json:"log_group"`
-	Region       string `json:"region"`
-	PollInterval string `json:"poll_interval"`
-	Enabled      bool   `json:"enabled"`
-	LastPollAt   string `json:"last_poll_at"`
-	AWSAccountID string `json:"aws_account_id,omitempty"`
+	Namespace  string `json:"namespace"`
+	Service    string `json:"service"`
+	Status     string `json:"status"`
+	SourceType string `json:"source_type"`
+	LogGroup   string `json:"log_group"`
+	Region     string `json:"region"`
+	Enabled    bool   `json:"enabled"`
 }
 
 // TokenInfo describes an agent token as returned by GET /api/tokens.
@@ -657,74 +654,27 @@ func mapToResultRow(m map[string]any) *pb.ResultRow {
 	return row
 }
 
-// ── Sources (CloudWatch + weftd) ───────────────────────────────
+// ── Sources (CloudWatch push + weftd) ───────────────────────────
 
-// SampleCloudWatchSourceRequest mirrors the JSON body accepted by
-// POST /api/sources/cloudwatch/sample. It carries only the creds/log-group
-// identification — the server assumes the role and reads recent events.
-type SampleCloudWatchSourceRequest struct {
-	Namespace    string `json:"namespace"`
-	Service      string `json:"service"`
-	AWSAccountID string `json:"aws_account_id,omitempty"`
-	RoleARN      string `json:"role_arn"`
-	ExternalID   string `json:"external_id,omitempty"`
-	LogGroup     string `json:"log_group"`
-	Region       string `json:"region"`
+// AddKinesisSourceRequest mirrors the JSON body accepted by
+// POST /api/sources/kinesis. No cross-account role (nothing runs in
+// weft's account for this path — see
+// docs/plans/cloudwatch-kinesis-subscription.md) and no schema fields
+// (the source is created StatusPending; `weft source configure`
+// finishes it once real events have started flowing through the
+// customer's Firehose stream and a sample has accumulated).
+type AddKinesisSourceRequest struct {
+	Namespace string `json:"namespace"`
+	Service   string `json:"service"`
+	LogGroup  string `json:"log_group"`
+	Region    string `json:"region"`
 }
 
-// SampleCloudWatchSource pulls a live sample from the customer's CloudWatch
-// log group so the caller can run schema detection before committing the
-// source. The coordinator assumes the cross-account role server-side; the
-// returned lines feed the same setup wizard the weftd onboarding flow uses.
-func (h *HTTPCoordinator) SampleCloudWatchSource(req SampleCloudWatchSourceRequest) ([]string, error) {
+// AddKinesisSource registers the AWS-log-group→service mapping for a
+// Firehose push source.
+func (h *HTTPCoordinator) AddKinesisSource(req AddKinesisSourceRequest) error {
 	body, _ := json.Marshal(req)
-	r, _ := http.NewRequest("POST", h.baseURL+"/api/sources/cloudwatch/sample", bytes.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	h.setAuthHeaders(r)
-
-	resp, err := h.client.Do(r)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return nil, httpError(resp)
-	}
-	var out struct {
-		Lines []string `json:"lines"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
-	}
-	return out.Lines, nil
-}
-
-// AddCloudWatchSourceRequest mirrors the JSON body accepted by
-// POST /api/sources/cloudwatch.
-type AddCloudWatchSourceRequest struct {
-	Namespace    string `json:"namespace"`
-	Service      string `json:"service"`
-	AWSAccountID string `json:"aws_account_id,omitempty"`
-	RoleARN      string `json:"role_arn"`
-	ExternalID   string `json:"external_id,omitempty"`
-	LogGroup     string `json:"log_group"`
-	Region       string `json:"region"`
-	PollInterval string `json:"poll_interval,omitempty"`
-
-	// Schema fields (normally arrive via the dashboard's schema editor).
-	// The CLI passes these straight through; the api server builds the
-	// schema YAML server-side from them, same as the frontend path.
-	Format          string `json:"format"`
-	TimestampField  string `json:"timestamp_field,omitempty"`
-	TimestampFormat string `json:"timestamp_format,omitempty"`
-	LevelField      string `json:"level_field,omitempty"`
-	LevelPattern    string `json:"level_pattern,omitempty"`
-}
-
-// AddCloudWatchSource registers a CloudWatch source.
-func (h *HTTPCoordinator) AddCloudWatchSource(req AddCloudWatchSourceRequest) error {
-	body, _ := json.Marshal(req)
-	r, _ := http.NewRequest("POST", h.baseURL+"/api/sources/cloudwatch", bytes.NewReader(body))
+	r, _ := http.NewRequest("POST", h.baseURL+"/api/sources/kinesis", bytes.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	h.setAuthHeaders(r)
 

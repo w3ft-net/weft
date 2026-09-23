@@ -7,34 +7,30 @@ import (
 	"gorm.io/gorm"
 )
 
-// AWSAccount is a cross-account AWS registration a customer uses to let the
-// coordinator pull CloudWatch logs. Exclusively CloudWatch-shaped: AccountID
-// is the 12-digit AWS account number, RoleARN is the role the coordinator
-// assumes, ExternalID is the STS external-id secret. Weftd sources don't
-// have one (their log_groups.aws_account_id is NULL).
-type AWSAccount struct {
-	gorm.Model
-	OrgID        string       `gorm:"not null"`
-	Organization Organization `gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
-	AccountID    string       `gorm:"not null"` // 12-digit AWS account number
-	RoleARN      string       `gorm:"not null"`
-	ExternalID   string
-	LogGroups    []LogGroup `gorm:"foreignKey:AWSAccountID;constraint:OnDelete:CASCADE"`
-}
-
 // LogGroupSourceType identifies where a log_groups row's rows come from.
-// cloudwatch: coordinator polls CloudWatch FilterLogEvents on a schedule.
-// weftd:      weftd agents push rows via gRPC IngestStream; no polling.
+// weftd:   weftd agents push rows via gRPC IngestStream; no polling.
+// kinesis: customer-owned Kinesis Data Firehose stream pushes to
+//
+//	POST /api/ingest/cloudwatch; no polling, no cross-account role
+//	registration on our side (see cloudwatch-kinesis-subscription.md).
+//
+// The enum also still carries a 'cloudwatch' value at the Postgres level
+// (poll-based ingestion, retired; migration 077) — Postgres can't drop an
+// enum value without recreating the type, so it stays as a legacy value
+// nothing writes anymore rather than a case any Go code branches on.
 type LogGroupSourceType string
 
 const (
-	SourceTypeCloudWatch LogGroupSourceType = "cloudwatch"
-	SourceTypeWeftd      LogGroupSourceType = "weftd"
+	SourceTypeWeftd LogGroupSourceType = "weftd"
 	// SourceTypeDirect is a raw-push producer with no sampling handshake:
 	// Heroku log drains, custom POSTs to /api/ingest, bare IngestStream
 	// clients. The coordinator auto-creates these on first-seen ingest
 	// (EnsureServiceLogGroup) rather than via GetSourceStatus/SubmitSample.
 	SourceTypeDirect LogGroupSourceType = "direct"
+	// SourceTypeKinesis is push-based CloudWatch ingestion via a
+	// customer-owned Firehose delivery stream
+	// (docs/plans/cloudwatch-kinesis-subscription.md).
+	SourceTypeKinesis LogGroupSourceType = "kinesis"
 )
 
 // LogGroupStatus tracks whether a human has approved the schema.
@@ -64,11 +60,9 @@ const (
 )
 
 // LogGroup represents a log source — pending or configured. Ownership is
-// pinned through NamespaceID (required); AWSAccountID is only populated for
-// cloudwatch sources since weftd sources don't have an AWS account. For
-// pending rows: SchemaYAML is empty, LogGroupName is the app path, and
-// Sample/Detection carry the auto-detected candidates from the most recent
-// agent submission.
+// pinned through NamespaceID (required). For pending rows: SchemaYAML is
+// empty, LogGroupName is the app path, and Sample/Detection carry the
+// auto-detected candidates from the most recent agent submission.
 type LogGroup struct {
 	gorm.Model
 	NamespaceID uint      `gorm:"not null;uniqueIndex:idx_ns_app"`
@@ -78,10 +72,8 @@ type LogGroup struct {
 	// GORM (`->`): the BEFORE INSERT trigger fills it from namespace_id,
 	// so GORM must omit it from INSERTs (a written zero-value would
 	// dodge the trigger's NULL check and trip the customers FK).
-	OrgID        string      `gorm:"->"`
-	AWSAccountID *uint       // nullable; required for cloudwatch, nil for weftd
-	AWSAccount   *AWSAccount `gorm:"foreignKey:AWSAccountID"`
-	Service      string      `gorm:"column:app;not null;uniqueIndex:idx_ns_app"`
+	OrgID   string `gorm:"->"`
+	Service string `gorm:"column:app;not null;uniqueIndex:idx_ns_app"`
 	// BucketID assigns this service to a bucket (migration 057). NULL =
 	// the default bucket; a non-NULL value is a service moved to a
 	// dedicated bucket. A service routes to exactly one bucket — the
@@ -92,10 +84,7 @@ type LogGroup struct {
 	LogGroupName string             // nullable: pending rows may not yet have a confirmed name
 	Region       string             `gorm:"not null;default:us-east-2"`
 	SchemaYAML   string             // nullable: pending rows don't yet have a schema
-	PollInterval string             `gorm:"not null;default:30s"`
 	Enabled      bool               `gorm:"not null;default:true"`
-	LastPollAt   string
-	LastToken    string
 	Instance     string // hostname of the agent that last submitted a sample (pending only)
 	Deployment   string `gorm:"column:deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.) — pending only
 	Sample       string // JSON array of raw sample lines; cleared on configure
@@ -113,86 +102,230 @@ type LogGroup struct {
 }
 
 // AddLogGroup creates or updates a configured log group source. Ownership
-// is keyed on (namespace_id, app). awsAccountID must be non-nil for
-// cloudwatch sources and nil for weftd sources — the caller is trusted to
-// match sourceType to account nullability. For weftd sources in the
-// pending→configured transition, use ConfigureLogGroup instead; AddLogGroup
-// is the CloudWatch add-source path where the schema is approved in one
-// UI step.
-func (s *Store) AddLogGroup(namespaceID uint, awsAccountID *uint, sourceType LogGroupSourceType, service, logGroupName, region, schemaYAML, pollInterval string) error {
+// is keyed on (namespace_id, app). For weftd sources in the
+// pending→configured transition, use ConfigureLogGroup instead.
+func (s *Store) AddLogGroup(namespaceID uint, sourceType LogGroupSourceType, service, logGroupName, region, schemaYAML string) error {
 	var lg LogGroup
 	result := s.db.Where("namespace_id = ? AND app = ?", namespaceID, service).First(&lg)
 	if result.Error == gorm.ErrRecordNotFound {
 		lg = LogGroup{
 			NamespaceID:  namespaceID,
-			AWSAccountID: awsAccountID,
 			SourceType:   sourceType,
 			Status:       StatusConfigured,
 			Service:      service,
 			LogGroupName: logGroupName,
 			Region:       region,
 			SchemaYAML:   schemaYAML,
-			PollInterval: pollInterval,
 			Enabled:      true,
 		}
-		return s.db.Create(&lg).Error
+		if err := s.db.Create(&lg).Error; err != nil {
+			return err
+		}
+		s.invalidateSchemaCache(namespaceID, service)
+		return nil
 	}
-	return s.db.Model(&lg).Updates(map[string]any{
-		"aws_account_id": awsAccountID,
+	if err := s.db.Model(&lg).Updates(map[string]any{
 		"source_type":    sourceType,
 		"status":         StatusConfigured,
 		"log_group_name": logGroupName,
 		"region":         region,
 		"schema_yaml":    schemaYAML,
-		"poll_interval":  pollInterval,
 		"sample":         nil,
 		"detection":      nil,
-	}).Error
+	}).Error; err != nil {
+		return err
+	}
+	s.invalidateSchemaCache(namespaceID, service)
+	return nil
 }
 
-// LogGroupWithAWSAccount is a joined result for the poller and list paths.
-// AWS-account-scoped fields (RoleARN, ExternalID, AccountID) are only
-// populated for cloudwatch sources; weftd sources leave them empty since
-// they don't have an AWS account.
-type LogGroupWithAWSAccount struct {
+// CreatePendingKinesisSource registers a namespace-scoped mapping from an
+// AWS CloudWatch log group name to a weft service for the Firehose push
+// path (source_type=kinesis) — CloudWatchAdapter.FindLogGroupByAWSName
+// needs this row to exist before it will route any event to a service.
+// Unlike AddLogGroup (poll mode's one-shot "commit with schema in hand"),
+// there's no schema yet and no cross-account role to assume: the row
+// starts StatusPending, exactly like a fresh weftd source, and is
+// finished via the existing pending→configure flow (ConfigureLogGroup,
+// unmodified) once a human has something to configure against — the
+// ingest path accumulates a sample from the first live-pushed rows for
+// exactly that purpose (see enrichRows in api/adapter.go).
+//
+// Idempotent on (namespaceID, service): a second call is a no-op rather
+// than an error, so `weft source add` is safe to re-run. Does not
+// resurrect or re-map an already-pending-or-configured row to a
+// different log group — callers that need to change the mapping should
+// remove and re-add.
+func (s *Store) CreatePendingKinesisSource(namespaceID uint, service, logGroupName, region string) error {
+	var existing LogGroup
+	result := s.db.Where("namespace_id = ? AND app = ?", namespaceID, service).First(&existing)
+	if result.Error == nil {
+		return nil
+	}
+	if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return result.Error
+	}
+	lg := LogGroup{
+		NamespaceID:  namespaceID,
+		SourceType:   SourceTypeKinesis,
+		Status:       StatusPending,
+		Service:      service,
+		LogGroupName: logGroupName,
+		Region:       region,
+		Enabled:      true,
+	}
+	return s.db.Create(&lg).Error
+}
+
+// ConfigureLogGroup lands a schema on an existing pending-or-configured
+// row — the weftd onboarding approval step (pending→configured) and the
+// resample-schema-swap path (a resample leaves the row configured but
+// with a fresh sample; comment on api/sources.go's caller has the full
+// story). Both are the same write: a customer or agent producing a new
+// schema_yaml for a service the coordinator already knows about.
+func (s *Store) ConfigureLogGroup(namespaceID uint, service, schemaYAML string) error {
+	res := s.db.Model(&LogGroup{}).
+		Where("namespace_id = ? AND app = ? AND status IN ?",
+			namespaceID, service, []LogGroupStatus{StatusPending, StatusConfigured}).
+		Updates(map[string]any{
+			"status":                StatusConfigured,
+			"schema_yaml":           schemaYAML,
+			"sample":                nil,
+			"detection":             nil,
+			"sample_collected":      0,
+			"resample_requested_at": nil,
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		// The row disappeared (or left pending/configured) between the
+		// caller's own lookup and this UPDATE — a parallel configure won
+		// the race, or the source got removed. Callers translate this
+		// into a 409, same as before this was a dedicated method.
+		return gorm.ErrRecordNotFound
+	}
+	s.invalidateSchemaCache(namespaceID, service)
+	return nil
+}
+
+// invalidateSchemaCache resolves namespaceID to the (orgID, namespace
+// name) tuple FindLogGroupSchema's cache keys off of, then evicts this
+// service's cached entry. A separate small lookup rather than requiring
+// every AddLogGroup/ConfigureLogGroup caller to thread org/namespace
+// name through — schema writes are rare (customer-driven, not per log
+// line), so the extra indexed-PK query here is not a hot path.
+//
+// Namespace is tenant-scoped (store.go's enroll list), so this must go
+// through crossTenant() rather than s.db directly — a plain s.db.First
+// here has no org in its context and silently fails closed with
+// ErrNoOrgInContext (tenant.go's scope callback), which would make this
+// function return early without ever calling schemaCache.invalidate.
+// Legitimate here the same way ValidateAgentToken's token-by-hash
+// lookup is: resolving the tenant identity is the query's very purpose,
+// so it can't itself be scoped by that identity.
+//
+// Best-effort: SchemaCache.invalidate is nil-safe and never surfaces an
+// error to the write path, matching the cache's overall philosophy —
+// worst case a missed invalidation is caught by the cache's own TTL.
+func (s *Store) invalidateSchemaCache(namespaceID uint, service string) {
+	if s.schemaCache == nil {
+		return
+	}
+	var ns Namespace
+	if err := s.crossTenant().First(&ns, namespaceID).Error; err != nil {
+		return
+	}
+	s.schemaCache.invalidate(ns.OrgID, ns.Name, service)
+}
+
+// FindLogGroupSchema resolves a service's configured schema for ingest-
+// time enrichment (api.enrichRow/enrichRows, SyslogServer), cache-aside
+// against the optional Valkey schema cache — see schema_cache.go.
+// ok=false means "no configured schema" (never onboarded, still
+// pending, or schema_yaml empty), not an error; callers skip enrichment
+// and leave the row Raw-only, exactly the pre-cache behavior.
+func (s *Store) FindLogGroupSchema(orgID, namespace, service string) (schemaYAML, customerName string, ok bool, err error) {
+	if entry, hit := s.schemaCache.get(orgID, namespace, service); hit {
+		return entry.SchemaYAML, entry.CustomerName, entry.Configured, nil
+	}
+	lg, err := s.FindLogGroup(orgID, namespace, service)
+	if err != nil {
+		return "", "", false, err
+	}
+	var entry cachedSchemaEntry
+	if lg != nil && lg.Status == StatusConfigured && lg.SchemaYAML != "" {
+		entry = cachedSchemaEntry{Configured: true, SchemaYAML: lg.SchemaYAML, CustomerName: lg.CustomerName}
+	}
+	s.schemaCache.set(orgID, namespace, service, &entry)
+	return entry.SchemaYAML, entry.CustomerName, entry.Configured, nil
+}
+
+// FindLogGroupByAWSName resolves an AWS CloudWatch log group name to its
+// configured weft service, scoped to (orgID, namespace) —
+// CloudWatchAdapter's per-event routing step (envelope.logGroup →
+// LogRow.Service; see docs/plans/cloudwatch-kinesis-subscription.md,
+// "Adapter-level logGroup → service resolution"). ok=false covers "no
+// log_groups row with this AWS name in this namespace," not an error;
+// the caller drops the event rather than routing it to service="". A
+// plain indexed Postgres lookup, not cached — no evidence yet that a
+// Firehose batch's per-event reverse lookup needs the same Valkey
+// cache-aside treatment as FindLogGroupSchema; adapter_cloudwatch.go
+// memoizes this per-request instead, which covers the common case of
+// one log group per batch.
+func (s *Store) FindLogGroupByAWSName(orgID, namespace, logGroupName string) (service string, ok bool, err error) {
+	var lg LogGroup
+	err = s.db.
+		Table("log_groups").
+		Select("log_groups.app").
+		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
+		Joins("JOIN organizations ON namespaces.org_id = organizations.id").
+		Where("organizations.id = ? AND namespaces.name = ? AND log_groups.log_group_name = ?",
+			orgID, namespace, logGroupName).
+		First(&lg).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return lg.Service, true, nil
+}
+
+// LogGroupJoined is a joined result for the list paths — a LogGroup plus
+// the customer/namespace names pulled in via the join, so callers don't
+// need a second query to resolve ownership.
+type LogGroupJoined struct {
 	LogGroup
 	CustomerName  string
 	NamespaceName string
-	RoleARN       string
-	ExternalID    string
-	AccountID     string // 12-digit AWS account number
 }
 
 // AllLogGroups returns configured log groups with customer/namespace info.
 // Pending rows are excluded — callers that want them use
-// ListPendingLogGroups. AWS-account fields are populated for cloudwatch
-// rows and left empty for weftd rows via the LEFT JOIN.
-func (s *Store) AllLogGroups() ([]LogGroupWithAWSAccount, error) {
+// ListPendingLogGroups.
+func (s *Store) AllLogGroups() ([]LogGroupJoined, error) {
 	return s.allLogGroups(StatusConfigured)
 }
 
 // AllLogGroupsAnyStatus returns every source regardless of status — including
 // pending and still-sampling rows. Backs the source-list view so it surfaces
 // (and can remove) sources that haven't been configured yet.
-func (s *Store) AllLogGroupsAnyStatus() ([]LogGroupWithAWSAccount, error) {
+func (s *Store) AllLogGroupsAnyStatus() ([]LogGroupJoined, error) {
 	return s.allLogGroups()
 }
 
 // allLogGroups runs the shared join. With no statuses it returns every row;
 // otherwise it filters to the given ones.
-func (s *Store) allLogGroups(statuses ...LogGroupStatus) ([]LogGroupWithAWSAccount, error) {
-	var results []LogGroupWithAWSAccount
+func (s *Store) allLogGroups(statuses ...LogGroupStatus) ([]LogGroupJoined, error) {
+	var results []LogGroupJoined
 	q := s.db.
 		Table("log_groups").
 		Select(`log_groups.*,
 		        organizations.name as customer_name,
-		        namespaces.name as namespace_name,
-		        aws_accounts.role_arn,
-		        aws_accounts.external_id,
-		        aws_accounts.account_id`).
+		        namespaces.name as namespace_name`).
 		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
-		Joins("JOIN organizations ON namespaces.org_id = organizations.id").
-		Joins("LEFT JOIN aws_accounts ON log_groups.aws_account_id = aws_accounts.id")
+		Joins("JOIN organizations ON namespaces.org_id = organizations.id")
 	if len(statuses) > 0 {
 		q = q.Where("log_groups.status IN ?", statuses)
 	}
@@ -253,7 +386,6 @@ func (s *Store) EnsureServiceLogGroup(namespaceID uint, service string) error {
 		SourceType:   SourceTypeDirect,
 		LogGroupName: service,
 		Region:       "local",
-		PollInterval: "0s",
 		Enabled:      true,
 	}).Error
 }
@@ -273,7 +405,6 @@ func (s *Store) UpsertPendingLogGroup(namespaceID uint, service, instance, deplo
 			SourceType:      SourceTypeWeftd,
 			LogGroupName:    service,
 			Region:          "local",
-			PollInterval:    "0s",
 			Enabled:         true,
 			Instance:        instance,
 			Deployment:      deployment,
@@ -322,8 +453,8 @@ func (s *Store) UpsertPendingLogGroup(namespaceID uint, service, instance, deplo
 // the bare service (migration 060), scoped to the namespace by the join
 // — so the match is on the bare service, not a "namespace/service"
 // composite.
-func (s *Store) FindLogGroup(orgID string, namespace, service string) (*LogGroupWithAWSAccount, error) {
-	var lg LogGroupWithAWSAccount
+func (s *Store) FindLogGroup(orgID string, namespace, service string) (*LogGroupJoined, error) {
+	var lg LogGroupJoined
 	err := s.db.
 		Table("log_groups").
 		Select(`log_groups.*,

@@ -7,94 +7,87 @@ const connectCloudwatch = {
   category: "connect-source",
   order: 40,
   headings: [
-    { level: 3, id: "1-create-the-cross-account-iam-role", text: "1. Create the cross-account IAM role" },
-    { level: 3, id: "2-register-the-source", text: "2. Register the source" },
+    { level: 3, id: "1-register-the-source", text: "1. Register the source" },
+    { level: 3, id: "2-deploy-the-cloudformation-stack", text: "2. Deploy the CloudFormation stack" },
+    { level: 3, id: "3-configure-the-schema", text: "3. Configure the schema" },
     { level: 3, id: "troubleshooting", text: "Troubleshooting" },
   ],
   html: `<p>If your logs already land in AWS CloudWatch Logs — Lambda, ECS/Fargate,
 API Gateway, RDS, or anything else that writes to a log group — weft can
-ingest directly without installing an agent. You grant a cross-account
-IAM role, point weft at a log group, and weft polls CloudWatch on a
-schedule (default 30s).</p>
-<p>This is the lowest-friction source type: nothing to install, nothing to
-run. Latency is bounded by CloudWatch's own ingestion delay plus the
-poll interval — usually well under a minute. For sub-second tailing
-install weftd instead.</p>
-<h3 id="1-create-the-cross-account-iam-role">1. Create the cross-account IAM role</h3>
-<p>In the AWS account that owns the log group, create an IAM role that
-trusts weft's ingestion account and has read access to the log group.
-Pick an external ID — any hard-to-guess string — and keep it secret;
-you'll paste it into weft in step 3.</p>
-<pre><code># Trust policy — allows weft's ingestion account to assume this role,
-# but only when it presents the matching external ID.
-{
-  &quot;Version&quot;: &quot;2012-10-17&quot;,
-  &quot;Statement&quot;: [{
-    &quot;Effect&quot;: &quot;Allow&quot;,
-    &quot;Principal&quot;: { &quot;AWS&quot;: &quot;arn:aws:iam::220664822695:root&quot; },
-    &quot;Action&quot;: &quot;sts:AssumeRole&quot;,
-    &quot;Condition&quot;: {
-      &quot;StringEquals&quot;: { &quot;sts:ExternalId&quot;: &quot;REPLACE-WITH-YOUR-EXTERNAL-ID&quot; }
-    }
-  }]
-}
-
-# Permissions policy — read-only access to the log group(s) you share.
-{
-  &quot;Version&quot;: &quot;2012-10-17&quot;,
-  &quot;Statement&quot;: [{
-    &quot;Effect&quot;: &quot;Allow&quot;,
-    &quot;Action&quot;: [
-      &quot;logs:FilterLogEvents&quot;,
-      &quot;logs:DescribeLogGroups&quot;,
-      &quot;logs:DescribeLogStreams&quot;
-    ],
-    &quot;Resource&quot;: &quot;arn:aws:logs:us-east-2:123456789012:log-group:/aws/lambda/my-fn:*&quot;
-  }]
-}
-</code></pre>
-<p>Scope <code>Resource</code> to a single log group (recommended) or a prefix
-(<code>.../log-group:/aws/lambda/*</code>) to share a whole tier at once. Note the
-trailing <code>:*</code> — CloudWatch Logs ARNs require it.</p>
-<h3 id="2-register-the-source">2. Register the source</h3>
-<p>Use the <code>weft</code> CLI to tell weft about the account and log group. Run this
-from any machine with the <code>weft</code> binary installed and a valid login.</p>
+ingest them without installing an agent. You deploy a small CloudFormation
+stack in your own AWS account that forwards a CloudWatch Logs subscription
+filter through a Kinesis Data Firehose delivery stream straight to weft.
+Nothing of ours runs in your account, and nothing polls: Firehose pushes
+events to us as they arrive.</p>
+<p>This is the lowest-friction source type: nothing to install, nothing of
+yours to run. Latency is bounded by CloudWatch's own subscription-filter
+delivery plus Firehose's buffering (roughly a minute at the lowest
+buffering setting the CloudFormation template uses). For sub-second
+tailing install weftd instead.</p>
+<h3 id="1-register-the-source">1. Register the source</h3>
+<p>Use the <code>weft</code> CLI to tell weft which log group maps to which service.
+Run this from any machine with the <code>weft</code> binary installed and a valid
+login.</p>
 <pre><code>weft source add \\
   --namespace myco \\
   --service my-app \\
   --log-group /aws/lambda/my-fn \\
-  --account 123456789012 \\
-  --role-arn arn:aws:iam::123456789012:role/weft-ingest \\
-  --external-id REPLACE-WITH-YOUR-EXTERNAL-ID \\
-  --region us-east-2 \\
-  --interval 30s
+  --region us-east-2
 </code></pre>
-<p><code>source add</code> pulls a live sample from the log group (the coordinator assumes
-the role for you) and runs an interactive schema wizard: it shows real lines
-and asks where the timestamp is, which field holds the log level, and whether
-the tail is a JSON payload. It detects the common shapes automatically —
+<p>This only records the mapping — nothing is ingesting yet. The source
+shows up as pending:</p>
+<pre><code>weft source list
+</code></pre>
+<h3 id="2-deploy-the-cloudformation-stack">2. Deploy the CloudFormation stack</h3>
+<p>In the AWS account that owns the log group, deploy the Firehose stack.
+It provisions the Firehose delivery stream, the IAM roles CloudWatch Logs
+needs to write to it, the subscription filter on your log group(s), and a
+required S3 bucket for any events Firehose can't deliver (30-day expiry).</p>
+<pre><code>aws cloudformation create-stack \\
+  --stack-name weft-cloudwatch-firehose \\
+  --template-url https://weft-public.s3.amazonaws.com/cfn/weft-cloudwatch-firehose.yaml \\
+  --parameters ParameterKey=WeftToken,ParameterValue=&lt;your-weft-namespace-token&gt; \\
+               ParameterKey=LogGroupNames,ParameterValue=&quot;/aws/lambda/my-fn&quot; \\
+  --capabilities CAPABILITY_IAM
+</code></pre>
+<p><code>WeftToken</code> is a namespace-scoped agent token (<code>weft token create</code>); it
+authenticates Firehose's deliveries to weft the same way any other push
+source authenticates. <code>LogGroupNames</code> is a comma-separated list — one
+stack can subscribe several log groups in the same account/region.</p>
+<p>To add or remove log groups later, update the stack's <code>LogGroupNames</code>
+parameter and redeploy; it won't touch the Firehose stream or IAM roles.</p>
+<h3 id="3-configure-the-schema">3. Configure the schema</h3>
+<p>Once your log group starts emitting events, weft accumulates a sample
+from that real traffic — there's nothing to pull on demand, so this
+happens naturally as your app logs. Once enough lines have accumulated:</p>
+<pre><code>weft source configure myco/my-app
+</code></pre>
+<p>This runs an interactive schema wizard: it shows real lines and asks
+where the timestamp is, which field holds the log level, and whether the
+tail is a JSON payload. It detects the common shapes automatically —
 CloudWatch-flavored text (<code>2026-04-18 14:32:01 INFO {&quot;user&quot;:&quot;alice&quot;}</code>) or
 pure-JSON Lambda logs — so you usually just confirm its suggestions. The
-schema it produces is stored server-side; there's no local file to manage.</p>
-<p>Within one poll interval weft will assume the role, page through
-recent log events, and start writing rows. Confirm the source is live:</p>
-<pre><code>weft source list
-
-# And in the shell
+schema it produces is stored server-side; there's no local file to
+manage. The source starts ingesting as soon as you approve it.</p>
+<pre><code># And in the shell
 cat /log/myco/my-app/main.log | head
 </code></pre>
 <h3 id="troubleshooting">Troubleshooting</h3>
 <ul>
-<li><strong>No rows appearing</strong> — the most common causes are a missing
-external ID, the role's resource ARN not matching your log group, or
-the log group being in a different region than you specified. Revisit
-step 1 and confirm each matches.</li>
+<li><strong>No rows appearing</strong> — check the Firehose delivery stream's own
+CloudWatch log group (created by the stack, separate from your app's
+log group) for delivery errors; a common cause is the <code>WeftToken</code>
+parameter not matching a live namespace token. Also confirm the
+subscription filter actually attached — CloudWatch allows at most 2
+subscription filters per log group, so if you already forward this log
+group elsewhere (Datadog, Splunk) you may be out of slots.</li>
+<li><strong>Nothing to configure yet</strong> — <code>weft source configure</code> needs a sample;
+if your log group is low-traffic it can take a while to accumulate one.
+<code>weft source schema &lt;namespace&gt;/&lt;service&gt;</code> shows accumulation progress.</li>
 <li><strong>Rows appearing but fields look wrong</strong> — your schema's
 <code>timestamp_format</code> is off. Check against Go's reference time
-(<code>Mon Jan 2 15:04:05 MST 2006</code>).</li>
-<li><strong>CloudWatch charges</strong> — weft's poller uses <code>FilterLogEvents</code>, which
-AWS bills as data scanned. If cost matters, raise <code>--interval</code> (fewer
-calls) or scope your log group tightly.</li>
+(<code>Mon Jan 2 15:04:05 MST 2006</code>), then <code>weft source resample</code> to pull a
+fresh sample and re-run the wizard.</li>
 </ul>
 `,
 } as const;

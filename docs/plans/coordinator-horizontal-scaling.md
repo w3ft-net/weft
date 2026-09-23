@@ -15,7 +15,7 @@ a chaos-test harness).
 | 1 | NAT gateway self-election | **Done** — option (a), lease-based failover, see below |
 | 1a | Quick win: S3 traffic off the NAT path entirely | **Done** — `aws_vpc_endpoint.s3` applied, confirmed `available` and associated with `rtb-08515c241db4539ec` |
 | 1b | Found: live prod config drift in `app_config_blob` (shard volume sizes, Stripe price IDs) | **Done** — applied, `app_config_blob` no longer drifts |
-| 2 | CloudWatch poller double-ingest | **Done** — per-log-group lease, see below |
+| 2 | CloudWatch poller double-ingest | **Done**, then **moot** — per-log-group lease shipped, then `coordinator/poller` itself was deleted entirely in the push-based CloudWatch cutover (`docs/plans/cloudwatch-kinesis-subscription.md`); see below for the original fix, kept as historical record |
 | 3 | Cron/watch executor double-fire | **Done** — per-watch lease, see below |
 | 4 | In-memory per-process state (tail/ingest/usage) | **Done** — usage stats (append-only flush, see below); `RingBuffer` scoped out (no fix needed, see below); `TailBroker` benchmarked 2026-09-17 (Redis Pub/Sub won), production wiring done 2026-09-17 (`coordinator.TailFanout`, see below), ElastiCache Terraform applied |
 | 5 | Shard FSM/registry convergence race | **Done** 2026-09-17 — `shard-fsm-leader` lease, see below |
@@ -291,7 +291,9 @@ applied.
 
 ## 2. CloudWatch poller double-ingest
 
-**Where:** `coordinator/poller/poller.go:35-71` (`Start`), `:99-155` (`poll`)
+**Moot as of the push-based CloudWatch cutover** (`docs/plans/cloudwatch-kinesis-subscription.md`) — `coordinator/poller` was deleted entirely, so the lease fix below no longer has anything to guard. Kept as historical record of the original N>1 hazard and fix shape.
+
+**Where (historical):** `coordinator/poller/poller.go:35-71` (`Start`), `:99-155` (`poll`)
 
 `Poller.Start` spawns one goroutine per enabled `log_groups` row, per
 process, with no lease/lock. Each tick reads `LastPollAt`/`LastToken` off the

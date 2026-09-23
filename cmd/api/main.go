@@ -21,6 +21,8 @@ func main() {
 	coordAddr := flag.String("coordinator", "localhost:9020", "coordinator gRPC address")
 	baseURL := flag.String("base-url", "https://w3ft.net", "base URL for magic links")
 	renderSyslogPort := flag.Int("render-syslog-port", 9023, "TCP port for the Render TLS syslog listener (see docs/ingestion-syslog.md); the NLB terminates TLS and forwards plaintext here")
+	redisAddr := flag.String("redis-addr", "", "Redis/Valkey address for the shared ingest-schema cache (host:port); empty disables it, every schema lookup falls through to Postgres directly")
+	redisTLS := flag.Bool("redis-tls", false, "use TLS for the Redis connection (required for ElastiCache in-transit encryption)")
 	flag.Parse()
 
 	jwtSecret := os.Getenv("JWT_SECRET")
@@ -43,6 +45,18 @@ func main() {
 		log.Fatalf("open database: %v", err)
 	}
 	defer s.Close()
+
+	// Shared Valkey-backed cache for ingest-time schema lookups
+	// (api.enrichRow/enrichRows, SyslogServer) — see
+	// docs/plans/cloudwatch-kinesis-subscription.md. Same "empty disables"
+	// convention as coordinator's --redis-addr for tail fan-out: no flag
+	// means every schema lookup goes straight to Postgres, same as
+	// before this cache existed. Construction never blocks or errors on
+	// an unreachable Redis (store.NewSchemaCache doesn't Ping) — every
+	// SchemaCache op is its own short-timeout, best-effort call.
+	if *redisAddr != "" {
+		s.SetSchemaCache(store.NewSchemaCache(*redisAddr, *redisTLS))
+	}
 
 	srv := weftapi.NewServer(s, jwtSecret, *coordAddr, *baseURL)
 	if err := srv.Connect(); err != nil {

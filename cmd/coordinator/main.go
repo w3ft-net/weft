@@ -27,7 +27,6 @@ import (
 	"github.com/graybeardcorp/weft/compute"
 	weftcfg "github.com/graybeardcorp/weft/config"
 	"github.com/graybeardcorp/weft/coordinator"
-	"github.com/graybeardcorp/weft/coordinator/poller"
 	coordsvc "github.com/graybeardcorp/weft/coordinator/service"
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -198,7 +197,7 @@ func main() {
 	provCtx, provCancel := context.WithCancel(context.Background())
 	defer provCancel()
 
-	// Identifies this process for the lease table (poller/cron/NAT mutual
+	// Identifies this process for the lease table (cron/NAT mutual
 	// exclusion, and now the shard-fsm-leader lease — see
 	// docs/plans/coordinator-horizontal-scaling.md #5). Computed before
 	// logdb.Start so the provisioner's own election loop can use it too.
@@ -230,7 +229,7 @@ func main() {
 	coord.Provisioner = prov
 
 	// Post-provisioner db-dependent setup: usage metering, customer
-	// seeding, archived-shard rehydration, pollers. Everything above
+	// seeding, archived-shard rehydration. Everything above
 	// already took its snapshot of the store at boot time for
 	// hydration; this block covers the pieces that run for the life
 	// of the process or depend on live buckets.
@@ -247,11 +246,8 @@ func main() {
 			}
 		}
 
-		// Start CloudWatch poller for configured sources.
-		p := poller.New(db, coord, holder)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		p.Start(ctx)
 
 		// Cron executor reuses the Notifier already wired into coord.
 		cronExec := &coordinator.CronExecutor{
@@ -264,7 +260,7 @@ func main() {
 
 		// NAT self-election: exactly one coordinator instance points the
 		// private subnet's 0.0.0.0/0 route at itself, via the same lease
-		// primitive as poller/cron above. Replaces the old boot-time-only
+		// primitive as cron above. Replaces the old boot-time-only
 		// claim in infrastructure-catalog's shared user-data script,
 		// which raced on boot order — see
 		// docs/plans/coordinator-horizontal-scaling.md #1. No-ops

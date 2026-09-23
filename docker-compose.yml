@@ -163,6 +163,11 @@ services:
       COORDINATOR_ADDR: coordinator:9020
       BASE_URL: http://localhost:5173
       JWT_SECRET: dev-secret-change-in-production
+      # Shared ingest-schema cache (docs/plans/cloudwatch-kinesis-subscription.md)
+      # — same Valkey instance coordinator uses for tail -f fan-out, a
+      # different key space. Internal Docker-network port; 6380 (below)
+      # is only the host-exposed mapping.
+      REDIS_ADDR: redis:6379
       STRIPE_SECRET_KEY: sk_test_51TDBfAEHO84wqJMxmG1GIgKTzDuJYWkgBFnezMCBaQcRg69vo1ZpFJCgKyFJOoYB9dqVrUiUDQMmLuj6LIiZmamy00wwE1vRih
       STRIPE_PUBLISHABLE_KEY: pk_test_51TDBfAEHO84wqJMxXOTWwZ1Grkw7eFQw3KAViuEPrJShEassrIWXMWQMUD0eaeI6D8HVNjRInLKWA3HTT4ckjuK3006aFW362Y
       STRIPE_WEBHOOK_SECRET: whsec_72a6ad2cf985245818ee5afb41431de38ce3b282849fa41013456d4b9e2109e7
@@ -179,6 +184,8 @@ services:
         condition: service_healthy
       coordinator:
         condition: service_started
+      redis:
+        condition: service_healthy
     # api and coordinator both run goose up at startup. They depend
     # on postgres but not on each other for migrations, so they race.
     # The loser hits "relation already exists" mid-migration and

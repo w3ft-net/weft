@@ -807,9 +807,15 @@ func httpClient(cfg *shell.Config) (*shell.HTTPCoordinator, error) {
 	return shell.NewHTTPCoordinator(cfg.Endpoint, cfg.Token, effectiveOrg(cfg)), nil
 }
 
+// runSourceAdd registers a push-based CloudWatch source: the AWS
+// log-group→service mapping CloudWatchAdapter routes against, created
+// StatusPending. There's no live sample to pull at creation time — the
+// customer's own Firehose stream hasn't been deployed yet — so this just
+// registers the mapping; `weft source configure` finishes onboarding
+// once real events have accumulated a sample.
 func runSourceAdd(client *shell.HTTPCoordinator) {
 	args := os.Args[3:]
-	var namespace, service, logGroup, region, pollInterval, awsAccountID, roleARN, externalID string
+	var namespace, service, logGroup, region string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -833,32 +839,11 @@ func runSourceAdd(client *shell.HTTPCoordinator) {
 				region = args[i+1]
 				i++
 			}
-		case "--interval":
-			if i+1 < len(args) {
-				pollInterval = args[i+1]
-				i++
-			}
-		case "--account":
-			if i+1 < len(args) {
-				awsAccountID = args[i+1]
-				i++
-			}
-		case "--role-arn":
-			if i+1 < len(args) {
-				roleARN = args[i+1]
-				i++
-			}
-		case "--external-id":
-			if i+1 < len(args) {
-				externalID = args[i+1]
-				i++
-			}
 		}
 	}
 
-	if namespace == "" || service == "" || logGroup == "" || roleARN == "" {
-		fmt.Fprintln(os.Stderr, `usage: weft source add --namespace NS --service NAME --log-group GROUP --role-arn ARN
-    [--account AWS_ACCOUNT_ID] [--region REGION] [--interval DURATION] [--external-id ID]`)
+	if namespace == "" || service == "" || logGroup == "" {
+		fmt.Fprintln(os.Stderr, "usage: weft source add --namespace NS --service NAME --log-group GROUP [--region REGION]")
 		os.Exit(1)
 	}
 	if strings.Contains(service, "/") {
@@ -868,58 +853,20 @@ func runSourceAdd(client *shell.HTTPCoordinator) {
 	if region == "" {
 		region = "us-east-2"
 	}
-	if pollInterval == "" {
-		pollInterval = "30s"
-	}
 
-	// Pull a live sample from the log group (the coordinator assumes the
-	// cross-account role) and run the interactive schema wizard against it,
-	// then commit. Same sample→detect→configure flow as weftd onboarding;
-	// the schema lives server-side, no local file.
-	fmt.Fprintf(os.Stderr, "Sampling recent events from %s…\n", logGroup)
-	lines, err := client.SampleCloudWatchSource(shell.SampleCloudWatchSourceRequest{
-		Namespace:    namespace,
-		Service:      service,
-		AWSAccountID: awsAccountID,
-		RoleARN:      roleARN,
-		ExternalID:   externalID,
-		LogGroup:     logGroup,
-		Region:       region,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "sample: %v\n", err)
-		os.Exit(1)
-	}
-	if len(lines) == 0 {
-		fmt.Fprintln(os.Stderr, "no events returned from the log group — nothing to sample")
-		os.Exit(1)
-	}
-
-	schema, err := setup.RunSetupFromLines(namespace+"/"+service, lines)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "setup: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := client.AddCloudWatchSource(shell.AddCloudWatchSourceRequest{
-		Namespace:       namespace,
-		Service:         service,
-		AWSAccountID:    awsAccountID,
-		RoleARN:         roleARN,
-		ExternalID:      externalID,
-		LogGroup:        logGroup,
-		Region:          region,
-		PollInterval:    pollInterval,
-		Format:          schema.Format,
-		TimestampField:  schema.TimestampField,
-		TimestampFormat: schema.TimestampFormat,
-		LevelField:      schema.LevelField,
-		LevelPattern:    schema.LevelPattern,
+	if err := client.AddKinesisSource(shell.AddKinesisSourceRequest{
+		Namespace: namespace,
+		Service:   service,
+		LogGroup:  logGroup,
+		Region:    region,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "add source: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Added source: %s/%s → %s (account %s, poll every %s)\n", namespace, service, logGroup, awsAccountID, pollInterval)
+	fmt.Printf("Added pending source: %s/%s → %s (kinesis push).\n"+
+		"Waiting for the Firehose stream to deliver events and accumulate a sample —\n"+
+		"then run `weft source configure %s/%s` to approve a schema.\n",
+		namespace, service, logGroup, namespace, service)
 }
 
 func runSourceList(client *shell.HTTPCoordinator) {

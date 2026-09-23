@@ -35,10 +35,10 @@ build order; this table is for picking opportunistic wins.
 | [nested-query-compute-pool](nested-query-compute-pool.md) | ~1d (phase A) | 4 | 3 | Ship save-time validation first |
 | [log-to-metric](log-to-metric.md) | 1.5d | 4 | 4 | Cheap rider on ingest-governance |
 | [perf-hints](perf-hints.md) | 1.5d | 4 | 3 | Polish |
-| [http-ingest](http-ingest.md) | ~2d left | 4 | 5 | Heroku shipped; JSON/CloudWatch adapters remain |
+| [http-ingest](http-ingest.md) | ~1d left | 4 | 5 | Heroku + CloudWatch adapters shipped; JSONAdapter remains |
 | [shard-archive-test](shard-archive-test.md) | ~2–3d | 4 | 3 | Operational validation only |
 | [weftd-multiline](weftd-multiline.md) | 3d | 4 | 4 | Easiest high-ROI win |
-| [cloudwatch-lambda-forwarder](cloudwatch-lambda-forwarder.md) | ~3d | 4 | 4 | |
+| [cloudwatch-kinesis-subscription](cloudwatch-kinesis-subscription.md) | ~0.5d left | 5 | 4 | Push path, CLI/frontend onboarding, and the poll-mode ripout all shipped; live pilot + rate-limit plumbing remain |
 | [alert-silencing](alert-silencing.md) | 3.5d | 4 | 5 | |
 | [weftd-disk-spool](weftd-disk-spool.md) | 3.5d | 3 | 4 | |
 | [cross-tenant-coordinator-log](compliance/cross-tenant-coordinator-log.md) | ~1–2d* | 3 | 5 | *Triage-gated; live security defect |
@@ -79,7 +79,7 @@ Each unblocks a meaningful slice of downstream work.
 
 | Plan | Effort | Why first |
 |---|---:|---|
-| [http-ingest](http-ingest.md) | ~2d remaining | Heroku adapter shipped; JSONAdapter (`/api/ingest`) + CloudWatchAdapter still pending |
+| [http-ingest](http-ingest.md) | ~1d remaining | Heroku + CloudWatch adapters shipped; JSONAdapter (`/api/ingest`) still pending |
 | [audit-log](compliance/audit-log.md) | 4.75d | Cheap to wire once before five downstream plans want to emit events |
 
 (`python-sdk` shipped — moved to `docs/completed/`. It was built as
@@ -162,13 +162,14 @@ than product strategy.
 | [direct-to-compute](direct-to-compute.md) | Shard streams rows directly to compute (skip coordinator) |
 | [nested-query-compute-pool](nested-query-compute-pool.md) | Compute calling back into the coordinator for sub-queries |
 | [compute-scaling](compute-scaling.md) | When the compute pool needs to scale beyond 1 |
-| [cloudwatch-lambda-forwarder](cloudwatch-lambda-forwarder.md) | Push-based CloudWatch alternative to today's poll |
+| [cloudwatch-kinesis-subscription](cloudwatch-kinesis-subscription.md) | Push-based CloudWatch ingestion — subscription filter → customer-owned Firehose stream → our HTTP endpoint; poll-mode fully retired |
 | [perf-hints](perf-hints.md) | Performance optimization opportunities |
 | [alert-multirow-tier-limits](alert-multirow-tier-limits.md) | Per-tier caps on multi-row alert fan-out |
 | [shard-archive-test](shard-archive-test.md) | Integration test harness for cold-shard rehydration |
 | [streaming-backpressure](streaming-backpressure.md) | Bounded per-shard queues + configurable streamCh; defer until production hits memory pressure |
 | [streaming-parallel-warp](streaming-parallel-warp.md) | Combine streaming + chunked intra-stage parallelism in warp |
 | [coverage-improvement](coverage-improvement.md) | Per-PR coverage delta, per-package floors, eliminating the `-p 1` test-isolation workaround |
+| [request-tracing](request-tracing.md) | `trace_id` log correlation (no span model, no OTLP) across weftd/CloudWatch (push)/offline ingest + SDK-based propagation; weft dogfoods it internally |
 
 ## Conventions for new plans
 

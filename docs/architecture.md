@@ -101,7 +101,7 @@ User-facing meta-variables (`NAMESPACE`, `SERVICE`, `KIND`, `LEVEL`, `TS`, `INST
 - [plans/ebs-shard-volumes.md](plans/ebs-shard-volumes.md) — EBS rollout design (S1–S6) + decisions
 - [plans/ebs-shard-volumes-verification.md](plans/ebs-shard-volumes-verification.md) — deploy-time verification playbook
 - [az-resilience.md](az-resilience.md) — future cross-AZ resilience work
-- [ingestion-cloudwatch.md](ingestion-cloudwatch.md) — CloudWatch polling/subscription, schema detection
+- [ingestion-cloudwatch.md](ingestion-cloudwatch.md) — CloudWatch push ingestion via Kinesis Firehose, schema detection
 - [ingestion-weftd.md](ingestion-weftd.md) — direct-ingest agent for sub-second log tailing
 - [query-execution.md](query-execution.md) — predicate extraction, pushdown, routing, fan-out
 - [materialized-views.md](materialized-views.md) — saved pipelines as indexes/subsets

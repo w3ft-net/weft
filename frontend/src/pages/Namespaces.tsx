@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import SidebarNav from '../components/SidebarNav'
 import PendingSourceConfigure from '../components/PendingSourceConfigure'
-import AddCloudWatchSource from '../components/AddCloudWatchSource'
+import AddKinesisSource from '../components/AddKinesisSource'
 import ConfiguredSourcesList from '../components/ConfiguredSourcesList'
 import {
   getNamespaces, createNamespace, getTokens, createToken, revokeToken,
@@ -35,7 +35,7 @@ export default function Namespaces() {
   const [newTokenEndpoint, setNewTokenEndpoint] = useState('')
   const [copied, setCopied] = useState(false)
   const [sources, setSources] = useState<SourceInfo[]>([])
-  const [showAddCW, setShowAddCW] = useState<string | null>(null)
+  const [showAddKinesis, setShowAddKinesis] = useState<string | null>(null)
   const [producers, setProducers] = useState<SyslogProducer[]>([])
 
   function loadData() {
@@ -218,7 +218,7 @@ export default function Namespaces() {
                             </div>
                           )}
 
-                          {/* Configured sources (CloudWatch + weftd) */}
+                          {/* Configured sources (CloudWatch push + weftd) */}
                           <div className="namespace-pending-section">
                             <div className="namespace-subsection-title">Sources</div>
                             <ConfiguredSourcesList
@@ -226,21 +226,22 @@ export default function Namespaces() {
                               sources={sourcesForNamespace(ns.name)}
                               onChanged={loadData}
                             />
-                            {showAddCW === ns.name ? (
-                              <AddCloudWatchSource
+                            {showAddKinesis === ns.name ? (
+                              <AddKinesisSource
                                 namespace={ns.name}
-                                onAdded={() => { setShowAddCW(null); loadData() }}
-                                onCancel={() => setShowAddCW(null)}
+                                onAdded={() => { setShowAddKinesis(null); loadData() }}
+                                onCancel={() => setShowAddKinesis(null)}
                               />
                             ) : (
-                              <button
-                                className="btn-action"
-                                onClick={() => setShowAddCW(ns.name)}
-                                data-testid={`namespace-add-cloudwatch-${ns.name}-button`}
-                                style={{ marginTop: 4 }}
-                              >
-                                + Add CloudWatch source
-                              </button>
+                              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                                <button
+                                  className="btn-action"
+                                  onClick={() => setShowAddKinesis(ns.name)}
+                                  data-testid={`namespace-add-kinesis-${ns.name}-button`}
+                                >
+                                  + Add Kinesis source
+                                </button>
+                              </div>
                             )}
                           </div>
 

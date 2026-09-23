@@ -35,7 +35,6 @@ type Organization struct {
 	SeatCount            int `gorm:"not null;default:0"`
 
 	Namespaces  []Namespace  `gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
-	AWSAccounts []AWSAccount `gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
 	AgentTokens []AgentToken `gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
 }
 

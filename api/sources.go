@@ -137,7 +137,7 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 	}
 
 	namespace := r.URL.Query().Get("namespace")
-	var sources []store.LogGroupWithAWSAccount
+	var sources []store.LogGroupJoined
 	q := s.store.DB().
 		Table("log_groups").
 		Select(`log_groups.*,
@@ -283,26 +283,10 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	// Flip the pending row to configured. The existing (namespace_id, app)
 	// row is preserved — only status/schema_yaml/sample/detection change —
 	// so there's no window where the source doesn't exist in the table.
-	if err := func() error {
-		res := s.store.DB().Model(&store.LogGroup{}).
-			Where("namespace_id = ? AND app = ? AND status IN ?",
-				ns.ID, app, []store.LogGroupStatus{store.StatusPending, store.StatusConfigured}).
-			Updates(map[string]any{
-				"status":                store.StatusConfigured,
-				"schema_yaml":           string(schemaYAML),
-				"sample":                nil,
-				"detection":             nil,
-				"sample_collected":      0,
-				"resample_requested_at": nil,
-			})
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected == 0 {
-			return gorm.ErrRecordNotFound
-		}
-		return nil
-	}(); err != nil {
+	// ConfigureLogGroup also evicts this service's Valkey schema-cache
+	// entry (store/schema_cache.go) so every api/coordinator node's next
+	// ingest-time lookup picks up the new schema immediately.
+	if err := s.store.ConfigureLogGroup(ns.ID, app, string(schemaYAML)); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			// The pending row disappeared between GetPendingLogGroup and
 			// the UPDATE — either a parallel configure won the race or
@@ -319,7 +303,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "configured"})
 }
 
-// ── CloudWatch source management (JWT-authenticated) ────────
+// ── Source management (JWT-authenticated) ────────
 
 // handleListSources returns all configured log sources for the caller's
 // customer, optionally filtered to a single namespace via ?namespace=X.
@@ -343,16 +327,13 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 	nsFilter := r.URL.Query().Get("namespace")
 
 	type sourceResp struct {
-		Namespace    string `json:"namespace"`
-		Service      string `json:"service"`
-		Status       string `json:"status"`
-		SourceType   string `json:"source_type"`
-		LogGroup     string `json:"log_group"`
-		Region       string `json:"region"`
-		PollInterval string `json:"poll_interval"`
-		Enabled      bool   `json:"enabled"`
-		LastPollAt   string `json:"last_poll_at"`
-		AWSAccountID string `json:"aws_account_id,omitempty"`
+		Namespace  string `json:"namespace"`
+		Service    string `json:"service"`
+		Status     string `json:"status"`
+		SourceType string `json:"source_type"`
+		LogGroup   string `json:"log_group"`
+		Region     string `json:"region"`
+		Enabled    bool   `json:"enabled"`
 	}
 	out := []sourceResp{}
 	for _, lg := range all {
@@ -363,143 +344,62 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		out = append(out, sourceResp{
-			Namespace:    lg.NamespaceName,
-			Service:      lg.Service,
-			Status:       string(lg.Status),
-			SourceType:   string(lg.SourceType),
-			LogGroup:     lg.LogGroupName,
-			Region:       lg.Region,
-			PollInterval: lg.PollInterval,
-			Enabled:      lg.Enabled,
-			LastPollAt:   lg.LastPollAt,
-			AWSAccountID: lg.AccountID,
+			Namespace:  lg.NamespaceName,
+			Service:    lg.Service,
+			Status:     string(lg.Status),
+			SourceType: string(lg.SourceType),
+			LogGroup:   lg.LogGroupName,
+			Region:     lg.Region,
+			Enabled:    lg.Enabled,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
 }
 
-// cloudWatchFormBase carries the fields shared between the sample and
-// add-source flows — the creds/log-group identification. Declared once so
-// both handlers decode the same JSON shape.
-type cloudWatchFormBase struct {
-	Namespace    string `json:"namespace"`
-	Service      string `json:"service"`
-	AWSAccountID string `json:"aws_account_id"`
-	RoleARN      string `json:"role_arn"`
-	ExternalID   string `json:"external_id"`
-	LogGroup     string `json:"log_group"`
-	Region       string `json:"region"`
-}
-
-// handleSampleCloudWatchSource proxies to the coordinator's
-// SampleCloudWatchSource RPC so the UI can preview events + a detected
-// schema before committing. Requires the same authorization as creating a
-// source (see handleAddCloudWatchSource).
-func (s *Server) handleSampleCloudWatchSource(w http.ResponseWriter, r *http.Request) {
-	session := GetSession(r)
-
-	var req cloudWatchFormBase
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	if req.Namespace == "" || req.LogGroup == "" || req.RoleARN == "" {
-		http.Error(w, "namespace, log_group, and role_arn are required", http.StatusBadRequest)
-		return
-	}
-
-	if err := s.authorizeSourceEdit(session, req.Namespace); err != nil {
-		http.Error(w, err.Error(), http.StatusForbidden)
-		return
-	}
-
-	resp, err := s.coordClient.SampleCloudWatchSource(s.coordCtx(r), &pb.SampleCloudWatchSourceRequest{
-		Namespace:    req.Namespace,
-		LogGroup:     req.LogGroup,
-		Region:       req.Region,
-		AwsAccountId: req.AWSAccountID,
-		RoleArn:      req.RoleARN,
-		ExternalId:   req.ExternalID,
-	})
-	if err != nil {
-		http.Error(w, "sample failed: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"lines":     resp.Lines,
-		"detection": json.RawMessage(resp.DetectionJson),
-	})
-}
-
-// handleAddCloudWatchSource is the final step of the add-source flow: the
-// user has previewed a sample, confirmed a schema via <SchemaEditor>, and
-// is now committing. Builds the Schema YAML server-side from the submitted
-// form fields rather than trusting a client-supplied YAML blob.
-func (s *Server) handleAddCloudWatchSource(w http.ResponseWriter, r *http.Request) {
+// handleAddKinesisSource registers the AWS-log-group→service mapping for
+// a Firehose push source: no cross-account role to verify and no schema
+// to build server-side. The source is created StatusPending; enrichRows/
+// accumulatePendingKinesisSamples (api/adapter.go) accumulate a sample
+// from the customer's real Firehose deliveries once their CloudFormation
+// stack is live, and `weft source configure` (unmodified — already
+// source-type-agnostic) finishes onboarding once a human has something
+// to approve. See docs/plans/cloudwatch-kinesis-subscription.md.
+func (s *Server) handleAddKinesisSource(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 
 	var req struct {
-		cloudWatchFormBase
-		PollInterval    string             `json:"poll_interval"`
-		Format          string             `json:"format"`
-		TimestampField  string             `json:"timestamp_field"`
-		TimestampFormat string             `json:"timestamp_format"`
-		LevelField      string             `json:"level_field"`
-		LevelPattern    string             `json:"level_pattern"`
-		TraceIDField    string             `json:"trace_id_field"`
-		ExpandKeys      []ingest.ExpandKey `json:"expand_keys"`
+		Namespace string `json:"namespace"`
+		Service   string `json:"service"`
+		LogGroup  string `json:"log_group"`
+		Region    string `json:"region"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if req.Namespace == "" || req.Service == "" || req.LogGroup == "" || req.RoleARN == "" {
-		http.Error(w, "namespace, app, log_group, and role_arn are required", http.StatusBadRequest)
+	if req.Namespace == "" || req.Service == "" || req.LogGroup == "" {
+		http.Error(w, "namespace, service, and log_group are required", http.StatusBadRequest)
 		return
 	}
 
 	if err := s.authorizeSourceEdit(session, req.Namespace); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
-		return
-	}
-
-	schema := &ingest.Schema{
-		Service:         req.Service,
-		Customer:        session.ActiveCustomerName,
-		Format:          req.Format,
-		TimestampField:  req.TimestampField,
-		TimestampFormat: req.TimestampFormat,
-		LevelField:      req.LevelField,
-		LevelPattern:    req.LevelPattern,
-		TraceIDField:    req.TraceIDField,
-		ExpandKeys:      req.ExpandKeys,
-	}
-	schemaYAML, err := schema.ToYAML()
-	if err != nil {
-		http.Error(w, "schema marshal: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	if _, err := s.coordClient.AddSource(s.coordCtx(r), &pb.AddSourceRequest{
-		Namespace:    req.Namespace,
-		Service:      req.Service,
-		LogGroup:     req.LogGroup,
-		Region:       req.Region,
-		SchemaYaml:   string(schemaYAML),
-		PollInterval: req.PollInterval,
-		AwsAccountId: req.AWSAccountID,
-		RoleArn:      req.RoleARN,
-		ExternalId:   req.ExternalID,
+		Namespace: req.Namespace,
+		Service:   req.Service,
+		LogGroup:  req.LogGroup,
+		Region:    req.Region,
 	}); err != nil {
 		http.Error(w, "add source: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"status": "configured", "service": req.Service})
+	json.NewEncoder(w).Encode(map[string]string{"status": "pending", "service": req.Service})
 }
 
 // handleDeleteSource removes a configured log source. Path shape:
