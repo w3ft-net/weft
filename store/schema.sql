@@ -11,7 +11,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict u2gy3U3nR16MgJHSZN5kQAigr5OFHGyUMnJft79c7cKJ3aL8pOCFyTJu7RMXbZG
+\restrict TdfsgBYS9ugOj8UetTamPgjzCYlgUVXb9jiyBWSL8yVUOMlNzYOurYb7yTLkYb2
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg13+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg13+2)
@@ -62,7 +62,8 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
 CREATE TYPE public.log_group_source_type AS ENUM (
     'cloudwatch',
     'weftd',
-    'direct'
+    'direct',
+    'kinesis'
 );
 
 
@@ -599,41 +600,6 @@ CREATE TABLE partman.template_public_usage_hourly (
     hour timestamp with time zone NOT NULL,
     bytes_ingested bigint NOT NULL
 );
-
-
---
--- Name: aws_accounts; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.aws_accounts (
-    id bigint NOT NULL,
-    created_at timestamp with time zone,
-    updated_at timestamp with time zone,
-    deleted_at timestamp with time zone,
-    account_id text NOT NULL,
-    role_arn text NOT NULL,
-    external_id text,
-    org_id uuid NOT NULL
-);
-
-
---
--- Name: accounts_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.accounts_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: accounts_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.accounts_id_seq OWNED BY public.aws_accounts.id;
 
 
 --
@@ -1175,15 +1141,11 @@ CREATE TABLE public.log_groups (
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
     deleted_at timestamp with time zone,
-    aws_account_id bigint,
     app text NOT NULL,
     log_group_name text,
     region text DEFAULT 'us-east-2'::text NOT NULL,
     schema_yaml text,
-    poll_interval text DEFAULT '30s'::text NOT NULL,
     enabled boolean DEFAULT true NOT NULL,
-    last_poll_at text,
-    last_token text,
     source_type public.log_group_source_type NOT NULL,
     namespace_id bigint NOT NULL,
     status text DEFAULT 'configured'::text NOT NULL,
@@ -1988,13 +1950,6 @@ ALTER TABLE ONLY public.agent_tokens ALTER COLUMN id SET DEFAULT nextval('public
 
 
 --
--- Name: aws_accounts id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.aws_accounts ALTER COLUMN id SET DEFAULT nextval('public.accounts_id_seq'::regclass);
-
-
---
 -- Name: cron_results id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -2125,14 +2080,6 @@ ALTER TABLE ONLY public.tmp_files ALTER COLUMN id SET DEFAULT nextval('public.tm
 --
 
 ALTER TABLE ONLY public.user_notices ALTER COLUMN id SET DEFAULT nextval('public.user_notices_id_seq'::regclass);
-
-
---
--- Name: aws_accounts accounts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.aws_accounts
-    ADD CONSTRAINT accounts_pkey PRIMARY KEY (id);
 
 
 --
@@ -2586,13 +2533,6 @@ CREATE INDEX idx_cron_hourly_watch_tag_bucket ON ONLY public.cron_results_hourly
 --
 
 CREATE INDEX cron_results_hourly_default_cron_watch_id_tag_bucket_start_idx ON public.cron_results_hourly_default USING btree (cron_watch_id, tag, bucket_start DESC);
-
-
---
--- Name: idx_accounts_deleted_at; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_accounts_deleted_at ON public.aws_accounts USING btree (deleted_at);
 
 
 --
@@ -3136,14 +3076,6 @@ ALTER TABLE ONLY public.cron_watch_history
 
 
 --
--- Name: log_groups fk_accounts_log_groups; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.log_groups
-    ADD CONSTRAINT fk_accounts_log_groups FOREIGN KEY (aws_account_id) REFERENCES public.aws_accounts(id) ON DELETE CASCADE;
-
-
---
 -- Name: agent_tokens fk_agent_tokens_namespace; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3157,14 +3089,6 @@ ALTER TABLE ONLY public.agent_tokens
 
 ALTER TABLE ONLY public.log_groups
     ADD CONSTRAINT fk_log_groups_org FOREIGN KEY (org_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
-
-
---
--- Name: aws_accounts fk_organizations_accounts; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.aws_accounts
-    ADD CONSTRAINT fk_organizations_accounts FOREIGN KEY (org_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
 
 
 --
@@ -3283,13 +3207,13 @@ ALTER TABLE ONLY public.users
 -- PostgreSQL database dump complete
 --
 
-\unrestrict u2gy3U3nR16MgJHSZN5kQAigr5OFHGyUMnJft79c7cKJ3aL8pOCFyTJu7RMXbZG
+\unrestrict TdfsgBYS9ugOj8UetTamPgjzCYlgUVXb9jiyBWSL8yVUOMlNzYOurYb7yTLkYb2
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict hNVI2PTx9Fn6Jm4i4OfakSZhEKarQgK4QsAwwO4VPEg8sEoePia4EjYTzuxmrmo
+\restrict VzoWvLszPdQjtg4ZAGaLX0Zk3BBa39TQD4IJMqHer0PcqcjFcyeIAJE2bzzjwEQ
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg13+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg13+2)
@@ -3323,13 +3247,13 @@ SELECT pg_catalog.setval('public.buckets_new_id_seq', 1, true);
 -- PostgreSQL database dump complete
 --
 
-\unrestrict hNVI2PTx9Fn6Jm4i4OfakSZhEKarQgK4QsAwwO4VPEg8sEoePia4EjYTzuxmrmo
+\unrestrict VzoWvLszPdQjtg4ZAGaLX0Zk3BBa39TQD4IJMqHer0PcqcjFcyeIAJE2bzzjwEQ
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict SvrPZ6xMXeHeOTLZ0f1xgPFWPf4rYFbNvchwDJhQpO2bgcKHiJ1cdT14JhHiCF7
+\restrict MgbmiXfbiAOwRcI0OsQO2e63y2j7zbV12TDnDbXawlVAjM04Ce20hAhIMEPGLXz
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg13+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg13+2)
@@ -3423,20 +3347,22 @@ INSERT INTO public.goose_db_version VALUES (71, 72, true, '2026-07-30 21:45:01.9
 INSERT INTO public.goose_db_version VALUES (72, 73, true, '2026-09-02 21:54:40.900486');
 INSERT INTO public.goose_db_version VALUES (73, 74, true, '2026-09-19 02:18:28.296681');
 INSERT INTO public.goose_db_version VALUES (74, 75, true, '2026-09-19 02:18:28.317272');
+INSERT INTO public.goose_db_version VALUES (75, 76, true, '2026-09-23 16:02:05.038678');
+INSERT INTO public.goose_db_version VALUES (76, 77, true, '2026-09-23 16:02:05.039149');
 
 
 --
 -- Name: goose_db_version_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
-SELECT pg_catalog.setval('public.goose_db_version_id_seq', 74, true);
+SELECT pg_catalog.setval('public.goose_db_version_id_seq', 76, true);
 
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict SvrPZ6xMXeHeOTLZ0f1xgPFWPf4rYFbNvchwDJhQpO2bgcKHiJ1cdT14JhHiCF7
+\unrestrict MgbmiXfbiAOwRcI0OsQO2e63y2j7zbV12TDnDbXawlVAjM04Ce20hAhIMEPGLXz
 
 
 -- +weft partman/cron reconstruction (generated by scripts/collapse-migrations.sh; do not hand-edit)
