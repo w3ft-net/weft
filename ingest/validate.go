@@ -42,7 +42,7 @@ func (s *Schema) Validate() []string {
 
 	if err := validateFieldRef("timestamp_field", s.TimestampField); err != "" {
 		errs = append(errs, err)
-	} else if s.TimestampField != "" && s.TimestampField != "none" && s.TimestampFormat == "" {
+	} else if !fieldRefDisabled(s.TimestampField) && s.TimestampFormat == "" {
 		errs = append(errs, "timestamp_format: required when timestamp_field is set — extractTimestamp returns no timestamp at all without it, silently falling back to ingest time")
 	}
 	if s.TimestampFields < 0 {
@@ -79,12 +79,24 @@ func (s *Schema) Validate() []string {
 	return errs
 }
 
-// validateFieldRef checks the shape parse.go's field extractors accept:
-// a JSON dot-path (leading '.') or a 1-based positional field index.
-// Empty and "none" both mean "don't extract" and are always valid.
-// Returns "" when valid, a message identifying name otherwise.
+// fieldRefDisabled reports whether value means "don't extract" to parse.go's
+// field extractors: empty, "none", and — undocumented but real, established
+// usage (integration/onboard_test.go's onboarding config) — "0". Every
+// extractor guards on `idx < 1`, so 0 has always silently no-op'd exactly
+// like empty/none; treating it as a validation error would reject a config
+// the parser itself has always accepted harmlessly.
+func fieldRefDisabled(value string) bool {
+	return value == "" || value == "none" || value == "0"
+}
+
+// validateFieldRef checks the shape parse.go's field extractors accept: a
+// JSON dot-path (leading '.') or a 1-based positional field index.
+// fieldRefDisabled values are always valid (see there). A negative index
+// has no established meaning the way 0 does, so it's still flagged — most
+// likely a typo or an off-by-one bug, not a deliberate disable. Returns ""
+// when valid, a message identifying name otherwise.
 func validateFieldRef(name, value string) string {
-	if value == "" || value == "none" || strings.HasPrefix(value, ".") {
+	if fieldRefDisabled(value) || strings.HasPrefix(value, ".") {
 		return ""
 	}
 	idx, err := strconv.Atoi(value)
@@ -92,7 +104,7 @@ func validateFieldRef(name, value string) string {
 		return fmt.Sprintf("%s: %q is neither a JSON dot-path (starting with '.') nor a positional field index", name, value)
 	}
 	if idx < 1 {
-		return fmt.Sprintf("%s: field index must be >= 1 (1-based), got %d", name, idx)
+		return fmt.Sprintf("%s: field index must be >= 1 (1-based) or 0 to disable, got %d", name, idx)
 	}
 	return ""
 }

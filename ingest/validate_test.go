@@ -50,8 +50,8 @@ func TestSchema_Validate(t *testing.T) {
 			wantErr: []string{`timestamp_field: "first" is neither a JSON dot-path`},
 		},
 		{
-			name:    "timestamp_field zero index",
-			schema:  Schema{TimestampField: "0", TimestampFormat: time_RFC3339},
+			name:    "timestamp_field negative index",
+			schema:  Schema{TimestampField: "-1", TimestampFormat: time_RFC3339},
 			wantErr: []string{"timestamp_field: field index must be >= 1"},
 		},
 		{
@@ -92,6 +92,20 @@ func TestSchema_Validate(t *testing.T) {
 			name:    "none and empty are always valid field refs",
 			schema:  Schema{TimestampField: "none", LevelField: "", TraceIDField: "none"},
 			wantErr: nil,
+		},
+		{
+			// integration/onboard_test.go configures a real source this
+			// way — "0" has always silently no-op'd in extractTimestamp
+			// (idx-- then idx<1 guard), same as "none"/"". Rejecting it
+			// would break that established, working config.
+			name:    `"0" disables a field ref same as none/empty, and skips the timestamp_format requirement`,
+			schema:  Schema{Format: "text", TimestampField: "0", LevelField: "0", TraceIDField: "0"},
+			wantErr: nil,
+		},
+		{
+			name:    "negative field index is still rejected — no established meaning like 0 has",
+			schema:  Schema{LevelField: "-1"},
+			wantErr: []string{"level_field: field index must be >= 1 (1-based) or 0 to disable, got -1"},
 		},
 		{
 			name:   "multiple problems all reported at once",
