@@ -660,7 +660,16 @@ func (e *Shard) queryable(tr TimeRange, serving map[string]struct{}) bool {
 	if e.State == StateSuspended || e.State == StateUpgrading {
 		return false
 	}
-	if e.isStale() {
+	// Staleness (missed heartbeats) is a live-instance liveness signal —
+	// meaningless once a shard is ARCHIVED, since it has no instance left
+	// to go stale. evaluateArchiving clears LastHeartbeatAt in memory when
+	// the archive completes, but that clear is never persisted (Store.
+	// SetShardParquetPath only updates parquet_path), so LoadFromStore
+	// rehydrates the shard's stale pre-archival heartbeat from Postgres on
+	// every coordinator restart. Applying isStale() here excluded every
+	// archived shard from queries the moment the coordinator next
+	// restarted — silently, with no error or log trace.
+	if e.State != StateArchived && e.isStale() {
 		return false
 	}
 	// An ARCHIVED / ARCHIVING / READ_ONLY shard with zero rows has nothing

@@ -153,6 +153,48 @@ func TestRegistry_HasApp_EmptyAppsNoLongerCatchAll(t *testing.T) {
 	}
 }
 
+// TestRegistry_MatchingEntries_ArchivedShardsIgnoreStaleHeartbeat pins
+// a production bug: ARCHIVED shards never heartbeat again once their
+// instance is retired, so LastHeartbeatAt freezes at whatever it was
+// before archival. evaluateArchiving clears it to zero in-memory
+// (shardsm.go), but that clear is never persisted — ShardStore.
+// SetShardParquetPath only updates the parquet_path column. So the
+// moment the coordinator restarts, LoadFromStore rehydrates the shard
+// from Postgres with its stale pre-archival LastHeartbeatAt, and
+// isStale() (designed to detect a dead EC2 instance) permanently
+// excludes the shard from every future query — even though the data
+// is sitting right there in S3. In prod this made every archived
+// shard — months of history — invisible to queries with zero error or
+// log trace, and the cold-shard Lambda was never invoked (its
+// Invocations metric had zero datapoints). Staleness is a live-
+// instance liveness signal; it must not apply once a shard has no
+// instance left to be stale about.
+func TestRegistry_MatchingEntries_ArchivedShardsIgnoreStaleHeartbeat(t *testing.T) {
+	now := time.Now()
+	reg := NewShardRegistry()
+
+	reg.Add(&Shard{
+		ID:          "archived-old",
+		Services:    []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
+		WindowStart: now.Add(-45 * 24 * time.Hour),
+		WindowEnd:   now.Add(-44 * 24 * time.Hour),
+		State:       StateArchived,
+		Addr:        "10.0.0.1:9000", // non-empty so the addr/Live guard passes; see registry_empty_shard_test.go
+		ParquetPath: "s3://weft-cold/1-apps/shard-archived-old.parquet",
+		RowCount:    340,
+		// Rehydrated from a stale DB row after a coordinator restart —
+		// last observed heartbeat from well before this shard archived,
+		// never cleared in Postgres.
+		LastHeartbeatAt: now.Add(-50 * 24 * time.Hour),
+	})
+
+	tr := TimeRange{Start: now.Add(-46 * 24 * time.Hour), End: now.Add(-43 * 24 * time.Hour)}
+	matching := reg.MatchingEntries(tr, servingFor(reg, "vimgym"), "bolt")
+	if len(matching) != 1 {
+		t.Fatalf("archived shard with real, in-window data was excluded by a stale pre-archival heartbeat; got %d matching", len(matching))
+	}
+}
+
 // TestProcessHeartbeat_RefreshesLastHeartbeatAt confirms that the
 // same-address heartbeat path updates LastHeartbeatAt. This is the
 // hot path in steady state — every ~10s a heartbeat arrives at the
