@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -247,12 +248,17 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
+		Envelope        string             `json:"envelope"`
 		Format          string             `json:"format"`
+		FieldSeparator  string             `json:"field_separator"`
 		TimestampField  string             `json:"timestamp_field"`
 		TimestampFormat string             `json:"timestamp_format"`
+		TimestampFields int                `json:"timestamp_fields"`
 		LevelField      string             `json:"level_field"`
 		LevelPattern    string             `json:"level_pattern"`
 		TraceIDField    string             `json:"trace_id_field"`
+		TraceIDPattern  string             `json:"trace_id_pattern"`
+		JSONStartField  int                `json:"json_start_field"`
 		ExpandKeys      []ingest.ExpandKey `json:"expand_keys"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -264,13 +270,28 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	schema := &ingest.Schema{
 		Service:         app,
 		Customer:        session.ActiveCustomerName,
+		Envelope:        req.Envelope,
 		Format:          req.Format,
+		FieldSeparator:  req.FieldSeparator,
 		TimestampField:  req.TimestampField,
 		TimestampFormat: req.TimestampFormat,
+		TimestampFields: req.TimestampFields,
 		LevelField:      req.LevelField,
 		LevelPattern:    req.LevelPattern,
 		TraceIDField:    req.TraceIDField,
+		TraceIDPattern:  req.TraceIDPattern,
+		JSONStartField:  req.JSONStartField,
 		ExpandKeys:      req.ExpandKeys,
+	}
+
+	// Defense in depth: the CLI validates before ever sending this
+	// request, but the endpoint accepts any authenticated caller (MCP,
+	// a hand-rolled script) — parse.go's extractors never error on a
+	// bad schema, they just silently extract nothing, so this is the
+	// only place a malformed schema gets caught for those callers.
+	if problems := schema.Validate(); len(problems) > 0 {
+		http.Error(w, "invalid schema:\n"+strings.Join(problems, "\n"), http.StatusBadRequest)
+		return
 	}
 
 	schemaYAML, err := schema.ToYAML()

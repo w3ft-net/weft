@@ -59,6 +59,18 @@ type Schema struct {
 	// See docs/plans/request-tracing.md.
 	TraceIDField string `yaml:"trace_id_field,omitempty"`
 
+	// TraceIDPattern is an optional regex to extract the trace ID from
+	// the TraceIDField value — same relationship LevelPattern has to
+	// LevelField. Needed for Go's stdlib-`log`-style "key=value" trailing
+	// tags (e.g. weft's own internal logging: "... trace_id=abc123"),
+	// where the whitespace-delimited field is "trace_id=abc123", not the
+	// bare ID — pattern "trace_id=(\\S+)" extracts just "abc123". If
+	// empty, the entire field value is the trace ID. Only applied on the
+	// positional-field path, not the JSON dot-path one (same as
+	// LevelPattern) — a JSON field is already a precise value with
+	// nothing to strip.
+	TraceIDPattern string `yaml:"trace_id_pattern,omitempty"`
+
 	// JSONStartField is the 1-based field index where JSON begins (for
 	// prefix_json format). Fields before this are positional text fields.
 	// Fields from this position onward are parsed as a single JSON object.

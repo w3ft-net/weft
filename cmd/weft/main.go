@@ -18,9 +18,11 @@ import (
 
 	"github.com/graybeardcorp/weft/cmd/weft/runner"
 	"github.com/graybeardcorp/weft/cmd/weft/setup"
+	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/internal/timerange"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shell"
+	"golang.org/x/term"
 )
 
 // orgOverride is the active org chosen via --org / WEFT_ORG, applied
@@ -591,7 +593,7 @@ func runSourcePending(cfg *shell.Config) {
 
 func runSourceConfigure(cfg *shell.Config) {
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: weft source configure <namespace>/<service>")
+		fmt.Fprintln(os.Stderr, "usage: weft source configure <namespace>/<service> [--file schema.yaml]")
 		os.Exit(1)
 	}
 	endpoint := cfg.Endpoint
@@ -602,9 +604,19 @@ func runSourceConfigure(cfg *shell.Config) {
 	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token, effectiveOrg(cfg))
 
 	target := os.Args[3]
+	var filePath string
+	for i := 4; i < len(os.Args); i++ {
+		switch {
+		case os.Args[i] == "--file" && i+1 < len(os.Args):
+			filePath = os.Args[i+1]
+			i++
+		case strings.HasPrefix(os.Args[i], "--file="):
+			filePath = strings.TrimPrefix(os.Args[i], "--file=")
+		}
+	}
 	parts := strings.SplitN(target, "/", 2)
 	if len(parts) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: weft source configure <namespace>/<service>")
+		fmt.Fprintln(os.Stderr, "usage: weft source configure <namespace>/<service> [--file schema.yaml]")
 		os.Exit(1)
 	}
 	namespace, service := parts[0], parts[1]
@@ -641,39 +653,105 @@ func runSourceConfigure(cfg *shell.Config) {
 		os.Exit(1)
 	}
 
-	// Parse sample lines from JSON.
-	var lines []string
-	if err := json.Unmarshal(sch.Sample, &lines); err != nil {
-		fmt.Fprintf(os.Stderr, "parse sample: %v\n", err)
-		os.Exit(1)
-	}
-	if len(lines) == 0 {
-		fmt.Fprintf(os.Stderr, "no sample lines available for %s/%s\n", namespace, service)
-		os.Exit(1)
+	// Non-interactive: --file, or stdin redirected/piped (not a terminal).
+	// Checked in that order so --file works even when stdin happens to be
+	// a non-terminal for unrelated reasons (e.g. run from another script).
+	nonInteractive := filePath != "" || !term.IsTerminal(int(os.Stdin.Fd()))
+
+	var schema *ingest.Schema
+	if nonInteractive {
+		schema, err = loadSchemaNonInteractive(filePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		// Service is advisory in the YAML (see ingest.Schema's doc
+		// comment) — the target on the command line is authoritative,
+		// same as the server does when it builds the schema it persists.
+		schema.Service = service
+
+		if problems := schema.Validate(); len(problems) > 0 {
+			fmt.Fprintln(os.Stderr, "schema validation failed:")
+			for _, p := range problems {
+				fmt.Fprintf(os.Stderr, "  - %s\n", p)
+			}
+			os.Exit(1)
+		}
+	} else {
+		// Parse sample lines from JSON.
+		var lines []string
+		if err := json.Unmarshal(sch.Sample, &lines); err != nil {
+			fmt.Fprintf(os.Stderr, "parse sample: %v\n", err)
+			os.Exit(1)
+		}
+		if len(lines) == 0 {
+			fmt.Fprintf(os.Stderr, "no sample lines available for %s/%s\n", namespace, service)
+			os.Exit(1)
+		}
+
+		// Run the interactive setup wizard with the remote sample.
+		schema, err = setup.RunSetupFromLines(namespace+"/"+service, lines)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "setup: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
-	// Run the interactive setup wizard with the remote sample.
-	schema, err := setup.RunSetupFromLines(namespace+"/"+service, lines)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "setup: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Send the configuration to the coordinator.
-	config := map[string]any{
-		"format":           schema.Format,
-		"timestamp_field":  schema.TimestampField,
-		"timestamp_format": schema.TimestampFormat,
-		"level_field":      schema.LevelField,
-		"level_pattern":    schema.LevelPattern,
-		"expand_keys":      schema.ExpandKeys,
-	}
-	if err := remote.ConfigureSource(namespace, service, config); err != nil {
+	if err := remote.ConfigureSource(namespace, service, schemaConfigMap(schema)); err != nil {
 		fmt.Fprintf(os.Stderr, "configure: %v\n", err)
 		os.Exit(1)
 	}
 
 	fmt.Printf("Source %s/%s configured.\n", namespace, service)
+}
+
+// loadSchemaNonInteractive reads and parses a schema YAML document from
+// path, or from stdin when path is empty — the `weft source configure
+// ns/svc < schema.yaml` shape. Same ingest.Schema shape ToYAML/
+// LoadSchemaFromBytes already round-trip elsewhere (weft source schema
+// prints exactly this format), so a schema pulled with `weft source
+// schema` is valid input here unmodified.
+func loadSchemaNonInteractive(path string) (*ingest.Schema, error) {
+	var data []byte
+	var err error
+	if path != "" {
+		data, err = os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+	} else {
+		data, err = io.ReadAll(os.Stdin)
+		if err != nil {
+			return nil, fmt.Errorf("read schema from stdin: %w", err)
+		}
+	}
+	schema, err := ingest.LoadSchemaFromBytes(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse schema YAML: %w", err)
+	}
+	return schema, nil
+}
+
+// schemaConfigMap builds the /configure request body from a schema,
+// covering every field ingest.Schema and the server's handleConfigureSource
+// both understand. Shared by the interactive wizard and non-interactive
+// (--file/stdin) paths so neither one silently drops a field the other
+// sends.
+func schemaConfigMap(schema *ingest.Schema) map[string]any {
+	return map[string]any{
+		"envelope":         schema.Envelope,
+		"format":           schema.Format,
+		"field_separator":  schema.FieldSeparator,
+		"timestamp_field":  schema.TimestampField,
+		"timestamp_format": schema.TimestampFormat,
+		"timestamp_fields": schema.TimestampFields,
+		"level_field":      schema.LevelField,
+		"level_pattern":    schema.LevelPattern,
+		"trace_id_field":   schema.TraceIDField,
+		"trace_id_pattern": schema.TraceIDPattern,
+		"json_start_field": schema.JSONStartField,
+		"expand_keys":      schema.ExpandKeys,
+	}
 }
 
 // runSourceResample asks the agent for a fresh sample of an

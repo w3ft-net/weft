@@ -78,6 +78,42 @@ func TestExtractTraceID(t *testing.T) {
 			line:    "2026-01-01 INFO Trace-Mixed-Case request handled",
 			wantTID: "Trace-Mixed-Case",
 		},
+		{
+			// The shape weft's own logging uses everywhere (logQuery,
+			// cold_shard.go, lambda-shard's handler): a trailing
+			// "trace_id=<id>" key=value tag, not a bare token.
+			name: "trace_id_pattern strips the key= prefix",
+			schema: Schema{
+				Format:         "text",
+				TraceIDField:   "11",
+				TraceIDPattern: `trace_id=(\S+)`,
+			},
+			line:    "2026/09/23 22:24:09 lambda-shard: query completed in 7.9s parquet=s3://bucket/x.parquet (3 rows) trace_id=04820d2e6642041168fb17ed0a55f9c6",
+			wantTID: "04820d2e6642041168fb17ed0a55f9c6",
+		},
+		{
+			name: "trace_id_pattern non-match yields empty, not the raw field",
+			schema: Schema{
+				Format:         "text",
+				TraceIDField:   "3",
+				TraceIDPattern: `trace_id=(\S+)`,
+			},
+			line:    "2026-01-01 INFO no-key-value-tag-here",
+			wantTID: "",
+		},
+		{
+			// TraceIDPattern only applies on the positional-field path —
+			// same relationship LevelPattern has to the JSON dot-path
+			// (extractJSONLevel never applies levelRe either).
+			name: "trace_id_pattern is ignored on the JSON dot-path",
+			schema: Schema{
+				Format:         "json",
+				TraceIDField:   ".trace_id",
+				TraceIDPattern: `trace_id=(\S+)`,
+			},
+			line:    `{"trace_id":"trace-xyz-789"}`,
+			wantTID: "trace-xyz-789",
+		},
 	}
 
 	for _, tc := range tests {

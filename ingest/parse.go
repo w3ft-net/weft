@@ -15,6 +15,7 @@ import (
 type Parser struct {
 	schema  *Schema
 	levelRe *regexp.Regexp
+	traceRe *regexp.Regexp
 }
 
 // NewParser creates a parser for the given schema.
@@ -26,6 +27,13 @@ func NewParser(s *Schema) (*Parser, error) {
 			return nil, fmt.Errorf("compile level pattern: %w", err)
 		}
 		p.levelRe = re
+	}
+	if s.TraceIDPattern != "" {
+		re, err := regexp.Compile(s.TraceIDPattern)
+		if err != nil {
+			return nil, fmt.Errorf("compile trace ID pattern: %w", err)
+		}
+		p.traceRe = re
 	}
 	return p, nil
 }
@@ -237,7 +245,22 @@ func (p *Parser) extractTraceID(fields []string, body string) string {
 	}
 
 	val := fields[idx-1]
-	return strings.Trim(val, "[]():")
+	val = strings.Trim(val, "[]():")
+
+	if p.traceRe != nil {
+		if m := p.traceRe.FindStringSubmatch(val); len(m) > 1 {
+			return m[1]
+		}
+		// Unlike extractLevel's fallback-to-whole-field: a trace ID only
+		// has value as an exact match against another line's trace ID.
+		// The raw field text ("trace_id=abc123", say) will never equal
+		// the bare IDs other rows extracted, so a non-match here is
+		// worse than nothing — it fabricates a row that looks traced
+		// but can't actually correlate with anything.
+		return ""
+	}
+
+	return val
 }
 
 func (p *Parser) extractJSONTraceID(body, path string) string {
