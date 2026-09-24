@@ -201,7 +201,11 @@ CREATE TABLE IF NOT EXISTS logs (
     pod            TEXT,
     container      TEXT,
     node           TEXT,
-    trace_id       TEXT
+    trace_id       TEXT,
+    span_name      TEXT,
+    span_id        TEXT,
+    parent_span_id TEXT,
+    duration_ns    BIGINT
 );
 `
 
@@ -251,6 +255,13 @@ var migrationSteps = []string{
 	// No backfill: unlike namespace/service/kind, there's no prior
 	// composite encoding to recover a trace_id from. Existing rows get NULL.
 	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS trace_id TEXT`,
+	// Same reasoning as trace_id: no prior composite to backfill from —
+	// weft-go's span.go is the only source, and it's new. See
+	// docs/plans/span-display.md.
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS span_name TEXT`,
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS span_id TEXT`,
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS parent_span_id TEXT`,
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS duration_ns BIGINT`,
 }
 
 // NewDuckDBShard opens or creates a DuckDB database at path and initializes the
@@ -316,7 +327,7 @@ var logColumns = []string{
 	"raw", "fields", "ts", "level", "namespace", "service", "kind",
 	"instance", "customer", "payload", "deployment", "env", "version",
 	"region", "cluster", "k8s_namespace", "pod", "container", "node",
-	"trace_id",
+	"trace_id", "span_name", "span_id", "parent_span_id", "duration_ns",
 }
 
 // Ingest bulk-loads rows into the logs table via DuckDB's Appender — the
@@ -375,6 +386,10 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow, rec IngestRecorder) error {
 				r.Container,
 				r.Node,
 				r.TraceId,
+				r.SpanName,
+				r.SpanId,
+				r.ParentSpanId,
+				r.DurationNs,
 			); rerr != nil {
 				appender.Close()
 				return fmt.Errorf("append row: %w", rerr)

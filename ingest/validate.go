@@ -55,6 +55,18 @@ func (s *Schema) Validate() []string {
 	if err := validateFieldRef("trace_id_field", s.TraceIDField); err != "" {
 		errs = append(errs, err)
 	}
+	if err := validateFieldRef("span_name_field", s.SpanNameField); err != "" {
+		errs = append(errs, err)
+	}
+	if err := validateFieldRef("span_id_field", s.SpanIDField); err != "" {
+		errs = append(errs, err)
+	}
+	if err := validateFieldRef("parent_span_id_field", s.ParentSpanIDField); err != "" {
+		errs = append(errs, err)
+	}
+	if err := validateFieldRef("duration_ns_field", s.DurationNsField); err != "" {
+		errs = append(errs, err)
+	}
 
 	if s.LevelPattern != "" {
 		if _, err := regexp.Compile(s.LevelPattern); err != nil {
@@ -64,6 +76,26 @@ func (s *Schema) Validate() []string {
 	if s.TraceIDPattern != "" {
 		if _, err := regexp.Compile(s.TraceIDPattern); err != nil {
 			errs = append(errs, fmt.Sprintf("trace_id_pattern: %v", err))
+		}
+	}
+	if s.SpanNamePattern != "" {
+		if _, err := regexp.Compile(s.SpanNamePattern); err != nil {
+			errs = append(errs, fmt.Sprintf("span_name_pattern: %v", err))
+		}
+	}
+	if s.SpanIDPattern != "" {
+		if _, err := regexp.Compile(s.SpanIDPattern); err != nil {
+			errs = append(errs, fmt.Sprintf("span_id_pattern: %v", err))
+		}
+	}
+	if s.ParentSpanIDPattern != "" {
+		if _, err := regexp.Compile(s.ParentSpanIDPattern); err != nil {
+			errs = append(errs, fmt.Sprintf("parent_span_id_pattern: %v", err))
+		}
+	}
+	if s.DurationNsPattern != "" {
+		if _, err := regexp.Compile(s.DurationNsPattern); err != nil {
+			errs = append(errs, fmt.Sprintf("duration_ns_pattern: %v", err))
 		}
 	}
 

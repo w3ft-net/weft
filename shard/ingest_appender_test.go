@@ -119,6 +119,62 @@ func TestIngest_TraceIDRoundTrip(t *testing.T) {
 	}
 }
 
+// TestIngest_SpanColumnsRoundTrip exercises the same three write points
+// (createTableSQL, migrationSteps, logColumns/AppendRow) for span_name/
+// span_id/parent_span_id/duration_ns, mirroring TestIngest_TraceIDRoundTrip
+// — a row carrying span fields must be queryable by exact match, and a row
+// without them must come back NULL/zero, not error.
+func TestIngest_SpanColumnsRoundTrip(t *testing.T) {
+	ds, err := NewDuckDBShard("span", "")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer ds.Close()
+
+	rows := []*pb.LogRow{
+		{
+			Raw: "with span", Customer: "kevlar", TsUnixNs: 1, TraceId: "trace-abc-123",
+			SpanName: "shard.Query", SpanId: "s2", ParentSpanId: "s1", DurationNs: 1234000,
+		},
+		{Raw: "without span", Customer: "kevlar", TsUnixNs: 2},
+	}
+	if err := ds.Ingest(rows, nil); err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+
+	var raw string
+	if err := ds.db.QueryRow(`SELECT raw FROM logs WHERE span_name = ? AND span_id = ?`, "shard.Query", "s2").Scan(&raw); err != nil {
+		t.Fatalf("query by span_name/span_id: %v", err)
+	}
+	if raw != "with span" {
+		t.Fatalf("span lookup: want %q, got %q", "with span", raw)
+	}
+
+	var parentID string
+	var durationNs int64
+	if err := ds.db.QueryRow(`SELECT parent_span_id, duration_ns FROM logs WHERE raw = 'with span'`).Scan(&parentID, &durationNs); err != nil {
+		t.Fatalf("query span columns: %v", err)
+	}
+	if parentID != "s1" || durationNs != 1234000 {
+		t.Fatalf("span columns: want parent_span_id=s1 duration_ns=1234000, got parent_span_id=%q duration_ns=%d", parentID, durationNs)
+	}
+
+	// Unset int64/string fields append as Go's zero value (0, ""), not
+	// SQL NULL — the Appender writes every column's literal Go value,
+	// same as trace_id's own "" (not NULL) in TestIngest_TraceIDRoundTrip.
+	var spanName string
+	var durationOfUnset int64
+	if err := ds.db.QueryRow(`SELECT span_name, duration_ns FROM logs WHERE raw = 'without span'`).Scan(&spanName, &durationOfUnset); err != nil {
+		t.Fatalf("query unset span row: %v", err)
+	}
+	if spanName != "" {
+		t.Fatalf("unset row: want empty span_name, got %q", spanName)
+	}
+	if durationOfUnset != 0 {
+		t.Fatalf("unset row: want duration_ns=0, got %d", durationOfUnset)
+	}
+}
+
 // TestIngest_EmptyPayloadDefaults asserts a row with no PayloadJson lands as an
 // empty JSON object (parity with the old INSERT path's "{}" default), so
 // downstream JSON extracts don't fault on NULL.

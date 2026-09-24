@@ -84,6 +84,31 @@ type Schema struct {
 	// already a precise value with nothing to strip.
 	TraceIDPattern string `yaml:"trace_id_pattern,omitempty"`
 
+	// SpanNameField/SpanIDField/ParentSpanIDField/DurationNsField extract
+	// weft-go's own "span start"/"span done"/"span error" lines (see
+	// weft-go's span.go) into reserved columns — same convention as
+	// TraceIDField: 1-based field index (text/prefix_json) or a JSON
+	// dot-path (json); empty/"none" means no extraction. Each has a
+	// matching *Pattern sibling for the same reason TraceIDPattern
+	// exists: these are trailing "key=value" tags, not their own field,
+	// so the field/pattern pair (or an empty field + whole-line pattern)
+	// is what actually locates the value. See docs/plans/span-display.md.
+	SpanNameField   string `yaml:"span_name_field,omitempty"`
+	SpanNamePattern string `yaml:"span_name_pattern,omitempty"`
+
+	SpanIDField   string `yaml:"span_id_field,omitempty"`
+	SpanIDPattern string `yaml:"span_id_pattern,omitempty"`
+
+	ParentSpanIDField   string `yaml:"parent_span_id_field,omitempty"`
+	ParentSpanIDPattern string `yaml:"parent_span_id_pattern,omitempty"`
+
+	// DurationNsField/DurationNsPattern extract weft-go's duration_ns=
+	// tag (only present on "span done" lines) as a plain integer — see
+	// span.go's End(). Unlike the other three fields, this one is
+	// parsed as an integer after extraction, not stored as-is.
+	DurationNsField   string `yaml:"duration_ns_field,omitempty"`
+	DurationNsPattern string `yaml:"duration_ns_pattern,omitempty"`
+
 	// JSONStartField is the 1-based field index where JSON begins (for
 	// prefix_json format). Fields before this are positional text fields.
 	// Fields from this position onward are parsed as a single JSON object.

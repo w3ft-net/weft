@@ -16,6 +16,11 @@ type Parser struct {
 	schema  *Schema
 	levelRe *regexp.Regexp
 	traceRe *regexp.Regexp
+
+	spanNameRe   *regexp.Regexp
+	spanIDRe     *regexp.Regexp
+	parentSpanRe *regexp.Regexp
+	durationNsRe *regexp.Regexp
 }
 
 // NewParser creates a parser for the given schema.
@@ -34,6 +39,21 @@ func NewParser(s *Schema) (*Parser, error) {
 			return nil, fmt.Errorf("compile trace ID pattern: %w", err)
 		}
 		p.traceRe = re
+	}
+	for pattern, dst := range map[string]**regexp.Regexp{
+		s.SpanNamePattern:     &p.spanNameRe,
+		s.SpanIDPattern:       &p.spanIDRe,
+		s.ParentSpanIDPattern: &p.parentSpanRe,
+		s.DurationNsPattern:   &p.durationNsRe,
+	} {
+		if pattern == "" {
+			continue
+		}
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("compile span pattern %q: %w", pattern, err)
+		}
+		*dst = re
 	}
 	return p, nil
 }
@@ -66,6 +86,16 @@ func (p *Parser) ParseLine(raw string, ingestTime time.Time) (*pb.LogRow, error)
 
 	// Extract trace ID.
 	row.TraceId = p.extractTraceID(fields, body)
+
+	// Extract span fields.
+	row.SpanName = p.extractSpanField(fields, body, p.schema.SpanNameField, p.spanNameRe)
+	row.SpanId = p.extractSpanField(fields, body, p.schema.SpanIDField, p.spanIDRe)
+	row.ParentSpanId = p.extractSpanField(fields, body, p.schema.ParentSpanIDField, p.parentSpanRe)
+	if s := p.extractSpanField(fields, body, p.schema.DurationNsField, p.durationNsRe); s != "" {
+		if ns, err := strconv.ParseInt(s, 10, 64); err == nil {
+			row.DurationNs = ns
+		}
+	}
 
 	// Extract JSON payload.
 	row.PayloadJson = p.extractPayload(fields, body)
@@ -274,6 +304,64 @@ func (p *Parser) extractTraceID(fields []string, body string) string {
 }
 
 func (p *Parser) extractJSONTraceID(body, path string) string {
+	idx := strings.Index(body, "{")
+	if idx < 0 {
+		return ""
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(body[idx:]), &obj); err != nil {
+		return ""
+	}
+	key := strings.TrimPrefix(path, ".")
+	val, ok := obj[key]
+	if !ok {
+		return ""
+	}
+	str, ok := val.(string)
+	if !ok {
+		return ""
+	}
+	return str
+}
+
+// extractSpanField is extractTraceID's exact shape, generalized over
+// which field/pattern pair to use — span_name/span_id/parent_span_id/
+// duration_ns all follow the same "field index or JSON dot-path,
+// optionally refined by a pattern" rule TraceIDField/TraceIDPattern
+// established. re is nil when the corresponding *Pattern is unset.
+func (p *Parser) extractSpanField(fields []string, body, fieldSpec string, re *regexp.Regexp) string {
+	if fieldSpec == "" || fieldSpec == "none" {
+		if re != nil {
+			if m := re.FindStringSubmatch(body); len(m) > 1 {
+				return m[1]
+			}
+		}
+		return ""
+	}
+
+	if strings.HasPrefix(fieldSpec, ".") {
+		return p.extractJSONSpanField(body, fieldSpec)
+	}
+
+	idx, err := strconv.Atoi(fieldSpec)
+	if err != nil || idx < 1 || idx > len(fields) {
+		return ""
+	}
+
+	val := fields[idx-1]
+	val = strings.Trim(val, "[]():")
+
+	if re != nil {
+		if m := re.FindStringSubmatch(val); len(m) > 1 {
+			return m[1]
+		}
+		return ""
+	}
+
+	return val
+}
+
+func (p *Parser) extractJSONSpanField(body, path string) string {
 	idx := strings.Index(body, "{")
 	if idx < 0 {
 		return ""

@@ -151,6 +151,16 @@ message LogRow {
   // an SDK via weftd's socket envelope. Empty means uncorrelated — not
   // every row will have one. See docs/plans/request-tracing.md.
   string trace_id = 21;
+  // span_name/span_id/parent_span_id/duration_ns extract weft-go's own
+  // "span start"/"span done"/"span error" lines (see span.go) into
+  // reserved columns, mirroring trace_id's own promotion — populated by
+  // ingest.Parser's span_*_field/span_*_pattern schema extraction. Only
+  // "span done" lines populate duration_ns; empty/zero on every other
+  // row. See docs/plans/span-display.md.
+  string span_name = 22;
+  string span_id = 23;
+  string parent_span_id = 24;
+  int64 duration_ns = 25;
 }
 
 message IngestRequest {

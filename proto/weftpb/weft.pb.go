@@ -640,7 +640,17 @@ type LogRow struct {
 	// ingest.Parser's trace_id_field schema extraction, or structurally by
 	// an SDK via weftd's socket envelope. Empty means uncorrelated — not
 	// every row will have one. See docs/plans/request-tracing.md.
-	TraceId       string `protobuf:"bytes,21,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	TraceId string `protobuf:"bytes,21,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	// span_name/span_id/parent_span_id/duration_ns extract weft-go's own
+	// "span start"/"span done"/"span error" lines (see span.go) into
+	// reserved columns, mirroring trace_id's own promotion — populated by
+	// ingest.Parser's span_*_field/span_*_pattern schema extraction. Only
+	// "span done" lines populate duration_ns; empty/zero on every other
+	// row. See docs/plans/span-display.md.
+	SpanName      string `protobuf:"bytes,22,opt,name=span_name,json=spanName,proto3" json:"span_name,omitempty"`
+	SpanId        string `protobuf:"bytes,23,opt,name=span_id,json=spanId,proto3" json:"span_id,omitempty"`
+	ParentSpanId  string `protobuf:"bytes,24,opt,name=parent_span_id,json=parentSpanId,proto3" json:"parent_span_id,omitempty"`
+	DurationNs    int64  `protobuf:"varint,25,opt,name=duration_ns,json=durationNs,proto3" json:"duration_ns,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -821,6 +831,34 @@ func (x *LogRow) GetTraceId() string {
 		return x.TraceId
 	}
 	return ""
+}
+
+func (x *LogRow) GetSpanName() string {
+	if x != nil {
+		return x.SpanName
+	}
+	return ""
+}
+
+func (x *LogRow) GetSpanId() string {
+	if x != nil {
+		return x.SpanId
+	}
+	return ""
+}
+
+func (x *LogRow) GetParentSpanId() string {
+	if x != nil {
+		return x.ParentSpanId
+	}
+	return ""
+}
+
+func (x *LogRow) GetDurationNs() int64 {
+	if x != nil {
+		return x.DurationNs
+	}
+	return 0
 }
 
 type IngestRequest struct {
@@ -5266,7 +5304,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\tmeta_vars\x18\x04 \x03(\v2\x1d.weft.ResultRow.MetaVarsEntryR\bmetaVars\x1a;\n" +
 	"\rMetaVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xae\x04\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xab\x05\n" +
 	"\x06LogRow\x12\x1d\n" +
 	"\bline_num\x18\x01 \x01(\x03B\x02\x18\x01R\alineNum\x12\x10\n" +
 	"\x03raw\x18\x02 \x01(\tR\x03raw\x12\x18\n" +
@@ -5292,7 +5330,12 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x04node\x18\x12 \x01(\tR\x04node\x12\x1c\n" +
 	"\tnamespace\x18\x13 \x01(\tR\tnamespace\x12\x12\n" +
 	"\x04kind\x18\x14 \x01(\tR\x04kind\x12\x19\n" +
-	"\btrace_id\x18\x15 \x01(\tR\atraceId\"1\n" +
+	"\btrace_id\x18\x15 \x01(\tR\atraceId\x12\x1b\n" +
+	"\tspan_name\x18\x16 \x01(\tR\bspanName\x12\x17\n" +
+	"\aspan_id\x18\x17 \x01(\tR\x06spanId\x12$\n" +
+	"\x0eparent_span_id\x18\x18 \x01(\tR\fparentSpanId\x12\x1f\n" +
+	"\vduration_ns\x18\x19 \x01(\x03R\n" +
+	"durationNs\"1\n" +
 	"\rIngestRequest\x12 \n" +
 	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\"5\n" +
 	"\x0eIngestResponse\x12#\n" +

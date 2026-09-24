@@ -181,3 +181,78 @@ func TestExtractTraceID(t *testing.T) {
 		})
 	}
 }
+
+// TestExtractSpanFields covers span_name/span_id/parent_span_id/duration_ns
+// extraction against weft-go's real "span done" line shape — a whole-line
+// pattern search (no fixed field index works, since the fields preceding
+// each key=value tag vary in count), same convention TestExtractTraceID's
+// "whole-line search" cases establish for trace_id_pattern.
+func TestExtractSpanFields(t *testing.T) {
+	schema := Schema{
+		Format:              "text",
+		SpanNamePattern:     `name=(\S+)`,
+		SpanIDPattern:       `span_id=(\S+)`,
+		ParentSpanIDPattern: `parent_span_id=(\S*)`,
+		DurationNsPattern:   `duration_ns=(\d+)`,
+	}
+	parser, err := NewParser(&schema)
+	if err != nil {
+		t.Fatalf("NewParser: %v", err)
+	}
+
+	t.Run("span done line: all four fields", func(t *testing.T) {
+		line := "span done name=shard.Query trace_id=abc span_id=s2 parent_span_id=s1 duration=1.234ms duration_ns=1234000 status=ok"
+		row, err := parser.ParseLine(line, time.Now())
+		if err != nil {
+			t.Fatalf("ParseLine: %v", err)
+		}
+		if row.SpanName != "shard.Query" {
+			t.Errorf("SpanName: got %q, want shard.Query", row.SpanName)
+		}
+		if row.SpanId != "s2" {
+			t.Errorf("SpanId: got %q, want s2", row.SpanId)
+		}
+		if row.ParentSpanId != "s1" {
+			t.Errorf("ParentSpanId: got %q, want s1", row.ParentSpanId)
+		}
+		if row.DurationNs != 1234000 {
+			t.Errorf("DurationNs: got %d, want 1234000", row.DurationNs)
+		}
+	})
+
+	t.Run("span start line: no duration_ns tag at all", func(t *testing.T) {
+		line := "span start name=coordinator.Execute trace_id=abc span_id=s1 parent_span_id="
+		row, err := parser.ParseLine(line, time.Now())
+		if err != nil {
+			t.Fatalf("ParseLine: %v", err)
+		}
+		if row.SpanName != "coordinator.Execute" {
+			t.Errorf("SpanName: got %q, want coordinator.Execute", row.SpanName)
+		}
+		if row.DurationNs != 0 {
+			t.Errorf("DurationNs: got %d, want 0 (no tag on a span start line)", row.DurationNs)
+		}
+	})
+
+	t.Run("empty parent_span_id parses as empty string, not an error", func(t *testing.T) {
+		line := "span done name=api.access trace_id=abc span_id=s1 parent_span_id= duration=1ms duration_ns=1000000 status=ok"
+		row, err := parser.ParseLine(line, time.Now())
+		if err != nil {
+			t.Fatalf("ParseLine: %v", err)
+		}
+		if row.ParentSpanId != "" {
+			t.Errorf("ParentSpanId: got %q, want empty", row.ParentSpanId)
+		}
+	})
+
+	t.Run("non-span line: nothing matches", func(t *testing.T) {
+		line := "2026/09/23 17:16:07 cron[mem-pressure]: ok (19ms)"
+		row, err := parser.ParseLine(line, time.Now())
+		if err != nil {
+			t.Fatalf("ParseLine: %v", err)
+		}
+		if row.SpanName != "" || row.SpanId != "" || row.ParentSpanId != "" || row.DurationNs != 0 {
+			t.Errorf("expected all span fields empty, got %+v", row)
+		}
+	})
+}
