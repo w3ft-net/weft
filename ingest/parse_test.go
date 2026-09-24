@@ -114,6 +114,55 @@ func TestExtractTraceID(t *testing.T) {
 			line:    `{"trace_id":"trace-xyz-789"}`,
 			wantTID: "trace-xyz-789",
 		},
+		{
+			// coordinator/querylog.go's real shape: the SQL text before
+			// trace_id= varies in length line to line (different WHERE
+			// clauses, LIMITs, predicates), so no single TraceIDField
+			// index could ever land on it — only a whole-line search
+			// works here. TraceIDField left empty/unset is what selects
+			// this mode.
+			name: "empty trace_id_field searches the whole line when trace_id_pattern is set",
+			schema: Schema{
+				Format:         "text",
+				TraceIDPattern: `trace_id=(\S+)`,
+			},
+			line:    `2026/09/23 17:16:07 query: namespace=weft service=coordinator shards=[shard-a shard-b] compute=[] sql=SELECT raw, ts FROM logs WHERE customer = ? AND ts >= CAST(? AS TIMESTAMP) ORDER BY ts LIMIT 5 trace_id=20a6a413d1a64330914e577274620763 coordinator_id=i-003aaf778951a6907`,
+			wantTID: "20a6a413d1a64330914e577274620763",
+		},
+		{
+			// api/middleware.go's real shape: method+path+status+duration
+			// all vary in field count/width before trace_id=.
+			name: "whole-line search on api's access-log shape",
+			schema: Schema{
+				Format:         "text",
+				TraceIDPattern: `trace_id=(\S+)`,
+			},
+			line:    `access GET /api/sources/weft/cold-shard/schema 200 12ms user=abc123 trace_id=f991d26350ece3d0c1de13d5817d24ad`,
+			wantTID: "f991d26350ece3d0c1de13d5817d24ad",
+		},
+		{
+			// A line with genuinely no tag must stay empty, not fall back
+			// to the JSON-timestamp trick of scanning for a stray brace
+			// or anything else — the whole-line search only ever finds
+			// what the pattern actually matches.
+			name: "whole-line search finds nothing on an untagged line",
+			schema: Schema{
+				Format:         "text",
+				TraceIDPattern: `trace_id=(\S+)`,
+			},
+			line:    "2026/09/23 17:16:07 cron[mem-pressure]: ok (19ms, stdout=0 bytes, stderr=0 bytes)",
+			wantTID: "",
+		},
+		{
+			// No pattern and no field at all: still fully disabled,
+			// unchanged from before this mode existed.
+			name: "no trace_id_field and no trace_id_pattern means no extraction",
+			schema: Schema{
+				Format: "text",
+			},
+			line:    "2026/09/23 17:16:07 query: ... trace_id=should-not-be-found",
+			wantTID: "",
+		},
 	}
 
 	for _, tc := range tests {

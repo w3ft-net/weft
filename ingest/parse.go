@@ -231,6 +231,16 @@ func (p *Parser) extractJSONLevel(body, path string) string {
 func (p *Parser) extractTraceID(fields []string, body string) string {
 	traceField := p.schema.TraceIDField
 	if traceField == "" || traceField == "none" {
+		// No field to anchor on — if a pattern is set, search the whole
+		// line instead. The only way to pull a "key=value" trailing tag
+		// out of a line whose earlier field count varies (a SQL string,
+		// a request path, ...), where no single field index could ever
+		// be trace_id= reliably. See TraceIDPattern's doc comment.
+		if p.traceRe != nil {
+			if m := p.traceRe.FindStringSubmatch(body); len(m) > 1 {
+				return m[1]
+			}
+		}
 		return ""
 	}
 

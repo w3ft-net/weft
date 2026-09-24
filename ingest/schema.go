@@ -59,16 +59,29 @@ type Schema struct {
 	// See docs/plans/request-tracing.md.
 	TraceIDField string `yaml:"trace_id_field,omitempty"`
 
-	// TraceIDPattern is an optional regex to extract the trace ID from
-	// the TraceIDField value — same relationship LevelPattern has to
-	// LevelField. Needed for Go's stdlib-`log`-style "key=value" trailing
-	// tags (e.g. weft's own internal logging: "... trace_id=abc123"),
-	// where the whitespace-delimited field is "trace_id=abc123", not the
-	// bare ID — pattern "trace_id=(\\S+)" extracts just "abc123". If
-	// empty, the entire field value is the trace ID. Only applied on the
-	// positional-field path, not the JSON dot-path one (same as
-	// LevelPattern) — a JSON field is already a precise value with
-	// nothing to strip.
+	// TraceIDPattern is an optional regex to extract the trace ID.
+	// Needed for Go's stdlib-`log`-style "key=value" trailing tags (e.g.
+	// weft's own internal logging: "... trace_id=abc123"), where the
+	// bare ID isn't its own field/value — pattern "trace_id=(\\S+)"
+	// extracts just "abc123". Two modes, chosen by whether TraceIDField
+	// is also set:
+	//
+	//   - TraceIDField set to a positional index: same relationship
+	//     LevelPattern has to LevelField — the pattern refines that one
+	//     pre-selected field. Requires the trailing tag to land at a
+	//     stable field index every line, so only fits a fixed-shape log
+	//     line (e.g. lambda-shard's "query completed in Xs (N rows)
+	//     trace_id=...").
+	//   - TraceIDField empty/"none": the pattern searches the *whole*
+	//     line instead. The only way to extract a trailing tag from a
+	//     line whose earlier field count varies (a SQL string, a request
+	//     path, ...) — e.g. coordinator's own query-audit log or api's
+	//     access log, where nothing before "trace_id=" sits at a fixed
+	//     index. Harmlessly finds nothing on a line with no tag at all.
+	//
+	// Only applied on the positional/whole-line path, never the JSON
+	// dot-path one (same asymmetry LevelPattern has) — a JSON field is
+	// already a precise value with nothing to strip.
 	TraceIDPattern string `yaml:"trace_id_pattern,omitempty"`
 
 	// JSONStartField is the 1-based field index where JSON begins (for
