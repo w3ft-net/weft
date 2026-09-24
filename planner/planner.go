@@ -219,15 +219,33 @@ func PlanInDir(pipeline, customer, cwd string, start, end time.Time) (*QueryPlan
 	if info.source.cmd == "trace" && info.source.traceID != "" {
 		sql.addPredicate("trace_id = ?", info.source.traceID)
 	}
-	if info.source.cmd == "trace" {
-		// A trace fans out across every service a request touched, with
-		// no shared context to identify which service produced which
-		// line — unlike cat/tail (single app, origin implicit from the
-		// path). Force the same MetaVarColumns projection normally
-		// reserved for an explicit awk/jq meta-var reference so
-		// NAMESPACE/SERVICE are always real, pipeline-filterable fields
-		// for trace, and so compute/local.go's trace-tag display branch
-		// has namespace/service available on every row.
+	if info.source.cmd == "trace_spans" {
+		// Cross-trace aggregation (docs/plans/span-display.md, Phase
+		// 2): no trace_id to anchor on — every "span done" (has a real
+		// duration_ns) or "span error" (matched off raw, the only
+		// signal that distinguishes it from a "span start" row, which
+		// also has duration_ns=0 — see the plan's "Aggregation
+		// mechanics") row in the queried time range, optionally
+		// narrowed to one span name. The projection is still plain
+		// `raw` (the default rawExpr) — no synthesized SQL expression
+		// needed, since raw already holds weft-go's exact "span done
+		// .../span error ..." text, which theme.RenderSpanRollup
+		// already knows how to parse (both phases share one parser).
+		sql.addPredicate("(duration_ns > 0 OR raw LIKE 'span error%')")
+		if info.source.spanName != "" {
+			sql.addPredicate("span_name = ?", info.source.spanName)
+		}
+	}
+	if info.source.cmd == "trace" || info.source.cmd == "trace_spans" {
+		// A trace (or a cross-trace span aggregation) fans out across
+		// every service a request touched, with no shared context to
+		// identify which service produced which line — unlike cat/tail
+		// (single app, origin implicit from the path). Force the same
+		// MetaVarColumns projection normally reserved for an explicit
+		// awk/jq meta-var reference so NAMESPACE/SERVICE are always
+		// real, pipeline-filterable fields, and so compute/local.go's
+		// trace-tag display branch has namespace/service available on
+		// every row (SpanOccurrence.Label).
 		sql.includeMetaVars = true
 	}
 

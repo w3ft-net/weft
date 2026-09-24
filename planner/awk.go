@@ -57,6 +57,9 @@ var AwkMetaVars = map[string]string{
 	"CONTAINER":     "container",
 	"NODE":          "node",
 	"TRACE_ID":      "trace_id",
+	"SPAN_NAME":     "span_name",
+	"SPAN_ID":       "span_id",
+	"DURATION_NS":   "duration_ns",
 }
 
 // awkMetaVarPattern matches any AwkMetaVars key used as a whole

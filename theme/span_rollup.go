@@ -15,15 +15,20 @@ import (
 // rollup needs beyond what "span done" repeats, so there's no pattern
 // for it here.
 var (
-	spanDoneRe  = regexp.MustCompile(`^span done name=(\S+) trace_id=(\S+) span_id=(\S+) parent_span_id=(\S*) duration=(\S+) status=(\S+)$`)
+	spanDoneRe  = regexp.MustCompile(`^span done name=(\S+) trace_id=(\S+) span_id=(\S+) parent_span_id=(\S*) duration=\S+ duration_ns=(\d+) status=(\S+)$`)
 	spanErrorRe = regexp.MustCompile(`^span error name=(\S+) trace_id=(\S+) span_id=(\S+) err=`)
 )
 
 // SpanOccurrence is one "span done" event rolled into a SpanRollupRow —
 // the per-instance detail the interactive drill-down's "samples" level
-// shows (which label/shard it hit, its own duration).
+// shows (which label/shard it hit, its own duration). TraceID is what
+// lets the samples level hand off into a `trace <id>` view for a
+// specific request — the same field's value is repeated across every
+// occurrence within one Phase 1 (single-trace) rollup, but varies per
+// row in Phase 2's cross-trace aggregation.
 type SpanOccurrence struct {
 	Label    string // the row's "namespace/service" column
+	TraceID  string
 	SpanID   string
 	Duration time.Duration
 	Status   string // "ok" or "error", from the span's own `status=` field
@@ -78,12 +83,12 @@ func RenderSpanRollup(lines []string) []SpanRollupRow {
 		label, raw := parts[1], parts[2]
 
 		if m := spanDoneRe.FindStringSubmatch(raw); m != nil {
-			dur, err := time.ParseDuration(m[5])
+			ns, err := strconv.ParseInt(m[5], 10, 64)
 			if err != nil {
 				continue
 			}
 			a := get(m[1])
-			a.occ = append(a.occ, SpanOccurrence{Label: label, SpanID: m[3], Duration: dur, Status: m[6]})
+			a.occ = append(a.occ, SpanOccurrence{Label: label, TraceID: m[2], SpanID: m[3], Duration: time.Duration(ns), Status: m[6]})
 			continue
 		}
 		if m := spanErrorRe.FindStringSubmatch(raw); m != nil {

@@ -73,3 +73,67 @@ func TestExecuteForWatch_TraceDoesNotTagOutput(t *testing.T) {
 		t.Error("watch-fired `trace abc-123` must not set TraceTag — would corrupt AlertCommand/dashboard consumers")
 	}
 }
+
+// TestExecuteQuery_TraceSpansTagsInteractiveOutput mirrors
+// TestExecuteQuery_TraceTagsInteractiveOutput for Phase 2's cross-trace
+// aggregation (docs/plans/span-display.md): `trace spans [name]` reuses
+// the exact same buffer-then-emit path a bare `trace <id>` gets, so it
+// needs the same TraceTag=true.
+func TestExecuteQuery_TraceSpansTagsInteractiveOutput(t *testing.T) {
+	for _, pipeline := range []string{"trace spans", "trace spans shard.Query"} {
+		t.Run(pipeline, func(t *testing.T) {
+			c := setupTestCoordinator(t)
+			pool := &spyPool{inner: c.Pool}
+			c.Pool = pool
+
+			res, err := c.Execute(context.Background(), pipeline, fullRange, "kevlar", "")
+			if err != nil {
+				t.Fatalf("query: %v", err)
+			}
+			drainExec(t, res)
+
+			if pool.lastReq == nil {
+				t.Fatal("ExecuteQuery was never called")
+			}
+			if !pool.lastReq.TraceTag {
+				t.Errorf("interactive %q should set TraceTag=true, got false", pipeline)
+			}
+		})
+	}
+}
+
+// TestExecuteForWatch_TraceSpansDoesNotTagOutput is
+// TestExecuteForWatch_TraceDoesNotTagOutput's Phase 2 counterpart —
+// same corruption risk, same alertCtx != nil gate.
+func TestExecuteForWatch_TraceSpansDoesNotTagOutput(t *testing.T) {
+	c := setupTestCoordinator(t)
+	pool := &spyPool{inner: c.Pool}
+	c.Pool = pool
+
+	cust, err := c.Store.GetOrgByName("kevlar")
+	if err != nil {
+		t.Fatalf("resolve test customer: %v", err)
+	}
+
+	pipeline := `trace spans`
+	w := &store.CronWatch{
+		OrgID:    cust.ID,
+		Name:     "trace-spans-watch",
+		Schedule: "every 1m",
+		Pipeline: pipeline,
+		Enabled:  true,
+	}
+
+	res, err := c.ExecuteForWatch(context.Background(), pipeline, fullRange, w)
+	if err != nil {
+		t.Fatalf("ExecuteForWatch: %v", err)
+	}
+	drainExec(t, res)
+
+	if pool.lastReq == nil {
+		t.Fatal("ExecuteQuery was never called")
+	}
+	if pool.lastReq.TraceTag {
+		t.Error("watch-fired `trace spans` must not set TraceTag — would corrupt AlertCommand/dashboard consumers")
+	}
+}

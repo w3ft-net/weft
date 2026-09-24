@@ -578,7 +578,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 			// value the same way an output read would, or count++ would
 			// silently never fire. See docs/known-issues.md's (fixed)
 			// awk meta-variable entry.
-			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: []string{`awk 'LEVEL == "ERROR" { count++ } END { print count }'`},
 		},
 

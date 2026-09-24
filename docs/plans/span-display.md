@@ -2,17 +2,29 @@
 
 ## Status
 
-🟢 Phase 1 shipped (this session): `theme/span_rollup.go` (parsing +
-flat-table rendering), `planner/parse.go`'s `--spans` flag, wiring into
+🟢 Phase 1 shipped: `theme/span_rollup.go` (parsing + flat-table
+rendering), `planner/parse.go`'s `--spans` flag, wiring into
 `ExecNonInteractive` and the interactive REPL, and the `spanview`
 package (list + samples drill-down, registered like chart/dashboard).
-Phase 2 (backend aggregation, `trace spans [name]`) is still 🟡
-designed, not started. Builds on `weft-go`'s `Span` type (v0.4.0, added
-in an earlier session — `StartSpan`/`RecordError`/`End`, wired through
-api→coordinator→compute→shard) and picks up `docs/plans/request-
-tracing.md`'s explicitly deferred hook: "nothing stops adding
-`duration_field`/`parent_id_field` siblings to the same schema-
-extraction pattern later."
+Builds on `weft-go`'s `Span` type (`StartSpan`/`RecordError`/`End`,
+wired through api→coordinator→compute→shard) and picks up
+`docs/plans/request-tracing.md`'s explicitly deferred hook: "nothing
+stops adding `duration_field`/`parent_id_field` siblings to the same
+schema-extraction pattern later."
+
+🟢 Phase 2 (`trace spans [name]` cross-trace aggregation) implemented:
+`weft-go`'s `duration_ns` numeric field, `ingest.Schema`'s four new
+extraction field/pattern pairs, the four reserved shard columns,
+`planner`'s `trace spans [name]` grammar, the coordinator's `TraceTag`
+extension, and `spanview`/`theme` generalized to serve both phases from
+one parser/renderer/View. The turned-out-simpler-than-planned
+implementation note: the SQL projection needed **no synthesized
+expression at all** — see "Aggregation mechanics" below. One item is
+still open: `weft-go`'s `duration_ns` change is committed locally
+(`~/dev/weft-go`) but not yet tagged/published as a new version; weft's
+`go.mod` currently points at it via a local `go.work` entry for
+development. Publishing v0.5.0 and repinning `go.mod` is the last step
+before this ships to production.
 
 ## Why
 
@@ -217,6 +229,38 @@ filter) but with `WHERE span_name = ? AND ts BETWEEN ? AND ?`
 (exact-match reserved column, parameterized, same shape as today's
 `trace_id = ?`) instead of a trace-id lookup.
 
+**Implementation note (as shipped): no synthesized SQL projection, and
+no `span_kind` column.** Two things resolved cleaner than this section
+originally assumed:
+
+1. **The projection is plain `raw`, unmodified.** `raw` already holds
+   weft-go's exact `"span done name=... trace_id=... duration_ns=...
+   status=..."` / `"span error name=... trace_id=... err=..."` text —
+   the same text `theme.RenderSpanRollup` already parses for Phase 1.
+   There's no need to reconstruct that shape from the reserved columns
+   with string concatenation; a plain `SELECT raw, ts [+ MetaVarColumns]
+   FROM logs WHERE ...` (`sql.includeMetaVars`, same as bare `trace
+   <id>`) produces rows Phase 1's parser consumes as-is. One parser,
+   one renderer, one `spanview.SpanView` — both phases, zero new
+   client-side code.
+2. **No `span_kind` reserved column** (resolving the "Open questions"
+   entry below). The WHERE clause is `(duration_ns > 0 OR raw LIKE
+   'span error%')`: a "span done" row is the only row shape that ever
+   carries a positive `duration_ns` (a "span start" row's tag is
+   absent, extracted as the zero value); a "span error" row is
+   identified by matching the fixed, always-present `raw` prefix
+   instead of a dedicated column. Together these exclude "span start"
+   noise while keeping both "done" (for stats) and "error" (for the
+   `ERRORS` count) rows — exactly what `trace <id>`'s existing parser
+   already expects to see.
+
+This also means the coordinator wiring is a one-line extension, not a
+new code path: `TraceTag` (the flag that makes compute buffer the
+merged stream and emit the summary-line + `<ts>\t<label>\t<raw>`
+format via `emitTraceTagged`) is set whenever `plan.SourceCmd ==
+"trace"` **or** `"trace_spans"`. `emitTraceTagged` itself needed no
+changes at all.
+
 **Aggregation mechanics — decided, not left open.** Percentiles
 aren't a decomposable aggregate (`COUNT`/`AVG`/`MIN`/`MAX` are —
 merge trivially across shards; a percentile depends on the full
@@ -235,14 +279,22 @@ window).
 
 Given that, v1 doesn't special-case percentiles out — every stat
 (`COUNT`, `AVG`, `MIN`, `MAX`, `P50`, `P99`) is computed the same
-way: each shard returns its raw, matching `duration_ns` values (not
-full rows — 8 bytes each) for `span_name = ? AND ts BETWEEN ? AND ?`;
-compute concatenates every shard's list and computes all statistics
-once, in plain Go (`sort.Slice` + indexing for percentiles) — no
-DuckDB in the compute layer (confirmed compute has no DuckDB
-dependency today; adding one just for this would be new
-infrastructure for no reason). Exact, not approximate — full stop,
-not "exact as long as row counts stay reasonable."
+way: each shard returns its matching rows for `span_name = ? AND ts
+BETWEEN ? AND ?`; compute concatenates every shard's list (via the
+same `emitTraceTagged` buffering `trace <id>` already uses — see the
+"Implementation note" above) and `theme.RenderSpanRollup` computes all
+statistics once, in plain Go (`sort.Slice` + indexing for percentiles)
+— no DuckDB in the compute layer (confirmed compute has no DuckDB
+dependency today; adding one just for this would be new infrastructure
+for no reason). Exact, not approximate — full stop, not "exact as long
+as row counts stay reasonable." **As shipped, this ships each row's
+full `raw` text (not a projected `duration_ns`-only column)** — the
+"Implementation note" above explains the code-reuse tradeoff that
+motivated it; see also "No scaling lever needed" immediately below,
+whose actual point (no LIMIT, no sampling, cost bounded by time range
+like any other query) holds regardless of that projection choice, even
+though its `duration_ns`-is-8-bytes framing described the narrower
+projection this plan originally proposed.
 
 **No scaling lever needed, and this plan doesn't invent one.** An
 earlier draft of this section proposed DuckDB's native reservoir
@@ -327,7 +379,7 @@ flag needed.
 
 ## Components to build
 
-Phase 1 (client-side rollup):
+Phase 1 (client-side rollup) — 🟢 shipped:
 1. `theme/span_rollup.go` (new) — span-line regex parsing +
    `RenderSpanRollup`, sibling to `trace_columns.go`.
 2. `planner/parse.go` — `--spans` flag on `case "trace":`.
@@ -337,18 +389,34 @@ Phase 1 (client-side rollup):
 4. New `SpanView` (level 1 + 2, Phase 1 data only) registered like
    `chart`/`dashboard`.
 
-Phase 2 (backend aggregation):
-5. `weft-go`: `duration_ns` on `Span.End()` — minor version bump.
+Phase 2 (backend aggregation) — 🟢 shipped, pending `weft-go` publish
+(see Status):
+5. `weft-go`: `duration_ns` on `Span.End()` — done, committed locally
+   (`~/dev/weft-go`), not yet tagged/published as v0.5.0.
 6. `ingest/schema.go` + `ingest/parse.go`: `SpanNameField`/
-   `SpanIDField`/`ParentSpanIDField`/`DurationNsField` (+ patterns).
-7. `shard/shard.go`: reserved columns via `migrationSteps`.
-8. `planner/`: `trace spans [name]` grammar + SQL shape.
-9. `planner/jq.go`: `MetaVarColumns` additions.
-10. `compute/local.go`: new emit/merge path for aggregated rows
-    (parallel to `emitTraceTagged`, not a modification of it).
+   `SpanIDField`/`ParentSpanIDField`/`DurationNsField` (+ patterns) —
+   done, via a shared `extractSpanField` generalizing `extractTraceID`
+   rather than four separate copies.
+7. `shard/shard.go`: reserved columns via `migrationSteps` — done
+   (`span_name`/`span_id`/`parent_span_id` TEXT, `duration_ns` BIGINT).
+8. `planner/`: `trace spans [name]` grammar + SQL shape — done. Turned
+   out not to need a new SQL projection at all; see the "Implementation
+   note" above.
+9. `planner/jq.go` + `planner/awk.go`: `MetaVarColumns`/`AwkMetaVars`/
+   `JQMetaVars` additions — done (`span_name`/`span_id`/`duration_ns`,
+   as `SPAN_NAME`/`SPAN_ID`/`DURATION_NS` and `_span_name`/`_span_id`/
+   `_duration_ns` respectively).
+10. ~~`compute/local.go`: new emit/merge path~~ — **not needed.**
+    `coordinator.go`'s existing `TraceTag` condition (which drives
+    `emitTraceTagged`) extended to also fire for `SourceCmd ==
+    "trace_spans"`; the buffer-then-emit path itself needed zero
+    changes. See the "Implementation note" above for why.
 11. `SpanView` extended to source Phase 2 (aggregate) data in
-    addition to Phase 1 (per-trace) data — same View, two data
-    sources.
+    addition to Phase 1 (per-trace) data — done, via generalizing
+    `QueryFunc`/`ListArgs` from a trace-ID-specific signature to a
+    full pipeline string + display title; `spanview.Builtin` now
+    recognizes three trigger shapes (`trace <id> --spans`, `trace
+    spans`, `trace spans <name>`).
 
 ## Open questions
 
@@ -358,25 +426,32 @@ wide-range query cost ever becomes a real problem, it's `docs/plans/
 streaming-backpressure.md`'s territory (applies uniformly to every
 query shape, not something this plan should special-case).
 
-- **Per-field patterns vs. one combined tag-extraction regex** for
-  ingest — noted above, implementation-time decision.
-- **Does a `span_kind` column (start/done/error) pull its own
-  weight**, or is "presence of `duration_ns`" (only on `done` lines)
-  and "presence of `err`" (only on `error` lines) enough to
-  distinguish without a dedicated column? Affects how many reserved
-  columns Phase 2 actually needs.
-- **Sample size for `trace spans <name>`'s drill-down list** — cap at
-  N most recent, N random, or something range-bucketed? Affects
-  whether "drill down on samples" shows a representative slice or
-  just whatever's newest.
+- ~~Per-field patterns vs. one combined tag-extraction regex~~ —
+  resolved: per-field (`SpanNameField`/`SpanNamePattern`, etc.,
+  mirroring `TraceIDField`/`TraceIDPattern` exactly), each schema field
+  independently configurable.
+- ~~Does a `span_kind` column (start/done/error) pull its own
+  weight?~~ — resolved: no. See the "Implementation note" under "Query
+  grammar" above — `duration_ns > 0 OR raw LIKE 'span error%'` is
+  sufficient to isolate done+error rows from start-row noise without a
+  dedicated column.
+- **Sample size for `trace spans <name>`'s drill-down list** — still
+  open. Current behavior: unbounded (every matching row across the
+  queried range becomes a samples-level occurrence, same as the
+  aggregate stats query — no separate, smaller drill-down query
+  exists yet). Whether that needs a cap (N most recent, N random,
+  range-bucketed) is a real question once someone drives this against
+  a span name with a very large occurrence count in production; not
+  addressed by this implementation.
 
 ## Cross-links
 
 - `docs/plans/request-tracing.md` — the propagation mechanism and
   reserved-`trace_id` precedent this plan extends; also the source of
   the "no waterfall" non-goal this plan continues.
-- `weft-go`'s `span.go` (v0.4.0) — the `Span` type whose log lines
-  Phase 1 parses and Phase 2 promotes to columns.
+- `weft-go`'s `span.go` (v0.4.0 shipped; `duration_ns` pending as
+  v0.5.0, see Status) — the `Span` type whose log lines Phase 1 parses
+  and Phase 2 promotes to columns.
 - `~/dev/warp/pkg/shellcore/view.go` — the `View` interface;
   `dashboard/view.go` — the focus/zoom pattern the new `SpanView`
   copies.

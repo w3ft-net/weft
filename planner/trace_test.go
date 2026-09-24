@@ -122,3 +122,75 @@ func TestPlanTrace_SpansFlag(t *testing.T) {
 		})
 	}
 }
+
+// TestPlanTraceSpans_Predicate: `trace spans` (Phase 2's cross-trace
+// aggregation, docs/plans/span-display.md) filters to rows that carry
+// a real duration_ns or are a "span error" line, with no trace_id or
+// span_name predicate and no namespace/service/kind scoping — it fans
+// out the same way a bare `trace <id>` does, just without a trace_id
+// to anchor on.
+func TestPlanTraceSpans_Predicate(t *testing.T) {
+	plan, err := Plan(`trace spans`, "kevlar", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if !strings.Contains(plan.ShardSQL, "(duration_ns > 0 OR raw LIKE 'span error%')") {
+		t.Errorf("ShardSQL missing the done/error row filter: %s", plan.ShardSQL)
+	}
+	if strings.Contains(plan.ShardSQL, "trace_id = ?") {
+		t.Errorf("ShardSQL unexpectedly scoped by trace_id: %s", plan.ShardSQL)
+	}
+	if strings.Contains(plan.ShardSQL, "span_name = ?") {
+		t.Errorf("ShardSQL unexpectedly scoped by span_name (no name given): %s", plan.ShardSQL)
+	}
+	for _, col := range []string{"namespace =", "service =", "kind =", "namespace IN", "service IN", "kind IN"} {
+		if strings.Contains(plan.ShardSQL, col) {
+			t.Errorf("ShardSQL unexpectedly scoped by %q: %s", col, plan.ShardSQL)
+		}
+	}
+	if plan.SourceCmd != "trace_spans" {
+		t.Errorf("SourceCmd: got %q, want trace_spans", plan.SourceCmd)
+	}
+}
+
+// TestPlanTraceSpans_WithName: `trace spans <name>` adds a parameterized
+// span_name predicate on top of the same done/error filter.
+func TestPlanTraceSpans_WithName(t *testing.T) {
+	plan, err := Plan(`trace spans shard.Query`, "kevlar", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if !strings.Contains(plan.ShardSQL, "span_name = ?") {
+		t.Errorf("ShardSQL missing span_name predicate: %s", plan.ShardSQL)
+	}
+	found := false
+	for _, a := range plan.Args {
+		if a == "shard.Query" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Args missing span name %q: %v", "shard.Query", plan.Args)
+	}
+}
+
+// TestPlanTraceSpans_IncludeMetaVars: same forced NAMESPACE/SERVICE
+// projection as a bare trace — see TestPlanTrace_IncludeMetaVars.
+func TestPlanTraceSpans_IncludeMetaVars(t *testing.T) {
+	plan, err := Plan(`trace spans`, "kevlar", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	for _, col := range MetaVarColumns {
+		if !strings.Contains(plan.ShardSQL, ", "+col) {
+			t.Errorf("ShardSQL missing MetaVarColumns projection %q: %s", col, plan.ShardSQL)
+		}
+	}
+}
+
+// TestPlanTraceSpans_ArityErrors: at most one span name argument.
+func TestPlanTraceSpans_ArityErrors(t *testing.T) {
+	if _, err := Plan(`trace spans a b`, "kevlar", time.Time{}, time.Time{}); err == nil {
+		t.Errorf("Plan(%q): expected error, got nil", "trace spans a b")
+	}
+}

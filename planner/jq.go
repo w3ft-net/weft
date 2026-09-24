@@ -33,6 +33,9 @@ var JQMetaVars = map[string]string{
 	"_container":     "container",
 	"_node":          "node",
 	"_trace_id":      "trace_id",
+	"_span_name":     "span_name",
+	"_span_id":       "span_id",
+	"_duration_ns":   "duration_ns",
 }
 
 // MetaVarColumns is the distinct, deterministically-ordered set of real
@@ -46,7 +49,7 @@ var JQMetaVars = map[string]string{
 var MetaVarColumns = []string{
 	"namespace", "service", "kind", "level", "instance", "deployment",
 	"env", "version", "region", "cluster", "k8s_namespace", "pod",
-	"container", "node", "trace_id",
+	"container", "node", "trace_id", "span_name", "span_id", "duration_ns",
 }
 
 // tryJqPushdown attempts to extract a pushable predicate from a jq expression string.

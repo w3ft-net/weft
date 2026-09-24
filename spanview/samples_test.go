@@ -10,11 +10,11 @@ import (
 
 func TestOccurrenceColumns_HeaderAndRows(t *testing.T) {
 	occ := []theme.SpanOccurrence{
-		{Label: "weft/shard-a", SpanID: "abcdef0123456789", Duration: 12 * time.Millisecond, Status: "ok"},
-		{Label: "weft/shard-b", SpanID: "fedcba9876543210", Duration: 34 * time.Millisecond, Status: "error"},
+		{Label: "weft/shard-a", TraceID: "trace-abc-123", Duration: 12 * time.Millisecond, Status: "ok"},
+		{Label: "weft/shard-b", TraceID: "trace-def-456", Duration: 34 * time.Millisecond, Status: "error"},
 	}
 	header, rows := occurrenceColumns(occ, 80)
-	for _, col := range []string{"LABEL", "SPAN_ID", "DURATION", "STATUS"} {
+	for _, col := range []string{"LABEL", "TRACE_ID", "DURATION", "STATUS"} {
 		if !strings.Contains(header, col) {
 			t.Errorf("expected header to contain %q, got %q", col, header)
 		}
@@ -32,7 +32,7 @@ func TestOccurrenceColumns_HeaderAndRows(t *testing.T) {
 
 func TestOccurrenceColumns_NarrowWidthFloorsLabelWidth(t *testing.T) {
 	occ := []theme.SpanOccurrence{
-		{Label: "weft/a-very-long-service-name-indeed", SpanID: "abcdef0123456789", Duration: time.Millisecond, Status: "ok"},
+		{Label: "weft/a-very-long-service-name-indeed", TraceID: "trace-abc-123", Duration: time.Millisecond, Status: "ok"},
 	}
 	_, rows := occurrenceColumns(occ, 20)
 	if len(rows) != 1 {

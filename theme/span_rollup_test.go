@@ -1,14 +1,16 @@
 package theme
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
-func spanDoneLine(name, traceID, spanID, parentID, duration, status string) string {
+func spanDoneLine(name, traceID, spanID, parentID string, duration time.Duration, status string) string {
 	return "span done name=" + name + " trace_id=" + traceID + " span_id=" + spanID +
-		" parent_span_id=" + parentID + " duration=" + duration + " status=" + status
+		" parent_span_id=" + parentID + " duration=" + duration.String() +
+		" duration_ns=" + strconv.FormatInt(duration.Nanoseconds(), 10) + " status=" + status
 }
 
 func spanErrorLine(name, traceID, spanID, errText string) string {
@@ -17,10 +19,10 @@ func spanErrorLine(name, traceID, spanID, errText string) string {
 
 func TestRenderSpanRollup_GroupsByNameAndComputesStats(t *testing.T) {
 	lines := []string{
-		traceRow(1000, "weft/coordinator", spanDoneLine("shard.Query", "t1", "s1", "", "10ms", "ok")),
-		traceRow(2000, "weft/shard-a", spanDoneLine("shard.Query", "t1", "s2", "s1", "20ms", "ok")),
-		traceRow(3000, "weft/shard-b", spanDoneLine("shard.Query", "t1", "s3", "s1", "30ms", "ok")),
-		traceRow(4000, "weft/coordinator", spanDoneLine("api.Handle", "t1", "s4", "", "5ms", "ok")),
+		traceRow(1000, "weft/coordinator", spanDoneLine("shard.Query", "t1", "s1", "", 10*time.Millisecond, "ok")),
+		traceRow(2000, "weft/shard-a", spanDoneLine("shard.Query", "t1", "s2", "s1", 20*time.Millisecond, "ok")),
+		traceRow(3000, "weft/shard-b", spanDoneLine("shard.Query", "t1", "s3", "s1", 30*time.Millisecond, "ok")),
+		traceRow(4000, "weft/coordinator", spanDoneLine("api.Handle", "t1", "s4", "", 5*time.Millisecond, "ok")),
 	}
 
 	rows := RenderSpanRollup(lines)
@@ -45,9 +47,32 @@ func TestRenderSpanRollup_GroupsByNameAndComputesStats(t *testing.T) {
 	}
 }
 
+// TestRenderSpanRollup_OccurrencesCarryTraceID: each occurrence's
+// TraceID comes from its own row's trace_id= field, not a single
+// shared value — the field Phase 1's per-trace rollup doesn't need
+// (every row shares one trace ID there) but Phase 2's cross-trace
+// aggregation (docs/plans/span-display.md) depends on, to let the
+// interactive samples level hand off into `trace <id>` for a specific
+// occurrence.
+func TestRenderSpanRollup_OccurrencesCarryTraceID(t *testing.T) {
+	lines := []string{
+		traceRow(1000, "weft/shard-a", spanDoneLine("shard.Query", "trace-aaa", "s1", "", 10*time.Millisecond, "ok")),
+		traceRow(2000, "weft/shard-b", spanDoneLine("shard.Query", "trace-bbb", "s2", "", 20*time.Millisecond, "ok")),
+	}
+	rows := RenderSpanRollup(lines)
+	if len(rows) != 1 || rows[0].Count() != 2 {
+		t.Fatalf("expected 1 span name with 2 occurrences, got %+v", rows)
+	}
+	got := []string{rows[0].Occurrences[0].TraceID, rows[0].Occurrences[1].TraceID}
+	want := []string{"trace-aaa", "trace-bbb"}
+	if got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("occurrence TraceIDs: got %v, want %v", got, want)
+	}
+}
+
 func TestRenderSpanRollup_CountsErrorsByName(t *testing.T) {
 	lines := []string{
-		traceRow(1000, "weft/shard-a", spanDoneLine("shard.Query", "t1", "s1", "", "10ms", "error")),
+		traceRow(1000, "weft/shard-a", spanDoneLine("shard.Query", "t1", "s1", "", 10*time.Millisecond, "error")),
 		traceRow(1500, "weft/shard-a", spanErrorLine("shard.Query", "t1", "s1", "connection reset")),
 	}
 
@@ -67,7 +92,7 @@ func TestRenderSpanRollup_IgnoresNonSpanLines(t *testing.T) {
 	lines := []string{
 		"# 3 line(s) across 2 service(s), 2026-09-24T00:16:29Z to 2026-09-24T00:16:30Z",
 		traceRow(1000, "weft/api", "handling request"),
-		traceRow(2000, "weft/api", spanDoneLine("api.Handle", "t1", "s1", "", "1.5ms", "ok")),
+		traceRow(2000, "weft/api", spanDoneLine("api.Handle", "t1", "s1", "", 1500*time.Microsecond, "ok")),
 	}
 
 	rows := RenderSpanRollup(lines)
@@ -83,7 +108,7 @@ func TestRenderSpanRollup_EmptyParentSpanID(t *testing.T) {
 	// A top-level span logs parent_span_id= with nothing after the
 	// equals sign — must still parse (the regex's \S* on that field).
 	lines := []string{
-		traceRow(1000, "weft/api", spanDoneLine("api.Handle", "t1", "s1", "", "1ms", "ok")),
+		traceRow(1000, "weft/api", spanDoneLine("api.Handle", "t1", "s1", "", 1*time.Millisecond, "ok")),
 	}
 	rows := RenderSpanRollup(lines)
 	if len(rows) != 1 || rows[0].Count() != 1 {
@@ -100,7 +125,7 @@ func TestRenderSpanRollupTable_EmptyRowsRendersPlaceholder(t *testing.T) {
 
 func TestRenderSpanRollupTable_HeaderAndColumns(t *testing.T) {
 	lines := []string{
-		traceRow(1000, "weft/api", spanDoneLine("api.Handle", "t1", "s1", "", "1.5ms", "ok")),
+		traceRow(1000, "weft/api", spanDoneLine("api.Handle", "t1", "s1", "", 1500*time.Microsecond, "ok")),
 	}
 	rows := RenderSpanRollup(lines)
 	out := RenderSpanRollupTable(rows, 100)

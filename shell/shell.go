@@ -468,15 +468,19 @@ func RenderTraceIfApplicable(pipeline string, result *QueryResult, termWidth int
 	return theme.RenderTraceColumns(lines, termWidth), true
 }
 
-// isSpansPipeline reports whether pipeline is a bare `trace <id> --spans`
-// query (the flag can appear anywhere among the arguments — see
-// planner/parse.go's case "trace"). Checked separately from, and before,
-// isTracePipeline: every --spans query is also a trace query, but only
-// the span rollup should render for it.
+// isSpansPipeline reports whether pipeline is a bare `trace <id>
+// --spans` query (Phase 1; the flag can appear anywhere among the
+// arguments — see planner/parse.go's case "trace") or a `trace spans
+// [name]` query (Phase 2's cross-trace aggregation). Checked
+// separately from, and before, isTracePipeline: every one of these is
+// also a trace query, but only the span rollup should render for it.
 func isSpansPipeline(pipeline string) bool {
 	fields := strings.Fields(pipeline)
 	if len(fields) == 0 || fields[0] != "trace" {
 		return false
+	}
+	if len(fields) > 1 && fields[1] == "spans" {
+		return true
 	}
 	for _, f := range fields[1:] {
 		if f == "--spans" {
@@ -487,15 +491,17 @@ func isSpansPipeline(pipeline string) bool {
 }
 
 // RenderSpanRollupIfApplicable renders result's rows into theme's flat
-// span-rollup table when pipeline is a `trace <id> --spans` query and
-// the result hasn't already come back pre-rendered as Text. This is
-// Phase 1's non-interactive path (docs/plans/span-display.md) — the
-// interactive REPL instead enters spanview's SpanView for the same
-// query (see cmd/weft/runner/runner.go), so this function is only wired
-// into ExecNonInteractive, not the REPL's runQuery. termWidth <= 0
-// falls back to 80, matching RenderTraceIfApplicable. Returns (nil,
-// false) when pipeline isn't a --spans query, so the caller falls
-// through to its normal trace/Text/Rows handling unchanged.
+// span-rollup table when pipeline is a `trace <id> --spans` (Phase 1)
+// or `trace spans [name]` (Phase 2) query and the result hasn't
+// already come back pre-rendered as Text. Both phases share one
+// parser/renderer — theme.RenderSpanRollup doesn't care whether the
+// rows it's handed came from one trace or many. The interactive REPL
+// instead enters spanview's SpanView for the same query (see
+// cmd/weft/runner/runner.go), so this function is only wired into
+// ExecNonInteractive, not the REPL's runQuery. termWidth <= 0 falls
+// back to 80, matching RenderTraceIfApplicable. Returns (nil, false)
+// when pipeline isn't a spans query, so the caller falls through to
+// its normal trace/Text/Rows handling unchanged.
 func RenderSpanRollupIfApplicable(pipeline string, result *QueryResult, termWidth int) ([]string, bool) {
 	if result == nil || result.Text != "" || !isSpansPipeline(pipeline) {
 		return nil, false

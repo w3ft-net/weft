@@ -1,9 +1,13 @@
-// Package spanview implements the interactive drill-down for `trace
-// <id> --spans`: a list of span names rolled up from a trace's rows
-// (see theme.RenderSpanRollup), and a "samples" level showing each
-// individual occurrence of the focused name within that trace. Modeled
-// on dashboard.DashboardView's focus/zoom pattern — see docs/plans/
-// span-display.md, "Interactive drill-down."
+// Package spanview implements the interactive drill-down shared by
+// both span-display phases: `trace <id> --spans` (Phase 1, a list of
+// span names rolled up from one trace's rows — see
+// theme.RenderSpanRollup) and `trace spans [name]` (Phase 2,
+// cross-trace aggregation over the queried time range). Both feed the
+// same list + "samples" levels — a samples row is a single occurrence
+// (which trace/label it hit, its own duration), letting the user pick
+// one and hand off into `trace <id>` for that specific request.
+// Modeled on dashboard.DashboardView's focus/zoom pattern — see
+// docs/plans/span-display.md, "Interactive drill-down."
 package spanview
 
 import (
@@ -16,17 +20,23 @@ import (
 
 const viewName = "span"
 
-// QueryFunc fetches trace_id's full row set the same way a bare `trace
-// <id>` pipeline would — one raw "<ts_unix_ns>\t<namespace/service>\t
-// <raw message>" line per row, the same shape theme.RenderSpanRollup
-// consumes. OnEnter calls this once, asynchronously.
-type QueryFunc func(traceID string) (lines []string, err error)
+// QueryFunc runs pipeline (a full weft pipeline string — `trace <id>`
+// for Phase 1, `trace spans` or `trace spans <name>` for Phase 2's
+// cross-trace aggregation) and returns its rows the same shape
+// theme.RenderSpanRollup consumes: one raw "<ts_unix_ns>\t<namespace/
+// service>\t<raw message>" line per row. OnEnter calls this once,
+// asynchronously.
+type QueryFunc func(pipeline string) (lines []string, err error)
 
-// ListArgs is passed to core.EnterView(viewName, ...) when `trace <id>
-// --spans` is intercepted before dispatch — see Builtin.
+// ListArgs is passed to core.EnterView(viewName, ...) when Builtin
+// intercepts `trace <id> --spans`, `trace spans`, or `trace spans
+// <name>` before normal pipeline dispatch. Title is what the status
+// bar / empty-state text shows — the trace ID for Phase 1, the span
+// name (or "all spans") for Phase 2.
 type ListArgs struct {
-	TraceID string
-	Query   QueryFunc
+	Pipeline string
+	Title    string
+	Query    QueryFunc
 }
 
 type level int
@@ -38,8 +48,9 @@ const (
 
 // SpanView implements shellcore.View.
 type SpanView struct {
-	traceID string
-	query   QueryFunc
+	pipeline string
+	title    string
+	query    QueryFunc
 
 	rows        []theme.SpanRollupRow
 	err         string
@@ -66,7 +77,8 @@ func (v *SpanView) OnEnter(c *shellcore.ShellCore, args any) error {
 	if !ok || a.Query == nil {
 		return fmt.Errorf("span: invalid args")
 	}
-	v.traceID = a.TraceID
+	v.pipeline = a.Pipeline
+	v.title = a.Title
 	v.query = a.Query
 	v.rows = nil
 	v.err = ""
@@ -81,17 +93,17 @@ func (v *SpanView) OnEnter(c *shellcore.ShellCore, args any) error {
 	// fetch lands) reassigns v.pending to a fresh channel, and the
 	// stale goroutine must keep writing to its own ch (silently
 	// discarded once nothing reads it) rather than delivering an old
-	// trace's rows into the new session via the field.
+	// query's rows into the new session via the field.
 	ch := make(chan fetchResult, 1)
 	v.pending = ch
-	go func(traceID string, query QueryFunc, ch chan fetchResult) {
-		lines, err := query(traceID)
+	go func(pipeline string, query QueryFunc, ch chan fetchResult) {
+		lines, err := query(pipeline)
 		if err != nil {
 			ch <- fetchResult{err: err}
 			return
 		}
 		ch <- fetchResult{rows: theme.RenderSpanRollup(lines)}
-	}(a.TraceID, a.Query, ch)
+	}(a.Pipeline, a.Query, ch)
 	return nil
 }
 
@@ -236,7 +248,7 @@ func (v *SpanView) Render(c *shellcore.ShellCore) {
 		buf.WriteString(shellcore.ErrorText("span: " + v.err))
 		buf.WriteString("\r\n")
 	case v.pending != nil:
-		buf.WriteString(shellcore.DimText("fetching trace " + v.traceID + "..."))
+		buf.WriteString(shellcore.DimText("fetching " + v.title + "..."))
 		buf.WriteString("\r\n")
 	case v.level == levelSamples:
 		v.renderSamples(&buf, w, h)
@@ -263,7 +275,7 @@ func (v *SpanView) statusBar() string {
 	if v.level == levelSamples {
 		return fmt.Sprintf(" spans: %s — samples   \xe2\x86\x91\xe2\x86\x93/jk move  esc back  q exit ", v.currentName())
 	}
-	return fmt.Sprintf(" spans: %s   \xe2\x86\x91\xe2\x86\x93/jk move  \xe2\x8f\x8e samples  esc/q exit ", v.traceID)
+	return fmt.Sprintf(" spans: %s   \xe2\x86\x91\xe2\x86\x93/jk move  \xe2\x8f\x8e samples  esc/q exit ", v.title)
 }
 
 func (v *SpanView) currentName() string {
@@ -275,7 +287,7 @@ func (v *SpanView) currentName() string {
 
 func (v *SpanView) renderList(buf *strings.Builder, w, h int) {
 	if len(v.rows) == 0 {
-		buf.WriteString(shellcore.DimText(fmt.Sprintf("(no spans found in trace %s)", v.traceID)))
+		buf.WriteString(shellcore.DimText(fmt.Sprintf("(no spans found for %s)", v.title)))
 		buf.WriteString("\r\n")
 		return
 	}

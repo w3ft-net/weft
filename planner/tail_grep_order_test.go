@@ -44,7 +44,7 @@ func TestPushdown_LimitBeforeFilter_DoesNotMerge(t *testing.T) {
 			// The inequality isn't limit-safe, so the whole filter runs
 			// in compute and needs LEVEL's real per-row value — see
 			// docs/known-issues.md's (fixed) awk meta-variable entry.
-			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id FROM logs WHERE namespace = ? ORDER BY ts ASC LIMIT 100`,
+			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? ORDER BY ts ASC LIMIT 100`,
 			wantCompute: []string{`awk 'LEVEL != "ERROR"'`},
 		},
 		{

@@ -21,10 +21,14 @@ type sourceInfo struct {
 	services   []string // service column values for SQL predicates
 	kinds      []string // kind column values for SQL predicates
 	env        string   // env column value; shared across all args in one pipeline
-	cmd        string   // "cat", "head", "tail", or "trace"
+	cmd        string   // "cat", "head", "tail", "trace", or "trace_spans"
 	limit      int      // for head/tail: line count (0 = unlimited for cat)
 	follow     bool     // tail -f
 	traceID    string   // trace_id predicate value; only set when cmd == "trace"
+	// spanName is `trace spans <name>`'s optional filter; only set
+	// when cmd == "trace_spans". Empty means "every span name in the
+	// queried time range" (`trace spans` with no argument).
+	spanName string
 	// spansOnly is `trace <id> --spans`'s flag. The SQL/row data this
 	// produces is identical to a bare `trace <id>` (see docs/plans/
 	// span-display.md, "Phase 1 in detail") — the rollup is a pure
@@ -210,6 +214,26 @@ func parseSource(cmd *bash.SimpleCommand, cwd string) (*sourceInfo, error) {
 		return &sourceInfo{namespaces: sf.namespaces, services: sf.services, kinds: sf.kinds, env: sf.env, cmd: "tail", limit: limit, follow: follow}, nil
 
 	case "trace":
+		// `trace spans` / `trace spans <name>` — Phase 2's cross-trace
+		// aggregation (docs/plans/span-display.md). Checked first and
+		// exclusively: "spans" as the very first argument is the
+		// sub-verb, never a trace ID (a real trace ID is opaque and
+		// never needs to equal that literal word in practice, and this
+		// keeps the grammar unambiguous rather than trying to guess
+		// from shape). Unlike `trace <id>`, there's no correlation ID
+		// at all — the query fans out across the customer's whole
+		// queried time range, not one request.
+		if len(args) > 0 && args[0] == "spans" {
+			switch len(args) {
+			case 1:
+				return &sourceInfo{cmd: "trace_spans"}, nil
+			case 2:
+				return &sourceInfo{cmd: "trace_spans", spanName: args[1]}, nil
+			default:
+				return nil, fmt.Errorf("trace spans: expected at most one span name argument")
+			}
+		}
+
 		// No path argument — a trace isn't scoped to one app, it fans out
 		// across every source the customer can read. The argument is an
 		// opaque correlation ID, not a pseudofile path, so it skips

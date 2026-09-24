@@ -81,16 +81,16 @@ func Run(s *shell.Shell) error {
 			dashboard.Register(r.core, dp)
 		}
 	}
-	// `trace <id> --spans`'s interactive rollup View — Phase 1 of
-	// docs/plans/span-display.md. Grouped with chart/dashboard above
-	// for the same wasm-build reason: this needs shellcore's View
-	// machinery, which stays out of shell/'s import graph. Query wraps
-	// s.Query the same way a plain `trace <id>` pipeline already runs,
-	// so the View's async fetch reuses the exact same server round trip
-	// ExecNonInteractive's --spans path does.
+	// Span display's interactive rollup View — both phases of
+	// docs/plans/span-display.md (`trace <id> --spans` and `trace spans
+	// [name]`). Grouped with chart/dashboard above for the same
+	// wasm-build reason: this needs shellcore's View machinery, which
+	// stays out of shell/'s import graph. spanview.Builtin already
+	// hands us the complete pipeline to run (see spanview/builtin.go's
+	// parseSpansLine) — Query wraps s.Query directly, no prefixing.
 	if s.Query != nil {
-		spanview.Register(r.core, func(traceID string) ([]string, error) {
-			result, err := s.Query("trace "+traceID, s.Range, r.core.DirStack())
+		spanview.Register(r.core, func(pipeline string) ([]string, error) {
+			result, err := s.Query(pipeline, s.Range, r.core.DirStack())
 			if err != nil {
 				return nil, err
 			}
