@@ -641,6 +641,71 @@ func TestShardSM_SuspendedRescueFromReadOnlyReturnsToReadOnly(t *testing.T) {
 	}
 }
 
+// TestShardSM_SuspendedRescueToReadOnlyRefreshesLiveness is the
+// regression test for a real production incident (2026-09-24,
+// shard-20260914T0000-a97f480b): a SUSPENDED shard whose pre-recovery
+// state was READ_ONLY got rescued back to READ_ONLY by a genuine,
+// healthy heartbeat every ~10s — but StateReadOnly's config (unlike
+// StateIngesting's) wires no OnEntryFrom(TriggerHeartbeat, ...), so
+// configureOnHeartbeat never ran and LastHeartbeatAt was never
+// refreshed. The very next Evaluate — reading the same ancient
+// LastHeartbeatAt — immediately judged the shard stale again and fired
+// straight back to SUSPENDED, ~76ms later per shard_operations'
+// timestamps. This repeated once a minute for 3+ hours: the shard was
+// perfectly healthy and heartbeating the entire time, but could never
+// converge, and evaluateRecovery's reap-then-relaunch never got a
+// stable SUSPENDED read to act on either.
+//
+// TestShardSM_SuspendedRescueFromReadOnlyReturnsToReadOnly (above) only
+// asserted the resulting State — exactly the blind spot that let this
+// ship, since State genuinely does flip to READ_ONLY for one instant
+// before flipping right back. This test asserts the liveness refresh
+// itself, and then proves the downstream consequence directly: a
+// second Evaluate immediately after the rescue must NOT re-suspend a
+// shard that just heartbeated.
+func TestShardSM_SuspendedRescueToReadOnlyRefreshesLiveness(t *testing.T) {
+	sm, db, entry := makeFixtureShardSM(t, StateSuspended)
+	entry.EBSVolumeID = "vol-abc"
+	entry.InstanceID = "i-alive"
+	seedShardOperation(t, db, "s-test", StateReadOnly, StateSuspended)
+
+	// Mirrors production: LastHeartbeatAt already holds a real, old
+	// value (frozen from before the shard ever went SUSPENDED) — not
+	// the zero value actuallyStale() special-cases as "never observed,
+	// treat as fresh". A fresh-fixture zero value would mask this bug
+	// entirely.
+	staleSince := entry.deps.Clock().Add(-3 * time.Hour)
+	entry.LastHeartbeatAt = staleSince
+
+	hb := store.ShardHeartbeat{
+		ShardID: "s-test", Addr: "10.0.0.7:9000", InstanceID: "i-alive",
+	}
+	if err := sm.Fire(context.Background(), TriggerHeartbeat, hb); err != nil {
+		t.Fatalf("Fire heartbeat: %v", err)
+	}
+	if entry.State != StateReadOnly {
+		t.Fatalf("state: got %q want READ_ONLY (rescue preserves prior state)", entry.State)
+	}
+	if entry.LastHeartbeatAt.Equal(staleSince) {
+		t.Fatalf("LastHeartbeatAt was not refreshed by the rescue heartbeat — still %v; "+
+			"StateReadOnly's config is missing the OnEntryFrom(TriggerHeartbeat, ...) "+
+			"action StateIngesting has (see configureOnHeartbeat)", entry.LastHeartbeatAt)
+	}
+	if got := entry.Addr; got != "10.0.0.7:9000" {
+		t.Fatalf("entry.Addr: got %q, want the rescue heartbeat's addr", got)
+	}
+
+	// The direct, observable consequence: a shard that just genuinely
+	// heartbeated must not immediately re-suspend on the very next tick.
+	if err := entry.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate after rescue: %v", err)
+	}
+	if entry.State != StateReadOnly {
+		t.Fatalf("state after post-rescue Evaluate: got %q, want READ_ONLY to hold — "+
+			"a healthy shard just bounced straight back to SUSPENDED", entry.State)
+	}
+}
+
 func TestShardSM_LaunchingRejectsStrayInstanceHeartbeat(t *testing.T) {
 	sm, _, entry := makeFixtureShardSM(t, StateLaunching)
 	entry.InstanceID = "i-abc"

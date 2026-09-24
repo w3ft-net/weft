@@ -229,14 +229,36 @@ func (sh *Shard) configureSM() {
 	// (IngestRecovered), rotates out normally (RotateRequested), and — if
 	// its instance also dies — drops to the recovery branch on the same
 	// HeartbeatStale edge INGESTING has.
+	//
+	// OnEntryFrom(TriggerHeartbeat, configureOnHeartbeat): DEGRADED, like
+	// READ_ONLY below, can be a SUSPENDED shard's rescue target
+	// (heartbeatTargetFromSuspended → postRecoveryTarget) — see the
+	// READ_ONLY comment for why this action must run here too.
 	sh.sm.Configure(StateDegraded).
 		OnEntry(sh.onEnterDegraded).
+		OnEntryFrom(TriggerHeartbeat, sh.configureOnHeartbeat).
 		Permit(TriggerIngestRecovered, StateIngesting).
 		Permit(TriggerRotateRequested, StateReadOnly).
 		Permit(TriggerRelaunchRequested, StateUpgrading).
 		PermitDynamic(TriggerHeartbeatStale, sh.staleTargetFromActive, sh.actuallyStale)
 
+	// OnEntryFrom(TriggerHeartbeat, configureOnHeartbeat): READ_ONLY is a
+	// valid SUSPENDED-rescue target (a shard whose pre-recovery state
+	// was READ_ONLY — heartbeatTargetFromSuspended → postRecoveryTarget
+	// returns it) and this action is what actually records the
+	// heartbeat: Addr/InstanceID/LastHeartbeatAt/RowCount/BinarySHA/Live.
+	// Without it (as shipped, and the cause of a real 2026-09-24
+	// production incident — see
+	// TestShardSM_SuspendedRescueToReadOnlyRefreshesLiveness),
+	// LastHeartbeatAt is never refreshed on the rescue, so the very
+	// next Evaluate reads the same ancient value, immediately judges
+	// the shard stale again, and fires straight back to SUSPENDED — a
+	// permanent, minute-by-minute bounce for a perfectly healthy,
+	// continuously-heartbeating shard, since it can never stay
+	// READ_ONLY long enough for evaluateRecovery to get a stable
+	// SUSPENDED read to reap-and-relaunch from either.
 	sh.sm.Configure(StateReadOnly).
+		OnEntryFrom(TriggerHeartbeat, sh.configureOnHeartbeat).
 		Permit(TriggerArchiveRequested, StateArchiving).
 		Permit(TriggerRelaunchRequested, StateUpgrading).
 		PermitDynamic(TriggerHeartbeatStale, sh.staleTargetFromActive, sh.actuallyStale)
@@ -759,15 +781,27 @@ func (sh *Shard) onEnterLaunching(ctx context.Context, args ...any) error {
 	return nil
 }
 
-// configureOnHeartbeat is INGESTING's OnEntryFrom(Heartbeat): it records
-// the heartbeat's addr/instance and attaches the live handle the promote
-// path already dialed. The Configure dial happens BEFORE this transition
-// (Provisioner.promoteOnHeartbeat → Shard.dialConfigure), so by the time
-// OnEntry runs the coordinator already has a working connection — an
-// unreachable shard never reaches INGESTING. The dialed handle rides in
-// through the Fire args; it's nil on dev/test paths with no Configurer
-// (and on direct sm.Fire callers), which then just record addr/instance
-// without attaching a connection.
+// configureOnHeartbeat is the OnEntryFrom(Heartbeat) action shared by
+// every state a heartbeat-driven promotion can land in — INGESTING
+// (fresh launch or SUSPENDED rescue), and READ_ONLY/DEGRADED (a
+// SUSPENDED rescue whose pre-recovery state was one of those — see
+// heartbeatTargetFromSuspended/postRecoveryTarget). It records the
+// heartbeat's addr/instance/liveness and attaches the live handle the
+// promote path already dialed. The Configure dial happens BEFORE this
+// transition (Provisioner.promoteOnHeartbeat → Shard.dialConfigure), so
+// by the time OnEntry runs the coordinator already has a working
+// connection — an unreachable shard never reaches any of these states.
+// The dialed handle rides in through the Fire args; it's nil on
+// dev/test paths with no Configurer (and on direct sm.Fire callers),
+// which then just record addr/instance without attaching a connection.
+//
+// Every state this is wired to must actually use it: LastHeartbeatAt is
+// the field actuallyStale() reads, and it's set nowhere else on the
+// promotion path. Landing in a state without this action means a
+// perfectly healthy shard's own liveness clock never advances, and the
+// very next Evaluate immediately re-detects it as stale — see
+// TestShardSM_SuspendedRescueToReadOnlyRefreshesLiveness, the
+// regression test for exactly that gap on READ_ONLY.
 //
 // SUSPENDED .OnEntry already dropped any dead handle before this runs, so
 // there's no prior connection to close (see docs/plans/asg-as-api-
