@@ -106,12 +106,15 @@ type Shell struct {
 	// back to the production host so a CLI invocation without explicit
 	// config still produces a shareable link.
 	ShareURLBase string
-	// TermWidth is the caller's known terminal width, used only by
-	// ExecNonInteractive's `trace <id>` rendering (theme.RenderTraceColumns)
-	// to size its 3-column layout — the coordinator has no way to know
-	// this, so it's the client's job to set it before calling Query. 0
-	// (the zero value, e.g. stdout isn't a real terminal) falls back to
-	// 80, matching pipe-stage chart's existing non-interactive default.
+	// TermWidth is the caller's known terminal width, used by
+	// ExecNonInteractive's call into RenderTraceIfApplicable to size
+	// `trace <id>`'s 3-column layout — the coordinator has no way to know
+	// this, so it's the client's job to supply it before calling Query.
+	// The interactive REPL doesn't read this field; it passes its own
+	// live, resize-aware width (shellcore.ShellCore.Width()) straight to
+	// RenderTraceIfApplicable instead. 0 (the zero value, e.g. stdout
+	// isn't a real terminal) falls back to 80, matching pipe-stage
+	// chart's existing non-interactive default.
 	TermWidth int
 }
 
@@ -129,6 +132,7 @@ func (s *Shell) ConfigureCore(core *shellcore.ShellCore) {
 	// (see weftPalette). Without this the shell renders warp's
 	// DefaultPalette, which doesn't share weft's blue/gold weave.
 	core.SetPalette(weftPalette())
+	core.SetSpinnerStyle(weftSpinnerStyle())
 	if s.FS != nil {
 		core.SetFS(s.FS)
 	}
@@ -410,16 +414,12 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 	}
 	if result.Text != "" {
 		fmt.Fprint(w, result.Text)
-	} else if isTracePipeline(weftPipeline) {
-		termWidth := s.TermWidth
-		if termWidth <= 0 {
-			termWidth = 80
+	} else if rendered, ok := RenderSpanRollupIfApplicable(weftPipeline, result, s.TermWidth); ok {
+		for _, l := range rendered {
+			fmt.Fprintln(w, l)
 		}
-		lines := make([]string, len(result.Rows))
-		for i, row := range result.Rows {
-			lines[i] = row.Raw
-		}
-		for _, l := range theme.RenderTraceColumns(lines, termWidth) {
+	} else if rendered, ok := RenderTraceIfApplicable(weftPipeline, result, s.TermWidth); ok {
+		for _, l := range rendered {
 			fmt.Fprintln(w, l)
 		}
 	} else {
@@ -442,6 +442,72 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 func isTracePipeline(pipeline string) bool {
 	fields := strings.Fields(pipeline)
 	return len(fields) > 0 && fields[0] == "trace"
+}
+
+// RenderTraceIfApplicable renders result's rows into theme's 3-column
+// gap-histogram display when pipeline is a bare `trace <id>` query and the
+// result hasn't already come back pre-rendered as Text. This is the one
+// place that decision gets made — every client entry point (ExecNonInteractive
+// here, and cmd/weft/runner's interactive REPL) calls it rather than each
+// re-deriving its own copy, which is how the REPL ended up missing this
+// rendering entirely the first time around. termWidth <= 0 falls back to 80,
+// matching pipe-stage chart's existing non-interactive default. Returns
+// (nil, false) when pipeline isn't a trace query, so the caller falls
+// through to its normal Text/Rows handling unchanged.
+func RenderTraceIfApplicable(pipeline string, result *QueryResult, termWidth int) ([]string, bool) {
+	if result == nil || result.Text != "" || !isTracePipeline(pipeline) {
+		return nil, false
+	}
+	if termWidth <= 0 {
+		termWidth = 80
+	}
+	lines := make([]string, len(result.Rows))
+	for i, row := range result.Rows {
+		lines[i] = row.Raw
+	}
+	return theme.RenderTraceColumns(lines, termWidth), true
+}
+
+// isSpansPipeline reports whether pipeline is a bare `trace <id> --spans`
+// query (the flag can appear anywhere among the arguments — see
+// planner/parse.go's case "trace"). Checked separately from, and before,
+// isTracePipeline: every --spans query is also a trace query, but only
+// the span rollup should render for it.
+func isSpansPipeline(pipeline string) bool {
+	fields := strings.Fields(pipeline)
+	if len(fields) == 0 || fields[0] != "trace" {
+		return false
+	}
+	for _, f := range fields[1:] {
+		if f == "--spans" {
+			return true
+		}
+	}
+	return false
+}
+
+// RenderSpanRollupIfApplicable renders result's rows into theme's flat
+// span-rollup table when pipeline is a `trace <id> --spans` query and
+// the result hasn't already come back pre-rendered as Text. This is
+// Phase 1's non-interactive path (docs/plans/span-display.md) — the
+// interactive REPL instead enters spanview's SpanView for the same
+// query (see cmd/weft/runner/runner.go), so this function is only wired
+// into ExecNonInteractive, not the REPL's runQuery. termWidth <= 0
+// falls back to 80, matching RenderTraceIfApplicable. Returns (nil,
+// false) when pipeline isn't a --spans query, so the caller falls
+// through to its normal trace/Text/Rows handling unchanged.
+func RenderSpanRollupIfApplicable(pipeline string, result *QueryResult, termWidth int) ([]string, bool) {
+	if result == nil || result.Text != "" || !isSpansPipeline(pipeline) {
+		return nil, false
+	}
+	if termWidth <= 0 {
+		termWidth = 80
+	}
+	lines := make([]string, len(result.Rows))
+	for i, row := range result.Rows {
+		lines[i] = row.Raw
+	}
+	return theme.RenderSpanRollupTable(theme.RenderSpanRollup(lines), termWidth), true
 }
 
 // queryResultLines flattens a *QueryResult into one trimmed input line

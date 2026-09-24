@@ -25,6 +25,13 @@ type sourceInfo struct {
 	limit      int      // for head/tail: line count (0 = unlimited for cat)
 	follow     bool     // tail -f
 	traceID    string   // trace_id predicate value; only set when cmd == "trace"
+	// spansOnly is `trace <id> --spans`'s flag. The SQL/row data this
+	// produces is identical to a bare `trace <id>` (see docs/plans/
+	// span-display.md, "Phase 1 in detail") — the rollup is a pure
+	// client-side reinterpretation of the same rows — so this field
+	// exists only so the flag doesn't fail sourceInfo's argument-count
+	// check below; nothing here changes the predicate or query shape.
+	spansOnly bool
 }
 
 // stageInfo describes a single pipeline stage after the source command.
@@ -207,10 +214,25 @@ func parseSource(cmd *bash.SimpleCommand, cwd string) (*sourceInfo, error) {
 		// across every source the customer can read. The argument is an
 		// opaque correlation ID, not a pseudofile path, so it skips
 		// resolveSourcePath/IsLocalFSPath entirely.
-		if len(args) != 1 {
+		//
+		// --spans is stripped here (any position) so `trace <id> --spans`
+		// doesn't trip the argument-count check below — the flag is
+		// otherwise inert server-side; the client decides span-rollup
+		// rendering entirely on its own from the pipeline text it already
+		// has (see shell.RenderSpanRollupIfApplicable).
+		var spansOnly bool
+		var rest []string
+		for _, a := range args {
+			if a == "--spans" {
+				spansOnly = true
+				continue
+			}
+			rest = append(rest, a)
+		}
+		if len(rest) != 1 {
 			return nil, fmt.Errorf("trace: expected exactly one trace id argument")
 		}
-		return &sourceInfo{cmd: "trace", traceID: args[0]}, nil
+		return &sourceInfo{cmd: "trace", traceID: rest[0], spansOnly: spansOnly}, nil
 
 	default:
 		// A leading command other than cat/head/tail can never

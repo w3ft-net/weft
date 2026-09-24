@@ -25,6 +25,7 @@ import (
 	"github.com/graybeardcorp/weft/chart"
 	"github.com/graybeardcorp/weft/dashboard"
 	"github.com/graybeardcorp/weft/shell"
+	"github.com/graybeardcorp/weft/spanview"
 )
 
 // Run drives the interactive CLI shell. The caller wires up s.Query,
@@ -79,6 +80,26 @@ func Run(s *shell.Shell) error {
 		if dp, ok := s.FS.(dashboard.Provider); ok && s.Dashboard == nil {
 			dashboard.Register(r.core, dp)
 		}
+	}
+	// `trace <id> --spans`'s interactive rollup View — Phase 1 of
+	// docs/plans/span-display.md. Grouped with chart/dashboard above
+	// for the same wasm-build reason: this needs shellcore's View
+	// machinery, which stays out of shell/'s import graph. Query wraps
+	// s.Query the same way a plain `trace <id>` pipeline already runs,
+	// so the View's async fetch reuses the exact same server round trip
+	// ExecNonInteractive's --spans path does.
+	if s.Query != nil {
+		spanview.Register(r.core, func(traceID string) ([]string, error) {
+			result, err := s.Query("trace "+traceID, s.Range, r.core.DirStack())
+			if err != nil {
+				return nil, err
+			}
+			lines := make([]string, len(result.Rows))
+			for i, row := range result.Rows {
+				lines[i] = row.Raw
+			}
+			return lines, nil
+		})
 	}
 
 	// Prefetch directory listings while the logo dissolves.
@@ -197,13 +218,17 @@ func (r *runner) runQuery(pipeline string) {
 			ev.Text = notices + result.Text
 		}
 		if result.Text == "" && len(result.Rows) > 0 {
-			for _, row := range result.Rows {
-				ev.Rows = append(ev.Rows, shellcore.ResultRow{Raw: row.Raw})
-			}
-			// Notices alongside row-shaped output: prepend as a
-			// synthetic Text payload that renders before rows.
-			if notices != "" {
-				ev.Text = notices
+			if rendered, ok := shell.RenderTraceIfApplicable(pipeline, result, r.core.Width()); ok {
+				ev.Text = notices + strings.Join(rendered, "\n") + "\n"
+			} else {
+				for _, row := range result.Rows {
+					ev.Rows = append(ev.Rows, shellcore.ResultRow{Raw: row.Raw})
+				}
+				// Notices alongside row-shaped output: prepend as a
+				// synthetic Text payload that renders before rows.
+				if notices != "" {
+					ev.Text = notices
+				}
 			}
 		}
 	}

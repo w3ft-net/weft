@@ -170,6 +170,7 @@ than product strategy.
 | [streaming-parallel-warp](streaming-parallel-warp.md) | Combine streaming + chunked intra-stage parallelism in warp |
 | [coverage-improvement](coverage-improvement.md) | Per-PR coverage delta, per-package floors, eliminating the `-p 1` test-isolation workaround |
 | [request-tracing](request-tracing.md) | `trace_id` log correlation (no span model, no OTLP) across weftd/CloudWatch (push)/offline ingest + SDK-based propagation; weft dogfoods it internally |
+| [span-display](span-display.md) | Roll up `weft-go`'s now-landed `Span` lines into `trace <id> --spans` (per-trace, client-side) and `trace spans [name]` (cross-trace aggregation, needs reserved columns) + a vim-nav interactive drill-down view |
 
 ## Conventions for new plans
 

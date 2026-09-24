@@ -91,10 +91,33 @@ func TestPlanTrace_IncludeMetaVars(t *testing.T) {
 
 // TestPlanTrace_ArityErrors: trace requires exactly one trace id argument.
 func TestPlanTrace_ArityErrors(t *testing.T) {
-	for _, pipeline := range []string{"trace", "trace id1 id2"} {
+	for _, pipeline := range []string{"trace", "trace id1 id2", "trace --spans"} {
 		t.Run(pipeline, func(t *testing.T) {
 			if _, err := Plan(pipeline, "kevlar", time.Time{}, time.Time{}); err == nil {
 				t.Errorf("Plan(%q): expected error, got nil", pipeline)
+			}
+		})
+	}
+}
+
+// TestPlanTrace_SpansFlag: `trace <id> --spans` plans identically to a
+// bare `trace <id>` — the flag is stripped before the argument-count
+// check and never reaches SQL. Position-independent (the flag can come
+// before or after the id) because docs/plans/span-display.md's Phase 1
+// rollup is entirely a client-side reinterpretation of the same rows.
+func TestPlanTrace_SpansFlag(t *testing.T) {
+	base, err := Plan(`trace abc-123`, "kevlar", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("Plan(bare): %v", err)
+	}
+	for _, pipeline := range []string{"trace abc-123 --spans", "trace --spans abc-123"} {
+		t.Run(pipeline, func(t *testing.T) {
+			plan, err := Plan(pipeline, "kevlar", time.Time{}, time.Time{})
+			if err != nil {
+				t.Fatalf("Plan(%q): %v", pipeline, err)
+			}
+			if plan.ShardSQL != base.ShardSQL {
+				t.Errorf("ShardSQL differs from bare trace:\n  bare:  %s\n  spans: %s", base.ShardSQL, plan.ShardSQL)
 			}
 		})
 	}
