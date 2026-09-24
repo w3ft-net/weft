@@ -25,12 +25,28 @@ var traceTagColors = []int{197, 81, 141, 148, 51, 213, 172, 118}
 // query somehow didn't carry origin metadata) renders as "[unknown]"
 // rather than a blank or malformed "[/]" tag.
 func TraceTag(namespace, service string) string {
-	label := namespace + "/" + service
+	label := traceLabel(namespace, service)
+	return traceTagColor(label) + "[" + label + "] \x1b[0m"
+}
+
+// traceLabel builds the same "namespace/service" (or "unknown") text
+// TraceTag badges, factored out so RenderTraceColumns (trace_columns.go)
+// can reuse the exact same label the badge would show, without also
+// getting its brackets/trailing space.
+func traceLabel(namespace, service string) string {
 	if namespace == "" && service == "" {
-		label = "unknown"
+		return "unknown"
 	}
+	return namespace + "/" + service
+}
+
+// traceTagColor returns just the ANSI color-open escape (no reset, no
+// brackets) TraceTag would use for label — the deterministic hash-to-
+// color lookup factored out so other trace renderers can color the same
+// label consistently without also getting TraceTag's "[...] " framing.
+func traceTagColor(label string) string {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(label))
 	code := traceTagColors[h.Sum32()%uint32(len(traceTagColors))]
-	return "\x1b[38;5;" + strconv.Itoa(code) + "m[" + label + "] \x1b[0m"
+	return "\x1b[38;5;" + strconv.Itoa(code) + "m"
 }

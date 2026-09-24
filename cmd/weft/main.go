@@ -339,6 +339,14 @@ func runOneShot(pipeline, rangeSpec string) {
 		s.Range = rangeSpec
 	}
 
+	// Only meaningful for `trace <id>` output (ExecNonInteractive's doc
+	// on Shell.TermWidth) — stdout not being a real terminal (piped,
+	// redirected) is not an error here, just falls back to the field's
+	// own zero-value default.
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
+		s.TermWidth = w
+	}
+
 	if err := s.ExecNonInteractive(pipeline, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

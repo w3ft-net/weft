@@ -33,10 +33,12 @@ func TestLocalComputeJob_TraceTagEmitsSummaryFirst(t *testing.T) {
 	}
 }
 
-// TestLocalComputeJob_TraceTagPrefixesEachRowWithBadge: every row
-// after the summary carries a [namespace/service] badge built from
-// its MetaVars.
-func TestLocalComputeJob_TraceTagPrefixesEachRowWithBadge(t *testing.T) {
+// TestLocalComputeJob_TraceTagEmitsDelimitedRows: every row after the
+// summary is plain "<ts_unix_ns>\t<namespace/service>\t<raw>" data, not
+// pre-rendered ANSI — the coordinator doesn't know the client's
+// terminal width, so it leaves the actual column/badge/wrap rendering
+// to theme.RenderTraceColumns on the client (shell.ExecNonInteractive).
+func TestLocalComputeJob_TraceTagEmitsDelimitedRows(t *testing.T) {
 	pool := &LocalComputePool{}
 	job := pool.NewJob(nil, 1, "ts", 0, false, true).(*LocalComputeJob)
 
@@ -50,12 +52,9 @@ func TestLocalComputeJob_TraceTagPrefixesEachRowWithBadge(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("got %d lines, want 2 (1 summary + 1 row): %v", len(lines), lines)
 	}
-	row := lines[1].Raw
-	if !strings.Contains(row, "[acme/api]") {
-		t.Errorf("row = %q, want it to contain badge \"[acme/api]\"", row)
-	}
-	if !strings.HasSuffix(row, "hello") {
-		t.Errorf("row = %q, want it to end with the original raw text %q", row, "hello")
+	want := "1000\tacme/api\thello"
+	if lines[1].Raw != want {
+		t.Errorf("row = %q, want %q", lines[1].Raw, want)
 	}
 }
 
@@ -112,8 +111,8 @@ func TestLocalComputeJob_TraceTagRespectsLimit(t *testing.T) {
 
 // TestLocalComputeJob_TraceTagEmptyNamespaceService: a row missing
 // namespace/service metadata (a malformed or pre-metavar shard
-// response) gets an "[unknown]" badge rather than a blank or
-// malformed "[/]" tag.
+// response) labels itself "unknown" rather than a blank or malformed
+// bare "/".
 func TestLocalComputeJob_TraceTagEmptyNamespaceService(t *testing.T) {
 	pool := &LocalComputePool{}
 	job := pool.NewJob(nil, 1, "ts", 0, false, true).(*LocalComputeJob)
@@ -128,7 +127,8 @@ func TestLocalComputeJob_TraceTagEmptyNamespaceService(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("got %d lines, want 2 (1 summary + 1 row): %v", len(lines), lines)
 	}
-	if !strings.Contains(lines[1].Raw, "[unknown]") {
-		t.Errorf("row = %q, want it to contain \"[unknown]\" badge", lines[1].Raw)
+	want := "1000\tunknown\tmystery"
+	if lines[1].Raw != want {
+		t.Errorf("row = %q, want %q", lines[1].Raw, want)
 	}
 }

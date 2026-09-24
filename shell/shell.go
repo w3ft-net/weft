@@ -11,6 +11,7 @@ import (
 	"github.com/graybeardcorp/warp/pkg/syntax"
 	"github.com/graybeardcorp/weft/chart"
 	"github.com/graybeardcorp/weft/internal/timerange"
+	"github.com/graybeardcorp/weft/theme"
 )
 
 // Row is a single result row consumed by the shell. Carries only
@@ -105,6 +106,13 @@ type Shell struct {
 	// back to the production host so a CLI invocation without explicit
 	// config still produces a shareable link.
 	ShareURLBase string
+	// TermWidth is the caller's known terminal width, used only by
+	// ExecNonInteractive's `trace <id>` rendering (theme.RenderTraceColumns)
+	// to size its 3-column layout — the coordinator has no way to know
+	// this, so it's the client's job to set it before calling Query. 0
+	// (the zero value, e.g. stdout isn't a real terminal) falls back to
+	// 80, matching pipe-stage chart's existing non-interactive default.
+	TermWidth int
 }
 
 // ConfigureCore wires every embedder-owned surface weft installs on a
@@ -402,12 +410,38 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 	}
 	if result.Text != "" {
 		fmt.Fprint(w, result.Text)
+	} else if isTracePipeline(weftPipeline) {
+		termWidth := s.TermWidth
+		if termWidth <= 0 {
+			termWidth = 80
+		}
+		lines := make([]string, len(result.Rows))
+		for i, row := range result.Rows {
+			lines[i] = row.Raw
+		}
+		for _, l := range theme.RenderTraceColumns(lines, termWidth) {
+			fmt.Fprintln(w, l)
+		}
 	} else {
 		for _, row := range result.Rows {
 			fmt.Fprintln(w, row.Raw)
 		}
 	}
 	return nil
+}
+
+// isTracePipeline reports whether pipeline's source command is the bare
+// `trace <id>` verb — the shape emitTraceTagged's delimited output is
+// meant for. A trace piped into further stages (`trace <id> | grep ...`)
+// never reaches this path at all (it has compute stages, so the
+// coordinator's zero-stage traceTag branch that emits the delimited
+// format doesn't fire for it), but checking here too means a client-side
+// bug in that routing fails safe — plain rows, not a garbled column
+// layout — rather than silently reformatting something that was never
+// meant for it.
+func isTracePipeline(pipeline string) bool {
+	fields := strings.Fields(pipeline)
+	return len(fields) > 0 && fields[0] == "trace"
 }
 
 // queryResultLines flattens a *QueryResult into one trimmed input line

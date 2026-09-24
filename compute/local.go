@@ -297,14 +297,18 @@ func (j *LocalComputeJob) retainLast() []*pb.ResultRow {
 
 // emitTraceTagged buffers the entire merged stream for a bare
 // interactive `trace <id>` (no downstream compute stages), then emits
-// a synthetic summary line followed by every row prefixed with a
-// colored [namespace/service] badge. Buffering (rather than streaming
-// as rows arrive) is required to know the final line/service counts
-// for the summary before emitting it first — accepted as a v1
-// tradeoff because a trace ID scopes to one bounded request's log
-// lines, unlike a general cat/tail over an app's full volume. j.limit
-// still caps the buffer when set (0 is the common case: trace sets no
-// default limit).
+// a synthetic summary line followed by every row as a delimited
+// "<ts_unix_ns>\t<namespace/service>\t<raw>" line — plain data, not
+// pre-rendered ANSI. The client (shell.ExecNonInteractive) is the one
+// that knows its own terminal width, so it's the one that turns this
+// into the actual 3-column gap-histogram/badge/wrapped-message display
+// via theme.RenderTraceColumns; the coordinator has no way to know
+// that width and shouldn't guess. Buffering (rather than streaming as
+// rows arrive) is required to know the final line/service counts for
+// the summary before emitting it first — accepted as a v1 tradeoff
+// because a trace ID scopes to one bounded request's log lines, unlike
+// a general cat/tail over an app's full volume. j.limit still caps the
+// buffer when set (0 is the common case: trace sets no default limit).
 func (j *LocalComputeJob) emitTraceTagged() {
 	var rows []*pb.ResultRow
 	onlineMerge(j.ch, j.shardCount, j.mergeKey, func(row *pb.ResultRow) bool {
@@ -334,8 +338,13 @@ func (j *LocalComputeJob) emitTraceTagged() {
 	j.streamCh <- Line{Raw: theme.Palette().Comment + line + theme.Palette().Reset}
 
 	for i, row := range rows {
-		badge := theme.TraceTag(row.MetaVars["namespace"], row.MetaVars["service"])
-		j.streamCh <- Line{Raw: badge + row.Raw, LineNum: int64(i + 1)}
+		ns, svc := row.MetaVars["namespace"], row.MetaVars["service"]
+		label := ns + "/" + svc
+		if ns == "" && svc == "" {
+			label = "unknown"
+		}
+		raw := fmt.Sprintf("%d\t%s\t%s", row.TsUnixNs, label, row.Raw)
+		j.streamCh <- Line{Raw: raw, LineNum: int64(i + 1)}
 	}
 }
 
