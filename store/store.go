@@ -4,13 +4,43 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/graybeardcorp/saaskit/orgs"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+// dbMaxOpenConnsDefault caps how many concurrent Postgres connections a
+// single process holds open. database/sql's own default is 0 (unlimited)
+// — Open never called SetMaxOpenConns at all until this was added, which
+// let a 2026-09-24 concurrency burst push the shared db.t4g.micro RDS
+// instance (max_connections ~112, LEAST(memory/9531392, 5000)) to 117
+// connections and take shard-heartbeat persistence down with "sorry, too
+// many clients already". Four processes share that instance today
+// (coordinator_desired=2, each instance running both a coordinator and
+// an api process); 20 × 4 = 80 leaves headroom for ad hoc tools
+// (weft-admin, weft-migrate, weft-demo-seed) and RDS's reserved
+// superuser slots. Override via DB_MAX_OPEN_CONNS if that topology
+// changes rather than editing this constant.
+const dbMaxOpenConnsDefault = 20
+
+// maxOpenConns resolves DB_MAX_OPEN_CONNS if set to a positive integer,
+// else dbMaxOpenConnsDefault. A non-positive override is rejected rather
+// than silently accepted — 0 means "unlimited" to database/sql, which
+// would reintroduce the exact bug this cap exists to prevent.
+func maxOpenConns() int {
+	if v := os.Getenv("DB_MAX_OPEN_CONNS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return dbMaxOpenConnsDefault
+}
 
 // Store manages all weft PostgreSQL state in a single unified package.
 type Store struct {
@@ -73,6 +103,9 @@ func Open(dsn string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: unwrap *sql.DB for orgs: %w", err)
 	}
+	sqlDB.SetMaxOpenConns(maxOpenConns())
+	sqlDB.SetMaxIdleConns(5)
+	sqlDB.SetConnMaxLifetime(30 * time.Minute)
 	s := &Store{db: db, tenant: newTenantScoping(), Orgs: orgs.New(sqlDB)}
 	s.tenant.install(db)
 	// Declare which models are tenant-scoped. Enforcement runs through
