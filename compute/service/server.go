@@ -134,7 +134,13 @@ func (s *Server) GetResult(_ context.Context, req *pb.GetResultRequest) (*pb.Get
 func ctxWithTraceIDFromMetadata(ctx context.Context) context.Context {
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		if ids := md.Get("weft-trace-id"); len(ids) > 0 {
-			return weftsdk.ContextWithTraceID(ctx, ids[0])
+			ctx = weftsdk.ContextWithTraceID(ctx, ids[0])
+		}
+		// Same courier, for the span coordinator's own "coordinator.Execute"
+		// started (if any) — read before StartSpan below so this
+		// process's span parents off it instead of starting a fresh root.
+		if ids := md.Get("weft-span-id"); len(ids) > 0 {
+			ctx = weftsdk.ContextWithSpanID(ctx, ids[0])
 		}
 	}
 	return ctx
@@ -142,12 +148,29 @@ func ctxWithTraceIDFromMetadata(ctx context.Context) context.Context {
 
 func (s *Server) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) (*pb.ExecuteQueryResponse, error) {
 	ctx = ctxWithTraceIDFromMetadata(ctx)
+	// "compute.ExecuteQuery" bookends this call with weftsdk's own "span
+	// start"/"span done" lines when traced (no-op otherwise) — compute
+	// previously logged nothing at all here, leaving a blind hop in the
+	// gap-histogram between the coordinator dispatching and the shard
+	// receiving. ctx (with this span now ambient) flows into
+	// s.pool.ExecuteQuery below and on into shard/grpc_client.go, so
+	// shard's own span parents off this one.
+	//
+	// defer span.End() alone — this RPC never returns a real Go error
+	// (a query failure comes back as resp.Error with a nil err), so
+	// RecordError is called explicitly at the point each failure is
+	// discovered rather than inferred from this function's own return
+	// value.
+	ctx, span := weftsdk.StartSpan(ctx, "compute.ExecuteQuery")
+	defer span.End()
 	stream, err := s.pool.ExecuteQuery(ctx, req)
 	if err != nil {
+		span.RecordError(err)
 		return &pb.ExecuteQueryResponse{Error: err.Error()}, nil
 	}
 	lines, err := compute.DrainLineStream(stream)
 	if err != nil {
+		span.RecordError(err)
 		return &pb.ExecuteQueryResponse{Error: err.Error()}, nil
 	}
 	return &pb.ExecuteQueryResponse{Text: compute.LinesToText(lines)}, nil
@@ -155,8 +178,11 @@ func (s *Server) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) 
 
 func (s *Server) ExecuteQueryStream(req *pb.ExecuteQueryRequest, out pb.WeftCompute_ExecuteQueryStreamServer) error {
 	ctx := ctxWithTraceIDFromMetadata(out.Context())
+	ctx, span := weftsdk.StartSpan(ctx, "compute.ExecuteQueryStream")
+	defer span.End()
 	stream, err := s.pool.ExecuteQuery(ctx, req)
 	if err != nil {
+		span.RecordError(err)
 		return out.Send(&pb.ExecuteQueryStreamResponse{Error: err.Error()})
 	}
 	const batchSize = 500
@@ -164,6 +190,7 @@ func (s *Server) ExecuteQueryStream(req *pb.ExecuteQueryRequest, out pb.WeftComp
 	for {
 		line, ok, err := stream.Next(ctx)
 		if err != nil {
+			span.RecordError(err)
 			return out.Send(&pb.ExecuteQueryStreamResponse{Error: err.Error()})
 		}
 		if !ok {
@@ -172,6 +199,7 @@ func (s *Server) ExecuteQueryStream(req *pb.ExecuteQueryRequest, out pb.WeftComp
 		batch = append(batch, line.Raw)
 		if len(batch) >= batchSize {
 			if err := out.Send(&pb.ExecuteQueryStreamResponse{Lines: batch}); err != nil {
+				span.RecordError(err)
 				return err
 			}
 			batch = nil
@@ -179,6 +207,7 @@ func (s *Server) ExecuteQueryStream(req *pb.ExecuteQueryRequest, out pb.WeftComp
 	}
 	if len(batch) > 0 {
 		if err := out.Send(&pb.ExecuteQueryStreamResponse{Lines: batch}); err != nil {
+			span.RecordError(err)
 			return err
 		}
 	}

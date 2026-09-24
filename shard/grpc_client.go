@@ -198,9 +198,14 @@ func (s *GRPCShard) QueryToSink(ctx context.Context, sql string, args []any, sin
 func (s *GRPCShard) queryToSinkOnce(ctx context.Context, sql string, args []any, sink RowSink) (int, error) {
 	// Trace courier (out to shard): mirrors the api→coordinator and
 	// coordinator→compute boundaries — context.Value doesn't cross a
-	// gRPC call on its own.
+	// gRPC call on its own. The ambient span ID (compute's own span, if
+	// any) rides alongside as weft-span-id so the span shard starts on
+	// the other end parents off it.
 	if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
 		ctx = metadata.AppendToOutgoingContext(ctx, "weft-trace-id", traceID)
+	}
+	if spanID, ok := weftsdk.CurrentSpanID(ctx); ok {
+		ctx = metadata.AppendToOutgoingContext(ctx, "weft-span-id", spanID)
 	}
 	stream, err := s.client.Query(ctx, &pb.QueryRequest{Sql: sql, Args: anyArgsToStrings(args)})
 	if err != nil {

@@ -47,9 +47,15 @@ func (p *GRPCComputePool) ExecuteQuery(ctx context.Context, req *pb.ExecuteQuery
 	// Trace courier (out to compute): context.Value doesn't cross a gRPC
 	// call on its own — ferry the ambient trace ID as `weft-trace-id`
 	// metadata, mirroring the api→coordinator boundary (coordCtx in
-	// api/handlers.go) and the pre-existing weft-dirstack pattern.
+	// api/handlers.go) and the pre-existing weft-dirstack pattern. The
+	// ambient span ID (coordinator's own "coordinator.Execute" span, if
+	// StartSpan established one) rides alongside as `weft-span-id` so
+	// the span compute starts on the other end parents off it.
 	if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
 		ctx = metadata.AppendToOutgoingContext(ctx, "weft-trace-id", traceID)
+	}
+	if spanID, ok := weftsdk.CurrentSpanID(ctx); ok {
+		ctx = metadata.AppendToOutgoingContext(ctx, "weft-span-id", spanID)
 	}
 	stream, err := p.client.ExecuteQueryStream(ctx, req)
 	if err != nil {

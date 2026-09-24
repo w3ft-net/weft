@@ -163,6 +163,12 @@ func (s *Server) coordCtx(r *http.Request) context.Context {
 	if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
 		ctx = metadata.AppendToOutgoingContext(ctx, "weft-trace-id", traceID)
 	}
+	// AccessLog's "api.access" span (if StartSpan established one) rides
+	// alongside as `weft-span-id` so coordinator's own span parents off
+	// it — same courier pattern as weft-trace-id.
+	if spanID, ok := weftsdk.CurrentSpanID(ctx); ok {
+		ctx = metadata.AppendToOutgoingContext(ctx, "weft-span-id", spanID)
+	}
 	return ctx
 }
 

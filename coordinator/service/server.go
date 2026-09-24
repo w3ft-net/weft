@@ -122,6 +122,7 @@ func (s *Server) runtimeCfg() *weftcfg.Runtime {
 }
 
 func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordinator_ExecuteServer) error {
+	start := time.Now()
 	customer, err := callerCustomer(stream.Context())
 	if err != nil {
 		return err
@@ -160,7 +161,30 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 		if ids := md.Get("weft-trace-id"); len(ids) > 0 {
 			ctx = weftsdk.ContextWithTraceID(ctx, ids[0])
 		}
+		// Same courier, for the span api's AccessLog started (if any) —
+		// read before StartSpan below so this RPC's own span parents
+		// off it instead of starting a fresh root.
+		if ids := md.Get("weft-span-id"); len(ids) > 0 {
+			ctx = weftsdk.ContextWithSpanID(ctx, ids[0])
+		}
 	}
+	// "coordinator.Execute" bookends this RPC with weftsdk's own "span
+	// start"/"span done" lines when traced (no-op otherwise), parented
+	// off whatever span api's own AccessLog started — the ctx it
+	// returns carries that parenting forward into ExecuteFollow/
+	// ExecuteWithDir, so compute's own span (compute/service/server.go)
+	// parents off this one in turn. See api/compute/shard for the
+	// matching span at each of those layers.
+	//
+	// defer span.End() alone, unconditionally, right here — no
+	// end-of-function branching on err. RecordError is called at each
+	// point below an error is actually discovered, which is what marks
+	// the eventual "span done" line's status, not whatever this
+	// function's own return value happens to be by the time it exits.
+	ctx, span := weftsdk.StartSpan(ctx, "coordinator.Execute")
+	defer span.End()
+	traceID, traced := weftsdk.TraceIDFromContext(ctx)
+	var lineCount int
 	var result *coordinator.ExecuteResult
 	if req.Follow && s.Coord.Tail != nil {
 		result, err = s.Coord.ExecuteFollow(ctx, req.Pipeline, tr, customer, req.UserId, dirStack)
@@ -168,11 +192,12 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 		result, err = s.Coord.ExecuteWithDir(ctx, req.Pipeline, tr, customer, req.UserId, dirStack)
 	}
 	if err != nil {
-		if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
+		span.RecordError(err)
+		if traced {
 			log.Printf("query rpc: error for customer=%s pipeline=%q trace_id=%s: %v", customer, req.Pipeline, traceID, err)
-			return err
+		} else {
+			log.Printf("query rpc: error for customer=%s pipeline=%q: %v", customer, req.Pipeline, err)
 		}
-		log.Printf("query rpc: error for customer=%s pipeline=%q: %v", customer, req.Pipeline, err)
 		return err
 	}
 
@@ -236,10 +261,12 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 		if err != nil {
 			// Client disconnect / ctx cancel surfaces here in follow
 			// mode; treat it as a clean stream end so the rpc returns
-			// nil instead of context.Canceled bubbling to the wire.
+			// nil instead of context.Canceled bubbling to the wire —
+			// not a real error, so no RecordError.
 			if ctx.Err() != nil {
 				return nil
 			}
+			span.RecordError(err)
 			return err
 		}
 		if !ok {
@@ -251,8 +278,10 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 			continue
 		}
 		batch = append(batch, &pb.Line{Raw: line.Raw})
+		lineCount++
 		if len(batch) >= batchSize || (inLivePhase != nil && inLivePhase()) {
 			if err := flush(false, nil); err != nil {
+				span.RecordError(err)
 				return err
 			}
 		}
@@ -274,7 +303,15 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 		}
 		stream.SetTrailer(md)
 	}
-	return flush(true, convertNotices(result.Notices))
+	err = flush(true, convertNotices(result.Notices))
+	if err != nil {
+		span.RecordError(err)
+		return err
+	}
+	if traced {
+		log.Printf("query rpc: done customer=%s pipeline=%q lines=%d duration=%s trace_id=%s", customer, req.Pipeline, lineCount, time.Since(start), traceID)
+	}
+	return nil
 }
 
 func (s *Server) ListServices(ctx context.Context, _ *pb.ListServicesRequest) (*pb.ListServicesResponse, error) {

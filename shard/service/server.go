@@ -238,6 +238,12 @@ func (s *Server) Query(req *pb.QueryRequest, stream pb.ShardQuery_QueryServer) e
 		if ids := md.Get("weft-trace-id"); len(ids) > 0 {
 			ctx = weftsdk.ContextWithTraceID(ctx, ids[0])
 		}
+		// Same courier, for the span compute's own "compute.ExecuteQuery"/
+		// "compute.ExecuteQueryStream" started (if any) — read before
+		// StartSpan below so this span parents off it.
+		if ids := md.Get("weft-span-id"); len(ids) > 0 {
+			ctx = weftsdk.ContextWithSpanID(ctx, ids[0])
+		}
 	}
 	if timeoutSec > 0 {
 		var cancel context.CancelFunc
@@ -245,23 +251,34 @@ func (s *Server) Query(req *pb.QueryRequest, stream pb.ShardQuery_QueryServer) e
 		defer cancel()
 	}
 
+	// "shard.Query" bookends this call with weftsdk's own "span start"/
+	// "span done" lines when traced (no-op otherwise). defer span.End()
+	// alone, unconditionally — RecordError below marks the eventual
+	// done line's status at the point an error is actually discovered,
+	// covering every return path with no end-of-function branching.
 	// Unlike cold-shard queries (always logged — see shard/cold_shard.go),
 	// live-shard queries stay silent unless actively traced: this is the
 	// hot, frequent path (nearly every query touches a live shard), so
 	// unconditional per-query logging here would be real log spam in a
-	// way cold-shard logging isn't.
+	// way cold-shard logging isn't. The sql= line below is this shard's
+	// own additional detail, kept alongside the generic span bookend
+	// rather than replaced by it.
+	ctx, span := weftsdk.StartSpan(ctx, "shard.Query")
+	defer span.End()
 	if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
 		log.Printf("shard %s: query trace_id=%s (sql=%s)", s.id, traceID, req.Sql)
 	}
 
 	rows, err := ds.QueryContext(ctx, req.Sql, stringArgsToAny(req.Args)...)
 	if err != nil {
+		span.RecordError(err)
 		log.Printf("shard %s: query error: %v (sql=%s args=%v)", s.id, err, req.Sql, req.Args)
 		return err
 	}
 
 	for _, r := range rows {
 		if err := stream.Send(r); err != nil {
+			span.RecordError(err)
 			return err
 		}
 	}

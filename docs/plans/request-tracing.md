@@ -210,6 +210,11 @@ calls) get correlated at all.
   that structure (paired start/end lines, an existing parent-request
   field). It's opt-in and conditional rather than a guaranteed byproduct
   of ingest the way real span data would be — not part of this plan.
+  **Update**: a real `Span` type has since landed in `weft-go` (v0.4.0)
+  for weft's own dogfooding, independent of this bullet's original
+  customer-log-extraction framing — see `docs/plans/span-display.md`,
+  which picks up exactly this hook to promote `span_name`/`span_id`/
+  `parent_span_id`/`duration_ns` to reserved columns.
 - **Sampling / volume control** — no design here. Real prior art exists
   (head-based vs. tail-based sampling) to draw on if/when volume becomes
   a real constraint; likely a smaller concern than under a span-based
@@ -264,5 +269,8 @@ calls) get correlated at all.
 - `docs/plans/weftd-client-side-parsing.md` — the footprint benchmark
   that ruled out an OTel-Collector-shaped architecture, and the
   `ingest.Parser` extraction pattern `trace_id_field` extends.
+- `docs/plans/span-display.md` — builds on the now-landed `weft-go`
+  `Span` type to roll up and aggregate span data in `trace <id>`,
+  picking up this doc's "Span-like fields" deferred hook above.
 - `docs/completed/go-sdk.md`, `docs/completed/python-sdk.md` — the
   existing SDKs this plan extends.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -216,10 +217,22 @@ func recordAccessIdentity(r *http.Request, label string) {
 func AccessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		// "api.access" bookends this request with weftsdk's own "span
+		// start"/"span done" lines when traced (no-op otherwise) — the
+		// gap-histogram display needs both ends of every hop to
+		// attribute time, not just this one's total duration. See
+		// coordinator/compute/shard for the matching span at each of
+		// those layers.
+		ctx, span := weftsdk.StartSpan(r.Context(), "api.access")
+		defer span.End()
+		r = r.WithContext(ctx)
 		rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		id := &accessIdentity{}
 		r = r.WithContext(context.WithValue(r.Context(), accessIdentityKey, id))
 		next.ServeHTTP(rw, r)
+		if rw.status >= 500 {
+			span.RecordError(fmt.Errorf("status %d", rw.status))
+		}
 		user := id.label
 		if user == "" {
 			user = "anon"
