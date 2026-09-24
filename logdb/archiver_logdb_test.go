@@ -17,7 +17,17 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}
-	defer db.Close()
+	// t.Cleanup, not defer: a plain defer here runs (closing db) before
+	// t.Cleanup callbacks fire, so a t.Cleanup(DeleteShard) registered
+	// below would run its query against an already-closed connection —
+	// DeleteShard's error is silently discarded (`_ =`), and the row
+	// (plus its cascade-linked shard_services row) leaks into the
+	// shared pooled test database forever, corrupting any later test
+	// that touches the same "default" bucket over a real (non-
+	// transactional) connection. t.Cleanup runs LIFO, so registering
+	// this before DeleteShard's cleanup below makes DeleteShard run
+	// first and Close second, in the correct order.
+	t.Cleanup(func() { _ = db.Close() })
 
 	// The shard_records table has a NOT NULL FK on bucket_id since
 	// migration 020. Look up the default bucket (seeded by that
