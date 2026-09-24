@@ -747,18 +747,26 @@ func loadSchemaNonInteractive(path string) (*ingest.Schema, error) {
 // sends.
 func schemaConfigMap(schema *ingest.Schema) map[string]any {
 	return map[string]any{
-		"envelope":         schema.Envelope,
-		"format":           schema.Format,
-		"field_separator":  schema.FieldSeparator,
-		"timestamp_field":  schema.TimestampField,
-		"timestamp_format": schema.TimestampFormat,
-		"timestamp_fields": schema.TimestampFields,
-		"level_field":      schema.LevelField,
-		"level_pattern":    schema.LevelPattern,
-		"trace_id_field":   schema.TraceIDField,
-		"trace_id_pattern": schema.TraceIDPattern,
-		"json_start_field": schema.JSONStartField,
-		"expand_keys":      schema.ExpandKeys,
+		"envelope":               schema.Envelope,
+		"format":                 schema.Format,
+		"field_separator":        schema.FieldSeparator,
+		"timestamp_field":        schema.TimestampField,
+		"timestamp_format":       schema.TimestampFormat,
+		"timestamp_fields":       schema.TimestampFields,
+		"level_field":            schema.LevelField,
+		"level_pattern":          schema.LevelPattern,
+		"trace_id_field":         schema.TraceIDField,
+		"trace_id_pattern":       schema.TraceIDPattern,
+		"span_name_field":        schema.SpanNameField,
+		"span_name_pattern":      schema.SpanNamePattern,
+		"span_id_field":          schema.SpanIDField,
+		"span_id_pattern":        schema.SpanIDPattern,
+		"parent_span_id_field":   schema.ParentSpanIDField,
+		"parent_span_id_pattern": schema.ParentSpanIDPattern,
+		"duration_ns_field":      schema.DurationNsField,
+		"duration_ns_pattern":    schema.DurationNsPattern,
+		"json_start_field":       schema.JSONStartField,
+		"expand_keys":            schema.ExpandKeys,
 	}
 }
 

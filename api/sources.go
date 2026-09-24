@@ -248,18 +248,26 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Envelope        string             `json:"envelope"`
-		Format          string             `json:"format"`
-		FieldSeparator  string             `json:"field_separator"`
-		TimestampField  string             `json:"timestamp_field"`
-		TimestampFormat string             `json:"timestamp_format"`
-		TimestampFields int                `json:"timestamp_fields"`
-		LevelField      string             `json:"level_field"`
-		LevelPattern    string             `json:"level_pattern"`
-		TraceIDField    string             `json:"trace_id_field"`
-		TraceIDPattern  string             `json:"trace_id_pattern"`
-		JSONStartField  int                `json:"json_start_field"`
-		ExpandKeys      []ingest.ExpandKey `json:"expand_keys"`
+		Envelope            string             `json:"envelope"`
+		Format              string             `json:"format"`
+		FieldSeparator      string             `json:"field_separator"`
+		TimestampField      string             `json:"timestamp_field"`
+		TimestampFormat     string             `json:"timestamp_format"`
+		TimestampFields     int                `json:"timestamp_fields"`
+		LevelField          string             `json:"level_field"`
+		LevelPattern        string             `json:"level_pattern"`
+		TraceIDField        string             `json:"trace_id_field"`
+		TraceIDPattern      string             `json:"trace_id_pattern"`
+		SpanNameField       string             `json:"span_name_field"`
+		SpanNamePattern     string             `json:"span_name_pattern"`
+		SpanIDField         string             `json:"span_id_field"`
+		SpanIDPattern       string             `json:"span_id_pattern"`
+		ParentSpanIDField   string             `json:"parent_span_id_field"`
+		ParentSpanIDPattern string             `json:"parent_span_id_pattern"`
+		DurationNsField     string             `json:"duration_ns_field"`
+		DurationNsPattern   string             `json:"duration_ns_pattern"`
+		JSONStartField      int                `json:"json_start_field"`
+		ExpandKeys          []ingest.ExpandKey `json:"expand_keys"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -268,20 +276,28 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 
 	// Build schema.
 	schema := &ingest.Schema{
-		Service:         app,
-		Customer:        session.ActiveCustomerName,
-		Envelope:        req.Envelope,
-		Format:          req.Format,
-		FieldSeparator:  req.FieldSeparator,
-		TimestampField:  req.TimestampField,
-		TimestampFormat: req.TimestampFormat,
-		TimestampFields: req.TimestampFields,
-		LevelField:      req.LevelField,
-		LevelPattern:    req.LevelPattern,
-		TraceIDField:    req.TraceIDField,
-		TraceIDPattern:  req.TraceIDPattern,
-		JSONStartField:  req.JSONStartField,
-		ExpandKeys:      req.ExpandKeys,
+		Service:             app,
+		Customer:            session.ActiveCustomerName,
+		Envelope:            req.Envelope,
+		Format:              req.Format,
+		FieldSeparator:      req.FieldSeparator,
+		TimestampField:      req.TimestampField,
+		TimestampFormat:     req.TimestampFormat,
+		TimestampFields:     req.TimestampFields,
+		LevelField:          req.LevelField,
+		LevelPattern:        req.LevelPattern,
+		TraceIDField:        req.TraceIDField,
+		TraceIDPattern:      req.TraceIDPattern,
+		SpanNameField:       req.SpanNameField,
+		SpanNamePattern:     req.SpanNamePattern,
+		SpanIDField:         req.SpanIDField,
+		SpanIDPattern:       req.SpanIDPattern,
+		ParentSpanIDField:   req.ParentSpanIDField,
+		ParentSpanIDPattern: req.ParentSpanIDPattern,
+		DurationNsField:     req.DurationNsField,
+		DurationNsPattern:   req.DurationNsPattern,
+		JSONStartField:      req.JSONStartField,
+		ExpandKeys:          req.ExpandKeys,
 	}
 
 	// Defense in depth: the CLI validates before ever sending this
