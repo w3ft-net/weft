@@ -8,11 +8,14 @@ import (
 	"github.com/graybeardcorp/weft/shard"
 )
 
-// DevFixtureTime constants for the sample data time windows.
+// DevFixtureTime constants for the sample data time windows. Relative
+// to time.Now(), not a fixed calendar date — see coordinator_test.go's
+// t0/t1/t2 comment for why a fixed date here eventually falls outside
+// every plan tier's retention clamp as real time advances.
 var (
-	DevT0 = time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC) // shard 0 start
-	DevT1 = time.Date(2026, 3, 28, 11, 0, 0, 0, time.UTC) // shard 1 start
-	DevT2 = time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC) // shard 1 end
+	DevT0 = time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour) // shard 0 start
+	DevT1 = DevT0.Add(1 * time.Hour)                                 // shard 1 start
+	DevT2 = DevT1.Add(1 * time.Hour)                                 // shard 1 end
 )
 
 func devPayload(m map[string]any) []byte {

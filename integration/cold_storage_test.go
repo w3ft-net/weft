@@ -18,9 +18,13 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// Relative to time.Now(), not a fixed calendar date — see
+// coordinator/coordinator_test.go's t0/t1/t2 comment for why a fixed
+// date here eventually falls outside every plan tier's retention
+// clamp as real time advances.
 var (
-	t0 = time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC)
-	t1 = time.Date(2026, 3, 28, 11, 0, 0, 0, time.UTC)
+	t0 = time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
+	t1 = t0.Add(1 * time.Hour)
 )
 
 func TestExportToS3_DirectWrite(t *testing.T) {

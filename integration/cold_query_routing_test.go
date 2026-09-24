@@ -57,9 +57,13 @@ func TestColdShardQueryRouting(t *testing.T) {
 	}
 
 	// Two time windows: shard-0 covers [t0, t1), shard-1 covers [t1, t2).
-	t0 := time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC)
-	t1 := time.Date(2026, 3, 28, 11, 0, 0, 0, time.UTC)
-	t2 := time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC)
+	// Relative to time.Now(), not a fixed calendar date — see
+	// coordinator/coordinator_test.go's t0/t1/t2 comment for why a
+	// fixed date here eventually falls outside the tier's retention
+	// clamp as real time advances.
+	t0 := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
+	t1 := t0.Add(1 * time.Hour)
+	t2 := t1.Add(1 * time.Hour)
 
 	s0, err := shard.NewDuckDBShard("cold-route-0", "")
 	if err != nil {
