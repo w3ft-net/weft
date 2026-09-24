@@ -139,6 +139,15 @@ func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
 
 	apps := []string{"vimgym", "callbox"}
 	c := NewCoordinator(CoordinatorConfig{Store: testQueryStoreReal(t, "kevlar", "vimgym", "callbox")})
+	// testQueryStoreReal's own cleanup (deleteOrgData) only touches
+	// subscriptions/namespaces/organizations — shard_records isn't
+	// customer-scoped, so addInProcessShard's real (non-rolled-back)
+	// SaveShard here would otherwise leak "shard-0" permanently into
+	// the shared pooled test database, corrupting any later test that
+	// reuses this pool slot and touches the same default bucket (see
+	// logdb's TestProvisioner_Coordination_* — this exact leak once
+	// caused their bucket state machine's rotation logic to misfire).
+	t.Cleanup(func() { _ = (logdb.ShardStore{Store: c.Store}).DeleteShard("shard-0") })
 	addInProcessShard(t, c, &logdb.Shard{
 		ID:          "shard-0",
 		WindowStart: t0, WindowEnd: t1,
