@@ -10,13 +10,26 @@ import (
 )
 
 // spanDoneRe/spanErrorRe match the two fixed log.Printf shapes weft-go's
-// Span type emits (span.go's End/RecordError) verbatim — no JSON, so a
-// single regex per shape is enough. "span start" lines carry nothing a
-// rollup needs beyond what "span done" repeats, so there's no pattern
-// for it here.
+// Span type emits (span.go's End/RecordError) — no JSON, so a single
+// regex per shape is enough. "span start" lines carry nothing a rollup
+// needs beyond what "span done" repeats, so there's no pattern for it
+// here.
+//
+// Deliberately NOT anchored at the start (no `^`): a real ingested
+// row's raw text is never just the bare message — log.Printf prepends
+// Go's default timestamp ("2026/09/24 16:24:03 ") to every line, and
+// ingest.Parser.ParseLine stores that full original line as row.Raw
+// verbatim, never just the message. An earlier `^`-anchored version of
+// these patterns never matched a single real ingested span line in
+// production (every test fixture in span_rollup_test.go used a bare,
+// unprefixed string, which is why this shipped unnoticed) — see
+// TestRenderSpanRollup_MatchesRealIngestedLineWithTimestampPrefix.
+// spanDoneRe keeps its trailing `$` (status=ok is genuinely the last
+// field weft-go ever emits); spanErrorRe has no trailing anchor since
+// it only extracts a prefix before the free-form err= text.
 var (
-	spanDoneRe  = regexp.MustCompile(`^span done name=(\S+) trace_id=(\S+) span_id=(\S+) parent_span_id=(\S*) duration=\S+ duration_ns=(\d+) status=(\S+)$`)
-	spanErrorRe = regexp.MustCompile(`^span error name=(\S+) trace_id=(\S+) span_id=(\S+) err=`)
+	spanDoneRe  = regexp.MustCompile(`span done name=(\S+) trace_id=(\S+) span_id=(\S+) parent_span_id=(\S*) duration=\S+ duration_ns=(\d+) status=(\S+)$`)
+	spanErrorRe = regexp.MustCompile(`span error name=(\S+) trace_id=(\S+) span_id=(\S+) err=`)
 )
 
 // SpanOccurrence is one "span done" event rolled into a SpanRollupRow —

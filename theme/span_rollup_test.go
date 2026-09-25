@@ -17,6 +17,65 @@ func spanErrorLine(name, traceID, spanID, errText string) string {
 	return "span error name=" + name + " trace_id=" + traceID + " span_id=" + spanID + " err=" + errText
 }
 
+// TestRenderSpanRollup_MatchesRealIngestedLineWithTimestampPrefix is the
+// regression test for a real production gap found while dogfooding
+// span-display end to end (2026-09-25): every existing test in this
+// file built its span-line fixtures as a BARE "span done name=..."
+// string with nothing before it — but that's not what a real ingested
+// row's `raw` column ever contains. weft-go's Span.End()/RecordError
+// call log.Printf, which prepends Go's default timestamp
+// ("2026/09/24 16:24:03 ") to every line; ingest.Parser.ParseLine sets
+// row.Raw to that FULL original line, timestamp included, never just
+// the message. spanDoneRe/spanErrorRe were anchored with `^` — assuming
+// the line starts directly with "span done"/"span error" — so they
+// never matched a single real ingested span line in production: `trace
+// <id> --spans` and `trace spans` (which share this exact parser) both
+// silently rendered "no spans found" against perfectly real, present
+// data the whole time this shipped, confirmed live via `trace spans`
+// returning empty despite `tail | awk 'DURATION_NS > 0'` finding 26
+// real matching rows in the same window.
+func TestRenderSpanRollup_MatchesRealIngestedLineWithTimestampPrefix(t *testing.T) {
+	// Exact shape of a real ingested weft/coordinator row's raw text —
+	// copied from a live production trace.
+	realRaw := "2026/09/24 16:24:03 span done name=coordinator.Execute trace_id=cdb1c1463758ecb93aab9621ea604ed8 " +
+		"span_id=278356b7a799fb18 parent_span_id=6f7eb239b86d3267 duration=49.114313ms duration_ns=49114313 status=ok"
+	lines := []string{traceRow(1000, "weft/coordinator", realRaw)}
+
+	rows := RenderSpanRollup(lines)
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 span name parsed from a realistic timestamp-prefixed line, got %d rows: %+v", len(rows), rows)
+	}
+	if rows[0].Name != "coordinator.Execute" {
+		t.Errorf("Name: got %q, want coordinator.Execute", rows[0].Name)
+	}
+	if rows[0].Count() != 1 {
+		t.Fatalf("expected 1 occurrence, got %d", rows[0].Count())
+	}
+	if rows[0].Occurrences[0].Duration != 49114313 {
+		t.Errorf("Duration: got %v, want 49114313ns", rows[0].Occurrences[0].Duration)
+	}
+	if rows[0].Occurrences[0].TraceID != "cdb1c1463758ecb93aab9621ea604ed8" {
+		t.Errorf("TraceID: got %q", rows[0].Occurrences[0].TraceID)
+	}
+}
+
+// TestRenderSpanRollup_MatchesRealIngestedErrorLineWithTimestampPrefix
+// is the "span error" sibling of the above — same real-world shape,
+// same anchoring bug.
+func TestRenderSpanRollup_MatchesRealIngestedErrorLineWithTimestampPrefix(t *testing.T) {
+	realRaw := "2026/09/24 16:24:03 span error name=shard.Query trace_id=cdb1c1463758ecb93aab9621ea604ed8 " +
+		"span_id=278356b7a799fb18 err=connection reset"
+	lines := []string{traceRow(1000, "weft/shard-a", realRaw)}
+
+	rows := RenderSpanRollup(lines)
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 span name parsed from a realistic timestamp-prefixed error line, got %d rows: %+v", len(rows), rows)
+	}
+	if rows[0].Errors != 1 {
+		t.Errorf("Errors: got %d, want 1", rows[0].Errors)
+	}
+}
+
 func TestRenderSpanRollup_GroupsByNameAndComputesStats(t *testing.T) {
 	lines := []string{
 		traceRow(1000, "weft/coordinator", spanDoneLine("shard.Query", "t1", "s1", "", 10*time.Millisecond, "ok")),
