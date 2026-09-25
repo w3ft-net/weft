@@ -11,6 +11,7 @@ import (
 	"github.com/graybeardcorp/warp/pkg/syntax"
 	"github.com/graybeardcorp/weft/chart"
 	"github.com/graybeardcorp/weft/internal/timerange"
+	"github.com/graybeardcorp/weft/spanview"
 	"github.com/graybeardcorp/weft/theme"
 )
 
@@ -90,6 +91,16 @@ type Shell struct {
 	// dashboard.Register if the FS satisfies dashboard.Provider —
 	// that's the CLI path.
 	Dashboard func(name string)
+	// Trace, when non-nil, takes over `trace <id>`, `trace <id>
+	// --spans`, and `trace spans [name]` instead of registering
+	// spanview's in-terminal View. The browser shell uses this to open
+	// a React modal (list/samples, mirroring spanview's own UX)
+	// instead of rendering ANSI into xterm scrollback. When nil,
+	// ConfigureCore leaves `trace` unregistered — cmd/weft/runner
+	// registers spanview.Register (interactive REPL) or callers fall
+	// back to RenderTraceIfApplicable/RenderSpanRollupIfApplicable
+	// (one-shot mode) instead. See TraceRequest for the payload shape.
+	Trace func(TraceRequest)
 	// OnRangeChange, when non-nil, is invoked by the `range <spec>`
 	// builtin with the new un-resolved spec after s.Range is updated.
 	// shellcore no longer carries range state (warp removed
@@ -149,6 +160,9 @@ func (s *Shell) ConfigureCore(core *shellcore.ShellCore) {
 	if s.Chart != nil {
 		core.RegisterBuiltin("chart", chartRequestBuiltin(s.Chart))
 		core.RegisterPipeStage("chart", chart.ParsePipeArgs, chartRequestPipe(s.Chart))
+	}
+	if s.Trace != nil {
+		core.RegisterBuiltin("trace", traceRequestBuiltin(s.Trace))
 	}
 	if s.User != "" {
 		core.SetUser(s.User)
@@ -292,6 +306,70 @@ func dashboardNavigateBuiltin(navigate func(name string)) shellcore.BuiltinFunc 
 		}
 		navigate(name)
 		return true
+	}
+}
+
+// TraceRequest is the payload Shell.Trace receives when the browser
+// shell intercepts a `trace` invocation. Mode distinguishes plain
+// `trace <id>` ("gap", the gap-histogram RenderTraceIfApplicable
+// renders for the CLI) from `trace <id> --spans` ("rollup", Phase 1's
+// single-trace span rollup, which gets the SELF/TOTAL column) from
+// `trace spans [name]` ("aggregate", Phase 2's cross-trace
+// aggregation, which gets the full percentile spread instead — see
+// theme.SpanRollupColumns' singleTrace doc comment for why the two
+// phases render different columns).
+type TraceRequest struct {
+	// Pipeline is the full "trace ..." pipeline to (re-)run — the
+	// browser modal fetches its own rows via the shell's existing
+	// async query path rather than being handed pre-fetched Lines,
+	// since the pipe-stage precedent (ChartRequest.Lines) doesn't
+	// apply: `trace` is never a pipe-stage destination, always the
+	// pipeline's own source command.
+	Pipeline string
+	// Title is the trace ID (gap/rollup) or span name/"all spans"
+	// (aggregate) — the same status-bar text spanview.ListArgs.Title
+	// already carries for the CLI's interactive View.
+	Title string
+	// Mode is "gap", "rollup", or "aggregate".
+	Mode string
+}
+
+// traceRequestBuiltin returns a `trace` builtin that forwards the
+// parsed request to the embedder callback instead of entering
+// spanview's in-terminal View or falling through to normal pipeline
+// dispatch (which the CLI's one-shot mode instead recognizes after
+// the fact via isTracePipeline/isSpansPipeline). It reuses
+// spanview.ParseSpansLine for the rollup/aggregate shapes — the exact
+// arg grammar spanview.Builtin itself dispatches on — rather than
+// forking that parsing, and adds one predicate of its own for the
+// plain `trace <id>` shape, which ParseSpansLine deliberately leaves
+// unmatched (spanview.Builtin lets that shape fall through to normal
+// dispatch since the CLI renders it via RenderTraceIfApplicable, not
+// a View).
+func traceRequestBuiltin(emit func(TraceRequest)) shellcore.BuiltinFunc {
+	return func(c *shellcore.ShellCore, args []string) bool {
+		if len(args) == 0 || args[0] != "trace" {
+			return false
+		}
+		if listArgs, ok := spanview.ParseSpansLine(args); ok {
+			mode := "rollup"
+			if len(args) > 1 && args[1] == "spans" {
+				mode = "aggregate"
+			}
+			emit(TraceRequest{Pipeline: listArgs.Pipeline, Title: listArgs.Title, Mode: mode})
+			return true
+		}
+		// Plain `trace <id>`: exactly one non-flag argument and it
+		// isn't the "spans" sub-verb (which ParseSpansLine already
+		// handles, including its own arity failures like `trace
+		// spans a b`  — falling through here for those would wrongly
+		// treat "spans" as a trace id).
+		if len(args) == 2 && args[1] != "spans" {
+			traceID := args[1]
+			emit(TraceRequest{Pipeline: "trace " + traceID, Title: traceID, Mode: "gap"})
+			return true
+		}
+		return false
 	}
 }
 

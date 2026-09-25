@@ -83,12 +83,20 @@ func Run(s *shell.Shell) error {
 	}
 	// Span display's interactive rollup View — both phases of
 	// docs/plans/span-display.md (`trace <id> --spans` and `trace spans
-	// [name]`). Grouped with chart/dashboard above for the same
+	// [name]`), plus plain `trace <id>` falls through spanview.Builtin
+	// to normal dispatch and is rendered by RenderTraceIfApplicable
+	// (shell.go). Grouped with chart/dashboard above for the same
 	// wasm-build reason: this needs shellcore's View machinery, which
-	// stays out of shell/'s import graph. spanview.Builtin already
-	// hands us the complete pipeline to run (see spanview/builtin.go's
-	// parseSpansLine) — Query wraps s.Query directly, no prefixing.
-	if s.Query != nil {
+	// stays out of shell/'s import graph (shell/ imports spanview only
+	// for its ParseSpansLine arg-grammar helper, not the View).
+	// spanview.Builtin already hands us the complete pipeline to run
+	// (see spanview/builtin.go's ParseSpansLine) — Query wraps s.Query
+	// directly, no prefixing. Gated on s.Trace == nil, matching the
+	// s.Chart == nil / s.Dashboard == nil checks above: the browser
+	// embedder sets Shell.Trace and takes over all three `trace` shapes
+	// itself (see shell.traceRequestBuiltin), so the CLI's in-terminal
+	// View should never register alongside it.
+	if s.Query != nil && s.Trace == nil {
 		spanview.Register(r.core, func(pipeline string) ([]string, error) {
 			result, err := s.Query(pipeline, s.Range, r.core.DirStack())
 			if err != nil {

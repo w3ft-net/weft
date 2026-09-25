@@ -362,7 +362,7 @@ var cursorMark = theme.Palette().Operator + "▸ " + theme.FgReset
 // `trace spans [name]` query (Phase 2) as opposed to `trace <id>`
 // (Phase 1) — mirrors shell/shell.go's function of the same name.
 // Duplicated rather than shared: it's a three-line check, and the two
-// packages' pipeline strings come from different builders (parseSpansLine's
+// packages' pipeline strings come from different builders (ParseSpansLine's
 // ListArgs.Pipeline here, planner-parsed pipeline text there) that only
 // happen to agree on this one shape. Gates theme.SpanRollupColumns'
 // singleTrace in renderList — see that function's doc comment for why

@@ -229,6 +229,77 @@ export async function execQuery(pipeline: string, instance?: string) {
   }
 }
 
+// fetchPipelineLines runs pipeline as a one-shot query and resolves to
+// its raw output lines, bypassing the WASM callback bridge entirely —
+// unlike execQuery (which delivers results into the Go-side core via
+// wasmHandleQueryResult/wasmPaneQueryResult), this is for a React
+// component (ShellTraceModal) that needs the rows directly to hand to
+// the wasmParseTraceRows/wasmRenderSpanRollup exports itself. Mirrors
+// execQuery's SSE parsing (same /api/shell/exec endpoint and event
+// shapes) but returns a Promise instead of pushing through a delivery
+// callback, and has no timeout/AbortController bookkeeping of its own
+// — the caller passes its own AbortSignal (e.g. from a cleanup effect)
+// since this isn't sharing the pane-keyed `controllers` map that
+// execQuery/execFollow use to cancel a *terminal-issued* query.
+export async function fetchPipelineLines(pipeline: string, signal?: AbortSignal): Promise<string[]> {
+  const res = await fetch(`${API_BASE}/api/shell/exec`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ pipeline, follow: false, range: currentRangeSpec }),
+    signal,
+  })
+
+  if (!res.ok) {
+    const msg = await res.text().catch(() => `HTTP ${res.status}`)
+    throw new Error(msg || `HTTP ${res.status}`)
+  }
+
+  const contentType = res.headers.get('content-type') || ''
+  if (!contentType.includes('text/event-stream')) {
+    throw new Error(`unexpected response (content-type: ${contentType || 'none'})`)
+  }
+
+  const reader = res.body?.getReader()
+  if (!reader) {
+    throw new Error('No response body')
+  }
+
+  const decoder = new TextDecoder()
+  let buf = ''
+  const lines: string[] = []
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buf += decoder.decode(value, { stream: true })
+    const parts = buf.split('\n')
+    buf = parts.pop() ?? ''
+
+    for (const part of parts) {
+      const line = part.trim()
+      if (!line.startsWith('data:')) continue
+      const raw = line.slice(5).trim()
+      if (!raw || raw === '[DONE]') continue
+      let evt: { type: string; text?: string; message?: string; data?: { raw?: string } }
+      try {
+        evt = JSON.parse(raw)
+      } catch {
+        continue // skip malformed SSE
+      }
+      if (evt.type === 'line' && evt.data?.raw != null) {
+        lines.push(evt.data.raw)
+      } else if (evt.type === 'error') {
+        throw new Error(evt.text || evt.message || 'unknown error')
+      }
+      // 'stderr' and 'tour_advance' events are ignored here — this path
+      // is for structured row data (trace/spans queries), not scrollback.
+    }
+  }
+
+  return lines
+}
+
 export async function execFollow(pipeline: string, instance?: string) {
   cancelQuery(instance)
   const abortController = new AbortController()

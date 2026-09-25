@@ -24,7 +24,7 @@ import (
 // Wire it via core.RegisterBuiltin("trace", spanview.Builtin(query)).
 func Builtin(query QueryFunc) shellcore.BuiltinFunc {
 	return func(c *shellcore.ShellCore, parts []string) bool {
-		listArgs, ok := parseSpansLine(parts)
+		listArgs, ok := ParseSpansLine(parts)
 		if !ok {
 			return false
 		}
@@ -36,14 +36,21 @@ func Builtin(query QueryFunc) shellcore.BuiltinFunc {
 	}
 }
 
-// parseSpansLine reports whether parts (a builtin dispatch's
+// ParseSpansLine reports whether parts (a builtin dispatch's
 // whitespace-split command line) matches one of Builtin's three
 // trigger shapes, returning the pipeline to run and the status-bar
 // title. Any other shape — plain `trace <id>`, wrong arity, or a piped
 // line (shellcore hands the whole line's fields here, so a literal "|"
 // token lands in the non-flag remainder and fails the arity checks
 // below) — returns ok=false.
-func parseSpansLine(parts []string) (*ListArgs, bool) {
+//
+// Exported (not just for Builtin's own use) so shell's traceRequestBuiltin
+// (shell/shell.go, the browser's `Trace` hook — see
+// docs/plans/browser-span-view.md) can reuse this exact arg grammar for
+// the rollup/aggregate shapes rather than forking it. shell imports this
+// package directly since it pulls in nothing beyond shellcore/theme,
+// both already part of shell's WASM-safe import graph.
+func ParseSpansLine(parts []string) (*ListArgs, bool) {
 	if len(parts) == 0 || parts[0] != "trace" {
 		return nil, false
 	}

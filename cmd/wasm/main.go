@@ -14,12 +14,14 @@
 package main
 
 import (
+	"encoding/json"
 	"syscall/js"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/warp/pkg/shellcore/wasm"
 	"github.com/graybeardcorp/weft/internal/timerange"
 	"github.com/graybeardcorp/weft/shell"
+	"github.com/graybeardcorp/weft/theme"
 )
 
 var jsCallbacks js.Value
@@ -42,7 +44,59 @@ func main() {
 	// All other wasm* exports (HandleInput, Resize, SpinnerTick,
 	// SetInput, GetInput, HandleQueryResult, HandleFollowRow,
 	// HandleFollowDone) are registered by wasm.Boot.
+	//
+	// wasmRenderSpanRollup / wasmParseTraceRows are stateless, called
+	// directly by JS (not routed through a core/pane) once React has
+	// the raw rows for a TraceRequest.Pipeline re-run — see
+	// docs/plans/browser-span-view.md. They wrap theme's rollup/parse
+	// math so the self-time interval-union and percentile computation
+	// stay in one language rather than getting reimplemented in JS.
+	js.Global().Set("wasmRenderSpanRollup", js.FuncOf(wasmRenderSpanRollup))
+	js.Global().Set("wasmParseTraceRows", js.FuncOf(wasmParseTraceRows))
 	select {}
+}
+
+// jsStringSlice converts a JS array-of-strings value into a []string.
+func jsStringSlice(v js.Value) []string {
+	n := v.Length()
+	out := make([]string, n)
+	for i := 0; i < n; i++ {
+		out[i] = v.Index(i).String()
+	}
+	return out
+}
+
+// jsonResult marshals v to JSON and returns it as a JS string, or a
+// {"error": ...} JSON string on a marshal failure (theme's rollup/row
+// types are plain exported-field structs, so in practice this never
+// fails — the fallback exists so a caller gets a parseable response
+// shape either way instead of a Go panic crossing the WASM boundary).
+func jsonResult(v any) any {
+	b, err := json.Marshal(v)
+	if err != nil {
+		b, _ = json.Marshal(map[string]string{"error": err.Error()})
+	}
+	return string(b)
+}
+
+// wasmRenderSpanRollup(lines: string[]) → JSON string of
+// theme.SpanRollupRow[]. Covers both `trace <id> --spans` (Phase 1)
+// and `trace spans [name]` (Phase 2) — theme.RenderSpanRollup doesn't
+// care which; the caller (ShellTraceModal) picks singleTrace-vs-not
+// column rendering from the TraceRequest.Mode it already has, the same
+// distinction RenderSpanRollupIfApplicable (shell/shell.go) makes for
+// the CLI's one-shot path.
+func wasmRenderSpanRollup(_ js.Value, args []js.Value) any {
+	lines := jsStringSlice(args[0])
+	return jsonResult(theme.RenderSpanRollup(lines))
+}
+
+// wasmParseTraceRows(lines: string[]) → JSON string of
+// theme.TraceRow[], the same parse step RenderTraceColumns (the ANSI
+// renderer) uses internally — see theme.ParseTraceRows.
+func wasmParseTraceRows(_ js.Value, args []js.Value) any {
+	lines := jsStringSlice(args[0])
+	return jsonResult(theme.ParseTraceRows(lines))
 }
 
 // buildSharedFS constructs (once) the MountFS shared by every pane.
@@ -88,6 +142,13 @@ func buildShell(cb js.Value, apps []string, mfs *shellcore.MountFS) *shell.Shell
 				spec["lines"] = items
 			}
 			cb.Call("chartOpen", spec)
+		},
+		Trace: func(r shell.TraceRequest) {
+			cb.Call("traceOpen", map[string]any{
+				"pipeline": r.Pipeline,
+				"title":    r.Title,
+				"mode":     r.Mode,
+			})
 		},
 	}
 	s.OnRangeChange = func(spec string) {

@@ -20,6 +20,71 @@ const (
 	traceColumnSpacing = 1 // single space between each of the 3 columns
 )
 
+// TraceRow is one line of a `trace <id>` result, parsed. IsData is
+// false for a passthrough line (the "# N line(s)..." summary
+// emitTraceTagged emits, "# no lines found", or anything else that
+// doesn't match the 3-field tab-delimited data shape) — Raw is the
+// only meaningful field in that case, the rest are zero. ColorIdx is
+// TraceLabelColorIndex(Label), included per-row so a JSON consumer
+// (the browser's wasmParseTraceRows export — see
+// docs/plans/browser-span-view.md) doesn't need to re-derive the same
+// hash to color the badge consistently with the ANSI renderer.
+type TraceRow struct {
+	Raw      string
+	IsData   bool
+	TsNs     int64
+	Label    string
+	Message  string
+	GapNs    int64 // relative to the previous data row; 0 for the first
+	ColorIdx int
+}
+
+// ParseTraceRows parses lines — the same "<ts_unix_ns>\t<namespace/
+// service>\t<raw message>" shape emitTraceTagged emits — into TraceRow,
+// computing each data row's gap relative to the previous data row (a
+// passthrough line in between doesn't reset the clock, matching
+// RenderTraceColumns' own gap computation). This is the one parse step
+// both RenderTraceColumns (the ANSI renderer) and the browser's
+// wasmParseTraceRows export share, so there's exactly one place that
+// decides what counts as a data row.
+func ParseTraceRows(lines []string) []TraceRow {
+	rows := make([]TraceRow, len(lines))
+	for i, l := range lines {
+		parts := strings.SplitN(l, "\t", 3)
+		if len(parts) != 3 {
+			rows[i] = TraceRow{Raw: l}
+			continue
+		}
+		ts, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil {
+			rows[i] = TraceRow{Raw: l}
+			continue
+		}
+		rows[i] = TraceRow{
+			Raw: l, IsData: true, TsNs: ts, Label: parts[1], Message: parts[2],
+			ColorIdx: TraceLabelColorIndex(parts[1]),
+		}
+	}
+
+	var prevTs int64
+	firstData := true
+	for i := range rows {
+		if !rows[i].IsData {
+			continue
+		}
+		if !firstData {
+			gap := rows[i].TsNs - prevTs
+			if gap < 0 {
+				gap = 0
+			}
+			rows[i].GapNs = gap
+		}
+		firstData = false
+		prevTs = rows[i].TsNs
+	}
+	return rows
+}
+
 // RenderTraceColumns re-renders the delimited rows compute.LocalComputeJob's
 // emitTraceTagged emits for a bare `trace <id>` ("<ts_unix_ns>\t<namespace/
 // service>\t<raw message>") into a 3-column display sized to termWidth:
@@ -35,58 +100,23 @@ const (
 // the full line set unconditionally rather than needing the caller to
 // separate summary/data lines first.
 func RenderTraceColumns(lines []string, termWidth int) []string {
-	type parsedLine struct {
-		raw    string // original text, used verbatim for passthrough lines
-		isData bool
-		tsNs   int64
-		label  string
-		msg    string
-	}
+	parsed := ParseTraceRows(lines)
 
-	parsed := make([]parsedLine, len(lines))
-	for i, l := range lines {
-		parts := strings.SplitN(l, "\t", 3)
-		if len(parts) != 3 {
-			parsed[i] = parsedLine{raw: l}
-			continue
-		}
-		ts, err := strconv.ParseInt(parts[0], 10, 64)
-		if err != nil {
-			parsed[i] = parsedLine{raw: l}
-			continue
-		}
-		parsed[i] = parsedLine{isData: true, tsNs: ts, label: parts[1], msg: parts[2]}
-	}
-
-	// First pass over data rows only: gaps (relative to the previous
-	// data row, not the previous output line — a passthrough line in
-	// between doesn't reset the clock) and the widest label, so both
-	// the bar scale and the badge column width are known before any
-	// rendering happens.
-	gaps := make([]int64, len(parsed))
+	// First pass over data rows only: the widest label (gaps are
+	// already computed by ParseTraceRows) so the bar scale and badge
+	// column width are known before any rendering happens.
 	var maxGap int64
-	var prevTs int64
 	haveData := false
-	firstData := true
 	labelWidth := traceLabelMinWidth
-	for i, p := range parsed {
-		if !p.isData {
+	for _, p := range parsed {
+		if !p.IsData {
 			continue
 		}
 		haveData = true
-		if !firstData {
-			gap := p.tsNs - prevTs
-			if gap < 0 {
-				gap = 0
-			}
-			gaps[i] = gap
-			if gap > maxGap {
-				maxGap = gap
-			}
+		if p.GapNs > maxGap {
+			maxGap = p.GapNs
 		}
-		firstData = false
-		prevTs = p.tsNs
-		if w := len(p.label); w > labelWidth {
+		if w := len(p.Label); w > labelWidth {
 			labelWidth = w
 		}
 	}
@@ -107,14 +137,14 @@ func RenderTraceColumns(lines []string, termWidth int) []string {
 	sep := strings.Repeat(" ", traceColumnSpacing)
 
 	out := make([]string, 0, len(lines))
-	for i, p := range parsed {
-		if !p.isData {
-			out = append(out, p.raw)
+	for _, p := range parsed {
+		if !p.IsData {
+			out = append(out, p.Raw)
 			continue
 		}
-		bar := renderGapBar(gaps[i], maxGap, gapColWidth)
-		badge := renderTraceLabelColumn(p.label, labelWidth)
-		for j, wrapped := range wrapText(p.msg, msgWidth) {
+		bar := renderGapBar(p.GapNs, maxGap, gapColWidth)
+		badge := renderTraceLabelColumn(p.Label, labelWidth)
+		for j, wrapped := range wrapText(p.Message, msgWidth) {
 			if j == 0 {
 				out = append(out, bar+sep+badge+sep+wrapped)
 			} else {

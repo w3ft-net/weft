@@ -29,6 +29,22 @@ export interface ChartOpenSpec {
   limit?: number
 }
 
+// TraceOpenSpec is the payload the Go-side `trace` handler hands us in
+// place of rendering ANSI/entering spanview's terminal View. `mode`
+// distinguishes plain `trace <id>` ("gap") from `trace <id> --spans`
+// ("rollup", Phase 1) from `trace spans [name]` ("aggregate", Phase
+// 2) — see shell.TraceRequest (shell/shell.go). Unlike ChartOpenSpec,
+// no rows travel with this payload: `trace` is always a pipeline's
+// source command, never a pipe-stage destination, so there's no
+// captured upstream snapshot to hand over the way `... | chart` does.
+// ShellTraceModal re-runs `pipeline` itself via the shell's existing
+// one-shot query path.
+export interface TraceOpenSpec {
+  pipeline: string
+  title: string
+  mode: 'gap' | 'rollup' | 'aggregate'
+}
+
 export async function initShellWasm(
   container: HTMLElement,
   services: string[],
@@ -36,6 +52,7 @@ export async function initShellWasm(
   identity?: ShellIdentity,
   onDashboardNavigate?: (name: string) => void,
   onChartOpen?: (spec: ChartOpenSpec) => void,
+  onTraceOpen?: (spec: TraceOpenSpec) => void,
 ): Promise<ShellBridge> {
   let terminalRef: BaseShellBridge['terminal'] | null = null
   const earlyWrites: string[] = []
@@ -89,10 +106,18 @@ export async function initShellWasm(
     chartOpen: (spec: ChartOpenSpec) => {
       if (onChartOpen) onChartOpen(spec)
     },
+    // traceOpen is invoked by the `trace` builtin inside cmd/wasm for
+    // all three shapes (see shell.traceRequestBuiltin). The React side
+    // renders list/samples in a modal, mirroring spanview's terminal
+    // UX rather than ANSI scrollback.
+    traceOpen: (spec: TraceOpenSpec) => {
+      if (onTraceOpen) onTraceOpen(spec)
+    },
     builtinExecuted: (pipeline: string) => notifyBuiltinExecuted(pipeline),
   } as WasmCallbacks & {
     dashboardNavigate: (name: string) => void
     chartOpen: (spec: ChartOpenSpec) => void
+    traceOpen: (spec: TraceOpenSpec) => void
   }
 
   const bridge = await loadShellWasm(container, {
@@ -176,9 +201,10 @@ export async function initShellPane(
     // Panes don't own the header range chip; still record the spec so
     // the network layer ships a sane window on each fetch.
     onRangeChange: (rawSpec: string) => { setCurrentRangeSpec(rawSpec) },
-    // Dashboard/chart navigation is a whole-page concern; no-op inside a pane.
+    // Dashboard/chart/trace navigation is a whole-page concern; no-op inside a pane.
     dashboardNavigate: () => {},
     chartOpen: () => {},
+    traceOpen: () => {},
     builtinExecuted: (pipeline: string) => notifyBuiltinExecuted(pipeline),
   } as WasmCallbacks
 

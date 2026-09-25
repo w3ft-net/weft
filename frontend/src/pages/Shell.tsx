@@ -6,8 +6,9 @@ import {
   getWatches, deleteWatch, type CronWatch,
   listSources,
 } from '../lib/api'
-import { initShellWasm, type ShellBridge, type ChartOpenSpec } from '../wasm/bridge'
+import { initShellWasm, type ShellBridge, type ChartOpenSpec, type TraceOpenSpec } from '../wasm/bridge'
 import ShellChartModal from '../components/ShellChartModal'
+import ShellTraceModal from '../components/ShellTraceModal'
 import { useAuth } from '../lib/AuthContext'
 import FileTreeSidebar from '../components/FileTreeSidebar'
 import '@xterm/xterm/css/xterm.css'
@@ -27,6 +28,7 @@ export default function Shell() {
   const [sidebarTab, setSidebarTab] = useState<'functions' | 'watches' | 'tmp' | 'etc' | null>(null)
   const [wasmReady, setWasmReady] = useState(false)
   const [chartSpec, setChartSpec] = useState<ChartOpenSpec | null>(null)
+  const [traceSpec, setTraceSpec] = useState<TraceOpenSpec | null>(null)
 
   useEffect(() => {
     getFunctions().then(setFunctions).catch(() => {})
@@ -71,6 +73,10 @@ export default function Shell() {
         // chart tile rendered in React. The modal owns its own
         // re-fetch for the watch form so it stays live.
         (spec: ChartOpenSpec) => setChartSpec(spec),
+        // `trace <id>`, `trace <id> --spans`, and `trace spans [name]`
+        // open a modal that re-runs the pipeline itself and renders
+        // gap/rollup/aggregate views — see ShellTraceModal.
+        (spec: TraceOpenSpec) => setTraceSpec(spec),
       )
       if (disposed) {
         bridge.dispose()
@@ -300,6 +306,9 @@ export default function Shell() {
 
       {chartSpec && (
         <ShellChartModal spec={chartSpec} onClose={() => setChartSpec(null)} />
+      )}
+      {traceSpec && (
+        <ShellTraceModal spec={traceSpec} onClose={() => setTraceSpec(null)} />
       )}
     </div>
   )

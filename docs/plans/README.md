@@ -40,6 +40,7 @@ build order; this table is for picking opportunistic wins.
 | [weftd-multiline](weftd-multiline.md) | 3d | 4 | 4 | Easiest high-ROI win |
 | [cloudwatch-kinesis-subscription](cloudwatch-kinesis-subscription.md) | ~0.5d left | 5 | 4 | Push path, CLI/frontend onboarding, and the poll-mode ripout all shipped; live pilot + rate-limit plumbing remain |
 | [alert-silencing](alert-silencing.md) | 3.5d | 4 | 5 | |
+| [browser-span-view](browser-span-view.md) | shipped | 4 | 3 | Implemented + live-verified in browser (2 bugs found/fixed); unrelated pre-existing local-dev trace_id/duration_ns extraction gap noted in the plan |
 | [weftd-disk-spool](weftd-disk-spool.md) | 3.5d | 3 | 4 | |
 | [cross-tenant-coordinator-log](compliance/cross-tenant-coordinator-log.md) | ~1–2d* | 3 | 5 | *Triage-gated; live security defect |
 | [bucket-split-policy](bucket-split-policy.md) | 3–4d | 3 | 4 | Fixes a broken/disabled feature |
@@ -171,6 +172,7 @@ than product strategy.
 | [coverage-improvement](coverage-improvement.md) | Per-PR coverage delta, per-package floors, eliminating the `-p 1` test-isolation workaround |
 | [request-tracing](request-tracing.md) | `trace_id` log correlation (no span model, no OTLP) across weftd/CloudWatch (push)/offline ingest + SDK-based propagation; weft dogfoods it internally |
 | [span-display](span-display.md) | Roll up `weft-go`'s now-landed `Span` lines into `trace <id> --spans` (per-trace, client-side) and `trace spans [name]` (cross-trace aggregation, needs reserved columns) + a vim-nav interactive drill-down view |
+| [browser-span-view](browser-span-view.md) | Browser-shell overlay for `trace <id>` (gap-histogram) and `trace <id> --spans`/`trace spans [name]` (rollup), mirroring the `dashboard`/`chart` JS-callback-to-React-modal hook pattern |
 
 ## Conventions for new plans
 

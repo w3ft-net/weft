@@ -1,0 +1,217 @@
+.shell-trace-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.shell-trace-modal-panel {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  min-width: 560px;
+  max-width: 1040px;
+  width: 86vw;
+  max-height: 80vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.shell-trace-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #30363d;
+  background: #0d1117;
+}
+
+.shell-trace-modal-title {
+  margin: 0;
+  font-size: 14px;
+  color: #c9d1d9;
+  font-weight: 500;
+  flex: 1;
+  letter-spacing: 0.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-trace-modal-back {
+  background: none;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  color: #8b949e;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.shell-trace-modal-back:hover {
+  color: #c9d1d9;
+  border-color: #58a6ff;
+}
+
+.shell-trace-modal-close {
+  background: none;
+  border: none;
+  color: #8b949e;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.shell-trace-modal-close:hover {
+  color: #c9d1d9;
+}
+
+.shell-trace-modal-body {
+  padding: 16px;
+  overflow: auto;
+  flex: 1;
+}
+
+.shell-trace-modal-loading,
+.shell-trace-modal-empty,
+.shell-trace-modal-error {
+  color: #8b949e;
+  font-size: 13px;
+  text-align: center;
+  padding: 32px 0;
+}
+
+.shell-trace-modal-error {
+  color: #f85149;
+}
+
+/* Gap mode (bare `trace <id>`): a flat list mirroring theme's 3-column
+   ANSI layout — bar, service badge, message — as CSS instead of block
+   characters. */
+.shell-trace-gap-list {
+  font-size: 12px;
+  color: #c9d1d9;
+}
+
+.shell-trace-gap-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.shell-trace-gap-passthrough {
+  color: #8b949e;
+  font-style: italic;
+  padding: 6px 0;
+}
+
+.shell-trace-gap-bar-col {
+  width: 80px;
+  flex: 0 0 80px;
+  height: 10px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.shell-trace-gap-bar {
+  height: 10px;
+  background: #6e7681;
+  border-radius: 1px;
+}
+
+.shell-trace-gap-badge {
+  flex: 0 0 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.shell-trace-gap-message {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+/* Rollup/aggregate mode (`trace <id> --spans` / `trace spans [name]`):
+   a table mirroring theme.SpanRollupColumns' two column sets. */
+.shell-trace-rollup-table,
+.shell-trace-samples-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: #c9d1d9;
+}
+
+.shell-trace-rollup-table th,
+.shell-trace-samples-table th {
+  text-align: right;
+  color: #8b949e;
+  font-weight: 500;
+  padding: 4px 8px;
+  border-bottom: 1px solid #30363d;
+}
+
+.shell-trace-rollup-table th:first-child,
+.shell-trace-rollup-table th:nth-child(2),
+.shell-trace-samples-table th:first-child,
+.shell-trace-samples-table th:nth-child(2) {
+  text-align: left;
+}
+
+.shell-trace-rollup-table td,
+.shell-trace-samples-table td {
+  text-align: right;
+  padding: 4px 8px;
+  border-bottom: 1px solid #21262d;
+}
+
+.shell-trace-rollup-name,
+.shell-trace-samples-table td:first-child,
+.shell-trace-samples-table td:nth-child(2) {
+  text-align: left;
+}
+
+.shell-trace-rollup-name {
+  color: #e3b341;
+  font-weight: 600;
+}
+
+.shell-trace-rollup-row {
+  cursor: pointer;
+}
+
+.shell-trace-rollup-row:hover {
+  background: #1c2128;
+}
+
+.shell-trace-rollup-bar-cell {
+  width: 90px;
+}
+
+.shell-trace-rollup-bar {
+  height: 8px;
+  background: #d29922;
+  border-radius: 1px;
+}
+
+.shell-trace-rollup-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.shell-trace-rollup-errors {
+  color: #f85149;
+  font-weight: 600;
+}
+
+.shell-trace-samples-traceid {
+  font-size: 11px;
+  color: #8b949e;
+}

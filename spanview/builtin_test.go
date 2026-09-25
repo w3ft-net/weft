@@ -27,16 +27,16 @@ func TestParseSpansLine(t *testing.T) {
 		{[]string{}, "", "", false},
 	}
 	for _, c := range cases {
-		got, ok := parseSpansLine(c.parts)
+		got, ok := ParseSpansLine(c.parts)
 		if ok != c.wantOK {
-			t.Errorf("parseSpansLine(%v) ok = %v, want %v", c.parts, ok, c.wantOK)
+			t.Errorf("ParseSpansLine(%v) ok = %v, want %v", c.parts, ok, c.wantOK)
 			continue
 		}
 		if !ok {
 			continue
 		}
 		if got.Pipeline != c.wantPipeline || got.Title != c.wantTitle {
-			t.Errorf("parseSpansLine(%v) = (%q, %q), want (%q, %q)", c.parts, got.Pipeline, got.Title, c.wantPipeline, c.wantTitle)
+			t.Errorf("ParseSpansLine(%v) = (%q, %q), want (%q, %q)", c.parts, got.Pipeline, got.Title, c.wantPipeline, c.wantTitle)
 		}
 	}
 }

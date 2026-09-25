@@ -45,8 +45,25 @@ func traceLabel(namespace, service string) string {
 // color lookup factored out so other trace renderers can color the same
 // label consistently without also getting TraceTag's "[...] " framing.
 func TraceTagColor(label string) string {
+	code := traceTagColors[traceLabelColorIndex(label)]
+	return "\x1b[38;5;" + strconv.Itoa(code) + "m"
+}
+
+// TraceLabelColorIndex returns label's index (0-7) into the same
+// deterministic rotation TraceTagColor picks its ANSI-256 code from.
+// Exported for ParseTraceRows (trace_columns.go), whose TraceRow.
+// ColorIdx crosses the WASM↔JS boundary as a plain small int rather
+// than an ANSI-256 code — the browser side keeps its own fixed 8-entry
+// hex table (rose/sky/violet/olive/turquoise/orchid/amber/lime, same
+// order as traceTagColors) for CSS coloring, an intentional bounded
+// duplication of this one fixed data table rather than of any hashing
+// or rendering logic — see docs/plans/browser-span-view.md.
+func TraceLabelColorIndex(label string) int {
+	return traceLabelColorIndex(label)
+}
+
+func traceLabelColorIndex(label string) int {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(label))
-	code := traceTagColors[h.Sum32()%uint32(len(traceTagColors))]
-	return "\x1b[38;5;" + strconv.Itoa(code) + "m"
+	return int(h.Sum32() % uint32(len(traceTagColors)))
 }

@@ -137,3 +137,40 @@ func TestRenderTraceColumns_NarrowTerminalStillProducesOutput(t *testing.T) {
 		t.Fatal("expected at least one output line even at a very narrow width")
 	}
 }
+
+// TestParseTraceRows_GapsAndPassthrough pins the shared parse step
+// RenderTraceColumns and the browser's wasmParseTraceRows export both
+// build on: passthrough lines carry IsData=false and only Raw, data
+// rows carry the parsed fields plus a gap computed relative to the
+// previous data row (skipping over any passthrough line in between).
+func TestParseTraceRows_GapsAndPassthrough(t *testing.T) {
+	lines := []string{
+		"# 2 line(s) across 1 service(s)",
+		traceRow(1000, "weft/coordinator", "first"),
+		"# an unrelated passthrough line",
+		traceRow(1_500_000, "weft/coordinator", "second"),
+	}
+	rows := ParseTraceRows(lines)
+	if len(rows) != 4 {
+		t.Fatalf("expected 4 rows, got %d", len(rows))
+	}
+	if rows[0].IsData || rows[0].Raw != lines[0] {
+		t.Errorf("row 0: expected passthrough with Raw=%q, got %+v", lines[0], rows[0])
+	}
+	if !rows[1].IsData || rows[1].TsNs != 1000 || rows[1].Label != "weft/coordinator" || rows[1].Message != "first" {
+		t.Errorf("row 1: unexpected parse, got %+v", rows[1])
+	}
+	if rows[1].GapNs != 0 {
+		t.Errorf("row 1 (first data row): expected GapNs=0, got %d", rows[1].GapNs)
+	}
+	if rows[2].IsData {
+		t.Errorf("row 2: expected passthrough, got %+v", rows[2])
+	}
+	wantGap := int64(1_500_000 - 1000)
+	if rows[3].GapNs != wantGap {
+		t.Errorf("row 3: expected GapNs=%d (gap measured against the previous DATA row, not the passthrough line), got %d", wantGap, rows[3].GapNs)
+	}
+	if rows[3].ColorIdx != TraceLabelColorIndex("weft/coordinator") {
+		t.Errorf("row 3: ColorIdx should match TraceLabelColorIndex(Label); got %d want %d", rows[3].ColorIdx, TraceLabelColorIndex("weft/coordinator"))
+	}
+}
