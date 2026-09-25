@@ -128,12 +128,18 @@ func fieldRefDisabled(value string) bool {
 // likely a typo or an off-by-one bug, not a deliberate disable. Returns ""
 // when valid, a message identifying name otherwise.
 func validateFieldRef(name, value string) string {
-	if fieldRefDisabled(value) || strings.HasPrefix(value, ".") {
+	if fieldRefDisabled(value) {
+		return ""
+	}
+	if strings.HasPrefix(value, ".") {
+		if _, err := compileJSONPath(value); err != nil {
+			return fmt.Sprintf("%s: %v", name, err)
+		}
 		return ""
 	}
 	idx, err := strconv.Atoi(value)
 	if err != nil {
-		return fmt.Sprintf("%s: %q is neither a JSON dot-path (starting with '.') nor a positional field index", name, value)
+		return fmt.Sprintf("%s: %q is neither a JSON path (starting with '.') nor a positional field index", name, value)
 	}
 	if idx < 1 {
 		return fmt.Sprintf("%s: field index must be >= 1 (1-based) or 0 to disable, got %d", name, idx)

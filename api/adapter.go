@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -167,7 +168,7 @@ func (s *Server) IngestHandler(a Adapter) http.Handler {
 		// accumulatePendingKinesisSamples. A no-op for every other
 		// adapter/status, so this costs nothing once a source is
 		// configured or for adapters that never produce pending rows.
-		accumulatePendingKinesisSamples(s.store, auth.Organization.ID, namespace, rows)
+		accumulatePendingKinesisSamples(s.store, s.classifier, auth.Organization.ID, namespace, rows)
 
 		// Forward to coordinator via the existing gRPC IngestStream.
 		// Same bearer token in metadata so authenticateStream's path
@@ -298,7 +299,7 @@ func enrichRows(st *store.Store, orgID, namespace string, rows []*pb.LogRow) {
 // IngestStream directly, not IngestHandler/enrichRows), and every other
 // source type either commits a schema immediately (poll-mode CloudWatch)
 // or has no configure step at all (SourceTypeDirect).
-func accumulatePendingKinesisSamples(st *store.Store, orgID, namespace string, rows []*pb.LogRow) {
+func accumulatePendingKinesisSamples(st *store.Store, classifier ingest.Classifier, orgID, namespace string, rows []*pb.LogRow) {
 	byService := make(map[string][]string)
 	for _, row := range rows {
 		byService[row.Service] = append(byService[row.Service], row.Raw)
@@ -331,7 +332,17 @@ func accumulatePendingKinesisSamples(st *store.Store, orgID, namespace string, r
 		if err != nil {
 			continue
 		}
-		detectionJSON, err := json.Marshal(ingest.Detect(combined))
+		namespaceID, svc := lg.NamespaceID, service
+		detection := ingest.ClassifyAsync(classifier, combined, !partial, func(d *ingest.Detection) {
+			detectionJSON, err := json.Marshal(d)
+			if err != nil {
+				return
+			}
+			if err := st.UpdateLogGroupDetection(namespaceID, svc, string(detectionJSON)); err != nil {
+				log.Printf("classify: update detection for kinesis source %s/%s: %v", namespace, svc, err)
+			}
+		})
+		detectionJSON, err := json.Marshal(detection)
 		if err != nil {
 			continue
 		}

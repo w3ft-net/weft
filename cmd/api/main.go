@@ -11,6 +11,7 @@ import (
 
 	weftapi "github.com/graybeardcorp/weft/api"
 	"github.com/graybeardcorp/weft/config"
+	"github.com/graybeardcorp/weft/ingest"
 	ingsyslog "github.com/graybeardcorp/weft/ingest/syslog"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -63,6 +64,17 @@ func main() {
 		log.Fatalf("connect to coordinator: %v", err)
 	}
 	defer srv.Close()
+
+	// LLM-based schema-field classification for pending sources — see
+	// ingest/llmdetect.go. Disabled (classifier stays nil) unless
+	// BEDROCK_CLASSIFIER_MODEL_ID/BEDROCK_REGION are set; that's a
+	// deliberate opt-in, not a startup requirement, since it depends on
+	// IAM/model-access being provisioned separately (infrastructure-live).
+	if classifier, err := ingest.NewBedrockClassifierFromEnv(context.Background()); err != nil {
+		log.Printf("WARNING: bedrock classifier disabled: %v", err)
+	} else if classifier != nil {
+		srv.SetClassifier(classifier)
+	}
 
 	// Configure Stripe prices from env. Each tier has a flat recurring
 	// price plus an optional metered overage price. Absence of the

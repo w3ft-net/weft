@@ -697,8 +697,24 @@ func runSourceConfigure(cfg *shell.Config) {
 			os.Exit(1)
 		}
 
+		// The server already computed detection for this sample
+		// (heuristic envelope/JSON detection, plus LLM-classified
+		// timestamp/level/trace/span candidates once classification
+		// completes — see ingest/llmdetect.go); use it instead of
+		// recomputing heuristic-only detection locally. Falls back to a
+		// local recompute if Detection is missing (a row predating
+		// classification, or one whose async classification hasn't
+		// landed yet) rather than showing an empty wizard.
+		var det *ingest.Detection
+		if len(sch.Detection) > 0 {
+			det = &ingest.Detection{}
+			if err := json.Unmarshal(sch.Detection, det); err != nil {
+				det = nil
+			}
+		}
+
 		// Run the interactive setup wizard with the remote sample.
-		schema, err = setup.RunSetupFromLines(namespace+"/"+service, lines)
+		schema, err = setup.RunSetupFromLines(namespace+"/"+service, lines, det)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "setup: %v\n", err)
 			os.Exit(1)

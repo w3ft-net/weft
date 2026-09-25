@@ -40,22 +40,42 @@ type Detection struct {
 	TimestampCandidates []TimestampCandidate
 
 	// LevelCandidates are field indices that look like log levels.
-	LevelCandidates []LevelCandidate
+	LevelCandidates []FieldCandidate
+
+	// TraceIDCandidates, SpanNameCandidates, SpanIDCandidates,
+	// ParentSpanIDCandidates, and DurationNsCandidates mirror
+	// LevelCandidates for Schema's other tag-style fields (see
+	// TraceIDField/SpanNameField/etc. in schema.go). Populated by the LLM
+	// classifier (ingest/llmdetect.go) — the heuristic Detect never sets
+	// these; there's no fixed-vocabulary equivalent for them the way
+	// levelStrings/timestampFormats are for level/timestamp.
+	TraceIDCandidates      []FieldCandidate
+	SpanNameCandidates     []FieldCandidate
+	SpanIDCandidates       []FieldCandidate
+	ParentSpanIDCandidates []FieldCandidate
+	DurationNsCandidates   []FieldCandidate
 }
 
 // TimestampCandidate is a field that might be a timestamp.
 type TimestampCandidate struct {
-	FieldIndex int    // 1-based
-	SpanFields int    // how many fields the timestamp spans (usually 1 or 2)
+	FieldIndex int    // 1-based positional index; 0 when JSONPath is set instead
+	SpanFields int    // how many fields the timestamp spans (usually 1 or 2); positional only
 	Format     string // Go time.Parse layout
+	JSONPath   string // JSON path (format=json, or the JSON tail of prefix_json); "" = positional
 	Sample     string // example value
 }
 
-// LevelCandidate is a field that might be a log level.
-type LevelCandidate struct {
-	FieldIndex int    // 1-based
+// FieldCandidate is a field that might hold a log level, trace ID, or one
+// of the span fields (span name/ID, parent span ID, duration) — the shape
+// Schema's *Field/*Pattern pairs share for all of those (schema.go:66-80).
+// Exactly one of FieldIndex/JSONPath is meaningful for a given candidate,
+// mirroring how Schema's own *Field strings disambiguate (a leading '.'
+// means JSON path, a bare positive integer means positional field index).
+type FieldCandidate struct {
+	FieldIndex int    // 1-based positional index; 0 = not positional (JSONPath set, or a whole-line pattern search)
+	JSONPath   string // JSON path; "" = not JSON-based
 	Sample     string // example value
-	Pattern    string // regex to extract level from value, or "" for whole field
+	Pattern    string // regex to extract the value, or "" for the whole field/path value
 }
 
 // known log level strings
@@ -69,15 +89,15 @@ var timestampFormats = []struct {
 	layout string
 	spans  int // how many whitespace-delimited fields it covers
 }{
-	{"2006-01-02T15:04:05Z07:00", 1},         // ISO 8601
-	{"2006-01-02T15:04:05.000Z07:00", 1},     // ISO 8601 with millis
-	{"2006-01-02T15:04:05", 1},               // ISO 8601 no tz
-	{"2006/01/02 15:04:05", 2},               // Go default
-	{"2006-01-02 15:04:05,000", 2},           // Python with millis (comma)
-	{"2006-01-02 15:04:05.000", 2},           // Python with millis (dot)
-	{"2006-01-02 15:04:05", 2},               // YYYY-MM-DD HH:MM:SS
-	{"02/Jan/2006:15:04:05 -0700", 2},        // CLF (inside brackets)
-	{"Jan 02 15:04:05", 3},                   // syslog
+	{"2006-01-02T15:04:05Z07:00", 1},     // ISO 8601
+	{"2006-01-02T15:04:05.000Z07:00", 1}, // ISO 8601 with millis
+	{"2006-01-02T15:04:05", 1},           // ISO 8601 no tz
+	{"2006/01/02 15:04:05", 2},           // Go default
+	{"2006-01-02 15:04:05,000", 2},       // Python with millis (comma)
+	{"2006-01-02 15:04:05.000", 2},       // Python with millis (dot)
+	{"2006-01-02 15:04:05", 2},           // YYYY-MM-DD HH:MM:SS
+	{"02/Jan/2006:15:04:05 -0700", 2},    // CLF (inside brackets)
+	{"Jan 02 15:04:05", 3},               // syslog
 }
 
 // celery level pattern: "INFO/MainProcess" → extract "INFO"
@@ -347,7 +367,7 @@ func (d *Detection) detectLevels(lines []string) {
 
 	for _, h := range hits {
 		if h.hits > len(sample)/3 {
-			d.LevelCandidates = append(d.LevelCandidates, LevelCandidate{
+			d.LevelCandidates = append(d.LevelCandidates, FieldCandidate{
 				FieldIndex: h.fieldIdx,
 				Sample:     h.sample,
 				Pattern:    h.pattern,

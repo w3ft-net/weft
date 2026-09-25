@@ -107,6 +107,13 @@ type Server struct {
 	// persists across reconnects — see docs/ingestion-syslog.md, "Rate limiting".
 	ingestLimiterOnce sync.Once
 	ingestLimiterPtr  *ingestLimiter
+
+	// Classifier drives LLM-based schema-field classification for
+	// pending sources (SubmitSample — see ingest/llmdetect.go). Nil is
+	// fine (every test in this package builds Server{} literals without
+	// one): ClassifyAsync falls back to deterministic envelope/JSON
+	// detection only, same as before this existed.
+	Classifier ingest.Classifier
 }
 
 func (s *Server) tokenLimiter() *ingestLimiter {
@@ -1132,10 +1139,6 @@ func (s *Server) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest) (*
 		return nil, status.Errorf(codes.InvalidArgument, "lines required for a final sample")
 	}
 
-	detection := ingest.Detect(req.Lines)
-	sampleJSON, _ := json.Marshal(req.Lines)
-	detectionJSON, _ := json.Marshal(detection)
-
 	ns, err := s.Store.GetNamespace(auth.Organization.ID, auth.Namespace)
 	if err != nil {
 		return nil, fmt.Errorf("namespace: %w", err)
@@ -1150,6 +1153,24 @@ func (s *Server) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest) (*
 	if i := strings.IndexByte(service, '/'); i >= 0 {
 		service = service[:i]
 	}
+
+	// ClassifyAsync computes envelope/JSON detection inline and, only for
+	// the final (non-partial) sample, starts LLM classification in the
+	// background — this RPC returns as soon as the sample is stored,
+	// never blocked on Bedrock. See ingest/llmdetect.go.
+	namespaceID := ns.ID
+	detection := ingest.ClassifyAsync(s.Classifier, req.Lines, !req.Partial, func(d *ingest.Detection) {
+		detectionJSON, err := json.Marshal(d)
+		if err != nil {
+			return
+		}
+		if err := s.Store.UpdateLogGroupDetection(namespaceID, service, string(detectionJSON)); err != nil {
+			log.Printf("classify: update detection for %s/%s: %v", auth.Namespace, service, err)
+		}
+	})
+	sampleJSON, _ := json.Marshal(req.Lines)
+	detectionJSON, _ := json.Marshal(detection)
+
 	if err := s.Store.UpsertPendingLogGroup(
 		ns.ID, service,
 		req.Instance, req.Deployment,

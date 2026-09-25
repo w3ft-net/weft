@@ -21,6 +21,20 @@ type Parser struct {
 	spanIDRe     *regexp.Regexp
 	parentSpanRe *regexp.Regexp
 	durationNsRe *regexp.Regexp
+
+	// JSON paths, compiled once here instead of per row — mirrors the
+	// *Re fields above. nil means the corresponding schema field isn't
+	// JSON-path mode (positional, disabled, or a whole-line pattern
+	// search). hasJSONPaths gates whether ParseLine bothers parsing the
+	// JSON body at all.
+	timestampPath  []jsonPathSegment
+	levelPath      []jsonPathSegment
+	tracePath      []jsonPathSegment
+	spanNamePath   []jsonPathSegment
+	spanIDPath     []jsonPathSegment
+	parentSpanPath []jsonPathSegment
+	durationNsPath []jsonPathSegment
+	hasJSONPaths   bool
 }
 
 // NewParser creates a parser for the given schema.
@@ -55,6 +69,30 @@ func NewParser(s *Schema) (*Parser, error) {
 		}
 		*dst = re
 	}
+
+	for name, spec := range map[string]struct {
+		field string
+		dst   *[]jsonPathSegment
+	}{
+		"timestamp_field":      {s.TimestampField, &p.timestampPath},
+		"level_field":          {s.LevelField, &p.levelPath},
+		"trace_id_field":       {s.TraceIDField, &p.tracePath},
+		"span_name_field":      {s.SpanNameField, &p.spanNamePath},
+		"span_id_field":        {s.SpanIDField, &p.spanIDPath},
+		"parent_span_id_field": {s.ParentSpanIDField, &p.parentSpanPath},
+		"duration_ns_field":    {s.DurationNsField, &p.durationNsPath},
+	} {
+		if !strings.HasPrefix(spec.field, ".") {
+			continue
+		}
+		segs, err := compileJSONPath(spec.field)
+		if err != nil {
+			return nil, fmt.Errorf("compile %s: %w", name, err)
+		}
+		*spec.dst = segs
+		p.hasJSONPaths = true
+	}
+
 	return p, nil
 }
 
@@ -76,22 +114,32 @@ func (p *Parser) ParseLine(raw string, ingestTime time.Time) (*pb.LogRow, error)
 	fields := p.splitFields(body)
 	row.Fields = fields
 
+	// Parse the JSON body (if any) once and share it across every
+	// JSON-path extractor below, instead of each one re-unmarshaling the
+	// same bytes — this schema can have up to 7 JSON-path fields, and
+	// this is the actual per-row ingest hot path.
+	var jsonBody any
+	var hasJSONBody bool
+	if p.hasJSONPaths {
+		jsonBody, hasJSONBody = parseJSONBody(body)
+	}
+
 	// Extract timestamp.
-	if ts, ok := p.extractTimestamp(fields, body); ok {
+	if ts, ok := p.extractTimestamp(fields, body, jsonBody, hasJSONBody); ok {
 		row.TsUnixNs = ts.UnixNano()
 	}
 
 	// Extract level.
-	row.Level = p.extractLevel(fields, body)
+	row.Level = p.extractLevel(fields, body, jsonBody, hasJSONBody)
 
 	// Extract trace ID.
-	row.TraceId = p.extractTraceID(fields, body)
+	row.TraceId = p.extractTraceID(fields, body, jsonBody, hasJSONBody)
 
 	// Extract span fields.
-	row.SpanName = p.extractSpanField(fields, body, p.schema.SpanNameField, p.spanNameRe)
-	row.SpanId = p.extractSpanField(fields, body, p.schema.SpanIDField, p.spanIDRe)
-	row.ParentSpanId = p.extractSpanField(fields, body, p.schema.ParentSpanIDField, p.parentSpanRe)
-	if s := p.extractSpanField(fields, body, p.schema.DurationNsField, p.durationNsRe); s != "" {
+	row.SpanName = p.extractSpanField(fields, body, p.schema.SpanNameField, p.spanNameRe, p.spanNamePath, jsonBody, hasJSONBody)
+	row.SpanId = p.extractSpanField(fields, body, p.schema.SpanIDField, p.spanIDRe, p.spanIDPath, jsonBody, hasJSONBody)
+	row.ParentSpanId = p.extractSpanField(fields, body, p.schema.ParentSpanIDField, p.parentSpanRe, p.parentSpanPath, jsonBody, hasJSONBody)
+	if s := p.extractSpanField(fields, body, p.schema.DurationNsField, p.durationNsRe, p.durationNsPath, jsonBody, hasJSONBody); s != "" {
 		if ns, err := strconv.ParseInt(s, 10, 64); err == nil {
 			row.DurationNs = ns
 		}
@@ -138,7 +186,7 @@ func (p *Parser) splitFields(body string) []string {
 	return strings.Split(body, sep)
 }
 
-func (p *Parser) extractTimestamp(fields []string, body string) (time.Time, bool) {
+func (p *Parser) extractTimestamp(fields []string, body string, jsonBody any, hasJSONBody bool) (time.Time, bool) {
 	tsField := p.schema.TimestampField
 	if tsField == "" || tsField == "none" {
 		return time.Time{}, false
@@ -151,7 +199,15 @@ func (p *Parser) extractTimestamp(fields []string, body string) (time.Time, bool
 
 	// JSON path.
 	if strings.HasPrefix(tsField, ".") {
-		return p.extractJSONTimestamp(body, tsField, format)
+		str, ok := jsonStringAt(jsonBody, hasJSONBody, p.timestampPath)
+		if !ok {
+			return time.Time{}, false
+		}
+		ts, err := time.Parse(format, str)
+		if err != nil {
+			return time.Time{}, false
+		}
+		return ts, true
 	}
 
 	// Field index.
@@ -183,33 +239,7 @@ func (p *Parser) extractTimestamp(fields []string, body string) (time.Time, bool
 	return ts, true
 }
 
-func (p *Parser) extractJSONTimestamp(body, path, format string) (time.Time, bool) {
-	// Find JSON in the body.
-	idx := strings.Index(body, "{")
-	if idx < 0 {
-		return time.Time{}, false
-	}
-	var obj map[string]any
-	if err := json.Unmarshal([]byte(body[idx:]), &obj); err != nil {
-		return time.Time{}, false
-	}
-	key := strings.TrimPrefix(path, ".")
-	val, ok := obj[key]
-	if !ok {
-		return time.Time{}, false
-	}
-	str, ok := val.(string)
-	if !ok {
-		return time.Time{}, false
-	}
-	ts, err := time.Parse(format, str)
-	if err != nil {
-		return time.Time{}, false
-	}
-	return ts, true
-}
-
-func (p *Parser) extractLevel(fields []string, body string) string {
+func (p *Parser) extractLevel(fields []string, body string, jsonBody any, hasJSONBody bool) string {
 	levelField := p.schema.LevelField
 	if levelField == "" || levelField == "none" {
 		return ""
@@ -217,7 +247,10 @@ func (p *Parser) extractLevel(fields []string, body string) string {
 
 	// JSON path.
 	if strings.HasPrefix(levelField, ".") {
-		return p.extractJSONLevel(body, levelField)
+		if str, ok := jsonStringAt(jsonBody, hasJSONBody, p.levelPath); ok {
+			return strings.ToUpper(str)
+		}
+		return ""
 	}
 
 	idx, err := strconv.Atoi(levelField)
@@ -237,28 +270,7 @@ func (p *Parser) extractLevel(fields []string, body string) string {
 	return strings.ToUpper(val)
 }
 
-func (p *Parser) extractJSONLevel(body, path string) string {
-	idx := strings.Index(body, "{")
-	if idx < 0 {
-		return ""
-	}
-	var obj map[string]any
-	if err := json.Unmarshal([]byte(body[idx:]), &obj); err != nil {
-		return ""
-	}
-	key := strings.TrimPrefix(path, ".")
-	val, ok := obj[key]
-	if !ok {
-		return ""
-	}
-	str, ok := val.(string)
-	if !ok {
-		return ""
-	}
-	return strings.ToUpper(str)
-}
-
-func (p *Parser) extractTraceID(fields []string, body string) string {
+func (p *Parser) extractTraceID(fields []string, body string, jsonBody any, hasJSONBody bool) string {
 	traceField := p.schema.TraceIDField
 	if traceField == "" || traceField == "none" {
 		// No field to anchor on — if a pattern is set, search the whole
@@ -276,7 +288,8 @@ func (p *Parser) extractTraceID(fields []string, body string) string {
 
 	// JSON path.
 	if strings.HasPrefix(traceField, ".") {
-		return p.extractJSONTraceID(body, traceField)
+		str, _ := jsonStringAt(jsonBody, hasJSONBody, p.tracePath)
+		return str
 	}
 
 	idx, err := strconv.Atoi(traceField)
@@ -303,33 +316,13 @@ func (p *Parser) extractTraceID(fields []string, body string) string {
 	return val
 }
 
-func (p *Parser) extractJSONTraceID(body, path string) string {
-	idx := strings.Index(body, "{")
-	if idx < 0 {
-		return ""
-	}
-	var obj map[string]any
-	if err := json.Unmarshal([]byte(body[idx:]), &obj); err != nil {
-		return ""
-	}
-	key := strings.TrimPrefix(path, ".")
-	val, ok := obj[key]
-	if !ok {
-		return ""
-	}
-	str, ok := val.(string)
-	if !ok {
-		return ""
-	}
-	return str
-}
-
 // extractSpanField is extractTraceID's exact shape, generalized over
-// which field/pattern pair to use — span_name/span_id/parent_span_id/
-// duration_ns all follow the same "field index or JSON dot-path,
-// optionally refined by a pattern" rule TraceIDField/TraceIDPattern
-// established. re is nil when the corresponding *Pattern is unset.
-func (p *Parser) extractSpanField(fields []string, body, fieldSpec string, re *regexp.Regexp) string {
+// which field/pattern/JSON-path triple to use — span_name/span_id/
+// parent_span_id/duration_ns all follow the same "field index or JSON
+// path, optionally refined by a pattern" rule TraceIDField/TraceIDPattern
+// established. re is nil when the corresponding *Pattern is unset; path
+// is nil when fieldSpec isn't JSON-path mode.
+func (p *Parser) extractSpanField(fields []string, body, fieldSpec string, re *regexp.Regexp, path []jsonPathSegment, jsonBody any, hasJSONBody bool) string {
 	if fieldSpec == "" || fieldSpec == "none" {
 		if re != nil {
 			if m := re.FindStringSubmatch(body); len(m) > 1 {
@@ -340,7 +333,8 @@ func (p *Parser) extractSpanField(fields []string, body, fieldSpec string, re *r
 	}
 
 	if strings.HasPrefix(fieldSpec, ".") {
-		return p.extractJSONSpanField(body, fieldSpec)
+		str, _ := jsonStringAt(jsonBody, hasJSONBody, path)
+		return str
 	}
 
 	idx, err := strconv.Atoi(fieldSpec)
@@ -359,27 +353,6 @@ func (p *Parser) extractSpanField(fields []string, body, fieldSpec string, re *r
 	}
 
 	return val
-}
-
-func (p *Parser) extractJSONSpanField(body, path string) string {
-	idx := strings.Index(body, "{")
-	if idx < 0 {
-		return ""
-	}
-	var obj map[string]any
-	if err := json.Unmarshal([]byte(body[idx:]), &obj); err != nil {
-		return ""
-	}
-	key := strings.TrimPrefix(path, ".")
-	val, ok := obj[key]
-	if !ok {
-		return ""
-	}
-	str, ok := val.(string)
-	if !ok {
-		return ""
-	}
-	return str
 }
 
 func (p *Parser) extractPayload(fields []string, body string) json.RawMessage {

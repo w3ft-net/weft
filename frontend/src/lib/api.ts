@@ -568,11 +568,18 @@ export interface TimestampCandidate {
   FieldIndex: number
   SpanFields: number
   Format: string
+  JSONPath: string
   Sample: string
 }
 
-export interface LevelCandidate {
+// FieldCandidate is the shape shared by level, trace ID, and all four
+// span fields (mirrors Go's ingest.FieldCandidate). Exactly one of
+// FieldIndex/JSONPath is meaningful for a given candidate — FieldIndex 0
+// with a non-empty Pattern and no JSONPath means "search the whole line"
+// (Schema's TraceIDPattern convention).
+export interface FieldCandidate {
   FieldIndex: number
+  JSONPath: string
   Sample: string
   Pattern: string
 }
@@ -586,7 +593,12 @@ export interface SourceDetection {
   JSONTailCoverage: number
   JSONTailStartField: number
   TimestampCandidates: TimestampCandidate[] | null
-  LevelCandidates: LevelCandidate[] | null
+  LevelCandidates: FieldCandidate[] | null
+  TraceIDCandidates: FieldCandidate[] | null
+  SpanNameCandidates: FieldCandidate[] | null
+  SpanIDCandidates: FieldCandidate[] | null
+  ParentSpanIDCandidates: FieldCandidate[] | null
+  DurationNsCandidates: FieldCandidate[] | null
 }
 
 export interface PendingSource {
@@ -611,6 +623,15 @@ export interface ConfigureSourceRequest {
   level_field: string
   level_pattern: string
   trace_id_field: string
+  trace_id_pattern: string
+  span_name_field: string
+  span_name_pattern: string
+  span_id_field: string
+  span_id_pattern: string
+  parent_span_id_field: string
+  parent_span_id_pattern: string
+  duration_ns_field: string
+  duration_ns_pattern: string
   expand_keys?: { key: string; type: string }[]
 }
 
@@ -633,22 +654,53 @@ export function configureSource(
   )
 }
 
-// Best-guess defaults from the server's Detection. Level and trace-id
-// fields are left blank on purpose — we don't detect them automatically
-// since most real logs don't carry either on every line.
+// fieldRef formats a FieldCandidate's location the way Schema's own
+// *Field strings expect: a JSON path, a 1-based positional index, or
+// "none" for a whole-line pattern search (FieldIndex 0 with no JSONPath —
+// NOT "0", which parse.go's extractors treat as a real, always-out-of-
+// range positional index and would silently never match).
+function fieldRef(c: FieldCandidate | undefined): { field: string; pattern: string } {
+  if (!c) return { field: '', pattern: '' }
+  if (c.JSONPath) return { field: c.JSONPath, pattern: c.Pattern }
+  if (c.FieldIndex >= 1) return { field: String(c.FieldIndex), pattern: c.Pattern }
+  return { field: 'none', pattern: c.Pattern }
+}
+
+// Best-guess defaults from the server's Detection. Level, trace ID, and
+// the span fields are now populated from the classifier's top candidate
+// the same way timestamp already is — earlier versions left them blank
+// because the old pattern-matching heuristic wasn't reliable enough to
+// trust blindly, but every candidate here has already been validated
+// against the real sample (see ingest/llmdetect.go's validateClassification)
+// before it ever reaches this response.
 export function suggestFromDetection(d: SourceDetection): ConfigureSourceRequest {
   const format =
     d.JSONCoverage > 0.8 ? 'json'
       : d.JSONTailCoverage > 0.5 ? 'prefix_json'
         : 'text'
   const ts = d.TimestampCandidates?.[0]
+  const level = fieldRef(d.LevelCandidates?.[0])
+  const traceID = fieldRef(d.TraceIDCandidates?.[0])
+  const spanName = fieldRef(d.SpanNameCandidates?.[0])
+  const spanID = fieldRef(d.SpanIDCandidates?.[0])
+  const parentSpanID = fieldRef(d.ParentSpanIDCandidates?.[0])
+  const durationNs = fieldRef(d.DurationNsCandidates?.[0])
   return {
     format,
-    timestamp_field: ts ? String(ts.FieldIndex) : '',
+    timestamp_field: ts ? (ts.JSONPath || String(ts.FieldIndex)) : '',
     timestamp_format: ts?.Format ?? '',
-    level_field: '',
-    level_pattern: '',
-    trace_id_field: '',
+    level_field: level.field,
+    level_pattern: level.pattern,
+    trace_id_field: traceID.field,
+    trace_id_pattern: traceID.pattern,
+    span_name_field: spanName.field,
+    span_name_pattern: spanName.pattern,
+    span_id_field: spanID.field,
+    span_id_pattern: spanID.pattern,
+    parent_span_id_field: parentSpanID.field,
+    parent_span_id_pattern: parentSpanID.pattern,
+    duration_ns_field: durationNs.field,
+    duration_ns_pattern: durationNs.pattern,
   }
 }
 

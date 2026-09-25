@@ -82,8 +82,15 @@ export default function SchemaEditor({
         These look like <strong>{formatLabel}</strong>.{' '}
         {hasTimestamp ? (
           <>
-            We'll use <strong>field {tsCandidate.FieldIndex}</strong>
-            {tsCandidate.SpanFields > 1 ? `–${tsCandidate.FieldIndex + tsCandidate.SpanFields - 1}` : ''}
+            We'll use{' '}
+            <strong>
+              {tsCandidate.JSONPath || (
+                <>
+                  field {tsCandidate.FieldIndex}
+                  {tsCandidate.SpanFields > 1 ? `–${tsCandidate.FieldIndex + tsCandidate.SpanFields - 1}` : ''}
+                </>
+              )}
+            </strong>
             {' '}as the timestamp
             {tsCandidate.Format ? (
               <>
@@ -184,6 +191,105 @@ export default function SchemaEditor({
               onChange={e => update('trace_id_field', e.target.value)}
               placeholder="field index, or .path for JSON"
               data-testid={`${testidPrefix}-trace-id-field-input`}
+            />
+          </label>
+
+          <label className="psc-field">
+            <span className="psc-label">Trace ID pattern (optional)</span>
+            <input
+              type="text"
+              value={form.trace_id_pattern}
+              onChange={e => update('trace_id_pattern', e.target.value)}
+              placeholder="regex like trace_id=(\\S+)"
+              data-testid={`${testidPrefix}-trace-id-pattern-input`}
+            />
+          </label>
+
+          <label className="psc-field">
+            <span className="psc-label">Span name field (optional)</span>
+            <input
+              type="text"
+              value={form.span_name_field}
+              onChange={e => update('span_name_field', e.target.value)}
+              placeholder="field index, or .path for JSON"
+              data-testid={`${testidPrefix}-span-name-field-input`}
+            />
+          </label>
+
+          <label className="psc-field">
+            <span className="psc-label">Span name pattern (optional)</span>
+            <input
+              type="text"
+              value={form.span_name_pattern}
+              onChange={e => update('span_name_pattern', e.target.value)}
+              placeholder="regex like span_name=(\\S+)"
+              data-testid={`${testidPrefix}-span-name-pattern-input`}
+            />
+          </label>
+
+          <label className="psc-field">
+            <span className="psc-label">Span ID field (optional)</span>
+            <input
+              type="text"
+              value={form.span_id_field}
+              onChange={e => update('span_id_field', e.target.value)}
+              placeholder="field index, or .path for JSON"
+              data-testid={`${testidPrefix}-span-id-field-input`}
+            />
+          </label>
+
+          <label className="psc-field">
+            <span className="psc-label">Span ID pattern (optional)</span>
+            <input
+              type="text"
+              value={form.span_id_pattern}
+              onChange={e => update('span_id_pattern', e.target.value)}
+              placeholder="regex like span_id=(\\S+)"
+              data-testid={`${testidPrefix}-span-id-pattern-input`}
+            />
+          </label>
+
+          <label className="psc-field">
+            <span className="psc-label">Parent span ID field (optional)</span>
+            <input
+              type="text"
+              value={form.parent_span_id_field}
+              onChange={e => update('parent_span_id_field', e.target.value)}
+              placeholder="field index, or .path for JSON"
+              data-testid={`${testidPrefix}-parent-span-id-field-input`}
+            />
+          </label>
+
+          <label className="psc-field">
+            <span className="psc-label">Parent span ID pattern (optional)</span>
+            <input
+              type="text"
+              value={form.parent_span_id_pattern}
+              onChange={e => update('parent_span_id_pattern', e.target.value)}
+              placeholder="regex like parent_span_id=(\\S+)"
+              data-testid={`${testidPrefix}-parent-span-id-pattern-input`}
+            />
+          </label>
+
+          <label className="psc-field">
+            <span className="psc-label">Duration field (optional)</span>
+            <input
+              type="text"
+              value={form.duration_ns_field}
+              onChange={e => update('duration_ns_field', e.target.value)}
+              placeholder="field index, or .path for JSON"
+              data-testid={`${testidPrefix}-duration-ns-field-input`}
+            />
+          </label>
+
+          <label className="psc-field">
+            <span className="psc-label">Duration pattern (optional)</span>
+            <input
+              type="text"
+              value={form.duration_ns_pattern}
+              onChange={e => update('duration_ns_pattern', e.target.value)}
+              placeholder="regex like duration_ns=(\\d+)"
+              data-testid={`${testidPrefix}-duration-ns-pattern-input`}
             />
           </label>
         </div>

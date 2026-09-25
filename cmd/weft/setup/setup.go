@@ -10,6 +10,7 @@ package setup
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -27,17 +28,26 @@ var (
 	labelStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
 )
 
-// RunSetupFromLines runs the interactive schema setup wizard from pre-loaded
-// lines (a live sample fetched server-side). The resulting schema is returned
-// to the caller, which posts it to the coordinator — it's never written to
-// disk. Customer is not captured on the schema either; the api server derives
-// it from the caller's JWT at upload time.
-func RunSetupFromLines(app string, lines []string) (*ingest.Schema, error) {
+// RunSetupFromLines runs the interactive schema setup wizard from
+// pre-loaded lines (a live sample fetched server-side) and det, the
+// server-computed detection for that sample (heuristic envelope/JSON
+// detection, plus LLM-classified timestamp/level/trace/span candidates —
+// see ingest/llmdetect.go). The caller fetches det from
+// SourceSchema.Detection; passing nil here falls back to recomputing the
+// (heuristic-only) detection locally, for a row predating classification
+// or one whose async classification hasn't landed yet.
+//
+// The resulting schema is returned to the caller, which posts it to the
+// coordinator — it's never written to disk. Customer is not captured on
+// the schema either; the api server derives it from the caller's JWT at
+// upload time.
+func RunSetupFromLines(app string, lines []string, det *ingest.Detection) (*ingest.Schema, error) {
 	fmt.Println(titleStyle.Render("schema detection for " + app))
 	fmt.Println()
 
-	// Run detection.
-	det := ingest.Detect(lines)
+	if det == nil {
+		det = ingest.Detect(lines)
+	}
 
 	// Show sample lines.
 	fmt.Println(labelStyle.Render("Sample lines (after cleanup):"))
@@ -84,12 +94,6 @@ func RunSetupFromLines(app string, lines []string) (*ingest.Schema, error) {
 		}
 	}
 
-	// Work with stripped lines for the rest.
-	sampleLines := det.StrippedLines
-	if len(sampleLines) == 0 {
-		sampleLines = det.Lines
-	}
-
 	// --- Format ---
 	suggestedFormat := det.SuggestFormat()
 	var format string
@@ -116,16 +120,25 @@ func RunSetupFromLines(app string, lines []string) (*ingest.Schema, error) {
 	}
 
 	// --- Timestamp ---
+	// Selected by index into det.TimestampCandidates, not by encoding the
+	// candidate into the option's string value — a Go time layout
+	// ("2006-01-02T15:04:05Z07:00") and a JSON path can both contain the
+	// ':' a delimited encoding would need, which breaks exactly the way
+	// promptFieldCandidate's doc comment calls out for the tag fields.
 	tsOptions := []huh.Option[string]{
 		huh.NewOption("None (use ingestion time)", "none"),
 	}
-	for _, tc := range det.TimestampCandidates {
-		label := fmt.Sprintf("Field %d: %s", tc.FieldIndex, tc.Sample)
-		if tc.SpanFields > 1 {
-			label = fmt.Sprintf("Fields %d-%d: %s", tc.FieldIndex, tc.FieldIndex+tc.SpanFields-1, tc.Sample)
+	for i, tc := range det.TimestampCandidates {
+		var label string
+		if tc.JSONPath != "" {
+			label = fmt.Sprintf("%s: %s", tc.JSONPath, tc.Sample)
+		} else {
+			label = fmt.Sprintf("Field %d: %s", tc.FieldIndex, tc.Sample)
+			if tc.SpanFields > 1 {
+				label = fmt.Sprintf("Fields %d-%d: %s", tc.FieldIndex, tc.FieldIndex+tc.SpanFields-1, tc.Sample)
+			}
 		}
-		val := fmt.Sprintf("%d:%d:%s", tc.FieldIndex, tc.SpanFields, tc.Format)
-		tsOptions = append(tsOptions, huh.NewOption(label, val))
+		tsOptions = append(tsOptions, huh.NewOption(label, strconv.Itoa(i)))
 	}
 
 	var tsChoice string
@@ -135,43 +148,30 @@ func RunSetupFromLines(app string, lines []string) (*ingest.Schema, error) {
 		Value(&tsChoice).
 		Run()
 
-	if tsChoice != "" && tsChoice != "none" {
-		parts := strings.SplitN(tsChoice, ":", 3)
-		if len(parts) == 3 {
-			schema.TimestampField = parts[0]
-			fmt.Sscanf(parts[1], "%d", &schema.TimestampFields)
-			schema.TimestampFormat = parts[2]
+	if idx, err := strconv.Atoi(tsChoice); err == nil && idx >= 0 && idx < len(det.TimestampCandidates) {
+		tc := det.TimestampCandidates[idx]
+		if tc.JSONPath != "" {
+			schema.TimestampField = tc.JSONPath
+		} else {
+			schema.TimestampField = strconv.Itoa(tc.FieldIndex)
+			schema.TimestampFields = tc.SpanFields
 		}
+		schema.TimestampFormat = tc.Format
 	}
 
 	// --- Level ---
-	levelOptions := []huh.Option[string]{
-		huh.NewOption("None (no level field)", "none"),
-	}
-	for _, lc := range det.LevelCandidates {
-		label := fmt.Sprintf("Field %d: %s", lc.FieldIndex, lc.Sample)
-		val := fmt.Sprintf("%d", lc.FieldIndex)
-		if lc.Pattern != "" {
-			val += ":" + lc.Pattern
-			label += dimStyle.Render(fmt.Sprintf(" (pattern: %s)", lc.Pattern))
-		}
-		levelOptions = append(levelOptions, huh.NewOption(label, val))
-	}
+	levelRef, levelPattern := promptFieldCandidate("Which field contains the log level?", det.LevelCandidates)
+	schema.LevelField = levelRef
+	schema.LevelPattern = levelPattern
 
-	var levelChoice string
-	huh.NewSelect[string]().
-		Title("Which field contains the log level?").
-		Options(levelOptions...).
-		Value(&levelChoice).
-		Run()
+	// --- Trace ID ---
+	schema.TraceIDField, schema.TraceIDPattern = promptFieldCandidate("Which field contains the trace/correlation ID? (optional)", det.TraceIDCandidates)
 
-	if levelChoice != "" && levelChoice != "none" {
-		parts := strings.SplitN(levelChoice, ":", 2)
-		schema.LevelField = parts[0]
-		if len(parts) > 1 {
-			schema.LevelPattern = parts[1]
-		}
-	}
+	// --- Span fields ---
+	schema.SpanNameField, schema.SpanNamePattern = promptFieldCandidate("Which field contains the span name? (optional)", det.SpanNameCandidates)
+	schema.SpanIDField, schema.SpanIDPattern = promptFieldCandidate("Which field contains the span ID? (optional)", det.SpanIDCandidates)
+	schema.ParentSpanIDField, schema.ParentSpanIDPattern = promptFieldCandidate("Which field contains the parent span ID? (optional)", det.ParentSpanIDCandidates)
+	schema.DurationNsField, schema.DurationNsPattern = promptFieldCandidate("Which field contains the span duration? (optional)", det.DurationNsCandidates)
 
 	// --- JSON tail confirmation ---
 	if format != "json" && det.JSONTailCoverage > 0.3 && format != "prefix_json" {
@@ -204,16 +204,80 @@ func RunSetupFromLines(app string, lines []string) (*ingest.Schema, error) {
 	} else {
 		fmt.Printf("  %s ingestion time\n", labelStyle.Render("Timestamp:"))
 	}
-	if schema.LevelField != "" && schema.LevelField != "none" {
-		fmt.Printf("  %s field %s\n", labelStyle.Render("Level:"), schema.LevelField)
-	} else {
-		fmt.Printf("  %s none\n", labelStyle.Render("Level:"))
-	}
+	printFieldSummary("Level:", schema.LevelField)
+	printFieldSummary("Trace ID:", schema.TraceIDField)
+	printFieldSummary("Span name:", schema.SpanNameField)
+	printFieldSummary("Span ID:", schema.SpanIDField)
+	printFieldSummary("Parent span ID:", schema.ParentSpanIDField)
+	printFieldSummary("Duration:", schema.DurationNsField)
 	if schema.Format == "prefix_json" {
 		fmt.Printf("  %s field %d+\n", labelStyle.Render("JSON payload:"), schema.JSONStartField)
 	}
 
 	return schema, nil
+}
+
+func printFieldSummary(label, field string) {
+	if field != "" && field != "none" {
+		fmt.Printf("  %s field %s\n", labelStyle.Render(label), field)
+	} else {
+		fmt.Printf("  %s none\n", labelStyle.Render(label))
+	}
+}
+
+// promptFieldCandidate shows a select prompt built from a candidate list —
+// the shape shared by level, trace ID, and all four span fields (see
+// ingest.FieldCandidate) — and returns the chosen field reference (a
+// positional index, a JSON path, or "" for none/disabled) and pattern, in
+// the same string form Schema's own *Field/*Pattern pairs expect. Six
+// call sites (level + trace_id + 4 span fields) is what justifies this as
+// a helper rather than writing the prompt out by hand each time the way
+// the original Level-only prompt did.
+func promptFieldCandidate(title string, candidates []ingest.FieldCandidate) (fieldRef, pattern string) {
+	options := []huh.Option[string]{huh.NewOption("None", "none")}
+	for i, c := range candidates {
+		var label string
+		switch {
+		case c.JSONPath != "":
+			label = fmt.Sprintf("%s: %s", c.JSONPath, c.Sample)
+		case c.FieldIndex >= 1:
+			label = fmt.Sprintf("Field %d: %s", c.FieldIndex, c.Sample)
+		default:
+			label = fmt.Sprintf("(whole line): %s", c.Sample)
+		}
+		if c.Pattern != "" {
+			label += dimStyle.Render(fmt.Sprintf(" (pattern: %s)", c.Pattern))
+		}
+		options = append(options, huh.NewOption(label, strconv.Itoa(i)))
+	}
+
+	var choice string
+	huh.NewSelect[string]().
+		Title(title).
+		Options(options...).
+		Value(&choice).
+		Run()
+
+	if choice == "" || choice == "none" {
+		return "", ""
+	}
+	idx, err := strconv.Atoi(choice)
+	if err != nil || idx < 0 || idx >= len(candidates) {
+		return "", ""
+	}
+	c := candidates[idx]
+	switch {
+	case c.JSONPath != "":
+		return c.JSONPath, c.Pattern
+	case c.FieldIndex >= 1:
+		return strconv.Itoa(c.FieldIndex), c.Pattern
+	default:
+		// Whole-line search: schema.go's convention is an empty/"none"
+		// field ref with a pattern set — NOT "0", which parse.go's
+		// extractors treat as a real (always out-of-range) positional
+		// index and would silently never match anything.
+		return "none", c.Pattern
+	}
 }
 
 func orDefault(s, def string) string {

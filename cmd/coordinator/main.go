@@ -28,6 +28,7 @@ import (
 	weftcfg "github.com/graybeardcorp/weft/config"
 	"github.com/graybeardcorp/weft/coordinator"
 	coordsvc "github.com/graybeardcorp/weft/coordinator/service"
+	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
@@ -371,10 +372,22 @@ func main() {
 			func(uid, org string) (*auth.Session, error) { return auth.BuildSession(db, uid, org) },
 			jwtSecret, skip)),
 	)
+	// LLM-based schema-field classification for pending sources — see
+	// ingest/llmdetect.go. Disabled (nil) unless
+	// BEDROCK_CLASSIFIER_MODEL_ID/BEDROCK_REGION are set; deliberately
+	// opt-in since it depends on IAM/model-access provisioned separately
+	// (infrastructure-live), not something the coordinator should refuse
+	// to start over.
+	classifier, err := ingest.NewBedrockClassifierFromEnv(context.Background())
+	if err != nil {
+		log.Printf("WARNING: bedrock classifier disabled: %v", err)
+	}
+
 	coordSvc := &coordsvc.Server{
-		Coord:  coord,
-		Store:  db,
-		CfgPtr: cfgPtr,
+		Coord:      coord,
+		Store:      db,
+		CfgPtr:     cfgPtr,
+		Classifier: classifier,
 	}
 	pb.RegisterWeftCoordinatorServer(srv, coordSvc)
 

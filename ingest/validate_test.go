@@ -47,7 +47,7 @@ func TestSchema_Validate(t *testing.T) {
 		{
 			name:    "timestamp_field not a field ref",
 			schema:  Schema{TimestampField: "first"},
-			wantErr: []string{`timestamp_field: "first" is neither a JSON dot-path`},
+			wantErr: []string{`timestamp_field: "first" is neither a JSON path`},
 		},
 		{
 			name:    "timestamp_field negative index",
@@ -62,12 +62,12 @@ func TestSchema_Validate(t *testing.T) {
 		{
 			name:    "bad level_field",
 			schema:  Schema{LevelField: "x"},
-			wantErr: []string{`level_field: "x" is neither a JSON dot-path`},
+			wantErr: []string{`level_field: "x" is neither a JSON path`},
 		},
 		{
 			name:    "bad trace_id_field",
 			schema:  Schema{TraceIDField: "abc"},
-			wantErr: []string{`trace_id_field: "abc" is neither a JSON dot-path`},
+			wantErr: []string{`trace_id_field: "abc" is neither a JSON path`},
 		},
 		{
 			name:    "invalid level_pattern regex",

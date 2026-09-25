@@ -85,10 +85,10 @@ type LogGroup struct {
 	Region       string             `gorm:"not null;default:us-east-2"`
 	SchemaYAML   string             // nullable: pending rows don't yet have a schema
 	Enabled      bool               `gorm:"not null;default:true"`
-	Instance     string // hostname of the agent that last submitted a sample (pending only)
-	Deployment   string `gorm:"column:deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.) — pending only
-	Sample       string // JSON array of raw sample lines; cleared on configure
-	Detection    string // JSON-encoded ingest.Detection; cleared on configure
+	Instance     string             // hostname of the agent that last submitted a sample (pending only)
+	Deployment   string             `gorm:"column:deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.) — pending only
+	Sample       string             // JSON array of raw sample lines; cleared on configure
+	Detection    string             // JSON-encoded ingest.Detection; cleared on configure
 	// SampleCollected is the accumulation progress (lines so far) while
 	// Status == StatusSampling, so the UI/CLI can report
 	// "<source> hasn't emitted enough lines to sample yet (N/50)".
@@ -444,6 +444,19 @@ func (s *Store) UpsertPendingLogGroup(namespaceID uint, service, instance, deplo
 		"detection":        detectionJSON,
 		"sample_collected": collected,
 	}).Error
+}
+
+// UpdateLogGroupDetection writes a freshly (LLM-)classified Detection for
+// (namespaceID, service) without touching sample/collected/status —
+// called from the background goroutine ClassifyAsync's callers kick off
+// after the synchronous sample-submit request has already returned. Scoped
+// to StatusPending/StatusSampling so it's a harmless no-op if the row was
+// approved or deleted while classification was still in flight, same
+// invariant UpsertPendingLogGroup documents above.
+func (s *Store) UpdateLogGroupDetection(namespaceID uint, service, detectionJSON string) error {
+	return s.db.Model(&LogGroup{}).
+		Where("namespace_id = ? AND app = ? AND status IN ?", namespaceID, service, []LogGroupStatus{StatusPending, StatusSampling}).
+		Update("detection", detectionJSON).Error
 }
 
 // FindLogGroup returns the single log_groups row for (customer, namespace,

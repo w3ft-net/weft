@@ -732,16 +732,23 @@ func (h *HTTPCoordinator) RemoveSource(namespace, app string) error {
 // SchemaYAML; "sampling" (and an in-flight resample) carries the
 // SampleCollected/SampleTarget progress.
 type SourceSchema struct {
-	Status            string          `json:"status"`
-	SchemaYAML        string          `json:"schema_yaml"`
-	SchemaHash        string          `json:"schema_hash"`
-	ResampleRequested bool            `json:"resample_requested"`
-	SampleCollected   int             `json:"sample_collected"`
-	SampleTarget      int             `json:"sample_target"`
+	Status            string `json:"status"`
+	SchemaYAML        string `json:"schema_yaml"`
+	SchemaHash        string `json:"schema_hash"`
+	ResampleRequested bool   `json:"resample_requested"`
+	SampleCollected   int    `json:"sample_collected"`
+	SampleTarget      int    `json:"sample_target"`
 	// Sample carries the sample lines (a JSON array of strings) when the
 	// source is ready to (re)configure: a pending first-time sample, or a
 	// fresh sample left by a completed resample. Empty otherwise.
 	Sample json.RawMessage `json:"sample"`
+	// Detection carries the server-computed ingest.Detection (heuristic
+	// envelope/JSON detection, plus LLM-classified timestamp/level/trace/
+	// span candidates once classification completes — see
+	// ingest/llmdetect.go) for whichever sample Sample carries. Present
+	// alongside Sample whenever Sample is. The CLI wizard unmarshals this
+	// instead of recomputing detection itself — see setup.RunSetupFromLines.
+	Detection json.RawMessage `json:"detection"`
 }
 
 // GetSourceSchema fetches the current schema / sampling state for a source.

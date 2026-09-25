@@ -30,6 +30,7 @@ import (
 
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/coordinator/onboarding"
+	"github.com/graybeardcorp/weft/ingest"
 	ingsyslog "github.com/graybeardcorp/weft/ingest/syslog"
 	"github.com/graybeardcorp/weft/mounts"
 	"github.com/graybeardcorp/weft/planner"
@@ -79,6 +80,21 @@ type Server struct {
 	// dev/test mode: defaults apply, no live refresh.
 	cfgPtr  *atomic.Pointer[config.Runtime]
 	limiter *limiter
+
+	// classifier drives LLM-based schema-field classification for
+	// pending sources (handleAgentSample, accumulatePendingKinesisSamples
+	// — see ingest/llmdetect.go). Nil means disabled: ClassifyAsync
+	// falls back to the deterministic envelope/JSON detection only, same
+	// as before this existed. Populated via SetClassifier.
+	classifier ingest.Classifier
+}
+
+// SetClassifier wires the LLM classifier used for pending-source schema
+// detection. Optional — a nil/never-called classifier just means
+// ClassifyAsync skips LLM classification (see NewBedrockClassifierFromEnv,
+// which itself returns nil when unconfigured).
+func (s *Server) SetClassifier(c ingest.Classifier) {
+	s.classifier = c
 }
 
 // SetConfig wires a live runtime-config pointer to the server. The

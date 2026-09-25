@@ -56,7 +56,21 @@ func (s *Server) handleAgentSample(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	detection := ingest.Detect(req.Lines)
+	// ClassifyAsync computes the cheap envelope/JSON detection inline and,
+	// only for the final (non-partial) sample, kicks off LLM
+	// classification in the background — this request returns as soon as
+	// the sample itself is stored, never blocked on Bedrock. See
+	// ingest/llmdetect.go.
+	namespaceID, appName := ns.ID, req.App
+	detection := ingest.ClassifyAsync(s.classifier, req.Lines, !req.Partial, func(d *ingest.Detection) {
+		detectionJSON, err := json.Marshal(d)
+		if err != nil {
+			return
+		}
+		if err := s.store.UpdateLogGroupDetection(namespaceID, appName, string(detectionJSON)); err != nil {
+			log.Printf("classify: update detection for %s/%s: %v", agent.Namespace, appName, err)
+		}
+	})
 	sampleJSON, _ := json.Marshal(req.Lines)
 	detectionJSON, _ := json.Marshal(detection)
 
@@ -566,6 +580,7 @@ func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
 		// endpoint accepts an already-configured source.
 		if lg.Sample != "" && lg.Sample != "[]" {
 			resp["sample"] = json.RawMessage(lg.Sample)
+			resp["detection"] = json.RawMessage(lg.Detection)
 		}
 		// While a resample is in flight the source keeps ingesting on
 		// its current schema; surface accumulation progress so the UI
