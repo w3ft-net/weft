@@ -39,28 +39,73 @@ var (
 // specific request — the same field's value is repeated across every
 // occurrence within one Phase 1 (single-trace) rollup, but varies per
 // row in Phase 2's cross-trace aggregation.
+//
+// Duration is inclusive (wall-clock from this span's own start to its
+// own end, including everything its children did — standard tracing
+// semantics, same as every span in Jaeger/Zipkin/OTel). SelfDuration is
+// Duration minus the time covered by this span's children (matched via
+// ParentSpanID, within the same line set) — the number that actually
+// answers "where is the bottleneck," since an inclusive duration high
+// up a call chain mostly reflects delegated work, not its own. It's
+// computed correctly for overlapping/concurrent children (a union of
+// their time ranges, not a naive sum — see computeSelfDurations) but
+// is only as complete as the line set it was computed from: it's
+// accurate for a single full trace (Phase 1, `trace <id>`), but
+// understates delegation for Phase 2's cross-trace `trace spans`
+// queries, which only fetch rows matching one span name and so can't
+// see cross-name children at all. Callers gate use of it (rolling it
+// into SpanRollupRow.SelfTotal) on that distinction (see
+// SpanRollupColumns' singleTrace) rather than showing a self-time
+// number that looks complete but isn't.
 type SpanOccurrence struct {
-	Label    string // the row's "namespace/service" column
-	TraceID  string
-	SpanID   string
-	Duration time.Duration
-	Status   string // "ok" or "error", from the span's own `status=` field
+	Label        string // the row's "namespace/service" column
+	TraceID      string
+	SpanID       string
+	ParentSpanID string
+	Duration     time.Duration
+	SelfDuration time.Duration
+	Status       string // "ok" or "error", from the span's own `status=` field
 }
 
 // SpanRollupRow is one distinct span name's aggregate stats within the
-// line set RenderSpanRollup was given: count, error count, and
-// min/avg/p50/p99/max duration across every "span done" event for that
-// name. Zero value (no occurrences) leaves the duration fields at 0 —
-// callers check Count() before reading them.
+// line set RenderSpanRollup was given: count, error count,
+// min/avg/p50/p99/max inclusive duration across every "span done"
+// event for that name (meaningful once there are enough occurrences
+// across enough traces to form a distribution — Phase 2's cross-trace
+// aggregation), and SelfTotal, the sum of self durations (see
+// SpanOccurrence) across this name's occurrences (meaningful for a
+// single trace, where percentiles over 1-3 samples aren't, but "how
+// much of this one request's time did this span name account for" is
+// — see SpanRollupColumns' singleTrace). Zero value (no occurrences)
+// leaves the duration fields at 0 — callers check Count() before
+// reading them.
 type SpanRollupRow struct {
 	Name                    string
 	Occurrences             []SpanOccurrence
 	Errors                  int
 	Min, Avg, P50, P99, Max time.Duration
+	SelfTotal               time.Duration
 }
 
 // Count reports how many "span done" events this row aggregates.
 func (r SpanRollupRow) Count() int { return len(r.Occurrences) }
+
+// parsedOcc is a "span done" event as parsed, before self-time and
+// before grouping by name — the flat, cross-name shape
+// computeSelfDurations needs (a child's name is irrelevant to finding
+// it by ParentSpanID, so this intentionally isn't SpanOccurrence, which
+// is already grouped under one name by the time callers see it).
+type parsedOcc struct {
+	name         string
+	label        string
+	traceID      string
+	spanID       string
+	parentSpanID string
+	startNs      int64
+	endNs        int64
+	duration     time.Duration
+	status       string
+}
 
 // RenderSpanRollup parses lines — the same "<ts_unix_ns>\t<namespace/
 // service>\t<raw message>" shape compute.LocalComputeJob's
@@ -70,23 +115,12 @@ func (r SpanRollupRow) Count() int { return len(r.Occurrences) }
 // N line(s)..." summary, malformed rows) is silently skipped: this is a
 // pure aggregation pass over data already fetched for a `trace <id>`
 // query, not a renderer, so there's nothing to pass through. Rows are
-// sorted by name for stable output.
+// sorted by name for stable output. Self-time (see SpanOccurrence) is
+// computed from ParentSpanID relationships within lines itself — it's
+// only as complete as that line set (see SpanOccurrence's doc comment).
 func RenderSpanRollup(lines []string) []SpanRollupRow {
-	type acc struct {
-		occ    []SpanOccurrence
-		errors int
-	}
-	byName := make(map[string]*acc)
-	var order []string
-	get := func(name string) *acc {
-		a, ok := byName[name]
-		if !ok {
-			a = &acc{}
-			byName[name] = a
-			order = append(order, name)
-		}
-		return a
-	}
+	var occs []parsedOcc
+	errorsByName := make(map[string]int)
 
 	for _, l := range lines {
 		parts := strings.SplitN(l, "\t", 3)
@@ -100,25 +134,70 @@ func RenderSpanRollup(lines []string) []SpanRollupRow {
 			if err != nil {
 				continue
 			}
-			a := get(m[1])
-			a.occ = append(a.occ, SpanOccurrence{Label: label, TraceID: m[2], SpanID: m[3], Duration: time.Duration(ns), Status: m[6]})
+			// endNs is this log line's own timestamp — emitted from
+			// Span.End(), so it's when the span finished, not when it
+			// started. tsErr != nil (a malformed timestamp field) just
+			// means self-time can't be computed for this occurrence;
+			// it still counts toward inclusive stats, with startNs=0
+			// (computeSelfDurations treats that as "no usable interval"
+			// and leaves SelfDuration at the Duration fallback below).
+			endNs, tsErr := strconv.ParseInt(parts[0], 10, 64)
+			duration := time.Duration(ns)
+			var startNs int64
+			if tsErr == nil {
+				startNs = endNs - ns
+			}
+			occs = append(occs, parsedOcc{
+				name: m[1], label: label, traceID: m[2], spanID: m[3], parentSpanID: m[4],
+				startNs: startNs, endNs: endNs, duration: duration, status: m[6],
+			})
 			continue
 		}
 		if m := spanErrorRe.FindStringSubmatch(raw); m != nil {
-			get(m[1]).errors++
+			errorsByName[m[1]]++
 		}
+	}
+
+	selfDurations := computeSelfDurations(occs)
+
+	byName := make(map[string][]SpanOccurrence)
+	seen := make(map[string]bool)
+	var order []string
+	addName := func(name string) {
+		if !seen[name] {
+			seen[name] = true
+			order = append(order, name)
+		}
+	}
+	for i, o := range occs {
+		addName(o.name)
+		byName[o.name] = append(byName[o.name], SpanOccurrence{
+			Label: o.label, TraceID: o.traceID, SpanID: o.spanID, ParentSpanID: o.parentSpanID,
+			Duration: o.duration, SelfDuration: selfDurations[i], Status: o.status,
+		})
+	}
+	// A span name with only "span error" lines and no "span done" for
+	// it in this line set (a request that errored before it could
+	// finish, say) still needs a row — its Count() is 0 and duration
+	// fields stay zero, but Errors is nonzero. Without this, such a
+	// name would silently vanish from the table instead of surfacing
+	// the error.
+	for name := range errorsByName {
+		addName(name)
 	}
 
 	sort.Strings(order)
 	rows := make([]SpanRollupRow, 0, len(order))
 	for _, name := range order {
-		a := byName[name]
-		durs := make([]time.Duration, len(a.occ))
-		for i, o := range a.occ {
+		occ := byName[name]
+		durs := make([]time.Duration, len(occ))
+		var selfTotal time.Duration
+		for i, o := range occ {
 			durs[i] = o.Duration
+			selfTotal += o.SelfDuration
 		}
 		sort.Slice(durs, func(i, j int) bool { return durs[i] < durs[j] })
-		row := SpanRollupRow{Name: name, Occurrences: a.occ, Errors: a.errors}
+		row := SpanRollupRow{Name: name, Occurrences: occ, Errors: errorsByName[name], SelfTotal: selfTotal}
 		if len(durs) > 0 {
 			row.Min = durs[0]
 			row.Max = durs[len(durs)-1]
@@ -129,6 +208,94 @@ func RenderSpanRollup(lines []string) []SpanRollupRow {
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// computeSelfDurations returns, parallel to occs, each occurrence's
+// self (exclusive) duration: its own Duration minus the time covered
+// by its children (occurrences whose parentSpanID matches its spanID),
+// clamped to >= 0 to absorb clock/logging skew that could otherwise
+// push it slightly negative. A span with no known children (a leaf, or
+// one whose children weren't in this line set at all — see
+// SpanOccurrence's doc comment on completeness) gets self == inclusive.
+//
+// Children are combined via interval union, not naive summation: this
+// mirrors what actual production self-time implementations do (OTel's
+// spanmetrics connector, New Relic's exclusive-duration calculation —
+// both explicitly merge overlapping child intervals before subtracting)
+// and matters concretely here, since weft's own span shape fans a
+// parent span (e.g. coordinator.Execute) out to multiple *concurrent*
+// children (e.g. several shard.Query calls) — summing their durations
+// naively would double-subtract the overlapping time and could easily
+// drive self-time negative for exactly the fan-out spans this feature
+// exists to make visible.
+func computeSelfDurations(occs []parsedOcc) []time.Duration {
+	childrenOf := make(map[string][]int) // parentSpanID -> indices into occs
+	for i, o := range occs {
+		if o.parentSpanID != "" {
+			childrenOf[o.parentSpanID] = append(childrenOf[o.parentSpanID], i)
+		}
+	}
+
+	self := make([]time.Duration, len(occs))
+	for i, o := range occs {
+		children := childrenOf[o.spanID]
+		if len(children) == 0 || (o.startNs == 0 && o.endNs == 0) {
+			self[i] = o.duration
+			continue
+		}
+		intervals := make([][2]int64, 0, len(children))
+		for _, ci := range children {
+			c := occs[ci]
+			if c.startNs == 0 && c.endNs == 0 {
+				continue // unusable timestamp; can't place this child in time
+			}
+			// Clip to the parent's own span — a child's logged
+			// timestamp can extend a hair past the parent's own due to
+			// ordinary clock/logging skew, and an uncapped interval
+			// would make covered() exceed the parent's own duration.
+			start, end := c.startNs, c.endNs
+			if start < o.startNs {
+				start = o.startNs
+			}
+			if end > o.endNs {
+				end = o.endNs
+			}
+			if end > start {
+				intervals = append(intervals, [2]int64{start, end})
+			}
+		}
+		covered := coveredNs(intervals)
+		selfNs := o.duration.Nanoseconds() - covered
+		if selfNs < 0 {
+			selfNs = 0
+		}
+		self[i] = time.Duration(selfNs)
+	}
+	return self
+}
+
+// coveredNs returns the total duration covered by intervals (each a
+// half-open [start,end) nanosecond range), merging overlaps so time
+// covered by more than one interval is counted once.
+func coveredNs(intervals [][2]int64) int64 {
+	if len(intervals) == 0 {
+		return 0
+	}
+	sort.Slice(intervals, func(i, j int) bool { return intervals[i][0] < intervals[j][0] })
+	var total int64
+	curStart, curEnd := intervals[0][0], intervals[0][1]
+	for _, iv := range intervals[1:] {
+		if iv[0] > curEnd {
+			total += curEnd - curStart
+			curStart, curEnd = iv[0], iv[1]
+			continue
+		}
+		if iv[1] > curEnd {
+			curEnd = iv[1]
+		}
+	}
+	total += curEnd - curStart
+	return total
 }
 
 func sumDuration(durs []time.Duration) time.Duration {
@@ -157,9 +324,10 @@ func percentileDuration(sorted []time.Duration, p float64) time.Duration {
 }
 
 // Column widths for spanRollupColumns' fixed-width layout. Every column
-// but NAME holds a short duration/count string, so only NAME needs to
-// flex with termWidth.
+// but NAME holds a short duration/count/bar string, so only NAME needs
+// to flex with termWidth.
 const (
+	spanBarWidth   = 10
 	spanCountWidth = 6
 	spanDurWidth   = 9
 	spanErrWidth   = 6
@@ -167,70 +335,205 @@ const (
 	spanColSpacing = 1
 )
 
-// SpanRollupColumns lays rows out into plain (uncolored) fixed-width
-// text: a header line and one line per row, "NAME COUNT AVG P50 P99 MIN
-// MAX ERRORS". Uncolored deliberately — spanview's interactive list
-// wraps a focused row in reverse video, which an embedded ANSI reset
-// mid-line would prematurely cancel, so this is the single shared
-// layout both spanview's plain interactive list and
-// RenderSpanRollupTable's colored header build on. Exported so
-// spanview (a separate package — it also pulls in shellcore, which
-// span_rollup.go's callers here shouldn't need) can reuse it exactly.
-func SpanRollupColumns(rows []SpanRollupRow, termWidth int) (header string, rowTexts []string) {
-	nameWidth := termWidth - spanCountWidth - 4*spanDurWidth - spanErrWidth - 6*spanColSpacing
+// FgReset ends a color span without canceling reverse video or an
+// explicit background: unlike "\x1b[0m" (a full SGR reset, which also
+// clears any "7m" reverse or "48;5;N" background attribute a caller
+// may have wrapped the whole line in), "39" resets only the foreground
+// color, "22" only bold/faint intensity, and "23" only italic — SGR
+// attributes are independent parameters, so background/reverse
+// survive. All three are needed: Key/Operator/Error bundle bold into
+// their color escape (e.g. Palette().Key is "\x1b[1;38;5;214m") and
+// Comment bundles italic, so resetting fg alone would leave later
+// cells in the row bold or italic too. Exported so other packages that
+// color per-cell text meant to sit inside a caller's own
+// background/reverse wrap (spanview's occurrenceColumns, for instance)
+// can reuse the exact same safe reset instead of composing their own.
+const FgReset = "\x1b[39;22;23m"
+
+// PadVisible right-pads (or truncates with a trailing "…") s to
+// exactly w VISIBLE characters, counting runes rather than bytes.
+// Byte length over-counts any multi-byte rune — time.Duration.String()
+// itself is the concrete case this exists for: "669.006µs" is 9
+// visible characters but 10 bytes (µ is 2 bytes in UTF-8), so a
+// byte-length check against a 9-wide column would wrongly decide it
+// needs truncating and silently drop a real character. Exported so
+// spanview's occurrenceColumns (a separate package, formatting the
+// same duration values into fixed-width columns) can share it instead
+// of re-deriving the same fix.
+func PadVisible(s string, w int) string {
+	r := []rune(s)
+	if len(r) > w {
+		if w > 1 {
+			return string(r[:w-1]) + "…"
+		}
+		return string(r[:w])
+	}
+	return s + strings.Repeat(" ", w-len(r))
+}
+
+// PadLeftVisible left-pads (or right-truncates, keeping the tail) s to
+// exactly w visible characters — see PadVisible.
+func PadLeftVisible(s string, w int) string {
+	r := []rune(s)
+	if len(r) > w {
+		return string(r[len(r)-w:])
+	}
+	return strings.Repeat(" ", w-len(r)) + s
+}
+
+// renderSpanBar draws a bar relative to the largest value in the set
+// (inclusive average across span names for cross-trace mode, or total
+// self time for single-trace mode — see SpanRollupColumns' singleTrace),
+// sibling to trace_columns.go's renderGapBar: filled proportionally to
+// value/maxValue (0, or a single row with nothing to compare against,
+// renders as all spaces rather than a misleading sliver). Colored in
+// the palette's Operator orange — the "weft" (warm) half of the
+// theme's weave, distinct from the muted gray renderGapBar uses for
+// the trace view's gap histogram, so a span-name comparison reads as a
+// different kind of bar than "time since the last log line." Ends
+// with FgReset, not a full reset, so it composes under spanview's
+// reverse-video focus wrap.
+func renderSpanBar(value, maxValue time.Duration, width int) string {
+	n := 0
+	if maxValue > 0 {
+		n = int(float64(value) / float64(maxValue) * float64(width))
+		if n > width {
+			n = width
+		}
+	}
+	return Palette().Operator + strings.Repeat(" ", width-n) + strings.Repeat("█", n) + FgReset
+}
+
+// SpanRollupColumns lays rows out into fixed-width text: a header line
+// and one line per row. The column set depends on singleTrace, which
+// callers derive from whether the line set they queried is a complete
+// single trace (see isSpansAggregatePipeline in shell/shell.go and
+// spanview/view.go):
+//
+//   - singleTrace=true (`trace <id> --spans`, Phase 1): "NAME BAR COUNT
+//     TOTAL ERRORS". Percentiles/avg/min/max over 1-3 occurrences of a
+//     span name within one trace aren't a meaningful distribution —
+//     TOTAL (the sum of self/exclusive durations, see SpanOccurrence)
+//     answers the question that actually matters for one request: how
+//     much of its elapsed time did this span name account for, in its
+//     own right (not delegated to children). BAR scales against the
+//     largest TOTAL, so it points at the real per-request bottleneck.
+//   - singleTrace=false (`trace spans [name]`, Phase 2): "NAME BAR COUNT
+//     AVG P50 P99 MIN MAX ERRORS" — the full inclusive-duration
+//     distribution, which self-time can't be computed for anyway (Phase
+//     2 only fetches rows matching one span name, so it can never see
+//     cross-name children — see SpanOccurrence's doc comment). BAR
+//     scales against the largest average.
+//
+// BAR's header cell is always blank — the bar graphic itself doesn't
+// need a text label to be legible as "a bar," and "BAR" was just
+// visual noise next to it.
+//
+// Data rows are colored (NAME in the palette's Key gold, durations in
+// Number indigo, ERRORS in Error salmon when nonzero, BAR per
+// renderSpanBar) using FgReset rather than a full SGR reset between
+// cells, so spanview's interactive list can safely wrap a focused row
+// in reverse video ("\x1b[7m") without an embedded color reset
+// canceling it early — reverse video and foreground color are
+// independent SGR attributes. The header stays plain label text;
+// callers (RenderSpanRollupTable, spanview) apply their own header
+// treatment. Exported so spanview (a separate package — it also pulls
+// in shellcore, which span_rollup.go's callers here shouldn't need)
+// can reuse it exactly.
+func SpanRollupColumns(rows []SpanRollupRow, termWidth int, singleTrace bool) (header string, rowTexts []string) {
+	// singleTrace: 5 fields (name, bar, count, total, errs) need 4
+	// separators and 1 duration-width column (TOTAL). Otherwise: 9
+	// fields (name, bar, count, avg, p50, p99, min, max, errs) need 8
+	// separators and 5 duration-width columns. An earlier version of
+	// this budget undercounted the non-singleTrace case (4*spanDurWidth,
+	// 7*spanColSpacing), leaving nameWidth 10 chars too wide and every
+	// row 10 chars past termWidth — which a redrawing interactive view
+	// (spanview) turns into visible overflow/wrap, not just a cosmetic
+	// width mismatch.
+	durCols, seps := 5, 8
+	if singleTrace {
+		durCols, seps = 1, 4
+	}
+	nameWidth := termWidth - spanBarWidth - spanCountWidth - durCols*spanDurWidth - spanErrWidth - seps*spanColSpacing
 	if nameWidth < spanNameMin {
 		nameWidth = spanNameMin
 	}
 
-	pad := func(s string, w int) string {
-		if len(s) > w {
-			if w > 1 {
-				return s[:w-1] + "…"
-			}
-			return s[:w]
+	var maxAvg, maxTotal time.Duration
+	for _, r := range rows {
+		if r.Avg > maxAvg {
+			maxAvg = r.Avg
 		}
-		return s + strings.Repeat(" ", w-len(s))
-	}
-	padLeft := func(s string, w int) string {
-		if len(s) > w {
-			return s[len(s)-w:]
+		if r.SelfTotal > maxTotal {
+			maxTotal = r.SelfTotal
 		}
-		return strings.Repeat(" ", w-len(s)) + s
 	}
-	sep := strings.Repeat(" ", spanColSpacing)
-	row := func(name, count, avg, p50, p99, min, max, errs string) string {
-		return strings.Join([]string{
-			pad(name, nameWidth),
-			padLeft(count, spanCountWidth),
-			padLeft(avg, spanDurWidth),
-			padLeft(p50, spanDurWidth),
-			padLeft(p99, spanDurWidth),
-			padLeft(min, spanDurWidth),
-			padLeft(max, spanDurWidth),
-			padLeft(errs, spanErrWidth),
-		}, sep)
+	barAgainst := maxAvg
+	if singleTrace {
+		barAgainst = maxTotal
 	}
 
-	header = row("NAME", "COUNT", "AVG", "P50", "P99", "MIN", "MAX", "ERRORS")
+	pad, padLeft := PadVisible, PadLeftVisible
+	color := func(s, sgr string) string { return sgr + s + FgReset }
+	sep := strings.Repeat(" ", spanColSpacing)
+	blankBar := strings.Repeat(" ", spanBarWidth)
+
+	headerCells := []string{pad("NAME", nameWidth), blankBar, padLeft("COUNT", spanCountWidth)}
+	if singleTrace {
+		headerCells = append(headerCells, padLeft("TOTAL", spanDurWidth))
+	} else {
+		headerCells = append(headerCells,
+			padLeft("AVG", spanDurWidth), padLeft("P50", spanDurWidth), padLeft("P99", spanDurWidth),
+			padLeft("MIN", spanDurWidth), padLeft("MAX", spanDurWidth),
+		)
+	}
+	headerCells = append(headerCells, padLeft("ERRORS", spanErrWidth))
+	header = strings.Join(headerCells, sep)
+
 	rowTexts = make([]string, len(rows))
 	for i, r := range rows {
-		rowTexts[i] = row(r.Name, strconv.Itoa(r.Count()),
-			r.Avg.String(), r.P50.String(), r.P99.String(), r.Min.String(), r.Max.String(),
-			strconv.Itoa(r.Errors))
+		errs := padLeft(strconv.Itoa(r.Errors), spanErrWidth)
+		if r.Errors > 0 {
+			errs = color(errs, Palette().Error)
+		}
+		barValue := r.Avg
+		if singleTrace {
+			barValue = r.SelfTotal
+		}
+		cells := []string{
+			color(pad(r.Name, nameWidth), Palette().Key),
+			renderSpanBar(barValue, barAgainst, spanBarWidth),
+			color(padLeft(strconv.Itoa(r.Count()), spanCountWidth), Palette().Number),
+		}
+		if singleTrace {
+			cells = append(cells, color(padLeft(r.SelfTotal.String(), spanDurWidth), Palette().Number))
+		} else {
+			cells = append(cells,
+				color(padLeft(r.Avg.String(), spanDurWidth), Palette().Number),
+				color(padLeft(r.P50.String(), spanDurWidth), Palette().Number),
+				color(padLeft(r.P99.String(), spanDurWidth), Palette().Number),
+				color(padLeft(r.Min.String(), spanDurWidth), Palette().Number),
+				color(padLeft(r.Max.String(), spanDurWidth), Palette().Number),
+			)
+		}
+		cells = append(cells, errs)
+		rowTexts[i] = strings.Join(cells, sep)
 	}
 	return header, rowTexts
 }
 
 // RenderSpanRollupTable renders rows into a ready-to-print ANSI table —
-// header in the theme's Key color, plain rows below — sized to
-// termWidth. Empty rows renders a single dimmed "no spans" line so
-// callers (ExecNonInteractive's `trace <id> --spans`) can print the
+// header in the theme's Key color, data rows colored per
+// SpanRollupColumns — sized to termWidth. singleTrace is passed
+// straight through to SpanRollupColumns (see its doc comment on the
+// two column sets). Empty rows renders a single dimmed "no spans" line
+// so callers (ExecNonInteractive's `trace <id> --spans`) can print the
 // result unconditionally.
-func RenderSpanRollupTable(rows []SpanRollupRow, termWidth int) []string {
+func RenderSpanRollupTable(rows []SpanRollupRow, termWidth int, singleTrace bool) []string {
 	if len(rows) == 0 {
 		return []string{Palette().Comment + "(no spans found in this trace)" + "\x1b[0m"}
 	}
-	header, rowTexts := SpanRollupColumns(rows, termWidth)
+	header, rowTexts := SpanRollupColumns(rows, termWidth, singleTrace)
 	out := make([]string, 0, len(rowTexts)+1)
 	out = append(out, Palette().Key+header+"\x1b[0m")
 	out = append(out, rowTexts...)

@@ -155,7 +155,7 @@ func renderTraceLabelColumn(label string, width int) string {
 		}
 	}
 	pad := strings.Repeat(" ", width-len(display))
-	return traceTagColor(label) + display + "\x1b[0m" + pad
+	return TraceTagColor(label) + display + "\x1b[0m" + pad
 }
 
 // wrapText greedily word-wraps s to width, hard-breaking any single word

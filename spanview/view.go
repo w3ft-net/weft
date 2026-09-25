@@ -292,8 +292,9 @@ func (v *SpanView) renderList(buf *strings.Builder, w, h int) {
 		return
 	}
 
-	header, rowTexts := theme.SpanRollupColumns(v.rows, w)
-	buf.WriteString(shellcore.DimText(header))
+	contentWidth := w - cursorWidth
+	header, rowTexts := theme.SpanRollupColumns(v.rows, contentWidth, !isSpansAggregatePipeline(v.pipeline))
+	buf.WriteString(shellcore.DimText(cursorBlank + header))
 	buf.WriteString("\r\n")
 
 	viewport := h - 2 // header + status bar
@@ -309,16 +310,66 @@ func (v *SpanView) renderList(buf *strings.Builder, w, h int) {
 		end = len(rowTexts)
 	}
 	for i := start; i < end; i++ {
-		line := padToWidth(rowTexts[i], w)
+		line := padToWidth(rowTexts[i], contentWidth)
 		if i == v.focus {
-			buf.WriteString("\x1b[7m")
+			buf.WriteString(cursorMark)
+			buf.WriteString(underlineOn)
 			buf.WriteString(line)
 			buf.WriteString(shellcore.AnsiReset)
 		} else {
+			buf.WriteString(cursorBlank)
 			buf.WriteString(line)
 		}
 		buf.WriteString("\r\n")
 	}
+}
+
+// The focused row in renderList/renderSamples used to be marked with
+// plain reverse video ("\x1b[7m"), which swaps foreground and
+// background per character — fine for plain text, but
+// theme.SpanRollupColumns' and occurrenceColumns' rows carry per-cell
+// foreground color (NAME gold, durations indigo, the BAR itself
+// orange), so reversing swapped each cell to a background tinted by
+// *its own* color instead of one uniform highlight (the "lavender"
+// background was the indigo Number color, reversed). An explicit
+// black background composed more cleanly but still read as messy —
+// this instead marks the row with a left-hand-side cursor plus an
+// underline: cursorMark/cursorBlank reserve a fixed 2-column gutter
+// (cursorWidth) that both renderers subtract from the width they hand
+// theme.SpanRollupColumns/occurrenceColumns, so the arrow doesn't
+// shift the table's own column alignment between focused and
+// unfocused rows. underlineOn ("\x1b[4m") is, like the background
+// attempt before it, an independent SGR parameter from foreground
+// color — cells already reset only fg/bold/italic between colors
+// (theme.FgReset), never underline, so it stays on for the whole row
+// and each cell's own color still reads normally on top of it.
+const (
+	cursorWidth = 2
+	cursorBlank = "  "
+	underlineOn = "\x1b[4m"
+)
+
+// cursorMark is the focused-row indicator itself, colored in the
+// palette's Operator orange (the same accent renderSpanBar's fill
+// uses) so it reads as a pointer, not more table content. It resets
+// with theme.FgReset (not a full reset) before underlineOn turns on,
+// so the mark's own color doesn't bleed into the underlined row that
+// follows it, and so nothing here interferes with the caller's later
+// full reset at the row's end.
+var cursorMark = theme.Palette().Operator + "▸ " + theme.FgReset
+
+// isSpansAggregatePipeline reports whether pipeline is specifically a
+// `trace spans [name]` query (Phase 2) as opposed to `trace <id>`
+// (Phase 1) — mirrors shell/shell.go's function of the same name.
+// Duplicated rather than shared: it's a three-line check, and the two
+// packages' pipeline strings come from different builders (parseSpansLine's
+// ListArgs.Pipeline here, planner-parsed pipeline text there) that only
+// happen to agree on this one shape. Gates theme.SpanRollupColumns'
+// singleTrace in renderList — see that function's doc comment for why
+// Phase 2 doesn't get self-time.
+func isSpansAggregatePipeline(pipeline string) bool {
+	fields := strings.Fields(pipeline)
+	return len(fields) > 1 && fields[0] == "trace" && fields[1] == "spans"
 }
 
 func (v *SpanView) renderSamples(buf *strings.Builder, w, h int) {
@@ -329,8 +380,9 @@ func (v *SpanView) renderSamples(buf *strings.Builder, w, h int) {
 		return
 	}
 
-	header, rowTexts := occurrenceColumns(occ, w)
-	buf.WriteString(shellcore.DimText(header))
+	contentWidth := w - cursorWidth
+	header, rowTexts := occurrenceColumns(occ, contentWidth, !isSpansAggregatePipeline(v.pipeline))
+	buf.WriteString(shellcore.DimText(cursorBlank + header))
 	buf.WriteString("\r\n")
 
 	viewport := h - 2
@@ -346,24 +398,36 @@ func (v *SpanView) renderSamples(buf *strings.Builder, w, h int) {
 		end = len(rowTexts)
 	}
 	for i := start; i < end; i++ {
-		line := padToWidth(rowTexts[i], w)
+		line := padToWidth(rowTexts[i], contentWidth)
 		if i == v.sampleFocus {
-			buf.WriteString("\x1b[7m")
+			buf.WriteString(cursorMark)
+			buf.WriteString(underlineOn)
 			buf.WriteString(line)
 			buf.WriteString(shellcore.AnsiReset)
 		} else {
+			buf.WriteString(cursorBlank)
 			buf.WriteString(line)
 		}
 		buf.WriteString("\r\n")
 	}
 }
 
-// padToWidth right-pads (or truncates) s to exactly w visible chars, so
-// a reverse-video-wrapped focused row fills the full terminal width
-// rather than only as far as its own text.
+// padToWidth right-pads s to exactly w visible chars, so a
+// reverse-video-wrapped focused row fills the full terminal width
+// rather than only as far as its own text. Measures with
+// shellcore.StripANSI rather than len(s) — theme.SpanRollupColumns'
+// rows now carry embedded color codes (see its doc comment), and
+// len(s) counts those escape bytes as width, which would both
+// misjudge whether padding is needed and risk byte-slicing s[:w]
+// through the middle of an escape sequence. Rows are already sized to
+// w in visible chars by SpanRollupColumns, so the >= case is expected
+// to be an exact match, not truncation — a colored string can't be
+// safely truncated by byte index, so a wider-than-expected row is left
+// alone rather than risking a corrupted escape sequence.
 func padToWidth(s string, w int) string {
-	if len(s) >= w {
-		return s[:w]
+	visLen := len(shellcore.StripANSI(s))
+	if visLen >= w {
+		return s
 	}
-	return s + strings.Repeat(" ", w-len(s))
+	return s + strings.Repeat(" ", w-visLen)
 }

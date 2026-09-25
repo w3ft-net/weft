@@ -490,12 +490,27 @@ func isSpansPipeline(pipeline string) bool {
 	return false
 }
 
+// isSpansAggregatePipeline reports whether pipeline is specifically a
+// `trace spans [name]` query (Phase 2) as opposed to `trace <id>
+// --spans` (Phase 1). Callers already know it's some spans pipeline
+// (isSpansPipeline) before checking this; it exists to gate
+// self-time — see theme.SpanRollupColumns' singleTrace: Phase 1 fetches a
+// complete single trace so self-time is accurate, Phase 2 only fetches
+// rows matching one span name so it can't see cross-name children at
+// all and would understate delegation while looking complete.
+func isSpansAggregatePipeline(pipeline string) bool {
+	fields := strings.Fields(pipeline)
+	return len(fields) > 1 && fields[0] == "trace" && fields[1] == "spans"
+}
+
 // RenderSpanRollupIfApplicable renders result's rows into theme's flat
 // span-rollup table when pipeline is a `trace <id> --spans` (Phase 1)
 // or `trace spans [name]` (Phase 2) query and the result hasn't
 // already come back pre-rendered as Text. Both phases share one
 // parser/renderer — theme.RenderSpanRollup doesn't care whether the
-// rows it's handed came from one trace or many. The interactive REPL
+// rows it's handed came from one trace or many — but only Phase 1 gets
+// the SELF column (see isSpansAggregatePipeline and
+// theme.SpanRollupColumns' singleTrace doc comment). The interactive REPL
 // instead enters spanview's SpanView for the same query (see
 // cmd/weft/runner/runner.go), so this function is only wired into
 // ExecNonInteractive, not the REPL's runQuery. termWidth <= 0 falls
@@ -513,7 +528,8 @@ func RenderSpanRollupIfApplicable(pipeline string, result *QueryResult, termWidt
 	for i, row := range result.Rows {
 		lines[i] = row.Raw
 	}
-	return theme.RenderSpanRollupTable(theme.RenderSpanRollup(lines), termWidth), true
+	singleTrace := !isSpansAggregatePipeline(pipeline)
+	return theme.RenderSpanRollupTable(theme.RenderSpanRollup(lines), termWidth, singleTrace), true
 }
 
 // queryResultLines flattens a *QueryResult into one trimmed input line
