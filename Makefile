@@ -33,7 +33,7 @@ integration:
 	./scripts/integration-test.sh
 
 # Wipe the dev state the docker stack accumulates so the next
-# integration run starts from zero. Removes postgres + minio volumes
+# integration run starts from zero. Removes postgres + localstack volumes
 # (via compose down -v), the docker-launcher-spawned shard containers
 # (which live outside compose), and the per-shard DuckDB subdirs under
 # dev/shard-data/ that the launcher intentionally preserves across

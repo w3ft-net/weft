@@ -1,5 +1,5 @@
 # Compose overlay providing LocalStack for integration tests that exercise
-# real AWS-SDK call paths (SNS, SQS, EC2). Off by default — the everyday
+# real AWS-SDK call paths (SNS, SQS, EC2, S3). Off by default — the everyday
 # dev stack does not need it. Usage:
 #
 #   docker compose -f docker-compose.yml -f docker-compose.localstack.yml \
@@ -8,8 +8,8 @@
 #
 # scripts/integration-test.sh wires the overlay automatically. ASG isn't
 # in LocalStack Community, so tests stub that one client; everything
-# else (SNS/SQS/EC2) goes through the real aws-sdk-go-v2 request path
-# against this container.
+# else (SNS/SQS/EC2, plus the S3 cold-storage bucket) goes through the
+# real aws-sdk-go-v2 request path against this container.
 
 services:
   localstack:
@@ -17,7 +17,7 @@ services:
     ports:
       - "4566:4566"
     environment:
-      SERVICES: sns,sqs,ec2
+      SERVICES: sns,sqs,ec2,s3
       DEBUG: "0"
       # Default region must match awsTestConfig() in lifecycle_test.go.
       AWS_DEFAULT_REGION: us-east-2

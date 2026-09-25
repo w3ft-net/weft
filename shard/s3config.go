@@ -6,10 +6,10 @@ import (
 	"os"
 )
 
-// S3Config holds S3/MinIO connection settings.
+// S3Config holds S3 connection settings.
 // Used by ColdShard (reads) and ExportToS3Parquet (writes).
 type S3Config struct {
-	Endpoint  string // e.g., "localhost:9050" for MinIO, "" for AWS
+	Endpoint  string // e.g., "localhost:4566" for LocalStack, "" for AWS
 	AccessKey string
 	SecretKey string
 	Region    string
@@ -27,7 +27,7 @@ type S3Config struct {
 //	S3_USE_SSL    — "true" for HTTPS (default: "false")
 //
 // Three modes:
-//   - MinIO (tests): all vars set → explicit credentials + custom endpoint
+//   - LocalStack (tests): all vars set → explicit credentials + custom endpoint
 //   - Lambda/EC2 (prod): only S3_REGION set → DuckDB uses IAM credentials
 //   - Local dev: nothing set → returns nil → local filesystem only
 func S3ConfigFromEnv() *S3Config {
@@ -81,7 +81,7 @@ func (c *S3Config) ConfigureDuckDB(db *sql.DB) error {
 		"SET s3_url_style='path'",
 	}
 	if c.AccessKey != "" {
-		// Explicit credentials (MinIO, tests).
+		// Explicit credentials (LocalStack, tests).
 		stmts = append(stmts,
 			fmt.Sprintf("SET s3_access_key_id='%s'", c.AccessKey),
 			fmt.Sprintf("SET s3_secret_access_key='%s'", c.SecretKey),

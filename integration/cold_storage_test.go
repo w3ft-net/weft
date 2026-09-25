@@ -144,10 +144,10 @@ func TestS3ConfigFromEnv(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("expected S3Config from env vars")
 	}
-	if cfg.Endpoint != MinioEndpoint {
-		t.Errorf("expected endpoint %s, got %s", MinioEndpoint, cfg.Endpoint)
+	if cfg.Endpoint != S3Endpoint {
+		t.Errorf("expected endpoint %s, got %s", S3Endpoint, cfg.Endpoint)
 	}
-	if cfg.AccessKey != MinioAccessKey {
-		t.Errorf("expected access key %s, got %s", MinioAccessKey, cfg.AccessKey)
+	if cfg.AccessKey != S3AccessKey {
+		t.Errorf("expected access key %s, got %s", S3AccessKey, cfg.AccessKey)
 	}
 }

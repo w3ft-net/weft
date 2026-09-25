@@ -17,48 +17,48 @@ import (
 )
 
 const (
-	minioEndpoint  = "http://localhost:9050"
-	minioAccessKey = "minioadmin"
-	minioSecretKey = "minioadmin"
-	minioBucket    = "weft-cold-test"
+	s3TestEndpoint  = "http://localhost:4566"
+	s3TestAccessKey = "test"
+	s3TestSecretKey = "test"
+	s3TestBucket    = "weft-cold-test"
 )
 
 // TestColdShard_S3Integration tests the full flow:
-// ingest → export to Parquet → upload to MinIO → ColdShard reads from S3.
+// ingest → export to Parquet → upload to S3 → ColdShard reads from S3.
 //
-// Requires MinIO running on localhost:9050 (docker compose up minio).
-// Skipped if MinIO is not reachable.
+// Requires LocalStack running on localhost:4566 (docker compose up localstack).
+// Skipped if LocalStack is not reachable.
 func TestColdShard_S3Integration(t *testing.T) {
 	if os.Getenv("WEFT_TEST_S3") == "" {
-		// Try to reach MinIO.
+		// Try to reach LocalStack.
 		cfg, err := config.LoadDefaultConfig(context.Background(),
 			config.WithRegion("us-east-1"),
-			config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(minioAccessKey, minioSecretKey, "")),
+			config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(s3TestAccessKey, s3TestSecretKey, "")),
 		)
 		if err != nil {
 			t.Skip("skipping S3 test: no AWS config")
 		}
 		client := s3.NewFromConfig(cfg, func(o *s3.Options) {
-			o.BaseEndpoint = aws.String(minioEndpoint)
+			o.BaseEndpoint = aws.String(s3TestEndpoint)
 			o.UsePathStyle = true
 		})
 		_, err = client.ListBuckets(context.Background(), &s3.ListBucketsInput{})
 		if err != nil {
-			t.Skip("skipping S3 test: MinIO not reachable at " + minioEndpoint)
+			t.Skip("skipping S3 test: LocalStack not reachable at " + s3TestEndpoint)
 		}
 	}
 
 	// Create bucket.
 	cfg, _ := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion("us-east-1"),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(minioAccessKey, minioSecretKey, "")),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(s3TestAccessKey, s3TestSecretKey, "")),
 	)
 	s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
-		o.BaseEndpoint = aws.String(minioEndpoint)
+		o.BaseEndpoint = aws.String(s3TestEndpoint)
 		o.UsePathStyle = true
 	})
 	s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
-		Bucket: aws.String(minioBucket),
+		Bucket: aws.String(s3TestBucket),
 	})
 
 	// Ingest test data.
@@ -83,7 +83,7 @@ func TestColdShard_S3Integration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Upload to MinIO.
+	// Upload to S3.
 	s3Key := "test/shard-s3-test.parquet"
 	f, err := os.Open(localPath)
 	if err != nil {
@@ -92,21 +92,21 @@ func TestColdShard_S3Integration(t *testing.T) {
 	defer f.Close()
 
 	_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
-		Bucket: aws.String(minioBucket),
+		Bucket: aws.String(s3TestBucket),
 		Key:    aws.String(s3Key),
 		Body:   f,
 	})
 	if err != nil {
-		t.Fatalf("upload to MinIO: %v", err)
+		t.Fatalf("upload to S3: %v", err)
 	}
-	t.Logf("uploaded to s3://%s/%s", minioBucket, s3Key)
+	t.Logf("uploaded to s3://%s/%s", s3TestBucket, s3Key)
 
-	// Create ColdShard pointing at MinIO S3.
-	s3Path := fmt.Sprintf("s3://%s/%s", minioBucket, s3Key)
+	// Create ColdShard pointing at S3 (LocalStack).
+	s3Path := fmt.Sprintf("s3://%s/%s", s3TestBucket, s3Key)
 	cs, err := NewColdShard("cold-s3", []string{"vimgym", "callbox"}, s3Path, "", &S3Config{
-		Endpoint:  "localhost:9050",
-		AccessKey: minioAccessKey,
-		SecretKey: minioSecretKey,
+		Endpoint:  "localhost:4566",
+		AccessKey: s3TestAccessKey,
+		SecretKey: s3TestSecretKey,
 		Region:    "us-east-1",
 		UseSSL:    false,
 	})

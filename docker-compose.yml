@@ -248,33 +248,15 @@ services:
       - /usr/local/bin/lambda-shard
     environment:
       PORT: "9030"
-      S3_ENDPOINT: minio:9000
-      S3_ACCESS_KEY: minioadmin
-      S3_SECRET_KEY: minioadmin
+      S3_ENDPOINT: localstack:4566
+      S3_ACCESS_KEY: test
+      S3_SECRET_KEY: test
       S3_REGION: us-east-1
       S3_USE_SSL: "false"
     ports:
       - "9030:9030"
     depends_on:
-      - minio
-
-  minio:
-    # minio/minio was removed from Docker Hub (2026) -- MinIO now
-    # publishes to quay.io. Pinned rather than :latest to match the
-    # localstack image below.
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
-    command: server /data --console-address ":9091"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - "9050:9000"
-      - "9091:9091"
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      - localstack
 
   # Real Pub/Sub server for the Redis-candidate half of the tail-fanout
   # benchmark (docs/plans/coordinator-horizontal-scaling.md item 4,
@@ -295,13 +277,16 @@ services:
 
   # LocalStack: AWS emulator for integration tests that exercise the
   # real EC2/SNS/SQS wire format (shard EBS lifecycle — see
-  # docs/plans/ebs-shard-volumes.md). Community edition covers
-  # ec2/sns/sqs; ASG lifecycle hooks are Pro-only and the tests inject
-  # a fake ASG client for that part.
+  # docs/plans/ebs-shard-volumes.md), and also the cold-storage S3
+  # bucket (replaces the standalone MinIO container — S3 is fully
+  # supported in Community, so there was no reason to run two AWS
+  # emulators). Community edition covers ec2/sns/sqs/s3; ASG lifecycle
+  # hooks are Pro-only and the tests inject a fake ASG client for that
+  # part.
   localstack:
     image: localstack/localstack:3.8
     environment:
-      SERVICES: "ec2,sns,sqs"
+      SERVICES: "ec2,sns,sqs,s3"
       DEFAULT_REGION: us-east-2
       DEBUG: "0"
     ports:

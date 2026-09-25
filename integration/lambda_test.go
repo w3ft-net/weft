@@ -19,9 +19,9 @@ import (
 )
 
 // TestLambdaColdShard_DockerIntegration tests the full flow:
-// ingest → export to MinIO → LambdaColdShard queries via the lambda-shard container.
+// ingest → export to S3 (LocalStack) → LambdaColdShard queries via the lambda-shard container.
 //
-// Requires docker-compose stack running (lambda-shard + minio).
+// Requires docker-compose stack running (lambda-shard + localstack).
 func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	// Lambda shard container runs on port 9030.
 	lambdaURL := "http://localhost:9030"
@@ -43,7 +43,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Export to MinIO S3.
+	// Export to S3 (LocalStack).
 	s3cfg := shard.S3ConfigFromEnv()
 	if s3cfg == nil {
 		t.Fatal("S3 config not set")
@@ -56,9 +56,9 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	t.Logf("exported to %s", s3Path)
 
 	// Create LambdaColdShard pointing at the container.
-	// Note: the container reads from MinIO using its own S3_* env vars
-	// (set in docker-compose), so the Parquet path uses the container's
-	// MinIO endpoint (minio:9000), not localhost:9050.
+	// Note: the container reads from LocalStack using its own S3_* env
+	// vars (set in docker-compose), so the Parquet path uses the
+	// container's LocalStack endpoint (localstack:4566), not localhost:4566.
 	containerS3Path := fmt.Sprintf("s3://%s/lambda-test/shard-lambda-int.parquet", ColdBucket)
 
 	cs, err := shard.NewColdShard("cold-lambda", []string{"vimgym", "callbox"}, containerS3Path, lambdaURL, nil)
@@ -185,14 +185,14 @@ func TestComputeLifecycle_LambdaColdShardReachable(t *testing.T) {
 	}
 }
 
-// Verify the exported Parquet is on MinIO.
+// Verify the exported Parquet is on S3 (LocalStack).
 func TestLambdaColdShard_VerifyS3Upload(t *testing.T) {
 	cfg, _ := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion("us-east-1"),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(MinioAccessKey, MinioSecretKey, "")),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(S3AccessKey, S3SecretKey, "")),
 	)
 	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
-		o.BaseEndpoint = aws.String(fmt.Sprintf("http://%s", MinioEndpoint))
+		o.BaseEndpoint = aws.String(fmt.Sprintf("http://%s", S3Endpoint))
 		o.UsePathStyle = true
 	})
 

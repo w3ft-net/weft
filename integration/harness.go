@@ -2,7 +2,7 @@
 
 // Package integration provides the shared test harness for weft integration
 // tests. TestMain verifies the docker stack is running and ensures the
-// MinIO cold-storage bucket exists. Migrations are the coordinator's
+// LocalStack cold-storage bucket exists. Migrations are the coordinator's
 // responsibility (store.Open → goose.Up) — by the time the coordinator's
 // /health endpoint returns 200, the schema is up to date.
 //
@@ -33,18 +33,18 @@ import (
 )
 
 const (
-	MinioEndpoint  = "localhost:9050"
-	MinioAccessKey = "minioadmin"
-	MinioSecretKey = "minioadmin"
-	ColdBucket     = "weft-cold"
-	CoordAddr      = "localhost:9020"
+	S3Endpoint  = "localhost:4566"
+	S3AccessKey = "test"
+	S3SecretKey = "test"
+	ColdBucket  = "weft-cold"
+	CoordAddr   = "localhost:9020"
 
 	coordHealth    = "http://localhost:9021/health"
 	postgresURL    = "postgres://weft:weft@localhost:5433/weft?sslmode=disable"
 	readinessTries = 15
 )
 
-// Setup verifies the stack is up and ensures the MinIO bucket exists.
+// Setup verifies the stack is up and ensures the S3 bucket exists.
 // Returns a cleanup function. Call from TestMain.
 //
 // When WEFT_SKIP_STACK_CHECK=1, Setup returns immediately without
@@ -52,9 +52,9 @@ const (
 // boundary tests that only read coverage/<service>.out on disk —
 // they don't need the docker stack up.
 func Setup() func() {
-	os.Setenv("S3_ENDPOINT", MinioEndpoint)
-	os.Setenv("S3_ACCESS_KEY", MinioAccessKey)
-	os.Setenv("S3_SECRET_KEY", MinioSecretKey)
+	os.Setenv("S3_ENDPOINT", S3Endpoint)
+	os.Setenv("S3_ACCESS_KEY", S3AccessKey)
+	os.Setenv("S3_SECRET_KEY", S3SecretKey)
 	os.Setenv("S3_REGION", "us-east-1")
 	os.Setenv("S3_USE_SSL", "false")
 
@@ -65,8 +65,8 @@ func Setup() func() {
 
 	requireStackRunning()
 
-	if err := ensureMinioBucket(); err != nil {
-		log.Fatalf("integration: MinIO setup: %v", err)
+	if err := ensureColdBucket(); err != nil {
+		log.Fatalf("integration: S3 bucket setup: %v", err)
 	}
 	if err := seedFixtures(); err != nil {
 		log.Fatalf("integration: seed fixtures: %v", err)
@@ -236,17 +236,17 @@ func requireStackRunning() {
 	)
 }
 
-func ensureMinioBucket() error {
+func ensureColdBucket() error {
 	cfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion("us-east-1"),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(MinioAccessKey, MinioSecretKey, "")),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(S3AccessKey, S3SecretKey, "")),
 	)
 	if err != nil {
 		return err
 	}
 
 	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
-		o.BaseEndpoint = aws.String(fmt.Sprintf("http://%s", MinioEndpoint))
+		o.BaseEndpoint = aws.String(fmt.Sprintf("http://%s", S3Endpoint))
 		o.UsePathStyle = true
 	})
 
