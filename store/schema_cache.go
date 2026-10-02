@@ -71,19 +71,18 @@ const (
 // exists to avoid — and a *ingest.Parser isn't cleanly serializable
 // (it holds a compiled *regexp.Regexp).
 type cachedSchemaEntry struct {
-	Configured   bool   `json:"configured"`
-	SchemaYAML   string `json:"schema_yaml,omitempty"`
-	CustomerName string `json:"customer_name,omitempty"`
+	Configured bool   `json:"configured"`
+	SchemaYAML string `json:"schema_yaml,omitempty"`
 }
 
-func schemaCacheKey(orgID, namespace, service string) string {
-	return "schema:" + orgID + ":" + namespace + ":" + service
+func schemaCacheKey(orgID OrgID, namespace string, service string) string {
+	return "schema:" + orgID.String() + ":" + namespace + ":" + service
 }
 
 // get returns (entry, true) on a cache hit, (nil, false) on a miss OR
 // any cache-layer error — callers can't distinguish the two and
 // shouldn't need to: either way, fall through to Postgres.
-func (c *SchemaCache) get(orgID, namespace, service string) (*cachedSchemaEntry, bool) {
+func (c *SchemaCache) get(orgID OrgID, namespace string, service string) (*cachedSchemaEntry, bool) {
 	if c == nil {
 		return nil, false
 	}
@@ -103,7 +102,7 @@ func (c *SchemaCache) get(orgID, namespace, service string) (*cachedSchemaEntry,
 // set populates the cache after a Postgres lookup (cache-aside fill).
 // Best-effort: a write failure just means the next lookup falls through
 // to Postgres again, same as a cold cache.
-func (c *SchemaCache) set(orgID, namespace, service string, entry *cachedSchemaEntry) {
+func (c *SchemaCache) set(orgID OrgID, namespace string, service string, entry *cachedSchemaEntry) {
 	if c == nil {
 		return
 	}
@@ -130,7 +129,7 @@ func (c *SchemaCache) set(orgID, namespace, service string, entry *cachedSchemaE
 // re-fetch the new schema from Postgres. No pub/sub broadcast needed
 // unless a local per-process tier is added later, at which point this
 // is the natural place to also PUBLISH an eviction notice.
-func (c *SchemaCache) invalidate(orgID, namespace, service string) {
+func (c *SchemaCache) invalidate(orgID OrgID, namespace string, service string) {
 	if c == nil {
 		return
 	}

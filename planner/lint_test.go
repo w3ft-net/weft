@@ -12,7 +12,7 @@ func lowerFor(t *testing.T, pipeline string) *LoweredPlan {
 		"log-pattern-count": `tail -n $2 /log/weft/$1/main.log | grep -c "$3"`,
 		"runtime-field":     `tail -n 1 /log/weft/$1/runtime.log | jq -r ".$2"`,
 	}}
-	lp, err := Lower(pipeline, "kevlar", "bolt", resolver)
+	lp, err := Lower(pipeline, 1, "bolt", resolver)
 	if err != nil {
 		t.Fatalf("Lower(%q): %v", pipeline, err)
 	}

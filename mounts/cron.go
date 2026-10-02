@@ -103,7 +103,7 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 	// /bin/ pipeline) — the save still succeeds, and the fire path
 	// falls back to inline Plan() for those.
 	resolver := cronBinResolver{store: m.cfg.Store, orgID: m.cfg.OrgID}
-	loweredJSON := planner.LowerForStorage(pipeline, m.cfg.CustomerName, string(m.cfg.Tier), resolver)
+	loweredJSON := planner.LowerForStorage(pipeline, int64(m.cfg.OrgID), string(m.cfg.Tier), resolver)
 
 	return m.cfg.Store.SaveCronWatch(m.cfg.OrgID, m.cfg.UserID, rel, schedule, pipeline, loweredJSON)
 }
@@ -115,7 +115,7 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 // three identical 10-line adapters is unjustified.
 type cronBinResolver struct {
 	store *store.Store
-	orgID string
+	orgID store.OrgID
 }
 
 func (r cronBinResolver) Source(name string) (string, string, bool) {

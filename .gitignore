@@ -62,3 +62,6 @@ coverage-baseline.out
 # local worktree go.work (gitignored)
 go.work
 go.work.sum
+
+# Production database dumps pulled for local verification: customer data.
+/prod.sql

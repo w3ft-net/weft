@@ -6,28 +6,28 @@ import (
 	"time"
 )
 
-// TestPlanCustomer_HappyPath: a normal customer name lands as the first
+// TestPlanCustomer_HappyPath: the customer id lands as the first
 // predicate in the WHERE clause, bound via a placeholder.
 func TestPlanCustomer_HappyPath(t *testing.T) {
-	plan, err := Plan(`cat foo.log`, "kevlar", time.Time{}, time.Time{})
+	plan, err := Plan(`cat foo.log`, 1, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	wantSQL := `SELECT raw, ts FROM logs WHERE customer = ? AND namespace = ?`
+	wantSQL := `SELECT raw, ts FROM logs WHERE customer_id = CAST(? AS BIGINT) AND namespace = ?`
 	if plan.ShardSQL != wantSQL {
 		t.Errorf("ShardSQL\n got: %s\nwant: %s", plan.ShardSQL, wantSQL)
 	}
-	wantArgs := []any{"kevlar", "foo"}
+	wantArgs := []any{"1", "foo"}
 	if len(plan.Args) != len(wantArgs) || plan.Args[0] != wantArgs[0] || plan.Args[1] != wantArgs[1] {
 		t.Errorf("Args: got %v, want %v", plan.Args, wantArgs)
 	}
 }
 
-// TestPlanCustomer_EmptySkipsPredicate: empty customer (test fixture
+// TestPlanCustomer_EmptySkipsPredicate: a zero customer id (test fixture
 // shape) emits no customer predicate. Real production code never
-// passes "" — the coordinator threads the JWT-resolved name through.
+// passes 0 — the coordinator threads the session's org id through.
 func TestPlanCustomer_EmptySkipsPredicate(t *testing.T) {
-	plan, err := Plan(`cat foo.log`, "", time.Time{}, time.Time{})
+	plan, err := Plan(`cat foo.log`, 0, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -36,20 +36,23 @@ func TestPlanCustomer_EmptySkipsPredicate(t *testing.T) {
 	}
 }
 
-// TestPlanCustomer_Injection: a hostile customer name carrying SQL
-// metacharacters lands as a bound positional value, not as inline SQL.
-// Pre-parameterization this property was held by a manual quote-double
-// in addCustomer; now the placeholder makes it structural.
-func TestPlanCustomer_Injection(t *testing.T) {
-	plan, err := Plan(`cat foo.log`, `acme'; DROP TABLE logs; --`, time.Time{}, time.Time{})
+// TestPlanCustomer_BoundAsCastPlaceholder: the customer id reaches the
+// shard as a bound positional value, never as inline SQL, and is cast
+// explicitly (args travel as strings; the predicate must not depend on how
+// DuckDB coerces a VARCHAR parameter against the BIGINT column).
+func TestPlanCustomer_BoundAsCastPlaceholder(t *testing.T) {
+	plan, err := Plan(`cat foo.log`, 424242, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if !strings.Contains(plan.ShardSQL, "customer = ?") {
-		t.Errorf("customer predicate missing placeholder: %s", plan.ShardSQL)
+	if !strings.Contains(plan.ShardSQL, "customer_id = CAST(? AS BIGINT)") {
+		t.Errorf("customer predicate missing cast placeholder: %s", plan.ShardSQL)
 	}
-	if len(plan.Args) == 0 || plan.Args[0] != `acme'; DROP TABLE logs; --` {
-		t.Errorf("customer arg: got %v, want exactly the malicious string", plan.Args)
+	if strings.Contains(plan.ShardSQL, "424242") {
+		t.Errorf("customer id inlined into SQL: %s", plan.ShardSQL)
+	}
+	if len(plan.Args) == 0 || plan.Args[0] != "424242" {
+		t.Errorf("customer arg: got %v, want \"424242\"", plan.Args)
 	}
 }
 
@@ -61,7 +64,7 @@ func TestPlanCustomer_Injection(t *testing.T) {
 // copy-pasted from an upstream system) would land in the SQL unescaped.
 // This test would fail before the jq.go:118 fix and pass after.
 func TestPlanJQMetaVar_Escaping(t *testing.T) {
-	plan, err := Plan(`cat vimgym.log | jq 'select(._trace_id == "trace-o'"'"'brien-123")'`, "kevlar", time.Time{}, time.Time{})
+	plan, err := Plan(`cat vimgym.log | jq 'select(._trace_id == "trace-o'"'"'brien-123")'`, 1, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -78,7 +81,7 @@ func TestPlanJQMetaVar_Escaping(t *testing.T) {
 func TestPlanTimeBounds_BothSet(t *testing.T) {
 	start := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
-	plan, err := Plan(`cat foo.log`, "kevlar", start, end)
+	plan, err := Plan(`cat foo.log`, 1, "", start, end)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -89,7 +92,7 @@ func TestPlanTimeBounds_BothSet(t *testing.T) {
 		t.Errorf("missing upper bound predicate: %s", plan.ShardSQL)
 	}
 	// Args order: customer, start, end, namespace.
-	wantArgs := []any{"kevlar", "2026-04-01 12:00:00", "2026-04-02 12:00:00", "foo"}
+	wantArgs := []any{"1", "2026-04-01 12:00:00", "2026-04-02 12:00:00", "foo"}
 	if len(plan.Args) != len(wantArgs) {
 		t.Fatalf("Args length: got %v, want %v", plan.Args, wantArgs)
 	}
@@ -105,7 +108,7 @@ func TestPlanTimeBounds_BothSet(t *testing.T) {
 // or zero respectively; either should produce a sensible plan.
 func TestPlanTimeBounds_LowerOnly(t *testing.T) {
 	start := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
-	plan, err := Plan(`cat foo.log`, "", start, time.Time{})
+	plan, err := Plan(`cat foo.log`, 0, "", start, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -122,7 +125,7 @@ func TestPlanTimeBounds_LowerOnly(t *testing.T) {
 // time.Time{}, time.Time{} — they all rely on this property to keep
 // their SQL goldens stable.
 func TestPlanTimeBounds_BothZero(t *testing.T) {
-	plan, err := Plan(`cat foo.log`, "", time.Time{}, time.Time{})
+	plan, err := Plan(`cat foo.log`, 0, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -145,7 +148,7 @@ func TestPlanTimeBounds_BothZero(t *testing.T) {
 func TestPlanCustomer_InsideLimitBoundedSubquery(t *testing.T) {
 	// `cat | sort | head` emits a subquery via direct-to-compute
 	// classification (sort terminal + non-trivial projection).
-	plan, err := Plan(`cat foo.log | sort | head -5`, "tenant-a", time.Time{}, time.Time{})
+	plan, err := Plan(`cat foo.log | sort | head -5`, 4, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -160,11 +163,11 @@ func TestPlanCustomer_InsideLimitBoundedSubquery(t *testing.T) {
 		t.Fatalf("expected WHERE clause: %s", sql)
 	}
 	clause := rest[whereIdx+len(" WHERE "):]
-	if !strings.HasPrefix(clause, "customer = ?") {
+	if !strings.HasPrefix(clause, "customer_id = CAST(? AS BIGINT)") {
 		t.Errorf("customer predicate not at head of inner WHERE:\n  rendered: %s\n  clause start: %q", sql, clause[:min(60, len(clause))])
 	}
-	if len(plan.Args) == 0 || plan.Args[0] != "tenant-a" {
-		t.Errorf("customer arg: got %v, want first arg to be 'tenant-a'", plan.Args)
+	if len(plan.Args) == 0 || plan.Args[0] != "4" {
+		t.Errorf("customer arg: got %v, want first arg to be \"4\"", plan.Args)
 	}
 }
 

@@ -134,7 +134,6 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	stream, err := s.coordClient.Execute(ctx, &pb.CoordinatorExecuteRequest{
 		Pipeline:    req.Pipeline,
 		Follow:      req.Follow,
-		Customer:    session.ActiveCustomerName,
 		UserId:      session.UserID,
 		TimeStartNs: start.UnixNano(),
 		TimeEndNs:   end.UnixNano(),

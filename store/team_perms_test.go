@@ -23,7 +23,7 @@ func teamPermsStore(t *testing.T) *Store {
 	return db
 }
 
-func addTeamUser(t *testing.T, db *Store, custID string, email, role string) *User {
+func addTeamUser(t *testing.T, db *Store, custID OrgID, email, role string) *User {
 	t.Helper()
 	u, err := db.CreateUser(email)
 	if err != nil {

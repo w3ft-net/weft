@@ -24,7 +24,7 @@ import (
 // single live row via ORDER BY updated_at DESC LIMIT 1.
 type TmpFile struct {
 	ID              uint64    `gorm:"primaryKey;column:id"`
-	OrgID           string    `gorm:"column:org_id;not null"`
+	OrgID           OrgID     `gorm:"column:org_id;not null"`
 	Path            string    `gorm:"column:path;not null"`
 	IsDir           bool      `gorm:"column:is_dir;not null;default:false"`
 	ByteSize        int64     `gorm:"column:byte_size;not null;default:0"`
@@ -95,7 +95,7 @@ func NormalizeTmpPath(p string) (string, error) {
 // GetTmpFile returns the single live row for (orgID, path), or
 // ErrTmpNotFound. "Live" = the row with the most recent UpdatedAt —
 // a stale row in a soon-to-be-dropped partition loses to a fresh one.
-func (s *Store) GetTmpFile(orgID string, path string) (*TmpFile, error) {
+func (s *Store) GetTmpFile(orgID OrgID, path string) (*TmpFile, error) {
 	p, err := NormalizeTmpPath(path)
 	if err != nil {
 		return nil, err
@@ -117,7 +117,7 @@ func (s *Store) GetTmpFile(orgID string, path string) (*TmpFile, error) {
 // Children that appear in multiple partitions (extremely rare —
 // possible if updated_at crosses a partition boundary during edit)
 // are deduplicated, keeping the most recent row.
-func (s *Store) ListTmpFiles(orgID string, dirPath string) ([]TmpFile, error) {
+func (s *Store) ListTmpFiles(orgID OrgID, dirPath string) ([]TmpFile, error) {
 	dirPath = strings.TrimPrefix(dirPath, "/")
 	dirPath = strings.TrimSuffix(dirPath, "/")
 	dirPath = strings.TrimPrefix(dirPath, "tmp/")
@@ -156,7 +156,7 @@ func (s *Store) ListTmpFiles(orgID string, dirPath string) ([]TmpFile, error) {
 
 // TmpUsageBytes returns the current total byte footprint of a
 // customer's /tmp contents (files only — directory rows contribute 0).
-func (s *Store) TmpUsageBytes(orgID string) (int64, error) {
+func (s *Store) TmpUsageBytes(orgID OrgID) (int64, error) {
 	var total int64
 	err := s.db.Table("tmp_files").
 		Where("org_id = ? AND is_dir = FALSE", orgID).
@@ -171,7 +171,7 @@ func (s *Store) TmpUsageBytes(orgID string) (int64, error) {
 // The one caller is the expiry notice: it fires on the write that takes
 // a user from zero files to one, which is the only moment the warning is
 // new information.
-func (s *Store) CountTmpFilesByUser(orgID, userID string) (int64, error) {
+func (s *Store) CountTmpFilesByUser(orgID OrgID, userID string) (int64, error) {
 	var n int64
 	err := s.db.Table("tmp_files").
 		Where("org_id = ? AND created_by_user_id = ? AND is_dir = FALSE", orgID, userID).
@@ -182,7 +182,7 @@ func (s *Store) CountTmpFilesByUser(orgID, userID string) (int64, error) {
 // Mkdir creates a directory row. Errors if the path already exists
 // (as file or dir) or if a parent component is missing or is a file.
 // userID is recorded as the creator; empty userID stores NULL.
-func (s *Store) Mkdir(orgID string, userID, path string) error {
+func (s *Store) Mkdir(orgID OrgID, userID, path string) error {
 	p, err := NormalizeTmpPath(path)
 	if err != nil {
 		return err
@@ -212,7 +212,7 @@ func (s *Store) Mkdir(orgID string, userID, path string) error {
 // created on the fly (mkdir -p semantics); callers that want strict
 // "parent must exist" behaviour pass false. Auto-created parents
 // inherit the same userID as the leaf write that triggered them.
-func (s *Store) EnsureParentDirs(orgID string, userID, path string, createMissing bool) error {
+func (s *Store) EnsureParentDirs(orgID OrgID, userID, path string, createMissing bool) error {
 	parts := strings.Split(path, "/")
 	if len(parts) <= 1 {
 		return nil // top-level; no parent to check
@@ -263,7 +263,7 @@ func (s *Store) EnsureParentDirs(orgID string, userID, path string, createMissin
 //
 // Caller supplies tier so this layer doesn't need to know about
 // subscription lookup. shellfs resolves tier once per request.
-func (s *Store) WriteTmpFile(orgID string, tier Tier, userID, path string, data []byte) error {
+func (s *Store) WriteTmpFile(orgID OrgID, tier Tier, userID, path string, data []byte) error {
 	p, err := NormalizeTmpPath(path)
 	if err != nil {
 		return err

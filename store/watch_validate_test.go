@@ -114,8 +114,8 @@ func TestCompileWatchPipeline_AlertThreshold(t *testing.T) {
 	}
 }
 
-func intPtr(n int) *int     { return &n }
-func strPtr(s string) *string { return &s }
+func intPtr(n int) *int             { return &n }
+func strPtr(s string) *string       { return &s }
 func float64Ptr(v float64) *float64 { return &v }
 
 func eqIntPtr(a, b *int) bool {

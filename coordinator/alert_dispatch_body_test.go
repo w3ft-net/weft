@@ -3,25 +3,27 @@ package coordinator
 import (
 	"strings"
 	"testing"
+
+	"github.com/graybeardcorp/weft/store"
 )
 
 // testOrgID is a fixed org UUID for fixtures that never touch the database.
-const testOrgID = "00000000-0000-0000-0000-0000000000a1"
+const testOrgID = 161
 
 // recordingNotifier captures the body handed to Send so tests can assert
 // on exactly what would be shipped to Slack/PagerDuty.
 type recordingNotifier struct {
 	sent []struct {
-		orgID string
+		orgID store.OrgID
 		alias string
 		watch string
 		body  string
 	}
 }
 
-func (r *recordingNotifier) Send(orgID string, alias, watch, body string) error {
+func (r *recordingNotifier) Send(orgID store.OrgID, alias, watch, body string) error {
 	r.sent = append(r.sent, struct {
-		orgID string
+		orgID store.OrgID
 		alias string
 		watch string
 		body  string

@@ -1173,8 +1173,8 @@ func TestShardSM_EvaluateArchivingExportsRetiresTerminatesThenCompletes(t *testi
 		id:          "s-test",
 		archivePath: "s3://weft/warp/s-test.parquet",
 		archiveStats: []shard.CustomerStat{
-			{Customer: "acme", MinTs: statMin, MaxTs: statMax, RowCount: 7},
-			{Customer: "globex", MinTs: statMin, MaxTs: statMax, RowCount: 3},
+			{CustomerID: 5, MinTs: statMin, MaxTs: statMax, RowCount: 7},
+			{CustomerID: 6, MinTs: statMin, MaxTs: statMax, RowCount: 3},
 		},
 	}
 	sm, db, entry := makeFixtureShardSM(t, StateArchiving, func(d *ShardDeps) {
@@ -1209,17 +1209,17 @@ func TestShardSM_EvaluateArchivingExportsRetiresTerminatesThenCompletes(t *testi
 	// The Archive RPC's per-customer stats land in shard_archive_stats for
 	// the retention janitor to consult later.
 	var stats []ShardArchiveStat
-	if err := db.DB().Where("shard_id = ?", "s-test").Order("customer").Find(&stats).Error; err != nil {
+	if err := db.DB().Where("shard_id = ?", "s-test").Order("org_id").Find(&stats).Error; err != nil {
 		t.Fatalf("read archive stats: %v", err)
 	}
 	if len(stats) != 2 {
 		t.Fatalf("archive stats: got %d rows, want 2: %+v", len(stats), stats)
 	}
-	if stats[0].Customer != "acme" || stats[0].RowCount != 7 || !stats[0].MaxTs.Equal(statMax) {
-		t.Fatalf("archive stat[0] = %+v, want acme/7/%v", stats[0], statMax)
+	if stats[0].OrgID != 5 || stats[0].RowCount != 7 || !stats[0].MaxTs.Equal(statMax) {
+		t.Fatalf("archive stat[0] = %+v, want org 5/7/%v", stats[0], statMax)
 	}
-	if stats[1].Customer != "globex" || stats[1].RowCount != 3 {
-		t.Fatalf("archive stat[1] = %+v, want globex/3", stats[1])
+	if stats[1].OrgID != 6 || stats[1].RowCount != 3 {
+		t.Fatalf("archive stat[1] = %+v, want org 6/3", stats[1])
 	}
 	if rec.EBSVolumeID != "" {
 		t.Fatalf("volume not retired/cleared: %q", rec.EBSVolumeID)

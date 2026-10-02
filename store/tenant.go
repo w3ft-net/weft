@@ -51,7 +51,7 @@ type skipScopeCtxKey struct{}
 // WithOrg returns a context that scopes any enrolled-model query
 // issued through db.WithContext(ctx) to orgID. This is the only
 // sanctioned way to read or write an enrolled model's rows.
-func WithOrg(ctx context.Context, orgID string) context.Context {
+func WithOrg(ctx context.Context, orgID OrgID) context.Context {
 	return context.WithValue(ctx, orgCtxKey{}, orgID)
 }
 
@@ -63,17 +63,18 @@ func WithoutTenantScope(ctx context.Context) context.Context {
 	return context.WithValue(ctx, skipScopeCtxKey{}, true)
 }
 
-// orgFromContext reports the org a query is scoped to. An empty id is treated
-// as *absent*, not as an org whose id happens to be "" — a zero-value string
+// orgFromContext reports the org a query is scoped to. A zero id is treated
+// as *absent*, not as an org whose id happens to be 0 — a zero-value id
 // threaded in by mistake must fail closed like any other missing scope, rather
-// than emitting `WHERE org_id = ''` and quietly matching nothing.
-func orgFromContext(ctx context.Context) (string, bool) {
+// than emitting `WHERE org_id = 0` and quietly matching nothing. (Identity ids
+// start at 1, so 0 is never a real org.)
+func orgFromContext(ctx context.Context) (OrgID, bool) {
 	if ctx == nil {
-		return "", false
+		return 0, false
 	}
-	id, ok := ctx.Value(orgCtxKey{}).(string)
-	if !ok || id == "" {
-		return "", false
+	id, ok := ctx.Value(orgCtxKey{}).(OrgID)
+	if !ok || id == 0 {
+		return 0, false
 	}
 	return id, true
 }
@@ -186,7 +187,7 @@ func (s *Store) DB() *gorm.DB { return s.db }
 // id)). Store methods use a background context for now — they don't
 // yet thread a request context (a separate change); the customer is
 // what the boundary needs.
-func (s *Store) scoped(orgID string) *gorm.DB {
+func (s *Store) scoped(orgID OrgID) *gorm.DB {
 	return s.db.WithContext(WithOrg(context.Background(), orgID))
 }
 

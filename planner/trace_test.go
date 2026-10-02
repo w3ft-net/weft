@@ -10,7 +10,7 @@ import (
 // predicate and no namespace/service/kind predicate — it fans out across
 // every source the customer can read, the same way `cat warp.log` does.
 func TestPlanTrace_Predicate(t *testing.T) {
-	plan, err := Plan(`trace abc-123`, "kevlar", time.Time{}, time.Time{})
+	plan, err := Plan(`trace abc-123`, 1, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestPlanTrace_Predicate(t *testing.T) {
 // SourceService stay empty so ShardDescriptorsFor(namespaceID=0) fans out
 // across every app/service, the same live path warp.log already exercises.
 func TestPlanTrace_OrderAndScope(t *testing.T) {
-	plan, err := Plan(`trace abc-123`, "kevlar", time.Time{}, time.Time{})
+	plan, err := Plan(`trace abc-123`, 1, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestPlanTrace_OrderAndScope(t *testing.T) {
 func TestPlanTrace_TimeBoundsApplied(t *testing.T) {
 	start := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
-	plan, err := Plan(`trace abc-123`, "kevlar", start, end)
+	plan, err := Plan(`trace abc-123`, 1, "", start, end)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestPlanTrace_TimeBoundsApplied(t *testing.T) {
 // display layer has namespace/service available on every row) even
 // with no downstream compute stage.
 func TestPlanTrace_IncludeMetaVars(t *testing.T) {
-	plan, err := Plan(`trace abc-123`, "kevlar", time.Time{}, time.Time{})
+	plan, err := Plan(`trace abc-123`, 1, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestPlanTrace_IncludeMetaVars(t *testing.T) {
 func TestPlanTrace_ArityErrors(t *testing.T) {
 	for _, pipeline := range []string{"trace", "trace id1 id2", "trace --spans"} {
 		t.Run(pipeline, func(t *testing.T) {
-			if _, err := Plan(pipeline, "kevlar", time.Time{}, time.Time{}); err == nil {
+			if _, err := Plan(pipeline, 1, "", time.Time{}, time.Time{}); err == nil {
 				t.Errorf("Plan(%q): expected error, got nil", pipeline)
 			}
 		})
@@ -106,13 +106,13 @@ func TestPlanTrace_ArityErrors(t *testing.T) {
 // before or after the id) because docs/plans/span-display.md's Phase 1
 // rollup is entirely a client-side reinterpretation of the same rows.
 func TestPlanTrace_SpansFlag(t *testing.T) {
-	base, err := Plan(`trace abc-123`, "kevlar", time.Time{}, time.Time{})
+	base, err := Plan(`trace abc-123`, 1, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan(bare): %v", err)
 	}
 	for _, pipeline := range []string{"trace abc-123 --spans", "trace --spans abc-123"} {
 		t.Run(pipeline, func(t *testing.T) {
-			plan, err := Plan(pipeline, "kevlar", time.Time{}, time.Time{})
+			plan, err := Plan(pipeline, 1, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", pipeline, err)
 			}
@@ -130,7 +130,7 @@ func TestPlanTrace_SpansFlag(t *testing.T) {
 // out the same way a bare `trace <id>` does, just without a trace_id
 // to anchor on.
 func TestPlanTraceSpans_Predicate(t *testing.T) {
-	plan, err := Plan(`trace spans`, "kevlar", time.Time{}, time.Time{})
+	plan, err := Plan(`trace spans`, 1, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestPlanTraceSpans_Predicate(t *testing.T) {
 // TestPlanTraceSpans_WithName: `trace spans <name>` adds a parameterized
 // span_name predicate on top of the same done/error filter.
 func TestPlanTraceSpans_WithName(t *testing.T) {
-	plan, err := Plan(`trace spans shard.Query`, "kevlar", time.Time{}, time.Time{})
+	plan, err := Plan(`trace spans shard.Query`, 1, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestPlanTraceSpans_WithName(t *testing.T) {
 // TestPlanTraceSpans_IncludeMetaVars: same forced NAMESPACE/SERVICE
 // projection as a bare trace — see TestPlanTrace_IncludeMetaVars.
 func TestPlanTraceSpans_IncludeMetaVars(t *testing.T) {
-	plan, err := Plan(`trace spans`, "kevlar", time.Time{}, time.Time{})
+	plan, err := Plan(`trace spans`, 1, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestPlanTraceSpans_IncludeMetaVars(t *testing.T) {
 
 // TestPlanTraceSpans_ArityErrors: at most one span name argument.
 func TestPlanTraceSpans_ArityErrors(t *testing.T) {
-	if _, err := Plan(`trace spans a b`, "kevlar", time.Time{}, time.Time{}); err == nil {
+	if _, err := Plan(`trace spans a b`, 1, "", time.Time{}, time.Time{}); err == nil {
 		t.Errorf("Plan(%q): expected error, got nil", "trace spans a b")
 	}
 }

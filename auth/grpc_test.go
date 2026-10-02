@@ -14,7 +14,7 @@ import (
 )
 
 // testOrgID is a fixed org UUID for fixtures that never touch the database.
-const testOrgID = "00000000-0000-0000-0000-0000000000a1"
+const testOrgID = 161
 
 const testSecret = "unit-test-secret"
 

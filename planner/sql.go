@@ -2,6 +2,7 @@ package planner
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -121,18 +122,21 @@ func (q *Query) addPredicate(pred string, literals ...string) {
 	q.predicates = append(q.predicates, Predicate{SQL: pred, Args: args})
 }
 
-// addCustomer attaches the row-level security predicate. Empty
-// customer is a no-op (no production caller passes empty; tests do).
-// Tagged ArgCustomer so a save-time-lowered form resolves this from
-// the watch's stored OrgID at fire time, not from whatever
-// customer was active during Plan().
-func (q *Query) addCustomer(customer string) {
-	if customer == "" {
+// addCustomer attaches the row-level security predicate. A zero id is a
+// no-op (no production caller passes zero; tests do). Tagged ArgCustomer so
+// a save-time-lowered form resolves this from the watch's stored OrgID at
+// fire time, not from whatever customer was active during Plan().
+//
+// Args travel as strings (see ArgSource), so the placeholder is cast
+// explicitly, the same way the timestamp bounds are: it must not depend on
+// how DuckDB would coerce a VARCHAR parameter against a BIGINT column.
+func (q *Query) addCustomer(customerID int64) {
+	if customerID == 0 {
 		return
 	}
 	q.predicates = append(q.predicates, Predicate{
-		SQL:  "customer = ?",
-		Args: []ArgSource{{Kind: ArgCustomer, Value: customer}},
+		SQL:  "customer_id = CAST(? AS BIGINT)",
+		Args: []ArgSource{{Kind: ArgCustomer, Value: strconv.FormatInt(customerID, 10)}},
 	})
 }
 

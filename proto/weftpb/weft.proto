@@ -65,7 +65,9 @@ message ArchiveResponse {
 }
 
 message CustomerArchiveStat {
-  string customer = 1;
+  reserved 1;
+  reserved "customer";
+  int64 customer_id = 5;
   int64 min_ts_unix_ns = 2;
   int64 max_ts_unix_ns = 3;
   int64 row_count = 4;
@@ -129,7 +131,11 @@ message LogRow {
   string instance = 6;       // hostname of the emitting machine
   bytes payload_json = 7;
   repeated string fields = 8;
-  string customer = 9;
+  reserved 9;
+  reserved "customer";
+  // customer_id is the owning org's id, stamped by the coordinator from the
+  // authenticated token (row-level security). Senders never set it.
+  int64 customer_id = 26;
   string deployment = 10;    // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
   string env = 11;            // deployment environment (token-derived)
   string version = 12;        // service version (agent version_file)
@@ -287,7 +293,7 @@ message ExecuteQueryRequest {
   // resolved by stopping early. See compute/local.go::consume.
   bool keep_last = 7;
   // Positional placeholder values for `?` markers in sql, in render
-  // order. Today the planner ships values as strings (customer name,
+  // order. Today the planner ships values as strings (customer id,
   // namespace name, ISO-formatted timestamps for CAST(? AS TIMESTAMP));
   // DuckDB binds them as VARCHAR and casts where needed. If the cast
   // path ever turns out unreliable in practice we promote to typed
@@ -451,7 +457,8 @@ message ShardHeartbeatRequest {
 message HeartbeatResponse {}
 
 message GetUsageRequest {
-  string customer = 1;
+  reserved 1;
+  reserved "customer";
   string period = 2;  // "2026-04" format; empty = current month
 }
 
@@ -462,7 +469,8 @@ message GetUsageResponse {
 }
 
 message CreateTokenRequest {
-  string customer = 1;
+  reserved 1;
+  reserved "customer";
   string label = 2;     // human-readable label (e.g., "vimgym-prod")
   string namespace = 3; // namespace this token authorizes (e.g., "vimgym")
   string env = 4;       // optional deployment-environment dimension stamped on every row
@@ -473,7 +481,8 @@ message CreateTokenResponse {
 }
 
 message ListTokensRequest {
-  string customer = 1;
+  reserved 1;
+  reserved "customer";
 }
 
 message ListTokensResponse {
@@ -517,7 +526,8 @@ message CoordinatorExecuteRequest {
   int64 time_start_ns = 2;  // 0 = use default
   int64 time_end_ns = 3;    // 0 = use default
   bool follow = 4;          // if true, stream stays open for live tail
-  string customer = 5;      // customer name for row-level security (from JWT)
+  reserved 5;
+  reserved "customer";
   string user_id = 6;       // invoking user; empty = system. Used for write attribution.
 }
 
@@ -559,7 +569,8 @@ message Notice {
 }
 
 message ListServicesRequest {
-  string customer = 1;  // filter services by customer (from JWT)
+  reserved 1;
+  reserved "customer";
 }
 
 message ListServicesResponse {
@@ -570,7 +581,8 @@ message ListServicesResponse {
 message AddSourceRequest {
   reserved 5, 6, 7, 8, 9, 11; // schema_yaml, poll_interval, aws_account_id, role_arn, external_id, source_type — poll-mode-only fields, retired with coordinator/poller
   string service = 1;
-  string customer = 2;
+  reserved 2;
+  reserved "customer";
   string log_group = 3;
   string region = 4;
   string namespace = 10;    // owner namespace (must already exist for this customer)
@@ -596,7 +608,8 @@ message SourceInfo {
 
 message RemoveSourceRequest {
   string service = 1;
-  string customer = 2;
+  reserved 2;
+  reserved "customer";
   string namespace = 3;
 }
 
@@ -604,14 +617,16 @@ message RemoveSourceResponse {}
 
 // Shell functions (/bin/).
 message SaveFunctionRequest {
-  string customer = 1;
+  reserved 1;
+  reserved "customer";
   string name = 2;
   string source = 3;
 }
 message SaveFunctionResponse {}
 
 message GetFunctionRequest {
-  string customer = 1;
+  reserved 1;
+  reserved "customer";
   string name = 2;
 }
 message GetFunctionResponse {
@@ -620,14 +635,16 @@ message GetFunctionResponse {
 }
 
 message ListFunctionsRequest {
-  string customer = 1;
+  reserved 1;
+  reserved "customer";
 }
 message ListFunctionsResponse {
   repeated string names = 1;
 }
 
 message DeleteFunctionRequest {
-  string customer = 1;
+  reserved 1;
+  reserved "customer";
   string name = 2;
 }
 message DeleteFunctionResponse {}
@@ -636,7 +653,8 @@ message DeleteFunctionResponse {}
 // Alert destinations are encoded inline in the pipeline as
 // `alert --notify=<alias>`; there is no separate wire field.
 message SaveWatchRequest {
-  string customer = 1;
+  reserved 1;
+  reserved "customer";
   string name = 2;
   string schedule = 3;
   string pipeline = 4;
@@ -646,7 +664,8 @@ message SaveWatchRequest {
 message SaveWatchResponse {}
 
 message GetWatchRequest {
-  string customer = 1;
+  reserved 1;
+  reserved "customer";
   string name = 2;
 }
 message GetWatchResponse {
@@ -659,20 +678,23 @@ message GetWatchResponse {
 }
 
 message ListWatchesRequest {
-  string customer = 1;
+  reserved 1;
+  reserved "customer";
 }
 message ListWatchesResponse {
   repeated string names = 1;
 }
 
 message DeleteWatchRequest {
-  string customer = 1;
+  reserved 1;
+  reserved "customer";
   string name = 2;
 }
 message DeleteWatchResponse {}
 
 message GetWatchResultsRequest {
-  string customer = 1;
+  reserved 1;
+  reserved "customer";
   string name = 2;
   int32 limit = 3;  // 0 = default (20)
 }

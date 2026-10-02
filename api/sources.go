@@ -291,7 +291,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	// Build schema.
 	schema := &ingest.Schema{
 		Service:             app,
-		Customer:            session.ActiveCustomerName,
+		CustomerID:          int64(session.ActiveOrgID),
 		Envelope:            req.Envelope,
 		Format:              req.Format,
 		FieldSeparator:      req.FieldSeparator,

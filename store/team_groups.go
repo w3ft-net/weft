@@ -42,16 +42,16 @@ const tokensSuffix = "+tokens"
 // AddUserToGroup grants (email, group) membership. group is a manager
 // group, a namespace, or "<ns>+tokens". Owner-only; the api layer gates
 // the caller before reaching here.
-func (s *Store) AddUserToGroup(orgID string, email, group string) error {
+func (s *Store) AddUserToGroup(orgID OrgID, email, group string) error {
 	return s.setGroupMembership(orgID, email, group, true)
 }
 
 // RemoveUserFromGroup revokes (email, group) membership.
-func (s *Store) RemoveUserFromGroup(orgID string, email, group string) error {
+func (s *Store) RemoveUserFromGroup(orgID OrgID, email, group string) error {
 	return s.setGroupMembership(orgID, email, group, false)
 }
 
-func (s *Store) setGroupMembership(orgID string, email, group string, grant bool) error {
+func (s *Store) setGroupMembership(orgID OrgID, email, group string, grant bool) error {
 	uid, err := s.resolveGrantableMember(orgID, email)
 	if err != nil {
 		return err
@@ -79,7 +79,7 @@ func (s *Store) setGroupMembership(orgID string, email, group string, grant bool
 // meant `deluser <owner> binmgr` had no way to do anything. Since
 // migration 072 an owner holds the same four bits as anyone else, so
 // both directions work.
-func (s *Store) resolveGrantableMember(orgID string, email string) (string, error) {
+func (s *Store) resolveGrantableMember(orgID OrgID, email string) (string, error) {
 	m, err := s.GetTeamMemberByEmail(orgID, email)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return "", fmt.Errorf("no such member: %s (invite them first: adduser %s)", email, email)
@@ -97,7 +97,7 @@ func (s *Store) resolveGrantableMember(orgID string, email string) (string, erro
 // existing namespace (with optional +tokens facet). It touches no
 // member, so callers can reject a bad group before any side effect —
 // e.g. before inviting someone on what turns out to be a typo.
-func (s *Store) ValidateGroup(orgID string, group string) error {
+func (s *Store) ValidateGroup(orgID OrgID, group string) error {
 	if _, ok := managerGroupColumn[group]; ok {
 		return nil
 	}
@@ -108,7 +108,7 @@ func (s *Store) ValidateGroup(orgID string, group string) error {
 
 // findNamespace resolves a namespace by name within a customer without
 // creating it — an unknown name is a user error, not a new namespace.
-func (s *Store) findNamespace(orgID string, name string) (*Namespace, error) {
+func (s *Store) findNamespace(orgID OrgID, name string) (*Namespace, error) {
 	namespaces, err := s.ListNamespaces(orgID)
 	if err != nil {
 		return nil, err
@@ -134,7 +134,7 @@ func (s *Store) findNamespace(orgID string, name string) (*Namespace, error) {
 // Reviving clears the other bits rather than restoring them. Re-adding a
 // member restores the membership, not the grants — the tombstone is a
 // record of what they used to hold, not an entitlement.
-func (s *Store) setOrgBit(orgID string, userID, column string, val bool) error {
+func (s *Store) setOrgBit(orgID OrgID, userID, column string, val bool) error {
 	var existing OrgPermission
 	err := s.scoped(orgID).Unscoped().Where("user_id = ?", userID).First(&existing).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -190,7 +190,7 @@ func (s *Store) setNamespaceBit(userID string, nsID uint, tokens bool, val bool)
 
 // IsOwner reports whether userID is an owner of orgID. A
 // non-member (no row) is not an owner, not an error.
-func (s *Store) IsOwner(orgID string, userID string) (bool, error) {
+func (s *Store) IsOwner(orgID OrgID, userID string) (bool, error) {
 	m, err := s.GetTeamMemberByUserID(orgID, userID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return false, nil
@@ -210,7 +210,7 @@ func (s *Store) IsOwner(orgID string, userID string) (bool, error) {
 // trigger does it, on the same status update, inside the same
 // transaction. Two writers for one row is how the tombstone bug in
 // setOrgBit stayed hidden; the trigger is now the only one.
-func (s *Store) RemoveMember(orgID string, email string) error {
+func (s *Store) RemoveMember(orgID OrgID, email string) error {
 	m, err := s.GetTeamMemberByEmail(orgID, email)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return fmt.Errorf("no such member: %s", email)
@@ -242,7 +242,7 @@ func (s *Store) RemoveMember(orgID string, email string) error {
 // Owners go through the same path as everyone else. Their groups are
 // real rows now, so there is no owner fork here and none at the
 // rendering sites either.
-func (s *Store) memberGroups(orgID string, m TeamMember, nsByID map[uint]string) ([]string, error) {
+func (s *Store) memberGroups(orgID OrgID, m TeamMember, nsByID map[uint]string) ([]string, error) {
 	if m.Pending() {
 		return nil, nil
 	}
@@ -307,7 +307,7 @@ func (s *Store) memberGroups(orgID string, m TeamMember, nsByID map[uint]string)
 // MemberGroups returns the group tokens for a single member by email,
 // along with their role and status — the backing query for `groups`
 // and `id`.
-func (s *Store) MemberGroups(orgID string, email string) (role, status string, groups []string, err error) {
+func (s *Store) MemberGroups(orgID OrgID, email string) (role, status string, groups []string, err error) {
 	m, err := s.GetTeamMemberByEmail(orgID, email)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return "", "", nil, fmt.Errorf("no such member: %s", email)
@@ -328,7 +328,7 @@ func (s *Store) MemberGroups(orgID string, email string) (role, status string, g
 // groups show "—", owners included — an owner's groups are rows like
 // anyone else's since migration 072, so the "(all — implicit)" special
 // case is gone.
-func (s *Store) RenderPasswd(orgID string) (string, error) {
+func (s *Store) RenderPasswd(orgID OrgID) (string, error) {
 	members, err := s.ListTeamMembers(orgID)
 	if err != nil {
 		return "", err
@@ -370,7 +370,7 @@ func (s *Store) RenderPasswd(orgID string) (string, error) {
 
 // namespacesByID returns a customer's namespaces keyed by ID, for
 // resolving permission rows back to namespace names.
-func (s *Store) namespacesByID(orgID string) (map[uint]string, error) {
+func (s *Store) namespacesByID(orgID OrgID) (map[uint]string, error) {
 	namespaces, err := s.ListNamespaces(orgID)
 	if err != nil {
 		return nil, err

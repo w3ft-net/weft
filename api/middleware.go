@@ -78,7 +78,7 @@ func persistLastActive(st *store.Store, session *auth.Session) {
 	// An org-less session (a superadmin with no membership) has no active
 	// customer to pin. Writing 0 trips the last_active_org_id foreign
 	// key, so there's nothing to persist.
-	if session.ActiveOrgID == "" {
+	if session.ActiveOrgID == 0 {
 		return
 	}
 	if err := st.UpdateUserLastActiveOrg(session.UserID, session.ActiveOrgID); err != nil {
@@ -151,7 +151,7 @@ const agentAuthKey contextKey = "agentAuth"
 
 // AgentAuthResult is the identity derived from a validated agent token.
 type AgentAuthResult struct {
-	OrgID        string
+	OrgID        store.OrgID
 	CustomerName string
 	Namespace    string
 }

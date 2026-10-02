@@ -1,7 +1,6 @@
 package coordinator
 
 import (
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,32 +13,30 @@ import (
 // zero but kept, since it's still accumulating.
 type CustomerUsageStats struct {
 	mu     sync.Mutex
-	counts map[string]*atomic.Int64 // key: "customer\x00YYYY-MM-DDTHH"
+	counts map[usageKey]*atomic.Int64
+}
+
+// usageKey is one (customer, hour) bucket. Hour is always truncated to the
+// UTC hour, so equal hours compare equal.
+type usageKey struct {
+	customerID int64
+	hour       time.Time
 }
 
 // NewCustomerUsageStats creates an empty usage tracker.
 func NewCustomerUsageStats() *CustomerUsageStats {
 	return &CustomerUsageStats{
-		counts: make(map[string]*atomic.Int64),
+		counts: make(map[usageKey]*atomic.Int64),
 	}
 }
 
-func usageKey(customer string, hour time.Time) string {
-	return customer + "\x00" + hour.Format("2006-01-02T15")
-}
-
-func parseUsageKey(key string) (customer, hourStr string) {
-	i := strings.IndexByte(key, 0)
-	if i < 0 {
-		return key, ""
-	}
-	return key[:i], key[i+1:]
+func currentUsageKey(customerID int64) usageKey {
+	return usageKey{customerID: customerID, hour: time.Now().UTC().Truncate(time.Hour)}
 }
 
 // Record adds bytes to the current hour's bucket for a customer.
-func (u *CustomerUsageStats) Record(customer string, bytes int64) {
-	hour := time.Now().UTC().Truncate(time.Hour)
-	key := usageKey(customer, hour)
+func (u *CustomerUsageStats) Record(customerID int64, bytes int64) {
+	key := currentUsageKey(customerID)
 
 	u.mu.Lock()
 	counter, ok := u.counts[key]
@@ -55,9 +52,9 @@ func (u *CustomerUsageStats) Record(customer string, bytes int64) {
 // UsageEntry is one flush's worth of usage data: bytes accumulated for a
 // customer/hour since the last Drain, ready to append to PostgreSQL.
 type UsageEntry struct {
-	Customer string
-	Hour     time.Time
-	Bytes    int64
+	CustomerID int64
+	Hour       time.Time
+	Bytes      int64
 }
 
 // Drain returns every bucket's delta since the last call and resets each
@@ -68,27 +65,22 @@ type UsageEntry struct {
 // it was last drained, so the caller can append it straight to
 // usage_hourly without double-counting on the next tick.
 func (u *CustomerUsageStats) Drain() []UsageEntry {
-	currentHour := time.Now().UTC().Truncate(time.Hour).Format("2006-01-02T15")
+	currentHour := time.Now().UTC().Truncate(time.Hour)
 
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
 	var entries []UsageEntry
 	for key, counter := range u.counts {
-		customer, hourStr := parseUsageKey(key)
-		hour, err := time.Parse("2006-01-02T15", hourStr)
-		if err != nil {
-			continue
-		}
 		bytes := counter.Swap(0)
 		if bytes > 0 {
 			entries = append(entries, UsageEntry{
-				Customer: customer,
-				Hour:     hour,
-				Bytes:    bytes,
+				CustomerID: key.customerID,
+				Hour:       key.hour,
+				Bytes:      bytes,
 			})
 		}
-		if hourStr != currentHour {
+		if !key.hour.Equal(currentHour) {
 			delete(u.counts, key)
 		}
 	}
@@ -97,9 +89,8 @@ func (u *CustomerUsageStats) Drain() []UsageEntry {
 
 // CurrentHour returns the bytes counted so far in the current (unflushed)
 // hour for a customer. Used by GetUsage to include not-yet-persisted data.
-func (u *CustomerUsageStats) CurrentHour(customer string) int64 {
-	hour := time.Now().UTC().Truncate(time.Hour)
-	key := usageKey(customer, hour)
+func (u *CustomerUsageStats) CurrentHour(customerID int64) int64 {
+	key := currentUsageKey(customerID)
 
 	u.mu.Lock()
 	counter, ok := u.counts[key]

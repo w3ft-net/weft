@@ -90,7 +90,7 @@ func isFixedField(field string, max int) bool {
 // Language is detected from shebang at write time: "bash" (default) or "lua".
 type ShellFunction struct {
 	gorm.Model
-	OrgID           string  `gorm:"not null;uniqueIndex:idx_func_customer_name"`
+	OrgID           OrgID   `gorm:"not null;uniqueIndex:idx_func_customer_name"`
 	Name            string  `gorm:"not null;uniqueIndex:idx_func_customer_name"`
 	Source          string  `gorm:"type:text;not null"`
 	Language        string  `gorm:"not null;default:bash"` // "bash" or "lua"
@@ -107,7 +107,7 @@ type ShellFunction struct {
 // mounts.ClassifyBinScript; the store stays oblivious to the
 // .lua-extension convention so name only matters here as the row
 // key, never as a language signal.
-func (s *Store) SaveShellFunction(orgID string, userID, name, source, language string) error {
+func (s *Store) SaveShellFunction(orgID OrgID, userID, name, source, language string) error {
 	if err := validateSource(language, source); err != nil {
 		return err
 	}
@@ -344,7 +344,7 @@ func terminalAlertOf(list *bash.List) *bash.SimpleCommand {
 	return sc
 }
 
-func (s *Store) GetShellFunction(orgID string, name string) (*ShellFunction, error) {
+func (s *Store) GetShellFunction(orgID OrgID, name string) (*ShellFunction, error) {
 	var fn ShellFunction
 	err := s.scoped(orgID).Where("name = ?", name).First(&fn).Error
 	if err != nil {
@@ -353,13 +353,13 @@ func (s *Store) GetShellFunction(orgID string, name string) (*ShellFunction, err
 	return &fn, nil
 }
 
-func (s *Store) ListShellFunctions(orgID string) ([]ShellFunction, error) {
+func (s *Store) ListShellFunctions(orgID OrgID) ([]ShellFunction, error) {
 	var fns []ShellFunction
 	err := s.scoped(orgID).Order("name").Find(&fns).Error
 	return fns, err
 }
 
-func (s *Store) DeleteShellFunction(orgID string, name string) error {
+func (s *Store) DeleteShellFunction(orgID OrgID, name string) error {
 	return s.scoped(orgID).Where("name = ?", name).Delete(&ShellFunction{}).Error
 }
 
@@ -373,7 +373,7 @@ func (s *Store) DeleteShellFunction(orgID string, name string) error {
 // dot-prefixed JSON path (".foo.bar"); see shellcore.FieldSpec.
 type CronWatch struct {
 	gorm.Model
-	OrgID      string `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
+	OrgID      OrgID  `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
 	Name       string `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
 	Schedule   string `gorm:"not null"` // "*/5 * * * *" or "every 1m"
 	Pipeline   string `gorm:"type:text;not null"`
@@ -419,7 +419,7 @@ func computeCronWatchHash(schedule, pipeline string) string {
 // show the user. Today the only producer is the truncation lint
 // below, but this is a generic channel: any future save-time check
 // that wants to warn without blocking uses the same mechanism.
-func (s *Store) SaveCronWatch(orgID string, userID, name, schedule, pipeline string, loweredPlan []byte) error {
+func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline string, loweredPlan []byte) error {
 	compiled, err := CompileWatchPipeline(pipeline)
 	if err != nil {
 		return err
@@ -584,7 +584,7 @@ func ValidateWatchPipeline(pipeline string) error {
 	return err
 }
 
-func (s *Store) GetCronWatch(orgID string, name string) (*CronWatch, error) {
+func (s *Store) GetCronWatch(orgID OrgID, name string) (*CronWatch, error) {
 	var w CronWatch
 	err := s.scoped(orgID).Where("name = ?", name).First(&w).Error
 	if err != nil {
@@ -593,18 +593,18 @@ func (s *Store) GetCronWatch(orgID string, name string) (*CronWatch, error) {
 	return &w, nil
 }
 
-func (s *Store) ListCronWatches(orgID string) ([]CronWatch, error) {
+func (s *Store) ListCronWatches(orgID OrgID) ([]CronWatch, error) {
 	var watches []CronWatch
 	err := s.scoped(orgID).Order("name").Find(&watches).Error
 	return watches, err
 }
 
-func (s *Store) DeleteCronWatch(orgID string, name string) error {
+func (s *Store) DeleteCronWatch(orgID OrgID, name string) error {
 	return s.scoped(orgID).Where("name = ?", name).Delete(&CronWatch{}).Error
 }
 
 // CountCronWatches returns the number of cron watches for a customer.
-func (s *Store) CountCronWatches(orgID string) (int, error) {
+func (s *Store) CountCronWatches(orgID OrgID) (int, error) {
 	var count int64
 	err := s.scoped(orgID).Model(&CronWatch{}).Count(&count).Error
 	return int(count), err
@@ -684,7 +684,7 @@ type CronBucket struct {
 // Raw-only — the full CronResult row (with stdout/stderr/exit_code)
 // only exists in the unrolled raw table. `since` is clamped to the
 // caller's plan retention before the query runs.
-func (s *Store) QueryCronResults(orgID string, watchName string, since time.Time) ([]CronResult, error) {
+func (s *Store) QueryCronResults(orgID OrgID, watchName string, since time.Time) ([]CronResult, error) {
 	var watch CronWatch
 	if err := s.scoped(orgID).Where("name = ?", watchName).First(&watch).Error; err != nil {
 		return nil, err
@@ -732,7 +732,7 @@ func ClampRetention(tier Tier, since time.Time) time.Time {
 // NOTE: subscriptions.org_id is a TEXT column that stores the
 // customer *name*, not the numeric id (see store/subscription.go).
 // That's historical — we'd rename it if we were starting over.
-func (s *Store) TierForOrg(orgID string) Tier {
+func (s *Store) TierForOrg(orgID OrgID) Tier {
 	var tier string
 	err := s.db.Raw(`
 		SELECT s.tier
@@ -758,7 +758,7 @@ func (s *Store) TierForOrg(orgID string) Tier {
 // per-service entries consumed by the Notifier.
 type NotifyConfig struct {
 	gorm.Model
-	OrgID         string `gorm:"not null;uniqueIndex"`
+	OrgID         OrgID  `gorm:"not null;uniqueIndex"`
 	SlackWebhook  string // incoming webhook URL (optional)
 	SlackBotToken string // bot OAuth token for chat.postMessage
 	SlackTeamName string // workspace name (for display)
@@ -770,7 +770,7 @@ type NotifyConfig struct {
 // customer. notify.yaml aliases reference rows here by Name.
 type PagerDutyIntegration struct {
 	gorm.Model
-	OrgID          string `gorm:"not null;index:idx_pd_integrations_customer_name,unique,where:deleted_at IS NULL"`
+	OrgID          OrgID  `gorm:"not null;index:idx_pd_integrations_customer_name,unique,where:deleted_at IS NULL"`
 	Name           string `gorm:"not null;index:idx_pd_integrations_customer_name,unique,where:deleted_at IS NULL"`
 	IntegrationKey string `gorm:"not null"`
 	LastUsedAt     *time.Time
@@ -781,7 +781,7 @@ type PagerDutyIntegration struct {
 // pluralize naturally through gorm's NamingStrategy.
 func (PagerDutyIntegration) TableName() string { return "pagerduty_integrations" }
 
-func (s *Store) GetNotifyConfig(orgID string) (*NotifyConfig, error) {
+func (s *Store) GetNotifyConfig(orgID OrgID) (*NotifyConfig, error) {
 	var nc NotifyConfig
 	err := s.scoped(orgID).First(&nc).Error
 	if err != nil {
@@ -790,7 +790,7 @@ func (s *Store) GetNotifyConfig(orgID string) (*NotifyConfig, error) {
 	return &nc, nil
 }
 
-func (s *Store) SaveSlackConfig(orgID string, webhook, botToken, teamName string) error {
+func (s *Store) SaveSlackConfig(orgID OrgID, webhook, botToken, teamName string) error {
 	now := time.Now()
 	var nc NotifyConfig
 	result := s.scoped(orgID).First(&nc)
@@ -813,7 +813,7 @@ func (s *Store) SaveSlackConfig(orgID string, webhook, botToken, teamName string
 
 // SaveNotifyAliases writes the raw /etc/notify.yaml YAML for a customer.
 // Callers must validate the YAML before invoking this.
-func (s *Store) SaveNotifyAliases(orgID string, aliasesYAML string) error {
+func (s *Store) SaveNotifyAliases(orgID OrgID, aliasesYAML string) error {
 	var nc NotifyConfig
 	result := s.scoped(orgID).First(&nc)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -829,7 +829,7 @@ func (s *Store) SaveNotifyAliases(orgID string, aliasesYAML string) error {
 
 // RecordPagerDutySend marks an integration's last_used_at / last_error after
 // a dispatch attempt. sendErr may be empty on success.
-func (s *Store) RecordPagerDutySend(orgID string, name, sendErr string) error {
+func (s *Store) RecordPagerDutySend(orgID OrgID, name, sendErr string) error {
 	now := time.Now()
 	return s.scoped(orgID).Model(&PagerDutyIntegration{}).
 		Where("name = ?", name).

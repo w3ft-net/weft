@@ -67,10 +67,7 @@ func TestJanitor_RunOnce(t *testing.T) {
 	ss.DB().Exec("DELETE FROM parquet_tombstones")
 	bucket := seedBucket(t, db, BucketStasis)
 
-	cust, err := db.FindOrCreateOrg("paying-co")
-	if err != nil {
-		t.Fatal(err)
-	}
+	cust := seedPayingCo(t, db)
 	if err := db.CreateSubscription(&store.Subscription{
 		ID: "sub", OrgID: cust.ID, Tier: "swatch", Status: "active",
 		StartsAt: janitorNow.Add(-days(90)), CreatedAt: janitorNow.Add(-days(90)),

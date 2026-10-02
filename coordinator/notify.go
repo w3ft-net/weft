@@ -41,7 +41,7 @@ func NewNotifier(s *store.Store, emailCfg *email.Config) *Notifier {
 // ad-hoc shell invocations should pass a fresh synthetic name (see
 // AlertContext.dispatchIdentity). body is the alert text; individual
 // channels may truncate further to satisfy per-service limits.
-func (n *Notifier) Send(orgID string, aliasName, watchName, body string) error {
+func (n *Notifier) Send(orgID store.OrgID, aliasName, watchName, body string) error {
 	aliasName = strings.TrimSpace(aliasName)
 	if aliasName == "" {
 		return nil
@@ -185,7 +185,7 @@ type pagerDutyPayload struct {
 	Details   map[string]any `json:"custom_details,omitempty"`
 }
 
-func (n *Notifier) sendPagerDuty(orgID string, watchName string, target store.PDTarget, stderr string) error {
+func (n *Notifier) sendPagerDuty(orgID store.OrgID, watchName string, target store.PDTarget, stderr string) error {
 	integ, err := func() (*store.PagerDutyIntegration, error) {
 		var item store.PagerDutyIntegration
 		err := n.Store.DB().WithContext(store.WithOrg(context.Background(), orgID)).Where("name = ?", target.Name).First(&item).Error

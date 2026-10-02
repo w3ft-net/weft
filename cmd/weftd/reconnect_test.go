@@ -88,7 +88,7 @@ func TestReconnect_SendRecovery(t *testing.T) {
 	ctx := context.Background()
 
 	// First send — should open a stream and send.
-	if err := sendLineWithReconnect(ctx, client, ss, "line1", "kevlar", "i-001", "vimgym", ""); err != nil {
+	if err := sendLineWithReconnect(ctx, client, ss, "line1", "i-001", "vimgym", ""); err != nil {
 		t.Fatal(err)
 	}
 	if client.streamCount() != 1 {
@@ -101,7 +101,7 @@ func TestReconnect_SendRecovery(t *testing.T) {
 	// Break the stream — next send should fail, trigger reconnect, and retry.
 	client.latestStream().failNext = true
 
-	if err := sendLineWithReconnect(ctx, client, ss, "line2", "kevlar", "i-001", "vimgym", ""); err != nil {
+	if err := sendLineWithReconnect(ctx, client, ss, "line2", "i-001", "vimgym", ""); err != nil {
 		t.Fatal(err)
 	}
 	if client.streamCount() != 2 {
@@ -119,8 +119,8 @@ func TestReconnect_EmptyLinesSkipped(t *testing.T) {
 	ss := &streamState{}
 	ctx := context.Background()
 
-	sendLineWithReconnect(ctx, client, ss, "", "kevlar", "i-001", "vimgym", "")
-	sendLineWithReconnect(ctx, client, ss, "   ", "kevlar", "i-001", "vimgym", "")
+	sendLineWithReconnect(ctx, client, ss, "", "i-001", "vimgym", "")
+	sendLineWithReconnect(ctx, client, ss, "   ", "i-001", "vimgym", "")
 
 	if client.streamCount() != 0 {
 		t.Fatalf("expected no streams for empty lines, got %d", client.streamCount())
@@ -180,9 +180,7 @@ func TestStreamScannedLines_ReusesOneStream(t *testing.T) {
 		fmt.Fprintf(&sb, "line %d\n", i)
 	}
 
-	streamScannedLines(context.Background(), client,
-		bufio.NewScanner(strings.NewReader(sb.String())),
-		"kevlar", "i-001", "xylem/django")
+	streamScannedLines(context.Background(), client, bufio.NewScanner(strings.NewReader(sb.String())), "i-001", "xylem/django")
 
 	if got := client.streamCount(); got != 1 {
 		t.Fatalf("journal tailer opened %d streams for %d lines; want exactly 1 reused stream "+

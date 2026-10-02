@@ -29,6 +29,21 @@ func archivedParquet(t *testing.T, rows []*pb.LogRow) (string, []shard.CustomerS
 	return path, stats
 }
 
+// payingCo is the fixture customer's org id. It is explicit (and far above
+// any sequence-assigned id) so the parquet rows, which are written before the
+// database fixture exists, can carry the same customer_id the org will have.
+const payingCo store.OrgID = 900001
+
+// seedPayingCo creates the "paying-co" org with the fixed id payingCo.
+func seedPayingCo(t *testing.T, db *store.Store) *store.Organization {
+	t.Helper()
+	cust := &store.Organization{ID: payingCo, Name: "paying-co"}
+	if err := db.DB().Create(cust).Error; err != nil {
+		t.Fatalf("customer: %v", err)
+	}
+	return cust
+}
+
 // purgeFixture seeds a swatch customer and an ARCHIVED shard pointing at
 // path, optionally recording its archive stats. Returns the bound store,
 // the resolver, and PurgeDeps with a fake Retire that records calls.
@@ -38,10 +53,7 @@ func purgeFixture(t *testing.T, shardID, path string, stats []shard.CustomerStat
 	ss := ShardStore{db}
 	bucket := seedBucket(t, db, BucketStasis)
 
-	cust, err := db.FindOrCreateOrg("paying-co")
-	if err != nil {
-		t.Fatalf("customer: %v", err)
-	}
+	cust := seedPayingCo(t, db)
 	if err := db.CreateSubscription(&store.Subscription{
 		ID: "sub-" + shardID, OrgID: cust.ID, Tier: "swatch",
 		Status: "active", StartsAt: janitorNow.Add(-days(90)), CreatedAt: janitorNow.Add(-days(90)),
@@ -78,7 +90,7 @@ func purgeFixture(t *testing.T, shardID, path string, stats []shard.CustomerStat
 }
 
 func mkRow(raw string, age int) *pb.LogRow {
-	return &pb.LogRow{Raw: raw, Customer: "paying-co", TsUnixNs: janitorNow.Add(-days(age)).UnixNano()}
+	return &pb.LogRow{Raw: raw, CustomerId: int64(payingCo), TsUnixNs: janitorNow.Add(-days(age)).UnixNano()}
 }
 
 func TestExecutePurge_Rewrite(t *testing.T) {
@@ -113,7 +125,7 @@ func TestExecutePurge_Rewrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cold.Close()
-	rows, err := cold.Query("SELECT raw, ts FROM logs WHERE customer = 'paying-co'")
+	rows, err := cold.Query("SELECT raw, ts FROM logs WHERE customer_id = 900001")
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
@@ -174,7 +186,7 @@ func TestExecutePurge_UnknownBackfillsStats(t *testing.T) {
 	}
 
 	stats, _ := ss.shardArchiveStats("sh-unk")
-	if len(stats) != 1 || stats[0].Customer != "paying-co" || stats[0].RowCount != 2 {
+	if len(stats) != 1 || stats[0].OrgID != payingCo || stats[0].RowCount != 2 {
 		t.Errorf("backfilled stats = %+v, want paying-co/2", stats)
 	}
 	if len(*retired) != 0 {

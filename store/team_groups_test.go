@@ -11,7 +11,7 @@ import (
 )
 
 // groupsFor is a test helper: the sorted group tokens for a member.
-func groupsFor(t *testing.T, db *Store, custID string, email string) []string {
+func groupsFor(t *testing.T, db *Store, custID OrgID, email string) []string {
 	t.Helper()
 	_, _, groups, err := db.MemberGroups(custID, email)
 	if err != nil {
@@ -211,7 +211,7 @@ func TestTeamGroups_GrantAfterRemoveAndReadd(t *testing.T) {
 	}
 }
 
-func mustMember(t *testing.T, db *Store, custID string, email string) *TeamMember {
+func mustMember(t *testing.T, db *Store, custID OrgID, email string) *TeamMember {
 	t.Helper()
 	m, err := db.GetTeamMemberByEmail(custID, email)
 	if err != nil {

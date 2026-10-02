@@ -22,7 +22,7 @@ import (
 // way WeftFuncs is.
 type WitFuncs struct {
 	Store  *store.Store
-	OrgID  string
+	OrgID  store.OrgID
 	UserID string // user invoking; empty = system call (still works for read-only paths)
 }
 

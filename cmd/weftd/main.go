@@ -444,8 +444,8 @@ func main() {
 
 		if src.Unit != "" {
 			go func() {
-				if err := onboardAndRun(ctx, coordClient, cfg.Token, customer, app, src.Path, src.Unit, hostname, fullApp, func() {
-					runJournalTailer(ctx, coordClient, customer, hostname, fullApp, src.Unit)
+				if err := onboardAndRun(ctx, coordClient, cfg.Token, app, src.Path, src.Unit, hostname, fullApp, func() {
+					runJournalTailer(ctx, coordClient, hostname, fullApp, src.Unit)
 				}); err != nil {
 					log.Printf("[%s] onboard failed: %v", fullApp, err)
 				}
@@ -454,12 +454,12 @@ func main() {
 			if strings.ContainsAny(src.Path, "*?[") {
 				// Glob: each matched file is onboarded independently from inside watchGlob.
 				// The app name derived from the pattern ("*") is meaningless here.
-				go watchGlob(ctx, coordClient, cfg.Token, customer, hostname, namespace, sourceKind(src), src.Path, explicitPaths)
+				go watchGlob(ctx, coordClient, cfg.Token, hostname, namespace, sourceKind(src), src.Path, explicitPaths)
 			} else {
 				// Single file: onboard once, then tail.
 				go func() {
-					if err := onboardAndRun(ctx, coordClient, cfg.Token, customer, app, src.Path, "", hostname, fullApp, func() {
-						runFileTailer(ctx, coordClient, customer, hostname, fullApp, src.Path)
+					if err := onboardAndRun(ctx, coordClient, cfg.Token, app, src.Path, "", hostname, fullApp, func() {
+						runFileTailer(ctx, coordClient, hostname, fullApp, src.Path)
 					}); err != nil {
 						log.Printf("[%s] onboard failed: %v", fullApp, err)
 					}
@@ -467,7 +467,7 @@ func main() {
 			}
 		}
 		if src.Metrics.Enabled {
-			go runMetricsCollector(ctx, coordClient, customer, hostname, namespace, effectiveServices(cfg), src.Metrics)
+			go runMetricsCollector(ctx, coordClient, hostname, namespace, effectiveServices(cfg), src.Metrics)
 		}
 	}
 
@@ -478,12 +478,12 @@ func main() {
 			log.Fatalf("socket listener: %v", err)
 		}
 		defer sock.Close()
-		go runSocketIngester(ctx, coordClient, customer, hostname, namespace, sock)
+		go runSocketIngester(ctx, coordClient, hostname, namespace, sock)
 		log.Printf("listening on socket %s", cfg.Socket)
 	}
 
 	if parseClientSide {
-		go runSchemaRefresher(ctx, coordClient, cfg.Token, customer)
+		go runSchemaRefresher(ctx, coordClient, cfg.Token)
 		go runParseStatsReporter(ctx)
 	}
 
@@ -503,7 +503,7 @@ func main() {
 // parserCache so the row-stamping hot path can use it.
 // unit is non-empty for journald sources (which have no file path); path is
 // non-empty for file sources. Exactly one is set.
-func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, customer, app, path, unit, hostname, fullApp string, run func()) error {
+func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, app, path, unit, hostname, fullApp string, run func()) error {
 	// Record how to re-sample this source, so the schema refresher can
 	// honor a user-requested resample later without disturbing the tailer.
 	registerResampleSource(fullApp, resampleSource{path: path, unit: unit, instance: hostname})
@@ -513,7 +513,7 @@ func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 	if err != nil {
 		log.Printf("[%s] status check failed: %v — proceeding to sample", fullApp, err)
 	} else if st.Status == "configured" {
-		installParser(fullApp, customer, st.SchemaYAML)
+		installParser(fullApp, st.SchemaYAML)
 		log.Printf("[%s] already configured — starting", fullApp)
 		run()
 		return nil
@@ -538,7 +538,7 @@ func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 	if err != nil {
 		return err
 	}
-	installParser(fullApp, customer, schemaYAML)
+	installParser(fullApp, schemaYAML)
 	log.Printf("[%s] configured — starting", fullApp)
 	run()
 	return nil
@@ -548,11 +548,11 @@ func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 // stashes it in the cache. No-op when parseClientSide is off or the
 // YAML is empty (e.g. unconfigured source). Logs and continues on
 // compile failures — the row-stamping path falls back to no-parse.
-func installParser(fullApp, customer, schemaYAML string) {
+func installParser(fullApp, schemaYAML string) {
 	if !parseClientSide || schemaYAML == "" {
 		return
 	}
-	if _, err := parserCache.Install(fullApp, customer, schemaYAML); err != nil {
+	if _, err := parserCache.Install(fullApp, schemaYAML); err != nil {
 		log.Printf("[%s] schema install failed, falling back to no-parse: %v", fullApp, err)
 	}
 }
@@ -563,7 +563,7 @@ func installParser(fullApp, customer, schemaYAML string) {
 // A misconfigured source whose status drops back to "pending" stops
 // receiving fresh parsers, but the previously installed one keeps
 // running until process restart — same posture as today's onboarding.
-func runSchemaRefresher(ctx context.Context, client pb.WeftCoordinatorClient, token, customer string) {
+func runSchemaRefresher(ctx context.Context, client pb.WeftCoordinatorClient, token string) {
 	if !parseClientSide {
 		return
 	}
@@ -577,7 +577,7 @@ func runSchemaRefresher(ctx context.Context, client pb.WeftCoordinatorClient, to
 		case <-ticker.C:
 		}
 		for _, fullApp := range parserCache.Apps() {
-			refreshSource(ctx, client, token, customer, fullApp)
+			refreshSource(ctx, client, token, fullApp)
 		}
 	}
 }
@@ -586,7 +586,7 @@ func runSchemaRefresher(ctx context.Context, client pb.WeftCoordinatorClient, to
 // resample, kicks it off; otherwise it reinstalls the parser when the
 // server's schema hash has moved. The source is looked up by the key the
 // coordinator stores it under.
-func refreshSource(ctx context.Context, client pb.WeftCoordinatorClient, token, customer, fullApp string) {
+func refreshSource(ctx context.Context, client pb.WeftCoordinatorClient, token, fullApp string) {
 	// The coordinator keys log sources on the BARE service —
 	// GetSourceStatus → FindLogGroup matches the service column alone and
 	// does not strip the kind (unlike SubmitSample). fullApp is the
@@ -613,7 +613,7 @@ func refreshSource(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 	if cached == st.SchemaHash {
 		return
 	}
-	if _, err := parserCache.Install(fullApp, customer, st.SchemaYAML); err != nil {
+	if _, err := parserCache.Install(fullApp, st.SchemaYAML); err != nil {
 		log.Printf("[%s] schema reinstall failed (keeping previous parser): %v", fullApp, err)
 		return
 	}
@@ -748,7 +748,7 @@ func openStream(ctx context.Context, client pb.WeftCoordinatorClient, label stri
 
 // runJournalTailer tails a systemd unit's journal and streams lines.
 // Reconnects automatically if the stream breaks.
-func runJournalTailer(ctx context.Context, client pb.WeftCoordinatorClient, customer, instance, app, unit string) {
+func runJournalTailer(ctx context.Context, client pb.WeftCoordinatorClient, instance, app, unit string) {
 	cmd := exec.CommandContext(ctx, "journalctl", "-f", "-u", unit, "--no-pager", "-o", "cat", "-n", "0")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -760,7 +760,7 @@ func runJournalTailer(ctx context.Context, client pb.WeftCoordinatorClient, cust
 		return
 	}
 
-	streamScannedLines(ctx, client, bufio.NewScanner(stdout), customer, instance, app)
+	streamScannedLines(ctx, client, bufio.NewScanner(stdout), instance, app)
 
 	cmd.Wait()
 }
@@ -774,7 +774,7 @@ func runJournalTailer(ctx context.Context, client pb.WeftCoordinatorClient, cust
 // stream.Recv() per line (the server-side leak) and churning ~one stream
 // per log line. runFileTailer already reused one stream; this brings the
 // journal path in line.
-func streamScannedLines(ctx context.Context, client pb.WeftCoordinatorClient, sc *bufio.Scanner, customer, instance, app string) {
+func streamScannedLines(ctx context.Context, client pb.WeftCoordinatorClient, sc *bufio.Scanner, instance, app string) {
 	ss := &streamState{}
 	defer func() {
 		if ss.stream != nil {
@@ -788,13 +788,13 @@ func streamScannedLines(ctx context.Context, client pb.WeftCoordinatorClient, sc
 		if line == "" {
 			continue
 		}
-		if err := sendLineWithReconnect(ctx, client, ss, line, customer, instance, app, ""); err != nil {
+		if err := sendLineWithReconnect(ctx, client, ss, line, instance, app, ""); err != nil {
 			return // context cancelled
 		}
 	}
 }
 
-func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, customer, instance, app, path string) {
+func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, instance, app, path string) {
 	tailer, err := weftd.NewTailer(path)
 	if err != nil {
 		log.Printf("[%s] open %s: %v", app, path, err)
@@ -812,14 +812,14 @@ func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, custome
 	for {
 		select {
 		case <-ctx.Done():
-			flushWithReconnect(ctx, client, ss, buf, customer, instance, app)
+			flushWithReconnect(ctx, client, ss, buf, instance, app)
 			if ss.stream != nil {
 				ss.stream.CloseAndRecv()
 			}
 			return
 		case line, ok := <-lines:
 			if !ok {
-				flushWithReconnect(ctx, client, ss, buf, customer, instance, app)
+				flushWithReconnect(ctx, client, ss, buf, instance, app)
 				if ss.stream != nil {
 					ss.stream.CloseAndRecv()
 				}
@@ -827,12 +827,12 @@ func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, custome
 			}
 			buf = append(buf, line)
 			if len(buf) >= 100 {
-				flushWithReconnect(ctx, client, ss, buf, customer, instance, app)
+				flushWithReconnect(ctx, client, ss, buf, instance, app)
 				buf = buf[:0]
 			}
 		case <-ticker.C:
 			if len(buf) > 0 {
-				flushWithReconnect(ctx, client, ss, buf, customer, instance, app)
+				flushWithReconnect(ctx, client, ss, buf, instance, app)
 				buf = buf[:0]
 			}
 		}
@@ -971,7 +971,7 @@ func absClean(p string) string {
 // auto-discovered — that's the well-known limitation of fsnotify
 // without a recursive subscriber. Startup-time discovery via
 // globMatch handles the deep case.
-func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, customer, instance, namespace, kind, pattern string, excluded map[string]bool) {
+func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, instance, namespace, kind, pattern string, excluded map[string]bool) {
 	prefix := fixedPrefix(pattern)
 	watchDir := strings.TrimSuffix(prefix, string(filepath.Separator))
 	if watchDir == "" {
@@ -991,8 +991,8 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, cust
 		app := appFromPath(pattern, p)
 		fullApp := namespace + "/" + app + "/" + kind
 		go func() {
-			if err := onboardAndRun(ctx, client, token, customer, app, p, "", instance, fullApp, func() {
-				runFileTailer(ctx, client, customer, instance, fullApp, p)
+			if err := onboardAndRun(ctx, client, token, app, p, "", instance, fullApp, func() {
+				runFileTailer(ctx, client, instance, fullApp, p)
 			}); err != nil {
 				log.Printf("[%s] onboard failed: %v", fullApp, err)
 			}
@@ -1094,7 +1094,7 @@ func effectiveServices(cfg Config) []string {
 	return nil
 }
 
-func runSocketIngester(ctx context.Context, client pb.WeftCoordinatorClient, customer, instance, namespace string, sock *weftd.SocketListener) {
+func runSocketIngester(ctx context.Context, client pb.WeftCoordinatorClient, instance, namespace string, sock *weftd.SocketListener) {
 	lines := sock.Lines()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -1110,7 +1110,7 @@ func runSocketIngester(ctx context.Context, client pb.WeftCoordinatorClient, cus
 		select {
 		case <-ctx.Done():
 			for _, al := range buf {
-				sendLineWithReconnect(ctx, client, ss, al.line, customer, instance, al.app, al.traceID)
+				sendLineWithReconnect(ctx, client, ss, al.line, instance, al.app, al.traceID)
 			}
 			if ss.stream != nil {
 				ss.stream.CloseAndRecv()
@@ -1126,14 +1126,14 @@ func runSocketIngester(ctx context.Context, client pb.WeftCoordinatorClient, cus
 			buf = append(buf, appLine{app: prefix(sl.App), line: sl.Line, traceID: sl.TraceID})
 			if len(buf) >= 100 {
 				for _, al := range buf {
-					sendLineWithReconnect(ctx, client, ss, al.line, customer, instance, al.app, al.traceID)
+					sendLineWithReconnect(ctx, client, ss, al.line, instance, al.app, al.traceID)
 				}
 				buf = buf[:0]
 			}
 		case <-ticker.C:
 			if len(buf) > 0 {
 				for _, al := range buf {
-					sendLineWithReconnect(ctx, client, ss, al.line, customer, instance, al.app, al.traceID)
+					sendLineWithReconnect(ctx, client, ss, al.line, instance, al.app, al.traceID)
 				}
 				buf = buf[:0]
 			}
@@ -1216,7 +1216,7 @@ func splitFullApp(fullApp string) (namespace, service, kind string) {
 	}
 }
 
-func buildLogRow(line, customer, instance, app, traceID string) *pb.LogRow {
+func buildLogRow(line, instance, app, traceID string) *pb.LogRow {
 	now := time.Now()
 
 	namespace, service, kind := splitFullApp(app)
@@ -1228,7 +1228,6 @@ func buildLogRow(line, customer, instance, app, traceID string) *pb.LogRow {
 			msg.Namespace = namespace
 			msg.Service = service
 			msg.Kind = kind
-			msg.Customer = customer
 			msg.Instance = instance
 			msg.Deployment = globalDeployment
 			msg.Region = globalRegion
@@ -1252,7 +1251,6 @@ func buildLogRow(line, customer, instance, app, traceID string) *pb.LogRow {
 		Namespace:  namespace,
 		Service:    service,
 		Kind:       kind,
-		Customer:   customer,
 		Instance:   instance,
 		Deployment: globalDeployment,
 		Region:     globalRegion,
@@ -1267,13 +1265,13 @@ func buildLogRow(line, customer, instance, app, traceID string) *pb.LogRow {
 }
 
 // sendLineWithReconnect sends a line, opening or reconnecting the stream as needed.
-func sendLineWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient, ss *streamState, line, customer, instance, app, traceID string) error {
+func sendLineWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient, ss *streamState, line, instance, app, traceID string) error {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return nil
 	}
 
-	msg := buildLogRow(line, customer, instance, app, traceID)
+	msg := buildLogRow(line, instance, app, traceID)
 
 	// Try sending on existing stream.
 	if ss.stream != nil {
@@ -1300,9 +1298,9 @@ func sendLineWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient,
 	return nil
 }
 
-func flushWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient, ss *streamState, lines []string, customer, instance, app string) {
+func flushWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient, ss *streamState, lines []string, instance, app string) {
 	for _, line := range lines {
-		if err := sendLineWithReconnect(ctx, client, ss, line, customer, instance, app, ""); err != nil {
+		if err := sendLineWithReconnect(ctx, client, ss, line, instance, app, ""); err != nil {
 			return
 		}
 	}

@@ -16,7 +16,7 @@ import (
 // spec to the frontend.
 type Dashboard struct {
 	gorm.Model
-	OrgID           string  `gorm:"not null;uniqueIndex:idx_dashboards_customer_name"`
+	OrgID           OrgID   `gorm:"not null;uniqueIndex:idx_dashboards_customer_name"`
 	Name            string  `gorm:"not null;uniqueIndex:idx_dashboards_customer_name"`
 	YAMLBody        string  `gorm:"column:yaml_body;type:text;not null"`
 	CreatedByUserID *string `gorm:"column:created_by_user_id"`
@@ -208,7 +208,7 @@ func validateSpec(spec *DashboardSpec) error {
 // ValidateDashboardWatchRefs returns an error if any tile references a
 // watch that doesn't exist for this customer. Run this after
 // ParseDashboardYAML in any save path.
-func (s *Store) ValidateDashboardWatchRefs(orgID string, spec *DashboardSpec) error {
+func (s *Store) ValidateDashboardWatchRefs(orgID OrgID, spec *DashboardSpec) error {
 	seen := map[string]bool{}
 	for _, sec := range spec.Sections {
 		for _, tile := range sec.Tiles {
@@ -230,7 +230,7 @@ func (s *Store) ValidateDashboardWatchRefs(orgID string, spec *DashboardSpec) er
 // SaveDashboard upserts a dashboard. Callers must have already run
 // ParseDashboardYAML and ValidateDashboardWatchRefs against the body.
 // userID is recorded as the creator on first write; ignored on update.
-func (s *Store) SaveDashboard(orgID string, userID, name, yamlBody string) error {
+func (s *Store) SaveDashboard(orgID OrgID, userID, name, yamlBody string) error {
 	return s.scoped(orgID).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
 			return err
@@ -253,7 +253,7 @@ func (s *Store) SaveDashboard(orgID string, userID, name, yamlBody string) error
 }
 
 // GetDashboard returns one dashboard by name.
-func (s *Store) GetDashboard(orgID string, name string) (*Dashboard, error) {
+func (s *Store) GetDashboard(orgID OrgID, name string) (*Dashboard, error) {
 	var d Dashboard
 	err := s.scoped(orgID).Where("name = ?", name).First(&d).Error
 	if err != nil {
@@ -263,13 +263,13 @@ func (s *Store) GetDashboard(orgID string, name string) (*Dashboard, error) {
 }
 
 // ListDashboards returns dashboards for a customer ordered by name.
-func (s *Store) ListDashboards(orgID string) ([]Dashboard, error) {
+func (s *Store) ListDashboards(orgID OrgID) ([]Dashboard, error) {
 	var list []Dashboard
 	err := s.scoped(orgID).Order("name").Find(&list).Error
 	return list, err
 }
 
 // DeleteDashboard removes a dashboard (soft-delete via gorm).
-func (s *Store) DeleteDashboard(orgID string, name string) error {
+func (s *Store) DeleteDashboard(orgID OrgID, name string) error {
 	return s.scoped(orgID).Where("name = ?", name).Delete(&Dashboard{}).Error
 }

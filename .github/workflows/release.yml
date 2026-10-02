@@ -44,6 +44,31 @@ jobs:
       with:
         path: weft
         ref: ${{ inputs.sha }}
+        # Full history, not the default shallow clone — the ancestry check
+        # below needs main's complete commit graph to compute merge-base
+        # against, and a shallow fetch of just this one ref wouldn't carry it.
+        fetch-depth: 0
+
+    # Security audit 2026-09-27 (card 22): the AWS OIDC trust condition on
+    # weft-github-deploy already restricts *dispatching this workflow* to
+    # ref:refs/heads/main, but that only constrains which ref the workflow
+    # file itself runs from — inputs.sha is a separate, free-text field the
+    # caller fully controls, checked out above with no relation to main
+    # enforced at all. A caller who can reach workflow_dispatch (dispatching
+    # with --ref main satisfies the trust condition) could still pass any
+    # sha= reachable in this repo's object graph — e.g. an unreviewed commit
+    # on a feature branch or PR — and have it built and published with
+    # AWS_DEPLOY_ROLE credentials. Fail closed before doing anything else if
+    # the requested commit isn't actually on main's history.
+    - name: Verify the requested SHA is reachable from main
+      working-directory: weft
+      env:
+        RELEASE_SHA: ${{ inputs.sha }}
+      run: |
+        if ! git merge-base --is-ancestor "$RELEASE_SHA" origin/main; then
+          echo "::error::$RELEASE_SHA is not an ancestor of origin/main — refusing to release a commit outside main's history"
+          exit 1
+        fi
 
     - name: Mint GitHub App token (private sibling checkouts + module fetch)
       id: app-token

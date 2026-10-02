@@ -25,7 +25,7 @@ func TestPlan_StrictRejectsNonLogPipeline(t *testing.T) {
 	}
 	for _, p := range cases {
 		t.Run(p, func(t *testing.T) {
-			_, err := planner.Plan(p, "", time.Time{}, time.Time{})
+			_, err := planner.Plan(p, 0, "", time.Time{}, time.Time{})
 			if !errors.Is(err, planner.ErrNotPlannable) {
 				t.Fatalf("Plan(%q) err = %v, want ErrNotPlannable", p, err)
 			}

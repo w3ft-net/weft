@@ -242,7 +242,7 @@ func (x *ArchiveResponse) GetCustomerStats() []*CustomerArchiveStat {
 
 type CustomerArchiveStat struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
+	CustomerId    int64                  `protobuf:"varint,5,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
 	MinTsUnixNs   int64                  `protobuf:"varint,2,opt,name=min_ts_unix_ns,json=minTsUnixNs,proto3" json:"min_ts_unix_ns,omitempty"`
 	MaxTsUnixNs   int64                  `protobuf:"varint,3,opt,name=max_ts_unix_ns,json=maxTsUnixNs,proto3" json:"max_ts_unix_ns,omitempty"`
 	RowCount      int64                  `protobuf:"varint,4,opt,name=row_count,json=rowCount,proto3" json:"row_count,omitempty"`
@@ -280,11 +280,11 @@ func (*CustomerArchiveStat) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *CustomerArchiveStat) GetCustomer() string {
+func (x *CustomerArchiveStat) GetCustomerId() int64 {
 	if x != nil {
-		return x.Customer
+		return x.CustomerId
 	}
-	return ""
+	return 0
 }
 
 func (x *CustomerArchiveStat) GetMinTsUnixNs() int64 {
@@ -613,22 +613,24 @@ type LogRow struct {
 	// Bare service name within the sender's namespace (e.g. "coordinator").
 	// The coordinator derives the namespace from the agent/poller token —
 	// this is NOT a "namespace/service" composite.
-	Service      string   `protobuf:"bytes,3,opt,name=service,proto3" json:"service,omitempty"`
-	Level        string   `protobuf:"bytes,4,opt,name=level,proto3" json:"level,omitempty"`
-	TsUnixNs     int64    `protobuf:"varint,5,opt,name=ts_unix_ns,json=tsUnixNs,proto3" json:"ts_unix_ns,omitempty"`
-	Instance     string   `protobuf:"bytes,6,opt,name=instance,proto3" json:"instance,omitempty"` // hostname of the emitting machine
-	PayloadJson  []byte   `protobuf:"bytes,7,opt,name=payload_json,json=payloadJson,proto3" json:"payload_json,omitempty"`
-	Fields       []string `protobuf:"bytes,8,rep,name=fields,proto3" json:"fields,omitempty"`
-	Customer     string   `protobuf:"bytes,9,opt,name=customer,proto3" json:"customer,omitempty"`
-	Deployment   string   `protobuf:"bytes,10,opt,name=deployment,proto3" json:"deployment,omitempty"`                         // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
-	Env          string   `protobuf:"bytes,11,opt,name=env,proto3" json:"env,omitempty"`                                       // deployment environment (token-derived)
-	Version      string   `protobuf:"bytes,12,opt,name=version,proto3" json:"version,omitempty"`                               // service version (agent version_file)
-	Region       string   `protobuf:"bytes,13,opt,name=region,proto3" json:"region,omitempty"`                                 // cloud region (agent cloud-metadata probe)
-	Cluster      string   `protobuf:"bytes,14,opt,name=cluster,proto3" json:"cluster,omitempty"`                               // k8s cluster name (k8s mode only)
-	K8SNamespace string   `protobuf:"bytes,15,opt,name=k8s_namespace,json=k8sNamespace,proto3" json:"k8s_namespace,omitempty"` // k8s namespace (k8s mode only)
-	Pod          string   `protobuf:"bytes,16,opt,name=pod,proto3" json:"pod,omitempty"`                                       // k8s pod name (k8s mode only)
-	Container    string   `protobuf:"bytes,17,opt,name=container,proto3" json:"container,omitempty"`                           // k8s container name (k8s mode only)
-	Node         string   `protobuf:"bytes,18,opt,name=node,proto3" json:"node,omitempty"`                                     // stable workload identity (file-sourced; see docs/plans/dimensions-from-files.md)
+	Service     string   `protobuf:"bytes,3,opt,name=service,proto3" json:"service,omitempty"`
+	Level       string   `protobuf:"bytes,4,opt,name=level,proto3" json:"level,omitempty"`
+	TsUnixNs    int64    `protobuf:"varint,5,opt,name=ts_unix_ns,json=tsUnixNs,proto3" json:"ts_unix_ns,omitempty"`
+	Instance    string   `protobuf:"bytes,6,opt,name=instance,proto3" json:"instance,omitempty"` // hostname of the emitting machine
+	PayloadJson []byte   `protobuf:"bytes,7,opt,name=payload_json,json=payloadJson,proto3" json:"payload_json,omitempty"`
+	Fields      []string `protobuf:"bytes,8,rep,name=fields,proto3" json:"fields,omitempty"`
+	// customer_id is the owning org's id, stamped by the coordinator from the
+	// authenticated token (row-level security). Senders never set it.
+	CustomerId   int64  `protobuf:"varint,26,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	Deployment   string `protobuf:"bytes,10,opt,name=deployment,proto3" json:"deployment,omitempty"`                         // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
+	Env          string `protobuf:"bytes,11,opt,name=env,proto3" json:"env,omitempty"`                                       // deployment environment (token-derived)
+	Version      string `protobuf:"bytes,12,opt,name=version,proto3" json:"version,omitempty"`                               // service version (agent version_file)
+	Region       string `protobuf:"bytes,13,opt,name=region,proto3" json:"region,omitempty"`                                 // cloud region (agent cloud-metadata probe)
+	Cluster      string `protobuf:"bytes,14,opt,name=cluster,proto3" json:"cluster,omitempty"`                               // k8s cluster name (k8s mode only)
+	K8SNamespace string `protobuf:"bytes,15,opt,name=k8s_namespace,json=k8sNamespace,proto3" json:"k8s_namespace,omitempty"` // k8s namespace (k8s mode only)
+	Pod          string `protobuf:"bytes,16,opt,name=pod,proto3" json:"pod,omitempty"`                                       // k8s pod name (k8s mode only)
+	Container    string `protobuf:"bytes,17,opt,name=container,proto3" json:"container,omitempty"`                           // k8s container name (k8s mode only)
+	Node         string `protobuf:"bytes,18,opt,name=node,proto3" json:"node,omitempty"`                                     // stable workload identity (file-sourced; see docs/plans/dimensions-from-files.md)
 	// namespace + kind complete the (namespace, service, kind) source
 	// coordinates that used to travel joined inside the old composite app
 	// string. The coordinator authoritatively overwrites namespace from
@@ -742,11 +744,11 @@ func (x *LogRow) GetFields() []string {
 	return nil
 }
 
-func (x *LogRow) GetCustomer() string {
+func (x *LogRow) GetCustomerId() int64 {
 	if x != nil {
-		return x.Customer
+		return x.CustomerId
 	}
-	return ""
+	return 0
 }
 
 func (x *LogRow) GetDeployment() string {
@@ -1400,7 +1402,7 @@ type ExecuteQueryRequest struct {
 	// resolved by stopping early. See compute/local.go::consume.
 	KeepLast bool `protobuf:"varint,7,opt,name=keep_last,json=keepLast,proto3" json:"keep_last,omitempty"`
 	// Positional placeholder values for `?` markers in sql, in render
-	// order. Today the planner ships values as strings (customer name,
+	// order. Today the planner ships values as strings (customer id,
 	// namespace name, ISO-formatted timestamps for CAST(? AS TIMESTAMP));
 	// DuckDB binds them as VARCHAR and casts where needed. If the cast
 	// path ever turns out unreliable in practice we promote to typed
@@ -1743,7 +1745,6 @@ func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
 
 type GetUsageRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
 	Period        string                 `protobuf:"bytes,2,opt,name=period,proto3" json:"period,omitempty"` // "2026-04" format; empty = current month
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1777,13 +1778,6 @@ func (x *GetUsageRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use GetUsageRequest.ProtoReflect.Descriptor instead.
 func (*GetUsageRequest) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{25}
-}
-
-func (x *GetUsageRequest) GetCustomer() string {
-	if x != nil {
-		return x.Customer
-	}
-	return ""
 }
 
 func (x *GetUsageRequest) GetPeriod() string {
@@ -1855,7 +1849,6 @@ func (x *GetUsageResponse) GetPeriodEnd() string {
 
 type CreateTokenRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
 	Label         string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`         // human-readable label (e.g., "vimgym-prod")
 	Namespace     string                 `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"` // namespace this token authorizes (e.g., "vimgym")
 	Env           string                 `protobuf:"bytes,4,opt,name=env,proto3" json:"env,omitempty"`             // optional deployment-environment dimension stamped on every row
@@ -1891,13 +1884,6 @@ func (x *CreateTokenRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use CreateTokenRequest.ProtoReflect.Descriptor instead.
 func (*CreateTokenRequest) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{27}
-}
-
-func (x *CreateTokenRequest) GetCustomer() string {
-	if x != nil {
-		return x.Customer
-	}
-	return ""
 }
 
 func (x *CreateTokenRequest) GetLabel() string {
@@ -1967,7 +1953,6 @@ func (x *CreateTokenResponse) GetToken() string {
 
 type ListTokensRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2000,13 +1985,6 @@ func (x *ListTokensRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ListTokensRequest.ProtoReflect.Descriptor instead.
 func (*ListTokensRequest) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{29}
-}
-
-func (x *ListTokensRequest) GetCustomer() string {
-	if x != nil {
-		return x.Customer
-	}
-	return ""
 }
 
 type ListTokensResponse struct {
@@ -2379,7 +2357,6 @@ type CoordinatorExecuteRequest struct {
 	TimeStartNs   int64                  `protobuf:"varint,2,opt,name=time_start_ns,json=timeStartNs,proto3" json:"time_start_ns,omitempty"` // 0 = use default
 	TimeEndNs     int64                  `protobuf:"varint,3,opt,name=time_end_ns,json=timeEndNs,proto3" json:"time_end_ns,omitempty"`       // 0 = use default
 	Follow        bool                   `protobuf:"varint,4,opt,name=follow,proto3" json:"follow,omitempty"`                                // if true, stream stays open for live tail
-	Customer      string                 `protobuf:"bytes,5,opt,name=customer,proto3" json:"customer,omitempty"`                             // customer name for row-level security (from JWT)
 	UserId        string                 `protobuf:"bytes,6,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                   // invoking user; empty = system. Used for write attribution.
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2441,13 +2418,6 @@ func (x *CoordinatorExecuteRequest) GetFollow() bool {
 		return x.Follow
 	}
 	return false
-}
-
-func (x *CoordinatorExecuteRequest) GetCustomer() string {
-	if x != nil {
-		return x.Customer
-	}
-	return ""
 }
 
 func (x *CoordinatorExecuteRequest) GetUserId() string {
@@ -2658,7 +2628,6 @@ func (x *Notice) GetBody() string {
 
 type ListServicesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"` // filter services by customer (from JWT)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2691,13 +2660,6 @@ func (x *ListServicesRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ListServicesRequest.ProtoReflect.Descriptor instead.
 func (*ListServicesRequest) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{41}
-}
-
-func (x *ListServicesRequest) GetCustomer() string {
-	if x != nil {
-		return x.Customer
-	}
-	return ""
 }
 
 type ListServicesResponse struct {
@@ -2748,7 +2710,6 @@ func (x *ListServicesResponse) GetServices() []string {
 type AddSourceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Service       string                 `protobuf:"bytes,1,opt,name=service,proto3" json:"service,omitempty"`
-	Customer      string                 `protobuf:"bytes,2,opt,name=customer,proto3" json:"customer,omitempty"`
 	LogGroup      string                 `protobuf:"bytes,3,opt,name=log_group,json=logGroup,proto3" json:"log_group,omitempty"`
 	Region        string                 `protobuf:"bytes,4,opt,name=region,proto3" json:"region,omitempty"`
 	Namespace     string                 `protobuf:"bytes,10,opt,name=namespace,proto3" json:"namespace,omitempty"` // owner namespace (must already exist for this customer)
@@ -2789,13 +2750,6 @@ func (*AddSourceRequest) Descriptor() ([]byte, []int) {
 func (x *AddSourceRequest) GetService() string {
 	if x != nil {
 		return x.Service
-	}
-	return ""
-}
-
-func (x *AddSourceRequest) GetCustomer() string {
-	if x != nil {
-		return x.Customer
 	}
 	return ""
 }
@@ -3024,7 +2978,6 @@ func (x *SourceInfo) GetNamespace() string {
 type RemoveSourceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Service       string                 `protobuf:"bytes,1,opt,name=service,proto3" json:"service,omitempty"`
-	Customer      string                 `protobuf:"bytes,2,opt,name=customer,proto3" json:"customer,omitempty"`
 	Namespace     string                 `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3063,13 +3016,6 @@ func (*RemoveSourceRequest) Descriptor() ([]byte, []int) {
 func (x *RemoveSourceRequest) GetService() string {
 	if x != nil {
 		return x.Service
-	}
-	return ""
-}
-
-func (x *RemoveSourceRequest) GetCustomer() string {
-	if x != nil {
-		return x.Customer
 	}
 	return ""
 }
@@ -3120,7 +3066,6 @@ func (*RemoveSourceResponse) Descriptor() ([]byte, []int) {
 // Shell functions (/bin/).
 type SaveFunctionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Source        string                 `protobuf:"bytes,3,opt,name=source,proto3" json:"source,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -3155,13 +3100,6 @@ func (x *SaveFunctionRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use SaveFunctionRequest.ProtoReflect.Descriptor instead.
 func (*SaveFunctionRequest) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{50}
-}
-
-func (x *SaveFunctionRequest) GetCustomer() string {
-	if x != nil {
-		return x.Customer
-	}
-	return ""
 }
 
 func (x *SaveFunctionRequest) GetName() string {
@@ -3216,7 +3154,6 @@ func (*SaveFunctionResponse) Descriptor() ([]byte, []int) {
 
 type GetFunctionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3250,13 +3187,6 @@ func (x *GetFunctionRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use GetFunctionRequest.ProtoReflect.Descriptor instead.
 func (*GetFunctionRequest) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{52}
-}
-
-func (x *GetFunctionRequest) GetCustomer() string {
-	if x != nil {
-		return x.Customer
-	}
-	return ""
 }
 
 func (x *GetFunctionRequest) GetName() string {
@@ -3320,7 +3250,6 @@ func (x *GetFunctionResponse) GetSource() string {
 
 type ListFunctionsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3353,13 +3282,6 @@ func (x *ListFunctionsRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ListFunctionsRequest.ProtoReflect.Descriptor instead.
 func (*ListFunctionsRequest) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{54}
-}
-
-func (x *ListFunctionsRequest) GetCustomer() string {
-	if x != nil {
-		return x.Customer
-	}
-	return ""
 }
 
 type ListFunctionsResponse struct {
@@ -3408,7 +3330,6 @@ func (x *ListFunctionsResponse) GetNames() []string {
 
 type DeleteFunctionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3442,13 +3363,6 @@ func (x *DeleteFunctionRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use DeleteFunctionRequest.ProtoReflect.Descriptor instead.
 func (*DeleteFunctionRequest) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{56}
-}
-
-func (x *DeleteFunctionRequest) GetCustomer() string {
-	if x != nil {
-		return x.Customer
-	}
-	return ""
 }
 
 func (x *DeleteFunctionRequest) GetName() string {
@@ -3499,7 +3413,6 @@ func (*DeleteFunctionResponse) Descriptor() ([]byte, []int) {
 // `alert --notify=<alias>`; there is no separate wire field.
 type SaveWatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Schedule      string                 `protobuf:"bytes,3,opt,name=schedule,proto3" json:"schedule,omitempty"`
 	Pipeline      string                 `protobuf:"bytes,4,opt,name=pipeline,proto3" json:"pipeline,omitempty"`
@@ -3535,13 +3448,6 @@ func (x *SaveWatchRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use SaveWatchRequest.ProtoReflect.Descriptor instead.
 func (*SaveWatchRequest) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{58}
-}
-
-func (x *SaveWatchRequest) GetCustomer() string {
-	if x != nil {
-		return x.Customer
-	}
-	return ""
 }
 
 func (x *SaveWatchRequest) GetName() string {
@@ -3603,7 +3509,6 @@ func (*SaveWatchResponse) Descriptor() ([]byte, []int) {
 
 type GetWatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3637,13 +3542,6 @@ func (x *GetWatchRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use GetWatchRequest.ProtoReflect.Descriptor instead.
 func (*GetWatchRequest) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{60}
-}
-
-func (x *GetWatchRequest) GetCustomer() string {
-	if x != nil {
-		return x.Customer
-	}
-	return ""
 }
 
 func (x *GetWatchRequest) GetName() string {
@@ -3723,7 +3621,6 @@ func (x *GetWatchResponse) GetEnabled() bool {
 
 type ListWatchesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3756,13 +3653,6 @@ func (x *ListWatchesRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ListWatchesRequest.ProtoReflect.Descriptor instead.
 func (*ListWatchesRequest) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{62}
-}
-
-func (x *ListWatchesRequest) GetCustomer() string {
-	if x != nil {
-		return x.Customer
-	}
-	return ""
 }
 
 type ListWatchesResponse struct {
@@ -3811,7 +3701,6 @@ func (x *ListWatchesResponse) GetNames() []string {
 
 type DeleteWatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3845,13 +3734,6 @@ func (x *DeleteWatchRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use DeleteWatchRequest.ProtoReflect.Descriptor instead.
 func (*DeleteWatchRequest) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{64}
-}
-
-func (x *DeleteWatchRequest) GetCustomer() string {
-	if x != nil {
-		return x.Customer
-	}
-	return ""
 }
 
 func (x *DeleteWatchRequest) GetName() string {
@@ -3899,7 +3781,6 @@ func (*DeleteWatchResponse) Descriptor() ([]byte, []int) {
 
 type GetWatchResultsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Customer      string                 `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Limit         int32                  `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"` // 0 = default (20)
 	unknownFields protoimpl.UnknownFields
@@ -3934,13 +3815,6 @@ func (x *GetWatchResultsRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use GetWatchResultsRequest.ProtoReflect.Descriptor instead.
 func (*GetWatchResultsRequest) Descriptor() ([]byte, []int) {
 	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{66}
-}
-
-func (x *GetWatchResultsRequest) GetCustomer() string {
-	if x != nil {
-		return x.Customer
-	}
-	return ""
 }
 
 func (x *GetWatchResultsRequest) GetName() string {
@@ -5278,12 +5152,13 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\ts3_prefix\x18\x01 \x01(\tR\bs3Prefix\"v\n" +
 	"\x0fArchiveResponse\x12!\n" +
 	"\fparquet_path\x18\x01 \x01(\tR\vparquetPath\x12@\n" +
-	"\x0ecustomer_stats\x18\x02 \x03(\v2\x19.weft.CustomerArchiveStatR\rcustomerStats\"\x98\x01\n" +
-	"\x13CustomerArchiveStat\x12\x1a\n" +
-	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12#\n" +
+	"\x0ecustomer_stats\x18\x02 \x03(\v2\x19.weft.CustomerArchiveStatR\rcustomerStats\"\xad\x01\n" +
+	"\x13CustomerArchiveStat\x12\x1f\n" +
+	"\vcustomer_id\x18\x05 \x01(\x03R\n" +
+	"customerId\x12#\n" +
 	"\x0emin_ts_unix_ns\x18\x02 \x01(\x03R\vminTsUnixNs\x12#\n" +
 	"\x0emax_ts_unix_ns\x18\x03 \x01(\x03R\vmaxTsUnixNs\x12\x1b\n" +
-	"\trow_count\x18\x04 \x01(\x03R\browCount\";\n" +
+	"\trow_count\x18\x04 \x01(\x03R\browCountJ\x04\b\x01\x10\x02R\bcustomer\";\n" +
 	"\x14IngestStreamResponse\x12#\n" +
 	"\rrows_received\x18\x01 \x01(\x03R\frowsReceived\"4\n" +
 	"\fQueryRequest\x12\x10\n" +
@@ -5304,7 +5179,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\tmeta_vars\x18\x04 \x03(\v2\x1d.weft.ResultRow.MetaVarsEntryR\bmetaVars\x1a;\n" +
 	"\rMetaVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xab\x05\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc0\x05\n" +
 	"\x06LogRow\x12\x1d\n" +
 	"\bline_num\x18\x01 \x01(\x03B\x02\x18\x01R\alineNum\x12\x10\n" +
 	"\x03raw\x18\x02 \x01(\tR\x03raw\x12\x18\n" +
@@ -5314,8 +5189,9 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"ts_unix_ns\x18\x05 \x01(\x03R\btsUnixNs\x12\x1a\n" +
 	"\binstance\x18\x06 \x01(\tR\binstance\x12!\n" +
 	"\fpayload_json\x18\a \x01(\fR\vpayloadJson\x12\x16\n" +
-	"\x06fields\x18\b \x03(\tR\x06fields\x12\x1a\n" +
-	"\bcustomer\x18\t \x01(\tR\bcustomer\x12\x1e\n" +
+	"\x06fields\x18\b \x03(\tR\x06fields\x12\x1f\n" +
+	"\vcustomer_id\x18\x1a \x01(\x03R\n" +
+	"customerId\x12\x1e\n" +
 	"\n" +
 	"deployment\x18\n" +
 	" \x01(\tR\n" +
@@ -5335,7 +5211,8 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\aspan_id\x18\x17 \x01(\tR\x06spanId\x12$\n" +
 	"\x0eparent_span_id\x18\x18 \x01(\tR\fparentSpanId\x12\x1f\n" +
 	"\vduration_ns\x18\x19 \x01(\x03R\n" +
-	"durationNs\"1\n" +
+	"durationNsJ\x04\b\t\x10\n" +
+	"R\bcustomer\"1\n" +
 	"\rIngestRequest\x12 \n" +
 	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\"5\n" +
 	"\x0eIngestResponse\x12#\n" +
@@ -5395,24 +5272,21 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
 	"binary_sha\x18\n" +
 	" \x01(\tR\tbinarySha\"\x13\n" +
-	"\x11HeartbeatResponse\"E\n" +
-	"\x0fGetUsageRequest\x12\x1a\n" +
-	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x16\n" +
-	"\x06period\x18\x02 \x01(\tR\x06period\"{\n" +
+	"\x11HeartbeatResponse\"9\n" +
+	"\x0fGetUsageRequest\x12\x16\n" +
+	"\x06period\x18\x02 \x01(\tR\x06periodJ\x04\b\x01\x10\x02R\bcustomer\"{\n" +
 	"\x10GetUsageResponse\x12%\n" +
 	"\x0ebytes_ingested\x18\x01 \x01(\x03R\rbytesIngested\x12!\n" +
 	"\fperiod_start\x18\x02 \x01(\tR\vperiodStart\x12\x1d\n" +
 	"\n" +
-	"period_end\x18\x03 \x01(\tR\tperiodEnd\"v\n" +
-	"\x12CreateTokenRequest\x12\x1a\n" +
-	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x14\n" +
+	"period_end\x18\x03 \x01(\tR\tperiodEnd\"j\n" +
+	"\x12CreateTokenRequest\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12\x1c\n" +
 	"\tnamespace\x18\x03 \x01(\tR\tnamespace\x12\x10\n" +
-	"\x03env\x18\x04 \x01(\tR\x03env\"+\n" +
+	"\x03env\x18\x04 \x01(\tR\x03envJ\x04\b\x01\x10\x02R\bcustomer\"+\n" +
 	"\x13CreateTokenResponse\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\"/\n" +
-	"\x11ListTokensRequest\x12\x1a\n" +
-	"\bcustomer\x18\x01 \x01(\tR\bcustomer\"=\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"#\n" +
+	"\x11ListTokensRequestJ\x04\b\x01\x10\x02R\bcustomer\"=\n" +
 	"\x12ListTokensResponse\x12'\n" +
 	"\x06tokens\x18\x01 \x03(\v2\x0f.weft.TokenInfoR\x06tokens\"\x8a\x01\n" +
 	"\tTokenInfo\x12\x14\n" +
@@ -5437,14 +5311,13 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x14AuthenticateResponse\x12\x1a\n" +
 	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x1c\n" +
 	"\tnamespace\x18\x05 \x01(\tR\tnamespaceJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\n" +
-	"shard_addrR\vshard_tokenR\rexpires_at_ns\"\xc8\x01\n" +
+	"shard_addrR\vshard_tokenR\rexpires_at_ns\"\xbc\x01\n" +
 	"\x19CoordinatorExecuteRequest\x12\x1a\n" +
 	"\bpipeline\x18\x01 \x01(\tR\bpipeline\x12\"\n" +
 	"\rtime_start_ns\x18\x02 \x01(\x03R\vtimeStartNs\x12\x1e\n" +
 	"\vtime_end_ns\x18\x03 \x01(\x03R\ttimeEndNs\x12\x16\n" +
-	"\x06follow\x18\x04 \x01(\bR\x06follow\x12\x1a\n" +
-	"\bcustomer\x18\x05 \x01(\tR\bcustomer\x12\x17\n" +
-	"\auser_id\x18\x06 \x01(\tR\x06userId\"~\n" +
+	"\x06follow\x18\x04 \x01(\bR\x06follow\x12\x17\n" +
+	"\auser_id\x18\x06 \x01(\tR\x06userIdJ\x04\b\x05\x10\x06R\bcustomer\"~\n" +
 	"\x1aCoordinatorExecuteResponse\x12 \n" +
 	"\x05lines\x18\x01 \x03(\v2\n" +
 	".weft.LineR\x05lines\x12&\n" +
@@ -5457,19 +5330,17 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x14\n" +
 	"\x05title\x18\x03 \x01(\tR\x05title\x12\x12\n" +
-	"\x04body\x18\x04 \x01(\tR\x04body\"1\n" +
-	"\x13ListServicesRequest\x12\x1a\n" +
-	"\bcustomer\x18\x01 \x01(\tR\bcustomer\"2\n" +
+	"\x04body\x18\x04 \x01(\tR\x04body\"%\n" +
+	"\x13ListServicesRequestJ\x04\b\x01\x10\x02R\bcustomer\"2\n" +
 	"\x14ListServicesResponse\x12\x1a\n" +
-	"\bservices\x18\x01 \x03(\tR\bservices\"\xbf\x01\n" +
+	"\bservices\x18\x01 \x03(\tR\bservices\"\xb3\x01\n" +
 	"\x10AddSourceRequest\x12\x18\n" +
-	"\aservice\x18\x01 \x01(\tR\aservice\x12\x1a\n" +
-	"\bcustomer\x18\x02 \x01(\tR\bcustomer\x12\x1b\n" +
+	"\aservice\x18\x01 \x01(\tR\aservice\x12\x1b\n" +
 	"\tlog_group\x18\x03 \x01(\tR\blogGroup\x12\x16\n" +
 	"\x06region\x18\x04 \x01(\tR\x06region\x12\x1c\n" +
 	"\tnamespace\x18\n" +
 	" \x01(\tR\tnamespaceJ\x04\b\x05\x10\x06J\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
-	"J\x04\b\v\x10\f\"\x13\n" +
+	"J\x04\b\v\x10\fJ\x04\b\x02\x10\x03R\bcustomer\"\x13\n" +
 	"\x11AddSourceResponse\"\x14\n" +
 	"\x12ListSourcesRequest\"A\n" +
 	"\x13ListSourcesResponse\x12*\n" +
@@ -5481,57 +5352,47 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\tlog_group\x18\x03 \x01(\tR\blogGroup\x12\x16\n" +
 	"\x06region\x18\x04 \x01(\tR\x06region\x12\x18\n" +
 	"\aenabled\x18\x05 \x01(\bR\aenabled\x12\x1c\n" +
-	"\tnamespace\x18\a \x01(\tR\tnamespaceJ\x04\b\x06\x10\a\"i\n" +
+	"\tnamespace\x18\a \x01(\tR\tnamespaceJ\x04\b\x06\x10\a\"]\n" +
 	"\x13RemoveSourceRequest\x12\x18\n" +
-	"\aservice\x18\x01 \x01(\tR\aservice\x12\x1a\n" +
-	"\bcustomer\x18\x02 \x01(\tR\bcustomer\x12\x1c\n" +
-	"\tnamespace\x18\x03 \x01(\tR\tnamespace\"\x16\n" +
-	"\x14RemoveSourceResponse\"]\n" +
-	"\x13SaveFunctionRequest\x12\x1a\n" +
-	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x12\n" +
+	"\aservice\x18\x01 \x01(\tR\aservice\x12\x1c\n" +
+	"\tnamespace\x18\x03 \x01(\tR\tnamespaceJ\x04\b\x02\x10\x03R\bcustomer\"\x16\n" +
+	"\x14RemoveSourceResponse\"Q\n" +
+	"\x13SaveFunctionRequest\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
-	"\x06source\x18\x03 \x01(\tR\x06source\"\x16\n" +
-	"\x14SaveFunctionResponse\"D\n" +
-	"\x12GetFunctionRequest\x12\x1a\n" +
-	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"A\n" +
+	"\x06source\x18\x03 \x01(\tR\x06sourceJ\x04\b\x01\x10\x02R\bcustomer\"\x16\n" +
+	"\x14SaveFunctionResponse\"8\n" +
+	"\x12GetFunctionRequest\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04nameJ\x04\b\x01\x10\x02R\bcustomer\"A\n" +
 	"\x13GetFunctionResponse\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
-	"\x06source\x18\x02 \x01(\tR\x06source\"2\n" +
-	"\x14ListFunctionsRequest\x12\x1a\n" +
-	"\bcustomer\x18\x01 \x01(\tR\bcustomer\"-\n" +
+	"\x06source\x18\x02 \x01(\tR\x06source\"&\n" +
+	"\x14ListFunctionsRequestJ\x04\b\x01\x10\x02R\bcustomer\"-\n" +
 	"\x15ListFunctionsResponse\x12\x14\n" +
-	"\x05names\x18\x01 \x03(\tR\x05names\"G\n" +
-	"\x15DeleteFunctionRequest\x12\x1a\n" +
-	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\x18\n" +
-	"\x16DeleteFunctionResponse\"\x8d\x01\n" +
-	"\x10SaveWatchRequest\x12\x1a\n" +
-	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x12\n" +
+	"\x05names\x18\x01 \x03(\tR\x05names\";\n" +
+	"\x15DeleteFunctionRequest\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04nameJ\x04\b\x01\x10\x02R\bcustomer\"\x18\n" +
+	"\x16DeleteFunctionResponse\"\x81\x01\n" +
+	"\x10SaveWatchRequest\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1a\n" +
 	"\bschedule\x18\x03 \x01(\tR\bschedule\x12\x1a\n" +
-	"\bpipeline\x18\x04 \x01(\tR\bpipelineJ\x04\b\x05\x10\x06R\vnotify_dest\"\x13\n" +
-	"\x11SaveWatchResponse\"A\n" +
-	"\x0fGetWatchRequest\x12\x1a\n" +
-	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\x8b\x01\n" +
+	"\bpipeline\x18\x04 \x01(\tR\bpipelineJ\x04\b\x01\x10\x02J\x04\b\x05\x10\x06R\bcustomerR\vnotify_dest\"\x13\n" +
+	"\x11SaveWatchResponse\"5\n" +
+	"\x0fGetWatchRequest\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04nameJ\x04\b\x01\x10\x02R\bcustomer\"\x8b\x01\n" +
 	"\x10GetWatchResponse\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
 	"\bschedule\x18\x02 \x01(\tR\bschedule\x12\x1a\n" +
 	"\bpipeline\x18\x03 \x01(\tR\bpipeline\x12\x18\n" +
-	"\aenabled\x18\x05 \x01(\bR\aenabledJ\x04\b\x04\x10\x05R\vnotify_dest\"0\n" +
-	"\x12ListWatchesRequest\x12\x1a\n" +
-	"\bcustomer\x18\x01 \x01(\tR\bcustomer\"+\n" +
+	"\aenabled\x18\x05 \x01(\bR\aenabledJ\x04\b\x04\x10\x05R\vnotify_dest\"$\n" +
+	"\x12ListWatchesRequestJ\x04\b\x01\x10\x02R\bcustomer\"+\n" +
 	"\x13ListWatchesResponse\x12\x14\n" +
-	"\x05names\x18\x01 \x03(\tR\x05names\"D\n" +
-	"\x12DeleteWatchRequest\x12\x1a\n" +
-	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\x15\n" +
-	"\x13DeleteWatchResponse\"^\n" +
-	"\x16GetWatchResultsRequest\x12\x1a\n" +
-	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x12\n" +
+	"\x05names\x18\x01 \x03(\tR\x05names\"8\n" +
+	"\x12DeleteWatchRequest\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04nameJ\x04\b\x01\x10\x02R\bcustomer\"\x15\n" +
+	"\x13DeleteWatchResponse\"R\n" +
+	"\x16GetWatchResultsRequest\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
-	"\x05limit\x18\x03 \x01(\x05R\x05limit\"F\n" +
+	"\x05limit\x18\x03 \x01(\x05R\x05limitJ\x04\b\x01\x10\x02R\bcustomer\"F\n" +
 	"\x17GetWatchResultsResponse\x12+\n" +
 	"\aresults\x18\x01 \x03(\v2\x11.weft.WatchResultR\aresults\"\x92\x01\n" +
 	"\vWatchResult\x12\x16\n" +

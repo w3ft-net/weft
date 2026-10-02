@@ -33,7 +33,7 @@ func TestIngest_AppenderRoundTrip(t *testing.T) {
 		Namespace:   "test",
 		Service:     "shard",
 		Kind:        "", // expect defaulted to "main"
-		Customer:    "kevlar",
+		CustomerId:  1,
 		PayloadJson: []byte(`{"user":"alice","n":42}`),
 		Region:      "us-east-2",
 	}
@@ -95,8 +95,8 @@ func TestIngest_TraceIDRoundTrip(t *testing.T) {
 	defer ds.Close()
 
 	rows := []*pb.LogRow{
-		{Raw: "with trace", Customer: "kevlar", TsUnixNs: 1, TraceId: "trace-abc-123"},
-		{Raw: "without trace", Customer: "kevlar", TsUnixNs: 2},
+		{Raw: "with trace", CustomerId: 1, TsUnixNs: 1, TraceId: "trace-abc-123"},
+		{Raw: "without trace", CustomerId: 1, TsUnixNs: 2},
 	}
 	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
@@ -133,10 +133,10 @@ func TestIngest_SpanColumnsRoundTrip(t *testing.T) {
 
 	rows := []*pb.LogRow{
 		{
-			Raw: "with span", Customer: "kevlar", TsUnixNs: 1, TraceId: "trace-abc-123",
+			Raw: "with span", CustomerId: 1, TsUnixNs: 1, TraceId: "trace-abc-123",
 			SpanName: "shard.Query", SpanId: "s2", ParentSpanId: "s1", DurationNs: 1234000,
 		},
-		{Raw: "without span", Customer: "kevlar", TsUnixNs: 2},
+		{Raw: "without span", CustomerId: 1, TsUnixNs: 2},
 	}
 	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
@@ -185,7 +185,7 @@ func TestIngest_EmptyPayloadDefaults(t *testing.T) {
 	}
 	defer ds.Close()
 
-	if err := ds.Ingest([]*pb.LogRow{{Raw: "x", Customer: "kevlar", TsUnixNs: 1}}, nil); err != nil {
+	if err := ds.Ingest([]*pb.LogRow{{Raw: "x", CustomerId: 1, TsUnixNs: 1}}, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 	var typ string
@@ -220,13 +220,13 @@ func TestIngest_ColumnOrderIndependent(t *testing.T) {
 	}
 
 	row := &pb.LogRow{
-		Raw:       "ordered",
-		Level:     "WARN",
-		Namespace: "ns",
-		Service:   "svc",
-		Customer:  "kevlar",
-		Region:    "us-east-2",
-		TsUnixNs:  1,
+		Raw:        "ordered",
+		Level:      "WARN",
+		Namespace:  "ns",
+		Service:    "svc",
+		CustomerId: 1,
+		Region:     "us-east-2",
+		TsUnixNs:   1,
 	}
 	if err := ds.Ingest([]*pb.LogRow{row}, nil); err != nil {
 		t.Fatalf("ingest after reorder: %v", err)

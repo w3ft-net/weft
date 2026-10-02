@@ -62,7 +62,7 @@ func TestKindPredicate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
+			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -87,7 +87,7 @@ func TestKindPredicate(t *testing.T) {
 // see a parse-time error pointing at the canonical 3-seg form rather
 // than getting silent empty results.
 func TestKindPredicate_TwoSegRejected(t *testing.T) {
-	_, err := Plan(`cat /log/weft/compute.log`, "", time.Time{}, time.Time{})
+	_, err := Plan(`cat /log/weft/compute.log`, 0, "", time.Time{}, time.Time{})
 	if err == nil {
 		t.Fatal("expected error for 2-seg path /log/weft/compute.log, got nil")
 	}
@@ -127,7 +127,7 @@ func TestEnvBearing_FourSeg(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
+			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}

@@ -28,11 +28,11 @@ func TestDuckDBShard_ArchiveCapturesCustomerStats(t *testing.T) {
 	// rows at one instant (zero span).
 	base := int64(1_700_000_000) * int64(time.Second)
 	rows := []*pb.LogRow{
-		{Raw: "a1", Customer: "acme", TsUnixNs: base},
-		{Raw: "a2", Customer: "acme", TsUnixNs: base + int64(time.Hour)},
-		{Raw: "a3", Customer: "acme", TsUnixNs: base + 2*int64(time.Hour)},
-		{Raw: "g1", Customer: "globex", TsUnixNs: base + int64(30*time.Minute)},
-		{Raw: "g2", Customer: "globex", TsUnixNs: base + int64(30*time.Minute)},
+		{Raw: "a1", CustomerId: 5, TsUnixNs: base},
+		{Raw: "a2", CustomerId: 5, TsUnixNs: base + int64(time.Hour)},
+		{Raw: "a3", CustomerId: 5, TsUnixNs: base + 2*int64(time.Hour)},
+		{Raw: "g1", CustomerId: 6, TsUnixNs: base + int64(30*time.Minute)},
+		{Raw: "g2", CustomerId: 6, TsUnixNs: base + int64(30*time.Minute)},
 	}
 	if err := s.Ingest(rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
@@ -46,15 +46,15 @@ func TestDuckDBShard_ArchiveCapturesCustomerStats(t *testing.T) {
 		t.Fatal("archive returned empty path")
 	}
 
-	byCustomer := make(map[string]CustomerStat, len(stats))
+	byCustomer := make(map[int64]CustomerStat, len(stats))
 	for _, st := range stats {
-		byCustomer[st.Customer] = st
+		byCustomer[st.CustomerID] = st
 	}
 	if len(byCustomer) != 2 {
 		t.Fatalf("stats: got %d customers, want 2: %+v", len(byCustomer), stats)
 	}
 
-	acme := byCustomer["acme"]
+	acme := byCustomer[5]
 	if acme.RowCount != 3 {
 		t.Errorf("acme RowCount = %d, want 3", acme.RowCount)
 	}
@@ -62,7 +62,7 @@ func TestDuckDBShard_ArchiveCapturesCustomerStats(t *testing.T) {
 		t.Errorf("acme span = %v, want 2h", span)
 	}
 
-	globex := byCustomer["globex"]
+	globex := byCustomer[6]
 	if globex.RowCount != 2 {
 		t.Errorf("globex RowCount = %d, want 2", globex.RowCount)
 	}

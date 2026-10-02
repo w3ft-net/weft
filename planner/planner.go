@@ -42,12 +42,13 @@ type QueryPlan struct {
 	// the user's pipeline minus the source. Consumed by
 	// coordinator.BuildLiveFilter so the live broker rows go through
 	// the same transformations as the historical batch.
-	LiveStages      []string
-	SourceCmd       string   // source command: "cat", "head", "tail", or "trace"
-	SourceNamespace string   // namespace column value — routing + allowlist ("" = all namespaces)
-	SourceService   string   // service column value — routing ("" = all services in the namespace)
-	SourceKind      string   // kind column value — live-tail matching ("" = all kinds)
-	AlertArgs       []string // argv for a terminal `alert` stage; nil if absent. Set even for alert-only pipelines (ShardSQL is empty in that case).
+	LiveStages       []string
+	SourceCmd        string   // source command: "cat", "head", "tail", or "trace"
+	SourceCustomerID int64    // the customer_id the query is scoped to (0 only in tests)
+	SourceNamespace  string   // namespace column value — routing + allowlist ("" = all namespaces)
+	SourceService    string   // service column value — routing ("" = all services in the namespace)
+	SourceKind       string   // kind column value — live-tail matching ("" = all kinds)
+	AlertArgs        []string // argv for a terminal `alert` stage; nil if absent. Set even for alert-only pipelines (ShardSQL is empty in that case).
 
 	// Direct-to-compute mode (see docs/plans/direct-to-compute.md §3).
 	// Populated from classifyShardMode walking ComputeStages for the
@@ -112,28 +113,7 @@ type pushdownResult struct {
 // pipeline whose shape unexpectedly changed.
 var ErrNotPlannable = errors.New("not a plannable log query")
 
-// Plan parses a weft shell pipeline and produces a QueryPlan by pushing
-// down as many stages as possible into shard-level SQL. A trailing
-// `| alert ...` stage is peeled off and returned as QueryPlan.AlertArgs
-// for the coordinator (or cron) to evaluate against the query's output.
-//
-// customer is the row-level security boundary — empty string emits no
-// customer predicate (test-only). start/end bound the SQL's ts column;
-// either zero-value skips the corresponding bound. The caller is
-// responsible for clamping start to the customer's tier retention; the
-// coordinator does this via a clampTimeRange helper before dispatch.
-func Plan(pipeline, customer string, start, end time.Time) (*QueryPlan, error) {
-	return PlanInDir(pipeline, customer, "", start, end)
-}
-
-// PlanInDir is Plan with a working directory: a relative source argument
-// (e.g. `tail gamestate.log`) is resolved against cwd before parsing, so
-// a delegated client sitting in /log/vimgym/api reads the right source.
-// cwd "" or "/" means "no directory context" and preserves the legacy
-// lexical parsing (bare `log/...` paths, the `warp.log` wildcard). Plan
-// is the cwd-less shim over this for the many callers that have no shell
-// cwd (watch lowering, explain, the follow-arg probe).
-func PlanInDir(pipeline, customer, cwd string, start, end time.Time) (*QueryPlan, error) {
+func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (*QueryPlan, error) {
 	queryPart, alertArgs := SplitAlertStage(pipeline)
 
 	// Alert-only pipeline (`alert ...` with nothing in front). Return
@@ -168,7 +148,7 @@ func PlanInDir(pipeline, customer, cwd string, start, end time.Time) (*QueryPlan
 	// Customer + time bounds first so they sit at the head of the
 	// WHERE clause regardless of subsequent app/source/stage pushdowns.
 	// addCustomer/addTimeBounds are no-ops on empty/zero values.
-	sql.addCustomer(customer)
+	sql.addCustomer(customerID)
 	sql.addTimeBounds(start, end)
 
 	// Snapshot the user's post-source stages before pushdown rewrites
@@ -458,25 +438,26 @@ func PlanInDir(pipeline, customer, cwd string, start, end time.Time) (*QueryPlan
 	}
 
 	return &QueryPlan{
-		ShardSQL:        shardSQL,
-		Args:            shardArgs,
-		ArgSources:      shardArgSources,
-		DirectShardSQL:  directShardSQL,
-		ComputeStages:   compute,
-		Limit:           sql.limit,
-		TailMode:        orderDesc,
-		Follow:          info.source.follow,
-		FollowPatterns:  grepPatterns,
-		LiveStages:      liveStages,
-		SourceCmd:       info.source.cmd,
-		SourceNamespace: firstOrEmpty(info.source.namespaces),
-		SourceService:   firstOrEmpty(info.source.services),
-		SourceKind:      firstOrEmpty(info.source.kinds),
-		AlertArgs:       alertArgs,
-		ShardOrderBy:    mergeOrderBy,
-		ShardLimit:      shardLimit,
-		RedirectTarget:  redirTarget,
-		RedirectAppend:  redirAppend,
+		ShardSQL:         shardSQL,
+		Args:             shardArgs,
+		ArgSources:       shardArgSources,
+		DirectShardSQL:   directShardSQL,
+		ComputeStages:    compute,
+		Limit:            sql.limit,
+		TailMode:         orderDesc,
+		Follow:           info.source.follow,
+		FollowPatterns:   grepPatterns,
+		LiveStages:       liveStages,
+		SourceCmd:        info.source.cmd,
+		SourceCustomerID: customerID,
+		SourceNamespace:  firstOrEmpty(info.source.namespaces),
+		SourceService:    firstOrEmpty(info.source.services),
+		SourceKind:       firstOrEmpty(info.source.kinds),
+		AlertArgs:        alertArgs,
+		ShardOrderBy:     mergeOrderBy,
+		ShardLimit:       shardLimit,
+		RedirectTarget:   redirTarget,
+		RedirectAppend:   redirAppend,
 	}, nil
 }
 

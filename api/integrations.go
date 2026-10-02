@@ -22,9 +22,8 @@ import (
 // handleListIntegrations returns the current integration status.
 func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveOrgID(session.ActiveCustomerName)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	custID, ok := activeOrg(w, session)
+	if !ok {
 		return
 	}
 
@@ -119,11 +118,14 @@ func (s *Server) handleSlackCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	custID, err := s.resolveOrgID(customerName)
+	// The callback has no session, only the org name carried in the signed
+	// state token, so this is a lookup (never a create).
+	cust, err := s.store.GetOrgByName(customerName)
 	if err != nil {
 		http.Redirect(w, r, s.baseURL+"/account?integration=slack&status=error", http.StatusFound)
 		return
 	}
+	custID := cust.ID
 
 	botToken := tokenResp.AccessToken
 	teamName := tokenResp.Team.Name
@@ -145,9 +147,8 @@ func (s *Server) handleSlackCallback(w http.ResponseWriter, r *http.Request) {
 // handleSlackDisconnect removes the Slack integration.
 func (s *Server) handleSlackDisconnect(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveOrgID(session.ActiveCustomerName)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	custID, ok := activeOrg(w, session)
+	if !ok {
 		return
 	}
 	s.store.DB().WithContext(store.WithOrg(context.Background(), custID)).Model(&store.NotifyConfig{}).Updates(map[string]any{
@@ -161,9 +162,8 @@ func (s *Server) handleSlackDisconnect(w http.ResponseWriter, r *http.Request) {
 // Body: {"name": "ops", "key": "<routing-key>", "description": "optional"}.
 func (s *Server) handlePagerDutySave(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveOrgID(session.ActiveCustomerName)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	custID, ok := activeOrg(w, session)
+	if !ok {
 		return
 	}
 
@@ -198,9 +198,8 @@ func (s *Server) handlePagerDutySave(w http.ResponseWriter, r *http.Request) {
 // Path: DELETE /api/integrations/pagerduty/{name}
 func (s *Server) handlePagerDutyDelete(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveOrgID(session.ActiveCustomerName)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	custID, ok := activeOrg(w, session)
+	if !ok {
 		return
 	}
 	name := r.PathValue("name")
@@ -208,7 +207,7 @@ func (s *Server) handlePagerDutyDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	err = s.store.DB().
+	err := s.store.DB().
 		WithContext(store.WithOrg(context.Background(), custID)).
 		Where("name = ?", name).Delete(&store.PagerDutyIntegration{}).Error
 	if err != nil {
@@ -222,9 +221,8 @@ func (s *Server) handlePagerDutyDelete(w http.ResponseWriter, r *http.Request) {
 // An absent row yields an empty string — the shell treats that as a blank file.
 func (s *Server) handleGetNotifyConfig(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveOrgID(session.ActiveCustomerName)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	custID, ok := activeOrg(w, session)
+	if !ok {
 		return
 	}
 	nc, _ := s.store.GetNotifyConfig(custID)
@@ -240,9 +238,8 @@ func (s *Server) handleGetNotifyConfig(w http.ResponseWriter, r *http.Request) {
 // errors back (missing targets, bad PD severity, malformed YAML).
 func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveOrgID(session.ActiveCustomerName)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	custID, ok := activeOrg(w, session)
+	if !ok {
 		return
 	}
 	var req struct {
@@ -266,9 +263,8 @@ func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) 
 // handlePagerDutyDisconnect removes all PagerDuty integrations for the customer.
 func (s *Server) handlePagerDutyDisconnect(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, err := s.resolveOrgID(session.ActiveCustomerName)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	custID, ok := activeOrg(w, session)
+	if !ok {
 		return
 	}
 	s.store.DB().WithContext(store.WithOrg(context.Background(), custID)).Delete(&store.PagerDutyIntegration{})

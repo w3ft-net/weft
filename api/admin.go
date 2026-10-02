@@ -159,7 +159,7 @@ func (s *Server) handleAdminListCustomers(w http.ResponseWriter, r *http.Request
 	out := make([]result, 0, len(customers))
 	for _, c := range customers {
 		r := result{
-			ID:          c.ID,
+			ID:          c.ID.String(),
 			Name:        c.Name,
 			DisplayName: c.DisplayName,
 			CreatedAt:   c.CreatedAt.Format(time.RFC3339),

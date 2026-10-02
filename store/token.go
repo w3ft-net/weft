@@ -22,7 +22,7 @@ import (
 // docs/plans/ingest-dimensions.md.
 type AgentToken struct {
 	gorm.Model
-	OrgID             string       `gorm:"not null"`
+	OrgID             OrgID        `gorm:"not null"`
 	Organization      Organization `gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
 	NamespaceID       uint         `gorm:"not null"`
 	Namespace         Namespace    `gorm:"foreignKey:NamespaceID;constraint:OnDelete:CASCADE"`
@@ -85,7 +85,7 @@ func agentTokenPrefix(raw string) string {
 // otherwise unusable, so a leaked syslog token can't be replayed as a
 // weftd/JSON/Heroku credential and vice versa. See
 // docs/ingestion-syslog.md.
-func (s *Store) CreateAgentToken(orgID string, namespaceID uint, label, env, producer string) (string, *AgentToken, error) {
+func (s *Store) CreateAgentToken(orgID OrgID, namespaceID uint, label, env, producer string) (string, *AgentToken, error) {
 	raw, err := generateToken()
 	if err != nil {
 		return "", nil, err
@@ -176,7 +176,7 @@ func (s *Store) ValidateAgentTokenForProducer(token, producer string) (*AgentAut
 }
 
 // ListAgentTokens returns all tokens for a customer, with namespace preloaded.
-func (s *Store) ListAgentTokens(orgID string) ([]AgentToken, error) {
+func (s *Store) ListAgentTokens(orgID OrgID) ([]AgentToken, error) {
 	var tokens []AgentToken
 	err := s.scoped(orgID).Preload("Namespace").Find(&tokens).Error
 	return tokens, err
@@ -205,7 +205,7 @@ type MetricsForecast struct {
 }
 
 // ForecastMetricsUsage computes projected monthly metric bytes from active agent configs.
-func (s *Store) ForecastMetricsUsage(orgID string) (*MetricsForecast, error) {
+func (s *Store) ForecastMetricsUsage(orgID OrgID) (*MetricsForecast, error) {
 	var tokens []AgentToken
 	err := s.scoped(orgID).Where("revoked = ? AND metrics_enabled = ?",
 		false, true).Find(&tokens).Error
@@ -243,7 +243,7 @@ func (s *Store) ForecastMetricsUsage(orgID string) (*MetricsForecast, error) {
 // SeedDevAgentToken ensures a deterministic dev token exists. Idempotent.
 // The raw token is still the known string; only its sha256 lives in the
 // DB, same as production tokens.
-func (s *Store) SeedDevAgentToken(orgID string, label, nsName string) {
+func (s *Store) SeedDevAgentToken(orgID OrgID, label, nsName string) {
 	const devToken = "wft_dev_0000000000000000"
 	hash := hashAgentToken(devToken)
 	var existing AgentToken
@@ -277,7 +277,7 @@ func generateToken() (string, error) {
 type AgentVersionSighting struct {
 	TokenID         uint
 	Prefix          string
-	OrgID           string
+	OrgID           OrgID
 	NamespaceID     uint
 	LastSeenVersion string
 	LastSeenAt      *time.Time

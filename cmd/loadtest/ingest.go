@@ -37,7 +37,6 @@ func runIngest(ctx context.Context, cfg *Config, report *Report) {
 		// Each simulated customer needs its own token — IngestStream
 		// validates the bearer and attributes rows to the token's customer.
 		tokResp, err := cfg.Client.CreateToken(ctx, &pb.CreateTokenRequest{
-			Customer:  customer,
 			Namespace: app,
 			Label:     "loadtest",
 		})
@@ -88,7 +87,7 @@ func ingestCustomer(ctx context.Context, client pb.WeftCoordinatorClient, custom
 			}
 			return
 		case <-ticker.C:
-			row := generateRow(customer, app)
+			row := generateRow(app)
 			if err := stream.Send(row); err != nil {
 				errors.Add(1)
 				return
@@ -98,7 +97,7 @@ func ingestCustomer(ctx context.Context, client pb.WeftCoordinatorClient, custom
 	}
 }
 
-func generateRow(customer, app string) *pb.LogRow {
+func generateRow(app string) *pb.LogRow {
 	now := time.Now()
 	level := levels[rand.Intn(len(levels))]
 	action := actions[rand.Intn(len(actions))]
@@ -125,7 +124,6 @@ func generateRow(customer, app string) *pb.LogRow {
 		Level:       level,
 		TsUnixNs:    now.UnixNano(),
 		Instance:    instance,
-		Customer:    customer,
 		PayloadJson: payload,
 		Fields:      []string{now.Format("2006-01-02T15:04:05"), level, app, instance, action},
 	}

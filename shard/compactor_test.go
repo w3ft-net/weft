@@ -22,14 +22,14 @@ func TestLambdaCompactor_RoundTrip(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(CompactResult{
 			RowsKept: 3, RowsDeleted: 2, OutputPath: got.Dst,
-			Stats: []CustomerStat{{Customer: "acme", RowCount: 3}},
+			Stats: []CustomerStat{{CustomerID: 5, RowCount: 3}},
 		})
 	}))
 	defer srv.Close()
 
 	c := NewLambdaCompactor(srv.URL, nil, "us-east-2")
 	cutoff := time.Unix(0, 1_700_000_000*int64(time.Second)).UTC()
-	res, err := c.Rewrite("s3://b/src.parquet", "s3://b/dst.parquet", []CustomerCutoff{{Customer: "acme", Cutoff: cutoff}})
+	res, err := c.Rewrite("s3://b/src.parquet", "s3://b/dst.parquet", []CustomerCutoff{{CustomerID: 5, Cutoff: cutoff}})
 	if err != nil {
 		t.Fatalf("Rewrite: %v", err)
 	}
@@ -38,14 +38,14 @@ func TestLambdaCompactor_RoundTrip(t *testing.T) {
 	if got.Op != CompactOpRewrite || got.Src != "s3://b/src.parquet" || got.Dst != "s3://b/dst.parquet" {
 		t.Fatalf("server saw %+v", got)
 	}
-	if len(got.Cutoffs) != 1 || got.Cutoffs[0].Customer != "acme" || !got.Cutoffs[0].Cutoff.Equal(cutoff) {
+	if len(got.Cutoffs) != 1 || got.Cutoffs[0].CustomerID != 5 || !got.Cutoffs[0].Cutoff.Equal(cutoff) {
 		t.Fatalf("cutoffs wire-tripped wrong: %+v", got.Cutoffs)
 	}
 	// Response parsed.
 	if res.RowsKept != 3 || res.RowsDeleted != 2 || res.OutputPath != "s3://b/dst.parquet" {
 		t.Fatalf("res = %+v", res)
 	}
-	if len(res.Stats) != 1 || res.Stats[0].Customer != "acme" {
+	if len(res.Stats) != 1 || res.Stats[0].CustomerID != 5 {
 		t.Fatalf("stats = %+v", res.Stats)
 	}
 }
@@ -55,7 +55,7 @@ func TestLambdaCompactor_CaptureAndErrorStatus(t *testing.T) {
 		var req CompactRequest
 		json.NewDecoder(r.Body).Decode(&req)
 		if req.Op == CompactOpCapture {
-			json.NewEncoder(w).Encode(CompactResult{Stats: []CustomerStat{{Customer: "x", RowCount: 9}}})
+			json.NewEncoder(w).Encode(CompactResult{Stats: []CustomerStat{{CustomerID: 11, RowCount: 9}}})
 			return
 		}
 		http.Error(w, "boom", http.StatusInternalServerError)

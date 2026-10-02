@@ -56,7 +56,7 @@ func TestPushdown_NewDimensions(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			plan, err := Plan(tc.pipeline, "", time.Time{}, time.Time{})
+			plan, err := Plan(tc.pipeline, 0, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tc.pipeline, err)
 			}
@@ -74,8 +74,9 @@ func TestPushdown_NewDimensions(t *testing.T) {
 // namespace/env/service/kind predicates.
 //
 // Path layout:
-//   3 seg → <ns>/<svc>/<kind>          env-less
-//   4 seg → <ns>/<env>/<svc>/<kind>    env-bearing
+//
+//	3 seg → <ns>/<svc>/<kind>          env-less
+//	4 seg → <ns>/<env>/<svc>/<kind>    env-bearing
 //
 // 2-seg paths are rejected (see TestKindPredicate_TwoSegRejected).
 func TestPathLayout_KindSegment(t *testing.T) {
@@ -131,7 +132,7 @@ func TestPathLayout_KindSegment(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			plan, err := Plan(tc.pipeline, "", time.Time{}, time.Time{})
+			plan, err := Plan(tc.pipeline, 0, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tc.pipeline, err)
 			}

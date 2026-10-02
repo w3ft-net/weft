@@ -176,7 +176,7 @@ type User struct {
 	// scoped to. The middleware uses it as the default active org when
 	// the request omits the X-Active-Org header. Nullable because new
 	// users haven't picked one yet.
-	LastActiveOrgID *string
+	LastActiveOrgID *OrgID
 	// OnboardingStep tracks where the user is in the Loom-Inc tour
 	// state machine. 'welcome' is the default for new signups; 'done'
 	// marks a graduate. The middleware reads this to decide whether
@@ -286,7 +286,7 @@ func (s *Store) GetUserByID(id string) (*User, error) {
 // UpdateUserLastActiveOrg flips users.last_active_org_id so a
 // reconnect lands the user back in the org they were last operating
 // in. No-op when orgID matches the existing value.
-func (s *Store) UpdateUserLastActiveOrg(userID string, orgID string) error {
+func (s *Store) UpdateUserLastActiveOrg(userID string, orgID OrgID) error {
 	return s.db.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
 		"last_active_org_id": orgID,
 		"updated_at":         time.Now(),
@@ -413,14 +413,14 @@ func (s *Store) GetLastMagicLinkToken(email string) (string, error) {
 
 // ListTeamMembers returns active and pending members (not removed), oldest
 // first.
-func (s *Store) ListTeamMembers(orgID string) ([]TeamMember, error) {
-	return s.Orgs.Members(context.Background(), orgID)
+func (s *Store) ListTeamMembers(orgID OrgID) ([]TeamMember, error) {
+	return s.Orgs.Members(context.Background(), orgID.String())
 }
 
 // InviteTeamMember records a pending membership for an address that may not
 // have an account yet. invitedBy is the inviting user's id.
-func (s *Store) InviteTeamMember(orgID, email string, role orgs.Role, invitedBy string) (*TeamMember, error) {
-	return s.Orgs.Invite(context.Background(), orgID, email, role, invitedBy)
+func (s *Store) InviteTeamMember(orgID OrgID, email string, role orgs.Role, invitedBy string) (*TeamMember, error) {
+	return s.Orgs.Invite(context.Background(), orgID.String(), email, role, invitedBy)
 }
 
 // AddTeamMemberWithEmail attaches an account weft already knows to the org,
@@ -430,13 +430,13 @@ func (s *Store) InviteTeamMember(orgID, email string, role orgs.Role, invitedBy 
 // The address is always passed: weft renders /etc/passwd from it and keys
 // adduser/deluser by it, so a membership without one would be invisible to
 // half the team surface.
-func (s *Store) AddTeamMemberWithEmail(orgID, userID, email string, role orgs.Role) error {
-	return s.Orgs.AddMemberWithEmail(context.Background(), orgID, userID, email, role)
+func (s *Store) AddTeamMemberWithEmail(orgID OrgID, userID string, email string, role orgs.Role) error {
+	return s.Orgs.AddMemberWithEmail(context.Background(), orgID.String(), userID, email, role)
 }
 
 // GetTeamMemberByEmail finds a non-removed member by email.
-func (s *Store) GetTeamMemberByEmail(orgID string, email string) (*TeamMember, error) {
-	m, err := s.Orgs.MemberByEmail(context.Background(), orgID, email)
+func (s *Store) GetTeamMemberByEmail(orgID OrgID, email string) (*TeamMember, error) {
+	m, err := s.Orgs.MemberByEmail(context.Background(), orgID.String(), email)
 	return m, asRecordNotFound(err)
 }
 
@@ -444,8 +444,8 @@ func (s *Store) GetTeamMemberByEmail(orgID string, email string) (*TeamMember, e
 // This is the canonical "is this user a member of this org" lookup; the
 // auth middleware uses it to validate X-Active-Org against the user's
 // memberships.
-func (s *Store) GetTeamMemberByUserID(orgID string, userID string) (*TeamMember, error) {
-	m, err := s.Orgs.Member(context.Background(), orgID, userID)
+func (s *Store) GetTeamMemberByUserID(orgID OrgID, userID string) (*TeamMember, error) {
+	m, err := s.Orgs.Member(context.Background(), orgID.String(), userID)
 	return m, asRecordNotFound(err)
 }
 
@@ -487,14 +487,14 @@ func (s *Store) AcceptTeamMember(id string, userID string) error {
 
 // RemoveTeamMemberByEmail revokes a membership by address, which is the only
 // way to withdraw an invite nobody has accepted.
-func (s *Store) RemoveTeamMemberByEmail(orgID, email string) error {
-	return s.Orgs.RemoveInvite(context.Background(), orgID, email)
+func (s *Store) RemoveTeamMemberByEmail(orgID OrgID, email string) error {
+	return s.Orgs.RemoveInvite(context.Background(), orgID.String(), email)
 }
 
 // CountTeamMembers returns the count of active + pending members — the number
 // a seat limit is checked against, so an outstanding invite holds its seat.
-func (s *Store) CountTeamMembers(orgID string) (int, error) {
-	return s.Orgs.CountMembers(context.Background(), orgID)
+func (s *Store) CountTeamMembers(orgID OrgID) (int, error) {
+	return s.Orgs.CountMembers(context.Background(), orgID.String())
 }
 
 // SetUserName updates a user's free-text display name. Used for

@@ -12,7 +12,7 @@ import (
 // readTmpFile reconstructs the byte contents of a tmp file via the
 // exported store surface. It mirrors the logic that formerly lived in
 // store.ReadTmpFile, which was relocated into production callers.
-func readTmpFile(db *store.Store, orgID string, path string) ([]byte, error) {
+func readTmpFile(db *store.Store, orgID store.OrgID, path string) ([]byte, error) {
 	f, err := db.GetTmpFile(orgID, path)
 	if err != nil {
 		return nil, err

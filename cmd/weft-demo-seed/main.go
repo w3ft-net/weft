@@ -501,7 +501,7 @@ func ensureActiveSubscription(s *store.Store, customerName string) error {
 	})
 }
 
-func upsertVerifiedUser(s *store.Store, email string, orgID string) (*store.User, error) {
+func upsertVerifiedUser(s *store.Store, email string, orgID store.OrgID) (*store.User, error) {
 	if u, err := s.GetUserByEmail(email); err == nil && u != nil {
 		// Ensure the user has a membership in this org. AddMemberWithEmail
 		// upserts on (org_id, user_id), so the seed stays idempotent across
@@ -559,7 +559,7 @@ level_field: "2"
 
 // --- pre-seeded /bin and /cron.d --------------------------------------
 
-func preseedScripts(s *store.Store, custID string, customerName string, members []*store.User) error {
+func preseedScripts(s *store.Store, custID store.OrgID, customerName string, members []*store.User) error {
 	if len(members) < 3 {
 		return nil
 	}
@@ -838,7 +838,7 @@ oncall:
 // Idempotent: any existing result for the watch short-circuits — we
 // never want re-runs of the seed to stack a second synthetic hour on
 // top of real ticks.
-func preseedLoomErrorRateHistory(s *store.Store, custID string) error {
+func preseedLoomErrorRateHistory(s *store.Store, custID store.OrgID) error {
 	watch, err := s.GetCronWatch(custID, "error-rate")
 	if err != nil {
 		return fmt.Errorf("lookup: %w", err)
@@ -863,7 +863,7 @@ func preseedLoomErrorRateHistory(s *store.Store, custID string) error {
 	// synthetic series. The id is a UUID now, so hash it down to an int64
 	// rather than converting — the point is determinism, not the value.
 	seed := fnv.New64a()
-	_, _ = seed.Write([]byte(custID))
+	_, _ = seed.Write([]byte(custID.String()))
 	rng := rand.New(rand.NewSource(int64(seed.Sum64())))
 	now := time.Now()
 	rows := make([]store.CronResult, 0, points)

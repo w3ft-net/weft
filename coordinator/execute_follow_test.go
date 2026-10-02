@@ -44,9 +44,9 @@ func TestExecuteFollow_HistoricalThenBroker(t *testing.T) {
 	// (vimgym). The brokerStream's filter is BuildLiveFilter(plan),
 	// which for `tail vimgym.log` is a passthrough scoped to vimgym.
 	c.Tail.Broadcast([]*pb.LogRow{{
-		Raw:       "2026-03-28T12:00:00 INFO vimgym i-001 live broadcast",
-		Namespace: "vimgym",
-		Customer:  "kevlar",
+		Raw:        "2026-03-28T12:00:00 INFO vimgym i-001 live broadcast",
+		Namespace:  "vimgym",
+		CustomerId: 1,
 	}})
 
 	// Read one more line — should be the broadcast row.
@@ -86,11 +86,11 @@ func TestExecuteFollow_RelativeSourceResolvesAgainstCwd(t *testing.T) {
 	drainHistorical(t, res.Stream, 500*time.Millisecond)
 
 	c.Tail.Broadcast([]*pb.LogRow{{
-		Raw:       "live gamestate row",
-		Namespace: "vimgym",
-		Service:   "api",
-		Kind:      "gamestate",
-		Customer:  "kevlar",
+		Raw:        "live gamestate row",
+		Namespace:  "vimgym",
+		Service:    "api",
+		Kind:       "gamestate",
+		CustomerId: 1,
 	}})
 
 	readCtx, readCancel := context.WithTimeout(ctx, 2*time.Second)
@@ -104,6 +104,51 @@ func TestExecuteFollow_RelativeSourceResolvesAgainstCwd(t *testing.T) {
 	}
 	if line.Raw != "live gamestate row" {
 		t.Errorf("broker row Raw = %q, want the broadcast we sent", line.Raw)
+	}
+}
+
+// TestExecuteFollow_DoesNotLeakOtherTenants is the C1 regression
+// (docs/audit_0926.md): the live matcher ignored Customer, so a follow
+// received every tenant's rows — both for a bare `warp.log` (empty
+// Namespace matches all) and for a namespace name two orgs share
+// (namespace names are unique only per org). The other tenant's row is
+// broadcast first; the follower must see only its own.
+func TestExecuteFollow_DoesNotLeakOtherTenants(t *testing.T) {
+	for _, tc := range []struct {
+		name, pipeline string
+	}{
+		{"wildcard_warp_log", "tail warp.log"},
+		{"shared_namespace_name", "tail vimgym.log"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := setupTestCoordinator(t)
+			c.Tail = NewTailBroker()
+			c.TailFanout = NewTailFanout(c.Tail, "", false)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			res, err := c.ExecuteFollow(ctx, tc.pipeline, fullRange, "kevlar", "", nil)
+			if err != nil {
+				t.Fatalf("ExecuteFollow: %v", err)
+			}
+			drainHistorical(t, res.Stream, 500*time.Millisecond)
+
+			c.Tail.Broadcast([]*pb.LogRow{
+				{Raw: "OTHER TENANT SECRET", Namespace: "vimgym", CustomerId: 12},
+				{Raw: "my own row", Namespace: "vimgym", CustomerId: 1},
+			})
+
+			readCtx, readCancel := context.WithTimeout(ctx, 2*time.Second)
+			defer readCancel()
+			line, ok, err := res.Stream.Next(readCtx)
+			if err != nil || !ok {
+				t.Fatalf("Next: ok=%v err=%v; own row never arrived", ok, err)
+			}
+			if line.Raw != "my own row" {
+				t.Errorf("first live line = %q; follow leaked another tenant's row", line.Raw)
+			}
+		})
 	}
 }
 

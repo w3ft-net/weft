@@ -135,7 +135,9 @@ func (s *Server) graduateOnboarding(userID string) error {
 	// somewhere coherent rather than 403'ing.
 	userOrgs, err := s.store.ListUserOrgs(userID)
 	if err == nil && len(userOrgs) > 0 {
-		_ = s.store.UpdateUserLastActiveOrg(userID, userOrgs[0].ID)
+		if homeID, err := store.ParseOrgID(userOrgs[0].ID); err == nil {
+			_ = s.store.UpdateUserLastActiveOrg(userID, homeID)
+		}
 	}
 
 	// Queue the graduation notice. This is the emitter, and it fires

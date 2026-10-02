@@ -10,7 +10,7 @@ import (
 
 // setupSource creates a customer + namespace and returns the store, the
 // namespace id, the customer id, and the (namespace, app, fullApp) names.
-func setupSource(t *testing.T, name string) (db *Store, nsID uint, custID string, nsName, app, fullApp string) {
+func setupSource(t *testing.T, name string) (db *Store, nsID uint, custID OrgID, nsName, app, fullApp string) {
 	t.Helper()
 	db = testOpen(t)
 	cust, err := db.FindOrCreateOrg(name)

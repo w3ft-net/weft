@@ -38,7 +38,6 @@ func TestDirstackCourier_GRPC(t *testing.T) {
 		var trailer metadata.MD
 		stream, err := client.Execute(ctx, &pb.CoordinatorExecuteRequest{
 			Pipeline: pipeline,
-			Customer: customer,
 		}, grpc.Trailer(&trailer))
 		if err != nil {
 			t.Fatalf("Execute(%q): %v", pipeline, err)

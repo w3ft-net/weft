@@ -26,7 +26,7 @@ level_pattern: "^([A-Z]+)$"
 
 func TestParserCacheInstall(t *testing.T) {
 	c := NewParserCache()
-	hashA, err := c.Install("ns/api", "acme", testSchemaA)
+	hashA, err := c.Install("ns/api", testSchemaA)
 	if err != nil {
 		t.Fatalf("install A: %v", err)
 	}
@@ -43,11 +43,11 @@ func TestParserCacheInstall(t *testing.T) {
 
 func TestParserCacheReinstallChangesHash(t *testing.T) {
 	c := NewParserCache()
-	hashA, err := c.Install("ns/api", "acme", testSchemaA)
+	hashA, err := c.Install("ns/api", testSchemaA)
 	if err != nil {
 		t.Fatalf("install A: %v", err)
 	}
-	hashB, err := c.Install("ns/api", "acme", testSchemaB)
+	hashB, err := c.Install("ns/api", testSchemaB)
 	if err != nil {
 		t.Fatalf("install B: %v", err)
 	}
@@ -61,11 +61,11 @@ func TestParserCacheReinstallChangesHash(t *testing.T) {
 
 func TestParserCacheReinstallSameYAMLStableHash(t *testing.T) {
 	c := NewParserCache()
-	hash1, err := c.Install("ns/api", "acme", testSchemaA)
+	hash1, err := c.Install("ns/api", testSchemaA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hash2, err := c.Install("ns/api", "acme", testSchemaA)
+	hash2, err := c.Install("ns/api", testSchemaA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestParserCacheReinstallSameYAMLStableHash(t *testing.T) {
 
 func TestParserCacheStatsSwap(t *testing.T) {
 	c := NewParserCache()
-	if _, err := c.Install("ns/api", "acme", testSchemaA); err != nil {
+	if _, err := c.Install("ns/api", testSchemaA); err != nil {
 		t.Fatal(err)
 	}
 	slot := c.Slot("ns/api")
@@ -108,7 +108,7 @@ func TestParserCacheStatsSwap(t *testing.T) {
 // alone without coordination.
 func TestParserCacheConcurrentSwap(t *testing.T) {
 	c := NewParserCache()
-	if _, err := c.Install("ns/api", "acme", testSchemaA); err != nil {
+	if _, err := c.Install("ns/api", testSchemaA); err != nil {
 		t.Fatal(err)
 	}
 	slot := c.Slot("ns/api")
@@ -133,11 +133,11 @@ func TestParserCacheConcurrentSwap(t *testing.T) {
 
 	deadline := time.Now().Add(50 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if _, err := c.Install("ns/api", "acme", testSchemaB); err != nil {
+		if _, err := c.Install("ns/api", testSchemaB); err != nil {
 			t.Errorf("install B: %v", err)
 			break
 		}
-		if _, err := c.Install("ns/api", "acme", testSchemaA); err != nil {
+		if _, err := c.Install("ns/api", testSchemaA); err != nil {
 			t.Errorf("install A: %v", err)
 			break
 		}

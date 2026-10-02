@@ -25,7 +25,7 @@ func (noResolver) Source(name string) (string, string, bool) { return "", "", fa
 // which is exactly the regression mode this test guards.
 func TestLower_RoundTrip(t *testing.T) {
 	pipeline := `cat /log/weft/coordinator/main.log | grep ERROR`
-	customer := "kevlar"
+	customer := int64(1)
 	start := time.Date(2026, 5, 13, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)
 
@@ -47,11 +47,11 @@ func TestLower_RoundTrip(t *testing.T) {
 	}
 
 	// Hydrate against the fire-time context.
-	hydratedArgs := got.Hydrate(ResolveCtx{Customer: customer, Start: start, End: end})
+	hydratedArgs := got.Hydrate(ResolveCtx{CustomerID: customer, Start: start, End: end})
 
 	// Fresh Plan call against the same context — what the live
 	// dispatch path would produce today.
-	plan, err := Plan(pipeline, customer, start, end)
+	plan, err := Plan(pipeline, customer, "", start, end)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -74,20 +74,20 @@ func TestLower_RoundTrip(t *testing.T) {
 // windows.
 func TestLower_HydrateUsesFireTimeBounds(t *testing.T) {
 	pipeline := `cat /log/loom/api/prod.log | grep ERROR`
-	lp, err := Lower(pipeline, "kevlar", "bolt", noResolver{})
+	lp, err := Lower(pipeline, 1, "bolt", noResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
 
 	fire1 := ResolveCtx{
-		Customer: "kevlar",
-		Start:    time.Date(2026, 5, 13, 9, 0, 0, 0, time.UTC),
-		End:      time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC),
+		CustomerID: 1,
+		Start:      time.Date(2026, 5, 13, 9, 0, 0, 0, time.UTC),
+		End:        time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC),
 	}
 	fire2 := ResolveCtx{
-		Customer: "kevlar",
-		Start:    time.Date(2026, 5, 13, 11, 0, 0, 0, time.UTC),
-		End:      time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC),
+		CustomerID: 1,
+		Start:      time.Date(2026, 5, 13, 11, 0, 0, 0, time.UTC),
+		End:        time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC),
 	}
 
 	args1 := lp.Hydrate(fire1)
@@ -116,8 +116,8 @@ func TestLower_HydrateUsesFireTimeBounds(t *testing.T) {
 					i, args1[i], formatTS(fire1.End))
 			}
 		case ArgCustomer:
-			if args1[i] != "kevlar" {
-				t.Errorf("args1[%d] (ArgCustomer) = %v, want kevlar", i, args1[i])
+			if args1[i] != "1" {
+				t.Errorf("args1[%d] (ArgCustomer) = %v, want 1", i, args1[i])
 			}
 		}
 	}
@@ -127,7 +127,7 @@ func TestLower_HydrateUsesFireTimeBounds(t *testing.T) {
 // must carry the current PlannerVersion. Consumers compare against
 // PlannerVersion to detect stale plans after a planner-breaking change.
 func TestLower_PlannerVersion(t *testing.T) {
-	lp, err := Lower(`cat /log/foo.log`, "kevlar", "bolt", noResolver{})
+	lp, err := Lower(`cat /log/foo.log`, 1, "bolt", noResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestLower_InlinesBinScript(t *testing.T) {
 		binByName: map[string]string{"find-errors": binBody},
 	}
 
-	lp, err := Lower(`find-errors ERROR | wc -l`, "kevlar", "bolt", resolver)
+	lp, err := Lower(`find-errors ERROR | wc -l`, 1, "bolt", resolver)
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
@@ -207,12 +207,12 @@ func TestLower_InlinesBinScript(t *testing.T) {
 
 // TestLower_NoArgSourcesWhenCustomerEmpty pins the planner contract
 // that an empty customer skips the ArgCustomer predicate. Lower
-// inherits this: if the caller passes customer == "", the lowered
+// inherits this: if the caller passes customer == 0, the lowered
 // form has zero ArgCustomer entries. (No production caller does this
 // for watches — but the test pins it as a property so a future Lower
 // caller doesn't quietly add a customer="" path.)
 func TestLower_NoArgSourcesWhenCustomerEmpty(t *testing.T) {
-	lp, err := Lower(`cat /log/foo.log`, "", "bolt", noResolver{})
+	lp, err := Lower(`cat /log/foo.log`, 0, "bolt", noResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}

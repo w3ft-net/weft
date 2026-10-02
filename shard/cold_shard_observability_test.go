@@ -50,7 +50,7 @@ func TestQueryToSink_LogsStreamReadError(t *testing.T) {
 
 	sink := &testSink{}
 	out := captureLog(t, func() {
-		cs.QueryToSink(context.Background(), "SELECT raw, ts FROM logs WHERE customer = 'kevlar'", nil, sink)
+		cs.QueryToSink(context.Background(), "SELECT raw, ts FROM logs WHERE customer_id = 1", nil, sink)
 	})
 
 	if !sink.sentinelReceived {
@@ -79,7 +79,7 @@ func TestQueryToSink_LogsConnectionFailure(t *testing.T) {
 
 	sink := &testSink{}
 	out := captureLog(t, func() {
-		cs.QueryToSink(context.Background(), "SELECT raw, ts FROM logs WHERE customer = 'kevlar'", nil, sink)
+		cs.QueryToSink(context.Background(), "SELECT raw, ts FROM logs WHERE customer_id = 1", nil, sink)
 	})
 
 	if !sink.sentinelReceived {
@@ -110,7 +110,7 @@ func TestQueryToSink_LogsCompletionAlways(t *testing.T) {
 
 	sink := &testSink{}
 	out := captureLog(t, func() {
-		cs.QueryToSink(context.Background(), "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer = 'kevlar'", nil, sink)
+		cs.QueryToSink(context.Background(), "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer_id = 1", nil, sink)
 	})
 
 	if len(sink.rows) == 0 {
@@ -140,7 +140,7 @@ func TestQueryToSink_TraceIDInLogWhenPresent(t *testing.T) {
 	ctx := weftsdk.ContextWithTraceID(context.Background(), "test-trace-123")
 	sink := &testSink{}
 	out := captureLog(t, func() {
-		cs.QueryToSink(ctx, "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer = 'kevlar'", nil, sink)
+		cs.QueryToSink(ctx, "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer_id = 1", nil, sink)
 	})
 
 	if len(sink.rows) == 0 {

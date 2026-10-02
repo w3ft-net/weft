@@ -37,7 +37,7 @@ func TestDiskUsage_CountsFileAndWAL(t *testing.T) {
 
 	rows := make([]*pb.LogRow, 500)
 	for i := range rows {
-		rows[i] = &pb.LogRow{Raw: "a reasonably sized log line for footprint", Customer: "kevlar", Namespace: "ns", Service: "svc", TsUnixNs: int64(i + 1)}
+		rows[i] = &pb.LogRow{Raw: "a reasonably sized log line for footprint", CustomerId: 1, Namespace: "ns", Service: "svc", TsUnixNs: int64(i + 1)}
 	}
 	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)

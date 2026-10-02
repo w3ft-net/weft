@@ -61,7 +61,7 @@ type Adapter interface {
 // access, for adapters that need to resolve rows against tenant data
 // mid-parse instead of deriving everything from the wire format.
 type AdapterContext struct {
-	OrgID     string
+	OrgID     store.OrgID
 	Namespace string
 	Store     *store.Store
 }
@@ -107,7 +107,7 @@ func (s *Server) IngestHandler(a Adapter) http.Handler {
 			http.Error(w, "validate token: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if auth == nil || auth.Organization == nil || auth.Organization.ID == "" || auth.Organization.Name == "" {
+		if auth == nil || auth.Organization == nil || auth.Organization.ID == 0 || auth.Organization.Name == "" {
 			http.Error(w, "invalid or revoked token", http.StatusUnauthorized)
 			return
 		}
@@ -202,8 +202,8 @@ func (s *Server) IngestHandler(a Adapter) http.Handler {
 // and "schema failed to parse" alike: callers treat all three the same
 // way (skip enrichment, leave the row Raw-only), matching pre-cache
 // behavior for any not-yet-onboarded service.
-func resolveParser(st *store.Store, orgID, namespace, service string) (*ingest.Parser, bool) {
-	schemaYAML, customerName, ok, err := st.FindLogGroupSchema(orgID, namespace, service)
+func resolveParser(st *store.Store, orgID store.OrgID, namespace string, service string) (*ingest.Parser, bool) {
+	schemaYAML, ok, err := st.FindLogGroupSchema(orgID, namespace, service)
 	if err != nil || !ok {
 		return nil, false
 	}
@@ -212,7 +212,7 @@ func resolveParser(st *store.Store, orgID, namespace, service string) (*ingest.P
 		return nil, false
 	}
 	schema.Service = service
-	schema.Customer = customerName
+	schema.CustomerID = int64(orgID)
 	parser, err := ingest.NewParser(&schema)
 	if err != nil {
 		return nil, false
@@ -246,7 +246,7 @@ func applyParsed(row *pb.LogRow, parser *ingest.Parser) {
 // the way enrichRows does, but store.FindLogGroupSchema's Valkey cache-
 // aside is exactly what keeps this cheap across a syslog connection's
 // many frames for the same service (a connection can live for hours).
-func enrichRow(st *store.Store, orgID, namespace string, row *pb.LogRow) {
+func enrichRow(st *store.Store, orgID store.OrgID, namespace string, row *pb.LogRow) {
 	parser, ok := resolveParser(st, orgID, namespace, row.Service)
 	if !ok {
 		return
@@ -259,7 +259,7 @@ func enrichRow(st *store.Store, orgID, namespace string, row *pb.LogRow) {
 // resolveParser so a batch repeating one service many times (a
 // CloudWatch Firehose POST spanning one log group's events, a multi-
 // frame Heroku drain) doesn't re-hit the Valkey cache once per row.
-func enrichRows(st *store.Store, orgID, namespace string, rows []*pb.LogRow) {
+func enrichRows(st *store.Store, orgID store.OrgID, namespace string, rows []*pb.LogRow) {
 	type resolved struct {
 		parser *ingest.Parser
 		ok     bool
@@ -299,7 +299,7 @@ func enrichRows(st *store.Store, orgID, namespace string, rows []*pb.LogRow) {
 // IngestStream directly, not IngestHandler/enrichRows), and every other
 // source type either commits a schema immediately (poll-mode CloudWatch)
 // or has no configure step at all (SourceTypeDirect).
-func accumulatePendingKinesisSamples(st *store.Store, classifier ingest.Classifier, orgID, namespace string, rows []*pb.LogRow) {
+func accumulatePendingKinesisSamples(st *store.Store, classifier ingest.Classifier, orgID store.OrgID, namespace string, rows []*pb.LogRow) {
 	byService := make(map[string][]string)
 	for _, row := range rows {
 		byService[row.Service] = append(byService[row.Service], row.Raw)

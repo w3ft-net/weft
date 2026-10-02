@@ -23,9 +23,9 @@ func testParquet(t *testing.T) string {
 	defer ds.Close()
 
 	rows := []*pb.LogRow{
-		{Raw: "error in vimgym", Namespace: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
-		{Raw: "info in vimgym", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
-		{Raw: "warn in callbox", Namespace: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: time.Now().UnixNano()},
+		{Raw: "error in vimgym", Namespace: "vimgym", Level: "ERROR", CustomerId: 1, TsUnixNs: time.Now().UnixNano()},
+		{Raw: "info in vimgym", Namespace: "vimgym", Level: "INFO", CustomerId: 1, TsUnixNs: time.Now().UnixNano()},
+		{Raw: "warn in callbox", Namespace: "callbox", Level: "WARN", CustomerId: 1, TsUnixNs: time.Now().UnixNano()},
 	}
 	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatal(err)
@@ -42,7 +42,7 @@ func TestLambdaHandler_QueryParquet(t *testing.T) {
 	var buf bytes.Buffer
 
 	err := HandleQuery(&buf, QueryRequest{
-		SQL:         "SELECT raw, ts FROM logs WHERE customer = 'kevlar'",
+		SQL:         "SELECT raw, ts FROM logs WHERE customer_id = 1",
 		ParquetPath: path,
 	}, nil)
 	if err != nil {
@@ -63,7 +63,7 @@ func TestLambdaHandler_FiltersByApp(t *testing.T) {
 	var buf bytes.Buffer
 
 	err := HandleQuery(&buf, QueryRequest{
-		SQL:         "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer = 'kevlar'",
+		SQL:         "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer_id = 1",
 		ParquetPath: path,
 	}, nil)
 	if err != nil {
@@ -91,7 +91,7 @@ func TestServeHTTP_QueryFailureReturnsErrorStatus(t *testing.T) {
 	defer srv.Close()
 
 	body, _ := json.Marshal(QueryRequest{
-		SQL:         "SELECT raw, ts FROM logs WHERE customer = 'kevlar'",
+		SQL:         "SELECT raw, ts FROM logs WHERE customer_id = 1",
 		ParquetPath: "/nonexistent/missing-shard.parquet",
 	})
 	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
@@ -122,7 +122,7 @@ func TestServeHTTP_SuccessStreamsRows(t *testing.T) {
 	defer srv.Close()
 
 	body, _ := json.Marshal(QueryRequest{
-		SQL:         "SELECT raw, ts FROM logs WHERE customer = 'kevlar'",
+		SQL:         "SELECT raw, ts FROM logs WHERE customer_id = 1",
 		ParquetPath: path,
 	})
 	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
@@ -156,7 +156,7 @@ func TestServeHTTP_StreamsIncrementally(t *testing.T) {
 	defer srv.Close()
 
 	body, _ := json.Marshal(QueryRequest{
-		SQL:         "SELECT raw, ts FROM logs WHERE customer = 'kevlar'",
+		SQL:         "SELECT raw, ts FROM logs WHERE customer_id = 1",
 		ParquetPath: path,
 	})
 	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))

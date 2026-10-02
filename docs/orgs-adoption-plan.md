@@ -1,8 +1,13 @@
 # Weft adoption of `saaskit/orgs` — continuation context
 
-Status: **not started.** This is a handoff doc for the next session. The shared
-library and the vimgym consumer are **done, committed, and green**; weft is the
-remaining consumer to adopt the shared org/membership/role shape.
+Status: **done, with one deliberate divergence (2026-10-02).** weft embeds
+`saaskit/orgs` (`Store.Orgs`) and runs it against its own `organizations` /
+`memberships` tables. Where this doc says org ids are UUIDs, weft's are now a
+`bigint` identity (`store.OrgID`, migration 078 — see
+`docs/plans/customer-bigint-pk.md`): saaskit treats org ids as opaque strings,
+so weft applies `orgs.SchemaSQLBigintOrgID` (saaskit v0.3.3) and ids cross into
+saaskit as decimal strings at `store/user.go` and `auth/session.go`. The rest
+of this doc is the original handoff and is kept for context.
 
 ## Where we are (already shipped)
 

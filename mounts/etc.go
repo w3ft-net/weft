@@ -192,7 +192,7 @@ func (m *EtcMount) buildUsageReport() string {
 	fmt.Fprintf(&b, "# period: %s — %s\n", periodStart.Format("2006-01-02"), periodEnd.Format("2006-01-02"))
 	fmt.Fprintf(&b, "# tier: %s\n\n", m.cfg.Tier)
 
-	bytesIngested, err := m.cfg.Store.QueryUsage(m.cfg.CustomerName, periodStart, periodEnd)
+	bytesIngested, err := m.cfg.Store.QueryUsage(m.cfg.OrgID, periodStart, periodEnd)
 	if err != nil {
 		bytesIngested = 0
 	}

@@ -26,7 +26,7 @@ type CronWatchVersion struct {
 type cronWatchHistoryRow struct {
 	ID               uint64    `gorm:"column:id"`
 	WatchID          uint64    `gorm:"column:watch_id"`
-	OrgID            string    `gorm:"column:org_id"`
+	OrgID            OrgID     `gorm:"column:org_id"`
 	Name             string    `gorm:"column:name"`
 	Schedule         string    `gorm:"column:schedule"`
 	Pipeline         string    `gorm:"column:pipeline"`
@@ -56,7 +56,7 @@ type cronWatchHistoryView struct {
 
 // LogCronWatch returns the version chain newest-first for the named
 // watch, including the live row as the first entry.
-func (s *Store) LogCronWatch(orgID string, name string) ([]CronWatchVersion, error) {
+func (s *Store) LogCronWatch(orgID OrgID, name string) ([]CronWatchVersion, error) {
 	w, err := s.GetCronWatch(orgID, name)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -116,7 +116,7 @@ func (s *Store) LogCronWatch(orgID string, name string) ([]CronWatchVersion, err
 
 // ResolveCronWatchRef parses a ref ("HEAD", "HEAD^N", or hash
 // prefix) and returns the matching version.
-func (s *Store) ResolveCronWatchRef(orgID string, name, ref string) (*CronWatchVersion, error) {
+func (s *Store) ResolveCronWatchRef(orgID OrgID, name, ref string) (*CronWatchVersion, error) {
 	if m := headCaretRefRe.FindStringSubmatch(ref); m != nil {
 		offset := 0
 		if m[1] != "" {
@@ -176,7 +176,7 @@ func (s *Store) ResolveCronWatchRef(orgID string, name, ref string) (*CronWatchV
 // is scoped to UPDATE OF schedule, pipeline so a message-only edit
 // doesn't capture a new history row. For history refs, it UPDATEs
 // the matching cron_watch_history row directly.
-func (s *Store) AmendCronWatchMessage(orgID string, name, ref, message string) error {
+func (s *Store) AmendCronWatchMessage(orgID OrgID, name, ref, message string) error {
 	v, err := s.ResolveCronWatchRef(orgID, name, ref)
 	if err != nil {
 		return err

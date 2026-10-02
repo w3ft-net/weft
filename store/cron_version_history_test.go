@@ -12,7 +12,7 @@ import (
 
 // Parallel of version_history_test.go for cron_watches.
 
-func cronHistoryCount(t *testing.T, db *Store, orgID string, name string) int {
+func cronHistoryCount(t *testing.T, db *Store, orgID OrgID, name string) int {
 	t.Helper()
 	var n int64
 	err := db.db.Raw(`
@@ -307,7 +307,7 @@ func TestAmendCronWatchMessage_HistoryRef(t *testing.T) {
 
 // checkoutCronWatch mirrors the former Store.CheckoutCronWatch, whose
 // production logic moved to a caller outside the store package.
-func checkoutCronWatch(db *Store, orgID string, userID, name, ref string) error {
+func checkoutCronWatch(db *Store, orgID OrgID, userID, name, ref string) error {
 	target, err := db.ResolveCronWatchRef(orgID, name, ref)
 	if err != nil {
 		return err

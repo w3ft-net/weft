@@ -46,7 +46,7 @@ type ShellFunctionVersion struct {
 type shellFunctionHistoryRow struct {
 	ID               uint64    `gorm:"column:id"`
 	FunctionID       uint64    `gorm:"column:function_id"`
-	OrgID            string    `gorm:"column:org_id"`
+	OrgID            OrgID     `gorm:"column:org_id"`
 	Name             string    `gorm:"column:name"`
 	Source           string    `gorm:"column:source"`
 	Language         string    `gorm:"column:language"`
@@ -87,7 +87,7 @@ func computeShellFunctionHash(source string) string {
 // named function, including the live row as the first entry.
 // Returns up to 6 entries (5 history + HEAD) when the cap is full.
 // Empty result when the named function doesn't exist.
-func (s *Store) LogShellFunction(orgID string, name string) ([]ShellFunctionVersion, error) {
+func (s *Store) LogShellFunction(orgID OrgID, name string) ([]ShellFunctionVersion, error) {
 	fn, err := s.GetShellFunction(orgID, name)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -160,7 +160,7 @@ var headCaretRefRe = regexp.MustCompile(`^HEAD(\^(\d*))?$`)
 
 // ResolveShellFunctionRef parses a ref ("HEAD", "HEAD^", "HEAD^N",
 // or a hash prefix ≥ 4 chars) and returns the matching version.
-func (s *Store) ResolveShellFunctionRef(orgID string, name, ref string) (*ShellFunctionVersion, error) {
+func (s *Store) ResolveShellFunctionRef(orgID OrgID, name, ref string) (*ShellFunctionVersion, error) {
 	if m := headCaretRefRe.FindStringSubmatch(ref); m != nil {
 		// HEAD or HEAD^N. Convert to a 0-indexed offset where 0 = HEAD.
 		offset := 0
@@ -223,7 +223,7 @@ func (s *Store) ResolveShellFunctionRef(orgID string, name, ref string) (*ShellF
 // edit doesn't capture a new history row. For history refs (HEAD^N
 // or hashes), it UPDATEs the matching shell_function_history row
 // directly.
-func (s *Store) AmendShellFunctionMessage(orgID string, name, ref, message string) error {
+func (s *Store) AmendShellFunctionMessage(orgID OrgID, name, ref, message string) error {
 	v, err := s.ResolveShellFunctionRef(orgID, name, ref)
 	if err != nil {
 		return err

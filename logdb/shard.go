@@ -35,11 +35,11 @@ type shardRowStore interface {
 // (delete / keep / rewrite) without scanning S3. See
 // docs/plans/retention-janitor.md.
 type ShardArchiveStat struct {
-	ShardID  string    `gorm:"primaryKey;column:shard_id"`
-	Customer string    `gorm:"primaryKey;column:customer"`
-	MinTs    time.Time `gorm:"not null;column:min_ts"`
-	MaxTs    time.Time `gorm:"not null;column:max_ts"`
-	RowCount int64     `gorm:"not null;column:row_count"`
+	ShardID  string      `gorm:"primaryKey;column:shard_id"`
+	OrgID    store.OrgID `gorm:"primaryKey;column:org_id"`
+	MinTs    time.Time   `gorm:"not null;column:min_ts"`
+	MaxTs    time.Time   `gorm:"not null;column:max_ts"`
+	RowCount int64       `gorm:"not null;column:row_count"`
 }
 
 func (*ShardArchiveStat) TableName() string { return "shard_archive_stats" }
@@ -203,7 +203,7 @@ func (s ShardStore) RecordArchiveStats(id string, stats []shard.CustomerStat) er
 		for i, st := range stats {
 			rows[i] = ShardArchiveStat{
 				ShardID:  id,
-				Customer: st.Customer,
+				OrgID:    store.OrgID(st.CustomerID),
 				MinTs:    st.MinTs,
 				MaxTs:    st.MaxTs,
 				RowCount: st.RowCount,

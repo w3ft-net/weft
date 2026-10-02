@@ -1,21 +1,44 @@
 package store
 
 import (
+	"fmt"
+	"strconv"
 	"time"
 
 	"gorm.io/gorm"
 )
 
+// OrgID is an organization's primary key: a bigint identity. saaskit's orgs
+// package treats org ids as opaque strings, so ids cross into it via String()
+// and come back via ParseOrgID.
+type OrgID int64
+
+// String is the decimal form saaskit's string-typed org ids carry.
+func (id OrgID) String() string { return strconv.FormatInt(int64(id), 10) }
+
+// ParseOrgID parses the decimal form produced by String.
+func ParseOrgID(s string) (OrgID, error) {
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid org id %q", s)
+	}
+	return OrgID(n), nil
+}
+
 // Organization is a weft tenant — what the code and the CLI used to call a
-// Customer. It is the same row it always was, re-keyed onto the UUID identity
-// the shared saaskit/orgs library uses, so weft and vimgym describe a team the
-// same way.
+// Customer. Its primary key is a bigint identity (OrgID). The shared
+// saaskit/orgs library treats org ids as opaque strings, so weft uses it
+// unchanged (its SchemaSQLBigintOrgID variant) and ids cross into it as
+// decimal strings.
 //
-// Two distinct names live here and they are not interchangeable:
+// The id and the names are not interchangeable:
 //
-//   - Name is the tenant *slug*. It is what gets stamped into every log row and
-//     what the shard-side isolation predicate matches (`WHERE customer =
-//     '<name>'`), so it is uniquely indexed and effectively immutable.
+//   - ID is the tenant's identity. It is what gets stamped into every log row
+//     (customer_id) and what the shard-side isolation predicate matches
+//     (`WHERE customer_id = ?`). It never changes and is never user-visible.
+//   - Name is the tenant *slug*: what users type (X-Active-Org, the CLI) and
+//     what the UI shows. It is uniquely indexed and resolved to an ID once,
+//     at the session boundary.
 //   - DisplayName is the human-readable team name, freely editable, and load
 //     bearing for nothing.
 //
@@ -23,7 +46,7 @@ import (
 // substance of billing — tier, comp, expiry — in Subscription, which is richer
 // than anything orgs models; these carry only the org-level Stripe identity.
 type Organization struct {
-	ID          string `gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	ID          OrgID `gorm:"primaryKey"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	DeletedAt   gorm.DeletedAt `gorm:"index"`
@@ -48,7 +71,7 @@ func (Organization) TableName() string { return "organizations" }
 // Agent tokens and log ingestion reference namespaces via "namespace/subapp" app names.
 type Namespace struct {
 	gorm.Model
-	OrgID string `gorm:"type:uuid;not null;uniqueIndex:idx_ns_org_name"`
+	OrgID OrgID  `gorm:"not null;uniqueIndex:idx_ns_org_name"`
 	Name  string `gorm:"not null;uniqueIndex:idx_ns_org_name"`
 }
 
@@ -60,7 +83,7 @@ func (s *Store) FindOrCreateOrg(name string) (*Organization, error) {
 }
 
 // GetOrgByID returns an org by primary key.
-func (s *Store) GetOrgByID(id string) (*Organization, error) {
+func (s *Store) GetOrgByID(id OrgID) (*Organization, error) {
 	var c Organization
 	if err := s.db.Where("id = ?", id).First(&c).Error; err != nil {
 		return nil, err
@@ -85,7 +108,7 @@ func (s *Store) UpdateOrgDisplayName(name, displayName string) error {
 // --- Namespaces ---
 
 // FindOrCreateNamespace returns the namespace, creating if needed.
-func (s *Store) FindOrCreateNamespace(orgID string, name string) (*Namespace, error) {
+func (s *Store) FindOrCreateNamespace(orgID OrgID, name string) (*Namespace, error) {
 	var ns Namespace
 	result := s.scoped(orgID).Where("name = ?", name).FirstOrCreate(&ns, Namespace{OrgID: orgID, Name: name})
 	return &ns, result.Error
@@ -95,7 +118,7 @@ func (s *Store) FindOrCreateNamespace(orgID string, name string) (*Namespace, er
 // one if absent. Callers validating user-supplied namespace names (e.g.
 // AddSource) should use this so a typo doesn't silently spawn a new
 // namespace under the org.
-func (s *Store) GetNamespace(orgID string, name string) (*Namespace, error) {
+func (s *Store) GetNamespace(orgID OrgID, name string) (*Namespace, error) {
 	var ns Namespace
 	if err := s.scoped(orgID).Where("name = ?", name).First(&ns).Error; err != nil {
 		return nil, err
@@ -104,7 +127,7 @@ func (s *Store) GetNamespace(orgID string, name string) (*Namespace, error) {
 }
 
 // ListNamespaces returns all namespaces for an org.
-func (s *Store) ListNamespaces(orgID string) ([]Namespace, error) {
+func (s *Store) ListNamespaces(orgID OrgID) ([]Namespace, error) {
 	var nss []Namespace
 	err := s.scoped(orgID).Order("name").Find(&nss).Error
 	return nss, err

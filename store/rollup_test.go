@@ -404,7 +404,7 @@ func TestCronAggregate_ClampsToPlanRetention(t *testing.T) {
 // behaviour.
 
 // cronAggregate mirrors the former Store.CronAggregate.
-func cronAggregate(db *Store, orgID string, cronWatchID uint, since time.Time, tag string) (CronAggStats, error) {
+func cronAggregate(db *Store, orgID OrgID, cronWatchID uint, since time.Time, tag string) (CronAggStats, error) {
 	since = ClampRetention(db.TierForOrg(orgID), since)
 	gran := PickGranularity(time.Since(since))
 
@@ -433,7 +433,7 @@ func cronAggregate(db *Store, orgID string, cronWatchID uint, since time.Time, t
 }
 
 // queryCronSeries mirrors the former Store.QueryCronSeries.
-func queryCronSeries(db *Store, orgID string, cronWatchID uint, since time.Time) ([]CronBucket, string, error) {
+func queryCronSeries(db *Store, orgID OrgID, cronWatchID uint, since time.Time) ([]CronBucket, string, error) {
 	since = ClampRetention(db.TierForOrg(orgID), since)
 	gran := PickGranularity(time.Since(since))
 

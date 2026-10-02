@@ -55,11 +55,11 @@ func TestDirectToCompute_Op5_CoordinatorComputeStageRoundtrip(t *testing.T) {
 	for i, v := range values {
 		stream.Send(&pb.LogRow{
 			Namespace: "op5compute", Service: "app",
-			Customer: "kevlar",
-			Raw:      v,
-			Level:    "INFO",
-			Instance: "test-host",
-			TsUnixNs: now.Add(time.Duration(i) * time.Second).UnixNano(),
+			CustomerId: 1,
+			Raw:        v,
+			Level:      "INFO",
+			Instance:   "test-host",
+			TsUnixNs:   now.Add(time.Duration(i) * time.Second).UnixNano(),
 		})
 	}
 	if _, err := stream.CloseAndRecv(); err != nil {
@@ -75,7 +75,6 @@ func TestDirectToCompute_Op5_CoordinatorComputeStageRoundtrip(t *testing.T) {
 
 		qstream, err := client.Execute(ctx, &pb.CoordinatorExecuteRequest{
 			Pipeline: `cat /log/op5compute.log | grep "` + unique + `" | sort`,
-			Customer: "kevlar",
 		})
 		if err != nil {
 			t.Fatalf("Query: %v", err)

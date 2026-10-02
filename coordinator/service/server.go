@@ -322,38 +322,26 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 }
 
 func (s *Server) ListServices(ctx context.Context, _ *pb.ListServicesRequest) (*pb.ListServicesResponse, error) {
-	customer, err := callerCustomer(ctx)
+	orgID, err := s.resolveCallerOrgID(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	// Return app names observed from ingest for this customer.
-	if s.Coord.SeenServices != nil && customer != "" {
-		if names := s.Coord.SeenServices.Names(customer); len(names) > 0 {
+	if s.Coord.SeenServices != nil {
+		if names := s.Coord.SeenServices.Names(int64(orgID)); len(names) > 0 {
 			return &pb.ListServicesResponse{Services: names}, nil
 		}
 	}
 
 	// Fall back to DB namespaces for this customer.
-	if customer != "" {
-		cust, err := s.Store.GetOrgByName(customer)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "resolve customer %q: %v", customer, err)
-		}
-		nss, err := s.Store.ListNamespaces(cust.ID)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "list namespaces: %v", err)
-		}
-		names := make([]string, len(nss))
-		for i, ns := range nss {
-			names[i] = ns.Name
-		}
-		return &pb.ListServicesResponse{Services: names}, nil
+	nss, err := s.Store.ListNamespaces(orgID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list namespaces: %v", err)
 	}
-	var names []string
-	if err := s.Store.DB().WithContext(store.WithoutTenantScope(context.Background())).
-		Model(&store.Namespace{}).Distinct().Pluck("name", &names).Error; err != nil {
-		return nil, status.Errorf(codes.Internal, "list apps: %v", err)
+	names := make([]string, len(nss))
+	for i, ns := range nss {
+		names[i] = ns.Name
 	}
 	return &pb.ListServicesResponse{Services: names}, nil
 }
@@ -517,6 +505,7 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 		return err
 	}
 	authCustomer := auth.Organization.Name
+	authCustomerID := int64(auth.Organization.ID)
 	authNamespace := auth.Namespace
 	authEnv := auth.Env
 
@@ -680,7 +669,7 @@ recvLoop:
 		}
 
 		// Force the authoritative customer on every row.
-		row.Customer = authCustomer
+		row.CustomerId = authCustomerID
 
 		// Token-derived env: stamp it on every row. The agent has no
 		// say in the env value — it's bound to the token at mint time.
@@ -715,11 +704,11 @@ recvLoop:
 		mu.Lock()
 		if count == 0 {
 			firstService = svcPath
-			log.Printf("ingest-stream: first row from customer=%s service=%s", row.Customer, svcPath)
+			log.Printf("ingest-stream: first row from customer=%s service=%s", authCustomer, svcPath)
 		}
 		if s.Coord.SeenServices != nil && row.Service != "" {
-			if s.Coord.SeenServices.Add(row.Customer, svcPath, row.Env) {
-				log.Printf("ingest-stream: new service discovered: customer=%s service=%s", row.Customer, svcPath)
+			if s.Coord.SeenServices.Add(authCustomerID, svcPath, row.Env) {
+				log.Printf("ingest-stream: new service discovered: customer=%s service=%s", authCustomer, svcPath)
 				// Auto-onboard: raw producers (Heroku, custom POSTs, bare
 				// IngestStream) never sample, so there's no log_group until
 				// we make one here. OnboardService records the canonical
@@ -785,7 +774,7 @@ func (s *Server) authenticateStream(ctx context.Context) (*store.AgentAuthResult
 	// auth is nil when the token doesn't exist (e.g. after customer
 	// deletion cascaded the token away). Customer.ID == 0 guards against
 	// any lingering orphan rows from pre-cascade deletions.
-	if auth == nil || auth.Organization == nil || auth.Organization.ID == "" || auth.Organization.Name == "" {
+	if auth == nil || auth.Organization == nil || auth.Organization.ID == 0 || auth.Organization.Name == "" {
 		return nil, status.Errorf(codes.Unauthenticated, "invalid or revoked token")
 	}
 	return auth, nil
@@ -818,7 +807,7 @@ func (s *Server) ingestBatch(rows []*pb.LogRow) {
 // nothing enforcement-critical reads this path (see
 // docs/plans/coordinator-horizontal-scaling.md).
 func (s *Server) GetUsage(ctx context.Context, req *pb.GetUsageRequest) (*pb.GetUsageResponse, error) {
-	customer, err := callerCustomer(ctx)
+	orgID, err := s.resolveCallerOrgID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -836,7 +825,7 @@ func (s *Server) GetUsage(ctx context.Context, req *pb.GetUsageRequest) (*pb.Get
 	periodEnd := t.AddDate(0, 1, 0)
 
 	var dbBytes int64
-	dbBytes, err = s.Store.QueryUsage(customer, periodStart, periodEnd)
+	dbBytes, err = s.Store.QueryUsage(orgID, periodStart, periodEnd)
 	if err != nil {
 		log.Printf("GetUsage DB query error: %v", err)
 		// Continue with in-memory only.
@@ -845,7 +834,7 @@ func (s *Server) GetUsage(ctx context.Context, req *pb.GetUsageRequest) (*pb.Get
 	// Add the current (not-yet-flushed) hour.
 	var memBytes int64
 	if s.Coord.Usage != nil {
-		memBytes = s.Coord.Usage.CurrentHour(customer)
+		memBytes = s.Coord.Usage.CurrentHour(int64(orgID))
 	}
 
 	return &pb.GetUsageResponse{
@@ -861,14 +850,14 @@ func (s *Server) GetUsage(ctx context.Context, req *pb.GetUsageRequest) (*pb.Get
 // authenticated caller belongs to. Ignores any customer field on the
 // request — the verified principal from the JWT interceptor is the sole
 // source of truth for identity.
-func (s *Server) resolveCallerOrgID(ctx context.Context) (string, error) {
+func (s *Server) resolveCallerOrgID(ctx context.Context) (store.OrgID, error) {
 	name, err := callerCustomer(ctx)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 	c, err := s.Store.GetOrgByName(name)
 	if err != nil {
-		return "", status.Errorf(codes.NotFound, "customer %q not found", name)
+		return 0, status.Errorf(codes.NotFound, "customer %q not found", name)
 	}
 	return c.ID, nil
 }
@@ -938,7 +927,7 @@ func (s *Server) SaveWatch(ctx context.Context, req *pb.SaveWatchRequest) (*pb.S
 	if cust, err := s.Store.GetOrgByID(custID); err == nil && cust != nil {
 		resolver := storeBinResolver{store: s.Store, orgID: custID}
 		tier := string(s.Store.TierForOrg(custID))
-		loweredJSON = planner.LowerForStorage(req.Pipeline, cust.Name, tier, resolver)
+		loweredJSON = planner.LowerForStorage(req.Pipeline, int64(custID), tier, resolver)
 	}
 	// SaveCronWatch's error may be a non-blocking store.Warning (the
 	// save already happened) — see store.Split's doc. SaveWatchResponse
@@ -960,7 +949,7 @@ func (s *Server) SaveWatch(ctx context.Context, req *pb.SaveWatchRequest) (*pb.S
 // is genuinely tiny.
 type storeBinResolver struct {
 	store *store.Store
-	orgID string
+	orgID store.OrgID
 }
 
 func (r storeBinResolver) Source(name string) (string, string, bool) {

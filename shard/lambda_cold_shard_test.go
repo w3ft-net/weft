@@ -74,7 +74,7 @@ func TestColdShard_RemoteQuery(t *testing.T) {
 	}
 	defer cs.Close()
 
-	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE customer = 'kevlar'")
+	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestColdShard_RemoteQueryToSink(t *testing.T) {
 	defer cs.Close()
 
 	sink := &testSink{}
-	cs.QueryToSink(context.Background(), "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer = 'kevlar'", nil, sink)
+	cs.QueryToSink(context.Background(), "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer_id = 1", nil, sink)
 
 	if !sink.sentinelReceived {
 		t.Error("expected sentinel")
@@ -136,7 +136,7 @@ func TestColdShard_RemoteQueryToSink_CarriesTraceID(t *testing.T) {
 
 	ctx := weftsdk.ContextWithTraceID(context.Background(), "test-trace-123")
 	sink := &testSink{}
-	cs.QueryToSink(ctx, "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer = 'kevlar'", nil, sink)
+	cs.QueryToSink(ctx, "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer_id = 1", nil, sink)
 
 	if gotTraceID != "test-trace-123" {
 		t.Fatalf("expected lambda request body to carry trace_id=test-trace-123, got %q", gotTraceID)
@@ -168,7 +168,7 @@ func TestColdShard_RemoteFiltersByApp(t *testing.T) {
 	}
 	defer cs.Close()
 
-	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE namespace = 'callbox' AND customer = 'kevlar'")
+	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE namespace = 'callbox' AND customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func BenchmarkColdShard_RemoteQuery(b *testing.B) {
 	for i := range rows {
 		rows[i] = &pb.LogRow{
 			Raw: "bench log line", Namespace: "vimgym",
-			Level: "INFO", Customer: "kevlar",
+			Level: "INFO", CustomerId: 1,
 			TsUnixNs: coldT0.Add(time.Duration(i) * time.Millisecond).UnixNano(),
 		}
 	}
@@ -222,6 +222,6 @@ func BenchmarkColdShard_RemoteQuery(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		cs.Query("SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
+		cs.Query("SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer_id = 1")
 	}
 }

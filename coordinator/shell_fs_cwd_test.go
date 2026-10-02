@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/graybeardcorp/weft/store"
 )
 
 // These tests pin the server-side execution of FS-navigation builtins
@@ -33,18 +35,18 @@ import (
 // env-less (acme/api → "api.log") and one env-bearing (acme/worker @ prod
 // → the "prod/" env directory), so the namespace listing exercises both
 // the file and the env-subdirectory arms of LogMount.ReadDir.
-func seedAcmeServices(c *Coordinator, customer string) {
-	c.SeenServices.Add(customer, "acme/api", "")
-	c.SeenServices.Add(customer, "acme/worker", "prod")
+func seedAcmeServices(c *Coordinator, customerID store.OrgID) {
+	c.SeenServices.Add(int64(customerID), "acme/api", "")
+	c.SeenServices.Add(int64(customerID), "acme/worker", "prod")
 }
 
 // TestShellLs_ResolvesCwdAndListsNamespace: `ls` with no args inside
 // /log/acme lists acme's children, not the root mounts.
 func TestShellLs_ResolvesCwdAndListsNamespace(t *testing.T) {
-	db, _ := testStoreAndCustomer(t)
+	db, custID := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 	const customer = "weftfuncs-test"
-	seedAcmeServices(c, customer)
+	seedAcmeServices(c, custID)
 
 	res, err := c.ExecuteWithDir(context.Background(), "ls", TimeRange{}, customer, "", []string{"/log/acme"})
 	if err != nil {
@@ -97,10 +99,10 @@ func TestShellTail_RelativeSourceResolvesAgainstCwd(t *testing.T) {
 // shared the nil-LogServices bug and rendered an empty tree. This pins
 // that tree works once the service list is populated.
 func TestShellTree_ListsNamespaceFromSeededCwd(t *testing.T) {
-	db, _ := testStoreAndCustomer(t)
+	db, custID := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Store: db})
 	const customer = "weftfuncs-test"
-	seedAcmeServices(c, customer)
+	seedAcmeServices(c, custID)
 
 	res, err := c.ExecuteWithDir(context.Background(), "tree", TimeRange{}, customer, "", []string{"/log/acme"})
 	if err != nil {

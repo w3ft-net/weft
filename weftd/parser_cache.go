@@ -75,19 +75,19 @@ func (c *ParserCache) Apps() []string {
 }
 
 // Install parses schemaYAML, builds a parser, and atomically swaps it
-// into the slot for app. The schema's app/customer fields are forced
-// to the agent-supplied values, since the schema itself doesn't know
-// which app/customer it's being installed for.
+// into the slot for app. The schema's app field is forced to the
+// agent-supplied value, since the schema itself doesn't know which app
+// it's being installed for. The customer is not stamped here: the
+// coordinator sets customer_id on every row from the authenticated token.
 //
 // Returns the computed hash so the caller can cache it. If the YAML
 // fails to parse, returns the error and leaves the slot unchanged.
-func (c *ParserCache) Install(app, customer, schemaYAML string) (string, error) {
+func (c *ParserCache) Install(app, schemaYAML string) (string, error) {
 	schema, err := ingest.LoadSchemaFromBytes([]byte(schemaYAML))
 	if err != nil {
 		return "", fmt.Errorf("load schema: %w", err)
 	}
 	schema.Service = app
-	schema.Customer = customer
 
 	parser, err := ingest.NewParser(schema)
 	if err != nil {

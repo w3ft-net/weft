@@ -38,10 +38,10 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 		rows = append(rows, &pb.LogRow{
 			TsUnixNs:  base.Add(time.Duration(i) * time.Minute).UnixNano(),
 			Namespace: "weft", Service: "coordinator", Kind: "main",
-			Raw:      "coordinator: handling query",
-			Level:    "INFO",
-			Instance: "i-coord-001",
-			Customer: "graybeard",
+			Raw:        "coordinator: handling query",
+			Level:      "INFO",
+			Instance:   "i-coord-001",
+			CustomerId: 9,
 		})
 	}
 
@@ -50,10 +50,10 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 		rows = append(rows, &pb.LogRow{
 			TsUnixNs:  base.Add(time.Duration(i) * time.Minute).UnixNano(),
 			Namespace: "weft", Service: "shard", Kind: "main",
-			Raw:      "shard: ingesting batch",
-			Level:    "INFO",
-			Instance: "i-shard-001",
-			Customer: "graybeard",
+			Raw:        "shard: ingesting batch",
+			Level:      "INFO",
+			Instance:   "i-shard-001",
+			CustomerId: 9,
 		})
 	}
 
@@ -66,19 +66,19 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 			Raw:         `{"collector":"cpu","value":42}`,
 			Level:       "METRIC",
 			Instance:    "i-coord-001",
-			Customer:    "graybeard",
+			CustomerId:  9,
 			PayloadJson: payload(map[string]any{"collector": "cpu", "value": 42}),
 		})
 	}
 
 	// A row from a different namespace to verify isolation.
 	rows = append(rows, &pb.LogRow{
-		TsUnixNs:  base.UnixNano(),
-		Namespace: "grantcentral",
-		Raw:       "grantcentral: should not appear",
-		Level:     "INFO",
-		Instance:  "i-gc-001",
-		Customer:  "kevlar",
+		TsUnixNs:   base.UnixNano(),
+		Namespace:  "grantcentral",
+		Raw:        "grantcentral: should not appear",
+		Level:      "INFO",
+		Instance:   "i-gc-001",
+		CustomerId: 1,
 	})
 
 	if err := ds.Ingest(rows, nil); err != nil {
@@ -241,14 +241,14 @@ func TestNamespaceQuery_FilterAcrossSubApps(t *testing.T) {
 func TestSeenServices_TracksSubApps(t *testing.T) {
 	sa := NewSeenServices()
 
-	sa.Add("graybeard", "weft/coordinator", "")
-	sa.Add("graybeard", "weft/shard", "")
-	sa.Add("graybeard", "weft/metrics", "")
-	sa.Add("graybeard", "weft/coordinator", "") // duplicate
-	sa.Add("kevlar", "grantcentral", "")
+	sa.Add(9, "weft/coordinator", "")
+	sa.Add(9, "weft/shard", "")
+	sa.Add(9, "weft/metrics", "")
+	sa.Add(9, "weft/coordinator", "") // duplicate
+	sa.Add(1, "grantcentral", "")
 
 	// Per-customer filtering.
-	names := sa.Names("graybeard")
+	names := sa.Names(9)
 	if len(names) != 3 {
 		t.Fatalf("expected 3 apps for graybeard, got %d: %v", len(names), names)
 	}
@@ -260,13 +260,13 @@ func TestSeenServices_TracksSubApps(t *testing.T) {
 	}
 
 	// kevlar should only see grantcentral.
-	kevlarNames := sa.Names("kevlar")
+	kevlarNames := sa.Names(1)
 	if len(kevlarNames) != 1 || kevlarNames[0] != "grantcentral" {
 		t.Errorf("kevlar apps: got %v, want [grantcentral]", kevlarNames)
 	}
 
 	// Unknown customer sees nothing.
-	if names := sa.Names("unknown"); len(names) != 0 {
+	if names := sa.Names(999); len(names) != 0 {
 		t.Errorf("unknown customer should see no apps, got %v", names)
 	}
 }
@@ -278,12 +278,12 @@ func TestSeenServices_EnvEncoding(t *testing.T) {
 	sa := NewSeenServices()
 
 	// Mix of env-less and env-bearing entries in the same namespace.
-	sa.Add("acme", "myco/api", "")        // env-less
-	sa.Add("acme", "myco/api", "prod")    // env-bearing, same app
-	sa.Add("acme", "myco/api", "staging") // different env, same app
-	sa.Add("acme", "myco/worker", "prod") // different app under prod
+	sa.Add(5, "myco/api", "")        // env-less
+	sa.Add(5, "myco/api", "prod")    // env-bearing, same app
+	sa.Add(5, "myco/api", "staging") // different env, same app
+	sa.Add(5, "myco/worker", "prod") // different app under prod
 
-	names := sa.Names("acme")
+	names := sa.Names(5)
 	want := []string{
 		"myco/api",
 		"myco/prod/api",

@@ -211,9 +211,9 @@ func ingestInterleaved(
 		rows[i] = &pb.LogRow{
 			Raw:       fmt.Sprintf("%s-%d", prefix, seq),
 			Namespace: "directcompute", Service: "op2",
-			Level:    "INFO",
-			Customer: "kevlar",
-			TsUnixNs: baseTs.Add(time.Duration(seq) * time.Millisecond).UnixNano(),
+			Level:      "INFO",
+			CustomerId: 1,
+			TsUnixNs:   baseTs.Add(time.Duration(seq) * time.Millisecond).UnixNano(),
 		}
 	}
 	resp, err := client.Ingest(ctx, &pb.IngestRequest{Rows: rows})

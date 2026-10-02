@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -240,11 +241,11 @@ type CoordinatorConfig struct {
 // files in the same namespace — see docs/plans/ingest-dimensions.md.
 type SeenServices struct {
 	mu   sync.RWMutex
-	apps map[string]map[string]bool // customer → set of slash-encoded names
+	apps map[int64]map[string]bool // customer id → set of slash-encoded names
 }
 
 func NewSeenServices() *SeenServices {
-	return &SeenServices{apps: make(map[string]map[string]bool)}
+	return &SeenServices{apps: make(map[int64]map[string]bool)}
 }
 
 // encodeName splices env into the app's namespace prefix. Given
@@ -264,27 +265,27 @@ func encodeName(app, env string) string {
 
 // Add records an (app, env) tuple for a customer. Returns true if
 // the resulting encoded name is new.
-func (s *SeenServices) Add(customer, app, env string) bool {
+func (s *SeenServices) Add(customerID int64, app, env string) bool {
 	name := encodeName(app, env)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.apps[customer] == nil {
-		s.apps[customer] = make(map[string]bool)
+	if s.apps[customerID] == nil {
+		s.apps[customerID] = make(map[string]bool)
 	}
-	if s.apps[customer][name] {
+	if s.apps[customerID][name] {
 		return false
 	}
-	s.apps[customer][name] = true
+	s.apps[customerID][name] = true
 	return true
 }
 
 // Names returns seen entries for a specific customer, sorted. Each
 // entry is either "<ns>/<app>" (env-less) or "<ns>/<env>/<app>"
 // (env-bearing).
-func (s *SeenServices) Names(customer string) []string {
+func (s *SeenServices) Names(customerID int64) []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	cApps := s.apps[customer]
+	cApps := s.apps[customerID]
 	if len(cApps) == 0 {
 		return nil
 	}
@@ -388,10 +389,10 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 				// namespace_ids and so route to different shards.
 				byKey := make(map[drainKey][]*pb.LogRow)
 				for _, row := range batch {
-					k := drainKey{row.Customer, row.Namespace, row.Service}
+					k := drainKey{row.CustomerId, row.Namespace, row.Service}
 					byKey[k] = append(byKey[k], row)
-					if c.Usage != nil && row.Customer != "" {
-						c.Usage.Record(row.Customer, int64(len(row.Raw)))
+					if c.Usage != nil && row.CustomerId != 0 {
+						c.Usage.Record(row.CustomerId, int64(len(row.Raw)))
 					}
 				}
 
@@ -400,7 +401,7 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 					// resolved through a (customer, namespace) cache so the
 					// per-batch grouping keeps the DB off the hot path.
 					service := k.service
-					nsID := c.ingestNamespaceID(k.customer, k.namespace)
+					nsID := c.ingestNamespaceID(k.customerID, k.namespace)
 					// Strict service-scoped routing only — no whole-registry
 					// fallback, which would commingle a different tenant's
 					// rows onto the wrong shard. A service onboarded after
@@ -479,7 +480,7 @@ func (c *Coordinator) StartUsageFlush(ctx context.Context, store *store.Store) {
 
 // flushUsage appends each drained delta as its own row. Append-only,
 // not upsert: usage_hourly has no uniqueness constraint on
-// (customer_name, hour) (migration 074) precisely so concurrent
+// (org_id, hour) (migration 074) precisely so concurrent
 // coordinators can each insert their own delta without racing on a
 // shared row. Readers (QueryUsage, rollup_usage_daily) already
 // SUM(bytes_ingested) across however many rows land for an hour.
@@ -487,10 +488,10 @@ func (c *Coordinator) flushUsage(store *store.Store) {
 	entries := c.Usage.Drain()
 	for _, e := range entries {
 		if err := store.DB().Exec(`
-			INSERT INTO usage_hourly (customer_name, hour, bytes_ingested)
+			INSERT INTO usage_hourly (org_id, hour, bytes_ingested)
 			VALUES (?, ?, ?)`,
-			e.Customer, e.Hour, e.Bytes).Error; err != nil {
-			log.Printf("usage flush error: customer=%s hour=%s: %v", e.Customer, e.Hour, err)
+			e.CustomerID, e.Hour, e.Bytes).Error; err != nil {
+			log.Printf("usage flush error: customer=%d hour=%s: %v", e.CustomerID, e.Hour, err)
 		}
 	}
 	if len(entries) > 0 {
@@ -509,9 +510,9 @@ func (c *Coordinator) IngestingShard(namespaceID uint, service string) shard.Sha
 // namespace resolution (two customers can share a composite app), and
 // the app is the composite the row carries.
 type drainKey struct {
-	customer  string
-	namespace string
-	service   string
+	customerID int64
+	namespace  string
+	service    string
 }
 
 // ingestNamespaceID resolves (customer, namespace) to namespaces.id for
@@ -519,37 +520,42 @@ type drainKey struct {
 // grouping keeps the DB lookup off the per-row path. Only non-zero
 // results are cached, so a namespace that doesn't exist yet (race with
 // its creation) is retried rather than pinned to 0.
-func (c *Coordinator) ingestNamespaceID(customer, namespace string) uint {
-	key := customer + "\x00" + namespace
+func (c *Coordinator) ingestNamespaceID(customerID int64, namespace string) uint {
+	key := strconv.FormatInt(customerID, 10) + "\x00" + namespace
 	if v, ok := c.nsIDCache.Load(key); ok {
 		return v.(uint)
 	}
-	id := c.resolveNamespaceID("", customer, namespace)
+	id := c.resolveNamespaceID(store.OrgID(customerID), namespace)
 	if id != 0 {
 		c.nsIDCache.Store(key, id)
 	}
 	return id
 }
 
-// resolveNamespaceID maps a (customer, namespace-name) to namespaces.id
+// resolveCustomerID maps a customer name to its org id. The empty name is the
+// no-customer test shape and resolves to 0 (the planner then emits no customer
+// predicate); any other name must exist.
+func (c *Coordinator) resolveCustomerID(customer string) (store.OrgID, error) {
+	if customer == "" {
+		return 0, nil
+	}
+	cust, err := c.Store.GetOrgByName(customer)
+	if err != nil {
+		return 0, fmt.Errorf("resolve customer %q: %w", customer, err)
+	}
+	return cust.ID, nil
+}
+
+// resolveNamespaceID maps a (customer id, namespace-name) to namespaces.id
 // for service-level shard routing. Returns 0 — the "no namespace
 // filter" sentinel ShardDescriptorsFor honors — when the namespace is
 // empty (all-namespaces fan-out) or can't be resolved (unknown customer,
 // or a namespace the owner deleted). A 0 widens the shard fan-out but
 // stays correct: the SQL still carries the namespace/service predicates,
-// and the shard's `customer = ?` predicate preserves tenant isolation.
-// custID may be passed pre-resolved (query path); 0 means "look it up
-// from customerName" (lowered/cron path, which only carries the name).
-func (c *Coordinator) resolveNamespaceID(custID string, customerName, namespace string) uint {
-	if namespace == "" || c.Store == nil {
+// and the shard's `customer_id = ?` predicate preserves tenant isolation.
+func (c *Coordinator) resolveNamespaceID(custID store.OrgID, namespace string) uint {
+	if namespace == "" || c.Store == nil || custID == 0 {
 		return 0
-	}
-	if custID == "" {
-		cust, err := c.Store.GetOrgByName(customerName)
-		if err != nil {
-			return 0
-		}
-		custID = cust.ID
 	}
 	ns, err := c.Store.GetNamespace(custID, namespace)
 	if err != nil {
@@ -567,9 +573,9 @@ func (c *Coordinator) resolveNamespaceID(custID string, customerName, namespace 
 //
 // The registry's MatchingEntries re-applies this clamp as defense in
 // depth — idempotent because we pass the already-clamped value.
-func (c *Coordinator) clampTimeRange(tr TimeRange, custID string) TimeRange {
+func (c *Coordinator) clampTimeRange(tr TimeRange, custID store.OrgID) TimeRange {
 	var tier store.Tier
-	if custID != "" && c.Store != nil {
+	if custID != 0 && c.Store != nil {
 		tier = c.Store.TierForOrg(custID)
 	}
 	cap := time.Now().Add(-store.LogRetention(tier))
@@ -647,7 +653,11 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 	if len(dirStack) > 0 {
 		cwd = dirStack[0]
 	}
-	plan, err := planner.PlanInDir(pipeline, "", cwd, time.Time{}, time.Time{})
+	followCust, err := c.resolveCustomerID(customer)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := planner.Plan(pipeline, int64(followCust), cwd, time.Time{}, time.Time{})
 	if err != nil {
 		return nil, err
 	}
@@ -658,6 +668,7 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 	}
 
 	matcher := &RowMatcher{
+		Customer:  plan.SourceCustomerID,
 		Namespace: plan.SourceNamespace,
 		Service:   plan.SourceService,
 		Kind:      plan.SourceKind,
@@ -722,7 +733,7 @@ func (c *Coordinator) ExecuteForWatch(ctx context.Context, pipeline string, tr T
 	// fire is already ~1ms, so an extra ~hundred-µs of refresh DB
 	// write doesn't move user-perceived latency. The next fire
 	// takes the hot path either way.
-	c.refreshLoweredSync(watch, cust.Name)
+	c.refreshLoweredSync(watch)
 	return c.execute(ctx, pipeline, tr, cust.Name, "", alertCtx, nil)
 }
 
@@ -777,7 +788,7 @@ func (c *Coordinator) executeLowered(ctx context.Context, watch *store.CronWatch
 	if !tr.Start.IsZero() && tr.Start.Before(cap) {
 		tr.Start = cap
 	}
-	resolveCtx := planner.ResolveCtx{Customer: lp.Customer, Start: tr.Start, End: tr.End}
+	resolveCtx := planner.ResolveCtx{CustomerID: lp.CustomerID, Start: tr.Start, End: tr.End}
 	args := lp.Hydrate(resolveCtx)
 	res, err := c.dispatchLoweredWithTier(ctx, lp, args, tr, tier, alertCtx)
 	if err != nil {
@@ -796,7 +807,7 @@ func (c *Coordinator) executeLowered(ctx context.Context, watch *store.CronWatch
 // than wrong), and skips the per-fire TierForOrg lookup (tier
 // is baked into LoweredPlan at save time).
 func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.LoweredPlan, args []any, tr TimeRange, tier store.Tier, alertCtx *AlertContext) (*ExecuteResult, error) {
-	nsID := c.resolveNamespaceID("", lp.Customer, lp.SourceNamespace)
+	nsID := c.resolveNamespaceID(store.OrgID(lp.CustomerID), lp.SourceNamespace)
 	descs := c.Provisioner.ShardDescriptorsFor(tr, nsID, lp.SourceService, tier)
 	if len(descs) == 0 {
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
@@ -877,13 +888,13 @@ func (c *Coordinator) loadLoweredPlan(watch *store.CronWatch) (*planner.LoweredP
 // and a concurrent goroutine over that conn races the main fire's
 // own DB activity. The latency cost (~hundreds of µs of DB writes)
 // is paid once per slow-path fire; the next fire is on the hot path.
-func (c *Coordinator) refreshLoweredSync(watch *store.CronWatch, customerName string) {
+func (c *Coordinator) refreshLoweredSync(watch *store.CronWatch) {
 	if watch.ID == 0 {
 		return
 	}
 	resolver := watchBinResolver{store: c.Store, orgID: watch.OrgID}
 	tier := string(c.Store.TierForOrg(watch.OrgID))
-	loweredJSON := planner.LowerForStorage(watch.Pipeline, customerName, tier, resolver)
+	loweredJSON := planner.LowerForStorage(watch.Pipeline, int64(watch.OrgID), tier, resolver)
 	if loweredJSON == nil {
 		return
 	}
@@ -906,7 +917,7 @@ func (c *Coordinator) refreshLoweredSync(watch *store.CronWatch, customerName st
 // mounts/cron.go — kept duplicated rather than shared (10-line type).
 type watchBinResolver struct {
 	store *store.Store
-	orgID string
+	orgID store.OrgID
 }
 
 func (r watchBinResolver) Source(name string) (string, string, bool) {
@@ -999,7 +1010,7 @@ func (c *Coordinator) execute(ctx context.Context, pipeline string, tr TimeRange
 // here — the rewriter strips redirects from the snapshot before
 // re-rendering, lifting them onto the CallbackCommand so warp's
 // own redirect machinery handles the FS write.
-func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr TimeRange, customer string, custID string, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
+func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr TimeRange, customer string, custID store.OrgID, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
 	// Clamp tr to the customer's tier retention BEFORE planning so the
 	// SQL's ts predicates and the shard-selection in MatchingEntries
 	// agree on the same start. Without the clamp here, a boundary-
@@ -1007,7 +1018,7 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 	// retention because the SQL would have no lower-bound predicate.
 	tr = c.clampTimeRange(tr, custID)
 
-	plan, err := planner.PlanInDir(pipeline, customer, cwd, tr.Start, tr.End)
+	plan, err := planner.Plan(pipeline, int64(custID), cwd, tr.Start, tr.End)
 	if err != nil {
 		// The rewriter only substitutes pipelines whose first command
 		// is on /log/..., which the planner accepts. ErrNotPlannable
@@ -1051,17 +1062,13 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 // the expansion cost twice — acceptable since the steps are
 // idempotent and the DB hits are cache-friendly. ExecuteForWatch
 // hits preflight once via runQuery on the happy path.
-func (c *Coordinator) preflight(pipeline, customer, cwd string) (string, string, error) {
-	var custID string
-	if customer != "" {
-		cust, err := c.Store.GetOrgByName(customer)
-		if err != nil {
-			return "", "", fmt.Errorf("resolve customer %q: %w", customer, err)
-		}
-		custID = cust.ID
+func (c *Coordinator) preflight(pipeline, customer, cwd string) (store.OrgID, string, error) {
+	custID, err := c.resolveCustomerID(customer)
+	if err != nil {
+		return 0, "", err
 	}
 
-	if custID != "" {
+	if custID != 0 {
 		fs := shellfs.New(c.Store, custID, nil)
 		// Reject `tail -f ... | <bin-script>` before inlining. Bash
 		// bodies get spliced by expandBinPipeline below, so if we
@@ -1071,11 +1078,11 @@ func (c *Coordinator) preflight(pipeline, customer, cwd string) (string, string,
 		// they're opaque). Failing here keeps the rule uniform and
 		// the error pointed at the right stage name.
 		if err := rejectBinInFollow(pipeline, fs); err != nil {
-			return "", "", err
+			return 0, "", err
 		}
 		expanded, err := expandBinPipeline(pipeline, fs)
 		if err != nil {
-			return "", "", fmt.Errorf("expand /bin: %w", err)
+			return 0, "", fmt.Errorf("expand /bin: %w", err)
 		}
 		pipeline = expanded
 
@@ -1088,10 +1095,10 @@ func (c *Coordinator) preflight(pipeline, customer, cwd string) (string, string,
 		// SeenServices guard supports tests that build Coordinator
 		// without going through NewCoordinator.
 		if c.SeenServices != nil {
-			if apps := c.SeenServices.Names(customer); len(apps) > 0 {
+			if apps := c.SeenServices.Names(int64(custID)); len(apps) > 0 {
 				expanded, err := planner.ExpandSourceGlobs(pipeline, cwd, apps)
 				if err != nil {
-					return "", "", fmt.Errorf("expand glob: %w", err)
+					return 0, "", fmt.Errorf("expand glob: %w", err)
 				}
 				pipeline = expanded
 			}
@@ -1106,7 +1113,7 @@ func (c *Coordinator) preflight(pipeline, customer, cwd string) (string, string,
 // scopes tenant-backed features (ShellFS, weft.*). alertCtx is forwarded
 // to runLocal so interior queries dispatched by the interceptor inherit
 // the caller's alert identity; may be nil.
-func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan, tr TimeRange, customer string, custID string, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
+func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan, tr TimeRange, customer string, custID store.OrgID, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
 	if plan.ShardSQL == "" {
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
@@ -1118,12 +1125,8 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 	// identifier. The planner already split the namespace out of the
 	// pseudofile path, so this checks it directly.
 	if plan.SourceNamespace != "" {
-		cust, err := c.Store.GetOrgByName(customer)
-		if err != nil {
-			return nil, fmt.Errorf("validate source: resolve customer %q: %w", customer, err)
-		}
 		var count int64
-		if err := c.Store.DB().WithContext(store.WithOrg(context.Background(), cust.ID)).Model(&store.Namespace{}).
+		if err := c.Store.DB().WithContext(store.WithOrg(context.Background(), custID)).Model(&store.Namespace{}).
 			Where("name = ?", plan.SourceNamespace).
 			Count(&count).Error; err != nil {
 			return nil, fmt.Errorf("validate source: %w", err)
@@ -1147,10 +1150,10 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 	// before invoking Plan so the SQL's ts predicate is consistent with
 	// the shard set.
 	var tier store.Tier
-	if custID != "" {
+	if custID != 0 {
 		tier = c.Store.TierForOrg(custID)
 	}
-	nsID := c.resolveNamespaceID(custID, customer, plan.SourceNamespace)
+	nsID := c.resolveNamespaceID(custID, plan.SourceNamespace)
 	descs := c.Provisioner.ShardDescriptorsFor(tr, nsID, plan.SourceService, tier)
 	if len(descs) == 0 {
 		logQuery("query: no matching shards (namespace=%s, service=%s, customer=%s)", plan.SourceNamespace, plan.SourceService, customer)
@@ -1272,7 +1275,7 @@ const scriptExecutionTimeout = 30 * time.Second
 // Notices are populated on the returned ExecuteResult AFTER warp
 // finishes, BEFORE the pipe writers close — so consumers reading
 // Notices past stream EOF see the populated value.
-func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRange, customer string, custID string, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
+func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRange, customer string, custID store.OrgID, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
 	ast, err := bash.Parse(pipeline)
 	if err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
@@ -1305,7 +1308,7 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 	bash.RegisterToolCommands(interp)
 
 	noticeQueue := notices.NewQueue(c.Store, userID)
-	if custID != "" {
+	if custID != 0 {
 		tier := c.Store.TierForOrg(custID)
 		opts := []shellfs.Option{
 			shellfs.WithTier(tier),
@@ -1329,7 +1332,7 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 		// nothing. Guarded for tests that build a Coordinator directly.
 		var logServices []string
 		if c.SeenServices != nil {
-			logServices = c.SeenServices.Names(customer)
+			logServices = c.SeenServices.Names(int64(custID))
 		}
 		// Wrap the mount in a cwd resolver keyed to the (already seeded)
 		// dirstack. pkg/bash's file builtins (ls, cat, grep FILE, …) hand

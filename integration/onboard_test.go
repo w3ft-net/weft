@@ -187,7 +187,6 @@ func TestOnboardFlow(t *testing.T) {
 		time.Sleep(3 * time.Second)
 		stream, err := client.Execute(context.Background(), &pb.CoordinatorExecuteRequest{
 			Pipeline: pipeline,
-			Customer: "kevlar",
 		})
 		if err != nil {
 			t.Logf("  query error: %v (retrying)", err)

@@ -57,7 +57,7 @@ func TestPushdown_LimitBeforeFilter_DoesNotMerge(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
+			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -89,11 +89,11 @@ func TestPushdown_LimitBeforeFilter_DoesNotMerge(t *testing.T) {
 // compute-side ordering invariant survives the test.
 func TestPlanCustomer_BoundsPerShardLimit(t *testing.T) {
 	pipeline := `cat warp.log | tail -n 100 | grep -v ERROR | wc -l`
-	plan, err := Plan(pipeline, "victim-co", time.Time{}, time.Time{})
+	plan, err := Plan(pipeline, 3, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	want := `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE customer = ? ORDER BY ts DESC LIMIT 100) AS t ORDER BY ts ASC`
+	want := `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE customer_id = CAST(? AS BIGINT) ORDER BY ts DESC LIMIT 100) AS t ORDER BY ts ASC`
 	if plan.ShardSQL != want {
 		t.Errorf("ShardSQL must place customer predicate before the LIMIT\n got: %s\nwant: %s", plan.ShardSQL, want)
 	}
@@ -141,7 +141,7 @@ func TestPushdown_LimitSafePushdown(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, "", time.Time{}, time.Time{})
+			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}

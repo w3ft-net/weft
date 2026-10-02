@@ -50,10 +50,10 @@ func TestRegistry_ServingSetQueryRouting(t *testing.T) {
 	// drops ShardRowCount==0 archived entries but ingesting entries are
 	// returned regardless. A row each keeps the test honest if that
 	// guard ever tightens.
-	if err := sVim.Ingest([]*pb.LogRow{{Namespace: "vimgym", Customer: "kevlar", TsUnixNs: t0.UnixNano()}}, nil); err != nil {
+	if err := sVim.Ingest([]*pb.LogRow{{Namespace: "vimgym", CustomerId: 1, TsUnixNs: t0.UnixNano()}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := sCb.Ingest([]*pb.LogRow{{Namespace: "callbox", Customer: "kevlar", TsUnixNs: t0.UnixNano()}}, nil); err != nil {
+	if err := sCb.Ingest([]*pb.LogRow{{Namespace: "callbox", CustomerId: 1, TsUnixNs: t0.UnixNano()}}, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -112,7 +112,7 @@ func TestRegistry_DegradedExcludedFromWritesButQueryable(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
-	if err := s.Ingest([]*pb.LogRow{{Namespace: "vimgym", Customer: "kevlar", TsUnixNs: t0.UnixNano()}}, nil); err != nil {
+	if err := s.Ingest([]*pb.LogRow{{Namespace: "vimgym", CustomerId: 1, TsUnixNs: t0.UnixNano()}}, nil); err != nil {
 		t.Fatal(err)
 	}
 

@@ -20,7 +20,7 @@ import (
 // Narrowed to an interface so tests can intercept Send without a live
 // HTTP endpoint. The concrete *Notifier satisfies it.
 type NotifyDispatcher interface {
-	Send(orgID string, aliasName, watchName, body string) error
+	Send(orgID store.OrgID, aliasName, watchName, body string) error
 }
 
 // AlertContext provides the alert command with access to result history,
@@ -31,7 +31,7 @@ type AlertContext struct {
 	Store       *store.Store
 	Watch       *store.CronWatch
 	Notifier    NotifyDispatcher
-	OrgID       string
+	OrgID       store.OrgID
 	Interactive bool
 }
 
@@ -146,7 +146,7 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 	// Window aggregates (per-tag when we have one).
 	var stats store.CronAggStats
 	if parsed.Duration > 0 && ctx.Store != nil && ctx.Watch != nil {
-		stats, _ = func(orgID string, cronWatchID uint, since time.Time, tag string) (store.CronAggStats, error) {
+		stats, _ = func(orgID store.OrgID, cronWatchID uint, since time.Time, tag string) (store.CronAggStats, error) {
 			since = store.ClampRetention(ctx.Store.TierForOrg(orgID), since)
 			gran := store.PickGranularity(time.Since(since))
 
@@ -269,7 +269,7 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 		if parsed.Duration == 0 {
 			triggered = r.value == ""
 		} else if ctx.Store != nil && ctx.Watch != nil {
-			n, _ := func(orgID string, cronWatchID uint, since time.Time, tag string) (int, error) {
+			n, _ := func(orgID store.OrgID, cronWatchID uint, since time.Time, tag string) (int, error) {
 				since = store.ClampRetention(ctx.Store.TierForOrg(orgID), since)
 				var n int64
 				query := `
@@ -379,7 +379,7 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 // ensures every invocation creates its own PagerDuty incident. When a tag
 // is set, it's appended to the watch name so PagerDuty sees per-tag
 // incidents collapse into per-tag dedup keys, not one watch-wide key.
-func (ctx *AlertContext) dispatchIdentity(tag string) (string, string) {
+func (ctx *AlertContext) dispatchIdentity(tag string) (string, store.OrgID) {
 	if ctx.Watch != nil {
 		name := ctx.Watch.Name
 		if tag != "" {

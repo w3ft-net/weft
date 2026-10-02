@@ -113,7 +113,8 @@ func Migrate(dsn string) error {
 	// have to be applied here — and re-applied on every migrate, because
 	// a saaskit upgrade can introduce a column that its queries assume.
 	//
-	// orgs.SchemaSQL is written for exactly this: every statement is
+	// orgs.SchemaSQLBigintOrgID (weft's organizations.id is a bigint
+	// identity since migration 078) is written for exactly this: every statement is
 	// CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS / CREATE
 	// INDEX IF NOT EXISTS, so running it against an already-current
 	// database is a no-op. It runs last so it can add columns to tables
@@ -125,7 +126,7 @@ func Migrate(dsn string) error {
 	// request through `resolve org role` 401'd on `column "seated" does
 	// not exist`. Applying the source of truth removes that whole class
 	// of drift rather than chasing it one column at a time.
-	if _, err := db.Exec(orgs.SchemaSQL); err != nil {
+	if _, err := db.Exec(orgs.SchemaSQLBigintOrgID); err != nil {
 		return fmt.Errorf("apply orgs schema: %w", err)
 	}
 	return nil

@@ -65,7 +65,7 @@ func TestClassifyShardMode_A_NoSort(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			plan, err := Plan(tc.pipeline, "", time.Time{}, time.Time{})
+			plan, err := Plan(tc.pipeline, 0, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
@@ -111,7 +111,7 @@ func TestClassifyShardMode_B_PlainSortIsFirstCompute(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			plan, err := Plan(tc.pipeline, "", time.Time{}, time.Time{})
+			plan, err := Plan(tc.pipeline, 0, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
@@ -156,7 +156,7 @@ func TestClassifyShardMode_C(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			plan, err := Plan(tc.pipeline, "", time.Time{}, time.Time{})
+			plan, err := Plan(tc.pipeline, 0, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
@@ -234,7 +234,7 @@ func TestDirectShardSQL(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			plan, err := Plan(tc.pipeline, "", time.Time{}, time.Time{})
+			plan, err := Plan(tc.pipeline, 0, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
@@ -250,7 +250,7 @@ func TestDirectShardSQL(t *testing.T) {
 // merge-direction XOR with sort's -r flag). The shard orders +
 // limits nothing; compute sorts and then trims.
 func TestClassifyShardMode_HeadAfterSort_StaysSafe(t *testing.T) {
-	plan, err := Plan(`cat vimgym.log | sort | head -5`, "", time.Time{}, time.Time{})
+	plan, err := Plan(`cat vimgym.log | sort | head -5`, 0, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}

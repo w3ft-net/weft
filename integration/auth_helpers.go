@@ -32,7 +32,6 @@ func openTestStore(t *testing.T) *store.Store {
 func ensureToken(t *testing.T, client pb.WeftCoordinatorClient, customer, namespace string) string {
 	t.Helper()
 	resp, err := client.CreateToken(context.Background(), &pb.CreateTokenRequest{
-		Customer:  customer,
 		Namespace: namespace,
 		Label:     "integration-test",
 	})

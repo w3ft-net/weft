@@ -33,6 +33,7 @@ type LiveFilter func(*pb.LogRow) []string
 // straight to the caller as the raw line.
 func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 	gate := &RowMatcher{
+		Customer:  plan.SourceCustomerID,
 		Namespace: plan.SourceNamespace,
 		Service:   plan.SourceService,
 		Kind:      plan.SourceKind,

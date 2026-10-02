@@ -26,7 +26,7 @@ func testStore(t *testing.T) *store.Store {
 
 // addMember inserts (or updates) a memberships row with the given
 // role, returning the user.
-func addMember(t *testing.T, db *store.Store, custID string, role string) *store.User {
+func addMember(t *testing.T, db *store.Store, custID store.OrgID, role string) *store.User {
 	t.Helper()
 	user, err := db.CreateUser(fmt.Sprintf("user-%s-%d@example.com", role, time.Now().UnixNano()))
 	if err != nil {

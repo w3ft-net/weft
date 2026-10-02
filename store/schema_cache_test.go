@@ -50,7 +50,7 @@ func TestFindLogGroupSchema_CacheAsideAndInvalidation(t *testing.T) {
 
 	// Cold lookup: cache miss, falls through to Postgres, then warms
 	// the cache as a side effect.
-	yaml1, _, ok, err := db.FindLogGroupSchema(cust.ID, "test", service)
+	yaml1, ok, err := db.FindLogGroupSchema(cust.ID, "test", service)
 	if err != nil || !ok {
 		t.Fatalf("cold FindLogGroupSchema: ok=%v err=%v", ok, err)
 	}
@@ -68,7 +68,7 @@ func TestFindLogGroupSchema_CacheAsideAndInvalidation(t *testing.T) {
 		Update("schema_yaml", "app: cacheme\nformat: json\n").Error; err != nil {
 		t.Fatalf("direct postgres mutation: %v", err)
 	}
-	yaml2, _, ok, err := db.FindLogGroupSchema(cust.ID, "test", service)
+	yaml2, ok, err := db.FindLogGroupSchema(cust.ID, "test", service)
 	if err != nil || !ok {
 		t.Fatalf("warm FindLogGroupSchema: ok=%v err=%v", ok, err)
 	}
@@ -81,7 +81,7 @@ func TestFindLogGroupSchema_CacheAsideAndInvalidation(t *testing.T) {
 	if err := db.ConfigureLogGroup(ns.ID, service, "app: cacheme\nformat: prefix_json\n"); err != nil {
 		t.Fatalf("ConfigureLogGroup: %v", err)
 	}
-	yaml3, _, ok, err := db.FindLogGroupSchema(cust.ID, "test", service)
+	yaml3, ok, err := db.FindLogGroupSchema(cust.ID, "test", service)
 	if err != nil || !ok {
 		t.Fatalf("post-invalidation FindLogGroupSchema: ok=%v err=%v", ok, err)
 	}
@@ -108,7 +108,7 @@ func TestFindLogGroupSchema_NegativeCache(t *testing.T) {
 	}
 
 	for i := 0; i < 2; i++ { // cold, then warm
-		_, _, ok, err := db.FindLogGroupSchema(cust.ID, "test", "never-onboarded")
+		_, ok, err := db.FindLogGroupSchema(cust.ID, "test", "never-onboarded")
 		if err != nil {
 			t.Fatalf("iteration %d: unexpected error: %v", i, err)
 		}
@@ -137,7 +137,7 @@ func TestFindLogGroupSchema_NilCacheFallsThroughToPostgres(t *testing.T) {
 		t.Fatalf("AddLogGroup: %v", err)
 	}
 
-	yaml, _, ok, err := db.FindLogGroupSchema(cust.ID, "test", "nocache")
+	yaml, ok, err := db.FindLogGroupSchema(cust.ID, "test", "nocache")
 	if err != nil || !ok || yaml != "app: nocache\nformat: text\n" {
 		t.Fatalf("FindLogGroupSchema with nil cache: yaml=%q ok=%v err=%v", yaml, ok, err)
 	}

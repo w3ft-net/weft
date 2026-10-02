@@ -22,7 +22,7 @@ func TestIngestRoundTrip_GrantCentralWorker(t *testing.T) {
 	// Build schema from detection results (simulating what the wizard would do).
 	schema := &Schema{
 		Service:         "grantcentral-worker",
-		Customer:        "kevlar",
+		CustomerID:      1,
 		Envelope:        "kevcons",
 		Format:          "text",
 		TimestampField:  "1",
@@ -108,7 +108,7 @@ func TestIngestRoundTrip_GrantCentralWorker(t *testing.T) {
 	}
 
 	// Query: all rows for this app.
-	allRows, err := ds.Query("SELECT raw, ts FROM logs WHERE service = 'grantcentral-worker' AND customer = 'kevlar'")
+	allRows, err := ds.Query("SELECT raw, ts FROM logs WHERE service = 'grantcentral-worker' AND customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestIngestRoundTrip_GrantCentralWorker(t *testing.T) {
 	}
 
 	// Query: ERROR rows only.
-	errorRows, err := ds.Query("SELECT raw, ts FROM logs WHERE service = 'grantcentral-worker' AND customer = 'kevlar' AND level = 'ERROR'")
+	errorRows, err := ds.Query("SELECT raw, ts FROM logs WHERE service = 'grantcentral-worker' AND customer_id = 1 AND level = 'ERROR'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestIngestRoundTrip_GrantCentralWorker(t *testing.T) {
 	}
 
 	// Query: grep for "timeout" in raw.
-	timeoutRows, err := ds.Query("SELECT raw, ts FROM logs WHERE service = 'grantcentral-worker' AND customer = 'kevlar' AND raw LIKE '%timeout%'")
+	timeoutRows, err := ds.Query("SELECT raw, ts FROM logs WHERE service = 'grantcentral-worker' AND customer_id = 1 AND raw LIKE '%timeout%'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestIngestRoundTrip_VimGym(t *testing.T) {
 
 	schema := &Schema{
 		Service:         "vimgym",
-		Customer:        "kevlar",
+		CustomerID:      1,
 		Envelope:        "kevcons",
 		Format:          "text",
 		TimestampField:  "1",

@@ -305,7 +305,7 @@ func TestSaveWatch_TruncationWarning(t *testing.T) {
 		t.Errorf("warning text should name the cap, got: %q", resp.Warnings[0])
 	}
 
-	saved, err := s.GetCronWatch(func() string {
+	saved, err := s.GetCronWatch(func() store.OrgID {
 		cust, _ := s.FindOrCreateOrg("truncation-warn-watch")
 		return cust.ID
 	}(), "risky")

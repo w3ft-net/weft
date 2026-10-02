@@ -34,8 +34,8 @@ func testParquet(t *testing.T, rows []*pb.LogRow) string {
 func TestHandleCompact_Rewrite(t *testing.T) {
 	base := int64(1_600_000_000) * int64(time.Second)
 	src := testParquet(t, []*pb.LogRow{
-		{Raw: "old", Customer: "acme", TsUnixNs: base},
-		{Raw: "new", Customer: "acme", TsUnixNs: base + 100*int64(24*time.Hour)},
+		{Raw: "old", CustomerId: 5, TsUnixNs: base},
+		{Raw: "new", CustomerId: 5, TsUnixNs: base + 100*int64(24*time.Hour)},
 	})
 	dst := t.TempDir() + "/out.parquet"
 
@@ -44,7 +44,7 @@ func TestHandleCompact_Rewrite(t *testing.T) {
 		Src: src,
 		Dst: dst,
 		Cutoffs: []shard.CustomerCutoff{
-			{Customer: "acme", Cutoff: time.Unix(0, base+50*int64(24*time.Hour))},
+			{CustomerID: 5, Cutoff: time.Unix(0, base+50*int64(24*time.Hour))},
 		},
 	}, nil)
 	if err != nil {
@@ -53,7 +53,7 @@ func TestHandleCompact_Rewrite(t *testing.T) {
 	if res.RowsKept != 1 || res.RowsDeleted != 1 || res.OutputPath != dst {
 		t.Fatalf("res = %+v, want kept 1 / deleted 1 / dst %q", res, dst)
 	}
-	if len(res.Stats) != 1 || res.Stats[0].Customer != "acme" || res.Stats[0].RowCount != 1 {
+	if len(res.Stats) != 1 || res.Stats[0].CustomerID != 5 || res.Stats[0].RowCount != 1 {
 		t.Errorf("survivor stats = %+v, want acme/1", res.Stats)
 	}
 }
@@ -61,8 +61,8 @@ func TestHandleCompact_Rewrite(t *testing.T) {
 func TestHandleCompact_Capture(t *testing.T) {
 	base := int64(1_600_000_000) * int64(time.Second)
 	src := testParquet(t, []*pb.LogRow{
-		{Raw: "a", Customer: "acme", TsUnixNs: base},
-		{Raw: "b", Customer: "globex", TsUnixNs: base},
+		{Raw: "a", CustomerId: 5, TsUnixNs: base},
+		{Raw: "b", CustomerId: 6, TsUnixNs: base},
 	})
 
 	res, err := HandleCompact(shard.CompactRequest{Op: shard.CompactOpCapture, Src: src}, nil)
@@ -76,7 +76,7 @@ func TestHandleCompact_Capture(t *testing.T) {
 
 func TestServeHTTP_RewriteRoundTrip(t *testing.T) {
 	base := int64(1_600_000_000) * int64(time.Second)
-	src := testParquet(t, []*pb.LogRow{{Raw: "new", Customer: "acme", TsUnixNs: base + 100*int64(24*time.Hour)}})
+	src := testParquet(t, []*pb.LogRow{{Raw: "new", CustomerId: 5, TsUnixNs: base + 100*int64(24*time.Hour)}})
 	dst := t.TempDir() + "/out.parquet"
 
 	srv := httptest.NewServer(http.HandlerFunc(ServeHTTP))

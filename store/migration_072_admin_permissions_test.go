@@ -29,7 +29,7 @@ import (
 // land it on a different connection and the trigger would see nothing —
 // silently, with no error and no notice. That is the failure mode this
 // helper exists to make impossible to reproduce by accident.
-func demote(t *testing.T, db *Store, orgID, userID, actingUserID string) {
+func demote(t *testing.T, db *Store, orgID OrgID, userID string, actingUserID string) {
 	t.Helper()
 	err := db.DB().Transaction(func(tx *gorm.DB) error {
 		if actingUserID != "" {
@@ -39,7 +39,7 @@ func demote(t *testing.T, db *Store, orgID, userID, actingUserID string) {
 			}
 		}
 		return tx.Exec(
-			`UPDATE memberships SET role = 'member' WHERE org_id = ?::uuid AND user_id = ?`,
+			`UPDATE memberships SET role = 'member' WHERE org_id = ? AND user_id = ?`,
 			orgID, userID).Error
 	})
 	if err != nil {
@@ -215,7 +215,7 @@ func TestTrigger_RemovalTombstonesGrants(t *testing.T) {
 	// in idx_orgperm_org_user, which is what setOrgBit has to cope with.
 	var tombstones int64
 	err := db.DB().Table("org_permissions").
-		Where("org_id = ?::uuid AND user_id = ? AND deleted_at IS NOT NULL", cust.ID, alice.ID).
+		Where("org_id = ? AND user_id = ? AND deleted_at IS NOT NULL", cust.ID, alice.ID).
 		Count(&tombstones).Error
 	if err != nil {
 		t.Fatal(err)

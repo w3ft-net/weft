@@ -89,9 +89,9 @@ func TestDirectToCompute_Op1_ShardStreamsDirectlyToCompute(t *testing.T) {
 		rows[i] = &pb.LogRow{
 			Raw:       fmt.Sprintf("%s-row-%d", prefix, i),
 			Namespace: "directcompute", Service: "app",
-			Level:    "INFO",
-			Customer: "kevlar",
-			TsUnixNs: now.Add(time.Duration(i) * time.Second).UnixNano(),
+			Level:      "INFO",
+			CustomerId: 1,
+			TsUnixNs:   now.Add(time.Duration(i) * time.Second).UnixNano(),
 		}
 	}
 	ingestResp, err := shardClient.Ingest(ctx, &pb.IngestRequest{Rows: rows})

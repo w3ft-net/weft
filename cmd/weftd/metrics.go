@@ -42,7 +42,7 @@ type netState struct {
 // every co-located service has its own /log/<ns>/<service>/metrics.log
 // stream; rows are byte-identical except for the App field.
 func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
-	customer, instance, namespace string, services []string, mcfg MetricsConfig) {
+	instance, namespace string, services []string, mcfg MetricsConfig) {
 
 	if len(services) == 0 {
 		log.Printf("metrics: no services configured (set top-level `services:` list); skipping")
@@ -104,26 +104,26 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 				cur, err := readCPU()
 				if err == nil {
 					if prevCPU != nil {
-						rows = append(rows, buildCPURow(placeholder, customer, instance, now, prevCPU, cur))
+						rows = append(rows, buildCPURow(placeholder, instance, now, prevCPU, cur))
 					}
 					prevCPU = cur
 				}
 			}
 
 			if collectors["memory"] {
-				if row, err := buildMemoryRow(placeholder, customer, instance, now); err == nil {
+				if row, err := buildMemoryRow(placeholder, instance, now); err == nil {
 					rows = append(rows, row)
 				}
 			}
 
 			if collectors["disk"] {
-				if diskRows, err := buildDiskRows(placeholder, customer, instance, now); err == nil {
+				if diskRows, err := buildDiskRows(placeholder, instance, now); err == nil {
 					rows = append(rows, diskRows...)
 				}
 			}
 
 			if collectors["load"] {
-				if row, err := buildLoadRow(placeholder, customer, instance, now); err == nil {
+				if row, err := buildLoadRow(placeholder, instance, now); err == nil {
 					rows = append(rows, row)
 				}
 			}
@@ -131,7 +131,7 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 			if collectors["network"] {
 				curNet, err := readNetDev()
 				if err == nil && len(prevNet) > 0 && elapsed > 0 {
-					rows = append(rows, buildNetworkRows(placeholder, customer, instance, now, prevNet, curNet, elapsed)...)
+					rows = append(rows, buildNetworkRows(placeholder, instance, now, prevNet, curNet, elapsed)...)
 				}
 				if err == nil {
 					prevNet = curNet
@@ -185,7 +185,7 @@ func readCPU() (*cpuState, error) {
 	return nil, fmt.Errorf("/proc/stat: no cpu line")
 }
 
-func buildCPURow(app, customer, instance string, now time.Time, prev, cur *cpuState) *pb.LogRow {
+func buildCPURow(app, instance string, now time.Time, prev, cur *cpuState) *pb.LogRow {
 	dt := float64(cur.total() - prev.total())
 	if dt == 0 {
 		dt = 1
@@ -206,8 +206,8 @@ func buildCPURow(app, customer, instance string, now time.Time, prev, cur *cpuSt
 	})
 
 	return &pb.LogRow{
-		Customer: customer, Instance: instance,
-		Raw: string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
+		Instance: instance,
+		Raw:      string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
 		PayloadJson: payload,
 	}
 }
@@ -231,7 +231,7 @@ func countCPUs() int {
 
 // ── Memory ───────────────────────────────────────────────────────────────────
 
-func buildMemoryRow(app, customer, instance string, now time.Time) (*pb.LogRow, error) {
+func buildMemoryRow(app, instance string, now time.Time) (*pb.LogRow, error) {
 	f, err := os.Open("/proc/meminfo")
 	if err != nil {
 		return nil, err
@@ -272,15 +272,15 @@ func buildMemoryRow(app, customer, instance string, now time.Time) (*pb.LogRow, 
 	})
 
 	return &pb.LogRow{
-		Customer: customer, Instance: instance,
-		Raw: string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
+		Instance: instance,
+		Raw:      string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
 		PayloadJson: payload,
 	}, nil
 }
 
 // ── Disk ─────────────────────────────────────────────────────────────────────
 
-func buildDiskRows(app, customer, instance string, now time.Time) ([]*pb.LogRow, error) {
+func buildDiskRows(app, instance string, now time.Time) ([]*pb.LogRow, error) {
 	f, err := os.Open("/proc/mounts")
 	if err != nil {
 		return nil, err
@@ -327,8 +327,8 @@ func buildDiskRows(app, customer, instance string, now time.Time) ([]*pb.LogRow,
 		})
 
 		rows = append(rows, &pb.LogRow{
-			Customer: customer, Instance: instance,
-			Raw: string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
+			Instance: instance,
+			Raw:      string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
 			PayloadJson: payload,
 		})
 	}
@@ -337,7 +337,7 @@ func buildDiskRows(app, customer, instance string, now time.Time) ([]*pb.LogRow,
 
 // ── Load ─────────────────────────────────────────────────────────────────────
 
-func buildLoadRow(app, customer, instance string, now time.Time) (*pb.LogRow, error) {
+func buildLoadRow(app, instance string, now time.Time) (*pb.LogRow, error) {
 	data, err := os.ReadFile("/proc/loadavg")
 	if err != nil {
 		return nil, err
@@ -357,8 +357,8 @@ func buildLoadRow(app, customer, instance string, now time.Time) (*pb.LogRow, er
 	})
 
 	return &pb.LogRow{
-		Customer: customer, Instance: instance,
-		Raw: string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
+		Instance: instance,
+		Raw:      string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
 		PayloadJson: payload,
 	}, nil
 }
@@ -400,7 +400,7 @@ func readNetDev() (map[string]netState, error) {
 	return result, nil
 }
 
-func buildNetworkRows(app, customer, instance string, now time.Time,
+func buildNetworkRows(app, instance string, now time.Time,
 	prev, cur map[string]netState, elapsed float64) []*pb.LogRow {
 
 	var rows []*pb.LogRow
@@ -420,8 +420,8 @@ func buildNetworkRows(app, customer, instance string, now time.Time,
 		})
 
 		rows = append(rows, &pb.LogRow{
-			Customer: customer, Instance: instance,
-			Raw: string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
+			Instance: instance,
+			Raw:      string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
 			PayloadJson: payload,
 		})
 	}

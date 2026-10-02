@@ -25,8 +25,8 @@ const RetentionGCDelay = time.Hour
 // docs/plans/retention-janitor.md.
 const RetentionGrace = 7 * 24 * time.Hour
 
-// RetentionResolver maps a customer — the string in logs.customer and
-// shard_archive_stats.customer — to its log-retention period. Built once
+// RetentionResolver maps a customer — the id in logs.customer_id and
+// shard_archive_stats.org_id — to its log-retention period. Built once
 // per janitor pass from store.ActiveCustomerTiers so the per-shard
 // classification below is pure in-memory map lookups, not a query per
 // customer.
@@ -37,11 +37,11 @@ const RetentionGrace = 7 * 24 * time.Hour
 // the query-side clamp, which can safely default an unknown customer to
 // trial (hiding data is reversible); deleting it is not.
 type RetentionResolver struct {
-	tiers map[string]store.Tier
+	tiers map[store.OrgID]store.Tier
 }
 
 // NewRetentionResolver wraps an already-loaded customer→tier map.
-func NewRetentionResolver(tiers map[string]store.Tier) *RetentionResolver {
+func NewRetentionResolver(tiers map[store.OrgID]store.Tier) *RetentionResolver {
 	return &RetentionResolver{tiers: tiers}
 }
 
@@ -49,7 +49,7 @@ func NewRetentionResolver(tiers map[string]store.Tier) *RetentionResolver {
 // ok=true when the customer has a known active tier. ok=false means
 // "unmapped — preserve this customer's data". Grace is applied by the
 // caller (the classifier), not baked in here.
-func (r *RetentionResolver) Retention(customer string) (time.Duration, bool) {
+func (r *RetentionResolver) Retention(customer store.OrgID) (time.Duration, bool) {
 	tier, ok := r.tiers[customer]
 	if !ok {
 		return 0, false
@@ -66,13 +66,13 @@ func (r *RetentionResolver) Retention(customer string) (time.Duration, bool) {
 func (r *RetentionResolver) Cutoffs(stats []ShardArchiveStat, now time.Time, grace time.Duration) []shard.CustomerCutoff {
 	var out []shard.CustomerCutoff
 	for _, st := range stats {
-		retention, ok := r.Retention(st.Customer)
+		retention, ok := r.Retention(st.OrgID)
 		if !ok {
 			continue // unmapped: preserved, no cutoff
 		}
 		out = append(out, shard.CustomerCutoff{
-			Customer: st.Customer,
-			Cutoff:   now.Add(-retention - grace),
+			CustomerID: int64(st.OrgID),
+			Cutoff:     now.Add(-retention - grace),
 		})
 	}
 	return out
@@ -87,8 +87,8 @@ func (r *RetentionResolver) AllCutoffs(now time.Time, grace time.Duration) []sha
 	out := make([]shard.CustomerCutoff, 0, len(r.tiers))
 	for cust, tier := range r.tiers {
 		out = append(out, shard.CustomerCutoff{
-			Customer: cust,
-			Cutoff:   now.Add(-store.LogRetention(tier) - grace),
+			CustomerID: int64(cust),
+			Cutoff:     now.Add(-store.LogRetention(tier) - grace),
 		})
 	}
 	return out
@@ -140,7 +140,7 @@ func ClassifyArchivedShard(stats []ShardArchiveStat, r *RetentionResolver, now t
 	}
 	var hasExpired, hasLive bool
 	for _, st := range stats {
-		retention, ok := r.Retention(st.Customer)
+		retention, ok := r.Retention(st.OrgID)
 		if !ok {
 			hasLive = true // unmapped: preserve all of this customer's rows
 			continue

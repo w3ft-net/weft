@@ -71,10 +71,10 @@ func (s *Server) ReportUsageForDay(ctx context.Context, day time.Time) error {
 	}
 	var rows []store.UsageForDay
 	err := s.store.DB().Raw(`
-		SELECT customer_name, bytes_ingested
+		SELECT org_id, bytes_ingested
 		FROM usage_daily
 		WHERE day = ?::date
-		ORDER BY customer_name`, day,
+		ORDER BY org_id`, day,
 	).Scan(&rows).Error
 	if err != nil {
 		return fmt.Errorf("load usage_daily for %s: %w", day.Format("2006-01-02"), err)
@@ -86,24 +86,24 @@ func (s *Server) ReportUsageForDay(ctx context.Context, day time.Time) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := s.reportOneCustomer(r.CustomerName, day, r.BytesIngested); err != nil {
+		if err := s.reportOneCustomer(r.OrgID, day, r.BytesIngested); err != nil {
 			// Per-customer failures are logged and skipped; one bad
 			// customer can't block reports for the rest. Tomorrow's
 			// run retries with the same idempotency identifier.
-			log.Printf("usage reporter: customer=%s day=%s: %v",
-				r.CustomerName, day.Format("2006-01-02"), err)
+			log.Printf("usage reporter: org=%d day=%s: %v",
+				r.OrgID, day.Format("2006-01-02"), err)
 		}
 	}
 	return nil
 }
 
-func (s *Server) reportOneCustomer(customerName string, day time.Time, bytes int64) error {
+func (s *Server) reportOneCustomer(orgID store.OrgID, day time.Time, bytes int64) error {
 	// weft-side idempotency — cheap UNIQUE-index lookup.
 	var reportCount int64
 	err := s.store.DB().Raw(`
 		SELECT COUNT(*) FROM stripe_usage_reports
-		WHERE customer_name = ? AND day = ?::date`,
-		customerName, day,
+		WHERE org_id = ? AND day = ?::date`,
+		orgID, day,
 	).Scan(&reportCount).Error
 	if err != nil {
 		return fmt.Errorf("check audit: %w", err)
@@ -121,9 +121,9 @@ func (s *Server) reportOneCustomer(customerName string, day time.Time, bytes int
 		FROM users u
 		JOIN memberships tm ON tm.user_id = u.id
 		JOIN organizations c ON tm.org_id = c.id
-		WHERE c.name = ? AND u.stripe_customer_id <> ''
+		WHERE c.id = ? AND u.stripe_customer_id <> ''
 		ORDER BY u.created_at ASC
-		LIMIT 1`, customerName,
+		LIMIT 1`, orgID,
 	).Scan(&stripeCustID).Error; err != nil {
 		return fmt.Errorf("lookup stripe_customer_id: %w", err)
 	}
@@ -131,7 +131,7 @@ func (s *Server) reportOneCustomer(customerName string, day time.Time, bytes int
 		return nil
 	}
 
-	cust, err := s.store.GetOrgByName(customerName)
+	cust, err := s.store.GetOrgByID(orgID)
 	if err != nil || cust == nil {
 		return nil
 	}
@@ -145,7 +145,9 @@ func (s *Server) reportOneCustomer(customerName string, day time.Time, bytes int
 	}
 
 	kb := bytes / 1000
-	identifier := fmt.Sprintf("weft:%s:%s", customerName, day.Format("2006-01-02"))
+	// The identifier stays name-based on purpose: it is Stripe's idempotency
+	// key, and a day already posted under the name must still dedupe on retry.
+	identifier := fmt.Sprintf("weft:%s:%s", cust.Name, day.Format("2006-01-02"))
 	// Mid-day timestamp: unambiguously inside the reporting day, no
 	// timezone edge cases at either boundary. Stripe attributes the
 	// event to the billing period covering this timestamp.
@@ -171,7 +173,7 @@ func (s *Server) reportOneCustomer(customerName string, day time.Time, bytes int
 		recordedID = event.Identifier
 	}
 	return s.store.DB().Clauses(clause.OnConflict{DoNothing: true}).Create(&store.StripeUsageReport{
-		CustomerName:  customerName,
+		OrgID:         orgID,
 		Day:           day,
 		KbReported:    kb,
 		StripeEventID: recordedID,

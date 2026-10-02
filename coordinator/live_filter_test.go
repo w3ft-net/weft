@@ -3,9 +3,10 @@ package coordinator
 import (
 	"testing"
 
+	"time"
+
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
-	"time"
 )
 
 // TestLiveFilter_CutAppliesToLiveRow pins the bug we just hit running
@@ -75,7 +76,7 @@ func TestLiveFilter_AppGateNamespaceMatchesSubApp(t *testing.T) {
 
 func runFilterCase(t *testing.T, pipeline string, row *pb.LogRow, want []string) {
 	t.Helper()
-	plan, err := planner.Plan(pipeline, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan(%q): %v", pipeline, err)
 	}

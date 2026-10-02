@@ -117,7 +117,7 @@ func BenchmarkExecuteForWatch(b *testing.B) {
 			}
 
 			if tc.lowered {
-				lp, err := planner.Lower(tc.pipeline, "kevlar", "bolt", tc.resolver)
+				lp, err := planner.Lower(tc.pipeline, 1, "bolt", tc.resolver)
 				if err != nil {
 					// Pipelines that don't lower (e.g. /bin/ refs the
 					// stub can't inline) skip the lowered sub-bench

@@ -49,7 +49,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ds.Ingest([]*pb.LogRow{{Raw: "persisted", Namespace: "vimgym", Customer: "kevlar", TsUnixNs: t0.UnixNano()}}, nil)
+	ds.Ingest([]*pb.LogRow{{Raw: "persisted", Namespace: "vimgym", CustomerId: 1, TsUnixNs: t0.UnixNano()}}, nil)
 	ds.ExportToParquet(parquetPath)
 	ds.Close()
 
@@ -103,7 +103,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 	}
 
 	// Query should work on the restored ColdShard.
-	rows, err := entry.Live.Query("SELECT raw, ts FROM logs WHERE customer = 'kevlar'")
+	rows, err := entry.Live.Query("SELECT raw, ts FROM logs WHERE customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}

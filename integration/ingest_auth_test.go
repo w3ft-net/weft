@@ -88,7 +88,6 @@ func TestIngestStream_RejectsDeletedCustomer(t *testing.T) {
 		// CloseAndRecv.
 		_ = stream.Send(&pb.LogRow{
 			Namespace: "integration", Service: "ghost",
-			Customer: custName,
 			Raw:      fmt.Sprintf("ghost row %d — customer no longer exists", i),
 			Instance: "test-host",
 			TsUnixNs: time.Now().Add(time.Duration(i) * time.Millisecond).UnixNano(),

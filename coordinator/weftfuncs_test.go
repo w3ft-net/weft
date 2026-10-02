@@ -22,7 +22,7 @@ func saveCronResult(db *store.Store, result *store.CronResult) error {
 	return db.DB().Create(result).Error
 }
 
-func testStoreAndCustomer(t *testing.T) (*store.Store, string) {
+func testStoreAndCustomer(t *testing.T) (*store.Store, store.OrgID) {
 	t.Helper()
 	db, err := store.Open(store.TestDSN(t))
 	if err != nil {
@@ -91,10 +91,7 @@ func testQueryStoreOpts(t testing.TB, customer string, realDB bool, namespaces .
 		deleteOrgData(db, customer)
 	}
 
-	cust, err := target.FindOrCreateOrg(customer)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cust := store.TestOrg(t, target, customer)
 	for _, ns := range namespaces {
 		if _, err := target.FindOrCreateNamespace(cust.ID, ns); err != nil {
 			t.Fatalf("create namespace %s: %v", ns, err)
@@ -122,7 +119,7 @@ func deleteOrgData(db *store.Store, customer string) {
 	_ = db.ExecForTest("DELETE FROM organizations WHERE name = ?", customer)
 }
 
-func seedWatch(t *testing.T, db *store.Store, custID string, name string, values []string, interval time.Duration) {
+func seedWatch(t *testing.T, db *store.Store, custID store.OrgID, name string, values []string, interval time.Duration) {
 	t.Helper()
 	err := db.SaveCronWatch(custID, "", name, "every 1m", "echo test", nil)
 	if err != nil {

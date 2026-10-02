@@ -7,11 +7,11 @@ import (
 // StripeUsageReport is the audit log for one day of ingestion usage
 // posted to Stripe's billing/meter_events API. Written only on
 // successful API response — absence signals "needs report" on the
-// next reporter tick. UNIQUE(customer_name, day) enforces weft-side
+// next reporter tick. UNIQUE(org_id, day) enforces weft-side
 // idempotency; Stripe's `identifier` field is the defense in depth.
 type StripeUsageReport struct {
 	ID            uint      `gorm:"primaryKey"`
-	CustomerName  string    `gorm:"not null;index:idx_stripe_usage_reports_customer_day,unique,priority:1"`
+	OrgID         OrgID     `gorm:"not null;index:idx_stripe_usage_reports_customer_day,unique,priority:1"`
 	Day           time.Time `gorm:"type:date;not null;index:idx_stripe_usage_reports_customer_day,unique,priority:2;index:idx_stripe_usage_reports_day"`
 	KbReported    int64     `gorm:"not null"`
 	StripeEventID string    `gorm:"not null"`
@@ -25,7 +25,7 @@ func (StripeUsageReport) TableName() string { return "stripe_usage_reports" }
 // UsageForDay is one row returned by UsageForDay — the per-customer
 // ingestion total for one calendar day, pulled from usage_daily.
 type UsageForDay struct {
-	CustomerName  string
+	OrgID         OrgID
 	BytesIngested int64
 }
 
@@ -43,7 +43,7 @@ type UsageForDay struct {
 // lag reality by up to one hour (the interval between rollup ticks).
 // That's fine for the dashboard and the daily Stripe report; see
 // docs/plans/stripe.md for the reporter's own timing.
-func (s *Store) QueryUsage(customerName string, periodStart, periodEnd time.Time) (int64, error) {
+func (s *Store) QueryUsage(orgID OrgID, periodStart, periodEnd time.Time) (int64, error) {
 	var result struct{ Total int64 }
 	err := s.db.Raw(`
 		SELECT COALESCE(SUM(b), 0) AS total FROM (
@@ -51,7 +51,7 @@ func (s *Store) QueryUsage(customerName string, periodStart, periodEnd time.Time
 			-- earlier of (periodEnd, start-of-today), so today's partial
 			-- daily row (if any) is ignored here and picked up below.
 			SELECT bytes_ingested AS b FROM usage_daily
-			WHERE customer_name = ?
+			WHERE org_id = ?
 			  AND day >= ?::date
 			  AND day <  LEAST(?::date, (date_trunc('day', now()))::date)
 			UNION ALL
@@ -60,11 +60,11 @@ func (s *Store) QueryUsage(customerName string, periodStart, periodEnd time.Time
 			-- caller's window ends before today, this half returns zero
 			-- rows.
 			SELECT bytes_ingested AS b FROM usage_hourly
-			WHERE customer_name = ?
+			WHERE org_id = ?
 			  AND hour >= GREATEST(?::timestamptz, date_trunc('day', now()))
 			  AND hour <  ?
 		) combined`,
-		customerName, periodStart, periodEnd,
-		customerName, periodStart, periodEnd).Scan(&result).Error
+		orgID, periodStart, periodEnd,
+		orgID, periodStart, periodEnd).Scan(&result).Error
 	return result.Total, err
 }

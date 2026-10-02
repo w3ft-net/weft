@@ -95,7 +95,7 @@ func TestExecuteRPC_FollowFlushesSingleLineImmediately(t *testing.T) {
 
 	coord.TailFanout.Publish([]*pb.LogRow{{
 		Namespace: "follow-flush", Service: "svc", Kind: "main",
-		Raw: "single live row",
+		Raw: "single live row", CustomerId: int64(cust.ID),
 	}})
 
 	select {

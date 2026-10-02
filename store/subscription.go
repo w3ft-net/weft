@@ -13,7 +13,7 @@ import (
 // Only the most recent active one matters for access control.
 type Subscription struct {
 	ID                   string     `gorm:"primaryKey"`
-	OrgID                string     `gorm:"not null;index"` // FK → organizations.id
+	OrgID                OrgID      `gorm:"not null;index"` // FK → organizations.id
 	Tier                 string     `gorm:"not null"`       // trial, swatch, yard, bolt
 	Status               string     `gorm:"not null"`       // active, cancelled
 	StartsAt             time.Time  `gorm:"not null"`
@@ -51,7 +51,7 @@ func (sub *Subscription) IsActive() bool {
 
 // ActiveSubscription returns the most recent active subscription for a
 // customer, or nil if none exists or the subscription has expired.
-func (s *Store) ActiveSubscription(orgID string) (*Subscription, error) {
+func (s *Store) ActiveSubscription(orgID OrgID) (*Subscription, error) {
 	var sub Subscription
 	err := s.scoped(orgID).Where("status = 'active'").
 		Order("created_at DESC").First(&sub).Error
@@ -75,14 +75,14 @@ func (s *Store) ActiveSubscription(orgID string) (*Subscription, error) {
 // the map; the janitor reads that absence as "do not delete" rather than
 // defaulting to trial, so a Stripe lag or provisioning race can't erase a
 // paying customer's archived data.
-func (s *Store) ActiveCustomerTiers() (map[string]Tier, error) {
+func (s *Store) ActiveCustomerTiers() (map[OrgID]Tier, error) {
 	type row struct {
-		Name string
-		Tier string
+		OrgID OrgID
+		Tier  string
 	}
 	var rows []row
 	err := s.db.Raw(`
-		SELECT DISTINCT ON (c.id) c.name AS name, sub.tier AS tier
+		SELECT DISTINCT ON (c.id) c.id AS org_id, sub.tier AS tier
 		FROM organizations c
 		JOIN subscriptions sub ON sub.org_id = c.id
 		WHERE sub.status = 'active'
@@ -92,9 +92,9 @@ func (s *Store) ActiveCustomerTiers() (map[string]Tier, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]Tier, len(rows))
+	out := make(map[OrgID]Tier, len(rows))
 	for _, r := range rows {
-		out[r.Name] = Tier(r.Tier)
+		out[r.OrgID] = Tier(r.Tier)
 	}
 	return out, nil
 }
@@ -107,7 +107,7 @@ func (s *Store) CreateSubscription(sub *Subscription) error {
 // SeedDevSubscription ensures an active dev subscription exists. Idempotent.
 // The row id is namespaced per customer so seeding multiple customers in
 // the same DB doesn't collide on the subscriptions primary key.
-func (s *Store) SeedDevSubscription(orgID string) {
+func (s *Store) SeedDevSubscription(orgID OrgID) {
 	sub, _ := s.ActiveSubscription(orgID)
 	if sub != nil {
 		return
@@ -133,7 +133,7 @@ func (s *Store) SeedDevSubscription(orgID string) {
 //
 // Organization is the surrogate id (FK → organizations.id). Reason must be
 // non-empty so it can be distinguished from a paid sub.
-func (s *Store) GrantCompSubscription(orgID string, tier, reason string) error {
+func (s *Store) GrantCompSubscription(orgID OrgID, tier, reason string) error {
 	if reason == "" {
 		return fmt.Errorf("comp grant requires a non-empty reason")
 	}

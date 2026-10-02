@@ -29,7 +29,7 @@ const maxEndpointDuration = 14 * 24 * time.Hour
 // Both bash (ExternalCmdFunc) and Lua (weft.* table) use this.
 type WeftFuncs struct {
 	Store *store.Store
-	OrgID string
+	OrgID store.OrgID
 }
 
 // SeasonalStatsResult is the {avg, stddev, samples} triple over the
@@ -41,7 +41,7 @@ type SeasonalStatsResult struct {
 }
 
 func (w *WeftFuncs) Latest(watchName string) (string, error) {
-	r, err := func(orgID string, watchName string) (*store.CronResult, error) {
+	r, err := func(orgID store.OrgID, watchName string) (*store.CronResult, error) {
 		var watch store.CronWatch
 		if err := w.Store.DB().WithContext(store.WithOrg(context.Background(), orgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
 			return nil, err
@@ -282,7 +282,7 @@ func (w *WeftFuncs) SeasonalStats(watchName string, period, window time.Duration
 	if period >= window {
 		return SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: window must be larger than period")
 	}
-	avg, stddev, samples, err := func(orgID string, watchName string, period, window time.Duration) (avg, stddev float64, samples int, err error) {
+	avg, stddev, samples, err := func(orgID store.OrgID, watchName string, period, window time.Duration) (avg, stddev float64, samples int, err error) {
 		var watch store.CronWatch
 		if err := w.Store.DB().WithContext(store.WithOrg(context.Background(), orgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
 			return 0, 0, 0, err

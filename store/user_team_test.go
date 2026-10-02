@@ -129,7 +129,7 @@ func TestNsmgrGroup(t *testing.T) {
 }
 
 // userIDForEmail resolves a member's user ID within an org.
-func userIDForEmail(t *testing.T, db *Store, orgID, email string) string {
+func userIDForEmail(t *testing.T, db *Store, orgID OrgID, email string) string {
 	t.Helper()
 	m, err := db.GetTeamMemberByEmail(orgID, email)
 	if err != nil {

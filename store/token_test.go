@@ -32,7 +32,7 @@ func testOpen(t *testing.T) *Store {
 	return tx
 }
 
-func createTestToken(db *Store, custID string, label string) (string, *AgentToken, error) {
+func createTestToken(db *Store, custID OrgID, label string) (string, *AgentToken, error) {
 	ns, _ := db.FindOrCreateNamespace(custID, "test")
 	return db.CreateAgentToken(custID, ns.ID, label, "", "")
 }

@@ -10,12 +10,13 @@ import (
 	"testing"
 
 	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // seedPendingSource creates a namespace and a final-sample (StatusPending,
 // ready-to-configure) log_group row for it, mirroring what a completed
 // weftd/CloudWatch sample handshake leaves behind.
-func seedPendingSource(t *testing.T, srv *Server, orgID, namespace, service string) {
+func seedPendingSource(t *testing.T, srv *Server, orgID store.OrgID, namespace string, service string) {
 	t.Helper()
 	ns, err := srv.store.FindOrCreateNamespace(orgID, namespace)
 	if err != nil {

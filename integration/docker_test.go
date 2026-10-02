@@ -97,24 +97,24 @@ func TestDockerStack_IngestAndQuery(t *testing.T) {
 	now := time.Now()
 	for i := 0; i < 10; i++ {
 		stream.Send(&pb.LogRow{
-			Service:  svcA,
-			Kind:     kindA,
-			Customer: "testcust",
-			Raw:      fmt.Sprintf("app-a log line %d", i),
-			Level:    "INFO",
-			Instance: "test-host",
-			TsUnixNs: now.Add(time.Duration(i) * time.Second).UnixNano(),
+			Service:    svcA,
+			Kind:       kindA,
+			CustomerId: 7,
+			Raw:        fmt.Sprintf("app-a log line %d", i),
+			Level:      "INFO",
+			Instance:   "test-host",
+			TsUnixNs:   now.Add(time.Duration(i) * time.Second).UnixNano(),
 		})
 	}
 	for i := 0; i < 10; i++ {
 		stream.Send(&pb.LogRow{
-			Service:  svcB,
-			Kind:     kindB,
-			Customer: "testcust",
-			Raw:      fmt.Sprintf("app-b log line %d", i),
-			Level:    "ERROR",
-			Instance: "test-host",
-			TsUnixNs: now.Add(time.Duration(i) * time.Second).UnixNano(),
+			Service:    svcB,
+			Kind:       kindB,
+			CustomerId: 7,
+			Raw:        fmt.Sprintf("app-b log line %d", i),
+			Level:      "ERROR",
+			Instance:   "test-host",
+			TsUnixNs:   now.Add(time.Duration(i) * time.Second).UnixNano(),
 		})
 	}
 
@@ -179,11 +179,11 @@ func TestDockerStack_ShardSuspendAndRecovery(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		stream.Send(&pb.LogRow{
 			Namespace: "suspend-test", Service: "logs",
-			Customer: "testcust",
-			Raw:      fmt.Sprintf("suspend test line %d", i),
-			Level:    "INFO",
-			Instance: "test-host",
-			TsUnixNs: now.Add(time.Duration(i) * time.Second).UnixNano(),
+			CustomerId: 7,
+			Raw:        fmt.Sprintf("suspend test line %d", i),
+			Level:      "INFO",
+			Instance:   "test-host",
+			TsUnixNs:   now.Add(time.Duration(i) * time.Second).UnixNano(),
 		})
 	}
 	stream.CloseAndRecv()
@@ -349,7 +349,6 @@ func queryPipeline(t *testing.T, client pb.WeftCoordinatorClient, pipeline, cust
 	t.Helper()
 	stream, err := client.Execute(context.Background(), &pb.CoordinatorExecuteRequest{
 		Pipeline: pipeline,
-		Customer: customer,
 	})
 	if err != nil {
 		t.Fatalf("query %q: %v", pipeline, err)

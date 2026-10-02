@@ -75,13 +75,13 @@ func (r *redisFanout) recvLoop(deliver func(rows []*pb.LogRow)) {
 func pattern(t tailTopic) string {
 	switch {
 	case t.Wildcard:
-		return "tail:*"
+		return fmt.Sprintf("tail:%d:*", t.Customer)
 	case t.Service == "":
-		return fmt.Sprintf("tail:%s:*", t.Namespace)
+		return fmt.Sprintf("tail:%d:%s:*", t.Customer, t.Namespace)
 	case t.Kind == "":
-		return fmt.Sprintf("tail:%s:%s:*", t.Namespace, t.Service)
+		return fmt.Sprintf("tail:%d:%s:%s:*", t.Customer, t.Namespace, t.Service)
 	default:
-		return fmt.Sprintf("tail:%s:%s:%s*", t.Namespace, t.Service, t.Kind)
+		return fmt.Sprintf("tail:%d:%s:%s:%s*", t.Customer, t.Namespace, t.Service, t.Kind)
 	}
 }
 
@@ -93,7 +93,7 @@ func channelFor(row *pb.LogRow) string {
 	if kind == "" {
 		kind = "main"
 	}
-	return fmt.Sprintf("tail:%s:%s:%s", row.Namespace, row.Service, kind)
+	return fmt.Sprintf("tail:%d:%s:%s:%s", row.CustomerId, row.Namespace, row.Service, kind)
 }
 
 func (r *redisFanout) announceInterest(t tailTopic, add bool) {

@@ -28,7 +28,7 @@ func TestSubscription_KeyedByCustomerSurrogate(t *testing.T) {
 
 	// An unrelated id must not resolve to this customer's subscription
 	// (proves the lookup keys on the surrogate, not a stringly-typed name).
-	if other, _ := db.ActiveSubscription("00000000-0000-0000-0000-00000000dead"); other != nil {
+	if other, _ := db.ActiveSubscription(57005); other != nil {
 		t.Errorf("ActiveSubscription(unrelated id) resolved to %+v", other)
 	}
 }
@@ -300,7 +300,7 @@ func promoteSubscriptionTier(db *Store, stripeSubID, tier string) error {
 }
 
 // revokeCompSubscription mirrors the former Store.RevokeCompSubscription.
-func revokeCompSubscription(db *Store, orgID string) error {
+func revokeCompSubscription(db *Store, orgID OrgID) error {
 	return db.scoped(orgID).Model(&Subscription{}).
 		Where("status = 'active' AND comp_reason != ''").
 		Updates(map[string]any{

@@ -55,7 +55,7 @@ func TestValidateSource_LuaSyntaxError(t *testing.T) {
 	}
 }
 
-func saveTestSetup(t *testing.T) (*Store, string) {
+func saveTestSetup(t *testing.T) (*Store, OrgID) {
 	t.Helper()
 	db := testOpen(t)
 	cust, err := db.FindOrCreateOrg("save-validate-test")

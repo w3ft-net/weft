@@ -29,18 +29,18 @@ func CaptureStats(parquetPath string, s3cfg *S3Config) ([]CustomerStat, error) {
 		}
 	}
 	return scanCustomerStats(db, fmt.Sprintf(
-		"SELECT COALESCE(customer, ''), MIN(ts), MAX(ts), COUNT(*) FROM %s GROUP BY 1",
+		"SELECT COALESCE(customer_id, 0), MIN(ts), MAX(ts), COUNT(*) FROM %s GROUP BY 1",
 		parquetReadExpr(parquetPath)))
 }
 
 // CustomerCutoff is one customer's deletion boundary for a retention
-// rewrite: rows for Customer with ts < Cutoff are dropped. A customer
+// rewrite: rows for CustomerID with ts < Cutoff are dropped. A customer
 // NOT represented in the cutoff set is preserved in full — that is how
 // the janitor protects an unmapped customer (no active subscription)
 // from deletion. See docs/plans/retention-janitor.md.
 type CustomerCutoff struct {
-	Customer string    `json:"customer"`
-	Cutoff   time.Time `json:"cutoff"`
+	CustomerID int64     `json:"customer_id"`
+	Cutoff     time.Time `json:"cutoff"`
 }
 
 // CompactResult reports the outcome of RewriteRetention. JSON-tagged: it
@@ -82,12 +82,12 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *
 		}
 	}
 
-	if _, err := db.Exec("CREATE TEMP TABLE cutoffs (customer TEXT, cutoff TIMESTAMP)"); err != nil {
+	if _, err := db.Exec("CREATE TEMP TABLE cutoffs (customer_id BIGINT, cutoff TIMESTAMP)"); err != nil {
 		return CompactResult{}, fmt.Errorf("create cutoffs: %w", err)
 	}
 	for _, c := range cutoffs {
-		if _, err := db.Exec("INSERT INTO cutoffs VALUES (?, ?)", c.Customer, c.Cutoff); err != nil {
-			return CompactResult{}, fmt.Errorf("insert cutoff %q: %w", c.Customer, err)
+		if _, err := db.Exec("INSERT INTO cutoffs VALUES (?, ?)", c.CustomerID, c.Cutoff); err != nil {
+			return CompactResult{}, fmt.Errorf("insert cutoff %d: %w", c.CustomerID, err)
 		}
 	}
 
@@ -96,8 +96,8 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *
 	// or its ts is still within retention. A NULL customer never matches a
 	// cutoff, so it is preserved too.
 	keep := fmt.Sprintf(
-		"SELECT l.* FROM %s l LEFT JOIN cutoffs c ON l.customer = c.customer "+
-			"WHERE c.customer IS NULL OR l.ts >= c.cutoff", src)
+		"SELECT l.* FROM %s l LEFT JOIN cutoffs c ON l.customer_id = c.customer_id "+
+			"WHERE c.customer_id IS NULL OR l.ts >= c.cutoff", src)
 
 	var total, kept int64
 	if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", src)).Scan(&total); err != nil {
@@ -113,7 +113,7 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *
 	}
 
 	stats, err := scanCustomerStats(db, fmt.Sprintf(
-		"SELECT COALESCE(customer, ''), MIN(ts), MAX(ts), COUNT(*) FROM (%s) GROUP BY 1", keep))
+		"SELECT COALESCE(customer_id, 0), MIN(ts), MAX(ts), COUNT(*) FROM (%s) GROUP BY 1", keep))
 	if err != nil {
 		return CompactResult{}, fmt.Errorf("survivor stats: %w", err)
 	}

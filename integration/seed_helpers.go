@@ -74,7 +74,7 @@ func grpcClientAs(t *testing.T, customer string) (*grpc.ClientConn, pb.WeftCoord
 // namespaceID). The user ID matches what customerJWT embeds
 // ("test-user-<customer>") so BuildSession can resolve the JWT into a
 // session with the correct customer.
-func seedCustomerWithNamespace(t *testing.T, customer, namespace string) (string, int64) {
+func seedCustomerWithNamespace(t *testing.T, customer, namespace string) (store.OrgID, int64) {
 	t.Helper()
 	conn, err := sql.Open("pgx", postgresURL)
 	if err != nil {
@@ -82,7 +82,7 @@ func seedCustomerWithNamespace(t *testing.T, customer, namespace string) (string
 	}
 	defer conn.Close()
 
-	var custID string
+	var custID store.OrgID
 	if err := conn.QueryRow(`
 		INSERT INTO organizations (name, created_at, updated_at)
 		VALUES ($1, now(), now())
@@ -132,7 +132,7 @@ func seedCustomerWithNamespace(t *testing.T, customer, namespace string) (string
 // JWT-derived customer constraint, which is what makes the
 // ghost-customer test possible: we inject a token whose customer is
 // then deleted out from under it.
-func seedAgentToken(t *testing.T, custID string, nsID int64, label string) string {
+func seedAgentToken(t *testing.T, custID store.OrgID, nsID int64, label string) string {
 	t.Helper()
 	raw, err := generateRawAgentToken()
 	if err != nil {

@@ -49,7 +49,7 @@ func (r *statusKeyRecorder) lastStatusService() string {
 func TestRefreshSourceLooksUpBareService(t *testing.T) {
 	rec := &statusKeyRecorder{}
 	// fullApp is the agent's composite for a journald celery source.
-	refreshSource(context.Background(), rec, "wft_test", "graybeard", "xylem/celery/main")
+	refreshSource(context.Background(), rec, "wft_test", "xylem/celery/main")
 
 	if got := rec.lastStatusService(); got != "celery" {
 		t.Fatalf("refresher asked the coordinator about %q; it keys sources on the bare service, want %q", got, "celery")
@@ -60,7 +60,7 @@ func TestRefreshSourceLooksUpBareService(t *testing.T) {
 // strip the kind and resolve to the bare service.
 func TestRefreshSourceStripsKindFromHyphenatedService(t *testing.T) {
 	rec := &statusKeyRecorder{}
-	refreshSource(context.Background(), rec, "wft_test", "graybeard", "xylem/celery-beat/main")
+	refreshSource(context.Background(), rec, "wft_test", "xylem/celery-beat/main")
 	if got := rec.lastStatusService(); got != "celery-beat" {
 		t.Fatalf("asked about %q, want %q", got, "celery-beat")
 	}

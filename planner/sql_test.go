@@ -40,12 +40,12 @@ func TestQueryBuilder_AllClauses(t *testing.T) {
 
 // TestQueryBuilder_CustomerAndBoundsOrder pins that addCustomer +
 // addTimeBounds emit their predicates in the order they were called
-// (the planner relies on this so customer = ? lands first in the
+// (the planner relies on this so customer_id = CAST(? AS BIGINT) lands first in the
 // WHERE clause — see customer_predicate_test.go for the security-
 // boundary rationale). Args appear in render order.
 func TestQueryBuilder_CustomerAndBoundsOrder(t *testing.T) {
 	q := newSQLBuilder()
-	q.addCustomer("kevlar")
+	q.addCustomer(1)
 	q.addTimeBounds(
 		time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC),
 		time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
@@ -53,11 +53,11 @@ func TestQueryBuilder_CustomerAndBoundsOrder(t *testing.T) {
 	q.addPredicate("namespace = ?", "vimgym")
 
 	sql, args := q.ToSQL()
-	wantSQL := "SELECT raw, ts FROM logs WHERE customer = ? AND ts >= CAST(? AS TIMESTAMP) AND ts <= CAST(? AS TIMESTAMP) AND namespace = ?"
+	wantSQL := "SELECT raw, ts FROM logs WHERE customer_id = CAST(? AS BIGINT) AND ts >= CAST(? AS TIMESTAMP) AND ts <= CAST(? AS TIMESTAMP) AND namespace = ?"
 	if sql != wantSQL {
 		t.Fatalf("ordered predicates:\n got: %s\nwant: %s", sql, wantSQL)
 	}
-	wantArgs := []any{"kevlar", "2026-04-01 12:00:00", "2026-04-02 12:00:00", "vimgym"}
+	wantArgs := []any{"1", "2026-04-01 12:00:00", "2026-04-02 12:00:00", "vimgym"}
 	if len(args) != len(wantArgs) {
 		t.Fatalf("args: got %v, want %v", args, wantArgs)
 	}
@@ -65,24 +65,6 @@ func TestQueryBuilder_CustomerAndBoundsOrder(t *testing.T) {
 		if args[i] != wantArgs[i] {
 			t.Errorf("args[%d]: got %v, want %v", i, args[i], wantArgs[i])
 		}
-	}
-}
-
-// TestQueryBuilder_CustomerInjectionAttempt — a malicious customer name
-// can't break out of the placeholder. Placeholders bind through DuckDB's
-// driver as a single VARCHAR, so the `'; DROP TABLE...` payload lands
-// as the literal value of the comparison, not as additional SQL.
-func TestQueryBuilder_CustomerInjectionAttempt(t *testing.T) {
-	q := newSQLBuilder()
-	q.addCustomer("bobby'; DROP TABLE logs; --")
-
-	sql, args := q.ToSQL()
-	wantSQL := "SELECT raw, ts FROM logs WHERE customer = ?"
-	if sql != wantSQL {
-		t.Errorf("sql:\n got: %s\nwant: %s", sql, wantSQL)
-	}
-	if len(args) != 1 || args[0] != "bobby'; DROP TABLE logs; --" {
-		t.Errorf("args: got %v, want exactly the malicious string", args)
 	}
 }
 

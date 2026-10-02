@@ -15,7 +15,7 @@ import (
 // historyCount returns the number of history rows for a function.
 // Used by trigger-behaviour tests that need to assert on raw counts
 // rather than going through the Log API.
-func historyCount(t *testing.T, db *Store, orgID string, name string) int {
+func historyCount(t *testing.T, db *Store, orgID OrgID, name string) int {
 	t.Helper()
 	var n int64
 	err := db.db.Raw(`
@@ -509,7 +509,7 @@ func TestAmendShellFunctionMessage_HistoryRef(t *testing.T) {
 
 // checkoutShellFunction mirrors the former Store.CheckoutShellFunction,
 // whose production logic moved to a caller outside the store package.
-func checkoutShellFunction(db *Store, orgID string, userID, name, ref string) error {
+func checkoutShellFunction(db *Store, orgID OrgID, userID, name, ref string) error {
 	target, err := db.ResolveShellFunctionRef(orgID, name, ref)
 	if err != nil {
 		return err

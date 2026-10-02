@@ -21,7 +21,7 @@ func TestSaveCronWatch_TruncationWarning(t *testing.T) {
 	user, _ := db.CreateUser("bob-lint@example.test")
 
 	pipeline := `tail -n 1000 /log/x/y/main.log | grep -c "boom"`
-	lowered := planner.LowerForStorage(pipeline, "cron-lint-warn", "bolt", noBinResolver{})
+	lowered := planner.LowerForStorage(pipeline, int64(cust.ID), "bolt", noBinResolver{})
 	if lowered == nil {
 		t.Fatal("LowerForStorage returned nil — fixture pipeline should lower cleanly")
 	}
@@ -55,7 +55,7 @@ func TestSaveCronWatch_NoWarningForSafePipeline(t *testing.T) {
 	user, _ := db.CreateUser("alice-lint@example.test")
 
 	pipeline := `cat /log/x/y/main.log | grep ERROR`
-	lowered := planner.LowerForStorage(pipeline, "cron-lint-safe", "bolt", noBinResolver{})
+	lowered := planner.LowerForStorage(pipeline, int64(cust.ID), "bolt", noBinResolver{})
 
 	err := db.SaveCronWatch(cust.ID, user.ID, "safe-cron", "*/5 * * * *", pipeline, lowered)
 	blocking, warnings := Split(err)

@@ -100,10 +100,10 @@ func NewParser(s *Schema) (*Parser, error) {
 // ingestTime is the time the line was received (used as fallback timestamp).
 func (p *Parser) ParseLine(raw string, ingestTime time.Time) (*pb.LogRow, error) {
 	row := &pb.LogRow{
-		Raw:      raw,
-		Service:  p.schema.Service,
-		Customer: p.schema.Customer,
-		TsUnixNs: ingestTime.UnixNano(),
+		Raw:        raw,
+		Service:    p.schema.Service,
+		CustomerId: p.schema.CustomerID,
+		TsUnixNs:   ingestTime.UnixNano(),
 	}
 
 	// Strip envelope.

@@ -24,7 +24,7 @@ import (
 // The shard has:
 //   - 2 ERROR rows for app=api, 1 INFO row for app=api
 //   - 1 ERROR row for app=web, 1 WARN row for app=web
-func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, string) {
+func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, store.OrgID) {
 	t.Helper()
 	db, custID := testStoreAndCustomer(t)
 
@@ -50,11 +50,11 @@ func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, 
 
 	now := time.Now()
 	rows := []*pb.LogRow{
-		logRow("api", "ERROR", cust.Name, now.Add(-10*time.Minute)),
-		logRow("api", "ERROR", cust.Name, now.Add(-8*time.Minute)),
-		logRow("api", "INFO", cust.Name, now.Add(-6*time.Minute)),
-		logRow("web", "ERROR", cust.Name, now.Add(-5*time.Minute)),
-		logRow("web", "WARN", cust.Name, now.Add(-2*time.Minute)),
+		logRow("api", "ERROR", int64(cust.ID), now.Add(-10*time.Minute)),
+		logRow("api", "ERROR", int64(cust.ID), now.Add(-8*time.Minute)),
+		logRow("api", "INFO", int64(cust.ID), now.Add(-6*time.Minute)),
+		logRow("web", "ERROR", int64(cust.ID), now.Add(-5*time.Minute)),
+		logRow("web", "WARN", int64(cust.ID), now.Add(-2*time.Minute)),
 	}
 	if err := s.Ingest(rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
@@ -73,18 +73,18 @@ func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, 
 	return c, db, cust.Name, custID
 }
 
-func logRow(app, level, customer string, ts time.Time) *pb.LogRow {
+func logRow(app, level string, customerID int64, ts time.Time) *pb.LogRow {
 	ns, svc, kind := shard.SplitApp(app)
 	return &pb.LogRow{
-		Raw:       level + " " + app + " line",
-		Fields:    []string{level, app, "line"},
-		TsUnixNs:  ts.UnixNano(),
-		Level:     level,
-		Namespace: ns,
-		Service:   svc,
-		Kind:      kind,
-		Instance:  "i-1",
-		Customer:  customer,
+		Raw:        level + " " + app + " line",
+		Fields:     []string{level, app, "line"},
+		TsUnixNs:   ts.UnixNano(),
+		Level:      level,
+		Namespace:  ns,
+		Service:    svc,
+		Kind:       kind,
+		Instance:   "i-1",
+		CustomerId: customerID,
 	}
 }
 

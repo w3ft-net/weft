@@ -296,7 +296,7 @@ func TestPagerDutyIntegration_TableName(t *testing.T) {
 // same behaviour.
 
 // savePagerDuty mirrors the former Store.SavePagerDutyIntegration.
-func savePagerDuty(db *Store, orgID string, name, key string) error {
+func savePagerDuty(db *Store, orgID OrgID, name, key string) error {
 	var item PagerDutyIntegration
 	result := db.scoped(orgID).Where("name = ?", name).First(&item)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -310,7 +310,7 @@ func savePagerDuty(db *Store, orgID string, name, key string) error {
 }
 
 // getPagerDuty mirrors the former Store.GetPagerDutyIntegration.
-func getPagerDuty(db *Store, orgID string, name string) (*PagerDutyIntegration, error) {
+func getPagerDuty(db *Store, orgID OrgID, name string) (*PagerDutyIntegration, error) {
 	var item PagerDutyIntegration
 	err := db.scoped(orgID).Where("name = ?", name).First(&item).Error
 	if err != nil {
@@ -320,13 +320,13 @@ func getPagerDuty(db *Store, orgID string, name string) (*PagerDutyIntegration, 
 }
 
 // listPagerDuty mirrors the former Store.ListPagerDutyIntegrations.
-func listPagerDuty(db *Store, orgID string) ([]PagerDutyIntegration, error) {
+func listPagerDuty(db *Store, orgID OrgID) ([]PagerDutyIntegration, error) {
 	var items []PagerDutyIntegration
 	err := db.scoped(orgID).Order("name").Find(&items).Error
 	return items, err
 }
 
 // deleteAllPagerDuty mirrors the former Store.DeleteAllPagerDutyIntegrations.
-func deleteAllPagerDuty(db *Store, orgID string) error {
+func deleteAllPagerDuty(db *Store, orgID OrgID) error {
 	return db.scoped(orgID).Delete(&PagerDutyIntegration{}).Error
 }

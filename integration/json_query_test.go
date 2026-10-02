@@ -48,7 +48,7 @@ func TestDockerStack_JqFieldExtraction(t *testing.T) {
 		stream.Send(&pb.LogRow{
 			Service:     jqSvc,
 			Kind:        jqKind,
-			Customer:    "testcust",
+			CustomerId:  7,
 			Raw:         string(payload),
 			PayloadJson: payload,
 			Level:       "INFO",
@@ -118,7 +118,6 @@ func queryText(t *testing.T, client pb.WeftCoordinatorClient, pipeline, customer
 	t.Helper()
 	stream, err := client.Execute(context.Background(), &pb.CoordinatorExecuteRequest{
 		Pipeline: pipeline,
-		Customer: customer,
 	})
 	if err != nil {
 		t.Fatalf("query %q: %v", pipeline, err)

@@ -58,10 +58,10 @@ type Shard interface {
 // shard_archive_stats so the retention janitor can classify archived
 // parquet (delete / keep / rewrite) without re-scanning S3.
 type CustomerStat struct {
-	Customer string    `json:"customer"`
-	MinTs    time.Time `json:"min_ts"`
-	MaxTs    time.Time `json:"max_ts"`
-	RowCount int64     `json:"row_count"`
+	CustomerID int64     `json:"customer_id"`
+	MinTs      time.Time `json:"min_ts"`
+	MaxTs      time.Time `json:"max_ts"`
+	RowCount   int64     `json:"row_count"`
 }
 
 // CustomerStatsToProto / CustomerStatsFromProto bridge the Go struct and
@@ -74,7 +74,7 @@ func CustomerStatsToProto(cs []CustomerStat) []*pb.CustomerArchiveStat {
 	out := make([]*pb.CustomerArchiveStat, len(cs))
 	for i, c := range cs {
 		out[i] = &pb.CustomerArchiveStat{
-			Customer:    c.Customer,
+			CustomerId:  c.CustomerID,
 			MinTsUnixNs: c.MinTs.UnixNano(),
 			MaxTsUnixNs: c.MaxTs.UnixNano(),
 			RowCount:    c.RowCount,
@@ -90,10 +90,10 @@ func CustomerStatsFromProto(ps []*pb.CustomerArchiveStat) []CustomerStat {
 	out := make([]CustomerStat, len(ps))
 	for i, p := range ps {
 		out[i] = CustomerStat{
-			Customer: p.Customer,
-			MinTs:    time.Unix(0, p.MinTsUnixNs).UTC(),
-			MaxTs:    time.Unix(0, p.MaxTsUnixNs).UTC(),
-			RowCount: p.RowCount,
+			CustomerID: p.CustomerId,
+			MinTs:      time.Unix(0, p.MinTsUnixNs).UTC(),
+			MaxTs:      time.Unix(0, p.MaxTsUnixNs).UTC(),
+			RowCount:   p.RowCount,
 		}
 	}
 	return out
@@ -190,7 +190,7 @@ CREATE TABLE IF NOT EXISTS logs (
     service        TEXT,
     kind           TEXT,
     instance       TEXT,
-    customer       TEXT,
+    customer_id    BIGINT,
     payload        JSON,
     deployment     TEXT,
     env            TEXT,
@@ -325,7 +325,7 @@ func (s *DuckDBShard) QueryToSink(ctx context.Context, query string, args []any,
 // this list exactly.
 var logColumns = []string{
 	"raw", "fields", "ts", "level", "namespace", "service", "kind",
-	"instance", "customer", "payload", "deployment", "env", "version",
+	"instance", "customer_id", "payload", "deployment", "env", "version",
 	"region", "cluster", "k8s_namespace", "pod", "container", "node",
 	"trace_id", "span_name", "span_id", "parent_span_id", "duration_ns",
 }
@@ -374,7 +374,7 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow, rec IngestRecorder) error {
 				r.Service,
 				kind,
 				r.Instance,
-				r.Customer,
+				r.CustomerId,
 				payload,
 				r.Deployment,
 				r.Env,
@@ -556,7 +556,7 @@ func (s *DuckDBShard) Archive(_ context.Context, s3Prefix string) (string, []Cus
 // pass (see docs/plans/retention-janitor.md).
 func (s *DuckDBShard) customerStats() ([]CustomerStat, error) {
 	return scanCustomerStats(s.db, `
-		SELECT COALESCE(customer, ''), MIN(ts), MAX(ts), COUNT(*)
+		SELECT COALESCE(customer_id, 0), MIN(ts), MAX(ts), COUNT(*)
 		FROM logs GROUP BY 1`)
 }
 
@@ -573,7 +573,7 @@ func scanCustomerStats(db *sql.DB, query string) ([]CustomerStat, error) {
 	var out []CustomerStat
 	for rows.Next() {
 		var c CustomerStat
-		if err := rows.Scan(&c.Customer, &c.MinTs, &c.MaxTs, &c.RowCount); err != nil {
+		if err := rows.Scan(&c.CustomerID, &c.MinTs, &c.MaxTs, &c.RowCount); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -714,7 +714,7 @@ func (s *DuckDBShard) ExportToS3Parquet(s3Path string, cfg *S3Config) error {
 
 // Query executes a SQL query and returns the matching result rows.
 // The SQL is expected to return (raw, ts). args binds positional
-// `?` placeholders (planner-supplied customer name, timestamps,
+// `?` placeholders (planner-supplied customer id, timestamps,
 // namespace/env/service names); pass none for legacy fully-baked SQL.
 func (s *DuckDBShard) Query(query string, args ...any) ([]*pb.ResultRow, error) {
 	return s.QueryContext(context.Background(), query, args...)

@@ -45,7 +45,7 @@ func TestIngestStream_FlushesImmediatelyForActiveTailSubscriber(t *testing.T) {
 
 	subCtx, cancelSub := context.WithCancel(context.Background())
 	defer cancelSub()
-	_, ch := coord.TailFanout.Subscribe(subCtx, &coordinator.RowMatcher{Namespace: "flushtest"})
+	_, ch := coord.TailFanout.Subscribe(subCtx, &coordinator.RowMatcher{Namespace: "flushtest", Customer: int64(cust.ID)})
 
 	streamCtx := metadata.NewIncomingContext(context.Background(),
 		metadata.Pairs("authorization", "Bearer "+rawTok))

@@ -10,8 +10,11 @@ type Schema struct {
 	// compatibility with schemas already stored in log_groups.schema_yaml;
 	// the poller overrides this with the log group's service before
 	// parsing, so the stored value is advisory.
-	Service  string `yaml:"app"`
-	Customer string `yaml:"customer"`
+	Service string `yaml:"app"`
+	// CustomerID is the owning org's id, stamped onto every row this schema's
+	// parser produces. Set by the ingest path that resolved the schema (never
+	// read from the schema YAML); zero where the coordinator stamps it itself.
+	CustomerID int64 `yaml:"-"`
 
 	// Envelope is the outer wrapper applied by the transport layer.
 	// "kevcons" strips the [timestamp] [instance] prefix.

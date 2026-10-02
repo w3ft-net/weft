@@ -33,7 +33,7 @@ import (
 type Session struct {
 	UserID              string
 	Email               string
-	ActiveOrgID         string
+	ActiveOrgID         store.OrgID
 	ActiveCustomerName  string
 	Tier                store.Tier
 	EmailVerified       bool
@@ -123,8 +123,14 @@ func BuildSession(st *store.Store, userID string, orgSelector string) (*Session,
 		return nil, err
 	}
 
-	tier := st.TierForOrg(active.ID)
-	isOwner, err := st.IsOwner(active.ID, user.ID)
+	// saaskit's org ids are opaque strings; this is where weft's become typed.
+	activeID, err := store.ParseOrgID(active.ID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve active org: %w", err)
+	}
+
+	tier := st.TierForOrg(activeID)
+	isOwner, err := st.IsOwner(activeID, user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve org role: %w", err)
 	}
@@ -134,7 +140,7 @@ func BuildSession(st *store.Store, userID string, orgSelector string) (*Session,
 	// their promotion materialized (migration 072), not something
 	// recomputed from the role here. Absence of a row is default-deny.
 	var canFunctions, canWatches, canEtc, canNS bool
-	perm, err := st.GetOrgPermission(active.ID, user.ID)
+	perm, err := st.GetOrgPermission(activeID, user.ID)
 	if err == nil && perm != nil {
 		canFunctions = perm.CanManageFunctions
 		canWatches = perm.CanManageWatches
@@ -147,7 +153,7 @@ func BuildSession(st *store.Store, userID string, orgSelector string) (*Session,
 	return &Session{
 		UserID:              user.ID,
 		Email:               user.Email,
-		ActiveOrgID:         active.ID,
+		ActiveOrgID:         activeID,
 		ActiveCustomerName:  active.Name,
 		Tier:                tier,
 		EmailVerified:       user.EmailVerifiedAt != nil,
@@ -162,7 +168,7 @@ func BuildSession(st *store.Store, userID string, orgSelector string) (*Session,
 
 // selectActiveOrg picks which org to scope the session to. The slice is
 // assumed sorted by membership created_at ASC (oldest first).
-func selectActiveOrg(userOrgs []orgs.OrgMembership, lastActive *string, selector string) (*orgs.OrgMembership, error) {
+func selectActiveOrg(userOrgs []orgs.OrgMembership, lastActive *store.OrgID, selector string) (*orgs.OrgMembership, error) {
 	if selector != "" {
 		for i := range userOrgs {
 			if userOrgs[i].Name == selector {
@@ -173,7 +179,7 @@ func selectActiveOrg(userOrgs []orgs.OrgMembership, lastActive *string, selector
 	}
 	if lastActive != nil {
 		for i := range userOrgs {
-			if userOrgs[i].ID == *lastActive {
+			if userOrgs[i].ID == lastActive.String() {
 				return &userOrgs[i], nil
 			}
 		}

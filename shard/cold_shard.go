@@ -60,7 +60,7 @@ type LambdaQueryRequest struct {
 }
 
 // anyArgsToStrings narrows planner-supplied []any to []string for the
-// wire format. The planner produces strings only (customer name,
+// wire format. The planner produces strings only (customer id,
 // ISO-formatted timestamps, namespace/env/service names); non-string
 // values fall through as fmt.Sprintf("%v", a) and surface in shard
 // logs as a typed-bug breadcrumb.

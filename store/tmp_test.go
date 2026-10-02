@@ -395,7 +395,7 @@ func TestTmpUsageBytes(t *testing.T) {
 // store tests keep exercising the same behaviour against the schema.
 
 // readTmpFile mirrors the former Store.ReadTmpFile.
-func readTmpFile(db *Store, orgID string, path string) ([]byte, error) {
+func readTmpFile(db *Store, orgID OrgID, path string) ([]byte, error) {
 	f, err := db.GetTmpFile(orgID, path)
 	if err != nil {
 		return nil, err
@@ -426,7 +426,7 @@ func readTmpFile(db *Store, orgID string, path string) ([]byte, error) {
 }
 
 // appendTmpFile mirrors the former Store.AppendTmpFile.
-func appendTmpFile(db *Store, orgID string, tier Tier, userID, path string, data []byte) error {
+func appendTmpFile(db *Store, orgID OrgID, tier Tier, userID, path string, data []byte) error {
 	p, err := NormalizeTmpPath(path)
 	if err != nil {
 		return err
@@ -519,7 +519,7 @@ func appendTmpFile(db *Store, orgID string, tier Tier, userID, path string, data
 }
 
 // copyTmpFile mirrors the former Store.CopyTmpFile.
-func copyTmpFile(db *Store, orgID string, tier Tier, userID, srcPath, dstPath string) error {
+func copyTmpFile(db *Store, orgID OrgID, tier Tier, userID, srcPath, dstPath string) error {
 	src, err := db.GetTmpFile(orgID, srcPath)
 	if err != nil {
 		return err
@@ -577,7 +577,7 @@ func copyTmpFile(db *Store, orgID string, tier Tier, userID, srcPath, dstPath st
 }
 
 // renameTmpFile mirrors the former Store.RenameTmpFile.
-func renameTmpFile(db *Store, orgID string, srcPath, dstPath string) error {
+func renameTmpFile(db *Store, orgID OrgID, srcPath, dstPath string) error {
 	src, err := db.GetTmpFile(orgID, srcPath)
 	if err != nil {
 		return err
@@ -602,7 +602,7 @@ func renameTmpFile(db *Store, orgID string, srcPath, dstPath string) error {
 }
 
 // touchTmpFile mirrors the former Store.TouchTmpFile.
-func touchTmpFile(db *Store, orgID string, tier Tier, userID, path string) error {
+func touchTmpFile(db *Store, orgID OrgID, tier Tier, userID, path string) error {
 	p, err := NormalizeTmpPath(path)
 	if err != nil {
 		return err
@@ -632,7 +632,7 @@ func touchTmpFile(db *Store, orgID string, tier Tier, userID, path string) error
 }
 
 // deleteTmpSubtree mirrors the former Store.DeleteTmpSubtree.
-func deleteTmpSubtree(db *Store, orgID string, path string) error {
+func deleteTmpSubtree(db *Store, orgID OrgID, path string) error {
 	p, err := NormalizeTmpPath(path)
 	if err != nil {
 		return err

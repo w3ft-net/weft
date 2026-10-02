@@ -69,9 +69,9 @@ func TestColdShard_S3Integration(t *testing.T) {
 	defer ds.Close()
 
 	rows := []*pb.LogRow{
-		{Raw: "s3 test row 1", Namespace: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: coldT0.Add(1 * time.Second).UnixNano()},
-		{Raw: "s3 test row 2", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: coldT0.Add(2 * time.Second).UnixNano()},
-		{Raw: "s3 test row 3", Namespace: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: coldT0.Add(3 * time.Second).UnixNano()},
+		{Raw: "s3 test row 1", Namespace: "vimgym", Level: "ERROR", CustomerId: 1, TsUnixNs: coldT0.Add(1 * time.Second).UnixNano()},
+		{Raw: "s3 test row 2", Namespace: "vimgym", Level: "INFO", CustomerId: 1, TsUnixNs: coldT0.Add(2 * time.Second).UnixNano()},
+		{Raw: "s3 test row 3", Namespace: "callbox", Level: "WARN", CustomerId: 1, TsUnixNs: coldT0.Add(3 * time.Second).UnixNano()},
 	}
 	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func TestColdShard_S3Integration(t *testing.T) {
 	defer cs.Close()
 
 	// Query all rows.
-	result, err := cs.Query("SELECT raw, ts FROM logs WHERE customer = 'kevlar'")
+	result, err := cs.Query("SELECT raw, ts FROM logs WHERE customer_id = 1")
 	if err != nil {
 		t.Fatalf("query from S3: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestColdShard_S3Integration(t *testing.T) {
 	t.Logf("queried %d rows from S3 Parquet", len(result))
 
 	// Query with filter.
-	result, err = cs.Query("SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer = 'kevlar'")
+	result, err = cs.Query("SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestColdShard_S3Integration(t *testing.T) {
 	}
 
 	// Query with level filter.
-	result, err = cs.Query("SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
+	result, err = cs.Query("SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,14 +13,16 @@ import (
 // set Namespace with empty Service/Kind widens to the namespace (or
 // namespace+service) level.
 type RowMatcher struct {
-	Namespace string
-	Service   string
-	Kind      string
-	Patterns  []planner.GrepPattern
+	Customer                 int64
+	Namespace, Service, Kind string
+	Patterns                 []planner.GrepPattern
 }
 
 // Match returns true if the row passes all filters.
 func (m *RowMatcher) Match(row *pb.LogRow) bool {
+	if m.Customer != row.CustomerId {
+		return false
+	}
 	if m.Namespace != "" {
 		if row.Namespace != m.Namespace {
 			return false

@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"log"
+	"strconv"
 	"strings"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -45,7 +46,7 @@ func (r *IngestionErrorRecorder) Record(shardID, errMsg string, rows []*pb.LogRo
 	}
 
 	apps := distinctStrings(rows, func(r *pb.LogRow) string { return shard.JoinApp(r.Namespace, r.Service, r.Kind) })
-	customers := distinctStrings(rows, func(r *pb.LogRow) string { return r.Customer })
+	customers := distinctStrings(rows, func(r *pb.LogRow) string { return strconv.FormatInt(r.CustomerId, 10) })
 
 	select {
 	case r.ch <- ingestionError{

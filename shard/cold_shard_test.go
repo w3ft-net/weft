@@ -38,11 +38,11 @@ func exportToParquet(t *testing.T, rows []*pb.LogRow) string {
 
 func testRows() []*pb.LogRow {
 	return []*pb.LogRow{
-		{Raw: "error in vimgym", Namespace: "vimgym", Level: "ERROR", Customer: "kevlar", Instance: "i-001", TsUnixNs: coldT0.Add(1 * time.Second).UnixNano()},
-		{Raw: "info in vimgym", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", Instance: "i-001", TsUnixNs: coldT0.Add(2 * time.Second).UnixNano()},
-		{Raw: "error in callbox", Namespace: "callbox", Level: "ERROR", Customer: "kevlar", Instance: "i-002", TsUnixNs: coldT0.Add(3 * time.Second).UnixNano()},
-		{Raw: "info in callbox", Namespace: "callbox", Level: "INFO", Customer: "kevlar", Instance: "i-002", TsUnixNs: coldT0.Add(4 * time.Second).UnixNano()},
-		{Raw: "other customer", Namespace: "vimgym", Level: "INFO", Customer: "acme", Instance: "i-999", TsUnixNs: coldT0.Add(5 * time.Second).UnixNano()},
+		{Raw: "error in vimgym", Namespace: "vimgym", Level: "ERROR", CustomerId: 1, Instance: "i-001", TsUnixNs: coldT0.Add(1 * time.Second).UnixNano()},
+		{Raw: "info in vimgym", Namespace: "vimgym", Level: "INFO", CustomerId: 1, Instance: "i-001", TsUnixNs: coldT0.Add(2 * time.Second).UnixNano()},
+		{Raw: "error in callbox", Namespace: "callbox", Level: "ERROR", CustomerId: 1, Instance: "i-002", TsUnixNs: coldT0.Add(3 * time.Second).UnixNano()},
+		{Raw: "info in callbox", Namespace: "callbox", Level: "INFO", CustomerId: 1, Instance: "i-002", TsUnixNs: coldT0.Add(4 * time.Second).UnixNano()},
+		{Raw: "other customer", Namespace: "vimgym", Level: "INFO", CustomerId: 5, Instance: "i-999", TsUnixNs: coldT0.Add(5 * time.Second).UnixNano()},
 	}
 }
 
@@ -55,7 +55,7 @@ func TestColdShard_QueryParquet(t *testing.T) {
 	}
 	defer cs.Close()
 
-	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
+	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer_id = 1")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestColdShard_FiltersByApp(t *testing.T) {
 	}
 	defer cs.Close()
 
-	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer = 'kevlar'")
+	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestColdShard_QueryToSink(t *testing.T) {
 	defer cs.Close()
 
 	sink := &testSink{}
-	cs.QueryToSink(context.Background(), "SELECT raw, ts FROM logs WHERE customer = 'kevlar'", nil, sink)
+	cs.QueryToSink(context.Background(), "SELECT raw, ts FROM logs WHERE customer_id = 1", nil, sink)
 
 	if !sink.sentinelReceived {
 		t.Error("expected sentinel")
@@ -183,12 +183,12 @@ func benchColdQuery(b *testing.B, n int) {
 	base := coldT0
 	for i := range rows {
 		rows[i] = &pb.LogRow{
-			Raw:       "bench log line with some content for realistic sizing",
-			Namespace: "vimgym",
-			Level:     "INFO",
-			Customer:  "kevlar",
-			Instance:  "i-001",
-			TsUnixNs:  base.Add(time.Duration(i) * time.Millisecond).UnixNano(),
+			Raw:        "bench log line with some content for realistic sizing",
+			Namespace:  "vimgym",
+			Level:      "INFO",
+			CustomerId: 1,
+			Instance:   "i-001",
+			TsUnixNs:   base.Add(time.Duration(i) * time.Millisecond).UnixNano(),
 		}
 	}
 
@@ -214,6 +214,6 @@ func benchColdQuery(b *testing.B, n int) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		cs.Query("SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
+		cs.Query("SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer_id = 1")
 	}
 }

@@ -26,12 +26,12 @@ func TestNewDuckDBShard_SeedsRowCountFromExistingTable(t *testing.T) {
 	base := time.Date(2026, 5, 30, 0, 0, 0, 0, time.UTC).UnixNano()
 	for i := range rows {
 		rows[i] = &pb.LogRow{
-			Raw:       "seed",
-			Namespace: "test",
-			Service:   "shard",
-			Kind:      "main",
-			Customer:  "kevlar",
-			TsUnixNs:  base + int64(i),
+			Raw:        "seed",
+			Namespace:  "test",
+			Service:    "shard",
+			Kind:       "main",
+			CustomerId: 1,
+			TsUnixNs:   base + int64(i),
 		}
 	}
 	if err := first.Ingest(rows, nil); err != nil {

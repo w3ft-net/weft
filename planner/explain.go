@@ -17,7 +17,7 @@ import (
 // and bound placeholders show their values inline as `? = 'value'`
 // so readers can correlate placeholders to args without scrolling.
 func Explain(pipeline string) string {
-	plan, err := Plan(pipeline, "", time.Time{}, time.Time{})
+	plan, err := Plan(pipeline, 0, "", time.Time{}, time.Time{})
 	if err != nil {
 		return fmt.Sprintf("Error: %v\n", err)
 	}

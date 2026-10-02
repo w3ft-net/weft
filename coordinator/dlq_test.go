@@ -84,12 +84,12 @@ func dlqTestRows(app string, n int) []*pb.LogRow {
 	ns, svc, kind := shard.SplitApp(app)
 	for i := range rows {
 		rows[i] = &pb.LogRow{
-			Namespace: ns,
-			Service:   svc,
-			Kind:      kind,
-			Customer:  "kevlar",
-			Raw:       fmt.Sprintf("row-%d", i),
-			TsUnixNs:  now,
+			Namespace:  ns,
+			Service:    svc,
+			Kind:       kind,
+			CustomerId: 1,
+			Raw:        fmt.Sprintf("row-%d", i),
+			TsUnixNs:   now,
 		}
 	}
 	return rows
@@ -139,7 +139,7 @@ func TestDLQ_Write_PayloadShape(t *testing.T) {
 	if len(decoded) != len(rows) {
 		t.Fatalf("expected %d records, got %d", len(rows), len(decoded))
 	}
-	if decoded[0]["app"] != "weft/coordinator" || decoded[0]["customer"] != "kevlar" {
+	if decoded[0]["app"] != "weft/coordinator" || decoded[0]["customer_id"] != float64(1) { // JSON numbers decode as float64
 		t.Errorf("record fields wrong: %v", decoded[0])
 	}
 }

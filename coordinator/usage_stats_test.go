@@ -15,12 +15,12 @@ func TestDrain_CompletedHourRemoved_CurrentHourReset(t *testing.T) {
 	u := NewCustomerUsageStats()
 
 	pastHour := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Hour)
-	pastKey := usageKey("acme", pastHour)
+	pastKey := usageKey{customerID: 5, hour: pastHour}
 	pastCounter := &atomic.Int64{}
 	pastCounter.Store(100)
 	u.counts[pastKey] = pastCounter // seed a "past" bucket directly; Record always uses now()
 
-	u.Record("acme", 50) // lands in the current hour
+	u.Record(5, 50) // lands in the current hour
 
 	entries := u.Drain()
 	if len(entries) != 2 {
@@ -47,15 +47,15 @@ func TestDrain_CompletedHourRemoved_CurrentHourReset(t *testing.T) {
 	if _, ok := u.counts[pastKey]; ok {
 		t.Error("past hour bucket still present after Drain, want removed")
 	}
-	if got := u.CurrentHour("acme"); got != 0 {
+	if got := u.CurrentHour(5); got != 0 {
 		t.Errorf("current hour after Drain = %d, want 0 (reset, not deleted)", got)
 	}
 
 	// Recording again after Drain must accumulate from zero, in the same
 	// bucket — proving the current-hour key survived rather than being
 	// silently recreated with stale state.
-	u.Record("acme", 7)
-	if got := u.CurrentHour("acme"); got != 7 {
+	u.Record(5, 7)
+	if got := u.CurrentHour(5); got != 7 {
 		t.Errorf("current hour after post-drain Record = %d, want 7", got)
 	}
 }
@@ -66,7 +66,7 @@ func TestDrain_CompletedHourRemoved_CurrentHourReset(t *testing.T) {
 // insert a pointless zero-byte row on every tick for idle customers.
 func TestDrain_ZeroByteBucketsOmitted(t *testing.T) {
 	u := NewCustomerUsageStats()
-	u.Record("idle-customer", 0)
+	u.Record(99, 0)
 
 	entries := u.Drain()
 	if len(entries) != 0 {
@@ -80,7 +80,7 @@ func TestDrain_ZeroByteBucketsOmitted(t *testing.T) {
 // to zero by the first call.
 func TestDrain_SecondCallOnlyReturnsNewDelta(t *testing.T) {
 	u := NewCustomerUsageStats()
-	u.Record("acme", 30)
+	u.Record(5, 30)
 
 	first := u.Drain()
 	if len(first) != 1 || first[0].Bytes != 30 {
@@ -92,7 +92,7 @@ func TestDrain_SecondCallOnlyReturnsNewDelta(t *testing.T) {
 		t.Errorf("second Drain() with no intervening Record returned %+v, want none", second)
 	}
 
-	u.Record("acme", 5)
+	u.Record(5, 5)
 	third := u.Drain()
 	if len(third) != 1 || third[0].Bytes != 5 {
 		t.Fatalf("third Drain() = %+v, want one entry of 5 bytes (not 35)", third)

@@ -31,16 +31,16 @@ func archiveFixture(t *testing.T, rows []*pb.LogRow) (string, *DuckDBShard) {
 
 // survivorsByCustomer reads a rewritten parquet back through a ColdShard
 // and counts surviving rows per customer.
-func survivorsByCustomer(t *testing.T, path, customer string) int {
+func survivorsByCustomer(t *testing.T, path string, customer int64) int {
 	t.Helper()
 	cold, err := NewColdShard("verify", nil, path, "", nil)
 	if err != nil {
 		t.Fatalf("cold shard: %v", err)
 	}
 	defer cold.Close()
-	rows, err := cold.Query("SELECT raw, ts FROM logs WHERE customer = ?", customer)
+	rows, err := cold.Query("SELECT raw, ts FROM logs WHERE customer_id = ?", customer)
 	if err != nil {
-		t.Fatalf("verify query (%s): %v", customer, err)
+		t.Fatalf("verify query (%d): %v", customer, err)
 	}
 	return len(rows)
 }
@@ -50,10 +50,10 @@ func TestRewriteRetention_DropsExpiredPreservesUnmapped(t *testing.T) {
 	old := base
 	recent := base + 100*int64(24*time.Hour)
 	rows := []*pb.LogRow{
-		{Raw: "acme-old", Customer: "acme", TsUnixNs: old},
-		{Raw: "acme-new", Customer: "acme", TsUnixNs: recent},
-		{Raw: "globex-old", Customer: "globex", TsUnixNs: old},
-		{Raw: "ghost-old", Customer: "ghost", TsUnixNs: old}, // no cutoff → preserved
+		{Raw: "acme-old", CustomerId: 5, TsUnixNs: old},
+		{Raw: "acme-new", CustomerId: 5, TsUnixNs: recent},
+		{Raw: "globex-old", CustomerId: 6, TsUnixNs: old},
+		{Raw: "ghost-old", CustomerId: 14, TsUnixNs: old}, // no cutoff → preserved
 	}
 	src, live := archiveFixture(t, rows)
 	defer live.Close()
@@ -63,8 +63,8 @@ func TestRewriteRetention_DropsExpiredPreservesUnmapped(t *testing.T) {
 	cutoff := time.Unix(0, base+50*int64(24*time.Hour))
 	dst := t.TempDir() + "/rewritten.parquet"
 	res, err := RewriteRetention(src, dst, []CustomerCutoff{
-		{Customer: "acme", Cutoff: cutoff},
-		{Customer: "globex", Cutoff: cutoff},
+		{CustomerID: 5, Cutoff: cutoff},
+		{CustomerID: 6, Cutoff: cutoff},
 	}, nil)
 	if err != nil {
 		t.Fatalf("rewrite: %v", err)
@@ -76,13 +76,13 @@ func TestRewriteRetention_DropsExpiredPreservesUnmapped(t *testing.T) {
 	if res.OutputPath != dst {
 		t.Fatalf("OutputPath = %q, want %q", res.OutputPath, dst)
 	}
-	if n := survivorsByCustomer(t, dst, "acme"); n != 1 {
+	if n := survivorsByCustomer(t, dst, 5); n != 1 {
 		t.Errorf("acme survivors = %d, want 1 (only acme-new)", n)
 	}
-	if n := survivorsByCustomer(t, dst, "globex"); n != 0 {
+	if n := survivorsByCustomer(t, dst, 6); n != 0 {
 		t.Errorf("globex survivors = %d, want 0 (fully expired)", n)
 	}
-	if n := survivorsByCustomer(t, dst, "ghost"); n != 1 {
+	if n := survivorsByCustomer(t, dst, 14); n != 1 {
 		t.Errorf("ghost survivors = %d, want 1 (unmapped, preserved)", n)
 	}
 }
@@ -90,15 +90,15 @@ func TestRewriteRetention_DropsExpiredPreservesUnmapped(t *testing.T) {
 func TestRewriteRetention_EmptyResultWritesNothing(t *testing.T) {
 	base := int64(1_600_000_000) * int64(time.Second)
 	rows := []*pb.LogRow{
-		{Raw: "globex-old", Customer: "globex", TsUnixNs: base},
-		{Raw: "globex-old2", Customer: "globex", TsUnixNs: base + int64(time.Hour)},
+		{Raw: "globex-old", CustomerId: 6, TsUnixNs: base},
+		{Raw: "globex-old2", CustomerId: 6, TsUnixNs: base + int64(time.Hour)},
 	}
 	src, live := archiveFixture(t, rows)
 	defer live.Close()
 
 	cutoff := time.Unix(0, base+50*int64(24*time.Hour)) // after every row
 	dst := t.TempDir() + "/empty.parquet"
-	res, err := RewriteRetention(src, dst, []CustomerCutoff{{Customer: "globex", Cutoff: cutoff}}, nil)
+	res, err := RewriteRetention(src, dst, []CustomerCutoff{{CustomerID: 6, Cutoff: cutoff}}, nil)
 	if err != nil {
 		t.Fatalf("rewrite: %v", err)
 	}

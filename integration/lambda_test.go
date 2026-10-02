@@ -34,10 +34,10 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	defer ds.Close()
 
 	rows := []*pb.LogRow{
-		{Raw: "lambda integration row 1", Namespace: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
-		{Raw: "lambda integration row 2", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
-		{Raw: "lambda integration row 3", Namespace: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
-		{Raw: "lambda integration row 4", Namespace: "vimgym", Level: "DEBUG", Customer: "acme", TsUnixNs: t0.Add(4 * time.Second).UnixNano()},
+		{Raw: "lambda integration row 1", Namespace: "vimgym", Level: "ERROR", CustomerId: 1, TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
+		{Raw: "lambda integration row 2", Namespace: "vimgym", Level: "INFO", CustomerId: 1, TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
+		{Raw: "lambda integration row 3", Namespace: "callbox", Level: "WARN", CustomerId: 1, TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
+		{Raw: "lambda integration row 4", Namespace: "vimgym", Level: "DEBUG", CustomerId: 5, TsUnixNs: t0.Add(4 * time.Second).UnixNano()},
 	}
 	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	}
 
 	// Query all kevlar rows.
-	result, err := cs.Query("SELECT raw, ts FROM logs WHERE customer = 'kevlar'")
+	result, err := cs.Query("SELECT raw, ts FROM logs WHERE customer_id = 1")
 	if err != nil {
 		t.Fatalf("query via Lambda: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	t.Logf("queried %d rows via Lambda container", len(result))
 
 	// Filter by app.
-	result, err = cs.Query("SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer = 'kevlar'")
+	result, err = cs.Query("SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	}
 
 	// Filter by level.
-	result, err = cs.Query("SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer = 'kevlar'")
+	result, err = cs.Query("SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 
 	// QueryToSink.
 	sink := &testSink{}
-	cs.QueryToSink(context.Background(), "SELECT raw, ts FROM logs WHERE customer = 'kevlar'", nil, sink)
+	cs.QueryToSink(context.Background(), "SELECT raw, ts FROM logs WHERE customer_id = 1", nil, sink)
 	if !sink.sentinelReceived {
 		t.Error("expected sentinel")
 	}
@@ -129,10 +129,10 @@ func TestComputeLifecycle_LambdaColdShardReachable(t *testing.T) {
 	defer ds.Close()
 
 	rows := []*pb.LogRow{
-		{Raw: "compute lifecycle row 1", Namespace: "vimgym", Level: "ERROR", Customer: "kevlar", TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
-		{Raw: "compute lifecycle row 2", Namespace: "vimgym", Level: "INFO", Customer: "kevlar", TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
-		{Raw: "compute lifecycle row 3", Namespace: "callbox", Level: "WARN", Customer: "kevlar", TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
-		{Raw: "compute lifecycle row 4", Namespace: "vimgym", Level: "DEBUG", Customer: "acme", TsUnixNs: t0.Add(4 * time.Second).UnixNano()},
+		{Raw: "compute lifecycle row 1", Namespace: "vimgym", Level: "ERROR", CustomerId: 1, TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
+		{Raw: "compute lifecycle row 2", Namespace: "vimgym", Level: "INFO", CustomerId: 1, TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
+		{Raw: "compute lifecycle row 3", Namespace: "callbox", Level: "WARN", CustomerId: 1, TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
+		{Raw: "compute lifecycle row 4", Namespace: "vimgym", Level: "DEBUG", CustomerId: 5, TsUnixNs: t0.Add(4 * time.Second).UnixNano()},
 	}
 	if err := ds.Ingest(rows, nil); err != nil {
 		t.Fatal(err)
@@ -151,7 +151,7 @@ func TestComputeLifecycle_LambdaColdShardReachable(t *testing.T) {
 	pool := &compute.LocalComputePool{AWSRegion: compute.ResolveRegion()}
 
 	stream, err := pool.ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{
-		Sql: "SELECT raw, ts FROM logs WHERE customer = 'kevlar'",
+		Sql: "SELECT raw, ts FROM logs WHERE customer_id = 1",
 		Shards: []*pb.ShardDescriptor{{
 			ShardId:     "cold-compute-lifecycle",
 			LambdaUrl:   lambdaURL,

@@ -72,7 +72,7 @@ type LogGroup struct {
 	// GORM (`->`): the BEFORE INSERT trigger fills it from namespace_id,
 	// so GORM must omit it from INSERTs (a written zero-value would
 	// dodge the trigger's NULL check and trip the customers FK).
-	OrgID   string `gorm:"->"`
+	OrgID   OrgID  `gorm:"->"`
 	Service string `gorm:"column:app;not null;uniqueIndex:idx_ns_app"`
 	// BucketID assigns this service to a bucket (migration 057). NULL =
 	// the default bucket; a non-NULL value is a service moved to a
@@ -245,20 +245,20 @@ func (s *Store) invalidateSchemaCache(namespaceID uint, service string) {
 // ok=false means "no configured schema" (never onboarded, still
 // pending, or schema_yaml empty), not an error; callers skip enrichment
 // and leave the row Raw-only, exactly the pre-cache behavior.
-func (s *Store) FindLogGroupSchema(orgID, namespace, service string) (schemaYAML, customerName string, ok bool, err error) {
+func (s *Store) FindLogGroupSchema(orgID OrgID, namespace string, service string) (schemaYAML string, ok bool, err error) {
 	if entry, hit := s.schemaCache.get(orgID, namespace, service); hit {
-		return entry.SchemaYAML, entry.CustomerName, entry.Configured, nil
+		return entry.SchemaYAML, entry.Configured, nil
 	}
 	lg, err := s.FindLogGroup(orgID, namespace, service)
 	if err != nil {
-		return "", "", false, err
+		return "", false, err
 	}
 	var entry cachedSchemaEntry
 	if lg != nil && lg.Status == StatusConfigured && lg.SchemaYAML != "" {
-		entry = cachedSchemaEntry{Configured: true, SchemaYAML: lg.SchemaYAML, CustomerName: lg.CustomerName}
+		entry = cachedSchemaEntry{Configured: true, SchemaYAML: lg.SchemaYAML}
 	}
 	s.schemaCache.set(orgID, namespace, service, &entry)
-	return entry.SchemaYAML, entry.CustomerName, entry.Configured, nil
+	return entry.SchemaYAML, entry.Configured, nil
 }
 
 // FindLogGroupByAWSName resolves an AWS CloudWatch log group name to its
@@ -273,7 +273,7 @@ func (s *Store) FindLogGroupSchema(orgID, namespace, service string) (schemaYAML
 // cache-aside treatment as FindLogGroupSchema; adapter_cloudwatch.go
 // memoizes this per-request instead, which covers the common case of
 // one log group per batch.
-func (s *Store) FindLogGroupByAWSName(orgID, namespace, logGroupName string) (service string, ok bool, err error) {
+func (s *Store) FindLogGroupByAWSName(orgID OrgID, namespace string, logGroupName string) (service string, ok bool, err error) {
 	var lg LogGroup
 	err = s.db.
 		Table("log_groups").
@@ -466,7 +466,7 @@ func (s *Store) UpdateLogGroupDetection(namespaceID uint, service, detectionJSON
 // the bare service (migration 060), scoped to the namespace by the join
 // — so the match is on the bare service, not a "namespace/service"
 // composite.
-func (s *Store) FindLogGroup(orgID string, namespace, service string) (*LogGroupJoined, error) {
+func (s *Store) FindLogGroup(orgID OrgID, namespace, service string) (*LogGroupJoined, error) {
 	var lg LogGroupJoined
 	err := s.db.
 		Table("log_groups").

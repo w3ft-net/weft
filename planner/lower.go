@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
@@ -19,7 +20,9 @@ import (
 //
 // v2: dropped the composite follow_app/source_app fields; the
 // (namespace, service, kind) columns are carried split.
-const PlannerVersion = 2
+// v3: the row-level-security predicate is `customer_id = CAST(? AS BIGINT)`
+// and LoweredPlan carries customer_id (was the customer name).
+const PlannerVersion = 3
 
 // LoweredPlan is the persisted shape we store next to a watch's
 // pipeline string. It captures everything the runtime needs to
@@ -43,7 +46,7 @@ type LoweredPlan struct {
 	// profile). Customer renames invalidate this field; the fire
 	// path will need to re-lower if it diverges, but renames are
 	// rare enough that the bake-in is worth the saved DB hit.
-	Customer string `json:"customer"`
+	CustomerID int64 `json:"customer_id"`
 	// Tier is the customer's tier at save time. Cached here so the
 	// fire path can clamp the time-range retention + select shards
 	// (both tier-dependent) without two DB roundtrips per fire. A
@@ -102,9 +105,9 @@ type BinResolver interface {
 // symbolic; Hydrate consumes the lowered form plus a ResolveCtx to
 // produce concrete dispatch args.
 type ResolveCtx struct {
-	Customer string
-	Start    time.Time
-	End      time.Time
+	CustomerID int64
+	Start      time.Time
+	End        time.Time
 }
 
 // Resolve produces the concrete value for one ArgSource. For
@@ -115,7 +118,7 @@ func (a ArgSource) Resolve(ctx ResolveCtx) string {
 	case ArgLiteral:
 		return a.Value
 	case ArgCustomer:
-		return ctx.Customer
+		return strconv.FormatInt(ctx.CustomerID, 10)
 	case ArgTimeStart:
 		return formatTS(ctx.Start)
 	case ArgTimeEnd:
@@ -139,7 +142,7 @@ func (a ArgSource) Resolve(ctx ResolveCtx) string {
 // range into Plan() so the ts predicates get emitted with
 // ArgTimeStart / ArgTimeEnd sources; Hydrate replaces the Values
 // at fire time.
-func Lower(pipeline, customer, tier string, resolveBin BinResolver) (*LoweredPlan, error) {
+func Lower(pipeline string, customerID int64, tier string, resolveBin BinResolver) (*LoweredPlan, error) {
 	expanded, deps, err := expandForLowering(pipeline, resolveBin)
 	if err != nil {
 		return nil, fmt.Errorf("lower: expand /bin: %w", err)
@@ -152,13 +155,13 @@ func Lower(pipeline, customer, tier string, resolveBin BinResolver) (*LoweredPla
 	sentinelStart := time.Unix(0, 1).UTC()
 	sentinelEnd := time.Unix(0, 2).UTC()
 
-	plan, err := Plan(expanded, customer, sentinelStart, sentinelEnd)
+	plan, err := Plan(expanded, customerID, "", sentinelStart, sentinelEnd)
 	if err != nil {
 		return nil, fmt.Errorf("lower: plan: %w", err)
 	}
 
 	return &LoweredPlan{
-		Customer:        customer,
+		CustomerID:      customerID,
 		Tier:            tier,
 		ShardSQL:        plan.ShardSQL,
 		DirectShardSQL:  plan.DirectShardSQL,
@@ -210,15 +213,15 @@ func HashBinSource(source string) string {
 // lowered_plan into SaveCronWatch — the watch saves cleanly and the
 // fire path falls back to inline Plan(). This is the canonical entry
 // point for save handlers; do NOT call Lower + Marshal directly.
-func LowerForStorage(pipeline, customer, tier string, resolveBin BinResolver) []byte {
-	lp, err := Lower(pipeline, customer, tier, resolveBin)
+func LowerForStorage(pipeline string, customerID int64, tier string, resolveBin BinResolver) []byte {
+	lp, err := Lower(pipeline, customerID, tier, resolveBin)
 	if err != nil {
-		log.Printf("lower: skip save-time lowering for pipeline (customer=%s): %v", customer, err)
+		log.Printf("lower: skip save-time lowering for pipeline (customer=%d): %v", customerID, err)
 		return nil
 	}
 	b, err := json.Marshal(lp)
 	if err != nil {
-		log.Printf("lower: marshal LoweredPlan (customer=%s): %v", customer, err)
+		log.Printf("lower: marshal LoweredPlan (customer=%d): %v", customerID, err)
 		return nil
 	}
 	return b

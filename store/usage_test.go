@@ -11,9 +11,9 @@ import (
 func TestRollupUsageDaily_AggregatesHourlyCorrectly(t *testing.T) {
 	db := testOpen(t)
 
-	cust := "usage-rollup-test"
+	cust := mustOrg(t, db, "usage-rollup-test")
 	// Two customers' rows to prove the GROUP BY scopes correctly.
-	other := "usage-rollup-other"
+	other := mustOrg(t, db, "usage-rollup-other")
 
 	// Yesterday, 05:00..09:00 UTC — five hourly rows of 100 bytes each
 	// for our customer, plus a single row for the other customer so
@@ -33,18 +33,18 @@ func TestRollupUsageDaily_AggregatesHourlyCorrectly(t *testing.T) {
 		t.Fatalf("first rollup: %v", err)
 	}
 
-	want := func(t *testing.T, customer string, wantBytes int64) {
+	want := func(t *testing.T, customer OrgID, wantBytes int64) {
 		t.Helper()
 		var got int64
 		if err := db.db.Raw(`
 			SELECT bytes_ingested FROM usage_daily
-			WHERE customer_name = ? AND day = ?::date`,
+			WHERE org_id = ? AND day = ?::date`,
 			customer, yesterday,
 		).Scan(&got).Error; err != nil {
 			t.Fatal(err)
 		}
 		if got != wantBytes {
-			t.Errorf("%s: usage_daily = %d, want %d", customer, got, wantBytes)
+			t.Errorf("org %d: usage_daily = %d, want %d", customer, got, wantBytes)
 		}
 	}
 	want(t, cust, 500)
@@ -79,7 +79,7 @@ func TestRollupUsageDaily_AggregatesHourlyCorrectly(t *testing.T) {
 func TestQueryUsage_SplitsOnTodayBoundary(t *testing.T) {
 	db := testOpen(t)
 
-	cust := "usage-query-split"
+	cust := mustOrg(t, db, "usage-query-split")
 	todayStart := time.Now().UTC().Truncate(24 * time.Hour)
 	yesterday := todayStart.Add(-24 * time.Hour)
 
@@ -137,9 +137,19 @@ func TestQueryUsage_SplitsOnTodayBoundary(t *testing.T) {
 // the same customer/hour behave identically to the old upsert-based
 // helper as far as every assertion in this file is concerned. Name kept
 // for now since callers still think of it as "record this hour's usage".
-func upsertUsageHourly(db *Store, customerName string, hour time.Time, bytes int64) error {
+func upsertUsageHourly(db *Store, orgID OrgID, hour time.Time, bytes int64) error {
 	return db.db.Exec(`
-		INSERT INTO usage_hourly (customer_name, hour, bytes_ingested)
+		INSERT INTO usage_hourly (org_id, hour, bytes_ingested)
 		VALUES (?, ?, ?)`,
-		customerName, hour, bytes).Error
+		orgID, hour, bytes).Error
+}
+
+// mustOrg returns the id of the (find-or-created) org with this name.
+func mustOrg(t *testing.T, db *Store, name string) OrgID {
+	t.Helper()
+	o, err := db.FindOrCreateOrg(name)
+	if err != nil {
+		t.Fatalf("FindOrCreateOrg(%q): %v", name, err)
+	}
+	return o.ID
 }

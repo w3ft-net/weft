@@ -61,7 +61,7 @@ func newQueryTestServer(t *testing.T) *Server {
 		t.Fatalf("getShard: %v", err)
 	}
 	if err := ds.Ingest([]*pb.LogRow{
-		{Raw: "hello", Namespace: "acme", Service: "app", Kind: "main", Customer: "acme", TsUnixNs: time.Now().UnixNano()},
+		{Raw: "hello", Namespace: "acme", Service: "app", Kind: "main", CustomerId: 5, TsUnixNs: time.Now().UnixNano()},
 	}, nil); err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -76,7 +76,7 @@ func newQueryTestServer(t *testing.T) *Server {
 func TestQuery_SilentWhenUntraced(t *testing.T) {
 	srv := newQueryTestServer(t)
 
-	req := &pb.QueryRequest{Sql: "SELECT raw, ts FROM logs WHERE customer = 'acme'"}
+	req := &pb.QueryRequest{Sql: "SELECT raw, ts FROM logs WHERE customer_id = 5"}
 	stream := &queryCaptureStream{ctx: context.Background()}
 
 	out := captureShardLog(t, func() {
@@ -97,7 +97,7 @@ func TestQuery_SilentWhenUntraced(t *testing.T) {
 func TestQuery_LogsTraceIDWhenPresent(t *testing.T) {
 	srv := newQueryTestServer(t)
 
-	req := &pb.QueryRequest{Sql: "SELECT raw, ts FROM logs WHERE customer = 'acme'"}
+	req := &pb.QueryRequest{Sql: "SELECT raw, ts FROM logs WHERE customer_id = 5"}
 	ctx := weftsdk.ContextWithTraceID(context.Background(), "shard-trace-abc")
 	stream := &queryCaptureStream{ctx: ctx}
 

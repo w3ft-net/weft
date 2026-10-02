@@ -14,7 +14,7 @@ import (
 // wildcard are untouched.
 
 func TestPlanInDir_RelativeSourceResolvesAgainstCwd(t *testing.T) {
-	plan, err := PlanInDir("tail gamestate.log", "vimgym", "/log/vimgym/api", time.Time{}, time.Time{})
+	plan, err := Plan("tail gamestate.log", 2, "/log/vimgym/api", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("PlanInDir: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestPlanInDir_RelativeSourceResolvesAgainstCwd(t *testing.T) {
 // A relative path one level down from the namespace root resolves the
 // same way: `cat api/main.log` from /log/vimgym → /log/vimgym/api/main.log.
 func TestPlanInDir_RelativeFromNamespaceRoot(t *testing.T) {
-	plan, err := PlanInDir("cat api/main.log", "vimgym", "/log/vimgym", time.Time{}, time.Time{})
+	plan, err := Plan("cat api/main.log", 2, "/log/vimgym", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("PlanInDir: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestPlanInDir_RelativeFromNamespaceRoot(t *testing.T) {
 
 // Absolute paths are untouched regardless of cwd.
 func TestPlanInDir_AbsolutePathIgnoresCwd(t *testing.T) {
-	plan, err := PlanInDir("tail /log/acme/api/main.log", "acme", "/log/vimgym/api", time.Time{}, time.Time{})
+	plan, err := Plan("tail /log/acme/api/main.log", 5, "/log/vimgym/api", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("PlanInDir: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestExpandSourceGlobs_RelativeGlobResolvesAgainstCwd(t *testing.T) {
 // path still parses, and the `warp.log` wildcard still fans out (empty
 // namespace = no source predicate).
 func TestPlanInDir_HomeCwdPreservesLegacyForms(t *testing.T) {
-	plan, err := PlanInDir("tail log/vimgym/api/gamestate.log", "vimgym", "/", time.Time{}, time.Time{})
+	plan, err := Plan("tail log/vimgym/api/gamestate.log", 2, "/", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("PlanInDir(log/...): %v", err)
 	}
@@ -80,7 +80,7 @@ func TestPlanInDir_HomeCwdPreservesLegacyForms(t *testing.T) {
 		t.Errorf("log/ form: got ns=%q svc=%q kind=%q, want vimgym/api/gamestate", plan.SourceNamespace, plan.SourceService, plan.SourceKind)
 	}
 
-	wild, err := PlanInDir("cat warp.log", "vimgym", "/", time.Time{}, time.Time{})
+	wild, err := Plan("cat warp.log", 2, "/", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("PlanInDir(warp.log): %v", err)
 	}

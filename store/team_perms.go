@@ -57,7 +57,7 @@ type NamespaceAcl struct {
 // holds real grants like everyone else, so leaving them out would hide
 // rows that exist and make the doc a partial view of the truth it
 // claims to be authoritative over.
-func (s *Store) BuildTeamPerms(orgID string) (TeamPermsDoc, error) {
+func (s *Store) BuildTeamPerms(orgID OrgID) (TeamPermsDoc, error) {
 	members, err := s.ListTeamMembers(orgID)
 	if err != nil {
 		return nil, fmt.Errorf("list members: %w", err)
@@ -128,7 +128,7 @@ func (s *Store) BuildTeamPerms(orgID string) (TeamPermsDoc, error) {
 // mean "default-deny" — perms not in the doc are deleted from the
 // store. Two-way authoritative: what's in the doc is what the user
 // gets, full stop.
-func (s *Store) ApplyTeamPerms(orgID string, doc TeamPermsDoc) error {
+func (s *Store) ApplyTeamPerms(orgID OrgID, doc TeamPermsDoc) error {
 	members, err := s.ListTeamMembers(orgID)
 	if err != nil {
 		return fmt.Errorf("list members: %w", err)

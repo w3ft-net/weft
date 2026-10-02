@@ -10,8 +10,8 @@ import (
 // the scoping callbacks against a real table without enrolling (and
 // thereby constraining) a production model.
 type tenantProbe struct {
-	ID    uint   `gorm:"primaryKey"`
-	OrgID string `gorm:"not null"`
+	ID    uint  `gorm:"primaryKey"`
+	OrgID OrgID `gorm:"not null"`
 	Val   string
 }
 
@@ -26,7 +26,7 @@ func TestTenantScoping_Enforced(t *testing.T) {
 
 	// A TEMP table lives on the tx's connection and is gone at rollback.
 	if err := db.DB().Exec(
-		`CREATE TEMP TABLE tenant_probe (id BIGSERIAL PRIMARY KEY, org_id UUID NOT NULL, val TEXT)`,
+		`CREATE TEMP TABLE tenant_probe (id BIGSERIAL PRIMARY KEY, org_id BIGINT NOT NULL, val TEXT)`,
 	).Error; err != nil {
 		t.Fatalf("create probe table: %v", err)
 	}
@@ -34,10 +34,10 @@ func TestTenantScoping_Enforced(t *testing.T) {
 
 	bg := context.Background()
 
-	// Two org UUIDs standing in for two tenants.
+	// Two org ids standing in for two tenants.
 	const (
-		orgA = "00000000-0000-0000-0000-00000000000a"
-		orgB = "00000000-0000-0000-0000-00000000000b"
+		orgA = 10
+		orgB = 11
 	)
 
 	// Seed two customers' rows through the exemption.
@@ -99,7 +99,7 @@ func TestTenantScoping_Enforced(t *testing.T) {
 	// id is a string, a zero-value variable threaded in by mistake must still
 	// fail closed rather than emit `WHERE org_id = ''`.
 	var empty []tenantProbe
-	if err := db.DB().WithContext(WithOrg(bg, "")).Find(&empty).Error; !errors.Is(err, ErrNoOrgInContext) {
+	if err := db.DB().WithContext(WithOrg(bg, 0)).Find(&empty).Error; !errors.Is(err, ErrNoOrgInContext) {
 		t.Errorf("empty-org find: err=%v (%d rows), want ErrNoOrgInContext", err, len(empty))
 	}
 }

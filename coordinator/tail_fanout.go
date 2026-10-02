@@ -13,15 +13,16 @@ import (
 // benchmark code (docs/plans/coordinator-horizontal-scaling.md item 4);
 // production must not depend on it.
 type tailTopic struct {
+	Customer                 int64
 	Namespace, Service, Kind string
 	Wildcard                 bool
 }
 
 func topicFor(m *RowMatcher) tailTopic {
 	if m.Namespace == "" {
-		return tailTopic{Wildcard: true}
+		return tailTopic{Customer: m.Customer, Wildcard: true}
 	}
-	return tailTopic{Namespace: m.Namespace, Service: m.Service, Kind: m.Kind}
+	return tailTopic{Customer: m.Customer, Namespace: m.Namespace, Service: m.Service, Kind: m.Kind}
 }
 
 // TailFanout wraps a *TailBroker with optional Redis-Pub/Sub cross-
