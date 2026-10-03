@@ -1,6 +1,7 @@
 # Customer (organization) primary key: uuid → bigint
 
-**Status:** designed, not started. Written 2026-10-01.
+**Status:** done. Written 2026-10-01; cut over to production 2026-10-03
+(see Phase 5 for what actually happened and what the plan missed).
 
 ## Why
 
@@ -154,7 +155,7 @@ What it does, in one transaction:
   tail is best-effort, accepted. `coordinator_desired=2` in prod, so schedule
   it with the deploy.
 
-### Phase 5: cutover (M)
+### Phase 5: cutover (M) — DONE 2026-10-03
 
 Rehearsed on 2026-10-02 against a fresh copy of prod (`prod.sql`, goose 77)
 through the real entry point, `go run ./cmd/weft-migrate`: 078 applied in
@@ -195,6 +196,51 @@ Before step 1:
 - Release weftd 0.26.0 whenever convenient. It is not required for cutover (old
   agents keep working), and kevcons apps run the pinned `.deb`, so a release
   plus repin is needed for the dead plumbing to leave the fleet.
+
+#### What happened (2026-10-03) and what the plan missed
+
+Prod was down 2026-10-02 11:28 EDT to 2026-10-03 09:14 EDT, far longer than the
+plan assumed, mostly because the status-server deploy failed once and the
+window sat open overnight. Order actually run: coordinator ASG to min 0 /
+desired 0, merge #14, status deploy (AMI + launch-template bump), scale up to
+min 1 / desired 2 (the first new coordinators ran `weft-migrate`; goose
+reported version 78), `bump-shard-templates` + `roll-all`, then the archive
+delete and `shard_archive_stats` truncate. Phase 5's unplanned work:
+
+- **Shard volumes carried the old schema.** The plan covered archived
+  parquet only. Rolled shards reattach their EBS volume, whose `logs` table
+  had `customer TEXT`; `CREATE TABLE IF NOT EXISTS` left it alone, so ingest
+  failed with "the column must exist in the table". Fixed in #15
+  (`convertLegacyCustomerColumn`: add `customer_id`, backfill graybeard=1 /
+  loom=2, any other name NULL, drop `customer`; on a 3 GB volume it took
+  about 25 s on open). Cutover-only, and since removed: once the four live
+  volumes were converted (the only shard-data volumes in the account; no
+  orphans, and every snapshot is an 8 GB AMI root), nothing could reattach an
+  old-schema volume. A shard that opens one now fails at ingest; clear a stale
+  `dev/shard-data` with `make integration-clean`. A rehearsal that opens a copy
+  of a real shard volume would have caught this: the Postgres rehearsal could
+  not.
+- **An unrelated commit rode in on the branch.** `987d60d` ("fix tenant leak
+  in tail -f") had swept in the in-progress democast extraction (`replace
+  ../democast`), which broke CI and the AMI build. Removed from the branch
+  before merge; the work is on local branch `democast-wip`.
+- **The status deploy failed once, then passed.** `build: repository has
+  uncommitted changes` three seconds in; the cause was never found (the
+  workdir was clean as `status-build` under every `HOME` we tried) and a
+  retry passed. kevcons's `hasUncommittedChanges` discards git's stderr and
+  reports "dirty" on any git failure, so a real cause would be invisible.
+- **Scaling the coordinator ASG to 0 does not stop the deploy.** The status
+  server built the AMI, bumped the launch template and "rolled" the empty
+  group successfully, but its post-deploy steps (`bump-shard-templates`,
+  `roll-all`) need a running coordinator, so they did not run until the
+  second deploy. Scale up before expecting the shard roll.
+- **The Lambdas need no manual step.** `release.yml`, triggered by the status
+  server after a healthy deploy, rebuilds and redeploys both on every release.
+- **`make collapse` ran by itself** (bot commit after the healthy deploy).
+- **Tooling gaps found:** `kevcons ssh --role X --instance-id I --command C`
+  ignores `--command` (opens an interactive session); `kevcons ssh --name
+  <tag>` was added for the status server (management account, no ASG); the
+  shard systemd unit logs to `/opt/app/logs/shard.log`, not the journal.
 
 ## Risks
 

@@ -264,38 +264,6 @@ var migrationSteps = []string{
 	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS duration_ns BIGINT`,
 }
 
-// convertLegacyCustomerColumn upgrades a logs table written before
-// customer-bigint-pk (a `customer TEXT` tenant name) to `customer_id BIGINT`.
-// It is not one of migrationSteps because those swallow errors: here a failed
-// backfill must abort, since the drop that follows it destroys the only record
-// of which tenant a row belongs to.
-//
-// Cutover-only: the two live tenants' names map to their fixed ids
-// (graybeard=1, loom=2, per docs/plans/customer-bigint-pk.md); any other name
-// is unattributable and becomes NULL, which no tenant's customer_id predicate
-// matches. Delete this once no pre-cutover volume remains.
-func convertLegacyCustomerColumn(db *sql.DB) error {
-	var legacy int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.columns
-		WHERE table_name = 'logs' AND column_name = 'customer'`).Scan(&legacy); err != nil {
-		return fmt.Errorf("detect legacy customer column: %w", err)
-	}
-	if legacy == 0 {
-		return nil
-	}
-	for _, step := range []string{
-		`ALTER TABLE logs ADD COLUMN IF NOT EXISTS customer_id BIGINT`,
-		`UPDATE logs SET customer_id = CASE customer WHEN 'graybeard' THEN 1 WHEN 'loom' THEN 2 END
-			WHERE customer_id IS NULL AND customer IS NOT NULL`,
-		`ALTER TABLE logs DROP COLUMN customer`,
-	} {
-		if _, err := db.Exec(step); err != nil {
-			return fmt.Errorf("convert legacy customer column: %w", err)
-		}
-	}
-	return nil
-}
-
 // NewDuckDBShard opens or creates a DuckDB database at path and initializes the
 // logs table. Use "" or ":memory:" for an in-memory database.
 func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
@@ -312,10 +280,6 @@ func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
 	// shards. Either way the schema converges to the CREATE TABLE shape.
 	for _, step := range migrationSteps {
 		_, _ = db.Exec(step)
-	}
-	if err := convertLegacyCustomerColumn(db); err != nil {
-		db.Close()
-		return nil, err
 	}
 	ds := &DuckDBShard{id: id, dbPath: path, db: db}
 	// Seed rowCount from the on-disk table so a shard recovering off a
