@@ -96,3 +96,24 @@ func TestLoadWithClient_InvalidJSONFallsBack(t *testing.T) {
 		t.Errorf("expected defaults on bad JSON")
 	}
 }
+
+func TestOverlay_CronShadowClaims(t *testing.T) {
+	r := Defaults()
+	if r.CronShadowClaims {
+		t.Fatal("shadow claims must default to off")
+	}
+	r.Overlay(map[string]string{keyCronShadowClaims: "true"})
+	if !r.CronShadowClaims {
+		t.Error("CRON_SHADOW_CLAIMS=true should enable it")
+	}
+	// A bad or empty value must not flip a setting that is already on.
+	r.Overlay(map[string]string{keyCronShadowClaims: "maybe"})
+	r.Overlay(map[string]string{keyCronShadowClaims: ""})
+	if !r.CronShadowClaims {
+		t.Error("bad/empty value overwrote the setting")
+	}
+	r.Overlay(map[string]string{keyCronShadowClaims: "false"})
+	if r.CronShadowClaims {
+		t.Error("CRON_SHADOW_CLAIMS=false should disable it")
+	}
+}

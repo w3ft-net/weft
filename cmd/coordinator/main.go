@@ -229,6 +229,19 @@ func main() {
 	}
 	coord.Provisioner = prov
 
+	// Runtime config watcher — powers IngestStream's per-stream byte
+	// budget via an atomic pointer the service reads on every accepted
+	// stream. GRPCMaxRecvBytes is read exactly once here because gRPC's
+	// MaxRecvMsgSize is a ServerOption evaluated at NewServer time.
+	appName := os.Getenv("APP_NAME")
+	if appName == "" {
+		appName = "weft"
+	}
+	cfgCtx, cfgCancel := context.WithCancel(context.Background())
+	defer cfgCancel()
+	cfgPtr := weftcfg.Watch(cfgCtx, appName, *awsRegion, 60*time.Second)
+	bootCfg := cfgPtr.Load()
+
 	// Post-provisioner db-dependent setup: usage metering, customer
 	// seeding, archived-shard rehydration. Everything above
 	// already took its snapshot of the store at boot time for
@@ -256,6 +269,9 @@ func main() {
 			Coord:    coord,
 			Notifier: notifier,
 			Holder:   holder,
+			// Read live, so flipping CRON_SHADOW_CLAIMS in the runtime
+			// config starts or stops the shadow within a config refresh.
+			ShadowClaims: func() bool { return cfgPtr.Load().CronShadowClaims },
 		}
 		cronExec.Start(ctx)
 
@@ -310,19 +326,6 @@ func main() {
 		"/weft.WeftCoordinator/Authenticate":    true,
 		"/weft.WeftCoordinator/Heartbeat":       true,
 	}
-
-	// Runtime config watcher — powers IngestStream's per-stream byte
-	// budget via an atomic pointer the service reads on every accepted
-	// stream. GRPCMaxRecvBytes is read exactly once here because gRPC's
-	// MaxRecvMsgSize is a ServerOption evaluated at NewServer time.
-	appName := os.Getenv("APP_NAME")
-	if appName == "" {
-		appName = "weft"
-	}
-	cfgCtx, cfgCancel := context.WithCancel(context.Background())
-	defer cfgCancel()
-	cfgPtr := weftcfg.Watch(cfgCtx, appName, *awsRegion, 60*time.Second)
-	bootCfg := cfgPtr.Load()
 
 	// HTTP liveness endpoint. Deliberately minimal — just 200 OK on
 	// /health so docker compose's healthcheck, the integration harness

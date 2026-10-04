@@ -31,9 +31,16 @@ type CronExecutor struct {
 	// Claims is the slot-claim backend for claim-mode crons. Nil means
 	// Store; tests substitute it for fault injection.
 	Claims slotClaimer
+	// ShadowClaims reports whether the shadow claimer (cron_shadow.go) is
+	// enabled. Nil means off. Read every tick, so it doubles as a kill
+	// switch.
+	ShadowClaims func() bool
 
 	mu      sync.Mutex
 	cancels map[uint]*cronRun // watchID → running goroutine
+	// shadowWatches is the lease-mode (not tombstoned) enabled crons as of
+	// the last reconcile, for the shadow claimer to read.
+	shadowWatches []store.CronWatch
 }
 
 // cronRun is one running per-watch goroutine. Identity (the pointer) is what
@@ -51,6 +58,7 @@ func (ce *CronExecutor) Start(ctx context.Context) {
 
 	// Initial load.
 	ce.reconcile(ctx)
+	go ce.runShadow(ctx)
 	log.Printf("cron: started (%d watches)", len(ce.cancels))
 
 	// Reconcile loop: pick up new/changed/deleted watches.
@@ -95,9 +103,14 @@ func (ce *CronExecutor) reconcile(ctx context.Context) {
 
 	// Build set of active watch IDs.
 	active := make(map[uint]bool)
+	shadow := make([]store.CronWatch, 0, len(watches))
+	defer func() { ce.shadowWatches = shadow }()
 	for _, w := range watches {
 		active[w.ID] = true
 		tombstonedAt, claims := tombstones[w.ID]
+		if !claims {
+			shadow = append(shadow, w)
+		}
 		run, running := ce.cancels[w.ID]
 		if running && run.claims == claims {
 			continue
