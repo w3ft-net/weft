@@ -197,3 +197,96 @@ has happened yet either).
 **Status:** open, low priority. Candidate fix: wrap each shard/bucket
 `Evaluate` call in a per-call `context.WithTimeout`.
 
+## Cron runs have no gap detection; handoffs silently skip or double-cover a window
+
+**Where:** `coordinator/cron.go` (`runWatch`, `executeWatch`,
+`watchQueryRange`), `store.ParseScheduleInterval`, and `cron_results`
+(which records `ran_at` but not which window a run covered).
+
+**Symptom:** when a cron's owner stops, loses its lease, or hands it to
+another coordinator, a stretch of time is either never queried or queried
+twice, and nothing records which. Specifically:
+
+- Every run queries `[now-interval, now]` (`watchQueryRange`). That tiles
+  run to run only if runs are exactly one interval apart.
+- `runWatch` runs once immediately on acquiring the lease and then starts
+  a fresh ticker. So every acquisition (restart, roll, handoff) fires
+  early with a window that overlaps the previous run's, double-counting
+  rows, and resets the cron's phase. Rough estimate, not measured: a roll
+  of the two coordinators moves each cron's lease once or twice, so up to
+  ~35-70 early extra runs for today's 35 crons.
+- A stretch with no owner leaves a hole nothing marks. Cron leases have a
+  30s TTL (`store.LeaseTTL`) and are not released on shutdown (only
+  `nat-holder` and `shard-fsm-leader` have a release path, and the first
+  entry above suggests even that may not fire when `GracefulStop()` stalls).
+  After a longer outage the first run covers only the last interval.
+- `cron_results` has `ran_at` only, so a gap can't be told from a schedule
+  edit, and an overlap can't be seen at all, without inferring from spacing.
+- The planner's time bounds are closed (`ts >= start AND ts <= end`,
+  `planner/sql.go` `addTimeBounds`). Any scheme that gives adjacent windows
+  a shared endpoint double-counts rows stamped exactly on it, which matters
+  once boundaries are round and logs carry second-resolution timestamps.
+
+**Root cause:** execution is driven by a per-process ticker whose phase is
+"when this process got the lease", the window comes from the wall clock at
+run time, and results are keyed only by when they ran. Nothing ties a
+result to a scheduled slot, so there is nothing to compare against.
+
+**Built, not wired:** `coordinator/cron_slot.go` is the pure slot/window
+logic, with tests and a mutation pass (see its commit). Slot `k` of
+interval `I` covers the epoch-aligned window closing at `k*I`, identical
+for every cron of that interval; `Window()` ends 1µs before the boundary to
+suit the closed bounds; a cron fires at boundary + settle + a stable
+per-watch jitter in `[0, min(I/2, 30s))`; `LatestDueSlot` returns only the
+latest due slot, so missed slots are skipped, never replayed; the claim key
+is `cron:<watch>:<interval>:<k>`. `runWatch` does not call it yet.
+
+**What's left** (design agreed 2026-10-04):
+
+1. Gap detection as a pure function: given the previous run's window end
+   and size and the current slot, return how many slots were missed, and
+   whether to report at all (not when the interval changed since the last
+   run, or the cron was disabled in between).
+2. Record the window. Add nullable `window_end timestamptz` and
+   `window_secs int` to `cron_results`, and persist them in
+   `persistResults`. Add `last_window_end` / `last_window_secs` to
+   `cron_watches`, written with the existing `last_run_at` update. Gaps are
+   then derived by SQL (`window_end - lag(window_end) - window_secs`); a
+   multi-row cron (alert_key set) writes several rows per run, so dedupe on
+   `(cron_watch_id, window_end)`. Failed runs still write a row
+   (`exit_code = 1`), so they never look like gaps. The partman template
+   table `partman.template_public_cron_results` needs the same columns,
+   guarded as migration 078 did for the other prod-only partman objects.
+3. Log `cron[<name>]: skipped N slot(s) (<from>..<to>)` at detection. The log
+   line ships into weft, so a cron can alert on it. No extra query: the new
+   owner reads the previous window with the watch it already loads.
+4. Wire `runWatch` to slots and an exactly-once claim, and drop the
+   immediate run on acquire (keep an explicit run on create/edit). The claim
+   store is undecided: a unique key in Postgres, or DynamoDB with a TTL.
+
+**Policy decided:** skip and record; do not replay or widen. Widening a
+window across N missed intervals inflates count-style values N-fold and can
+page falsely; replay bursts every cron's queries on recovery and sends stale
+alerts. A per-cron `catchup` option can come later if someone needs it.
+
+**Does not fix:** rows that land after a run has already queried their
+window. Windows are over each row's `ts`, so a late row (for instance a
+`weftd` spool delivered after an outage) is never counted by the cron for
+its window. Contiguous means no overlap and no hole as of run time, not
+complete.
+
+**Why it matters:** alert and metric crons see inflated or missing windows
+around every coordinator roll, and there is no record that it happened.
+Nothing is on fire: results are only wrong near handoffs, and the crons
+that exist today mostly read gauges, not counts.
+
+**Related:** the schedule parser collapses 5-field cron strings into plain
+intervals and falls back to 5 minutes for shapes it doesn't recognise (by
+reading `ParseScheduleInterval`, e.g. `0 9 * * *` would run every 5
+minutes), while `docs/manual/crons.md` shows cron syntax as the format.
+Slots keyed by nominal time would make real cron expressions possible; that
+is a separate decision and not covered here.
+
+**Status:** open. Design agreed, pure slot logic written and unwired,
+nothing recorded yet.
+
