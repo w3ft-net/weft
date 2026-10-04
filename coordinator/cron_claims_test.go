@@ -148,7 +148,7 @@ func TestClaimTickFailsClosedAndRetries(t *testing.T) {
 	ce := env.executor("a")
 	st := &cronClaimState{watch: env.watch}
 	tombstoned := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
-	// Past slot 12:05's fire time (boundary + settle + jitter <= 30s).
+	// Past slot 12:05's fire time (boundary + settle + jitter < 60s).
 	now := time.Date(2026, 10, 4, 12, 6, 0, 0, time.UTC)
 
 	env.claims.err = errors.New("db down")

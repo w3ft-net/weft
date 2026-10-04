@@ -127,8 +127,22 @@ client IPs over the Oct 4 hours sampled, more replacement than rolls explain.
   unaffected.
 - Lost-lease-then-restart (the latent bug above).
 
+## Settle time
+
+A slot fires at window close + `cronSettle` + per-watch jitter, so rows
+still in flight can land before the window is queried; an early query
+undercounts that window permanently. `cronSettle` is 30s. That covers weftd
+(sub-second) and the coordinator's 2s shard batching with room to spare, and
+most of CloudWatch's 5-60s agent batching. It does not cover the CloudWatch
+tail: a cron over CloudWatch-sourced logs can still undercount, and
+`below`/`absent` alerts on one can false-fire. The real fix is a per-source
+settle derived from the sources a pipeline reads; not built. Lease mode has
+no settle at all, so this is not a regression. Cost of 30s: alerts fire up
+to 30s later, small against the 5m minimum interval for trial tier.
+
 ## Open decisions
 
 - Shadow flag default off, enabled through runtime config after the deploy is
   confirmed healthy (assumed).
 - `coord-uptime` as the canary (assumed).
+- Per-source settle for CloudWatch-sourced crons (not scheduled).

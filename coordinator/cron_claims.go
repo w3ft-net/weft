@@ -10,8 +10,13 @@ import (
 
 const (
 	// cronSettle is how long after a window closes a cron waits before
-	// querying it, so rows still in flight from ingest can land.
-	cronSettle = 5 * time.Second
+	// querying it, so rows still in flight from ingest can land. weftd and
+	// the coordinator's 2s shard batching need only a few seconds;
+	// CloudWatch-sourced rows can lag 5-60s (docs/ingestion-weftd.md), and
+	// a window queried early is undercounted for good. 30s covers most of
+	// that; the 60s tail needs a per-source settle (see
+	// docs/plans/cron-claims-rollout.md).
+	cronSettle = 30 * time.Second
 	// cronClaimPoll is how often a claim-mode cron checks whether a new
 	// slot is due. Checking is a clock comparison; the database is only
 	// touched when a new slot comes due.
