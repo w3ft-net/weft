@@ -24,18 +24,30 @@ type CronExecutor struct {
 	// lease that guards execution once the coordinator ASG scales past
 	// 1 instance — see docs/plans/coordinator-horizontal-scaling.md.
 	Holder string
-	// Execute fires one run of a watch. Nil means executeWatch; tests
-	// substitute it so scheduling can be exercised without a Coordinator.
-	Execute func(store.CronWatch)
+	// Execute fires one run of a watch over tr. Nil means executeWatch;
+	// tests substitute it so scheduling can be exercised without a
+	// Coordinator.
+	Execute func(w store.CronWatch, tr TimeRange)
+	// Claims is the slot-claim backend for claim-mode crons. Nil means
+	// Store; tests substitute it for fault injection.
+	Claims slotClaimer
 
 	mu      sync.Mutex
-	cancels map[uint]context.CancelFunc // watchID → cancel
+	cancels map[uint]*cronRun // watchID → running goroutine
+}
+
+// cronRun is one running per-watch goroutine. Identity (the pointer) is what
+// forgetWatch compares, so a goroutine that outlives its replacement can
+// never delete the replacement's entry.
+type cronRun struct {
+	cancel context.CancelFunc
+	claims bool // claim mode (tombstoned) rather than lease mode
 }
 
 // Start begins the cron executor. It loads watches from the database,
 // spawns a goroutine for each enabled watch, and reconciles every 30 seconds.
 func (ce *CronExecutor) Start(ctx context.Context) {
-	ce.cancels = make(map[uint]context.CancelFunc)
+	ce.cancels = make(map[uint]*cronRun)
 
 	// Initial load.
 	ce.reconcile(ctx)
@@ -45,6 +57,8 @@ func (ce *CronExecutor) Start(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
+		prune := time.NewTicker(time.Hour)
+		defer prune.Stop()
 		for {
 			select {
 			case <-ctx.Done():
@@ -52,6 +66,8 @@ func (ce *CronExecutor) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				ce.reconcile(ctx)
+			case <-prune.C:
+				ce.pruneClaims()
 			}
 		}
 	}()
@@ -69,22 +85,43 @@ func (ce *CronExecutor) reconcile(ctx context.Context) {
 	ce.mu.Lock()
 	defer ce.mu.Unlock()
 
+	tombstones, err := ce.Store.CronTombstones()
+	if err != nil {
+		// Without the tombstone set a claim-mode cron could be started
+		// under a lease. Leave everything as it is and retry next tick.
+		log.Printf("cron: failed to list tombstones: %v", err)
+		return
+	}
+
 	// Build set of active watch IDs.
 	active := make(map[uint]bool)
 	for _, w := range watches {
 		active[w.ID] = true
-		if _, running := ce.cancels[w.ID]; !running {
-			// Start new watch.
-			watchCtx, cancel := context.WithCancel(ctx)
-			ce.cancels[w.ID] = cancel
-			go ce.runWatch(watchCtx, w)
+		tombstonedAt, claims := tombstones[w.ID]
+		run, running := ce.cancels[w.ID]
+		if running && run.claims == claims {
+			continue
+		}
+		if running {
+			// Mode changed (tombstoned, or rolled back): stop the old
+			// goroutine and start one in the new mode.
+			run.cancel()
+			log.Printf("cron[%s]: mode change, claims=%v", w.Name, claims)
+		}
+		watchCtx, cancel := context.WithCancel(ctx)
+		run = &cronRun{cancel: cancel, claims: claims}
+		ce.cancels[w.ID] = run
+		if claims {
+			go ce.runClaims(watchCtx, w, tombstonedAt, run)
+		} else {
+			go ce.runWatch(watchCtx, w, run)
 		}
 	}
 
 	// Stop watches that are no longer enabled.
-	for id, cancel := range ce.cancels {
+	for id, run := range ce.cancels {
 		if !active[id] {
-			cancel()
+			run.cancel()
 			delete(ce.cancels, id)
 		}
 	}
@@ -94,39 +131,38 @@ func (ce *CronExecutor) reconcile(ctx context.Context) {
 func (ce *CronExecutor) stopAll() {
 	ce.mu.Lock()
 	defer ce.mu.Unlock()
-	for id, cancel := range ce.cancels {
-		cancel()
+	for id, run := range ce.cancels {
+		run.cancel()
 		delete(ce.cancels, id)
 	}
 }
 
-// forgetWatch removes a watch's cancel-tracking entry so the next
-// reconcile tick retries it. Needed because reconcile stores the cancel
-// func and spawns runWatch before knowing whether it'll actually start —
-// if runWatch bails immediately (lease held elsewhere), reconcile would
-// otherwise believe the watch is running forever and never retry, even
-// after the other holder dies and the lease frees up.
-func (ce *CronExecutor) forgetWatch(id uint) {
+// forgetWatch removes a watch's tracking entry so the next reconcile tick
+// retries it. Needed because reconcile stores the entry and spawns the
+// goroutine before knowing whether it'll actually run — if runWatch bails
+// (lease held elsewhere) or loses its lease later, reconcile would otherwise
+// believe the watch is running forever and never retry, even after the
+// other holder dies and the lease frees up. Only removes run's own entry:
+// reconcile may already have replaced it (mode change) and that
+// replacement must survive.
+func (ce *CronExecutor) forgetWatch(id uint, run *cronRun) {
 	ce.mu.Lock()
 	defer ce.mu.Unlock()
-	delete(ce.cancels, id)
+	if ce.cancels[id] == run {
+		delete(ce.cancels, id)
+	}
 }
 
 // runWatch executes a single cron watch on its schedule.
-func (ce *CronExecutor) runWatch(ctx context.Context, watch store.CronWatch) {
+func (ce *CronExecutor) runWatch(ctx context.Context, watch store.CronWatch, run *cronRun) {
 	interval := parseSchedule(watch.Schedule)
 
 	// Defensive: skip watches that violate the minimum interval for their tier.
 	// This shouldn't happen if saves are validated, but belt-and-suspenders.
 	// Checked before acquiring the lease below — no point squatting on it
 	// for a watch that's never going to run.
-	if tier := ce.tierForWatch(watch); tier != "" {
-		minInterval := store.MinWatchInterval(tier)
-		if minInterval > 0 && interval < minInterval {
-			log.Printf("cron[%s]: skipping — interval %s is below minimum %s for tier %s",
-				watch.Name, interval, minInterval, tier)
-			return
-		}
+	if !ce.intervalAllowed(watch, interval) {
+		return
 	}
 
 	// Only one coordinator instance may run a given watch at a time —
@@ -136,16 +172,15 @@ func (ce *CronExecutor) runWatch(ctx context.Context, watch store.CronWatch) {
 	leaseCtx, ok := store.AcquireAndHold(ctx, ce.Store, leaseName, ce.Holder)
 	if !ok {
 		log.Printf("cron[%s]: lease held by another coordinator instance, not running", watch.Name)
-		ce.forgetWatch(watch.ID)
+		ce.forgetWatch(watch.ID, run)
 		return
 	}
-	parent := ctx
 	ctx = leaseCtx
 
 	log.Printf("cron[%s]: started (every %s)", watch.Name, interval)
 
 	// Run immediately on first tick.
-	ce.fire(watch)
+	ce.fire(watch, watchQueryRange(watch.Schedule, time.Now()))
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -154,16 +189,10 @@ func (ce *CronExecutor) runWatch(ctx context.Context, watch store.CronWatch) {
 		select {
 		case <-ctx.Done():
 			log.Printf("cron[%s]: stopped", watch.Name)
-			// A live parent means the lease was lost, not that reconcile
-			// or stopAll cancelled us (they remove the entry themselves).
-			// Forget it so reconcile can restart the cron here once the
-			// lease is obtainable again; without this the stale entry
-			// makes reconcile think it is still running. Not done
-			// unconditionally: a cancelled watch may already have been
-			// replaced by a fresh entry under the same id.
-			if parent.Err() == nil {
-				ce.forgetWatch(watch.ID)
-			}
+			// Reached on lease loss as well as on reconcile/stopAll
+			// cancellation; forgetWatch is a no-op unless this goroutine's
+			// entry is still the current one.
+			ce.forgetWatch(watch.ID, run)
 			return
 		case <-ticker.C:
 			// Reload watch from DB in case pipeline/schedule changed.
@@ -172,9 +201,25 @@ func (ce *CronExecutor) runWatch(ctx context.Context, watch store.CronWatch) {
 				log.Printf("cron[%s]: failed to reload: %v", watch.Name, err)
 				continue
 			}
-			ce.fire(*updated)
+			ce.fire(*updated, watchQueryRange(updated.Schedule, time.Now()))
 		}
 	}
+}
+
+// intervalAllowed reports whether interval meets the minimum for the watch's
+// tier. Saves are validated, so this is belt-and-suspenders; it is checked
+// before any lease or claim is taken, since there is no point squatting on
+// a watch that will never run.
+func (ce *CronExecutor) intervalAllowed(watch store.CronWatch, interval time.Duration) bool {
+	if tier := ce.tierForWatch(watch); tier != "" {
+		minInterval := store.MinWatchInterval(tier)
+		if minInterval > 0 && interval < minInterval {
+			log.Printf("cron[%s]: skipping — interval %s is below minimum %s for tier %s",
+				watch.Name, interval, minInterval, tier)
+			return false
+		}
+	}
+	return true
 }
 
 // resolvePipeline trims the stored pipeline for execution. /bin/ script
@@ -188,21 +233,20 @@ func (ce *CronExecutor) resolvePipeline(watch store.CronWatch) string {
 	return strings.TrimSpace(watch.Pipeline)
 }
 
-func (ce *CronExecutor) fire(watch store.CronWatch) {
+func (ce *CronExecutor) fire(watch store.CronWatch, tr TimeRange) {
 	if ce.Execute != nil {
-		ce.Execute(watch)
+		ce.Execute(watch, tr)
 		return
 	}
-	ce.executeWatch(watch)
+	ce.executeWatch(watch, tr)
 }
 
 // executeWatch runs the watch's pipeline and records the result.
-func (ce *CronExecutor) executeWatch(watch store.CronWatch) {
+func (ce *CronExecutor) executeWatch(watch store.CronWatch, tr TimeRange) {
 	start := time.Now()
 
 	pipeline := ce.resolvePipeline(watch)
 
-	tr := watchQueryRange(watch.Schedule, start)
 	// ExecuteForWatch runs the query and (if the pipeline ends with `| alert`)
 	// evaluates the alert in the watch's AlertContext — incident dedup and
 	// notifier dispatch both key off the watch identity instead of an

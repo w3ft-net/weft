@@ -85,3 +85,25 @@ func (s *Store) CronTombstone(watchID uint) (acquiredAt time.Time, ok bool, err 
 	}
 	return rows[0].AcquiredAt, true, nil
 }
+
+// CronTombstones returns every cron in claim mode, keyed by watch ID, with
+// the time it was tombstoned. One query per reconcile tick.
+func (s *Store) CronTombstones() (map[uint]time.Time, error) {
+	var rows []struct {
+		Name       string
+		AcquiredAt time.Time
+	}
+	err := s.db.Raw(`SELECT name, acquired_at FROM leases WHERE holder = ? AND name LIKE 'cron:%'`,
+		CronClaimsHolder).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uint]time.Time, len(rows))
+	for _, r := range rows {
+		var id uint
+		if _, err := fmt.Sscanf(r.Name, "cron:%d", &id); err == nil {
+			out[id] = r.AcquiredAt
+		}
+	}
+	return out, nil
+}

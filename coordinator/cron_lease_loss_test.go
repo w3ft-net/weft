@@ -34,23 +34,27 @@ func TestCronLeaseLossThenRestart(t *testing.T) {
 	t.Cleanup(func() {
 		adb.Exec(`DELETE FROM leases WHERE name = ?`, leaseName)
 		adb.Unscoped().Delete(&w)
+		// Other coordinator tests assume the pooled fixture DB holds a
+		// single org, so don't leave ours behind.
+		adb.Exec(`DELETE FROM organizations WHERE id = ?`, org.ID)
 	})
 
 	var runs atomic.Int32
 	ce := &CronExecutor{
 		Store:   db,
 		Holder:  "me",
-		Execute: func(store.CronWatch) { runs.Add(1) },
-		cancels: map[uint]context.CancelFunc{},
+		Execute: func(store.CronWatch, TimeRange) { runs.Add(1) },
+		cancels: map[uint]*cronRun{},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	ce.mu.Lock()
 	wctx, wcancel := context.WithCancel(ctx)
-	ce.cancels[w.ID] = wcancel
+	run := &cronRun{cancel: wcancel}
+	ce.cancels[w.ID] = run
 	ce.mu.Unlock()
-	go ce.runWatch(wctx, w)
+	go ce.runWatch(wctx, w, run)
 	mustWait(t, 5*time.Second, func() bool { return runs.Load() == 1 }, "first run")
 
 	// Another coordinator takes the lease out from under us; our next
