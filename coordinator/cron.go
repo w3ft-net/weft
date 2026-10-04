@@ -24,6 +24,9 @@ type CronExecutor struct {
 	// lease that guards execution once the coordinator ASG scales past
 	// 1 instance — see docs/plans/coordinator-horizontal-scaling.md.
 	Holder string
+	// Execute fires one run of a watch. Nil means executeWatch; tests
+	// substitute it so scheduling can be exercised without a Coordinator.
+	Execute func(store.CronWatch)
 
 	mu      sync.Mutex
 	cancels map[uint]context.CancelFunc // watchID → cancel
@@ -136,12 +139,13 @@ func (ce *CronExecutor) runWatch(ctx context.Context, watch store.CronWatch) {
 		ce.forgetWatch(watch.ID)
 		return
 	}
+	parent := ctx
 	ctx = leaseCtx
 
 	log.Printf("cron[%s]: started (every %s)", watch.Name, interval)
 
 	// Run immediately on first tick.
-	ce.executeWatch(watch)
+	ce.fire(watch)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -150,6 +154,16 @@ func (ce *CronExecutor) runWatch(ctx context.Context, watch store.CronWatch) {
 		select {
 		case <-ctx.Done():
 			log.Printf("cron[%s]: stopped", watch.Name)
+			// A live parent means the lease was lost, not that reconcile
+			// or stopAll cancelled us (they remove the entry themselves).
+			// Forget it so reconcile can restart the cron here once the
+			// lease is obtainable again; without this the stale entry
+			// makes reconcile think it is still running. Not done
+			// unconditionally: a cancelled watch may already have been
+			// replaced by a fresh entry under the same id.
+			if parent.Err() == nil {
+				ce.forgetWatch(watch.ID)
+			}
 			return
 		case <-ticker.C:
 			// Reload watch from DB in case pipeline/schedule changed.
@@ -158,7 +172,7 @@ func (ce *CronExecutor) runWatch(ctx context.Context, watch store.CronWatch) {
 				log.Printf("cron[%s]: failed to reload: %v", watch.Name, err)
 				continue
 			}
-			ce.executeWatch(*updated)
+			ce.fire(*updated)
 		}
 	}
 }
@@ -172,6 +186,14 @@ func (ce *CronExecutor) runWatch(ctx context.Context, watch store.CronWatch) {
 // through the same server-side machinery.
 func (ce *CronExecutor) resolvePipeline(watch store.CronWatch) string {
 	return strings.TrimSpace(watch.Pipeline)
+}
+
+func (ce *CronExecutor) fire(watch store.CronWatch) {
+	if ce.Execute != nil {
+		ce.Execute(watch)
+		return
+	}
+	ce.executeWatch(watch)
 }
 
 // executeWatch runs the watch's pipeline and records the result.
