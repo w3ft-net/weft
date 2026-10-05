@@ -38,8 +38,7 @@ valid).
   `cron_results` row per slot, no duplicate, no skipped slot.
 - **Phase 2 ramp applied.** All 37 crons are on claims: batch A (5) 14:45,
   batch B (22) 15:22, batch C (7 paging) 15:59, batch D (2 hourly) 16:41 UTC.
-  A, B and C passed their gates; D is soaking (needs two hourly slots).
-  Results under Phase 2.
+  All four passed their gates. **Phase 2 is complete.** Results under Phase 2.
 - **Overdue guard deployed** (`0cf7130`, rolled 12:56-13:09 UTC). Log-only for
   tenants without a `system` alias.
 - **Temporary state to remove after the rollout:** `CRON_SHADOW_CLAIMS=true`
@@ -185,7 +184,14 @@ either. Do the log counts with simple greps: nested quoting through
 | A | 8, 10, 18, 20, 22 (collectors) | 14:45:33 | 1m crons 33 claims / span 33, 5m crons 6 / 6; 0 holes; all ran within 2 intervals |
 | B | 22 non-paging crons incl. org 2's 28 and 29 | 15:22:01 | 205 slots, 0 holes, >= 2 real slots each; 0 overdue; 0 errors |
 | C | 2, 3, 4, 13, 17, 24, 25 (paging) | 15:59:34 | 132 slots, 0 holes, >= 3 slots each; 0 overdue; worst run age 1.00 intervals; 0 errors |
-| D | 15, 21 (hourly) | 16:41:06 | soaking until two real slots (17:00, 18:00) |
+| D | 15, 21 (hourly) | 16:41:06 | three real slots each (17:00, 18:00, 19:00); see final gate |
+
+**Final gate (19:25 UTC, all 37 crons).** 4,202 claim slots, 0 holes, no cron
+with fewer than 3 slots; 0 overdue, worst last run 0.97 intervals; 0 errors,
+overdue lines or panics on either coordinator. Both coordinators were
+replaced at 18:12 and 18:18 by an instance refresh (a deploy), and both new
+ones came up with all 37 crons in `claims`: the whole claim-mode fleet went
+through a full coordinator roll with no holes.
 
 The canary (`coord-uptime`) had 724 claims over a span of 724 from 03:15 to
 15:18 across three coordinator replacements.
