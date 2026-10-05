@@ -35,6 +35,9 @@ type CronExecutor struct {
 	// enabled. Nil means off. Read every tick, so it doubles as a kill
 	// switch.
 	ShadowClaims func() bool
+	// SendOverdue delivers an overdue page. Nil means Notifier.Send;
+	// tests substitute it.
+	SendOverdue func(orgID store.OrgID, alias, watchName, body string) error
 
 	mu      sync.Mutex
 	cancels map[uint]*cronRun // watchID → running goroutine
@@ -59,6 +62,7 @@ func (ce *CronExecutor) Start(ctx context.Context) {
 	// Initial load.
 	ce.reconcile(ctx)
 	go ce.runShadow(ctx)
+	go ce.runOverdueGuard(ctx)
 	log.Printf("cron: started (%d watches)", len(ce.cancels))
 
 	// Reconcile loop: pick up new/changed/deleted watches.
@@ -219,18 +223,26 @@ func (ce *CronExecutor) runWatch(ctx context.Context, watch store.CronWatch, run
 	}
 }
 
+// intervalBelowMin reports whether interval is under the minimum for the
+// watch's tier, with the tier and minimum for the message. Saves are
+// validated, so this is belt-and-suspenders.
+func (ce *CronExecutor) intervalBelowMin(watch store.CronWatch, interval time.Duration) (tier store.Tier, min time.Duration, below bool) {
+	tier = ce.tierForWatch(watch)
+	if tier == "" {
+		return tier, 0, false
+	}
+	min = store.MinWatchInterval(tier)
+	return tier, min, min > 0 && interval < min
+}
+
 // intervalAllowed reports whether interval meets the minimum for the watch's
-// tier. Saves are validated, so this is belt-and-suspenders; it is checked
-// before any lease or claim is taken, since there is no point squatting on
-// a watch that will never run.
+// tier, logging when it does not. It is checked before any lease or claim is
+// taken, since there is no point squatting on a watch that will never run.
 func (ce *CronExecutor) intervalAllowed(watch store.CronWatch, interval time.Duration) bool {
-	if tier := ce.tierForWatch(watch); tier != "" {
-		minInterval := store.MinWatchInterval(tier)
-		if minInterval > 0 && interval < minInterval {
-			log.Printf("cron[%s]: skipping — interval %s is below minimum %s for tier %s",
-				watch.Name, interval, minInterval, tier)
-			return false
-		}
+	if tier, min, below := ce.intervalBelowMin(watch, interval); below {
+		log.Printf("cron[%s]: skipping — interval %s is below minimum %s for tier %s",
+			watch.Name, interval, min, tier)
+		return false
 	}
 	return true
 }

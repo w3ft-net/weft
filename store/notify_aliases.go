@@ -8,6 +8,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// SystemAlias is the reserved alias name a tenant defines in notify.yaml to
+// receive alerts the platform raises on their behalf, as opposed to alerts a
+// cron's own `alert` stage raises. It is an ordinary alias with ordinary
+// targets; a tenant that does not define it simply receives none. Today the
+// only such alert is a cron going overdue (coordinator/cron_overdue.go).
+const SystemAlias = "system"
+
 // AliasMap is the parsed form of /etc/notify.yaml. Keys are alias names
 // that cron watches reference via `notify: <alias>`. Each value bundles
 // per-service target lists.
