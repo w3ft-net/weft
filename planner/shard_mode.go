@@ -5,8 +5,9 @@ import "strings"
 // classifyShardMode decides the shard's ORDER BY + LIMIT for the
 // direct-to-compute path. See docs/plans/direct-to-compute.md §3:
 //
-//	Mode A (default — no sort) → "ts" ordering, direction from
-//	                             a terminal head/tail, limit = plan.Limit.
+//	Mode A (default — no sort, or any upstream head/tail limit)
+//	                           → "ts" ordering, direction from
+//	                             the head/tail, limit = plan.Limit.
 //	Mode B (plain sort first)  → "raw" ordering, direction from sort -r.
 //	                             Limit only if already pushed (plan.Limit).
 //	Mode C (sort flags, or any transforming stage before sort) → no
@@ -27,8 +28,15 @@ import "strings"
 func classifyShardMode(computeStages []string, orderDesc bool, limit int) (order string, shardLimit int) {
 	sortIdx, sortFields := findLastSort(computeStages)
 
-	// --- Mode A: no sort anywhere ---------------------------------
-	if sortIdx < 0 {
+	// --- Mode A: no sort anywhere, or a head/tail limit was pushed ---
+	// A pushed limit (limit > 0) is only ever set by a head/tail that
+	// precedes every compute stage, and `sort` is never pushable, so a
+	// sort in computeStages necessarily runs *after* the limit:
+	// `tail -N | … | sort` means "sort the newest N rows". The shard
+	// must therefore select by ts (the head/tail's own order) and let
+	// compute sort the survivors; ordering the shard by raw would
+	// return the lexicographically smallest N instead.
+	if sortIdx < 0 || limit > 0 {
 		if orderDesc {
 			return "ts DESC", limit
 		}

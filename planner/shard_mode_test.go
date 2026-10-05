@@ -1,6 +1,8 @@
 package planner
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -262,5 +264,68 @@ func TestClassifyShardMode_HeadAfterSort_StaysSafe(t *testing.T) {
 	// sort" to mirror its limit onto shards lives in a follow-up.
 	if plan.ShardLimit != 0 {
 		t.Errorf("ShardLimit = %d, want 0 (no limit pushed when head follows sort)", plan.ShardLimit)
+	}
+}
+
+// TestTailThenSort_PushesNewestNByTs pins that a leading tail limit keeps
+// its per-shard "newest N by ts" pushdown no matter what a later sort
+// (or a jq that may or may not fold into the projection) does.
+// `tail -N | … | sort` means "sort the newest N rows", so each shard
+// must return its ts DESC top-N and compute must keep the global newest
+// N by ts (TailMode / KeepLast) before sort runs.
+//
+// Today classifyShardMode ignores the tail limit once a sort is
+// present: plain `sort` first → ORDER BY raw LIMIT N (the
+// lexicographically smallest N, not the newest), and any transforming
+// stage before sort → no ORDER BY / LIMIT at all, so compute's KeepLast
+// keeps the last N rows to *arrive* — whichever shard finishes last wins.
+func TestTailThenSort_PushesNewestNByTs(t *testing.T) {
+	cases := []struct {
+		name     string
+		pipeline string
+		wantLim  int
+	}{
+		{
+			name:     "tail | sort (mode B today: ORDER BY raw LIMIT N)",
+			pipeline: `tail -10 vimgym.log | sort`,
+			wantLim:  10,
+		},
+		{
+			name:     "tail | jq -r | sort (mode B/C today)",
+			pipeline: `tail -n 200 vimgym.log | jq -r '.msg' | sort`,
+			wantLim:  200,
+		},
+		{
+			name:     "tail | jq | sort (mode B/C today)",
+			pipeline: `tail -n 200 vimgym.log | jq '.msg' | sort`,
+			wantLim:  200,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := Plan(tc.pipeline, 0, "", time.Time{}, time.Time{})
+			if err != nil {
+				t.Fatalf("Plan: %v", err)
+			}
+			wantInner := "ORDER BY ts DESC LIMIT " + strconv.Itoa(tc.wantLim)
+			if !strings.Contains(plan.DirectShardSQL, wantInner) {
+				t.Errorf("DirectShardSQL missing %q\n  got: %s", wantInner, plan.DirectShardSQL)
+			}
+			if strings.Contains(plan.DirectShardSQL, "ORDER BY raw") {
+				t.Errorf("DirectShardSQL orders by raw; tail's limit must select by ts\n  got: %s", plan.DirectShardSQL)
+			}
+			if plan.ShardOrderBy != "ts" {
+				t.Errorf("ShardOrderBy (merge key) = %q, want %q", plan.ShardOrderBy, "ts")
+			}
+			if plan.ShardLimit != tc.wantLim {
+				t.Errorf("ShardLimit = %d, want %d", plan.ShardLimit, tc.wantLim)
+			}
+			if !plan.TailMode {
+				t.Errorf("TailMode = false; compute must keep the newest N by ts, not the last N to arrive")
+			}
+			if plan.Limit != tc.wantLim {
+				t.Errorf("Limit = %d, want %d", plan.Limit, tc.wantLim)
+			}
+		})
 	}
 }
