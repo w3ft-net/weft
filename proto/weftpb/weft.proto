@@ -437,6 +437,63 @@ service WeftAdmin {
   // ListBuckets returns every bucket (id/label/tier/target/state) for
   // `weft-admin roll-all` iteration.
   rpc ListBuckets(ListBucketsRequest) returns (ListBucketsResponse);
+
+  // ListCronModes returns every enabled cron with the scheduling path that
+  // owns it (lease, claims, rollback), for `weft-admin cron-mode list`.
+  // See docs/plans/cron-claims-rollout.md.
+  rpc ListCronModes(ListCronModesRequest) returns (ListCronModesResponse);
+
+  // EnableCronClaims switches the named crons to per-slot claims by
+  // tombstoning their lease rows. Explicit ids only (no "all"): the rollout
+  // ramps a few crons at a time. Unknown or disabled ids fail the whole call
+  // before anything changes.
+  rpc EnableCronClaims(EnableCronClaimsRequest) returns (EnableCronClaimsResponse);
+
+  // RollbackCronClaims returns crons to lease mode: each tombstone becomes
+  // a lease that expires after a short window so the two paths never
+  // overlap. Ids, or all tombstoned crons.
+  rpc RollbackCronClaims(RollbackCronClaimsRequest) returns (RollbackCronClaimsResponse);
+}
+
+message CronModeInfo {
+  uint64 watch_id = 1;
+  int64 org_id = 2;
+  string name = 3;
+  string schedule = 4;
+  // mode is "lease", "claims", or "rollback" (inside the post-rollback
+  // window: lease path denied until the window ends).
+  string mode = 5;
+  // lease_holder/acquired_at describe the cron's lease row; empty when it
+  // has none. expires_at is empty for a tombstone (never expires).
+  string lease_holder = 6;
+  string acquired_at = 7;
+  string expires_at = 8;
+}
+
+message ListCronModesRequest {}
+message ListCronModesResponse { repeated CronModeInfo crons = 1; }
+
+message EnableCronClaimsRequest { repeated uint64 watch_ids = 1; }
+message EnableCronClaimsResponse {
+  // changed are the ids switched to claims; already_claims were already
+  // tombstoned and left as they were.
+  repeated uint64 changed = 1;
+  repeated uint64 already_claims = 2;
+}
+
+message RollbackCronClaimsRequest {
+  repeated uint64 watch_ids = 1;
+  // all rolls back every tombstoned cron; watch_ids must then be empty.
+  bool all = 2;
+}
+message RollbackCronClaimsResponse {
+  // rolled_back were tombstoned and are now in the rollback window;
+  // not_claims were not in claim mode (nothing to do).
+  repeated uint64 rolled_back = 1;
+  repeated uint64 not_claims = 2;
+  // window_seconds is how long the lease path stays denied. Wait this long
+  // before rolling the coordinator code back.
+  int32 window_seconds = 3;
 }
 
 message ShardHeartbeatRequest {
