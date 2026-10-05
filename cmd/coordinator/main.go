@@ -269,9 +269,6 @@ func main() {
 			Coord:    coord,
 			Notifier: notifier,
 			Holder:   holder,
-			// Read live, so flipping CRON_SHADOW_CLAIMS in the runtime
-			// config starts or stops the shadow within a config refresh.
-			ShadowClaims: func() bool { return cfgPtr.Load().CronShadowClaims },
 		}
 		cronExec.Start(ctx)
 

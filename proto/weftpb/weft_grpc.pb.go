@@ -1704,14 +1704,11 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	WeftAdmin_RelaunchShard_FullMethodName      = "/weft.WeftAdmin/RelaunchShard"
-	WeftAdmin_ForceRemoveShard_FullMethodName   = "/weft.WeftAdmin/ForceRemoveShard"
-	WeftAdmin_GetShard_FullMethodName           = "/weft.WeftAdmin/GetShard"
-	WeftAdmin_ListShards_FullMethodName         = "/weft.WeftAdmin/ListShards"
-	WeftAdmin_ListBuckets_FullMethodName        = "/weft.WeftAdmin/ListBuckets"
-	WeftAdmin_ListCronModes_FullMethodName      = "/weft.WeftAdmin/ListCronModes"
-	WeftAdmin_EnableCronClaims_FullMethodName   = "/weft.WeftAdmin/EnableCronClaims"
-	WeftAdmin_RollbackCronClaims_FullMethodName = "/weft.WeftAdmin/RollbackCronClaims"
+	WeftAdmin_RelaunchShard_FullMethodName    = "/weft.WeftAdmin/RelaunchShard"
+	WeftAdmin_ForceRemoveShard_FullMethodName = "/weft.WeftAdmin/ForceRemoveShard"
+	WeftAdmin_GetShard_FullMethodName         = "/weft.WeftAdmin/GetShard"
+	WeftAdmin_ListShards_FullMethodName       = "/weft.WeftAdmin/ListShards"
+	WeftAdmin_ListBuckets_FullMethodName      = "/weft.WeftAdmin/ListBuckets"
 )
 
 // WeftAdminClient is the client API for WeftAdmin service.
@@ -1755,19 +1752,6 @@ type WeftAdminClient interface {
 	// ListBuckets returns every bucket (id/label/tier/target/state) for
 	// `weft-admin roll-all` iteration.
 	ListBuckets(ctx context.Context, in *ListBucketsRequest, opts ...grpc.CallOption) (*ListBucketsResponse, error)
-	// ListCronModes returns every enabled cron with the scheduling path that
-	// owns it (lease, claims, rollback), for `weft-admin cron-mode list`.
-	// See docs/plans/cron-claims-rollout.md.
-	ListCronModes(ctx context.Context, in *ListCronModesRequest, opts ...grpc.CallOption) (*ListCronModesResponse, error)
-	// EnableCronClaims switches the named crons to per-slot claims by
-	// tombstoning their lease rows. Explicit ids only (no "all"): the rollout
-	// ramps a few crons at a time. Unknown or disabled ids fail the whole call
-	// before anything changes.
-	EnableCronClaims(ctx context.Context, in *EnableCronClaimsRequest, opts ...grpc.CallOption) (*EnableCronClaimsResponse, error)
-	// RollbackCronClaims returns crons to lease mode: each tombstone becomes
-	// a lease that expires after a short window so the two paths never
-	// overlap. Ids, or all tombstoned crons.
-	RollbackCronClaims(ctx context.Context, in *RollbackCronClaimsRequest, opts ...grpc.CallOption) (*RollbackCronClaimsResponse, error)
 }
 
 type weftAdminClient struct {
@@ -1828,36 +1812,6 @@ func (c *weftAdminClient) ListBuckets(ctx context.Context, in *ListBucketsReques
 	return out, nil
 }
 
-func (c *weftAdminClient) ListCronModes(ctx context.Context, in *ListCronModesRequest, opts ...grpc.CallOption) (*ListCronModesResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListCronModesResponse)
-	err := c.cc.Invoke(ctx, WeftAdmin_ListCronModes_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *weftAdminClient) EnableCronClaims(ctx context.Context, in *EnableCronClaimsRequest, opts ...grpc.CallOption) (*EnableCronClaimsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(EnableCronClaimsResponse)
-	err := c.cc.Invoke(ctx, WeftAdmin_EnableCronClaims_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *weftAdminClient) RollbackCronClaims(ctx context.Context, in *RollbackCronClaimsRequest, opts ...grpc.CallOption) (*RollbackCronClaimsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RollbackCronClaimsResponse)
-	err := c.cc.Invoke(ctx, WeftAdmin_RollbackCronClaims_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // WeftAdminServer is the server API for WeftAdmin service.
 // All implementations must embed UnimplementedWeftAdminServer
 // for forward compatibility.
@@ -1899,19 +1853,6 @@ type WeftAdminServer interface {
 	// ListBuckets returns every bucket (id/label/tier/target/state) for
 	// `weft-admin roll-all` iteration.
 	ListBuckets(context.Context, *ListBucketsRequest) (*ListBucketsResponse, error)
-	// ListCronModes returns every enabled cron with the scheduling path that
-	// owns it (lease, claims, rollback), for `weft-admin cron-mode list`.
-	// See docs/plans/cron-claims-rollout.md.
-	ListCronModes(context.Context, *ListCronModesRequest) (*ListCronModesResponse, error)
-	// EnableCronClaims switches the named crons to per-slot claims by
-	// tombstoning their lease rows. Explicit ids only (no "all"): the rollout
-	// ramps a few crons at a time. Unknown or disabled ids fail the whole call
-	// before anything changes.
-	EnableCronClaims(context.Context, *EnableCronClaimsRequest) (*EnableCronClaimsResponse, error)
-	// RollbackCronClaims returns crons to lease mode: each tombstone becomes
-	// a lease that expires after a short window so the two paths never
-	// overlap. Ids, or all tombstoned crons.
-	RollbackCronClaims(context.Context, *RollbackCronClaimsRequest) (*RollbackCronClaimsResponse, error)
 	mustEmbedUnimplementedWeftAdminServer()
 }
 
@@ -1936,15 +1877,6 @@ func (UnimplementedWeftAdminServer) ListShards(context.Context, *ListShardsReque
 }
 func (UnimplementedWeftAdminServer) ListBuckets(context.Context, *ListBucketsRequest) (*ListBucketsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListBuckets not implemented")
-}
-func (UnimplementedWeftAdminServer) ListCronModes(context.Context, *ListCronModesRequest) (*ListCronModesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListCronModes not implemented")
-}
-func (UnimplementedWeftAdminServer) EnableCronClaims(context.Context, *EnableCronClaimsRequest) (*EnableCronClaimsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method EnableCronClaims not implemented")
-}
-func (UnimplementedWeftAdminServer) RollbackCronClaims(context.Context, *RollbackCronClaimsRequest) (*RollbackCronClaimsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method RollbackCronClaims not implemented")
 }
 func (UnimplementedWeftAdminServer) mustEmbedUnimplementedWeftAdminServer() {}
 func (UnimplementedWeftAdminServer) testEmbeddedByValue()                   {}
@@ -2057,60 +1989,6 @@ func _WeftAdmin_ListBuckets_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
-func _WeftAdmin_ListCronModes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListCronModesRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WeftAdminServer).ListCronModes(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WeftAdmin_ListCronModes_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WeftAdminServer).ListCronModes(ctx, req.(*ListCronModesRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _WeftAdmin_EnableCronClaims_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(EnableCronClaimsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WeftAdminServer).EnableCronClaims(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WeftAdmin_EnableCronClaims_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WeftAdminServer).EnableCronClaims(ctx, req.(*EnableCronClaimsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _WeftAdmin_RollbackCronClaims_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RollbackCronClaimsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WeftAdminServer).RollbackCronClaims(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WeftAdmin_RollbackCronClaims_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WeftAdminServer).RollbackCronClaims(ctx, req.(*RollbackCronClaimsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // WeftAdmin_ServiceDesc is the grpc.ServiceDesc for WeftAdmin service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2137,18 +2015,6 @@ var WeftAdmin_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListBuckets",
 			Handler:    _WeftAdmin_ListBuckets_Handler,
-		},
-		{
-			MethodName: "ListCronModes",
-			Handler:    _WeftAdmin_ListCronModes_Handler,
-		},
-		{
-			MethodName: "EnableCronClaims",
-			Handler:    _WeftAdmin_EnableCronClaims_Handler,
-		},
-		{
-			MethodName: "RollbackCronClaims",
-			Handler:    _WeftAdmin_RollbackCronClaims_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

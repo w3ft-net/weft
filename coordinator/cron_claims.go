@@ -21,10 +21,6 @@ const (
 	// slot is due. Checking is a clock comparison; the database is only
 	// touched when a new slot comes due.
 	cronClaimPoll = time.Second
-	// cronQuietPeriod is how long after the tombstone claim mode ignores
-	// slots, so the previous lease holder's last tick (renewed every
-	// LeaseRenewInterval) cannot overlap the first claimed run.
-	cronQuietPeriod = store.LeaseRenewInterval + 5*time.Second
 	// cronClaimRetention is how long claim rows are kept for forensics.
 	cronClaimRetention = 24 * time.Hour
 )
@@ -52,15 +48,16 @@ type cronClaimState struct {
 	seen     bool
 }
 
-// runClaims runs one tombstoned cron: every cronClaimPoll it asks whether a
-// new slot is due, and runs it if this coordinator wins the slot's claim.
-// Runs until ctx is cancelled (reconcile, when the tombstone goes away).
-func (ce *CronExecutor) runClaims(ctx context.Context, watch store.CronWatch, tombstonedAt time.Time, run *cronRun) {
+// runClaims runs one cron: every cronClaimPoll it asks whether a new slot is
+// due, and runs it if this coordinator wins the slot's claim. Runs until ctx
+// is cancelled (reconcile, when the cron is disabled or deleted).
+func (ce *CronExecutor) runClaims(ctx context.Context, watch store.CronWatch) {
+	// Defensive: skip watches that violate the minimum interval for their
+	// tier. Saves are validated, so this is belt-and-suspenders.
 	if !ce.intervalAllowed(watch, parseSchedule(watch.Schedule)) {
-		ce.forgetWatch(watch.ID, run)
 		return
 	}
-	log.Printf("cron[%s]: started in claim mode (every %s)", watch.Name, parseSchedule(watch.Schedule))
+	log.Printf("cron[%s]: started (every %s)", watch.Name, parseSchedule(watch.Schedule))
 
 	st := &cronClaimState{watch: watch}
 	ticker := time.NewTicker(cronClaimPoll)
@@ -68,11 +65,10 @@ func (ce *CronExecutor) runClaims(ctx context.Context, watch store.CronWatch, to
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("cron[%s]: stopped (claim mode)", watch.Name)
-			ce.forgetWatch(watch.ID, run)
+			log.Printf("cron[%s]: stopped", watch.Name)
 			return
 		case <-ticker.C:
-			ce.claimTick(st, tombstonedAt, time.Now())
+			ce.claimTick(st, time.Now())
 		}
 	}
 }
@@ -81,7 +77,7 @@ func (ce *CronExecutor) runClaims(ctx context.Context, watch store.CronWatch, to
 // without holding its claim: a failed claim write means no run, and the
 // slot is retried on the next tick (fail closed — the worst case is a
 // skipped slot, never a duplicate).
-func (ce *CronExecutor) claimTick(st *cronClaimState, tombstonedAt, now time.Time) {
+func (ce *CronExecutor) claimTick(st *cronClaimState, now time.Time) {
 	w := st.watch
 	interval := parseSchedule(w.Schedule)
 	slot, ok := LatestDueSlot(w.ID, interval, cronSettle, now)
@@ -90,8 +86,10 @@ func (ce *CronExecutor) claimTick(st *cronClaimState, tombstonedAt, now time.Tim
 	}
 	decided := func() { st.lastSlot, st.seen = slot.Index, true }
 
-	if slot.FireAt(cronSettle).Before(tombstonedAt.Add(cronQuietPeriod)) {
-		log.Printf("cron_claim result=quiet key=%s", slot.Key())
+	// A cron created after this slot's window closed has nothing to report
+	// for it, and running it would evaluate (and could alert on) data from
+	// before the cron existed. Its first run is the next slot.
+	if slot.Boundary().Before(w.CreatedAt) {
 		decided()
 		return
 	}

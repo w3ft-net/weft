@@ -66,8 +66,14 @@ func newClaimEnv(t *testing.T, name string) *claimEnv {
 	if err := adb.Create(&w).Error; err != nil {
 		t.Fatal(err)
 	}
+	// An existing cron: created long before any slot a test simulates, so the
+	// creation rule (see claimTick) does not skip its slots.
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := adb.Model(&store.CronWatch{}).Where("id = ?", w.ID).Update("created_at", old).Error; err != nil {
+		t.Fatal(err)
+	}
+	w.CreatedAt = old
 	t.Cleanup(func() {
-		adb.Exec(`DELETE FROM leases WHERE name = ?`, store.CronLeaseName(w.ID))
 		adb.Unscoped().Delete(&w)
 		// Other coordinator tests assume the pooled fixture DB holds a
 		// single org, so don't leave ours behind.
@@ -103,7 +109,6 @@ func TestClaimTicksRunEachSlotOnceAcrossCoordinators(t *testing.T) {
 	env := newClaimEnv(t, "claims-sim")
 	interval := 5 * time.Minute
 	t0 := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
-	tombstoned := t0.Add(-time.Hour)
 
 	type coord struct {
 		ce *CronExecutor
@@ -123,7 +128,7 @@ func TestClaimTicksRunEachSlotOnceAcrossCoordinators(t *testing.T) {
 			coords[0] = mk("a2")
 		}
 		for _, c := range coords {
-			c.ce.claimTick(c.st, tombstoned, now)
+			c.ce.claimTick(c.st, now)
 		}
 	}
 
@@ -133,6 +138,13 @@ func TestClaimTicksRunEachSlotOnceAcrossCoordinators(t *testing.T) {
 	// have fired before t0, so check the interior by tiling.
 	if len(runs) < int(sim/interval)-1 {
 		t.Fatalf("only %d runs in %s", len(runs), sim)
+	}
+	// A run's window is exactly one interval (never reaching older data than
+	// that: the cold-shard fan-out incident, see docs/known-issues.md).
+	for i, r := range runs {
+		if span := r.tr.End.Sub(r.tr.Start); span != interval-time.Microsecond {
+			t.Fatalf("run %d window spans %v, want one interval less 1us", i, span)
+		}
 	}
 	for i := 1; i < len(runs); i++ {
 		prev, cur := runs[i-1].tr, runs[i].tr
@@ -147,100 +159,51 @@ func TestClaimTickFailsClosedAndRetries(t *testing.T) {
 	env := newClaimEnv(t, "claims-failclosed")
 	ce := env.executor("a")
 	st := &cronClaimState{watch: env.watch}
-	tombstoned := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	// Past slot 12:05's fire time (boundary + settle + jitter < 60s).
 	now := time.Date(2026, 10, 4, 12, 6, 0, 0, time.UTC)
 
 	env.claims.err = errors.New("db down")
 	for i := 0; i < 3; i++ {
-		ce.claimTick(st, tombstoned, now.Add(time.Duration(i)*time.Second))
+		ce.claimTick(st, now.Add(time.Duration(i)*time.Second))
 	}
 	if n := len(env.runs()); n != 0 {
 		t.Fatalf("ran %d times with the claim store failing", n)
 	}
 
 	env.claims.err = nil
-	ce.claimTick(st, tombstoned, now.Add(4*time.Second))
-	ce.claimTick(st, tombstoned, now.Add(5*time.Second))
+	ce.claimTick(st, now.Add(4*time.Second))
+	ce.claimTick(st, now.Add(5*time.Second))
 	if n := len(env.runs()); n != 1 {
 		t.Fatalf("want exactly 1 run after the store recovered, got %d", n)
 	}
 }
 
-// Slots that fire inside the quiet period after the tombstone are skipped,
-// and not claimed.
-func TestClaimTickQuietPeriodAfterTombstone(t *testing.T) {
-	env := newClaimEnv(t, "claims-quiet")
-	ce := env.executor("a")
-	st := &cronClaimState{watch: env.watch}
-
-	slot, _ := LatestDueSlot(env.watch.ID, 5*time.Minute, cronSettle, time.Date(2026, 10, 4, 12, 6, 0, 0, time.UTC))
-	fireAt := slot.FireAt(cronSettle)
-	// Tombstoned 1s before the slot fires: inside the quiet period.
-	ce.claimTick(st, fireAt.Add(-time.Second), fireAt.Add(time.Second))
-	if n := len(env.runs()); n != 0 {
-		t.Fatalf("ran %d times inside the quiet period", n)
-	}
-	if len(env.claims.owners) != 0 {
-		t.Fatalf("quiet-period slot was claimed: %v", env.claims.owners)
-	}
-
-	// The next slot is past the quiet period and runs.
-	ce.claimTick(st, fireAt.Add(-time.Second), fireAt.Add(5*time.Minute+time.Second))
-	if n := len(env.runs()); n != 1 {
-		t.Fatalf("want 1 run after the quiet period, got %d", n)
-	}
-}
-
-// Through the real reconcile: a lease-mode cron is switched to claim mode
-// by a tombstone without a second run, and rolled back by the rollback
-// state; the lease path cannot start until the rollback window passes.
-func TestReconcileFollowsTombstoneAndRollback(t *testing.T) {
-	env := newClaimEnv(t, "claims-transitions")
-	id := env.watch.ID
-	ce := env.executor("a")
-	ce.cancels = map[uint]*cronRun{}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	mode := func() (claims, tracked bool) {
-		ce.mu.Lock()
-		defer ce.mu.Unlock()
-		r, ok := ce.cancels[id]
-		return ok && r.claims, ok
-	}
-	runsFor := func() int { return len(env.runs()) }
-
-	ce.reconcile(ctx)
-	if err := waitFor(5*time.Second, func() bool { return runsFor() == 1 }); err != nil {
-		t.Fatal("lease-mode cron did not run its first tick")
-	}
-	if c, _ := mode(); c {
-		t.Fatal("untombstoned cron is in claim mode")
-	}
-
-	if err := env.db.TombstoneCronLease(id); err != nil {
+// A cron created after a slot's window closed has nothing to report for it:
+// that slot is skipped (not claimed, not run), and its first run is the next
+// slot. Otherwise a new cron would evaluate, and could alert on, data from
+// before it existed.
+func TestClaimTickSkipsSlotsThatClosedBeforeTheCronWasCreated(t *testing.T) {
+	env := newClaimEnv(t, "claims-created")
+	adb := env.db.DB().WithContext(store.WithoutTenantScope(context.Background()))
+	created := time.Date(2026, 10, 4, 12, 7, 0, 0, time.UTC)
+	if err := adb.Model(&store.CronWatch{}).Where("id = ?", env.watch.ID).Update("created_at", created).Error; err != nil {
 		t.Fatal(err)
 	}
-	ce.reconcile(ctx)
-	if c, ok := mode(); !ok || !c {
-		t.Fatalf("after tombstone: claims=%v tracked=%v, want claim mode", c, ok)
-	}
-	time.Sleep(1500 * time.Millisecond) // claim loop ticks; slot is inside the quiet period
-	if n := runsFor(); n != 1 {
-		t.Fatalf("switching to claim mode ran the cron again: %d runs", n)
+	w := env.watch
+	w.CreatedAt = created
+	ce := env.executor("a")
+	st := &cronClaimState{watch: w}
+
+	// 12:06: the latest due slot closed at 12:05, before the cron existed.
+	ce.claimTick(st, time.Date(2026, 10, 4, 12, 6, 0, 0, time.UTC))
+	if n := len(env.runs()); n != 0 || len(env.claims.owners) != 0 {
+		t.Fatalf("pre-creation slot ran %d time(s), claimed %v", n, env.claims.owners)
 	}
 
-	if ok, err := env.db.RollbackCronTombstone(id); err != nil || !ok {
-		t.Fatalf("rollback: ok=%v err=%v", ok, err)
-	}
-	ce.reconcile(ctx)
-	// Back in lease mode, but the lease is denied for the rollback
-	// window, so the goroutine bails and is forgotten, retried later.
-	if err := waitFor(5*time.Second, func() bool { _, tracked := mode(); return !tracked }); err != nil {
-		t.Fatal("rolled-back cron was not released while its lease is denied")
-	}
-	if n := runsFor(); n != 1 {
-		t.Fatalf("lease mode ran during the rollback window: %d runs", n)
+	// 12:11: the 12:10 slot closed after creation, so it runs once.
+	ce.claimTick(st, time.Date(2026, 10, 4, 12, 11, 5, 0, time.UTC))
+	ce.claimTick(st, time.Date(2026, 10, 4, 12, 11, 6, 0, time.UTC))
+	if n := len(env.runs()); n != 1 {
+		t.Fatalf("want exactly 1 run for the first post-creation slot, got %d", n)
 	}
 }

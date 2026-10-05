@@ -20,48 +20,31 @@ type CronExecutor struct {
 	Store    *store.Store
 	Coord    *Coordinator
 	Notifier *Notifier
-	// Holder identifies this coordinator process for the per-watch
-	// lease that guards execution once the coordinator ASG scales past
-	// 1 instance — see docs/plans/coordinator-horizontal-scaling.md.
+	// Holder identifies this coordinator process: it is recorded on every
+	// slot claim and names the owner of the overdue-guard lease.
 	Holder string
 	// Execute fires one run of a watch over tr. Nil means executeWatch;
 	// tests substitute it so scheduling can be exercised without a
 	// Coordinator.
 	Execute func(w store.CronWatch, tr TimeRange)
-	// Claims is the slot-claim backend for claim-mode crons. Nil means
-	// Store; tests substitute it for fault injection.
+	// Claims is the slot-claim backend. Nil means Store; tests substitute it
+	// for fault injection.
 	Claims slotClaimer
-	// ShadowClaims reports whether the shadow claimer (cron_shadow.go) is
-	// enabled. Nil means off. Read every tick, so it doubles as a kill
-	// switch.
-	ShadowClaims func() bool
 	// SendOverdue delivers an overdue page. Nil means Notifier.Send;
 	// tests substitute it.
 	SendOverdue func(orgID store.OrgID, alias, watchName, body string) error
 
 	mu      sync.Mutex
-	cancels map[uint]*cronRun // watchID → running goroutine
-	// shadowWatches is the lease-mode (not tombstoned) enabled crons as of
-	// the last reconcile, for the shadow claimer to read.
-	shadowWatches []store.CronWatch
-}
-
-// cronRun is one running per-watch goroutine. Identity (the pointer) is what
-// forgetWatch compares, so a goroutine that outlives its replacement can
-// never delete the replacement's entry.
-type cronRun struct {
-	cancel context.CancelFunc
-	claims bool // claim mode (tombstoned) rather than lease mode
+	cancels map[uint]context.CancelFunc // watchID → cancel
 }
 
 // Start begins the cron executor. It loads watches from the database,
 // spawns a goroutine for each enabled watch, and reconciles every 30 seconds.
 func (ce *CronExecutor) Start(ctx context.Context) {
-	ce.cancels = make(map[uint]*cronRun)
+	ce.cancels = make(map[uint]context.CancelFunc)
 
 	// Initial load.
 	ce.reconcile(ctx)
-	go ce.runShadow(ctx)
 	go ce.runOverdueGuard(ctx)
 	log.Printf("cron: started (%d watches)", len(ce.cancels))
 
@@ -85,7 +68,8 @@ func (ce *CronExecutor) Start(ctx context.Context) {
 	}()
 }
 
-// reconcile syncs running goroutines with the database state.
+// reconcile syncs running goroutines with the database state: every enabled
+// cron runs under per-slot claims (runClaims), whether or not it is new.
 func (ce *CronExecutor) reconcile(ctx context.Context) {
 	var watches []store.CronWatch
 	err := ce.Store.DB().WithContext(store.WithoutTenantScope(context.Background())).Where("enabled = ?", true).Find(&watches).Error
@@ -97,48 +81,22 @@ func (ce *CronExecutor) reconcile(ctx context.Context) {
 	ce.mu.Lock()
 	defer ce.mu.Unlock()
 
-	tombstones, err := ce.Store.CronTombstones()
-	if err != nil {
-		// Without the tombstone set a claim-mode cron could be started
-		// under a lease. Leave everything as it is and retry next tick.
-		log.Printf("cron: failed to list tombstones: %v", err)
-		return
-	}
-
 	// Build set of active watch IDs.
 	active := make(map[uint]bool)
-	shadow := make([]store.CronWatch, 0, len(watches))
-	defer func() { ce.shadowWatches = shadow }()
 	for _, w := range watches {
 		active[w.ID] = true
-		tombstonedAt, claims := tombstones[w.ID]
-		if !claims {
-			shadow = append(shadow, w)
-		}
-		run, running := ce.cancels[w.ID]
-		if running && run.claims == claims {
-			continue
-		}
-		if running {
-			// Mode changed (tombstoned, or rolled back): stop the old
-			// goroutine and start one in the new mode.
-			run.cancel()
-			log.Printf("cron[%s]: mode change, claims=%v", w.Name, claims)
-		}
-		watchCtx, cancel := context.WithCancel(ctx)
-		run = &cronRun{cancel: cancel, claims: claims}
-		ce.cancels[w.ID] = run
-		if claims {
-			go ce.runClaims(watchCtx, w, tombstonedAt, run)
-		} else {
-			go ce.runWatch(watchCtx, w, run)
+		if _, running := ce.cancels[w.ID]; !running {
+			// Start new watch.
+			watchCtx, cancel := context.WithCancel(ctx)
+			ce.cancels[w.ID] = cancel
+			go ce.runClaims(watchCtx, w)
 		}
 	}
 
 	// Stop watches that are no longer enabled.
-	for id, run := range ce.cancels {
+	for id, cancel := range ce.cancels {
 		if !active[id] {
-			run.cancel()
+			cancel()
 			delete(ce.cancels, id)
 		}
 	}
@@ -148,78 +106,9 @@ func (ce *CronExecutor) reconcile(ctx context.Context) {
 func (ce *CronExecutor) stopAll() {
 	ce.mu.Lock()
 	defer ce.mu.Unlock()
-	for id, run := range ce.cancels {
-		run.cancel()
+	for id, cancel := range ce.cancels {
+		cancel()
 		delete(ce.cancels, id)
-	}
-}
-
-// forgetWatch removes a watch's tracking entry so the next reconcile tick
-// retries it. Needed because reconcile stores the entry and spawns the
-// goroutine before knowing whether it'll actually run — if runWatch bails
-// (lease held elsewhere) or loses its lease later, reconcile would otherwise
-// believe the watch is running forever and never retry, even after the
-// other holder dies and the lease frees up. Only removes run's own entry:
-// reconcile may already have replaced it (mode change) and that
-// replacement must survive.
-func (ce *CronExecutor) forgetWatch(id uint, run *cronRun) {
-	ce.mu.Lock()
-	defer ce.mu.Unlock()
-	if ce.cancels[id] == run {
-		delete(ce.cancels, id)
-	}
-}
-
-// runWatch executes a single cron watch on its schedule.
-func (ce *CronExecutor) runWatch(ctx context.Context, watch store.CronWatch, run *cronRun) {
-	interval := parseSchedule(watch.Schedule)
-
-	// Defensive: skip watches that violate the minimum interval for their tier.
-	// This shouldn't happen if saves are validated, but belt-and-suspenders.
-	// Checked before acquiring the lease below — no point squatting on it
-	// for a watch that's never going to run.
-	if !ce.intervalAllowed(watch, interval) {
-		return
-	}
-
-	// Only one coordinator instance may run a given watch at a time —
-	// two instances both firing it on schedule would double-send every
-	// alert/notification and double-apply every side effect.
-	leaseName := fmt.Sprintf("cron:%d", watch.ID)
-	leaseCtx, ok := store.AcquireAndHold(ctx, ce.Store, leaseName, ce.Holder)
-	if !ok {
-		log.Printf("cron[%s]: lease held by another coordinator instance, not running", watch.Name)
-		ce.forgetWatch(watch.ID, run)
-		return
-	}
-	ctx = leaseCtx
-
-	log.Printf("cron[%s]: started (every %s)", watch.Name, interval)
-
-	// Run immediately on first tick.
-	ce.fire(watch, watchQueryRange(watch.Schedule, time.Now()))
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			log.Printf("cron[%s]: stopped", watch.Name)
-			// Reached on lease loss as well as on reconcile/stopAll
-			// cancellation; forgetWatch is a no-op unless this goroutine's
-			// entry is still the current one.
-			ce.forgetWatch(watch.ID, run)
-			return
-		case <-ticker.C:
-			// Reload watch from DB in case pipeline/schedule changed.
-			updated, err := ce.Store.GetCronWatch(watch.OrgID, watch.Name)
-			if err != nil {
-				log.Printf("cron[%s]: failed to reload: %v", watch.Name, err)
-				continue
-			}
-			ce.fire(*updated, watchQueryRange(updated.Schedule, time.Now()))
-		}
 	}
 }
 
@@ -434,16 +323,4 @@ func (ce *CronExecutor) tierForWatch(watch store.CronWatch) store.Tier {
 // Delegates to store.ParseScheduleInterval.
 func parseSchedule(schedule string) time.Duration {
 	return store.ParseScheduleInterval(schedule)
-}
-
-// watchQueryRange is the time window a cron run queries: exactly the gap
-// since the previous fire, [now-interval, now]. The interval is the same
-// value runWatch tickers on (parseSchedule), so this tiles fire-to-fire
-// with no gap and never exceeds the interval — which keeps a cron from
-// reaching shards older than its own cadence (notably the archived
-// cold-Lambda shards). Previously this was hardcoded to an all-time
-// [2000..2100] window, which fanned every tick onto every in-retention
-// shard. See cron_window_test.go.
-func watchQueryRange(schedule string, now time.Time) TimeRange {
-	return TimeRange{Start: now.Add(-parseSchedule(schedule)), End: now}
 }

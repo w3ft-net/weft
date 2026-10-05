@@ -71,8 +71,6 @@ func main() {
 		bumpShardTemplatesCmd(os.Args[2:])
 	case "force-remove":
 		forceRemoveCmd(os.Args[2:])
-	case "cron-mode":
-		cronModeCmd(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -90,7 +88,6 @@ Subcommands:
   roll-all                 roll every live shard across every bucket
   bump-shard-templates     point shard launch templates at /<app>/ami/latest
   force-remove <shard-id>  discard a shard stuck in ARCHIVING (dry run unless --yes)
-  cron-mode list|set|rollback  move crons between lease and per-slot claims (dry run unless --yes)
 
 Common flags:
   -coord                coordinator gRPC address (default "localhost:9020")

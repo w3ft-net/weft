@@ -101,13 +101,6 @@ type Runtime struct {
 	// with codes.FailedPrecondition. Used to retire an old wire shape
 	// once AgentsAtOrBelow(old, lookback) is empty. Empty disables.
 	WeftdHardFloor string
-
-	// CronShadowClaims turns on the cron shadow claimer: a dry run of
-	// per-slot claiming that logs what claim mode would decide while every
-	// cron keeps running under leases (docs/plans/cron-claims-rollout.md,
-	// Phase 0). Also the kill switch: setting it false stops the shadow
-	// within one config refresh. Default off.
-	CronShadowClaims bool
 }
 
 // Defaults returns the compile-time defaults. These are the values
@@ -167,7 +160,6 @@ const (
 	keyMinWeftCliVersion      = "MIN_WEFT_CLI_VERSION"
 	keyMinWeftdVersion        = "MIN_WEFTD_VERSION"
 	keyWeftdHardFloor         = "WEFTD_HARD_FLOOR"
-	keyCronShadowClaims       = "CRON_SHADOW_CLAIMS"
 )
 
 // paramPath returns the SSM path the kevcons config-set command writes
@@ -202,7 +194,6 @@ func (r *Runtime) Overlay(blob map[string]string) {
 	overlayString(blob, keyMinWeftCliVersion, &r.MinWeftCliVersion)
 	overlayString(blob, keyMinWeftdVersion, &r.MinWeftdVersion)
 	overlayString(blob, keyWeftdHardFloor, &r.WeftdHardFloor)
-	overlayBool(blob, keyCronShadowClaims, &r.CronShadowClaims)
 }
 
 func overlayInt(blob map[string]string, key string, dst *int) {
@@ -229,19 +220,6 @@ func overlayInt64(blob map[string]string, key string, dst *int64) {
 		return
 	}
 	*dst = n
-}
-
-func overlayBool(blob map[string]string, key string, dst *bool) {
-	v, ok := blob[key]
-	if !ok || strings.TrimSpace(v) == "" {
-		return
-	}
-	b, err := strconv.ParseBool(strings.TrimSpace(v))
-	if err != nil {
-		log.Printf("config: ignoring bad bool for %s=%q: %v", key, v, err)
-		return
-	}
-	*dst = b
 }
 
 func overlayString(blob map[string]string, key string, dst *string) {
