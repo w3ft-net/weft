@@ -203,6 +203,7 @@ func TestEvaluateStateMachines_ShardsConvergeConcurrently(t *testing.T) {
 
 	start := time.Now()
 	p.evaluateStateMachines(context.Background())
+	p.evalWG.Wait() // shard Evaluates run in the background pool
 	elapsed := time.Since(start)
 
 	if got := launcher.callCount(); got != n {

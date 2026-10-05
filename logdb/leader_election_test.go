@@ -163,6 +163,7 @@ func TestCheck_EvaluateStateMachinesGatedBehindLeader(t *testing.T) {
 
 	prov.leading.Store(false)
 	prov.check(ctx)
+	prov.evalWG.Wait() // shard Evaluates run in the background pool
 
 	if got := launcher.launchCountSafe(); got != 0 {
 		t.Fatalf("non-leader must not launch shards: got %d launches", got)
@@ -176,6 +177,7 @@ func TestCheck_EvaluateStateMachinesGatedBehindLeader(t *testing.T) {
 	// some other broken precondition.
 	prov.leading.Store(true)
 	prov.check(ctx)
+	prov.evalWG.Wait() // shard Evaluates run in the background pool
 	drainLaunches(t, prov, launcher, 2)
 	if got := launcher.launchCountSafe(); got != 2 {
 		t.Fatalf("expected 2 launches once leading, got %d", got)
@@ -194,7 +196,8 @@ func TestProcessHeartbeat_PromoteGatedBehindLeader(t *testing.T) {
 	prov, launcher := newFSMTestProvisioner(t, db)
 	ctx := context.Background()
 
-	prov.check(ctx) // leading (default true) — mint + launch the one shard
+	prov.check(ctx)    // leading (default true) — mint + launch the one shard
+	prov.evalWG.Wait() // shard Evaluates run in the background pool
 	drainLaunches(t, prov, launcher, 1)
 	if got := countByState(prov, StateLaunching); got != 1 {
 		t.Fatalf("expected 1 LAUNCHING shard set up, got %d", got)

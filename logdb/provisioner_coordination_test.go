@@ -205,6 +205,7 @@ func TestProvisioner_Coordination_ScaleUpLaunchPromote(t *testing.T) {
 	// current window (under-target fill) and kicks both launches, which
 	// park on the gate.
 	prov.check(ctx)
+	prov.evalWG.Wait() // shard Evaluates run in the background pool
 	drainLaunches(t, prov, launcher, 2)
 	if got := launcher.launchCountSafe(); got != 2 {
 		t.Fatalf("expected 2 launches for Target=2, got %d", got)
@@ -227,6 +228,7 @@ func TestProvisioner_Coordination_ScaleUpLaunchPromote(t *testing.T) {
 	var st BucketState
 	for i := 0; i < 5; i++ {
 		prov.check(ctx)
+		prov.evalWG.Wait() // shard Evaluates run in the background pool
 		if st = bucketState(t, prov); st == BucketStasis {
 			break
 		}
@@ -239,6 +241,7 @@ func TestProvisioner_Coordination_ScaleUpLaunchPromote(t *testing.T) {
 	}
 	// No further launches once at Target.
 	prov.check(ctx)
+	prov.evalWG.Wait() // shard Evaluates run in the background pool
 	if got := launcher.launchCountSafe(); got != 2 {
 		t.Fatalf("steady state should not launch more shards, got %d total", got)
 	}
@@ -255,6 +258,7 @@ func TestProvisioner_Coordination_RestartReconnect(t *testing.T) {
 	prov1, launcher1 := newFSMTestProvisioner(t, db)
 	ctx := context.Background()
 	prov1.check(ctx)
+	prov1.evalWG.Wait() // shard Evaluates run in the background pool
 	drainLaunches(t, prov1, launcher1, 1)
 	simulateHeartbeats(prov1)
 	if prov1.registry.TotalIngesting() != 1 {

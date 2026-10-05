@@ -105,11 +105,13 @@ type ProvisionerConfig struct {
 	// expected shape for every test that constructs a Provisioner directly
 	// without going through Start.
 	Holder string
-	// MaxConcurrentEvaluate bounds how many bucket/shard Evaluate calls
-	// evaluateStateMachines runs at once per tick. Zero (the production
-	// default) uses maxConcurrentEvaluate. Set to 1 for a test wired to a
-	// single-connection store (openSMTestStore's tx-scoped fixture panics
-	// under concurrent access) to force sequential evaluation.
+	// MaxConcurrentEvaluate is the number of concurrent Evaluate slots:
+	// the bucket pass fans out over it per tick, and shard Evaluates
+	// share it across ticks as a worker pool (see enqueueShardEvaluations).
+	// Zero (the production default) uses maxConcurrentEvaluate. Set to 1
+	// for a test wired to a single-connection store (openSMTestStore's
+	// tx-scoped fixture panics under concurrent access) to force
+	// sequential evaluation.
 	MaxConcurrentEvaluate int
 }
 
@@ -279,6 +281,22 @@ type Provisioner struct {
 	// inside one Evaluate call must not keep the lease forever. See
 	// docs/plans/coordinator-horizontal-scaling.md #5 "Real gap #3".
 	lastProgress atomic.Int64
+
+	// Shard Evaluate work queue (see enqueueShardEvaluations). evalMu
+	// guards the four fields below it.
+	evalMu sync.Mutex
+	// evalQueue holds shards waiting for a free slot, FIFO.
+	evalQueue []*Shard
+	// evalPending is every shard that is queued or running an Evaluate.
+	// A shard in this set is never enqueued again, so one shard is never
+	// evaluated twice concurrently and a stuck one costs exactly its own
+	// slot.
+	evalPending map[string]struct{}
+	// evalRunning is the number of Evaluates currently holding a slot.
+	evalRunning int
+	// evalWG tracks running Evaluates so tests can wait for the queue to
+	// drain; production never waits on it.
+	evalWG sync.WaitGroup
 }
 
 // NewProvisioner creates a provisioner.
@@ -292,6 +310,8 @@ func NewProvisioner(registry *ShardRegistry, launcher ShardLauncher, config Prov
 		configurer: grpcConfigurer{shardSecret: config.ShardSecret},
 		bucketSMs:  map[int64]*BucketSM{},
 		clock:      time.Now,
+
+		evalPending: map[string]struct{}{},
 	}
 	p.leading.Store(true)
 	return p
@@ -713,13 +733,13 @@ func (p *Provisioner) isLeader() bool { return p.leading.Load() }
 // others still completing. See the lastProgress field comment.
 func (p *Provisioner) markProgress() { p.lastProgress.Store(time.Now().UnixNano()) }
 
-// maxConcurrentEvaluate bounds how many bucket/shard Evaluate calls run at
-// once per evaluateStateMachines tick. Sequential evaluation made one slow
-// shard's Evaluate (e.g. a stuck AWS call during archive or recovery) block
-// every other shard's convergence for that whole tick — confirmed under
-// real prod load in docs/known-issues.md "evaluateStateMachines runs
-// shards sequentially". Bounded (not unbounded) so a large fleet doesn't
-// fan out into hundreds of simultaneous DB/AWS calls from one tick.
+// maxConcurrentEvaluate is the default number of concurrent Evaluate slots.
+// Sequential evaluation made one slow shard's Evaluate (e.g. a stuck AWS
+// call during archive or recovery) block every other shard's convergence —
+// confirmed under real prod load in docs/known-issues.md
+// "evaluateStateMachines runs shards sequentially". Bounded (not
+// unbounded) so a large fleet doesn't fan out into hundreds of
+// simultaneous DB/AWS calls.
 const maxConcurrentEvaluate = 8
 
 // evaluateConcurrently runs eval(item) for every item in items, with at
@@ -753,9 +773,13 @@ func evaluateConcurrently[T any](items []T, limit int, eval func(T)) {
 // tick toward convergence. Buckets run first: a WARMING bucket mints new
 // shard SMs, and re-snapshotting after the bucket pass lets those minted
 // shards Evaluate the same tick (their launch starts now, not next tick).
-// Within each pass, items converge concurrently (bounded by
-// maxConcurrentEvaluate) rather than one at a time, so one slow bucket or
-// shard no longer stalls every other one's convergence for the tick.
+// The bucket pass is waited on: bucket Evaluates are DB-only (FireShard
+// just fires an FSM trigger; side effects live in the shard's own
+// Evaluate), and finishing it first is what lets a freshly minted shard
+// be enqueued in the same tick. The shard pass is not waited on — shards
+// are handed to a worker pool (enqueueShardEvaluations) so a slow or
+// stuck Evaluate (archive export, hung AWS call) costs only its own
+// slot and never delays the tick, heartbeat adoption, or other shards.
 //
 // Only ever called while holding the shard-fsm-leader lease (see check) —
 // callers driving this directly in tests are implicitly leader via
@@ -785,10 +809,56 @@ func (p *Provisioner) evaluateStateMachines(ctx context.Context) {
 		p.markProgress()
 	})
 
-	deps := p.shardDeps()
 	shards := p.registry.Entries()
-	evaluateConcurrently(shards, limit, func(e *Shard) {
-		e.ensureSM(deps)
+	p.enqueueShardEvaluations(ctx, shards)
+	store.LogEvaluateTick(len(buckets), len(shards), time.Since(tickStart))
+}
+
+// enqueueShardEvaluations hands shards to the Evaluate worker pool and
+// returns without waiting for any of them. maxConcurrentEvaluate (or
+// config.MaxConcurrentEvaluate) is the number of slots; a slot frees the
+// moment its Evaluate returns and immediately starts the next queued
+// shard, so a fleet bigger than the slot count still drains in one pass
+// rather than one batch per tick. A shard already queued or running is
+// skipped — it keeps its place (or its slot) instead of being evaluated
+// twice concurrently.
+func (p *Provisioner) enqueueShardEvaluations(ctx context.Context, shards []*Shard) {
+	p.evalMu.Lock()
+	defer p.evalMu.Unlock()
+	for _, e := range shards {
+		if _, busy := p.evalPending[e.ID]; busy {
+			continue
+		}
+		p.evalPending[e.ID] = struct{}{}
+		p.evalQueue = append(p.evalQueue, e)
+	}
+	p.startQueuedEvaluationsLocked(ctx)
+}
+
+// startQueuedEvaluationsLocked starts queued shards while slots are free.
+// Caller holds evalMu.
+func (p *Provisioner) startQueuedEvaluationsLocked(ctx context.Context) {
+	limit := p.config.MaxConcurrentEvaluate
+	if limit <= 0 {
+		limit = maxConcurrentEvaluate
+	}
+	for p.evalRunning < limit && len(p.evalQueue) > 0 {
+		e := p.evalQueue[0]
+		p.evalQueue = p.evalQueue[1:]
+		p.evalRunning++
+		p.evalWG.Add(1)
+		go p.runShardEvaluate(ctx, e)
+	}
+}
+
+// runShardEvaluate runs one shard's Evaluate in a slot, then frees the
+// slot and starts the next queued shard.
+func (p *Provisioner) runShardEvaluate(ctx context.Context, e *Shard) {
+	defer p.evalWG.Done()
+	// A shard queued under a lease this process has since lost must not be
+	// driven: the new leader owns convergence.
+	if p.isLeader() {
+		e.ensureSM(p.shardDeps())
 		start := time.Now()
 		err := e.Evaluate(ctx)
 		store.LogEvaluateEvent("shard", e.ID, time.Since(start), err)
@@ -796,8 +866,13 @@ func (p *Provisioner) evaluateStateMachines(ctx context.Context) {
 			log.Printf("provisioner: shard %s Evaluate: %v", e.ID, err)
 		}
 		p.markProgress()
-	})
-	store.LogEvaluateTick(len(buckets), len(shards), time.Since(tickStart))
+	}
+
+	p.evalMu.Lock()
+	defer p.evalMu.Unlock()
+	delete(p.evalPending, e.ID)
+	p.evalRunning--
+	p.startQueuedEvaluationsLocked(ctx)
 }
 
 // ensureBucketSMs keeps the bucketSMs map current with the bucket set:
