@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -139,5 +140,81 @@ func TestDeleteCronClaimsBefore(t *testing.T) {
 	}
 	if ok, _ := db.ClaimCronSlot("cleanup:new", "me"); ok {
 		t.Fatal("recent claim should have been kept")
+	}
+}
+
+func TestCronModes(t *testing.T) {
+	db := testOpen(t)
+	org, err := db.FindOrCreateOrg("cron-modes-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(name string, enabled bool) *CronWatch {
+		w := &CronWatch{OrgID: org.ID, Name: name, Schedule: "every 5m", Pipeline: "true", Enabled: enabled}
+		if err := db.db.WithContext(WithoutTenantScope(context.Background())).Create(w).Error; err != nil {
+			t.Fatal(err)
+		}
+		// Enabled defaults to true in the model; make a disabled one explicit.
+		if !enabled {
+			db.db.WithContext(WithoutTenantScope(context.Background())).Model(w).Update("enabled", false)
+		}
+		return w
+	}
+	plain := mk("m-plain", true)
+	held := mk("m-held", true)
+	claims := mk("m-claims", true)
+	rolled := mk("m-rolled", true)
+	disabled := mk("m-disabled", false)
+
+	if ok, _ := db.AcquireLease(CronLeaseName(held.ID), "coord-a", LeaseTTL); !ok {
+		t.Fatal("setup: lease")
+	}
+	if err := db.TombstoneCronLease(claims.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.TombstoneCronLease(rolled.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := db.RollbackCronTombstone(rolled.ID); err != nil || !ok {
+		t.Fatalf("setup: rollback ok=%v err=%v", ok, err)
+	}
+	if err := db.TombstoneCronLease(disabled.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	modes, err := db.CronModes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[uint]CronMode{}
+	for _, m := range modes {
+		got[m.WatchID] = m
+	}
+	if _, present := got[disabled.ID]; present {
+		t.Error("disabled cron listed")
+	}
+	for _, c := range []struct {
+		w      *CronWatch
+		mode   string
+		holder string
+	}{
+		{plain, CronModeLease, ""},
+		{held, CronModeLease, "coord-a"},
+		{claims, CronModeClaims, CronClaimsHolder},
+		{rolled, CronModeRollback, CronRollbackHolder},
+	} {
+		m, ok := got[c.w.ID]
+		if !ok {
+			t.Fatalf("%s missing from CronModes", c.w.Name)
+		}
+		if m.Mode != c.mode || m.Holder != c.holder {
+			t.Errorf("%s: mode=%q holder=%q, want %q/%q", c.w.Name, m.Mode, m.Holder, c.mode, c.holder)
+		}
+	}
+	if !got[claims.ID].ExpiresAt.IsZero() {
+		t.Error("tombstone should report no expiry")
+	}
+	if got[held.ID].ExpiresAt.IsZero() {
+		t.Error("a live lease should report its expiry")
 	}
 }

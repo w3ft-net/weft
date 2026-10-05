@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -104,6 +105,78 @@ func (s *Store) CronTombstones() (map[uint]time.Time, error) {
 		if _, err := fmt.Sscanf(r.Name, "cron:%d", &id); err == nil {
 			out[id] = r.AcquiredAt
 		}
+	}
+	return out, nil
+}
+
+// Cron modes as reported by CronModes.
+const (
+	CronModeLease    = "lease"
+	CronModeClaims   = "claims"
+	CronModeRollback = "rollback"
+)
+
+// CronMode is one enabled cron and which scheduling path owns it.
+type CronMode struct {
+	WatchID  uint
+	OrgID    OrgID
+	Name     string
+	Schedule string
+	// Mode is CronModeClaims (tombstoned), CronModeRollback (inside the
+	// post-rollback window, lease path denied), or CronModeLease.
+	Mode string
+	// Holder and AcquiredAt describe the cron's lease row; empty/zero when
+	// it has none. ExpiresAt is zero for a tombstone (infinity).
+	Holder     string
+	AcquiredAt time.Time
+	ExpiresAt  time.Time
+}
+
+// CronModes lists every enabled cron with its scheduling mode, ordered by
+// watch ID. Read-only; spans all orgs, like the executor's own listing.
+func (s *Store) CronModes() ([]CronMode, error) {
+	var rows []struct {
+		ID         uint
+		OrgID      OrgID
+		Name       string
+		Schedule   string
+		Holder     *string
+		AcquiredAt *time.Time
+		Infinite   bool
+		ExpiresAt  *time.Time
+	}
+	err := s.db.WithContext(WithoutTenantScope(context.Background())).Raw(`
+		SELECT w.id, w.org_id, w.name, w.schedule,
+		       l.holder, l.acquired_at,
+		       l.expires_at = 'infinity' AS infinite,
+		       CASE WHEN l.expires_at = 'infinity' THEN NULL ELSE l.expires_at END AS expires_at
+		FROM cron_watches w
+		LEFT JOIN leases l ON l.name = 'cron:' || w.id
+		WHERE w.enabled AND w.deleted_at IS NULL
+		ORDER BY w.id`).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	out := make([]CronMode, 0, len(rows))
+	for _, r := range rows {
+		m := CronMode{WatchID: r.ID, OrgID: r.OrgID, Name: r.Name, Schedule: r.Schedule, Mode: CronModeLease}
+		if r.Holder != nil {
+			m.Holder = *r.Holder
+		}
+		if r.AcquiredAt != nil {
+			m.AcquiredAt = *r.AcquiredAt
+		}
+		if r.ExpiresAt != nil {
+			m.ExpiresAt = *r.ExpiresAt
+		}
+		switch {
+		case m.Holder == CronClaimsHolder && r.Infinite:
+			m.Mode = CronModeClaims
+		case m.Holder == CronRollbackHolder && m.ExpiresAt.After(now):
+			m.Mode = CronModeRollback
+		}
+		out = append(out, m)
 	}
 	return out, nil
 }
