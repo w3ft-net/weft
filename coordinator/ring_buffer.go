@@ -75,7 +75,11 @@ func (r *RingBuffer) Drain(maxRows int) []*pb.LogRow {
 	tail := (r.head - r.count + r.size) % r.size
 	rows := make([]*pb.LogRow, n)
 	for i := 0; i < n; i++ {
-		rows[i] = r.buf[(tail+i)%r.size]
+		idx := (tail + i) % r.size
+		rows[i] = r.buf[idx]
+		// Release the slot: otherwise a drained row stays reachable until
+		// the write head laps it, pinning up to capacity rows' worth of heap.
+		r.buf[idx] = nil
 	}
 	r.count -= n
 
