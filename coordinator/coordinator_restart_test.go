@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
@@ -21,7 +22,7 @@ func TestCoordinator_RediscoveryDoesNotLoseData(t *testing.T) {
 	}
 	t.Cleanup(func() { s0.Close() })
 
-	coord := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "testcust", "myapp")})
+	coord := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: testQueryStore(t, "testcust", "myapp")})
 	addInProcessShard(t, coord, &logdb.Shard{
 		ID:          "shard-0",
 		WindowStart: DevT0,

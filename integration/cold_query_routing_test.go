@@ -17,6 +17,7 @@ import (
 	_ "github.com/duckdb/duckdb-go/v2"
 	"google.golang.org/grpc"
 
+	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/coordinator"
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -115,10 +116,9 @@ func TestColdShardQueryRouting(t *testing.T) {
 	t.Cleanup(func() { cold.Close() })
 
 	svcs := []store.ShardService{{NamespaceID: ns.ID, Service: "vimgym"}}
-	c := coordinator.NewCoordinator(coordinator.CoordinatorConfig{
+	c := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{},
 		Store:             tx,
-		LambdaFunctionURL: lambdaSrv.URL,
-	})
+		LambdaFunctionURL: lambdaSrv.URL})
 
 	// The real MintShard path persists three things: the shard_records row,
 	// the in-memory registry entry, and the shard_services rows that query

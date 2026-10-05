@@ -18,9 +18,9 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// poolFromCoord returns the *compute.LocalComputePool that NewCoordinator
-// installs by default. Fails the test if some earlier code wrapped or
-// replaced c.Pool — that's a setup-order bug.
+// poolFromCoord returns the *compute.LocalComputePool that
+// setupTestCoordinator and friends passed as CoordinatorConfig.Pool.
+// Fails the test if some earlier code wrapped or replaced c.Pool — that's a setup-order bug.
 func poolFromCoord(t testing.TB, c *Coordinator) *compute.LocalComputePool {
 	t.Helper()
 	pool, ok := c.Pool.(*compute.LocalComputePool)
@@ -207,7 +207,7 @@ func setupTestCoordinator(t testing.TB) *Coordinator {
 	}
 
 	apps := []string{"vimgym", "callbox"}
-	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym", "callbox", "warp")})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: testQueryStore(t, "kevlar", "vimgym", "callbox", "warp")})
 	addInProcessShard(t, c, &logdb.Shard{
 		ID:          "shard-0",
 		WindowStart: t0, WindowEnd: t1,
@@ -629,10 +629,9 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 	now := time.Now()
 	apps := []string{"vimgym", "callbox"}
 
-	c := NewCoordinator(CoordinatorConfig{
-		LambdaFunctionURL: "https://lambda.example.com/cold-query",
-	})
-	// Register in-process resolvers on the default LocalComputePool
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{},
+		LambdaFunctionURL: "https://lambda.example.com/cold-query"})
+	// Register in-process resolvers on the LocalComputePool
 	// BEFORE wrapping in spyPool, because addInProcessShard reaches
 	// for the underlying *compute.LocalComputePool through c.Pool.
 	addInProcessShard(t, c, &logdb.Shard{

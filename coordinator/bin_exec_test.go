@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/graybeardcorp/weft/compute"
 )
 
 // TestRunLocal_BinBashScriptResolution verifies that /bin/ bash scripts
@@ -17,7 +19,7 @@ func TestRunLocal_BinBashScriptResolution(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Store: db})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
 	result, err := c.runLocal(context.Background(), "who alice", TimeRange{}, "", custID, "", nil, nil)
 	if err != nil {
 		t.Fatalf("runLocal: %v", err)
@@ -43,7 +45,7 @@ func TestRunLocal_BinLuaScriptResolution(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Store: db})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
 	result, err := c.runLocal(context.Background(), "greet world", TimeRange{}, "", custID, "", nil, nil)
 	if err != nil {
 		t.Fatalf("runLocal: %v", err)
@@ -63,7 +65,7 @@ func TestRunLocal_BinBashPositionalRebinds(t *testing.T) {
 	if err := db.SaveShellFunction(custID, "", "greet", `echo "hello $1"`, "bash"); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	c := NewCoordinator(CoordinatorConfig{Store: db})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
 
 	alice, err := c.runLocal(context.Background(), "greet alice", TimeRange{}, "", custID, "", nil, nil)
 	if err != nil {

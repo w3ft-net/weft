@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/graybeardcorp/weft/compute"
 	weftcfg "github.com/graybeardcorp/weft/config"
 	"github.com/graybeardcorp/weft/coordinator"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -48,7 +49,7 @@ func TestIngestStream_PerTokenRateLimit_ThrottlesButDeliversAll(t *testing.T) {
 	var cfgPtr atomic.Pointer[weftcfg.Runtime]
 	cfgPtr.Store(cfg)
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Store: tx})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: tx})
 	srv := &Server{Coord: coord, Store: tx, CfgPtr: &cfgPtr}
 
 	ctx := metadata.NewIncomingContext(context.Background(),
@@ -103,7 +104,7 @@ func TestIngestStream_PerTokenRateLimit_Disabled(t *testing.T) {
 	var cfgPtr atomic.Pointer[weftcfg.Runtime]
 	cfgPtr.Store(cfg)
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Store: tx})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: tx})
 	srv := &Server{Coord: coord, Store: tx, CfgPtr: &cfgPtr}
 
 	ctx := metadata.NewIncomingContext(context.Background(),

@@ -7,6 +7,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/coordinator"
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -17,7 +18,7 @@ import (
 // preconditions without a launcher or DB.
 func shardAdminServer(t *testing.T, shardID string, state logdb.ShardState) *Server {
 	t.Helper()
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}})
 	logdb.SeedShard(coord.Provisioner, &logdb.Shard{ID: shardID, State: state})
 	return &Server{Coord: coord}
 }
@@ -100,7 +101,7 @@ func TestForceRemoveShard_HasInstanceOrVolume_RefusedWithoutForce(t *testing.T) 
 		"volume":   {ID: "shard-a", State: logdb.StateArchiving, EBSVolumeID: "vol-123"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
+			coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}})
 			logdb.SeedShard(coord.Provisioner, sh)
 			srv := &Server{Coord: coord}
 			_, err := srv.ForceRemoveShard(context.Background(), &pb.ForceRemoveShardRequest{ShardId: "shard-a"})

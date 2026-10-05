@@ -7,6 +7,7 @@ import (
 
 	"google.golang.org/grpc/metadata"
 
+	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/coordinator"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
@@ -37,10 +38,9 @@ func TestIngestStream_FlushesImmediatelyForActiveTailSubscriber(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{},
 		Store: tx,
-		Tail:  coordinator.NewTailBroker(),
-	})
+		Tail:  coordinator.NewTailBroker()})
 	srv := &Server{Coord: coord, Store: tx}
 
 	subCtx, cancelSub := context.WithCancel(context.Background())

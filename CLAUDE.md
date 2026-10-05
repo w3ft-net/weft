@@ -26,7 +26,7 @@ The project depends on `github.com/graybeardcorp/warp` via a local replace direc
 
 **Shard nodes** — time-partitioned DuckDB instances. Each owns a window of log data and is its own finite state machine (`logdb.Shard`): LAUNCHING → INGESTING (→ DEGRADED, the ingest circuit breaker) → READ_ONLY → ARCHIVING → ARCHIVED, with SUSPENDED (recoverable instance-death branch) and GONE (cleanup sink). A bucket can hold several INGESTING shards at once (its `Target`); the bucket FSM rotates/scales the cohort. The coordinator hosts the FSMs but each shard's own `Evaluate` drives its convergence — there's no separate reconciler. See `logdb/states.go` and `docs/plans/asg-as-api-stateless.md` for the transition table.
 
-**Compute pool** — stateless gpipe workers for post-filter pipeline stages. Deferred to Phase 3; coordinator runs gpipe inline initially.
+**Compute pool** — stateless gpipe workers for post-filter pipeline stages. Run by `cmd/compute`; the coordinator dispatches every query to it over gRPC (`--compute`, required) and never runs pipeline stages itself.
 
 **weftd** — optional Go agent deployed on customer instances for sub-second log tailing via gRPC. Ships structured lines to the coordinator.
 

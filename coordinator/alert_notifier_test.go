@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/compute"
 )
 
 // TestQuery_InteractiveAlertUsesCoordinatorNotifier — regression guard for
@@ -25,10 +27,9 @@ func TestQuery_InteractiveAlertUsesCoordinatorNotifier(t *testing.T) {
 		t.Fatalf("get customer: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{},
 		Store:    db,
-		Notifier: NewNotifier(db, nil),
-	})
+		Notifier: NewNotifier(db, nil)})
 
 	// No alias is defined in /etc/notify.yaml, so Notifier.Send returns
 	// "no notify.yaml configured". The point is that Send is REACHED —
@@ -60,10 +61,8 @@ func TestQuery_InteractiveAlertFallbackWhenNoNotifier(t *testing.T) {
 		t.Fatalf("get customer: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{
-		Store: db,
-		// Notifier: nil
-	})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{},
+		Store: db}) // Notifier: nil
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	result, err := c.Execute(context.Background(), `echo 40 | alert above 30 --notify=foo`, tr, cust.Name, "")

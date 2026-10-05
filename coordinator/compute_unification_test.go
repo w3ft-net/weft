@@ -33,7 +33,7 @@ func (p *spyPool) NewJob(stages []string, shardCount int, mergeKey string, limit
 func TestQuery_NoStages_RoutesThroughComputePool(t *testing.T) {
 	c := setupTestCoordinator(t)
 	// setupTestCoordinator already registered InProcessResolvers on
-	// c.Pool (the default LocalComputePool). Wrap it in spyPool so we
+	// c.Pool (a LocalComputePool). Wrap it in spyPool so we
 	// can observe ExecuteQuery calls without breaking the resolution.
 	pool := &spyPool{inner: c.Pool}
 	c.Pool = pool
@@ -49,14 +49,5 @@ func TestQuery_NoStages_RoutesThroughComputePool(t *testing.T) {
 
 	if pool.execCount.Load() != 1 {
 		t.Fatalf("expected exactly one ExecuteQuery call, got %d", pool.execCount.Load())
-	}
-}
-
-// TestNewCoordinator_DefaultsLocalPool pins the constructor invariant:
-// every Coordinator has a Pool so queries never dispatch to nil.
-func TestNewCoordinator_DefaultsLocalPool(t *testing.T) {
-	c := NewCoordinator(CoordinatorConfig{})
-	if c.Pool == nil {
-		t.Fatal("NewCoordinator returned a Coordinator with nil Pool; expected default LocalComputePool")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -120,7 +121,7 @@ func TestCoordinatorQuery_CatRedirectFromEtcToTmp(t *testing.T) {
 		t.Fatalf("seed /etc/notify.yaml: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Store: db})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	cust, _ := db.GetOrgByID(custID)
 
@@ -158,7 +159,7 @@ func TestCoordinatorQuery_CatTmpReturnsContent(t *testing.T) {
 		t.Fatalf("seed /tmp/note: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Store: db})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	cust, _ := db.GetOrgByID(custID)
 

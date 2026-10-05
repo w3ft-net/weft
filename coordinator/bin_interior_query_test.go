@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
@@ -60,9 +61,8 @@ func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, 
 		t.Fatalf("ingest: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{
-		Store: db,
-	})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{},
+		Store: db})
 	addInProcessShard(t, c, &logdb.Shard{
 		ID:        s.ID(),
 		State:     logdb.StateIngesting,

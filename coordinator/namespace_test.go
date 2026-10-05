@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
@@ -85,7 +86,7 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 		t.Fatalf("ingest: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "graybeard", "weft", "grantcentral")})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: testQueryStore(t, "graybeard", "weft", "grantcentral")})
 	addInProcessShard(t, c, &logdb.Shard{
 		ID:          "ns-shard-0",
 		WindowStart: base,

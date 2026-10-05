@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/coordinator"
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -63,7 +64,7 @@ func ctxWithBearer(token string) context.Context {
 // only auth, so we don't need a real DB.
 func helperServer(t *testing.T) *Server {
 	t.Helper()
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}})
 	logdb.SeedShard(coord.Provisioner, &logdb.Shard{ID: "shard-a", State: logdb.StateIngesting})
 	return &Server{Coord: coord}
 }

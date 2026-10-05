@@ -14,6 +14,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
+	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
@@ -165,7 +166,7 @@ func TestDLQ_Write_NilSafe(t *testing.T) {
 // pulled off the ring buffer lands in the DLQ.
 func TestDrain_NoHealthyShards_RoutesToDLQ(t *testing.T) {
 	dlq, putter := testDLQ()
-	c := NewCoordinator(CoordinatorConfig{DLQ: dlq})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, DLQ: dlq})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -192,7 +193,7 @@ func TestDrain_NoHealthyShards_RoutesToDLQ(t *testing.T) {
 // in the DLQ.
 func TestDrain_PrimaryAndFallbackFail_RoutesToDLQ(t *testing.T) {
 	dlq, putter := testDLQ()
-	c := NewCoordinator(CoordinatorConfig{DLQ: dlq})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, DLQ: dlq})
 	// Apps must include the row's app, otherwise IngestingShard
 	// returns nil and we'd hit the "no shard owns this app" branch
 	// instead of the primary+fallback-fail one we're pinning here.

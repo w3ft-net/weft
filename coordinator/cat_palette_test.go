@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/theme"
 )
 
@@ -22,7 +23,7 @@ func TestRunLocal_CatHighlightsWithWeftPalette(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Store: db})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
 	result, err := c.runLocal(context.Background(), "cat /bin/greet", TimeRange{}, "", custID, "", nil, nil)
 	if err != nil {
 		t.Fatalf("runLocal: %v", err)

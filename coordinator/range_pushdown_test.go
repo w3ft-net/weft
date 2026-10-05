@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
@@ -54,7 +55,7 @@ func TestCoordinator_PlannerInjectsTimeRange(t *testing.T) {
 	t.Cleanup(func() { cold.Close() })
 
 	// Build coordinator with both shards.
-	c := NewCoordinator(CoordinatorConfig{Store: testQueryStore(t, "kevlar", "vimgym")})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: testQueryStore(t, "kevlar", "vimgym")})
 	addInProcessShard(t, c, &logdb.Shard{
 		ID:          "shard-live",
 		WindowStart: t1, WindowEnd: t2, State: logdb.StateIngesting, Live: live,

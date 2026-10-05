@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/notices"
 )
 
@@ -21,7 +22,7 @@ func TestCoordinatorQuery_RecordsCreatorOnTmpWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Store: db})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
 	// Use the customer's name (not its ID) — Query takes a name.
@@ -53,7 +54,7 @@ func TestCoordinatorQuery_RecordsCreatorOnTmpWrite(t *testing.T) {
 func TestCoordinatorQuery_EmptyUserStoresNullCreator(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	c := NewCoordinator(CoordinatorConfig{Store: db})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
 	cust, _ := db.GetOrgByID(custID)
@@ -81,7 +82,7 @@ func TestCoordinatorQuery_AttachesTmpExpiryNoticeOnFirstWrite(t *testing.T) {
 	alice, _ := db.CreateUser("alice-notice@example.test")
 	bob, _ := db.CreateUser("bob-notice@example.test")
 
-	c := NewCoordinator(CoordinatorConfig{Store: db})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	cust, _ := db.GetOrgByID(custID)
 
@@ -138,7 +139,7 @@ func TestCoordinatorExecuteForWatch_StoresNullCreator(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Store: db})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	res, err := c.ExecuteForWatch(context.Background(), `echo from-watch > /tmp/watchnote`, tr, w)
 	if err != nil {

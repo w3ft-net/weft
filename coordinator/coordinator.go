@@ -156,7 +156,7 @@ func (r *ExecuteResult) Drain(ctx context.Context) (*DrainedResult, error) {
 // registry so c.Provisioner is never nil — drain and query paths
 // read fields fresh on every pass, so the swap is safe.
 type Coordinator struct {
-	Pool         compute.ComputePool     // nil = no compute support
+	Pool         compute.ComputePool     // required; every query dispatches through it
 	Tail         *TailBroker             // nil = no live-tail subscriptions
 	TailFanout   *TailFanout             // nil exactly when Tail is nil; wraps Tail, with or without Redis configured
 	Ingest       *RingBuffer             // write path: IngestStream → buffer → shards. NewCoordinator always installs one; StartDrain still has to be called explicitly.
@@ -306,14 +306,11 @@ func (s *SeenServices) Names(customerID int64) []string {
 // — registry population is the provisioner's concern, not the
 // coordinator's.
 func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
-	pool := cfg.Pool
-	if pool == nil {
-		// Every query routes through the compute pool — including the
-		// zero-stage shard-only case — so a Coordinator without a Pool
-		// would have nothing to dispatch to. Default to an in-process
-		// LocalComputePool; callers wanting remote compute pass a
-		// GRPCComputePool explicitly.
-		pool = &compute.LocalComputePool{}
+	// Every query routes through the compute pool — including the
+	// zero-stage shard-only case — so there is no meaningful default.
+	// Production passes a GRPCComputePool; tests pass a LocalComputePool.
+	if cfg.Pool == nil {
+		panic("coordinator: CoordinatorConfig.Pool is required")
 	}
 	ingest := cfg.Ingest
 	if ingest == nil {
@@ -344,7 +341,7 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		prov.SetStore(cfg.Store)
 	}
 	c := &Coordinator{
-		Pool:                   pool,
+		Pool:                   cfg.Pool,
 		Provisioner:            prov,
 		Tail:                   cfg.Tail,
 		Ingest:                 ingest,

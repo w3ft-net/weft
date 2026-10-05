@@ -67,7 +67,7 @@ Docker Compose with containerized DuckDB shard nodes. This lets us test multi-no
   the past → INGESTING → READ_ONLY; past retention → ARCHIVING
   (Parquet export + volume delete — no snapshot).
 - Coordinator behind ALB (1-2 instances)
-- Compute pool deferred to Phase 3 — coordinator runs gpipe inline initially
+- Compute workers (`cmd/compute`) run all post-filter stages; the coordinator requires a compute address and never runs gpipe inline
 
 ## Multi-tenancy
 

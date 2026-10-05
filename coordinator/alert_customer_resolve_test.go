@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/compute"
 )
 
 // TestQuery_InteractiveAlertResolvesCallerCustomer is a RED test for a
@@ -40,10 +42,9 @@ func TestQuery_InteractiveAlertResolvesCallerCustomer(t *testing.T) {
 
 	// Prod-shaped Coordinator: Store + Notifier are set, but OrgID
 	// is zero (it's never set by cmd/coordinator/main.go either).
-	c := NewCoordinator(CoordinatorConfig{
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{},
 		Store:    db,
-		Notifier: NewNotifier(db, nil),
-	})
+		Notifier: NewNotifier(db, nil)})
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	result, err := c.Execute(context.Background(), `echo 40 | alert above 30 --notify=foo`, tr, cust.Name, "")
@@ -106,11 +107,9 @@ func TestQuery_InteractiveBinExpandResolvesCallerCustomer(t *testing.T) {
 		t.Fatalf("save script: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{},
 		Store:    db,
-		Notifier: NewNotifier(db, nil),
-		// OrgID intentionally zero.
-	})
+		Notifier: NewNotifier(db, nil)}) // OrgID intentionally zero.
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	result, err := c.Execute(context.Background(), `echo_first disk`, tr, cust.Name, "")

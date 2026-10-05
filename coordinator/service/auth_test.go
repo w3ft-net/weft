@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/coordinator"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
@@ -16,7 +17,7 @@ func TestAuthenticate_NoShardAddr(t *testing.T) {
 	store, cleanup := testStore(t)
 	defer cleanup()
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}})
 	srv := &Server{Coord: coord, Store: store}
 
 	// Create a token.
@@ -57,7 +58,7 @@ func TestAuthenticate_MetricsConfigSync(t *testing.T) {
 	store, cleanup := testStore(t)
 	defer cleanup()
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}})
 	srv := &Server{Coord: coord, Store: store}
 
 	cust, err := store.FindOrCreateOrg("kevlar")
@@ -102,7 +103,7 @@ func TestAuthenticate_InvalidToken(t *testing.T) {
 	store, cleanup := testStore(t)
 	defer cleanup()
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}})
 	srv := &Server{Coord: coord, Store: store}
 
 	_, err := srv.Authenticate(context.Background(), &pb.AuthenticateRequest{Token: "wft_bogus"})

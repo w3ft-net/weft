@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/compute"
 )
 
 // TestCronShareScriptAcrossWatches — the motivating use case. One /bin
@@ -34,7 +36,7 @@ func TestCronShareScriptAcrossWatches(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Store: db})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
 	diskResult, err := c.ExecuteForWatch(context.Background(), strings.TrimSpace(diskW.Pipeline), tr, diskW)
@@ -73,7 +75,7 @@ func TestCronBareNameStillWorks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Store: db})
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	result, err := c.ExecuteForWatch(context.Background(), strings.TrimSpace(w.Pipeline), tr, w)
 	if err != nil {

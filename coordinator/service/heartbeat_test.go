@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/coordinator"
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -19,7 +20,7 @@ import (
 // known heartbeat token. Used by every heartbeat-auth test below.
 func newRegisteredShard(t *testing.T, shardID, token string) *Server {
 	t.Helper()
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}})
 	logdb.SeedShard(coord.Provisioner, &logdb.Shard{
 		ID:             shardID,
 		State:          logdb.StateIngesting,
@@ -83,7 +84,7 @@ func TestHeartbeat_BadBearer_Rejected(t *testing.T) {
 // The coordinator's provisioner is what mints the identity + token in
 // response.
 func TestHeartbeat_EmptyShardID_Christen(t *testing.T) {
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}})
 	srv := &Server{Coord: coord}
 
 	_, err := srv.Heartbeat(context.Background(), &pb.ShardHeartbeatRequest{
@@ -121,7 +122,7 @@ func TestHeartbeat_EmptyToken_Rejected(t *testing.T) {
 // restart" case is now handled by falling back to a Store lookup
 // (TestHeartbeat_UnknownInRegistry_LoadFromStore).
 func TestHeartbeat_UnknownShardID_Rejected(t *testing.T) {
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}})
 	srv := &Server{Coord: coord}
 
 	_, err := srv.Heartbeat(context.Background(), &pb.ShardHeartbeatRequest{
@@ -170,7 +171,7 @@ func TestHeartbeat_UnknownInRegistry_LoadFromStore(t *testing.T) {
 	// the provisioner's ShardOps — the auth fallback path now reads
 	// the persisted token through the provisioner, not directly off
 	// Server.Store (big lift moved auth into Provisioner.AuthenticateShard).
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Store: tx})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: tx})
 	srv := &Server{Coord: coord, Store: tx}
 
 	_, err = srv.Heartbeat(heartbeatCtx(token), &pb.ShardHeartbeatRequest{

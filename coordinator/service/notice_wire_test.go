@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/coordinator"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
@@ -53,7 +54,7 @@ func TestQueryRPC_EmitsNoticesOnFirstTmpWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Store: st})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: st})
 	srv := &Server{Coord: coord, Store: st}
 
 	// Inject the authenticated caller into the context (the auth

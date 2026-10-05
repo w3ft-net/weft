@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/compute"
 )
 
 // Runaway saved scripts must be cancellable — otherwise an infinite
@@ -30,10 +32,9 @@ func TestRunLocal_InfiniteLoopHitsTimeout(t *testing.T) {
 		t.Fatalf("save script: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{},
 		Store:                  db,
-		ScriptExecutionTimeout: 200 * time.Millisecond,
-	})
+		ScriptExecutionTimeout: 200 * time.Millisecond})
 
 	start := time.Now()
 	res, err := c.runLocal(context.Background(), "runaway", TimeRange{}, cust.Name, custID, "", nil, nil)
@@ -74,10 +75,9 @@ func TestRunLocal_QuickScriptCompletesNormally(t *testing.T) {
 		t.Fatalf("save script: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{},
 		Store:                  db,
-		ScriptExecutionTimeout: 5 * time.Second,
-	})
+		ScriptExecutionTimeout: 5 * time.Second})
 
 	result, err := c.runLocal(context.Background(), "quick", TimeRange{}, cust.Name, custID, "", nil, nil)
 	if err != nil {
