@@ -36,7 +36,12 @@ valid).
 - **Phase 1 canary done.** `coord-uptime` (id 12) has run in claim mode since
   03:14:30 UTC, through a second coordinator replacement. One claim and one
   `cron_results` row per slot, no duplicate, no skipped slot.
-- **Not started:** Phase 2 ramp. The overdue guard (below) ships first.
+- **Phase 2 ramp applied.** All 37 crons are on claims: batch A (5) 14:45,
+  batch B (22) 15:22, batch C (7 paging) 15:59, batch D (2 hourly) 16:41 UTC.
+  A, B and C passed their gates; D is soaking (needs two hourly slots).
+  Results under Phase 2.
+- **Overdue guard deployed** (`0cf7130`, rolled 12:56-13:09 UTC). Log-only for
+  tenants without a `system` alias.
 - **Temporary state to remove after the rollout:** `CRON_SHADOW_CLAIMS=true`
   was set with `kevcons config set --no-apply` (not Terraform). The SSM
   parameter is Terraform-managed, so the next `terraform apply` silently
@@ -138,29 +143,81 @@ Abort and `cron-mode rollback <ids>` on any of:
 - sustained `cron_claim result=error` lines (claim store failing);
 - elevated lease or DB errors on the coordinators.
 
-Gate queries for a soak (read-only, via `kevcons db query`):
+Gate queries for a soak (read-only, via `kevcons db query`). Real claim keys
+are `cron:<id>:<interval>:<index>` (id is field 2, index field 4); shadow keys
+are `shadow:cron:<id>:<interval>:<index>` (fields 3 and 5). Using the shadow
+field numbers on real keys returns nothing, silently.
 
 ```sql
--- one claim and one result per slot, for the batch's ids
-SELECT key, holder, claimed_at FROM cron_claims
- WHERE key LIKE 'cron:<id>:%' ORDER BY claimed_at;
-SELECT ran_at, count(*) FROM cron_results
- WHERE cron_watch_id = <id> AND ran_at >= '<tombstone time>' GROUP BY ran_at;
--- holes in a cron's slot sequence (shadow keys: 'shadow:cron:%')
-WITH k AS (SELECT split_part(key,':',3)::int id, split_part(key,':',4) iv,
-                  split_part(key,':',5)::bigint idx FROM cron_claims
-            WHERE key LIKE 'cron:%')
-SELECT id, count(*) n, max(idx)-min(idx)+1 span FROM k GROUP BY id, iv
-HAVING max(idx)-min(idx)+1 <> count(*);
+-- continuity per cron: claims (n) vs the span of slot indexes; holes = span - n
+SELECT split_part(key,':',2) AS id, count(*) AS n,
+       max(split_part(key,':',4)::bigint)-min(split_part(key,':',4)::bigint)+1 AS span,
+       max(claimed_at) AS last_claim
+  FROM cron_claims
+ WHERE key LIKE 'cron:%' AND split_part(key,':',2) IN ('<id>', ...)
+ GROUP BY 1 ORDER BY 1::int;
+-- run recency for every enabled cron; hourly needs its own case, because
+-- the '*/N' pattern does not match '0 * * * *' and it would read as every minute
+SELECT count(*) AS crons,
+       count(*) FILTER (WHERE age > 2*mins*60) AS overdue,
+       round(max(age/(mins*60.0))::numeric,2) AS worst_age_in_intervals
+  FROM (SELECT extract(epoch FROM now()-last_run_at) AS age,
+               CASE WHEN schedule ~ '^0 \* ' THEN 60
+                    ELSE COALESCE(substring(schedule from '^\*/([0-9]+) ')::int, 1) END AS mins
+          FROM cron_watches WHERE enabled AND deleted_at IS NULL) t;
 ```
 
 Results rows prove a run only for crons that print output; for quiet crons
 use `cron_watches.last_run_at` or the coordinator log. `weft-admin cron-mode
 list` (via `kevcons ssh`) shows each cron's mode and lease holder.
 
+Operating notes: `kevcons ssh` without `--instance-id` picks an instance for
+you, and `kevcons db query` relays through one too; either can stall or fail
+if it picks an instance that is being replaced. Gate checks that read logs
+must be run on each coordinator (`--instance-id`), since a claim can be won on
+either. Do the log counts with simple greps: nested quoting through
+`--command` fails with a usage dump.
+
+**Results (2026-10-05).**
+
+| Batch | Crons | Applied (UTC) | Gate |
+|---|---|---|---|
+| A | 8, 10, 18, 20, 22 (collectors) | 14:45:33 | 1m crons 33 claims / span 33, 5m crons 6 / 6; 0 holes; all ran within 2 intervals |
+| B | 22 non-paging crons incl. org 2's 28 and 29 | 15:22:01 | 205 slots, 0 holes, >= 2 real slots each; 0 overdue; 0 errors |
+| C | 2, 3, 4, 13, 17, 24, 25 (paging) | 15:59:34 | 132 slots, 0 holes, >= 3 slots each; 0 overdue; worst run age 1.00 intervals; 0 errors |
+| D | 15, 21 (hourly) | 16:41:06 | soaking until two real slots (17:00, 18:00) |
+
+The canary (`coord-uptime`) had 724 claims over a span of 724 from 03:15 to
+15:18 across three coordinator replacements.
+
+What the ramp showed:
+
+- **Alert dedupe works in claim mode.** `gc-pause-spike-coordinator` crossed
+  its threshold at 16:21:55 and paged once (Slack and PagerDuty); the five
+  later runs still over the threshold sent nothing. That alert was a real GC
+  pause p99 of 84 ms, present in lease mode before batch C.
+- **A restart during a batch is a free test.** A coordinator was replaced at
+  16:02 between batch C's apply and its gate; claims stayed contiguous.
+- **Switch-over transition.** Windows differ between modes, so a switch can
+  leave a gap (a minute-cron lost ~3s) or overlap (an hourly cron's first
+  claimed window starts at the previous hour, inside what its last
+  lease-mode run covered). Harmless for rates and counts; note it when reading
+  data around a cron's switch.
+- **Monitors that count lease events lose their signal.** `lease-holders`,
+  `lease-flap-rate` and `lease-contention` read `lease_event` log lines, which
+  stop for crons on claims. They only collect, so nothing false fires, but
+  they read near zero and need rewriting around `cron_claim result=` lines
+  (Phase 3).
+
 ### Phase 3: cleanup
 
-Remove the lease path and tombstones. New crons default to claims.
+Remove the lease path and tombstones. New crons default to claims. Also:
+
+- rewrite `lease-holders`, `lease-flap-rate` and `lease-contention` around
+  `cron_claim result=won|lost|error` lines;
+- remove the shadow claimer, `CRON_SHADOW_CLAIMS` (set in SSM by hand during
+  the rollout), and old `shadow:` rows (the hourly prune also clears them);
+- keep the overdue guard; it is independent of the scheduling mode.
 
 ## Guards
 
@@ -272,6 +329,24 @@ to 30s later, small against the 5m minimum interval for trial tier.
   per episode, with all of their stopped crons in one message.
 - Operators have no page of their own for a tenant's crons going overdue, only
   the `cron_overdue` log line.
+- Unrelated to this rollout, cause already found elsewhere: **coordinators
+  fail their ELB health check every few hours and are replaced by the ASG**
+  (10-04 10:42, 12:14, 16:04 and 10-05 06:56, 09:00, 11:50, 16:02 UTC, the
+  first three before shadow or claims existed). The cause is
+  `RingBuffer.Drain` in `coordinator/ring_buffer.go`: it never cleared drained
+  slots, so up to 1M rows stayed reachable. The fix (nil the slot, with tests)
+  was uncommitted as of 2026-10-05, and a byte-bounded capacity is still open.
+  The 16:02 victim's runtime metrics fit it: heap rose in a straight line from
+  320 MB (13:47) to ~1.2 GB (16:00), about 6-8 MB/min from boot, flat across
+  all three ramp batches and while the instance held no cron leases.
+- Shard hosts' logs went sparse after a coordinator replacement. Host
+  `...29-158` heartbeated every minute until 16:03, then about every ten
+  minutes. `shard-host-count` therefore flips 4/5 depending on which
+  five-minute windows contain its heartbeat, and `shard-host-loss` paged at
+  17:00:36 on a -1 delta. This is in the data, not an artifact of claim
+  windows (the raw heartbeats show it, and `...28-225` was sparse for hours
+  before the ramp). Whether the host is unhealthy or its weftd reconnected
+  badly after the replacement is not established.
 - Unrelated, uninvestigated: the coordinator log shows `drain: DLQ'd ~50
   rows ... (no shard serves this service)` for `loom/api`, `loom/worker` and
   `loom/edge`, continuously.
