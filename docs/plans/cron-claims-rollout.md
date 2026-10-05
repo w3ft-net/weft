@@ -39,6 +39,10 @@ valid).
 - **Phase 2 ramp applied.** All 37 crons are on claims: batch A (5) 14:45,
   batch B (22) 15:22, batch C (7 paging) 15:59, batch D (2 hourly) 16:41 UTC.
   All four passed their gates. **Phase 2 is complete.** Results under Phase 2.
+- **Phase 3 code done** (not yet deployed at the time of writing): the lease
+  path, tombstone and mode machinery, shadow claimer, `weft-admin cron-mode`
+  and its RPCs are removed; every enabled cron runs under claims by default.
+  The tombstone rows in the database are deliberately left (see Phase 3).
 - **Overdue guard deployed** (`0cf7130`, rolled 12:56-13:09 UTC). Log-only for
   tenants without a `system` alias.
 - **Temporary state to remove after the rollout:** `CRON_SHADOW_CLAIMS=true`
@@ -209,27 +213,53 @@ What the ramp showed:
   claimed window starts at the previous hour, inside what its last
   lease-mode run covered). Harmless for rates and counts; note it when reading
   data around a cron's switch.
-- **Monitors that count lease events lose their signal.** `lease-holders`,
-  `lease-flap-rate` and `lease-contention` read `lease_event` log lines, which
-  stop for crons on claims. They only collect, so nothing false fires, but
-  they read near zero and need rewriting around `cron_claim result=` lines
-  (Phase 3).
+- **Monitors that count lease events** (`lease-holders`, `lease-flap-rate`,
+  `lease-contention`) read `lease_event` log lines for every use of the lease
+  primitive, not only crons. Once crons stop using leases they keep measuring
+  the remaining ones (NAT, the shard FSM leader, the overdue guard), so they
+  need no change; their numbers just drop. If visibility into claim contention
+  is wanted, add a monitor on `cron_claim result=lost|error` lines.
 
 ### Phase 3: cleanup
 
-Remove the lease path and tombstones. New crons default to claims. Also:
+**3a, code (this change).** Every enabled cron runs under claims; there is no
+lease path and no per-cron mode. Removed: `runWatch` and its per-cron lease,
+the sliding `[now-interval, now]` window (`watchQueryRange`), the immediate run
+on acquire, the forward quiet period, the shadow claimer and
+`CRON_SHADOW_CLAIMS`, the tombstone/rollback/mode store APIs, the three
+`WeftAdmin` cron-mode RPCs and `weft-admin cron-mode`. Kept: the claim
+scheduler, `cron_claims` and its hourly prune, and the overdue guard (it
+doesn't depend on the scheduling mode). Behaviour changes to know about:
 
-- rewrite `lease-holders`, `lease-flap-rate` and `lease-contention` around
-  `cron_claim result=won|lost|error` lines;
-- remove the shadow claimer, `CRON_SHADOW_CLAIMS` (set in SSM by hand during
-  the rollout), and old `shadow:` rows (the hourly prune also clears them);
-- keep the overdue guard; it is independent of the scheduling mode.
+- A new cron's first run is its next slot (a slot whose window closed before
+  the cron was created is skipped), not an immediate run on creation.
+- A coordinator that starts takes the latest due slot if no one else has;
+  that is normal claim behaviour, not a duplicate.
+
+**3b, tombstone rows (later, separate step).** The tombstones are `leases` rows
+named `cron:<id>` with `holder = 'claims'` and `expires_at = 'infinity'`. They
+are inert to the new code. Do not delete them in the same release as 3a: during
+the roll an old coordinator that no longer sees a tombstone would start that
+cron under a lease while a new one claims it, a double run. Delete them only
+once every coordinator is on the 3a code and it has been stable for a while:
+
+```sql
+-- tombstones plus any stale per-cron lease rows from the lease era
+DELETE FROM leases WHERE name LIKE 'cron:%';
+```
+
+Until 3b, rolling the code
+back is safe, because the previous code still reads the tombstones.
+
+Also after the 3a roll: remove the by-hand `CRON_SHADOW_CLAIMS` key from the
+SSM config blob (new code ignores it).
 
 ## Guards
 
-- **Forward quiet period.** Claim mode ignores slots whose fire time is before
-  `tombstone.acquired_at + 15s` (10s renew interval plus margin), so the old
-  holder's last tick cannot overlap the first claimed run.
+- **Forward quiet period** (removed in Phase 3a, with the lease path it
+  protected): claim mode ignored slots whose fire time was before
+  `tombstone.acquired_at + 15s`, so a previous lease holder's last tick could
+  not overlap the first claimed run.
 - **Fail closed.** A failed claim write means no run and a retry on the next
   tick; never a run without a claim. Worst case is a skipped slot and a logged
   gap, never a duplicate.
@@ -268,15 +298,17 @@ Remove the lease path and tombstones. New crons default to claims. Also:
 
 ## Rollback runbook
 
-Per cron: do not delete the tombstone. Set the row to `holder='rollback'`,
-`expires_at = now() + 45s`. Claim mode stops when the tombstone is gone;
-lease mode cannot take over until the 45s pass, so nothing overlaps.
-`weft-admin cron-mode rollback <id|all>` does this.
+Per-cron rollback (`weft-admin cron-mode rollback`) existed only while both
+paths did, and was removed in Phase 3a. Now:
 
-If the *code* is rolled back while tombstones exist, those crons stop (they
-don't double-fire). The rollback script must therefore clear tombstones to
-expiring leases first. Order: `cron-mode rollback all`, wait 45s, then roll
-code.
+- To go back, deploy the previous commit. Its coordinators read the tombstones
+  (3b has not run) and run every cron in claim mode, exactly as before 3a.
+- Do not run the 3b `DELETE` until you no longer want that option: once the
+  tombstones are gone, the pre-3a code would run every cron under a lease
+  again, and any rolling deploy mixes the two paths for a few minutes.
+- Before 3a (history): per cron, set the tombstone row to `holder='rollback'`,
+  `expires_at = now() + 45s`, so claim mode stops and the lease path cannot
+  take over until the 45s pass.
 
 ## Latent bug fixed in Phase 0 (confirmed in production before the fix)
 
@@ -300,14 +332,19 @@ client IPs over the Oct 4 hours sampled, more replacement than rolls explain.
 
 ## Tests required
 
-- Store: tombstone beats legacy `AcquireLease`; the rollback state expires;
-  claim insert is exactly-once under concurrency; cleanup removes old claims.
-- Scheduler simulation, fake clock, several coordinators, across every
-  transition (lease -> tombstone -> claims -> rollback): at most one run per
-  slot, bounded gap.
-- Fault injection: claim-store errors mean no run and a retry; lease path
-  unaffected.
-- Lost-lease-then-restart (the latent bug above).
+- Store: claim insert is exactly-once under concurrency; cleanup removes old
+  claims.
+- Scheduler simulation, fake clock, several coordinators and a restart: every
+  slot runs exactly once, windows tile with no gap or overlap and span exactly
+  one interval.
+- Fault injection: claim-store errors mean no run and a retry.
+- A cron created after a slot closed skips that slot; every enabled cron
+  starts under claims with no tombstone and takes no lease; disabling stops
+  it and re-enabling restarts it.
+- Overdue guard: see `coordinator/cron_overdue_test.go`.
+- Retired with the lease path: tombstone-beats-`AcquireLease`, the rollback
+  state, lease -> tombstone -> claims transitions, and lost-lease-then-restart
+  (the latent bug above, which cannot occur without the per-cron lease).
 
 ## Settle time
 

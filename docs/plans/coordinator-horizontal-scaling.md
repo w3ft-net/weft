@@ -16,7 +16,7 @@ a chaos-test harness).
 | 1a | Quick win: S3 traffic off the NAT path entirely | **Done** — `aws_vpc_endpoint.s3` applied, confirmed `available` and associated with `rtb-08515c241db4539ec` |
 | 1b | Found: live prod config drift in `app_config_blob` (shard volume sizes, Stripe price IDs) | **Done** — applied, `app_config_blob` no longer drifts |
 | 2 | CloudWatch poller double-ingest | **Done**, then **moot** — per-log-group lease shipped, then `coordinator/poller` itself was deleted entirely in the push-based CloudWatch cutover (`docs/plans/cloudwatch-kinesis-subscription.md`); see below for the original fix, kept as historical record |
-| 3 | Cron/watch executor double-fire | **Done** — per-watch lease, see below |
+| 3 | Cron/watch executor double-fire | **Done** — per-watch lease, see below; **superseded 2026-10** by per-slot claims (`docs/plans/cron-claims-rollout.md`), which removed the per-cron lease |
 | 4 | In-memory per-process state (tail/ingest/usage) | **Done** — usage stats (append-only flush, see below); `RingBuffer` scoped out (no fix needed, see below); `TailBroker` benchmarked 2026-09-17 (Redis Pub/Sub won), production wiring done 2026-09-17 (`coordinator.TailFanout`, see below), ElastiCache Terraform applied |
 | 5 | Shard FSM/registry convergence race | **Done** 2026-09-17 — `shard-fsm-leader` lease, see below |
 | — | Generic lease primitive (`store.AcquireLease`/`AcquireAndHold`) | **Done** — see below; also fixed a latent concurrent-migration bug this uncovered |

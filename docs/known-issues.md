@@ -197,11 +197,17 @@ has happened yet either).
 **Status:** open, low priority. Candidate fix: wrap each shard/bucket
 `Evaluate` call in a per-call `context.WithTimeout`.
 
-## Cron runs have no gap detection; handoffs silently skip or double-cover a window
+## Cron gap detection is not built (handoffs no longer skip or double-cover a window)
 
-**Where:** `coordinator/cron.go` (`runWatch`, `executeWatch`,
-`watchQueryRange`), `store.ParseScheduleInterval`, and `cron_results`
-(which records `ran_at` but not which window a run covered).
+**Status (2026-10):** the scheduling half is fixed and live; gap *detection*
+and recording a run's window are not built. Everything under **Symptom**
+describes the old per-cron lease and sliding window, which are gone (see
+**Built and rolled out**). Kept for the design reasoning behind what is left.
+
+**Where:** `coordinator/cron_claims.go` (`runClaims`, `claimTick`),
+`coordinator/cron_slot.go`, `executeWatch` in `coordinator/cron.go`,
+`store.ParseScheduleInterval`, and `cron_results` (which records `ran_at` but
+not which window a run covered).
 
 **Symptom:** when a cron's owner stops, loses its lease, or hands it to
 another coordinator, a stretch of time is either never queried or queried
@@ -232,16 +238,25 @@ twice, and nothing records which. Specifically:
 run time, and results are keyed only by when they ran. Nothing ties a
 result to a scheduled slot, so there is nothing to compare against.
 
-**Built, not wired:** `coordinator/cron_slot.go` is the pure slot/window
-logic, with tests and a mutation pass (see its commit). Slot `k` of
-interval `I` covers the epoch-aligned window closing at `k*I`, identical
-for every cron of that interval; `Window()` ends 1µs before the boundary to
-suit the closed bounds; a cron fires at boundary + settle + a stable
-per-watch jitter in `[0, min(I/2, 30s))`; `LatestDueSlot` returns only the
-latest due slot, so missed slots are skipped, never replayed; the claim key
-is `cron:<watch>:<interval>:<k>`. `runWatch` does not call it yet.
+**Built and rolled out (2026-10-05):** `coordinator/cron_slot.go` is the pure
+slot/window logic. Slot `k` of interval `I` covers the epoch-aligned window
+closing at `k*I`, identical for every cron of that interval; `Window()` ends
+1µs before the boundary to suit the closed bounds; a cron fires at boundary +
+settle (30s) + a stable per-watch jitter in `[0, min(I/2, 30s))`;
+`LatestDueSlot` returns only the latest due slot, so missed slots are skipped,
+never replayed. A run happens only if the coordinator wins an insert of the
+claim key `cron:<watch>:<interval>:<k>` into `cron_claims` (a Postgres unique
+key), so a slot runs at most once across coordinators; a failed claim write is
+a skipped slot, never a duplicate. This is now the only execution path: the
+per-cron lease, the sliding `[now-interval, now]` window and the immediate run
+on acquire are removed. Holes are visible in `cron_claims` (a gap in the slot
+index sequence for a cron), and the overdue guard (`cron_overdue.go`) reports a
+cron that has stopped. See `docs/plans/cron-claims-rollout.md`.
 
-**What's left** (design agreed 2026-10-04):
+A new cron's first run is its next slot (a slot whose window closed before the
+cron was created is skipped), not an immediate run as before.
+
+**What's left** (design agreed 2026-10-04; items 1-3 not built):
 
 1. Gap detection as a pure function: given the previous run's window end
    and size and the current slot, return how many slots were missed, and
@@ -260,9 +275,9 @@ is `cron:<watch>:<interval>:<k>`. `runWatch` does not call it yet.
 3. Log `cron[<name>]: skipped N slot(s) (<from>..<to>)` at detection. The log
    line ships into weft, so a cron can alert on it. No extra query: the new
    owner reads the previous window with the watch it already loads.
-4. Wire `runWatch` to slots and an exactly-once claim, and drop the
-   immediate run on acquire (keep an explicit run on create/edit). The claim
-   store is undecided: a unique key in Postgres, or DynamoDB with a TTL.
+4. ~~Wire to slots and an exactly-once claim.~~ Done, with a Postgres unique
+   key as the claim store. The immediate run on acquire is gone; an explicit
+   run on create/edit was not built.
 
 **Policy decided:** skip and record; do not replay or widen. Widening a
 window across N missed intervals inflates count-style values N-fold and can

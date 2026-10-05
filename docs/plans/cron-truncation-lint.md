@@ -5,9 +5,9 @@
 A cron pipeline that puts a row cap on its source stage — `tail -n N`,
 `head -n N`, or a `/bin/` script that wraps one (`log-pattern-count`
 expands to `tail -n $2 ... | grep -c "$3"`) — silently drops anything
-past N. `watchQueryRange` already bounds every cron fire to a
-non-overlapping `[now-interval, now]` window (see
-`coordinator/cron.go`, `cron_window_test.go`), so there's no
+past N. Each cron fire is already bounded to a non-overlapping
+epoch-aligned window of exactly one interval (`CronSlot.Window()` in
+`coordinator/cron_slot.go`), so there's no
 *duplication* across ticks, but within one tick the cap is still a
 cap: if a log source produces more than N matching rows in one
 schedule interval, the excess is dropped before any downstream
