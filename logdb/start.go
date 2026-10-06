@@ -188,6 +188,93 @@ func parseShardTemplates() map[string]string {
 	return out
 }
 
+// exportConfig is the ephemeral archive export's deployment config
+// (docs/plans/ephemeral-archive-export.md), all from the environment so
+// Terraform owns it:
+//
+//	EXPORT_LAUNCH_TEMPLATE  the dedicated export launch template id (Role=export)
+//	EXPORT_MAX_CONCURRENT   cap on export instances in flight (default 2)
+//
+// Export instances launch into the shard tiers' subnets, so the subnet map is
+// derived from SHARD_<TIER>_SUBNETS rather than configured separately.
+type exportConfig struct {
+	LaunchTemplate string
+	MaxConcurrent  int // 0 → defaultMaxConcurrentExports
+	Subnets        map[string]string
+}
+
+// parseExportConfig reads the export config. tierSubnets is tier→az→subnet; the
+// export uses one subnet per AZ, the smaller tier's winning where tiers differ.
+func parseExportConfig(tierSubnets map[string]map[string]string) exportConfig {
+	c := exportConfig{
+		LaunchTemplate: strings.TrimSpace(os.Getenv("EXPORT_LAUNCH_TEMPLATE")),
+		Subnets:        map[string]string{},
+	}
+	for _, tier := range []string{"small", "medium", "large"} {
+		for az, subnet := range tierSubnets[tier] {
+			if _, taken := c.Subnets[az]; !taken {
+				c.Subnets[az] = subnet
+			}
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("EXPORT_MAX_CONCURRENT")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			log.Printf("warning: EXPORT_MAX_CONCURRENT=%q is not a positive integer, using the default (%d)", raw, defaultMaxConcurrentExports)
+		} else {
+			c.MaxConcurrent = n
+		}
+	}
+	return c
+}
+
+// usable reports whether the export can run, and if not, why. The export
+// writes its manifest under the archive prefix over S3 and the coordinator
+// reads it back, so a local parquet dir cannot carry it.
+func (c exportConfig) usable(parquetDir string) (bool, string) {
+	switch {
+	case c.LaunchTemplate == "":
+		return false, "EXPORT_LAUNCH_TEMPLATE is not set"
+	case len(c.Subnets) == 0:
+		return false, "no shard subnets to launch export instances into"
+	case !strings.HasPrefix(parquetDir, "s3://"):
+		return false, fmt.Sprintf("PARQUET_DIR %q is not an s3:// prefix", parquetDir)
+	}
+	return true, ""
+}
+
+// wireArchiveExport enables the ephemeral archive export on provConfig when it
+// is configured. When it is not — or cannot be built — shards keep archiving in
+// process, which is the pre-export behavior: loud in the log, never a boot
+// failure, because a coordinator that will not start is worse than a slow
+// archive.
+func wireArchiveExport(ctx context.Context, provConfig *ProvisionerConfig, region string, tierSubnets map[string]map[string]string) {
+	c := parseExportConfig(tierSubnets)
+	if ok, why := c.usable(provConfig.ParquetDir); !ok {
+		log.Printf("provisioner: archive export disabled (%s); shards archive in process", why)
+		return
+	}
+	exports, err := NewExportResources(region, c.Subnets, c.LaunchTemplate)
+	if err != nil {
+		log.Printf("provisioner: archive export disabled, ExportResources: %v; shards archive in process", err)
+		return
+	}
+	manifests, err := shard.NewS3ManifestStore(ctx, region)
+	if err != nil {
+		log.Printf("provisioner: archive export disabled, manifest store: %v; shards archive in process", err)
+		return
+	}
+	provConfig.Exports = exports
+	provConfig.ExportManifests = manifests
+	provConfig.MaxConcurrentExports = c.MaxConcurrent
+	maxConcurrent := c.MaxConcurrent
+	if maxConcurrent == 0 {
+		maxConcurrent = defaultMaxConcurrentExports
+	}
+	log.Printf("provisioner: archive export enabled (template=%s subnets=%v max_concurrent=%d)",
+		c.LaunchTemplate, c.Subnets, maxConcurrent)
+}
+
 // startProd wires the EC2Provisioner, provisioner, and volume manager for
 // production deploys. The coordinator launches shard instances directly via
 // RunInstances/TerminateInstances (no Auto Scaling Group) — it is the sole
@@ -215,6 +302,7 @@ func startProd(cfg Config, reg *ShardRegistry, lambdaURL string, subnets map[str
 	provConfig.LambdaFunctionURL = lambdaURL
 	provConfig.VolumeSizesGB = parseShardVolumeSizes()
 	provConfig.Holder = cfg.Holder
+	wireArchiveExport(cfg.Ctx, &provConfig, cfg.AWSRegion, subnets)
 	log.Printf("provisioner: per-tier volume sizes (GiB) from env: %v (tiers absent fall back to %d)", provConfig.VolumeSizesGB, defaultShardVolumeGB)
 	prov := NewProvisioner(reg, launcher, provConfig)
 	prov.SetVolumeManager(vm)

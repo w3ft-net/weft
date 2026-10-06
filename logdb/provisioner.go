@@ -96,6 +96,13 @@ type ProvisionerConfig struct {
 	// onto ShardDeps so a fresh launch sizes its EBS volume per tier. Nil in
 	// dev/test, where the docker launcher ignores volume size anyway.
 	VolumeSizesGB map[string]int32
+	// Exports and ExportManifests enable the ephemeral archive export; both
+	// nil (dev, tests, or unconfigured prod) keeps the in-process Archive.
+	// MaxConcurrentExports caps export instances in flight (0 → default).
+	// Threaded onto ShardDeps. See docs/plans/ephemeral-archive-export.md.
+	Exports              ExportOps
+	ExportManifests      shard.ManifestReader
+	MaxConcurrentExports int
 	// Holder identifies this process for the "shard-fsm-leader" lease (see
 	// docs/plans/coordinator-horizontal-scaling.md #5) — the same holder
 	// id main.go's coordinatorHolder() mints for the NAT/poller/cron

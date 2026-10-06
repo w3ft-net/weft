@@ -68,6 +68,10 @@ func (p *Provisioner) shardDeps() *ShardDeps {
 			LambdaFunctionURL: p.config.LambdaFunctionURL,
 			Clock:             p.clock,
 			VolumeSizesGB:     p.config.VolumeSizesGB,
+
+			Exports:              p.config.Exports,
+			ExportManifests:      p.config.ExportManifests,
+			MaxConcurrentExports: p.config.MaxConcurrentExports,
 		}
 		if api, ok := p.launcher.(ShardLaunchAPI); ok {
 			d.Launcher = api
