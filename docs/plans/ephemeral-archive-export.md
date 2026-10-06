@@ -443,23 +443,66 @@ Enabling the export removes `4a672d0d` from this path.
 
 ### 2. Infrastructure (`infrastructure-catalog` / `-live`; Terraform review)
 
-- [ ] **Export launch template**: new module modeled on `shard-fleet`.
-      `Role=export` (never `shard`), `instance_metadata_tags = enabled`, no
-      `shard_tier` tag, the shared user-data with `instance_role = "export"`,
-      an egress-only security group, the shard instance profile (it already
-      writes the archive prefix and reads SSM/Secrets for `load-app-env`).
-- [ ] **Coordinator IAM**: `ec2:CreateSnapshot`, `DescribeSnapshots`,
-      `DeleteSnapshot`; `RunInstances` including on `snapshot/*` and
-      `volume/*` resources; `CreateTags` on snapshots and volumes at creation;
-      `iam:PassRole` for the export profile; `s3:GetObject` on
-      `<archive prefix>/_manifests/*`.
-- [ ] **EC2 vCPU quota** for the r7g family (On-Demand Standard) covers
-      `EXPORT_MAX_CONCURRENT` × the largest class's vCPUs.
-- [ ] Config goes in Terraform, not ad-hoc SSM. Adding `EXPORT_*` changes the
-      app config blob's SSM parameter: **stop and warn on that plan line**.
-      Leave `EXPORT_LAUNCH_TEMPLATE` unset on this first apply.
-- [ ] Check whether this stack's apply also touches the cold-shard Lambda
-      (it reverts to a placeholder; redeploy after if so).
+Written, validated and formatted, **not planned or applied**, and not
+committed (those repos are edited from outside this worktree). Two stages,
+like the janitor: stage 1 creates the template and IAM with the feature off and
+must not change `app_config_blob`; stage 3 flips `archive_export_enabled`.
+
+What changed:
+- `modules/export-fleet/` (new): launch template + egress-only security
+  group. `Role=export` (never `shard`), no `shard_tier`, IMDS tags on,
+  `instance_initiated_shutdown_behavior = terminate`, the shared user-data
+  with `instance_role = "export"`. Deliberately not the `shard-fleet` module,
+  so the shard launch templates cannot show a diff.
+- `stacks/asg-weft-application`: `module.export_fleet` (reusing the shard
+  fleet's instance profile, which already carries the SSM/Secrets reads and
+  S3 write the host needs), `aws_iam_role_policy.coordinator_export_output_cleanup`,
+  variables `archive_export_enabled` (default false),
+  `archive_export_max_concurrent` (default 1) and
+  `export_default_instance_type`, the two `EXPORT_*` blob keys behind
+  `archive_export_enabled`, and outputs.
+- `prod/weft`: the two variables (default off) and the pass-through. The
+  tfvars is untouched.
+
+Verified read-only against the live account (`kevcons aws`):
+- [x] The shared `weft-instance-role` already **allows** `ec2:CreateSnapshot`,
+      `DeleteSnapshot`, `DescribeSnapshots`, `RunInstances`,
+      `TerminateInstances`, `CreateTags`, `DescribeInstances`, and
+      `iam:PassRole` to itself. No new EC2 or PassRole grant is needed.
+- [x] **EC2 vCPU quota** (Running On-Demand Standard): 256, ample for
+      `EXPORT_MAX_CONCURRENT` × 8 vCPUs (r7g.2xlarge).
+- [x] The S3 gateway endpoint is attached to the shard subnets' route table,
+      so export traffic does not ride the coordinator NAT.
+- [x] The role's inline policies total about 5.8 KB (with whitespace) against
+      the 10.2 KB aggregate cap; the new policy adds about 200 bytes.
+- [x] `s3:DeleteObject` on the cold bucket is **implicitly denied** today. The
+      new grant allows it only on `*.attempt-*` keys, checked with the policy
+      simulator: allowed for `<id>.attempt-N.parquet` and
+      `<id>.attempt-N/<part>/data_0.parquet`; denied for the in-process layout
+      `<id>/…`, `<id>.parquet` and `_manifests/…`.
+
+Still to do:
+- [ ] `terraform init` then `terraform plan` in `prod/weft`; expected: **3
+      to add** (`module.export_fleet.aws_launch_template.export`,
+      `module.export_fleet.aws_security_group.export`,
+      `aws_iam_role_policy.coordinator_export_output_cleanup`), two new
+      outputs, **no change to the `app_config_blob` SSM parameter, nothing
+      destroyed**. Any other change is live drift (see the Stripe notes in
+      `prod/weft/main.tf`): stop and look before applying. Per the repo rule an
+      apply is run by you, teeing to a log.
+- [ ] Check whether this stack's apply also touches the cold-shard Lambda (it
+      reverts to a placeholder; redeploy after if so).
+- [ ] Stage 3 (after the drill): set `archive_export_enabled = true`; that
+      plan should touch only `app_config_blob`.
+
+**Separate finding, not fixed here: the retention janitor cannot delete from
+S3.** `janitor_enabled = true` in prod, but the coordinator's role has no
+`s3:DeleteObject` on the cold bucket (the same simulation: implicit deny); the
+only `DeleteObject` in the stack is on the compactor Lambda's role. The
+janitor's `S3ObjectDeleter` runs on the coordinator, so its tombstone sweep and
+retirement deletes should fail with AccessDenied. The export's grant above is
+deliberately narrower and does not fix this. Worth checking the coordinator
+logs for `janitor:` errors; widening delete on customer data is your call.
 
 ### 3. Deploy (merge to `main`; CI builds and rolls the AMI)
 
