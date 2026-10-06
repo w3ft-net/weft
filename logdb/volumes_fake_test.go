@@ -26,6 +26,8 @@ type fakeVolumeManager struct {
 	findErr    map[string]error
 
 	nextVolID int
+
+	deleted []string // volume ids passed to DeleteVolume
 }
 
 type attachedPair struct{ volumeID, instanceID, device string }
@@ -83,4 +85,9 @@ func (f *fakeVolumeManager) DetachFromInstance(_ context.Context, _ string, _ bo
 	return nil
 }
 
-func (f *fakeVolumeManager) DeleteVolume(_ context.Context, _ string) error { return nil }
+func (f *fakeVolumeManager) DeleteVolume(_ context.Context, volumeID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleted = append(f.deleted, volumeID)
+	return nil
+}

@@ -996,6 +996,66 @@ func TestShardSM_EvaluateArchivingOrphanStaysArchiving(t *testing.T) {
 	}
 }
 
+// An ARCHIVING shard with no live handle and no recorded export must not have
+// its volume deleted or its instance terminated: nothing has been exported, so
+// the volume is the only copy of the data. (Reachable when the live handle is
+// absent, e.g. a coordinator that restarted before the shard was re-attached.)
+func TestShardSM_EvaluateArchivingWithoutLiveHandleKeepsUnexportedVolume(t *testing.T) {
+	fl := &fakeLauncher{}
+	vm := &fakeVolumeManager{}
+	sm, db, entry := makeFixtureShardSM(t, StateArchiving, func(d *ShardDeps) {
+		d.Launcher = fl
+		d.Volumes = vm
+		d.ParquetDir = "s3://weft"
+	})
+	entry.Live = nil
+	entry.RowCount = 1000 // it holds data, so there is something to export
+	entry.EBSVolumeID = "vol-1"
+	entry.InstanceID = "i-1"
+	if err := (ShardStore{db}).SetShardLaunchResult("s-test", "i-1", "us-east-2a", "vol-1", nil); err != nil {
+		t.Fatalf("seed launch result: %v", err)
+	}
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(vm.deleted) != 0 {
+		t.Fatalf("volume deleted before any export was recorded: %v", vm.deleted)
+	}
+	if len(fl.terminated) != 0 {
+		t.Fatalf("instance terminated before any export was recorded: %v", fl.terminated)
+	}
+	if st, _ := sm.smState(context.Background()); st != StateArchiving {
+		t.Fatalf("state: got %q want ARCHIVING (no export recorded)", st)
+	}
+}
+
+// The counterpart: a shard that never ingested a row has nothing to export, so
+// its volume and instance are still retired even with no live handle.
+func TestShardSM_EvaluateArchivingEmptyShardWithoutLiveHandleRetires(t *testing.T) {
+	fl := &fakeLauncher{}
+	vm := &fakeVolumeManager{}
+	sm, db, entry := makeFixtureShardSM(t, StateArchiving, func(d *ShardDeps) {
+		d.Launcher = fl
+		d.Volumes = vm
+		d.ParquetDir = "s3://weft"
+	})
+	entry.Live = nil
+	entry.RowCount = 0
+	entry.EBSVolumeID = "vol-1"
+	entry.InstanceID = "i-1"
+	if err := (ShardStore{db}).SetShardLaunchResult("s-test", "i-1", "us-east-2a", "vol-1", nil); err != nil {
+		t.Fatalf("seed launch result: %v", err)
+	}
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(vm.deleted) != 1 || len(fl.terminated) != 1 {
+		t.Fatalf("empty shard not retired: deleted=%v terminated=%v", vm.deleted, fl.terminated)
+	}
+}
+
 func TestShardSM_ArchivedRejectsRotateAndArchive(t *testing.T) {
 	// ARCHIVED is terminal-for-data; only AdminDelete leaves it.
 	for _, trigger := range []Trigger{TriggerRotateRequested, TriggerArchiveRequested, TriggerHeartbeatStale, TriggerLaunchFailed} {

@@ -659,6 +659,7 @@ func (sh *Shard) evaluateArchiving(ctx context.Context) error {
 	volumeID := sh.EBSVolumeID
 	instanceID := sh.InstanceID
 	services := sh.Services
+	rowCount := sh.RowCount
 	sh.mu.Unlock()
 
 	// Step 1 — export to S3 (once). A shard with no recorded path and no
@@ -700,6 +701,16 @@ func (sh *Shard) evaluateArchiving(ctx context.Context) error {
 		parquetPath = path
 		sh.mu.Unlock()
 		log.Printf("shardsm %s: archived to %s", sh.ID, path)
+	}
+
+	// Steps 2 and 3 destroy the only copy of any unexported data, so they run
+	// only once the export is recorded — or when there is provably nothing to
+	// export (no live handle and no rows ever reported). A shard that holds
+	// data but has no live handle stays ARCHIVING and retries; AdminDelete is
+	// the operator escape hatch.
+	if parquetPath == "" && rowCount > 0 {
+		log.Printf("shardsm %s: ARCHIVING with no export recorded and no live handle (%d rows); keeping volume %q and instance %q", sh.ID, rowCount, volumeID, instanceID)
+		return nil
 	}
 
 	// Step 2 — retire the data volume (detach → delete).
