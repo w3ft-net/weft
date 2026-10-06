@@ -223,10 +223,34 @@ decision, COPY start/end, error, rows/files/bytes); honor `ctx` via
 `memory_limit`/threads); shard `gc_pauses_p99` alert. Output: the
 export-capacity table (bytes → RAM/time per instance type).
 
-**Phase 1 — `weft-export` mode.** Open a `.duckdb` read-only from a
-mounted volume, run `exportArchive`, write manifest, shut down. Test:
-export a fixture DB, assert Parquet + manifest, assert the manifest is
-written last.
+**Phase 1 — `weft-shard export` subcommand. DONE.** A subcommand of
+`cmd/shard` (no second binary to bake into the AMI), implemented in
+`shard/export.go` and `cmd/shard/export.go`:
+`weft-shard export --shard-id ID --db PATH --prefix PREFIX --attempt N
+[--timeout D]`. It never serves, heartbeats or registers.
+- `OpenForExport` opens the restored file without creating tables or
+  running migrations, and refuses a missing file or one with no `logs`
+  table, so a mis-mounted empty volume fails instead of exporting an
+  "empty success" the coordinator would act on. It opens read-write, not
+  read-only, so DuckDB can replay a WAL; the volume is a disposable copy.
+- `RunExport` runs `Archive` (so the Phase 0 logging, context and
+  single-flight apply), then writes the manifest last through a
+  `ManifestStore` (`LocalManifestStore` for dev/tests, `S3ManifestStore`
+  for `s3://` prefixes). No manifest on failure; a failed manifest write
+  fails the export.
+- Manifest key: `<prefix>/_manifests/<shard-id>.json` (`ManifestKey`).
+  Fields: shard id, attempt, parquet path, rows, db bytes, per-customer
+  stats, started/finished. `attempt` lets the coordinator ignore a stale
+  manifest.
+- Verified: a crash-consistent copy (main file plus un-replayed WAL,
+  taken while the shard is open) exports every row, so the pre-snapshot
+  `CHECKPOINT` really can be best-effort (resolves part of open question
+  2).
+- Not yet verified: `S3ManifestStore.Put` against real S3 (no LocalStack
+  test), and the export against a snapshot-restored EBS volume.
+- Shutting the host down on success or failure is the instance
+  user-data's job (Phase 2); the binary just exits 0, 1 (failed) or 2
+  (usage).
 
 **Phase 2 — snapshot/volume/instance primitives.** Extend
 `VolumeManager` with snapshot-create/wait/delete and create-from-

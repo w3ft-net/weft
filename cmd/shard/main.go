@@ -27,6 +27,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "export" {
+		os.Exit(runExportCommand(os.Args[2:]))
+	}
+
 	grpcPort := flag.Int("grpc-port", 9000, "gRPC listen port")
 	httpPort := flag.Int("http-port", 9001, "HTTP health listen port")
 	dataDir := flag.String("data-dir", "/opt/app/data", "directory holding shard.json and shard.duckdb")
