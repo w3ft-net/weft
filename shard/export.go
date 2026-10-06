@@ -5,7 +5,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +16,7 @@ import (
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 // The ephemeral archive export (docs/plans/ephemeral-archive-export.md): a
@@ -46,6 +50,13 @@ type ExportManifest struct {
 // ManifestStore persists a manifest at key (as produced by ManifestKey).
 type ManifestStore interface {
 	Put(ctx context.Context, key string, m ExportManifest) error
+}
+
+// ManifestReader is the coordinator's side: it polls for the manifest an export
+// wrote. found is false (with a nil error) when no manifest exists yet; an
+// unreadable or corrupt manifest is an error, never "not found".
+type ManifestReader interface {
+	Get(ctx context.Context, key string) (m ExportManifest, found bool, err error)
 }
 
 // ManifestKey is where a shard's export manifest lives under the archive
@@ -126,7 +137,26 @@ func (LocalManifestStore) Put(_ context.Context, key string, m ExportManifest) e
 	return os.Rename(tmp, key)
 }
 
-// S3ManifestStore writes manifests to S3. A single PutObject is atomic: readers
+func (LocalManifestStore) Get(_ context.Context, key string) (ExportManifest, bool, error) {
+	b, err := os.ReadFile(key)
+	if errors.Is(err, fs.ErrNotExist) {
+		return ExportManifest{}, false, nil
+	}
+	if err != nil {
+		return ExportManifest{}, false, err
+	}
+	return decodeManifest(key, b)
+}
+
+func decodeManifest(key string, b []byte) (ExportManifest, bool, error) {
+	var m ExportManifest
+	if err := json.Unmarshal(b, &m); err != nil {
+		return ExportManifest{}, false, fmt.Errorf("decode manifest %s: %w", key, err)
+	}
+	return m, true, nil
+}
+
+// S3ManifestStore reads and writes manifests in S3. A single PutObject is atomic: readers
 // see the whole object or none of it.
 type S3ManifestStore struct {
 	client *s3.Client
@@ -156,6 +186,27 @@ func (s *S3ManifestStore) Put(ctx context.Context, key string, m ExportManifest)
 		Bucket: &bucket, Key: &objKey, Body: bytes.NewReader(b), ContentType: &ct,
 	})
 	return err
+}
+
+func (s *S3ManifestStore) Get(ctx context.Context, key string) (ExportManifest, bool, error) {
+	bucket, objKey, err := parseS3URL(key)
+	if err != nil {
+		return ExportManifest{}, false, err
+	}
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &bucket, Key: &objKey})
+	if err != nil {
+		var nsk *s3types.NoSuchKey
+		if errors.As(err, &nsk) {
+			return ExportManifest{}, false, nil
+		}
+		return ExportManifest{}, false, fmt.Errorf("get manifest %s: %w", key, err)
+	}
+	defer out.Body.Close()
+	b, err := io.ReadAll(out.Body)
+	if err != nil {
+		return ExportManifest{}, false, fmt.Errorf("read manifest %s: %w", key, err)
+	}
+	return decodeManifest(key, b)
 }
 
 // parseS3URL splits "s3://bucket/key" into its bucket and key.

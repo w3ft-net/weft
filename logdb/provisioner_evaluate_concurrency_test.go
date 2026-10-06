@@ -123,6 +123,19 @@ func (f *fakeConcurrentShardStore) LatestPreRecoveryState(id string) (ShardState
 	return "", nil
 }
 
+// The export-fact methods are never reached by the shards these tests drive
+// (none is ARCHIVING with an export in flight); they only satisfy the interface.
+func (f *fakeConcurrentShardStore) BeginExportAttempt(string, int, string, time.Time) (bool, error) {
+	return false, nil
+}
+func (f *fakeConcurrentShardStore) SetExportSnapshot(string, string) error { return nil }
+func (f *fakeConcurrentShardStore) SetExportInstance(string, string) error { return nil }
+func (f *fakeConcurrentShardStore) ClearExportFacts(string) error          { return nil }
+func (f *fakeConcurrentShardStore) CountActiveExports() (int, error)       { return 0, nil }
+func (f *fakeConcurrentShardStore) LatestShardDiskBytes(string) (int64, error) {
+	return 0, nil
+}
+
 // sleepyLauncher is a ShardLaunchAPI whose Terminate blocks for `delay`
 // before succeeding — standing in for a slow AWS call (e.g. a stuck
 // ec2:TerminateInstances during SUSPENDED recovery) so a test can measure

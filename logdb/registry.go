@@ -57,6 +57,19 @@ type Shard struct {
 	LaunchAttempts  int        `gorm:"not null;default:0;column:launch_attempts"` // per-shard launch retry counter
 	BinarySHA       string     `gorm:"not null;default:'';column:binary_sha"`     // shard's compile-time GitSHA from its heartbeat; weft-admin skips a shard whose SHA already matches the target binary
 
+	// ── ephemeral archive export (migration 080) ──
+	// The persisted facts evaluateArchiving derives the export's phase from
+	// (docs/plans/ephemeral-archive-export.md). ExportAttempt is monotonic and
+	// survives clearing the rest; the others are cleared when an attempt ends.
+	// Written only through ShardStore's narrow methods and mirrored onto the
+	// entry, because SaveShard upserts the whole row and would otherwise write
+	// a stale copy back.
+	ExportSnapshotID   string     `gorm:"column:export_snapshot_id"`
+	ExportInstanceID   string     `gorm:"column:export_instance_id"`
+	ExportInstanceType string     `gorm:"column:export_instance_type"`
+	ExportStartedAt    *time.Time `gorm:"column:export_started_at"`
+	ExportAttempt      int        `gorm:"not null;default:0;column:export_attempt"`
+
 	// ── retention janitor (migration 066) ──
 	// LastPurgedAt is when the janitor last rewrote (or revisited) this
 	// archived shard. The prior parquet from a rewrite is tombstoned in the
@@ -266,7 +279,26 @@ func (e *Shard) persistedCopy() *Shard {
 		StripeIndex:     e.StripeIndex,
 		LaunchAttempts:  e.LaunchAttempts,
 		BinarySHA:       e.BinarySHA,
+
+		// Export facts ride along: SaveShard upserts the whole row, so
+		// omitting them here would write a stale (or empty) copy back over
+		// what the narrow export writers just persisted.
+		ExportSnapshotID:   e.ExportSnapshotID,
+		ExportInstanceID:   e.ExportInstanceID,
+		ExportInstanceType: e.ExportInstanceType,
+		ExportStartedAt:    copyTimePtr(e.ExportStartedAt),
+		ExportAttempt:      e.ExportAttempt,
 	}
+}
+
+// copyTimePtr returns an independent copy of *t, so a persistedCopy never
+// aliases the live entry's pointer.
+func copyTimePtr(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	c := *t
+	return &c
 }
 
 // PersistState saves the current state of an entry to the store.
@@ -348,6 +380,15 @@ func (r *ShardRegistry) RefreshFromStore() {
 		entry.StripeIndex = f.StripeIndex
 		entry.LaunchAttempts = f.LaunchAttempts
 		entry.IngestFailures = f.IngestFailures
+		// Export facts: like AZ/StripeIndex, the DB is never behind memory
+		// (every writer persists before mutating the entry), and after a
+		// leader handover the new leader's entry must see the old leader's
+		// in-flight attempt rather than start a second one.
+		entry.ExportSnapshotID = f.ExportSnapshotID
+		entry.ExportInstanceID = f.ExportInstanceID
+		entry.ExportInstanceType = f.ExportInstanceType
+		entry.ExportStartedAt = f.ExportStartedAt
+		entry.ExportAttempt = f.ExportAttempt
 		// Only refresh services when the shard_services read succeeded;
 		// on a transient error leave the existing membership rather than
 		// wiping live routing to nil.

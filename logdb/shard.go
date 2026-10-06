@@ -26,6 +26,14 @@ type shardRowStore interface {
 	ClearShardVolume(id string) error
 	ClearShardInstance(id string) error
 	LatestPreRecoveryState(id string) (ShardState, error)
+
+	// Ephemeral archive export facts (migration 080).
+	BeginExportAttempt(id string, prevAttempt int, instanceType string, startedAt time.Time) (bool, error)
+	SetExportSnapshot(id, snapshotID string) error
+	SetExportInstance(id, instanceID string) error
+	ClearExportFacts(id string) error
+	CountActiveExports() (int, error)
+	LatestShardDiskBytes(id string) (int64, error)
 }
 
 // ShardArchiveStat is one (shard, customer) row of archive metadata: the
@@ -226,6 +234,73 @@ func (s ShardStore) ClearShardVolume(id string) error {
 func (s ShardStore) ClearShardInstance(id string) error {
 	return s.db().Model(&Shard{}).Where("id = ?", id).
 		Select("InstanceID").Updates(&Shard{InstanceID: ""}).Error
+}
+
+// BeginExportAttempt claims the next export attempt for a shard: it moves
+// export_attempt from prevAttempt to prevAttempt+1 and records the chosen
+// instance type and start time, only if export_attempt is still prevAttempt.
+// It reports whether this caller won, so two evaluators racing (a leader
+// handover) cannot both start the same attempt.
+func (s ShardStore) BeginExportAttempt(id string, prevAttempt int, instanceType string, startedAt time.Time) (bool, error) {
+	res := s.db().Model(&Shard{}).
+		Where("id = ? AND export_attempt = ?", id, prevAttempt).
+		Updates(map[string]any{
+			"export_attempt":       prevAttempt + 1,
+			"export_instance_type": instanceType,
+			"export_started_at":    startedAt,
+		})
+	return res.RowsAffected == 1, res.Error
+}
+
+// SetExportSnapshot records the snapshot taken for the current export attempt.
+func (s ShardStore) SetExportSnapshot(id, snapshotID string) error {
+	return s.db().Model(&Shard{}).Where("id = ?", id).
+		Update("export_snapshot_id", snapshotID).Error
+}
+
+// SetExportInstance records the export instance launched for the current attempt.
+func (s ShardStore) SetExportInstance(id, instanceID string) error {
+	return s.db().Model(&Shard{}).Where("id = ?", id).
+		Update("export_instance_id", instanceID).Error
+}
+
+// ClearExportFacts ends the current attempt's bookkeeping. It deliberately
+// leaves export_attempt alone: the counter caps retries and keeps the next
+// attempt's tags distinct from this one's.
+func (s ShardStore) ClearExportFacts(id string) error {
+	return s.db().Model(&Shard{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"export_snapshot_id":   nil,
+			"export_instance_id":   nil,
+			"export_instance_type": nil,
+			"export_started_at":    nil,
+		}).Error
+}
+
+// CountActiveExports returns how many shards have an export instance
+// launched. It backs the cap on concurrent exports, which exists to stay under
+// EC2 vCPU quotas when a bucket cohort reaches ARCHIVING together.
+func (s ShardStore) CountActiveExports() (int, error) {
+	var n int64
+	err := s.db().Model(&Shard{}).
+		Where("export_instance_id IS NOT NULL AND export_instance_id <> ''").
+		Count(&n).Error
+	return int(n), err
+}
+
+// LatestShardDiskBytes returns the disk footprint (.duckdb + WAL + spill) in
+// the shard's most recent heartbeat, or 0 if it has none. It sizes the export
+// instance; the WAL and spill make it a slight overestimate of the .duckdb
+// alone, which errs toward a bigger instance.
+func (s ShardStore) LatestShardDiskBytes(id string) (int64, error) {
+	var rows []struct{ DiskBytes int64 }
+	err := s.db().Raw(`
+		SELECT disk_bytes FROM shard_heartbeats
+		WHERE shard_id = ? ORDER BY beat_at DESC LIMIT 1`, id).Scan(&rows).Error
+	if err != nil || len(rows) == 0 {
+		return 0, err
+	}
+	return rows[0].DiskBytes, nil
 }
 
 // LatestPreRecoveryState returns the state the shard was in immediately

@@ -212,6 +212,37 @@ func TestExportManifest_JSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLocalManifestStore_GetRoundTripAndMissing(t *testing.T) {
+	dir := t.TempDir()
+	key := ManifestKey(dir, "s-1")
+	var store LocalManifestStore
+
+	if _, found, err := store.Get(context.Background(), key); err != nil || found {
+		t.Fatalf("missing manifest: found=%v err=%v, want not found and no error", found, err)
+	}
+
+	in := ExportManifest{ShardID: "s-1", Attempt: 4, ParquetPath: "p", Rows: 9, Customers: []CustomerStat{{CustomerID: 2, RowCount: 9}}}
+	if err := store.Put(context.Background(), key, in); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := store.Get(context.Background(), key)
+	if err != nil || !found {
+		t.Fatalf("Get after Put: found=%v err=%v", found, err)
+	}
+	if got.Attempt != 4 || got.Rows != 9 || len(got.Customers) != 1 {
+		t.Fatalf("round trip lost data: %+v", got)
+	}
+
+	// A corrupt manifest is an error, not "not found": the coordinator must not
+	// treat garbage as either proof of completion or proof of absence.
+	if err := os.WriteFile(key, []byte("{not json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := store.Get(context.Background(), key); err == nil || found {
+		t.Fatalf("corrupt manifest: found=%v err=%v, want an error", found, err)
+	}
+}
+
 func TestManifestKey(t *testing.T) {
 	if got := ManifestKey("s3://bkt/warp", "s-1"); got != "s3://bkt/warp/_manifests/s-1.json" {
 		t.Fatalf("ManifestKey = %q", got)
