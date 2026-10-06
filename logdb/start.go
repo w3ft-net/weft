@@ -264,8 +264,14 @@ func wireArchiveExport(ctx context.Context, provConfig *ProvisionerConfig, regio
 		log.Printf("provisioner: archive export disabled, manifest store: %v; shards archive in process", err)
 		return
 	}
+	outputs, err := NewS3ObjectDeleter(ctx, region)
+	if err != nil {
+		log.Printf("provisioner: archive export disabled, output deleter: %v; shards archive in process", err)
+		return
+	}
 	provConfig.Exports = exports
 	provConfig.ExportManifests = manifests
+	provConfig.ExportOutputs = outputs
 	provConfig.MaxConcurrentExports = c.MaxConcurrent
 	maxConcurrent := c.MaxConcurrent
 	if maxConcurrent == 0 {

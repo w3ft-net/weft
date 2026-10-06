@@ -4,6 +4,7 @@ package logdb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -270,8 +271,11 @@ func TestExportResources_SnapshotState(t *testing.T) {
 	if st, _ := x.SnapshotState(context.Background(), id); st.State != "completed" {
 		t.Fatalf("completed: %+v", st)
 	}
-	if _, err := x.SnapshotState(context.Background(), "snap-nope"); err == nil {
-		t.Fatal("SnapshotState of an unknown snapshot returned no error")
+	// An unknown snapshot is distinguishable from a failed describe: the FSM
+	// treats the first as a vanished snapshot (fail the attempt), the second as
+	// transient (retry).
+	if _, err := x.SnapshotState(context.Background(), "snap-nope"); !errors.Is(err, errSnapshotNotFound) {
+		t.Fatalf("SnapshotState of an unknown snapshot = %v, want errSnapshotNotFound", err)
 	}
 }
 

@@ -162,14 +162,24 @@ func (x *ExportResources) CreateSnapshot(ctx context.Context, spec SnapshotSpec)
 	return *out.SnapshotId, nil
 }
 
-// SnapshotState reports a snapshot's state. An unknown snapshot is an error.
+// errSnapshotNotFound is wrapped by SnapshotState when EC2 does not know the
+// snapshot, as opposed to a describe call that merely failed. The shard FSM
+// treats the first as a vanished snapshot (fail the attempt) and the second as
+// transient (retry next tick).
+var errSnapshotNotFound = errors.New("export snapshot not found")
+
+// SnapshotState reports a snapshot's state. An unknown snapshot wraps
+// errSnapshotNotFound.
 func (x *ExportResources) SnapshotState(ctx context.Context, snapshotID string) (ExportSnapshotState, error) {
 	out, err := x.ec2.DescribeSnapshots(ctx, &ec2.DescribeSnapshotsInput{SnapshotIds: []string{snapshotID}})
 	if err != nil {
+		if snapshotAlreadyGone(err) { // EC2's own "InvalidSnapshot.NotFound" for an unknown id
+			return ExportSnapshotState{}, fmt.Errorf("snapshot %s: %w", snapshotID, errSnapshotNotFound)
+		}
 		return ExportSnapshotState{}, fmt.Errorf("describe snapshot %s: %w", snapshotID, err)
 	}
 	if len(out.Snapshots) == 0 {
-		return ExportSnapshotState{}, fmt.Errorf("snapshot %s not found", snapshotID)
+		return ExportSnapshotState{}, fmt.Errorf("snapshot %s: %w", snapshotID, errSnapshotNotFound)
 	}
 	s := out.Snapshots[0]
 	return ExportSnapshotState{State: string(s.State), Progress: aws.ToString(s.Progress)}, nil

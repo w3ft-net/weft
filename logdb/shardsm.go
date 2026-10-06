@@ -95,6 +95,10 @@ type ShardDeps struct {
 	// keeps the in-process Archive. They are set together or not at all.
 	Exports         ExportOps
 	ExportManifests shard.ManifestReader
+	// ExportOutputs removes a failed export attempt's partial Parquet. Each
+	// attempt writes to its own location (shard.ExportOutputSuffix), so this
+	// only reclaims storage; correctness does not depend on it.
+	ExportOutputs ObjectDeleter
 	// ExportSizing overrides defaultExportSizing; MaxConcurrentExports caps
 	// export instances in flight across all shards (0 → the default).
 	ExportSizing         []ExportSize
@@ -713,7 +717,7 @@ func (sh *Shard) evaluateArchiving(ctx context.Context) error {
 	// facts, so a cleanup that failed after the archive was recorded is
 	// retried here.
 	if sh.deps.Exports != nil && sh.hasExportFacts() {
-		if err := sh.endExportAttempt(ctx); err != nil {
+		if err := sh.endExportAttempt(ctx, false); err != nil {
 			return err
 		}
 		if sh.hasExportFacts() {

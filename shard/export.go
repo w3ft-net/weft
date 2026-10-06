@@ -59,6 +59,25 @@ type ManifestReader interface {
 	Get(ctx context.Context, key string) (m ExportManifest, found bool, err error)
 }
 
+// ExportOutputSuffix names one attempt's output: the export writes
+// <prefix>/<shard-id>.attempt-N[.parquet], never into the location a failed
+// attempt used. DuckDB's OVERWRITE_OR_IGNORE only replaces same-named files, so
+// a retry that shared a directory with a partial earlier attempt would leave the
+// old files in place and the archive glob would read both (rows double-count).
+func ExportOutputSuffix(attempt int) string {
+	return fmt.Sprintf(".attempt-%d", attempt)
+}
+
+// ExportOutputPaths lists the delete targets for one attempt's output: the
+// hive-partitioned directory form and the single-file form, in the shapes
+// logdb.ObjectDeleter takes. They are exact (the directory ends in a slash
+// before its glob, the file in .parquet), so attempt 1 can never match
+// attempt 10.
+func ExportOutputPaths(prefix, shardID string, attempt int) []string {
+	base := strings.TrimRight(prefix, "/") + "/" + shardID + ExportOutputSuffix(attempt)
+	return []string{base + "/**/*.parquet", base + ".parquet"}
+}
+
 // ManifestKey is where a shard's export manifest lives under the archive
 // prefix. The coordinator derives the same key to poll for completion.
 func ManifestKey(prefix, shardID string) string {
@@ -101,7 +120,7 @@ func RunExport(ctx context.Context, cfg ExportConfig, store ManifestStore) (Expo
 	if fi, err := os.Stat(cfg.DBPath); err == nil {
 		m.DBBytes = fi.Size()
 	}
-	path, stats, err := s.Archive(ctx, cfg.S3Prefix)
+	path, stats, err := s.archive(ctx, cfg.S3Prefix, ExportOutputSuffix(cfg.Attempt))
 	if err != nil {
 		return ExportManifest{}, err
 	}

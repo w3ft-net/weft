@@ -305,3 +305,33 @@ is a separate decision and not covered here.
 **Status:** open. Design agreed, pure slot logic written and unwired,
 nothing recorded yet.
 
+## In-process `Archive` can double-count rows after a failed attempt
+
+**Where:** `DuckDBShard.Archive` / `exportArchive` in `shard/shard.go`, which
+writes `<prefix>/<shard-id>` (hive partitions) or `<prefix>/<shard-id>.parquet`.
+
+**Symptom:** if an attempt fails partway and a later attempt for the same
+shard succeeds, the archive can contain rows twice. DuckDB's
+`OVERWRITE_OR_IGNORE` replaces files with the same name and leaves other files
+in the directory alone, so a file written by the failed attempt that the
+successful one does not overwrite stays, and the `**/*.parquet` glob reads it.
+Verified against real DuckDB: a stale file survived a re-export and the glob
+returned 40 rows from a shard holding 20. How likely it is depends on whether
+the two attempts split the data into the same file names (thread count and
+partition layout both affect it).
+
+**Why it is not fixed:** giving each in-process attempt its own directory (as
+the ephemeral export does, `<id>.attempt-N`) would make a shard that cannot
+archive and retries every 10 minutes leak a new partial copy per attempt,
+where today it overwrites one. The shard host has no S3 deleter to clean up
+after itself.
+
+**Mitigation:** the ephemeral archive export
+(`docs/plans/ephemeral-archive-export.md`) writes attempt-scoped output and the
+coordinator deletes failed attempts', so it does not have this problem. With
+the export enabled the in-process path is only used for empty shards. Until
+then, a shard that has failed in-process archives and then succeeds deserves a
+row-count check of its archive against `row_count`.
+
+**Status:** open for the in-process path; fixed for the export.
+

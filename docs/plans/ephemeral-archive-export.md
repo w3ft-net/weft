@@ -239,6 +239,8 @@ export-capacity table (bytes → RAM/time per instance type).
   `ManifestStore` (`LocalManifestStore` for dev/tests, `S3ManifestStore`
   for `s3://` prefixes). No manifest on failure; a failed manifest write
   fails the export.
+- Output location: `<prefix>/<shard-id>.attempt-N[.parquet]`, one per
+  attempt (see the rollout checklist, item 0, for why).
 - Manifest key: `<prefix>/_manifests/<shard-id>.json` (`ManifestKey`).
   Fields: shard id, attempt, parquet path, rows, db bytes, per-customer
   stats, started/finished. `attempt` lets the coordinator ignore a stale
@@ -398,23 +400,36 @@ Order matters. The feature ships **off** (no `EXPORT_LAUNCH_TEMPLATE`), is
 proven by a manual drill on a scratch prefix, and only then enabled.
 Nothing here has run against real AWS.
 
-### 0. Blocker: stale files double-count rows on a retry
+### 0. Resolved: stale files double-counted rows on a retry
 
 DuckDB's `OVERWRITE_OR_IGNORE` replaces files with the *same name* and
 leaves every other file in the directory alone. Verified against real
 DuckDB: after a second export into a directory holding a file from an
 earlier partial attempt, the stale file survived and reading the archive
-glob returned 40 rows from a shard holding 20.
+glob returned 40 rows from a shard holding 20. A retry that splits files
+differently from the failed attempt (a bigger instance means more threads)
+would have hit this.
 
-This bites two ways: a retry attempt that splits files differently from the
-failed one (a bigger instance means more threads), and the **in-process**
-path, where `4a672d0d` has been writing partial output into
-`<prefix>/<id>/` for days. Fix before enabling. Preferred design: each
-attempt writes to its own directory (`<prefix>/<id>/attempt-N/`), the
-manifest already records the path the coordinator stores, and the
-coordinator deletes a failed attempt's output (it has an `ObjectDeleter`
-for the janitor). Until fixed, do not enable, and list
-`<prefix>/4a672d0d…/` in S3 before touching that shard.
+**Fixed in the export.** Each attempt writes to its own location,
+`<prefix>/<shard-id>.attempt-N` (hive directory) or
+`<prefix>/<shard-id>.attempt-N.parquet` (single file), so a retry never
+shares a directory with a failed attempt. The manifest already carries the
+path and the coordinator records it, so readers are unchanged. The
+coordinator also deletes a failed attempt's output (`ShardDeps.ExportOutputs`,
+the janitor's `ObjectDeleter`): after the host is stopped, so a running host
+cannot write after the delete; never on the success path; never once an
+archive is recorded; and only exact `<id>.attempt-N` paths. A failed delete
+keeps the facts so the next tick retries. A snapshot that vanished (what a
+half-finished failure leaves) now fails the attempt again instead of being
+polled forever. Correctness does not depend on the delete: it only reclaims
+storage.
+
+**Not fixed: the in-process path** (`Archive`, used when the export is off
+and in dev). It still writes `<prefix>/<id>` and a retry after a partial
+attempt can double-count. It is left as is on purpose: giving each in-process
+attempt its own directory would make a stuck shard that retries every 10
+minutes leak a new partial copy per attempt. See `docs/known-issues.md`.
+Enabling the export removes `4a672d0d` from this path.
 
 ### 1. Before merging
 
@@ -423,7 +438,8 @@ for the janitor). Until fixed, do not enable, and list
 - [ ] `make test`, `make test-deploy`; `go build ./...` clean.
 - [ ] Renumber your untracked `078_org_id_bigint.sql`: the collapsed schema's
       max is 79 and mine is `080_shard_export_facts.sql`.
-- [ ] Decide the fix for the blocker above and land it with this.
+- [ ] Coordinator role can `s3:DeleteObject` and `s3:ListBucket` on the archive
+      prefix (the janitor's deleter needs the same; confirm it is granted).
 
 ### 2. Infrastructure (`infrastructure-catalog` / `-live`; Terraform review)
 
@@ -487,8 +503,11 @@ so nothing the coordinator or janitor reads is touched.
 
 ### 5. Enable, one shard
 
-- [ ] Real-prefix pre-flight for `4a672d0d` (see the blocker): list and clear
-      stale partial output under its prefix.
+- [ ] Optional cleanup for `4a672d0d`: its days of failed in-process attempts
+      left partial files under `<prefix>/<id>/`. The export writes to
+      `<id>.attempt-N` and the archive records that path, so the old files
+      are never read; they only cost storage. List them, confirm nothing
+      references them, then delete.
 - [ ] Check the shard host is not still running an old in-process `COPY`
       (the old binary ignores its context): look for CPU and swap thrash.
 - [ ] Terraform: set `EXPORT_LAUNCH_TEMPLATE` and `EXPORT_MAX_CONCURRENT=1`;

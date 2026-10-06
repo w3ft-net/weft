@@ -71,6 +71,7 @@ func (p *Provisioner) shardDeps() *ShardDeps {
 
 			Exports:              p.config.Exports,
 			ExportManifests:      p.config.ExportManifests,
+			ExportOutputs:        p.config.ExportOutputs,
 			MaxConcurrentExports: p.config.MaxConcurrentExports,
 		}
 		if api, ok := p.launcher.(ShardLaunchAPI); ok {

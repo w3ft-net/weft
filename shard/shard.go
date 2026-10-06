@@ -548,6 +548,13 @@ func dirSize(root string) int64 {
 // phase with the shard's native memory state so a stuck export is diagnosable
 // from the shard log alone.
 func (s *DuckDBShard) Archive(ctx context.Context, s3Prefix string) (string, []CustomerStat, error) {
+	return s.archive(ctx, s3Prefix, "")
+}
+
+// archive is Archive with a suffix on the output name: "" writes
+// <prefix>/<id>[.parquet], the in-process layout; the ephemeral export passes
+// ExportOutputSuffix(attempt) so each attempt gets a location of its own.
+func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string) (string, []CustomerStat, error) {
 	attempt, end, err := s.beginArchive()
 	if err != nil {
 		return "", nil, err
@@ -576,7 +583,7 @@ func (s *DuckDBShard) Archive(ctx context.Context, s3Prefix string) (string, []C
 		attempt, len(stats), time.Since(statsStart).Round(time.Millisecond), s.nativeMemoryDiag(ctx))
 
 	stopSampling = s.sampleArchiveMemory(attempt, "copy", archiveSampleInterval)
-	path, rows, err := s.exportArchive(ctx, attempt, s3Prefix)
+	path, rows, err := s.exportArchive(ctx, attempt, s3Prefix, outputSuffix)
 	stopSampling()
 	if err != nil {
 		return fail("export", err)
@@ -621,7 +628,7 @@ func scanCustomerStats(ctx context.Context, db *sql.DB, query string) ([]Custome
 // path. S3 when S3ConfigFromEnv is set, otherwise a local directory.
 // It also returns the number of rows the COPY wrote. attempt tags the phase
 // log lines (see Archive).
-func (s *DuckDBShard) exportArchive(ctx context.Context, attempt int64, s3Prefix string) (path string, rows int64, err error) {
+func (s *DuckDBShard) exportArchive(ctx context.Context, attempt int64, s3Prefix, outputSuffix string) (path string, rows int64, err error) {
 	plan, err := s.planPartitions(ctx)
 	if err != nil {
 		return "", 0, fmt.Errorf("partition sizing: %w", err)
@@ -641,10 +648,10 @@ func (s *DuckDBShard) exportArchive(ctx context.Context, attempt int64, s3Prefix
 		if err := s3cfg.ConfigureDuckDB(s.db); err != nil {
 			return "", 0, err
 		}
-		return s.exportParquet(ctx, fmt.Sprintf("%s/%s", s3Prefix, s.id), plan.gran)
+		return s.exportParquet(ctx, fmt.Sprintf("%s/%s%s", s3Prefix, s.id, outputSuffix), plan.gran)
 	}
 
-	dir := fmt.Sprintf("%s/%s", s3Prefix, s.id)
+	dir := fmt.Sprintf("%s/%s%s", s3Prefix, s.id, outputSuffix)
 	if plan.gran == "" {
 		// Small shard — single file, no partition.
 		path := dir + ".parquet"

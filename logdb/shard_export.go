@@ -2,6 +2,7 @@ package logdb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -200,6 +201,12 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 		snapID = id
 	}
 	snap, err := d.Exports.SnapshotState(ctx, snapID)
+	if errors.Is(err, errSnapshotNotFound) {
+		// Also what a half-finished failure looks like: cleanup removed the
+		// snapshot but a later step did not complete. Failing again re-runs the
+		// idempotent cleanup instead of polling a snapshot that will never return.
+		return sh.failExportAttempt(ctx, fmt.Sprintf("snapshot %s no longer exists", snapID))
+	}
 	if err != nil {
 		log.Printf("shardsm %s: export snapshot %s state, retrying next tick: %v", sh.ID, snapID, err)
 		return nil
@@ -271,6 +278,31 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 	return sh.failExportAttempt(ctx, fmt.Sprintf("export instance %s ended (%s) without a manifest", instID, state))
 }
 
+// deleteAttemptOutput removes the current attempt's partial output, reporting
+// whether it is done (nothing to delete, or deleted). It never touches anything
+// once an archive is recorded, and only ever builds paths of the form
+// <id>.attempt-N, so it cannot reach the in-process layout or another attempt.
+func (sh *Shard) deleteAttemptOutput() bool {
+	sh.mu.RLock()
+	attempt, recorded, services := sh.ExportAttempt, sh.ParquetPath, sh.Services
+	sh.mu.RUnlock()
+	if recorded != "" {
+		log.Printf("shardsm %s: archive already recorded at %s; not deleting export output", sh.ID, recorded)
+		return true
+	}
+	if sh.deps.ExportOutputs == nil {
+		log.Printf("shardsm %s: no output deleter configured; attempt %d's partial output (if any) is left in place", sh.ID, attempt)
+		return true
+	}
+	for _, p := range shard.ExportOutputPaths(sh.archiveS3Prefix(services), sh.ID, attempt) {
+		if err := sh.deps.ExportOutputs.DeleteParquet(p); err != nil {
+			log.Printf("shardsm %s: delete failed attempt %d's output %s, retrying next tick: %v", sh.ID, attempt, p, err)
+			return false
+		}
+	}
+	return true
+}
+
 // failExportAttempt ends the current attempt unsuccessfully: it removes the
 // attempt's AWS resources and clears its facts, leaving export_attempt so the
 // next tick claims the following one (or stops, at the cap).
@@ -279,15 +311,21 @@ func (sh *Shard) failExportAttempt(ctx context.Context, reason string) error {
 	attempt := sh.ExportAttempt
 	sh.mu.RUnlock()
 	log.Printf("shardsm %s: export attempt %d/%d failed: %s", sh.ID, attempt, maxExportAttempts, reason)
-	return sh.endExportAttempt(ctx)
+	return sh.endExportAttempt(ctx, true)
 }
 
 // endExportAttempt removes the shard's export resources, then clears the facts.
-// A cleanup failure leaves the facts in place so the next tick retries; the
-// error is logged, not returned, like the other AWS steps.
-func (sh *Shard) endExportAttempt(ctx context.Context) error {
+// With discardOutput (a failed attempt) it also deletes the attempt's partial
+// Parquet, after the host is stopped so a still-running host cannot write after
+// the delete. A successful attempt passes false: its output is the archive.
+// A failed step leaves the facts in place so the next tick retries; the error
+// is logged, not returned, like the other AWS steps.
+func (sh *Shard) endExportAttempt(ctx context.Context, discardOutput bool) error {
 	if err := sh.deps.Exports.Cleanup(ctx, sh.ID); err != nil {
 		log.Printf("shardsm %s: export cleanup, retrying next tick: %v", sh.ID, err)
+		return nil
+	}
+	if discardOutput && !sh.deleteAttemptOutput() {
 		return nil
 	}
 	if err := sh.deps.Store.ClearExportFacts(sh.ID); err != nil {

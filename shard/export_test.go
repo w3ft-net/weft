@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -240,6 +241,79 @@ func TestLocalManifestStore_GetRoundTripAndMissing(t *testing.T) {
 	}
 	if _, found, err := store.Get(context.Background(), key); err == nil || found {
 		t.Fatalf("corrupt manifest: found=%v err=%v, want an error", found, err)
+	}
+}
+
+// A retry must never share an output location with a failed attempt:
+// DuckDB's OVERWRITE_OR_IGNORE only replaces same-named files, so a file left by
+// an earlier partial attempt survives and the archive glob reads it too (the
+// rows double-count). Each attempt therefore writes to its own location.
+func TestRunExport_EachAttemptWritesItsOwnOutput(t *testing.T) {
+	db := exportFixtureDB(t)
+	out := t.TempDir()
+	run := func(attempt int) ExportManifest {
+		t.Helper()
+		m, err := RunExport(context.Background(), ExportConfig{ShardID: "s-export", DBPath: db, S3Prefix: out, Attempt: attempt}, LocalManifestStore{})
+		if err != nil {
+			t.Fatalf("attempt %d: %v", attempt, err)
+		}
+		return m
+	}
+
+	first := run(1)
+	second := run(2)
+
+	if first.ParquetPath == second.ParquetPath {
+		t.Fatalf("attempts 1 and 2 share an output path: %s", first.ParquetPath)
+	}
+	if !strings.Contains(first.ParquetPath, ".attempt-1") || !strings.Contains(second.ParquetPath, ".attempt-2") {
+		t.Fatalf("output paths do not name their attempt: %q, %q", first.ParquetPath, second.ParquetPath)
+	}
+	// The first attempt's output is untouched by the second.
+	if _, err := os.Stat(first.ParquetPath); err != nil {
+		t.Fatalf("attempt 1's output was disturbed by attempt 2: %v", err)
+	}
+	// Reading attempt 2's path alone yields exactly the shard's rows, even with
+	// attempt 1's files sitting next to it.
+	s, err := NewDuckDBShard("reader", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var n int64
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM read_parquet('" + second.ParquetPath + "')").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("attempt 2's output holds %d rows, want 3", n)
+	}
+}
+
+// The in-process Archive keeps its original layout; only the export is
+// attempt-scoped.
+func TestDuckDBShard_ArchiveKeepsItsOriginalLayout(t *testing.T) {
+	s := archiveFixtureShard(t)
+	out := t.TempDir()
+	path, _, err := s.Archive(context.Background(), out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(out, "phase-test.parquet"); path != want {
+		t.Fatalf("Archive path = %q, want %q", path, want)
+	}
+}
+
+func TestExportOutputPaths(t *testing.T) {
+	got := ExportOutputPaths("s3://weft/warp/", "s-1", 2)
+	want := []string{"s3://weft/warp/s-1.attempt-2/**/*.parquet", "s3://weft/warp/s-1.attempt-2.parquet"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("ExportOutputPaths = %v, want %v", got, want)
+	}
+	// Attempt 1 must not be able to match attempt 10's output.
+	for _, p := range ExportOutputPaths("s3://b/p", "s-1", 1) {
+		if strings.Contains(p, "attempt-10") || strings.HasSuffix(p, "attempt-1") {
+			t.Errorf("path %q is not exact enough to be a delete target", p)
+		}
 	}
 }
 

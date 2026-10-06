@@ -102,6 +102,7 @@ type ProvisionerConfig struct {
 	// Threaded onto ShardDeps. See docs/plans/ephemeral-archive-export.md.
 	Exports              ExportOps
 	ExportManifests      shard.ManifestReader
+	ExportOutputs        ObjectDeleter
 	MaxConcurrentExports int
 	// Holder identifies this process for the "shard-fsm-leader" lease (see
 	// docs/plans/coordinator-horizontal-scaling.md #5) — the same holder

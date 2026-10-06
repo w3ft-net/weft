@@ -24,10 +24,51 @@ type fakeExportOps struct {
 	instState  string
 
 	createErr, launchErr, cleanupErr error
+	snapErr                          error // returned by SnapshotState when set
 
 	createCalls  []SnapshotSpec
 	launchCalls  []ExportSpec
 	cleanupCalls []string
+	rec          *eventLog // shared with the output deleter to assert ordering
+}
+
+// eventLog records the order of side effects across fakes.
+type eventLog struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (e *eventLog) add(s string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.events = append(e.events, s)
+}
+
+func (e *eventLog) snapshot() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.events...)
+}
+
+// fakeOutputDeleter is the ObjectDeleter the failed-attempt cleanup uses.
+type fakeOutputDeleter struct {
+	mu    sync.Mutex
+	paths []string
+	err   error
+	rec   *eventLog
+}
+
+func (f *fakeOutputDeleter) DeleteParquet(path string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.rec != nil {
+		f.rec.add("delete:" + path)
+	}
+	if f.err != nil {
+		return f.err
+	}
+	f.paths = append(f.paths, path)
+	return nil
 }
 
 func (f *fakeExportOps) CreateSnapshot(_ context.Context, s SnapshotSpec) (string, error) {
@@ -46,6 +87,9 @@ func (f *fakeExportOps) CreateSnapshot(_ context.Context, s SnapshotSpec) (strin
 func (f *fakeExportOps) SnapshotState(context.Context, string) (ExportSnapshotState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.snapErr != nil {
+		return ExportSnapshotState{}, f.snapErr
+	}
 	return f.snapState, nil
 }
 
@@ -72,6 +116,9 @@ func (f *fakeExportOps) Cleanup(_ context.Context, shardID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cleanupCalls = append(f.cleanupCalls, shardID)
+	if f.rec != nil {
+		f.rec.add("cleanup")
+	}
 	return f.cleanupErr
 }
 
@@ -108,6 +155,8 @@ type exportFixture struct {
 	db       *store.Store
 	ss       ShardStore
 	ops      *fakeExportOps
+	outputs  *fakeOutputDeleter
+	events   *eventLog
 	manifest *fakeManifestReader
 	launcher *fakeLauncher
 	volumes  *fakeVolumeManager
@@ -117,8 +166,11 @@ type exportFixture struct {
 
 func newExportFixture(t *testing.T, customize ...func(*ShardDeps)) *exportFixture {
 	t.Helper()
+	events := &eventLog{}
 	f := &exportFixture{
-		ops:      &fakeExportOps{snapState: ExportSnapshotState{State: "pending"}, instState: "pending"},
+		events:   events,
+		outputs:  &fakeOutputDeleter{rec: events},
+		ops:      &fakeExportOps{snapState: ExportSnapshotState{State: "pending"}, instState: "pending", rec: events},
 		manifest: &fakeManifestReader{manifests: map[string]shard.ExportManifest{}},
 		launcher: &fakeLauncher{},
 		volumes:  &fakeVolumeManager{},
@@ -132,6 +184,7 @@ func newExportFixture(t *testing.T, customize ...func(*ShardDeps)) *exportFixtur
 		d.LambdaFunctionURL = "https://fn.example/" // non-empty → ColdShard skips the duckdb open
 		d.Exports = f.ops
 		d.ExportManifests = f.manifest
+		d.ExportOutputs = f.outputs
 		for _, c := range customize {
 			c(d)
 		}
@@ -602,6 +655,144 @@ func TestShardExport_NilExportsKeepsTheInProcessArchive(t *testing.T) {
 	}
 	if f.state(t) != StateArchived {
 		t.Fatalf("state = %q, want ARCHIVED", f.state(t))
+	}
+}
+
+// ── failed-attempt output ───────────────────────────────────────────
+
+var attempt2Outputs = []string{
+	"s3://weft/warp/s-test.attempt-2/**/*.parquet",
+	"s3://weft/warp/s-test.attempt-2.parquet",
+}
+
+// A failed attempt may have left partial output. It lives in the attempt's own
+// location, so deleting it is safe; leaving it would only waste storage, but a
+// retry never shares the directory, so correctness does not depend on it.
+func TestShardExport_FailedAttemptDeletesItsOwnOutputAfterStoppingTheHost(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, 2, f.clock, "snap-2", "i-export-2")
+	f.ops.snapState = ExportSnapshotState{State: "completed"}
+	f.ops.instState = "terminated"
+
+	f.evaluate(t)
+
+	if got := f.outputs.paths; len(got) != 2 || got[0] != attempt2Outputs[0] || got[1] != attempt2Outputs[1] {
+		t.Fatalf("deleted %v, want exactly attempt 2's output %v", got, attempt2Outputs)
+	}
+	// The host is stopped before its output is deleted, or a still-running host
+	// could write after the delete and leave files nothing tracks.
+	ev := f.events.snapshot()
+	if len(ev) < 2 || ev[0] != "cleanup" || ev[1] != "delete:"+attempt2Outputs[0] {
+		t.Fatalf("event order = %v, want cleanup first, then the deletes", ev)
+	}
+	row := f.row(t)
+	if row.ExportSnapshotID != "" || row.ExportInstanceID != "" || row.ExportAttempt != 2 {
+		t.Fatalf("after a failed attempt: %+v", row)
+	}
+}
+
+// If the output cannot be deleted, the facts stay so the next tick retries, and
+// the snapshot being gone must not wedge that retry in a "poll forever" loop.
+func TestShardExport_OutputDeleteFailureRetriesNextTick(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, 2, f.clock, "snap-2", "i-export-2")
+	f.ops.snapState = ExportSnapshotState{State: "completed"}
+	f.ops.instState = "terminated"
+	f.outputs.err = errors.New("AccessDenied")
+
+	f.evaluate(t)
+	if row := f.row(t); row.ExportSnapshotID == "" {
+		t.Fatal("facts cleared although the output delete failed")
+	}
+	f.assertDataIntact(t)
+
+	// Cleanup already removed the snapshot; the next tick sees it vanished.
+	f.ops.snapErr = errSnapshotNotFound
+	f.outputs.err = nil
+	f.evaluate(t)
+
+	if got := f.outputs.paths; len(got) != 2 {
+		t.Fatalf("retry deleted %v, want attempt 2's two output paths", got)
+	}
+	if row := f.row(t); row.ExportSnapshotID != "" || row.ExportInstanceID != "" {
+		t.Fatalf("facts not cleared after the retry: %+v", row)
+	}
+}
+
+func TestShardExport_SnapshotVanishedFailsTheAttempt(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, 1, f.clock, "snap-1", "")
+	f.ops.snapErr = errSnapshotNotFound
+
+	f.evaluate(t)
+
+	if len(f.ops.cleanupCalls) != 1 {
+		t.Fatalf("a vanished snapshot did not fail the attempt: cleanups=%v", f.ops.cleanupCalls)
+	}
+	if row := f.row(t); row.ExportSnapshotID != "" {
+		t.Fatalf("facts not cleared: %+v", row)
+	}
+}
+
+// A transient describe error is not a vanished snapshot.
+func TestShardExport_TransientSnapshotErrorDoesNotFailTheAttempt(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, 1, f.clock, "snap-1", "")
+	f.ops.snapErr = errors.New("RequestLimitExceeded")
+
+	f.evaluate(t)
+
+	if len(f.ops.cleanupCalls) != 0 {
+		t.Fatalf("failed the attempt over a throttled describe: %v", f.ops.cleanupCalls)
+	}
+	f.assertDataIntact(t)
+}
+
+// The success path must never delete: that output is the archive.
+func TestShardExport_SuccessNeverDeletesOutput(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, 1, f.clock, "snap-1", "i-export-1")
+	f.ops.snapState = ExportSnapshotState{State: "completed"}
+	f.ops.instState = "terminated"
+	f.manifest.manifests[testExportManifestKey] = goodManifest(1)
+
+	f.evaluate(t)
+
+	if f.state(t) != StateArchived {
+		t.Fatalf("state = %q, want ARCHIVED", f.state(t))
+	}
+	if len(f.outputs.paths) != 0 {
+		t.Fatalf("deleted %v on the success path", f.outputs.paths)
+	}
+}
+
+// Belt and braces: once an archive is recorded, no failure path may touch the
+// output, whatever called it.
+func TestShardExport_NeverDeletesOutputOnceTheArchiveIsRecorded(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, 1, f.clock, "snap-1", "i-export-1")
+	f.sm.mu.Lock()
+	f.sm.ParquetPath = "s3://weft/warp/s-test.attempt-1/**/*.parquet"
+	f.sm.mu.Unlock()
+
+	if err := f.sm.failExportAttempt(context.Background(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.outputs.paths) != 0 {
+		t.Fatalf("deleted %v although the archive is recorded", f.outputs.paths)
+	}
+}
+
+func TestShardExport_NoOutputDeleterStillFailsTheAttempt(t *testing.T) {
+	f := newExportFixture(t, func(d *ShardDeps) { d.ExportOutputs = nil })
+	f.seedAttempt(t, 1, f.clock, "snap-1", "i-export-1")
+	f.ops.snapState = ExportSnapshotState{State: "completed"}
+	f.ops.instState = "terminated"
+
+	f.evaluate(t)
+
+	if len(f.ops.cleanupCalls) != 1 || f.row(t).ExportSnapshotID != "" {
+		t.Fatalf("attempt not failed cleanly without a deleter: cleanups=%v row=%+v", f.ops.cleanupCalls, f.row(t))
 	}
 }
 
