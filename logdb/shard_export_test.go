@@ -1,0 +1,620 @@
+//go:build test
+
+package logdb
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/graybeardcorp/weft/shard"
+	"github.com/graybeardcorp/weft/store"
+)
+
+// ── fakes ───────────────────────────────────────────────────────────
+
+type fakeExportOps struct {
+	mu sync.Mutex
+
+	snapshotID string // returned by CreateSnapshot; "snap-1" if empty
+	snapState  ExportSnapshotState
+	instanceID string // returned by LaunchInstance; "i-export-1" if empty
+	instState  string
+
+	createErr, launchErr, cleanupErr error
+
+	createCalls  []SnapshotSpec
+	launchCalls  []ExportSpec
+	cleanupCalls []string
+}
+
+func (f *fakeExportOps) CreateSnapshot(_ context.Context, s SnapshotSpec) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.createCalls = append(f.createCalls, s)
+	if f.createErr != nil {
+		return "", f.createErr
+	}
+	if f.snapshotID == "" {
+		return "snap-1", nil
+	}
+	return f.snapshotID, nil
+}
+
+func (f *fakeExportOps) SnapshotState(context.Context, string) (ExportSnapshotState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.snapState, nil
+}
+
+func (f *fakeExportOps) LaunchInstance(_ context.Context, s ExportSpec) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.launchCalls = append(f.launchCalls, s)
+	if f.launchErr != nil {
+		return "", f.launchErr
+	}
+	if f.instanceID == "" {
+		return "i-export-1", nil
+	}
+	return f.instanceID, nil
+}
+
+func (f *fakeExportOps) InstanceState(context.Context, string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.instState, nil
+}
+
+func (f *fakeExportOps) Cleanup(_ context.Context, shardID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cleanupCalls = append(f.cleanupCalls, shardID)
+	return f.cleanupErr
+}
+
+type fakeManifestReader struct {
+	mu        sync.Mutex
+	manifests map[string]shard.ExportManifest
+	err       error
+	gets      int
+	// appearOnGet, when > 0, hides the manifest until the Nth Get: it models
+	// an export that writes its manifest between two coordinator polls.
+	appearOnGet int
+}
+
+func (f *fakeManifestReader) Get(_ context.Context, key string) (shard.ExportManifest, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gets++
+	if f.err != nil {
+		return shard.ExportManifest{}, false, f.err
+	}
+	if f.appearOnGet > 0 && f.gets < f.appearOnGet {
+		return shard.ExportManifest{}, false, nil
+	}
+	m, ok := f.manifests[key]
+	return m, ok, nil
+}
+
+// ── fixture ─────────────────────────────────────────────────────────
+
+const testExportManifestKey = "s3://weft/warp/_manifests/s-test.json"
+
+type exportFixture struct {
+	sm       *Shard
+	db       *store.Store
+	ss       ShardStore
+	ops      *fakeExportOps
+	manifest *fakeManifestReader
+	launcher *fakeLauncher
+	volumes  *fakeVolumeManager
+	live     *fakeArchivableShard
+	clock    time.Time
+}
+
+func newExportFixture(t *testing.T, customize ...func(*ShardDeps)) *exportFixture {
+	t.Helper()
+	f := &exportFixture{
+		ops:      &fakeExportOps{snapState: ExportSnapshotState{State: "pending"}, instState: "pending"},
+		manifest: &fakeManifestReader{manifests: map[string]shard.ExportManifest{}},
+		launcher: &fakeLauncher{},
+		volumes:  &fakeVolumeManager{},
+		live:     &fakeArchivableShard{id: "s-test", archivePath: "s3://in-process-must-not-run"},
+		clock:    time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC),
+	}
+	f.sm, f.db, _ = makeFixtureShardSM(t, StateArchiving, func(d *ShardDeps) {
+		d.Launcher = f.launcher
+		d.Volumes = f.volumes
+		d.ParquetDir = "s3://weft"
+		d.LambdaFunctionURL = "https://fn.example/" // non-empty → ColdShard skips the duckdb open
+		d.Exports = f.ops
+		d.ExportManifests = f.manifest
+		for _, c := range customize {
+			c(d)
+		}
+	})
+	f.ss = ShardStore{f.db}
+	f.sm.Live = f.live
+	f.sm.Services = []store.ShardService{{NamespaceID: 1, Service: "warp"}}
+	f.sm.EBSVolumeID, f.sm.InstanceID, f.sm.AZ, f.sm.RowCount = "vol-1", "i-shard", "us-east-2a", 1000
+	if err := f.ss.SetShardLaunchResult("s-test", "i-shard", "us-east-2a", "vol-1", nil); err != nil {
+		t.Fatalf("seed launch result: %v", err)
+	}
+	f.heartbeat(t, 3<<30) // 3 GiB: the smallest export size class
+	return f
+}
+
+// heartbeat records a heartbeat whose disk footprint drives the instance sizing.
+func (f *exportFixture) heartbeat(t *testing.T, diskBytes int64) {
+	t.Helper()
+	if err := f.db.DB().Exec(`
+		INSERT INTO shard_heartbeats (shard_id, addr, instance_id, state, row_count, disk_bytes, beat_at)
+		VALUES ('s-test', '', '', 'READ_ONLY', 0, ?, ?)`, diskBytes, f.clock.Add(-time.Minute)).Error; err != nil {
+		t.Fatalf("seed heartbeat: %v", err)
+	}
+}
+
+// seedAttempt puts the shard mid-export: row and entry both, as the writers do.
+func (f *exportFixture) seedAttempt(t *testing.T, attempt int, started time.Time, snap, inst string) {
+	t.Helper()
+	if attempt > 0 {
+		if err := f.db.DB().Exec(`UPDATE shard_records SET export_attempt = ?, export_instance_type = 'r7g.large', export_started_at = ? WHERE id = 's-test'`,
+			attempt, started).Error; err != nil {
+			t.Fatalf("seed attempt: %v", err)
+		}
+	}
+	if snap != "" {
+		_ = f.ss.SetExportSnapshot("s-test", snap)
+	}
+	if inst != "" {
+		_ = f.ss.SetExportInstance("s-test", inst)
+	}
+	f.sm.mu.Lock()
+	f.sm.ExportAttempt, f.sm.ExportSnapshotID, f.sm.ExportInstanceID = attempt, snap, inst
+	if attempt > 0 {
+		f.sm.ExportInstanceType = "r7g.large"
+		f.sm.ExportStartedAt = &started
+	}
+	f.sm.mu.Unlock()
+}
+
+func (f *exportFixture) evaluate(t *testing.T) {
+	t.Helper()
+	if err := f.sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+}
+
+func (f *exportFixture) row(t *testing.T) *Shard {
+	t.Helper()
+	return getShardRow(t, f.ss)
+}
+
+func (f *exportFixture) state(t *testing.T) ShardState {
+	t.Helper()
+	st, _ := f.sm.smState(context.Background())
+	return st
+}
+
+func (f *exportFixture) assertDataIntact(t *testing.T) {
+	t.Helper()
+	if len(f.volumes.deleted) != 0 {
+		t.Fatalf("volume deleted before the export was recorded: %v", f.volumes.deleted)
+	}
+	if len(f.launcher.terminated) != 0 {
+		t.Fatalf("shard instance terminated before the export was recorded: %v", f.launcher.terminated)
+	}
+	if f.state(t) != StateArchiving {
+		t.Fatalf("state = %q, want ARCHIVING", f.state(t))
+	}
+}
+
+func goodManifest(attempt int) shard.ExportManifest {
+	t0 := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	return shard.ExportManifest{
+		ShardID: "s-test", Attempt: attempt, ParquetPath: "s3://weft/warp/s-test/**/*.parquet", Rows: 10,
+		Customers: []shard.CustomerStat{{CustomerID: 5, MinTs: t0, MaxTs: t0.Add(time.Hour), RowCount: 7}, {CustomerID: 6, MinTs: t0, MaxTs: t0, RowCount: 3}},
+	}
+}
+
+// ── sizing ──────────────────────────────────────────────────────────
+
+func TestExportInstanceType(t *testing.T) {
+	d := &ShardDeps{}
+	const gib = int64(1) << 30
+	small, mid, big := defaultExportSizing[0].InstanceType, defaultExportSizing[1].InstanceType, defaultExportSizing[len(defaultExportSizing)-1].InstanceType
+	cases := []struct {
+		name    string
+		bytes   int64
+		attempt int
+		want    string
+	}{
+		{"tiny", 1 * gib, 1, small},
+		{"at the first boundary", defaultExportSizing[0].MaxDBBytes, 1, small},
+		{"just over the first boundary", defaultExportSizing[0].MaxDBBytes + 1, 1, mid},
+		{"huge", 500 * gib, 1, big},
+		{"unknown size takes the largest: never guess small", 0, 1, big},
+		{"a retry steps up one class", 1 * gib, 2, mid},
+		{"a retry cannot step past the largest", 500 * gib, 3, big},
+	}
+	for _, c := range cases {
+		got, err := d.exportInstanceType(c.bytes, c.attempt)
+		if err != nil || got != c.want {
+			t.Errorf("%s: exportInstanceType(%d, %d) = %q %v, want %q", c.name, c.bytes, c.attempt, got, err, c.want)
+		}
+	}
+
+	custom := &ShardDeps{ExportSizing: []ExportSize{{MaxDBBytes: 10, InstanceType: "x.small"}, {MaxDBBytes: 1 << 62, InstanceType: "x.big"}}}
+	if got, _ := custom.exportInstanceType(5, 1); got != "x.small" {
+		t.Errorf("configured table ignored: got %q", got)
+	}
+}
+
+// ── phases ──────────────────────────────────────────────────────────
+
+func TestShardExport_FirstTickClaimsAttemptAndSnapshots(t *testing.T) {
+	f := newExportFixture(t)
+	f.evaluate(t)
+
+	row := f.row(t)
+	if row.ExportAttempt != 1 || row.ExportStartedAt == nil || row.ExportInstanceType != defaultExportSizing[0].InstanceType {
+		t.Fatalf("attempt not claimed with a derived size: %+v", row)
+	}
+	if len(f.ops.createCalls) != 1 {
+		t.Fatalf("CreateSnapshot calls = %d, want 1", len(f.ops.createCalls))
+	}
+	if got := f.ops.createCalls[0]; got.ShardID != "s-test" || got.Attempt != 1 || got.VolumeID != "vol-1" {
+		t.Fatalf("snapshot spec = %+v", got)
+	}
+	if row.ExportSnapshotID != "snap-1" {
+		t.Fatalf("snapshot not persisted: %q", row.ExportSnapshotID)
+	}
+	if f.sm.ExportAttempt != 1 || f.sm.ExportSnapshotID != "snap-1" {
+		t.Fatalf("entry not mirrored (a later SaveShard would write stale facts back): attempt=%d snap=%q", f.sm.ExportAttempt, f.sm.ExportSnapshotID)
+	}
+	if f.live.archived {
+		t.Fatal("the in-process Archive ran; the export must happen off the shard's instance")
+	}
+	if len(f.ops.launchCalls) != 0 {
+		t.Fatal("launched an instance before the snapshot completed")
+	}
+	f.assertDataIntact(t)
+}
+
+func TestShardExport_SnapshotPendingWaits(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, 1, f.clock, "snap-1", "")
+	f.evaluate(t)
+	if len(f.ops.launchCalls) != 0 || len(f.ops.cleanupCalls) != 0 {
+		t.Fatalf("pending snapshot: launches=%v cleanups=%v, want neither", f.ops.launchCalls, f.ops.cleanupCalls)
+	}
+	f.assertDataIntact(t)
+}
+
+func TestShardExport_SnapshotCompletedLaunchesTheExportInstance(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, 2, f.clock, "snap-9", "")
+	f.ops.snapState = ExportSnapshotState{State: "completed"}
+	f.evaluate(t)
+
+	if len(f.ops.launchCalls) != 1 {
+		t.Fatalf("LaunchInstance calls = %d, want 1", len(f.ops.launchCalls))
+	}
+	got := f.ops.launchCalls[0]
+	if got.ShardID != "s-test" || got.Attempt != 2 || got.SnapshotID != "snap-9" || got.InstanceType != "r7g.large" ||
+		got.AZ != "us-east-2a" || got.Prefix != "s3://weft/warp" {
+		t.Fatalf("launch spec = %+v", got)
+	}
+	if f.row(t).ExportInstanceID != "i-export-1" || f.sm.ExportInstanceID != "i-export-1" {
+		t.Fatal("export instance not persisted and mirrored")
+	}
+	f.assertDataIntact(t)
+}
+
+func TestShardExport_SnapshotErrorFailsTheAttempt(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, 1, f.clock, "snap-1", "")
+	f.ops.snapState = ExportSnapshotState{State: "error"}
+	f.evaluate(t)
+
+	if len(f.ops.cleanupCalls) != 1 || f.ops.cleanupCalls[0] != "s-test" {
+		t.Fatalf("cleanup calls = %v, want one for s-test", f.ops.cleanupCalls)
+	}
+	row := f.row(t)
+	if row.ExportSnapshotID != "" || row.ExportStartedAt != nil {
+		t.Fatalf("facts not cleared after a failed attempt: %+v", row)
+	}
+	if row.ExportAttempt != 1 {
+		t.Fatalf("attempt counter = %d, want 1 (it must survive the clear)", row.ExportAttempt)
+	}
+	f.assertDataIntact(t)
+
+	// The next tick starts attempt 2 and steps up one size class.
+	f.ops.snapState = ExportSnapshotState{State: "pending"}
+	f.evaluate(t)
+	row = f.row(t)
+	if row.ExportAttempt != 2 || row.ExportInstanceType != defaultExportSizing[1].InstanceType {
+		t.Fatalf("retry: attempt=%d type=%q, want attempt 2 one size class up", row.ExportAttempt, row.ExportInstanceType)
+	}
+}
+
+func TestShardExport_WaitsForTheManifestWhileTheInstanceRuns(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, 1, f.clock, "snap-1", "i-export-1")
+	f.ops.snapState = ExportSnapshotState{State: "completed"}
+	f.ops.instState = "running"
+	f.evaluate(t)
+
+	if len(f.ops.cleanupCalls) != 0 || len(f.ops.launchCalls) != 0 {
+		t.Fatalf("running export disturbed: cleanups=%v launches=%v", f.ops.cleanupCalls, f.ops.launchCalls)
+	}
+	f.assertDataIntact(t)
+}
+
+func TestShardExport_ManifestRecordsArchiveThenRetiresTheShard(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, 1, f.clock, "snap-1", "i-export-1")
+	f.ops.snapState = ExportSnapshotState{State: "completed"}
+	f.ops.instState = "terminated" // the host powers itself off after writing the manifest
+	f.manifest.manifests[testExportManifestKey] = goodManifest(1)
+
+	f.evaluate(t)
+
+	row := f.row(t)
+	if row.ParquetPath != "s3://weft/warp/s-test/**/*.parquet" {
+		t.Fatalf("parquet path = %q", row.ParquetPath)
+	}
+	var stats []ShardArchiveStat
+	if err := f.db.DB().Where("shard_id = ?", "s-test").Order("org_id").Find(&stats).Error; err != nil || len(stats) != 2 || stats[0].RowCount != 7 {
+		t.Fatalf("archive stats = %+v err=%v", stats, err)
+	}
+	if !f.live.closed {
+		t.Fatal("live shard not closed after the ColdShard swap")
+	}
+	if _, ok := f.sm.Live.(*shard.ColdShard); !ok {
+		t.Fatalf("Live = %T, want a ColdShard", f.sm.Live)
+	}
+	if len(f.ops.cleanupCalls) == 0 {
+		t.Fatal("export resources not cleaned up")
+	}
+	if row.ExportSnapshotID != "" || row.ExportInstanceID != "" || row.ExportStartedAt != nil {
+		t.Fatalf("export facts not cleared: %+v", row)
+	}
+	// The shard's own volume and instance are retired only now, and the shard
+	// completes in the same pass.
+	if len(f.volumes.deleted) != 1 || len(f.launcher.terminated) != 1 || f.launcher.terminated[0] != "i-shard" {
+		t.Fatalf("shard resources: deleted=%v terminated=%v", f.volumes.deleted, f.launcher.terminated)
+	}
+	if f.state(t) != StateArchived {
+		t.Fatalf("state = %q, want ARCHIVED", f.state(t))
+	}
+	if f.live.archived {
+		t.Fatal("the in-process Archive ran")
+	}
+}
+
+func TestShardExport_IgnoresAStaleManifest(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, 2, f.clock, "snap-2", "i-export-2")
+	f.ops.snapState = ExportSnapshotState{State: "completed"}
+	f.ops.instState = "running"
+	f.manifest.manifests[testExportManifestKey] = goodManifest(1) // left by attempt 1
+
+	f.evaluate(t)
+
+	if f.row(t).ParquetPath != "" {
+		t.Fatal("recorded attempt 1's manifest as attempt 2's result")
+	}
+	f.assertDataIntact(t)
+}
+
+func TestShardExport_InstanceEndedWithoutManifestFailsTheAttempt(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, 1, f.clock, "snap-1", "i-export-1")
+	f.ops.snapState = ExportSnapshotState{State: "completed"}
+	f.ops.instState = "terminated"
+
+	f.evaluate(t)
+
+	if len(f.ops.cleanupCalls) != 1 {
+		t.Fatalf("cleanup calls = %v", f.ops.cleanupCalls)
+	}
+	row := f.row(t)
+	if row.ExportInstanceID != "" || row.ExportSnapshotID != "" || row.ExportAttempt != 1 {
+		t.Fatalf("after a failed attempt: %+v", row)
+	}
+	f.assertDataIntact(t)
+}
+
+// An export that writes its manifest and then terminates between the
+// coordinator's manifest poll and its instance-state poll must not be failed.
+func TestShardExport_ManifestAppearingAsTheInstanceEndsIsASuccess(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, 1, f.clock, "snap-1", "i-export-1")
+	f.ops.snapState = ExportSnapshotState{State: "completed"}
+	f.ops.instState = "terminated"
+	f.manifest.manifests[testExportManifestKey] = goodManifest(1)
+	f.manifest.appearOnGet = 2 // first poll misses; the re-check after seeing the dead instance finds it
+
+	f.evaluate(t)
+
+	if f.row(t).ParquetPath == "" {
+		t.Fatal("a successful export was failed because its manifest landed a moment late")
+	}
+	if f.state(t) != StateArchived {
+		t.Fatalf("state = %q, want ARCHIVED", f.state(t))
+	}
+}
+
+func TestShardExport_UnknownInstanceStateWaitsRatherThanFails(t *testing.T) {
+	// EC2 can briefly not know an instance it just launched; that must not
+	// fail the attempt. A vanished instance is caught by the deadline.
+	f := newExportFixture(t)
+	f.seedAttempt(t, 1, f.clock, "snap-1", "i-export-1")
+	f.ops.snapState = ExportSnapshotState{State: "completed"}
+	f.ops.instState = ""
+
+	f.evaluate(t)
+
+	if len(f.ops.cleanupCalls) != 0 {
+		t.Fatalf("failed an attempt over an instance EC2 did not know yet: %v", f.ops.cleanupCalls)
+	}
+	f.assertDataIntact(t)
+}
+
+func TestShardExport_AttemptDeadlineFailsAHungExport(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, 1, f.clock.Add(-exportAttemptTimeout-time.Minute), "snap-1", "i-export-1")
+	f.ops.snapState = ExportSnapshotState{State: "completed"}
+	f.ops.instState = "running" // alive but never finishing
+
+	f.evaluate(t)
+
+	if len(f.ops.cleanupCalls) != 1 {
+		t.Fatalf("a hung export was not failed at the deadline: cleanups=%v", f.ops.cleanupCalls)
+	}
+	f.assertDataIntact(t)
+}
+
+func TestShardExport_AttemptCapStopsRetryingButKeepsTheData(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, maxExportAttempts, f.clock, "", "")
+	_ = f.ss.ClearExportFacts("s-test") // the last attempt failed and was cleaned up
+	f.sm.mu.Lock()
+	f.sm.ExportStartedAt, f.sm.ExportInstanceType = nil, ""
+	f.sm.mu.Unlock()
+
+	f.evaluate(t)
+	f.evaluate(t)
+
+	if len(f.ops.createCalls) != 0 || len(f.ops.launchCalls) != 0 {
+		t.Fatalf("started attempt %d past the cap: snapshots=%v launches=%v", maxExportAttempts+1, f.ops.createCalls, f.ops.launchCalls)
+	}
+	if got := f.row(t).ExportAttempt; got != maxExportAttempts {
+		t.Fatalf("attempt counter moved to %d", got)
+	}
+	f.assertDataIntact(t) // stays ARCHIVING with the volume: it is never auto-GONE
+}
+
+func TestShardExport_ConcurrencyCapHoldsTheLaunch(t *testing.T) {
+	f := newExportFixture(t, func(d *ShardDeps) { d.MaxConcurrentExports = 1 })
+	// Another shard already has an export instance running.
+	bucket := seedBucket(t, f.db, BucketStasis)
+	if err := f.ss.SaveShard(&Shard{ID: "s-busy", State: StateArchiving, BucketID: bucket.ID, Tier: "small",
+		WindowStart: f.clock, WindowEnd: f.clock, CreatedAt: f.clock}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.ss.SetExportInstance("s-busy", "i-other-export"); err != nil {
+		t.Fatal(err)
+	}
+	f.seedAttempt(t, 1, f.clock, "snap-1", "")
+	f.ops.snapState = ExportSnapshotState{State: "completed"}
+
+	f.evaluate(t)
+
+	if len(f.ops.launchCalls) != 0 {
+		t.Fatalf("launched past the concurrency cap: %v", f.ops.launchCalls)
+	}
+	if len(f.ops.cleanupCalls) != 0 {
+		t.Fatalf("a held launch must not fail the attempt: %v", f.ops.cleanupCalls)
+	}
+	f.assertDataIntact(t)
+
+	// Capacity frees up: the next tick launches.
+	if err := f.ss.ClearExportFacts("s-busy"); err != nil {
+		t.Fatal(err)
+	}
+	f.evaluate(t)
+	if len(f.ops.launchCalls) != 1 {
+		t.Fatalf("did not launch once capacity freed: %v", f.ops.launchCalls)
+	}
+}
+
+func TestShardExport_AWSErrorsRetryNextTickWithoutLosingTheData(t *testing.T) {
+	f := newExportFixture(t)
+	f.ops.createErr = errors.New("RequestLimitExceeded")
+	f.evaluate(t)
+	f.assertDataIntact(t)
+	if f.row(t).ExportSnapshotID != "" {
+		t.Fatal("recorded a snapshot that was never created")
+	}
+
+	f.ops.createErr = nil
+	f.evaluate(t)
+	if f.row(t).ExportSnapshotID != "snap-1" {
+		t.Fatal("did not recover on the next tick")
+	}
+}
+
+// The export needs only the volume and the snapshot, not the live handle: a
+// coordinator that restarted mid-archive (Live == nil) must still drive it.
+func TestShardExport_DoesNotNeedTheLiveHandle(t *testing.T) {
+	f := newExportFixture(t)
+	f.sm.Live = nil
+	f.evaluate(t)
+	if len(f.ops.createCalls) != 1 {
+		t.Fatalf("snapshot not taken without a live handle: %v", f.ops.createCalls)
+	}
+	f.assertDataIntact(t)
+}
+
+// Completion requires the export resources to be gone. If cleanup fails after
+// the manifest was recorded, the shard's volume must not be retired until a
+// later tick cleans up.
+func TestShardExport_CleanupFailureHoldsTheRetireUntilItSucceeds(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, 1, f.clock, "snap-1", "i-export-1")
+	f.ops.snapState = ExportSnapshotState{State: "completed"}
+	f.ops.instState = "terminated"
+	f.manifest.manifests[testExportManifestKey] = goodManifest(1)
+	f.ops.cleanupErr = errors.New("DeleteSnapshot throttled")
+
+	f.evaluate(t)
+
+	if f.row(t).ParquetPath == "" {
+		t.Fatal("the export result was not recorded")
+	}
+	if len(f.volumes.deleted) != 0 || f.state(t) != StateArchiving {
+		t.Fatalf("retired the shard with export resources outstanding: deleted=%v state=%q", f.volumes.deleted, f.state(t))
+	}
+
+	f.ops.cleanupErr = nil
+	f.evaluate(t)
+	if len(f.volumes.deleted) != 1 || f.state(t) != StateArchived {
+		t.Fatalf("did not complete after cleanup succeeded: deleted=%v state=%q", f.volumes.deleted, f.state(t))
+	}
+	if row := f.row(t); row.ExportSnapshotID != "" || row.ExportInstanceID != "" {
+		t.Fatalf("export facts still set: %+v", row)
+	}
+}
+
+// Without export wiring (dev, docker, most tests) the in-process Archive path
+// is unchanged.
+func TestShardExport_NilExportsKeepsTheInProcessArchive(t *testing.T) {
+	f := newExportFixture(t, func(d *ShardDeps) { d.Exports = nil; d.ExportManifests = nil })
+	f.live.archivePath = "s3://weft/warp/s-test.parquet"
+	f.evaluate(t)
+	if !f.live.archived {
+		t.Fatal("in-process Archive did not run with no export wiring")
+	}
+	if f.state(t) != StateArchived {
+		t.Fatalf("state = %q, want ARCHIVED", f.state(t))
+	}
+}
+
+// An admin delete of a shard mid-export must not leave a snapshot or an
+// instance behind.
+func TestShardExport_AdminDeleteCleansUpExportResources(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedAttempt(t, 1, f.clock, "snap-1", "i-export-1")
+
+	if err := f.sm.Fire(context.Background(), TriggerAdminDelete); err != nil {
+		t.Fatalf("AdminDelete: %v", err)
+	}
+	if len(f.ops.cleanupCalls) != 1 || f.ops.cleanupCalls[0] != "s-test" {
+		t.Fatalf("cleanup calls = %v, want one for s-test", f.ops.cleanupCalls)
+	}
+}

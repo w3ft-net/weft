@@ -87,6 +87,18 @@ type ShardDeps struct {
 	// dev/test, where it's nil — falls back to defaultShardVolumeGB. Ignored
 	// on recovery launches, which reattach the surviving volume.
 	VolumeSizesGB map[string]int32
+
+	// Exports and ExportManifests enable the ephemeral archive export
+	// (docs/plans/ephemeral-archive-export.md): ARCHIVING snapshots the shard's
+	// volume and has a short-lived instance export it, instead of the shard
+	// exporting on its own (possibly tiny) host. Both nil — dev, docker, tests —
+	// keeps the in-process Archive. They are set together or not at all.
+	Exports         ExportOps
+	ExportManifests shard.ManifestReader
+	// ExportSizing overrides defaultExportSizing; MaxConcurrentExports caps
+	// export instances in flight across all shards (0 → the default).
+	ExportSizing         []ExportSize
+	MaxConcurrentExports int
 }
 
 // volumeSizeGB returns the fresh-launch data-volume size for tier, falling
@@ -662,10 +674,26 @@ func (sh *Shard) evaluateArchiving(ctx context.Context) error {
 	rowCount := sh.RowCount
 	sh.mu.Unlock()
 
-	// Step 1 — export to S3 (once). A shard with no recorded path and no
-	// live handle has nothing to export (already cold after a restart, or
-	// never ingested); fall through to the volume/instance cleanup.
-	if parquetPath == "" && liveShard != nil {
+	// Step 1 — get the archive recorded (once). With the ephemeral export
+	// wired (and data to export), a short-lived instance does the work off this
+	// shard's host (advanceExport); otherwise the live shard exports in
+	// process. A shard with no recorded path and no live handle has nothing the
+	// in-process path can export; it falls through to the guard below.
+	exportsOn := sh.deps.Exports != nil && rowCount > 0
+	switch {
+	case parquetPath != "":
+		// Already recorded by an earlier tick.
+	case exportsOn:
+		if err := sh.advanceExport(ctx); err != nil {
+			return err
+		}
+		sh.mu.RLock()
+		parquetPath = sh.ParquetPath
+		sh.mu.RUnlock()
+		if parquetPath == "" {
+			return nil // export still in progress; advanceExport logged why
+		}
+	case liveShard != nil:
 		exportCtx, cancel := context.WithTimeout(ctx, archiveTimeout)
 		path, stats, err := liveShard.Archive(exportCtx, sh.archiveS3Prefix(services))
 		cancel()
@@ -673,34 +701,24 @@ func (sh *Shard) evaluateArchiving(ctx context.Context) error {
 			log.Printf("shardsm %s: archive export failed, retrying next tick: %v", sh.ID, err)
 			return nil
 		}
-		// Swap the live handle for a ColdShard so registry walks still see a
-		// non-nil pointer for the archived entry. Build it before the persist
-		// so a ColdShard failure doesn't strand us with a recorded path but a
-		// closed live handle.
-		cold, err := shard.NewColdShard(sh.ID, serviceNames(services), path, sh.deps.LambdaFunctionURL, nil)
-		if err != nil {
-			log.Printf("shardsm %s: build cold shard, retrying next tick: %v", sh.ID, err)
+		if err := sh.recordArchive(path, stats); err != nil {
+			log.Printf("shardsm %s: %v; retrying next tick", sh.ID, err)
 			return nil
 		}
-		if err := sh.deps.Store.SetShardParquetPath(sh.ID, path); err != nil {
-			return fmt.Errorf("shardsm %s: persist parquet path: %w", sh.ID, err)
-		}
-		// Best-effort: archive stats drive the retention janitor but aren't
-		// load-bearing for the archive itself. A failure here (or a crash
-		// before this line on a retry where liveShard is already closed)
-		// just leaves the shard without stats; the janitor falls back to
-		// scanning that file. Don't fail the whole archive over metadata.
-		if err := sh.deps.Store.RecordArchiveStats(sh.ID, stats); err != nil {
-			log.Printf("shardsm %s: record archive stats: %v", sh.ID, err)
-		}
-		liveShard.Close()
-		sh.mu.Lock()
-		sh.Live = cold
-		sh.ParquetPath = path
-		sh.LastHeartbeatAt = time.Time{}
 		parquetPath = path
-		sh.mu.Unlock()
-		log.Printf("shardsm %s: archived to %s", sh.ID, path)
+	}
+
+	// Step 1b — the export's snapshot and instance must be gone before the
+	// shard's own volume is retired. Runs on every tick that still has export
+	// facts, so a cleanup that failed after the archive was recorded is
+	// retried here.
+	if sh.deps.Exports != nil && sh.hasExportFacts() {
+		if err := sh.endExportAttempt(ctx); err != nil {
+			return err
+		}
+		if sh.hasExportFacts() {
+			return nil // cleanup failed; endExportAttempt logged it
+		}
 	}
 
 	// Steps 2 and 3 destroy the only copy of any unexported data, so they run
@@ -756,6 +774,41 @@ func (sh *Shard) evaluateArchiving(ctx context.Context) error {
 	if done {
 		return sh.Fire(ctx, TriggerArchiveComplete) // → ARCHIVED
 	}
+	return nil
+}
+
+// recordArchive records a finished archive: it swaps the live handle for a
+// ColdShard (so registry walks still see a non-nil pointer), persists the
+// parquet path and the per-customer stats, and closes the live handle. The
+// ColdShard is built first so a failure there leaves nothing half-recorded.
+func (sh *Shard) recordArchive(path string, stats []shard.CustomerStat) error {
+	sh.mu.RLock()
+	services, live := sh.Services, sh.Live
+	sh.mu.RUnlock()
+
+	cold, err := shard.NewColdShard(sh.ID, serviceNames(services), path, sh.deps.LambdaFunctionURL, nil)
+	if err != nil {
+		return fmt.Errorf("build cold shard: %w", err)
+	}
+	if err := sh.deps.Store.SetShardParquetPath(sh.ID, path); err != nil {
+		return fmt.Errorf("persist parquet path: %w", err)
+	}
+	// Best-effort: archive stats drive the retention janitor but aren't
+	// load-bearing for the archive itself. A failure here just leaves the shard
+	// without stats; the janitor falls back to scanning that file. Don't fail
+	// the whole archive over metadata.
+	if err := sh.deps.Store.RecordArchiveStats(sh.ID, stats); err != nil {
+		log.Printf("shardsm %s: record archive stats: %v", sh.ID, err)
+	}
+	if live != nil {
+		live.Close()
+	}
+	sh.mu.Lock()
+	sh.Live = cold
+	sh.ParquetPath = path
+	sh.LastHeartbeatAt = time.Time{}
+	sh.mu.Unlock()
+	log.Printf("shardsm %s: archived to %s", sh.ID, path)
 	return nil
 }
 
@@ -1027,6 +1080,17 @@ func (sh *Shard) onEnterArchived(ctx context.Context, args ...any) error {
 
 func (sh *Shard) onEnterGone(ctx context.Context, args ...any) error {
 	log.Printf("shardsm %s: enter GONE — removing from registry + deleting record", sh.ID)
+	// An admin delete can land mid-export; don't leave its snapshot or export
+	// instance behind with no row left to track them. Only shards that ever
+	// attempted an export have anything to clean.
+	sh.mu.RLock()
+	exported := sh.ExportAttempt > 0
+	sh.mu.RUnlock()
+	if exported && sh.deps.Exports != nil {
+		if err := sh.deps.Exports.Cleanup(ctx, sh.ID); err != nil {
+			log.Printf("shardsm %s: export cleanup on GONE (orphans possible; the sweep is the backstop): %v", sh.ID, err)
+		}
+	}
 	if sh.deps.Registry != nil {
 		sh.deps.Registry.Remove(sh.ID)
 	}
