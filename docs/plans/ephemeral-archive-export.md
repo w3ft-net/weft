@@ -54,15 +54,17 @@ READ_ONLY ──ArchiveRequested──► ARCHIVING
 ARCHIVING steps, each gated on a persisted fact, in order:
   A. CHECKPOINT the live shard (fold WAL into the main file)
   B. CreateSnapshot(volume)                  → export_snapshot_id
-  C. CreateVolume(from snapshot, export AZ)  → export_volume_id
-  D. RunInstances(export type), attach export volume,
-     boot weft-export (mode of cmd/shard)    → export_instance_id
-  E. weft-export opens the file read-only, runs the existing
-     exportArchive, writes Parquet + manifest to S3, self-terminates
+     (poll SnapshotState until completed)
+  D. RunInstances(export type) with the snapshot as a block device
+     mapping: the restored volume is created and attached at launch,
+     and deleted with the instance          → export_instance_id
+     boot `weft-shard export`
+  E. the export opens the file, runs the existing exportArchive,
+     writes Parquet + manifest to S3, then the host terminates itself
   F. Coordinator sees the manifest: SetShardParquetPath,
      RecordArchiveStats, swap Live for ColdShard
-  G. Cleanup: delete export volume, delete snapshot,
-     then the existing retire-volume + terminate-instance steps
+  G. Cleanup: ExportResources.Cleanup (any leftover instance, the
+     snapshot), then the existing retire-volume + terminate-instance steps
   H. ArchiveComplete → ARCHIVED
 ```
 
@@ -120,7 +122,7 @@ bug, and the alert says so rather than silently retrying bigger.
 ### Persisted state and idempotence
 
 New nullable columns on the shard row: `export_snapshot_id`,
-`export_volume_id`, `export_instance_id`, `export_instance_type`, plus
+`export_instance_id`, `export_instance_type`, plus
 `export_started_at` and `export_attempt`. Every step is skipped if its
 fact is already set, so a coordinator crash resumes mid-sequence, the
 same pattern as the existing steps 1–3. The snapshot is immutable and the
@@ -159,8 +161,7 @@ What changes is `evaluateArchiving` (`logdb/shardsm.go`):
    `CHECKPOINT` is best-effort; a crash-consistent snapshot recovers by
    WAL replay on open.
 4. **Stricter completion.** `done` requires a parquet path, no volume,
-   no instance, and no `export_snapshot_id` / `export_volume_id` /
-   `export_instance_id`. `AdminDelete` / `ForceRemove` also clean up
+   no instance, and no `export_snapshot_id` / `export_instance_id`. `AdminDelete` / `ForceRemove` also clean up
    export resources (the sweep is the backstop).
 5. **Per-phase deadlines and failure policy.** Deadlines derive from
    `export_started_at`. On export-instance death or timeout the next
@@ -252,10 +253,70 @@ export-capacity table (bytes → RAM/time per instance type).
   user-data's job (Phase 2); the binary just exits 0, 1 (failed) or 2
   (usage).
 
-**Phase 2 — snapshot/volume/instance primitives.** Extend
-`VolumeManager` with snapshot-create/wait/delete and create-from-
-snapshot; extend `EC2Provisioner` with an export launch spec. Mock
-`EC2VolumesAPI` tests like the existing volume tests.
+**Phase 2 — snapshot and export-instance primitives. CODE DONE;
+infrastructure not.** The design changed from the original sketch in one
+useful way: `RunInstances` takes a block device mapping with a
+`SnapshotId`, so the restored volume is created and attached at launch and
+deleted with the instance (`DeleteOnTermination`). There is no separate
+create-volume or attach phase and no export volume to track or leak, so
+the FSM facts `export_volume_id` and the volume half of cleanup are gone.
+
+Code (`logdb/export_resources.go`, a new `ExportResources`; the existing
+`VolumeManager` and `EC2Provisioner` are untouched):
+- `CreateSnapshot`, `SnapshotState`, `LaunchInstance`, `InstanceState`,
+  `Cleanup`. Each is a single non-blocking AWS interaction, idempotent by
+  tag, so the shard FSM polls across ticks instead of waiting in a call.
+- Tags are `export_shard_id`, `export_attempt`, `export_prefix` and
+  `Role=export`. **Never `shard_id` or `shard_tier`**, which the shard
+  lookups (`findLiveByShard`, `FindByShard`) key on, so an export resource
+  cannot be mistaken for the shard's own. A test pins this.
+- `Role=export` matters: the AMI's `startup.sh` starts `weft-$Role`.
+- The export host launches from the coordinator's own AMI, so it has the
+  `export` subcommand, and with
+  `InstanceInitiatedShutdownBehavior=terminate`.
+- `Cleanup(shardID)` terminates live export instances and deletes export
+  snapshots for the shard across all attempts; refuses an empty id (which
+  would match everything).
+
+Instance side (`deploy/`):
+- `weft-export.service` (oneshot, runs `weft-shard export`) and
+  `export-role.sh`, sourced by `startup.sh` when `Role=export`. It reads
+  the job from the instance tags, validates it (the values reach a systemd
+  EnvironmentFile), mounts the restored volume at **`/mnt/export`** and
+  **never formats it** (a blank volume is a bad restore; formatting would
+  turn it into an empty "successful" archive).
+- Mounted at `/mnt/export`, not `/opt/app/data`, because weftd reads
+  `shard.json` there for its `node` dimension and the restored volume
+  carries the live shard's; the export host's metrics would be attributed
+  to the shard.
+- Shutdown is guaranteed three ways: an EXIT trap, a `shutdown -h +180`
+  backstop armed first thing, and the unit's own `--timeout`. weftd starts
+  before the export so its log (including the Phase 0 progress lines) ships
+  to weft; `export_finish` waits for the unit, then 30s for the flush.
+- Tested: `deploy/export-role_test.sh` (`make test-deploy`) covers input
+  validation. Not tested: mount and shutdown paths, which need a real host.
+
+**Infrastructure this needs, in `infrastructure-catalog` / `-live` (not
+done; separate repo, and Terraform changes need your review):**
+1. A dedicated **export launch template** (a new `shard-fleet`-like
+   module). Do not reuse a shard template: the template's `Role=shard`
+   tag may or may not be overridden by the request's tags, and if it is
+   not, the export host boots as a blank shard. It needs `Role=export`,
+   `instance_metadata_tags = enabled`, the shared user-data, a security
+   group, and an instance profile that can write the archive prefix.
+2. **Coordinator IAM:** `ec2:CreateSnapshot`, `DescribeSnapshots`,
+   `DeleteSnapshot`, `RunInstances` including block-device-mapping from a
+   snapshot, `CreateTags` on snapshots and volumes at creation, and
+   `iam:PassRole` for the export instance profile.
+3. **Coordinator config:** an export launch template id, per-AZ export
+   subnets (the tier's shard subnets work), and the export instance
+   profile. Per your rule, these belong in Terraform, not ad-hoc SSM.
+4. **AMI:** picks up `export-role.sh` and `weft-export.service` via the
+   `packer/weft.pkr.hcl` change on the next `kevcons build`.
+
+Assumption to verify on the first real launch: `ebsnvme-id` maps the
+snapshot-restored volume to `/dev/sdf` the way it does for a shard's
+volume (the block device mapping asks for `/dev/sdf`).
 
 **Phase 3 — FSM wiring.** Replace step 1 in `evaluateArchiving` with
 A–E, add G cleanup, persist the new facts (migration at the next free

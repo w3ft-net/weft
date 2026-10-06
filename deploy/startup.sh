@@ -42,6 +42,16 @@ set -a
 . /opt/app/.env
 set +a
 
+# Export role: an ephemeral archive-export host (see deploy/export-role.sh and
+# docs/plans/ephemeral-archive-export.md). It mounts a restored copy of a
+# shard's volume at /mnt/export — not /opt/app/data, so it can't pass for the
+# shard — and powers itself off when done. export_prepare arms the shutdown
+# guarantee first thing; if the library itself is missing, shut down now.
+if [ "$ROLE" = "export" ]; then
+  . /opt/app/scripts/export-role.sh || shutdown -h now
+  export_prepare
+fi
+
 # Safety belt for coordinator: if the blob didn't populate the shard
 # launch config, bail loudly. An operator can fix the config much
 # faster than they can notice a dev-mode coordinator running in prod —
@@ -119,7 +129,13 @@ if [ "$ROLE" = "shard" ]; then
   fi
 fi
 
-systemctl start "weft-$ROLE"
+# The export unit is a long oneshot: don't block here on it, so weftd below is
+# up (and shipping its log) while the export runs. export_finish waits for it.
+if [ "$ROLE" = "export" ]; then
+  systemctl start --no-block "weft-$ROLE"
+else
+  systemctl start "weft-$ROLE"
+fi
 
 # Also start the API server on coordinator hosts.
 if [ "$ROLE" = "coordinator" ]; then
@@ -205,4 +221,11 @@ UNIT
   systemctl enable weftd
   systemctl restart weftd
   echo "weftd started for role=$ROLE"
+fi
+
+# Export role: hold the host until the export unit finishes (and weftd has
+# shipped its last lines), then return — the EXIT trap armed in export_prepare
+# powers the host off.
+if [ "$ROLE" = "export" ]; then
+  export_finish
 fi

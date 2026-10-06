@@ -1,0 +1,24 @@
+[Unit]
+Description=weft archive export (ephemeral host)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Run once to completion; startup.sh waits on it, then shuts the host down.
+# EXPORT_* come from the instance tags via /etc/weft-export.env (written by
+# deploy/export-role.sh); the rest of the env (S3_REGION, ...) is the app env,
+# the same one the shard unit reads.
+Type=oneshot
+User=app
+Group=app
+EnvironmentFile=/opt/app/.env
+EnvironmentFile=/etc/weft-export.env
+ExecStart=/opt/app/bin/weft-shard export \
+    --shard-id=${EXPORT_SHARD_ID} \
+    --db=/mnt/export/shard.duckdb \
+    --prefix=${EXPORT_PREFIX} \
+    --attempt=${EXPORT_ATTEMPT} \
+    --timeout=150m
+TimeoutStartSec=160min
+StandardOutput=append:/opt/app/logs/export.log
+StandardError=append:/opt/app/logs/export.log

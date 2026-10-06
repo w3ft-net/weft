@@ -271,6 +271,13 @@ build {
     destination = "/tmp/start-role.sh"
   }
 
+  # Instance side of the ephemeral archive export; sourced by startup.sh when
+  # the Role tag is "export". See docs/plans/ephemeral-archive-export.md.
+  provisioner "file" {
+    source      = "deploy/export-role.sh"
+    destination = "/tmp/export-role.sh"
+  }
+
   # load-app-env-extra is weft's per-app hook for the universal
   # /usr/local/bin/load-app-env loader. Composes DB_DSN from the
   # DATABASE_* component env vars (DATABASE_HOST/NAME from the SSM
@@ -296,9 +303,9 @@ build {
 
   provisioner "shell" {
     inline = [
-      "sudo mv /tmp/startup.sh /tmp/fetch-config.sh /tmp/start-role.sh /opt/app/scripts/",
+      "sudo mv /tmp/startup.sh /tmp/fetch-config.sh /tmp/start-role.sh /tmp/export-role.sh /opt/app/scripts/",
       "sudo mv /tmp/load-app-env-extra /opt/app/scripts/load-app-env-extra",
-      "sudo chmod +x /opt/app/scripts/startup.sh /opt/app/scripts/fetch-config.sh /opt/app/scripts/start-role.sh /opt/app/scripts/load-app-env-extra",
+      "sudo chmod +x /opt/app/scripts/startup.sh /opt/app/scripts/fetch-config.sh /opt/app/scripts/start-role.sh /opt/app/scripts/export-role.sh /opt/app/scripts/load-app-env-extra",
       "sudo mv /tmp/weft-admin-run /opt/app/bin/weft-admin-run",
       "sudo chmod +x /opt/app/bin/weft-admin-run",
       "sudo chown app:app /opt/app/bin/weft-admin-run",
@@ -327,13 +334,18 @@ build {
   }
 
   provisioner "file" {
+    source      = "deploy/weft-export.service"
+    destination = "/tmp/weft-export.service"
+  }
+
+  provisioner "file" {
     source      = "deploy/weft-api.service"
     destination = "/tmp/weft-api.service"
   }
 
   provisioner "shell" {
     inline = [
-      "sudo mv /tmp/weft-startup.service /tmp/weft-coordinator.service /tmp/weft-shard.service /tmp/weft-compute.service /tmp/weft-api.service /etc/systemd/system/",
+      "sudo mv /tmp/weft-startup.service /tmp/weft-coordinator.service /tmp/weft-shard.service /tmp/weft-compute.service /tmp/weft-export.service /tmp/weft-api.service /etc/systemd/system/",
       "sudo systemctl daemon-reload",
       "sudo systemctl enable weft-startup",
     ]
