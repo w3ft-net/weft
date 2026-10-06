@@ -387,10 +387,139 @@ whether or not the export is enabled:
   `tag-key` filter and tag-based `DescribeSnapshots` behave as the fake
   does, and listing past a single results page.
 
-**Phase 5 — roll out.** Ship, then re-evaluate `4a672d0d`: it should
-complete on its own once the coordinator runs the new path. Only if it
-still cannot archive, consider `weft-admin force-remove` (irreversible;
-needs explicit sign-off).
+**Phase 5 — roll out.** See the checklist below. Re-evaluate `4a672d0d`
+last: it should complete on its own once the coordinator runs the new
+path. Only if it still cannot archive, consider `weft-admin force-remove`
+(irreversible; needs explicit sign-off).
+
+## Rollout checklist
+
+Order matters. The feature ships **off** (no `EXPORT_LAUNCH_TEMPLATE`), is
+proven by a manual drill on a scratch prefix, and only then enabled.
+Nothing here has run against real AWS.
+
+### 0. Blocker: stale files double-count rows on a retry
+
+DuckDB's `OVERWRITE_OR_IGNORE` replaces files with the *same name* and
+leaves every other file in the directory alone. Verified against real
+DuckDB: after a second export into a directory holding a file from an
+earlier partial attempt, the stale file survived and reading the archive
+glob returned 40 rows from a shard holding 20.
+
+This bites two ways: a retry attempt that splits files differently from the
+failed one (a bigger instance means more threads), and the **in-process**
+path, where `4a672d0d` has been writing partial output into
+`<prefix>/<id>/` for days. Fix before enabling. Preferred design: each
+attempt writes to its own directory (`<prefix>/<id>/attempt-N/`), the
+manifest already records the path the coordinator stores, and the
+coordinator deletes a failed attempt's output (it has an `ObjectDeleter`
+for the janitor). Until fixed, do not enable, and list
+`<prefix>/4a672d0d…/` in S3 before touching that shard.
+
+### 1. Before merging
+
+- [ ] Code review of the 9 commits on `worktree-ephemeral-archive-export`
+      (`/code-review`).
+- [ ] `make test`, `make test-deploy`; `go build ./...` clean.
+- [ ] Renumber your untracked `078_org_id_bigint.sql`: the collapsed schema's
+      max is 79 and mine is `080_shard_export_facts.sql`.
+- [ ] Decide the fix for the blocker above and land it with this.
+
+### 2. Infrastructure (`infrastructure-catalog` / `-live`; Terraform review)
+
+- [ ] **Export launch template**: new module modeled on `shard-fleet`.
+      `Role=export` (never `shard`), `instance_metadata_tags = enabled`, no
+      `shard_tier` tag, the shared user-data with `instance_role = "export"`,
+      an egress-only security group, the shard instance profile (it already
+      writes the archive prefix and reads SSM/Secrets for `load-app-env`).
+- [ ] **Coordinator IAM**: `ec2:CreateSnapshot`, `DescribeSnapshots`,
+      `DeleteSnapshot`; `RunInstances` including on `snapshot/*` and
+      `volume/*` resources; `CreateTags` on snapshots and volumes at creation;
+      `iam:PassRole` for the export profile; `s3:GetObject` on
+      `<archive prefix>/_manifests/*`.
+- [ ] **EC2 vCPU quota** for the r7g family (On-Demand Standard) covers
+      `EXPORT_MAX_CONCURRENT` × the largest class's vCPUs.
+- [ ] Config goes in Terraform, not ad-hoc SSM. Adding `EXPORT_*` changes the
+      app config blob's SSM parameter: **stop and warn on that plan line**.
+      Leave `EXPORT_LAUNCH_TEMPLATE` unset on this first apply.
+- [ ] Check whether this stack's apply also touches the cold-shard Lambda
+      (it reverts to a placeholder; redeploy after if so).
+
+### 3. Deploy (merge to `main`; CI builds and rolls the AMI)
+
+- [ ] Migration 080 applied (coordinator boot). It is additive and old code
+      tolerates the columns, so the rolling N=2 deploy is safe.
+- [ ] Coordinator log shows `archive export disabled (EXPORT_LAUNCH_TEMPLATE
+      is not set); shards archive in process` and `archive sweeper started`.
+- [ ] No behavior change for in-process archives. Note: `roll-all` does not
+      roll ARCHIVING shards, so **`4a672d0d` keeps its old binary** (no Phase 0
+      logging). Phase 0 numbers must come from the drill below, not from it.
+- [ ] After a healthy deploy, `make collapse` per the usual flow.
+
+### 4. Drill: one export on a scratch prefix, feature still off
+
+Use a `drill-` shard id and a scratch prefix, never the real archive prefix,
+so nothing the coordinator or janitor reads is touched.
+
+- [ ] Snapshot `4a672d0d`'s volume (a read-only operation on prod; `kevcons aws`).
+- [ ] Launch one export host by hand from the export template, from the new
+      AMI: `Role=export`, tags `export_shard_id=drill-<n>`, `export_attempt=1`,
+      `export_prefix=s3://<archive bucket>/_export-drill`, the snapshot at
+      `/dev/sdf`, shutdown behavior terminate. Start with `r7g.xlarge`.
+- [ ] Verify the assumptions this design rests on:
+  - [ ] `ebsnvme-id` maps the restored volume to `/dev/sdf`; it mounts at
+        `/mnt/export`; `shard.duckdb` opens (WAL replay).
+  - [ ] `weft-export.service` runs; `/opt/app/logs/export.log` fills; the log
+        reaches weft (`/log/weft/export/…`) through weftd.
+  - [ ] Parquet and `_manifests/drill-<n>.json` appear under the scratch
+        prefix; the manifest's rows match the shard's `row_count`.
+  - [ ] The host terminates itself and its restored volume is deleted.
+  - [ ] The host did **not** register or heartbeat as a shard.
+- [ ] **Capture the numbers**: wall time, peak RSS, PSI, spill bytes, partition
+      count (the Phase 0 progress lines). Put them in the instance-size table
+      (`defaultExportSizing` is a seed; there is no env override yet).
+- [ ] Failure drills: terminate a host mid-export (no manifest, no partial
+      "success"); export a copy with no `logs` table (must fail, not write an
+      empty archive).
+- [ ] Delete the drill snapshot, scratch prefix and any leftovers. If the
+      sweeper is on, a `drill-` resource has no shard row and is removed
+      after 15 minutes, so run the drill before enabling.
+
+### 5. Enable, one shard
+
+- [ ] Real-prefix pre-flight for `4a672d0d` (see the blocker): list and clear
+      stale partial output under its prefix.
+- [ ] Check the shard host is not still running an old in-process `COPY`
+      (the old binary ignores its context): look for CPU and swap thrash.
+- [ ] Terraform: set `EXPORT_LAUNCH_TEMPLATE` and `EXPORT_MAX_CONCURRENT=1`;
+      watch for the SSM warning; restart coordinators one at a time.
+- [ ] Log shows `archive export enabled (template=… max_concurrent=1)`.
+- [ ] Watch `4a672d0d`: `export attempt 1/3 begun` → snapshot → launch →
+      manifest → `archived to …` → volume deleted → ARCHIVED.
+- [ ] Compare: archived row count equals the shard's `row_count`; a query over
+      the archived shard returns what the live one did.
+- [ ] Snapshot, export instance and restored volume are all gone.
+
+### 6. Widen
+
+- [ ] Raise `EXPORT_MAX_CONCURRENT` to 2. Watch the next real window rotation
+      (a whole cohort reaches ARCHIVING together; the cap should hold launches).
+- [ ] Re-evaluate the instance-size table against the real runs.
+
+### 7. Alerts to configure (account config, not in git)
+
+- [ ] `ALERT archiving-stuck` (the sweeper; 6h in ARCHIVING).
+- [ ] `export attempt .* failed` and `export failed … times (cap 3)`.
+- [ ] `archive-sweep: removed orphaned export` (non-zero means something leaked).
+- [ ] EC2 spend and any lingering `export_shard_id` snapshots or instances.
+
+### Rollback
+
+Unset `EXPORT_LAUNCH_TEMPLATE` and restart coordinators: shards archive in
+process again. Leftover facts on a row are inert while the export is off.
+With the feature off the sweeper does not remove orphans, so clean up by
+hand anything tagged `export_shard_id`. Migration 080 is additive and needs
+no rollback.
 
 ## Open questions
 
